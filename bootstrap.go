@@ -9,7 +9,7 @@ import (
 )
 
 func retryableSetup(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if err == nil || errors.Is(err, context.Canceled) {
 		return false
 	}
 	switch e := err.(type) {
@@ -29,20 +29,24 @@ func retryableSetup(err error) bool {
 	case interface{ Unwrap() error }:
 		return retryableSetup(e.Unwrap())
 	}
-	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed)
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed)
 }
 
 func (c *Client) bootstrap(ctx context.Context) error {
 	err := c.connectMonitor(ctx)
-	if !retryableSetup(err) {
+	if ctx.Err() != nil || !retryableSetup(err) {
 		return err
 	}
 	// Tentacle can close a new authentication connection when temporarily
-	// busy. No command has been admitted. Bound additional setup attempts by
+	// busy, or an individual endpoint can time out while the caller remains
+	// live. No command has been admitted. Bound additional setup attempts by
 	// ConnectTimeout and the caller's context, preserving both failure causes.
 	retryCtx, cancel := context.WithTimeout(ctx, c.options.ConnectTimeout)
 	defer cancel()
 	backoff := 250 * time.Millisecond
+	if short := c.options.ConnectTimeout / 4; short < backoff {
+		backoff = max(short, time.Nanosecond)
+	}
 	for {
 		timer := time.NewTimer(backoff)
 		select {
