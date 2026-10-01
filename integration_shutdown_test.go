@@ -35,7 +35,7 @@ func TestCephRepeatedShutdownUnderTrafficIntegration(t *testing.T) {
 	for cycle := 0; cycle < 12; cycle++ {
 		c, err := Dial(ctx, integrationOptions(t))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("bootstrap during shutdown cycle %d: %v", cycle+1, err)
 		}
 		var completed atomic.Int64
 		ready := make(chan struct{})

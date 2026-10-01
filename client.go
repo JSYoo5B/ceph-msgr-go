@@ -90,7 +90,7 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 			return nil, err
 		}
 	}
-	if err = c.connectMonitor(ctx); err != nil {
+	if err = c.bootstrap(ctx); err != nil {
 		c.Close()
 		return nil, err
 	}
