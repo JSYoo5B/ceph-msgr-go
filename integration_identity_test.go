@@ -8,12 +8,54 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
 )
+
+func fixtureRejectsOldProof(ctx context.Context, options Options, initial *cephx.Client) (bool, error) {
+	for _, seed := range options.Monitors {
+		endpoint, address, err := seedAddress(seed)
+		if err != nil {
+			return false, err
+		}
+		// Probe an isolated copy. An accepted probe may receive new tickets,
+		// but must never refresh the old proof whose disposal we are observing.
+		candidate := *initial
+		candidate.Tickets = make(map[uint32]cephx.Ticket, len(initial.Tickets))
+		for service, ticket := range initial.Tickets {
+			candidate.Tickets[service] = ticket
+		}
+		probe, cancel := context.WithTimeout(ctx, 3*time.Second)
+		conn, err := options.DialContext(probe, "tcp", endpoint)
+		if err == nil {
+			var transport *session.Transport
+			transport, err = session.Handshake(probe, conn, address, 1, 0, session.MonAuth{Client: &candidate}, options.MaxFrameSize, 3*time.Second)
+			if transport != nil {
+				transport.Conn.Close()
+			}
+		}
+		cancel()
+		if err == nil {
+			return false, nil
+		}
+		var rejection *AuthenticationError
+		if !errors.As(err, &rejection) {
+			if retryableSetup(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		if rejection.Method != 2 || rejection.Code != -13 {
+			return false, err
+		}
+	}
+	return true, nil
+}
 
 func TestCephExpiredTicketRecoveryIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
@@ -88,13 +130,16 @@ func TestCephDiscardedTicketProofIntegration(t *testing.T) {
 	if control == "" || os.Getenv("CEPH_MSGR_TEST_EXPIRE_TICKETS") != "1" {
 		t.Skip("requires an isolated ticket expiration fixture")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	options := integrationOptions(t)
 	dial := options.DialContext
 	var blocked atomic.Bool
+	blockedSetup := make(chan struct{})
+	var blockOnce sync.Once
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 		if blocked.Load() {
+			blockOnce.Do(func() { close(blockedSetup) })
 			return nil, io.EOF
 		}
 		return dial(ctx, network, endpoint)
@@ -104,11 +149,21 @@ func TestCephDiscardedTicketProofIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	initial := c.snapshotAuth()
 	blocked.Store(true)
 	if err := controlFixtureMonitors(ctx, control, false); err != nil {
 		t.Fatal(err)
 	}
+	// Capture the proof after the coordinator reaches a blocked setup. A
+	// renewal already in progress when blocking started must settle first.
+	select {
+	case <-blockedSetup:
+	case <-ctx.Done():
+		t.Fatal("recovery did not reach the setup barrier", ctx.Err())
+	}
+	initial := c.snapshotAuth()
+	c.mu.Lock()
+	preservedAuth := c.auth
+	c.mu.Unlock()
 	// Stop this client's recovery while the proof ages. MON persistence can
 	// briefly retain an old secret after restart, so let the running quorum
 	// complete rotation before allowing this client to reclaim its identity.
@@ -120,10 +175,29 @@ func TestCephDiscardedTicketProofIntegration(t *testing.T) {
 	if err := controlFixtureMonitors(ctx, control, true); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-time.After(2 * 12 * time.Second):
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
+	probeOptions := c.options
+	probeOptions.DialContext = dial
+	started := time.Now()
+	for {
+		rejected, err := fixtureRejectsOldProof(ctx, probeOptions, initial)
+		if err != nil {
+			t.Fatal("independent old-proof authentication probe", err)
+		}
+		if rejected {
+			break
+		}
+		select {
+		case <-time.After(time.Second):
+		case <-ctx.Done():
+			t.Fatal("MONs did not discard the preserved authentication proof", ctx.Err())
+		}
+	}
+	t.Logf("all MONs reject preserved auth secret ID=%d with -13 after %s of running quorum", initial.Tickets[cephx.ServiceAuth].SecretID, time.Since(started).Round(time.Millisecond))
+	c.mu.Lock()
+	unchanged := c.auth == preservedAuth
+	c.mu.Unlock()
+	if !unchanged {
+		t.Fatal("blocked client replaced the proof whose disposal was observed")
 	}
 	blocked.Store(false)
 	for _, call := range []func(context.Context, Command) (Result, error){c.MonCommand, c.MgrCommand} {
