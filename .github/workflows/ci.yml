@@ -66,6 +66,7 @@ jobs:
           - { key: aes256k, service: aes256k, family: '6', stress: '' }
           - { key: aes, service: aes256k, family: '4', stress: '' }
           - { key: aes256k, service: aes, family: '4', stress: '' }
+          - { key: aes256k, service: aes256k, family: '4', stress: '', managers: '0' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,3 +88,4 @@ jobs:
           CEPH_MSGR_TEST_SERVICE_CIPHER: ${{ matrix.service }}
           CEPH_MSGR_TEST_IP_FAMILY: ${{ matrix.family }}
           CEPH_MSGR_STRESS_DURATION: ${{ matrix.stress }}
+          CEPH_MSGR_TEST_MGR_COUNT: ${{ matrix.managers || '2' }}

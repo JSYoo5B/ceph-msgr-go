@@ -4,6 +4,8 @@ set -eu
 root=/tmp/ceph-msgr-test
 key_type=${CEPH_MSGR_TEST_KEY_TYPE:-aes256k}
 service_cipher=${CEPH_MSGR_TEST_SERVICE_CIPHER:-$key_type}
+mgr_count=${CEPH_MSGR_TEST_MGR_COUNT:-2}
+case "$mgr_count" in 0|2) ;; *) exit 2 ;; esac
 case "$key_type" in aes|aes256k) ;; *) exit 2 ;; esac
 case "$service_cipher" in aes|aes256k) ;; *) exit 2 ;; esac
 allowed_ciphers=$key_type
@@ -79,54 +81,68 @@ for name in a b c; do
     ceph-mon --mkfs -i "$name" -c "$root/ceph.conf" --monmap "$root/monmap" --keyring "$keyring" --setuser root --setgroup root > "$root/mkfs.$name.log" 2>&1
     start_mon "$name"
 done
+mon_ready=false
 for attempt in $(seq 1 60); do
     if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" status > /dev/null 2>&1; then
+        mon_ready=true
         break
     fi
     sleep 1
 done
-for name in a b; do
-    mkdir -p "$root/mgr.$name"
-    ceph-mgr -f -i "$name" -c "$root/ceph.conf" --keyring "$keyring" --setuser root --setgroup root > "$root/mgr.$name.log" 2>&1 &
-    echo $! > "$root/mgr.$name.pid"
-done
-for attempt in $(seq 1 60); do
-    if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" mgr dump --format json 2>/dev/null | python3 -c 'import json,sys; m=json.load(sys.stdin); sys.exit(not (m.get("available") and m.get("standbys")))'; then
-        ceph-authtool "$keyring" -n client.test --print-key > /out/key
-        ceph-authtool "$keyring" -n client.readonly --print-key > /out/readonly.key
-        touch /out/ready
-        echo "Ceph test cluster ready: 3 MON, 2 MGR, key=$key_type, service=$service_cipher, $address, secure."
-        while true; do
-            # The fault test controls only this container's MON a.
-            if test -f /out/stop-mon-a && ! test -f /out/mon-a-stopped; then
-                kill "$(cat "$root/mon.a.pid")"
-                touch /out/mon-a-stopped
-            fi
-            if test -f /out/restart-mon; then
-                read -r request_id name extra < /out/restart-mon
-                case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
-                case "$name" in a|b|c) ;; *) exit 2 ;; esac
-                test -z "$extra" || exit 2
-                rm /out/restart-mon
-                pid=$(cat "$root/mon.$name.pid")
-                kill "$pid"
-                wait "$pid" || true
-                start_mon "$name"
-                joined=false
-                for retry in $(seq 1 30); do
-                    if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" quorum_status --format json 2>/dev/null | python3 -c 'import json,sys; sys.exit(len(json.load(sys.stdin).get("quorum_names", [])) != 3)'; then
-                        joined=true
-                        break
-                    fi
-                    sleep 1
-                done
-                test "$joined" = true || exit 1
-                touch "/out/mon-restarted.$request_id"
+test "$mon_ready" = true || exit 1
+start_mgrs() {
+    for name in a b; do
+        mkdir -p "$root/mgr.$name"
+        ceph-mgr -f -i "$name" -c "$root/ceph.conf" --keyring "$keyring" --setuser root --setgroup root > "$root/mgr.$name.log" 2>&1 &
+        echo $! > "$root/mgr.$name.pid"
+    done
+    for attempt in $(seq 1 60); do
+        if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" mgr dump --format json 2>/dev/null | python3 -c 'import json,sys; m=json.load(sys.stdin); sys.exit(not (m.get("available") and m.get("standbys")))'; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+if test "$mgr_count" = 2; then
+    start_mgrs
+fi
+ceph-authtool "$keyring" -n client.test --print-key > /out/key
+ceph-authtool "$keyring" -n client.readonly --print-key > /out/readonly.key
+touch /out/ready
+echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, secure."
+while true; do
+    if test -f /out/start-mgrs && ! test -f /out/mgrs-started; then
+        test "$mgr_count" = 0 || exit 2
+        start_mgrs
+        mgr_count=2
+        touch /out/mgrs-started
+    fi
+    # Fault controls affect only this container's daemons.
+    if test -f /out/stop-mon-a && ! test -f /out/mon-a-stopped; then
+        kill "$(cat "$root/mon.a.pid")"
+        touch /out/mon-a-stopped
+    fi
+    if test -f /out/restart-mon; then
+        read -r request_id name extra < /out/restart-mon
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        case "$name" in a|b|c) ;; *) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/restart-mon
+        pid=$(cat "$root/mon.$name.pid")
+        kill "$pid"
+        wait "$pid" || true
+        start_mon "$name"
+        joined=false
+        for retry in $(seq 1 30); do
+            if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" quorum_status --format json 2>/dev/null | python3 -c 'import json,sys; sys.exit(len(json.load(sys.stdin).get("quorum_names", [])) != 3)'; then
+                joined=true
+                break
             fi
             sleep 1
         done
+        test "$joined" = true || exit 1
+        touch "/out/mon-restarted.$request_id"
     fi
     sleep 1
 done
-tail -n 20 "$root"/mon.*.log "$root"/mgr.*.log
-exit 1
