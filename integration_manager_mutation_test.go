@@ -60,7 +60,7 @@ func TestCephAppliedManagerMutationIsNotReplayedIntegration(t *testing.T) {
 			if wrapped.CompareAndSwap(false, true) {
 				conn = &lostReplyConn{Conn: conn, armed: &armed, closed: make(chan struct{}), signalBlocked: func() { blockOnce.Do(func() { close(blocked) }) }}
 			}
-			conn = &managerSetupWriteProbe{Conn: conn, writes: &writes}
+			conn = &commandWriteProbe{Conn: conn, writes: &writes}
 		}
 		return conn, nil
 	}

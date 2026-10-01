@@ -11,12 +11,12 @@ import (
 	"time"
 )
 
-type managerSetupWriteProbe struct {
+type commandWriteProbe struct {
 	net.Conn
 	writes *atomic.Int32
 }
 
-func (c *managerSetupWriteProbe) Write(p []byte) (int, error) {
+func (c *commandWriteProbe) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n >= 4096 {
 		c.writes.Add(1)
@@ -70,7 +70,7 @@ func TestCephManagerSetupFailoverIntegration(t *testing.T) {
 		}
 		conn, err := dial(ctx, network, endpoint)
 		if err == nil && manager {
-			return &managerSetupWriteProbe{Conn: conn, writes: &writes}, nil
+			return &commandWriteProbe{Conn: conn, writes: &writes}, nil
 		}
 		return conn, err
 	}
