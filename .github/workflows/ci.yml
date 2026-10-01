@@ -1,0 +1,82 @@
+name: Native Go and Tentacle interoperability
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go: ['1.24.0', '1.27.x']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Enforce standard-library-only product dependencies
+        run: |
+          external=$(go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d; /^github.com\/jsyoo5b\/ceph-msgr-go\($\|\/\)/d')
+          test -z "$external" || { echo "$external"; exit 1; }
+
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      # The race detector needs CGO instrumentation; product builds use CGO=0.
+      - run: go test -race ./...
+        env:
+          CGO_ENABLED: '1'
+
+  ceph:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { key: aes256k, service: aes256k, family: '4', stress: '3m' }
+          - { key: aes, service: aes, family: '4', stress: '' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '' }
+          - { key: aes, service: aes256k, family: '4', stress: '' }
+          - { key: aes256k, service: aes, family: '4', stress: '' }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      - name: Real MON and MGR commands, errors, renewal and faults
+        run: sh integration/run.sh
+        env:
+          CEPH_MSGR_TEST_IMAGE: quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9
+          CEPH_MSGR_TEST_KEY_TYPE: ${{ matrix.key }}
+          CEPH_MSGR_TEST_SERVICE_CIPHER: ${{ matrix.service }}
+          CEPH_MSGR_TEST_IP_FAMILY: ${{ matrix.family }}
+          CEPH_MSGR_STRESS_DURATION: ${{ matrix.stress }}
