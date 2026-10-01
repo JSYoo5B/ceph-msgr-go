@@ -33,6 +33,7 @@ mon_host = [v2:$address:33300/0],[v2:$address:33301/0],[v2:$address:33302/0]
 auth_cluster_required = cephx
 auth_service_required = cephx
 auth_client_required = cephx
+auth_allow_insecure_global_id_reclaim = false
 auth_mon_ticket_ttl = 12
 auth_service_ticket_ttl = 12
 ms_cluster_mode = secure
