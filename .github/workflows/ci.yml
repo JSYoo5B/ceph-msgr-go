@@ -97,6 +97,7 @@ jobs:
         with:
           go-version: '1.27.x'
       - name: Real MON and MGR commands, errors, renewal and faults
+        id: ceph
         run: |
           result=0
           sh integration/run.sh 2>&1 | tee "$RUNNER_TEMP/ceph-tests.log" || result=$?
@@ -113,3 +114,13 @@ jobs:
           CEPH_MSGR_TEST_MGR_COUNT: ${{ matrix.managers || '2' }}
           CEPH_MSGR_TEST_RUNTIME: ${{ matrix.runtime || 'container' }}
           CEPH_MSGR_TEST_EXPIRE_TICKETS: ${{ matrix.expiry || '0' }}
+          CEPH_MSGR_TEST_DIAGNOSTICS: ${{ runner.temp }}/ceph-diagnostics
+      - name: Preserve failed Ceph test logs and crash metadata
+        if: failure() && steps.ceph.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ceph-diagnostics-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/ceph-tests.log
+            ${{ runner.temp }}/ceph-diagnostics/
+          retention-days: 7

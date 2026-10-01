@@ -73,6 +73,7 @@ for attempt in $(seq 1 120); do
         if test "$runtime" = host; then
             if ! test -f "$out/relay.ready"; then
                 cat "$out/relay.log"
+                failure_diagnostics
                 exit 1
             fi
             proxy=$(docker port "$container" 40000/tcp)
@@ -99,4 +100,5 @@ for attempt in $(seq 1 120); do
     sleep 1
 done
 docker logs --tail 50 "$container"
+failure_diagnostics
 exit 1
