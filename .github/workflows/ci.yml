@@ -35,7 +35,7 @@ jobs:
       - run: go vet ./...
       - name: Enforce standard-library-only product dependencies
         run: |
-          external=$(go list -deps -f '{{if not .Standard}}{{.ImportPath}}{{end}}' ./... | sed '/^$/d; /^github.com\/jsyoo5b\/ceph-msgr-go\($\|\/\)/d')
+          external=$(go list -deps -f '{{if not .Standard}}{{if not .Module.Main}}{{.ImportPath}}{{end}}{{end}}' ./...)
           test -z "$external" || { echo "$external"; exit 1; }
 
   race:
