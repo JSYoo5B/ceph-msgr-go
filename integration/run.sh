@@ -2,7 +2,7 @@
 # All Ceph executables and faults stay in a disposable test container.
 set -eu
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-image=${CEPH_MSGR_TEST_IMAGE:-quay.io/ceph/ceph:v20.2.4}
+image=${CEPH_MSGR_TEST_IMAGE:-quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9}
 key_type=${CEPH_MSGR_TEST_KEY_TYPE:-aes256k}
 service_cipher=${CEPH_MSGR_TEST_SERVICE_CIPHER:-$key_type}
 ip_family=${CEPH_MSGR_TEST_IP_FAMILY:-4}
