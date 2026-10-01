@@ -15,7 +15,7 @@ import (
 func TestCancellationDuringPartialWriteFinishesFrameAndPreservesOtherCall(t *testing.T) {
 	client, peer := net.Pipe()
 	peer.SetDeadline(time.Now().Add(3 * time.Second))
-	s := New(&Transport{Conn: client, Reader: msgr.NewReader(client, 0), Writer: msgr.NewWriter(client, 0)}, 2*time.Second, nil, nil)
+	s := New(&Transport{Conn: client, Reader: msgr.NewReader(client, 0), Writer: msgr.NewWriter(client, 0)}, Config{WriteTimeout: 2 * time.Second}, nil, nil)
 	t.Cleanup(func() { s.Fail(ErrClosed); peer.Close(); s.Wait() })
 	s.Start()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -56,7 +56,7 @@ func TestCancellationDuringPartialWriteFinishesFrameAndPreservesOtherCall(t *tes
 func TestTruncatedResponseCannotEstablishCommandOutcome(t *testing.T) {
 	client, peer := net.Pipe()
 	peer.SetDeadline(time.Now().Add(3 * time.Second))
-	s := New(&Transport{Conn: client, Reader: msgr.NewReader(client, 0), Writer: msgr.NewWriter(client, 0)}, time.Second, nil, nil)
+	s := New(&Transport{Conn: client, Reader: msgr.NewReader(client, 0), Writer: msgr.NewWriter(client, 0)}, Config{WriteTimeout: time.Second}, nil, nil)
 	t.Cleanup(func() { s.Fail(ErrClosed); peer.Close(); s.Wait() })
 	s.Start()
 	done := make(chan error, 1)

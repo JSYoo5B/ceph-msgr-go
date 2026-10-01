@@ -15,7 +15,7 @@ func testSession(t *testing.T) (*Session, *msgr.Reader, *msgr.Writer) {
 	t.Helper()
 	client, peer := net.Pipe()
 	peer.SetDeadline(time.Now().Add(3 * time.Second))
-	s := New(&Transport{Conn: client, Reader: msgr.NewReader(client, 0), Writer: msgr.NewWriter(client, 0)}, time.Second, nil, nil)
+	s := New(&Transport{Conn: client, Reader: msgr.NewReader(client, 0), Writer: msgr.NewWriter(client, 0)}, Config{WriteTimeout: time.Second}, nil, nil)
 	t.Cleanup(func() { s.Fail(ErrClosed); peer.Close(); s.Wait() })
 	return s, msgr.NewReader(peer, 0), msgr.NewWriter(peer, 0)
 }

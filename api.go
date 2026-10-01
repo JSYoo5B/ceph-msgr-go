@@ -21,6 +21,10 @@ import (
 var ErrClosed = session.ErrClosed
 var ErrManagerChanged = errors.New("ceph: active manager changed")
 
+// ErrKeepaliveTimeout means an established connection received no complete
+// Messenger frame within KeepaliveTimeout. Started commands remain uncertain.
+var ErrKeepaliveTimeout = session.ErrKeepaliveTimeout
+
 type OutcomeUnknownError = session.OutcomeUnknownError
 
 // AuthenticationError is an explicit server rejection of authentication or
@@ -49,7 +53,14 @@ type Options struct {
 	// ConnectTimeout bounds each endpoint's setup, additional bootstrap
 	// retries after transient connection errors, and retired MON draining.
 	ConnectTimeout time.Duration
-	MaxFrameSize   uint32
+	// KeepaliveInterval controls Messenger probes, independently of TCP
+	// keepalive. Defaults to 15 seconds.
+	KeepaliveInterval time.Duration
+	// KeepaliveTimeout bounds silence on an established connection. Defaults
+	// to 45 seconds and must exceed KeepaliveInterval. Any complete valid
+	// frame counts as activity; request contexts do not reset this timeout.
+	KeepaliveTimeout time.Duration
+	MaxFrameSize     uint32
 	// MaxInFlight bounds concurrent command calls, including queued requests.
 	// Defaults to 64. Waiting for a slot respects the operation's context.
 	MaxInFlight int

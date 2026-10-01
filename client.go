@@ -62,6 +62,15 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if options.ConnectTimeout < 0 {
 		return nil, errors.New("ceph: negative connect timeout")
 	}
+	if options.KeepaliveInterval == 0 {
+		options.KeepaliveInterval = 15 * time.Second
+	}
+	if options.KeepaliveTimeout == 0 {
+		options.KeepaliveTimeout = 45 * time.Second
+	}
+	if options.KeepaliveInterval < 0 || options.KeepaliveTimeout <= options.KeepaliveInterval {
+		return nil, errors.New("ceph: keepalive timeout must exceed a positive interval")
+	}
 	if options.MaxFrameSize == 0 {
 		options.MaxFrameSize = wire.DefaultLimit
 	}
@@ -195,6 +204,10 @@ func (c *Client) attach(s *session.Session) bool {
 	return true
 }
 
+func (c *Client) sessionConfig() session.Config {
+	return session.Config{WriteTimeout: c.options.ConnectTimeout, KeepaliveInterval: c.options.KeepaliveInterval, KeepaliveTimeout: c.options.KeepaliveTimeout}
+}
+
 func (c *Client) connectMonitor(ctx context.Context) error {
 	c.mu.Lock()
 	seeds := append([]string(nil), c.options.Monitors...)
@@ -232,7 +245,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		ready := make(chan struct{})
 		var readyOnce sync.Once
 		var s *session.Session
-		s = session.New(transport, c.options.ConnectTimeout, func(m msgr.MessageData) error {
+		s = session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
 			accepted, err := c.handleMap(s, m)
 			if accepted {
 				readyOnce.Do(func() { close(ready) })
@@ -451,7 +464,7 @@ func (c *Client) manager(ctx context.Context) (*session.Session, error) {
 				continue
 			}
 			var s *session.Session
-			s = session.New(transport, c.options.ConnectTimeout, nil, func(error) {
+			s = session.New(transport, c.sessionConfig(), nil, func(error) {
 				c.mu.Lock()
 				if c.mgr == s {
 					c.mgr = nil

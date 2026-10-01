@@ -15,6 +15,7 @@ import (
 
 var ErrClosed = errors.New("ceph: client closed")
 var ErrRetired = errors.New("ceph: session retired")
+var ErrKeepaliveTimeout = errors.New("ceph messenger: keepalive timeout")
 
 // OutcomeUnknownError means a command may have reached the daemon. It is not
 // safe to infer that a mutation failed or to re-execute it automatically.
@@ -36,9 +37,13 @@ type request struct {
 	result  chan response
 }
 
+type Config struct {
+	WriteTimeout, KeepaliveInterval, KeepaliveTimeout time.Duration
+}
+
 type Session struct {
 	transport      *Transport
-	writeTimeout   time.Duration
+	config         Config
 	mu             sync.Mutex
 	pending        map[uint64]*request
 	nextID         uint64
@@ -52,13 +57,19 @@ type Session struct {
 	wg             sync.WaitGroup
 	startOnce      sync.Once
 	received, sent atomic.Uint64
-	lastReceive    atomic.Int64
+	lastReceive    atomic.Pointer[time.Time]
 	onMessage      func(msgr.MessageData) error
 	onClose        func(error)
 }
 
-func New(t *Transport, writeTimeout time.Duration, onMessage func(msgr.MessageData) error, onClose func(error)) *Session {
-	return &Session{transport: t, writeTimeout: writeTimeout, pending: make(map[uint64]*request), idle: make(chan struct{}), queue: make(chan *request, 64), controls: make(chan msgr.Frame, 16), ack: make(chan struct{}, 1), done: make(chan struct{}), onMessage: onMessage, onClose: onClose}
+func New(t *Transport, config Config, onMessage func(msgr.MessageData) error, onClose func(error)) *Session {
+	if config.KeepaliveInterval == 0 {
+		config.KeepaliveInterval = 15 * time.Second
+	}
+	if config.KeepaliveTimeout == 0 {
+		config.KeepaliveTimeout = 45 * time.Second
+	}
+	return &Session{transport: t, config: config, pending: make(map[uint64]*request), idle: make(chan struct{}), queue: make(chan *request, 64), controls: make(chan msgr.Frame, 16), ack: make(chan struct{}, 1), done: make(chan struct{}), onMessage: onMessage, onClose: onClose}
 }
 func (s *Session) Start() {
 	s.startOnce.Do(func() {
@@ -67,7 +78,8 @@ func (s *Session) Start() {
 		if s.err != nil {
 			return
 		}
-		s.lastReceive.Store(time.Now().UnixNano())
+		now := time.Now()
+		s.lastReceive.Store(&now)
 		s.wg.Add(3)
 		go s.readLoop()
 		go s.writeLoop()
@@ -213,7 +225,7 @@ func (s *Session) control(f msgr.Frame) error {
 	}
 }
 func (s *Session) writeFrame(f msgr.Frame) error {
-	if err := s.transport.Conn.SetWriteDeadline(time.Now().Add(s.writeTimeout)); err != nil {
+	if err := s.transport.Conn.SetWriteDeadline(time.Now().Add(s.config.WriteTimeout)); err != nil {
 		return err
 	}
 	return s.transport.Writer.Write(f)
@@ -266,7 +278,9 @@ func (s *Session) readLoop() {
 			s.Fail(err)
 			return
 		}
-		s.lastReceive.Store(time.Now().UnixNano())
+		// Keep Go's monotonic clock component when publishing activity.
+		now := time.Now()
+		s.lastReceive.Store(&now)
 		switch f.Tag {
 		case msgr.Message:
 			m, err := msgr.DecodeMessage(f)
@@ -343,15 +357,15 @@ func (s *Session) readLoop() {
 }
 func (s *Session) keepaliveLoop() {
 	defer s.wg.Done()
-	timer := time.NewTicker(15 * time.Second)
+	timer := time.NewTicker(s.config.KeepaliveInterval)
 	defer timer.Stop()
 	for {
 		select {
 		case <-s.done:
 			return
 		case now := <-timer.C:
-			if now.Sub(time.Unix(0, s.lastReceive.Load())) > 45*time.Second {
-				s.Fail(errors.New("ceph messenger: keepalive timeout"))
+			if now.Sub(*s.lastReceive.Load()) >= s.config.KeepaliveTimeout {
+				s.Fail(ErrKeepaliveTimeout)
 				return
 			}
 			e := wire.Encoder{}
