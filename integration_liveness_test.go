@@ -28,6 +28,8 @@ func TestCephManagerReceiveStallIntegration(t *testing.T) {
 	options.KeepaliveTimeout = 3 * time.Second
 	var armed, wrapped atomic.Bool
 	blocked := make(chan struct{})
+	submitted := make(chan struct{})
+	var submittedOnce sync.Once
 	dial := options.DialContext
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 		conn, err := dial(ctx, network, endpoint)
@@ -36,7 +38,14 @@ func TestCephManagerReceiveStallIntegration(t *testing.T) {
 		}
 		_, port, err := net.SplitHostPort(endpoint)
 		if err == nil && (port == "36800" || port == "36801") && wrapped.CompareAndSwap(false, true) {
-			return &lostReplyConn{Conn: conn, armed: &armed, closed: make(chan struct{}), signalBlocked: func() { close(blocked) }}, nil
+			return &receiveStallConn{
+				lostReplyConn: &lostReplyConn{Conn: conn, armed: &armed, closed: make(chan struct{}), signalBlocked: func() { close(blocked) }},
+				onWrite: func(n int) {
+					if armed.Load() && n >= 4096 {
+						submittedOnce.Do(func() { close(submitted) })
+					}
+				},
+			}, nil
 		}
 		return conn, nil
 	}
@@ -65,7 +74,19 @@ func TestCephManagerReceiveStallIntegration(t *testing.T) {
 	short, stop := context.WithCancel(ctx)
 	defer stop()
 	finished := make(chan error, 1)
-	go func() { _, err := c.MgrCommand(short, command); finished <- err }()
+	bulk := command
+	bulk.Input = bytes.Repeat([]byte{0x71}, 40<<10)
+	go func() { _, err := c.MgrCommand(short, bulk); finished <- err }()
+	// Blocked bytes can be a keepalive acknowledgment from the idle phase.
+	// Observe a bulk command write before canceling: probes are much smaller
+	// than 4 KiB and cannot establish command transmission on their own.
+	select {
+	case <-submitted:
+	case err := <-finished:
+		t.Fatal("call ended before command bytes were written", err)
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
 	select {
 	case <-blocked:
 	case err := <-finished:
@@ -107,6 +128,17 @@ func TestCephManagerReceiveStallIntegration(t *testing.T) {
 		t.Errorf("workers remain after receive stall: before=%d after=%d", baseline, after)
 	}
 	t.Log("idle keepalive, local cancellation, silence detection and fresh MGR recovery passed")
+}
+
+type receiveStallConn struct {
+	*lostReplyConn
+	onWrite func(int)
+}
+
+func (c *receiveStallConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.onWrite(n)
+	return n, err
 }
 
 // A standard net.Pipe supplies real write deadlines while a Go relay speaks
