@@ -12,6 +12,8 @@ case "$runtime" in container|host) ;; *) exit 2 ;; esac
 diagnostics=${CEPH_MSGR_TEST_DIAGNOSTICS:-}
 expire_tickets=${CEPH_MSGR_TEST_EXPIRE_TICKETS:-0}
 case "$expire_tickets" in 0|1) ;; *) exit 2 ;; esac
+idle_sessions=${CEPH_MSGR_TEST_IDLE_SESSIONS:-0}
+case "$idle_sessions" in 0|1) ;; *) exit 2 ;; esac
 case "$mgr_count" in
     0) test_run=${CEPH_MSGR_TEST_RUN:-^TestCephManagerAvailabilityIntegration$} ;;
     2) test_run=${CEPH_MSGR_TEST_RUN:-^TestCeph.*Integration$} ;;
@@ -22,6 +24,12 @@ if test "$expire_tickets" = 1; then
     # Losing the rotating proof can also strand Ceph daemons. Give this
     # destructive authentication scenario its own short-lived fixture.
     test_run=${CEPH_MSGR_TEST_RUN:-'^TestCeph(ExpiredTicketRecovery|DiscardedTicketProof)Integration$'}
+fi
+if test "$idle_sessions" = 1; then
+    test "$mgr_count" = 2 && test "$expire_tickets" = 0 || exit 2
+    # Keep this long-ticket scenario separate from renewal/expiration tests
+    # whose deadlines rely on the ordinary 12-second fixture lifetime.
+    test_run=${CEPH_MSGR_TEST_RUN:-'^TestCephIdleSessionsIntegration$'}
 fi
 case "$ip_family" in
     4) monitors=127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302 ;;
@@ -76,7 +84,7 @@ else
 fi
 # Keep a running long test independent of edits in the shared checkout.
 cp "$project_root/integration/cluster.sh" "$out/cluster.sh"
-docker run -d --name "$container" --label ceph-msgr-go.integration=true --entrypoint /bin/sh "$@" -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_IP_FAMILY="$ip_family" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -v "$out:/out" "$image" "$cluster_script" > /dev/null
+docker run -d --name "$container" --label ceph-msgr-go.integration=true --entrypoint /bin/sh "$@" -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_IP_FAMILY="$ip_family" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -v "$out:/out" "$image" "$cluster_script" > /dev/null
 for attempt in $(seq 1 120); do
     if test -f "$out/ready"; then
         if test "$runtime" = host; then
@@ -86,12 +94,12 @@ for attempt in $(seq 1 120); do
                 exit 1
             fi
             proxy=$(docker port "$container" 40000/tcp)
-            if CEPH_MSGR_MONITORS="$monitors" CEPH_MSGR_KEY_FILE="$out/key" CEPH_MSGR_IDENTITY=client.test CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 CEPH_MSGR_CONTROL_DIR="$out" CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" CEPH_MSGR_TEST_PROXY="$proxy" "$out/client.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
+            if CEPH_MSGR_MONITORS="$monitors" CEPH_MSGR_KEY_FILE="$out/key" CEPH_MSGR_IDENTITY=client.test CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 CEPH_MSGR_CONTROL_DIR="$out" CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" CEPH_MSGR_TEST_PROXY="$proxy" "$out/client.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
                 result=0
             else
                 result=$?
             fi
-        elif docker exec -e CEPH_MSGR_MONITORS="$monitors" -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" -e CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" "$container" /out/client.test -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
+        elif docker exec -e CEPH_MSGR_MONITORS="$monitors" -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" "$container" /out/client.test -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
             result=0
         else
             result=$?

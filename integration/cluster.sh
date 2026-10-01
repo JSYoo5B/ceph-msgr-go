@@ -5,6 +5,12 @@ root=/tmp/ceph-msgr-test
 key_type=${CEPH_MSGR_TEST_KEY_TYPE:-aes256k}
 service_cipher=${CEPH_MSGR_TEST_SERVICE_CIPHER:-$key_type}
 mgr_count=${CEPH_MSGR_TEST_MGR_COUNT:-2}
+idle_sessions=${CEPH_MSGR_TEST_IDLE_SESSIONS:-0}
+case "$idle_sessions" in
+    0) ticket_ttl=12; subscribe_interval=86400 ;;
+    1) ticket_ttl=120; subscribe_interval=2 ;;
+    *) exit 2 ;;
+esac
 case "$mgr_count" in 0|2) ;; *) exit 2 ;; esac
 case "$key_type" in aes|aes256k) ;; *) exit 2 ;; esac
 case "$service_cipher" in aes|aes256k) ;; *) exit 2 ;; esac
@@ -34,8 +40,9 @@ auth_cluster_required = cephx
 auth_service_required = cephx
 auth_client_required = cephx
 auth_allow_insecure_global_id_reclaim = false
-auth_mon_ticket_ttl = 12
-auth_service_ticket_ttl = 12
+auth_mon_ticket_ttl = $ticket_ttl
+auth_service_ticket_ttl = $ticket_ttl
+mon_subscribe_interval = $subscribe_interval
 ms_cluster_mode = secure
 ms_service_mode = secure
 ms_client_mode = secure
