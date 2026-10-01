@@ -277,18 +277,23 @@ func (s *Session) readLoop() {
 			}
 			if m.Type == msgr.MonCommandReplyMessage || m.Type == msgr.MgrCommandReplyMessage {
 				s.mu.Lock()
-				r := s.remove(m.Transaction)
-				s.mu.Unlock()
+				r := s.pending[m.Transaction]
 				if r != nil {
 					expected := msgr.MonCommandReplyMessage
 					if r.message.Type == msgr.MgrCommandMessage {
 						expected = msgr.MgrCommandReplyMessage
 					}
-					if m.Type != expected {
-						r.result <- response{err: msgr.ErrFrame}
+					if !r.started || m.Type != expected {
+						// Leave it pending so Fail preserves whether transmission
+						// started, for this request and every other affected call.
+						s.mu.Unlock()
 						s.Fail(msgr.ErrFrame)
 						return
 					}
+					s.remove(m.Transaction)
+				}
+				s.mu.Unlock()
+				if r != nil {
 					r.result <- response{message: m}
 				}
 			} else if s.onMessage != nil {

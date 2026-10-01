@@ -135,7 +135,11 @@ func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result
 	}
 	code, message, err := msgr.CommandReply(reply)
 	if err != nil {
-		return result, err
+		// A received but undecodable reply does not establish whether the
+		// command succeeded. Keep raw output and retire the invalid session.
+		result.Data = append([]byte(nil), reply.Data...)
+		s.Fail(err)
+		return result, &OutcomeUnknownError{Cause: fmt.Errorf("ceph: invalid command reply: %w", err)}
 	}
 	result = Result{Data: append([]byte(nil), reply.Data...), Message: message, Code: code}
 	if code < 0 {

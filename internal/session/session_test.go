@@ -178,3 +178,50 @@ func TestCancellationDuringDispatchRemainsConservative(t *testing.T) {
 		t.Fatal("race lost delivery state", err)
 	}
 }
+
+func TestWrongReplyTypeFailsAllSentRequestsWithUnknownOutcomes(t *testing.T) {
+	s, r, w := testSession(t)
+	s.Start()
+	done := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() {
+			_, err := s.Call(context.Background(), msgr.MessageData{Type: msgr.MonCommandMessage})
+			done <- err
+		}()
+	}
+	first := readRequest(t, r)
+	readRequest(t, r)
+	first.Type = msgr.MgrCommandReplyMessage // Wrong daemon reply, same TID.
+	first.Sequence = 1
+	if err := w.Write(first.Frame()); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		var unknown *OutcomeUnknownError
+		if err := <-done; !errors.Is(err, msgr.ErrFrame) || !errors.As(err, &unknown) {
+			t.Fatal("invalid response lost a sent request's outcome", err)
+		}
+	}
+	s.Wait()
+}
+
+func TestReplyForUnsentRequestCannotCompleteIt(t *testing.T) {
+	s, _, w := testSession(t)
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Call(context.Background(), msgr.MessageData{Type: msgr.MonCommandMessage})
+		done <- err
+	}()
+	queued := <-s.queue // Writer remains paused; nothing has been transmitted.
+	s.wg.Add(1)
+	go s.readLoop()
+	m := msgr.MessageData{Sequence: 1, Transaction: queued.message.Transaction, Type: msgr.MonCommandReplyMessage}
+	if err := w.Write(m.Frame()); err != nil {
+		t.Fatal(err)
+	}
+	var unknown *OutcomeUnknownError
+	if err := <-done; !errors.Is(err, msgr.ErrFrame) || errors.As(err, &unknown) {
+		t.Fatal("unsolicited reply completed an unsent command", err)
+	}
+	s.Wait()
+}

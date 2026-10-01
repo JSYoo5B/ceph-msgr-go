@@ -125,6 +125,7 @@ type peerConfig struct {
 	role    uint8
 	id      uint64
 	command func(msgr.MessageData)
+	reply   func(*msgr.MessageData)
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
@@ -445,7 +446,11 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		if len(data) == 0 {
 			data = []byte(`{"ok":true}`)
 		}
-		if err := send(msgr.MessageData{Type: typ, Transaction: m.Transaction, Front: e.Data, Data: data}); err != nil {
+		response := msgr.MessageData{Type: typ, Transaction: m.Transaction, Front: e.Data, Data: data}
+		if cfg.reply != nil {
+			cfg.reply(&response)
+		}
+		if err := send(response); err != nil {
 			return err
 		}
 	}
