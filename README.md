@@ -62,6 +62,8 @@ fmt.Printf("%s\n", result.Data)
   context에 따른다. `MaxFrameSize` 기본값은 논리 frame당 16 MiB다.
 - `ConnectTimeout` 기본값은 endpoint별 10초다. 요청 deadline은 공유
   연결에 적용하지 않는다. `Close`는 연결과 내부 worker를 종료하고 기다린다.
+  종료 후 호출은 입력 검증·복사 전에 `ErrClosed`를 반환한다. 호출 context가
+  이미 취소됐으면 해당 context 오류를 먼저 반환한다.
 - `KeepaliveInterval` 기본값은 15초, `KeepaliveTimeout`은 45초이며 timeout은
   interval보다 커야 한다. TCP keepalive와 별도로 Messenger probe를 보내고,
   완전한 frame 수신이 끊기면 `ErrKeepaliveTimeout`으로 연결을 종료한다.
@@ -102,7 +104,9 @@ fmt.Printf("%s\n", result.Data)
   응답 메시지 종류나 본문이 손상된 경우에도 전송한 요청의 결과는 불명확하며
   해당 세션을 종료한다. 본문 해석 실패 시 수신한 raw data는 보존한다.
   복구는 fresh lossy session을 사용하며 Messenger cookie에 의한 기존
-  session 재개는 구현하지 않는다.
+  session 재개는 구현하지 않는다. 서버가 reliable 방식이나 알 수 없는
+  session flag를 선택하면 거부한다. 인증된 서버 식별 주소에도 연결 대상의
+  주소·포트·nonce가 포함돼야 한다.
 
 인증은 `secure`만 허용하며 자동 downgrade하지 않는다. 현재 Tentacle의
 `aes256k`와 기존 `aes` 키를 지원한다. 압축 협상은 압축을 끄는 데 사용한다.
@@ -154,6 +158,12 @@ MGR 응답 수신을 차단해 로컬 취소, keepalive timeout, 새 연결 복�
 이 방향별 차단 시험은 Go 시험 전송 계층에서 수행한다. 별도로 실제 MON과
 MGR 프로세스에 SIGSTOP을 적용해 TCP 연결을 열린 채로 유지했고, 무응답
 감지 후 다른 MON과 standby MGR에서 조회가 성공했다.
+active MGR 프로세스를 종료한 별도 시험에서는 `mgr fail` 없이 Ceph의 기본
+beacon 설정으로 약 33초 뒤 standby가 자동 승격됐다. 그동안 인증 티켓이
+갱신됐고, 승격된 MGR의 명령과 재기동한 daemon의 standby 복귀도 확인했다.
+이 경로는 20.2.4·aes256k의 Linux arm64 및 20.2.3·aes의 Darwin arm64에서
+통과했다. 기본 Go dialer의 `localhost` seed도 Linux arm64에서 IPv4·IPv6
+각각 인증된 MON/MGR 명령을 완료했다.
 
 MON 세 개를 모두 중단하고 재기동하는 과정을 3회 반복했다. 중단 중 전송을
 기다리는 호출은 context 만료로 끝나며, 충분한 deadline을 가진 MON/MGR
@@ -163,6 +173,10 @@ MON 세 개를 모두 중단하고 재기동하는 과정을 3회 반복했다. 
 같은 키를 복원해 기존 client의 MON/MGR 호출이 다시 성공하는지 검증했다.
 키 회수·복원 시험은 Linux arm64에서 20.2.4의 aes256k·IPv4 및 aes·IPv6,
 20.2.3의 aes·IPv4 구성으로도 통과했다.
+인증 키 자체를 교체한 경우에도 기존 client의 갱신 거절을 확인했고,
+호출자가 새 키로 명시적으로 만든 client에서 MON/MGR 명령이 성공했다.
+쓰기 중인 연결 뒤에 대기하던 호출을 취소하거나 종료할 때 bulk 입력과
+context 참조가 GC로 해제되는지도 별도의 단위 시험으로 확인했다.
 
 별도 fixture에서 실제 ticket이 만료된 뒤 서버가 이전 ID의 암호 증거를
 받아들이면 ID를 유지하고 ticket을 갱신했다. 그 증거의 rotating secret까지
@@ -181,7 +195,13 @@ ticket 갱신 366회, MGR fail 119회를 수행했다. 장애 중 결과 불명�
 ticket 갱신 361회, MGR fail 120회, 결과 불명확 22건을 기록했다.
 샘플링한 세션 최대는 3개, goroutine 최대는 24개였다. 두 1시간 시험의
 fixture는 global ID reclaim에 Ceph의 기본 허용 설정을 사용했다.
-엄격한 reclaim 설정의 검증 범위는 위의 개별 시험과 전체 CI다.
+
+`auth_allow_insecure_global_id_reclaim=false`를 적용한 바이너리 `cadd40d`의
+[엄격한 인증 설정 1시간 시험](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/strict-auth-soak-1h)도
+Linux arm64·IPv4·aes256k 구성에서 통과했다. 성공 호출 1,246,654건,
+ticket 갱신 367회, MGR fail 119회, 결과 불명확 34건을 기록했다.
+샘플링한 세션 최대는 3개, goroutine 최대는 24개였으며 종료 후 worker
+정리 검사도 통과했다. 이후 변경은 각 실서버 시험과 CI로 따로 검증했다.
 
 앞선 별도 장시간 실행은 16분 31초에 실패했다. Go 호출은 결과 불명확 EOF를
 반환했고 Ceph MGR·MON의 crash 로그도 있었다. 원인은 아직 확정하지 못했으며,
@@ -250,10 +270,10 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
 시험한다. Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드 및 별도 인증 만료 fixture까지 포함한
-[GitHub CI 17개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36855841353)이
+[GitHub CI 17개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36864257413)이
 2026-10-01에 모두 통과했다. Actions 설정 lint도 통과했다.
-[복구 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/secure-stall-recovery)는
-이 실행의 `945a090`을 가리킨다.
+[서버 식별·MGR 자동 승계 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/server-identity-and-mgr-recovery)는
+이 실행의 `a65c54a`를 가리킨다.
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
@@ -277,6 +297,9 @@ python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
 - Frame vector는 별도의 Python CRC/AES-GCM 구현으로 생성했다. 이는
   [규약 기반 vector](internal/msgr/testdata/generate.py)이며 Ceph traffic
   capture가 아니다.
+- [실제 Ceph banner·HELLO capture](internal/msgr/testdata/README.md)는 인증 전
+  CRC framing 회귀·fuzz 입력으로 사용한다. Secure reader도 독립 AES-GCM
+  vector를 seed로 별도 fuzz 검사한다.
 - [MON/MGR 지도 fixture](internal/maps/testdata/README.md)는 실제 Ceph가 생성했다.
   Fixture의 SHA-256과 생성 환경을 함께 기록했다.
 - Synthetic peer 테스트는 취소·오류·경합을 검증하는 용도이며 실제 Ceph
