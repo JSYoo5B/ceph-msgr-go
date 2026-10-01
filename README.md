@@ -165,6 +165,14 @@ beacon 설정으로 약 33초 뒤 standby가 자동 승격됐다. 그동안 인�
 통과했다. 기본 Go dialer의 `localhost` seed도 Linux arm64에서 IPv4·IPv6
 각각 인증된 MON/MGR 명령을 완료했다.
 
+[MGR 연결 준비 복구 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/manager-setup-recovery)는
+`321dd35`다. 연결 준비 중 active MGR이나 인증 ticket이 바뀌면 현재 상태를
+다시 확인해 아직 전송하지 않은 명령을 처리한다. 실제 20.2.4·aes256k의
+Darwin arm64 시험에서는 연결 준비와 MGR 전환을 겹치게 한 뒤 변경 명령의
+단일 전송과 독립 클라이언트가 읽은 변경 결과를 확인했다. 같은 바이너리의
+전체 시험과 3분 부하 시험에서 63,504개 명령, ticket 갱신 18회, MGR 전환
+6회를 처리했다. 이 체크포인트의 CI 17개 작업도 모두 통과했다.
+
 MON 세 개를 모두 중단하고 재기동하는 과정을 3회 반복했다. 중단 중 전송을
 기다리는 호출은 context 만료로 끝나며, 충분한 deadline을 가진 MON/MGR
 조회는 quorum 복구 후 완료됐다. 이 시험은 프로세스 중단에 대한 검증이다.
