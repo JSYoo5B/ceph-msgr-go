@@ -35,6 +35,7 @@ type Client struct {
 	sessions map[*session.Session]struct{}
 	mgrGate  chan struct{}
 	wake     chan struct{}
+	calls    chan struct{}
 	wg       sync.WaitGroup
 }
 
@@ -66,6 +67,12 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if options.MaxFrameSize < 1024 || options.MaxFrameSize > 1<<30 {
 		return nil, errors.New("ceph: frame limit must be between 1 KiB and 1 GiB")
 	}
+	if options.MaxInFlight == 0 {
+		options.MaxInFlight = 64
+	}
+	if options.MaxInFlight < 1 || options.MaxInFlight > 1024 {
+		return nil, errors.New("ceph: MaxInFlight must be between 1 and 1024")
+	}
 	if options.DialContext == nil {
 		dialer := &net.Dialer{Timeout: options.ConnectTimeout}
 		options.DialContext = dialer.DialContext
@@ -75,7 +82,7 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 		return nil, err
 	}
 	base, cancel := context.WithCancel(context.Background())
-	c := &Client{options: options, ctx: base, cancel: cancel, changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), mgrGate: make(chan struct{}, 1), wake: make(chan struct{}, 1)}
+	c := &Client{options: options, ctx: base, cancel: cancel, changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), mgrGate: make(chan struct{}, 1), wake: make(chan struct{}, 1), calls: make(chan struct{}, options.MaxInFlight)}
 	if options.ExpectedFSID != "" {
 		c.fsid, err = parseFSID(options.ExpectedFSID)
 		if err != nil {

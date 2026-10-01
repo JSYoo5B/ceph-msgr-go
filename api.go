@@ -43,6 +43,9 @@ type Options struct {
 	ExpectedFSID   string
 	ConnectTimeout time.Duration
 	MaxFrameSize   uint32
+	// MaxInFlight bounds concurrent command calls, including queued requests.
+	// Defaults to 64. Waiting for a slot respects the operation's context.
+	MaxInFlight int
 	// DialContext defaults to net.Dialer.DialContext. Custom implementations
 	// must honor context cancellation; useful for proxies and in-process tests.
 	DialContext func(context.Context, string, string) (net.Conn, error)
@@ -102,6 +105,14 @@ func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result
 	}
 	if err := json.Unmarshal(command.JSON, &object); err != nil || strings.TrimSpace(object.Prefix) == "" {
 		return result, errors.New("ceph: command JSON requires a string prefix")
+	}
+	select {
+	case c.calls <- struct{}{}:
+		defer func() { <-c.calls }()
+	case <-ctx.Done():
+		return result, ctx.Err()
+	case <-c.ctx.Done():
+		return result, ErrClosed
 	}
 	jsonCommand := string(command.JSON)
 	input := append([]byte(nil), command.Input...)
