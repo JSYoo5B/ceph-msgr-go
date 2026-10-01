@@ -34,6 +34,7 @@ type Client struct {
 	monReady bool
 	sessions map[*session.Session]struct{}
 	mgrGate  chan struct{}
+	wake     chan struct{}
 	wg       sync.WaitGroup
 }
 
@@ -74,7 +75,7 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 		return nil, err
 	}
 	base, cancel := context.WithCancel(context.Background())
-	c := &Client{options: options, ctx: base, cancel: cancel, changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), mgrGate: make(chan struct{}, 1)}
+	c := &Client{options: options, ctx: base, cancel: cancel, changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), mgrGate: make(chan struct{}, 1), wake: make(chan struct{}, 1)}
 	if options.ExpectedFSID != "" {
 		c.fsid, err = parseFSID(options.ExpectedFSID)
 		if err != nil {
@@ -86,6 +87,8 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 		c.Close()
 		return nil, err
 	}
+	c.wg.Add(1)
+	go c.supervise()
 	return c, nil
 }
 
@@ -125,6 +128,12 @@ func dialAddress(a msgr.Address) string {
 	return netip.AddrPortFrom(ip, a.Endpoint.Port()).String()
 }
 func (c *Client) signal() { close(c.changed); c.changed = make(chan struct{}) } // mu held
+func (c *Client) wakeMonitor() {
+	select {
+	case c.wake <- struct{}{}:
+	default:
+	}
+}
 func (c *Client) snapshotAuth() *cephx.Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -189,10 +198,6 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 	var failures []error
 	seen := make(map[string]bool)
 	for _, seed := range seeds {
-		if seen[seed] {
-			continue
-		}
-		seen[seed] = true
 		linked, release := c.linkedContext(ctx)
 		endpoint, address, err := seedAddress(seed)
 		if err != nil {
@@ -200,6 +205,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			failures = append(failures, err)
 			continue
 		}
+		identity := endpoint + "/" + strconv.FormatUint(uint64(address.Nonce), 10)
+		if seen[identity] {
+			release()
+			continue
+		}
+		seen[identity] = true
 		candidate := c.snapshotAuth()
 		transport, err := c.open(linked, endpoint, address, 1, 0, session.MonAuth{Client: candidate})
 		if err != nil {
@@ -222,8 +233,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}, func(error) {
 			c.mu.Lock()
 			if c.mon == s {
+				wasReady := c.monReady
 				c.monReady = false
 				c.signal()
+				if wasReady {
+					c.wakeMonitor()
+				}
 			}
 			c.mu.Unlock()
 		})
@@ -249,20 +264,27 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			}
 		}
 		release()
+		var oldManager *session.Session
 		if err == nil {
 			c.mu.Lock()
 			if c.closed {
 				err = ErrClosed
 			} else {
+				if c.auth.GlobalID != candidate.GlobalID {
+					oldManager, c.mgr = c.mgr, nil
+				}
 				c.auth = candidate
 				c.monReady = true
 				c.signal()
 			}
 			c.mu.Unlock()
 		}
+		if oldManager != nil {
+			oldManager.Fail(errors.New("ceph: authenticated client identity changed"))
+		}
 		if err == nil {
 			if old != nil && old != s {
-				old.Fail(errors.New("ceph: monitor session replaced"))
+				c.retireMonitor(old)
 			}
 			return nil
 		}
@@ -345,13 +367,11 @@ func (c *Client) monitor(ctx context.Context) (*session.Session, error) {
 		if s != nil && ready {
 			if err := s.Err(); err == nil {
 				return s, nil
-			} else {
-				return nil, err
 			}
 		}
 		if s != nil {
 			if err := s.Err(); err != nil {
-				return nil, err
+				c.wakeMonitor()
 			}
 		}
 		select {

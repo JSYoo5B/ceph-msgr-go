@@ -124,6 +124,7 @@ type peerConfig struct {
 	release byte
 	role    uint8
 	id      uint64
+	command func(msgr.MessageData)
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
@@ -410,6 +411,9 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		}
 		if cfg.role == 1 && m.Type != msgr.MonCommandMessage || cfg.role == 16 && m.Type != msgr.MgrCommandMessage {
 			return errors.New("wrong command daemon")
+		}
+		if cfg.command != nil {
+			cfg.command(m)
 		}
 		if strings.Contains(string(m.Front), "drop") {
 			return nil

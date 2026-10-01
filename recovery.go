@@ -1,0 +1,74 @@
+package cephmsgr
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
+)
+
+// Recovery opens fresh lossy sessions. It never replays an outstanding command.
+// Reauthentication also renews tickets without sharing mutable CephX state
+// with MGR handshakes or imposing deadlines on the old session's requests.
+func (c *Client) supervise() {
+	defer c.wg.Done()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	backoff := 250 * time.Millisecond
+	var nextAttempt time.Time
+	for {
+		c.mu.Lock()
+		needed := !c.monReady || c.mon == nil || c.mon.Err() != nil
+		if !needed {
+			for _, service := range []uint32{cephx.ServiceAuth, cephx.ServiceMgr} {
+				ticket, ok := c.auth.Tickets[service]
+				if !ok || !time.Now().Before(ticket.RenewAfter) {
+					needed = true
+				}
+			}
+		}
+		closed := c.closed
+		c.mu.Unlock()
+		if closed {
+			return
+		}
+		if needed && !time.Now().Before(nextAttempt) {
+			if err := c.connectMonitor(c.ctx); err != nil {
+				nextAttempt = time.Now().Add(backoff)
+				backoff *= 2
+				if backoff > 5*time.Second {
+					backoff = 5 * time.Second
+				}
+			} else {
+				backoff = 250 * time.Millisecond
+				nextAttempt = time.Time{}
+			}
+		}
+		select {
+		case <-c.wake:
+		case <-ticker.C:
+		case <-c.ctx.Done():
+			return
+		}
+	}
+}
+
+func (c *Client) retireMonitor(s *session.Session) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		s.Fail(ErrClosed)
+		return
+	}
+	c.wg.Add(1)
+	c.mu.Unlock()
+	go func() {
+		defer c.wg.Done()
+		ctx, cancel := context.WithTimeout(c.ctx, c.options.ConnectTimeout)
+		defer cancel()
+		s.WaitIdle(ctx)
+		s.Fail(errors.New("ceph: monitor session replaced after reauthentication"))
+	}()
+}
