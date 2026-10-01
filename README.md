@@ -62,9 +62,17 @@ fmt.Printf("%s\n", result.Data)
   context에 따른다. `MaxFrameSize` 기본값은 논리 frame당 16 MiB다.
 - `ConnectTimeout` 기본값은 endpoint별 10초다. 요청 deadline은 공유
   연결에 적용하지 않는다. `Close`는 연결과 내부 worker를 종료하고 기다린다.
+- `KeepaliveInterval` 기본값은 15초, `KeepaliveTimeout`은 45초이며 timeout은
+  interval보다 커야 한다. TCP keepalive와 별도로 Messenger probe를 보내고,
+  완전한 frame 수신이 끊기면 `ErrKeepaliveTimeout`으로 연결을 종료한다.
+  timeout 검사는 probe 주기에 수행하므로 감지는 다음 주기까지 늦어질 수 있다.
+  경과 시간은 Go의 monotonic clock을 사용한다. 이미 전송을 시작한 명령은
+  이 원인을 가진 `OutcomeUnknownError`를 반환하며 자동 재실행하지 않는다.
 - 모든 seed에서 일시적인 전송·연결 오류가 나면 bootstrap을 다시 시도한다.
   추가 시도는 `ConnectTimeout`과 Dial context로 제한한다. 명시적인 인증
   거절, wire 검증 실패, FSID·지원 계열 불일치는 이 재시도의 대상이 아니다.
+  개별 endpoint의 setup timeout은 호출자 context가 살아 있을 때 재시도할
+  수 있다. 호출자의 context 취소·만료 이후에는 새 시도를 시작하지 않는다.
 - MON 단절 시 seed 및 MonMap 주소로 다시 인증한다. 이후 요청은 복구를
   기다린다. Ticket 수명의 약 75%에서 새 MON 연결로 ticket을 갱신하고,
   이전 MON의 진행 중 요청은 `ConnectTimeout` 동안 완료할 기회를 준다.
@@ -76,6 +84,10 @@ fmt.Printf("%s\n", result.Data)
   반환한다. 같은 키의 인증이 복원되면 background 재인증으로 복구한다.
   `auth rm`의 반영 시점은 Ceph에 따르며, client는 재인증 거절을 받은
   시점부터 요청을 차단한다.
+  오래 단절되어 ticket 검증용 rotating secret까지 서버가 버린 경우에는
+  유효한 장기 키가 있어도 기존 global ID의 재사용을 거부할 수 있다.
+  이 거부를 받은 client가 스스로 새 ID로 인증하지 않는다. 호출자는 원인을
+  확인한 뒤 새 `Dial`을 명시적으로 수행할 수 있다.
 - MgrMap이 바뀌면 이전 MGR 연결을 종료하며 다음 호출은 새 active MGR로
   연결한다. 전송 중이던 요청은 `ErrManagerChanged`를 원인으로 보존한다.
   MGR 접속 중 client global ID가 바뀌면 이전 ID의 접속 결과를 폐기하고,
@@ -124,6 +136,8 @@ CGO=0으로 실행했다.
 
 시험 구성은 3 MON·2 MGR, OSD 없음, 12초 ticket TTL이다. `status`와
 `pg stat` 응답을 검증했고 MON 프로세스 종료 및 active MGR fail을 주입했다.
+현재 fixture는 `auth_allow_insecure_global_id_reclaim=false`를 사용하며,
+이 설정으로 아래의 전체 CI 시험을 통과했다.
 잘못된 인증 키, 읽기 전용 계정의 쓰기 거절, 미지원 명령의 코드·상태 문자열,
 `pg getmap` binary 출력과 40 KiB binary bulk 입력도 실제 서버로 확인했다.
 설정 set/get/rm과 balancer·crash·iostat 모듈 명령을 검증했다. iostat을
@@ -134,6 +148,13 @@ MGR 전환 후 모듈 명령이 정상 동작했다. 접속 중인 MON을 8회 �
 수신을 차단한 변경 명령은 독립 클라이언트로 서버 적용을 먼저 확인한 뒤
 로컬 대기를 취소해 `OutcomeUnknownError`가 반환되는지 검증했다.
 
+MGR 응답 수신을 차단해 로컬 취소, keepalive timeout, 새 연결 복구를
+확인했다. Go relay에서 MON bulk frame의 일부 쓰기를 멈춰 쓰기 timeout,
+전송 전 대기 요청의 context 만료, 변경 명령의 자동 재실행 금지도 확인했다.
+이 방향별 차단 시험은 Go 시험 전송 계층에서 수행한다. 별도로 실제 MON과
+MGR 프로세스에 SIGSTOP을 적용해 TCP 연결을 열린 채로 유지했고, 무응답
+감지 후 다른 MON과 standby MGR에서 조회가 성공했다.
+
 MON 세 개를 모두 중단하고 재기동하는 과정을 3회 반복했다. 중단 중 전송을
 기다리는 호출은 context 만료로 끝나며, 충분한 deadline을 가진 MON/MGR
 조회는 quorum 복구 후 완료됐다. 이 시험은 프로세스 중단에 대한 검증이다.
@@ -143,11 +164,28 @@ MON 세 개를 모두 중단하고 재기동하는 과정을 3회 반복했다. 
 키 회수·복원 시험은 Linux arm64에서 20.2.4의 aes256k·IPv4 및 aes·IPv6,
 20.2.3의 aes·IPv4 구성으로도 통과했다.
 
+별도 fixture에서 실제 ticket이 만료된 뒤 서버가 이전 ID의 암호 증거를
+받아들이면 ID를 유지하고 ticket을 갱신했다. 그 증거의 rotating secret까지
+폐기되도록 기다린 경우에는 MON/MGR의 새 명령을 `AuthenticationError(-13)`로
+차단했고, 호출자가 명시적으로 수행한 새 `Dial`은 정상 접속했다.
+
 [1시간 부하 시험 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/tentacle-soak-1h)는
 `0e73e56`이다. Linux arm64·IPv4·aes256k 구성에서 성공 요청 1,244,441건,
 ticket 갱신 366회, MGR fail 119회를 수행했다. 장애 중 결과 불명확 15건은
 해당 오류로 반환했다. 이후 복구 보강은 별도의 3분 부하 시험과 CI로 검증했다.
 세션·goroutine 수는 샘플링한 값이며 순간 최대치를 보장하지 않는다.
+
+수신 무응답 감지를 추가한 바이너리 `dd3daef`의
+[추가 1시간 부하 시험](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/stall-soak-1h)도
+같은 Linux arm64·IPv4·aes256k 구성에서 통과했다. 성공 호출 1,248,430건,
+ticket 갱신 361회, MGR fail 120회, 결과 불명확 22건을 기록했다.
+샘플링한 세션 최대는 3개, goroutine 최대는 24개였다. 두 1시간 시험의
+fixture는 global ID reclaim에 Ceph의 기본 허용 설정을 사용했다.
+엄격한 reclaim 설정의 검증 범위는 위의 개별 시험과 전체 CI다.
+
+앞선 별도 장시간 실행은 16분 31초에 실패했다. Go 호출은 결과 불명확 EOF를
+반환했고 Ceph MGR·MON의 crash 로그도 있었다. 원인은 아직 확정하지 못했으며,
+장시간 시험만 따로 실행한 위의 성공 결과가 그 실패 원인을 설명하지는 않는다.
 
 MGR이 없는 상태에서도 MON 조회와 실제 ticket 갱신을 확인했다. MGR 대기
 취소는 전송 전 오류로, 대기 중 `Close`는 `ErrClosed`로 반환했고, 이후
@@ -158,10 +196,16 @@ aes256k·IPv4 및 aes·IPv6 구성으로 수행했다.
 않는다. 1시간을 넘는 운영, 위에 명시하지 않은 모듈·클러스터 구성,
 20.2.0–20.2.2 및 이후 Ceph 패치는 아직 검증하지 않았다.
 
+Darwin arm64에서도 CGO=0 native 시험 바이너리를 직접 실행해 20.2.4의
+aes256k 구성과 상호운용을 확인했다. Ceph는 Docker에 두고 개발용 Go TCP
+relay로 접근했다. Ceph 주소는 IPv4와 IPv6를 각각 시험했으며 relay까지의
+호스트 TCP 경로는 IPv4다. 이 결과를 Darwin에서의 직접 IPv6 접속 검증으로
+해석하지 않는다. 반복 종료 시험의 파일 descriptor 수는 시작과 끝 모두 5였다.
+
 Go 1.24.0과 1.27 계열에서 Linux·macOS·Windows의 CGO=0 unit/vet 검사를
 통과했다. Linux와 Darwin arm64에서 race 검사, Darwin에서 parser fuzzing도 통과했다.
 Windows amd64, Darwin amd64, Linux 386에서 CGO=0 빌드를 확인했다.
-이 결과는 각 OS에서 실제 Ceph 상대 실행을 검증했다는 의미가 아니다.
+Windows의 실제 Ceph 상대 실행은 아직 검증하지 않았다.
 
 ```sh
 go test -race ./...
@@ -172,6 +216,8 @@ CEPH_MSGR_TEST_IP_FAMILY=6 sh integration/run.sh
 CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes256k sh integration/run.sh
 CEPH_MSGR_STRESS_DURATION=3m sh integration/run.sh
 CEPH_MSGR_TEST_MGR_COUNT=0 sh integration/run.sh # MGR 지연 기동
+CEPH_MSGR_TEST_RUNTIME=host sh integration/run.sh # 호스트 native 바이너리
+CEPH_MSGR_TEST_EXPIRE_TICKETS=1 sh integration/run.sh # 별도 인증 만료 fixture
 CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 ```
 
@@ -179,9 +225,16 @@ CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 `CEPH_MSGR_TEST_TIMEOUT`도 늘린다. 기본 timeout은 10분이다.
 
 Harness는 격리된 컨테이너 안에서 Ceph 클러스터와 CGO=0 Go 테스트 바이너리를
-실행하고 종료 시 컨테이너·임시 키를 삭제한다. 호스트 포트를 공개하지 않는다.
+실행하고 종료 시 컨테이너·임시 키를 삭제한다. 기본 모드는 호스트 포트를
+공개하지 않는다. `host` 모드는 현재 OS·CPU의 시험 바이너리를 실행하며
+개발용 relay 하나를 `127.0.0.1`의 임시 포트에 공개한다.
 Ceph CLI는 이 개발 fixture의 초기화와 daemon 준비 상태 확인에 사용한다.
 `CEPH_MSGR_TEST_RUN`으로 Go 시험의 이름을 선택할 수 있다.
+`auth_allow_insecure_global_id_reclaim=false`를 적용한다. 인증 만료 시험은
+MON을 ticket과 rotating secret의 수명보다 오래 중단한다. Ceph daemon의
+기존 인증에도 영향을 주므로 전용 fixture에서만 실행한다.
+`CEPH_MSGR_TEST_DIAGNOSTICS`에 개발용 디렉터리를 지정하면 실패 시 daemon
+텍스트 로그와 crash metadata를 보관한다. 키와 프로세스 메모리는 복사하지 않는다.
 20.2.3 시험은 `CEPH_MSGR_TEST_IMAGE=quay.io/ceph/ceph:v20.2.3`과
 `CEPH_MSGR_TEST_KEY_TYPE=aes`를 함께 설정한다. 해당 이미지의 개발 도구에는
 aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적으로 실패시킨다.
@@ -195,9 +248,12 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 
 [CI 설정](.github/workflows/ci.yml)은 Linux·macOS·Windows에서 Go 1.24.0과
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
-시험한다. 20.2.4·aes256k와 20.2.3·aes의 3분 부하 시험 및 MGR 지연 기동까지 포함한
-[GitHub CI 14개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36844886976)이
+시험한다. Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
+3분 부하 시험, MGR 지연 기동, host 모드 및 별도 인증 만료 fixture까지 포함한
+[GitHub CI 17개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36855841353)이
 2026-10-01에 모두 통과했다. Actions 설정 lint도 통과했다.
+[복구 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/secure-stall-recovery)는
+이 실행의 `945a090`을 가리킨다.
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
@@ -221,7 +277,7 @@ python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
 - Frame vector는 별도의 Python CRC/AES-GCM 구현으로 생성했다. 이는
   [규약 기반 vector](internal/msgr/testdata/generate.py)이며 Ceph traffic
   capture가 아니다.
-- [MonMap fixture](internal/maps/testdata/README.md)는 실제 Ceph가 생성했다.
+- [MON/MGR 지도 fixture](internal/maps/testdata/README.md)는 실제 Ceph가 생성했다.
   Fixture의 SHA-256과 생성 환경을 함께 기록했다.
 - Synthetic peer 테스트는 취소·오류·경합을 검증하는 용도이며 실제 Ceph
   상호운용 시험을 대신하지 않는다.
