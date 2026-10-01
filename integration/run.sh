@@ -42,7 +42,16 @@ failure_diagnostics() {
         for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log; do
             docker cp "$container:/tmp/ceph-msgr-test/$log" "$diagnostics/$log" > /dev/null 2>&1 || true
         done
-        docker exec "$container" sh -c 'for file in /var/lib/ceph/crash/*/meta; do test -f "$file" || continue; cat "$file"; done' > "$diagnostics/crash-metadata.jsonl" || true
+        # docker cp also works after the container exits. Select metadata
+        # from the archive stream without saving any other crash files.
+        docker cp "$container:/var/lib/ceph/crash" - 2>/dev/null | python3 "$project_root/tools/collect_crash_metadata.py" > "$diagnostics/crash-metadata.jsonl" || true
+        cat "$diagnostics/crash-metadata.jsonl"
+        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log; do
+            if test -f "$diagnostics/$log"; then
+                tail -n 80 "$diagnostics/$log"
+            fi
+        done
+        return
     fi
     docker exec "$container" sh -c 'for file in /var/lib/ceph/crash/*/meta; do test -f "$file" || continue; cat "$file"; done; tail -n 80 /tmp/ceph-msgr-test/mon.*.log /tmp/ceph-msgr-test/mgr.*.log' || true
 }
