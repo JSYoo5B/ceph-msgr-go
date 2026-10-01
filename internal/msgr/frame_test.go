@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"math"
+	"net/netip"
 	"os"
 	"reflect"
 	"testing"
@@ -22,7 +23,7 @@ type vector struct {
 	CRC, Secure string
 }
 
-func decodeHex(t *testing.T, s string) []byte {
+func decodeHex(t testing.TB, s string) []byte {
 	t.Helper()
 	p, err := hex.DecodeString(s)
 	if err != nil {
@@ -30,7 +31,7 @@ func decodeHex(t *testing.T, s string) []byte {
 	}
 	return p
 }
-func fixtures(t *testing.T) []vector {
+func fixtures(t testing.TB) []vector {
 	t.Helper()
 	p, err := os.ReadFile("testdata/frames.json")
 	if err != nil {
@@ -209,5 +210,60 @@ func TestBannerFixtureAndFeatureRejection(t *testing.T) {
 
 func FuzzFrameReader(f *testing.F) {
 	f.Add(make([]byte, 32))
+	for _, v := range fixtures(f) {
+		f.Add(decodeHex(f, v.CRC))
+	}
+	p, err := os.ReadFile("testdata/ceph-mon-hello-v20.2.4.bin")
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(p[26:])
 	f.Fuzz(func(t *testing.T, p []byte) { NewReader(bytes.NewReader(p), 4096).Read() })
+}
+
+func FuzzSecureFrameReader(f *testing.F) {
+	f.Add([]byte{})
+	for _, v := range fixtures(f) {
+		f.Add(decodeHex(f, v.Secure))
+	}
+	f.Fuzz(func(t *testing.T, p []byte) {
+		r := NewReader(bytes.NewReader(p), 4096)
+		key, nonce := testKeyNonce()
+		if err := r.EnableSecure(key, nonce); err != nil {
+			t.Fatal(err)
+		}
+		r.Read()
+	})
+}
+
+func TestCephCapturedBannerAndHello(t *testing.T) {
+	p, err := os.ReadFile("testdata/ceph-mon-hello-v20.2.4.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := bytes.NewReader(p)
+	banner, err := ReadBanner(input, Banner{Supported: 3, Required: Revision1})
+	if err != nil || banner != (Banner{Supported: 3}) {
+		t.Fatal("Ceph banner", banner, err)
+	}
+	r := NewReader(input, 4096)
+	f, err := r.Read()
+	if err != nil || f.Tag != Hello || len(f.Segments) != 1 {
+		t.Fatal("Ceph HELLO frame", err)
+	}
+	d := wire.NewDecoder(f.Segments[0])
+	role, address := d.U8(), DecodeAddress(d)
+	// The endpoint oracle is the capture socket's independent getsockname,
+	// recorded before authentication; no Go encoder generated this fixture.
+	want := Address{Type: 2, Endpoint: netip.MustParseAddrPort("127.0.0.1:34716")}
+	if err := d.Done(); err != nil || role != 1 || address != want {
+		t.Fatal("Ceph HELLO identity", role, address, err)
+	}
+	if _, err := r.Read(); !errors.Is(err, io.EOF) {
+		t.Fatal("unconsumed capture bytes", err)
+	}
+	var encoded bytes.Buffer
+	if err := NewWriter(&encoded, 4096).Write(f); err != nil || !bytes.Equal(encoded.Bytes(), p[26:]) {
+		t.Fatal("writer differs from daemon-generated HELLO", err)
+	}
 }
