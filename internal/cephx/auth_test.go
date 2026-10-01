@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -48,7 +49,7 @@ func encodeTestKey(k Key) []byte {
 	e.Raw(k.secret)
 	return e.Data
 }
-func testTickets(t *testing.T, encryption, session Key, typ uint32, old *Ticket) []byte {
+func testTickets(t testing.TB, encryption, session Key, typ uint32, old *Ticket) []byte {
 	t.Helper()
 	key := wire.Encoder{}
 	key.U8(1)
@@ -84,7 +85,7 @@ func testTickets(t *testing.T, encryption, session Key, typ uint32, old *Ticket)
 	}
 	return e.Data
 }
-func testAuthReply(t *testing.T, key, auth, mgr Key, old *Ticket) []byte {
+func testAuthReply(t testing.TB, key, auth, mgr Key, old *Ticket) []byte {
 	t.Helper()
 	e := wire.Encoder{}
 	e.U16(0x100)
@@ -101,6 +102,44 @@ func testAuthReply(t *testing.T, key, auth, mgr Key, old *Ticket) []byte {
 	e.Bytes(container.Data)
 	e.Bytes(testTickets(t, auth, mgr, ServiceMgr, nil))
 	return e.Data
+}
+
+func FuzzAuthenticationPublication(f *testing.F) {
+	for _, aes := range []bool{false, true} {
+		key := rfcKey(f)
+		if aes {
+			key = Key{kind: AES, secret: bytes.Repeat([]byte{0x51}, 16)}
+		}
+		old := Ticket{Key: key, SecretID: 3, Blob: []byte("previous proof")}
+		// Valid cryptographic seeds reach fields beyond the outer header.
+		// This checks atomic state publication, not wire interoperability.
+		f.Add(aes, testAuthReply(f, key, key, key, nil))
+		f.Add(aes, testAuthReply(f, key, key, key, &old))
+	}
+	f.Fuzz(func(t *testing.T, aes bool, p []byte) {
+		key := rfcKey(t)
+		if aes {
+			key = Key{kind: AES, secret: bytes.Repeat([]byte{0x51}, 16)}
+		}
+		c, err := NewClient("client.fuzz", key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.GlobalID = 42
+		for _, service := range []uint32{ServiceAuth, ServiceMgr} {
+			c.Tickets[service] = Ticket{Key: key, SecretID: 3, Blob: []byte("previous proof"), Expires: time.Now().Add(time.Minute)}
+		}
+		before := make(map[uint32]Ticket, len(c.Tickets))
+		for service, ticket := range c.Tickets {
+			ticket.Blob = append([]byte(nil), ticket.Blob...)
+			ticket.Key.secret = append([]byte(nil), ticket.Key.secret...)
+			before[service] = ticket
+		}
+		_, _, err = c.Finish(99, p)
+		if err != nil && (c.GlobalID != 42 || !reflect.DeepEqual(c.Tickets, before)) {
+			t.Fatal("failed authentication published identity or ticket state")
+		}
+	})
 }
 
 func TestTicketRenewalAndAtomicFailure(t *testing.T) {

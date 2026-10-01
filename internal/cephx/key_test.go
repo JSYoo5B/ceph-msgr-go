@@ -12,7 +12,7 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 )
 
-func unhex(t *testing.T, s string) []byte {
+func unhex(t testing.TB, s string) []byte {
 	t.Helper()
 	p, err := hex.DecodeString(s)
 	if err != nil {
@@ -20,7 +20,7 @@ func unhex(t *testing.T, s string) []byte {
 	}
 	return p
 }
-func rfcKey(t *testing.T) Key {
+func rfcKey(t testing.TB) Key {
 	return Key{kind: AES256K, secret: unhex(t, "6d404d37faf79f9df0d33568d320669800eb4836472ea8a026d16b7182460c52")}
 }
 
