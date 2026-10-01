@@ -19,10 +19,23 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 )
 
-// These bits describe only encodings/behaviors used by MON/MGR sessions. Do
-// not substitute CEPH_FEATURES_ALL: that also promises unsupported OSD codecs.
+// Transport and map encodings used by MON/MGR sessions. Do not substitute
+// CEPH_FEATURES_ALL: that also promises unsupported OSD message codecs.
 const Features uint64 = 1<<1 | 1<<2 | 1<<4 | 1<<5 | 1<<15 | 1<<23 | 1<<28 | 1<<42 | 1<<57 | 1<<59 | 1<<61
 const RequiredFeatures uint64 = 1 << 59 // MSG_ADDR2
+
+// Ceph MON admission requires these CRUSH-generation bits from every CLIENT,
+// even clients that only issue commands. This scope never subscribes to an
+// OSDMap, interprets a CRUSH map, or opens an OSD connection. These bits satisfy
+// MON admission only; they are not an object-placement capability promise.
+const monAdmissionFeatures uint64 = 1<<18 | 1<<25 | 1<<41 | 1<<48 | 1<<58
+
+func featuresForRole(role uint8) uint64 {
+	if role == 1 {
+		return Features | monAdmissionFeatures
+	}
+	return Features
+}
 
 type Authenticator interface {
 	Initial() ([]byte, error)
@@ -88,6 +101,7 @@ type Transport struct {
 // Handshake takes ownership of conn, closing it on failure. The context and
 // deadline govern only setup; a successful connection has its deadline cleared.
 func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, limit uint32, timeout time.Duration) (_ *Transport, err error) {
+	stage := "banner"
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer func() {
 		stop()
@@ -97,6 +111,9 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		if ctx.Err() != nil {
 			err = ctx.Err()
 			conn.Close()
+		}
+		if err != nil {
+			err = fmt.Errorf("ceph messenger %s: %w", stage, err)
 		}
 	}()
 	deadline := time.Now().Add(timeout)
@@ -118,6 +135,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		return nil, err
 	}
 	write := func(tag msgr.Tag, p []byte) error { return w.Write(msgr.Frame{Tag: tag, Segments: [][]byte{p}}) }
+	stage = "hello"
 	hello := wire.Encoder{}
 	hello.U8(8)
 	target.Encode(&hello)
@@ -140,6 +158,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if peerRole != role {
 		return nil, errors.New("ceph messenger: unexpected daemon role")
 	}
+	stage = "authentication"
 	payload, err := auth.Initial()
 	if err != nil {
 		return nil, err
@@ -206,6 +225,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if len(secret) < 40 {
 		return nil, errors.New("ceph messenger: incomplete authentication")
 	}
+	stage = "signature"
 	if err = r.EnableSecure(secret[:16], secret[16:28]); err != nil {
 		return nil, err
 	}
@@ -228,6 +248,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	rx.data.Reset()
 	tx.data.Reset()
 	if peer.Supported&msgr.Compression != 0 {
+		stage = "compression negotiation"
 		// Negotiate no compression. This implements the negotiation feature,
 		// while advertising no compression algorithms or compressed payloads.
 		e := wire.Encoder{}
@@ -254,6 +275,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		}
 	}
 	var random [8]byte
+	stage = "session identification"
 	if _, err = rand.Read(random[:]); err != nil {
 		return nil, err
 	}
@@ -266,7 +288,8 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	target.Encode(&ident)
 	ident.U64(globalID)
 	ident.U64(binary.LittleEndian.Uint64(random[:]))
-	ident.U64(Features)
+	supportedFeatures := featuresForRole(role)
+	ident.U64(supportedFeatures)
 	ident.U64(RequiredFeatures)
 	ident.U64(1)
 	ident.U64(0) // lossy session, fresh recovery only
@@ -281,7 +304,12 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		return nil, msgr.ErrFrame
 	}
 	if f.Tag == msgr.IdentMissingFeatures {
-		return nil, msgr.ErrFeatures
+		d := wire.NewDecoder(f.Segments[0])
+		missing := d.U64()
+		if err := d.Done(); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: peer requires 0x%016x", msgr.ErrFeatures, missing)
 	}
 	if f.Tag != msgr.ServerIdent {
 		return nil, fmt.Errorf("%w: expected server ident, got %d", msgr.ErrFrame, f.Tag)
@@ -299,7 +327,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if expectedID != 0 && serverID != expectedID {
 		return nil, errors.New("ceph messenger: unexpected daemon ID")
 	}
-	if RequiredFeatures&^supported != 0 || required&^Features != 0 {
+	if RequiredFeatures&^supported != 0 || required&^supportedFeatures != 0 {
 		return nil, msgr.ErrFeatures
 	}
 	if !stop() || ctx.Err() != nil {

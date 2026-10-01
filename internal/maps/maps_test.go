@@ -3,6 +3,7 @@ package maps
 import (
 	"errors"
 	"net/netip"
+	"os"
 	"testing"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
@@ -45,6 +46,20 @@ func TestMonMapReleaseAndAddresses(t *testing.T) {
 		if _, err := DecodeMon(monFixture(20)[:n]); err == nil {
 			t.Fatalf("truncation %d accepted", n)
 		}
+	}
+}
+
+func TestRealTentacleMonMap(t *testing.T) {
+	blob, err := os.ReadFile("testdata/monmap-v20.2.4.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// mon getmap returns the map itself; MMonMap adds a bufferlist length.
+	front := wire.Encoder{}
+	front.Bytes(blob)
+	m, err := DecodeMon(front.Data)
+	if err != nil || m.Epoch != 1 || m.MinimumRelease != 20 || len(m.Addresses) != 1 || m.Addresses[0].Endpoint.String() != "127.0.0.1:33300" {
+		t.Fatal(m, err)
 	}
 }
 func TestMgrUnavailableAndActive(t *testing.T) {

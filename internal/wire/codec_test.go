@@ -73,7 +73,7 @@ func FuzzDecoder(f *testing.F) {
 	f.Fuzz(func(t *testing.T, p []byte) {
 		d := NewDecoder(p)
 		_, sub := d.Struct(3)
-		sub.String()
+		_ = sub.String()
 		sub.Count(4, 1024)
 		d.Bytes()
 		d.Done()

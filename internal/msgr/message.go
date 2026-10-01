@@ -100,7 +100,7 @@ func CommandReply(m MessageData) (int32, string, error) {
 	if m.Type == MonCommandReplyMessage {
 		n := d.Count(4, 1024)
 		for i := 0; i < n; i++ {
-			d.String()
+			_ = d.String()
 		}
 	}
 	return code, text, d.Done()
