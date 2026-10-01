@@ -14,8 +14,8 @@ import (
 	"time"
 )
 
-// Drops receive bytes only after authentication. The daemon can still execute
-// a submitted command; closing the wrapper releases the blocked read worker.
+// Stops receive bytes when armed; mutation tests arm it after authentication.
+// Closing the wrapper releases the blocked read worker.
 type lostReplyConn struct {
 	net.Conn
 	armed         *atomic.Bool
