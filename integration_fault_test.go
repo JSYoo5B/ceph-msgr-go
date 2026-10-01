@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -85,11 +86,18 @@ func TestCephLostMutationReplyIntegration(t *testing.T) {
 	defer ticker.Stop()
 	for {
 		result, err := observer.MonCommand(ctx, Command{JSON: read})
-		if err == nil && bytes.Equal(result.Data, input) {
+		if err == nil {
+			if !bytes.Equal(result.Data, input) {
+				t.Fatal("server mutation has incorrect data", string(result.Data))
+			}
 			break
 		}
 		var server *CommandError
-		if !errors.As(err, &server) || server.Code != -2 {
+		var uncertain *OutcomeUnknownError
+		var connection *net.OpError
+		missing := errors.As(err, &server) && server.Code == -2
+		transient := errors.As(err, &uncertain) || errors.As(err, &connection) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed)
+		if !missing && !transient {
 			t.Fatal("independent client could not observe the server mutation", err, string(result.Data))
 		}
 		select {
