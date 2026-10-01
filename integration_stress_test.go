@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"runtime"
@@ -11,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
 )
 
 func TestCephStressIntegration(t *testing.T) {
@@ -31,6 +34,8 @@ func TestCephStressIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
 	var calls, faults, uncertain atomic.Int64
+	var causeMu sync.Mutex
+	unknownCauses := make(map[string]int64)
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
@@ -51,14 +56,35 @@ func TestCephStressIntegration(t *testing.T) {
 					}
 					var unknown *OutcomeUnknownError
 					var connection *net.OpError
+					cause := ""
+					switch {
+					case errors.Is(err, ErrManagerChanged):
+						cause = "MGR-changed"
+					case errors.Is(err, session.ErrRetired):
+						cause = "MON-retired"
+					case errors.Is(err, ErrKeepaliveTimeout):
+						cause = "keepalive-timeout"
+					case errors.Is(err, context.DeadlineExceeded):
+						cause = "deadline"
+					case errors.As(err, &connection), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, net.ErrClosed):
+						cause = "transport"
+					}
+					// Unknown execution does not make a protocol, crypto or
+					// authentication failure acceptable during this workload.
+					if cause == "" {
+						t.Errorf("unexpected %s error under load: %v", prefix, err)
+						cancel()
+						return
+					}
 					if errors.As(err, &unknown) {
 						uncertain.Add(1)
-					} else if !errors.Is(err, ErrManagerChanged) && !errors.As(err, &connection) && !errors.Is(err, context.DeadlineExceeded) {
-						t.Errorf("unexpected %s error under load: %v", prefix, err)
-						return
+						causeMu.Lock()
+						unknownCauses[cause]++
+						causeMu.Unlock()
 					}
 				} else if !json.Valid(result.Data) {
 					t.Errorf("invalid %s output", prefix)
+					cancel()
 					return
 				} else {
 					calls.Add(1)
@@ -131,5 +157,5 @@ func TestCephStressIntegration(t *testing.T) {
 	if after := runtime.NumGoroutine(); after > baseline+4 {
 		t.Errorf("workers remain after Close: before=%d after=%d", baseline, after)
 	}
-	t.Logf("calls=%d ticket-renewals=%d MGR-faults=%d unknown-outcomes=%d sampled-max-sessions=%d sampled-max-goroutines=%d", calls.Load(), renewals, faults.Load(), uncertain.Load(), sampledMaxSessions, sampledMaxWorkers)
+	t.Logf("calls=%d ticket-renewals=%d MGR-faults=%d unknown-outcomes=%d sampled-max-sessions=%d sampled-max-goroutines=%d unknown-causes=%v", calls.Load(), renewals, faults.Load(), uncertain.Load(), sampledMaxSessions, sampledMaxWorkers, unknownCauses)
 }
