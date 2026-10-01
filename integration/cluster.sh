@@ -58,6 +58,7 @@ keyring="$root/keyring"
 ceph-authtool "$keyring" --create-keyring --name mon. --gen-key --key-type "$key_type" --cap mon 'allow *'
 ceph-authtool "$keyring" --name client.test --gen-key --key-type "$key_type" --cap mon 'allow *' --cap mgr 'allow *'
 ceph-authtool "$keyring" --name client.readonly --gen-key --key-type "$key_type" --cap mon 'allow r' --cap mgr 'allow r'
+ceph-authtool "$keyring" --name client.revocable --gen-key --key-type "$key_type" --cap mon 'allow *' --cap mgr 'allow *'
 for name in a b; do
     ceph-authtool "$keyring" --name "mgr.$name" --gen-key --key-type "$key_type" --cap mon 'profile mgr' --cap mgr 'allow *'
 done
@@ -109,6 +110,7 @@ if test "$mgr_count" = 2; then
 fi
 ceph-authtool "$keyring" -n client.test --print-key > /out/key
 ceph-authtool "$keyring" -n client.readonly --print-key > /out/readonly.key
+ceph-authtool "$keyring" -n client.revocable --print-key > /out/revocable.key
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, secure."
 while true; do
