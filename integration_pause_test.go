@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 )
 
-func controlFixtureManager(ctx context.Context, control, action, name string) error {
+func controlFixtureDaemon(ctx context.Context, control, action, daemon, name string) error {
 	id := time.Now().UnixNano()
-	file, err := os.CreateTemp(control, action+"-mgr-")
+	file, err := os.CreateTemp(control, action+"-"+daemon+"-")
 	if err != nil {
 		return err
 	}
@@ -25,10 +26,10 @@ func controlFixtureManager(ctx context.Context, control, action, name string) er
 	if err := file.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(file.Name(), filepath.Join(control, action+"-mgr")); err != nil {
+	if err := os.Rename(file.Name(), filepath.Join(control, action+"-"+daemon)); err != nil {
 		return err
 	}
-	ack := filepath.Join(control, fmt.Sprintf("mgr-%s.%d", action, id))
+	ack := filepath.Join(control, fmt.Sprintf("%s-%s.%d", daemon, action, id))
 	defer os.Remove(ack)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -67,13 +68,13 @@ func TestCephPausedManagerIntegration(t *testing.T) {
 	c.mu.Lock()
 	old, name, id := c.mgr, c.mgrMap.Name, c.mgrMap.GlobalID
 	c.mu.Unlock()
-	if err := controlFixtureManager(ctx, control, "pause", name); err != nil {
+	if err := controlFixtureDaemon(ctx, control, "pause", "mgr", name); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
 		resume, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		if err := controlFixtureManager(resume, control, "resume", name); err != nil {
+		if err := controlFixtureDaemon(resume, control, "resume", "mgr", name); err != nil {
 			t.Error("resume paused fixture MGR", err)
 		}
 	}()
@@ -109,4 +110,57 @@ func TestCephPausedManagerIntegration(t *testing.T) {
 		t.Fatal("command on replacement MGR", err)
 	}
 	t.Logf("paused MGR=%s: open socket silence detected and standby command passed", name)
+}
+
+func TestCephPausedMonitorIntegration(t *testing.T) {
+	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	if control == "" {
+		t.Skip("requires a disposable fixture")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	options := integrationOptions(t)
+	options.ConnectTimeout = time.Second
+	options.KeepaliveInterval, options.KeepaliveTimeout = time.Second, 3*time.Second
+	c, err := Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.mu.Lock()
+	old := c.mon
+	c.mu.Unlock()
+	_, port, err := net.SplitHostPort(old.RemoteAddr().String())
+	name := map[string]string{"33300": "a", "33301": "b", "33302": "c"}[port]
+	if err != nil || name == "" {
+		t.Fatal("unexpected fixture MON endpoint", old.RemoteAddr())
+	}
+	if err := controlFixtureDaemon(ctx, control, "pause", "mon", name); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		resume, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if err := controlFixtureDaemon(resume, control, "resume", "mon", name); err != nil {
+			t.Error("resume paused fixture MON", err)
+		}
+	}()
+	_, err = c.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"status","format":"json"}`)})
+	var unknown *OutcomeUnknownError
+	if !errors.Is(err, ErrKeepaliveTimeout) || !errors.As(err, &unknown) {
+		t.Fatal("paused MON lost its uncertain liveness result", err)
+	}
+	if err := fixtureRecoveryRead(ctx, c, false); err != nil {
+		t.Fatal("MON command after open socket silence", err)
+	}
+	c.mu.Lock()
+	current := c.mon
+	c.mu.Unlock()
+	if current == old || current.RemoteAddr().String() == old.RemoteAddr().String() {
+		t.Fatal("paused MON connection was reused")
+	}
+	if err := fixtureRecoveryRead(ctx, c, true); err != nil {
+		t.Fatal("MGR command after paused MON recovery", err)
+	}
+	t.Logf("paused MON=%s: silence detected, another quorum member served commands", name)
 }

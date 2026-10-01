@@ -176,19 +176,21 @@ while true; do
         mgr_count=2
         touch /out/mgrs-started
     fi
-    for action in pause resume; do
-        if test -f "/out/$action-mgr"; then
-            read -r request_id name extra < "/out/$action-mgr"
+    for daemon in mon mgr; do
+      for action in pause resume; do
+        if test -f "/out/$action-$daemon"; then
+            read -r request_id name extra < "/out/$action-$daemon"
             case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
-            case "$name" in a|b) ;; *) exit 2 ;; esac
+            case "$daemon.$name" in mon.a|mon.b|mon.c|mgr.a|mgr.b) ;; *) exit 2 ;; esac
             test -z "$extra" || exit 2
-            rm "/out/$action-mgr"
+            rm "/out/$action-$daemon"
             case "$action" in
-                pause) kill -STOP "$(cat "$root/mgr.$name.pid")" ;;
-                resume) kill -CONT "$(cat "$root/mgr.$name.pid")" ;;
+                pause) kill -STOP "$(cat "$root/$daemon.$name.pid")" ;;
+                resume) kill -CONT "$(cat "$root/$daemon.$name.pid")" ;;
             esac
-            touch "/out/mgr-$action.$request_id"
+            touch "/out/$daemon-$action.$request_id"
         fi
+      done
     done
     # Fault controls affect only this container's daemons.
     if test -f /out/stop-mon-a && ! test -f /out/mon-a-stopped; then
