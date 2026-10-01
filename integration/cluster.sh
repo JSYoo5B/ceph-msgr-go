@@ -114,6 +114,38 @@ ceph-authtool "$keyring" -n client.revocable --print-key > /out/revocable.key
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, secure."
 while true; do
+    if test -f /out/stop-mons; then
+        read -r request_id extra < /out/stop-mons
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/stop-mons
+        for name in a b c; do
+            kill "$(cat "$root/mon.$name.pid")"
+        done
+        for name in a b c; do
+            wait "$(cat "$root/mon.$name.pid")" || true
+        done
+        touch "/out/mons-stopped.$request_id"
+    fi
+    if test -f /out/start-mons; then
+        read -r request_id extra < /out/start-mons
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/start-mons
+        for name in a b c; do
+            start_mon "$name"
+        done
+        joined=false
+        for retry in $(seq 1 30); do
+            if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" quorum_status --format json 2>/dev/null | python3 -c 'import json,sys; sys.exit(len(json.load(sys.stdin).get("quorum_names", [])) != 3)'; then
+                joined=true
+                break
+            fi
+            sleep 1
+        done
+        test "$joined" = true || exit 1
+        touch "/out/mons-started.$request_id"
+    fi
     if test -f /out/start-mgrs && ! test -f /out/mgrs-started; then
         test "$mgr_count" = 0 || exit 2
         start_mgrs
