@@ -115,11 +115,14 @@ for attempt in $(seq 1 60); do
     sleep 1
 done
 test "$mon_ready" = true || exit 1
+start_mgr() {
+    mkdir -p "$root/mgr.$1"
+    ceph-mgr -f -i "$1" -c "$root/ceph.conf" --keyring "$keyring" --setuser root --setgroup root >> "$root/mgr.$1.log" 2>&1 &
+    echo $! > "$root/mgr.$1.pid"
+}
 start_mgrs() {
     for name in a b; do
-        mkdir -p "$root/mgr.$name"
-        ceph-mgr -f -i "$name" -c "$root/ceph.conf" --keyring "$keyring" --setuser root --setgroup root > "$root/mgr.$name.log" 2>&1 &
-        echo $! > "$root/mgr.$name.pid"
+        start_mgr "$name"
     done
     for attempt in $(seq 1 60); do
         if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" mgr dump --format json 2>/dev/null | python3 -c 'import json,sys; m=json.load(sys.stdin); sys.exit(not (m.get("available") and m.get("standbys")))'; then
@@ -177,7 +180,9 @@ while true; do
         touch /out/mgrs-started
     fi
     for daemon in mon mgr; do
-      for action in pause resume; do
+      for action in pause resume stop start; do
+        # MON quorum outage has its own controls above.
+        case "$daemon/$action" in mon/stop|mon/start) continue ;; esac
         if test -f "/out/$action-$daemon"; then
             read -r request_id name extra < "/out/$action-$daemon"
             case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
@@ -187,6 +192,12 @@ while true; do
             case "$action" in
                 pause) kill -STOP "$(cat "$root/$daemon.$name.pid")" ;;
                 resume) kill -CONT "$(cat "$root/$daemon.$name.pid")" ;;
+                stop)
+                    pid=$(cat "$root/mgr.$name.pid")
+                    kill "$pid"
+                    wait "$pid" || true
+                    ;;
+                start) start_mgr "$name" ;;
             esac
             touch "/out/$daemon-$action.$request_id"
         fi
