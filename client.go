@@ -32,6 +32,7 @@ type Client struct {
 	mgrMap   maps.Mgr
 	mon, mgr *session.Session
 	monReady bool
+	authErr  error // Explicit MON reauthentication rejection, until recovery.
 	sessions map[*session.Session]struct{}
 	mgrGate  chan struct{}
 	wake     chan struct{}
@@ -281,6 +282,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 					oldManager, c.mgr = c.mgr, nil
 				}
 				c.auth = candidate
+				c.authErr = nil
 				c.monReady = true
 				c.signal()
 			}
@@ -369,8 +371,11 @@ func (c *Client) monitor(ctx context.Context) (*session.Session, error) {
 			c.mu.Unlock()
 			return nil, ErrClosed
 		}
-		s, ready, changed := c.mon, c.monReady, c.changed
+		s, ready, changed, authErr := c.mon, c.monReady, c.changed, c.authErr
 		c.mu.Unlock()
+		if authErr != nil {
+			return nil, authErr
+		}
 		if s != nil && ready {
 			if err := s.Err(); err == nil {
 				return s, nil
@@ -455,7 +460,7 @@ func (c *Client) manager(ctx context.Context) (*session.Session, error) {
 				c.mu.Unlock()
 			})
 			c.mu.Lock()
-			stale := c.closed || c.mgrMap.GlobalID != mapSnapshot.GlobalID || !c.mgrMap.Available || !reflect.DeepEqual(c.mgrMap.Addresses, mapSnapshot.Addresses)
+			stale := c.closed || c.authErr != nil || c.mgrMap.GlobalID != mapSnapshot.GlobalID || !c.mgrMap.Available || !reflect.DeepEqual(c.mgrMap.Addresses, mapSnapshot.Addresses)
 			if !stale {
 				c.mgr = s
 				stale = !c.attach(s)

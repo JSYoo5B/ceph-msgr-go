@@ -2,6 +2,7 @@ package cephmsgr
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
@@ -35,6 +36,10 @@ func (c *Client) supervise() {
 		}
 		if needed && !time.Now().Before(nextAttempt) {
 			if err := c.connectMonitor(c.ctx); err != nil {
+				var rejection *AuthenticationError
+				if errors.As(err, &rejection) {
+					c.rejectAuthentication(err)
+				}
 				nextAttempt = time.Now().Add(backoff)
 				backoff *= 2
 				if backoff > 5*time.Second {
@@ -51,6 +56,31 @@ func (c *Client) supervise() {
 		case <-c.ctx.Done():
 			return
 		}
+	}
+}
+
+func (c *Client) rejectAuthentication(err error) {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	c.authErr = err
+	c.monReady = false
+	c.mgr = nil
+	all := make([]*session.Session, 0, len(c.sessions))
+	for s := range c.sessions {
+		// Close admission before publishing the rejection. A caller that
+		// resolved a previous session must not start a new command on it.
+		s.Retire()
+		all = append(all, s)
+	}
+	c.signal()
+	c.mu.Unlock()
+	for _, s := range all {
+		// Session.Fail preserves uncertainty for requests whose transmission
+		// started, while keeping the explicit authentication cause available.
+		s.Fail(err)
 	}
 }
 
