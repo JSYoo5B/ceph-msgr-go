@@ -8,6 +8,14 @@ mgr_count=${CEPH_MSGR_TEST_MGR_COUNT:-2}
 case "$mgr_count" in 0|2) ;; *) exit 2 ;; esac
 case "$key_type" in aes|aes256k) ;; *) exit 2 ;; esac
 case "$service_cipher" in aes|aes256k) ;; *) exit 2 ;; esac
+echo "Fixture daemon: $(ceph --version)"
+cipher_options=false
+monmap_help=$(monmaptool --help 2>&1 || true)
+case "$monmap_help" in *--auth-service-cipher*) cipher_options=true ;; esac
+if test "$cipher_options" = false && { test "$key_type" != aes || test "$service_cipher" != aes; }; then
+    echo 'This fixture image has no aes256k support; request aes explicitly.' >&2
+    exit 2
+fi
 allowed_ciphers=$key_type
 if test "$service_cipher" != "$key_type"; then
     allowed_ciphers=aes,aes256k
@@ -55,14 +63,29 @@ ms_bind_port_min = 36801
 ms_bind_port_max = 36801
 EOF
 keyring="$root/keyring"
-ceph-authtool "$keyring" --create-keyring --name mon. --gen-key --key-type "$key_type" --cap mon 'allow *'
-ceph-authtool "$keyring" --name client.test --gen-key --key-type "$key_type" --cap mon 'allow *' --cap mgr 'allow *'
-ceph-authtool "$keyring" --name client.readonly --gen-key --key-type "$key_type" --cap mon 'allow r' --cap mgr 'allow r'
-ceph-authtool "$keyring" --name client.revocable --gen-key --key-type "$key_type" --cap mon 'allow *' --cap mgr 'allow *'
+generate_key() {
+    entity=$1
+    shift
+    if test "$cipher_options" = true; then
+        ceph-authtool "$keyring" --name "$entity" --gen-key --key-type "$key_type" "$@"
+    else
+        # Earlier Tentacle patch tools generate only the explicitly
+        # requested AES fixture. Product authentication is unchanged.
+        ceph-authtool "$keyring" --name "$entity" --gen-key "$@"
+    fi
+}
+generate_key mon. --create-keyring --cap mon 'allow *'
+generate_key client.test --cap mon 'allow *' --cap mgr 'allow *'
+generate_key client.readonly --cap mon 'allow r' --cap mgr 'allow r'
+generate_key client.revocable --cap mon 'allow *' --cap mgr 'allow *'
 for name in a b; do
-    ceph-authtool "$keyring" --name "mgr.$name" --gen-key --key-type "$key_type" --cap mon 'profile mgr' --cap mgr 'allow *'
+    generate_key "mgr.$name" --cap mon 'profile mgr' --cap mgr 'allow *'
 done
-monmaptool --create --fsid 80bbab73-69c1-4a0c-a746-4271357750b8 --addv a "[v2:$address:33300/0]" --addv b "[v2:$address:33301/0]" --addv c "[v2:$address:33302/0]" --set-min-mon-release 20 --enable-all-features --auth-service-cipher "$service_cipher" --auth-allowed-ciphers "$allowed_ciphers" --auth-preferred-cipher "$key_type" "$root/monmap"
+set -- --create --fsid 80bbab73-69c1-4a0c-a746-4271357750b8 --addv a "[v2:$address:33300/0]" --addv b "[v2:$address:33301/0]" --addv c "[v2:$address:33302/0]" --set-min-mon-release 20 --enable-all-features
+if test "$cipher_options" = true; then
+    set -- "$@" --auth-service-cipher "$service_cipher" --auth-allowed-ciphers "$allowed_ciphers" --auth-preferred-cipher "$key_type"
+fi
+monmaptool "$@" "$root/monmap"
 cleanup() {
     for name in mon.a mon.b mon.c mgr.a mgr.b; do
         if test -f "$root/$name.pid"; then

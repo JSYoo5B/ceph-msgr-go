@@ -55,6 +55,7 @@ jobs:
           CGO_ENABLED: '1'
 
   ceph:
+    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -67,6 +68,7 @@ jobs:
           - { key: aes, service: aes256k, family: '4', stress: '' }
           - { key: aes256k, service: aes, family: '4', stress: '' }
           - { key: aes256k, service: aes256k, family: '4', stress: '', managers: '0' }
+          - { release: '20.2.3', key: aes, service: aes, family: '4', stress: '3m', image: 'quay.io/ceph/ceph:v20.2.3@sha256:d195020de02512030118e772cef7859e92904e91eb4cb21acb503f8b94118137' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -83,7 +85,7 @@ jobs:
           fi
           exit "$result"
         env:
-          CEPH_MSGR_TEST_IMAGE: quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9
+          CEPH_MSGR_TEST_IMAGE: ${{ matrix.image || 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9' }}
           CEPH_MSGR_TEST_KEY_TYPE: ${{ matrix.key }}
           CEPH_MSGR_TEST_SERVICE_CIPHER: ${{ matrix.service }}
           CEPH_MSGR_TEST_IP_FAMILY: ${{ matrix.family }}
