@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
@@ -102,6 +103,11 @@ type Transport struct {
 // Handshake takes ownership of conn, closing it on failure. The context and
 // deadline govern only setup; a successful connection has its deadline cleared.
 func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, limit uint32, timeout time.Duration) (_ *Transport, err error) {
+	if target.Endpoint.IsValid() {
+		// Match the wire representation: IPv4 uses its native family, while
+		// IPv6 scope is carried by ScopeID rather than a Go address zone.
+		target.Endpoint = netip.AddrPortFrom(target.Endpoint.Addr().Unmap().WithZone(""), target.Endpoint.Port())
+	}
 	stage := "banner"
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer func() {
@@ -325,7 +331,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		return nil, fmt.Errorf("%w: expected server ident, got %d", msgr.ErrFrame, f.Tag)
 	}
 	id := wire.NewDecoder(f.Segments[0])
-	msgr.DecodeAddresses(id)
+	serverAddresses := msgr.DecodeAddresses(id)
 	serverID := id.U64()
 	id.U64()
 	supported, required := id.U64(), id.U64()
@@ -333,6 +339,9 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	id.U64()
 	if err = id.Done(); err != nil {
 		return nil, err
+	}
+	if !slices.Contains(serverAddresses, target) {
+		return nil, fmt.Errorf("%w: server identification does not include target address", msgr.ErrAuthentication)
 	}
 	if expectedID != 0 && serverID != expectedID {
 		return nil, errors.New("ceph messenger: unexpected daemon ID")

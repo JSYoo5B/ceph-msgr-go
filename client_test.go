@@ -337,11 +337,18 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 	if err := write(msgr.CompressionDone, noCompression.Data); err != nil {
 		return nil, nil, err
 	}
-	if _, err := read(msgr.ClientIdent); err != nil {
+	p, err = read(msgr.ClientIdent)
+	if err != nil {
+		return nil, nil, err
+	}
+	clientIdent := wire.NewDecoder(p)
+	msgr.DecodeAddresses(clientIdent)
+	target := msgr.DecodeAddress(clientIdent)
+	if err := clientIdent.Err(); err != nil {
 		return nil, nil, err
 	}
 	ident := wire.Encoder{}
-	msgr.EncodeAddresses(&ident, nil)
+	msgr.EncodeAddresses(&ident, []msgr.Address{target})
 	ident.U64(cfg.id)
 	ident.U64(1)
 	ident.U64(session.Features)
