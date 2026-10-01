@@ -100,12 +100,6 @@ func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result
 	if uint64(len(command.JSON))+uint64(len(command.Input))+256 > uint64(c.options.MaxFrameSize) {
 		return result, errors.New("ceph: command exceeds frame limit")
 	}
-	var object struct {
-		Prefix string `json:"prefix"`
-	}
-	if err := json.Unmarshal(command.JSON, &object); err != nil || strings.TrimSpace(object.Prefix) == "" {
-		return result, errors.New("ceph: command JSON requires a string prefix")
-	}
 	select {
 	case c.calls <- struct{}{}:
 		defer func() { <-c.calls }()
@@ -113,6 +107,12 @@ func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result
 		return result, ctx.Err()
 	case <-c.ctx.Done():
 		return result, ErrClosed
+	}
+	var object struct {
+		Prefix string `json:"prefix"`
+	}
+	if err := json.Unmarshal(command.JSON, &object); err != nil || strings.TrimSpace(object.Prefix) == "" {
+		return result, errors.New("ceph: command JSON requires a string prefix")
 	}
 	jsonCommand := string(command.JSON)
 	input := append([]byte(nil), command.Input...)
