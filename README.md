@@ -62,11 +62,19 @@ fmt.Printf("%s\n", result.Data)
   context에 따른다. `MaxFrameSize` 기본값은 논리 frame당 16 MiB다.
 - `ConnectTimeout` 기본값은 endpoint별 10초다. 요청 deadline은 공유
   연결에 적용하지 않는다. `Close`는 연결과 내부 worker를 종료하고 기다린다.
+- 모든 seed에서 일시적인 전송·연결 오류가 나면 bootstrap을 다시 시도한다.
+  추가 시도는 `ConnectTimeout`과 Dial context로 제한한다. 명시적인 인증
+  거절, wire 검증 실패, FSID·지원 계열 불일치는 이 재시도의 대상이 아니다.
 - MON 단절 시 seed 및 MonMap 주소로 다시 인증한다. 이후 요청은 복구를
   기다린다. Ticket 수명의 약 75%에서 새 MON 연결로 ticket을 갱신하고,
   이전 MON의 진행 중 요청은 `ConnectTimeout` 동안 완료할 기회를 준다.
+  교체된 MON은 새 요청을 받지 않는다. 전송 전에 거절된 요청만 새 MON으로
+  보내며, 이전 연결에서 이미 전송을 시작한 요청을 다시 실행하지 않는다.
 - MgrMap이 바뀌면 이전 MGR 연결을 종료하며 다음 호출은 새 active MGR로
   연결한다. 전송 중이던 요청은 `ErrManagerChanged`를 원인으로 보존한다.
+- active MGR이 없거나 service ticket을 갱신 중이면 `MgrCommand`는 호출
+  context 안에서 대기한다. 아직 명령을 전송하지 않은 이 대기의 취소는
+  결과 불명확 오류가 아니다. MGR을 기다리는 동안 MON 명령은 계속 사용할 수 있다.
 - 이미 전송을 시작한 호출의 취소·단절은 `*OutcomeUnknownError`가 될 수 있다.
   `errors.As`로 이를 확인한다. `errors.Is`로 원인 context 오류도 확인할 수
   있다. 취소가 서버 실행의 취소나 rollback을 의미하지 않는다.
@@ -99,7 +107,8 @@ MON이 명령 전용 CLIENT에도 요구하는 CRUSH 세대 비트는 MON 접속
 | 20.2.4 | aes / aes256k | IPv4 | 동일 시험 통과, MGR session key는 aes |
 | 20.2.4 | aes256k / aes | IPv4 | 동일 시험 통과, MGR session key는 aes |
 
-모두 secure 모드이며 클라이언트는 Linux arm64, CGO=0으로 실행했다.
+모두 secure 모드이며 클라이언트는 Linux arm64 및 GitHub CI의 Linux amd64에서
+CGO=0으로 실행했다.
 혼합 구성에서 MGR session key는 [Tentacle KeyServer](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/cephx/CephxKeyServer.cc#L591)가
 클라이언트 키와 service secret 중 낮은 타입으로 선택한다. 해당 키 타입도
 시험에서 확인했다.
@@ -108,14 +117,31 @@ MON이 명령 전용 CLIENT에도 요구하는 CRUSH 세대 비트는 MON 접속
 `pg stat` 응답을 검증했고 MON 프로세스 종료 및 active MGR fail을 주입했다.
 잘못된 인증 키, 읽기 전용 계정의 쓰기 거절, 미지원 명령의 코드·상태 문자열,
 `pg getmap` binary 출력과 40 KiB binary bulk 입력도 실제 서버로 확인했다.
-IPv4·aes256k 구성의 3분 부하 시험에서는 동시 요청 62,362건, ticket 갱신
-17회, MGR fail 5회를 수행했고 세션 수와 `Close` 후 worker 정리를 확인했다.
-실제 시험 클라이언트 바이너리는 Ceph 실행 파일이나 라이브러리를 호출하지
-않는다. 장시간 운영, 다양한 모듈·CRUSH 설정, 20.2.0–20.2.3 및 이후
-Ceph 패치는 아직 검증하지 않았다.
+설정 set/get/rm과 balancer·crash·iostat 모듈 명령을 검증했다. iostat을
+비활성화했을 때 서버의 `-95` 코드와 상태 문자열을 보존했고, 재활성화 및
+MGR 전환 후 모듈 명령이 정상 동작했다. 접속 중인 MON을 8회 재시작하는
+동안 동시 조회를 수행했다. 클라이언트 12개를 차례로 생성해 동시 요청 중
+종료했으며 worker, 파일 descriptor 및 GC 후 heap 정리를 확인했다.
+수신을 차단한 변경 명령은 독립 클라이언트로 서버 적용을 먼저 확인한 뒤
+로컬 대기를 취소해 `OutcomeUnknownError`가 반환되는지 검증했다.
 
-Go 1.24.0과 1.27.1에서 전체 unit 검사를 통과했다. Darwin arm64에서
-race/vet 검사와 parser fuzzing도 통과했다.
+[1시간 부하 시험 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/tentacle-soak-1h)는
+`0e73e56`이다. Linux arm64·IPv4·aes256k 구성에서 성공 요청 1,244,441건,
+ticket 갱신 366회, MGR fail 119회를 수행했다. 장애 중 결과 불명확 15건은
+해당 오류로 반환했다. 이후 복구 보강은 별도의 3분 부하 시험과 CI로 검증했다.
+세션·goroutine 수는 샘플링한 값이며 순간 최대치를 보장하지 않는다.
+
+MGR이 없는 상태에서도 MON 조회와 실제 ticket 갱신을 확인했다. MGR 대기
+취소는 전송 전 오류로, 대기 중 `Close`는 `ErrClosed`로 반환했고, 이후
+MGR을 기동하면 기존 대기 요청이 처리됐다. 이 시험은 Linux arm64에서
+aes256k·IPv4 및 aes·IPv6 구성으로 수행했다.
+
+실제 시험 클라이언트 바이너리는 Ceph 실행 파일이나 라이브러리를 호출하지
+않는다. 1시간을 넘는 운영, 위에 명시하지 않은 모듈·클러스터 구성,
+20.2.0–20.2.3 및 이후 Ceph 패치는 아직 검증하지 않았다.
+
+Go 1.24.0과 1.27 계열에서 Linux·macOS·Windows의 CGO=0 unit/vet 검사를
+통과했다. Linux와 Darwin arm64에서 race 검사, Darwin에서 parser fuzzing도 통과했다.
 Windows amd64, Darwin amd64, Linux 386에서 CGO=0 빌드를 확인했다.
 이 결과는 각 OS에서 실제 Ceph 상대 실행을 검증했다는 의미가 아니다.
 
@@ -127,6 +153,8 @@ CEPH_MSGR_TEST_KEY_TYPE=aes sh integration/run.sh
 CEPH_MSGR_TEST_IP_FAMILY=6 sh integration/run.sh
 CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes256k sh integration/run.sh
 CEPH_MSGR_STRESS_DURATION=3m sh integration/run.sh
+CEPH_MSGR_TEST_MGR_COUNT=0 sh integration/run.sh # MGR 지연 기동
+CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 ```
 
 부하 시험 시간은 45초 이상으로 설정한다. 더 긴 시험에는
@@ -134,7 +162,8 @@ CEPH_MSGR_STRESS_DURATION=3m sh integration/run.sh
 
 Harness는 격리된 컨테이너 안에서 Ceph 클러스터와 CGO=0 Go 테스트 바이너리를
 실행하고 종료 시 컨테이너·임시 키를 삭제한다. 호스트 포트를 공개하지 않는다.
-Ceph CLI는 이 개발 fixture의 초기화에만 사용한다.
+Ceph CLI는 이 개발 fixture의 초기화와 daemon 준비 상태 확인에 사용한다.
+`CEPH_MSGR_TEST_RUN`으로 Go 시험의 이름을 선택할 수 있다.
 
 기존 클러스터에 읽기 명령만 시험하려면 `CEPH_MSGR_MONITORS`(쉼표 구분),
 `CEPH_MSGR_IDENTITY`, `CEPH_MSGR_KEY_FILE`(base64 key 값이 든 파일), 선택적으로
@@ -144,8 +173,9 @@ Ceph CLI는 이 개발 fixture의 초기화에만 사용한다.
 
 [CI 설정](.github/workflows/ci.yml)은 Linux·macOS·Windows에서 Go 1.24.0과
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 5개 Ceph 구성을
-시험하도록 구성했다. Actions 설정 lint는 통과했으며 GitHub에서의 실행
-결과는 아직 없다.
+시험한다. MGR 지연 기동 시험까지 포함한
+[GitHub CI 13개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36839965685)이
+2026-10-01에 모두 통과했다. Actions 설정 lint도 통과했다.
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,

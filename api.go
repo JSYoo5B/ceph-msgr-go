@@ -44,7 +44,9 @@ type Options struct {
 	Key      Key
 	// ExpectedFSID pins the cluster UUID. When empty, the first authenticated
 	// MonMap establishes the FSID used to validate all later maps.
-	ExpectedFSID   string
+	ExpectedFSID string
+	// ConnectTimeout bounds each endpoint's setup, additional bootstrap
+	// retries after transient connection errors, and retired MON draining.
 	ConnectTimeout time.Duration
 	MaxFrameSize   uint32
 	// MaxInFlight bounds concurrent command calls, including queued requests.
