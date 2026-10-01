@@ -255,10 +255,13 @@ MON을 ticket과 rotating secret의 수명보다 오래 중단한다. Ceph daemo
 기존 인증에도 영향을 주므로 전용 fixture에서만 실행한다.
 `CEPH_MSGR_TEST_DIAGNOSTICS`에 개발용 디렉터리를 지정하면 실패 시 daemon
 텍스트 로그와 crash metadata를 보관한다. 키와 프로세스 메모리는 복사하지 않는다.
+Metadata는 종료된 컨테이너에서도 회수하며, 이 개발용 수집에는 Python 3
+표준 라이브러리를 사용한다. CI는 실패한 Ceph 시험의 로그와 metadata를
+artifact로 7일간 보관하도록 설정했다.
 20.2.3 시험은 `CEPH_MSGR_TEST_IMAGE=quay.io/ceph/ceph:v20.2.3`과
 `CEPH_MSGR_TEST_KEY_TYPE=aes`를 함께 설정한다. 해당 이미지의 개발 도구에는
 aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적으로 실패시킨다.
-기본 fixture는 계속 20.2.4와 aes256k를 사용한다.
+기본 fixture는 digest를 고정한 20.2.4 이미지와 aes256k를 사용한다.
 
 기존 클러스터에 읽기 명령만 시험하려면 `CEPH_MSGR_MONITORS`(쉼표 구분),
 `CEPH_MSGR_IDENTITY`, `CEPH_MSGR_KEY_FILE`(base64 key 값이 든 파일), 선택적으로
