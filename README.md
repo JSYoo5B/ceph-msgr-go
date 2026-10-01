@@ -169,9 +169,16 @@ beacon 설정으로 약 33초 뒤 standby가 자동 승격됐다. 그동안 인�
 `321dd35`다. 연결 준비 중 active MGR이나 인증 ticket이 바뀌면 현재 상태를
 다시 확인해 아직 전송하지 않은 명령을 처리한다. 실제 20.2.4·aes256k의
 Darwin arm64 시험에서는 연결 준비와 MGR 전환을 겹치게 한 뒤 변경 명령의
-단일 전송과 독립 클라이언트가 읽은 변경 결과를 확인했다. 같은 바이너리의
-전체 시험과 3분 부하 시험에서 63,504개 명령, ticket 갱신 18회, MGR 전환
+단일 전송과 독립 클라이언트가 읽은 변경 결과를 확인했다. 제품 수정이 동일한
+`d4e737a`의 전체 시험과 3분 부하 시험에서 63,504개 명령, ticket 갱신 18회, MGR 전환
 6회를 처리했다. 이 체크포인트의 CI 17개 작업도 모두 통과했다.
+
+별도의 120초 ticket fixture에서 8초 동안 애플리케이션 명령 없이 MON/MGR
+연결을 유지했다. 1초 keepalive와 4초 무응답 제한을 사용했고, ticket 갱신이나
+MON 재연결 없이 수신 활동과 이후의 MgrMap 전달을 확인했다. 독립 클라이언트가
+MGR을 전환한 뒤에도 기존 MON 구독으로 새 MGR을 찾아 명령을 완료했다.
+이 시험은 20.2.4·aes256k의 Darwin arm64·IPv6 및 20.2.3·aes의 Linux arm64·IPv4에서
+통과했다.
 
 MON 세 개를 모두 중단하고 재기동하는 과정을 3회 반복했다. 중단 중 전송을
 기다리는 호출은 context 만료로 끝나며, 충분한 deadline을 가진 MON/MGR
@@ -190,6 +197,8 @@ context 참조가 GC로 해제되는지도 별도의 단위 시험으로 확인�
 받아들이면 ID를 유지하고 ticket을 갱신했다. 그 증거의 rotating secret까지
 폐기되도록 기다린 경우에는 MON/MGR의 새 명령을 `AuthenticationError(-13)`로
 차단했고, 호출자가 명시적으로 수행한 새 `Dial`은 정상 접속했다.
+폐기 시험은 보관한 이전 증명을 각 MON이 실제로 거절하는지 먼저 확인하며,
+고정된 대기 시간만으로 rotating secret 폐기를 단정하지 않는다.
 
 [1시간 부하 시험 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/tentacle-soak-1h)는
 `0e73e56`이다. Linux arm64·IPv4·aes256k 구성에서 성공 요청 1,244,441건,
@@ -246,6 +255,7 @@ CEPH_MSGR_STRESS_DURATION=3m sh integration/run.sh
 CEPH_MSGR_TEST_MGR_COUNT=0 sh integration/run.sh # MGR 지연 기동
 CEPH_MSGR_TEST_RUNTIME=host sh integration/run.sh # 호스트 native 바이너리
 CEPH_MSGR_TEST_EXPIRE_TICKETS=1 sh integration/run.sh # 별도 인증 만료 fixture
+CEPH_MSGR_TEST_IDLE_SESSIONS=1 sh integration/run.sh # 별도 120초 ticket·idle 시험
 CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 ```
 
@@ -280,11 +290,13 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 [CI 설정](.github/workflows/ci.yml)은 Linux·macOS·Windows에서 Go 1.24.0과
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
 시험한다. Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
-3분 부하 시험, MGR 지연 기동, host 모드 및 별도 인증 만료 fixture까지 포함한
-[GitHub CI 17개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36864257413)이
+3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36877040581)이
 2026-10-01에 모두 통과했다. Actions 설정 lint도 통과했다.
+[idle·인증 증명 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/idle-and-proof-verification)는
+이 실행의 `5f4e1b7`를 가리킨다.
 [서버 식별·MGR 자동 승계 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/server-identity-and-mgr-recovery)는
-이 실행의 `a65c54a`를 가리킨다.
+앞서 CI 17개 작업을 통과한 `a65c54a`를 가리킨다.
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
