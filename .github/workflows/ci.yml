@@ -55,7 +55,7 @@ jobs:
           CGO_ENABLED: '1'
 
   ceph:
-    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }})
+    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -69,6 +69,7 @@ jobs:
           - { key: aes256k, service: aes, family: '4', stress: '' }
           - { key: aes256k, service: aes256k, family: '4', stress: '', managers: '0' }
           - { release: '20.2.3', key: aes, service: aes, family: '4', stress: '3m', image: 'quay.io/ceph/ceph:v20.2.3@sha256:d195020de02512030118e772cef7859e92904e91eb4cb21acb503f8b94118137' }
+          - { key: aes256k, service: aes256k, family: '4', stress: '', runtime: 'host' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -91,3 +92,4 @@ jobs:
           CEPH_MSGR_TEST_IP_FAMILY: ${{ matrix.family }}
           CEPH_MSGR_STRESS_DURATION: ${{ matrix.stress }}
           CEPH_MSGR_TEST_MGR_COUNT: ${{ matrix.managers || '2' }}
+          CEPH_MSGR_TEST_RUNTIME: ${{ matrix.runtime || 'container' }}
