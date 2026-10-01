@@ -122,7 +122,7 @@ MON이 명령 전용 CLIENT에도 요구하는 CRUSH 세대 비트는 MON 접속
 
 ## 검증 결과
 
-2026-10-01에 다음 구성을 실제 Ceph daemon과 검증했다.
+2026-10-01–02에 다음 구성을 실제 Ceph daemon과 검증했다.
 
 | Ceph | 인증 키 / rotating service cipher | 주소 | 결과 |
 | --- | --- | --- | --- |
@@ -161,12 +161,21 @@ MGR의 `balancer mode` 변경에서도 서버 적용을 독립 클라이언트�
 이 시험은 20.2.4·aes256k의 Darwin arm64·IPv4 및 20.2.3·aes의
 Linux arm64·IPv6에서 통과했다. 후자의 결과는 이 시험에 대한 검증이다.
 
+MON의 `config-key set`도 적용된 변경의 응답을 막은 상태로 검증했다.
+독립 클라이언트가 값을 다시 저장하고 읽어 확인한 뒤 실제 MON을 재기동했다.
+원래 호출은 결과 불명확 오류로 끝났으며, 다른 MON에 인증한 기존 클라이언트와
+독립 클라이언트 모두 덮어쓴 값을 읽었다. 변경 명령의 전송은 한 번뿐이었다.
+이 시험은 CI의 Linux amd64·실제 Ceph 구성과 20.2.4·aes256k의
+Darwin arm64·IPv4에서 통과했다.
+
 MGR 핸드셰이크에서는 실제 서버의 수신 bytes를 차단한 상태로 `Close`를
 호출했다. 연결 정리를 잠시 보류하면 `Close`도 기다렸으며, 정리를 끝내면
 연결과 대기 호출이 모두 종료됐다. 명령을 전송하기 전이므로 호출은
 결과 불명확 오류 없이 `ErrClosed`를 반환했다. 독립 클라이언트의 MGR
 명령은 계속 성공했고 파일 descriptor 검사도 통과했다. 이 시험은 아래
-CI의 Linux amd64·실제 Ceph 구성에서 검증했다.
+CI의 Linux amd64·실제 Ceph 구성 및 20.2.4·aes256k의 Darwin arm64·IPv4에서
+통과했다. Darwin에서는 해당 시험 전후 파일 descriptor가 모두 7개였고,
+수정 전 제품 코드는 이 시험의 연결 정리 검사에서 실패했다.
 
 MGR 응답 수신을 차단해 로컬 취소, keepalive timeout, 새 연결 복구를
 확인했다. Go relay에서 MON bulk frame의 일부 쓰기를 멈춰 쓰기 timeout,
@@ -235,6 +244,22 @@ Linux arm64·IPv4·aes256k 구성에서 통과했다. 성공 호출 1,246,654건
 ticket 갱신 367회, MGR fail 119회, 결과 불명확 34건을 기록했다.
 샘플링한 세션 최대는 3개, goroutine 최대는 24개였으며 종료 후 worker
 정리 검사도 통과했다. 이후 변경은 각 실서버 시험과 CI로 따로 검증했다.
+
+MGR 연결 준비 복구를 포함한 `965ee5b`의
+[추가 1시간 시험](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mgr-recovery-soak-1h)도
+동일한 엄격한 인증 설정의 Linux arm64·20.2.4·IPv4·aes256k 구성에서 통과했다.
+성공 호출 1,256,578건, ticket 갱신 363회, MGR fail 120회, 결과 불명확 39건을
+기록했다. 샘플 최대는 세션 3개·goroutine 24개였으며 종료 후 worker 검사도
+통과했다. 이 바이너리에는 이후 MGR 핸드셰이크 종료 수정과 부하 시험 오류
+원인 검사가 포함돼 있지 않다. 이후 부하 시험은 연결 단절·세션 교체 등
+허용한 복구 원인만 받아들이며, 결과 불명확이더라도 인증·암호·프로토콜
+오류를 허용하지 않는다.
+
+이 검사를 적용한 제품 소스 `5f36a9c`의 Darwin arm64·20.2.4·aes256k·IPv4
+전체 시험과 3분 부하 시험도 통과했다. 성공 호출 50,532건, ticket 갱신
+18회, MGR fail 5회, 결과 불명확 0건을 기록했다. 샘플 최대는 세션 2개·
+goroutine 19개였다. 이 시험에는 MGR 핸드셰이크 종료와 MON/MGR 변경 명령의
+실제 적용·재실행 금지 검증도 포함한다.
 
 앞선 별도 장시간 실행은 16분 31초에 실패했다. Go 호출은 결과 불명확 EOF를
 반환했고 Ceph MGR·MON의 crash 로그도 있었다. 원인은 아직 확정하지 못했으며,
@@ -307,10 +332,12 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
 시험한다. Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36884070984)이
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36886549130)이
 2026-10-01에 모두 통과했다. Actions 설정 lint도 통과했다.
+[MON/MGR 복구 오류 검사 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-mgr-recovery-causes)는
+이 실행의 `5f36a9c`를 가리킨다.
 [MGR 결과·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mgr-outcomes-and-close)는
-이 실행의 `72c76a5`를 가리킨다.
+앞서 CI 18개 작업을 통과한 `72c76a5`를 가리킨다.
 [idle·인증 증명 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/idle-and-proof-verification)는
 앞서 CI 18개 작업을 통과한 `5f4e1b7`를 가리킨다.
 [서버 식별·MGR 자동 승계 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/server-identity-and-mgr-recovery)는
