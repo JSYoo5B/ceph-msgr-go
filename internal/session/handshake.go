@@ -1,0 +1,312 @@
+// Package session coordinates authenticated msgr2.1 client connections.
+package session
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
+)
+
+// These bits describe only encodings/behaviors used by MON/MGR sessions. Do
+// not substitute CEPH_FEATURES_ALL: that also promises unsupported OSD codecs.
+const Features uint64 = 1<<1 | 1<<2 | 1<<4 | 1<<5 | 1<<15 | 1<<23 | 1<<28 | 1<<42 | 1<<57 | 1<<59 | 1<<61
+const RequiredFeatures uint64 = 1 << 59 // MSG_ADDR2
+
+type Authenticator interface {
+	Initial() ([]byte, error)
+	More([]byte) ([]byte, error)
+	Done(uint64, []byte) (cephx.Key, []byte, error)
+}
+type MonAuth struct{ Client *cephx.Client }
+
+func (a MonAuth) Initial() ([]byte, error)                            { return a.Client.Initial(), nil }
+func (a MonAuth) More(p []byte) ([]byte, error)                       { return a.Client.Challenge(p) }
+func (a MonAuth) Done(id uint64, p []byte) (cephx.Key, []byte, error) { return a.Client.Finish(id, p) }
+
+type MgrAuth struct{ Authorizer *cephx.Authorizer }
+
+func (a MgrAuth) Initial() ([]byte, error)      { return a.Authorizer.Payload(nil) }
+func (a MgrAuth) More(p []byte) ([]byte, error) { return a.Authorizer.Payload(p) }
+func (a MgrAuth) Done(_ uint64, p []byte) (cephx.Key, []byte, error) {
+	secret, err := a.Authorizer.Finish(p)
+	return a.Authorizer.Key(), secret, err
+}
+
+type recordingReader struct {
+	io.Reader
+	active bool
+	data   bytes.Buffer
+}
+
+func (r *recordingReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if r.active && n > 0 {
+		if r.data.Len()+n > 1<<20 {
+			return n, wire.ErrLimit
+		}
+		r.data.Write(p[:n])
+	}
+	return n, err
+}
+
+type recordingWriter struct {
+	io.Writer
+	active bool
+	data   bytes.Buffer
+}
+
+func (w *recordingWriter) Write(p []byte) (int, error) {
+	if w.active && w.data.Len()+len(p) > 1<<20 {
+		return 0, wire.ErrLimit
+	}
+	n, err := w.Writer.Write(p)
+	if w.active && n > 0 {
+		w.data.Write(p[:n])
+	}
+	return n, err
+}
+
+type Transport struct {
+	Conn     net.Conn
+	Reader   *msgr.Reader
+	Writer   *msgr.Writer
+	GlobalID uint64
+}
+
+// Handshake takes ownership of conn, closing it on failure. The context and
+// deadline govern only setup; a successful connection has its deadline cleared.
+func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, limit uint32, timeout time.Duration) (_ *Transport, err error) {
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer func() {
+		stop()
+		if err != nil {
+			conn.Close()
+		}
+		if ctx.Err() != nil {
+			err = ctx.Err()
+			conn.Close()
+		}
+	}()
+	deadline := time.Now().Add(timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err = conn.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
+	rx := &recordingReader{Reader: conn, active: true}
+	tx := &recordingWriter{Writer: conn, active: true}
+	r, w := msgr.NewReader(rx, limit), msgr.NewWriter(tx, limit)
+	local := msgr.Banner{Supported: msgr.Revision1 | msgr.Compression, Required: msgr.Revision1}
+	if err = msgr.WriteFull(tx, local.Encode()); err != nil {
+		return nil, err
+	}
+	peer, err := msgr.ReadBanner(rx, local)
+	if err != nil {
+		return nil, err
+	}
+	write := func(tag msgr.Tag, p []byte) error { return w.Write(msgr.Frame{Tag: tag, Segments: [][]byte{p}}) }
+	hello := wire.Encoder{}
+	hello.U8(8)
+	target.Encode(&hello)
+	if err = write(msgr.Hello, hello.Data); err != nil {
+		return nil, err
+	}
+	f, err := r.Read()
+	if err != nil {
+		return nil, err
+	}
+	if f.Tag != msgr.Hello || len(f.Segments) != 1 {
+		return nil, msgr.ErrFrame
+	}
+	hd := wire.NewDecoder(f.Segments[0])
+	peerRole := hd.U8()
+	myAddr := msgr.DecodeAddress(hd)
+	if err = hd.Done(); err != nil {
+		return nil, err
+	}
+	if peerRole != role {
+		return nil, errors.New("ceph messenger: unexpected daemon role")
+	}
+	payload, err := auth.Initial()
+	if err != nil {
+		return nil, err
+	}
+	authReq := wire.Encoder{}
+	authReq.U32(2)
+	authReq.U32(1)
+	authReq.U32(2)
+	authReq.Bytes(payload)
+	if err = write(msgr.AuthRequest, authReq.Data); err != nil {
+		return nil, err
+	}
+	var sessionKey cephx.Key
+	var secret []byte
+	var globalID uint64
+	for round := 0; round < 8; round++ {
+		f, err = r.Read()
+		if err != nil {
+			return nil, err
+		}
+		if len(f.Segments) != 1 {
+			return nil, msgr.ErrFrame
+		}
+		d := wire.NewDecoder(f.Segments[0])
+		switch f.Tag {
+		case msgr.AuthReplyMore:
+			payload = d.Bytes()
+			if err = d.Done(); err != nil {
+				return nil, err
+			}
+			reply, err := auth.More(payload)
+			if err != nil {
+				return nil, err
+			}
+			e := wire.Encoder{}
+			e.Bytes(reply)
+			if err = write(msgr.AuthRequestMore, e.Data); err != nil {
+				return nil, err
+			}
+		case msgr.AuthBadMethod:
+			method, code := d.U32(), int32(d.U32())
+			return nil, fmt.Errorf("ceph messenger: authentication method %d rejected with code %d", method, code)
+		case msgr.AuthDone:
+			globalID = d.U64()
+			mode := d.U32()
+			payload = d.Bytes()
+			if err = d.Done(); err != nil {
+				return nil, err
+			}
+			if mode != 2 {
+				return nil, errors.New("ceph messenger: secure mode required")
+			}
+			sessionKey, secret, err = auth.Done(globalID, payload)
+			if err != nil {
+				return nil, err
+			}
+		default:
+			return nil, fmt.Errorf("%w: tag %d during authentication", msgr.ErrFrame, f.Tag)
+		}
+		if f.Tag == msgr.AuthDone {
+			break
+		}
+	}
+	if len(secret) < 40 {
+		return nil, errors.New("ceph messenger: incomplete authentication")
+	}
+	if err = r.EnableSecure(secret[:16], secret[16:28]); err != nil {
+		return nil, err
+	}
+	if err = w.EnableSecure(secret[:16], secret[28:40]); err != nil {
+		return nil, err
+	}
+	sig := sessionKey.Signature(rx.data.Bytes())
+	expectedSig := sessionKey.Signature(tx.data.Bytes())
+	rx.active, tx.active = false, false
+	if err = write(msgr.AuthSignature, sig); err != nil {
+		return nil, err
+	}
+	f, err = r.Read()
+	if err != nil {
+		return nil, err
+	}
+	if f.Tag != msgr.AuthSignature || len(f.Segments) != 1 || !hmac.Equal(expectedSig, f.Segments[0]) {
+		return nil, msgr.ErrAuthentication
+	}
+	rx.data.Reset()
+	tx.data.Reset()
+	if peer.Supported&msgr.Compression != 0 {
+		// Negotiate no compression. This implements the negotiation feature,
+		// while advertising no compression algorithms or compressed payloads.
+		e := wire.Encoder{}
+		e.U8(0)
+		e.U32(0)
+		if err = write(msgr.CompressionRequest, e.Data); err != nil {
+			return nil, err
+		}
+		f, err = r.Read()
+		if err != nil {
+			return nil, err
+		}
+		if f.Tag != msgr.CompressionDone || len(f.Segments) != 1 {
+			return nil, msgr.ErrFrame
+		}
+		d := wire.NewDecoder(f.Segments[0])
+		enabled := d.Bool()
+		d.U32()
+		if err = d.Done(); err != nil {
+			return nil, err
+		}
+		if enabled {
+			return nil, errors.New("ceph messenger: compression unsupported")
+		}
+	}
+	var random [8]byte
+	if _, err = rand.Read(random[:]); err != nil {
+		return nil, err
+	}
+	myAddr.Type, myAddr.Nonce = 2, binary.LittleEndian.Uint32(random[:4])
+	if myAddr.Endpoint.IsValid() {
+		myAddr.Endpoint = netip.AddrPortFrom(myAddr.Endpoint.Addr(), 0)
+	}
+	ident := wire.Encoder{}
+	msgr.EncodeAddresses(&ident, []msgr.Address{myAddr})
+	target.Encode(&ident)
+	ident.U64(globalID)
+	ident.U64(binary.LittleEndian.Uint64(random[:]))
+	ident.U64(Features)
+	ident.U64(RequiredFeatures)
+	ident.U64(1)
+	ident.U64(0) // lossy session, fresh recovery only
+	if err = write(msgr.ClientIdent, ident.Data); err != nil {
+		return nil, err
+	}
+	f, err = r.Read()
+	if err != nil {
+		return nil, err
+	}
+	if len(f.Segments) != 1 {
+		return nil, msgr.ErrFrame
+	}
+	if f.Tag == msgr.IdentMissingFeatures {
+		return nil, msgr.ErrFeatures
+	}
+	if f.Tag != msgr.ServerIdent {
+		return nil, fmt.Errorf("%w: expected server ident, got %d", msgr.ErrFrame, f.Tag)
+	}
+	id := wire.NewDecoder(f.Segments[0])
+	msgr.DecodeAddresses(id)
+	serverID := id.U64()
+	id.U64()
+	supported, required := id.U64(), id.U64()
+	id.U64()
+	id.U64()
+	if err = id.Done(); err != nil {
+		return nil, err
+	}
+	if expectedID != 0 && serverID != expectedID {
+		return nil, errors.New("ceph messenger: unexpected daemon ID")
+	}
+	if RequiredFeatures&^supported != 0 || required&^Features != 0 {
+		return nil, msgr.ErrFeatures
+	}
+	if !stop() || ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err = conn.SetDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	return &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID}, nil
+}
