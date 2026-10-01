@@ -415,7 +415,11 @@ func (c *Client) manager(ctx context.Context) (*session.Session, error) {
 	case <-c.ctx.Done():
 		return nil, ErrClosed
 	}
+retryManager:
 	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if _, err := c.monitor(ctx); err != nil {
 			return nil, err
 		}
@@ -456,10 +460,25 @@ func (c *Client) manager(ctx context.Context) (*session.Session, error) {
 		}
 		var failures []error
 		for _, address := range mapSnapshot.Addresses {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			linked, release := c.linkedContext(ctx)
 			transport, err := c.open(linked, dialAddress(address), address, 16, mapSnapshot.GlobalID, session.MgrAuth{Authorizer: authorizer})
 			release()
 			if err != nil {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				c.mu.Lock()
+				stale := c.closed || c.authErr != nil || c.auth != auth || c.mgrMap.GlobalID != mapSnapshot.GlobalID || !c.mgrMap.Available || !reflect.DeepEqual(c.mgrMap.Addresses, mapSnapshot.Addresses)
+				c.mu.Unlock()
+				if stale {
+					// Setup has not submitted an application command. Resolve
+					// the current identity/map before returning an obsolete
+					// endpoint or authorizer failure.
+					continue retryManager
+				}
 				failures = append(failures, err)
 				continue
 			}
@@ -481,7 +500,7 @@ func (c *Client) manager(ctx context.Context) (*session.Session, error) {
 			c.mu.Unlock()
 			if stale {
 				s.Fail(ErrManagerChanged)
-				break
+				continue retryManager
 			}
 			return s, nil
 		}
