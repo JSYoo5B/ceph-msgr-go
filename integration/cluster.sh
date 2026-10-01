@@ -70,11 +70,14 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+start_mon() {
+    ceph-mon -f -i "$1" -c "$root/ceph.conf" --keyring "$keyring" --setuser root --setgroup root >> "$root/mon.$1.log" 2>&1 &
+    echo $! > "$root/mon.$1.pid"
+}
 for name in a b c; do
     mkdir -p "$root/mon.$name"
     ceph-mon --mkfs -i "$name" -c "$root/ceph.conf" --monmap "$root/monmap" --keyring "$keyring" --setuser root --setgroup root > "$root/mkfs.$name.log" 2>&1
-    ceph-mon -f -i "$name" -c "$root/ceph.conf" --keyring "$keyring" --setuser root --setgroup root > "$root/mon.$name.log" 2>&1 &
-    echo $! > "$root/mon.$name.pid"
+    start_mon "$name"
 done
 for attempt in $(seq 1 60); do
     if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" status > /dev/null 2>&1; then
@@ -98,6 +101,27 @@ for attempt in $(seq 1 60); do
             if test -f /out/stop-mon-a && ! test -f /out/mon-a-stopped; then
                 kill "$(cat "$root/mon.a.pid")"
                 touch /out/mon-a-stopped
+            fi
+            if test -f /out/restart-mon; then
+                read -r request_id name extra < /out/restart-mon
+                case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+                case "$name" in a|b|c) ;; *) exit 2 ;; esac
+                test -z "$extra" || exit 2
+                rm /out/restart-mon
+                pid=$(cat "$root/mon.$name.pid")
+                kill "$pid"
+                wait "$pid" || true
+                start_mon "$name"
+                joined=false
+                for retry in $(seq 1 30); do
+                    if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" quorum_status --format json 2>/dev/null | python3 -c 'import json,sys; sys.exit(len(json.load(sys.stdin).get("quorum_names", [])) != 3)'; then
+                        joined=true
+                        break
+                    fi
+                    sleep 1
+                done
+                test "$joined" = true || exit 1
+                touch "/out/mon-restarted.$request_id"
             fi
             sleep 1
         done

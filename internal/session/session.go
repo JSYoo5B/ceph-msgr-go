@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,6 +73,7 @@ func (s *Session) Start() {
 	})
 }
 func (s *Session) Done() <-chan struct{} { return s.done }
+func (s *Session) RemoteAddr() net.Addr  { return s.transport.Conn.RemoteAddr() }
 func (s *Session) Err() error            { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
 func (s *Session) Wait()                 { s.wg.Wait() }
 func (s *Session) Fail(err error) {
