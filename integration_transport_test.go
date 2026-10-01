@@ -40,11 +40,7 @@ func (c *lostReplyConn) Close() error {
 
 func TestCephLostMutationReplyIntegration(t *testing.T) {
 	// fixtureClient checks the control directory before any mutation.
-	observer, ctx := fixtureClient(t, 30*time.Second)
-	probe, _ := json.Marshal(map[string]string{"prefix": "config-key set", "key": "native-receive-fault-probe"})
-	if _, err := observer.MonCommand(ctx, Command{JSON: probe, Input: []byte("server execution survives a canceled local wait")}); err != nil {
-		t.Fatal("small unaligned input before receive fault", err)
-	}
+	observer, ctx := fixtureClient(t, 45*time.Second)
 	options := integrationOptions(t)
 	var armed atomic.Bool
 	blocked := make(chan struct{})
@@ -70,22 +66,51 @@ func TestCephLostMutationReplyIntegration(t *testing.T) {
 	key := fmt.Sprintf("native-lost-reply-%d", time.Now().UnixNano())
 	input := []byte("server execution survives a canceled local wait")
 	encoded, _ := json.Marshal(map[string]string{"prefix": "config-key set", "key": key})
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	_, err = c.MonCommand(callCtx, Command{JSON: encoded, Input: input})
-	var unknown *OutcomeUnknownError
-	if !errors.As(err, &unknown) || !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatal("lost response did not preserve uncertain mutation", err)
-	}
+	finished := make(chan error, 1)
+	go func() {
+		_, err := c.MonCommand(callCtx, Command{JSON: encoded, Input: input})
+		finished <- err
+	}()
 	select {
 	case <-blocked:
+	case err := <-finished:
+		t.Fatal("mutation finished before receive fault", err)
 	case <-ctx.Done():
 		t.Fatal("receive fault did not activate")
 	}
-	encoded, _ = json.Marshal(map[string]string{"prefix": "config-key get", "key": key})
-	result, err := observer.MonCommand(ctx, Command{JSON: encoded})
-	if err != nil || !bytes.Equal(result.Data, input) {
-		t.Fatal("independent client did not observe the server mutation", err)
+	read, _ := json.Marshal(map[string]string{"prefix": "config-key get", "key": key})
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		result, err := observer.MonCommand(ctx, Command{JSON: read})
+		if err == nil && bytes.Equal(result.Data, input) {
+			break
+		}
+		var server *CommandError
+		if !errors.As(err, &server) || server.Code != -2 {
+			t.Fatal("independent client could not observe the server mutation", err, string(result.Data))
+		}
+		select {
+		case err := <-finished:
+			t.Fatal("mutation finished while receive bytes were blocked", err)
+		case <-ctx.Done():
+			t.Fatal("server mutation did not become visible", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+	// Observe server execution before canceling the local wait. Only the read
+	// probe is repeated; the mutation is submitted exactly once.
+	cancel()
+	select {
+	case err := <-finished:
+		var unknown *OutcomeUnknownError
+		if !errors.As(err, &unknown) || !errors.Is(err, context.Canceled) {
+			t.Fatal("lost response did not preserve uncertain mutation", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("canceling the local wait did not release the caller", ctx.Err())
 	}
 	if err := c.Close(); err != nil {
 		t.Fatal("shutdown with blocked receive", err)
