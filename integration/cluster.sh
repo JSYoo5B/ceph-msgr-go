@@ -43,6 +43,7 @@ EOF
 keyring="$root/keyring"
 ceph-authtool "$keyring" --create-keyring --name mon. --gen-key --key-type "$key_type" --cap mon 'allow *'
 ceph-authtool "$keyring" --name client.test --gen-key --key-type "$key_type" --cap mon 'allow *' --cap mgr 'allow *'
+ceph-authtool "$keyring" --name client.readonly --gen-key --key-type "$key_type" --cap mon 'allow r' --cap mgr 'allow r'
 for name in a b; do
     ceph-authtool "$keyring" --name "mgr.$name" --gen-key --key-type "$key_type" --cap mon 'profile mgr' --cap mgr 'allow *'
 done
@@ -77,6 +78,7 @@ done
 for attempt in $(seq 1 60); do
     if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" mgr dump --format json 2>/dev/null | python3 -c 'import json,sys; m=json.load(sys.stdin); sys.exit(not (m.get("available") and m.get("standbys")))'; then
         ceph-authtool "$keyring" -n client.test --print-key > /out/key
+        ceph-authtool "$keyring" -n client.readonly --print-key > /out/readonly.key
         touch /out/ready
         echo "Ceph test cluster ready: 3 MON, 2 MGR, $key_type, secure."
         while true; do
