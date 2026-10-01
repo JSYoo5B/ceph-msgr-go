@@ -22,7 +22,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go test -c -o "$out/client.test" .
 docker run -d --name "$container" --label ceph-msgr-go.integration=true --entrypoint /bin/sh -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -v "$project_root/integration:/test:ro" -v "$out:/out" "$image" /test/cluster.sh > /dev/null
 for attempt in $(seq 1 120); do
     if test -f "$out/ready"; then
-        docker exec -e CEPH_MSGR_MONITORS=127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302 -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out "$container" /out/client.test -test.run '^TestCeph.*Integration$' -test.v -test.timeout 90s
+        docker exec -e CEPH_MSGR_MONITORS=127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302 -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out -e CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" "$container" /out/client.test -test.run '^TestCeph.*Integration$' -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"
         exit
     fi
     if test "$(docker inspect --format '{{.State.Running}}' "$container")" != true; then
