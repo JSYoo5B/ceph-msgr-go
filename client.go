@@ -420,6 +420,19 @@ func (c *Client) manager(ctx context.Context) (*session.Session, error) {
 			}
 		}
 		authorizer, err := auth.Authorizer(cephx.ServiceMgr)
+		if errors.Is(err, cephx.ErrTicket) {
+			// No command or MGR handshake has started. Let the coordinator
+			// obtain a current ticket and keep waiting under this context.
+			c.wakeMonitor()
+			select {
+			case <-changed:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-c.ctx.Done():
+				return nil, ErrClosed
+			}
+		}
 		if err != nil {
 			return nil, err
 		}
