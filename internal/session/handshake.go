@@ -200,7 +200,16 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 			}
 		case msgr.AuthBadMethod:
 			method, code := d.U32(), int32(d.U32())
-			return nil, fmt.Errorf("ceph messenger: authentication method %d rejected with code %d", method, code)
+			for field := 0; field < 2; field++ {
+				n := d.Count(4, 32) // allowed methods and allowed connection modes
+				for i := 0; i < n; i++ {
+					d.U32()
+				}
+			}
+			if err := d.Done(); err != nil {
+				return nil, err
+			}
+			return nil, &cephx.AuthenticationError{Method: method, Code: code}
 		case msgr.AuthDone:
 			globalID = d.U64()
 			mode := d.U32()

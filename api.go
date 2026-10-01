@@ -23,6 +23,10 @@ var ErrManagerChanged = errors.New("ceph: active manager changed")
 
 type OutcomeUnknownError = session.OutcomeUnknownError
 
+// AuthenticationError is an explicit server rejection before commands can
+// run. It preserves the method and server result code for errors.As.
+type AuthenticationError = cephx.AuthenticationError
+
 // Key is an opaque CephX credential. Formatting redacts its key material.
 type Key struct{ value cephx.Key }
 

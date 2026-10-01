@@ -65,6 +65,20 @@ func handshakePeer(conn net.Conn, a fixtureAuth, badSignature bool, mode uint32)
 	if f, err := r.Read(); err != nil || f.Tag != msgr.AuthRequest {
 		return errors.New("auth request")
 	}
+	if mode == 0 {
+		e := wire.Encoder{}
+		e.U32(2)
+		rejection := int32(-13)
+		e.U32(uint32(rejection))
+		e.U32(1)
+		e.U32(2)
+		e.U32(1)
+		e.U32(2)
+		if badSignature {
+			e.Data = e.Data[:len(e.Data)-1]
+		}
+		return w.Write(msgr.Frame{Tag: msgr.AuthBadMethod, Segments: [][]byte{e.Data}})
+	}
 	done := wire.Encoder{}
 	done.U64(42)
 	done.U32(mode)
@@ -174,5 +188,24 @@ func TestHandshakeCancellation(t *testing.T) {
 	_, err := Handshake(ctx, client, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), 4096, time.Second)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
+	}
+}
+
+func TestAuthenticationRejectionPreservesCodeAndValidatesFrame(t *testing.T) {
+	for _, malformed := range []bool{false, true} {
+		client, peer := net.Pipe()
+		done := make(chan error, 1)
+		go func() { done <- handshakePeer(peer, fixtureAuthData(), malformed, 0) }()
+		_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), 4096, time.Second)
+		var rejected *cephx.AuthenticationError
+		if err == nil || errors.As(err, &rejected) == malformed {
+			t.Fatal("rejection or malformed frame misclassified", err)
+		}
+		if !malformed && (rejected.Method != 2 || rejected.Code != -13) {
+			t.Fatal(rejected)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
 	}
 }

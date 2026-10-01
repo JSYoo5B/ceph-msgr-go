@@ -21,6 +21,24 @@ func TestInitialIdentityFixture(t *testing.T) {
 	}
 }
 
+func TestRejectedAuthReplyPreservesCodeWithoutPublishingState(t *testing.T) {
+	c, _ := NewClient("client.admin", rfcKey(t))
+	c.GlobalID = 42
+	e := wire.Encoder{}
+	e.U16(0x100)
+	code := int32(-13)
+	e.U32(uint32(code))
+	_, _, err := c.Finish(99, e.Data)
+	var rejected *AuthenticationError
+	if !errors.As(err, &rejected) || rejected.Code != code || rejected.Method != 2 || c.GlobalID != 42 || len(c.Tickets) != 0 {
+		t.Fatal("rejection lost code or changed identity", err)
+	}
+	_, _, err = c.Finish(99, e.Data[:len(e.Data)-1])
+	if err == nil || errors.As(err, &rejected) {
+		t.Fatal("truncated code classified as rejection", err)
+	}
+}
+
 func encodeTestKey(k Key) []byte {
 	e := wire.Encoder{}
 	e.U16(k.Type())

@@ -18,6 +18,17 @@ const (
 
 var ErrTicket = errors.New("cephx: missing, expired or malformed ticket")
 
+// AuthenticationError preserves an explicit server rejection. Code is the
+// wire result, not a host OS errno. Local cryptographic failures are separate.
+type AuthenticationError struct {
+	Method uint32
+	Code   int32
+}
+
+func (e *AuthenticationError) Error() string {
+	return fmt.Sprintf("ceph: authentication method %d rejected with code %d", e.Method, e.Code)
+}
+
 type Ticket struct {
 	Key                 Key
 	SecretID            uint64
@@ -176,11 +187,14 @@ func parseReplies(d *wire.Decoder, secret Key, old map[uint32]Ticket, now time.T
 func (c *Client) Finish(globalID uint64, p []byte) (Key, []byte, error) {
 	d := wire.NewDecoder(p)
 	typ, status := d.U16(), int32(d.U32())
-	if status != 0 {
-		return Key{}, nil, fmt.Errorf("cephx: server authentication code %d", status)
+	if err := d.Err(); err != nil {
+		return Key{}, nil, err
 	}
 	if typ != 0x100 {
 		return Key{}, nil, wire.ErrVersion
+	}
+	if status != 0 {
+		return Key{}, nil, &AuthenticationError{Method: 2, Code: status}
 	}
 	now := time.Now()
 	tickets, err := parseReplies(d, c.Key, c.Tickets, now)
