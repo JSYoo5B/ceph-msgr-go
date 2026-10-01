@@ -409,12 +409,25 @@ func (c *Client) monitor(ctx context.Context) (*session.Session, error) {
 func (c *Client) manager(ctx context.Context) (*session.Session, error) {
 	select {
 	case c.mgrGate <- struct{}{}:
-		defer func() { <-c.mgrGate }()
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-c.ctx.Done():
 		return nil, ErrClosed
 	}
+	// A MGR connection belongs to the client before its session is attached.
+	// Close must also wait for a canceled handshake to finish cleaning it up.
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		<-c.mgrGate
+		return nil, ErrClosed
+	}
+	c.wg.Add(1)
+	c.mu.Unlock()
+	defer func() {
+		<-c.mgrGate
+		c.wg.Done()
+	}()
 retryManager:
 	for {
 		if err := ctx.Err(); err != nil {
