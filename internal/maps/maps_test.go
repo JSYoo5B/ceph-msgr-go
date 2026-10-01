@@ -62,6 +62,37 @@ func TestRealTentacleMonMap(t *testing.T) {
 		t.Fatal(m, err)
 	}
 }
+
+func TestRealTentacleIPv6Maps(t *testing.T) {
+	monBlob, err := os.ReadFile("testdata/monmap-3-ipv6-v20.2.4.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	front := wire.Encoder{}
+	front.Bytes(monBlob)
+	mon, err := DecodeMon(front.Data)
+	if err != nil || mon.Epoch != 1 || mon.MinimumRelease != 20 || len(mon.Addresses) != 3 {
+		t.Fatal("independent IPv6 MonMap", mon, err)
+	}
+	for i, address := range mon.Addresses {
+		if address.Type != 2 || address.Endpoint.Addr() != netip.IPv6Loopback() || address.Endpoint.Port() != uint16(33300+i) {
+			t.Fatal("independent MonMap address", address)
+		}
+	}
+	mgrBlob, err := os.ReadFile("testdata/mgrmap-ipv6-v20.2.4.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr, err := DecodeMgr(mgrBlob)
+	// Expected fields come from ceph-monstore-tool's independent readable
+	// decoding of this same daemon-generated map, not from a Go encoder.
+	if err != nil || mgr.Epoch != 4 || mgr.GlobalID != 4111 || !mgr.Available || mgr.Name != "b" || len(mgr.Addresses) != 1 {
+		t.Fatal("independent IPv6 MgrMap", mgr, err)
+	}
+	if address := mgr.Addresses[0]; address.Type != 2 || address.Endpoint.String() != "[::1]:36801" || address.Nonce != 3962530023 {
+		t.Fatal("independent MgrMap address", address)
+	}
+}
 func TestMgrUnavailableAndActive(t *testing.T) {
 	for _, available := range []bool{false, true} {
 		e := wire.Encoder{}
@@ -84,5 +115,17 @@ func TestMgrUnavailableAndActive(t *testing.T) {
 }
 func FuzzMaps(f *testing.F) {
 	f.Add(monFixture(20))
+	for _, name := range []string{"monmap-v20.2.4.bin", "monmap-3-ipv6-v20.2.4.bin", "mgrmap-ipv6-v20.2.4.bin"} {
+		blob, err := os.ReadFile("testdata/" + name)
+		if err != nil {
+			f.Fatal(err)
+		}
+		if name != "mgrmap-ipv6-v20.2.4.bin" {
+			front := wire.Encoder{}
+			front.Bytes(blob)
+			blob = front.Data
+		}
+		f.Add(blob)
+	}
 	f.Fuzz(func(t *testing.T, p []byte) { DecodeMon(p); DecodeMgr(p) })
 }
