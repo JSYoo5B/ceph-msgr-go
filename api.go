@@ -115,6 +115,9 @@ func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
+	if c.ctx.Err() != nil {
+		return result, ErrClosed
+	}
 	if uint64(len(command.JSON))+uint64(len(command.Input))+256 > uint64(c.options.MaxFrameSize) {
 		return result, errors.New("ceph: command exceeds frame limit")
 	}
@@ -124,6 +127,14 @@ func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result
 	case <-ctx.Done():
 		return result, ctx.Err()
 	case <-c.ctx.Done():
+		return result, ErrClosed
+	}
+	// A ready slot can race cancellation or Close. Check both lifetimes
+	// again before validating JSON or copying caller-owned bulk input.
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if c.ctx.Err() != nil {
 		return result, ErrClosed
 	}
 	var object struct {
