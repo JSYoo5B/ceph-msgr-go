@@ -76,6 +76,7 @@ func TestCephStressIntegration(t *testing.T) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	started := time.Now()
+	peakSessions, peakWorkers := 0, 0
 	for ctx.Err() == nil {
 		select {
 		case <-ctx.Done():
@@ -92,6 +93,12 @@ func TestCephStressIntegration(t *testing.T) {
 			active := len(c.sessions)
 			mgrName := c.mgrMap.Name
 			c.mu.Unlock()
+			if active > peakSessions {
+				peakSessions = active
+			}
+			if workers := runtime.NumGoroutine(); workers > peakWorkers {
+				peakWorkers = workers
+			}
 			if active > 4 {
 				t.Errorf("sessions accumulate across recovery: %d", active)
 				cancel()
@@ -104,6 +111,7 @@ func TestCephStressIntegration(t *testing.T) {
 					cancel()
 				}
 				faults.Add(1)
+				t.Logf("elapsed=%s calls=%d renewals=%d MGR-faults=%d unknown=%d sessions=%d goroutines=%d", time.Since(started).Round(time.Second), calls.Load(), renewals, faults.Load(), uncertain.Load(), active, runtime.NumGoroutine())
 			}
 		}
 	}
@@ -115,5 +123,5 @@ func TestCephStressIntegration(t *testing.T) {
 	if after := runtime.NumGoroutine(); after > baseline+4 {
 		t.Errorf("workers remain after Close: before=%d after=%d", baseline, after)
 	}
-	t.Logf("calls=%d ticket-renewals=%d MGR-faults=%d unknown-outcomes=%d", calls.Load(), renewals, faults.Load(), uncertain.Load())
+	t.Logf("calls=%d ticket-renewals=%d MGR-faults=%d unknown-outcomes=%d peak-sessions=%d peak-goroutines=%d", calls.Load(), renewals, faults.Load(), uncertain.Load(), peakSessions, peakWorkers)
 }
