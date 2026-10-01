@@ -9,6 +9,7 @@ ip_family=${CEPH_MSGR_TEST_IP_FAMILY:-4}
 mgr_count=${CEPH_MSGR_TEST_MGR_COUNT:-2}
 runtime=${CEPH_MSGR_TEST_RUNTIME:-container}
 case "$runtime" in container|host) ;; *) exit 2 ;; esac
+diagnostics=${CEPH_MSGR_TEST_DIAGNOSTICS:-}
 case "$mgr_count" in
     0) test_run=${CEPH_MSGR_TEST_RUN:-^TestCephManagerAvailabilityIntegration$} ;;
     2) test_run=${CEPH_MSGR_TEST_RUN:-^TestCeph.*Integration$} ;;
@@ -24,6 +25,18 @@ container="ceph-msgr-go-test-$$"
 cleanup() {
     docker rm -f "$container" > /dev/null 2>&1 || true
     rm -rf "$out"
+}
+failure_diagnostics() {
+    if test -n "$diagnostics"; then
+        mkdir -p "$diagnostics"
+        # Copy daemon text logs and crash metadata only, never keyrings or
+        # process memory. The caller chooses the development output directory.
+        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log; do
+            docker cp "$container:/tmp/ceph-msgr-test/$log" "$diagnostics/$log" > /dev/null 2>&1 || true
+        done
+        docker exec "$container" sh -c 'for file in /var/lib/ceph/crash/*/meta; do test -f "$file" || continue; cat "$file"; done' > "$diagnostics/crash-metadata.jsonl" || true
+    fi
+    docker exec "$container" sh -c 'for file in /var/lib/ceph/crash/*/meta; do test -f "$file" || continue; cat "$file"; done; tail -n 80 /tmp/ceph-msgr-test/mon.*.log /tmp/ceph-msgr-test/mgr.*.log' || true
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -68,7 +81,7 @@ for attempt in $(seq 1 120); do
         if test "$result" -eq 0; then
             exit 0
         else
-            docker exec "$container" sh -c 'tail -n 25 /tmp/ceph-msgr-test/mon.*.log /tmp/ceph-msgr-test/mgr.*.log' || true
+            failure_diagnostics
             exit "$result"
         fi
     fi
