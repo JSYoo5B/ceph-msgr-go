@@ -40,7 +40,7 @@ func fixtureAuthData() fixtureAuth {
 }
 
 // This peer simulates handshake faults, not independent Ceph interoperability.
-func handshakePeer(conn net.Conn, a fixtureAuth, badSignature bool, mode uint32) error {
+func handshakePeer(conn net.Conn, a fixtureAuth, badSignature bool, mode uint32, serverFlags uint64) error {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(2 * time.Second))
 	rx := &recordingReader{Reader: conn, active: true}
@@ -130,7 +130,7 @@ func handshakePeer(conn net.Conn, a fixtureAuth, badSignature bool, mode uint32)
 	ident.U64(1)
 	ident.U64(Features)
 	ident.U64(RequiredFeatures)
-	ident.U64(1)
+	ident.U64(serverFlags)
 	ident.U64(0)
 	if err := w.Write(msgr.Frame{Tag: msgr.ServerIdent, Segments: [][]byte{ident.Data}}); err != nil {
 		return err
@@ -143,7 +143,7 @@ func TestAuthenticatedHandshakeAndContextLifetime(t *testing.T) {
 	client, server := net.Pipe()
 	a := fixtureAuthData()
 	peerDone := make(chan error, 1)
-	go func() { peerDone <- handshakePeer(server, a, false, 2) }()
+	go func() { peerDone <- handshakePeer(server, a, false, 2, 1) }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	tr, err := Handshake(ctx, client, msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}, 1, 0, a, 4096, time.Second)
@@ -168,7 +168,7 @@ func TestHandshakeRejectsTamperingAndDowngrade(t *testing.T) {
 		client, server := net.Pipe()
 		a := fixtureAuthData()
 		done := make(chan error, 1)
-		go func() { done <- handshakePeer(server, a, tc.bad, tc.mode) }()
+		go func() { done <- handshakePeer(server, a, tc.bad, tc.mode, 1) }()
 		_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, a, 4096, time.Second)
 		if err == nil {
 			t.Fatal("unsafe handshake accepted")
@@ -195,7 +195,7 @@ func TestAuthenticationRejectionPreservesCodeAndValidatesFrame(t *testing.T) {
 	for _, malformed := range []bool{false, true} {
 		client, peer := net.Pipe()
 		done := make(chan error, 1)
-		go func() { done <- handshakePeer(peer, fixtureAuthData(), malformed, 0) }()
+		go func() { done <- handshakePeer(peer, fixtureAuthData(), malformed, 0, 1) }()
 		_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), 4096, time.Second)
 		var rejected *cephx.AuthenticationError
 		if err == nil || errors.As(err, &rejected) == malformed {
@@ -206,6 +206,23 @@ func TestAuthenticationRejectionPreservesCodeAndValidatesFrame(t *testing.T) {
 		}
 		if err := <-done; err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestHandshakeRejectsUnsupportedSessionFlags(t *testing.T) {
+	for _, flags := range []uint64{0, 3} {
+		client, server := net.Pipe()
+		done := make(chan error, 1)
+		auth := fixtureAuthData()
+		go func() { done <- handshakePeer(server, auth, false, 2, flags) }()
+		transport, err := Handshake(context.Background(), client, msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}, 1, 0, auth, 4096, time.Second)
+		if transport != nil {
+			transport.Conn.Close()
+		}
+		<-done
+		if !errors.Is(err, msgr.ErrFeatures) {
+			t.Fatalf("unimplemented session flags %#x were not rejected: %v", flags, err)
 		}
 	}
 }

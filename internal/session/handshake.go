@@ -23,6 +23,7 @@ import (
 // CEPH_FEATURES_ALL: that also promises unsupported OSD message codecs.
 const Features uint64 = 1<<1 | 1<<2 | 1<<4 | 1<<5 | 1<<15 | 1<<23 | 1<<28 | 1<<42 | 1<<57 | 1<<59 | 1<<61
 const RequiredFeatures uint64 = 1 << 59 // MSG_ADDR2
+const sessionFlagLossy uint64 = 1       // CEPH_MSG_CONNECT_LOSSY
 
 // Ceph MON admission requires these CRUSH-generation bits from every CLIENT,
 // even clients that only issue commands. This scope never subscribes to an
@@ -300,8 +301,8 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	supportedFeatures := featuresForRole(role)
 	ident.U64(supportedFeatures)
 	ident.U64(RequiredFeatures)
-	ident.U64(1)
-	ident.U64(0) // lossy session, fresh recovery only
+	ident.U64(sessionFlagLossy)
+	ident.U64(0) // no client cookie: fresh lossy recovery only
 	if err = write(msgr.ClientIdent, ident.Data); err != nil {
 		return nil, err
 	}
@@ -328,7 +329,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	serverID := id.U64()
 	id.U64()
 	supported, required := id.U64(), id.U64()
-	id.U64()
+	flags := id.U64()
 	id.U64()
 	if err = id.Done(); err != nil {
 		return nil, err
@@ -338,6 +339,12 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	}
 	if RequiredFeatures&^supported != 0 || required&^supportedFeatures != 0 {
 		return nil, msgr.ErrFeatures
+	}
+	// SERVER_IDENT is authoritative about the selected policy. Reliable
+	// sessions require cookie-based resumption and message replay, which this
+	// command-only client does not implement. Unknown flags are unsupported.
+	if flags != sessionFlagLossy {
+		return nil, fmt.Errorf("%w: unsupported session flags %#x", msgr.ErrFeatures, flags)
 	}
 	if !stop() || ctx.Err() != nil {
 		return nil, ctx.Err()
