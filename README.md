@@ -62,6 +62,7 @@ fmt.Printf("%s\n", result.Data)
   context에 따른다. `MaxFrameSize` 기본값은 논리 frame당 16 MiB다.
 - `ConnectTimeout` 기본값은 endpoint별 10초다. 요청 deadline은 공유
   연결에 적용하지 않는다. `Close`는 연결과 내부 worker를 종료하고 기다린다.
+  MGR 핸드셰이크 중인 연결의 정리도 완료한 뒤 반환한다.
   종료 후 호출은 입력 검증·복사 전에 `ErrClosed`를 반환한다. 호출 context가
   이미 취소됐으면 해당 context 오류를 먼저 반환한다.
 - `KeepaliveInterval` 기본값은 15초, `KeepaliveTimeout`은 45초이며 timeout은
@@ -151,6 +152,21 @@ MGR 전환 후 모듈 명령이 정상 동작했다. 접속 중인 MON을 8회 �
 종료했으며 worker, 파일 descriptor 및 GC 후 heap 정리를 확인했다.
 수신을 차단한 변경 명령은 독립 클라이언트로 서버 적용을 먼저 확인한 뒤
 로컬 대기를 취소해 `OutcomeUnknownError`가 반환되는지 검증했다.
+
+MGR의 `balancer mode` 변경에서도 서버 적용을 독립 클라이언트로 확인한 뒤
+응답 수신을 막았다. 독립 클라이언트가 원래 설정을 다시 저장하고 MON에서
+저장 결과를 확인한 다음 MGR을 전환했다. 진행 중 호출은
+`ErrManagerChanged`를 원인으로 가진 `OutcomeUnknownError`를 반환했고,
+새 MGR에는 원래 설정이 유지됐다. 변경 명령의 전송은 한 번뿐이었다.
+이 시험은 20.2.4·aes256k의 Darwin arm64·IPv4 및 20.2.3·aes의
+Linux arm64·IPv6에서 통과했다. 후자의 결과는 이 시험에 대한 검증이다.
+
+MGR 핸드셰이크에서는 실제 서버의 수신 bytes를 차단한 상태로 `Close`를
+호출했다. 연결 정리를 잠시 보류하면 `Close`도 기다렸으며, 정리를 끝내면
+연결과 대기 호출이 모두 종료됐다. 명령을 전송하기 전이므로 호출은
+결과 불명확 오류 없이 `ErrClosed`를 반환했다. 독립 클라이언트의 MGR
+명령은 계속 성공했고 파일 descriptor 검사도 통과했다. 이 시험은 아래
+CI의 Linux amd64·실제 Ceph 구성에서 검증했다.
 
 MGR 응답 수신을 차단해 로컬 취소, keepalive timeout, 새 연결 복구를
 확인했다. Go relay에서 MON bulk frame의 일부 쓰기를 멈춰 쓰기 timeout,
@@ -291,16 +307,20 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
 시험한다. Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36877040581)이
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36884070984)이
 2026-10-01에 모두 통과했다. Actions 설정 lint도 통과했다.
+[MGR 결과·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mgr-outcomes-and-close)는
+이 실행의 `72c76a5`를 가리킨다.
 [idle·인증 증명 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/idle-and-proof-verification)는
-이 실행의 `5f4e1b7`를 가리킨다.
+앞서 CI 18개 작업을 통과한 `5f4e1b7`를 가리킨다.
 [서버 식별·MGR 자동 승계 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/server-identity-and-mgr-recovery)는
 앞서 CI 17개 작업을 통과한 `a65c54a`를 가리킨다.
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-메시지와 명령 schema 파일을 비교한다. 소스는 메모리에서만 읽고 결과를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 52개 경로를
+비교한다. 시험에서 사용하는 balancer·crash·iostat 모듈도 포함한다.
+소스는 메모리에서만 읽고 결과를
 stdout으로 출력한다. 파일 변화가 wire 변경이나 호환성 판정을 의미하지는
 않으며 지정된 경로 밖의 변경은 검사하지 않는다.
 
