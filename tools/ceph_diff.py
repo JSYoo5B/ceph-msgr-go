@@ -54,6 +54,18 @@ GROUPS = {
         "src/mgr/MgrClient.h",
         "src/mgr/MgrClient.cc",
     ),
+    "daemon-policy": (
+        "src/mon/Monitor.h",
+        "src/mon/Monitor.cc",
+        "src/mon/AuthMonitor.h",
+        "src/mon/AuthMonitor.cc",
+        "src/mon/MgrMonitor.h",
+        "src/mon/MgrMonitor.cc",
+        "src/mgr/DaemonServer.h",
+        "src/mgr/DaemonServer.cc",
+        "src/mgr/MgrStandby.h",
+        "src/mgr/MgrStandby.cc",
+    ),
     "messages": (
         "src/messages/MAuth.h",
         "src/messages/MAuthReply.h",
@@ -69,6 +81,9 @@ GROUPS = {
     "command-schemas": (
         "src/mon/MonCommands.h",
         "src/mgr/MgrCommands.h",
+        "src/pybind/mgr/balancer/module.py",
+        "src/pybind/mgr/crash/module.py",
+        "src/pybind/mgr/iostat/module.py",
     ),
 }
 
