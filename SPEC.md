@@ -1,6 +1,6 @@
 # ceph-msgr-go 초기 스펙 및 타당성 판단
 
-조사 기준일: 2026-10-01. 이 문서는 구현 목표와 검증 기준을 정의한다. 현재 코드와 실클러스터 검증 결과는 없다.
+조사 및 구현 기준일: 2026-10-01. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
 
 ## 확정된 프로젝트 정책
 
@@ -17,7 +17,7 @@
 
 Tentacle을 최소 계열로 삼는 것과 모든 20.2 패치 및 이후 모든 계열에서 동작을 검증했다는 것은 다르다. 실제 지원표에는 Ceph 버전, 인증 키 타입, 연결 모드 및 통합 테스트 결과를 기록한다. 이후 계열은 검증 후 지원 대상으로 추가한다.
 
-msgr2.1 기능 비트는 Tentacle 버전 증명이 아니다. 지원 계열 확인과 wire feature 협상을 별도로 다룬다. 런타임 버전 확인에 사용할 MON/MGR 응답과 필요한 권한은 초기 실클러스터 조사에서 확정한다. 확인 실패를 구버전으로 오인하거나, 기능 비트만으로 Tentacle이라고 판단하지 않는다.
+msgr2.1 기능 비트는 Tentacle 버전 증명이 아니다. 런타임에서는 인증된 MonMap의 `min_mon_release >= 20`을 요구한다. 이는 클러스터의 최소 MON 계열 설정 확인이며 각 daemon의 정확한 패치 버전 증명이 아니다. 최소 설정이 이전 계열인 업그레이드 중 클러스터도 거부한다. 실서버 검증에 사용한 정확한 패치와 커밋은 시험 이미지의 `ceph --version`으로 확인했다.
 
 참조: [Tentacle 릴리스 노트](https://docs.ceph.com/en/latest/releases/tentacle/), [고정 소스](https://github.com/ceph/ceph/tree/7f793731f1b39eb4f465e960113d2363c311b964).
 
@@ -25,7 +25,9 @@ msgr2.1 기능 비트는 Tentacle 버전 증명이 아니다. 지원 계열 확�
 
 초기 전송은 msgr2.1을 대상으로 한다. msgr1과 msgr2.0 연결로의 fallback을 만들지 않는다. 협상한 필수 기능이 부족하면 명시적인 오류를 반환한다. 아직 구현하지 않은 기능을 지원한다고 광고하지 않는다.
 
-기본 연결 모드는 `secure`로 한다. 인증 전 교환에는 프로토콜이 요구하는 CRC framing이 필요하다. 인증 후 `crc` 모드까지 공개 옵션으로 제공할지는 별도 결정 사항이며, `secure` 실패 시 자동 downgrade하지 않는다. 초기에는 압축을 협상하지 않는다.
+공개 연결 모드는 `secure`만 제공한다. 인증 전 교환에는 프로토콜이 요구하는 CRC framing을 사용하며 `secure` 실패 시 downgrade하지 않는다. 압축 협상 절차는 구현하되 알고리즘 목록을 비워 압축을 사용하지 않는다. 압축 frame은 거부한다.
+
+실제 Tentacle MON은 명령 전용 CLIENT에도 CRUSH 세대 비트를 접속 요건으로 요구했다. 초기 구현은 고정 참조에서 확인한 이 비트들을 MON 세션에서만 광고한다. 이는 명령 전용 접속을 위한 제한된 예외이며 CRUSH 계산 지원을 의미하지 않는다. OSDMap을 구독·해석하거나 OSD에 접속하지 않는다. 그 밖의 구현하지 않은 필수 기능은 오류로 거부한다.
 
 구현 항목은 다음과 같다.
 
@@ -34,7 +36,7 @@ msgr2.1 기능 비트는 Tentacle 버전 증명이 아니다. 지원 계열 확�
 3. 32-byte preamble, segment, CRC32C, secure framing, AES-GCM tag 검증과 방향별 nonce 상태.
 4. AUTH_SIGNATURE를 포함한 인증 교환 및 세션 식별.
 5. Message header, front/middle/data, sequence, ACK, keepalive.
-6. Cookie, global/connect sequence, reconnect, retry, reset, 종료를 처리하는 상태 머신.
+6. Global ID, sequence, 종료, MON/MGR 변경과 재인증을 처리하는 상태 머신. 현재는 fresh lossy session으로 복구하며 이전 Messenger cookie로 session을 재개하는 기능은 구현하지 않는다. 새 세션으로 명령을 재실행하지 않는다.
 7. 서버가 보내는 입력의 길이·개수·산술 overflow 검증과 메모리 사용 상한.
 
 Tentacle이 실제 사용하는 구조체의 이전 encoding version을 읽는 것은 현재 wire 규약 구현이다. 이를 이전 Ceph 계열이나 이전 공개 API 지원과 혼동하지 않는다. C++ 구현의 객체 수명·락·메모리 배치를 그대로 이식하지 않고 wire 의미와 상태 전이를 Go로 표현한다.
@@ -68,13 +70,14 @@ MON 명령과 MGR 명령은 명시적인 API로 구분한다. 명령 prefix만 �
 
 ## Go API 설계 기준
 
-공개 API는 연결 생성, MON 명령, MGR 명령, 종료를 중심으로 한다. 이름과 구체적인 타입은 구현 시 확정한다. go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
+공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `Close`와 `Options`, `Command`, `Result`를 중심으로 한다. go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
 - 응답은 원본 data bytes와 상태 문자열을 보존한다. 모든 응답이 JSON이라고 가정하지 않는다.
 - 서버 오류 코드와 Go의 context·네트워크·프로토콜 오류를 구분한다. 서버 코드는 호스트 OS의 errno 숫자로 재해석하지 않는다.
 - client에서 동시 명령 호출을 허용한다. 요청 하나의 deadline을 공유 TCP 연결에 직접 적용하지 않는다.
+- `MaxFrameSize`는 frame 논리 크기, `MaxInFlight`는 동시 명령 수를 제한한다. 대기 슬롯을 얻기 전에는 bulk 입력을 복사하지 않는다. 기본값은 각각 16 MiB와 64다.
 - 취소 시 pending 요청과 자원을 정리한다. 늦은 응답을 안전하게 소비한다. 일부 전송한 frame을 방치해 연결 framing을 깨뜨리지 않는다.
 - context 취소는 서버에서 명령 실행을 취소하거나 이미 적용된 변경을 되돌린다는 보장이 아니다.
 - transport ACK는 관리 명령 완료 응답과 다르다. 연결 단절 후 변경 명령의 실행 결과가 불명확하면 이를 명시적으로 반환한다.
@@ -109,6 +112,6 @@ Tentacle 이상, MON/MGR 우선, 이전 API 호환성 의무 없음이라는 범
 
 업그레이드마다 소스 차이 분석과 독립 fixture·실클러스터 검증을 수행한다. 기존 버전과 새 버전의 실패 차이를 찾아 실제 규약 변경과 구현 결함을 구분한다. 단순 연결 성공 또는 AI 코드 생성 속도를 유지 가능성의 근거로 삼지 않는다.
 
-착수 여부를 실증할 첫 기준은 현재 Tentacle의 새 키 인증, MON 명령, MGR 명령, ticket 갱신과 failover가 함께 동작하는 PoC다. 이후 Ceph 패치 하나에 대한 차이 분석과 재검증 비용을 기록해 유지보수 가능성을 판단한다.
+첫 실증 기준인 현재 Tentacle의 새 키 인증, MON 명령, MGR 명령, ticket 갱신과 failover가 함께 동작하는 PoC는 완료했다. 짧은 ticket TTL을 적용한 격리 시험이며 장시간 운영이나 이후 Ceph 패치에 대한 검증을 대신하지 않는다. 이후 패치 하나에 대한 차이 분석과 재검증 비용을 기록해 유지보수 가능성을 판단한다.
 
 참조: [msgr2.1 도입 PR](https://github.com/ceph/ceph/pull/35078), [frame 변경 이력](https://github.com/ceph/ceph/commits/tentacle/src/msg/async/frames_v2.h), [wire crypto 변경 이력](https://github.com/ceph/ceph/commits/tentacle/src/msg/async/crypto_onwire.cc), [ProtocolV2 변경 이력](https://github.com/ceph/ceph/commits/tentacle/src/msg/async/ProtocolV2.cc), [Rook의 Ceph 빌드 제거 PR](https://github.com/rook/rook/pull/1362).
