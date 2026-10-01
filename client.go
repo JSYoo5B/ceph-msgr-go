@@ -460,7 +460,7 @@ func (c *Client) manager(ctx context.Context) (*session.Session, error) {
 				c.mu.Unlock()
 			})
 			c.mu.Lock()
-			stale := c.closed || c.authErr != nil || c.mgrMap.GlobalID != mapSnapshot.GlobalID || !c.mgrMap.Available || !reflect.DeepEqual(c.mgrMap.Addresses, mapSnapshot.Addresses)
+			stale := c.closed || c.authErr != nil || c.auth.GlobalID != auth.GlobalID || c.mgrMap.GlobalID != mapSnapshot.GlobalID || !c.mgrMap.Available || !reflect.DeepEqual(c.mgrMap.Addresses, mapSnapshot.Addresses)
 			if !stale {
 				c.mgr = s
 				stale = !c.attach(s)

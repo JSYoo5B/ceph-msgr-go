@@ -185,3 +185,83 @@ func TestManagerHandshakeCannotPublishAfterAuthenticationRejection(t *testing.T)
 		t.Fatal(ctx.Err())
 	}
 }
+
+func TestManagerHandshakeCannotPublishAfterGlobalIDChange(t *testing.T) {
+	options := mockOptions(t, 20, [16]byte{1})
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	var monitors, managers, oldCommands, newCommands atomic.Int32
+	options.DialContext = func(ctx context.Context, _, endpoint string) (net.Conn, error) {
+		cfg := peerConfig{fsid: [16]byte{1}, release: 20, role: 1, clientID: 42}
+		if strings.HasSuffix(endpoint, ":6800") {
+			cfg.role, cfg.id = 16, 99
+			if managers.Add(1) == 1 {
+				close(started)
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				cfg.command = func(msgr.MessageData) { oldCommands.Add(1) }
+			} else {
+				cfg.clientID = 43
+				cfg.command = func(msgr.MessageData) { newCommands.Add(1) }
+			}
+		} else if monitors.Add(1) > 1 {
+			cfg.clientID = 43
+		}
+		client, peer := net.Pipe()
+		go mockDaemon(peer, cfg)
+		return client, ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	finished := make(chan error, 1)
+	go func() { _, err := c.MgrCommand(ctx, Command{JSON: []byte(`{"prefix":"pg stat"}`)}); finished <- err }()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	// A real reauthentication handshake assigns a new client identity while
+	// the MGR handshake retains its earlier immutable authorizer snapshot.
+	snapshot := c.snapshotAuth()
+	for id, ticket := range snapshot.Tickets {
+		ticket.RenewAfter = time.Now().Add(-time.Second)
+		snapshot.Tickets[id] = ticket
+	}
+	c.mu.Lock()
+	c.auth = snapshot
+	c.mu.Unlock()
+	c.wakeMonitor()
+	for {
+		c.mu.Lock()
+		changedIdentity, changed := c.monReady && c.auth.GlobalID == 43, c.changed
+		c.mu.Unlock()
+		if changedIdentity {
+			break
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	release <- struct{}{}
+	select {
+	case err := <-finished:
+		if err != nil {
+			t.Fatal("new identity did not handle the unsubmitted command", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if oldCommands.Load() != 0 || newCommands.Load() != 1 || managers.Load() != 2 {
+		t.Fatal("late handshake admitted a command with the previous identity", oldCommands.Load(), newCommands.Load(), managers.Load())
+	}
+}

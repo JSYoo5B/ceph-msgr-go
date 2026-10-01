@@ -120,17 +120,21 @@ func mockMgrMap(epoch uint32, id uint64, port uint16) []byte {
 }
 
 type peerConfig struct {
-	fsid    [16]byte
-	release byte
-	role    uint8
-	id      uint64
-	command func(msgr.MessageData)
-	reply   func(*msgr.MessageData)
+	fsid     [16]byte
+	release  byte
+	role     uint8
+	id       uint64
+	clientID uint64
+	command  func(msgr.MessageData)
+	reply    func(*msgr.MessageData)
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
 // routing. It shares the Go frame codec and is not a real-Ceph wire oracle.
 func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer, error) {
+	if cfg.clientID == 0 {
+		cfg.clientID = 42
+	}
 	rx := &traceReader{Reader: conn, active: true}
 	tx := &traceWriter{Writer: conn, active: true}
 	if _, err := msgr.ReadBanner(rx, msgr.Banner{Supported: 3, Required: 1}); err != nil {
@@ -248,7 +252,7 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 	} else {
 		parse := func(p []byte) (uint64, bool, uint64, error) {
 			d := wire.NewDecoder(p)
-			if d.U8() != 1 || d.U64() != 42 || d.U32() != cephx.ServiceMgr {
+			if d.U8() != 1 || d.U64() != cfg.clientID || d.U32() != cephx.ServiceMgr {
 				return 0, false, 0, errors.New("mgr authorizer")
 			}
 			d.U8()
@@ -303,7 +307,7 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		final = out.Data
 	}
 	done := wire.Encoder{}
-	done.U64(42)
+	done.U64(cfg.clientID)
 	done.U32(2)
 	done.Bytes(final)
 	if err := write(msgr.AuthDone, done.Data); err != nil {
