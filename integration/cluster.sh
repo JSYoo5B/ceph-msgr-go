@@ -3,12 +3,23 @@
 set -eu
 root=/tmp/ceph-msgr-test
 key_type=${CEPH_MSGR_TEST_KEY_TYPE:-aes256k}
+service_cipher=${CEPH_MSGR_TEST_SERVICE_CIPHER:-$key_type}
 case "$key_type" in aes|aes256k) ;; *) exit 2 ;; esac
+case "$service_cipher" in aes|aes256k) ;; *) exit 2 ;; esac
+allowed_ciphers=$key_type
+if test "$service_cipher" != "$key_type"; then
+    allowed_ciphers=aes,aes256k
+fi
+case "${CEPH_MSGR_TEST_IP_FAMILY:-4}" in
+    4) address=127.0.0.1; bind_ipv4=true; bind_ipv6=false ;;
+    6) address='[::1]'; bind_ipv4=false; bind_ipv6=true ;;
+    *) exit 2 ;;
+esac
 mkdir -p "$root"
-cat > "$root/ceph.conf" <<'EOF'
+cat > "$root/ceph.conf" <<EOF
 [global]
 fsid = 80bbab73-69c1-4a0c-a746-4271357750b8
-mon_host = [v2:127.0.0.1:33300/0],[v2:127.0.0.1:33301/0],[v2:127.0.0.1:33302/0]
+mon_host = [v2:$address:33300/0],[v2:$address:33301/0],[v2:$address:33302/0]
 auth_cluster_required = cephx
 auth_service_required = cephx
 auth_client_required = cephx
@@ -19,20 +30,21 @@ ms_service_mode = secure
 ms_client_mode = secure
 ms_bind_msgr1 = false
 ms_bind_msgr2 = true
-ms_bind_ipv6 = false
+ms_bind_ipv4 = $bind_ipv4
+ms_bind_ipv6 = $bind_ipv6
 log_to_stderr = true
 err_to_stderr = true
 [mon]
-mon_data = /tmp/ceph-msgr-test/mon.$id
+mon_data = /tmp/ceph-msgr-test/mon.\$id
 [mon.a]
-public_addr = 127.0.0.1:33300
+public_addr = $address:33300
 [mon.b]
-public_addr = 127.0.0.1:33301
+public_addr = $address:33301
 [mon.c]
-public_addr = 127.0.0.1:33302
+public_addr = $address:33302
 [mgr]
-mgr_data = /tmp/ceph-msgr-test/mgr.$id
-public_addr = 127.0.0.1
+mgr_data = /tmp/ceph-msgr-test/mgr.\$id
+public_addr = $address
 [mgr.a]
 ms_bind_port_min = 36800
 ms_bind_port_max = 36800
@@ -47,7 +59,7 @@ ceph-authtool "$keyring" --name client.readonly --gen-key --key-type "$key_type"
 for name in a b; do
     ceph-authtool "$keyring" --name "mgr.$name" --gen-key --key-type "$key_type" --cap mon 'profile mgr' --cap mgr 'allow *'
 done
-monmaptool --create --fsid 80bbab73-69c1-4a0c-a746-4271357750b8 --addv a '[v2:127.0.0.1:33300/0]' --addv b '[v2:127.0.0.1:33301/0]' --addv c '[v2:127.0.0.1:33302/0]' --set-min-mon-release 20 --enable-all-features --auth-service-cipher "$key_type" --auth-allowed-ciphers "$key_type" --auth-preferred-cipher "$key_type" "$root/monmap"
+monmaptool --create --fsid 80bbab73-69c1-4a0c-a746-4271357750b8 --addv a "[v2:$address:33300/0]" --addv b "[v2:$address:33301/0]" --addv c "[v2:$address:33302/0]" --set-min-mon-release 20 --enable-all-features --auth-service-cipher "$service_cipher" --auth-allowed-ciphers "$allowed_ciphers" --auth-preferred-cipher "$key_type" "$root/monmap"
 cleanup() {
     for name in mon.a mon.b mon.c mgr.a mgr.b; do
         if test -f "$root/$name.pid"; then
@@ -80,7 +92,7 @@ for attempt in $(seq 1 60); do
         ceph-authtool "$keyring" -n client.test --print-key > /out/key
         ceph-authtool "$keyring" -n client.readonly --print-key > /out/readonly.key
         touch /out/ready
-        echo "Ceph test cluster ready: 3 MON, 2 MGR, $key_type, secure."
+        echo "Ceph test cluster ready: 3 MON, 2 MGR, key=$key_type, service=$service_cipher, $address, secure."
         while true; do
             # The fault test controls only this container's MON a.
             if test -f /out/stop-mon-a && ! test -f /out/mon-a-stopped; then

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
 )
 
 // These read-only tests are opt-in and use actual daemon responses as the
@@ -40,6 +42,18 @@ func TestCephIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	if cipher := os.Getenv("CEPH_MSGR_TEST_SERVICE_CIPHER"); cipher != "" {
+		want := uint16(cephx.AES256K)
+		// Tentacle KeyServer uses the lower key type of the credential
+		// and rotating service secret for the MGR session key.
+		if cipher == "aes" || options.Key.value.Type() == cephx.AES {
+			want = cephx.AES
+		}
+		if got := c.snapshotAuth().Tickets[cephx.ServiceMgr].Key.Type(); got != want {
+			t.Fatalf("MGR service ticket cipher: got %d want %d", got, want)
+		}
+		t.Logf("credential type=%d MGR service ticket type=%d", options.Key.value.Type(), want)
+	}
 	result, err := c.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"status","format":"json"}`)})
 	if err != nil || !json.Valid(result.Data) {
 		t.Fatal("MON status", err, string(result.Data))
