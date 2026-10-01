@@ -28,9 +28,9 @@ func TestCephManagerReceiveStallIntegration(t *testing.T) {
 	options.KeepaliveTimeout = 3 * time.Second
 	var armed, wrapped atomic.Bool
 	blocked := make(chan struct{})
-	dialer := &net.Dialer{}
+	dial := options.DialContext
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-		conn, err := dialer.DialContext(ctx, network, endpoint)
+		conn, err := dial(ctx, network, endpoint)
 		if err != nil {
 			return nil, err
 		}
@@ -171,11 +171,11 @@ func TestCephMonitorWriteStallIntegration(t *testing.T) {
 	defer cancel()
 	options := integrationOptions(t)
 	options.ConnectTimeout = 2 * time.Second
-	dialer := &net.Dialer{}
+	dial := options.DialContext
 	var wrapped atomic.Bool
 	var relay *writeStallRelay
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-		conn, err := dialer.DialContext(ctx, network, endpoint)
+		conn, err := dial(ctx, network, endpoint)
 		if err != nil {
 			return nil, err
 		}

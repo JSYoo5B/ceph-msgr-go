@@ -46,9 +46,9 @@ func TestCephLostMutationReplyIntegration(t *testing.T) {
 	var armed atomic.Bool
 	blocked := make(chan struct{})
 	var blockOnce sync.Once
-	dialer := &net.Dialer{}
+	dial := options.DialContext
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-		conn, err := dialer.DialContext(ctx, network, endpoint)
+		conn, err := dial(ctx, network, endpoint)
 		if err != nil {
 			return nil, err
 		}

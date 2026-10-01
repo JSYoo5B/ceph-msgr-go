@@ -30,7 +30,7 @@ func integrationOptions(t *testing.T) Options {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Options{Monitors: strings.Split(monitors, ","), Identity: os.Getenv("CEPH_MSGR_IDENTITY"), Key: key, ExpectedFSID: os.Getenv("CEPH_MSGR_FSID")}
+	return Options{Monitors: strings.Split(monitors, ","), Identity: os.Getenv("CEPH_MSGR_IDENTITY"), Key: key, ExpectedFSID: os.Getenv("CEPH_MSGR_FSID"), DialContext: fixtureDialer()}
 }
 
 func TestCephIntegration(t *testing.T) {

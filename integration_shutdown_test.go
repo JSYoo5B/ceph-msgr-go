@@ -14,10 +14,13 @@ import (
 )
 
 func fixtureFDCount() int {
-	// Development-only Linux fixture metric; no product path uses /proc.
+	// Development-only fixture metric; no product path uses /proc or /dev/fd.
 	entries, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
-		return -1
+		entries, err = os.ReadDir("/dev/fd")
+		if err != nil {
+			return -1
+		}
 	}
 	return len(entries)
 }
