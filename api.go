@@ -23,8 +23,9 @@ var ErrManagerChanged = errors.New("ceph: active manager changed")
 
 type OutcomeUnknownError = session.OutcomeUnknownError
 
-// AuthenticationError is an explicit server rejection before commands can
-// run. It preserves the method and server result code for errors.As.
+// AuthenticationError is an explicit server rejection of authentication or
+// renewal. It preserves the method and server result code for errors.As.
+// It may also be the cause of an OutcomeUnknownError for a started command.
 type AuthenticationError = cephx.AuthenticationError
 
 // Key is an opaque CephX credential. Formatting redacts its key material.
