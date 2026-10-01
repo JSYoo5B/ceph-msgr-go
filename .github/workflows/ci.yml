@@ -68,6 +68,7 @@ jobs:
         with:
           go-version: '1.27.x'
       - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzFrameReader$' -fuzztime=20s -parallel=2
+      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzSecureFrameReader$' -fuzztime=20s -parallel=2
       - run: go test ./internal/maps -run '^$' -fuzz '^FuzzMaps$' -fuzztime=20s -parallel=2
       - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPublication$' -fuzztime=20s -parallel=2
 
