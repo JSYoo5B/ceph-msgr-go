@@ -37,6 +37,16 @@ type request struct {
 	result  chan response
 }
 
+// Called with the session lock held. Completed calls can remain in the
+// writer's queue; release their input and context without affecting a frame
+// whose write has already started.
+func (r *request) releaseUnstarted() {
+	if !r.started {
+		r.ctx = nil
+		r.message = msgr.MessageData{}
+	}
+}
+
 type Config struct {
 	WriteTimeout, KeepaliveInterval, KeepaliveTimeout time.Duration
 }
@@ -113,6 +123,7 @@ func (s *Session) Fail(err error) {
 		if r.started {
 			cause = &OutcomeUnknownError{Cause: err}
 		}
+		r.releaseUnstarted()
 		r.result <- response{err: cause}
 	}
 	s.pending = make(map[uint64]*request)
@@ -157,6 +168,7 @@ func (s *Session) abandon(id uint64, r *request, err error) error {
 	if r.started {
 		return &OutcomeUnknownError{Cause: err}
 	}
+	r.releaseUnstarted()
 	return err
 }
 func (s *Session) Call(ctx context.Context, m msgr.MessageData) (msgr.MessageData, error) {
@@ -245,12 +257,15 @@ func (s *Session) writeLoop() {
 			err = s.writeFrame(msgr.Frame{Tag: msgr.Ack, Segments: [][]byte{e.Data}})
 		case r := <-s.queue:
 			s.mu.Lock()
-			valid := s.err == nil && r.ctx.Err() == nil
+			valid := s.err == nil
 			if r.result != nil {
 				valid = valid && s.pending[r.message.Transaction] == r
-				if valid {
-					r.started = true
-				}
+			}
+			if valid {
+				valid = r.ctx.Err() == nil
+			}
+			if valid && r.result != nil {
+				r.started = true
 			}
 			s.mu.Unlock()
 			if !valid {
