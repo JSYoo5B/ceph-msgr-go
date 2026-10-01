@@ -122,18 +122,29 @@ func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result
 	input := append([]byte(nil), command.Input...)
 	var s *session.Session
 	var err error
-	if mgr {
-		s, err = c.manager(ctx)
-	} else {
-		s, err = c.monitor(ctx)
-	}
-	if err != nil {
-		return result, err
-	}
 	c.mu.Lock()
 	fsid := c.fsid
 	c.mu.Unlock()
-	reply, err := s.Call(ctx, msgr.CommandMessage(mgr, fsid, []string{jsonCommand}, input))
+	request := msgr.CommandMessage(mgr, fsid, []string{jsonCommand}, input)
+	var reply msgr.MessageData
+	for {
+		if mgr {
+			s, err = c.manager(ctx)
+		} else {
+			s, err = c.monitor(ctx)
+		}
+		if err != nil {
+			return result, err
+		}
+		reply, err = s.Call(ctx, request)
+		var unknown *OutcomeUnknownError
+		if errors.Is(err, session.ErrRetired) && !errors.As(err, &unknown) {
+			// Retirement rejected this call before admission. Resolve the
+			// new session; never resend a call whose transmission started.
+			continue
+		}
+		break
+	}
 	if err != nil {
 		return result, err
 	}

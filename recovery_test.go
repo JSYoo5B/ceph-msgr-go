@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
 )
 
 func TestMonitorFailoverDoesNotReplayUncertainCommand(t *testing.T) {
@@ -48,6 +49,57 @@ func TestMonitorFailoverDoesNotReplayUncertainCommand(t *testing.T) {
 	}
 	if mutations.Load() != 1 || secondary.Load() != 1 {
 		t.Fatal("mutation replayed or secondary unused", mutations.Load(), secondary.Load())
+	}
+}
+
+func TestRetirementTimeoutDoesNotReplayTransmittedMutation(t *testing.T) {
+	options := mockOptions(t, 20, [16]byte{1})
+	options.ConnectTimeout = 100 * time.Millisecond
+	started, release := make(chan struct{}), make(chan struct{})
+	var mutations atomic.Int32
+	options.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		client, peer := net.Pipe()
+		go mockDaemon(peer, peerConfig{fsid: [16]byte{1}, release: 20, role: 1, command: func(m msgr.MessageData) {
+			if strings.Contains(string(m.Front), "mutation") && mutations.Add(1) == 1 {
+				close(started)
+				<-release
+			}
+		}})
+		return client, ctx.Err()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	defer close(release)
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"mutation"}`)})
+		done <- err
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	c.mu.Lock()
+	old := c.mon
+	c.mu.Unlock()
+	c.retireMonitor(old)
+	select {
+	case err := <-done:
+		var unknown *OutcomeUnknownError
+		if !errors.As(err, &unknown) || !errors.Is(err, session.ErrRetired) {
+			t.Fatal("transmitted retirement was treated as safe admission rejection", err)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	if mutations.Load() != 1 {
+		t.Fatal("mutation replayed after retirement", mutations.Load())
 	}
 }
 

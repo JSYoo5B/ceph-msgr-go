@@ -14,6 +14,7 @@ import (
 )
 
 var ErrClosed = errors.New("ceph: client closed")
+var ErrRetired = errors.New("ceph: session retired")
 
 // OutcomeUnknownError means a command may have reached the daemon. It is not
 // safe to infer that a mutation failed or to re-execute it automatically.
@@ -42,6 +43,7 @@ type Session struct {
 	pending        map[uint64]*request
 	nextID         uint64
 	err            error
+	retiring       bool
 	idle           chan struct{}
 	queue          chan *request
 	controls       chan msgr.Frame
@@ -76,6 +78,13 @@ func (s *Session) Done() <-chan struct{} { return s.done }
 func (s *Session) RemoteAddr() net.Addr  { return s.transport.Conn.RemoteAddr() }
 func (s *Session) Err() error            { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
 func (s *Session) Wait()                 { s.wg.Wait() }
+
+// Retire stops admission without interrupting requests already registered.
+func (s *Session) Retire() {
+	s.mu.Lock()
+	s.retiring = true
+	s.mu.Unlock()
+}
 func (s *Session) Fail(err error) {
 	if err == nil {
 		err = ErrClosed
@@ -147,6 +156,10 @@ func (s *Session) Call(ctx context.Context, m msgr.MessageData) (msgr.MessageDat
 		err := s.err
 		s.mu.Unlock()
 		return msgr.MessageData{}, err
+	}
+	if s.retiring {
+		s.mu.Unlock()
+		return msgr.MessageData{}, ErrRetired
 	}
 	if s.nextID == ^uint64(0) {
 		s.mu.Unlock()

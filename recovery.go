@@ -2,7 +2,6 @@ package cephmsgr
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
@@ -62,6 +61,7 @@ func (c *Client) retireMonitor(s *session.Session) {
 		s.Fail(ErrClosed)
 		return
 	}
+	s.Retire()
 	c.wg.Add(1)
 	c.mu.Unlock()
 	go func() {
@@ -69,6 +69,6 @@ func (c *Client) retireMonitor(s *session.Session) {
 		ctx, cancel := context.WithTimeout(c.ctx, c.options.ConnectTimeout)
 		defer cancel()
 		s.WaitIdle(ctx)
-		s.Fail(errors.New("ceph: monitor session replaced after reauthentication"))
+		s.Fail(session.ErrRetired)
 	}()
 }
