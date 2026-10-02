@@ -45,6 +45,10 @@ type handshakePeerConfig struct {
 	mode            uint32
 	serverFlags     uint64
 	serverAddresses func(msgr.Address) []msgr.Address
+	malformedTag    msgr.Tag
+	authMore        bool
+	authMorePayload []byte
+	peerRole        uint8
 }
 
 func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error {
@@ -60,14 +64,30 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 		return err
 	}
 	r, w := msgr.NewReader(rx, 0), msgr.NewWriter(tx, 0)
+	write := func(tag msgr.Tag, payload []byte) error {
+		if cfg.malformedTag == tag {
+			payload = payload[:len(payload)-1]
+			if tag == msgr.AuthBadMethod {
+				payload = payload[:4]
+			}
+		}
+		return w.Write(msgr.Frame{Tag: tag, Segments: [][]byte{payload}})
+	}
 	if f, err := r.Read(); err != nil || f.Tag != msgr.Hello {
 		return errors.New("client hello")
 	}
 	hello := wire.Encoder{}
-	hello.U8(1)
+	role := cfg.peerRole
+	if role == 0 {
+		role = 1
+	}
+	hello.U8(role)
 	msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.2:0")}.Encode(&hello)
-	if err := w.Write(msgr.Frame{Tag: msgr.Hello, Segments: [][]byte{hello.Data}}); err != nil {
+	if err := write(msgr.Hello, hello.Data); err != nil {
 		return err
+	}
+	if cfg.malformedTag == msgr.Hello {
+		return nil
 	}
 	if f, err := r.Read(); err != nil || f.Tag != msgr.AuthRequest {
 		return errors.New("auth request")
@@ -84,16 +104,21 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 		if cfg.badSignature {
 			e.Data = e.Data[:len(e.Data)-1]
 		}
-		return w.Write(msgr.Frame{Tag: msgr.AuthBadMethod, Segments: [][]byte{e.Data}})
+		return write(msgr.AuthBadMethod, e.Data)
+	}
+	if cfg.authMore || cfg.malformedTag == msgr.AuthReplyMore {
+		more := wire.Encoder{}
+		more.Bytes(cfg.authMorePayload)
+		return write(msgr.AuthReplyMore, more.Data)
 	}
 	done := wire.Encoder{}
 	done.U64(42)
 	done.U32(cfg.mode)
 	done.Bytes(nil)
-	if err := w.Write(msgr.Frame{Tag: msgr.AuthDone, Segments: [][]byte{done.Data}}); err != nil {
+	if err := write(msgr.AuthDone, done.Data); err != nil {
 		return err
 	}
-	if cfg.mode != 2 {
+	if cfg.mode != 2 || cfg.malformedTag == msgr.AuthDone {
 		return nil
 	}
 	signature := a.key.Signature(rx.data.Bytes())
@@ -124,8 +149,11 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	e := wire.Encoder{}
 	e.U8(0)
 	e.U32(0)
-	if err := w.Write(msgr.Frame{Tag: msgr.CompressionDone, Segments: [][]byte{e.Data}}); err != nil {
+	if err := write(msgr.CompressionDone, e.Data); err != nil {
 		return err
+	}
+	if cfg.malformedTag == msgr.CompressionDone {
+		return nil
 	}
 	f, err = r.Read()
 	if err != nil || f.Tag != msgr.ClientIdent {
@@ -136,6 +164,11 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	target := msgr.DecodeAddress(d)
 	if d.Err() != nil {
 		return d.Err()
+	}
+	if cfg.malformedTag == msgr.IdentMissingFeatures {
+		missing := wire.Encoder{}
+		missing.U64(1)
+		return write(msgr.IdentMissingFeatures, missing.Data)
 	}
 	addresses := []msgr.Address{target}
 	if cfg.serverAddresses != nil {
@@ -149,8 +182,11 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	ident.U64(RequiredFeatures)
 	ident.U64(cfg.serverFlags)
 	ident.U64(0)
-	if err := w.Write(msgr.Frame{Tag: msgr.ServerIdent, Segments: [][]byte{ident.Data}}); err != nil {
+	if err := write(msgr.ServerIdent, ident.Data); err != nil {
 		return err
+	}
+	if cfg.malformedTag == msgr.ServerIdent {
+		return nil
 	}
 	_, err = r.Read()
 	return err

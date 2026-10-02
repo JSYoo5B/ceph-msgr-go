@@ -344,7 +344,10 @@ func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (bool, e
 	case msgr.MonMapMessage:
 		mon, err := maps.DecodeMon(m.Front)
 		if err != nil {
-			return false, err
+			if errors.Is(err, maps.ErrRelease) {
+				return false, err
+			}
+			return false, fmt.Errorf("%w: invalid MON map: %w", msgr.ErrFrame, err)
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -363,7 +366,7 @@ func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (bool, e
 	case msgr.MgrMapMessage:
 		mgr, err := maps.DecodeMgr(m.Front)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("%w: invalid MGR map: %w", msgr.ErrFrame, err)
 		}
 		c.mu.Lock()
 		if c.mon != source || mgr.Epoch < c.mgrMap.Epoch {

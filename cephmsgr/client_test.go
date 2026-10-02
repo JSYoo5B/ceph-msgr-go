@@ -133,6 +133,7 @@ type peerConfig struct {
 	monMap    []byte
 	addresses []msgr.Address
 	ident     func(msgr.Address)
+	payload   func(msgr.Tag, []byte) []byte
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
@@ -150,7 +151,12 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		return nil, nil, err
 	}
 	r, w := msgr.NewReader(rx, 0), msgr.NewWriter(tx, 0)
-	write := func(tag msgr.Tag, p []byte) error { return w.Write(msgr.Frame{Tag: tag, Segments: [][]byte{p}}) }
+	write := func(tag msgr.Tag, p []byte) error {
+		if cfg.payload != nil {
+			p = cfg.payload(tag, p)
+		}
+		return w.Write(msgr.Frame{Tag: tag, Segments: [][]byte{p}})
+	}
 	read := func(tag msgr.Tag) ([]byte, error) {
 		f, err := r.Read()
 		if err != nil {

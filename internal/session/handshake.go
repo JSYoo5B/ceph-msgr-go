@@ -59,6 +59,17 @@ func (a MgrAuth) Done(_ uint64, p []byte) (cephx.Key, []byte, error) {
 	return a.Authorizer.Key(), secret, err
 }
 
+func authPayloadError(err error) error {
+	// Authenticators can also fail while generating local proofs. Mark only
+	// peer encoding failures whose EOF could otherwise resemble network loss;
+	// explicit rejection and local/cryptographic errors retain their classes.
+	var rejection *cephx.AuthenticationError
+	if !errors.As(err, &rejection) && (errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, wire.ErrVersion)) {
+		return fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+	}
+	return err
+}
+
 type recordingReader struct {
 	io.Reader
 	active bool
@@ -160,7 +171,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	peerRole := hd.U8()
 	myAddr := msgr.DecodeAddress(hd)
 	if err = hd.Done(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 	}
 	if peerRole != role {
 		return nil, errors.New("ceph messenger: unexpected daemon role")
@@ -194,11 +205,11 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		case msgr.AuthReplyMore:
 			payload = d.Bytes()
 			if err = d.Done(); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 			}
 			reply, err := auth.More(payload)
 			if err != nil {
-				return nil, err
+				return nil, authPayloadError(err)
 			}
 			e := wire.Encoder{}
 			e.Bytes(reply)
@@ -214,7 +225,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 				}
 			}
 			if err := d.Done(); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 			}
 			return nil, &cephx.AuthenticationError{Method: method, Code: code}
 		case msgr.AuthDone:
@@ -222,14 +233,14 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 			mode := d.U32()
 			payload = d.Bytes()
 			if err = d.Done(); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 			}
 			if mode != 2 {
 				return nil, errors.New("ceph messenger: secure mode required")
 			}
 			sessionKey, secret, err = auth.Done(globalID, payload)
 			if err != nil {
-				return nil, err
+				return nil, authPayloadError(err)
 			}
 		default:
 			return nil, fmt.Errorf("%w: tag %d during authentication", msgr.ErrFrame, f.Tag)
@@ -284,7 +295,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		enabled := d.Bool()
 		d.U32()
 		if err = d.Done(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 		}
 		if enabled {
 			return nil, errors.New("ceph messenger: compression unsupported")
@@ -323,7 +334,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		d := wire.NewDecoder(f.Segments[0])
 		missing := d.U64()
 		if err := d.Done(); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 		}
 		return nil, fmt.Errorf("%w: peer requires 0x%016x", msgr.ErrFeatures, missing)
 	}
@@ -338,7 +349,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	flags := id.U64()
 	id.U64()
 	if err = id.Done(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 	}
 	if !slices.Contains(serverAddresses, target) {
 		return nil, fmt.Errorf("%w: server identification does not include target address", msgr.ErrAuthentication)
