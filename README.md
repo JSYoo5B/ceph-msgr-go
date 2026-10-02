@@ -201,6 +201,16 @@ MGR 전환 후 모듈 명령이 정상 동작했다. 접속 중인 MON을 8회 �
 수신을 차단한 변경 명령은 독립 클라이언트로 서버 적용을 먼저 확인한 뒤
 로컬 대기를 취소해 `OutcomeUnknownError`가 반환되는지 검증했다.
 
+네트워크 지연 시험에서는 40 KiB frame의 일부를 실제 서버에 보낸 뒤
+전송을 멈췄다. 해당 호출을 취소하면 결과 불명확 오류, 전송 전에 대기하다
+만료된 호출은 일반 context 오류를 반환했다. 이후 전송과 응답 수신을
+재개하면 같은 MON/MGR 연결의 동시 요청 8개가 모두 완료됐다. JSON과
+binary 응답을 각각 대조했고, 취소한 MON 변경이 나중에 실제 적용된 것도
+독립 클라이언트로 확인했다. Go relay는 쓰기를 최대 257 bytes,
+읽기를 최대 37 bytes로 나눈다. 이는 stream 분할 검사이며 TCP packet 수를
+측정한 것은 아니다. 20.2.4·aes256k의 Darwin arm64·IPv4 및 Linux arm64의
+직접 IPv6 연결에서 통과했다.
+
 MGR의 `balancer mode` 변경에서도 서버 적용을 독립 클라이언트로 확인한 뒤
 응답 수신을 막았다. 독립 클라이언트가 원래 설정을 다시 저장하고 MON에서
 저장 결과를 확인한 다음 MGR을 전환했다. 진행 중 호출은
@@ -352,6 +362,7 @@ CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes256k sh integration
 CEPH_MSGR_STRESS_DURATION=3m sh integration/run.sh
 CEPH_MSGR_TEST_MGR_COUNT=0 sh integration/run.sh # MGR 지연 기동
 CEPH_MSGR_TEST_RUNTIME=host sh integration/run.sh # 호스트 native 바이너리
+CEPH_MSGR_TEST_RUNTIME=host CEPH_MSGR_TEST_RACE=1 sh integration/run.sh # 실제 Ceph 상대 race 검사
 CEPH_MSGR_TEST_EXPIRE_TICKETS=1 sh integration/run.sh # 별도 인증 만료 fixture
 CEPH_MSGR_TEST_IDLE_SESSIONS=1 sh integration/run.sh # 별도 120초 ticket·idle 시험
 CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
@@ -383,10 +394,16 @@ active MGR 교체 후 별도 인증, 취소와 종료를 통과했다. MGR 지�
 단위 시험에서는 실제 전송 메시지를 세어 준비 API가 관리 명령을 보내지 않고,
 명령 슬롯이 모두 사용 중이어도 완료되는 것을 확인했다.
 
-Harness는 격리된 컨테이너 안에서 Ceph 클러스터와 CGO=0 Go 테스트 바이너리를
+기본 Harness는 격리된 컨테이너 안에서 Ceph 클러스터와 CGO=0 Go 테스트 바이너리를
 실행하고 종료 시 컨테이너·임시 키를 삭제한다. 기본 모드는 호스트 포트를
 공개하지 않는다. `host` 모드는 현재 OS·CPU의 시험 바이너리를 실행하며
 개발용 relay 하나를 `127.0.0.1`의 임시 포트에 공개한다.
+`CEPH_MSGR_TEST_RACE=1`은 `host` 모드에서만 지원한다. 이때 시험 바이너리는
+Go race detector에 필요한 CGO=1 계측을 사용한다. 제품과 기본 fixture
+바이너리는 계속 CGO=0이며, race 계측은 제품 의존성에 포함되지 않는다.
+Darwin arm64·20.2.4·aes256k·IPv4에서 인증 키 회수·복원, 연결 준비,
+상태 조회·실제 ticket 갱신·MGR 전환, 부분 전송·응답 지연, MGR 무응답,
+MON 쓰기 timeout·실제 MON 정지 복구를 포함한 7개 시험이 race 검사로 통과했다.
 Ceph CLI는 이 개발 fixture의 초기화와 daemon 준비 상태 확인에 사용한다.
 Harness는 공개 API 시험과 클라이언트 패키지의 내부 시험을 각각 컴파일해
 같은 fixture에서 차례로 실행한다. 마지막 내부 복구 시험이 MON 하나를
@@ -418,13 +435,17 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 
 [CI 설정](.github/workflows/ci.yml)은 Linux·macOS·Windows에서 Go 1.24.0과
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
-시험한다. Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
+시험한다. Race 작업은 Linux amd64에서 실제 Ceph를 상대하는 공개 API와
+클라이언트 내부 통합시험도 host 모드로 실행한다.
+Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36955617945)이
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36959580838)이
 2026-10-02에 모두 통과했다. Actions 설정 lint와 개발용 진단 도구의 단위
-시험 9개도 통과했다.
+시험 및 소스 비교 도구 시험 16개도 통과했다.
+[네트워크 취소·실서버 race 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/network-cancellation)는
+이 실행의 `836fdb2`를 가리킨다.
 [연결 준비 API 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/readiness-waits)는
-이 실행의 `cc621d0`를 가리킨다. 실제 Ceph에서 인증 키 회수·복원과 MON
+앞서 CI 18개 작업을 통과한 `cc621d0`를 가리킨다. 실제 Ceph에서 인증 키 회수·복원과 MON
 무응답 복구를 검사할 때 두 준비 API의 인증 오류·대기·복구도 확인했다.
 [클라이언트 패키지 이동 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/client-package-layout)는
 앞서 CI 18개 작업을 통과한 `a402b03`를 가리킨다.
@@ -448,6 +469,17 @@ MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 52개 �
 소스는 메모리에서만 읽고 결과를
 stdout으로 출력한다. 파일 변화가 wire 변경이나 호환성 판정을 의미하지는
 않으며 지정된 경로 밖의 변경은 검사하지 않는다.
+
+2026-10-02에 `tentacle`을 커밋
+`7411a08041185df39dbb166f983a6b0be7af0811`로 고정해 참조와 비교했다.
+52개 경로에서 7개 파일이 달랐으며 자동 조회·비교는 7.95초였다. 이 시간은
+수동 diff 검토와 실서버 시험 시간을 포함하지 않는다. 검사한 경로의
+frame·CephX·메시지 인코딩은 그대로였고, 연결 재사용 판단·서버 내부 처리와
+일부 MON 명령 schema가 바뀌었다. Go client의 fresh lossy 연결과 raw 명령
+API를 변경할 필요는 발견하지 못했다. 이는 소스 검토 결과이며 해당 가변
+브랜치를 빌드한 실서버의 호환성 검증은 아니다.
+도구 시험은 추가·삭제·변경 분류, commit SHA 고정, 응답 크기 제한,
+HTTP 오류 구분과 오류 응답 자원 정리를 검사한다.
 
 ```sh
 python3 tools/ceph_diff.py tentacle           # 고정 v20.2.4 참조와 비교
