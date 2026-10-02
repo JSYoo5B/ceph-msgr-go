@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +13,57 @@ import (
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
 )
+
+// A started read can cross renewal rejection. Preserve its uncertainty while
+// requiring every endpoint's failure to report the independently observed code.
+func matchesAuthenticationRejection(err error, method uint32, code int32) bool {
+	switch cause := err.(type) {
+	case *cephmsgr.AuthenticationError:
+		return cause != nil && cause.Method == method && cause.Code == code
+	case interface{ Unwrap() []error }:
+		children := cause.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !matchesAuthenticationRejection(child, method, code) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return matchesAuthenticationRejection(cause.Unwrap(), method, code)
+	}
+	return false
+}
+
+func TestAuthenticationRejectionOracle(t *testing.T) {
+	rejection := func() error { return &cephmsgr.AuthenticationError{Method: 2, Code: -13} }
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"explicit", rejection(), true},
+		{"wrapped", fmt.Errorf("authentication: %w", rejection()), true},
+		{"inflight endpoint rejection", &cephmsgr.OutcomeUnknownError{Cause: errors.Join(rejection(), rejection(), rejection())}, true},
+		{"nested inflight endpoint rejection", fmt.Errorf("MON read: %w", &cephmsgr.OutcomeUnknownError{Cause: errors.Join(fmt.Errorf("first endpoint: %w", rejection()), fmt.Errorf("next endpoint: %w", rejection()))}), true},
+		{"nil", nil, false},
+		{"no auth rejection", io.EOF, false},
+		{"missing cause", &cephmsgr.OutcomeUnknownError{}, false},
+		{"different code", errors.Join(rejection(), &cephmsgr.AuthenticationError{Method: 2, Code: -1}), false},
+		{"different method", errors.Join(rejection(), &cephmsgr.AuthenticationError{Method: 1, Code: -13}), false},
+		{"joined protocol failure", &cephmsgr.OutcomeUnknownError{Cause: errors.Join(rejection(), cephmsgr.ErrMalformedMessage)}, false},
+		{"joined crypto failure", &cephmsgr.OutcomeUnknownError{Cause: errors.Join(rejection(), errors.New("cipher authentication failure"))}, false},
+		{"joined transport failure", &cephmsgr.OutcomeUnknownError{Cause: errors.Join(rejection(), io.EOF)}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := matchesAuthenticationRejection(test.err, 2, -13); got != test.want {
+				t.Fatal("incorrect authentication rejection classification", got, test.want, test.err)
+			}
+		})
+	}
+}
 
 func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	admin, ctx := fixtureClient(t, time.Minute)
@@ -32,6 +85,19 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	if _, err := c.MgrCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"pg stat"}`)}); err != nil {
 		t.Fatal("MGR before key revocation", err)
 	}
+	keyring := append([]byte("[client.revocable]\n\tkey = "), bytes.TrimSpace(encoded)...)
+	keyring = append(keyring, []byte("\n\tcaps mon = \"allow *\"\n\tcaps mgr = \"allow *\"\n")...)
+	restored := false
+	t.Cleanup(func() {
+		if restored {
+			return
+		}
+		restore, stop := context.WithTimeout(context.Background(), 20*time.Second)
+		defer stop()
+		if _, err := admin.MonCommand(restore, cephmsgr.Command{JSON: []byte(`{"prefix":"auth import"}`), Input: keyring}); err != nil {
+			t.Error("restore fixture credential after revocation", err)
+		}
+	})
 	if _, err := admin.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"auth rm","entity":"client.revocable"}`)}); err != nil {
 		t.Fatal("remove fixture credential", err)
 	}
@@ -43,7 +109,7 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 		if fresh != nil {
 			fresh.Close()
 		} else {
-			if !errors.As(rejected, &server) || server.Method != 2 || server.Code >= 0 {
+			if !errors.As(rejected, &server) || server.Method != 2 || server.Code >= 0 || !matchesAuthenticationRejection(rejected, server.Method, server.Code) {
 				t.Fatal("fresh connection did not report explicit server rejection", rejected)
 			}
 			break
@@ -63,18 +129,18 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	defer deadline.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	var inflightRejections int
 	for {
 		_, err := c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"status"}`)})
-		var actual *cephmsgr.AuthenticationError
-		if errors.As(err, &actual) {
-			if actual.Method != server.Method || actual.Code != server.Code {
+		if err != nil {
+			if !matchesAuthenticationRejection(err, server.Method, server.Code) {
 				t.Fatal("renewal rejection changed the server result", err)
 			}
 			var unknown *cephmsgr.OutcomeUnknownError
-			if errors.As(err, &unknown) {
-				t.Fatal("unsubmitted command was marked uncertain", err)
+			if !errors.As(err, &unknown) {
+				break // A subsequent call observes rejection before admission.
 			}
-			break
+			inflightRejections++
 		}
 		select {
 		case <-deadline.C:
@@ -84,9 +150,10 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 		case <-ticker.C:
 		}
 	}
+	t.Logf("renewal rejection: %d in-flight reads; subsequent MON admission rejected", inflightRejections)
 	_, err = c.MgrCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"pg stat"}`)})
-	var actual *cephmsgr.AuthenticationError
-	if !errors.As(err, &actual) || actual.Code != server.Code {
+	var unknown *cephmsgr.OutcomeUnknownError
+	if !matchesAuthenticationRejection(err, server.Method, server.Code) || errors.As(err, &unknown) {
 		t.Fatal("new MGR call lost the MON authentication rejection", err)
 	}
 	rejectedState := c.Snapshot()
@@ -94,25 +161,23 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 		t.Fatal("public state did not preserve genuine renewal rejection", rejectedState)
 	}
 	for _, wait := range []func(context.Context) error{c.WaitMonReady, c.WaitMgrReady} {
-		var rejection *cephmsgr.AuthenticationError
 		var unknown *cephmsgr.OutcomeUnknownError
-		if err := wait(ctx); !errors.As(err, &rejection) || rejection.Code != server.Code || rejection.Method != server.Method || errors.As(err, &unknown) {
+		if err := wait(ctx); !matchesAuthenticationRejection(err, server.Method, server.Code) || errors.As(err, &unknown) {
 			t.Fatal("preparation lost the actual authentication rejection", err)
 		}
 	}
 	// Restore the same fixture key through an independently authenticated
 	// administrator. The rejected client must recover without being rebuilt.
-	keyring := append([]byte("[client.revocable]\n\tkey = "), bytes.TrimSpace(encoded)...)
-	keyring = append(keyring, []byte("\n\tcaps mon = \"allow *\"\n\tcaps mgr = \"allow *\"\n")...)
 	if _, err := admin.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"auth import"}`), Input: keyring}); err != nil {
 		t.Fatal("restore fixture credential", err)
 	}
+	restored = true
 	for {
 		_, err = c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"status"}`)})
 		if err == nil {
 			break
 		}
-		if !errors.As(err, &actual) {
+		if !matchesAuthenticationRejection(err, server.Method, server.Code) {
 			t.Fatal("unexpected recovery error after restoring credential", err)
 		}
 		select {
