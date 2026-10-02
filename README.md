@@ -806,6 +806,12 @@ generic peer 주소의 실제 Ceph 시험, handshake 거부 원인 보존과 fix
 모두 통과했다. [daemon Tell 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/daemon-tell)는
 이 커밋을 가리킨다.
 
+MON 로그 stream·native CLI oracle·cursor 복구·parser fuzz와 client TCP 장애를
+격리한 mapped 시험을 포함한 `5573026`의
+[CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37016830915)도
+모두 통과했다. [MON 로그 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-log-stream)는
+이 커밋을 가리킨다.
+
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
 앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
 [복구 중 Context 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/recovery-contexts)는
