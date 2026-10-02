@@ -133,6 +133,9 @@ func seedAddress(seed string) (string, msgr.Address, error) {
 		return "", a, errors.New("ceph: invalid monitor port")
 	}
 	if ip, err := netip.ParseAddr(host); err == nil {
+		if ip.Zone() != "" {
+			return "", a, errors.New("ceph: IPv6 monitor seed zones are unsupported")
+		}
 		a.Endpoint = netip.AddrPortFrom(ip.Unmap(), uint16(n))
 	}
 	return seed, a, nil

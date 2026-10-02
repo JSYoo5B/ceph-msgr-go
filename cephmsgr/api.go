@@ -49,7 +49,8 @@ func (k Key) String() string   { return k.value.String() }
 func (k Key) GoString() string { return k.String() }
 
 type Options struct {
-	// Monitors are host:port endpoints, optionally prefixed with v2:.
+	// Monitors are host:port endpoints, optionally prefixed with v2: and
+	// suffixed with /nonce. IPv6 addresses must be bracketed; %zone is unsupported.
 	Monitors []string
 	Identity string
 	Key      Key
