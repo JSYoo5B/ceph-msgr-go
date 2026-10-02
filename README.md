@@ -325,7 +325,7 @@ JSON과 대조했고, 알 수 없는 명령 `-22`, read-only 계정의 `-13`, �
 전송 중 Tell 취소·Close·잘못된 응답의 raw data 보존·자동 재실행 금지는
 별도의 synthetic API·session 시험으로 검증했다.
 이를 포함한 `94bc9e3`의 Linux arm64·CGO=0·aes256k·직접 IPv6 전체 통합시험은
-32개가 통과했다. 별도의 동일 제품 Tell 복구 시험은 실제 AUTH·MGR ticket
+32개가 통과했다. 당시 daemon SIGSTOP 방식의 별도 Tell 복구 시험은 실제 AUTH·MGR ticket
 갱신 2회, seed MON a를 멈춘 동안 학습한 b에서의 Tell, 한 번만 보낸
 `mgr fail`에 따른 b→a 전환 뒤 lazy 접속·Tell·일반 조회·Close를 약 24초에
 통과했다. client global ID는 유지했고 새 MGR의 name·ID·epoch는 별도
@@ -379,10 +379,15 @@ JSON·binary 출력과 서버 `-22` 응답을 각각 확인했다. Context 검�
 잠금 밖에서 실행하며, 검사 중 취소·종료된 전송 전 요청을 뒤늦게 보내지
 않는 것도 단위 시험으로 검증했다.
 
-같은 context 동작을 MGR 최초 연결, ticket 갱신, MON 무응답 복구,
+같은 context 동작을 MGR 최초 연결, ticket 갱신, MON 연결 복구,
 MGR 전환과 대기 취소·종료 중에도 검증했다. 복구 시험은 결과 불명확
 오류에 포함된 원인을 모두 검사하며, 인증·프로토콜 오류가 일시적인
 네트워크 오류로 취급되지 않는 것도 회귀 시험으로 확인했다.
+현재 context·Tell 복구 시험은 client의 MON-a TCP만 끊고 재접속을 Close까지
+차단한다. 학습한 b/c에서 복구하는 동안 native MON quorum과 daemon 인증은
+유지한다. Tell은 장애 전 실제 ticket 갱신 2회를 확인하며, 두 시험 모두
+실제 MGR 전환을 한 번만 요청한다. 별도의 실제 MON/MGR SIGSTOP·종료·
+반복 재기동·전체 MON 중단 시험은 유지한다.
 제품 소스 `c14f78f`는 20.2.4·aes256k의 Linux arm64·CGO=0·직접 IPv6에서
 전체 통합시험과 3분 부하 시험을 통과했다. 부하 시험은 명령 63,278건,
 ticket 갱신 18회, MGR 장애 주입 시도 6회와 context의 상태 조회 284,403회를
@@ -439,6 +444,16 @@ Ceph CLI 자체의 bootstrap·재연결은 native 정책을 따르며, 최종 �
 4.34초와 aes256k·직접 IPv6 8.68초에 각각 두 cycle을 통과했다.
 별도 실험에서 요구 auth epoch를 실제 값보다 1,000 높게 지정하자 준비
 확인이 종료됐고, native MON 응답의 실제 epoch는 3으로 남았다.
+
+준비 확인을 보강한 `1e4cfda`의
+[GitHub CI](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37024308483)는
+auth epoch 두 구성을 포함해 25개 중 24개가 통과했다. aes256k/AES·IPv4의
+context·Tell 복구는 MGR 준비 대기 timeout으로 실패했고, native MGR 두 개의
+MON 접속에서 오래된 AUTH ticket의 `-13` 거절이 기록됐다. 장애 전 갱신·ACK
+흐름을 복원할 로그가 부족해 근본 원인은 확정하지 못했다. 같은 커밋의 새
+로컬 fixture에서 두 복구 시험은 14.83초·25.18초에 통과했다. 이 실패를
+기존 cold MGR 교체 실패와 구분하며, 인증 오류를 재시도하거나 허용하지
+않고 두 복구 시험의 client TCP 장애를 daemon 장애와 분리했다.
 
 큰 응답 시험에서는 `MaxFrameSize=32 MiB`로 유효한 status JSON 뒤에
 16 MiB 공백을 붙였다. 실제 MON이 원래 명령을 응답 front에 그대로 포함했고,
