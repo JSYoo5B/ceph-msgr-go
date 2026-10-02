@@ -209,31 +209,39 @@ func (c *Client) sessionConfig() session.Config {
 }
 
 func (c *Client) connectMonitor(ctx context.Context) error {
+	type target struct {
+		endpoint string
+		address  msgr.Address
+	}
 	c.mu.Lock()
 	seeds := append([]string(nil), c.options.Monitors...)
-	for _, a := range c.monMap.Addresses {
-		seeds = append(seeds, dialAddress(a)+"/"+strconv.FormatUint(uint64(a.Nonce), 10))
-	}
+	learned := append([]msgr.Address(nil), c.monMap.Addresses...)
 	old, wasReady := c.mon, c.monReady
 	c.mu.Unlock()
 	var failures []error
-	seen := make(map[string]bool)
+	targets := make([]target, 0, len(seeds)+len(learned))
 	for _, seed := range seeds {
-		linked, release := c.linkedContext(ctx)
 		endpoint, address, err := seedAddress(seed)
 		if err != nil {
-			release()
 			failures = append(failures, err)
 			continue
 		}
-		identity := endpoint + "/" + strconv.FormatUint(uint64(address.Nonce), 10)
-		if seen[identity] {
-			release()
+		targets = append(targets, target{endpoint: endpoint, address: address})
+	}
+	for _, address := range learned {
+		// A dial string cannot retain all authenticated address fields.
+		// SERVER_IDENT compares the full target, including IPv6 scope/flow.
+		targets = append(targets, target{endpoint: dialAddress(address), address: address})
+	}
+	seen := make(map[target]bool)
+	for _, candidateTarget := range targets {
+		if seen[candidateTarget] {
 			continue
 		}
-		seen[identity] = true
+		seen[candidateTarget] = true
+		linked, release := c.linkedContext(ctx)
 		candidate := c.snapshotAuth()
-		transport, err := c.open(linked, endpoint, address, 1, 0, session.MonAuth{Client: candidate})
+		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate})
 		if err != nil {
 			release()
 			failures = append(failures, err)

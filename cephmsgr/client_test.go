@@ -84,6 +84,9 @@ func mockTicket(key cephx.Key, encoded []byte, service uint32) ([]byte, error) {
 	return out.Data, nil
 }
 func mockMonMap(release uint8, fsid [16]byte) []byte {
+	return mockMonMapAddresses(release, fsid, []msgr.Address{{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}})
+}
+func mockMonMapAddresses(release uint8, fsid [16]byte, addresses []msgr.Address) []byte {
 	e := wire.Encoder{}
 	e.Raw(fsid[:])
 	e.U32(1)
@@ -94,7 +97,7 @@ func mockMonMap(release uint8, fsid [16]byte) []byte {
 	e.Struct(1, 1, features.Data)
 	info := wire.Encoder{}
 	info.String("a")
-	msgr.EncodeAddresses(&info, []msgr.Address{{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}})
+	msgr.EncodeAddresses(&info, addresses)
 	e.U32(1)
 	e.String("a")
 	e.Struct(6, 1, info.Data)
@@ -120,13 +123,16 @@ func mockMgrMap(epoch uint32, id uint64, port uint16) []byte {
 }
 
 type peerConfig struct {
-	fsid     [16]byte
-	release  byte
-	role     uint8
-	id       uint64
-	clientID uint64
-	command  func(msgr.MessageData)
-	reply    func(*msgr.MessageData)
+	fsid      [16]byte
+	release   byte
+	role      uint8
+	id        uint64
+	clientID  uint64
+	command   func(msgr.MessageData)
+	reply     func(*msgr.MessageData)
+	monMap    []byte
+	addresses []msgr.Address
+	ident     func(msgr.Address)
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
@@ -347,8 +353,15 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 	if err := clientIdent.Err(); err != nil {
 		return nil, nil, err
 	}
+	if cfg.ident != nil {
+		cfg.ident(target)
+	}
+	addresses := cfg.addresses
+	if addresses == nil {
+		addresses = []msgr.Address{target}
+	}
 	ident := wire.Encoder{}
-	msgr.EncodeAddresses(&ident, []msgr.Address{target})
+	msgr.EncodeAddresses(&ident, addresses)
 	ident.U64(cfg.id)
 	ident.U64(1)
 	ident.U64(session.Features)
@@ -398,7 +411,11 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		return w.Write(m.Frame())
 	}
 	if cfg.role == 1 {
-		if err := send(msgr.MessageData{Type: msgr.MonMapMessage, Front: mockMonMap(cfg.release, cfg.fsid)}); err != nil {
+		monMap := cfg.monMap
+		if monMap == nil {
+			monMap = mockMonMap(cfg.release, cfg.fsid)
+		}
+		if err := send(msgr.MessageData{Type: msgr.MonMapMessage, Front: monMap}); err != nil {
 			return err
 		}
 		if err := send(msgr.MessageData{Type: msgr.MgrMapMessage, Front: mockMgrMap(1, 99, 6800)}); err != nil {
