@@ -332,7 +332,16 @@ IPv4로 바꾸지 않고 보존한다. 이는 고정 Tentacle의
 secure synthetic peer로 일치하는 주소의 성공, 같은 IP의 서로 다른 family 거부,
 learned MON 복구를 확인했다. DNS seed에서 추론한 Go `TCPAddr`의 IPv4 표현만
 별도로 정규화하며, custom dialer의 4·16-byte IPv4와 native IPv6도 검사했다.
-실제 mapped IPv6 TCP/Ceph 구성의 지원을 검증한 것은 아니다.
+이 raw vector·synthetic 시험 자체는 실제 mapped IPv6 Ceph 상대 검증이 아니다.
+
+제품 소스 `7034227`은 별도 Linux arm64·20.2.4·aes256k fixture에서 실제 mapped
+AF_INET6 MON 3개·MGR 2개와 기본 Go dialer의 secure 인증을 통과했다. 독립 Ceph
+CLI의 `status`·`mon dump`·`mgr dump`·`pg stat` JSON과 인증된 지도 주소·MGR ID를
+대조하고, Go의 raw MON/MGR JSON·서버 code `0`·Close를 확인했다. TCP peer는
+IPv4로 표시됐지만 wire map은 `[::ffff:127.0.0.1]`을 유지했다. Ceph 설정 입력은
+hex 형식 `[::ffff:7f00:1]`을 사용한다. 이 결과의 범위는 Linux `bindv6only=0`의
+컨테이너 loopback이며, hostname 추론·host relay·mapped 주소의 장애 복구는
+이 시험에 포함하지 않는다.
 
 후속 `25496b0`는 hostname seed에서 custom dialer가 일반 `net.Addr`로 제공한
 숫자형 IP:port도 MON 식별 주소로 사용한다. 명시적 seed와 learned wire 주소는
@@ -510,6 +519,7 @@ go vet ./...
 sh integration/run.sh                         # Docker 필요, aes256k
 CEPH_MSGR_TEST_KEY_TYPE=aes sh integration/run.sh
 CEPH_MSGR_TEST_IP_FAMILY=6 sh integration/run.sh
+CEPH_MSGR_TEST_IP_FAMILY=6 CEPH_MSGR_TEST_MAPPED_IPV6=1 sh integration/run.sh # 별도 mapped 주소·native CLI 대조
 CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes256k sh integration/run.sh
 CEPH_MSGR_STRESS_DURATION=3m sh integration/run.sh
 CEPH_MSGR_TEST_MGR_COUNT=0 sh integration/run.sh # MGR 지연 기동

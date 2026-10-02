@@ -12,6 +12,14 @@ short_tickets=${CEPH_MSGR_TEST_SHORT_TICKETS:-0}
 case "$short_tickets" in 0|1) ;; *) exit 2 ;; esac
 mode_rejection=${CEPH_MSGR_TEST_MODE_REJECTION:-}
 case "$mode_rejection" in ''|mon|mgr) ;; *) exit 2 ;; esac
+mapped_ipv6=${CEPH_MSGR_TEST_MAPPED_IPV6:-0}
+case "$mapped_ipv6" in 0|1) ;; *) exit 2 ;; esac
+if test "$mapped_ipv6" = 1; then
+    test "${CEPH_MSGR_TEST_IP_FAMILY:-4}" = 6 && test "$mgr_count" = 2 || exit 2
+    test "${CEPH_MSGR_TEST_RUNTIME:-container}" = container && test "${CEPH_MSGR_TEST_EXPIRE_TICKETS:-0}" = 0 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 && test -z "$mode_rejection" && test -z "${CEPH_MSGR_STRESS_DURATION:-}" || exit 2
+    # Linux must accept IPv4 routing to this mapped AF_INET6 listener.
+    test "$(cat /proc/sys/net/ipv6/bindv6only)" = 0 || exit 1
+fi
 mon_service_mode=secure
 mgr_service_mode=secure
 client_mode=secure
@@ -81,6 +89,10 @@ case "${CEPH_MSGR_TEST_IP_FAMILY:-4}" in
     6) address='[::1]'; bind_ipv4=false; bind_ipv6=true ;;
     *) exit 2 ;;
 esac
+if test "$mapped_ipv6" = 1; then
+    # Ceph's parser accepts the hex form; its JSON formatter uses dotted IPv4.
+    address='[::ffff:7f00:1]'
+fi
 mkdir -p "$root"
 cat > "$root/ceph.conf" <<EOF
 [global]
@@ -201,6 +213,16 @@ fi
 ceph-authtool "$keyring" -n client.test --print-key > /out/key
 ceph-authtool "$keyring" -n client.readonly --print-key > /out/readonly.key
 ceph-authtool "$keyring" -n client.revocable --print-key > /out/revocable.key
+if test "$mapped_ipv6" = 1; then
+    # Fresh native Ceph clients independently prove the configured wire family
+    # and MGR read path before the Go regression is permitted to run.
+    mapped_monitors="[v2:$address:33300/0],[v2:$address:33301/0],[v2:$address:33302/0]"
+    timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$mapped_monitors" status --format json > /out/mapped-oracle-status.json
+    timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$mapped_monitors" mon dump --format json > /out/mapped-oracle-mon.json
+    timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$mapped_monitors" mgr dump --format json > /out/mapped-oracle-mgr.json
+    timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$mapped_monitors" pg stat --format json > /out/mapped-oracle-pg.json
+    python3 /out/mapped_address_oracle.py /out
+fi
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."
 while true; do

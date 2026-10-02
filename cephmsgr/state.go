@@ -25,10 +25,10 @@ type State struct {
 // MonitorState describes the authenticated MonMap and the held MON session.
 type MonitorState struct {
 	Ready          bool
-	Endpoint       string
+	Endpoint       string // Peer reported by the held connection's RemoteAddr.
 	MapEpoch       uint32
 	MinimumRelease uint8
-	Endpoints      []string // msgr2 dial endpoints from the last authenticated map.
+	Endpoints      []string // msgr2 dial endpoints from the last authenticated map; address family may differ from Endpoint.
 }
 
 // ManagerState separates advertised MGR availability from a ready client
@@ -36,12 +36,12 @@ type MonitorState struct {
 // MGR connections are opened lazily by MgrCommand or WaitMgrReady.
 type ManagerState struct {
 	Ready     bool
-	Endpoint  string
+	Endpoint  string // Peer reported by the held connection's RemoteAddr.
 	MapEpoch  uint32
 	Available bool // Last received MgrMap value, not a live daemon probe.
 	Name      string
 	GlobalID  uint64
-	Endpoints []string
+	Endpoints []string // msgr2 dial endpoints from the last authenticated map; address family may differ from Endpoint.
 }
 
 // TicketState exposes local renewal scheduling without keys or opaque proofs.

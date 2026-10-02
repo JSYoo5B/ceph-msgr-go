@@ -26,6 +26,8 @@ short_tickets=${CEPH_MSGR_TEST_SHORT_TICKETS:-0}
 case "$short_tickets" in 0|1) ;; *) exit 2 ;; esac
 mode_rejection=${CEPH_MSGR_TEST_MODE_REJECTION:-}
 case "$mode_rejection" in ''|mon|mgr) ;; *) exit 2 ;; esac
+mapped_ipv6=${CEPH_MSGR_TEST_MAPPED_IPV6:-0}
+case "$mapped_ipv6" in 0|1) ;; *) exit 2 ;; esac
 case "$mgr_count" in
     0) test_run=${CEPH_MSGR_TEST_RUN:-^TestCephManagerAvailabilityIntegration$} ;;
     2) test_run=${CEPH_MSGR_TEST_RUN:-^TestCeph.*Integration$} ;;
@@ -61,19 +63,41 @@ if test -n "$mode_rejection"; then
     # must reject these listeners rather than fall back from secure mode.
     test_run=${CEPH_MSGR_TEST_RUN:-'^TestCephConnectionModeRejectionIntegration$'}
 fi
+if test "$mapped_ipv6" = 1; then
+    test "$ip_family" = 6 && test "$runtime" = container && test "$mgr_count" = 2 || exit 2
+    test "$expire_tickets" = 0 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 && test -z "$mode_rejection" && test -z "${CEPH_MSGR_STRESS_DURATION:-}" || exit 2
+    # Physical IPv4 routing and authoritative AF_INET6 identities differ in
+    # this isolated fixture; ordinary DNS and recovery scenarios run separately.
+    test_run=${CEPH_MSGR_TEST_RUN:-'^TestCephMappedAddressIntegration$'}
+fi
 case "$ip_family" in
     4) monitors=127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302 ;;
     6) monitors='[::1]:33300,[::1]:33301,[::1]:33302' ;;
     *) exit 2 ;;
 esac
+if test "$mapped_ipv6" = 1; then
+    # Ceph accepts mapped literals in hex input but renders dotted JSON output.
+    monitors='[::ffff:7f00:1]:33300,[::ffff:7f00:1]:33301,[::ffff:7f00:1]:33302'
+fi
 out=$(mktemp -d "${TMPDIR:-/tmp}/ceph-msgr-integration.XXXXXX")
 container="ceph-msgr-go-test-$$"
 cleanup() {
     docker rm -f "$container" > /dev/null 2>&1 || true
     rm -rf "$out"
 }
+save_mapped_metadata() {
+    test "$mapped_ipv6" = 1 && test -n "$diagnostics" || return 0
+    mkdir -p "$diagnostics"
+    for name in status mon mgr pg summary; do
+        file="mapped-oracle-$name.json"
+        if test -f "$out/$file"; then
+            cp "$out/$file" "$diagnostics/$file"
+        fi
+    done
+}
 failure_diagnostics() {
     printf 'Ceph fixture failure diagnostics:\n'
+    save_mapped_metadata
     if test -n "$diagnostics"; then
         mkdir -p "$diagnostics"
         # Copy daemon/probe text logs and crash metadata only, never keyrings or
@@ -128,9 +152,13 @@ else
 fi
 # Keep a running long test independent of edits in the shared checkout.
 cp "$project_root/integration/cluster.sh" "$out/cluster.sh"
-docker run -d --name "$container" --label ceph-msgr-go.integration=true --entrypoint /bin/sh "$@" -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_IP_FAMILY="$ip_family" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -v "$out:/out" "$image" "$cluster_script" > /dev/null
+if test "$mapped_ipv6" = 1; then
+    cp "$project_root/tools/mapped_address_oracle.py" "$out/mapped_address_oracle.py"
+fi
+docker run -d --name "$container" --label ceph-msgr-go.integration=true --entrypoint /bin/sh "$@" -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_IP_FAMILY="$ip_family" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -e CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" -v "$out:/out" "$image" "$cluster_script" > /dev/null
 for attempt in $(seq 1 120); do
     if test -f "$out/ready"; then
+        save_mapped_metadata
         # Keep fixture mutations serial. Run the public API suite before the
         # client package suite, whose final recovery test leaves MON a down.
         for suite in api client; do
@@ -142,12 +170,12 @@ for attempt in $(seq 1 120); do
                     exit 1
                 fi
                 proxy=$(docker port "$container" 40000/tcp)
-                if CEPH_MSGR_MONITORS="$monitors" CEPH_MSGR_KEY_FILE="$out/key" CEPH_MSGR_IDENTITY=client.test CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 CEPH_MSGR_CONTROL_DIR="$out" CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" CEPH_MSGR_TEST_PROXY="$proxy" "$out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
+                if CEPH_MSGR_MONITORS="$monitors" CEPH_MSGR_KEY_FILE="$out/key" CEPH_MSGR_IDENTITY=client.test CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 CEPH_MSGR_CONTROL_DIR="$out" CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" CEPH_MSGR_TEST_PROXY="$proxy" "$out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
                     result=0
                 else
                     result=$?
                 fi
-            elif docker exec -e CEPH_MSGR_MONITORS="$monitors" -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -e CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" "$container" "/out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
+            elif docker exec -e CEPH_MSGR_MONITORS="$monitors" -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -e CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" -e CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" "$container" "/out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
                 result=0
             else
                 result=$?
