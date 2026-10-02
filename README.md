@@ -49,6 +49,14 @@ fmt.Printf("%s\n", result.Data)
 `{"prefix":"pg stat","format":"json"}`을 사용할 수 있다. MON/MGR 경로는
 호출자가 선택한다. 각 명령은 해당 identity의 Ceph 권한에 따라 처리된다.
 
+`MonTell`은 현재 접속한 MON, `MgrTell`은 현재 active MGR의 daemon-local
+명령을 실행한다. 예를 들어 `{"prefix":"version","format":"json"}`을 보낼 수
+있다. MON 재접속·ticket 갱신으로 `MonTell`의 대상은 바뀔 수 있으며,
+임의의 이름·rank·wildcard 대상 지정은 제공하지 않는다. Tell은 daemon의
+admin 명령 schema를 사용한다. MON은 read·write·execute, MGR은 allow-all
+권한을 요구하며, 인증된 read-only 계정의 거절은 `CommandError`로 반환한다.
+Tell에도 요청별 context·raw 출력·결과 불명확 및 자동 재실행 금지 계약이 적용된다.
+
 `Command.Input`은 bulk 입력 bytes다. `Result.Data`는 binary를 포함한 원본
 출력이고, `Message`는 상태 문자열, `Code`는 서버가 반환한 숫자다.
 출력을 항상 JSON으로 해석하거나 서버 코드를 호스트 OS의 errno로 바꾸지 않는다.
@@ -80,7 +88,7 @@ if state.AuthRejection != nil {
 ```
 
 `Manager.Available`은 마지막으로 수신한 MgrMap 값이다. MGR 접속은
-`MgrCommand` 또는 `WaitMgrReady`가 필요할 때 시작하므로 available이어도
+`MgrCommand`, `MgrTell` 또는 `WaitMgrReady`가 필요할 때 시작하므로 available이어도
 ready는 아닐 수 있다.
 MON 복구를 기다리거나 인증 갱신이 명시적으로 거절되면 MGR ready도 false다.
 Ready는 현재 알려진 명령 접수 조건이며 이후 명령 성공을 보장하지 않는다.
@@ -157,7 +165,7 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
   MGR 접속 중 client global ID가 바뀌면 이전 ID의 접속 결과를 폐기하고,
   아직 전송하지 않은 명령은 현재 ID로 인증한 연결에서 처리한다.
 - active MGR이 없거나 service ticket을 갱신 중이면 `MgrCommand`는 호출
-  context 안에서 대기한다. 아직 명령을 전송하지 않은 이 대기의 취소는
+  context 안에서 대기한다. `MgrTell`도 같은 대기 규칙을 따른다. 아직 명령을 전송하지 않은 이 대기의 취소는
   결과 불명확 오류가 아니다. MGR을 기다리는 동안 MON 명령은 계속 사용할 수 있다.
 - 이미 전송을 시작한 호출의 취소·단절은 `*OutcomeUnknownError`가 될 수 있다.
   `errors.As`로 이를 확인한다. `errors.Is`로 원인 context 오류도 확인할 수
@@ -190,6 +198,13 @@ MON이 명령 전용 CLIENT에도 요구하는 CRUSH 세대 비트는 MON 접속
 ## 검증 결과
 
 2026-10-01–02에 다음 구성을 실제 Ceph daemon과 검증했다.
+
+Tell 제품 구현 `6ba0d88`은 20.2.4의 Linux arm64·CGO=0·aes256k·직접 IPv6와
+Darwin arm64·aes·IPv4 host race에서 검증했다. native CLI의 MON/MGR 버전
+JSON과 대조했고, 알 수 없는 명령 `-22`, read-only 계정의 `-13`, 거절 후
+일반 조회, 일반 명령과 Tell의 동시 호출 및 Close가 통과했다.
+전송 중 Tell 취소·Close·잘못된 응답의 raw data 보존·자동 재실행 금지는
+별도의 synthetic API·session 시험으로 검증했다.
 
 | Ceph | 인증 키 / rotating service cipher | 주소 | 결과 |
 | --- | --- | --- | --- |
@@ -719,7 +734,7 @@ generic peer 주소의 실제 Ceph 시험, handshake 거부 원인 보존과 fix
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 56개 경로를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 59개 경로를
 비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
 iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를

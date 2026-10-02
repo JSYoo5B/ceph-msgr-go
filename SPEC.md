@@ -66,11 +66,17 @@ MGR 기능:
 
 MON 명령과 MGR 명령은 명시적인 API로 구분한다. 명령 prefix만 보고 임의로 경로를 추측하지 않는다. 명령의 JSON, bulk 입력, binary 출력, 상태 문자열과 서버 오류 코드를 각각 보존한다.
 
+현재 접속한 MON과 active MGR의 daemon-local 명령은 `MonTell`·`MgrTell`로 구분한다. Tentacle의 `MCommand`(97)는 인증된 nonzero FSID와 command 문자열 벡터를 보내며, TID는 Messenger header에 둔다. `MCommandReply`(98)의 raw data, signed code, 상태 문자열을 보존한다. MGR의 zero-FSID legacy module 경로로 바꾸지 않는다. 임의 daemon 이름·rank·wildcard 대상 지정은 현재 구현 범위 밖이다.
+
+Tell도 일반 관리 명령과 같은 context·동시 호출·결과 불명확·자동 재실행 금지 계약을 따른다. native Ceph client의 Tell 재전송 동작은 복사하지 않는다. MON Tell의 read·write·execute 또는 MGR Tell의 allow-all 권한 부족은 인증 실패와 구분한 서버 명령 오류다.
+
+참조: [MCommand](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MCommand.h), [MCommandReply](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MCommandReply.h), [daemon-local command 처리](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/admin_socket.cc).
+
 참조: [CephX 보안 수정](https://docs.ceph.com/en/latest/security/CVE-2025-30156/), [CephX 개요](https://docs.ceph.com/en/tentacle/dev/cephx/), [librados 명령 입출력 계약](https://docs.ceph.com/en/tentacle/rados/api/librados/).
 
 ## Go API 설계 기준
 
-공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `WaitMonReady`, `WaitMgrReady`, `Snapshot`, `Close`와 `Options`, `Command`, `Result`, `State`를 중심으로 한다. go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
+공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MgrTell`, `WaitMonReady`, `WaitMgrReady`, `Snapshot`, `Close`와 `Options`, `Command`, `Result`, `State`를 중심으로 한다. go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
