@@ -205,6 +205,15 @@ JSON과 대조했고, 알 수 없는 명령 `-22`, read-only 계정의 `-13`, �
 일반 조회, 일반 명령과 Tell의 동시 호출 및 Close가 통과했다.
 전송 중 Tell 취소·Close·잘못된 응답의 raw data 보존·자동 재실행 금지는
 별도의 synthetic API·session 시험으로 검증했다.
+이를 포함한 `94bc9e3`의 Linux arm64·CGO=0·aes256k·직접 IPv6 전체 통합시험은
+32개가 통과했다. 별도의 동일 제품 Tell 복구 시험은 실제 AUTH·MGR ticket
+갱신 2회, seed MON a를 멈춘 동안 학습한 b에서의 Tell, 한 번만 보낸
+`mgr fail`에 따른 b→a 전환 뒤 lazy 접속·Tell·일반 조회·Close를 약 24초에
+통과했다. client global ID는 유지했고 새 MGR의 name·ID·epoch는 별도
+observer의 현재 `mgr dump` 응답과 대조했다.
+같은 Tell 복구 시험은 Darwin arm64·aes·IPv4 host race에서도 약 24초에
+통과했다. 이 실행에서는 MGR a→b 전환을 확인했으며 host TCP 경로는
+개발용 relay를 사용했다.
 
 | Ceph | 인증 키 / rotating service cipher | 주소 | 결과 |
 | --- | --- | --- | --- |
