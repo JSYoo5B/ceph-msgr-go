@@ -4,11 +4,27 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestMappedIPv6MonitorSeedsPreserveWireFamily(t *testing.T) {
+	for _, tc := range []struct{ seed, endpoint string }{
+		{"v2:[::ffff:c000:201]:3300/7", "[::ffff:c000:201]:3300"},
+		{"v2:[::ffff:192.0.2.1]:3300/7", "[::ffff:192.0.2.1]:3300"},
+	} {
+		t.Run(tc.seed, func(t *testing.T) {
+			endpoint, address, err := seedAddress(tc.seed)
+			want := netip.MustParseAddrPort("[::ffff:192.0.2.1]:3300")
+			if err != nil || endpoint != tc.endpoint || address.Endpoint != want || address.Type != 2 || address.Nonce != 7 || address.FlowInfo != 0 || address.ScopeID != 0 {
+				t.Fatal("mapped IPv6 seed lost its wire family", endpoint, address, err)
+			}
+		})
+	}
+}
 
 func TestScopedMonitorSeedsRejectedBeforeDial(t *testing.T) {
 	for _, tc := range []struct {

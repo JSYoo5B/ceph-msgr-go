@@ -129,9 +129,9 @@ type Transport struct {
 // deadline govern only setup; a successful connection has its deadline cleared.
 func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, limit uint32, timeout time.Duration) (_ *Transport, err error) {
 	if target.Endpoint.IsValid() {
-		// Match the wire representation: IPv4 uses its native family, while
-		// IPv6 scope is carried by ScopeID rather than a Go address zone.
-		target.Endpoint = netip.AddrPortFrom(target.Endpoint.Addr().Unmap().WithZone(""), target.Endpoint.Port())
+		// Retain the target's wire family, including mapped IPv6. IPv6 scope
+		// is carried by ScopeID rather than a Go address zone.
+		target.Endpoint = netip.AddrPortFrom(target.Endpoint.Addr().WithZone(""), target.Endpoint.Port())
 	}
 	stage := "banner"
 	cancelDone := make(chan struct{})

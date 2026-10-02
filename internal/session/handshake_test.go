@@ -45,6 +45,7 @@ type handshakePeerConfig struct {
 	mode            uint32
 	serverFlags     uint64
 	serverAddresses func(msgr.Address) []msgr.Address
+	serverAddrWire  []byte
 	malformedTag    msgr.Tag
 	authMore        bool
 	authMorePayload []byte
@@ -175,7 +176,11 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 		addresses = cfg.serverAddresses(target)
 	}
 	ident := wire.Encoder{}
-	msgr.EncodeAddresses(&ident, addresses)
+	if cfg.serverAddrWire == nil {
+		msgr.EncodeAddresses(&ident, addresses)
+	} else {
+		ident.Raw(cfg.serverAddrWire)
+	}
 	ident.U64(0)
 	ident.U64(1)
 	ident.U64(Features)

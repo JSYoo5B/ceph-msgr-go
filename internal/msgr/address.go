@@ -23,7 +23,7 @@ func (a Address) Encode(e *wire.Encoder) {
 	if !a.Endpoint.IsValid() {
 		p.U32(0)
 	} else {
-		ip := a.Endpoint.Addr().Unmap()
+		ip := a.Endpoint.Addr()
 		var sock []byte
 		if ip.Is4() {
 			sock = make([]byte, 16)

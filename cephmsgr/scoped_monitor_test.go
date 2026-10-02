@@ -16,6 +16,7 @@ import (
 func TestLearnedMonitorRecoveryPreservesWireAddress(t *testing.T) {
 	for _, test := range []struct {
 		name      string
+		endpoint  string
 		scope     uint32
 		flow      uint32
 		staleFlow bool
@@ -24,11 +25,16 @@ func TestLearnedMonitorRecoveryPreservesWireAddress(t *testing.T) {
 		{name: "flow", flow: 0x12345678},
 		{name: "scope_and_flow", scope: 3, flow: 0x12345678},
 		{name: "same_endpoint_distinct_flow", flow: 0x12345678, staleFlow: true},
+		{name: "mapped_ipv6_scope_and_flow", endpoint: "[::ffff:192.0.2.1]:3300", scope: 3, flow: 0x12345678},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			// Transport routing and wire identity are separate: a custom dialer
 			// avoids depending on the test host's interface names or scope IDs.
-			address := msgr.Address{Type: 2, Nonce: 7, Endpoint: netip.MustParseAddrPort("[fe80::1]:3300"), ScopeID: test.scope, FlowInfo: test.flow}
+			endpoint := test.endpoint
+			if endpoint == "" {
+				endpoint = "[fe80::1]:3300"
+			}
+			address := msgr.Address{Type: 2, Nonce: 7, Endpoint: netip.MustParseAddrPort(endpoint), ScopeID: test.scope, FlowInfo: test.flow}
 			learned := []msgr.Address{address}
 			if test.staleFlow {
 				stale := address

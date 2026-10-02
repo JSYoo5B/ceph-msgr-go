@@ -136,7 +136,7 @@ func seedAddress(seed string) (string, msgr.Address, error) {
 		if ip.Zone() != "" {
 			return "", a, errors.New("ceph: IPv6 monitor seed zones are unsupported")
 		}
-		a.Endpoint = netip.AddrPortFrom(ip.Unmap(), uint16(n))
+		a.Endpoint = netip.AddrPortFrom(ip, uint16(n))
 	}
 	return seed, a, nil
 }
@@ -189,7 +189,11 @@ func (c *Client) open(ctx context.Context, endpoint string, address msgr.Address
 	}
 	if !address.Endpoint.IsValid() {
 		if tcp, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
-			address.Endpoint = tcp.AddrPort()
+			// TCPAddr uses AF_INET for IP.To4(), including a 16-byte ParseIP
+			// value. Only inferred socket addresses follow that convention;
+			// literal seeds and learned wire addresses retain their family.
+			endpoint := tcp.AddrPort()
+			address.Endpoint = netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port())
 		} else {
 			address.Endpoint, _ = netip.ParseAddrPort(endpoint)
 		}
