@@ -3,33 +3,13 @@ package cephmsgr
 import (
 	"context"
 	"errors"
-	"io"
-	"net"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
 )
 
 func retryableSetup(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) {
-		return false
-	}
-	switch e := err.(type) {
-	case interface{ Unwrap() []error }:
-		children := e.Unwrap()
-		if len(children) == 0 {
-			return false
-		}
-		for _, child := range children {
-			if !retryableSetup(child) {
-				return false
-			}
-		}
-		return true
-	case net.Error:
-		return true
-	case interface{ Unwrap() error }:
-		return retryableSetup(e.Unwrap())
-	}
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed)
+	return session.RetryableSetupError(err)
 }
 
 func (c *Client) bootstrap(ctx context.Context) error {

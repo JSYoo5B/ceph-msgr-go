@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -58,6 +59,111 @@ func TestBootstrapRejectsCompleteMalformedPayloadWithoutRetry(t *testing.T) {
 				t.Fatal("malformed complete payload was retried as transport loss", attempts.Load(), err)
 			}
 		})
+	}
+}
+
+func TestBootstrapRejectsMalformedHandshakeDespiteCleanupDeadline(t *testing.T) {
+	options := mockOptions(t, 20, [16]byte{1})
+	// Leave ample time to reach the failure gate even on a slow CI runner.
+	// This single regression exercises a real per-endpoint setup deadline.
+	options.ConnectTimeout = 5 * time.Second
+	validDial := options.DialContext
+	var attempts atomic.Int32
+	type setup struct {
+		ctx  context.Context
+		conn *detachedHandshakeCleanupConn
+	}
+	started := make(chan setup, 1)
+	release := make(chan struct{})
+	var once sync.Once
+	finish := func() { once.Do(func() { close(release) }) }
+	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+		if attempts.Add(1) > 1 {
+			return validDial(ctx, network, endpoint)
+		}
+		client, peer := net.Pipe()
+		held := &detachedHandshakeCleanupConn{Conn: client, closing: make(chan struct{}), cleaned: make(chan struct{}), release: release}
+		started <- setup{ctx: ctx, conn: held}
+		go mockDaemon(peer, peerConfig{fsid: [16]byte{1}, release: 20, role: 1, payload: func(tag msgr.Tag, payload []byte) []byte {
+			if tag == msgr.Hello {
+				return payload[:len(payload)-1]
+			}
+			return payload
+		}})
+		return held, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	type outcome struct {
+		client *Client
+		err    error
+	}
+	finished := make(chan outcome, 1)
+	done := make(chan struct{})
+	var first setup
+	t.Cleanup(func() {
+		// Release the Close owner before canceling or closing any connection.
+		// Join Dial even when a Fatal path never consumes its buffered result.
+		finish()
+		cancel()
+		<-done
+		select {
+		case result := <-finished:
+			if result.client != nil {
+				result.client.Close()
+			}
+		default:
+		}
+		if first.conn == nil {
+			select {
+			case first = <-started:
+			default:
+			}
+		}
+		if first.conn != nil {
+			first.conn.Close()
+		}
+	})
+	go func() {
+		client, err := Dial(ctx, options)
+		finished <- outcome{client: client, err: err}
+		close(done)
+	}()
+	select {
+	case first = <-started:
+	case <-ctx.Done():
+		t.Fatal("bootstrap did not begin its first setup", ctx.Err())
+	}
+	select {
+	case <-first.conn.closing:
+	case <-ctx.Done():
+		t.Fatal("malformed HELLO did not reach failure cleanup", ctx.Err())
+	}
+	if first.ctx.Err() != nil {
+		t.Fatal("setup deadline preceded the malformed payload refusal", first.ctx.Err())
+	}
+	// The complete malformed frame has already caused Close. Let only this
+	// endpoint's deadline expire while Close remains at the cleanup barrier.
+	select {
+	case <-first.ctx.Done():
+	case <-ctx.Done():
+		t.Fatal("endpoint deadline did not expire independently", ctx.Err())
+	}
+	finish()
+	select {
+	case result := <-finished:
+		if result.client != nil {
+			result.client.Close()
+		}
+		if result.client != nil || !errors.Is(result.err, msgr.ErrFrame) || !errors.Is(result.err, io.ErrUnexpectedEOF) || attempts.Load() != 1 {
+			t.Fatal("malformed complete HELLO became a retryable timeout", attempts.Load(), result.err)
+		}
+		select {
+		case <-first.conn.cleaned:
+		default:
+			t.Fatal("bootstrap returned before connection cleanup")
+		}
+	case <-ctx.Done():
+		t.Fatal("bootstrap did not finish its failure cleanup", ctx.Err())
 	}
 }
 

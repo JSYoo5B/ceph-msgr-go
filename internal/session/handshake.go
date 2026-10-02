@@ -141,6 +141,10 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	})
 	stopped := false
 	defer func() {
+		// A completed refusal must not become a retryable timeout while Close
+		// finishes its cleanup. Network errors still map to a context that ends
+		// during cleanup, including a socket deadline preceding its timer.
+		preserveFailure := err != nil && ctx.Err() == nil && !setupTransportError(err, true)
 		if !stopped && !stop() {
 			// A repeated Conn.Close need not wait for another Close's cleanup.
 			// Keep cancellation-owned cleanup within this handshake's lifetime.
@@ -149,7 +153,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		if err != nil {
 			conn.Close()
 		}
-		if ctx.Err() != nil {
+		if ctx.Err() != nil && !preserveFailure {
 			err = ctx.Err()
 			conn.Close()
 		}
