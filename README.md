@@ -535,6 +535,15 @@ CI 화면에 표시한다. 병렬·하위 테스트와 imported helper의 위치
 [단위시험 진단 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/unit-failure-diagnostics)는
 해당 CI의 `54d21b9`를 가리킨다.
 
+기본 `net.Dialer`를 사용하는 실제 loopback TCP 시험은 IPv4·IPv6에서 raw 출력과
+서버 오류 코드 보존, 전송 후 개별 취소와 후속 요청, `Close`의 요청·연결 종료를
+검사한다. IPv6 listener가 없는 환경에서는 해당 경우만 이유를 남겨 건너뛴다.
+Darwin arm64의 반복·race 검사와
+[CI 20개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36981511888)이 통과했다.
+[기본 TCP 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/native-tcp-dialer)는
+이 실행의 `43433a1`을 가리킨다. 상대는 Go codec을 공유하는 synthetic peer이며,
+이 시험 자체가 실제 Ceph나 Windows의 실제 Ceph 상대 지원을 입증하지는 않는다.
+
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
 앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
 [복구 중 Context 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/recovery-contexts)는
