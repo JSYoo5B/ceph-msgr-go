@@ -134,6 +134,10 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
   이전 MON의 진행 중 요청은 `ConnectTimeout` 동안 완료할 기회를 준다.
   교체된 MON은 새 요청을 받지 않는다. 전송 전에 거절된 요청만 새 MON으로
   보내며, 이전 연결에서 이미 전송을 시작한 요청을 다시 실행하지 않는다.
+- 인증된 MonMap의 `auth_epoch`가 증가하면 새 접속에 사용할 ticket을
+  조기 갱신한다. 기존 global ID와 갱신 검증용 이전 proof는 보존하며,
+  이미 인증된 MGR 연결과 진행 중 명령을 유지한다. 갱신 중인 MON 후보가
+  이전 epoch의 인증 결과를 뒤늦게 게시하지 못하도록 검사한다.
 - MON 재인증을 서버가 명시적으로 거절하면 기존 MON/MGR 연결에서 새
   명령 접수를 중단한다. 새 호출에는 `AuthenticationError`, 이미 전송을
   시작한 호출에는 인증 거절을 원인으로 가진 `OutcomeUnknownError`를
@@ -247,6 +251,38 @@ MGR 장애 주입 5회와 context 상태 조회 289,749회를 처리했다. 결�
 2건은 MGR 교체 원인을 유지했으며 자동 재실행하지 않았다. 관찰한 최대
 세션은 2개, goroutine은 19개였다. 반복 종료 12회에서 파일 descriptor는
 6개로 돌아왔고, GC 후 heap은 268,056 bytes에서 273,336 bytes였다.
+
+같은 `23148f5`의 직접 IPv6·aes256k·CGO=0
+[1시간 연속 시험](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/communication-lifecycle-1h)도
+통과했다. 성공 호출 1,248,669건, ticket 갱신 368회, 서버가 성공 응답한
+MGR 장애 주입 119회와 context 상태 조회 5,609,455회를 처리했다.
+결과 불명확 14건은 모두 MGR 교체 원인을 보존했다. 샘플링한 최대 세션은
+3개, goroutine은 24개였고, 이후 관측에서 각각 2개와 19개로 돌아왔다.
+이 시험은 뒤에 추가한 인증 epoch 및 응답 decoder 변경을 포함하지 않는다.
+
+인증 epoch 보강은 20.2.4의 별도 120초 ticket fixture에서 확인했다.
+실제 `auth wipe-rotating-service-keys`를 두 번 실행해, 예정된 갱신보다
+일찍 새 ticket을 받고 global ID와 기존 MGR 연결을 유지했다. 개발 fixture는
+새 CLI process로 MGR에 교체된 service key가 전달됐는지 먼저 확인한 뒤,
+native client의 최초 MGR 연결을 검증한다. 이 native 연결의 인증 거절을
+재시도하지 않는다. Linux arm64·CGO=0의 aes256k·IPv6와 aes·IPv4에서 통과했다.
+이전 제품 소스 `23148f5`는 같은 시험에서 조기 갱신을 하지 못해 실패했다.
+이 두 차례 교체와 큰 MON 응답은 Darwin arm64·IPv4·aes256k의 실제 host
+바이너리에서도 race 계측으로 통과했다. 계측은 개발 시험에만 사용한다.
+
+큰 응답 시험에서는 `MaxFrameSize=32 MiB`로 유효한 status JSON 뒤에
+16 MiB 공백을 붙였다. 실제 MON이 원래 명령을 응답 front에 그대로 포함했고,
+서버 코드·raw JSON을 보존한 뒤 같은 연결의 다음 명령도 성공했다.
+응답 본문 decoder에도 설정한 상한을 전달하며, 기본 상한은 16 MiB로 유지한다.
+양의 소수 초 ticket 유효기간은 encrypted codec 단위 시험으로 확인했다.
+소수 초 단위 ticket 갱신의 실제 동작을 검증한 것은 아니다.
+
+이 변경을 포함한 `7b7c307`은 같은 직접 IPv6·aes256k 구성에서 전체 통합시험과
+3분 부하 시험을 통과했다. 성공 호출 62,700건, ticket 갱신 18회, 서버가 성공
+응답한 MGR 장애 주입 5회와 context 상태 조회 281,761회를 처리했다.
+결과 불명확 2건은 MGR 교체 원인을 유지했다. 관찰한 최대 세션은 2개,
+goroutine은 19개였다. 반복 종료 12회에서 파일 descriptor는 6개로 돌아왔고,
+GC 후 heap은 344,424 bytes에서 279,192 bytes였다.
 
 MON 재접속의 IPv6 scope·flow와 동일 endpoint의 서로 다른 식별 후보는
 인증·지도·명령 응답까지 수행하는 synthetic peer 시험 4개로 확인했다.
@@ -407,6 +443,7 @@ CEPH_MSGR_TEST_RUNTIME=host sh integration/run.sh # 호스트 native 바이너�
 CEPH_MSGR_TEST_RUNTIME=host CEPH_MSGR_TEST_RACE=1 sh integration/run.sh # 실제 Ceph 상대 race 검사
 CEPH_MSGR_TEST_EXPIRE_TICKETS=1 sh integration/run.sh # 별도 인증 만료 fixture
 CEPH_MSGR_TEST_IDLE_SESSIONS=1 sh integration/run.sh # 별도 120초 ticket·idle 시험
+CEPH_MSGR_TEST_AUTH_EPOCH=1 sh integration/run.sh # 별도 service-key 교체·조기 갱신 시험
 CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 ```
 
@@ -480,12 +517,15 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 시험한다. Race 작업은 Linux amd64에서 실제 Ceph를 상대하는 공개 API와
 클라이언트 내부 통합시험도 host 모드로 실행한다.
 Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
-3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36969860118)이
+3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료, 긴 ticket·idle fixture와
+service-key 교체 2개 구성을 포함한
+[GitHub CI 20개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36975839366)이
 2026-10-02에 모두 통과했다. Actions 설정 lint와 개발용 진단 도구의 단위
-시험 및 소스 비교 도구 시험 19개도 통과했다.
+시험 및 소스 비교 도구 시험 31개도 통과했다.
+[서비스 키 교체·큰 응답 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/service-key-epochs)는
+이 실행의 `7b7c307`을 가리킨다.
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
-이 실행의 `23148f5`를 가리킨다.
+앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
 [복구 중 Context 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/recovery-contexts)는
 앞서 CI 18개 작업을 통과한 `c14f78f`를 가리킨다.
 [MON 주소 보존 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-wire-address)는
