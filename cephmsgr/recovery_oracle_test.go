@@ -46,7 +46,7 @@ func TestRecoveryReadOracleRejectsMalformedReply(t *testing.T) {
 			defer stop()
 			err = fixtureRecoveryRead(read, c, mgr)
 			var unknown *OutcomeUnknownError
-			if !errors.As(err, &unknown) || !errors.Is(err, msgr.ErrFrame) || !errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.DeadlineExceeded) || commands.Load() != 1 {
+			if !errors.As(err, &unknown) || !errors.Is(err, ErrMalformedMessage) || !errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, context.DeadlineExceeded) || commands.Load() != 1 {
 				t.Fatal("recovery oracle hid a malformed response by retrying it", commands.Load(), err)
 			}
 		})

@@ -21,6 +21,12 @@ import (
 var ErrClosed = session.ErrClosed
 var ErrManagerChanged = errors.New("ceph: active manager changed")
 
+// ErrMalformedMessage identifies invalid Messenger framing or message encoding.
+// A complete malformed payload may also wrap io.ErrUnexpectedEOF from decoding;
+// check this marker before treating that cause as a transient connection loss.
+// Started commands still have an OutcomeUnknownError and are never replayed.
+var ErrMalformedMessage = msgr.ErrFrame
+
 // ErrKeepaliveTimeout means an established connection received no complete
 // Messenger frame within KeepaliveTimeout. Started commands remain uncertain.
 var ErrKeepaliveTimeout = session.ErrKeepaliveTimeout

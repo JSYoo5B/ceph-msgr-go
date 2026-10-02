@@ -57,6 +57,11 @@ fmt.Printf("%s\n", result.Data)
 `errors.As`로 인증 방법과 서버 코드를 확인할 수 있으며, 로컬 암호 검증
 실패와 구분한다.
 
+잘못된 Messenger frame·메시지 인코딩은 `errors.Is(err, ErrMalformedMessage)`로
+확인할 수 있다. 완전히 받은 본문을 해석하다 발생한 `io.ErrUnexpectedEOF`도
+원인으로 남으므로, 이 표시를 먼저 검사해 TCP 수신 중 단절과 구분한다.
+이미 전송한 명령은 `OutcomeUnknownError`를 함께 유지하며 자동 재실행하지 않는다.
+
 ## 운영 상태
 
 `Snapshot()`은 네트워크 요청이나 재접속 대기 없이 현재 client 상태를 읽는다.
