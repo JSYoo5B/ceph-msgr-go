@@ -3,16 +3,18 @@ package msgr
 import "github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 
 const (
-	MonMapMessage          uint16 = 4
-	SubscribeMessage       uint16 = 15
-	SubscribeAckMessage    uint16 = 16
-	AuthMessage            uint16 = 17
-	AuthReplyMessage       uint16 = 18
-	MonCommandMessage      uint16 = 50
-	MonCommandReplyMessage uint16 = 51
-	MgrMapMessage          uint16 = 0x704
-	MgrCommandMessage      uint16 = 0x709
-	MgrCommandReplyMessage uint16 = 0x70a
+	MonMapMessage           uint16 = 4
+	SubscribeMessage        uint16 = 15
+	SubscribeAckMessage     uint16 = 16
+	AuthMessage             uint16 = 17
+	AuthReplyMessage        uint16 = 18
+	MonCommandMessage       uint16 = 50
+	MonCommandReplyMessage  uint16 = 51
+	TellCommandMessage      uint16 = 97
+	TellCommandReplyMessage uint16 = 98
+	MgrMapMessage           uint16 = 0x704
+	MgrCommandMessage       uint16 = 0x709
+	MgrCommandReplyMessage  uint16 = 0x70a
 )
 
 type MessageData struct {
@@ -84,13 +86,26 @@ func CommandMessage(mgr bool, fsid [16]byte, commands []string, input []byte) Me
 	}
 	return MessageData{Type: typ, Version: 1, Front: e.Data, Data: input, Priority: 127}
 }
+
+// TellCommand encodes Tentacle's daemon-local MCommand. The caller supplies
+// the authenticated FSID; Session.Call assigns the transaction in the header.
+func TellCommand(fsid [16]byte, commands []string, input []byte) MessageData {
+	e := wire.Encoder{}
+	e.Raw(fsid[:])
+	e.U32(uint32(len(commands)))
+	for _, command := range commands {
+		e.String(command)
+	}
+	return MessageData{Type: TellCommandMessage, Version: 1, Front: e.Data, Data: input, Priority: 127}
+}
+
 func CommandReply(m MessageData, limit uint32) (int32, string, error) {
 	d := wire.NewDecoderLimit(m.Front, limit)
 	if m.Type == MonCommandReplyMessage {
 		d.U64()
 		d.U16()
 		d.U64()
-	} else if m.Type != MgrCommandReplyMessage {
+	} else if m.Type != MgrCommandReplyMessage && m.Type != TellCommandReplyMessage {
 		return 0, "", ErrFrame
 	}
 	if m.CompatVersion > 1 {
