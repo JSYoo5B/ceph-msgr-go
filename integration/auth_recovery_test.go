@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -92,6 +93,13 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	if rejectedState.AuthRejection == nil || rejectedState.AuthRejection.Code != server.Code || rejectedState.AuthRejection.Method != server.Method || rejectedState.Monitor.Ready || rejectedState.Manager.Ready || rejectedState.Closed {
 		t.Fatal("public state did not preserve genuine renewal rejection", rejectedState)
 	}
+	for _, wait := range []func(context.Context) error{c.WaitMonReady, c.WaitMgrReady} {
+		var rejection *cephmsgr.AuthenticationError
+		var unknown *cephmsgr.OutcomeUnknownError
+		if err := wait(ctx); !errors.As(err, &rejection) || rejection.Code != server.Code || rejection.Method != server.Method || errors.As(err, &unknown) {
+			t.Fatal("preparation lost the actual authentication rejection", err)
+		}
+	}
 	// Restore the same fixture key through an independently authenticated
 	// administrator. The rejected client must recover without being rebuilt.
 	keyring := append([]byte("[client.revocable]\n\tkey = "), bytes.TrimSpace(encoded)...)
@@ -119,5 +127,10 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	recoveredState := waitClientState(t, c, ctx, func(s cephmsgr.State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if recoveredState.AuthRejection != nil || !recoveredState.Monitor.Ready || !recoveredState.Manager.Ready || recoveredState.Closed || recoveredState.GlobalID != rejectedState.GlobalID {
 		t.Fatal("public state did not recover with the restored credential", recoveredState)
+	}
+	for _, wait := range []func(context.Context) error{c.WaitMonReady, c.WaitMgrReady} {
+		if err := wait(ctx); err != nil {
+			t.Fatal("preparation after real credential restoration", err)
+		}
 	}
 }

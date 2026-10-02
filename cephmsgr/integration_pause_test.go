@@ -133,6 +133,14 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 	if state.Monitor.Ready || state.Manager.Ready || !state.Manager.Available || state.Manager.Endpoint == "" || oldManager.Err() != nil {
 		t.Fatal("live MGR concealed the MON admission dependency during actual silence", state, oldManager.Err())
 	}
+	for _, wait := range []func(context.Context) error{c.WaitMonReady, c.WaitMgrReady} {
+		short, stop := context.WithTimeout(ctx, 30*time.Millisecond)
+		err := wait(short)
+		stop()
+		if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &unknown) {
+			t.Fatal("preparation bypassed unavailable MON admission", err)
+		}
+	}
 	blockReconnect.Store(false)
 	if err := fixtureRecoveryRead(ctx, c, false); err != nil {
 		t.Fatal("MON command after open socket silence", err)
@@ -149,6 +157,11 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 	state = waitClientState(t, c, ctx, func(s State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if !state.Monitor.Ready || !state.Manager.Ready {
 		t.Fatal("public admission state did not recover after actual MON silence", state)
+	}
+	for _, wait := range []func(context.Context) error{c.WaitMonReady, c.WaitMgrReady} {
+		if err := wait(ctx); err != nil {
+			t.Fatal("preparation after actual MON silence", err)
+		}
 	}
 	t.Logf("paused MON=%s: silence detected, another quorum member served commands", name)
 }

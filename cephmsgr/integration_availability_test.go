@@ -36,10 +36,19 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 	if !state.Monitor.Ready || state.Manager.Available || state.Manager.Ready {
 		t.Fatal("unavailable MGR state obscured the ready MON", state)
 	}
-	short, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
-	_, err := c.MgrCommand(short, command)
-	cancel()
+	if err := c.WaitMonReady(ctx); err != nil {
+		t.Fatal("missing MGR blocked MON preparation", err)
+	}
+	prepare, stop := context.WithTimeout(ctx, 30*time.Millisecond)
+	err := c.WaitMgrReady(prepare)
+	stop()
 	var unknown *OutcomeUnknownError
+	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &unknown) {
+		t.Fatal("MGR preparation did not preserve known non-execution", err)
+	}
+	short, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
+	_, err = c.MgrCommand(short, command)
+	cancel()
 	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &unknown) {
 		t.Fatal("MGR discovery wait did not preserve known non-execution", err)
 	}
@@ -63,6 +72,10 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 		case <-time.After(time.Millisecond):
 		}
 	}
+	closedWaits := make(chan error, 4)
+	for i := 0; i < cap(closedWaits); i++ {
+		go func() { closedWaits <- closing.WaitMgrReady(ctx) }()
+	}
 	if err := closing.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -76,6 +89,16 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 			t.Fatal("Close left a discovery caller waiting", ctx.Err())
 		}
 	}
+	for i := 0; i < cap(closedWaits); i++ {
+		select {
+		case err := <-closedWaits:
+			if !errors.Is(err, ErrClosed) || errors.As(err, &unknown) {
+				t.Fatal("closed preparation wait has incorrect outcome", err)
+			}
+		case <-ctx.Done():
+			t.Fatal("Close left a preparation caller waiting", ctx.Err())
+		}
+	}
 
 	finished := make(chan error, 1)
 	go func() {
@@ -85,6 +108,8 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 		}
 		finished <- err
 	}()
+	prepared := make(chan error, 1)
+	go func() { prepared <- c.WaitMgrReady(ctx) }()
 	// Observe genuine renewal while MGR is absent, with a pending MGR call.
 	initial := c.Snapshot().AuthTicket
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -96,6 +121,8 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 		select {
 		case err := <-finished:
 			t.Fatal("MGR call returned while no MGR existed", err)
+		case err := <-prepared:
+			t.Fatal("MGR preparation returned while no MGR existed", err)
 		case <-ctx.Done():
 			t.Fatal("MON tickets did not renew without MGR", ctx.Err())
 		case <-ticker.C:
@@ -112,9 +139,20 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("MGR startup did not release the waiting command", ctx.Err())
 	}
+	select {
+	case err := <-prepared:
+		if err != nil {
+			t.Fatal("waiting preparation failed after MGR startup", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("MGR startup did not release waiting preparation", ctx.Err())
+	}
 	state = waitClientState(t, c, ctx, func(s State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if !state.Manager.Available || !state.Manager.Ready || !state.Monitor.Ready {
 		t.Fatal("delayed MGR startup did not update public state", state)
 	}
-	t.Log("MON stayed available and renewed tickets; MGR wait canceled locally or completed after discovery")
+	if err := c.WaitMgrReady(ctx); err != nil {
+		t.Fatal("MGR preparation after delayed startup", err)
+	}
+	t.Log("MON stayed available and renewed tickets; command and preparation waits canceled locally, ended at Close or completed after discovery")
 }
