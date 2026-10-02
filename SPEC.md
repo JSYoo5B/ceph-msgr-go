@@ -56,6 +56,7 @@ MON 기능:
 - 여러 seed 주소, IPv4/IPv6 및 msgr2 주소를 통한 bootstrap.
 - FSID 일치 확인, MonMap 수신·갱신, 접속 MON 변경.
 - 명령 메시지와 응답, transaction ID에 따른 동시 요청 분배.
+- MonMap의 정확한 MON 이름을 지정하는 독립 daemon-local Tell.
 - MGR 발견에 필요한 MgrMap 구독 및 갱신.
 - cluster log 구독, service cursor와 메모리 상한을 갖는 수신 stream.
 
@@ -67,11 +68,17 @@ MGR 기능:
 
 MON 명령과 MGR 명령은 명시적인 API로 구분한다. 명령 prefix만 보고 임의로 경로를 추측하지 않는다. 명령의 JSON, bulk 입력, binary 출력, 상태 문자열과 서버 오류 코드를 각각 보존한다.
 
-현재 접속한 MON과 active MGR의 daemon-local 명령은 `MonTell`·`MgrTell`로 구분한다. Tentacle의 `MCommand`(97)는 인증된 nonzero FSID와 command 문자열 벡터를 보내며, TID는 Messenger header에 둔다. `MCommandReply`(98)의 raw data, signed code, 상태 문자열을 보존한다. MGR의 zero-FSID legacy module 경로로 바꾸지 않는다. 임의 daemon 이름·rank·wildcard 대상 지정은 현재 구현 범위 밖이다.
+현재 접속한 MON과 active MGR의 daemon-local 명령은 `MonTell`·`MgrTell`로 구분한다. `MonTellTo(ctx, name, command)`는 MonMap의 정확한 bare MON 이름을 지정한다. Prefix 제거·숫자의 rank 해석·wildcard 확장은 제공하지 않으며 MGR 대상은 active MGR로 한정한다. Tentacle의 `MCommand`(97)는 인증된 nonzero FSID와 command 문자열 벡터를 보내며, TID는 Messenger header에 둔다. `MCommandReply`(98)의 raw data, signed code, 상태 문자열을 보존한다. MGR의 zero-FSID legacy module 경로로 바꾸지 않는다.
+
+이름 지정 MON Tell은 주 MON admission 후 지도에서 대상의 v2 원주소를 선택한다. 이름·rank·전체 주소 벡터를 보존하며 family·nonce·scope·flow를 접속 문자열로 재해석하지 않는다. 지정 MON에 global ID 0으로 새 CephX 인증을 수행하고 `MMonGetMap`(5, header 1/compat 0, 빈 payload)의 독립 지도에서 FSID·최소 지원 계열·같은 이름과 원주소의 일치를 확인한다. 주 MON/MGR 연결·auth·map·log watch는 이 결과로 변경하지 않는다. 주 지도에 대상이 없으면 `ErrMonitorNotFound`, 독립 admission의 대상 연관이 바뀌면 `ErrMonitorTargetChanged`로 전송 전 실패를 알린다. 전송 후 변경은 결과 불명확 원인이 될 수 있다.
+
+일반 명령과 같은 `MaxInFlight` 슬롯을 입력 복사 전에 얻는다. Operation context는 전체 호출과 Client Close를 연결하며 `ConnectTimeout`은 endpoint별 setup만 제한한다. Client Close는 독립 handshake와 session 정리를 완료할 때까지 기다린다. 전송 전 setup의 일시적인 전송·연결 오류에 한해 같은 이름의 다른 v2 주소를 시도할 수 있지만, 다른 MON으로 대체하거나 전송 결과가 불명확한 Tell을 다시 실행하지 않는다.
 
 Tell도 일반 관리 명령과 같은 context·동시 호출·결과 불명확·자동 재실행 금지 계약을 따른다. native Ceph client의 Tell 재전송 동작은 복사하지 않는다. MON Tell의 read·write·execute 또는 MGR Tell의 allow-all 권한 부족은 인증 실패와 구분한 서버 명령 오류다.
 
 참조: [MCommand](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MCommand.h), [MCommandReply](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MCommandReply.h), [daemon-local command 처리](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/admin_socket.cc).
+
+이름 지정 경로의 참조는 [MonClient의 독립 Tell 연결](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MonClient.cc#L1238)과 [MMonGetMap](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MMonGetMap.h)이다. LGPL-2.1 고지를 확인했고 C++ 구현을 복사하지 않고 wire 의미를 독립 작성한다.
 
 MON 로그는 `log-debug/info/sec/warn/error`의 연속 구독과 `MLog`(52)를 사용한다.
 현재 LogEntry v5의 entity·rank·주소·원본 timestamp·sequence·priority·text·channel을
@@ -97,7 +104,7 @@ MLog에는 구독 generation ID가 없어 같은 세션의 이전 watch에서 �
 
 ## Go API 설계 기준
 
-공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MgrTell`,
+공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
 `WaitMonReady`, `WaitMgrReady`, `WatchLogs`, `Snapshot`, `Close`를 중심으로 한다.
 연결·명령·상태 타입은 `Options`, `Command`, `Result`, `State`다.
 로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
@@ -105,6 +112,7 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
+- `MonTellTo(ctx, name, command)`는 정확한 MON 이름을 지정하고 독립 인증·지도 검증·호출·정리까지 요청 context를 적용한다. 알려진 대상 없음·지도 변경·전송 전 취소와 전송 후 결과 불명확을 구분하며 주 연결과 다른 명령의 수명을 보존한다.
 - `WaitMonReady(ctx)`와 `WaitMgrReady(ctx)`는 관리 명령이나 명령 슬롯 없이 연결 준비를 기다린다. MGR 대기는 발견과 별도 인증 연결을 포함한다. 취소는 해당 대기만 끝내며 성공은 이후 명령 성공을 보장하지 않는다. `Snapshot()`은 네트워크 요청 없이 현재 상태를 복사한다.
 - `WatchLogs(ctx, options)`는 client당 하나의 worker를 로컬에 비동기 등록하며 명령 슬롯을 사용하지 않는다. context는 복구를 포함한 watch 전체 수명에 적용한다. `Next(ctx)` 취소는 해당 대기만 끝내며 이미 취소된 context는 접수한 큐를 소비하지 않는다.
 - 로그 큐는 최대 64 batch와 보수적인 보유 bytes 추정치로 제한한다. `MaxBufferedBytes` 기본값은 `MaxFrameSize`, 허용 범위는 1 KiB–1 GiB이며 정확한 Go heap 상한은 아니다. overflow는 watch만 종료하며 이미 접수한 batch와 일반 명령 연결을 유지한다.
@@ -128,6 +136,7 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 5. 동시 요청 중 개별 context 취소, 늦은 응답, 결과 불명확, Close 경합을 검증한다.
 6. 제품의 전이 의존성을 포함해 CGO·네이티브 라이브러리·CLI 의존성이 없는지 확인하고 대상 OS에서 빌드·실행을 검증한다.
 7. MON 로그는 독립 raw wire 입력 및 native CLI oracle과 대조한다. 실제 로그 수신, cursor 복구, ticket 갱신, 제한된 큐, watch·Next context와 Close를 검증하며 단순 SubscribeAck를 권한 확인으로 사용하지 않는다.
+8. 이름 지정 MON Tell은 독립 native daemon status의 name·rank·FSID와 대조한다. 없는 이름의 접속 전 거절, 다른 MON으로 대체하지 않음, 새 private 인증 ID와 주 상태 보존, 동시 호출·전송 후 불확실성·setup과 session의 Close 소유권을 검증한다.
 
 구현한 encoder와 decoder끼리의 round trip만으로 wire 호환성을 입증하지 않는다. Ceph에서 얻은 fixture 및 실제 Ceph 상대 검증을 사용한다. parser fuzzing, race 검사, 장시간 ticket 갱신, 장애 주입을 포함한다. 클러스터 구성과 테스트 oracle을 위한 Ceph CLI·컨테이너 사용은 개발 도구이며 제품의 런타임 의존성과 구분한다.
 

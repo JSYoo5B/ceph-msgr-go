@@ -53,10 +53,27 @@ fmt.Printf("%s\n", result.Data)
 `MonTell`은 현재 접속한 MON, `MgrTell`은 현재 active MGR의 daemon-local
 명령을 실행한다. 예를 들어 `{"prefix":"version","format":"json"}`을 보낼 수
 있다. MON 재접속·ticket 갱신으로 `MonTell`의 대상은 바뀔 수 있으며,
-임의의 이름·rank·wildcard 대상 지정은 제공하지 않는다. Tell은 daemon의
+`MonTellTo(ctx, "b", command)`는 MonMap의 정확한 bare name `b`를 지정한다.
+`mon.b` prefix를 제거하거나 숫자를 rank로 해석하지 않으며 wildcard를
+확장하지 않는다. MGR 대상은 현재 active MGR이다. Tell은 daemon의
 admin 명령 schema를 사용한다. MON은 read·write·execute, MGR은 allow-all
 권한을 요구하며, 인증된 read-only 계정의 거절은 `CommandError`로 반환한다.
 Tell에도 요청별 context·raw 출력·결과 불명확 및 자동 재실행 금지 계약이 적용된다.
+
+`MonTellTo`는 먼저 주 MON의 admission을 기다리고 그 지도에서 대상 주소를
+선택한다. 지정 MON에 global ID 0으로 시작하는 독립 인증을 거친 뒤, 한 번 받은
+MonMap의 FSID·최소 지원 계열·이름과 원래 주소를 확인한다. 주소의 family·
+nonce·scope·flow도 보존한다. 주 client의 global ID·ticket·MON/MGR 연결과
+로그 구독을 교체하지 않는다. 일반 명령과 `MaxInFlight` 슬롯을 공유하며
+입력 복사는 슬롯을 얻은 뒤 수행한다. `ConnectTimeout`은 endpoint별 setup을
+제한하고, 연결 후 Tell 대기는 호출 context에 따른다. `Close`는 이 독립
+연결의 진행 중 setup과 session 정리도 기다린다.
+
+주 지도에 이름이 없으면 `ErrMonitorNotFound`, 독립 admission 지도에서
+이름이나 원래 주소가 달라졌으면 `ErrMonitorTargetChanged`를 반환하며
+명령은 아직 전송하지 않았다. 전송 후 지도 변경은 결과 불명확 오류의 원인이
+될 수 있다. 주소를 여러 개 시도해도 지정한 이름의 v2 주소만 사용하며,
+대상이 불가능하면 다른 MON으로 바꾸지 않는다.
 
 `Command.Input`은 bulk 입력 bytes다. `Result.Data`는 binary를 포함한 원본
 출력이고, `Message`는 상태 문자열, `Code`는 서버가 반환한 숫자다.
@@ -276,6 +293,30 @@ read-only 계정의 실제 로그 수신, Next 대기 취소·watch 취소와 �
 차단해 학습한 MON 33301에서 로그를 이어 받았다. 이 시험은 서버 이력의
 무손실 전달을 증명하지 않는다. 최종 `1a09b01`의 Linux arm64·CGO=0·aes256k·
 직접 IPv6 전체 통합시험은 35개가 통과했다.
+
+이름 지정 MON core `80d8b42`는 고정 20.2.4의 Linux arm64·CGO=0·aes256k·
+직접 IPv6 시험을 0.18초에 통과했다. native CLI의 `mon.b mon_status`에서
+얻은 name·rank와 대조하고 a/b/c 대상, 존재하지 않는 이름의 접속 전 거절,
+지정 b의 TCP 접속 거절 시 다른 MON으로 바꾸지 않는 동작을 확인했다.
+daemon의 `-22`와 read-only 계정의 `-13`은 raw 결과와 `CommandError`로
+보존했고 주 MON a·MGR·로그 수신과 인증 identity는 유지했다.
+Darwin arm64·aes·IPv4 host relay의 race 시험은 1.08초에 통과했으며,
+b/c의 동시 Tell과 일반 MON/MGR 명령도 함께 검사했다.
+같은 동시 호출을 포함한 최종 Linux arm64·CGO=0·aes256k·직접 IPv6 시험도
+0.46초에 통과했다.
+11개 synthetic API 시험은 새 인증의 global ID 0·빈 이전 ticket proof와
+CLIENT_IDENT의 새 ID 84를 주 ID 42와 독립 비교한다. 지도 검증·원주소 보존·
+전송 전후 취소·raw 결과·자동 재실행 금지·setup 종료 소유권을 포함한
+CGO=0 및 race 20회와 Windows build가 통과했다.
+추가 시험은 완전한 Tell 수신 뒤 대상 삭제·이름 변경·주소 재할당을 주입했다.
+세 경우 모두 `ErrMonitorTargetChanged`를 원인으로 한 결과 불명확을 반환하고
+명령을 한 번만 전송했으며 주 인증·지도·MON/MGR 명령을 유지했다.
+이 경계 시험은 CGO=0 및 race 각 100회를 통과했다. 지도 parser fuzzing은
+20초 동안 2,487,568개 입력을 처리해 통과했다.
+이름 지정 Tell을 포함한 최종 Linux arm64·CGO=0·aes256k·직접 IPv6 전체
+통합시험은 36개가 통과했고, 별도 fixture가 필요한 9개는 제외됐다.
+기존 ticket 갱신·실제 MON/MGR 장애·불명확한 변경의 재실행 금지와
+트래픽 중 12회 종료도 통과했으며 FD 수는 6에서 6으로 유지됐다.
 
 Tell 제품 구현 `6ba0d88`은 20.2.4의 Linux arm64·CGO=0·aes256k·직접 IPv6와
 Darwin arm64·aes·IPv4 host race에서 검증했다. native CLI의 MON/MGR 버전
@@ -842,7 +883,7 @@ MON 로그 stream·native CLI oracle·cursor 복구·parser fuzz와 client TCP �
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 66개 경로를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 67개 경로를
 비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
 iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를
@@ -877,6 +918,10 @@ byte-identical이었다. 나머지
 wire 의미는 그대로였고 Go 변경이 필요한 차이를 발견하지 못했다. 비교 시간은
 수동 검토·실서버 시험을 포함하지 않으며 해당 HEAD의 런타임 지원 주장이 아니다.
 
+이름 지정 MON Tell 추가 후 같은 base와 HEAD를 67개 경로로 비교한 실행은
+9.25초였으며 변경 파일 9개는 동일했다. 추가한 `MMonGetMap.h`는
+byte-identical이었다. 이는 지정 소스의 비교 결과다.
+
 ```sh
 python3 tools/ceph_diff.py tentacle           # 고정 v20.2.4 참조와 비교
 python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
@@ -895,6 +940,10 @@ python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
   wire 의미를 독립 Go 코드로 작성했다. 관련 header와 LogMonitor의 LGPL-2.1
   고지를 확인했으며 C++ 코드를 복사하지 않았다. 독립 raw wire 시험과 native
   CLI 로그 oracle은 개발 검증에만 사용한다.
+- 이름 지정 MON Tell은 고정 [MonClient의 독립 연결 경로](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MonClient.cc#L1238)와
+  [MMonGetMap](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MMonGetMap.h)의
+  wire 의미를 독립 구현했다. LGPL-2.1 고지를 확인했으며 C++ 코드를 복사하지
+  않았다. native client의 Tell 재전송을 제품 동작에 포함하지 않는다.
 - AES256K 암호 검증은 [RFC 8009](https://www.rfc-editor.org/rfc/rfc8009.html)의
   공식 vector를 사용한다.
 - Frame vector는 별도의 Python CRC/AES-GCM 구현으로 생성했다. 이는
