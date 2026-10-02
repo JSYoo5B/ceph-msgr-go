@@ -257,21 +257,24 @@ func (s *Session) writeLoop() {
 			err = s.writeFrame(msgr.Frame{Tag: msgr.Ack, Segments: [][]byte{e.Data}})
 		case r := <-s.queue:
 			s.mu.Lock()
-			valid := s.err == nil
-			if r.result != nil {
-				valid = valid && s.pending[r.message.Transaction] == r
+			id, ctx := r.message.Transaction, r.ctx
+			valid := s.err == nil && (r.result == nil || s.pending[id] == r)
+			s.mu.Unlock()
+			// Context methods are caller code and may inspect this session.
+			// Cancellation or Fail can release the queued request during Err.
+			if !valid || ctx.Err() != nil {
+				continue
 			}
-			if valid {
-				valid = r.ctx.Err() == nil
-			}
+			s.mu.Lock()
+			valid = s.err == nil && (r.result == nil || s.pending[id] == r)
 			if valid && r.result != nil {
 				r.started = true
 			}
+			m := r.message
 			s.mu.Unlock()
 			if !valid {
 				continue
 			}
-			m := r.message
 			m.Sequence = s.sent.Add(1)
 			m.AckSequence = s.received.Load()
 			err = s.writeFrame(m.Frame())
