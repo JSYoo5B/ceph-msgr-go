@@ -72,7 +72,8 @@ func (c *Client) Snapshot() State {
 	for _, address := range c.mgrMap.Addresses {
 		state.Manager.Endpoints = append(state.Manager.Endpoints, dialAddress(address))
 	}
-	admitted := !c.closed && c.authErr == nil
+	authError := c.authErr
+	admitted := !c.closed && authError == nil
 	monSession, mgrSession := c.mon, c.mgr
 	if monSession != nil {
 		state.Monitor.Ready = admitted && c.monReady && monSession.Err() == nil
@@ -80,17 +81,17 @@ func (c *Client) Snapshot() State {
 	if mgrSession != nil {
 		state.Manager.Ready = state.Monitor.Ready && mgrSession.Err() == nil
 	}
-	var rejection *AuthenticationError
-	if errors.As(c.authErr, &rejection) {
-		copyRejection := *rejection
-		state.AuthRejection = &copyRejection
-	}
 	auth, mgr := c.auth.Tickets[cephx.ServiceAuth], c.auth.Tickets[cephx.ServiceMgr]
 	state.AuthTicket = TicketState{Expires: auth.Expires, RenewAfter: auth.RenewAfter}
 	state.MgrTicket = TicketState{Expires: mgr.Expires, RenewAfter: mgr.RenewAfter}
 	c.mu.Unlock()
-	// RemoteAddr may be implemented by the caller's connection wrapper.
-	// Read peer metadata without invoking custom code under the client lock.
+	// errors.As and RemoteAddr may invoke caller-supplied implementations.
+	// Do not invoke custom code under the client lock.
+	var rejection *AuthenticationError
+	if errors.As(authError, &rejection) {
+		copyRejection := *rejection
+		state.AuthRejection = &copyRejection
+	}
 	if monSession != nil {
 		if address := monSession.RemoteAddr(); address != nil {
 			state.Monitor.Endpoint = address.String()

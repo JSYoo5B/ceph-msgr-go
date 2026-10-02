@@ -10,6 +10,21 @@ import (
 	"time"
 )
 
+type snapshotAuthenticationError struct {
+	onAs func()
+	err  *AuthenticationError
+}
+
+func (e snapshotAuthenticationError) Error() string { return e.err.Error() }
+func (e snapshotAuthenticationError) As(target any) bool {
+	e.onAs()
+	if pointer, ok := target.(**AuthenticationError); ok {
+		*pointer = e.err
+		return true
+	}
+	return false
+}
+
 func waitClientState(t *testing.T, c *Client, ctx context.Context, matches func(State) bool) State {
 	t.Helper()
 	ticker := time.NewTicker(time.Millisecond)
@@ -154,5 +169,26 @@ func TestSnapshotManagerReadinessRequiresMonitorAdmission(t *testing.T) {
 	state := c.Snapshot()
 	if state.Monitor.Ready || state.Manager.Ready || !state.Manager.Available || state.Closed || mgr.Err() != nil {
 		t.Fatal("live MGR session concealed its blocked MON admission dependency", state)
+	}
+}
+
+func TestSnapshotAuthenticationCallbacksRunOutsideClientLock(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, mockOptions(t, 20, [16]byte{1}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Close() // Stop other lock owners before testing the custom callback.
+	c.authErr = snapshotAuthenticationError{err: &AuthenticationError{Method: 2, Code: -13}, onAs: func() {
+		if !c.mu.TryLock() {
+			t.Error("Snapshot invoked a custom authentication error under its client lock")
+			return
+		}
+		c.mu.Unlock()
+	}}
+	state := c.Snapshot()
+	if state.AuthRejection == nil || state.AuthRejection.Method != 2 || state.AuthRejection.Code != -13 {
+		t.Fatal("custom authentication error lost its typed rejection", state)
 	}
 }
