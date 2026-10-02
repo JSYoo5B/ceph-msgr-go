@@ -14,33 +14,34 @@ import (
 // with MGR handshakes or imposing deadlines on the old session's requests.
 func (c *Client) supervise() {
 	defer c.wg.Done()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
 	backoff := 250 * time.Millisecond
 	var nextAttempt time.Time
 	for {
-		c.mu.Lock()
-		needed := !c.monReady || c.mon == nil || c.mon.Err() != nil
-		if !needed {
-			for _, service := range []uint32{cephx.ServiceAuth, cephx.ServiceMgr} {
-				ticket, ok := c.auth.Tickets[service]
-				if !ok || !time.Now().Before(ticket.RenewAfter) {
-					needed = true
-				}
-			}
-		}
-		closed := c.closed
-		c.mu.Unlock()
+		now := time.Now()
+		needed, deadline, closed := c.renewalState(now)
 		if closed {
 			return
 		}
-		if needed && !time.Now().Before(nextAttempt) {
-			if err := c.connectMonitor(c.ctx); err != nil {
+		if needed && !now.Before(nextAttempt) {
+			err := c.connectMonitor(c.ctx)
+			if err != nil {
 				var rejection *AuthenticationError
 				if errors.As(err, &rejection) {
 					c.rejectAuthentication(err)
 				}
-				nextAttempt = time.Now().Add(backoff)
+			}
+			now = time.Now()
+			stillNeeded, _, closed := c.renewalState(now)
+			if closed {
+				return
+			}
+			if err != nil || stillNeeded {
+				// Even a successful exchange can return tickets whose renewal
+				// time passed during setup. It did not advance the schedule;
+				// back off instead of repeatedly reconnecting without waiting.
+				nextAttempt = now.Add(backoff)
 				backoff *= 2
 				if backoff > 5*time.Second {
 					backoff = 5 * time.Second
@@ -49,14 +50,44 @@ func (c *Client) supervise() {
 				backoff = 250 * time.Millisecond
 				nextAttempt = time.Time{}
 			}
+			continue
 		}
+		if needed {
+			deadline = nextAttempt
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(max(time.Until(deadline), 0))
 		select {
 		case <-c.wake:
-		case <-ticker.C:
+		case <-timer.C:
 		case <-c.ctx.Done():
 			return
 		}
 	}
+}
+
+func (c *Client) renewalState(now time.Time) (needed bool, deadline time.Time, closed bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false, time.Time{}, true
+	}
+	needed = !c.monReady || c.mon == nil || c.mon.Err() != nil
+	for _, service := range []uint32{cephx.ServiceAuth, cephx.ServiceMgr} {
+		ticket, ok := c.auth.Tickets[service]
+		if !ok || !now.Before(ticket.RenewAfter) {
+			needed = true
+		}
+		if deadline.IsZero() || ticket.RenewAfter.Before(deadline) {
+			deadline = ticket.RenewAfter
+		}
+	}
+	return needed, deadline, false
 }
 
 func (c *Client) rejectAuthentication(err error) {

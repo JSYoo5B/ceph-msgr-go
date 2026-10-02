@@ -59,12 +59,15 @@ func mockCredential() (Key, []byte) {
 	k, _ := ParseKey(base64.StdEncoding.EncodeToString(e.Data))
 	return k, e.Data
 }
-func mockTicket(key cephx.Key, encoded []byte, service uint32) ([]byte, error) {
+func mockTicket(key cephx.Key, encoded []byte, service uint32, validity time.Duration) ([]byte, error) {
+	if validity == 0 {
+		validity = time.Hour
+	}
 	e := wire.Encoder{}
 	e.U8(1)
 	e.Raw(encoded)
-	e.U32(3600)
-	e.U32(0)
+	e.U32(uint32(validity / time.Second))
+	e.U32(uint32(validity % time.Second))
 	encrypted, err := key.Seal(4, e.Data)
 	if err != nil {
 		return nil, err
@@ -142,6 +145,8 @@ type peerConfig struct {
 	role        uint8
 	id          uint64
 	clientID    uint64
+	authTTL     time.Duration
+	mgrTTL      time.Duration
 	command     func(msgr.MessageData)
 	reply       func(*msgr.MessageData)
 	monMap      []byte
@@ -253,7 +258,7 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		if got != want {
 			return nil, nil, errors.New("bad challenge proof")
 		}
-		tickets, err := mockTicket(key.value, encoded, cephx.ServiceAuth)
+		tickets, err := mockTicket(key.value, encoded, cephx.ServiceAuth, cfg.authTTL)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -265,7 +270,7 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		}
 		wrapped := wire.Encoder{}
 		wrapped.Bytes(encrypted)
-		extra, err := mockTicket(key.value, encoded, cephx.ServiceMgr)
+		extra, err := mockTicket(key.value, encoded, cephx.ServiceMgr, cfg.mgrTTL)
 		if err != nil {
 			return nil, nil, err
 		}
