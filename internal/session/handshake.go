@@ -74,14 +74,28 @@ type recordingReader struct {
 	io.Reader
 	active bool
 	data   bytes.Buffer
+	err    error
 }
 
 func (r *recordingReader) Read(p []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	if r.active {
+		remaining := (1 << 20) - r.data.Len()
+		if len(p) > remaining {
+			if remaining == 0 {
+				r.err = wire.ErrLimit
+				return 0, r.err
+			}
+			// io.ReadFull discards errors when n fills its request. Read only
+			// bytes that fit, then fail the next read before consuming any
+			// bytes omitted from the signed authentication transcript.
+			p = p[:remaining]
+		}
+	}
 	n, err := r.Reader.Read(p)
 	if r.active && n > 0 {
-		if r.data.Len()+n > 1<<20 {
-			return n, wire.ErrLimit
-		}
 		r.data.Write(p[:n])
 	}
 	return n, err
