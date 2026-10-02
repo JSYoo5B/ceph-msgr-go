@@ -26,10 +26,21 @@ if test -n "$mode_rejection"; then
     esac
 fi
 mon_tick_interval=5
+idle_session_settings=
 auth_ticket_ttl=
 case "$idle_sessions" in
     0) ticket_ttl=12; subscribe_interval=86400 ;;
-    1) ticket_ttl=120; subscribe_interval=2 ;;
+    1)
+        ticket_ttl=120
+        subscribe_interval=2
+        mon_tick_interval=1
+        # Cross MON's server-side session expiry without renewing tickets.
+        # Daemon MonClients must also ping before this isolated short limit,
+        # including their first timer while hunting for a monitor.
+        idle_session_settings='mon_session_timeout = 3
+mon_client_ping_interval = 1
+mon_client_hunt_interval = 1'
+        ;;
     *) exit 2 ;;
 esac
 if test "$auth_epoch" = 1; then
@@ -83,6 +94,7 @@ auth_mon_ticket_ttl = $auth_ticket_ttl
 auth_service_ticket_ttl = $ticket_ttl
 mon_subscribe_interval = $subscribe_interval
 mon_tick_interval = $mon_tick_interval
+$idle_session_settings
 ms_cluster_mode = secure
 ms_service_mode = secure
 ms_client_mode = $client_mode

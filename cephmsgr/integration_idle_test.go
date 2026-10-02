@@ -3,11 +3,16 @@ package cephmsgr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 type idleSessionReadProbe struct {
@@ -31,6 +36,67 @@ func TestCephIdleSessionsIntegration(t *testing.T) {
 	defer cancel()
 	options := integrationOptions(t)
 	options.KeepaliveInterval, options.KeepaliveTimeout = time.Second, 4*time.Second
+	observer, err := Dial(ctx, options)
+	if err != nil {
+		t.Fatal("independent idle fixture observer", err)
+	}
+	defer observer.Close()
+	// Pinned DaemonServer::config show returns a single running value plus
+	// newline for a key, even with JSON formatting. Unlike config get, this
+	// queries the daemon's reported effective configuration, not the MON DB.
+	configCtx, stopConfig := context.WithTimeout(ctx, 10*time.Second)
+	defer stopConfig()
+	for _, setting := range []struct {
+		name  string
+		value float64
+	}{
+		{"mon_session_timeout", 3},
+		{"mon_tick_interval", 1},
+		{"mon_client_ping_interval", 1},
+		{"mon_client_hunt_interval", 1},
+		{"mon_subscribe_interval", 2},
+		{"auth_mon_ticket_ttl", 120},
+		{"auth_service_ticket_ttl", 120},
+	} {
+		encoded, _ := json.Marshal(map[string]string{"prefix": "config show", "who": "mon.a", "key": setting.name})
+		for {
+			result, err := observer.MgrCommand(configCtx, Command{JSON: encoded})
+			var server *CommandError
+			if errors.As(err, &server) && server.Code == -2 && result.Code == -2 {
+				// The active MGR can be ready before mon.a's configuration
+				// report arrives. Retry only this known read-only absence.
+				select {
+				case <-time.After(100 * time.Millisecond):
+					continue
+				case <-configCtx.Done():
+					t.Fatal("mon.a did not report its running configuration", setting.name, configCtx.Err())
+				}
+			}
+			if err != nil || result.Code != 0 || len(result.Data) > 64 {
+				t.Fatal("read actual mon.a idle fixture setting", setting.name, result.Code, err)
+			}
+			value, err := strconv.ParseFloat(strings.TrimSpace(string(result.Data)), 64)
+			if err != nil || value != setting.value {
+				t.Fatal("mon.a idle fixture setting differs from the required server boundary", setting.name, value)
+			}
+			break
+		}
+	}
+	stopConfig()
+	// Bind both subjects to the MON whose effective configuration was checked.
+	var seed string
+	for _, candidate := range options.Monitors {
+		endpoint, _, err := seedAddress(candidate)
+		_, port, _ := net.SplitHostPort(endpoint)
+		if err == nil && port == "33300" {
+			seed = candidate
+			break
+		}
+	}
+	if seed == "" {
+		t.Fatal("idle fixture did not provide the verified mon.a seed")
+	}
+	options.Monitors = []string{seed}
 	dial := options.DialContext
 	var monDials, mgrDials, monReads, mgrReads atomic.Int32
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
@@ -63,19 +129,60 @@ func TestCephIdleSessionsIntegration(t *testing.T) {
 			t.Fatal("fixture ticket would renew during the idle test")
 		}
 	}
+	// The control has the same valid credentials and stateful subscriptions,
+	// but cannot send its first keepalive within the eight-second observation.
+	// Its 30-second local timeout cannot cause the expected server-side close.
+	controlOptions := integrationOptions(t)
+	controlOptions.Monitors = []string{seed}
+	controlOptions.KeepaliveInterval, controlOptions.KeepaliveTimeout = 10*time.Second, 30*time.Second
+	control, err := Dial(ctx, controlOptions)
+	if err != nil {
+		t.Fatal("authenticate the slow-keepalive trim control", err)
+	}
+	defer control.Close()
+	control.mu.Lock()
+	controlMon, controlAuth := control.mon, control.auth
+	control.mu.Unlock()
+	for _, ticket := range controlAuth.Tickets {
+		if time.Until(ticket.RenewAfter) < time.Minute {
+			t.Fatal("trim control would renew instead of remaining idle")
+		}
+	}
 	initialMonReads, initialMgrReads := monReads.Load(), mgrReads.Load()
-	// Exceed both the local silence timeout and the fixture's two-second
-	// legacy subscribe interval, without application traffic or renewal.
+	// Exceed the server's three-second session timeout, local silence timeout
+	// and two-second legacy subscribe interval without commands or renewal.
+	started := time.Now()
+	controlDone := controlMon.Done()
+	var trimmedAfter time.Duration
 	timer := time.NewTimer(8 * time.Second)
 	defer timer.Stop()
-	select {
-	case <-timer.C:
-	case <-mon.Done():
-		t.Fatal("idle MON session failed", mon.Err())
-	case <-mgr.Done():
-		t.Fatal("idle MGR session failed", mgr.Err())
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
+	idle := true
+	for idle {
+		select {
+		case <-timer.C:
+			idle = false
+		case <-controlDone:
+			trimmedAfter = time.Since(started)
+			if trimmedAfter < 2*time.Second || trimmedAfter >= 8*time.Second || !testcluster.IsRecoveryError(controlMon.Err()) {
+				t.Fatal("slow-keepalive control did not observe the known server trim boundary", trimmedAfter, controlMon.Err())
+			}
+			// Keep the original session's close observable even if the
+			// coordinator already began fresh-session recovery. No command
+			// is issued by this control or repeated on a replacement session.
+			if err := control.Close(); err != nil {
+				t.Fatal("close the trimmed control", err)
+			}
+			controlDone = nil
+		case <-mon.Done():
+			t.Fatal("idle MON session failed", mon.Err())
+		case <-mgr.Done():
+			t.Fatal("idle MGR session failed", mgr.Err())
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+	}
+	if controlDone != nil {
+		t.Fatal("MON did not trim the idle slow-keepalive control before its first ping")
 	}
 	c.mu.Lock()
 	unchanged := c.mon == mon && c.mgr == mgr && c.auth == auth && c.monReady
@@ -86,11 +193,6 @@ func TestCephIdleSessionsIntegration(t *testing.T) {
 	}
 	// Change the active MGR from an independent native client. The idle
 	// client's original MON connection must still deliver its MgrMap.
-	observer, err := Dial(ctx, integrationOptions(t))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer observer.Close()
 	c.mu.Lock()
 	name := c.mgrMap.Name
 	c.mu.Unlock()
@@ -120,5 +222,5 @@ func TestCephIdleSessionsIntegration(t *testing.T) {
 	if !unchanged || monDials.Load() != 1 || mgrDials.Load() != 2 {
 		t.Fatal("map delivery required MON reconnect or renewal", unchanged, monDials.Load(), mgrDials.Load())
 	}
-	t.Logf("idle=8s ticket-TTL=120s MON/MGR encrypted incoming reads=%d/%d; unchanged MON/auth, MGR connections=%d after independent failover", monActivity, mgrActivity, mgrDials.Load())
+	t.Logf("idle=8s server-timeout=3s tick=1s slow-keepalive-control-trim=%s ticket-TTL=120s MON/MGR encrypted incoming reads=%d/%d; unchanged MON/auth, MGR connections=%d after one independent failover", trimmedAfter, monActivity, mgrActivity, mgrDials.Load())
 }
