@@ -105,7 +105,7 @@ jobs:
           result=0
           sh integration/run.sh 2>&1 | tee "$RUNNER_TEMP/ceph-tests.log" || result=$?
           if test "$result" -ne 0; then
-            python3 tools/ci_failure_annotations.py "$RUNNER_TEMP/ceph-tests.log"
+            python3 tools/ci_failure_annotations.py "$RUNNER_TEMP/ceph-tests.log" "$result"
           fi
           exit "$result"
         env:
