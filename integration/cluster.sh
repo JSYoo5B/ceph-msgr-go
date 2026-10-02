@@ -323,21 +323,56 @@ while true; do
     fi
     if test -f /out/verify-service-keys; then
         test "$auth_epoch" = 1 || exit 2
-        read -r request_id name extra < /out/verify-service-keys
+        read -r request_id name mgr_id map_epoch auth_key_epoch extra < /out/verify-service-keys
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         case "$name" in a|b) ;; *) exit 2 ;; esac
+        for value in "$mgr_id" "$map_epoch" "$auth_key_epoch"; do
+            case "$value" in ''|*[!0-9]*) exit 2 ;; esac
+            test "$value" -gt 0 || exit 2
+        done
         test -z "$extra" || exit 2
         rm /out/verify-service-keys
         keys_ready=false
-        deadline=$(( $(date +%s) + 15 ))
-        while test "$(date +%s)" -lt "$deadline"; do
-            # Every probe is a fresh independent client. pg stat is a MGR
-            # read, unlike MON mgr dump. No native authentication error is
-            # retried or hidden by this development-only oracle.
-            if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" pg stat --format json > "$root/service-keys-probe.json" 2> "$root/service-keys-probe.log" && python3 -c 'import json,sys; json.load(sys.stdin)' < "$root/service-keys-probe.json"; then
-                keys_ready=true
-                break
+        key_probe_deadline=$(( $(date +%s) + 15 ))
+        service_key_probe() {
+            key_probe_remaining=$(( key_probe_deadline - $(date +%s) ))
+            test "$key_probe_remaining" -gt 0 || return 1
+            key_probe_timeout=3
+            if test "$key_probe_remaining" -lt "$key_probe_timeout"; then
+                key_probe_timeout=$key_probe_remaining
             fi
+            # Native CLI bootstrap/reconnect follows Ceph's own policy. Only
+            # final authenticated read replies satisfy this oracle; the Go
+            # subject's first MGR authentication is still submitted once.
+            timeout "$key_probe_timeout" ceph -c "$root/ceph.conf" -n client.test -k "$keyring" --monmap "$root/monmap" --mon-client-target-rank "$mon_rank" "$@"
+        }
+        while test "$(date +%s)" -lt "$key_probe_deadline"; do
+            keys_ready=true
+            for mon_name in a b c; do
+                case "$mon_name" in a) mon_rank=0 ;; b) mon_rank=1 ;; c) mon_rank=2 ;; esac
+                # Use the fixture's complete initial map; a single -m seed
+                # would have only rank 0 before bootstrap. Pin the native
+                # MonClient's rank rather than allowing it to hunt any MON.
+                # mon dump is forwarded to the leader, so it cannot prove a
+                # particular MON's local map has learned this key wipe.
+                if ! service_key_probe tell "mon.$mon_name" mon_status --format json > "$root/service-keys-probe.json" 2> "$root/service-keys-probe.log" || ! python3 -c 'import json,sys; s=json.load(sys.stdin); m=s["monmap"]; assert s["name"]==sys.argv[1] and s["rank"]==int(sys.argv[2]) and m["epoch"]>=int(sys.argv[3]) and m["auth_epoch"]>=int(sys.argv[4])' "$mon_name" "$mon_rank" "$map_epoch" "$auth_key_epoch" < "$root/service-keys-probe.json"; then
+                    keys_ready=false
+                    break
+                fi
+                # This query checks active identity only; the following
+                # named daemon Tell proves an actual fresh MGR connection.
+                if ! service_key_probe mgr dump --format json > "$root/service-keys-probe.json" 2> "$root/service-keys-probe.log" || ! python3 -c 'import json,sys; m=json.load(sys.stdin); assert m["available"] and m["active_name"]==sys.argv[1] and m["active_gid"]==int(sys.argv[2])' "$name" "$mgr_id" < "$root/service-keys-probe.json"; then
+                    keys_ready=false
+                    break
+                fi
+                if ! service_key_probe tell "mgr.$name" version --format json > "$root/service-keys-probe.json" 2> "$root/service-keys-probe.log" || ! python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["release"]=="tentacle" and v["version"].startswith("20.2.")' < "$root/service-keys-probe.json"; then
+                    keys_ready=false
+                    break
+                fi
+            done
+            test "$keys_ready" != true || break
+            # Repeat only independent native read probes. The Go clients'
+            # authentication rejection and the wipe mutation are not retried.
             sleep 1
         done
         if test "$keys_ready" != true; then

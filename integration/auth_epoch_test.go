@@ -112,11 +112,13 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 		if err := fixtureRecoveryRead(ctx, held, true); err != nil {
 			t.Fatalf("held MGR after service-key disposal: %q", fmt.Sprint(err))
 		}
-		// Daemon rotating secrets arrive in a separate CephX exchange. A
-		// fresh independent CLI process must prove MGR has the new service
-		// key before the native cold handshake; MON renewal alone cannot.
+		// Daemon rotating secrets arrive in a separate CephX exchange. Tie
+		// the independent CLI probes to the new local MON epochs and this
+		// exact MGR identity before the one native cold handshake. An
+		// unpinned CLI read alone can use a different MON's service ticket.
 		gate, stop := context.WithTimeout(ctx, 20*time.Second)
-		err = testcluster.ControlDaemon(gate, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "service-keys", state.Manager.Name)
+		identity := fmt.Sprintf("%s %d %d %d", state.Manager.Name, state.Manager.GlobalID, current.Epoch, *current.AuthEpoch)
+		err = testcluster.ControlDaemon(gate, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "service-keys", identity)
 		stop()
 		if err != nil {
 			t.Fatalf("independent MGR replacement-key readiness: %q", fmt.Sprint(err))
