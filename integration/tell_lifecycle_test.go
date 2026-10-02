@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
-	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephTellRecoveryIntegration(t *testing.T) {
@@ -43,11 +42,12 @@ func TestCephTellRecoveryIntegration(t *testing.T) {
 	options.Monitors = options.Monitors[:1] // Fixture MON a; b/c must be learned.
 	options.ConnectTimeout = 2 * time.Second
 	options.KeepaliveInterval, options.KeepaliveTimeout = 200*time.Millisecond, 2*time.Second
+	fault := installSeedPathFault(&options)
 	c, err := cephmsgr.Dial(ctx, options)
 	if err != nil {
 		t.Fatal("authenticate tell recovery client", err)
 	}
-	t.Cleanup(func() { c.Close() })
+	fault.cleanupAfterClientClose(t, c)
 	versionCommand := cephmsgr.Command{JSON: []byte(`{"prefix":"version","format":"json"}`)}
 	checkTell := func(role string, call func(context.Context, cephmsgr.Command) (cephmsgr.Result, error)) {
 		t.Helper()
@@ -93,28 +93,10 @@ func TestCephTellRecoveryIntegration(t *testing.T) {
 	if err != nil || port != "33300" {
 		t.Fatal("tell recovery did not begin on the sole MON a seed", previous.Monitor.Endpoint, err)
 	}
-	resumeNeeded := false
-	resume := func() error {
-		restore, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-		if err := testcluster.ControlDaemon(restore, control, "resume", "mon", "a"); err != nil {
-			return err
-		}
-		resumeNeeded = false
-		return nil
-	}
-	// Resume runs before client cleanup on Fatal too. Arm it before requesting
-	// pause because a missed acknowledgement can still follow applied SIGSTOP.
-	t.Cleanup(func() {
-		if resumeNeeded {
-			if err := resume(); err != nil {
-				t.Error("restore tell recovery MON a", err)
-			}
-		}
-	})
-	resumeNeeded = true
-	if err := testcluster.ControlDaemon(ctx, control, "pause", "mon", "a"); err != nil {
-		t.Fatal("pause tell recovery MON a", err)
+	// Interrupt only this client's seed connection. Native MON/MGR daemon
+	// authentication stays independent of this tell recovery fault.
+	if err := fault.interrupt(); err != nil {
+		t.Fatal("interrupt tell recovery seed TCP path", err)
 	}
 	recovered := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 		checkIdentity(s)
@@ -123,10 +105,7 @@ func TestCephTellRecoveryIntegration(t *testing.T) {
 	})
 	checkTell("mon", c.MonTell)
 	if err := fixtureRecoveryRead(ctx, c, false); err != nil {
-		t.Fatal("ordinary status through learned MON while seed paused", err)
-	}
-	if err := resume(); err != nil {
-		t.Fatal("resume tell recovery MON a", err)
+		t.Fatal("ordinary status through learned MON while seed TCP is blocked", err)
 	}
 	t.Logf("current-peer MON tell passed after sole-seed %q -> learned %q; client-id=%d", previous.Monitor.Endpoint, recovered.Monitor.Endpoint, recovered.GlobalID)
 	if err := c.WaitMgrReady(ctx); err != nil {
@@ -190,6 +169,7 @@ func TestCephTellRecoveryIntegration(t *testing.T) {
 	if err := c.Close(); err != nil {
 		t.Fatal("close tell recovery client", err)
 	}
+	stats := fault.assertHeld(t)
 	closed := c.Snapshot()
 	if !closed.Closed || closed.Monitor.Ready || closed.Manager.Ready || closed.GlobalID != initial.GlobalID || closed.FSID != initial.FSID || closed.AuthRejection != nil || closed.Manager.GlobalID != final.Manager.GlobalID {
 		t.Fatal("closed tell recovery lost metadata or retained readiness", closed)
@@ -202,5 +182,5 @@ func TestCephTellRecoveryIntegration(t *testing.T) {
 			t.Fatal("tell after recovered Close lost known non-execution", err)
 		}
 	}
-	t.Logf("current-peer tell survived two ticket renewals, learned MON recovery and lazy MGR takeover; client-id=%d MGR %s/%d -> %s/%d", final.GlobalID, before.Manager.Name, before.Manager.GlobalID, final.Manager.Name, final.Manager.GlobalID)
+	t.Logf("current-peer tell survived two ticket renewals, blocked seed TCP recovery and lazy MGR takeover; client-id=%d MGR %s/%d -> %s/%d seed dials=%d rejected=%d", final.GlobalID, before.Manager.Name, before.Manager.GlobalID, final.Manager.Name, final.Manager.GlobalID, stats.Successful, stats.Rejected)
 }

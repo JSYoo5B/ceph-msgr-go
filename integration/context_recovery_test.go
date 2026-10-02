@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -55,17 +54,19 @@ func (ctx *recoverySnapshotContext) Err() error {
 
 func TestCephContextRecoveryIntegration(t *testing.T) {
 	observer, ctx := fixtureClient(t, 35*time.Second)
-	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	options := integrationOptions(t)
+	options.Monitors = options.Monitors[:1]
 	options.ConnectTimeout = time.Second
 	options.KeepaliveInterval, options.KeepaliveTimeout = 500*time.Millisecond, 2*time.Second
-	// Hold fresh MON setup while the real daemon is paused so reentrant
-	// readiness cancellation deterministically exercises unavailable admission.
+	seedFault := installSeedPathFault(&options)
+	// Hold learned MON b/c setup after this client's sole-seed TCP path closes
+	// so readiness cancellation exercises unavailable admission. MON a always
+	// reaches the inner blacklist, which remains active after this hold releases.
 	var holdMonitor atomic.Bool
 	dial := options.DialContext
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 		_, port, _ := net.SplitHostPort(endpoint)
-		if holdMonitor.Load() && (port == "33300" || port == "33301" || port == "33302") {
+		if holdMonitor.Load() && (port == "33301" || port == "33302") {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
@@ -75,11 +76,14 @@ func TestCephContextRecoveryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Register first: the worker cleanup below sets closing and joins callers
+	// before this LIFO cleanup closes again and restores the local seed path.
+	seedFault.cleanupAfterClientClose(t, c)
 	work, stop := context.WithCancel(ctx)
 	var workers sync.WaitGroup
 	var closing atomic.Bool
 	var closedCalls [2]atomic.Uint32
-	t.Cleanup(func() { stop(); holdMonitor.Store(false); closing.Store(true); c.Close(); workers.Wait() })
+	t.Cleanup(func() { closing.Store(true); stop(); holdMonitor.Store(false); c.Close(); workers.Wait() })
 	initial := waitClientState(t, c, ctx, func(s cephmsgr.State) bool { return s.Manager.Available })
 	if initial.Manager.Ready || initial.GlobalID == 0 {
 		t.Fatal("context recovery must begin before cold MGR setup")
@@ -162,25 +166,16 @@ func TestCephContextRecoveryIntegration(t *testing.T) {
 	renewed := waitClientState(t, c, work, func(s cephmsgr.State) bool {
 		return s.Monitor.Ready && s.Manager.Ready && s.AuthTicket.Expires.After(initial.AuthTicket.Expires) && s.MgrTicket.Expires.After(initial.MgrTicket.Expires)
 	})
-	_, port, _ := net.SplitHostPort(renewed.Monitor.Endpoint)
-	name := map[string]string{"33300": "a", "33301": "b", "33302": "c"}[port]
-	if name == "" {
-		t.Fatal("unrecognized context recovery MON", renewed.Monitor.Endpoint)
+	_, port, err := net.SplitHostPort(renewed.Monitor.Endpoint)
+	if err != nil || port != "33300" {
+		t.Fatal("context recovery did not begin on sole MON a seed", renewed.Monitor.Endpoint, err)
 	}
 	holdMonitor.Store(true)
-	if err := testcluster.ControlDaemon(work, control, "pause", "mon", name); err != nil {
-		t.Fatal("pause context recovery MON", err)
+	// Leave native MON processes and quorum healthy for real ticket renewal
+	// and the independent administrator's once-only MGR mutation.
+	if err := seedFault.interrupt(); err != nil {
+		t.Fatal("inject context recovery client MON TCP connection loss", err)
 	}
-	paused := true
-	t.Cleanup(func() {
-		if paused {
-			resume, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if err := testcluster.ControlDaemon(resume, control, "resume", "mon", name); err != nil {
-				t.Error("resume context recovery MON", err)
-			}
-		}
-	})
 	waitClientState(t, c, work, func(s cephmsgr.State) bool { return !s.Monitor.Ready })
 	for role, wait := range []func(context.Context) error{c.WaitMonReady, c.WaitMgrReady} {
 		operation, cancel := context.WithTimeout(work, 30*time.Millisecond)
@@ -194,12 +189,9 @@ func TestCephContextRecoveryIntegration(t *testing.T) {
 	}
 	holdMonitor.Store(false)
 	recovered := waitClientState(t, c, work, func(s cephmsgr.State) bool {
-		return s.Monitor.Ready && s.Manager.Ready && s.Monitor.Endpoint != renewed.Monitor.Endpoint
+		_, peerPort, err := net.SplitHostPort(s.Monitor.Endpoint)
+		return s.Monitor.Ready && s.Manager.Ready && err == nil && (peerPort == "33301" || peerPort == "33302")
 	})
-	if err := testcluster.ControlDaemon(work, control, "resume", "mon", name); err != nil {
-		t.Fatal("resume context recovery MON", err)
-	}
-	paused = false
 
 	encoded, _ = json.Marshal(map[string]string{"prefix": "mgr fail", "who": recovered.Manager.Name})
 	// The independent administrator sends this mutation once. Only the four
@@ -242,5 +234,6 @@ func TestCephContextRecoveryIntegration(t *testing.T) {
 	if checks.invalid.Load() || !checks.unready[0].Load() || !checks.changedManagerCallback.Load() {
 		t.Fatal("reentrant snapshots lost identity or bypassed recovery states", checks.invalid.Load(), checks.unready[0].Load(), checks.changedManagerCallback.Load())
 	}
-	t.Logf("Err->Snapshot callbacks survived cold MGR setup, real ticket renewal, paused MON failover, MGR takeover, readiness cancellation and concurrent Close; MON/MGR completed=%d/%d callbacks=%d/%d", checks.calls[0].Load(), checks.calls[1].Load(), checks.callbacks[0].Load(), checks.callbacks[1].Load())
+	stats := seedFault.assertHeld(t)
+	t.Logf("Err->Snapshot callbacks survived cold MGR setup, real ticket renewal, client MON TCP fault and sole-seed blacklist %q -> learned %q with native MON quorum healthy, once-only MGR takeover, readiness cancellation and concurrent Close; MON/MGR completed=%d/%d callbacks=%d/%d blocked seed dials=%d", renewed.Monitor.Endpoint, recovered.Monitor.Endpoint, checks.calls[0].Load(), checks.calls[1].Load(), checks.callbacks[0].Load(), checks.callbacks[1].Load(), stats.Rejected)
 }
