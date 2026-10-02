@@ -38,6 +38,7 @@ type Client struct {
 	wake     chan struct{}
 	calls    chan struct{}
 	wg       sync.WaitGroup
+	logWatch *LogStream
 }
 
 // Dial establishes and authenticates a MON connection and verifies a MonMap
@@ -282,6 +283,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		var candidateEpoch uint32
 		var s *session.Session
 		s = session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
+			if m.Type == msgr.LogMessage {
+				if !verifiedMon {
+					return nil
+				}
+				return c.handleLog(s, m)
+			}
 			// MON can send mgrmap before monmap. Keep at most one frame until
 			// this candidate's MonMap establishes cluster and release identity.
 			if m.Type == msgr.MgrMapMessage && !verifiedMon {
@@ -332,6 +339,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			if c.mon == s {
 				wasReady := c.monReady
 				c.monReady = false
+				if c.logWatch != nil {
+					c.logWatch.source = nil
+				}
 				c.signal()
 				if wasReady {
 					c.wakeMonitor()
@@ -341,6 +351,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		})
 		c.mu.Lock()
 		c.mon, c.monReady = s, false
+		if c.logWatch != nil {
+			// The log worker may miss a fast candidate failure and restoration
+			// of the same old session. Force a cursor-based registration even
+			// when it observes only the final restored MON.
+			c.logWatch.source = nil
+		}
 		attached := c.attach(s)
 		c.signal()
 		c.mu.Unlock()
