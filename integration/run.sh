@@ -98,7 +98,7 @@ save_mapped_metadata() {
 save_oracle_metadata() {
     test -n "$diagnostics" || return 0
     mkdir -p "$diagnostics"
-    for file in tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json log-oracle.json log-oracle-sentinel.txt; do
+    for file in tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json named-mon-b.json log-oracle.json log-oracle-sentinel.txt; do
         if test -f "$out/$file"; then
             cp "$out/$file" "$diagnostics/$file"
         fi

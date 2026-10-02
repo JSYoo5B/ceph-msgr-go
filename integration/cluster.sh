@@ -229,6 +229,7 @@ if test "$mgr_count" = 2 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 
     # and oracles. Host tests also enter this script through host-cluster.sh.
     tell_monitors="[v2:$address:33300/0]"
     timeout 5 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" tell mon.a version --format json > /out/tell-oracle-mon.json
+    timeout 5 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" tell mon.b mon_status --format json > /out/named-mon-b.json
     timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" mgr dump --format json > /out/tell-oracle-mgr-map.json
     tell_mgr=$(python3 - /out/tell-oracle-mgr-map.json <<'PY'
 import json
