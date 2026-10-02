@@ -8,6 +8,10 @@ mgr_count=${CEPH_MSGR_TEST_MGR_COUNT:-2}
 idle_sessions=${CEPH_MSGR_TEST_IDLE_SESSIONS:-0}
 auth_epoch=${CEPH_MSGR_TEST_AUTH_EPOCH:-0}
 case "$auth_epoch" in 0|1) ;; *) exit 2 ;; esac
+short_tickets=${CEPH_MSGR_TEST_SHORT_TICKETS:-0}
+case "$short_tickets" in 0|1) ;; *) exit 2 ;; esac
+mon_tick_interval=5
+auth_ticket_ttl=
 case "$idle_sessions" in
     0) ticket_ttl=12; subscribe_interval=86400 ;;
     1) ticket_ttl=120; subscribe_interval=2 ;;
@@ -17,6 +21,16 @@ if test "$auth_epoch" = 1; then
     test "$idle_sessions" = 0 && test "$mgr_count" = 2 || exit 2
     ticket_ttl=120
 fi
+if test "$short_tickets" = 1; then
+    test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$mgr_count" = 2 || exit 2
+    # Keep MGR service keys at the ordinary lifetime; only MON/AUTH tickets
+    # need a fractional lifetime to reproduce the coordinator deadline.
+    auth_ticket_ttl=1.5
+    # Rotating secrets advance on MON ticks. The default five-second tick
+    # would starve this deliberately short lifetime at the server itself.
+    mon_tick_interval=1
+fi
+auth_ticket_ttl=${auth_ticket_ttl:-$ticket_ttl}
 case "$mgr_count" in 0|2) ;; *) exit 2 ;; esac
 case "$key_type" in aes|aes256k) ;; *) exit 2 ;; esac
 case "$service_cipher" in aes|aes256k) ;; *) exit 2 ;; esac
@@ -50,9 +64,10 @@ auth_cluster_required = cephx
 auth_service_required = cephx
 auth_client_required = cephx
 auth_allow_insecure_global_id_reclaim = false
-auth_mon_ticket_ttl = $ticket_ttl
+auth_mon_ticket_ttl = $auth_ticket_ttl
 auth_service_ticket_ttl = $ticket_ttl
 mon_subscribe_interval = $subscribe_interval
+mon_tick_interval = $mon_tick_interval
 ms_cluster_mode = secure
 ms_service_mode = secure
 ms_client_mode = secure
