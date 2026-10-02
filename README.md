@@ -343,6 +343,17 @@ hex 형식 `[::ffff:7f00:1]`을 사용한다. 이 결과의 범위는 Linux `bin
 컨테이너 loopback이며, hostname 추론·host relay·mapped 주소의 장애 복구는
 이 시험에 포함하지 않는다.
 
+같은 제품의 후속 mapped 시험은 AUTH·MGR ticket 갱신 2회, 단일 seed MON a를
+SIGSTOP한 동안 지도에서 학습한 b로의 접속·조회, 별도 observer가 한 번 보낸
+`mgr fail`에 따른 b→a 전환을 확인했다. 새 `mgr dump`의 name·ID·epoch와 상태를
+대조한 뒤 lazy MGR 접속·양쪽 조회·Close도 통과했다. 포트 예약을 적용한
+Linux arm64·20.2.4·aes256k 실행은 약 32초였다.
+앞선 실행에서는 Ceph MGR a의 listener가 `Address already in use`로 실패했고,
+당시 포트 소유자는 확인하지 못했다. 별도의 결정적인 Linux socket 대조군은
+자동 client 포트가 향후 mapped listener를 막는 경로와 예약에 따른 성공을
+확인했다. 개발 컨테이너는 MON/MGR 고정 포트를 자동 할당에서 제외한다.
+이 대조군과 후속 성공만으로 앞선 충돌의 실제 소유자를 확정하지는 않는다.
+
 후속 `25496b0`는 hostname seed에서 custom dialer가 일반 `net.Addr`로 제공한
 숫자형 IP:port도 MON 식별 주소로 사용한다. 명시적 seed와 learned wire 주소는
 유지하며, 해석할 수 없는 RemoteAddr는 handshake를 시작하지 않고 연결 종료를
@@ -666,6 +677,16 @@ generic peer 주소의 실제 Ceph 시험, handshake 거부 원인 보존과 fix
 분리를 포함한 `ab17b77`의
 [CI 24개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36999005901)이 모두 통과했다.
 [peer 주소 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/peer-addresses)는
+이 커밋을 가리킨다.
+
+독립 native CLI metadata oracle과 mapped secure 인증·명령·종료를 추가한
+`0f87a0c`의 [CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37002707754)도
+모두 통과했다. [mapped 인증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mapped-peer-interop)는
+이 커밋을 가리킨다. 이후 mapped 갱신·failover 시험은 별도의 변경이다.
+
+포트 예약과 mapped ticket 갱신·MON/MGR 장애 복구를 추가한 `8a827e2`의
+[CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37004993582)도
+모두 통과했다. [mapped 복구 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mapped-session-recovery)는
 이 커밋을 가리킨다.
 
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
