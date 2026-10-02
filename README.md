@@ -415,12 +415,30 @@ MGR 장애 주입 119회와 context 상태 조회 5,609,455회를 처리했다.
 인증 epoch 보강은 20.2.4의 별도 120초 ticket fixture에서 확인했다.
 실제 `auth wipe-rotating-service-keys`를 두 번 실행해, 예정된 갱신보다
 일찍 새 ticket을 받고 global ID와 기존 MGR 연결을 유지했다. 개발 fixture는
-새 CLI process로 MGR에 교체된 service key가 전달됐는지 먼저 확인한 뒤,
+새 CLI process의 MGR 조회를 준비 확인으로 사용한 뒤,
 native client의 최초 MGR 연결을 검증한다. 이 native 연결의 인증 거절을
 재시도하지 않는다. Linux arm64·CGO=0의 aes256k·IPv6와 aes·IPv4에서 통과했다.
 이전 제품 소스 `23148f5`는 같은 시험에서 조기 갱신을 하지 못해 실패했다.
 이 두 차례 교체와 큰 MON 응답은 Darwin arm64·IPv4·aes256k의 실제 host
 바이너리에서도 race 계측으로 통과했다. 계측은 개발 시험에만 사용한다.
+
+`0134506`의 [GitHub CI](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37020182074)는
+25개 중 24개가 통과했고, aes·IPv4의 교체 시험은
+cold MGR 인증 `-13`으로 실패했다. MGR 로그에는 MON 발급 ticket의 복호화
+실패가 기록됐다. 같은 소스의 새 로컬 fixture는 두 교체 cycle을 통과했으며,
+남은 로그로 과거 실패의 발급 MON이나 service-key 세대를 확정하지 못했다.
+기존 준비 확인은 대상 MGR와 현재 auth epoch를 묶지 않았으므로 보강했다.
+각 MON의 로컬 `mon_status`에서 새 map/auth epoch를 확인하고, 전체 초기
+MonMap과 rank 지정으로 native CLI의 MON 경로를 고정한다. active MGR의
+name·global ID를 대조한 뒤 같은 MON rank의 새 native CLI로 이름 지정
+MGR Tell을 실행한다. 각 probe는 전체 15초 중 남은 시간으로 제한한다.
+Ceph CLI 자체의 bootstrap·재연결은 native 정책을 따르며, 최종 인증된
+읽기 응답을 준비 증거로 사용한다. 이는 Go cold client의 정확한 ticket이나
+최초 인증 성공을 대신 증명하지 않는다. Go의 최초 MGR 인증 거절과 wipe
+변경은 재시도하지 않는다. 최종 보강은 Linux arm64·CGO=0의 aes·IPv4
+4.34초와 aes256k·직접 IPv6 8.68초에 각각 두 cycle을 통과했다.
+별도 실험에서 요구 auth epoch를 실제 값보다 1,000 높게 지정하자 준비
+확인이 종료됐고, native MON 응답의 실제 epoch는 3으로 남았다.
 
 큰 응답 시험에서는 `MaxFrameSize=32 MiB`로 유효한 status JSON 뒤에
 16 MiB 공백을 붙였다. 실제 MON이 원래 명령을 응답 front에 그대로 포함했고,
