@@ -2,11 +2,8 @@ package integration_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"net"
-	"sync"
 	"testing"
 	"time"
 
@@ -21,52 +18,7 @@ func TestCephLogRecoveryIntegration(t *testing.T) {
 	options.Monitors = options.Monitors[:1]
 	options.ConnectTimeout = 2 * time.Second
 	options.KeepaliveInterval, options.KeepaliveTimeout = 200*time.Millisecond, 2*time.Second
-	dial := options.DialContext
-	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
-	}
-	var seedMu sync.Mutex
-	var seedConn net.Conn
-	var seedBlocked bool
-	var seedDials, rejectedSeedDials int
-	blockedDial := func(ctx context.Context, network string) (net.Conn, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, &net.OpError{Op: "dial", Net: network, Err: io.EOF}
-	}
-	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		_, port, err := net.SplitHostPort(endpoint)
-		isSeed := err == nil && port == "33300"
-		seedMu.Lock()
-		blocked := isSeed && seedBlocked
-		if blocked {
-			rejectedSeedDials++
-		}
-		seedMu.Unlock()
-		if blocked {
-			return blockedDial(ctx, network)
-		}
-		conn, err := dial(ctx, network, endpoint)
-		if err != nil || !isSeed {
-			return conn, err
-		}
-		seedMu.Lock()
-		if seedBlocked {
-			// A dial begun before the fault must not escape the blacklist.
-			rejectedSeedDials++
-			seedMu.Unlock()
-			conn.Close()
-			return blockedDial(ctx, network)
-		}
-		seedConn = conn
-		seedDials++
-		seedMu.Unlock()
-		return conn, nil
-	}
+	seedFault := installSeedPathFault(&options)
 	c, err := cephmsgr.Dial(ctx, options)
 	if err != nil {
 		t.Fatal("authenticate log recovery client", err)
@@ -135,23 +87,8 @@ func TestCephLogRecoveryIntegration(t *testing.T) {
 	}
 	// This fault affects only this client's TCP path. Keep Ceph daemons and
 	// quorum healthy for the once-only log mutations and the fixture's 12s TTL.
-	// Restoring a local flag needs no live test context or daemon-control IPC.
-	t.Cleanup(func() {
-		if err := c.Close(); err != nil {
-			t.Error("close log client before restoring its seed path", err)
-		}
-		seedMu.Lock()
-		seedBlocked = false
-		seedMu.Unlock()
-	})
-	seedMu.Lock()
-	seedBlocked = true // Block new dials before releasing the recorded socket.
-	lost, dialsBeforeFault := seedConn, seedDials
-	seedMu.Unlock()
-	if lost == nil {
-		t.Fatal("no successful sole-seed TCP connection was recorded")
-	}
-	if err := lost.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+	seedFault.cleanupAfterClientClose(t, c)
+	if err := seedFault.interrupt(); err != nil {
 		t.Fatal("inject client MON TCP connection loss", err)
 	}
 	recovered := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
@@ -192,11 +129,6 @@ func TestCephLogRecoveryIntegration(t *testing.T) {
 	if !closed.Closed || closed.Monitor.Ready || closed.Manager.Ready || closed.GlobalID != initial.GlobalID || closed.FSID != initial.FSID || closed.AuthRejection != nil {
 		t.Fatal("closed log client retained readiness or lost identity", closed)
 	}
-	seedMu.Lock()
-	blocked, successfulDials, rejectedDials := seedBlocked, seedDials, rejectedSeedDials
-	seedMu.Unlock()
-	if !blocked || successfulDials != dialsBeforeFault || rejectedDials == 0 {
-		t.Fatal("sole-seed blacklist was not sustained through recovery and Close", blocked, successfulDials, dialsBeforeFault, rejectedDials)
-	}
-	t.Logf("client TCP fault only; healthy Ceph daemons/quorum; log watch survived two renewals and unavailable sole seed %q -> learned %q; client-id=%d service-version=%d blocked seed dials=%d", initial.Monitor.Endpoint, recovered.Monitor.Endpoint, initial.GlobalID, last, rejectedDials)
+	stats := seedFault.assertHeld(t)
+	t.Logf("client TCP fault only; healthy Ceph daemons/quorum; log watch survived two renewals and unavailable sole seed %q -> learned %q; client-id=%d service-version=%d blocked seed dials=%d", initial.Monitor.Endpoint, recovered.Monitor.Endpoint, initial.GlobalID, last, stats.Rejected)
 }
