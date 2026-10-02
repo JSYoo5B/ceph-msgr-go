@@ -123,6 +123,10 @@ Watch context는 복구를 포함한 전체 구독 수명을 제어하고, `Next
 살아 있는 Next context로 이미 접수한 batch를 읽은 뒤 최초 종료 원인을
 계속 받는다. 명시적인 watch 종료는 `ErrLogStreamClosed`, client 종료는
 `ErrClosed`이며 먼저 기록된 취소·overflow 등의 원인을 덮어쓰지 않는다.
+수신 frame의 설정 상한이나 프로토콜·인증 검증이 실패하면 해당 원인을
+로그 구독의 종료 오류로 보존한다. 빠른 MON 교체나 지연된 연결 정리가
+그 원인을 대기 timeout으로 바꾸지 않으며, 이미 접수한 batch는 먼저 읽는다.
+교체된 옛 세션의 뒤늦은 오류는 현재 구독을 종료하지 않는다.
 
 `Level`은 서버에 요청하는 최소 우선순위다. 기본값은 `LogInfo`이며
 `LogDebug`·`LogSec`·`LogWarn`·`LogError`도 제공한다. 전달받은 entry를 로컬에서
@@ -297,6 +301,15 @@ Close 후에도 마지막 인증된 목록을 유지했다. Linux arm64·CGO=0·
 직접 IPv6의 관련 3개 시험과 Darwin arm64·aes·IPv4 host relay의 race
 5개 시험이 통과했다. 지도 교체·거절·stale source·private map 격리와
 동시 Snapshot·Close를 검사하는 member 단위 시험은 race 100회를 통과했다.
+
+로그의 frame 크기 거절은 합성 peer의 인증된 secure frame으로 재현했다.
+일반 종료·worker보다 빠른 MON 교체·지연된 Conn.Close의 세 경우에서
+기존 코드는 제한 원인을 잃었고, 수정 후 CGO=0 및 race 100회를 통과했다.
+이미 교체된 옛 source의 오류는 새 구독을 유지하는 대조군도 확인했다.
+peer가 받은 명령은 제한 원인과 결과 불명확을 유지하며 재전송하지 않았다.
+Session의 종료 callback과 정리 완료를 기다리는 순서는 바꾸지 않았다.
+실제 Linux arm64·aes256k·직접 IPv6 로그 수신과 두 차례 ticket 갱신·
+seed TCP 복구도 19.75초·3.04초의 두 시험에서 통과했다.
 
 MON 로그 core `ff80b4c`를 포함한 20.2.4 시험은 Linux arm64·CGO=0·aes256k·
 직접 IPv6와 Darwin arm64·aes·IPv4 host relay의 race 실행에서 통과했다.
@@ -911,6 +924,11 @@ MON 로그 stream·native CLI oracle·cursor 복구·parser fuzz와 client TCP �
 context·Tell의 client TCP 장애 격리를 포함한 `f685aa7`의
 [CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37027436808)이
 모두 통과했다. [이름 지정 MON 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/named-mon-tell)는
+이 커밋을 가리킨다.
+
+인증된 MON 이름·rank의 로컬 조회와 native map oracle을 추가한 `66ef78c`의
+[CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37077788952)도
+모두 통과했다. [MON 이름 조회 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-member-discovery)는
 이 커밋을 가리킨다.
 
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
