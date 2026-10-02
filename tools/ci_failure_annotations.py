@@ -16,19 +16,26 @@ def annotations(log, exit_code):
     diagnostics = deque(maxlen=10)
     last_started = None
     completed_failure = False
+    source_prefix = ""
 
     def append_diagnostics():
         for path, number, message in diagnostics:
             output.append(f"::error file={escape(path)},line={number}::{escape(message)}")
 
     for line in log:
+        suite = re.match(r"^Running Ceph test suite: (api|client)\s*$", line)
+        if suite:
+            source_prefix = "integration/" if suite.group(1) == "api" else ""
+            diagnostics.clear()
+            last_started = None
         started = re.match(r"^=== RUN\s+(\S+)", line)
         if started:
             diagnostics.clear()
             last_started = started.group(1)
         match = re.match(r"\s+(\S+_test\.go):(\d+): (.*)", line)
         if match:
-            diagnostics.append(match.groups())
+            path, number, message = match.groups()
+            diagnostics.append((source_prefix + path, number, message))
         if line.startswith("--- FAIL:"):
             completed_failure = True
             output.append("::error::" + escape(line.strip()))

@@ -1,4 +1,4 @@
-package cephmsgr
+package integration_test
 
 import (
 	"bytes"
@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go"
 )
 
 func TestCephLostMutationReplyIntegration(t *testing.T) {
@@ -34,7 +36,7 @@ func TestCephLostMutationReplyIntegration(t *testing.T) {
 		wrapped.SignalBlocked = func() { blockOnce.Do(func() { close(blocked) }) }
 		return wrapped, nil
 	}
-	c, err := Dial(ctx, options)
+	c, err := cephmsgr.Dial(ctx, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +49,7 @@ func TestCephLostMutationReplyIntegration(t *testing.T) {
 	defer cancel()
 	finished := make(chan error, 1)
 	go func() {
-		_, err := c.MonCommand(callCtx, Command{JSON: encoded, Input: input})
+		_, err := c.MonCommand(callCtx, cephmsgr.Command{JSON: encoded, Input: input})
 		finished <- err
 	}()
 	select {
@@ -61,15 +63,15 @@ func TestCephLostMutationReplyIntegration(t *testing.T) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		result, err := observer.MonCommand(ctx, Command{JSON: read})
+		result, err := observer.MonCommand(ctx, cephmsgr.Command{JSON: read})
 		if err == nil {
 			if !bytes.Equal(result.Data, input) {
 				t.Fatal("server mutation has incorrect data", string(result.Data))
 			}
 			break
 		}
-		var server *CommandError
-		var uncertain *OutcomeUnknownError
+		var server *cephmsgr.CommandError
+		var uncertain *cephmsgr.OutcomeUnknownError
 		var connection *net.OpError
 		missing := errors.As(err, &server) && server.Code == -2
 		transient := errors.As(err, &uncertain) || errors.As(err, &connection) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, net.ErrClosed)
@@ -89,7 +91,7 @@ func TestCephLostMutationReplyIntegration(t *testing.T) {
 	cancel()
 	select {
 	case err := <-finished:
-		var unknown *OutcomeUnknownError
+		var unknown *cephmsgr.OutcomeUnknownError
 		if !errors.As(err, &unknown) || !errors.Is(err, context.Canceled) {
 			t.Fatal("lost response did not preserve uncertain mutation", err)
 		}

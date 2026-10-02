@@ -34,6 +34,18 @@ class FailureAnnotationsTest(unittest.TestCase):
         self.assertIn("code 125", result[0])
         self.assertIn("No Go test start was observed", result[0])
 
+    def test_suite_paths_and_diagnostics_follow_the_current_package(self):
+        log = ["Running Ceph test suite: api\n", "=== RUN   TestPublic\n",
+               "    commands_test.go:42: public command failed\n", "--- FAIL: TestPublic\n",
+               "Running Ceph test suite: client\n", "=== RUN   TestPrivate\n",
+               "    integration_pause_test.go:7: internal session failed\n", "--- FAIL: TestPrivate\n"]
+        result = annotations(log, 1)
+        self.assertEqual(result[1], "::error file=integration/commands_test.go,line=42::public command failed")
+        self.assertEqual(result[3], "::error file=integration_pause_test.go,line=7::internal session failed")
+        abrupt = annotations(log[:3] + ["--- PASS: TestPublic\n", "Running Ceph test suite: client\n"], 137)
+        self.assertEqual(len(abrupt), 1)
+        self.assertIn("No Go test start was observed", abrupt[0])
+
     def test_success_does_not_emit_failure_annotations(self):
         self.assertEqual(annotations(["=== RUN   TestOK\n--- PASS: TestOK\n"], 0), [])
 

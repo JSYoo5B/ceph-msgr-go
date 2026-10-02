@@ -73,12 +73,14 @@ arch=$(docker image inspect --format '{{.Architecture}}' "$image")
 cd "$project_root"
 if test "$runtime" = host; then
     CGO_ENABLED=0 GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go test -c -o "$out/client.test" .
+    CGO_ENABLED=0 GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go test -c -o "$out/api.test" ./integration
     CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$out/relay" ./integration/relay
     cp "$project_root/integration/host-cluster.sh" "$out/host-cluster.sh"
     set -- -p 127.0.0.1::40000
     cluster_script=/out/host-cluster.sh
 else
     CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go test -c -o "$out/client.test" .
+    CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go test -c -o "$out/api.test" ./integration
     set --
     cluster_script=/out/cluster.sh
 fi
@@ -87,29 +89,33 @@ cp "$project_root/integration/cluster.sh" "$out/cluster.sh"
 docker run -d --name "$container" --label ceph-msgr-go.integration=true --entrypoint /bin/sh "$@" -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_IP_FAMILY="$ip_family" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -v "$out:/out" "$image" "$cluster_script" > /dev/null
 for attempt in $(seq 1 120); do
     if test -f "$out/ready"; then
-        if test "$runtime" = host; then
-            if ! test -f "$out/relay.ready"; then
-                cat "$out/relay.log"
-                failure_diagnostics
-                exit 1
-            fi
-            proxy=$(docker port "$container" 40000/tcp)
-            if CEPH_MSGR_MONITORS="$monitors" CEPH_MSGR_KEY_FILE="$out/key" CEPH_MSGR_IDENTITY=client.test CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 CEPH_MSGR_CONTROL_DIR="$out" CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" CEPH_MSGR_TEST_PROXY="$proxy" "$out/client.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
+        # Keep fixture mutations serial. Run the public API suite before the
+        # internal session suite, whose final recovery test leaves MON a down.
+        for suite in api client; do
+            printf 'Running Ceph test suite: %s\n' "$suite"
+            if test "$runtime" = host; then
+                if ! test -f "$out/relay.ready"; then
+                    cat "$out/relay.log"
+                    failure_diagnostics
+                    exit 1
+                fi
+                proxy=$(docker port "$container" 40000/tcp)
+                if CEPH_MSGR_MONITORS="$monitors" CEPH_MSGR_KEY_FILE="$out/key" CEPH_MSGR_IDENTITY=client.test CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 CEPH_MSGR_CONTROL_DIR="$out" CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" CEPH_MSGR_TEST_PROXY="$proxy" "$out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
+                    result=0
+                else
+                    result=$?
+                fi
+            elif docker exec -e CEPH_MSGR_MONITORS="$monitors" -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" "$container" "/out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
                 result=0
             else
                 result=$?
             fi
-        elif docker exec -e CEPH_MSGR_MONITORS="$monitors" -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" "$container" /out/client.test -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
-            result=0
-        else
-            result=$?
-        fi
-        if test "$result" -eq 0; then
-            exit 0
-        else
-            failure_diagnostics
-            exit "$result"
-        fi
+            if test "$result" -ne 0; then
+                failure_diagnostics
+                exit "$result"
+            fi
+        done
+        exit 0
     fi
     if test "$(docker inspect --format '{{.State.Running}}' "$container")" != true; then
         break

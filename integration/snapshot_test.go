@@ -1,4 +1,4 @@
-package cephmsgr
+package integration_test
 
 import (
 	"encoding/json"
@@ -8,11 +8,13 @@ import (
 	"slices"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go"
 )
 
 func TestCephSnapshotIntegration(t *testing.T) {
 	c, ctx := fixtureClient(t, time.Minute)
-	initial := waitClientState(t, c, ctx, func(s State) bool { return s.Manager.Available })
+	initial := waitClientState(t, c, ctx, func(s cephmsgr.State) bool { return s.Manager.Available })
 	if initial.Closed || !initial.Monitor.Ready || initial.Manager.Ready || initial.GlobalID == 0 || initial.AuthRejection != nil {
 		t.Fatal("incorrect initial public state", initial)
 	}
@@ -22,16 +24,16 @@ func TestCephSnapshotIntegration(t *testing.T) {
 		}
 	}
 	observer, _ := fixtureClient(t, time.Minute)
-	result, err := observer.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"status","format":"json"}`)})
+	result, err := observer.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"status","format":"json"}`)})
 	var status struct {
 		FSID string `json:"fsid"`
 	}
 	if err != nil || json.Unmarshal(result.Data, &status) != nil || status.FSID != initial.FSID {
 		t.Fatal("independent status disagrees with snapshot FSID", err, initial.FSID)
 	}
-	checkManagerMap := func() State {
+	checkManagerMap := func() cephmsgr.State {
 		t.Helper()
-		result, err := observer.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"mgr dump","format":"json"}`)})
+		result, err := observer.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"mgr dump","format":"json"}`)})
 		var server struct {
 			Epoch     uint32 `json:"epoch"`
 			GlobalID  uint64 `json:"active_gid"`
@@ -41,16 +43,16 @@ func TestCephSnapshotIntegration(t *testing.T) {
 		if err != nil || json.Unmarshal(result.Data, &server) != nil || server.GlobalID == 0 || server.Epoch == 0 {
 			t.Fatal("independent MgrMap query", err)
 		}
-		return waitClientState(t, c, ctx, func(s State) bool {
+		return waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 			return s.Manager.MapEpoch >= server.Epoch && s.Manager.GlobalID == server.GlobalID && s.Manager.Name == server.Name && s.Manager.Available == server.Available
 		})
 	}
 	checkManagerMap()
-	query := Command{JSON: []byte(`{"prefix":"pg stat","format":"json"}`)}
+	query := cephmsgr.Command{JSON: []byte(`{"prefix":"pg stat","format":"json"}`)}
 	if _, err := c.MgrCommand(ctx, query); err != nil {
 		t.Fatal(err)
 	}
-	state := waitClientState(t, c, ctx, func(s State) bool { return s.Monitor.Ready && s.Manager.Ready })
+	state := waitClientState(t, c, ctx, func(s cephmsgr.State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if !state.Manager.Ready || !slices.Contains(state.Manager.Endpoints, state.Manager.Endpoint) || !slices.Contains(state.Monitor.Endpoints, state.Monitor.Endpoint) {
 		t.Fatal("ready session endpoints disagree with authenticated maps", state)
 	}
@@ -59,7 +61,7 @@ func TestCephSnapshotIntegration(t *testing.T) {
 	if slices.Contains(state.Monitor.Endpoints, "caller-owned") || slices.Contains(state.Manager.Endpoints, "caller-owned") {
 		t.Fatal("snapshot mutation affected the real client")
 	}
-	renewed := waitClientState(t, c, ctx, func(s State) bool {
+	renewed := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 		return s.AuthTicket.Expires.After(initial.AuthTicket.Expires) && s.MgrTicket.Expires.After(initial.MgrTicket.Expires)
 	})
 	if renewed.GlobalID != initial.GlobalID || renewed.AuthRejection != nil || !renewed.Monitor.Ready {
@@ -73,10 +75,10 @@ func TestCephSnapshotIntegration(t *testing.T) {
 	if err := testcluster.RestartMonitor(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), name); err != nil {
 		t.Fatal(err)
 	}
-	waitClientState(t, c, ctx, func(s State) bool {
+	waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 		return s.Monitor.Ready && s.AuthTicket.Expires.After(renewed.AuthTicket.Expires)
 	})
-	if _, err := c.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"status","format":"json"}`)}); err != nil {
+	if _, err := c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"status","format":"json"}`)}); err != nil {
 		t.Fatal("MON query after real restart", err)
 	}
 	state = c.Snapshot()
@@ -85,10 +87,10 @@ func TestCephSnapshotIntegration(t *testing.T) {
 	}
 	oldManager := state.Manager
 	encoded, _ := json.Marshal(map[string]string{"prefix": "mgr fail", "who": oldManager.Name})
-	if _, err := observer.MonCommand(ctx, Command{JSON: encoded}); err != nil {
+	if _, err := observer.MonCommand(ctx, cephmsgr.Command{JSON: encoded}); err != nil {
 		t.Fatal(err)
 	}
-	state = waitClientState(t, c, ctx, func(s State) bool {
+	state = waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 		return s.Manager.Available && s.Manager.GlobalID != oldManager.GlobalID
 	})
 	if state.Manager.Ready || state.Manager.MapEpoch <= oldManager.MapEpoch {
@@ -98,7 +100,7 @@ func TestCephSnapshotIntegration(t *testing.T) {
 	if _, err := c.MgrCommand(ctx, query); err != nil {
 		t.Fatal("new MGR query", err)
 	}
-	waitClientState(t, c, ctx, func(s State) bool { return s.Monitor.Ready && s.Manager.Ready })
+	waitClientState(t, c, ctx, func(s cephmsgr.State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}
