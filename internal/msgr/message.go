@@ -4,6 +4,7 @@ import "github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 
 const (
 	MonMapMessage           uint16 = 4
+	MonGetMapMessage        uint16 = 5
 	SubscribeMessage        uint16 = 15
 	SubscribeAckMessage     uint16 = 16
 	AuthMessage             uint16 = 17
@@ -71,6 +72,13 @@ func DecodeMessage(f Frame) (MessageData, error) {
 }
 
 func Paxos(e *wire.Encoder) { e.U64(0); e.U16(0xffff); e.U64(0) }
+
+// GetMonMap requests a one-time MonMap without creating map subscriptions.
+// Tentacle's MMonGetMap has the default version-1 header and no payload.
+func GetMonMap() MessageData {
+	return MessageData{Type: MonGetMapMessage, Version: 1, Priority: 127}
+}
+
 func CommandMessage(mgr bool, fsid [16]byte, commands []string, input []byte) MessageData {
 	e := wire.Encoder{}
 	typ := MonCommandMessage
