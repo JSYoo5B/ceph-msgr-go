@@ -303,6 +303,15 @@ GC 후 heap은 344,424 bytes에서 279,192 bytes였다.
 검증된 범위에 포함하지 않는다. Ceph는
 [rotating key의 남은 수명으로 validity를 줄일 수 있다](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/cephx/CephxKeyServer.cc#L123).
 
+이 갱신 방식을 포함한 `47cec13`의 Linux arm64·CGO=0·20.2.4·aes256k·직접 IPv6
+[1시간 시험](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/auth-lifecycle-1h)도 통과했다.
+성공 호출 1,263,576건, ticket 갱신 404회, 서버가 성공 응답한 MGR 장애 주입
+119회와 context 상태 조회 5,676,627회를 처리했다. 결과 불명확 11건은 모두
+MGR 교체 원인을 보존했다. 샘플링한 최대 세션은 2개, goroutine은 20개였다.
+같은 실행에서 큰 MON 응답도 원본 JSON과 서버 코드를 유지했다.
+이 시험은 이후 MON idle fixture, admission 오류 경합과 seed 주소 변경을
+포함하지 않는다.
+
 실제 CRC-only MON/MGR listener에서도 secure-only 제안과 인증 거절의
 method `2`·서버 코드 `-95`, 전송 전 알려진 실패를 확인했다. 개발용 observer가
 outbound AUTH_REQUEST의 mode `[secure]`를 직접 검사하며 credential bytes를
@@ -374,6 +383,8 @@ MGR을 전환한 뒤에도 기존 MON 구독으로 새 MGR을 찾아 명령을 �
 1초 keepalive를 쓰는 client는 원래 MON 세션·인증을 유지하고 이후 MGR 전환
 지도를 받았다. 20.2.4·aes256k·Linux amd64·IPv6의 host 모드
 [실제 CI 시험](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36990152382)에서 통과했다.
+같은 고정 소스는 20.2.4·aes·Darwin arm64·IPv4의 host race에서도 통과했다.
+대조군 종료는 약 3.10초였고, 기존 client는 MON/auth와 양쪽 수신 활동을 유지했다.
 서버가 먼저 보낸 keepalive의 과거·미래 timestamp 원본 echo와 로컬 수신 시각,
 명령 sequence·ACK 유지는 별도의 secure synthetic peer 시험으로 확인했다.
 
