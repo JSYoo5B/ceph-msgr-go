@@ -223,6 +223,61 @@ if test "$mapped_ipv6" = 1; then
     timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$mapped_monitors" pg stat --format json > /out/mapped-oracle-pg.json
     python3 /out/mapped_address_oracle.py /out
 fi
+if test "$mgr_count" = 2 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 && test -z "$mode_rejection" && test "$mapped_ipv6" = 0; then
+    # Independent native clients exercise daemon-local MCommand tell routing
+    # before the ordinary Go suite. Special fixtures keep their own selectors
+    # and oracles. Host tests also enter this script through host-cluster.sh.
+    tell_monitors="[v2:$address:33300/0]"
+    timeout 5 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" tell mon.a version --format json > /out/tell-oracle-mon.json
+    timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" mgr dump --format json > /out/tell-oracle-mgr-map.json
+    tell_mgr=$(python3 - /out/tell-oracle-mgr-map.json <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "rb") as source:
+    data = source.read(1024 * 1024 + 1)
+if len(data) > 1024 * 1024:
+    raise SystemExit("Tell oracle mgr map exceeds its metadata limit")
+try:
+    value = json.loads(data)
+except (ValueError, UnicodeError):
+    raise SystemExit("Tell oracle mgr map is invalid JSON") from None
+if (not isinstance(value, dict) or value.get("available") is not True
+        or value.get("active_name") not in ("a", "b")
+        or type(value.get("active_gid")) is not int
+        or not 0 < value["active_gid"] < 1 << 64):
+    raise SystemExit("Tell oracle requires the current available fixture MGR")
+print(value["active_name"])
+PY
+    )
+    timeout 5 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" tell "mgr.$tell_mgr" version --format json > /out/tell-oracle-mgr.json
+    python3 - /out/tell-oracle-mon.json /out/tell-oracle-mgr.json <<'PY'
+import json
+import re
+import sys
+
+# Pinned admin_socket.cc VersionHook emits these three top-level strings;
+# version.cc supplies the build version, release name, and release type.
+# Keep each daemon's original JSON bytes unchanged for the Go comparison.
+for path in sys.argv[1:]:
+    with open(path, "rb") as source:
+        data = source.read(4097)
+    if len(data) > 4096:
+        raise SystemExit("Tell oracle version exceeds its metadata limit")
+    try:
+        value = json.loads(data)
+    except (ValueError, UnicodeError):
+        raise SystemExit("Tell oracle version is invalid JSON") from None
+    if not isinstance(value, dict) or set(value) != {"version", "release", "release_type"}:
+        raise SystemExit("Tell oracle version has an unexpected JSON shape")
+    if any(not isinstance(field, str) or not field or len(field) > 128
+           or not field.isascii() or any(ord(char) < 32 or ord(char) == 127 for char in field)
+           for field in value.values()):
+        raise SystemExit("Tell oracle version fields must be bounded printable strings")
+    if value["release"] != "tentacle" or not re.fullmatch(r"20\.2\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", value["version"]):
+        raise SystemExit("Tell oracle daemon must identify Tentacle 20.2")
+PY
+fi
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."
 while true; do

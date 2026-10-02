@@ -73,6 +73,8 @@ GROUPS = {
     "messages": (
         "src/messages/MAuth.h",
         "src/messages/MAuthReply.h",
+        "src/messages/MCommand.h",
+        "src/messages/MCommandReply.h",
         "src/messages/MMonCommand.h",
         "src/messages/MMonCommandAck.h",
         "src/messages/MMgrCommand.h",
