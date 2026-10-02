@@ -158,6 +158,31 @@ ceph-authtool "$keyring" -n client.revocable --print-key > /out/revocable.key
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, secure."
 while true; do
+    if test -f /out/verify-service-keys; then
+        test "$auth_epoch" = 1 || exit 2
+        read -r request_id name extra < /out/verify-service-keys
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        case "$name" in a|b) ;; *) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/verify-service-keys
+        keys_ready=false
+        deadline=$(( $(date +%s) + 15 ))
+        while test "$(date +%s)" -lt "$deadline"; do
+            # Every probe is a fresh independent client. pg stat is a MGR
+            # read, unlike MON mgr dump. No native authentication error is
+            # retried or hidden by this development-only oracle.
+            if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" pg stat --format json > "$root/service-keys-probe.json" 2> "$root/service-keys-probe.log" && python3 -c 'import json,sys; json.load(sys.stdin)' < "$root/service-keys-probe.json"; then
+                keys_ready=true
+                break
+            fi
+            sleep 1
+        done
+        if test "$keys_ready" != true; then
+            cat "$root/service-keys-probe.log" "$root/service-keys-probe.json"
+            exit 1
+        fi
+        touch "/out/service-keys-verify.$request_id"
+    fi
     if test -f /out/stop-mons; then
         read -r request_id extra < /out/stop-mons
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac

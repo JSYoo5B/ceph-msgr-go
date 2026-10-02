@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephServiceKeyEpochIntegration(t *testing.T) {
@@ -110,6 +111,22 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 		}
 		if err := fixtureRecoveryRead(ctx, held, true); err != nil {
 			t.Fatalf("held MGR after service-key disposal: %q", fmt.Sprint(err))
+		}
+		// Daemon rotating secrets arrive in a separate CephX exchange. A
+		// fresh independent CLI process must prove MGR has the new service
+		// key before the native cold handshake; MON renewal alone cannot.
+		gate, stop := context.WithTimeout(ctx, 20*time.Second)
+		err = testcluster.ControlDaemon(gate, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "service-keys", state.Manager.Name)
+		stop()
+		if err != nil {
+			t.Fatalf("independent MGR replacement-key readiness: %q", fmt.Sprint(err))
+		}
+		if err := held.WaitMgrReady(ctx); err != nil {
+			t.Fatalf("held MGR after replacement-key readiness: %q", fmt.Sprint(err))
+		}
+		state = held.Snapshot()
+		if state.Manager.GlobalID != heldInitial.Manager.GlobalID || state.Manager.Name != heldInitial.Manager.Name || managerDials.Load() != 1 {
+			t.Fatalf("replacement-key readiness changed the held MGR: name=%s global-id=%d dials=%d", state.Manager.Name, state.Manager.GlobalID, managerDials.Load())
 		}
 		if err := cold.WaitMgrReady(ctx); err != nil {
 			t.Fatalf("cold MGR with replacement service ticket: %q", fmt.Sprint(err))

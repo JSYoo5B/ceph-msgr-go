@@ -60,22 +60,25 @@ failure_diagnostics() {
     printf 'Ceph fixture failure diagnostics:\n'
     if test -n "$diagnostics"; then
         mkdir -p "$diagnostics"
-        # Copy daemon text logs and crash metadata only, never keyrings or
+        # Copy daemon/probe text logs and crash metadata only, never keyrings or
         # process memory. The caller chooses the development output directory.
-        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log; do
+        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log service-keys-probe.json service-keys-probe.log; do
             docker cp "$container:/tmp/ceph-msgr-test/$log" "$diagnostics/$log" > /dev/null 2>&1 || true
         done
         # docker cp also works after the container exits. Select metadata
         # from the archive stream without saving any other crash files.
         docker cp "$container:/var/lib/ceph/crash" - 2>/dev/null | python3 "$project_root/tools/collect_crash_metadata.py" > "$diagnostics/crash-metadata.jsonl" || true
         cat "$diagnostics/crash-metadata.jsonl"
-        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log; do
+        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log service-keys-probe.json service-keys-probe.log; do
             if test -f "$diagnostics/$log"; then
                 tail -n 80 "$diagnostics/$log"
             fi
         done
         return
     fi
+    # The gate exits the fixture on failure; its stdout remains readable even
+    # when docker exec can no longer collect logs from the stopped container.
+    docker logs --tail 80 "$container" || true
     docker exec "$container" sh -c 'for file in /var/lib/ceph/crash/*/meta; do test -f "$file" || continue; cat "$file"; done; tail -n 80 /tmp/ceph-msgr-test/mon.*.log /tmp/ceph-msgr-test/mgr.*.log' || true
 }
 trap cleanup EXIT
