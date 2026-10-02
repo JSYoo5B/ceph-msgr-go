@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -122,19 +123,33 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 	options := integrationOptions(t)
 	options.ConnectTimeout = time.Second
 	options.KeepaliveInterval, options.KeepaliveTimeout = time.Second, 3*time.Second
+	dial := options.DialContext
+	var blockReconnect atomic.Bool
+	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+		_, port, _ := net.SplitHostPort(endpoint)
+		if blockReconnect.Load() && (port == "33300" || port == "33301" || port == "33302") {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return dial(ctx, network, endpoint)
+	}
 	c, err := Dial(ctx, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	if _, err := c.MgrCommand(ctx, Command{JSON: []byte(`{"prefix":"pg stat","format":"json"}`)}); err != nil {
+		t.Fatal("establish MGR before MON pause", err)
+	}
 	c.mu.Lock()
-	old := c.mon
+	old, oldManager := c.mon, c.mgr
 	c.mu.Unlock()
 	_, port, err := net.SplitHostPort(old.RemoteAddr().String())
 	name := map[string]string{"33300": "a", "33301": "b", "33302": "c"}[port]
 	if err != nil || name == "" {
 		t.Fatal("unexpected fixture MON endpoint", old.RemoteAddr())
 	}
+	blockReconnect.Store(true)
 	if err := controlFixtureDaemon(ctx, control, "pause", "mon", name); err != nil {
 		t.Fatal(err)
 	}
@@ -150,6 +165,11 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 	if !errors.Is(err, ErrKeepaliveTimeout) || !errors.As(err, &unknown) {
 		t.Fatal("paused MON lost its uncertain liveness result", err)
 	}
+	state := c.Snapshot()
+	if state.Monitor.Ready || state.Manager.Ready || !state.Manager.Available || state.Manager.Endpoint == "" || oldManager.Err() != nil {
+		t.Fatal("live MGR concealed the MON admission dependency during actual silence", state, oldManager.Err())
+	}
+	blockReconnect.Store(false)
 	if err := fixtureRecoveryRead(ctx, c, false); err != nil {
 		t.Fatal("MON command after open socket silence", err)
 	}
@@ -161,6 +181,10 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 	}
 	if err := fixtureRecoveryRead(ctx, c, true); err != nil {
 		t.Fatal("MGR command after paused MON recovery", err)
+	}
+	state = c.Snapshot()
+	if !state.Monitor.Ready || !state.Manager.Ready {
+		t.Fatal("public admission state did not recover after actual MON silence", state)
 	}
 	t.Logf("paused MON=%s: silence detected, another quorum member served commands", name)
 }

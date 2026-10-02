@@ -32,7 +32,8 @@ type MonitorState struct {
 }
 
 // ManagerState separates advertised MGR availability from a ready client
-// session. MGR connections are opened lazily by MgrCommand.
+// session. Ready also requires MON admission, which MgrCommand waits for.
+// MGR connections are opened lazily by MgrCommand.
 type ManagerState struct {
 	Ready     bool
 	Endpoint  string
@@ -77,7 +78,7 @@ func (c *Client) Snapshot() State {
 		state.Monitor.Ready = admitted && c.monReady && monSession.Err() == nil
 	}
 	if mgrSession != nil {
-		state.Manager.Ready = admitted && mgrSession.Err() == nil
+		state.Manager.Ready = state.Monitor.Ready && mgrSession.Err() == nil
 	}
 	var rejection *AuthenticationError
 	if errors.As(c.authErr, &rejection) {

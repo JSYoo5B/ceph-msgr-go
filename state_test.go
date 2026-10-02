@@ -124,3 +124,35 @@ func TestSnapshotConcurrentCommandsAndClose(t *testing.T) {
 	c.Close()
 	wg.Wait()
 }
+
+func TestSnapshotManagerReadinessRequiresMonitorAdmission(t *testing.T) {
+	options := mockOptions(t, 20, [16]byte{1})
+	dial := options.DialContext
+	var reconnecting atomic.Bool
+	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+		if reconnecting.Load() {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return dial(ctx, network, endpoint)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	c, err := Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if _, err := c.MgrCommand(ctx, Command{JSON: []byte(`{"prefix":"status"}`)}); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	mon, mgr := c.mon, c.mgr
+	c.mu.Unlock()
+	reconnecting.Store(true)
+	mon.Fail(net.ErrClosed)
+	state := c.Snapshot()
+	if state.Monitor.Ready || state.Manager.Ready || !state.Manager.Available || state.Closed || mgr.Err() != nil {
+		t.Fatal("live MGR session concealed its blocked MON admission dependency", state)
+	}
+}
