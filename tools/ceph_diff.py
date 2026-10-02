@@ -94,9 +94,12 @@ def fetch(url, allow_missing=False):
         with urllib.request.urlopen(request, timeout=20) as response:
             body = response.read(LIMIT + 1)
     except urllib.error.HTTPError as error:
-        if allow_missing and error.code == 404:
-            return None
-        raise RuntimeError(f"HTTP {error.code}: {url}") from error
+        try:
+            if allow_missing and error.code == 404:
+                return None
+            raise RuntimeError(f"HTTP {error.code}: {url}") from error
+        finally:
+            error.close()
     if len(body) > LIMIT:
         raise RuntimeError(f"source exceeds {LIMIT} bytes: {url}")
     return body
@@ -106,8 +109,9 @@ def resolve(ref):
     if not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", ref):
         raise ValueError("invalid Ceph ref")
     url = "https://api.github.com/repos/ceph/ceph/commits/" + urllib.parse.quote(ref, safe="")
-    sha = json.loads(fetch(url))["sha"]
-    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+    metadata = json.loads(fetch(url))
+    sha = metadata.get("sha") if isinstance(metadata, dict) else None
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise ValueError("upstream returned an invalid commit SHA")
     return sha
 
