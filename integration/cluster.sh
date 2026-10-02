@@ -6,11 +6,17 @@ key_type=${CEPH_MSGR_TEST_KEY_TYPE:-aes256k}
 service_cipher=${CEPH_MSGR_TEST_SERVICE_CIPHER:-$key_type}
 mgr_count=${CEPH_MSGR_TEST_MGR_COUNT:-2}
 idle_sessions=${CEPH_MSGR_TEST_IDLE_SESSIONS:-0}
+auth_epoch=${CEPH_MSGR_TEST_AUTH_EPOCH:-0}
+case "$auth_epoch" in 0|1) ;; *) exit 2 ;; esac
 case "$idle_sessions" in
     0) ticket_ttl=12; subscribe_interval=86400 ;;
     1) ticket_ttl=120; subscribe_interval=2 ;;
     *) exit 2 ;;
 esac
+if test "$auth_epoch" = 1; then
+    test "$idle_sessions" = 0 && test "$mgr_count" = 2 || exit 2
+    ticket_ttl=120
+fi
 case "$mgr_count" in 0|2) ;; *) exit 2 ;; esac
 case "$key_type" in aes|aes256k) ;; *) exit 2 ;; esac
 case "$service_cipher" in aes|aes256k) ;; *) exit 2 ;; esac
@@ -18,6 +24,10 @@ echo "Fixture daemon: $(ceph --version)"
 cipher_options=false
 monmap_help=$(monmaptool --help 2>&1 || true)
 case "$monmap_help" in *--auth-service-cipher*) cipher_options=true ;; esac
+if test "$auth_epoch" = 1 && test "$cipher_options" != true; then
+    echo 'Service-key epoch tests require the current Tentacle auth map format.' >&2
+    exit 2
+fi
 if test "$cipher_options" = false && { test "$key_type" != aes || test "$service_cipher" != aes; }; then
     echo 'This fixture image has no aes256k support; request aes explicitly.' >&2
     exit 2

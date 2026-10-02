@@ -97,7 +97,7 @@ jobs:
       - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPublication$' -fuzztime=20s -parallel=2
 
   ceph:
-    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }})
+    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -114,6 +114,8 @@ jobs:
           - { key: aes256k, service: aes256k, family: '4', stress: '', runtime: 'host' }
           - { key: aes256k, service: aes256k, family: '4', stress: '', expiry: '1' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'host', idle: '1' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '', auth_epoch: '1' }
+          - { key: aes, service: aes, family: '4', stress: '', auth_epoch: '1' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -140,6 +142,7 @@ jobs:
           CEPH_MSGR_TEST_RUNTIME: ${{ matrix.runtime || 'container' }}
           CEPH_MSGR_TEST_EXPIRE_TICKETS: ${{ matrix.expiry || '0' }}
           CEPH_MSGR_TEST_IDLE_SESSIONS: ${{ matrix.idle || '0' }}
+          CEPH_MSGR_TEST_AUTH_EPOCH: ${{ matrix.auth_epoch || '0' }}
           CEPH_MSGR_TEST_DIAGNOSTICS: ${{ runner.temp }}/ceph-diagnostics
       - name: Preserve failed Ceph test logs and crash metadata
         if: failure() && steps.ceph.outcome == 'failure'
