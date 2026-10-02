@@ -16,23 +16,34 @@ type Mon struct {
 	Epoch          uint32
 	AuthEpoch      uint32
 	MinimumRelease uint8
+	Members        []MonMember
 	Addresses      []msgr.Address
 }
 
+// MonMember retains the name, current rank and complete advertised address
+// vector. Members appear in rank order; Addresses on Mon contains only usable
+// msgr2 endpoints for bootstrap.
+type MonMember struct {
+	Name      string
+	Rank      uint32
+	Addresses []msgr.Address
+}
+
+// DecodeMon returns no partial map on failure.
 func DecodeMon(front []byte) (Mon, error) {
 	var m Mon
 	outer := wire.NewDecoder(front)
 	blob := outer.Bytes()
 	if err := outer.Done(); err != nil {
-		return m, err
+		return Mon{}, err
 	}
 	d := wire.NewDecoder(blob)
 	v, p := d.Struct(10)
 	if err := d.Done(); err != nil {
-		return m, err
+		return Mon{}, err
 	}
 	if v < 7 {
-		return m, wire.ErrVersion
+		return Mon{}, wire.ErrVersion
 	}
 	copy(m.FSID[:], p.Raw(16))
 	m.Epoch = p.U32()
@@ -50,23 +61,39 @@ func DecodeMon(front []byte) (Mon, error) {
 		infoName := info.String()
 		addrs := msgr.DecodeAddresses(info)
 		p.Fail(info.Err())
+		if err := p.Err(); err != nil {
+			return Mon{}, err
+		}
 		if name != infoName {
-			return m, errors.New("ceph: inconsistent monitor name")
+			return Mon{}, errors.New("ceph: inconsistent monitor name")
 		}
 		if _, exists := byName[name]; exists {
-			return m, errors.New("ceph: duplicate monitor name")
+			return Mon{}, errors.New("ceph: duplicate monitor name")
 		}
 		byName[name] = addrs
 	}
 	ranks := p.Count(4, 1024)
+	if err := p.Err(); err != nil {
+		return Mon{}, err
+	}
+	// Tentacle MonMap add/remove/rename keep ranks.size() == mon_info.size().
+	// Together with the checks below, ranks must cover every member once.
+	if ranks != len(byName) {
+		return Mon{}, errors.New("ceph: incomplete monitor ranks")
+	}
+	m.Members = make([]MonMember, 0, ranks)
 	seen := make(map[string]bool)
 	for i := 0; i < ranks; i++ {
 		name := p.String()
+		if err := p.Err(); err != nil {
+			return Mon{}, err
+		}
 		addrs, ok := byName[name]
 		if !ok || seen[name] {
-			return m, errors.New("ceph: invalid monitor ranks")
+			return Mon{}, errors.New("ceph: invalid monitor ranks")
 		}
 		seen[name] = true
+		m.Members = append(m.Members, MonMember{Name: name, Rank: uint32(i), Addresses: addrs})
 		for _, a := range addrs {
 			if a.Type == 2 && a.Endpoint.IsValid() {
 				m.Addresses = append(m.Addresses, a)
@@ -97,13 +124,13 @@ func DecodeMon(front []byte) (Mon, error) {
 		m.AuthEpoch = p.U32()
 	}
 	if err := p.Err(); err != nil {
-		return m, err
+		return Mon{}, err
 	}
 	if m.MinimumRelease < 20 {
-		return m, fmt.Errorf("%w: %d", ErrRelease, m.MinimumRelease)
+		return Mon{}, fmt.Errorf("%w: %d", ErrRelease, m.MinimumRelease)
 	}
 	if m.FSID == [16]byte{} || len(m.Addresses) == 0 {
-		return m, errors.New("ceph: empty monitor map")
+		return Mon{}, errors.New("ceph: empty monitor map")
 	}
 	// The envelope permits unrelated appended cipher policy and future fields.
 	return m, nil
