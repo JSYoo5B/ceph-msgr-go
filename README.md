@@ -713,6 +713,11 @@ generic peer 주소의 실제 Ceph 시험, handshake 거부 원인 보존과 fix
 모두 통과했다. [mapped 복구 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mapped-session-recovery)는
 이 커밋을 가리킨다.
 
+`MonTell`·`MgrTell`과 실제 갱신·MON/MGR 전환 시험을 포함한 `fbf8ceb`의
+[CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37007686548)도
+모두 통과했다. [daemon Tell 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/daemon-tell)는
+이 커밋을 가리킨다.
+
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
 앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
 [복구 중 Context 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/recovery-contexts)는
@@ -764,6 +769,11 @@ storage profile 허용값 변경이 있었다. 이 추가 diff에서 Messenger·
 원래 명령·응답 계약으로 노출하며 API 호환 wrapper를 추가하지 않는다.
 도구 시험은 추가·삭제·변경 분류, commit SHA 고정, 응답 크기 제한,
 HTTP 오류 구분과 오류 응답 자원 정리를 검사한다.
+
+Tell 추가 후 같은 고정 base와 Tentacle HEAD를 59개 경로로 다시 비교한
+2026-10-02의 실행은 8.78초였으며 변경 파일 8개는 동일했다. 새로 감시한
+`MCommand.h`·`MCommandReply.h`·`admin_socket.cc`는 byte-identical이었다.
+이는 소스 비교 결과이며 가변 브랜치의 실서버 검증을 의미하지 않는다.
 
 ```sh
 python3 tools/ceph_diff.py tentacle           # 고정 v20.2.4 참조와 비교
