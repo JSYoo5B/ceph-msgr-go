@@ -87,6 +87,7 @@ GROUPS = {
         "src/messages/MMgrCommand.h",
         "src/messages/MMgrCommandReply.h",
         "src/messages/MMonMap.h",
+        "src/messages/MMonGetMap.h",
         "src/messages/MMgrMap.h",
         "src/messages/MMonSubscribe.h",
         "src/messages/MMonSubscribeAck.h",
