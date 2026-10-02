@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephStressIntegration(t *testing.T) {
@@ -51,6 +52,13 @@ func TestCephStressIntegration(t *testing.T) {
 				result, err := call(callCtx, Command{JSON: encoded})
 				stop()
 				if err != nil {
+					// Check every cause before honoring workload shutdown. A
+					// coincident deadline must not hide a protocol/auth failure.
+					if !testcluster.IsRecoveryError(err, context.Canceled, context.DeadlineExceeded, ErrManagerChanged, ErrKeepaliveTimeout, session.ErrRetired) {
+						t.Errorf("unexpected %s error under load: %v", prefix, err)
+						cancel()
+						return
+					}
 					if ctx.Err() != nil {
 						return
 					}
@@ -66,6 +74,8 @@ func TestCephStressIntegration(t *testing.T) {
 						cause = "keepalive-timeout"
 					case errors.Is(err, context.DeadlineExceeded):
 						cause = "deadline"
+					case errors.Is(err, context.Canceled):
+						cause = "canceled"
 					case errors.As(err, &connection), errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, net.ErrClosed):
 						cause = "transport"
 					}
@@ -82,7 +92,7 @@ func TestCephStressIntegration(t *testing.T) {
 						unknownCauses[cause]++
 						causeMu.Unlock()
 					}
-				} else if !json.Valid(result.Data) {
+				} else if result.Code != 0 || !json.Valid(result.Data) {
 					t.Errorf("invalid %s output", prefix)
 					cancel()
 					return

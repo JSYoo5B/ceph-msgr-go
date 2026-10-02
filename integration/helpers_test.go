@@ -3,16 +3,14 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"net"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
@@ -74,14 +72,12 @@ func fixtureRecoveryRead(ctx context.Context, c *cephmsgr.Client, mgr bool) erro
 	for {
 		result, err := call(ctx, cephmsgr.Command{JSON: command})
 		if err == nil {
-			if !json.Valid(result.Data) {
+			if result.Code != 0 || !json.Valid(result.Data) {
 				return fmt.Errorf("invalid %s output after quorum recovery", prefix)
 			}
 			return nil
 		}
-		var unknown *cephmsgr.OutcomeUnknownError
-		var network *net.OpError
-		if !errors.As(err, &unknown) && !errors.As(err, &network) && !errors.Is(err, cephmsgr.ErrManagerChanged) && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, net.ErrClosed) {
+		if !testcluster.IsRecoveryError(err, cephmsgr.ErrManagerChanged, cephmsgr.ErrKeepaliveTimeout, session.ErrRetired) {
 			return err
 		}
 		// This is a read-only oracle. Mutations are never retried by this

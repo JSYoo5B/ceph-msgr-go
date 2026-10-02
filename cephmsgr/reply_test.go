@@ -53,7 +53,7 @@ func TestMalformedCommandReplyPreservesOutputAndUnknownOutcome(t *testing.T) {
 			result, err := call(ctx, Command{JSON: []byte(`{"prefix":"mutation"}`), Input: input})
 			var unknown *OutcomeUnknownError
 			var serverError *CommandError
-			if !errors.As(err, &unknown) || errors.As(err, &serverError) || !bytes.Equal(result.Data, input) {
+			if !errors.As(err, &unknown) || !errors.Is(err, msgr.ErrFrame) || errors.As(err, &serverError) || !bytes.Equal(result.Data, input) {
 				t.Fatal("malformed reply lost outcome or raw output", result, err)
 			}
 			if _, err := call(ctx, Command{JSON: []byte(`{"prefix":"status"}`)}); err != nil {
