@@ -66,9 +66,12 @@ type Options struct {
 	// to 45 seconds and must exceed KeepaliveInterval. Any complete valid
 	// frame counts as activity; request contexts do not reset this timeout.
 	KeepaliveTimeout time.Duration
-	MaxFrameSize     uint32
+	// MaxFrameSize bounds the sum of logical segment lengths per Messenger
+	// frame. Defaults to 16 MiB; accepted values range from 1 KiB to 1 GiB.
+	MaxFrameSize uint32
 	// MaxInFlight bounds concurrent command calls, including queued requests.
-	// Defaults to 64. Waiting for a slot respects the operation's context.
+	// Defaults to 64, with a maximum of 1024. Waiting for a slot respects the
+	// operation's context.
 	MaxInFlight int
 	// DialContext defaults to net.Dialer.DialContext. Custom implementations
 	// must honor context cancellation; useful for proxies and in-process tests.
@@ -179,7 +182,7 @@ func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result
 	if err != nil {
 		return result, err
 	}
-	code, message, err := msgr.CommandReply(reply)
+	code, message, err := msgr.CommandReply(reply, c.options.MaxFrameSize)
 	if err != nil {
 		// A received but undecodable reply does not establish whether the
 		// command succeeded. Keep raw output and retire the invalid session.

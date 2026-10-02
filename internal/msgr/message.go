@@ -84,8 +84,8 @@ func CommandMessage(mgr bool, fsid [16]byte, commands []string, input []byte) Me
 	}
 	return MessageData{Type: typ, Version: 1, Front: e.Data, Data: input, Priority: 127}
 }
-func CommandReply(m MessageData) (int32, string, error) {
-	d := wire.NewDecoder(m.Front)
+func CommandReply(m MessageData, limit uint32) (int32, string, error) {
+	d := wire.NewDecoderLimit(m.Front, limit)
 	if m.Type == MonCommandReplyMessage {
 		d.U64()
 		d.U16()
@@ -100,7 +100,7 @@ func CommandReply(m MessageData) (int32, string, error) {
 	if m.Type == MonCommandReplyMessage {
 		n := d.Count(4, 1024)
 		for i := 0; i < n; i++ {
-			_ = d.String()
+			_ = d.Bytes()
 		}
 	}
 	return code, text, d.Done()
