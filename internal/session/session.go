@@ -334,13 +334,16 @@ func (s *Session) readLoop() {
 			case s.ack <- struct{}{}:
 			default:
 			}
-			if m.Type == msgr.MonCommandReplyMessage || m.Type == msgr.MgrCommandReplyMessage {
+			if m.Type == msgr.MonCommandReplyMessage || m.Type == msgr.MgrCommandReplyMessage || m.Type == msgr.TellCommandReplyMessage {
 				s.mu.Lock()
 				r := s.pending[m.Transaction]
 				if r != nil {
 					expected := msgr.MonCommandReplyMessage
-					if r.message.Type == msgr.MgrCommandMessage {
+					switch r.message.Type {
+					case msgr.MgrCommandMessage:
 						expected = msgr.MgrCommandReplyMessage
+					case msgr.TellCommandMessage:
+						expected = msgr.TellCommandReplyMessage
 					}
 					if !r.started || m.Type != expected {
 						// Leave it pending so Fail preserves whether transmission
