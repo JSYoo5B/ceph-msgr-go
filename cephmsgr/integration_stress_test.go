@@ -17,6 +17,16 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
+type stressSnapshotContext struct {
+	context.Context
+	inspect func()
+}
+
+func (ctx stressSnapshotContext) Err() error {
+	ctx.inspect()
+	return ctx.Context.Err()
+}
+
 func TestCephStressIntegration(t *testing.T) {
 	value := os.Getenv("CEPH_MSGR_STRESS_DURATION")
 	if value == "" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {
@@ -35,6 +45,18 @@ func TestCephStressIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
 	defer cancel()
 	var calls, faults, uncertain atomic.Int64
+	initial := c.Snapshot()
+	var callbacks atomic.Int64
+	var identityDrift atomic.Bool
+	inspect := func() {
+		state := c.Snapshot()
+		callbacks.Add(1)
+		// Recovery and shutdown can change readiness. The authenticated
+		// identity must remain stable, including after local cancellation.
+		if state.FSID != initial.FSID || state.GlobalID != initial.GlobalID || state.AuthRejection != nil {
+			identityDrift.Store(true)
+		}
+	}
 	var causeMu sync.Mutex
 	unknownCauses := make(map[string]int64)
 	var wg sync.WaitGroup
@@ -49,7 +71,7 @@ func TestCephStressIntegration(t *testing.T) {
 			encoded, _ := json.Marshal(map[string]string{"prefix": prefix, "format": "json"})
 			for ctx.Err() == nil {
 				callCtx, stop := context.WithTimeout(ctx, 5*time.Second)
-				result, err := call(callCtx, Command{JSON: encoded})
+				result, err := call(stressSnapshotContext{Context: callCtx, inspect: inspect}, Command{JSON: encoded})
 				stop()
 				if err != nil {
 					// Check every cause before honoring workload shutdown. A
@@ -167,5 +189,8 @@ func TestCephStressIntegration(t *testing.T) {
 	if after := runtime.NumGoroutine(); after > baseline+4 {
 		t.Errorf("workers remain after Close: before=%d after=%d", baseline, after)
 	}
-	t.Logf("calls=%d ticket-renewals=%d MGR-faults=%d unknown-outcomes=%d sampled-max-sessions=%d sampled-max-goroutines=%d unknown-causes=%v", calls.Load(), renewals, faults.Load(), uncertain.Load(), sampledMaxSessions, sampledMaxWorkers, unknownCauses)
+	if callbacks.Load() == 0 || identityDrift.Load() {
+		t.Errorf("reentrant stress contexts lost identity or were not exercised: callbacks=%d identity-drift=%t", callbacks.Load(), identityDrift.Load())
+	}
+	t.Logf("calls=%d ticket-renewals=%d MGR-faults=%d unknown-outcomes=%d sampled-max-sessions=%d sampled-max-goroutines=%d context-snapshots=%d unknown-causes=%v", calls.Load(), renewals, faults.Load(), uncertain.Load(), sampledMaxSessions, sampledMaxWorkers, callbacks.Load(), unknownCauses)
 }
