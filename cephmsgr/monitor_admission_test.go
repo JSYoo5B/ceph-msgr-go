@@ -18,7 +18,9 @@ import (
 func monitorAdmissionClient(t *testing.T, candidate func(func(msgr.MessageData) error) error) (*Client, context.Context, <-chan struct{}, *atomic.Uint32) {
 	t.Helper()
 	options := mockOptions(t, 20, [16]byte{1})
-	options.ConnectTimeout = 100 * time.Millisecond
+	// Decoding and admission failures must be observed without imposing the
+	// short wait used by the intentionally missing-MonMap scenario below.
+	options.ConnectTimeout = time.Second
 	started := make(chan struct{})
 	var monitors, mutations atomic.Uint32
 	options.DialContext = func(ctx context.Context, _, endpoint string) (net.Conn, error) {
@@ -123,6 +125,7 @@ func TestDialAcceptsManagerMapBeforeMonitorMap(t *testing.T) {
 func TestRejectedMonitorDoesNotPublishUnverifiedManagerMap(t *testing.T) {
 	for _, failure := range []string{"FSID", "release", "malformed", "missing", "timeout"} {
 		t.Run(failure, func(t *testing.T) {
+			missingMonMap := make(chan struct{})
 			candidate := func(send func(msgr.MessageData) error) error {
 				if err := send(msgr.MessageData{Type: msgr.MgrMapMessage, Front: mockMgrMap(9, 4000, 6810)}); err != nil {
 					return err
@@ -138,6 +141,7 @@ func TestRejectedMonitorDoesNotPublishUnverifiedManagerMap(t *testing.T) {
 				case "missing":
 					return io.EOF
 				case "timeout":
+					close(missingMonMap)
 					return nil // The live authenticated peer never sends MonMap.
 				}
 				return send(msgr.MessageData{Type: msgr.MonMapMessage, Front: mon})
@@ -148,8 +152,25 @@ func TestRejectedMonitorDoesNotPublishUnverifiedManagerMap(t *testing.T) {
 			c.mu.Lock()
 			mon, mgr := c.mon, c.mgr
 			c.mu.Unlock()
-			if err := c.connectMonitor(ctx); err == nil {
+			admissionCtx := ctx
+			stopAdmission := func() {}
+			if failure == "timeout" {
+				admissionCtx, stopAdmission = context.WithTimeout(ctx, 500*time.Millisecond)
+			}
+			admissionErr := c.connectMonitor(admissionCtx)
+			stopAdmission()
+			if admissionErr == nil {
 				t.Fatal("unverified candidate was admitted", failure)
+			}
+			if failure == "timeout" {
+				if !errors.Is(admissionErr, context.DeadlineExceeded) {
+					t.Fatal("missing MonMap did not terminate at the candidate deadline", admissionErr)
+				}
+				select {
+				case <-missingMonMap:
+				default:
+					t.Fatal("candidate timed out before its authenticated MGR map was delivered", admissionErr)
+				}
 			}
 			after := c.Snapshot()
 			c.mu.Lock()

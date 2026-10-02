@@ -346,14 +346,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 		err = s.Send(c.ctx, msgr.Subscribe(0, 0))
 		if err == nil {
-			select {
-			case <-ready:
-				err = s.Err()
-			case <-s.Done():
-				err = s.Err()
-			case <-linked.Done():
-				err = linked.Err()
-			}
+			err = waitMonitorAdmission(linked, s, ready)
 		}
 		release()
 		var oldManager *session.Session
@@ -399,6 +392,21 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+func waitMonitorAdmission(ctx context.Context, s *session.Session, ready <-chan struct{}) error {
+	select {
+	case <-ready:
+		return s.Err()
+	case <-s.Done():
+		return s.Err()
+	case <-ctx.Done():
+		// A protocol failure can already be terminal when this goroutine
+		// resumes after the setup deadline. Fail preserves the first cause
+		// atomically, including when a reader is finishing concurrently.
+		s.Fail(ctx.Err())
+		return s.Err()
+	}
 }
 
 func validateMapMessageHeader(m msgr.MessageData) error {
