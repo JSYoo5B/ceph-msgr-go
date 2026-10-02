@@ -269,33 +269,83 @@ func TestTicketRenewalDeadlineBackoff(t *testing.T) {
 }
 
 func TestAlreadyDueTicketRenewalDoesNotSpin(t *testing.T) {
-	options, count, attempts := renewalDeadlineOptions(t, func(_ int32, cfg *peerConfig) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var expiredSetups atomic.Int32
+	options, _, attempts := renewalDeadlineOptions(t, func(_ int32, cfg *peerConfig) {
 		cfg.authTTL, cfg.mgrTTL = time.Nanosecond, time.Nanosecond
+		cfg.ident = func(msgr.Address) {
+			// CLIENT_IDENT follows Finish, so this clock sample is no earlier
+			// than either ticket's receipt time. Wait for the clock itself to
+			// pass sample+TTL before sending SERVER_IDENT: a 1ns wire TTL alone
+			// does not prove expiration on clocks with coarser resolution.
+			deadline := time.Now().Add(time.Nanosecond)
+			ticker := time.NewTicker(time.Millisecond)
+			defer ticker.Stop()
+			for !time.Now().After(deadline) {
+				select {
+				case <-ticker.C:
+				case <-ctx.Done():
+					return
+				}
+			}
+			expiredSetups.Add(1)
+		}
 	}, func(n int32) error {
 		if n > 6 {
 			return io.EOF // Bound peers even if the coordinator regresses to spinning.
 		}
 		return nil
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
 	c, err := Dial(ctx, options)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
 	<-attempts
+	awaitPublication := func(attempt renewalAttempt) {
+		for {
+			c.mu.Lock()
+			auth, ready, changed := c.auth, c.monReady, c.changed
+			c.mu.Unlock()
+			if ready && auth.Tickets[cephx.ServiceAuth].Expires.After(attempt.at) {
+				// The bootstrap proof expired before this attempt began. A
+				// newer expiry therefore proves a successful renewal published.
+				now := time.Now()
+				for _, service := range []uint32{cephx.ServiceAuth, cephx.ServiceMgr} {
+					if now.Before(auth.Tickets[service].Expires) {
+						t.Fatal("test peer published a ticket before its expiration gate", attempt.number)
+					}
+				}
+				return
+			}
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				t.Fatal("already-due renewal did not publish", ctx.Err())
+			}
+		}
+	}
+	var previous renewalAttempt
 	select {
-	case <-attempts: // Exercise a successful exchange with already-due tickets.
+	case previous = <-attempts:
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
-	select {
-	case <-time.After(400 * time.Millisecond):
-	case <-ctx.Done():
-		t.Fatal(ctx.Err())
+	awaitPublication(previous)
+	for _, delay := range []time.Duration{250 * time.Millisecond, 500 * time.Millisecond} {
+		select {
+		case next := <-attempts:
+			if next.number != previous.number+1 || next.at.Sub(previous.at) < delay {
+				t.Fatal("already-due successful tickets bypassed renewal backoff", next, previous, delay)
+			}
+			awaitPublication(next)
+			previous = next
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
 	}
-	if n := count.Load(); n < 2 || n > 3 {
-		t.Fatal("already-due successful tickets caused a renewal spin", n)
+	if expiredSetups.Load() < previous.number {
+		t.Fatal("already-due renewal skipped an expiration gate", expiredSetups.Load(), previous.number)
 	}
 }
