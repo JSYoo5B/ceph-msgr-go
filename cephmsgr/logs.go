@@ -115,9 +115,10 @@ type LogStream struct {
 // WatchLogs creates the client's single active cluster-log watch. ctx governs
 // the whole watch, including recovery; a Next context only governs that wait.
 // Registration and recovery submit no command and use no MaxInFlight slot.
-// The initial subscription starts at Ceph's last committed log batch, rather
-// than promising full historical delivery. Reconnection resumes after the last
-// accepted service version. Cancellation is local; no remote unsubscribe or
+// Success registers a local worker; it does not confirm server registration or
+// read permission. A zero StartVersion requests Ceph's last committed batch;
+// other values request that inclusive cursor. Reconnection resumes after the
+// last accepted service version. Cancellation is local; no remote unsubscribe or
 // lossless-delivery guarantee is implied. MLog has no subscription-generation
 // identifier; a late batch from a prior watch on the same session can arrive.
 func (c *Client) WatchLogs(ctx context.Context, options LogOptions) (*LogStream, error) {
@@ -197,14 +198,17 @@ func (s *LogStream) stop(err error) {
 }
 
 // Close releases the watch slot and waits for its registration worker to exit.
-// Accepted batches remain readable; later Next calls return ErrLogStreamClosed.
-// Calling Close again leaves the first terminal cause unchanged.
+// Accepted batches remain readable. Closing an active watch sets its terminal
+// cause to ErrLogStreamClosed; an existing terminal cause remains unchanged.
 func (s *LogStream) Close() error {
 	s.stop(ErrLogStreamClosed)
 	<-s.done
 	return nil
 }
 
+// Next waits for one accepted batch. Canceling ctx ends only this call and
+// leaves the watch active. An already canceled ctx consumes no queued batch.
+// With a live ctx, accepted batches drain before the stable terminal error.
 func (s *LogStream) Next(ctx context.Context) (LogBatch, error) {
 	for {
 		if err := ctx.Err(); err != nil {

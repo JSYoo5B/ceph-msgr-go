@@ -1,6 +1,7 @@
 # ceph-msgr-go
 
-Ceph MON/MGR 관리 명령을 msgr2.1로 직접 호출하는 native Go 라이브러리다.
+Ceph MON/MGR 관리 명령을 호출하고 MON cluster log를 msgr2.1로 직접 받는
+native Go 라이브러리다.
 제품은 Go 표준 라이브러리만 사용하며 CGO, go-ceph, librados, Ceph CLI를
 요구하지 않는다. 최소 Ceph 계열은 Tentacle(20.2)이며 객체 I/O는 후속 업무다.
 
@@ -70,6 +71,69 @@ Tell에도 요청별 context·raw 출력·결과 불명확 및 자동 재실행 
 원인으로 남으므로, 이 표시를 먼저 검사해 TCP 수신 중 단절과 구분한다.
 이미 전송한 명령은 `OutcomeUnknownError`를 함께 유지하며 자동 재실행하지 않는다.
 
+## MON 로그
+
+`WatchLogs(ctx, LogOptions)`는 현재 인증된 MON에서 cluster log를 받는
+`LogStream`을 만든다. 성공은 로컬 worker 등록을 뜻한다. 서버 등록·첫 로그
+수신·읽기 권한을 확인한 결과가 아니며, Ceph는 권한이 없는 구독을 조용히
+거절할 수 있다. SubscribeAck에도 구독별 권한 결과가 없으므로 필요한
+대기에는 context deadline을 둔다.
+
+```go
+watchCtx, stopWatch := context.WithTimeout(context.Background(), time.Minute)
+defer stopWatch()
+logs, err := client.WatchLogs(watchCtx, cephmsgr.LogOptions{
+    Level: cephmsgr.LogInfo,
+})
+if err != nil {
+    return err
+}
+defer logs.Close()
+
+wait, stopWait := context.WithTimeout(context.Background(), 5*time.Second)
+batch, err := logs.Next(wait)
+stopWait()
+if err != nil {
+    return err
+}
+fmt.Printf("cluster=%s cursor=%d entries=%d\n", batch.FSID, batch.Version, len(batch.Entries))
+```
+
+Watch context는 복구를 포함한 전체 구독 수명을 제어하고, `Next(ctx)`의
+취소는 그 대기만 끝낸다. 이미 취소된 Next context는 큐를 소비하지 않는다.
+동시 Next 호출에는 각 batch를 한 호출에 한 번 전달한다. `LogStream.Close`
+는 watch worker를 종료하고 구독 슬롯을 해제하며 공유 MON 연결은 유지한다.
+살아 있는 Next context로 이미 접수한 batch를 읽은 뒤 최초 종료 원인을
+계속 받는다. 명시적인 watch 종료는 `ErrLogStreamClosed`, client 종료는
+`ErrClosed`이며 먼저 기록된 취소·overflow 등의 원인을 덮어쓰지 않는다.
+
+`Level`은 서버에 요청하는 최소 우선순위다. 기본값은 `LogInfo`이며
+`LogDebug`·`LogSec`·`LogWarn`·`LogError`도 제공한다. 전달받은 entry를 로컬에서
+우선순위로 다시 거르지 않는다. Ceph가 history 누락을 알리는 낮은 우선순위의
+WARN이나 알 수 없는 priority를 보내도 원문 그대로 보존한다.
+
+`StartVersion`은 inclusive MON log-service cursor다. 0은 구독 처리 시점의
+마지막 committed batch를 요청하며 전체 과거 이력을 뜻하지 않는다.
+별도 client에서 이어 받으려면 이전 `LogBatch.Version + 1`을 지정한다.
+재접속은 마지막으로 큐에 접수한 version 다음부터 요청한다. `Version`은
+개별 entry의 `Sequence`나 Messenger 메시지 version과 다르다.
+증가시킬 수 없는 최대 uint64 cursor는 `ErrLogCursorOverflow`로 거부한다.
+`LogBatch.FSID`와 entry의 entity·rank·주소·원본 seconds/nanoseconds·priority·
+message·channel을 보존하며 timestamp를 정규화하지 않는다.
+
+client당 한 watch만 허용하며 중복 등록은 `ErrLogWatchActive`다. 구독은 관리
+명령이나 `MaxInFlight` 슬롯을 사용하지 않는다. 큐는 최대 64 batch이고,
+`MaxBufferedBytes`는 기본 `MaxFrameSize`, 허용 범위는 1 KiB–1 GiB다.
+문자열·주소·entry metadata를 포함한 보수적인 보유 데이터 추정치이며 정확한
+Go heap 상한은 아니다. 초과하면 해당 watch만 `ErrLogOverflow`로 끝내고
+이미 접수한 큐와 일반 MON/MGR 명령 연결은 유지한다.
+
+구독 종료는 로컬 처리이며 원격 unsubscribe나 무손실 전달을 보장하지 않는다.
+서버의 history 누락 entry도 별도 신뢰 표시로 추측하지 않고 raw entry로
+전달한다. MLog에는 구독 generation ID가 없어 같은 MON 세션의 이전 watch에서
+늦게 온 batch가 새 watch에 도착할 수 있다. 현재 admission을 통과한 MON과
+일치하는 FSID의 메시지만 받고 service version으로 이미 접수한 batch를 거른다.
+
 ## 운영 상태
 
 `Snapshot()`은 네트워크 요청이나 재접속 대기 없이 현재 client 상태를 읽는다.
@@ -126,7 +190,8 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
   MON의 MonMap 검증 대기는 protocol 실패와 context 종료가 겹쳐도 세션에
   먼저 기록된 종료 원인을 보존한다.
   MGR 핸드셰이크 중인 연결의 정리도 완료한 뒤 반환한다.
-  종료 후 호출은 입력 검증·복사 전에 `ErrClosed`를 반환한다. 호출 context가
+  종료 후 새 명령·준비 대기·`WatchLogs` 호출은 입력 검증·복사 전에
+  `ErrClosed`를 반환한다. 호출 context가
   이미 취소됐으면 해당 context 오류를 먼저 반환한다.
 - `KeepaliveInterval` 기본값은 15초, `KeepaliveTimeout`은 45초이며 timeout은
   interval보다 커야 한다. TCP keepalive와 별도로 Messenger probe를 보내고,
@@ -198,6 +263,19 @@ MON이 명령 전용 CLIENT에도 요구하는 CRUSH 세대 비트는 MON 접속
 ## 검증 결과
 
 2026-10-01–02에 다음 구성을 실제 Ceph daemon과 검증했다.
+
+MON 로그 core `ff80b4c`를 포함한 20.2.4 시험은 Linux arm64·CGO=0·aes256k·
+직접 IPv6와 Darwin arm64·aes·IPv4 host relay의 race 실행에서 통과했다.
+독립 native CLI 로그와 entity·rank·주소·priority·text 및 microsecond 표시
+시각을 대조했고 raw nanoseconds를 보존했다. 실제 entry sequence 0도
+MON log-service cursor와 구분했다.
+read-only 계정의 실제 로그 수신, Next 대기 취소·watch 취소와 재등록,
+1 KiB 큐 overflow, 일반 MON/MGR 명령과 Close도 확인했다.
+복구 시험은 AUTH·MGR ticket 만료 시각이 두 번 실제로 증가하는 동안 ID를
+유지했다. Ceph quorum을 유지한 채 client TCP를 끊고 seed 33300 재접속을
+차단해 학습한 MON 33301에서 로그를 이어 받았다. 이 시험은 서버 이력의
+무손실 전달을 증명하지 않는다. 최종 `1a09b01`의 Linux arm64·CGO=0·aes256k·
+직접 IPv6 전체 통합시험은 35개가 통과했다.
 
 Tell 제품 구현 `6ba0d88`은 20.2.4의 Linux arm64·CGO=0·aes256k·직접 IPv6와
 Darwin arm64·aes·IPv4 host race에서 검증했다. native CLI의 MON/MGR 버전
@@ -748,7 +826,7 @@ generic peer 주소의 실제 Ceph 시험, handshake 거부 원인 보존과 fix
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 59개 경로를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 66개 경로를
 비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
 iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를
@@ -775,6 +853,14 @@ Tell 추가 후 같은 고정 base와 Tentacle HEAD를 59개 경로로 다시 �
 `MCommand.h`·`MCommandReply.h`·`admin_socket.cc`는 byte-identical이었다.
 이는 소스 비교 결과이며 가변 브랜치의 실서버 검증을 의미하지 않는다.
 
+MON 로그 추가 후 같은 고정 base와 HEAD를 66개 경로로 비교한 실행은
+11.79초였으며 9개 파일이 달랐다. 새 로그 감시 경로 7개 중 6개는
+byte-identical이었다. 나머지
+[`entity_name.cc` 변경](https://github.com/ceph/ceph/blob/7411a08041185df39dbb166f983a6b0be7af0811/src/common/entity_name.cc#L145-L155)은
+유효 타입명 목록의 표시 수정이었다. EntityName 인코딩·해석과 LogEntry v5의
+wire 의미는 그대로였고 Go 변경이 필요한 차이를 발견하지 못했다. 비교 시간은
+수동 검토·실서버 시험을 포함하지 않으며 해당 HEAD의 런타임 지원 주장이 아니다.
+
 ```sh
 python3 tools/ceph_diff.py tentacle           # 고정 v20.2.4 참조와 비교
 python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
@@ -786,6 +872,13 @@ python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
 고정 Ceph 소스로 확인했다. Ceph 소스에는 LGPL-2.1 등의 개별 라이선스가
 명시되어 있으며 해당 소스를 제품에 vendor하거나 링크하지 않았다.
 
+- MON 로그는 고정 [MLog](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MLog.h),
+  [LogEntry v5](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/LogEntry.cc#L203),
+  [EntityName](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/entity_name.h),
+  [LogMonitor 구독 처리](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/LogMonitor.cc#L1090)의
+  wire 의미를 독립 Go 코드로 작성했다. 관련 header와 LogMonitor의 LGPL-2.1
+  고지를 확인했으며 C++ 코드를 복사하지 않았다. 독립 raw wire 시험과 native
+  CLI 로그 oracle은 개발 검증에만 사용한다.
 - AES256K 암호 검증은 [RFC 8009](https://www.rfc-editor.org/rfc/rfc8009.html)의
   공식 vector를 사용한다.
 - Frame vector는 별도의 Python CRC/AES-GCM 구현으로 생성했다. 이는

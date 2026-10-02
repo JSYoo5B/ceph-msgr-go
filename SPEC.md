@@ -57,6 +57,7 @@ MON 기능:
 - FSID 일치 확인, MonMap 수신·갱신, 접속 MON 변경.
 - 명령 메시지와 응답, transaction ID에 따른 동시 요청 분배.
 - MGR 발견에 필요한 MgrMap 구독 및 갱신.
+- cluster log 구독, service cursor와 메모리 상한을 갖는 수신 stream.
 
 MGR 기능:
 
@@ -72,15 +73,42 @@ Tell도 일반 관리 명령과 같은 context·동시 호출·결과 불명확�
 
 참조: [MCommand](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MCommand.h), [MCommandReply](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MCommandReply.h), [daemon-local command 처리](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/admin_socket.cc).
 
+MON 로그는 `log-debug/info/sec/warn/error`의 연속 구독과 `MLog`(52)를 사용한다.
+현재 LogEntry v5의 entity·rank·주소·원본 timestamp·sequence·priority·text·channel을
+보존하며 기존 feature 집합을 확장하지 않는다. Batch version은 MON log-service
+cursor이며 entry sequence와 다르다. Start cursor 0은 서버의 마지막 committed
+batch, 나머지는 inclusive cursor다. 현재 admission을 통과한 MON과 FSID만 허용하고
+재접속은 마지막으로 큐에 접수한 version 다음부터 구독한다. 최대 uint64는
+증가시키지 않고 명시적으로 거부한다.
+
+구독 등록 성공이나 SubscribeAck를 읽기 권한 승인으로 해석하지 않는다.
+종료는 로컬 처리이며 원격 unsubscribe와 무손실 수신을 보장하지 않는다.
+서버의 history 누락 WARN 등 낮은 priority도 거르지 않고 raw entry로 보존한다.
+MLog에는 구독 generation ID가 없어 같은 세션의 이전 watch에서 늦게 온 batch를
+완전히 구분할 수 없다. C++ 구현을 복사하지 않고 고정 wire 의미를 독립 구현하며
+관련 header·LogMonitor의 LGPL-2.1 고지와 개발 fixture 출처를 확인한다.
+
+참조: [MLog](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MLog.h),
+[LogEntry v5](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/LogEntry.cc#L203),
+[EntityName](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/entity_name.h),
+[LogMonitor cursor·history 처리](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/LogMonitor.cc#L1090).
+
 참조: [CephX 보안 수정](https://docs.ceph.com/en/latest/security/CVE-2025-30156/), [CephX 개요](https://docs.ceph.com/en/tentacle/dev/cephx/), [librados 명령 입출력 계약](https://docs.ceph.com/en/tentacle/rados/api/librados/).
 
 ## Go API 설계 기준
 
-공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MgrTell`, `WaitMonReady`, `WaitMgrReady`, `Snapshot`, `Close`와 `Options`, `Command`, `Result`, `State`를 중심으로 한다. go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
+공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MgrTell`,
+`WaitMonReady`, `WaitMgrReady`, `WatchLogs`, `Snapshot`, `Close`를 중심으로 한다.
+연결·명령·상태 타입은 `Options`, `Command`, `Result`, `State`다.
+로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
+go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
 - `WaitMonReady(ctx)`와 `WaitMgrReady(ctx)`는 관리 명령이나 명령 슬롯 없이 연결 준비를 기다린다. MGR 대기는 발견과 별도 인증 연결을 포함한다. 취소는 해당 대기만 끝내며 성공은 이후 명령 성공을 보장하지 않는다. `Snapshot()`은 네트워크 요청 없이 현재 상태를 복사한다.
+- `WatchLogs(ctx, options)`는 client당 하나의 worker를 로컬에 비동기 등록하며 명령 슬롯을 사용하지 않는다. context는 복구를 포함한 watch 전체 수명에 적용한다. `Next(ctx)` 취소는 해당 대기만 끝내며 이미 취소된 context는 접수한 큐를 소비하지 않는다.
+- 로그 큐는 최대 64 batch와 보수적인 보유 bytes 추정치로 제한한다. `MaxBufferedBytes` 기본값은 `MaxFrameSize`, 허용 범위는 1 KiB–1 GiB이며 정확한 Go heap 상한은 아니다. overflow는 watch만 종료하며 이미 접수한 batch와 일반 명령 연결을 유지한다.
+- `LogStream.Close`는 worker를 종료하고 watch 슬롯을 해제한다. 살아 있는 Next context는 이미 접수한 큐를 먼저 읽고 최초 종료 원인을 계속 받는다. Client Close도 watch worker를 종료하고 기다린다. 취소·overflow·인증·프로토콜 등 먼저 기록된 원인을 이후 Close가 덮어쓰지 않는다.
 - 응답은 원본 data bytes와 상태 문자열을 보존한다. 모든 응답이 JSON이라고 가정하지 않는다.
 - 서버 오류 코드와 Go의 context·네트워크·프로토콜 오류를 구분한다. 서버 코드는 호스트 OS의 errno 숫자로 재해석하지 않는다.
 - client에서 동시 명령 호출을 허용한다. 요청 하나의 deadline을 공유 TCP 연결에 직접 적용하지 않는다.
@@ -99,6 +127,7 @@ Tell도 일반 관리 명령과 같은 context·동시 호출·결과 불명확�
 4. ticket 갱신, MON/MGR failover, 연결 단절과 session reset을 검증한다.
 5. 동시 요청 중 개별 context 취소, 늦은 응답, 결과 불명확, Close 경합을 검증한다.
 6. 제품의 전이 의존성을 포함해 CGO·네이티브 라이브러리·CLI 의존성이 없는지 확인하고 대상 OS에서 빌드·실행을 검증한다.
+7. MON 로그는 독립 raw wire 입력 및 native CLI oracle과 대조한다. 실제 로그 수신, cursor 복구, ticket 갱신, 제한된 큐, watch·Next context와 Close를 검증하며 단순 SubscribeAck를 권한 확인으로 사용하지 않는다.
 
 구현한 encoder와 decoder끼리의 round trip만으로 wire 호환성을 입증하지 않는다. Ceph에서 얻은 fixture 및 실제 Ceph 상대 검증을 사용한다. parser fuzzing, race 검사, 장시간 ticket 갱신, 장애 주입을 포함한다. 클러스터 구성과 테스트 oracle을 위한 Ceph CLI·컨테이너 사용은 개발 도구이며 제품의 런타임 의존성과 구분한다.
 

@@ -32,8 +32,8 @@ type MonitorState struct {
 }
 
 // ManagerState separates advertised MGR availability from a ready client
-// session. Ready also requires MON admission, which MgrCommand waits for.
-// MGR connections are opened lazily by MgrCommand or WaitMgrReady.
+// session. Ready also requires MON admission, which MGR operations wait for.
+// MGR connections are opened lazily by MgrCommand, MgrTell or WaitMgrReady.
 type ManagerState struct {
 	Ready     bool
 	Endpoint  string // Peer reported by the held connection's RemoteAddr.
