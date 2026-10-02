@@ -76,6 +76,8 @@ type Options struct {
 	MaxInFlight int
 	// DialContext defaults to net.Dialer.DialContext. Custom implementations
 	// must honor context cancellation; useful for proxies and in-process tests.
+	// For hostname monitor seeds, RemoteAddr must identify the resolved Ceph
+	// peer as a *net.TCPAddr or provide a numeric IP:port through String().
 	DialContext func(context.Context, string, string) (net.Conn, error)
 }
 

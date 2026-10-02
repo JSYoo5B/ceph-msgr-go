@@ -188,14 +188,15 @@ func (c *Client) open(ctx context.Context, endpoint string, address msgr.Address
 		return nil, err
 	}
 	if !address.Endpoint.IsValid() {
-		if tcp, ok := conn.RemoteAddr().(*net.TCPAddr); ok {
+		remote := conn.RemoteAddr()
+		if tcp, ok := remote.(*net.TCPAddr); ok {
 			// TCPAddr uses AF_INET for IP.To4(), including a 16-byte ParseIP
 			// value. Only inferred socket addresses follow that convention;
 			// literal seeds and learned wire addresses retain their family.
 			endpoint := tcp.AddrPort()
 			address.Endpoint = netip.AddrPortFrom(endpoint.Addr().Unmap(), endpoint.Port())
-		} else {
-			address.Endpoint, _ = netip.ParseAddrPort(endpoint)
+		} else if remote != nil {
+			address.Endpoint, _ = netip.ParseAddrPort(remote.String())
 		}
 		if !address.Endpoint.IsValid() {
 			conn.Close()
