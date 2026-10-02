@@ -189,3 +189,22 @@ func TestLogSubscribeIndependentVector(t *testing.T) {
 		t.Fatal("adding logs changed existing map-only subscriptions", plain)
 	}
 }
+
+func FuzzDecodeLog(f *testing.F) {
+	front, err := hex.DecodeString(strings.Join(strings.Fields(logVector), ""))
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(front, uint8(1), uint8(0), uint16(4096))
+	f.Add([]byte{}, uint8(1), uint8(0), uint16(4096))
+	f.Add(front[:38], uint8(2), uint8(2), uint16(64))
+	countOverflow := append([]byte(nil), front...)
+	binary.LittleEndian.PutUint32(countOverflow[34:], ^uint32(0))
+	f.Add(countOverflow, uint8(1), uint8(0), uint16(4096))
+	f.Fuzz(func(t *testing.T, p []byte, version, compat uint8, limit uint16) {
+		batch, err := DecodeLog(MessageData{Type: LogMessage, Version: uint16(version), CompatVersion: uint16(compat), Front: p}, uint32(limit))
+		if err != nil && (!errors.Is(err, ErrFrame) || !reflect.DeepEqual(batch, LogBatch{})) {
+			t.Fatal("malformed complete log exposed a partial batch or lost protocol provenance", err)
+		}
+	})
+}
