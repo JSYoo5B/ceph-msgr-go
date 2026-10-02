@@ -115,6 +115,8 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
   context에 따른다. `MaxFrameSize` 기본값은 논리 frame당 16 MiB다.
 - `ConnectTimeout` 기본값은 endpoint별 10초다. 요청 deadline은 공유
   연결에 적용하지 않는다. `Close`는 연결과 내부 worker를 종료하고 기다린다.
+  MON의 MonMap 검증 대기는 protocol 실패와 context 종료가 겹쳐도 세션에
+  먼저 기록된 종료 원인을 보존한다.
   MGR 핸드셰이크 중인 연결의 정리도 완료한 뒤 반환한다.
   종료 후 호출은 입력 검증·복사 전에 `ErrClosed`를 반환한다. 호출 context가
   이미 취소됐으면 해당 context 오류를 먼저 반환한다.
@@ -168,6 +170,11 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
   session flag를 선택하면 거부한다. 인증된 서버 식별 주소에도 연결 대상의
   주소·포트·nonce와 IPv6 scope·flow 정보가 일치해야 한다. 재접속할 때
   MonMap에서 받은 원본 주소를 유지하며 TCP 접속 문자열로 재파싱하지 않는다.
+
+MON seed는 `host:port`, `v2:host:port/nonce` 형식이며 IPv6는 대괄호로 감싼다.
+`%3`·`%en0` 같은 IPv6 zone seed는 연결 전에 거부한다. 로컬 routing zone은
+원격 Ceph 주소의 wire `ScopeID`를 결정하지 못하므로 이를 추측하지 않는다.
+MonMap에서 받은 scope·flow 보존과 실제 link-local 네트워크 지원은 구분한다.
 
 인증은 `secure`만 허용하며 자동 downgrade하지 않는다. 현재 Tentacle의
 `aes256k`와 기존 `aes` 키를 지원한다. 압축 협상은 압축을 끄는 데 사용한다.
@@ -360,6 +367,15 @@ MON 재연결 없이 수신 활동과 이후의 MgrMap 전달을 확인했다. �
 MGR을 전환한 뒤에도 기존 MON 구독으로 새 MGR을 찾아 명령을 완료했다.
 이 시험은 20.2.4·aes256k의 Darwin arm64·IPv6 및 20.2.3·aes의 Linux arm64·IPv4에서
 통과했다.
+
+후속 `de18213`은 MON session timeout을 3초·tick을 1초로 줄인 별도 fixture에서
+같은 8초 idle을 검증했다. 독립 client가 daemon의 실제 설정 7개를 읽고,
+첫 keepalive가 10초 뒤인 대조군의 원래 MON 세션은 8초 안에 서버에서 닫혔다.
+1초 keepalive를 쓰는 client는 원래 MON 세션·인증을 유지하고 이후 MGR 전환
+지도를 받았다. 20.2.4·aes256k·Linux amd64·IPv6의 host 모드
+[실제 CI 시험](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36990152382)에서 통과했다.
+서버가 먼저 보낸 keepalive의 과거·미래 timestamp 원본 echo와 로컬 수신 시각,
+명령 sequence·ACK 유지는 별도의 secure synthetic peer 시험으로 확인했다.
 
 MON 세 개를 모두 중단하고 재기동하는 과정을 3회 반복했다. 중단 중 전송을
 기다리는 호출은 context 만료로 끝나며, 충분한 deadline을 가진 MON/MGR
@@ -576,6 +592,14 @@ Darwin arm64의 반복·race 검사와
 구성을 포함한다. [인증 갱신·모드 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/auth-deadlines-and-modes)는
 이 실행의 `47cec13`을 가리킨다. Windows의 1ns 시험은 wire TTL만으로 만료를
 추정하지 않고 실제 clock이 시한을 넘은 뒤 publication을 허용하도록 보강했다.
+
+MON idle 만료 대조군, secure keepalive echo, IPv6 zone seed 거부와 admission
+종료 원인 보존을 포함한
+[CI 24개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36990152382)도 모두 통과했다.
+[MON 세션 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-lifetime-boundaries)는
+해당 `de18213`을 가리킨다. 오류가 먼저 기록돼도 deadline 분기가 이를 덮는
+경합은 제어된 시험으로 재현했다. 일반 map 검증과 의도한 missing-map timeout의
+시험 예산도 분리했다. 앞선 macOS CI 실패가 어느 경로였는지는 확정하지 못했다.
 
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
 앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
