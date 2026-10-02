@@ -34,6 +34,8 @@ GROUPS = {
     ),
     "authentication": (
         "src/auth/Auth.h",
+        "src/auth/AuthRegistry.h",
+        "src/auth/AuthRegistry.cc",
         "src/auth/Crypto.h",
         "src/auth/Crypto.cc",
         "src/auth/cephx/CephxProtocol.h",
@@ -55,6 +57,8 @@ GROUPS = {
         "src/mgr/MgrClient.cc",
     ),
     "daemon-policy": (
+        "src/common/options/global.yaml.in",
+        "src/common/options/mon.yaml.in",
         "src/mon/Monitor.h",
         "src/mon/Monitor.cc",
         "src/mon/AuthMonitor.h",
