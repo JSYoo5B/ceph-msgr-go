@@ -10,12 +10,10 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
-	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func testMappedAddressLifecycle(t *testing.T) {
-	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
-	if control == "" || os.Getenv("CEPH_MSGR_TEST_MAPPED_IPV6") != "1" || os.Getenv("CEPH_MSGR_TEST_PROXY") != "" {
+	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" || os.Getenv("CEPH_MSGR_TEST_MAPPED_IPV6") != "1" || os.Getenv("CEPH_MSGR_TEST_PROXY") != "" {
 		t.Skip("requires the container-local mapped Ceph fixture")
 	}
 	if os.Getenv("CEPH_MSGR_TEST_MGR_COUNT") != "2" {
@@ -30,6 +28,7 @@ func testMappedAddressLifecycle(t *testing.T) {
 	options.ExpectedFSID = fsid
 	options.ConnectTimeout = 5 * time.Second
 	options.KeepaliveInterval, options.KeepaliveTimeout = 200*time.Millisecond, 2*time.Second
+	seedFault := installSeedPathFault(&options)
 	c, err := cephmsgr.Dial(ctx, options)
 	if err != nil {
 		t.Fatal("mapped lifecycle authentication", err)
@@ -82,34 +81,18 @@ func testMappedAddressLifecycle(t *testing.T) {
 		t.Logf("mapped renewal cycle=%d client-id=%d AUTH expiry=%s MGR expiry=%s", cycle, state.GlobalID, state.AuthTicket.Expires.Format(time.RFC3339Nano), state.MgrTicket.Expires.Format(time.RFC3339Nano))
 		previous = state
 	}
-	// The only configured seed is MON a. A ready session on b/c while a is
-	// stopped therefore exercises an authenticated learned AF_INET6 target.
+	// The only configured seed is MON a. Its local TCP path stays unavailable
+	// through Close, so b/c must be an authenticated learned AF_INET6 target.
 	_, port, err := net.SplitHostPort(previous.Monitor.Endpoint)
 	if err != nil || port != "33300" {
 		t.Fatal("mapped learned-path oracle did not begin on the sole seed", previous.Monitor.Endpoint, err)
 	}
-	resumeNeeded := false
-	resume := func() error {
-		restore, stop := context.WithTimeout(context.Background(), 5*time.Second)
-		defer stop()
-		if err := testcluster.ControlDaemon(restore, control, "resume", "mon", "a"); err != nil {
-			return err
-		}
-		resumeNeeded = false
-		return nil
-	}
-	// Register after client cleanup so SIGCONT completes before Close on
-	// Fatal too. A failed pause acknowledgement can still follow SIGSTOP.
-	t.Cleanup(func() {
-		if resumeNeeded {
-			if err := resume(); err != nil {
-				t.Error("restore mapped MON a", err)
-			}
-		}
-	})
-	resumeNeeded = true
-	if err := testcluster.ControlDaemon(ctx, control, "pause", "mon", "a"); err != nil {
-		t.Fatal("pause mapped MON a", err)
+	// Keep Ceph daemons and quorum running: this isolates client learned-peer
+	// recovery from native daemon proof/ticket expiry under the fixture's 12s TTL.
+	seedFault.cleanupAfterClientClose(t, c)
+	t.Logf("inject mapped client TCP path fault only; sole MON-a seed blocked until client Close; Ceph daemons/quorum remain running; client-id=%d", previous.GlobalID)
+	if err := seedFault.interrupt(); err != nil {
+		t.Fatal("inject mapped client MON TCP connection loss", err)
 	}
 	recovered := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 		checkMapped("learned MON recovery", s)
@@ -117,12 +100,9 @@ func testMappedAddressLifecycle(t *testing.T) {
 		return s.Monitor.Ready && err == nil && (peerPort == "33301" || peerPort == "33302")
 	})
 	if err := fixtureRecoveryRead(ctx, c, false); err != nil {
-		t.Fatal("status through learned mapped MON while seed paused", err)
+		t.Fatal("status through learned mapped MON while sole seed path blocked", err)
 	}
-	if err := resume(); err != nil {
-		t.Fatal("resume mapped MON a", err)
-	}
-	t.Logf("mapped sole-seed MON %q -> learned peer %q while a was stopped; client-id=%d", previous.Monitor.Endpoint, recovered.Monitor.Endpoint, recovered.GlobalID)
+	t.Logf("mapped unavailable client seed path %q -> learned peer %q; client-id=%d", previous.Monitor.Endpoint, recovered.Monitor.Endpoint, recovered.GlobalID)
 	if err := c.WaitMgrReady(ctx); err != nil {
 		t.Fatal("prepare mapped MGR before takeover", err)
 	}
@@ -130,6 +110,7 @@ func testMappedAddressLifecycle(t *testing.T) {
 	checkMapped("before MGR takeover", beforeTakeover)
 	observerOptions := options
 	observerOptions.Monitors = []string{"v2:[::ffff:7f00:1]:33300/0", "v2:[::ffff:7f00:1]:33301/0", "v2:[::ffff:7f00:1]:33302/0"}
+	observerOptions.DialContext = nil // Independent default dialer has no client fault.
 	observer, err := cephmsgr.Dial(ctx, observerOptions)
 	if err != nil {
 		t.Fatal("independent mapped observer authentication", err)
@@ -198,5 +179,6 @@ func testMappedAddressLifecycle(t *testing.T) {
 			t.Fatal("closed mapped readiness lost known non-execution", err)
 		}
 	}
-	t.Logf("mapped ticket renewal, learned MON admission and lazy MGR takeover passed; retained client-id=%d MGR %s/%d -> %s/%d", final.GlobalID, beforeTakeover.Manager.Name, beforeTakeover.Manager.GlobalID, final.Manager.Name, final.Manager.GlobalID)
+	stats := seedFault.assertHeld(t)
+	t.Logf("client TCP fault only; healthy Ceph daemons/quorum; mapped two ticket renewals, learned MON admission and lazy MGR takeover passed; retained client-id=%d MGR %s/%d -> %s/%d; blocked seed dials=%d", final.GlobalID, beforeTakeover.Manager.Name, beforeTakeover.Manager.GlobalID, final.Manager.Name, final.Manager.GlobalID, stats.Rejected)
 }

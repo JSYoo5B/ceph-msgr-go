@@ -445,7 +445,7 @@ hex 형식 `[::ffff:7f00:1]`을 사용한다. 이 결과의 범위는 Linux `bin
 컨테이너 loopback이며, hostname 추론·host relay·mapped 주소의 장애 복구는
 이 시험에 포함하지 않는다.
 
-같은 제품의 후속 mapped 시험은 AUTH·MGR ticket 갱신 2회, 단일 seed MON a를
+`8a827e2`의 mapped 시험은 AUTH·MGR ticket 갱신 2회, 단일 seed MON a를
 SIGSTOP한 동안 지도에서 학습한 b로의 접속·조회, 별도 observer가 한 번 보낸
 `mgr fail`에 따른 b→a 전환을 확인했다. 새 `mgr dump`의 name·ID·epoch와 상태를
 대조한 뒤 lazy MGR 접속·양쪽 조회·Close도 통과했다. 포트 예약을 적용한
@@ -455,6 +455,16 @@ Linux arm64·20.2.4·aes256k 실행은 약 32초였다.
 자동 client 포트가 향후 mapped listener를 막는 경로와 예약에 따른 성공을
 확인했다. 개발 컨테이너는 MON/MGR 고정 포트를 자동 할당에서 제외한다.
 이 대조군과 후속 성공만으로 앞선 충돌의 실제 소유자를 확정하지는 않는다.
+
+후속 `e7f3a3b`의 원격 CI에서는 같은 pause/resume 뒤 두 native MGR가
+없어진 AUTH service secret으로 이전 proof를 검증하지 못하며 복귀하지 않았다.
+Go MON 인증·갱신은 유지됐고 같은 커밋의 로컬 재현은 통과했으므로 정확한
+발생 원인은 확정하지 않았다. 현재 mapped 시험은 Ceph quorum을 유지한 채
+client TCP를 끊고 seed 33300 경로를 Close까지 차단해 이 결합을 분리한다.
+Linux arm64·20.2.4·aes256k에서 두 ticket 갱신·학습한 MON 33301 접속·
+한 번의 `mgr fail`·새 지도 대조·lazy 접속·Close를 약 19초에 통과했다.
+이는 client 경로 장애 시험이다. 실제 MON daemon 중단·복구는 별도 통합시험으로
+계속 검증하며 앞선 SIGSTOP 시험 결과와 구분한다.
 
 후속 `25496b0`는 hostname seed에서 custom dialer가 일반 `net.Addr`로 제공한
 숫자형 IP:port도 MON 식별 주소로 사용한다. 명시적 seed와 learned wire 주소는
