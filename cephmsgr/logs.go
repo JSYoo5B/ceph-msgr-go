@@ -242,7 +242,28 @@ func (s *LogStream) Next(ctx context.Context) (LogBatch, error) {
 
 func fatalLogSessionError(err error) bool {
 	var rejection *AuthenticationError
-	return errors.As(err, &rejection) || errors.Is(err, msgr.ErrFrame) || errors.Is(err, msgr.ErrCRC) || errors.Is(err, msgr.ErrAuthentication) || errors.Is(err, msgr.ErrNonce) || errors.Is(err, wire.ErrVersion) || errors.Is(err, cephx.ErrIntegrity)
+	return errors.As(err, &rejection) || errors.Is(err, msgr.ErrFrame) || errors.Is(err, msgr.ErrCRC) || errors.Is(err, msgr.ErrAuthentication) || errors.Is(err, msgr.ErrNonce) || errors.Is(err, wire.ErrVersion) || errors.Is(err, wire.ErrLimit) || errors.Is(err, cephx.ErrIntegrity)
+}
+
+// Preserve a registered source's terminal protocol error before a replacement
+// can make it stale. Custom error inspection and cancellation run outside mu.
+func (c *Client) stopLogForFailedSession(source *session.Session, err error) {
+	if !fatalLogSessionError(err) {
+		return
+	}
+	c.mu.Lock()
+	watch := c.logWatch
+	if c.mon == source && watch != nil && watch.observed == source {
+		if !watch.stopLocked(err) {
+			watch = nil
+		}
+	} else {
+		watch = nil
+	}
+	c.mu.Unlock()
+	if watch != nil {
+		watch.cancel()
+	}
 }
 
 func (s *LogStream) failCurrent(source *session.Session, err error) bool {

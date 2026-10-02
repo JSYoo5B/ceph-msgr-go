@@ -334,7 +334,8 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				readyOnce.Do(func() { close(ready) })
 			}
 			return nil
-		}, func(error) {
+		}, func(err error) {
+			c.stopLogForFailedSession(s, err)
 			c.mu.Lock()
 			if c.mon == s {
 				wasReady := c.monReady
@@ -349,6 +350,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			}
 			c.mu.Unlock()
 		})
+		if old != nil {
+			// The old session may already be terminal while its custom Conn.Close
+			// still delays onClose. Record its registered watch's cause before
+			// making that callback stale by adopting this candidate.
+			c.stopLogForFailedSession(old, old.Err())
+		}
 		c.mu.Lock()
 		c.mon, c.monReady = s, false
 		if c.logWatch != nil {
