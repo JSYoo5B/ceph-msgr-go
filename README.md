@@ -223,6 +223,15 @@ JSON·binary 출력과 서버 `-22` 응답을 각각 확인했다. Context 검�
 잠금 밖에서 실행하며, 검사 중 취소·종료된 전송 전 요청을 뒤늦게 보내지
 않는 것도 단위 시험으로 검증했다.
 
+같은 context 동작을 MGR 최초 연결, ticket 갱신, MON 무응답 복구,
+MGR 전환과 대기 취소·종료 중에도 검증했다. 복구 시험은 결과 불명확
+오류에 포함된 원인을 모두 검사하며, 인증·프로토콜 오류가 일시적인
+네트워크 오류로 취급되지 않는 것도 회귀 시험으로 확인했다.
+제품 소스 `c14f78f`는 20.2.4·aes256k의 Linux arm64·CGO=0·직접 IPv6에서
+전체 통합시험과 3분 부하 시험을 통과했다. 부하 시험은 명령 63,278건,
+ticket 갱신 18회, MGR 장애 6회와 context의 상태 조회 284,403회를
+처리했다. 결과 불명확 응답은 없었고 관찰한 최대 세션 수는 2였다.
+
 MON 재접속의 IPv6 scope·flow와 동일 endpoint의 서로 다른 식별 후보는
 인증·지도·명령 응답까지 수행하는 synthetic peer 시험 4개로 확인했다.
 실제 link-local 네트워크 시험은 아니다. 같은 제품 소스 `3cca408`은
@@ -456,11 +465,13 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 클라이언트 내부 통합시험도 host 모드로 실행한다.
 Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36962632275)이
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36964931080)이
 2026-10-02에 모두 통과했다. Actions 설정 lint와 개발용 진단 도구의 단위
 시험 및 소스 비교 도구 시험 16개도 통과했다.
+[복구 중 Context 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/recovery-contexts)는
+이 실행의 `c14f78f`를 가리킨다.
 [MON 주소 보존 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-wire-address)는
-이 실행의 `3cca408`을 가리킨다.
+앞서 CI 18개 작업을 통과한 `3cca408`을 가리킨다.
 [Context 콜백 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/context-admission)는
 앞서 CI 18개 작업을 통과한 `580ea2a`를 가리킨다.
 [네트워크 취소·실서버 race 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/network-cancellation)는
