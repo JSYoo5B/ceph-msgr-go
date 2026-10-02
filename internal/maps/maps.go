@@ -14,6 +14,7 @@ var ErrRelease = errors.New("ceph: monitor minimum release is earlier than Tenta
 type Mon struct {
 	FSID           [16]byte
 	Epoch          uint32
+	AuthEpoch      uint32
 	MinimumRelease uint8
 	Addresses      []msgr.Address
 }
@@ -73,6 +74,28 @@ func DecodeMon(front []byte) (Mon, error) {
 		}
 	}
 	m.MinimumRelease = p.U8()
+	if v >= 8 {
+		n := p.Count(4, 1024) // removed ranks
+		for i := 0; i < n; i++ {
+			p.U32()
+		}
+		p.U8() // election strategy
+		n = p.Count(4, 1024)
+		for i := 0; i < n; i++ {
+			_ = p.String() // disallowed leaders
+		}
+	}
+	if v >= 9 {
+		p.Bool() // stretch mode
+		_ = p.String()
+		n := p.Count(4, 1024)
+		for i := 0; i < n; i++ {
+			_ = p.String() // stretch marked-down monitors
+		}
+	}
+	if v >= 10 {
+		m.AuthEpoch = p.U32()
+	}
 	if err := p.Err(); err != nil {
 		return m, err
 	}
@@ -82,7 +105,7 @@ func DecodeMon(front []byte) (Mon, error) {
 	if m.FSID == [16]byte{} || len(m.Addresses) == 0 {
 		return m, errors.New("ceph: empty monitor map")
 	}
-	// The versioned envelope allows unrelated appended election/auth fields.
+	// The envelope permits unrelated appended cipher policy and future fields.
 	return m, nil
 }
 

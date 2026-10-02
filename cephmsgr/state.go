@@ -45,7 +45,8 @@ type ManagerState struct {
 }
 
 // TicketState exposes local renewal scheduling without keys or opaque proofs.
-// A zero value means the client has no ticket for this service.
+// A zero value means no ticket is available for new authentication. An older
+// opaque proof can remain internal to renew tickets after service-key disposal.
 type TicketState struct {
 	Expires    time.Time
 	RenewAfter time.Time

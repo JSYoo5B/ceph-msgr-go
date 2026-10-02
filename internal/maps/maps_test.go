@@ -11,6 +11,9 @@ import (
 )
 
 func monFixture(release byte) []byte {
+	return monAuthFixture(release, 0)
+}
+func monAuthFixture(release byte, authEpoch uint32) []byte {
 	e := wire.Encoder{}
 	e.Raw([]byte("0123456789abcdef"))
 	e.U32(7)
@@ -28,6 +31,17 @@ func monFixture(release byte) []byte {
 	e.U32(1)
 	e.String("a")
 	e.U8(release)
+	e.U32(0) // removed ranks
+	e.U8(0)
+	e.U32(0) // disallowed leaders
+	e.U8(0)
+	e.String("")
+	e.U32(0) // stretch marked-down monitors
+	e.U32(authEpoch)
+	e.U32(2)
+	e.U32(1)
+	e.U32(2)
+	e.U32(2)
 	mapBlob := wire.Encoder{}
 	mapBlob.Struct(10, 6, e.Data)
 	out := wire.Encoder{}

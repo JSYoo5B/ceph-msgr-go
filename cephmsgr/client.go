@@ -154,12 +154,25 @@ func (c *Client) wakeMonitor() {
 func (c *Client) snapshotAuth() *cephx.Client {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	copyAuth := *c.auth
-	copyAuth.Tickets = make(map[uint32]cephx.Ticket, len(c.auth.Tickets))
-	for id, t := range c.auth.Tickets {
+	return copyAuth(c.auth)
+}
+func copyAuth(auth *cephx.Client) *cephx.Client {
+	copyAuth := *auth
+	copyAuth.Tickets = make(map[uint32]cephx.Ticket, len(auth.Tickets))
+	for id, t := range auth.Tickets {
 		copyAuth.Tickets[id] = t
 	}
 	return &copyAuth
+}
+func invalidateAuthTickets(auth *cephx.Client) *cephx.Client {
+	invalidated := copyAuth(auth)
+	for id, ticket := range invalidated.Tickets {
+		// Tentacle keeps AUTH rotating keys during a service-key wipe. Retain
+		// the old proof and session key for secure global-ID reclamation.
+		ticket.Expires, ticket.RenewAfter = time.Time{}, time.Time{}
+		invalidated.Tickets[id] = ticket
+	}
+	return invalidated
 }
 func (c *Client) linkedContext(ctx context.Context) (context.Context, func()) {
 	linked, cancel := context.WithTimeout(ctx, c.options.ConnectTimeout)
@@ -240,7 +253,10 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 		seen[candidateTarget] = true
 		linked, release := c.linkedContext(ctx)
-		candidate := c.snapshotAuth()
+		c.mu.Lock()
+		candidate := copyAuth(c.auth)
+		attemptEpoch, knownEpoch := c.monMap.AuthEpoch, c.monMap.Epoch != 0
+		c.mu.Unlock()
 		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate})
 		if err != nil {
 			release()
@@ -255,6 +271,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		var verifiedMon bool
 		var bufferedMgr *msgr.MessageData
 		var bufferedEpoch uint32
+		var candidateEpoch uint32
 		var s *session.Session
 		s = session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
 			// MON can send mgrmap before monmap. Keep at most one frame until
@@ -287,6 +304,10 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				return err
 			}
 			if accepted {
+				if !verifiedMon {
+					mon, _ := maps.DecodeMon(m.Front) // Already validated by handleMap.
+					candidateEpoch = mon.AuthEpoch
+				}
 				verifiedMon = true
 				if bufferedMgr != nil {
 					_, err = c.handleMap(s, *bufferedMgr)
@@ -338,6 +359,11 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			if c.closed {
 				err = ErrClosed
 			} else {
+				if (knownEpoch && c.monMap.AuthEpoch > attemptEpoch) || candidateEpoch < c.monMap.AuthEpoch {
+					// Authentication may precede a key wipe learned from MonMap.
+					// Never overwrite its invalidation with an older candidate.
+					candidate = invalidateAuthTickets(candidate)
+				}
 				if c.auth.GlobalID != candidate.GlobalID {
 					oldManager, c.mgr = c.mgr, nil
 				}
@@ -410,6 +436,10 @@ func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (bool, e
 		}
 		c.fsid = mon.FSID
 		if mon.Epoch >= c.monMap.Epoch {
+			if mon.AuthEpoch > c.monMap.AuthEpoch {
+				c.auth = invalidateAuthTickets(c.auth)
+				c.wakeMonitor()
+			}
 			c.monMap = mon
 		}
 		c.signal()

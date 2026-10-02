@@ -87,9 +87,12 @@ func mockMonMap(release uint8, fsid [16]byte) []byte {
 	return mockMonMapAddresses(release, fsid, []msgr.Address{{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}})
 }
 func mockMonMapAddresses(release uint8, fsid [16]byte, addresses []msgr.Address) []byte {
+	return mockMonMapAuthEpoch(release, fsid, addresses, 1, 0)
+}
+func mockMonMapAuthEpoch(release uint8, fsid [16]byte, addresses []msgr.Address, epoch, authEpoch uint32) []byte {
 	e := wire.Encoder{}
 	e.Raw(fsid[:])
-	e.U32(1)
+	e.U32(epoch)
 	e.Raw(make([]byte, 16))
 	features := wire.Encoder{}
 	features.U64(0)
@@ -104,6 +107,17 @@ func mockMonMapAddresses(release uint8, fsid [16]byte, addresses []msgr.Address)
 	e.U32(1)
 	e.String("a")
 	e.U8(release)
+	e.U32(0) // removed ranks
+	e.U8(0)  // election strategy
+	e.U32(0) // disallowed leaders
+	e.U8(0)  // stretch mode
+	e.String("")
+	e.U32(0) // stretch marked-down monitors
+	e.U32(authEpoch)
+	e.U32(2) // service cipher: aes256k
+	e.U32(1)
+	e.U32(2) // allowed cipher: aes256k
+	e.U32(2) // preferred cipher: aes256k
 	out := wire.Encoder{}
 	out.Struct(10, 6, e.Data)
 	front := wire.Encoder{}
