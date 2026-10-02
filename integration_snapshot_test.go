@@ -2,6 +2,7 @@ package cephmsgr
 
 import (
 	"encoding/json"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"net"
 	"os"
 	"slices"
@@ -69,7 +70,7 @@ func TestCephSnapshotIntegration(t *testing.T) {
 	if name == "" {
 		t.Fatal("unrecognized fixture MON", renewed.Monitor.Endpoint)
 	}
-	if err := restartFixtureMonitor(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), name); err != nil {
+	if err := testcluster.RestartMonitor(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), name); err != nil {
 		t.Fatal(err)
 	}
 	waitClientState(t, c, ctx, func(s State) bool {

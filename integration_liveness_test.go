@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"io"
 	"net"
 	"os"
@@ -39,7 +40,7 @@ func TestCephManagerReceiveStallIntegration(t *testing.T) {
 		_, port, err := net.SplitHostPort(endpoint)
 		if err == nil && (port == "36800" || port == "36801") && wrapped.CompareAndSwap(false, true) {
 			return &receiveStallConn{
-				lostReplyConn: &lostReplyConn{Conn: conn, armed: &armed, closed: make(chan struct{}), signalBlocked: func() { close(blocked) }},
+				LostReplyConn: &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{}), SignalBlocked: func() { close(blocked) }},
 				onWrite: func(n int) {
 					if armed.Load() && n >= 4096 {
 						submittedOnce.Do(func() { close(submitted) })
@@ -131,7 +132,7 @@ func TestCephManagerReceiveStallIntegration(t *testing.T) {
 }
 
 type receiveStallConn struct {
-	*lostReplyConn
+	*testcluster.LostReplyConn
 	onWrite func(int)
 }
 

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephNaturalManagerFailoverIntegration(t *testing.T) {
@@ -22,13 +23,13 @@ func TestCephNaturalManagerFailoverIntegration(t *testing.T) {
 	c.mu.Unlock()
 	ticket := c.snapshotAuth().Tickets[cephx.ServiceAuth]
 	started := time.Now()
-	if err := controlFixtureDaemon(ctx, control, "stop", "mgr", name); err != nil {
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mgr", name); err != nil {
 		t.Fatal("stop active MGR process", err)
 	}
 	defer func() {
 		restart, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		if err := controlFixtureDaemon(restart, control, "start", "mgr", name); err != nil {
+		if err := testcluster.ControlDaemon(restart, control, "start", "mgr", name); err != nil {
 			t.Error("restart stopped fixture MGR", err)
 			return
 		}

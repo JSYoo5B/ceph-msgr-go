@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 // These read-only tests are opt-in and use actual daemon responses as the
@@ -30,7 +31,7 @@ func integrationOptions(t *testing.T) Options {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Options{Monitors: strings.Split(monitors, ","), Identity: os.Getenv("CEPH_MSGR_IDENTITY"), Key: key, ExpectedFSID: os.Getenv("CEPH_MSGR_FSID"), DialContext: fixtureDialer()}
+	return Options{Monitors: strings.Split(monitors, ","), Identity: os.Getenv("CEPH_MSGR_IDENTITY"), Key: key, ExpectedFSID: os.Getenv("CEPH_MSGR_FSID"), DialContext: testcluster.Dialer()}
 }
 
 func TestCephIntegration(t *testing.T) {

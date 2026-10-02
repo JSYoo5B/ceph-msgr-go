@@ -4,52 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"io"
 	"net"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
-
-func restartFixtureMonitor(ctx context.Context, control, name string) error {
-	id := time.Now().UnixNano()
-	file, err := os.CreateTemp(control, "restart-mon-request-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if _, err := fmt.Fprintf(file, "%d %s\n", id, name); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(file.Name(), filepath.Join(control, "restart-mon")); err != nil {
-		return err
-	}
-	ack := filepath.Join(control, fmt.Sprintf("mon-restarted.%d", id))
-	defer os.Remove(ack)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if _, err := os.Stat(ack); err == nil {
-			return nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
 
 func TestCephRepeatedMonitorRecoveryIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
@@ -116,7 +80,7 @@ func TestCephRepeatedMonitorRecoveryIntegration(t *testing.T) {
 			t.Errorf("unexpected fixture MON endpoint: %s", endpoint)
 			break
 		}
-		if err := restartFixtureMonitor(ctx, control, name); err != nil {
+		if err := testcluster.RestartMonitor(ctx, control, name); err != nil {
 			t.Errorf("restart MON %s: %v", name, err)
 			break
 		}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"net"
 	"os"
 	"sync"
@@ -34,7 +35,7 @@ func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {
 	rejectedPort.Store("")
 	var writes atomic.Int32
 	var mu sync.Mutex
-	connections := make(map[string]*lostReplyConn)
+	connections := make(map[string]*testcluster.LostReplyConn)
 	blocked := make(chan struct{})
 	var blockOnce sync.Once
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
@@ -46,7 +47,7 @@ func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		stalled := &lostReplyConn{Conn: conn, armed: &atomic.Bool{}, closed: make(chan struct{}), signalBlocked: func() { blockOnce.Do(func() { close(blocked) }) }}
+		stalled := &testcluster.LostReplyConn{Conn: conn, Armed: &atomic.Bool{}, Closed: make(chan struct{}), SignalBlocked: func() { blockOnce.Do(func() { close(blocked) }) }}
 		mu.Lock()
 		connections[endpoint] = stalled
 		mu.Unlock()
@@ -69,7 +70,7 @@ func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {
 	if name == "" || stalled == nil {
 		t.Fatal("could not identify the authenticated fixture MON", endpoint)
 	}
-	stalled.armed.Store(true)
+	stalled.Armed.Store(true)
 	input := bytes.Repeat([]byte("applied MON mutation; "), 2048)
 	mutation := command("config-key set")
 	mutation.Input = input
@@ -111,7 +112,7 @@ func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {
 	// Restart the real daemon, then release the intentionally withheld receive.
 	// Exclude its endpoint so recovery must authenticate a different MON.
 	rejectedPort.Store(port)
-	if err := restartFixtureMonitor(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), name); err != nil {
+	if err := testcluster.RestartMonitor(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), name); err != nil {
 		t.Fatal("restart the MON that applied the unanswered mutation", err)
 	}
 	stalled.Close()

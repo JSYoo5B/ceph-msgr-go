@@ -4,49 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"net"
 	"os"
-	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 )
-
-func controlFixtureDaemon(ctx context.Context, control, action, daemon, name string) error {
-	id := time.Now().UnixNano()
-	file, err := os.CreateTemp(control, action+"-"+daemon+"-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if _, err := fmt.Fprintf(file, "%d %s\n", id, name); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(file.Name(), filepath.Join(control, action+"-"+daemon)); err != nil {
-		return err
-	}
-	ack := filepath.Join(control, fmt.Sprintf("%s-%s.%d", daemon, action, id))
-	defer os.Remove(ack)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if _, err := os.Stat(ack); err == nil {
-			return nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
 
 func TestCephPausedManagerIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
@@ -69,13 +33,13 @@ func TestCephPausedManagerIntegration(t *testing.T) {
 	c.mu.Lock()
 	old, name, id := c.mgr, c.mgrMap.Name, c.mgrMap.GlobalID
 	c.mu.Unlock()
-	if err := controlFixtureDaemon(ctx, control, "pause", "mgr", name); err != nil {
+	if err := testcluster.ControlDaemon(ctx, control, "pause", "mgr", name); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
 		resume, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		if err := controlFixtureDaemon(resume, control, "resume", "mgr", name); err != nil {
+		if err := testcluster.ControlDaemon(resume, control, "resume", "mgr", name); err != nil {
 			t.Error("resume paused fixture MGR", err)
 		}
 	}()
@@ -150,13 +114,13 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 		t.Fatal("unexpected fixture MON endpoint", old.RemoteAddr())
 	}
 	blockReconnect.Store(true)
-	if err := controlFixtureDaemon(ctx, control, "pause", "mon", name); err != nil {
+	if err := testcluster.ControlDaemon(ctx, control, "pause", "mon", name); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
 		resume, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		defer stop()
-		if err := controlFixtureDaemon(resume, control, "resume", "mon", name); err != nil {
+		if err := testcluster.ControlDaemon(resume, control, "resume", "mon", name); err != nil {
 			t.Error("resume paused fixture MON", err)
 		}
 	}()

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"io"
 	"net"
 	"sync"
@@ -13,31 +14,6 @@ import (
 	"testing"
 	"time"
 )
-
-// Stops receive bytes when armed; mutation tests arm it after authentication.
-// Closing the wrapper releases the blocked read worker.
-type lostReplyConn struct {
-	net.Conn
-	armed         *atomic.Bool
-	signalBlocked func()
-	closed        chan struct{}
-	closeOnce     sync.Once
-}
-
-func (c *lostReplyConn) Read(p []byte) (int, error) {
-	n, err := c.Conn.Read(p)
-	if n > 0 && c.armed.Load() {
-		c.signalBlocked()
-		<-c.closed
-		return 0, net.ErrClosed
-	}
-	return n, err
-}
-
-func (c *lostReplyConn) Close() error {
-	c.closeOnce.Do(func() { close(c.closed) })
-	return c.Conn.Close()
-}
 
 func TestCephLostMutationReplyIntegration(t *testing.T) {
 	// fixtureClient checks the control directory before any mutation.
@@ -52,10 +28,10 @@ func TestCephLostMutationReplyIntegration(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		wrapped := &lostReplyConn{Conn: conn, armed: &armed, closed: make(chan struct{})}
+		wrapped := &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{})}
 		// A short initial ticket may renew between bootstrap and the
 		// command. Observe receive loss across this client's connections.
-		wrapped.signalBlocked = func() { blockOnce.Do(func() { close(blocked) }) }
+		wrapped.SignalBlocked = func() { blockOnce.Do(func() { close(blocked) }) }
 		return wrapped, nil
 	}
 	c, err := Dial(ctx, options)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -33,7 +34,7 @@ func TestCephCloseDuringManagerHandshakeIntegration(t *testing.T) {
 		}
 		_, port, _ := net.SplitHostPort(endpoint)
 		if port == "36800" || port == "36801" {
-			stalled := &lostReplyConn{Conn: conn, armed: &armed, closed: make(chan struct{}), signalBlocked: func() { blockOnce.Do(func() { close(blocked) }) }}
+			stalled := &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{}), SignalBlocked: func() { blockOnce.Do(func() { close(blocked) }) }}
 			held := &managerCleanupConn{Conn: stalled, closing: make(chan struct{}), cleaned: make(chan struct{}), release: release}
 			connections <- held
 			return held, nil
