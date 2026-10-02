@@ -10,6 +10,21 @@ auth_epoch=${CEPH_MSGR_TEST_AUTH_EPOCH:-0}
 case "$auth_epoch" in 0|1) ;; *) exit 2 ;; esac
 short_tickets=${CEPH_MSGR_TEST_SHORT_TICKETS:-0}
 case "$short_tickets" in 0|1) ;; *) exit 2 ;; esac
+mode_rejection=${CEPH_MSGR_TEST_MODE_REJECTION:-}
+case "$mode_rejection" in ''|mon|mgr) ;; *) exit 2 ;; esac
+mon_service_mode=secure
+mgr_service_mode=secure
+client_mode=secure
+if test -n "$mode_rejection"; then
+    test "$mgr_count" = 2 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 || exit 2
+    # Independent Ceph clients prepare the fixture with either mode. This
+    # changes neither the native client's secure-only offer nor its API.
+    client_mode='secure crc'
+    case "$mode_rejection" in
+        mon) mon_service_mode=crc ;;
+        mgr) mgr_service_mode=crc ;;
+    esac
+fi
 mon_tick_interval=5
 auth_ticket_ttl=
 case "$idle_sessions" in
@@ -70,7 +85,9 @@ mon_subscribe_interval = $subscribe_interval
 mon_tick_interval = $mon_tick_interval
 ms_cluster_mode = secure
 ms_service_mode = secure
-ms_client_mode = secure
+ms_client_mode = $client_mode
+ms_mon_service_mode = $mon_service_mode
+ms_mon_client_mode = $client_mode
 ms_bind_msgr1 = false
 ms_bind_msgr2 = true
 ms_bind_ipv4 = $bind_ipv4
@@ -88,6 +105,8 @@ public_addr = $address:33302
 [mgr]
 mgr_data = /tmp/ceph-msgr-test/mgr.\$id
 public_addr = $address
+# AuthRegistry treats MGR servers like MON servers for client mode policy.
+ms_mon_service_mode = $mgr_service_mode
 [mgr.a]
 ms_bind_port_min = 36800
 ms_bind_port_max = 36800
@@ -171,8 +190,42 @@ ceph-authtool "$keyring" -n client.test --print-key > /out/key
 ceph-authtool "$keyring" -n client.readonly --print-key > /out/readonly.key
 ceph-authtool "$keyring" -n client.revocable --print-key > /out/revocable.key
 touch /out/ready
-echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, secure."
+echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."
 while true; do
+    if test -f /out/secure-mgr; then
+        test "$mode_rejection" = mgr || exit 2
+        read -r request_id name extra < /out/secure-mgr
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        case "$name" in a|b) ;; *) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/secure-mgr
+        sed 's/^ms_mon_service_mode = crc$/ms_mon_service_mode = secure/' "$root/ceph.conf" > "$root/ceph.conf.secure"
+        mv "$root/ceph.conf.secure" "$root/ceph.conf"
+        # Restart both daemons so a CRC-only standby cannot take over. Mode
+        # policy is a startup setting; a config file write alone is no proof.
+        for name in a b; do
+            pid=$(cat "$root/mgr.$name.pid")
+            kill "$pid"
+            wait "$pid" || true
+        done
+        for name in a b; do
+            start_mgr "$name"
+        done
+        mode_ready=false
+        deadline=$(( $(date +%s) + 30 ))
+        while test "$(date +%s)" -lt "$deadline"; do
+            if timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" pg stat --format json > "$root/mode-probe.json" 2> "$root/mode-probe.log" && python3 -c 'import json,sys; json.load(sys.stdin)' < "$root/mode-probe.json"; then
+                mode_ready=true
+                break
+            fi
+            sleep 1
+        done
+        if test "$mode_ready" != true; then
+            cat "$root/mode-probe.log" "$root/mode-probe.json"
+            exit 1
+        fi
+        touch "/out/mgr-secure.$request_id"
+    fi
     if test -f /out/verify-service-keys; then
         test "$auth_epoch" = 1 || exit 2
         read -r request_id name extra < /out/verify-service-keys
