@@ -130,7 +130,9 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
   개별 endpoint의 setup timeout은 호출자 context가 살아 있을 때 재시도할
   수 있다. 호출자의 context 취소·만료 이후에는 새 시도를 시작하지 않는다.
 - MON 단절 시 seed 및 MonMap 주소로 다시 인증한다. 이후 요청은 복구를
-  기다린다. Ticket 수명의 약 75%에서 새 MON 연결로 ticket을 갱신하고,
+  기다린다. Ticket 수명의 약 75%인 AUTH/MGR의 `RenewAfter` 중 가장 이른
+  시각에 새 MON 연결로 ticket을 갱신한다. 갱신 실패나
+  연결 준비 중 갱신 시각이 지난 성공 응답은 250ms부터 5초까지 backoff한다.
   이전 MON의 진행 중 요청은 `ConnectTimeout` 동안 완료할 기회를 준다.
   교체된 MON은 새 요청을 받지 않는다. 전송 전에 거절된 요청만 새 MON으로
   보내며, 이전 연결에서 이미 전송을 시작한 요청을 다시 실행하지 않는다.
@@ -275,7 +277,7 @@ native client의 최초 MGR 연결을 검증한다. 이 native 연결의 인증 
 서버 코드·raw JSON을 보존한 뒤 같은 연결의 다음 명령도 성공했다.
 응답 본문 decoder에도 설정한 상한을 전달하며, 기본 상한은 16 MiB로 유지한다.
 양의 소수 초 ticket 유효기간은 encrypted codec 단위 시험으로 확인했다.
-소수 초 단위 ticket 갱신의 실제 동작을 검증한 것은 아니다.
+이 codec 변경 자체는 소수 초 ticket의 실제 갱신 검증을 포함하지 않았다.
 
 이 변경을 포함한 `7b7c307`은 같은 직접 IPv6·aes256k 구성에서 전체 통합시험과
 3분 부하 시험을 통과했다. 성공 호출 62,700건, ticket 갱신 18회, 서버가 성공
@@ -283,6 +285,24 @@ native client의 최초 MGR 연결을 검증한다. 이 native 연결의 인증 
 결과 불명확 2건은 MGR 교체 원인을 유지했다. 관찰한 최대 세션은 2개,
 goroutine은 19개였다. 반복 종료 12회에서 파일 descriptor는 6개로 돌아왔고,
 GC 후 heap은 344,424 bytes에서 279,192 bytes였다.
+
+후속 `649b45e`는 1초 간격의 갱신 검사를 실제 `RenewAfter`를 기다리는
+타이머로 바꿨다. 암호화된 500ms AUTH/MGR ticket은 각각 만료 전에 갱신을
+시작했고, 기존 세션에서 진행 중인 명령의 원본 응답도 유지했다.
+실제 20.2.4에서는 AUTH ticket 1.5초·MGR service ticket 12초·MON tick 1초의
+격리 fixture로 네 번 모두 만료 전에 갱신했다. Linux arm64·CGO=0·aes256k·
+직접 IPv6와 Darwin arm64·aes·IPv4 host race에서 client ID와 기존 MGR 연결을
+유지했다. 두 종류 ticket을 모두 1.5초로 줄인 별도 구성은 통과하지 못했으며
+검증된 범위에 포함하지 않는다. Ceph는
+[rotating key의 남은 수명으로 validity를 줄일 수 있다](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/cephx/CephxKeyServer.cc#L123).
+
+실제 CRC-only MON/MGR listener에서도 secure-only 제안과 인증 거절의
+method `2`·서버 코드 `-95`, 전송 전 알려진 실패를 확인했다. 개발용 observer가
+outbound AUTH_REQUEST의 mode `[secure]`를 직접 검사하며 credential bytes를
+로그에 남기지 않는다. MGR 거절 중 MON 조회는 유지됐고, 두 MGR을 secure로 재시작한
+뒤 같은 client가 새 MGR 지도·인증·조회를 완료했다. MON은 aes256k·Linux arm64·
+직접 IPv6, MGR 거절·복구는 aes256k·Darwin arm64·IPv4 host race에서 통과했다.
+CRC는 이 부정 시험의 서버와 독립 Ceph fixture 클라이언트에만 허용한다.
 
 MON 재접속의 IPv6 scope·flow와 동일 endpoint의 서로 다른 식별 후보는
 인증·지도·명령 응답까지 수행하는 synthetic peer 시험 4개로 확인했다.
@@ -444,6 +464,9 @@ CEPH_MSGR_TEST_RUNTIME=host CEPH_MSGR_TEST_RACE=1 sh integration/run.sh # 실제
 CEPH_MSGR_TEST_EXPIRE_TICKETS=1 sh integration/run.sh # 별도 인증 만료 fixture
 CEPH_MSGR_TEST_IDLE_SESSIONS=1 sh integration/run.sh # 별도 120초 ticket·idle 시험
 CEPH_MSGR_TEST_AUTH_EPOCH=1 sh integration/run.sh # 별도 service-key 교체·조기 갱신 시험
+CEPH_MSGR_TEST_SHORT_TICKETS=1 sh integration/run.sh # 별도 fractional AUTH ticket 시험
+CEPH_MSGR_TEST_MODE_REJECTION=mon sh integration/run.sh # 실제 CRC-only MON 거절
+CEPH_MSGR_TEST_MODE_REJECTION=mgr sh integration/run.sh # 실제 CRC-only MGR 거절·secure 복구
 CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 ```
 
@@ -543,6 +566,16 @@ Darwin arm64의 반복·race 검사와
 [기본 TCP 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/native-tcp-dialer)는
 이 실행의 `43433a1`을 가리킨다. 상대는 Go codec을 공유하는 synthetic peer이며,
 이 시험 자체가 실제 Ceph나 Windows의 실제 Ceph 상대 지원을 입증하지는 않는다.
+후속 `085b98f`는 서로 다른 MON/MGR loopback TCP 연결에서 지도 발견,
+`WaitMgrReady`, 두 daemon의 동시 raw 응답과 양쪽 `Close`도 검사한다.
+
+갱신 deadline, clock 기반 만료 시험, 실제 보안 모드 거절을 포함한
+[CI 24개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36986263689)이
+2026-10-02에 모두 통과했다. Linux·macOS·Windows의 두 Go 버전,
+실제 fractional AUTH ticket과 MON/MGR CRC-only 거절, race·fuzz 및 기존 Ceph
+구성을 포함한다. [인증 갱신·모드 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/auth-deadlines-and-modes)는
+이 실행의 `47cec13`을 가리킨다. Windows의 1ns 시험은 wire TTL만으로 만료를
+추정하지 않고 실제 clock이 시한을 넘은 뒤 publication을 허용하도록 보강했다.
 
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
 앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
@@ -574,20 +607,25 @@ Darwin arm64의 반복·race 검사와
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 52개 경로를
-비교한다. 시험에서 사용하는 balancer·crash·iostat 모듈도 포함한다.
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 56개 경로를
+비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
+iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를
 stdout으로 출력한다. 파일 변화가 wire 변경이나 호환성 판정을 의미하지는
 않으며 지정된 경로 밖의 변경은 검사하지 않는다.
 
 2026-10-02에 `tentacle`을 커밋
 `7411a08041185df39dbb166f983a6b0be7af0811`로 고정해 참조와 비교했다.
-52개 경로에서 7개 파일이 달랐으며 자동 조회·비교는 7.95초였다. 이 시간은
+56개 경로에서 8개 파일이 달랐으며 자동 조회·비교는 8.59초였다. 이 시간은
 수동 diff 검토와 실서버 시험 시간을 포함하지 않는다. 검사한 경로의
 frame·CephX·메시지 인코딩은 그대로였고, 연결 재사용 판단·서버 내부 처리와
 일부 MON 명령 schema가 바뀌었다. Go client의 fresh lossy 연결과 raw 명령
 API를 변경할 필요는 발견하지 못했다. 이는 소스 검토 결과이며 해당 가변
 브랜치를 빌드한 실서버의 호환성 검증은 아니다.
+추가 감시한 `global.yaml.in`에는 BlueFS·BlueStore·block-device 옵션 8개 추가와
+storage profile 허용값 변경이 있었다. 이 추가 diff에서 Messenger·인증 옵션은
+변하지 않았다. raw MON config 명령의 옵션 목록이나 서버 허용값 변화는
+원래 명령·응답 계약으로 노출하며 API 호환 wrapper를 추가하지 않는다.
 도구 시험은 추가·삭제·변경 분류, commit SHA 고정, 응답 크기 제한,
 HTTP 오류 구분과 오류 응답 자원 정리를 검사한다.
 
