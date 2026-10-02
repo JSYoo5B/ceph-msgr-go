@@ -15,6 +15,11 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
 )
 
+// These fixtures call private connectMonitor themselves. Keep the autonomous
+// supervisor from installing a competing candidate while that call is pending.
+// Production MON setup has one owner: bootstrap, followed by the supervisor.
+type monitorAdmissionOwnerContextKey struct{}
+
 func monitorAdmissionClient(t *testing.T, candidate func(func(msgr.MessageData) error) error) (*Client, context.Context, <-chan struct{}, *atomic.Uint32) {
 	t.Helper()
 	options := mockOptions(t, 20, [16]byte{1})
@@ -23,6 +28,12 @@ func monitorAdmissionClient(t *testing.T, candidate func(func(msgr.MessageData) 
 	options.ConnectTimeout = time.Second
 	started := make(chan struct{})
 	var monitors, mutations atomic.Uint32
+	var autonomous, mapWrites, delivered, deliveryFailures atomic.Uint32
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("MON admission fixture: owned_attempts=%d blocked_autonomous=%d candidate_map_writes=%d delivered=%d write_failures=%d", monitors.Load(), autonomous.Load(), mapWrites.Load(), delivered.Load(), deliveryFailures.Load())
+		}
+	})
 	options.DialContext = func(ctx context.Context, _, endpoint string) (net.Conn, error) {
 		cfg := peerConfig{role: 1, release: 20, fsid: [16]byte{1}}
 		if strings.HasSuffix(endpoint, ":6800") {
@@ -35,8 +46,23 @@ func monitorAdmissionClient(t *testing.T, candidate func(func(msgr.MessageData) 
 		} else if strings.HasSuffix(endpoint, ":6809") {
 			cfg.role, cfg.id = 16, 108
 		} else if strings.HasSuffix(endpoint, ":3300") {
+			if ctx.Value(monitorAdmissionOwnerContextKey{}) != started {
+				autonomous.Add(1)
+				return nil, errors.New("MON admission fixture requires its explicit owner context")
+			}
 			if monitors.Add(1) > 1 {
-				cfg.initialMaps = candidate
+				cfg.initialMaps = func(send func(msgr.MessageData) error) error {
+					return candidate(func(m msgr.MessageData) error {
+						mapWrites.Add(1)
+						err := send(m)
+						if err == nil {
+							delivered.Add(1)
+						} else {
+							deliveryFailures.Add(1)
+						}
+						return err
+					})
+				}
 			}
 		} else {
 			return nil, errors.New("unverified MGR map selected an unexpected endpoint")
@@ -46,6 +72,7 @@ func monitorAdmissionClient(t *testing.T, candidate func(func(msgr.MessageData) 
 		return client, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx = context.WithValue(ctx, monitorAdmissionOwnerContextKey{}, started)
 	t.Cleanup(cancel)
 	c, err := Dial(ctx, options)
 	if err != nil {

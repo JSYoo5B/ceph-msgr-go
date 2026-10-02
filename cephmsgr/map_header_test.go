@@ -83,7 +83,7 @@ func TestMapHeaderValidationPreservesStaleSourceAndReleasePolicy(t *testing.T) {
 
 // Unlike mockDaemon's normal version-1 sender, this peer preserves the exact
 // map headers under test after completing CephX and secure authentication.
-func mapHeaderPeer(conn net.Conn, messages []msgr.MessageData) {
+func mapHeaderPeer(conn net.Conn, messages []msgr.MessageData, sent *atomic.Uint32) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
 	r, w, err := mockAuthenticate(conn, peerConfig{role: 1, release: 20, fsid: [16]byte{1}})
@@ -105,6 +105,9 @@ func mapHeaderPeer(conn net.Conn, messages []msgr.MessageData) {
 		if err := w.Write(message.Frame()); err != nil {
 			return
 		}
+		if sent != nil {
+			sent.Add(1)
+		}
 	}
 	<-drained
 }
@@ -122,7 +125,7 @@ func TestDialAcceptsCompatibleMapHeaders(t *testing.T) {
 				go mapHeaderPeer(peer, []msgr.MessageData{
 					{Type: msgr.MgrMapMessage, Version: version, CompatVersion: 1, Front: mockMgrMap(1, 99, 6800)},
 					{Type: msgr.MonMapMessage, Version: version, CompatVersion: 1, Front: mockMonMap(20, [16]byte{1})},
-				})
+				}, nil)
 				return client, nil
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -152,7 +155,17 @@ func TestIncompatibleMapCandidatePreservesAcceptedManagerAndMutation(t *testing.
 			options := mockOptions(t, 20, [16]byte{1})
 			started := make(chan struct{})
 			var monitors, mutations atomic.Uint32
+			var autonomous, delivered atomic.Uint32
+			t.Cleanup(func() {
+				if t.Failed() {
+					t.Logf("map-header fixture: bad_type=%d owned_attempts=%d blocked_autonomous=%d candidate_maps_delivered=%d", badType, monitors.Load(), autonomous.Load(), delivered.Load())
+				}
+			})
 			options.DialContext = func(ctx context.Context, _, endpoint string) (net.Conn, error) {
+				if strings.HasSuffix(endpoint, ":3300") && ctx.Value(monitorAdmissionOwnerContextKey{}) != started {
+					autonomous.Add(1)
+					return nil, errors.New("map-header fixture requires its explicit owner context")
+				}
 				client, peer := net.Pipe()
 				cfg := peerConfig{role: 1, release: 20, fsid: [16]byte{1}}
 				if strings.HasSuffix(endpoint, ":3300") && monitors.Add(1) > 1 {
@@ -165,7 +178,7 @@ func TestIncompatibleMapCandidatePreservesAcceptedManagerAndMutation(t *testing.
 							messages[i].Version, messages[i].CompatVersion = 2, 2
 						}
 					}
-					go mapHeaderPeer(peer, messages)
+					go mapHeaderPeer(peer, messages, &delivered)
 					return client, nil
 				}
 				if strings.HasSuffix(endpoint, ":6800") {
@@ -180,6 +193,7 @@ func TestIncompatibleMapCandidatePreservesAcceptedManagerAndMutation(t *testing.
 				return client, nil
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx = context.WithValue(ctx, monitorAdmissionOwnerContextKey{}, started)
 			defer cancel()
 			c, err := Dial(ctx, options)
 			if err != nil {
