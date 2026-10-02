@@ -107,6 +107,9 @@ MLog에는 구독 generation ID가 없어 같은 세션의 이전 watch에서 �
 공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
 `WaitMonReady`, `WaitMgrReady`, `WatchLogs`, `Snapshot`, `Close`를 중심으로 한다.
 연결·명령·상태 타입은 `Options`, `Command`, `Result`, `State`다.
+`MonitorState.Members`는 `MonitorMember{Name, Rank}`로 인증된 MonMap의
+이름을 조회하며 같은 epoch의 rank 순서로 독립 복사한다. 이름은
+`MonTellTo`에 사용하고, rank·멤버십을 daemon의 현재 준비 상태로 해석하지 않는다.
 로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
 go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
@@ -137,6 +140,7 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 6. 제품의 전이 의존성을 포함해 CGO·네이티브 라이브러리·CLI 의존성이 없는지 확인하고 대상 OS에서 빌드·실행을 검증한다.
 7. MON 로그는 독립 raw wire 입력 및 native CLI oracle과 대조한다. 실제 로그 수신, cursor 복구, ticket 갱신, 제한된 큐, watch·Next context와 Close를 검증하며 단순 SubscribeAck를 권한 확인으로 사용하지 않는다.
 8. 이름 지정 MON Tell은 독립 native daemon status의 name·rank·FSID와 대조한다. 없는 이름의 접속 전 거절, 다른 MON으로 대체하지 않음, 새 private 인증 ID와 주 상태 보존, 동시 호출·전송 후 불확실성·setup과 session의 Close 소유권을 검증한다.
+9. MON 이름 조회는 독립 native CLI 지도와 대조한다. 네트워크 없는 조회와 반환 slice의 소유권, 주 지도 변경·거절·stale source·private Tell의 격리, ticket 갱신과 Close 후 마지막 정보 보존을 검증한다.
 
 구현한 encoder와 decoder끼리의 round trip만으로 wire 호환성을 입증하지 않는다. Ceph에서 얻은 fixture 및 실제 Ceph 상대 검증을 사용한다. parser fuzzing, race 검사, 장시간 ticket 갱신, 장애 주입을 포함한다. 클러스터 구성과 테스트 oracle을 위한 Ceph CLI·컨테이너 사용은 개발 도구이며 제품의 런타임 의존성과 구분한다.
 

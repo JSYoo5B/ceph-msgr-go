@@ -154,7 +154,7 @@ Go heap 상한은 아니다. 초과하면 해당 watch만 `ErrLogOverflow`로 �
 ## 운영 상태
 
 `Snapshot()`은 네트워크 요청이나 재접속 대기 없이 현재 client 상태를 읽는다.
-FSID와 client global ID, MON/MGR 지도 epoch·접속 주소, active MGR,
+FSID와 client global ID, MON/MGR 지도 epoch·접속 주소, MON 이름·rank, active MGR,
 ticket 만료·갱신 예정 시각, 명시적인 MON 인증 거절을 확인할 수 있다.
 키와 ticket의 암호 내용은 포함하지 않는다.
 
@@ -162,6 +162,9 @@ ticket 만료·갱신 예정 시각, 명시적인 MON 인증 거절을 확인할
 state := client.Snapshot()
 fmt.Printf("MON ready=%t MGR available=%t ready=%t\n",
     state.Monitor.Ready, state.Manager.Available, state.Manager.Ready)
+for _, member := range state.Monitor.Members {
+    fmt.Printf("MON name=%s rank=%d\n", member.Name, member.Rank)
+}
 if state.AuthRejection != nil {
     fmt.Printf("authentication method=%d code=%d\n",
         state.AuthRejection.Method, state.AuthRejection.Code)
@@ -174,8 +177,14 @@ ready는 아닐 수 있다.
 MON 복구를 기다리거나 인증 갱신이 명시적으로 거절되면 MGR ready도 false다.
 Ready는 현재 알려진 명령 접수 조건이며 이후 명령 성공을 보장하지 않는다.
 
+`Monitor.Members`는 같은 `MapEpoch`의 마지막 인증된 MonMap을 rank 순서로
+복사한다. `Name`은 `MonTellTo`가 받는 정확한 bare 이름이며, rank는 지도 변경에
+따라 바뀔 수 있다. 목록은 각 daemon의 준비 상태를 의미하지 않는다.
+이 목록을 읽은 뒤 대상 연관이 바뀌면 이름 지정 Tell의 독립 admission에서
+검사한다. Snapshot 조회가 이후 호출의 대상을 예약하지는 않는다.
+
 `Close` 후에는 `Closed=true`, MON/MGR ready=false를 반환하고 마지막으로
-알아낸 지도·identity 정보는 남는다. 반환한 주소 slice와 인증 거절 객체를
+알아낸 지도·identity 정보는 남는다. 반환한 주소·member slice와 인증 거절 객체를
 수정해도 client에는 영향을 주지 않는다. Snapshot은 한 시점의 관찰값이다.
 
 서비스 시작 시 연결 준비를 기다리려면 `WaitMonReady(ctx)`와
@@ -279,7 +288,15 @@ MON이 명령 전용 CLIENT에도 요구하는 CRUSH 세대 비트는 MON 접속
 
 ## 검증 결과
 
-2026-10-01–02에 다음 구성을 실제 Ceph daemon과 검증했다.
+2026-10-01–03에 다음 구성을 실제 Ceph daemon과 검증했다.
+
+MON 이름 조회는 독립 native CLI MonMap의 name·rank·FSID·epoch와 대조했다.
+Snapshot 100회가 새 접속을 만들지 않고 MGR를 lazy 상태로 유지하는 것도
+확인했다. 조회한 이름으로 private Tell을 실행하고 실제 ticket 갱신 뒤와
+Close 후에도 마지막 인증된 목록을 유지했다. Linux arm64·CGO=0·aes256k·
+직접 IPv6의 관련 3개 시험과 Darwin arm64·aes·IPv4 host relay의 race
+5개 시험이 통과했다. 지도 교체·거절·stale source·private map 격리와
+동시 Snapshot·Close를 검사하는 member 단위 시험은 race 100회를 통과했다.
 
 MON 로그 core `ff80b4c`를 포함한 20.2.4 시험은 Linux arm64·CGO=0·aes256k·
 직접 IPv6와 Darwin arm64·aes·IPv4 host relay의 race 실행에서 통과했다.
@@ -454,6 +471,10 @@ MON 접속에서 오래된 AUTH ticket의 `-13` 거절이 기록됐다. 장애 �
 로컬 fixture에서 두 복구 시험은 14.83초·25.18초에 통과했다. 이 실패를
 기존 cold MGR 교체 실패와 구분하며, 인증 오류를 재시도하거나 허용하지
 않고 두 복구 시험의 client TCP 장애를 daemon 장애와 분리했다.
+분리한 전체 Linux arm64·CGO=0·aes256k/AES·IPv4 실서버 시험은 36개가
+통과했고 별도 fixture 대상 9개는 제외됐다. 실제 MON 재시작 8회·전체
+MON 중단과 복구 3회·MGR 장애·불명확한 변경의 재실행 금지도 확인했다.
+트래픽 중 종료 12회 후 FD는 6개로 돌아왔다.
 
 큰 응답 시험에서는 `MaxFrameSize=32 MiB`로 유효한 status JSON 뒤에
 16 MiB 공백을 붙였다. 실제 MON이 원래 명령을 응답 front에 그대로 포함했고,
@@ -884,6 +905,12 @@ MON 로그 stream·native CLI oracle·cursor 복구·parser fuzz와 client TCP �
 격리한 mapped 시험을 포함한 `5573026`의
 [CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37016830915)도
 모두 통과했다. [MON 로그 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-log-stream)는
+이 커밋을 가리킨다.
+
+독립 인증·원주소 검증을 사용하는 이름 지정 MON Tell과 준비 oracle 보강,
+context·Tell의 client TCP 장애 격리를 포함한 `f685aa7`의
+[CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37027436808)이
+모두 통과했다. [이름 지정 MON 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/named-mon-tell)는
 이 커밋을 가리킨다.
 
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
