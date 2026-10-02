@@ -211,6 +211,12 @@ binary 응답을 각각 대조했고, 취소한 MON 변경이 나중에 실제 �
 측정한 것은 아니다. 20.2.4·aes256k의 Darwin arm64·IPv4 및 Linux arm64의
 직접 IPv6 연결에서 통과했다.
 
+사용자 정의 context의 `Err`에서 `Snapshot`을 조회하는 MON/MGR 명령도
+20.2.4·aes256k의 Darwin arm64·IPv4에서 CGO=0과 race 계측으로 통과했다.
+JSON·binary 출력과 서버 `-22` 응답을 각각 확인했다. Context 검사는 세션
+잠금 밖에서 실행하며, 검사 중 취소·종료된 전송 전 요청을 뒤늦게 보내지
+않는 것도 단위 시험으로 검증했다.
+
 MGR의 `balancer mode` 변경에서도 서버 적용을 독립 클라이언트로 확인한 뒤
 응답 수신을 막았다. 독립 클라이언트가 원래 설정을 다시 저장하고 MON에서
 저장 결과를 확인한 다음 MGR을 전환했다. 진행 중 호출은
@@ -439,11 +445,13 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 클라이언트 내부 통합시험도 host 모드로 실행한다.
 Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36959580838)이
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36961949660)이
 2026-10-02에 모두 통과했다. Actions 설정 lint와 개발용 진단 도구의 단위
 시험 및 소스 비교 도구 시험 16개도 통과했다.
+[Context 콜백 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/context-admission)는
+이 실행의 `580ea2a`를 가리킨다.
 [네트워크 취소·실서버 race 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/network-cancellation)는
-이 실행의 `836fdb2`를 가리킨다.
+앞서 CI 18개 작업을 통과한 `836fdb2`를 가리킨다.
 [연결 준비 API 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/readiness-waits)는
 앞서 CI 18개 작업을 통과한 `cc621d0`를 가리킨다. 실제 Ceph에서 인증 키 회수·복원과 MON
 무응답 복구를 검사할 때 두 준비 API의 인증 오류·대기·복구도 확인했다.
