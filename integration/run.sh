@@ -9,6 +9,12 @@ ip_family=${CEPH_MSGR_TEST_IP_FAMILY:-4}
 mgr_count=${CEPH_MSGR_TEST_MGR_COUNT:-2}
 runtime=${CEPH_MSGR_TEST_RUNTIME:-container}
 case "$runtime" in container|host) ;; *) exit 2 ;; esac
+race=${CEPH_MSGR_TEST_RACE:-0}
+case "$race" in 0|1) ;; *) exit 2 ;; esac
+if test "$race" = 1 && test "$runtime" != host; then
+    echo 'Development race instrumentation requires CEPH_MSGR_TEST_RUNTIME=host.' >&2
+    exit 2
+fi
 diagnostics=${CEPH_MSGR_TEST_DIAGNOSTICS:-}
 expire_tickets=${CEPH_MSGR_TEST_EXPIRE_TICKETS:-0}
 case "$expire_tickets" in 0|1) ;; *) exit 2 ;; esac
@@ -72,8 +78,16 @@ fi
 arch=$(docker image inspect --format '{{.Architecture}}' "$image")
 cd "$project_root"
 if test "$runtime" = host; then
-    CGO_ENABLED=0 GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go test -c -o "$out/client.test" ./cephmsgr
-    CGO_ENABLED=0 GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go test -c -o "$out/api.test" ./integration
+    test_cgo=0
+    set --
+    if test "$race" = 1; then
+        # Race instrumentation is a development dependency. Default fixture
+        # binaries and the product still build with CGO=0.
+        test_cgo=1
+        set -- -race
+    fi
+    CGO_ENABLED=$test_cgo GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go test "$@" -c -o "$out/client.test" ./cephmsgr
+    CGO_ENABLED=$test_cgo GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go test "$@" -c -o "$out/api.test" ./integration
     CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$out/relay" ./integration/relay
     cp "$project_root/integration/host-cluster.sh" "$out/host-cluster.sh"
     set -- -p 127.0.0.1::40000

@@ -53,6 +53,28 @@ jobs:
       - run: go test -race ./...
         env:
           CGO_ENABLED: '1'
+      - name: Race detector with actual Tentacle MON and MGR sessions
+        id: race_ceph
+        run: |
+          result=0
+          sh integration/run.sh 2>&1 | tee "$RUNNER_TEMP/ceph-tests.log" || result=$?
+          if test "$result" -ne 0; then
+            python3 tools/ci_failure_annotations.py "$RUNNER_TEMP/ceph-tests.log" "$result"
+          fi
+          exit "$result"
+        env:
+          CEPH_MSGR_TEST_RUNTIME: host
+          CEPH_MSGR_TEST_RACE: '1'
+          CEPH_MSGR_TEST_DIAGNOSTICS: ${{ runner.temp }}/ceph-diagnostics
+      - name: Preserve failed Ceph race test logs and crash metadata
+        if: failure() && steps.race_ceph.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ceph-race-diagnostics
+          path: |
+            ${{ runner.temp }}/ceph-tests.log
+            ${{ runner.temp }}/ceph-diagnostics/
+          retention-days: 7
 
   fuzz:
     runs-on: ubuntu-latest
