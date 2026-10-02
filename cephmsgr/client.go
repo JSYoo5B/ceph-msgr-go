@@ -266,6 +266,10 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				if !current {
 					return nil
 				}
+				if err := validateMapMessageHeader(m); err != nil {
+					bufferedMgr = nil
+					return err
+				}
 				mgr, err := maps.DecodeMgr(m.Front)
 				if err != nil {
 					bufferedMgr = nil
@@ -368,12 +372,24 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 	return errors.Join(failures...)
 }
 
+func validateMapMessageHeader(m msgr.MessageData) error {
+	// MMonMap and MMgrMap support message header version 1. Their nested map
+	// envelopes have independent versions; a newer compatible header is valid.
+	if (m.Type == msgr.MonMapMessage || m.Type == msgr.MgrMapMessage) && m.CompatVersion > 1 {
+		return fmt.Errorf("%w: map message compatibility version %d: %w", msgr.ErrFrame, m.CompatVersion, wire.ErrVersion)
+	}
+	return nil
+}
+
 func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (bool, error) {
 	c.mu.Lock()
 	current := c.mon == source
 	c.mu.Unlock()
 	if !current {
 		return false, nil
+	}
+	if err := validateMapMessageHeader(m); err != nil {
+		return false, err
 	}
 	switch m.Type {
 	case msgr.MonMapMessage:
