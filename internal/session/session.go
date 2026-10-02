@@ -64,6 +64,7 @@ type Session struct {
 	controls       chan msgr.Frame
 	ack            chan struct{}
 	done           chan struct{}
+	cleanupDone    chan struct{}
 	wg             sync.WaitGroup
 	startOnce      sync.Once
 	received, sent atomic.Uint64
@@ -79,7 +80,7 @@ func New(t *Transport, config Config, onMessage func(msgr.MessageData) error, on
 	if config.KeepaliveTimeout == 0 {
 		config.KeepaliveTimeout = 45 * time.Second
 	}
-	return &Session{transport: t, config: config, pending: make(map[uint64]*request), idle: make(chan struct{}), queue: make(chan *request, 64), controls: make(chan msgr.Frame, 16), ack: make(chan struct{}, 1), done: make(chan struct{}), onMessage: onMessage, onClose: onClose}
+	return &Session{transport: t, config: config, pending: make(map[uint64]*request), idle: make(chan struct{}), queue: make(chan *request, 64), controls: make(chan msgr.Frame, 16), ack: make(chan struct{}, 1), done: make(chan struct{}), cleanupDone: make(chan struct{}), onMessage: onMessage, onClose: onClose}
 }
 func (s *Session) Start() {
 	s.startOnce.Do(func() {
@@ -99,7 +100,14 @@ func (s *Session) Start() {
 func (s *Session) Done() <-chan struct{} { return s.done }
 func (s *Session) RemoteAddr() net.Addr  { return s.transport.Conn.RemoteAddr() }
 func (s *Session) Err() error            { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
-func (s *Session) Wait()                 { s.wg.Wait() }
+func (s *Session) Wait() {
+	// Fail closes admission under mu before done, so Start cannot add workers
+	// after this barrier. The failure owner can also be an application caller;
+	// its connection and callback cleanup must finish before the session exits.
+	<-s.done
+	s.wg.Wait()
+	<-s.cleanupDone
+}
 
 // Retire stops admission without interrupting requests already registered.
 func (s *Session) Retire() {
@@ -130,6 +138,7 @@ func (s *Session) Fail(err error) {
 	close(s.idle)
 	s.idle = make(chan struct{})
 	s.mu.Unlock()
+	defer close(s.cleanupDone)
 	s.transport.Conn.Close()
 	if s.onClose != nil {
 		s.onClose(err)
