@@ -524,6 +524,17 @@ service-key 교체 2개 구성을 포함한
 시험 및 소스 비교 도구 시험 31개도 통과했다.
 [서비스 키 교체·큰 응답 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/service-key-epochs)는
 이 실행의 `7b7c307`을 가리킨다.
+
+단위시험은 `go test -json -fullpath`로 package·test별 기록을 수집하고,
+[진단 도구](tools/go_test_annotations.py)가 실패 assertion의 실제 파일·줄 번호를
+CI 화면에 표시한다. 병렬·하위 테스트와 imported helper의 위치를 구분하고,
+원본 JSON은 실패 artifact로 보존한다. `-fullpath`는 최소 Go 버전의
+[Go 1.24 testing 소스](https://github.com/golang/go/blob/go1.24.0/src/testing/testing.go#L469)에서도
+확인했다. 독립 Go 실패·panic·빌드·성공 출력, 도구 시험 59개와 Linux·macOS·Windows의
+[CI 20개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36979376909)이 통과했다.
+[단위시험 진단 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/unit-failure-diagnostics)는
+해당 CI의 `54d21b9`를 가리킨다.
+
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
 앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
 [복구 중 Context 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/recovery-contexts)는
