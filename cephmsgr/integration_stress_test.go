@@ -171,9 +171,20 @@ func TestCephStressIntegration(t *testing.T) {
 			// Repeated MGR takeover occurs while reads and ticket renewals run.
 			if time.Since(started) >= time.Duration(faults.Load()+1)*30*time.Second {
 				cmd, _ := json.Marshal(map[string]string{"prefix": "mgr fail", "who": mgrName})
-				if _, err := c.MonCommand(ctx, Command{JSON: cmd}); err != nil && ctx.Err() == nil {
-					t.Errorf("MGR fault injection: %v", err)
+				result, err := c.MonCommand(ctx, Command{JSON: cmd})
+				if err != nil {
+					// Workload expiry can race this mutation. Preserve unexpected
+					// causes even then, and count only acknowledged fault commands.
+					if !errors.Is(err, ctx.Err()) || !testcluster.IsRecoveryError(err, context.Canceled, context.DeadlineExceeded) {
+						t.Errorf("MGR fault injection: %v", err)
+						cancel()
+					}
+					continue
+				}
+				if result.Code != 0 {
+					t.Errorf("MGR fault injection returned code %d", result.Code)
 					cancel()
+					continue
 				}
 				faults.Add(1)
 				active, workers := sampleResources()

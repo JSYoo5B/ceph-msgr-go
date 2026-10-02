@@ -229,7 +229,7 @@ MGR 전환과 대기 취소·종료 중에도 검증했다. 복구 시험은 결
 네트워크 오류로 취급되지 않는 것도 회귀 시험으로 확인했다.
 제품 소스 `c14f78f`는 20.2.4·aes256k의 Linux arm64·CGO=0·직접 IPv6에서
 전체 통합시험과 3분 부하 시험을 통과했다. 부하 시험은 명령 63,278건,
-ticket 갱신 18회, MGR 장애 6회와 context의 상태 조회 284,403회를
+ticket 갱신 18회, MGR 장애 주입 시도 6회와 context의 상태 조회 284,403회를
 처리했다. 결과 불명확 응답은 없었고 관찰한 최대 세션 수는 2였다.
 
 MON 재접속의 IPv6 scope·flow와 동일 endpoint의 서로 다른 식별 후보는
@@ -279,7 +279,7 @@ beacon 설정으로 약 33초 뒤 standby가 자동 승격됐다. 그동안 인�
 다시 확인해 아직 전송하지 않은 명령을 처리한다. 실제 20.2.4·aes256k의
 Darwin arm64 시험에서는 연결 준비와 MGR 전환을 겹치게 한 뒤 변경 명령의
 단일 전송과 독립 클라이언트가 읽은 변경 결과를 확인했다. 제품 수정이 동일한
-`d4e737a`의 전체 시험과 3분 부하 시험에서 63,504개 명령, ticket 갱신 18회, MGR 전환
+`d4e737a`의 전체 시험과 3분 부하 시험에서 63,504개 명령, ticket 갱신 18회, MGR 전환 시도
 6회를 처리했다. 이 체크포인트의 CI 17개 작업도 모두 통과했다.
 
 별도의 120초 ticket fixture에서 8초 동안 애플리케이션 명령 없이 MON/MGR
@@ -311,28 +311,28 @@ context 참조가 GC로 해제되는지도 별도의 단위 시험으로 확인�
 
 [1시간 부하 시험 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/tentacle-soak-1h)는
 `0e73e56`이다. Linux arm64·IPv4·aes256k 구성에서 성공 요청 1,244,441건,
-ticket 갱신 366회, MGR fail 119회를 수행했다. 장애 중 결과 불명확 15건은
+ticket 갱신 366회, MGR fail 시도 119회를 수행했다. 장애 중 결과 불명확 15건은
 해당 오류로 반환했다. 이후 복구 보강은 별도의 3분 부하 시험과 CI로 검증했다.
 세션·goroutine 수는 샘플링한 값이며 순간 최대치를 보장하지 않는다.
 
 수신 무응답 감지를 추가한 바이너리 `dd3daef`의
 [추가 1시간 부하 시험](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/stall-soak-1h)도
 같은 Linux arm64·IPv4·aes256k 구성에서 통과했다. 성공 호출 1,248,430건,
-ticket 갱신 361회, MGR fail 120회, 결과 불명확 22건을 기록했다.
+ticket 갱신 361회, MGR fail 시도 120회, 결과 불명확 22건을 기록했다.
 샘플링한 세션 최대는 3개, goroutine 최대는 24개였다. 두 1시간 시험의
 fixture는 global ID reclaim에 Ceph의 기본 허용 설정을 사용했다.
 
 `auth_allow_insecure_global_id_reclaim=false`를 적용한 바이너리 `cadd40d`의
 [엄격한 인증 설정 1시간 시험](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/strict-auth-soak-1h)도
 Linux arm64·IPv4·aes256k 구성에서 통과했다. 성공 호출 1,246,654건,
-ticket 갱신 367회, MGR fail 119회, 결과 불명확 34건을 기록했다.
+ticket 갱신 367회, MGR fail 시도 119회, 결과 불명확 34건을 기록했다.
 샘플링한 세션 최대는 3개, goroutine 최대는 24개였으며 종료 후 worker
 정리 검사도 통과했다. 이후 변경은 각 실서버 시험과 CI로 따로 검증했다.
 
 MGR 연결 준비 복구를 포함한 `965ee5b`의
 [추가 1시간 시험](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mgr-recovery-soak-1h)도
 동일한 엄격한 인증 설정의 Linux arm64·20.2.4·IPv4·aes256k 구성에서 통과했다.
-성공 호출 1,256,578건, ticket 갱신 363회, MGR fail 120회, 결과 불명확 39건을
+성공 호출 1,256,578건, ticket 갱신 363회, MGR fail 시도 120회, 결과 불명확 39건을
 기록했다. 샘플 최대는 세션 3개·goroutine 24개였으며 종료 후 worker 검사도
 통과했다. 이 바이너리에는 이후 MGR 핸드셰이크 종료 수정과 부하 시험 오류
 원인 검사가 포함돼 있지 않다. 이후 부하 시험은 연결 단절·세션 교체 등
@@ -341,7 +341,7 @@ MGR 연결 준비 복구를 포함한 `965ee5b`의
 
 이 검사를 적용한 제품 소스 `5f36a9c`의 Darwin arm64·20.2.4·aes256k·IPv4
 전체 시험과 3분 부하 시험도 통과했다. 성공 호출 50,532건, ticket 갱신
-18회, MGR fail 5회, 결과 불명확 0건을 기록했다. 샘플 최대는 세션 2개·
+18회, MGR fail 시도 5회, 결과 불명확 0건을 기록했다. 샘플 최대는 세션 2개·
 goroutine 19개였다. 이 시험에는 MGR 핸드셰이크 종료와 MON/MGR 변경 명령의
 실제 적용·재실행 금지 검증도 포함한다.
 
