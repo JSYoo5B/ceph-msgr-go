@@ -155,7 +155,9 @@ cp "$project_root/integration/cluster.sh" "$out/cluster.sh"
 if test "$mapped_ipv6" = 1; then
     cp "$project_root/tools/mapped_address_oracle.py" "$out/mapped_address_oracle.py"
 fi
-docker run -d --name "$container" --label ceph-msgr-go.integration=true --entrypoint /bin/sh "$@" -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_IP_FAMILY="$ip_family" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -e CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" -v "$out:/out" "$image" "$cluster_script" > /dev/null
+# Daemons can acquire these listeners later, during takeover or restart. Reserve
+# their ports from automatic client allocation inside this disposable namespace.
+docker run -d --name "$container" --label ceph-msgr-go.integration=true --sysctl net.ipv4.ip_local_reserved_ports=33300,33301,33302,36800,36801 --entrypoint /bin/sh "$@" -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_IP_FAMILY="$ip_family" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -e CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" -v "$out:/out" "$image" "$cluster_script" > /dev/null
 for attempt in $(seq 1 120); do
     if test -f "$out/ready"; then
         save_mapped_metadata
