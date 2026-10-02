@@ -336,14 +336,26 @@ CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 ```
 
 부하 시험 시간은 45초 이상으로 설정한다. 더 긴 시험에는
-`CEPH_MSGR_TEST_TIMEOUT`도 늘린다. 기본 timeout은 10분이다.
+`CEPH_MSGR_TEST_TIMEOUT`도 늘린다. 기본 timeout은 시험 바이너리별로 10분이다.
+
+[공개 API 통합시험](integration/)은 별도 Go 시험 패키지에서 제품을 import한다.
+명령·권한·인증 키 회수와 교체·운영 상태 검사를 포함한다. 루트에는 내부
+세션·인증 증거·요청 대기열을 직접 검사하는 시험을 남겼다. 공유하는 relay
+접속·장애 제어 함수는 [개발용 내부 패키지](internal/testcluster/)에 있으며
+제품의 빌드·실행 의존성에는 포함되지 않는다.
+분리한 시험 소스 `48e9054`는 20.2.4·aes256k·IPv4의 Darwin arm64 host 모드에서
+공개 API 시험 10개와 내부 시험 14개를 연속 실행해 통과했다. hostname과
+별도 fixture가 필요한 시험은 실행 조건에 따라 건너뛰었으며, 반복 종료
+시험의 파일 descriptor 수는 시작과 끝 모두 5개였다.
 
 Harness는 격리된 컨테이너 안에서 Ceph 클러스터와 CGO=0 Go 테스트 바이너리를
 실행하고 종료 시 컨테이너·임시 키를 삭제한다. 기본 모드는 호스트 포트를
 공개하지 않는다. `host` 모드는 현재 OS·CPU의 시험 바이너리를 실행하며
 개발용 relay 하나를 `127.0.0.1`의 임시 포트에 공개한다.
 Ceph CLI는 이 개발 fixture의 초기화와 daemon 준비 상태 확인에 사용한다.
-`CEPH_MSGR_TEST_RUN`으로 Go 시험의 이름을 선택할 수 있다.
+Harness는 공개 API 시험과 루트의 내부 시험을 각각 컴파일해 같은 fixture에서
+차례로 실행한다. 마지막 내부 복구 시험이 MON 하나를 중단하므로 공개 API
+시험을 먼저 실행한다. `CEPH_MSGR_TEST_RUN`은 두 바이너리 모두에 적용된다.
 `auth_allow_insecure_global_id_reclaim=false`를 적용한다. 인증 만료 시험은
 MON을 ticket과 rotating secret의 수명보다 오래 중단한다. Ceph daemon의
 기존 인증에도 영향을 주므로 전용 fixture에서만 실행한다.
@@ -372,11 +384,13 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
 시험한다. Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36946746867)이
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36949821444)이
 2026-10-02에 모두 통과했다. Actions 설정 lint와 개발용 진단 도구의 단위
-시험 8개도 통과했다.
+시험 9개도 통과했다.
+[통합시험 패키지 분리 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/integration-test-layout)는
+이 실행의 `48e9054`를 가리킨다.
 [운영 상태 API 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/client-state-snapshots)는
-이 실행의 `d27732d`를 가리킨다.
+앞서 CI 18개 작업을 통과한 `d27732d`를 가리킨다.
 [MON/MGR 복구 오류 검사 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-mgr-recovery-causes)는
 앞서 CI 18개 작업을 통과한 `5f36a9c`를 가리킨다.
 [MGR 결과·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mgr-outcomes-and-close)는

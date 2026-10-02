@@ -2,7 +2,6 @@ package integration_test
 
 import (
 	"encoding/json"
-	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"net"
 	"os"
 	"slices"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephSnapshotIntegration(t *testing.T) {
