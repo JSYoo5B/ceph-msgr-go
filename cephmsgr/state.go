@@ -33,7 +33,7 @@ type MonitorState struct {
 
 // ManagerState separates advertised MGR availability from a ready client
 // session. Ready also requires MON admission, which MgrCommand waits for.
-// MGR connections are opened lazily by MgrCommand.
+// MGR connections are opened lazily by MgrCommand or WaitMgrReady.
 type ManagerState struct {
 	Ready     bool
 	Endpoint  string

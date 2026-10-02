@@ -75,13 +75,34 @@ if state.AuthRejection != nil {
 ```
 
 `Manager.Available`은 마지막으로 수신한 MgrMap 값이다. MGR 접속은
-`MgrCommand`가 필요할 때 시작하므로 available이어도 ready는 아닐 수 있다.
+`MgrCommand` 또는 `WaitMgrReady`가 필요할 때 시작하므로 available이어도
+ready는 아닐 수 있다.
 MON 복구를 기다리거나 인증 갱신이 명시적으로 거절되면 MGR ready도 false다.
 Ready는 현재 알려진 명령 접수 조건이며 이후 명령 성공을 보장하지 않는다.
 
 `Close` 후에는 `Closed=true`, MON/MGR ready=false를 반환하고 마지막으로
 알아낸 지도·identity 정보는 남는다. 반환한 주소 slice와 인증 거절 객체를
 수정해도 client에는 영향을 주지 않는다. Snapshot은 한 시점의 관찰값이다.
+
+서비스 시작 시 연결 준비를 기다리려면 `WaitMonReady(ctx)`와
+`WaitMgrReady(ctx)`를 사용한다. MON 인증·MonMap 확인을 기다리며,
+MGR 대기는 active MGR 발견과 별도 인증 연결까지 준비한다.
+관리 명령을 전송하거나 `MaxInFlight` 명령 슬롯을 차지하지 않는다.
+
+```go
+prepare, stop := context.WithTimeout(context.Background(), 10*time.Second)
+defer stop()
+if err := client.WaitMgrReady(prepare); err != nil {
+    return err
+}
+```
+
+대기 context의 취소·만료는 해당 대기만 끝내고, 이미 준비된 연결은 client가
+소유한다. `Close`는 대기 중인 호출을 `ErrClosed`로 끝내며, 명시적인 인증
+거절은 `AuthenticationError`의 서버 코드와 인증 방식을 보존한다.
+이 API는 관리 명령을 보내지 않으므로 `OutcomeUnknownError`를 만들지 않는다.
+성공은 준비된 연결을 관찰했다는 뜻이며 이후 명령의 성공을 보장하지 않는다.
+MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
 
 ## 수명과 복구
 
@@ -340,7 +361,7 @@ CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 `CEPH_MSGR_TEST_TIMEOUT`도 늘린다. 기본 timeout은 시험 바이너리별로 10분이다.
 
 [공개 API 통합시험](integration/)은 별도 Go 시험 패키지에서 제품을 import한다.
-명령·권한·인증 키 회수와 교체·운영 상태 검사를 포함한다.
+명령·권한·인증 키 회수와 교체·운영 상태·연결 준비 검사를 포함한다.
 [클라이언트 패키지](cephmsgr/)에는 제품 구현과 내부 세션·인증 증거·
 요청 대기열을 직접 검사하는 시험을 함께 둔다. 공유하는 relay
 접속·장애 제어 함수는 [개발용 내부 패키지](internal/testcluster/)에 있으며
@@ -353,6 +374,14 @@ CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 aes256k·IPv4 구성에서 공개 상태 조회, 실제 MON 무응답 복구, MON/MGR 명령
 시험 3개가 새 import 경로로 통과했다. 패키지 이동은 기존 Go 소스 33개의
 내용을 그대로 유지했다.
+
+연결 준비 API를 추가한 소스 `cc621d0`는 같은 Darwin arm64·20.2.4·aes256k·
+IPv4 구성에서 관리 명령 없이 동시 8개 MGR 준비 호출, 실제 ticket 갱신,
+active MGR 교체 후 별도 인증, 취소와 종료를 통과했다. MGR 지연 기동 fixture도
+통과했다. 이 경우 MON 사용과 갱신을 유지하면서 MGR 명령·준비 대기를 취소하거나
+종료했고, MGR을 기동하면 진행 중이던 두 대기가 모두 완료됐다.
+단위 시험에서는 실제 전송 메시지를 세어 준비 API가 관리 명령을 보내지 않고,
+명령 슬롯이 모두 사용 중이어도 완료되는 것을 확인했다.
 
 Harness는 격리된 컨테이너 안에서 Ceph 클러스터와 CGO=0 Go 테스트 바이너리를
 실행하고 종료 시 컨테이너·임시 키를 삭제한다. 기본 모드는 호스트 포트를
@@ -391,11 +420,14 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
 시험한다. Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36951780387)이
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36955617945)이
 2026-10-02에 모두 통과했다. Actions 설정 lint와 개발용 진단 도구의 단위
 시험 9개도 통과했다.
+[연결 준비 API 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/readiness-waits)는
+이 실행의 `cc621d0`를 가리킨다. 실제 Ceph에서 인증 키 회수·복원과 MON
+무응답 복구를 검사할 때 두 준비 API의 인증 오류·대기·복구도 확인했다.
 [클라이언트 패키지 이동 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/client-package-layout)는
-이 실행의 `a402b03`를 가리킨다.
+앞서 CI 18개 작업을 통과한 `a402b03`를 가리킨다.
 [통합시험 패키지 분리 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/integration-test-layout)는
 앞서 CI 18개 작업을 통과한 `48e9054`를 가리킨다.
 [운영 상태 API 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/client-state-snapshots)는

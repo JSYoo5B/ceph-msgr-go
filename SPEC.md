@@ -70,10 +70,11 @@ MON 명령과 MGR 명령은 명시적인 API로 구분한다. 명령 prefix만 �
 
 ## Go API 설계 기준
 
-공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `Close`와 `Options`, `Command`, `Result`를 중심으로 한다. go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
+공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `WaitMonReady`, `WaitMgrReady`, `Snapshot`, `Close`와 `Options`, `Command`, `Result`, `State`를 중심으로 한다. go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
+- `WaitMonReady(ctx)`와 `WaitMgrReady(ctx)`는 관리 명령이나 명령 슬롯 없이 연결 준비를 기다린다. MGR 대기는 발견과 별도 인증 연결을 포함한다. 취소는 해당 대기만 끝내며 성공은 이후 명령 성공을 보장하지 않는다. `Snapshot()`은 네트워크 요청 없이 현재 상태를 복사한다.
 - 응답은 원본 data bytes와 상태 문자열을 보존한다. 모든 응답이 JSON이라고 가정하지 않는다.
 - 서버 오류 코드와 Go의 context·네트워크·프로토콜 오류를 구분한다. 서버 코드는 호스트 OS의 errno 숫자로 재해석하지 않는다.
 - client에서 동시 명령 호출을 허용한다. 요청 하나의 deadline을 공유 TCP 연결에 직접 적용하지 않는다.
