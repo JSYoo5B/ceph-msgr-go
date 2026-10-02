@@ -252,13 +252,48 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 		ready := make(chan struct{})
 		var readyOnce sync.Once
+		var verifiedMon bool
+		var bufferedMgr *msgr.MessageData
+		var bufferedEpoch uint32
 		var s *session.Session
 		s = session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
+			// MON can send mgrmap before monmap. Keep at most one frame until
+			// this candidate's MonMap establishes cluster and release identity.
+			if m.Type == msgr.MgrMapMessage && !verifiedMon {
+				c.mu.Lock()
+				current := c.mon == s
+				c.mu.Unlock()
+				if !current {
+					return nil
+				}
+				mgr, err := maps.DecodeMgr(m.Front)
+				if err != nil {
+					bufferedMgr = nil
+					return fmt.Errorf("%w: invalid MGR map: %w", msgr.ErrFrame, err)
+				}
+				if bufferedMgr == nil || mgr.Epoch >= bufferedEpoch {
+					bufferedMgr = &msgr.MessageData{Type: m.Type, Front: m.Front}
+					bufferedEpoch = mgr.Epoch
+				}
+				return nil
+			}
 			accepted, err := c.handleMap(s, m)
+			if err != nil {
+				bufferedMgr = nil
+				return err
+			}
 			if accepted {
+				verifiedMon = true
+				if bufferedMgr != nil {
+					_, err = c.handleMap(s, *bufferedMgr)
+					bufferedMgr = nil
+					if err != nil {
+						return err
+					}
+				}
 				readyOnce.Do(func() { close(ready) })
 			}
-			return err
+			return nil
 		}, func(error) {
 			c.mu.Lock()
 			if c.mon == s {

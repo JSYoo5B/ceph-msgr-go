@@ -123,17 +123,18 @@ func mockMgrMap(epoch uint32, id uint64, port uint16) []byte {
 }
 
 type peerConfig struct {
-	fsid      [16]byte
-	release   byte
-	role      uint8
-	id        uint64
-	clientID  uint64
-	command   func(msgr.MessageData)
-	reply     func(*msgr.MessageData)
-	monMap    []byte
-	addresses []msgr.Address
-	ident     func(msgr.Address)
-	payload   func(msgr.Tag, []byte) []byte
+	fsid        [16]byte
+	release     byte
+	role        uint8
+	id          uint64
+	clientID    uint64
+	command     func(msgr.MessageData)
+	reply       func(*msgr.MessageData)
+	monMap      []byte
+	addresses   []msgr.Address
+	ident       func(msgr.Address)
+	payload     func(msgr.Tag, []byte) []byte
+	initialMaps func(func(msgr.MessageData) error) error
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
@@ -417,15 +418,21 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		return w.Write(m.Frame())
 	}
 	if cfg.role == 1 {
-		monMap := cfg.monMap
-		if monMap == nil {
-			monMap = mockMonMap(cfg.release, cfg.fsid)
-		}
-		if err := send(msgr.MessageData{Type: msgr.MonMapMessage, Front: monMap}); err != nil {
-			return err
-		}
-		if err := send(msgr.MessageData{Type: msgr.MgrMapMessage, Front: mockMgrMap(1, 99, 6800)}); err != nil {
-			return err
+		if cfg.initialMaps != nil {
+			if err := cfg.initialMaps(send); err != nil {
+				return err
+			}
+		} else {
+			monMap := cfg.monMap
+			if monMap == nil {
+				monMap = mockMonMap(cfg.release, cfg.fsid)
+			}
+			if err := send(msgr.MessageData{Type: msgr.MonMapMessage, Front: monMap}); err != nil {
+				return err
+			}
+			if err := send(msgr.MessageData{Type: msgr.MgrMapMessage, Front: mockMgrMap(1, 99, 6800)}); err != nil {
+				return err
+			}
 		}
 	}
 	for {
