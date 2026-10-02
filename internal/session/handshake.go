@@ -134,9 +134,18 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		target.Endpoint = netip.AddrPortFrom(target.Endpoint.Addr().Unmap().WithZone(""), target.Endpoint.Port())
 	}
 	stage := "banner"
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	cancelDone := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(cancelDone)
+		conn.Close()
+	})
+	stopped := false
 	defer func() {
-		stop()
+		if !stopped && !stop() {
+			// A repeated Conn.Close need not wait for another Close's cleanup.
+			// Keep cancellation-owned cleanup within this handshake's lifetime.
+			<-cancelDone
+		}
 		if err != nil {
 			conn.Close()
 		}
@@ -380,7 +389,8 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if flags != sessionFlagLossy {
 		return nil, fmt.Errorf("%w: unsupported session flags %#x", msgr.ErrFeatures, flags)
 	}
-	if !stop() || ctx.Err() != nil {
+	stopped = stop()
+	if !stopped || ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
 	if err = conn.SetDeadline(time.Time{}); err != nil {
