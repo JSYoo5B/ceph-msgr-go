@@ -277,6 +277,11 @@ for path in sys.argv[1:]:
     if value["release"] != "tentacle" or not re.fullmatch(r"20\.2\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?", value["version"]):
         raise SystemExit("Tell oracle daemon must identify Tentacle 20.2")
 PY
+    log_sentinel=$(python3 -c 'import uuid; print("ceph-msgr-log-oracle-" + uuid.uuid4().hex)')
+    printf '%s\n' "$log_sentinel" > /out/log-oracle-sentinel.txt
+    timeout 5 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" log "$log_sentinel"
+    timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" log last 20 --format json > "$root/log-oracle-tail.json"
+    python3 /out/log_oracle.py /out "$root/log-oracle-tail.json"
 fi
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."

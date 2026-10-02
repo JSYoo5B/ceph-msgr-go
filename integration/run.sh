@@ -95,10 +95,10 @@ save_mapped_metadata() {
         fi
     done
 }
-save_tell_metadata() {
+save_oracle_metadata() {
     test -n "$diagnostics" || return 0
     mkdir -p "$diagnostics"
-    for file in tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json; do
+    for file in tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json log-oracle.json log-oracle-sentinel.txt; do
         if test -f "$out/$file"; then
             cp "$out/$file" "$diagnostics/$file"
         fi
@@ -107,7 +107,7 @@ save_tell_metadata() {
 failure_diagnostics() {
     printf 'Ceph fixture failure diagnostics:\n'
     save_mapped_metadata
-    save_tell_metadata
+    save_oracle_metadata
     if test -n "$diagnostics"; then
         mkdir -p "$diagnostics"
         # Copy daemon/probe text logs and crash metadata only, never keyrings or
@@ -162,6 +162,7 @@ else
 fi
 # Keep a running long test independent of edits in the shared checkout.
 cp "$project_root/integration/cluster.sh" "$out/cluster.sh"
+cp "$project_root/tools/log_oracle.py" "$out/log_oracle.py"
 if test "$mapped_ipv6" = 1; then
     cp "$project_root/tools/mapped_address_oracle.py" "$out/mapped_address_oracle.py"
 fi
@@ -171,7 +172,7 @@ docker run -d --name "$container" --label ceph-msgr-go.integration=true --sysctl
 for attempt in $(seq 1 120); do
     if test -f "$out/ready"; then
         save_mapped_metadata
-        save_tell_metadata
+        save_oracle_metadata
         # Keep fixture mutations serial. Run the public API suite before the
         # client package suite, whose final recovery test leaves MON a down.
         for suite in api client; do
