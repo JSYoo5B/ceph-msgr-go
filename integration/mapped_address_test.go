@@ -114,4 +114,7 @@ func TestCephMappedAddressIntegration(t *testing.T) {
 	if !closed.Closed || closed.Monitor.Ready || closed.Manager.Ready {
 		t.Fatal("closed mapped client retained ready sessions", closed)
 	}
+	// Run mutations after the native startup oracle was compared above. This
+	// explicit order keeps the bootstrap metadata valid without test-order rules.
+	t.Run("lifecycle", testMappedAddressLifecycle)
 }
