@@ -433,7 +433,9 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		sequence++
 		m.Sequence = sequence
 		m.Priority = 127
-		m.Version = 1
+		if m.Version == 0 {
+			m.Version = 1
+		}
 		return w.Write(m.Frame())
 	}
 	if cfg.role == 1 {
@@ -470,7 +472,8 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		if m.Type == msgr.SubscribeMessage {
 			continue
 		}
-		if cfg.role == 1 && m.Type != msgr.MonCommandMessage || cfg.role == 16 && m.Type != msgr.MgrCommandMessage {
+		tell := m.Type == msgr.TellCommandMessage
+		if !tell && (cfg.role == 1 && m.Type != msgr.MonCommandMessage || cfg.role == 16 && m.Type != msgr.MgrCommandMessage) {
 			return errors.New("wrong command daemon")
 		}
 		if cfg.command != nil {
@@ -493,13 +496,15 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		}
 		e := wire.Encoder{}
 		typ := msgr.MgrCommandReplyMessage
-		if cfg.role == 1 {
+		if tell {
+			typ = msgr.TellCommandReplyMessage
+		} else if cfg.role == 1 {
 			msgr.Paxos(&e)
 			typ = msgr.MonCommandReplyMessage
 		}
 		e.U32(uint32(code))
 		e.String("status text")
-		if cfg.role == 1 {
+		if cfg.role == 1 && !tell {
 			e.U32(0)
 		}
 		data := m.Data

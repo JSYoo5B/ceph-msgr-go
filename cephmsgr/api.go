@@ -116,13 +116,41 @@ func parseFSID(s string) ([16]byte, error) {
 	return id, nil
 }
 
+type commandOperation uint8
+
+const (
+	monitorCommand commandOperation = iota
+	managerCommand
+	monitorTell
+	managerTell
+)
+
 func (c *Client) MonCommand(ctx context.Context, command Command) (Result, error) {
-	return c.command(ctx, command, false)
+	return c.command(ctx, command, monitorCommand)
 }
 func (c *Client) MgrCommand(ctx context.Context, command Command) (Result, error) {
-	return c.command(ctx, command, true)
+	return c.command(ctx, command, managerCommand)
 }
-func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result, error) {
+
+// MonTell sends a daemon-local command to the currently admitted MON. Its
+// target can change after recovery or ticket renewal. It does not select a
+// monitor by name, send to a quorum, or replay an uncertain command.
+// The server requires MON read, write and execute capabilities for tell.
+func (c *Client) MonTell(ctx context.Context, command Command) (Result, error) {
+	return c.command(ctx, command, monitorTell)
+}
+
+// MgrTell sends a daemon-local command to the current active MGR. These commands
+// use the daemon's admin command schema, distinct from MGR module commands, and
+// require the server's allow-all MGR capability. Context cancellation ends the
+// local wait; an uncertain command is never replayed after recovery.
+func (c *Client) MgrTell(ctx context.Context, command Command) (Result, error) {
+	return c.command(ctx, command, managerTell)
+}
+
+func (c *Client) command(ctx context.Context, command Command, operation commandOperation) (Result, error) {
+	mgr := operation == managerCommand || operation == managerTell
+	tell := operation == monitorTell || operation == managerTell
 	var result Result
 	if err := ctx.Err(); err != nil {
 		return result, err
@@ -162,7 +190,17 @@ func (c *Client) command(ctx context.Context, command Command, mgr bool) (Result
 	c.mu.Lock()
 	fsid := c.fsid
 	c.mu.Unlock()
-	request := msgr.CommandMessage(mgr, fsid, []string{jsonCommand}, input)
+	var request msgr.MessageData
+	if tell {
+		// A zero FSID makes MGR interpret MCommand as a legacy module command.
+		// Never substitute that different route for daemon-local tell.
+		if fsid == [16]byte{} {
+			return result, errors.New("ceph: tell requires an authenticated cluster FSID")
+		}
+		request = msgr.TellCommand(fsid, []string{jsonCommand}, input)
+	} else {
+		request = msgr.CommandMessage(mgr, fsid, []string{jsonCommand}, input)
+	}
 	var reply msgr.MessageData
 	for {
 		if mgr {
