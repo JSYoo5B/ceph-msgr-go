@@ -239,17 +239,14 @@ func (r *Reader) read() (Frame, error) {
 		if err != nil {
 			return Frame{}, err
 		}
-		if err := checkStatus(epi[0]); err != nil {
-			return Frame{}, err
-		}
-		for i := 1; i < 4; i++ {
-			var want uint32
-			if i < len(sizes) {
-				want = CRC(^uint32(0), f.Segments[i])
-			}
+		for i := 1; i < len(sizes); i++ {
+			want := CRC(^uint32(0), f.Segments[i])
 			if binary.LittleEndian.Uint32(epi[1+(i-1)*4:]) != want {
 				return Frame{}, ErrCRC
 			}
+		}
+		if err := checkStatus(epi[0]); err != nil {
+			return Frame{}, err
 		}
 	}
 	return f, nil
