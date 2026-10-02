@@ -283,6 +283,26 @@ func TestLogWatchRejectsInvalidOptionsBeforeSubscription(t *testing.T) {
 	valid.Close()
 }
 
+func TestLogWatchClosedClientPrecedesOptionValidation(t *testing.T) {
+	c, ctx, _ := logTestFixture(t)
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	for _, options := range []LogOptions{
+		{}, {Level: LogLevel(255)}, {MaxBufferedBytes: 1},
+		{MaxBufferedBytes: (1 << 30) + 1}, {StartVersion: math.MaxUint64},
+	} {
+		if stream, err := c.WatchLogs(ctx, options); stream != nil || !errors.Is(err, ErrClosed) {
+			t.Fatal("closed client validated options before its lifetime", options, stream, err)
+		}
+		if stream, err := c.WatchLogs(canceled, options); stream != nil || !errors.Is(err, context.Canceled) {
+			t.Fatal("closed client hid caller cancellation", options, stream, err)
+		}
+	}
+}
+
 func TestLogWatchInclusiveStartAndAcceptedRecoveryCursor(t *testing.T) {
 	c, ctx, peers := logTestFixture(t)
 	first := logTestNextPeer(t, ctx, peers)

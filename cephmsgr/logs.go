@@ -124,6 +124,9 @@ func (c *Client) WatchLogs(ctx context.Context, options LogOptions) (*LogStream,
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if c.ctx.Err() != nil {
+		return nil, ErrClosed
+	}
 	if options.StartVersion == math.MaxUint64 {
 		return nil, ErrLogCursorOverflow
 	}
