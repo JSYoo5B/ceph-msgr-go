@@ -12,8 +12,9 @@ Ceph MON/MGR 관리 명령을 msgr2.1로 직접 호출하는 native Go 라이브
 ## 사용
 
 Go 1.24 이상을 대상으로 한다. import 경로는
-`github.com/jsyoo5b/ceph-msgr-go`이며 패키지 이름은 `cephmsgr`다.
-배포된 module tag는 아직 없다.
+`github.com/jsyoo5b/ceph-msgr-go/cephmsgr`이며 패키지 이름은 `cephmsgr`다.
+배포된 module tag는 아직 없다. 제품 Go 코드는 `cephmsgr/`, wire·인증·세션
+구현은 `internal/`, 공개 API 통합시험과 실행 도구는 `integration/`에 둔다.
 
 ```go
 key, err := cephmsgr.ParseKey(encodedKey) // keyring 전체가 아닌 base64 key 값
@@ -339,8 +340,8 @@ CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
 `CEPH_MSGR_TEST_TIMEOUT`도 늘린다. 기본 timeout은 시험 바이너리별로 10분이다.
 
 [공개 API 통합시험](integration/)은 별도 Go 시험 패키지에서 제품을 import한다.
-명령·권한·인증 키 회수와 교체·운영 상태 검사를 포함한다. 루트에는 내부
-세션·인증 증거·요청 대기열을 직접 검사하는 시험을 남겼다. 공유하는 relay
+명령·권한·인증 키 회수와 교체·운영 상태 검사를 포함한다. [클라이언트 패키지](cephmsgr/)에는 제품 구현과 내부 세션·인증 증거·
+요청 대기열을 직접 검사하는 시험을 함께 둔다. 공유하는 relay
 접속·장애 제어 함수는 [개발용 내부 패키지](internal/testcluster/)에 있으며
 제품의 빌드·실행 의존성에는 포함되지 않는다.
 분리한 시험 소스 `48e9054`는 20.2.4·aes256k·IPv4의 Darwin arm64 host 모드에서
@@ -353,7 +354,7 @@ Harness는 격리된 컨테이너 안에서 Ceph 클러스터와 CGO=0 Go 테스
 공개하지 않는다. `host` 모드는 현재 OS·CPU의 시험 바이너리를 실행하며
 개발용 relay 하나를 `127.0.0.1`의 임시 포트에 공개한다.
 Ceph CLI는 이 개발 fixture의 초기화와 daemon 준비 상태 확인에 사용한다.
-Harness는 공개 API 시험과 루트의 내부 시험을 각각 컴파일해 같은 fixture에서
+Harness는 공개 API 시험과 클라이언트 패키지의 내부 시험을 각각 컴파일해 같은 fixture에서
 차례로 실행한다. 마지막 내부 복구 시험이 MON 하나를 중단하므로 공개 API
 시험을 먼저 실행한다. `CEPH_MSGR_TEST_RUN`은 두 바이너리 모두에 적용된다.
 `auth_allow_insecure_global_id_reclaim=false`를 적용한다. 인증 만료 시험은
@@ -376,7 +377,7 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 
 기존 클러스터에 읽기 명령만 시험하려면 `CEPH_MSGR_MONITORS`(쉼표 구분),
 `CEPH_MSGR_IDENTITY`, `CEPH_MSGR_KEY_FILE`(base64 key 값이 든 파일), 선택적으로
-`CEPH_MSGR_FSID`를 설정하고 `go test -run '^TestCephIntegration$' -v .`를
+`CEPH_MSGR_FSID`를 설정하고 `go test -run '^TestCephIntegration$' -v ./cephmsgr`를
 실행한다. 장애 주입 시험은 격리 harness의 control directory가 있을 때만
 실행한다.
 

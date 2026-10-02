@@ -25,7 +25,7 @@ def annotations(log, exit_code):
     for line in log:
         suite = re.match(r"^Running Ceph test suite: (api|client)\s*$", line)
         if suite:
-            source_prefix = "integration/" if suite.group(1) == "api" else ""
+            source_prefix = "integration/" if suite.group(1) == "api" else "cephmsgr/"
             diagnostics.clear()
             last_started = None
         started = re.match(r"^=== RUN\s+(\S+)", line)

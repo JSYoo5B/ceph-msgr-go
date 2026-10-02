@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jsyoo5b/ceph-msgr-go"
+	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 

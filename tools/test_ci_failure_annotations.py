@@ -41,7 +41,7 @@ class FailureAnnotationsTest(unittest.TestCase):
                "    integration_pause_test.go:7: internal session failed\n", "--- FAIL: TestPrivate\n"]
         result = annotations(log, 1)
         self.assertEqual(result[1], "::error file=integration/commands_test.go,line=42::public command failed")
-        self.assertEqual(result[3], "::error file=integration_pause_test.go,line=7::internal session failed")
+        self.assertEqual(result[3], "::error file=cephmsgr/integration_pause_test.go,line=7::internal session failed")
         abrupt = annotations(log[:3] + ["--- PASS: TestPublic\n", "Running Ceph test suite: client\n"], 137)
         self.assertEqual(len(abrupt), 1)
         self.assertIn("No Go test start was observed", abrupt[0])

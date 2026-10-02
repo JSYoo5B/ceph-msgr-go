@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jsyoo5b/ceph-msgr-go"
+	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
 )
 
 func TestCephConfigCommandsIntegration(t *testing.T) {

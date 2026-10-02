@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jsyoo5b/ceph-msgr-go"
+	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
 )
 
 func TestCephHostnameSeedIntegration(t *testing.T) {

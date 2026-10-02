@@ -72,14 +72,14 @@ fi
 arch=$(docker image inspect --format '{{.Architecture}}' "$image")
 cd "$project_root"
 if test "$runtime" = host; then
-    CGO_ENABLED=0 GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go test -c -o "$out/client.test" .
+    CGO_ENABLED=0 GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go test -c -o "$out/client.test" ./cephmsgr
     CGO_ENABLED=0 GOOS=$(go env GOHOSTOS) GOARCH=$(go env GOHOSTARCH) go test -c -o "$out/api.test" ./integration
     CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o "$out/relay" ./integration/relay
     cp "$project_root/integration/host-cluster.sh" "$out/host-cluster.sh"
     set -- -p 127.0.0.1::40000
     cluster_script=/out/host-cluster.sh
 else
-    CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go test -c -o "$out/client.test" .
+    CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go test -c -o "$out/client.test" ./cephmsgr
     CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go test -c -o "$out/api.test" ./integration
     set --
     cluster_script=/out/cluster.sh
@@ -90,7 +90,7 @@ docker run -d --name "$container" --label ceph-msgr-go.integration=true --entryp
 for attempt in $(seq 1 120); do
     if test -f "$out/ready"; then
         # Keep fixture mutations serial. Run the public API suite before the
-        # internal session suite, whose final recovery test leaves MON a down.
+        # client package suite, whose final recovery test leaves MON a down.
         for suite in api client; do
             printf 'Running Ceph test suite: %s\n' "$suite"
             if test "$runtime" = host; then
