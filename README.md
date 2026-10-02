@@ -155,7 +155,8 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
   복구는 fresh lossy session을 사용하며 Messenger cookie에 의한 기존
   session 재개는 구현하지 않는다. 서버가 reliable 방식이나 알 수 없는
   session flag를 선택하면 거부한다. 인증된 서버 식별 주소에도 연결 대상의
-  주소·포트·nonce가 포함돼야 한다.
+  주소·포트·nonce와 IPv6 scope·flow 정보가 일치해야 한다. 재접속할 때
+  MonMap에서 받은 원본 주소를 유지하며 TCP 접속 문자열로 재파싱하지 않는다.
 
 인증은 `secure`만 허용하며 자동 downgrade하지 않는다. 현재 Tentacle의
 `aes256k`와 기존 `aes` 키를 지원한다. 압축 협상은 압축을 끄는 데 사용한다.
@@ -216,6 +217,11 @@ binary 응답을 각각 대조했고, 취소한 MON 변경이 나중에 실제 �
 JSON·binary 출력과 서버 `-22` 응답을 각각 확인했다. Context 검사는 세션
 잠금 밖에서 실행하며, 검사 중 취소·종료된 전송 전 요청을 뒤늦게 보내지
 않는 것도 단위 시험으로 검증했다.
+
+MON 재접속의 IPv6 scope·flow와 동일 endpoint의 서로 다른 식별 후보는
+인증·지도·명령 응답까지 수행하는 synthetic peer 시험 4개로 확인했다.
+실제 link-local 네트워크 시험은 아니다. 같은 제품 소스 `3cca408`은
+20.2.4·aes256k의 Linux arm64·직접 IPv6 전체 통합시험 28개를 통과했다.
 
 MGR의 `balancer mode` 변경에서도 서버 적용을 독립 클라이언트로 확인한 뒤
 응답 수신을 막았다. 독립 클라이언트가 원래 설정을 다시 저장하고 MON에서
@@ -445,11 +451,13 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 클라이언트 내부 통합시험도 host 모드로 실행한다.
 Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36961949660)이
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36962632275)이
 2026-10-02에 모두 통과했다. Actions 설정 lint와 개발용 진단 도구의 단위
 시험 및 소스 비교 도구 시험 16개도 통과했다.
+[MON 주소 보존 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-wire-address)는
+이 실행의 `3cca408`을 가리킨다.
 [Context 콜백 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/context-admission)는
-이 실행의 `580ea2a`를 가리킨다.
+앞서 CI 18개 작업을 통과한 `580ea2a`를 가리킨다.
 [네트워크 취소·실서버 race 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/network-cancellation)는
 앞서 CI 18개 작업을 통과한 `836fdb2`를 가리킨다.
 [연결 준비 API 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/readiness-waits)는
