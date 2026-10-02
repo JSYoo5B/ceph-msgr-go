@@ -298,16 +298,19 @@ func (s *Session) readLoop() {
 	defer s.wg.Done()
 	for {
 		f, err := s.transport.Reader.Read()
-		if errors.Is(err, msgr.ErrAborted) {
-			continue
-		}
-		if err != nil {
+		aborted := errors.Is(err, msgr.ErrAborted)
+		if err != nil && !aborted {
 			s.Fail(err)
 			return
 		}
 		// Keep Go's monotonic clock component when publishing activity.
 		now := time.Now()
 		s.lastReceive.Store(&now)
+		if aborted {
+			// A complete late-aborted frame proves receive activity, but
+			// must not dispatch a message or advance its sequence/ACK.
+			continue
+		}
 		switch f.Tag {
 		case msgr.Message:
 			m, err := msgr.DecodeMessage(f)
