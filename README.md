@@ -325,6 +325,33 @@ MON 재접속의 IPv6 scope·flow와 동일 endpoint의 서로 다른 식별 후
 실제 link-local 네트워크 시험은 아니다. 같은 제품 소스 `3cca408`은
 20.2.4·aes256k의 Linux arm64·직접 IPv6 전체 통합시험 28개를 통과했다.
 
+후속 `f17a0aa`는 명시적 seed와 인증된 mapped AF_INET6 주소의 family·scope·flow를
+IPv4로 바꾸지 않고 보존한다. 이는 고정 Tentacle의
+[원본 sockaddr encoding](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/msg/msg_types.h#L500)과
+정확한 서버 식별 비교에 따른 수정이다. 직접 작성한 raw 주소 vector와
+secure synthetic peer로 일치하는 주소의 성공, 같은 IP의 서로 다른 family 거부,
+learned MON 복구를 확인했다. DNS seed에서 추론한 Go `TCPAddr`의 IPv4 표현만
+별도로 정규화하며, custom dialer의 4·16-byte IPv4와 native IPv6도 검사했다.
+실제 mapped IPv6 TCP/Ceph 구성의 지원을 검증한 것은 아니다.
+
+후속 `25496b0`는 hostname seed에서 custom dialer가 일반 `net.Addr`로 제공한
+숫자형 IP:port도 MON 식별 주소로 사용한다. 명시적 seed와 learned wire 주소는
+유지하며, 해석할 수 없는 RemoteAddr는 handshake를 시작하지 않고 연결 종료를
+마친 뒤 로컬 설정 오류로 거부한다. IPv4·IPv6·mapped IPv6의 secure synthetic
+peer와 종료 대조군으로 수정 전 실패 및 수정 후 결과를 확인했다.
+
+`08f7d5e`의 공개 API 시험은 fixture용 hostname을 숫자형 MON 주소로 라우팅하고
+일반 `net.Addr`의 논리 peer 주소를 사용한다. 같은 제품 `25496b0`에서 실제
+20.2.4·aes256k·Linux arm64·직접 IPv6의 MON/MGR 명령과 Close가 통과했으며,
+기존 기본 Go DNS dialer 시험도 통과했다. 20.2.4·aes·IPv4의 Darwin arm64
+host race·relay 구성에서도 일반 peer 주소 경로가 통과했다.
+
+`ac45f06`은 handshake가 이미 선택한 거부 원인을 연결 정리 중의 후행
+context 종료에도 보존한다. 원래 코드에서 실패한 20개 거부 회귀와 대조군으로
+인증 코드·framing·feature 거부 및 plain 정책 오류를 확인했다. transport 오류의
+context 매핑과 성공 연결의 수명은 유지하며, 실제 endpoint deadline을 넘긴
+cleanup에서도 malformed HELLO를 bootstrap 재시도로 바꾸지 않고 종료한다.
+
 MGR의 `balancer mode` 변경에서도 서버 적용을 독립 클라이언트로 확인한 뒤
 응답 수신을 막았다. 독립 클라이언트가 원래 설정을 다시 저장하고 MON에서
 저장 결과를 확인한 다음 MGR을 전환했다. 진행 중 호출은
@@ -611,6 +638,25 @@ MON idle 만료 대조군, secure keepalive echo, IPv6 zone seed 거부와 admis
 해당 `de18213`을 가리킨다. 오류가 먼저 기록돼도 deadline 분기가 이를 덮는
 경합은 제어된 시험으로 재현했다. 일반 map 검증과 의도한 missing-map timeout의
 시험 예산도 분리했다. 앞선 macOS CI 실패가 어느 경로였는지는 확정하지 못했다.
+
+mapped wire family 보존과 custom `TCPAddr` 추론을 포함한
+[CI 24개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36994298657)이 모두 통과했다.
+[주소 family 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/wire-address-family)는
+해당 `f17a0aa`를 가리킨다. 이 CI의 실제 Ceph 상대 주소는 기존 IPv4·IPv6 구성이며,
+mapped AF_INET6 구성은 별도의 raw vector·synthetic peer 검증 범위다.
+
+후속 `08f7d5e` CI는 23개 작업이 통과했고 macOS·Go 1.24의 malformed-MgrMap
+admission 시험이 deadline으로 실패했다. 고정 소스의 제어된 경합에서는 시험의
+private MON 후보와 시작 직후 supervisor 후보가 겹쳐 첫 후보의 map이 무시되는
+동일 증상을 재현했다. `ab17b77`은 두 단위 fixture에서 명시적인 후보 소유권을
+분리하고 시도·map 전달 진단을 추가했다. 실제 CI가 이 경로였는지는 미확정이며,
+제품의 MON 연결 소유자와 재접속 동작은 변경하지 않았다.
+
+generic peer 주소의 실제 Ceph 시험, handshake 거부 원인 보존과 fixture 소유권
+분리를 포함한 `ab17b77`의
+[CI 24개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36999005901)이 모두 통과했다.
+[peer 주소 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/peer-addresses)는
+이 커밋을 가리킨다.
 
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
 앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
