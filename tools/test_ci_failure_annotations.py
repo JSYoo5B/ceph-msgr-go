@@ -54,6 +54,35 @@ class FailureAnnotationsTest(unittest.TestCase):
                "--- FAIL: TestFailure\n"]
         self.assertEqual(annotations(log, 1)[1], "::error file=file_test.go,line=7::50%25%0Dnext")
 
+    def test_joined_error_preserves_each_endpoint_cause(self):
+        log = ["Running Ceph test suite: api\n", "=== RUN   TestRejection\n",
+               "    auth_recovery_test.go:113: authentication rejected\n",
+               "ceph messenger authentication: code -13\n",
+               "unexpected EOF\n", "    cipher tag 50% mismatch\n",
+               "--- FAIL: TestRejection (1s)\n", "FAIL\n",
+               "daemon diagnostic after the suite\n"]
+        result = annotations(log, 1)
+        self.assertEqual(result[1], "::error file=integration/auth_recovery_test.go,line=113::authentication rejected%0Aceph messenger authentication: code -13%0Aunexpected EOF%0A    cipher tag 50%25 mismatch")
+        self.assertNotIn("daemon diagnostic", "\n".join(result))
+
+    def test_multiline_diagnostic_is_bounded_and_marks_truncation(self):
+        log = ["=== RUN   TestBound\n", "    bound_test.go:7: assertion\n",
+               "x" * 20000 + "\n", "omitted continuation\n", "--- FAIL: TestBound\n"]
+        result = annotations(log, 1)
+        self.assertTrue(result[1].endswith("%0A[diagnostic truncated]"))
+        self.assertLess(len(result[1]), 8300)
+        self.assertNotIn("omitted continuation", result[1])
+
+    def test_suite_transition_does_not_become_error_continuation(self):
+        log = ["Running Ceph test suite: api\n", "=== RUN   TestOld\n",
+               "    old_test.go:7: old assertion\n", "old cause\n",
+               "Running Ceph test suite: client\n", "=== RUN   TestCurrent\n",
+               "    current_test.go:8: current assertion\n", "current cause\n",
+               "--- FAIL: TestCurrent\n"]
+        result = annotations(log, 1)
+        self.assertEqual(result[1], "::error file=cephmsgr/current_test.go,line=8::current assertion%0Acurrent cause")
+        self.assertNotIn("old cause", "\n".join(result))
+
 
 if __name__ == "__main__":
     unittest.main()

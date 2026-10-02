@@ -4,6 +4,8 @@ import argparse
 from collections import deque
 import re
 
+DIAGNOSTIC_LIMIT = 8192
+
 
 def escape(value):
     return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
@@ -17,6 +19,12 @@ def annotations(log, exit_code):
     last_started = None
     completed_failure = False
     source_prefix = ""
+    continuation = False
+
+    def bounded(message):
+        if len(message) > DIAGNOSTIC_LIMIT:
+            return message[:DIAGNOSTIC_LIMIT] + "\n[diagnostic truncated]", False
+        return message, True
 
     def append_diagnostics():
         for path, number, message in diagnostics:
@@ -28,14 +36,25 @@ def annotations(log, exit_code):
             source_prefix = "integration/" if suite.group(1) == "api" else "cephmsgr/"
             diagnostics.clear()
             last_started = None
+            continuation = False
         started = re.match(r"^=== RUN\s+(\S+)", line)
         if started:
             diagnostics.clear()
             last_started = started.group(1)
+            continuation = False
+        if re.match(r"^\s*(--- (PASS|FAIL|SKIP):|=== (RUN|PAUSE|CONT|NAME)\b|PASS\s*$|FAIL\s*$)", line):
+            continuation = False
         match = re.match(r"\s+(\S+_test\.go):(\d+): (.*)", line)
         if match:
             path, number, message = match.groups()
+            message, continuation = bounded(message)
             diagnostics.append((source_prefix + path, number, message))
+        elif continuation and line.strip():
+            # errors.Join and multiline assertions emit continuation lines
+            # without another Go source prefix. Keep them with their cause.
+            path, number, message = diagnostics[-1]
+            message, continuation = bounded(message + "\n" + line.rstrip("\n"))
+            diagnostics[-1] = (path, number, message)
         if line.startswith("--- FAIL:"):
             completed_failure = True
             output.append("::error::" + escape(line.strip()))
