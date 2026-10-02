@@ -49,6 +49,7 @@ cleanup() {
     rm -rf "$out"
 }
 failure_diagnostics() {
+    printf 'Ceph fixture failure diagnostics:\n'
     if test -n "$diagnostics"; then
         mkdir -p "$diagnostics"
         # Copy daemon text logs and crash metadata only, never keyrings or
