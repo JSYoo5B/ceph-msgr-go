@@ -56,6 +56,32 @@ fmt.Printf("%s\n", result.Data)
 `errors.As`로 인증 방법과 서버 코드를 확인할 수 있으며, 로컬 암호 검증
 실패와 구분한다.
 
+## 운영 상태
+
+`Snapshot()`은 네트워크 요청이나 재접속 대기 없이 현재 client 상태를 읽는다.
+FSID와 client global ID, MON/MGR 지도 epoch·접속 주소, active MGR,
+ticket 만료·갱신 예정 시각, 명시적인 MON 인증 거절을 확인할 수 있다.
+키와 ticket의 암호 내용은 포함하지 않는다.
+
+```go
+state := client.Snapshot()
+fmt.Printf("MON ready=%t MGR available=%t ready=%t\n",
+    state.Monitor.Ready, state.Manager.Available, state.Manager.Ready)
+if state.AuthRejection != nil {
+    fmt.Printf("authentication method=%d code=%d\n",
+        state.AuthRejection.Method, state.AuthRejection.Code)
+}
+```
+
+`Manager.Available`은 마지막으로 수신한 MgrMap 값이다. MGR 접속은
+`MgrCommand`가 필요할 때 시작하므로 available이어도 ready는 아닐 수 있다.
+MON 복구를 기다리거나 인증 갱신이 명시적으로 거절되면 MGR ready도 false다.
+Ready는 현재 알려진 명령 접수 조건이며 이후 명령 성공을 보장하지 않는다.
+
+`Close` 후에는 `Closed=true`, MON/MGR ready=false를 반환하고 마지막으로
+알아낸 지도·identity 정보는 남는다. 반환한 주소 slice와 인증 거절 객체를
+수정해도 client에는 영향을 주지 않는다. Snapshot은 한 시점의 관찰값이다.
+
 ## 수명과 복구
 
 - 동시 호출을 지원한다. `MaxInFlight` 기본값은 64이며 슬롯 대기도 호출
@@ -280,6 +306,15 @@ relay로 접근했다. Ceph 주소는 IPv4와 IPv6를 각각 시험했으며 rel
 호스트 TCP 경로는 IPv4다. 이 결과를 Darwin에서의 직접 IPv6 접속 검증으로
 해석하지 않는다. 반복 종료 시험의 파일 descriptor 수는 시작과 끝 모두 5였다.
 
+공개 `Snapshot`의 FSID와 active MGR 정보는 독립 클라이언트의 `status`·
+`mgr dump` 응답과 대조했다. 실제 ticket 갱신, MON 재기동, MGR 전환과
+lazy 접속, 인증 키 회수·복원, 종료에 따른 상태 변화도 확인했다.
+실제 MON을 SIGSTOP하고 재접속을 잠시 막은 시험에서는 MGR 연결이 살아
+있어도 MON/MGR ready가 false였고, 다른 MON에서 복구한 뒤 둘 다 true로
+돌아왔다. 이 시험들은 20.2.4·aes256k의 Darwin arm64·IPv4에서 통과했다.
+같은 공개 상태 검사를 포함한 제품 소스 `9a3f5c0`의 전체 통합시험 25개도
+20.2.4·aes256k의 Linux arm64·IPv6에서 통과했다.
+
 Go 1.24.0과 1.27 계열에서 Linux·macOS·Windows의 CGO=0 unit/vet 검사를
 통과했다. Linux와 Darwin arm64에서 race 검사, Darwin에서 parser fuzzing도 통과했다.
 Windows amd64, Darwin amd64, Linux 386에서 CGO=0 빌드를 확인했다.
@@ -317,6 +352,11 @@ MON을 ticket과 rotating secret의 수명보다 오래 중단한다. Ceph daemo
 Metadata는 종료된 컨테이너에서도 회수하며, 이 개발용 수집에는 Python 3
 표준 라이브러리를 사용한다. CI는 실패한 Ceph 시험의 로그와 metadata를
 artifact로 7일간 보관하도록 설정했다.
+완료된 Go 시험 실패가 없이 harness가 비정상 종료되면, CI 공개 annotation에
+종료 코드와 마지막으로 시작한 시험, 최대 10개 진단을 남긴다. 마지막 시험이
+종료 원인이라는 뜻은 아니다. 앞선 CI `57b8619`의 20.2.4·aes256k·IPv6 작업은
+코드 137로 종료됐으며 원인은 아직 확인하지 못했다. 이후 동일한 Ceph·암호·
+IP 구성의 Linux arm64 통합시험과 CI 성공이 이 종료 원인을 설명하지는 않는다.
 20.2.3 시험은 `CEPH_MSGR_TEST_IMAGE=quay.io/ceph/ceph:v20.2.3`과
 `CEPH_MSGR_TEST_KEY_TYPE=aes`를 함께 설정한다. 해당 이미지의 개발 도구에는
 aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적으로 실패시킨다.
@@ -332,10 +372,13 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
 시험한다. Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36886549130)이
-2026-10-01에 모두 통과했다. Actions 설정 lint도 통과했다.
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36946746867)이
+2026-10-02에 모두 통과했다. Actions 설정 lint와 개발용 진단 도구의 단위
+시험 8개도 통과했다.
+[운영 상태 API 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/client-state-snapshots)는
+이 실행의 `d27732d`를 가리킨다.
 [MON/MGR 복구 오류 검사 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-mgr-recovery-causes)는
-이 실행의 `5f36a9c`를 가리킨다.
+앞서 CI 18개 작업을 통과한 `5f36a9c`를 가리킨다.
 [MGR 결과·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mgr-outcomes-and-close)는
 앞서 CI 18개 작업을 통과한 `72c76a5`를 가리킨다.
 [idle·인증 증명 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/idle-and-proof-verification)는
