@@ -49,7 +49,7 @@ func TestCephSnapshotIntegration(t *testing.T) {
 	if _, err := c.MgrCommand(ctx, query); err != nil {
 		t.Fatal(err)
 	}
-	state := c.Snapshot()
+	state := waitClientState(t, c, ctx, func(s State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if !state.Manager.Ready || !slices.Contains(state.Manager.Endpoints, state.Manager.Endpoint) || !slices.Contains(state.Monitor.Endpoints, state.Monitor.Endpoint) {
 		t.Fatal("ready session endpoints disagree with authenticated maps", state)
 	}
@@ -97,9 +97,7 @@ func TestCephSnapshotIntegration(t *testing.T) {
 	if _, err := c.MgrCommand(ctx, query); err != nil {
 		t.Fatal("new MGR query", err)
 	}
-	if !c.Snapshot().Manager.Ready {
-		t.Fatal("new authenticated MGR session was not ready")
-	}
+	waitClientState(t, c, ctx, func(s State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if err := c.Close(); err != nil {
 		t.Fatal(err)
 	}

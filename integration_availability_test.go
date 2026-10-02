@@ -112,7 +112,7 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("MGR startup did not release the waiting command", ctx.Err())
 	}
-	state = c.Snapshot()
+	state = waitClientState(t, c, ctx, func(s State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if !state.Manager.Available || !state.Manager.Ready || !state.Monitor.Ready {
 		t.Fatal("delayed MGR startup did not update public state", state)
 	}

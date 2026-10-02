@@ -182,7 +182,7 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 	if err := fixtureRecoveryRead(ctx, c, true); err != nil {
 		t.Fatal("MGR command after paused MON recovery", err)
 	}
-	state = c.Snapshot()
+	state = waitClientState(t, c, ctx, func(s State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if !state.Monitor.Ready || !state.Manager.Ready {
 		t.Fatal("public admission state did not recover after actual MON silence", state)
 	}

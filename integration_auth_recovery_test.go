@@ -114,7 +114,7 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	if _, err := c.MgrCommand(ctx, Command{JSON: []byte(`{"prefix":"pg stat"}`)}); err != nil {
 		t.Fatal("MGR after credential restoration", err)
 	}
-	recoveredState := c.Snapshot()
+	recoveredState := waitClientState(t, c, ctx, func(s State) bool { return s.Monitor.Ready && s.Manager.Ready })
 	if recoveredState.AuthRejection != nil || !recoveredState.Monitor.Ready || !recoveredState.Manager.Ready || recoveredState.Closed || recoveredState.GlobalID != rejectedState.GlobalID {
 		t.Fatal("public state did not recover with the restored credential", recoveredState)
 	}
