@@ -28,7 +28,15 @@ type MonitorState struct {
 	Endpoint       string // Peer reported by the held connection's RemoteAddr.
 	MapEpoch       uint32
 	MinimumRelease uint8
-	Endpoints      []string // msgr2 dial endpoints from the last authenticated map; address family may differ from Endpoint.
+	Endpoints      []string        // msgr2 dial endpoints from the last authenticated map; address family may differ from Endpoint.
+	Members        []MonitorMember // Last known authenticated map members in rank order, not per-daemon readiness.
+}
+
+// MonitorMember identifies a MON in the last known authenticated map. A member
+// may be unavailable, and its rank can change when the map changes.
+type MonitorMember struct {
+	Name string // Exact bare MON name accepted by MonTellTo.
+	Rank uint32
 }
 
 // ManagerState separates advertised MGR availability from a ready client
@@ -63,6 +71,9 @@ func (c *Client) Snapshot() State {
 	}
 	state.Monitor.MapEpoch = c.monMap.Epoch
 	state.Monitor.MinimumRelease = c.monMap.MinimumRelease
+	for _, member := range c.monMap.Members {
+		state.Monitor.Members = append(state.Monitor.Members, MonitorMember{Name: member.Name, Rank: member.Rank})
+	}
 	for _, address := range c.monMap.Addresses {
 		state.Monitor.Endpoints = append(state.Monitor.Endpoints, dialAddress(address))
 	}
