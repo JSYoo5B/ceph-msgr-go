@@ -232,6 +232,22 @@ MGR 전환과 대기 취소·종료 중에도 검증했다. 복구 시험은 결
 ticket 갱신 18회, MGR 장애 주입 시도 6회와 context의 상태 조회 284,403회를
 처리했다. 결과 불명확 응답은 없었고 관찰한 최대 세션 수는 2였다.
 
+MON 후보에서 먼저 받은 MgrMap은 해당 후보의 MonMap이 FSID·최소 계열을
+검증한 뒤에 반영한다. 후보를 거절하거나 검증 대기가 만료되면 기존 MGR와
+진행 중 명령을 유지한다. 지도 메시지의 호환 header version과 인증 transcript
+크기도 검증한다. 잘못된 명령 응답으로 같은 세션을 종료할 때는 영향을 받은
+모든 요청에 `ErrMalformedMessage`와 해석 오류를 함께 보존한다.
+`Close`는 세션 worker뿐 아니라 연결의 `Close`, 종료 callback, 취소된
+handshake의 연결 정리까지 기다린다. 이 경합은 지연된 정리를 사용하는
+단위·race 시험으로 확인했다.
+
+이 보강을 포함한 제품 소스 `23148f5`도 같은 실제 IPv6 구성의 전체 통합시험과
+3분 부하 시험을 통과했다. 명령 64,480건, ticket 갱신 18회, 서버가 성공 응답한
+MGR 장애 주입 5회와 context 상태 조회 289,749회를 처리했다. 결과 불명확
+2건은 MGR 교체 원인을 유지했으며 자동 재실행하지 않았다. 관찰한 최대
+세션은 2개, goroutine은 19개였다. 반복 종료 12회에서 파일 descriptor는
+6개로 돌아왔고, GC 후 heap은 268,056 bytes에서 273,336 bytes였다.
+
 MON 재접속의 IPv6 scope·flow와 동일 endpoint의 서로 다른 식별 후보는
 인증·지도·명령 응답까지 수행하는 synthetic peer 시험 4개로 확인했다.
 실제 link-local 네트워크 시험은 아니다. 같은 제품 소스 `3cca408`은
@@ -465,11 +481,13 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 클라이언트 내부 통합시험도 host 모드로 실행한다.
 Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
 3분 부하 시험, MGR 지연 기동, host 모드, 별도 인증 만료 및 긴 ticket·idle fixture를
-포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36964931080)이
+포함한 [GitHub CI 18개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/36969860118)이
 2026-10-02에 모두 통과했다. Actions 설정 lint와 개발용 진단 도구의 단위
-시험 및 소스 비교 도구 시험 16개도 통과했다.
+시험 및 소스 비교 도구 시험 19개도 통과했다.
+[MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
+이 실행의 `23148f5`를 가리킨다.
 [복구 중 Context 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/recovery-contexts)는
-이 실행의 `c14f78f`를 가리킨다.
+앞서 CI 18개 작업을 통과한 `c14f78f`를 가리킨다.
 [MON 주소 보존 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-wire-address)는
 앞서 CI 18개 작업을 통과한 `3cca408`을 가리킨다.
 [Context 콜백 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/context-admission)는
