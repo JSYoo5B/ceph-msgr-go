@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
 )
 
 func TestCephManagerAvailabilityIntegration(t *testing.T) {
@@ -34,6 +32,10 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 		}
 	}
 	command := Command{JSON: []byte(`{"prefix":"pg stat","format":"json"}`)}
+	state := c.Snapshot()
+	if !state.Monitor.Ready || state.Manager.Available || state.Manager.Ready {
+		t.Fatal("unavailable MGR state obscured the ready MON", state)
+	}
 	short, cancel := context.WithTimeout(ctx, 30*time.Millisecond)
 	_, err := c.MgrCommand(short, command)
 	cancel()
@@ -84,10 +86,10 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 		finished <- err
 	}()
 	// Observe genuine renewal while MGR is absent, with a pending MGR call.
-	initial := c.snapshotAuth().Tickets[cephx.ServiceAuth]
+	initial := c.Snapshot().AuthTicket
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	for !c.snapshotAuth().Tickets[cephx.ServiceAuth].Expires.After(initial.Expires) {
+	for !c.Snapshot().AuthTicket.Expires.After(initial.Expires) {
 		if result, err := c.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"status","format":"json"}`)}); err != nil || !json.Valid(result.Data) {
 			t.Fatal("MON unavailable while waiting for MGR", err)
 		}
@@ -109,6 +111,10 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 		}
 	case <-ctx.Done():
 		t.Fatal("MGR startup did not release the waiting command", ctx.Err())
+	}
+	state = c.Snapshot()
+	if !state.Manager.Available || !state.Manager.Ready || !state.Monitor.Ready {
+		t.Fatal("delayed MGR startup did not update public state", state)
 	}
 	t.Log("MON stayed available and renewed tickets; MGR wait canceled locally or completed after discovery")
 }

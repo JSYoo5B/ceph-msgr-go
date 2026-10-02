@@ -86,6 +86,10 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	if !errors.As(err, &actual) || actual.Code != server.Code {
 		t.Fatal("new MGR call lost the MON authentication rejection", err)
 	}
+	rejectedState := c.Snapshot()
+	if rejectedState.AuthRejection == nil || rejectedState.AuthRejection.Code != server.Code || rejectedState.AuthRejection.Method != server.Method || rejectedState.Monitor.Ready || rejectedState.Manager.Ready || rejectedState.Closed {
+		t.Fatal("public state did not preserve genuine renewal rejection", rejectedState)
+	}
 	// Restore the same fixture key through an independently authenticated
 	// administrator. The rejected client must recover without being rebuilt.
 	keyring := append([]byte("[client.revocable]\n\tkey = "), bytes.TrimSpace(encoded)...)
@@ -109,5 +113,9 @@ func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	}
 	if _, err := c.MgrCommand(ctx, Command{JSON: []byte(`{"prefix":"pg stat"}`)}); err != nil {
 		t.Fatal("MGR after credential restoration", err)
+	}
+	recoveredState := c.Snapshot()
+	if recoveredState.AuthRejection != nil || !recoveredState.Monitor.Ready || !recoveredState.Manager.Ready || recoveredState.Closed || recoveredState.GlobalID != rejectedState.GlobalID {
+		t.Fatal("public state did not recover with the restored credential", recoveredState)
 	}
 }
