@@ -144,7 +144,7 @@ func parseReplies(d *wire.Decoder, secret Key, old map[uint32]Ticket, now time.T
 		}
 		key := DecodeKey(td)
 		sec, ns := td.U32(), td.U32()
-		if ns >= 1_000_000_000 || sec == 0 {
+		if ns >= 1_000_000_000 || (sec == 0 && ns == 0) {
 			return nil, ErrTicket
 		}
 		if err := td.Done(); err != nil {
