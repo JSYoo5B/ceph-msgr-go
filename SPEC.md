@@ -140,6 +140,9 @@ MgrMap의 대기 MGR을 독립 복사한다. 가용성이나 새로운 접속 �
 전체 목록이 아니다. `AvailableModules`는 active daemon이 보고한
 `ManagerModule{Name, CanRun, ErrorString}`를 원본 순서대로 독립 복사한다.
 Load 가능 보고를 실행 중 상태·명령 권한으로 바꾸지 않는다.
+`ManagerModule.Options`는 option map key와 `ManagerModuleOption`의 이름,
+원문 uint8 Type·Level과 uint32 Flags, 기본값·범위·설명·enum·tag·관련 옵션을
+보존한다. 중첩 map과 slice를 독립 복사하고 설정값을 검증하거나 적용하지 않는다.
 `ManagerState.Services`는 같은 지도의 active module 이름 → raw URI map을
 독립 복사한다. URL 파싱·HTTP 접속·준비 상태·권한 확인은 수행하지 않는다.
 로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
@@ -190,9 +193,17 @@ LGPL-2.1 고지를 확인하고 wire 의미를 독립 구현한다. `StandbyInfo
 
 Active 모듈 metadata는 같은 [MgrMap의 ModuleInfo](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMap.h#L129)의
 LGPL-2.1 고지를 확인하고 wire prefix를 독립 구현한다. 명시적인 module set과
-active `name/can_run/error_string`을 보존하며 module_options는 공개
-모델에 넣지 않는다. 같은 epoch의 `mgr dump`와 비교하고 module disable/enable,
+active `name/can_run/error_string`과 option schema를 보존한다. 같은 epoch의 `mgr dump`와 비교하고 module disable/enable,
 active 전환, 목록 소유권과 Close 후 보존을 검증한다.
+
+ModuleInfo v2의 option map은 [ModuleOption v1](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMap.h#L37)을
+독립 구현한다. Map key와 내부 name을 구분하며 기본값·min/max 등 문자열을
+수치·시간으로 변환하지 않는다. 고정 [Option type·level 코드](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/options.h#L16)의
+일반 LGPL-2.1 또는 LGPL-3 고지를 확인했다. Native dump는 type·level을 이름으로
+출력하므로 oracle 비교본에서만 고정 코드로 되돌리고 제품의 unknown 코드도
+그대로 유지한다. Native formatter의 unknown은 원래 코드를 복구할 수 없어
+oracle에서 추측하지 않는다. 전체 schema와 active 전환, 중첩 소유권을 비교하고
+실제 설정값이 바뀌어도 보고된 기본값과 구분되는지 검증한다.
 
 서비스 URI는 같은 MgrMap의 raw map을 독립 구현한다. 고정
 [active beacon 반영](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMonitor.cc#L515)과

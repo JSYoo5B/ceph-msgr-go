@@ -106,6 +106,7 @@ GROUPS = {
     "command-schemas": (
         "src/common/cmdparse.cc",
         "src/common/cmdparse.h",
+        "src/common/options.h",
         "src/mon/MonCommand.h",
         "src/common/admin_socket.cc",
         "src/mon/MonCommands.h",

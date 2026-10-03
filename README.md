@@ -410,13 +410,24 @@ Tentacle 20.2.4의 Linux IPv6/aes256k와 Darwin IPv4/AES race 시험에서
 Always-on 모듈 전체 목록은 포함하지 않는다. `Manager.AvailableModules`는 active
 MGR이 보고한 `ManagerModule{Name, CanRun, ErrorString}` 목록이다. `CanRun`과
 원인 문자열은 해당 daemon의 마지막 load 가능 보고이며 실행 중 상태나 명령
-권한을 의미하지 않는다. 모듈 options는 해석하지 않는다. 두 목록 모두 별도
+권한을 의미하지 않는다. 두 목록 모두 별도
 명령이나 MGR 접속 없이 조회하고 호출자가 소유하며 Close 후 마지막 값을 유지한다.
 
 같은 Linux IPv6/aes256k와 Darwin IPv4/AES race 구성에서 명시적인 활성화 목록과
 34개 모듈 보고를 같은 epoch의 native `mgr dump`와 대조했다. `iostat` 비활성화·
 재활성화와 active MGR 전환 뒤에도 전체 목록과 로딩 실패 원인이 일치했다.
 이 조회에서도 제품의 MGR 접속은 발생하지 않았다.
+
+각 `ManagerModule.Options`는 서버가 보고한 option 이름 → `ManagerModuleOption`
+map이다. 이름, 원문 타입·level 코드와 flags, 기본값·min/max·설명, enum·tag·관련
+옵션 목록을 보존한다. 기본값과 범위는 schema metadata이며 현재 설정값이나
+Go 인자를 검증·변환하는 규칙으로 적용하지 않는다. Map key와 descriptor의
+`Name`을 각각 유지하고 중첩 map과 slice도 Snapshot마다 독립 복사한다.
+
+Linux IPv6/aes256k와 Darwin IPv4/AES race에서 425개 descriptor 전체를 같은
+epoch의 native `mgr dump`와 대조했다. Prometheus 설정값을 `9393`으로 바꿔도
+보고된 기본값 `9283`과 구분됐고, active MGR 전환과 Close 뒤에도 보존됐다.
+이 schema 조회에서도 제품의 MGR 접속은 발생하지 않았다.
 
 `Manager.Services`는 같은 지도의 module 이름 → raw URI를 새
 `map[string]string`으로 복사한다. Active MGR이 광고한 Dashboard·Prometheus 등
@@ -1310,7 +1321,7 @@ client TCP 복구·stream 종료 원인 보존을 포함한 `993001d`의
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 81개 경로를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 82개 경로를
 비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
 iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를
