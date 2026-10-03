@@ -117,7 +117,7 @@ save_mapped_metadata() {
 save_oracle_metadata() {
     test -n "$diagnostics" || return 0
     mkdir -p "$diagnostics"
-    for file in tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json named-mon-b.json log-oracle.json log-oracle-sentinel.txt config-oracle.json config-oracle-history.jsonl hostname-config-oracle.json command-oracle-mon.json command-oracle-mgr.json command-oracle-summary.json tell-command-oracle-mon-a.json tell-command-oracle-mon-b.json tell-command-oracle-mon-c.json tell-command-oracle-mgr.json tell-command-oracle-summary.json manager-oracle.json digest-oracle.json monitor-oracle.json osd-oracle.json osd-native-stat.txt osd-object.bin osd-native-read.bin; do
+    for file in tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json named-mon-b.json log-oracle.json log-oracle-sentinel.txt config-oracle.json config-oracle-history.jsonl hostname-config-oracle.json command-oracle-mon.json command-oracle-mgr.json command-oracle-summary.json tell-command-oracle-mon-a.json tell-command-oracle-mon-b.json tell-command-oracle-mon-c.json tell-command-oracle-mgr.json tell-command-oracle-summary.json manager-oracle.json digest-oracle.json monitor-oracle.json osd-oracle.json osd-map-native-oracle.json osd-map-manifest.json osd-map-epoch.json osd-map-applied.json osd-native-stat.txt osd-object.bin osd-native-read.bin; do
         if test -f "$out/$file"; then
             cp "$out/$file" "$diagnostics/$file"
         fi
@@ -131,14 +131,14 @@ failure_diagnostics() {
         mkdir -p "$diagnostics"
         # Copy daemon/probe text logs and crash metadata only, never keyrings or
         # process memory. The caller chooses the development output directory.
-        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log osd.0.log osd.0.mkfs.log osd.probe.log service-keys-probe.json service-keys-probe.log mode-probe.json mode-probe.log; do
+        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log osd.0.log osd.0.mkfs.log osd.probe.log osd-map-control.log osd-map-applied.json service-keys-probe.json service-keys-probe.log mode-probe.json mode-probe.log; do
             docker cp "$container:/tmp/ceph-msgr-test/$log" "$diagnostics/$log" > /dev/null 2>&1 || true
         done
         # docker cp also works after the container exits. Select metadata
         # from the archive stream without saving any other crash files.
         docker cp "$container:/var/lib/ceph/crash" - 2>/dev/null | python3 "$project_root/tools/collect_crash_metadata.py" > "$diagnostics/crash-metadata.jsonl" || true
         cat "$diagnostics/crash-metadata.jsonl"
-        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log osd.0.log osd.0.mkfs.log osd.probe.log service-keys-probe.json service-keys-probe.log mode-probe.json mode-probe.log; do
+        for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log osd.0.log osd.0.mkfs.log osd.probe.log osd-map-control.log osd-map-applied.json service-keys-probe.json service-keys-probe.log mode-probe.json mode-probe.log; do
             if test -f "$diagnostics/$log"; then
                 tail -n 80 "$diagnostics/$log"
             fi
@@ -183,6 +183,7 @@ fi
 cp "$project_root/integration/cluster.sh" "$out/cluster.sh"
 cp "$project_root/integration/osd-fixture.sh" "$out/osd-fixture.sh"
 cp "$project_root/tools/osd_oracle.py" "$out/osd_oracle.py"
+cp "$project_root/tools/osd_map_oracle.py" "$out/osd_map_oracle.py"
 cp "$project_root/integration/publish-ack.sh" "$out/publish-ack.sh"
 cp "$project_root/tools/log_oracle.py" "$out/log_oracle.py"
 cp "$project_root/tools/command_oracle.py" "$out/command_oracle.py"

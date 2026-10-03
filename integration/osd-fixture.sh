@@ -16,11 +16,13 @@ cat >> "$root/ceph.conf" <<EOF
 osd_data = $root/osd.\$id
 osd_objectstore = memstore
 osd_crush_update_on_start = false
+osd_beacon_report_interval = 1
 ms_service_mode = $connection_mode
 ms_mon_cluster_mode = secure crc
 ms_bind_port_min = 36900
 ms_bind_port_max = 36910
 [osd.0]
+admin_socket = $root/osd.0.asok
 public_addr = 127.0.0.1:36900
 cluster_addr = 127.0.0.1:36901
 EOF

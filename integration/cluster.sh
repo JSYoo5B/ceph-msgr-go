@@ -25,8 +25,16 @@ fi
 mapped_ipv6=${CEPH_MSGR_TEST_MAPPED_IPV6:-0}
 case "$mapped_ipv6" in 0|1) ;; *) exit 2 ;; esac
 osd_fixture=${CEPH_MSGR_TEST_OSD:-0}
+osd_map_retention=
 case "$osd_fixture" in 0|1) ;; *) exit 2 ;; esac
 if test "$osd_fixture" = 1; then
+    # This disposable single-PG topology needs a retained-history boundary
+    # to independently verify both full and incremental map delivery.
+    # Force only an early, pre-object boundary in this disposable topology.
+    # Ordinary last_epoch_clean reporting need not advance in a static PG.
+    osd_map_retention='paxos_service_trim_min = 1
+mon_min_osdmap_epochs = 5
+mon_osd_force_trim_to = 5'
     test "${CEPH_MSGR_TEST_IP_FAMILY:-4}" = 4 && test "$mgr_count" = 2 || exit 2
     test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 && test -z "$mode_rejection" && test "$mapped_ipv6" = 0 && test "${CEPH_MSGR_TEST_EXPIRE_TICKETS:-0}" = 0 && test -z "${CEPH_MSGR_STRESS_DURATION:-}" || exit 2
 fi
@@ -150,6 +158,7 @@ log_to_stderr = true
 err_to_stderr = true
 [mon]
 mon_data = /tmp/ceph-msgr-test/mon.\$id
+$osd_map_retention
 [mon.a]
 public_addr = $address:33300
 [mon.b]
@@ -349,6 +358,46 @@ fi
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."
 while true; do
+    if test -f /out/verify-osd-epoch; then
+        test "$osd_fixture" = 1 || exit 2
+        read -r request_id label extra < /out/verify-osd-epoch
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 && test "$label" = advance && test -z "$extra" || exit 2
+        rm /out/verify-osd-epoch
+        fixture_phase=verify-osd-applied-epoch
+        timeout 10 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" osd dump --format json > /out/osd-map-epoch.json
+        epoch_applied=false
+        for attempt in $(seq 1 20); do
+            # Retain the non-secret daemon status even if this readiness check
+            # fails, so diagnostics show its applied/retained epoch boundaries.
+            if timeout 5 ceph --admin-daemon "$root/osd.0.asok" status > "$root/osd-map-applied.json" 2>> "$root/osd-map-control.log" && python3 - /out/osd-map-epoch.json "$root/osd-map-applied.json" 2>> "$root/osd-map-control.log" <<'PY'
+import json, sys
+expected, applied = (json.load(open(path)) for path in sys.argv[1:])
+# OSD::status dumps epoch_t through Formatter::dump_stream, a JSON string.
+sys.exit(not (applied["cluster_fsid"] == expected["fsid"] and int(applied["newest_map"]) >= expected["epoch"] and applied["cluster_osdmap_trim_lower_bound"] > 1))
+PY
+            then
+                epoch_applied=true
+                break
+            fi
+            sleep 1
+        done
+        test "$epoch_applied" = true || exit 1
+        cp "$root/osd-map-applied.json" /out/osd-map-applied.json
+        sh /out/publish-ack.sh "/out/osd-epoch-verify.$request_id"
+        fixture_phase=control-idle
+    fi
+    if test -f /out/verify-osd-maps; then
+        test "$osd_fixture" = 1 || exit 2
+        read -r request_id label extra < /out/verify-osd-maps
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 && test "$label" = received && test -z "$extra" || exit 2
+        rm /out/verify-osd-maps
+        fixture_phase=verify-osd-map-oracle
+        timeout 30 python3 /out/osd_map_oracle.py /out
+        sh /out/publish-ack.sh "/out/osd-maps-verify.$request_id"
+        fixture_phase=control-idle
+    fi
     if test -f /out/verify-digest; then
         test "$config_fixture" = 1 || exit 2
         read -r request_id name label extra < /out/verify-digest
