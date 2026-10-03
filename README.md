@@ -1099,7 +1099,10 @@ lazy 접속, 인증 키 회수·복원, 종료에 따른 상태 변화도 확인
 Go 1.24.0과 1.27 계열에서 Linux·macOS·Windows의 CGO=0 unit/vet 검사를
 통과했다. Linux와 Darwin arm64에서 race 검사, Darwin에서 parser fuzzing도 통과했다.
 Windows amd64, Darwin amd64, Linux 386에서 CGO=0 빌드를 확인했다.
-Windows의 실제 Ceph 상대 실행은 아직 검증하지 않았다.
+Windows amd64의 실제 Ceph 상대 실행도 소스 `37e2027`에서 확인했다.
+[2026-10-03 CI](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37121095318)의
+26개 작업이 모두 통과했으며 Windows의 아래 선택 시험 10개도 실제 pass를
+기록했다. Go 1.27.1·CGO=0·20.2.4·aes256k·secure·IPv4 relay 구성이다.
 
 Windows 전용 CI는 `windows-2025`에서 CGO=0 Windows amd64 시험 실행 파일을
 직접 실행한다. 개발용 Ceph 20.2.4·aes256k·secure·IPv4 fixture만 별도의 WSL2
@@ -1109,6 +1112,8 @@ Windows 전용 CI는 `windows-2025`에서 CGO=0 Windows amd64 시험 실행 파�
 context·Close와 log/config/digest 수신을 포함한 공개 시험 9개와 내부 통신
 시험 1개를 선택한다. 모든 선택 시험의 실제 pass와 package pass를 요구해
 전체 skip 또는 잘못된 selector를 성공으로 처리하지 않는다.
+시험 동안 전용 foreground WSL 세션을 유지하고 fixture 정리 후 종료·대기한다.
+Docker 서비스가 떠 있다는 사실만으로 WSL 배포판의 수명이 유지된다고 가정하지 않는다.
 
 [Windows 검증 드라이버](tools/windows_interop.py)는 실행마다 별도의 `run-*`
 증거 폴더를 만들고 source SHA·Go 도구 체인·daemon 버전·시험 목록을
