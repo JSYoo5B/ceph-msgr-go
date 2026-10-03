@@ -46,7 +46,7 @@ func (c *Client) MonTellTo(ctx context.Context, name string, command Command) (R
 		return result, ErrClosed
 	}
 	if uint64(len(command.JSON))+uint64(len(command.Input))+256 > uint64(c.options.MaxFrameSize) {
-		return result, errors.New("ceph: command exceeds frame limit")
+		return result, fmt.Errorf("ceph: command exceeds frame limit: %w", ErrLimitExceeded)
 	}
 	select {
 	case c.calls <- struct{}{}:

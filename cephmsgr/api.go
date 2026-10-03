@@ -16,6 +16,7 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 )
 
 var ErrClosed = session.ErrClosed
@@ -26,6 +27,16 @@ var ErrManagerChanged = errors.New("ceph: active manager changed")
 // check this marker before treating that cause as a transient connection loss.
 // Started commands still have an OutcomeUnknownError and are never replayed.
 var ErrMalformedMessage = msgr.ErrFrame
+
+// ErrLimitExceeded identifies encoded data that exceeds an accepted byte or
+// collection bound, including configured frame limits, encoder/decoder limits
+// and the authentication transcript limit. Some bounds are fixed rather than
+// configurable through MaxFrameSize. Check ErrMalformedMessage independently:
+// a valid frame can exceed a local limit, while an invalid encoded length or
+// count can identify both errors. Started commands still have an
+// OutcomeUnknownError and are never replayed. Watch buffer overflow, waiting
+// for a MaxInFlight slot and invalid option values have separate errors.
+var ErrLimitExceeded = wire.ErrLimit
 
 // ErrKeepaliveTimeout means an established connection received no complete
 // Messenger frame within KeepaliveTimeout. Started commands remain uncertain.
@@ -159,7 +170,7 @@ func (c *Client) command(ctx context.Context, command Command, operation command
 		return result, ErrClosed
 	}
 	if uint64(len(command.JSON))+uint64(len(command.Input))+256 > uint64(c.options.MaxFrameSize) {
-		return result, errors.New("ceph: command exceeds frame limit")
+		return result, fmt.Errorf("ceph: command exceeds frame limit: %w", ErrLimitExceeded)
 	}
 	select {
 	case c.calls <- struct{}{}:
