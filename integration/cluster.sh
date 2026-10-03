@@ -172,7 +172,13 @@ if test "$cipher_options" = true; then
     set -- "$@" --auth-service-cipher "$service_cipher" --auth-allowed-ciphers "$allowed_ciphers" --auth-preferred-cipher "$key_type"
 fi
 monmaptool "$@" "$root/monmap"
+fixture_phase=bootstrap
 cleanup() {
+    fixture_exit=$?
+    if test "${CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS:-0}" = 1; then
+        printf 'exit=%s phase=%s\n' "$fixture_exit" "$fixture_phase" > "$root/fixture-exit" || true
+        printf 'Ceph fixture exit=%s phase=%s\n' "$fixture_exit" "$fixture_phase"
+    fi
     for name in mon.a mon.b mon.c mgr.a mgr.b; do
         if test -f "$root/$name.pid"; then
             kill "$(cat "$root/$name.pid")" 2>/dev/null || true
@@ -374,6 +380,7 @@ while true; do
         touch "/out/hostname-config-verify.$request_id"
     fi
     if test -f /out/verify-config; then
+        fixture_phase=verify-config-read
         test "$config_fixture" = 1 || exit 2
         read -r request_id identity label extra < /out/verify-config
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
@@ -381,7 +388,9 @@ while true; do
         case "$identity" in client.test|client.configwatch) ;; *) exit 2 ;; esac
         case "$label" in initial|reopen|reset|global|client|exact|no-read|no-read-update|fallback-client|fallback-global|removed|raw|replacement|after-overflow|renewal-1|renewal-2|learned|final-deletion) ;; *) exit 2 ;; esac
         test -z "$extra" || exit 2
+        fixture_phase="verify-config-$label-remove"
         rm /out/verify-config
+        fixture_phase="verify-config-$label-oracle"
         # A fresh native CLI is the independent read oracle. Full effective
         # configuration remains in memory; only these controlled keys may be
         # persisted. This path must never print credentials or raw responses.
@@ -460,7 +469,9 @@ os.replace(temporary, output_path / "config-oracle.json")
 with (output_path / "config-oracle-history.jsonl").open("a", encoding="utf-8") as history:
     history.write(encoded)
 PY
+        fixture_phase="verify-config-$label-ack"
         touch "/out/config-verify.$request_id"
+        fixture_phase=control-idle
     fi
     if test -f /out/secure-mgr; then
         test "$mode_rejection" = mgr || exit 2
