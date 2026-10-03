@@ -158,7 +158,8 @@ type Mgr struct {
 	Name             string
 	Addresses        []msgr.Address
 	Standbys         []Standby
-	EnabledModules   []string // Explicit enabled set, separate from always-on modules.
+	EnabledModules   []string          // Explicit enabled set, separate from always-on modules.
+	Services         map[string]string // Active daemon's raw module service URIs.
 	AvailableModules []ModuleInfo
 }
 
@@ -202,10 +203,13 @@ func DecodeMgr(front []byte) (Mgr, error) {
 			m.EnabledModules = append(m.EnabledModules, name)
 		}
 	}
-	n = p.Count(8, 65536) // services: module name and URI; not exposed here
+	n = p.Count(8, 65536) // services: module name and URI
+	m.Services = make(map[string]string, n)
 	for i := 0; i < n && p.Err() == nil; i++ {
-		_ = p.String()
-		_ = p.String()
+		name, uri := p.String(), p.String()
+		if p.Err() == nil {
+			m.Services[name] = uri
+		}
 	}
 	n = p.Count(15, 65536) // envelope, name/error lengths and can_run
 	if n > 0 {

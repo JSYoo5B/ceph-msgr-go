@@ -40,15 +40,17 @@ func TestMgrModulesNativeLayout(t *testing.T) {
 		name      string
 		tail      string
 		enabled   []string
+		services  map[string]string
 		available []ModuleInfo
 	}{
-		{name: "empty collections", tail: "000000000000000000000000"},
-		{name: "enabled only", tail: modules + "0000000000000000", enabled: []string{"iostat", "nfs"}},
-		{name: "services only", tail: "00000000" + services + "00000000"},
+		{name: "empty collections", tail: "000000000000000000000000", services: map[string]string{}},
+		{name: "enabled only", tail: modules + "0000000000000000", enabled: []string{"iostat", "nfs"}, services: map[string]string{}},
+		{name: "services only", tail: "00000000" + services + "00000000", services: map[string]string{"dashboard": "https://example.invalid"}},
 		{
-			name:    "module prefixes and options tail",
-			tail:    modules + services + available,
-			enabled: []string{"iostat", "nfs"},
+			name:     "module prefixes and options tail",
+			tail:     modules + services + available,
+			enabled:  []string{"iostat", "nfs"},
+			services: map[string]string{"dashboard": "https://example.invalid"},
 			available: []ModuleInfo{
 				{Name: "zeta", CanRun: false, ErrorString: "missing package"},
 				{Name: "alpha", CanRun: true},
@@ -72,11 +74,11 @@ func TestMgrModulesNativeLayout(t *testing.T) {
 			front := wire.Encoder{}
 			front.Struct(14, 6, body.Data)
 			mgr, err := DecodeMgr(front.Data)
-			if err != nil || mgr.Epoch != 8 || mgr.GlobalID != 99 || !mgr.Available || mgr.Name != "active" || len(mgr.Addresses) != 1 || mgr.Standbys != nil || !reflect.DeepEqual(mgr.EnabledModules, test.enabled) || !reflect.DeepEqual(mgr.AvailableModules, test.available) {
+			if err != nil || mgr.Epoch != 8 || mgr.GlobalID != 99 || !mgr.Available || mgr.Name != "active" || len(mgr.Addresses) != 1 || mgr.Standbys != nil || !reflect.DeepEqual(mgr.EnabledModules, test.enabled) || !reflect.DeepEqual(mgr.Services, test.services) || !reflect.DeepEqual(mgr.AvailableModules, test.available) {
 				t.Fatal("native module metadata or map fields changed", mgr, err)
 			}
 			clear(front.Data)
-			if !reflect.DeepEqual(mgr.EnabledModules, test.enabled) || !reflect.DeepEqual(mgr.AvailableModules, test.available) {
+			if !reflect.DeepEqual(mgr.EnabledModules, test.enabled) || !reflect.DeepEqual(mgr.Services, test.services) || !reflect.DeepEqual(mgr.AvailableModules, test.available) {
 				t.Fatal("module metadata retained receive-buffer storage", mgr)
 			}
 		})
