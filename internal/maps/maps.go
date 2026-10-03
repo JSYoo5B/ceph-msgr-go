@@ -149,6 +149,24 @@ type ModuleInfo struct {
 	Name        string
 	CanRun      bool
 	ErrorString string
+	Options     map[string]ModuleOption
+}
+
+// ModuleOption is the raw schema advertised by a MGR module. Numeric codes
+// and string defaults are preserved without applying configuration values.
+type ModuleOption struct {
+	Name            string
+	Type            uint8
+	Level           uint8
+	Flags           uint32
+	DefaultValue    string
+	Min             string
+	Max             string
+	EnumAllowed     []string
+	Description     string
+	LongDescription string
+	Tags            []string
+	SeeAlso         []string
 }
 
 type Mgr struct {
@@ -216,13 +234,26 @@ func DecodeMgr(front []byte) (Mgr, error) {
 		m.AvailableModules = make([]ModuleInfo, 0, n)
 	}
 	for i := 0; i < n && p.Err() == nil; i++ {
-		_, info := p.Struct(2)
+		version, info := p.Struct(2)
 		module := ModuleInfo{Name: info.String(), CanRun: info.Bool(), ErrorString: info.String()}
+		if version >= 2 && info.Err() == nil {
+			n := info.Count(52, 65536) // map key, envelope and minimum ModuleOption body
+			if n > 0 {
+				module.Options = make(map[string]ModuleOption, n)
+			}
+			for j := 0; j < n && info.Err() == nil; j++ {
+				name := info.String()
+				option := decodeModuleOption(info)
+				if info.Err() == nil {
+					module.Options[name] = option
+				}
+			}
+		}
 		p.Fail(info.Err())
 		if p.Err() == nil {
 			m.AvailableModules = append(m.AvailableModules, module)
 		}
-		// Module options remain in the consumed child envelope.
+		// Unrelated appended fields remain in the consumed child envelope.
 	}
 	for _, a := range all {
 		if a.Type == 2 && a.Endpoint.IsValid() {
@@ -236,4 +267,39 @@ func DecodeMgr(front []byte) (Mgr, error) {
 		return m, errors.New("ceph: invalid active manager")
 	}
 	return m, nil // The remaining timestamps, policies and client metadata are not needed.
+}
+
+func decodeModuleOption(d *wire.Decoder) ModuleOption {
+	_, p := d.Struct(1)
+	option := ModuleOption{
+		Name:         p.String(),
+		Type:         p.U8(),
+		Level:        p.U8(),
+		Flags:        p.U32(),
+		DefaultValue: p.String(),
+		Min:          p.String(),
+		Max:          p.String(),
+	}
+	option.EnumAllowed = decodeModuleOptionStrings(p)
+	option.Description = p.String()
+	option.LongDescription = p.String()
+	option.Tags = decodeModuleOptionStrings(p)
+	option.SeeAlso = decodeModuleOptionStrings(p)
+	d.Fail(p.Err())
+	return option
+}
+
+func decodeModuleOptionStrings(p *wire.Decoder) []string {
+	n := p.Count(4, 65536)
+	if n == 0 {
+		return nil
+	}
+	strings := make([]string, 0, n)
+	for i := 0; i < n && p.Err() == nil; i++ {
+		value := p.String()
+		if p.Err() == nil {
+			strings = append(strings, value)
+		}
+	}
+	return strings
 }

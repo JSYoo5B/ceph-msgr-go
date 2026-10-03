@@ -52,7 +52,7 @@ func TestMgrModulesNativeLayout(t *testing.T) {
 			enabled:  []string{"iostat", "nfs"},
 			services: map[string]string{"dashboard": "https://example.invalid"},
 			available: []ModuleInfo{
-				{Name: "zeta", CanRun: false, ErrorString: "missing package"},
+				{Name: "zeta", CanRun: false, ErrorString: "missing package", Options: map[string]ModuleOption{"interval": {Name: "interval"}}},
 				{Name: "alpha", CanRun: true},
 			},
 		},
