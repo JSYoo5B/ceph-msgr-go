@@ -651,7 +651,7 @@ retryManager:
 				return nil, err
 			}
 			linked, release := c.linkedContext(ctx)
-			transport, err := c.open(linked, dialAddress(address), address, 16, mapSnapshot.GlobalID, session.MgrAuth{Authorizer: authorizer})
+			transport, err := c.open(linked, dialAddress(address), address, 16, mapSnapshot.GlobalID, session.ServiceAuth{Authorizer: authorizer})
 			release()
 			if err != nil {
 				if err := ctx.Err(); err != nil {

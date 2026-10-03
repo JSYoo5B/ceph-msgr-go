@@ -17,12 +17,12 @@ var ErrClosed = errors.New("ceph: client closed")
 var ErrRetired = errors.New("ceph: session retired")
 var ErrKeepaliveTimeout = errors.New("ceph messenger: keepalive timeout")
 
-// OutcomeUnknownError means a command may have reached the daemon. It is not
+// OutcomeUnknownError means a request may have reached the daemon. It is not
 // safe to infer that a mutation failed or to re-execute it automatically.
 type OutcomeUnknownError struct{ Cause error }
 
 func (e *OutcomeUnknownError) Error() string {
-	return fmt.Sprintf("ceph: command outcome unknown: %v", e.Cause)
+	return fmt.Sprintf("ceph: request outcome unknown: %v", e.Cause)
 }
 func (e *OutcomeUnknownError) Unwrap() error { return e.Cause }
 
@@ -49,6 +49,9 @@ func (r *request) releaseUnstarted() {
 
 type Config struct {
 	WriteTimeout, KeepaliveInterval, KeepaliveTimeout time.Duration
+	// OSD request identities must not restart on a new connection belonging to
+	// the same client. The coordinator can supply a client-wide transaction source.
+	NextTransaction func() (uint64, error)
 }
 
 type Session struct {
@@ -194,12 +197,24 @@ func (s *Session) Call(ctx context.Context, m msgr.MessageData) (msgr.MessageDat
 		s.mu.Unlock()
 		return msgr.MessageData{}, ErrRetired
 	}
-	if s.nextID == ^uint64(0) {
+	if s.config.NextTransaction == nil && s.nextID == ^uint64(0) {
 		s.mu.Unlock()
 		return msgr.MessageData{}, errors.New("ceph: transaction IDs exhausted")
 	}
-	s.nextID++
-	m.Transaction = s.nextID
+	if s.config.NextTransaction != nil {
+		id, err := s.config.NextTransaction()
+		if err != nil || id == 0 {
+			s.mu.Unlock()
+			if err == nil {
+				err = errors.New("ceph: invalid transaction ID")
+			}
+			return msgr.MessageData{}, err
+		}
+		m.Transaction = id
+	} else {
+		s.nextID++
+		m.Transaction = s.nextID
+	}
 	r := &request{ctx: ctx, message: m, result: make(chan response, 1)}
 	s.pending[m.Transaction] = r
 	s.mu.Unlock()
@@ -334,7 +349,7 @@ func (s *Session) readLoop() {
 			case s.ack <- struct{}{}:
 			default:
 			}
-			if m.Type == msgr.MonCommandReplyMessage || m.Type == msgr.MgrCommandReplyMessage || m.Type == msgr.TellCommandReplyMessage {
+			if m.Type == msgr.MonCommandReplyMessage || m.Type == msgr.MgrCommandReplyMessage || m.Type == msgr.TellCommandReplyMessage || m.Type == msgr.OSDOpReplyMessage {
 				s.mu.Lock()
 				r := s.pending[m.Transaction]
 				if r != nil {
@@ -344,6 +359,8 @@ func (s *Session) readLoop() {
 						expected = msgr.MgrCommandReplyMessage
 					case msgr.TellCommandMessage:
 						expected = msgr.TellCommandReplyMessage
+					case msgr.OSDOpMessage:
+						expected = msgr.OSDOpReplyMessage
 					}
 					if !r.started || m.Type != expected {
 						// Leave it pending so Fail preserves whether transmission

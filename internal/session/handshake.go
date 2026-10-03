@@ -36,6 +36,11 @@ func featuresForRole(role uint8) uint64 {
 	if role == 1 {
 		return Features | monAdmissionFeatures
 	}
+	if role == 4 {
+		// Implemented OSD object-locator and PGID64 encodings. In particular,
+		// omit CRUSH, upmap, resend-on-split and new OSD reply encoding bits.
+		return Features | 1<<8 | 1<<9
+	}
 	return Features
 }
 
@@ -61,11 +66,11 @@ func (a MonAuth) Done(id uint64, p []byte, requireSecret bool) (cephx.Key, []byt
 	return a.Client.Finish(id, p, requireSecret)
 }
 
-type MgrAuth struct{ Authorizer *cephx.Authorizer }
+type ServiceAuth struct{ Authorizer *cephx.Authorizer }
 
-func (a MgrAuth) Initial() ([]byte, error)      { return a.Authorizer.Payload(nil) }
-func (a MgrAuth) More(p []byte) ([]byte, error) { return a.Authorizer.Payload(p) }
-func (a MgrAuth) Done(_ uint64, p []byte, requireSecret bool) (cephx.Key, []byte, error) {
+func (a ServiceAuth) Initial() ([]byte, error)      { return a.Authorizer.Payload(nil) }
+func (a ServiceAuth) More(p []byte) ([]byte, error) { return a.Authorizer.Payload(p) }
+func (a ServiceAuth) Done(_ uint64, p []byte, requireSecret bool) (cephx.Key, []byte, error) {
 	secret, err := a.Authorizer.Finish(p, requireSecret)
 	return a.Authorizer.Key(), secret, err
 }
@@ -134,6 +139,7 @@ type Transport struct {
 	Reader   *msgr.Reader
 	Writer   *msgr.Writer
 	GlobalID uint64
+	Features uint64 // Intersection of local and peer Messenger feature sets.
 }
 
 // Handshake takes ownership of conn, closing it on failure. The context and
@@ -401,7 +407,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if !slices.Contains(serverAddresses, target) {
 		return nil, fmt.Errorf("%w: server identification does not include target address", msgr.ErrAuthentication)
 	}
-	if expectedID != 0 && serverID != expectedID {
+	if (role == 4 || expectedID != 0) && serverID != expectedID {
 		return nil, errors.New("ceph messenger: unexpected daemon ID")
 	}
 	if RequiredFeatures&^supported != 0 || required&^supportedFeatures != 0 {
@@ -420,5 +426,5 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if err = conn.SetDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
-	return &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID}, nil
+	return &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID, Features: supported & supportedFeatures}, nil
 }

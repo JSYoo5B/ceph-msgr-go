@@ -56,6 +56,10 @@ type handshakePeerConfig struct {
 	authMorePayload []byte
 	authMoreRounds  int
 	peerRole        uint8
+	serverID        uint64
+	serverSupported uint64
+	serverRequired  uint64
+	identFeatures   func(uint64) error
 	afterIdent      func(net.Conn, *msgr.Reader, *msgr.Writer) error
 }
 
@@ -201,6 +205,14 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	d := wire.NewDecoder(f.Segments[0])
 	msgr.DecodeAddresses(d)
 	target := msgr.DecodeAddress(d)
+	d.U64()
+	d.U64()
+	clientFeatures := d.U64()
+	if cfg.identFeatures != nil {
+		if err := cfg.identFeatures(clientFeatures); err != nil {
+			return err
+		}
+	}
 	if d.Err() != nil {
 		return d.Err()
 	}
@@ -219,10 +231,17 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	} else {
 		ident.Raw(cfg.serverAddrWire)
 	}
-	ident.U64(0)
+	ident.U64(cfg.serverID)
 	ident.U64(1)
-	ident.U64(Features)
-	ident.U64(RequiredFeatures)
+	supported, required := cfg.serverSupported, cfg.serverRequired
+	if supported == 0 {
+		supported = Features
+	}
+	if required == 0 {
+		required = RequiredFeatures
+	}
+	ident.U64(supported)
+	ident.U64(required)
 	ident.U64(cfg.serverFlags)
 	ident.U64(0)
 	if err := write(msgr.ServerIdent, ident.Data); err != nil {

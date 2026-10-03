@@ -9,6 +9,8 @@ const (
 	SubscribeAckMessage     uint16 = 16
 	AuthMessage             uint16 = 17
 	AuthReplyMessage        uint16 = 18
+	OSDOpMessage            uint16 = 42
+	OSDOpReplyMessage       uint16 = 43
 	MonCommandMessage       uint16 = 50
 	MonCommandReplyMessage  uint16 = 51
 	TellCommandMessage      uint16 = 97

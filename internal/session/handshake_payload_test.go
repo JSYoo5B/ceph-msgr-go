@@ -94,7 +94,7 @@ func TestCompleteEncryptedMgrChallengeRetainsDecodeFailure(t *testing.T) {
 	go func() {
 		peerDone <- handshakePeer(peer, fixture, handshakePeerConfig{mode: 2, serverFlags: 1, authMore: true, authMorePayload: challenge, peerRole: 16})
 	}()
-	_, err = Handshake(context.Background(), client, msgr.Address{Type: 2}, 16, 0, MgrAuth{Authorizer: authorizer}, SecureMode, 4096, time.Second)
+	_, err = Handshake(context.Background(), client, msgr.Address{Type: 2}, 16, 0, ServiceAuth{Authorizer: authorizer}, SecureMode, 4096, time.Second)
 	if !errors.Is(err, msgr.ErrFrame) || !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatal("complete authenticated MGR challenge was classified as network truncation", err)
 	}
