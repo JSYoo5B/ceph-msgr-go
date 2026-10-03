@@ -147,7 +147,13 @@ MON에도 이미 구현한 PGID64 wire capability를 협상해 classic v6 full/i
 map을 받는다. CRUSH admission 예외를 확장하는 것이 아니며 PGPOOL3·OSDMAP_ENC·
 INCSUBOSDMAP·backoff/upmap·새 객체 reply feature를 함께 추가하지 않는다.
 내포한 지도는 여전히 opaque bytes다. 독립 native class decoder와 같은 peer
-feature의 native encoder로 FSID·epoch·원본 bytes를 대조한다.
+feature의 native encoder로 FSID·epoch·원본 bytes를 대조한다. Full map은
+개발용 `ceph osd getmap <epoch>`로 같은 epoch의 canonical map을 받아 native
+encoder 입력으로 삼는다. 서버의 canonical→peer 변환과 같은 경로이며,
+수신한 full map을 decode→encode했을 때 unordered blocklist의 순서가 바뀌는
+것을 byte 오류로 오인하지 않는다. Incremental은 ordered container와 opaque
+embedded full/CRUSH bytes를 보존하므로 수신 blob의 native 재인코딩 bytes를
+직접 비교한다. JSON dump는 지도 데이터 일부를 생략하므로 byte 비교를 대신하지 않는다.
 
 참조: [MMonGetOSDMap](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MMonGetOSDMap.h),
 [range 응답](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/OSDMonitor.cc#L2819),

@@ -395,7 +395,7 @@ PY
         test "$request_id" -gt 0 && test "$label" = received && test -z "$extra" || exit 2
         rm /out/verify-osd-maps
         fixture_phase=verify-osd-map-oracle
-        timeout 30 python3 /out/osd_map_oracle.py /out 2>> "$root/osd-map-control.log"
+        timeout 30 python3 /out/osd_map_oracle.py /out "$root" 2>> "$root/osd-map-control.log"
         sh /out/publish-ack.sh "/out/osd-maps-verify.$request_id"
         fixture_phase=control-idle
     fi

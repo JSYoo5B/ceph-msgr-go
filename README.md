@@ -179,7 +179,10 @@ MON에는 구현된 PGID64 wire 기능을 협상하지만 CRUSH 계산·지도 �
 20.2.4·Darwin arm64·IPv4 host relay의 aes256k secure/CRC와 Linux arm64
 container·AES secure에서 최신 full, 고정 full/incremental range, 미래 epoch의
 빈 응답, 동시 private 조회와 연속 구독을 native decoder/encoder의 FSID·epoch·
-정확한 bytes로 대조했다. 구독은 만료 전 AUTH ticket 갱신 두 차례와 유일한
+정확한 bytes로 대조했다. Full map은 같은 epoch의 native canonical map을
+peer feature로 인코딩해 비교하고, incremental은 수신 blob을 native 재인코딩해
+비교한다. Full map의 unordered blocklist는 decode→encode에서 순서가 바뀔 수
+있으므로 서버와 같은 canonical 입력을 사용한다. 구독은 만료 전 AUTH ticket 갱신 두 차례와 유일한
 seed의 TCP 단절을 거쳐 learned MON에서 이어졌다. Linux 시험은 실제 pool을
 포함하며 기존 OSD 지도 전달도 함께 통과했다. Synthetic peer는 취소·overflow·
 queued cursor·최대 epoch·source guard·정리 경합과 최초 오류 보존을 검증한다.
@@ -281,7 +284,8 @@ Windows OSD 상호운용과 OSD IPv6는 아직 검증하지 않았다.
 Raw OSDMap은 같은 20.2.4의 Darwin arm64·IPv4 host relay·aes256k
 secure/CRC와 Linux arm64·IPv4 container·aes secure에서 각각 실제 전체·증분
 지도 10개를 받아 native decoder의 FSID·epoch와 협상 feature의 native
-재인코딩 bytes를 대조했다. 지도 수신 뒤 명시적인 현재
+인코딩 bytes를 대조했다. Full map은 같은 epoch의 canonical map을 입력으로
+사용한다. 지도 수신 뒤 명시적인 현재
 epoch 읽기도 성공했다. fixture는 객체 생성 이전 epoch 5에서만 history를 trim해
 full-map 응답을 검증하며, 지도 적용·배치 지원의 근거로 사용하지 않는다.
 
