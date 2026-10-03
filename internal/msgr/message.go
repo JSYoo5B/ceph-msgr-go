@@ -5,6 +5,7 @@ import "github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 const (
 	MonMapMessage           uint16 = 4
 	MonGetMapMessage        uint16 = 5
+	MonGetOSDMapMessage     uint16 = 6
 	SubscribeMessage        uint16 = 15
 	SubscribeAckMessage     uint16 = 16
 	AuthMessage             uint16 = 17
@@ -80,6 +81,36 @@ func Paxos(e *wire.Encoder) { e.U64(0); e.U16(0xffff); e.U64(0) }
 // Tentacle's MMonGetMap has the default version-1 header and no payload.
 func GetMonMap() MessageData {
 	return MessageData{Type: MonGetMapMessage, Version: 1, Priority: 127}
+}
+
+// GetOSDMaps requests inclusive full/incremental ranges. Tentacle returns one
+// possibly empty or truncated MOSDMap, without copying a transaction ID.
+func GetOSDMaps(fullFirst, fullLast, incrementalFirst, incrementalLast uint32) MessageData {
+	e := wire.Encoder{}
+	Paxos(&e)
+	e.U32(fullFirst)
+	e.U32(fullLast)
+	e.U32(incrementalFirst)
+	e.U32(incrementalLast)
+	return MessageData{Type: MonGetOSDMapMessage, Version: 1, Priority: 127, Front: e.Data}
+}
+
+// OSDMapSubscribe updates only osdmap. Other subscriptions on the connection
+// are retained by MON. Zero requests the latest full map; positive next asks
+// for history starting at that epoch. ONETIME removes this server subscription
+// after its first publication cycle, which can contain multiple messages.
+func OSDMapSubscribe(next uint64, onetime bool, hostname string) MessageData {
+	e := wire.Encoder{}
+	e.U32(1)
+	e.String("osdmap")
+	e.U64(next)
+	var flags uint8
+	if onetime {
+		flags = 1
+	}
+	e.U8(flags)
+	e.String(hostname)
+	return MessageData{Type: SubscribeMessage, Version: 3, CompatVersion: 1, Priority: 127, Front: e.Data}
 }
 
 func CommandMessage(mgr bool, fsid [16]byte, commands []string, input []byte) MessageData {
