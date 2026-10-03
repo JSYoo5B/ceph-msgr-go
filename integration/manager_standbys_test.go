@@ -57,9 +57,11 @@ func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client
 				Name string `json:"name"`
 				ID   uint64 `json:"gid"`
 			} `json:"standbys"`
-			Modules          []string          `json:"modules"`
-			Services         map[string]string `json:"services"`
-			AvailableModules []struct {
+			Modules              []string            `json:"modules"`
+			Services             map[string]string   `json:"services"`
+			AlwaysOnModules      map[uint32][]string `json:"always_on_modules"`
+			ForceDisabledModules []string            `json:"force_disabled_modules"`
+			AvailableModules     []struct {
 				Name        string                               `json:"name"`
 				CanRun      bool                                 `json:"can_run"`
 				ErrorString string                               `json:"error_string"`
@@ -91,7 +93,7 @@ func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client
 			available = append(available, cephmsgr.ManagerModule{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString, Options: options})
 		}
 		enabled := append([]string(nil), oracle.Modules...)
-		if state.Manager.Available != oracle.Available || state.Manager.Name != oracle.Name || state.Manager.GlobalID != oracle.ID || !reflect.DeepEqual(state.Manager.Standbys, expected) || !reflect.DeepEqual(state.Manager.EnabledModules, enabled) || !reflect.DeepEqual(state.Manager.AvailableModules, available) || !maps.Equal(state.Manager.Services, oracle.Services) {
+		if state.Manager.Available != oracle.Available || state.Manager.Name != oracle.Name || state.Manager.GlobalID != oracle.ID || !reflect.DeepEqual(state.Manager.Standbys, expected) || !reflect.DeepEqual(state.Manager.EnabledModules, enabled) || !reflect.DeepEqual(state.Manager.AvailableModules, available) || !maps.Equal(state.Manager.Services, oracle.Services) || !reflect.DeepEqual(state.Manager.AlwaysOnModules, oracle.AlwaysOnModules) || !reflect.DeepEqual(state.Manager.ForceDisabledModules, append([]string(nil), oracle.ForceDisabledModules...)) {
 			t.Fatal("snapshot differs from same-epoch native MgrMap", state.Manager, oracle)
 		}
 		t.Logf("epoch %d: active %s/%d, standbys %+v match native MgrMap", oracle.Epoch, oracle.Name, oracle.ID, expected)
@@ -102,6 +104,7 @@ func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client
 			count += len(module.Options)
 		}
 		t.Logf("epoch %d: %d module option descriptors match native MgrMap", oracle.Epoch, count)
+		t.Logf("epoch %d: %d release policies and force-disabled modules %v match native MgrMap", oracle.Epoch, len(oracle.AlwaysOnModules), oracle.ForceDisabledModules)
 		return state
 	}
 }

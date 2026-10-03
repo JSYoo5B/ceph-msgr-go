@@ -20,6 +20,14 @@ metadata["standbys"] = sorted(({"name": item["name"], "gid": item["gid"]}
                                 for item in full["standbys"]), key=lambda item: item["gid"])
 metadata["modules"] = full["modules"]
 metadata["services"] = full["services"]
+# Tentacle dumps policy release keys as names. Its force-disabled object repeats
+# the key "module", so keep every pair rather than losing all but the last one.
+releases = {name: code for code, name in enumerate(("octopus", "pacific", "quincy", "reef", "squid", "tentacle"), 15)}
+metadata["always_on_modules"] = {releases[name]: modules for name, modules in full["always_on_modules"].items()}
+policy_pairs = dict(json.loads(payload, object_pairs_hook=list))["force_disabled_modules"]
+if any(name != "module" for name, _ in policy_pairs):
+    raise SystemExit("Unexpected native force-disabled module formatter")
+metadata["force_disabled_modules"] = [module for _, module in policy_pairs]
 # Fixed Tentacle common/options.h formatter names. Only the independent
 # comparison copy changes representation; product snapshots keep wire codes.
 # "unknown" is deliberately rejected because the formatter loses the code.
