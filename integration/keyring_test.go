@@ -27,7 +27,7 @@ func TestCephKeyringIntegration(t *testing.T) {
 	}
 	var credentials []credential
 	for _, test := range []struct{ identity, oracle string }{{"client.test", "key"}, {"client.readonly", "readonly.key"}} {
-		key, err := cephmsgr.ParseKeyring(data, test.identity)
+		key, err := parseTestKeyring(data, test.identity)
 		if err != nil {
 			t.Fatal("select native keyring identity", test.identity, err)
 		}
@@ -41,7 +41,7 @@ func TestCephKeyringIntegration(t *testing.T) {
 		}
 		credentials = append(credentials, credential{identity: test.identity, key: key})
 	}
-	if _, err := cephmsgr.ParseKeyring(data, "client.absent"); err == nil {
+	if _, err := parseTestKeyring(data, "client.absent"); err == nil {
 		t.Fatal("absent identity selected another entity")
 	}
 	clear(data) // Returned keys must remain usable independently of the input.
@@ -60,7 +60,7 @@ func TestCephKeyringIntegration(t *testing.T) {
 				t.Fatal("keyring identity did not establish a distinct admitted client", state)
 			}
 			previousID = state.GlobalID
-			command, err := cephmsgr.NewCommand("status", map[string]any{"format": "json"})
+			command, err := newCommand("status", map[string]any{"format": "json"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -71,7 +71,7 @@ func TestCephKeyringIntegration(t *testing.T) {
 			if err != nil || json.Unmarshal(result.Data, &status) != nil || status.FSID != state.FSID {
 				t.Fatal("MON read using selected keyring credential", credential.identity, err)
 			}
-			command, err = cephmsgr.NewCommand("iostat", map[string]any{"width": 80, "print_header": false})
+			command, err = newCommand("iostat", map[string]any{"width": 80, "print_header": false})
 			if err != nil {
 				t.Fatal(err)
 			}

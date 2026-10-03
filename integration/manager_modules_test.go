@@ -50,7 +50,7 @@ func TestCephManagerModulesIntegration(t *testing.T) {
 	}
 	command := func(prefix string, args map[string]any) {
 		t.Helper()
-		cmd, err := cephmsgr.NewCommand(prefix, args)
+		cmd, err := newCommand(prefix, args)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +71,7 @@ func TestCephManagerModulesIntegration(t *testing.T) {
 			return
 		}
 		defer admin.Close()
-		cmd, _ := cephmsgr.NewCommand("mgr module enable", map[string]any{"module": "iostat"})
+		cmd, _ := newCommand("mgr module enable", map[string]any{"module": "iostat"})
 		if _, err := admin.MonCommand(cleanup, cmd); err != nil {
 			t.Error("restore fixture iostat", err)
 		}

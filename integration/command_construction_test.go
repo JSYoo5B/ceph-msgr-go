@@ -6,28 +6,26 @@ import (
 	"fmt"
 	"testing"
 	"time"
-
-	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
 )
 
 func TestCephCommandConstructionIntegration(t *testing.T) {
 	ordinaryLogFixture(t)
 	c, ctx := fixtureClient(t, 30*time.Second)
-	config, err := cephmsgr.NewCommand("config get", map[string]any{"who": "client.test", "key": "debug_ms"})
+	config, err := newCommand("config get", map[string]any{"who": "client.test", "key": "debug_ms"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result, err := c.MonCommand(ctx, config); err != nil || len(result.Data) == 0 {
 		t.Fatal("built MON command", err)
 	}
-	iostat, err := cephmsgr.NewCommand("iostat", map[string]any{"width": 80, "print_header": true})
+	iostat, err := newCommand("iostat", map[string]any{"width": 80, "print_header": true})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result, err := c.MgrCommand(ctx, iostat); err != nil || !bytes.Contains(result.Data, []byte("Read IOPS")) {
 		t.Fatal("built MGR integer/boolean arguments", err)
 	}
-	pgs, err := cephmsgr.NewCommand("pg dump", map[string]any{"dumpcontents": []string{"pgs"}, "format": "json"})
+	pgs, err := newCommand("pg dump", map[string]any{"dumpcontents": []string{"pgs"}, "format": "json"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +33,7 @@ func TestCephCommandConstructionIntegration(t *testing.T) {
 		t.Fatal("built MGR array arguments", err)
 	}
 	key := fmt.Sprintf("ceph-msgr-command-%d", time.Now().UnixNano())
-	set, err := cephmsgr.NewCommand("config-key set", map[string]any{"key": key, "val": "Go 명령\n\x00unicode 雪"})
+	set, err := newCommand("config-key set", map[string]any{"key": key, "val": "Go 명령\n\x00unicode 雪"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,14 +42,14 @@ func TestCephCommandConstructionIntegration(t *testing.T) {
 	if _, err := c.MonCommand(ctx, set); err != nil {
 		t.Fatal("built Unicode config-key set", err)
 	}
-	get, err := cephmsgr.NewCommand("config-key get", map[string]any{"key": key})
+	get, err := newCommand("config-key get", map[string]any{"key": key})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result, err := c.MonCommand(ctx, get); err != nil || !bytes.Equal(result.Data, []byte("Go 명령\n\x00unicode 雪")) {
 		t.Fatal("built Unicode config-key value changed", err, result.Data)
 	}
-	set, err = cephmsgr.NewCommand("config-key set", map[string]any{"key": key})
+	set, err = newCommand("config-key set", map[string]any{"key": key})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,12 +60,12 @@ func TestCephCommandConstructionIntegration(t *testing.T) {
 	if result, err := c.MonCommand(ctx, get); err != nil || !bytes.Equal(result.Data, set.Input) {
 		t.Fatal("built binary config-key value changed", err, result.Data)
 	}
-	remove, err := cephmsgr.NewCommand("config-key rm", map[string]any{"key": key})
+	remove, err := newCommand("config-key rm", map[string]any{"key": key})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.MonCommand(ctx, remove); err != nil {
 		t.Fatal("built config-key cleanup", err)
 	}
-	t.Log("Go named arguments executed on MON/MGR; Unicode/NUL and binary command input preserved")
+	t.Log("Consumer JSON arguments executed on MON/MGR; Unicode/NUL and binary command input preserved")
 }

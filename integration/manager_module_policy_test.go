@@ -42,7 +42,7 @@ func TestCephManagerModulePolicyIntegration(t *testing.T) {
 	}
 	command := func(prefix string, args map[string]any) {
 		t.Helper()
-		cmd, err := cephmsgr.NewCommand(prefix, args)
+		cmd, err := newCommand(prefix, args)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +64,7 @@ func TestCephManagerModulePolicyIntegration(t *testing.T) {
 		}
 		defer admin.Close()
 		for module := range remaining {
-			cmd, _ := cephmsgr.NewCommand("mgr module enable", map[string]any{"module": module})
+			cmd, _ := newCommand("mgr module enable", map[string]any{"module": module})
 			if _, err := admin.MonCommand(cleanup, cmd); err != nil {
 				t.Error("restore always-on fixture module", module, err)
 			}

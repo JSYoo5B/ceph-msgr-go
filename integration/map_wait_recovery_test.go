@@ -81,7 +81,7 @@ func TestCephMapWaitRecoveryIntegration(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("map wait did not block", ctx.Err())
 	}
-	cmd, err := cephmsgr.NewCommand("mgr fail", map[string]any{"who": original.Manager.Name})
+	cmd, err := newCommand("mgr fail", map[string]any{"who": original.Manager.Name})
 	if err != nil {
 		t.Fatal(err)
 	}

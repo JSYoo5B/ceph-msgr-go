@@ -46,7 +46,7 @@ func TestCephMapWaitIntegration(t *testing.T) {
 	}
 	command := func(prefix string, args map[string]any) {
 		t.Helper()
-		cmd, err := cephmsgr.NewCommand(prefix, args)
+		cmd, err := newCommand(prefix, args)
 		if err != nil {
 			t.Fatal(err)
 		}

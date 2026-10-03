@@ -46,7 +46,7 @@ func TestCephManagerServicesIntegration(t *testing.T) {
 	}
 	command := func(prefix string, args map[string]any) {
 		t.Helper()
-		cmd, err := cephmsgr.NewCommand(prefix, args)
+		cmd, err := newCommand(prefix, args)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -72,7 +72,7 @@ func TestCephManagerServicesIntegration(t *testing.T) {
 			return
 		}
 		defer admin.Close()
-		cmd, _ := cephmsgr.NewCommand("mgr module disable", map[string]any{"module": "prometheus"})
+		cmd, _ := newCommand("mgr module disable", map[string]any{"module": "prometheus"})
 		if _, err := admin.MonCommand(cleanup, cmd); err != nil {
 			t.Error("disable fixture prometheus", err)
 		}

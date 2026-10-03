@@ -137,7 +137,7 @@ func TestCephManagerStandbysIntegration(t *testing.T) {
 	if c.Snapshot().Manager.Standbys[0].Name != promoted.Name {
 		t.Fatal("snapshot standby slice aliases client state")
 	}
-	command, err := cephmsgr.NewCommand("mgr fail", map[string]any{"who": initial.Manager.Name})
+	command, err := newCommand("mgr fail", map[string]any{"who": initial.Manager.Name})
 	if err != nil {
 		t.Fatal(err)
 	}

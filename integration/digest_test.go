@@ -157,7 +157,7 @@ func TestCephDigestIntegration(t *testing.T) {
 	}
 	command := func(prefix string, args map[string]any) {
 		t.Helper()
-		cmd, err := cephmsgr.NewCommand(prefix, args)
+		cmd, err := newCommand(prefix, args)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -182,7 +182,7 @@ func TestCephDigestIntegration(t *testing.T) {
 			return
 		}
 		defer admin.Close()
-		cmd, _ := cephmsgr.NewCommand("health unmute", map[string]any{"code": sentinel})
+		cmd, _ := newCommand("health unmute", map[string]any{"code": sentinel})
 		if _, err := admin.MonCommand(cleanup, cmd); err != nil {
 			t.Error("cleanup digest fixture mute", err)
 		}
