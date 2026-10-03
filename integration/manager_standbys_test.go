@@ -31,6 +31,12 @@ func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client
 				Name string `json:"name"`
 				ID   uint64 `json:"gid"`
 			} `json:"standbys"`
+			Modules          []string `json:"modules"`
+			AvailableModules []struct {
+				Name        string `json:"name"`
+				CanRun      bool   `json:"can_run"`
+				ErrorString string `json:"error_string"`
+			} `json:"available_modules"`
 		}
 		if err != nil || json.Unmarshal(data, &oracle) != nil || oracle.Epoch == 0 {
 			t.Fatal("native manager metadata", err)
@@ -41,14 +47,20 @@ func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client
 			// only that read until both views describe the same committed epoch.
 			continue
 		}
-		expected := make([]cephmsgr.StandbyManager, len(oracle.Standbys))
-		for i, standby := range oracle.Standbys {
-			expected[i] = cephmsgr.StandbyManager{Name: standby.Name, GlobalID: standby.ID}
+		var expected []cephmsgr.StandbyManager
+		for _, standby := range oracle.Standbys {
+			expected = append(expected, cephmsgr.StandbyManager{Name: standby.Name, GlobalID: standby.ID})
 		}
-		if state.Manager.Available != oracle.Available || state.Manager.Name != oracle.Name || state.Manager.GlobalID != oracle.ID || !reflect.DeepEqual(state.Manager.Standbys, expected) {
+		var available []cephmsgr.ManagerModule
+		for _, module := range oracle.AvailableModules {
+			available = append(available, cephmsgr.ManagerModule{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString})
+		}
+		enabled := append([]string(nil), oracle.Modules...)
+		if state.Manager.Available != oracle.Available || state.Manager.Name != oracle.Name || state.Manager.GlobalID != oracle.ID || !reflect.DeepEqual(state.Manager.Standbys, expected) || !reflect.DeepEqual(state.Manager.EnabledModules, enabled) || !reflect.DeepEqual(state.Manager.AvailableModules, available) {
 			t.Fatal("snapshot differs from same-epoch native MgrMap", state.Manager, oracle)
 		}
 		t.Logf("epoch %d: active %s/%d, standbys %+v match native MgrMap", oracle.Epoch, oracle.Name, oracle.ID, expected)
+		t.Logf("epoch %d: explicit modules %v and %d reported modules match native MgrMap", oracle.Epoch, enabled, len(available))
 		return state
 	}
 }

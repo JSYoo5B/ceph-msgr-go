@@ -324,7 +324,7 @@ while true; do
         read -r request_id label extra < /out/verify-manager-map
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 || exit 2
-        case "$label" in initial|replacement) ;; *) exit 2 ;; esac
+        case "$label" in initial|replacement|disabled|restored) ;; *) exit 2 ;; esac
         test -z "$extra" || exit 2
         rm /out/verify-manager-map
         timeout 10 python3 /out/manager_oracle.py "$root" /out
