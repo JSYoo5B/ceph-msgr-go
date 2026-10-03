@@ -30,6 +30,7 @@ func mockMgrMapWithStandbys(active maps.Mgr, epoch uint32, standbys []StandbyMan
 	e.U32(0) // enabled modules
 	e.U32(0) // services
 	e.U32(0) // available modules
+	mockMgrMapTail(&e)
 	out := wire.Encoder{}
 	out.Struct(14, 6, e.Data)
 	return msgr.MessageData{Type: msgr.MgrMapMessage, Version: 1, Front: out.Data}

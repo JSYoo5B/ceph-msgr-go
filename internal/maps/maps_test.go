@@ -126,10 +126,11 @@ func TestMgrUnavailableAndActive(t *testing.T) {
 			e.U8(0)
 		}
 		e.String("a")
-		e.U32(0) // standby map
-		e.U32(0) // explicit enabled modules
-		e.U32(0) // services
-		e.U32(0) // active available modules
+		e.U32(0)                // standby map
+		e.U32(0)                // explicit enabled modules
+		e.U32(0)                // services
+		e.U32(0)                // active available modules
+		e.Raw(make([]byte, 44)) // empty v7–v14 MgrMap tail
 		out := wire.Encoder{}
 		out.Struct(14, 6, e.Data)
 		m, err := DecodeMgr(out.Data)

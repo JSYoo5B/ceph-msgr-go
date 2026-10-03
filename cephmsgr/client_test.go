@@ -138,9 +138,24 @@ func mockMgrMap(epoch uint32, id uint64, port uint16) []byte {
 	e.U32(0) // enabled modules
 	e.U32(0) // services
 	e.U32(0) // available modules
+	mockMgrMapTail(&e)
 	out := wire.Encoder{}
 	out.Struct(14, 6, e.Data)
 	return out.Data
+}
+
+// mockMgrMapTailBytes is the v7–v14 tail after available_modules.
+const mockMgrMapTailBytes = 44
+
+func mockMgrMapTail(e *wire.Encoder) {
+	e.U64(0) // v7 active_change timestamp
+	e.U32(0) // v8 always_on_modules
+	e.U64(0) // v9 active_mgr_features
+	e.U32(0) // v10 last_failure_osd_epoch
+	e.U32(0) // v11 client address vectors
+	e.U32(0) // v12 client names
+	e.U64(0) // v13 flags
+	e.U32(0) // v14 force_disabled_modules
 }
 
 type peerConfig struct {

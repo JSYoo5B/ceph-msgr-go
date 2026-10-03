@@ -13,7 +13,7 @@ func moduleStateMap(active maps.Mgr, epoch uint32, standbys []StandbyManager, en
 	base := mockMgrMapWithStandbys(active, epoch, standbys)
 	e := wire.Encoder{}
 	// Replace the helper's three empty collections inside its 6-byte envelope.
-	e.Raw(base.Front[6 : len(base.Front)-12])
+	e.Raw(base.Front[6 : len(base.Front)-12-mockMgrMapTailBytes])
 	e.U32(uint32(len(enabled)))
 	for _, name := range enabled {
 		e.String(name)
@@ -32,6 +32,7 @@ func moduleStateMap(active maps.Mgr, epoch uint32, standbys []StandbyManager, en
 		info.U32(0) // module options, opaque to public Snapshot metadata
 		e.Struct(2, 1, info.Data)
 	}
+	mockMgrMapTail(&e)
 	out := wire.Encoder{}
 	out.Struct(14, 6, e.Data)
 	return msgr.MessageData{Type: msgr.MgrMapMessage, Version: 1, Front: out.Data}

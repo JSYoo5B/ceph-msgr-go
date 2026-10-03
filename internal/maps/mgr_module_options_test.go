@@ -44,6 +44,7 @@ func TestMgrModuleOptionsNativeLayout(t *testing.T) {
 	body.U32(0) // explicit enabled modules
 	body.U32(0) // services
 	body.Raw(tail)
+	body.Raw(make([]byte, 44)) // empty v7–v14 MgrMap tail
 	front := wire.Encoder{}
 	front.Struct(14, 6, body.Data)
 	want := []ModuleInfo{

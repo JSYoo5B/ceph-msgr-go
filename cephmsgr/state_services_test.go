@@ -13,7 +13,7 @@ import (
 func serviceStateMap(active maps.Mgr, epoch uint32, services map[string]string) msgr.MessageData {
 	base := mockMgrMapWithStandbys(active, epoch, nil)
 	e := wire.Encoder{}
-	e.Raw(base.Front[6 : len(base.Front)-12]) // Replace the three empty collections.
+	e.Raw(base.Front[6 : len(base.Front)-12-mockMgrMapTailBytes]) // Replace the three empty collections.
 	e.U32(1)
 	e.String("dashboard")
 	names := make([]string, 0, len(services))
@@ -33,6 +33,7 @@ func serviceStateMap(active maps.Mgr, epoch uint32, services map[string]string) 
 	info.String("raw diagnostic")
 	info.U32(0) // module options
 	e.Struct(2, 1, info.Data)
+	mockMgrMapTail(&e)
 	out := wire.Encoder{}
 	out.Struct(14, 6, e.Data)
 	return msgr.MessageData{Type: msgr.MgrMapMessage, Version: 1, Front: out.Data}

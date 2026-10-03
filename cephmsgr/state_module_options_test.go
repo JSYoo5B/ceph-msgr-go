@@ -13,7 +13,7 @@ import (
 func moduleOptionStateMap(active maps.Mgr, epoch uint32, options map[string]ManagerModuleOption) msgr.MessageData {
 	base := mockMgrMapWithStandbys(active, epoch, nil)
 	e := wire.Encoder{}
-	e.Raw(base.Front[6 : len(base.Front)-12])
+	e.Raw(base.Front[6 : len(base.Front)-12-mockMgrMapTailBytes])
 	e.U32(1)
 	e.String("custom")
 	e.U32(0) // services
@@ -53,6 +53,7 @@ func moduleOptionStateMap(active maps.Mgr, epoch uint32, options map[string]Mana
 		info.Struct(1, 1, body.Data)
 	}
 	e.Struct(2, 1, info.Data)
+	mockMgrMapTail(&e)
 	out := wire.Encoder{}
 	out.Struct(14, 6, e.Data)
 	return msgr.MessageData{Type: msgr.MgrMapMessage, Version: 1, Front: out.Data}

@@ -88,10 +88,10 @@ func mapWaitTestManagerMessage(t *testing.T, active maps.Mgr, epoch uint32) msgr
 	plain := mockMgrMapWithStandbys(active, epoch, nil)
 	// The schema helper writes its prefix, one enabled "custom" string, and
 	// an empty services count before the available_modules vector.
-	availableOffset := len(plain.Front) - 12 + 4 + 4 + len("custom") + 4
+	availableOffset := len(plain.Front) - 12 - mockMgrMapTailBytes + 4 + 4 + len("custom") + 4
 	standby := mockMgrMapWithStandbys(active, epoch, []StandbyManager{{Name: "standby", GlobalID: 101}})
 	body := wire.Encoder{}
-	body.Raw(standby.Front[6 : len(standby.Front)-12])
+	body.Raw(standby.Front[6 : len(standby.Front)-12-mockMgrMapTailBytes])
 	body.U32(1)
 	body.String("custom")
 	body.U32(1)

@@ -70,7 +70,8 @@ func TestMgrModulesNativeLayout(t *testing.T) {
 			body.String("active")
 			body.U32(0) // standbys
 			body.Raw(tail)
-			body.Raw([]byte{1, 2, 3, 4, 5, 6, 7, 8}) // unrelated outer metadata
+			body.Raw([]byte{1, 2, 3, 4, 5, 6, 7, 8}) // v7 active_change timestamp
+			body.Raw(make([]byte, 36))               // empty v8–v14 MgrMap tail
 			front := wire.Encoder{}
 			front.Struct(14, 6, body.Data)
 			mgr, err := DecodeMgr(front.Data)
