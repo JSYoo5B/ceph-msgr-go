@@ -218,9 +218,16 @@ Go heap 상한은 아니다. 초과하면 해당 watch만 `ErrLogOverflow`로 �
 `WatchConfig(ctx, ConfigOptions)`는 인증된 client identity에 적용되는 설정을
 전체 `map[string]string`으로 받는 `ConfigStream`을 만든다. 알려지지 않은
 옵션·빈 값·raw 문자열을 그대로 전달하며 Go client의 `Options`에는 적용하지
-않는다. Host와 device class는 빈 값으로 요청하며 운영체제의 hostname이나
-로컬 Ceph 설정을 추측하지 않는다. 서버가 선택한 설정 map이며 컴파일된
-모든 기본값을 나열하는 API는 아니다.
+않는다. Host는 `Dial`에 전달한 `Options.Hostname`이고 기본값은 빈 문자열이다.
+모든 MON 구독과 `MGetConfig`에 같은 값을 client 수명 동안 그대로 보낸다.
+Watch별로 바꾸지 않으며 재등록·인증 갱신·MON 복구에도 유지한다. Device class는
+빈 값이다. 운영체제의 hostname·환경변수·로컬 Ceph 설정을 조회하거나 문자열을
+정규화·축약하지 않는다. Hostname 선택은 사용 레이어가 맡으며 MON 접속 주소와
+독립적이다. 서버가 선택한 설정 map이며 컴파일된 모든 기본값을 나열하는 API는 아니다.
+
+Hostname과 identity를 포함한 제어 메시지가 `MaxFrameSize`를 넘으면 `Dial`은
+인코딩·접속 전에 `ErrLimitExceeded`로 거절한다. 이 사전 검사는 서버의 인증·초기
+지도 frame이 그 상한 안에 들어간다는 보장이 아니다.
 
 ```go
 watchCtx, stopWatch := context.WithTimeout(context.Background(), time.Minute)
@@ -557,6 +564,16 @@ MON이 명령 전용 CLIENT에도 요구하는 CRUSH 세대 비트는 MON 접속
 ## 검증 결과
 
 2026-10-01–03에 다음 구성을 실제 Ceph daemon과 검증했다.
+
+호출자가 지정한 hostname은 Linux arm64·CGO=0·aes256k·직접 IPv6와 Darwin
+arm64·aes·IPv4 host relay의 race 시험에서 각각 19.95초·20.37초에 통과했다.
+같은 identity로 두 hostname·빈 문자열·공백을 포함한 원문을 전송하고, 별도 native
+client의 `NODE_NAME`으로 선택한 시험용 설정 한 개와 비교했다. Native client의
+기본값·타입 변환이 있으므로 이 oracle은 전체 raw map의 동등성을 주장하지 않는다.
+로그·digest 병행, 명령 슬롯 점유, watch 재등록, 실제 ticket 갱신과 학습 MON
+복구 후에도 선택값을 유지했다. 서버 선택을 구분하는 빈 CRUSH host·상위 root는
+disposable fixture에만 만들었으며 제품의 MGR·OSD 데이터 접속은 0회였다.
+Go가 OS hostname을 조회하거나 CRUSH 배치를 계산하는 기능은 추가하지 않았다.
 
 MON config 구독은 Linux arm64·CGO=0·aes256k·직접 IPv6의 전체 통합시험
 38개와 Darwin arm64·aes·IPv4 host relay의 race 5개에서 통과했다.

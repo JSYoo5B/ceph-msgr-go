@@ -30,8 +30,9 @@ var ErrManagerChanged = errors.New("ceph: active manager changed")
 // Started commands still have an OutcomeUnknownError and are never replayed.
 var ErrMalformedMessage = msgr.ErrFrame
 
-// ErrLimitExceeded identifies a command rejected by its size preflight or wire
-// data rejected by a frame, byte-length, collection-count or authentication
+// ErrLimitExceeded identifies a command or MON control message rejected by its
+// size preflight, or wire data rejected by a frame, byte-length,
+// collection-count or authentication
 // transcript bound. Some bounds are fixed rather than
 // configurable through MaxFrameSize. Check ErrMalformedMessage independently:
 // a valid frame can exceed a local limit, while an invalid encoded length or

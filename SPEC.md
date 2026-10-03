@@ -82,7 +82,8 @@ MON 기능:
 - MGR 발견에 필요한 MgrMap 구독 및 갱신.
 - cluster log 구독, service cursor와 메모리 상한을 갖는 수신 stream.
 - 인증된 client identity의 effective config를 raw 전체 map으로 받는 구독과
-  초기 map 요청. Host·device class는 비워 요청하고 Go Options에는 적용하지 않는다.
+  초기 map 요청. Host는 호출자의 `Options.Hostname`을 보내고 device class는
+  비운다. 반환 map을 Go Options에 적용하지 않는다.
 - MON의 주기적인 `mgrdigest` 구독으로 health detail·MON 상태 raw JSON을 받는다.
   MGR entity나 연결을 요구하지 않으며 지도·cursor가 없는 최신 값 stream이다.
 
@@ -129,8 +130,12 @@ MLog에는 구독 generation ID가 없어 같은 세션의 이전 watch에서 �
 MON config는 연속 `config` 구독과 `MGetConfig`(63)를 보내고 `MConfig`(62)의
 전체 effective map을 받는다. Message header는 version 1/compat 1이며 payload는
 raw string의 map이다. 설정 revision·FSID·cursor·연관된 request ID·구독
-generation은 payload에 없다. 인증된 자기 client identity와 빈 host/class를
-요청하며 반환 map을 Go Options에 적용하지 않는다. 서버는 session별로 변하지
+generation은 payload에 없다. 인증된 자기 client identity와 `Options.Hostname`,
+빈 class를 요청하며 반환 map을 Go Options에 적용하지 않는다. Hostname의 기본값은
+빈 문자열이고 모든 `MMonSubscribe`에도 같은 값을 그대로 보낸다. Initial config
+요청과 지속 구독의 서버 선택을 일치시키며 재등록·인증 갱신·MON 복구에도 유지한다.
+Watch별 selector 변경·OS 조회·환경변수 읽기·hostname 정규화는 제공하지 않는다.
+서버는 session별로 변하지
 않은 map 전송을 생략할 수 있어 재등록 때도 MGetConfig를 함께 보낸다.
 하나의 unread map을 전체 교체하며 empty map과 absent key 삭제를 보존한다.
 현재 admission을 통과한 source만 받으며 로그 watch와 명령 슬롯을 공유하지
@@ -143,6 +148,20 @@ generation은 payload에 없다. 인증된 자기 client identity와 빈 host/cl
 [ConfigMap](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/ConfigMap.cc).
 LGPL-2.1 또는 LGPL-3 선택 고지를 확인했으며 C++ 코드를 복사하지 않고
 wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발 fixture에만 둔다.
+
+Hostname wire 참조는 같은 고정 커밋의
+[MMonSubscribe v3](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MMonSubscribe.h),
+[MON session hostname 수신](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/Monitor.cc#L5368)과
+[지속 config 선택](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/ConfigMonitor.cc#L880)이다.
+Native oracle의 hostname 입력은
+[MonClient](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MonClient.cc#L1126)와
+[NODE_NAME 처리](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/hostname.cc#L21)를 확인했다.
+Native의 OS 조회·이름 축약 동작은 Go 제품에 옮기지 않는다. Fixture는 서버의
+[host 상위 location 조회](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/crush/CrushWrapper.cc#L791)를
+구분하는 빈 topology만 사용하며 Go의 CRUSH·OSDMap 지원을 의미하지 않는다.
+LGPL-2.1 및 COPYING의 LGPL-2.1/LGPL-3 선택 고지를 확인했고 C++ 코드를 복사하지 않았다.
+독립 native client의 설정 한 개를 비교하며 기본값·타입 변환이 있는 native view를
+전체 raw MConfig map과 같다고 주장하지 않는다.
 
 참조: [CephX 보안 수정](https://docs.ceph.com/en/latest/security/CVE-2025-30156/), [CephX 개요](https://docs.ceph.com/en/tentacle/dev/cephx/), [librados 명령 입출력 계약](https://docs.ceph.com/en/tentacle/rados/api/librados/).
 
@@ -181,6 +200,7 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 
 - `ParseKey(base64Key)`는 호출자가 선택한 encoded CephX credential을 검증한다. Identity 선택과 text keyring·설정 파일 로딩은 사용 계층이 맡는다.
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
+- `Options.Hostname`은 caller가 선택한 통신 입력이며 client 수명 동안 불변이다. Hostname·identity를 포함한 MON 제어 메시지가 `MaxFrameSize`를 넘으면 인코딩·접속 전에 `ErrLimitExceeded`로 거절한다. 서버의 bootstrap frame 크기까지 보장하는 검사는 아니다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. `Command.JSON`과 `Input`을 전달하고 `Result`를 그대로 반환한다. 명령별 typed API나 성공 출력의 application JSON parser를 추가하지 않는다.
 - `MonTellTo(ctx, name, command)`는 정확한 MON 이름을 지정하고 독립 인증·지도 검증·호출·정리까지 요청 context를 적용한다. 알려진 대상 없음·지도 변경·전송 전 취소와 전송 후 결과 불명확을 구분하며 주 연결과 다른 명령의 수명을 보존한다.
 - `WaitMonReady(ctx)`와 `WaitMgrReady(ctx)`는 관리 명령이나 명령 슬롯 없이 연결 준비를 기다린다. MGR 대기는 발견과 별도 인증 연결을 포함한다. 취소는 해당 대기만 끝내며 성공은 이후 명령 성공을 보장하지 않는다. `Snapshot()`은 네트워크 요청 없이 현재 상태를 복사한다.
