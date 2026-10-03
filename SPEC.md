@@ -132,6 +132,8 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 `MonitorState.Members`는 `MonitorMember{Name, Rank}`로 인증된 MonMap의
 이름을 조회하며 같은 epoch의 rank 순서로 독립 복사한다. 이름은
 `MonTellTo`에 사용하고, rank·멤버십을 daemon의 현재 준비 상태로 해석하지 않는다.
+`ManagerState.Standbys`는 `StandbyManager{Name, GlobalID}`로 같은 인증된
+MgrMap의 대기 MGR을 독립 복사한다. 가용성이나 새로운 접속 경로를 추가하지 않는다.
 로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
 설정은 `ConfigOptions`, `ConfigStream.Next`·`Close`로 raw `map[string]string`을
 전달한다. 하나의 unread 전체 map을 후속 map으로 교체하며 caller가 소유한다.
@@ -167,6 +169,12 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 복사하지 않고 JSON 의미를 독립 작성한다. 연결 feature에 따라 `req`의 JSON 타입과
 `positional` 출력이 달라지므로 native oracle과의 비교에서 이 두 속성의 표현만
 구분하고 제품이 받은 원본은 그대로 보존한다.
+
+MGR standby는 고정 [MgrMap과 StandbyInfo](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMap.h#L189)의
+LGPL-2.1 고지를 확인하고 wire 의미를 독립 구현한다. `StandbyInfo`의 gid·name을
+보존하며 child envelope의 module·feature metadata는 공개 기능 범위에 넣지 않는다.
+실제 daemon이 만든 기존 IPv6 MgrMap fixture와 같은 epoch의 native `mgr dump`
+결과를 oracle로 사용하고 standby만 바뀌는 지도와 active 전환을 검증한다.
 
 ## 구현 및 검증 순서
 

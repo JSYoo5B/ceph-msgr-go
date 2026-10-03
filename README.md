@@ -301,7 +301,7 @@ revision·cursor·연관된 request ID·구독 generation이 없으며, 같은 M
 ## 운영 상태
 
 `Snapshot()`은 네트워크 요청이나 재접속 대기 없이 현재 client 상태를 읽는다.
-FSID와 client global ID, MON/MGR 지도 epoch·접속 주소, MON 이름·rank, active MGR,
+FSID와 client global ID, MON/MGR 지도 epoch·접속 주소, MON 이름·rank, active·standby MGR,
 ticket 만료·갱신 예정 시각, 명시적인 MON 인증 거절을 확인할 수 있다.
 키와 ticket의 암호 내용은 포함하지 않는다.
 
@@ -312,11 +312,26 @@ fmt.Printf("MON ready=%t MGR available=%t ready=%t\n",
 for _, member := range state.Monitor.Members {
     fmt.Printf("MON name=%s rank=%d\n", member.Name, member.Rank)
 }
+for _, standby := range state.Manager.Standbys {
+    fmt.Printf("standby MGR name=%s gid=%d\n", standby.Name, standby.GlobalID)
+}
 if state.AuthRejection != nil {
     fmt.Printf("authentication method=%d code=%d\n",
         state.AuthRejection.Method, state.AuthRejection.Code)
 }
 ```
+
+`Manager.Standbys`는 인증된 MgrMap의 standby 이름과 daemon global ID를
+`[]StandbyManager`로 반환한다. 별도 명령이나 MGR 접속 없이 조회하며 반환 slice를
+수정해도 client 상태는 바뀌지 않는다. 이는 마지막 지도에 광고된 멤버십이며
+준비 상태나 접속 대상으로 해석하지 않는다. Active MGR과 같은 `MapEpoch`의
+정보이고, 새 지도에서 standby가 active로 바뀌면 목록도 갱신된다. Close 후에도
+마지막 목록을 유지한다.
+
+Tentacle 20.2.4의 Linux IPv6/aes256k와 Darwin IPv4/AES race 시험에서
+전환 전후의 같은 epoch를 native `mgr dump`와 비교했다. Standby가 active로
+승격된 뒤 재기동한 daemon이 새 ID로 복귀하는 것도 일치했으며, 조회 과정에서
+제품의 MGR 접속은 발생하지 않았다.
 
 `Manager.Available`은 마지막으로 수신한 MgrMap 값이다. MGR 접속은
 `MgrCommand`, `MgrTell` 또는 `WaitMgrReady`가 필요할 때 시작하므로 available이어도
