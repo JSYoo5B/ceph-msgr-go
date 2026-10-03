@@ -1,6 +1,6 @@
 # ceph-msgr-go
 
-Ceph MON/MGR 관리 명령을 호출하고 MON cluster log와 client 설정을 msgr2.1로 직접 받는
+Ceph MON/MGR 관리 명령을 호출하고 MON log·설정·health·상태를 msgr2.1로 직접 받는
 native Go 라이브러리다.
 제품은 Go 표준 라이브러리만 사용하며 CGO, go-ceph, librados, Ceph CLI를
 요구하지 않는다. 최소 Ceph 계열은 Tentacle(20.2)이며 객체 I/O는 후속 업무다.
@@ -47,6 +47,32 @@ if err != nil {
 }
 fmt.Printf("%s\n", result.Data)
 ```
+
+기존 keyring을 사용할 때는 파일 bytes와 정확한 identity를 `ParseKeyring`에
+전달한다. Ceph가 기본 출력하는 text keyring에서 해당 entity의 활성 `key`를
+선택하므로 여러 identity가 있어도 첫 key로 대체하지 않는다.
+
+```go
+data, err := os.ReadFile(keyringPath)
+if err != nil {
+    return err
+}
+key, err := cephmsgr.ParseKeyring(data, "client.management")
+if err != nil {
+    return err
+}
+// Dial의 Options.Identity에도 "client.management"를 지정한다.
+```
+
+`caps`와 `pending key`는 선택하거나 적용하지 않는다. 기본 파일 경로 검색이나
+전체 Ceph 설정 해석 없이 호출자가 읽을 파일과 identity를 정한다. 공백·빈 줄·
+전체 줄 `#`/`;` 주석·CRLF는 받지만 quoted key 값이나 이어지는 줄 등 Ceph 설정
+파서 전체 문법은 제공하지 않는다. 중복 section/key는 거절하고 identity가 없으면
+`ErrKeyringIdentityNotFound`를 반환한다. 반환 Key는 입력 bytes와 독립적이다.
+
+Tentacle 20.2.4의 native `auth get` 출력에 관리·read-only 계정을 담아 각각의
+`--print-key` 결과와 대조했다. Linux IPv6/aes256k와 Darwin IPv4/AES race에서
+입력 bytes를 지운 후에도 두 계정 모두 선택한 키로 MON/MGR 명령을 실행했다.
 
 `NewCommand(prefix, arguments)`는 Go 값으로 JSON 명령을 구성한다.
 `arguments`에는 string, integer, boolean, array 등 JSON으로 인코딩할 수 있는
@@ -1258,7 +1284,7 @@ client TCP 복구·stream 종료 원인 보존을 포함한 `993001d`의
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 79개 경로를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 81개 경로를
 비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
 iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를

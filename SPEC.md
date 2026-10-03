@@ -126,7 +126,7 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 
 ## Go API 설계 기준
 
-공개 API는 `ParseKey`, `NewCommand`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
+공개 API는 `ParseKey`, `ParseKeyring`, `NewCommand`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
 `MonCommandDescriptions`, `MgrCommandDescriptions`, `MonTellDescriptions`,
 `MonTellToDescriptions`, `MgrTellDescriptions`, `WaitMonReady`, `WaitMgrReady`,
 `WatchLogs`, `WatchConfig`, `WatchDigest`, `Snapshot`, `Close`를 중심으로 한다.
@@ -144,6 +144,7 @@ Health detail과 MON 상태 bytes를 해석 없이 한 쌍으로 유지하며 �
 교체한다. 구독 성공은 서버의 권한 확인이 아니고 전달 시점·이력을 보장하지 않는다.
 go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
+- `ParseKeyring(data, identity)`는 현재 Ceph가 기본 출력하는 text keyring에서 정확한 client identity의 활성 key를 선택해 기존 `ParseKey`로 검증한다. 다른 entity·pending key로 대체하지 않으며 caps나 OS의 파일 검색·설정 우선순위를 적용하지 않는다. 반환 Key는 입력과 독립적이다.
 - `NewCommand(prefix, arguments)`는 Go named arguments를 표준 JSON으로 인코딩하며 호출자의 map과 원문 prefix를 보존한다. 선택한 prefix의 덮어쓰기는 거부하고, 인자 schema·권한·전송 경로를 추측하거나 bulk 입력을 JSON에 넣지 않는다.
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
@@ -188,6 +189,12 @@ Digest는 고정 [MMgrDigest](https://github.com/ceph/ceph/blob/7f793731f1b39eb4
 현재 admission을 통과한 MON만 수신하고 재접속 때 start=0/flags=0으로 다시
 구독한다. 같은 daemon의 native `mon_status`와 native `health detail`을 대조한다.
 비교본에서만 uptime·quorum_age·live feature_map을 제외하며 제품의 원본은 보존한다.
+
+Text keyring은 고정 [KeyRing writer](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/KeyRing.cc#L232)의
+LGPL-2.1 고지를 확인하고 출력 문법을 독립 구현한다. 중복 section·key와 전체
+ConfUtils의 quoting·continuation 문법은 범위에 넣지 않는다. 실제 native `auth get`
+출력을 여러 entity로 합친 keyring을 `--print-key`와 대조하고 선택한 키로 MON/MGR를
+인증한다. Ceph 도구는 시험 fixture의 생성·oracle에만 사용한다.
 
 ## 구현 및 검증 순서
 

@@ -36,6 +36,8 @@ GROUPS = {
         "src/auth/Auth.h",
         "src/auth/AuthRegistry.h",
         "src/auth/AuthRegistry.cc",
+        "src/auth/KeyRing.h",
+        "src/auth/KeyRing.cc",
         "src/auth/Crypto.h",
         "src/auth/Crypto.cc",
         "src/auth/cephx/CephxProtocol.h",
