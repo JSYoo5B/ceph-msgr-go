@@ -34,7 +34,10 @@ const monAdmissionFeatures uint64 = 1<<18 | 1<<25 | 1<<41 | 1<<48 | 1<<58
 
 func featuresForRole(role uint8) uint64 {
 	if role == 1 {
-		return Features | monAdmissionFeatures
+		// PGID64 is implemented by our 64-bit pool/PG wire codecs. MON map
+		// acquisition negotiates that same format while delivering inner maps
+		// as opaque bytes; it does not enable placement or map application.
+		return Features | monAdmissionFeatures | 1<<9
 	}
 	if role == 4 {
 		// Implemented OSD object-locator and PGID64 encodings. In particular,
