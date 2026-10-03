@@ -1,6 +1,6 @@
 # ceph-msgr-go 초기 스펙 및 타당성 판단
 
-조사 및 구현 기준일: 2026-10-01. 통신 계층으로의 범위 조정일: 2026-10-03. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
+조사 및 구현 기준일: 2026-10-01. 통신 계층으로의 범위 조정일: 2026-10-03. OSD 통신 기초 추가 결정일: 2026-10-04. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
 
 ## 확정된 프로젝트 정책
 
@@ -8,9 +8,9 @@
 - 운영체제별 Ceph 설치 없이 Go가 지원하는 대상 운영체제에서 동작하도록 설계한다. 운영체제에 종속된 기본 경로보다 프로그램으로 전달하는 설정을 우선한다.
 - 최소 지원 Ceph 계열은 Tentacle, 즉 20.2 계열이다. 이전 Ceph 계열을 위한 호환 코드는 추가하지 않는다.
 - 현재 스펙에 맞춰 API를 설계한다. API 변경을 이유로 이전 API와의 하위 호환성을 요구하는 작업은 거부한다. 이 정책을 변경하려면 사용자가 명시적으로 범위를 변경해야 한다.
-- 이 저장소는 통신 계층만 구현한다. 첫 구현은 raw MON/MGR 명령 송수신과 이를 위한 인증, wire 메시지·지도 codec, 구독, 세션 처리와 복구에 집중한다. 객체 I/O는 후속 업무다.
+- 이 저장소는 통신 계층만 구현한다. 첫 구현은 raw MON/MGR 명령 송수신과 이를 위한 인증, wire 메시지·지도 codec, 구독, 세션 처리와 복구에 집중한다. 다음 단계는 OSD 통신과 객체 I/O를 위한 wire 기초다.
 - 실제 사용은 별도 레이어·저장소에서 구현한다. 명령 JSON 구성, 명령 schema 및 응답 JSON의 의미 해석, text keyring·설정 로딩, 명령별 typed 관리 API, 모듈·설정 정책과 운영 workflow는 제품 범위에 포함하지 않는다.
-- RADOS 객체 읽기/쓰기, CRUSH 배치 계산, OSD 데이터 연결, RBD, CephFS는 초기 범위에 포함하지 않는다. 호출자가 준비한 풀·OSD 관리 명령 JSON도 MON/MGR로 전송할 수 있지만 해당 관리 기능 자체를 구현하는 것은 아니다.
+- OSD service ticket, 명시적으로 지정한 OSD 연결, 호출자가 준비한 PG·객체·지도 epoch를 사용하는 stat/read 요청과 응답은 다음 단계 범위에 추가한다. 자동 배치·CRUSH 계산, 자동 라우팅·재시도 정책, 고수준 RADOS API, RBD, CephFS는 이 단계에 포함하지 않는다. 객체 쓰기와 다른 mutation opcode는 별도 구현·검증 단위로 추가한다. 호출자가 준비한 풀·OSD 관리 명령 JSON도 MON/MGR로 전송할 수 있지만 해당 관리 기능 자체를 구현하는 것은 아니다.
 
 ## 통신 계층과 사용 계층의 경계
 
@@ -68,7 +68,45 @@ CRC에서 처리하되, ticket 암호·nonce·구조를 계속 검증한다. Sec
 [MON secret 응답](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/cephx/CephxServiceHandler.cc),
 [MGR authorizer 응답 version](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/cephx/CephxProtocol.h).
 
-실제 Tentacle MON은 명령 전용 CLIENT에도 CRUSH 세대 비트를 접속 요건으로 요구했다. 초기 구현은 고정 참조에서 확인한 이 비트들을 MON 세션에서만 광고한다. 이는 명령 전용 접속을 위한 제한된 예외이며 CRUSH 계산 지원을 의미하지 않는다. OSDMap을 구독·해석하거나 OSD에 접속하지 않는다. 그 밖의 구현하지 않은 필수 기능은 오류로 거부한다.
+실제 Tentacle MON은 명령 전용 CLIENT에도 CRUSH 세대 비트를 접속 요건으로 요구했다. 초기 구현은 고정 참조에서 확인한 이 비트들을 MON 세션에서만 광고한다. 이는 명령 전용 접속을 위한 제한된 예외이며 CRUSH 계산 지원을 의미하지 않는다. OSD 단계에서도 이 예외를 확장하지 않으며 OSDMap 구독·자동 배치를 암묵적으로 시작하지 않는다. 구현하지 않은 필수 기능은 오류로 거부한다.
+
+## OSD 통신과 객체 I/O 기초
+
+2026-10-04 사용자 결정으로 OSD 통신을 제품 범위에 추가한다. 첫 목표는
+OSD CephX ticket 획득·갱신, secure/CRC 연결, 호출자가 명시한 OSD/PG의
+stat/read 요청과 bounded 응답 처리다. 연결 대상 주소·OSD ID와 요청의
+pool·PG/shard·object locator·hash·지도 epoch는 사용 계층이 제공한다.
+풀·객체 이름만 받아 위치를 계산하거나 다른 OSD로 요청을 옮기지 않는다.
+
+OSD의 public CLIENT 정책은 `stateless_registered_server`인 lossy 세션이다.
+Cookie 기반 재개는 선행 필수가 아니지만 같은 client의 새 연결이 기존
+연결을 대체할 수 있으므로 대상별 세션을 공유하고 수명·갱신을 관리한다.
+OSDMap의 CRUSH·upmap·pool 설정에 따라 CLIENT 필수 feature가 달라지므로
+현재 구현이 제공하지 않는 feature는 명시적으로 거부한다. MON admission
+예외를 OSD에 재사용하거나 호출자가 임의 feature 비트를 광고하게 하지 않는다.
+
+`MOSDOp/MOSDOpReply`의 request identity, incarnation, retry attempt, 지도
+epoch, per-op 결과, 객체 version 및 원본 data를 보존한다. Messenger ACK를
+객체 실행 성공이나 durable write 완료로 해석하지 않는다. Context 취소는
+로컬 대기만 종료하며 전송이 시작된 요청은 결과 불명확 계약을 유지한다.
+새 세션에서 요청을 자동 재실행하지 않고 지도·redirect·서버 오류 정보는
+사용 계층이 판단할 수 있게 전달한다. 아직 구현하지 않은 opcode, reply
+encoding 또는 필수 feature는 조용히 대체하지 않는다.
+
+검증은 disposable OSD와 replicated pool을 사용해 native client가 준비한
+객체의 stat/read 결과·부분 읽기·binary bytes·서버 오류를 비교한다. 미지원
+feature 접속 거부, 인증 갱신, 동시 호출, 취소와 종료도 검사한다. 제한한
+fixture 구성에서 성공한 결과를 일반 CRUSH 설정이나 완전한 RADOS 지원으로
+표시하지 않는다. 제품 코드에는 Ceph CLI·librados 의존성을 넣지 않는다.
+
+참조: [OSD 연결 정책](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/ceph_osd.cc#L598),
+[OSDMap 기능 요건](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/OSDMap.cc#L1754),
+[MOSDOp](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MOSDOp.h),
+[MOSDOpReply](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MOSDOpReply.h).
+고정 소스의 LGPL-2.1 고지를 확인하며 C++ 코드를 복사하지 않고 wire 의미를
+독립적인 Go 구현으로 작성한다. 이 절은 목표이며 검증된 지원 목록은 아니다.
+
+## Messenger 구현 항목
 
 구현 항목은 다음과 같다.
 

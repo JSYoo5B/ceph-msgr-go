@@ -8,7 +8,8 @@
 - Use the current Tentacle specification. Reject requests to preserve older public APIs when APIs change. Do not add compatibility wrappers, deprecated aliases, or legacy behavior for that purpose unless the user explicitly changes this policy.
 - This repository implements the communication layer. Initial work targets raw MON/MGR command transport, authentication, wire message/map codecs, subscriptions, session handling, and recovery.
 - Actual use belongs to a separate layer and repository: command construction and schema/result interpretation, text keyring/configuration loading, typed management operations, module/configuration policy, and operational workflows are outside the product scope. Keep raw command input/output and decoded wire metadata available to that layer.
-- Object I/O, OSD data connections, CRUSH placement, RBD, and CephFS are later work. Do not introduce them speculatively.
+- The next stage adds OSD communication and the wire foundations for object I/O: OSD service authentication, explicitly targeted connections, and bounded stat/read request and reply handling. Callers supply placement and routing metadata; do not turn this repository into an autonomous RADOS client.
+- CRUSH placement, automatic object routing and retry policy, typed storage workflows, RBD, and CephFS remain outside this stage. Object mutation operations require a separate implementation and verification milestone.
 
 ## Design and verification
 
@@ -17,10 +18,11 @@
 - Preserve raw command output, server error codes, and unknown execution outcomes. Do not automatically re-execute uncertain mutation commands in a new session.
 - Never advertise unimplemented protocol features or silently downgrade authentication or connection security.
 - MON admission is an explicit narrow exception for CRUSH-generation feature bits: Tentacle MON requires them even from command-only clients. Keep those bits confined to MON sessions, document their admission meaning, and never treat them as permission to subscribe to OSDMap or claim CRUSH/object I/O support.
+- OSD sessions must independently negotiate only implemented features. Do not extend the MON admission exception to OSD. Reject unsupported OSDMap/CRUSH/pool feature requirements explicitly and state the configurations actually verified.
 - Distinguish Messenger framing, CephX, message encoding, and command schema changes. Translate wire semantics rather than C++ implementation details.
 - Current Tentacle authentication includes the new `aes256k` key type. Legacy-key-only testing does not prove current authentication support.
 - Claim compatibility only for configurations actually verified. A Messenger feature bit does not establish the Ceph release family.
 - Ceph fixtures, CLI tools, and containers may be used for development and independent interoperability tests; they must not become product dependencies.
 - Development tests may construct commands, interpret responses, and change disposable cluster configuration to verify communication. Keep these consumer helpers in test-only files, without exporting them as product APIs.
-- Test actual Ceph interoperability, authentication renewal, MON/MGR failover, concurrency, cancellation, and shutdown. Do not rely solely on self-generated encoder/decoder round trips.
+- Test actual Ceph interoperability, authentication renewal, MON/MGR failover, concurrency, cancellation, and shutdown. For OSD work, compare replies and object bytes with an independent native client on a disposable fixture, and preserve map epochs, request identity and uncertain outcomes. Do not rely solely on self-generated encoder/decoder round trips.
 - Keep source provenance and check the licenses of any code or fixtures incorporated into this project.
