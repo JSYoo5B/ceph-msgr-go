@@ -68,6 +68,13 @@ if err != nil {
 fmt.Printf("%s\n", result.Data)
 ```
 
+`Options.ConnectionMode`의 기본값은 `cephmsgr.SecureMode`다. CRC 연결은
+`ConnectionMode: cephmsgr.CRCMode`로 명시적으로 선택한다. 이 선택은
+MON/MGR과 ticket 갱신·재접속·이름 지정 MON Tell 연결 전체에 적용된다.
+선택한 모드 하나만 제안하며 서버의 다른 모드 선택을 거부한다.
+두 모드 모두 CephX와 인증 transcript 서명을 검증한다. CRC는 인증 이후
+통신을 암호화하지 않으며 CRC32C는 손상 검출만 제공한다.
+
 호출자는 exact client identity와 선택한 base64 CephX key를 전달한다.
 `ParseKey`는 인증 credential codec이며 keyring 텍스트·설정 파일 선택은 사용
 레이어가 처리한다. `Command.JSON`에는 준비한 Ceph command object를 넣고
@@ -550,8 +557,9 @@ MON seed는 `host:port`, `v2:host:port/nonce` 형식이며 IPv6는 대괄호로 
 원격 Ceph 주소의 wire `ScopeID`를 결정하지 못하므로 이를 추측하지 않는다.
 MonMap에서 받은 scope·flow 보존과 실제 link-local 네트워크 지원은 구분한다.
 
-인증은 `secure`만 허용하며 자동 downgrade하지 않는다. 현재 Tentacle의
-`aes256k`와 기존 `aes` 키를 지원한다. 압축 협상은 압축을 끄는 데 사용한다.
+연결 모드는 기본 `secure`와 명시적으로 선택한 `crc`를 지원하며 자동
+fallback하지 않는다. 현재 Tentacle의 `aes256k`와 기존 `aes` CephX 키를
+지원한다. 압축 협상은 압축을 끄는 데 사용한다.
 FSID는 `ExpectedFSID`가 있으면 해당 값, 없으면 첫 인증 MonMap으로 고정한다.
 MonMap의 `min_mon_release >= 20`을 요구한다. 이 설정은 daemon별 정확한
 패치 버전을 증명하지 않으며 이전 최소 계열을 유지하는 업그레이드 클러스터는
@@ -682,6 +690,27 @@ CGO=0으로 실행했다.
 혼합 구성에서 MGR session key는 [Tentacle KeyServer](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/cephx/CephxKeyServer.cc#L591)가
 클라이언트 키와 service secret 중 낮은 타입으로 선택한다. 해당 키 타입도
 시험에서 확인했다.
+
+2026-10-03에는 명시적으로 선택한 msgr2.1 CRC 연결도 Ceph 20.2.4와
+검증했다. 아래 두 실행은 각각 공개 API·내부 통합시험 52개를 통과했고,
+별도 fixture가 필요한 10개는 제외했다.
+
+| Ceph | CephX 키 / service cipher | 클라이언트·주소 | 실행 |
+| --- | --- | --- | --- |
+| 20.2.4 | aes256k / aes256k | Darwin arm64·IPv4 host relay | CGO=0 |
+| 20.2.4 | aes / aes | Darwin arm64·IPv4 host relay | 개발용 race detector |
+
+CRC-only MON/MGR의 실제 AUTH_REQUEST에서 CephX와 mode `[1]`만 제안하는
+것을 확인했다. 일반 명령·MON/MGR Tell·이름 지정 MON Tell, raw binary
+입출력·서버 오류, ticket 갱신, MON/MGR 장애·구독 복구, 동시 요청·취소와
+종료를 검증했다. 결과가 불명확한 변경 명령은 재실행하지 않았고,
+트래픽 중 12회 종료 뒤 FD 수는 두 실행 모두 5에서 5로 유지됐다.
+같은 CRC-only MON에 secure를 선택한 연결은 `AuthenticationError`의
+서버 코드 `-95`로 거부됐다. 인증 transcript 서명과 인증 이후 CRC 손상
+검출은 별도 synthetic peer에서도 확인했다.
+CI에는 Linux IPv4 host의 두 키 타입과 IPv6 container의 aes256k CRC
+프로필을 추가했다. 이전 Tentacle 패치·혼합 cipher 및 Windows의 실제
+CRC 연결은 위 실행으로 검증한 구성이 아니다.
 
 시험 구성은 3 MON·2 MGR, OSD 없음, 12초 ticket TTL이다. `status`와
 `pg stat` 응답을 검증했고 MON 프로세스 종료 및 active MGR fail을 주입했다.
@@ -1142,6 +1171,8 @@ go test -race ./...
 go vet ./...
 sh integration/run.sh                         # Docker 필요, aes256k
 CEPH_MSGR_TEST_KEY_TYPE=aes sh integration/run.sh
+CEPH_MSGR_TEST_CONNECTION_MODE=crc sh integration/run.sh # CRC-only MON/MGR, CephX 유지
+CEPH_MSGR_TEST_CONNECTION_MODE=crc CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_RUNTIME=host sh integration/run.sh
 CEPH_MSGR_TEST_IP_FAMILY=6 sh integration/run.sh
 CEPH_MSGR_TEST_IP_FAMILY=6 CEPH_MSGR_TEST_MAPPED_IPV6=1 sh integration/run.sh # 별도 mapped 주소·native CLI 대조
 CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes256k sh integration/run.sh

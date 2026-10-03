@@ -47,7 +47,26 @@ msgr2.1 기능 비트는 Tentacle 버전 증명이 아니다. 런타임에서는
 
 초기 전송은 msgr2.1을 대상으로 한다. msgr1과 msgr2.0 연결로의 fallback을 만들지 않는다. 협상한 필수 기능이 부족하면 명시적인 오류를 반환한다. 아직 구현하지 않은 기능을 지원한다고 광고하지 않는다.
 
-공개 연결 모드는 `secure`만 제공한다. 인증 전 교환에는 프로토콜이 요구하는 CRC framing을 사용하며 `secure` 실패 시 downgrade하지 않는다. 압축 협상 절차는 구현하되 알고리즘 목록을 비워 압축을 사용하지 않는다. 압축 frame은 거부한다.
+2026-10-03 사용자 결정으로 공개 연결 모드에 명시적 `crc` 선택을 추가한다.
+`Options.ConnectionMode`의 기본값은 `SecureMode`이며 `CRCMode`를 지정할 때만
+인증 후에도 msgr2.1 CRC framing을 유지한다. 두 모드 모두 CephX 인증과
+AUTH_SIGNATURE transcript 검증을 수행한다. CRC는 이후 통신을 암호화하지
+않으며 frame CRC32C는 전송 손상 검출용이다. 각 연결은 선택한 모드 하나만
+제안하고 서버가 다른 모드를 선택하면 거부한다. MON/MGR 재접속·ticket 갱신·
+이름 지정 MON Tell의 독립 연결에도 동일한 선택을 적용하며 자동 fallback은 없다.
+인증 전 교환에는 두 모드 모두 CRC framing을 사용한다. 압축 협상 절차는
+구현하되 알고리즘 목록을 비워 압축을 사용하지 않는다. 압축 frame은 거부한다.
+
+고정 Tentacle 소스의 `Auth.h`는 CRC에서 connection secret 길이 0을 요청한다.
+MON 응답의 암호화된 빈 secret과 MGR authorizer의 nonce-only version 1을
+CRC에서 처리하되, ticket 암호·nonce·구조를 계속 검증한다. Secure는 version 2와
+최소 40-byte connection secret을 요구한다. 길이 검증을 완화해 인증 미완료를
+성공으로 처리하지 않으며 AUTH_DONE과 transcript 서명 확인 전에는 세션을
+게시하지 않는다.
+
+참조: [인증 모드와 secret 길이](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/Auth.h),
+[MON secret 응답](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/cephx/CephxServiceHandler.cc),
+[MGR authorizer 응답 version](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/cephx/CephxProtocol.h).
 
 실제 Tentacle MON은 명령 전용 CLIENT에도 CRUSH 세대 비트를 접속 요건으로 요구했다. 초기 구현은 고정 참조에서 확인한 이 비트들을 MON 세션에서만 광고한다. 이는 명령 전용 접속을 위한 제한된 예외이며 CRUSH 계산 지원을 의미하지 않는다. OSDMap을 구독·해석하거나 OSD에 접속하지 않는다. 그 밖의 구현하지 않은 필수 기능은 오류로 거부한다.
 
@@ -294,6 +313,7 @@ LGPL-2.1 고지를 확인하고 시험용 credential 선택을 독립 구현한�
 9. MON 이름 조회는 독립 native CLI 지도와 대조한다. 네트워크 없는 조회와 반환 slice의 소유권, 주 지도 변경·거절·stale source·private Tell의 격리, ticket 갱신과 Close 후 마지막 정보 보존을 검증한다.
 10. 지도 대기 API는 실제 MON add/rm과 MGR 전환의 새 epoch를 native 지도와 비교한다. 명령 슬롯 점유 중에도 진행하고, MON 재접속을 잠시 막은 상태에서 대기가 유지된 뒤 학습한 MON의 재구독으로 새 MGR 지도를 받는지 검증한다. 개별 context 취소와 Client Close도 검증한다.
 11. CephX 내부 plaintext는 유효한 암호 envelope에 넣은 독립 입력과 크기 제한이 있는 fuzz로 검증한다. Decoder의 읽기 실패와 완전한 version·nonce·암호 오류를 구분하고, 실패 시 identity·ticket·credential·부분 출력을 게시하지 않는지 공개 setup 경로까지 확인한다. 정상 실서버 인증과 ticket 갱신 검증도 두 키 타입별로 유지한다.
+12. CRC는 실제 CRC-only MON/MGR와 두 CephX 키 타입별로 검증한다. 정확한 단일 모드 제안, secure 선택 거부, transcript 서명, 인증 이후 CRC 손상 거부, 일반·Tell·이름 지정 Tell과 raw binary·오류 보존을 확인한다. 기존 갱신·장애 복구·취소·종료 시험도 CRC 선택으로 수행한다. CLI나 native daemon 내부 client의 fixture 설정을 Go 제품의 모드 fallback으로 간주하지 않는다.
 
 구현한 encoder와 decoder끼리의 round trip만으로 wire 호환성을 입증하지 않는다. Ceph에서 얻은 fixture 및 실제 Ceph 상대 검증을 사용한다. parser fuzzing, race 검사, 장시간 ticket 갱신, 장애 주입을 포함한다. 클러스터 구성과 테스트 oracle을 위한 Ceph CLI·컨테이너 사용은 개발 도구이며 제품의 런타임 의존성과 구분한다.
 
