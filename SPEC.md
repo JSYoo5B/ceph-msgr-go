@@ -59,6 +59,8 @@ MON 기능:
 - MonMap의 정확한 MON 이름을 지정하는 독립 daemon-local Tell.
 - MGR 발견에 필요한 MgrMap 구독 및 갱신.
 - cluster log 구독, service cursor와 메모리 상한을 갖는 수신 stream.
+- 인증된 client identity의 effective config를 raw 전체 map으로 받는 구독과
+  초기 map 요청. Host·device class는 비워 요청하고 Go Options에는 적용하지 않는다.
 
 MGR 기능:
 
@@ -100,17 +102,37 @@ MLog에는 구독 generation ID가 없어 같은 세션의 이전 watch에서 �
 [EntityName](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/entity_name.h),
 [LogMonitor cursor·history 처리](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/LogMonitor.cc#L1090).
 
+MON config는 연속 `config` 구독과 `MGetConfig`(63)를 보내고 `MConfig`(62)의
+전체 effective map을 받는다. Message header는 version 1/compat 1이며 payload는
+raw string의 map이다. 설정 revision·FSID·cursor·연관된 request ID·구독
+generation은 payload에 없다. 인증된 자기 client identity와 빈 host/class를
+요청하며 반환 map을 Go Options에 적용하지 않는다. 서버는 session별로 변하지
+않은 map 전송을 생략할 수 있어 재등록 때도 MGetConfig를 함께 보낸다.
+하나의 unread map을 전체 교체하며 empty map과 absent key 삭제를 보존한다.
+현재 admission을 통과한 source만 받으며 로그 watch와 명령 슬롯을 공유하지
+않는다. 복구는 새 전체 map 요청이며 중간 변경 이력·원격 unsubscribe·무손실
+수신을 보장하지 않는다. 같은 session의 이전 watch 응답은 구분할 수 없다.
+
+참조: [MConfig](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MConfig.h),
+[MGetConfig](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MGetConfig.h),
+[ConfigMonitor](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/ConfigMonitor.cc),
+[ConfigMap](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/ConfigMap.cc).
+LGPL-2.1 또는 LGPL-3 선택 고지를 확인했으며 C++ 코드를 복사하지 않고
+wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발 fixture에만 둔다.
+
 참조: [CephX 보안 수정](https://docs.ceph.com/en/latest/security/CVE-2025-30156/), [CephX 개요](https://docs.ceph.com/en/tentacle/dev/cephx/), [librados 명령 입출력 계약](https://docs.ceph.com/en/tentacle/rados/api/librados/).
 
 ## Go API 설계 기준
 
 공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
-`WaitMonReady`, `WaitMgrReady`, `WatchLogs`, `Snapshot`, `Close`를 중심으로 한다.
+`WaitMonReady`, `WaitMgrReady`, `WatchLogs`, `WatchConfig`, `Snapshot`, `Close`를 중심으로 한다.
 연결·명령·상태 타입은 `Options`, `Command`, `Result`, `State`다.
 `MonitorState.Members`는 `MonitorMember{Name, Rank}`로 인증된 MonMap의
 이름을 조회하며 같은 epoch의 rank 순서로 독립 복사한다. 이름은
 `MonTellTo`에 사용하고, rank·멤버십을 daemon의 현재 준비 상태로 해석하지 않는다.
 로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
+설정은 `ConfigOptions`, `ConfigStream.Next`·`Close`로 raw `map[string]string`을
+전달한다. 하나의 unread 전체 map을 후속 map으로 교체하며 caller가 소유한다.
 go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.

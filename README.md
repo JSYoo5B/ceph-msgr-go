@@ -1,6 +1,6 @@
 # ceph-msgr-go
 
-Ceph MON/MGR 관리 명령을 호출하고 MON cluster log를 msgr2.1로 직접 받는
+Ceph MON/MGR 관리 명령을 호출하고 MON cluster log와 client 설정을 msgr2.1로 직접 받는
 native Go 라이브러리다.
 제품은 Go 표준 라이브러리만 사용하며 CGO, go-ceph, librados, Ceph CLI를
 요구하지 않는다. 최소 Ceph 계열은 Tentacle(20.2)이며 객체 I/O는 후속 업무다.
@@ -155,6 +155,65 @@ Go heap 상한은 아니다. 초과하면 해당 watch만 `ErrLogOverflow`로 �
 늦게 온 batch가 새 watch에 도착할 수 있다. 현재 admission을 통과한 MON과
 일치하는 FSID의 메시지만 받고 service version으로 이미 접수한 batch를 거른다.
 
+## MON 설정
+
+`WatchConfig(ctx, ConfigOptions)`는 인증된 client identity에 적용되는 설정을
+전체 `map[string]string`으로 받는 `ConfigStream`을 만든다. 알려지지 않은
+옵션·빈 값·raw 문자열을 그대로 전달하며 Go client의 `Options`에는 적용하지
+않는다. Host와 device class는 빈 값으로 요청하며 운영체제의 hostname이나
+로컬 Ceph 설정을 추측하지 않는다. 서버가 선택한 설정 map이며 컴파일된
+모든 기본값을 나열하는 API는 아니다.
+
+```go
+watchCtx, stopWatch := context.WithTimeout(context.Background(), time.Minute)
+defer stopWatch()
+configs, err := client.WatchConfig(watchCtx, cephmsgr.ConfigOptions{})
+if err != nil {
+    return err
+}
+defer configs.Close()
+
+wait, stopWait := context.WithTimeout(context.Background(), 5*time.Second)
+values, err := configs.Next(wait)
+stopWait()
+if err != nil {
+    return err
+}
+fmt.Printf("configured options=%d\n", len(values))
+```
+
+하나의 unread map만 보유하며 후속 map이 전체를 교체한다. 이전에 있던 key가
+없어지거나 빈 map이 오면 삭제도 반영한다. 중간 map은 합쳐 전달하지 않고
+생략할 수 있다. 반환한 map은 호출자 소유이며 동시 Next 호출에 한 번만
+전달한다. 이미 취소된 Next context는 map을 소비하지 않고, 개별 대기 취소는
+watch를 종료하지 않는다. Watch context는 재접속을 포함한 전체 수명에 적용한다.
+
+Client당 config watch 하나를 허용하며 중복은 `ErrConfigWatchActive`다.
+로그 watch와 함께 사용할 수 있고 명령이나 `MaxInFlight` 슬롯, MGR 연결을
+사용하지 않는다. 성공은 로컬 worker 등록이며 첫 map 전달의 확인은 아니다.
+같은 MON에 watch를 다시 만들 때도 연속 구독과 `MGetConfig`로 전체 map을
+요청한다. 서버가 같은 session의 변하지 않은 map을 다시 보내지 않을 수 있어
+구독 메시지 단독으로 초기 값을 보장하지 않는다.
+
+고정 20.2.4의 CephX 인증은 비어 있지 않은 MON cap을 요구한다. Config·monmap
+구독의 일반 MON read 권한 예외와 별개다. 빈 MON cap 계정의 초기 인증은
+`AuthenticationError(-13)`으로 거절됐으며 제품이 다른 인증으로 바꾸지 않는다.
+
+`MaxBufferedBytes`는 기본 `MaxFrameSize`, 허용 범위는 1 KiB–1 GiB다.
+512 bytes에 entry당 128 bytes와 key/value 길이를 더한 보수적 추정치이며
+정확한 Go heap 상한은 아니다. 초과하면 해당 watch만 `ErrConfigOverflow`로
+끝내고 이미 접수한 map과 공유 MON 연결을 유지한다. `ConfigStream.Close`는
+worker를 기다리고 슬롯을 해제한다. 살아 있는 Next context는 접수한 map을
+먼저 읽고 최초 종료 원인을 계속 받는다. 명시적 watch 종료는
+`ErrConfigStreamClosed`, client 종료는 `ErrClosed`다.
+
+현재 admission을 통과한 MON의 메시지만 받는다. MConfig payload에는 FSID·설정
+revision·cursor·연관된 request ID·구독 generation이 없으며, 같은 MON session의 이전 watch에서
+늦게 온 응답은 구분할 수 없다. 재접속은 새 전체 map을 요청한다. 종료는 로컬
+처리이고 원격 unsubscribe·중간 변경 이력·무손실 전달을 보장하지 않는다.
+현재 source의 잘못된 map은 공유 session을 실패시키며 이미 전송한 명령의
+결과 불명확 원인을 보존한다. 그 명령을 새 session에서 재실행하지 않는다.
+
 ## 운영 상태
 
 `Snapshot()`은 네트워크 요청이나 재접속 대기 없이 현재 client 상태를 읽는다.
@@ -293,6 +352,29 @@ MON이 명령 전용 CLIENT에도 요구하는 CRUSH 세대 비트는 MON 접속
 ## 검증 결과
 
 2026-10-01–03에 다음 구성을 실제 Ceph daemon과 검증했다.
+
+MON config 구독은 Linux arm64·CGO=0·aes256k·직접 IPv6의 전체 통합시험
+38개와 Darwin arm64·aes·IPv4 host relay의 race 5개에서 통과했다.
+Config 시험은 각각 29.25초·30.30초였다. Fresh native CLI의 전체 effective map과
+Go 수신 map을 독립적인 raw byte 길이·key 순서의 SHA256 및 entry count로
+17회 대조했다. 전체 설정은 진단에 저장하지 않고 시험용 두 key만 남겼다.
+Global→client→정확한 identity의 우선순위, override 삭제·fallback,
+raw newline·Unicode·NUL·공백 값과 caller의 map 소유권을 확인했다.
+
+MON cap을 `allow command "fsid"`로 제한한 계정은 fsid 조회가 성공하고
+status·일반 config get이 각각 서버 code -13으로 거절됐지만 config map과
+변경을 받았다. 빈 MON caps 인증 거절과 구독의 일반 read 권한 예외를
+구분했다. 명령 슬롯이 찬 동안 수신, 로그 병행, 같은 session 재등록,
+watch만 끝내는 1 KiB overflow, 두 차례 실제 ticket 갱신,
+client TCP만 끊은 학습 MON 복구와 Close도 검증했다. Config 시험 중
+MGR 접속은 0회였고 변경·cleanup 명령은 불명확해도 자동 재실행하지 않았다.
+
+지연된 Conn.Close와 아직 실패를 관찰하지 않은 worker 뒤에서 Client.Close·
+Stream.Close가 최초 frame·제한·인증 원인을 덮는 경계를 합성 peer로 재현했다.
+수정 전 overlay의 실패와 수정 후 CGO=0·race 100회를 확인했고, 이미 교체된
+source·일반 전송 EOF는 구분했다. 공개된 MON 재인증 거절도 두 watch에 같은
+경계에서 기록하며 먼저 접수한 데이터와 앞선 overflow·취소·Close 원인을
+유지했다. 최종 전체 Go CGO=0·race 및 vet도 통과했다.
 
 MON 이름 조회는 독립 native CLI MonMap의 name·rank·FSID·epoch와 대조했다.
 Snapshot 100회가 새 접속을 만들지 않고 MGR를 lazy 상태로 유지하는 것도
@@ -931,6 +1013,12 @@ context·Tell의 client TCP 장애 격리를 포함한 `f685aa7`의
 모두 통과했다. [MON 이름 조회 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-member-discovery)는
 이 커밋을 가리킨다.
 
+등록된 MON 로그 source의 frame 제한 원인을 빠른 교체·지연된 정리 중에도
+보존하는 `1082657`의
+[CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37079706985)도
+모두 통과했다. [로그 frame 제한 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/log-frame-limits)는
+이 커밋을 가리킨다.
+
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
 앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
 [복구 중 Context 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/recovery-contexts)는
@@ -961,7 +1049,7 @@ context·Tell의 client TCP 장애 격리를 포함한 `f685aa7`의
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 67개 경로를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 73개 경로를
 비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
 iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를
@@ -1000,6 +1088,11 @@ wire 의미는 그대로였고 Go 변경이 필요한 차이를 발견하지 못
 9.25초였으며 변경 파일 9개는 동일했다. 추가한 `MMonGetMap.h`는
 byte-identical이었다. 이는 지정 소스의 비교 결과다.
 
+MON config 추가 후 같은 base와 고정 HEAD를 73개 경로로 비교한 실행은
+10.39초였으며 변경 파일 9개는 동일했다. 추가한 MConfig·MGetConfig와
+ConfigMonitor·ConfigMap의 6개 경로는 모두 byte-identical이었다.
+이는 지정 소스의 비교 결과이며 해당 HEAD의 런타임 지원 주장이 아니다.
+
 ```sh
 python3 tools/ceph_diff.py tentacle           # 고정 v20.2.4 참조와 비교
 python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
@@ -1010,6 +1103,14 @@ python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
 규약은 [Tentacle Messenger 문서](https://docs.ceph.com/en/tentacle/dev/msgr2/)와
 고정 Ceph 소스로 확인했다. Ceph 소스에는 LGPL-2.1 등의 개별 라이선스가
 명시되어 있으며 해당 소스를 제품에 vendor하거나 링크하지 않았다.
+
+- MON 설정은 고정 [MConfig](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MConfig.h),
+  [MGetConfig](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MGetConfig.h),
+  [ConfigMonitor](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/ConfigMonitor.cc),
+  [ConfigMap](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/ConfigMap.cc)의
+  wire 의미를 독립 Go 코드로 작성했다. LGPL-2.1 또는 LGPL-3 선택 고지를
+  확인했으며 C++ 코드를 복사하지 않았다. Native CLI와 설정 변경은 개발
+  fixture에만 두며 제품 의존성이 아니다.
 
 - MON 로그는 고정 [MLog](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MLog.h),
   [LogEntry v5](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/LogEntry.cc#L203),
