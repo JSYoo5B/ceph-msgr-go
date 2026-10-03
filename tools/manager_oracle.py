@@ -20,8 +20,21 @@ metadata["standbys"] = sorted(({"name": item["name"], "gid": item["gid"]}
                                 for item in full["standbys"]), key=lambda item: item["gid"])
 metadata["modules"] = full["modules"]
 metadata["services"] = full["services"]
-metadata["available_modules"] = [{name: module[name] for name in ("name", "can_run", "error_string")}
-                                 for module in full["available_modules"]]
+# Fixed Tentacle common/options.h formatter names. Only the independent
+# comparison copy changes representation; product snapshots keep wire codes.
+# "unknown" is deliberately rejected because the formatter loses the code.
+types = {name: code for code, name in enumerate(("uint", "int", "str", "float", "bool", "addr", "addrvec", "uuid", "size", "secs", "millisecs"))}
+levels = {"basic": 0, "advanced": 1, "dev": 2}
+metadata["available_modules"] = []
+for module in full["available_modules"]:
+    entry = {name: module[name] for name in ("name", "can_run", "error_string")}
+    entry["module_options"] = {}
+    for key, option in module["module_options"].items():
+        descriptor = dict(option)
+        descriptor["type"] = types[option["type"]]
+        descriptor["level"] = levels[option["level"]]
+        entry["module_options"][key] = descriptor
+    metadata["available_modules"].append(entry)
 temporary = output / "manager-oracle.tmp"
 temporary.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
 os.replace(temporary, output / "manager-oracle.json")

@@ -16,6 +16,31 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
+type managerModuleOptionOracle struct {
+	Name            string   `json:"name"`
+	Type            uint8    `json:"type"`
+	Level           uint8    `json:"level"`
+	Flags           uint32   `json:"flags"`
+	DefaultValue    string   `json:"default_value"`
+	Min             string   `json:"min"`
+	Max             string   `json:"max"`
+	EnumAllowed     []string `json:"enum_allowed"`
+	Description     string   `json:"desc"`
+	LongDescription string   `json:"long_desc"`
+	Tags            []string `json:"tags"`
+	SeeAlso         []string `json:"see_also"`
+}
+
+func (o managerModuleOptionOracle) value() cephmsgr.ManagerModuleOption {
+	return cephmsgr.ManagerModuleOption{
+		Name: o.Name, Type: o.Type, Level: o.Level, Flags: o.Flags,
+		DefaultValue: o.DefaultValue, Min: o.Min, Max: o.Max,
+		EnumAllowed: append([]string(nil), o.EnumAllowed...),
+		Description: o.Description, LongDescription: o.LongDescription,
+		Tags: append([]string(nil), o.Tags...), SeeAlso: append([]string(nil), o.SeeAlso...),
+	}
+}
+
 func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client, control, label string) cephmsgr.State {
 	t.Helper()
 	for {
@@ -35,9 +60,10 @@ func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client
 			Modules          []string          `json:"modules"`
 			Services         map[string]string `json:"services"`
 			AvailableModules []struct {
-				Name        string `json:"name"`
-				CanRun      bool   `json:"can_run"`
-				ErrorString string `json:"error_string"`
+				Name        string                               `json:"name"`
+				CanRun      bool                                 `json:"can_run"`
+				ErrorString string                               `json:"error_string"`
+				Options     map[string]managerModuleOptionOracle `json:"module_options"`
 			} `json:"available_modules"`
 		}
 		if err != nil || json.Unmarshal(data, &oracle) != nil || oracle.Epoch == 0 {
@@ -55,7 +81,14 @@ func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client
 		}
 		var available []cephmsgr.ManagerModule
 		for _, module := range oracle.AvailableModules {
-			available = append(available, cephmsgr.ManagerModule{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString})
+			var options map[string]cephmsgr.ManagerModuleOption
+			if len(module.Options) > 0 {
+				options = make(map[string]cephmsgr.ManagerModuleOption, len(module.Options))
+			}
+			for key, option := range module.Options {
+				options[key] = option.value()
+			}
+			available = append(available, cephmsgr.ManagerModule{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString, Options: options})
 		}
 		enabled := append([]string(nil), oracle.Modules...)
 		if state.Manager.Available != oracle.Available || state.Manager.Name != oracle.Name || state.Manager.GlobalID != oracle.ID || !reflect.DeepEqual(state.Manager.Standbys, expected) || !reflect.DeepEqual(state.Manager.EnabledModules, enabled) || !reflect.DeepEqual(state.Manager.AvailableModules, available) || !maps.Equal(state.Manager.Services, oracle.Services) {
@@ -64,6 +97,11 @@ func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client
 		t.Logf("epoch %d: active %s/%d, standbys %+v match native MgrMap", oracle.Epoch, oracle.Name, oracle.ID, expected)
 		t.Logf("epoch %d: explicit modules %v and %d reported modules match native MgrMap", oracle.Epoch, enabled, len(available))
 		t.Logf("epoch %d: advertised services %v match native MgrMap", oracle.Epoch, oracle.Services)
+		count := 0
+		for _, module := range available {
+			count += len(module.Options)
+		}
+		t.Logf("epoch %d: %d module option descriptors match native MgrMap", oracle.Epoch, count)
 		return state
 	}
 }
