@@ -39,19 +39,16 @@ func TestCephTellDescriptionsIntegration(t *testing.T) {
 		t.Fatal("native oracle target differs from admitted fixture target", state)
 	}
 	for _, route := range []struct {
-		name    string
-		call    func(context.Context) (cephmsgr.CommandDescriptions, error)
-		execute func(context.Context, cephmsgr.Command) (cephmsgr.Result, error)
+		name string
+		call func(context.Context, cephmsgr.Command) (cephmsgr.Result, error)
 	}{
-		{"mon-" + monName, c.MonTellDescriptions, c.MonTell},
-		{"mon-b", func(ctx context.Context) (cephmsgr.CommandDescriptions, error) {
-			return c.MonTellToDescriptions(ctx, "b")
-		}, func(ctx context.Context, command cephmsgr.Command) (cephmsgr.Result, error) {
+		{"mon-" + monName, c.MonTell},
+		{"mon-b", func(ctx context.Context, command cephmsgr.Command) (cephmsgr.Result, error) {
 			return c.MonTellTo(ctx, "b", command)
 		}},
-		{"mgr", c.MgrTellDescriptions, c.MgrTell},
+		{"mgr", c.MgrTell},
 	} {
-		catalog, err := route.call(ctx)
+		catalog, err := fetchCatalog(ctx, route.call)
 		if err != nil {
 			t.Fatal(route.name, "Tell descriptions", err)
 		}
@@ -73,7 +70,7 @@ func TestCephTellDescriptionsIntegration(t *testing.T) {
 		}
 		version := catalogDescription(t, catalog, "version")
 		request, _ := json.Marshal(map[string]string{"prefix": version.Prefix, "format": "json"})
-		result, err := route.execute(ctx, cephmsgr.Command{JSON: request})
+		result, err := route.call(ctx, cephmsgr.Command{JSON: request})
 		var output tellVersion
 		if err != nil || json.Unmarshal(result.Data, &output) != nil || output.Release != "tentacle" || !strings.HasPrefix(output.Version, "20.2.") {
 			t.Fatal(route.name, "discovered daemon version command", err)

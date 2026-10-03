@@ -49,7 +49,7 @@ func normalizeCatalogComparison(object map[string]any, native bool) {
 	}
 }
 
-func compareNativeCatalog(t *testing.T, role string, catalog cephmsgr.CommandDescriptions, oracle []byte) {
+func compareNativeCatalog(t *testing.T, role string, catalog commandCatalog, oracle []byte) {
 	t.Helper()
 	actual, expected := catalogObject(t, catalog.Result.Data), catalogObject(t, oracle)
 	if catalog.Result.Code != 0 || len(catalog.Commands) != len(expected) {
@@ -72,7 +72,7 @@ func compareNativeCatalog(t *testing.T, role string, catalog cephmsgr.CommandDes
 	t.Logf("%s: all %d descriptors match native catalog; %d raw bytes preserved", role, len(catalog.Commands), len(catalog.Result.Data))
 }
 
-func catalogDescription(t *testing.T, catalog cephmsgr.CommandDescriptions, prefix string) cephmsgr.CommandDescription {
+func catalogDescription(t *testing.T, catalog commandCatalog, prefix string) catalogEntry {
 	t.Helper()
 	for _, description := range catalog.Commands {
 		if description.Prefix == prefix {
@@ -80,10 +80,10 @@ func catalogDescription(t *testing.T, catalog cephmsgr.CommandDescriptions, pref
 		}
 	}
 	t.Fatal("catalog has no", prefix)
-	return cephmsgr.CommandDescription{}
+	return catalogEntry{}
 }
 
-func fetchNativeCatalogs(t *testing.T, ctx context.Context, c *cephmsgr.Client, control, label string) (cephmsgr.CommandDescriptions, cephmsgr.CommandDescriptions) {
+func fetchNativeCatalogs(t *testing.T, ctx context.Context, c *cephmsgr.Client, control, label string) (commandCatalog, commandCatalog) {
 	t.Helper()
 	if err := testcluster.ControlDaemon(ctx, control, "verify", "command-descriptions", label); err != nil {
 		t.Fatal("fresh native command catalog", err)
@@ -95,17 +95,17 @@ func fetchNativeCatalogs(t *testing.T, ctx context.Context, c *cephmsgr.Client, 
 	if err != nil || json.Unmarshal(data, &summary) != nil || summary.Label != label {
 		t.Fatal("native catalog oracle barrier", err)
 	}
-	mon, err := c.MonCommandDescriptions(ctx)
+	mon, err := fetchCatalog(ctx, c.MonCommand)
 	if err != nil {
 		t.Fatal("MON command descriptions", err, mon.Result.Code)
 	}
-	mgr, err := c.MgrCommandDescriptions(ctx)
+	mgr, err := fetchCatalog(ctx, c.MgrCommand)
 	if err != nil {
 		t.Fatal("MGR command descriptions", err, mgr.Result.Code)
 	}
 	for _, route := range []struct {
 		name    string
-		catalog cephmsgr.CommandDescriptions
+		catalog commandCatalog
 	}{{"mon", mon}, {"mgr", mgr}} {
 		oracle, err := os.ReadFile(filepath.Join(control, "command-oracle-"+route.name+".json"))
 		if err != nil {
@@ -129,7 +129,7 @@ func TestCephCommandDescriptionsIntegration(t *testing.T) {
 		t.Fatal("MGR iostat argument description", iostat)
 	}
 	forwarded := catalogDescription(t, mon, "iostat")
-	if forwarded.Flags&cephmsgr.CommandFlagManager == 0 || forwarded.Flags&cephmsgr.CommandFlagPoll == 0 || iostat.Flags != 0 {
+	if forwarded.Flags&catalogFlagManager == 0 || forwarded.Flags&catalogFlagPoll == 0 || iostat.Flags != 0 {
 		t.Fatal("MON forwarding metadata differs from direct MGR metadata")
 	}
 	// Execute read-only commands using discovered prefixes and named arguments.
