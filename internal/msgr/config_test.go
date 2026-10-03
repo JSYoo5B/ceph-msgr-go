@@ -32,7 +32,7 @@ func configLiteral(t testing.TB, text string) []byte {
 }
 
 func TestConfigRequestsIndependentVectors(t *testing.T) {
-	sub := ConfigSubscribe()
+	sub := ConfigSubscribe("")
 	want := configLiteral(t, `
 03000000
 06000000 636f6e666967 0000000000000000 00
@@ -43,7 +43,7 @@ func TestConfigRequestsIndependentVectors(t *testing.T) {
 	if sub.Type != 15 || sub.Version != 3 || sub.CompatVersion != 1 || sub.Priority != 127 || sub.Transaction != 0 || !reflect.DeepEqual(sub.Front, want) || len(sub.Middle) != 0 || len(sub.Data) != 0 {
 		t.Fatal("config subscription changed its continuous start, map subscriptions, hostname or header")
 	}
-	get := GetConfig("client.unit.scope")
+	get := GetConfig("client.unit.scope", "")
 	want = configLiteral(t, `08000000 0a000000 756e69742e73636f7065 00000000 00000000`)
 	if get.Type != 63 || get.Version != 1 || get.CompatVersion != 1 || get.Priority != 127 || get.Transaction != 0 || !reflect.DeepEqual(get.Front, want) || len(get.Middle) != 0 || len(get.Data) != 0 {
 		t.Fatal("getconfig changed its client EntityName, empty masks or header")
@@ -54,7 +54,7 @@ func TestConfigRequestsIndependentVectors(t *testing.T) {
 	}
 	// The authenticated client ID may itself contain the word client; only the
 	// entity prefix is removed, and no numeric global ID is encoded in its place.
-	get = GetConfig("client.client.scope")
+	get = GetConfig("client.client.scope", "")
 	if !reflect.DeepEqual(get.Front, configLiteral(t, `08000000 0c000000 636c69656e742e73636f7065 00000000 00000000`)) {
 		t.Fatal("getconfig rewrote the authenticated bare client name")
 	}

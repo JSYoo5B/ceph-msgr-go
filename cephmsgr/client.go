@@ -94,6 +94,12 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Account for the largest subscription and the identity-bearing MGetConfig
+	// before copying hostname into a frame. Both include the Messenger header.
+	requestBytes := max(uint64(109), 57+uint64(len(strings.TrimPrefix(auth.Name, "client."))))
+	if uint64(len(options.Hostname))+requestBytes > uint64(options.MaxFrameSize) {
+		return nil, fmt.Errorf("ceph: hostname requests exceed frame limit: %w", wire.ErrLimit)
+	}
 	base, cancel := context.WithCancel(context.Background())
 	c := &Client{options: options, ctx: base, cancel: cancel, changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), mgrGate: make(chan struct{}, 1), wake: make(chan struct{}, 1), calls: make(chan struct{}, options.MaxInFlight)}
 	if options.ExpectedFSID != "" {
@@ -406,7 +412,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			s.Fail(ErrClosed)
 			return ErrClosed
 		}
-		err = s.Send(c.ctx, msgr.Subscribe(0, 0))
+		err = s.Send(c.ctx, msgr.Subscribe(0, 0, c.options.Hostname))
 		if err == nil {
 			err = waitMonitorAdmission(linked, s, ready)
 		}

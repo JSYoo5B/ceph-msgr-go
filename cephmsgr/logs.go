@@ -335,7 +335,7 @@ func (s *LogStream) run() {
 			}
 			c.mu.Unlock()
 			if register {
-				if err := mon.Send(s.ctx, msgr.LogSubscribe(s.level, next)); err != nil {
+				if err := mon.Send(s.ctx, msgr.LogSubscribe(s.level, next, c.options.Hostname)); err != nil {
 					if watchErr := s.ctx.Err(); watchErr != nil {
 						s.stop(watchErr)
 						return

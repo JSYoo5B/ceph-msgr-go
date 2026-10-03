@@ -167,7 +167,7 @@ func TestDecodeLogEmptyAndDefaultSourceEntries(t *testing.T) {
 }
 
 func TestLogSubscribeIndependentVector(t *testing.T) {
-	m := LogSubscribe("info", 0x1122334455667788)
+	m := LogSubscribe("info", 0x1122334455667788, "")
 	want := logLiteral(t, `
 03000000
 08000000 6c6f672d696e666f 8877665544332211 00
@@ -178,7 +178,7 @@ func TestLogSubscribeIndependentVector(t *testing.T) {
 	if m.Type != SubscribeMessage || m.Version != 3 || m.CompatVersion != 1 || m.Priority != 127 || m.Transaction != 0 || !reflect.DeepEqual(m.Front, want) || len(m.Middle) != 0 || len(m.Data) != 0 {
 		t.Fatal("continuous log subscription lost lexical order, full cursor or map subscriptions", m)
 	}
-	plain := Subscribe(0x11223344, 0x55667788)
+	plain := Subscribe(0x11223344, 0x55667788, "")
 	want = logLiteral(t, `
 02000000
 06000000 6d67726d6170 8877665500000000 00

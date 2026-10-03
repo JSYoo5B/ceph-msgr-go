@@ -60,8 +60,9 @@ type ConfigStream struct {
 // context governs only that local wait. It submits no command, takes no command
 // slot and does not open a MGR connection. Success registers a local worker,
 // not a server permission or delivery acknowledgement. Every source registration
-// requests a full map for the authenticated client.* identity with empty host
-// and device-class masks, including a new watch on an existing MON session.
+// requests a full map for the authenticated client.* identity and the client's
+// Options.Hostname, with an empty device-class mask, including a new watch on
+// an existing MON session.
 func (c *Client) WatchConfig(ctx context.Context, options ConfigOptions) (*ConfigStream, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -251,9 +252,9 @@ func (s *ConfigStream) run() {
 			}
 			c.mu.Unlock()
 			if register {
-				err := mon.Send(s.ctx, msgr.ConfigSubscribe())
+				err := mon.Send(s.ctx, msgr.ConfigSubscribe(c.options.Hostname))
 				if err == nil {
-					err = mon.Send(s.ctx, msgr.GetConfig(identity))
+					err = mon.Send(s.ctx, msgr.GetConfig(identity, c.options.Hostname))
 				}
 				if err != nil {
 					if watchErr := s.ctx.Err(); watchErr != nil {

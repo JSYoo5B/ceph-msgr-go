@@ -18,8 +18,8 @@ type Digest struct {
 
 // DigestSubscribe adds continuous health/MON-status delivery while retaining
 // map subscriptions. Start zero requests a fresh digest; it is not a cursor.
-func DigestSubscribe() MessageData {
-	return subscribe(0, 0, "mgrdigest", 0)
+func DigestSubscribe(hostname string) MessageData {
+	return subscribe(0, 0, "mgrdigest", 0, hostname)
 }
 
 // DecodeDigest reads the front-only MMgrDigest payload in wire order: MON

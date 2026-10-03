@@ -254,7 +254,7 @@ func (s *DigestStream) run() {
 			}
 			c.mu.Unlock()
 			if register {
-				err := mon.Send(s.ctx, msgr.DigestSubscribe())
+				err := mon.Send(s.ctx, msgr.DigestSubscribe(c.options.Hostname))
 				if err != nil {
 					if watchErr := s.ctx.Err(); watchErr != nil {
 						s.stop(watchErr)

@@ -67,6 +67,10 @@ type Options struct {
 	Monitors []string
 	Identity string
 	Key      Key
+	// Hostname is sent unchanged in every MON subscription and effective-config
+	// request for this client's lifetime. Empty is the default. The client does
+	// not look up, normalize or shorten an operating-system hostname.
+	Hostname string
 	// ExpectedFSID pins the cluster UUID. When empty, the first authenticated
 	// MonMap establishes the FSID used to validate all later maps.
 	ExpectedFSID string

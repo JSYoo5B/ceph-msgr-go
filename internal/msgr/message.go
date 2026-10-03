@@ -129,18 +129,18 @@ func CommandReply(m MessageData, limit uint32) (int32, string, error) {
 	return code, text, d.Done()
 }
 
-func Subscribe(monEpoch, mgrEpoch uint32) MessageData {
-	return subscribe(monEpoch, mgrEpoch, "", 0)
+func Subscribe(monEpoch, mgrEpoch uint32, hostname string) MessageData {
+	return subscribe(monEpoch, mgrEpoch, "", 0, hostname)
 }
 
 // LogSubscribe adds a continuous log subscription without dropping the MON/MGR
 // map subscriptions. The caller validates the level: debug, info, sec, warn,
 // or error. next is the 64-bit MON log-service cursor, not an entry sequence.
-func LogSubscribe(level string, next uint64) MessageData {
-	return subscribe(0, 0, "log-"+level, next)
+func LogSubscribe(level string, next uint64, hostname string) MessageData {
+	return subscribe(0, 0, "log-"+level, next, hostname)
 }
 
-func subscribe(monEpoch, mgrEpoch uint32, extraKey string, next uint64) MessageData {
+func subscribe(monEpoch, mgrEpoch uint32, extraKey string, next uint64, hostname string) MessageData {
 	e := wire.Encoder{}
 	if extraKey != "" {
 		e.U32(3)
@@ -159,6 +159,6 @@ func subscribe(monEpoch, mgrEpoch uint32, extraKey string, next uint64) MessageD
 	e.String("monmap")
 	e.U64(uint64(monEpoch))
 	e.U8(0)
-	e.String("")
+	e.String(hostname)
 	return MessageData{Type: SubscribeMessage, Version: 3, CompatVersion: 1, Priority: 127, Front: e.Data}
 }

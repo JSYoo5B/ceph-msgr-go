@@ -15,19 +15,20 @@ const (
 
 // ConfigSubscribe requests continuous effective configuration updates without
 // dropping the MON/MGR map subscriptions. Empty hostname means no host mask.
-func ConfigSubscribe() MessageData {
-	return subscribe(0, 0, "config", 0)
+func ConfigSubscribe(hostname string) MessageData {
+	return subscribe(0, 0, "config", 0, hostname)
 }
 
 // GetConfig requests a full map for the validated client.<id> identity used by
-// CephX authentication. Host and device class are empty; this builder does not
-// select another entity or infer settings from the local operating system.
+// CephX authentication and the caller's unchanged hostname. Device class is
+// empty; this builder does not select another entity or infer settings from
+// the local operating system.
 // MConfig replies have no request transaction, service version or cursor.
-func GetConfig(identity string) MessageData {
+func GetConfig(identity, hostname string) MessageData {
 	e := wire.Encoder{}
 	e.U32(8) // EntityName CLIENT type, distinct from a global-ID entity_name_t.
 	e.String(strings.TrimPrefix(identity, "client."))
-	e.String("")
+	e.String(hostname)
 	e.String("")
 	return MessageData{Type: GetConfigMessage, Version: 1, CompatVersion: 1, Priority: 127, Front: e.Data}
 }

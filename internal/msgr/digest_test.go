@@ -21,7 +21,7 @@ func TestDigestSubscriptionIndependentVector(t *testing.T) {
 06000000 6d6f6e6d6170 0000000000000000 00
 00000000
 `)
-	message := DigestSubscribe()
+	message := DigestSubscribe("")
 	if message.Type != 15 || message.Version != 3 || message.CompatVersion != 1 || message.Priority != 127 || message.Transaction != 0 || !bytes.Equal(message.Front, want) || len(message.Middle) != 0 || len(message.Data) != 0 {
 		t.Fatal("digest subscription changed its continuous start, maps or empty hostname")
 	}
