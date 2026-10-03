@@ -10,7 +10,7 @@
 - 현재 스펙에 맞춰 API를 설계한다. API 변경을 이유로 이전 API와의 하위 호환성을 요구하는 작업은 거부한다. 이 정책을 변경하려면 사용자가 명시적으로 범위를 변경해야 한다.
 - 이 저장소는 통신 계층만 구현한다. 첫 구현은 raw MON/MGR 명령 송수신과 이를 위한 인증, wire 메시지·지도 codec, 구독, 세션 처리와 복구에 집중한다. 다음 단계는 OSD 통신과 객체 I/O를 위한 wire 기초다.
 - 실제 사용은 별도 레이어·저장소에서 구현한다. 명령 JSON 구성, 명령 schema 및 응답 JSON의 의미 해석, text keyring·설정 로딩, 명령별 typed 관리 API, 모듈·설정 정책과 운영 workflow는 제품 범위에 포함하지 않는다.
-- OSD service ticket, 명시적으로 지정한 OSD 연결, 호출자가 준비한 PG·객체·지도 epoch를 사용하는 stat/read 요청과 응답은 다음 단계 범위에 추가한다. 자동 배치·CRUSH 계산, 자동 라우팅·재시도 정책, 고수준 RADOS API, RBD, CephFS는 이 단계에 포함하지 않는다. 객체 쓰기와 다른 mutation opcode는 별도 구현·검증 단위로 추가한다. 호출자가 준비한 풀·OSD 관리 명령 JSON도 MON/MGR로 전송할 수 있지만 해당 관리 기능 자체를 구현하는 것은 아니다.
+- OSD service ticket, 명시적으로 지정한 OSD 연결, 호출자가 준비한 객체 locator·raw hash·지도 epoch를 사용하는 stat/read 요청과 응답을 범위에 추가한다. 자동 배치·CRUSH 계산, 자동 라우팅·재시도 정책, 고수준 RADOS API, RBD, CephFS는 이 단계에 포함하지 않는다. 객체 쓰기와 다른 mutation opcode는 별도 구현·검증 단위로 추가한다. 호출자가 준비한 풀·OSD 관리 명령 JSON도 MON/MGR로 전송할 수 있지만 해당 관리 기능 자체를 구현하는 것은 아니다.
 
 ## 통신 계층과 사용 계층의 경계
 
@@ -73,10 +73,15 @@ CRC에서 처리하되, ticket 암호·nonce·구조를 계속 검증한다. Sec
 ## OSD 통신과 객체 I/O 기초
 
 2026-10-04 사용자 결정으로 OSD 통신을 제품 범위에 추가한다. 첫 목표는
-OSD CephX ticket 획득·갱신, secure/CRC 연결, 호출자가 명시한 OSD/PG의
+OSD CephX ticket 획득·갱신, secure/CRC 연결, 호출자가 명시한 OSD 대상의
 stat/read 요청과 bounded 응답 처리다. 연결 대상 주소·OSD ID와 요청의
-pool·PG/shard·object locator·hash·지도 epoch는 사용 계층이 제공한다.
+pool·object locator·raw hash·지도 epoch는 사용 계층이 제공한다.
 풀·객체 이름만 받아 위치를 계산하거나 다른 OSD로 요청을 옮기지 않는다.
+
+첫 codec은 Tentacle의 실제 feature 협상으로 선택하는 MOSDOp v6와
+MOSDOpReply v6다. v6의 요청·응답 `pg_t` seed는 객체의 raw hash이며 실제
+PG 번호와 다르다. 독립적인 PG/shard 지정과 erasure-coded pool 지원은
+이 milestone에서 제공하지 않는다. 초기 실서버 시험은 replicated pool이다.
 
 OSD의 public CLIENT 정책은 `stateless_registered_server`인 lossy 세션이다.
 Cookie 기반 재개는 선행 필수가 아니지만 같은 client의 새 연결이 기존

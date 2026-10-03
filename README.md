@@ -1,9 +1,10 @@
 # ceph-msgr-go
 
-Ceph Tentacle의 MON/MGR와 msgr2.1로 통신하는 native Go 라이브러리다.
-Messenger·CephX·세션·raw 명령 송수신과 wire 메시지·지도·구독을 구현한다.
+Ceph Tentacle의 MON/MGR 및 명시적으로 지정한 OSD와 msgr2.1로 통신하는
+native Go 라이브러리다. Messenger·CephX·세션·raw 관리 명령·wire 지도·구독과
+OSD stat/read 통신 기초를 구현한다.
 제품은 Go 표준 라이브러리만 사용하며 CGO, go-ceph, librados, Ceph CLI를
-요구하지 않는다. 최소 Ceph 계열은 Tentacle(20.2)이며 객체 I/O는 후속 업무다.
+요구하지 않는다. 최소 Ceph 계열은 Tentacle(20.2)이다.
 
 고정 wire 참조는 Ceph `v20.2.4`, 커밋
 `7f793731f1b39eb4f465e960113d2363c311b964`다.
@@ -20,6 +21,7 @@ Messenger·CephX·세션·raw 명령 송수신과 wire 메시지·지도·구독
 | MON/MGR 발견·세션·복구·요청별 context | 운영 작업과 재시도 정책 |
 | caller가 준비한 raw JSON·bulk 입력 송신, 원본 응답·오류 반환 | 명령 JSON 구성·schema 검증·응답 JSON 해석·typed 관리 API |
 | MonMap·MgrMap·log·config·digest wire codec과 수신 | 설정 적용·모듈 정책·서비스 URI 사용 |
+| OSD service ticket·명시적 연결·bounded stat/read wire 요청과 응답 | OSDMap·객체 hash·CRUSH 배치·대상 선택·재시도·고수준 객체 API |
 
 지도에 실린 module metadata·option·activation policy·service URI는 받은 값을
 보존한다. 실행 모듈 계산, 설정 적용과 서비스 접속은 사용 레이어가 맡는다.
@@ -70,7 +72,7 @@ fmt.Printf("%s\n", result.Data)
 
 `Options.ConnectionMode`의 기본값은 `cephmsgr.SecureMode`다. CRC 연결은
 `ConnectionMode: cephmsgr.CRCMode`로 명시적으로 선택한다. 이 선택은
-MON/MGR과 ticket 갱신·재접속·이름 지정 MON Tell 연결 전체에 적용된다.
+MON/MGR/OSD와 ticket 갱신·재접속·이름 지정 MON Tell 연결 전체에 적용된다.
 선택한 모드 하나만 제안하며 서버의 다른 모드 선택을 거부한다.
 두 모드 모두 CephX와 인증 transcript 서명을 검증한다. CRC는 인증 이후
 통신을 암호화하지 않으며 CRC32C는 손상 검출만 제공한다.
@@ -131,6 +133,80 @@ nonce·scope·flow도 보존한다. 주 client의 global ID·ticket·MON/MGR 연
 함께 가질 수 있다. 명령 입력을 송신 전에 거절하면 결과 불명확 오류가
 아니지만, 전송 후 응답을 받지 못하면 `OutcomeUnknownError`를 보존한다.
 Watch 큐 overflow·명령 슬롯 대기·잘못된 Options 값은 별도 오류다.
+
+## OSD stat/read 통신 기초
+
+`Options.EnableOSD: true`로 OSD service ticket 획득·갱신을 명시적으로 켠다.
+이 선택은 OSDMap 구독이나 배치를 시작하지 않는다. 사용 레이어가 준비한
+숫자 v2 주소·nonce와 OSD ID로 `OpenOSD`를 호출하고, 객체 locator·raw hash·
+지도 epoch를 요청에 넣는다. 다음 변수들은 사용 레이어에서 받은 값이다.
+
+```go
+osd, err := client.OpenOSD(ctx, cephmsgr.OSDTarget{
+    ID: targetID, Address: targetAddress,
+})
+if err != nil {
+    return err
+}
+defer osd.Close()
+reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: mapEpoch,
+    Object: cephmsgr.OSDObject{
+        Pool: poolID, Name: objectName, Namespace: namespace,
+        Key: locatorKey, Hash: rawObjectHash,
+    },
+    Operations: []cephmsgr.OSDOperation{
+        {Code: cephmsgr.OSDStat},
+        {Code: cephmsgr.OSDRead, Offset: offset, Length: length},
+    },
+})
+// reply.Code·Operations[i].Result·Data·RawFront·RawData를 보존해 전달한다.
+// err가 있어도 reply에 서버 결과나 수신한 원본 bytes가 있을 수 있다.
+```
+
+같은 ID·wire 주소의 연결은 하나의 handle을 공유한다. 다른 주소로 바꾸려면
+기존 handle을 닫는다. `MaxOSDConnections`는 setup을 포함해 기본 16개를
+허용하며 `MaxInFlight`는 MON/MGR/OSD 요청이 공유한다. Setup context는
+성공한 handle의 수명과 독립적이다. Handle·client 종료는 연결 정리를 기다린다.
+
+첫 codec은 Tentacle feature 협상으로 선택한 `MOSDOp/MOSDOpReply v6`다.
+요청·응답 `pg_t` seed는 **raw object hash**이며 실제 PG 번호가 아니다.
+Replicated pool의 현재 객체에 대한 stat과 양의 길이 read만 제공한다.
+Stat bytes는 size와 mtime의 wire 출력이며 filesystem API로 변환하지 않는다.
+Aggregate 서버 code와 operation별 result는 서로 다를 수 있다. 예를 들어
+존재하지 않는 객체는 aggregate -2와 실행되지 않은 stat의 result 0을 반환한다.
+`*OSDError`는 서버의 aggregate 음수 code를 보존한다.
+
+OSD 연결은 lossy session이며 전송한 요청을 재실행하지 않는다. 전송 후
+취소·단절·손상된 응답에는 `OutcomeUnknownError`를 보존한다. Messenger ACK는
+객체 요청 완료가 아니다. Redirect는 `ErrOSDRedirect`와 원본 metadata를
+반환하고 따라가지 않는다. 연결 실패나 client global ID 변경 후에는 handle을
+닫고 사용 레이어가 새 연결 여부를 결정한다. OSDMap·backoff control 메시지는
+이 단계에 구현하지 않았으며 수신하면 세션을 명시적으로 실패시킨다.
+
+MON의 CRUSH admission 예외는 OSD에 적용하지 않는다. 구현하지 않은 필수
+feature는 `ErrUnsupportedFeatures`로 거부한다. 현재 실제 검증은 legacy CRUSH,
+HASHPSPOOL·upmap을 사용하지 않는 replicated pool에 한정한다. 일반적인 최신
+CRUSH 설정의 OSD 접속 지원은 주장하지 않는다. 독립 EC shard 대상 지정,
+snapshot context, 객체 쓰기, 자동 배치·라우팅·재시도, RADOS/RBD/CephFS는
+이 단계의 구현 범위 밖이다.
+
+20.2.4·Darwin arm64·IPv4 host relay의 aes256k secure/CRC와 Linux arm64
+container·IPv4의 aes secure에서 native client가 준비한 binary 객체 10,513
+bytes와 stat2의 size·nanosecond mtime를 대조했다.
+Partial·EOF·ENOENT, 8개 동시 요청, OSD ticket 갱신 후 재접속, 종료 및 현대
+CRUSH 필수 feature의 접속 거부를 검증했다. 합성 peer는 전송 후 취소·늦은
+응답·공유 handle·연결 상한·transaction ID·setup 정리 경합을 별도로 검증한다.
+Windows OSD 상호운용과 OSD IPv6는 아직 검증하지 않았다.
+
+재현은 disposable memstore OSD 하나와 테스트용 pool을 만드는 opt-in profile이다.
+Native `rados`·librados stat2 oracle은 개발 fixture 안에서만 사용한다.
+
+```sh
+CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_RUNTIME=host integration/run.sh
+CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_RUNTIME=host \
+  CEPH_MSGR_TEST_CONNECTION_MODE=crc integration/run.sh
+```
 
 ## Raw 명령 catalog
 
@@ -566,8 +642,9 @@ MonMap의 `min_mon_release >= 20`을 요구한다. 이 설정은 daemon별 정�
 거부한다.
 
 MON이 명령 전용 CLIENT에도 요구하는 CRUSH 세대 비트는 MON 접속에 한정해
-광고한다. CRUSH 계산, OSDMap 구독, OSD 연결, RADOS/RBD/CephFS는 구현하지
-않았다. 그 밖의 미지원 필수 기능은 명시적으로 거부한다.
+광고한다. 명시적 OSD stat/read 연결에서도 이 예외를 재사용하지 않는다.
+CRUSH 계산·OSDMap 구독·RADOS/RBD/CephFS는 구현하지 않았으며 그 밖의
+미지원 필수 기능은 명시적으로 거부한다.
 
 ## 검증 결과
 
@@ -1486,5 +1563,10 @@ python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
   vector를 seed로 별도 fuzz 검사한다.
 - [MON/MGR 지도 fixture](internal/maps/testdata/README.md)는 실제 Ceph가 생성했다.
   Fixture의 SHA-256과 생성 환경을 함께 기록했다.
+- [OSD 요청·응답 fixture](internal/osd/testdata/README.md)는 고정 Tentacle의
+  `ceph-dencoder`로 검증·재인코딩했다. Python이 native field 규약에서 독립
+  envelope를 구성하며 Go codec의 round trip으로 생성하지 않았다.
+  LGPL-2.1 고지를 확인했고 C++ 코드는 포함하지 않았다. 실제 OSD의 위치·
+  응답 의미는 별도 native client oracle과 실서버 통신으로 검증한다.
 - Synthetic peer 테스트는 취소·오류·경합을 검증하는 용도이며 실제 Ceph
   상호운용 시험을 대신하지 않는다.
