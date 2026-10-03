@@ -140,6 +140,8 @@ MgrMap의 대기 MGR을 독립 복사한다. 가용성이나 새로운 접속 �
 전체 목록이 아니다. `AvailableModules`는 active daemon이 보고한
 `ManagerModule{Name, CanRun, ErrorString}`를 원본 순서대로 독립 복사한다.
 Load 가능 보고를 실행 중 상태·명령 권한으로 바꾸지 않는다.
+`ManagerState.Services`는 같은 지도의 active module 이름 → raw URI map을
+독립 복사한다. URL 파싱·HTTP 접속·준비 상태·권한 확인은 수행하지 않는다.
 로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
 설정은 `ConfigOptions`, `ConfigStream.Next`·`Close`로 raw `map[string]string`을
 전달한다. 하나의 unread 전체 map을 후속 map으로 교체하며 caller가 소유한다.
@@ -188,9 +190,19 @@ LGPL-2.1 고지를 확인하고 wire 의미를 독립 구현한다. `StandbyInfo
 
 Active 모듈 metadata는 같은 [MgrMap의 ModuleInfo](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMap.h#L129)의
 LGPL-2.1 고지를 확인하고 wire prefix를 독립 구현한다. 명시적인 module set과
-active `name/can_run/error_string`을 보존하며 services·module_options는 공개
+active `name/can_run/error_string`을 보존하며 module_options는 공개
 모델에 넣지 않는다. 같은 epoch의 `mgr dump`와 비교하고 module disable/enable,
 active 전환, 목록 소유권과 Close 후 보존을 검증한다.
+
+서비스 URI는 같은 MgrMap의 raw map을 독립 구현한다. 고정
+[active beacon 반영](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMonitor.cc#L515)과
+[active 제거](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMonitor.cc#L930)의
+LGPL-2.1 고지를 확인했다. 새 지도는 전체 map을 교체한다. 실제 Prometheus 모듈의
+광고를 같은 epoch의 `mgr dump`와 비교하고 active 전환과 모듈 비활성화에 따른
+주소 변경·삭제를 검증한다. 서비스 모듈과 native CLI는 개발 fixture에만 사용한다.
+Fixture의 Prometheus 광고는 고정
+[localized listener와 set_uri](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/pybind/mgr/prometheus/module.py#L2408)의
+의미를 사용하며 Python 코드를 제품에 포함하지 않는다.
 
 Digest는 고정 [MMgrDigest](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MMgrDigest.h#L35),
 [MON 전송](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMonitor.cc#L645),

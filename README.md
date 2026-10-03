@@ -385,6 +385,9 @@ for _, member := range state.Monitor.Members {
 for _, standby := range state.Manager.Standbys {
     fmt.Printf("standby MGR name=%s gid=%d\n", standby.Name, standby.GlobalID)
 }
+for module, uri := range state.Manager.Services {
+    fmt.Printf("MGR service module=%s uri=%s\n", module, uri)
+}
 if state.AuthRejection != nil {
     fmt.Printf("authentication method=%d code=%d\n",
         state.AuthRejection.Method, state.AuthRejection.Code)
@@ -414,6 +417,17 @@ MGR이 보고한 `ManagerModule{Name, CanRun, ErrorString}` 목록이다. `CanRu
 34개 모듈 보고를 같은 epoch의 native `mgr dump`와 대조했다. `iostat` 비활성화·
 재활성화와 active MGR 전환 뒤에도 전체 목록과 로딩 실패 원인이 일치했다.
 이 조회에서도 제품의 MGR 접속은 발생하지 않았다.
+
+`Manager.Services`는 같은 지도의 module 이름 → raw URI를 새
+`map[string]string`으로 복사한다. Active MGR이 광고한 Dashboard·Prometheus 등
+서비스 주소이며 별도 명령이나 MGR 접속 없이 읽는다. URL을 해석하거나 HTTP에
+접속하지 않으며 서비스 응답·접근 권한을 확인한 값은 아니다. 새 지도에서 제거된
+서비스는 다음 Snapshot에서도 사라지고 Close 후에는 마지막 map을 유지한다.
+
+Linux IPv6/aes256k와 Darwin IPv4/AES race의 실제 Prometheus 광고를 같은
+epoch의 native `mgr dump`와 비교했다. 별도 포트를 사용한 두 fixture MGR의
+전환에서 URI가 새 active 주소로 바뀌고 모듈 비활성화 뒤 삭제되는 것이 일치했다.
+제품에서 서비스 URI에 접속하거나 MGR session을 열지 않았다.
 
 `Manager.Available`은 마지막으로 수신한 MgrMap 값이다. MGR 접속은
 `MgrCommand`, `MgrTell` 또는 `WaitMgrReady`가 필요할 때 시작하므로 available이어도
