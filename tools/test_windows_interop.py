@@ -1,5 +1,10 @@
+import contextlib
+import io
 import json
 import os
+from pathlib import Path
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -135,6 +140,55 @@ class NativeEnvironmentTest(unittest.TestCase):
             self.assertEqual(dict(os.environ), inherited)
             env["UNRELATED_SETTING"] = "changed copy"
             self.assertEqual(os.environ["UNRELATED_SETTING"], "preserved")
+
+
+class CommandDiagnosticsTest(unittest.TestCase):
+    def test_failed_command_preserves_combined_output_before_raising(self):
+        args = ["wsl.exe", "--distribution", "test fixture", "--", "bash", "fixture.sh"]
+        combined = "fixture setup started\nWSL could not start the distribution\n"
+        result = subprocess.CompletedProcess(args, 23, stdout=combined)
+        console = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "bootstrap.log"
+            log.write_text("earlier successful step\n", encoding="utf-8")
+            with mock.patch.object(verifier.subprocess, "run", return_value=result) as run:
+                with contextlib.redirect_stdout(console), self.assertRaises(subprocess.CalledProcessError) as raised:
+                    verifier.command(args, cwd=directory, env={"CGO_ENABLED": "0"},
+                                     timeout=17, capture=True, log=log)
+            self.assertEqual(raised.exception.returncode, 23)
+            self.assertEqual(raised.exception.cmd, args)
+            self.assertEqual(raised.exception.output, combined)
+            self.assertEqual(console.getvalue(), combined)
+            recorded = log.read_text(encoding="utf-8")
+            prefix, command, output = recorded.split("\n", 2)
+            self.assertEqual(prefix, "earlier successful step")
+            self.assertEqual(json.loads(command), args)
+            self.assertEqual(output, combined)
+            run.assert_called_once_with(args, cwd=directory, env={"CGO_ENABLED": "0"},
+                                        check=False, timeout=17, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, encoding="utf-8", errors="replace")
+
+    def test_successful_capture_preserves_parseable_stdout_and_quietly_logs(self):
+        args = ["go", "env", "-json", "GOHOSTOS", "GOHOSTARCH", "CGO_ENABLED"]
+        host = {"GOHOSTOS": "windows", "GOHOSTARCH": "amd64", "CGO_ENABLED": "0"}
+        output = json.dumps(host, indent=2) + "\n"
+        result = subprocess.CompletedProcess(args, 0, stdout=output)
+        console = io.StringIO()
+        with tempfile.TemporaryDirectory() as directory:
+            log = Path(directory) / "bootstrap.log"
+            with mock.patch.object(verifier.subprocess, "run", return_value=result) as run:
+                with contextlib.redirect_stdout(console):
+                    returned = verifier.command(args, cwd=directory, env={"GOTOOLCHAIN": "local"},
+                                                capture=True, log=log)
+            self.assertIs(returned, result)
+            self.assertEqual(json.loads(returned.stdout), host)
+            self.assertEqual(console.getvalue(), "")
+            command, recorded = log.read_text(encoding="utf-8").split("\n", 1)
+            self.assertEqual(json.loads(command), args)
+            self.assertEqual(recorded, output)
+            run.assert_called_once_with(args, cwd=directory, env={"GOTOOLCHAIN": "local"},
+                                        check=False, timeout=300, stdout=subprocess.PIPE,
+                                        stderr=subprocess.STDOUT, encoding="utf-8", errors="replace")
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 
 import go_test_annotations
 
@@ -74,30 +75,44 @@ def native_environment():
     return env
 
 
-def command(args, *, cwd, env, timeout=300, capture=False):
-    return subprocess.run(args, cwd=cwd, env=env, check=True, timeout=timeout,
-                          stdout=subprocess.PIPE if capture else None,
-                          encoding="utf-8" if capture else None)
+def command(args, *, cwd, env, timeout=300, capture=False, log=None):
+    result = subprocess.run(args, cwd=cwd, env=env, check=False, timeout=timeout,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            encoding="utf-8", errors="replace")
+    if log is not None:
+        with log.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(args) + "\n" + result.stdout)
+    if not capture or result.returncode:
+        print(result.stdout, end="", flush=True)
+    result.check_returncode()
+    return result
 
 
 def run(distro, diagnostics):
-    env = native_environment()
     project = Path(__file__).resolve().parent.parent
     diagnostics = diagnostics.resolve()
     diagnostics.mkdir(parents=True, exist_ok=True)
-    host = json.loads(command(
+    (diagnostics / "startup.json").write_text(json.dumps({"platform": sys.platform,
+        "distro": distro, "project": str(project)}, indent=2) + "\n", encoding="utf-8")
+    env = native_environment()
+
+    def execute(args, *, env=env, timeout=300, capture=False):
+        return command(args, cwd=project, env=env, timeout=timeout,
+                       capture=capture, log=diagnostics / "bootstrap.log")
+
+    host = json.loads(execute(
         ["go", "env", "-json", "GOHOSTOS", "GOHOSTARCH", "GOOS", "GOARCH", "CGO_ENABLED"],
-        cwd=project, env=env, capture=True).stdout)
+        capture=True).stdout)
     if host != {"GOHOSTOS": "windows", "GOHOSTARCH": "amd64", "GOOS": "windows",
                 "GOARCH": "amd64", "CGO_ENABLED": "0"}:
         raise RuntimeError("expected a native Windows amd64 toolchain with CGO disabled")
-    external = command(["go", "list", "-deps", "-f",
+    external = execute(["go", "list", "-deps", "-f",
                         "{{if not .Standard}}{{if not .Module.Main}}{{.ImportPath}}{{end}}{{end}}",
-                        "./cephmsgr"], cwd=project, env=env, capture=True).stdout.strip()
+                        "./cephmsgr"], capture=True).stdout.strip()
     if external:
         raise RuntimeError("product has non-standard-library dependencies")
-    revision = command(["git", "rev-parse", "HEAD"], cwd=project, env=env, capture=True).stdout.strip()
-    version = command(["go", "version"], cwd=project, env=env, capture=True).stdout.strip()
+    revision = execute(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
+    version = execute(["go", "version"], capture=True).stdout.strip()
     out = Path(tempfile.mkdtemp(prefix="ceph-msgr-windows-", dir=os.getenv("RUNNER_TEMP")))
     wsl = ["wsl.exe", "--distribution", distro, "--user", "root", "--"]
     attempted = False
@@ -107,23 +122,20 @@ def run(distro, diagnostics):
               "product_dependencies": "Go standard library", "suites": {}}
     try:
         for name, (package, _) in SUITES.items():
-            command(["go", "test", "-c", "-o", str(out / (name + ".test.exe")), "./" + package],
-                    cwd=project, env=env)
+            execute(["go", "test", "-c", "-o", str(out / (name + ".test.exe")), "./" + package])
         linux = dict(env, GOOS="linux", GOARCH="amd64")
-        command(["go", "build", "-o", str(out / "relay"), "./integration/relay"],
-                cwd=project, env=linux)
+        execute(["go", "build", "-o", str(out / "relay"), "./integration/relay"], env=linux)
 
         def wsl_path(path):
-            return command(wsl + ["wslpath", "-a", "-u", str(path)], cwd=project,
-                           env=env, capture=True, timeout=60).stdout.strip()
+            return execute(wsl + ["wslpath", "-a", "-u", str(path)],
+                           capture=True, timeout=60).stdout.strip()
 
         fixture = wsl_path(project / "integration/windows-fixture.sh")
         output = wsl_path(out)
         target = wsl_path(diagnostics)
 
         def fixture_action(action, timeout=60):
-            return command(wsl + ["bash", fixture, action, output, target],
-                           cwd=project, env=env, timeout=timeout)
+            return execute(wsl + ["bash", fixture, action, output, target], timeout=timeout)
 
         attempted = True
         fixture_action("start", timeout=900)
@@ -181,4 +193,14 @@ if __name__ == "__main__":
     parser.add_argument("--distro", required=True, help="dedicated WSL2 development distribution")
     parser.add_argument("--diagnostics", type=Path, required=True)
     args = parser.parse_args()
-    run(args.distro, args.diagnostics)
+    try:
+        run(args.distro, args.diagnostics)
+    except Exception as error:
+        args.diagnostics.mkdir(parents=True, exist_ok=True)
+        (args.diagnostics / "failure.json").write_text(json.dumps({
+            "error_type": type(error).__name__, "error": str(error),
+            "traceback": traceback.format_exc(),
+        }, indent=2) + "\n", encoding="utf-8")
+        message = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print("::error title=Windows interoperability verification::" + message, flush=True)
+        raise
