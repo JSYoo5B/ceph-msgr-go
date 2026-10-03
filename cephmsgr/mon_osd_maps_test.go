@@ -51,7 +51,9 @@ func (p *monOSDMapsTestPeer) serve(early bool) {
 		frame msgr.Frame
 		err   error
 	}
-	frames, abort, drained := make(chan incoming), make(chan struct{}), make(chan struct{})
+	// Keep reading ACKs while the sole writer publishes unsolicited admission
+	// frames, rather than coupling both net.Pipe directions through the owner.
+	frames, abort, drained := make(chan incoming, 16), make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(drained)
 		for {
@@ -79,13 +81,21 @@ func (p *monOSDMapsTestPeer) serve(early bool) {
 			return
 		}
 	}
-	for _, message := range []msgr.MessageData{
-		{Type: msgr.MonMapMessage, Version: 1, Front: mockMonMap(20, [16]byte{1})},
-		{Type: msgr.MgrMapMessage, Version: 1, Front: mockMgrMap(1, 99, 6800)},
-	} {
-		if send(message) != nil {
-			return
+	// Admit only in response to the actual setup request. An unsolicited
+	// MonMap can finish private admission before its queued GetMonMap writes;
+	// setup-context release then legitimately drops that unnecessary request.
+	admitted := false
+	admit := func() error {
+		for _, message := range []msgr.MessageData{
+			{Type: msgr.MonMapMessage, Version: 1, Front: mockMonMap(20, [16]byte{1})},
+			{Type: msgr.MgrMapMessage, Version: 1, Front: mockMgrMap(1, 99, 6800)},
+		} {
+			if err := send(message); err != nil {
+				return err
+			}
 		}
+		admitted = true
+		return nil
 	}
 	for {
 		select {
@@ -109,7 +119,7 @@ func (p *monOSDMapsTestPeer) serve(early bool) {
 			}
 			p.requests <- m
 			if m.Type == 5 { // Private operations explicitly admit this MON.
-				if send(msgr.MessageData{Type: msgr.MonMapMessage, Version: 1, Front: mockMonMap(20, [16]byte{1})}) != nil {
+				if admit() != nil {
 					return
 				}
 				continue
@@ -137,6 +147,15 @@ func (p *monOSDMapsTestPeer) serve(early bool) {
 				if err := d.Done(); err != nil {
 					p.errors <- err
 					return
+				}
+				if !admitted {
+					if _, base := sub.all["monmap"]; !base {
+						p.errors <- errors.New("OSD map subscription preceded MON admission request")
+						return
+					}
+					if admit() != nil {
+						return
+					}
 				}
 				if present {
 					p.subscriptions <- sub
@@ -616,16 +635,18 @@ func TestMonOSDMapWatchIgnoresUnadmittedAndUnregisteredSources(t *testing.T) {
 
 func (p *monOSDMapsTestPeer) nextRequest(t *testing.T, ctx context.Context, typ uint16) msgr.MessageData {
 	t.Helper()
+	var observed []uint16
 	for {
 		select {
 		case message := <-p.requests:
+			observed = append(observed, message.Type)
 			if message.Type == typ {
 				return message
 			}
 		case err := <-p.errors:
 			t.Fatal("MON OSD map peer failed", err)
 		case <-ctx.Done():
-			t.Fatal("MON OSD map request was not observed", typ, ctx.Err())
+			t.Fatal("MON OSD map request was not observed", typ, "received types", observed, ctx.Err())
 		}
 	}
 }
@@ -780,7 +801,7 @@ func TestMonOSDMapRequestCancellationAndClientCloseJoinPrivateConnection(t *test
 }
 
 func TestMonOSDMapWatchFirstFatalCauseSurvivesDelayedCleanup(t *testing.T) {
-	for _, late := range []string{"malformed", "overflow", "watch-close", "client-close"} {
+	for _, late := range []string{"malformed", "overflow", "watch-close", "client-close", "lifetime-cancel"} {
 		t.Run(late, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -817,6 +838,11 @@ func TestMonOSDMapWatchFirstFatalCauseSurvivesDelayedCleanup(t *testing.T) {
 				go func() { closed <- stream.Close() }()
 			} else if late == "client-close" {
 				go func() { closed <- c.Close() }()
+			} else if late == "lifetime-cancel" {
+				// The watch lifetime is independent of the live Next context.
+				// Neither the paused worker nor onClose can publish the earlier
+				// fatal cause before this cancellation reaches stop.
+				watchCancel()
 			} else {
 				message := osdMapsMessage(4, [16]byte{1}, nil, []OSDMapBlob{{Epoch: 6, Data: []byte{8}}})
 				if late == "malformed" {
@@ -837,7 +863,7 @@ func TestMonOSDMapWatchFirstFatalCauseSurvivesDelayedCleanup(t *testing.T) {
 			gate.unblock()
 			monOSDMapsTestBatch(t, ctx, stream, accepted)
 			if _, err := stream.Next(ctx); err != cause {
-				t.Fatal("late callback/close replaced the session's first fatal cause", err, cause)
+				t.Fatal("late callback/close/cancellation replaced the session's first fatal cause", err, cause)
 			}
 			select {
 			case <-held.cleaned:

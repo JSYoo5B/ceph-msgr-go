@@ -110,6 +110,17 @@ func (s *OSDMapStream) stopLocked(err error) bool {
 }
 
 func (s *OSDMapStream) stop(err error) {
+	// Lifetime cancellation can run before a failed source finishes custom
+	// connection cleanup/onClose. Preserve its already published fatal cause,
+	// as Close does, before releasing the watch slot. Inspect errors outside mu.
+	s.client.mu.Lock()
+	source := s.observed
+	s.client.mu.Unlock()
+	if source != nil {
+		if previous := source.Err(); fatalLogSessionError(previous) {
+			s.failCurrent(source, previous)
+		}
+	}
 	s.client.mu.Lock()
 	s.stopLocked(err)
 	s.client.mu.Unlock()
