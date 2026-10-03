@@ -1101,6 +1101,35 @@ Go 1.24.0과 1.27 계열에서 Linux·macOS·Windows의 CGO=0 unit/vet 검사를
 Windows amd64, Darwin amd64, Linux 386에서 CGO=0 빌드를 확인했다.
 Windows의 실제 Ceph 상대 실행은 아직 검증하지 않았다.
 
+Windows 전용 CI는 `windows-2025`에서 CGO=0 Windows amd64 시험 실행 파일을
+직접 실행한다. 개발용 Ceph 20.2.4·aes256k·secure·IPv4 fixture만 별도의 WSL2
+배포판에 두고 기존 opaque TCP relay의 Windows loopback 경로로 접근한다.
+이는 Windows의 직접 IPv6 접속이나 다른 인증 구성의 검증을 대신하지 않는다.
+준비·인증 갱신·MON/MGR 전환, raw 명령·Tell·이름 지정 MON Tell, 동시성,
+context·Close와 log/config/digest 수신을 포함한 공개 시험 9개와 내부 통신
+시험 1개를 선택한다. 모든 선택 시험의 실제 pass와 package pass를 요구해
+전체 skip 또는 잘못된 selector를 성공으로 처리하지 않는다.
+
+[Windows 검증 드라이버](tools/windows_interop.py)는 실행마다 별도의 `run-*`
+증거 폴더를 만들고 source SHA·Go 도구 체인·daemon 버전·시험 목록을
+`verification.json`에 기록한다. 준비 실패도
+`startup.json`·`bootstrap.log`·`failure.json`으로 남긴다. 전용 컨테이너와 임시
+credential을 정리하고 CI가 자신이 만든 WSL 배포판만 삭제한다. 정리 실패는
+`cleanup-failure.json`에 소유한 컨테이너·output 경로를 기록하고 output을
+보존한다. Windows 시험의 시간 초과는 해당 PID의 자식 tree만 종료·대기한다. 이 도구와
+WSL·Docker·Python·Ceph CLI는 개발 검증 도구이며 제품 의존성이 아니다.
+준비한 WSL2 배포판에서는 PowerShell로 다음을 실행할 수 있다.
+
+```powershell
+python tools/windows_interop.py --distro CephMsgrFixture --diagnostics "$env:TEMP/ceph-windows-evidence"
+```
+
+WSL 구성은 [공식 runner image](https://github.com/actions/runner-images/blob/main/images/windows/Windows2025-Readme.md),
+[배포판 import](https://learn.microsoft.com/en-us/windows/wsl/use-custom-distro),
+[localhost 전달](https://learn.microsoft.com/en-us/windows/wsl/networking)을 기준으로 한다.
+개발용 Ubuntu rootfs는 Canonical의 고정 20240423 archive와
+[게시된 SHA256](https://cloud-images.ubuntu.com/wsl/releases/noble/20240423/SHA256SUMS)을 확인한다.
+
 ```sh
 go test -race ./...
 go vet ./...
@@ -1188,7 +1217,7 @@ aes256k 옵션이 없으므로 이를 요청하면 fixture 준비를 명시적�
 실행한다.
 
 [CI 설정](.github/workflows/ci.yml)은 Linux·macOS·Windows에서 Go 1.24.0과
-1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 위 6개 Ceph 구성을
+1.27 계열의 CGO=0 unit/vet 검사, Linux에서 race 검사와 지정한 Tentacle 구성을
 시험한다. Race 작업은 Linux amd64에서 실제 Ceph를 상대하는 공개 API와
 클라이언트 내부 통합시험도 host 모드로 실행한다.
 Frame·지도·인증 응답 parser fuzzing, 20.2.4·aes256k와 20.2.3·aes의
