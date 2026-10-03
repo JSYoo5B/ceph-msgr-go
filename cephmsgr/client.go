@@ -20,25 +20,26 @@ import (
 )
 
 type Client struct {
-	options  Options
-	ctx      context.Context
-	cancel   context.CancelFunc
-	mu       sync.Mutex
-	closed   bool
-	changed  chan struct{}
-	auth     *cephx.Client // Published snapshots are immutable.
-	fsid     [16]byte
-	monMap   maps.Mon
-	mgrMap   maps.Mgr
-	mon, mgr *session.Session
-	monReady bool
-	authErr  error // Explicit MON reauthentication rejection, until recovery.
-	sessions map[*session.Session]struct{}
-	mgrGate  chan struct{}
-	wake     chan struct{}
-	calls    chan struct{}
-	wg       sync.WaitGroup
-	logWatch *LogStream
+	options     Options
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.Mutex
+	closed      bool
+	changed     chan struct{}
+	auth        *cephx.Client // Published snapshots are immutable.
+	fsid        [16]byte
+	monMap      maps.Mon
+	mgrMap      maps.Mgr
+	mon, mgr    *session.Session
+	monReady    bool
+	authErr     error // Explicit MON reauthentication rejection, until recovery.
+	sessions    map[*session.Session]struct{}
+	mgrGate     chan struct{}
+	wake        chan struct{}
+	calls       chan struct{}
+	wg          sync.WaitGroup
+	logWatch    *LogStream
+	configWatch *ConfigStream
 }
 
 // Dial establishes and authenticates a MON connection and verifies a MonMap
@@ -283,6 +284,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		var candidateEpoch uint32
 		var s *session.Session
 		s = session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
+			if m.Type == msgr.ConfigMessage {
+				if !verifiedMon {
+					return nil
+				}
+				return c.handleConfig(s, m)
+			}
 			if m.Type == msgr.LogMessage {
 				if !verifiedMon {
 					return nil
@@ -336,12 +343,16 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			return nil
 		}, func(err error) {
 			c.stopLogForFailedSession(s, err)
+			c.stopConfigForFailedSession(s, err)
 			c.mu.Lock()
 			if c.mon == s {
 				wasReady := c.monReady
 				c.monReady = false
 				if c.logWatch != nil {
 					c.logWatch.source = nil
+				}
+				if c.configWatch != nil {
+					c.configWatch.source = nil
 				}
 				c.signal()
 				if wasReady {
@@ -355,6 +366,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			// still delays onClose. Record its registered watch's cause before
 			// making that callback stale by adopting this candidate.
 			c.stopLogForFailedSession(old, old.Err())
+			c.stopConfigForFailedSession(old, old.Err())
 		}
 		c.mu.Lock()
 		c.mon, c.monReady = s, false
@@ -363,6 +375,11 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			// of the same old session. Force a cursor-based registration even
 			// when it observes only the final restored MON.
 			c.logWatch.source = nil
+		}
+		if c.configWatch != nil {
+			// Request a full map even if the worker misses a failed candidate
+			// and observes only restoration of the same old MON session.
+			c.configWatch.source = nil
 		}
 		attached := c.attach(s)
 		c.signal()
@@ -656,6 +673,23 @@ retryManager:
 
 // Close is idempotent and waits for all connection workers to exit.
 func (c *Client) Close() error {
+	// A session can already have a fatal cause while custom connection cleanup
+	// delays onClose and a watch worker has not observed Done. Preserve that
+	// registered source's cause before publishing ordinary client shutdown.
+	// Error inspection and watch cancellation may invoke custom code.
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		c.wg.Wait()
+		return nil
+	}
+	source := c.mon
+	c.mu.Unlock()
+	if source != nil {
+		err := source.Err()
+		c.stopLogForFailedSession(source, err)
+		c.stopConfigForFailedSession(source, err)
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -663,13 +697,26 @@ func (c *Client) Close() error {
 		return nil
 	}
 	c.closed = true
-	c.cancel()
+	configWatch, logWatch := c.configWatch, c.logWatch
+	if configWatch != nil {
+		configWatch.stopLocked(ErrClosed)
+	}
+	if logWatch != nil {
+		logWatch.stopLocked(ErrClosed)
+	}
 	c.signal()
 	all := make([]*session.Session, 0, len(c.sessions))
 	for s := range c.sessions {
 		all = append(all, s)
 	}
 	c.mu.Unlock()
+	c.cancel()
+	if configWatch != nil {
+		configWatch.cancel()
+	}
+	if logWatch != nil {
+		logWatch.cancel()
+	}
 	for _, s := range all {
 		s.Fail(ErrClosed)
 	}

@@ -201,6 +201,15 @@ func (s *LogStream) stop(err error) {
 // Accepted batches remain readable. Closing an active watch sets its terminal
 // cause to ErrLogStreamClosed; an existing terminal cause remains unchanged.
 func (s *LogStream) Close() error {
+	s.client.mu.Lock()
+	source := s.observed
+	s.client.mu.Unlock()
+	if source != nil {
+		err := source.Err()
+		if fatalLogSessionError(err) {
+			s.failCurrent(source, err)
+		}
+	}
 	s.stop(ErrLogStreamClosed)
 	<-s.done
 	return nil
