@@ -66,6 +66,10 @@ if test "$short_tickets" = 1; then
 fi
 auth_ticket_ttl=${auth_ticket_ttl:-$ticket_ttl}
 case "$mgr_count" in 0|2) ;; *) exit 2 ;; esac
+config_fixture=0
+if test "$mgr_count" = 2 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 && test -z "$mode_rejection" && test "$mapped_ipv6" = 0; then
+    config_fixture=1
+fi
 case "$key_type" in aes|aes256k) ;; *) exit 2 ;; esac
 case "$service_cipher" in aes|aes256k) ;; *) exit 2 ;; esac
 echo "Fixture daemon: $(ceph --version)"
@@ -154,6 +158,12 @@ generate_key mon. --create-keyring --cap mon 'allow *'
 generate_key client.test --cap mon 'allow *' --cap mgr 'allow *'
 generate_key client.readonly --cap mon 'allow r' --cap mgr 'allow r'
 generate_key client.revocable --cap mon 'allow *' --cap mgr 'allow *'
+if test "$config_fixture" = 1; then
+    # CephX needs a nonempty MON cap to issue its initial ticket. One exact
+    # command grants no general MON read access to status/config get/mgrmap;
+    # authenticated config/monmap subscriptions require no such read cap.
+    generate_key client.configwatch --cap mon 'allow command "fsid"' --cap mgr 'allow r'
+fi
 for name in a b; do
     generate_key "mgr.$name" --cap mon 'profile mgr' --cap mgr 'allow *'
 done
@@ -213,6 +223,10 @@ fi
 ceph-authtool "$keyring" -n client.test --print-key > /out/key
 ceph-authtool "$keyring" -n client.readonly --print-key > /out/readonly.key
 ceph-authtool "$keyring" -n client.revocable --print-key > /out/revocable.key
+if test "$config_fixture" = 1; then
+    # Private fixture credential; never include this file in diagnostics.
+    ceph-authtool "$keyring" -n client.configwatch --print-key > /out/configwatch.key
+fi
 if test "$mapped_ipv6" = 1; then
     # Fresh native Ceph clients independently prove the configured wire family
     # and MGR read path before the Go regression is permitted to run.
@@ -287,6 +301,95 @@ fi
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."
 while true; do
+    if test -f /out/verify-config; then
+        test "$config_fixture" = 1 || exit 2
+        read -r request_id identity label extra < /out/verify-config
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 || exit 2
+        case "$identity" in client.test|client.configwatch) ;; *) exit 2 ;; esac
+        case "$label" in initial|reopen|reset|global|client|exact|no-read|no-read-update|fallback-client|fallback-global|removed|raw|replacement|after-overflow|renewal-1|renewal-2|learned|final-deletion) ;; *) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/verify-config
+        # A fresh native CLI is the independent read oracle. Full effective
+        # configuration remains in memory; only these controlled keys may be
+        # persisted. This path must never print credentials or raw responses.
+        python3 - "$request_id" "$identity" "$label" "$root" /out <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import subprocess
+import sys
+import time
+
+request_id, identity, label, fixture_root, output_dir = sys.argv[1:]
+identities = {"client.test", "client.configwatch"}
+labels = {
+    "initial", "reopen", "reset", "global", "client", "exact", "no-read",
+    "no-read-update", "fallback-client", "fallback-global", "removed", "raw",
+    "replacement", "after-overflow", "renewal-1", "renewal-2", "learned",
+    "final-deletion",
+}
+if not request_id.isascii() or not request_id.isdecimal() or int(request_id) <= 0 or identity not in identities or label not in labels:
+    raise SystemExit("Invalid config oracle request")
+root_path, output_path = pathlib.Path(fixture_root), pathlib.Path(output_dir)
+command = [
+    "ceph", "-c", str(root_path / "ceph.conf"), "-n", "client.test",
+    "-k", str(root_path / "keyring"), "config", "get", identity,
+    "--format", "json",
+]
+deadline = time.monotonic() + 12
+while True:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SystemExit("Fresh native config read did not complete within its bound")
+    try:
+        result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.DEVNULL, timeout=min(3, remaining), check=False)
+    except subprocess.TimeoutExpired:
+        continue
+    if result.returncode == 0:
+        break
+    # Only independent read probes retry; Go mutations are submitted once.
+    time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+if len(result.stdout) > 1024 * 1024:
+    raise SystemExit("Native config read exceeds the response bound")
+try:
+    full = json.loads(result.stdout)
+except (ValueError, UnicodeError):
+    raise SystemExit("Native config read is invalid JSON") from None
+if not isinstance(full, dict) or len(full) > 4096:
+    raise SystemExit("Native config read has an invalid option map")
+fingerprint = hashlib.sha256()
+for key in sorted(full, key=lambda raw: raw.encode("utf-8")):
+    option = full[key]
+    if not isinstance(option, dict) or not isinstance(option.get("value"), str):
+        raise SystemExit("Native config read has an invalid raw option")
+    for raw in (key, option["value"]):
+        encoded_raw = raw.encode("utf-8")
+        fingerprint.update(len(encoded_raw).to_bytes(8, "big"))
+        fingerprint.update(encoded_raw)
+entries = len(full)
+selected = {}
+for key in ("client_mount_timeout", "ceph_msgr_config_fixture_raw"):
+    if key not in full:
+        continue
+    option = full[key]
+    if not isinstance(option, dict) or not isinstance(option.get("value"), str) or len(option["value"].encode("utf-8")) > 16 * 1024:
+        raise SystemExit("Native config read has an invalid controlled value")
+    selected[key] = option["value"]
+del full, result
+metadata = {"request_id": int(request_id), "identity": identity, "label": label, "values": selected,
+            "map_sha256": fingerprint.hexdigest(), "map_entries": entries}
+encoded = json.dumps(metadata, ensure_ascii=True, separators=(",", ":")) + "\n"
+temporary = output_path / ("config-oracle." + request_id + ".tmp")
+temporary.write_text(encoded, encoding="utf-8")
+os.replace(temporary, output_path / "config-oracle.json")
+with (output_path / "config-oracle-history.jsonl").open("a", encoding="utf-8") as history:
+    history.write(encoded)
+PY
+        touch "/out/config-verify.$request_id"
+    fi
     if test -f /out/secure-mgr; then
         test "$mode_rejection" = mgr || exit 2
         read -r request_id name extra < /out/secure-mgr
