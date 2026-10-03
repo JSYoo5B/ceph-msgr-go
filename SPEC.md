@@ -1,6 +1,6 @@
 # ceph-msgr-go 초기 스펙 및 타당성 판단
 
-조사 및 구현 기준일: 2026-10-01. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
+조사 및 구현 기준일: 2026-10-01. 통신 계층으로의 범위 조정일: 2026-10-03. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
 
 ## 확정된 프로젝트 정책
 
@@ -8,8 +8,30 @@
 - 운영체제별 Ceph 설치 없이 Go가 지원하는 대상 운영체제에서 동작하도록 설계한다. 운영체제에 종속된 기본 경로보다 프로그램으로 전달하는 설정을 우선한다.
 - 최소 지원 Ceph 계열은 Tentacle, 즉 20.2 계열이다. 이전 Ceph 계열을 위한 호환 코드는 추가하지 않는다.
 - 현재 스펙에 맞춰 API를 설계한다. API 변경을 이유로 이전 API와의 하위 호환성을 요구하는 작업은 거부한다. 이 정책을 변경하려면 사용자가 명시적으로 범위를 변경해야 한다.
-- 첫 구현은 MON/MGR 관리 명령과 이를 위한 인증, 지도, 세션 처리에 집중한다. 객체 I/O는 후속 업무다.
-- RADOS 객체 읽기/쓰기, CRUSH 배치 계산, OSD 데이터 연결, RBD, CephFS는 초기 범위에 포함하지 않는다. MON/MGR 명령을 통한 풀·OSD 관리까지 제외한다는 뜻은 아니다.
+- 이 저장소는 통신 계층만 구현한다. 첫 구현은 raw MON/MGR 명령 송수신과 이를 위한 인증, wire 메시지·지도 codec, 구독, 세션 처리와 복구에 집중한다. 객체 I/O는 후속 업무다.
+- 실제 사용은 별도 레이어·저장소에서 구현한다. 명령 JSON 구성, 명령 schema 및 응답 JSON의 의미 해석, text keyring·설정 로딩, 명령별 typed 관리 API, 모듈·설정 정책과 운영 workflow는 제품 범위에 포함하지 않는다.
+- RADOS 객체 읽기/쓰기, CRUSH 배치 계산, OSD 데이터 연결, RBD, CephFS는 초기 범위에 포함하지 않는다. 호출자가 준비한 풀·OSD 관리 명령 JSON도 MON/MGR로 전송할 수 있지만 해당 관리 기능 자체를 구현하는 것은 아니다.
+
+## 통신 계층과 사용 계층의 경계
+
+제품은 호출자가 선택한 MON/MGR 경로로 raw JSON·bulk 입력을 전송하고 원본
+출력 bytes·상태 문자열·서버 코드를 전달한다. 요청별 context, 동시성, 인증·
+ticket 갱신, 주소 발견, 세션 복구와 결과 불명확 처리는 이 계층의 책임이다.
+구체적인 명령 선택·인자 구성·응답 해석과 재시도·운영 판단은 사용 계층이 맡는다.
+전송 입력의 JSON object·prefix 형식과 크기 검사는 통신 API의 입력 계약이며
+명령별 schema 검증은 아니다.
+
+MonMap·MgrMap·MLog·MConfig·MMgrDigest의 wire 구조를 읽고 그 metadata를
+원문 그대로 전달하는 기능은 유지한다. MgrMap의 module option·activation
+metadata·service URI를 읽는 것과 설정 적용·실행 모듈 계산·HTTP 접속은
+구분한다. 후자는 별도 사용 계층의 책임이다. CephX의 encoded credential을
+읽는 `ParseKey`는 인증 codec이며 text keyring의 entity 선택·파일 로딩과 다르다.
+
+`NewCommand`, `ParseKeyring`와 typed command-description API는 이 경계에
+맞춰 제품에서 제거한다. 호환 wrapper나 별도 공개 helper package를 만들지
+않는다. 명령 catalog도 호출자가 raw 명령으로 조회하고 해석한다. Native oracle과
+실클러스터 시험을 위한 명령 구성·결과 해석 helper는 `integration/*_test.go`에만
+두며 모듈 활성화·설정 변경·MGR 전환은 disposable fixture의 통신 검증에 사용한다.
 
 ## 참조 버전과 지원의 의미
 
@@ -67,7 +89,7 @@ MON 기능:
 MGR 기능:
 
 - MgrMap의 active MGR 주소를 사용한 별도 연결과 service 인증.
-- MGR 명령과 응답, 모듈 미지원·권한 오류의 구분.
+- MGR 명령과 응답, 서버 오류 code·message의 원문 보존. 모듈 미지원·권한 오류의 의미 해석은 사용 계층이 맡는다.
 - active MGR 변경 시 연결 갱신과 진행 중 요청의 결과 처리.
 
 MON 명령과 MGR 명령은 명시적인 API로 구분한다. 명령 prefix만 보고 임의로 경로를 추측하지 않는다. 명령의 JSON, bulk 입력, binary 출력, 상태 문자열과 서버 오류 코드를 각각 보존한다.
@@ -126,9 +148,8 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 
 ## Go API 설계 기준
 
-공개 API는 `ParseKey`, `ParseKeyring`, `NewCommand`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
-`MonCommandDescriptions`, `MgrCommandDescriptions`, `MonTellDescriptions`,
-`MonTellToDescriptions`, `MgrTellDescriptions`, `WaitMonReady`, `WaitMgrReady`,
+공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
+`WaitMonReady`, `WaitMgrReady`,
 `WaitMonMap`, `WaitMgrMap`,
 `WatchLogs`, `WatchConfig`, `WatchDigest`, `Snapshot`, `Close`를 중심으로 한다.
 연결·명령·상태 타입은 `Options`, `Command`, `Result`, `State`다.
@@ -158,12 +179,9 @@ Health detail과 MON 상태 bytes를 해석 없이 한 쌍으로 유지하며 �
 교체한다. 구독 성공은 서버의 권한 확인이 아니고 전달 시점·이력을 보장하지 않는다.
 go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
-- `ParseKeyring(data, identity)`는 현재 Ceph가 기본 출력하는 text keyring에서 정확한 client identity의 활성 key를 선택해 기존 `ParseKey`로 검증한다. 다른 entity·pending key로 대체하지 않으며 caps나 OS의 파일 검색·설정 우선순위를 적용하지 않는다. 반환 Key는 입력과 독립적이다.
-- `NewCommand(prefix, arguments)`는 Go named arguments를 표준 JSON으로 인코딩하며 호출자의 map과 원문 prefix를 보존한다. 선택한 prefix의 덮어쓰기는 거부하고, 인자 schema·권한·전송 경로를 추측하거나 bulk 입력을 JSON에 넣지 않는다.
+- `ParseKey(base64Key)`는 호출자가 선택한 encoded CephX credential을 검증한다. Identity 선택과 text keyring·설정 파일 로딩은 사용 계층이 맡는다.
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
-- `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
-- `MonCommandDescriptions(ctx)`와 `MgrCommandDescriptions(ctx)`는 현재 서버의 관리 명령 metadata를 새로 조회한다. 같은 prefix의 여러 signature와 원본 ID·flags·JSON 속성을 보존하며 prefix로 중복 제거하거나 실행 경로·권한·모듈 활성화를 추측하지 않는다. 원본 `Result`를 유지하고 성공 응답의 JSON 해석 실패는 세션 실패나 결과 불명확으로 바꾸지 않는다.
-- `MonTellDescriptions`, `MgrTellDescriptions`, `MonTellToDescriptions`는 관리 명령과 구분한 daemon-local admin schema를 조회한다. `sig/help`와 원본 속성을 보존하며 미제공된 module·permission·flags를 실행 권한 정보로 해석하지 않는다. admin formatter의 고정 feature 집합에 따라 인자 JSON boolean을 그대로 보존한다.
+- `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. `Command.JSON`과 `Input`을 전달하고 `Result`를 그대로 반환한다. 명령별 typed API나 성공 출력의 application JSON parser를 추가하지 않는다.
 - `MonTellTo(ctx, name, command)`는 정확한 MON 이름을 지정하고 독립 인증·지도 검증·호출·정리까지 요청 context를 적용한다. 알려진 대상 없음·지도 변경·전송 전 취소와 전송 후 결과 불명확을 구분하며 주 연결과 다른 명령의 수명을 보존한다.
 - `WaitMonReady(ctx)`와 `WaitMgrReady(ctx)`는 관리 명령이나 명령 슬롯 없이 연결 준비를 기다린다. MGR 대기는 발견과 별도 인증 연결을 포함한다. 취소는 해당 대기만 끝내며 성공은 이후 명령 성공을 보장하지 않는다. `Snapshot()`은 네트워크 요청 없이 현재 상태를 복사한다.
 - `WaitMonMap(ctx, afterEpoch)`·`WaitMgrMap(ctx, afterEpoch)`는 기존 map 알림에서 strictly newer authenticated epoch를 기다리고 Snapshot과 같은 독립 복사본을 반환한다. 0은 이미 받은 nonzero 지도를 허용하며 중간 epoch·준비 상태를 보장하지 않는다. 새 명령·구독·접속·worker·명령 슬롯을 만들지 않고 MON 복구 중에도 대기한다. 개별 context 종료는 해당 대기만, Client Close와 명시적인 인증 거절은 각 기존 오류로 해제한다.
@@ -182,12 +200,12 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 - Messenger가 보장하는 세션 재개와 애플리케이션 명령 재실행을 구분한다. 새 세션에서 결과가 불명확한 변경 명령을 자동으로 다시 실행하지 않는다.
 - `Close`는 내부 작업과 연결을 종료하고 대기 중 호출을 해제해야 한다. 종료·취소·재연결의 경합을 검증한다.
 
-명령 설명 JSON은 고정 [cmdparse formatter](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/cmdparse.cc#L136),
+개발 시험에서 사용하는 명령 설명 JSON은 고정 [cmdparse formatter](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/cmdparse.cc#L136),
 [MON catalog](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/Monitor.cc#L3460),
 [MGR catalog](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mgr/DaemonServer.cc#L1596),
 [flags](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MonCommand.h#L27)를 참조한다.
 `cmdparse.cc`의 GPLv2와 MON/MGR 파일의 LGPL-2.1 고지를 확인했으며 C++ 코드를
-복사하지 않고 JSON 의미를 독립 작성한다. 연결 feature에 따라 `req`의 JSON 타입과
+복사하지 않고 시험용 JSON 비교를 독립 작성한다. 이 parser는 제품에 포함하지 않는다. 연결 feature에 따라 `req`의 JSON 타입과
 `positional` 출력이 달라지므로 native oracle과의 비교에서 이 두 속성의 표현만
 구분하고 제품이 받은 원본은 그대로 보존한다.
 
@@ -237,9 +255,9 @@ Digest는 고정 [MMgrDigest](https://github.com/ceph/ceph/blob/7f793731f1b39eb4
 구독한다. 같은 daemon의 native `mon_status`와 native `health detail`을 대조한다.
 비교본에서만 uptime·quorum_age·live feature_map을 제외하며 제품의 원본은 보존한다.
 
-Text keyring은 고정 [KeyRing writer](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/KeyRing.cc#L232)의
-LGPL-2.1 고지를 확인하고 출력 문법을 독립 구현한다. 중복 section·key와 전체
-ConfUtils의 quoting·continuation 문법은 범위에 넣지 않는다. 실제 native `auth get`
+개발 fixture의 text keyring은 고정 [KeyRing writer](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/auth/KeyRing.cc#L232)의
+LGPL-2.1 고지를 확인하고 시험용 credential 선택을 독립 구현한다. 제품은 keyring
+텍스트를 받지 않는다. 실제 native `auth get`
 출력을 여러 entity로 합친 keyring을 `--print-key`와 대조하고 선택한 키로 MON/MGR를
 인증한다. Ceph 도구는 시험 fixture의 생성·oracle에만 사용한다.
 
@@ -272,7 +290,7 @@ ConfUtils의 quoting·continuation 문법은 범위에 넣지 않는다. 실제 
 
 Tentacle 이상, MON/MGR 우선, 이전 API 호환성 의무 없음이라는 범위라면 추진할 가치가 있다. AI는 C++ 인코딩·상태 전이를 읽고 Go codec을 작성하거나 소스 변경을 분류하는 작업에 도움을 줄 수 있다. 그러나 암호 정확성, 실제 서버와의 호환성, 장애 상황의 결과 의미 및 장시간 운영 검증을 대체하지 않는다. 구현 기간이나 AI의 배수 단축 효과는 이 프로젝트에서 측정되지 않았다.
 
-유지보수는 Ceph 전체 변경을 이식하는 방식보다 다음의 영향을 추적하는 방식으로 운영한다: Messenger wire/feature, CephX와 crypto, MonClient/MgrClient, 사용하는 메시지·지도 encoding, 지원하는 명령 schema. C++ 내부 refactor는 wire나 외부 동작이 바뀌는지 확인한 뒤 필요한 경우에만 반영한다.
+유지보수는 Ceph 전체 변경을 이식하는 방식보다 다음의 영향을 추적하는 방식으로 운영한다: Messenger wire/feature, CephX와 crypto, MonClient/MgrClient, 사용하는 메시지·지도 encoding. 명령 schema 변경은 raw 전송 계약에 영향을 주는지와 시험 oracle의 변경을 확인하되 명령별 사용 API로 이식하지 않는다. C++ 내부 refactor는 wire나 외부 동작이 바뀌는지 확인한 뒤 필요한 경우에만 반영한다.
 
 업그레이드마다 소스 차이 분석과 독립 fixture·실클러스터 검증을 수행한다. 기존 버전과 새 버전의 실패 차이를 찾아 실제 규약 변경과 구현 결함을 구분한다. 단순 연결 성공 또는 AI 코드 생성 속도를 유지 가능성의 근거로 삼지 않는다.
 
