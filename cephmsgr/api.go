@@ -1,6 +1,8 @@
-// Package cephmsgr provides native Go MON/MGR management commands over Ceph
-// Tentacle's authenticated msgr2.1 transport. No Ceph installation is required
-// on the client host. See README.md for the current verification status.
+// Package cephmsgr provides native Go communication with Ceph Tentacle MON/MGR
+// daemons over authenticated msgr2.1: raw commands, wire maps and subscriptions.
+// Callers own command construction, result interpretation and management policy.
+// No Ceph installation is required on the client host. See README.md for the
+// current verification status.
 package cephmsgr
 
 import (

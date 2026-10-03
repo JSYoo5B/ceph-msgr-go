@@ -1,7 +1,7 @@
 # ceph-msgr-go
 
-Ceph MON/MGR 관리 명령을 호출하고 MON log·설정·health·상태를 msgr2.1로 직접 받는
-native Go 라이브러리다.
+Ceph Tentacle의 MON/MGR와 msgr2.1로 통신하는 native Go 라이브러리다.
+Messenger·CephX·세션·raw 명령 송수신과 wire 메시지·지도·구독을 구현한다.
 제품은 Go 표준 라이브러리만 사용하며 CGO, go-ceph, librados, Ceph CLI를
 요구하지 않는다. 최소 Ceph 계열은 Tentacle(20.2)이며 객체 I/O는 후속 업무다.
 
@@ -9,6 +9,28 @@ native Go 라이브러리다.
 `7f793731f1b39eb4f465e960113d2363c311b964`다.
 프로젝트 정책과 변경 빈도 조사는 [SPEC.md](SPEC.md)에 기록했다.
 공개 API 변경 시 이전 API를 위한 호환 wrapper를 추가하지 않는다.
+
+## 저장소의 역할
+
+이 저장소는 통신 계층을 제공한다. 실제 사용은 별도 레이어·저장소에서 구현한다.
+
+| 이 저장소 | 사용 레이어 |
+| --- | --- |
+| Messenger framing·CephX·인증 갱신 | credential 선택·keyring/설정 로딩 |
+| MON/MGR 발견·세션·복구·요청별 context | 운영 작업과 재시도 정책 |
+| caller가 준비한 raw JSON·bulk 입력 송신, 원본 응답·오류 반환 | 명령 JSON 구성·schema 검증·응답 JSON 해석·typed 관리 API |
+| MonMap·MgrMap·log·config·digest wire codec과 수신 | 설정 적용·모듈 정책·서비스 URI 사용 |
+
+지도에 실린 module metadata·option·activation policy·service URI는 받은 값을
+보존한다. 실행 모듈 계산, 설정 적용과 서비스 접속은 사용 레이어가 맡는다.
+명령 JSON 구성·keyring 텍스트 선택·명령 catalog 해석 helper는 제품에서 제거했으며
+실제 Ceph 대조 시험에서 필요한 부분만 `integration/*_test.go`에 둔다.
+시험의 설정 변경·모듈 활성화·MGR 전환은 disposable fixture의 통신 검증이다.
+
+통신 계층 분리 후 CGO=0 전체 Go 검사, raw 응답 경로의 race 검사, vet와
+Windows 빌드를 통과했다. 실제 20.2.4의 Linux IPv6·aes256k 및 Darwin
+IPv4·AES/race에서 raw 인자·bulk 입력, 관리·daemon-local catalog, 선택한
+credential의 MON/MGR 인증, MGR 전환 중 wire metadata 보존을 다시 검증했다.
 
 ## 사용
 
@@ -37,10 +59,8 @@ defer client.Close()
 
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
-command, err := cephmsgr.NewCommand("status", map[string]any{"format": "json"})
-if err != nil {
-    return err
-}
+// 실제 명령 선택과 JSON 구성은 사용 레이어가 맡는다.
+command := cephmsgr.Command{JSON: []byte(`{"prefix":"status","format":"json"}`)}
 result, err := client.MonCommand(ctx, command)
 if err != nil {
     return err
@@ -48,42 +68,11 @@ if err != nil {
 fmt.Printf("%s\n", result.Data)
 ```
 
-기존 keyring을 사용할 때는 파일 bytes와 정확한 identity를 `ParseKeyring`에
-전달한다. Ceph가 기본 출력하는 text keyring에서 해당 entity의 활성 `key`를
-선택하므로 여러 identity가 있어도 첫 key로 대체하지 않는다.
-
-```go
-data, err := os.ReadFile(keyringPath)
-if err != nil {
-    return err
-}
-key, err := cephmsgr.ParseKeyring(data, "client.management")
-if err != nil {
-    return err
-}
-// Dial의 Options.Identity에도 "client.management"를 지정한다.
-```
-
-`caps`와 `pending key`는 선택하거나 적용하지 않는다. 기본 파일 경로 검색이나
-전체 Ceph 설정 해석 없이 호출자가 읽을 파일과 identity를 정한다. 공백·빈 줄·
-전체 줄 `#`/`;` 주석·CRLF는 받지만 quoted key 값이나 이어지는 줄 등 Ceph 설정
-파서 전체 문법은 제공하지 않는다. 중복 section/key는 거절하고 identity가 없으면
-`ErrKeyringIdentityNotFound`를 반환한다. 반환 Key는 입력 bytes와 독립적이다.
-
-Tentacle 20.2.4의 native `auth get` 출력에 관리·read-only 계정을 담아 각각의
-`--print-key` 결과와 대조했다. Linux IPv6/aes256k와 Darwin IPv4/AES race에서
-입력 bytes를 지운 후에도 두 계정 모두 선택한 키로 MON/MGR 명령을 실행했다.
-
-`NewCommand(prefix, arguments)`는 Go 값으로 JSON 명령을 구성한다.
-`arguments`에는 string, integer, boolean, array 등 JSON으로 인코딩할 수 있는
-값과 `format` 같은 named argument를 전달한다. nil이면 prefix만 인코딩한다.
-호출자의 map을 바꾸지 않으며 `prefix` key로 선택한 명령을 덮어쓰는 입력은
-거절한다. Bulk 입력은 반환한 `Command.Input`에 지정한다. 인자 schema·권한은
-서버가 검증하고 호출 경로는 `MonCommand`·`MgrCommand`·Tell 중에서 선택한다.
-JSON 인코딩 실패는 네트워크 호출 전에 원인 오류와 함께 반환한다.
-20.2.4의 Linux arm64·IPv6·aes256k 및 Darwin arm64·IPv4·aes/race에서
-MON/MGR의 string·integer·boolean·array 인자 호출과 Unicode/NUL 문자열,
-별도의 binary bulk 입력을 실서버로 검증했다.
+호출자는 exact client identity와 선택한 base64 CephX key를 전달한다.
+`ParseKey`는 인증 credential codec이며 keyring 텍스트·설정 파일 선택은 사용
+레이어가 처리한다. `Command.JSON`에는 준비한 Ceph command object를 넣고
+`Command.Input`에는 별도의 bulk bytes를 지정한다. 라이브러리는 object·prefix
+형식과 송신 크기를 검사하며 명령별 인자 schema는 해석하지 않는다.
 
 `MgrCommand`는 active MGR에 별도로 인증해 명령을 보낸다. 예를 들어
 `{"prefix":"pg stat","format":"json"}`을 사용할 수 있다. MON/MGR 경로는
@@ -136,62 +125,26 @@ nonce·scope·flow도 보존한다. 주 client의 global ID·ticket·MON/MGR 연
 아니지만, 전송 후 응답을 받지 못하면 `OutcomeUnknownError`를 보존한다.
 Watch 큐 overflow·명령 슬롯 대기·잘못된 Options 값은 별도 오류다.
 
-## 명령 목록과 인자
+## Raw 명령 catalog
 
-`MonCommandDescriptions(ctx)`와 `MgrCommandDescriptions(ctx)`는 현재 MON 또는
-active MGR의 관리 명령 설명을 조회한다. 호출마다 서버에 요청하며 캐시하지 않는다.
+명령 목록도 일반 raw 명령으로 조회한다. 경로는 호출자가 선택하고 성공 출력의
+JSON 해석은 사용 레이어에서 수행한다.
 
 ```go
-catalog, err := client.MonCommandDescriptions(ctx)
-if err != nil {
-    return err // catalog.Result에는 받은 raw 응답과 서버 code·message가 남는다.
-}
-for _, command := range catalog.Commands {
-    fmt.Printf("%s: %s (%s)\n", command.Prefix, command.Help, command.Permission)
-    for _, part := range command.Signature {
-        if part.Argument != nil {
-            fmt.Printf("  %s: %s\n", part.Argument.Name, part.Argument.Type)
-        }
-    }
-}
+result, err := client.MonCommand(ctx, cephmsgr.Command{
+    JSON: []byte(`{"prefix":"get_command_descriptions","format":"json"}`),
+})
+// result.Data·Code·Message를 사용 레이어에 그대로 전달한다.
 ```
 
-`CommandDescription`은 원본 ID, prefix, 순서가 있는 signature, 도움말,
-module, permission, flags와 raw JSON을 보존한다. 인자의 `Attributes`에는
-name·type을 포함한 원래 JSON 속성이 들어간다. `req`, `n`, `range`, `strings`
-등을 임의로 숫자·배열로 바꾸지 않는다. 현재 서버의 `req="fasle"` 오타도
-그대로 남는다. 같은 prefix의 여러 signature를 모두 반환하며 ID는 조회 시점의
-열거 순번이므로 영구 식별자로 사용하지 않는다. 반환값은 호출자가 소유한다.
-
-MON 목록에는 MGR로 전달하는 명령도 포함된다. `CommandFlagManager`·
-`CommandFlagPoll` 등은 서버 metadata이며 실행 경로를 자동 선택하지 않는다.
-Direct MGR 목록의 flags는 현재 Tentacle formatter에서 모두 0이다. 목록에
-명령이 있다는 사실은 실행 권한이나 해당 모듈의 활성화를 보장하지 않는다.
-Tell의 daemon-local admin 명령 목록과도 구분한다.
-
-`MonTellDescriptions(ctx)`, `MgrTellDescriptions(ctx)`,
-`MonTellToDescriptions(ctx, name)`는 각각 현재 MON, active MGR,
-정확한 bare name의 MON에서 daemon-local admin 명령 설명을 받는다.
-같은 반환 모델을 쓰지만 이 schema에는 module·permission·flags가 없으므로
-해당 값이 비어 있다는 사실을 무권한이나 실행 허가로 해석하지 않는다.
-원본 JSON은 field 부재를 유지한다. 인자의 `req`·`positional`은 admin formatter가
-항상 현재 feature 집합을 사용하므로 JSON boolean으로 반환된다.
-이름 지정 조회는 `MonTellTo`의 독립 admission과 context·연결 정리를 사용한다.
-Linux arm64·IPv6·aes256k 및 Darwin arm64·IPv4·aes/race의 실제 20.2.4에서
-MON 52개·MGR 45개의 모든 raw 설명이 native CLI 결과와 일치했다. 현재 MON과
-이름 지정 MON, active MGR에서 조회한 `version` 명령 실행도 검증했다.
-
-조회는 일반 명령과 같은 context·슬롯·raw 오류 계약을 따른다. 서버가 성공
-응답을 보낸 뒤 JSON 설명 해석에 실패하면 받은 `Result`와
-`ErrInvalidCommandDescriptions`를 감싼 로컬 해석 오류를 돌려준다. 그 오류로
-공유 세션을 종료하거나 명령을 자동 재실행하지 않는다.
+같은 payload를 `MgrCommand`·`MonTell`·`MgrTell`·`MonTellTo`에 전달할 수 있다.
+MON/MGR 관리 catalog와 daemon-local admin catalog는 서로 다른 application
+schema다. Catalog가 실행 경로·권한·모듈 활성화를 보장하지 않으며 해당 의미를
+이 라이브러리에서 해석하지 않는다. 성공 응답은 JSON이 아니어도 그대로 반환한다.
 
 20.2.4의 Linux arm64·IPv6·aes256k와 Darwin arm64·IPv4·aes/race 구성에서
-MON 984개·MGR 663개의 전체 descriptor를 독립 native librados 결과와
-대조했다. `req`·`positional`의 연결 feature별 표현 차이만 비교용 복사본에서
-구분했으며 raw 응답은 수정하지 않았다. 조회한 MON/MGR 명령 실행과
-MGR 교체 후 새 active MGR의 목록 재조회도 통과했다. 개수는 fixture 구성의
-관찰값이며 다른 클러스터의 고정 개수가 아니다.
+raw 관리 catalog 및 daemon-local catalog를 독립 native client·CLI 출력과 대조했다.
+비교용 JSON 해석은 시험 코드에만 두고 제품의 raw 응답은 변경하지 않는다.
 
 ## MON 로그
 
