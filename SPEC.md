@@ -104,10 +104,21 @@ feature 접속 거부, 인증 갱신, 동시 호출, 취소와 종료도 검사�
 fixture 구성에서 성공한 결과를 일반 CRUSH 설정이나 완전한 RADOS 지원으로
 표시하지 않는다. 제품 코드에는 Ceph CLI·librados 의존성을 넣지 않는다.
 
+후속 통신 구현은 OSD가 stale epoch 요청 등에 응답해 보내는 `MOSDMap`을
+bounded FIFO로 전달한다. 현재 Tentacle feature 협상의 v1 및 current v4
+envelope에서 FSID·trim/latest epoch·ordered full/incremental blob·원본 front를
+보존한다. 내포한 지도는 opaque bytes이며 CRUSH·OSDMap 적용과 target 선택은
+사용 계층의 책임이다. MON subscription이나 OSD feature 광고를 추가하지 않는다.
+큐 손실이 incremental chain을 깨뜨리지 않도록 overflow는 OSD 세션을 실패시키고
+이미 접수한 지도는 첫 terminal cause보다 먼저 전달한다. Context는 map의
+로컬 수신 대기만 취소한다. 지도 수신을 요청 완료나 자동 재실행의 근거로 삼지 않는다.
+
 참조: [OSD 연결 정책](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/ceph_osd.cc#L598),
 [OSDMap 기능 요건](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/OSDMap.cc#L1754),
 [MOSDOp](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MOSDOp.h),
-[MOSDOpReply](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MOSDOpReply.h).
+[MOSDOpReply](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MOSDOpReply.h),
+[MOSDMap envelope·peer feature 재인코딩](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MOSDMap.h#L106),
+[OSD map 전달](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/OSD.cc#L7555).
 고정 소스의 LGPL-2.1 고지를 확인하며 C++ 코드를 복사하지 않고 wire 의미를
 독립적인 Go 구현으로 작성한다. 이 절은 목표이며 검증된 지원 목록은 아니다.
 

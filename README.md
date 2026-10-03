@@ -21,7 +21,7 @@ OSD stat/read 통신 기초를 구현한다.
 | MON/MGR 발견·세션·복구·요청별 context | 운영 작업과 재시도 정책 |
 | caller가 준비한 raw JSON·bulk 입력 송신, 원본 응답·오류 반환 | 명령 JSON 구성·schema 검증·응답 JSON 해석·typed 관리 API |
 | MonMap·MgrMap·log·config·digest wire codec과 수신 | 설정 적용·모듈 정책·서비스 URI 사용 |
-| OSD service ticket·명시적 연결·bounded stat/read wire 요청과 응답 | OSDMap·객체 hash·CRUSH 배치·대상 선택·재시도·고수준 객체 API |
+| OSD service ticket·명시적 연결·bounded stat/read 요청·응답·raw OSDMap 수신 | 내포한 OSDMap 해석·적용·객체 hash·CRUSH 배치·대상 선택·재시도·고수준 객체 API |
 
 지도에 실린 module metadata·option·activation policy·service URI는 받은 값을
 보존한다. 실행 모듈 계산, 설정 적용과 서비스 접속은 사용 레이어가 맡는다.
@@ -181,8 +181,31 @@ OSD 연결은 lossy session이며 전송한 요청을 재실행하지 않는다.
 취소·단절·손상된 응답에는 `OutcomeUnknownError`를 보존한다. Messenger ACK는
 객체 요청 완료가 아니다. Redirect는 `ErrOSDRedirect`와 원본 metadata를
 반환하고 따라가지 않는다. 연결 실패나 client global ID 변경 후에는 handle을
-닫고 사용 레이어가 새 연결 여부를 결정한다. OSDMap·backoff control 메시지는
-이 단계에 구현하지 않았으며 수신하면 세션을 명시적으로 실패시킨다.
+닫고 사용 레이어가 새 연결 여부를 결정한다. OSDMap 메시지는 다음의 raw
+지도 큐로 전달한다. Backoff 등 다른 미지원 control 메시지는 수신하면 세션을
+명시적으로 실패시킨다.
+
+`OSDConnection.NextMap(ctx)`는 그 연결에서 받은 다음 `OSDMapBatch`를 반환한다.
+FSID·encoding version·trim/latest epoch와 `FullMaps`·`IncrementalMaps`의
+epoch·원본 bytes 및 `RawFront`를 보존한다. 내포한 지도의 해석·FSID 검증·적용,
+기준 full map 확보, 배치와 새 요청의 epoch 결정은 사용 레이어가 처리한다.
+라이브러리는 MON에 OSDMap을 구독하거나 map을 적용·요청·재실행하지 않는다.
+
+Tentacle도 현재 기능 협상에서는 envelope v1을 선택할 수 있으며 이 경우
+trim/latest epoch는 wire에 없으므로 둘 다 0이다. `NewestMap`은 서버가 광고한
+값으로, 전달한 마지막 blob이나 이 라이브러리가 적용한 epoch를 의미하지 않는다.
+Current v4 envelope의 obsolete removed-snapshot map은 빈 count만 지원한다.
+
+지도 큐는 OSD 연결별 FIFO다. Incremental chain을 버리거나 full map으로
+합치지 않는다. `MaxBufferedOSDMapBytes`는 기본 `MaxFrameSize`, 1 KiB–1 GiB이며
+보수적으로 batch당 512 bytes·원본 front·blob당 64 bytes를 계산한다. 최대 64개
+batch, envelope당 full/incremental 합계 최대 4,096 blobs를 허용한다. 한도 초과는
+`ErrOSDMapOverflow`로 해당 OSD 세션을 실패시키며 전송 중 요청의 결과 불명확
+계약을 유지한다. 따라서 지도 큐를 소비하지 않는 사용에도 이 한도가 적용된다.
+이미 접수한 batch는 종료·실패 후에도 먼저 drain하고 처음 기록된 원인을 반환한다.
+`NextMap`의 context 취소는 그 대기만 끝내며 이미 취소된 context는 큐를 소비하지 않는다.
+동시 호출은 각각 batch를 한 번만 받는다. 서버가 항상 모든 history를 보내는
+것은 아니므로 raw 전달 자체를 lossless 구독이나 완전한 지도 chain으로 보지 않는다.
 
 MON의 CRUSH admission 예외는 OSD에 적용하지 않는다. 구현하지 않은 필수
 feature는 `ErrUnsupportedFeatures`로 거부한다. 현재 실제 검증은 legacy CRUSH,
@@ -198,6 +221,13 @@ Partial·EOF·ENOENT, 8개 동시 요청, OSD ticket 갱신 후 재접속, 종�
 CRUSH 필수 feature의 접속 거부를 검증했다. 합성 peer는 전송 후 취소·늦은
 응답·공유 handle·연결 상한·transaction ID·setup 정리 경합을 별도로 검증한다.
 Windows OSD 상호운용과 OSD IPv6는 아직 검증하지 않았다.
+
+Raw OSDMap은 같은 20.2.4의 Darwin arm64·IPv4 host relay·aes256k
+secure/CRC와 Linux arm64·IPv4 container·aes secure에서 각각 실제 전체·증분
+지도 10개를 받아 native decoder의 FSID·epoch와 협상 feature의 native
+재인코딩 bytes를 대조했다. 지도 수신 뒤 명시적인 현재
+epoch 읽기도 성공했다. fixture는 객체 생성 이전 epoch 5에서만 history를 trim해
+full-map 응답을 검증하며, 지도 적용·배치 지원의 근거로 사용하지 않는다.
 
 재현은 disposable memstore OSD 하나와 테스트용 pool을 만드는 opt-in profile이다.
 Native `rados`·librados stat2 oracle은 개발 fixture 안에서만 사용한다.
@@ -1570,5 +1600,10 @@ python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
   않는다.
   LGPL-2.1 고지를 확인했고 C++ 코드는 포함하지 않았다. 실제 OSD의 위치·
   응답 의미는 별도 native client oracle과 실서버 통신으로 검증한다.
+- [OSDMap envelope fixture](internal/maps/testdata/osd-message/README.md)는
+  독립 구성한 v1/v4 입력을 고정 Tentacle의 native message decoder로 검증했다.
+  실제 OSD가 보낸 내포 full/incremental blob은 별도 native class decoder와
+  현재 fixture의 협상 feature encoder로 대조한다. 내포 지도 codec을 제품에
+  구현했다는 의미가 아니다.
 - Synthetic peer 테스트는 취소·오류·경합을 검증하는 용도이며 실제 Ceph
   상호운용 시험을 대신하지 않는다.
