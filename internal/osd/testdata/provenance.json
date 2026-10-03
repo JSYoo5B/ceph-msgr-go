@@ -1,0 +1,44 @@
+{
+  "ceph_version": "20.2.4",
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "features": 3026423347916342070,
+  "fixtures": {
+    "request-v6": {
+      "type": 42,
+      "version": 6,
+      "compat": 3,
+      "front_bytes": 248,
+      "data_bytes": 0,
+      "native_envelope_sha256": "400eff6992179c29205b07e6cd1f0ff1554deba3cf9ac484c1a7676ee6e983a3",
+      "summary": "osd_op(client.123.1:77 7.11223344 7:22cc4488:tenant:route-key:osd-codec:head [stat,read 2~4] snapc 0=[] ondisk+read+returnvec e11)"
+    },
+    "reply-v6-success": {
+      "type": 43,
+      "version": 6,
+      "compat": 2,
+      "front_bytes": 242,
+      "data_bytes": 20,
+      "native_envelope_sha256": "dc831a27b9041b4328e2fe4711f28dc7bb6a15643da71f76d056ce1ca5a3902e",
+      "summary": "osd_op_reply(77 osd-codec [stat out=16b,read 2~4 out=4b] v11'20 uv19 ondisk = 0)"
+    },
+    "reply-v6-enoent": {
+      "type": 43,
+      "version": 6,
+      "compat": 2,
+      "front_bytes": 242,
+      "data_bytes": 0,
+      "native_envelope_sha256": "3d973c0aa99eef26f5557a4c3120358dd5e837ba35ae5d659d51fc015546d693",
+      "summary": "osd_op_reply(77 osd-codec [stat,read 2~0] v11'20 uv19 ondisk = -2 ((2) No such file or directory))"
+    },
+    "reply-v6-redirect": {
+      "type": 43,
+      "version": 6,
+      "compat": 2,
+      "front_bytes": 267,
+      "data_bytes": 0,
+      "native_envelope_sha256": "10cd62dfd75083aba4e538d228184a5971b0325675d926bac5afb00564f4e3ed",
+      "summary": "osd_op_reply(77 osd-codec [stat,read 2~0] v11'20 uv19 ondisk = 0 redirect: { object next-object, locator{@9;tenant:redirect} })"
+    }
+  }
+}
