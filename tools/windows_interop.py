@@ -6,9 +6,11 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 
 import go_test_annotations
@@ -123,6 +125,22 @@ def new_evidence_directory(base):
     return Path(tempfile.mkdtemp(prefix="run-", dir=base))
 
 
+def wait_for_holder(holder, output, timeout=30):
+    deadline = time.monotonic() + timeout
+    while not (output / "holder.ready").exists():
+        if holder.poll() is not None or time.monotonic() >= deadline:
+            raise RuntimeError("foreground WSL session did not become ready")
+        time.sleep(0.1)
+
+
+def check_relay(proxy):
+    host, port = proxy_endpoint(proxy).rsplit(":", 1)
+    with socket.create_connection((host, int(port)), timeout=5) as connection:
+        connection.sendall((33300).to_bytes(2, "big"))
+        if connection.recv(1) != b"\x00":
+            raise RuntimeError("Windows relay did not reach the fixture MON listener")
+
+
 def run(distro, diagnostics):
     project = Path(__file__).resolve().parent.parent
     diagnostics = diagnostics.resolve()
@@ -152,6 +170,8 @@ def run(distro, diagnostics):
     # --exec preserves argv: a default shell consumes Windows backslashes.
     wsl = ["wsl.exe", "--distribution", distro, "--user", "root", "--exec"]
     attempted = False
+    holder = None
+    holder_output = None
     report = {"revision": revision, "go": version, "host": host,
               "ceph": "20.2.4", "credential": "aes256k", "service_cipher": "aes256k",
               "connection_mode": "secure", "wire_family": "IPv4", "transport": "WSL loopback relay",
@@ -173,11 +193,17 @@ def run(distro, diagnostics):
         def fixture_action(action, timeout=60):
             return execute(wsl + ["bash", fixture, action, output, target], timeout=timeout)
 
+        holder_output = (diagnostics / "holder.log").open("w", encoding="utf-8")
+        holder = subprocess.Popen(wsl + ["bash", fixture, "hold", output, target],
+                                  cwd=project, env=env, stdout=holder_output, stderr=subprocess.STDOUT)
+        wait_for_holder(holder, out)
         attempted = True
         fixture_action("start", timeout=900)
         report["daemon_version"] = (out / "daemon-version").read_text(encoding="utf-8").strip()
         report["fixture_image"] = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
         proxy = proxy_endpoint((out / "proxy").read_text(encoding="utf-8"))
+        check_relay(proxy)
+        report["windows_relay_admission"] = True
         env.update(CEPH_MSGR_MONITORS="127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302",
                    CEPH_MSGR_KEY_FILE=str(out / "key"), CEPH_MSGR_IDENTITY="client.test",
                    CEPH_MSGR_FSID="80bbab73-69c1-4a0c-a746-4271357750b8",
@@ -214,18 +240,27 @@ def run(distro, diagnostics):
                 print("Could not collect fixture diagnostics: " + str(error), file=sys.stderr)
         raise
     finally:
-        if attempted:
+        try:
             try:
-                fixture_action("stop")
-            except BaseException as error:
-                marker = out / "container-name"
-                (diagnostics / "cleanup-failure.json").write_text(json.dumps({
-                    "distro": distro, "fixture_output": str(out),
-                    "container": marker.read_text(encoding="utf-8").strip() if marker.exists() else None,
-                    "error": str(error),
-                }, indent=2) + "\n", encoding="utf-8")
-                # Keep the ownership handle for the caller to complete cleanup.
-                raise
+                if attempted:
+                    fixture_action("stop")
+            finally:
+                if holder is not None:
+                    (out / "holder.stop").touch()
+                    if holder.wait(timeout=30) != 0:
+                        raise RuntimeError("foreground WSL session did not finish successfully")
+                if holder_output is not None:
+                    holder_output.close()
+        except BaseException as error:
+            marker = out / "container-name"
+            (diagnostics / "cleanup-failure.json").write_text(json.dumps({
+                "distro": distro, "fixture_output": str(out),
+                "container": marker.read_text(encoding="utf-8").strip() if marker.exists() else None,
+                "holder_pid": holder.pid if holder is not None else None,
+                "error": str(error),
+            }, indent=2) + "\n", encoding="utf-8")
+            # Keep the ownership handle for the caller to complete cleanup.
+            raise
         shutil.rmtree(out)
     report["cleanup_complete"] = True
     (diagnostics / "verification.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

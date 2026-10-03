@@ -4,11 +4,11 @@
 set -eu
 
 if test "$#" -lt 2 || test "$#" -gt 3; then
-    echo 'usage: windows-fixture.sh start|diagnostics|stop OUTPUT_PATH [DIAGNOSTICS_PATH]' >&2
+    echo 'usage: windows-fixture.sh start|hold|diagnostics|stop OUTPUT_PATH [DIAGNOSTICS_PATH]' >&2
     exit 2
 fi
 action=$1
-case "$action" in start|diagnostics|stop) ;; *) exit 2 ;; esac
+case "$action" in start|hold|diagnostics|stop) ;; *) exit 2 ;; esac
 test -d "$2" || { echo 'fixture output directory does not exist' >&2; exit 2; }
 out=$(CDPATH= cd -- "$2" && pwd)
 project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -33,6 +33,17 @@ require_owned_container() {
 }
 
 case "$action" in
+    hold)
+        # A foreground WSL command owns this session while Windows tests run.
+        # Docker's systemd service alone does not keep the distribution alive.
+        touch "$out/holder.ready"
+        deadline=$(($(date +%s) + 1800))
+        while ! test -f "$out/holder.stop"; do
+            test "$(date +%s)" -lt "$deadline" || { echo 'WSL session lifetime exceeded' >&2; exit 1; }
+            sleep 1
+        done
+        exit 0
+        ;;
     stop)
         if read_container; then
             # A failed Docker query is not proof that the owned container left.
