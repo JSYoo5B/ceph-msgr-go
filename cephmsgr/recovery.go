@@ -100,11 +100,15 @@ func (c *Client) rejectAuthentication(err error) {
 	c.monReady = false
 	c.mgr = nil
 	configWatch, logWatch := c.configWatch, c.logWatch
+	digestWatch := c.digestWatch
 	if configWatch != nil && !configWatch.stopLocked(err) {
 		configWatch = nil
 	}
 	if logWatch != nil && !logWatch.stopLocked(err) {
 		logWatch = nil
+	}
+	if digestWatch != nil && !digestWatch.stopLocked(err) {
+		digestWatch = nil
 	}
 	all := make([]*session.Session, 0, len(c.sessions))
 	for s := range c.sessions {
@@ -120,6 +124,9 @@ func (c *Client) rejectAuthentication(err error) {
 	}
 	if logWatch != nil {
 		logWatch.cancel()
+	}
+	if digestWatch != nil {
+		digestWatch.cancel()
 	}
 	for _, s := range all {
 		// Session.Fail preserves uncertainty for requests whose transmission
