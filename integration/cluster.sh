@@ -362,6 +362,17 @@ while true; do
         timeout 15 python3 /out/command_oracle.py "$root" /out "$request_id" "$label"
         touch "/out/command-descriptions-verify.$request_id"
     fi
+    if test -f /out/verify-hostname-config; then
+        test "$config_fixture" = 1 || exit 2
+        read -r request_id label extra < /out/verify-hostname-config
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 || exit 2
+        case "$label" in initial|subscriptions|reopen|changed|renewal|learned|restored) ;; *) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/verify-hostname-config
+        timeout 30 python3 /out/hostname_config_oracle.py "$root" /out "$request_id" "$label"
+        touch "/out/hostname-config-verify.$request_id"
+    fi
     if test -f /out/verify-config; then
         test "$config_fixture" = 1 || exit 2
         read -r request_id identity label extra < /out/verify-config
