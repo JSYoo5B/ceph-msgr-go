@@ -42,6 +42,7 @@ type Client struct {
 	logWatch    *LogStream
 	configWatch *ConfigStream
 	digestWatch *DigestStream
+	osdMapWatch *OSDMapStream
 	osds        map[int32]*OSDConnection
 	osdNext     atomic.Uint64
 }
@@ -313,6 +314,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		var candidateEpoch uint32
 		var s *session.Session
 		s = session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
+			if m.Type == msgr.OSDMapMessage {
+				if !verifiedMon {
+					return nil
+				}
+				return c.handleMonOSDMap(s, m)
+			}
 			if m.Type == msgr.MgrDigestMessage {
 				if !verifiedMon {
 					return nil
@@ -380,6 +387,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			c.stopLogForFailedSession(s, err)
 			c.stopConfigForFailedSession(s, err)
 			c.stopDigestForFailedSession(s, err)
+			c.stopOSDMapForFailedSession(s, err)
 			c.mu.Lock()
 			if c.mon == s {
 				wasReady := c.monReady
@@ -392,6 +400,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				}
 				if c.digestWatch != nil {
 					c.digestWatch.source = nil
+				}
+				if c.osdMapWatch != nil {
+					c.osdMapWatch.source = nil
 				}
 				c.signal()
 				if wasReady {
@@ -407,6 +418,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			c.stopLogForFailedSession(old, old.Err())
 			c.stopConfigForFailedSession(old, old.Err())
 			c.stopDigestForFailedSession(old, old.Err())
+			c.stopOSDMapForFailedSession(old, old.Err())
 		}
 		c.mu.Lock()
 		c.mon, c.monReady = s, false
@@ -425,6 +437,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			// Resubscribe even if the worker misses a failed candidate and
 			// observes only restoration of the same admitted MON session.
 			c.digestWatch.source = nil
+		}
+		if c.osdMapWatch != nil {
+			c.osdMapWatch.source = nil
 		}
 		attached := c.attach(s)
 		c.signal()
@@ -745,6 +760,7 @@ func (c *Client) Close() error {
 		c.stopLogForFailedSession(source, err)
 		c.stopConfigForFailedSession(source, err)
 		c.stopDigestForFailedSession(source, err)
+		c.stopOSDMapForFailedSession(source, err)
 	}
 	c.mu.Lock()
 	if c.closed {
@@ -755,6 +771,7 @@ func (c *Client) Close() error {
 	c.closed = true
 	configWatch, logWatch := c.configWatch, c.logWatch
 	digestWatch := c.digestWatch
+	osdMapWatch := c.osdMapWatch
 	if configWatch != nil {
 		configWatch.stopLocked(ErrClosed)
 	}
@@ -763,6 +780,9 @@ func (c *Client) Close() error {
 	}
 	if digestWatch != nil {
 		digestWatch.stopLocked(ErrClosed)
+	}
+	if osdMapWatch != nil {
+		osdMapWatch.stopLocked(ErrClosed)
 	}
 	c.signal()
 	all := make([]*session.Session, 0, len(c.sessions))
@@ -779,6 +799,9 @@ func (c *Client) Close() error {
 	}
 	if digestWatch != nil {
 		digestWatch.cancel()
+	}
+	if osdMapWatch != nil {
+		osdMapWatch.cancel()
 	}
 	for _, s := range all {
 		s.Fail(ErrClosed)
