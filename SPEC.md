@@ -144,6 +144,10 @@ Load 가능 보고를 실행 중 상태·명령 권한으로 바꾸지 않는다
 `ManagerModule.Options`는 option map key와 `ManagerModuleOption`의 이름,
 원문 uint8 Type·Level과 uint32 Flags, 기본값·범위·설명·enum·tag·관련 옵션을
 보존한다. 중첩 map과 slice를 독립 복사하고 설정값을 검증하거나 적용하지 않는다.
+`ManagerState.AlwaysOnModules`는 raw uint32 release 코드별 상시 활성화 정책을,
+`ForceDisabledModules`는 서버가 강제 비활성화한 set을 같은 epoch에서 보존한다.
+중첩 목록을 독립 복사하며 현재 실행 set이나 적용 release를 추측하지 않는다.
+이전 release 코드가 Tentacle metadata에 있다는 것은 이전 계열 지원이 아니다.
 `ManagerState.Services`는 같은 지도의 active module 이름 → raw URI map을
 독립 복사한다. URL 파싱·HTTP 접속·준비 상태·권한 확인은 수행하지 않는다.
 로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
@@ -206,6 +210,14 @@ ModuleInfo v2의 option map은 [ModuleOption v1](https://github.com/ceph/ceph/bl
 그대로 유지한다. Native formatter의 unknown은 원래 코드를 복구할 수 없어
 oracle에서 추측하지 않는다. 전체 schema와 active 전환, 중첩 소유권을 비교하고
 실제 설정값이 바뀌어도 보고된 기본값과 구분되는지 검증한다.
+
+상시 활성화·강제 비활성화 정책은 같은 MgrMap v8·v14 tail의 wire 의미를
+독립 구현한다. Release 코드와 set의 문자열을 보존하며 blocklist client 주소·
+기능 비트·OSD epoch·flags는 공개 기능으로 추가하지 않는다. 같은 epoch의 native
+`mgr dump`와 비교하고 두 모듈의 강제 비활성화·MGR 전환·재활성화를 검증한다.
+Oracle은 반복되는 `module` object key를 모두 보존하며 release 이름만 고정
+[release 코드](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/ceph_releases.h#L13)로
+되돌린다. 일반 LGPL-2.1 또는 LGPL-3 고지를 확인했으며 C++ 코드를 복사하지 않는다.
 
 서비스 URI는 같은 MgrMap의 raw map을 독립 구현한다. 고정
 [active beacon 반영](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMonitor.cc#L515)과

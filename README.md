@@ -447,6 +447,21 @@ MGR이 보고한 `ManagerModule{Name, CanRun, ErrorString}` 목록이다. `CanRu
 재활성화와 active MGR 전환 뒤에도 전체 목록과 로딩 실패 원인이 일치했다.
 이 조회에서도 제품의 MGR 접속은 발생하지 않았다.
 
+`Manager.AlwaysOnModules`는 MgrMap의 release 코드 → 상시 활성화 모듈 목록을
+`map[uint32][]string`으로 보존한다. `Manager.ForceDisabledModules`는 상시 활성화
+모듈 중 서버 설정으로 강제 비활성화한 목록이다. 명시적인 `EnabledModules`와
+구분하며 현재 실행 목록이나 특정 release에 적용할 합집합을 계산하지 않는다.
+Tentacle 지도가 포함한 이전 release 코드도 원본 metadata로 유지하며 해당
+Ceph 계열에 접속하는 기능을 추가하지 않는다. 두 값은 같은 `MapEpoch`에서
+조회하고, 중첩 slice도 호출자가 소유하며 새 지도는 전체 정책을 교체한다.
+`WaitMgrMap`으로 정책 변경을 기다릴 수 있고 Close 후 마지막 값을 유지한다.
+
+Linux IPv6/aes256k와 Darwin IPv4/AES race에서 6개 release 정책과 강제
+비활성화 목록을 같은 epoch의 native `mgr dump`와 대조했다. `progress`·`status`
+두 모듈의 강제 비활성화, active MGR 전환, 재활성화에 따른 목록 삭제가 일치했다.
+Ceph formatter가 반복하는 `module` object key도 oracle에서 모두 보존했다.
+제품 조회는 별도의 MGR 접속 없이 동작했다.
+
 각 `ManagerModule.Options`는 서버가 보고한 option 이름 → `ManagerModuleOption`
 map이다. 이름, 원문 타입·level 코드와 flags, 기본값·min/max·설명, enum·tag·관련
 옵션 목록을 보존한다. 기본값과 범위는 schema metadata이며 현재 설정값이나
