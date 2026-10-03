@@ -388,13 +388,14 @@ PY
         fixture_phase=control-idle
     fi
     if test -f /out/verify-osd-maps; then
-        test "$osd_fixture" = 1 || exit 2
+        # Native blob validation also serves MON-only map acquisition; no OSD
+        # daemon or object fixture is required to receive the MON's raw maps.
         read -r request_id label extra < /out/verify-osd-maps
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 && test "$label" = received && test -z "$extra" || exit 2
         rm /out/verify-osd-maps
         fixture_phase=verify-osd-map-oracle
-        timeout 30 python3 /out/osd_map_oracle.py /out
+        timeout 30 python3 /out/osd_map_oracle.py /out 2>> "$root/osd-map-control.log"
         sh /out/publish-ack.sh "/out/osd-maps-verify.$request_id"
         fixture_phase=control-idle
     fi

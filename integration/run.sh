@@ -87,7 +87,7 @@ if test "$osd_fixture" = 1; then
     test "$expire_tickets" = 0 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 && test -z "$mode_rejection" && test -z "${CEPH_MSGR_STRESS_DURATION:-}" || exit 2
     # OSD topology and object preparation are isolated from the empty-cluster
     # management fixtures. Select actual object communication tests explicitly.
-    test_run=${CEPH_MSGR_TEST_RUN:-'^TestCephOSD.*Integration$'}
+    test_run=${CEPH_MSGR_TEST_RUN:-'^TestCeph(OSD|MonOSDMaps).*Integration$'}
 fi
 case "$ip_family" in
     4) monitors=127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302 ;;
