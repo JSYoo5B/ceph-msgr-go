@@ -37,14 +37,27 @@ defer client.Close()
 
 ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 defer cancel()
-result, err := client.MonCommand(ctx, cephmsgr.Command{
-    JSON: json.RawMessage(`{"prefix":"status","format":"json"}`),
-})
+command, err := cephmsgr.NewCommand("status", map[string]any{"format": "json"})
+if err != nil {
+    return err
+}
+result, err := client.MonCommand(ctx, command)
 if err != nil {
     return err
 }
 fmt.Printf("%s\n", result.Data)
 ```
+
+`NewCommand(prefix, arguments)`는 Go 값으로 JSON 명령을 구성한다.
+`arguments`에는 string, integer, boolean, array 등 JSON으로 인코딩할 수 있는
+값과 `format` 같은 named argument를 전달한다. nil이면 prefix만 인코딩한다.
+호출자의 map을 바꾸지 않으며 `prefix` key로 선택한 명령을 덮어쓰는 입력은
+거절한다. Bulk 입력은 반환한 `Command.Input`에 지정한다. 인자 schema·권한은
+서버가 검증하고 호출 경로는 `MonCommand`·`MgrCommand`·Tell 중에서 선택한다.
+JSON 인코딩 실패는 네트워크 호출 전에 원인 오류와 함께 반환한다.
+20.2.4의 Linux arm64·IPv6·aes256k 및 Darwin arm64·IPv4·aes/race에서
+MON/MGR의 string·integer·boolean·array 인자 호출과 Unicode/NUL 문자열,
+별도의 binary bulk 입력을 실서버로 검증했다.
 
 `MgrCommand`는 active MGR에 별도로 인증해 명령을 보낸다. 예를 들어
 `{"prefix":"pg stat","format":"json"}`을 사용할 수 있다. MON/MGR 경로는

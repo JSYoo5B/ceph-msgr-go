@@ -124,7 +124,7 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 
 ## Go API 설계 기준
 
-공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
+공개 API는 `ParseKey`, `NewCommand`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
 `MonCommandDescriptions`, `MgrCommandDescriptions`, `MonTellDescriptions`,
 `MonTellToDescriptions`, `MgrTellDescriptions`, `WaitMonReady`, `WaitMgrReady`,
 `WatchLogs`, `WatchConfig`, `Snapshot`, `Close`를 중심으로 한다.
@@ -137,6 +137,7 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 전달한다. 하나의 unread 전체 map을 후속 map으로 교체하며 caller가 소유한다.
 go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
+- `NewCommand(prefix, arguments)`는 Go named arguments를 표준 JSON으로 인코딩하며 호출자의 map과 원문 prefix를 보존한다. 선택한 prefix의 덮어쓰기는 거부하고, 인자 schema·권한·전송 경로를 추측하거나 bulk 입력을 JSON에 넣지 않는다.
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
 - `MonCommandDescriptions(ctx)`와 `MgrCommandDescriptions(ctx)`는 현재 서버의 관리 명령 metadata를 새로 조회한다. 같은 prefix의 여러 signature와 원본 ID·flags·JSON 속성을 보존하며 prefix로 중복 제거하거나 실행 경로·권한·모듈 활성화를 추측하지 않는다. 원본 `Result`를 유지하고 성공 응답의 JSON 해석 실패는 세션 실패나 결과 불명확으로 바꾸지 않는다.
