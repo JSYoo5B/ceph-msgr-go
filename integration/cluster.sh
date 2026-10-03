@@ -224,6 +224,11 @@ ceph-authtool "$keyring" -n client.test --print-key > /out/key
 ceph-authtool "$keyring" -n client.readonly --print-key > /out/readonly.key
 ceph-authtool "$keyring" -n client.revocable --print-key > /out/revocable.key
 if test "$config_fixture" = 1; then
+    # Native server text writers provide a multi-identity keyring independently
+    # of the Go parser. Keep these disposable credentials out of diagnostics.
+    timeout 10 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" auth get client.readonly -o /out/readonly.keyring
+    timeout 10 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" auth get client.test -o /out/admin.keyring
+    cat /out/readonly.keyring /out/admin.keyring > /out/clients.keyring
     # Private fixture credential; never include this file in diagnostics.
     ceph-authtool "$keyring" -n client.configwatch --print-key > /out/configwatch.key
 fi
