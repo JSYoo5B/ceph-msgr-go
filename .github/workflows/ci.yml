@@ -118,6 +118,7 @@ jobs:
       - run: go test ./internal/maps -run '^$' -fuzz '^FuzzMaps$' -fuzztime=20s -parallel=2
       - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPublication$' -fuzztime=20s -parallel=2
       - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPlaintextPublication$' -fuzztime=20s -parallel=2
+      - run: go test ./internal/osd -run '^$' -fuzz '^FuzzReplyDecode$' -fuzztime=20s -parallel=2
 
   windows-ceph:
     name: Windows native Ceph 20.2.4 (aes256k, secure, IPv4 relay)
@@ -172,7 +173,7 @@ jobs:
           retention-days: 7
 
   ceph:
-    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }})
+    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -199,6 +200,10 @@ jobs:
           - { key: aes256k, service: aes256k, mode: 'crc', family: '4', stress: '', runtime: 'host' }
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host' }
           - { key: aes256k, service: aes256k, mode: 'crc', family: '6', stress: '' }
+          - { key: aes256k, service: aes256k, family: '4', stress: '', runtime: 'host', osd: '1' }
+          - { key: aes, service: aes, family: '4', stress: '', osd: '1' }
+          - { key: aes256k, service: aes256k, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1' }
+          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', osd: '1' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -206,7 +211,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.x'
-      - name: Real MON and MGR commands, errors, renewal and faults
+      - name: Real MON, MGR and opt-in OSD protocol verification
         id: ceph
         run: |
           result=0
@@ -222,6 +227,7 @@ jobs:
           CEPH_MSGR_TEST_IP_FAMILY: ${{ matrix.family }}
           CEPH_MSGR_STRESS_DURATION: ${{ matrix.stress }}
           CEPH_MSGR_TEST_MGR_COUNT: ${{ matrix.managers || '2' }}
+          CEPH_MSGR_TEST_OSD: ${{ matrix.osd || '0' }}
           CEPH_MSGR_TEST_RUNTIME: ${{ matrix.runtime || 'container' }}
           CEPH_MSGR_TEST_EXPIRE_TICKETS: ${{ matrix.expiry || '0' }}
           CEPH_MSGR_TEST_IDLE_SESSIONS: ${{ matrix.idle || '0' }}

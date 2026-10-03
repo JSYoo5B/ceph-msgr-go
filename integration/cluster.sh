@@ -24,6 +24,12 @@ if test "$connection_mode" = crc && test -n "$mode_rejection"; then
 fi
 mapped_ipv6=${CEPH_MSGR_TEST_MAPPED_IPV6:-0}
 case "$mapped_ipv6" in 0|1) ;; *) exit 2 ;; esac
+osd_fixture=${CEPH_MSGR_TEST_OSD:-0}
+case "$osd_fixture" in 0|1) ;; *) exit 2 ;; esac
+if test "$osd_fixture" = 1; then
+    test "${CEPH_MSGR_TEST_IP_FAMILY:-4}" = 4 && test "$mgr_count" = 2 || exit 2
+    test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 && test -z "$mode_rejection" && test "$mapped_ipv6" = 0 && test "${CEPH_MSGR_TEST_EXPIRE_TICKETS:-0}" = 0 && test -z "${CEPH_MSGR_STRESS_DURATION:-}" || exit 2
+fi
 if test "$mapped_ipv6" = 1; then
     test "${CEPH_MSGR_TEST_IP_FAMILY:-4}" = 6 && test "$mgr_count" = 2 || exit 2
     test "${CEPH_MSGR_TEST_RUNTIME:-container}" = container && test "${CEPH_MSGR_TEST_EXPIRE_TICKETS:-0}" = 0 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 && test -z "$mode_rejection" && test -z "${CEPH_MSGR_STRESS_DURATION:-}" || exit 2
@@ -179,6 +185,11 @@ generate_key mon. --create-keyring --cap mon 'allow *'
 generate_key client.test --cap mon 'allow *' --cap mgr 'allow *'
 generate_key client.readonly --cap mon 'allow r' --cap mgr 'allow r'
 generate_key client.revocable --cap mon 'allow *' --cap mgr 'allow *'
+if test "$osd_fixture" = 1; then
+    # Disposable consumer credentials only; product does not create caps.
+    ceph-authtool "$keyring" -n client.test --cap mon 'allow *' --cap mgr 'allow *' --cap osd 'allow *'
+    ceph-authtool "$keyring" -n client.readonly --cap mon 'allow r' --cap mgr 'allow r' --cap osd 'allow r'
+fi
 if test "$config_fixture" = 1; then
     # CephX needs a nonempty MON cap to issue its initial ticket. One exact
     # command grants no general MON read access to status/config get/mgrmap;
@@ -200,7 +211,7 @@ cleanup() {
         printf 'exit=%s phase=%s\n' "$fixture_exit" "$fixture_phase" > "$root/fixture-exit" || true
         printf 'Ceph fixture exit=%s phase=%s\n' "$fixture_exit" "$fixture_phase"
     fi
-    for name in mon.a mon.b mon.c mgr.a mgr.b; do
+    for name in mon.a mon.b mon.c mgr.a mgr.b osd.0; do
         if test -f "$root/$name.pid"; then
             kill "$(cat "$root/$name.pid")" 2>/dev/null || true
         fi
@@ -330,6 +341,10 @@ PY
     timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" log last 20 --format json > "$root/log-oracle-tail.json"
     python3 /out/log_oracle.py /out "$root/log-oracle-tail.json"
     timeout 15 python3 /out/command_oracle.py "$root" /out 0 initial
+fi
+if test "$osd_fixture" = 1; then
+    fixture_phase=osd-bootstrap
+    sh /out/osd-fixture.sh "$root"
 fi
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."

@@ -6,5 +6,11 @@ case "${CEPH_MSGR_TEST_IP_FAMILY:-4}" in
     6) upstream=::1 ;;
     *) exit 2 ;;
 esac
-/out/relay -upstream "$upstream" -ready /out/relay.ready > /out/relay.log 2>&1 &
+set --
+case "${CEPH_MSGR_TEST_OSD:-0}" in
+    0) ;;
+    1) set -- -osd ;;
+    *) exit 2 ;;
+esac
+/out/relay -upstream "$upstream" -ready /out/relay.ready "$@" > /out/relay.log 2>&1 &
 exec /out/cluster.sh

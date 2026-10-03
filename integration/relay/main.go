@@ -1,5 +1,5 @@
 // The relay is a development fixture, never a product dependency. It forwards
-// opaque TCP bytes to MON/MGR loopback ports; CephX stays end to end.
+// opaque TCP bytes to fixture loopback ports; CephX stays end to end.
 package main
 
 import (
@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-func forward(conn net.Conn, upstream string) {
+func forward(conn net.Conn, upstream string, osd bool) {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 	var header [2]byte
@@ -23,6 +23,10 @@ func forward(conn net.Conn, upstream string) {
 	port := binary.BigEndian.Uint16(header[:])
 	switch port {
 	case 33300, 33301, 33302, 36800, 36801:
+	case 36900:
+		if !osd {
+			return
+		}
 	default:
 		return
 	}
@@ -48,6 +52,7 @@ func main() {
 	listen := flag.String("listen", ":40000", "fixture listener")
 	upstream := flag.String("upstream", "127.0.0.1", "Ceph loopback address")
 	ready := flag.String("ready", "", "optional readiness file")
+	osd := flag.Bool("osd", false, "allow the opt-in OSD fixture CLIENT port")
 	flag.Parse()
 	if ip := net.ParseIP(*upstream); ip == nil || !ip.IsLoopback() {
 		log.Fatal("upstream must be loopback")
@@ -67,6 +72,6 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		go forward(conn, *upstream)
+		go forward(conn, *upstream, *osd)
 	}
 }
