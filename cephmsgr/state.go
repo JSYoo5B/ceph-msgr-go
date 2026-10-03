@@ -72,6 +72,25 @@ type ManagerModule struct {
 	Name        string
 	CanRun      bool
 	ErrorString string
+	Options     map[string]ManagerModuleOption // Reported schema, not current configured values.
+}
+
+// ManagerModuleOption preserves a module's advertised option schema. Type,
+// Level and Flags are raw metadata codes; the strings are not interpreted as
+// configured values or evidence of client permission.
+type ManagerModuleOption struct {
+	Name            string
+	Type            uint8
+	Level           uint8
+	Flags           uint32
+	DefaultValue    string
+	Min             string
+	Max             string
+	EnumAllowed     []string
+	Description     string
+	LongDescription string
+	Tags            []string
+	SeeAlso         []string
 }
 
 // TicketState exposes local renewal scheduling without keys or opaque proofs.
@@ -111,7 +130,21 @@ func (c *Client) Snapshot() State {
 	}
 	state.Manager.EnabledModules = append([]string(nil), c.mgrMap.EnabledModules...)
 	for _, module := range c.mgrMap.AvailableModules {
-		state.Manager.AvailableModules = append(state.Manager.AvailableModules, ManagerModule{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString})
+		reported := ManagerModule{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString}
+		if len(module.Options) != 0 {
+			reported.Options = make(map[string]ManagerModuleOption, len(module.Options))
+			for name, option := range module.Options {
+				reported.Options[name] = ManagerModuleOption{
+					Name: option.Name, Type: option.Type, Level: option.Level, Flags: option.Flags,
+					DefaultValue: option.DefaultValue, Min: option.Min, Max: option.Max,
+					Description: option.Description, LongDescription: option.LongDescription,
+					EnumAllowed: append([]string(nil), option.EnumAllowed...),
+					Tags:        append([]string(nil), option.Tags...),
+					SeeAlso:     append([]string(nil), option.SeeAlso...),
+				}
+			}
+		}
+		state.Manager.AvailableModules = append(state.Manager.AvailableModules, reported)
 	}
 	state.Manager.Services = make(map[string]string, len(c.mgrMap.Services))
 	for module, uri := range c.mgrMap.Services {
