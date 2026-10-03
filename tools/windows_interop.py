@@ -24,6 +24,7 @@ SUITES = {
         "TestCephSnapshotIntegration", "TestCephLogWatchIntegration",
         "TestCephConfigStreamIntegration", "TestCephDigestIntegration",
         "TestCephHostnameConfigIntegration",
+        "TestCephMonOSDMapsIntegration", "TestCephMonOSDMapsRecoveryIntegration",
     )),
     "client": ("cephmsgr", ("TestCephIntegration",)),
 }

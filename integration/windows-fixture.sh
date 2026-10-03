@@ -66,12 +66,12 @@ case "$action" in
             docker logs --tail 100 "$container" > "$diagnostics/fixture.log" 2>&1 || true
             docker inspect --format '{{json .State}}' "$container" > "$diagnostics/container-state.json"
             docker cp "$container:/tmp/ceph-msgr-test/fixture-exit" "$diagnostics/fixture-exit" > /dev/null 2>&1 || true
-            for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log; do
+            for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log osd-map-control.log; do
                 docker cp "$container:/tmp/ceph-msgr-test/$log" "$diagnostics/$log" > /dev/null 2>&1 || true
             done
         fi
         # Whitelist fixture metadata: never copy credentials or process memory.
-        for file in relay.log daemon-version tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json named-mon-b.json log-oracle.json log-oracle-sentinel.txt command-oracle-mon.json command-oracle-mgr.json command-oracle-summary.json manager-oracle.json monitor-oracle.json digest-oracle.json config-oracle.json hostname-config-oracle.json; do
+        for file in relay.log daemon-version tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json named-mon-b.json log-oracle.json log-oracle-sentinel.txt command-oracle-mon.json command-oracle-mgr.json command-oracle-summary.json manager-oracle.json monitor-oracle.json digest-oracle.json config-oracle.json hostname-config-oracle.json osd-map-native-oracle.json osd-map-manifest.json; do
             if test -f "$out/$file"; then
                 cp "$out/$file" "$diagnostics/$file"
             fi
