@@ -53,6 +53,12 @@ type ManagerState struct {
 	Standbys         []StandbyManager // Last known authenticated map members, not daemon readiness or connection targets.
 	EnabledModules   []string         // Explicit enable set, not a computed always-on or running list.
 	AvailableModules []ManagerModule  // Last active-daemon report, not session readiness or authorization.
+	// AlwaysOnModules preserves the policy's raw Ceph release codes and module
+	// names. It does not select a release or compute the running module set.
+	AlwaysOnModules map[uint32][]string
+	// ForceDisabledModules is the policy's explicit disabled set, separate from
+	// EnabledModules and the per-release always-on lists.
+	ForceDisabledModules []string
 	// Services maps module names to raw advertised URIs from this epoch's active
 	// daemon. Advertisements do not establish readiness or authorization.
 	Services map[string]string
@@ -129,6 +135,13 @@ func (c *Client) Snapshot() State {
 		state.Manager.Standbys = append(state.Manager.Standbys, StandbyManager{Name: standby.Name, GlobalID: standby.GlobalID})
 	}
 	state.Manager.EnabledModules = append([]string(nil), c.mgrMap.EnabledModules...)
+	if len(c.mgrMap.AlwaysOnModules) != 0 {
+		state.Manager.AlwaysOnModules = make(map[uint32][]string, len(c.mgrMap.AlwaysOnModules))
+		for release, modules := range c.mgrMap.AlwaysOnModules {
+			state.Manager.AlwaysOnModules[release] = append([]string(nil), modules...)
+		}
+	}
+	state.Manager.ForceDisabledModules = append([]string(nil), c.mgrMap.ForceDisabledModules...)
 	for _, module := range c.mgrMap.AvailableModules {
 		reported := ManagerModule{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString}
 		if len(module.Options) != 0 {
