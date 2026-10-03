@@ -143,11 +143,18 @@ func parseReplies(d *wire.Decoder, secret Key, old map[uint32]Ticket, now time.T
 			return nil, err
 		}
 		td := wire.NewDecoder(plain)
-		if td.U8() != 1 {
+		version := td.U8()
+		if err := td.Err(); err != nil {
+			return nil, err
+		}
+		if version != 1 {
 			return nil, wire.ErrVersion
 		}
 		key := DecodeKey(td)
 		sec, ns := td.U32(), td.U32()
+		if err := td.Err(); err != nil {
+			return nil, err
+		}
 		if ns >= 1_000_000_000 || (sec == 0 && ns == 0) {
 			return nil, ErrTicket
 		}
@@ -175,7 +182,11 @@ func parseReplies(d *wire.Decoder, secret Key, old map[uint32]Ticket, now time.T
 			}
 		}
 		bd := wire.NewDecoder(blob)
-		if bd.U8() != 1 {
+		version = bd.U8()
+		if err := bd.Err(); err != nil {
+			return nil, err
+		}
+		if version != 1 {
 			return nil, wire.ErrVersion
 		}
 		sid := bd.U64()
@@ -286,7 +297,11 @@ func (a *Authorizer) Payload(challenge []byte) ([]byte, error) {
 			return nil, err
 		}
 		d := wire.NewDecoder(plain)
-		if d.U8() != 1 {
+		version := d.U8()
+		if err := d.Err(); err != nil {
+			return nil, err
+		}
+		if version != 1 {
 			return nil, wire.ErrVersion
 		}
 		nonce := d.U64()
@@ -319,7 +334,18 @@ func (a *Authorizer) Finish(p []byte) ([]byte, error) {
 		return nil, err
 	}
 	r := wire.NewDecoder(plain)
-	if r.U8() != 2 || r.U64() != a.nonce+1 {
+	version := r.U8()
+	if err := r.Err(); err != nil {
+		return nil, err
+	}
+	if version != 2 {
+		return nil, ErrIntegrity
+	}
+	nonce := r.U64()
+	if err := r.Err(); err != nil {
+		return nil, err
+	}
+	if nonce != a.nonce+1 {
 		return nil, ErrIntegrity
 	}
 	secret := r.Bytes()
