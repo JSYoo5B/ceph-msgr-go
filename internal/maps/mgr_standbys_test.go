@@ -49,6 +49,9 @@ func TestMgrStandbysNativeLayout(t *testing.T) {
 			body.U8(1)
 			body.String("active")
 			body.Raw(tail)
+			body.U32(0) // explicit enabled modules
+			body.U32(0) // services
+			body.U32(0) // active available modules
 			front := wire.Encoder{}
 			front.Struct(14, 6, body.Data)
 			mgr, err := DecodeMgr(front.Data)

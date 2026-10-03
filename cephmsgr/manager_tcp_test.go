@@ -77,6 +77,9 @@ func TestDefaultDialerManagerLoopbackTCP(t *testing.T) {
 			mgr.U8(1)
 			mgr.String("a")
 			mgr.U32(0) // standby count
+			mgr.U32(0) // enabled modules
+			mgr.U32(0) // services
+			mgr.U32(0) // available modules
 			mgrMap := wire.Encoder{}
 			mgrMap.Struct(14, 6, mgr.Data)
 			for i := range listeners {

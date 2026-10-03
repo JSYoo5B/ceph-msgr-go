@@ -110,6 +110,9 @@ func TestRealTentacleIPv6Maps(t *testing.T) {
 	if !reflect.DeepEqual(mgr.Standbys, []Standby{{Name: "a", GlobalID: 4114}}) {
 		t.Fatal("independent MgrMap standbys", mgr.Standbys)
 	}
+	if !reflect.DeepEqual(mgr.EnabledModules, []string{"iostat", "nfs", "nvmeof"}) || mgr.AvailableModules != nil {
+		t.Fatal("independent MgrMap module metadata", mgr.EnabledModules, mgr.AvailableModules)
+	}
 }
 func TestMgrUnavailableAndActive(t *testing.T) {
 	for _, available := range []bool{false, true} {
@@ -124,6 +127,9 @@ func TestMgrUnavailableAndActive(t *testing.T) {
 		}
 		e.String("a")
 		e.U32(0) // standby map
+		e.U32(0) // explicit enabled modules
+		e.U32(0) // services
+		e.U32(0) // active available modules
 		out := wire.Encoder{}
 		out.Struct(14, 6, e.Data)
 		m, err := DecodeMgr(out.Data)

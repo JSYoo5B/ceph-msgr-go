@@ -143,13 +143,23 @@ type Standby struct {
 	GlobalID uint64
 }
 
+// ModuleInfo preserves the active daemon's advertised module capability.
+// CanRun is not a running state; runtime failures are reported through health.
+type ModuleInfo struct {
+	Name        string
+	CanRun      bool
+	ErrorString string
+}
+
 type Mgr struct {
-	Epoch     uint32
-	GlobalID  uint64
-	Available bool
-	Name      string
-	Addresses []msgr.Address
-	Standbys  []Standby
+	Epoch            uint32
+	GlobalID         uint64
+	Available        bool
+	Name             string
+	Addresses        []msgr.Address
+	Standbys         []Standby
+	EnabledModules   []string // Explicit enabled set, separate from always-on modules.
+	AvailableModules []ModuleInfo
 }
 
 func DecodeMgr(front []byte) (Mgr, error) {
@@ -182,6 +192,34 @@ func DecodeMgr(front []byte) (Mgr, error) {
 		// Struct consumes the complete envelope. Module/feature metadata in
 		// this child is outside management discovery and can be skipped.
 	}
+	n = p.Count(4, 65536)
+	if n > 0 {
+		m.EnabledModules = make([]string, 0, n)
+	}
+	for i := 0; i < n && p.Err() == nil; i++ {
+		name := p.String()
+		if p.Err() == nil {
+			m.EnabledModules = append(m.EnabledModules, name)
+		}
+	}
+	n = p.Count(8, 65536) // services: module name and URI; not exposed here
+	for i := 0; i < n && p.Err() == nil; i++ {
+		_ = p.String()
+		_ = p.String()
+	}
+	n = p.Count(15, 65536) // envelope, name/error lengths and can_run
+	if n > 0 {
+		m.AvailableModules = make([]ModuleInfo, 0, n)
+	}
+	for i := 0; i < n && p.Err() == nil; i++ {
+		_, info := p.Struct(2)
+		module := ModuleInfo{Name: info.String(), CanRun: info.Bool(), ErrorString: info.String()}
+		p.Fail(info.Err())
+		if p.Err() == nil {
+			m.AvailableModules = append(m.AvailableModules, module)
+		}
+		// Module options remain in the consumed child envelope.
+	}
 	for _, a := range all {
 		if a.Type == 2 && a.Endpoint.IsValid() {
 			m.Addresses = append(m.Addresses, a)
@@ -193,5 +231,5 @@ func DecodeMgr(front []byte) (Mgr, error) {
 	if m.Available && (m.GlobalID == 0 || len(m.Addresses) == 0) {
 		return m, errors.New("ceph: invalid active manager")
 	}
-	return m, nil // The remaining module and client metadata are not needed.
+	return m, nil // The remaining timestamps, policies and client metadata are not needed.
 }
