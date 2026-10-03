@@ -114,7 +114,8 @@ def run(distro, diagnostics):
     revision = execute(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
     version = execute(["go", "version"], capture=True).stdout.strip()
     out = Path(tempfile.mkdtemp(prefix="ceph-msgr-windows-", dir=os.getenv("RUNNER_TEMP")))
-    wsl = ["wsl.exe", "--distribution", distro, "--user", "root", "--"]
+    # --exec preserves argv: a default shell consumes Windows backslashes.
+    wsl = ["wsl.exe", "--distribution", distro, "--user", "root", "--exec"]
     attempted = False
     report = {"revision": revision, "go": version, "host": host,
               "ceph": "20.2.4", "credential": "aes256k", "service_cipher": "aes256k",
