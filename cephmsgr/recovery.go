@@ -99,6 +99,13 @@ func (c *Client) rejectAuthentication(err error) {
 	c.authErr = err
 	c.monReady = false
 	c.mgr = nil
+	configWatch, logWatch := c.configWatch, c.logWatch
+	if configWatch != nil && !configWatch.stopLocked(err) {
+		configWatch = nil
+	}
+	if logWatch != nil && !logWatch.stopLocked(err) {
+		logWatch = nil
+	}
 	all := make([]*session.Session, 0, len(c.sessions))
 	for s := range c.sessions {
 		// Close admission before publishing the rejection. A caller that
@@ -108,6 +115,12 @@ func (c *Client) rejectAuthentication(err error) {
 	}
 	c.signal()
 	c.mu.Unlock()
+	if configWatch != nil {
+		configWatch.cancel()
+	}
+	if logWatch != nil {
+		logWatch.cancel()
+	}
 	for _, s := range all {
 		// Session.Fail preserves uncertainty for requests whose transmission
 		// started, while keeping the explicit authentication cause available.
