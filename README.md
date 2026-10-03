@@ -298,6 +298,50 @@ revision·cursor·연관된 request ID·구독 generation이 없으며, 같은 M
 현재 source의 잘못된 map은 공유 session을 실패시키며 이미 전송한 명령의
 결과 불명확 원인을 보존한다. 그 명령을 새 session에서 재실행하지 않는다.
 
+## MON health·상태 구독
+
+`WatchDigest`는 MON의 주기적인 `mgrdigest`를 받아 health detail과 그 MON의
+상태 JSON을 한 쌍으로 전달한다. MGR 접속이나 조회 명령, 명령 슬롯을 사용하지
+않는다. MON read 권한이 필요하며 등록 성공은 로컬 worker의 시작을 뜻한다.
+실제 권한이나 첫 전달의 성공은 `Next`에서 확인한다.
+
+```go
+digests, err := client.WatchDigest(ctx, cephmsgr.DigestOptions{})
+if err != nil {
+    return err
+}
+defer digests.Close()
+digest, err := digests.Next(ctx)
+if err != nil {
+    return err
+}
+fmt.Printf("health=%s\nMON=%s\n", digest.Health, digest.MonStatus)
+```
+
+`ClusterDigest.Health`와 `MonStatus`는 원본 `json.RawMessage`다. JSON을
+해석하거나 알려진 필드만 남기지 않으며 반환한 bytes는 호출자가 소유한다.
+아직 읽지 않은 한 쌍만 보관하고 새 전달로 교체하므로 중간 변경 이력이나
+무손실 전달을 보장하지 않는다. `DigestOptions.MaxBufferedBytes`는 기본적으로
+client의 `MaxFrameSize`이며 512 bytes와 두 JSON 길이의 합으로 보관 크기를
+추정한다. 범위는 1 KiB–1 GiB이고 정확한 Go heap 상한은 아니다.
+
+Client당 digest watch 하나를 허용하며 중복은 `ErrDigestWatchActive`다.
+Config·log watch와 함께 사용할 수 있다. Watch context는 MON 복구를 포함한
+전체 수명에, `Next(ctx)`의 context는 해당 대기에만 적용한다. 이미 취소된
+Next는 보관된 값을 소비하지 않는다. MON 재접속·인증 갱신 후 다시 구독한다.
+Tentacle 기본 주기는 5초이며 서버의 health 변경으로 더 일찍 전달될 수 있다.
+
+`Close`는 로컬 watch를 종료한다. 보관된 값은 먼저 읽을 수 있고 이후 최초
+종료 원인을 유지한다. 명시적인 종료는 `ErrDigestStreamClosed`, client 종료는
+`ErrClosed`, 보관 크기 초과는 `ErrDigestOverflow`다. Overflow는 해당 watch만
+종료한다. Wire payload에는 FSID·지도 epoch·cursor·구독 generation이 없고,
+같은 MON session의 이전 watch에서 늦게 온 값은 구분할 수 없다.
+
+Tentacle 20.2.4의 Linux IPv6/aes256k와 Darwin IPv4/AES race에서 health
+mute·unmute, ticket 갱신 이후 새 전달, 유일한 seed의 접속 단절 후 다른 MON의
+전달, watch 재등록과 Close를 검증했다. 각 단계의 전체 health detail과 같은
+daemon의 MON 상태를 독립 native 클라이언트와 비교했으며 MGR 접속은 없었다.
+
 ## 운영 상태
 
 `Snapshot()`은 네트워크 요청이나 재접속 대기 없이 현재 client 상태를 읽는다.
@@ -1214,7 +1258,7 @@ client TCP 복구·stream 종료 원인 보존을 포함한 `993001d`의
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 76개 경로를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 79개 경로를
 비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
 iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를

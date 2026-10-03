@@ -61,6 +61,8 @@ MON 기능:
 - cluster log 구독, service cursor와 메모리 상한을 갖는 수신 stream.
 - 인증된 client identity의 effective config를 raw 전체 map으로 받는 구독과
   초기 map 요청. Host·device class는 비워 요청하고 Go Options에는 적용하지 않는다.
+- MON의 주기적인 `mgrdigest` 구독으로 health detail·MON 상태 raw JSON을 받는다.
+  MGR entity나 연결을 요구하지 않으며 지도·cursor가 없는 최신 값 stream이다.
 
 MGR 기능:
 
@@ -127,7 +129,7 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 공개 API는 `ParseKey`, `NewCommand`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
 `MonCommandDescriptions`, `MgrCommandDescriptions`, `MonTellDescriptions`,
 `MonTellToDescriptions`, `MgrTellDescriptions`, `WaitMonReady`, `WaitMgrReady`,
-`WatchLogs`, `WatchConfig`, `Snapshot`, `Close`를 중심으로 한다.
+`WatchLogs`, `WatchConfig`, `WatchDigest`, `Snapshot`, `Close`를 중심으로 한다.
 연결·명령·상태 타입은 `Options`, `Command`, `Result`, `State`다.
 `MonitorState.Members`는 `MonitorMember{Name, Rank}`로 인증된 MonMap의
 이름을 조회하며 같은 epoch의 rank 순서로 독립 복사한다. 이름은
@@ -137,6 +139,9 @@ MgrMap의 대기 MGR을 독립 복사한다. 가용성이나 새로운 접속 �
 로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
 설정은 `ConfigOptions`, `ConfigStream.Next`·`Close`로 raw `map[string]string`을
 전달한다. 하나의 unread 전체 map을 후속 map으로 교체하며 caller가 소유한다.
+Digest는 `DigestOptions`, `ClusterDigest`, `DigestStream.Next`·`Close`로 제공한다.
+Health detail과 MON 상태 bytes를 해석 없이 한 쌍으로 유지하며 최신 unread 값으로
+교체한다. 구독 성공은 서버의 권한 확인이 아니고 전달 시점·이력을 보장하지 않는다.
 go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
 
 - `NewCommand(prefix, arguments)`는 Go named arguments를 표준 JSON으로 인코딩하며 호출자의 map과 원문 prefix를 보존한다. 선택한 prefix의 덮어쓰기는 거부하고, 인자 schema·권한·전송 경로를 추측하거나 bulk 입력을 JSON에 넣지 않는다.
@@ -175,6 +180,14 @@ LGPL-2.1 고지를 확인하고 wire 의미를 독립 구현한다. `StandbyInfo
 보존하며 child envelope의 module·feature metadata는 공개 기능 범위에 넣지 않는다.
 실제 daemon이 만든 기존 IPv6 MgrMap fixture와 같은 epoch의 native `mgr dump`
 결과를 oracle로 사용하고 standby만 바뀌는 지도와 active 전환을 검증한다.
+
+Digest는 고정 [MMgrDigest](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MMgrDigest.h#L35),
+[MON 전송](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMonitor.cc#L645),
+[health JSON](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/HealthMonitor.cc#L470)을
+참조하며 LGPL-2.1 고지를 확인했다. 두 bufferlist의 wire 의미를 독립 작성한다.
+현재 admission을 통과한 MON만 수신하고 재접속 때 start=0/flags=0으로 다시
+구독한다. 같은 daemon의 native `mon_status`와 native `health detail`을 대조한다.
+비교본에서만 uptime·quorum_age·live feature_map을 제외하며 제품의 원본은 보존한다.
 
 ## 구현 및 검증 순서
 
