@@ -1114,6 +1114,8 @@ context·Close와 log/config/digest 수신을 포함한 공개 시험 9개와 �
 전체 skip 또는 잘못된 selector를 성공으로 처리하지 않는다.
 시험 동안 전용 foreground WSL 세션을 유지하고 fixture 정리 후 종료·대기한다.
 Docker 서비스가 떠 있다는 사실만으로 WSL 배포판의 수명이 유지된다고 가정하지 않는다.
+Fixture 제어 ACK는 임시 파일을 닫은 뒤 같은 디렉터리에서 rename으로 발행한다.
+시험이 ACK를 확인하자마자 삭제해도 발행자가 해당 파일을 다시 수정하지 않는다.
 
 [Windows 검증 드라이버](tools/windows_interop.py)는 실행마다 별도의 `run-*`
 증거 폴더를 만들고 source SHA·Go 도구 체인·daemon 버전·시험 목록을

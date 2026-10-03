@@ -100,6 +100,7 @@ test "$(docker image inspect --format '{{.Architecture}}' "$image")" = amd64 || 
 }
 
 cp "$project_root/integration/cluster.sh" "$out/cluster.sh"
+cp "$project_root/integration/publish-ack.sh" "$out/publish-ack.sh"
 cp "$project_root/integration/host-cluster.sh" "$out/host-cluster.sh"
 for oracle in "$project_root"/tools/*_oracle.py; do
     cp "$oracle" "$out/"

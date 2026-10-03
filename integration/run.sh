@@ -162,6 +162,7 @@ else
 fi
 # Keep a running long test independent of edits in the shared checkout.
 cp "$project_root/integration/cluster.sh" "$out/cluster.sh"
+cp "$project_root/integration/publish-ack.sh" "$out/publish-ack.sh"
 cp "$project_root/tools/log_oracle.py" "$out/log_oracle.py"
 cp "$project_root/tools/command_oracle.py" "$out/command_oracle.py"
 cp "$project_root/tools/tell_command_oracle.py" "$out/tell_command_oracle.py"

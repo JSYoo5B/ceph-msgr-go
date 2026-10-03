@@ -323,7 +323,7 @@ while true; do
         test -z "$extra" || exit 2
         rm /out/verify-digest
         timeout 20 python3 /out/digest_oracle.py "$root" /out "$name" "$label"
-        touch "/out/digest-verify.$request_id"
+        sh /out/publish-ack.sh "/out/digest-verify.$request_id"
     fi
     if test -f /out/verify-monitor-map; then
         test "$config_fixture" = 1 || exit 2
@@ -334,7 +334,7 @@ while true; do
         test -z "$extra" || exit 2
         rm /out/verify-monitor-map
         timeout 10 python3 /out/monitor_oracle.py "$root" /out
-        touch "/out/monitor-map-verify.$request_id"
+        sh /out/publish-ack.sh "/out/monitor-map-verify.$request_id"
     fi
     if test -f /out/verify-manager-map; then
         test "$config_fixture" = 1 || exit 2
@@ -345,7 +345,7 @@ while true; do
         test -z "$extra" || exit 2
         rm /out/verify-manager-map
         timeout 10 python3 /out/manager_oracle.py "$root" /out
-        touch "/out/manager-map-verify.$request_id"
+        sh /out/publish-ack.sh "/out/manager-map-verify.$request_id"
     fi
     if test -f /out/verify-tell-descriptions; then
         test "$config_fixture" = 1 || exit 2
@@ -355,7 +355,7 @@ while true; do
         test "$label" = initial && test -z "$extra" || exit 2
         rm /out/verify-tell-descriptions
         timeout 25 python3 /out/tell_command_oracle.py "$root" /out
-        touch "/out/tell-descriptions-verify.$request_id"
+        sh /out/publish-ack.sh "/out/tell-descriptions-verify.$request_id"
     fi
     if test -f /out/verify-command-descriptions; then
         test "$config_fixture" = 1 || exit 2
@@ -366,7 +366,7 @@ while true; do
         test -z "$extra" || exit 2
         rm /out/verify-command-descriptions
         timeout 15 python3 /out/command_oracle.py "$root" /out "$request_id" "$label"
-        touch "/out/command-descriptions-verify.$request_id"
+        sh /out/publish-ack.sh "/out/command-descriptions-verify.$request_id"
     fi
     if test -f /out/verify-hostname-config; then
         test "$config_fixture" = 1 || exit 2
@@ -377,7 +377,7 @@ while true; do
         test -z "$extra" || exit 2
         rm /out/verify-hostname-config
         timeout 30 python3 /out/hostname_config_oracle.py "$root" /out "$request_id" "$label"
-        touch "/out/hostname-config-verify.$request_id"
+        sh /out/publish-ack.sh "/out/hostname-config-verify.$request_id"
     fi
     if test -f /out/verify-config; then
         fixture_phase=verify-config-read
@@ -470,7 +470,7 @@ with (output_path / "config-oracle-history.jsonl").open("a", encoding="utf-8") a
     history.write(encoded)
 PY
         fixture_phase="verify-config-$label-ack"
-        touch "/out/config-verify.$request_id"
+        sh /out/publish-ack.sh "/out/config-verify.$request_id"
         fixture_phase=control-idle
     fi
     if test -f /out/secure-mgr; then
@@ -505,7 +505,7 @@ PY
             cat "$root/mode-probe.log" "$root/mode-probe.json"
             exit 1
         fi
-        touch "/out/mgr-secure.$request_id"
+        sh /out/publish-ack.sh "/out/mgr-secure.$request_id"
     fi
     if test -f /out/verify-service-keys; then
         test "$auth_epoch" = 1 || exit 2
@@ -565,7 +565,7 @@ PY
             cat "$root/service-keys-probe.log" "$root/service-keys-probe.json"
             exit 1
         fi
-        touch "/out/service-keys-verify.$request_id"
+        sh /out/publish-ack.sh "/out/service-keys-verify.$request_id"
     fi
     if test -f /out/stop-mons; then
         read -r request_id extra < /out/stop-mons
@@ -578,7 +578,7 @@ PY
         for name in a b c; do
             wait "$(cat "$root/mon.$name.pid")" || true
         done
-        touch "/out/mons-stopped.$request_id"
+        sh /out/publish-ack.sh "/out/mons-stopped.$request_id"
     fi
     if test -f /out/start-mons; then
         read -r request_id extra < /out/start-mons
@@ -597,7 +597,7 @@ PY
             sleep 1
         done
         test "$joined" = true || exit 1
-        touch "/out/mons-started.$request_id"
+        sh /out/publish-ack.sh "/out/mons-started.$request_id"
     fi
     if test -f /out/start-mgrs && ! test -f /out/mgrs-started; then
         test "$mgr_count" = 0 || exit 2
@@ -625,7 +625,7 @@ PY
                     ;;
                 start) start_mgr "$name" ;;
             esac
-            touch "/out/$daemon-$action.$request_id"
+            sh /out/publish-ack.sh "/out/$daemon-$action.$request_id"
         fi
       done
     done
@@ -653,7 +653,7 @@ PY
             sleep 1
         done
         test "$joined" = true || exit 1
-        touch "/out/mon-restarted.$request_id"
+        sh /out/publish-ack.sh "/out/mon-restarted.$request_id"
     fi
     sleep 1
 done
