@@ -121,7 +121,9 @@ func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(directory, "osd-map-manifest.json"), manifest, 0600); err != nil {
+	// Non-secret fixture evidence must also be readable by the host runner
+	// when this test binary runs as root inside its disposable container.
+	if err := os.WriteFile(filepath.Join(directory, "osd-map-manifest.json"), manifest, 0644); err != nil {
 		t.Fatal(err)
 	}
 	if err := testcluster.ControlDaemon(ctx, directory, "verify", "osd-maps", "received"); err != nil {
