@@ -34,9 +34,16 @@ require_owned_container() {
 
 case "$action" in
     stop)
-        if read_container && docker inspect "$container" > /dev/null 2>&1; then
+        if read_container; then
+            # A failed Docker query is not proof that the owned container left.
+            docker info > /dev/null
+            present=$(docker container ls --all --filter "name=^/$container$" --format '{{.Names}}')
+            test -n "$present" || exit 0
+            test "$present" = "$container" || exit 2
             require_owned_container
             docker rm -f "$container" > /dev/null
+            present=$(docker container ls --all --filter "name=^/$container$" --format '{{.Names}}')
+            test -z "$present" || { echo 'owned fixture container is still present' >&2; exit 1; }
         fi
         exit 0
         ;;
@@ -46,6 +53,8 @@ case "$action" in
         if read_container && docker inspect "$container" > /dev/null 2>&1; then
             require_owned_container
             docker logs --tail 100 "$container" > "$diagnostics/fixture.log" 2>&1 || true
+            docker inspect --format '{{json .State}}' "$container" > "$diagnostics/container-state.json"
+            docker cp "$container:/tmp/ceph-msgr-test/fixture-exit" "$diagnostics/fixture-exit" > /dev/null 2>&1 || true
             for log in mon.a.log mon.b.log mon.c.log mgr.a.log mgr.b.log; do
                 docker cp "$container:/tmp/ceph-msgr-test/$log" "$diagnostics/$log" > /dev/null 2>&1 || true
             done
@@ -96,6 +105,7 @@ docker run -d --name "$container" \
     -e CEPH_MSGR_TEST_SERVICE_CIPHER=aes256k \
     -e CEPH_MSGR_TEST_IP_FAMILY=4 \
     -e CEPH_MSGR_TEST_MGR_COUNT=2 \
+    -e CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS=1 \
     -v "$out:/out" "$image" /out/host-cluster.sh > /dev/null
 
 deadline=$(($(date +%s) + 120))

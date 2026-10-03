@@ -88,6 +88,41 @@ def command(args, *, cwd, env, timeout=300, capture=False, log=None):
     return result
 
 
+def run_test_process(args, *, cwd, env, log, timeout=420):
+    """Join the native test runner and terminate only its owned tree on failure."""
+    if sys.platform != "win32":
+        raise RuntimeError("the native test process runner requires Windows")
+    process = subprocess.Popen(args, cwd=cwd, env=env, stdout=log,
+                               stderr=subprocess.STDOUT)
+    try:
+        return process.wait(timeout=timeout)
+    except BaseException:
+        cleanup_error = None
+        try:
+            cleanup = subprocess.run(
+                ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                cwd=cwd, env=env, check=False, timeout=30,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                encoding="utf-8", errors="replace")
+            cleanup.check_returncode()
+        except Exception as error:
+            cleanup_error = error
+        try:
+            process.wait(timeout=30)
+        except Exception as error:
+            if cleanup_error is None:
+                cleanup_error = error
+        if cleanup_error is not None:
+            raise RuntimeError("could not confirm termination of owned Windows test process tree "
+                               + str(process.pid)) from cleanup_error
+        raise
+
+
+def new_evidence_directory(base):
+    base.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="run-", dir=base))
+
+
 def run(distro, diagnostics):
     project = Path(__file__).resolve().parent.parent
     diagnostics = diagnostics.resolve()
@@ -153,10 +188,10 @@ def run(distro, diagnostics):
             print("Executing Windows native " + name + " suite", flush=True)
             log = diagnostics / (name + "-tests.jsonl")
             with log.open("w", encoding="utf-8") as events:
-                result = subprocess.run(
+                result = run_test_process(
                     ["go", "tool", "test2json", "-p", full_package, str(out / (name + ".test.exe")),
                      "-test.v=test2json", "-test.timeout=6m", "-test.run=^(" + "|".join(tests) + ")$"],
-                    cwd=project, env=env, stdout=events, stderr=subprocess.STDOUT, timeout=420)
+                    cwd=project, env=env, log=events, timeout=420)
             lines = log.read_text(encoding="utf-8").splitlines()
             for line in lines:
                 try:
@@ -165,8 +200,8 @@ def run(distro, diagnostics):
                     continue
                 if output_event:
                     print(output_event, end="", flush=True)
-            if result.returncode:
-                for annotation in go_test_annotations.annotations(lines, result.returncode):
+            if result:
+                for annotation in go_test_annotations.annotations(lines, result):
                     print(annotation, flush=True)
                 raise RuntimeError(name + " native suite failed")
             report["suites"][name] = required_passes(lines, full_package, tests)
@@ -179,11 +214,19 @@ def run(distro, diagnostics):
                 print("Could not collect fixture diagnostics: " + str(error), file=sys.stderr)
         raise
     finally:
-        try:
-            if attempted:
+        if attempted:
+            try:
                 fixture_action("stop")
-        finally:
-            shutil.rmtree(out)
+            except BaseException as error:
+                marker = out / "container-name"
+                (diagnostics / "cleanup-failure.json").write_text(json.dumps({
+                    "distro": distro, "fixture_output": str(out),
+                    "container": marker.read_text(encoding="utf-8").strip() if marker.exists() else None,
+                    "error": str(error),
+                }, indent=2) + "\n", encoding="utf-8")
+                # Keep the ownership handle for the caller to complete cleanup.
+                raise
+        shutil.rmtree(out)
     report["cleanup_complete"] = True
     (diagnostics / "verification.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("Windows native interoperability verified: " + revision, flush=True)
@@ -194,11 +237,12 @@ if __name__ == "__main__":
     parser.add_argument("--distro", required=True, help="dedicated WSL2 development distribution")
     parser.add_argument("--diagnostics", type=Path, required=True)
     args = parser.parse_args()
+    evidence = new_evidence_directory(args.diagnostics)
+    print("Windows evidence directory: " + str(evidence), flush=True)
     try:
-        run(args.distro, args.diagnostics)
+        run(args.distro, evidence)
     except Exception as error:
-        args.diagnostics.mkdir(parents=True, exist_ok=True)
-        (args.diagnostics / "failure.json").write_text(json.dumps({
+        (evidence / "failure.json").write_text(json.dumps({
             "error_type": type(error).__name__, "error": str(error),
             "traceback": traceback.format_exc(),
         }, indent=2) + "\n", encoding="utf-8")

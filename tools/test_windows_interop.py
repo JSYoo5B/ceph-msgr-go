@@ -115,6 +115,20 @@ class ProxyEndpointTest(unittest.TestCase):
                 verifier.proxy_endpoint(value)
 
 
+class EvidenceIsolationTest(unittest.TestCase):
+    def test_repeated_invocations_cannot_reuse_an_earlier_success_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory) / "evidence"
+            first = verifier.new_evidence_directory(base)
+            (first / "verification.json").write_text('{"cleanup_complete":true}\n', encoding="utf-8")
+            second = verifier.new_evidence_directory(base)
+            (second / "failure.json").write_text('{"error":"setup failed"}\n', encoding="utf-8")
+            self.assertNotEqual(first, second)
+            self.assertFalse((second / "verification.json").exists())
+            self.assertFalse((first / "failure.json").exists())
+            self.assertEqual(json.loads((first / "verification.json").read_text()), {"cleanup_complete": True})
+
+
 class NativeEnvironmentTest(unittest.TestCase):
     def test_non_windows_host_cannot_claim_native_windows_execution(self):
         for platform in ("darwin", "linux", "cygwin", "msys"):
@@ -189,6 +203,69 @@ class CommandDiagnosticsTest(unittest.TestCase):
             run.assert_called_once_with(args, cwd=directory, env={"GOTOOLCHAIN": "local"},
                                         check=False, timeout=300, stdout=subprocess.PIPE,
                                         stderr=subprocess.STDOUT, encoding="utf-8", errors="replace")
+
+
+class OwnedTestProcessTest(unittest.TestCase):
+    def test_success_waits_for_the_owned_parent_without_terminating_processes(self):
+        args = ["go", "tool", "test2json", "client.test.exe", "-test.v=test2json"]
+        process = mock.Mock(pid=41234)
+        process.wait.return_value = 0
+        log = io.StringIO()
+        env = {"CGO_ENABLED": "0"}
+        with mock.patch.object(verifier.sys, "platform", "win32"):
+            with mock.patch.object(verifier.subprocess, "Popen", return_value=process) as start:
+                with mock.patch.object(verifier.subprocess, "run") as cleanup:
+                    result = verifier.run_test_process(args, cwd="test-project", env=env,
+                                                       log=log, timeout=123)
+        self.assertEqual(result, 0)
+        start.assert_called_once_with(args, cwd="test-project", env=env, stdout=log,
+                                      stderr=subprocess.STDOUT)
+        process.wait.assert_called_once_with(timeout=123)
+        cleanup.assert_not_called()
+
+    def test_timeout_terminates_only_the_owned_tree_and_joins_before_reraising(self):
+        args = ["go", "tool", "test2json", "client.test.exe"]
+        timeout = subprocess.TimeoutExpired(args, 420)
+        process = mock.Mock(pid=41234)
+        process.wait.side_effect = [timeout, 1]
+        taskkill = ["taskkill.exe", "/PID", "41234", "/T", "/F"]
+        env = {"CGO_ENABLED": "0"}
+        with mock.patch.object(verifier.sys, "platform", "win32"):
+            with mock.patch.object(verifier.subprocess, "Popen", return_value=process):
+                with mock.patch.object(verifier.subprocess, "run",
+                                       return_value=subprocess.CompletedProcess(taskkill, 0, stdout="terminated\n")) as cleanup:
+                    with self.assertRaises(subprocess.TimeoutExpired) as raised:
+                        verifier.run_test_process(args, cwd="test-project", env=env,
+                                                  log=io.StringIO())
+        self.assertIs(raised.exception, timeout)
+        cleanup.assert_called_once_with(taskkill, cwd="test-project", env=env, check=False,
+                                        timeout=30, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                        encoding="utf-8", errors="replace")
+        self.assertEqual(process.wait.call_args_list, [mock.call(timeout=420), mock.call(timeout=30)])
+
+    def test_unverified_tree_cleanup_never_reports_the_timeout_as_cleanly_stopped(self):
+        args = ["go", "tool", "test2json", "client.test.exe"]
+        taskkill = ["taskkill.exe", "/PID", "41234", "/T", "/F"]
+        cases = (
+            ("tree termination refused", subprocess.CompletedProcess(taskkill, 5, stdout="access denied\n"), 1),
+            ("tree termination timed out", subprocess.TimeoutExpired(taskkill, 30), 1),
+            ("parent did not join", subprocess.CompletedProcess(taskkill, 0, stdout="terminated\n"),
+             subprocess.TimeoutExpired(args, 30)),
+        )
+        for reason, cleanup_result, joined in cases:
+            process = mock.Mock(pid=41234)
+            process.wait.side_effect = [subprocess.TimeoutExpired(args, 420), joined]
+            with self.subTest(reason=reason), mock.patch.object(verifier.sys, "platform", "win32"):
+                with mock.patch.object(verifier.subprocess, "Popen", return_value=process):
+                    with mock.patch.object(verifier.subprocess, "run") as cleanup:
+                        if isinstance(cleanup_result, Exception):
+                            cleanup.side_effect = cleanup_result
+                        else:
+                            cleanup.return_value = cleanup_result
+                        with self.assertRaisesRegex(RuntimeError, "could not confirm termination.*41234"):
+                            verifier.run_test_process(args, cwd="test-project", env={}, log=io.StringIO())
+            self.assertEqual(process.wait.call_args_list, [mock.call(timeout=420), mock.call(timeout=30)])
+            self.assertEqual(cleanup.call_args.args[0], taskkill)
 
 
 if __name__ == "__main__":
