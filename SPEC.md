@@ -129,6 +129,7 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 공개 API는 `ParseKey`, `ParseKeyring`, `NewCommand`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
 `MonCommandDescriptions`, `MgrCommandDescriptions`, `MonTellDescriptions`,
 `MonTellToDescriptions`, `MgrTellDescriptions`, `WaitMonReady`, `WaitMgrReady`,
+`WaitMonMap`, `WaitMgrMap`,
 `WatchLogs`, `WatchConfig`, `WatchDigest`, `Snapshot`, `Close`를 중심으로 한다.
 연결·명령·상태 타입은 `Options`, `Command`, `Result`, `State`다.
 `MonitorState.Members`는 `MonitorMember{Name, Rank}`로 인증된 MonMap의
@@ -161,6 +162,7 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 - `MonTellDescriptions`, `MgrTellDescriptions`, `MonTellToDescriptions`는 관리 명령과 구분한 daemon-local admin schema를 조회한다. `sig/help`와 원본 속성을 보존하며 미제공된 module·permission·flags를 실행 권한 정보로 해석하지 않는다. admin formatter의 고정 feature 집합에 따라 인자 JSON boolean을 그대로 보존한다.
 - `MonTellTo(ctx, name, command)`는 정확한 MON 이름을 지정하고 독립 인증·지도 검증·호출·정리까지 요청 context를 적용한다. 알려진 대상 없음·지도 변경·전송 전 취소와 전송 후 결과 불명확을 구분하며 주 연결과 다른 명령의 수명을 보존한다.
 - `WaitMonReady(ctx)`와 `WaitMgrReady(ctx)`는 관리 명령이나 명령 슬롯 없이 연결 준비를 기다린다. MGR 대기는 발견과 별도 인증 연결을 포함한다. 취소는 해당 대기만 끝내며 성공은 이후 명령 성공을 보장하지 않는다. `Snapshot()`은 네트워크 요청 없이 현재 상태를 복사한다.
+- `WaitMonMap(ctx, afterEpoch)`·`WaitMgrMap(ctx, afterEpoch)`는 기존 map 알림에서 strictly newer authenticated epoch를 기다리고 Snapshot과 같은 독립 복사본을 반환한다. 0은 이미 받은 nonzero 지도를 허용하며 중간 epoch·준비 상태를 보장하지 않는다. 새 명령·구독·접속·worker·명령 슬롯을 만들지 않고 MON 복구 중에도 대기한다. 개별 context 종료는 해당 대기만, Client Close와 명시적인 인증 거절은 각 기존 오류로 해제한다.
 - `WatchLogs(ctx, options)`는 client당 하나의 worker를 로컬에 비동기 등록하며 명령 슬롯을 사용하지 않는다. context는 복구를 포함한 watch 전체 수명에 적용한다. `Next(ctx)` 취소는 해당 대기만 끝내며 이미 취소된 context는 접수한 큐를 소비하지 않는다.
 - 로그 큐는 최대 64 batch와 보수적인 보유 bytes 추정치로 제한한다. `MaxBufferedBytes` 기본값은 `MaxFrameSize`, 허용 범위는 1 KiB–1 GiB이며 정확한 Go heap 상한은 아니다. overflow는 watch만 종료하며 이미 접수한 batch와 일반 명령 연결을 유지한다.
 - `LogStream.Close`는 worker를 종료하고 watch 슬롯을 해제한다. 살아 있는 Next context는 이미 접수한 큐를 먼저 읽고 최초 종료 원인을 계속 받는다. Client Close도 watch worker를 종료하고 기다린다. 취소·overflow·인증·프로토콜 등 먼저 기록된 원인을 이후 Close가 덮어쓰지 않는다.
@@ -240,7 +242,8 @@ ConfUtils의 quoting·continuation 문법은 범위에 넣지 않는다. 실제 
 7. MON 로그는 독립 raw wire 입력 및 native CLI oracle과 대조한다. 실제 로그 수신, cursor 복구, ticket 갱신, 제한된 큐, watch·Next context와 Close를 검증하며 단순 SubscribeAck를 권한 확인으로 사용하지 않는다.
 8. 이름 지정 MON Tell은 독립 native daemon status의 name·rank·FSID와 대조한다. 없는 이름의 접속 전 거절, 다른 MON으로 대체하지 않음, 새 private 인증 ID와 주 상태 보존, 동시 호출·전송 후 불확실성·setup과 session의 Close 소유권을 검증한다.
 9. MON 이름 조회는 독립 native CLI 지도와 대조한다. 네트워크 없는 조회와 반환 slice의 소유권, 주 지도 변경·거절·stale source·private Tell의 격리, ticket 갱신과 Close 후 마지막 정보 보존을 검증한다.
-10. CephX 내부 plaintext는 유효한 암호 envelope에 넣은 독립 입력과 크기 제한이 있는 fuzz로 검증한다. Decoder의 읽기 실패와 완전한 version·nonce·암호 오류를 구분하고, 실패 시 identity·ticket·credential·부분 출력을 게시하지 않는지 공개 setup 경로까지 확인한다. 정상 실서버 인증과 ticket 갱신 검증도 두 키 타입별로 유지한다.
+10. 지도 대기 API는 실제 MON add/rm과 MGR 전환의 새 epoch를 native 지도와 비교한다. 명령 슬롯 점유 중에도 진행하고, MON 재접속을 잠시 막은 상태에서 대기가 유지된 뒤 학습한 MON의 재구독으로 새 MGR 지도를 받는지 검증한다. 개별 context 취소와 Client Close도 검증한다.
+11. CephX 내부 plaintext는 유효한 암호 envelope에 넣은 독립 입력과 크기 제한이 있는 fuzz로 검증한다. Decoder의 읽기 실패와 완전한 version·nonce·암호 오류를 구분하고, 실패 시 identity·ticket·credential·부분 출력을 게시하지 않는지 공개 setup 경로까지 확인한다. 정상 실서버 인증과 ticket 갱신 검증도 두 키 타입별로 유지한다.
 
 구현한 encoder와 decoder끼리의 round trip만으로 wire 호환성을 입증하지 않는다. Ceph에서 얻은 fixture 및 실제 Ceph 상대 검증을 사용한다. parser fuzzing, race 검사, 장시간 ticket 갱신, 장애 주입을 포함한다. 클러스터 구성과 테스트 oracle을 위한 Ceph CLI·컨테이너 사용은 개발 도구이며 제품의 런타임 의존성과 구분한다.
 

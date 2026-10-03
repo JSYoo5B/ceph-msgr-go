@@ -394,6 +394,35 @@ if state.AuthRejection != nil {
 }
 ```
 
+지도 변경을 기다릴 때는 `WaitMonMap(ctx, afterEpoch)`·`WaitMgrMap(ctx, afterEpoch)`를
+사용한다. `afterEpoch`보다 큰 마지막 인증된 epoch의 독립 복사본을 반환하며
+`0`은 이미 받은 nonzero 지도도 허용한다. 중간 epoch를 건너뛸 수 있고 준비 상태를
+보장하지 않는다. 새 명령·구독·MGR 연결이나 명령 슬롯을 사용하지 않는다.
+
+```go
+manager, err := client.WaitMgrMap(ctx, 0)
+if err != nil {
+    return err
+}
+for {
+    manager, err = client.WaitMgrMap(ctx, manager.MapEpoch)
+    if err != nil {
+        return err
+    }
+    fmt.Printf("MGR epoch=%d active=%s services=%v\n",
+        manager.MapEpoch, manager.Name, manager.Services)
+}
+```
+
+Context 종료는 해당 대기만 끝내며 다른 대기와 client는 유지한다. MON 재접속
+중에도 기다리고, Close는 `ErrClosed`, 명시적인 인증 거절은 해당 오류로 반환한다.
+Close 후 마지막 지도를 읽을 때는 `Snapshot`을 사용한다.
+
+Linux IPv6/aes256k와 Darwin IPv4/AES race에서 실제 MON 추가·삭제의 새 epoch와
+MGR 전환을 native 지도와 대조했다. 유일한 명령 슬롯 점유 중에도 진행했고,
+MON 재접속을 잠시 막아 둔 대기가 학습한 두 번째 MON의 재구독으로 완료됐다.
+로컬 대기 취소와 Close를 검증했으며 제품의 별도 MGR 접속은 발생하지 않았다.
+
 `Manager.Standbys`는 인증된 MgrMap의 standby 이름과 daemon global ID를
 `[]StandbyManager`로 반환한다. 별도 명령이나 MGR 접속 없이 조회하며 반환 slice를
 수정해도 client 상태는 바뀌지 않는다. 이는 마지막 지도에 광고된 멤버십이며
