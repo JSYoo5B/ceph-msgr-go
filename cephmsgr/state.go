@@ -49,7 +49,15 @@ type ManagerState struct {
 	Available bool // Last received MgrMap value, not a live daemon probe.
 	Name      string
 	GlobalID  uint64
-	Endpoints []string // msgr2 dial endpoints from the last authenticated map; address family may differ from Endpoint.
+	Endpoints []string         // msgr2 dial endpoints from the last authenticated map; address family may differ from Endpoint.
+	Standbys  []StandbyManager // Last known authenticated map members, not daemon readiness or connection targets.
+}
+
+// StandbyManager identifies a standby MGR in the last known authenticated map.
+// Its membership does not establish availability or a ready client session.
+type StandbyManager struct {
+	Name     string
+	GlobalID uint64 // MGR daemon global ID, distinct from the authenticated client ID.
 }
 
 // TicketState exposes local renewal scheduling without keys or opaque proofs.
@@ -83,6 +91,9 @@ func (c *Client) Snapshot() State {
 	state.Manager.GlobalID = c.mgrMap.GlobalID
 	for _, address := range c.mgrMap.Addresses {
 		state.Manager.Endpoints = append(state.Manager.Endpoints, dialAddress(address))
+	}
+	for _, standby := range c.mgrMap.Standbys {
+		state.Manager.Standbys = append(state.Manager.Standbys, StandbyManager{Name: standby.Name, GlobalID: standby.GlobalID})
 	}
 	authError := c.authErr
 	admitted := !c.closed && authError == nil
