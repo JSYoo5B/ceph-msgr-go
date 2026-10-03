@@ -27,7 +27,10 @@ func TestCephNaturalManagerFailoverIntegration(t *testing.T) {
 		t.Fatal("stop active MGR process", err)
 	}
 	defer func() {
-		restart, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		// A cold MGR loads its Python modules before it can send a standby
+		// beacon. Allow setup and that load to finish independently of the
+		// command's lifetime, while retaining a bounded new-ID readiness check.
+		restart, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := testcluster.ControlDaemon(restart, control, "start", "mgr", name); err != nil {
 			t.Error("restart stopped fixture MGR", err)
