@@ -97,6 +97,51 @@ nonce·scope·flow도 보존한다. 주 client의 global ID·ticket·MON/MGR 연
 아니지만, 전송 후 응답을 받지 못하면 `OutcomeUnknownError`를 보존한다.
 Watch 큐 overflow·명령 슬롯 대기·잘못된 Options 값은 별도 오류다.
 
+## 명령 목록과 인자
+
+`MonCommandDescriptions(ctx)`와 `MgrCommandDescriptions(ctx)`는 현재 MON 또는
+active MGR의 관리 명령 설명을 조회한다. 호출마다 서버에 요청하며 캐시하지 않는다.
+
+```go
+catalog, err := client.MonCommandDescriptions(ctx)
+if err != nil {
+    return err // catalog.Result에는 받은 raw 응답과 서버 code·message가 남는다.
+}
+for _, command := range catalog.Commands {
+    fmt.Printf("%s: %s (%s)\n", command.Prefix, command.Help, command.Permission)
+    for _, part := range command.Signature {
+        if part.Argument != nil {
+            fmt.Printf("  %s: %s\n", part.Argument.Name, part.Argument.Type)
+        }
+    }
+}
+```
+
+`CommandDescription`은 원본 ID, prefix, 순서가 있는 signature, 도움말,
+module, permission, flags와 raw JSON을 보존한다. 인자의 `Attributes`에는
+name·type을 포함한 원래 JSON 속성이 들어간다. `req`, `n`, `range`, `strings`
+등을 임의로 숫자·배열로 바꾸지 않는다. 현재 서버의 `req="fasle"` 오타도
+그대로 남는다. 같은 prefix의 여러 signature를 모두 반환하며 ID는 조회 시점의
+열거 순번이므로 영구 식별자로 사용하지 않는다. 반환값은 호출자가 소유한다.
+
+MON 목록에는 MGR로 전달하는 명령도 포함된다. `CommandFlagManager`·
+`CommandFlagPoll` 등은 서버 metadata이며 실행 경로를 자동 선택하지 않는다.
+Direct MGR 목록의 flags는 현재 Tentacle formatter에서 모두 0이다. 목록에
+명령이 있다는 사실은 실행 권한이나 해당 모듈의 활성화를 보장하지 않는다.
+Tell의 daemon-local admin 명령 목록과도 구분한다.
+
+조회는 일반 명령과 같은 context·슬롯·raw 오류 계약을 따른다. 서버가 성공
+응답을 보낸 뒤 JSON 설명 해석에 실패하면 받은 `Result`와
+`ErrInvalidCommandDescriptions`를 감싼 로컬 해석 오류를 돌려준다. 그 오류로
+공유 세션을 종료하거나 명령을 자동 재실행하지 않는다.
+
+20.2.4의 Linux arm64·IPv6·aes256k와 Darwin arm64·IPv4·aes/race 구성에서
+MON 984개·MGR 663개의 전체 descriptor를 독립 native librados 결과와
+대조했다. `req`·`positional`의 연결 feature별 표현 차이만 비교용 복사본에서
+구분했으며 raw 응답은 수정하지 않았다. 조회한 MON/MGR 명령 실행과
+MGR 교체 후 새 active MGR의 목록 재조회도 통과했다. 개수는 fixture 구성의
+관찰값이며 다른 클러스터의 고정 개수가 아니다.
+
 ## MON 로그
 
 `WatchLogs(ctx, LogOptions)`는 현재 인증된 MON에서 cluster log를 받는
@@ -1129,7 +1174,7 @@ client TCP 복구·stream 종료 원인 보존을 포함한 `993001d`의
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 73개 경로를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 76개 경로를
 비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
 iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를

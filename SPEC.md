@@ -125,7 +125,8 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 ## Go API 설계 기준
 
 공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
-`WaitMonReady`, `WaitMgrReady`, `WatchLogs`, `WatchConfig`, `Snapshot`, `Close`를 중심으로 한다.
+`MonCommandDescriptions`, `MgrCommandDescriptions`, `WaitMonReady`, `WaitMgrReady`,
+`WatchLogs`, `WatchConfig`, `Snapshot`, `Close`를 중심으로 한다.
 연결·명령·상태 타입은 `Options`, `Command`, `Result`, `State`다.
 `MonitorState.Members`는 `MonitorMember{Name, Rank}`로 인증된 MonMap의
 이름을 조회하며 같은 epoch의 rank 순서로 독립 복사한다. 이름은
@@ -137,6 +138,7 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
+- `MonCommandDescriptions(ctx)`와 `MgrCommandDescriptions(ctx)`는 현재 서버의 관리 명령 metadata를 새로 조회한다. 같은 prefix의 여러 signature와 원본 ID·flags·JSON 속성을 보존하며 prefix로 중복 제거하거나 실행 경로·권한·모듈 활성화를 추측하지 않는다. 원본 `Result`를 유지하고 성공 응답의 JSON 해석 실패는 세션 실패나 결과 불명확으로 바꾸지 않는다.
 - `MonTellTo(ctx, name, command)`는 정확한 MON 이름을 지정하고 독립 인증·지도 검증·호출·정리까지 요청 context를 적용한다. 알려진 대상 없음·지도 변경·전송 전 취소와 전송 후 결과 불명확을 구분하며 주 연결과 다른 명령의 수명을 보존한다.
 - `WaitMonReady(ctx)`와 `WaitMgrReady(ctx)`는 관리 명령이나 명령 슬롯 없이 연결 준비를 기다린다. MGR 대기는 발견과 별도 인증 연결을 포함한다. 취소는 해당 대기만 끝내며 성공은 이후 명령 성공을 보장하지 않는다. `Snapshot()`은 네트워크 요청 없이 현재 상태를 복사한다.
 - `WatchLogs(ctx, options)`는 client당 하나의 worker를 로컬에 비동기 등록하며 명령 슬롯을 사용하지 않는다. context는 복구를 포함한 watch 전체 수명에 적용한다. `Next(ctx)` 취소는 해당 대기만 끝내며 이미 취소된 context는 접수한 큐를 소비하지 않는다.
@@ -153,6 +155,15 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 - transport ACK는 관리 명령 완료 응답과 다르다. 연결 단절 후 변경 명령의 실행 결과가 불명확하면 이를 명시적으로 반환한다.
 - Messenger가 보장하는 세션 재개와 애플리케이션 명령 재실행을 구분한다. 새 세션에서 결과가 불명확한 변경 명령을 자동으로 다시 실행하지 않는다.
 - `Close`는 내부 작업과 연결을 종료하고 대기 중 호출을 해제해야 한다. 종료·취소·재연결의 경합을 검증한다.
+
+명령 설명 JSON은 고정 [cmdparse formatter](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/common/cmdparse.cc#L136),
+[MON catalog](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/Monitor.cc#L3460),
+[MGR catalog](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mgr/DaemonServer.cc#L1596),
+[flags](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MonCommand.h#L27)를 참조한다.
+`cmdparse.cc`의 GPLv2와 MON/MGR 파일의 LGPL-2.1 고지를 확인했으며 C++ 코드를
+복사하지 않고 JSON 의미를 독립 작성한다. 연결 feature에 따라 `req`의 JSON 타입과
+`positional` 출력이 달라지므로 native oracle과의 비교에서 이 두 속성의 표현만
+구분하고 제품이 받은 원본은 그대로 보존한다.
 
 ## 구현 및 검증 순서
 
