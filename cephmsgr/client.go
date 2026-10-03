@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
@@ -41,6 +42,8 @@ type Client struct {
 	logWatch    *LogStream
 	configWatch *ConfigStream
 	digestWatch *DigestStream
+	osds        map[int32]*OSDConnection
+	osdNext     atomic.Uint64
 }
 
 // Dial establishes and authenticates a MON connection and verifies a MonMap
@@ -89,11 +92,21 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if options.MaxInFlight < 1 || options.MaxInFlight > 1024 {
 		return nil, errors.New("ceph: MaxInFlight must be between 1 and 1024")
 	}
+	if options.MaxOSDConnections == 0 {
+		options.MaxOSDConnections = 16
+	}
+	if options.MaxOSDConnections < 1 || options.MaxOSDConnections > 1024 {
+		return nil, errors.New("ceph: MaxOSDConnections must be between 1 and 1024")
+	}
 	if options.DialContext == nil {
 		dialer := &net.Dialer{Timeout: options.ConnectTimeout}
 		options.DialContext = dialer.DialContext
 	}
-	auth, err := cephx.NewClient(options.Identity, options.Key.value, 0)
+	var services uint32
+	if options.EnableOSD {
+		services = cephx.ServiceAuth | cephx.ServiceMgr | cephx.ServiceOSD
+	}
+	auth, err := cephx.NewClient(options.Identity, options.Key.value, services)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +117,7 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 		return nil, fmt.Errorf("ceph: hostname requests exceed frame limit: %w", wire.ErrLimit)
 	}
 	base, cancel := context.WithCancel(context.Background())
-	c := &Client{options: options, ctx: base, cancel: cancel, changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), mgrGate: make(chan struct{}, 1), wake: make(chan struct{}, 1), calls: make(chan struct{}, options.MaxInFlight)}
+	c := &Client{options: options, ctx: base, cancel: cancel, changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), mgrGate: make(chan struct{}, 1), wake: make(chan struct{}, 1), calls: make(chan struct{}, options.MaxInFlight), osds: make(map[int32]*OSDConnection)}
 	if options.ExpectedFSID != "" {
 		c.fsid, err = parseFSID(options.ExpectedFSID)
 		if err != nil {
@@ -421,6 +434,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 		release()
 		var oldManager *session.Session
+		var oldOSDs []*session.Session
 		if err == nil {
 			c.mu.Lock()
 			if c.closed {
@@ -433,6 +447,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				}
 				if c.auth.GlobalID != candidate.GlobalID {
 					oldManager, c.mgr = c.mgr, nil
+					for _, osd := range c.osds {
+						if osd.session != nil {
+							osd.session.Retire()
+							oldOSDs = append(oldOSDs, osd.session)
+						}
+					}
 				}
 				c.auth = candidate
 				c.authErr = nil
@@ -443,6 +463,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 		if oldManager != nil {
 			oldManager.Fail(errors.New("ceph: authenticated client identity changed"))
+		}
+		for _, osd := range oldOSDs {
+			osd.Fail(errors.New("ceph: authenticated client identity changed"))
 		}
 		if err == nil {
 			if old != nil && old != s {

@@ -78,7 +78,10 @@ func (c *Client) renewalState(now time.Time) (needed bool, deadline time.Time, c
 		return false, time.Time{}, true
 	}
 	needed = !c.monReady || c.mon == nil || c.mon.Err() != nil
-	for _, service := range []uint32{cephx.ServiceAuth, cephx.ServiceMgr} {
+	for service := uint32(1); service <= cephx.ServiceAuth; service <<= 1 {
+		if c.auth.Services()&service == 0 {
+			continue
+		}
 		ticket, ok := c.auth.Tickets[service]
 		if !ok || !now.Before(ticket.RenewAfter) {
 			needed = true

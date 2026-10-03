@@ -166,6 +166,7 @@ type peerConfig struct {
 	clientID    uint64
 	authTTL     time.Duration
 	mgrTTL      time.Duration
+	services    uint32
 	command     func(msgr.MessageData)
 	reply       func(*msgr.MessageData)
 	monMap      []byte
@@ -263,7 +264,11 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		proof.U8()
 		proof.U64()
 		proof.Bytes()
-		if proof.U32() != cephx.ServiceAuth|cephx.ServiceMgr || proof.Done() != nil {
+		services := cfg.services
+		if services == 0 {
+			services = cephx.ServiceAuth | cephx.ServiceMgr
+		}
+		if proof.U32() != services || proof.Done() != nil {
 			return nil, nil, errors.New("ticket request")
 		}
 		challengeBlob := wire.Encoder{}
@@ -293,6 +298,14 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		if err != nil {
 			return nil, nil, err
 		}
+		if services&cephx.ServiceOSD != 0 {
+			osdTicket, err := mockTicket(key.value, encoded, cephx.ServiceOSD, cfg.mgrTTL)
+			if err != nil {
+				return nil, nil, err
+			}
+			binary.LittleEndian.PutUint32(extra[1:5], 2)
+			extra = append(extra, osdTicket[5:]...)
+		}
 		response := wire.Encoder{}
 		response.U16(0x100)
 		response.U32(0)
@@ -301,9 +314,13 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		response.Bytes(extra)
 		final = response.Data
 	} else {
+		service := cephx.ServiceMgr
+		if cfg.role == 4 {
+			service = cephx.ServiceOSD
+		}
 		parse := func(p []byte) (uint64, bool, uint64, error) {
 			d := wire.NewDecoder(p)
-			if d.U8() != 1 || d.U64() != cfg.clientID || d.U32() != cephx.ServiceMgr {
+			if d.U8() != 1 || d.U64() != cfg.clientID || d.U32() != service {
 				return 0, false, 0, errors.New("mgr authorizer")
 			}
 			d.U8()
@@ -409,7 +426,11 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 	msgr.EncodeAddresses(&ident, addresses)
 	ident.U64(cfg.id)
 	ident.U64(1)
-	ident.U64(session.Features)
+	features := session.Features
+	if cfg.role == 4 {
+		features |= 1<<8 | 1<<9
+	}
+	ident.U64(features)
 	ident.U64(session.RequiredFeatures)
 	ident.U64(1)
 	ident.U64(0)

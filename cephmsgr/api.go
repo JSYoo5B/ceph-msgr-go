@@ -1,5 +1,6 @@
 // Package cephmsgr provides native Go communication with Ceph Tentacle MON/MGR
-// daemons over authenticated msgr2.1: raw commands, wire maps and subscriptions.
+// and explicitly targeted OSD daemons over authenticated msgr2.1: raw commands,
+// wire maps and subscriptions, and bounded read-only object requests.
 // Callers own command construction, result interpretation and management policy.
 // No Ceph installation is required on the client host. See README.md for the
 // current verification status.
@@ -62,8 +63,8 @@ func ParseKey(base64Key string) (Key, error) {
 func (k Key) String() string   { return k.value.String() }
 func (k Key) GoString() string { return k.String() }
 
-// ConnectionMode selects the authenticated Messenger transport for every MON
-// and MGR connection, including renewal, recovery and named MON tell sessions.
+// ConnectionMode selects the authenticated Messenger transport for every MON,
+// MGR and OSD connection, including renewal, recovery and named MON tell sessions.
 type ConnectionMode uint8
 
 const (
@@ -95,6 +96,14 @@ type Options struct {
 	// ConnectionMode defaults to SecureMode. Only this mode is offered to
 	// every peer; an unsupported or different selection fails without fallback.
 	ConnectionMode ConnectionMode
+	// EnableOSD requests and renews OSD service tickets in addition to MON/MGR
+	// credentials. OpenOSD requires this explicit opt-in. It does not subscribe
+	// to OSDMap or enable placement, routing or automatic object retries.
+	EnableOSD bool
+	// MaxOSDConnections bounds OSD connections and concurrent setups held by
+	// this client. Defaults to 16; valid values are 1 through 1024. Close an
+	// OSDConnection to release its slot. It is independent of MaxInFlight.
+	MaxOSDConnections int
 	// Hostname is sent unchanged in every MON subscription and effective-config
 	// request for this client's lifetime. Empty is the default. The client does
 	// not look up, normalize or shorten an operating-system hostname.

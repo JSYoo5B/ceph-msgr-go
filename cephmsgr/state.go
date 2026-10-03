@@ -19,6 +19,7 @@ type State struct {
 	Manager       ManagerState
 	AuthTicket    TicketState
 	MgrTicket     TicketState
+	OSDTicket     TicketState          // Zero unless EnableOSD obtained a service ticket.
 	AuthRejection *AuthenticationError // A copy of an explicit MON rejection.
 }
 
@@ -175,6 +176,8 @@ func (c *Client) Snapshot() State {
 	auth, mgr := c.auth.Tickets[cephx.ServiceAuth], c.auth.Tickets[cephx.ServiceMgr]
 	state.AuthTicket = TicketState{Expires: auth.Expires, RenewAfter: auth.RenewAfter}
 	state.MgrTicket = TicketState{Expires: mgr.Expires, RenewAfter: mgr.RenewAfter}
+	osd := c.auth.Tickets[cephx.ServiceOSD]
+	state.OSDTicket = TicketState{Expires: osd.Expires, RenewAfter: osd.RenewAfter}
 	c.mu.Unlock()
 	// errors.As and RemoteAddr may invoke caller-supplied implementations.
 	// Do not invoke custom code under the client lock.
