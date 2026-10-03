@@ -43,14 +43,16 @@ type MonitorMember struct {
 // session. Ready also requires MON admission, which MGR operations wait for.
 // MGR connections are opened lazily by MgrCommand, MgrTell or WaitMgrReady.
 type ManagerState struct {
-	Ready     bool
-	Endpoint  string // Peer reported by the held connection's RemoteAddr.
-	MapEpoch  uint32
-	Available bool // Last received MgrMap value, not a live daemon probe.
-	Name      string
-	GlobalID  uint64
-	Endpoints []string         // msgr2 dial endpoints from the last authenticated map; address family may differ from Endpoint.
-	Standbys  []StandbyManager // Last known authenticated map members, not daemon readiness or connection targets.
+	Ready            bool
+	Endpoint         string // Peer reported by the held connection's RemoteAddr.
+	MapEpoch         uint32
+	Available        bool // Last received MgrMap value, not a live daemon probe.
+	Name             string
+	GlobalID         uint64
+	Endpoints        []string         // msgr2 dial endpoints from the last authenticated map; address family may differ from Endpoint.
+	Standbys         []StandbyManager // Last known authenticated map members, not daemon readiness or connection targets.
+	EnabledModules   []string         // Explicit enable set, not a computed always-on or running list.
+	AvailableModules []ManagerModule  // Last active-daemon report, not session readiness or authorization.
 }
 
 // StandbyManager identifies a standby MGR in the last known authenticated map.
@@ -58,6 +60,15 @@ type ManagerState struct {
 type StandbyManager struct {
 	Name     string
 	GlobalID uint64 // MGR daemon global ID, distinct from the authenticated client ID.
+}
+
+// ManagerModule describes an active MGR's last reported module load capability
+// in the authenticated map. CanRun does not establish a running module, client
+// readiness or permission; ErrorString preserves the raw reported diagnostic.
+type ManagerModule struct {
+	Name        string
+	CanRun      bool
+	ErrorString string
 }
 
 // TicketState exposes local renewal scheduling without keys or opaque proofs.
@@ -94,6 +105,10 @@ func (c *Client) Snapshot() State {
 	}
 	for _, standby := range c.mgrMap.Standbys {
 		state.Manager.Standbys = append(state.Manager.Standbys, StandbyManager{Name: standby.Name, GlobalID: standby.GlobalID})
+	}
+	state.Manager.EnabledModules = append([]string(nil), c.mgrMap.EnabledModules...)
+	for _, module := range c.mgrMap.AvailableModules {
+		state.Manager.AvailableModules = append(state.Manager.AvailableModules, ManagerModule{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString})
 	}
 	authError := c.authErr
 	admitted := !c.closed && authError == nil
