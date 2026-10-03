@@ -119,6 +119,58 @@ jobs:
       - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPublication$' -fuzztime=20s -parallel=2
       - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPlaintextPublication$' -fuzztime=20s -parallel=2
 
+  windows-ceph:
+    name: Windows native Ceph 20.2.4 (aes256k, secure, IPv4 relay)
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+      - name: Import dedicated WSL2 development fixture
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'ubuntu-wsl-rootfs.tar.gz'
+          # Canonical's fixed archive and published SHA256SUMS; no Store login
+          # or interactive first-user creation is required for this import.
+          Invoke-WebRequest -Uri 'https://cloud-images.ubuntu.com/wsl/releases/noble/20240423/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz' -OutFile $archive
+          $expected = '8251e27ffff381a4af5f41dcb94d867de3e0d9774a9241908ab34555d99315ea'
+          if ((Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -ne $expected) {
+            throw 'WSL development rootfs checksum mismatch'
+          }
+          $fixtureDistro = "CephMsgrFixture-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $storage = Join-Path $env:RUNNER_TEMP 'ceph-wsl'
+          wsl.exe --import $fixtureDistro $storage $archive --version 2
+          if ($LASTEXITCODE -ne 0) { throw 'WSL2 fixture import failed' }
+          "CEPH_MSGR_WSL_DISTRO=$fixtureDistro" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Remove-Item $archive
+          wsl.exe --distribution $fixtureDistro --user root -- uname -m
+          if ($LASTEXITCODE -ne 0) { throw 'WSL2 fixture startup failed' }
+      - name: Execute Windows binaries against real MON and MGR
+        run: python tools/windows_interop.py --distro $env:CEPH_MSGR_WSL_DISTRO --diagnostics "$env:RUNNER_TEMP/ceph-windows-diagnostics"
+      - name: Remove dedicated WSL fixture
+        if: always() && env.CEPH_MSGR_WSL_DISTRO != ''
+        run: |
+          wsl.exe --unregister $env:CEPH_MSGR_WSL_DISTRO
+          if ($LASTEXITCODE -ne 0) { throw 'WSL2 fixture cleanup failed' }
+      - name: Preserve Windows interoperability evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ceph-windows-evidence
+          path: ${{ runner.temp }}/ceph-windows-diagnostics/
+          retention-days: 7
+
   ceph:
     name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }})
     runs-on: ubuntu-latest
