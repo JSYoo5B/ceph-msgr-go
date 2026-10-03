@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/netip"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
@@ -106,6 +107,9 @@ func TestRealTentacleIPv6Maps(t *testing.T) {
 	if address := mgr.Addresses[0]; address.Type != 2 || address.Endpoint.String() != "[::1]:36801" || address.Nonce != 3962530023 {
 		t.Fatal("independent MgrMap address", address)
 	}
+	if !reflect.DeepEqual(mgr.Standbys, []Standby{{Name: "a", GlobalID: 4114}}) {
+		t.Fatal("independent MgrMap standbys", mgr.Standbys)
+	}
 }
 func TestMgrUnavailableAndActive(t *testing.T) {
 	for _, available := range []bool{false, true} {
@@ -119,6 +123,7 @@ func TestMgrUnavailableAndActive(t *testing.T) {
 			e.U8(0)
 		}
 		e.String("a")
+		e.U32(0) // standby map
 		out := wire.Encoder{}
 		out.Struct(14, 6, e.Data)
 		m, err := DecodeMgr(out.Data)

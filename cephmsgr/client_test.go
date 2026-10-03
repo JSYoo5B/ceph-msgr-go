@@ -134,6 +134,7 @@ func mockMgrMap(epoch uint32, id uint64, port uint16) []byte {
 	e.U64(id)
 	e.U8(1)
 	e.String("a")
+	e.U32(0) // no standby managers
 	out := wire.Encoder{}
 	out.Struct(14, 6, e.Data)
 	return out.Data

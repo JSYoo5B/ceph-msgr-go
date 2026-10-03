@@ -136,12 +136,20 @@ func DecodeMon(front []byte) (Mon, error) {
 	return m, nil
 }
 
+// Standby identifies a daemon advertised in the authenticated MgrMap. It does
+// not include an address or promise that the daemon is ready for connections.
+type Standby struct {
+	Name     string
+	GlobalID uint64
+}
+
 type Mgr struct {
 	Epoch     uint32
 	GlobalID  uint64
 	Available bool
 	Name      string
 	Addresses []msgr.Address
+	Standbys  []Standby
 }
 
 func DecodeMgr(front []byte) (Mgr, error) {
@@ -159,6 +167,21 @@ func DecodeMgr(front []byte) (Mgr, error) {
 	m.GlobalID = p.U64()
 	m.Available = p.Bool()
 	m.Name = p.String()
+	n := p.Count(26, 65536) // uint64 key, envelope header, gid and name length
+	if n > 0 {
+		m.Standbys = make([]Standby, 0, n)
+	}
+	for i := 0; i < n && p.Err() == nil; i++ {
+		p.U64() // StandbyInfo map key; the CLI exposes the value's gid.
+		_, info := p.Struct(4)
+		standby := Standby{GlobalID: info.U64(), Name: info.String()}
+		p.Fail(info.Err())
+		if p.Err() == nil {
+			m.Standbys = append(m.Standbys, standby)
+		}
+		// Struct consumes the complete envelope. Module/feature metadata in
+		// this child is outside management discovery and can be skipped.
+	}
 	for _, a := range all {
 		if a.Type == 2 && a.Endpoint.IsValid() {
 			m.Addresses = append(m.Addresses, a)
@@ -170,5 +193,5 @@ func DecodeMgr(front []byte) (Mgr, error) {
 	if m.Available && (m.GlobalID == 0 || len(m.Addresses) == 0) {
 		return m, errors.New("ceph: invalid active manager")
 	}
-	return m, nil // Standby/module metadata are outside the client's needs.
+	return m, nil // The remaining module and client metadata are not needed.
 }
