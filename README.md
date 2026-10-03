@@ -1564,8 +1564,10 @@ python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
 - [MON/MGR 지도 fixture](internal/maps/testdata/README.md)는 실제 Ceph가 생성했다.
   Fixture의 SHA-256과 생성 환경을 함께 기록했다.
 - [OSD 요청·응답 fixture](internal/osd/testdata/README.md)는 고정 Tentacle의
-  `ceph-dencoder`로 검증·재인코딩했다. Python이 native field 규약에서 독립
-  envelope를 구성하며 Go codec의 round trip으로 생성하지 않았다.
+  `ceph-dencoder`의 native decoder로 검증했다. Python이 field 규약에서 독립
+  envelope를 구성하며 Go codec의 round trip으로 생성하지 않았다. Message
+  재출력은 기존 payload를 보존하므로 native payload encoder oracle로 주장하지
+  않는다.
   LGPL-2.1 고지를 확인했고 C++ 코드는 포함하지 않았다. 실제 OSD의 위치·
   응답 의미는 별도 native client oracle과 실서버 통신으로 검증한다.
 - Synthetic peer 테스트는 취소·오류·경합을 검증하는 용도이며 실제 Ceph

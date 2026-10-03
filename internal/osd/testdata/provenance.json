@@ -3,6 +3,7 @@
   "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
   "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
   "features": 3026423347916342070,
+  "validation": "Native message decoder acceptance and envelope re-export; Message::encode retains nonempty payload and does not rerun its payload encoder.",
   "fixtures": {
     "request-v6": {
       "type": 42,

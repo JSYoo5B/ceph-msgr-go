@@ -53,7 +53,7 @@ func TestEncodeRequestMatchesNativeCeph(t *testing.T) {
 		t.Fatal("incorrect request message metadata", m)
 	}
 	if !bytes.Equal(m.Front, oracleBytes(t, "request-v6.front")) {
-		t.Fatal("stat/read request differs from pinned native Ceph encoder bytes")
+		t.Fatal("stat/read request differs from independent bytes accepted by the pinned native decoder")
 	}
 }
 

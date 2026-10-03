@@ -1,15 +1,20 @@
-# Tentacle native encoder fixtures
+# Tentacle native decoder fixtures
 
-These bytes are canonical output of `ceph-dencoder` from the pinned Ceph
-20.2.4 development image recorded in `provenance.json`. They are encoder
-oracle fixtures, not captures from a live OSD or proof of object placement.
+These independently constructed bytes were accepted by `ceph-dencoder` from
+the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
+are native decoder fixtures, not native payload encoder output, captures from
+a live OSD, or proof of object placement.
 No Go codec in this package generated the reference inputs or outputs.
 
 Independent Python `struct.pack` reference envelopes were built from the
 pinned `MOSDOp.h`, `MOSDOpReply.h`, `osd_types.{h,cc}`, `rados.h`, `msgr.h`,
 and `zipkin_trace.h` field definitions. Native Ceph decoded each envelope,
-printed the recorded summary, then encoded it with the feature mask in
-`provenance.json`. Native re-encoded front/data matched each reference input.
+printed the recorded summary, then re-exported the message envelope with the
+feature mask in `provenance.json`. Re-exported front/data matched each input.
+`Message::encode` retains a nonempty decoded payload without calling
+`encode_payload` again, so this invocation does not independently validate the
+feature-selected payload encoder. The negotiated v6 path and live reply
+semantics are separately verified against actual Tentacle OSDs.
 The test fixtures retain that native output, with the development envelope
 header/footer and length prefixes removed. The `.hex` data contains no keys.
 
