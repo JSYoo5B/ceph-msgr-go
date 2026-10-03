@@ -21,7 +21,7 @@ type OSDMapBlob struct {
 	Data  []byte
 }
 
-// OSDMapBatch preserves a MOSDMap publication from an authenticated OSD.
+// OSDMapBatch preserves a MOSDMap publication from an authenticated MON or OSD.
 // OldestMap and NewestMap are the server's advertised trim/latest epochs,
 // which can extend beyond the included blobs; both are absent (zero) in v1.
 // They do not describe a map applied by this library. Each slice belongs to the
@@ -137,12 +137,10 @@ func (o *OSDConnection) handleMap(source *session.Session, m msgr.MessageData) e
 	if err != nil {
 		err = fmt.Errorf("%w: invalid OSD map: %w", msgr.ErrFrame, err)
 	}
-	batch := OSDMapBatch{FSID: fmt.Sprintf("%x-%x-%x-%x-%x", decoded.FSID[:4], decoded.FSID[4:6], decoded.FSID[6:8], decoded.FSID[8:10], decoded.FSID[10:]), Version: m.Version, CompatVersion: m.CompatVersion, OldestMap: decoded.OldestMap, NewestMap: decoded.NewestMap, RawFront: decoded.RawFront}
-	batch.FullMaps = publicOSDMapBlobs(decoded.FullMaps)
-	batch.IncrementalMaps = publicOSDMapBlobs(decoded.IncrementalMaps)
+	batch := publicOSDMapBatch(m, decoded)
 	// RawFront owns all blob bytes; per-blob slices are views into that buffer.
 	// Count envelope and slice metadata conservatively without double counting.
-	size := uint64(512) + uint64(len(batch.RawFront)) + 64*uint64(len(batch.FullMaps)+len(batch.IncrementalMaps))
+	size := osdMapBatchBytes(batch)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !o.acceptsMapLocked(source) {
@@ -161,6 +159,14 @@ func (o *OSDConnection) handleMap(source *session.Session, m msgr.MessageData) e
 	o.mapBytes += size
 	o.signalMapsLocked()
 	return nil
+}
+
+func publicOSDMapBatch(m msgr.MessageData, decoded maps.OSDMessage) OSDMapBatch {
+	return OSDMapBatch{FSID: fmt.Sprintf("%x-%x-%x-%x-%x", decoded.FSID[:4], decoded.FSID[4:6], decoded.FSID[6:8], decoded.FSID[8:10], decoded.FSID[10:]), Version: m.Version, CompatVersion: m.CompatVersion, OldestMap: decoded.OldestMap, NewestMap: decoded.NewestMap, RawFront: decoded.RawFront, FullMaps: publicOSDMapBlobs(decoded.FullMaps), IncrementalMaps: publicOSDMapBlobs(decoded.IncrementalMaps)}
+}
+
+func osdMapBatchBytes(batch OSDMapBatch) uint64 {
+	return 512 + uint64(len(batch.RawFront)) + 64*uint64(len(batch.FullMaps)+len(batch.IncrementalMaps))
 }
 
 func publicOSDMapBlobs(blobs []maps.OSDBlob) []OSDMapBlob {

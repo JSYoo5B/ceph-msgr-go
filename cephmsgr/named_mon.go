@@ -182,6 +182,12 @@ func (c *Client) namedMonitorAddresses(ctx context.Context, name string) ([16]by
 }
 
 func (c *Client) openNamedMonitor(ctx context.Context, name string, fsid [16]byte, address msgr.Address) (_ *session.Session, err error) {
+	return c.openPrivateMonitor(ctx, name, fsid, address, nil)
+}
+
+// The private connection independently admits its MON before dispatching any
+// operation payload. Its authentication never replaces the primary credentials.
+func (c *Client) openPrivateMonitor(ctx context.Context, name string, fsid [16]byte, address msgr.Address, handle func(msgr.MessageData) error) (_ *session.Session, err error) {
 	// Tentacle's directed Tell connections start a full MON CephX exchange
 	// with global ID zero. Their private credentials never replace c.auth.
 	auth, err := cephx.NewClient(c.options.Identity, c.options.Key.value, 0)
@@ -196,8 +202,12 @@ func (c *Client) openNamedMonitor(ctx context.Context, name string, fsid [16]byt
 	}
 	ready := make(chan struct{})
 	var admitted sync.Once
+	var verified bool // Accessed only by the session reader.
 	s := session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
 		if m.Type != msgr.MonMapMessage {
+			if verified && handle != nil {
+				return handle(m)
+			}
 			return nil // No map/log subscriptions or shared-state publication.
 		}
 		if err := validateMapMessageHeader(m); err != nil {
@@ -215,6 +225,7 @@ func (c *Client) openNamedMonitor(ctx context.Context, name string, fsid [16]byt
 		}
 		for _, member := range mon.Members {
 			if member.Name == name && slices.Contains(member.Addresses, address) {
+				verified = true
 				admitted.Do(func() { close(ready) })
 				return nil
 			}
