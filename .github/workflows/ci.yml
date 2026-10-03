@@ -172,7 +172,7 @@ jobs:
           retention-days: 7
 
   ceph:
-    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }})
+    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -196,6 +196,9 @@ jobs:
           - { key: aes256k, service: aes256k, family: '6', stress: '', mode_rejection: 'mon' }
           - { key: aes, service: aes, family: '4', stress: '', mode_rejection: 'mgr' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', mapped: '1' }
+          - { key: aes256k, service: aes256k, mode: 'crc', family: '4', stress: '', runtime: 'host' }
+          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host' }
+          - { key: aes256k, service: aes256k, mode: 'crc', family: '6', stress: '' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -225,6 +228,7 @@ jobs:
           CEPH_MSGR_TEST_AUTH_EPOCH: ${{ matrix.auth_epoch || '0' }}
           CEPH_MSGR_TEST_SHORT_TICKETS: ${{ matrix.short_tickets || '0' }}
           CEPH_MSGR_TEST_MODE_REJECTION: ${{ matrix.mode_rejection || '' }}
+          CEPH_MSGR_TEST_CONNECTION_MODE: ${{ matrix.mode || 'secure' }}
           CEPH_MSGR_TEST_MAPPED_IPV6: ${{ matrix.mapped || '0' }}
           CEPH_MSGR_TEST_DIAGNOSTICS: ${{ runner.temp }}/ceph-diagnostics
       - name: Preserve failed Ceph test logs and crash metadata

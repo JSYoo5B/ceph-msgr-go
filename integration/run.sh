@@ -26,6 +26,16 @@ short_tickets=${CEPH_MSGR_TEST_SHORT_TICKETS:-0}
 case "$short_tickets" in 0|1) ;; *) exit 2 ;; esac
 mode_rejection=${CEPH_MSGR_TEST_MODE_REJECTION:-}
 case "$mode_rejection" in ''|mon|mgr) ;; *) exit 2 ;; esac
+connection_mode=${CEPH_MSGR_TEST_CONNECTION_MODE:-secure}
+case "$connection_mode" in secure|crc) ;; *)
+    echo 'CEPH_MSGR_TEST_CONNECTION_MODE must be secure or crc.' >&2
+    exit 2
+    ;;
+esac
+if test "$connection_mode" = crc && test -n "$mode_rejection"; then
+    echo 'CRC mode cannot be combined with the secure-client mode-rejection fixture.' >&2
+    exit 2
+fi
 mapped_ipv6=${CEPH_MSGR_TEST_MAPPED_IPV6:-0}
 case "$mapped_ipv6" in 0|1) ;; *) exit 2 ;; esac
 case "$mgr_count" in
@@ -59,8 +69,8 @@ if test "$short_tickets" = 1; then
 fi
 if test -n "$mode_rejection"; then
     test "$mgr_count" = 2 && test "$expire_tickets" = 0 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 || exit 2
-    # Only the independent fixture clients may use CRC. The native product
-    # must reject these listeners rather than fall back from secure mode.
+    # This profile keeps the default secure client and independently proves
+    # rejection of a CRC-only listener without a connection-mode fallback.
     test_run=${CEPH_MSGR_TEST_RUN:-'^TestCephConnectionModeRejectionIntegration$'}
 fi
 if test "$mapped_ipv6" = 1; then
@@ -175,7 +185,7 @@ if test "$mapped_ipv6" = 1; then
 fi
 # Daemons can acquire these listeners later, during takeover or restart. Reserve
 # their ports from automatic client allocation inside this disposable namespace.
-docker run -d --name "$container" --label ceph-msgr-go.integration=true --sysctl net.ipv4.ip_local_reserved_ports=33300,33301,33302,36800,36801 --entrypoint /bin/sh "$@" -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_IP_FAMILY="$ip_family" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -e CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" -v "$out:/out" "$image" "$cluster_script" > /dev/null
+docker run -d --name "$container" --label ceph-msgr-go.integration=true --sysctl net.ipv4.ip_local_reserved_ports=33300,33301,33302,36800,36801 --entrypoint /bin/sh "$@" -e CEPH_MSGR_TEST_KEY_TYPE="$key_type" -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_IP_FAMILY="$ip_family" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -e CEPH_MSGR_TEST_CONNECTION_MODE="$connection_mode" -e CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" -v "$out:/out" "$image" "$cluster_script" > /dev/null
 for attempt in $(seq 1 120); do
     if test -f "$out/ready"; then
         save_mapped_metadata
@@ -191,12 +201,12 @@ for attempt in $(seq 1 120); do
                     exit 1
                 fi
                 proxy=$(docker port "$container" 40000/tcp)
-                if CEPH_MSGR_MONITORS="$monitors" CEPH_MSGR_KEY_FILE="$out/key" CEPH_MSGR_IDENTITY=client.test CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 CEPH_MSGR_CONTROL_DIR="$out" CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" CEPH_MSGR_TEST_PROXY="$proxy" "$out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
+                if CEPH_MSGR_MONITORS="$monitors" CEPH_MSGR_KEY_FILE="$out/key" CEPH_MSGR_IDENTITY=client.test CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 CEPH_MSGR_CONTROL_DIR="$out" CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" CEPH_MSGR_TEST_CONNECTION_MODE="$connection_mode" CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" CEPH_MSGR_TEST_PROXY="$proxy" "$out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
                     result=0
                 else
                     result=$?
                 fi
-            elif docker exec -e CEPH_MSGR_MONITORS="$monitors" -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -e CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" -e CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" "$container" "/out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
+            elif docker exec -e CEPH_MSGR_MONITORS="$monitors" -e CEPH_MSGR_KEY_FILE=/out/key -e CEPH_MSGR_IDENTITY=client.test -e CEPH_MSGR_FSID=80bbab73-69c1-4a0c-a746-4271357750b8 -e CEPH_MSGR_CONTROL_DIR=/out -e CEPH_MSGR_TEST_SERVICE_CIPHER="$service_cipher" -e CEPH_MSGR_TEST_MGR_COUNT="$mgr_count" -e CEPH_MSGR_TEST_EXPIRE_TICKETS="$expire_tickets" -e CEPH_MSGR_TEST_IDLE_SESSIONS="$idle_sessions" -e CEPH_MSGR_TEST_AUTH_EPOCH="$auth_epoch" -e CEPH_MSGR_TEST_SHORT_TICKETS="$short_tickets" -e CEPH_MSGR_TEST_MODE_REJECTION="$mode_rejection" -e CEPH_MSGR_TEST_CONNECTION_MODE="$connection_mode" -e CEPH_MSGR_TEST_MAPPED_IPV6="$mapped_ipv6" -e CEPH_MSGR_STRESS_DURATION="${CEPH_MSGR_STRESS_DURATION:-}" "$container" "/out/$suite.test" -test.run "$test_run" -test.v -test.timeout "${CEPH_MSGR_TEST_TIMEOUT:-10m}"; then
                 result=0
             else
                 result=$?

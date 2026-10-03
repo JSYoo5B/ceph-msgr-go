@@ -28,7 +28,23 @@ func integrationOptions(t *testing.T) cephmsgr.Options {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return cephmsgr.Options{Monitors: strings.Split(monitors, ","), Identity: os.Getenv("CEPH_MSGR_IDENTITY"), Key: key, ExpectedFSID: os.Getenv("CEPH_MSGR_FSID"), DialContext: testcluster.Dialer()}
+	return cephmsgr.Options{Monitors: strings.Split(monitors, ","), Identity: os.Getenv("CEPH_MSGR_IDENTITY"), Key: key, ExpectedFSID: os.Getenv("CEPH_MSGR_FSID"), DialContext: testcluster.Dialer(), ConnectionMode: integrationConnectionMode(t)}
+}
+
+func integrationConnectionMode(t *testing.T) cephmsgr.ConnectionMode {
+	t.Helper()
+	switch os.Getenv("CEPH_MSGR_TEST_CONNECTION_MODE") {
+	case "", "secure":
+		return cephmsgr.SecureMode
+	case "crc":
+		if os.Getenv("CEPH_MSGR_TEST_MODE_REJECTION") != "" {
+			t.Fatal("CRC mode cannot use the secure-client mode-rejection fixture")
+		}
+		return cephmsgr.CRCMode
+	default:
+		t.Fatal("CEPH_MSGR_TEST_CONNECTION_MODE must be secure or crc")
+		return cephmsgr.SecureMode
+	}
 }
 
 func fixtureClient(t *testing.T, timeout time.Duration) (*cephmsgr.Client, context.Context) {

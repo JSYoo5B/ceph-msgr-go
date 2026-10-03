@@ -12,6 +12,16 @@ short_tickets=${CEPH_MSGR_TEST_SHORT_TICKETS:-0}
 case "$short_tickets" in 0|1) ;; *) exit 2 ;; esac
 mode_rejection=${CEPH_MSGR_TEST_MODE_REJECTION:-}
 case "$mode_rejection" in ''|mon|mgr) ;; *) exit 2 ;; esac
+connection_mode=${CEPH_MSGR_TEST_CONNECTION_MODE:-secure}
+case "$connection_mode" in secure|crc) ;; *)
+    echo 'CEPH_MSGR_TEST_CONNECTION_MODE must be secure or crc.' >&2
+    exit 2
+    ;;
+esac
+if test "$connection_mode" = crc && test -n "$mode_rejection"; then
+    echo 'CRC mode cannot be combined with the secure-client mode-rejection fixture.' >&2
+    exit 2
+fi
 mapped_ipv6=${CEPH_MSGR_TEST_MAPPED_IPV6:-0}
 case "$mapped_ipv6" in 0|1) ;; *) exit 2 ;; esac
 if test "$mapped_ipv6" = 1; then
@@ -20,18 +30,27 @@ if test "$mapped_ipv6" = 1; then
     # Linux must accept IPv4 routing to this mapped AF_INET6 listener.
     test "$(cat /proc/sys/net/ipv6/bindv6only)" = 0 || exit 1
 fi
-mon_service_mode=secure
-mgr_service_mode=secure
-client_mode=secure
+mon_service_mode=$connection_mode
+mgr_service_mode=$connection_mode
+client_mode=$connection_mode
 if test -n "$mode_rejection"; then
     test "$mgr_count" = 2 && test "$idle_sessions" = 0 && test "$auth_epoch" = 0 && test "$short_tickets" = 0 || exit 2
-    # Independent Ceph clients prepare the fixture with either mode. This
-    # changes neither the native client's secure-only offer nor its API.
+    # Independent Ceph clients prepare this secure-client rejection fixture
+    # with either mode. The Go client must still offer secure alone.
     client_mode='secure crc'
     case "$mode_rejection" in
         mon) mon_service_mode=crc ;;
         mgr) mgr_service_mode=crc ;;
     esac
+fi
+mgr_cluster_mode=secure
+if test "$mon_service_mode" = crc || test "$mgr_service_mode" = crc; then
+    # Native MGR bootstrap and libcephsqlite CLIENT messengers retain the MGR
+    # CephContext, so AuthRegistry uses ms_mon_cluster_mode for their offers.
+    # Prefer secure for true daemon links; permit CRC for these CLIENT links
+    # to either MON or MGR's CRC-only CLIENT listener.
+    # MON's receiving cluster policy remains secure-only.
+    mgr_cluster_mode='secure crc'
 fi
 mon_tick_interval=5
 idle_session_settings=
@@ -112,6 +131,7 @@ mon_subscribe_interval = $subscribe_interval
 mon_tick_interval = $mon_tick_interval
 $idle_session_settings
 ms_cluster_mode = secure
+ms_mon_cluster_mode = secure
 ms_service_mode = secure
 ms_client_mode = $client_mode
 ms_mon_service_mode = $mon_service_mode
@@ -133,6 +153,7 @@ public_addr = $address:33302
 [mgr]
 mgr_data = /tmp/ceph-msgr-test/mgr.\$id
 public_addr = $address
+ms_mon_cluster_mode = $mgr_cluster_mode
 # AuthRegistry treats MGR servers like MON servers for client mode policy.
 ms_mon_service_mode = $mgr_service_mode
 [mgr.a]
