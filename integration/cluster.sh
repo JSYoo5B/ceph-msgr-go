@@ -297,10 +297,22 @@ PY
     timeout 5 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" log "$log_sentinel"
     timeout 3 ceph -c "$root/ceph.conf" -n client.test -k "$keyring" -m "$tell_monitors" log last 20 --format json > "$root/log-oracle-tail.json"
     python3 /out/log_oracle.py /out "$root/log-oracle-tail.json"
+    timeout 15 python3 /out/command_oracle.py "$root" /out 0 initial
 fi
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."
 while true; do
+    if test -f /out/verify-command-descriptions; then
+        test "$config_fixture" = 1 || exit 2
+        read -r request_id label extra < /out/verify-command-descriptions
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 || exit 2
+        case "$label" in initial|renewal|learned-mon|mgr-replacement) ;; *) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/verify-command-descriptions
+        timeout 15 python3 /out/command_oracle.py "$root" /out "$request_id" "$label"
+        touch "/out/command-descriptions-verify.$request_id"
+    fi
     if test -f /out/verify-config; then
         test "$config_fixture" = 1 || exit 2
         read -r request_id identity label extra < /out/verify-config

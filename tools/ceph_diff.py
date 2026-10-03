@@ -99,6 +99,9 @@ GROUPS = {
         "src/messages/MMonSubscribeAck.h",
     ),
     "command-schemas": (
+        "src/common/cmdparse.cc",
+        "src/common/cmdparse.h",
+        "src/mon/MonCommand.h",
         "src/common/admin_socket.cc",
         "src/mon/MonCommands.h",
         "src/mgr/MgrCommands.h",
