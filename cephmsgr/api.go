@@ -104,6 +104,11 @@ type Options struct {
 	// this client. Defaults to 16; valid values are 1 through 1024. Close an
 	// OSDConnection to release its slot. It is independent of MaxInFlight.
 	MaxOSDConnections int
+	// MaxBufferedOSDMapBytes bounds each OSD connection's unread map queue.
+	// Defaults to MaxFrameSize; valid values are 1 KiB through 1 GiB. The
+	// queue also permits at most 64 batches. Overflow fails that OSD session
+	// instead of dropping incremental maps needed by the caller's map layer.
+	MaxBufferedOSDMapBytes uint32
 	// Hostname is sent unchanged in every MON subscription and effective-config
 	// request for this client's lifetime. Empty is the default. The client does
 	// not look up, normalize or shorten an operating-system hostname.

@@ -30,18 +30,22 @@ type OSDTarget struct {
 // connection slot and waits for cleanup; Client.Close also owns its lifetime.
 // A failed handle is not automatically reconnected and requests are not replayed.
 type OSDConnection struct {
-	client    *Client
-	target    OSDTarget
-	address   msgr.Address
-	ctx       context.Context
-	cancel    context.CancelFunc
-	setupDone chan struct{}
-	closeOnce sync.Once
-	closed    bool // guarded by client.mu, as are session and setupErr
-	session   *session.Session
-	setupErr  error
-	features  uint64
-	globalID  uint64
+	client      *Client
+	target      OSDTarget
+	address     msgr.Address
+	ctx         context.Context
+	cancel      context.CancelFunc
+	setupDone   chan struct{}
+	closeOnce   sync.Once
+	closed      bool // guarded by client.mu, as are session and setupErr
+	session     *session.Session
+	setupErr    error
+	features    uint64
+	globalID    uint64
+	mapQueue    []queuedOSDMap // guarded by client.mu
+	mapBytes    uint64
+	mapTerminal error
+	mapChanged  chan struct{}
 }
 
 // OpenOSD authenticates an OSD service connection using this client's MON-issued
@@ -99,7 +103,7 @@ func (c *Client) OpenOSD(ctx context.Context, target OSDTarget) (*OSDConnection,
 		return nil, ErrOSDConnectionLimit
 	}
 	base, cancel := context.WithCancel(c.ctx)
-	o := &OSDConnection{client: c, target: target, address: address, ctx: base, cancel: cancel, setupDone: make(chan struct{})}
+	o := &OSDConnection{client: c, target: target, address: address, ctx: base, cancel: cancel, setupDone: make(chan struct{}), mapChanged: make(chan struct{})}
 	c.osds[target.ID] = o
 	c.wg.Add(1)
 	c.mu.Unlock()
@@ -169,11 +173,14 @@ func (o *OSDConnection) open(ctx context.Context) error {
 		}
 		config := c.sessionConfig()
 		config.NextTransaction = c.nextOSDTransaction
-		s := session.New(tr, config, func(m msgr.MessageData) error {
-			// Do not silently consume routing or backoff instructions. The first
-			// milestone has no OSDMap/backoff/redirect state machine.
+		var s *session.Session
+		s = session.New(tr, config, func(m msgr.MessageData) error {
+			if m.Type == msgr.OSDMapMessage {
+				return o.handleMap(s, m)
+			}
+			// Other routing and backoff instructions remain unsupported.
 			return fmt.Errorf("%w: unsupported OSD control message %d", msgr.ErrFeatures, m.Type)
-		}, nil)
+		}, o.stopMaps)
 		c.mu.Lock()
 		stale := c.closed || o.closed || c.authErr != nil || c.auth.GlobalID != auth.GlobalID
 		if !stale {

@@ -27,9 +27,9 @@ const RequiredFeatures uint64 = 1 << 59 // MSG_ADDR2
 const sessionFlagLossy uint64 = 1       // CEPH_MSG_CONNECT_LOSSY
 
 // Ceph MON admission requires these CRUSH-generation bits from every CLIENT,
-// even clients that only issue commands. This scope never subscribes to an
-// OSDMap, interprets a CRUSH map, or opens an OSD connection. These bits satisfy
-// MON admission only; they are not an object-placement capability promise.
+// even clients that only issue commands. These bits satisfy MON admission
+// only; they do not imply OSDMap subscriptions or CRUSH placement support
+// and are never copied to OSD connections.
 const monAdmissionFeatures uint64 = 1<<18 | 1<<25 | 1<<41 | 1<<48 | 1<<58
 
 func featuresForRole(role uint8) uint64 {

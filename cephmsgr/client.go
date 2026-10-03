@@ -98,6 +98,12 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if options.MaxOSDConnections < 1 || options.MaxOSDConnections > 1024 {
 		return nil, errors.New("ceph: MaxOSDConnections must be between 1 and 1024")
 	}
+	if options.MaxBufferedOSDMapBytes == 0 {
+		options.MaxBufferedOSDMapBytes = options.MaxFrameSize
+	}
+	if options.MaxBufferedOSDMapBytes < 1024 || options.MaxBufferedOSDMapBytes > 1<<30 {
+		return nil, errors.New("ceph: OSD map buffer limit must be between 1 KiB and 1 GiB")
+	}
 	if options.DialContext == nil {
 		dialer := &net.Dialer{Timeout: options.ConnectTimeout}
 		options.DialContext = dialer.DialContext
