@@ -125,7 +125,8 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 ## Go API 설계 기준
 
 공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
-`MonCommandDescriptions`, `MgrCommandDescriptions`, `WaitMonReady`, `WaitMgrReady`,
+`MonCommandDescriptions`, `MgrCommandDescriptions`, `MonTellDescriptions`,
+`MonTellToDescriptions`, `MgrTellDescriptions`, `WaitMonReady`, `WaitMgrReady`,
 `WatchLogs`, `WatchConfig`, `Snapshot`, `Close`를 중심으로 한다.
 연결·명령·상태 타입은 `Options`, `Command`, `Result`, `State`다.
 `MonitorState.Members`는 `MonitorMember{Name, Rank}`로 인증된 MonMap의
@@ -139,6 +140,7 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
 - `MonCommand(ctx, command)`와 `MgrCommand(ctx, command)`는 요청별 취소와 deadline을 지원한다. 먼저 raw command API를 구현하고 필요한 typed API만 추가한다.
 - `MonCommandDescriptions(ctx)`와 `MgrCommandDescriptions(ctx)`는 현재 서버의 관리 명령 metadata를 새로 조회한다. 같은 prefix의 여러 signature와 원본 ID·flags·JSON 속성을 보존하며 prefix로 중복 제거하거나 실행 경로·권한·모듈 활성화를 추측하지 않는다. 원본 `Result`를 유지하고 성공 응답의 JSON 해석 실패는 세션 실패나 결과 불명확으로 바꾸지 않는다.
+- `MonTellDescriptions`, `MgrTellDescriptions`, `MonTellToDescriptions`는 관리 명령과 구분한 daemon-local admin schema를 조회한다. `sig/help`와 원본 속성을 보존하며 미제공된 module·permission·flags를 실행 권한 정보로 해석하지 않는다. admin formatter의 고정 feature 집합에 따라 인자 JSON boolean을 그대로 보존한다.
 - `MonTellTo(ctx, name, command)`는 정확한 MON 이름을 지정하고 독립 인증·지도 검증·호출·정리까지 요청 context를 적용한다. 알려진 대상 없음·지도 변경·전송 전 취소와 전송 후 결과 불명확을 구분하며 주 연결과 다른 명령의 수명을 보존한다.
 - `WaitMonReady(ctx)`와 `WaitMgrReady(ctx)`는 관리 명령이나 명령 슬롯 없이 연결 준비를 기다린다. MGR 대기는 발견과 별도 인증 연결을 포함한다. 취소는 해당 대기만 끝내며 성공은 이후 명령 성공을 보장하지 않는다. `Snapshot()`은 네트워크 요청 없이 현재 상태를 복사한다.
 - `WatchLogs(ctx, options)`는 client당 하나의 worker를 로컬에 비동기 등록하며 명령 슬롯을 사용하지 않는다. context는 복구를 포함한 watch 전체 수명에 적용한다. `Next(ctx)` 취소는 해당 대기만 끝내며 이미 취소된 context는 접수한 큐를 소비하지 않는다.

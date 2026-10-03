@@ -130,6 +130,18 @@ Direct MGR 목록의 flags는 현재 Tentacle formatter에서 모두 0이다. �
 명령이 있다는 사실은 실행 권한이나 해당 모듈의 활성화를 보장하지 않는다.
 Tell의 daemon-local admin 명령 목록과도 구분한다.
 
+`MonTellDescriptions(ctx)`, `MgrTellDescriptions(ctx)`,
+`MonTellToDescriptions(ctx, name)`는 각각 현재 MON, active MGR,
+정확한 bare name의 MON에서 daemon-local admin 명령 설명을 받는다.
+같은 반환 모델을 쓰지만 이 schema에는 module·permission·flags가 없으므로
+해당 값이 비어 있다는 사실을 무권한이나 실행 허가로 해석하지 않는다.
+원본 JSON은 field 부재를 유지한다. 인자의 `req`·`positional`은 admin formatter가
+항상 현재 feature 집합을 사용하므로 JSON boolean으로 반환된다.
+이름 지정 조회는 `MonTellTo`의 독립 admission과 context·연결 정리를 사용한다.
+Linux arm64·IPv6·aes256k 및 Darwin arm64·IPv4·aes/race의 실제 20.2.4에서
+MON 52개·MGR 45개의 모든 raw 설명이 native CLI 결과와 일치했다. 현재 MON과
+이름 지정 MON, active MGR에서 조회한 `version` 명령 실행도 검증했다.
+
 조회는 일반 명령과 같은 context·슬롯·raw 오류 계약을 따른다. 서버가 성공
 응답을 보낸 뒤 JSON 설명 해석에 실패하면 받은 `Result`와
 `ErrInvalidCommandDescriptions`를 감싼 로컬 해석 오류를 돌려준다. 그 오류로
