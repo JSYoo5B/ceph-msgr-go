@@ -19,6 +19,7 @@ metadata = {name: full[name] for name in ("epoch", "available", "active_name", "
 metadata["standbys"] = sorted(({"name": item["name"], "gid": item["gid"]}
                                 for item in full["standbys"]), key=lambda item: item["gid"])
 metadata["modules"] = full["modules"]
+metadata["services"] = full["services"]
 metadata["available_modules"] = [{name: module[name] for name in ("name", "can_run", "error_string")}
                                  for module in full["available_modules"]]
 temporary = output / "manager-oracle.tmp"
