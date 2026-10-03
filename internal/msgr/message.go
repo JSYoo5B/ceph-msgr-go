@@ -140,16 +140,16 @@ func LogSubscribe(level string, next uint64) MessageData {
 	return subscribe(0, 0, "log-"+level, next)
 }
 
-func subscribe(monEpoch, mgrEpoch uint32, logKey string, next uint64) MessageData {
+func subscribe(monEpoch, mgrEpoch uint32, extraKey string, next uint64) MessageData {
 	e := wire.Encoder{}
-	if logKey != "" {
+	if extraKey != "" {
 		e.U32(3)
 	} else {
 		e.U32(2)
 	}
 	// Ceph maps encode in lexicographic key order.
-	if logKey != "" {
-		e.String(logKey)
+	if extraKey != "" {
+		e.String(extraKey)
 		e.U64(next)
 		e.U8(0)
 	}
