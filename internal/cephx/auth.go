@@ -12,8 +12,11 @@ import (
 )
 
 const (
-	ServiceMgr  uint32 = 0x10
-	ServiceAuth uint32 = 0x20
+	ServiceOSD        uint32 = 0x04
+	ServiceMgr        uint32 = 0x10
+	ServiceAuth       uint32 = 0x20
+	defaultServices          = ServiceAuth | ServiceMgr
+	supportedServices        = defaultServices | ServiceOSD
 )
 
 var ErrTicket = errors.New("cephx: missing, expired or malformed ticket")
@@ -45,16 +48,32 @@ type Client struct {
 	Key      Key
 	GlobalID uint64
 	Tickets  map[uint32]Ticket
+	services uint32
 }
 
-func NewClient(name string, key Key) (*Client, error) {
+// NewClient selects the service tickets requested in each MON exchange.
+// Zero selects AUTH/MGR; the only optional additional service is OSD.
+func NewClient(name string, key Key, services uint32) (*Client, error) {
 	if !strings.HasPrefix(name, "client.") || len(name) <= 7 || len(name) > 1024 || strings.ContainsAny(name, "\x00\r\n") {
 		return nil, errors.New("cephx: identity must be client.<id>")
 	}
 	if key.Type() != AES && key.Type() != AES256K {
 		return nil, ErrKey
 	}
-	return &Client{Name: name, Key: key, Tickets: make(map[uint32]Ticket)}, nil
+	if services == 0 {
+		services = defaultServices
+	}
+	if !validServices(services) {
+		return nil, errors.New("cephx: invalid requested service mask")
+	}
+	return &Client{Name: name, Key: key, Tickets: make(map[uint32]Ticket), services: services}, nil
+}
+
+// Services returns the immutable request mask, preserved by Client value copies.
+func (c *Client) Services() uint32 { return c.services }
+
+func validServices(services uint32) bool {
+	return services&defaultServices == defaultServices && services&^supportedServices == 0
 }
 func (c *Client) Initial() []byte {
 	e := wire.Encoder{}
@@ -86,6 +105,9 @@ func (c *Client) Challenge(p []byte) ([]byte, error) {
 	return c.authRequest(challenge, nonce)
 }
 func (c *Client) authRequest(challenge, nonce uint64) ([]byte, error) {
+	if !validServices(c.services) {
+		return nil, errors.New("cephx: invalid requested service mask")
+	}
 	b := wire.Encoder{}
 	b.U64(challenge)
 	b.U64(nonce)
@@ -111,7 +133,7 @@ func (c *Client) authRequest(challenge, nonce uint64) ([]byte, error) {
 	e.U64(nonce)
 	e.U64(sum)
 	c.Tickets[ServiceAuth].encode(&e)
-	e.U32(ServiceAuth | ServiceMgr)
+	e.U32(c.services)
 	return e.Data, nil
 }
 
@@ -272,6 +294,9 @@ type Authorizer struct {
 }
 
 func (c *Client) Authorizer(service uint32) (*Authorizer, error) {
+	if (service != ServiceMgr && service != ServiceOSD) || c.services&service == 0 {
+		return nil, ErrTicket
+	}
 	t, ok := c.Tickets[service]
 	if !ok || !time.Now().Before(t.Expires) {
 		return nil, ErrTicket

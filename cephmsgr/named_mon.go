@@ -184,7 +184,7 @@ func (c *Client) namedMonitorAddresses(ctx context.Context, name string) ([16]by
 func (c *Client) openNamedMonitor(ctx context.Context, name string, fsid [16]byte, address msgr.Address) (_ *session.Session, err error) {
 	// Tentacle's directed Tell connections start a full MON CephX exchange
 	// with global ID zero. Their private credentials never replace c.auth.
-	auth, err := cephx.NewClient(c.options.Identity, c.options.Key.value)
+	auth, err := cephx.NewClient(c.options.Identity, c.options.Key.value, 0)
 	if err != nil {
 		return nil, err
 	}

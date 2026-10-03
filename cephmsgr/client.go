@@ -93,7 +93,7 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 		dialer := &net.Dialer{Timeout: options.ConnectTimeout}
 		options.DialContext = dialer.DialContext
 	}
-	auth, err := cephx.NewClient(options.Identity, options.Key.value)
+	auth, err := cephx.NewClient(options.Identity, options.Key.value, 0)
 	if err != nil {
 		return nil, err
 	}

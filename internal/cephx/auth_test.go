@@ -12,18 +12,18 @@ import (
 )
 
 func TestInitialIdentityFixture(t *testing.T) {
-	c, _ := NewClient("client.admin", rfcKey(t))
+	c, _ := NewClient("client.admin", rfcKey(t), 0)
 	const want = "0a080000000500000061646d696e0000000000000000"
 	if hex.EncodeToString(c.Initial()) != want {
 		t.Fatalf("identity %x", c.Initial())
 	}
-	if _, err := NewClient("osd.1", rfcKey(t)); err == nil {
+	if _, err := NewClient("osd.1", rfcKey(t), 0); err == nil {
 		t.Fatal("accepted daemon identity")
 	}
 }
 
 func TestRejectedAuthReplyPreservesCodeWithoutPublishingState(t *testing.T) {
-	c, _ := NewClient("client.admin", rfcKey(t))
+	c, _ := NewClient("client.admin", rfcKey(t), 0)
 	c.GlobalID = 42
 	e := wire.Encoder{}
 	e.U16(0x100)
@@ -121,7 +121,7 @@ func FuzzAuthenticationPublication(f *testing.F) {
 		if aes {
 			key = Key{kind: AES, secret: bytes.Repeat([]byte{0x51}, 16)}
 		}
-		c, err := NewClient("client.fuzz", key)
+		c, err := NewClient("client.fuzz", key, 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -146,7 +146,7 @@ func TestTicketRenewalAndAtomicFailure(t *testing.T) {
 	key := rfcKey(t)
 	auth := Key{kind: AES256K, secret: bytes.Repeat([]byte{0x21}, 32)}
 	mgr := Key{kind: AES256K, secret: bytes.Repeat([]byte{0x31}, 32)}
-	c, _ := NewClient("client.admin", key)
+	c, _ := NewClient("client.admin", key, 0)
 	reply := testAuthReply(t, key, auth, mgr, nil)
 	session, secret, err := c.Finish(42, reply, true)
 	if err != nil || session.Type() != AES256K || len(secret) != 40 {
@@ -173,7 +173,7 @@ func TestTicketRenewalAndAtomicFailure(t *testing.T) {
 
 func TestAuthorizerChallengeAndReply(t *testing.T) {
 	k := rfcKey(t)
-	c, _ := NewClient("client.admin", k)
+	c, _ := NewClient("client.admin", k, 0)
 	c.GlobalID = 42
 	c.Tickets[ServiceMgr] = Ticket{Key: k, Blob: []byte("opaque"), Expires: time.Now().Add(time.Minute)}
 	a, err := c.Authorizer(ServiceMgr)

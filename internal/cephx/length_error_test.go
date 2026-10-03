@@ -38,7 +38,7 @@ func TestAuthenticationLengthErrorsPreserveCauseAndState(t *testing.T) {
 					}
 					for _, field := range []string{"ticket-key", "connection-secret", "authorizer-reply", "plaintext-ticket-blob", "encrypted-ticket-blob"} {
 						t.Run(field, func(t *testing.T) {
-							c, _ := NewClient("client.length-test", key)
+							c, _ := NewClient("client.length-test", key, 0)
 							c.GlobalID = 42
 							c.Tickets[ServiceAuth] = Ticket{Key: key, SecretID: 7, Blob: []byte("previous auth"), Expires: time.Now().Add(time.Minute)}
 							c.Tickets[ServiceMgr] = Ticket{Key: key, SecretID: 9, Blob: []byte("previous mgr"), Expires: time.Now().Add(time.Minute)}
@@ -114,7 +114,7 @@ func TestAuthenticationLengthChecksKeepCryptoAndVersionErrors(t *testing.T) {
 		if kind == AES {
 			key = Key{kind: AES, secret: bytes.Repeat([]byte{0x51}, 16)}
 		}
-		c, _ := NewClient("client.length-test", key)
+		c, _ := NewClient("client.length-test", key, 0)
 		good := testAuthReply(t, key, key, key, nil)
 		if _, _, err := c.Finish(42, good, true); err != nil {
 			t.Fatal("valid authentication", err)

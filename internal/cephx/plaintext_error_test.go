@@ -81,7 +81,7 @@ func plaintextTestAuthReplyWithSecret(t *testing.T, key Key, service uint32, pay
 
 func plaintextTestClient(t *testing.T, key Key) *Client {
 	t.Helper()
-	c, err := NewClient("client.plaintext-test", key)
+	c, err := NewClient("client.plaintext-test", key, 0)
 	if err != nil {
 		t.Fatal(err)
 	}

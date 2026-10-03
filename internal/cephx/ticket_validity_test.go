@@ -91,7 +91,7 @@ func TestInvalidTicketValidityDoesNotPublishAuthentication(t *testing.T) {
 					id   uint32
 				}{{"auth", ServiceAuth}, {"mgr", ServiceMgr}} {
 					t.Run(field.name+"/"+service.name, func(t *testing.T) {
-						c, err := NewClient("client.validity", key)
+						c, err := NewClient("client.validity", key, 0)
 						if err != nil {
 							t.Fatal(err)
 						}

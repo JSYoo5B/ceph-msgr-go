@@ -54,7 +54,7 @@ func TestCompleteMalformedCephXPayloadIsProtocolFailure(t *testing.T) {
 		t.Run(fmt.Sprint("challenge=", more), func(t *testing.T) {
 			client, peer := net.Pipe()
 			fixture := fixtureAuthData()
-			auth, err := cephx.NewClient("client.test", fixture.key)
+			auth, err := cephx.NewClient("client.test", fixture.key, 0)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -79,7 +79,7 @@ func TestCompleteEncryptedMgrChallengeRetainsDecodeFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth, err := cephx.NewClient("client.test", fixture.key)
+	auth, err := cephx.NewClient("client.test", fixture.key, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
