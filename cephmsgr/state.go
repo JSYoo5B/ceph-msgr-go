@@ -53,6 +53,9 @@ type ManagerState struct {
 	Standbys         []StandbyManager // Last known authenticated map members, not daemon readiness or connection targets.
 	EnabledModules   []string         // Explicit enable set, not a computed always-on or running list.
 	AvailableModules []ManagerModule  // Last active-daemon report, not session readiness or authorization.
+	// Services maps module names to raw advertised URIs from this epoch's active
+	// daemon. Advertisements do not establish readiness or authorization.
+	Services map[string]string
 }
 
 // StandbyManager identifies a standby MGR in the last known authenticated map.
@@ -80,7 +83,7 @@ type TicketState struct {
 }
 
 // Snapshot reads client state without sending a command, dialing, or waiting
-// for recovery. The returned slices and rejection can be modified independently
+// for recovery. Returned slices, maps and rejection can be modified independently
 // of the client. Ready is false after Close or an explicit auth rejection.
 func (c *Client) Snapshot() State {
 	c.mu.Lock()
@@ -109,6 +112,10 @@ func (c *Client) Snapshot() State {
 	state.Manager.EnabledModules = append([]string(nil), c.mgrMap.EnabledModules...)
 	for _, module := range c.mgrMap.AvailableModules {
 		state.Manager.AvailableModules = append(state.Manager.AvailableModules, ManagerModule{Name: module.Name, CanRun: module.CanRun, ErrorString: module.ErrorString})
+	}
+	state.Manager.Services = make(map[string]string, len(c.mgrMap.Services))
+	for module, uri := range c.mgrMap.Services {
+		state.Manager.Services[module] = uri
 	}
 	authError := c.authErr
 	admitted := !c.closed && authError == nil
