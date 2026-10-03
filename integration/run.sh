@@ -98,7 +98,7 @@ save_mapped_metadata() {
 save_oracle_metadata() {
     test -n "$diagnostics" || return 0
     mkdir -p "$diagnostics"
-    for file in tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json named-mon-b.json log-oracle.json log-oracle-sentinel.txt config-oracle.json config-oracle-history.jsonl command-oracle-mon.json command-oracle-mgr.json command-oracle-summary.json; do
+    for file in tell-oracle-mon.json tell-oracle-mgr.json tell-oracle-mgr-map.json named-mon-b.json log-oracle.json log-oracle-sentinel.txt config-oracle.json config-oracle-history.jsonl command-oracle-mon.json command-oracle-mgr.json command-oracle-summary.json tell-command-oracle-mon-a.json tell-command-oracle-mon-b.json tell-command-oracle-mon-c.json tell-command-oracle-mgr.json tell-command-oracle-summary.json; do
         if test -f "$out/$file"; then
             cp "$out/$file" "$diagnostics/$file"
         fi
@@ -164,6 +164,7 @@ fi
 cp "$project_root/integration/cluster.sh" "$out/cluster.sh"
 cp "$project_root/tools/log_oracle.py" "$out/log_oracle.py"
 cp "$project_root/tools/command_oracle.py" "$out/command_oracle.py"
+cp "$project_root/tools/tell_command_oracle.py" "$out/tell_command_oracle.py"
 if test "$mapped_ipv6" = 1; then
     cp "$project_root/tools/mapped_address_oracle.py" "$out/mapped_address_oracle.py"
 fi

@@ -302,6 +302,16 @@ fi
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."
 while true; do
+    if test -f /out/verify-tell-descriptions; then
+        test "$config_fixture" = 1 || exit 2
+        read -r request_id label extra < /out/verify-tell-descriptions
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 || exit 2
+        test "$label" = initial && test -z "$extra" || exit 2
+        rm /out/verify-tell-descriptions
+        timeout 25 python3 /out/tell_command_oracle.py "$root" /out
+        touch "/out/tell-descriptions-verify.$request_id"
+    fi
     if test -f /out/verify-command-descriptions; then
         test "$config_fixture" = 1 || exit 2
         read -r request_id label extra < /out/verify-command-descriptions
