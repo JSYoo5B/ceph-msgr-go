@@ -39,6 +39,8 @@ type CommandDescriptions struct {
 
 // CommandDescription preserves one advertised command and its original JSON.
 // The returned signature, Raw and attribute values are owned by the caller.
+// Daemon-local schemas omit Module, Permission and Flags. Their zero values
+// mean metadata was not reported; Raw preserves that absence.
 type CommandDescription struct {
 	ID         string
 	Prefix     string
@@ -81,6 +83,30 @@ func (c *Client) MonCommandDescriptions(ctx context.Context) (CommandDescription
 // and unknown outcomes, and does not cache across calls or MGR changes.
 func (c *Client) MgrCommandDescriptions(ctx context.Context) (CommandDescriptions, error) {
 	return fetchCommandDescriptions(ctx, c.MgrCommand)
+}
+
+// MonTellDescriptions fetches the current MON's daemon-local admin command
+// schema, distinct from MonCommandDescriptions' management schema. It uses
+// MonTell's context, capability and command-outcome semantics.
+func (c *Client) MonTellDescriptions(ctx context.Context) (CommandDescriptions, error) {
+	return fetchCommandDescriptions(ctx, c.MonTell)
+}
+
+// MgrTellDescriptions fetches the active MGR's daemon-local admin command
+// schema, distinct from MgrCommandDescriptions' management schema. It uses
+// MgrTell's context, capability and command-outcome semantics.
+func (c *Client) MgrTellDescriptions(ctx context.Context) (CommandDescriptions, error) {
+	return fetchCommandDescriptions(ctx, c.MgrTell)
+}
+
+// MonTellToDescriptions fetches one named MON's daemon-local admin schema.
+// name is the exact bare MonMap name. The independent authentication, map
+// admission, operation context and connection cleanup follow MonTellTo;
+// unavailable targets are never replaced with another MON.
+func (c *Client) MonTellToDescriptions(ctx context.Context, name string) (CommandDescriptions, error) {
+	return fetchCommandDescriptions(ctx, func(ctx context.Context, command Command) (Result, error) {
+		return c.MonTellTo(ctx, name, command)
+	})
 }
 
 func fetchCommandDescriptions(ctx context.Context, call func(context.Context, Command) (Result, error)) (CommandDescriptions, error) {
