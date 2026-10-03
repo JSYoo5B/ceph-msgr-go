@@ -1,4 +1,4 @@
-// Package maps reads the subset of MON/MGR maps needed by management clients.
+// Package maps reads MON/MGR maps and opaque OSD map message envelopes.
 package maps
 
 import (
