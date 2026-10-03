@@ -94,6 +94,18 @@ func (c *Client) renewalState(now time.Time) (needed bool, deadline time.Time, c
 }
 
 func (c *Client) rejectAuthentication(err error) {
+	// A prior MON protocol failure can be published while custom connection
+	// cleanup still delays the map watch's worker/onClose. Inspect that source
+	// outside mu before recording a later authentication refusal for the watch.
+	c.mu.Lock()
+	var mapSource *session.Session
+	if watch := c.osdMapWatch; watch != nil {
+		mapSource = watch.observed
+	}
+	c.mu.Unlock()
+	if mapSource != nil {
+		c.stopOSDMapForFailedSession(mapSource, mapSource.Err())
+	}
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()

@@ -8,6 +8,7 @@ import (
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/maps"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
 )
 
 // OSDMapRequest selects inclusive native full and incremental ranges. Each
@@ -116,7 +117,7 @@ func (c *Client) RequestOSDMaps(ctx context.Context, request OSDMapRequest) (OSD
 			}
 			armed.Store(true)
 			if err := s.Send(operation, message); err != nil {
-				return OSDMapBatch{}, c.namedMonitorError(err)
+				return OSDMapBatch{}, c.requestedOSDMapError(s, err)
 			}
 			select {
 			case batch := <-response:
@@ -131,7 +132,7 @@ func (c *Client) RequestOSDMaps(ctx context.Context, request OSDMapRequest) (OSD
 				}
 				return OSDMapBatch{}, c.namedMonitorError(s.Err())
 			case <-operation.Done():
-				return OSDMapBatch{}, c.namedMonitorError(operation.Err())
+				return OSDMapBatch{}, c.requestedOSDMapError(s, operation.Err())
 			}
 		}
 	}
@@ -139,4 +140,14 @@ func (c *Client) RequestOSDMaps(ctx context.Context, request OSDMapRequest) (OSD
 		return OSDMapBatch{}, c.namedMonitorError(errors.Join(failures...))
 	}
 	return OSDMapBatch{}, errors.New("ceph: MON map has no Messenger v2 address")
+}
+
+// Operation cancellation and source failure can become visible together while
+// private connection cleanup is still blocked. Preserve an already published
+// fatal protocol cause before mapping local cancellation to client shutdown.
+func (c *Client) requestedOSDMapError(source *session.Session, err error) error {
+	if previous := source.Err(); fatalLogSessionError(previous) {
+		err = previous
+	}
+	return c.namedMonitorError(err)
 }

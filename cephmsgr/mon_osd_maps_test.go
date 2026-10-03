@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"math"
 	"net"
 	"reflect"
@@ -218,7 +219,7 @@ func (p *monOSDMapsTestPeer) subscription(t *testing.T, ctx context.Context, nex
 	}
 }
 
-func monOSDMapsTestFixture(t *testing.T) (*Client, context.Context, <-chan *monOSDMapsTestPeer) {
+func monOSDMapsTestFixture(t *testing.T, wrap ...func(int, net.Conn) net.Conn) (*Client, context.Context, <-chan *monOSDMapsTestPeer) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	options := mockOptions(t, 20, [16]byte{1})
@@ -237,9 +238,13 @@ func monOSDMapsTestFixture(t *testing.T) (*Client, context.Context, <-chan *monO
 		client, server := net.Pipe()
 		p := &monOSDMapsTestPeer{conn: server, sends: make(chan logTestSend), subscriptions: make(chan monOSDMapsTestSubscription, 8), commands: make(chan msgr.MessageData, 128), requests: make(chan msgr.MessageData, 128), done: make(chan struct{}), errors: make(chan error, 8)}
 		mu.Lock()
-		early := len(all) != 0
+		index := len(all)
+		early := index != 0
 		all = append(all, p)
 		mu.Unlock()
+		for _, wrapConn := range wrap {
+			client = wrapConn(index, client)
+		}
 		peers <- p
 		go p.serve(early)
 		return client, nil
@@ -662,6 +667,10 @@ func TestMonOSDMapRequestPrivateIsolationPreservesPartialAndEmptyReplies(t *test
 			}
 			defer stream.Close()
 			primary.subscription(t, ctx, 11)
+			// Admission's MgrMap follows MonMap on the same reader. Wait for
+			// that ordinary greeting before comparing the private operation's
+			// effect on shared identity and metadata.
+			monOSDMapsTestBarrier(t, ctx, c)
 			before := c.Snapshot()
 			c.mu.Lock()
 			main, auth := c.mon, c.auth
@@ -801,7 +810,7 @@ func TestMonOSDMapRequestCancellationAndClientCloseJoinPrivateConnection(t *test
 }
 
 func TestMonOSDMapWatchFirstFatalCauseSurvivesDelayedCleanup(t *testing.T) {
-	for _, late := range []string{"malformed", "overflow", "watch-close", "client-close", "lifetime-cancel"} {
+	for _, late := range []string{"malformed", "overflow", "watch-close", "client-close", "lifetime-cancel", "auth-rejection"} {
 		t.Run(late, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -843,6 +852,15 @@ func TestMonOSDMapWatchFirstFatalCauseSurvivesDelayedCleanup(t *testing.T) {
 				// Neither the paused worker nor onClose can publish the earlier
 				// fatal cause before this cancellation reaches stop.
 				watchCancel()
+			} else if late == "auth-rejection" {
+				rejection := &AuthenticationError{Code: -13}
+				c.rejectAuthentication(rejection)
+				c.mu.Lock()
+				refused := c.authErr == rejection && !c.monReady
+				c.mu.Unlock()
+				if !refused {
+					t.Fatal("preserving the map cause suppressed client authentication refusal")
+				}
 			} else {
 				message := osdMapsMessage(4, [16]byte{1}, nil, []OSDMapBlob{{Epoch: 6, Data: []byte{8}}})
 				if late == "malformed" {
@@ -886,5 +904,142 @@ func TestMonOSDMapWatchFirstFatalCauseSurvivesDelayedCleanup(t *testing.T) {
 				t.Fatal("onClose replaced the first fatal cause", err, cause)
 			}
 		})
+	}
+}
+
+func TestMonOSDMapRequestFirstFatalCauseSurvivesCancellationAndCleanup(t *testing.T) {
+	for _, closer := range []string{"operation", "client"} {
+		t.Run(closer, func(t *testing.T) {
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			finish := func() { releaseOnce.Do(func() { close(release) }) }
+			wrapped := make(chan *managerCleanupConn, 1)
+			c, ctx, peers := monOSDMapsTestFixture(t, func(index int, conn net.Conn) net.Conn {
+				if index != 1 {
+					return conn
+				}
+				held := &managerCleanupConn{Conn: conn, closing: make(chan struct{}), cleaned: make(chan struct{}), release: release}
+				wrapped <- held
+				return held
+			})
+			t.Cleanup(finish)
+			monOSDMapsTestNextPeer(t, ctx, peers)
+			operation, cancelOperation := context.WithCancel(ctx)
+			defer cancelOperation()
+			result := make(chan error, 1)
+			go func() {
+				_, err := c.RequestOSDMaps(operation, OSDMapRequest{FullFirst: 7, FullLast: 7})
+				result <- err
+			}()
+			private := monOSDMapsTestNextPeer(t, ctx, peers)
+			private.nextRequest(t, ctx, 5)
+			private.nextRequest(t, ctx, 6)
+			var held *managerCleanupConn
+			select {
+			case held = <-wrapped:
+			case <-ctx.Done():
+				t.Fatal("private connection wrapper was not owned", ctx.Err())
+			}
+			c.mu.Lock()
+			var source *session.Session
+			for candidate := range c.sessions {
+				if candidate != c.mon {
+					source = candidate
+				}
+			}
+			c.mu.Unlock()
+			if source == nil {
+				t.Fatal("private request did not register an owned session")
+			}
+			cause := &net.OpError{Op: "read", Net: "tcp", Err: msgr.ErrCRC}
+			go source.Fail(cause)
+			awaitCleanup(t, ctx, held.closing) // Err/Done published; Fail still owns blocked cleanup.
+			closed := make(chan error, 1)
+			if closer == "operation" {
+				cancelOperation()
+			} else {
+				go func() { closed <- c.Close() }()
+			}
+			select {
+			case err := <-result:
+				t.Fatal("private request returned before joining its blocked cleanup", err)
+			default:
+			}
+			finish()
+			if err := osdMapsAwaitResult(t, ctx, result); err != cause {
+				t.Fatal("cancellation hid an already published fatal source error", err, cause)
+			}
+			if closer == "client" {
+				select {
+				case err := <-closed:
+					if err != nil {
+						t.Fatal(err)
+					}
+				case <-ctx.Done():
+					t.Fatal("Client.Close did not join the released private request", ctx.Err())
+				}
+			} else {
+				monOSDMapsTestBarrier(t, ctx, c)
+			}
+		})
+	}
+}
+
+func TestMonOSDMapRequestCancellationArbitratesPublishedSourceFailure(t *testing.T) {
+	for _, closer := range []string{"operation", "client"} {
+		for _, failure := range []string{"healthy", "transport", "fatal"} {
+			t.Run(closer+"/"+failure, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				base, cancelClient := context.WithCancel(context.Background())
+				defer cancelClient()
+				operation, cancelOperation := context.WithCancel(base)
+				defer cancelOperation()
+				c := &Client{ctx: base}
+				conn, peer := net.Pipe()
+				release := make(chan struct{})
+				held := &managerCleanupConn{Conn: conn, closing: make(chan struct{}), cleaned: make(chan struct{}), release: release}
+				source := session.New(&session.Transport{Conn: held}, session.Config{}, nil, nil)
+				t.Cleanup(func() { close(release); source.Fail(ErrClosed); source.Wait(); peer.Close() })
+				var cause error
+				switch failure {
+				case "transport":
+					cause = io.EOF
+				case "fatal":
+					cause = &net.OpError{Op: "read", Net: "tcp", Err: msgr.ErrCRC}
+				}
+				if cause != nil {
+					go source.Fail(cause)
+					awaitCleanup(t, ctx, held.closing)
+				}
+				if closer == "operation" {
+					cancelOperation()
+				} else {
+					cancelClient()
+				}
+				// Exercise the actual Send/wait error arbitration with both events
+				// already published. The public join test deliberately leaves select
+				// ordering free; this checks the cancellation branch independently.
+				err := c.requestedOSDMapError(source, operation.Err())
+				if failure == "fatal" {
+					if err != cause {
+						t.Fatal("local cancellation replaced the first fatal source cause", err, cause)
+					}
+				} else {
+					want := context.Canceled
+					if closer == "client" {
+						want = ErrClosed
+					}
+					if !errors.Is(err, want) {
+						t.Fatal("nonfatal source replaced normal cancellation/shutdown", err, want)
+					}
+				}
+				select {
+				case <-held.cleaned:
+					t.Fatal("error arbitration required source cleanup to finish")
+				default:
+				}
+			})
+		}
 	}
 }

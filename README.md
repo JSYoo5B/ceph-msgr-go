@@ -177,7 +177,7 @@ MON에는 구현된 PGID64 wire 기능을 협상하지만 CRUSH 계산·지도 �
 사용 레이어에 둔다.
 
 20.2.4·Darwin arm64·IPv4 host relay의 aes256k secure/CRC와 Linux arm64
-container·AES secure에서 최신 full, 고정 full/incremental range, 미래 epoch의
+container·AES secure/CRC에서 최신 full, 고정 full/incremental range, 미래 epoch의
 빈 응답, 동시 private 조회와 연속 구독을 native decoder/encoder의 FSID·epoch·
 정확한 bytes로 대조했다. Full map은 같은 epoch의 native canonical map을
 peer feature로 인코딩해 비교하고, incremental은 수신 blob을 native 재인코딩해
