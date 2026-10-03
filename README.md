@@ -403,6 +403,18 @@ Tentacle 20.2.4의 Linux IPv6/aes256k와 Darwin IPv4/AES race 시험에서
 승격된 뒤 재기동한 daemon이 새 ID로 복귀하는 것도 일치했으며, 조회 과정에서
 제품의 MGR 접속은 발생하지 않았다.
 
+`Manager.EnabledModules`는 같은 MgrMap의 명시적인 활성화 설정을 반환한다.
+Always-on 모듈 전체 목록은 포함하지 않는다. `Manager.AvailableModules`는 active
+MGR이 보고한 `ManagerModule{Name, CanRun, ErrorString}` 목록이다. `CanRun`과
+원인 문자열은 해당 daemon의 마지막 load 가능 보고이며 실행 중 상태나 명령
+권한을 의미하지 않는다. 모듈 options는 해석하지 않는다. 두 목록 모두 별도
+명령이나 MGR 접속 없이 조회하고 호출자가 소유하며 Close 후 마지막 값을 유지한다.
+
+같은 Linux IPv6/aes256k와 Darwin IPv4/AES race 구성에서 명시적인 활성화 목록과
+34개 모듈 보고를 같은 epoch의 native `mgr dump`와 대조했다. `iostat` 비활성화·
+재활성화와 active MGR 전환 뒤에도 전체 목록과 로딩 실패 원인이 일치했다.
+이 조회에서도 제품의 MGR 접속은 발생하지 않았다.
+
 `Manager.Available`은 마지막으로 수신한 MgrMap 값이다. MGR 접속은
 `MgrCommand`, `MgrTell` 또는 `WaitMgrReady`가 필요할 때 시작하므로 available이어도
 ready는 아닐 수 있다.

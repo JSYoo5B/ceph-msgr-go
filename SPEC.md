@@ -136,6 +136,10 @@ wire 의미를 독립 작성했다. Native CLI oracle과 설정 변경은 개발
 `MonTellTo`에 사용하고, rank·멤버십을 daemon의 현재 준비 상태로 해석하지 않는다.
 `ManagerState.Standbys`는 `StandbyManager{Name, GlobalID}`로 같은 인증된
 MgrMap의 대기 MGR을 독립 복사한다. 가용성이나 새로운 접속 경로를 추가하지 않는다.
+`ManagerState.EnabledModules`는 같은 지도의 명시적인 활성화 set이며 always-on
+전체 목록이 아니다. `AvailableModules`는 active daemon이 보고한
+`ManagerModule{Name, CanRun, ErrorString}`를 원본 순서대로 독립 복사한다.
+Load 가능 보고를 실행 중 상태·명령 권한으로 바꾸지 않는다.
 로그는 `LogOptions`, `LogBatch`, `LogEntry`, `LogStream.Next`·`Close`로 제공한다.
 설정은 `ConfigOptions`, `ConfigStream.Next`·`Close`로 raw `map[string]string`을
 전달한다. 하나의 unread 전체 map을 후속 map으로 교체하며 caller가 소유한다.
@@ -178,9 +182,15 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 
 MGR standby는 고정 [MgrMap과 StandbyInfo](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMap.h#L189)의
 LGPL-2.1 고지를 확인하고 wire 의미를 독립 구현한다. `StandbyInfo`의 gid·name을
-보존하며 child envelope의 module·feature metadata는 공개 기능 범위에 넣지 않는다.
+보존하며 standby child envelope의 module·feature metadata는 공개 기능 범위에 넣지 않는다.
 실제 daemon이 만든 기존 IPv6 MgrMap fixture와 같은 epoch의 native `mgr dump`
 결과를 oracle로 사용하고 standby만 바뀌는 지도와 active 전환을 검증한다.
+
+Active 모듈 metadata는 같은 [MgrMap의 ModuleInfo](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMap.h#L129)의
+LGPL-2.1 고지를 확인하고 wire prefix를 독립 구현한다. 명시적인 module set과
+active `name/can_run/error_string`을 보존하며 services·module_options는 공개
+모델에 넣지 않는다. 같은 epoch의 `mgr dump`와 비교하고 module disable/enable,
+active 전환, 목록 소유권과 Close 후 보존을 검증한다.
 
 Digest는 고정 [MMgrDigest](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MMgrDigest.h#L35),
 [MON 전송](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/MgrMonitor.cc#L645),
