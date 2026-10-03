@@ -11,6 +11,7 @@
 - 이 저장소는 통신 계층만 구현한다. 첫 구현은 raw MON/MGR 명령 송수신과 이를 위한 인증, wire 메시지·지도 codec, 구독, 세션 처리와 복구에 집중한다. 다음 단계는 OSD 통신과 객체 I/O를 위한 wire 기초다.
 - 실제 사용은 별도 레이어·저장소에서 구현한다. 명령 JSON 구성, 명령 schema 및 응답 JSON의 의미 해석, text keyring·설정 로딩, 명령별 typed 관리 API, 모듈·설정 정책과 운영 workflow는 제품 범위에 포함하지 않는다.
 - OSD service ticket, 명시적으로 지정한 OSD 연결, 호출자가 준비한 객체 locator·raw hash·지도 epoch를 사용하는 stat/read 요청과 응답을 범위에 추가한다. 자동 배치·CRUSH 계산, 자동 라우팅·재시도 정책, 고수준 RADOS API, RBD, CephFS는 이 단계에 포함하지 않는다. 객체 쓰기와 다른 mutation opcode는 별도 구현·검증 단위로 추가한다. 호출자가 준비한 풀·OSD 관리 명령 JSON도 MON/MGR로 전송할 수 있지만 해당 관리 기능 자체를 구현하는 것은 아니다.
+- 2026-10-04 후속 사용자 결정으로 MON의 명시적인 raw OSDMap 조회·구독을 추가한다. 최신 full·지정 epoch 범위·연속 수신을 제공하며 지도 해석·적용·CRUSH 배치와 객체 요청 재실행은 사용 계층에 둔다.
 
 ## 통신 계층과 사용 계층의 경계
 
@@ -108,7 +109,7 @@ fixture 구성에서 성공한 결과를 일반 CRUSH 설정이나 완전한 RAD
 bounded FIFO로 전달한다. 현재 Tentacle feature 협상의 v1 및 current v4
 envelope에서 FSID·trim/latest epoch·ordered full/incremental blob·원본 front를
 보존한다. 내포한 지도는 opaque bytes이며 CRUSH·OSDMap 적용과 target 선택은
-사용 계층의 책임이다. MON subscription이나 OSD feature 광고를 추가하지 않는다.
+사용 계층의 책임이다. 이 OSD 수신 경로 자체는 MON 구독을 시작하지 않는다.
 큐 손실이 incremental chain을 깨뜨리지 않도록 overflow는 OSD 세션을 실패시키고
 이미 접수한 지도는 첫 terminal cause보다 먼저 전달한다. Context는 map의
 로컬 수신 대기만 취소한다. 지도 수신을 요청 완료나 자동 재실행의 근거로 삼지 않는다.
@@ -121,6 +122,38 @@ envelope에서 FSID·trim/latest epoch·ordered full/incremental blob·원본 fr
 [OSD map 전달](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/OSD.cc#L7555).
 고정 소스의 LGPL-2.1 고지를 확인하며 C++ 코드를 복사하지 않고 wire 의미를
 독립적인 Go 구현으로 작성한다. 이 절은 목표이며 검증된 지원 목록은 아니다.
+
+## MON raw OSDMap 획득
+
+`RequestOSDMaps`의 zero 요청은 cursor 0의 ONETIME 구독으로 최신 full map을
+받는다. 지정한 full/incremental inclusive range는 `MMonGetOSDMap`으로 요청한다.
+응답에는 TID가 복사되지 않으므로 각 조회는 별도 인증·MonMap admission을
+통과한 MON 연결을 소유하고 다른 조회·구독과 응답을 격리한다. `MaxInFlight`를
+기존 명령과 공유하며 operation context와 Client Close가 setup·수신·정리를 소유한다.
+서버는 retained/current epoch와 count/bytes 상한으로 범위를 자를 수 있다.
+한 개의 빈 또는 partial envelope도 정상 응답이며 자동 범위 완료·재요청은 없다.
+
+`WatchOSDMaps`는 client당 하나의 shared MON 구독으로 OSD ticket 없이 동작한다.
+0은 full baseline, 양의 `StartEpoch`는 inclusive history를 요청한다. MON `osd`
+read capability가 없으면 서버는 구독을 조용히 버릴 수 있으므로 로컬 등록·ACK·
+timeout을 권한 승인·거절이나 지도 chain 완료로 해석하지 않는다. FIFO 64개와
+byte bound를 적용하며 overflow는 watch만 끝내고 shared MON 명령을 보존한다.
+인증 갱신과 MON 재접속은 마지막 큐 접수 blob의 최대 epoch + 1부터 재구독하며
+최초 StartEpoch보다 낮추지 않는다. `NewestMap`은 광고값이고 적용 cursor가 아니다.
+Trim fallback·빈 batch·중복·이전 watch의 늦은 메시지를 원본 그대로 드러낸다.
+내포한 map 해석·적용, 누락 판단과 전체 chain 확보는 사용 계층이 맡는다.
+
+MON에도 이미 구현한 PGID64 wire capability를 협상해 classic v6 full/incremental
+map을 받는다. CRUSH admission 예외를 확장하는 것이 아니며 PGPOOL3·OSDMAP_ENC·
+INCSUBOSDMAP·backoff/upmap·새 객체 reply feature를 함께 추가하지 않는다.
+내포한 지도는 여전히 opaque bytes다. 독립 native class decoder와 같은 peer
+feature의 native encoder로 FSID·epoch·원본 bytes를 대조한다.
+
+참조: [MMonGetOSDMap](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MMonGetOSDMap.h),
+[range 응답](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/OSDMonitor.cc#L2819),
+[구독·trim 처리](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/OSDMonitor.cc#L4867),
+[구독 권한](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/mon/Monitor.cc#L5394).
+LGPL-2.1 고지를 확인하고 C++ 코드를 복사하지 않고 wire 의미를 독립 구현한다.
 
 ## Messenger 구현 항목
 

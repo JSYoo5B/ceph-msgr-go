@@ -134,6 +134,61 @@ nonce·scope·flow도 보존한다. 주 client의 global ID·ticket·MON/MGR 연
 아니지만, 전송 후 응답을 받지 못하면 `OutcomeUnknownError`를 보존한다.
 Watch 큐 overflow·명령 슬롯 대기·잘못된 Options 값은 별도 오류다.
 
+## MON raw OSDMap 조회·구독
+
+`RequestOSDMaps(ctx, OSDMapRequest{})`는 최신 full map을 받는다. 지정 epoch의
+full/incremental inclusive range도 조회할 수 있다. 응답은 같은 `OSDMapBatch`
+타입이며 내포한 지도는 원본 bytes다. OSD ticket이나 `EnableOSD`는 필요 없다.
+
+```go
+latest, err := client.RequestOSDMaps(ctx, cephmsgr.OSDMapRequest{})
+if err != nil {
+    return err
+}
+batch, err := client.RequestOSDMaps(ctx, cephmsgr.OSDMapRequest{
+    IncrementalFirst: firstEpoch, IncrementalLast: lastEpoch,
+})
+// 사용 레이어가 full baseline·증분 연속성·trim 및 추가 조회 여부를 판단한다.
+```
+
+각 range pair는 모두 0이면 비활성, 그렇지 않으면 `0 < First <= Last`다.
+서버는 retained/current history와 count·bytes 상한으로 응답을 자를 수 있으며
+full map부터 같은 예산을 사용한다. 한 개의 빈 또는 partial batch도 정상
+응답이다. `NewestMap`을 요청 범위 완료나 지도 적용 epoch로 해석하지 않는다.
+응답에 상관 ID가 없어 조회마다 독립 인증·MonMap admission을 통과한 연결을
+사용한다. 동시 조회는 명령과 같은 `MaxInFlight`를 공유하고 shared MON의
+identity·구독을 보존한다. 자동으로 다음 range를 조회하거나 요청을 재실행하지 않는다.
+
+`WatchOSDMaps(ctx, OSDMapOptions{StartEpoch: epoch})`는 client당 하나의 연속
+구독을 만든다. 0은 최신 full baseline, 양수는 inclusive history를 요청한다.
+watch context는 복구를 포함한 수명, `Next(ctx)`의 context는 그 대기만 제한한다.
+MON `osd` read capability가 필요하며 서버가 부족한 권한의 구독을 조용히
+버릴 수 있다. 로컬 등록 성공이나 timeout을 서버 권한 판정으로 바꾸지 않는다.
+
+큐는 FIFO 64개이며 `MaxBufferedBytes`는 기본 `MaxFrameSize`, 1 KiB–1 GiB다.
+OSD 지도 큐와 같은 보수적 byte accounting을 사용한다. 초과하면
+`ErrOSDMapWatchOverflow`로 watch만 끝내고 접수한 batch와 공유 MON 명령을 유지한다.
+`Close`는 worker를 기다리며 `ErrOSDMapStreamClosed`, Client Close는 `ErrClosed`다.
+접수한 batch는 처음 기록한 terminal 오류보다 먼저 drain한다.
+인증 갱신·MON 전환은 마지막 접수 blob 최대 epoch + 1로 재구독한다.
+이는 delivery cursor이며 map 적용을 뜻하지 않는다. 빈 batch·trim·중복과
+동일 MON의 이전 watch에서 늦게 온 응답도 보존하므로 완전한 chain은 보장하지 않는다.
+MON에는 구현된 PGID64 wire 기능을 협상하지만 CRUSH 계산·지도 적용·대상 선택은
+사용 레이어에 둔다.
+
+20.2.4·Darwin arm64·IPv4 host relay의 aes256k secure/CRC와 Linux arm64
+container·AES secure에서 최신 full, 고정 full/incremental range, 미래 epoch의
+빈 응답, 동시 private 조회와 연속 구독을 native decoder/encoder의 FSID·epoch·
+정확한 bytes로 대조했다. 구독은 만료 전 AUTH ticket 갱신 두 차례와 유일한
+seed의 TCP 단절을 거쳐 learned MON에서 이어졌다. Linux 시험은 실제 pool을
+포함하며 기존 OSD 지도 전달도 함께 통과했다. Synthetic peer는 취소·overflow·
+queued cursor·최대 epoch·source guard·정리 경합과 최초 오류 보존을 검증한다.
+
+```sh
+CEPH_MSGR_TEST_RUNTIME=host \
+  CEPH_MSGR_TEST_RUN='^TestCephMonOSDMaps.*Integration$' sh integration/run.sh
+```
+
 ## OSD stat/read 통신 기초
 
 `Options.EnableOSD: true`로 OSD service ticket 획득·갱신을 명시적으로 켠다.
@@ -189,7 +244,8 @@ OSD 연결은 lossy session이며 전송한 요청을 재실행하지 않는다.
 FSID·encoding version·trim/latest epoch와 `FullMaps`·`IncrementalMaps`의
 epoch·원본 bytes 및 `RawFront`를 보존한다. 내포한 지도의 해석·FSID 검증·적용,
 기준 full map 확보, 배치와 새 요청의 epoch 결정은 사용 레이어가 처리한다.
-라이브러리는 MON에 OSDMap을 구독하거나 map을 적용·요청·재실행하지 않는다.
+`NextMap` 자체는 MON 구독이나 지도 적용·조회·객체 재실행을 시작하지 않는다.
+MON의 명시적인 조회·구독은 위의 API를 사용한다.
 
 Tentacle도 현재 기능 협상에서는 envelope v1을 선택할 수 있으며 이 경우
 trim/latest epoch는 wire에 없으므로 둘 다 0이다. `NewestMap`은 서버가 광고한
@@ -1509,7 +1565,7 @@ client TCP 복구·stream 종료 원인 보존을 포함한 `993001d`의
 
 [Ceph 변경 비교 도구](tools/ceph_diff.py)는 Python 표준 라이브러리로
 upstream ref를 commit SHA로 고정한 후 Messenger, CephX, 지도·복구,
-MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 82개 경로를
+MON/MGR 서버의 인증·접속 정책, 메시지와 명령 schema 등 89개 경로를
 비교한다. AuthRegistry와 global·MON 옵션, 시험에서 사용하는 balancer·crash·
 iostat 모듈도 포함한다.
 소스는 메모리에서만 읽고 결과를
