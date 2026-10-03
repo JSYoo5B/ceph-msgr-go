@@ -165,6 +165,7 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 7. MON 로그는 독립 raw wire 입력 및 native CLI oracle과 대조한다. 실제 로그 수신, cursor 복구, ticket 갱신, 제한된 큐, watch·Next context와 Close를 검증하며 단순 SubscribeAck를 권한 확인으로 사용하지 않는다.
 8. 이름 지정 MON Tell은 독립 native daemon status의 name·rank·FSID와 대조한다. 없는 이름의 접속 전 거절, 다른 MON으로 대체하지 않음, 새 private 인증 ID와 주 상태 보존, 동시 호출·전송 후 불확실성·setup과 session의 Close 소유권을 검증한다.
 9. MON 이름 조회는 독립 native CLI 지도와 대조한다. 네트워크 없는 조회와 반환 slice의 소유권, 주 지도 변경·거절·stale source·private Tell의 격리, ticket 갱신과 Close 후 마지막 정보 보존을 검증한다.
+10. CephX 내부 plaintext는 유효한 암호 envelope에 넣은 독립 입력과 크기 제한이 있는 fuzz로 검증한다. Decoder의 읽기 실패와 완전한 version·nonce·암호 오류를 구분하고, 실패 시 identity·ticket·credential·부분 출력을 게시하지 않는지 공개 setup 경로까지 확인한다. 정상 실서버 인증과 ticket 갱신 검증도 두 키 타입별로 유지한다.
 
 구현한 encoder와 decoder끼리의 round trip만으로 wire 호환성을 입증하지 않는다. Ceph에서 얻은 fixture 및 실제 Ceph 상대 검증을 사용한다. parser fuzzing, race 검사, 장시간 ticket 갱신, 장애 주입을 포함한다. 클러스터 구성과 테스트 oracle을 위한 Ceph CLI·컨테이너 사용은 개발 도구이며 제품의 런타임 의존성과 구분한다.
 

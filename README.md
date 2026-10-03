@@ -613,6 +613,37 @@ probe가 통과했다. 허용 Options 범위가 모든 서버의 admission을 �
 Darwin·AES의 실제 config 갱신·MON 복구·취소·tell·상태 조회를 포함한 6개
 시험도 race로 통과했다. 이 malformed 입력 검증과 정상 실서버 상호운용을 구분한다.
 
+후속 `6dba908`은 암호문 검증이 끝난 내부 plaintext의 필수 version·key·validity·
+blob·challenge·authorizer nonce가 잘린 경우 원래 `io.ErrUnexpectedEOF`를
+보존한다. AES/AES256K의 독립 회귀 입력 26개는 원래 코드에서 실패했고,
+수정 후 50회 CGO=0·race 검사에 통과했다. 완전한 미지원 version·잘못된 nonce·
+zero validity·암호문 변조는 기존 의미·암호 오류를 유지한다. 공개 MON/MGR
+setup에서도 잘린 7개 원인은 `ErrMalformedMessage`와 EOF를 함께 보존하며,
+client·명령·인증 상태를 게시하거나 setup을 재시도하지 않는다.
+
+앞선 `f40c670`의 로컬 전체 Linux·aes256k·IPv6 실행은 38개 성공·1개 실패·
+9개 별도 fixture 제외였다. MGR 자연 승계·ticket 갱신·새 MGR 명령은
+40.694초에 성공했지만, 정리용 15초 context 안에 재시작한 standby를
+확인하지 못했다. 로그에서 새 PID의 Python 모듈 로딩 13.092초와 마지막
+조회보다 0.952초 늦은 정상 standby 수락·새 GID의 인증된 명령을 확인했다.
+Native daemon의 rotating-key 경고도 있었으며 영구 인증 거절로 단정하지
+않는다. 정리만 30초로 제한하고 원래 90초 승계 검증·새 nonzero GID 확인·
+start 한 번·오류 즉시 실패를 유지했다. 수정한 Linux·aes256k·IPv6에서 config
+갱신(41.03초)·공개 limit(0.05초)·MGR 자연 승계와 standby 복귀(42.60초)가
+모두 통과했다. 인증 보안이나 명령 재실행 정책을 완화하지 않았다.
+
+같은 product 변경의 Darwin arm64·AES·IPv4 relay 시험도 race로 config 갱신,
+공개 limit, MGR 자연 승계와 standby 복귀를 통과했다. 이 시험에서 승계 중
+ticket 갱신과 새 standby ID를 실제로 확인했다. 두 키 타입의 정상 실서버
+검증과, 잘린 plaintext를 보내는 합성 peer의 공개 오류 회귀를 구분한다.
+
+`FuzzAuthenticationPlaintextPublication`는 최대 8 KiB의 임의 내부 plaintext를
+AES/AES256K로 암호화한 뒤 AUTH/MGR key·encrypted blob·challenge·authorizer
+reply의 6개 경로에 전달한다. 원본 입력과 실패 시 ticket·credential·nonce·
+base·부분 출력의 불변성, 성공한 독립 control의 ticket·secret을 검사한다.
+20초 검사에서 533,819개 입력이 통과했고 CI에도 같은 20초 경로를 추가했다.
+기존 ciphertext 변조 fuzz와 목적이 다르며 실제 Ceph 호환성 검증을 대신하지 않는다.
+
 양의 소수 초 ticket 유효기간은 encrypted codec 단위 시험으로 확인했다.
 이 codec 변경 자체는 소수 초 ticket의 실제 갱신 검증을 포함하지 않았다.
 
@@ -1062,6 +1093,11 @@ client TCP 복구·stream 종료 원인 보존을 포함한 `993001d`의
 [CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37083221718)도
 모두 통과했다. [MON config 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-config-stream)는
 이 커밋을 가리킨다.
+
+공개 limit 오류·CephX 길이 원인 보존·native limit 실행 결과 검증을 포함한
+`f40c670`의 [CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37085465712)도
+모두 통과했다. [공개 limit 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/public-limit-errors)는
+이 커밋을 가리킨다. 별도 로컬 실행의 MGR 정리 timeout과 후속 보정은 위에 기록했다.
 
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
 앞서 CI 18개 작업을 통과한 `23148f5`를 가리킨다.
