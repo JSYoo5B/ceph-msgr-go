@@ -28,9 +28,9 @@ var ErrManagerChanged = errors.New("ceph: active manager changed")
 // Started commands still have an OutcomeUnknownError and are never replayed.
 var ErrMalformedMessage = msgr.ErrFrame
 
-// ErrLimitExceeded identifies encoded data that exceeds an accepted byte or
-// collection bound, including configured frame limits, encoder/decoder limits
-// and the authentication transcript limit. Some bounds are fixed rather than
+// ErrLimitExceeded identifies a command rejected by its size preflight or wire
+// data rejected by a frame, byte-length, collection-count or authentication
+// transcript bound. Some bounds are fixed rather than
 // configurable through MaxFrameSize. Check ErrMalformedMessage independently:
 // a valid frame can exceed a local limit, while an invalid encoded length or
 // count can identify both errors. Started commands still have an
@@ -80,6 +80,8 @@ type Options struct {
 	KeepaliveTimeout time.Duration
 	// MaxFrameSize bounds the sum of logical segment lengths per Messenger
 	// frame. Defaults to 16 MiB; accepted values range from 1 KiB to 1 GiB.
+	// It also applies during setup and to unsolicited maps and streams, so a
+	// bound below a server's bootstrap frame can prevent admission.
 	MaxFrameSize uint32
 	// MaxInFlight bounds concurrent command calls, including queued requests.
 	// Defaults to 64, with a maximum of 1024. Waiting for a slot respects the

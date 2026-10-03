@@ -146,6 +146,8 @@ go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 �
 - 서버 오류 코드와 Go의 context·네트워크·프로토콜 오류를 구분한다. 서버 코드는 호스트 OS의 errno 숫자로 재해석하지 않는다.
 - client에서 동시 명령 호출을 허용한다. 요청 하나의 deadline을 공유 TCP 연결에 직접 적용하지 않는다.
 - `MaxFrameSize`는 frame 논리 크기, `MaxInFlight`는 동시 명령 수를 제한한다. 대기 슬롯을 얻기 전에는 bulk 입력을 복사하지 않는다. 기본값은 각각 16 MiB와 64다.
+- `ErrLimitExceeded`는 frame·인코딩·인증 transcript의 byte 또는 collection 상한 초과를 표시한다. 고정 상한도 포함하며 watch overflow·슬롯 대기·잘못된 Options 값과 구분한다. 유효한 frame의 로컬 상한 초과는 `ErrMalformedMessage`가 아니지만 길이·개수 검증 실패는 두 원인을 함께 보존할 수 있다. 송신 전 거절은 결과 불명확 오류가 아니며 전송 후 실패는 기존 결과 불명확 계약을 따른다.
+- 로그와 config watch의 최초 종료 원인은 해당 watch에 먼저 기록된 원인이다. Source 오류가 watch에 기록되기 전에 수명 context의 취소를 먼저 관찰하면 context 오류로 끝날 수 있다. 이미 기록된 종료 원인과 접수한 데이터는 이후 취소나 Close가 덮어쓰지 않는다.
 - 취소 시 pending 요청과 자원을 정리한다. 늦은 응답을 안전하게 소비한다. 일부 전송한 frame을 방치해 연결 framing을 깨뜨리지 않는다.
 - context 취소는 서버에서 명령 실행을 취소하거나 이미 적용된 변경을 되돌린다는 보장이 아니다.
 - transport ACK는 관리 명령 완료 응답과 다르다. 연결 단절 후 변경 명령의 실행 결과가 불명확하면 이를 명시적으로 반환한다.

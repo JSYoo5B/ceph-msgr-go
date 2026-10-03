@@ -88,6 +88,15 @@ nonce·scope·flow도 보존한다. 주 client의 global ID·ticket·MON/MGR 연
 원인으로 남으므로, 이 표시를 먼저 검사해 TCP 수신 중 단절과 구분한다.
 이미 전송한 명령은 `OutcomeUnknownError`를 함께 유지하며 자동 재실행하지 않는다.
 
+명령의 보수적인 송신 크기 검사와 frame·문자열·컨테이너·인증 transcript의
+크기 또는 개수 상한 초과는
+`errors.Is(err, ErrLimitExceeded)`로 확인한다. `MaxFrameSize` 외의 고정
+상한도 포함한다. 유효한 서버 응답이 로컬 frame 상한을 넘는 경우에는
+`ErrMalformedMessage`가 아니며, 인코딩의 길이·개수 검증 실패는 두 표시를
+함께 가질 수 있다. 명령 입력을 송신 전에 거절하면 결과 불명확 오류가
+아니지만, 전송 후 응답을 받지 못하면 `OutcomeUnknownError`를 보존한다.
+Watch 큐 overflow·명령 슬롯 대기·잘못된 Options 값은 별도 오류다.
+
 ## MON 로그
 
 `WatchLogs(ctx, LogOptions)`는 현재 인증된 MON에서 cluster log를 받는
@@ -207,6 +216,11 @@ worker를 기다리고 슬롯을 해제한다. 살아 있는 Next context는 접
 먼저 읽고 최초 종료 원인을 계속 받는다. 명시적 watch 종료는
 `ErrConfigStreamClosed`, client 종료는 `ErrClosed`다.
 
+두 watch의 최초 종료 원인은 해당 watch에 먼저 기록된 원인이다. Source의
+오류가 watch에 기록되기 전에 수명 context의 취소를 먼저 관찰하면 context
+오류로 종료할 수 있다. 이미 기록된 종료 원인과 접수한 데이터는 이후
+취소나 Close가 덮어쓰지 않는다.
+
 현재 admission을 통과한 MON의 메시지만 받는다. MConfig payload에는 FSID·설정
 revision·cursor·연관된 request ID·구독 generation이 없으며, 같은 MON session의 이전 watch에서
 늦게 온 응답은 구분할 수 없다. 재접속은 새 전체 map을 요청한다. 종료는 로컬
@@ -274,12 +288,14 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
 
 - 동시 호출을 지원한다. `MaxInFlight` 기본값은 64이며 슬롯 대기도 호출
   context에 따른다. `MaxFrameSize` 기본값은 논리 frame당 16 MiB다.
+  초기 인증·지도·구독에도 적용하므로 서버가 보내는 초기 frame보다 작게
+  설정하면 admission부터 실패할 수 있다.
 - `ConnectTimeout` 기본값은 endpoint별 10초다. 요청 deadline은 공유
   연결에 적용하지 않는다. `Close`는 연결과 내부 worker를 종료하고 기다린다.
   MON의 MonMap 검증 대기는 protocol 실패와 context 종료가 겹쳐도 세션에
   먼저 기록된 종료 원인을 보존한다.
   MGR 핸드셰이크 중인 연결의 정리도 완료한 뒤 반환한다.
-  종료 후 새 명령·준비 대기·`WatchLogs` 호출은 입력 검증·복사 전에
+  종료 후 새 명령·준비 대기·`WatchLogs`·`WatchConfig` 호출은 입력 검증·복사 전에
   `ErrClosed`를 반환한다. 호출 context가
   이미 취소됐으면 해당 context 오류를 먼저 반환한다.
 - `KeepaliveInterval` 기본값은 15초, `KeepaliveTimeout`은 45초이며 timeout은
@@ -575,6 +591,28 @@ MON 중단과 복구 3회·MGR 장애·불명확한 변경의 재실행 금지�
 16 MiB 공백을 붙였다. 실제 MON이 원래 명령을 응답 front에 그대로 포함했고,
 서버 코드·raw JSON을 보존한 뒤 같은 연결의 다음 명령도 성공했다.
 응답 본문 decoder에도 설정한 상한을 전달하며, 기본 상한은 16 MiB로 유지한다.
+
+공개 limit 분류를 추가한 `a5edf75`는 실제 20.2.4에서 256 KiB 상한으로
+다섯 명령 경로의 입력 초과 10건을 송신 전에 거절했다. 딱 한 번 보낸
+261,888-byte read-only status 요청에는 서버가 정상적인 큰 응답을 반환했고,
+client는 `ErrLimitExceeded`와 `OutcomeUnknownError`를 함께 보존했다.
+`ErrMalformedMessage`나 알려진 서버 거절로 바꾸지 않았다. 이후 작은 status
+조회가 같은 FSID·global ID로 복구됐고, 요청·복구 control을 합한 TCP 송신
+263,464 bytes(Linux arm64·CGO=0·aes256k·IPv6)와
+263,463 bytes(Darwin arm64·AES·IPv4 relay·race)는 큰 요청 재실행이 없음을
+확인했다. 최초 64 KiB probe는 bootstrap부터 크기 제한으로 실패했다.
+그 trace에서는 초과 frame 종류를 특정하지 못했고, 상한을 256 KiB로 올린
+probe가 통과했다. 허용 Options 범위가 모든 서버의 admission을 보장하지 않는다.
+
+같은 변경은 CephX의 네 encoded-length 경계에서 decoder 오류가 crypto·version
+오류로 가려지던 문제를 수정했다. AES/AES256K의 독립된 회귀 입력 20개가
+원래 코드에서 실패하고 수정 후 CGO=0·race 50회 검사에 통과했다. 유효 인증,
+실제 암호문 변조·미지원 version의 오류, 실패 시 identity·ticket 미게시도
+유지했다. 정상 길이 초과·잘못된 내부 길이·1,025개 echoed command의 count
+제한은 secure 합성 peer로 구분해 raw 출력·결과 불명확·재실행 금지를 검사했다.
+Darwin·AES의 실제 config 갱신·MON 복구·취소·tell·상태 조회를 포함한 6개
+시험도 race로 통과했다. 이 malformed 입력 검증과 정상 실서버 상호운용을 구분한다.
+
 양의 소수 초 ticket 유효기간은 encrypted codec 단위 시험으로 확인했다.
 이 codec 변경 자체는 소수 초 ticket의 실제 갱신 검증을 포함하지 않았다.
 
@@ -1017,6 +1055,12 @@ context·Tell의 client TCP 장애 격리를 포함한 `f685aa7`의
 보존하는 `1082657`의
 [CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37079706985)도
 모두 통과했다. [로그 frame 제한 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/log-frame-limits)는
+이 커밋을 가리킨다.
+
+전체 config map 구독·제한된 MON capability의 native CLI oracle·ticket 갱신과
+client TCP 복구·stream 종료 원인 보존을 포함한 `993001d`의
+[CI 25개 작업](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37083221718)도
+모두 통과했다. [MON config 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/mon-config-stream)는
 이 커밋을 가리킨다.
 
 [MON 후보·종료 검증 체크포인트](https://github.com/JSYoo5B/ceph-msgr-go/tree/checkpoint/monitor-admission)는
