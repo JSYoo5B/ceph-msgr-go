@@ -134,7 +134,11 @@ func parseReplies(d *wire.Decoder, secret Key, old map[uint32]Ticket, now time.T
 		if d.U8() != 1 {
 			return nil, wire.ErrVersion
 		}
-		plain, err := secret.Open(4, d.Bytes())
+		ciphertext := d.Bytes()
+		if err := d.Err(); err != nil {
+			return nil, err
+		}
+		plain, err := secret.Open(4, ciphertext)
 		if err != nil {
 			return nil, err
 		}
@@ -152,6 +156,9 @@ func parseReplies(d *wire.Decoder, secret Key, old map[uint32]Ticket, now time.T
 		}
 		encrypted := d.Bool()
 		blob := d.Bytes()
+		if err := d.Err(); err != nil {
+			return nil, err
+		}
 		if encrypted {
 			previous, ok := old[typ]
 			if !ok {
@@ -210,7 +217,11 @@ func (c *Client) Finish(globalID uint64, p []byte) (Key, []byte, error) {
 		return Key{}, nil, err
 	}
 	cd := wire.NewDecoder(connection)
-	plain, err := auth.Key.Open(3, cd.Bytes())
+	ciphertext := cd.Bytes()
+	if err := cd.Err(); err != nil {
+		return Key{}, nil, err
+	}
+	plain, err := auth.Key.Open(3, ciphertext)
 	if err != nil {
 		return Key{}, nil, err
 	}
@@ -296,7 +307,11 @@ func (a *Authorizer) Payload(challenge []byte) ([]byte, error) {
 }
 func (a *Authorizer) Finish(p []byte) ([]byte, error) {
 	d := wire.NewDecoder(p)
-	plain, err := a.ticket.Key.Open(0x12, d.Bytes())
+	ciphertext := d.Bytes()
+	if err := d.Err(); err != nil {
+		return nil, err
+	}
+	plain, err := a.ticket.Key.Open(0x12, ciphertext)
 	if err != nil {
 		return nil, err
 	}
