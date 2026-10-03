@@ -1,0 +1,106 @@
+package integration_test
+
+import (
+	"context"
+	"encoding/json"
+	"net"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
+)
+
+func nativeManagerSnapshot(t *testing.T, ctx context.Context, c *cephmsgr.Client, control, label string) cephmsgr.State {
+	t.Helper()
+	for {
+		if err := testcluster.ControlDaemon(ctx, control, "verify", "manager-map", label); err != nil {
+			t.Fatal("fresh native MGR map", err)
+		}
+		data, err := os.ReadFile(filepath.Join(control, "manager-oracle.json"))
+		var oracle struct {
+			Epoch     uint32 `json:"epoch"`
+			Available bool   `json:"available"`
+			Name      string `json:"active_name"`
+			ID        uint64 `json:"active_gid"`
+			Standbys  []struct {
+				Name string `json:"name"`
+				ID   uint64 `json:"gid"`
+			} `json:"standbys"`
+		}
+		if err != nil || json.Unmarshal(data, &oracle) != nil || oracle.Epoch == 0 {
+			t.Fatal("native manager metadata", err)
+		}
+		state := waitClientState(t, c, ctx, func(state cephmsgr.State) bool { return state.Manager.MapEpoch >= oracle.Epoch })
+		if state.Manager.MapEpoch != oracle.Epoch {
+			// A newer subscribed map can overtake the independent read. Repeat
+			// only that read until both views describe the same committed epoch.
+			continue
+		}
+		expected := make([]cephmsgr.StandbyManager, len(oracle.Standbys))
+		for i, standby := range oracle.Standbys {
+			expected[i] = cephmsgr.StandbyManager{Name: standby.Name, GlobalID: standby.ID}
+		}
+		if state.Manager.Available != oracle.Available || state.Manager.Name != oracle.Name || state.Manager.GlobalID != oracle.ID || !reflect.DeepEqual(state.Manager.Standbys, expected) {
+			t.Fatal("snapshot differs from same-epoch native MgrMap", state.Manager, oracle)
+		}
+		t.Logf("epoch %d: active %s/%d, standbys %+v match native MgrMap", oracle.Epoch, oracle.Name, oracle.ID, expected)
+		return state
+	}
+}
+
+func TestCephManagerStandbysIntegration(t *testing.T) {
+	control := ordinaryLogFixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	options := integrationOptions(t)
+	dial := options.DialContext
+	var managerDials atomic.Uint32
+	options.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		_, port, _ := net.SplitHostPort(address)
+		if port == "36800" || port == "36801" {
+			managerDials.Add(1)
+		}
+		return dial(ctx, network, address)
+	}
+	c, err := cephmsgr.Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	initial := nativeManagerSnapshot(t, ctx, c, control, "initial")
+	if initial.Manager.Ready || len(initial.Manager.Standbys) != 1 || managerDials.Load() != 0 {
+		t.Fatal("standby metadata required MGR connection or fixture has no standby", initial.Manager)
+	}
+	promoted := initial.Manager.Standbys[0]
+	initial.Manager.Standbys[0].Name = "caller-owned"
+	if c.Snapshot().Manager.Standbys[0].Name != promoted.Name {
+		t.Fatal("snapshot standby slice aliases client state")
+	}
+	command, err := cephmsgr.NewCommand("mgr fail", map[string]any{"who": initial.Manager.Name})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One fixture mutation; observing new maps never replays this command.
+	if _, err := c.MonCommand(ctx, command); err != nil {
+		t.Fatal("MGR promotion", err)
+	}
+	waitClientState(t, c, ctx, func(state cephmsgr.State) bool {
+		return state.Manager.Available && state.Manager.Name == promoted.Name && state.Manager.GlobalID == promoted.GlobalID && len(state.Manager.Standbys) > 0
+	})
+	replacement := nativeManagerSnapshot(t, ctx, c, control, "replacement")
+	if replacement.Manager.Standbys[0].Name != initial.Manager.Name || replacement.Manager.Ready || managerDials.Load() != 0 {
+		t.Fatal("standby-to-active transition or lazy MGR state", replacement.Manager, managerDials.Load())
+	}
+	if err := c.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed := c.Snapshot()
+	if !closed.Closed || closed.Manager.Ready || !reflect.DeepEqual(closed.Manager.Standbys, replacement.Manager.Standbys) {
+		t.Fatal("Close lost last advertised standby metadata", closed.Manager)
+	}
+}
