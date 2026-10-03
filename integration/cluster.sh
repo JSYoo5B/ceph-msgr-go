@@ -302,6 +302,18 @@ fi
 touch /out/ready
 echo "Ceph test cluster ready: 3 MON, $mgr_count MGR, key=$key_type, service=$service_cipher, $address, MON mode=$mon_service_mode, MGR mode=$mgr_service_mode."
 while true; do
+    if test -f /out/verify-digest; then
+        test "$config_fixture" = 1 || exit 2
+        read -r request_id name label extra < /out/verify-digest
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 || exit 2
+        case "$name" in a|b|c) ;; *) exit 2 ;; esac
+        case "$label" in initial|muted|unmuted|renewal|learned-mon|reopen) ;; *) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/verify-digest
+        timeout 20 python3 /out/digest_oracle.py "$root" /out "$name" "$label"
+        touch "/out/digest-verify.$request_id"
+    fi
     if test -f /out/verify-manager-map; then
         test "$config_fixture" = 1 || exit 2
         read -r request_id label extra < /out/verify-manager-map
