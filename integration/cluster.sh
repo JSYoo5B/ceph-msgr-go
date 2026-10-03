@@ -319,6 +319,17 @@ while true; do
         timeout 20 python3 /out/digest_oracle.py "$root" /out "$name" "$label"
         touch "/out/digest-verify.$request_id"
     fi
+    if test -f /out/verify-monitor-map; then
+        test "$config_fixture" = 1 || exit 2
+        read -r request_id label extra < /out/verify-monitor-map
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 || exit 2
+        case "$label" in initial|added|removed) ;; *) exit 2 ;; esac
+        test -z "$extra" || exit 2
+        rm /out/verify-monitor-map
+        timeout 10 python3 /out/monitor_oracle.py "$root" /out
+        touch "/out/monitor-map-verify.$request_id"
+    fi
     if test -f /out/verify-manager-map; then
         test "$config_fixture" = 1 || exit 2
         read -r request_id label extra < /out/verify-manager-map
