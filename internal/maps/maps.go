@@ -170,15 +170,17 @@ type ModuleOption struct {
 }
 
 type Mgr struct {
-	Epoch            uint32
-	GlobalID         uint64
-	Available        bool
-	Name             string
-	Addresses        []msgr.Address
-	Standbys         []Standby
-	EnabledModules   []string          // Explicit enabled set, separate from always-on modules.
-	Services         map[string]string // Active daemon's raw module service URIs.
-	AvailableModules []ModuleInfo
+	Epoch                uint32
+	GlobalID             uint64
+	Available            bool
+	Name                 string
+	Addresses            []msgr.Address
+	Standbys             []Standby
+	EnabledModules       []string          // Explicit enabled set, separate from always-on modules.
+	Services             map[string]string // Active daemon's raw module service URIs.
+	AvailableModules     []ModuleInfo
+	AlwaysOnModules      map[uint32][]string // Raw release-code policy, not a computed running list.
+	ForceDisabledModules []string
 }
 
 func DecodeMgr(front []byte) (Mgr, error) {
@@ -255,6 +257,50 @@ func DecodeMgr(front []byte) (Mgr, error) {
 		}
 		// Unrelated appended fields remain in the consumed child envelope.
 	}
+	if v >= 7 {
+		p.Raw(8) // active_change timestamp
+	}
+	if v >= 8 {
+		n := p.Count(8, 65536) // release code and module-set count
+		if n > 0 {
+			m.AlwaysOnModules = make(map[uint32][]string, n)
+		}
+		for i := 0; i < n && p.Err() == nil; i++ {
+			release := p.U32()
+			modules := decodeModuleOptionStrings(p)
+			if p.Err() == nil {
+				m.AlwaysOnModules[release] = modules
+			}
+		}
+	}
+	if v >= 9 {
+		p.U64() // active_mgr_features
+	}
+	if v >= 10 {
+		p.U32() // last_failure_osd_epoch
+	}
+	var clientAddresses int
+	if v >= 11 {
+		clientAddresses = p.Count(5, 65536) // address vectors, not MGR connection targets
+		for i := 0; i < clientAddresses && p.Err() == nil; i++ {
+			msgr.DecodeAddresses(p)
+		}
+	}
+	if v >= 12 {
+		n := p.Count(4, 65536) // client names
+		for i := 0; i < n && p.Err() == nil; i++ {
+			_ = p.String()
+		}
+		if n != clientAddresses {
+			p.Fail(errors.New("ceph: manager client address/name count mismatch"))
+		}
+	}
+	if v >= 13 {
+		p.U64() // flags
+	}
+	if v >= 14 {
+		m.ForceDisabledModules = decodeModuleOptionStrings(p)
+	}
 	for _, a := range all {
 		if a.Type == 2 && a.Endpoint.IsValid() {
 			m.Addresses = append(m.Addresses, a)
@@ -266,7 +312,7 @@ func DecodeMgr(front []byte) (Mgr, error) {
 	if m.Available && (m.GlobalID == 0 || len(m.Addresses) == 0) {
 		return m, errors.New("ceph: invalid active manager")
 	}
-	return m, nil // The remaining timestamps, policies and client metadata are not needed.
+	return m, nil // Compatible future fields remain in the consumed envelope.
 }
 
 func decodeModuleOption(d *wire.Decoder) ModuleOption {
