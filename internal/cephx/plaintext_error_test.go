@@ -57,13 +57,18 @@ func plaintextTestTicket(t *testing.T, key Key, service uint32, payload, blob []
 
 func plaintextTestAuthReply(t *testing.T, key Key, service uint32, payload, blob []byte, encrypted bool) []byte {
 	t.Helper()
+	return plaintextTestAuthReplyWithSecret(t, key, service, payload, blob, encrypted, bytes.Repeat([]byte{0x39}, 40))
+}
+
+func plaintextTestAuthReplyWithSecret(t *testing.T, key Key, service uint32, payload, blob []byte, encrypted bool, connectionSecret []byte) []byte {
+	t.Helper()
 	record := plaintextTestTicket(t, key, service, payload, blob, encrypted)
 	auth, extra := record, []byte(nil)
 	if service == ServiceMgr {
 		auth = plaintextTestTicket(t, key, ServiceAuth, plaintextTestKeyPayload(key), plaintextTestBlob(), false)
 		extra = record
 	}
-	ciphertext, err := key.Seal(3, plaintextTestBytes(nil, bytes.Repeat([]byte{0x39}, 40)))
+	ciphertext, err := key.Seal(3, plaintextTestBytes(nil, connectionSecret))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +135,7 @@ func TestAuthenticationPlaintextErrorsPreserveCauseAndState(t *testing.T) {
 							case "blob-version":
 								blob = nil
 							}
-							session, secret, err := c.Finish(99, plaintextTestAuthReply(t, key, service.id, payload, blob, encrypted))
+							session, secret, err := c.Finish(99, plaintextTestAuthReply(t, key, service.id, payload, blob, encrypted), true)
 							if !errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, ErrTicket) || errors.Is(err, wire.ErrVersion) || errors.Is(err, ErrIntegrity) {
 								t.Fatal("authenticated truncated plaintext lost its decode cause", err)
 							}
@@ -162,7 +167,7 @@ func TestAuthenticationPlaintextErrorsPreserveCauseAndState(t *testing.T) {
 					if field == "challenge-version" {
 						output, err = a.Payload(ciphertext)
 					} else {
-						output, err = a.Finish(plaintextTestBytes(nil, ciphertext))
+						output, err = a.Finish(plaintextTestBytes(nil, ciphertext), true)
 					}
 					if !errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, wire.ErrVersion) || errors.Is(err, ErrIntegrity) {
 						t.Fatal("authenticated truncated authorizer plaintext lost its cause", err)
@@ -188,7 +193,7 @@ func TestAuthenticationPlaintextChecksKeepSemanticErrors(t *testing.T) {
 			for _, service := range []uint32{ServiceAuth, ServiceMgr} {
 				for _, encrypted := range []bool{false, true} {
 					c := plaintextTestClient(t, key)
-					if session, secret, err := c.Finish(99, plaintextTestAuthReply(t, key, service, good, blob, encrypted)); err != nil || session.Type() != cipher.kind || len(secret) != 40 || c.GlobalID != 99 {
+					if session, secret, err := c.Finish(99, plaintextTestAuthReply(t, key, service, good, blob, encrypted), true); err != nil || session.Type() != cipher.kind || len(secret) != 40 || c.GlobalID != 99 {
 						t.Fatal("full independent plaintext vector failed", err)
 					}
 				}
@@ -201,7 +206,7 @@ func TestAuthenticationPlaintextChecksKeepSemanticErrors(t *testing.T) {
 			}{{[]byte{2}, blob, wire.ErrVersion}, {good, []byte{2}, wire.ErrVersion}, {zeroValidity, blob, ErrTicket}} {
 				c := plaintextTestClient(t, key)
 				before := plaintextTestTicketsSnapshot(c)
-				session, secret, err := c.Finish(99, plaintextTestAuthReply(t, key, ServiceAuth, control.payload, control.blob, false))
+				session, secret, err := c.Finish(99, plaintextTestAuthReply(t, key, ServiceAuth, control.payload, control.blob, false), true)
 				if !errors.Is(err, control.want) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, wire.ErrLimit) || session.Type() != 0 || secret != nil || c.GlobalID != 42 || !reflect.DeepEqual(c.Tickets, before) {
 					t.Fatal("complete invalid ticket changed its semantic class or auth state", err)
 				}
@@ -220,7 +225,7 @@ func TestAuthenticationPlaintextChecksKeepSemanticErrors(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if secret, err := a.Finish(plaintextTestBytes(nil, ciphertext)); err != nil || len(secret) != 40 {
+			if secret, err := a.Finish(plaintextTestBytes(nil, ciphertext), true); err != nil || len(secret) != 40 {
 				t.Fatal("full authorizer reply failed", err)
 			}
 			wrongNonce := append([]byte(nil), reply...)
@@ -239,7 +244,7 @@ func TestAuthenticationPlaintextChecksKeepSemanticErrors(t *testing.T) {
 				if control.usage == 0x11 {
 					output, err = a.Payload(ciphertext)
 				} else {
-					output, err = a.Finish(plaintextTestBytes(nil, ciphertext))
+					output, err = a.Finish(plaintextTestBytes(nil, ciphertext), true)
 				}
 				if !errors.Is(err, control.want) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, wire.ErrLimit) || output != nil || !reflect.DeepEqual(*a, before) {
 					t.Fatal("complete invalid authorizer plaintext changed its semantic class or state", err)
@@ -251,7 +256,7 @@ func TestAuthenticationPlaintextChecksKeepSemanticErrors(t *testing.T) {
 			} else {
 				ciphertext[len(ciphertext)-1] ^= 1 // Invalid authenticated tag.
 			}
-			if secret, err := a.Finish(plaintextTestBytes(nil, ciphertext)); !errors.Is(err, ErrIntegrity) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, wire.ErrLimit) || secret != nil {
+			if secret, err := a.Finish(plaintextTestBytes(nil, ciphertext), true); !errors.Is(err, ErrIntegrity) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, wire.ErrLimit) || secret != nil {
 				t.Fatal("ciphertext tampering was reclassified as an inner decoding error", err)
 			}
 		})

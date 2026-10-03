@@ -75,7 +75,7 @@ func TestHandshakeWaitsForCancellationCallbackCleanup(t *testing.T) {
 			t.Cleanup(cancel)
 			finished := make(chan error, 1)
 			go func() {
-				_, err := Handshake(ctx, held, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), 4096, time.Second)
+				_, err := Handshake(ctx, held, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), SecureMode, 4096, time.Second)
 				finished <- err
 			}()
 			await := func(ch <-chan struct{}) {
@@ -164,7 +164,7 @@ func TestHandshakePreservesRefusalBeforeCleanupContextEnds(t *testing.T) {
 		{name: "malformed HELLO", peer: handshakePeerConfig{mode: 2, malformedTag: msgr.Hello}, want: msgr.ErrFrame},
 		{name: "explicit auth rejection", authRejection: true},
 		{name: "tampered transcript", peer: handshakePeerConfig{mode: 2, badSignature: true}, want: msgr.ErrAuthentication},
-		{name: "insecure mode", peer: handshakePeerConfig{mode: 1}, wantText: "secure mode required"},
+		{name: "different connection mode", peer: handshakePeerConfig{mode: 1}, wantText: "server selected connection mode 1, requested 2"},
 		{name: "wrong role", peer: handshakePeerConfig{mode: 2, peerRole: 16}, wantText: "unexpected daemon role", peerReadFailure: true},
 		{name: "wrong daemon ID", peer: handshakePeerConfig{mode: 2, serverFlags: 1}, expectedID: 99, wantText: "unexpected daemon ID", peerReadFailure: true},
 		{name: "unsupported policy", peer: handshakePeerConfig{mode: 2}, want: msgr.ErrFeatures, peerReadFailure: true},
@@ -203,7 +203,7 @@ func TestHandshakePreservesRefusalBeforeCleanupContextEnds(t *testing.T) {
 				}
 				finished := make(chan error, 1)
 				go func() {
-					_, err := Handshake(ctx, held, msgr.Address{Type: 2}, 1, test.expectedID, method, 4096, 30*time.Second)
+					_, err := Handshake(ctx, held, msgr.Address{Type: 2}, 1, test.expectedID, method, SecureMode, 4096, 30*time.Second)
 					finished <- err
 				}()
 				select {
@@ -273,7 +273,7 @@ func TestHandshakeTransportFailureMapsContextDuringCleanup(t *testing.T) {
 			t.Cleanup(func() { finish(); held.Close() })
 			finished := make(chan error, 1)
 			go func() {
-				_, err := Handshake(ctx, held, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), 4096, 30*time.Second)
+				_, err := Handshake(ctx, held, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), SecureMode, 4096, 30*time.Second)
 				finished <- err
 			}()
 			select {
@@ -325,7 +325,7 @@ func TestHandshakeSuccessfulSetupCanceledBeforePublication(t *testing.T) {
 	defer cancel()
 	finished := make(chan error, 1)
 	go func() {
-		_, err := Handshake(ctx, held, msgr.Address{Type: 2}, 1, 0, auth, 4096, 30*time.Second)
+		_, err := Handshake(ctx, held, msgr.Address{Type: 2}, 1, 0, auth, SecureMode, 4096, 30*time.Second)
 		finished <- err
 	}()
 	select {

@@ -39,23 +39,34 @@ func featuresForRole(role uint8) uint64 {
 	return Features
 }
 
+// ConnectionMode is the selected msgr2 wire mode. Only one mode is offered;
+// authentication may not substitute a different mode.
+type ConnectionMode uint32
+
+const (
+	CRCMode    ConnectionMode = 1
+	SecureMode ConnectionMode = 2
+)
+
 type Authenticator interface {
 	Initial() ([]byte, error)
 	More([]byte) ([]byte, error)
-	Done(uint64, []byte) (cephx.Key, []byte, error)
+	Done(uint64, []byte, bool) (cephx.Key, []byte, error)
 }
 type MonAuth struct{ Client *cephx.Client }
 
-func (a MonAuth) Initial() ([]byte, error)                            { return a.Client.Initial(), nil }
-func (a MonAuth) More(p []byte) ([]byte, error)                       { return a.Client.Challenge(p) }
-func (a MonAuth) Done(id uint64, p []byte) (cephx.Key, []byte, error) { return a.Client.Finish(id, p) }
+func (a MonAuth) Initial() ([]byte, error)      { return a.Client.Initial(), nil }
+func (a MonAuth) More(p []byte) ([]byte, error) { return a.Client.Challenge(p) }
+func (a MonAuth) Done(id uint64, p []byte, requireSecret bool) (cephx.Key, []byte, error) {
+	return a.Client.Finish(id, p, requireSecret)
+}
 
 type MgrAuth struct{ Authorizer *cephx.Authorizer }
 
 func (a MgrAuth) Initial() ([]byte, error)      { return a.Authorizer.Payload(nil) }
 func (a MgrAuth) More(p []byte) ([]byte, error) { return a.Authorizer.Payload(p) }
-func (a MgrAuth) Done(_ uint64, p []byte) (cephx.Key, []byte, error) {
-	secret, err := a.Authorizer.Finish(p)
+func (a MgrAuth) Done(_ uint64, p []byte, requireSecret bool) (cephx.Key, []byte, error) {
+	secret, err := a.Authorizer.Finish(p, requireSecret)
 	return a.Authorizer.Key(), secret, err
 }
 
@@ -127,7 +138,7 @@ type Transport struct {
 
 // Handshake takes ownership of conn, closing it on failure. The context and
 // deadline govern only setup; a successful connection has its deadline cleared.
-func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, limit uint32, timeout time.Duration) (_ *Transport, err error) {
+func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (_ *Transport, err error) {
 	if target.Endpoint.IsValid() {
 		// Retain the target's wire family, including mapped IPv6. IPv6 scope
 		// is carried by ScopeID rather than a Go address zone.
@@ -161,6 +172,9 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 			err = fmt.Errorf("ceph messenger %s: %w", stage, err)
 		}
 	}()
+	if mode != SecureMode && mode != CRCMode {
+		return nil, errors.New("ceph messenger: invalid connection mode")
+	}
 	deadline := time.Now().Add(timeout)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
@@ -211,7 +225,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	authReq := wire.Encoder{}
 	authReq.U32(2)
 	authReq.U32(1)
-	authReq.U32(2)
+	authReq.U32(uint32(mode))
 	authReq.Bytes(payload)
 	if err = write(msgr.AuthRequest, authReq.Data); err != nil {
 		return nil, err
@@ -219,6 +233,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	var sessionKey cephx.Key
 	var secret []byte
 	var globalID uint64
+	authenticated := false
 	for round := 0; round < 8; round++ {
 		f, err = r.Read()
 		if err != nil {
@@ -257,18 +272,19 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 			return nil, &cephx.AuthenticationError{Method: method, Code: code}
 		case msgr.AuthDone:
 			globalID = d.U64()
-			mode := d.U32()
+			selectedMode := d.U32()
 			payload = d.Bytes()
 			if err = d.Done(); err != nil {
 				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 			}
-			if mode != 2 {
-				return nil, errors.New("ceph messenger: secure mode required")
+			if selectedMode != uint32(mode) {
+				return nil, fmt.Errorf("ceph messenger: server selected connection mode %d, requested %d", selectedMode, mode)
 			}
-			sessionKey, secret, err = auth.Done(globalID, payload)
+			sessionKey, secret, err = auth.Done(globalID, payload, mode == SecureMode)
 			if err != nil {
 				return nil, authPayloadError(err)
 			}
+			authenticated = true
 		default:
 			return nil, fmt.Errorf("%w: tag %d during authentication", msgr.ErrFrame, f.Tag)
 		}
@@ -276,16 +292,20 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 			break
 		}
 	}
-	if len(secret) < 40 {
+	if !authenticated || (mode == SecureMode && len(secret) < 40) {
 		return nil, errors.New("ceph messenger: incomplete authentication")
 	}
 	stage = "signature"
-	if err = r.EnableSecure(secret[:16], secret[16:28]); err != nil {
-		return nil, err
+	if mode == SecureMode {
+		if err = r.EnableSecure(secret[:16], secret[16:28]); err != nil {
+			return nil, err
+		}
+		if err = w.EnableSecure(secret[:16], secret[28:40]); err != nil {
+			return nil, err
+		}
 	}
-	if err = w.EnableSecure(secret[:16], secret[28:40]); err != nil {
-		return nil, err
-	}
+	// CRC keeps the plaintext frame codec, but still authenticates both
+	// transcripts using the CephX session key before admitting a session.
 	sig := sessionKey.Signature(rx.data.Bytes())
 	expectedSig := sessionKey.Signature(tx.data.Bytes())
 	rx.active, tx.active = false, false

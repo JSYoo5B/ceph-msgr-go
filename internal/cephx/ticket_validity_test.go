@@ -121,7 +121,7 @@ func TestInvalidTicketValidityDoesNotPublishAuthentication(t *testing.T) {
 						reply.Raw(authReply)
 						reply.Bytes(container.Data)
 						reply.Bytes(mgrReply)
-						if _, _, err := c.Finish(99, reply.Data); !errors.Is(err, ErrTicket) {
+						if _, _, err := c.Finish(99, reply.Data, true); !errors.Is(err, ErrTicket) {
 							t.Fatal("invalid validity accepted or misclassified", err)
 						}
 						if c.GlobalID != 42 || !reflect.DeepEqual(c.Tickets, before) {

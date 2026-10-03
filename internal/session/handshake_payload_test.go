@@ -38,7 +38,7 @@ func TestCompleteMalformedHandshakePayloadIsProtocolFailure(t *testing.T) {
 			go func() {
 				peerDone <- handshakePeer(peer, auth, handshakePeerConfig{mode: mode, serverFlags: 1, malformedTag: test.tag})
 			}()
-			_, err := Handshake(context.Background(), client, msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}, 1, 0, auth, 4096, time.Second)
+			_, err := Handshake(context.Background(), client, msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}, 1, 0, auth, SecureMode, 4096, time.Second)
 			if !errors.Is(err, msgr.ErrFrame) || !errors.Is(err, io.ErrUnexpectedEOF) {
 				t.Errorf("complete malformed payload was classified as transport loss: %v", err)
 			}
@@ -62,7 +62,7 @@ func TestCompleteMalformedCephXPayloadIsProtocolFailure(t *testing.T) {
 			go func() {
 				peerDone <- handshakePeer(peer, fixture, handshakePeerConfig{mode: 2, serverFlags: 1, authMore: more})
 			}()
-			_, err = Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, MonAuth{Client: auth}, 4096, time.Second)
+			_, err = Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, MonAuth{Client: auth}, SecureMode, 4096, time.Second)
 			if !errors.Is(err, msgr.ErrFrame) || !errors.Is(err, io.ErrUnexpectedEOF) {
 				t.Errorf("complete nested CephX payload was classified as transport loss: %v", err)
 			}
@@ -94,7 +94,7 @@ func TestCompleteEncryptedMgrChallengeRetainsDecodeFailure(t *testing.T) {
 	go func() {
 		peerDone <- handshakePeer(peer, fixture, handshakePeerConfig{mode: 2, serverFlags: 1, authMore: true, authMorePayload: challenge, peerRole: 16})
 	}()
-	_, err = Handshake(context.Background(), client, msgr.Address{Type: 2}, 16, 0, MgrAuth{Authorizer: authorizer}, 4096, time.Second)
+	_, err = Handshake(context.Background(), client, msgr.Address{Type: 2}, 16, 0, MgrAuth{Authorizer: authorizer}, SecureMode, 4096, time.Second)
 	if !errors.Is(err, msgr.ErrFrame) || !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatal("complete authenticated MGR challenge was classified as network truncation", err)
 	}
@@ -109,7 +109,7 @@ type failedProofAuth struct {
 }
 
 func (a failedProofAuth) More([]byte) ([]byte, error) { return nil, a.cause }
-func (a failedProofAuth) Done(uint64, []byte) (cephx.Key, []byte, error) {
+func (a failedProofAuth) Done(uint64, []byte, bool) (cephx.Key, []byte, error) {
 	return cephx.Key{}, nil, a.cause
 }
 
@@ -127,7 +127,7 @@ func TestAuthenticatorNonEncodingFailuresRetainTheirClasses(t *testing.T) {
 				go func() {
 					peerDone <- handshakePeer(peer, fixture, handshakePeerConfig{mode: 2, serverFlags: 1, authMore: more})
 				}()
-				_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, failedProofAuth{fixtureAuth: fixture, cause: cause}, 4096, time.Second)
+				_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, failedProofAuth{fixtureAuth: fixture, cause: cause}, SecureMode, 4096, time.Second)
 				if !errors.Is(err, cause) || errors.Is(err, msgr.ErrFrame) {
 					t.Errorf("non-encoding authenticator failure was relabeled as malformed data: %v", err)
 				}

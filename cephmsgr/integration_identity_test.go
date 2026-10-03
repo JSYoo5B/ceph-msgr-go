@@ -34,7 +34,7 @@ func fixtureRejectsOldProof(ctx context.Context, options Options, initial *cephx
 		conn, err := options.DialContext(probe, "tcp", endpoint)
 		if err == nil {
 			var transport *session.Transport
-			transport, err = session.Handshake(probe, conn, address, 1, 0, session.MonAuth{Client: &candidate}, options.MaxFrameSize, 3*time.Second)
+			transport, err = session.Handshake(probe, conn, address, 1, 0, session.MonAuth{Client: &candidate}, options.ConnectionMode.sessionMode(), options.MaxFrameSize, 3*time.Second)
 			if transport != nil {
 				transport.Conn.Close()
 			}

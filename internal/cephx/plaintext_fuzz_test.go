@@ -66,6 +66,17 @@ func FuzzAuthenticationPlaintextPublication(f *testing.F) {
 				f.Add(selector, wrongNonce)
 			}
 			f.Add(selector, []byte{version})
+			// The high selector bit opts into CRC without changing the six
+			// authenticated plaintext routes or the selected CephX key type.
+			crcSelector := selector | 0x80
+			f.Add(crcSelector, good)
+			f.Add(crcSelector, []byte{})
+			if mode == 5 {
+				f.Add(crcSelector, binary.LittleEndian.AppendUint64([]byte{1}, 124))
+				f.Add(crcSelector, plaintextTestBytes(binary.LittleEndian.AppendUint64([]byte{2}, 124), nil))
+				f.Add(crcSelector, binary.LittleEndian.AppendUint64([]byte{1}, 125))
+				f.Add(crcSelector, []byte{1, 124}) // Short CRC nonce-only reply.
+			}
 		}
 	}
 	f.Fuzz(func(t *testing.T, selector uint8, payload []byte) {
@@ -74,7 +85,8 @@ func FuzzAuthenticationPlaintextPublication(f *testing.F) {
 		if len(payload) > 8<<10 {
 			t.Skip()
 		}
-		mode := (selector >> 1) % 6
+		mode := (selector >> 1 & 0x3f) % 6
+		requireConnectionSecret := selector&0x80 == 0
 		key := Key{kind: AES, secret: bytes.Repeat([]byte{0x51}, 16)}
 		if selector&1 != 0 {
 			key = Key{kind: AES256K, secret: bytes.Repeat([]byte{0x51}, 32)}
@@ -96,15 +108,19 @@ func FuzzAuthenticationPlaintextPublication(f *testing.F) {
 			} else {
 				blob = payload
 			}
-			reply := plaintextTestAuthReply(t, key, service, body, blob, mode >= 2)
-			session, output, err = c.Finish(99, reply)
+			connectionSecret := bytes.Repeat([]byte{0x39}, 40)
+			if !requireConnectionSecret {
+				connectionSecret = nil
+			}
+			reply := plaintextTestAuthReplyWithSecret(t, key, service, body, blob, mode >= 2, connectionSecret)
+			session, output, err = c.Finish(99, reply, requireConnectionSecret)
 			if err != nil {
 				if session.Type() != 0 || output != nil || !reflect.DeepEqual(*c, before) {
 					t.Fatal("failed plaintext authentication published credentials or client state")
 				}
 			} else {
 				auth, exists := c.Tickets[ServiceAuth]
-				if !exists || !reflect.DeepEqual(auth.Key, session) || c.GlobalID != 99 || session.Type() == 0 || !bytes.Equal(output, bytes.Repeat([]byte{0x39}, 40)) || c.Name != before.Name || !reflect.DeepEqual(c.Key, before.Key) {
+				if !exists || !reflect.DeepEqual(auth.Key, session) || c.GlobalID != 99 || session.Type() == 0 || !bytes.Equal(output, connectionSecret) || c.Name != before.Name || !reflect.DeepEqual(c.Key, before.Key) {
 					t.Fatal("successful plaintext authentication lost its identity or complete secret")
 				}
 			}
@@ -124,12 +140,12 @@ func FuzzAuthenticationPlaintextPublication(f *testing.F) {
 			if mode == 4 {
 				output, err = a.Payload(ciphertext)
 			} else {
-				output, err = a.Finish(plaintextTestBytes(nil, ciphertext))
+				output, err = a.Finish(plaintextTestBytes(nil, ciphertext), requireConnectionSecret)
 			}
 			if !reflect.DeepEqual(*c, before) || !reflect.DeepEqual(*a, beforeAuthorizer) || err != nil && output != nil {
 				t.Fatal("authorizer plaintext parsing mutated state or published partial output")
 			}
-			if err == nil && (mode == 4 && len(output) == 0 || mode == 5 && len(output) < 40) {
+			if err == nil && (mode == 4 && len(output) == 0 || mode == 5 && len(output) < 40 && (requireConnectionSecret || len(output) != 0)) {
 				t.Fatal("successful authorizer parsing did not return a complete proof or secret")
 			}
 		}
@@ -163,6 +179,17 @@ func FuzzAuthenticationPlaintextPublication(f *testing.F) {
 			wrongNonce[1]++
 			if bytes.Equal(payload, wrongNonce) && (!errors.Is(err, ErrIntegrity) || errors.Is(err, io.ErrUnexpectedEOF)) {
 				t.Fatal("complete wrong nonce was reclassified", err)
+			}
+			if !requireConnectionSecret {
+				crcNonceOnly := binary.LittleEndian.AppendUint64([]byte{1}, 124)
+				crcEmptyV2 := plaintextTestBytes(binary.LittleEndian.AppendUint64([]byte{2}, 124), nil)
+				if (bytes.Equal(payload, crcNonceOnly) || bytes.Equal(payload, crcEmptyV2)) && (err != nil || len(output) != 0) {
+					t.Fatal("valid CRC reply without connection secret was rejected", err)
+				}
+				crcWrongNonce := binary.LittleEndian.AppendUint64([]byte{1}, 125)
+				if bytes.Equal(payload, crcWrongNonce) && !errors.Is(err, ErrIntegrity) {
+					t.Fatal("CRC nonce-only reply bypassed nonce verification", err)
+				}
 			}
 		}
 		if bytes.Equal(payload, []byte{version}) && (!errors.Is(err, want) || errors.Is(err, io.ErrUnexpectedEOF)) {

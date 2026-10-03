@@ -62,12 +62,39 @@ func ParseKey(base64Key string) (Key, error) {
 func (k Key) String() string   { return k.value.String() }
 func (k Key) GoString() string { return k.String() }
 
+// ConnectionMode selects the authenticated Messenger transport for every MON
+// and MGR connection, including renewal, recovery and named MON tell sessions.
+type ConnectionMode uint8
+
+const (
+	// SecureMode encrypts and authenticates frames with AES-GCM. It is the default.
+	SecureMode ConnectionMode = iota
+	// CRCMode uses unencrypted frames protected by CRC32C after CephX
+	// authentication and transcript verification. CRC32C detects corruption;
+	// it does not provide cryptographic integrity for subsequent traffic.
+	CRCMode
+)
+
+func (mode ConnectionMode) sessionMode() session.ConnectionMode {
+	switch mode {
+	case SecureMode:
+		return session.SecureMode
+	case CRCMode:
+		return session.CRCMode
+	default:
+		return 0
+	}
+}
+
 type Options struct {
 	// Monitors are host:port endpoints, optionally prefixed with v2: and
 	// suffixed with /nonce. IPv6 addresses must be bracketed; %zone is unsupported.
 	Monitors []string
 	Identity string
 	Key      Key
+	// ConnectionMode defaults to SecureMode. Only this mode is offered to
+	// every peer; an unsupported or different selection fails without fallback.
+	ConnectionMode ConnectionMode
 	// Hostname is sent unchanged in every MON subscription and effective-config
 	// request for this client's lifetime. Empty is the default. The client does
 	// not look up, normalize or shorten an operating-system hostname.

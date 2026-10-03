@@ -174,7 +174,7 @@ func TestOversizedHelloTranscriptStopsBeforeAuthentication(t *testing.T) {
 		f, err := r.Read()
 		peerDone <- err == nil && f.Tag == msgr.AuthRequest
 	}()
-	_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), 2<<20, time.Second)
+	_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), SecureMode, 2<<20, time.Second)
 	authSent := <-peerDone
 	if !errors.Is(err, wire.ErrLimit) || authSent {
 		t.Fatal("oversized HELLO advanced past the transcript limit", err, authSent)

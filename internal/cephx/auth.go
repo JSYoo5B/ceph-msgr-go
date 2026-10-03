@@ -201,8 +201,9 @@ func parseReplies(d *wire.Decoder, secret Key, old map[uint32]Ticket, now time.T
 }
 
 // Finish verifies the MON auth reply and extracts the per-connection secret.
+// requireConnectionSecret is true for secure mode and false only for CRC mode.
 // globalID is published only after every ticket and encrypted field verifies.
-func (c *Client) Finish(globalID uint64, p []byte) (Key, []byte, error) {
+func (c *Client) Finish(globalID uint64, p []byte, requireConnectionSecret bool) (Key, []byte, error) {
 	d := wire.NewDecoder(p)
 	typ, status := d.U16(), int32(d.U32())
 	if err := d.Err(); err != nil {
@@ -227,24 +228,27 @@ func (c *Client) Finish(globalID uint64, p []byte) (Key, []byte, error) {
 	if err := d.Done(); err != nil {
 		return Key{}, nil, err
 	}
-	cd := wire.NewDecoder(connection)
-	ciphertext := cd.Bytes()
-	if err := cd.Err(); err != nil {
-		return Key{}, nil, err
+	var secret []byte
+	if len(connection) > 0 || requireConnectionSecret {
+		cd := wire.NewDecoder(connection)
+		ciphertext := cd.Bytes()
+		if err := cd.Err(); err != nil {
+			return Key{}, nil, err
+		}
+		plain, err := auth.Key.Open(3, ciphertext)
+		if err != nil {
+			return Key{}, nil, err
+		}
+		if err := cd.Done(); err != nil {
+			return Key{}, nil, err
+		}
+		sd := wire.NewDecoder(plain)
+		secret = sd.Bytes()
+		if err := sd.Done(); err != nil {
+			return Key{}, nil, err
+		}
 	}
-	plain, err := auth.Key.Open(3, ciphertext)
-	if err != nil {
-		return Key{}, nil, err
-	}
-	if err := cd.Done(); err != nil {
-		return Key{}, nil, err
-	}
-	sd := wire.NewDecoder(plain)
-	secret := sd.Bytes()
-	if err := sd.Done(); err != nil {
-		return Key{}, nil, err
-	}
-	if len(secret) < 40 {
+	if len(secret) < 40 && (requireConnectionSecret || len(secret) != 0) {
 		return Key{}, nil, ErrIntegrity
 	}
 	if len(extra) > 0 {
@@ -320,7 +324,10 @@ func (a *Authorizer) Payload(challenge []byte) ([]byte, error) {
 	out.Bytes(p)
 	return out.Data, nil
 }
-func (a *Authorizer) Finish(p []byte) ([]byte, error) {
+
+// Finish verifies the service authorizer reply, including its nonce proof.
+// CRC mode permits version 1, whose reply has no connection-secret field.
+func (a *Authorizer) Finish(p []byte, requireConnectionSecret bool) ([]byte, error) {
 	d := wire.NewDecoder(p)
 	ciphertext := d.Bytes()
 	if err := d.Err(); err != nil {
@@ -338,7 +345,7 @@ func (a *Authorizer) Finish(p []byte) ([]byte, error) {
 	if err := r.Err(); err != nil {
 		return nil, err
 	}
-	if version != 2 {
+	if version != 2 && (version != 1 || requireConnectionSecret) {
 		return nil, ErrIntegrity
 	}
 	nonce := r.U64()
@@ -348,11 +355,14 @@ func (a *Authorizer) Finish(p []byte) ([]byte, error) {
 	if nonce != a.nonce+1 {
 		return nil, ErrIntegrity
 	}
-	secret := r.Bytes()
+	var secret []byte
+	if version == 2 {
+		secret = r.Bytes()
+	}
 	if err := r.Done(); err != nil {
 		return nil, err
 	}
-	if len(secret) < 40 {
+	if len(secret) < 40 && (requireConnectionSecret || len(secret) != 0) {
 		return nil, ErrIntegrity
 	}
 	return secret, nil

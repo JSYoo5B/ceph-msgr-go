@@ -29,12 +29,12 @@ func TestRejectedAuthReplyPreservesCodeWithoutPublishingState(t *testing.T) {
 	e.U16(0x100)
 	code := int32(-13)
 	e.U32(uint32(code))
-	_, _, err := c.Finish(99, e.Data)
+	_, _, err := c.Finish(99, e.Data, true)
 	var rejected *AuthenticationError
 	if !errors.As(err, &rejected) || rejected.Code != code || rejected.Method != 2 || c.GlobalID != 42 || len(c.Tickets) != 0 {
 		t.Fatal("rejection lost code or changed identity", err)
 	}
-	_, _, err = c.Finish(99, e.Data[:len(e.Data)-1])
+	_, _, err = c.Finish(99, e.Data[:len(e.Data)-1], true)
 	if err == nil || errors.As(err, &rejected) {
 		t.Fatal("truncated code classified as rejection", err)
 	}
@@ -135,7 +135,7 @@ func FuzzAuthenticationPublication(f *testing.F) {
 			ticket.Key.secret = append([]byte(nil), ticket.Key.secret...)
 			before[service] = ticket
 		}
-		_, _, err = c.Finish(99, p)
+		_, _, err = c.Finish(99, p, true)
 		if err != nil && (c.GlobalID != 42 || !reflect.DeepEqual(c.Tickets, before)) {
 			t.Fatal("failed authentication published identity or ticket state")
 		}
@@ -148,7 +148,7 @@ func TestTicketRenewalAndAtomicFailure(t *testing.T) {
 	mgr := Key{kind: AES256K, secret: bytes.Repeat([]byte{0x31}, 32)}
 	c, _ := NewClient("client.admin", key)
 	reply := testAuthReply(t, key, auth, mgr, nil)
-	session, secret, err := c.Finish(42, reply)
+	session, secret, err := c.Finish(42, reply, true)
 	if err != nil || session.Type() != AES256K || len(secret) != 40 {
 		t.Fatal(err)
 	}
@@ -158,12 +158,12 @@ func TestTicketRenewalAndAtomicFailure(t *testing.T) {
 	old := c.Tickets[ServiceAuth]
 	next := Key{kind: AES256K, secret: bytes.Repeat([]byte{0x41}, 32)}
 	renew := testAuthReply(t, key, next, mgr, &old)
-	if _, _, err := c.Finish(42, renew); err != nil {
+	if _, _, err := c.Finish(42, renew, true); err != nil {
 		t.Fatal("renewal", err)
 	}
 	previous := c.Tickets[ServiceAuth].Key.Signature(nil)
 	renew[len(renew)-1] ^= 1
-	if _, _, err := c.Finish(99, renew); err == nil {
+	if _, _, err := c.Finish(99, renew, true); err == nil {
 		t.Fatal("damaged renewal accepted")
 	}
 	if c.GlobalID != 42 || !bytes.Equal(previous, c.Tickets[ServiceAuth].Key.Signature(nil)) {
@@ -220,7 +220,7 @@ func TestAuthorizerChallengeAndReply(t *testing.T) {
 		}
 		e := wire.Encoder{}
 		e.Bytes(enc)
-		_, err = a.Finish(e.Data)
+		_, err = a.Finish(e.Data, true)
 		if valid && err != nil {
 			t.Fatal(err)
 		}

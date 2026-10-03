@@ -20,9 +20,11 @@ type fixtureAuth struct {
 	secret []byte
 }
 
-func (a fixtureAuth) Initial() ([]byte, error)                       { return []byte{10}, nil }
-func (a fixtureAuth) More([]byte) ([]byte, error)                    { return nil, errors.New("unexpected challenge") }
-func (a fixtureAuth) Done(uint64, []byte) (cephx.Key, []byte, error) { return a.key, a.secret, nil }
+func (a fixtureAuth) Initial() ([]byte, error)    { return []byte{10}, nil }
+func (a fixtureAuth) More([]byte) ([]byte, error) { return nil, errors.New("unexpected challenge") }
+func (a fixtureAuth) Done(uint64, []byte, bool) (cephx.Key, []byte, error) {
+	return a.key, a.secret, nil
+}
 
 func fixtureAuthData() fixtureAuth {
 	e := wire.Encoder{}
@@ -41,15 +43,20 @@ func fixtureAuthData() fixtureAuth {
 
 // This peer simulates handshake faults, not independent Ceph interoperability.
 type handshakePeerConfig struct {
-	badSignature    bool
-	mode            uint32
+	badSignature bool
+	mode         uint32
+	// offeredMode checks the client's single mode offer independently of the
+	// deliberately selected mode used by mismatch tests. Zero means secure.
+	offeredMode     ConnectionMode
 	serverFlags     uint64
 	serverAddresses func(msgr.Address) []msgr.Address
 	serverAddrWire  []byte
 	malformedTag    msgr.Tag
 	authMore        bool
 	authMorePayload []byte
+	authMoreRounds  int
 	peerRole        uint8
+	afterIdent      func(net.Conn, *msgr.Reader, *msgr.Writer) error
 }
 
 func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error {
@@ -90,8 +97,21 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	if cfg.malformedTag == msgr.Hello {
 		return nil
 	}
-	if f, err := r.Read(); err != nil || f.Tag != msgr.AuthRequest {
+	f, err := r.Read()
+	if err != nil || f.Tag != msgr.AuthRequest || len(f.Segments) != 1 {
 		return errors.New("auth request")
+	}
+	offer := wire.NewDecoder(f.Segments[0])
+	wanted := cfg.offeredMode
+	if wanted == 0 {
+		wanted = SecureMode
+	}
+	if offer.U32() != 2 || offer.U32() != 1 || offer.U32() != uint32(wanted) {
+		return errors.New("client did not offer exactly the requested CephX mode")
+	}
+	offer.Bytes()
+	if err := offer.Done(); err != nil {
+		return err
 	}
 	if cfg.mode == 0 {
 		e := wire.Encoder{}
@@ -112,6 +132,22 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 		more.Bytes(cfg.authMorePayload)
 		return write(msgr.AuthReplyMore, more.Data)
 	}
+	if cfg.authMoreRounds > 0 {
+		for range cfg.authMoreRounds {
+			more := wire.Encoder{}
+			more.Bytes(nil)
+			if err := write(msgr.AuthReplyMore, more.Data); err != nil {
+				return err
+			}
+			if f, err := r.Read(); err != nil || f.Tag != msgr.AuthRequestMore {
+				return errors.New("client authentication continuation")
+			}
+		}
+		if _, err := r.Read(); err == nil {
+			return errors.New("client proceeded without AUTH_DONE")
+		}
+		return nil
+	}
 	done := wire.Encoder{}
 	done.U64(42)
 	done.U32(cfg.mode)
@@ -119,15 +155,17 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	if err := write(msgr.AuthDone, done.Data); err != nil {
 		return err
 	}
-	if cfg.mode != 2 || cfg.malformedTag == msgr.AuthDone {
+	if cfg.mode != uint32(wanted) || cfg.malformedTag == msgr.AuthDone {
 		return nil
 	}
 	signature := a.key.Signature(rx.data.Bytes())
 	expected := a.key.Signature(tx.data.Bytes())
 	rx.active, tx.active = false, false
-	r.EnableSecure(a.secret[:16], a.secret[28:40])
-	w.EnableSecure(a.secret[:16], a.secret[16:28])
-	f, err := r.Read()
+	if wanted == SecureMode {
+		r.EnableSecure(a.secret[:16], a.secret[28:40])
+		w.EnableSecure(a.secret[:16], a.secret[16:28])
+	}
+	f, err = r.Read()
 	if err != nil {
 		return err
 	}
@@ -193,6 +231,9 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	if cfg.malformedTag == msgr.ServerIdent {
 		return nil
 	}
+	if cfg.afterIdent != nil {
+		return cfg.afterIdent(conn, r, w)
+	}
 	_, err = r.Read()
 	return err
 }
@@ -204,7 +245,7 @@ func TestAuthenticatedHandshakeAndContextLifetime(t *testing.T) {
 	go func() { peerDone <- handshakePeer(server, a, handshakePeerConfig{mode: 2, serverFlags: 1}) }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	tr, err := Handshake(ctx, client, msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}, 1, 0, a, 4096, time.Second)
+	tr, err := Handshake(ctx, client, msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}, 1, 0, a, SecureMode, 4096, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +270,7 @@ func TestHandshakeRejectsTamperingAndDowngrade(t *testing.T) {
 		go func() {
 			done <- handshakePeer(server, a, handshakePeerConfig{badSignature: tc.bad, mode: tc.mode, serverFlags: 1})
 		}()
-		_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, a, 4096, time.Second)
+		_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, a, SecureMode, 4096, time.Second)
 		if err == nil {
 			t.Fatal("unsafe handshake accepted")
 		}
@@ -245,7 +286,7 @@ func TestHandshakeCancellation(t *testing.T) {
 	defer server.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := Handshake(ctx, client, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), 4096, time.Second)
+	_, err := Handshake(ctx, client, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), SecureMode, 4096, time.Second)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
@@ -258,7 +299,7 @@ func TestAuthenticationRejectionPreservesCodeAndValidatesFrame(t *testing.T) {
 		go func() {
 			done <- handshakePeer(peer, fixtureAuthData(), handshakePeerConfig{badSignature: malformed, serverFlags: 1})
 		}()
-		_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), 4096, time.Second)
+		_, err := Handshake(context.Background(), client, msgr.Address{Type: 2}, 1, 0, fixtureAuthData(), SecureMode, 4096, time.Second)
 		var rejected *cephx.AuthenticationError
 		if err == nil || errors.As(err, &rejected) == malformed {
 			t.Fatal("rejection or malformed frame misclassified", err)
@@ -278,7 +319,7 @@ func TestHandshakeRejectsUnsupportedSessionFlags(t *testing.T) {
 		done := make(chan error, 1)
 		auth := fixtureAuthData()
 		go func() { done <- handshakePeer(server, auth, handshakePeerConfig{mode: 2, serverFlags: flags}) }()
-		transport, err := Handshake(context.Background(), client, msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}, 1, 0, auth, 4096, time.Second)
+		transport, err := Handshake(context.Background(), client, msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")}, 1, 0, auth, SecureMode, 4096, time.Second)
 		if transport != nil {
 			transport.Conn.Close()
 		}
@@ -318,7 +359,7 @@ func TestHandshakeValidatesServerAddressIdentity(t *testing.T) {
 			go func() {
 				done <- handshakePeer(peer, auth, handshakePeerConfig{mode: 2, serverFlags: 1, serverAddresses: tc.addresses})
 			}()
-			transport, err := Handshake(context.Background(), client, target, 1, 0, auth, 4096, time.Second)
+			transport, err := Handshake(context.Background(), client, target, 1, 0, auth, SecureMode, 4096, time.Second)
 			if transport != nil {
 				transport.Conn.Close()
 			}

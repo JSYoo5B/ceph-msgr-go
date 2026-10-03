@@ -50,6 +50,9 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if options.ConnectionMode.sessionMode() == 0 {
+		return nil, errors.New("ceph: invalid connection mode")
+	}
 	if len(options.Monitors) == 0 {
 		return nil, errors.New("ceph: at least one monitor is required")
 	}
@@ -212,7 +215,7 @@ func (c *Client) open(ctx context.Context, endpoint string, address msgr.Address
 			return nil, errors.New("ceph: dialer returned no peer IP address")
 		}
 	}
-	return session.Handshake(ctx, conn, address, role, id, auth, c.options.MaxFrameSize, c.options.ConnectTimeout)
+	return session.Handshake(ctx, conn, address, role, id, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)
 }
 
 func (c *Client) attach(s *session.Session) bool {

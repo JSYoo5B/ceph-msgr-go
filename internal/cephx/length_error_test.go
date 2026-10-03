@@ -51,7 +51,7 @@ func TestAuthenticationLengthErrorsPreserveCauseAndState(t *testing.T) {
 								a := &Authorizer{ticket: c.Tickets[ServiceMgr], nonce: 123}
 								beforeAuthorizer := *a
 								var secret []byte
-								secret, err = a.Finish(encoded.Data)
+								secret, err = a.Finish(encoded.Data, true)
 								if secret != nil || !reflect.DeepEqual(*a, beforeAuthorizer) {
 									t.Fatal("failed authorizer changed state or returned secret")
 								}
@@ -89,7 +89,7 @@ func TestAuthenticationLengthErrorsPreserveCauseAndState(t *testing.T) {
 								}
 								var session Key
 								var secret []byte
-								session, secret, err = c.Finish(99, p.Data)
+								session, secret, err = c.Finish(99, p.Data, true)
 								if session.Type() != 0 || secret != nil {
 									t.Fatal("failed authentication returned credentials")
 								}
@@ -116,7 +116,7 @@ func TestAuthenticationLengthChecksKeepCryptoAndVersionErrors(t *testing.T) {
 		}
 		c, _ := NewClient("client.length-test", key)
 		good := testAuthReply(t, key, key, key, nil)
-		if _, _, err := c.Finish(42, good); err != nil {
+		if _, _, err := c.Finish(42, good, true); err != nil {
 			t.Fatal("valid authentication", err)
 		}
 		before := make(map[uint32]Ticket, len(c.Tickets))
@@ -125,7 +125,7 @@ func TestAuthenticationLengthChecksKeepCryptoAndVersionErrors(t *testing.T) {
 		}
 		bad := append([]byte(nil), good...)
 		bad[6+5+5+4] ^= 1 // Complete, length-valid encrypted ticket key.
-		_, _, err := c.Finish(99, bad)
+		_, _, err := c.Finish(99, bad, true)
 		if !errors.Is(err, ErrIntegrity) || errors.Is(err, wire.ErrLimit) || errors.Is(err, io.ErrUnexpectedEOF) {
 			t.Fatal("crypto rejection reclassified", err)
 		}
@@ -143,7 +143,7 @@ func TestAuthenticationLengthChecksKeepCryptoAndVersionErrors(t *testing.T) {
 		p.U32(ServiceAuth)
 		p.U8(1)
 		p.Bytes(ciphertext)
-		_, _, err = c.Finish(99, p.Data)
+		_, _, err = c.Finish(99, p.Data, true)
 		if !errors.Is(err, wire.ErrVersion) || errors.Is(err, wire.ErrLimit) || errors.Is(err, io.ErrUnexpectedEOF) {
 			t.Fatal("encoding version reclassified", err)
 		}
@@ -152,7 +152,7 @@ func TestAuthenticationLengthChecksKeepCryptoAndVersionErrors(t *testing.T) {
 		a := &Authorizer{ticket: c.Tickets[ServiceMgr]}
 		p = wire.Encoder{}
 		p.Bytes(nil)
-		_, err = a.Finish(p.Data)
+		_, err = a.Finish(p.Data, true)
 		if !errors.Is(err, ErrIntegrity) || errors.Is(err, wire.ErrLimit) || errors.Is(err, io.ErrUnexpectedEOF) {
 			t.Fatal("empty ciphertext reclassified", err)
 		}

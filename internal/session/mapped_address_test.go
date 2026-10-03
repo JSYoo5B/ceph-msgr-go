@@ -48,7 +48,7 @@ func TestHandshakePreservesMappedIPv6TargetFamily(t *testing.T) {
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			transport, err := Handshake(ctx, client, target, 1, 0, auth, 4096, time.Second)
+			transport, err := Handshake(ctx, client, target, 1, 0, auth, SecureMode, 4096, time.Second)
 			if transport != nil {
 				transport.Conn.Close()
 			}
