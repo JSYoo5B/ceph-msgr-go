@@ -410,6 +410,14 @@ LGPL-2.1 고지를 확인하고 시험용 credential 선택을 독립 구현한�
 
 구현한 encoder와 decoder끼리의 round trip만으로 wire 호환성을 입증하지 않는다. Ceph에서 얻은 fixture 및 실제 Ceph 상대 검증을 사용한다. parser fuzzing, race 검사, 장시간 ticket 갱신, 장애 주입을 포함한다. 클러스터 구성과 테스트 oracle을 위한 Ceph CLI·컨테이너 사용은 개발 도구이며 제품의 런타임 의존성과 구분한다.
 
+개발 실행기는 별도 `integration/fixture` Go 1.25 모듈에서 공개
+`ceph-testcontainers-go v0.1.0`의 `ceph.Run`으로 container·network·준비 대기·
+cleanup을 관리한다. 제품 Go 1.24 모듈과 의존성은 분리한다. 현재 컨테이너
+하나의 MON 3개·MGR 0/2개·선택 OSD 구성과 native bootstrap·control·oracle은
+기존 adapter에 남긴다. 상위 typed fixture에 없는 키·cipher·TTL, CRC·IPv6·
+mapped IPv6·memstore profile을 기본 topology로 대체해 검증을 줄이지 않는다.
+이 개발 도구 교체 자체를 제품 상호운용 검증 결과로 해석하지 않는다.
+
 ## 변경 빈도와 AI 활용에 대한 판단
 
 확인한 사실:

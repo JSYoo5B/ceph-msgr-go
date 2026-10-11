@@ -1303,6 +1303,8 @@ Windows amd64의 실제 Ceph 상대 실행도 소스 `37e2027`에서 확인했�
 Windows 전용 CI는 `windows-2025`에서 CGO=0 Windows amd64 시험 실행 파일을
 직접 실행한다. 개발용 Ceph 20.2.4·aes256k·secure·IPv4 fixture만 별도의 WSL2
 배포판에 두고 기존 opaque TCP relay의 Windows loopback 경로로 접근한다.
+Fixture 제어는 Go 1.25 이상으로 컴파일한 Linux 개발 실행기가 맡으며,
+제품 시험 바이너리는 계속 Windows에서 직접 실행한다.
 이는 Windows의 직접 IPv6 접속이나 다른 인증 구성의 검증을 대신하지 않는다.
 준비·인증 갱신·MON/MGR 전환, raw 명령·Tell·이름 지정 MON Tell, 동시성,
 context·Close와 log/config/digest 수신을 포함한 공개 시험 9개와 내부 통신
@@ -1336,6 +1338,8 @@ WSL 구성은 [공식 runner image](https://github.com/actions/runner-images/blo
 ```sh
 go test -race ./...
 go vet ./...
+go -C integration/fixture test ./...          # 개발 실행기, Go 1.25 이상
+go -C integration/fixture vet ./...
 sh integration/run.sh                         # Docker 필요, aes256k
 CEPH_MSGR_TEST_KEY_TYPE=aes sh integration/run.sh
 CEPH_MSGR_TEST_CONNECTION_MODE=crc sh integration/run.sh # CRC-only MON/MGR, CephX 유지
@@ -1382,10 +1386,24 @@ active MGR 교체 후 별도 인증, 취소와 종료를 통과했다. MGR 지�
 단위 시험에서는 실제 전송 메시지를 세어 준비 API가 관리 명령을 보내지 않고,
 명령 슬롯이 모두 사용 중이어도 완료되는 것을 확인했다.
 
-기본 Harness는 격리된 컨테이너 안에서 Ceph 클러스터와 CGO=0 Go 테스트 바이너리를
-실행하고 종료 시 컨테이너·임시 키를 삭제한다. 기본 모드는 호스트 포트를
-공개하지 않는다. `host` 모드는 현재 OS·CPU의 시험 바이너리를 실행하며
-개발용 relay 하나를 `127.0.0.1`의 임시 포트에 공개한다.
+개발 Harness는 [별도 Go 모듈](integration/fixture/go.mod)에 고정한 공개
+`ceph-testcontainers-go v0.1.0`의 `ceph.Run`을 사용한다. 이 모듈은 Go 1.25
+이상을 요구하며 container·network·준비 대기·cleanup을 소유한다. 제품의
+Go 1.24·표준 라이브러리만 사용하는 dependency graph에는 포함되지 않는다.
+`integration/run.sh`의 환경변수 입력과 profile별 시험 selector는 유지한다.
+
+현재 adapter는 컨테이너 하나 안에서 native MON 3개와 MGR 0개 또는 2개,
+선택한 OSD 1개를 실행한다. 라이브러리의 daemon별 다중 컨테이너 topology로
+전환한 것은 아니다. `cluster.sh`의 native protocol bootstrap·control과 독립
+oracle은 유지한다. 상위 fixture의 typed API에는 현재 시험이 요구하는
+client/service CephX 키 타입·service cipher·ticket TTL, CRC-only listener와
+mode 변경, IPv6·mapped IPv6, memstore 설정을 그대로 표현하는 옵션이 없다.
+이 profile 제어를 상위 fixture에 추가하기 전에는 기존 adapter를 제거할 수 없다.
+
+기본 모드는 같은 컨테이너에서 CGO=0 Go 시험 바이너리를 실행한다. Relay용
+포트만 host loopback에 할당하며 container 모드에서는 사용하지 않는다.
+`host` 모드는 현재 OS·CPU의 시험 바이너리를 실행하며 개발용 relay 하나를
+`127.0.0.1`의 임시 포트로 사용한다. 종료 시 소유한 fixture와 임시 키를 정리한다.
 `CEPH_MSGR_TEST_RACE=1`은 `host` 모드에서만 지원한다. 이때 시험 바이너리는
 Go race detector에 필요한 CGO=1 계측을 사용한다. 제품과 기본 fixture
 바이너리는 계속 CGO=0이며, race 계측은 제품 의존성에 포함되지 않는다.
