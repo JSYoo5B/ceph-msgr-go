@@ -1396,9 +1396,13 @@ Go 1.24·표준 라이브러리만 사용하는 dependency graph에는 포함되
 선택한 OSD 1개를 실행한다. 라이브러리의 daemon별 다중 컨테이너 topology로
 전환한 것은 아니다. `cluster.sh`의 native protocol bootstrap·control과 독립
 oracle은 유지한다. 상위 fixture의 typed API에는 현재 시험이 요구하는
-client/service CephX 키 타입·service cipher·ticket TTL, CRC-only listener와
-mode 변경, IPv6·mapped IPv6, memstore 설정을 그대로 표현하는 옵션이 없다.
-이 profile 제어를 상위 fixture에 추가하기 전에는 기존 adapter를 제거할 수 없다.
+client/service CephX 키 타입·초기 auth-map cipher 정책, CRC-only listener와
+mode 변경, IPv6·mapped IPv6, mkfs 전 memstore 선택을 그대로 표현하는 옵션이
+없다. 이 profile 제어를 상위 fixture에 추가하기 전에는 기존 bootstrap
+adapter를 제거할 수 없다. Ticket TTL은 현재 `TemporaryConfig`로 설정할 수
+있으며 새로 발급된 ticket의 실제 만료 시각으로 검증해야 한다. 사용자 지정
+CRUSH map과 pool 설정도 기존 native `Ceph`·`Exec`·file-copy 수단으로 적용할
+수 있으므로 별도의 CRUSH 배치 기능을 상위 fixture에 요구하지 않는다.
 
 기본 모드는 같은 컨테이너에서 CGO=0 Go 시험 바이너리를 실행한다. Relay용
 포트만 host loopback에 할당하며 container 모드에서는 사용하지 않는다.

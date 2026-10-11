@@ -414,8 +414,10 @@ LGPL-2.1 고지를 확인하고 시험용 credential 선택을 독립 구현한�
 `ceph-testcontainers-go v0.1.0`의 `ceph.Run`으로 container·network·준비 대기·
 cleanup을 관리한다. 제품 Go 1.24 모듈과 의존성은 분리한다. 현재 컨테이너
 하나의 MON 3개·MGR 0/2개·선택 OSD 구성과 native bootstrap·control·oracle은
-기존 adapter에 남긴다. 상위 typed fixture에 없는 키·cipher·TTL, CRC·IPv6·
-mapped IPv6·memstore profile을 기본 topology로 대체해 검증을 줄이지 않는다.
+기존 adapter에 남긴다. 상위 typed fixture에 없는 키·초기 auth-map cipher,
+CRC·IPv6·mapped IPv6·mkfs 전 memstore profile을 기본 topology로 대체해
+검증을 줄이지 않는다. TTL은 기존 `TemporaryConfig`로 설정할 수 있으며
+CRUSH map import·pool 설정은 native `Ceph`·`Exec`·file-copy로 표현할 수 있다.
 이 개발 도구 교체 자체를 제품 상호운용 검증 결과로 해석하지 않는다.
 
 ## 변경 빈도와 AI 활용에 대한 판단
