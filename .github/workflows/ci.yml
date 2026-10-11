@@ -25,6 +25,7 @@ jobs:
     env:
       CGO_ENABLED: '0'
       GOTOOLCHAIN: local
+      GOWORK: 'off'
       DIAGNOSTIC_PYTHON: ${{ matrix.os == 'windows-latest' && 'python' || 'python3' }}
       PYTHONIOENCODING: utf-8
     steps:
@@ -59,9 +60,40 @@ jobs:
           path: ${{ runner.temp }}/go-tests.jsonl
           retention-days: 7
 
+  fixture-tools:
+    name: Fixture development tools (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Keep the Go 1.25+ Testcontainers module outside the product's Go 1.24 checks.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
+      - name: Download fixture-only dependencies
+        run: go -C integration/fixture mod download
+      - name: Test fixture development tools without a running cluster
+        run: go -C integration/fixture test -mod=readonly ./...
+      - name: Vet fixture development tools
+        run: go -C integration/fixture vet -mod=readonly ./...
+
   race:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -69,6 +101,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
+      - name: Download fixture-only dependencies
+        run: go -C integration/fixture mod download
       # The race detector needs CGO instrumentation; product builds use CGO=0.
       - run: go test -race ./...
         env:
@@ -102,6 +137,7 @@ jobs:
     env:
       CGO_ENABLED: '0'
       GOTOOLCHAIN: local
+      GOWORK: 'off'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -131,6 +167,7 @@ jobs:
     env:
       CGO_ENABLED: '0'
       GOTOOLCHAIN: local
+      GOWORK: 'off'
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -139,6 +176,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
+      - name: Download fixture-only dependencies
+        run: go -C integration/fixture mod download
       - name: Import dedicated WSL2 development fixture
         run: |
           $ErrorActionPreference = 'Stop'
@@ -177,6 +217,10 @@ jobs:
     name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
     strategy:
       fail-fast: false
       matrix:
@@ -212,6 +256,9 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
+      - name: Download fixture-only dependencies
+        run: go -C integration/fixture mod download
       - name: Real MON, MGR and opt-in OSD protocol verification
         id: ceph
         run: |

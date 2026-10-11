@@ -74,7 +74,7 @@ def native_environment():
     for name in list(env):
         if name.startswith("CEPH_MSGR_"):
             del env[name]
-    env.update(CGO_ENABLED="0", GOTOOLCHAIN="local", GOOS="windows", GOARCH="amd64")
+    env.update(CGO_ENABLED="0", GOTOOLCHAIN="local", GOWORK="off", GOOS="windows", GOARCH="amd64")
     return env
 
 
@@ -150,8 +150,8 @@ def run(distro, diagnostics):
         "distro": distro, "project": str(project)}, indent=2) + "\n", encoding="utf-8")
     env = native_environment()
 
-    def execute(args, *, env=env, timeout=300, capture=False):
-        return command(args, cwd=project, env=env, timeout=timeout,
+    def execute(args, *, env=env, cwd=project, timeout=300, capture=False):
+        return command(args, cwd=cwd, env=env, timeout=timeout,
                        capture=capture, log=diagnostics / "bootstrap.log")
 
     host = json.loads(execute(
@@ -167,6 +167,9 @@ def run(distro, diagnostics):
         raise RuntimeError("product has non-standard-library dependencies")
     revision = execute(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
     version = execute(["go", "version"], capture=True).stdout.strip()
+    toolchain = re.search(r"\bgo([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[a-z]+[0-9]+)?\b", version)
+    if toolchain is None or tuple(map(int, toolchain.groups())) < (1, 25):
+        raise RuntimeError("the development fixture controller requires Go 1.25 or later")
     out = Path(tempfile.mkdtemp(prefix="ceph-msgr-windows-", dir=os.getenv("RUNNER_TEMP")))
     # --exec preserves argv: a default shell consumes Windows backslashes.
     wsl = ["wsl.exe", "--distribution", distro, "--user", "root", "--exec"]
@@ -182,6 +185,8 @@ def run(distro, diagnostics):
             execute(["go", "test", "-c", "-o", str(out / (name + ".test.exe")), "./" + package])
         linux = dict(env, GOOS="linux", GOARCH="amd64")
         execute(["go", "build", "-o", str(out / "relay"), "./integration/relay"], env=linux)
+        execute(["go", "build", "-mod=readonly", "-o", str(out / "fixture-controller"), "."],
+                cwd=project / "integration/fixture", env=linux)
 
         def wsl_path(path):
             return execute(wsl + ["wslpath", "-a", "-u", str(path)],
@@ -200,6 +205,7 @@ def run(distro, diagnostics):
         wait_for_holder(holder, out)
         attempted = True
         fixture_action("start", timeout=900)
+        report["fixture_provider"] = "github.com/JSYoo5B/ceph-testcontainers-go@v0.1.0"
         report["daemon_version"] = (out / "daemon-version").read_text(encoding="utf-8").strip()
         report["fixture_image"] = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
         proxy = proxy_endpoint((out / "proxy").read_text(encoding="utf-8"))
@@ -244,7 +250,7 @@ def run(distro, diagnostics):
         try:
             try:
                 if attempted:
-                    fixture_action("stop")
+                    fixture_action("stop", timeout=150)
             finally:
                 if holder is not None:
                     (out / "holder.stop").touch()
@@ -254,9 +260,11 @@ def run(distro, diagnostics):
                     holder_output.close()
         except BaseException as error:
             marker = out / "container-name"
+            provider = out / "provider.pid"
             (diagnostics / "cleanup-failure.json").write_text(json.dumps({
                 "distro": distro, "fixture_output": str(out),
                 "container": marker.read_text(encoding="utf-8").strip() if marker.exists() else None,
+                "provider_pid": provider.read_text(encoding="utf-8").strip() if provider.exists() else None,
                 "holder_pid": holder.pid if holder is not None else None,
                 "error": str(error),
             }, indent=2) + "\n", encoding="utf-8")

@@ -1,0 +1,285 @@
+package main
+
+import (
+	"fmt"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestProfileDefaults(t *testing.T) {
+	// Getenv exposes both an unset variable and an explicitly empty one as "".
+	p, err := loadProfile(func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := profile{
+		image:          "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+		keyType:        "aes256k",
+		serviceCipher:  "aes256k",
+		ipFamily:       "4",
+		mgrCount:       "2",
+		runtime:        "container",
+		race:           "0",
+		expireTickets:  "0",
+		idleSessions:   "0",
+		authEpoch:      "0",
+		shortTickets:   "0",
+		connectionMode: "secure",
+		mappedIPv6:     "0",
+		osd:            "0",
+		testRun:        "^TestCeph.*Integration$",
+		testTimeout:    "10m",
+	}
+	if p != want {
+		t.Fatalf("profile = %#v, want %#v", p, want)
+	}
+}
+
+func TestProfileSelection(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"normal", nil, "^TestCeph.*Integration$"},
+		{"no-manager", map[string]string{"CEPH_MSGR_TEST_MGR_COUNT": "0"}, "^TestCephManagerAvailabilityIntegration$"},
+		{"expired", map[string]string{"CEPH_MSGR_TEST_EXPIRE_TICKETS": "1"}, "^TestCeph(ExpiredTicketRecovery|DiscardedTicketProof)Integration$"},
+		{"idle", map[string]string{"CEPH_MSGR_TEST_IDLE_SESSIONS": "1"}, "^TestCephIdleSessionsIntegration$"},
+		{"auth-epoch", map[string]string{"CEPH_MSGR_TEST_AUTH_EPOCH": "1"}, "^TestCephServiceKeyEpochIntegration$"},
+		{"fractional", map[string]string{"CEPH_MSGR_TEST_SHORT_TICKETS": "1"}, "^TestCephFractionalTicketRenewalIntegration$"},
+		{"reject-mon", map[string]string{"CEPH_MSGR_TEST_MODE_REJECTION": "mon"}, "^TestCephConnectionModeRejectionIntegration$"},
+		{"reject-mgr", map[string]string{"CEPH_MSGR_TEST_MODE_REJECTION": "mgr"}, "^TestCephConnectionModeRejectionIntegration$"},
+		{"mapped", map[string]string{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCephMappedAddressIntegration$"},
+		{"osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
+		{"crc-host-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, override := range []string{"", "^CallerChosen[Integration$"} {
+				env := copyProfileEnv(tc.env)
+				env["CEPH_MSGR_TEST_RUN"] = override
+				p, err := loadProfile(func(name string) string { return env[name] })
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := tc.want
+				if override != "" {
+					want = override // The runner passes regex validation to go test.
+				}
+				if p.testRun != want {
+					t.Fatalf("test selector = %q, want %q", p.testRun, want)
+				}
+				containerEnv, testEnv := p.containerEnvironment(), p.testEnvironment("/out", "")
+				for name, want := range tc.env {
+					if containerEnv[name] != want {
+						t.Fatalf("container %s = %q, want %q", name, containerEnv[name], want)
+					}
+					switch name {
+					case "CEPH_MSGR_TEST_IP_FAMILY", "CEPH_MSGR_TEST_RUNTIME", "CEPH_MSGR_TEST_RACE":
+						// These select fixture/build behavior, not test behavior.
+					default:
+						if testEnv[name] != want {
+							t.Fatalf("test %s = %q, want %q", name, testEnv[name], want)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestProfileCipherAndRawValues(t *testing.T) {
+	for _, tc := range []struct {
+		key, service, want string
+	}{
+		{"aes", "", "aes"},
+		{"aes256k", "", "aes256k"},
+		{"aes", "aes256k", "aes256k"},
+		{"aes256k", "aes", "aes"},
+	} {
+		env := map[string]string{
+			"CEPH_MSGR_TEST_KEY_TYPE":       tc.key,
+			"CEPH_MSGR_TEST_SERVICE_CIPHER": tc.service,
+			"CEPH_MSGR_TEST_IMAGE":          " own image ",
+			"CEPH_MSGR_STRESS_DURATION":     " 3m ",
+			"CEPH_MSGR_TEST_TIMEOUT":        " invalid-timeout ",
+			"CEPH_MSGR_TEST_DIAGNOSTICS":    " /output path ",
+		}
+		p, err := loadProfile(func(name string) string { return env[name] })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.keyType != tc.key || p.serviceCipher != tc.want || p.image != " own image " || p.stressDuration != " 3m " || p.testTimeout != " invalid-timeout " || p.diagnostics != " /output path " {
+			t.Fatalf("caller values changed: %#v", p)
+		}
+	}
+}
+
+func TestProfileInvalidChoices(t *testing.T) {
+	for _, name := range []string{
+		"CEPH_MSGR_TEST_KEY_TYPE", "CEPH_MSGR_TEST_SERVICE_CIPHER", "CEPH_MSGR_TEST_IP_FAMILY",
+		"CEPH_MSGR_TEST_MGR_COUNT", "CEPH_MSGR_TEST_RUNTIME", "CEPH_MSGR_TEST_RACE",
+		"CEPH_MSGR_TEST_EXPIRE_TICKETS", "CEPH_MSGR_TEST_IDLE_SESSIONS", "CEPH_MSGR_TEST_AUTH_EPOCH",
+		"CEPH_MSGR_TEST_SHORT_TICKETS", "CEPH_MSGR_TEST_MODE_REJECTION", "CEPH_MSGR_TEST_CONNECTION_MODE",
+		"CEPH_MSGR_TEST_MAPPED_IPV6", "CEPH_MSGR_TEST_OSD",
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, err := loadProfile(func(key string) string {
+				if key == name {
+					return " unsupported "
+				}
+				return ""
+			})
+			if err == nil || !strings.Contains(err.Error(), name) || p != (profile{}) {
+				t.Fatalf("invalid choice returned %#v, %v", p, err)
+			}
+		})
+	}
+}
+
+func TestProfileInvalidCombinations(t *testing.T) {
+	auth := []string{"CEPH_MSGR_TEST_EXPIRE_TICKETS", "CEPH_MSGR_TEST_IDLE_SESSIONS", "CEPH_MSGR_TEST_AUTH_EPOCH", "CEPH_MSGR_TEST_SHORT_TICKETS"}
+	cases := []map[string]string{
+		{"CEPH_MSGR_TEST_RACE": "1"},
+		{"CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_MODE_REJECTION": "mon"},
+		{"CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_MODE_REJECTION": "mgr"},
+		{"CEPH_MSGR_TEST_MODE_REJECTION": "mgr", "CEPH_MSGR_TEST_MGR_COUNT": "0"},
+		{"CEPH_MSGR_TEST_MAPPED_IPV6": "1"},
+		{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_RUNTIME": "host"},
+		{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_MGR_COUNT": "0"},
+		{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_STRESS_DURATION": "0"},
+		{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_MODE_REJECTION": "mon"},
+		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_MGR_COUNT": "0"},
+		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"},
+		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_STRESS_DURATION": "0"},
+		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_MODE_REJECTION": "mgr"},
+		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"},
+	}
+	for i, key := range auth {
+		cases = append(cases,
+			map[string]string{key: "1", "CEPH_MSGR_TEST_MGR_COUNT": "0"},
+			map[string]string{key: "1", "CEPH_MSGR_TEST_MODE_REJECTION": "mon"},
+			map[string]string{key: "1", "CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"},
+			map[string]string{key: "1", "CEPH_MSGR_TEST_OSD": "1"},
+		)
+		for _, other := range auth[i+1:] {
+			cases = append(cases, map[string]string{key: "1", other: "1"})
+		}
+	}
+	for i, env := range cases {
+		t.Run(fmt.Sprintf("case-%02d", i), func(t *testing.T) {
+			env["CEPH_MSGR_TEST_RUN"] = "^Custom$"
+			p, err := loadProfile(func(name string) string { return env[name] })
+			if err == nil || p != (profile{}) {
+				t.Fatalf("invalid combination %v returned %#v, %v", env, p, err)
+			}
+		})
+	}
+}
+
+func TestProfileCRCAndStressDoNotOverrestrictAuthentication(t *testing.T) {
+	for _, selector := range []string{"", "CEPH_MSGR_TEST_EXPIRE_TICKETS", "CEPH_MSGR_TEST_IDLE_SESSIONS", "CEPH_MSGR_TEST_AUTH_EPOCH", "CEPH_MSGR_TEST_SHORT_TICKETS"} {
+		env := map[string]string{"CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_STRESS_DURATION": "3m"}
+		if selector != "" {
+			env[selector] = "1"
+		} else {
+			env["CEPH_MSGR_TEST_MGR_COUNT"] = "0"
+		}
+		if _, err := loadProfile(func(name string) string { return env[name] }); err != nil {
+			t.Fatalf("valid CRC/stress profile %v: %v", env, err)
+		}
+	}
+}
+
+func TestProfileMonitors(t *testing.T) {
+	for _, tc := range []struct {
+		family, mapped, want string
+	}{
+		{"4", "0", "127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302"},
+		{"6", "0", "[::1]:33300,[::1]:33301,[::1]:33302"},
+		{"6", "1", "[::ffff:7f00:1]:33300,[::ffff:7f00:1]:33301,[::ffff:7f00:1]:33302"},
+	} {
+		p, err := loadProfile(func(name string) string {
+			switch name {
+			case "CEPH_MSGR_TEST_IP_FAMILY":
+				return tc.family
+			case "CEPH_MSGR_TEST_MAPPED_IPV6":
+				return tc.mapped
+			}
+			return ""
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := p.monitors(); got != tc.want {
+			t.Fatalf("monitor identity = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+func TestProfileEnvironmentContracts(t *testing.T) {
+	p, err := loadProfile(func(name string) string {
+		return map[string]string{
+			"CEPH_MSGR_TEST_KEY_TYPE":        "aes",
+			"CEPH_MSGR_TEST_SERVICE_CIPHER":  "aes256k",
+			"CEPH_MSGR_TEST_RUNTIME":         "host",
+			"CEPH_MSGR_TEST_RACE":            "1",
+			"CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
+			"CEPH_MSGR_STRESS_DURATION":      "3m",
+		}[name]
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	container := p.containerEnvironment()
+	wantContainer := map[string]string{
+		"CEPH_MSGR_TEST_KEY_TYPE": "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k",
+		"CEPH_MSGR_TEST_IP_FAMILY": "4", "CEPH_MSGR_TEST_MGR_COUNT": "2",
+		"CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1",
+		"CEPH_MSGR_TEST_EXPIRE_TICKETS": "0", "CEPH_MSGR_TEST_IDLE_SESSIONS": "0",
+		"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",
+		"CEPH_MSGR_TEST_MODE_REJECTION": "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
+		"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
+		"CEPH_MSGR_STRESS_DURATION": "3m", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
+	}
+	if !reflect.DeepEqual(container, wantContainer) {
+		t.Fatalf("container environment = %v, want %v", container, wantContainer)
+	}
+	for _, controlDir := range []string{"/out", filepath.Join(t.TempDir(), "control directory")} {
+		for _, proxy := range []string{"", "127.0.0.1:40123"} {
+			got := p.testEnvironment(controlDir, proxy)
+			want := map[string]string{
+				"CEPH_MSGR_MONITORS": "127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302",
+				"CEPH_MSGR_KEY_FILE": filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
+				"CEPH_MSGR_IDENTITY": "client.test", "CEPH_MSGR_FSID": "80bbab73-69c1-4a0c-a746-4271357750b8",
+				"CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k", "CEPH_MSGR_TEST_MGR_COUNT": "2",
+				"CEPH_MSGR_TEST_EXPIRE_TICKETS": "0", "CEPH_MSGR_TEST_IDLE_SESSIONS": "0",
+				"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",
+				"CEPH_MSGR_TEST_MODE_REJECTION": "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
+				"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
+				"CEPH_MSGR_STRESS_DURATION": "3m", "CEPH_MSGR_TEST_PROXY": proxy,
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("test environment = %v, want %v", got, want)
+			}
+			got["CEPH_MSGR_TEST_CONNECTION_MODE"] = "changed"
+			if p.testEnvironment(controlDir, proxy)["CEPH_MSGR_TEST_CONNECTION_MODE"] != "crc" {
+				t.Fatal("test environment mutation changed the profile")
+			}
+		}
+	}
+	container["CEPH_MSGR_TEST_KEY_TYPE"] = "changed"
+	if p.containerEnvironment()["CEPH_MSGR_TEST_KEY_TYPE"] != "aes" {
+		t.Fatal("container environment mutation changed the profile")
+	}
+}
+
+func copyProfileEnv(input map[string]string) map[string]string {
+	result := make(map[string]string, len(input))
+	for name, value := range input {
+		result[name] = value
+	}
+	return result
+}
