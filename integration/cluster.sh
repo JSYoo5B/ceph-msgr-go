@@ -192,6 +192,9 @@ generate_key() {
 }
 generate_key mon. --create-keyring --cap mon 'allow *'
 generate_key client.test --cap mon 'allow *' --cap mgr 'allow *'
+# The development provider uses its public Ceph/control APIs for readiness and
+# metadata. This separate native admin identity is never passed to Go clients.
+generate_key client.admin --cap mon 'allow *' --cap mgr 'allow *' --cap osd 'allow *'
 generate_key client.readonly --cap mon 'allow r' --cap mgr 'allow r'
 generate_key client.revocable --cap mon 'allow *' --cap mgr 'allow *'
 if test "$osd_fixture" = 1; then
@@ -208,6 +211,12 @@ fi
 for name in a b; do
     generate_key "mgr.$name" --cap mon 'profile mgr' --cap mgr 'allow *'
 done
+# ceph-testcontainers-go captures these standard native-client paths after
+# startup. Keep the protocol-specific configuration/key generation above: its
+# v0.1.0 options cannot yet express AES256K, CRC-only or IPv6 bootstrap.
+mkdir -p /etc/ceph
+ln -sf "$root/ceph.conf" /etc/ceph/ceph.conf
+ln -sf "$keyring" /etc/ceph/ceph.client.admin.keyring
 set -- --create --fsid 80bbab73-69c1-4a0c-a746-4271357750b8 --addv a "[v2:$address:33300/0]" --addv b "[v2:$address:33301/0]" --addv c "[v2:$address:33302/0]" --set-min-mon-release 20 --enable-all-features
 if test "$cipher_options" = true; then
     set -- "$@" --auth-service-cipher "$service_cipher" --auth-allowed-ciphers "$allowed_ciphers" --auth-preferred-cipher "$key_type"
