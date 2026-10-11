@@ -268,5 +268,193 @@ class OwnedTestProcessTest(unittest.TestCase):
             self.assertEqual(cleanup.call_args.args[0], taskkill)
 
 
+class ForegroundProviderReadinessTest(unittest.TestCase):
+    VERSION = "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)"
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.output = Path(directory.name)
+        self.provider = mock.Mock(spec=subprocess.Popen, pid=41234)
+        self.provider.poll.return_value = None
+
+    def ready(self, version=VERSION, proxy="127.0.0.1:40001"):
+        (self.output / "daemon-version").write_text(version + "\n", encoding="utf-8")
+        (self.output / "proxy").write_text(proxy + "\n", encoding="utf-8")
+        (self.output / "provider.ready").touch()
+
+    def test_running_check_rejects_every_terminal_exit_including_zero(self):
+        verifier.require_provider_running(self.provider)
+        for code in (0, 1, -9):
+            self.provider.poll.return_value = code
+            with self.subTest(code=code), self.assertRaisesRegex(RuntimeError, "exited unexpectedly"):
+                verifier.require_provider_running(self.provider)
+        self.provider.wait.assert_not_called()
+
+    def test_ready_requires_exact_version_valid_proxy_and_live_process(self):
+        self.ready(proxy=" \t127.0.0.1:40001\r")
+        self.assertEqual(verifier.wait_for_provider(self.provider, self.output),
+                         (self.VERSION, "127.0.0.1:40001"))
+        self.provider.poll.assert_called()
+        self.provider.wait.assert_not_called()
+
+    def test_pending_provider_can_publish_readiness_after_the_first_poll(self):
+        with mock.patch.object(verifier.time, "monotonic", return_value=10):
+            with mock.patch.object(verifier.time, "sleep", side_effect=lambda _: self.ready()) as sleep:
+                self.assertEqual(verifier.wait_for_provider(self.provider, self.output, timeout=5),
+                                 (self.VERSION, "127.0.0.1:40001"))
+        sleep.assert_called_once_with(0.1)
+        self.provider.wait.assert_not_called()
+
+    def test_dead_process_is_rejected_before_and_after_ready_publication(self):
+        for ready in (False, True):
+            if ready:
+                self.ready()
+            self.provider.poll.return_value = 0
+            with self.subTest(ready=ready), self.assertRaisesRegex(RuntimeError, "exited unexpectedly"):
+                verifier.wait_for_provider(self.provider, self.output)
+        self.provider.wait.assert_not_called()
+
+    def test_error_and_stopped_markers_reject_a_still_pending_live_process(self):
+        for name in ("provider.error", "provider.stopped"):
+            marker = self.output / name
+            marker.touch()
+            with self.subTest(marker=name), self.assertRaisesRegex(RuntimeError, "failed before readiness"):
+                verifier.wait_for_provider(self.provider, self.output)
+            marker.unlink()
+        self.provider.wait.assert_not_called()
+
+    def test_pending_readiness_timeout_never_joins_or_kills_the_provider(self):
+        with mock.patch.object(verifier.time, "monotonic", side_effect=(10, 15)):
+            with mock.patch.object(verifier.time, "sleep") as sleep:
+                with self.assertRaisesRegex(RuntimeError, "did not become ready"):
+                    verifier.wait_for_provider(self.provider, self.output, timeout=5)
+        sleep.assert_not_called()
+        self.provider.wait.assert_not_called()
+        self.provider.kill.assert_not_called()
+        self.provider.terminate.assert_not_called()
+
+    def test_ready_rejects_another_release_or_another_commit_of_the_same_release(self):
+        versions = (self.VERSION.replace("20.2.4", "20.2.3"),
+                    self.VERSION.replace("7f793731f1b39eb4f465e960113d2363c311b964", "0" * 40), "")
+        for version in versions:
+            self.ready(version=version)
+            with self.subTest(version=version), self.assertRaisesRegex(RuntimeError, "fixed Tentacle reference"):
+                verifier.wait_for_provider(self.provider, self.output)
+
+    def test_ready_rejects_a_nonloopback_or_out_of_range_proxy(self):
+        for proxy in ("192.0.2.1:40001", "127.0.0.1:65536"):
+            self.ready(proxy=proxy)
+            with self.subTest(proxy=proxy), self.assertRaises(ValueError):
+                verifier.wait_for_provider(self.provider, self.output)
+
+
+class ForegroundProviderCleanupTest(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.output = Path(directory.name)
+        self.provider = mock.Mock(spec=subprocess.Popen, pid=41234)
+        self.provider.wait.return_value = 0
+
+    def test_stop_is_published_before_callback_and_join_precedes_final_confirmation(self):
+        order = []
+
+        def stop():
+            self.assertTrue((self.output / "provider.stop").exists())
+            self.assertFalse((self.output / "provider.pid").exists())
+            (self.output / "provider.pid").write_text("41234\n", encoding="utf-8")
+            order.append("stop")
+
+        def join(timeout):
+            self.assertEqual(order, ["stop"])
+            self.assertTrue((self.output / "provider.pid").exists())
+            self.assertFalse((self.output / "provider.stopped").exists())
+            (self.output / "provider.stopped").touch()
+            order.append("join")
+            return 0
+
+        self.provider.wait.side_effect = join
+        self.assertEqual(verifier.finish_provider(self.provider, self.output, stop, timeout=17), 0)
+        self.assertEqual(order, ["stop", "join"])
+        self.provider.wait.assert_called_once_with(timeout=17)
+
+    def test_pid_published_during_join_cannot_bypass_cleanup_confirmation(self):
+        def join(timeout):
+            (self.output / "provider.pid").write_text("41234\n", encoding="utf-8")
+            return 1
+
+        self.provider.wait.side_effect = join
+        with self.assertRaisesRegex(RuntimeError, "without confirming cleanup"):
+            verifier.finish_provider(self.provider, self.output, mock.Mock())
+        self.provider.wait.assert_called_once_with(timeout=30)
+        self.assertTrue((self.output / "provider.pid").exists())
+
+    def test_startup_error_without_pid_is_joined_even_when_stop_callback_fails(self):
+        (self.output / "provider.error").write_text("preflight failed\n", encoding="utf-8")
+        self.provider.wait.return_value = 2
+        stop = mock.Mock(side_effect=RuntimeError("stop command interrupted"))
+        self.assertEqual(verifier.finish_provider(self.provider, self.output, stop), 2)
+        stop.assert_called_once_with()
+        self.provider.wait.assert_called_once_with(timeout=30)
+        self.assertTrue((self.output / "provider.stop").exists())
+        self.assertFalse((self.output / "provider.pid").exists())
+
+    def test_operation_error_with_confirmed_cleanup_preserves_the_nonzero_exit(self):
+        for name in ("provider.pid", "provider.error", "provider.stopped"):
+            (self.output / name).touch()
+        self.provider.wait.return_value = 1
+        self.assertEqual(verifier.finish_provider(self.provider, self.output, mock.Mock()), 1)
+        self.provider.wait.assert_called_once_with(timeout=30)
+
+    def test_callback_error_does_not_override_final_confirmed_cleanup(self):
+        (self.output / "provider.pid").touch()
+        callback_error = RuntimeError("stop command interrupted")
+
+        def join(timeout):
+            (self.output / "provider.stopped").touch()
+            return 0
+
+        self.provider.wait.side_effect = join
+        self.assertEqual(verifier.finish_provider(
+            self.provider, self.output, mock.Mock(side_effect=callback_error)), 0)
+        self.provider.wait.assert_called_once_with(timeout=30)
+
+    def test_cleanup_error_rejects_stopped_confirmation_with_or_without_a_pid(self):
+        (self.output / "provider.stopped").touch()
+        (self.output / "provider.cleanup.error").write_text("cleanup failed\n", encoding="utf-8")
+        for has_pid in (False, True):
+            if has_pid:
+                (self.output / "provider.pid").touch()
+            with self.subTest(has_pid=has_pid), self.assertRaisesRegex(RuntimeError, "cleanup failed.*ownership retained"):
+                verifier.finish_provider(self.provider, self.output, mock.Mock())
+        self.assertEqual(self.provider.wait.call_count, 2)
+
+    def test_dead_provider_without_stopped_marker_never_confirms_cleanup(self):
+        (self.output / "provider.pid").touch()
+        self.provider.poll.return_value = 1
+        self.provider.wait.return_value = 1
+        with self.assertRaisesRegex(RuntimeError, "without confirming cleanup"):
+            verifier.finish_provider(self.provider, self.output, mock.Mock())
+        self.provider.wait.assert_called_once_with(timeout=30)
+
+    def test_join_timeout_retains_ownership_without_killing_the_provider(self):
+        (self.output / "provider.pid").write_text("41234\n", encoding="utf-8")
+        timeout = subprocess.TimeoutExpired("foreground fixture", 17)
+        self.provider.wait.side_effect = timeout
+        stop = mock.Mock()
+        with self.assertRaisesRegex(RuntimeError, "ownership retained") as raised:
+            verifier.finish_provider(self.provider, self.output, stop, timeout=17)
+        self.assertIs(raised.exception.__cause__, timeout)
+        stop.assert_called_once_with()
+        self.provider.wait.assert_called_once_with(timeout=17)
+        self.provider.kill.assert_not_called()
+        self.provider.terminate.assert_not_called()
+        self.provider.send_signal.assert_not_called()
+        self.assertEqual((self.output / "provider.pid").read_text(encoding="utf-8"), "41234\n")
+        self.assertTrue((self.output / "provider.stop").exists())
+        self.assertFalse((self.output / "provider.stopped").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

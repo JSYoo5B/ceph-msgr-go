@@ -17,6 +17,7 @@ import go_test_annotations
 
 
 MODULE = "github.com/jsyoo5b/ceph-msgr-go"
+DAEMON_VERSION = "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)"
 SUITES = {
     "api": ("integration", (
         "TestCephContextAdmissionIntegration", "TestCephTellIntegration",
@@ -134,6 +135,51 @@ def wait_for_holder(holder, output, timeout=30):
         time.sleep(0.1)
 
 
+def require_provider_running(provider):
+    code = provider.poll()
+    if code is not None:
+        raise RuntimeError("foreground WSL fixture exited unexpectedly with code " + str(code))
+
+
+def wait_for_provider(provider, output, timeout=900):
+    deadline = time.monotonic() + timeout
+    while not (output / "provider.ready").exists():
+        require_provider_running(provider)
+        if (output / "provider.error").exists() or (output / "provider.stopped").exists():
+            raise RuntimeError("fixture controller failed before readiness; see provider.log")
+        if time.monotonic() >= deadline:
+            raise RuntimeError("foreground WSL fixture did not become ready")
+        time.sleep(0.1)
+    require_provider_running(provider)
+    version = (output / "daemon-version").read_text(encoding="utf-8").strip()
+    if version != DAEMON_VERSION:
+        raise RuntimeError("fixture daemon version does not match the fixed Tentacle reference")
+    return version, proxy_endpoint((output / "proxy").read_text(encoding="utf-8"))
+
+
+def finish_provider(provider, output, stop_fixture, timeout=30):
+    # Publish cancellation before querying provider.pid: preflight may still be
+    # running, so absence of that marker does not prove the child has finished.
+    (output / "provider.stop").touch()
+    stop_error = None
+    try:
+        stop_fixture()
+    except BaseException as error:
+        stop_error = error
+    try:
+        code = provider.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("foreground WSL fixture did not exit after cleanup request; ownership retained") from error
+    if (output / "provider.cleanup.error").exists():
+        raise RuntimeError("fixture controller cleanup failed; ownership retained") from stop_error
+    if (output / "provider.pid").exists():
+        if not (output / "provider.stopped").exists():
+            raise RuntimeError("fixture controller exited without confirming cleanup") from stop_error
+    # The joined foreground process cannot publish a late PID. Its final
+    # markers, rather than an interrupted stop command, establish cleanup.
+    return code
+
+
 def check_relay(proxy):
     host, port = proxy_endpoint(proxy).rsplit(":", 1)
     with socket.create_connection((host, int(port)), timeout=5) as connection:
@@ -174,6 +220,9 @@ def run(distro, diagnostics):
     # --exec preserves argv: a default shell consumes Windows backslashes.
     wsl = ["wsl.exe", "--distribution", distro, "--user", "root", "--exec"]
     attempted = False
+    provider = None
+    provider_output = None
+    provider_exit = None
     holder = None
     holder_output = None
     report = {"revision": revision, "go": version, "host": host,
@@ -203,13 +252,16 @@ def run(distro, diagnostics):
         holder = subprocess.Popen(wsl + ["bash", fixture, "hold", output, target],
                                   cwd=project, env=env, stdout=holder_output, stderr=subprocess.STDOUT)
         wait_for_holder(holder, out)
+        provider_output = (diagnostics / "provider.log").open("w", encoding="utf-8")
+        provider = subprocess.Popen(wsl + ["bash", fixture, "start", output, target],
+                                    cwd=project, env=env, stdout=provider_output, stderr=subprocess.STDOUT)
         attempted = True
-        fixture_action("start", timeout=900)
+        daemon_version, proxy = wait_for_provider(provider, out)
         report["fixture_provider"] = "github.com/JSYoo5B/ceph-testcontainers-go@v0.1.0"
-        report["daemon_version"] = (out / "daemon-version").read_text(encoding="utf-8").strip()
+        report["daemon_version"] = daemon_version
         report["fixture_image"] = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
-        proxy = proxy_endpoint((out / "proxy").read_text(encoding="utf-8"))
         check_relay(proxy)
+        require_provider_running(provider)
         report["windows_relay_admission"] = True
         env.update(CEPH_MSGR_MONITORS="127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302",
                    CEPH_MSGR_KEY_FILE=str(out / "key"), CEPH_MSGR_IDENTITY="client.test",
@@ -217,6 +269,7 @@ def run(distro, diagnostics):
                    CEPH_MSGR_CONTROL_DIR=str(out), CEPH_MSGR_TEST_PROXY=proxy,
                    CEPH_MSGR_TEST_SERVICE_CIPHER="aes256k", CEPH_MSGR_TEST_MGR_COUNT="2")
         for name, (package, tests) in SUITES.items():
+            require_provider_running(provider)
             full_package = MODULE + "/" + package
             print("Executing Windows native " + name + " suite", flush=True)
             log = diagnostics / (name + "-tests.jsonl")
@@ -237,6 +290,7 @@ def run(distro, diagnostics):
                 for annotation in go_test_annotations.annotations(lines, result):
                     print(annotation, flush=True)
                 raise RuntimeError(name + " native suite failed")
+            require_provider_running(provider)
             report["suites"][name] = required_passes(lines, full_package, tests)
         fixture_action("diagnostics")
     except BaseException:
@@ -249,28 +303,36 @@ def run(distro, diagnostics):
     finally:
         try:
             try:
-                if attempted:
-                    fixture_action("stop", timeout=150)
+                if provider is not None:
+                    provider_exit = finish_provider(provider, out, lambda: fixture_action("stop", timeout=150))
             finally:
-                if holder is not None:
+                # Do not end WSL lifetime while foreground startup or cleanup
+                # still owns resources. Failed joins retain both PID handles.
+                if holder is not None and (provider is None or provider.poll() is not None):
                     (out / "holder.stop").touch()
                     if holder.wait(timeout=30) != 0:
                         raise RuntimeError("foreground WSL session did not finish successfully")
-                if holder_output is not None:
-                    holder_output.close()
         except BaseException as error:
             marker = out / "container-name"
-            provider = out / "provider.pid"
+            provider_marker = out / "provider.pid"
             (diagnostics / "cleanup-failure.json").write_text(json.dumps({
                 "distro": distro, "fixture_output": str(out),
                 "container": marker.read_text(encoding="utf-8").strip() if marker.exists() else None,
-                "provider_pid": provider.read_text(encoding="utf-8").strip() if provider.exists() else None,
+                "provider_pid": provider_marker.read_text(encoding="utf-8").strip() if provider_marker.exists() else None,
+                "provider_session_pid": provider.pid if provider is not None else None,
                 "holder_pid": holder.pid if holder is not None else None,
                 "error": str(error),
             }, indent=2) + "\n", encoding="utf-8")
             # Keep the ownership handle for the caller to complete cleanup.
             raise
+        finally:
+            if provider_output is not None:
+                provider_output.close()
+            if holder_output is not None:
+                holder_output.close()
         shutil.rmtree(out)
+    if provider_exit not in (None, 0):
+        raise RuntimeError("foreground WSL fixture finished with code " + str(provider_exit))
     report["cleanup_complete"] = True
     (diagnostics / "verification.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print("Windows native interoperability verified: " + revision, flush=True)

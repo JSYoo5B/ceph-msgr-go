@@ -37,12 +37,14 @@ case "$action" in
         exit 0
         ;;
     stop)
+        # Cancellation may arrive while preflight is still pulling the image.
+        # Prevent that foreground start from launching a controller later.
+        touch "$out/provider.stop"
         if ! read_provider; then
             test ! -f "$out/provider.cleanup.error" || { echo 'fixture controller cleanup failed; output retained' >&2; exit 1; }
             # Bootstrap may have failed before the controller was launched.
             exit 0
         fi
-        touch "$out/provider.stop"
         deadline=$(($(date +%s) + 120))
         while ! test -f "$out/provider.stopped"; do
             test "$(date +%s)" -lt "$deadline" || { echo 'fixture controller cleanup timed out' >&2; exit 1; }
@@ -107,33 +109,7 @@ export CEPH_MSGR_TEST_RUNTIME=host
 diagnostics=${3:-$out/diagnostics}
 mkdir -p "$diagnostics"
 chmod +x "$out/relay" "$out/fixture-controller"
-"$out/fixture-controller" serve -project "$project_root" -output "$out" -diagnostics "$diagnostics" > "$out/provider.log" 2>&1 &
-provider_pid=$!
-printf '%s\n' "$provider_pid" > "$out/provider.pid"
-
-deadline=$(($(date +%s) + 300))
-while test "$(date +%s)" -lt "$deadline"; do
-    test ! -f "$out/provider.error" || { echo 'fixture controller failed during startup' >&2; exit 1; }
-    test ! -f "$out/provider.stopped" || { echo 'fixture controller stopped before readiness' >&2; exit 1; }
-    if test -f "$out/provider.ready"; then
-        version=$(cat "$out/daemon-version")
-        test "$version" = 'ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)' || {
-            echo 'fixture daemon version does not match the fixed Tentacle reference' >&2
-            exit 1
-        }
-        proxy=$(cat "$out/proxy")
-        case "$proxy" in 127.0.0.1:*) ;; *)
-            echo 'fixture relay was not published exclusively on IPv4 loopback' >&2
-            exit 1
-        esac
-        port=${proxy#127.0.0.1:}
-        case "$port" in ''|*[!0-9]*) exit 1 ;; esac
-        test "$port" -gt 0 && test "$port" -le 65535 || exit 1
-        echo "Windows Ceph fixture ready through $proxy"
-        exit 0
-    fi
-    kill -0 "$provider_pid" 2>/dev/null || { echo 'fixture controller exited before readiness' >&2; exit 1; }
-    sleep 1
-done
-echo 'Ceph fixture did not become ready within 300 seconds' >&2
-exit 1
+test ! -f "$out/provider.stop" || exit 0
+printf '%s\n' "$$" > "$out/provider.pid"
+# Python owns this foreground WSL process until controller cleanup completes.
+exec "$out/fixture-controller" serve -project "$project_root" -output "$out" -diagnostics "$diagnostics"
