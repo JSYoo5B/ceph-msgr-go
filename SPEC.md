@@ -1,6 +1,6 @@
-# ceph-msgr-go 초기 스펙 및 타당성 판단
+# ceph-msgr-go 스펙 및 검증 기준
 
-조사 및 구현 기준일: 2026-10-01. 통신 계층으로의 범위 조정일: 2026-10-03. OSD 통신 기초 추가 결정일: 2026-10-04. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
+조사 및 구현 기준일: 2026-10-01. 통신 계층으로의 범위 조정일: 2026-10-03. OSD 통신 기초 추가 결정일: 2026-10-04. 최종 테스트 환경 범위 및 후속 제품 통신 요구 확정일: 2026-10-13. 우선순위·진행상황 정리일: 2026-10-14. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
 
 ## 확정된 프로젝트 정책
 
@@ -12,6 +12,164 @@
 - 실제 사용은 별도 레이어·저장소에서 구현한다. 명령 JSON 구성, 명령 schema 및 응답 JSON의 의미 해석, text keyring·설정 로딩, 명령별 typed 관리 API, 모듈·설정 정책과 운영 workflow는 제품 범위에 포함하지 않는다.
 - OSD service ticket, 명시적으로 지정한 OSD 연결, 호출자가 준비한 객체 locator·raw hash·지도 epoch를 사용하는 stat/read 요청과 응답을 범위에 추가한다. 자동 배치·CRUSH 계산, 자동 라우팅·재시도 정책, 고수준 RADOS API, RBD, CephFS는 이 단계에 포함하지 않는다. 객체 쓰기와 다른 mutation opcode는 별도 구현·검증 단위로 추가한다. 호출자가 준비한 풀·OSD 관리 명령 JSON도 MON/MGR로 전송할 수 있지만 해당 관리 기능 자체를 구현하는 것은 아니다.
 - 2026-10-04 후속 사용자 결정으로 MON의 명시적인 raw OSDMap 조회·구독을 추가한다. 최신 full·지정 epoch 범위·연속 수신을 제공하며 지도 해석·적용·CRUSH 배치와 객체 요청 재실행은 사용 계층에 둔다.
+- 2026-10-13 스펙 보강 결정으로 상위 레이어가 Tentacle의 RADOS·RBD·CephFS 기능을 구현하는 데 필요한 OSD 전반·MDS·대상 지정 명령의 통신 계약을 후속 제품 요구로 추가한다. 현재 stat/read 단계의 지원 범위와 분리하며, 고수준 사용 API와 자동 배치·운영 정책은 계속 별도 레이어에 둔다. 상세 요구와 단계별 완료 기준은 아래 후속 제품 통신 계약을 따른다.
+
+## 작업 우선순위와 진행상황
+
+### 우선순위의 의미와 다음 작업
+
+아래 우선순위는 2026-10-14 기준 구현 순서다. P0부터 착수하되 각 항목의
+선행 조건을 먼저 충족한다. 낮은 우선순위도 최종 필수 요구에서 제외하지 않는다.
+현재 동작의 보안·데이터 정확성·취소/종료 회귀는 해당 단계보다 우선해 수정한다.
+세부 작업 ID·선행 조건·native 완료 기준은 [후속 단계표](#후속-milestone과-완료-기준)에 둔다.
+
+| 수준 | 구현 순서와 목적 | 진행상황 |
+| --- | --- | --- |
+| 기반 | 기존 Messenger·CephX·MON/MGR·OSD stat/read·raw 지도 수신을 유지 | 아래 제한 범위에서 구현 및 실검증 기록 있음 |
+| P0 | 객체 mutation의 입력·완료 계약과 최소 쓰기·복합 요청: O0 → O1 | stat/read의 per-op 응답 기반만 있음; mutation 미구현 |
+| P1 | OSD metadata·snapshot·class call, 열거·이벤트·backoff, OSD/PG 명령과 replicated feature 범위 확대 | raw OSDMap 기반만 있음; 후속 opcode·이벤트·명령 미구현 |
+| P2 | MDS 인증·지도·session → MDS 대상 명령 및 metadata·필수 이벤트 → 상태 복구·결합 I/O | MDS 제품 통신 미구현 |
+| P3 | EC·추가 feature/플랫폼 profile와 장시간 검증, 후속 제품 경로를 지원하는 최종 시험 환경 | 현재 일부 profile만 실검증 기록 있음; 전체 완료 아님 |
+
+**다음 구현 단위는 O0의 wire 목록·공개 계약 확정 후 O1의 replicated 객체
+쓰기·조건·복합 요청과 native oracle 검증이다.** O1은 읽기 opcode 벡터의
+존재로 완료 처리하지 않으며 응답 손실·결과 불명확·실제 반영과 완료 의미를
+함께 검증한다. P2의 최소 metadata 사용에도 필수 capability/lease와 복구
+계약이 필요하므로 이를 P3로 미뤄 MDS 지원을 선언하지 않는다.
+각 단계의 native fixture·control·oracle은 해당 구현을 검증하기 전에 준비한다.
+E1의 P3는 최종 전 경로 환경 완료를 점검하는 순서이며 P0–P2에서 필요한
+시험 환경의 준비를 뒤로 미루는 뜻이 아니다.
+
+### 현재 구현과 검증 기록
+
+확인 기준은 checkout의 제품 소스 `adc1ecd347a7dd647338ade45f7649533f729408`
+및 기존 README의 실행 기록이다. 이 정리는 소스/API·시험의 존재와 문서의
+검증 범위를 대조한 것이며 해당 SHA의 새 시험 실행이나 현재 원격 CI 확인은 아니다.
+`구현 있음`은 아래 제한 범위의 코드/API가 있다는 뜻이고, `실검증 기록`은
+README에 실제 daemon·native oracle 결과가 기록되어 있다는 뜻이다.
+시험 파일의 존재·합성 peer 성공과 실서버 통과를 동일 상태로 표시하지 않는다.
+
+| ID | 구현 범위와 상태 | 기록된 검증과 남은 제한 | 근거 |
+| --- | --- | --- | --- |
+| B1 | msgr2.1 secure/CRC, CephX aes/aes256k, MON/MGR ticket 갱신·세션 복구: 구현 있음 | 20.2.4의 역할·키·주소별 실검증 기록; CRC·혼합 cipher·Windows 조합을 모두 검증한 것은 아님; cookie 재개 없음 | [session](internal/session/handshake.go), [CephX](internal/cephx/auth.go), [검증 기록](README.md#검증-결과) |
+| B2 | raw MON/MGR 명령·현재 daemon Tell·이름 지정 MON Tell, 준비/지도 대기·wire metadata: 구현 있음 | native 명령·지도 및 failover·context·Close 시험 기록; 이름 지정 MGR·OSD/PG/MDS 대상 명령은 미구현 | [명령 API](cephmsgr/api.go), [MON 대상](cephmsgr/named_mon.go), [지도 대기](cephmsgr/map_wait.go), [검증 기록](README.md#검증-결과) |
+| B3 | MON log·config·digest 구독: 구현 있음 | native oracle·갱신·복구·bounded 큐 시험 기록; 권한 ACK·완전한 변경 이력·원격 unsubscribe 보장 없음 | [로그](README.md#mon-로그), [설정](README.md#mon-설정), [digest](README.md#mon-health상태-구독) |
+| B4 | 명시적 OSD 연결·ticket·v6 stat/read opcode 벡터·per-op 결과: 구현 있음 | 20.2.4 legacy CRUSH, HASHPSPOOL/upmap 미사용 replicated pool의 bytes/stat2·갱신 실검증 기록; mutation·snapshot·EC와 일반 최신 CRUSH 미지원; OSD Windows/IPv6 미검증 | [OSD API](cephmsgr/osd.go), [요청](cephmsgr/osd_request.go), [encoder](internal/osd/request.go), [native 시험](integration/osd_test.go), [지원 범위](README.md#osd-statread-통신-기초) |
+| B5 | MON raw OSDMap 최신 full·range 조회/연속 구독, OSD map 전달: 구현 있음 | native decoder/encoder와 epoch·bytes 비교 및 갱신·단절 기록; 내포 map 해석·적용·CRUSH는 사용 계층 책임; 전체 incremental chain 보장 없음 | [MON 조회](cephmsgr/mon_osd_request.go), [MON 구독](cephmsgr/mon_osd_maps.go), [OSD 전달](cephmsgr/osd_maps.go), [지원 범위](README.md#mon-raw-osdmap-조회구독) |
+| B6 | operation context·결과 불명확·자동 재실행 금지·bounded 입력/큐·Close: 현재 경로에 구현 있음 | 실제 명령 결과·취소·장애 및 합성 peer 경합 시험 기록; mutation·MDS 이벤트/복구로의 확장은 미구현 | [수명과 복구](README.md#수명과-복구), [검증 기록](README.md#검증-결과), [공통 후속 계약](#공통-공개-계약과-복구-책임) |
+| B7 | 제품 Go 모듈과 native fixture 모듈 분리: 구현 있음 | CGO=0 빌드/검사 및 Linux·Darwin·선택 Windows MON/MGR 실검증 기록; 모든 OS·주소·역할 profile의 통과를 뜻하지 않음 | [제품 모듈](go.mod), [fixture 모듈](integration/fixture/go.mod), [검증 기록](README.md#검증-결과) |
+
+B1–B7은 초기 제한 범위의 구현 현황이며 완전한 RADOS/RBD/CephFS 지원표가
+아니다. MDS·mutation·EC 구현이 진행되면 해당 작업 ID의 부분 구현 내용을
+적고 표를 갱신한다. 별도 상위 저장소의 구현 진행률은 이 저장소에서 추정하지 않는다.
+
+### 남은 검증과 상태 갱신 규칙
+
+- 현재 README에는 별도 장시간 실행의 16분 31초 실패와 원인 미확정 기록이
+  있다. 이후 3분 부하 통과를 그 원인의 해결로 처리하지 않는다. 1시간 이상
+  운영, 미검증 패치·구성·주소/OS 조합은 P3의 별도 검증 과제로 추적한다.
+- 최종 환경은 기존 `integration/fixture` 실행기가 있어도 전체 완료가 아니다.
+  Mutation·MDS·EC·native RBD/CephFS와 daemon 간 필수 경로별 준비·control·
+  oracle·장애·정리 recipe의 완료 여부를 별도 기록한다. 이 문서 정리에서
+  fixture 저장소의 새 상태를 조사하거나 환경 완료를 판정한 것은 아니다.
+- 작업별 구현 상태는 `미구현 → 부분 구현 → 구현 있음`, 검증 상태는
+  `미검증 → 합성/단위 시험 → 제한 구성 실검증 → 해당 단계 수용 기준 완료`로
+  따로 기록한다. `진행 중`에는 실제 코드/계약 산출물과 남은 작업을 붙이고,
+  단순 우선순위 지정이나 스펙 추가를 구현 착수로 표시하지 않는다.
+- 상태 변경 시 확인일·정확한 제품 SHA·변경 범위·증거 링크·Ceph/이미지·
+  암호/주소/OS/profile·실행/skip·남은 제한을 갱신한다. Native 실행 기록은
+  README에 두고 이 표에서 링크하며 문서 정리일과 시험 실행일을 구분한다.
+  이후 소스의 과거 통과 기록 재사용에는 영향 범위와 재검증 필요 여부를 남긴다.
+
+## 최종 목표: Messenger 통신 및 I/O 전반의 테스트 환경
+
+2026-10-13 사용자 결정으로 최종 테스트 환경의 기준을 **선택한 Ceph 릴리스에서
+Messenger를 사용하는 모든 통신 및 I/O 경로의 구현과 검증을 재현할 수 있는
+환경 구축**으로 정한다. 현재의 MON/MGR 및 OSD stat/read는 이 목표의 초기
+단계다. 현재 제품 API나 이미 작성된 시험만으로 최종 요구사항을 제한하지 않는다.
+
+대상 메시지·opcode·feature는 고정 Ceph 소스와 실제 daemon의 동작을 기준으로
+목록화한다. 아래 영역은 출발점이며 완전한 메시지 목록을 대신하지 않는다.
+새 경로가 확인되면 요구 목록에 추가하고 필요한 topology·control·oracle을
+평가한다. 아직 구현하지 않은 제품 기능도 후속 단계의 테스트 환경 요구로 기록한다.
+
+| 영역 | 최종 테스트 환경이 표현해야 할 조건과 독립 검증 |
+| --- | --- |
+| 공통 Messenger·CephX | 서비스별 인증·권한·ticket 갱신/만료·key 회전, framing·feature 협상, 주소·nonce·identity, ACK·keepalive·session reset/reconnect, 결과 불명확·취소·동시성·종료 |
+| CLIENT ↔ MON/MGR | raw 명령·bulk/binary 응답·Tell, 인증과 발견, 지도·로그·config·digest 구독, 지도 epoch·권한·failover·재구독 |
+| CLIENT ↔ OSD | stat/read뿐 아니라 쓰기·부분 쓰기·append·truncate·삭제, 복합 opcode, xattr·omap·class call·watch/notify·snapshot 조건 등 참조 릴리스의 객체 I/O; 원본 bytes·metadata·version·per-op 결과와 완료 의미 |
+| CLIENT ↔ MDS 및 CephFS I/O | MDS 인증·발견·session·metadata 요청, capability/lease·회수·reconnect, namespace·inode·snapshot·다중 rank/standby 전환과 이에 연결된 OSD 데이터 I/O |
+| RBD의 기반 Messenger I/O | native RBD로 준비한 image·snapshot·clone·namespace와 관련 객체/metadata, 실제 read/write·이름/상태 변경을 기반 OSD 요청 및 독립 데이터 oracle과 대조 |
+| daemon 간 Messenger 통신 | 실제 MON/MGR/OSD/MDS의 상호 통신, quorum·지도 배포·heartbeat·peering·replication·recovery·backfill·metadata 이동을 필요한 topology와 public/cluster 경로에서 유발하고 관찰 |
+| 상위 서비스가 사용하는 경로 | RGW·mirror daemon 등 native 서비스가 사용하는 Messenger 기반 통신과 I/O를 유발할 fixture·oracle; HTTP/S3 같은 별도 전송은 서비스 입력/관찰 경로로 구분 |
+
+RBD는 OSD 기반 I/O와 구분된 별도 Messenger 서버 역할로 취급하지 않는다.
+CephFS는 MDS metadata 통신과 OSD 데이터 I/O를 함께 확인한다. Native 서비스의
+정상 동작만으로 Go의 같은 wire 경로가 구현되었다고 판정하지 않는다.
+Daemon 간 경로는 실제 Ceph daemon으로 생성하고 관찰하며, 그 경로의 시험
+환경 구축이 Go 제품을 MON/OSD/MDS 서버로 구현해야 한다는 뜻은 아니다.
+
+현재 제품은 Tentacle 이상, msgr2.1 secure/CRC와 pure Go 정책을 유지한다.
+프로토콜 버전·압축·추가 feature는 시험 프로필에 명시하고, 현재 지원 검증과
+미지원 협상/거절 검증 및 후속 구현 요구를 구분한다. 제품의 msgr1/msgr2.0
+fallback이나 고수준 RADOS/RBD/CephFS API를 이 환경 목표만으로 추가하지 않는다.
+후속 wire 기능은 codec·공개 계약·native oracle·완료 기준을 가진 별도 milestone으로
+추가한다. Native CLI/librados/librbd/libcephfs 등은 개발 fixture와 독립 oracle에만
+사용하며 제품 빌드·실행·전이 의존성의 native 금지 정책을 유지한다.
+
+### 환경의 구축 및 완료 기준
+
+- 각 경로별 요구 목록에 참조 release/commit, 메시지·opcode·feature, 구현 단계,
+  필요한 daemon 수·역할·주소·network·pool/PG/replica/EC 조건, 준비할 데이터와
+  인증·권한·cipher·TTL, control 입력과 oracle 출력, 오류·장애·복구·정리 수용
+  기준을 기록한다. CRUSH·배치·라우팅 metadata의 준비와 검증도 test-only 소비
+  계층에 둔다. EC와 추가 feature profile은 현재 replicated stat/read 검증과 분리한다.
+- Fixture가 실제 native 작업의 상태를 만들고 관찰할 수 있음을 먼저 확인한다.
+  환경 준비 검증, Go wire 구현 검증, 상위 서비스 동작 검증의 결과를 각각 기록한다.
+  접속 성공·실행 파일 존재·generic Exec·custom adapter만으로 기능 제공을 완료로
+  표시하지 않는다. 각 미완료 항목에는 부족한 primitive/recipe/검증과 선행 조건을 남긴다.
+- Native client/daemon의 독립 oracle로 데이터 bytes·metadata·version·지도 epoch·
+  request identity·서버 결과를 대조한다. 쓰기는 ACK·응답·실제 반영·내구성의
+  해당 native 완료 의미를 구분하고, 응답 손실 후 readback과 daemon/OSD 재시작
+  등으로 필요한 후조건을 검증한다. 불명확한 mutation을 자동 재실행하지 않는다.
+- 경로별 daemon 정지/재시작/교체, peer 선택·방향·단계별 지연/단절, 부분 전송,
+  늦은 응답·서버 거절·epoch 변경·fullness·blocklist와 취소/종료 경합을 재현한다.
+  Wire 손상·합성 peer·fuzz는 제품/소비자 도구, native 상태·topology·network
+  장애와 복원은 fixture의 책임으로 구분한다. 같은 시험 조건을 표현하는 공개
+  primitive가 있으면 재사용하고, 필요한 image extension은 명시적으로 선택한다.
+- 역할·작업별로 release·암호·주소 family·플랫폼·host/container·이미지의 검증
+  조합을 명시한다. 공식 이미지와 역할 이미지의 실제 작업을 가능한 한 같은
+  release·architecture·설정·입력으로 비교하고 immutable digest와 로그를 남긴다.
+  Preflight는 해당 작업의 실행·oracle·정리 성공을 대신하지 않는다.
+- 모든 프로필은 disposable 자원과 bounded 대기·명령·출력·진단을 사용한다.
+  소유 container/network/volume/process 및 변경한 native 상태의 정리·복원을
+  확인하고, 실패 시 원인·단계·정확한 SHA/이미지·증거를 credential 없이 보존한다.
+- 모든 필수 경로에 재현 가능한 준비/control/oracle/장애/정리 recipe와 native
+  성공 근거가 있어야 **최종 환경 구축 완료**로 판정한다. Go의 미구현 기능은
+  별도 구현 상태로 남긴다. 환경 기능이 미제공·미검증이거나 필수 실행이 skip된
+  경우에는 전체 완료를 선언하지 않는다. 플랫폼 제약과 선행 구현은 명시적으로
+  추적하며 현재 API나 성공한 일부 프로필만으로 남은 경로를 제외하지 않는다.
+
+### Testcontainers 요구사항과 반복 점검
+
+`ceph-testcontainers-go`/images에 대한 요구 검토는 위 최종 목표를 기준으로
+현재 시험과 후속 I/O 단계에 필요한 환경 기능을 함께 대조한다. 각 요구는
+`released version`, `main`, `미머지 PR`,
+`공개 primitive로 가능하지만 recipe/검증 부족`, `구현 없음`, `실검증 미확정`으로
+구분하고 Go의 구현 단계도 별도 기록한다.
+
+기존 공개 기능이 해당 조건을 실제 표현하는지 확인한 후 재사용한다. Main이나
+기존 PR의 구현이 의도를 충족하면 중복 요구 이슈를 만들지 않고 릴리스 대기를
+보고한다. 아직 부족한 환경 기능은 기존 이슈를 먼저 확인하고 근거와 단계별
+수용 기준을 보완한다. 공식 이미지에서 가능한 작업이 담당 역할 이미지에서
+실패하면 images 저장소에 구체적인 성공/실패 증거와 회귀 시험 요구를 남긴다.
+소비자 전용 oracle/relay와 고수준 API 구현의 부재를 fixture 기능 부재로 바꾸어
+보고하지 않는다. 반대로 현재 제품이 사용하지 않는다는 이유로 위 최종 환경의
+필수 primitive 요구를 제외하지 않는다.
+
+환경 경로 구분의 참조: [Tentacle 아키텍처](https://docs.ceph.com/en/tentacle/architecture/),
+[CephFS metadata/data 경로](https://docs.ceph.com/en/tentacle/cephfs/),
+[Messenger 모드와 network 설정](https://docs.ceph.com/en/tentacle/rados/configuration/msgr2/).
 
 ## 통신 계층과 사용 계층의 경계
 
@@ -33,6 +191,205 @@ metadata·service URI를 읽는 것과 설정 적용·실행 모듈 계산·HTTP
 않는다. 명령 catalog도 호출자가 raw 명령으로 조회하고 해석한다. Native oracle과
 실클러스터 시험을 위한 명령 구성·결과 해석 helper는 `integration/*_test.go`에만
 두며 모듈 활성화·설정 변경·MGR 전환은 disposable fixture의 통신 검증에 사용한다.
+
+## 후속 제품 통신 계약
+
+이 절은 2026-10-13 요청에 따라 추가한 **제품의 후속 통신 요구**다.
+위의 최종 시험 환경 목표와 별개로 Go 통신 계층이 제공해야 할 계약을 정한다.
+현재 구현·검증 완료 선언이 아니며 아래 milestone의 공개 함수명·타입은
+아직 확정하지 않는다. 각 milestone에서 wire 목록·API·독립 oracle을 함께
+확정한다. 현재 stat/read의 제한을 후속 제품의 최종 범위로 해석하지 않는다.
+
+목표는 상위 레이어가 고정 Tentacle의 기능을 구현할 수 있도록 필요한
+통신 primitive를 제공하는 것이다. go-ceph `v0.41.0`의 공개 기능군은 초기
+누락 점검 기준으로 사용하되 Ceph 고정 소스가 wire 규약의 기준이다.
+이후 go-ceph 변경은 별도 검토하며 이전 Ceph 계열·C ABI·함수명·native handle
+호환성을 제품 목표로 추가하지 않는다. go-ceph의 모든 기능 제공은 통신과
+상위 구현을 각각 검증해야 하는 결합 목표이며 이 스펙의 존재로 보장되지 않는다.
+
+### 기능 목록과 레이어별 책임
+
+각 milestone은 기능 → 메시지/opcode·encoding·feature → 공개 입출력 →
+사용 계층 책임 → native oracle·장애 시험의 추적표를 작성해야 한다.
+목록에 참조 release/commit, 필수 선행 기능, 지원할 profile, 구현·검증 상태를
+기록하고 누락·미지원 항목도 남긴다. 아래 표는 필수 기능군이며 opcode 전수
+목록을 대신하지 않는다. 고정 소스의 client 메시지와 상위 기능을 함께 대조해
+필수 경로를 보완하며 관련 요구가 미완료이면 해당 기능군 완료를 선언하지 않는다.
+
+| 기능군 | 통신 계층의 후속 요구 | 별도 사용 계층의 책임 |
+| --- | --- | --- |
+| 대상 지정 명령 | OSD·PG·MDS의 raw 명령·bulk 입력·binary 응답, service 인증과 대상 식별 | 명령 schema, 대상 선택·wildcard 확장, typed 관리·운영 정책 |
+| 객체 요청 | 읽기·쓰기·삭제·복합 opcode·조건·xattr·omap·class call·snapshot의 wire 계약 | 객체 API, pool·namespace 선택, OSDMap 적용·CRUSH·배치·라우팅 |
+| 객체 열거·이벤트 | PG 열거 요청·응답과 cursor, watch/notify·ack·오류와 연결 제어 이벤트 | pool 전체 열거·중복 처리, lock 정책, 이벤트 handler와 재등록 판단 |
+| MDS | 서비스 인증·지도·session·metadata 요청·응답·capability/lease·reconnect 메시지 | filesystem 선택·요청 라우팅, 경로·inode·파일 handle·캐시·권한과 일관성 판단 |
+| RBD 기반 통신 | RBD가 요구하는 OSD opcode·class payload·snapshot·watch/notify 전달 | image metadata·striping·parent/clone·copy-up·lock·group·diff·mirror·migration 로직 |
+| CephFS 기반 통신 | MDS wire metadata·이벤트와 연결된 OSD I/O의 입력·결과 보존 | 파일 layout·OSD 대상 계산, 데이터·metadata flush와 POSIX 의미 구현 |
+
+RADOS object class의 이름·method·입출력은 원본 bytes로 전달한다.
+RBD·lock 등 class별 schema·결과 해석은 상위에 두며 서버에 설치된 class나
+권한·지원 여부를 통신 연결 성공으로 보장하지 않는다. CephFS volume/subvolume
+관리 명령과 MDS 파일 I/O는 별도 기능군이다. RBD를 별도 Messenger 서버로
+취급하거나 image 작업을 MON/MGR 명령만으로 대체하지 않는다.
+RGW Admin Operations·HTTP/S3와 native pointer·라이브러리 버전 조회는
+Messenger 제품의 기능이 아니다. 필요한 HTTP 클라이언트와 서비스 사용은
+상위에 두고 native 라이브러리를 제품 의존성으로 추가하지 않는다.
+
+### OSD 전체 요청·응답과 제어 이벤트
+
+- 현재 MOSDOp/MOSDOpReply stat/read를 기반으로 write/writefull·append·
+  truncate·zero·create·delete, 비교·version 조건, xattr·omap, object class call,
+  allocation hint, snapshot read/write context·rollback을 단계별로 추가한다.
+  Opcode별 flag·payload·data 분할·길이 제한·결과 encoding을 고정 소스로
+  정하고 unsupported opcode·flag 조합은 송신 전에 거절한다.
+- 한 객체에 대한 ordered compound operation과 per-op 결과·출력 경계를
+  보존한다. Native의 조건 실패·fail-ok·원자성 계약을 opcode별로 명시하며
+  한 요청을 여러 독립 요청으로 나눠 같은 의미라고 표시하지 않는다.
+  서로 다른 객체·요청에 원자성이나 순서 보장을 추가하지 않는다.
+- 입력에는 pool·namespace·locator·object·hash, 대상 OSD·지도 epoch와
+  필요한 PG/shard·snapshot·요청 flag를 표현한다. Raw hash와 실제 PG seed를
+  구분하며 encoding별 의미를 검증한다. PG 열거의 범위·filter·cursor와
+  raw 항목·continuation·종료 정보를 상위에 전달하고 pool 순회는 수행하지 않는다.
+- 응답은 request identity·incarnation·attempt, epoch·redirect metadata,
+  전체 및 per-op 서버 코드, object version·원본 bytes와 완료 관련 flag를
+  보존한다. Messenger ACK, 서버 실행 결과, 적용·내구성 완료를 구분하고
+  지원하는 Tentacle profile에서 관찰한 완료 의미를 명시한다. Native 문서의
+  complete/safe 구분을 모든 encoding에 두 응답이 온다는 가정으로 옮기지 않는다.
+- Watch 등록·갱신·해제와 notify·notify ack·timeout·watch 오류의 wire를
+  제공한다. Cookie·notify ID·peer·payload와 등록 수명을 보존하며 응답 TID가
+  없는 unsolicited 이벤트도 별도 dispatcher로 받는다. 연결 단절을 watch의
+  원격 해제나 notify 성공으로 해석하지 않는다. Lock schema와 handler 정책은
+  상위가 맡고, 사용자 처리가 끝나기 전에 의미가 있는 ack를 생성하지 않는다.
+- OSDMap·backoff/unblock 등 연결 제어 메시지는 참조 소스에서 필수 목록과
+  handshake를 확정한다. 순수 protocol ack·대상 세션별 송신 제한은 통신
+  계층이 처리하고 지도 적용·대상 변경·요청 재제출은 상위가 판단한다.
+  지연 중에도 요청 context·Close는 동작해야 하며 제어 메시지를 일반 응답으로
+  오인하거나 자동 재실행 근거로 사용하지 않는다.
+- Replicated 및 EC의 요구를 별도 profile로 정의한다. CRUSH·upmap·pool의
+  필수 feature 중 외부 지도 적용·배치가 필요한 것은 상위 구현과 결합해
+  검증하고, wire 처리가 필요한 것은 통신 계층에 구현한다. Caller가 임의 feature
+  bit를 광고하는 우회는 허용하지 않는다. 협상한 역할별 feature와 실제 지원
+  계약을 일치시키며 MON admission 예외는 계속 MON에만 한정한다.
+
+### MDS 인증·지도·session·metadata 통신
+
+- MDS CephX service ticket·갱신, secure/CRC 연결, FSMap 계열·MDSMap의
+  획득·구독과 bounded codec을 추가한다. FSID·filesystem ID·epoch,
+  rank·daemon identity·원주소·상태·필수 client feature를 보존한다.
+  권한상 보이지 않는 지도와 빈 지도·등록 ACK·연결 성공을 구분한다.
+  Filesystem 선택과 metadata 대상 라우팅은 상위가 결정한다.
+- Messenger feature와 MDS session의 client feature를 별도로 검증하고
+  미지원 필수 feature는 접속 또는 session 준비 단계에서 명시적으로 거절한다.
+  후속 연결도 caller가 선택한 동일한 msgr2.1 secure/CRC 정책을 따르며
+  보안 모드·프로토콜·압축 fallback을 추가하지 않는다.
+- Caller가 지정한 MDS에 대한 session open/renew/close와 stale·reject·
+  eviction·재접속 상태를 구현하고 session generation·identity·sequence를
+  노출한다. Messenger 연결 준비와 metadata session 준비를 구분한다.
+  Multi-rank·standby 전환 시 새 daemon과 이전 rank의 관계를 지도에 따라
+  검증하며 server가 요구하는 session 복구를 fresh lossy 연결로 대체하지 않는다.
+- Lookup·getattr/setattr·open/create·readdir·link/unlink·rename·mkdir/rmdir·
+  symlink·xattr·file lock·snapshot 등 고정 릴리스 metadata 요청의 wire
+  field를 표현한다. Caller 제공 credential·inode/path·flag·조건·payload를
+  인코딩하고 request ID, forward·retry·replay 관련 정보, 초기/unsafe 결과와
+  safe 완료의 구분, 서버 결과와 inode/dentry·layout·snapshot metadata 및
+  raw 부속 bytes를
+  보존한다. OS credential 조회·경로 해석·파일 handle 관리는 상위 책임이다.
+- Capability grant/revoke/recall·release·flush/ack, lease·snapshot realm 등
+  필수 비동기 메시지와 재접속 payload를 codec·수신/송신 계약에 포함한다.
+  CephX 권한과 inode capability를 구분하며 inode·cap ID·sequence·generation·
+  flush ID·dirty metadata 등 상위가 일관성을 판단할 정보를 생략하지 않는다.
+  캐시 상태·dirty data·file lock·capability의 의미 상태는 상위가 소유하고,
+  통신 계층은 session·메시지 연관과 wire 제약을 소유한다.
+- 복구에 필요한 상위 상태를 받는 명시적인 입력 계약과 복구 완료·거절·
+  기한 만료 이벤트를 제공한다. 상태 제출·flush 완료·cap 반환을 상위가
+  확인하기 전에 통신 계층이 이를 완료한 응답으로 대신하지 않는다.
+  상위 미응답·큐 overflow·상태 누락으로 protocol 진행이 불가능하면
+  제한된 시간 안에 session을 실패시키고 진행 중 요청의 불명확성을 드러낸다.
+  MDS reconnect/replay와 OSD 데이터 flush의 결합 의미는 소비자 시험에서 검증한다.
+
+### 대상 지정 raw 명령
+
+OSD·PG·MDS 대상 명령에 필요한 메시지와 reply codec·권한·service 인증을
+고정 소스에서 확정한다. Caller는 정확한 daemon identity 또는 PG와 지도
+metadata를 지정한다. 통신 계층은 요청 context 내에서 대상·FSID·원주소와
+session의 관계를 검증하고 raw 명령 벡터·bulk 입력·binary 출력·signed 서버
+코드·상태 문자열을 보존한다. MonCommand/MgrCommand로 조용히 경로를
+바꾸지 않으며 OSD 객체 opcode와 daemon-local 명령을 구분한다.
+지도 변경·대상 소멸·권한 거절·전송 전 실패와 전송 후 결과 불명확을 구분한다.
+PG primary 재선택, 대상 이동·fan-out·wildcard 확장은 상위가 결정한다.
+
+### 공통 공개 계약과 복구 책임
+
+- Request/reply와 unsolicited 이벤트에 peer identity·session generation·
+  request/event ID·지도 epoch를 해당 wire가 제공하는 범위에서 전달한다.
+  Wire에 없는 generation·cursor는 로컬 metadata로 명확히 구분하며 이전
+  session의 늦은 응답을 새 요청의 결과로 배분하지 않는다.
+- Request ID 발급·충돌 검증·pending 분배는 통신 계층이 맡는다. 후속 API는
+  상위가 동일한 논리 요청의 protocol 재제출을 검토할 수 있도록 원래 identity와
+  완료 상태를 보존한다. Messenger 재전송·service session 복구·MDS replay·
+  새로운 객체/명령 실행을 구분하고 허용한 경로·identity 수명·중복 억제의
+  유효 범위를 native oracle로 검증한다. 요청 bytes 보존만으로 exactly-once를
+  주장하지 않으며 불명확한 mutation을 새 session에서 자동 재실행하지 않는다.
+- 명령·객체·metadata·제어 송신은 operation context와 bounded 입력·in-flight
+  제한을 가진다. 순서가 필요한 이벤트는 count·bytes 상한의 FIFO로 전달한다.
+  Latest 값으로 교체하는 stream은 해당 wire 의미가 허용하는 경우에만 사용한다.
+  Overflow 시 stream만 또는 session 전체를 실패시킬지 기능별로 명시하고
+  correctness에 필요한 이벤트를 조용히 버리지 않는다.
+- Event 소비자와 사용자 handler가 공유 수신 loop를 막지 않도록 한다.
+  Next의 로컬 대기 취소·stream 수명 취소·원격 해제·protocol ack를 구분하고,
+  최초 terminal cause·이미 접수한 이벤트·Close의 정리/대기 의미를 정의한다.
+  동시 요청·제어 송신·인증 갱신·늦은 이벤트와의 경합을 검증한다.
+- Frame/front/middle/data·opcode별 입력과 event bytes의 소유권을 명시한다.
+  인코딩 상한·불일치·미지원 조합은 가능하면 송신 전에 거절한다. Unknown
+  metadata는 허용하는 encoding에서 보존하되 필수 message/feature의 미구현을
+  opaque frame 통과로 숨기지 않는다. Arbitrary raw frame 전송·임의 feature
+  광고를 확장 API의 대체로 제공하지 않는다.
+
+### 후속 milestone과 완료 기준
+
+위 우선순위와 같은 작업 ID로 계약·선행 조건·진행상황·완료 기준을 관리한다.
+
+| ID · 우선순위 | 제품에서 확정·구현할 계약 | 선행 조건 | 진행상황 | 필수 독립 검증 |
+| --- | --- | --- | --- | --- |
+| O0 · P0 | mutation별 opcode/flag·request identity·per-op 출력·완료/내구성·event 계약 확정 | B1·B4·B6 | 스펙 요구 있음; wire 전수 목록·공개 타입 미확정 | native encoder/decoder·서버 처리 경로로 입력/결과 계약 대조; O1 수용 시험 확정 |
+| O1 · P0 | replicated write/writefull·append·truncate·zero·create/delete와 조건·compound | O0 | 미구현; stat/read 벡터는 B4 | native 쓰기·조건 실패·복합 원자성·readback·OSD 재시작·응답 손실·재실행 금지 |
+| O2 · P1 | xattr·omap·class call·allocation hint·snapshot context·rollback | O1; opcode별 O0 계약 보완 | 미구현 | native metadata·class 원본 bytes·snapshot 읽기/쓰기·rollback·오류/조건 비교 |
+| O3 · P1 | PG 열거·cursor, watch/notify·ack/오류, backoff/unblock | O0; 알림 송신 opcode는 O1/O2; 이벤트 공통 계약 | 미구현; raw OSDMap만 B5 | native 열거·알림 ack/timeout·제어 제한·큐 overflow·갱신/단절과 identity/수명 |
+| D1 · P1 | OSD·PG 대상 raw 명령·bulk 입력·reply 연관 | B4·B5; 해당 명령 encoding·권한 확정 | 미구현 | native 동일 대상의 raw/binary 출력·권한 오류·지도/대상 변경·취소 |
+| O4 · P1 | 일반 replicated 구성의 필수 OSD feature·encoding 범위 확대 | B4·B5 및 각 feature가 요구하는 O1–O3; 사용 계층 배치 입력 | 미구현; 제한 feature 거절은 B4 | HASHPSPOOL·CRUSH/upmap 등 profile별 native 대상/결과 및 미지원 거절 비교 |
+| M0 · P2 | MDS ticket·FSMap/MDSMap·feature·session과 상태/복구 입출력 계약 | B1·B6 및 MDS 필수 wire 목록 확정 | 미구현 | native 지도·권한·session 준비/거절·갱신·최소 복구와 제한 입력 비교 |
+| D2 · P2 | MDS 대상 raw 명령·bulk 입력·reply 연관 | M0 | 미구현 | native 동일 MDS의 출력·권한 오류·rank/대상 변경·취소 |
+| M1 · P2 | metadata 요청·응답, capability/lease·snapshot 이벤트와 필수 제어 송신 | M0; capability/flush·복구 계약; 데이터 사용은 O1/O2 | 미구현 | native metadata·다중 client capability/lease·snapshot·서버 거절·취소/종료 |
+| M2 · P2 | 상위 상태 제출·flush/ack·reconnect/replay·다중 rank·OSD 결합 I/O | M1·O1/O2; 상위 test-only 상태 제공자 | 미구현 | MDS failover·eviction·blocklist·dirty state·늦은 응답·데이터/metadata 후조건 |
+| V1 · P3 | EC/shard·추가 feature/주소/OS 및 장시간 시험 profile | 해당 OSD/MDS 기능과 독립 native fixture/oracle | EC 미구현; 현재 profile은 B1–B7; 확대·장시간 검증 미완료 | EC 별 데이터/조건/완료 의미, OSD IPv6/Windows 등 선택 profile·갱신/장애·장시간 실패 원인 |
+| E1 · P3 | 최종 환경의 mutation·MDS·RBD/CephFS 기반·daemon 간 경로 recipe | native fixture와 topology/control/oracle; Go wire 검증에는 해당 제품 단계 | 실행기 부분 제공; 전 경로 환경 완료 미확정 | 경로별 준비·실행·native oracle·장애·정리 근거; 환경/Go/상위 결과 별도 기록 |
+
+이 표의 후속 기능은 구현·검증 미완료다. 세부 작업은 세분화할 수 있지만
+필수 요구를 생략하지 않는다. P3도 최종 목표의 필수 검증이며 M0–M2와 같이
+이미 구현한 기능의 정확성에 필요한 복구는 해당 구현 단계에서 완료해야 한다.
+예를 들어 대상 MDS 명령은 MDS 인증·발견이, metadata 사용은 필요한
+capability/lease 이벤트가 먼저 있어야 한다. EC는 별도 구현·검증 milestone이며
+현재 replicated stat/read의 성공을 EC 지원으로 승격하지 않는다.
+
+각 단계의 완료에는 고정 wire 목록·공개 입출력·상위 책임·unsupported 오류,
+독립 bytes/metadata/서버 결과 oracle, 인증 갱신·보안 모드·동시성·취소·Close와
+장애·복구 시험이 필요하다. 완료·내구성은 해당 Tentacle 서버의 flag·처리 경로와
+native client로 검증하고 version별 의미를 기록한다. 필수 case가 skip되거나
+준비만 성공한 경우에는 구현 또는 검증 미완료로 남긴다. 합성 peer·fuzz·race와
+CGO=0·대상 OS 검증도 수행하되 실제 Ceph 상대 시험을 대신하지 않는다.
+
+Native librbd/libcephfs가 만든 데이터만 Go에서 읽는 시험은 기초 검증이다.
+상위 RBD·CephFS 기능 동등성은 소비자 구현으로 실제 작업·복구·동시성을
+실행한 별도 결과가 필요하다. 통신 단계 완료, 상위 기능 완료, 최종 환경 구축
+완료를 각각 기록하며 daemon 간 환경의 완성을 Go 서버 구현 요구로 바꾸지 않는다.
+
+참조: [Tentacle librados 계약](https://docs.ceph.com/en/tentacle/rados/api/librados/),
+[CephFS I/O 경로](https://docs.ceph.com/en/tentacle/cephfs/cephfs-io-path/),
+[inode capability](https://docs.ceph.com/en/tentacle/cephfs/capabilities/),
+[CephFS 지도·client feature 관리](https://docs.ceph.com/en/tentacle/cephfs/administration/).
+Wire encoding·ID·feature와 라이선스/출처는 위 고정 Ceph commit의 메시지·client
+소스를 milestone별로 확인한다. 이 목록은 소스 전수 분석·상호운용 검증의
+완료 기록이 아니다. Go-ceph의 공개 API는 기능 누락 비교에만 사용하며
+native 구현 코드나 의존성을 제품에 가져오지 않는다.
 
 ## 참조 버전과 지원의 의미
 
@@ -170,7 +527,7 @@ LGPL-2.1 고지를 확인하고 C++ 코드를 복사하지 않고 wire 의미를
 3. 32-byte preamble, segment, CRC32C, secure framing, AES-GCM tag 검증과 방향별 nonce 상태.
 4. AUTH_SIGNATURE를 포함한 인증 교환 및 세션 식별.
 5. Message header, front/middle/data, sequence, ACK, keepalive.
-6. Global ID, sequence, 종료, MON/MGR 변경과 재인증을 처리하는 상태 머신. 현재는 fresh lossy session으로 복구하며 이전 Messenger cookie로 session을 재개하는 기능은 구현하지 않는다. 새 세션으로 명령을 재실행하지 않는다.
+6. Global ID, sequence, 종료, MON/MGR 변경과 재인증을 처리하는 상태 머신. 현재는 fresh lossy session으로 복구하며 이전 Messenger cookie로 session을 재개하는 기능은 구현하지 않는다. 새 세션으로 명령을 재실행하지 않는다. 이 현재 방식은 후속 MDS session·capability·요청 복구 계약을 대신하지 않는다.
 7. 서버가 보내는 입력의 길이·개수·산술 overflow 검증과 메모리 사용 상한.
 
 Tentacle이 실제 사용하는 구조체의 이전 encoding version을 읽는 것은 현재 wire 규약 구현이다. 이를 이전 Ceph 계열이나 이전 공개 API 지원과 혼동하지 않는다. C++ 구현의 객체 수명·락·메모리 배치를 그대로 이식하지 않고 wire 의미와 상태 전이를 Go로 표현한다.
@@ -279,7 +636,7 @@ LGPL-2.1 및 COPYING의 LGPL-2.1/LGPL-3 선택 고지를 확인했고 C++ 코드
 
 ## Go API 설계 기준
 
-공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
+현재 MON/MGR 공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
 `WaitMonReady`, `WaitMgrReady`,
 `WaitMonMap`, `WaitMgrMap`,
 `WatchLogs`, `WatchConfig`, `WatchDigest`, `Snapshot`, `Close`를 중심으로 한다.
@@ -309,6 +666,8 @@ Digest는 `DigestOptions`, `ClusterDigest`, `DigestStream.Next`·`Close`로 제�
 Health detail과 MON 상태 bytes를 해석 없이 한 쌍으로 유지하며 최신 unread 값으로
 교체한다. 구독 성공은 서버의 권한 확인이 아니고 전달 시점·이력을 보장하지 않는다.
 go-ceph 및 C API의 함수 이름·타입과 호환시키는 것을 목표로 하지 않는다.
+OSD와 후속 MDS·대상 지정 명령·이벤트 API도 위 후속 제품 통신 계약을 따른다.
+아래 현재 API의 함수 목록만으로 후속 제품 범위를 제한하지 않는다.
 
 - `ParseKey(base64Key)`는 호출자가 선택한 encoded CephX credential을 검증한다. Identity 선택과 text keyring·설정 파일 로딩은 사용 계층이 맡는다.
 - `Dial(ctx, options)`는 bootstrap과 초기 인증을 취소할 수 있어야 한다. Dial context의 종료가 성공적으로 생성된 client의 전체 수명을 자동으로 종료하지 않도록 한다.
@@ -393,7 +752,12 @@ LGPL-2.1 고지를 확인하고 시험용 credential 선택을 독립 구현한�
 출력을 여러 entity로 합친 keyring을 `--print-key`와 대조하고 선택한 키로 MON/MGR를
 인증한다. Ceph 도구는 시험 fixture의 생성·oracle에만 사용한다.
 
-## 구현 및 검증 순서
+## 기존 기반의 구현·검증 기준
+
+아래 목록은 B1–B7의 기존 기반을 구현·검증할 때의 기준이다. 항목별 현재
+상태와 제한은 앞의 진행표 및 README를 따른다. 새로운 후속 작업의 착수
+순서는 [우선순위 표](#우선순위의-의미와-다음-작업)를 따르며 이 목록을
+미착수 작업 목록이나 전체 기능 완료 선언으로 해석하지 않는다.
 
 1. 고정 소스에서 codec, frame, feature, CephX 인증 흐름의 최소 집합을 추출한다. 암호 및 frame의 독립적인 test vector를 확보한다.
 2. Go만으로 msgr2.1 secure 및 `aes256k`를 사용하는 MON 인증과 관리 조회 명령을 수행한다.
