@@ -2,6 +2,7 @@
 """Tests for binary-safe C adaptation, not mocked Ceph interoperability."""
 import ctypes as C
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -180,11 +181,13 @@ class XattrAdapterTests(unittest.TestCase):
         library.install("rados_conf_read_file", lambda cluster, path: paths.append(path) or 0)
         library.install("rados_conf_set", lambda cluster, key, path: paths.append((key, path)) or 0)
         native = xattr.Native(library)
+        root = Path("/owned-private")
         for role in ("test", "readonly"):
-            with xattr.client_connection(native, Path("/owned-private"), {"pool": "owned"}, role):
+            with xattr.client_connection(native, root, {"pool": "owned"}, role):
                 pass
         self.assertEqual(entities, [b"client.test", b"client.readonly"])
-        self.assertEqual(paths, [b"/owned-private/ceph.conf", (b"keyring", b"/owned-private/keyring")] * 2)
+        self.assertEqual(paths, [os.fsencode(root / "ceph.conf"),
+                                 (b"keyring", os.fsencode(root / "keyring"))] * 2)
         self.assertEqual(sum(name == "rados_shutdown" for name, _ in library.calls), 2)
         self.assertEqual(sum(name == "rados_ioctx_destroy" for name, _ in library.calls), 2)
 
