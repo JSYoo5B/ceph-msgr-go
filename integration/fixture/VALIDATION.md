@@ -75,13 +75,36 @@ The first valid public OSD topology started and its native byte/stat2 oracle
 passed, but every Go test was correctly rejected at MON SESSION_IDENT with
 required feature mask `0x0000000040000000`. Native OSDMap diagnostics showed
 `.mgr` still had HASHPSPOOL despite the data pool's `NoHashPSPool` setting.
-Evidence is retained in `/tmp/ceph-v020-osd2.log`. The test-only adapter clears
+Evidence is retained in `/tmp/ceph-v020-osd2.log`. The original adapter cleared
 that flag once on the known internal `.mgr` pool through the public `Ceph`
-command, then checks every pool; other unsupported pools fail preparation.
-The native before/after receipt shows `.mgr` flags 1 at epoch 12 and flags 0
-at epoch 13. Product code and advertised feature masks were not changed.
-The preferred public recipe/API remains a question in
-[upstream #68](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/68).
+command. Its native before/after receipt showed `.mgr` flags 1 at epoch 12 and
+flags 0 at epoch 13. Those are historical post-bootstrap workaround results.
+
+The current OSD recipe instead writes
+`[global] osd_pool_default_flag_hashpspool = false` into `bootstrap.conf` and
+passes it through `WithConfigFile` before `ceph.Run`, following the public
+recipe in [upstream #68](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/68).
+The explicit data pool still uses `CreatePool(NoHashPSPool: true)`. Preparation
+does not change `.mgr` flags afterward. It waits within the startup/parent
+context for the data pool and, for two-manager profiles, the background-created
+`.mgr` pool, using only bounded read-only native OSDMap observations. Receipts
+require a positive epoch, the fixture's exact FSID, unique actual pool IDs/names
+and present numeric flags; malformed observations fail rather than becoming
+readiness polling. Any pool's
+numeric HASHPSPOOL bit or flag name fails preparation immediately. The current
+`pool-policy.json` records the bootstrap recipe and the verified actual policy;
+it does not fabricate a before/after mutation. Existing non-OSD/idle/ticket
+settings and product advertised feature masks are unchanged.
+
+Bootstrap generation, required pool names, all-pool flag rejection and polling
+cancellation have focused pure-Go/race tests. A fresh secure/AES256K IPv4 host
+MemStore run passed five selected native tests with the bootstrap default.
+Native OSDMap epoch 12 identified `.mgr` ID 1 and data-pool ID 2 with flags 0;
+Go MON admission and explicit OSD/native bytes comparisons passed. All eight
+owned containers and the network were independently absent after cleanup.
+The earlier table used the historical workaround; the new source snapshot,
+two-profile results and remaining authentication-observer limitation are in
+[CONSUMER_QUESTIONS_VALIDATION.md](CONSUMER_QUESTIONS_VALIDATION.md).
 
 Private credentials/configuration are excluded from preserved diagnostics.
 Provider diagnostics and crash metadata now use the public v0.2.0 collectors;

@@ -1184,6 +1184,16 @@ authorizer가 선택한 ticket, native daemon key 세대의 증거는 아니다.
 AES/AES·IPv4·120초 ticket·Linux arm64 container의 새 독립 fixture에서
 두 cycle이 12.29초에 통과했다. 간헐 실패의 원인을 고쳤다는 주장은 아니다.
 
+2026-10-15 후속 소비자 진단은 티켓의 로컬 parse 식별자와 실제 publication
+순서로 인증된 MON 연결을 기록하고, MGR이 선택한 티켓과 새 authorizer에
+인코딩한 blob을 run별 HMAC label로 연결한다. 그대로 유지한 티켓의 발급
+연결은 새 MON 연결로 덮어쓰지 않는다. 설치 callback을 context 안에서
+기다리며, 실제 인증 frame의 로컬 write 결과, AUTH_DONE 검증, 전체 handshake
+완료를 구분한다. 원본 ticket·proof·key bytes는 기록하지 않는다.
+이 기록도 native MGR이 실제 검증에 사용한 키 세대를 보여주지는 않는다.
+관측 계약과 새 검증 범위는
+[소비자 후속 검증 기록](integration/fixture/CONSUMER_QUESTIONS_VALIDATION.md)에 둔다.
+
 준비 확인을 보강한 `1e4cfda`의
 [GitHub CI](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37024308483)는
 auth epoch 두 구성을 포함해 25개 중 24개가 통과했다. aes256k/AES·IPv4의
@@ -1609,11 +1619,16 @@ OSD는 기본 MemStore 또는 `CEPH_MSGR_TEST_OSD_STORE=bluestore`에 따라
 3 OSD는 BlueStore·replicas 3/min_size 2를 사용한다. Native `crushtool`로 만든
 legacy map과 `CreatePool(NoHashPSPool: true)`를 적용한다.
 `CreateClient`가 생성한 시험용 keyring은 private IPC 디렉터리에만 보관한다.
-MGR 모듈이 자동 생성한 `.mgr` 풀의 HASHPSPOOL도 disposable fixture에서
-명시적으로 해제하고 모든 풀의 플래그를 native OSDMap으로 확인한다.
+OSD profile은 `[global] osd_pool_default_flag_hashpspool = false`를
+`WithConfigFile`로 Ceph 시작 전에 전달해 MGR 모듈의 자동 `.mgr` 풀에도
+적용한다. 시작 후 `.mgr` 플래그를 바꾸지 않으며, background 생성이 끝날
+때까지 유한 context 안에서 읽기 전용 native OSDMap을 확인한다. `.mgr`와
+데이터 풀의 존재 및 모든 풀의 HASHPSPOOL 미사용을 검사한다.
 데이터 풀의 `NoHashPSPool`만으로 MON 요구 feature가 줄어들지는 않는다.
-제품이 미구현 bit를 광고해 admission을 통과시키지 않으며 변경 전후의
-native 풀 정책은 `pool-policy.json`에 기록한다.
+제품이 미구현 bit를 광고해 admission을 통과시키지 않으며,
+bootstrap recipe와 실제 native 풀 정책은 `pool-policy.json`에 기록한다.
+이 bootstrap 변경의 새 native 검증 상태는
+[fixture validation](integration/fixture/VALIDATION.md)에 별도로 기록한다.
 
 MON 주소·FSID는 실제 native map에서 읽는다. 장애 주입 대상은 고정 포트가
 아닌 MON 이름과 MGR 컨테이너 주소로 식별한다. `cluster.sh`는 독립

@@ -37,6 +37,21 @@ type Ticket struct {
 	SecretID            uint64
 	Blob                []byte
 	Expires, RenewAfter time.Time
+	receipt             *ticketReceipt
+}
+
+// ticketReceipt identifies a successful local service-ticket parse, not server
+// issuance or a rotating-key generation. It survives immutable snapshot copies
+// and invalidation. A non-zero-size allocation gives each parse its own identity.
+type ticketReceipt struct{ marker byte }
+
+// ReceiptIdentity is an opaque, non-secret identity for internal test observers.
+// A nil result means no parsed-ticket provenance is available.
+func (t Ticket) ReceiptIdentity() any {
+	if t.receipt == nil {
+		return nil
+	}
+	return t.receipt
 }
 
 func (t Ticket) encode(e *wire.Encoder) { e.U8(1); e.U64(t.SecretID); e.Bytes(t.Blob) }
@@ -217,7 +232,7 @@ func parseReplies(d *wire.Decoder, secret Key, old map[uint32]Ticket, now time.T
 			return nil, err
 		}
 		validity := time.Duration(sec)*time.Second + time.Duration(ns)
-		out[typ] = Ticket{Key: key, SecretID: sid, Blob: append([]byte(nil), opaque...), Expires: now.Add(validity), RenewAfter: now.Add(validity - validity/4)}
+		out[typ] = Ticket{Key: key, SecretID: sid, Blob: append([]byte(nil), opaque...), Expires: now.Add(validity), RenewAfter: now.Add(validity - validity/4), receipt: &ticketReceipt{}}
 	}
 	return out, d.Err()
 }

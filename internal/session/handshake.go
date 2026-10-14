@@ -61,6 +61,12 @@ type Authenticator interface {
 	More([]byte) ([]byte, error)
 	Done(uint64, []byte, bool) (cephx.Key, []byte, error)
 }
+
+// This optional internal seam reports only local protocol-write facts. A full
+// write is not server acceptance. No frame bytes or errors reach the observer.
+type authWriteObserver interface {
+	AuthWriteObserved(msgr.Tag, int, bool)
+}
 type MonAuth struct{ Client *cephx.Client }
 
 func (a MonAuth) Initial() ([]byte, error)      { return a.Client.Initial(), nil }
@@ -236,7 +242,15 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	authReq.U32(1)
 	authReq.U32(uint32(mode))
 	authReq.Bytes(payload)
-	if err = write(msgr.AuthRequest, authReq.Data); err != nil {
+	writeAuth := func(tag msgr.Tag, payload []byte) error {
+		before := tx.data.Len()
+		err := write(tag, payload)
+		if observer, ok := auth.(authWriteObserver); ok {
+			observer.AuthWriteObserved(tag, tx.data.Len()-before, err == nil)
+		}
+		return err
+	}
+	if err = writeAuth(msgr.AuthRequest, authReq.Data); err != nil {
 		return nil, err
 	}
 	var sessionKey cephx.Key
@@ -264,7 +278,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 			}
 			e := wire.Encoder{}
 			e.Bytes(reply)
-			if err = write(msgr.AuthRequestMore, e.Data); err != nil {
+			if err = writeAuth(msgr.AuthRequestMore, e.Data); err != nil {
 				return nil, err
 			}
 		case msgr.AuthBadMethod:

@@ -133,7 +133,7 @@ while true; do
         case "$label" in initial|added|removed) ;; *) exit 2 ;; esac
         test -z "$extra" || exit 2
         rm /out/verify-monitor-map
-        timeout 10 python3 /out/monitor_oracle.py "$root" /out
+        timeout 30 python3 /out/monitor_oracle.py "$root" /out
         sh /out/publish-ack.sh "/out/monitor-map-verify.$request_id"
     fi
     if test -f /out/verify-manager-map; then

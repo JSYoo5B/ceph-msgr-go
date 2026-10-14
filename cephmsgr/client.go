@@ -21,30 +21,32 @@ import (
 )
 
 type Client struct {
-	options     Options
-	ctx         context.Context
-	cancel      context.CancelFunc
-	mu          sync.Mutex
-	closed      bool
-	changed     chan struct{}
-	auth        *cephx.Client // Published snapshots are immutable.
-	fsid        [16]byte
-	monMap      maps.Mon
-	mgrMap      maps.Mgr
-	mon, mgr    *session.Session
-	monReady    bool
-	authErr     error // Explicit MON reauthentication rejection, until recovery.
-	sessions    map[*session.Session]struct{}
-	mgrGate     chan struct{}
-	wake        chan struct{}
-	calls       chan struct{}
-	wg          sync.WaitGroup
-	logWatch    *LogStream
-	configWatch *ConfigStream
-	digestWatch *DigestStream
-	osdMapWatch *OSDMapStream
-	osds        map[int32]*OSDConnection
-	osdNext     atomic.Uint64
+	options       Options
+	ctx           context.Context
+	cancel        context.CancelFunc
+	mu            sync.Mutex
+	closed        bool
+	changed       chan struct{}
+	auth          *cephx.Client   // Published snapshots are immutable.
+	authTrace     *authTraceHooks // Private, nil-default test observer.
+	authTraceNext uint64
+	fsid          [16]byte
+	monMap        maps.Mon
+	mgrMap        maps.Mgr
+	mon, mgr      *session.Session
+	monReady      bool
+	authErr       error // Explicit MON reauthentication rejection, until recovery.
+	sessions      map[*session.Session]struct{}
+	mgrGate       chan struct{}
+	wake          chan struct{}
+	calls         chan struct{}
+	wg            sync.WaitGroup
+	logWatch      *LogStream
+	configWatch   *ConfigStream
+	digestWatch   *DigestStream
+	osdMapWatch   *OSDMapStream
+	osds          map[int32]*OSDConnection
+	osdNext       atomic.Uint64
 }
 
 // Dial establishes and authenticates a MON connection and verifies a MonMap
@@ -125,6 +127,7 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	}
 	base, cancel := context.WithCancel(context.Background())
 	c := &Client{options: options, ctx: base, cancel: cancel, changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), mgrGate: make(chan struct{}, 1), wake: make(chan struct{}, 1), calls: make(chan struct{}, options.MaxInFlight), osds: make(map[int32]*OSDConnection)}
+	c.authTrace = authTraceFromContext(ctx)
 	if options.ExpectedFSID != "" {
 		c.fsid, err = parseFSID(options.ExpectedFSID)
 		if err != nil {
@@ -312,6 +315,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		var bufferedMgr *msgr.MessageData
 		var bufferedEpoch uint32
 		var candidateEpoch uint32
+		var candidateMonMap maps.Mon
 		var s *session.Session
 		s = session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
 			if m.Type == msgr.OSDMapMessage {
@@ -371,6 +375,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				if !verifiedMon {
 					mon, _ := maps.DecodeMon(m.Front) // Already validated by handleMap.
 					candidateEpoch = mon.AuthEpoch
+					candidateMonMap = mon
 				}
 				verifiedMon = true
 				if bufferedMgr != nil {
@@ -455,6 +460,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 		release()
 		var oldManager *session.Session
+		var installedObservation *authIssuerObservation
 		var oldOSDs []*session.Session
 		if err == nil {
 			c.mu.Lock()
@@ -478,9 +484,19 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				c.auth = candidate
 				c.authErr = nil
 				c.monReady = true
+				if c.authTrace != nil && c.authTrace.installed != nil {
+					c.authTraceNext++
+					installedObservation = &authIssuerObservation{session: s, endpoint: candidateTarget.endpoint, monMap: candidateMonMap, sequence: c.authTraceNext}
+					if c.authTrace.cycle != nil {
+						installedObservation.cycle = int(c.authTrace.cycle.Load())
+					}
+				}
 				c.signal()
 			}
 			c.mu.Unlock()
+		}
+		if installedObservation != nil {
+			c.authTrace.installed(*installedObservation, candidate)
 		}
 		if oldManager != nil {
 			oldManager.Fail(errors.New("ceph: authenticated client identity changed"))
@@ -695,7 +711,19 @@ retryManager:
 				return nil, err
 			}
 			linked, release := c.linkedContext(ctx)
-			transport, err := c.open(linked, dialAddress(address), address, 16, mapSnapshot.GlobalID, session.ServiceAuth{Authorizer: authorizer})
+			var attemptAuth session.Authenticator = session.ServiceAuth{Authorizer: authorizer}
+			var finishAttempt func(error)
+			if c.authTrace != nil && c.authTrace.manager != nil {
+				cycle := 0
+				if c.authTrace.cycle != nil {
+					cycle = int(c.authTrace.cycle.Load())
+				}
+				attemptAuth, finishAttempt = c.authTrace.manager(cycle, auth, mapSnapshot, address, attemptAuth)
+			}
+			transport, err := c.open(linked, dialAddress(address), address, 16, mapSnapshot.GlobalID, attemptAuth)
+			if finishAttempt != nil {
+				finishAttempt(err)
+			}
 			release()
 			if err != nil {
 				if err := ctx.Err(); err != nil {

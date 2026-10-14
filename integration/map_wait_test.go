@@ -106,6 +106,7 @@ func TestCephMapWaitIntegration(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("wait added MON map", ctx.Err())
 	}
+	waitNativeMonitorElection(t, ctx, c, control, "added", added, mon.Members)
 	nativeMonitorMapWait(t, ctx, c, control, "added")
 	added.Members[0].Name = "caller-owned"
 	if c.Snapshot().Monitor.Members[0].Name == "caller-owned" {
@@ -118,6 +119,7 @@ func TestCephMapWaitIntegration(t *testing.T) {
 	if err != nil || slices.ContainsFunc(removed.Members, func(m cephmsgr.MonitorMember) bool { return m.Name == "map-wait-spare" }) {
 		t.Fatal("removed member did not wake map wait", removed, err)
 	}
+	waitNativeMonitorElection(t, ctx, c, control, "removed", removed, mon.Members)
 	nativeMonitorMapWait(t, ctx, c, control, "removed")
 	// MON membership changes can trigger elections while an earlier failed
 	// native MGR respawns. Establish actual standby availability before this

@@ -61,6 +61,24 @@ func (c *fixtureCluster) Terminate(ctx context.Context, opts ...testcontainers.T
 }
 func (c *fixtureCluster) checkControl() error { c.mu.Lock(); defer c.mu.Unlock(); return c.controlErr }
 
+// fixtureBootstrapConfig is passed through WithConfigFile before ceph.Run.
+// Pool defaults must reach MGR's automatic .mgr creation as well as explicit
+// data pools; changing .mgr after bootstrap is too late for initial admission.
+func fixtureBootstrapConfig(p profile) string {
+	tick := 5
+	if p.shortTickets == "1" {
+		tick = 1
+	}
+	config := fmt.Sprintf("[global]\nmon_tick_interval = %d\nmon_subscribe_interval = 86400\n", tick)
+	if p.idleSessions == "1" {
+		config = "[global]\nmon_tick_interval = 1\nmon_subscribe_interval = 2\nmon_session_timeout = 3\nmon_client_ping_interval = 1\nmon_client_hunt_interval = 1\n"
+	}
+	if p.osd == "1" {
+		config += "osd_pool_default_flag_hashpspool = false\nosd_crush_update_on_start = false\nosd_beacon_report_interval = 1\n[mon]\npaxos_service_trim_min = 1\nmon_min_osdmap_epochs = 5\nmon_osd_force_trim_to = 5\n"
+	}
+	return config
+}
+
 func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -77,25 +95,15 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		return nil, errors.New("fixture output must be a directory")
 	}
 	ttl := 12 * time.Second
-	tick := 5
-	subscribe := 86400
 	if p.idleSessions == "1" || p.authEpoch == "1" {
 		ttl = 120 * time.Second
 	}
 	authTTL := ttl
 	if p.shortTickets == "1" {
 		authTTL = 1500 * time.Millisecond
-		tick = 1
-	}
-	config := fmt.Sprintf("[global]\nmon_tick_interval = %d\nmon_subscribe_interval = %d\n", tick, subscribe)
-	if p.idleSessions == "1" {
-		config = "[global]\nmon_tick_interval = 1\nmon_subscribe_interval = 2\nmon_session_timeout = 3\nmon_client_ping_interval = 1\nmon_client_hunt_interval = 1\n"
-	}
-	if p.osd == "1" {
-		config += "osd_crush_update_on_start = false\nosd_beacon_report_interval = 1\n[mon]\npaxos_service_trim_min = 1\nmon_min_osdmap_epochs = 5\nmon_osd_force_trim_to = 5\n"
 	}
 	cfgPath := filepath.Join(out, "bootstrap.conf")
-	if err = os.WriteFile(cfgPath, []byte(config), 0600); err != nil {
+	if err = os.WriteFile(cfgPath, []byte(fixtureBootstrapConfig(p)), 0600); err != nil {
 		return nil, err
 	}
 	mode := ceph.MessengerSecure
