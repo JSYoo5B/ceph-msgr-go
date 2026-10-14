@@ -602,12 +602,13 @@ func managerAuthRejection(log string) string {
 	if started < 0 {
 		return ""
 	}
+	var latest string
 	for _, line := range strings.Split(log[started:], "\n") {
 		if strings.Contains(line, "monclient(hunting): handle_auth_bad_method failed to auth with my available methods: (13) Permission denied") {
-			return line
+			latest = line
 		}
 	}
-	return ""
+	return latest
 }
 
 func nativeManagerRejection(ctx context.Context, daemon testcontainers.Container) (string, error) {
@@ -628,49 +629,36 @@ func nativeManagerRejection(ctx context.Context, daemon testcontainers.Container
 
 func managerFailoverReady(status ceph.ManagerStatus, names map[string]bool) bool {
 	return len(names) == 2 && status.Available && status.ActiveGID != 0 && names[status.ActiveName] &&
-		len(status.Standbys) == 1 && names[status.Standbys[0].Name] && status.Standbys[0].Name != status.ActiveName && status.Standbys[0].GID != 0
+		len(status.Standbys) == 1 && names[status.Standbys[0].Name] && status.Standbys[0].Name != status.ActiveName &&
+		status.Standbys[0].GID != 0 && status.Standbys[0].GID != status.ActiveGID
 }
 
 func (c *fixtureCluster) prepareManagerFailover(ctx context.Context, out string) error {
-	preparation, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	names := make(map[string]bool)
+	daemons := make(map[string]testcontainers.Container)
+	var names []string
 	for _, d := range c.cluster.Managers() {
-		names[d.DaemonName] = true
+		if _, duplicate := daemons[d.DaemonName]; duplicate {
+			return errors.New("duplicate owned MGR preparation identity")
+		}
+		daemons[d.DaemonName] = d.Container
+		names = append(names, d.DaemonName)
 	}
-	if len(names) != 2 {
-		return errors.New("ordinary MGR failover requires two owned daemons")
-	}
-	restarted := make(map[string]bool)
-	for {
-		status, err := c.cluster.ManagerStatus(preparation)
-		if err != nil {
-			return err
-		}
-		if managerFailoverReady(status, names) {
-			return nil
-		}
-		present := map[string]bool{status.ActiveName: true}
-		for _, standby := range status.Standbys {
-			present[standby.Name] = true
-		}
-		for _, d := range c.cluster.Managers() {
-			if present[d.DaemonName] || restarted[d.DaemonName] {
-				continue
+	backend := managerPreparationBackend{
+		observe: func(call context.Context) (managerPreparationMap, error) {
+			data, err := c.cluster.Ceph(call, "mgr", "dump", "--format", "json")
+			var state managerPreparationMap
+			if err == nil {
+				err = json.Unmarshal(data, &state)
 			}
-			rejection, err := nativeManagerRejection(preparation, d)
-			if err != nil {
-				return err
-			}
-			if rejection == "" {
-				continue
-			}
-			// This restores a missing disposable fixture daemon before an
-			// independent failover test. Preserve the first native refusal and
-			// current map identity before the once-only public container restart.
-			// The measured Go mutation/authentication has not been submitted.
-			receipt, err := json.Marshal(map[string]any{"observed_at": time.Now().UTC(), "daemon": "mgr." + d.DaemonName, "native_rejection": rejection,
-				"active_name": status.ActiveName, "active_gid": status.ActiveGID, "standbys": status.Standbys, "action": "restore missing native daemon before independent failover"})
+			return state, err
+		},
+		rejection: func(call context.Context, name string) (string, error) {
+			return nativeManagerRejection(call, daemons[name])
+		},
+		stop:  func(call context.Context, name string) error { return daemons[name].Stop(call, nil) },
+		start: func(call context.Context, name string) error { return daemons[name].Start(call) },
+		record: func(receipt managerPreparationReceipt) error {
+			data, err := json.Marshal(receipt)
 			if err != nil {
 				return err
 			}
@@ -678,25 +666,11 @@ func (c *fixtureCluster) prepareManagerFailover(ctx context.Context, out string)
 			if err != nil {
 				return err
 			}
-			_, writeErr := f.Write(append(receipt, '\n'))
-			closeErr := f.Close()
-			if writeErr != nil || closeErr != nil {
-				return errors.Join(writeErr, closeErr)
-			}
-			restarted[d.DaemonName] = true
-			if err := d.Stop(preparation, nil); err != nil {
-				return err
-			}
-			if err := d.Start(preparation); err != nil {
-				return err
-			}
-		}
-		select {
-		case <-preparation.Done():
-			return fmt.Errorf("native MGR failover fixture never restored active and standby: %w", preparation.Err())
-		case <-time.After(250 * time.Millisecond):
-		}
+			_, writeErr := f.Write(append(data, '\n'))
+			return errors.Join(writeErr, f.Close())
+		},
 	}
+	return prepareManagerFailoverWithBackend(ctx, names, backend, 45*time.Second)
 }
 func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
 	count, _ := strconv.Atoi(c.profile.osdReplicas)
