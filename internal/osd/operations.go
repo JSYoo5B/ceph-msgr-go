@@ -22,6 +22,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		return 0, 0, ErrRequest
 	}
 	var flags, total uint64
+	var stagedDigestSize uint64
 	for _, op := range ops {
 		if !SupportedOperation(op.Code) || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
 			return 0, 0, ErrOperation
@@ -31,6 +32,14 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		}
 		if op.Code != AssertVersion && op.Version != 0 {
 			return 0, 0, ErrRequest
+		}
+		// Tentacle v20.2.4 can validate a staged full-write digest against
+		// committed storage during a following full-object READ/CMPEXT.
+		// APPEND may become a full write when the staged object is empty.
+		// Keep every possible boundary across intervening FAILOK operations:
+		// callers do not supply the original size or remote execution state.
+		if (op.Code == Read || op.Code == CompareExtent) && stagedDigestSize > 0 && op.Offset == 0 && op.Length >= stagedDigestSize {
+			return 0, 0, ErrOperation
 		}
 		switch op.Code {
 		case Read:
@@ -57,6 +66,12 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 				return 0, 0, ErrRequest
 			}
 		case Write, WriteFull, Append:
+			// A WRITE at zero can replace the whole object too; callers do
+			// not provide its previous size. Retain the smallest possible
+			// staged digest boundary across FAILOK operations.
+			if (op.Code == WriteFull || op.Code == Append || op.Code == Write && op.Offset == 0) && op.Length > 0 && (stagedDigestSize == 0 || op.Length < stagedDigestSize) {
+				stagedDigestSize = op.Length
+			}
 			flags |= FlagWrite
 			if op.Length != uint64(len(op.Data)) || op.Offset > math.MaxUint64-op.Length || op.Code != Write && op.Offset != 0 {
 				return 0, 0, ErrRequest

@@ -96,6 +96,8 @@ type OSDVersion struct {
 }
 
 // OSDOperationResult preserves each operation's wire metadata and raw output.
+// Read and CompareExtent may report a shorter Length at EOF. CompareExtent
+// compares bytes beyond EOF with zero without returning a payload.
 // Stat's bytes describe size and mtime; this layer does not convert them into a
 // filesystem-style object API. The caller can interpret the wire data.
 type OSDOperationResult struct {
@@ -149,6 +151,12 @@ type OSDReply struct {
 // ErrOSDRedirect accompanies a decoded redirect reply. The routing layer may
 // inspect it; this client never follows a redirect automatically.
 var ErrOSDRedirect = osd.ErrRedirect
+
+// ErrUnsupportedOSDOperation rejects unknown opcodes, flags and unsupported
+// compound combinations before object-request transmission. In Tentacle,
+// offset-zero READ/CMPEXT after a possible full write can compare committed
+// bytes with a staged digest; these combinations are conservatively rejected.
+var ErrUnsupportedOSDOperation = osd.ErrOperation
 
 type OSDError struct{ Code int32 }
 
@@ -259,7 +267,8 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		if requested.Code == osd.AssertVersion {
 			length = requested.Version
 		}
-		if op.Code != requested.Code && !normalizedZero || op.Offset != requested.Offset || op.Length > length || requested.Code != osd.Read && op.Length != length || op.TruncateSize != 0 || op.TruncateSequence != 0 || op.Flags&(osd.OpExclusive|osd.OpFailOK) != requested.Flags || uint64(len(op.Data)) != uint64(op.PayloadLength) {
+		shortExtent := requested.Code == osd.Read || requested.Code == osd.CompareExtent
+		if op.Code != requested.Code && !normalizedZero || op.Offset != requested.Offset || op.Length > length || !shortExtent && op.Length != length || op.TruncateSize != 0 || op.TruncateSequence != 0 || op.Flags&(osd.OpExclusive|osd.OpFailOK) != requested.Flags || uint64(len(op.Data)) != uint64(op.PayloadLength) {
 			return errors.New("OSD reply operation differs from request or payload metadata")
 		}
 		success := !redirect && reply.Result >= 0 && op.Result >= 0

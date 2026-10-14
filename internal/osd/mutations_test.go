@@ -84,3 +84,30 @@ func TestMutationInputBoundsAndUnsupportedFields(t *testing.T) {
 		t.Fatal("read-only mtime would be ignored", err)
 	}
 }
+
+func TestRejectFullReadAfterStagedWrite(t *testing.T) {
+	for _, code := range []uint16{Write, WriteFull, Append} {
+		r := oracleRequest()
+		r.Operations = []Operation{{Code: code, Length: 3, Data: []byte{99, 0, 254}}, {Code: Read, Length: 20}}
+		if _, err := EncodeRequest(r, oracleFeatures, wire.DefaultLimit); !errors.Is(err, ErrOperation) {
+			t.Fatal("unsafe native staged digest combination was sent", code, err)
+		}
+		r.Operations[1].Offset, r.Operations[1].Length = 1, 2
+		if _, err := EncodeRequest(r, oracleFeatures, wire.DefaultLimit); err != nil {
+			t.Fatal("partial read after staged replacement", code, err)
+		}
+		r.Operations = []Operation{{Code: Read, Length: 20}, {Code: code, Length: 3, Data: []byte{99, 0, 254}}}
+		if _, err := EncodeRequest(r, oracleFeatures, wire.DefaultLimit); err != nil {
+			t.Fatal("read before replacement is safe", code, err)
+		}
+	}
+	r := oracleRequest()
+	r.Operations = []Operation{
+		{Code: WriteFull, Length: 3, Data: []byte{99, 0, 254}},
+		{Code: WriteFull, Flags: OpFailOK, Length: 10, Data: make([]byte, 10)},
+		{Code: Read, Length: 3},
+	}
+	if _, err := EncodeRequest(r, oracleFeatures, wire.DefaultLimit); !errors.Is(err, ErrOperation) {
+		t.Fatal("later FAILOK write erased an earlier dangerous digest boundary", err)
+	}
+}
