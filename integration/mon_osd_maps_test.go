@@ -46,7 +46,7 @@ func verifyNativeMonMaps(t *testing.T, ctx context.Context, control string, batc
 					continue
 				}
 				seen[name] = true
-				if err := os.WriteFile(filepath.Join(control, name), blob.Data, 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(control, name), blob.Data, 0644); err != nil {
 					t.Fatal(err)
 				}
 				records = append(records, map[string]any{"kind": set.kind, "epoch": blob.Epoch})

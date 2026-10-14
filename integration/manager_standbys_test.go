@@ -145,8 +145,11 @@ func TestCephManagerStandbysIntegration(t *testing.T) {
 	if _, err := c.MonCommand(ctx, command); err != nil {
 		t.Fatal("MGR promotion", err)
 	}
+	// Native ceph-mgr may respawn and obtain a new auth GID during takeover.
+	// Match its daemon name here; verify the new GID against the same-epoch
+	// native map below instead of requiring the prior standby GID to survive.
 	waitClientState(t, c, ctx, func(state cephmsgr.State) bool {
-		return state.Manager.Available && state.Manager.Name == promoted.Name && state.Manager.GlobalID == promoted.GlobalID && len(state.Manager.Standbys) > 0
+		return state.Manager.Available && state.Manager.Name == promoted.Name && state.Manager.GlobalID != 0 && len(state.Manager.Standbys) > 0
 	})
 	replacement := nativeManagerSnapshot(t, ctx, c, control, "replacement")
 	if replacement.Manager.Standbys[0].Name != initial.Manager.Name || replacement.Manager.Ready || managerDials.Load() != 0 {

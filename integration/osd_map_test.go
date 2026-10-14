@@ -96,7 +96,7 @@ func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 					t.Fatal("invalid map blob epoch/bytes")
 				}
 				name := fmt.Sprintf("osd-map-%s-%d.bin", set.kind, blob.Epoch)
-				if err := os.WriteFile(filepath.Join(directory, name), blob.Data, 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(directory, name), blob.Data, 0644); err != nil {
 					t.Fatal(err)
 				}
 				blobs = append(blobs, map[string]any{"kind": set.kind, "epoch": blob.Epoch})

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
@@ -20,38 +19,7 @@ func controlFixtureMonitors(ctx context.Context, control string, start bool) err
 	if start {
 		request, response = "start-mons", "mons-started"
 	}
-	id := time.Now().UnixNano()
-	file, err := os.CreateTemp(control, request+"-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if _, err := fmt.Fprintf(file, "%d\n", id); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(file.Name(), filepath.Join(control, request)); err != nil {
-		return err
-	}
-	ack := filepath.Join(control, fmt.Sprintf("%s.%d", response, id))
-	defer os.Remove(ack)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		if _, err := os.Stat(ack); err == nil {
-			return nil
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-		}
-	}
+	return testcluster.RequestControl(ctx, control, request, response)
 }
 
 func fixtureRecoveryRead(ctx context.Context, c *Client, mgr bool) error {

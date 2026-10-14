@@ -88,3 +88,31 @@ Provider diagnostics and crash metadata now use the public v0.2.0 collectors;
 the old single-container crash archive parser was removed with its tests.
 Consumer-specific command/schema interpretation and native oracle receipts
 remain test-only.
+
+## First main CI failure and correction
+
+The first merged migration commit, `bb90440020579b5ebf83c610ff41d41490a59478`,
+failed [CI run 38589085119](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38589085119).
+Fourteen jobs failed; unit, fixture-tool and Windows real-Ceph jobs passed.
+The original failure logs and artifacts were inspected before changing code.
+
+- Linux root container tests published control requests with mode 0600. The
+  non-root host controller could not read them. `provider.error` explicitly
+  recorded permission denied for `stop-mons`, `restart-mon` and
+  `verify-osd-epoch`. This also affects secure-MGR restoration requests.
+  Control requests now use 0644 inside the private fixture directory, as do
+  non-secret map blobs selected for diagnostic collection. Keys remain private.
+- Native MGR takeover can respawn a daemon and change its authenticated GID.
+  The host fixture's initial native map had standby `a/14989`; the later native
+  map had active `a/15016`. The test incorrectly required the old GID throughout
+  takeover. It now checks the promoted daemon name and validates its current
+  GID against a fresh native map at the same epoch.
+- Waiting tests now report controller/oracle failure files immediately instead
+  of reducing the first failure to later context deadline errors.
+
+Correction validation: all root CGO=0 Go tests and vet, the fixture module tests,
+and 144 Python tests passed. Focused live Tentacle 20.2.4 secure/aes256k
+container tests for MGR standby takeover and public snapshot renewal/MON restart
+passed. Cross-UID Linux behavior still requires the new remote CI run; macOS
+Docker Desktop does not reproduce Linux bind-mount ownership exactly. No test
+was skipped and no timeout increased to hide the original failures.
