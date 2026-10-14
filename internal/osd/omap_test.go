@@ -77,7 +77,7 @@ func TestOmapAdmissionBoundsAndVariantIsolation(t *testing.T) {
 		{"bykeys prefix", func(op *Operation) { op.Code = OmapGetValuesByKeys; op.Omap.MaxEntries = 0; op.Omap.Prefix = "p" }, ErrRequest},
 		{"EXCL", func(op *Operation) { op.Flags = OpExclusive }, ErrOperation},
 		{"unknown flags", func(op *Operation) { op.Flags = 4 }, ErrOperation},
-		{"unsupported comparison", func(op *Operation) { op.Code = 0x1219 }, ErrOperation},
+		{"unsupported tmap conversion", func(op *Operation) { op.Code = 0x3222 }, ErrOperation},
 		{"unsupported range removal", func(op *Operation) { op.Code = 0x222c }, ErrOperation},
 		{"large cursor", func(op *Operation) { op.Omap.StartAfter = strings.Repeat("x", 1024) }, wire.ErrLimit},
 		{"large keyset", func(op *Operation) {

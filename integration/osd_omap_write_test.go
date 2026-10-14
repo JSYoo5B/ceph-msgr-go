@@ -25,16 +25,24 @@ type omapWriteState struct {
 }
 
 type omapWriteAction struct {
-	Op      string            `json:"op"`
-	Flags   uint32            `json:"flags"`
-	Entries []omapNativeEntry `json:"entries,omitempty"`
-	Keys    [][]byte          `json:"keys,omitempty"`
+	Op         string            `json:"op"`
+	Flags      uint32            `json:"flags"`
+	Entries    []omapNativeEntry `json:"entries,omitempty"`
+	Keys       [][]byte          `json:"keys,omitempty"`
+	Key        []byte            `json:"key,omitempty"`
+	Value      []byte            `json:"value,omitempty"`
+	Comparison *int              `json:"comparison,omitempty"`
+}
+
+type omapNativePrval struct {
+	Index int   `json:"index"`
+	Prval int32 `json:"prval"`
 }
 
 type omapWriteSeed struct {
 	Baseline   []byte             `json:"baseline"`
-	Attributes []nativeXattrEntry `json:"attributes"`
-	Entries    []omapNativeEntry  `json:"entries"`
+	Attributes []nativeXattrEntry `json:"attributes,omitempty"`
+	Entries    []omapNativeEntry  `json:"entries,omitempty"`
 }
 
 type omapWriteInput struct {
@@ -66,15 +74,21 @@ type omapWriteReceipt struct {
 		HeaderCLI   bool `json:"header_via_pinned_rados_cli"`
 		RawWire     bool `json:"raw_wire_payload_available"`
 		PerOp       bool `json:"native_write_per_op_results_available"`
+		CmpPrval    bool `json:"native_cmp_per_op_prval_available"`
 	} `json:"scope"`
-	Objects   []string       `json:"objects"`
-	Object    string         `json:"object"`
-	SeedCode  *int32         `json:"seed_aggregate"`
-	State     omapWriteState `json:"state"`
-	Before    omapWriteState `json:"before"`
-	After     omapWriteState `json:"after"`
-	Aggregate *int32         `json:"aggregate"`
-	Cleanup   struct {
+	Objects   []string          `json:"objects"`
+	Object    string            `json:"object"`
+	SeedCode  *int32            `json:"seed_aggregate"`
+	State     omapWriteState    `json:"state"`
+	Before    omapWriteState    `json:"before"`
+	After     omapWriteState    `json:"after"`
+	Aggregate *int32            `json:"aggregate"`
+	Prvals    []omapNativePrval `json:"prvals"`
+	Vector    *struct {
+		Aggregate int32             `json:"aggregate"`
+		Prvals    []omapNativePrval `json:"prvals"`
+	} `json:"vector"`
+	Cleanup struct {
 		Objects []struct {
 			Object string `json:"object"`
 			Code   int32  `json:"code"`
@@ -118,7 +132,7 @@ func nativeOmapWrite(t *testing.T, ctx context.Context, base osdFixtureOracle, m
 	if result.Schema != 1 || result.Commit != source || result.Mode != mode || result.Fixture.ID != base.Pool || result.Fixture.Object != base.Name || !strings.Contains(result.DaemonVersion, source) || !strings.Contains(result.DaemonVersion, "20.2.4") {
 		t.Fatal("native OMAP write receipt provenance differs")
 	}
-	if !result.Scope.Independent || !result.Scope.HeaderCLI || result.Scope.RawWire || result.Scope.PerOp {
+	if !result.Scope.Independent || !result.Scope.HeaderCLI || result.Scope.RawWire || result.Scope.PerOp || !result.Scope.CmpPrval {
 		t.Fatal("native OMAP write oracle fabricated wire or per-op evidence")
 	}
 	return result

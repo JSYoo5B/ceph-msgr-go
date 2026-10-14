@@ -19,6 +19,7 @@ const (
 	OmapGetValues       uint16 = 0x1212
 	OmapGetHeader       uint16 = 0x1213
 	OmapGetValuesByKeys uint16 = 0x1214
+	OmapCompare         uint16 = 0x1219
 	OmapSetValues       uint16 = 0x2215
 	OmapSetHeader       uint16 = 0x2216
 	OmapClear           uint16 = 0x2217

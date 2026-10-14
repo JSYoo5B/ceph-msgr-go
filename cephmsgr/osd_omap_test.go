@@ -120,7 +120,7 @@ func TestOSDOmapInvalidInputsNeverAllocateTIDOrSend(t *testing.T) {
 	values = osdOmapOp(OSDGetOmapValues)
 	values.Omap.MaxOutputBytes = c.options.MaxFrameSize / 2
 	check("aggregate vector output budget", []OSDOperation{values, values})
-	for _, code := range []OSDOpcode{OSDRead, OSDStat, OSDGetXattrs, OSDGetOmapHeader, 0x1219, OSDSetOmapValues, OSDSetOmapHeader, OSDClearOmap, 0x222c} {
+	for _, code := range []OSDOpcode{OSDRead, OSDStat, OSDGetXattrs, OSDGetOmapHeader, OSDCompareOmap, OSDSetOmapValues, OSDSetOmapHeader, OSDClearOmap, 0x222c} {
 		op := OSDOperation{Code: code, Omap: OSDOmapInput{Keys: []string{}}}
 		if code == OSDRead {
 			op.Length = 1

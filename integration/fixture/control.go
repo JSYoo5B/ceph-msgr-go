@@ -347,7 +347,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return errors.New("invalid native OMAP write oracle request")
 		}
 		switch fields[1] {
-		case "prepare", "observe", "compare", "cleanup":
+		case "prepare", "observe", "assert", "compare", "cleanup":
 		default:
 			return errors.New("invalid native OMAP write oracle action")
 		}

@@ -16,8 +16,22 @@ type OmapEntry struct {
 	Value []byte
 }
 
+// OmapAssertion is one OMAP_CMP assertion. The stored value is the left
+// operand; Comparison is the native EQ=1, GT=3 or LT=5 identifier.
+type OmapAssertion struct {
+	Key        string
+	Value      []byte
+	Comparison int32
+}
+
+const (
+	OmapCompareEqual   int32 = 1
+	OmapCompareGreater int32 = 3
+	OmapCompareLess    int32 = 5
+)
+
 // OmapInput admits one bounded read page, one explicit key set, one header
-// read or one OMAP mutation. Strings are length-aware wire bytes, including
+// read, one comparison set or one OMAP mutation. Strings are length-aware wire bytes, including
 // empty, NUL and non-UTF-8 strings. Each opcode admits only its own fields.
 // The local output budget does not become a remote byte-limit argument.
 type OmapInput struct {
@@ -25,13 +39,14 @@ type OmapInput struct {
 	MaxEntries         uint64
 	Keys               []string
 	Entries            []OmapEntry
+	Assertions         []OmapAssertion
 	Header             []byte
 	MaxOutputBytes     uint32
 }
 
 func IsOmapOperation(code uint16) bool {
 	switch code {
-	case OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys,
+	case OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare,
 		OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys:
 		return true
 	}
@@ -42,8 +57,13 @@ func isOmapMutation(code uint16) bool {
 	return code == OmapSetValues || code == OmapSetHeader || code == OmapClear || code == OmapRemoveKeys
 }
 
+// Mutations and comparisons return no output, so they take no receipt budget.
+func omapWithoutOutput(code uint16) bool {
+	return isOmapMutation(code) || code == OmapCompare
+}
+
 func omapInputEmpty(input OmapInput) bool {
-	return input.StartAfter == "" && input.Prefix == "" && input.MaxEntries == 0 && input.Keys == nil && input.Entries == nil && input.Header == nil && input.MaxOutputBytes == 0
+	return input.StartAfter == "" && input.Prefix == "" && input.MaxEntries == 0 && input.Keys == nil && input.Entries == nil && input.Assertions == nil && input.Header == nil && input.MaxOutputBytes == 0
 }
 
 // Bound every encoded field before sorting or allocating an encoded buffer.
@@ -52,7 +72,7 @@ func omapInputBytes(op Operation, limit uint32) (uint64, error) {
 		return 0, ErrRequest
 	}
 	input := op.Omap
-	if isOmapMutation(op.Code) {
+	if omapWithoutOutput(op.Code) {
 		if input.MaxOutputBytes != 0 {
 			return 0, ErrRequest
 		}
@@ -76,7 +96,8 @@ func omapInputBytes(op Operation, limit uint32) (uint64, error) {
 	page := op.Code == OmapGetKeys || op.Code == OmapGetValues
 	keySet := op.Code == OmapGetValuesByKeys || op.Code == OmapRemoveKeys
 	if !page && (input.StartAfter != "" || input.Prefix != "" || input.MaxEntries != 0) || op.Code == OmapGetKeys && input.Prefix != "" ||
-		!keySet && input.Keys != nil || op.Code != OmapSetValues && input.Entries != nil || op.Code != OmapSetHeader && input.Header != nil {
+		!keySet && input.Keys != nil || op.Code != OmapSetValues && input.Entries != nil || op.Code != OmapSetHeader && input.Header != nil ||
+		op.Code != OmapCompare && input.Assertions != nil {
 		return 0, ErrRequest
 	}
 	switch op.Code {
@@ -122,6 +143,24 @@ func omapInputBytes(op Operation, limit uint32) (uint64, error) {
 			}
 		}
 		return total, nil
+	case OmapCompare:
+		if uint64(len(input.Assertions)) > math.MaxUint32 {
+			return 0, wire.ErrLimit
+		}
+		// Each native map entry: key length, value length and int32 operator.
+		total, err := boundedBytes(limit, 4, uint64(len(input.Assertions))*12)
+		if err != nil {
+			return 0, err
+		}
+		for _, assertion := range input.Assertions {
+			if uint64(len(assertion.Key)) > math.MaxUint32 || uint64(len(assertion.Value)) > math.MaxUint32 {
+				return 0, wire.ErrLimit
+			}
+			if total, err = boundedBytes(limit, total, uint64(len(assertion.Key)), uint64(len(assertion.Value))); err != nil {
+				return 0, err
+			}
+		}
+		return total, nil
 	case OmapSetHeader:
 		if uint64(len(input.Header)) > math.MaxUint32 {
 			return 0, wire.ErrLimit
@@ -157,6 +196,19 @@ func canonicalOmapEntries(entries []OmapEntry) ([]OmapEntry, error) {
 	return ordered, nil
 }
 
+// The native decoder keeps only the first duplicate map key, so duplicates are
+// refused. Only identifiers the pinned handler evaluates are admitted.
+func canonicalOmapAssertions(assertions []OmapAssertion) ([]OmapAssertion, error) {
+	ordered := append([]OmapAssertion(nil), assertions...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Key < ordered[j].Key })
+	for i := range ordered {
+		if i > 0 && ordered[i].Key == ordered[i-1].Key {
+			return nil, ErrRequest
+		}
+	}
+	return ordered, nil
+}
+
 func validateOmapOperation(op Operation, limit uint32) (uint64, uint64, error) {
 	size, err := omapInputBytes(op, limit)
 	if err != nil {
@@ -171,6 +223,17 @@ func validateOmapOperation(op Operation, limit uint32) (uint64, uint64, error) {
 		if _, err := canonicalOmapEntries(op.Omap.Entries); err != nil {
 			return 0, 0, err
 		}
+	case OmapCompare:
+		for _, assertion := range op.Omap.Assertions {
+			switch assertion.Comparison {
+			case OmapCompareEqual, OmapCompareGreater, OmapCompareLess:
+			default:
+				return 0, 0, ErrOperation
+			}
+		}
+		if _, err := canonicalOmapAssertions(op.Omap.Assertions); err != nil {
+			return 0, 0, err
+		}
 	}
 	if isOmapMutation(op.Code) {
 		return FlagWrite, size, nil
@@ -178,8 +241,8 @@ func validateOmapOperation(op Operation, limit uint32) (uint64, uint64, error) {
 	return FlagRead, size, nil
 }
 
-// Native Objecter.h 953/992/1065/1359-1386 derives the extent length from this
-// encoding; GETHEADER/CLEAR carry no input. Use the correct std::string GETVALS
+// Native Objecter.h 953/992/1062/1065/1359-1386 derives the extent length from
+// this encoding; GETHEADER/CLEAR carry no input. Use the correct std::string GETVALS
 // overload's start/count/prefix ordering.
 func appendOmapInput(data []byte, op Operation) []byte {
 	e := wire.Encoder{Data: data}
@@ -196,6 +259,14 @@ func appendOmapInput(data []byte, op Operation) []byte {
 		for _, entry := range entries {
 			e.String(entry.Key)
 			e.Bytes(entry.Value)
+		}
+	case OmapCompare:
+		assertions, _ := canonicalOmapAssertions(op.Omap.Assertions) // already admitted
+		e.U32(uint32(len(assertions)))
+		for _, assertion := range assertions {
+			e.String(assertion.Key)
+			e.Bytes(assertion.Value)
+			e.U32(uint32(assertion.Comparison))
 		}
 	case OmapSetHeader:
 		e.Raw(op.Omap.Header)
@@ -224,9 +295,9 @@ func ValidateOmapReply(requested Operation, reply OperationResult, success bool)
 	if reply.Code != requested.Code || reply.Offset != 0 || reply.Length != inputBytes || reply.TruncateSize != 0 || reply.TruncateSequence != 0 || reply.Xattr != (XattrResult{}) {
 		return errors.New("OSD OMAP reply union differs from submitted operation")
 	}
-	if isOmapMutation(requested.Code) {
+	if omapWithoutOutput(requested.Code) {
 		if reply.PayloadLength != 0 || len(reply.Data) != 0 {
-			return errors.New("OSD OMAP mutation reply returned data")
+			return errors.New("OSD OMAP mutation/comparison reply returned data")
 		}
 		return nil
 	}

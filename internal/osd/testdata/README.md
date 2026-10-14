@@ -19,6 +19,12 @@ SETVALS/SETHEADER/RMKEYS/CLEAR(FAILOK) request, and ONDISK, ACK, ENOENT and
 FAILOK replies. They are offline codec proof only and claim no live OSD
 execution, staging or durability.
 
+[Fresh OMAP_CMP encoder/decoder fixtures](omap-cmp-native-README.md)
+independently construct five message triples: a four-assertion OMAP_CMP
+(EQ/LT/GT over empty, NUL and binary keys) followed by SETVALS, and success,
+ECANCELED, FAILOK and read-only ENOENT replies. They are offline codec proof
+only and claim no live comparison evaluation, execution or durability.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from

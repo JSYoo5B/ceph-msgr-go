@@ -1,4 +1,4 @@
-# Tentacle O2b/O2c bounded OMAP read, header and write contract
+# Tentacle O2b/O2c/O2d bounded OMAP read, header, write and comparison contract
 
 Reference: Ceph 20.2.4, commit
 `7f793731f1b39eb4f465e960113d2363c311b964`.
@@ -9,9 +9,11 @@ acceptance. GETHEADER, SETVALS, SETHEADER, CLEAR and RMKEYS (O2c) are
 implemented with the same explicit placement and v6 identity rules; their
 native evidence is recorded separately in
 [OSD_OMAP_WRITE_VALIDATION.md](../../integration/fixture/OSD_OMAP_WRITE_VALIDATION.md).
+OMAP_CMP (O2d) is implemented with its own native evidence in
+[OSD_OMAP_COMPARE_VALIDATION.md](../../integration/fixture/OSD_OMAP_COMPARE_VALIDATION.md).
 [OSD_OMAP_VALIDATION.md](../../integration/fixture/OSD_OMAP_VALIDATION.md)
-records the read profiles and gaps. OMAP_CMP and RMKEYRANGE below remain
-proposals, not implemented support. [CONTRACT.md](CONTRACT.md) supplies existing v6
+records the read profiles and gaps. RMKEYRANGE below remains a proposal, not
+implemented support. [CONTRACT.md](CONTRACT.md) supplies existing v6
 identity, explicit placement, context, per-op results and uncertain-outcome
 rules; [METADATA_CONTRACT.md](METADATA_CONTRACT.md) concerns the separate xattr
 subset. Neither supplies OMAP comparison or pagination semantics.
@@ -27,7 +29,7 @@ The [opcode list][opcodes], [native read builders][read-builders] and
 | OMAPGETVALS | 0x1212 | Implemented bounded single filtered page | string start_after, u64 max_to_get, string filter_prefix | u32 count, key/value blobs, bool more |
 | OMAPGETHEADER | 0x1213 | Implemented bounded raw bytes | Empty | Raw header bytes, no internal length prefix |
 | OMAPGETVALSBYKEYS | 0x1214 | Implemented bounded requested key set | Native encoded set of strings | Native encoded map; no more suffix |
-| OMAP_CMP | 0x1219 | Include EQ/LT/GT assertions after independent oracle | Native encoded map of key to (value bufferlist, int comparison) | No output; success 0 or signed error |
+| OMAP_CMP | 0x1219 | Implemented EQ/LT/GT canonical assertion map | Native encoded map of key to (value bufferlist, int comparison) | No output; success 0 or signed error |
 | OMAPSETVALS | 0x2215 | Implemented bounded canonical entries | Native encoded string-to-bufferlist map | No output |
 | OMAPSETHEADER | 0x2216 | Implemented bounded raw header | Raw header bytes | No output |
 | OMAPCLEAR | 0x2217 | Implemented; header removal is a native acceptance case | Empty | No output |
@@ -37,8 +39,8 @@ The [opcode list][opcodes], [native read builders][read-builders] and
 The read milestone deliberately excluded header and comparison until their
 independent execution oracles were ready. O2c adds the header read and four
 writes using the same explicitly targeted replicated BlueStore profile as
-O1/O2a. Comparison remains a separate milestone because its signed-char
-ordering needs its own native execution oracle. RMKEYRANGE is a separate milestone: the audited builder and
+O1/O2a. O2d then adds comparison with its own signed-char native execution
+oracle. RMKEYRANGE is a separate milestone: the audited builder and
 handler exist, but endpoint ordering, half-open range behavior and empty/reversed
 ranges need their own native acceptance. TMAP conversion, class calls, allocation
 hints, snapshots, rollback and watch remain separate work. No compatibility
@@ -168,9 +170,22 @@ operator][signed-char] uses char while its [build flags][char-build] select
 therefore have signed-char ordering; do not derive a Go-side unsigned
 bytes.Compare result or reuse xattr's string/string_view comparison oracle.
 Binary asymmetry such as 0x80 versus 0x7f and equal-prefix/different-length values
-must be covered by an independent native execution oracle. This source audit
-establishes the required oracle cases, not their live results. Raw communication
-need not evaluate comparisons locally at all.
+must be covered by an independent native execution oracle. Live Tentacle
+20.2.4 on arm64 OSD containers (whose default char is unsigned) confirmed the
+signed ordering: stored 0x80 is LESS than 0x7f, 0xff is less than 0x00, and a
+longer value is greater than its prefix even with a high-bit tail. The product
+never evaluates comparisons locally; a test-only model is used as a third
+reference.
+
+The implementation admits `OmapInput.Assertions` only for OMAP_CMP, requires a
+zero output budget, rejects duplicate keys, encodes a sorted copy (unsigned
+std::string key order, as the server evaluates) and refuses identifiers other
+than 1, 3 and 5 with ErrOperation before TID allocation. The pinned decoder
+would keep only the first duplicate key, and NE/GTE/LTE reach EINVAL only if
+evaluation gets that far; live native C calls with 2, 4 and 6 returned -22.
+An empty assertion set is transmitted and only checks object existence.
+Comparison is a READ operation, so the staged-read rule rejects it after an
+OMAP write or DELETE in the same vector; compare-before-write is admitted.
 
 Multiple assertions serialize as key -> (operand bytes, int32 identifier).
 Preserve aggregate/per-op codes separately, including FAILOK failures. Do not
@@ -294,9 +309,9 @@ OSDMap epoch, explicit primary identity and cleanup for every new run.
 | Canonical wire | Fresh ObjectOperation/MOSDOp/MOSDOpReply encode plus separate native decode, request union input lengths, map/set/assertion encodings, suffix/no-suffix/header raw output, Go byte comparison | Three read opcodes/five fresh triples passed; header/write five fresh triples passed (41/369/70-byte request equality); assertion vectors pending |
 | Bytes and absence | Binary/NUL/non-UTF-8/empty key and value; absent key vs empty value vs absent object; raw header empty/nonempty; exact object bytes/stat2/version/mtime | Binary/empty/NUL BYKEYS and missing object passed with unchanged native state; binary/empty header via pinned rados CLI and Go GETHEADER passed |
 | Pagination | Count 0/1/exact/final/huge, cursor/prefix relations, empty-key boundary, byte cap overshoot, more true/false, single-page raw ordering | 23-case live read matrix passed in two bounded profiles; configured caps and live NUL cursor/prefix comparison pending |
-| Comparison | EQ/LT/GT, unsupported IDs, stored-left asymmetry, high-bit signed-char order, missing key/object, multi-assertion order, success0/ECANCELED/raw per-op | Not executed |
+| Comparison | EQ/LT/GT, unsupported IDs, stored-left asymmetry, high-bit signed-char order, missing key/object, multi-assertion order, success0/ECANCELED/raw per-op | Fresh native encoder five vectors match Go; CRC/AES host three-BlueStore 25 live cases passed with Go result = native C prval = signed-char model for 17 single assertions; multi-assertion cases are indirect (one C call is one assertion) |
 | Mutations | SET before independent GET/BYKEYS, SETHEADER/header read, RMKEYS retains header, CLEAR removes header+values, absent keys/object, empty operations and object creation | CRC/AES host three-BlueStore: 17 live cases passed, including two native C mirror comparisons; empty SETVALS/RMKEYS/SETHEADER each commit a new version and mtime |
-| Atomicity/FAILOK | Compare-before-write, failed guard rollback, FAILOK then later write; staged writes followed by reads characterized separately | Small reads before writes, failed AssertVersion rollback, FAILOK CLEAR -2 then SETVALS commit passed; EOVERFLOW refusal and its cached object_info advance recorded; OMAP reads after OMAP writes rejected locally; CMP pending |
+| Atomicity/FAILOK | Compare-before-write, failed guard rollback, FAILOK then later write; staged writes followed by reads characterized separately | Small reads before writes, failed AssertVersion rollback, FAILOK CLEAR -2 then SETVALS commit passed; CMP guard commit/-125 cancel/FAILOK -125 then commit passed against native C mirrors; EOVERFLOW refusal and its cached object_info advance recorded; OMAP reads/comparisons after OMAP writes or DELETE rejected locally |
 | Limits/permission | Disposable OSD entry cap 2 and small byte cap, local oversize/budget, read-only credential EPERM without state change; restore settings and identity | Default 64-byte RETURNVEC write-reply bound observed; configured caps and EPERM not executed |
 | Recovery/uncertainty | ONDISK write then actual primary SIGKILL on size3/min_size2; independently native bytes/OMAP/header/version/mtime; lost response preserves TID/submission and no replay | Synthetic local cancellation only; live loss/Close/SIGKILL not executed |
 | Scope separation | Namespace isolation, key order preservation, supported replicated pools; EC/snapshot/range-delete matrices tracked separately | Not executed |

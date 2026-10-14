@@ -52,6 +52,46 @@ class OmapWriteNativeTests(unittest.TestCase):
             with self.subTest(raw=raw, mode=mode), self.assertRaises((ValueError, KeyError, TypeError)):
                 writes.validate_request(raw, mode)
 
+    def test_comparison_inputs_keep_bytes_and_bounded_identifiers(self):
+        request = writes.validate_request({"object": owned(b"main-"), "operations": [
+            {"op": "cmp", "flags": 2, "key": encode(b"\0k"), "value": encode(b"\x80\0"), "comparison": 5},
+            {"op": "cmp", "flags": 0, "key": "", "value": "", "comparison": 4}]}, "assert")
+        self.assertEqual(request["operations"][0], {"op": "cmp", "flags": 2, "key": b"\0k", "value": b"\x80\0", "comparison": 5})
+        for action in [{"op": "set", "flags": 0, "entries": []}, {"op": "cmp", "key": "", "value": "", "comparison": 256},
+                       {"op": "cmp", "key": "", "value": "", "comparison": -1}, {"op": "cmp", "key": "", "comparison": 1, "keys": []}]:
+            with self.subTest(action=action), self.assertRaises(ValueError):
+                writes.validate_request({"object": owned(b"main-"), "operations": [action]}, "assert")
+
+    def test_comparison_vectors_report_each_prval_and_returnvec(self):
+        library = Library()
+        library.install("rados_create_read_op", lambda: 41)
+        library.install("rados_create_write_op", lambda: 42)
+        seen = []
+
+        def cmp2(operation, key, comparison, value, key_len, value_len, prval):
+            seen.append((operation, key[:key_len], comparison, value[:value_len]))
+            prval._obj.value = -125 if comparison == 3 else 0
+
+        library.install("rados_read_op_omap_cmp2", cmp2)
+        library.install("rados_write_op_omap_cmp2", cmp2)
+        library.install("rados_read_op_operate", lambda operation, io, name, flags: -125)
+        flags = {}
+        library.install("rados_write_op_operate2", lambda operation, io, name, stamp, value: flags.setdefault("write", value) and 0)
+        native = writes.Native.__new__(writes.Native)
+        native.lib = library
+        actions = [{"op": "cmp", "flags": 0, "key": b"\0k", "value": b"\x80", "comparison": 5},
+                   {"op": "cmp", "flags": 2, "key": b"z", "value": b"", "comparison": 3}]
+        result = native.assert_vector(1, b"object", actions)
+        self.assertEqual(result, {"aggregate": -125, "prvals": [{"index": 0, "prval": 0}, {"index": 1, "prval": -125}]})
+        self.assertEqual(seen[0], (41, b"\0k", 5, b"\x80"))
+        self.assertIn(("rados_read_op_set_flags", (41, 2)), library.calls)
+        aggregate, prvals = native.write_vector(1, b"object", actions + [{"op": "clear", "flags": 0}], {"seconds": 1, "nanos": 2})
+        self.assertEqual((aggregate, [p["index"] for p in prvals]), (0, [0, 1]))
+        self.assertEqual(flags["write"], writes.RETURNVEC)
+        names = [name for name, _ in library.calls]
+        self.assertEqual(names[-1], "rados_release_write_op")
+        self.assertIn("rados_release_read_op", names)
+
     def test_ownership_is_limited_to_exact_fixture_uuid_names(self):
         receipt = {"schema_version": 1, "source_commit": writes.SOURCE_COMMIT, "pool": "pool", "pool_id": 7,
                    "fixture_object": "fixture", "namespace": "", "objects": [owned(b"main-"), owned(b"absent-")]}

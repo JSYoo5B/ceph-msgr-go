@@ -233,7 +233,7 @@ Replicated pool의 현재 객체에 대한 stat과 양의 길이 read, write/wri
 append, truncate, zero, create/delete와 version/extent 조건을 제공한다.
 제한 xattr GET/GETALL·STRING 비교·SET/RM도 같은 ordered vector에서 제공한다.
 OMAP은 제한된 단일 페이지 GETKEYS/GETVALS와 지정 키 BYKEYS 읽기, raw header
-읽기와 SETVALS·SETHEADER·CLEAR·RMKEYS 쓰기를 제공한다.
+읽기, OMAP_CMP 비교와 SETVALS·SETHEADER·CLEAR·RMKEYS 쓰기를 제공한다.
 Stat bytes는 size와 mtime의 wire 출력이며 filesystem API로 변환하지 않는다.
 Aggregate 서버 code와 operation별 result는 서로 다를 수 있다. 예를 들어
 존재하지 않는 객체는 aggregate -2와 실행되지 않은 stat의 result 0을 반환한다.
@@ -294,7 +294,7 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 
 현재 SET/RM 뒤 같은 vector의 GET/GETALL/CMP는 staged-read 의미를 보장하지
 못해 송신 전에 거절한다. 비교를 먼저 놓는 순서가 지원된다. U64 비교,
-bulk SET/RESET, OMAP 비교·범위 삭제, class·snapshot은 별도 미구현 단계다.
+bulk SET/RESET, OMAP 범위 삭제, class·snapshot은 별도 미구현 단계다.
 
 OMAP 읽기는 `Omap` 입력을 쓰며 extent·Version·Data·Xattr는 0이다.
 `StartAfter`는 exclusive cursor, `Prefix`는 GETVALS의 byte prefix이며
@@ -325,7 +325,7 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 `PayloadLength`다. 누락된 키와 빈 값은 원본 map에서 구분한다. 출력 해석,
 다음 cursor 선택과 여러 페이지의 일관성은 사용 레이어가 맡는다.
 [OMAP 계약과 검증 범위](internal/osd/OMAP_CONTRACT.md)에 native C API의
-NUL cursor/prefix 제한과 비교·범위 삭제 미지원 범위를 기록했다.
+NUL cursor/prefix 제한과 범위 삭제 미지원 범위를 기록했다.
 
 OMAP header와 쓰기도 같은 `Omap` 입력을 쓴다. `OSDGetOmapHeader`는 입력 없이
 양의 `MaxOutputBytes`만 받고 raw header bytes를 길이 prefix 없이 `Data`로
@@ -352,10 +352,37 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 })
 ```
 
+`OSDCompareOmap`은 `Assertions`만 받고 출력이 없으며 `MaxOutputBytes`는 0이다.
+각 assertion은 저장된 값을 왼쪽 operand로 두는 native 의미를 따른다.
+`OSDOmapLess`는 저장값이 `Value`보다 작다는 조건이다. 이는 operand를 왼쪽에
+두는 xattr 비교와 반대다. 순서 비교는 고정 Tentacle 빌드의 `-fsigned-char`에
+따라 byte를 signed char로 비교한 뒤 길이를 비교하므로 `bytes.Compare`와 다르다.
+없는 키는 빈 값으로 비교하고 없는 객체는 `-ENOENT`다. 서버는 키 순서대로
+평가해 처음 실패한 assertion에서 `-ECANCELED`를 반환한다. 지원하는 비교는
+`OSDOmapEqual`·`OSDOmapGreater`·`OSDOmapLess`뿐이고 다른 식별자는 서버가 평가하지
+않으므로 송신 전에 `ErrUnsupportedOSDOperation`으로 거절한다. 중복 키도 거절한다.
+
+```go
+reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch, Object: object,
+    ModificationTime: cephmsgr.OSDTime{Seconds: seconds, Nanoseconds: nanos},
+    Operations: []cephmsgr.OSDOperation{
+        {Code: cephmsgr.OSDCompareOmap,
+         Omap: cephmsgr.OSDOmapInput{Assertions: []cephmsgr.OSDOmapAssertion{
+             {Key: "version", Value: expected, Comparison: cephmsgr.OSDOmapEqual},
+         }}},
+        {Code: cephmsgr.OSDSetOmapValues,
+         Omap: cephmsgr.OSDOmapInput{Entries: []cephmsgr.OSDOmapEntry{
+             {Key: "version", Value: next},
+         }}},
+    },
+})
+```
+
 OMAP 쓰기 뒤 같은 vector의 OMAP 읽기는 staged 상태를 보장하지 못해 FAILOK
-쓰기 뒤에도 `ErrUnsupportedOSDOperation`으로 송신 전에 거절한다. DELETE 뒤의
-OMAP·xattr 읽기도 committed metadata를 읽을 수 있어 같은 이유로 거절한다.
-읽기를 먼저 두는 순서는 지원한다. 쓰기를 포함한 vector는 RETURNVEC 응답의 per-op 출력이
+쓰기 뒤에도 `ErrUnsupportedOSDOperation`으로 송신 전에 거절한다. OMAP 비교도
+읽기로 취급한다. DELETE 뒤의 OMAP·xattr 읽기도 committed metadata를 읽을 수
+있어 같은 이유로 거절한다. 읽기와 비교를 먼저 두는 순서는 지원한다. 쓰기를 포함한 vector는 RETURNVEC 응답의 per-op 출력이
 서버의 `osd_max_write_op_reply_len`(기본 64 bytes)을 넘으면 Tentacle이
 aggregate와 해당 operation에 `-EOVERFLOW`를 돌려주고 transaction을 commit하지
 않는다. 이 거절은 서버 설정에 따르므로 client가 미리 판단하지 않고
@@ -450,6 +477,17 @@ Secure/aes256k container 3 BlueStore의 CGO0 전체 OSD 시험 23개도 통과�
 그대로였다. 다만 primary가 보고하는 user version과 mtime은 거절된 요청 값으로
 앞서 나갔으며, 고정 소스의 `finish_ctx`가 cache에 먼저 반영한 결과로 기록했다.
 쓰기 응답 손실·SIGKILL 복구, 권한 거절과 CI matrix는 별도 검증이 필요하다.
+
+[OMAP 비교 검증](integration/fixture/OSD_OMAP_COMPARE_VALIDATION.md)은 fresh
+native encoder/별도 decoder의 5개 vector와 Go bytes를 대조했다. 정렬하지 않은
+assertion 입력도 native map 순서로 인코딩함을 확인했다. CRC/AES host 3
+BlueStore의 25개 실서버 사례와 secure/aes256k container의 CGO0 전체 OSD 시험
+24개가 통과했다. 실서버 사례 중 단일 assertion 17개는 Go per-op 결과, native C
+prval, test-only signed-char 모델이 모두 일치했다. arm64 OSD에서도 저장값
+`0x80`이 `0x7f`보다 작다고 평가되어 signed 순서를 확인했다. 비교 뒤 쓰기의
+commit·`-125` 취소·FAILOK과 없는 객체의 `-2`, 서버가 평가하지 않는 식별자의
+native `-22`와 Go의 송신 전 거절도 확인했다. 한 operation에 여러 assertion을
+담는 native 대조는 C API 제약으로 간접 증거이며 C++ oracle이 필요하다.
 
 응답 대기 중 OSD 연결을 `Close`하는 별도 실서버 시험은 CRC/AES/AES·IPv4
 3-BlueStore host relay에서 통과했다. Native read가 단일 append 실행을

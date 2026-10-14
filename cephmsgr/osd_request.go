@@ -109,7 +109,8 @@ type OSDVersion struct {
 // Xattr keeps attribute lengths/comparison fields separate from extents.
 // For OMAP operations, Length echoes the encoded input byte length (zero for
 // GetOmapHeader and ClearOmap). Data retains the raw collection framing,
-// including the page's more suffix, or the raw header; mutations return none.
+// including the page's more suffix, or the raw header; comparisons and
+// mutations return none.
 type OSDOperationResult struct {
 	Code                         OSDOpcode
 	Flags                        uint32
@@ -266,14 +267,14 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 	return result, nil
 }
 
-// Each encoded OMAP entry needs at least two length prefixes and the whole
-// request data must fit one frame. Refuse impossible maps, summed across the
-// vector, before copying any entry headers into the wire input.
+// Each encoded OMAP entry needs at least two length prefixes, each assertion
+// two prefixes and an operator, and the whole request data must fit one frame.
+// Refuse impossible maps, summed across the vector, before copying headers.
 func osdOmapEntryBound(ops []OSDOperation, limit uint32) error {
-	var entries uint64
+	var minimum uint64
 	for _, op := range ops {
-		entries += uint64(len(op.Omap.Entries))
-		if entries > uint64(limit)/8 {
+		minimum += uint64(len(op.Omap.Entries))*8 + uint64(len(op.Omap.Assertions))*12
+		if minimum > uint64(limit) {
 			return ErrLimitExceeded
 		}
 	}
@@ -312,7 +313,7 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		}
 		success := !redirect && reply.Result >= 0 && op.Result >= 0
 		switch requested.Code {
-		case osd.OmapGetKeys, osd.OmapGetValues, osd.OmapGetHeader, osd.OmapGetValuesByKeys,
+		case osd.OmapGetKeys, osd.OmapGetValues, osd.OmapGetHeader, osd.OmapGetValuesByKeys, osd.OmapCompare,
 			osd.OmapSetValues, osd.OmapSetHeader, osd.OmapClear, osd.OmapRemoveKeys:
 			if err := osd.ValidateOmapReply(requested, op, success); err != nil {
 				return err

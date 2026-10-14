@@ -12,7 +12,10 @@ therefore use the pinned rados CLI `getomapheader OBJECT FILE`, which writes the
 raw bufferlist to a private file. CLI header reads are separate requests;
 every state observation rechecks native stat2/version around them. Native C
 write vectors use SET2/RM_KEYS2/CLEAR, whose per-op results are not exposed:
-only aggregate results are native observations.
+only aggregate results are native observations. OMAP_CMP uses the
+length-aware read/write cmp2 builders, which expose per-op prval; each C call
+is one CMP operation with exactly one assertion. Native write vectors pass
+LIBRADOS_OPERATION_RETURNVEC like the Go client.
 
 ROOT contains fixture ceph.conf/keyring. OUT contains pinned osd-oracle.json,
 daemon-version and bounded osd-omap-write-input.json.
@@ -20,7 +23,8 @@ daemon-version and bounded osd-omap-write-input.json.
 attrs, OMAP entries; no header) and reserves separate absent UUID names that a
 Go mutation may create. Ownership is published atomically before any Go write.
 --observe records bytes/stat2/version/attrs/OMAP/header for one owned name
-without writes. --compare seeds a separate native mirror (or leaves it absent),
+without writes. --assert executes ONE read-only vector of single-assertion
+CMP operations on one owned name and records per-op prvals and unchanged state. --compare seeds a separate native mirror (or leaves it absent),
 executes ONE native C write vector with explicit mtime, observes before/after
 and removes the mirror. --cleanup removes every owned name. No native mutation
 is retried; unit adaptation tests are not daemon proof.
@@ -49,7 +53,8 @@ MAX_RESERVED = 8
 MAX_OPERATIONS = 16
 MAX_CLI_OUTPUT = 16 << 10
 OWNED = "osd-omap-write-owned"
-WRITE_OPS = {"set", "remove", "clear"}
+WRITE_OPS = {"set", "remove", "clear", "cmp"}
+RETURNVEC = 1024  # librados.h:137 LIBRADOS_OPERATION_RETURNVEC
 
 
 def binary(text, limit=MAX_BINARY):
@@ -94,14 +99,16 @@ def seed(raw):
             "entries": entries(raw.get("entries", []), "seed entry")}
 
 
-def operations(raw):
+def operations(raw, allowed=WRITE_OPS):
     if not isinstance(raw, list) or not 0 < len(raw) <= MAX_OPERATIONS:
         raise ValueError("invalid native write vector count")
     result = []
     for action in raw:
-        if not isinstance(action, dict) or action.get("op") not in WRITE_OPS:
+        if not isinstance(action, dict) or action.get("op") not in allowed:
             raise ValueError("unsupported native OMAP write operation")
-        admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags"}[action["op"]]}
+        admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags", "cmp": "key"}[action["op"]]}
+        if action["op"] == "cmp":
+            admitted |= {"value", "comparison"}
         if set(action) - admitted:
             raise ValueError("unknown native OMAP write fields")
         flags = action.get("flags", 0)
@@ -112,12 +119,21 @@ def operations(raw):
             decoded["entries"] = entries(action.get("entries", []), "set entry")
         elif action["op"] == "remove":
             decoded["keys"] = keys(action.get("keys", []), "removal key")
+        elif action["op"] == "cmp":
+            # The C builder takes uint8; unsupported identifiers stay
+            # expressible here to observe the server, never in the Go product.
+            comparison = action.get("comparison")
+            if type(comparison) is not int or not 0 <= comparison <= 255:
+                raise ValueError("invalid native OMAP comparison identifier")
+            decoded.update(key=binary(action.get("key", ""), MAX_KEY), value=binary(action.get("value", "")),
+                           comparison=comparison)
         result.append(decoded)
     return result
 
 
 def validate_request(raw, mode):
     allowed = {"prepare": {"seed", "reserve"}, "observe": {"object", "inventory_keys"},
+               "assert": {"object", "operations", "inventory_keys"},
                "compare": {"seed", "operations", "mtime", "inventory_keys"}, "cleanup": set()}
     if mode not in allowed:
         raise ValueError("invalid OMAP write oracle mode")
@@ -132,6 +148,9 @@ def validate_request(raw, mode):
         request["reserve"] = reserve
     elif mode == "observe":
         request["object"] = xattr.identity(raw.get("object"), "object")
+    elif mode == "assert":
+        request["object"] = xattr.identity(raw.get("object"), "object")
+        request["operations"] = operations(raw.get("operations"), {"cmp"})
     elif mode == "compare":
         request["seed"] = seed(raw.get("seed"))
         request["operations"] = operations(raw.get("operations"))
@@ -146,6 +165,7 @@ def validate_request(raw, mode):
             total += len(source["baseline"]) + sum(len(k) + len(v) for k, v in source["entries"] + source["attributes"])
     for action in request.get("operations", []):
         total += sum(len(k) + len(v) for k, v in action.get("entries", [])) + sum(map(len, action.get("keys", [])))
+        total += len(action.get("key", b"")) + len(action.get("value", b""))
     if total > MAX_BINARY:
         raise ValueError("aggregate OMAP write oracle input exceeds 128 KiB")
     return request
@@ -190,19 +210,48 @@ class HeaderCLI:
 class Native(omap.Native):
     def __init__(self, library=None):
         super().__init__(library)
-        p, s = C.c_void_p, C.c_size_t
+        p, s, char = C.c_void_p, C.c_size_t, C.c_char_p
+        cmp2 = [p, char, C.c_uint8, char, s, s, C.POINTER(C.c_int)]
         for name, arguments in {"write_op_omap_rm_keys2": [p, C.POINTER(p), C.POINTER(s), s],
-                                "write_op_omap_clear": [p]}.items():
+                                "write_op_omap_clear": [p], "write_op_omap_cmp2": cmp2,
+                                "read_op_omap_cmp2": cmp2}.items():
             function = getattr(self.lib, "rados_" + name)
             function.argtypes, function.restype = arguments, None
+
+    def append_cmp(self, operation, kind, index, action, outputs, buffers):
+        prval = C.c_int(999)
+        # Register before construction so every prval is reported once.
+        outputs.append((index, prval))
+        buffers.append(prval)
+        getattr(self.lib, "rados_" + kind + "_op_omap_cmp2")(
+            operation, action["key"], action["comparison"], action["value"],
+            len(action["key"]), len(action["value"]), C.byref(prval))
+        if action["flags"]:
+            getattr(self.lib, "rados_" + kind + "_op_set_flags")(operation, action["flags"])
+
+    def assert_vector(self, io, name, actions):
+        operation = self.lib.rados_create_read_op()
+        if not operation:
+            raise RuntimeError("native OMAP comparison allocation failed")
+        outputs, buffers = [], []
+        try:
+            for index, action in enumerate(actions):
+                self.append_cmp(operation, "read", index, action, outputs, buffers)
+            aggregate = self.lib.rados_read_op_operate(operation, io, name, 0)
+            return {"aggregate": aggregate, "prvals": [{"index": i, "prval": v.value} for i, v in outputs]}
+        finally:
+            self.lib.rados_release_read_op(operation)
 
     def write_vector(self, io, name, actions, mtime):
         operation = self.lib.rados_create_write_op()
         if not operation:
             raise RuntimeError("native OMAP write allocation failed")
-        buffers = []
+        buffers, outputs = [], []
         try:
-            for action in actions:
+            for index, action in enumerate(actions):
+                if action["op"] == "cmp":
+                    self.append_cmp(operation, "write", index, action, outputs, buffers)
+                    continue
                 if action["op"] == "set":
                     k, kl, kb = omap.pointers([key for key, _ in action["entries"]])
                     v, vl, vb = omap.pointers([value for _, value in action["entries"]])
@@ -217,7 +266,8 @@ class Native(omap.Native):
                 if action["flags"]:
                     self.lib.rados_write_op_set_flags(operation, action["flags"])
             stamp = xattr.Timespec(mtime["seconds"], mtime["nanos"])
-            return self.lib.rados_write_op_operate2(operation, io, name, C.byref(stamp), 0)
+            aggregate = self.lib.rados_write_op_operate2(operation, io, name, C.byref(stamp), RETURNVEC)
+            return aggregate, [{"index": i, "prval": v.value} for i, v in outputs]
         finally:
             self.lib.rados_release_write_op(operation)
 
@@ -287,7 +337,8 @@ def execute(native, io, metadata, request, mode, out, cli):
     result = {"schema_version": 1, "source_commit": SOURCE_COMMIT, "mode": mode,
               "fixture": {k: metadata[k] for k in ("pool", "pool_id", "object")},
               "scope": {"independent_native_c_api": True, "header_via_pinned_rados_cli": True,
-                        "raw_wire_payload_available": False, "native_write_per_op_results_available": False}}
+                        "raw_wire_payload_available": False, "native_write_per_op_results_available": False,
+                        "native_cmp_per_op_prval_available": True}}
     if mode == "cleanup":
         codes = []
         for name in check_ownership(omap.read_json(out / (OWNED + ".json")), metadata):
@@ -296,12 +347,17 @@ def execute(native, io, metadata, request, mode, out, cli):
         for entry in codes:
             native.check(entry["code"] if entry["code"] != -2 else 0)
         return result
-    if mode == "observe":
+    if mode in ("observe", "assert"):
         owned = check_ownership(omap.read_json(out / (OWNED + ".json")), metadata)
         if request["object"] not in owned:
             raise ValueError("observation is limited to owned OMAP write objects")
         result["object"] = request["object"].decode()
         result["state"] = native.full_state(io, request["object"], request["inventory_keys"], cli)
+        if mode == "assert":
+            result["vector"] = native.assert_vector(io, request["object"], request["operations"])
+            result["after"] = native.full_state(io, request["object"], request["inventory_keys"], cli)
+            if result["after"] != result["state"]:
+                raise AssertionError("native read-only OMAP comparison changed object state")
         return result
     if mode == "prepare":
         main = owned_name(metadata, b"main-")
@@ -341,7 +397,7 @@ def execute(native, io, metadata, request, mode, out, cli):
         result["object"] = mirror.decode()
         result["before"] = native.full_state(io, mirror, request["inventory_keys"], cli)
         created = True  # a write vector may create an absent mirror
-        result["aggregate"] = native.write_vector(io, mirror, request["operations"], request["mtime"])
+        result["aggregate"], result["prvals"] = native.write_vector(io, mirror, request["operations"], request["mtime"])
         result["after"] = native.full_state(io, mirror, request["inventory_keys"], cli)
         return result
     finally:
@@ -377,7 +433,7 @@ if __name__ == "__main__":
     parser.add_argument("root", type=Path)
     parser.add_argument("out", type=Path)
     modes = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("prepare", "observe", "compare", "cleanup"):
+    for mode in ("prepare", "observe", "assert", "compare", "cleanup"):
         modes.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     args = parser.parse_args()
     collect(args.root, args.out, args.mode)
