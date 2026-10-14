@@ -225,6 +225,16 @@ func FuzzReplyDecode(f *testing.F) {
 			data = readHex(".data")
 		}
 		f.Add(readHex(".front"), data, uint16(6), uint16(2))
+		if name == "reply-v6-enoent" {
+			// An aborted vector still carries the submitted operation codes.
+			// Keep all supported guards and mutations in the seed corpus so
+			// expanding the decoder cannot leave a read-only fuzz invariant.
+			for _, code := range []uint16{AssertVersion, CompareExtent, Write, WriteFull, Append, Truncate, Zero, Create, Delete} {
+				front := readHex(".front")
+				binary.LittleEndian.PutUint16(front[62:64], code)
+				f.Add(front, data, uint16(6), uint16(2))
+			}
+		}
 	}
 	f.Fuzz(func(t *testing.T, front, data []byte, version, compat uint16) {
 		// Arbitrary inputs must stay bounded before cloning or allocating ops.
@@ -238,7 +248,7 @@ func FuzzReplyDecode(f *testing.F) {
 		}
 		var combined []byte
 		for _, op := range r.Operations {
-			if op.Code != Read && op.Code != Stat || uint64(len(op.Data)) != uint64(op.PayloadLength) {
+			if !SupportedOperation(op.Code) || uint64(len(op.Data)) != uint64(op.PayloadLength) {
 				t.Fatal("accepted reply lost operation metadata")
 			}
 			combined = append(combined, op.Data...)
