@@ -117,8 +117,8 @@ func TestCephManagerStandbysIntegration(t *testing.T) {
 	dial := options.DialContext
 	var managerDials atomic.Uint32
 	options.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(address)
-		if port == "36800" || port == "36801" {
+		_, role, _ := testcluster.SplitPeer(address)
+		if role == "mgr.a" || role == "mgr.b" {
 			managerDials.Add(1)
 		}
 		return dial(ctx, network, address)

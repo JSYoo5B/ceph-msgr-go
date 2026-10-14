@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"net"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephCloseDuringManagerHandshakeIntegration(t *testing.T) {
@@ -32,8 +33,8 @@ func TestCephCloseDuringManagerHandshakeIntegration(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		_, port, _ := net.SplitHostPort(endpoint)
-		if port == "36800" || port == "36801" {
+		_, role, _ := testcluster.SplitPeer(endpoint)
+		if role == "mgr.a" || role == "mgr.b" {
 			stalled := &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{}), SignalBlocked: func() { blockOnce.Do(func() { close(blocked) }) }}
 			held := &managerCleanupConn{Conn: stalled, closing: make(chan struct{}), cleaned: make(chan struct{}), release: release}
 			connections <- held

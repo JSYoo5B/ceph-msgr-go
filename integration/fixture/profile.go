@@ -11,6 +11,7 @@ const profileDefaultImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf879
 
 // profile describes a development fixture, not product connection options.
 type profile struct {
+	monAddresses, fsid, peers                                        string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race string
 	expireTickets, idleSessions, authEpoch, shortTickets             string
 	modeRejection, connectionMode, mappedIPv6, osd                   string
@@ -126,15 +127,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	return p, nil
 }
 
-func (p profile) monitors() string {
-	if p.mappedIPv6 == "1" {
-		return "[::ffff:7f00:1]:33300,[::ffff:7f00:1]:33301,[::ffff:7f00:1]:33302"
-	}
-	if p.ipFamily == "6" {
-		return "[::1]:33300,[::1]:33301,[::1]:33302"
-	}
-	return "127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302"
-}
+func (p profile) monitors() string { return p.monAddresses }
 
 func (p profile) containerEnvironment() map[string]string {
 	return map[string]string{
@@ -162,7 +155,8 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_MONITORS":             p.monitors(),
 		"CEPH_MSGR_KEY_FILE":             filepath.Join(controlDir, "key"),
 		"CEPH_MSGR_IDENTITY":             "client.test",
-		"CEPH_MSGR_FSID":                 "80bbab73-69c1-4a0c-a746-4271357750b8",
+		"CEPH_MSGR_FSID":                 p.fsid,
+		"CEPH_MSGR_TEST_PEERS":           p.peers,
 		"CEPH_MSGR_CONTROL_DIR":          controlDir,
 		"CEPH_MSGR_TEST_SERVICE_CIPHER":  p.serviceCipher,
 		"CEPH_MSGR_TEST_MGR_COUNT":       p.mgrCount,

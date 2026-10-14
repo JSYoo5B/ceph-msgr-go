@@ -29,7 +29,7 @@ def unsigned(value, maximum, label, minimum=0):
     return value
 
 
-def mapped_endpoint(vector, port, label):
+def mapped_endpoint(vector, expected, label):
     addrs = object_value(vector, label).get("addrvec")
     if not isinstance(addrs, list) or len(addrs) != 1:
         raise ValueError(label + " must contain exactly one v2 address")
@@ -45,18 +45,21 @@ def mapped_endpoint(vector, port, label):
         ip = ipaddress.IPv6Address(host[1:-1])
     except ValueError:
         raise ValueError(label + " has an invalid IPv6 address") from None
-    if ip.ipv4_mapped != ipaddress.IPv4Address("127.0.0.1") or int(number) != port:
+    expected_host, _, expected_port = expected.rpartition(":")
+    if ip.ipv4_mapped is None or ip != ipaddress.IPv6Address(expected_host[1:-1]) or int(number) != int(expected_port):
         raise ValueError(label + " has the wrong mapped address or port")
     unsigned(addr.get("nonce"), (1 << 32) - 1, label + " nonce")
     return text
 
 
-def validate(status, mon, mgr, pg):
+def validate(status, mon, mgr, pg, peers=None, fsid=None):
+    peers = peers or {**{"mon."+name:"[::ffff:127.0.0.1]:"+str(port) for name,port in MON_PORTS.items()}, **{"mgr."+name:"[::ffff:127.0.0.1]:"+str(port) for name,port in MGR_PORTS.items()}}
+    fsid = fsid or FSID
     status = object_value(status, "status")
     mon = object_value(mon, "mon dump")
     mgr = object_value(mgr, "mgr dump")
     pg = object_value(pg, "pg stat")
-    if status.get("fsid") != FSID or mon.get("fsid") != FSID:
+    if status.get("fsid") != fsid or mon.get("fsid") != fsid:
         raise ValueError("status and mon dump must identify the fixture FSID")
     if unsigned(mon.get("min_mon_release"), 255, "min_mon_release") != 20:
         raise ValueError("mon dump must require Tentacle release 20")
@@ -69,12 +72,12 @@ def validate(status, mon, mgr, pg):
         name = entry.get("name")
         if not isinstance(name, str) or name not in MON_PORTS or name in mon_endpoints:
             raise ValueError("mon dump has unexpected or duplicate monitor names")
-        mon_endpoints[name] = mapped_endpoint(entry.get("public_addrs"), MON_PORTS[name], "monitor " + name)
+        mon_endpoints[name] = mapped_endpoint(entry.get("public_addrs"), peers["mon."+name], "monitor " + name)
     name = mgr.get("active_name")
     if mgr.get("available") is not True or not isinstance(name, str) or name not in MGR_PORTS:
         raise ValueError("mgr dump must identify an available fixture manager")
     gid = unsigned(mgr.get("active_gid"), (1 << 64) - 1, "active_gid", minimum=1)
-    mgr_endpoint = mapped_endpoint(mgr.get("active_addrs"), MGR_PORTS[name], "manager " + name)
+    mgr_endpoint = mapped_endpoint(mgr.get("active_addrs"), peers["mgr."+name], "manager " + name)
     standbys = mgr.get("standbys")
     if not isinstance(standbys, list) or len(standbys) != 1:
         raise ValueError("mgr dump must contain one standby")
@@ -88,7 +91,7 @@ def validate(status, mon, mgr, pg):
         raise ValueError("pg stat must contain boolean pg_ready")
     pg_summary = object_value(pg.get("pg_summary"), "pg_summary")
     unsigned(pg_summary.get("num_pgs"), (1 << 64) - 1, "num_pgs")
-    return {"fsid": FSID, "mon_endpoints": sorted(mon_endpoints.values()),
+    return {"fsid": fsid, "mon_endpoints": sorted(mon_endpoints.values()),
             "mgr_endpoint": mgr_endpoint, "mgr_name": name, "mgr_global_id": gid}
 
 
@@ -110,7 +113,8 @@ def main(argv):
     out = Path(argv[0])
     try:
         summary = validate(*(read_json(out / ("mapped-oracle-" + name + ".json"))
-                             for name in ("status", "mon", "mgr", "pg")))
+                             for name in ("status", "mon", "mgr", "pg")),
+                           peers=read_json(out / "peers.json"), fsid=(out / "fsid").read_text().strip())
         (out / "mapped-oracle-summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError) as error:
         print("Mapped-address oracle failed: " + str(error), file=sys.stderr)

@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephMapWaitIntegration(t *testing.T) {
@@ -22,8 +24,8 @@ func TestCephMapWaitIntegration(t *testing.T) {
 	dial := options.DialContext
 	var managerDials atomic.Uint32
 	options.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(address)
-		if port == "36800" || port == "36801" {
+		_, role, _ := testcluster.SplitPeer(address)
+		if role == "mgr.a" || role == "mgr.b" {
 			managerDials.Add(1)
 		}
 		return dial(ctx, network, address)
@@ -37,7 +39,7 @@ func TestCephMapWaitIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
+	t.Cleanup(func() { admin.Close() })
 	mon := nativeMonitorMapWait(t, ctx, c, control, "initial")
 	mgr := nativeManagerSnapshot(t, ctx, c, control, "initial").Manager
 	initial, err := c.WaitMgrMap(ctx, 0)
@@ -50,8 +52,8 @@ func TestCephMapWaitIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := admin.MonCommand(ctx, cmd); err != nil {
-			t.Fatal(prefix, err)
+		if result, err := admin.MonCommand(ctx, cmd); err != nil || result.Code != 0 {
+			t.Fatal(prefix, result.Code, err)
 		}
 	}
 	held, stopHeld := context.WithCancel(ctx)
@@ -73,13 +75,26 @@ func TestCephMapWaitIntegration(t *testing.T) {
 	}
 	awaitedMon := make(chan monResult, 1)
 	go func() { state, err := c.WaitMonMap(ctx, mon.MapEpoch); awaitedMon <- monResult{state, err} }()
-	host, _, err := net.SplitHostPort(mon.Endpoints[0])
+	host, _, err := testcluster.SplitPeer(mon.Endpoints[0])
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A nonexistent fourth MON is added only to this disposable fixture.
 	// Existing three MONs retain quorum; mutation commands are sent once.
 	command("mon add", map[string]any{"name": "map-wait-spare", "addr": "v2:" + net.JoinHostPort(host, "33320") + "/0"})
+	removeSubmitted := false
+	t.Cleanup(func() {
+		if removeSubmitted {
+			return
+		}
+		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stop()
+		payload, _ := json.Marshal(map[string]string{"prefix": "mon rm", "name": "map-wait-spare"})
+		result, err := admin.MonCommand(cleanup, cephmsgr.Command{JSON: payload})
+		if err != nil || result.Code != 0 {
+			t.Errorf("remove disposable spare MON: code=%d error=%v", result.Code, err)
+		}
+	})
 	var added cephmsgr.MonitorState
 	select {
 	case result := <-awaitedMon:
@@ -95,6 +110,8 @@ func TestCephMapWaitIntegration(t *testing.T) {
 	if c.Snapshot().Monitor.Members[0].Name == "caller-owned" {
 		t.Fatal("waited members alias client map")
 	}
+	// Mark submission before sending: an uncertain remove must not be replayed.
+	removeSubmitted = true
 	command("mon rm", map[string]any{"name": "map-wait-spare"})
 	removed, err := c.WaitMonMap(ctx, added.MapEpoch)
 	if err != nil || slices.ContainsFunc(removed.Members, func(m cephmsgr.MonitorMember) bool { return m.Name == "map-wait-spare" }) {

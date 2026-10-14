@@ -53,8 +53,8 @@ func testStreamCancellation(t *testing.T, mgr bool) {
 		if err != nil {
 			return nil, err
 		}
-		_, port, _ := net.SplitHostPort(endpoint)
-		isMgr := port == "36800" || port == "36801"
+		_, role, _ := testcluster.SplitPeer(endpoint)
+		isMgr := role == "mgr.a" || role == "mgr.b"
 		if isMgr == mgr {
 			targetDials.Add(1)
 			if wrapped.CompareAndSwap(false, true) {

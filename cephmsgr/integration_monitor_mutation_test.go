@@ -6,13 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"net"
 	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {
@@ -39,8 +40,8 @@ func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {
 	blocked := make(chan struct{})
 	var blockOnce sync.Once
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(endpoint)
-		if port == rejectedPort.Load().(string) {
+		_, role, _ := testcluster.SplitPeer(endpoint)
+		if role == rejectedPort.Load().(string) {
 			return nil, net.ErrClosed
 		}
 		conn, err := dial(ctx, network, endpoint)
@@ -62,8 +63,8 @@ func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {
 	old := c.mon
 	endpoint := old.RemoteAddr().String()
 	c.mu.Unlock()
-	_, port, _ := net.SplitHostPort(endpoint)
-	name := map[string]string{"33300": "a", "33301": "b", "33302": "c"}[port]
+	_, role, _ := testcluster.SplitPeer(endpoint)
+	name := map[string]string{"mon.a": "a", "mon.b": "b", "mon.c": "c"}[role]
 	mu.Lock()
 	stalled := connections[endpoint]
 	mu.Unlock()
@@ -111,7 +112,7 @@ func TestCephAppliedMonitorMutationIsNotReplayedIntegration(t *testing.T) {
 	}
 	// Restart the real daemon, then release the intentionally withheld receive.
 	// Exclude its endpoint so recovery must authenticate a different MON.
-	rejectedPort.Store(port)
+	rejectedPort.Store(role)
 	if err := testcluster.RestartMonitor(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), name); err != nil {
 		t.Fatal("restart the MON that applied the unanswered mutation", err)
 	}

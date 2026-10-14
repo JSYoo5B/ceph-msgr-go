@@ -10,7 +10,7 @@ import (
 )
 
 func stageAssets(project, out string, p profile) error {
-	files := []string{"integration/cluster.sh", "integration/host-cluster.sh", "integration/osd-fixture.sh", "integration/publish-ack.sh"}
+	files := []string{"integration/cluster.sh", "integration/osd-fixture.sh", "integration/publish-ack.sh", "integration/fixture/legacy.crush.txt"}
 	oracles, err := filepath.Glob(filepath.Join(project, "tools", "*_oracle.py"))
 	if err != nil {
 		return err
@@ -30,11 +30,7 @@ func stageAssets(project, out string, p profile) error {
 			return err
 		}
 	}
-	script := "#!/bin/sh\nset -eu\nexec /bin/sh /out/cluster.sh\n"
-	if p.runtime == "host" {
-		script = "#!/bin/sh\nset -eu\nexec /bin/sh /out/host-cluster.sh\n"
-	}
-	return os.WriteFile(filepath.Join(out, "provider-cluster.sh"), []byte(script), 0o700)
+	return nil
 }
 
 func buildTests(ctx context.Context, project, out, arch string, p profile) error {

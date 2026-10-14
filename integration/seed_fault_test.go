@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 // seedPathFault affects only this client's fixture MON-a TCP path. It leaves
@@ -55,8 +56,8 @@ func (f *seedPathFault) dialContext(ctx context.Context, network, endpoint strin
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	_, port, err := net.SplitHostPort(endpoint)
-	isSeed := err == nil && port == "33300"
+	_, role, err := testcluster.SplitPeer(endpoint)
+	isSeed := err == nil && role == "mon.a"
 	f.mu.Lock()
 	blocked := isSeed && f.blocked
 	if blocked {
@@ -155,6 +156,7 @@ func (ctx seedPathProbeContext) Err() error {
 }
 
 func TestSeedPathFaultBlocksLateDialAndClosesLatestOutsideLock(t *testing.T) {
+	t.Setenv("CEPH_MSGR_TEST_PEERS", `{"mon.a":"127.0.0.1:33300","mon.b":"127.0.0.1:33301"}`)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var fault *seedPathFault

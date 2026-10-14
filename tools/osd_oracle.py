@@ -81,12 +81,13 @@ def collect(root, output, pool, object_name):
             descriptor["size"] != 1 or descriptor["min_size"] != 1 or
             descriptor["pg_num"] != 1 or descriptor["pg_placement_num"] != 1 or
             {"hashpspool", "creating"} & set(descriptor.get("flags_names", "").split(",")) or
+            any("hashpspool" in p.get("flags_names", "").split(",") for p in topology["pools"]) or
             topology.get("pg_upmap") or topology.get("pg_upmap_items") or topology.get("pg_upmap_primaries") or
             any(b["alg"] != "straw" for b in crush["buckets"]) or
             crush.get("choose_args") or
             any(crush["tunables"].get(name) != value for name, value in legacy_tunables.items())):
         raise ValueError("Native topology does not match the explicit legacy OSD fixture")
-    if len(addresses) != 1 or addresses[0]["type"] != "v2" or addresses[0]["addr"] != "127.0.0.1:36900":
+    if len(addresses) != 1 or addresses[0]["type"] != "v2" or addresses[0]["addr"] != json.loads((output / "peers.json").read_bytes())["osd.0"]:
         raise ValueError("Unexpected native OSD CLIENT endpoint")
     endpoint = addresses[0]
     if type(endpoint["nonce"]) is not int or not 0 <= endpoint["nonce"] < 1 << 32:

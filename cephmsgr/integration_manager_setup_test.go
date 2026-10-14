@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 type commandWriteProbe struct {
@@ -57,8 +59,8 @@ func TestCephManagerSetupFailoverIntegration(t *testing.T) {
 	var stalled atomic.Bool
 	var writes atomic.Int32
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-		_, port, err := net.SplitHostPort(endpoint)
-		manager := err == nil && (port == "36800" || port == "36801")
+		_, role, err := testcluster.SplitPeer(endpoint)
+		manager := err == nil && (role == "mgr.a" || role == "mgr.b")
 		if manager && stalled.CompareAndSwap(false, true) {
 			close(started)
 			select {

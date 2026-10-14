@@ -3,11 +3,11 @@ package integration_test
 import (
 	"context"
 	"fmt"
-	"net"
 	"testing"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephLogRecoveryIntegration(t *testing.T) {
@@ -81,8 +81,8 @@ func TestCephLogRecoveryIntegration(t *testing.T) {
 		t.Logf("log stream survived renewal cycle=%d client-id=%d service-version=%d", cycle, state.GlobalID, last)
 		previous = state
 	}
-	_, port, err := net.SplitHostPort(previous.Monitor.Endpoint)
-	if err != nil || port != "33300" {
+	_, role, err := testcluster.SplitPeer(previous.Monitor.Endpoint)
+	if err != nil || role != "mon.a" {
 		t.Fatal("log test did not begin on sole MON a seed", previous.Monitor.Endpoint, err)
 	}
 	// This fault affects only this client's TCP path. Keep Ceph daemons and
@@ -93,8 +93,8 @@ func TestCephLogRecoveryIntegration(t *testing.T) {
 	}
 	recovered := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 		identity(s)
-		_, peerPort, err := net.SplitHostPort(s.Monitor.Endpoint)
-		return s.Monitor.Ready && err == nil && (peerPort == "33301" || peerPort == "33302")
+		_, peerRole, err := testcluster.SplitPeer(s.Monitor.Endpoint)
+		return s.Monitor.Ready && err == nil && (peerRole == "mon.b" || peerRole == "mon.c")
 	})
 	// The only configured seed remains locally unavailable until cleanup.
 	// This independent producer connects directly to the admitted learned MON.

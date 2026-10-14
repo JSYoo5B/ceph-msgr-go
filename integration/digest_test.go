@@ -52,8 +52,8 @@ func digestMute(health map[string]any, code string) bool {
 
 func digestFixtureMonitorName(t *testing.T, endpoint string) string {
 	t.Helper()
-	_, port, err := net.SplitHostPort(endpoint)
-	name := map[string]string{"33300": "a", "33301": "b", "33302": "c"}[port]
+	_, role, err := testcluster.SplitPeer(endpoint)
+	name := map[string]string{"mon.a": "a", "mon.b": "b", "mon.c": "c"}[role]
 	if err != nil || name == "" {
 		t.Fatal("digest fixture MON endpoint", endpoint, err)
 	}
@@ -101,8 +101,8 @@ func TestCephDigestIntegration(t *testing.T) {
 	dial := options.DialContext
 	var managerDials atomic.Uint32
 	options.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(address)
-		if port == "36800" || port == "36801" {
+		_, role, _ := testcluster.SplitPeer(address)
+		if role == "mgr.a" || role == "mgr.b" {
 			managerDials.Add(1)
 		}
 		return dial(ctx, network, address)

@@ -18,7 +18,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
 	containerexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
@@ -125,6 +124,7 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 	if err != nil {
 		return err
 	}
+	p = c.profile
 	proxy, err := prepareEvidence(ctx, c, out, p)
 	if err != nil {
 		return err
@@ -132,6 +132,9 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 	// The client package's final recovery test leaves MON a down. Preserve the
 	// public API -> client suite ordering within each disposable fixture.
 	for _, name := range []string{"api", "client"} {
+		if err := c.checkControl(); err != nil {
+			return err
+		}
 		fmt.Printf("Running Ceph test suite: %s\n", name)
 		args := []string{"-test.run", p.testRun, "-test.v", "-test.timeout", p.testTimeout}
 		if p.runtime == "host" {
@@ -152,6 +155,9 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 				return fmt.Errorf("%s container suite exit=%d: %w", name, code, errors.Join(err, errors.New("Ceph suite failed")))
 			}
 		}
+	}
+	if err := c.checkControl(); err != nil {
+		return err
 	}
 	return saveMetadata(out, p.diagnostics)
 }
@@ -192,6 +198,7 @@ func serve(ctx context.Context, project, out string, p profile) (result error) {
 	if err != nil {
 		return err
 	}
+	p = c.profile
 	if _, err := prepareEvidence(ctx, c, out, p); err != nil {
 		return err
 	}
@@ -205,6 +212,9 @@ func serve(ctx context.Context, project, out string, p profile) (result error) {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			if err := c.checkControl(); err != nil {
+				return err
+			}
 			if fileExists(filepath.Join(out, "provider.diagnostics")) {
 				if err := collectDiagnostics(c, out, p.diagnostics); err != nil {
 					return err
@@ -223,7 +233,7 @@ func serve(ctx context.Context, project, out string, p profile) (result error) {
 	}
 }
 
-func recordOwnership(c *ceph.Container, out string) error {
+func recordOwnership(c *fixtureCluster, out string) error {
 	if c == nil {
 		return nil
 	}
@@ -234,14 +244,30 @@ func recordOwnership(c *ceph.Container, out string) error {
 			return err
 		}
 	}
-	data, err := json.MarshalIndent(map[string]string{"container_id": containerID, "network": c.NetworkName()}, "", "  ")
+	owned := map[string]string{}
+	if c.Container != nil {
+		owned["messenger-oracles"] = c.GetContainerID()
+	}
+	for _, mon := range c.cluster.Monitors() {
+		owned["mon."+mon.DaemonName] = mon.GetContainerID()
+	}
+	for _, mgr := range c.cluster.Managers() {
+		owned["mgr."+mgr.DaemonName] = mgr.GetContainerID()
+	}
+	for _, osd := range c.cluster.OSDs() {
+		owned[fmt.Sprintf("osd.%d", osd.ID)] = osd.GetContainerID()
+	}
+	if control := c.cluster.ControlContainer(); control != nil {
+		owned["control"] = control.GetContainerID()
+	}
+	data, err := json.MarshalIndent(map[string]any{"container_id": containerID, "network": c.NetworkName(), "containers": owned}, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(filepath.Join(out, "fixture-ownership.json"), append(data, '\n'), 0o600)
 }
 
-func prepareEvidence(ctx context.Context, c *ceph.Container, out string, p profile) (string, error) {
+func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profile) (string, error) {
 	imageID, architecture, err := inspectImageMetadata(ctx, c)
 	if err != nil {
 		return "", err
@@ -253,8 +279,8 @@ func prepareEvidence(ctx context.Context, c *ceph.Container, out string, p profi
 	if err := os.WriteFile(filepath.Join(out, "daemon-version"), []byte(version+"\n"), 0o600); err != nil {
 		return "", err
 	}
-	manifest := map[string]any{"provider": "github.com/JSYoo5B/ceph-testcontainers-go", "provider_version": "v0.1.0", "image": p.image, "image_id": imageID, "architecture": architecture, "daemon_version": version,
-		"bootstrap": "msgr-protocol-profile", "topology": "3 MON and 0/2 MGR native processes in one owned container", "runtime": p.runtime,
+	manifest := map[string]any{"provider": "github.com/JSYoo5B/ceph-testcontainers-go", "provider_version": "v0.2.0", "image": p.image, "image_id": imageID, "architecture": architecture, "daemon_version": version,
+		"bootstrap": "public-api", "topology": "3 MON and 0/2 MGR owned daemon containers plus a native oracle client", "runtime": p.runtime, "fsid": p.fsid,
 		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

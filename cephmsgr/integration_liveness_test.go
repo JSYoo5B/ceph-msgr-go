@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"io"
 	"net"
 	"os"
@@ -15,6 +14,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephManagerReceiveStallIntegration(t *testing.T) {
@@ -37,8 +38,8 @@ func TestCephManagerReceiveStallIntegration(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		_, port, err := net.SplitHostPort(endpoint)
-		if err == nil && (port == "36800" || port == "36801") && wrapped.CompareAndSwap(false, true) {
+		_, role, err := testcluster.SplitPeer(endpoint)
+		if err == nil && (role == "mgr.a" || role == "mgr.b") && wrapped.CompareAndSwap(false, true) {
 			return &receiveStallConn{
 				LostReplyConn: &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{}), SignalBlocked: func() { close(blocked) }},
 				onWrite: func(n int) {

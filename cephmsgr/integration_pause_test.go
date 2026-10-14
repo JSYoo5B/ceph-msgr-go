@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"net"
 	"os"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephPausedManagerIntegration(t *testing.T) {
@@ -90,8 +91,8 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 	dial := options.DialContext
 	var blockReconnect atomic.Bool
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(endpoint)
-		if blockReconnect.Load() && (port == "33300" || port == "33301" || port == "33302") {
+		_, role, _ := testcluster.SplitPeer(endpoint)
+		if blockReconnect.Load() && (role == "mon.a" || role == "mon.b" || role == "mon.c") {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
@@ -108,8 +109,8 @@ func TestCephPausedMonitorIntegration(t *testing.T) {
 	c.mu.Lock()
 	old, oldManager := c.mon, c.mgr
 	c.mu.Unlock()
-	_, port, err := net.SplitHostPort(old.RemoteAddr().String())
-	name := map[string]string{"33300": "a", "33301": "b", "33302": "c"}[port]
+	_, role, err := testcluster.SplitPeer(old.RemoteAddr().String())
+	name := map[string]string{"mon.a": "a", "mon.b": "b", "mon.c": "c"}[role]
 	if err != nil || name == "" {
 		t.Fatal("unexpected fixture MON endpoint", old.RemoteAddr())
 	}

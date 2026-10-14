@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func testMappedAddressLifecycle(t *testing.T) {
@@ -19,11 +20,11 @@ func testMappedAddressLifecycle(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MGR_COUNT") != "2" {
 		t.Fatal("mapped lifecycle requires the two-MGR fixture")
 	}
-	const fsid = "80bbab73-69c1-4a0c-a746-4271357750b8"
+	fsid := os.Getenv("CEPH_MSGR_FSID")
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	options := integrationOptions(t)
-	options.Monitors = []string{"v2:[::ffff:7f00:1]:33300/0"}
+	options.Monitors = []string{"v2:" + testcluster.PeerEndpoint("mon.a") + "/0"}
 	options.DialContext = nil
 	options.ExpectedFSID = fsid
 	options.ConnectTimeout = 5 * time.Second
@@ -53,13 +54,12 @@ func testMappedAddressLifecycle(t *testing.T) {
 		if state.Closed || state.FSID != fsid || state.GlobalID != initial.GlobalID || state.AuthRejection != nil || state.Monitor.MapEpoch == 0 || state.Monitor.MinimumRelease < 20 || state.Manager.MapEpoch == 0 {
 			t.Fatal(stage, "lost authenticated cluster/client identity", state)
 		}
-		mappedOracleEndpoints(t, stage+" MON", state.Monitor.Endpoints, 33300, 33301, 33302)
+		mappedOracleEndpoints(t, stage+" MON", state.Monitor.Endpoints, "mon.a", "mon.b", "mon.c")
 		if state.Manager.Available {
-			port := map[string]uint16{"a": 36800, "b": 36801}[state.Manager.Name]
-			if port == 0 || state.Manager.GlobalID == 0 {
-				t.Fatal(stage, "has an unexpected active MGR identity", state)
+			if state.Manager.Name != "a" && state.Manager.Name != "b" || state.Manager.GlobalID == 0 {
+				t.Fatal(stage, "unexpected active MGR identity", state)
 			}
-			mappedOracleEndpoints(t, stage+" MGR", state.Manager.Endpoints, port)
+			mappedOracleEndpoints(t, stage+" MGR", state.Manager.Endpoints, "mgr."+state.Manager.Name)
 		}
 	}
 	checkMapped("initial", initial)
@@ -83,8 +83,8 @@ func testMappedAddressLifecycle(t *testing.T) {
 	}
 	// The only configured seed is MON a. Its local TCP path stays unavailable
 	// through Close, so b/c must be an authenticated learned AF_INET6 target.
-	_, port, err := net.SplitHostPort(previous.Monitor.Endpoint)
-	if err != nil || port != "33300" {
+	_, role, err := testcluster.SplitPeer(previous.Monitor.Endpoint)
+	if err != nil || role != "mon.a" {
 		t.Fatal("mapped learned-path oracle did not begin on the sole seed", previous.Monitor.Endpoint, err)
 	}
 	// Keep Ceph daemons and quorum running: this isolates client learned-peer
@@ -96,8 +96,8 @@ func testMappedAddressLifecycle(t *testing.T) {
 	}
 	recovered := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 		checkMapped("learned MON recovery", s)
-		_, peerPort, err := net.SplitHostPort(s.Monitor.Endpoint)
-		return s.Monitor.Ready && err == nil && (peerPort == "33301" || peerPort == "33302")
+		_, peerRole, err := testcluster.SplitPeer(s.Monitor.Endpoint)
+		return s.Monitor.Ready && err == nil && (peerRole == "mon.b" || peerRole == "mon.c")
 	})
 	if err := fixtureRecoveryRead(ctx, c, false); err != nil {
 		t.Fatal("status through learned mapped MON while sole seed path blocked", err)
@@ -109,7 +109,7 @@ func testMappedAddressLifecycle(t *testing.T) {
 	beforeTakeover := c.Snapshot()
 	checkMapped("before MGR takeover", beforeTakeover)
 	observerOptions := options
-	observerOptions.Monitors = []string{"v2:[::ffff:7f00:1]:33300/0", "v2:[::ffff:7f00:1]:33301/0", "v2:[::ffff:7f00:1]:33302/0"}
+	observerOptions.Monitors = strings.Split(os.Getenv("CEPH_MSGR_MONITORS"), ",")
 	observerOptions.DialContext = nil // Independent default dialer has no client fault.
 	observer, err := cephmsgr.Dial(ctx, observerOptions)
 	if err != nil {
@@ -169,8 +169,8 @@ func testMappedAddressLifecycle(t *testing.T) {
 	if !closed.Closed || closed.Monitor.Ready || closed.Manager.Ready || closed.FSID != fsid || closed.GlobalID != initial.GlobalID || closed.AuthRejection != nil || closed.Manager.GlobalID != final.Manager.GlobalID {
 		t.Fatal("closed mapped lifecycle lost metadata or retained readiness", closed)
 	}
-	mappedOracleEndpoints(t, "closed MON", closed.Monitor.Endpoints, 33300, 33301, 33302)
-	mappedOracleEndpoints(t, "closed MGR", closed.Manager.Endpoints, map[string]uint16{"a": 36800, "b": 36801}[closed.Manager.Name])
+	mappedOracleEndpoints(t, "closed MON", closed.Monitor.Endpoints, "mon.a", "mon.b", "mon.c")
+	mappedOracleEndpoints(t, "closed MGR", closed.Manager.Endpoints, "mgr."+closed.Manager.Name)
 	closedWait, stop := context.WithTimeout(context.Background(), 5*time.Second)
 	defer stop()
 	for _, wait := range []func(context.Context) error{c.WaitMonReady, c.WaitMgrReady} {

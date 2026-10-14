@@ -194,28 +194,16 @@ func TestProfileCRCAndStressDoNotOverrestrictAuthentication(t *testing.T) {
 }
 
 func TestProfileMonitors(t *testing.T) {
-	for _, tc := range []struct {
-		family, mapped, want string
-	}{
-		{"4", "0", "127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302"},
-		{"6", "0", "[::1]:33300,[::1]:33301,[::1]:33302"},
-		{"6", "1", "[::ffff:7f00:1]:33300,[::ffff:7f00:1]:33301,[::ffff:7f00:1]:33302"},
-	} {
-		p, err := loadProfile(func(name string) string {
-			switch name {
-			case "CEPH_MSGR_TEST_IP_FAMILY":
-				return tc.family
-			case "CEPH_MSGR_TEST_MAPPED_IPV6":
-				return tc.mapped
-			}
-			return ""
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := p.monitors(); got != tc.want {
-			t.Fatalf("monitor identity = %q, want %q", got, tc.want)
-		}
+	p, err := loadProfile(func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.monitors() != "" || p.fsid != "" {
+		t.Fatal("profile fabricated topology before native bootstrap")
+	}
+	p.monAddresses = "172.22.0.2:3300,[fd00::3]:3300"
+	if p.monitors() != p.monAddresses {
+		t.Fatal("native addresses were not retained")
 	}
 }
 
@@ -233,6 +221,9 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.monAddresses = "172.22.0.2:3300,172.22.0.3:3300,172.22.0.4:3300"
+	p.fsid = "94b09669-3ee8-4a10-af82-346cb674debb"
+	p.peers = `{"mon.a":"172.22.0.2:3300"}`
 	container := p.containerEnvironment()
 	wantContainer := map[string]string{
 		"CEPH_MSGR_TEST_KEY_TYPE": "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k",
@@ -251,9 +242,9 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		for _, proxy := range []string{"", "127.0.0.1:40123"} {
 			got := p.testEnvironment(controlDir, proxy)
 			want := map[string]string{
-				"CEPH_MSGR_MONITORS": "127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302",
+				"CEPH_MSGR_MONITORS": p.monAddresses,
 				"CEPH_MSGR_KEY_FILE": filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
-				"CEPH_MSGR_IDENTITY": "client.test", "CEPH_MSGR_FSID": "80bbab73-69c1-4a0c-a746-4271357750b8",
+				"CEPH_MSGR_TEST_PEERS": p.peers, "CEPH_MSGR_IDENTITY": "client.test", "CEPH_MSGR_FSID": p.fsid,
 				"CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k", "CEPH_MSGR_TEST_MGR_COUNT": "2",
 				"CEPH_MSGR_TEST_EXPIRE_TICKETS": "0", "CEPH_MSGR_TEST_IDLE_SESSIONS": "0",
 				"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",

@@ -87,8 +87,8 @@ func TestCephIdleSessionsIntegration(t *testing.T) {
 	var seed string
 	for _, candidate := range options.Monitors {
 		endpoint, _, err := seedAddress(candidate)
-		_, port, _ := net.SplitHostPort(endpoint)
-		if err == nil && port == "33300" {
+		_, role, _ := testcluster.SplitPeer(endpoint)
+		if err == nil && role == "mon.a" {
 			seed = candidate
 			break
 		}
@@ -100,9 +100,9 @@ func TestCephIdleSessionsIntegration(t *testing.T) {
 	dial := options.DialContext
 	var monDials, mgrDials, monReads, mgrReads atomic.Int32
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(endpoint)
+		_, role, _ := testcluster.SplitPeer(endpoint)
 		dials, reads := &monDials, &monReads
-		if port == "36800" || port == "36801" {
+		if role == "mgr.a" || role == "mgr.b" {
 			dials, reads = &mgrDials, &mgrReads
 		}
 		dials.Add(1)

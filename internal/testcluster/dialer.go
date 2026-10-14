@@ -31,8 +31,8 @@ func Dialer() func(context.Context, string, string) (net.Conn, error) {
 		}
 		host, port, err := net.SplitHostPort(endpoint)
 		ip := net.ParseIP(host)
-		if err != nil || ip == nil || !ip.IsLoopback() {
-			return nil, errors.New("fixture proxy requires a loopback endpoint")
+		if err != nil || ip == nil {
+			return nil, errors.New("fixture proxy requires a numeric endpoint")
 		}
 		n, err := strconv.ParseUint(port, 10, 16)
 		if err != nil {
@@ -57,8 +57,11 @@ func Dialer() func(context.Context, string, string) (net.Conn, error) {
 			return nil, err
 		}
 		var header [2]byte
-		binary.BigEndian.PutUint16(header[:], uint16(n))
-		if _, err = conn.Write(header[:]); err != nil {
+		if len(endpoint) > 256 {
+			return nil, errors.New("fixture endpoint exceeds relay limit")
+		}
+		binary.BigEndian.PutUint16(header[:], uint16(len(endpoint)))
+		if _, err = conn.Write(append(header[:], []byte(endpoint)...)); err != nil {
 			return nil, err
 		}
 		var status [1]byte

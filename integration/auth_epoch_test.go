@@ -25,8 +25,8 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 		conn, err := dial(ctx, network, endpoint)
 		if err == nil {
-			_, port, _ := net.SplitHostPort(endpoint)
-			if port == "36800" || port == "36801" {
+			_, role, _ := testcluster.SplitPeer(endpoint)
+			if role == "mgr.a" || role == "mgr.b" {
 				managerDials.Add(1)
 			}
 		}

@@ -22,7 +22,7 @@ func TestCephHostnameSeedIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	options := integrationOptions(t)
-	options.Monitors = []string{"v2:localhost:33300/0"}
+	options.Monitors = []string{"v2:" + net.JoinHostPort("fixture-mon-a", mustSeedPort(t, options.Monitors[0])) + "/0"}
 	options.DialContext = nil
 	c, err := cephmsgr.Dial(ctx, options)
 	if err != nil {
@@ -110,4 +110,14 @@ func TestCephGenericHostnameSeedIntegration(t *testing.T) {
 		t.Fatal("close client with generic peer addresses", err)
 	}
 	t.Logf("custom hostname seed authenticated %s; raw MON/MGR JSON and Close passed", state.Monitor.Endpoint)
+}
+
+func mustSeedPort(t *testing.T, seed string) string {
+	t.Helper()
+	endpoint, _, _ := strings.Cut(strings.TrimPrefix(seed, "v2:"), "/")
+	_, port, err := net.SplitHostPort(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
 }

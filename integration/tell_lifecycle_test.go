@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephTellRecoveryIntegration(t *testing.T) {
@@ -89,8 +89,8 @@ func TestCephTellRecoveryIntegration(t *testing.T) {
 		t.Logf("tell after renewal cycle=%d retained client-id=%d AUTH/MGR expiry=%s/%s", cycle, state.GlobalID, state.AuthTicket.Expires.Format(time.RFC3339Nano), state.MgrTicket.Expires.Format(time.RFC3339Nano))
 		previous = state
 	}
-	_, port, err := net.SplitHostPort(previous.Monitor.Endpoint)
-	if err != nil || port != "33300" {
+	_, role, err := testcluster.SplitPeer(previous.Monitor.Endpoint)
+	if err != nil || role != "mon.a" {
 		t.Fatal("tell recovery did not begin on the sole MON a seed", previous.Monitor.Endpoint, err)
 	}
 	// Interrupt only this client's seed connection. Native MON/MGR daemon
@@ -100,8 +100,8 @@ func TestCephTellRecoveryIntegration(t *testing.T) {
 	}
 	recovered := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 		checkIdentity(s)
-		_, peerPort, err := net.SplitHostPort(s.Monitor.Endpoint)
-		return s.Monitor.Ready && err == nil && (peerPort == "33301" || peerPort == "33302")
+		_, peerRole, err := testcluster.SplitPeer(s.Monitor.Endpoint)
+		return s.Monitor.Ready && err == nil && (peerRole == "mon.b" || peerRole == "mon.c")
 	})
 	checkTell("mon", c.MonTell)
 	if err := fixtureRecoveryRead(ctx, c, false); err != nil {
@@ -162,8 +162,8 @@ func TestCephTellRecoveryIntegration(t *testing.T) {
 	}
 	final := c.Snapshot()
 	checkIdentity(final)
-	_, mgrPort, err := net.SplitHostPort(final.Manager.Endpoint)
-	if !final.Monitor.Ready || !final.Manager.Ready || final.Manager.GlobalID != server.GlobalID || final.Manager.Name != server.Name || err != nil || mgrPort != map[string]string{"a": "36800", "b": "36801"}[server.Name] {
+	_, mgrRole, err := testcluster.SplitPeer(final.Manager.Endpoint)
+	if !final.Monitor.Ready || !final.Manager.Ready || final.Manager.GlobalID != server.GlobalID || final.Manager.Name != server.Name || err != nil || mgrRole != map[string]string{"a": "mgr.a", "b": "mgr.b"}[server.Name] {
 		t.Fatal("tell did not run on the confirmed replacement MGR", final, err)
 	}
 	if err := c.Close(); err != nil {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 type namedMonProbeKey struct{}
@@ -44,22 +45,22 @@ func TestCephNamedMonitorTellIntegration(t *testing.T) {
 		dial = (&net.Dialer{}).DialContext
 	}
 	var mu sync.Mutex
-	var namedPorts []string
+	var namedPeers []string
 	var blockB bool
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		_, port, err := net.SplitHostPort(endpoint)
+		_, role, err := testcluster.SplitPeer(endpoint)
 		if err != nil {
 			return nil, err
 		}
 		marked := ctx.Value(namedMonProbeKey{}) != nil
 		mu.Lock()
 		if marked {
-			namedPorts = append(namedPorts, port)
+			namedPeers = append(namedPeers, role)
 		}
-		blocked := marked && blockB && port == "33301"
+		blocked := marked && blockB && role == "mon.b"
 		mu.Unlock()
 		if blocked {
 			return nil, &net.OpError{Op: "dial", Net: network, Err: io.EOF}
@@ -75,7 +76,7 @@ func TestCephNamedMonitorTellIntegration(t *testing.T) {
 		t.Fatal("prepare primary MGR", err)
 	}
 	initial := c.Snapshot()
-	if !initial.Monitor.Ready || !initial.Manager.Ready || initial.FSID != oracle.Map.FSID || !strings.HasSuffix(initial.Monitor.Endpoint, ":33300") {
+	if !initial.Monitor.Ready || !initial.Manager.Ready || initial.FSID != oracle.Map.FSID || initial.Monitor.Endpoint != testcluster.PeerEndpoint("mon.a") {
 		t.Fatal("primary sessions did not begin at MON a", initial)
 	}
 	checkPrimary := func() {
@@ -104,10 +105,10 @@ func TestCephNamedMonitorTellIntegration(t *testing.T) {
 		checkPrimary()
 	}
 	mu.Lock()
-	ports := append([]string(nil), namedPorts...)
+	roles := append([]string(nil), namedPeers...)
 	mu.Unlock()
-	if strings.Join(ports, ",") != "33301,33302,33300" {
-		t.Fatal("named operations contacted the wrong MON", ports)
+	if strings.Join(roles, ",") != "mon.b,mon.c,mon.a" {
+		t.Fatal("named operations contacted the wrong MON", roles)
 	}
 	for _, name := range []string{"absent", "mon.b", "1", "*", "B"} {
 		_, err := c.MonTellTo(probe, name, command)
@@ -117,7 +118,7 @@ func TestCephNamedMonitorTellIntegration(t *testing.T) {
 		}
 	}
 	mu.Lock()
-	if len(namedPorts) != len(ports) {
+	if len(namedPeers) != len(roles) {
 		mu.Unlock()
 		t.Fatal("unknown name opened a target connection")
 	}
@@ -130,10 +131,10 @@ func TestCephNamedMonitorTellIntegration(t *testing.T) {
 	}
 	mu.Lock()
 	blockB = false
-	blockedPorts := append([]string(nil), namedPorts[len(ports):]...)
+	blockedPeers := append([]string(nil), namedPeers[len(roles):]...)
 	mu.Unlock()
-	if strings.Join(blockedPorts, ",") != "33301" {
-		t.Fatal("unavailable target fell back to another MON", blockedPorts)
+	if strings.Join(blockedPeers, ",") != "mon.b" {
+		t.Fatal("unavailable target fell back to another MON", blockedPeers)
 	}
 	checkPrimary()
 	result, err := c.MonTellTo(probe, "b", cephmsgr.Command{JSON: []byte(`{"prefix":"__ceph_msgr_missing_named_tell__","format":"json"}`)})

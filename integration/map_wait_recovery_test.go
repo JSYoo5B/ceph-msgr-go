@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephMapWaitRecoveryIntegration(t *testing.T) {
@@ -27,11 +28,11 @@ func TestCephMapWaitRecoveryIntegration(t *testing.T) {
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
 	t.Cleanup(unblock)
 	options.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(address)
-		if port == "36800" || port == "36801" {
+		_, role, _ := testcluster.SplitPeer(address)
+		if role == "mgr.a" || role == "mgr.b" {
 			managerDials.Add(1)
 		}
-		if armed.Load() && (port == "33301" || port == "33302") {
+		if armed.Load() && (role == "mon.b" || role == "mon.c") {
 			once.Do(func() { close(entered) })
 			select {
 			case <-release:

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"io"
 	"net"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephRepeatedMonitorRecoveryIntegration(t *testing.T) {
@@ -74,8 +75,8 @@ func TestCephRepeatedMonitorRecoveryIntegration(t *testing.T) {
 		}
 		endpoint := old.RemoteAddr().String()
 		c.mu.Unlock()
-		_, port, err := net.SplitHostPort(endpoint)
-		name := map[string]string{"33300": "a", "33301": "b", "33302": "c"}[port]
+		_, role, err := testcluster.SplitPeer(endpoint)
+		name := map[string]string{"mon.a": "a", "mon.b": "b", "mon.c": "c"}[role]
 		if err != nil || name == "" {
 			t.Errorf("unexpected fixture MON endpoint: %s", endpoint)
 			break

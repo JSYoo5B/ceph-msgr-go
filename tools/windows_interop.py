@@ -180,10 +180,11 @@ def finish_provider(provider, output, stop_fixture, timeout=30):
     return code
 
 
-def check_relay(proxy):
+def check_relay(proxy, endpoint):
     host, port = proxy_endpoint(proxy).rsplit(":", 1)
     with socket.create_connection((host, int(port)), timeout=5) as connection:
-        connection.sendall((33300).to_bytes(2, "big"))
+        encoded = endpoint.encode("ascii")
+        connection.sendall(len(encoded).to_bytes(2, "big") + encoded)
         if connection.recv(1) != b"\x00":
             raise RuntimeError("Windows relay did not reach the fixture MON listener")
 
@@ -214,8 +215,8 @@ def run(distro, diagnostics):
     revision = execute(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
     version = execute(["go", "version"], capture=True).stdout.strip()
     toolchain = re.search(r"\bgo([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[a-z]+[0-9]+)?\b", version)
-    if toolchain is None or tuple(map(int, toolchain.groups())) < (1, 25):
-        raise RuntimeError("the development fixture controller requires Go 1.25 or later")
+    if toolchain is None or tuple(map(int, toolchain.groups())) < (1, 26):
+        raise RuntimeError("the development fixture controller requires Go 1.26 or later")
     out = Path(tempfile.mkdtemp(prefix="ceph-msgr-windows-", dir=os.getenv("RUNNER_TEMP")))
     # --exec preserves argv: a default shell consumes Windows backslashes.
     wsl = ["wsl.exe", "--distribution", distro, "--user", "root", "--exec"]
@@ -257,15 +258,17 @@ def run(distro, diagnostics):
                                     cwd=project, env=env, stdout=provider_output, stderr=subprocess.STDOUT)
         attempted = True
         daemon_version, proxy = wait_for_provider(provider, out)
-        report["fixture_provider"] = "github.com/JSYoo5B/ceph-testcontainers-go@v0.1.0"
+        report["fixture_provider"] = "github.com/JSYoo5B/ceph-testcontainers-go@v0.2.0"
         report["daemon_version"] = daemon_version
         report["fixture_image"] = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
-        check_relay(proxy)
+        peers = json.loads((out / "peers.json").read_text())
+        manifest = json.loads((out / "fixture-manifest.json").read_text())
+        check_relay(proxy, peers["mon.a"])
         require_provider_running(provider)
         report["windows_relay_admission"] = True
-        env.update(CEPH_MSGR_MONITORS="127.0.0.1:33300,127.0.0.1:33301,127.0.0.1:33302",
+        env.update(CEPH_MSGR_MONITORS=",".join(peers["mon." + name] for name in ("a", "b", "c")),
                    CEPH_MSGR_KEY_FILE=str(out / "key"), CEPH_MSGR_IDENTITY="client.test",
-                   CEPH_MSGR_FSID="80bbab73-69c1-4a0c-a746-4271357750b8",
+                   CEPH_MSGR_FSID=manifest["fsid"], CEPH_MSGR_TEST_PEERS=json.dumps(peers),
                    CEPH_MSGR_CONTROL_DIR=str(out), CEPH_MSGR_TEST_PROXY=proxy,
                    CEPH_MSGR_TEST_SERVICE_CIPHER="aes256k", CEPH_MSGR_TEST_MGR_COUNT="2")
         for name, (package, tests) in SUITES.items():

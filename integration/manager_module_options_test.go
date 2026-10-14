@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephManagerModuleOptionsIntegration(t *testing.T) {
@@ -20,8 +21,8 @@ func TestCephManagerModuleOptionsIntegration(t *testing.T) {
 	dial := options.DialContext
 	var managerDials atomic.Uint32
 	options.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(address)
-		if port == "36800" || port == "36801" {
+		_, role, _ := testcluster.SplitPeer(address)
+		if role == "mgr.a" || role == "mgr.b" {
 			managerDials.Add(1)
 		}
 		return dial(ctx, network, address)
@@ -41,8 +42,8 @@ func TestCephManagerModuleOptionsIntegration(t *testing.T) {
 	}
 	initial := nativeManagerSnapshot(t, ctx, c, control, "initial")
 	opts := schema(initial)
-	port, present := opts["server_port"]
-	if !present || port.Name != "server_port" || port.DefaultValue != "9283" || len(opts) == 0 {
+	role, present := opts["server_port"]
+	if !present || role.Name != "server_port" || role.DefaultValue != "9283" || len(opts) == 0 {
 		t.Fatal("fixture prometheus option descriptors missing", opts)
 	}
 	owned := c.Snapshot()

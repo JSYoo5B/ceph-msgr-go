@@ -116,6 +116,8 @@ class MappedAddressOracleTest(unittest.TestCase):
     def test_gate_writes_only_the_validated_summary(self):
         with tempfile.TemporaryDirectory() as directory:
             out = Path(directory)
+            (out / "fsid").write_text(oracle.FSID)
+            (out / "peers.json").write_text(json.dumps({**{"mon."+name:"[::ffff:127.0.0.1]:"+str(port) for name,port in oracle.MON_PORTS.items()}, **{"mgr."+name:"[::ffff:127.0.0.1]:"+str(port) for name,port in oracle.MGR_PORTS.items()}}))
             values = metadata()
             values[2]["unknown_field"] = "PRIVATE_SENTINEL"
             self.write_metadata(out, values)
@@ -130,6 +132,8 @@ class MappedAddressOracleTest(unittest.TestCase):
         for content in (b'{"PRIVATE_SENTINEL":', b'\xff', b' ' * (oracle.MAX_JSON_BYTES + 1), None):
             with self.subTest(content_size=None if content is None else len(content)), tempfile.TemporaryDirectory() as directory:
                 out = Path(directory)
+                (out / "fsid").write_text(oracle.FSID)
+                (out / "peers.json").write_text(json.dumps({**{"mon."+name:"[::ffff:127.0.0.1]:"+str(port) for name,port in oracle.MON_PORTS.items()}, **{"mgr."+name:"[::ffff:127.0.0.1]:"+str(port) for name,port in oracle.MGR_PORTS.items()}}))
                 self.write_metadata(out, metadata())
                 path = out / "mapped-oracle-status.json"
                 if content is None:

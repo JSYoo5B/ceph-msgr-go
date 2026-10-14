@@ -5,13 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func fixtureBalancerMode(t *testing.T, c *Client, ctx context.Context) string {
@@ -56,8 +57,8 @@ func TestCephAppliedManagerMutationIsNotReplayedIntegration(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		_, port, _ := net.SplitHostPort(endpoint)
-		if port == "36800" || port == "36801" {
+		_, role, _ := testcluster.SplitPeer(endpoint)
+		if role == "mgr.a" || role == "mgr.b" {
 			if wrapped.CompareAndSwap(false, true) {
 				conn = &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{}), SignalBlocked: func() { blockOnce.Do(func() { close(blocked) }) }}
 			}

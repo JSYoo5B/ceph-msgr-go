@@ -65,8 +65,8 @@ func TestCephContextRecoveryIntegration(t *testing.T) {
 	var holdMonitor atomic.Bool
 	dial := options.DialContext
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(endpoint)
-		if holdMonitor.Load() && (port == "33301" || port == "33302") {
+		_, role, _ := testcluster.SplitPeer(endpoint)
+		if holdMonitor.Load() && (role == "mon.b" || role == "mon.c") {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
@@ -166,8 +166,8 @@ func TestCephContextRecoveryIntegration(t *testing.T) {
 	renewed := waitClientState(t, c, work, func(s cephmsgr.State) bool {
 		return s.Monitor.Ready && s.Manager.Ready && s.AuthTicket.Expires.After(initial.AuthTicket.Expires) && s.MgrTicket.Expires.After(initial.MgrTicket.Expires)
 	})
-	_, port, err := net.SplitHostPort(renewed.Monitor.Endpoint)
-	if err != nil || port != "33300" {
+	_, role, err := testcluster.SplitPeer(renewed.Monitor.Endpoint)
+	if err != nil || role != "mon.a" {
 		t.Fatal("context recovery did not begin on sole MON a seed", renewed.Monitor.Endpoint, err)
 	}
 	holdMonitor.Store(true)
@@ -189,8 +189,8 @@ func TestCephContextRecoveryIntegration(t *testing.T) {
 	}
 	holdMonitor.Store(false)
 	recovered := waitClientState(t, c, work, func(s cephmsgr.State) bool {
-		_, peerPort, err := net.SplitHostPort(s.Monitor.Endpoint)
-		return s.Monitor.Ready && s.Manager.Ready && err == nil && (peerPort == "33301" || peerPort == "33302")
+		_, peerRole, err := testcluster.SplitPeer(s.Monitor.Endpoint)
+		return s.Monitor.Ready && s.Manager.Ready && err == nil && (peerRole == "mon.b" || peerRole == "mon.c")
 	})
 
 	encoded, _ = json.Marshal(map[string]string{"prefix": "mgr fail", "who": recovered.Manager.Name})

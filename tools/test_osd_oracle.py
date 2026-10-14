@@ -18,6 +18,7 @@ class OSDOracleTests(unittest.TestCase):
         self.output = pathlib.Path(self.temporary.name) / "output"
         self.root.mkdir()
         self.output.mkdir()
+        (self.output / "peers.json").write_text(json.dumps({"osd.0":"127.0.0.1:36900"}))
         self.data = bytes(range(256)) * 41 + b"\x00\xfftail"
         (self.output / "osd-object.bin").write_bytes(self.data)
         (self.output / "osd-native-read.bin").write_bytes(self.data)
@@ -58,6 +59,9 @@ class OSDOracleTests(unittest.TestCase):
 
     def test_modern_placement_requirements_cannot_claim_legacy_fixture(self):
         candidates = []
+        value = copy.deepcopy(self.topology)
+        value["pools"].append({"pool": 1, "pool_name": ".mgr", "flags_names": "hashpspool"})
+        candidates.append((value, self.crush))
         value = copy.deepcopy(self.topology)
         value["pools"][0]["flags_names"] = "hashpspool"
         candidates.append((value, self.crush))

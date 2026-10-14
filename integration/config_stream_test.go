@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephConfigStreamIntegration(t *testing.T) {
@@ -38,8 +39,8 @@ func TestCephConfigStreamIntegration(t *testing.T) {
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 		conn, err := dial(ctx, network, endpoint)
 		if err == nil {
-			_, port, _ := net.SplitHostPort(endpoint)
-			if port == "36800" || port == "36801" {
+			_, role, _ := testcluster.SplitPeer(endpoint)
+			if role == "mgr.a" || role == "mgr.b" {
 				mgrDials.Add(1)
 			} else {
 				monDials.Add(1)
@@ -290,8 +291,8 @@ func TestCephConfigStreamIntegration(t *testing.T) {
 		observe(fmt.Sprintf("renewal-%d", cycle), map[string]string{configFixtureOption: "42", configFixtureRaw: raw})
 		previous = state
 	}
-	_, port, err := net.SplitHostPort(previous.Monitor.Endpoint)
-	if err != nil || port != "33300" {
+	_, role, err := testcluster.SplitPeer(previous.Monitor.Endpoint)
+	if err != nil || role != "mon.a" {
 		t.Fatal("config subject did not hold its sole MON a seed", previous.Monitor.Endpoint, err)
 	}
 	drainConfigUpdates(t, ctx, stream)
@@ -300,8 +301,8 @@ func TestCephConfigStreamIntegration(t *testing.T) {
 	}
 	recovered := waitClientState(t, c, ctx, func(state cephmsgr.State) bool {
 		checkIdentity(state)
-		_, port, err := net.SplitHostPort(state.Monitor.Endpoint)
-		return state.Monitor.Ready && err == nil && (port == "33301" || port == "33302")
+		_, role, err := testcluster.SplitPeer(state.Monitor.Endpoint)
+		return state.Monitor.Ready && err == nil && (role == "mon.b" || role == "mon.c")
 	})
 	observe("learned", map[string]string{configFixtureOption: "42", configFixtureRaw: raw})
 	remove("client.test", configFixtureRaw)

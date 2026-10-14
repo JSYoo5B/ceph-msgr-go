@@ -29,12 +29,8 @@ func TestCephTellDescriptionsIntegration(t *testing.T) {
 		t.Fatal("native Tell oracle manager", err)
 	}
 	state := c.Snapshot()
-	monName := ""
-	for i, endpoint := range []string{"33300", "33301", "33302"} {
-		if strings.HasSuffix(state.Monitor.Endpoint, ":"+endpoint) {
-			monName = []string{"a", "b", "c"}[i]
-		}
-	}
+	_, role, _ := testcluster.SplitPeer(state.Monitor.Endpoint)
+	monName := strings.TrimPrefix(role, "mon.")
 	if monName == "" || manager.Name != state.Manager.Name || manager.ID != state.Manager.GlobalID {
 		t.Fatal("native oracle target differs from admitted fixture target", state)
 	}

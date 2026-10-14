@@ -2,7 +2,6 @@ package integration_test
 
 import (
 	"encoding/json"
-	"net"
 	"os"
 	"slices"
 	"testing"
@@ -67,8 +66,8 @@ func TestCephSnapshotIntegration(t *testing.T) {
 	if renewed.GlobalID != initial.GlobalID || renewed.AuthRejection != nil || !renewed.Monitor.Ready {
 		t.Fatal("genuine ticket renewal lost authenticated identity", renewed)
 	}
-	_, port, _ := net.SplitHostPort(renewed.Monitor.Endpoint)
-	name := map[string]string{"33300": "a", "33301": "b", "33302": "c"}[port]
+	_, role, _ := testcluster.SplitPeer(renewed.Monitor.Endpoint)
+	name := map[string]string{"mon.a": "a", "mon.b": "b", "mon.c": "c"}[role]
 	if name == "" {
 		t.Fatal("unrecognized fixture MON", renewed.Monitor.Endpoint)
 	}

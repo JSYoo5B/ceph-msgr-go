@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 func TestCephManagerServicesIntegration(t *testing.T) {
@@ -20,8 +21,8 @@ func TestCephManagerServicesIntegration(t *testing.T) {
 	dial := options.DialContext
 	var managerDials atomic.Uint32
 	options.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		_, port, _ := net.SplitHostPort(address)
-		if port == "36800" || port == "36801" {
+		_, role, _ := testcluster.SplitPeer(address)
+		if role == "mgr.a" || role == "mgr.b" {
 			managerDials.Add(1)
 		}
 		return dial(ctx, network, address)
@@ -54,7 +55,7 @@ func TestCephManagerServicesIntegration(t *testing.T) {
 			t.Fatal(prefix, err)
 		}
 	}
-	// The two fixture daemons share a host. Localized ports let active and
+	// The two fixture daemons share a host. Localized roles let active and
 	// standby module listeners coexist and distinguish the promoted URI.
 	command("config set", map[string]any{"who": "mgr", "name": "mgr/prometheus/a/server_port", "value": "9280"})
 	command("config set", map[string]any{"who": "mgr", "name": "mgr/prometheus/b/server_port", "value": "9281"})
@@ -81,7 +82,7 @@ func TestCephManagerServicesIntegration(t *testing.T) {
 	enabled := nativeManagerSnapshot(t, ctx, c, control, "restored")
 	expectedPort := map[string]string{"a": ":9280/", "b": ":9281/"}
 	if !strings.HasSuffix(enabled.Manager.Services["prometheus"], expectedPort[enabled.Manager.Name]) {
-		t.Fatal("service URI did not use active daemon's localized port", enabled.Manager)
+		t.Fatal("service URI did not use active daemon's localized role", enabled.Manager)
 	}
 	owned := c.Snapshot()
 	owned.Manager.Services["prometheus"] = "caller-owned"
