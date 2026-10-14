@@ -199,10 +199,37 @@ receipt. Evidence and frozen source/profile/cleanup receipts are retained at
 `CEPH_MSGR_TEST_RUN='^TestCephOSDXattrOutcomeIntegration$'` and the CRC/AES
 three-BlueStore host profile above.
 
-Metadata-specific crash recovery, configured server name/value limits,
-permission refusals, namespace isolation, numeric CMP, omap/class/snapshot
-and broad pool/EC profiles remain incomplete. The P1 O2 milestone and final
-environment are not complete.
+## Mixed metadata after primary SIGKILL
+
+`TestCephOSDXattrCrashIntegration` passed its first native run in 20.05s on
+secure AES256K entity/service, IPv4, Linux arm64 container, three sparse-file
+BlueStore replicas/min2. A single APPEND+SET(binary)+RM(existing attribute)
+vector returned ONDISK. Independent native reads verified complete bytes,
+attribute inventory, user version and explicit nanosecond mtime before the
+actual selected primary `osd.1` was killed. The public fixture receipt proves
+exit 137 without OOM and identifies the owned container.
+
+The remaining two replicas form a degraded readable PG. They are not called
+clean. Native MON placement supplies a new explicit target, map epoch and
+endpoint/nonce; Go STAT/READ/GET/GETALL and the removed attribute's known
+ENODATA preserve the same state and higher local TID. Native snapshots before
+and after these reads have identical inventory, bytes, version and mtime.
+No recovery write replays the vector. Cleanup restarts the owned primary,
+waits for three-replica clean state, obtains fresh routing and restores only
+the test's attrs and original bytes/mtime.
+
+All ten owned containers and the network were independently absent afterward.
+Evidence and frozen execution-input/cleanup receipts are retained at
+`/tmp/ceph-xattr-crash-secure-20261015-01`. Snapshot comparisons occur inside
+the test; the ordinary native receipt file is replaced by later observations
+and cleanup, so it is not a persisted snapshot history. Reproduce with
+`CEPH_MSGR_TEST_RUN='^TestCephOSDXattrCrashIntegration$'` and the secure
+AES256K three-BlueStore container profile. This verifies daemon SIGKILL;
+host/device power loss and media durability remain unverified.
+
+Configured server name/value limits, permission refusals, namespace isolation,
+numeric CMP, omap/class/snapshot and broad pool/EC profiles remain incomplete.
+The P1 O2 milestone and final environment are not complete.
 
 Reproduce the Go/native profile with
 `CEPH_MSGR_TEST_RUN='^TestCephOSDXattrsIntegration$'` and the same fixture flags

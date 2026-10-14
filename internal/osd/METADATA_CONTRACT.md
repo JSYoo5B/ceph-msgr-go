@@ -210,7 +210,7 @@ fixture and explicit routing/native stat/read controls:
 | Atomicity and FAILOK | Compare-before-SET/RM success; false guard after an earlier staged mutation restores pre-state; FAILOK permits later writes and retains per-op failure | Go/native guard-before-write and FAILOK passed; staged SET-before-CMP remains rejected and native-only rollback evidence |
 | Mixed requests | Xattr GET+READ+STAT output boundaries; SET/RM+data mutation followed by independent fresh reads/stat2; staged xattr reads characterized separately | Fresh vectors and GET/GETALL/READ/STAT passed; one APPEND+SET actual native execution/readback passed; staged xattr reads pending |
 | Refusal and uncertainty | Permission rejection vs missing object/attr; sent append+xattr vector loses response, retains identity/outcome, fresh session never replays it | CRC/AES three-BlueStore APPEND+SET receive withholding/Close passed; exact local identity/unknown outcome and fresh native/Go no-replay observed; permission refusal pending |
-| Completion and recovery | SET/RM ONDISK then native inventory/version/mtime after primary SIGKILL on BlueStore; read-only result has no durability claim | Same bounded profile as O1 initially; unexecuted |
+| Completion and recovery | SET/RM ONDISK then native inventory/version/mtime after primary SIGKILL on BlueStore; read-only result has no durability claim | Secure AES256K three-BlueStore APPEND+SET+RM ONDISK followed by actual-primary SIGKILL and two-replica native/Go inventory/bytes/version/mtime passed; hardware power loss unverified |
 
 The subsequent native-only oracle passed binary/empty/prefixed inventory,
 compound SET/RM, 36 STRING comparison cases, rollback and FAILOK in one
@@ -223,7 +223,9 @@ acceptance subsequently passed binary/empty/non-UTF8 names, 36 read/write
 STRING comparison vectors, guard-before-SET/RM failures and FAILOK, missing
 attr/object identities and mixed GET/GETALL/READ/STAT. One sent APPEND+SET
 withheld-reply/Close test independently observed execution, unknown local
-completion and fresh-session no-replay. Metadata crash, server-configured
+completion and fresh-session no-replay. A separate secure AES256K
+three-BlueStore APPEND+SET+RM vector survived actual-primary SIGKILL with
+unchanged native/Go metadata on two replicas. Server-configured
 limits/permissions and namespace matrices remain pending;
 the OSD feature mask has not widened. Existing O1 results cannot be relabeled
 as this new matrix.
