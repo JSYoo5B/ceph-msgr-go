@@ -1,10 +1,11 @@
-# Native xattr oracle preparation
+# Bounded xattr codec and native interoperability
 
-This is an O2 prerequisite, not implemented Go xattr support. The product still
-rejects these opcodes. The independent test-only adapter invokes Tentacle's
-public librados C API; no Go wire encoder generates its native requests.
-Wire payload/header vectors, raw per-op replies and Go/native interoperability
-remain separate acceptance work in [METADATA_CONTRACT.md](../../internal/osd/METADATA_CONTRACT.md).
+The limited O2a implementation supports GET/GETALL, STRING CMP, SET and RM.
+This document retains the earlier native-only prerequisite separately from
+later fresh codec and Go/native daemon acceptance. The independent adapter
+invokes Tentacle's public librados C API; no Go wire encoder generates its
+native comparison requests. [METADATA_CONTRACT.md](../../internal/osd/METADATA_CONTRACT.md)
+records supported ordering/bounds and the broader incomplete O2 checklist.
 
 Reference source: Ceph 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`, image
@@ -99,3 +100,80 @@ All daemon lifecycle stays in the public fixture APIs. The C adapter and Ceph
 tools are development-only; the Go product's build/runtime/dependency graph
 remains CGO-free. The wrapper is independently written against public headers
 with LGPL-2.1 provenance and copies no native implementation.
+
+## Fresh codec and public client verification
+
+Five [fresh native encoder/decoder vectors](../../internal/osd/testdata/xattr-native-README.md)
+verify the five unions, binary/non-UTF8 names, empty SET, all six STRING IDs,
+native map output, GET normalization, signed +1 and constructed -125/-27/-2
+reply cases. Go matches the complete 592-byte request front/80-byte data and
+41-byte header, decodes the four replies and compares raw fields/output with
+the separate native decoder receipt. These constructed replies alone are not
+server-handled results or a test of the configured native limits.
+
+Public peer tests retain these native reply bytes and inject separately labeled
+faults. They check pre-TID invalid-name/flag/union/budget/staged-read refusal;
+positive results, FAILOK and known aggregate errors; and sent malformed output,
+reserved union bytes, over-budget data and ACK-only mixed mutations. Failures
+retain OutcomeUnknown, exact local submission and available raw metadata,
+terminate the session and never reconnect or replay the request. Internal
+native-seeded decode fuzzing passed 209,833 executions in a 20-second run;
+focused public/internal race tests and whole CGO0 Go/vet checks passed.
+
+## Go/native daemon acceptance
+
+The new `TestCephOSDXattrsIntegration` passed 43 subcases: 42 independent
+Go/native vectors plus one mixed GET/GETALL/READ/STAT case. It uses the existing
+caller-routed fixture head object; the native oracle reads that actual object,
+resets a separate mirror once, executes one native vector, compares state and
+removes only the mirror. Original bytes, prior attrs and nanosecond mtime are
+restored afterward; version increases are retained rather than fabricated away.
+
+The 36 read/write comparison vectors exercise all six operators with lesser,
+equal and greater binary operands. Actual Go replies preserve true per-op +1
+and false -125; the C API comparison result is aggregate/state evidence, not an
+invented raw callback. Additional vectors cover binary/empty/underscore/non-UTF8
+SET/RM, guard-before-SET/RM refusal, FAILOK commit, missing attribute versus
+missing object, raw list encoding and mixed output boundaries.
+
+| Profile | Observed result | Scope |
+| --- | --- | --- |
+| Secure AES256K entity/service, IPv4, Linux arm64 container, 3 BlueStore replicas/min2 | 43/43 in 16.94s | Focused Go/native xattr suite |
+| CRC AES256K entity/service, IPv4, Darwin arm64 host relay, single MemStore | 43/43 in 16.09s on first run | Focused xattr; ONDISK is not restart persistence |
+| CRC AES entity/service, IPv4, Darwin arm64 host relay, 3 BlueStore replicas/min2, race | 16/16 whole OSD top-level tests; xattr 43/43 in 17.31s | Local instrumented O1/xattr regression, not Linux CI proof |
+
+All fixtures use the pinned image/source and public v0.2.0 daemon APIs. The
+whole race suite has no FAIL/SKIP/DATA RACE. Its client package selector runs
+zero tests and is not counted as another pass. Owned containers/networks were
+independently absent afterward:10 for each three-BlueStore fixture,8 for the
+single-MemStore fixture. The product remains CGO0; CGO1 instruments host tests.
+
+First Go/native execution passed 37 cases then failed a test vector that put
+SET before CMP, an ordering intentionally rejected before TID/send. The test
+was corrected to CMP-before-SET/RM; product policy was not relaxed. Its first
+log `/tmp/ceph-xattr-go-first.log` remains separate. Successful evidence:
+
+- `/tmp/ceph-xattr-go-second.log` and `/tmp/ceph-xattr-go-second-diag`.
+- `/tmp/ceph-xattr-memstore-crc-aes256k-20261015/run.log`, source/profile,
+  ownership and cleanup receipts in that directory.
+- `/tmp/ceph-osd-race-whole-20261015-02/run.log`, execution-inputs and
+  cleanup-and-result receipts in that directory.
+
+The comparison adapter revision SHA256 is
+`dd49b11630915deac1f36f7160de3d91a2d8d181324fb11f227150c8144c291e`.
+The earlier a8a3 native-only proof remains a separate revision. Root CLI
+`encode-osd-xattrs` also successfully built, encoded and separately decoded
+the fresh vectors; its owned builder was removed. Sharing that SDK cache with
+`encode-osd-mutations` must preserve both wrapper source paths at configuration
+time; regenerating the original mutation target verifies its unchanged bytes.
+
+Metadata-specific response loss/Close/crash recovery, configured server
+name/value limits, permission refusals, namespace isolation, combined data and
+metadata mutation, numeric CMP, omap/class/snapshot and broad pool/EC profiles
+remain incomplete. O1 data-mutation recovery tests do not establish these
+metadata behaviors. The P1 O2 milestone and final environment are not complete.
+
+Reproduce the Go/native profile with
+`CEPH_MSGR_TEST_RUN='^TestCephOSDXattrsIntegration$'` and the same fixture flags
+above (or the secure AES256K/container profile). Whole OSD fixture selection
+includes both native-only preparation and the new Go interoperability test.

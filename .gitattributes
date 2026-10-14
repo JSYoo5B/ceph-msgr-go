@@ -3,3 +3,4 @@
 *.py text eol=lf
 # Native proof provenance hashes the exact checked-out source bytes.
 tools/osd_mutation_native_encoder.cc text eol=lf
+tools/osd_xattr_native_encoder.cc text eol=lf

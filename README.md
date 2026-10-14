@@ -231,6 +231,7 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 요청·응답 `pg_t` seed는 **raw object hash**이며 실제 PG 번호가 아니다.
 Replicated pool의 현재 객체에 대한 stat과 양의 길이 read, write/writefull,
 append, truncate, zero, create/delete와 version/extent 조건을 제공한다.
+제한 xattr GET/GETALL·STRING 비교·SET/RM도 같은 ordered vector에서 제공한다.
 Stat bytes는 size와 mtime의 wire 출력이며 filesystem API로 변환하지 않는다.
 Aggregate 서버 code와 operation별 result는 서로 다를 수 있다. 예를 들어
 존재하지 않는 객체는 aggregate -2와 실행되지 않은 stat의 result 0을 반환한다.
@@ -268,6 +269,31 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 ```
 
 입력 vector와 `Data`는 Request가 반환할 때까지 변경하지 않는다.
+
+Xattr operation은 extent 대신 `Xattr` union을 쓴다. 이름은 빈 문자열이나
+NUL을 허용하지 않으며 non-UTF8 bytes와 앞의 underscore를 그대로 보존한다.
+SET/CMP의 값은 `Data`이고 nil/빈 값은 제거가 아니다. STRING 비교는 caller의
+operand를 왼쪽에 두는 byte 비교다. `OSDGetXattr`·`OSDGetXattrs`는 양의 local
+`MaxOutputBytes`를 요구하며 서버 truncation/pagination을 요청하지 않는다.
+응답은 raw union 길이와 각 `Data`를 보존하고 GETALL map을 해석하지 않는다.
+
+```go
+reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch, Object: object,
+    Operations: []cephmsgr.OSDOperation{
+        {Code: cephmsgr.OSDCompareXattr,
+         Xattr: cephmsgr.OSDXattrInput{Name: "tag", Comparison: cephmsgr.OSDXattrEqual},
+         Data: expectedTag},
+        {Code: cephmsgr.OSDSetXattr,
+         Xattr: cephmsgr.OSDXattrInput{Name: "tag"}, Data: newTag},
+    },
+})
+```
+
+현재 SET/RM 뒤 같은 vector의 GET/GETALL/CMP는 staged-read 의미를 보장하지
+못해 송신 전에 거절한다. 비교를 먼저 놓는 순서가 지원된다. U64 비교,
+bulk SET/RESET, omap·class·snapshot은 별도 미구현 단계다.
+
 `ModificationTime`의 0은 그대로 전송하며 client 시각으로 대체하지 않는다.
 쓰기 성공은 서버의 `OSDReplyOnDisk`를 요구한다. 이것은 저장소가 보고한
 완료이며, MemStore 재시작 후 persistence나 전원 장애 내구성 보장이 아니다.
@@ -328,10 +354,12 @@ host/device 전원 장애 범위는 미완료다.
 frame과 일치했다. 실제 ProtocolV2 송신 세션이나 서버 처리의 증거는 아니다.
 재현 도구도 public Testcontainers의 소유 builder에서 실행한다.
 
-다음 xattr 단계의 [native C API oracle](integration/fixture/OSD_XATTR_VALIDATION.md)는
-CRC/AES/AES·IPv4·3-BlueStore host profile에서 binary·빈 값·SET/RM,
-36개 STRING 비교와 rollback·FAILOK를 검증했다. Go xattr opcode와 wire
-vector 비교는 미구현이다. 해당 fixture 시험은 이 선행 oracle만 실행한다.
+[제한 xattr 검증](integration/fixture/OSD_XATTR_VALIDATION.md)은 fresh native
+encoder·별도 decoder와 Go wire bytes를 비교했다. Secure/aes256k·IPv4
+3-BlueStore의 Go/native client 대조에서는 42개 vector와 mixed GET/READ/STAT,
+총 43개 하위 시험이 통과했다. Binary·빈 값·non-UTF8 이름, 여섯 STRING
+비교·양수 per-op 결과·알려진 거절·FAILOK와 원본 bytes/mtime 복구를 확인했다.
+이 결과를 xattr crash·응답 손실·모든 namespace/configuration으로 확대하지 않는다.
 
 응답 대기 중 OSD 연결을 `Close`하는 별도 실서버 시험은 CRC/AES/AES·IPv4
 3-BlueStore host relay에서 통과했다. Native read가 단일 append 실행을

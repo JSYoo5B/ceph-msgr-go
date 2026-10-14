@@ -27,7 +27,7 @@
 | --- | --- | --- |
 | 기반 | 기존 Messenger·CephX·MON/MGR·OSD stat/read·raw 지도 수신을 유지 | 아래 제한 범위에서 구현 및 실검증 기록 있음 |
 | P0 | 객체 mutation의 입력·완료 계약과 최소 쓰기·복합 요청: O0 → O1 | 11개 stat/read·mutation/guard opcode 구현; single BlueStore와 3-replica primary SIGKILL native 검증; O0/O1 전체 완료 아님 |
-| P1 | OSD metadata·snapshot·class call, 열거·이벤트·backoff, OSD/PG 명령과 replicated feature 범위 확대 | raw OSDMap 기반만 있음; 후속 opcode·이벤트·명령 미구현 |
+| P1 | OSD metadata·snapshot·class call, 열거·이벤트·backoff, OSD/PG 명령과 replicated feature 범위 확대 | 제한 xattr 5 opcode·fresh native wire/Go 비교 구현; 나머지 metadata·이벤트·명령 미구현 |
 | P2 | MDS 인증·지도·session → MDS 대상 명령 및 metadata·필수 이벤트 → 상태 복구·결합 I/O | MDS 제품 통신 미구현 |
 | P3 | EC·추가 feature/플랫폼 profile와 장시간 검증, 후속 제품 경로를 지원하는 최종 시험 환경 | 현재 일부 profile만 실검증 기록 있음; 전체 완료 아님 |
 
@@ -376,7 +376,7 @@ PG primary 재선택, 대상 이동·fan-out·wildcard 확장은 상위가 결�
 | --- | --- | --- | --- | --- |
 | O0 · P0 | mutation별 opcode/flag·request identity·per-op 출력·완료/내구성·event 계약 확정 | B1·B4·B6 | 80개 Tentacle opcode 목록과 O1 입력/identity/per-op/ONDISK 공개 계약 확정; mutation decoder vector 5개와 별도 fresh native encoder front/data/header vector 5개 검증(offline header 입력); map/reply·future backoff/watch 목록과 미지원 control TID 충돌·combined feature 거절 합성 시험 완료; event 실검증·후속 opcode 계약 미완료 ([객체 계약](internal/osd/CONTRACT.md), [event 계약](internal/osd/EVENT_CONTRACT.md)) | native encoder/decoder·서버 처리 경로로 입력/결과 계약 대조; O1 수용 시험 확정 |
 | O1 · P0 | replicated write/writefull·append·truncate·zero·create/delete와 조건·compound | O0 | 11개 stat/read·mutation/guard opcode 구현; single BlueStore 11개·3-replica/min_size 2 전체 선택 12개 시험 통과; 25 mutation/guard 사례(CMPEXT EOF normalized length·zero-extension 포함)·mixed read/stat 5개 vector·응답 손실·정상 재시작·SIGKILL 검증; 실제 primary SIGKILL 후 남은 2 replica native/Go bytes·version·mtime·재실행 금지 검증; 넓은 matrix/host·device 전원 장애 미완료; WRITEFULL/APPEND/offset 0 WRITE 뒤 offset 0 READ/CMPEXT full-payload 조합 거절 | native 쓰기·조건 실패·복합 원자성·readback·OSD 재시작·응답 손실·재실행 금지 |
-| O2 · P1 | xattr·omap·class call·allocation hint·snapshot context·rollback | O1; opcode별 O0 계약 보완 | 제품 미구현; [제한 xattr 계약](internal/osd/METADATA_CONTRACT.md)과 [native C API oracle](integration/fixture/OSD_XATTR_VALIDATION.md) 준비(binary·빈 값·36 STRING 비교·rollback·FAILOK 한 profile 통과); xattr wire/Go 비교 미완료 | native metadata·class 원본 bytes·snapshot 읽기/쓰기·rollback·오류/조건 비교 |
+| O2 · P1 | xattr·omap·class call·allocation hint·snapshot context·rollback | O1; opcode별 O0 계약 보완 | 부분 구현: [제한 xattr 5 opcode 계약](internal/osd/METADATA_CONTRACT.md), fresh encoder/별도 decoder 5 vector·Go bytes 대조, [실서버 Go/native 43 하위 사례](integration/fixture/OSD_XATTR_VALIDATION.md)(binary·빈 값·non-UTF8 이름·36 STRING 비교·guard-before-write·FAILOK·missing·mixed read) 통과; namespace·server limit/permission·xattr loss/crash와 나머지 O2 미완료 | native metadata·class 원본 bytes·snapshot 읽기/쓰기·rollback·오류/조건 비교 |
 | O3 · P1 | PG 열거·cursor, watch/notify·ack/오류, backoff/unblock | O0; 알림 송신 opcode는 O1/O2; 이벤트 공통 계약 | 미구현; raw OSDMap만 B5 | native 열거·알림 ack/timeout·제어 제한·큐 overflow·갱신/단절과 identity/수명 |
 | D1 · P1 | OSD·PG 대상 raw 명령·bulk 입력·reply 연관 | B4·B5; 해당 명령 encoding·권한 확정 | 미구현 | native 동일 대상의 raw/binary 출력·권한 오류·지도/대상 변경·취소 |
 | O4 · P1 | 일반 replicated 구성의 필수 OSD feature·encoding 범위 확대 | B4·B5 및 각 feature가 요구하는 O1–O3; 사용 계층 배치 입력 | 미구현; 제한 feature 거절은 B4 | HASHPSPOOL·CRUSH/upmap 등 profile별 native 대상/결과 및 미지원 거절 비교 |

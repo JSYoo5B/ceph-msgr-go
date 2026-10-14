@@ -56,7 +56,7 @@ func TestMutationInputBoundsAndUnsupportedFields(t *testing.T) {
 		{Code: AssertVersion}, {Code: AssertVersion, Version: 1, Length: 1},
 		{Code: CompareExtent, Length: 1}, {Code: Write, Version: 1},
 		{Code: Write, Flags: OpExclusive}, {Code: Create, Flags: 4},
-		{Code: 0x2301}, // xattr is an explicit later milestone.
+		{Code: SetXattr}, // Empty xattr names must not alias internal OI_ATTR.
 	} {
 		r := oracleRequest()
 		r.Operations = []Operation{op}

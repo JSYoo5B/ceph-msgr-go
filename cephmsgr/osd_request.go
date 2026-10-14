@@ -58,6 +58,8 @@ const (
 // Truncate uses Offset as the new size. Create/Delete/Stat have zero extents.
 // AssertVersion uses Version, with zero extents and no payload. Only Create
 // accepts ExclusiveCreate. Snapshot/truncate-sequence variants are unsupported.
+// Xattr is the active input union for Get/GetAll/Compare/Set/RemoveXattr;
+// their extent and Version fields are zero. Data holds the SET/CMP bytes.
 // Caller must not mutate the vector or Data until Request returns.
 type OSDOperation struct {
 	Code           OSDOpcode
@@ -65,6 +67,7 @@ type OSDOperation struct {
 	Offset, Length uint64
 	Data           []byte
 	Version        uint64
+	Xattr          OSDXattrInput
 }
 
 // OSDTime is Tentacle's raw utime_t. Zero preserves the server's zero-mtime
@@ -100,6 +103,7 @@ type OSDVersion struct {
 // compares bytes beyond EOF with zero without returning a payload.
 // Stat's bytes describe size and mtime; this layer does not convert them into a
 // filesystem-style object API. The caller can interpret the wire data.
+// Xattr keeps attribute lengths/comparison fields separate from extents.
 type OSDOperationResult struct {
 	Code                         OSDOpcode
 	Flags                        uint32
@@ -108,6 +112,7 @@ type OSDOperationResult struct {
 	PayloadLength                uint32
 	Result                       int32
 	Data                         []byte
+	Xattr                        OSDXattrResult
 }
 
 type OSDRedirect struct {
@@ -212,7 +217,7 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 		Locator:    osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
 		Operations: make([]osd.Operation, len(request.Operations))}
 	for i, op := range request.Operations {
-		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version}
+		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr)}
 	}
 	m, err := osd.EncodeRequest(input, o.features, c.options.MaxFrameSize)
 	if err != nil {
@@ -268,7 +273,7 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 			length = requested.Version
 		}
 		shortExtent := requested.Code == osd.Read || requested.Code == osd.CompareExtent
-		if op.Code != requested.Code && !normalizedZero || op.Offset != requested.Offset || op.Length > length || !shortExtent && op.Length != length || op.TruncateSize != 0 || op.TruncateSequence != 0 || op.Flags&(osd.OpExclusive|osd.OpFailOK) != requested.Flags || uint64(len(op.Data)) != uint64(op.PayloadLength) {
+		if op.Code != requested.Code && !normalizedZero || op.Flags&(osd.OpExclusive|osd.OpFailOK) != requested.Flags || uint64(len(op.Data)) != uint64(op.PayloadLength) {
 			return errors.New("OSD reply operation differs from request or payload metadata")
 		}
 		// Tentacle stops a vector on an ordinary failed operation. Only
@@ -280,6 +285,16 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 			return errors.New("OSD successful vector contains a failed ordinary operation")
 		}
 		success := !redirect && reply.Result >= 0 && op.Result >= 0
+		switch requested.Code {
+		case osd.GetXattr, osd.GetXattrs, osd.CompareXattr, osd.SetXattr, osd.RemoveXattr:
+			if err := osd.ValidateXattrReply(requested, op, success); err != nil {
+				return err
+			}
+			continue
+		}
+		if op.Offset != requested.Offset || op.Length > length || !shortExtent && op.Length != length || op.TruncateSize != 0 || op.TruncateSequence != 0 || op.Xattr != (osd.XattrResult{}) {
+			return errors.New("OSD reply extent differs from request")
+		}
 		switch requested.Code {
 		case osd.Read:
 			if uint64(op.PayloadLength) > requested.Length || success && uint64(op.PayloadLength) != op.Length {
@@ -321,7 +336,8 @@ func publicOSDReply(r osd.Reply) OSDReply {
 	for i, op := range r.Operations {
 		result.Operations[i] = OSDOperationResult{Code: OSDOpcode(op.Code), Flags: op.Flags,
 			Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence,
-			PayloadLength: op.PayloadLength, Result: op.Result, Data: op.Data}
+			PayloadLength: op.PayloadLength, Result: op.Result, Data: op.Data,
+			Xattr: OSDXattrResult{NameLength: op.Xattr.NameLength, ValueLength: op.Xattr.ValueLength, ComparisonOp: op.Xattr.ComparisonOp, ComparisonMode: op.Xattr.ComparisonMode}}
 	}
 	return result
 }

@@ -4,6 +4,10 @@
 separate construction, execution and provenance receipt. The files described
 below remain independently packed/native-decoder fixtures.
 
+[Fresh xattr encoder/decoder fixtures](xattr-native-README.md) independently
+construct five message triples and decode them in separate native objects;
+their provenance and live daemon scope are recorded separately.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from

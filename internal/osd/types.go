@@ -15,6 +15,11 @@ const (
 	Stat           uint16 = 0x1202
 	AssertVersion  uint16 = 0x1208
 	CompareExtent  uint16 = 0x1220
+	GetXattr       uint16 = 0x1301
+	GetXattrs      uint16 = 0x1302
+	CompareXattr   uint16 = 0x1303
+	SetXattr       uint16 = 0x2301
+	RemoveXattr    uint16 = 0x2304
 	Write          uint16 = 0x2201
 	WriteFull      uint16 = 0x2202
 	Truncate       uint16 = 0x2203
@@ -62,6 +67,7 @@ type PG struct {
 }
 
 type Operation struct {
+	Xattr          XattrInput
 	Data           []byte
 	Version        uint64
 	Code           uint16
@@ -88,6 +94,7 @@ type Version struct {
 }
 
 type OperationResult struct {
+	Xattr                        XattrResult
 	Code                         uint16
 	Flags                        uint32
 	Offset, Length, TruncateSize uint64

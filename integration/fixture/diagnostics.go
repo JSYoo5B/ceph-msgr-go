@@ -25,6 +25,7 @@ var metadataFiles = []string{
 	"manager-oracle.json", "digest-oracle.json", "monitor-oracle.json", "osd-oracle.json", "osd-map-native-oracle.json", "osd-map-manifest.json",
 	"osd-mutation-result.json", "osd-compound-result.json", "service-keys-history.jsonl", "manager-preparation.jsonl", "manager-native-auth.json", "osd-crash-state.json", "osd-map-epoch.json", "osd-map-applied.json", "osd-native-stat.txt", "osd-object.bin", "osd-native-read.bin",
 	"osd-xattr-native.json", "osd-xattr-native-command.json",
+	"osd-xattr-result.json", "osd-xattr-command.json",
 }
 
 func saveMetadata(out, diagnostics string) error {

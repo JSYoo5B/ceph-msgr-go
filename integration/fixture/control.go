@@ -275,6 +275,21 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-xattr")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || fields[1] != "compare" || c.profile.osd != "1" {
+			return errors.New("invalid xattr comparison oracle request")
+		}
+		if err = c.runXattrCommand(ctx, out, true); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-xattr-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "restart-mon")
 	if err != nil {
 		return err
@@ -452,23 +467,34 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 }
 
 func (c *fixtureCluster) runXattrOracle(ctx context.Context, out string) error {
+	return c.runXattrCommand(ctx, out, false)
+}
+
+func (c *fixtureCluster) runXattrCommand(ctx context.Context, out string, compare bool) error {
+	args := []string{"python3", "/out/osd_xattr_native.py"}
+	receipt := "osd-xattr-native-command.json"
+	if compare {
+		args = append(args, "--compare")
+		receipt = "osd-xattr-command.json"
+	}
+	args = append(args, "/tmp/ceph-msgr-test", "/out")
 	result, runErr := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{
-		Argv:    []string{"python3", "/out/osd_xattr_native.py", "/tmp/ceph-msgr-test", "/out"},
+		Argv:    args,
 		Timeout: 80 * time.Second, MaxStdout: 64 << 10, MaxStderr: 16 << 10,
-		Label: "fixed native xattr matrix",
+		Label: "native xattr oracle",
 	})
-	// This fixed oracle contains only disposable object data and ordinary
+	// This oracle contains only disposable object data and ordinary
 	// native API errors. Preserve its bounded first-failure traceback rather
 	// than discarding it with the generic control command's output.
 	data, err := json.Marshal(result)
 	if err == nil {
-		err = os.WriteFile(filepath.Join(out, "osd-xattr-native-command.json"), data, 0644)
+		err = os.WriteFile(filepath.Join(out, receipt), data, 0644)
 	}
 	if runErr != nil || err != nil {
 		return errors.Join(runErr, err)
 	}
 	if !result.Complete() || result.ExitCode != 0 {
-		return fmt.Errorf("native xattr matrix exit=%d complete=%t; see osd-xattr-native-command.json", result.ExitCode, result.Complete())
+		return fmt.Errorf("native xattr oracle exit=%d complete=%t; see %s", result.ExitCode, result.Complete(), receipt)
 	}
 	return nil
 }

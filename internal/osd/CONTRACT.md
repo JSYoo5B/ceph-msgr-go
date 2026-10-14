@@ -22,6 +22,11 @@ delivery, future backoff/watch wire requirements and their acceptance gaps.
 
 ## Bounded v6 vector
 
+The additional five xattr operations have their own active packed union and
+local output budgets in [METADATA_CONTRACT.md](METADATA_CONTRACT.md). Existing
+identity, per-op results, ONDISK and unknown-outcome rules also apply to them.
+Omap/class/snapshot/U64 comparison and bulk xattr variants remain unsupported.
+
 Negotiated OBJECTLOCATOR and PGID64 select the supported request/reply v6
 branch; NEW_OSDOP_ENCODING and NEW_OSDOPREPLY_ENCODING are rejected. The caller
 supplies pool, namespace, locator key, object, raw placement hash, target OSD,

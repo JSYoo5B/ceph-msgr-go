@@ -16,6 +16,9 @@ The fixed CLI matrix reads fixture pool/object identity and credentials, uses
 a separate '-native-xattr' object, records byte-exact before/after observations
 and removes that object. It never modifies the original fixture object. Binary
 values/names in JSON evidence use base64 without text normalization.
+Explicit --compare ROOT OUT instead reads bounded osd-xattr-input.json and
+observes the caller object without modifying it, executes one independently
+constructed native vector on a separate mirror, and writes osd-xattr-result.json.
 """
 import argparse
 import base64
@@ -31,6 +34,8 @@ MAX_VALUE = 1 << 20
 MAX_NAME = 4096
 MAX_ENTRIES = 1024
 MAX_OPERATIONS = 64
+MAX_INPUT = 1 << 20
+MAX_COMPARE_OUTPUT = 512 << 10
 COMPARE = {"eq": 1, "ne": 2, "gt": 3, "gte": 4, "lt": 5, "lte": 6}
 SOURCE_COMMIT = "7f793731f1b39eb4f465e960113d2363c311b964"
 
@@ -72,17 +77,29 @@ def string_comparison(operator, caller, stored):
 def validate_request(request):
     if not isinstance(request, dict):
         raise ValueError("xattr input must be an object")
+    allowed_fields = {"object", "namespace", "observe_actual", "compare", "exists", "kind",
+                      "operations", "attributes", "get_names", "baseline", "seconds", "nanos"}
+    if set(request) - allowed_fields:
+        raise ValueError("unknown xattr input fields")
+    for field in ("object", "namespace"):
+        if field in request:
+            identity(request[field], field, empty=field == "namespace")
     for field in ("observe_actual", "compare", "exists"):
         if field in request and type(request[field]) is not bool:
             raise ValueError("invalid boolean " + field)
     kind = request.get("kind", "read")
     if kind not in ("read", "write"):
         raise ValueError("invalid compound kind")
+    seconds, nanos = request.get("seconds", 0), request.get("nanos", 0)
+    if type(seconds) is not int or not 0 <= seconds < 1 << 32 or type(nanos) is not int or not 0 <= nanos < 10**9:
+        raise ValueError("invalid comparison vector mtime")
+    if kind == "read" and (seconds or nanos):
+        raise ValueError("read-only comparison vector requires zero mtime")
     actions = request.get("operations", [])
     attrs = request.get("attributes", [])
     names = request.get("get_names", [])
     if (not isinstance(actions, list) or len(actions) > MAX_OPERATIONS
-            or not isinstance(attrs, list) or len(attrs) > MAX_ENTRIES
+            or not isinstance(attrs, list) or len(attrs) >= MAX_OPERATIONS
             or not isinstance(names, list) or len(names) > MAX_ENTRIES):
         raise ValueError("oracle vector or inventory exceeds bound")
     decoded = []
@@ -112,7 +129,11 @@ def validate_request(request):
         if set(action) - allowed:
             raise ValueError("unknown xattr operation fields")
         decoded.append(result)
-    attributes = [(name_bytes(a["name"]), binary(a["value"])) for a in attrs]
+    attributes = []
+    for attribute in attrs:
+        if not isinstance(attribute, dict) or set(attribute) != {"name", "value"}:
+            raise ValueError("invalid baseline xattr fields")
+        attributes.append((name_bytes(attribute["name"]), binary(attribute["value"])))
     if len({name for name, _ in attributes}) != len(attributes):
         raise ValueError("duplicate baseline xattr name")
     if request.get("compare") and not decoded:
@@ -122,10 +143,42 @@ def validate_request(request):
     baseline = binary(request.get("baseline", ""))
     if len(baseline) + sum(len(n) + len(v) for n, v in attributes) > MAX_VALUE:
         raise ValueError("baseline exceeds aggregate oracle bound")
-    if sum(len(a.get("name", b"")) + len(a.get("value", b"")) for a in decoded) > MAX_VALUE:
+    if (len(baseline) + sum(len(n) + len(v) for n, v in attributes)
+            + sum(len(a.get("name", b"")) + len(a.get("value", b"")) for a in decoded)
+            + sum(len(name_bytes(n)) for n in names) > MAX_INPUT):
         raise ValueError("vector exceeds aggregate oracle bound")
     return dict(request, kind=kind, operations=decoded, attributes=attributes,
-                get_names=[name_bytes(n) for n in names], baseline=baseline)
+                get_names=[name_bytes(n) for n in names], baseline=baseline, seconds=seconds, nanos=nanos)
+
+
+def identity(value, label, empty=False):
+    if not isinstance(value, str) or "\0" in value or not empty and not value:
+        raise ValueError("invalid " + label + " identity")
+    encoded = value.encode("utf-8")
+    if len(encoded) > MAX_NAME:
+        raise ValueError(label + " identity exceeds oracle bound")
+    return encoded
+
+
+def read_json_bounded(path):
+    with path.open("rb") as file:
+        data = file.read(MAX_INPUT + 1)
+    if len(data) > MAX_INPUT:
+        raise ValueError("xattr JSON input exceeds 1 MiB bound")
+    return json.loads(data)
+
+
+def publish_compare_result(out, result):
+    data = bytearray()
+    for chunk in json.JSONEncoder().iterencode(result):
+        encoded = chunk.encode("utf-8")
+        if len(data) + len(encoded) + 1 > MAX_COMPARE_OUTPUT:
+            raise ValueError("xattr JSON result exceeds 512 KiB bound")
+        data.extend(encoded)
+    data.extend(b"\n")
+    temporary = out / "osd-xattr-result.tmp"
+    temporary.write_bytes(data)
+    os.replace(temporary, out / "osd-xattr-result.json")
 
 
 class Native:
@@ -138,6 +191,7 @@ class Native:
             "conf_read_file": ([p, char], i), "conf_set": ([p, char, char], i),
             "connect": ([p], i), "shutdown": ([p], None),
             "ioctx_create": ([p, char, C.POINTER(p)], i), "ioctx_destroy": ([p], None),
+            "ioctx_set_namespace": ([p, char], None),
             "remove": ([p, char], i), "get_last_version": ([p], u64),
             "stat2": ([p, char, C.POINTER(u64), C.POINTER(Timespec)], i),
             "read": ([p, char, p, s, u64], i), "getxattr": ([p, char, char, p, s], i),
@@ -194,7 +248,8 @@ class Native:
             raise ValueError("invalid native vector kind or count")
         for action in actions:
             code = action["op"]
-            if code not in ("cmp", "set", "remove", "list") or action["flags"] not in (0, 2):
+            if (code not in ("cmp", "set", "remove", "list")
+                    or type(action["flags"]) is not int or action["flags"] not in (0, 2)):
                 raise ValueError("unsupported native operation or flag")
             if kind == "read" and code in ("set", "remove") or kind == "write" and code == "list":
                 raise ValueError("operation cannot be expressed by this C compound API")
@@ -225,7 +280,7 @@ class Native:
                 getattr(self.lib, "rados_" + kind + "_op_set_flags")(operation, action["flags"])
         return outputs, buffers
 
-    def vector(self, io, object_name, kind, actions):
+    def vector(self, io, object_name, kind, actions, mtime=None):
         operation = getattr(self.lib, "rados_create_" + kind + "_op")()
         if not operation:
             raise RuntimeError("native operation allocation failed")
@@ -235,7 +290,8 @@ class Native:
             if kind == "read":
                 code = self.lib.rados_read_op_operate(operation, io, object_name, 0)
             else:
-                code = self.lib.rados_write_op_operate2(operation, io, object_name, None, 0)
+                code = self.lib.rados_write_op_operate2(operation, io, object_name,
+                                                      C.byref(mtime) if mtime is not None else None, 0)
             listed = []
             for index, iterator, result in outputs:
                 listed.append({"index": index, "code": result.value,
@@ -473,16 +529,101 @@ def collect(root, out):
         lib.rados_shutdown(cluster)
 
 
+def comparison_vector(native, io, metadata, request):
+    """Only the disposable native mirror is mutated; the actual object is read."""
+    original = identity(request.get("object", metadata["object"]), "object")
+    namespace = request.get("namespace", "")
+    native.lib.rados_ioctx_set_namespace(io, identity(namespace, "namespace", empty=True))
+    mirror = original + b"-native-xattr-compare"
+    result = {"schema_version": 1, "source_commit": SOURCE_COMMIT,
+              "fixture": {key: metadata[key] for key in ("pool", "pool_id", "object")},
+              "object": original.decode("utf-8"), "namespace": namespace,
+              "mirror_object": mirror.decode("utf-8"),
+              "scope": {"raw_cmp_per_op_result_available": False,
+                        "raw_set_remove_per_op_result_available": False,
+                        "single_get_compound_available": False,
+                        "positive_cmp_true_result": "1 (pinned server source, not exposed by C API)"}}
+    if request.get("observe_actual", True):
+        result["actual"] = native.snapshot(io, original, request["get_names"])
+    if not request.get("compare", False):
+        result["cleanup"] = {"mirror_touched": False, "object_removed": False, "code": None}
+        return result
+    removed = native.lib.rados_remove(io, mirror)
+    if removed != -2:
+        native.check(removed)
+    try:
+        if request.get("exists", True):
+            seed = native.lib.rados_create_write_op()
+            if not seed:
+                raise RuntimeError("native operation allocation failed")
+            try:
+                baseline = request["baseline"]
+                buffer = C.create_string_buffer(baseline, len(baseline) + 1)
+                native.lib.rados_write_op_write_full(seed, buffer, len(baseline))
+                actions = [{"op": "set", "name": n, "value": v, "flags": 0}
+                           for n, v in request["attributes"]]
+                _, buffers = native.append(seed, "write", actions)
+                seed_time = Timespec(1700000000, 123456789)
+                native.check(native.lib.rados_write_op_operate2(seed, io, mirror, C.byref(seed_time), 0))
+            finally:
+                native.lib.rados_release_write_op(seed)
+        result["before"] = native.snapshot(io, mirror, request["get_names"])
+        mtime = Timespec(request["seconds"], request["nanos"]) if request["kind"] == "write" else None
+        result["vector"] = native.vector(io, mirror, request["kind"], request["operations"], mtime=mtime)
+        result["after"] = native.snapshot(io, mirror, request["get_names"])
+        return result
+    finally:
+        code = native.lib.rados_remove(io, mirror)
+        result["cleanup"] = {"mirror_touched": True, "object_removed": code in (0, -2), "code": code}
+        if code not in (0, -2) and sys.exc_info()[0] is None:
+            native.check(code)
+
+
+def collect_comparison(root, out):
+    # Parse every caller-controlled field, including metadata defaults, before
+    # loading librados or admitting any native request/mirror reset.
+    request = validate_request(read_json_bounded(out / "osd-xattr-input.json"))
+    metadata = read_json_bounded(out / "osd-oracle.json")
+    identity(metadata["pool"], "pool")
+    identity(request.get("object", metadata["object"]), "object")
+    if type(metadata["pool_id"]) is not int or not 0 <= metadata["pool_id"] < 1 << 63:
+        raise ValueError("invalid fixture pool identity")
+    with (out / "daemon-version").open("rb") as version_file:
+        daemon_version = version_file.read(513).decode("utf-8").strip()
+    if len(daemon_version) > 512 or "20.2.4" not in daemon_version or SOURCE_COMMIT not in daemon_version:
+        raise ValueError("native xattr fixture does not identify the pinned Tentacle source")
+    native, cluster, io = Native(), C.c_void_p(), C.c_void_p()
+    lib = native.lib
+    native.check(lib.rados_create2(C.byref(cluster), b"ceph", b"client.test", 0))
+    try:
+        native.check(lib.rados_conf_read_file(cluster, os.fsencode(root / "ceph.conf")))
+        native.check(lib.rados_conf_set(cluster, b"keyring", os.fsencode(root / "keyring")))
+        native.check(lib.rados_connect(cluster))
+        native.check(lib.rados_ioctx_create(cluster, identity(metadata["pool"], "pool"), C.byref(io)))
+        try:
+            result = comparison_vector(native, io, metadata, request)
+            result["fixture_daemon_version"] = daemon_version
+            publish_compare_result(out, result)
+        finally:
+            lib.rados_ioctx_destroy(io)
+    finally:
+        lib.rados_shutdown(cluster)
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, nargs="?")
     parser.add_argument("out", type=Path, nargs="?")
-    parser.add_argument("--selfcheck", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--selfcheck", action="store_true")
+    mode.add_argument("--compare", action="store_true")
     args = parser.parse_args()
     if args.selfcheck:
         print(json.dumps(selfcheck(Native())))
     elif args.root is not None and args.out is not None:
-        collect(args.root, args.out)
+        if args.compare:
+            collect_comparison(args.root, args.out)
+        else:
+            collect(args.root, args.out)
     else:
         parser.error("provide fixture root/out, or --selfcheck")

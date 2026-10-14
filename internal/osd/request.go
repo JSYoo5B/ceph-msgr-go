@@ -24,8 +24,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	}
 	// Include all fixed fields and length prefixes before allocating the front.
 	const fixed = 41 + 4 + 4 + 4 + 8 + 12 + 6 + 8 + 4 + 4 + 4 + 8 + 17 + 4 + 2 + 8 + 8 + 4 + 4 + 8 + 6 + 21
-	if uint64(fixed)+uint64(len(r.Locator.Key))+uint64(len(r.Locator.Namespace))+uint64(len(r.Object))+uint64(len(r.Operations))*opWireSize > uint64(limit) {
-		return msgr.MessageData{}, wire.ErrLimit
+	frontBytes, err := boundedBytes(limit, fixed, uint64(len(r.Locator.Key)), uint64(len(r.Locator.Namespace)), uint64(len(r.Object)), uint64(len(r.Operations))*opWireSize)
+	if err != nil {
+		return msgr.MessageData{}, err
 	}
 	flags, dataBytes, err := ValidateOperations(r.Operations, limit)
 	if err != nil {
@@ -34,20 +35,27 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	if r.MTimeNanoseconds >= 1_000_000_000 || flags&FlagWrite == 0 && (r.MTimeSeconds != 0 || r.MTimeNanoseconds != 0) {
 		return msgr.MessageData{}, ErrRequest
 	}
-	if uint64(fixed)+uint64(len(r.Locator.Key))+uint64(len(r.Locator.Namespace))+uint64(len(r.Object))+uint64(len(r.Operations))*opWireSize+dataBytes > uint64(limit) {
-		return msgr.MessageData{}, wire.ErrLimit
+	if _, err := boundedBytes(limit, frontBytes, dataBytes); err != nil {
+		return msgr.MessageData{}, err
 	}
-	replyBudget := uint64(190) + uint64(len(r.Object)) + uint64(len(r.Operations))*(opWireSize+4)
+	replyBudget, err := boundedBytes(limit, 190, uint64(len(r.Object)), uint64(len(r.Operations))*(opWireSize+4))
+	if err != nil {
+		return msgr.MessageData{}, err
+	}
 	for _, op := range r.Operations {
-		if op.Code == Read {
-			replyBudget += op.Length
+		var outputBytes uint64
+		switch op.Code {
+		case Read:
+			outputBytes = op.Length
+		case Stat:
+			outputBytes = 16
+		case GetXattr, GetXattrs:
+			outputBytes = uint64(op.Xattr.MaxOutputBytes)
 		}
-		if op.Code == Stat {
-			replyBudget += 16
+		replyBudget, err = boundedBytes(limit, replyBudget, outputBytes)
+		if err != nil {
+			return msgr.MessageData{}, err
 		}
-	}
-	if replyBudget > uint64(limit) {
-		return msgr.MessageData{}, wire.ErrLimit
 	}
 	e := wire.Encoder{}
 	e.U32(r.ClientInc)
@@ -64,15 +72,21 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	for _, op := range r.Operations {
 		e.U16(op.Code)
 		e.U32(op.Flags)
-		e.U64(op.Offset)
-		if op.Code == AssertVersion {
-			e.U64(op.Version)
+		payloadBytes := uint64(len(op.Data))
+		if IsXattrOperation(op.Code) {
+			encodeXattrUnion(&e, op)
+			payloadBytes += uint64(len(op.Xattr.Name))
 		} else {
-			e.U64(op.Length)
+			e.U64(op.Offset)
+			if op.Code == AssertVersion {
+				e.U64(op.Version)
+			} else {
+				e.U64(op.Length)
+			}
+			e.U64(0) // truncate_size.
+			e.U32(0) // truncate_seq.
 		}
-		e.U64(0) // truncate_size.
-		e.U32(0) // truncate_seq.
-		e.U32(uint32(len(op.Data)))
+		e.U32(uint32(payloadBytes))
 	}
 	e.U64(NoSnap)
 	e.U64(0) // snap sequence.
@@ -87,6 +101,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	e.Struct(2, 2, identity.Data)
 	data := make([]byte, 0, int(dataBytes))
 	for _, op := range r.Operations {
+		if IsXattrOperation(op.Code) {
+			data = append(data, op.Xattr.Name...)
+		}
 		data = append(data, op.Data...)
 	}
 	return msgr.MessageData{Data: data, Type: RequestMessage, Version: 6, CompatVersion: 3, Priority: 127, Front: e.Data}, nil

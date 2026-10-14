@@ -18,8 +18,8 @@ func DecodeReply(m msgr.MessageData, limit uint32) (Reply, error) {
 	if limit == 0 {
 		limit = wire.DefaultLimit
 	}
-	if uint64(41)+uint64(len(m.Front))+uint64(len(m.Middle))+uint64(len(m.Data)) > uint64(limit) {
-		return r, wire.ErrLimit
+	if _, err := boundedBytes(limit, 41, uint64(len(m.Front)), uint64(len(m.Middle)), uint64(len(m.Data))); err != nil {
+		return r, err
 	}
 	r.RawFront, r.RawData = bytes.Clone(m.Front), bytes.Clone(m.Data)
 	if m.Type != ReplyMessage || len(m.Middle) != 0 {
@@ -44,8 +44,12 @@ func DecodeReply(m msgr.MessageData, limit uint32) (Reply, error) {
 		op := &r.Operations[i]
 		op.Code = d.U16()
 		op.Flags = d.U32()
-		op.Offset, op.Length = d.U64(), d.U64()
-		op.TruncateSize, op.TruncateSequence = d.U64(), d.U32()
+		if IsXattrOperation(op.Code) {
+			op.Xattr = decodeXattrUnion(d, op.Code)
+		} else {
+			op.Offset, op.Length = d.U64(), d.U64()
+			op.TruncateSize, op.TruncateSequence = d.U64(), d.U32()
+		}
 		op.PayloadLength = d.U32()
 		if !SupportedOperation(op.Code) {
 			d.Fail(ErrOperation)

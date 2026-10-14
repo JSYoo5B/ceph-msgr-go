@@ -1,0 +1,478 @@
+{
+  "binary_sha256": "9ac490f10685f0f14e7e60970a10279046f3141de01c86f4c210b0f0d08d23ea",
+  "build_driver_sha256": "fd4398ba2631c6e0d992a5d0e09d7edb344e96a77ac83c17ca87b2f38faa8693",
+  "builder_container_id": "a1b56471e10e67006cea86f18a4f6e3f268fa563ae804ecc5e35582b74e4d99b",
+  "builder_termination_completed": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "xattr-native-reply-v6-cmp-false": {
+      "data_bytes": 0,
+      "decoded_operations": [
+        {
+          "cmp_mode": 1,
+          "cmp_op": 1,
+          "code": 4867,
+          "flags": 0,
+          "indata_hex": "",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -125,
+          "union_hex": "05000000040000000101000000000000000000000000000000000000",
+          "value_len": 4
+        }
+      ],
+      "front_bytes": 202,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 202,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "671afe49cac3290a0052f02a87bc5e71e00607a7b4afa2996947629303eb8721",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "xattr-native-reply-v6-read-mixed": {
+      "data_bytes": 38,
+      "decoded_operations": [
+        {
+          "cmp_mode": 0,
+          "cmp_op": 0,
+          "code": 4865,
+          "flags": 0,
+          "indata_hex": "",
+          "name_len": 5,
+          "outdata_hex": "00ff410a",
+          "payload_len": 4,
+          "result": 0,
+          "union_hex": "05000000040000000000000000000000000000000000000000000000",
+          "value_len": 4
+        },
+        {
+          "cmp_mode": 0,
+          "cmp_op": 0,
+          "code": 4866,
+          "flags": 0,
+          "indata_hex": "",
+          "name_len": 0,
+          "outdata_hex": "02000000050000005f726177ff0400000000ff410a05000000656d70747900000000",
+          "payload_len": 34,
+          "result": 0,
+          "union_hex": "00000000000000000000000000000000000000000000000000000000",
+          "value_len": 0
+        },
+        {
+          "cmp_mode": 1,
+          "cmp_op": 1,
+          "code": 4867,
+          "flags": 0,
+          "indata_hex": "",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": 1,
+          "union_hex": "05000000040000000101000000000000000000000000000000000000",
+          "value_len": 4
+        }
+      ],
+      "front_bytes": 286,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 38,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 286,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "ed25f0c88b848cc373f33a6aa5e86b0c5d639f5aff1fa2989909435fb13b0e1e",
+      "data_sha256": "aabe66a96b709bffc3793f9d7ef4f1c6136539c72839575a90324a2fbf54183e",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "xattr-native-reply-v6-rm-refused": {
+      "data_bytes": 0,
+      "decoded_operations": [
+        {
+          "cmp_mode": 0,
+          "cmp_op": 0,
+          "code": 8964,
+          "flags": 0,
+          "indata_hex": "",
+          "name_len": 7,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -2,
+          "union_hex": "07000000000000000000000000000000000000000000000000000000",
+          "value_len": 0
+        }
+      ],
+      "front_bytes": 202,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 202,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "109107c52d2ab293a826defe7eb025039faeb31f47b467f64a875021276cfdff",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "xattr-native-reply-v6-set-refused": {
+      "data_bytes": 0,
+      "decoded_operations": [
+        {
+          "cmp_mode": 0,
+          "cmp_op": 0,
+          "code": 8961,
+          "flags": 0,
+          "indata_hex": "",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -27,
+          "union_hex": "05000000040000000000000000000000000000000000000000000000",
+          "value_len": 4
+        }
+      ],
+      "front_bytes": 202,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 202,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "4b1f84ec99b9763879a1efc24f7f4116841864b7b8cd7640e0d0c5c02e740a06",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "xattr-native-request-v6-all": {
+      "data_bytes": 80,
+      "decoded_operations": [
+        {
+          "cmp_mode": 0,
+          "cmp_op": 0,
+          "code": 4865,
+          "flags": 0,
+          "indata_hex": "5f726177ff",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 5,
+          "union_hex": "05000000000000000000000000000000000000000000000000000000",
+          "value_len": 0
+        },
+        {
+          "cmp_mode": 0,
+          "cmp_op": 0,
+          "code": 4866,
+          "flags": 0,
+          "indata_hex": "",
+          "name_len": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "union_hex": "00000000000000000000000000000000000000000000000000000000",
+          "value_len": 0
+        },
+        {
+          "cmp_mode": 1,
+          "cmp_op": 1,
+          "code": 4867,
+          "flags": 0,
+          "indata_hex": "5f726177ff00ff410a",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 9,
+          "union_hex": "05000000040000000101000000000000000000000000000000000000",
+          "value_len": 4
+        },
+        {
+          "cmp_mode": 1,
+          "cmp_op": 2,
+          "code": 4867,
+          "flags": 0,
+          "indata_hex": "5f726177ff00ff410a",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 9,
+          "union_hex": "05000000040000000201000000000000000000000000000000000000",
+          "value_len": 4
+        },
+        {
+          "cmp_mode": 1,
+          "cmp_op": 3,
+          "code": 4867,
+          "flags": 0,
+          "indata_hex": "5f726177ff00ff410a",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 9,
+          "union_hex": "05000000040000000301000000000000000000000000000000000000",
+          "value_len": 4
+        },
+        {
+          "cmp_mode": 1,
+          "cmp_op": 4,
+          "code": 4867,
+          "flags": 0,
+          "indata_hex": "5f726177ff00ff410a",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 9,
+          "union_hex": "05000000040000000401000000000000000000000000000000000000",
+          "value_len": 4
+        },
+        {
+          "cmp_mode": 1,
+          "cmp_op": 5,
+          "code": 4867,
+          "flags": 0,
+          "indata_hex": "5f726177ff00ff410a",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 9,
+          "union_hex": "05000000040000000501000000000000000000000000000000000000",
+          "value_len": 4
+        },
+        {
+          "cmp_mode": 1,
+          "cmp_op": 6,
+          "code": 4867,
+          "flags": 2,
+          "indata_hex": "5f726177ff00ff410a",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 9,
+          "union_hex": "05000000040000000601000000000000000000000000000000000000",
+          "value_len": 4
+        },
+        {
+          "cmp_mode": 0,
+          "cmp_op": 0,
+          "code": 8961,
+          "flags": 0,
+          "indata_hex": "5f726177ff00ff410a",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 9,
+          "union_hex": "05000000040000000000000000000000000000000000000000000000",
+          "value_len": 4
+        },
+        {
+          "cmp_mode": 0,
+          "cmp_op": 0,
+          "code": 8961,
+          "flags": 0,
+          "indata_hex": "656d707479",
+          "name_len": 5,
+          "outdata_hex": "",
+          "payload_len": 5,
+          "union_hex": "05000000000000000000000000000000000000000000000000000000",
+          "value_len": 0
+        },
+        {
+          "cmp_mode": 0,
+          "cmp_op": 0,
+          "code": 8964,
+          "flags": 0,
+          "indata_hex": "5f72656d6f7665",
+          "name_len": 7,
+          "outdata_hex": "",
+          "payload_len": 7,
+          "union_hex": "07000000000000000000000000000000000000000000000000000000",
+          "value_len": 0
+        }
+      ],
+      "front_bytes": 592,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 3,
+        "data_len": 80,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 592,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 42,
+        "version": 6
+      },
+      "front_sha256": "c06fe119bbc629c1a3dc2e4e645616528eb1be1674bafb6f2e36540f955f9c77",
+      "data_sha256": "f64f4d4ba1cd789c882c50c15594080d2da64a0a53453cc39072b0c35b5e0cba",
+      "header_sha256": "20e99f0e240771d043a3cbc8fe9bfeadb083e309ec975d2899c2d28a25b4a16e"
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffff85207000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffff82400000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffff850e8000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffff85097000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffff81f3a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffff85056000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffff85025000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffff85004000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffff81d16000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffff81ce5000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffff81b37000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffff851c0000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffff81a96000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "five freshly constructed native xattr messages directly encoded and separately decoded; decoded objects never re-encoded",
+  "wrapper_sha256": "245e29f4c3b70b03adbbb42e657d6d5d5e7081436a65462c13ef52950a713543",
+  "generator": "tools/osd_xattr_native_encoder.cc",
+  "build_driver": "tools/osd_xattr_native_encoder.py",
+  "source_license": "MOSDOp/MOSDOpReply/Objecter/osd_types/PrimaryLogPG: LGPL-2.1 notices; include/rados.h permits LGPL-2.1 or LGPL-3.0. This independent test wrapper invokes unchanged native code and copies no Ceph implementation.",
+  "source_files": {
+    "src/messages/MOSDOp.h": "68d6b0ed89f97761bb0fc575d3d5c17edd9003b8c0ac820d53728f945ac205f5",
+    "src/messages/MOSDOpReply.h": "6bd3e2cb240e3d245480d571e21a7ae6430c416aaa45c611d9ba5063e217d444",
+    "src/osdc/Objecter.h": "a821492fba9a486b0ac715f71b77a61a5dd10c6949ec56d48add6d054a459480",
+    "src/osd/osd_types.h": "8baa31f93e0694b7986381265f6af2294b23ce7cf98f8caf5bfde66c9abb84d1",
+    "src/osd/osd_types.cc": "614710847acaebd82e17787b91b38e07198eec58488cd9f6d7283499e0fa6d3b",
+    "src/osd/PrimaryLogPG.cc": "b05065f11e23e3920fe4d63d8d35e364a4289945f40c5791566d861fbc2ee28c",
+    "src/include/rados.h": "abd9410e17a9b93ad5c666197164f0b7f86a07da361e0cbf40451f93958a01fb",
+    "src/include/encoding.h": "6cbf988d836652f2d9410502dc918903cd4bf6a9f6aad5afdbcc302317352b06",
+    "src/msg/Message.h": "81f9b84fc9f6b2bdd93aad232a441eae268ac337a1c8a2075b927b7a954a629a",
+    "src/msg/Message.cc": "9c778ea7185e1910fb6d97bbfdcfe446a52f4eac94ff9a89faf5a3cfcdf0f562",
+    "src/include/msgr.h": "7eb1d06765ef153f6480b0a28c410df7c56946e42ac98637139079b372134e23",
+    "src/msg/async/frames_v2.h": "67c10757b0692a45854333c55a6d67bd099e8937a7511d834401fb9f673dea94",
+    "COPYING": "26f44ffbf74cdf08b3e1fdcaf1d4cfa3893ba62107950e086868a686d5ff86c2"
+  },
+  "logical_inputs": {
+    "object": "xattr-codec",
+    "pool": 7,
+    "key": "route-key",
+    "namespace": "tenant",
+    "raw_hash": 287454020,
+    "client_inc": 1,
+    "map_epoch": 11,
+    "tid": 77,
+    "mtime_seconds": 1700000000,
+    "mtime_nanoseconds": 123456789,
+    "snap": "NOSNAP=-2",
+    "retry_attempt": 0,
+    "name_hex": "5f726177ff",
+    "value_hex": "00ff410a",
+    "empty_set_name_hex": "656d707479",
+    "remove_name_hex": "5f72656d6f7665",
+    "request_order": [
+      "GETXATTR",
+      "GETXATTRS",
+      "CMPXATTR_EQ",
+      "CMPXATTR_NE",
+      "CMPXATTR_GT",
+      "CMPXATTR_GTE",
+      "CMPXATTR_LT",
+      "CMPXATTR_LTE_FAILOK",
+      "SETXATTR_binary",
+      "SETXATTR_empty",
+      "RMXATTR"
+    ],
+    "comparison_mode": "STRING=1; all native compare IDs 1..6, no U64 claims",
+    "flags": "READ/WRITE derived by native ceph_osd_op_mode_read/modify; ONDISK and RETURNVEC explicitly requested"
+  },
+  "reply_construction_scope": [
+    "Logical replies are freshly constructed codec inputs, not daemon-produced replies or proof of server execution, comparison truth, attr lookup, storage filtering, persistence, limits or permissions.",
+    "GET reply value_len=4 and raw outdata are explicitly supplied through public claim_ops, following the audited GET handler shape; native merge_osd_op_vector_out_data independently derives payload_len=4.",
+    "GETXATTRS outdata is produced by native ceph::encode on std::map<string,bufferlist,less<>> containing raw name _raw/ff and empty; it is not a Python/Go map encoding.",
+    "Native constructor request ops and explicit outdata/results are supplied with public claim_ops. Encoder creates empty-front/data MOSDOpReply payloads; separately decoded objects are never encoded or re-exported.",
+    "The mixed GET/GETALL/CMP reply uses aggregate=0 and per-op results 0,0,+1; CMP false is constructed aggregate/per-op -ECANCELED(-125). These raw signed codec cases do not execute a comparison helper.",
+    "SET refusal is constructed aggregate/per-op -EFBIG(-27), the audited value-limit handler code. RM refusal is constructed aggregate/per-op -ENOENT(-2), the audited missing-object handler code. No native limit/missing-object invocation is claimed here.",
+    "Read-only mixed success uses native ACK completion, with no ONDISK durability claim. Negative SET/RM replies request no completion acknowledgment. Existing live OSD/native state evidence remains separate."
+  ],
+  "native_decoder_scope": "Separate new MOSDOp/MOSDOpReply objects receive only bytes directly generated by the fresh native encoder; native decode_payload verifies every packed union and request indata/reply outdata and result against encoded native ops. Those decoded objects are never reused as encoder inputs.",
+  "build_receipt": {
+    "completed_at": "2026-10-15T05:00:00+09:00",
+    "public_runner": "go -C integration/fixture run . encode-osd-xattrs -project ../.. -cache /private/tmp/ceph-native-encoder-cache -output /tmp/ceph-xattr-native-encoder-attempt2-proof.json",
+    "log": "/tmp/ceph-xattr-native-encoder-attempt2-proof.json.log",
+    "official_configuration": "Existing pinned SDK cache/official CMake generated acconfig.h; only new xattr target added, mutation target unchanged",
+    "incremental_compilation": "[1/2] Building CXX object src/CMakeFiles/osd_xattr_native_encoder.dir/tmp/osd_xattr_native_encoder.cc.o\n[2/2] Linking CXX executable bin/osd_xattr_native_encoder\n",
+    "compiler": "GCC toolset 14, C++20, Debug -O0 -g0",
+    "native_library_cache": "same-source library SHA matches existing mutation proof; no Ceph daemon/common library rebuild",
+    "cleanup": "public Terminate completed 2026-10-15T05:00:10+09:00; independent inspect recorded separately",
+    "encoding_log": "xattr-native-request-v6-all\t592\t80\nxattr-native-reply-v6-read-mixed\t286\t38\nxattr-native-reply-v6-cmp-false\t202\t0\nxattr-native-reply-v6-set-refused\t202\t0\nxattr-native-reply-v6-rm-refused\t202\t0\n"
+  },
+  "native_library_matches_mutation_receipt": true
+}

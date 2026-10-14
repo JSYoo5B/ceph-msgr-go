@@ -1,12 +1,13 @@
-# Tentacle O2a xattr preparation contract
+# Tentacle O2a bounded xattr contract
 
 Reference: Ceph 20.2.4, commit
 `7f793731f1b39eb4f465e960113d2363c311b964`.
-Source audit: 2026-10-15. This is a proposed bounded next stage for review,
-not implemented product support. A later bounded native C API oracle is
-recorded in [OSD_XATTR_VALIDATION.md](../../integration/fixture/OSD_XATTR_VALIDATION.md);
-it does not establish Go/wire interoperability. O0 native
-payload-encoder acceptance and contract review remain prerequisites to implementation.
+Source audit and limited implementation: 2026-10-15. GET/GETALL, STRING CMP,
+SET and RM are implemented after contract review and fresh native codec proof.
+[OSD_XATTR_VALIDATION.md](../../integration/fixture/OSD_XATTR_VALIDATION.md)
+separates native-only preparation from subsequent Go/native interoperability:
+43 subcases passed in a secure/aes256k IPv4 three-BlueStore profile. This does
+not complete the broader O2 milestone or the remaining acceptance matrix.
 [CONTRACT.md](CONTRACT.md) supplies existing v6 object identity, per-op result,
 ONDISK, cancellation and unknown-outcome rules. Snapshot contexts, omap,
 class calls, allocation hints, rollback and watch remain separate later work.
@@ -15,7 +16,7 @@ class calls, allocation hints, rollback and watch remain separate later work.
 
 [The opcode list and packed union][rados] define these xattr operations:
 
-| Opcode | Value | O2a proposal | Input data / union | Output |
+| Opcode | Value | O2a implementation | Input data / union | Output |
 | --- | --- | --- | --- | --- |
 | GETXATTR | 0x1301 | Include | Raw name bytes; name_len set, value_len/comparison fields zero | Raw value bytes; reply value_len becomes output length |
 | GETXATTRS | 0x1302 | Include | No input; entire union zero | Native encoded name-to-value map, not concatenated raw values |
@@ -28,7 +29,7 @@ class calls, allocation hints, rollback and watch remain separate later work.
 Each operation still has the 38-byte packed envelope: opcode u16, flags u32,
 28-byte union and payload_len u32. The [xattr union][xattr-union] occupies its first ten bytes:
 name_len u32, value_len u32, comparison op u8, comparison mode u8; the remaining
-18 bytes must be zero in this proposed subset. These are little-endian lengths,
+18 bytes must be zero in this implemented subset. These are little-endian lengths,
 not extent offsets. Input data is raw `name || value`, with no trailing NUL,
 name prefix, terminator or length prefix inside that operation's data segment.
 The whole vector concatenates each operation's input in order.
@@ -43,7 +44,7 @@ named native builder is insufficient evidence of server semantics.
 
 ## Names, values and server bounds
 
-The proposal requires a **nonempty, NUL-free name** before transmission.
+The implementation requires a **nonempty, NUL-free name** before transmission.
 Go string storage can preserve byte sequences including non-UTF-8 bytes;
 there is no Unicode normalization, trimming, lowercasing or inferred text
 encoding. Values are arbitrary bytes, including empty, NUL and non-UTF-8.
@@ -63,7 +64,7 @@ internal `_`; it consequently does not make the empty-name hazard safe.
 
 [BlueStore attr operations][bluestore] use `name.c_str()` for attr lookup,
 set and removal. An embedded NUL can truncate/alias a name even though the
-Messenger union carries a length. Reject every NUL in the proposed name,
+Messenger union carries a length. Reject every NUL in the submitted name,
 not just a leading one. A user name `_foo` becomes storage name `__foo` and is
 returned as `_foo`; do not reject or strip that user prefix as if it were the
 internal object-info name. Native acceptance for non-UTF-8 names remains to be
@@ -82,7 +83,7 @@ return its configured rejection. Actual lengths, not rune counts, govern.
 
 [Comparison op/mode constants][comparison-ids] are EQ 1, NE 2, GT 3, GTE 4,
 LT 5, LTE 6; STRING 1 and U64 2. Reject unknown op/mode locally and require
-zero comparison fields on non-CMP operations. This initial proposal does not
+zero comparison fields on non-CMP operations. This implementation does not
 support arbitrary packed-union flags or fall back to a different mode.
 
 [The comparison helpers][comparison] compare the **caller operand on the left**
@@ -111,14 +112,14 @@ oracle, not an invented C API mode argument.
 
 ## Proposed Go communication fields and results
 
-Extend the ordered operation union with an explicitly named xattr variant,
-for example `Xattr *OSDXattrInput` containing `Name string`, `CompareOp`,
-`CompareMode`, and a local `MaxOutputBytes` budget. Reuse existing operation
-`Data []byte` as the raw SET value or CMP operand. Derive wire lengths from
-name/Data; callers should not supply inconsistent name_len/value_len. For
-GETXATTRS no name/operand is accepted. Extent, version and other union inputs
-must be zero for xattr operations. The final field layout/name is a proposal
-for contract review, not a new public API commitment or compatibility wrapper.
+The public ordered operation has a value variant `Xattr OSDXattrInput` with
+`Name string`, `Comparison OSDXattrComparison` and local `MaxOutputBytes uint32`.
+Existing `Data []byte` carries the raw SET value or CMP operand; lengths are
+derived from admitted bytes. CMP selects STRING mode explicitly; no public
+numeric mode or fallback exists. GETXATTRS accepts no name/operand. Extent and
+version inputs must be zero, and non-xattr opcodes require the zero variant.
+`OSDOperationResult.Xattr` exposes raw NameLength/ValueLength and comparison
+op/mode separately; it does not fabricate returned names or extent offsets.
 
 A positive caller budget is needed for GETXATTR/GETXATTRS because the request
 has no remote output-size field. Bound each output and the aggregate vector
@@ -169,7 +170,7 @@ the existing object backend; no immediate staged attr read is established by
 those handlers. SET→GET, SET→CMP, RM→GET and RM→GETALL need independent native
 characterization before acceptance. This is source-derived uncertainty, not an
 observed failed native vector. Compare-before-write guard vectors are the
-first proposed supported ordering. A successful SET can create a previously
+first supported ordering. A successful SET can create a previously
 missing head object through `maybe_create_new_object`; creation/version/mtime
 and unrelated object bytes must be checked independently. Missing-attr RM on
 an existing BlueStore object is a native no-op in the audited backend; missing
@@ -201,13 +202,13 @@ fixture and explicit routing/native stat/read controls:
 
 | Case | Required native/Go comparison | Current status |
 | --- | --- | --- |
-| Binary values and empty value | NUL/0xff/newline payload; length-zero vs removed; set/get/list exact bytes and no unrelated object-content change | Native C API subset passed; Go/wire comparison pending |
-| Names and namespace | Normal, leading underscore, non-UTF-8 names; local rejection of empty/NUL names before TID/send; different object namespace isolation | Source-derived empty/NUL hazards; no unsafe native alias mutation needed |
+| Binary values and empty value | NUL/0xff/newline payload; length-zero vs removed; set/get/list exact bytes and no unrelated object-content change | Limited Go/native profile and fresh wire vectors passed |
+| Names and namespace | Normal, leading underscore, non-UTF-8 names; local rejection of empty/NUL names before TID/send; different object namespace isolation | Byte-name profile and pre-send rejection passed; namespace isolation pending; no unsafe alias mutation performed |
 | Length limits | Configured name limit and value-size cap yield native `-ENAMETOOLONG`/`-EFBIG`; local frame/budget limits reject before send, received oversize retains uncertainty | Recipe/oracle pending |
-| Compare operators | Caller-left asymmetric GT/LT, all six ops, binary/empty STRING, true positive result, false `-ECANCELED`; missing attr vs missing object | Native C aggregate/state matrix 36 cases passed; raw positive result, missing identities and Go comparison pending |
-| U64 followup | LE operand 0/max; stored decimal, empty/missing, prefix, bad signs/whitespace/NUL, overflow; invalid input length/mode locally rejected | Separate oracle prerequisite; STRING-only first proposal |
-| Atomicity and FAILOK | Compare-before-SET/RM success; false guard after an earlier staged mutation restores pre-state; FAILOK permits later writes and retains per-op failure | Native C guard/rollback/FAILOK effects passed; raw per-op and Go comparison pending |
-| Mixed requests | Xattr GET+READ+STAT output boundaries; SET/RM+data mutation followed by independent fresh reads/stat2; staged xattr reads characterized separately | Native fresh encoder and mixed oracle pending |
+| Compare operators | Caller-left asymmetric GT/LT, all six ops, binary/empty STRING, true positive result, false `-ECANCELED`; missing attr vs missing object | Go/native matrix 36 cases and missing identities passed; actual Go per-op +1 preserved, C callback still unavailable |
+| U64 followup | LE operand 0/max; stored decimal, empty/missing, prefix, bad signs/whitespace/NUL, overflow; invalid input length/mode locally rejected | Unsupported; separate oracle prerequisite |
+| Atomicity and FAILOK | Compare-before-SET/RM success; false guard after an earlier staged mutation restores pre-state; FAILOK permits later writes and retains per-op failure | Go/native guard-before-write and FAILOK passed; staged SET-before-CMP remains rejected and native-only rollback evidence |
+| Mixed requests | Xattr GET+READ+STAT output boundaries; SET/RM+data mutation followed by independent fresh reads/stat2; staged xattr reads characterized separately | Fresh vectors and GET/GETALL/READ/STAT passed; combined data-metadata mutation/staged xattr reads pending |
 | Refusal and uncertainty | Permission rejection vs missing object/attr; sent append+xattr vector loses response, retains identity/outcome, fresh session never replays it | Extend existing lost-response recipe; unexecuted |
 | Completion and recovery | SET/RM ONDISK then native inventory/version/mtime after primary SIGKILL on BlueStore; read-only result has no durability claim | Same bounded profile as O1 initially; unexecuted |
 
@@ -215,9 +216,15 @@ The subsequent native-only oracle passed binary/empty/prefixed inventory,
 compound SET/RM, 36 STRING comparison cases, rollback and FAILOK in one
 CRC/AES IPv4 three-BlueStore host profile. The table above remains the full
 Go/native acceptance checklist, not a claim that this limited C API result
-completed it. Raw CMP per-op results, fresh xattr wire vectors and Go APIs are
-still pending. No O2a product support or widened feature advertisement is
-claimed. Existing O1 results cannot be relabeled as this new matrix.
+completed it. Fresh xattr wire vectors independently verify the Go codecs;
+the subsequent live Go replies preserve raw positive CMP results. The C API
+callback still cannot expose those per-op values. Limited Go/native
+acceptance subsequently passed binary/empty/non-UTF8 names, 36 read/write
+STRING comparison vectors, guard-before-SET/RM failures and FAILOK, missing
+attr/object identities and mixed GET/GETALL/READ/STAT. Sent-metadata crash/loss,
+server-configured limits/permissions and namespace matrices remain pending;
+the OSD feature mask has not widened. Existing O1 results cannot be relabeled
+as this new matrix.
 Broader pool/EC/snapshot and staged-read semantics remain excluded
 until their own contracts and independent acceptance are complete.
 

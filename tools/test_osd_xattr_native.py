@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Tests for binary-safe C adaptation, not mocked Ceph interoperability."""
 import ctypes as C
+import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 import osd_xattr_native as xattr
 
@@ -60,6 +64,163 @@ class IteratorLibrary(Library):
 
 
 class XattrAdapterTests(unittest.TestCase):
+    def comparison_request(self, **changes):
+        value = {"object": "owned-go-object", "namespace": "tenant-A", "compare": True,
+                 "kind": "write", "baseline": xattr.encode(b"\0before\xff"),
+                 "attributes": [{"name": xattr.encode(b"binary"), "value": xattr.encode(b"\0old\xff")}],
+                 "operations": [{"op": "cmp", "name": xattr.encode(b"binary"),
+                                 "comparison": "eq", "value": xattr.encode(b"\0old\xff")},
+                                {"op": "set", "name": xattr.encode(b"binary"), "value": xattr.encode(b"\0new\xff")}],
+                 "get_names": [xattr.encode(b"binary")], "seconds": 1700000002, "nanos": 314159265}
+        value.update(changes)
+        return value
+
+    def comparison_native(self, cleanup_code=0, vector_error=None):
+        library = Library()
+        events = []
+        removals = 0
+
+        def remove(io, name):
+            nonlocal removals
+            removals += 1
+            events.append(("remove", name))
+            return 0 if removals == 1 else cleanup_code
+
+        def seed(operation, io, name, mtime, flags):
+            events.append(("seed", name, mtime._obj.tv_sec, mtime._obj.tv_nsec))
+            return 0
+
+        def full(operation, value, length):
+            events.append(("baseline", C.string_at(value, length)))
+
+        def attribute(operation, name, value, length):
+            events.append(("attribute", name, C.string_at(value, length)))
+
+        library.install("rados_remove", remove)
+        library.install("rados_ioctx_set_namespace", lambda io, ns: events.append(("namespace", ns)))
+        library.install("rados_write_op_operate2", seed)
+        library.install("rados_write_op_write_full", full)
+        library.install("rados_write_op_setxattr", attribute)
+        native = xattr.Native(library)
+
+        def snapshot(io, name, names):
+            events.append(("snapshot", name, names))
+            return {"code": 0, "data": "", "version": 11}
+
+        def vector(io, name, kind, operations, mtime=None):
+            events.append(("vector", name, kind, operations,
+                           None if mtime is None else (mtime.tv_sec, mtime.tv_nsec)))
+            if vector_error:
+                raise RuntimeError(vector_error)
+            return {"code": -125, "lists": [], "raw_cmp_per_op_result_available": False}
+
+        native.snapshot, native.vector = snapshot, vector
+        return native, events
+
+    def test_compare_mode_only_mutates_mirror_and_preserves_binary_namespace_mtime(self):
+        native, events = self.comparison_native()
+        request = xattr.validate_request(self.comparison_request())
+        result = xattr.comparison_vector(native, C.c_void_p(1),
+                                         {"pool": "owned", "pool_id": 2, "object": "fixture"}, request)
+        mirror = b"owned-go-object-native-xattr-compare"
+        self.assertEqual(events[0], ("namespace", b"tenant-A"))
+        self.assertEqual([e[1] for e in events if e[0] == "remove"], [mirror, mirror])
+        self.assertEqual([e[1:] for e in events if e[0] == "seed"], [(mirror, 1700000000, 123456789)])
+        self.assertIn(("baseline", b"\0before\xff"), events)
+        self.assertIn(("attribute", b"binary", b"\0old\xff"), events)
+        vector = next(e for e in events if e[0] == "vector")
+        self.assertEqual(vector[1], mirror)
+        self.assertEqual(vector[3][1]["value"], b"\0new\xff")
+        self.assertEqual(vector[4], (1700000002, 314159265))
+        self.assertEqual([e[1] for e in events if e[0] == "snapshot"], [b"owned-go-object", mirror, mirror])
+        self.assertEqual(result["vector"]["code"], -125)
+        self.assertTrue(result["cleanup"]["object_removed"])
+        self.assertFalse(result["scope"]["raw_cmp_per_op_result_available"])
+
+    def test_readonly_observation_never_resets_or_seeds_mirror(self):
+        native, events = self.comparison_native()
+        request = xattr.validate_request({"observe_actual": True})
+        result = xattr.comparison_vector(native, C.c_void_p(1),
+                                         {"pool": "owned", "pool_id": 2, "object": "fixture"}, request)
+        self.assertEqual(events, [("namespace", b""), ("snapshot", b"fixture", [])])
+        self.assertFalse(result["cleanup"]["mirror_touched"])
+        self.assertNotIn("vector", result)
+
+    def test_comparison_failure_cleans_only_mirror_without_masking_first_error(self):
+        native, events = self.comparison_native(cleanup_code=-5, vector_error="first vector failure")
+        with self.assertRaisesRegex(RuntimeError, "first vector failure"):
+            xattr.comparison_vector(native, C.c_void_p(1),
+                                     {"pool": "owned", "pool_id": 2, "object": "fixture"},
+                                     xattr.validate_request(self.comparison_request()))
+        self.assertEqual(events[-1], ("remove", b"owned-go-object-native-xattr-compare"))
+        self.assertEqual(sum(e[0] == "vector" for e in events), 1)
+        self.assertEqual(sum(e[0] == "seed" for e in events), 1)
+
+    def test_collect_rejects_invalid_admission_before_loading_native_library(self):
+        requests = [self.comparison_request(object="bad\0object"),
+                    self.comparison_request(namespace="bad\0namespace"),
+                    self.comparison_request(kind="read"),
+                    self.comparison_request(nanos=10**9),
+                    self.comparison_request(seconds=1 << 32),
+                    self.comparison_request(client_name="client.admin"),
+                    self.comparison_request(operations=[{"op": "set", "name": xattr.encode(b"n\0alias"), "value": ""}]),
+                    self.comparison_request(operations=[{"op": "list", "flags": 4}]),
+                    self.comparison_request(operations=[{"op": "list"}] * 65),
+                    self.comparison_request(attributes=[{"name": xattr.encode(str(i).encode()), "value": ""} for i in range(64)])]
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            (out / "osd-oracle.json").write_text(json.dumps({"pool": "owned", "pool_id": 2, "object": "fixture"}))
+            for request in requests:
+                (out / "osd-xattr-input.json").write_text(json.dumps(request))
+                with self.subTest(request=request), patch.object(xattr, "Native") as constructor:
+                    with self.assertRaises(ValueError):
+                        xattr.collect_comparison(out, out)
+                    constructor.assert_not_called()
+
+    def test_input_and_output_json_bounds_do_not_publish_partial_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            source = out / "input.json"
+            source.write_bytes(b" " * (xattr.MAX_INPUT + 1))
+            with self.assertRaisesRegex(ValueError, "1 MiB"):
+                xattr.read_json_bounded(source)
+            result = out / "osd-xattr-result.json"
+            result.write_text("previous valid receipt\n")
+            with self.assertRaisesRegex(ValueError, "512 KiB"):
+                xattr.publish_compare_result(out, {"data": "x" * xattr.MAX_COMPARE_OUTPUT})
+            self.assertEqual(result.read_text(), "previous valid receipt\n")
+            self.assertFalse((out / "osd-xattr-result.tmp").exists())
+            xattr.publish_compare_result(out, {"value": xattr.encode(b"\0\xff"), "code": -125})
+            self.assertEqual(json.loads(result.read_text()), {"value": xattr.encode(b"\0\xff"), "code": -125})
+
+    def test_native_write_vector_explicit_mtime_and_fixed_matrix_default_are_distinct(self):
+        library = Library()
+        observed = []
+
+        def operate(operation, io, name, mtime, flags):
+            observed.append(None if mtime is None else (mtime._obj.tv_sec, mtime._obj.tv_nsec))
+            return 0
+
+        library.install("rados_write_op_operate2", operate)
+        native = xattr.Native(library)
+        actions = [{"op": "set", "name": b"safe", "value": b"\0", "flags": 0}]
+        native.vector(C.c_void_p(1), b"owned", "write", actions)
+        native.vector(C.c_void_p(1), b"owned", "write", actions, mtime=xattr.Timespec(0, 0))
+        native.vector(C.c_void_p(1), b"owned", "write", actions,
+                      mtime=xattr.Timespec(1700000002, 314159265))
+        self.assertEqual(observed, [None, (0, 0), (1700000002, 314159265)])
+
+    def test_native_entry_flags_and_kind_admission_precedes_any_c_builder(self):
+        library = Library()
+        native = xattr.Native(library)
+        for kind, action in (("write", {"op": "list", "flags": 0}),
+                             ("read", {"op": "set", "name": b"safe", "value": b"", "flags": 0}),
+                             ("write", {"op": "set", "name": b"safe", "value": b"", "flags": False}),
+                             ("write", {"op": "set", "name": b"safe", "value": b"", "flags": 1})):
+            with self.subTest(kind=kind, action=action), self.assertRaises(ValueError):
+                native.append(C.c_void_p(1), kind, [action])
+        self.assertEqual(library.calls, [])
+
     def snapshot_native(self, final_state=(11, 4, 1700000000, 123456789)):
         library = Library()
         library.last_version = 0

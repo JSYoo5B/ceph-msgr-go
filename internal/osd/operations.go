@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent:
+	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr:
 		return true
 	}
 	return false
@@ -23,6 +23,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 	}
 	var flags, total uint64
 	var stagedDigestSize uint64
+	var stagedXattr bool
 	for _, op := range ops {
 		if !SupportedOperation(op.Code) || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
 			return 0, 0, ErrOperation
@@ -31,6 +32,30 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			return 0, 0, wire.ErrLimit
 		}
 		if op.Code != AssertVersion && op.Version != 0 {
+			return 0, 0, ErrRequest
+		}
+		if IsXattrOperation(op.Code) {
+			mode, inputBytes, err := validateXattrOperation(op, limit)
+			if err != nil {
+				return 0, 0, err
+			}
+			// The replicated native getter reads the committed backend rather
+			// than the transaction's staged SET/RM attrs. Keep this ordering
+			// unsupported until independently characterized, including FAILOK.
+			if stagedXattr && (op.Code == GetXattr || op.Code == GetXattrs || op.Code == CompareXattr) {
+				return 0, 0, ErrOperation
+			}
+			if op.Code == SetXattr || op.Code == RemoveXattr {
+				stagedXattr = true
+			}
+			if inputBytes > uint64(limit)-total {
+				return 0, 0, wire.ErrLimit
+			}
+			flags |= mode
+			total += inputBytes
+			continue
+		}
+		if op.Xattr != (XattrInput{}) {
 			return 0, 0, ErrRequest
 		}
 		// Tentacle v20.2.4 can validate a staged full-write digest against
@@ -92,10 +117,10 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 				return 0, 0, ErrRequest
 			}
 		}
-		total += uint64(len(op.Data))
-		if total > uint64(limit) {
+		if uint64(len(op.Data)) > uint64(limit)-total {
 			return 0, 0, wire.ErrLimit
 		}
+		total += uint64(len(op.Data))
 	}
 	return flags, total, nil
 }

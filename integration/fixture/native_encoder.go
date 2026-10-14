@@ -23,10 +23,29 @@ import (
 
 const nativeEncoderCommit = "7f793731f1b39eb4f465e960113d2363c311b964"
 
+type nativeEncoderSpec struct {
+	command, wrapper, driver string
+	names                    []string
+}
+
+var mutationEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-mutations", wrapper: "osd_mutation_native_encoder.cc", driver: "osd_mutation_native_encoder.py",
+	names: []string{"mutation-native-request-v6-all", "mutation-native-reply-v6-all-success", "mutation-native-reply-v6-exclusive-eexist", "mutation-native-reply-v6-cmpext-mismatch", "mutation-native-reply-v6-truncate"},
+}
+
+var xattrEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-xattrs", wrapper: "osd_xattr_native_encoder.cc", driver: "osd_xattr_native_encoder.py",
+	names: []string{"xattr-native-request-v6-all", "xattr-native-reply-v6-read-mixed", "xattr-native-reply-v6-cmp-false", "xattr-native-reply-v6-set-refused", "xattr-native-reply-v6-rm-refused"},
+}
+
 // The offline encoder is a development oracle. It starts no Ceph daemon and
 // installs native build packages only in its owned disposable container.
 func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
-	flags := flag.NewFlagSet("encode-osd-mutations", flag.ContinueOnError)
+	return runNativeEncoder(ctx, args, mutationEncoderSpec)
+}
+
+func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec) (result error) {
+	flags := flag.NewFlagSet(spec.command, flag.ContinueOnError)
 	project := flags.String("project", "../..", "product checkout")
 	cache := flags.String("cache", "", "optional persistent native build cache")
 	output := flags.String("output", "", "required native proof JSON output")
@@ -34,13 +53,13 @@ func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
 		return err
 	}
 	if flags.NArg() != 0 || *output == "" {
-		return errors.New("encode-osd-mutations requires -output PATH and no positional arguments")
+		return fmt.Errorf("%s requires -output PATH and no positional arguments", spec.command)
 	}
 	root, err := filepath.Abs(*project)
 	if err != nil {
 		return err
 	}
-	wrapper := filepath.Join(root, "tools", "osd_mutation_native_encoder.cc")
+	wrapper := filepath.Join(root, "tools", spec.wrapper)
 	input, err := os.ReadFile(wrapper)
 	if err != nil {
 		return err
@@ -95,12 +114,20 @@ func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
 	if err != nil {
 		return err
 	}
-	for _, name := range []string{"osd_mutation_native_encoder.py", "osd_mutation_native_encoder.cc"} {
+	files := []string{spec.driver, spec.wrapper}
+	// A shared SDK cache may retain both CMake targets. Both original sources
+	// must be present during configuration even when only one target is built.
+	if spec.command == xattrEncoderSpec.command {
+		files = append(files, mutationEncoderSpec.wrapper)
+	} else {
+		files = append(files, xattrEncoderSpec.wrapper)
+	}
+	for _, name := range files {
 		if err := target.CopyFileToContainer(build, filepath.Join(root, "tools", name), "/tmp/"+name, 0600); err != nil {
 			return err
 		}
 	}
-	code, stream, err := target.Exec(build, []string{"python3", "-u", "/tmp/osd_mutation_native_encoder.py", "--build-native", "--work", "/native-cache/work", "--wrapper", "/tmp/osd_mutation_native_encoder.cc"}, containerexec.Multiplexed())
+	code, stream, err := target.Exec(build, []string{"python3", "-u", "/tmp/" + spec.driver, "--build-native", "--work", "/native-cache/work", "--wrapper", "/tmp/" + spec.wrapper}, containerexec.Multiplexed())
 	if stream != nil {
 		_, copyErr := io.Copy(log, io.LimitReader(stream, 2<<20))
 		err = errors.Join(err, copyErr)
@@ -111,7 +138,7 @@ func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
 	if err := log.Close(); err != nil {
 		return err
 	}
-	proof, err := readNativeEncoderProof(*output+".log", wrapperHash)
+	proof, err := readNativeEncoderProofFor(*output+".log", wrapperHash, spec)
 	if err != nil {
 		return err
 	}
@@ -127,11 +154,15 @@ func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
 	if err := os.WriteFile(*output, append(data, '\n'), 0600); err != nil {
 		return err
 	}
-	fmt.Println("Native v6 front/data proof:", *output)
+	fmt.Println("Native v6 front/data/header proof:", *output)
 	return nil
 }
 
 func readNativeEncoderProof(path, wrapperHash string) (map[string]any, error) {
+	return readNativeEncoderProofFor(path, wrapperHash, mutationEncoderSpec)
+}
+
+func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec) (map[string]any, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -154,11 +185,14 @@ func readNativeEncoderProof(path, wrapperHash string) (map[string]any, error) {
 	if proof["ceph_commit"] != nativeEncoderCommit || proof["image"] != profileDefaultImage || proof["native_payload_encoder_verified"] != true || proof["native_message_header_verified"] != true || proof["wrapper_sha256"] != wrapperHash {
 		return nil, errors.New("native proof lacks the exact source, image, wrapper or successful payload/header encoding receipt")
 	}
+	if spec.command == xattrEncoderSpec.command && proof["native_payload_decoder_verified"] != true {
+		return nil, errors.New("native xattr proof lacks its independent decoder receipt")
+	}
 	fixtures, ok := proof["fixtures"].(map[string]any)
-	if !ok || len(fixtures) != 5 {
+	if !ok || len(fixtures) != len(spec.names) {
 		return nil, errors.New("native proof lacks five encoder vectors")
 	}
-	for _, name := range []string{"mutation-native-request-v6-all", "mutation-native-reply-v6-all-success", "mutation-native-reply-v6-exclusive-eexist", "mutation-native-reply-v6-cmpext-mismatch", "mutation-native-reply-v6-truncate"} {
+	for i, name := range spec.names {
 		fixture, ok := fixtures[name].(map[string]any)
 		if !ok {
 			return nil, fmt.Errorf("native proof lacks %s", name)
@@ -174,14 +208,14 @@ func readNativeEncoderProof(path, wrapperHash string) (map[string]any, error) {
 			}
 			segments[segment] = data
 		}
-		if err := validateNativeEncoderHeader(name, fixture, segments); err != nil {
+		if err := validateNativeEncoderHeader(name, fixture, segments, i == 0); err != nil {
 			return nil, err
 		}
 	}
 	return proof, nil
 }
 
-func validateNativeEncoderHeader(name string, fixture map[string]any, segments map[string][]byte) error {
+func validateNativeEncoderHeader(name string, fixture map[string]any, segments map[string][]byte, request bool) error {
 	metadata, ok := fixture["native_header"].(map[string]any)
 	if !ok {
 		return fmt.Errorf("native proof lacks %s native header metadata", name)
@@ -198,7 +232,7 @@ func validateNativeEncoderHeader(name string, fixture map[string]any, segments m
 		"front_len": uint64(len(segments["front"])), "middle_len": 0, "data_len": uint64(len(segments["data"])),
 	}
 	typ, compat := uint64(43), uint64(2)
-	if name == "mutation-native-request-v6-all" {
+	if request {
 		typ, compat = 42, 3
 	}
 	if expected["type"] != typ || expected["version"] != 6 || expected["compat"] != compat || binary.LittleEndian.Uint32(h[22:26]) != 0 || expected["reserved"] != 0 {
