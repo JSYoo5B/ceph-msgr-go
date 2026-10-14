@@ -13,7 +13,7 @@ import osd_oracle
 
 class OSDOracleTests(unittest.TestCase):
     def setUp(self):
-        profile = mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_REPLICAS": "1"})
+        profile = mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_IP_FAMILY": "4"})
         profile.start()
         self.addCleanup(profile.stop)
         self.temporary = tempfile.TemporaryDirectory()
@@ -167,6 +167,49 @@ class OSDOracleTests(unittest.TestCase):
         for value in ("", "0", "2", "03", "4"):
             with self.subTest(value=value), mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_REPLICAS": value}), self.assertRaises(ValueError):
                 self.collect()
+
+    def ipv6(self):
+        os.environ["CEPH_MSGR_TEST_IP_FAMILY"] = "6"
+        peers = {}
+        for daemon in self.topology["osds"]:
+            endpoint = f"[fd00:ce01::{daemon['osd'] + 10}]:6800"
+            daemon["public_addrs"]["addrvec"][0]["addr"] = endpoint
+            peers["osd." + str(daemon["osd"])] = endpoint
+        (self.output / "peers.json").write_text(json.dumps(peers))
+
+    def test_ipv6_primary_nonce_and_replica_addresses_preserved(self):
+        self.replicated()
+        self.ipv6()
+        self.collect()
+        value = json.loads((self.output / "osd-oracle.json").read_bytes())
+        self.assertEqual(value["ip_family"], 6)
+        self.assertEqual(value["osd_id"], 2)
+        self.assertEqual(value["address"], "v2:[fd00:ce01::12]:6800/102")
+        self.assertEqual(value["endpoint"]["addr"], "[fd00:ce01::12]:6800")
+
+    def test_ipv6_profile_rejects_ipv4_replica_even_when_primary_is_ipv6(self):
+        self.replicated()
+        self.ipv6()
+        bad = "127.0.0.1:36900"
+        self.topology["osds"][0]["public_addrs"]["addrvec"][0]["addr"] = bad
+        peers = json.loads((self.output / "peers.json").read_bytes())
+        peers["osd.0"] = bad
+        (self.output / "peers.json").write_text(json.dumps(peers))
+        with self.assertRaises(ValueError):
+            self.collect()
+        self.assertFalse((self.output / "osd-oracle.json").exists())
+
+    def test_osd_endpoint_family_and_wire_syntax_are_strict(self):
+        for family, endpoints in (
+                (4, ("[::1]:6800", "[127.0.0.1]:6800", "fixture-osd:6800", "127.0.0.1:0", "0.0.0.0:6800")),
+                (6, ("127.0.0.1:6800", "::1:6800", "[::ffff:127.0.0.1]:6800", "[::]:6800", "[ff02::1]:6800", "[fe80::1%eth0]:6800", "[::1]:65536"))):
+            for endpoint in endpoints:
+                with self.subTest(family=family, endpoint=endpoint), self.assertRaises(ValueError):
+                    osd_oracle.validate_endpoint(endpoint, family)
+
+    def test_unknown_ip_family_cannot_publish_oracle(self):
+        with mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_IP_FAMILY": "dual"}), self.assertRaises(ValueError):
+            self.collect()
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 
 import ctypes
 import hashlib
+import ipaddress
 import json
 import os
 import pathlib
@@ -12,6 +13,17 @@ import sys
 
 class Timespec(ctypes.Structure):
     _fields_ = [("tv_sec", ctypes.c_long), ("tv_nsec", ctypes.c_long)]
+
+
+def validate_endpoint(endpoint, family):
+    matched = re.fullmatch(r"(?:\[([^\[\]]+)\]|([^:\[\]]+)):([0-9]+)", endpoint)
+    if matched is None:
+        raise ValueError("Native OSD endpoint must be a numeric IP and bounded port")
+    address = ipaddress.ip_address(matched[1] or matched[2])
+    if (address.version != family or address.is_unspecified or address.is_multicast or
+            "%" in str(address) or getattr(address, "ipv4_mapped", None) is not None or
+            bool(matched[1]) != (address.version == 6) or not 0 < int(matched[3]) <= 65535):
+        raise ValueError("Native OSD endpoint does not match the selected address family")
 
 
 def native_stat(root, pool, object_name):
@@ -58,6 +70,10 @@ def native_stat(root, pool, object_name):
 
 
 def collect(root, output, pool, object_name):
+    family_setting = os.environ.get("CEPH_MSGR_TEST_IP_FAMILY", "4")
+    if family_setting not in ("4", "6"):
+        raise ValueError("Invalid OSD fixture IP family")
+    family = int(family_setting)
     replica_setting = os.environ.get("CEPH_MSGR_TEST_OSD_REPLICAS", "1")
     if replica_setting not in ("1", "3"):
         raise ValueError("Invalid OSD replica fixture profile")
@@ -85,6 +101,16 @@ def collect(root, output, pool, object_name):
         raise ValueError("Native replica topology does not match the controlled fixture")
     osd = next(o for o in topology["osds"] if o["osd"] == primary)
     addresses = osd["public_addrs"]["addrvec"]
+    peers = json.loads((output / "peers.json").read_bytes())
+    for daemon in topology["osds"]:
+        advertised = daemon["public_addrs"]["addrvec"]
+        if (len(advertised) != 1 or advertised[0]["type"] != "v2" or
+                advertised[0]["addr"] != peers.get("osd." + str(daemon["osd"]))):
+            raise ValueError("Unexpected native OSD CLIENT endpoint")
+        validate_endpoint(advertised[0]["addr"], family)
+        nonce = advertised[0]["nonce"]
+        if type(nonce) is not int or not 0 <= nonce < 1 << 32:
+            raise ValueError("Invalid native OSD endpoint nonce")
     legacy_tunables = {"choose_local_tries": 2, "choose_local_fallback_tries": 5,
                        "choose_total_tries": 19, "chooseleaf_descend_once": 0,
                        "chooseleaf_vary_r": 0, "chooseleaf_stable": 0,
@@ -101,11 +127,7 @@ def collect(root, output, pool, object_name):
             crush.get("choose_args") or
             any(crush["tunables"].get(name) != value for name, value in legacy_tunables.items())):
         raise ValueError("Native topology does not match the explicit legacy OSD fixture")
-    if len(addresses) != 1 or addresses[0]["type"] != "v2" or addresses[0]["addr"] != json.loads((output / "peers.json").read_bytes()).get("osd." + str(primary)):
-        raise ValueError("Unexpected native OSD CLIENT endpoint")
     endpoint = addresses[0]
-    if type(endpoint["nonce"]) is not int or not 0 <= endpoint["nonce"] < 1 << 32:
-        raise ValueError("Invalid native OSD endpoint nonce")
     size, seconds, nanos = native_stat(root, pool, object_name)
     data = (output / "osd-native-read.bin").read_bytes()
     if len(data) != size or data != (output / "osd-object.bin").read_bytes():
@@ -113,6 +135,7 @@ def collect(root, output, pool, object_name):
     metadata = {
         "pool": pool, "pool_id": pool_id, "object": object_name, "osd_id": primary,
         "acting": acting, "up": up, "replicas": replicas, "min_size": min_size,
+        "ip_family": family,
         "epoch": topology["epoch"], "raw_pgid": raw_pg, "pgid": pg,
         "hash": int(raw[2], 16), "pg_seed": int(actual[2], 16),
         "address": "v2:" + endpoint["addr"] + "/" + str(endpoint["nonce"]),

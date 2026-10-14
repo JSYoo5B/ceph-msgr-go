@@ -253,6 +253,7 @@ jobs:
           - { key: aes256k, service: aes256k, family: '4', stress: '', osd: '1', osd_store: 'bluestore' }
           - { key: aes256k, service: aes256k, family: '4', stress: '', osd: '1', osd_store: 'bluestore', osd_replicas: '3' }
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '', osd: '1', osd_store: 'bluestore', osd_replicas: '3' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

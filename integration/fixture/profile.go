@@ -132,8 +132,8 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		selected = "^TestCephMappedAddressIntegration$"
 	}
 	if p.osd == "1" {
-		if p.mgrCount != "2" || p.ipFamily != "4" || p.mappedIPv6 != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.modeRejection != "" || p.stressDuration != "" {
-			return profile{}, fmt.Errorf("OSD fixture requires IPv4, two managers, and no mapped-IPv6, authentication, mode-rejection, or stress fixture")
+		if p.mgrCount != "2" || p.mappedIPv6 != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.modeRejection != "" || p.stressDuration != "" {
+			return profile{}, fmt.Errorf("OSD fixture requires two managers and no mapped-IPv6, authentication, mode-rejection, or stress fixture")
 		}
 		selected = "^TestCeph(OSD|MonOSDMaps).*Integration$"
 	}

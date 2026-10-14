@@ -51,6 +51,11 @@ P2의 최소 metadata 사용에도 필수 capability/lease와 복구
 E1의 P3는 최종 전 경로 환경 완료를 점검하는 순서이며 P0–P2에서 필요한
 시험 환경의 준비를 뒤로 미루는 뜻이 아니다.
 
+IPv6·secure·aes256k client/service key·Linux arm64 container의
+3-replica BlueStore 구성도 전체 선택 12개, mutation/guard 25개와 mixed vector
+5개를 첫 native 실행에 통과했다. 이 결과는 해당 legacy CRUSH profile의
+IPv6 endpoint 검증이며 Windows 또는 모든 주소/저장소 조합의 증거는 아니다.
+
 ### 현재 구현과 검증 기록
 
 확인 기준은 checkout의 제품 소스 `adc1ecd347a7dd647338ade45f7649533f729408`
@@ -66,7 +71,7 @@ README에 실제 daemon·native oracle 결과가 기록되어 있다는 뜻이�
 | B1 | msgr2.1 secure/CRC, CephX aes/aes256k, MON/MGR ticket 갱신·세션 복구: 구현 있음 | 20.2.4의 역할·키·주소별 실검증 기록; CRC·혼합 cipher·Windows 조합을 모두 검증한 것은 아님; cookie 재개 없음 | [session](internal/session/handshake.go), [CephX](internal/cephx/auth.go), [검증 기록](README.md#검증-결과) |
 | B2 | raw MON/MGR 명령·현재 daemon Tell·이름 지정 MON Tell, 준비/지도 대기·wire metadata: 구현 있음 | native 명령·지도 및 failover·context·Close 시험 기록; 이름 지정 MGR·OSD/PG/MDS 대상 명령은 미구현 | [명령 API](cephmsgr/api.go), [MON 대상](cephmsgr/named_mon.go), [지도 대기](cephmsgr/map_wait.go), [검증 기록](README.md#검증-결과) |
 | B3 | MON log·config·digest 구독: 구현 있음 | native oracle·갱신·복구·bounded 큐 시험 기록; 권한 ACK·완전한 변경 이력·원격 unsubscribe 보장 없음 | [로그](README.md#mon-로그), [설정](README.md#mon-설정), [digest](README.md#mon-health상태-구독) |
-| B4 | 명시적 OSD 연결·ticket·v6 stat/read·mutation/guard opcode 벡터·per-op 결과: 구현 있음 | 20.2.4 legacy CRUSH, HASHPSPOOL/upmap 미사용 replicated pool의 bytes/stat2·갱신, single/3-replica BlueStore mutation·compound·primary SIGKILL 실검증 기록; snapshot·EC와 일반 최신 CRUSH 미지원; OSD Windows/IPv6 미검증 | [OSD API](cephmsgr/osd.go), [요청](cephmsgr/osd_request.go), [encoder](internal/osd/request.go), [native 시험](integration/osd_test.go), [지원 범위](README.md#osd-statread-통신-기초) |
+| B4 | 명시적 OSD 연결·ticket·v6 stat/read·mutation/guard opcode 벡터·per-op 결과: 구현 있음 | 20.2.4 legacy CRUSH, HASHPSPOOL/upmap 미사용 replicated pool의 bytes/stat2·갱신, single/3-replica BlueStore mutation·compound·primary SIGKILL 실검증 기록; snapshot·EC와 일반 최신 CRUSH 미지원; IPv6 secure/aes256k 3-replica BlueStore 검증; OSD Windows 및 그 밖의 주소 조합 미검증 | [OSD API](cephmsgr/osd.go), [요청](cephmsgr/osd_request.go), [encoder](internal/osd/request.go), [native 시험](integration/osd_test.go), [지원 범위](README.md#osd-statread-통신-기초) |
 | B5 | MON raw OSDMap 최신 full·range 조회/연속 구독, OSD map 전달: 구현 있음 | native decoder/encoder와 epoch·bytes 비교 및 갱신·단절 기록; 내포 map 해석·적용·CRUSH는 사용 계층 책임; 전체 incremental chain 보장 없음 | [MON 조회](cephmsgr/mon_osd_request.go), [MON 구독](cephmsgr/mon_osd_maps.go), [OSD 전달](cephmsgr/osd_maps.go), [지원 범위](README.md#mon-raw-osdmap-조회구독) |
 | B6 | operation context·결과 불명확·자동 재실행 금지·bounded 입력/큐·Close: 현재 경로에 구현 있음 | 실제 명령 결과·취소·장애 및 합성 peer 경합 시험 기록; sent mutation의 결과 불명확·로컬 identity·재실행 금지 검증; MDS 이벤트/복구로의 확장은 미구현 | [수명과 복구](README.md#수명과-복구), [검증 기록](README.md#검증-결과), [공통 후속 계약](#공통-공개-계약과-복구-책임) |
 | B7 | 제품 Go 모듈과 native fixture 모듈 분리: 구현 있음 | CGO=0 빌드/검사 및 Linux·Darwin·선택 Windows MON/MGR 실검증 기록; 모든 OS·주소·역할 profile의 통과를 뜻하지 않음 | [제품 모듈](go.mod), [fixture 모듈](integration/fixture/go.mod), [검증 기록](README.md#검증-결과) |

@@ -293,6 +293,10 @@ host relay에서도 25개 mutation/guard와 mixed vector 5개를 포함한 9개 
 동일한 25개 mutation/guard·mixed vector 5개와 실제 primary SIGKILL을 포함하며,
 정리 후 소유 컨테이너 10개와 network 소멸을 독립 확인했다. 이 profile의 제품
 소스는 `0943727781a4d41d5092d38ab600f03478dba6ef`다.
+IPv6·secure·aes256k client/service key·Linux arm64 container의 같은 3복제본
+BlueStore 구성도 전체 12개 시험, mutation/guard 25개 및 mixed vector 5개를
+첫 native 실행에 통과했다. 모든 OSD의 실제 public endpoint가 IPv6임을
+검사했으며, 정리 후 소유 컨테이너 10개와 network 소멸을 확인했다.
 Host/device 전원 장애 검증은 아니다.
 
 다만 nonempty WRITEFULL·APPEND·offset 0 WRITE 뒤 offset 0 READ/CMPEXT가
@@ -321,6 +325,12 @@ CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
   CEPH_MSGR_TEST_CONNECTION_MODE=crc \
   CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes \
   CEPH_MSGR_TEST_RUN='^TestCeph(MonOSDMaps.*|OSD.*)Integration$' \
+  sh integration/run.sh
+
+
+CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
+  CEPH_MSGR_TEST_OSD_REPLICAS=3 CEPH_MSGR_TEST_IP_FAMILY=6 \
+  CEPH_MSGR_TEST_KEY_TYPE=aes256k CEPH_MSGR_TEST_SERVICE_CIPHER=aes256k \
   sh integration/run.sh
 ```
 

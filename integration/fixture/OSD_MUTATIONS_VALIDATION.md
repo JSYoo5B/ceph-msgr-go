@@ -24,6 +24,7 @@ BlueStore profile uses size 3/min_size 2. EC I/O is unimplemented and unverified
 | secure/aes256k, IPv4, three BlueStore OSDs, replicas 3/min_size 2, container | all twelve selected OSD/MON-map tests passed; 25 mutation/guard cases including four CMPEXT EOF cases, five mixed vectors, maps/renewal, lost reply, orderly restart and SIGKILL; actual primary SIGKILL preserved independent native/Go bytes, version and nanosecond mtime on the surviving two replicas without another write |
 | CRC/aes256k, IPv4, single MemStore OSD, host relay | nine selected tests passed; 25 mutation/guard cases, five mixed vectors, MON/OSD maps, lost reply, native stat/read, renewal and feature rejection; three BlueStore-only restart/crash/replica tests skipped |
 | CRC/AES client and service keys, IPv4, three BlueStore OSDs, replicas 3/min_size 2, host relay | all twelve selected tests passed on the first attempt; 25 mutation/guard cases, five mixed vectors, actual primary SIGKILL, restart/crash, maps, lost reply and renewal |
+| secure/aes256k client and service keys, IPv6, three BlueStore OSDs, replicas 3/min_size 2, container | all twelve selected tests passed on the first native attempt; 25 mutation/guard cases, five mixed vectors, actual primary SIGKILL, restart/crash, maps, lost reply and renewal; every owned OSD public endpoint matched the selected IPv6 family |
 
 Native vector comparisons use a separate native object reset to the same
 baseline. Both paths receive explicit matching nanosecond mtimes. Native
@@ -190,3 +191,14 @@ Remaining work is listed in [the wire contract](../../internal/osd/CONTRACT.md):
 broader replicated/address/OS matrices, host/device power-loss persistence,
 EC, true native mutation payload encoder fixtures and unsolicited event/control
 contracts. The SPEC O0/O1 milestones remain partially complete.
+
+IPv6 acceptance source was `6658d14` plus the IPv6 profile/oracle change.
+The earlier `IPv4`-only adapter preflight rejection is preserved separately in
+`/tmp/ceph-osd-3replicas-ipv6-secure.log`; no daemon was created in that attempt.
+The first actual native run passed in
+`/tmp/ceph-osd-3replicas-ipv6-secure-native.log`. Ownership and independent
+cleanup checks are in `/tmp/ceph-osd-3replicas-ipv6-secure-ownership.txt` and
+`/tmp/ceph-osd-3replicas-ipv6-secure-cleanup.log`: all ten owned containers and
+the dedicated network were absent after termination. The provider's public
+WithAddressFamily IPv6 option applies to MON/MGR/OSD; no provider or product
+feature mask was changed. Python oracle tests now total 170 passes.

@@ -139,7 +139,7 @@ Lost-response tests independently observe one append before canceling the local 
 repeat it. Unit tests additionally reject ACK-only completion, malformed
 inputs and uint64 read-budget overflow, and retain submission metadata.
 
-Verified profiles use Tentacle 20.2.4 IPv4, legacy CRUSH, no HASHPSPOOL/upmap,
+Verified profiles use Tentacle 20.2.4, legacy CRUSH, no HASHPSPOOL/upmap,
 with single-replica MemStore/BlueStore and three-replica/min_size 2 BlueStore.
 Five [mutation decoder vectors](testdata/mutation-README.md) independently
 construct fields in Python and pass native ceph-dencoder decoding/re-export.
@@ -159,3 +159,9 @@ actual-primary SIGKILL readback. Verified product source is
 ten owned containers and the network were gone after cleanup. This expands
 one local profile and does not establish a whole CI or native payload-encoder
 proof.
+
+The IPv6 secure/aes256k three-BlueStore-replica container profile passes all
+12 selected tests, 25 mutation/guard cases and five mixed vectors on Linux
+arm64. The oracle verifies every owned OSD's numeric IPv6 public endpoint,
+port and nonce, including the replacement primary. This is distinct from the
+IPv4 host-relay evidence and does not establish other IPv6 configurations.
