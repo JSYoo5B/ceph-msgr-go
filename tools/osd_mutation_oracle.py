@@ -12,24 +12,164 @@ import ipaddress
 import os
 import pathlib
 import sys
-import subprocess
 import re
 import time
+import math
 
 from osd_oracle import Timespec
 
+MAX_INPUT_BYTES = 4 << 20
+MAX_DATA_BYTES = 1 << 20
+MAX_IDENTITY_BYTES = 4096
+MAX_MON_OUTPUT_BYTES = 1 << 20
+MAX_MON_DIAGNOSTIC_BYTES = 16 << 10
+
+
+def fixture_identity(value, label, *, empty=False):
+    if not isinstance(value, str) or "\0" in value or not empty and not value:
+        raise ValueError("invalid native fixture " + label)
+    if len(value.encode("utf-8")) > MAX_IDENTITY_BYTES:
+        raise ValueError("native fixture " + label + " exceeds bound")
+    return value
+
+
+def bounded_json(path):
+    with path.open("rb") as file:
+        data = file.read(MAX_INPUT_BYTES + 1)
+    if len(data) > MAX_INPUT_BYTES:
+        raise ValueError("native mutation JSON exceeds input bound")
+    return json.loads(data)
+
+
+def bounded_data(encoded):
+    # Existing Go []byte JSON uses null for nil; native nil/empty both length0.
+    if encoded is None:
+        encoded = ""
+    if not isinstance(encoded, str) or len(encoded) > 4 * ((MAX_DATA_BYTES + 2) // 3):
+        raise ValueError("invalid native mutation binary input")
+    data = base64.b64decode(encoded, validate=True)
+    if len(data) > MAX_DATA_BYTES:
+        raise ValueError("native mutation binary input exceeds bound")
+    return data
+
+
+def validate_mutation_request(request, metadata):
+    """Validate caller identity/vector before any native read or mirror reset."""
+    if not isinstance(request, dict) or not isinstance(metadata, dict):
+        raise ValueError("invalid native mutation JSON object")
+    fixture_identity(metadata["pool"], "pool")
+    if type(metadata["pool_id"]) is not int or not 0 <= metadata["pool_id"] < 1 << 63:
+        raise ValueError("invalid native fixture pool ID")
+    name = fixture_identity(request.get("object", metadata["object"]), "object")
+    namespace = fixture_identity(request.get("namespace", ""), "namespace", empty=True)
+    for field in ("compare", "placement", "exists"):
+        if field in request and type(request[field]) is not bool:
+            raise ValueError("invalid native mutation boolean")
+    actions = request.get("operations", [])
+    if not isinstance(actions, list) or len(actions) > 64 or request.get("compare", False) and not actions:
+        raise ValueError("invalid native mutation operation count")
+    total = 0
+    supported = {0x2201, 0x2202, 0x2206, 0x2203, 0x2204, 0x220d, 0x2205, 0x1208, 0x1220}
+    for action in actions:
+        if not isinstance(action, dict) or type(action.get("Code")) is not int or action["Code"] not in supported:
+            raise ValueError("unsupported native mutation opcode")
+        for field in ("Offset", "Length"):
+            if type(action.get(field)) is not int or not 0 <= action[field] < 1 << 64:
+                raise ValueError("invalid native mutation extent")
+        flags = action.get("Flags")
+        allowed = (0, 1, 2, 3) if action["Code"] == 0x220d else (0, 2)
+        if type(flags) is not int or flags not in allowed:
+            raise ValueError("unsupported native mutation flags")
+        data = bounded_data(action.get("Data"))
+        total += len(data)
+        if total > MAX_DATA_BYTES:
+            raise ValueError("native mutation vector exceeds binary bound")
+        if action["Code"] in (0x2201, 0x2202, 0x2206, 0x1220) and action["Length"] != len(data):
+            raise ValueError("native mutation payload length differs from extent")
+        if action["Code"] not in (0x2201, 0x2202, 0x2206, 0x1220) and data:
+            raise ValueError("native mutation opcode does not carry data")
+    if request.get("compare", False):
+        if type(request.get("exists")) is not bool:
+            raise ValueError("native mutation baseline existence is required")
+        bounded_data(request.get("baseline"))
+        for field, limit in (("seconds", 1 << 32), ("nanos", 10**9)):
+            if type(request.get(field)) is not int or not 0 <= request[field] < limit:
+                raise ValueError("invalid native mutation timestamp")
+        delta = request.get("version_delta", 0)
+        if type(delta) is not int or not -(1 << 63) <= delta < 1 << 63:
+            raise ValueError("invalid native mutation version delta")
+    return name, namespace
+
+
+def native_mon_query(lib, cluster, *arguments, timeout):
+    """Read placement through public librados, without CLI ASCII validation.
+
+    Pinned librados.h:3910 and librados_c.cc:891-917 allocate both output
+    buffers even on errors. MonClient.h:585-600 uses whole seconds; zero is
+    unlimited. Bounds reject oversized native allocations before copying.
+    """
+    if arguments == ("osd", "dump"):
+        command = {"prefix": "osd dump", "format": "json"}
+    elif len(arguments) in (4, 5) and arguments[:2] == ("osd", "map"):
+        command = {"prefix": "osd map", "format": "json",
+                   "pool": fixture_identity(arguments[2], "pool"),
+                   "object": fixture_identity(arguments[3], "object")}
+        if len(arguments) == 5:
+            command["nspace"] = fixture_identity(arguments[4], "namespace", empty=True)
+    else:
+        raise ValueError("unsupported native placement MON query")
+    if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout < 1:
+        raise ValueError("native placement read deadline below one whole second")
+    seconds = math.floor(min(10, timeout))
+    code = lib.rados_conf_set(cluster, b"rados_mon_op_timeout", str(seconds).encode())
+    if code < 0:
+        raise RuntimeError("native placement timeout setup failed: " + str(code))
+    encoded = json.dumps(command, ensure_ascii=False).encode("utf-8")
+    commands = (C.c_char_p * 1)(encoded)
+    output, diagnostic = C.c_void_p(), C.c_void_p()
+    output_length, diagnostic_length = C.c_size_t(), C.c_size_t()
+    try:
+        code = lib.rados_mon_command(cluster, commands, 1, None, 0,
+                                     C.byref(output), C.byref(output_length),
+                                     C.byref(diagnostic), C.byref(diagnostic_length))
+        if output_length.value > MAX_MON_OUTPUT_BYTES or diagnostic_length.value > MAX_MON_DIAGNOSTIC_BYTES:
+            raise ValueError("native placement MON output exceeds bounded allocation receipt")
+        if (output_length.value and not output.value or diagnostic_length.value and not diagnostic.value):
+            raise ValueError("native placement MON returned a missing buffer")
+        if code < 0:
+            # Never copy native diagnostics or authentication material to receipts.
+            raise RuntimeError("native placement MON query failed: " + str(code))
+        value = json.loads(C.string_at(output, output_length.value))
+        if not isinstance(value, dict):
+            raise ValueError("invalid native placement JSON shape")
+        return value
+    finally:
+        if output.value:
+            lib.rados_buffer_free(output)
+        if diagnostic.value:
+            lib.rados_buffer_free(diagnostic)
+
 
 def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
-                      timeout=30, clock=time.monotonic):
+                      timeout=30, clock=time.monotonic, namespace=""):
     """Collect one internally consistent native routing observation.
 
     Only osd map/dump reads are repeated, and only when their epochs differ.
     One pair never combines an old acting set with a newer daemon address.
-    The read budget bounds every subprocess and the total number of pairs.
+    The read budget bounds every native query and the total number of pairs.
     Mutation/readback requests are not replayed by this collector.
     """
     if type(attempts) is not int or not 1 <= attempts <= 5 or not 0 < timeout <= 30:
         raise ValueError("invalid native placement read budget")
+    fixture_identity(pool_name, "pool")
+    fixture_identity(object_name, "object")
+    fixture_identity(namespace, "namespace", empty=True)
+    if type(pool_id) is not int or not 0 <= pool_id < 1 << 63:
+        raise ValueError("invalid native placement pool ID")
+    # Pinned MonCommands.h:650: osd map pool object [nspace]. OSDMonitor
+    # :5918-5928 emits namespace/object as objname, not the bare object name.
+    displayed_object = namespace + "/" + object_name if namespace else object_name
+    map_arguments = ("osd", "map", pool_name, object_name) + ((namespace,) if namespace else ())
     deadline = clock() + timeout
 
     def query(*arguments):
@@ -44,12 +184,12 @@ def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
         return value
 
     for _ in range(attempts):
-        mapped = query("osd", "map", pool_name, object_name)
+        mapped = query(*map_arguments)
         topology = query("osd", "dump")
         epochs = (mapped.get("epoch"), topology.get("epoch"))
         if any(type(epoch) is not int or not 0 < epoch < 1 << 32 for epoch in epochs):
             raise ValueError("invalid native placement epoch")
-        if (mapped.get("pool") != pool_name or mapped.get("objname") != object_name
+        if (mapped.get("pool") != pool_name or mapped.get("objname") != displayed_object
                 or type(mapped.get("pool_id")) is not int or mapped["pool_id"] != pool_id):
             raise ValueError("native placement object or pool identity changed")
         if epochs[0] != epochs[1]:
@@ -110,24 +250,35 @@ def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
         match = re.fullmatch(r"([0-9]+)\.([0-9a-f]+)", raw_pg) if isinstance(raw_pg, str) else None
         if not match or int(match[1]) != pool_id or int(match[2], 16) >= 1 << 32:
             raise ValueError("invalid native raw placement hash")
+        mapped_pg = mapped.get("pgid")
+        pg_match = re.fullmatch(r"([0-9]+)\.([0-9a-f]+)", mapped_pg) if isinstance(mapped_pg, str) else None
+        if not pg_match or int(pg_match[1]) != pool_id or int(pg_match[2], 16) >= 1 << 32:
+            raise ValueError("invalid native mapped placement group")
         return {"up": mapped["up"], "acting": mapped["acting"], "replicas": pool["size"],
                 "min_size": pool["min_size"], "pool_id": pool_id, "object": object_name,
                 "osd_id": primary, "epoch": epochs[0], "hash": int(match[2], 16),
+                "namespace": namespace, "raw_pgid": raw_pg, "pgid": mapped_pg,
+                "pg_seed": int(pg_match[2], 16),
                 "address": "v2:" + address + "/" + str(endpoint["nonce"])}
     raise ValueError("native placement epochs did not converge within read budget")
 
 
 def collect(root, out):
-    request = json.loads((out / "osd-mutation-input.json").read_bytes())
-    metadata = json.loads((out / "osd-oracle.json").read_bytes())
+    request = bounded_json(out / "osd-mutation-input.json")
+    metadata = bounded_json(out / "osd-oracle.json")
+    object_name, namespace = validate_mutation_request(request, metadata)
     lib = C.CDLL("librados.so.2")
     ptr, char, integer, u64, size = C.c_void_p, C.c_char_p, C.c_int, C.c_uint64, C.c_size_t
     defs = {
         "create2": ([C.POINTER(ptr), char, char, u64], integer),
         "conf_read_file": ([ptr, char], integer),
         "conf_set": ([ptr, char, char], integer),
+        "mon_command": ([ptr, C.POINTER(char), size, char, size,
+                         C.POINTER(ptr), C.POINTER(size), C.POINTER(ptr), C.POINTER(size)], integer),
+        "buffer_free": ([ptr], None),
         "connect": ([ptr], integer),
         "ioctx_create": ([ptr, char, C.POINTER(ptr)], integer),
+        "ioctx_set_namespace": ([ptr, char], None),
         "ioctx_destroy": ([ptr], None), "shutdown": ([ptr], None),
         "stat2": ([ptr, char, C.POINTER(u64), C.POINTER(Timespec)], integer),
         "get_last_version": ([ptr], u64),
@@ -180,23 +331,22 @@ def collect(root, out):
         check(lib.rados_connect(cluster))
         check(lib.rados_ioctx_create(cluster, metadata["pool"].encode(), C.byref(io)))
         try:
-            original = metadata["object"].encode()
+            lib.rados_ioctx_set_namespace(io, namespace.encode())
+            original = object_name.encode()
             actual = snapshot(io, original)
             result = {"actual": actual}
             if request.get("placement", False):
-                def ceph(*args, timeout):
-                    data = subprocess.check_output(["ceph", "-c", str(root / "ceph.conf"), "-n", "client.test", "-k", str(root / "keyring"), *args, "--format", "json"], timeout=timeout)
-                    if len(data) > 1 << 20:
-                        raise ValueError("native placement JSON exceeds 1 MiB")
-                    return json.loads(data)
-                result["placement"] = collect_placement(ceph, metadata["pool"], metadata["object"], metadata["pool_id"])
+                def command(*args, timeout):
+                    return native_mon_query(lib, cluster, *args, timeout=timeout)
+                result["placement"] = collect_placement(command, metadata["pool"], object_name,
+                                                         metadata["pool_id"], namespace=namespace)
             if request.get("compare", False):
                 mirror = original + b"-native-mutation"
                 code = lib.rados_remove(io, mirror)
                 if code != -2:
                     check(code)
                 if request["exists"]:
-                    baseline = base64.b64decode(request["baseline"], validate=True)
+                    baseline = bounded_data(request.get("baseline"))
                     seed = lib.rados_create_write_op()
                     try:
                         lib.rados_write_op_write_full(seed, baseline, len(baseline))
@@ -210,7 +360,7 @@ def collect(root, out):
                 try:
                     for action in request["operations"]:
                         code, offset, length = action["Code"], action["Offset"], action["Length"]
-                        data = base64.b64decode(action.get("Data") or "", validate=True)
+                        data = bounded_data(action.get("Data"))
                         flags = action["Flags"]
                         if code == 0x2201:
                             lib.rados_write_op_write(op, data, len(data), offset)
@@ -227,7 +377,10 @@ def collect(root, out):
                         elif code == 0x2205:
                             lib.rados_write_op_remove(op)
                         elif code == 0x1208:
-                            lib.rados_write_op_assert_version(op, version + request["version_delta"])
+                            target_version = version + request.get("version_delta", 0)
+                            if not 0 <= target_version < 1 << 64:
+                                raise ValueError("native comparison version exceeds u64")
+                            lib.rados_write_op_assert_version(op, target_version)
                         elif code == 0x1220:
                             rval = integer(999)
                             perops.append(rval)

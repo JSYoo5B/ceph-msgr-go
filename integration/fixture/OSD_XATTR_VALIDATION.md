@@ -291,9 +291,44 @@ Reproduce with `CEPH_MSGR_TEST_RUN='^TestCephOSDXattrPermissionsIntegration$'`
 and the CRC/AES256K single-MemStore host profile. Python unit tests verify
 fixed role admission, vector connection selection and cleanup ownership.
 
-Namespace isolation, numeric CMP, omap/class/snapshot and broad pool/EC
-profiles remain incomplete. The P1 O2 milestone and final environment are
-not complete.
+## Caller-prepared namespace isolation
+
+`TestCephOSDXattrNamespacesIntegration` passed in 6.34s on a third fresh
+CRC/AES entity/service, IPv4, Darwin arm64 host relay, three-BlueStore/min2
+fixture. The same bare object name in `ceph-msgr/ns-alpha` and
+`ceph-msgr/네임스페이스` has separate native routing and state. Native MON JSON
+reported raw PGs `2.305acbaf` and `2.8724e2c9`, mapped PG `2.0`, epoch 21,
+primary 1 and nonce 568705511. Callers supply each namespace/hash/epoch/target
+to Go; no placement calculation or automatic namespace selection is added.
+
+Explicit Go WRITEFULL+binary/empty SET, GET/GETALL/READ, subsequent SET/RM and
+known ENODATA match native snapshots. Each operation preserves the peer
+namespace and the original default-namespace object. Version/mtime comparison
+stays within each object. Cleanup explicitly deletes only the two newly owned
+objects, independently verifies absence and default-object stability, and
+confirms all ten owned containers and the network removed.
+
+The first trial failed before writes and discarded the generic native stderr,
+so its exact cause was not observed. A second unchanged trial, with the new
+bounded native command receipt, shows the native CLI rejecting Unicode nspace
+as invalid printable characters and EINVAL. This is CLI frontend validation,
+not a Go/OSD namespace failure. The adapter now issues read-only `osd map` and
+`osd dump` JSON through public librados `rados_mon_command`, keeping the same
+epoch-consistency and identity checks. Per-query native timeouts are finite
+whole seconds within the remaining budget; subsecond exhaustion fails before
+send. Native-allocated buffers are bounded before copying and always freed.
+
+First/second logs and independent cleanup receipts remain at
+`/tmp/ceph-xattr-namespaces-first*` and `...-second*`; successful frozen source,
+log, selected receipts and cleanup are at `...-third*`. The successful adapter
+SHA256 is `d58b2de61a2ab9ceaa9032168ce8f3c54a02abbe07d66ddca686d49513aaf956`.
+Its 22 Python tests cover namespace/object identity, epoch read budgets,
+native JSON calls, error/free paths and bounded outputs. Reproduce with
+`CEPH_MSGR_TEST_RUN='^TestCephOSDXattrNamespacesIntegration$'` and the CRC/AES
+three-BlueStore host profile.
+
+Numeric CMP, omap/class/snapshot and broad pool/EC profiles remain incomplete.
+The P1 O2 milestone and final environment are not complete.
 
 Reproduce the Go/native profile with
 `CEPH_MSGR_TEST_RUN='^TestCephOSDXattrsIntegration$'` and the same fixture flags

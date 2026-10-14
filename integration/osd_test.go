@@ -23,10 +23,13 @@ type osdFixtureOracle struct {
 	MinSize     int     `json:"min_size"`
 	Pool        int64   `json:"pool_id"`
 	Name        string  `json:"object"`
+	Namespace   string  `json:"namespace"`
 	ID          int32   `json:"osd_id"`
 	Epoch       uint32  `json:"epoch"`
 	Hash        uint32  `json:"hash"`
 	PG          uint32  `json:"pg_seed"`
+	RawPGID     string  `json:"raw_pgid"`
+	PGID        string  `json:"pgid"`
 	Address     string  `json:"address"`
 	Size        uint64  `json:"size"`
 	Seconds     uint32  `json:"mtime_seconds"`
@@ -73,7 +76,7 @@ func osdFixture(t *testing.T) (*cephmsgr.Client, context.Context, osdFixtureOrac
 }
 
 func osdObjectRequest(oracle osdFixtureOracle, operations ...cephmsgr.OSDOperation) cephmsgr.OSDRequest {
-	return cephmsgr.OSDRequest{MapEpoch: oracle.Epoch, Object: cephmsgr.OSDObject{Pool: oracle.Pool, Name: oracle.Name, Hash: oracle.Hash}, Operations: operations}
+	return cephmsgr.OSDRequest{MapEpoch: oracle.Epoch, Object: cephmsgr.OSDObject{Pool: oracle.Pool, Name: oracle.Name, Namespace: oracle.Namespace, Hash: oracle.Hash}, Operations: operations}
 }
 
 func checkOSDMetadata(t *testing.T, reply cephmsgr.OSDReply, oracle osdFixtureOracle) {

@@ -203,7 +203,7 @@ fixture and explicit routing/native stat/read controls:
 | Case | Required native/Go comparison | Current status |
 | --- | --- | --- |
 | Binary values and empty value | NUL/0xff/newline payload; length-zero vs removed; set/get/list exact bytes and no unrelated object-content change | Limited Go/native profile and fresh wire vectors passed |
-| Names and namespace | Normal, leading underscore, non-UTF-8 names; local rejection of empty/NUL names before TID/send; different object namespace isolation | Byte-name profile and pre-send rejection passed; namespace isolation pending; no unsafe alias mutation performed |
+| Names and namespace | Normal, leading underscore, non-UTF-8 names; local rejection of empty/NUL names before TID/send; different object namespace isolation | Byte-name profile and pre-send rejection passed; same bare object in slash/Unicode namespaces isolated in CRC/AES three-BlueStore native/Go with caller-prepared independent hashes/routes; no unsafe alias mutation performed |
 | Length limits | Configured name limit and value-size cap yield native `-ENAMETOOLONG`/`-EFBIG`; local frame/budget limits reject before send, received oversize retains uncertainty | CRC/AES three-BlueStore six-case native/Go 32/33 boundaries and staged-SET rollback passed; all-owned effective settings and exact prior entry/absence restored with public v0.2.0 handles |
 | Compare operators | Caller-left asymmetric GT/LT, all six ops, binary/empty STRING, true positive result, false `-ECANCELED`; missing attr vs missing object | Go/native matrix 36 cases and missing identities passed; actual Go per-op +1 preserved, C callback still unavailable |
 | U64 followup | LE operand 0/max; stored decimal, empty/missing, prefix, bad signs/whitespace/NUL, overflow; invalid input length/mode locally rejected | Unsupported; separate oracle prerequisite |
@@ -228,8 +228,9 @@ three-BlueStore APPEND+SET+RM vector survived actual-primary SIGKILL with
 unchanged native/Go metadata on two replicas. Public scoped configuration
 and all-owned effective gates verified name/value limits and rollback after
 an earlier SET. Readonly native/Go SET/RM return EPERM with unchanged state;
-their raw Go per-op0 and echoed ONDISK do not establish execution. Namespace
-matrices remain pending;
+their raw Go per-op0 and echoed ONDISK do not establish execution. Two slash/
+Unicode namespaces isolate the same bare object while preserving its default
+namespace, with independently prepared native MON routing;
 the OSD feature mask has not widened. Existing O1 results cannot be relabeled
 as this new matrix.
 Broader pool/EC/snapshot and staged-read semantics remain excluded

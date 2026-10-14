@@ -314,7 +314,7 @@ func TestCephOSDMutationRestartIntegration(t *testing.T) {
 
 func adoptMutationPlacement(t *testing.T, original, fresh osdFixtureOracle) osdFixtureOracle {
 	t.Helper()
-	if fresh.ID < 0 || fresh.Address == "" || fresh.Epoch < original.Epoch || fresh.Pool != original.Pool || fresh.Name != original.Name || fresh.Hash != original.Hash {
+	if fresh.ID < 0 || fresh.Address == "" || fresh.Epoch < original.Epoch || fresh.Pool != original.Pool || fresh.Name != original.Name || fresh.Namespace != original.Namespace || fresh.Hash != original.Hash {
 		t.Fatalf("native replacement routing changed object identity or regressed epoch: %+v", fresh)
 	}
 	primaryPresent := false
@@ -330,6 +330,7 @@ func adoptMutationPlacement(t *testing.T, original, fresh osdFixtureOracle) osdF
 	// because the native placement receipt describes routing, not restoration.
 	original.ID, original.Epoch, original.Address = fresh.ID, fresh.Epoch, fresh.Address
 	original.Acting, original.Up = fresh.Acting, fresh.Up
+	original.PG, original.RawPGID, original.PGID = fresh.PG, fresh.RawPGID, fresh.PGID
 	return original
 }
 
