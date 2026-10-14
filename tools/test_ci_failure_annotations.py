@@ -62,7 +62,80 @@ class FailureAnnotationsTest(unittest.TestCase):
         self.assertEqual(result[3], "::error file=cephmsgr/integration_pause_test.go,line=7::internal session failed")
         abrupt = annotations(log[:3] + ["--- PASS: TestPublic\n", "Running Ceph test suite: client\n"], 137)
         self.assertEqual(len(abrupt), 1)
-        self.assertIn("No Go test start was observed", abrupt[0])
+        self.assertIn("Last started Go test: TestPublic", abrupt[0])
+        self.assertIn("Last completed passing Go test: TestPublic", abrupt[0])
+
+    def test_passing_api_and_empty_client_followed_by_metadata_eacces(self):
+        # Regression for the container job: both binaries returned PASS, then
+        # host saveMetadata could not open a root-owned public 0600 receipt.
+        # A client selection with no RUN must not erase the actual API start.
+        log = ["Running Ceph test suite: api\n",
+               "=== RUN   TestCephOSDXattrsIntegration\n",
+               "=== RUN   TestCephOSDXattrsIntegration/GET_GETALL_READ_STAT_and_missing_attr\n",
+               "--- PASS: TestCephOSDXattrsIntegration (17.39s)\n",
+               "    --- PASS: TestCephOSDXattrsIntegration/GET_GETALL_READ_STAT_and_missing_attr (0.40s)\n",
+               "PASS\n", "Running Ceph test suite: client\n", "PASS\n",
+               "testing: warning: no tests to run\n",
+               "2026/10/14 21:13:15 container cleanup finished\n",
+               "open /tmp/ceph-msgr-integration-2438852291/osd-xattr-permission-list.json: permission denied\n",
+               "exit status 1\n"]
+        for timestamped in (False, True):
+            with self.subTest(timestamped=timestamped):
+                lines = ["2026-10-14T21:13:15.2952703Z " + line for line in log] if timestamped else log
+                result = annotations(lines, 1)
+                self.assertEqual(len(result), 1)
+                self.assertIn("Last started Go test: TestCephOSDXattrsIntegration/GET_GETALL_READ_STAT_and_missing_attr", result[0])
+                self.assertIn("Last completed passing Go test: TestCephOSDXattrsIntegration/GET_GETALL_READ_STAT_and_missing_attr", result[0])
+                self.assertIn("Failure phase: post-suite fixture metadata", result[0])
+                self.assertIn("api/client PASS markers were observed", result[0])
+                self.assertNotIn("No Go test start", result[0])
+                self.assertNotIn("2438852291", result[0])
+
+    def test_only_started_test_does_not_invent_passing_completion(self):
+        result = annotations(["Running Ceph test suite: api\n", "=== RUN   TestWaiting\n",
+                              "Running Ceph test suite: client\n", "exit status 137\n"], 137)
+        self.assertIn("Last started Go test: TestWaiting", result[0])
+        self.assertNotIn("passing", result[0])
+        self.assertNotIn("PASS markers", result[0])
+
+    def test_named_pass_without_run_is_completion_evidence_not_bootstrap_failure(self):
+        result = annotations(["Running Ceph test suite: api\n", "--- PASS: TestCompleted (0.4s)\n",
+                              "PASS\n", "Running Ceph test suite: client\n", "PASS\n"], 1)
+        self.assertIn("completion was observed without a RUN marker", result[0])
+        self.assertIn("Last completed passing Go test: TestCompleted", result[0])
+        self.assertNotIn("No Go test start", result[0])
+        self.assertNotIn("Last started Go test:", result[0])
+
+    def test_metadata_phase_requires_both_suite_pass_markers_and_exact_public_receipt(self):
+        error = "open /tmp/ceph-msgr-integration-12/osd-xattr-permission-go-set.json: permission denied\n"
+        for lines in ([error], ["Running Ceph test suite: api\n", "=== RUN   TestStarted\n", error],
+                      ["Running Ceph test suite: api\n", "PASS\n", "Running Ceph test suite: client\n", error]):
+            result = annotations(lines, 1)
+            self.assertNotIn("Failure phase", result[0])
+        passed = ["Running Ceph test suite: api\n", "=== RUN   TestOK\n", "--- PASS: TestOK\n", "PASS\n",
+                  "Running Ceph test suite: client\n", "PASS\n"]
+        for error in ("open /tmp/ceph-msgr-integration-12/keyring: permission denied\n",
+                      "open /private/config.json: permission denied\n",
+                      "open /tmp/ceph-msgr-integration-12/osd-xattr-permission-list.json: no such file\n",
+                      "daemon says open /out/osd-xattr-permission-list.json: permission denied\n"):
+            self.assertNotIn("Failure phase", annotations(passed + [error], 1)[0])
+
+    def test_timestamped_genuine_go_failure_preserves_current_source_diagnostic(self):
+        lines = ["Running Ceph test suite: api\n", "=== RUN   TestFailure\n",
+                 "    auth_test.go:19: ceph messenger authentication: code -13\n",
+                 "--- FAIL: TestFailure (0.4s)\n", "FAIL\n"]
+        result = annotations(["2026-10-14T21:13:15.2952703Z " + line for line in lines], 1)
+        self.assertEqual(result, ["::error::--- FAIL: TestFailure (0.4s)",
+                                  "::error file=integration/auth_test.go,line=19::ceph messenger authentication: code -13"])
+
+    def test_timestamped_first_pull_failure_and_printf_do_not_invent_test_start(self):
+        lines = ["printf '=== RUN   TestNotStarted\\n--- PASS: TestNotStarted\\nPASS\\n'\n",
+                 "pull fixture image: received unexpected HTTP status: 502 Bad Gateway\n", "exit status 1\n"]
+        result = annotations(["2026-10-14T21:13:15.2952703Z " + line for line in lines], 1)
+        self.assertEqual(len(result), 1)
+        self.assertIn("No Go test start was observed", result[0])
+        self.assertNotIn("passing", result[0])
+        self.assertNotIn("TestNotStarted", result[0])
 
     def test_success_does_not_emit_failure_annotations(self):
         self.assertEqual(annotations(["=== RUN   TestOK\n--- PASS: TestOK\n"], 0), [])

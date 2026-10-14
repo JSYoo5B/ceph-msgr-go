@@ -18,6 +18,20 @@ CRASH_SYMBOL_LIMIT = 240
 FAILURE_DIAGNOSTICS_MARKER = "Ceph fixture failure diagnostics:"
 
 
+def github_log_line(line):
+    # gh job-log downloads prepend this UTC timestamp; workflow tee artifacts
+    # contain the raw line. Do not strip arbitrary prefixes or echoed scripts.
+    return re.sub(r"^\ufeff?[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z ", "", line, count=1)
+
+
+def metadata_permission_failure(line):
+    # saveMetadata reads these public receipts after both test binaries return.
+    # Identify the exact known failure without publishing arbitrary paths or
+    # treating daemon/config/keyring permission failures as this harness phase.
+    return re.fullmatch(r"open (?:/tmp/ceph-msgr-integration-[0-9]+|/out)/"
+                        r"(osd-xattr-permission-(?:list|set|remove|go-set|go-remove)\.json): permission denied", line.strip())
+
+
 def bounded_json_depth(value):
     depth, quoted, escaped = 0, False, False
     for char in value:
@@ -199,6 +213,10 @@ def annotations(log, exit_code):
     output = []
     diagnostics = deque(maxlen=10)
     last_started = None
+    last_passed = None
+    current_suite = None
+    passed_suites = []
+    metadata_failed = None
     completed_failure = False
     source_prefix = ""
     continuation = False
@@ -216,6 +234,7 @@ def annotations(log, exit_code):
             output.append(f"::error file={escape(path)},line={number}::{escape(message)}")
 
     for line in log:
+        line = github_log_line(line)
         if line.rstrip("\r\n") == FAILURE_DIAGNOSTICS_MARKER:
             continuation = False
             failure_diagnostics = True
@@ -239,20 +258,29 @@ def annotations(log, exit_code):
         suite = re.match(r"^Running Ceph test suite: (api|client)\s*$", line)
         started = re.match(r"^=== RUN\s+(\S+)", line)
         resumed = re.match(r"^=== (PAUSE|CONT|NAME)\s+\S+", line)
+        if passed_suites == ["api", "client"]:
+            metadata = metadata_permission_failure(line)
+            if metadata:
+                metadata_failed = metadata.group(1)
         if failure_diagnostics and not (suite or started or resumed):
             # Daemon log tails are untrusted text, not Go assertion records.
             continue
         if suite:
             failure_diagnostics = False
             source_prefix = "integration/" if suite.group(1) == "api" else "cephmsgr/"
+            current_suite = suite.group(1)
             diagnostics.clear()
-            last_started = None
             continuation = False
         if started:
             failure_diagnostics = False
             diagnostics.clear()
             last_started = started.group(1)
             continuation = False
+        passed = re.match(r"^\s*--- PASS:\s+(Test\S+)(?:\s|$)", line)
+        if passed:
+            last_passed = passed.group(1)
+        if line.strip() == "PASS" and current_suite and current_suite not in passed_suites:
+            passed_suites.append(current_suite)
         if re.match(r"^\s*(--- (PASS|FAIL|SKIP):|=== (RUN|PAUSE|CONT|NAME)\b|PASS\s*$|FAIL\s*$)", line):
             continuation = False
             failure_diagnostics = False
@@ -272,7 +300,16 @@ def annotations(log, exit_code):
             output.append("::error::" + escape(line.strip()))
             append_diagnostics()
     if not completed_failure:
-        context = f"Last started Go test: {last_started}." if last_started else "No Go test start was observed."
+        if last_started:
+            context = f"Last started Go test: {last_started}."
+        elif last_passed:
+            context = "Go test completion was observed without a RUN marker."
+        else:
+            context = "No Go test start was observed."
+        if last_passed:
+            context += f" Last completed passing Go test: {last_passed}."
+        if metadata_failed:
+            context += f" Failure phase: post-suite fixture metadata (permission denied reading {metadata_failed}); api/client PASS markers were observed."
         output.append(f"::error::Ceph harness exited with code {exit_code} without a completed Go test failure. " + escape(context))
         append_diagnostics()
     return output
