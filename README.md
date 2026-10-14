@@ -243,6 +243,10 @@ OSD 연결은 lossy session이며 전송한 요청을 재실행하지 않는다.
 닫고 사용 레이어가 새 연결 여부를 결정한다. OSDMap 메시지는 다음의 raw
 지도 큐로 전달한다. Backoff 등 다른 미지원 control 메시지는 수신하면 세션을
 명시적으로 실패시킨다.
+Watch/notify·backoff type에 요청과 같은 TID가 있어도 mutation 완료로
+처리하지 않으며, 이미 보낸 요청은 결과 불명확과 local submission을 유지한다.
+[control/event 계약](internal/osd/EVENT_CONTRACT.md)에 해당 합성 거절 시험과
+후속 wire·feature·native 검증 요구를 기록했다. 실제 backoff/watch 지원은 없다.
 
 한 객체의 쓰기·조건 vector는 단일 요청으로 전송한다. `Data`의 byte 수와
 `Length`는 같아야 하며, truncate는 `Offset`에 새 크기를 넣는다.

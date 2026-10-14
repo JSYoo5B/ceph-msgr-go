@@ -16,7 +16,9 @@ The exhaustive `__CEPH_FORALL_OSD_OPS` inventory is recorded in
 be transmitted or accepted as ordinary operation replies. Mode bits alone do
 not establish semantics: notably CALL uses a read bit but its class determines
 its behavior. The inventory does not claim that deferred payloads, control
-messages or unsolicited events have been specified or implemented.
+messages or unsolicited events have been implemented. The separate
+[control/event contract](EVENT_CONTRACT.md) inventories current map/reply
+delivery, future backoff/watch wire requirements and their acceptance gaps.
 
 ## Bounded v6 vector
 
