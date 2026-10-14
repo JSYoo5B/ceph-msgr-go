@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,13 +23,33 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 	options := integrationOptions(t)
 	dial := options.DialContext
 	var managerDials atomic.Int32
+	var dialMu sync.Mutex
+	var monitorDials []string
+	observeDial := func(role string) {
+		if role == "mon.a" || role == "mon.b" || role == "mon.c" {
+			dialMu.Lock()
+			monitorDials = append(monitorDials, role)
+			dialMu.Unlock()
+		}
+	}
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 		conn, err := dial(ctx, network, endpoint)
 		if err == nil {
 			_, role, _ := testcluster.SplitPeer(endpoint)
+			observeDial(role)
 			if role == "mgr.a" || role == "mgr.b" {
 				managerDials.Add(1)
 			}
+		}
+		return conn, err
+	}
+	coldOptions := integrationOptions(t)
+	coldDial := coldOptions.DialContext
+	coldOptions.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+		conn, err := coldDial(ctx, network, endpoint)
+		if err == nil {
+			_, role, _ := testcluster.SplitPeer(endpoint)
+			observeDial(role)
 		}
 		return conn, err
 	}
@@ -40,11 +61,23 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 	if err := held.WaitMgrReady(ctx); err != nil {
 		t.Fatalf("establish MGR before service-key disposal: %q", fmt.Sprint(err))
 	}
-	cold, err := cephmsgr.Dial(ctx, integrationOptions(t))
+	cold, err := cephmsgr.Dial(ctx, coldOptions)
 	if err != nil {
 		t.Fatalf("authenticate cold client: %q", fmt.Sprint(err))
 	}
 	defer cold.Close()
+	// Keep only public state in the test log: no keys, ticket blobs or opaque
+	// proofs. A service SecretID alone would not prove a key generation anyway:
+	// pinned KeyServer::prepare_rotating_update(wipe) creates a fresh MGR
+	// RotatingSecrets set whose numeric IDs may be reused after every wipe.
+	logState := func(cycle int, phase string, client *cephmsgr.Client) {
+		t.Helper()
+		s := client.Snapshot()
+		dialMu.Lock()
+		history := append([]string(nil), monitorDials...)
+		dialMu.Unlock()
+		t.Logf("service-key observation cycle=%d phase=%s client-id=%d MON=%s map-epoch=%d auth-expires=%s mgr-expires=%s MGR=%s daemon-id=%d ready=%t rejection=%v MON-dials=%v", cycle, phase, s.GlobalID, s.Monitor.Endpoint, s.Monitor.MapEpoch, s.AuthTicket.Expires.Format(time.RFC3339Nano), s.MgrTicket.Expires.Format(time.RFC3339Nano), s.Manager.Name, s.Manager.GlobalID, s.Manager.Ready, s.AuthRejection, history)
+	}
 	heldInitial, coldInitial := held.Snapshot(), cold.Snapshot()
 	if heldInitial.GlobalID == 0 || coldInitial.GlobalID == 0 || coldInitial.Manager.Ready || managerDials.Load() != 1 {
 		t.Fatal("fixture did not establish one held and one cold MGR client")
@@ -69,13 +102,15 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 		// handshake must use the replacement ticket, not an existing session.
 		if cycle > 1 {
 			cold.Close()
-			cold, err = cephmsgr.Dial(ctx, integrationOptions(t))
+			cold, err = cephmsgr.Dial(ctx, coldOptions)
 			if err != nil {
 				t.Fatalf("authenticate next cold client: %q", fmt.Sprint(err))
 			}
 			defer cold.Close()
 		}
 		oldHeld, oldCold := held.Snapshot(), cold.Snapshot()
+		logState(cycle, "held-before-wipe", held)
+		logState(cycle, "cold-before-wipe", cold)
 		for _, s := range []cephmsgr.State{oldHeld, oldCold} {
 			if time.Until(s.AuthTicket.RenewAfter) < time.Minute || time.Until(s.MgrTicket.RenewAfter) < time.Minute {
 				t.Fatal("fixture tickets are too short to distinguish epoch notification from scheduled renewal")
@@ -102,6 +137,8 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 			}
 		}
 		cancel()
+		logState(cycle, "held-after-renewal", held)
+		logState(cycle, "cold-after-renewal", cold)
 		if err := held.WaitMgrReady(ctx); err != nil || managerDials.Load() != 1 {
 			t.Fatalf("service-key disposal replaced an authenticated held MGR connection: dials=%d error=%q", managerDials.Load(), fmt.Sprint(err))
 		}
@@ -131,8 +168,10 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 			t.Fatalf("replacement-key readiness changed the held MGR: name=%s global-id=%d dials=%d", state.Manager.Name, state.Manager.GlobalID, managerDials.Load())
 		}
 		if err := cold.WaitMgrReady(ctx); err != nil {
+			logState(cycle, "cold-first-MGR-rejected", cold)
 			t.Fatalf("cold MGR with replacement service ticket: %q", fmt.Sprint(err))
 		}
+		logState(cycle, "cold-first-MGR-accepted", cold)
 		if err := fixtureRecoveryRead(ctx, cold, true); err != nil {
 			t.Fatalf("cold MGR command after service-key disposal: %q", fmt.Sprint(err))
 		}

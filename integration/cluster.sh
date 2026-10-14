@@ -304,6 +304,19 @@ PY
             # subject's first MGR authentication is still submitted once.
             timeout "$key_probe_timeout" ceph -c "$root/ceph.conf" -n client.test -k "$keyring" --monmap "$root/monmap" --mon-client-target-rank "$mon_rank" "$@"
         }
+        service_key_check() {
+            # Preserve every public native observation, including failed
+            # readiness checks. A later successful CLI cannot prove which
+            # rotating-key generation the Go subject already received.
+            key_probe_phase=$1
+            shift
+            if service_key_probe "$@" > "$root/service-keys-probe.json" 2> "$root/service-keys-probe.log"; then
+                key_probe_code=0
+            else
+                key_probe_code=$?
+            fi
+            python3 /out/service_key_oracle.py "$root/service-keys-probe.json" /out/service-keys-history.jsonl "$request_id" "$key_probe_phase" "$mon_name" "$mon_rank" "$map_epoch" "$auth_key_epoch" "$name" "$mgr_id" "$key_probe_code"
+        }
         while test "$(date +%s)" -lt "$key_probe_deadline"; do
             keys_ready=true
             for mon_name in a b c; do
@@ -313,17 +326,17 @@ PY
                 # MonClient's rank rather than allowing it to hunt any MON.
                 # mon dump is forwarded to the leader, so it cannot prove a
                 # particular MON's local map has learned this key wipe.
-                if ! service_key_probe tell "mon.$mon_name" mon_status --format json > "$root/service-keys-probe.json" 2> "$root/service-keys-probe.log" || ! python3 -c 'import json,sys; s=json.load(sys.stdin); m=s["monmap"]; assert s["name"]==sys.argv[1] and s["rank"]==int(sys.argv[2]) and m["epoch"]>=int(sys.argv[3]) and m["auth_epoch"]>=int(sys.argv[4])' "$mon_name" "$mon_rank" "$map_epoch" "$auth_key_epoch" < "$root/service-keys-probe.json"; then
+                if ! service_key_check mon-status tell "mon.$mon_name" mon_status --format json; then
                     keys_ready=false
                     break
                 fi
                 # This query checks active identity only; the following
                 # named daemon Tell proves an actual fresh MGR connection.
-                if ! service_key_probe mgr dump --format json > "$root/service-keys-probe.json" 2> "$root/service-keys-probe.log" || ! python3 -c 'import json,sys; m=json.load(sys.stdin); assert m["available"] and m["active_name"]==sys.argv[1] and m["active_gid"]==int(sys.argv[2])' "$name" "$mgr_id" < "$root/service-keys-probe.json"; then
+                if ! service_key_check mgr-map mgr dump --format json; then
                     keys_ready=false
                     break
                 fi
-                if ! service_key_probe tell "mgr.$name" version --format json > "$root/service-keys-probe.json" 2> "$root/service-keys-probe.log" || ! python3 -c 'import json,sys; v=json.load(sys.stdin); assert v["release"]=="tentacle" and v["version"].startswith("20.2.")' < "$root/service-keys-probe.json"; then
+                if ! service_key_check mgr-version tell "mgr.$name" version --format json; then
                     keys_ready=false
                     break
                 fi
