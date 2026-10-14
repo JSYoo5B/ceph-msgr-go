@@ -89,7 +89,11 @@ can precede vector evaluation, leaving some per-op codes zero.
 
 One object vector is one native transaction. Ordinary guard failure prevents
 its staged writes from becoming visible. FAILOK intentionally changes that
-contract. Ordered operations do not promise generic read-your-staged-writes
+contract. An aggregate success with a negative ordinary, non-FAILOK per-op
+result is a malformed completion receipt. The session fails and a sent
+mutation retains its unknown outcome, original results and local submission;
+it is never replayed. Known negative aggregate refusals and positive result
+codes remain distinct. Ordered operations do not promise generic read-your-staged-writes
 behavior or atomicity across different requests/objects. Reply normalization
 must correspond to the submitted operation; unrelated opcode/offset/length
 or payload changes fail the session as an unknown outcome.

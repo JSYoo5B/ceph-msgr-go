@@ -271,6 +271,14 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		if op.Code != requested.Code && !normalizedZero || op.Offset != requested.Offset || op.Length > length || !shortExtent && op.Length != length || op.TruncateSize != 0 || op.TruncateSequence != 0 || op.Flags&(osd.OpExclusive|osd.OpFailOK) != requested.Flags || uint64(len(op.Data)) != uint64(op.PayloadLength) {
 			return errors.New("OSD reply operation differs from request or payload metadata")
 		}
+		// Tentacle stops a vector on an ordinary failed operation. Only
+		// FAILOK can retain a negative per-op result in a successful vector.
+		// A contradictory success is not an execution/durability receipt.
+		// https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/PrimaryLogPG.cc#L8205
+		// https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/PrimaryLogPG.cc#L9188
+		if !redirect && reply.Result >= 0 && op.Result < 0 && requested.Flags&osd.OpFailOK == 0 {
+			return errors.New("OSD successful vector contains a failed ordinary operation")
+		}
 		success := !redirect && reply.Result >= 0 && op.Result >= 0
 		switch requested.Code {
 		case osd.Read:
