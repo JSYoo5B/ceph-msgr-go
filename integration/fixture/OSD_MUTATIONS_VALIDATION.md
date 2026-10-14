@@ -164,6 +164,17 @@ the readiness recipe or its cause. Separate MGR precondition changes passed
 four selected native tests. This proves those fixture preconditions, not a
 causal fix for intermittent rotating-key rejection.
 
+The rejection recurred on consumer `2d1cc4624cafeb64072ce64d56a2ede032fbddda`,
+[CI job 115993789742](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38605086391/job/115993789742),
+this time on the first wipe. All nine native readiness probes passed with
+MonMap epoch 4/auth epoch 10 and active mgr.a/global ID 4167, before the cold
+Go client's first MGR authentication returned -13 and mgr.a logged ticket-info
+bad magic. The initial and renewal Go MON connections were both mon.a. The
+retained public observations still do not identify the effective service-key
+generation used at issuance or MGR lookup. The recurrence is retained in
+[issue #71's follow-up](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6174955026).
+Subsequent successful CI runs do not establish a fix for this failure.
+
 The conditional native AUTH preparation branch is now separately verified by
 `TestCephNativeManagerPreparationIntegration` in
 `/tmp/ceph-native-mgr-conditional.log` (PASS, 48.95 seconds). Public Pause/Resume
@@ -180,7 +191,11 @@ API/recipe question remains open, and #71's rotating-key failure is separate.
 
 The opt-in `CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION=1` selects this one test.
 CI includes this isolated AES/aes256k IPv4 profile. The local evidence above
-is Linux arm64; the added Linux amd64 CI result must be checked separately.
+is Linux arm64. The Linux amd64 row also passed on exact consumer source
+`6658d14` in [CI run 38605940894](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38605940894),
+whose 40 jobs all passed, and on `d39cc93` in
+[CI run 38608642377](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38608642377),
+whose 41 jobs all passed, including the added IPv6 three-BlueStore row.
 Reproducible execution is:
 
 ```sh

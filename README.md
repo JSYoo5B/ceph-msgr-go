@@ -1066,6 +1066,17 @@ Ceph CLI 자체의 bootstrap·재연결은 native 정책을 따르며, 최종 �
 별도 실험에서 요구 auth epoch를 실제 값보다 1,000 높게 지정하자 준비
 확인이 종료됐고, native MON 응답의 실제 epoch는 3으로 남았다.
 
+2026-10-15 기준 이 간헐 거절의 원인은 아직 확정하지 못했다.
+`2d1cc46`의 [CI 첫 실패](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38605086391/job/115993789742)에서는
+첫 wipe 뒤에도 cold Go MGR 인증이 `-13`으로 거절됐다. 초기·갱신 MON
+연결은 모두 mon.a였고, native 준비 probe 9개는 map epoch 4/auth epoch 10과
+동일한 mgr.a/global ID 4167을 확인한 뒤 모두 통과했다. 직후 그 MGR는
+ticket-info bad magic을 기록했다. 이 관측은 Go ticket 발급과 MGR 검증에
+사용한 실제 service-key 세대의 일치를 증명하지 않는다.
+[fixture 질문과 추가 근거](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6174955026)를
+남겼으며, 이후 `d39cc93`의 CI 41개 통과도 원인이 해결됐다는 뜻으로
+처리하지 않는다. 최초 인증이나 wipe를 재시도해 실패를 숨기지 않는다.
+
 준비 확인을 보강한 `1e4cfda`의
 [GitHub CI](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37024308483)는
 auth epoch 두 구성을 포함해 25개 중 24개가 통과했다. aes256k/AES·IPv4의
