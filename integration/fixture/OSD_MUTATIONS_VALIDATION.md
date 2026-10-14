@@ -83,6 +83,17 @@ The canceled call retains OutcomeUnknownError and local submission identity.
 A caller-chosen fresh session reads the bytes with a larger TID and does not
 repeat the append. The native observer checks the bytes again after reopening.
 
+The separate `TestCephOSDMutationCloseIntegration` passed on its first native
+CRC/AES/AES IPv4 three-BlueStore host-relay run in 2.66 seconds, on `f4632b5`
+plus the new test. Native readback first proves the single append executed
+with its explicit mtime/version, then OSDConnection.Close ends the pending
+wait while the caller context remains live. OutcomeUnknown+ErrClosed retains
+local submission identity without fabricated remote reply fields. A fresh,
+caller-selected connection reads the same bytes with a larger TID, and final
+native bytes/version/mtime remain unchanged. All ten owned containers and the
+owned network were independently absent after cleanup. Evidence is
+`/tmp/ceph-osd-close-crc-aes.log` and its ownership/cleanup records.
+
 BlueStore restart acceptance checks ONDISK completion, orderly Stop/Start,
 independent native readback and a new Go read with native-refreshed epoch and
 endpoint nonce. Original fixture bytes/mtime and routing metadata are restored
@@ -113,7 +124,29 @@ ONDISK and preserve unknown-outcome identity. Five independently Python-packed
 pinned native ceph-dencoder: a nine-opcode compound request, all-op success,
 EEXIST, compare-extent mismatch and zero-to-truncate replies. Re-export keeps
 nonempty decoded payload and does not independently invoke the native payload
-encoder. True native payload encoder fixtures remain outstanding.
+encoder. The separately constructed fresh native encoder vectors below close
+that bounded mutation/guard payload gap.
+
+## Fresh native payload encoding
+
+Five separate [native encoder vectors](../../internal/osd/testdata/mutation-native-README.md)
+were generated from new MOSDOp/MOSDOpReply objects using unchanged pinned
+Ceph implementation and a matching freshly built ceph-common library. Direct
+native encode_payload calls assert v6; no decoded payload was imported/reused.
+Go matches the 519-byte request front and 11-byte binary data completely.
+Four native reply constructors preserve flags, operation unions/results,
+versions, placement and raw bytes. This is front/data proof, not independent
+Messenger header encoding or server execution. The new TRUNCATE fixture is
+not live ZERO normalization evidence.
+
+The stored receipt records source/submodule/configuration/wrapper/library
+hashes and actual loader/execution results. The public Testcontainers command
+`encode-osd-mutations` was itself run with a retained cache and reproduced all
+ten front/data segments identically. Independent inspection confirmed its
+owned builder `c81959def195` was deleted. Proof/log:
+`/tmp/ceph-native-public-runner-proof.json` and the same path plus `.log`.
+Development packages remain in the owned builder; the product has no native
+build/runtime/transitive dependency.
 
 Five mixed read/stat/mutation vectors verify ordered output boundaries, staged
 size versus committed read bytes, partial/EOF reads after write-full or truncate,
@@ -241,8 +274,40 @@ CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION=1 sh integration/run.sh
 
 Remaining work is listed in [the wire contract](../../internal/osd/CONTRACT.md):
 broader replicated/address/OS matrices, host/device power-loss persistence,
-EC, true native mutation payload encoder fixtures and unsolicited event/control
-contracts. The SPEC O0/O1 milestones remain partially complete.
+EC and native unsolicited event/control/lifetime acceptance. Fresh mutation
+payload encoder evidence is separate from the older decoder fixtures.
+The SPEC O0/O1 milestones remain partially complete.
+
+## Later CI failures and selected-OSD map preparation
+
+Consumer `7d33e14` passed all 41 jobs in
+[CI run 38613204323](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38613204323).
+Subsequent `f4632b5` [CI run 38613806089](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38613806089)
+passed 39/41. Its IPv6 AES256K service-key epoch row rejected the second
+cycle's first MGR authentication even though the renewed cached blob remained
+unchanged between observations. The first-failure artifact and limitations are
+retained in [issue #71](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6175912840).
+This cause is unresolved; no wipe/authentication retry was added.
+
+The other failure was the secure/AES256K IPv4 three-BlueStore map-delivery
+test, not mutation/concurrency readback. Its retained applied-map gate queried
+osd.0 while the caller selected restarted osd.1. Preparation now carries the
+actual target ID and verifies its owning daemon, whoami, FSID, newest epoch and
+trim boundary. The test records incremental/full phase and observes bounded
+RPC/map waits together, retaining completed causes regardless of select order.
+Two gate regressions and six wait regressions passed; wait tests also passed
+race instrumentation.
+
+The first corrected whole native secure/AES256K IPv4 three-BlueStore run passed
+all 14 selected tests, including the added Close and concurrency cases, 25
+mutation/guard cases and five mixed vectors. Map delivery passed in 6.88s
+after the preceding crash test. Source was `f4632b5` plus the Close/gate/wait
+changes. All ten owned containers and the network were independently removed.
+Evidence: `/tmp/ceph-osd-selected-gate-secure.log` and ownership/cleanup files.
+The original CI artifact remains at `/tmp/ceph-f463-osd3-ipv4-failure`; its OSD
+logs truncate after the failure and cannot reconstruct the exact failed phase
+or RPC outcome. Wrong-target gating is established; the new local pass does
+not prove every possible missing-map cause resolved or replace exact-head CI.
 
 IPv6 acceptance source was `6658d14` plus the IPv6 profile/oracle change.
 The earlier `IPv4`-only adapter preflight rejection is preserved separately in

@@ -36,6 +36,9 @@ func (e *cleanupFailure) Error() string { return "fixture cleanup: " + e.cause.E
 func (e *cleanupFailure) Unwrap() error { return e.cause }
 
 func command(ctx context.Context, args []string) (result error) {
+	if len(args) != 0 && args[0] == "encode-osd-mutations" {
+		return nativeEncoderCommand(ctx, args[1:])
+	}
 	if len(args) == 0 || (args[0] != "run" && args[0] != "serve") {
 		return errors.New("usage: fixture-controller run|serve -project PATH [-output PATH] [-diagnostics PATH]")
 	}

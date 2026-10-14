@@ -377,8 +377,15 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		return err
 	}
 	if fields != nil {
-		if len(fields) != 2 || fields[1] != "advance" || c.profile.osd != "1" {
+		if len(fields) != 3 || fields[1] != "advance" || c.profile.osd != "1" {
 			return errors.New("invalid OSD epoch request")
+		}
+		selected, err := strconv.ParseInt(fields[2], 10, 32)
+		if err != nil || selected < 0 {
+			return errors.New("invalid OSD epoch target")
+		}
+		if _, err = c.daemon("osd", fields[2]); err != nil {
+			return err
 		}
 		dump, err := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
 		if err != nil {
@@ -394,22 +401,20 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		if err = json.Unmarshal(dump, &expected); err != nil {
 			return err
 		}
+		if expected.Epoch == 0 || expected.FSID == "" || expected.FSID != c.profile.fsid {
+			return errors.New("invalid native OSD epoch identity")
+		}
 		deadline := time.Now().Add(30 * time.Second)
 		for {
-			data, e := c.cluster.AdminSocket(ctx, "osd.0", "status")
+			data, e := c.cluster.AdminSocket(ctx, "osd."+fields[2], "status")
 			if e != nil {
 				return e
 			}
-			var applied struct {
-				FSID   string `json:"cluster_fsid"`
-				Newest string `json:"newest_map"`
-				Lower  uint32 `json:"cluster_osdmap_trim_lower_bound"`
-			}
-			if e = json.Unmarshal(data, &applied); e != nil {
+			ready, e := osdAppliedEpoch(data, int32(selected), expected.FSID, expected.Epoch)
+			if e != nil {
 				return e
 			}
-			epoch, _ := strconv.ParseUint(applied.Newest, 10, 32)
-			if applied.FSID == expected.FSID && epoch >= uint64(expected.Epoch) && applied.Lower > 1 {
+			if ready {
 				if err = os.WriteFile(filepath.Join(out, "osd-map-applied.json"), data, 0600); err != nil {
 					return err
 				}
@@ -429,6 +434,26 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		}
 	}
 	return nil
+}
+
+func osdAppliedEpoch(data []byte, selected int32, fsid string, expected uint32) (bool, error) {
+	var applied struct {
+		Who    *int32 `json:"whoami"`
+		FSID   string `json:"cluster_fsid"`
+		Newest string `json:"newest_map"`
+		Lower  uint32 `json:"cluster_osdmap_trim_lower_bound"`
+	}
+	if err := json.Unmarshal(data, &applied); err != nil {
+		return false, err
+	}
+	if applied.Who == nil || *applied.Who != selected || fsid == "" || applied.FSID != fsid {
+		return false, errors.New("native OSD applied-map receipt belongs to a different daemon or cluster")
+	}
+	newest, err := strconv.ParseUint(applied.Newest, 10, 32)
+	if err != nil || newest == 0 || uint64(applied.Lower) > newest {
+		return false, errors.New("invalid native OSD applied-map epoch/trim receipt")
+	}
+	return newest >= uint64(expected) && applied.Lower > 1, nil
 }
 
 // managerAuthRejection recognizes an explicit native MonClient refusal in the

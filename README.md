@@ -317,8 +317,21 @@ version·ONDISK 및 native bytes/mtime을 비교했다. Append 완료 순서는
 committed bytes 비교로 객체가 unreadable이 될 수 있어 보수적으로 제한하며
 중간 operation이 있어도 유지한다.
 그 밖의 partial·EOF mixed reads 통과를 일반적인 staged read 보장으로 확대하지 않는다.
-O0 event·native payload encoder, 넓은 replicated/주소·OS matrix, EC와
+O0 event 실검증, 넓은 replicated/주소·OS matrix, EC와
 host/device 전원 장애 범위는 미완료다.
+
+별도 [fresh native encoder fixture](internal/osd/testdata/mutation-native-README.md)는
+고정 Ceph 소스에서 새 MOSDOp/MOSDOpReply 객체의 `encode_payload`를 직접
+실행했다. Go의 519-byte request front와 11-byte data가 모두 일치했고,
+네 native reply의 flags·union·result·version을 검증했다. Front/data만의
+encoder 증거이며 Messenger header나 실제 서버 처리의 증거는 아니다.
+재현 도구도 public Testcontainers의 소유 builder에서 실행한다.
+
+응답 대기 중 OSD 연결을 `Close`하는 별도 실서버 시험은 CRC/AES/AES·IPv4
+3-BlueStore host relay에서 통과했다. Native read가 단일 append 실행을
+먼저 확인한 뒤, caller context가 살아 있는 상태에서 `OutcomeUnknown`과
+`ErrClosed`·local identity를 보존했다. 새 연결과 native read 모두 동일한
+bytes/version/mtime을 확인했으며 append 재실행은 없었다.
 
 ```sh
 CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \

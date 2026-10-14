@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -27,7 +29,7 @@ func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 			t.Error("restore disposable map option", err)
 		}
 	})
-	if err := testcluster.ControlDaemon(ctx, directory, "verify", "osd-epoch", "advance"); err != nil {
+	if err := testcluster.ControlDaemon(ctx, directory, "verify", "osd-epoch", "advance "+strconv.Itoa(int(oracle.ID))); err != nil {
 		t.Fatal("native OSD applied epoch", err)
 	}
 	encoded, err := os.ReadFile(filepath.Join(directory, "osd-map-epoch.json"))
@@ -46,26 +48,35 @@ func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	var applied struct {
-		Trim uint32 `json:"cluster_osdmap_trim_lower_bound"`
+		Who    *int32 `json:"whoami"`
+		FSID   string `json:"cluster_fsid"`
+		Newest string `json:"newest_map"`
+		Trim   uint32 `json:"cluster_osdmap_trim_lower_bound"`
 	}
 	if err := json.Unmarshal(encoded, &applied); err != nil {
 		t.Fatal(err)
 	}
-	if applied.Trim < 2 {
-		t.Fatal("native retained full-map trim boundary", applied.Trim)
+	newest, err := strconv.ParseUint(applied.Newest, 10, 32)
+	if err != nil || applied.Who == nil || *applied.Who != oracle.ID || applied.FSID != current.FSID || current.FSID == "" || newest < uint64(current.Epoch) || applied.Trim < 2 || uint64(applied.Trim) > newest {
+		t.Fatalf("native selected OSD applied-map receipt: target=%d who=%v fsid=%s newest=%s trim=%d error=%v", oracle.ID, applied.Who, applied.FSID, applied.Newest, applied.Trim, err)
 	}
 	target := cephmsgr.OSDTarget{ID: oracle.ID, Address: oracle.Address}
 	var blobs []map[string]any
 	for phase, epoch := range []uint32{oracle.Epoch, 1} {
+		phaseName := []string{"incremental", "full"}[phase]
 		// Fresh sessions are necessary: OSD projected_epoch suppresses maps it
 		// already sent, regardless of a later request's older epoch.
 		o, err := c.OpenOSD(ctx, target)
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer o.Close()
 		request := osdObjectRequest(oracle, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: 127})
 		request.MapEpoch = epoch
 		call, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		mapContext, cancelMap := context.WithTimeout(ctx, 5*time.Second)
+		defer cancelMap()
 		completed := make(chan error, 1)
 		go func() {
 			reply, err := o.Request(call, request)
@@ -74,10 +85,13 @@ func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 			}
 			completed <- err
 		}()
-		batch, err := o.NextMap(ctx)
+		mapResult := make(chan osdMapWaitResult, 1)
+		go func() { batch, err := o.NextMap(mapContext); mapResult <- osdMapWaitResult{batch, err} }()
+		batch, readError, err := waitOSDMapAndRead(mapContext, completed, mapResult, phase == 1)
+		cancelMap()
 		if err != nil {
 			cancel()
-			t.Fatal("native OSD map delivery", err)
+			t.Fatalf("native OSD map delivery: phase=%s target=%d request-epoch=%d newest=%d trim=%d read=%v error=%v", phaseName, oracle.ID, epoch, newest, applied.Trim, readError, err)
 		}
 		if batch.FSID != current.FSID || batch.Version != 1 || batch.CompatVersion != 1 || batch.OldestMap != 0 || batch.NewestMap != 0 {
 			cancel()
@@ -102,7 +116,6 @@ func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 				blobs = append(blobs, map[string]any{"kind": set.kind, "epoch": blob.Epoch})
 			}
 		}
-		readError := <-completed
 		cancel()
 		if phase == 0 && readError != nil {
 			t.Fatal("stale read was not completed", readError)
@@ -130,4 +143,52 @@ func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 		t.Fatal("independent native map decoder and negotiated-feature encoding", err)
 	}
 	t.Logf("received full/incremental native OSD maps (%d blobs), matched native decoder/encoder; explicit epoch reads preserved object bytes", len(blobs))
+}
+
+type osdMapWaitResult struct {
+	batch cephmsgr.OSDMapBatch
+	err   error
+}
+
+func waitOSDMapAndRead(ctx context.Context, read <-chan error, maps <-chan osdMapWaitResult, ancient bool) (cephmsgr.OSDMapBatch, error, error) {
+	var batch cephmsgr.OSDMapBatch
+	var readError, mapError error
+	for read != nil || maps != nil {
+		select {
+		case <-ctx.Done():
+			// Results already completed at the boundary still carry independent
+			// causes, even if cancellation wins the outer select first.
+			select {
+			case err := <-read:
+				readError = err
+			default:
+			}
+			select {
+			case result := <-maps:
+				batch, mapError = result.batch, result.err
+			default:
+			}
+			return batch, readError, errors.Join(ctx.Err(), mapError, readError)
+		case err := <-read:
+			readError, read = err, nil
+			if err != nil && !ancient {
+				// Report this RPC immediately, but retain a map result that is
+				// already available regardless of which ready channel won select.
+				select {
+				case result := <-maps:
+					batch, mapError = result.batch, result.err
+				default:
+				}
+				return batch, err, errors.Join(fmt.Errorf("stale read failed: %w", err), mapError)
+			}
+		case result := <-maps:
+			batch, mapError, maps = result.batch, result.err, nil
+			// Keep observing the bounded RPC when map delivery fails first.
+			// Returning here would discard an already buffered RPC refusal.
+		}
+	}
+	if mapError != nil {
+		return batch, readError, errors.Join(mapError, readError)
+	}
+	return batch, readError, nil
 }

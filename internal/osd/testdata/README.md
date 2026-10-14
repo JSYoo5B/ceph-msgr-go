@@ -1,4 +1,8 @@
-# Tentacle native decoder fixtures
+# Tentacle native codec fixtures
+
+[Fresh mutation payload encoder fixtures](mutation-native-README.md) have a
+separate construction, execution and provenance receipt. The files described
+below remain independently packed/native-decoder fixtures.
 
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They

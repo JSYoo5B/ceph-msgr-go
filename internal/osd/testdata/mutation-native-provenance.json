@@ -1,0 +1,123 @@
+{
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "pinned_submodules": {
+    "src/fmt": {
+      "repository": "ceph/fmt",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039"
+    },
+    "src/BLAKE3": {
+      "repository": "BLAKE3-team/BLAKE3",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533"
+    },
+    "src/xxHash": {
+      "repository": "ceph/xxHash",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38"
+    },
+    "src/rocksdb": {
+      "repository": "ceph/rocksdb",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db"
+    },
+    "src/zstd": {
+      "repository": "facebook/zstd",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7"
+    },
+    "src/isa-l": {
+      "repository": "ceph/isa-l",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "repository": "ceph/jerasure",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "repository": "ceph/gf-complete",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749"
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "wrapper_sha256": "bf8b256be071dd1aded11de3b0120442500c0e722d413ceb2fb18fe303b1a97e",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_payload_encoder_verified": true,
+  "status": "five freshly constructed native messages directly encoded; no imported front/data",
+  "fixtures": {
+    "mutation-native-reply-v6-all-success": {
+      "front_bytes": 541,
+      "data_bytes": 0,
+      "front_sha256": "99d06fd07089cbab723b8c1a72753963f5302daf0c6db0b59ae783e41709ad4f",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "mutation-native-reply-v6-cmpext-mismatch": {
+      "front_bytes": 205,
+      "data_bytes": 0,
+      "front_sha256": "6f74bfff67ab990a9905d13dd95f551d46bc8f904b9dc5409d8bec0ef92f240d",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "mutation-native-reply-v6-exclusive-eexist": {
+      "front_bytes": 205,
+      "data_bytes": 0,
+      "front_sha256": "ef62bf3c8bee7208e83b8da4196fe34afde739014a5a5c2192015a3ed8fb5533",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "mutation-native-reply-v6-truncate": {
+      "front_bytes": 205,
+      "data_bytes": 0,
+      "front_sha256": "c3ed262cc8581573166554434113b208bc8b1c2650ce9f5f61a69930d5d82dce",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "mutation-native-request-v6-all": {
+      "front_bytes": 519,
+      "data_bytes": 11,
+      "front_sha256": "b0c1f42e7ca84558e4c00cd6edd9b49b79dbcb868411f27274404a7a0a249662",
+      "data_sha256": "3466fdfe401d81c0c7185ed249122f9d2b5bfd0628e6a915c190e261042816ad"
+    }
+  },
+  "binary_sha256": "9da14cfc6cfa435bba742b5e82dfe4f11d899a617b68a61b39bf4121a5d5c4b8",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffff7fa97000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffff7cc00000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffff7f9b8000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffff7f967000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffff7c73a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffff7f926000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffff7f8f5000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffff7f8d4000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffff7c516000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffff7f8a3000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffff7c368000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffff7fa50000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffff7f802000)\n",
+  "encoding_log": "mutation-native-request-v6-all\t519\t11\nmutation-native-reply-v6-all-success\t541\t0\nmutation-native-reply-v6-exclusive-eexist\t205\t0\nmutation-native-reply-v6-cmpext-mismatch\t205\t0\nmutation-native-reply-v6-truncate\t205\t0\n",
+  "source_license": "LGPL-2.1, cited Ceph source headers; independent wrapper copies no native implementation",
+  "source_files": {
+    "src/messages/MOSDOp.h": "68d6b0ed89f97761bb0fc575d3d5c17edd9003b8c0ac820d53728f945ac205f5",
+    "src/messages/MOSDOpReply.h": "6bd3e2cb240e3d245480d571e21a7ae6430c416aaa45c611d9ba5063e217d444",
+    "src/msg/Message.h": "81f9b84fc9f6b2bdd93aad232a441eae268ac337a1c8a2075b927b7a954a629a",
+    "src/osd/osd_types.h": "8baa31f93e0694b7986381265f6af2294b23ce7cf98f8caf5bfde66c9abb84d1",
+    "COPYING": "26f44ffbf74cdf08b3e1fdcaf1d4cfa3893ba62107950e086868a686d5ff86c2"
+  },
+  "native_envelope": {
+    "scope": "front/data payload bytes only; Messenger header bytes were not emitted or independently compared",
+    "directly_asserted_payload_version": 6,
+    "features": 3026423347916342070
+  },
+  "generator": "tools/osd_mutation_native_encoder.cc constructs fresh MOSDOp/MOSDOpReply objects with empty front/data and directly invokes encode_payload(features)",
+  "build_driver": "tools/osd_mutation_native_encoder.py",
+  "build_driver_sha256": "b2548c5783d67e17ee353829dcb67ddd57915091b96ad187e922adb4a94acce5",
+  "verification_notes": [
+    "Request front/data match independently constructed Python vectors already accepted by the pinned native decoder. No C++ logical input was changed to match Go.",
+    "Replies retain constructor-copied READ/WRITE/RETURNVEC flags; bad_replay_version is user version 19, with replay version 20/epoch 11.",
+    "The one-op negative CMPEXT has FAILOK unset. The all-success vector retains FAILOK on its CMPEXT.",
+    "The TRUNCATE reply is freshly constructed, not live server ZERO normalization evidence.",
+    "These native classes prove payload encoding only, not live execution, durability, placement, or Messenger header framing."
+  ],
+  "build_receipt": {
+    "official_configuration": "CMake generated include/acconfig.h without invented native ABI definitions",
+    "native_target": "osd_mutation_native_encoder links ceph-common compiled from same pinned source",
+    "compiler": "GCC toolset 14, C++20, Debug -O0 -g0",
+    "bundled_boost": "1.87.0 (official build target)",
+    "bundled_fmt": "11.0.2, exact pinned src/fmt gitlink",
+    "testcontainers": "public GenericContainer/CopyFileToContainer/Exec/Terminate, owned daemonless pinned image",
+    "completed_at": "2026-10-15T03:33:15+09:00",
+    "cleanup": "public Terminate completed 2026-10-15T03:33:26+09:00; independent docker inspect returned No such container: adc23659f37c",
+    "logs": "/tmp/ceph-mutation-native-cached.log and cache/work/{native-cmake-configuration,native-encoder-compilation,native-loader-audit,native-direct-encoding}.log"
+  }
+}

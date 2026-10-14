@@ -146,9 +146,12 @@ with single-replica MemStore/BlueStore and three-replica/min_size 2 BlueStore.
 Five [mutation decoder vectors](testdata/mutation-README.md) independently
 construct fields in Python and pass native ceph-dencoder decoding/re-export.
 Message::encode retains nonempty decoded payload, so re-export does not prove
-the native payload encoder. Broader replicated/address/OS matrices, true
-native payload encoder evidence, host/device power-loss durability, EC and
-unsolicited O0/O3 control/event contracts remain acceptance work. O0/O1 are
+the native payload encoder. Five separate
+[fresh native encoder vectors](testdata/mutation-native-README.md) now verify
+mutation/guard request front/data and four native reply constructors; they do
+not independently compare Messenger header bytes or execute those requests.
+Broader replicated/address/OS matrices, host/device power-loss durability, EC
+and native O0/O3 event/lifetime acceptance remain work. O0/O1 are
 not globally complete. The expanded CRC/aes256k single-MemStore host-relay run
 also passes nine selected tests with all 25 mutation/guard cases and five mixed
 vectors; BlueStore-only restart/crash/replica tests are skipped.
