@@ -10,7 +10,7 @@ import (
 )
 
 func stageAssets(project, out string, p profile) error {
-	files := []string{"integration/cluster.sh", "integration/osd-fixture.sh", "integration/publish-ack.sh", "integration/fixture/legacy.crush.txt"}
+	files := []string{"integration/cluster.sh", "integration/osd-fixture.sh", "integration/publish-ack.sh", "integration/fixture/legacy.crush.txt", "tools/osd_xattr_native.py"}
 	oracles, err := filepath.Glob(filepath.Join(project, "tools", "*_oracle.py"))
 	if err != nil {
 		return err

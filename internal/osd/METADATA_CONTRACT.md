@@ -3,7 +3,9 @@
 Reference: Ceph 20.2.4, commit
 `7f793731f1b39eb4f465e960113d2363c311b964`.
 Source audit: 2026-10-15. This is a proposed bounded next stage for review,
-not implemented product support or native interoperability evidence. O0 native
+not implemented product support. A later bounded native C API oracle is
+recorded in [OSD_XATTR_VALIDATION.md](../../integration/fixture/OSD_XATTR_VALIDATION.md);
+it does not establish Go/wire interoperability. O0 native
 payload-encoder acceptance and contract review remain prerequisites to implementation.
 [CONTRACT.md](CONTRACT.md) supplies existing v6 object identity, per-op result,
 ONDISK, cancellation and unknown-outcome rules. Snapshot contexts, omap,
@@ -199,19 +201,24 @@ fixture and explicit routing/native stat/read controls:
 
 | Case | Required native/Go comparison | Current status |
 | --- | --- | --- |
-| Binary values and empty value | NUL/0xff/newline payload; length-zero vs removed; set/get/list exact bytes and no unrelated object-content change | Source contract only; unexecuted |
+| Binary values and empty value | NUL/0xff/newline payload; length-zero vs removed; set/get/list exact bytes and no unrelated object-content change | Native C API subset passed; Go/wire comparison pending |
 | Names and namespace | Normal, leading underscore, non-UTF-8 names; local rejection of empty/NUL names before TID/send; different object namespace isolation | Source-derived empty/NUL hazards; no unsafe native alias mutation needed |
 | Length limits | Configured name limit and value-size cap yield native `-ENAMETOOLONG`/`-EFBIG`; local frame/budget limits reject before send, received oversize retains uncertainty | Recipe/oracle pending |
-| Compare operators | Caller-left asymmetric GT/LT, all six ops, binary/empty STRING, true positive result, false `-ECANCELED`; missing attr vs missing object | Native comparison matrix pending |
+| Compare operators | Caller-left asymmetric GT/LT, all six ops, binary/empty STRING, true positive result, false `-ECANCELED`; missing attr vs missing object | Native C aggregate/state matrix 36 cases passed; raw positive result, missing identities and Go comparison pending |
 | U64 followup | LE operand 0/max; stored decimal, empty/missing, prefix, bad signs/whitespace/NUL, overflow; invalid input length/mode locally rejected | Separate oracle prerequisite; STRING-only first proposal |
-| Atomicity and FAILOK | Compare-before-SET/RM success; false guard after an earlier staged mutation restores pre-state; FAILOK permits later writes and retains per-op failure | Native compound/per-op oracle pending |
+| Atomicity and FAILOK | Compare-before-SET/RM success; false guard after an earlier staged mutation restores pre-state; FAILOK permits later writes and retains per-op failure | Native C guard/rollback/FAILOK effects passed; raw per-op and Go comparison pending |
 | Mixed requests | Xattr GET+READ+STAT output boundaries; SET/RM+data mutation followed by independent fresh reads/stat2; staged xattr reads characterized separately | Native fresh encoder and mixed oracle pending |
 | Refusal and uncertainty | Permission rejection vs missing object/attr; sent append+xattr vector loses response, retains identity/outcome, fresh session never replays it | Extend existing lost-response recipe; unexecuted |
 | Completion and recovery | SET/RM ONDISK then native inventory/version/mtime after primary SIGKILL on BlueStore; read-only result has no durability claim | Same bounded profile as O1 initially; unexecuted |
 
-No O2a implementation, native xattr trial, acceptance pass or widened feature
-advertisement is claimed here. Existing O1 results cannot be relabeled as this
-new matrix. Broader pool/EC/snapshot and staged-read semantics remain excluded
+The subsequent native-only oracle passed binary/empty/prefixed inventory,
+compound SET/RM, 36 STRING comparison cases, rollback and FAILOK in one
+CRC/AES IPv4 three-BlueStore host profile. The table above remains the full
+Go/native acceptance checklist, not a claim that this limited C API result
+completed it. Raw CMP per-op results, fresh xattr wire vectors and Go APIs are
+still pending. No O2a product support or widened feature advertisement is
+claimed. Existing O1 results cannot be relabeled as this new matrix.
+Broader pool/EC/snapshot and staged-read semantics remain excluded
 until their own contracts and independent acceptance are complete.
 
 ## Provenance

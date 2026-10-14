@@ -25,7 +25,7 @@ func TestNativeEncoderProofRejectsStaleOrIncompleteEvidence(t *testing.T) {
 	}
 	for name, value := range receipt["fixtures"].(map[string]any) {
 		fixture := value.(map[string]any)
-		for _, segment := range []string{"front", "data"} {
+		for _, segment := range []string{"header", "front", "data"} {
 			h, err := os.ReadFile("../../internal/osd/testdata/" + name + "." + segment + ".hex")
 			if err != nil {
 				t.Fatal(err)
@@ -50,6 +50,8 @@ func TestNativeEncoderProofRejectsStaleOrIncompleteEvidence(t *testing.T) {
 		{"image", func(p map[string]any) { p["image"] = "other-image" }},
 		{"wrapper", func(p map[string]any) { p["wrapper_sha256"] = "other-wrapper" }},
 		{"unverified", func(p map[string]any) { p["native_payload_encoder_verified"] = false }},
+		{"header-unverified", func(p map[string]any) { p["native_message_header_verified"] = false }},
+		{"header-verification-missing", func(p map[string]any) { delete(p, "native_message_header_verified") }},
 		{"missing-vector", func(p map[string]any) { delete(p["fixtures"].(map[string]any), "mutation-native-request-v6-all") }},
 		{"invalid-hex", func(p map[string]any) {
 			p["fixtures"].(map[string]any)["mutation-native-request-v6-all"].(map[string]any)["front_hex"] = "not-hex"
@@ -57,6 +59,35 @@ func TestNativeEncoderProofRejectsStaleOrIncompleteEvidence(t *testing.T) {
 		{"wrong-length", func(p map[string]any) {
 			p["fixtures"].(map[string]any)["mutation-native-request-v6-all"].(map[string]any)["data_bytes"] = 12
 		}},
+		{"header-missing", func(p map[string]any) { delete(encoderRequestFixture(p), "header_hex") }},
+		{"header-invalid-hex", func(p map[string]any) { encoderRequestFixture(p)["header_hex"] = "not-hex" }},
+		{"header-short", func(p map[string]any) {
+			fixture := encoderRequestFixture(p)
+			fixture["header_hex"] = fixture["header_hex"].(string)[:80]
+			fixture["header_bytes"] = 40
+		}},
+		{"header-wrong-count", func(p map[string]any) { encoderRequestFixture(p)["header_bytes"] = 42 }},
+		{"header-metadata-missing", func(p map[string]any) { delete(encoderRequestFixture(p), "native_header") }},
+		{"header-wrong-tid", func(p map[string]any) { encoderRequestFixture(p)["native_header"].(map[string]any)["tid"] = 78 }},
+		{"header-negative-tid", func(p map[string]any) { encoderRequestFixture(p)["native_header"].(map[string]any)["tid"] = -1 }},
+		{"header-tid-overflow", func(p map[string]any) {
+			encoderRequestFixture(p)["native_header"].(map[string]any)["tid"] = json.Number("18446744073709551616")
+		}},
+		{"header-field-missing", func(p map[string]any) { delete(encoderRequestFixture(p)["native_header"].(map[string]any), "flags") }},
+		{"header-padding", func(p map[string]any) {
+			fixture := encoderRequestFixture(p)
+			h := fixture["header_hex"].(string)
+			fixture["header_hex"] = h[:44] + "01000000" + h[52:]
+		}},
+		{"header-wrong-request-type", func(p map[string]any) {
+			fixture := encoderRequestFixture(p)
+			h := fixture["header_hex"].(string)
+			fixture["header_hex"] = h[:32] + "2b00" + h[36:]
+			fixture["native_header"].(map[string]any)["type"] = 43
+		}},
+		{"header-wrong-front-length", func(p map[string]any) { encoderRequestFixture(p)["native_header"].(map[string]any)["front_len"] = 520 }},
+		{"header-wrong-data-length", func(p map[string]any) { encoderRequestFixture(p)["native_header"].(map[string]any)["data_len"] = 12 }},
+		{"header-nonempty-middle", func(p map[string]any) { encoderRequestFixture(p)["native_header"].(map[string]any)["middle_len"] = 1 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "receipt.log")
@@ -89,6 +120,10 @@ func TestNativeEncoderProofRejectsStaleOrIncompleteEvidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func encoderRequestFixture(proof map[string]any) map[string]any {
+	return proof["fixtures"].(map[string]any)["mutation-native-request-v6-all"].(map[string]any)
 }
 
 func compactEncoderProof(t *testing.T, data []byte) []byte {

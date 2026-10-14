@@ -62,6 +62,7 @@ func TestProfileSelection(t *testing.T) {
 		{"ipv6-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"ipv6-replicated-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"crc-host-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
+		{"crc-aes-host-race-replicated-osd", map[string]string{"CEPH_MSGR_TEST_KEY_TYPE": "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes", "CEPH_MSGR_TEST_IP_FAMILY": "4", "CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -85,8 +86,8 @@ func TestProfileSelection(t *testing.T) {
 						t.Fatalf("container %s = %q, want %q", name, containerEnv[name], want)
 					}
 					switch name {
-					case "CEPH_MSGR_TEST_IP_FAMILY", "CEPH_MSGR_TEST_RUNTIME", "CEPH_MSGR_TEST_RACE":
-						// These select fixture/build behavior, not test behavior.
+					case "CEPH_MSGR_TEST_KEY_TYPE", "CEPH_MSGR_TEST_IP_FAMILY", "CEPH_MSGR_TEST_RUNTIME", "CEPH_MSGR_TEST_RACE":
+						// These select fixture key generation/build behavior, not test behavior.
 					default:
 						if testEnv[name] != want {
 							t.Fatalf("test %s = %q, want %q", name, testEnv[name], want)

@@ -323,9 +323,15 @@ host/device 전원 장애 범위는 미완료다.
 별도 [fresh native encoder fixture](internal/osd/testdata/mutation-native-README.md)는
 고정 Ceph 소스에서 새 MOSDOp/MOSDOpReply 객체의 `encode_payload`를 직접
 실행했다. Go의 519-byte request front와 11-byte data가 모두 일치했고,
-네 native reply의 flags·union·result·version을 검증했다. Front/data만의
-encoder 증거이며 Messenger header나 실제 서버 처리의 증거는 아니다.
+네 native reply의 flags·union·result·version을 검증했다. Native envelope
+설정과 명시적 offline seq/ACK/priority 입력의 41-byte header 직렬화도 Go
+frame과 일치했다. 실제 ProtocolV2 송신 세션이나 서버 처리의 증거는 아니다.
 재현 도구도 public Testcontainers의 소유 builder에서 실행한다.
+
+다음 xattr 단계의 [native C API oracle](integration/fixture/OSD_XATTR_VALIDATION.md)는
+CRC/AES/AES·IPv4·3-BlueStore host profile에서 binary·빈 값·SET/RM,
+36개 STRING 비교와 rollback·FAILOK를 검증했다. Go xattr opcode와 wire
+vector 비교는 미구현이다. 해당 fixture 시험은 이 선행 oracle만 실행한다.
 
 응답 대기 중 OSD 연결을 `Close`하는 별도 실서버 시험은 CRC/AES/AES·IPv4
 3-BlueStore host relay에서 통과했다. Native read가 단일 append 실행을

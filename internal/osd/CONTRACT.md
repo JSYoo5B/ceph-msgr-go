@@ -152,8 +152,9 @@ construct fields in Python and pass native ceph-dencoder decoding/re-export.
 Message::encode retains nonempty decoded payload, so re-export does not prove
 the native payload encoder. Five separate
 [fresh native encoder vectors](testdata/mutation-native-README.md) now verify
-mutation/guard request front/data and four native reply constructors; they do
-not independently compare Messenger header bytes or execute those requests.
+mutation/guard request front/data and four native reply constructors, plus
+five 41-byte native header2 serializations with explicit offline transport
+inputs. They do not execute a live ProtocolV2 session or those server requests.
 Broader replicated/address/OS matrices, host/device power-loss durability, EC
 and native O0/O3 event/lifetime acceptance remain work. O0/O1 are
 not globally complete. The expanded CRC/aes256k single-MemStore host-relay run

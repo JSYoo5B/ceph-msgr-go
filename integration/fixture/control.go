@@ -260,6 +260,21 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-xattr-native")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || fields[1] != "matrix" || c.profile.osd != "1" {
+			return errors.New("invalid native xattr oracle request")
+		}
+		if err = c.runXattrOracle(ctx, out); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-xattr-native-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "restart-mon")
 	if err != nil {
 		return err
@@ -432,6 +447,28 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		if err = publishAck(out, "osd-epoch-verify."+fields[0]); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func (c *fixtureCluster) runXattrOracle(ctx context.Context, out string) error {
+	result, runErr := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{
+		Argv:    []string{"python3", "/out/osd_xattr_native.py", "/tmp/ceph-msgr-test", "/out"},
+		Timeout: 80 * time.Second, MaxStdout: 64 << 10, MaxStderr: 16 << 10,
+		Label: "fixed native xattr matrix",
+	})
+	// This fixed oracle contains only disposable object data and ordinary
+	// native API errors. Preserve its bounded first-failure traceback rather
+	// than discarding it with the generic control command's output.
+	data, err := json.Marshal(result)
+	if err == nil {
+		err = os.WriteFile(filepath.Join(out, "osd-xattr-native-command.json"), data, 0644)
+	}
+	if runErr != nil || err != nil {
+		return errors.Join(runErr, err)
+	}
+	if !result.Complete() || result.ExitCode != 0 {
+		return fmt.Errorf("native xattr matrix exit=%d complete=%t; see osd-xattr-native-command.json", result.ExitCode, result.Complete())
 	}
 	return nil
 }

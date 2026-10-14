@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
@@ -149,8 +151,8 @@ func readNativeEncoderProof(path, wrapperHash string) (map[string]any, error) {
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	if proof["ceph_commit"] != nativeEncoderCommit || proof["image"] != profileDefaultImage || proof["native_payload_encoder_verified"] != true || proof["wrapper_sha256"] != wrapperHash {
-		return nil, errors.New("native proof lacks the exact source, image, wrapper or successful encoding receipt")
+	if proof["ceph_commit"] != nativeEncoderCommit || proof["image"] != profileDefaultImage || proof["native_payload_encoder_verified"] != true || proof["native_message_header_verified"] != true || proof["wrapper_sha256"] != wrapperHash {
+		return nil, errors.New("native proof lacks the exact source, image, wrapper or successful payload/header encoding receipt")
 	}
 	fixtures, ok := proof["fixtures"].(map[string]any)
 	if !ok || len(fixtures) != 5 {
@@ -161,15 +163,53 @@ func readNativeEncoderProof(path, wrapperHash string) (map[string]any, error) {
 		if !ok {
 			return nil, fmt.Errorf("native proof lacks %s", name)
 		}
-		for _, segment := range []string{"front", "data"} {
+		segments := make(map[string][]byte, 3)
+		for _, segment := range []string{"header", "front", "data"} {
 			h, ok := fixture[segment+"_hex"].(string)
 			data, err := hex.DecodeString(h)
 			number, numeric := fixture[segment+"_bytes"].(json.Number)
 			count, countErr := number.Int64()
-			if !ok || err != nil || !numeric || countErr != nil || count != int64(len(data)) || segment == "front" && len(data) == 0 {
+			if !ok || err != nil || !numeric || countErr != nil || count != int64(len(data)) || segment == "front" && len(data) == 0 || segment == "header" && len(data) != 41 {
 				return nil, fmt.Errorf("native proof has invalid %s %s bytes", name, segment)
 			}
+			segments[segment] = data
+		}
+		if err := validateNativeEncoderHeader(name, fixture, segments); err != nil {
+			return nil, err
 		}
 	}
 	return proof, nil
+}
+
+func validateNativeEncoderHeader(name string, fixture map[string]any, segments map[string][]byte) error {
+	metadata, ok := fixture["native_header"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("native proof lacks %s native header metadata", name)
+	}
+	h := segments["header"] // Validated as exactly 41 bytes before this call.
+	// Pinned include/msgr.h ceph_msg_header2 is packed little-endian. Segment
+	// lengths belong to the native Message envelope, not this header2 struct.
+	expected := map[string]uint64{
+		"seq": binary.LittleEndian.Uint64(h[0:8]), "tid": binary.LittleEndian.Uint64(h[8:16]),
+		"type": uint64(binary.LittleEndian.Uint16(h[16:18])), "priority": uint64(binary.LittleEndian.Uint16(h[18:20])),
+		"version": uint64(binary.LittleEndian.Uint16(h[20:22])), "data_off": uint64(binary.LittleEndian.Uint16(h[26:28])),
+		"ack_seq": binary.LittleEndian.Uint64(h[28:36]), "flags": uint64(h[36]),
+		"compat": uint64(binary.LittleEndian.Uint16(h[37:39])), "reserved": uint64(binary.LittleEndian.Uint16(h[39:41])),
+		"front_len": uint64(len(segments["front"])), "middle_len": 0, "data_len": uint64(len(segments["data"])),
+	}
+	typ, compat := uint64(43), uint64(2)
+	if name == "mutation-native-request-v6-all" {
+		typ, compat = 42, 3
+	}
+	if expected["type"] != typ || expected["version"] != 6 || expected["compat"] != compat || binary.LittleEndian.Uint32(h[22:26]) != 0 || expected["reserved"] != 0 {
+		return fmt.Errorf("native proof has unsupported %s header encoding", name)
+	}
+	for field, want := range expected {
+		number, ok := metadata[field].(json.Number)
+		got, err := strconv.ParseUint(number.String(), 10, 64)
+		if !ok || err != nil || got != want {
+			return fmt.Errorf("native proof has inconsistent %s header %s", name, field)
+		}
+	}
+	return nil
 }

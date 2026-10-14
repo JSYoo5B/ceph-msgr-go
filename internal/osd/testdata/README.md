@@ -1,6 +1,6 @@
 # Tentacle native codec fixtures
 
-[Fresh mutation payload encoder fixtures](mutation-native-README.md) have a
+[Fresh mutation payload/header encoder fixtures](mutation-native-README.md) have a
 separate construction, execution and provenance receipt. The files described
 below remain independently packed/native-decoder fixtures.
 

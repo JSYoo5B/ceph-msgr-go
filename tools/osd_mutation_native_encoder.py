@@ -167,6 +167,10 @@ def build(root, wrapper):
     config = builddir / "include/acconfig.h"
     if not config.is_file():
         raise RuntimeError("official Ceph CMake did not generate acconfig.h")
+    # Container copy can assign an older archive timestamp than an existing
+    # cached object. Force only this owned wrapper source to be newer so the
+    # claimed wrapper digest always corresponds to an actual fresh compile.
+    os.utime(wrapper, None)
     command(["cmake", "--build", str(builddir), "--target", "osd_mutation_native_encoder", "-j2"], root, "native-encoder-compilation", environment)
     output = root / "encoded"
     environment["LD_LIBRARY_PATH"] = str(builddir / "lib") + ":/opt/rh/gcc-toolset-14/root/usr/lib64"
@@ -180,8 +184,14 @@ def build(root, wrapper):
     for front in sorted(output.glob("*.front.bin")):
         name = front.name[:-len(".front.bin")]
         data = (output / (name + ".data.bin")).read_bytes()
+        header = (output / (name + ".header.bin")).read_bytes()
+        metadata = json.loads((output / (name + ".native-header.json")).read_text())
+        if len(header) != 41 or metadata["version"] != 6 or metadata["front_len"] != front.stat().st_size or metadata["middle_len"] != 0 or metadata["data_len"] != len(data):
+            raise RuntimeError("native header/envelope proof is incomplete for " + name)
         fixtures[name] = {"front_hex": front.read_bytes().hex(), "data_hex": data.hex(),
-                          "front_bytes": front.stat().st_size, "data_bytes": len(data)}
+                          "front_bytes": front.stat().st_size, "data_bytes": len(data),
+                          "header_hex": header.hex(), "header_bytes": len(header),
+                          "native_header": metadata}
     if len(fixtures) != 5:
         raise RuntimeError("native encoder did not emit all five vectors")
     result = {"ceph_commit": COMMIT, "image": IMAGE,
@@ -192,6 +202,13 @@ def build(root, wrapper):
               "wrapper_sha256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
               "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
               "native_payload_encoder_verified": True,
+              "native_message_header_verified": True,
+              "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+              "offline_transport_inputs": {"sequence": 1, "ack_sequence": 3, "priority": "CEPH_MSG_PRIO_DEFAULT", "message_crc_flags": "MSG_CRC_ALL"},
+              "build_driver_sha256": hashlib.sha256(pathlib.Path(__file__).read_bytes()).hexdigest(),
+              "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+              "native_library_sha256": hashlib.sha256((builddir / "lib/libceph-common.so.2").read_bytes()).hexdigest(),
+              "loader_audit": loader,
               "status": "five freshly constructed native messages directly encoded; no imported front/data",
               "fixtures": fixtures}
     print(json.dumps(result), flush=True)

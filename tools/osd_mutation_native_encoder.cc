@@ -5,6 +5,7 @@
 // No decoded front is imported and no socket or network capture is used.
 #include "messages/MOSDOp.h"
 #include "messages/MOSDOpReply.h"
+#include "msg/async/frames_v2.h"
 
 #include <filesystem>
 #include <fstream>
@@ -78,6 +79,54 @@ void emit(const std::filesystem::path& root, const std::string& name,
   message.encode_payload(features);
   if (message.get_header().version != 6)
     throw std::runtime_error("native encoder did not select version 6");
+  // Message::encode now only updates the native envelope and footer after
+  // the direct fresh-object payload encode above. No decoded bytes are used.
+  message.set_seq(1);  // Explicit offline transport input, not live session state.
+  message.set_priority(CEPH_MSG_PRIO_DEFAULT);
+  message.encode(features, MSG_CRC_ALL, true);
+  const auto& header = message.get_header();
+  const auto& footer = message.get_footer();
+  if (header.front_len != message.get_payload().length() ||
+      header.middle_len != message.get_middle().length() ||
+      header.data_len != message.get_data().length())
+    throw std::runtime_error("native envelope lengths disagree with payloads");
+  // Project the fresh native envelope into the native v2 struct, as required
+  // by its public MessageFrame API. This does not execute ProtocolV2's live
+  // write_message/session path. ACK sequence 3 is another explicit test input.
+  ceph_msg_header2 header2{};
+  header2.seq = header.seq;
+  header2.tid = header.tid;
+  header2.type = header.type;
+  header2.priority = header.priority;
+  header2.version = header.version;
+  header2.data_off = header.data_off;
+  header2.ack_seq = 3;
+  header2.flags = footer.flags;
+  header2.compat_version = header.compat_version;
+  header2.reserved = header.reserved;
+  auto frame = ceph::msgr::v2::MessageFrame::Encode(
+      header2, message.get_payload(), message.get_middle(), message.get_data());
+  ceph::buffer::list encoded_header;
+  encoded_header.append(reinterpret_cast<const char*>(&frame.header()),
+                        sizeof(frame.header()));
+  if (encoded_header.length() != 41)
+    throw std::runtime_error("native v2 message header size changed");
+  write_segment(root / (name + ".header.bin"), encoded_header);
+  std::ofstream metadata(root / (name + ".native-header.json"));
+  metadata.exceptions(std::ios::failbit | std::ios::badbit);
+  metadata << "{\"type\":" << uint16_t(header.type)
+           << ",\"version\":" << uint16_t(header.version)
+           << ",\"compat\":" << uint16_t(header.compat_version)
+           << ",\"tid\":" << uint64_t(header.tid)
+           << ",\"seq\":" << uint64_t(header.seq)
+           << ",\"priority\":" << uint16_t(header.priority)
+           << ",\"front_len\":" << uint32_t(header.front_len)
+           << ",\"middle_len\":" << uint32_t(header.middle_len)
+           << ",\"data_len\":" << uint32_t(header.data_len)
+           << ",\"data_off\":" << uint16_t(header.data_off)
+           << ",\"flags\":" << unsigned(footer.flags)
+           << ",\"ack_seq\":" << uint64_t(frame.header().ack_seq)
+           << ",\"reserved\":" << uint16_t(header.reserved) << "}\n";
   write_segment(root / (name + ".front.bin"), message.get_payload());
   write_segment(root / (name + ".data.bin"), message.get_data());
   std::cout << name << "\t" << message.get_payload().length() << "\t"

@@ -135,9 +135,22 @@ Ceph implementation and a matching freshly built ceph-common library. Direct
 native encode_payload calls assert v6; no decoded payload was imported/reused.
 Go matches the 519-byte request front and 11-byte binary data completely.
 Four native reply constructors preserve flags, operation unions/results,
-versions, placement and raw bytes. This is front/data proof, not independent
-Messenger header encoding or server execution. The new TRUNCATE fixture is
+versions, placement and raw bytes. The new TRUNCATE fixture is
 not live ZERO normalization evidence.
+
+A later actual cached build emitted five 41-byte native header2 serializations
+through MessageFrame::Encode after Message::encode(MSG_CRC_ALL). Native
+type/version/compatibility, TID and envelope lengths are preserved; seq 1,
+ACK seq 3 and priority 127 are explicit offline inputs. Go framing matches
+the complete request header, and all five headers decode with their unchanged
+front/data. This is native envelope/serialization proof, not live
+ProtocolV2::write_message or server execution. The matching library stayed
+unchanged while the wrapper was recompiled and linked; copied-source mtime is
+refreshed so the build cache cannot reuse an older wrapper. The proof and
+compile/link log are `/tmp/ceph-mutation-native-header-crc-proof.json` and its
+`.log`; builder `aa566d24fd8b` was independently absent after termination.
+The initial stale-wrapper failure has only its retained tool-output excerpt,
+as the first log path was reused; it was not counted as a successful proof.
 
 The stored receipt records source/submodule/configuration/wrapper/library
 hashes and actual loader/execution results. The public Testcontainers command
@@ -289,6 +302,18 @@ unchanged between observations. The first-failure artifact and limitations are
 retained in [issue #71](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6175912840).
 This cause is unresolved; no wipe/authentication retry was added.
 
+`49e7599` [CI run 38622629859](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38622629859)
+passed 40/41, including every OSD row and both auth-epoch rows. Its Windows
+fixture test failed because CRLF checkout changed the exact C++ source hash.
+`9be36ae` pins that file to LF and [CI run 38623451052](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38623451052)
+passed all 41 jobs, including that Windows test. Runtime provenance hash
+validation remains exact. This separate pass does not resolve auth intermittency.
+`ef50577` [CI run 38624472769](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38624472769)
+also passed all 41 jobs after rejecting aggregate-success replies containing
+an ordinary failed operation. Those malformed sent-mutation replies retain
+unknown outcomes, raw signed results and local submission identity; FAILOK,
+known aggregate refusals and positive results remain accepted.
+
 The other failure was the secure/AES256K IPv4 three-BlueStore map-delivery
 test, not mutation/concurrency readback. Its retained applied-map gate queried
 osd.0 while the caller selected restarted osd.1. Preparation now carries the
@@ -319,3 +344,23 @@ cleanup checks are in `/tmp/ceph-osd-3replicas-ipv6-secure-ownership.txt` and
 the dedicated network were absent after termination. The provider's public
 WithAddressFamily IPv6 option applies to MON/MGR/OSD; no provider or product
 feature mask was changed. Python oracle tests now total 170 passes.
+
+## Native OSD race profile
+
+A separate CRC/AES/AES IPv4 host-relay three-BlueStore run passed all 15
+selected API tests with race instrumentation and no failures, skips or race
+report. Both API/client executables were verified as `-race=true`/CGO=1,
+Darwin arm64, Go 1.27.2; daemons used the pinned Linux arm64 image. The client
+package selected zero tests and is not counted as another acceptance pass.
+The suite included 25 mutation/guard cases, five mixed vectors, 32 concurrent
+compound requests, Close/lost-response handling, restart/SIGKILL/replicas,
+maps/stat/read/renewal/feature rejection and the native-only xattr prerequisite.
+All ten owned containers and the network were independently absent afterward.
+Evidence: `/tmp/ceph-osd-race-whole-20261015-01/run.log`,
+`execution-inputs.json` and `cleanup-and-result.json` in that directory.
+
+CI now adds the same bounded profile as a distinct Linux host race row while
+retaining its ordinary counterpart. The local Darwin pass is not evidence
+that this new Linux AMD64 CI row passed, and CGO=1 instruments development
+tests only; product builds and the relay remain CGO-free. Host/device power
+loss, other pool/features/stores and general staged-read semantics remain open.

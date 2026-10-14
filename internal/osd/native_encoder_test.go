@@ -2,6 +2,8 @@ package osd
 
 import (
 	"bytes"
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
@@ -25,6 +27,22 @@ func nativeEncoderOperations() []Operation {
 	}
 }
 
+func nativeEncoderMessage(t *testing.T, name string) msgr.MessageData {
+	t.Helper()
+	header := oracleBytes(t, name+".header")
+	m, err := msgr.DecodeMessage(msgr.Frame{Tag: msgr.Message, Segments: [][]byte{
+		header, oracleBytes(t, name+".front"), nil, oracleBytes(t, name+".data"),
+	}})
+	if err != nil {
+		t.Fatal("cannot decode independently serialized native v2 header", err)
+	}
+	if m.Sequence != 1 || m.Transaction != 77 || m.AckSequence != 3 ||
+		m.Priority != 127 || m.Version != 6 || !bytes.Equal(m.Frame().Segments[0], header) {
+		t.Fatal("native header identity/default priority/CRC-enabled COMPLETE flag differs from Go", m)
+	}
+	return m
+}
+
 func TestMutationRequestMatchesFreshNativeEncoder(t *testing.T) {
 	r := Request{ClientInc: 1, MapEpoch: 11,
 		Locator: Locator{Pool: 7, Key: "route-key", Namespace: "tenant", Hash: -1},
@@ -34,6 +52,14 @@ func TestMutationRequestMatchesFreshNativeEncoder(t *testing.T) {
 	m, err := EncodeRequest(r, oracleFeatures, wire.DefaultLimit)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Sequence and ACK are explicit offline transport inputs. TID 77 comes
+	// from the native MOSDOp constructor; Go Session.Call supplies it in use.
+	m.Sequence, m.Transaction, m.AckSequence = 1, 77, 3
+	native := nativeEncoderMessage(t, "mutation-native-request-v6-all")
+	if native.Type != RequestMessage || native.CompatVersion != 3 ||
+		!bytes.Equal(m.Frame().Segments[0], native.Frame().Segments[0]) {
+		t.Fatal("Go request header differs from native envelope/MessageFrame output")
 	}
 	if !bytes.Equal(m.Front, oracleBytes(t, "mutation-native-request-v6-all.front")) ||
 		!bytes.Equal(m.Data, oracleBytes(t, "mutation-native-request-v6-all.data")) {
@@ -53,10 +79,10 @@ func TestDecodeFreshNativeEncoderMutationReplies(t *testing.T) {
 		{"mutation-native-reply-v6-truncate", 0, []Operation{{Code: Truncate, Offset: 1}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Type/version/compat below select the decoder branch. The fixture
-			// emits front/data only; it does not independently verify header bytes.
-			m := msgr.MessageData{Type: ReplyMessage, Version: 6, CompatVersion: 2,
-				Front: oracleBytes(t, tc.name+".front"), Data: oracleBytes(t, tc.name+".data")}
+			m := nativeEncoderMessage(t, tc.name)
+			if m.Type != ReplyMessage || m.CompatVersion != 2 {
+				t.Fatal("native MOSDOpReply constructor/encoder header metadata changed", m)
+			}
 			r, err := DecodeReply(m, wire.DefaultLimit)
 			if err != nil {
 				t.Fatal(err)
@@ -82,6 +108,48 @@ func TestDecodeFreshNativeEncoderMutationReplies(t *testing.T) {
 					op.Result != tc.code || op.PayloadLength != 0 || len(op.Data) != 0 {
 					t.Fatal("lost native packed operation union/flags/result", i, op)
 				}
+			}
+		})
+	}
+}
+
+func TestFreshNativeEnvelopeLengths(t *testing.T) {
+	// Messenger v2 transports segment lengths outside its 41-byte header.
+	// These lengths are independently set by native Message::encode and
+	// retained in the receipt; they are not fabricated Go header fields.
+	var proof struct {
+		Verified bool `json:"native_message_header_verified"`
+		Fixtures map[string]struct {
+			Header struct {
+				Type    uint16 `json:"type"`
+				Version uint16 `json:"version"`
+				Compat  uint16 `json:"compat"`
+				TID     uint64 `json:"tid"`
+				Front   uint32 `json:"front_len"`
+				Middle  uint32 `json:"middle_len"`
+				Data    uint32 `json:"data_len"`
+				Flags   uint8  `json:"flags"`
+			} `json:"native_header"`
+		} `json:"fixtures"`
+	}
+	raw, err := os.ReadFile("testdata/mutation-native-provenance.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &proof); err != nil {
+		t.Fatal(err)
+	}
+	if !proof.Verified || len(proof.Fixtures) != 5 {
+		t.Fatal("missing native header receipt")
+	}
+	for name, fixture := range proof.Fixtures {
+		t.Run(name, func(t *testing.T) {
+			m := nativeEncoderMessage(t, name)
+			h := fixture.Header
+			if h.Type != m.Type || h.Version != m.Version || h.Compat != m.CompatVersion ||
+				h.TID != m.Transaction || h.Flags != 1 || h.Middle != 0 ||
+				int(h.Front) != len(m.Front) || int(h.Data) != len(m.Data) {
+				t.Fatal("native Message envelope identity/lengths/CRC policy disagree with stored segments", h)
 			}
 		})
 	}
