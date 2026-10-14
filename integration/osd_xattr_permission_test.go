@@ -34,7 +34,7 @@ func nativeReadonlyXattr(t *testing.T, ctx context.Context, oracle osdFixtureOra
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "osd-xattr-permission-"+op+".json"), data, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "osd-xattr-permission-"+op+".json"), data, 0644); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("native client.readonly %s aggregate=%d mirror version %d->%d unchanged=%t", op, result.Vector.Code, result.Before.Version, result.After.Version, xattrSnapshotEqual(result.Before, result.After, true))
@@ -186,7 +186,7 @@ func TestCephOSDXattrPermissionsIntegration(t *testing.T) {
 			if err != nil || len(data) > 512<<10 {
 				t.Fatal("permission observation exceeds evidence bound", err)
 			}
-			if err := os.WriteFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-xattr-permission-go-"+tc.native.Op+".json"), data, 0600); err != nil {
+			if err := os.WriteFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-xattr-permission-go-"+tc.native.Op+".json"), data, 0644); err != nil {
 				t.Fatal(err)
 			}
 		})
