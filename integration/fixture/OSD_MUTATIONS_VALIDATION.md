@@ -178,7 +178,9 @@ The lazy Go MGR path was not exercised by this preparation test. Issue #65's
 API/recipe question remains open, and #71's rotating-key failure is separate.
 
 The opt-in `CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION=1` selects this one test.
-It adds no matrix to the current CI; reproducible execution is:
+CI includes this isolated AES/aes256k IPv4 profile. The local evidence above
+is Linux arm64; the added Linux amd64 CI result must be checked separately.
+Reproducible execution is:
 
 ```sh
 CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION=1 sh integration/run.sh

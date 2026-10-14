@@ -1502,8 +1502,8 @@ standby 소멸과 최신 AUTH -13을 독립 확인했다. Conditional 준비 동
 receipt 하나와 Stop/Start 한 번으로 새 global ID의 standby를 복원했고
 active MGR는 유지했다. 정상 상태에서 두 번째 준비는 재시작·receipt를 추가하지
 않았다(48.95초 통과). 이는 disposable native fixture의 사전조건 복구 검증이며
-Go CephX protocol 수정이나 Go MGR 인증 재실행 검증은 아니다. 현재 CI matrix는
-추가하지 않는다. 상세 결과·독립 증거는
+Go CephX protocol 수정이나 Go MGR 인증 재실행 검증은 아니다. 이 단독 AES/aes256k·IPv4 프로필을 CI에도 추가했다. Linux arm64의
+로컬 통과와 Linux amd64 CI 통과는 별도로 확인한다. 상세 결과·독립 증거는
 [검증 기록](integration/fixture/OSD_MUTATIONS_VALIDATION.md)에 둔다.
 
 기본 모드는 cluster network에 붙인 별도 native oracle 컨테이너에서 CGO=0
