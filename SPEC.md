@@ -39,7 +39,10 @@ native/Go bytes·version·mtime과 추가 쓰기 없는 복구를 검증했다. 
 3-OSD profile의 전체 선택 시험 12개도 통과했으며 25개 mutation/guard
 사례에는 CMPEXT EOF short length·zero-extension·rollback·FAILOK가 포함된다.
 CRC/aes256k·single MemStore host profile도 같은 25개 사례와 mixed vector 5개를
-포함한 9개 시험을 통과했다(BlueStore 전용 3개 제외).
+포함한 9개 시험을 통과했다(BlueStore 전용 3개 제외). 추가 CRC/AES/AES·IPv4
+host-relay 3-BlueStore profile도 같은 25개 사례·mixed vector 5개·실제 primary
+SIGKILL을 포함한 12개 시험을 첫 실행에 통과했다. 이는 해당 profile의 로컬
+검증이며 현재 원격 CI 전체 통과 판정이 아니다.
 Native payload encoder, 후속 event 계약과 넓은 구성·내구성 범위는 남았다.
 O1은 읽기 opcode 벡터의 존재나 제한 profile의 통과로 전체 완료 처리하지 않는다.
 P2의 최소 metadata 사용에도 필수 capability/lease와 복구

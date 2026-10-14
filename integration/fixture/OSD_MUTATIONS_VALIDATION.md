@@ -23,6 +23,7 @@ BlueStore profile uses size 3/min_size 2. EC I/O is unimplemented and unverified
 | secure/aes256k, IPv4, single BlueStore OSD, container | all eleven selected OSD/MON-map tests passed; 21 mutation/guard cases, five mixed read/stat/mutation vectors, lost reply, orderly restart, SIGKILL, native stat/read, renewal and feature rejection |
 | secure/aes256k, IPv4, three BlueStore OSDs, replicas 3/min_size 2, container | all twelve selected OSD/MON-map tests passed; 25 mutation/guard cases including four CMPEXT EOF cases, five mixed vectors, maps/renewal, lost reply, orderly restart and SIGKILL; actual primary SIGKILL preserved independent native/Go bytes, version and nanosecond mtime on the surviving two replicas without another write |
 | CRC/aes256k, IPv4, single MemStore OSD, host relay | nine selected tests passed; 25 mutation/guard cases, five mixed vectors, MON/OSD maps, lost reply, native stat/read, renewal and feature rejection; three BlueStore-only restart/crash/replica tests skipped |
+| CRC/AES client and service keys, IPv4, three BlueStore OSDs, replicas 3/min_size 2, host relay | all twelve selected tests passed on the first attempt; 25 mutation/guard cases, five mixed vectors, actual primary SIGKILL, restart/crash, maps, lost reply and renewal |
 
 Native vector comparisons use a separate native object reset to the same
 baseline. Both paths receive explicit matching nanosecond mtimes. Native
@@ -117,6 +118,16 @@ Expanded CRC/MemStore host acceptance is in `/tmp/ceph-osd-crc-final.log`: nine
 selected tests passed, including all 25 mutation/guard cases and five mixed
 vectors; three BlueStore-only tests skipped. Both expanded runs cleaned up
 their disposable containers.
+The additional CRC/AES/AES IPv4 host-relay three-BlueStore profile passed all
+twelve tests on its first attempt at product source
+`0943727781a4d41d5092d38ab600f03478dba6ef`, recorded in
+`/tmp/ceph-osd-3replicas-crc-aes.log`. It includes all 25 mutation/guard cases,
+five mixed vectors and actual-primary SIGKILL readback. Independent Docker
+inspection matched the ten owned container IDs and network recorded in
+`/tmp/ceph-osd-3replicas-crc-aes-ownership.txt`; all ten containers and the network
+were absent after cleanup, as recorded in
+`/tmp/ceph-osd-3replicas-crc-aes-cleanup.log`. This is local profile evidence,
+not a whole remote CI acceptance claim.
 Product checksum/EOF corrections were pushed to main in `cbabcbd`; fixture
 auth precondition work was pushed in `b3bf303`. These hashes identify changes,
 not a claim that every remote CI matrix passed.

@@ -150,3 +150,12 @@ unsolicited O0/O3 control/event contracts remain acceptance work. O0/O1 are
 not globally complete. The expanded CRC/aes256k single-MemStore host-relay run
 also passes nine selected tests with all 25 mutation/guard cases and five mixed
 vectors; BlueStore-only restart/crash/replica tests are skipped.
+
+The additional CRC/AES client-and-service-key IPv4 host-relay profile with
+three BlueStore replicas/min_size 2 passes all twelve selected tests on its
+first attempt, including 25 mutation/guard cases, five mixed vectors and
+actual-primary SIGKILL readback. Verified product source is
+`0943727781a4d41d5092d38ab600f03478dba6ef`. Independent inspection confirmed all
+ten owned containers and the network were gone after cleanup. This expands
+one local profile and does not establish a whole CI or native payload-encoder
+proof.

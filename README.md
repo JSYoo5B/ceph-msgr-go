@@ -288,7 +288,12 @@ partial·EOF read/stat와 쓰기를 섞은 5개 vector를 검증했다.
 새 Go 연결과 독립 native read가 binary bytes·version·mtime을 보존했고
 추가 쓰기나 자동 mutation 재실행은 없었다. CRC/aes256k·single MemStore·Darwin
 host relay에서도 25개 mutation/guard와 mixed vector 5개를 포함한 9개 시험이
-통과했다(BlueStore 전용 3개 제외). Host/device 전원 장애 검증은 아니다.
+통과했다(BlueStore 전용 3개 제외). CRC/AES client·service key·IPv4 host relay의
+3-OSD BlueStore·replicas 3/min_size 2에서도 12개 시험 전체가 첫 실행에 통과했다.
+동일한 25개 mutation/guard·mixed vector 5개와 실제 primary SIGKILL을 포함하며,
+정리 후 소유 컨테이너 10개와 network 소멸을 독립 확인했다. 이 profile의 제품
+소스는 `0943727781a4d41d5092d38ab600f03478dba6ef`다.
+Host/device 전원 장애 검증은 아니다.
 
 다만 nonempty WRITEFULL·APPEND·offset 0 WRITE 뒤 offset 0 READ/CMPEXT가
 앞선 payload 크기 이상을 검사하는 조합은 `ErrUnsupportedOSDOperation`으로
@@ -309,6 +314,13 @@ CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
 CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
   CEPH_MSGR_TEST_OSD_REPLICAS=3 \
   CEPH_MSGR_TEST_RUN='^TestCephOSDReplicasIntegration$' \
+  sh integration/run.sh
+
+CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
+  CEPH_MSGR_TEST_OSD_REPLICAS=3 CEPH_MSGR_TEST_RUNTIME=host \
+  CEPH_MSGR_TEST_CONNECTION_MODE=crc \
+  CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes \
+  CEPH_MSGR_TEST_RUN='^TestCeph(MonOSDMaps.*|OSD.*)Integration$' \
   sh integration/run.sh
 ```
 
