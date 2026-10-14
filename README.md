@@ -232,7 +232,8 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 Replicated pool의 현재 객체에 대한 stat과 양의 길이 read, write/writefull,
 append, truncate, zero, create/delete와 version/extent 조건을 제공한다.
 제한 xattr GET/GETALL·STRING 비교·SET/RM도 같은 ordered vector에서 제공한다.
-OMAP은 제한된 단일 페이지 GETKEYS/GETVALS와 지정 키 BYKEYS 읽기를 제공한다.
+OMAP은 제한된 단일 페이지 GETKEYS/GETVALS와 지정 키 BYKEYS 읽기, raw header
+읽기와 SETVALS·SETHEADER·CLEAR·RMKEYS 쓰기를 제공한다.
 Stat bytes는 size와 mtime의 wire 출력이며 filesystem API로 변환하지 않는다.
 Aggregate 서버 code와 operation별 result는 서로 다를 수 있다. 예를 들어
 존재하지 않는 객체는 aggregate -2와 실행되지 않은 stat의 result 0을 반환한다.
@@ -293,7 +294,7 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 
 현재 SET/RM 뒤 같은 vector의 GET/GETALL/CMP는 staged-read 의미를 보장하지
 못해 송신 전에 거절한다. 비교를 먼저 놓는 순서가 지원된다. U64 비교,
-bulk SET/RESET, OMAP header·비교·쓰기, class·snapshot은 별도 미구현 단계다.
+bulk SET/RESET, OMAP 비교·범위 삭제, class·snapshot은 별도 미구현 단계다.
 
 OMAP 읽기는 `Omap` 입력을 쓰며 extent·Version·Data·Xattr는 0이다.
 `StartAfter`는 exclusive cursor, `Prefix`는 GETVALS의 byte prefix이며
@@ -324,7 +325,43 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 `PayloadLength`다. 누락된 키와 빈 값은 원본 map에서 구분한다. 출력 해석,
 다음 cursor 선택과 여러 페이지의 일관성은 사용 레이어가 맡는다.
 [OMAP 계약과 검증 범위](internal/osd/OMAP_CONTRACT.md)에 native C API의
-NUL cursor/prefix 제한과 header·비교·쓰기 미지원 범위를 기록했다.
+NUL cursor/prefix 제한과 비교·범위 삭제 미지원 범위를 기록했다.
+
+OMAP header와 쓰기도 같은 `Omap` 입력을 쓴다. `OSDGetOmapHeader`는 입력 없이
+양의 `MaxOutputBytes`만 받고 raw header bytes를 길이 prefix 없이 `Data`로
+반환한다. `OSDSetOmapValues`는 `Entries`, `OSDSetOmapHeader`는 `Header`,
+`OSDRemoveOmapKeys`는 `Keys`만 받으며 `OSDClearOmap`은 입력이 없다. 쓰기의
+`MaxOutputBytes`는 0이어야 한다. 중복 키는 송신 전에 거절하고 복사본을 native
+byte 순서로 정렬한다. 빈 `Entries`·`Keys`도 실제로 전송하는 mutation이며 빈
+`Header`는 CLEAR가 아니다. 서버의 CLEAR는 값과 header를 함께 지운다.
+
+```go
+reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch, Object: object,
+    ModificationTime: cephmsgr.OSDTime{Seconds: seconds, Nanoseconds: nanos},
+    Operations: []cephmsgr.OSDOperation{
+        {Code: cephmsgr.OSDGetOmapHeader,
+         Omap: cephmsgr.OSDOmapInput{MaxOutputBytes: 64}},
+        {Code: cephmsgr.OSDSetOmapValues,
+         Omap: cephmsgr.OSDOmapInput{Entries: []cephmsgr.OSDOmapEntry{
+             {Key: "version", Value: newVersion},
+         }}},
+        {Code: cephmsgr.OSDRemoveOmapKeys,
+         Omap: cephmsgr.OSDOmapInput{Keys: []string{"stale"}}},
+    },
+})
+```
+
+OMAP 쓰기 뒤 같은 vector의 OMAP 읽기는 staged 상태를 보장하지 못해 FAILOK
+쓰기 뒤에도 `ErrUnsupportedOSDOperation`으로 송신 전에 거절한다. DELETE 뒤의
+OMAP·xattr 읽기도 committed metadata를 읽을 수 있어 같은 이유로 거절한다.
+읽기를 먼저 두는 순서는 지원한다. 쓰기를 포함한 vector는 RETURNVEC 응답의 per-op 출력이
+서버의 `osd_max_write_op_reply_len`(기본 64 bytes)을 넘으면 Tentacle이
+aggregate와 해당 operation에 `-EOVERFLOW`를 돌려주고 transaction을 commit하지
+않는다. 이 거절은 서버 설정에 따르므로 client가 미리 판단하지 않고
+`*OSDError`로 그대로 전달한다. 큰 OMAP 읽기는 별도 읽기 요청으로 보낸다.
+거절 응답에도 서버가 ACK·ONDISK flag를 붙이므로 음수 aggregate의 ONDISK를
+commit 근거로 해석하지 않는다.
 
 `ModificationTime`의 0은 그대로 전송하며 client 시각으로 대체하지 않는다.
 쓰기 성공은 서버의 `OSDReplyOnDisk`를 요구한다. 이것은 저장소가 보고한
@@ -401,6 +438,18 @@ native encoder/별도 decoder의 5개 message vector와 Go bytes를 대조하고
 CRC/AES host 3 BlueStore의 23개 실서버 Go/native 사례를 통과했다.
 Secure/aes256k container 3 BlueStore의 CGO0 전체 OSD 시험도 22개 통과했다.
 CI의 OMAP profile matrix는 해당 커밋의 독립 결과가 필요하다.
+
+[OMAP header·쓰기 검증](integration/fixture/OSD_OMAP_WRITE_VALIDATION.md)은 fresh
+native encoder/별도 decoder의 5개 message vector와 Go의 header/front/data를
+대조했다. CRC/AES host 3 BlueStore에서는 native C API와 pinned rados CLI header
+관찰을 쓴 17개 Go/native 사례가 통과했다. Binary·빈 키와 값, header 설정·읽기,
+RMKEYS 뒤 header 유지, CLEAR의 header 삭제, 빈 mutation의 version·mtime 반영,
+없는 객체 생성과 ENOENT, AssertVersion 실패 rollback, FAILOK을 확인했다.
+Secure/aes256k container 3 BlueStore의 CGO0 전체 OSD 시험 23개도 통과했다.
+쓰기 vector의 64-byte RETURNVEC 출력 한도 거절에서는 OMAP·header·bytes가
+그대로였다. 다만 primary가 보고하는 user version과 mtime은 거절된 요청 값으로
+앞서 나갔으며, 고정 소스의 `finish_ctx`가 cache에 먼저 반영한 결과로 기록했다.
+쓰기 응답 손실·SIGKILL 복구, 권한 거절과 CI matrix는 별도 검증이 필요하다.
 
 응답 대기 중 OSD 연결을 `Close`하는 별도 실서버 시험은 CRC/AES/AES·IPv4
 3-BlueStore host relay에서 통과했다. Native read가 단일 append 실행을

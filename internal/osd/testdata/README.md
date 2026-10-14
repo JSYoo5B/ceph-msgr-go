@@ -13,6 +13,12 @@ construct five message triples, including raw binary cursor/prefix inputs and
 page-more/BYKEYS output framing. Their offline payload/header scope is separate
 from the live native-C/Go page acceptance.
 
+[Fresh OMAP header/write encoder/decoder fixtures](omap-write-native-README.md)
+independently construct five message triples: a GETHEADER plus
+SETVALS/SETHEADER/RMKEYS/CLEAR(FAILOK) request, and ONDISK, ACK, ENOENT and
+FAILOK replies. They are offline codec proof only and claim no live OSD
+execution, staging or durability.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from

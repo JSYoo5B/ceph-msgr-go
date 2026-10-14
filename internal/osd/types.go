@@ -17,7 +17,12 @@ const (
 	CompareExtent       uint16 = 0x1220
 	OmapGetKeys         uint16 = 0x1211
 	OmapGetValues       uint16 = 0x1212
+	OmapGetHeader       uint16 = 0x1213
 	OmapGetValuesByKeys uint16 = 0x1214
+	OmapSetValues       uint16 = 0x2215
+	OmapSetHeader       uint16 = 0x2216
+	OmapClear           uint16 = 0x2217
+	OmapRemoveKeys      uint16 = 0x2218
 	GetXattr            uint16 = 0x1301
 	GetXattrs           uint16 = 0x1302
 	CompareXattr        uint16 = 0x1303

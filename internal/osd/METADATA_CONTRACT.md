@@ -170,7 +170,9 @@ the existing object backend; no immediate staged attr read is established by
 those handlers. SET→GET, SET→CMP, RM→GET and RM→GETALL need independent native
 characterization before acceptance. This is source-derived uncertainty, not an
 observed failed native vector. Compare-before-write guard vectors are the
-first supported ordering. A successful SET can create a previously
+first supported ordering. Since the O2c OMAP milestone, a DELETE earlier in
+the vector also makes a later GET/GETALL/CMP unsupported before transmission,
+because the read may still consult committed attrs after the staged delete. A successful SET can create a previously
 missing head object through `maybe_create_new_object`; creation/version/mtime
 and unrelated object bytes must be checked independently. Missing-attr RM on
 an existing BlueStore object is a native no-op in the audited backend; missing

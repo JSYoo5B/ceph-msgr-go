@@ -25,10 +25,11 @@ delivery, future backoff/watch wire requirements and their acceptance gaps.
 The additional five xattr operations have their own active packed union and
 local output budgets in [METADATA_CONTRACT.md](METADATA_CONTRACT.md). Existing
 identity, per-op results, ONDISK and unknown-outcome rules also apply to them.
-Three bounded OMAP reads use derived input-length extents and raw collection
-output; [OMAP_CONTRACT.md](OMAP_CONTRACT.md) records their distinct union,
-pagination and native acceptance. OMAP header/compare/write, class/snapshot,
-U64 comparison and bulk xattr variants remain unsupported.
+Three bounded OMAP reads, the raw header read and four OMAP writes (SETVALS,
+SETHEADER, CLEAR, RMKEYS) use derived input-length extents;
+[OMAP_CONTRACT.md](OMAP_CONTRACT.md) records their distinct union, pagination,
+write ordering and native acceptance. OMAP comparison and range removal,
+class/snapshot, U64 comparison and bulk xattr variants remain unsupported.
 
 Negotiated OBJECTLOCATOR and PGID64 select the supported request/reply v6
 branch; NEW_OSDOP_ENCODING and NEW_OSDOPREPLY_ENCODING are rejected. The caller

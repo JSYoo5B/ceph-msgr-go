@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetValuesByKeys:
+	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys:
 		return true
 	}
 	return false
@@ -23,7 +23,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 	}
 	var flags, total uint64
 	var stagedDigestSize uint64
-	var stagedXattr bool
+	var stagedXattr, stagedOmap bool
 	for _, op := range ops {
 		if !SupportedOperation(op.Code) || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
 			return 0, 0, ErrOperation
@@ -39,6 +39,13 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			if err != nil {
 				return 0, 0, err
 			}
+			// OMAP writes stage transaction operations while reads consult
+			// the backend. Keep reads after any staged OMAP write, including
+			// FAILOK, unsupported until independently characterized.
+			if stagedOmap && mode == FlagRead {
+				return 0, 0, ErrOperation
+			}
+			stagedOmap = stagedOmap || mode == FlagWrite
 			if inputBytes > uint64(limit)-total {
 				return 0, 0, wire.ErrLimit
 			}
@@ -131,6 +138,12 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			if op.Offset != 0 || op.Length != 0 || len(op.Data) != 0 {
 				return 0, 0, ErrRequest
 			}
+		}
+		// DELETE resets object state in the transaction, but a later metadata
+		// read can still consult committed xattrs/OMAP (new_object keeps the
+		// OMAP flag). Treat it as a staged write of both metadata kinds.
+		if op.Code == Delete {
+			stagedOmap, stagedXattr = true, true
 		}
 		if uint64(len(op.Data)) > uint64(limit)-total {
 			return 0, 0, wire.ErrLimit

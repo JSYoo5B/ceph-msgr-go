@@ -77,8 +77,8 @@ func TestOmapAdmissionBoundsAndVariantIsolation(t *testing.T) {
 		{"bykeys prefix", func(op *Operation) { op.Code = OmapGetValuesByKeys; op.Omap.MaxEntries = 0; op.Omap.Prefix = "p" }, ErrRequest},
 		{"EXCL", func(op *Operation) { op.Flags = OpExclusive }, ErrOperation},
 		{"unknown flags", func(op *Operation) { op.Flags = 4 }, ErrOperation},
-		{"unsupported header", func(op *Operation) { op.Code = 0x1213 }, ErrOperation},
-		{"unsupported write", func(op *Operation) { op.Code = 0x2215 }, ErrOperation},
+		{"unsupported comparison", func(op *Operation) { op.Code = 0x1219 }, ErrOperation},
+		{"unsupported range removal", func(op *Operation) { op.Code = 0x222c }, ErrOperation},
 		{"large cursor", func(op *Operation) { op.Omap.StartAfter = strings.Repeat("x", 1024) }, wire.ErrLimit},
 		{"large keyset", func(op *Operation) {
 			op.Code = OmapGetValuesByKeys
@@ -217,16 +217,19 @@ func FuzzOmapReplyBounds(f *testing.F) {
 		f.Add(uint8(0), data)
 		f.Add(uint8(1), data)
 		f.Add(uint8(2), data)
+		f.Add(uint8(3), data)
 	}
 	f.Fuzz(func(t *testing.T, variant uint8, data []byte) {
 		request := Operation{Omap: OmapInput{MaxOutputBytes: 64}}
-		switch variant % 3 {
+		switch variant % 4 {
 		case 0:
 			request.Code, request.Omap.MaxEntries = OmapGetKeys, 4
 		case 1:
 			request.Code, request.Omap.MaxEntries = OmapGetValues, 4
 		case 2:
 			request.Code, request.Omap.Keys = OmapGetValuesByKeys, []string{"", "\x00", "a", "\xff"}
+		case 3:
+			request.Code = OmapGetHeader
 		}
 		result := syntheticOmapReply(t, request, data)
 		_ = ValidateOmapReply(request, result, true)

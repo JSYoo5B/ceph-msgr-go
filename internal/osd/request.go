@@ -51,7 +51,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			outputBytes = 16
 		case GetXattr, GetXattrs:
 			outputBytes = uint64(op.Xattr.MaxOutputBytes)
-		case OmapGetKeys, OmapGetValues, OmapGetValuesByKeys:
+		case OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys:
 			outputBytes = uint64(op.Omap.MaxOutputBytes)
 		}
 		replyBudget, err = boundedBytes(limit, replyBudget, outputBytes)
@@ -109,7 +109,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	data := make([]byte, 0, int(dataBytes))
 	for _, op := range r.Operations {
 		if IsOmapOperation(op.Code) {
-			data = append(data, encodeOmapInput(op)...)
+			data = appendOmapInput(data, op)
 			continue
 		}
 		if IsXattrOperation(op.Code) {

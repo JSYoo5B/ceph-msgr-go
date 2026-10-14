@@ -338,6 +338,27 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-omap-write")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" {
+			return errors.New("invalid native OMAP write oracle request")
+		}
+		switch fields[1] {
+		case "prepare", "observe", "compare", "cleanup":
+		default:
+			return errors.New("invalid native OMAP write oracle action")
+		}
+		args := []string{"python3", "/out/osd_omap_write_native.py", "--" + fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-omap-write-command.json", "native OMAP write oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-omap-write-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-osd-xattr-native")
 	if err != nil {
 		return err

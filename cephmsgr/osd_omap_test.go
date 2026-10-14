@@ -120,15 +120,18 @@ func TestOSDOmapInvalidInputsNeverAllocateTIDOrSend(t *testing.T) {
 	values = osdOmapOp(OSDGetOmapValues)
 	values.Omap.MaxOutputBytes = c.options.MaxFrameSize / 2
 	check("aggregate vector output budget", []OSDOperation{values, values})
-	for _, code := range []OSDOpcode{OSDRead, OSDStat, OSDGetXattrs, 0x1213, 0x1219, 0x2215, 0x2216, 0x2217, 0x2218} {
+	for _, code := range []OSDOpcode{OSDRead, OSDStat, OSDGetXattrs, OSDGetOmapHeader, 0x1219, OSDSetOmapValues, OSDSetOmapHeader, OSDClearOmap, 0x222c} {
 		op := OSDOperation{Code: code, Omap: OSDOmapInput{Keys: []string{}}}
 		if code == OSDRead {
 			op.Length = 1
 		}
+		if code == OSDGetOmapHeader {
+			op.Omap.MaxOutputBytes = 8 // only the Keys variant is invalid
+		}
 		if code == OSDGetXattrs {
 			op.Xattr.MaxOutputBytes = 4
 		}
-		check(fmt.Sprintf("wrong union or unsupported header/compare/write %x", code), []OSDOperation{op})
+		check(fmt.Sprintf("wrong union or unsupported compare/range removal %x", code), []OSDOperation{op})
 	}
 	if o.session.Err() != nil || dials.Load() != 1 {
 		t.Fatal("local OMAP rejection failed/reconnected session", o.session.Err(), dials.Load())

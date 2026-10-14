@@ -1,0 +1,383 @@
+#!/usr/bin/env python3
+"""Independent test-only Tentacle OMAP header/write oracle, never product code.
+
+Ceph 20.2.4 source 7f793731f1b39eb4f465e960113d2363c311b964:
+src/include/rados/librados.h:2991,3107,3133,3150 and src/librados/librados_c.cc
+(LGPL-2.1; header LGPL-2.1 or LGPL-3.0); src/tools/rados/rados.cc:2879-2943
+(LGPL-2.1). This adapter copies no Ceph implementation and emits no
+Go-generated wire data.
+
+The pinned C API has no OMAP header get/set entrypoint. Header observations
+therefore use the pinned rados CLI `getomapheader OBJECT FILE`, which writes the
+raw bufferlist to a private file. CLI header reads are separate requests;
+every state observation rechecks native stat2/version around them. Native C
+write vectors use SET2/RM_KEYS2/CLEAR, whose per-op results are not exposed:
+only aggregate results are native observations.
+
+ROOT contains fixture ceph.conf/keyring. OUT contains pinned osd-oracle.json,
+daemon-version and bounded osd-omap-write-input.json.
+--prepare exclusively creates one UUID-suffixed owned object (baseline bytes,
+attrs, OMAP entries; no header) and reserves separate absent UUID names that a
+Go mutation may create. Ownership is published atomically before any Go write.
+--observe records bytes/stat2/version/attrs/OMAP/header for one owned name
+without writes. --compare seeds a separate native mirror (or leaves it absent),
+executes ONE native C write vector with explicit mtime, observes before/after
+and removes the mirror. --cleanup removes every owned name. No native mutation
+is retried; unit adaptation tests are not daemon proof.
+"""
+import argparse
+import ctypes as C
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import uuid
+
+import osd_omap_native as omap
+import osd_xattr_native as xattr
+
+SOURCE_COMMIT = xattr.SOURCE_COMMIT
+MAX_INPUT = 1 << 20
+MAX_OUTPUT = 512 << 10
+MAX_BINARY = 128 << 10
+MAX_KEY = 4096
+MAX_ENTRIES = 128
+MAX_HEADER = 64 << 10
+MAX_RESERVED = 8
+MAX_OPERATIONS = 16
+MAX_CLI_OUTPUT = 16 << 10
+OWNED = "osd-omap-write-owned"
+WRITE_OPS = {"set", "remove", "clear"}
+
+
+def binary(text, limit=MAX_BINARY):
+    return xattr.binary(text, limit)
+
+
+def entries(values, label):
+    if not isinstance(values, list) or len(values) > MAX_ENTRIES:
+        raise ValueError("invalid " + label + " count")
+    result = []
+    for item in values:
+        if not isinstance(item, dict) or set(item) != {"key", "value"}:
+            raise ValueError("invalid " + label + " entry")
+        result.append((binary(item["key"], MAX_KEY), binary(item["value"])))
+    if len({k for k, _ in result}) != len(result):
+        raise ValueError("duplicate " + label + " key")
+    return sorted(result)
+
+
+def keys(values, label):
+    if not isinstance(values, list) or len(values) > MAX_ENTRIES:
+        raise ValueError("invalid " + label + " count")
+    result = [binary(k, MAX_KEY) for k in values]
+    if len(set(result)) != len(result):
+        raise ValueError("duplicate " + label)
+    return sorted(result)
+
+
+def seed(raw):
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - {"baseline", "attributes", "entries"}:
+        raise ValueError("invalid seed fields")
+    attrs = []
+    for item in raw.get("attributes", []):
+        if not isinstance(item, dict) or set(item) != {"name", "value"}:
+            raise ValueError("invalid seed attribute")
+        attrs.append((xattr.checked_name(binary(item["name"], MAX_KEY)), binary(item["value"])))
+    if len(attrs) > xattr.MAX_OPERATIONS or len({k for k, _ in attrs}) != len(attrs):
+        raise ValueError("invalid seed attribute inventory")
+    return {"baseline": binary(raw.get("baseline", "")), "attributes": sorted(attrs),
+            "entries": entries(raw.get("entries", []), "seed entry")}
+
+
+def operations(raw):
+    if not isinstance(raw, list) or not 0 < len(raw) <= MAX_OPERATIONS:
+        raise ValueError("invalid native write vector count")
+    result = []
+    for action in raw:
+        if not isinstance(action, dict) or action.get("op") not in WRITE_OPS:
+            raise ValueError("unsupported native OMAP write operation")
+        admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags"}[action["op"]]}
+        if set(action) - admitted:
+            raise ValueError("unknown native OMAP write fields")
+        flags = action.get("flags", 0)
+        if type(flags) is not int or flags not in (0, 2):
+            raise ValueError("only FAILOK flag is admitted")
+        decoded = {"op": action["op"], "flags": flags}
+        if action["op"] == "set":
+            decoded["entries"] = entries(action.get("entries", []), "set entry")
+        elif action["op"] == "remove":
+            decoded["keys"] = keys(action.get("keys", []), "removal key")
+        result.append(decoded)
+    return result
+
+
+def validate_request(raw, mode):
+    allowed = {"prepare": {"seed", "reserve"}, "observe": {"object", "inventory_keys"},
+               "compare": {"seed", "operations", "mtime", "inventory_keys"}, "cleanup": set()}
+    if mode not in allowed:
+        raise ValueError("invalid OMAP write oracle mode")
+    if not isinstance(raw, dict) or set(raw) - allowed[mode]:
+        raise ValueError("unknown OMAP write oracle input fields")
+    request = {"inventory_keys": keys(raw.get("inventory_keys", []), "inventory key")}
+    if mode == "prepare":
+        request["seed"] = seed(raw.get("seed", {}))
+        reserve = raw.get("reserve", 0)
+        if type(reserve) is not int or not 0 <= reserve <= MAX_RESERVED:
+            raise ValueError("invalid absent-name reservation count")
+        request["reserve"] = reserve
+    elif mode == "observe":
+        request["object"] = xattr.identity(raw.get("object"), "object")
+    elif mode == "compare":
+        request["seed"] = seed(raw.get("seed"))
+        request["operations"] = operations(raw.get("operations"))
+        mtime = raw.get("mtime")
+        if (not isinstance(mtime, dict) or set(mtime) != {"seconds", "nanos"} or type(mtime["seconds"]) is not int
+                or type(mtime["nanos"]) is not int or not 0 <= mtime["seconds"] < 1 << 32 or not 0 <= mtime["nanos"] < 10**9):
+            raise ValueError("compare needs an explicit valid mtime")
+        request["mtime"] = mtime
+    total = sum(len(k) for k in request["inventory_keys"])
+    for source in (request.get("seed"),):
+        if source:
+            total += len(source["baseline"]) + sum(len(k) + len(v) for k, v in source["entries"] + source["attributes"])
+    for action in request.get("operations", []):
+        total += sum(len(k) + len(v) for k, v in action.get("entries", [])) + sum(map(len, action.get("keys", [])))
+    if total > MAX_BINARY:
+        raise ValueError("aggregate OMAP write oracle input exceeds 128 KiB")
+    return request
+
+
+def publish(out, name, result):
+    data = bytearray()
+    for chunk in json.JSONEncoder().iterencode(result):
+        encoded = chunk.encode()
+        if len(data) + len(encoded) + 1 > MAX_OUTPUT:
+            raise ValueError("OMAP write JSON output exceeds 512 KiB")
+        data.extend(encoded)
+    temporary = out / (name + ".tmp")
+    temporary.write_bytes(data + b"\n")
+    os.replace(temporary, out / (name + ".json"))
+
+
+class HeaderCLI:
+    """Pinned rados CLI raw header reader with fixed fixture identity."""
+
+    def __init__(self, root, metadata, namespace):
+        self.base = ["rados", "--conf", str(root / "ceph.conf"), "--keyring", str(root / "keyring"),
+                     "--name", "client.test", "--pool", metadata["pool"]]
+        if namespace:
+            self.base += ["--namespace", namespace]
+
+    def get(self, name):
+        with tempfile.TemporaryDirectory(prefix="omap-header-") as directory:
+            path = Path(directory) / "header"
+            result = subprocess.run(self.base + ["getomapheader", name.decode(), str(path)], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            if result.returncode != 0 or not path.is_file():
+                raise RuntimeError("native rados getomapheader failed: exit=%d %s" % (
+                    result.returncode, result.stderr[-MAX_CLI_OUTPUT:].decode(errors="replace")))
+            with path.open("rb") as source:
+                header = source.read(MAX_HEADER + 1)
+            if len(header) > MAX_HEADER:
+                raise ValueError("native OMAP header exceeds oracle bound")
+            return header
+
+
+class Native(omap.Native):
+    def __init__(self, library=None):
+        super().__init__(library)
+        p, s = C.c_void_p, C.c_size_t
+        for name, arguments in {"write_op_omap_rm_keys2": [p, C.POINTER(p), C.POINTER(s), s],
+                                "write_op_omap_clear": [p]}.items():
+            function = getattr(self.lib, "rados_" + name)
+            function.argtypes, function.restype = arguments, None
+
+    def write_vector(self, io, name, actions, mtime):
+        operation = self.lib.rados_create_write_op()
+        if not operation:
+            raise RuntimeError("native OMAP write allocation failed")
+        buffers = []
+        try:
+            for action in actions:
+                if action["op"] == "set":
+                    k, kl, kb = omap.pointers([key for key, _ in action["entries"]])
+                    v, vl, vb = omap.pointers([value for _, value in action["entries"]])
+                    buffers.extend((k, kl, kb, v, vl, vb))
+                    self.lib.rados_write_op_omap_set2(operation, k, v, kl, vl, len(action["entries"]))
+                elif action["op"] == "remove":
+                    k, kl, kb = omap.pointers(action["keys"])
+                    buffers.extend((k, kl, kb))
+                    self.lib.rados_write_op_omap_rm_keys2(operation, k, kl, len(action["keys"]))
+                else:
+                    self.lib.rados_write_op_omap_clear(operation)
+                if action["flags"]:
+                    self.lib.rados_write_op_set_flags(operation, action["flags"])
+            stamp = xattr.Timespec(mtime["seconds"], mtime["nanos"])
+            return self.lib.rados_write_op_operate2(operation, io, name, C.byref(stamp), 0)
+        finally:
+            self.lib.rados_release_write_op(operation)
+
+    def full_state(self, io, name, inventory_keys, cli):
+        length, mtime = C.c_uint64(), xattr.Timespec()
+        code = self.lib.rados_stat2(io, name, C.byref(length), C.byref(mtime))
+        if code == -2:
+            return {"code": -2, "version": 0, "data": "", "attributes": None, "gets": [], "omap": None, "header": None}
+        self.check(code)
+        result = self.state(io, name, inventory_keys)
+        result["header"] = xattr.encode(cli.get(name))
+        length, mtime = C.c_uint64(), xattr.Timespec()
+        self.check(self.lib.rados_stat2(io, name, C.byref(length), C.byref(mtime)))
+        if (self.lib.rados_get_last_version(io) != result["version"] or length.value != len(binary(result["data"], xattr.MAX_VALUE))
+                or mtime.tv_sec != result["seconds"] or mtime.tv_nsec != result["nanos"]):
+            raise ValueError("native state changed during separate CLI header observation")
+        return result
+
+
+def create_seeded(native, io, name, source):
+    operation = native.lib.rados_create_write_op()
+    if not operation:
+        raise RuntimeError("native OMAP seed allocation failed")
+    try:
+        native.lib.rados_write_op_create(operation, 1, None)  # exclusive
+        baseline = C.create_string_buffer(source["baseline"], len(source["baseline"]) + 1)
+        native.lib.rados_write_op_write_full(operation, baseline, len(source["baseline"]))
+        _, keep = native.append(operation, "write", [{"op": "set", "name": k, "value": v, "flags": 0} for k, v in source["attributes"]])
+        k, kl, kb = omap.pointers([key for key, _ in source["entries"]])
+        v, vl, vb = omap.pointers([value for _, value in source["entries"]])
+        native.lib.rados_write_op_omap_set2(operation, k, v, kl, vl, len(source["entries"]))
+        stamp = xattr.Timespec(1700000000, 123456789)
+        return native.lib.rados_write_op_operate2(operation, io, name, C.byref(stamp), 0)
+    finally:
+        native.lib.rados_release_write_op(operation)
+
+
+def owned_name(metadata, label):
+    name = xattr.identity(metadata["object"], "fixture object") + b"-native-omapw-" + label + uuid.uuid4().hex.encode()
+    xattr.identity(name.decode(), "owned object")
+    return name
+
+
+def check_ownership(receipt, metadata):
+    if (not isinstance(receipt, dict) or receipt.get("schema_version") != 1 or receipt.get("source_commit") != SOURCE_COMMIT
+            or any(receipt.get(k) != metadata[k] for k in ("pool", "pool_id")) or receipt.get("fixture_object") != metadata["object"]
+            or receipt.get("namespace") != ""):
+        raise ValueError("invalid OMAP write ownership provenance or scope")
+    names = receipt.get("objects")
+    if not isinstance(names, list) or not 1 <= len(names) <= MAX_RESERVED + 1:
+        raise ValueError("invalid OMAP write ownership set")
+    prefix = xattr.identity(metadata["object"], "fixture object") + b"-native-omapw-"
+    result = []
+    for index, text in enumerate(names):
+        name = xattr.identity(text, "owned object")
+        label = b"main-" if index == 0 else b"absent-"
+        suffix = name[len(prefix + label):]
+        if not name.startswith(prefix + label) or len(suffix) != 32 or any(c not in b"0123456789abcdef" for c in suffix):
+            raise ValueError("OMAP write owned name is not a fixture UUID name")
+        result.append(name)
+    if len(set(result)) != len(result):
+        raise ValueError("duplicate OMAP write owned name")
+    return result
+
+
+def execute(native, io, metadata, request, mode, out, cli):
+    result = {"schema_version": 1, "source_commit": SOURCE_COMMIT, "mode": mode,
+              "fixture": {k: metadata[k] for k in ("pool", "pool_id", "object")},
+              "scope": {"independent_native_c_api": True, "header_via_pinned_rados_cli": True,
+                        "raw_wire_payload_available": False, "native_write_per_op_results_available": False}}
+    if mode == "cleanup":
+        codes = []
+        for name in check_ownership(omap.read_json(out / (OWNED + ".json")), metadata):
+            codes.append({"object": name.decode(), "code": native.lib.rados_remove(io, name)})
+        result["cleanup"] = {"objects": codes, "objects_removed": all(c["code"] in (0, -2) for c in codes)}
+        for entry in codes:
+            native.check(entry["code"] if entry["code"] != -2 else 0)
+        return result
+    if mode == "observe":
+        owned = check_ownership(omap.read_json(out / (OWNED + ".json")), metadata)
+        if request["object"] not in owned:
+            raise ValueError("observation is limited to owned OMAP write objects")
+        result["object"] = request["object"].decode()
+        result["state"] = native.full_state(io, request["object"], request["inventory_keys"], cli)
+        return result
+    if mode == "prepare":
+        main = owned_name(metadata, b"main-")
+        absent = [owned_name(metadata, b"absent-") for _ in range(request["reserve"])]
+        for name in absent:
+            length, mtime = C.c_uint64(), xattr.Timespec()
+            if native.lib.rados_stat2(io, name, C.byref(length), C.byref(mtime)) != -2:
+                raise RuntimeError("reserved UUID name unexpectedly exists")
+        created = True
+        try:
+            code = create_seeded(native, io, main, request["seed"])
+            result["seed_aggregate"] = code
+            if code == -17:
+                created = False
+            native.check(code)
+            result["state"] = native.full_state(io, main, [k for k, _ in request["seed"]["entries"]], cli)
+            publish(out, OWNED, {"schema_version": 1, "source_commit": SOURCE_COMMIT, "pool": metadata["pool"],
+                                 "pool_id": metadata["pool_id"], "fixture_object": metadata["object"], "namespace": "",
+                                 "objects": [n.decode() for n in [main] + absent]})
+            created = False  # ownership transferred after the atomic receipt
+        finally:
+            if created:
+                native.lib.rados_remove(io, main)
+        result["objects"] = [n.decode() for n in [main] + absent]
+        return result
+    # compare: one disposable native mirror around one C write vector.
+    mirror = owned_name(metadata, b"mirror-")
+    created = False
+    try:
+        if request["seed"] is not None:
+            created = True
+            code = create_seeded(native, io, mirror, request["seed"])
+            result["seed_aggregate"] = code
+            if code == -17:
+                created = False
+            native.check(code)
+        result["object"] = mirror.decode()
+        result["before"] = native.full_state(io, mirror, request["inventory_keys"], cli)
+        created = True  # a write vector may create an absent mirror
+        result["aggregate"] = native.write_vector(io, mirror, request["operations"], request["mtime"])
+        result["after"] = native.full_state(io, mirror, request["inventory_keys"], cli)
+        return result
+    finally:
+        if created:
+            code = native.lib.rados_remove(io, mirror)
+            result["cleanup"] = {"mirror_removed": code in (0, -2), "code": code}
+            if code not in (0, -2) and sys.exc_info()[0] is None:
+                native.check(code)
+
+
+def collect(root, out, mode):
+    request = validate_request(omap.read_json(out / "osd-omap-write-input.json"), mode)
+    metadata = omap.read_json(out / "osd-oracle.json")
+    for field in ("pool", "object"):
+        xattr.identity(metadata[field], field)
+    omap.integer(metadata["pool_id"], (1 << 63) - 1, "fixture pool_id")
+    with (out / "daemon-version").open("rb") as source:
+        version = source.read(513).decode().strip()
+    if len(version) > 512 or "20.2.4" not in version or SOURCE_COMMIT not in version:
+        raise ValueError("OMAP write fixture is not pinned Tentacle")
+    if mode != "prepare":
+        check_ownership(omap.read_json(out / (OWNED + ".json")), metadata)
+    native = Native()
+    cli = HeaderCLI(root, metadata, "")
+    with xattr.client_connection(native, root, metadata, "test") as io:
+        result = execute(native, io, metadata, request, mode, out, cli)
+        result["fixture_daemon_version"] = version
+        publish(out, "osd-omap-write-result", result)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("root", type=Path)
+    parser.add_argument("out", type=Path)
+    modes = parser.add_mutually_exclusive_group(required=True)
+    for mode in ("prepare", "observe", "compare", "cleanup"):
+        modes.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
+    args = parser.parse_args()
+    collect(args.root, args.out, args.mode)

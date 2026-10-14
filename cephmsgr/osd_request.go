@@ -60,9 +60,9 @@ const (
 // accepts ExclusiveCreate. Snapshot/truncate-sequence variants are unsupported.
 // Xattr is the active input union for Get/GetAll/Compare/Set/RemoveXattr;
 // their extent and Version fields are zero. Data holds the SET/CMP bytes.
-// Omap is the active input for GetOmapKeys/Values/ValuesByKeys, with zero
+// Omap is the active input for the OMAP reads and mutations, with zero
 // extent, Version, Data and Xattr. Its wire input length is derived locally.
-// Caller must not mutate the vector, Data or Omap.Keys until Request returns.
+// Caller must not mutate the vector, Data or Omap inputs until Request returns.
 type OSDOperation struct {
 	Code           OSDOpcode
 	Flags          OSDOperationFlags
@@ -107,8 +107,9 @@ type OSDVersion struct {
 // Stat's bytes describe size and mtime; this layer does not convert them into a
 // filesystem-style object API. The caller can interpret the wire data.
 // Xattr keeps attribute lengths/comparison fields separate from extents.
-// For OMAP reads, Length echoes the encoded input byte length. Data retains
-// the raw collection framing, including the page's more suffix when present.
+// For OMAP operations, Length echoes the encoded input byte length (zero for
+// GetOmapHeader and ClearOmap). Data retains the raw collection framing,
+// including the page's more suffix, or the raw header; mutations return none.
 type OSDOperationResult struct {
 	Code                         OSDOpcode
 	Flags                        uint32
@@ -166,6 +167,9 @@ var ErrOSDRedirect = osd.ErrRedirect
 // compound combinations before object-request transmission. In Tentacle,
 // offset-zero READ/CMPEXT after a possible full write can compare committed
 // bytes with a staged digest; these combinations are conservatively rejected.
+// OMAP and xattr reads after a staged write of the same metadata kind or a
+// DELETE, which may read committed rather than staged state, are rejected the
+// same way.
 var ErrUnsupportedOSDOperation = osd.ErrOperation
 
 type OSDError struct{ Code int32 }
@@ -214,6 +218,9 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 	if globalID != o.globalID {
 		return result, errors.New("ceph: OSD connection belongs to an earlier client identity")
 	}
+	if err := osdOmapEntryBound(request.Operations, c.options.MaxFrameSize); err != nil {
+		return result, err
+	}
 	input := osd.Request{
 		ClientInc:        request.ClientIncarnation,
 		MTimeSeconds:     request.ModificationTime.Seconds,
@@ -259,6 +266,20 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 	return result, nil
 }
 
+// Each encoded OMAP entry needs at least two length prefixes and the whole
+// request data must fit one frame. Refuse impossible maps, summed across the
+// vector, before copying any entry headers into the wire input.
+func osdOmapEntryBound(ops []OSDOperation, limit uint32) error {
+	var entries uint64
+	for _, op := range ops {
+		entries += uint64(len(op.Omap.Entries))
+		if entries > uint64(limit)/8 {
+			return ErrLimitExceeded
+		}
+	}
+	return nil
+}
+
 func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 	if reply.Object != input.Object || reply.PG.Pool != uint64(input.Locator.Pool) || reply.PG.Seed != input.Hash || reply.RetryAttempt != 0 || len(reply.Operations) != len(input.Operations) {
 		return errors.New("OSD reply does not match request identity or operations")
@@ -291,7 +312,8 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		}
 		success := !redirect && reply.Result >= 0 && op.Result >= 0
 		switch requested.Code {
-		case osd.OmapGetKeys, osd.OmapGetValues, osd.OmapGetValuesByKeys:
+		case osd.OmapGetKeys, osd.OmapGetValues, osd.OmapGetHeader, osd.OmapGetValuesByKeys,
+			osd.OmapSetValues, osd.OmapSetHeader, osd.OmapClear, osd.OmapRemoveKeys:
 			if err := osd.ValidateOmapReply(requested, op, success); err != nil {
 				return err
 			}
