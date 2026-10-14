@@ -19,6 +19,7 @@ func TestCephMapWaitIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	prepareNativeManagerFailover(t, ctx, control)
 	options := integrationOptions(t)
 	options.MaxInFlight = 1
 	dial := options.DialContext
@@ -118,6 +119,11 @@ func TestCephMapWaitIntegration(t *testing.T) {
 		t.Fatal("removed member did not wake map wait", removed, err)
 	}
 	nativeMonitorMapWait(t, ctx, c, control, "removed")
+	// MON membership changes can trigger elections while an earlier failed
+	// native MGR respawns. Establish actual standby availability before this
+	// separate MGR failover, preserving any native AUTH refusal and restoration.
+	prepareNativeManagerFailover(t, ctx, control)
+	mgr = nativeManagerSnapshot(t, ctx, c, control, "restored").Manager
 	type mgrResult struct {
 		state cephmsgr.ManagerState
 		err   error

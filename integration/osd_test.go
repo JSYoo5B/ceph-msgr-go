@@ -13,19 +13,24 @@ import (
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 type osdFixtureOracle struct {
-	Pool        int64  `json:"pool_id"`
-	Name        string `json:"object"`
-	ID          int32  `json:"osd_id"`
-	Epoch       uint32 `json:"epoch"`
-	Hash        uint32 `json:"hash"`
-	PG          uint32 `json:"pg_seed"`
-	Address     string `json:"address"`
-	Size        uint64 `json:"size"`
-	Seconds     uint32 `json:"mtime_seconds"`
-	Nanoseconds uint32 `json:"mtime_nanoseconds"`
+	Up          []int32 `json:"up"`
+	Acting      []int32 `json:"acting"`
+	Replicas    int     `json:"replicas"`
+	MinSize     int     `json:"min_size"`
+	Pool        int64   `json:"pool_id"`
+	Name        string  `json:"object"`
+	ID          int32   `json:"osd_id"`
+	Epoch       uint32  `json:"epoch"`
+	Hash        uint32  `json:"hash"`
+	PG          uint32  `json:"pg_seed"`
+	Address     string  `json:"address"`
+	Size        uint64  `json:"size"`
+	Seconds     uint32  `json:"mtime_seconds"`
+	Nanoseconds uint32  `json:"mtime_nanoseconds"`
 }
 
 func osdFixture(t *testing.T) (*cephmsgr.Client, context.Context, osdFixtureOracle, []byte) {
@@ -50,6 +55,12 @@ func osdFixture(t *testing.T) (*cephmsgr.Client, context.Context, osdFixtureOrac
 	options.EnableOSD = true
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	t.Cleanup(cancel)
+	if oracle.Replicas == 3 {
+		waitOSDFixtureClean(t, ctx, oracle)
+		fresh := nativeMutation(t, ctx, map[string]any{"compare": false, "placement": true}).Placement
+		oracle = adoptMutationPlacement(t, oracle, fresh)
+		publishReplicaOSDRouting(t, directory, oracle)
+	}
 	c, err := cephmsgr.Dial(ctx, options)
 	if err != nil {
 		t.Fatal(err)
@@ -214,5 +225,15 @@ func TestCephOSDUnsupportedFeaturesIntegration(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("OSD did not enforce required CRUSH feature", ctx.Err())
 		}
+	}
+}
+
+func waitOSDFixtureClean(t *testing.T, ctx context.Context, oracle osdFixtureOracle) {
+	t.Helper()
+	if oracle.Replicas != 3 {
+		return
+	}
+	if err := testcluster.ControlDaemon(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "osd-ready", "clean"); err != nil {
+		t.Fatal("restore three-OSD clean fixture before selecting routing", err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -88,11 +89,13 @@ func TestCephOSDMutationsIntegration(t *testing.T) {
 		return cephmsgr.OSDOperation{Code: code, Offset: offset, Length: uint64(len(data)), Data: data}
 	}
 	cases := []struct {
-		name   string
-		absent bool
-		delta  int64
-		code   int32
-		ops    []cephmsgr.OSDOperation
+		name          string
+		absent        bool
+		delta         int64
+		code          int32
+		ops           []cephmsgr.OSDOperation
+		shortCompare  bool
+		compareLength uint64
 	}{
 		{name: "write hole", ops: []cephmsgr.OSDOperation{dataOp(cephmsgr.OSDWrite, 14, []byte{0, 254})}},
 		{name: "replace shorter", ops: []cephmsgr.OSDOperation{dataOp(cephmsgr.OSDWriteFull, 0, []byte{128, 0, 255})}},
@@ -112,6 +115,10 @@ func TestCephOSDMutationsIntegration(t *testing.T) {
 		{name: "version older", delta: -1, code: -34, ops: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDAssertVersion}, dataOp(cephmsgr.OSDAppend, 0, []byte{99})}},
 		{name: "version newer", delta: 1, code: -75, ops: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDAssertVersion}, dataOp(cephmsgr.OSDAppend, 0, []byte{99})}},
 		{name: "compare matches", ops: []cephmsgr.OSDOperation{dataOp(cephmsgr.OSDCompareExtent, 1, baseline[1:4]), dataOp(cephmsgr.OSDWrite, 2, []byte{99, 100})}},
+		{name: "compare extends past eof with zero padding", shortCompare: true, compareLength: 2, ops: []cephmsgr.OSDOperation{dataOp(cephmsgr.OSDCompareExtent, 8, []byte{128, 10, 0, 0}), dataOp(cephmsgr.OSDAppend, 0, []byte{99})}},
+		{name: "compare wholly beyond eof with zero padding", shortCompare: true, ops: []cephmsgr.OSDOperation{dataOp(cephmsgr.OSDCompareExtent, 14, []byte{0, 0, 0, 0}), dataOp(cephmsgr.OSDAppend, 0, []byte{99})}},
+		{name: "compare eof mismatch rolls back", shortCompare: true, compareLength: 2, code: -4098, ops: []cephmsgr.OSDOperation{dataOp(cephmsgr.OSDCompareExtent, 8, []byte{128, 10, 0, 99}), dataOp(cephmsgr.OSDAppend, 0, []byte{99})}},
+		{name: "compare eof mismatch failok commits", shortCompare: true, compareLength: 2, ops: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDCompareExtent, Flags: cephmsgr.OSDFailOK, Offset: 8, Length: 4, Data: []byte{128, 10, 0, 99}}, dataOp(cephmsgr.OSDAppend, 0, []byte{99})}},
 		{name: "rollback after staged write", code: -4097, ops: []cephmsgr.OSDOperation{dataOp(cephmsgr.OSDWrite, 8, []byte{88}), dataOp(cephmsgr.OSDCompareExtent, 0, []byte{0, 255, 0}), dataOp(cephmsgr.OSDAppend, 0, []byte{99})}},
 		{name: "compare failok commits", ops: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDCompareExtent, Flags: cephmsgr.OSDFailOK, Length: 1, Data: []byte{99}}, dataOp(cephmsgr.OSDAppend, 0, []byte{99})}},
 		{name: "ordered payload vector", ops: []cephmsgr.OSDOperation{dataOp(cephmsgr.OSDWriteFull, 0, []byte{1, 0}), dataOp(cephmsgr.OSDAppend, 0, []byte{255, 3}), dataOp(cephmsgr.OSDWrite, 1, []byte{128})}},
@@ -150,12 +157,19 @@ func TestCephOSDMutationsIntegration(t *testing.T) {
 				t.Fatalf("completion metadata: %+v", reply)
 			}
 			native := nativeMutation(t, ctx, map[string]any{"compare": true, "exists": !tc.absent, "baseline": baseline, "operations": tc.ops, "version_delta": tc.delta, "seconds": r.ModificationTime.Seconds, "nanos": r.ModificationTime.Nanoseconds})
-			if (native.Code != reply.Code && !(tc.name == "compare failok commits" && native.Code == -5 && reply.Code == 0)) || native.Actual.Code != native.Native.Code || !bytes.Equal(native.Actual.Data, native.Native.Data) || native.Actual.Code == 0 && (native.Actual.Seconds != native.Native.Seconds || native.Actual.Nanos != native.Native.Nanos) {
+			ignoredComparison := false
+			for _, op := range tc.ops {
+				ignoredComparison = ignoredComparison || op.Code == cephmsgr.OSDCompareExtent && op.Flags&cephmsgr.OSDFailOK != 0
+			}
+			if (native.Code != reply.Code && !(ignoredComparison && native.Code == -5 && reply.Code == 0)) || native.Actual.Code != native.Native.Code || !bytes.Equal(native.Actual.Data, native.Native.Data) || native.Actual.Code == 0 && (native.Actual.Seconds != native.Native.Seconds || native.Actual.Nanos != native.Native.Nanos) {
 				t.Fatalf("Go/native code or object differs: Go=%d native=%+v", reply.Code, native)
 			}
 			j := 0
 			for i, op := range tc.ops {
 				if op.Code == cephmsgr.OSDCompareExtent {
+					if tc.shortCompare && reply.Operations[i].Length != tc.compareLength {
+						t.Fatalf("native EOF normalized compare length=%d; want=%d", reply.Operations[i].Length, tc.compareLength)
+					}
 					if reply.Operations[i].Result != native.Comparisons[j] {
 						t.Fatalf("compare per-op=%d native=%d", reply.Operations[i].Result, native.Comparisons[j])
 					}
@@ -183,7 +197,7 @@ func TestCephOSDMutationLostReplyIntegration(t *testing.T) {
 			return nil, err
 		}
 		_, kind, _ := testcluster.SplitPeer(endpoint)
-		if kind != "osd.0" {
+		if kind != "osd."+strconv.Itoa(int(oracle.ID)) {
 			return conn, nil
 		}
 		return &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{}), SignalBlocked: func() {
@@ -255,53 +269,86 @@ func TestCephOSDMutationRestartIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("restart persistence requires the sparse-file BlueStore fixture")
 	}
-	c, ctx, oracle, original := osdFixture(t)
-	defer func() { restoreMutationObject(t, c, oracle, original) }()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	c, _, oracle, original := osdFixture(t)
+	name := strconv.Itoa(int(oracle.ID))
+	stopped := false
+	defer func() { recoverMutationFixture(t, c, oracle, original, name, stopped) }()
 	o := mutationConnection(t, c, ctx, oracle)
+	defer o.Close()
 	want := append([]byte{0, 255, 128}, bytes.Repeat([]byte("persisted-by-bluestore"), 512)...)
 	reply, err := o.Request(ctx, osdObjectRequest(oracle, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(want)), Data: want}))
 	if err != nil || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
 		t.Fatal("ONDISK write before restart", err)
 	}
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
-	if err = testcluster.ControlDaemon(ctx, dir, "stop", "osd", "0"); err != nil {
+	if err = testcluster.ControlDaemon(ctx, dir, "stop", "osd", name); err != nil {
 		t.Fatal(err)
 	}
-	o.Close()
-	if err = testcluster.ControlDaemon(ctx, dir, "start", "osd", "0"); err != nil {
+	stopped = true
+	if err = o.Close(); err != nil {
+		t.Fatal("close orderly stopped OSD connection", err)
+	}
+	if err = testcluster.ControlDaemon(ctx, dir, "start", "osd", name); err != nil {
 		t.Fatal(err)
 	}
+	stopped = false
+	waitOSDFixtureClean(t, ctx, oracle)
 	native := nativeMutation(t, ctx, map[string]any{"compare": false, "placement": true})
-	if !bytes.Equal(native.Actual.Data, want) || native.Placement.Epoch <= oracle.Epoch {
-		t.Fatal("native readback after restart", native)
+	if native.Actual.Code != 0 || native.Actual.Version != reply.UserVersion || !bytes.Equal(native.Actual.Data, want) || native.Placement.Epoch <= oracle.Epoch {
+		t.Fatalf("native orderly restart readback: code=%d bytes=%d version=%d placement=%+v", native.Actual.Code, len(native.Actual.Data), native.Actual.Version, native.Placement)
 	}
 	// The consumer refreshes routing from the native map; the product neither
 	// retries the write nor selects a replacement primary itself.
-	fresh := native.Placement
-	fresh.Seconds, fresh.Nanoseconds = oracle.Seconds, oracle.Nanoseconds
-	oracle = fresh
-	// Publish refreshed native routing for subsequent fixture tests as well.
-	path := filepath.Join(dir, "osd-oracle.json")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var metadata map[string]any
-	if err = json.Unmarshal(data, &metadata); err != nil {
-		t.Fatal(err)
-	}
-	metadata["address"], metadata["epoch"] = oracle.Address, oracle.Epoch
-	data, err = json.Marshal(metadata)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.WriteFile(path, data, 0644); err != nil {
-		t.Fatal(err)
-	}
+	oracle = adoptMutationPlacement(t, oracle, native.Placement)
+	publishReplicaOSDRouting(t, dir, oracle)
 	o = mutationConnection(t, c, ctx, oracle)
+	defer o.Close()
 	read, err := o.Request(ctx, osdObjectRequest(oracle, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: uint64(len(want))}))
-	if err != nil || read.Transaction <= reply.Transaction || !bytes.Equal(read.Operations[0].Data, want) {
+	if err != nil || read.Transaction <= reply.Transaction || read.UserVersion != native.Actual.Version || !bytes.Equal(read.Operations[0].Data, want) {
 		t.Fatal("Go readback after restart", err)
 	}
 	t.Log("ONDISK write survived orderly BlueStore OSD restart; independent native and Go readback matched")
+}
+
+func adoptMutationPlacement(t *testing.T, original, fresh osdFixtureOracle) osdFixtureOracle {
+	t.Helper()
+	if fresh.ID < 0 || fresh.Address == "" || fresh.Epoch < original.Epoch || fresh.Pool != original.Pool || fresh.Name != original.Name || fresh.Hash != original.Hash {
+		t.Fatalf("native replacement routing changed object identity or regressed epoch: %+v", fresh)
+	}
+	primaryPresent := false
+	for _, id := range fresh.Acting {
+		if id == fresh.ID {
+			primaryPresent = true
+		}
+	}
+	if !primaryPresent {
+		t.Fatalf("native primary is absent from acting set: %+v", fresh)
+	}
+	// Replace all routing fields together. Keep original size/mtime separately
+	// because the native placement receipt describes routing, not restoration.
+	original.ID, original.Epoch, original.Address = fresh.ID, fresh.Epoch, fresh.Address
+	original.Acting, original.Up = fresh.Acting, fresh.Up
+	return original
+}
+
+func recoverMutationFixture(t *testing.T, c *cephmsgr.Client, oracle osdFixtureOracle, original []byte, stoppedName string, stopped bool) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	if stopped {
+		if err := testcluster.ControlDaemon(ctx, dir, "start", "osd", stoppedName); err != nil {
+			t.Error("recover stopped OSD before object restoration", err)
+			return
+		}
+	}
+	waitOSDFixtureClean(t, ctx, oracle)
+	// A restarted daemon need not become primary again. Read current native
+	// placement on both success and failure paths before restoring the object.
+	fresh := nativeMutation(t, ctx, map[string]any{"compare": false, "placement": true}).Placement
+	oracle = adoptMutationPlacement(t, oracle, fresh)
+	publishReplicaOSDRouting(t, dir, oracle)
+	restoreMutationObject(t, c, oracle, original)
 }

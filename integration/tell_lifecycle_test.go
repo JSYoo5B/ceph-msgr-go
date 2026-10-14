@@ -38,6 +38,7 @@ func TestCephTellRecoveryIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	prepareNativeManagerFailover(t, ctx, control)
 	options := integrationOptions(t)
 	options.Monitors = options.Monitors[:1] // Fixture MON a; b/c must be learned.
 	options.ConnectTimeout = 2 * time.Second

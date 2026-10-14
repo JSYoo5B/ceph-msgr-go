@@ -39,7 +39,7 @@ MaxFrameSize; vectors have 1–64 operations. Extents cannot overflow uint64.
 | Read | 0x1201 | offset, positive bounded length; no input | bounded raw bytes; native may shorten extent |
 | Stat | 0x1202 | zero extents, no input | 16 bytes: size u64, seconds u32, nanos u32 |
 | AssertVersion | 0x1208 | positive Version in second union u64; other fields zero | no data; older -ERANGE, newer -EOVERFLOW |
-| CompareExtent | 0x1220 | offset, length == len(Data), positive length | no data; mismatch code -4095 minus relative mismatch offset |
+| CompareExtent | 0x1220 | offset, length == len(Data), positive length; native comparison zero-extends bytes past EOF | no data; reply extent may shorten at committed EOF, including zero; mismatch code -4095 minus relative mismatch offset |
 | Write | 0x2201 | offset, length == len(Data) | no data |
 | WriteFull | 0x2202 | offset zero, length == len(Data); empty replacement allowed | no data |
 | Truncate | 0x2203 | offset is new size; length zero, no input | no data |
@@ -61,6 +61,19 @@ Explicit raw ModificationTime encodes utime_t; nanoseconds must be below 1e9.
 Zero is transmitted unchanged and preserves native zero-mtime behavior. No
 local clock is silently substituted. Nonzero mtime on a read-only vector is
 rejected because it would not set the object's mtime.
+
+A following READ or CMPEXT at offset 0 covering any preceding nonempty
+WRITEFULL, APPEND or offset-zero WRITE payload length is rejected before
+transmission. The conservative check retains the minimum positive payload
+length across intervening operations without assuming a known committed size.
+An actual native WRITEFULL/full-READ vector triggered a checksum failure:
+PrimaryLogPG::do_read compared committed bytes with the staged size/digest and
+marked the primary object unreadable. WRITE, APPEND and CMPEXT share relevant
+write/read paths in the pinned source; their same risk is source-derived,
+not an additional observed native failure. Unit tests reject all six guarded
+write/read-or-compare combinations before submission. Partial and EOF reads
+after replacement are separately verified; native checksum checks are not
+disabled to claim broader support.
 
 ## Identity, results and uncertainty
 
@@ -92,23 +105,48 @@ explicitly chosen OSD starts a fresh session with increasing TIDs, not a replay.
 
 ## Verification and remaining acceptance
 
-Live tests compare 21 mutation/guard/compound cases with an independent native
+Live tests compare 25 mutation/guard/compound cases with an independent native
 librados vector on a separate disposable object, including binary readback,
 nanosecond mtime, exclusive create, version bounds, extent comparison,
 rollback and FAILOK. Native librados's cmpext callback can itself return -EIO
 under FAILOK although the wire aggregate is success and writes commit; its
-negative per-op value and independent readback are checked separately. See
+negative per-op value and independent readback are checked separately. Four
+native EOF comparison cases cover zero-extension past EOF, wholly beyond EOF,
+mismatch rollback and FAILOK commit. Returned CMPEXT extent lengths shorten to
+2 or 0 while comparison still checks the zero-extended requested range; these
+normalized lengths remain visible rather than failing the session. See
 [Objecter.h](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osdc/Objecter.h#L444).
 
-BlueStore tests verify ONDISK then orderly OSD stop/start and native/Go
-readback using refreshed caller-owned routing. This is not a power-loss or
-multi-replica durability claim. Lost-response tests independently observe one
-append before canceling the local wait and verify a fresh session does not
+The single-OSD BlueStore profile passes eleven native tests, including five
+mixed read/stat/mutation vectors, orderly restart and SIGKILL (exit 137, no
+OOM) readback. ONDISK completion is followed by independent native and fresh
+Go reads with caller-owned routing; bytes, version and nanosecond mtime are
+checked. Mixed vectors exercise actual Tentacle execution and independent
+native pre/post stat2/read. The native C write_op API does not independently
+reconstruct their mixed read/write payloads.
+
+The expanded three-OSD BlueStore profile uses replicas 3/min_size 2 and passes
+all twelve selected OSD/MON-map tests, including the 25 mutation/guard cases,
+five mixed vectors, renewal, map delivery, lost reply and restart/crash paths.
+After an
+ONDISK binary write the actual primary is killed with SIGKILL. Independent
+native placement selects the surviving primary; the caller explicitly opens
+that Go target. The surviving two-replica acting set preserves bytes, version
+and mtime without another write or automatic mutation replay. This proves the
+observed daemon failure scenario, not host/device power-loss persistence.
+
+Lost-response tests independently observe one append before canceling the local wait and verify a fresh session does not
 repeat it. Unit tests additionally reject ACK-only completion, malformed
 inputs and uint64 read-budget overflow, and retain submission metadata.
 
-The verified fixture remains one OSD, replicas/min_size 1, legacy CRUSH, no
-HASHPSPOOL/upmap, Tentacle 20.2.4 IPv4. Broader replicated profiles, full native
-payload encoder fixtures for all new opcodes, mixed read-output/mutation
-vectors, forced crash durability and unsolicited O0/O3 control/event contracts
-remain separate acceptance work. O0/O1 are not globally complete.
+Verified profiles use Tentacle 20.2.4 IPv4, legacy CRUSH, no HASHPSPOOL/upmap,
+with single-replica MemStore/BlueStore and three-replica/min_size 2 BlueStore.
+Five [mutation decoder vectors](testdata/mutation-README.md) independently
+construct fields in Python and pass native ceph-dencoder decoding/re-export.
+Message::encode retains nonempty decoded payload, so re-export does not prove
+the native payload encoder. Broader replicated/address/OS matrices, true
+native payload encoder evidence, host/device power-loss durability, EC and
+unsolicited O0/O3 control/event contracts remain acceptance work. O0/O1 are
+not globally complete. The expanded CRC/aes256k single-MemStore host-relay run
+also passes nine selected tests with all 25 mutation/guard cases and five mixed
+vectors; BlueStore-only restart/crash/replica tests are skipped.

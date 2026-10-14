@@ -276,14 +276,39 @@ read-your-staged-writes 보장으로 확대하지 않는다.
 
 [O0/O1 wire 계약](internal/osd/CONTRACT.md)과
 [native 검증 기록](integration/fixture/OSD_MUTATIONS_VALIDATION.md)에 opcode·flag·완료
-의미와 native 비교 범위를 기록했다. 현재 실제 검증은 20.2.4 IPv4, 하나의
-OSD/replica, legacy CRUSH에 한정한다. 21개 native 비교 사례, 응답 손실 뒤
-재실행 금지와 BlueStore의 정상 OSD 재시작 후 readback을 검증했다.
-O0의 event 계약과 O1의 일반 replicated/mixed-output/crash 범위는 미완료다.
+의미와 native 비교 범위를 기록했다. 20.2.4 IPv4·legacy CRUSH에서 single
+BlueStore OSD/replica profile의 11개 시험이 통과했다. 이후 3-OSD BlueStore·
+replicas 3/min_size 2의 전체 선택 시험 12개도 통과했다. 25개 mutation/guard
+native 비교 사례에는 EOF 밖을 zero-extension으로 비교하는 CMPEXT 4개가
+포함되며 reply length가 2 또는 0으로 줄어드는 metadata도 보존했다.
+응답 손실 뒤 재실행 금지, 정상 재시작·SIGKILL 후 native/Go readback과
+partial·EOF read/stat와 쓰기를 섞은 5개 vector를 검증했다.
+3-replica profile에서는 ONDISK 완료 뒤
+실제 primary를 SIGKILL하고 남은 두 replica에서 새 primary를 호출자가 지정했다.
+새 Go 연결과 독립 native read가 binary bytes·version·mtime을 보존했고
+추가 쓰기나 자동 mutation 재실행은 없었다. CRC/aes256k·single MemStore·Darwin
+host relay에서도 25개 mutation/guard와 mixed vector 5개를 포함한 9개 시험이
+통과했다(BlueStore 전용 3개 제외). Host/device 전원 장애 검증은 아니다.
+
+다만 nonempty WRITEFULL·APPEND·offset 0 WRITE 뒤 offset 0 READ/CMPEXT가
+앞선 payload 크기 이상을 검사하는 조합은 `ErrUnsupportedOSDOperation`으로
+송신 전에 거절한다. WRITEFULL 뒤 full READ는 실제 native checksum 실패를
+관찰했다. WRITE/APPEND/CMPEXT의 같은 위험은 pinned 소스의 공통 read/write
+경로에서 추론한 것으로 별도 실서버 실패 재현 주장은 아니다. Staged digest와
+committed bytes 비교로 객체가 unreadable이 될 수 있어 보수적으로 제한하며
+중간 operation이 있어도 유지한다.
+그 밖의 partial·EOF mixed reads 통과를 일반적인 staged read 보장으로 확대하지 않는다.
+O0 event·native payload encoder, 넓은 replicated/주소·OS matrix, EC와
+host/device 전원 장애 범위는 미완료다.
 
 ```sh
 CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
-  CEPH_MSGR_TEST_RUN='^TestCephOSD(Mutations|MutationLostReply|MutationRestart|IO|Renewal)Integration$' \
+  CEPH_MSGR_TEST_RUN='^TestCephOSD(Mutations|Compound|MutationLostReply|MutationRestart|MutationCrash|IO|Renewal)Integration$' \
+  sh integration/run.sh
+
+CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
+  CEPH_MSGR_TEST_OSD_REPLICAS=3 \
+  CEPH_MSGR_TEST_RUN='^TestCephOSDReplicasIntegration$' \
   sh integration/run.sh
 ```
 
@@ -1439,8 +1464,10 @@ active MGR 교체 후 별도 인증, 취소와 종료를 통과했다. MGR 지�
 `WithAuth`, `WithMessengerMode(MessengerV2Only)`, `WithMessengerPolicy`,
 `WithAddressFamily`로 각 daemon을 라이브러리가 소유한 컨테이너에서 실행한다.
 Ticket TTL과 aes/aes256k client·service cipher는 bootstrap 시 설정한다.
-선택한 OSD는 `WithOSDObjectStore(OSDMemStore)`로 초기화하며 native
-`crushtool`로 만든 legacy map과 `CreatePool(NoHashPSPool: true)`를 적용한다.
+OSD는 기본 MemStore 또는 `CEPH_MSGR_TEST_OSD_STORE=bluestore`에 따라
+`WithOSDObjectStore`로 초기화한다. Replica profile은 1 또는 3 OSD이며
+3 OSD는 BlueStore·replicas 3/min_size 2를 사용한다. Native `crushtool`로 만든
+legacy map과 `CreatePool(NoHashPSPool: true)`를 적용한다.
 `CreateClient`가 생성한 시험용 keyring은 private IPC 디렉터리에만 보관한다.
 MGR 모듈이 자동 생성한 `.mgr` 풀의 HASHPSPOOL도 disposable fixture에서
 명시적으로 해제하고 모든 풀의 플래그를 native OSDMap으로 확인한다.
@@ -1456,6 +1483,16 @@ MON/MGR 정지·재기동·pause/resume와 일시적 mode 정책은 Go controlle
 기존 request ID의 acknowledgement를 게시한다. OSD 적용 epoch는
 `AdminSocket`으로 독립 확인한다. Native 결과·byte 비교와 mutation의
 once-only 전송 검증은 그대로 유지한다.
+
+별도 `CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION=1`은 native MGR 준비 시험 하나를
+선택한다. Standby mgr.b를 공개 Pause/Resume로 45초 멈춘 뒤 native map의
+standby 소멸과 최신 AUTH -13을 독립 확인했다. Conditional 준비 동작은
+receipt 하나와 Stop/Start 한 번으로 새 global ID의 standby를 복원했고
+active MGR는 유지했다. 정상 상태에서 두 번째 준비는 재시작·receipt를 추가하지
+않았다(48.95초 통과). 이는 disposable native fixture의 사전조건 복구 검증이며
+Go CephX protocol 수정이나 Go MGR 인증 재실행 검증은 아니다. 현재 CI matrix는
+추가하지 않는다. 상세 결과·독립 증거는
+[검증 기록](integration/fixture/OSD_MUTATIONS_VALIDATION.md)에 둔다.
 
 기본 모드는 cluster network에 붙인 별도 native oracle 컨테이너에서 CGO=0
 Go 시험 바이너리를 실행한다. `host` 모드는 현재 OS·CPU의 시험 바이너리를
@@ -1739,7 +1776,9 @@ python3 tools/ceph_diff.py v20.2.4 --base v20.2.3 --json
   `ceph-dencoder`의 native decoder로 검증했다. Python이 field 규약에서 독립
   envelope를 구성하며 Go codec의 round trip으로 생성하지 않았다. Message
   재출력은 기존 payload를 보존하므로 native payload encoder oracle로 주장하지
-  않는다.
+  않는다. [Mutation decoder vector 5개](internal/osd/testdata/mutation-README.md)도
+  같은 한계를 유지하며 9개 mutation/guard opcode의 union·input segmentation과
+  success/EEXIST/extent mismatch/zero→truncate reply를 native decoder로 대조했다.
   LGPL-2.1 고지를 확인했고 C++ 코드는 포함하지 않았다. 실제 OSD의 위치·
   응답 의미는 별도 native client oracle과 실서버 통신으로 검증한다.
 - [OSDMap envelope fixture](internal/maps/testdata/osd-message/README.md)는

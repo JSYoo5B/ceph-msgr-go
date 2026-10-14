@@ -2,6 +2,7 @@
 
 import copy
 import json
+import os
 import pathlib
 import tempfile
 import unittest
@@ -12,6 +13,9 @@ import osd_oracle
 
 class OSDOracleTests(unittest.TestCase):
     def setUp(self):
+        profile = mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_REPLICAS": "1"})
+        profile.start()
+        self.addCleanup(profile.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = pathlib.Path(self.temporary.name) / "root"
@@ -23,7 +27,7 @@ class OSDOracleTests(unittest.TestCase):
         (self.output / "osd-object.bin").write_bytes(self.data)
         (self.output / "osd-native-read.bin").write_bytes(self.data)
         self.mapped = {"pool": "test-pool", "pool_id": 7, "objname": "binary-object", "epoch": 23,
-                       "raw_pgid": "7.f123abcd", "pgid": "7.0", "acting": [0], "up": [0]}
+                       "raw_pgid": "7.f123abcd", "pgid": "7.0", "acting": [0], "up": [0], "acting_primary": 0}
         self.topology = {
             "epoch": 23,
             "pools": [{"pool": 7, "pool_name": "test-pool", "size": 1, "min_size": 1,
@@ -32,7 +36,7 @@ class OSDOracleTests(unittest.TestCase):
                 {"type": "v2", "addr": "127.0.0.1:36900", "nonce": 4294967295}]} }],
             "pg_upmap": [], "pg_upmap_items": [],
         }
-        self.crush = {"buckets": [{"alg": "straw"}], "choose_args": {},
+        self.crush = {"devices": [{"id": 0}], "buckets": [{"alg": "straw"}], "choose_args": {},
                       "tunables": {"choose_local_tries": 2, "choose_local_fallback_tries": 5,
                                    "choose_total_tries": 19, "chooseleaf_descend_once": 0,
                                    "chooseleaf_vary_r": 0, "chooseleaf_stable": 0,
@@ -55,6 +59,7 @@ class OSDOracleTests(unittest.TestCase):
         self.assertEqual(value["address"], "v2:127.0.0.1:36900/4294967295")
         self.assertEqual(value["mtime_nanoseconds"], 765432109)
         self.assertEqual(value["size"], len(self.data))
+        self.assertEqual((value["osd_id"], value["acting"], value["up"], value["replicas"], value["min_size"]), (0, [0], [0], 1, 1))
         self.assertFalse((self.output / "osd-oracle.tmp").exists())
 
     def test_modern_placement_requirements_cannot_claim_legacy_fixture(self):
@@ -110,6 +115,58 @@ class OSDOracleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.collect()
         self.assertFalse((self.output / "osd-oracle.json").exists())
+
+    def replicated(self):
+        os.environ["CEPH_MSGR_TEST_OSD_REPLICAS"] = "3"
+        self.mapped.update(acting=[2, 0, 1], up=[2, 0, 1], acting_primary=2)
+        self.topology["pools"][0].update(size=3, min_size=2)
+        self.topology["osds"] = [
+            {"osd": i, "public_addrs": {"addrvec": [
+                {"type": "v2", "addr": "127.0.0.1:" + str(36900+i), "nonce": 100+i}]}}
+            for i in range(3)]
+        self.crush["devices"] = [{"id": i} for i in range(3)]
+        (self.output / "peers.json").write_text(json.dumps({"osd." + str(i): "127.0.0.1:" + str(36900+i) for i in range(3)}))
+
+    def test_three_replicas_use_actual_primary_endpoint(self):
+        self.replicated()
+        self.collect()
+        value = json.loads((self.output / "osd-oracle.json").read_bytes())
+        self.assertEqual((value["replicas"], value["min_size"]), (3, 2))
+        self.assertEqual(value["osd_id"], 2)
+        self.assertEqual(value["acting"], [2, 0, 1])
+        self.assertEqual(value["up"], [2, 0, 1])
+        self.assertEqual(value["address"], "v2:127.0.0.1:36902/102")
+
+    def test_replica_topology_must_be_complete_and_unique(self):
+        self.replicated()
+        for field, bad in (("acting", [2, 0]), ("acting", [2, 0, 0]), ("acting", [2, 0, 3]),
+                           ("up", [2, 0, True]), ("up", [2, 0]), ("acting_primary", 3),
+                           ("acting_primary", True)):
+            previous = self.mapped[field]
+            self.mapped[field] = bad
+            with self.subTest(field=field, bad=bad), self.assertRaises(ValueError):
+                self.collect()
+            self.mapped[field] = previous
+            self.assertFalse((self.output / "osd-oracle.json").exists())
+        for size, minimum in ((1, 1), (3, 1), (3, 3), (2, 2)):
+            self.topology["pools"][0].update(size=size, min_size=minimum)
+            with self.subTest(size=size, minimum=minimum), self.assertRaises(ValueError):
+                self.collect()
+        self.topology["pools"][0].update(size=3, min_size=2)
+        self.crush["devices"][2]["id"] = 0
+        with self.assertRaises(ValueError):
+            self.collect()
+
+    def test_replica_primary_endpoint_cannot_use_another_daemon(self):
+        self.replicated()
+        self.topology["osds"][2]["public_addrs"]["addrvec"][0]["addr"] = "127.0.0.1:36900"
+        with self.assertRaises(ValueError):
+            self.collect()
+
+    def test_unknown_replica_profiles_are_rejected(self):
+        for value in ("", "0", "2", "03", "4"):
+            with self.subTest(value=value), mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_REPLICAS": value}), self.assertRaises(ValueError):
+                self.collect()
 
 
 if __name__ == "__main__":

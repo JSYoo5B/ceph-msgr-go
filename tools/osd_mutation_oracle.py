@@ -8,12 +8,113 @@ generates native requests. Only comparison reads may be repeated by tests.
 import base64
 import ctypes as C
 import json
+import ipaddress
 import os
 import pathlib
 import sys
 import subprocess
+import re
+import time
 
 from osd_oracle import Timespec
+
+
+def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
+                      timeout=30, clock=time.monotonic):
+    """Collect one internally consistent native routing observation.
+
+    Only osd map/dump reads are repeated, and only when their epochs differ.
+    One pair never combines an old acting set with a newer daemon address.
+    The read budget bounds every subprocess and the total number of pairs.
+    Mutation/readback requests are not replayed by this collector.
+    """
+    if type(attempts) is not int or not 1 <= attempts <= 5 or not 0 < timeout <= 30:
+        raise ValueError("invalid native placement read budget")
+    deadline = clock() + timeout
+
+    def query(*arguments):
+        remaining = deadline - clock()
+        if remaining <= 0:
+            raise ValueError("native placement read deadline exceeded")
+        value = command(*arguments, timeout=min(10, remaining))
+        if clock() > deadline:
+            raise ValueError("native placement read deadline exceeded")
+        if not isinstance(value, dict):
+            raise ValueError("invalid native placement JSON shape")
+        return value
+
+    for _ in range(attempts):
+        mapped = query("osd", "map", pool_name, object_name)
+        topology = query("osd", "dump")
+        epochs = (mapped.get("epoch"), topology.get("epoch"))
+        if any(type(epoch) is not int or not 0 < epoch < 1 << 32 for epoch in epochs):
+            raise ValueError("invalid native placement epoch")
+        if (mapped.get("pool") != pool_name or mapped.get("objname") != object_name
+                or type(mapped.get("pool_id")) is not int or mapped["pool_id"] != pool_id):
+            raise ValueError("native placement object or pool identity changed")
+        if epochs[0] != epochs[1]:
+            continue
+        primary = mapped.get("acting_primary")
+        if type(primary) is not int or not 0 <= primary < 1 << 31:
+            raise ValueError("invalid native acting primary")
+        for field in ("up", "acting"):
+            vector = mapped.get(field)
+            if (not isinstance(vector, list) or not 1 <= len(vector) <= 64
+                    or any(type(osd) is not int or not 0 <= osd < 1 << 31 for osd in vector)
+                    or len(set(vector)) != len(vector)):
+                raise ValueError("invalid native placement " + field + " set")
+        if primary not in mapped["acting"] or primary not in mapped["up"]:
+            raise ValueError("native acting primary absent from current routing sets")
+        osds, pools = topology.get("osds"), topology.get("pools")
+        if not isinstance(osds, list) or not isinstance(pools, list):
+            raise ValueError("invalid native OSDMap topology")
+        daemons = [o for o in osds if isinstance(o, dict) and type(o.get("osd")) is int and o["osd"] == primary]
+        descriptors = [p for p in pools if isinstance(p, dict) and type(p.get("pool")) is int and p["pool"] == pool_id]
+        if len(daemons) != 1 or len(descriptors) != 1:
+            raise ValueError("native target OSD or pool is missing or ambiguous")
+        daemon, pool = daemons[0], descriptors[0]
+        if daemon.get("up") != 1 or daemon.get("in") != 1:
+            raise ValueError("native target OSD is not up and in")
+        if (pool.get("pool_name") != pool_name or pool.get("type") != 1
+                or type(pool.get("size")) is not int or type(pool.get("min_size")) is not int
+                or not 1 <= pool["min_size"] <= pool["size"] <= 64):
+            raise ValueError("native target pool is not the expected replicated pool")
+        public = daemon.get("public_addrs", {})
+        if not isinstance(public, dict):
+            raise ValueError("invalid native target address vector")
+        addresses = public.get("addrvec", [])
+        if not isinstance(addresses, list):
+            raise ValueError("invalid native target address vector")
+        endpoints = [a for a in addresses if isinstance(a, dict) and a.get("type") == "v2"]
+        if len(endpoints) != 1:
+            raise ValueError("native target must have one unambiguous v2 address")
+        endpoint = endpoints[0]
+        address = endpoint.get("addr")
+        if (not isinstance(address, str) or len(address) > 256
+                or type(endpoint.get("nonce")) is not int or not 0 <= endpoint["nonce"] < 1 << 32):
+            raise ValueError("invalid native target endpoint metadata")
+        host, separator, port = address.rpartition(":")
+        if host.startswith("["):
+            if not host.endswith("]") or ":" not in host:
+                raise ValueError("invalid native target IPv6 address")
+            host = host[1:-1]
+        elif ":" in host:
+            raise ValueError("native IPv6 endpoint requires brackets")
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            raise ValueError("invalid native target IP address") from None
+        if not separator or not port.isdecimal() or not 1 <= int(port) <= 65535 or ip.is_unspecified:
+            raise ValueError("invalid native target TCP address")
+        raw_pg = mapped.get("raw_pgid")
+        match = re.fullmatch(r"([0-9]+)\.([0-9a-f]+)", raw_pg) if isinstance(raw_pg, str) else None
+        if not match or int(match[1]) != pool_id or int(match[2], 16) >= 1 << 32:
+            raise ValueError("invalid native raw placement hash")
+        return {"up": mapped["up"], "acting": mapped["acting"], "replicas": pool["size"],
+                "min_size": pool["min_size"], "pool_id": pool_id, "object": object_name,
+                "osd_id": primary, "epoch": epochs[0], "hash": int(match[2], 16),
+                "address": "v2:" + address + "/" + str(endpoint["nonce"])}
+    raise ValueError("native placement epochs did not converge within read budget")
 
 
 def collect(root, out):
@@ -83,14 +184,12 @@ def collect(root, out):
             actual = snapshot(io, original)
             result = {"actual": actual}
             if request.get("placement", False):
-                def ceph(*args):
-                    return json.loads(subprocess.check_output(["ceph", "-c", str(root / "ceph.conf"), "-n", "client.test", "-k", str(root / "keyring"), *args, "--format", "json"], timeout=10))
-                mapped = ceph("osd", "map", metadata["pool"], metadata["object"])
-                topology = ceph("osd", "dump")
-                primary = mapped["acting_primary"]
-                daemon = next(o for o in topology["osds"] if o["osd"] == primary)
-                endpoint = next(a for a in daemon["public_addrs"]["addrvec"] if a["type"] == "v2")
-                result["placement"] = {"pool_id": mapped["pool_id"], "object": mapped["objname"], "osd_id": primary, "epoch": topology["epoch"], "hash": int(mapped["raw_pgid"].split(".")[1], 16), "address": "v2:" + endpoint["addr"] + "/" + str(endpoint["nonce"])}
+                def ceph(*args, timeout):
+                    data = subprocess.check_output(["ceph", "-c", str(root / "ceph.conf"), "-n", "client.test", "-k", str(root / "keyring"), *args, "--format", "json"], timeout=timeout)
+                    if len(data) > 1 << 20:
+                        raise ValueError("native placement JSON exceeds 1 MiB")
+                    return json.loads(data)
+                result["placement"] = collect_placement(ceph, metadata["pool"], metadata["object"], metadata["pool_id"])
             if request.get("compare", False):
                 mirror = original + b"-native-mutation"
                 code = lib.rados_remove(io, mirror)

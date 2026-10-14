@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -95,7 +96,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		return errors.New("native oracle worker failed; inspect native-oracles.log")
 	}
 	for _, kind := range []string{"mon", "mgr", "osd"} {
-		for _, action := range []string{"pause", "resume", "stop", "start"} {
+		for _, action := range []string{"pause", "resume", "stop", "start", "kill"} {
 			fields, err := c.request(out, action+"-"+kind)
 			if err != nil {
 				return err
@@ -126,6 +127,28 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 				if err == nil {
 					delete(c.pauses, key)
 				}
+			case "kill":
+				if kind != "osd" {
+					return errors.New("forced crash is restricted to disposable OSDs")
+				}
+				zero := time.Duration(0)
+				err = daemon.Stop(ctx, &zero)
+				if err == nil {
+					state, stateErr := daemon.State(ctx)
+					if stateErr != nil {
+						return stateErr
+					}
+					if state == nil || state.Running || state.ExitCode != 137 || state.OOMKilled {
+						return errors.New("OSD forced crash did not produce a non-OOM SIGKILL receipt")
+					}
+					data, encodeErr := json.Marshal(map[string]any{"daemon": key, "id": daemon.GetContainerID(), "exit_code": state.ExitCode, "oom_killed": state.OOMKilled})
+					if encodeErr != nil {
+						return encodeErr
+					}
+					if err = os.WriteFile(filepath.Join(out, "osd-crash-state.json"), data, 0644); err != nil {
+						return err
+					}
+				}
 			case "stop":
 				err = daemon.Stop(ctx, nil)
 			case "start":
@@ -139,7 +162,90 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			}
 		}
 	}
-	fields, err := c.request(out, "verify-osd-mutation")
+	fields, err := c.request(out, "verify-osd-ready")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || fields[1] != "clean" || c.profile.osd != "1" {
+			return errors.New("invalid OSD clean readiness request")
+		}
+		readyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		err := c.cluster.WaitForClean(readyCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("restore native OSD fixture readiness: %w", err)
+		}
+		if err := publishAck(out, "osd-ready-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+	fields, err = c.request(out, "verify-osd-compound")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || fields[1] != "snapshot" || c.profile.osd != "1" {
+			return errors.New("invalid compound oracle request")
+		}
+		if err = c.exec(ctx, "python3", "/out/osd_compound_oracle.py", "/tmp/ceph-msgr-test", "/out"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-compound-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+	fields, err = c.request(out, "verify-mgr-auth")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.nativeMgrPreparation != "1" {
+			return errors.New("native MGR rejection observation is restricted to its opt-in acceptance fixture")
+		}
+		daemon, err := c.daemon("mgr", fields[1])
+		if err != nil {
+			return err
+		}
+		status, err := c.cluster.ManagerStatus(ctx)
+		if err != nil {
+			return err
+		}
+		rejection, err := nativeManagerRejection(ctx, daemon)
+		if err != nil {
+			return err
+		}
+		present := status.ActiveName == fields[1]
+		for _, standby := range status.Standbys {
+			present = present || standby.Name == fields[1]
+		}
+		data, err := json.Marshal(map[string]any{"daemon": "mgr." + fields[1], "missing": !present, "native_rejection": rejection, "status": status})
+		if err != nil {
+			return err
+		}
+		if err = os.WriteFile(filepath.Join(out, "manager-native-auth.json"), data, 0644); err != nil {
+			return err
+		}
+		if err = publishAck(out, "mgr-auth-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+	fields, err = c.request(out, "prepare-mgr-failover")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || fields[1] != "ready" || c.profile.mgrCount != "2" || c.profile.authEpoch == "1" || c.profile.idleSessions == "1" || c.profile.shortTickets == "1" || c.profile.expireTickets == "1" || c.profile.modeRejection != "" {
+			return errors.New("invalid ordinary MGR failover preparation request")
+		}
+		if err = c.prepareManagerFailover(ctx, out); err != nil {
+			return err
+		}
+		if err = publishAck(out, "mgr-failover-prepare."+fields[0]); err != nil {
+			return err
+		}
+	}
+	fields, err = c.request(out, "verify-osd-mutation")
 	if err != nil {
 		return err
 	}
@@ -324,7 +430,130 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 	}
 	return nil
 }
+
+// managerAuthRejection recognizes an explicit native MonClient refusal in the
+// latest ceph-mgr process only. Old refusals from an earlier respawn cannot
+// authorize another restart. No Go subject's authentication is retried here.
+// Pinned MonClient.cc:1968-1998 and CephxServiceHandler.cc:253-260 explain the
+// failure after the MON no longer retains the native daemon's AUTH secret.
+func managerAuthRejection(log string) string {
+	started := strings.LastIndex(log, " ceph version ")
+	if started < 0 {
+		return ""
+	}
+	for _, line := range strings.Split(log[started:], "\n") {
+		if strings.Contains(line, "monclient(hunting): handle_auth_bad_method failed to auth with my available methods: (13) Permission denied") {
+			return line
+		}
+	}
+	return ""
+}
+
+func nativeManagerRejection(ctx context.Context, daemon testcontainers.Container) (string, error) {
+	logs, err := daemon.Logs(ctx)
+	if err != nil {
+		return "", err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(logs, (8<<20)+1))
+	closeErr := logs.Close()
+	if readErr != nil || closeErr != nil {
+		return "", errors.Join(readErr, closeErr)
+	}
+	if len(data) > 8<<20 {
+		return "", errors.New("native MGR preparation log exceeds bound")
+	}
+	return managerAuthRejection(string(data)), nil
+}
+
+func managerFailoverReady(status ceph.ManagerStatus, names map[string]bool) bool {
+	return len(names) == 2 && status.Available && status.ActiveGID != 0 && names[status.ActiveName] &&
+		len(status.Standbys) == 1 && names[status.Standbys[0].Name] && status.Standbys[0].Name != status.ActiveName && status.Standbys[0].GID != 0
+}
+
+func (c *fixtureCluster) prepareManagerFailover(ctx context.Context, out string) error {
+	preparation, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	names := make(map[string]bool)
+	for _, d := range c.cluster.Managers() {
+		names[d.DaemonName] = true
+	}
+	if len(names) != 2 {
+		return errors.New("ordinary MGR failover requires two owned daemons")
+	}
+	restarted := make(map[string]bool)
+	for {
+		status, err := c.cluster.ManagerStatus(preparation)
+		if err != nil {
+			return err
+		}
+		if managerFailoverReady(status, names) {
+			return nil
+		}
+		present := map[string]bool{status.ActiveName: true}
+		for _, standby := range status.Standbys {
+			present[standby.Name] = true
+		}
+		for _, d := range c.cluster.Managers() {
+			if present[d.DaemonName] || restarted[d.DaemonName] {
+				continue
+			}
+			rejection, err := nativeManagerRejection(preparation, d)
+			if err != nil {
+				return err
+			}
+			if rejection == "" {
+				continue
+			}
+			// This restores a missing disposable fixture daemon before an
+			// independent failover test. Preserve the first native refusal and
+			// current map identity before the once-only public container restart.
+			// The measured Go mutation/authentication has not been submitted.
+			receipt, err := json.Marshal(map[string]any{"observed_at": time.Now().UTC(), "daemon": "mgr." + d.DaemonName, "native_rejection": rejection,
+				"active_name": status.ActiveName, "active_gid": status.ActiveGID, "standbys": status.Standbys, "action": "restore missing native daemon before independent failover"})
+			if err != nil {
+				return err
+			}
+			f, err := os.OpenFile(filepath.Join(out, "manager-preparation.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				return err
+			}
+			_, writeErr := f.Write(append(receipt, '\n'))
+			closeErr := f.Close()
+			if writeErr != nil || closeErr != nil {
+				return errors.Join(writeErr, closeErr)
+			}
+			restarted[d.DaemonName] = true
+			if err := d.Stop(preparation, nil); err != nil {
+				return err
+			}
+			if err := d.Start(preparation); err != nil {
+				return err
+			}
+		}
+		select {
+		case <-preparation.Done():
+			return fmt.Errorf("native MGR failover fixture never restored active and standby: %w", preparation.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
 func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
+	count, _ := strconv.Atoi(c.profile.osdReplicas)
+	minimum := 1
+	if count == 3 {
+		minimum = 2
+		path := filepath.Join(out, "legacy.crush.txt")
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		text := strings.Replace(string(source), "device 0 osd.0", "device 0 osd.0\ndevice 1 osd.1\ndevice 2 osd.2", 1)
+		text = strings.Replace(text, "item osd.0 weight 1.00000", "item osd.0 weight 1.00000\n    item osd.1 weight 1.00000\n    item osd.2 weight 1.00000", 1)
+		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+			return err
+		}
+	}
+
 	if err := c.exec(ctx, "crushtool", "-c", "/out/legacy.crush.txt", "-o", "/out/legacy.crush"); err != nil {
 		return err
 	}
@@ -338,7 +567,7 @@ func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
 	if _, err := c.cluster.Ceph(ctx, "balancer", "off"); err != nil {
 		return err
 	}
-	_, err := c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: "ceph-msgr-osd-fixture", PGNum: 1, Replicas: 1, MinSize: 1, NoHashPSPool: true})
+	_, err := c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: "ceph-msgr-osd-fixture", PGNum: 1, Replicas: count, MinSize: minimum, NoHashPSPool: true})
 	if err != nil {
 		return fmt.Errorf("create legacy pool: %w", err)
 	}

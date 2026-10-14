@@ -1,6 +1,6 @@
 # ceph-msgr-go 스펙 및 검증 기준
 
-조사 및 구현 기준일: 2026-10-01. 통신 계층으로의 범위 조정일: 2026-10-03. OSD 통신 기초 추가 결정일: 2026-10-04. 최종 테스트 환경 범위 및 후속 제품 통신 요구 확정일: 2026-10-13. 우선순위·진행상황 정리일: 2026-10-14. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
+조사 및 구현 기준일: 2026-10-01. 통신 계층으로의 범위 조정일: 2026-10-03. OSD 통신 기초 추가 결정일: 2026-10-04. 최종 테스트 환경 범위 및 후속 제품 통신 요구 확정일: 2026-10-13. 우선순위·진행상황 정리일: 2026-10-14. O0/O1 제한 범위 구현·native 검증 갱신일: 2026-10-15. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
 
 ## 확정된 프로젝트 정책
 
@@ -26,15 +26,23 @@
 | 수준 | 구현 순서와 목적 | 진행상황 |
 | --- | --- | --- |
 | 기반 | 기존 Messenger·CephX·MON/MGR·OSD stat/read·raw 지도 수신을 유지 | 아래 제한 범위에서 구현 및 실검증 기록 있음 |
-| P0 | 객체 mutation의 입력·완료 계약과 최소 쓰기·복합 요청: O0 → O1 | stat/read의 per-op 응답 기반만 있음; mutation 미구현 |
+| P0 | 객체 mutation의 입력·완료 계약과 최소 쓰기·복합 요청: O0 → O1 | 11개 stat/read·mutation/guard opcode 구현; single BlueStore와 3-replica primary SIGKILL native 검증; O0/O1 전체 완료 아님 |
 | P1 | OSD metadata·snapshot·class call, 열거·이벤트·backoff, OSD/PG 명령과 replicated feature 범위 확대 | raw OSDMap 기반만 있음; 후속 opcode·이벤트·명령 미구현 |
 | P2 | MDS 인증·지도·session → MDS 대상 명령 및 metadata·필수 이벤트 → 상태 복구·결합 I/O | MDS 제품 통신 미구현 |
 | P3 | EC·추가 feature/플랫폼 profile와 장시간 검증, 후속 제품 경로를 지원하는 최종 시험 환경 | 현재 일부 profile만 실검증 기록 있음; 전체 완료 아님 |
 
-**다음 구현 단위는 O0의 wire 목록·공개 계약 확정 후 O1의 replicated 객체
-쓰기·조건·복합 요청과 native oracle 검증이다.** O1은 읽기 opcode 벡터의
-존재로 완료 처리하지 않으며 응답 손실·결과 불명확·실제 반영과 완료 의미를
-함께 검증한다. P2의 최소 metadata 사용에도 필수 capability/lease와 복구
+**O0 wire 목록·O1 공개 계약과 제한 replicated 객체 쓰기·조건·복합 요청을
+구현했다.** Single BlueStore에서는 native 실행·readback·응답 손실·결과
+불명확·재실행 금지와 정상 재시작·SIGKILL을 검증했다. 별도의
+3-replica/min_size 2 profile에서는 실제 primary SIGKILL 뒤 남은 두 replica의
+native/Go bytes·version·mtime과 추가 쓰기 없는 복구를 검증했다. 같은
+3-OSD profile의 전체 선택 시험 12개도 통과했으며 25개 mutation/guard
+사례에는 CMPEXT EOF short length·zero-extension·rollback·FAILOK가 포함된다.
+CRC/aes256k·single MemStore host profile도 같은 25개 사례와 mixed vector 5개를
+포함한 9개 시험을 통과했다(BlueStore 전용 3개 제외).
+Native payload encoder, 후속 event 계약과 넓은 구성·내구성 범위는 남았다.
+O1은 읽기 opcode 벡터의 존재나 제한 profile의 통과로 전체 완료 처리하지 않는다.
+P2의 최소 metadata 사용에도 필수 capability/lease와 복구
 계약이 필요하므로 이를 P3로 미뤄 MDS 지원을 선언하지 않는다.
 각 단계의 native fixture·control·oracle은 해당 구현을 검증하기 전에 준비한다.
 E1의 P3는 최종 전 경로 환경 완료를 점검하는 순서이며 P0–P2에서 필요한
@@ -43,8 +51,9 @@ E1의 P3는 최종 전 경로 환경 완료를 점검하는 순서이며 P0–P2
 ### 현재 구현과 검증 기록
 
 확인 기준은 checkout의 제품 소스 `adc1ecd347a7dd647338ade45f7649533f729408`
-및 기존 README의 실행 기록이다. 이 정리는 소스/API·시험의 존재와 문서의
-검증 범위를 대조한 것이며 해당 SHA의 새 시험 실행이나 현재 원격 CI 확인은 아니다.
+및 기존 README의 실행 기록에서 시작했다. 2026-10-15 O0/O1 갱신은
+현재 checkout의 구현과 [로컬 native 검증 기록](integration/fixture/OSD_MUTATIONS_VALIDATION.md)을
+추가 대조했다. 초기 SHA의 새 실행이나 현재 원격 CI 전체 통과를 뜻하지 않는다.
 `구현 있음`은 아래 제한 범위의 코드/API가 있다는 뜻이고, `실검증 기록`은
 README에 실제 daemon·native oracle 결과가 기록되어 있다는 뜻이다.
 시험 파일의 존재·합성 peer 성공과 실서버 통과를 동일 상태로 표시하지 않는다.
@@ -54,9 +63,9 @@ README에 실제 daemon·native oracle 결과가 기록되어 있다는 뜻이�
 | B1 | msgr2.1 secure/CRC, CephX aes/aes256k, MON/MGR ticket 갱신·세션 복구: 구현 있음 | 20.2.4의 역할·키·주소별 실검증 기록; CRC·혼합 cipher·Windows 조합을 모두 검증한 것은 아님; cookie 재개 없음 | [session](internal/session/handshake.go), [CephX](internal/cephx/auth.go), [검증 기록](README.md#검증-결과) |
 | B2 | raw MON/MGR 명령·현재 daemon Tell·이름 지정 MON Tell, 준비/지도 대기·wire metadata: 구현 있음 | native 명령·지도 및 failover·context·Close 시험 기록; 이름 지정 MGR·OSD/PG/MDS 대상 명령은 미구현 | [명령 API](cephmsgr/api.go), [MON 대상](cephmsgr/named_mon.go), [지도 대기](cephmsgr/map_wait.go), [검증 기록](README.md#검증-결과) |
 | B3 | MON log·config·digest 구독: 구현 있음 | native oracle·갱신·복구·bounded 큐 시험 기록; 권한 ACK·완전한 변경 이력·원격 unsubscribe 보장 없음 | [로그](README.md#mon-로그), [설정](README.md#mon-설정), [digest](README.md#mon-health상태-구독) |
-| B4 | 명시적 OSD 연결·ticket·v6 stat/read opcode 벡터·per-op 결과: 구현 있음 | 20.2.4 legacy CRUSH, HASHPSPOOL/upmap 미사용 replicated pool의 bytes/stat2·갱신 실검증 기록; mutation·snapshot·EC와 일반 최신 CRUSH 미지원; OSD Windows/IPv6 미검증 | [OSD API](cephmsgr/osd.go), [요청](cephmsgr/osd_request.go), [encoder](internal/osd/request.go), [native 시험](integration/osd_test.go), [지원 범위](README.md#osd-statread-통신-기초) |
+| B4 | 명시적 OSD 연결·ticket·v6 stat/read·mutation/guard opcode 벡터·per-op 결과: 구현 있음 | 20.2.4 legacy CRUSH, HASHPSPOOL/upmap 미사용 replicated pool의 bytes/stat2·갱신, single/3-replica BlueStore mutation·compound·primary SIGKILL 실검증 기록; snapshot·EC와 일반 최신 CRUSH 미지원; OSD Windows/IPv6 미검증 | [OSD API](cephmsgr/osd.go), [요청](cephmsgr/osd_request.go), [encoder](internal/osd/request.go), [native 시험](integration/osd_test.go), [지원 범위](README.md#osd-statread-통신-기초) |
 | B5 | MON raw OSDMap 최신 full·range 조회/연속 구독, OSD map 전달: 구현 있음 | native decoder/encoder와 epoch·bytes 비교 및 갱신·단절 기록; 내포 map 해석·적용·CRUSH는 사용 계층 책임; 전체 incremental chain 보장 없음 | [MON 조회](cephmsgr/mon_osd_request.go), [MON 구독](cephmsgr/mon_osd_maps.go), [OSD 전달](cephmsgr/osd_maps.go), [지원 범위](README.md#mon-raw-osdmap-조회구독) |
-| B6 | operation context·결과 불명확·자동 재실행 금지·bounded 입력/큐·Close: 현재 경로에 구현 있음 | 실제 명령 결과·취소·장애 및 합성 peer 경합 시험 기록; mutation·MDS 이벤트/복구로의 확장은 미구현 | [수명과 복구](README.md#수명과-복구), [검증 기록](README.md#검증-결과), [공통 후속 계약](#공통-공개-계약과-복구-책임) |
+| B6 | operation context·결과 불명확·자동 재실행 금지·bounded 입력/큐·Close: 현재 경로에 구현 있음 | 실제 명령 결과·취소·장애 및 합성 peer 경합 시험 기록; sent mutation의 결과 불명확·로컬 identity·재실행 금지 검증; MDS 이벤트/복구로의 확장은 미구현 | [수명과 복구](README.md#수명과-복구), [검증 기록](README.md#검증-결과), [공통 후속 계약](#공통-공개-계약과-복구-책임) |
 | B7 | 제품 Go 모듈과 native fixture 모듈 분리: 구현 있음 | CGO=0 빌드/검사 및 Linux·Darwin·선택 Windows MON/MGR 실검증 기록; 모든 OS·주소·역할 profile의 통과를 뜻하지 않음 | [제품 모듈](go.mod), [fixture 모듈](integration/fixture/go.mod), [검증 기록](README.md#검증-결과) |
 
 B1–B7은 초기 제한 범위의 구현 현황이며 완전한 RADOS/RBD/CephFS 지원표가
@@ -350,8 +359,8 @@ PG primary 재선택, 대상 이동·fan-out·wildcard 확장은 상위가 결�
 
 | ID · 우선순위 | 제품에서 확정·구현할 계약 | 선행 조건 | 진행상황 | 필수 독립 검증 |
 | --- | --- | --- | --- | --- |
-| O0 · P0 | mutation별 opcode/flag·request identity·per-op 출력·완료/내구성·event 계약 확정 | B1·B4·B6 | 80개 Tentacle opcode 목록과 O1 입력/identity/per-op/ONDISK 공개 계약 확정; event·후속 opcode 계약 미완료 ([계약](internal/osd/CONTRACT.md)) | native encoder/decoder·서버 처리 경로로 입력/결과 계약 대조; O1 수용 시험 확정 |
-| O1 · P0 | replicated write/writefull·append·truncate·zero·create/delete와 조건·compound | O0 | 11개 stat/read·mutation/guard opcode 구현; 1-OSD 제한 profile native 벡터·응답 손실·BlueStore 정상 재시작 검증; 넓은 replicated·mixed-output/crash 검증 미완료 | native 쓰기·조건 실패·복합 원자성·readback·OSD 재시작·응답 손실·재실행 금지 |
+| O0 · P0 | mutation별 opcode/flag·request identity·per-op 출력·완료/내구성·event 계약 확정 | B1·B4·B6 | 80개 Tentacle opcode 목록과 O1 입력/identity/per-op/ONDISK 공개 계약 확정; native mutation decoder vector 5개 검증; native payload encoder·event·후속 opcode 계약 미완료 ([계약](internal/osd/CONTRACT.md)) | native encoder/decoder·서버 처리 경로로 입력/결과 계약 대조; O1 수용 시험 확정 |
+| O1 · P0 | replicated write/writefull·append·truncate·zero·create/delete와 조건·compound | O0 | 11개 stat/read·mutation/guard opcode 구현; single BlueStore 11개·3-replica/min_size 2 전체 선택 12개 시험 통과; 25 mutation/guard 사례(CMPEXT EOF normalized length·zero-extension 포함)·mixed read/stat 5개 vector·응답 손실·정상 재시작·SIGKILL 검증; 실제 primary SIGKILL 후 남은 2 replica native/Go bytes·version·mtime·재실행 금지 검증; 넓은 matrix/host·device 전원 장애 미완료; WRITEFULL/APPEND/offset 0 WRITE 뒤 offset 0 READ/CMPEXT full-payload 조합 거절 | native 쓰기·조건 실패·복합 원자성·readback·OSD 재시작·응답 손실·재실행 금지 |
 | O2 · P1 | xattr·omap·class call·allocation hint·snapshot context·rollback | O1; opcode별 O0 계약 보완 | 미구현 | native metadata·class 원본 bytes·snapshot 읽기/쓰기·rollback·오류/조건 비교 |
 | O3 · P1 | PG 열거·cursor, watch/notify·ack/오류, backoff/unblock | O0; 알림 송신 opcode는 O1/O2; 이벤트 공통 계약 | 미구현; raw OSDMap만 B5 | native 열거·알림 ack/timeout·제어 제한·큐 overflow·갱신/단절과 identity/수명 |
 | D1 · P1 | OSD·PG 대상 raw 명령·bulk 입력·reply 연관 | B4·B5; 해당 명령 encoding·권한 확정 | 미구현 | native 동일 대상의 raw/binary 출력·권한 오류·지도/대상 변경·취소 |

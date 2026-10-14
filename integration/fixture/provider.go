@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -117,7 +118,12 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		opts = append(opts, ceph.WithAddressFamily(ceph.AddressIPv6))
 	}
 	if p.osd == "1" {
-		opts = append(opts, ceph.WithOSDCount(1), ceph.WithOSDObjectStore(ceph.OSDObjectStore(p.osdStore)), ceph.WithPoolDefaults(1, 1))
+		count, _ := strconv.Atoi(p.osdReplicas)
+		minimum := 1
+		if count == 3 {
+			minimum = 2
+		}
+		opts = append(opts, ceph.WithOSDCount(count), ceph.WithOSDObjectStore(ceph.OSDObjectStore(p.osdStore)), ceph.WithPoolDefaults(count, minimum))
 	} else {
 		opts = append(opts, ceph.WithNoInitialOSDs())
 	}

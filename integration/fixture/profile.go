@@ -11,11 +11,12 @@ const profileDefaultImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf879
 
 // profile describes a development fixture, not product connection options.
 type profile struct {
-	monAddresses, fsid, peers                                        string
-	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race string
-	expireTickets, idleSessions, authEpoch, shortTickets             string
-	modeRejection, connectionMode, mappedIPv6, osd, osdStore         string
-	stressDuration, testRun, testTimeout, diagnostics                string
+	monAddresses, fsid, peers                                             string
+	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
+	expireTickets, idleSessions, authEpoch, shortTickets                  string
+	nativeMgrPreparation                                                  string
+	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
+	stressDuration, testRun, testTimeout, diagnostics                     string
 }
 
 func loadProfile(getenv func(string) string) (profile, error) {
@@ -26,25 +27,27 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		return fallback
 	}
 	p := profile{
-		image:          value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
-		keyType:        value("CEPH_MSGR_TEST_KEY_TYPE", "aes256k"),
-		ipFamily:       value("CEPH_MSGR_TEST_IP_FAMILY", "4"),
-		mgrCount:       value("CEPH_MSGR_TEST_MGR_COUNT", "2"),
-		runtime:        value("CEPH_MSGR_TEST_RUNTIME", "container"),
-		race:           value("CEPH_MSGR_TEST_RACE", "0"),
-		expireTickets:  value("CEPH_MSGR_TEST_EXPIRE_TICKETS", "0"),
-		idleSessions:   value("CEPH_MSGR_TEST_IDLE_SESSIONS", "0"),
-		authEpoch:      value("CEPH_MSGR_TEST_AUTH_EPOCH", "0"),
-		shortTickets:   value("CEPH_MSGR_TEST_SHORT_TICKETS", "0"),
-		modeRejection:  getenv("CEPH_MSGR_TEST_MODE_REJECTION"),
-		connectionMode: value("CEPH_MSGR_TEST_CONNECTION_MODE", "secure"),
-		mappedIPv6:     value("CEPH_MSGR_TEST_MAPPED_IPV6", "0"),
-		osd:            value("CEPH_MSGR_TEST_OSD", "0"),
-		osdStore:       value("CEPH_MSGR_TEST_OSD_STORE", "memstore"),
-		stressDuration: getenv("CEPH_MSGR_STRESS_DURATION"),
-		testRun:        getenv("CEPH_MSGR_TEST_RUN"),
-		testTimeout:    value("CEPH_MSGR_TEST_TIMEOUT", "10m"),
-		diagnostics:    getenv("CEPH_MSGR_TEST_DIAGNOSTICS"),
+		image:                value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
+		keyType:              value("CEPH_MSGR_TEST_KEY_TYPE", "aes256k"),
+		ipFamily:             value("CEPH_MSGR_TEST_IP_FAMILY", "4"),
+		mgrCount:             value("CEPH_MSGR_TEST_MGR_COUNT", "2"),
+		runtime:              value("CEPH_MSGR_TEST_RUNTIME", "container"),
+		race:                 value("CEPH_MSGR_TEST_RACE", "0"),
+		expireTickets:        value("CEPH_MSGR_TEST_EXPIRE_TICKETS", "0"),
+		idleSessions:         value("CEPH_MSGR_TEST_IDLE_SESSIONS", "0"),
+		authEpoch:            value("CEPH_MSGR_TEST_AUTH_EPOCH", "0"),
+		shortTickets:         value("CEPH_MSGR_TEST_SHORT_TICKETS", "0"),
+		nativeMgrPreparation: value("CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION", "0"),
+		modeRejection:        getenv("CEPH_MSGR_TEST_MODE_REJECTION"),
+		connectionMode:       value("CEPH_MSGR_TEST_CONNECTION_MODE", "secure"),
+		mappedIPv6:           value("CEPH_MSGR_TEST_MAPPED_IPV6", "0"),
+		osd:                  value("CEPH_MSGR_TEST_OSD", "0"),
+		osdStore:             value("CEPH_MSGR_TEST_OSD_STORE", "memstore"),
+		osdReplicas:          value("CEPH_MSGR_TEST_OSD_REPLICAS", "1"),
+		stressDuration:       getenv("CEPH_MSGR_STRESS_DURATION"),
+		testRun:              getenv("CEPH_MSGR_TEST_RUN"),
+		testTimeout:          value("CEPH_MSGR_TEST_TIMEOUT", "10m"),
+		diagnostics:          getenv("CEPH_MSGR_TEST_DIAGNOSTICS"),
 	}
 	p.serviceCipher = value("CEPH_MSGR_TEST_SERVICE_CIPHER", p.keyType)
 	for _, choice := range []struct {
@@ -59,17 +62,25 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_IDLE_SESSIONS", p.idleSessions, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_AUTH_EPOCH", p.authEpoch, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_SHORT_TICKETS", p.shortTickets, []string{"0", "1"}},
+		{"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION", p.nativeMgrPreparation, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MODE_REJECTION", p.modeRejection, []string{"", "mon", "mgr"}},
 		{"CEPH_MSGR_TEST_CONNECTION_MODE", p.connectionMode, []string{"secure", "crc"}},
 		{"CEPH_MSGR_TEST_MAPPED_IPV6", p.mappedIPv6, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_OSD", p.osd, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_OSD_STORE", p.osdStore, []string{"memstore", "bluestore"}},
+		{"CEPH_MSGR_TEST_OSD_REPLICAS", p.osdReplicas, []string{"1", "3"}},
 		{"CEPH_MSGR_TEST_MGR_COUNT", p.mgrCount, []string{"0", "2"}},
 		{"CEPH_MSGR_TEST_IP_FAMILY", p.ipFamily, []string{"4", "6"}},
 	} {
 		if !slices.Contains(choice.allowed, choice.value) {
 			return profile{}, fmt.Errorf("%s must be one of %s", choice.name, strings.Join(choice.allowed, ", "))
 		}
+	}
+	if p.osdReplicas != "1" && p.osd != "1" {
+		return profile{}, fmt.Errorf("replicated fixture requires CEPH_MSGR_TEST_OSD=1")
+	}
+	if p.osdReplicas == "3" && p.osdStore != "bluestore" {
+		return profile{}, fmt.Errorf("replicated crash profile requires BlueStore")
 	}
 	if p.osdStore != "memstore" && p.osd != "1" {
 		return profile{}, fmt.Errorf("BlueStore fixture requires CEPH_MSGR_TEST_OSD=1")
@@ -126,6 +137,12 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		selected = "^TestCeph(OSD|MonOSDMaps).*Integration$"
 	}
+	if p.nativeMgrPreparation == "1" {
+		if p.mgrCount != "2" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.osd != "0" || p.stressDuration != "" {
+			return profile{}, fmt.Errorf("native MGR preparation acceptance requires an isolated ordinary two-MGR fixture")
+		}
+		selected = "^TestCephNativeManagerPreparationIntegration$"
+	}
 	if p.testRun == "" {
 		p.testRun = selected
 	}
@@ -136,46 +153,50 @@ func (p profile) monitors() string { return p.monAddresses }
 
 func (p profile) containerEnvironment() map[string]string {
 	return map[string]string{
-		"CEPH_MSGR_TEST_KEY_TYPE":            p.keyType,
-		"CEPH_MSGR_TEST_SERVICE_CIPHER":      p.serviceCipher,
-		"CEPH_MSGR_TEST_IP_FAMILY":           p.ipFamily,
-		"CEPH_MSGR_TEST_MGR_COUNT":           p.mgrCount,
-		"CEPH_MSGR_TEST_RUNTIME":             p.runtime,
-		"CEPH_MSGR_TEST_RACE":                p.race,
-		"CEPH_MSGR_TEST_EXPIRE_TICKETS":      p.expireTickets,
-		"CEPH_MSGR_TEST_IDLE_SESSIONS":       p.idleSessions,
-		"CEPH_MSGR_TEST_AUTH_EPOCH":          p.authEpoch,
-		"CEPH_MSGR_TEST_SHORT_TICKETS":       p.shortTickets,
-		"CEPH_MSGR_TEST_MODE_REJECTION":      p.modeRejection,
-		"CEPH_MSGR_TEST_CONNECTION_MODE":     p.connectionMode,
-		"CEPH_MSGR_TEST_MAPPED_IPV6":         p.mappedIPv6,
-		"CEPH_MSGR_TEST_OSD":                 p.osd,
-		"CEPH_MSGR_TEST_OSD_STORE":           p.osdStore,
-		"CEPH_MSGR_STRESS_DURATION":          p.stressDuration,
-		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
+		"CEPH_MSGR_TEST_KEY_TYPE":               p.keyType,
+		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
+		"CEPH_MSGR_TEST_IP_FAMILY":              p.ipFamily,
+		"CEPH_MSGR_TEST_MGR_COUNT":              p.mgrCount,
+		"CEPH_MSGR_TEST_RUNTIME":                p.runtime,
+		"CEPH_MSGR_TEST_RACE":                   p.race,
+		"CEPH_MSGR_TEST_EXPIRE_TICKETS":         p.expireTickets,
+		"CEPH_MSGR_TEST_IDLE_SESSIONS":          p.idleSessions,
+		"CEPH_MSGR_TEST_AUTH_EPOCH":             p.authEpoch,
+		"CEPH_MSGR_TEST_SHORT_TICKETS":          p.shortTickets,
+		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": p.nativeMgrPreparation,
+		"CEPH_MSGR_TEST_MODE_REJECTION":         p.modeRejection,
+		"CEPH_MSGR_TEST_CONNECTION_MODE":        p.connectionMode,
+		"CEPH_MSGR_TEST_MAPPED_IPV6":            p.mappedIPv6,
+		"CEPH_MSGR_TEST_OSD":                    p.osd,
+		"CEPH_MSGR_TEST_OSD_STORE":              p.osdStore,
+		"CEPH_MSGR_TEST_OSD_REPLICAS":           p.osdReplicas,
+		"CEPH_MSGR_STRESS_DURATION":             p.stressDuration,
+		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS":    "1",
 	}
 }
 
 func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	return map[string]string{
-		"CEPH_MSGR_MONITORS":             p.monitors(),
-		"CEPH_MSGR_KEY_FILE":             filepath.Join(controlDir, "key"),
-		"CEPH_MSGR_IDENTITY":             "client.test",
-		"CEPH_MSGR_FSID":                 p.fsid,
-		"CEPH_MSGR_TEST_PEERS":           p.peers,
-		"CEPH_MSGR_CONTROL_DIR":          controlDir,
-		"CEPH_MSGR_TEST_SERVICE_CIPHER":  p.serviceCipher,
-		"CEPH_MSGR_TEST_MGR_COUNT":       p.mgrCount,
-		"CEPH_MSGR_TEST_EXPIRE_TICKETS":  p.expireTickets,
-		"CEPH_MSGR_TEST_IDLE_SESSIONS":   p.idleSessions,
-		"CEPH_MSGR_TEST_AUTH_EPOCH":      p.authEpoch,
-		"CEPH_MSGR_TEST_SHORT_TICKETS":   p.shortTickets,
-		"CEPH_MSGR_TEST_MODE_REJECTION":  p.modeRejection,
-		"CEPH_MSGR_TEST_CONNECTION_MODE": p.connectionMode,
-		"CEPH_MSGR_TEST_MAPPED_IPV6":     p.mappedIPv6,
-		"CEPH_MSGR_TEST_OSD":             p.osd,
-		"CEPH_MSGR_TEST_OSD_STORE":       p.osdStore,
-		"CEPH_MSGR_STRESS_DURATION":      p.stressDuration,
-		"CEPH_MSGR_TEST_PROXY":           proxy,
+		"CEPH_MSGR_MONITORS":                    p.monitors(),
+		"CEPH_MSGR_KEY_FILE":                    filepath.Join(controlDir, "key"),
+		"CEPH_MSGR_IDENTITY":                    "client.test",
+		"CEPH_MSGR_FSID":                        p.fsid,
+		"CEPH_MSGR_TEST_PEERS":                  p.peers,
+		"CEPH_MSGR_CONTROL_DIR":                 controlDir,
+		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
+		"CEPH_MSGR_TEST_MGR_COUNT":              p.mgrCount,
+		"CEPH_MSGR_TEST_EXPIRE_TICKETS":         p.expireTickets,
+		"CEPH_MSGR_TEST_IDLE_SESSIONS":          p.idleSessions,
+		"CEPH_MSGR_TEST_AUTH_EPOCH":             p.authEpoch,
+		"CEPH_MSGR_TEST_SHORT_TICKETS":          p.shortTickets,
+		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": p.nativeMgrPreparation,
+		"CEPH_MSGR_TEST_MODE_REJECTION":         p.modeRejection,
+		"CEPH_MSGR_TEST_CONNECTION_MODE":        p.connectionMode,
+		"CEPH_MSGR_TEST_MAPPED_IPV6":            p.mappedIPv6,
+		"CEPH_MSGR_TEST_OSD":                    p.osd,
+		"CEPH_MSGR_TEST_OSD_STORE":              p.osdStore,
+		"CEPH_MSGR_TEST_OSD_REPLICAS":           p.osdReplicas,
+		"CEPH_MSGR_STRESS_DURATION":             p.stressDuration,
+		"CEPH_MSGR_TEST_PROXY":                  proxy,
 	}
 }

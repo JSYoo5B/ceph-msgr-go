@@ -16,6 +16,7 @@ func TestCephMapWaitRecoveryIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
+	prepareNativeManagerFailover(t, ctx, control)
 	options := integrationOptions(t)
 	options.Monitors = options.Monitors[:1]
 	options.ConnectTimeout = 2 * time.Second

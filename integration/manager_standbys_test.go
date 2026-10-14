@@ -113,6 +113,7 @@ func TestCephManagerStandbysIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	prepareNativeManagerFailover(t, ctx, control)
 	options := integrationOptions(t)
 	dial := options.DialContext
 	var managerDials atomic.Uint32

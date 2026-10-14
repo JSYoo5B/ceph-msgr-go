@@ -15,23 +15,25 @@ func TestProfileDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := profile{
-		image:          "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
-		keyType:        "aes256k",
-		serviceCipher:  "aes256k",
-		ipFamily:       "4",
-		mgrCount:       "2",
-		runtime:        "container",
-		race:           "0",
-		expireTickets:  "0",
-		idleSessions:   "0",
-		authEpoch:      "0",
-		shortTickets:   "0",
-		connectionMode: "secure",
-		mappedIPv6:     "0",
-		osd:            "0",
-		osdStore:       "memstore",
-		testRun:        "^TestCeph.*Integration$",
-		testTimeout:    "10m",
+		image:                "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+		keyType:              "aes256k",
+		serviceCipher:        "aes256k",
+		ipFamily:             "4",
+		mgrCount:             "2",
+		runtime:              "container",
+		race:                 "0",
+		expireTickets:        "0",
+		idleSessions:         "0",
+		authEpoch:            "0",
+		shortTickets:         "0",
+		nativeMgrPreparation: "0",
+		connectionMode:       "secure",
+		mappedIPv6:           "0",
+		osd:                  "0",
+		osdStore:             "memstore",
+		osdReplicas:          "1",
+		testRun:              "^TestCeph.*Integration$",
+		testTimeout:          "10m",
 	}
 	if p != want {
 		t.Fatalf("profile = %#v, want %#v", p, want)
@@ -50,9 +52,11 @@ func TestProfileSelection(t *testing.T) {
 		{"idle", map[string]string{"CEPH_MSGR_TEST_IDLE_SESSIONS": "1"}, "^TestCephIdleSessionsIntegration$"},
 		{"auth-epoch", map[string]string{"CEPH_MSGR_TEST_AUTH_EPOCH": "1"}, "^TestCephServiceKeyEpochIntegration$"},
 		{"fractional", map[string]string{"CEPH_MSGR_TEST_SHORT_TICKETS": "1"}, "^TestCephFractionalTicketRenewalIntegration$"},
+		{"native-mgr-preparation", map[string]string{"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": "1"}, "^TestCephNativeManagerPreparationIntegration$"},
 		{"reject-mon", map[string]string{"CEPH_MSGR_TEST_MODE_REJECTION": "mon"}, "^TestCephConnectionModeRejectionIntegration$"},
 		{"reject-mgr", map[string]string{"CEPH_MSGR_TEST_MODE_REJECTION": "mgr"}, "^TestCephConnectionModeRejectionIntegration$"},
 		{"mapped", map[string]string{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCephMappedAddressIntegration$"},
+		{"replicated", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"bluestore", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"crc-host-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
@@ -125,6 +129,7 @@ func TestProfileInvalidChoices(t *testing.T) {
 		"CEPH_MSGR_TEST_MGR_COUNT", "CEPH_MSGR_TEST_RUNTIME", "CEPH_MSGR_TEST_RACE",
 		"CEPH_MSGR_TEST_EXPIRE_TICKETS", "CEPH_MSGR_TEST_IDLE_SESSIONS", "CEPH_MSGR_TEST_AUTH_EPOCH",
 		"CEPH_MSGR_TEST_SHORT_TICKETS", "CEPH_MSGR_TEST_MODE_REJECTION", "CEPH_MSGR_TEST_CONNECTION_MODE",
+		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION",
 		"CEPH_MSGR_TEST_MAPPED_IPV6", "CEPH_MSGR_TEST_OSD",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -144,6 +149,8 @@ func TestProfileInvalidChoices(t *testing.T) {
 func TestProfileInvalidCombinations(t *testing.T) {
 	auth := []string{"CEPH_MSGR_TEST_EXPIRE_TICKETS", "CEPH_MSGR_TEST_IDLE_SESSIONS", "CEPH_MSGR_TEST_AUTH_EPOCH", "CEPH_MSGR_TEST_SHORT_TICKETS"}
 	cases := []map[string]string{
+		{"CEPH_MSGR_TEST_OSD_REPLICAS": "3"},
+		{"CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD": "1"},
 		{"CEPH_MSGR_TEST_OSD_STORE": "bluestore"},
 		{"CEPH_MSGR_TEST_OSD_STORE": "filestore", "CEPH_MSGR_TEST_OSD": "1"},
 		{"CEPH_MSGR_TEST_RACE": "1"},
@@ -163,6 +170,7 @@ func TestProfileInvalidCombinations(t *testing.T) {
 	}
 	for i, key := range auth {
 		cases = append(cases,
+			map[string]string{key: "1", "CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": "1"},
 			map[string]string{key: "1", "CEPH_MSGR_TEST_MGR_COUNT": "0"},
 			map[string]string{key: "1", "CEPH_MSGR_TEST_MODE_REJECTION": "mon"},
 			map[string]string{key: "1", "CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"},
@@ -172,6 +180,12 @@ func TestProfileInvalidCombinations(t *testing.T) {
 			cases = append(cases, map[string]string{key: "1", other: "1"})
 		}
 	}
+	cases = append(cases,
+		map[string]string{"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": "1", "CEPH_MSGR_TEST_MGR_COUNT": "0"},
+		map[string]string{"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": "1", "CEPH_MSGR_TEST_OSD": "1"},
+		map[string]string{"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": "1", "CEPH_MSGR_TEST_MODE_REJECTION": "mgr"},
+		map[string]string{"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": "1", "CEPH_MSGR_STRESS_DURATION": "3m"},
+	)
 	for i, env := range cases {
 		t.Run(fmt.Sprintf("case-%02d", i), func(t *testing.T) {
 			env["CEPH_MSGR_TEST_RUN"] = "^Custom$"
@@ -235,9 +249,10 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		"CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1",
 		"CEPH_MSGR_TEST_EXPIRE_TICKETS": "0", "CEPH_MSGR_TEST_IDLE_SESSIONS": "0",
 		"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",
-		"CEPH_MSGR_TEST_MODE_REJECTION": "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
+		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": "0",
+		"CEPH_MSGR_TEST_MODE_REJECTION":         "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
 		"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
-		"CEPH_MSGR_TEST_OSD_STORE":  "memstore",
+		"CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
 		"CEPH_MSGR_STRESS_DURATION": "3m", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
 	}
 	if !reflect.DeepEqual(container, wantContainer) {
@@ -253,9 +268,10 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k", "CEPH_MSGR_TEST_MGR_COUNT": "2",
 				"CEPH_MSGR_TEST_EXPIRE_TICKETS": "0", "CEPH_MSGR_TEST_IDLE_SESSIONS": "0",
 				"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",
-				"CEPH_MSGR_TEST_MODE_REJECTION": "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
+				"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": "0",
+				"CEPH_MSGR_TEST_MODE_REJECTION":         "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
 				"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
-				"CEPH_MSGR_TEST_OSD_STORE":  "memstore",
+				"CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
 				"CEPH_MSGR_STRESS_DURATION": "3m", "CEPH_MSGR_TEST_PROXY": proxy,
 			}
 			if !reflect.DeepEqual(got, want) {
