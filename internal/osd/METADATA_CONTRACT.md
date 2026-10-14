@@ -208,8 +208,8 @@ fixture and explicit routing/native stat/read controls:
 | Compare operators | Caller-left asymmetric GT/LT, all six ops, binary/empty STRING, true positive result, false `-ECANCELED`; missing attr vs missing object | Go/native matrix 36 cases and missing identities passed; actual Go per-op +1 preserved, C callback still unavailable |
 | U64 followup | LE operand 0/max; stored decimal, empty/missing, prefix, bad signs/whitespace/NUL, overflow; invalid input length/mode locally rejected | Unsupported; separate oracle prerequisite |
 | Atomicity and FAILOK | Compare-before-SET/RM success; false guard after an earlier staged mutation restores pre-state; FAILOK permits later writes and retains per-op failure | Go/native guard-before-write and FAILOK passed; staged SET-before-CMP remains rejected and native-only rollback evidence |
-| Mixed requests | Xattr GET+READ+STAT output boundaries; SET/RM+data mutation followed by independent fresh reads/stat2; staged xattr reads characterized separately | Fresh vectors and GET/GETALL/READ/STAT passed; combined data-metadata mutation/staged xattr reads pending |
-| Refusal and uncertainty | Permission rejection vs missing object/attr; sent append+xattr vector loses response, retains identity/outcome, fresh session never replays it | Extend existing lost-response recipe; unexecuted |
+| Mixed requests | Xattr GET+READ+STAT output boundaries; SET/RM+data mutation followed by independent fresh reads/stat2; staged xattr reads characterized separately | Fresh vectors and GET/GETALL/READ/STAT passed; one APPEND+SET actual native execution/readback passed; staged xattr reads pending |
+| Refusal and uncertainty | Permission rejection vs missing object/attr; sent append+xattr vector loses response, retains identity/outcome, fresh session never replays it | CRC/AES three-BlueStore APPEND+SET receive withholding/Close passed; exact local identity/unknown outcome and fresh native/Go no-replay observed; permission refusal pending |
 | Completion and recovery | SET/RM ONDISK then native inventory/version/mtime after primary SIGKILL on BlueStore; read-only result has no durability claim | Same bounded profile as O1 initially; unexecuted |
 
 The subsequent native-only oracle passed binary/empty/prefixed inventory,
@@ -221,8 +221,10 @@ the subsequent live Go replies preserve raw positive CMP results. The C API
 callback still cannot expose those per-op values. Limited Go/native
 acceptance subsequently passed binary/empty/non-UTF8 names, 36 read/write
 STRING comparison vectors, guard-before-SET/RM failures and FAILOK, missing
-attr/object identities and mixed GET/GETALL/READ/STAT. Sent-metadata crash/loss,
-server-configured limits/permissions and namespace matrices remain pending;
+attr/object identities and mixed GET/GETALL/READ/STAT. One sent APPEND+SET
+withheld-reply/Close test independently observed execution, unknown local
+completion and fresh-session no-replay. Metadata crash, server-configured
+limits/permissions and namespace matrices remain pending;
 the OSD feature mask has not widened. Existing O1 results cannot be relabeled
 as this new matrix.
 Broader pool/EC/snapshot and staged-read semantics remain excluded

@@ -167,11 +167,42 @@ the fresh vectors; its owned builder was removed. Sharing that SDK cache with
 `encode-osd-mutations` must preserve both wrapper source paths at configuration
 time; regenerating the original mutation target verifies its unchanged bytes.
 
-Metadata-specific response loss/Close/crash recovery, configured server
-name/value limits, permission refusals, namespace isolation, combined data and
-metadata mutation, numeric CMP, omap/class/snapshot and broad pool/EC profiles
-remain incomplete. O1 data-mutation recovery tests do not establish these
-metadata behaviors. The P1 O2 milestone and final environment are not complete.
+Exact main head `03ad44d5f3dafddf8aeb3293484cd49c9af2310a` passed all 42
+jobs of [CI 38633315993](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38633315993)
+on its first run. Original job logs show the native C oracle and 43 Go/native
+xattr subcases passing in each of nine OSD profiles: CRC/secure, AES/AES256K,
+IPv4/IPv6, container/host relay, single MemStore/BlueStore and three BlueStore
+replicas. These are 387 profile-specific subcase executions, not 387 distinct
+behaviors. The host three-BlueStore CRC/AES race job also passed without a data
+race. Evidence is retained in `/tmp/ceph-ci-03ad44d-watch`; this CI success
+does not establish a cause or fix for the earlier auth-epoch intermittency.
+
+## Sent mixed mutation and handle Close
+
+`TestCephOSDXattrOutcomeIntegration` passed its first native run in 1.65s on
+CRC/AES entity/service, IPv4, Darwin arm64 host relay, three BlueStore
+replicas/min2. One actual APPEND+SETXATTR vector used a binary value and a
+non-UTF-8 attribute name. The receive fault withholds reads without capturing
+reply bytes or authentication material. Independent native reads establish
+the exact append, attribute, higher version and explicit nanosecond mtime
+before the Go handle is closed while its caller context is still live.
+
+The absent reply retains `OutcomeUnknown` plus `ErrClosed` and the exact local
+submission. It has no invented remote transaction, flags, per-op result or raw
+reply. A fresh caller-selected connection has a larger local TID, reads the
+same bytes/attribute/stat and preserves the native version and inventory.
+No append is replayed. Explicit cleanup restores original bytes, prior attrs
+and mtime; all ten owned containers and the network were independently absent.
+This is execution/readback evidence, not a received ONDISK or C API raw per-op
+receipt. Evidence and frozen source/profile/cleanup receipts are retained at
+`/private/tmp/ceph-xattr-outcome-crc-aes-ymt7zj1m`; reproduce with
+`CEPH_MSGR_TEST_RUN='^TestCephOSDXattrOutcomeIntegration$'` and the CRC/AES
+three-BlueStore host profile above.
+
+Metadata-specific crash recovery, configured server name/value limits,
+permission refusals, namespace isolation, numeric CMP, omap/class/snapshot
+and broad pool/EC profiles remain incomplete. The P1 O2 milestone and final
+environment are not complete.
 
 Reproduce the Go/native profile with
 `CEPH_MSGR_TEST_RUN='^TestCephOSDXattrsIntegration$'` and the same fixture flags
