@@ -218,25 +218,31 @@ func (s *Session) Call(ctx context.Context, m msgr.MessageData) (msgr.MessageDat
 	r := &request{ctx: ctx, message: m, result: make(chan response, 1)}
 	s.pending[m.Transaction] = r
 	s.mu.Unlock()
-	select {
-	case s.queue <- r:
-	case <-ctx.Done():
-		return msgr.MessageData{}, s.abandon(m.Transaction, r, ctx.Err())
-	case <-s.done:
-		result := <-r.result
+	finish := func(result response) (msgr.MessageData, error) {
+		if result.err != nil && result.message.Transaction == 0 {
+			result.message.Transaction = m.Transaction
+		}
 		return result.message, result.err
 	}
 	select {
+	case s.queue <- r:
+	case <-ctx.Done():
+		return msgr.MessageData{Transaction: m.Transaction}, s.abandon(m.Transaction, r, ctx.Err())
+	case <-s.done:
+		result := <-r.result
+		return finish(result)
+	}
+	select {
 	case result := <-r.result:
-		return result.message, result.err
+		return finish(result)
 	case <-ctx.Done():
 		// Prefer a completed result if dispatch won the race with cancellation.
 		select {
 		case result := <-r.result:
-			return result.message, result.err
+			return finish(result)
 		default:
 		}
-		return msgr.MessageData{}, s.abandon(m.Transaction, r, ctx.Err())
+		return msgr.MessageData{Transaction: m.Transaction}, s.abandon(m.Transaction, r, ctx.Err())
 	}
 }
 func (s *Session) Send(ctx context.Context, m msgr.MessageData) error {

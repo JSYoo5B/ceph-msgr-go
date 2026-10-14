@@ -1,5 +1,5 @@
 // Package osd implements the bounded Tentacle wire codecs for explicitly
-// targeted, read-only object requests. It does not discover or route objects.
+// targeted object requests. It does not discover or route objects.
 package osd
 
 import "errors"
@@ -13,10 +13,22 @@ const (
 	ReplyMessage   uint16 = 43
 	Read           uint16 = 0x1201
 	Stat           uint16 = 0x1202
+	AssertVersion  uint16 = 0x1208
+	CompareExtent  uint16 = 0x1220
+	Write          uint16 = 0x2201
+	WriteFull      uint16 = 0x2202
+	Truncate       uint16 = 0x2203
+	Zero           uint16 = 0x2204
+	Delete         uint16 = 0x2205
+	Append         uint16 = 0x2206
+	Create         uint16 = 0x220d
+	OpExclusive    uint32 = 1
+	OpFailOK       uint32 = 2
 	FlagAck        uint64 = 0x0001
 	FlagOnNVRAM    uint64 = 0x0002
 	FlagOnDisk     uint64 = 0x0004
 	FlagRead       uint64 = 0x0010
+	FlagWrite      uint64 = 0x0020
 	FlagReturnVec  uint64 = 0x4000000
 	NoSnap         uint64 = ^uint64(0) - 1
 	MaxOperations         = 64
@@ -33,7 +45,7 @@ const (
 var (
 	ErrFeatures  = errors.New("ceph osd: unsupported negotiated encoding features")
 	ErrOperation = errors.New("ceph osd: unsupported operation")
-	ErrRequest   = errors.New("ceph osd: invalid read-only request")
+	ErrRequest   = errors.New("ceph osd: invalid object request")
 	ErrRedirect  = errors.New("ceph osd: automatic redirect unsupported")
 )
 
@@ -50,6 +62,8 @@ type PG struct {
 }
 
 type Operation struct {
+	Data           []byte
+	Version        uint64
 	Code           uint16
 	Flags          uint32
 	Offset, Length uint64
@@ -59,12 +73,13 @@ type Operation struct {
 // raw pg_t, not an independently chosen actual PG or erasure-code shard.
 // The server maps it using the supplied pool and its OSDMap.
 type Request struct {
-	ClientInc  uint32
-	MapEpoch   uint32
-	Locator    Locator
-	Object     string
-	Hash       uint32
-	Operations []Operation
+	ClientInc                      uint32
+	MTimeSeconds, MTimeNanoseconds uint32
+	MapEpoch                       uint32
+	Locator                        Locator
+	Object                         string
+	Hash                           uint32
+	Operations                     []Operation
 }
 
 type Version struct {

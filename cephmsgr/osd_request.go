@@ -12,8 +12,25 @@ import (
 type OSDOpcode uint16
 
 const (
-	OSDRead OSDOpcode = OSDOpcode(osd.Read)
-	OSDStat OSDOpcode = OSDOpcode(osd.Stat)
+	OSDRead          OSDOpcode = OSDOpcode(osd.Read)
+	OSDStat          OSDOpcode = OSDOpcode(osd.Stat)
+	OSDWrite         OSDOpcode = OSDOpcode(osd.Write)
+	OSDWriteFull     OSDOpcode = OSDOpcode(osd.WriteFull)
+	OSDAppend        OSDOpcode = OSDOpcode(osd.Append)
+	OSDTruncate      OSDOpcode = OSDOpcode(osd.Truncate)
+	OSDZero          OSDOpcode = OSDOpcode(osd.Zero)
+	OSDCreate        OSDOpcode = OSDOpcode(osd.Create)
+	OSDDelete        OSDOpcode = OSDOpcode(osd.Delete)
+	OSDAssertVersion OSDOpcode = OSDOpcode(osd.AssertVersion)
+	OSDCompareExtent OSDOpcode = OSDOpcode(osd.CompareExtent)
+)
+
+// OSD reply completion flags are native OSD flags, not Messenger ACKs.
+// ONDISK is a server completion report whose persistence depends on its store.
+const (
+	OSDReplyAck     = osd.FlagAck
+	OSDReplyOnNVRAM = osd.FlagOnNVRAM
+	OSDReplyOnDisk  = osd.FlagOnDisk
 )
 
 // OSDObject contains wire locator metadata prepared by the routing layer.
@@ -27,21 +44,43 @@ type OSDObject struct {
 	Hash           uint32
 }
 
-// OSDOperation is a single stat or bounded read on the request's object. Stat
-// has zero Offset and Length. Read requires a positive Length; read-to-end and
-// mutation opcodes are outside this milestone. Offset+Length must not overflow.
+type OSDOperationFlags uint32
+
+const (
+	OSDExclusiveCreate OSDOperationFlags = OSDOperationFlags(osd.OpExclusive)
+	// OSDFailOK continues a compound vector after this operation's error. Its
+	// negative per-op result is retained even if later mutations commit.
+	OSDFailOK OSDOperationFlags = OSDOperationFlags(osd.OpFailOK)
+)
+
+// OSDOperation is one ordered operation on the request's object. Writes and
+// CompareExtent require Length == len(Data); WriteFull/Append have Offset 0.
+// Truncate uses Offset as the new size. Create/Delete/Stat have zero extents.
+// AssertVersion uses Version, with zero extents and no payload. Only Create
+// accepts ExclusiveCreate. Snapshot/truncate-sequence variants are unsupported.
+// Caller must not mutate the vector or Data until Request returns.
 type OSDOperation struct {
 	Code           OSDOpcode
+	Flags          OSDOperationFlags
 	Offset, Length uint64
+	Data           []byte
+	Version        uint64
 }
 
-// OSDRequest specifies a first-attempt request with no snapshot context.
-// MapEpoch is obtained by the caller's map layer. The client does not move a
-// request to another OSD or refresh its epoch automatically.
+// OSDTime is Tentacle's raw utime_t. Zero preserves the server's zero-mtime
+// semantics; the client does not substitute its own clock. Nanoseconds < 1e9.
+type OSDTime struct{ Seconds, Nanoseconds uint32 }
+
+// OSDRequest is one ordered, atomic object vector on an explicitly targeted
+// replicated OSD, with head/no snapshot context. Mutation replies request only
+// ONDISK completion, not a separate preliminary ACK. There is no automatic
+// epoch refresh, redirect, placement calculation, retry or mutation replay.
 type OSDRequest struct {
-	MapEpoch   uint32
-	Object     OSDObject
-	Operations []OSDOperation
+	ClientIncarnation uint32
+	ModificationTime  OSDTime
+	MapEpoch          uint32
+	Object            OSDObject
+	Operations        []OSDOperation
 }
 
 type OSDPG struct {
@@ -77,10 +116,21 @@ type OSDRedirect struct {
 	LegacyInstructions []byte
 }
 
+// OSDSubmission is local request metadata, retained when an admitted request
+// ends with an error. It is not a server reply or proof of execution.
+type OSDSubmission struct {
+	Transaction, GlobalID       uint64
+	ClientIncarnation, MapEpoch uint32
+	Attempt                     uint32
+}
+
 // OSDReply preserves the server's completion metadata and operation outputs.
 // Flags are raw Ceph OSD flags, independent of Messenger ACKs. A read-only
-// success does not establish any write durability guarantee.
+// success does not establish any write durability guarantee. A mutation
+// success requires the server ONDISK flag; durability is storage/profile
+// dependent (in particular, MemStore contents do not survive OSD restart).
 type OSDReply struct {
+	Submission                   OSDSubmission
 	Transaction, GlobalID        uint64
 	Object                       string
 	PG                           OSDPG
@@ -104,7 +154,7 @@ type OSDError struct{ Code int32 }
 
 func (e *OSDError) Error() string { return fmt.Sprintf("ceph: OSD result code %d", e.Code) }
 
-// Request transmits one explicitly targeted, read-only object request. ctx
+// Request transmits one explicitly targeted ordered object vector. ctx
 // governs the full local wait, including MaxInFlight admission. Cancellation
 // after transmission starts preserves OutcomeUnknownError. Replies expose the
 // wire pg_t, epoch and versions for the caller's routing layer; no retry occurs.
@@ -146,11 +196,15 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 	if globalID != o.globalID {
 		return result, errors.New("ceph: OSD connection belongs to an earlier client identity")
 	}
-	input := osd.Request{MapEpoch: request.MapEpoch, Object: request.Object.Name, Hash: request.Object.Hash,
+	input := osd.Request{
+		ClientInc:        request.ClientIncarnation,
+		MTimeSeconds:     request.ModificationTime.Seconds,
+		MTimeNanoseconds: request.ModificationTime.Nanoseconds,
+		MapEpoch:         request.MapEpoch, Object: request.Object.Name, Hash: request.Object.Hash,
 		Locator:    osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
 		Operations: make([]osd.Operation, len(request.Operations))}
 	for i, op := range request.Operations {
-		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Offset: op.Offset, Length: op.Length}
+		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version}
 	}
 	m, err := osd.EncodeRequest(input, o.features, c.options.MaxFrameSize)
 	if err != nil {
@@ -160,11 +214,14 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 		return result, err
 	}
 	reply, err := s.Call(operation, m)
+	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch}
+	result.Submission = submission
 	if err != nil {
 		return result, o.operationError(err)
 	}
 	decoded, err := osd.DecodeReply(reply, c.options.MaxFrameSize)
 	result = publicOSDReply(decoded)
+	result.Submission = submission
 	result.Transaction, result.GlobalID = reply.Transaction, o.globalID
 	redirect := errors.Is(err, osd.ErrRedirect)
 	if err == nil || redirect {
@@ -188,9 +245,21 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 	if reply.Object != input.Object || reply.PG.Pool != uint64(input.Locator.Pool) || reply.PG.Seed != input.Hash || reply.RetryAttempt != 0 || len(reply.Operations) != len(input.Operations) {
 		return errors.New("OSD reply does not match request identity or operations")
 	}
+	flags, _, err := osd.ValidateOperations(input.Operations, ^uint32(0))
+	if err != nil {
+		return err
+	}
+	if !redirect && reply.Result >= 0 && flags&osd.FlagWrite != 0 && !reply.OnDisk() {
+		return errors.New("mutation reply lacks requested ONDISK completion")
+	}
 	for i, requested := range input.Operations {
 		op := reply.Operations[i]
-		if op.Code != requested.Code || op.Offset != requested.Offset || op.Length > requested.Length || uint64(len(op.Data)) != uint64(op.PayloadLength) {
+		normalizedZero := requested.Code == osd.Zero && op.Code == osd.Truncate
+		length := requested.Length
+		if requested.Code == osd.AssertVersion {
+			length = requested.Version
+		}
+		if op.Code != requested.Code && !normalizedZero || op.Offset != requested.Offset || op.Length > length || requested.Code != osd.Read && op.Length != length || op.TruncateSize != 0 || op.TruncateSequence != 0 || op.Flags&(osd.OpExclusive|osd.OpFailOK) != requested.Flags || uint64(len(op.Data)) != uint64(op.PayloadLength) {
 			return errors.New("OSD reply operation differs from request or payload metadata")
 		}
 		success := !redirect && reply.Result >= 0 && op.Result >= 0
@@ -200,13 +269,13 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 				return errors.New("OSD read reply exceeds requested length or has inconsistent output")
 			}
 		case osd.Stat:
-			// A failed vector may leave an unexecuted stat with rval 0 and no
-			// output. Only an ordinary successful reply requires size+mtime.
 			if op.PayloadLength > 16 || success && op.PayloadLength != 16 {
 				return errors.New("OSD stat reply has invalid size and mtime output")
 			}
 		default:
-			return errors.New("OSD reply has an unsupported operation")
+			if op.PayloadLength != 0 {
+				return errors.New("OSD mutation/guard reply has unsupported output")
+			}
 		}
 	}
 	return nil

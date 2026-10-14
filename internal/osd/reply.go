@@ -47,7 +47,7 @@ func DecodeReply(m msgr.MessageData, limit uint32) (Reply, error) {
 		op.Offset, op.Length = d.U64(), d.U64()
 		op.TruncateSize, op.TruncateSequence = d.U64(), d.U32()
 		op.PayloadLength = d.U32()
-		if op.Code != Stat && op.Code != Read {
+		if !SupportedOperation(op.Code) {
 			d.Fail(ErrOperation)
 		}
 	}

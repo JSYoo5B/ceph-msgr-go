@@ -2,7 +2,7 @@
 
 Ceph Tentacle의 MON/MGR 및 명시적으로 지정한 OSD와 msgr2.1로 통신하는
 native Go 라이브러리다. Messenger·CephX·세션·raw 관리 명령·wire 지도·구독과
-OSD stat/read 통신 기초를 구현한다.
+OSD stat/read와 제한된 replicated 객체 쓰기 wire를 구현한다.
 제품은 Go 표준 라이브러리만 사용하며 CGO, go-ceph, librados, Ceph CLI를
 요구하지 않는다. 최소 Ceph 계열은 Tentacle(20.2)이다.
 
@@ -21,7 +21,7 @@ OSD stat/read 통신 기초를 구현한다.
 | MON/MGR 발견·세션·복구·요청별 context | 운영 작업과 재시도 정책 |
 | caller가 준비한 raw JSON·bulk 입력 송신, 원본 응답·오류 반환 | 명령 JSON 구성·schema 검증·응답 JSON 해석·typed 관리 API |
 | MonMap·MgrMap·log·config·digest wire codec과 수신 | 설정 적용·모듈 정책·서비스 URI 사용 |
-| OSD service ticket·명시적 연결·bounded stat/read 요청·응답·raw OSDMap 수신 | 내포한 OSDMap 해석·적용·객체 hash·CRUSH 배치·대상 선택·재시도·고수준 객체 API |
+| OSD service ticket·명시적 연결·bounded 객체 read/write·조건 벡터·raw OSDMap 수신 | 내포한 OSDMap 해석·적용·객체 hash·CRUSH 배치·대상 선택·재시도·고수준 객체 API |
 
 지도에 실린 module metadata·option·activation policy·service URI는 받은 값을
 보존한다. 실행 모듈 계산, 설정 적용과 서비스 접속은 사용 레이어가 맡는다.
@@ -192,7 +192,7 @@ CEPH_MSGR_TEST_RUNTIME=host \
   CEPH_MSGR_TEST_RUN='^TestCephMonOSDMaps.*Integration$' sh integration/run.sh
 ```
 
-## OSD stat/read 통신 기초
+## OSD 객체 요청 통신
 
 `Options.EnableOSD: true`로 OSD service ticket 획득·갱신을 명시적으로 켠다.
 이 선택은 OSDMap 구독이나 배치를 시작하지 않는다. 사용 레이어가 준비한
@@ -229,7 +229,8 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 
 첫 codec은 Tentacle feature 협상으로 선택한 `MOSDOp/MOSDOpReply v6`다.
 요청·응답 `pg_t` seed는 **raw object hash**이며 실제 PG 번호가 아니다.
-Replicated pool의 현재 객체에 대한 stat과 양의 길이 read만 제공한다.
+Replicated pool의 현재 객체에 대한 stat과 양의 길이 read, write/writefull,
+append, truncate, zero, create/delete와 version/extent 조건을 제공한다.
 Stat bytes는 size와 mtime의 wire 출력이며 filesystem API로 변환하지 않는다.
 Aggregate 서버 code와 operation별 result는 서로 다를 수 있다. 예를 들어
 존재하지 않는 객체는 aggregate -2와 실행되지 않은 stat의 result 0을 반환한다.
@@ -242,6 +243,49 @@ OSD 연결은 lossy session이며 전송한 요청을 재실행하지 않는다.
 닫고 사용 레이어가 새 연결 여부를 결정한다. OSDMap 메시지는 다음의 raw
 지도 큐로 전달한다. Backoff 등 다른 미지원 control 메시지는 수신하면 세션을
 명시적으로 실패시킨다.
+
+한 객체의 쓰기·조건 vector는 단일 요청으로 전송한다. `Data`의 byte 수와
+`Length`는 같아야 하며, truncate는 `Offset`에 새 크기를 넣는다.
+`OSDAssertVersion`은 `Version`, `OSDCompareExtent`는 비교할 원본 `Data`를
+받는다. `OSDExclusiveCreate`는 create에만 적용하며 `OSDFailOK`는 해당
+operation의 실패를 보존하면서 뒤의 operation을 계속 실행하게 한다.
+
+```go
+reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch,
+    Object: object, // caller가 준비한 locator와 raw placement hash
+    ClientIncarnation: incarnation,
+    ModificationTime: cephmsgr.OSDTime{Seconds: seconds, Nanoseconds: nanos},
+    Operations: []cephmsgr.OSDOperation{
+        {Code: cephmsgr.OSDAssertVersion, Version: expectedVersion},
+        {Code: cephmsgr.OSDWriteFull, Length: uint64(len(data)), Data: data},
+    },
+})
+```
+
+입력 vector와 `Data`는 Request가 반환할 때까지 변경하지 않는다.
+`ModificationTime`의 0은 그대로 전송하며 client 시각으로 대체하지 않는다.
+쓰기 성공은 서버의 `OSDReplyOnDisk`를 요구한다. 이것은 저장소가 보고한
+완료이며, MemStore 재시작 후 persistence나 전원 장애 내구성 보장이 아니다.
+
+불명확한 결과에도 `reply.Submission`은 할당된 TID·인증 global ID·incarnation·
+입력 epoch·attempt를 보존한다. 이 로컬 metadata는 서버 실행 증거가 아니다.
+`reply.Transaction`과 서버 원본 출력은 실제 응답을 받은 경우에만 의미가 있다.
+한 객체 vector의 원자성을 서로 다른 요청/객체의 원자성 또는 일반적인
+read-your-staged-writes 보장으로 확대하지 않는다.
+
+[O0/O1 wire 계약](internal/osd/CONTRACT.md)과
+[native 검증 기록](integration/fixture/OSD_MUTATIONS_VALIDATION.md)에 opcode·flag·완료
+의미와 native 비교 범위를 기록했다. 현재 실제 검증은 20.2.4 IPv4, 하나의
+OSD/replica, legacy CRUSH에 한정한다. 21개 native 비교 사례, 응답 손실 뒤
+재실행 금지와 BlueStore의 정상 OSD 재시작 후 readback을 검증했다.
+O0의 event 계약과 O1의 일반 replicated/mixed-output/crash 범위는 미완료다.
+
+```sh
+CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
+  CEPH_MSGR_TEST_RUN='^TestCephOSD(Mutations|MutationLostReply|MutationRestart|IO|Renewal)Integration$' \
+  sh integration/run.sh
+```
 
 `OSDConnection.NextMap(ctx)`는 그 연결에서 받은 다음 `OSDMapBatch`를 반환한다.
 FSID·encoding version·trim/latest epoch와 `FullMaps`·`IncrementalMaps`의
@@ -270,7 +314,7 @@ MON의 CRUSH admission 예외는 OSD에 적용하지 않는다. 구현하지 않
 feature는 `ErrUnsupportedFeatures`로 거부한다. 현재 실제 검증은 legacy CRUSH,
 HASHPSPOOL·upmap을 사용하지 않는 replicated pool에 한정한다. 일반적인 최신
 CRUSH 설정의 OSD 접속 지원은 주장하지 않는다. 독립 EC shard 대상 지정,
-snapshot context, 객체 쓰기, 자동 배치·라우팅·재시도, RADOS/RBD/CephFS는
+snapshot context, 자동 배치·라우팅·재시도, RADOS/RBD/CephFS는
 이 단계의 구현 범위 밖이다.
 
 20.2.4·Darwin arm64·IPv4 host relay의 aes256k secure/CRC와 Linux arm64

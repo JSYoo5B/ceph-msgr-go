@@ -350,8 +350,8 @@ PG primary 재선택, 대상 이동·fan-out·wildcard 확장은 상위가 결�
 
 | ID · 우선순위 | 제품에서 확정·구현할 계약 | 선행 조건 | 진행상황 | 필수 독립 검증 |
 | --- | --- | --- | --- | --- |
-| O0 · P0 | mutation별 opcode/flag·request identity·per-op 출력·완료/내구성·event 계약 확정 | B1·B4·B6 | 스펙 요구 있음; wire 전수 목록·공개 타입 미확정 | native encoder/decoder·서버 처리 경로로 입력/결과 계약 대조; O1 수용 시험 확정 |
-| O1 · P0 | replicated write/writefull·append·truncate·zero·create/delete와 조건·compound | O0 | 미구현; stat/read 벡터는 B4 | native 쓰기·조건 실패·복합 원자성·readback·OSD 재시작·응답 손실·재실행 금지 |
+| O0 · P0 | mutation별 opcode/flag·request identity·per-op 출력·완료/내구성·event 계약 확정 | B1·B4·B6 | 80개 Tentacle opcode 목록과 O1 입력/identity/per-op/ONDISK 공개 계약 확정; event·후속 opcode 계약 미완료 ([계약](internal/osd/CONTRACT.md)) | native encoder/decoder·서버 처리 경로로 입력/결과 계약 대조; O1 수용 시험 확정 |
+| O1 · P0 | replicated write/writefull·append·truncate·zero·create/delete와 조건·compound | O0 | 11개 stat/read·mutation/guard opcode 구현; 1-OSD 제한 profile native 벡터·응답 손실·BlueStore 정상 재시작 검증; 넓은 replicated·mixed-output/crash 검증 미완료 | native 쓰기·조건 실패·복합 원자성·readback·OSD 재시작·응답 손실·재실행 금지 |
 | O2 · P1 | xattr·omap·class call·allocation hint·snapshot context·rollback | O1; opcode별 O0 계약 보완 | 미구현 | native metadata·class 원본 bytes·snapshot 읽기/쓰기·rollback·오류/조건 비교 |
 | O3 · P1 | PG 열거·cursor, watch/notify·ack/오류, backoff/unblock | O0; 알림 송신 opcode는 O1/O2; 이벤트 공통 계약 | 미구현; raw OSDMap만 B5 | native 열거·알림 ack/timeout·제어 제한·큐 overflow·갱신/단절과 identity/수명 |
 | D1 · P1 | OSD·PG 대상 raw 명령·bulk 입력·reply 연관 | B4·B5; 해당 명령 encoding·권한 확정 | 미구현 | native 동일 대상의 raw/binary 출력·권한 오류·지도/대상 변경·취소 |

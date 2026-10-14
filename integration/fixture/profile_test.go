@@ -29,6 +29,7 @@ func TestProfileDefaults(t *testing.T) {
 		connectionMode: "secure",
 		mappedIPv6:     "0",
 		osd:            "0",
+		osdStore:       "memstore",
 		testRun:        "^TestCeph.*Integration$",
 		testTimeout:    "10m",
 	}
@@ -52,6 +53,7 @@ func TestProfileSelection(t *testing.T) {
 		{"reject-mon", map[string]string{"CEPH_MSGR_TEST_MODE_REJECTION": "mon"}, "^TestCephConnectionModeRejectionIntegration$"},
 		{"reject-mgr", map[string]string{"CEPH_MSGR_TEST_MODE_REJECTION": "mgr"}, "^TestCephConnectionModeRejectionIntegration$"},
 		{"mapped", map[string]string{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCephMappedAddressIntegration$"},
+		{"bluestore", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"crc-host-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 	}
@@ -142,6 +144,8 @@ func TestProfileInvalidChoices(t *testing.T) {
 func TestProfileInvalidCombinations(t *testing.T) {
 	auth := []string{"CEPH_MSGR_TEST_EXPIRE_TICKETS", "CEPH_MSGR_TEST_IDLE_SESSIONS", "CEPH_MSGR_TEST_AUTH_EPOCH", "CEPH_MSGR_TEST_SHORT_TICKETS"}
 	cases := []map[string]string{
+		{"CEPH_MSGR_TEST_OSD_STORE": "bluestore"},
+		{"CEPH_MSGR_TEST_OSD_STORE": "filestore", "CEPH_MSGR_TEST_OSD": "1"},
 		{"CEPH_MSGR_TEST_RACE": "1"},
 		{"CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_MODE_REJECTION": "mon"},
 		{"CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_MODE_REJECTION": "mgr"},
@@ -233,6 +237,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",
 		"CEPH_MSGR_TEST_MODE_REJECTION": "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
 		"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
+		"CEPH_MSGR_TEST_OSD_STORE":  "memstore",
 		"CEPH_MSGR_STRESS_DURATION": "3m", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
 	}
 	if !reflect.DeepEqual(container, wantContainer) {
@@ -250,6 +255,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",
 				"CEPH_MSGR_TEST_MODE_REJECTION": "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
 				"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
+				"CEPH_MSGR_TEST_OSD_STORE":  "memstore",
 				"CEPH_MSGR_STRESS_DURATION": "3m", "CEPH_MSGR_TEST_PROXY": proxy,
 			}
 			if !reflect.DeepEqual(got, want) {

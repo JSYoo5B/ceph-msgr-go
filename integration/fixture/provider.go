@@ -117,7 +117,7 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		opts = append(opts, ceph.WithAddressFamily(ceph.AddressIPv6))
 	}
 	if p.osd == "1" {
-		opts = append(opts, ceph.WithOSDCount(1), ceph.WithOSDObjectStore(ceph.OSDMemStore), ceph.WithPoolDefaults(1, 1))
+		opts = append(opts, ceph.WithOSDCount(1), ceph.WithOSDObjectStore(ceph.OSDObjectStore(p.osdStore)), ceph.WithPoolDefaults(1, 1))
 	} else {
 		opts = append(opts, ceph.WithNoInitialOSDs())
 	}

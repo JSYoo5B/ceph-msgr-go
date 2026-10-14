@@ -281,7 +281,7 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	}
 	manifest := map[string]any{"provider": "github.com/JSYoo5B/ceph-testcontainers-go", "provider_version": "v0.2.0", "image": p.image, "image_id": imageID, "architecture": architecture, "daemon_version": version,
 		"bootstrap": "public-api", "topology": "3 MON and 0/2 MGR owned daemon containers plus a native oracle client", "runtime": p.runtime, "fsid": p.fsid,
-		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd}
+		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd, "osd_store": p.osdStore}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return "", err

@@ -27,24 +27,23 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	if uint64(fixed)+uint64(len(r.Locator.Key))+uint64(len(r.Locator.Namespace))+uint64(len(r.Object))+uint64(len(r.Operations))*opWireSize > uint64(limit) {
 		return msgr.MessageData{}, wire.ErrLimit
 	}
-	// A normal v6 reply has a 41-byte Messenger header, 149 fixed front
-	// bytes, the object name, 38-byte packed ops and one 4-byte rval per op.
-	// Bound the whole vector's expected output before sending any request.
+	flags, dataBytes, err := ValidateOperations(r.Operations, limit)
+	if err != nil {
+		return msgr.MessageData{}, err
+	}
+	if r.MTimeNanoseconds >= 1_000_000_000 || flags&FlagWrite == 0 && (r.MTimeSeconds != 0 || r.MTimeNanoseconds != 0) {
+		return msgr.MessageData{}, ErrRequest
+	}
+	if uint64(fixed)+uint64(len(r.Locator.Key))+uint64(len(r.Locator.Namespace))+uint64(len(r.Object))+uint64(len(r.Operations))*opWireSize+dataBytes > uint64(limit) {
+		return msgr.MessageData{}, wire.ErrLimit
+	}
 	replyBudget := uint64(190) + uint64(len(r.Object)) + uint64(len(r.Operations))*(opWireSize+4)
 	for _, op := range r.Operations {
-		if op.Code != Read && op.Code != Stat || op.Flags != 0 {
-			return msgr.MessageData{}, ErrOperation
-		}
-		if op.Code == Stat && (op.Offset != 0 || op.Length != 0) || op.Code == Read && (op.Length == 0 || op.Offset > math.MaxUint64-op.Length) {
-			return msgr.MessageData{}, ErrRequest
-		}
 		if op.Code == Read {
-			if op.Length > uint64(limit) {
-				return msgr.MessageData{}, wire.ErrLimit
-			}
 			replyBudget += op.Length
-		} else {
-			replyBudget += 16 // encoded stat size and utime_t.
+		}
+		if op.Code == Stat {
+			replyBudget += 16
 		}
 	}
 	if replyBudget > uint64(limit) {
@@ -53,8 +52,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	e := wire.Encoder{}
 	e.U32(r.ClientInc)
 	e.U32(r.MapEpoch)
-	e.U32(uint32(FlagRead | FlagOnDisk | FlagReturnVec))
-	e.U64(0) // mtime (seconds, nanoseconds), unused by reads.
+	e.U32(uint32(flags | FlagOnDisk | FlagReturnVec))
+	e.U32(r.MTimeSeconds)
+	e.U32(r.MTimeNanoseconds)
 	e.U64(0) // zero reassert_version.version.
 	e.U32(0) // zero reassert_version.epoch.
 	encodeLocator(&e, r.Locator)
@@ -65,10 +65,14 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		e.U16(op.Code)
 		e.U32(op.Flags)
 		e.U64(op.Offset)
-		e.U64(op.Length)
+		if op.Code == AssertVersion {
+			e.U64(op.Version)
+		} else {
+			e.U64(op.Length)
+		}
 		e.U64(0) // truncate_size.
 		e.U32(0) // truncate_seq.
-		e.U32(0) // stat/read have no operation input payload.
+		e.U32(uint32(len(op.Data)))
 	}
 	e.U64(NoSnap)
 	e.U64(0) // snap sequence.
@@ -81,7 +85,11 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	identity.U64(0) // derive TID from header, set by Session.Call.
 	identity.U32(0) // server restores client_inc for this default reqid.
 	e.Struct(2, 2, identity.Data)
-	return msgr.MessageData{Type: RequestMessage, Version: 6, CompatVersion: 3, Priority: 127, Front: e.Data}, nil
+	data := make([]byte, 0, int(dataBytes))
+	for _, op := range r.Operations {
+		data = append(data, op.Data...)
+	}
+	return msgr.MessageData{Data: data, Type: RequestMessage, Version: 6, CompatVersion: 3, Priority: 127, Front: e.Data}, nil
 }
 
 func encodePG(e *wire.Encoder, pg PG) {

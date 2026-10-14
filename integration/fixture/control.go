@@ -23,6 +23,13 @@ func (c *fixtureCluster) daemon(kind, name string) (testcontainers.Container, er
 			}
 		}
 	}
+	if kind == "osd" {
+		for _, d := range c.cluster.OSDs() {
+			if strconv.Itoa(d.ID) == name {
+				return d.Container, nil
+			}
+		}
+	}
 	if kind == "mgr" {
 		for _, d := range c.cluster.Managers() {
 			if d.DaemonName == name {
@@ -87,7 +94,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 	if fileExists(filepath.Join(out, "native-oracles.error")) {
 		return errors.New("native oracle worker failed; inspect native-oracles.log")
 	}
-	for _, kind := range []string{"mon", "mgr"} {
+	for _, kind := range []string{"mon", "mgr", "osd"} {
 		for _, action := range []string{"pause", "resume", "stop", "start"} {
 			fields, err := c.request(out, action+"-"+kind)
 			if err != nil {
@@ -132,7 +139,22 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			}
 		}
 	}
-	fields, err := c.request(out, "restart-mon")
+	fields, err := c.request(out, "verify-osd-mutation")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || fields[1] != "compare" || c.profile.osd != "1" {
+			return errors.New("invalid mutation oracle request")
+		}
+		if err = c.exec(ctx, "python3", "/out/osd_mutation_oracle.py", "/tmp/ceph-msgr-test", "/out"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-mutation-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+	fields, err = c.request(out, "restart-mon")
 	if err != nil {
 		return err
 	}

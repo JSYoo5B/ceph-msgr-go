@@ -14,7 +14,7 @@ type profile struct {
 	monAddresses, fsid, peers                                        string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race string
 	expireTickets, idleSessions, authEpoch, shortTickets             string
-	modeRejection, connectionMode, mappedIPv6, osd                   string
+	modeRejection, connectionMode, mappedIPv6, osd, osdStore         string
 	stressDuration, testRun, testTimeout, diagnostics                string
 }
 
@@ -40,6 +40,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		connectionMode: value("CEPH_MSGR_TEST_CONNECTION_MODE", "secure"),
 		mappedIPv6:     value("CEPH_MSGR_TEST_MAPPED_IPV6", "0"),
 		osd:            value("CEPH_MSGR_TEST_OSD", "0"),
+		osdStore:       value("CEPH_MSGR_TEST_OSD_STORE", "memstore"),
 		stressDuration: getenv("CEPH_MSGR_STRESS_DURATION"),
 		testRun:        getenv("CEPH_MSGR_TEST_RUN"),
 		testTimeout:    value("CEPH_MSGR_TEST_TIMEOUT", "10m"),
@@ -62,12 +63,16 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_CONNECTION_MODE", p.connectionMode, []string{"secure", "crc"}},
 		{"CEPH_MSGR_TEST_MAPPED_IPV6", p.mappedIPv6, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_OSD", p.osd, []string{"0", "1"}},
+		{"CEPH_MSGR_TEST_OSD_STORE", p.osdStore, []string{"memstore", "bluestore"}},
 		{"CEPH_MSGR_TEST_MGR_COUNT", p.mgrCount, []string{"0", "2"}},
 		{"CEPH_MSGR_TEST_IP_FAMILY", p.ipFamily, []string{"4", "6"}},
 	} {
 		if !slices.Contains(choice.allowed, choice.value) {
 			return profile{}, fmt.Errorf("%s must be one of %s", choice.name, strings.Join(choice.allowed, ", "))
 		}
+	}
+	if p.osdStore != "memstore" && p.osd != "1" {
+		return profile{}, fmt.Errorf("BlueStore fixture requires CEPH_MSGR_TEST_OSD=1")
 	}
 	if p.race == "1" && p.runtime != "host" {
 		return profile{}, fmt.Errorf("development race instrumentation requires CEPH_MSGR_TEST_RUNTIME=host")
@@ -145,6 +150,7 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_CONNECTION_MODE":     p.connectionMode,
 		"CEPH_MSGR_TEST_MAPPED_IPV6":         p.mappedIPv6,
 		"CEPH_MSGR_TEST_OSD":                 p.osd,
+		"CEPH_MSGR_TEST_OSD_STORE":           p.osdStore,
 		"CEPH_MSGR_STRESS_DURATION":          p.stressDuration,
 		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
 	}
@@ -168,6 +174,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_CONNECTION_MODE": p.connectionMode,
 		"CEPH_MSGR_TEST_MAPPED_IPV6":     p.mappedIPv6,
 		"CEPH_MSGR_TEST_OSD":             p.osd,
+		"CEPH_MSGR_TEST_OSD_STORE":       p.osdStore,
 		"CEPH_MSGR_STRESS_DURATION":      p.stressDuration,
 		"CEPH_MSGR_TEST_PROXY":           proxy,
 	}

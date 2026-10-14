@@ -116,3 +116,10 @@ container tests for MGR standby takeover and public snapshot renewal/MON restart
 passed. Cross-UID Linux behavior still requires the new remote CI run; macOS
 Docker Desktop does not reproduce Linux bind-mount ownership exactly. No test
 was skipped and no timeout increased to hide the original failures.
+
+The correction commit `a25426ba653564226f02db1d3728ef0b218ff612` subsequently
+passed all 36 jobs in [CI run 38592987116](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38592987116),
+including the previously failed Linux container controls, MGR takeover,
+expired-ticket recovery, both legacy-cipher OSD profiles, race sessions and
+Windows native Ceph execution. This confirms the correction on Linux CI; the
+first failed run remains distinct evidence and was not rerun to erase it.

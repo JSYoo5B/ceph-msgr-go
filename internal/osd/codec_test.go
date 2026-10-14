@@ -94,7 +94,7 @@ func TestRequestRejectsUnsupportedEncodingAndOperations(t *testing.T) {
 		{"locator hash", func(r *Request) { r.Locator.Hash = 0 }, ErrRequest},
 		{"empty vector", func(r *Request) { r.Operations = nil }, ErrRequest},
 		{"too many ops", func(r *Request) { r.Operations = make([]Operation, MaxOperations+1) }, ErrRequest},
-		{"mutation", func(r *Request) { r.Operations[0].Code = 0x2201 }, ErrOperation},
+		{"unimplemented xattr", func(r *Request) { r.Operations[0].Code = 0x2301 }, ErrOperation},
 		{"op flags", func(r *Request) { r.Operations[0].Flags = 1 }, ErrOperation},
 		{"stat offset", func(r *Request) { r.Operations[0].Offset = 1 }, ErrRequest},
 		{"unbounded read", func(r *Request) { r.Operations[1].Length = 0 }, ErrRequest},
@@ -171,7 +171,7 @@ func TestReplyRejectsTruncationAndMalformedMetadata(t *testing.T) {
 		{"middle", func(m *msgr.MessageData) { m.Middle = []byte{0} }, msgr.ErrFrame},
 		{"pg version", func(m *msgr.MessageData) { m.Front[13] = 2 }, wire.ErrVersion},
 		{"op count", func(m *msgr.MessageData) { binary.LittleEndian.PutUint32(m.Front[58:62], math.MaxUint32) }, wire.ErrLimit},
-		{"unknown op", func(m *msgr.MessageData) { binary.LittleEndian.PutUint16(m.Front[62:64], 0x2201) }, ErrOperation},
+		{"unknown op", func(m *msgr.MessageData) { binary.LittleEndian.PutUint16(m.Front[62:64], 0x2301) }, ErrOperation},
 		{"payload length", func(m *msgr.MessageData) { binary.LittleEndian.PutUint32(m.Front[96:100], math.MaxUint32) }, wire.ErrLimit},
 		{"redirect compat", func(m *msgr.MessageData) { m.Front[171] = 2 }, wire.ErrVersion},
 	} {
