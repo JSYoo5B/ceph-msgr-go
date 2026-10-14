@@ -299,6 +299,12 @@ BlueStore 구성도 전체 12개 시험, mutation/guard 25개 및 mixed vector 5
 검사했으며, 정리 후 소유 컨테이너 10개와 network 소멸을 확인했다.
 Host/device 전원 장애 검증은 아니다.
 
+같은 객체·OSD 연결에 16개씩 동시 제출하는 별도 compound mutation 시험도
+CRC/AES/AES·IPv4·Darwin arm64 host relay의 3-BlueStore 구성에서 통과했다.
+독립 WRITE extent와 두 APPEND로 구성한 binary record의 원자성, 유일 TID·
+version·ONDISK 및 native bytes/mtime을 비교했다. Append 완료 순서는
+가정하지 않고 record 집합을 비교하며, 자동 재실행은 없다.
+
 다만 nonempty WRITEFULL·APPEND·offset 0 WRITE 뒤 offset 0 READ/CMPEXT가
 앞선 payload 크기 이상을 검사하는 조합은 `ErrUnsupportedOSDOperation`으로
 송신 전에 거절한다. WRITEFULL 뒤 full READ는 실제 native checksum 실패를

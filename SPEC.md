@@ -44,6 +44,10 @@ host-relay 3-BlueStore profile도 같은 25개 사례·mixed vector 5개·실제
 SIGKILL을 포함한 12개 시험을 첫 실행에 통과했다. 이는 해당 profile의 로컬
 검증이며 현재 원격 CI 전체 통과 판정이 아니다.
 Native payload encoder, 후속 event 계약과 넓은 구성·내구성 범위는 남았다.
+같은 CRC/AES/AES host-relay 3-BlueStore 구성의 별도 동시성 시험에서는
+동일 객체·연결의 16개 동시 two-op WRITE와 16개 동시 two-op APPEND를
+native bytes·record 원자성·version·mtime·ONDISK·유일 TID와 대조해 통과했다.
+이 시험의 성공을 다른 구성이나 요청 간 실행 순서 보장으로 확대하지 않는다.
 O1은 읽기 opcode 벡터의 존재나 제한 profile의 통과로 전체 완료 처리하지 않는다.
 P2의 최소 metadata 사용에도 필수 capability/lease와 복구
 계약이 필요하므로 이를 P3로 미뤄 MDS 지원을 선언하지 않는다.

@@ -40,6 +40,43 @@ length 2), comparison wholly beyond EOF (reply length 0), EOF mismatch rollback,
 and EOF mismatch with FAILOK commit. The mismatch code and normalized extent
 are preserved independently from aggregate completion and committed readback.
 
+## Concurrent compound mutations
+
+`TestCephOSDMutationConcurrencyIntegration` passed on its first standalone
+native run in 3.17 seconds, on `819781e` plus the new test. The pinned
+CRC/AES/AES IPv4 three-BlueStore/min_size 2 fixture ran the CGO=0 Darwin arm64
+client through the host relay. This is an additional test, not a rerun of the
+twelve-test profile above.
+
+Each of two subcases submits sixteen concurrent two-operation requests on
+one explicitly targeted OSD connection and the same object. Independent
+WRITE extents reconstruct sixteen tagged binary records; two APPENDs within
+each compound request must remain one complete record. The append order is
+unspecified, so native readback checks the record multiset for missing,
+duplicated or torn records. Both subcases compare ONDISK completion, per-op
+codes/extents/results, unique submission TIDs and user versions, final native
+bytes/version/nanosecond mtime, and a later Go read. TIDs are compared as a
+set between sequential before/after requests, never in goroutine completion
+order. The two subcases completed 32 compound requests/64 mutation ops;
+write TIDs were 2–17 with native final version 18, and append TIDs were 20–35
+with native final version 35.
+
+Evidence: `/tmp/ceph-osd-concurrency-crc-aes.log`,
+`/tmp/ceph-osd-concurrency-crc-aes-ownership.json`, and
+`/tmp/ceph-osd-concurrency-crc-aes-cleanup.log`. Independent inspection found
+all ten owned containers and the owned network removed. This adds no product
+routing, placement, native dependency or mutation replay. The normal OSD
+selection includes the new test; the other CI profiles need their own result.
+
+```sh
+CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
+CEPH_MSGR_TEST_OSD_REPLICAS=3 CEPH_MSGR_TEST_RUNTIME=host \
+CEPH_MSGR_TEST_CONNECTION_MODE=crc CEPH_MSGR_TEST_KEY_TYPE=aes \
+CEPH_MSGR_TEST_SERVICE_CIPHER=aes CEPH_MSGR_TEST_IP_FAMILY=4 \
+CEPH_MSGR_TEST_RUN='^TestCephOSDMutationConcurrencyIntegration$' \
+sh integration/run.sh
+```
+
 The lost-reply test sends one append and blocks receive bytes only after OSD
 authentication. An independent native read proves execution before cancellation.
 The canceled call retains OutcomeUnknownError and local submission identity.
