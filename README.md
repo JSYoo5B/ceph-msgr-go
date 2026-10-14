@@ -1042,7 +1042,7 @@ MGR 장애 주입 119회와 context 상태 조회 5,609,455회를 처리했다.
 실제 `auth wipe-rotating-service-keys`를 두 번 실행해, 예정된 갱신보다
 일찍 새 ticket을 받고 global ID와 기존 MGR 연결을 유지했다. 개발 fixture는
 새 CLI process의 MGR 조회를 준비 확인으로 사용한 뒤,
-native client의 최초 MGR 연결을 검증한다. 이 native 연결의 인증 거절을
+Go client의 최초 MGR 연결을 검증한다. 이 Go 연결의 인증 거절을
 재시도하지 않는다. Linux arm64·CGO=0의 aes256k·IPv6와 aes·IPv4에서 통과했다.
 이전 제품 소스 `23148f5`는 같은 시험에서 조기 갱신을 하지 못해 실패했다.
 이 두 차례 교체와 큰 MON 응답은 Darwin arm64·IPv4·aes256k의 실제 host
@@ -1076,6 +1076,15 @@ ticket-info bad magic을 기록했다. 이 관측은 Go ticket 발급과 MGR 검
 [fixture 질문과 추가 근거](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6174955026)를
 남겼으며, 이후 `d39cc93`의 CI 41개 통과도 원인이 해결됐다는 뜻으로
 처리하지 않는다. 최초 인증이나 wipe를 재시도해 실패를 숨기지 않는다.
+
+시험은 `cephmsgr/integration_auth_epoch_test.go`에 두어 비공개 cached 상태를
+함께 관측한다. 각 client의 MON dial 이력, 동일 lock 구간의 map/auth epoch와
+MGR identity, service SecretID·validity 및 교체 전/후 blob 일치 여부를
+기록한다. Blob·key·proof bytes는 출력하지 않으며 held/cold 이력도 분리한다.
+이 정보는 관측 시점의 저장 상태이며 정확한 발급·설치 이벤트나 이후
+authorizer가 선택한 ticket, native daemon key 세대의 증거는 아니다.
+AES/AES·IPv4·120초 ticket·Linux arm64 container의 새 독립 fixture에서
+두 cycle이 12.29초에 통과했다. 간헐 실패의 원인을 고쳤다는 주장은 아니다.
 
 준비 확인을 보강한 `1e4cfda`의
 [GitHub CI](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/37024308483)는
