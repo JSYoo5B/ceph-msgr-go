@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr:
+	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetValuesByKeys:
 		return true
 	}
 	return false
@@ -32,6 +32,21 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			return 0, 0, wire.ErrLimit
 		}
 		if op.Code != AssertVersion && op.Version != 0 {
+			return 0, 0, ErrRequest
+		}
+		if IsOmapOperation(op.Code) {
+			mode, inputBytes, err := validateOmapOperation(op, limit)
+			if err != nil {
+				return 0, 0, err
+			}
+			if inputBytes > uint64(limit)-total {
+				return 0, 0, wire.ErrLimit
+			}
+			flags |= mode
+			total += inputBytes
+			continue
+		}
+		if !omapInputEmpty(op.Omap) {
 			return 0, 0, ErrRequest
 		}
 		if IsXattrOperation(op.Code) {

@@ -9,34 +9,37 @@ import "errors"
 // messages/MOSDOpReply.h, osd/osd_types.{h,cc}, and include/rados.h.
 // Those sources carry LGPL-2.1 notices; no native implementation is copied.
 const (
-	RequestMessage uint16 = 42
-	ReplyMessage   uint16 = 43
-	Read           uint16 = 0x1201
-	Stat           uint16 = 0x1202
-	AssertVersion  uint16 = 0x1208
-	CompareExtent  uint16 = 0x1220
-	GetXattr       uint16 = 0x1301
-	GetXattrs      uint16 = 0x1302
-	CompareXattr   uint16 = 0x1303
-	SetXattr       uint16 = 0x2301
-	RemoveXattr    uint16 = 0x2304
-	Write          uint16 = 0x2201
-	WriteFull      uint16 = 0x2202
-	Truncate       uint16 = 0x2203
-	Zero           uint16 = 0x2204
-	Delete         uint16 = 0x2205
-	Append         uint16 = 0x2206
-	Create         uint16 = 0x220d
-	OpExclusive    uint32 = 1
-	OpFailOK       uint32 = 2
-	FlagAck        uint64 = 0x0001
-	FlagOnNVRAM    uint64 = 0x0002
-	FlagOnDisk     uint64 = 0x0004
-	FlagRead       uint64 = 0x0010
-	FlagWrite      uint64 = 0x0020
-	FlagReturnVec  uint64 = 0x4000000
-	NoSnap         uint64 = ^uint64(0) - 1
-	MaxOperations         = 64
+	RequestMessage      uint16 = 42
+	ReplyMessage        uint16 = 43
+	Read                uint16 = 0x1201
+	Stat                uint16 = 0x1202
+	AssertVersion       uint16 = 0x1208
+	CompareExtent       uint16 = 0x1220
+	OmapGetKeys         uint16 = 0x1211
+	OmapGetValues       uint16 = 0x1212
+	OmapGetValuesByKeys uint16 = 0x1214
+	GetXattr            uint16 = 0x1301
+	GetXattrs           uint16 = 0x1302
+	CompareXattr        uint16 = 0x1303
+	SetXattr            uint16 = 0x2301
+	RemoveXattr         uint16 = 0x2304
+	Write               uint16 = 0x2201
+	WriteFull           uint16 = 0x2202
+	Truncate            uint16 = 0x2203
+	Zero                uint16 = 0x2204
+	Delete              uint16 = 0x2205
+	Append              uint16 = 0x2206
+	Create              uint16 = 0x220d
+	OpExclusive         uint32 = 1
+	OpFailOK            uint32 = 2
+	FlagAck             uint64 = 0x0001
+	FlagOnNVRAM         uint64 = 0x0002
+	FlagOnDisk          uint64 = 0x0004
+	FlagRead            uint64 = 0x0010
+	FlagWrite           uint64 = 0x0020
+	FlagReturnVec       uint64 = 0x4000000
+	NoSnap              uint64 = ^uint64(0) - 1
+	MaxOperations              = 64
 )
 
 const (
@@ -67,6 +70,7 @@ type PG struct {
 }
 
 type Operation struct {
+	Omap           OmapInput
 	Xattr          XattrInput
 	Data           []byte
 	Version        uint64

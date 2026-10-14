@@ -232,6 +232,7 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 Replicated pool의 현재 객체에 대한 stat과 양의 길이 read, write/writefull,
 append, truncate, zero, create/delete와 version/extent 조건을 제공한다.
 제한 xattr GET/GETALL·STRING 비교·SET/RM도 같은 ordered vector에서 제공한다.
+OMAP은 제한된 단일 페이지 GETKEYS/GETVALS와 지정 키 BYKEYS 읽기를 제공한다.
 Stat bytes는 size와 mtime의 wire 출력이며 filesystem API로 변환하지 않는다.
 Aggregate 서버 code와 operation별 result는 서로 다를 수 있다. 예를 들어
 존재하지 않는 객체는 aggregate -2와 실행되지 않은 stat의 result 0을 반환한다.
@@ -292,7 +293,38 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 
 현재 SET/RM 뒤 같은 vector의 GET/GETALL/CMP는 staged-read 의미를 보장하지
 못해 송신 전에 거절한다. 비교를 먼저 놓는 순서가 지원된다. U64 비교,
-bulk SET/RESET, omap·class·snapshot은 별도 미구현 단계다.
+bulk SET/RESET, OMAP header·비교·쓰기, class·snapshot은 별도 미구현 단계다.
+
+OMAP 읽기는 `Omap` 입력을 쓰며 extent·Version·Data·Xattr는 0이다.
+`StartAfter`는 exclusive cursor, `Prefix`는 GETVALS의 byte prefix이며
+`MaxEntries`가 0인 페이지도 원본 more 상태를 반환한다. `Keys`는 BYKEYS에만
+쓰고 중복을 거절하며 복사본을 native 순서로 정렬한다. 문자열은 원본 wire
+bytes로 보존한다. `MaxOutputBytes`는 local 응답 제한이며 서버 byte cap이나
+자동 페이지 이동을 요청하지 않는다. GETKEYS/GETVALS의 raw `Data`는 native
+set/map 뒤 more bool을 포함하고 BYKEYS map에는 more가 없다.
+
+```go
+reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch, Object: object,
+    Operations: []cephmsgr.OSDOperation{
+        {Code: cephmsgr.OSDGetOmapValues,
+         Omap: cephmsgr.OSDOmapInput{
+             StartAfter: cursor, Prefix: prefix, MaxEntries: 32,
+             MaxOutputBytes: 64 << 10,
+         }},
+        {Code: cephmsgr.OSDGetOmapValuesByKeys,
+         Omap: cephmsgr.OSDOmapInput{
+             Keys: []string{"version", "tag"}, MaxOutputBytes: 4096,
+         }},
+    },
+})
+```
+
+응답의 `Length`는 native가 echo한 encoded input byte 수이고, 출력 byte 수는
+`PayloadLength`다. 누락된 키와 빈 값은 원본 map에서 구분한다. 출력 해석,
+다음 cursor 선택과 여러 페이지의 일관성은 사용 레이어가 맡는다.
+[OMAP 계약과 검증 범위](internal/osd/OMAP_CONTRACT.md)에 native C API의
+NUL cursor/prefix 제한과 header·비교·쓰기 미지원 범위를 기록했다.
 
 `ModificationTime`의 0은 그대로 전송하며 client 시각으로 대체하지 않는다.
 쓰기 성공은 서버의 `OSDReplyOnDisk`를 요구한다. 이것은 저장소가 보고한
@@ -359,7 +391,16 @@ encoder·별도 decoder와 Go wire bytes를 비교했다. Secure/aes256k·IPv4
 3-BlueStore의 Go/native client 대조에서는 42개 vector와 mixed GET/READ/STAT,
 총 43개 하위 시험이 통과했다. Binary·빈 값·non-UTF8 이름, 여섯 STRING
 비교·양수 per-op 결과·알려진 거절·FAILOK와 원본 bytes/mtime 복구를 확인했다.
-이 결과를 xattr crash·응답 손실·모든 namespace/configuration으로 확대하지 않는다.
+이후 APPEND+xattr 응답 손실·Close·primary SIGKILL, namespace 격리,
+서버 이름/값 제한과 readonly EPERM을 별도 시험했다. 이 검증을 포함한
+`bc2b9df` CI는 42개 작업 모두 통과했고 9개 OSD profile의 실제 시험을 확인했다.
+광범위한 pool/EC·snapshot·hardware 전원 장애와 미지원 metadata는 별도 범위다.
+
+[제한 OMAP 읽기 검증](integration/fixture/OSD_OMAP_VALIDATION.md)은 fresh
+native encoder/별도 decoder의 5개 message vector와 Go bytes를 대조하고,
+CRC/AES host 3 BlueStore의 23개 실서버 Go/native 사례를 통과했다.
+Secure/aes256k container 3 BlueStore의 CGO0 전체 OSD 시험도 22개 통과했다.
+CI의 OMAP profile matrix는 해당 커밋의 독립 결과가 필요하다.
 
 응답 대기 중 OSD 연결을 `Close`하는 별도 실서버 시험은 CRC/AES/AES·IPv4
 3-BlueStore host relay에서 통과했다. Native read가 단일 append 실행을

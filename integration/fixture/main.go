@@ -42,6 +42,9 @@ func command(ctx context.Context, args []string) (result error) {
 	if len(args) != 0 && args[0] == "encode-osd-xattrs" {
 		return runNativeEncoder(ctx, args[1:], xattrEncoderSpec)
 	}
+	if len(args) != 0 && args[0] == "encode-osd-omap" {
+		return runNativeEncoder(ctx, args[1:], omapEncoderSpec)
+	}
 	if len(args) == 0 || (args[0] != "run" && args[0] != "serve") {
 		return errors.New("usage: fixture-controller run|serve -project PATH [-output PATH] [-diagnostics PATH]")
 	}

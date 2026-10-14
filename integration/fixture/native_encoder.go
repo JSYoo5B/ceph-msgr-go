@@ -38,6 +38,11 @@ var xattrEncoderSpec = nativeEncoderSpec{
 	names: []string{"xattr-native-request-v6-all", "xattr-native-reply-v6-read-mixed", "xattr-native-reply-v6-cmp-false", "xattr-native-reply-v6-set-refused", "xattr-native-reply-v6-rm-refused"},
 }
 
+var omapEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-omap", wrapper: "osd_omap_native_encoder.cc", driver: "osd_omap_native_encoder.py",
+	names: []string{"omap-native-request-v6-read-all", "omap-native-reply-v6-read-mixed", "omap-native-reply-v6-keys-final", "omap-native-reply-v6-vals-empty", "omap-native-reply-v6-bykeys-empty-value"},
+}
+
 // The offline encoder is a development oracle. It starts no Ceph daemon and
 // installs native build packages only in its owned disposable container.
 func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
@@ -114,14 +119,9 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	if err != nil {
 		return err
 	}
-	files := []string{spec.driver, spec.wrapper}
-	// A shared SDK cache may retain both CMake targets. Both original sources
-	// must be present during configuration even when only one target is built.
-	if spec.command == xattrEncoderSpec.command {
-		files = append(files, mutationEncoderSpec.wrapper)
-	} else {
-		files = append(files, xattrEncoderSpec.wrapper)
-	}
+	// A shared SDK cache can retain every oracle target. Supply all original
+	// wrapper sources during configuration, then build only the selected target.
+	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper}
 	for _, name := range files {
 		if err := target.CopyFileToContainer(build, filepath.Join(root, "tools", name), "/tmp/"+name, 0600); err != nil {
 			return err
@@ -185,8 +185,8 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 	if proof["ceph_commit"] != nativeEncoderCommit || proof["image"] != profileDefaultImage || proof["native_payload_encoder_verified"] != true || proof["native_message_header_verified"] != true || proof["wrapper_sha256"] != wrapperHash {
 		return nil, errors.New("native proof lacks the exact source, image, wrapper or successful payload/header encoding receipt")
 	}
-	if spec.command == xattrEncoderSpec.command && proof["native_payload_decoder_verified"] != true {
-		return nil, errors.New("native xattr proof lacks its independent decoder receipt")
+	if spec.command != mutationEncoderSpec.command && proof["native_payload_decoder_verified"] != true {
+		return nil, errors.New("native proof lacks its independent decoder receipt")
 	}
 	fixtures, ok := proof["fixtures"].(map[string]any)
 	if !ok || len(fixtures) != len(spec.names) {

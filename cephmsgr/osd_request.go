@@ -60,7 +60,9 @@ const (
 // accepts ExclusiveCreate. Snapshot/truncate-sequence variants are unsupported.
 // Xattr is the active input union for Get/GetAll/Compare/Set/RemoveXattr;
 // their extent and Version fields are zero. Data holds the SET/CMP bytes.
-// Caller must not mutate the vector or Data until Request returns.
+// Omap is the active input for GetOmapKeys/Values/ValuesByKeys, with zero
+// extent, Version, Data and Xattr. Its wire input length is derived locally.
+// Caller must not mutate the vector, Data or Omap.Keys until Request returns.
 type OSDOperation struct {
 	Code           OSDOpcode
 	Flags          OSDOperationFlags
@@ -68,6 +70,7 @@ type OSDOperation struct {
 	Data           []byte
 	Version        uint64
 	Xattr          OSDXattrInput
+	Omap           OSDOmapInput
 }
 
 // OSDTime is Tentacle's raw utime_t. Zero preserves the server's zero-mtime
@@ -104,6 +107,8 @@ type OSDVersion struct {
 // Stat's bytes describe size and mtime; this layer does not convert them into a
 // filesystem-style object API. The caller can interpret the wire data.
 // Xattr keeps attribute lengths/comparison fields separate from extents.
+// For OMAP reads, Length echoes the encoded input byte length. Data retains
+// the raw collection framing, including the page's more suffix when present.
 type OSDOperationResult struct {
 	Code                         OSDOpcode
 	Flags                        uint32
@@ -217,7 +222,7 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 		Locator:    osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
 		Operations: make([]osd.Operation, len(request.Operations))}
 	for i, op := range request.Operations {
-		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr)}
+		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr), Omap: omapWireInput(op.Omap)}
 	}
 	m, err := osd.EncodeRequest(input, o.features, c.options.MaxFrameSize)
 	if err != nil {
@@ -286,6 +291,11 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		}
 		success := !redirect && reply.Result >= 0 && op.Result >= 0
 		switch requested.Code {
+		case osd.OmapGetKeys, osd.OmapGetValues, osd.OmapGetValuesByKeys:
+			if err := osd.ValidateOmapReply(requested, op, success); err != nil {
+				return err
+			}
+			continue
 		case osd.GetXattr, osd.GetXattrs, osd.CompareXattr, osd.SetXattr, osd.RemoveXattr:
 			if err := osd.ValidateXattrReply(requested, op, success); err != nil {
 				return err
