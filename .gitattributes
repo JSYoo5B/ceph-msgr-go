@@ -1,3 +1,5 @@
 # Development fixtures execute inside Linux even when checked out on Windows.
 *.sh text eol=lf
 *.py text eol=lf
+# Native proof provenance hashes the exact checked-out source bytes.
+tools/osd_mutation_native_encoder.cc text eol=lf
