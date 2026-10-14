@@ -27,13 +27,14 @@ import (
 // oracle/test client and the IPC directory. No daemon entrypoint is replaced.
 type fixtureCluster struct {
 	testcontainers.Container
-	cluster    *ceph.Container
-	profile    profile
-	cancel     context.CancelFunc
-	done       chan struct{}
-	mu         sync.Mutex
-	controlErr error
-	pauses     map[string]*ceph.ContainerPause
+	cluster     *ceph.Container
+	profile     profile
+	cancel      context.CancelFunc
+	done        chan struct{}
+	mu          sync.Mutex
+	controlErr  error
+	pauses      map[string]*ceph.ContainerPause
+	xattrLimits *xattrLimitsScope
 }
 
 func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
@@ -46,6 +47,9 @@ func (c *fixtureCluster) Terminate(ctx context.Context, opts ...testcontainers.T
 	// Restore paused containers before requesting their orderly cleanup.
 	for _, pause := range c.pauses {
 		errs = append(errs, pause.Resume(ctx))
+	}
+	if c.xattrLimits != nil {
+		errs = append(errs, c.xattrLimits.Restore(ctx))
 	}
 	if c.Container != nil {
 		errs = append(errs, c.Container.Terminate(ctx, opts...))

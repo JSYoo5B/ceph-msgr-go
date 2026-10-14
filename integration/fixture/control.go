@@ -260,6 +260,48 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "limit-osd-xattr")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" {
+			return errors.New("invalid scoped xattr limit request")
+		}
+		var scope *xattrLimitsScope
+		switch fields[1] {
+		case "apply":
+			if c.xattrLimits != nil {
+				return errors.New("xattr limit scope already owned")
+			}
+			c.xattrLimits, err = beginXattrLimits(ctx, c.cluster)
+			scope = c.xattrLimits
+		case "restore":
+			if c.xattrLimits == nil {
+				return errors.New("xattr limit scope is not owned")
+			}
+			scope = c.xattrLimits
+			err = scope.Restore(ctx)
+			if err == nil {
+				c.xattrLimits = nil
+			}
+		default:
+			return errors.New("invalid xattr limit action")
+		}
+		if scope != nil {
+			data, encodeErr := json.Marshal(scope.Receipt())
+			if encodeErr == nil {
+				encodeErr = os.WriteFile(filepath.Join(out, "osd-xattr-limits.json"), data, 0600)
+			}
+			err = errors.Join(err, encodeErr)
+		}
+		if err != nil {
+			return fmt.Errorf("scoped native xattr limits: %w", err)
+		}
+		if err = publishAck(out, "osd-xattr-limit."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-osd-xattr-native")
 	if err != nil {
 		return err

@@ -227,9 +227,39 @@ and cleanup, so it is not a persisted snapshot history. Reproduce with
 AES256K three-BlueStore container profile. This verifies daemon SIGKILL;
 host/device power loss and media durability remain unverified.
 
-Configured server name/value limits, permission refusals, namespace isolation,
-numeric CMP, omap/class/snapshot and broad pool/EC profiles remain incomplete.
-The P1 O2 milestone and final environment are not complete.
+## Configured server limits and rollback
+
+`TestCephOSDXattrServerLimitsIntegration` passed its first native run, six of
+six cases in 7.20s, on CRC/AES entity/service, IPv4, Darwin arm64 host relay,
+three BlueStore replicas/min2. Public v0.2.0 `TemporaryConfig` handles own
+exact prior MON DB entry/absence and restore without overriding outside
+changes. Bounded `AdminSocket(config get)` gates verify both selected effective
+options on every owned OSD, covering the actual object and native mirror even
+if their placement differs. Receipts bind each daemon to its owned container.
+Only these two numeric options and selected prior entries are retained.
+
+Effective `osd_max_attr_size`/`osd_max_attr_name_len` were 0/100 on all three
+OSDs, became 32/32, and returned to 0/100. Both prior central entries were
+absent and were removed on restore. Values and names of length 32 committed
+with ONDISK; a 33-byte value returned native/Go `-EFBIG` (-27), and a 33-byte
+name returned `-ENAMETOOLONG` (-36). Each refusal also followed an earlier
+staged SET: complete bytes, attrs, version and mtime remained unchanged,
+proving rollback. Go preserves the aggregate and raw per-op errors as known
+server refusals; a negative receipt has no mandatory ONDISK requirement.
+Native C callbacks still do not expose raw SET per-op results.
+
+Independent cleanup confirmed all ten containers and the network absent.
+Evidence, selected limits receipt and frozen source/profile/cleanup receipts
+are retained at `/tmp/ceph-xattr-limits-crc-aes-20261015-first`. Reproduce with
+`CEPH_MSGR_TEST_RUN='^TestCephOSDXattrServerLimitsIntegration$'` and the CRC/AES
+three-BlueStore host profile. Meaningful fixture unit tests cover every-owned
+daemon gates, partial uncertain config application, restoration conflict,
+reverse cleanup, cancellation and selected bounded JSON. Their race/vet
+checks and whole fixture CGO0 checks passed.
+
+Permission refusals, namespace isolation, numeric CMP, omap/class/snapshot
+and broad pool/EC profiles remain incomplete. The P1 O2 milestone and final
+environment are not complete.
 
 Reproduce the Go/native profile with
 `CEPH_MSGR_TEST_RUN='^TestCephOSDXattrsIntegration$'` and the same fixture flags

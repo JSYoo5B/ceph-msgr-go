@@ -204,7 +204,7 @@ fixture and explicit routing/native stat/read controls:
 | --- | --- | --- |
 | Binary values and empty value | NUL/0xff/newline payload; length-zero vs removed; set/get/list exact bytes and no unrelated object-content change | Limited Go/native profile and fresh wire vectors passed |
 | Names and namespace | Normal, leading underscore, non-UTF-8 names; local rejection of empty/NUL names before TID/send; different object namespace isolation | Byte-name profile and pre-send rejection passed; namespace isolation pending; no unsafe alias mutation performed |
-| Length limits | Configured name limit and value-size cap yield native `-ENAMETOOLONG`/`-EFBIG`; local frame/budget limits reject before send, received oversize retains uncertainty | Recipe/oracle pending |
+| Length limits | Configured name limit and value-size cap yield native `-ENAMETOOLONG`/`-EFBIG`; local frame/budget limits reject before send, received oversize retains uncertainty | CRC/AES three-BlueStore six-case native/Go 32/33 boundaries and staged-SET rollback passed; all-owned effective settings and exact prior entry/absence restored with public v0.2.0 handles |
 | Compare operators | Caller-left asymmetric GT/LT, all six ops, binary/empty STRING, true positive result, false `-ECANCELED`; missing attr vs missing object | Go/native matrix 36 cases and missing identities passed; actual Go per-op +1 preserved, C callback still unavailable |
 | U64 followup | LE operand 0/max; stored decimal, empty/missing, prefix, bad signs/whitespace/NUL, overflow; invalid input length/mode locally rejected | Unsupported; separate oracle prerequisite |
 | Atomicity and FAILOK | Compare-before-SET/RM success; false guard after an earlier staged mutation restores pre-state; FAILOK permits later writes and retains per-op failure | Go/native guard-before-write and FAILOK passed; staged SET-before-CMP remains rejected and native-only rollback evidence |
@@ -225,8 +225,9 @@ attr/object identities and mixed GET/GETALL/READ/STAT. One sent APPEND+SET
 withheld-reply/Close test independently observed execution, unknown local
 completion and fresh-session no-replay. A separate secure AES256K
 three-BlueStore APPEND+SET+RM vector survived actual-primary SIGKILL with
-unchanged native/Go metadata on two replicas. Server-configured
-limits/permissions and namespace matrices remain pending;
+unchanged native/Go metadata on two replicas. Public scoped configuration
+and all-owned effective gates verified name/value limits and rollback after
+an earlier SET. Permissions and namespace matrices remain pending;
 the OSD feature mask has not widened. Existing O1 results cannot be relabeled
 as this new matrix.
 Broader pool/EC/snapshot and staged-read semantics remain excluded
