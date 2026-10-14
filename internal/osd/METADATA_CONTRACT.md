@@ -209,7 +209,7 @@ fixture and explicit routing/native stat/read controls:
 | U64 followup | LE operand 0/max; stored decimal, empty/missing, prefix, bad signs/whitespace/NUL, overflow; invalid input length/mode locally rejected | Unsupported; separate oracle prerequisite |
 | Atomicity and FAILOK | Compare-before-SET/RM success; false guard after an earlier staged mutation restores pre-state; FAILOK permits later writes and retains per-op failure | Go/native guard-before-write and FAILOK passed; staged SET-before-CMP remains rejected and native-only rollback evidence |
 | Mixed requests | Xattr GET+READ+STAT output boundaries; SET/RM+data mutation followed by independent fresh reads/stat2; staged xattr reads characterized separately | Fresh vectors and GET/GETALL/READ/STAT passed; one APPEND+SET actual native execution/readback passed; staged xattr reads pending |
-| Refusal and uncertainty | Permission rejection vs missing object/attr; sent append+xattr vector loses response, retains identity/outcome, fresh session never replays it | CRC/AES three-BlueStore APPEND+SET receive withholding/Close passed; exact local identity/unknown outcome and fresh native/Go no-replay observed; permission refusal pending |
+| Refusal and uncertainty | Permission rejection vs missing object/attr; sent append+xattr vector loses response, retains identity/outcome, fresh session never replays it | CRC/AES three-BlueStore APPEND+SET receive withholding/Close passed; CRC/AES256K single-MemStore readonly GET/GETALL and known SET/RM EPERM passed with unchanged native state; raw Go per-op0 and echoed flags retained, same session remains usable |
 | Completion and recovery | SET/RM ONDISK then native inventory/version/mtime after primary SIGKILL on BlueStore; read-only result has no durability claim | Secure AES256K three-BlueStore APPEND+SET+RM ONDISK followed by actual-primary SIGKILL and two-replica native/Go inventory/bytes/version/mtime passed; hardware power loss unverified |
 
 The subsequent native-only oracle passed binary/empty/prefixed inventory,
@@ -227,7 +227,9 @@ completion and fresh-session no-replay. A separate secure AES256K
 three-BlueStore APPEND+SET+RM vector survived actual-primary SIGKILL with
 unchanged native/Go metadata on two replicas. Public scoped configuration
 and all-owned effective gates verified name/value limits and rollback after
-an earlier SET. Permissions and namespace matrices remain pending;
+an earlier SET. Readonly native/Go SET/RM return EPERM with unchanged state;
+their raw Go per-op0 and echoed ONDISK do not establish execution. Namespace
+matrices remain pending;
 the OSD feature mask has not widened. Existing O1 results cannot be relabeled
 as this new matrix.
 Broader pool/EC/snapshot and staged-read semantics remain excluded

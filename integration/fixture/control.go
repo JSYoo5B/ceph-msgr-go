@@ -253,7 +253,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		if len(fields) != 2 || fields[1] != "compare" || c.profile.osd != "1" {
 			return errors.New("invalid mutation oracle request")
 		}
-		if err = c.exec(ctx, "python3", "/out/osd_mutation_oracle.py", "/tmp/ceph-msgr-test", "/out"); err != nil {
+		if err = c.runMutationCommand(ctx, out); err != nil {
 			return err
 		}
 		if err = publishAck(out, "osd-mutation-verify."+fields[0]); err != nil {
@@ -520,10 +520,20 @@ func (c *fixtureCluster) runXattrCommand(ctx context.Context, out string, compar
 		receipt = "osd-xattr-command.json"
 	}
 	args = append(args, "/tmp/ceph-msgr-test", "/out")
+	return c.runOracleCommand(ctx, out, args, receipt, "native xattr oracle")
+}
+
+func (c *fixtureCluster) runMutationCommand(ctx context.Context, out string) error {
+	return c.runOracleCommand(ctx, out,
+		[]string{"python3", "/out/osd_mutation_oracle.py", "/tmp/ceph-msgr-test", "/out"},
+		"osd-mutation-command.json", "native mutation oracle")
+}
+
+func (c *fixtureCluster) runOracleCommand(ctx context.Context, out string, args []string, receipt, label string) error {
 	result, runErr := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{
 		Argv:    args,
 		Timeout: 80 * time.Second, MaxStdout: 64 << 10, MaxStderr: 16 << 10,
-		Label: "native xattr oracle",
+		Label: label,
 	})
 	// This oracle contains only disposable object data and ordinary
 	// native API errors. Preserve its bounded first-failure traceback rather
@@ -536,7 +546,7 @@ func (c *fixtureCluster) runXattrCommand(ctx context.Context, out string, compar
 		return errors.Join(runErr, err)
 	}
 	if !result.Complete() || result.ExitCode != 0 {
-		return fmt.Errorf("native xattr oracle exit=%d complete=%t; see %s", result.ExitCode, result.Complete(), receipt)
+		return fmt.Errorf("%s exit=%d complete=%t; see %s", label, result.ExitCode, result.Complete(), receipt)
 	}
 	return nil
 }

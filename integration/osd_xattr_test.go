@@ -48,6 +48,8 @@ func (a xattrNativeAction) MarshalJSON() ([]byte, error) {
 
 type xattrNativeInput struct {
 	Object     string              `json:"object,omitempty"`
+	Namespace  string              `json:"namespace,omitempty"`
+	ClientRole string              `json:"client_role,omitempty"`
 	Compare    bool                `json:"compare"`
 	Exists     bool                `json:"exists"`
 	Kind       string              `json:"kind"`
@@ -68,11 +70,13 @@ type xattrNativeResult struct {
 		ID     int64  `json:"pool_id"`
 		Object string `json:"object"`
 	} `json:"fixture"`
-	Object string              `json:"object"`
-	Actual nativeXattrSnapshot `json:"actual"`
-	Before nativeXattrSnapshot `json:"before"`
-	After  nativeXattrSnapshot `json:"after"`
-	Vector struct {
+	Object         string              `json:"object"`
+	Namespace      string              `json:"namespace"`
+	ClientIdentity string              `json:"client_identity"`
+	Actual         nativeXattrSnapshot `json:"actual"`
+	Before         nativeXattrSnapshot `json:"before"`
+	After          nativeXattrSnapshot `json:"after"`
+	Vector         struct {
 		Code          int32 `json:"code"`
 		RawComparison bool  `json:"raw_cmp_per_op_result_available"`
 		Lists         []struct {
@@ -132,8 +136,11 @@ func nativeXattrCompare(t *testing.T, ctx context.Context, oracle osdFixtureOrac
 	if object == "" {
 		object = oracle.Name
 	}
-	if result.Schema != 1 || result.Commit != "7f793731f1b39eb4f465e960113d2363c311b964" || result.Fixture.ID != oracle.Pool || result.Fixture.Object != oracle.Name || result.Object != object || !strings.Contains(result.DaemonVersion, result.Commit) || !strings.Contains(result.DaemonVersion, "20.2.4") {
+	if result.Schema != 1 || result.Commit != "7f793731f1b39eb4f465e960113d2363c311b964" || result.Fixture.ID != oracle.Pool || result.Fixture.Object != oracle.Name || result.Object != object || result.Namespace != input.Namespace || !strings.Contains(result.DaemonVersion, result.Commit) || !strings.Contains(result.DaemonVersion, "20.2.4") {
 		t.Fatal("native xattr receipt differs from selected fixture/source", result)
+	}
+	if input.ClientRole == "readonly" && result.ClientIdentity != "client.readonly" {
+		t.Fatal("native xattr receipt differs from selected read-only identity", result.ClientIdentity)
 	}
 	if result.Scope.RawComparison || result.Scope.RawMutation || result.Scope.CompoundGet || result.Vector.RawComparison {
 		t.Fatal("native C API invented unavailable raw results", result.Scope)

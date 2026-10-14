@@ -146,6 +146,59 @@ class XattrAdapterTests(unittest.TestCase):
         self.assertFalse(result["cleanup"]["mirror_touched"])
         self.assertNotIn("vector", result)
 
+    def test_restricted_vector_uses_separate_io_while_test_io_seeds_and_cleans(self):
+        native, events = self.comparison_native()
+        request = xattr.validate_request(self.comparison_request(client_role="readonly"))
+        captured = []
+        rights = []
+        remove = native.lib.rados_remove
+        seed = native.lib.rados_write_op_operate2
+        native.lib.install("rados_remove", lambda io, name: rights.append(("remove", io.value)) or remove(io, name))
+        native.lib.install("rados_write_op_operate2", lambda op, io, *args: rights.append(("seed", io.value)) or seed(op, io, *args))
+        native.vector = lambda io, *args, **kwargs: captured.append(io.value) or {
+            "code": -13, "lists": [], "raw_cmp_per_op_result_available": False}
+        result = xattr.comparison_vector(native, C.c_void_p(11),
+                                         {"pool": "owned", "pool_id": 2, "object": "fixture"},
+                                         request, vector_io=C.c_void_p(22))
+        self.assertEqual(captured, [22])
+        self.assertEqual(rights, [("remove", 11), ("seed", 11), ("remove", 11)])
+        self.assertEqual(result["vector"]["code"], -13)
+        self.assertEqual(sum(e[0] == "seed" for e in events), 1)
+        self.assertEqual([e[1] for e in events if e[0] == "remove"],
+                         [b"owned-go-object-native-xattr-compare"] * 2)
+        self.assertTrue(result["cleanup"]["object_removed"])
+
+    def test_fixed_client_roles_select_only_fixture_entities_and_private_paths(self):
+        library = Library()
+        entities = []
+        paths = []
+        def create(cluster, ceph, entity, flags):
+            entities.append(entity)
+            cluster._obj.value = len(entities)
+            return 0
+        library.install("rados_create2", create)
+        library.install("rados_conf_read_file", lambda cluster, path: paths.append(path) or 0)
+        library.install("rados_conf_set", lambda cluster, key, path: paths.append((key, path)) or 0)
+        native = xattr.Native(library)
+        for role in ("test", "readonly"):
+            with xattr.client_connection(native, Path("/owned-private"), {"pool": "owned"}, role):
+                pass
+        self.assertEqual(entities, [b"client.test", b"client.readonly"])
+        self.assertEqual(paths, [b"/owned-private/ceph.conf", (b"keyring", b"/owned-private/keyring")] * 2)
+        self.assertEqual(sum(name == "rados_shutdown" for name, _ in library.calls), 2)
+        self.assertEqual(sum(name == "rados_ioctx_destroy" for name, _ in library.calls), 2)
+
+    def test_unknown_client_roles_rejected_before_loading_library_or_c_calls(self):
+        for role in (None, False, 1, "", "client.readonly", "admin", "readonly\0", ["test"]):
+            with self.subTest(role=role), self.assertRaisesRegex(ValueError, "client_role"):
+                xattr.validate_request(self.comparison_request(client_role=role))
+        library = Library()
+        native = xattr.Native(library)
+        with self.assertRaisesRegex(ValueError, "client_role"):
+            with xattr.client_connection(native, Path("/owned-private"), {"pool": "owned"}, "admin"):
+                self.fail("invalid role admitted")
+        self.assertEqual(library.calls, [])
+
     def test_comparison_failure_cleans_only_mirror_without_masking_first_error(self):
         native, events = self.comparison_native(cleanup_code=-5, vector_error="first vector failure")
         with self.assertRaisesRegex(RuntimeError, "first vector failure"):
@@ -163,6 +216,7 @@ class XattrAdapterTests(unittest.TestCase):
                     self.comparison_request(nanos=10**9),
                     self.comparison_request(seconds=1 << 32),
                     self.comparison_request(client_name="client.admin"),
+                    self.comparison_request(client_role="admin"),
                     self.comparison_request(operations=[{"op": "set", "name": xattr.encode(b"n\0alias"), "value": ""}]),
                     self.comparison_request(operations=[{"op": "list", "flags": 4}]),
                     self.comparison_request(operations=[{"op": "list"}] * 65),

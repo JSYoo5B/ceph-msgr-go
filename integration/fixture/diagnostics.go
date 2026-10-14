@@ -27,6 +27,9 @@ var metadataFiles = []string{
 	"osd-xattr-native.json", "osd-xattr-native-command.json",
 	"osd-xattr-result.json", "osd-xattr-command.json",
 	"osd-xattr-limits.json",
+	"osd-mutation-command.json",
+	"osd-xattr-permission-list.json", "osd-xattr-permission-set.json", "osd-xattr-permission-remove.json",
+	"osd-xattr-permission-go-set.json", "osd-xattr-permission-go-remove.json",
 }
 
 func saveMetadata(out, diagnostics string) error {

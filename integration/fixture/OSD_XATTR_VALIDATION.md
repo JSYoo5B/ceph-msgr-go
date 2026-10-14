@@ -257,9 +257,43 @@ daemon gates, partial uncertain config application, restoration conflict,
 reverse cleanup, cancellation and selected bounded JSON. Their race/vet
 checks and whole fixture CGO0 checks passed.
 
-Permission refusals, namespace isolation, numeric CMP, omap/class/snapshot
-and broad pool/EC profiles remain incomplete. The P1 O2 milestone and final
-environment are not complete.
+## Read-only capabilities
+
+`TestCephOSDXattrPermissionsIntegration` passed a corrected fresh native run
+in 1.26s on CRC/AES256K entity/service, IPv4, Darwin arm64 host relay, single
+MemStore. The public fixture creates `client.readonly` with OSD allow-r.
+The native adapter admits only the fixed test/readonly identities; mirror
+setup, state observations and cleanup use client.test, while its single
+comparison vector uses client.readonly. No caller-controlled auth path or
+privileged retry is provided. Existing default client.test behavior is retained.
+
+Binary GET/GETALL and independent native readonly listing succeed. Native and
+Go SET/RM return aggregate EPERM (-1), while the actual Go per-op result is 0:
+capability admission rejects the vector before executing an operation.
+Raw flags `0x4000024` echo the request, including ONDISK, and do not establish
+execution or persistence of a refused write. The result remains a known
+`OSDError`, with raw reply/local identity and no OutcomeUnknown. The same
+readonly session continues reading at higher TIDs. Native bytes, full attrs,
+version and nanosecond mtime remain unchanged. Native C raw SET/RM callbacks
+remain unavailable; the actual Go wire result is separately retained.
+
+The first run failed a test expectation of command-style EACCES (-13) before
+the Go SET. Its generic native receipt was overwritten by cleanup, so the
+first exact native code cannot be reconstructed from that log. Pinned
+PrimaryLogPG capability admission uses EPERM; only the corrected fresh run
+actually records native/Go -1. The first log and evidence limitation are
+retained at `/private/tmp/ceph-xattr-permission-crc-aes256k-rnnkf64f`.
+The corrected proof, frozen source/profile and five bounded phase receipts
+are retained at
+`/private/tmp/ceph-xattr-permission-corrected-crc-aes256k-sys6jup7`.
+All eight owned containers and the network were independently removed.
+Reproduce with `CEPH_MSGR_TEST_RUN='^TestCephOSDXattrPermissionsIntegration$'`
+and the CRC/AES256K single-MemStore host profile. Python unit tests verify
+fixed role admission, vector connection selection and cleanup ownership.
+
+Namespace isolation, numeric CMP, omap/class/snapshot and broad pool/EC
+profiles remain incomplete. The P1 O2 milestone and final environment are
+not complete.
 
 Reproduce the Go/native profile with
 `CEPH_MSGR_TEST_RUN='^TestCephOSDXattrsIntegration$'` and the same fixture flags

@@ -23,6 +23,7 @@ constructed native vector on a separate mirror, and writes osd-xattr-result.json
 import argparse
 import base64
 import ctypes as C
+from contextlib import contextmanager
 import json
 import os
 import sys
@@ -38,6 +39,7 @@ MAX_INPUT = 1 << 20
 MAX_COMPARE_OUTPUT = 512 << 10
 COMPARE = {"eq": 1, "ne": 2, "gt": 3, "gte": 4, "lt": 5, "lte": 6}
 SOURCE_COMMIT = "7f793731f1b39eb4f465e960113d2363c311b964"
+CLIENT_ROLES = {"test": b"client.test", "readonly": b"client.readonly"}
 
 
 def encode(data):
@@ -78,9 +80,13 @@ def validate_request(request):
     if not isinstance(request, dict):
         raise ValueError("xattr input must be an object")
     allowed_fields = {"object", "namespace", "observe_actual", "compare", "exists", "kind",
-                      "operations", "attributes", "get_names", "baseline", "seconds", "nanos"}
+                      "operations", "attributes", "get_names", "baseline", "seconds", "nanos",
+                      "client_role"}
     if set(request) - allowed_fields:
         raise ValueError("unknown xattr input fields")
+    role = request.get("client_role", "test")
+    if not isinstance(role, str) or role not in CLIENT_ROLES:
+        raise ValueError("client_role must be test or readonly")
     for field in ("object", "namespace"):
         if field in request:
             identity(request[field], field, empty=field == "namespace")
@@ -529,7 +535,7 @@ def collect(root, out):
         lib.rados_shutdown(cluster)
 
 
-def comparison_vector(native, io, metadata, request):
+def comparison_vector(native, io, metadata, request, vector_io=None):
     """Only the disposable native mirror is mutated; the actual object is read."""
     original = identity(request.get("object", metadata["object"]), "object")
     namespace = request.get("namespace", "")
@@ -569,7 +575,8 @@ def comparison_vector(native, io, metadata, request):
                 native.lib.rados_release_write_op(seed)
         result["before"] = native.snapshot(io, mirror, request["get_names"])
         mtime = Timespec(request["seconds"], request["nanos"]) if request["kind"] == "write" else None
-        result["vector"] = native.vector(io, mirror, request["kind"], request["operations"], mtime=mtime)
+        result["vector"] = native.vector(io if vector_io is None else vector_io, mirror,
+                                          request["kind"], request["operations"], mtime=mtime)
         result["after"] = native.snapshot(io, mirror, request["get_names"])
         return result
     finally:
@@ -577,6 +584,29 @@ def comparison_vector(native, io, metadata, request):
         result["cleanup"] = {"mirror_touched": True, "object_removed": code in (0, -2), "code": code}
         if code not in (0, -2) and sys.exc_info()[0] is None:
             native.check(code)
+
+
+@contextmanager
+def client_connection(native, root, metadata, role):
+    """Fixed fixture identities only; never caller-supplied auth/config paths."""
+    if role not in CLIENT_ROLES:
+        raise ValueError("client_role must be test or readonly")
+    cluster, io = C.c_void_p(), C.c_void_p()
+    lib = native.lib
+    native.check(lib.rados_create2(C.byref(cluster), b"ceph", CLIENT_ROLES[role], 0))
+    try:
+        native.check(lib.rados_conf_read_file(cluster, os.fsencode(root / "ceph.conf")))
+        # cluster.sh combines the public fixture's private identity keyrings
+        # here. rados_create2 selects the entity; key material never leaves it.
+        native.check(lib.rados_conf_set(cluster, b"keyring", os.fsencode(root / "keyring")))
+        native.check(lib.rados_connect(cluster))
+        native.check(lib.rados_ioctx_create(cluster, identity(metadata["pool"], "pool"), C.byref(io)))
+        try:
+            yield io
+        finally:
+            lib.rados_ioctx_destroy(io)
+    finally:
+        lib.rados_shutdown(cluster)
 
 
 def collect_comparison(root, out):
@@ -592,22 +622,18 @@ def collect_comparison(root, out):
         daemon_version = version_file.read(513).decode("utf-8").strip()
     if len(daemon_version) > 512 or "20.2.4" not in daemon_version or SOURCE_COMMIT not in daemon_version:
         raise ValueError("native xattr fixture does not identify the pinned Tentacle source")
-    native, cluster, io = Native(), C.c_void_p(), C.c_void_p()
-    lib = native.lib
-    native.check(lib.rados_create2(C.byref(cluster), b"ceph", b"client.test", 0))
-    try:
-        native.check(lib.rados_conf_read_file(cluster, os.fsencode(root / "ceph.conf")))
-        native.check(lib.rados_conf_set(cluster, b"keyring", os.fsencode(root / "keyring")))
-        native.check(lib.rados_connect(cluster))
-        native.check(lib.rados_ioctx_create(cluster, identity(metadata["pool"], "pool"), C.byref(io)))
-        try:
+    native = Native()
+    with client_connection(native, root, metadata, "test") as io:
+        if request.get("client_role", "test") == "readonly":
+            with client_connection(native, root, metadata, "readonly") as restricted:
+                native.lib.rados_ioctx_set_namespace(restricted, identity(request.get("namespace", ""),
+                                                                          "namespace", empty=True))
+                result = comparison_vector(native, io, metadata, request, vector_io=restricted)
+                result["client_identity"] = "client.readonly"
+        else:
             result = comparison_vector(native, io, metadata, request)
-            result["fixture_daemon_version"] = daemon_version
-            publish_compare_result(out, result)
-        finally:
-            lib.rados_ioctx_destroy(io)
-    finally:
-        lib.rados_shutdown(cluster)
+        result["fixture_daemon_version"] = daemon_version
+        publish_compare_result(out, result)
 
 
 if __name__ == "__main__":
