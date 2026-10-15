@@ -98,11 +98,14 @@ def completed(status):
 def control_lock(out):
     # Never remove an existing lock: it may belong to a concurrent invocation.
     path = out / (NAME + "-control.lock")
+    # The file's existence owns the lock; Windows requires its handle to be
+    # closed before unlinking it when the protected operation finishes.
     with path.open("x"):
-        try:
-            yield
-        finally:
-            path.unlink()
+        pass
+    try:
+        yield
+    finally:
+        path.unlink()
 
 
 def worker(root, out, token):

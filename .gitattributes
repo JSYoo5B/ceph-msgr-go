@@ -1,13 +1,6 @@
 # Development fixtures execute inside Linux even when checked out on Windows.
 *.sh text eol=lf
 *.py text eol=lf
-# Native proof provenance hashes the exact checked-out source bytes.
-tools/osd_mutation_native_encoder.cc text eol=lf
-tools/osd_xattr_native_encoder.cc text eol=lf
-tools/osd_omap_native_encoder.cc text eol=lf
-tools/osd_omap_write_native_encoder.cc text eol=lf
-tools/osd_omap_cmp_native_encoder.cc text eol=lf
-tools/osd_omap_range_native_encoder.cc text eol=lf
-tools/osd_call_native_encoder.cc text eol=lf
-tools/osd_alloc_hint_native_encoder.cc text eol=lf
-tools/osd_snap_native_encoder.cc text eol=lf
+# Native proof provenance hashes the exact checked-out encoder source bytes.
+# Include future encoders so Windows checkouts preserve the Linux build inputs.
+tools/*_native_encoder.cc text eol=lf

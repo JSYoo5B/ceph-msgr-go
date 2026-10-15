@@ -146,6 +146,42 @@ class WatcherScopeTests(unittest.TestCase):
         self.assertEqual(log.read_text(), "preexisting scope")
         self.assertFalse((self.out / (oracle.NAME + "-status.json")).exists())
 
+    def test_control_lock_closes_handle_before_windows_unlink(self):
+        lock = self.out / (oracle.NAME + "-control.lock")
+        original_open, original_unlink = Path.open, Path.unlink
+        handles = []
+
+        def open_file(path, *args, **kwargs):
+            handle = original_open(path, *args, **kwargs)
+            if path == lock:
+                handles.append(handle)
+            return handle
+
+        def windows_unlink(path, *args, **kwargs):
+            if path == lock and any(not handle.closed for handle in handles):
+                raise PermissionError("Windows refuses to unlink an open file")
+            return original_unlink(path, *args, **kwargs)
+
+        for fail_body in (False, True):
+            with self.subTest(fail_body=fail_body), \
+                    patch.object(Path, "open", autospec=True, side_effect=open_file), \
+                    patch.object(Path, "unlink", autospec=True, side_effect=windows_unlink):
+                def operation():
+                    with oracle.control_lock(self.out):
+                        self.assertTrue(lock.exists())
+                        with self.assertRaises(FileExistsError):
+                            with oracle.control_lock(self.out):
+                                self.fail("overlapping lock admitted")
+                        if fail_body:
+                            raise ValueError("protected operation failed")
+
+                if fail_body:
+                    with self.assertRaisesRegex(ValueError, "protected operation failed"):
+                        operation()
+                else:
+                    operation()
+                self.assertFalse(lock.exists())
+
     def test_common_completion_waits_for_final_token_receipt(self):
         active = scope(stopped=False)
         self.seed(active)
