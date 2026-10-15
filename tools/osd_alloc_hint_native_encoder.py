@@ -33,7 +33,7 @@ def command(argv, cwd, label, env=None):
     return result.stdout
 
 
-def build(root, wrapper):
+def build(root, wrapper, build_target="osd_alloc_hint_native_encoder", output_name="encoded-alloc-hint", status=None):
     if not pathlib.Path("/.dockerenv").is_file():
         raise RuntimeError("native development packages may only be installed in an owned disposable Docker container")
     root.mkdir(parents=True, exist_ok=True)
@@ -141,12 +141,12 @@ def build(root, wrapper):
                                 "archive_sha256": hashlib.sha256(tar.read_bytes()).hexdigest()}
     # Add only our independent test wrapper target to the disposable checkout.
     # All native classes/encoders remain the unchanged pinned implementation.
-    if "add_executable(osd_alloc_hint_native_encoder" not in (checkout / "src/CMakeLists.txt").read_text():
+    if "add_executable(" + build_target not in (checkout / "src/CMakeLists.txt").read_text():
         with (checkout / "src/CMakeLists.txt").open("a") as cmake:
             cmake.write("\nif(EXISTS " + str(wrapper) + ")\n")
-            cmake.write("add_executable(osd_alloc_hint_native_encoder " + str(wrapper) + ")\n")
-            cmake.write("target_link_libraries(osd_alloc_hint_native_encoder PRIVATE ceph-common ${ceph_common_deps})\n")
-            cmake.write("target_compile_features(osd_alloc_hint_native_encoder PRIVATE cxx_std_20)\n")
+            cmake.write("add_executable(" + build_target + " " + str(wrapper) + ")\n")
+            cmake.write("target_link_libraries(" + build_target + " PRIVATE ceph-common ${ceph_common_deps})\n")
+            cmake.write("target_compile_features(" + build_target + " PRIVATE cxx_std_20)\n")
             cmake.write("endif()\n")
 
     builddir = root / "build"
@@ -173,10 +173,10 @@ def build(root, wrapper):
     # cached object. Force only this owned wrapper source to be newer so the
     # claimed wrapper digest always corresponds to an actual fresh compile.
     os.utime(wrapper, None)
-    command(["cmake", "--build", str(builddir), "--target", "osd_alloc_hint_native_encoder", "-j2"], root, "native-encoder-compilation", environment)
-    output = root / "encoded-alloc-hint"
+    command(["cmake", "--build", str(builddir), "--target", build_target, "-j2"], root, "native-encoder-compilation", environment)
+    output = root / output_name
     environment["LD_LIBRARY_PATH"] = str(builddir / "lib") + ":/opt/rh/gcc-toolset-14/root/usr/lib64"
-    binary = builddir / "bin/osd_alloc_hint_native_encoder"
+    binary = builddir / ("bin/" + build_target)
     loader = command(["ldd", str(binary)], root, "native-loader-audit", environment)
     common = next((line for line in loader.splitlines() if "libceph-common.so" in line), "")
     if "=> " + str(builddir / "lib") + "/" not in common:
@@ -213,7 +213,7 @@ def build(root, wrapper):
               "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
               "native_library_sha256": hashlib.sha256((builddir / "lib/libceph-common.so.2").read_bytes()).hexdigest(),
               "loader_audit": loader,
-              "status": "five freshly constructed native SETALLOCHINT messages directly encoded and separately decoded; decoded objects never re-encoded",
+              "status": status or "five freshly constructed native SETALLOCHINT messages directly encoded and separately decoded; decoded objects never re-encoded",
               "fixtures": fixtures}
     print(json.dumps(result), flush=True)
 

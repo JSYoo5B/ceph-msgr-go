@@ -66,7 +66,8 @@ const (
 // and Omap; Data holds the method input. AllocHint is the active input for
 // OSDSetAllocHint, with every other field zero. Snapshot is the ROLLBACK
 // target (1 through OSDMaxSnapshot) and ListSnapshots the OSDListSnapshots
-// budget; both opcodes carry no other field and no flags.
+// budget; both opcodes carry no other field and no flags. ListWatchers is the
+// local output budget for head-only, standalone OSDListWatchers.
 // Caller must not mutate the vector, Data or Omap inputs until Request returns.
 type OSDOperation struct {
 	Code           OSDOpcode
@@ -79,6 +80,7 @@ type OSDOperation struct {
 	Class          OSDClassInput
 	AllocHint      OSDAllocHint
 	Snapshot       uint64
+	ListWatchers   OSDListWatchersInput
 	ListSnapshots  OSDListSnapshotsInput
 }
 
@@ -145,6 +147,8 @@ type OSDOperationResult struct {
 	// for a successful OSDListSnapshots, which also keeps the raw bytes.
 	Snapshot  uint64
 	Snapshots OSDSnapshotList
+	// Watchers is decoded on a successful OSDListWatchers; Data keeps raw bytes.
+	Watchers []OSDWatcher
 }
 
 type OSDRedirect struct {
@@ -257,8 +261,9 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots}
 	for i, op := range request.Operations {
 		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
-			AllocHint: osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},
-			Snap:      op.Snapshot, ListSnaps: osd.ListSnapsInput{MaxOutputBytes: op.ListSnapshots.MaxOutputBytes}}
+			AllocHint:    osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},
+			ListWatchers: osd.ListWatchersInput{MaxOutputBytes: op.ListWatchers.MaxOutputBytes},
+			Snap:         op.Snapshot, ListSnaps: osd.ListSnapsInput{MaxOutputBytes: op.ListSnapshots.MaxOutputBytes}}
 	}
 	m, err := osd.EncodeRequest(input, o.features, c.options.MaxFrameSize)
 	if err != nil {
@@ -367,6 +372,11 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 				return err
 			}
 			continue
+		case osd.ListWatchers:
+			if err := osd.ValidateListWatchersReply(requested, op, success); err != nil {
+				return err
+			}
+			continue
 		case osd.ListSnaps:
 			if err := osd.ValidateListSnapsReply(requested, op, success); err != nil {
 				return err
@@ -422,6 +432,9 @@ func publicOSDReply(r osd.Reply) OSDReply {
 			Class:     OSDClassResult{ClassLength: op.Class.ClassLength, MethodLength: op.Class.MethodLength, Argc: op.Class.Argc, InputLength: op.Class.InputLength, OutputLength: op.Class.OutputLength},
 			AllocHint: OSDAllocHint{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: OSDAllocHintFlags(op.AllocHint.Flags)},
 			Snapshot:  op.Snap}
+		if op.Code == osd.ListWatchers && r.Result >= 0 && op.Result >= 0 && r.Redirect.Empty() {
+			result.Operations[i].Watchers = publicWatchers(op.Data)
+		}
 		if op.Code == osd.ListSnaps && r.Result >= 0 && op.Result >= 0 && r.Redirect.Empty() {
 			result.Operations[i].Snapshots = publicSnapshotList(op.Data)
 		}

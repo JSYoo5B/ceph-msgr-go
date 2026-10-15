@@ -427,6 +427,25 @@ advisory 쓰기다. 서버는 없는 객체를 만들고 값을 object_info에 �
 지정한 flag만 보낸다. [allocation hint 계약](internal/osd/ALLOC_HINT_CONTRACT.md)에
 근거를 정리했다.
 
+`OSDListWatchers`는 head 객체의 현재 watcher 등록 목록을 읽는다. 단독 요청만
+허용하며 `ListWatchers.MaxOutputBytes`로 수신 출력의 로컬 한도를 지정한다(최소
+10 bytes). 성공하면 `Operations[0].Watchers`에 watcher entity·cookie·등록 timeout·
+주소(type/nonce·IPv4/IPv6·flow/scope)가 해석되고 원본은 `Data`에 남는다.
+이 목록의 entity는 조회 client와 별개다. 목록 조회는 watch 등록이나 알림 수신,
+watcher 생존 확인을 수행하지 않는다. [계약](internal/osd/WATCHERS_CONTRACT.md)과
+[실제 Ceph 검증](integration/fixture/OSD_WATCHERS_VALIDATION.md)에 범위를 기록했다.
+
+```go
+reply, err := connection.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch, Object: object, // caller가 준비한 OSD 대상·배치 정보
+    Operations: []cephmsgr.OSDOperation{{
+        Code: cephmsgr.OSDListWatchers,
+        ListWatchers: cephmsgr.OSDListWatchersInput{MaxOutputBytes: 64 << 10},
+    }},
+})
+// 성공 시 reply.Operations[0].Watchers와 원본 Data를 사용한다.
+```
+
 snapshot은 caller가 MON에서 할당한 self-managed snap id를 그대로 전달한다. 이
 client는 snap id를 할당·삭제하지 않고 pool의 snapshot 상태와 대조하지도 않는다.
 읽기 전용 요청의 `ReadSnapshot`은 관찰할 clone을 고른다. 0은 head이며 reply는

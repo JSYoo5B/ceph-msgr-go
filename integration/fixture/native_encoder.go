@@ -77,6 +77,11 @@ var snapEncoderSpec = nativeEncoderSpec{
 	requests: 4,
 }
 
+var watchersEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-watchers", wrapper: "osd_watchers_native_encoder.cc", driver: "osd_watchers_native_encoder.py",
+	names: []string{"watchers-native-request-v6-list", "watchers-native-reply-v6-populated", "watchers-native-reply-v6-empty", "watchers-native-reply-v6-enoent", "watchers-native-reply-v6-eacces"},
+}
+
 // The offline encoder is a development oracle. It starts no Ceph daemon and
 // installs native build packages only in its owned disposable container.
 func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
@@ -155,7 +160,7 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	}
 	// A shared SDK cache can retain every oracle target. Supply all original
 	// wrapper sources during configuration, then build only the selected target.
-	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper}
+	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper, watchersEncoderSpec.wrapper, allocHintEncoderSpec.driver}
 	for _, name := range files {
 		if err := target.CopyFileToContainer(build, filepath.Join(root, "tools", name), "/tmp/"+name, 0600); err != nil {
 			return err

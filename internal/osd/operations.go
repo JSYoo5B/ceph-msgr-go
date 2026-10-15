@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps:
+	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers:
 		return true
 	}
 	return false
@@ -32,6 +32,21 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			return 0, 0, wire.ErrLimit
 		}
 		if op.Code != AssertVersion && op.Version != 0 {
+			return 0, 0, ErrRequest
+		}
+		if op.Code == ListWatchers {
+			// Observe committed head registrations only; compound ordering and
+			// snapshot watcher semantics are deliberately outside this subset.
+			if len(ops) != 1 {
+				return 0, 0, ErrOperation
+			}
+			if err := validateListWatchersOperation(op, limit); err != nil {
+				return 0, 0, err
+			}
+			flags |= FlagRead
+			continue
+		}
+		if op.ListWatchers != (ListWatchersInput{}) {
 			return 0, 0, ErrRequest
 		}
 		if op.Code == Rollback || op.Code == ListSnaps {

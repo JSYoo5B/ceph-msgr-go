@@ -81,6 +81,7 @@ type Operation struct {
 	Xattr          XattrInput
 	Class          ClassInput
 	AllocHint      AllocHintInput
+	ListWatchers   ListWatchersInput
 	ListSnaps      ListSnapsInput
 	Data           []byte
 	Version        uint64

@@ -1,7 +1,7 @@
 {
   "binary_sha256": "2eab3c6cc8c46bfda7d2bccfd9523729b9b241ad7381dee6869021b06f091ae8",
-  "build_driver_sha256": "623b70a16caecd47c1541c8b61cd76aaebb940fbc3cf2c7ee057e50448320183",
-  "builder_container_id": "08eb76af40d0d2469a0a8b457b43efe8acd386cc43b207b49288dc985ebc2091",
+  "build_driver_sha256": "79063616bd6254b2144dd2fb2a0199a57dc3d8c99e80700d3e720ab8c42d819f",
+  "builder_container_id": "de96d25fd798673a1ceb8897535f1306153fadfbe9da5e2a7746272f590e5523",
   "builder_termination_completed": true,
   "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
   "fixtures": {
@@ -254,7 +254,7 @@
   "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
   "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
   "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
-  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffffacd57000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffffaa000000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffffacc38000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffffa9faf000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffffa9ae9000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffffacbf7000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffffa9ab8000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffffa9a97000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffffa9873000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffffa9842000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffffa9694000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffffacd10000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffffa95f3000)\n",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffffbe048000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffffbb200000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffffbdf28000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffffbded7000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffffbad3a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffffbde96000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffffbde65000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffffbde44000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffffbab16000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffffbde13000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffffba968000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffffbe000000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffffba8c7000)\n",
   "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
   "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
   "native_message_header_verified": true,
@@ -388,5 +388,6 @@
   "native_library_matches_omap_write_receipt": true,
   "native_library_matches_omap_cmp_receipt": true,
   "native_library_matches_omap_range_receipt": true,
-  "native_library_matches_call_receipt": true
+  "native_library_matches_call_receipt": true,
+  "regeneration_note": "2026-10-15: re-executed after sharing the native build driver with LIST_WATCHERS; all 15 header/front/data segments match the previously stored bytes."
 }

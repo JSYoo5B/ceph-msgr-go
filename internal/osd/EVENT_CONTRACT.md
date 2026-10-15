@@ -3,7 +3,7 @@
 Reference: Ceph 20.2.4, commit
 `7f793731f1b39eb4f465e960113d2363c311b964`.
 Source and product audit: 2026-10-15. This document completes a bounded source
-inventory for O0; it does not implement O3, advertise additional features or
+inventory for O0; it does not implement O3 events, advertise additional features or
 establish native event interoperability. [CONTRACT.md](CONTRACT.md) defines
 current object vectors and their completion/uncertainty contract.
 
@@ -164,8 +164,10 @@ metadata: cookie alone does not establish that a delayed event belongs to the
 current registration. The event wire has no registration generation field or
 object locator to recover that association on its own.
 
-Required companion operations are currently unsupported: WATCH `0x220f`,
-NOTIFY `0x1206`, NOTIFY_ACK `0x1207`, LIST_WATCHERS `0x1209`. Their packed unions
+The standalone head LIST_WATCHERS `0x1209` observation is implemented in
+[WATCHERS_CONTRACT.md](WATCHERS_CONTRACT.md), with native acceptance recorded
+separately. It does not register or renew a watch. Required event companion
+operations remain unsupported: WATCH `0x220f`, NOTIFY `0x1206`, NOTIFY_ACK `0x1207`. Their packed unions
 and [ObjectOperation builders][watch-ops] require separate codecs. WATCH stores
 cookie, unused version, action, registration generation and timeout; actions
 are UNWATCH 0, WATCH 3, RECONNECT 5, PING 7. Historical action 1 is not an excuse

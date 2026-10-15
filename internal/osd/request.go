@@ -62,6 +62,8 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			outputBytes = uint64(op.Omap.MaxOutputBytes)
 		case Call:
 			outputBytes = uint64(op.Class.MaxOutputBytes)
+		case ListWatchers:
+			outputBytes = uint64(op.ListWatchers.MaxOutputBytes)
 		case ListSnaps:
 			outputBytes = uint64(op.ListSnaps.MaxOutputBytes)
 		}

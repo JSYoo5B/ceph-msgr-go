@@ -8,7 +8,7 @@ SPARSE_READ,0x1205,RD,DATA,unsupported
 NOTIFY,0x1206,RD,DATA,unsupported
 NOTIFY_ACK,0x1207,RD,DATA,unsupported
 ASSERT_VER,0x1208,RD,DATA,implemented
-LIST_WATCHERS,0x1209,RD,DATA,unsupported
+LIST_WATCHERS,0x1209,RD,DATA,implemented
 LIST_SNAPS,0x120a,RD,DATA,implemented
 SYNC_READ,0x120b,RD,DATA,unsupported
 WRITE,0x2201,WR,DATA,implemented

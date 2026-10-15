@@ -364,6 +364,22 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-watchers")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || (fields[1] != "start" && fields[1] != "observe" && fields[1] != "stop") {
+			return errors.New("invalid native watcher oracle request")
+		}
+		args := []string{"python3", "/out/osd_watchers_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-watchers-command.json", "native watcher oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-watchers-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-osd-command")
 	if err != nil {
 		return err

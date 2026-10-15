@@ -32,7 +32,8 @@ pagination, comparison, write ordering and native acceptance. Object class
 CALL has its own union and ordering rules in [CLASS_CONTRACT.md](CLASS_CONTRACT.md),
 and the allocation hint in [ALLOC_HINT_CONTRACT.md](ALLOC_HINT_CONTRACT.md).
 The read snap id, write SnapContext, ORDERSNAP, ROLLBACK and LIST_SNAPS follow
-[SNAPSHOT_CONTRACT.md](SNAPSHOT_CONTRACT.md). U64 comparison and bulk xattr
+[SNAPSHOT_CONTRACT.md](SNAPSHOT_CONTRACT.md). Standalone head LIST_WATCHERS
+is specified in [WATCHERS_CONTRACT.md](WATCHERS_CONTRACT.md). U64 comparison and bulk xattr
 variants remain unsupported.
 
 Negotiated OBJECTLOCATOR and PGID64 select the supported request/reply v6

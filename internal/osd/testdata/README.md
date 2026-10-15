@@ -92,3 +92,21 @@ and object `next-object`. Each reply has the current v6 24-byte trace suffix.
 The cited Ceph sources carry LGPL-2.1 notices. This package independently
 implements the wire definitions and includes serialized fixture data only;
 it does not incorporate Ceph native implementation code.
+
+## LIST_WATCHERS fresh native vectors (2026-10-15)
+
+The five `watchers-native-*` vectors and
+[provenance](watchers-native-provenance.json) were directly encoded from fresh
+pinned Ceph 20.2.4 native messages, then separately decoded. LIST_WATCHERS
+output itself uses the native watcher-list encoder and decoder, including
+IPv4/IPv6 entries, maximum cookie and empty list. Go supplies logical inputs
+independently; it does not supply encoder bytes. Offline header seq/ACK inputs
+are not a live ProtocolV2 session. EACCES/ENOENT vectors are explicit logical
+refusals, not daemon permission evidence. See
+[the contract](../WATCHERS_CONTRACT.md) and
+[daemon acceptance](../../../integration/fixture/OSD_WATCHERS_VALIDATION.md).
+
+```sh
+cd integration/fixture
+go run . encode-osd-watchers -cache /tmp/ceph-native-encoder-cache -output /tmp/watchers-proof.json
+```
