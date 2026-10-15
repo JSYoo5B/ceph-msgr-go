@@ -1,0 +1,705 @@
+package cephmsgr
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/jsyoo5b/ceph-msgr-go/internal/mds"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
+)
+
+var (
+	ErrMDSSessionExists = errors.New("ceph: MDS connection already owns a CephFS session")
+	// ErrMDSSessionActive refuses a second connection or session at an MDS
+	// address where this client's CephFS session is active or was never
+	// confirmed closed. The MDS binds sessions to the client GlobalID, so a new
+	// connection would take over the remote session; reconnect is unsupported.
+	ErrMDSSessionActive   = errors.New("ceph: this client has an active or unconfirmed CephFS session at that MDS address")
+	ErrMDSSessionClosed   = errors.New("ceph: MDS closed the CephFS session")
+	ErrMDSSessionOverflow = errors.New("ceph: CephFS session event queue overflow")
+)
+
+// MDSSessionRejectedError is an explicit MDS REJECT. Reason is the raw
+// error_string metadata ("" when absent); Blocklisted reports the
+// SESSION_BLOCKLISTED flag. Required-feature, filesystem-capability, root
+// claim, refused-session and blocklist refusals all arrive this way.
+type MDSSessionRejectedError struct {
+	Reason      string
+	Flags       uint32
+	Blocklisted bool
+	Metadata    map[string]string
+}
+
+func (e *MDSSessionRejectedError) Error() string {
+	return fmt.Sprintf("ceph: MDS rejected the CephFS session: %q", e.Reason)
+}
+
+// MDSSessionState is the local view of one CephFS session.
+type MDSSessionState uint8
+
+const (
+	MDSSessionOpening MDSSessionState = iota + 1
+	MDSSessionOpen
+	MDSSessionStale
+	MDSSessionClosing
+	// Terminal states. Closed and Rejected are confirmed by the MDS. Lost means
+	// the transport ended first; the remote session may remain open until the
+	// MDS times it out (stale, then autoclose eviction, usually blocklisting).
+	MDSSessionClosed
+	MDSSessionRejected
+	MDSSessionLost
+)
+
+func (s MDSSessionState) terminal() bool { return s >= MDSSessionClosed }
+
+// Raw MClientSession operations delivered as events.
+const (
+	MDSSessionOpOpen          = mds.SessionOpen
+	MDSSessionOpStale         = mds.SessionStale
+	MDSSessionOpRecallState   = mds.SessionRecallState
+	MDSSessionOpFlushMessage  = mds.SessionFlushMessage
+	MDSSessionOpForceReadOnly = mds.SessionForceReadOnly
+)
+
+// MDSClientFeatures is the exact CephFS client feature bitset declared in
+// REQUEST_OPEN (raw little-endian feature_bitset_t image). It is fixed by the
+// implemented message formats and cannot be widened by the caller.
+func MDSClientFeatures() []byte { return slices.Clone(mds.ClientFeatures) }
+
+// MDSFeatureBitsetHas tests one bit in a raw feature_bitset_t byte image, such
+// as MDSSessionOpenInfo.SupportedFeatures or MDSMap.RequiredClientFeatures.
+func MDSFeatureBitsetHas(raw []byte, bit uint) bool { return mds.FeatureBitsetHas(raw, bit) }
+
+// MDSCapAuth is one raw MDS capability grant reported in the session OPEN.
+// UID -1 is MDS_AUTH_UID_ANY. The library enforces none of these grants.
+type MDSCapAuth struct {
+	UID                             int64
+	GIDs                            []uint32
+	Path, FilesystemName            string
+	RootSquash, Readable, Writeable bool
+}
+
+// MDSSessionOpenInfo preserves the server OPEN reply.
+type MDSSessionOpenInfo struct {
+	Sequence          uint64
+	SupportedFeatures []byte
+	MetricFlags       []byte
+	Flags             uint32
+	Metadata          map[string]string
+	CapAuths          []MDSCapAuth
+}
+
+// MDSSessionOptions configures OpenSession.
+type MDSSessionOptions struct {
+	// Metadata is sent unchanged as client metadata. The MDS interprets some
+	// keys: "root" is a claimed mount root checked against MDS caps and "uuid"
+	// is refused when another session already uses it. Nothing is added.
+	Metadata map[string]string
+	// RenewInterval is required. While the session is open or stale the
+	// library sends REQUEST_RENEWCAPS on this period (and once immediately
+	// after OPEN or STALE, as the native client does). Pick it below the
+	// MDSMap session_timeout; the library has no map of its own.
+	RenewInterval time.Duration
+	// MaxEvents bounds the FIFO of unsolicited session events. Zero means 64.
+	// Overflow fails the MDS connection: events are never dropped.
+	MaxEvents int
+}
+
+// MDSSessionEvent is one unsolicited MClientSession after OPEN: a duplicate
+// OPEN, STALE, RECALL_STATE, FLUSHMSG or FORCE_RO. Op is the raw wire value.
+type MDSSessionEvent struct {
+	Op                 uint32
+	Sequence           uint64
+	MaxCaps, MaxLeases uint32
+	Flags              uint32
+	Metadata           map[string]string
+	SupportedFeatures  []byte
+	Received           time.Time
+}
+
+// MDSSessionRenewal reports one acknowledged REQUEST_RENEWCAPS. Requested is
+// the local send time; native clients extend their capability TTL from it by
+// the MDSMap session_timeout when the matching RENEWCAPS reply arrives.
+type MDSSessionRenewal struct {
+	Sequence             uint64
+	Requested, Confirmed time.Time
+}
+
+// MDSSessionStatus is a copy of local session state. Generation counts
+// OpenSession calls of this Client. PushSequence counts MDS messages the
+// server sequences against REQUEST_CLOSE; it stays zero in this stage because
+// capability, lease, snapshot and quota messages are unsupported.
+type MDSSessionStatus struct {
+	State                                      MDSSessionState
+	Generation, ConnectionGeneration, GlobalID uint64
+	Target                                     MDSTarget
+	PushSequence, RenewSequence                uint64
+	LastRenewal                                MDSSessionRenewal
+	Open                                       MDSSessionOpenInfo
+	ReadOnly                                   bool
+	Err                                        error
+}
+
+// MDSSession is one CephFS client session on an MDSConnection. It implements
+// session open/renew/close and event delivery only: no metadata request,
+// capability, lease, reconnect or replay exists in this stage.
+type MDSSession struct {
+	conn          *MDSConnection
+	generation    uint64
+	renewInterval time.Duration
+	maxEvents     int
+	renewNow      chan struct{}
+	done          chan struct{}
+	stopped       chan struct{}
+
+	mu        sync.Mutex
+	state     MDSSessionState
+	err       error
+	changed   chan struct{}
+	open      MDSSessionOpenInfo
+	push      uint64
+	renewSeq  uint64
+	renewSent map[uint64]time.Time
+	renewal   MDSSessionRenewal
+	readOnly  bool
+	events    []MDSSessionEvent
+	closeSent bool
+	// queued records that REQUEST_OPEN entered the ordered writer; from then on
+	// the MDS may hold the session even if the transport ends.
+	queued bool
+}
+
+// OpenSession sends one REQUEST_OPEN on this connection and waits for OPEN.
+// An explicit REJECT returns *MDSSessionRejectedError and a server CLOSE
+// returns ErrMDSSessionClosed; both leave no session. When ctx ends after the
+// request was queued, OpenSession returns the still-opening session with an
+// OutcomeUnknownError: the MDS may open it later. Keep waiting with WaitOpen
+// or end it with Close; an abandoned open session is eventually evicted.
+func (m *MDSConnection) OpenSession(ctx context.Context, options MDSSessionOptions) (*MDSSession, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c := m.client
+	if options.RenewInterval <= 0 {
+		return nil, errors.New("ceph: MDS session requires a positive RenewInterval")
+	}
+	if options.MaxEvents == 0 {
+		options.MaxEvents = 64
+	}
+	if options.MaxEvents < 1 || options.MaxEvents > 4096 {
+		return nil, errors.New("ceph: MDS session MaxEvents must be between 1 and 4096")
+	}
+	if uint32(len(options.Metadata)) > mds.MaxSessionMetadata {
+		return nil, fmt.Errorf("ceph: MDS session metadata entry count: %w", ErrLimitExceeded)
+	}
+	request := mds.EncodeRequestOpen(options.Metadata)
+	if uint64(len(request.Front))+41 > uint64(c.options.MaxFrameSize) {
+		return nil, fmt.Errorf("ceph: MDS session metadata exceeds frame limit: %w", ErrLimitExceeded)
+	}
+	c.mu.Lock()
+	if c.closed || m.closed || m.ctx.Err() != nil {
+		c.mu.Unlock()
+		return nil, ErrClosed
+	}
+	s := m.session
+	if err := s.Err(); err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if c.auth.GlobalID != m.globalID {
+		c.mu.Unlock()
+		return nil, ErrMDSIdentityChanged
+	}
+	if m.cephfs != nil {
+		c.mu.Unlock()
+		return nil, ErrMDSSessionExists
+	}
+	if c.mdsUnresolved[m.address] {
+		c.mu.Unlock()
+		return nil, ErrMDSSessionActive
+	}
+	for _, other := range c.mdss {
+		if other != m && other.address == m.address && other.cephfs != nil {
+			c.mu.Unlock()
+			return nil, ErrMDSSessionActive
+		}
+	}
+	if c.mdsSessionGeneration == ^uint64(0) {
+		c.mu.Unlock()
+		return nil, errors.New("ceph: MDS session generations exhausted")
+	}
+	c.mdsSessionGeneration++
+	session := &MDSSession{conn: m, generation: c.mdsSessionGeneration, renewInterval: options.RenewInterval, maxEvents: options.MaxEvents,
+		renewNow: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}), state: MDSSessionOpening,
+		changed: make(chan struct{}), renewSent: make(map[uint64]time.Time)}
+	m.cephfs = session
+	c.mu.Unlock()
+	// Admission only: after success the queued REQUEST_OPEN is ordered before
+	// every later message even if ctx ends.
+	session.mu.Lock()
+	err := s.SendControl(ctx, request)
+	session.queued = err == nil
+	session.mu.Unlock()
+	if err != nil {
+		session.finish(MDSSessionLost, err, false)
+		close(session.stopped)
+		if s.Err() != nil {
+			return nil, err
+		}
+		return nil, m.operationError(err)
+	}
+	go session.renewLoop()
+	if _, err := session.WaitOpen(ctx); err != nil {
+		if session.Status().State == MDSSessionOpening && ctx.Err() != nil {
+			return session, &OutcomeUnknownError{Cause: err}
+		}
+		return nil, err
+	}
+	return session, nil
+}
+
+// WaitOpen waits until the session leaves Opening. It returns the OPEN reply,
+// or the terminal cause. Its ctx bounds only this local wait.
+func (s *MDSSession) WaitOpen(ctx context.Context) (MDSSessionOpenInfo, error) {
+	for {
+		s.mu.Lock()
+		state, err, changed, open := s.state, s.err, s.changed, cloneOpenInfo(s.open)
+		s.mu.Unlock()
+		if state.terminal() {
+			return MDSSessionOpenInfo{}, err
+		}
+		if state != MDSSessionOpening {
+			return open, nil
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return MDSSessionOpenInfo{}, ctx.Err()
+		}
+	}
+}
+
+// Done closes when the session reaches a terminal state.
+func (s *MDSSession) Done() <-chan struct{} { return s.done }
+
+// Err returns the terminal cause, or nil while the session is live. A
+// confirmed Close leaves ErrMDSSessionClosed.
+func (s *MDSSession) Err() error { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
+
+func (s *MDSSession) Status() MDSSessionStatus {
+	m := s.conn
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return MDSSessionStatus{State: s.state, Generation: s.generation, ConnectionGeneration: m.generation, GlobalID: m.globalID, Target: m.target,
+		PushSequence: s.push, RenewSequence: s.renewSeq, LastRenewal: s.renewal, Open: cloneOpenInfo(s.open), ReadOnly: s.readOnly, Err: s.err}
+}
+
+// Next returns the oldest unsolicited session event. Accepted events remain
+// readable after the session ends; then Next returns the terminal cause.
+// ctx bounds only this wait. A FLUSHMSG event must be answered with
+// AcknowledgeFlush once the caller has sent its capability releases.
+func (s *MDSSession) Next(ctx context.Context) (MDSSessionEvent, error) {
+	if err := ctx.Err(); err != nil {
+		return MDSSessionEvent{}, err
+	}
+	for {
+		s.mu.Lock()
+		if len(s.events) != 0 {
+			event := s.events[0]
+			s.events[0] = MDSSessionEvent{}
+			s.events = s.events[1:]
+			s.mu.Unlock()
+			return event, nil
+		}
+		state, err, changed := s.state, s.err, s.changed
+		s.mu.Unlock()
+		if state.terminal() {
+			return MDSSessionEvent{}, err
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return MDSSessionEvent{}, ctx.Err()
+		}
+	}
+}
+
+// Renew sends one REQUEST_RENEWCAPS and waits for a RENEWCAPS reply with the
+// same or a later sequence. ctx bounds only the local wait.
+func (s *MDSSession) Renew(ctx context.Context) (MDSSessionRenewal, error) {
+	if err := ctx.Err(); err != nil {
+		return MDSSessionRenewal{}, err
+	}
+	seq, err := s.sendRenewal(ctx)
+	if err != nil {
+		return MDSSessionRenewal{}, err
+	}
+	for {
+		s.mu.Lock()
+		renewal, state, terminal, changed := s.renewal, s.state, s.err, s.changed
+		s.mu.Unlock()
+		if renewal.Sequence >= seq {
+			return renewal, nil
+		}
+		if state.terminal() {
+			return MDSSessionRenewal{}, terminal
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return MDSSessionRenewal{}, ctx.Err()
+		}
+	}
+}
+
+// AcknowledgeFlush sends FLUSHMSG_ACK for a FLUSHMSG event's sequence. The
+// library never acknowledges a flush on the caller's behalf. ctx governs only
+// write admission; success is not proof that the MDS processed the ack.
+func (s *MDSSession) AcknowledgeFlush(ctx context.Context, seq uint64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	state, err := s.state, s.err
+	s.mu.Unlock()
+	if state.terminal() {
+		return err
+	}
+	message, err := mds.EncodeSessionControl(mds.SessionFlushMessageAck, seq)
+	if err != nil {
+		return err
+	}
+	return s.conn.session.SendControl(ctx, message)
+}
+
+// Close sends REQUEST_CLOSE (with the current push sequence) once and waits
+// for the MDS CLOSE, a terminal transport failure or ctx. It returns nil after
+// a confirmed CLOSE or REJECT. A ctx error leaves the session Closing; Close
+// can be called again to keep waiting. If the transport ends first, the remote
+// session is unconfirmed: the error wraps ErrMDSSessionActive and this client
+// refuses further connections to that MDS address.
+func (s *MDSSession) Close(ctx context.Context) error {
+	s.mu.Lock()
+	send := !s.state.terminal() && !s.closeSent
+	if send {
+		s.closeSent = true
+	}
+	seq := s.push
+	s.mu.Unlock()
+	if send {
+		message, err := mds.EncodeSessionControl(mds.SessionRequestClose, seq)
+		if err != nil {
+			return err
+		}
+		if err := s.conn.session.SendControl(ctx, message); err != nil {
+			s.mu.Lock()
+			if !s.state.terminal() {
+				s.closeSent = false
+			}
+			s.mu.Unlock()
+			return s.closeResult(err)
+		}
+		s.mu.Lock()
+		if !s.state.terminal() {
+			s.setStateLocked(MDSSessionClosing)
+		}
+		s.mu.Unlock()
+	}
+	for {
+		s.mu.Lock()
+		state, err, changed := s.state, s.err, s.changed
+		s.mu.Unlock()
+		if state.terminal() {
+			return s.closeResult(err)
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+}
+
+func (s *MDSSession) closeResult(cause error) error {
+	s.mu.Lock()
+	state := s.state
+	s.mu.Unlock()
+	switch state {
+	case MDSSessionClosed, MDSSessionRejected:
+		return nil
+	case MDSSessionLost:
+		return fmt.Errorf("%w: %w", ErrMDSSessionActive, s.Err())
+	}
+	return cause
+}
+
+func (s *MDSSession) setStateLocked(state MDSSessionState) {
+	s.state = state
+	close(s.changed)
+	s.changed = make(chan struct{})
+}
+
+// finish publishes a terminal state once and releases the connection's
+// session slot. unresolved records the address because the MDS may still hold
+// the session; the caller must not hold s.mu or the client mutex.
+func (s *MDSSession) finish(state MDSSessionState, err error, unresolved bool) {
+	s.mu.Lock()
+	if s.state.terminal() {
+		s.mu.Unlock()
+		return
+	}
+	s.err = err
+	s.setStateLocked(state)
+	s.renewSent = nil
+	close(s.done)
+	s.mu.Unlock()
+	m := s.conn
+	c := m.client
+	c.mu.Lock()
+	if m.cephfs == s {
+		m.cephfs = nil
+	}
+	if unresolved {
+		if c.mdsUnresolved == nil {
+			c.mdsUnresolved = make(map[msgr.Address]bool)
+		}
+		c.mdsUnresolved[m.address] = true
+	}
+	c.mu.Unlock()
+}
+
+// lost is called when the owning transport ends. A session whose
+// REQUEST_OPEN was queued may exist remotely and becomes unresolved.
+func (s *MDSSession) lost(cause error) {
+	s.mu.Lock()
+	queued := s.queued
+	s.mu.Unlock()
+	s.finish(MDSSessionLost, cause, queued)
+}
+
+func (s *MDSSession) sendRenewal(ctx context.Context) (uint64, error) {
+	s.mu.Lock()
+	if s.state.terminal() {
+		err := s.err
+		s.mu.Unlock()
+		return 0, err
+	}
+	if s.state == MDSSessionOpening {
+		s.mu.Unlock()
+		return 0, errors.New("ceph: MDS session is not open")
+	}
+	if s.renewSeq == ^uint64(0) {
+		s.mu.Unlock()
+		return 0, errors.New("ceph: MDS session renewal sequences exhausted")
+	}
+	s.renewSeq++
+	seq := s.renewSeq
+	s.renewSent[seq] = time.Now()
+	// Bound outstanding renewals: a reply covers every older sequence.
+	if len(s.renewSent) > 64 {
+		delete(s.renewSent, slices.Min(slices.Collect(maps.Keys(s.renewSent))))
+	}
+	s.mu.Unlock()
+	message, err := mds.EncodeSessionControl(mds.SessionRequestRenewCaps, seq)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.conn.session.SendControl(ctx, message); err != nil {
+		return 0, err
+	}
+	return seq, nil
+}
+
+func (s *MDSSession) renewLoop() {
+	defer close(s.stopped)
+	ticker := time.NewTicker(s.renewInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+		case <-s.renewNow:
+		}
+		s.mu.Lock()
+		state := s.state
+		s.mu.Unlock()
+		if state != MDSSessionOpen && state != MDSSessionStale {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(s.conn.ctx, s.renewInterval)
+		_, err := s.sendRenewal(ctx)
+		cancel()
+		if err != nil && s.conn.session.Err() != nil {
+			return
+		}
+	}
+}
+
+func (s *MDSSession) triggerRenewal() {
+	select {
+	case s.renewNow <- struct{}{}:
+	default:
+	}
+}
+
+func (s *MDSSession) pushEventLocked(event MDSSessionEvent) error {
+	if len(s.events) >= s.maxEvents {
+		return ErrMDSSessionOverflow
+	}
+	s.events = append(s.events, event)
+	return nil
+}
+
+// dispatch runs on the transport read loop and never blocks. An error fails
+// the MDS transport (and with it the session as Lost).
+func (s *MDSSession) dispatch(message mds.ClientSession, received time.Time) error {
+	s.mu.Lock()
+	if s.state.terminal() {
+		s.mu.Unlock()
+		return fmt.Errorf("%w: MDS session message after terminal state", msgr.ErrFrame)
+	}
+	event := MDSSessionEvent{Op: message.Op, Sequence: message.Sequence, MaxCaps: message.MaxCaps, MaxLeases: message.MaxLeases,
+		Flags: message.Flags, Metadata: message.Metadata, SupportedFeatures: message.SupportedFeatures, Received: received}
+	var terminal MDSSessionState
+	var cause error
+	renew := false
+	var err error
+	switch message.Op {
+	case mds.SessionOpen:
+		info := MDSSessionOpenInfo{Sequence: message.Sequence, SupportedFeatures: message.SupportedFeatures, MetricFlags: message.MetricFlags,
+			Flags: message.Flags, Metadata: message.Metadata, CapAuths: publicCapAuths(message.CapAuths)}
+		if s.push == 0 && message.Sequence != 0 {
+			s.push = message.Sequence
+		}
+		if s.state == MDSSessionOpening {
+			s.open = info
+			s.state = MDSSessionOpen
+			renew = true
+		} else {
+			// Native clients refresh MDS features from a later OPEN.
+			s.open.SupportedFeatures, s.open.MetricFlags = info.SupportedFeatures, info.MetricFlags
+			err = s.pushEventLocked(event)
+		}
+	case mds.SessionClose:
+		terminal, cause = MDSSessionClosed, ErrMDSSessionClosed
+	case mds.SessionReject:
+		reason := message.Metadata["error_string"]
+		terminal, cause = MDSSessionRejected, &MDSSessionRejectedError{Reason: reason, Flags: message.Flags, Blocklisted: message.Flags&mds.SessionFlagBlocklisted != 0, Metadata: message.Metadata}
+	case mds.SessionRenewCaps:
+		if s.state == MDSSessionOpening {
+			err = fmt.Errorf("%w: MDS RENEWCAPS before OPEN", msgr.ErrFrame)
+			break
+		}
+		if sent, ok := s.renewSent[message.Sequence]; ok {
+			for seq := range s.renewSent {
+				if seq <= message.Sequence {
+					delete(s.renewSent, seq)
+				}
+			}
+			s.renewal = MDSSessionRenewal{Sequence: message.Sequence, Requested: sent, Confirmed: received}
+			if s.state == MDSSessionStale && message.Sequence == s.renewSeq {
+				s.state = MDSSessionOpen
+			}
+		} else if message.Sequence == 0 || message.Sequence > s.renewSeq {
+			err = fmt.Errorf("%w: MDS RENEWCAPS for an unsent sequence", msgr.ErrFrame)
+		}
+	case mds.SessionStale:
+		if s.state == MDSSessionOpening {
+			err = fmt.Errorf("%w: MDS STALE before OPEN", msgr.ErrFrame)
+			break
+		}
+		if s.state == MDSSessionOpen {
+			s.state = MDSSessionStale
+		}
+		renew = true
+		err = s.pushEventLocked(event)
+	case mds.SessionRecallState, mds.SessionFlushMessage:
+		if s.state == MDSSessionOpening {
+			err = fmt.Errorf("%w: MDS session control before OPEN", msgr.ErrFrame)
+			break
+		}
+		err = s.pushEventLocked(event)
+	case mds.SessionForceReadOnly:
+		s.readOnly = true
+		err = s.pushEventLocked(event)
+	default:
+		err = fmt.Errorf("%w: unexpected MDS session operation %d", msgr.ErrFrame, message.Op)
+	}
+	if err == nil && terminal == 0 {
+		// Wake Next/Renew/WaitOpen waiters for queued events or renewals.
+		s.setStateLocked(s.state)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if terminal != 0 {
+		// CLOSE and REJECT are confirmed by the MDS; nothing stays unresolved.
+		s.finish(terminal, cause, false)
+		return nil
+	}
+	if renew {
+		s.triggerRenewal()
+	}
+	return nil
+}
+
+func publicCapAuths(in []mds.CapAuth) []MDSCapAuth {
+	out := make([]MDSCapAuth, len(in))
+	for i, a := range in {
+		out[i] = MDSCapAuth{UID: a.UID, GIDs: slices.Clone(a.GIDs), Path: a.Path, FilesystemName: a.FilesystemName, RootSquash: a.RootSquash, Readable: a.Readable, Writeable: a.Writeable}
+	}
+	return out
+}
+
+func cloneOpenInfo(in MDSSessionOpenInfo) MDSSessionOpenInfo {
+	out := in
+	out.SupportedFeatures, out.MetricFlags, out.Metadata = slices.Clone(in.SupportedFeatures), slices.Clone(in.MetricFlags), maps.Clone(in.Metadata)
+	out.CapAuths = make([]MDSCapAuth, len(in.CapAuths))
+	for i, a := range in.CapAuths {
+		out.CapAuths[i] = a
+		out.CapAuths[i].GIDs = slices.Clone(a.GIDs)
+	}
+	if in.CapAuths == nil {
+		out.CapAuths = nil
+	}
+	return out
+}
+
+// dispatchMDSMessage routes one non-reply MDS message. Only MClientSession is
+// implemented; anything else fails the transport as unsupported.
+func (m *MDSConnection) dispatchMDSMessage(message msgr.MessageData) error {
+	if message.Type != mds.ClientSessionMessage {
+		return fmt.Errorf("%w: unsupported MDS message %d", msgr.ErrFeatures, message.Type)
+	}
+	c := m.client
+	decoded, err := mds.DecodeClientSession(message, c.options.MaxFrameSize)
+	if err != nil {
+		return fmt.Errorf("%w: invalid MDS session message: %w", msgr.ErrFrame, err)
+	}
+	c.mu.Lock()
+	s := m.cephfs
+	c.mu.Unlock()
+	if s == nil {
+		return fmt.Errorf("%w: MDS session message without a local session", msgr.ErrFrame)
+	}
+	return s.dispatch(decoded, time.Now())
+}
+
+// mdsTransportEnded marks a live CephFS session as lost when its transport
+// ends; called from the Session close callback.
+func (m *MDSConnection) mdsTransportEnded(cause error) {
+	c := m.client
+	c.mu.Lock()
+	s := m.cephfs
+	c.mu.Unlock()
+	if s != nil {
+		s.lost(cause)
+	}
+}

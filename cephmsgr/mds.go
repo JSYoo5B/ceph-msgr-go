@@ -46,9 +46,10 @@ type MDSConnection struct {
 	cancel    context.CancelFunc
 	setupDone chan struct{}
 	closeOnce sync.Once
-	// client.mu guards setupErr, session publication and closed.
+	// client.mu guards setupErr, session publication, cephfs and closed.
 	setupErr                       error
 	session                        *session.Session
+	cephfs                         *MDSSession
 	closed                         bool
 	features, globalID, generation uint64
 }
@@ -77,6 +78,18 @@ func (c *Client) OpenMDS(ctx context.Context, target MDSTarget) (*MDSConnection,
 	if c.closed {
 		c.mu.Unlock()
 		return nil, ErrClosed
+	}
+	if c.mdsUnresolved[address] {
+		c.mu.Unlock()
+		return nil, ErrMDSSessionActive
+	}
+	for other, held := range c.mdss {
+		// A new connection with this GlobalID would take over the MDS's
+		// remote session, which only the session's own handle may use.
+		if other != key && held.address == address && held.cephfs != nil {
+			c.mu.Unlock()
+			return nil, ErrMDSSessionActive
+		}
 	}
 	if held := c.mdss[key]; held != nil {
 		if held.address != address {
@@ -192,9 +205,7 @@ func (m *MDSConnection) open(ctx context.Context) error {
 		}
 		config := c.sessionConfig()
 		config.NextTransaction = c.nextMDSTransaction
-		s := session.New(tr, config, func(message msgr.MessageData) error {
-			return fmt.Errorf("%w: unsupported MDS message %d", msgr.ErrFeatures, message.Type)
-		}, nil)
+		s := session.New(tr, config, m.dispatchMDSMessage, m.mdsTransportEnded)
 		c.mu.Lock()
 		stale := c.closed || m.closed || c.authErr != nil || c.auth.GlobalID != auth.GlobalID
 		if !stale {

@@ -1,0 +1,410 @@
+{
+  "binary_sha256": "0c0de18505bed4dca4929d132cc772f05b29a7f96cf26f1167d4f27dbe0d70c7",
+  "build_driver_sha256": "80c303cafc1381ca59fb7507239e51c76910ab0d864507f5a82ca23cd6cef9dd",
+  "builder_container_id": "cbbc3e69972b081693a1413be1102db8549f53b73afa4deb757814019c7ea4a5",
+  "builder_termination_completed": true,
+  "canonical_message_encode_verified": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "mds-session-native-open": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_session": {
+        "cap_auths": [
+          {
+            "fs_name": "cephfs",
+            "gids": [
+              1000,
+              1001
+            ],
+            "path": "volumes/a",
+            "readable": true,
+            "root_squash": true,
+            "uid": -1,
+            "writeable": false
+          }
+        ],
+        "flags": 0,
+        "max_caps": 0,
+        "max_leases": 0,
+        "message_type": 22,
+        "metadata": {},
+        "metric_spec_hex": "01010c00000008000000ffff000000000000",
+        "oldest_client_tid": 18446744073709551615,
+        "op": 1,
+        "seq": 0,
+        "source_oldest_client_tid": 18446744073709551615,
+        "stamp_nsec": 0,
+        "stamp_sec": 0,
+        "supported_features_hex": "08000000ffffff0000000000",
+        "version": 7
+      },
+      "front_bytes": 136,
+      "front_sha256": "c9927fc18b12362e2c0946596d3182d20dacae1c71dfc26db2e046054ac3e76a",
+      "header_bytes": 41,
+      "header_sha256": "5bb32001f526d7319e3961e587d285c7df6a5043576b9fe3658184a33402dee0",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 136,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 22,
+        "version": 7
+      }
+    },
+    "mds-session-native-recall-state": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_session": {
+        "cap_auths": [],
+        "flags": 0,
+        "max_caps": 100,
+        "max_leases": 7,
+        "message_type": 22,
+        "metadata": {},
+        "metric_spec_hex": "01010400000000000000",
+        "oldest_client_tid": 18446744073709551615,
+        "op": 7,
+        "seq": 0,
+        "source_oldest_client_tid": 18446744073709551615,
+        "stamp_nsec": 0,
+        "stamp_sec": 0,
+        "supported_features_hex": "00000000",
+        "version": 1
+      },
+      "front_bytes": 28,
+      "front_sha256": "8b028e829fde9f9ec8176c038da07dd206d4b4e3c9250aa4c5ceb1d845d57fbf",
+      "header_bytes": 41,
+      "header_sha256": "5928ab1a3218a2accdb8b6ca9f499d9223d069cb9cdabe4845cdc393df2dbb2f",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 28,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 22,
+        "version": 1
+      }
+    },
+    "mds-session-native-reject": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_session": {
+        "cap_auths": [],
+        "flags": 1,
+        "max_caps": 0,
+        "max_leases": 0,
+        "message_type": 22,
+        "metadata": {
+          "error_string": "blocklisted (blacklisted)"
+        },
+        "metric_spec_hex": "01010400000000000000",
+        "oldest_client_tid": 18446744073709551615,
+        "op": 11,
+        "seq": 0,
+        "source_oldest_client_tid": 18446744073709551615,
+        "stamp_nsec": 0,
+        "stamp_sec": 0,
+        "supported_features_hex": "00000000",
+        "version": 7
+      },
+      "front_bytes": 107,
+      "front_sha256": "6d4bef5d53f84e2ea0fe6022d41d57730307c6c06acadd865be2db09711c4842",
+      "header_bytes": 41,
+      "header_sha256": "5bb32001f526d7319e3961e587d285c7df6a5043576b9fe3658184a33402dee0",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 107,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 22,
+        "version": 7
+      }
+    },
+    "mds-session-native-renewcaps": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_session": {
+        "cap_auths": [],
+        "flags": 0,
+        "max_caps": 0,
+        "max_leases": 0,
+        "message_type": 22,
+        "metadata": {},
+        "metric_spec_hex": "01010400000000000000",
+        "oldest_client_tid": 18446744073709551615,
+        "op": 5,
+        "seq": 5,
+        "source_oldest_client_tid": 18446744073709551615,
+        "stamp_nsec": 0,
+        "stamp_sec": 0,
+        "supported_features_hex": "00000000",
+        "version": 1
+      },
+      "front_bytes": 28,
+      "front_sha256": "3281508172481aaa3a9e9b0b35d79950ada2ad480d0b6b12403dcd0b18f91864",
+      "header_bytes": 41,
+      "header_sha256": "5928ab1a3218a2accdb8b6ca9f499d9223d069cb9cdabe4845cdc393df2dbb2f",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 28,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 22,
+        "version": 1
+      }
+    },
+    "mds-session-native-request-close": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_session": {
+        "cap_auths": [],
+        "flags": 0,
+        "max_caps": 0,
+        "max_leases": 0,
+        "message_type": 22,
+        "metadata": {},
+        "metric_spec_hex": "01010400000000000000",
+        "oldest_client_tid": 18446744073709551615,
+        "op": 2,
+        "seq": 0,
+        "source_oldest_client_tid": 18446744073709551615,
+        "stamp_nsec": 0,
+        "stamp_sec": 0,
+        "supported_features_hex": "00000000",
+        "version": 1
+      },
+      "front_bytes": 28,
+      "front_sha256": "ab5ab9e4c79f911a85a2f07826c774cb2b338a48d185dd5d6b156b038c22cf05",
+      "header_bytes": 41,
+      "header_sha256": "5928ab1a3218a2accdb8b6ca9f499d9223d069cb9cdabe4845cdc393df2dbb2f",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 28,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 22,
+        "version": 1
+      }
+    },
+    "mds-session-native-request-open": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_session": {
+        "cap_auths": [],
+        "flags": 0,
+        "max_caps": 0,
+        "max_leases": 0,
+        "message_type": 22,
+        "metadata": {
+          "entity_id": "admin",
+          "root": "/"
+        },
+        "metric_spec_hex": "01010400000000000000",
+        "oldest_client_tid": 18446744073709551615,
+        "op": 0,
+        "seq": 0,
+        "source_oldest_client_tid": 18446744073709551615,
+        "stamp_nsec": 0,
+        "stamp_sec": 0,
+        "supported_features_hex": "08000000ff01000000000000",
+        "version": 7
+      },
+      "front_bytes": 105,
+      "front_sha256": "09fab16e04bdd742860f1deb6b0fb3e0d7e09e6d31fd0f4382a7b1f975ea7bc1",
+      "header_bytes": 41,
+      "header_sha256": "5bb32001f526d7319e3961e587d285c7df6a5043576b9fe3658184a33402dee0",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 105,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 22,
+        "version": 7
+      }
+    },
+    "mds-session-native-request-renewcaps": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_session": {
+        "cap_auths": [],
+        "flags": 0,
+        "max_caps": 0,
+        "max_leases": 0,
+        "message_type": 22,
+        "metadata": {},
+        "metric_spec_hex": "01010400000000000000",
+        "oldest_client_tid": 18446744073709551615,
+        "op": 4,
+        "seq": 5,
+        "source_oldest_client_tid": 9,
+        "stamp_nsec": 0,
+        "stamp_sec": 0,
+        "supported_features_hex": "00000000",
+        "version": 1
+      },
+      "front_bytes": 28,
+      "front_sha256": "4ee1962bc0e5d8dd3000787249411558fcb0feae66e02e7123d673cdc06836fd",
+      "header_bytes": 41,
+      "header_sha256": "5928ab1a3218a2accdb8b6ca9f499d9223d069cb9cdabe4845cdc393df2dbb2f",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 28,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 22,
+        "version": 1
+      }
+    },
+    "mds-session-native-stale": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_session": {
+        "cap_auths": [],
+        "flags": 0,
+        "max_caps": 0,
+        "max_leases": 0,
+        "message_type": 22,
+        "metadata": {},
+        "metric_spec_hex": "01010400000000000000",
+        "oldest_client_tid": 18446744073709551615,
+        "op": 6,
+        "seq": 0,
+        "source_oldest_client_tid": 18446744073709551615,
+        "stamp_nsec": 0,
+        "stamp_sec": 0,
+        "supported_features_hex": "00000000",
+        "version": 1
+      },
+      "front_bytes": 28,
+      "front_sha256": "e73c06f0ebb2893f86129818b70012c7964bf8c0a80dcc50e2dc4e054eb3c8dd",
+      "header_bytes": 41,
+      "header_sha256": "5928ab1a3218a2accdb8b6ca9f499d9223d069cb9cdabe4845cdc393df2dbb2f",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 28,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 22,
+        "version": 1
+      }
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "launcher_sha256": "80c303cafc1381ca59fb7507239e51c76910ab0d864507f5a82ca23cd6cef9dd",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffff8b79c000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffff88a00000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffff8b6c8000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffff8b677000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffff8853a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffff8b636000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffff8b605000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffff88519000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffff882f5000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffff882c4000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffff88116000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffff8b760000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffff88075000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "eight freshly constructed native MClientSession messages canonically Message::encode encoded once and separately decoded; empty payloads required and decoded objects never re-encoded",
+  "wrapper_sha256": "499abfe87ae097d2cf7121f901d871b43a4e4ceb5c748791128876f298ffee0b"
+}

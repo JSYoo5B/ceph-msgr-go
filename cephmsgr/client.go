@@ -54,6 +54,10 @@ type Client struct {
 	mdss          map[mdsTargetKey]*MDSConnection
 	mdsNext       atomic.Uint64
 	mdsGeneration uint64
+	// mdsUnresolved holds exact MDS addresses whose CephFS session ended
+	// without a confirmed CLOSE/REJECT; mdsSessionGeneration counts sessions.
+	mdsUnresolved        map[msgr.Address]bool
+	mdsSessionGeneration uint64
 
 	fsMapWatch, mdsMapWatch             *monMDSMapWatch
 	mdsMapBindings                      map[*session.Session]mdsMapBinding

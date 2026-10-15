@@ -37,6 +37,7 @@ type nativeEncoderSpec struct {
 	mixedV8        bool   // explicitly permits leading v8 requests followed by native v6 replies
 	replyVersion   uint16 // explicit all-reply v8 suite; zero preserves the first-request default
 	mdsMaps        bool   // closed five-vector MFSMapUser/MMDSMap suite, never an OSD header override
+	mdsSessions    bool   // closed eight-vector MClientSession suite, never an OSD or map override
 }
 
 var mutationEncoderSpec = nativeEncoderSpec{
@@ -139,6 +140,11 @@ var mdsMapEncoderSpec = nativeEncoderSpec{
 	names: []string{"mds-map-native-fsmap-empty", "mds-map-native-fsmap-multi", "mds-map-native-mdsmap-empty", "mds-map-native-mdsmap-populated", "mds-map-native-mdsmap-unknown"},
 }
 
+var mdsSessionEncoderSpec = nativeEncoderSpec{
+	command: "encode-mds-sessions", wrapper: "mds_session_native_encoder.cc", driver: "mds_session_native_encoder.py", mdsSessions: true,
+	names: []string{"mds-session-native-request-open", "mds-session-native-request-renewcaps", "mds-session-native-request-close", "mds-session-native-open", "mds-session-native-reject", "mds-session-native-renewcaps", "mds-session-native-recall-state", "mds-session-native-stale"},
+}
+
 // The offline encoder is a development oracle. It starts no Ceph daemon and
 // installs native build packages only in its owned disposable container.
 func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
@@ -220,7 +226,7 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper, watchersEncoderSpec.wrapper, mapextEncoderSpec.wrapper, checksumEncoderSpec.wrapper, sparseReadEncoderSpec.wrapper, pgListEncoderSpec.wrapper, watchNotifyEncoderSpec.wrapper, allocHintEncoderSpec.driver}
 	files = append(files, backoffEncoderSpec.wrapper, requestV8EncoderSpec.wrapper)
 	files = append(files, pgListV8EncoderSpec.wrapper)
-	files = append(files, replyV8EncoderSpec.wrapper, mdsMapEncoderSpec.wrapper)
+	files = append(files, replyV8EncoderSpec.wrapper, mdsMapEncoderSpec.wrapper, mdsSessionEncoderSpec.wrapper)
 	if spec.command == sparseReadEncoderSpec.command {
 		files = append(files, "build_sparse_read_oracle.py", "osd_sparse_read_oracle.cc")
 	}
@@ -244,7 +250,7 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	if err != nil {
 		return err
 	}
-	if spec.mdsMaps {
+	if spec.mdsMaps || spec.mdsSessions {
 		driver, err := os.ReadFile(filepath.Join(root, "tools", spec.driver))
 		if err != nil {
 			return err
@@ -277,6 +283,9 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 	if spec.mdsMaps && !closedMDSMapEncoderSpec(spec) {
 		return nil, errors.New("unsupported native MDS map encoder specification")
 	}
+	if spec.mdsSessions && !closedMDSSessionEncoderSpec(spec) {
+		return nil, errors.New("unsupported native MDS session encoder specification")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -302,7 +311,7 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 	if spec.command != mutationEncoderSpec.command && proof["native_payload_decoder_verified"] != true {
 		return nil, errors.New("native proof lacks its independent decoder receipt")
 	}
-	if spec.mdsMaps {
+	if spec.mdsMaps || spec.mdsSessions {
 		if err := validateNativeMDSMapSourceProof(proof); err != nil {
 			return nil, err
 		}
@@ -329,6 +338,12 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 		}
 		if spec.mdsMaps {
 			if err := validateNativeMDSMapFixture(name, fixture, segments); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if spec.mdsSessions {
+			if err := validateNativeMDSSessionFixture(name, fixture, segments); err != nil {
 				return nil, err
 			}
 			continue
@@ -529,7 +544,16 @@ func validateNativeReplyV8Decoder(name string, fixture map[string]any, data []by
 func closedMDSMapEncoderSpec(spec nativeEncoderSpec) bool {
 	return spec.command == mdsMapEncoderSpec.command && spec.wrapper == mdsMapEncoderSpec.wrapper &&
 		spec.driver == mdsMapEncoderSpec.driver && slices.Equal(spec.names, mdsMapEncoderSpec.names) &&
-		spec.mdsMaps && spec.requests == 0 && spec.events == 0 && !spec.controls &&
+		spec.mdsMaps && !spec.mdsSessions && spec.requests == 0 && spec.events == 0 && !spec.controls &&
+		spec.requestVersion == 0 && !spec.mixedV8 && spec.replyVersion == 0
+}
+
+// The session family is closed in the same way: its type-22 header rules can
+// never be selected by an OSD or map specification.
+func closedMDSSessionEncoderSpec(spec nativeEncoderSpec) bool {
+	return spec.command == mdsSessionEncoderSpec.command && spec.wrapper == mdsSessionEncoderSpec.wrapper &&
+		spec.driver == mdsSessionEncoderSpec.driver && slices.Equal(spec.names, mdsSessionEncoderSpec.names) &&
+		spec.mdsSessions && !spec.mdsMaps && spec.requests == 0 && spec.events == 0 && !spec.controls &&
 		spec.requestVersion == 0 && !spec.mixedV8 && spec.replyVersion == 0
 }
 
@@ -647,6 +671,216 @@ func validateNativeMDSMapFixture(name string, fixture map[string]any, segments m
 		!nativeProofNumber(decoded, "message_type", typ) || !nativeProofNumber(decoded, "epoch", uint64(epoch)) || !nativeProofNumber(decoded, "entry_count", expectedEntries) ||
 		decoded["fsid_hex"] != fsid || decoded["encoded_map_sha256"] != fmt.Sprintf("%x", sha256.Sum256(encoded)) {
 		return fmt.Errorf("native proof has inconsistent %s map identity/decoder receipt", name)
+	}
+	return nil
+}
+
+// nativeSessionVector is the closed expectation for one MClientSession vector.
+// Version 1 carries only the 28-byte ceph_mds_session_head; version 7 adds
+// metadata, supported features, metric spec, flags, cap auths and the oldest
+// client TID (messages/MClientSession.h at the pinned commit).
+type nativeSessionVector struct {
+	version                uint16
+	op, maxCaps, maxLeases uint32
+	flags                  uint32
+	seq                    uint64
+	metadata               map[string]string
+	capAuths               int
+	// features and metric are the native feature_bitset_t and metric_spec_t
+	// encode images; empty selects the default (empty) images.
+	features, metric     string
+	oldestTID, sourceTID uint64
+}
+
+const (
+	nativeEmptyBitset     = "00000000"
+	nativeEmptyMetricSpec = "0101" + "04000000" + nativeEmptyBitset
+)
+
+// nativeSessionHeadBytes is the packed ceph_mds_session_head size.
+const nativeSessionHeadBytes = 28
+
+var nativeSessionVectors = map[string]nativeSessionVector{
+	"mds-session-native-request-open": {version: 7, op: 0, metadata: map[string]string{"entity_id": "admin", "root": "/"},
+		features: "08000000" + "ff01000000000000", oldestTID: ^uint64(0), sourceTID: ^uint64(0)},
+	"mds-session-native-request-renewcaps": {version: 1, op: 4, seq: 5, oldestTID: ^uint64(0), sourceTID: 9},
+	"mds-session-native-request-close":     {version: 1, op: 2, oldestTID: ^uint64(0), sourceTID: ^uint64(0)},
+	"mds-session-native-open": {version: 7, op: 1, capAuths: 1, features: "08000000" + "ffffff0000000000",
+		metric: "0101" + "0c000000" + "08000000" + "ffff000000000000", oldestTID: ^uint64(0), sourceTID: ^uint64(0)},
+	"mds-session-native-reject": {version: 7, op: 11, flags: 1, metadata: map[string]string{"error_string": "blocklisted (blacklisted)"},
+		oldestTID: ^uint64(0), sourceTID: ^uint64(0)},
+	"mds-session-native-renewcaps":    {version: 1, op: 5, seq: 5, oldestTID: ^uint64(0), sourceTID: ^uint64(0)},
+	"mds-session-native-recall-state": {version: 1, op: 7, maxCaps: 100, maxLeases: 7, oldestTID: ^uint64(0), sourceTID: ^uint64(0)},
+	"mds-session-native-stale":        {version: 1, op: 6, oldestTID: ^uint64(0), sourceTID: ^uint64(0)},
+}
+
+// sessionCursor walks the fresh native front only to bind the independent
+// native decoder receipt to its bytes; it is not a product codec.
+type sessionCursor struct {
+	b  []byte
+	ok bool
+}
+
+func (c *sessionCursor) take(n uint64) []byte {
+	if !c.ok || n > uint64(len(c.b)) {
+		c.ok = false
+		return nil
+	}
+	v := c.b[:n]
+	c.b = c.b[n:]
+	return v
+}
+
+func (c *sessionCursor) u8() uint8 {
+	if v := c.take(1); v != nil {
+		return v[0]
+	}
+	return 0
+}
+
+func (c *sessionCursor) u32() uint32 {
+	if v := c.take(4); v != nil {
+		return binary.LittleEndian.Uint32(v)
+	}
+	return 0
+}
+
+func (c *sessionCursor) u64() uint64 {
+	if v := c.take(8); v != nil {
+		return binary.LittleEndian.Uint64(v)
+	}
+	return 0
+}
+
+func (c *sessionCursor) str() string { return string(c.take(uint64(c.u32()))) }
+
+// structBody consumes an ENCODE_START(1, 1) envelope and returns its body.
+func (c *sessionCursor) structBody() *sessionCursor {
+	v, compat := c.u8(), c.u8()
+	body := c.take(uint64(c.u32()))
+	return &sessionCursor{b: body, ok: c.ok && v == 1 && compat == 1}
+}
+
+func nativeProofSigned(m map[string]any, field string, want int64) bool {
+	n, ok := m[field].(json.Number)
+	got, err := strconv.ParseInt(n.String(), 10, 64)
+	return ok && err == nil && got == want
+}
+
+func validateNativeMDSSessionFixture(name string, fixture map[string]any, segments map[string][]byte) error {
+	want, ok := nativeSessionVectors[name]
+	if !ok {
+		return fmt.Errorf("native proof has unknown MDS session vector %s", name)
+	}
+	h, front, data := segments["header"], segments["front"], segments["data"]
+	if len(h) != 41 || len(data) != 0 || binary.LittleEndian.Uint64(h[:8]) != 1 ||
+		binary.LittleEndian.Uint64(h[8:16]) != 0 || binary.LittleEndian.Uint16(h[16:18]) != 22 ||
+		binary.LittleEndian.Uint16(h[18:20]) != 127 || binary.LittleEndian.Uint16(h[20:22]) != want.version ||
+		binary.LittleEndian.Uint32(h[22:26]) != 0 || binary.LittleEndian.Uint16(h[26:28]) != 0 ||
+		binary.LittleEndian.Uint64(h[28:36]) != 3 || h[36] != 1 ||
+		binary.LittleEndian.Uint16(h[37:39]) != 1 || binary.LittleEndian.Uint16(h[39:41]) != 0 {
+		return fmt.Errorf("native proof has unsupported %s session header", name)
+	}
+	metadata, ok := fixture["native_header"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("native proof lacks %s header metadata", name)
+	}
+	for field, n := range map[string]uint64{"seq": 1, "tid": 0, "type": 22, "priority": 127, "version": uint64(want.version), "data_off": 0, "ack_seq": 3, "flags": 1, "compat": 1, "reserved": 0, "front_len": uint64(len(front)), "middle_len": 0, "data_len": 0} {
+		if !nativeProofNumber(metadata, field, n) {
+			return fmt.Errorf("native proof has inconsistent %s header %s", name, field)
+		}
+	}
+	for _, segment := range []string{"front", "data", "header"} {
+		if fixture[segment+"_sha256"] != fmt.Sprintf("%x", sha256.Sum256(segments[segment])) {
+			return fmt.Errorf("native proof has inconsistent %s %s digest", name, segment)
+		}
+	}
+	receipt, ok := fixture["decoded_session"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("native proof lacks %s independent session decoder receipt", name)
+	}
+	for field, n := range map[string]uint64{"message_type": 22, "version": uint64(want.version), "op": uint64(want.op), "seq": want.seq, "stamp_sec": 0, "stamp_nsec": 0, "max_caps": uint64(want.maxCaps), "max_leases": uint64(want.maxLeases), "flags": uint64(want.flags), "oldest_client_tid": want.oldestTID, "source_oldest_client_tid": want.sourceTID} {
+		if !nativeProofNumber(receipt, field, n) {
+			return fmt.Errorf("native proof has inconsistent %s decoded session %s", name, field)
+		}
+	}
+	c := &sessionCursor{b: front, ok: true}
+	if c.u32() != want.op || c.u64() != want.seq || c.u64() != 0 || c.u32() != want.maxCaps || c.u32() != want.maxLeases || !c.ok {
+		return fmt.Errorf("native proof has inconsistent %s session head", name)
+	}
+	keys, _ := receipt["metadata"].(map[string]any)
+	auths, _ := receipt["cap_auths"].([]any)
+	features, _ := receipt["supported_features_hex"].(string)
+	metric, _ := receipt["metric_spec_hex"].(string)
+	wantFeatures, wantMetric := want.features, want.metric
+	if wantFeatures == "" {
+		wantFeatures = nativeEmptyBitset
+	}
+	if wantMetric == "" {
+		wantMetric = nativeEmptyMetricSpec
+	}
+	if keys == nil || auths == nil || len(keys) != len(want.metadata) || len(auths) != want.capAuths || features != wantFeatures || metric != wantMetric {
+		return fmt.Errorf("native proof lacks %s decoded session extension receipt", name)
+	}
+	for k, v := range want.metadata {
+		if keys[k] != v {
+			return fmt.Errorf("native proof has inconsistent %s decoded session metadata", name)
+		}
+	}
+	if want.version == 1 {
+		// Native decoding leaves every extension field at its default.
+		if len(front) != nativeSessionHeadBytes {
+			return fmt.Errorf("native proof has unsupported %s head-only session", name)
+		}
+		return nil
+	}
+	n := c.u32()
+	if !c.ok || uint64(n) != uint64(len(want.metadata)) {
+		return fmt.Errorf("native proof has inconsistent %s session metadata count", name)
+	}
+	seen := make(map[string]bool, n)
+	for range n {
+		k, v := c.str(), c.str()
+		if !c.ok || seen[k] || keys[k] != v {
+			return fmt.Errorf("native proof has inconsistent %s session metadata", name)
+		}
+		seen[k] = true
+	}
+	for _, image := range []string{features, metric} {
+		raw, err := hex.DecodeString(image)
+		if err != nil || len(raw) < 4 || !bytes.Equal(c.take(uint64(len(raw))), raw) {
+			return fmt.Errorf("native proof has inconsistent %s session bitset image", name)
+		}
+	}
+	if c.u32() != want.flags || uint64(c.u32()) != uint64(want.capAuths) || !c.ok {
+		return fmt.Errorf("native proof has inconsistent %s session flags/cap auth count", name)
+	}
+	for _, entry := range auths {
+		auth, ok := entry.(map[string]any)
+		body := c.structBody()
+		match := body.structBody()
+		uid := int64(match.u64())
+		gids, _ := auth["gids"].([]any)
+		count := match.u32()
+		if !ok || !match.ok || uint64(count) != uint64(len(gids)) || !nativeProofSigned(auth, "uid", uid) {
+			return fmt.Errorf("native proof has inconsistent %s session cap auth match", name)
+		}
+		for _, gid := range gids {
+			n, isNumber := gid.(json.Number)
+			if !isNumber || n.String() != strconv.FormatUint(uint64(match.u32()), 10) {
+				return fmt.Errorf("native proof has inconsistent %s session cap auth gids", name)
+			}
+		}
+		path, fs, squash := match.str(), match.str(), match.u8()
+		readable, writeable := body.u8(), body.u8()
+		if !match.ok || len(match.b) != 0 || !body.ok || len(body.b) != 0 || squash > 1 || readable > 1 || writeable > 1 ||
+			auth["path"] != path || auth["fs_name"] != fs || auth["root_squash"] != (squash == 1) ||
+			auth["readable"] != (readable == 1) || auth["writeable"] != (writeable == 1) {
+			return fmt.Errorf("native proof has inconsistent %s session cap auth", name)
+		}
+	}
+	if c.u64() != want.oldestTID || !c.ok || len(c.b) != 0 {
+		return fmt.Errorf("native proof has inconsistent %s session oldest client TID or trailing bytes", name)
 	}
 	return nil
 }

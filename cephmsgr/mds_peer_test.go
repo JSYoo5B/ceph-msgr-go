@@ -319,6 +319,8 @@ type mdsTestPeer struct {
 	mu       sync.Mutex
 	seq      uint64
 	client   *mdsTestClientConn
+	// sessions admits MClientSession messages for CephFS session tests.
+	sessions atomic.Bool
 }
 
 type mdsTestWritePause struct{ started, release chan struct{} }
@@ -383,7 +385,7 @@ func (p *mdsTestPeer) serve() {
 		}
 		// D2 opens no filesystem client session. Session OPEN, map selection
 		// or any other MDS message would violate the command-only contract.
-		if m.Type != msgr.TellCommandMessage {
+		if m.Type != msgr.TellCommandMessage && !(m.Type == 22 && p.sessions.Load()) {
 			p.errors <- fmt.Errorf("MDS command transport unexpectedly sent message %d", m.Type)
 			return
 		}
