@@ -12,11 +12,13 @@ import (
 )
 
 const (
+	// Pinned Ceph v20.2.4 include/msgr.h:92: CEPH_ENTITY_TYPE_MDS.
+	ServiceMDS        uint32 = 0x02
 	ServiceOSD        uint32 = 0x04
 	ServiceMgr        uint32 = 0x10
 	ServiceAuth       uint32 = 0x20
 	defaultServices          = ServiceAuth | ServiceMgr
-	supportedServices        = defaultServices | ServiceOSD
+	supportedServices        = defaultServices | ServiceOSD | ServiceMDS
 )
 
 var ErrTicket = errors.New("cephx: missing, expired or malformed ticket")
@@ -67,7 +69,8 @@ type Client struct {
 }
 
 // NewClient selects the service tickets requested in each MON exchange.
-// Zero selects AUTH/MGR; the only optional additional service is OSD.
+// Zero selects AUTH/MGR. OSD and MDS are independent optional additions.
+// A requested service ticket does not establish that service transport support.
 func NewClient(name string, key Key, services uint32) (*Client, error) {
 	if !strings.HasPrefix(name, "client.") || len(name) <= 7 || len(name) > 1024 || strings.ContainsAny(name, "\x00\r\n") {
 		return nil, errors.New("cephx: identity must be client.<id>")
@@ -309,7 +312,7 @@ type Authorizer struct {
 }
 
 func (c *Client) Authorizer(service uint32) (*Authorizer, error) {
-	if (service != ServiceMgr && service != ServiceOSD) || c.services&service == 0 {
+	if (service != ServiceMgr && service != ServiceOSD && service != ServiceMDS) || c.services&service == 0 {
 		return nil, ErrTicket
 	}
 	t, ok := c.Tickets[service]

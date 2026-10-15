@@ -48,7 +48,7 @@ func TestClientServiceMaskAndValueCopies(t *testing.T) {
 		if kind == AES256K {
 			key.secret = bytes.Repeat([]byte{0x51}, 32)
 		}
-		for _, services := range []uint32{0, ServiceAuth | ServiceMgr, ServiceAuth | ServiceMgr | ServiceOSD} {
+		for _, services := range []uint32{0, ServiceAuth | ServiceMgr, ServiceAuth | ServiceMgr | ServiceOSD, ServiceAuth | ServiceMgr | ServiceMDS, ServiceAuth | ServiceMgr | ServiceOSD | ServiceMDS} {
 			c, err := NewClient("client.services", key, services)
 			if err != nil {
 				t.Fatal(err)
@@ -64,7 +64,7 @@ func TestClientServiceMaskAndValueCopies(t *testing.T) {
 			copy := *c // The coordinator clones Client before reauthentication.
 			copy.GlobalID = 99
 			if copy.Services() != want {
-				t.Fatal("value copy lost the OSD request selection")
+				t.Fatal("value copy lost the requested service selection")
 			}
 			assertServiceRequest(t, &copy, want)
 		}
@@ -73,7 +73,7 @@ func TestClientServiceMaskAndValueCopies(t *testing.T) {
 
 func TestUnsupportedServiceMasksRejectBeforeProducingProof(t *testing.T) {
 	key := rfcKey(t)
-	for _, services := range []uint32{ServiceOSD, ServiceAuth, ServiceMgr, ServiceAuth | ServiceOSD, ServiceAuth | ServiceMgr | 1, ServiceAuth | ServiceMgr | 2, ServiceAuth | ServiceMgr | 8, ServiceAuth | ServiceMgr | 64, ^uint32(0)} {
+	for _, services := range []uint32{ServiceOSD, ServiceMDS, ServiceOSD | ServiceMDS, ServiceAuth, ServiceMgr, ServiceAuth | ServiceMDS, ServiceMgr | ServiceMDS, ServiceAuth | ServiceOSD, ServiceAuth | ServiceMgr | 1, ServiceAuth | ServiceMgr | 8, ServiceAuth | ServiceMgr | 64, ^uint32(0)} {
 		if c, err := NewClient("client.services", key, services); err == nil || c != nil {
 			t.Fatalf("unsupported service mask %#x accepted", services)
 		}
@@ -169,7 +169,7 @@ func TestOSDTicketRenewalAndServiceAuthorizer(t *testing.T) {
 
 func TestAuthorizerRejectsUnsupportedOrUnrequestedService(t *testing.T) {
 	c, _ := NewClient("client.services", rfcKey(t), 0)
-	for _, service := range []uint32{0, 1, 2, 8, ServiceAuth, ServiceOSD, ServiceOSD | ServiceMgr, 64} {
+	for _, service := range []uint32{0, 1, ServiceMDS, 8, ServiceAuth, ServiceOSD, ServiceOSD | ServiceMgr, 64} {
 		c.Tickets[service] = Ticket{Key: c.Key, Expires: time.Now().Add(time.Minute)}
 		if a, err := c.Authorizer(service); !errors.Is(err, ErrTicket) || a != nil {
 			t.Fatalf("unsupported or unrequested authorizer %#x accepted", service)
