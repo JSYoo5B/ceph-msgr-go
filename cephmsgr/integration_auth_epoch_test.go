@@ -810,9 +810,11 @@ func TestEpochTraceCallbacksRunAfterPublicationOutsideClientLockAndTolerateClose
 			install := hooks.installed
 			var owner atomic.Pointer[Client]
 			callback := make(chan State, 1)
+			installed := make(chan struct{}, 1)
 			closed := make(chan struct{})
 			hooks.installed = func(info authIssuerObservation, auth *cephx.Client) {
-				if c := owner.Load(); c != nil {
+				c := owner.Load()
+				if c != nil {
 					// Reentrant Snapshot would deadlock if Client.mu were held.
 					callback <- c.Snapshot()
 					if closeDuringCallback {
@@ -823,6 +825,9 @@ func TestEpochTraceCallbacksRunAfterPublicationOutsideClientLockAndTolerateClose
 					}
 				}
 				install(info, auth)
+				if c != nil {
+					installed <- struct{}{}
+				}
 			}
 			c, err := Dial(context.WithValue(ctx, authTraceContextKey{}, hooks), mockOptions(t, 20, [16]byte{1}))
 			if err != nil {
@@ -830,8 +835,13 @@ func TestEpochTraceCallbacksRunAfterPublicationOutsideClientLockAndTolerateClose
 			}
 			defer c.Close()
 			owner.Store(c)
-			finished := make(chan error, 1)
-			go func() { finished <- c.connectMonitor(ctx) }()
+			// Only the supervisor reconnects after bootstrap. A direct
+			// connectMonitor call would race its first loop iteration, which
+			// can retire this candidate as its own predecessor (GOMAXPROCS=1).
+			c.mu.Lock()
+			first := c.mon
+			c.mu.Unlock()
+			first.Fail(errors.New("test: force supervised MON renewal"))
 			select {
 			case state := <-callback:
 				if !state.Monitor.Ready || state.GlobalID == 0 {
@@ -841,12 +851,14 @@ func TestEpochTraceCallbacksRunAfterPublicationOutsideClientLockAndTolerateClose
 				t.Fatal("install callback blocked while reentering Snapshot")
 			}
 			select {
-			case err := <-finished:
-				if err != nil {
-					t.Fatal(err)
-				}
+			case <-installed:
 			case <-ctx.Done():
 				t.Fatal("install callback/Close race did not complete")
+			}
+			if !closeDuringCallback {
+				if s, err := c.monitor(ctx); err != nil || s == first {
+					t.Fatal("supervised renewal did not publish a fresh MON session", err)
+				}
 			}
 			if closeDuringCallback {
 				select {
