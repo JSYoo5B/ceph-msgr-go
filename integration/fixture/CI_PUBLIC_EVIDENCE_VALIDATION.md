@@ -28,3 +28,14 @@ Both test groups passed with `CGO_ENABLED=0`.
 These checks establish the publication policy and local collector behavior.
 They do not establish a successful Linux root-container/unprivileged-host run
 or a restarted exact-head CI result; those require the next live fixture/CI run.
+
+## Windows receipt identity check — 2026-10-15
+
+Exact-head run `38703760506` at
+`874164f944377aa106da9f1a3f9bf8268c5d3d9b` failed only its two Windows unit
+jobs. `os.Stat(path)` can load Windows file identity lazily, so comparing that
+receipt after atomic replacement can inspect the replacement twice. The test
+now captures identity through an open file's `Stat`, then closes the handle
+before replacement. Production publication remains unchanged. Focused CGO=0
+tests and Windows amd64 test cross-compilation passed; actual Windows execution
+is left to the new normal CI run.

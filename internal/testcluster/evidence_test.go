@@ -13,7 +13,18 @@ func TestPublicEvidenceReplacesPrivateReceiptForHostDiagnostics(t *testing.T) {
 	if err := os.WriteFile(path, []byte("old container receipt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(path)
+	// On Windows, os.Stat can defer loading a file's identity until SameFile
+	// is called. After publication that path already names the replacement.
+	// File.Stat captures the old handle's identity now; close it before Rename
+	// so the test does not itself prevent replacement on Windows.
+	previous, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := previous.Stat()
+	if closeErr := previous.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
