@@ -7,3 +7,4 @@ tools/osd_xattr_native_encoder.cc text eol=lf
 tools/osd_omap_native_encoder.cc text eol=lf
 tools/osd_omap_write_native_encoder.cc text eol=lf
 tools/osd_omap_cmp_native_encoder.cc text eol=lf
+tools/osd_omap_range_native_encoder.cc text eol=lf

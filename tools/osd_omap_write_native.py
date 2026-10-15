@@ -2,7 +2,7 @@
 """Independent test-only Tentacle OMAP header/write oracle, never product code.
 
 Ceph 20.2.4 source 7f793731f1b39eb4f465e960113d2363c311b964:
-src/include/rados/librados.h:2991,3107,3133,3150 and src/librados/librados_c.cc
+src/include/rados/librados.h:2991,3107,3133,3149 and src/librados/librados_c.cc
 (LGPL-2.1; header LGPL-2.1 or LGPL-3.0); src/tools/rados/rados.cc:2879-2943
 (LGPL-2.1). This adapter copies no Ceph implementation and emits no
 Go-generated wire data.
@@ -53,7 +53,7 @@ MAX_RESERVED = 8
 MAX_OPERATIONS = 16
 MAX_CLI_OUTPUT = 16 << 10
 OWNED = "osd-omap-write-owned"
-WRITE_OPS = {"set", "remove", "clear", "cmp"}
+WRITE_OPS = {"set", "remove", "clear", "cmp", "rmrange"}
 RETURNVEC = 1024  # librados.h:137 LIBRADOS_OPERATION_RETURNVEC
 
 
@@ -106,7 +106,9 @@ def operations(raw, allowed=WRITE_OPS):
     for action in raw:
         if not isinstance(action, dict) or action.get("op") not in allowed:
             raise ValueError("unsupported native OMAP write operation")
-        admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags", "cmp": "key"}[action["op"]]}
+        admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags", "cmp": "key", "rmrange": "begin"}[action["op"]]}
+        if action["op"] == "rmrange":
+            admitted.add("end")
         if action["op"] == "cmp":
             admitted |= {"value", "comparison"}
         if set(action) - admitted:
@@ -119,6 +121,10 @@ def operations(raw, allowed=WRITE_OPS):
             decoded["entries"] = entries(action.get("entries", []), "set entry")
         elif action["op"] == "remove":
             decoded["keys"] = keys(action.get("keys", []), "removal key")
+        elif action["op"] == "rmrange":
+            # Reversed ranges stay expressible here to characterize the
+            # server; the Go product refuses them before transmission.
+            decoded.update(begin=binary(action.get("begin", ""), MAX_KEY), end=binary(action.get("end", ""), MAX_KEY))
         elif action["op"] == "cmp":
             # The C builder takes uint8; unsupported identifiers stay
             # expressible here to observe the server, never in the Go product.
@@ -166,6 +172,7 @@ def validate_request(raw, mode):
     for action in request.get("operations", []):
         total += sum(len(k) + len(v) for k, v in action.get("entries", [])) + sum(map(len, action.get("keys", [])))
         total += len(action.get("key", b"")) + len(action.get("value", b""))
+        total += len(action.get("begin", b"")) + len(action.get("end", b""))
     if total > MAX_BINARY:
         raise ValueError("aggregate OMAP write oracle input exceeds 128 KiB")
     return request
@@ -214,6 +221,7 @@ class Native(omap.Native):
         cmp2 = [p, char, C.c_uint8, char, s, s, C.POINTER(C.c_int)]
         for name, arguments in {"write_op_omap_rm_keys2": [p, C.POINTER(p), C.POINTER(s), s],
                                 "write_op_omap_clear": [p], "write_op_omap_cmp2": cmp2,
+                                "write_op_omap_rm_range2": [p, char, s, char, s],
                                 "read_op_omap_cmp2": cmp2}.items():
             function = getattr(self.lib, "rados_" + name)
             function.argtypes, function.restype = arguments, None
@@ -261,6 +269,9 @@ class Native(omap.Native):
                     k, kl, kb = omap.pointers(action["keys"])
                     buffers.extend((k, kl, kb))
                     self.lib.rados_write_op_omap_rm_keys2(operation, k, kl, len(action["keys"]))
+                elif action["op"] == "rmrange":
+                    self.lib.rados_write_op_omap_rm_range2(operation, action["begin"], len(action["begin"]),
+                                                           action["end"], len(action["end"]))
                 else:
                     self.lib.rados_write_op_omap_clear(operation)
                 if action["flags"]:

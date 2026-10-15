@@ -233,7 +233,7 @@ Replicated pool의 현재 객체에 대한 stat과 양의 길이 read, write/wri
 append, truncate, zero, create/delete와 version/extent 조건을 제공한다.
 제한 xattr GET/GETALL·STRING 비교·SET/RM도 같은 ordered vector에서 제공한다.
 OMAP은 제한된 단일 페이지 GETKEYS/GETVALS와 지정 키 BYKEYS 읽기, raw header
-읽기, OMAP_CMP 비교와 SETVALS·SETHEADER·CLEAR·RMKEYS 쓰기를 제공한다.
+읽기, OMAP_CMP 비교와 SETVALS·SETHEADER·CLEAR·RMKEYS·RMKEYRANGE 쓰기를 제공한다.
 Stat bytes는 size와 mtime의 wire 출력이며 filesystem API로 변환하지 않는다.
 Aggregate 서버 code와 operation별 result는 서로 다를 수 있다. 예를 들어
 존재하지 않는 객체는 aggregate -2와 실행되지 않은 stat의 result 0을 반환한다.
@@ -294,7 +294,7 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 
 현재 SET/RM 뒤 같은 vector의 GET/GETALL/CMP는 staged-read 의미를 보장하지
 못해 송신 전에 거절한다. 비교를 먼저 놓는 순서가 지원된다. U64 비교,
-bulk SET/RESET, OMAP 범위 삭제, class·snapshot은 별도 미구현 단계다.
+bulk SET/RESET, class·snapshot은 별도 미구현 단계다.
 
 OMAP 읽기는 `Omap` 입력을 쓰며 extent·Version·Data·Xattr는 0이다.
 `StartAfter`는 exclusive cursor, `Prefix`는 GETVALS의 byte prefix이며
@@ -325,12 +325,16 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 `PayloadLength`다. 누락된 키와 빈 값은 원본 map에서 구분한다. 출력 해석,
 다음 cursor 선택과 여러 페이지의 일관성은 사용 레이어가 맡는다.
 [OMAP 계약과 검증 범위](internal/osd/OMAP_CONTRACT.md)에 native C API의
-NUL cursor/prefix 제한과 범위 삭제 미지원 범위를 기록했다.
+NUL cursor/prefix 제한을 기록했다.
 
 OMAP header와 쓰기도 같은 `Omap` 입력을 쓴다. `OSDGetOmapHeader`는 입력 없이
 양의 `MaxOutputBytes`만 받고 raw header bytes를 길이 prefix 없이 `Data`로
 반환한다. `OSDSetOmapValues`는 `Entries`, `OSDSetOmapHeader`는 `Header`,
-`OSDRemoveOmapKeys`는 `Keys`만 받으며 `OSDClearOmap`은 입력이 없다. 쓰기의
+`OSDRemoveOmapKeys`는 `Keys`만 받으며 `OSDClearOmap`은 입력이 없다.
+`OSDRemoveOmapKeyRange`는 `RangeBegin`(포함)과 `RangeEnd`(제외)로 반열린 구간의
+키를 지운다. 같은 끝점은 실행되는 빈 삭제다. 역순 구간은 작은 객체에서는 빈
+삭제지만 키가 많으면 고정 RocksDB 경로가 그대로 DeleteRange에 넘기므로 송신 전에
+거절한다. 쓰기의
 `MaxOutputBytes`는 0이어야 한다. 중복 키는 송신 전에 거절하고 복사본을 native
 byte 순서로 정렬한다. 빈 `Entries`·`Keys`도 실제로 전송하는 mutation이며 빈
 `Header`는 CLEAR가 아니다. 서버의 CLEAR는 값과 header를 함께 지운다.

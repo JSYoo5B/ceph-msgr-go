@@ -78,7 +78,7 @@ func TestOmapAdmissionBoundsAndVariantIsolation(t *testing.T) {
 		{"EXCL", func(op *Operation) { op.Flags = OpExclusive }, ErrOperation},
 		{"unknown flags", func(op *Operation) { op.Flags = 4 }, ErrOperation},
 		{"unsupported tmap conversion", func(op *Operation) { op.Code = 0x3222 }, ErrOperation},
-		{"unsupported range removal", func(op *Operation) { op.Code = 0x222c }, ErrOperation},
+		{"unsupported class call", func(op *Operation) { op.Code = 0x1401 }, ErrOperation},
 		{"large cursor", func(op *Operation) { op.Omap.StartAfter = strings.Repeat("x", 1024) }, wire.ErrLimit},
 		{"large keyset", func(op *Operation) {
 			op.Code = OmapGetValuesByKeys

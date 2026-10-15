@@ -1,4 +1,4 @@
-# Tentacle O2b/O2c/O2d bounded OMAP read, header, write and comparison contract
+# Tentacle bounded OMAP read, header, write, comparison and range removal contract
 
 Reference: Ceph 20.2.4, commit
 `7f793731f1b39eb4f465e960113d2363c311b964`.
@@ -12,8 +12,9 @@ native evidence is recorded separately in
 OMAP_CMP (O2d) is implemented with its own native evidence in
 [OSD_OMAP_COMPARE_VALIDATION.md](../../integration/fixture/OSD_OMAP_COMPARE_VALIDATION.md).
 [OSD_OMAP_VALIDATION.md](../../integration/fixture/OSD_OMAP_VALIDATION.md)
-records the read profiles and gaps. RMKEYRANGE below remains a proposal, not
-implemented support. [CONTRACT.md](CONTRACT.md) supplies existing v6
+records the read profiles and gaps. RMKEYRANGE (O2e) is implemented with its
+evidence in
+[OSD_OMAP_RANGE_VALIDATION.md](../../integration/fixture/OSD_OMAP_RANGE_VALIDATION.md). [CONTRACT.md](CONTRACT.md) supplies existing v6
 identity, explicit placement, context, per-op results and uncertain-outcome
 rules; [METADATA_CONTRACT.md](METADATA_CONTRACT.md) concerns the separate xattr
 subset. Neither supplies OMAP comparison or pagination semantics.
@@ -34,15 +35,20 @@ The [opcode list][opcodes], [native read builders][read-builders] and
 | OMAPSETHEADER | 0x2216 | Implemented bounded raw header | Raw header bytes | No output |
 | OMAPCLEAR | 0x2217 | Implemented; header removal is a native acceptance case | Empty | No output |
 | OMAPRMKEYS | 0x2218 | Implemented bounded canonical key set | Native encoded set of strings | No output |
-| OMAPRMKEYRANGE | 0x222c | Defer first implementation | string key_begin, string key_end | No output |
+| OMAPRMKEYRANGE | 0x222c | Implemented half-open forward range | string key_begin, string key_end | No output |
 
 The read milestone deliberately excluded header and comparison until their
 independent execution oracles were ready. O2c adds the header read and four
 writes using the same explicitly targeted replicated BlueStore profile as
 O1/O2a. O2d then adds comparison with its own signed-char native execution
-oracle. RMKEYRANGE is a separate milestone: the audited builder and
-handler exist, but endpoint ordering, half-open range behavior and empty/reversed
-ranges need their own native acceptance. TMAP conversion, class calls, allocation
+oracle. O2e adds RMKEYRANGE: `OmapInput.RangeBegin` (inclusive) and `RangeEnd`
+(exclusive) are encoded as two length-aware strings like the pinned
+omap_rm_range builder, the handler returns ENOENT for a missing/whiteout object,
+and BlueStore removes `[begin, end)` through RocksDBStore::rm_range_keys. Equal
+endpoints are an executed empty removal. A reversed range is empty on small
+objects, but past `rocksdb_delete_range_threshold` keys (1 Mi by default) the
+pinned RocksDBStore passes it unchanged to DeleteRange, so the client refuses
+begin > end before transmission. TMAP conversion, class calls, allocation
 hints, snapshots, rollback and watch remain separate work. No compatibility
 wrapper for an earlier Go API or earlier Ceph release is proposed.
 

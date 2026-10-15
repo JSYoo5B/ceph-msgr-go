@@ -24,6 +24,7 @@ const (
 	OmapSetHeader       uint16 = 0x2216
 	OmapClear           uint16 = 0x2217
 	OmapRemoveKeys      uint16 = 0x2218
+	OmapRemoveKeyRange  uint16 = 0x222c
 	GetXattr            uint16 = 0x1301
 	GetXattrs           uint16 = 0x1302
 	CompareXattr        uint16 = 0x1303

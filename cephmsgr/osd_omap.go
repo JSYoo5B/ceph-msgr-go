@@ -12,6 +12,7 @@ const (
 	OSDSetOmapHeader       OSDOpcode = OSDOpcode(osd.OmapSetHeader)
 	OSDClearOmap           OSDOpcode = OSDOpcode(osd.OmapClear)
 	OSDRemoveOmapKeys      OSDOpcode = OSDOpcode(osd.OmapRemoveKeys)
+	OSDRemoveOmapKeyRange  OSDOpcode = OSDOpcode(osd.OmapRemoveKeyRange)
 )
 
 // OSDOmapEntry is one SetOmapValues key/value pair. Key holds length-aware
@@ -52,6 +53,8 @@ type OSDOmapAssertion struct {
 // GetOmapKeys accepts no Prefix. GetOmapValuesByKeys accepts only Keys.
 // RemoveOmapKeys accepts only Keys; SetOmapValues accepts only Entries;
 // SetOmapHeader accepts only Header; CompareOmap accepts only Assertions;
+// RemoveOmapKeyRange accepts only RangeBegin (inclusive) and RangeEnd
+// (exclusive) byte strings, and refuses a reversed range before transmission;
 // GetOmapHeader and ClearOmap accept no input. Duplicate keys are rejected and
 // encoding sorts copies of Keys, Entries and Assertions in native byte order. For the opcode's own field, nil and empty
 // Keys, Entries, Assertions and Header are explicit empty inputs: an empty
@@ -78,20 +81,22 @@ type OSDOmapAssertion struct {
 // osd_max_write_op_reply_len (64 bytes by default) with -EOVERFLOW and does not
 // commit the transaction; the client returns that server code unchanged.
 type OSDOmapInput struct {
-	StartAfter, Prefix string
-	MaxEntries         uint64
-	Keys               []string
-	Entries            []OSDOmapEntry
-	Assertions         []OSDOmapAssertion
-	Header             []byte
-	MaxOutputBytes     uint32
+	StartAfter, Prefix   string
+	MaxEntries           uint64
+	Keys                 []string
+	Entries              []OSDOmapEntry
+	Assertions           []OSDOmapAssertion
+	Header               []byte
+	RangeBegin, RangeEnd string
+	MaxOutputBytes       uint32
 }
 
 // omapWireInput copies only entry/assertion headers; key and value bytes are copied by
 // the encoder after the complete request has been bounded.
 func omapWireInput(input OSDOmapInput) osd.OmapInput {
 	result := osd.OmapInput{StartAfter: input.StartAfter, Prefix: input.Prefix,
-		MaxEntries: input.MaxEntries, Keys: input.Keys, Header: input.Header, MaxOutputBytes: input.MaxOutputBytes}
+		MaxEntries: input.MaxEntries, Keys: input.Keys, Header: input.Header,
+		RangeBegin: input.RangeBegin, RangeEnd: input.RangeEnd, MaxOutputBytes: input.MaxOutputBytes}
 	if input.Entries != nil {
 		result.Entries = make([]osd.OmapEntry, len(input.Entries))
 		for i, entry := range input.Entries {

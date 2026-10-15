@@ -247,3 +247,59 @@ func TestOmapHeaderAndWriteReplyValidation(t *testing.T) {
 		}
 	}
 }
+
+// Source-derived literal for Objecter.h omap_rm_range (two encoded strings).
+func TestOmapRemoveKeyRangeEncodingAndAdmission(t *testing.T) {
+	r := oracleRequest()
+	r.MTimeSeconds = 1
+	r.Operations = []Operation{{Code: OmapRemoveKeyRange, Flags: OpFailOK, Omap: OmapInput{RangeBegin: "b\x00", RangeEnd: "c\xff"}}}
+	m, err := EncodeRequest(r, oracleFeatures, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary.LittleEndian.Uint32(m.Front[8:12]) != uint32(FlagWrite|FlagOnDisk|FlagReturnVec) ||
+		!bytes.Equal(m.Front[113:151], xattrLiteral(t, "2c22 02000000 0000000000000000 0c00000000000000 000000000000000000000000 0c000000")) ||
+		!bytes.Equal(m.Data, xattrLiteral(t, "02000000 6200 02000000 63ff")) {
+		t.Fatal("range removal union/input differs from the native builder layout")
+	}
+	for _, input := range []OmapInput{{}, {RangeBegin: "a", RangeEnd: "a"}, {RangeEnd: "\xff"}} {
+		r.Operations = []Operation{{Code: OmapRemoveKeyRange, Omap: input}}
+		if _, err := EncodeRequest(r, oracleFeatures, 1024); err != nil {
+			t.Fatal("empty or forward range rejected", input, err)
+		}
+	}
+	for _, tc := range []struct {
+		name string
+		op   Operation
+		want error
+	}{
+		{"reversed range", Operation{Code: OmapRemoveKeyRange, Omap: OmapInput{RangeBegin: "b", RangeEnd: "a"}}, ErrRequest},
+		{"reversed by prefix", Operation{Code: OmapRemoveKeyRange, Omap: OmapInput{RangeBegin: "a\x00", RangeEnd: "a"}}, ErrRequest},
+		{"output budget", Operation{Code: OmapRemoveKeyRange, Omap: OmapInput{MaxOutputBytes: 1}}, ErrRequest},
+		{"keys variant", Operation{Code: OmapRemoveKeyRange, Omap: OmapInput{Keys: []string{}}}, ErrRequest},
+		{"cursor variant", Operation{Code: OmapRemoveKeyRange, Omap: OmapInput{StartAfter: "a"}}, ErrRequest},
+		{"range on another opcode", Operation{Code: OmapRemoveKeys, Omap: OmapInput{RangeBegin: "a"}}, ErrRequest},
+		{"range end on a read", Operation{Code: OmapGetKeys, Omap: OmapInput{RangeEnd: "z", MaxOutputBytes: 8}}, ErrRequest},
+		{"range on stat", Operation{Code: Stat, Omap: OmapInput{RangeBegin: "a"}}, ErrRequest},
+		{"large range key", Operation{Code: OmapRemoveKeyRange, Omap: OmapInput{RangeEnd: strings.Repeat("z", 1024)}}, wire.ErrLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r.Operations = []Operation{tc.op}
+			if _, err := EncodeRequest(r, oracleFeatures, 1024); !errors.Is(err, tc.want) {
+				t.Fatal("invalid range removal admitted", err)
+			}
+		})
+	}
+	if _, _, err := ValidateOperations([]Operation{{Code: OmapRemoveKeyRange}, {Code: OmapGetHeader, Omap: OmapInput{MaxOutputBytes: 8}}}, 1024); !errors.Is(err, ErrOperation) {
+		t.Fatal("OMAP read after a staged range removal admitted", err)
+	}
+	op := Operation{Code: OmapRemoveKeyRange, Omap: OmapInput{RangeBegin: "a", RangeEnd: "b"}}
+	valid := syntheticOmapReply(t, op, nil)
+	if valid.Length != 10 || ValidateOmapReply(op, valid, true) != nil {
+		t.Fatal("range removal reply union rejected", valid.Length)
+	}
+	valid.PayloadLength, valid.Data = 1, []byte{0}
+	if ValidateOmapReply(op, valid, true) == nil {
+		t.Fatal("range removal reply returned data")
+	}
+}

@@ -25,6 +25,13 @@ independently construct five message triples: a four-assertion OMAP_CMP
 ECANCELED, FAILOK and read-only ENOENT replies. They are offline codec proof
 only and claim no live comparison evaluation, execution or durability.
 
+[Fresh OMAPRMKEYRANGE encoder/decoder fixtures](omap-range-native-README.md)
+independently construct five message triples: three range removals (binary
+endpoints with an embedded NUL and a high byte, an empty FAILOK range and an
+empty begin), and success, ENOENT, FAILOK-then-SETVALS and EOPNOTSUPP replies.
+They are offline codec proof only and claim no live range removal, erasure
+pool refusal, execution or durability.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from

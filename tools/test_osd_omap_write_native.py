@@ -92,6 +92,26 @@ class OmapWriteNativeTests(unittest.TestCase):
         self.assertEqual(names[-1], "rados_release_write_op")
         self.assertIn("rados_release_read_op", names)
 
+    def test_range_removal_keeps_binary_endpoints(self):
+        request = writes.validate_request({"seed": None, "mtime": {"seconds": 1, "nanos": 0}, "operations": [
+            {"op": "rmrange", "flags": 2, "begin": encode(b"b\0"), "end": encode(b"c\xff")},
+            {"op": "rmrange", "flags": 0, "begin": encode(b"z"), "end": encode(b"a")}]}, "compare")
+        self.assertEqual(request["operations"][0], {"op": "rmrange", "flags": 2, "begin": b"b\0", "end": b"c\xff"})
+        self.assertEqual(request["operations"][1]["begin"], b"z")  # reversed stays expressible natively
+        library = Library()
+        library.install("rados_create_write_op", lambda: 7)
+        seen = []
+        library.install("rados_write_op_omap_rm_range2", lambda op, b, bl, e, el: seen.append((op, b[:bl], e[:el])))
+        library.install("rados_write_op_operate2", lambda op, io, name, stamp, flags: 0)
+        native = writes.Native.__new__(writes.Native)
+        native.lib = library
+        self.assertEqual(native.write_vector(1, b"o", request["operations"], {"seconds": 1, "nanos": 0}), (0, []))
+        self.assertEqual(seen, [(7, b"b\0", b"c\xff"), (7, b"z", b"a")])
+        self.assertIn(("rados_write_op_set_flags", (7, 2)), library.calls)
+        with self.assertRaises(ValueError):
+            writes.validate_request({"seed": None, "mtime": {"seconds": 1, "nanos": 0}, "operations": [
+                {"op": "rmrange", "begin": "", "end": "", "keys": []}]}, "compare")
+
     def test_ownership_is_limited_to_exact_fixture_uuid_names(self):
         receipt = {"schema_version": 1, "source_commit": writes.SOURCE_COMMIT, "pool": "pool", "pool_id": 7,
                    "fixture_object": "fixture", "namespace": "", "objects": [owned(b"main-"), owned(b"absent-")]}

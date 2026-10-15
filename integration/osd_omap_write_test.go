@@ -32,6 +32,8 @@ type omapWriteAction struct {
 	Key        []byte            `json:"key,omitempty"`
 	Value      []byte            `json:"value,omitempty"`
 	Comparison *int              `json:"comparison,omitempty"`
+	Begin      []byte            `json:"begin,omitempty"`
+	End        []byte            `json:"end,omitempty"`
 }
 
 type omapNativePrval struct {

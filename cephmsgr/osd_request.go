@@ -314,7 +314,7 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		success := !redirect && reply.Result >= 0 && op.Result >= 0
 		switch requested.Code {
 		case osd.OmapGetKeys, osd.OmapGetValues, osd.OmapGetHeader, osd.OmapGetValuesByKeys, osd.OmapCompare,
-			osd.OmapSetValues, osd.OmapSetHeader, osd.OmapClear, osd.OmapRemoveKeys:
+			osd.OmapSetValues, osd.OmapSetHeader, osd.OmapClear, osd.OmapRemoveKeys, osd.OmapRemoveKeyRange:
 			if err := osd.ValidateOmapReply(requested, op, success); err != nil {
 				return err
 			}

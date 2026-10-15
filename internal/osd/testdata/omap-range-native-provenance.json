@@ -1,0 +1,394 @@
+{
+  "binary_sha256": "271188acb6dec3b2aeb63df65206875eaa772f2f3a3d47799ba8bf96dc5c83bf",
+  "build_driver_sha256": "7873de177d0f8c159aa888ebc14def53afbde7e500d8afbd27f0ef2fa2c5f4bf",
+  "builder_container_id": "e24608e23c6d2af2d89a5870d5ba2cd74a6e046da3289985055b1bca0f50441f",
+  "builder_termination_completed": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "omap-range-native-reply-v6-enoent": {
+      "data_bytes": 0,
+      "decoded_operations": [
+        {
+          "code": 8748,
+          "flags": 0,
+          "indata_hex": "",
+          "input_len": 10,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -2,
+          "union_hex": "00000000000000000a00000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 207,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 207,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "15a6feaa3a39e6b15cf9aeb5b828d8992cdcf65b35cb1c9e7519fba690574be0",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "omap-range-native-reply-v6-eopnotsupp": {
+      "data_bytes": 0,
+      "decoded_operations": [
+        {
+          "code": 8748,
+          "flags": 0,
+          "indata_hex": "",
+          "input_len": 10,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -95,
+          "union_hex": "00000000000000000a00000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 207,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 207,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "222bea1f3445e8c965209c398a38469a2243fb6e9fb643520f8074bae9d43b64",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "omap-range-native-reply-v6-failok": {
+      "data_bytes": 0,
+      "decoded_operations": [
+        {
+          "code": 8748,
+          "flags": 2,
+          "indata_hex": "",
+          "input_len": 10,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -2,
+          "union_hex": "00000000000000000a00000000000000000000000000000000000000"
+        },
+        {
+          "code": 8725,
+          "flags": 0,
+          "indata_hex": "",
+          "input_len": 14,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": 0,
+          "union_hex": "00000000000000000e00000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 249,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 249,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "349609571cdae17f4c0a7b03541a77427cfbd011ef29577122985cacba57b5db",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "omap-range-native-reply-v6-success": {
+      "data_bytes": 0,
+      "decoded_operations": [
+        {
+          "code": 8748,
+          "flags": 0,
+          "indata_hex": "",
+          "input_len": 12,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": 0,
+          "union_hex": "00000000000000000c00000000000000000000000000000000000000"
+        },
+        {
+          "code": 8748,
+          "flags": 2,
+          "indata_hex": "",
+          "input_len": 8,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": 0,
+          "union_hex": "00000000000000000800000000000000000000000000000000000000"
+        },
+        {
+          "code": 8748,
+          "flags": 0,
+          "indata_hex": "",
+          "input_len": 9,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": 0,
+          "union_hex": "00000000000000000900000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 291,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 291,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "3902a9e58ec126c740c82379e6260edd6eed99fe1c41b9dcad63fd850c915b6e",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "omap-range-native-request-v6-all": {
+      "data_bytes": 29,
+      "decoded_operations": [
+        {
+          "code": 8748,
+          "flags": 0,
+          "indata_hex": "0200000062000200000063ff",
+          "input_len": 12,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 12,
+          "union_hex": "00000000000000000c00000000000000000000000000000000000000"
+        },
+        {
+          "code": 8748,
+          "flags": 2,
+          "indata_hex": "0000000000000000",
+          "input_len": 8,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 8,
+          "union_hex": "00000000000000000800000000000000000000000000000000000000"
+        },
+        {
+          "code": 8748,
+          "flags": 0,
+          "indata_hex": "0000000001000000ff",
+          "input_len": 9,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 9,
+          "union_hex": "00000000000000000900000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 293,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 3,
+        "data_len": 29,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 293,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 42,
+        "version": 6
+      },
+      "front_sha256": "fe9c7a9ce45302ad124b3713796d7e93026277cbd43bbd255e5135f2815297ed",
+      "data_sha256": "d9830d5147f61ce99f494f0708cef5f9888aed7ef39239088281b3929aaed07f",
+      "header_sha256": "20e99f0e240771d043a3cbc8fe9bfeadb083e309ec975d2899c2d28a25b4a16e"
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffffa1c97000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffff9ee00000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffffa1b78000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffffa1b27000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffff9e93a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffffa1ae6000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffffa1ab5000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffffa1a94000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffff9e716000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffffa1a63000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffff9e568000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffffa1c50000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffff9e4c7000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "five freshly constructed native OMAPRMKEYRANGE messages directly encoded and separately decoded; decoded objects never re-encoded",
+  "wrapper_sha256": "1cbfba98d2f9c3fe4635024e081d7607ebb4e280184e9139081cc4cc7581f861",
+  "generator": "tools/osd_omap_range_native_encoder.cc",
+  "build_driver": "tools/osd_omap_range_native_encoder.py",
+  "source_license": "MOSDOp/MOSDOpReply/Objecter/osd_types/PrimaryLogPG and encoding: LGPL-2.1 notices; rados.h permits LGPL-2.1 or LGPL-3.0. This independent test wrapper invokes unchanged native code and copies no Ceph implementation.",
+  "source_files": {
+    "src/messages/MOSDOp.h": "68d6b0ed89f97761bb0fc575d3d5c17edd9003b8c0ac820d53728f945ac205f5",
+    "src/messages/MOSDOpReply.h": "6bd3e2cb240e3d245480d571e21a7ae6430c416aaa45c611d9ba5063e217d444",
+    "src/osdc/Objecter.h": "a821492fba9a486b0ac715f71b77a61a5dd10c6949ec56d48add6d054a459480",
+    "src/osd/osd_types.h": "8baa31f93e0694b7986381265f6af2294b23ce7cf98f8caf5bfde66c9abb84d1",
+    "src/osd/osd_types.cc": "614710847acaebd82e17787b91b38e07198eec58488cd9f6d7283499e0fa6d3b",
+    "src/osd/PrimaryLogPG.cc": "b05065f11e23e3920fe4d63d8d35e364a4289945f40c5791566d861fbc2ee28c",
+    "src/include/rados.h": "abd9410e17a9b93ad5c666197164f0b7f86a07da361e0cbf40451f93958a01fb",
+    "src/include/encoding.h": "6cbf988d836652f2d9410502dc918903cd4bf6a9f6aad5afdbcc302317352b06",
+    "src/include/buffer.h": "3474fa9f1d88945a5b351fd459fff1390d64fbfa90bc9f512e65cacecb6c3c3b",
+    "src/msg/Message.h": "81f9b84fc9f6b2bdd93aad232a441eae268ac337a1c8a2075b927b7a954a629a",
+    "src/msg/Message.cc": "9c778ea7185e1910fb6d97bbfdcfe446a52f4eac94ff9a89faf5a3cfcdf0f562",
+    "src/include/msgr.h": "7eb1d06765ef153f6480b0a28c410df7c56946e42ac98637139079b372134e23",
+    "src/msg/async/frames_v2.h": "67c10757b0692a45854333c55a6d67bd099e8937a7511d834401fb9f673dea94",
+    "COPYING": "26f44ffbf74cdf08b3e1fdcaf1d4cfa3893ba62107950e086868a686d5ff86c2"
+  },
+  "logical_inputs": {
+    "object": "omap-range-codec",
+    "pool": 7,
+    "key": "route-key",
+    "namespace": "tenant",
+    "raw_hash": 287454020,
+    "client_inc": 1,
+    "map_epoch": 11,
+    "tid": 77,
+    "mtime_seconds": 1700000000,
+    "mtime_nanoseconds": 5,
+    "mtime_scope": "explicit caller mtime; every source request contains WRITE",
+    "snap": "NOSNAP=-2",
+    "retry_attempt": 0,
+    "request_ranges_hex": [
+      {
+        "begin": "6200",
+        "end": "63ff",
+        "flags": 0
+      },
+      {
+        "begin": "",
+        "end": "",
+        "flags": "FAILOK=2"
+      },
+      {
+        "begin": "",
+        "end": "ff",
+        "flags": 0
+      }
+    ],
+    "single_range_hex": {
+      "begin": "61",
+      "end": "62"
+    },
+    "setvals_entries_hex": {
+      "6b": "76"
+    },
+    "request_order": [
+      "OMAPRMKEYRANGE(6200, 63ff)",
+      "OMAPRMKEYRANGE(empty, empty) FAILOK",
+      "OMAPRMKEYRANGE(empty, ff)"
+    ],
+    "flags": "WRITE derived by native ceph_osd_op_mode_modify (OMAPRMKEYRANGE is WR); ONDISK and RETURNVEC explicitly requested; no READ",
+    "native_builder": "omap_rm_range(std::string_view, std::string_view) (pinned Objecter.h 1395-1401) receives length-aware std::string endpoints and encodes begin then end as u32-length strings; add_data sets extent.offset 0 and extent.length to the encoded length; set_last_op_flags(CEPH_OSD_OP_FLAG_FAILOK) after the second range and after the failok range; std::map omap_set"
+  },
+  "reply_construction_scope": [
+    "Logical replies are freshly constructed codec inputs, not daemon-produced replies or proof of range removal, execution, staging, durability, caps, ENOENT/EOPNOTSUPP semantics, erasure pool behavior or server limits.",
+    "The public MOSDOpReply constructor keeps the request WRITE/RETURNVEC mode bits and replaces only ONDISK/ONNVRAM/ACK with the explicit acktype: ONDISK for success and failok, ACK|ONDISK for enoent and eopnotsupp.",
+    "ACK|ONDISK on the refused vectors follows pinned PrimaryLogPG.cc: a failed do_osd_ops in a may_write vector sets update_log_only (prepare_transaction 8991-8998) and execute_ctx adds ACK|ONDISK before record_write_error (4366).",
+    "The OMAPRMKEYRANGE handler (PrimaryLogPG.cc 8067-8093) checks !pool.info.supports_omap() first (EOPNOTSUPP, 8069-8072; osd_types.h 1787-1789 is false only for erasure pools) and then !obs.exists or whiteout (ENOENT, 8076-8079). The eopnotsupp vector is only the logical erasure-pool refusal shape; no erasure pool was exercised.",
+    "Per-op results follow pinned do_osd_ops (8205-8213): enoent and eopnotsupp are a single OMAPRMKEYRANGE(61, 62) with aggregate and per-op -2 or -95; failok is OMAPRMKEYRANGE(61, 62, FAILOK) -2 then SETVALS 0 with aggregate 0.",
+    "Every reply carries the logical set_reply_versions(11'20, 19) used by earlier native vectors. A live -ENOENT write refusal additionally calls set_enoent_reply_versions(info.last_update, info.last_user_version) (PrimaryLogPG.cc 4362-4364); those live version values are not represented here.",
+    "Public claim_ops supplies input-union echoes and explicit results. Native merge_osd_op_vector_out_data independently derives payload_len 0 for every operation; OMAPRMKEYRANGE and SETVALS return no output."
+  ],
+  "native_decoder_scope": "Separate new MOSDOp/MOSDOpReply objects receive only bytes directly generated by the fresh native encoder; native decode_payload verifies each packed union and request indata/reply outdata/result against encoded native operations. Decoded objects are never encoded or re-exported.",
+  "build_receipt": {
+    "completed_at": "2026-10-15T09:23:54+09:00",
+    "public_runner": "cd integration/fixture && GOWORK=off go run . encode-osd-omap-range -project ../.. -cache /private/tmp/ceph-native-encoder-cache -output /tmp/ceph-omap-range-native-encoder-attempt1-proof.json",
+    "log": "/tmp/ceph-omap-range-native-encoder-attempt1-proof.json.log",
+    "official_configuration": "Existing pinned SDK cache and official CMake generated acconfig.h; only new OMAPRMKEYRANGE target appended behind if(EXISTS wrapper), existing targets unchanged",
+    "incremental_compilation": "[1/2] Building CXX object src/CMakeFiles/osd_omap_range_native_encoder.dir/tmp/osd_omap_range_native_encoder.cc.o\n[2/2] Linking CXX executable bin/osd_omap_range_native_encoder\n",
+    "compiler": "GCC toolset 14, C++20, Debug -O0 -g0",
+    "native_library_cache": "same-source library SHA matches existing mutation/xattr/OMAP read/OMAP header-write/OMAP_CMP proofs; no common library rebuild",
+    "cleanup": "public Terminate completed 2026-10-15T09:23:54+09:00; docker ps -a --filter label=ceph-msgr-go.native-encoder and docker inspect of the builder ID afterwards found no container",
+    "attempts": "attempt1 succeeded on the first compile and run; no failed compile or run preceded it",
+    "encoding_log": "omap-range-native-request-v6-all\t293\t29\nomap-range-native-reply-v6-success\t291\t0\nomap-range-native-reply-v6-enoent\t207\t0\nomap-range-native-reply-v6-failok\t249\t0\nomap-range-native-reply-v6-eopnotsupp\t207\t0\n"
+  },
+  "native_library_matches_mutation_receipt": true,
+  "native_library_matches_xattr_receipt": true,
+  "native_library_matches_omap_read_receipt": true,
+  "native_library_matches_omap_write_receipt": true,
+  "native_library_matches_omap_cmp_receipt": true
+}

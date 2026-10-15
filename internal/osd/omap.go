@@ -41,20 +41,22 @@ type OmapInput struct {
 	Entries            []OmapEntry
 	Assertions         []OmapAssertion
 	Header             []byte
-	MaxOutputBytes     uint32
+	// RangeBegin is inclusive and RangeEnd exclusive for OMAPRMKEYRANGE.
+	RangeBegin, RangeEnd string
+	MaxOutputBytes       uint32
 }
 
 func IsOmapOperation(code uint16) bool {
 	switch code {
 	case OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare,
-		OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys:
+		OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange:
 		return true
 	}
 	return false
 }
 
 func isOmapMutation(code uint16) bool {
-	return code == OmapSetValues || code == OmapSetHeader || code == OmapClear || code == OmapRemoveKeys
+	return code == OmapSetValues || code == OmapSetHeader || code == OmapClear || code == OmapRemoveKeys || code == OmapRemoveKeyRange
 }
 
 // Mutations and comparisons return no output, so they take no receipt budget.
@@ -63,7 +65,7 @@ func omapWithoutOutput(code uint16) bool {
 }
 
 func omapInputEmpty(input OmapInput) bool {
-	return input.StartAfter == "" && input.Prefix == "" && input.MaxEntries == 0 && input.Keys == nil && input.Entries == nil && input.Assertions == nil && input.Header == nil && input.MaxOutputBytes == 0
+	return input.StartAfter == "" && input.Prefix == "" && input.MaxEntries == 0 && input.Keys == nil && input.Entries == nil && input.Assertions == nil && input.Header == nil && input.RangeBegin == "" && input.RangeEnd == "" && input.MaxOutputBytes == 0
 }
 
 // Bound every encoded field before sorting or allocating an encoded buffer.
@@ -97,7 +99,7 @@ func omapInputBytes(op Operation, limit uint32) (uint64, error) {
 	keySet := op.Code == OmapGetValuesByKeys || op.Code == OmapRemoveKeys
 	if !page && (input.StartAfter != "" || input.Prefix != "" || input.MaxEntries != 0) || op.Code == OmapGetKeys && input.Prefix != "" ||
 		!keySet && input.Keys != nil || op.Code != OmapSetValues && input.Entries != nil || op.Code != OmapSetHeader && input.Header != nil ||
-		op.Code != OmapCompare && input.Assertions != nil {
+		op.Code != OmapCompare && input.Assertions != nil || op.Code != OmapRemoveKeyRange && (input.RangeBegin != "" || input.RangeEnd != "") {
 		return 0, ErrRequest
 	}
 	switch op.Code {
@@ -166,6 +168,11 @@ func omapInputBytes(op Operation, limit uint32) (uint64, error) {
 			return 0, wire.ErrLimit
 		}
 		return boundedBytes(limit, uint64(len(input.Header)))
+	case OmapRemoveKeyRange:
+		if uint64(len(input.RangeBegin)) > math.MaxUint32 || uint64(len(input.RangeEnd)) > math.MaxUint32 {
+			return 0, wire.ErrLimit
+		}
+		return boundedBytes(limit, 8, uint64(len(input.RangeBegin)), uint64(len(input.RangeEnd)))
 	case OmapGetHeader, OmapClear:
 		return 0, nil
 	}
@@ -223,6 +230,13 @@ func validateOmapOperation(op Operation, limit uint32) (uint64, uint64, error) {
 		if _, err := canonicalOmapEntries(op.Omap.Entries); err != nil {
 			return 0, 0, err
 		}
+	case OmapRemoveKeyRange:
+		// Small backends iterate [begin, end) and treat a reversed range as
+		// empty, but past rocksdb_delete_range_threshold keys the pinned
+		// RocksDBStore passes it to DeleteRange unchanged. Refuse it locally.
+		if op.Omap.RangeBegin > op.Omap.RangeEnd {
+			return 0, 0, ErrRequest
+		}
 	case OmapCompare:
 		for _, assertion := range op.Omap.Assertions {
 			switch assertion.Comparison {
@@ -241,7 +255,7 @@ func validateOmapOperation(op Operation, limit uint32) (uint64, uint64, error) {
 	return FlagRead, size, nil
 }
 
-// Native Objecter.h 953/992/1062/1065/1359-1386 derives the extent length from
+// Native Objecter.h 953/992/1062/1065/1359-1394 derives the extent length from
 // this encoding; GETHEADER/CLEAR carry no input. Use the correct std::string GETVALS
 // overload's start/count/prefix ordering.
 func appendOmapInput(data []byte, op Operation) []byte {
@@ -270,6 +284,9 @@ func appendOmapInput(data []byte, op Operation) []byte {
 		}
 	case OmapSetHeader:
 		e.Raw(op.Omap.Header)
+	case OmapRemoveKeyRange:
+		e.String(op.Omap.RangeBegin)
+		e.String(op.Omap.RangeEnd)
 	case OmapGetKeys, OmapGetValues:
 		e.String(op.Omap.StartAfter)
 		e.U64(op.Omap.MaxEntries)
