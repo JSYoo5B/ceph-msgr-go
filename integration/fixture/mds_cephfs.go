@@ -25,7 +25,9 @@ import (
 // Every mutation is journaled before it is issued and is never replayed after
 // an uncertain outcome. The Go test removes the namespace with its own
 // requests; cleanup independently reads it back, checks residual sessions and
-// the blocklist, and removes the two identities. Native behavior relied upon:
+// the blocklist, and removes its identities (the recovery and push extensions
+// add their own; see mds_cephfs_recovery.go and mds_cephfs_push.go). Native
+// behavior relied upon:
 // client/Client.cc, pybind/cephfs/cephfs.pyx, mds/Server.cc and
 // mds/SessionMap.cc at mdsFreshSource (LGPL-2.1 references; no code copied).
 
@@ -99,14 +101,20 @@ type mdsCephFSScope struct {
 	out                    string
 	plan                   mdsCephFSPlan
 	recovery               mdsCephFSRecoveryPlan
+	push                   mdsCephFSPushPlan
 	goClient, native       *ceph.ClientConfig
 	recClient              *ceph.ClientConfig
+	pushNative             *ceph.ClientConfig
 	goIntent, nativeIntent bool
-	recIntent              bool
-	baselineReady          bool
-	baselineBlocklist      []mdsSessionsBlock
-	lastRequestID          int64
-	mutations              []*mdsCephFSMutation
+	recIntent, pushIntent  bool
+	// pushBaseline is the recall configuration and snapshot flag observed
+	// before any push mutation; pushMin/pushMax are the owned overrides.
+	pushBaseline      *mdsCephFSPushBaseline
+	pushMin, pushMax  *ceph.ConfigOverride
+	baselineReady     bool
+	baselineBlocklist []mdsSessionsBlock
+	lastRequestID     int64
+	mutations         []*mdsCephFSMutation
 	// current is the owned rank-0 incarnation every action proves: the
 	// startup daemon until an owned restart is adopted.
 	current mdsFreshDaemon
@@ -172,6 +180,15 @@ func parseMDSCephFSRequest(fields []string, token string, previousID int64) (int
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS stat target is not admitted")
 		}
 		action.target = arg
+	case "push-stat":
+		if !slices.Contains(mdsCephFSPushTargets, arg) {
+			return 0, mdsCephFSAction{}, errors.New("MDS CephFS push stat target is not admitted")
+		}
+		action.target = arg
+	case "push-rename", "push-snapshot-create", "push-snapshot-remove", "push-quota-set", "push-quota-clear", "push-recall-on", "push-recall-max-off", "push-recall-off", "push-cache-drop":
+		if arg != "" {
+			return 0, mdsCephFSAction{}, errors.New("MDS CephFS push actions take no caller argument")
+		}
 	case "getxattr", "write", "read":
 		if arg != "go-file" {
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS file action admits only the Go-created file")
@@ -298,6 +315,8 @@ type mdsCephFSNative struct {
 	Path           string           `json:"path"`
 	NativeGlobalID uint64           `json:"native_global_id"`
 	Stat           *mdsCephFSStat   `json:"stat,omitempty"`
+	SourceStat     *mdsCephFSStat   `json:"source_stat,omitempty"`
+	QuotaAbsent    bool             `json:"quota_absent,omitempty"`
 	ValueHex       string           `json:"value_hex,omitempty"`
 	Created        []mdsCephFSEntry `json:"created,omitempty"`
 	Entries        []mdsCephFSEntry `json:"entries,omitempty"`
@@ -398,6 +417,8 @@ type mdsCephFSResult struct {
 	Restart         *mdsCephFSRestart         `json:"restart,omitempty"`
 	RankStatus      *mdsCephFSRankStatus      `json:"rank_status,omitempty"`
 	HistoricOps     []mdsCephFSHistoricOp     `json:"historic_ops,omitempty"`
+	PushConfig      *mdsCephFSPushConfig      `json:"push_config,omitempty"`
+	CacheDrop       *mdsCephFSCacheDrop       `json:"cache_drop,omitempty"`
 	Complete        bool                      `json:"complete"`
 	Error           string                    `json:"error,omitempty"`
 	ElapsedMillis   int64                     `json:"elapsed_ms"`
@@ -416,10 +437,15 @@ func (c *fixtureCluster) mdsCephFSJournal() error {
 	if x.recIntent {
 		recovery = "client.mds-cephfs-recovery-" + s.token
 	}
+	push := ""
+	if x.pushIntent {
+		push = "client.mds-cephfs-push-native-" + s.token
+	}
 	return writeMDSFreshJSON(x.out, "mds-cephfs-owned.json", map[string]any{
 		"source_commit": mdsFreshSource, "token": s.token, "fsid": c.profile.fsid, "fs_name": s.name, "fscid": s.oracle.FSCID,
-		"client_identity": identity, "native_identity": native, "recovery_identity": recovery, "plan": x.plan, "recovery_plan": x.recovery,
-		"baseline_blocklist": x.baselineBlocklist, "mutations": x.mutations, "restart": x.restart, "current_mds": x.current, "owned_session_addresses": x.owned,
+		"client_identity": identity, "native_identity": native, "recovery_identity": recovery, "push_native_identity": push, "plan": x.plan, "recovery_plan": x.recovery,
+		"push_plan": x.push, "push_baseline": x.pushBaseline, "baseline_blocklist": x.baselineBlocklist, "mutations": x.mutations, "restart": x.restart, "current_mds": x.current,
+		"owned_session_addresses": x.owned,
 	})
 }
 
@@ -429,7 +455,7 @@ func (c *fixtureCluster) prepareMDSCephFS(ctx context.Context, out string) error
 		return errors.New("invalid MDS CephFS preparation scope")
 	}
 	s := c.mdsFresh
-	x := &mdsCephFSScope{out: out, plan: mdsCephFSPlanFor(s.token), recovery: mdsCephFSRecoveryPlanFor(s.token), current: s.oracle.MDS, owned: map[string]uint64{}}
+	x := &mdsCephFSScope{out: out, plan: mdsCephFSPlanFor(s.token), recovery: mdsCephFSRecoveryPlanFor(s.token), push: mdsCephFSPushPlanFor(s.token), current: s.oracle.MDS, owned: map[string]uint64{}}
 	c.mdsCephFS = x
 	ctx, stop := context.WithTimeout(ctx, fixtureStartupTimeout)
 	defer stop()
@@ -510,18 +536,22 @@ func (c *fixtureCluster) prepareMDSCephFS(ctx context.Context, out string) error
 		return err
 	}
 	c.profile.mdsCephFSRecoveryIdentity = "client.mds-cephfs-recovery-" + s.token
+	if err := c.prepareMDSCephFSPush(ctx, out); err != nil {
+		return err
+	}
 	if err := errors.Join(c.mdsCephFSJournal(), c.mdsCephFSWriteTarget()); err != nil {
 		return err
 	}
-	goCaps, nativeCaps, recoveryCaps := mdsCephFSGoCaps(s.name), mdsCephFSNativeCaps(s.name), mdsCephFSRecoveryCaps(s.name)
+	goCaps, nativeCaps, recoveryCaps, pushCaps := mdsCephFSGoCaps(s.name), mdsCephFSNativeCaps(s.name), mdsCephFSRecoveryCaps(s.name), mdsCephFSPushNativeCaps(s.name)
 	return writeMDSFreshJSON(out, "mds-cephfs-oracle.json", map[string]any{
 		"source_commit": mdsFreshSource, "token": s.token, "fsid": s.oracle.FSID, "fscid": s.oracle.FSCID, "fs_name": s.name,
 		"mds_gid": s.oracle.MDS.GID, "client_identity": c.profile.mdsCephFSIdentity, "native_identity": "client.mds-cephfs-native-" + s.token,
-		"recovery_identity": c.profile.mdsCephFSRecoveryIdentity,
-		"client_caps":       map[string]string{"mon": goCaps.Mon, "mds": goCaps.MDS, "osd": goCaps.OSD},
-		"native_caps":       map[string]string{"mon": nativeCaps.Mon, "mds": nativeCaps.MDS, "osd": nativeCaps.OSD},
-		"recovery_caps":     map[string]string{"mon": recoveryCaps.Mon, "mds": recoveryCaps.MDS, "osd": recoveryCaps.OSD},
-		"plan":              x.plan, "recovery_plan": x.recovery, "baseline_blocklist": x.baselineBlocklist,
+		"recovery_identity": c.profile.mdsCephFSRecoveryIdentity, "push_native_identity": "client.mds-cephfs-push-native-" + s.token,
+		"client_caps":      map[string]string{"mon": goCaps.Mon, "mds": goCaps.MDS, "osd": goCaps.OSD},
+		"native_caps":      map[string]string{"mon": nativeCaps.Mon, "mds": nativeCaps.MDS, "osd": nativeCaps.OSD},
+		"recovery_caps":    map[string]string{"mon": recoveryCaps.Mon, "mds": recoveryCaps.MDS, "osd": recoveryCaps.OSD},
+		"push_native_caps": map[string]string{"mon": pushCaps.Mon, "mds": pushCaps.MDS, "osd": pushCaps.OSD},
+		"plan":             x.plan, "recovery_plan": x.recovery, "push_plan": x.push, "push_baseline": x.pushBaseline, "baseline_blocklist": x.baselineBlocklist,
 		"data_pool": s.oracle.DataPools[0], "data_pool_name": s.name + "-data",
 	})
 }
@@ -682,6 +712,9 @@ func (c *fixtureCluster) mdsCephFSAct(ctx context.Context, id int64, action mdsC
 	case "recovery-stat", "recovery-list", "recovery-write":
 		return c.mdsCephFSRecoveryNative(ctx, id, action, result)
 	}
+	if strings.HasPrefix(action.name, "push-") {
+		return c.mdsCephFSPushAct(ctx, id, action, result)
+	}
 	path, err := x.plan.path(action.target)
 	if err != nil {
 		return err
@@ -740,6 +773,9 @@ type mdsCephFSCleanup struct {
 	NamespaceNote           string                  `json:"namespace_note,omitempty"`
 	Namespace               *mdsCephFSNative        `json:"namespace,omitempty"`
 	RecoveryNamespace       *mdsCephFSNative        `json:"recovery_namespace,omitempty"`
+	PushNamespace           *mdsCephFSNative        `json:"push_namespace,omitempty"`
+	PushConfig              *mdsCephFSPushConfig    `json:"push_config,omitempty"`
+	PushConfigRestored      bool                    `json:"push_config_restored"`
 	NewBlocklist            []mdsSessionsBlock      `json:"new_blocklist"`
 	RemovedBlocklist        []mdsCephFSRemovedBlock `json:"removed_blocklist"`
 	KeptBlocklist           []mdsSessionsBlock      `json:"kept_new_blocklist"`
@@ -748,16 +784,18 @@ type mdsCephFSCleanup struct {
 	ClientIdentityRemoved   bool                    `json:"client_identity_removed"`
 	NativeIdentityRemoved   bool                    `json:"native_identity_removed"`
 	RecoveryIdentityRemoved bool                    `json:"recovery_identity_removed"`
+	PushIdentityRemoved     bool                    `json:"push_identity_removed"`
 	Completed               bool                    `json:"completed"`
 	Errors                  []string                `json:"errors,omitempty"`
 }
 
 // finishMDSCephFS runs once, inside the cached MDS fresh cleanup and before
 // the owned filesystem is removed. It mutates nothing but owned state: the
-// three identities and new blocklist entries attributable to the owned
-// eviction, the owned MDS restart or an observed owned Go session address.
-// Residual namespace entries are reported and then discarded by the verified
-// filesystem removal; no session is evicted.
+// four identities, the two owned recall overrides and new blocklist entries
+// attributable to the owned eviction, the owned MDS restart or an observed
+// owned Go session address. Residual namespace entries (including an
+// unremoved snapshot or quota in the push directory) are reported and then
+// discarded by the verified filesystem removal; no session is evicted.
 func (c *fixtureCluster) finishMDSCephFS(ctx context.Context) error {
 	s, x := c.mdsFresh, c.mdsCephFS
 	if s == nil || x == nil {
@@ -776,13 +814,16 @@ func (c *fixtureCluster) finishMDSCephFS(ctx context.Context) error {
 			errs = append(errs, err)
 		}
 	}
-	nativeName := "mds-cephfs-native-" + s.token
+	nativeName, pushName := "mds-cephfs-native-"+s.token, "mds-cephfs-push-native-"+s.token
+	// The recall overrides are restored first: they are independent of any
+	// session and must not outlive the acceptance.
+	c.finishMDSCephFSPushConfig(ctx, &receipt, fail)
 	if x.baselineReady {
 		sessions, _, err := c.mdsSessionsList(ctx)
 		fail(err)
 		goPresent := false
 		for _, session := range sessions {
-			if ownedGoAuthID(s.token, session.AuthID) || session.AuthID == nativeName {
+			if ownedGoAuthID(s.token, session.AuthID) || session.AuthID == nativeName || session.AuthID == pushName {
 				receipt.ResidualSessions = append(receipt.ResidualSessions, session)
 				goPresent = goPresent || ownedGoAuthID(s.token, session.AuthID)
 			}
@@ -804,11 +845,23 @@ func (c *fixtureCluster) finishMDSCephFS(ctx context.Context) error {
 			recoveryPath, _ := x.recovery.path("dir")
 			_, recovery, recoveryErr := c.mdsCephFSRunNative(ctx, x.recovery.Directory, "stat", recoveryPath)
 			fail(recoveryErr)
-			if err == nil && recoveryErr == nil {
+			// The push directory is read by its own identity; without one no
+			// push namespace could exist (preparation creates it before tests).
+			pushAbsent, pushErr := !x.pushIntent, error(nil)
+			if x.pushNative != nil {
+				pushPath, _ := x.push.path("dir")
+				var push mdsCephFSNative
+				_, push, pushErr = c.mdsCephFSRunPushNative(ctx, "stat", pushPath)
+				fail(pushErr)
+				if pushErr == nil {
+					receipt.PushNamespace, pushAbsent = &push, !push.Stat.Exists
+				}
+			}
+			if err == nil && recoveryErr == nil && pushErr == nil {
 				receipt.Namespace, receipt.RecoveryNamespace, receipt.NamespaceChecked = &native, &recovery, true
-				receipt.NamespaceRestored = !native.Stat.Exists && !recovery.Stat.Exists
+				receipt.NamespaceRestored = !native.Stat.Exists && !recovery.Stat.Exists && pushAbsent
 				if !receipt.NamespaceRestored {
-					receipt.NamespaceNote = "an owned directory remained; it is discarded with the owned filesystem"
+					receipt.NamespaceNote = "an owned directory (with any snapshot or quota in it) remained; it is discarded with the owned filesystem"
 				}
 			}
 		}
@@ -841,10 +894,12 @@ func (c *fixtureCluster) finishMDSCephFS(ctx context.Context) error {
 	receipt.ClientIdentityRemoved = remove(x.goClient, x.goIntent, "client")
 	receipt.NativeIdentityRemoved = remove(x.native, x.nativeIntent, "native oracle")
 	receipt.RecoveryIdentityRemoved = remove(x.recClient, x.recIntent, "recovery")
+	receipt.PushIdentityRemoved = remove(x.pushNative, x.pushIntent, "push oracle")
 	for _, err := range errs {
 		receipt.Errors = append(receipt.Errors, err.Error())
 	}
-	receipt.Completed = len(errs) == 0 && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved && receipt.RecoveryIdentityRemoved
+	receipt.Completed = len(errs) == 0 && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved && receipt.RecoveryIdentityRemoved &&
+		receipt.PushIdentityRemoved && receipt.PushConfigRestored
 	if !receipt.Completed && len(errs) == 0 {
 		errs = append(errs, errors.New("MDS CephFS cleanup did not verify every check"))
 	}

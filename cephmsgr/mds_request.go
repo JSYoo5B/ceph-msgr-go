@@ -140,6 +140,10 @@ func (r MDSReply) DecodeReaddir() (MDSReaddir, error) { return mds.DecodeReaddir
 
 func (r MDSReply) DecodeSnapTrace() ([]MDSSnapRealm, error) { return mds.DecodeSnapTrace(r.SnapTrace) }
 
+// DecodeMDSSnapTrace decodes a SnapRealmInfoNew snap trace blob, such as
+// MDSSnap.Trace or MDSCaps.SnapTrace from a push.
+func DecodeMDSSnapTrace(raw []byte) ([]MDSSnapRealm, error) { return mds.DecodeSnapTrace(raw) }
+
 // DecodeMDSXattrs decodes an InodeStat xattr blob into name→value.
 func DecodeMDSXattrs(raw []byte) (map[string][]byte, error) { return mds.DecodeXattrs(raw) }
 

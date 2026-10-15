@@ -193,7 +193,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
     def test_mds_cephfs_rows_select_only_the_declared_cephfs_tests(self):
         rows = [row for row in self.rows if row.get("mds_cephfs") == "1"]
         self.assertEqual(len(rows), 2)
-        expected = {"TestCephMDSCephFSIntegration", "TestCephMDSCephFSRecoveryIntegration"}
+        expected = {"TestCephMDSCephFSIntegration", "TestCephMDSCephFSPushIntegration", "TestCephMDSCephFSRecoveryIntegration"}
         self.assertTrue(expected <= self.declared)
         observed = set()
         for row in rows:
@@ -209,6 +209,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertIsNone(selector.search("PrefixTestCephMDSCephFSIntegration"))
             self.assertIsNone(selector.search("TestCephMDSCephFSRecoveryIntegrationExtended"))
             self.assertIsNone(selector.search("TestCephMDSCephFSRecoveryRecoveryIntegration"))
+            self.assertIsNone(selector.search("TestCephMDSCephFSPushIntegrationExtended"))
+            self.assertIsNone(selector.search("TestCephMDSCephFSPushRecoveryIntegration"))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"),
                 ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))

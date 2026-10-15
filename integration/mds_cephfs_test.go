@@ -74,6 +74,8 @@ type nativeMDSCephFSOutput struct {
 	Path           string                 `json:"path"`
 	NativeGlobalID uint64                 `json:"native_global_id"`
 	Stat           *nativeMDSCephFSStat   `json:"stat"`
+	SourceStat     *nativeMDSCephFSStat   `json:"source_stat"`
+	QuotaAbsent    bool                   `json:"quota_absent"`
 	ValueHex       string                 `json:"value_hex"`
 	Created        []nativeMDSCephFSEntry `json:"created"`
 	Entries        []nativeMDSCephFSEntry `json:"entries"`
@@ -119,6 +121,8 @@ type nativeMDSCephFSReceipt struct {
 	Restart       *nativeMDSCephFSRestart     `json:"restart"`
 	RankStatus    *nativeMDSCephFSRankStatus  `json:"rank_status"`
 	HistoricOps   []nativeMDSCephFSHistoricOp `json:"historic_ops"`
+	PushConfig    *nativeMDSCephFSPushConfig  `json:"push_config"`
+	CacheDrop     *nativeMDSCephFSCacheDrop   `json:"cache_drop"`
 	Complete      bool                        `json:"complete"`
 	Error         string                      `json:"error"`
 	ElapsedMillis int64                       `json:"elapsed_ms"`

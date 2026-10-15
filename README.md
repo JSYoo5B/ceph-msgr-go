@@ -425,6 +425,9 @@ rank 0 MDS를 재시작한 결과를 남겼다. 이전 주소로의 재개는 SE
 inode로 safe 완료됐고 응답이 없던 create는 한 번만 실행됐다. Eviction 뒤 blocklist에는
 `<ip>:0/<CephFSNonce>` 하나가 생겼고 같은 client의 OSD 읽기는 -108을 받았다.
 `FlushJournal`은 unsafe→safe 지연을 최대 5초에서 수 ms로 줄였다.
+[push 검증 기록](integration/fixture/MDS_CEPHFS_PUSH_VALIDATION.md)에는 dentry lease
+REVOKE와 RELEASE 응답, snapshot UPDATE·SPLIT·DESTROY, quota, RECALL_STATE와 cap 반환,
+`cache drop` 중 FLUSHMSG와 `AcknowledgeFlush` 응답을 실제 MDS에서 확인한 결과를 남겼다.
 
 ## OSD 객체 요청 통신
 

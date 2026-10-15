@@ -377,7 +377,7 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 		manifest["session_mutations"] = "owned refuse_client_session, required_client_features, session timeouts, mds_defer_session_stale, eviction blocklist entries and one foreign identity, each reconciled during cleanup"
 	}
 	if p.mdsCephFS == "1" {
-		manifest["cephfs_mutations"] = "owned Go, recovery and native LibCephFS identities, two directories with their files, one user xattr and two native writes removed through Go requests and verified natively; one owned client eviction and one owned rank-0 MDS restart whose blocklist entries are removed and verified during cleanup"
+		manifest["cephfs_mutations"] = "owned Go, recovery, native and push-native LibCephFS identities, three directories with their files, one user xattr and two native writes removed through Go requests and verified natively; one native rename, one snapshot and one quota created and removed natively; the owned daemon's mds_min_caps_per_client and mds_max_caps_per_client lowered and restored, and one cache drop; one owned client eviction and one owned rank-0 MDS restart whose blocklist entries are removed and verified during cleanup"
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

@@ -314,4 +314,6 @@ Public evidence roots and logs are under
   refusal (only -108 occurred).
 - These are local selected-configuration results, separate from remote CI.
   Both CephFS CI rows now select `^TestCephMDSCephFS(Recovery)?Integration$`;
-  they were not run remotely here.
+  they were not run remotely here. The push acceptance later widened the selector to
+  `^TestCephMDSCephFS(Push|Recovery)?Integration$` (see
+  [MDS_CEPHFS_PUSH_VALIDATION.md](MDS_CEPHFS_PUSH_VALIDATION.md)).

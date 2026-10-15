@@ -219,3 +219,7 @@ but are not the acceptance record.
   meets a restarted MDS (RESET) and CephFS reconnect with replayed requests
   were later accepted live in
   [MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md).
+- Dentry lease revoke and release, snapshot-realm and quota pushes,
+  RECALL_STATE answered by cap releases and FLUSHMSG acknowledgement were
+  later accepted live in
+  [MDS_CEPHFS_PUSH_VALIDATION.md](MDS_CEPHFS_PUSH_VALIDATION.md).

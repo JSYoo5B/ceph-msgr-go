@@ -21,7 +21,10 @@ import (
 // client/Client.cc (add_update_cap, handle_caps, handle_cap_grant, check_caps,
 // send_cap, remove_cap and handle_lease at v20.2.4; LGPL-2.1, no code
 // copied), reduced to a client that holds no file data: nothing is ever used,
-// dirty or flushing, and directories are never marked complete.
+// dirty or flushing, and directories are never marked complete. It also
+// restates handle_snap (realm moves on SPLIT), handle_quota, handle_session
+// RECALL_STATE (trim_caps) and FLUSHMSG, counting every capability, lease,
+// snapshot and quota push as got_mds_push does.
 
 const (
 	cephCapLinkExcl     = 2 << 4
@@ -105,6 +108,11 @@ type cephfsCap struct {
 	// uses for reconnect; zero when only the inode is known.
 	ParentIno uint64 `json:",omitempty"`
 	Name      string `json:",omitempty"`
+	// Added orders caps as the native session cap list does (a cap is
+	// appended when it is added or re-added after a release).
+	Added uint64 `json:",omitempty"`
+	// Quota is the latest MClientQuota for this inode (handle_quota).
+	Quota *cephmsgr.MDSQuota `json:",omitempty"`
 }
 
 func (c *cephfsCap) fileWanted() uint32 {
@@ -155,6 +163,65 @@ type cephfsHold struct {
 	Error                   string
 }
 
+// cephfsLeaseEvent is one MClientLease REVOKE and the RELEASE answering it.
+type cephfsLeaseEvent struct {
+	Arrival      uint64
+	Received     time.Time
+	PushesBefore uint64
+	Revoke       cephmsgr.MDSLease
+	Held         time.Duration `json:",omitempty"`
+	Released     time.Time
+	Release      cephmsgr.MDSLease
+	Sent         bool
+	Error        string `json:",omitempty"`
+}
+
+// cephfsSnapEvent is one MClientSnap with its decoded SnapRealmInfoNew trace
+// and the cached inodes moved into the split realm.
+type cephfsSnapEvent struct {
+	Arrival     uint64
+	Received    time.Time
+	Op          uint32
+	Split       uint64
+	SplitInos   []uint64 `json:",omitempty"`
+	SplitRealms []uint64 `json:",omitempty"`
+	TraceBytes  int
+	Realms      []cephmsgr.MDSSnapRealm
+	Moved       []uint64 `json:",omitempty"`
+	Error       string   `json:",omitempty"`
+}
+
+// cephfsQuotaEvent is one MClientQuota; Known reports a cached inode.
+type cephfsQuotaEvent struct {
+	Arrival  uint64
+	Received time.Time
+	Quota    cephmsgr.MDSQuota
+	Known    bool
+}
+
+// cephfsRecallEvent is one RECALL_STATE and the trim that answered it.
+type cephfsRecallEvent struct {
+	Arrival            uint64
+	Received           time.Time
+	MaxCaps, MaxLeases uint32
+	Before, After      int
+	Released           []cephmsgr.MDSCapItem `json:",omitempty"`
+	Barrier            uint32
+	Sent               time.Time
+	Error              string `json:",omitempty"`
+}
+
+// cephfsFlushEvent is one FLUSHMSG: the MDS's push sequence at sending
+// (Sequence) against the pushes this agent counted before it, and the ack.
+type cephfsFlushEvent struct {
+	Arrival     uint64
+	Received    time.Time
+	Sequence    uint64
+	AgentPushes uint64
+	Acked       time.Time
+	Error       string `json:",omitempty"`
+}
+
 type cephfsCapAgent struct {
 	s       *cephmsgr.MDSSession
 	ctx     context.Context
@@ -168,10 +235,26 @@ type cephfsCapAgent struct {
 	errs    []string
 	done    chan struct{}
 	endErr  error
+	// pushes counts capability, lease, snapshot and quota pushes handled.
+	pushes uint64
+	// added numbers caps in the order they were added (cephfsCap.Added).
+	added      uint64
+	realms     map[uint64]cephmsgr.MDSSnapRealm
+	leaseHolds map[string]time.Duration
+	leases     []cephfsLeaseEvent
+	snaps      []cephfsSnapEvent
+	quotas     []cephfsQuotaEvent
+	recalls    []cephfsRecallEvent
+	flushes    []cephfsFlushEvent
+}
+
+func newCephFSCapAgent(ctx context.Context, s *cephmsgr.MDSSession) *cephfsCapAgent {
+	return &cephfsCapAgent{s: s, ctx: ctx, caps: map[uint64]*cephfsCap{}, holds: map[uint64]*cephfsHold{}, held: map[uint64]bool{}, done: make(chan struct{}),
+		realms: map[uint64]cephmsgr.MDSSnapRealm{}, leaseHolds: map[string]time.Duration{}}
 }
 
 func startCephFSCapAgent(ctx context.Context, s *cephmsgr.MDSSession) *cephfsCapAgent {
-	a := &cephfsCapAgent{s: s, ctx: ctx, caps: map[uint64]*cephfsCap{}, holds: map[uint64]*cephfsHold{}, held: map[uint64]bool{}, done: make(chan struct{})}
+	a := newCephFSCapAgent(ctx, s)
 	go a.run()
 	return a
 }
@@ -203,45 +286,199 @@ func (a *cephfsCapAgent) failLocked(format string, args ...any) {
 }
 
 func (a *cephfsCapAgent) handleLocked(e cephmsgr.MDSSessionEvent) {
+	if e.Caps != nil || e.Lease != nil || e.Snap != nil || e.Quota != nil {
+		// got_mds_push: every counted push, whatever it carries.
+		a.pushes++
+	}
 	switch {
 	case e.Caps != nil:
 		a.handleCapsLocked(e)
 	case e.Lease != nil:
-		l := e.Lease
-		a.recordLocked(cephfsCapRecord{Kind: "lease", Received: e.Received, Arrival: e.Arrival, Ino: l.Ino, Op: uint32(l.Action), Seq: l.Seq, Note: fmt.Sprintf("mask=%d dentry=%q", l.Mask, l.DentryName)})
-		if l.Action != cephmsgr.MDSLeaseRevoke {
-			a.failLocked("unexpected MDS lease action %d", l.Action)
-			return
-		}
-		// handle_lease: every revoke is answered with a RELEASE echoing it.
-		release := cephmsgr.MDSLease{Action: cephmsgr.MDSLeaseRelease, Mask: l.Mask, Ino: l.Ino, First: l.First, Last: l.Last, Seq: l.Seq, DentryName: l.DentryName}
-		err := a.send(func(ctx context.Context) error { return a.s.SendLease(ctx, release) })
-		r := cephfsCapRecord{Kind: "lease-release", Ino: l.Ino, Seq: l.Seq, Note: fmt.Sprintf("dentry=%q", l.DentryName)}
-		if err != nil {
-			r.Error = err.Error()
-			a.failLocked("lease release: %v", err)
-		}
-		a.recordLocked(r)
+		a.handleLeaseLocked(e)
 	case e.Snap != nil:
-		a.recordLocked(cephfsCapRecord{Kind: "snap", Received: e.Received, Arrival: e.Arrival, Op: e.Snap.Op, Note: fmt.Sprintf("split=%d inos=%d realms=%d trace=%d", e.Snap.Split, len(e.Snap.SplitInos), len(e.Snap.SplitRealms), len(e.Snap.Trace))})
+		a.handleSnapLocked(e)
 	case e.Quota != nil:
-		a.recordLocked(cephfsCapRecord{Kind: "quota", Received: e.Received, Arrival: e.Arrival, Ino: e.Quota.Ino})
+		q := *e.Quota
+		ev := cephfsQuotaEvent{Arrival: e.Arrival, Received: e.Received, Quota: q}
+		// handle_quota updates a cached inode's quota and rstat; no answer.
+		if c := a.caps[q.Ino]; c != nil {
+			c.Quota, ev.Known = &q, true
+		}
+		a.quotas = append(a.quotas, ev)
+		a.recordLocked(cephfsCapRecord{Kind: "quota", Received: e.Received, Arrival: e.Arrival, Ino: q.Ino,
+			Note: fmt.Sprintf("max_bytes=%d max_files=%d rbytes=%d rfiles=%d rsubdirs=%d", q.MaxBytes, q.MaxFiles, q.RBytes, q.RFiles, q.RSubdirs)})
 	default:
 		r := cephfsCapRecord{Kind: "session", Received: e.Received, Arrival: e.Arrival, Op: e.Op, Seq: uint32(e.Sequence)}
 		switch e.Op {
 		case cephmsgr.MDSSessionOpFlushMessage:
-			// Native clients flush cap releases, then acknowledge.
-			if err := a.send(func(ctx context.Context) error { return a.s.AcknowledgeFlush(ctx, e.Sequence) }); err != nil {
-				r.Error = err.Error()
+			// Native clients flush pending cap releases, then acknowledge. This
+			// agent sends releases at once, so nothing is pending here.
+			ev := cephfsFlushEvent{Arrival: e.Arrival, Received: e.Received, Sequence: e.Sequence, AgentPushes: a.pushes}
+			err := a.send(func(ctx context.Context) error { return a.s.AcknowledgeFlush(ctx, e.Sequence) })
+			ev.Acked = time.Now()
+			if err != nil {
+				r.Error, ev.Error = err.Error(), err.Error()
 				a.failLocked("flush acknowledgement: %v", err)
 			}
+			r.Note = fmt.Sprintf("flushmsg seq=%d agent_pushes=%d", e.Sequence, a.pushes)
+			a.flushes = append(a.flushes, ev)
 		case cephmsgr.MDSSessionOpRecallState:
-			r.Note = fmt.Sprintf("recall max_caps=%d max_leases=%d", e.MaxCaps, e.MaxLeases)
+			ev := a.trimCapsLocked(e)
+			r.Note = fmt.Sprintf("recall max_caps=%d max_leases=%d caps %d->%d released=%d", e.MaxCaps, e.MaxLeases, ev.Before, ev.After, len(ev.Released))
+			if ev.Error != "" {
+				r.Error = ev.Error
+			}
+			a.recalls = append(a.recalls, ev)
 		default:
 			a.failLocked("unexpected MDS session event op %d", e.Op)
 		}
 		a.recordLocked(r)
 	}
+}
+
+// handleLeaseLocked restates handle_lease: every REVOKE is answered with a
+// RELEASE echoing its sequence, mask, inode, snap range and dentry name. A
+// hold registered for the dentry name delays that answer once.
+func (a *cephfsCapAgent) handleLeaseLocked(e cephmsgr.MDSSessionEvent) {
+	l := *e.Lease
+	a.recordLocked(cephfsCapRecord{Kind: "lease", Received: e.Received, Arrival: e.Arrival, Ino: l.Ino, Op: uint32(l.Action), Seq: l.Seq,
+		Note: fmt.Sprintf("mask=%d dentry=%q first=%d last=%#x", l.Mask, l.DentryName, l.First, l.Last)})
+	if l.Action != cephmsgr.MDSLeaseRevoke {
+		a.failLocked("unexpected MDS lease action %d", l.Action)
+		return
+	}
+	release := cephmsgr.MDSLease{Action: cephmsgr.MDSLeaseRelease, Mask: l.Mask, Ino: l.Ino, First: l.First, Last: l.Last, Seq: l.Seq, DentryName: l.DentryName}
+	a.leases = append(a.leases, cephfsLeaseEvent{Arrival: e.Arrival, Received: e.Received, PushesBefore: a.pushes - 1, Revoke: l, Release: release})
+	index := len(a.leases) - 1
+	answer := func() {
+		ev := &a.leases[index]
+		err := a.send(func(ctx context.Context) error { return a.s.SendLease(ctx, release) })
+		ev.Released, ev.Sent = time.Now(), err == nil
+		r := cephfsCapRecord{Kind: "lease-release", Ino: l.Ino, Seq: l.Seq, Note: fmt.Sprintf("dentry=%q", l.DentryName)}
+		if err != nil {
+			r.Error, ev.Error = err.Error(), err.Error()
+			a.failLocked("lease release: %v", err)
+		}
+		a.recordLocked(r)
+	}
+	if delay, ok := a.leaseHolds[l.DentryName]; ok {
+		delete(a.leaseHolds, l.DentryName)
+		a.leases[index].Held = delay
+		time.AfterFunc(delay, func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			answer()
+		})
+		return
+	}
+	answer()
+}
+
+// handleSnapLocked restates handle_snap: on SPLIT the first realm of the
+// trace must be the split realm, and cached inodes listed in split_inos move
+// into it unless they already belong to a newer realm; every realm of the
+// trace is then recorded (update_snap_trace). Nothing is sent: this client
+// never has dirty data to flush as a cap snap.
+func (a *cephfsCapAgent) handleSnapLocked(e cephmsgr.MDSSessionEvent) {
+	m := e.Snap
+	ev := cephfsSnapEvent{Arrival: e.Arrival, Received: e.Received, Op: m.Op, Split: m.Split, SplitInos: slices.Clone(m.SplitInos), SplitRealms: slices.Clone(m.SplitRealms), TraceBytes: len(m.Trace)}
+	realms, err := cephmsgr.MDSReply{SnapTrace: m.Trace}.DecodeSnapTrace()
+	ev.Realms = realms
+	switch {
+	case err != nil:
+		ev.Error = err.Error()
+		a.failLocked("snap trace of op %d: %v", m.Op, err)
+	case len(realms) == 0:
+		ev.Error = "empty snap trace"
+		a.failLocked("snap op %d without a realm", m.Op)
+	case m.Op == cephmsgr.MDSSnapOpSplit && realms[0].Ino != m.Split:
+		ev.Error = "split realm is not the first realm of the trace"
+		a.failLocked("snap split %d trace starts with realm %d", m.Split, realms[0].Ino)
+	case m.Op == cephmsgr.MDSSnapOpSplit:
+		info := realms[0]
+		for _, ino := range m.SplitInos {
+			c := a.caps[ino]
+			if c == nil || c.CapID == 0 || c.Released || c.Realm == info.Ino {
+				continue
+			}
+			if old, ok := a.realms[c.Realm]; ok && old.Created > info.Created {
+				continue
+			}
+			c.Realm = info.Ino
+			ev.Moved = append(ev.Moved, ino)
+		}
+	}
+	for _, r := range realms {
+		a.realms[r.Ino] = r
+	}
+	a.snaps = append(a.snaps, ev)
+	a.recordLocked(cephfsCapRecord{Kind: "snap", Received: e.Received, Arrival: e.Arrival, Op: m.Op, Error: ev.Error,
+		Note: fmt.Sprintf("split=%d inos=%v realms=%v trace=%d moved=%v", m.Split, m.SplitInos, m.SplitRealms, len(m.Trace), ev.Moved)})
+}
+
+// trimCapsLocked restates trim_caps for a client whose only expireable
+// dentries are those of unopened regular files: walking caps in the order
+// they were added, it removes (with queue_release) unopened non-root file
+// caps until at most max_caps remain and sends the releases at once, where
+// the native client flushes them on its next tick. Directories, the root and
+// open files are kept, as their dentries or handles pin them natively.
+func (a *cephfsCapAgent) trimCapsLocked(e cephmsgr.MDSSessionEvent) cephfsRecallEvent {
+	ev := cephfsRecallEvent{Arrival: e.Arrival, Received: e.Received, MaxCaps: e.MaxCaps, MaxLeases: e.MaxLeases, Barrier: a.barrier}
+	var live []*cephfsCap
+	for _, c := range a.caps {
+		if c.CapID != 0 && !c.Released {
+			live = append(live, c)
+		}
+	}
+	slices.SortFunc(live, func(x, y *cephfsCap) int { return cmp.Or(cmp.Compare(x.Added, y.Added), cmp.Compare(x.Ino, y.Ino)) })
+	ev.Before, ev.After = len(live), len(live)
+	for _, c := range live {
+		if ev.After <= int(e.MaxCaps) {
+			break
+		}
+		open := 0
+		for _, refs := range c.Open {
+			open += refs
+		}
+		if c.Ino == 1 || c.Dir || open != 0 {
+			continue
+		}
+		ev.Released = append(ev.Released, cephmsgr.MDSCapItem{Ino: c.Ino, CapID: c.CapID, MigrateSeq: c.MSeq, IssueSeq: c.IssueSeq})
+		c.Released = true
+		ev.After--
+		a.recordLocked(cephfsCapRecord{Kind: "release", Ino: c.Ino, CapID: c.CapID, IssueSeq: c.IssueSeq, MSeq: c.MSeq, Caps: cephCapString(c.Issued), Note: "trim_caps for RECALL_STATE"})
+	}
+	if len(ev.Released) == 0 {
+		return ev
+	}
+	items := slices.Clone(ev.Released)
+	err := a.send(func(ctx context.Context) error { return a.s.ReleaseCaps(ctx, items, a.barrier) })
+	ev.Sent = time.Now()
+	if err != nil {
+		ev.Error = err.Error()
+		a.failLocked("recall cap release: %v", err)
+	}
+	return ev
+}
+
+// holdLease delays the RELEASE answering the next REVOKE of one dentry name.
+func (a *cephfsCapAgent) holdLease(name string, delay time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.leaseHolds[name] = delay
+}
+
+// liveCaps counts caps that are held (not released).
+func (a *cephfsCapAgent) liveCaps() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	n := 0
+	for _, c := range a.caps {
+		if c.CapID != 0 && !c.Released {
+			n++
+		}
+	}
+	return n
 }
 
 func (a *cephfsCapAgent) send(f func(context.Context) error) error {
@@ -318,6 +555,10 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 
 // addUpdateCapLocked restates the cap fields of add_update_cap.
 func (a *cephfsCapAgent) addUpdateCapLocked(c *cephfsCap, capID uint64, issued, wanted, seq, mseq uint32, realm uint64) {
+	if c.CapID == 0 || c.Released {
+		a.added++
+		c.Added = a.added
+	}
 	if c.CapID != 0 && !c.Released && !cephSeqAfter(seq, c.Seq) {
 		seq, mseq, issued = c.Seq, c.MSeq, issued|c.Issued
 	}
@@ -477,6 +718,10 @@ func (a *cephfsCapAgent) applyStatLocked(st *cephmsgr.MDSInodeStat, source strin
 	if c.CapID != 0 && !c.Released && !cephSeqAfter(seq, c.Seq) {
 		// A push newer than this reply was already handled.
 		seq, mseq, issued = c.Seq, c.MSeq, issued|c.Issued
+	}
+	if c.CapID == 0 || c.Released {
+		a.added++
+		c.Added = a.added
 	}
 	if c.Released {
 		c.Implemented, c.Wanted, c.Released = 0, 0, false
@@ -671,7 +916,8 @@ func (a *cephfsCapAgent) reconnectState(realms map[uint64]cephmsgr.MDSSnapRealm)
 // caps do not.
 func startCephFSCapAgentFrom(ctx context.Context, s *cephmsgr.MDSSession, previous *cephfsCapAgent) *cephfsCapAgent {
 	previous.mu.Lock()
-	a := &cephfsCapAgent{s: s, ctx: ctx, caps: map[uint64]*cephfsCap{}, holds: map[uint64]*cephfsHold{}, held: map[uint64]bool{}, done: make(chan struct{}), barrier: previous.barrier}
+	a := newCephFSCapAgent(ctx, s)
+	a.barrier, a.added = previous.barrier, previous.added
 	for ino, c := range previous.caps {
 		if c.CapID == 0 || c.Released {
 			continue
@@ -697,12 +943,20 @@ type cephfsAgentSnapshot struct {
 	Holds    []cephfsHold
 	Barrier  uint32
 	EndError string `json:",omitempty"`
+	// Pushes counts the capability, lease, snapshot and quota pushes handled.
+	Pushes  uint64
+	Leases  []cephfsLeaseEvent  `json:",omitempty"`
+	Snaps   []cephfsSnapEvent   `json:",omitempty"`
+	Quotas  []cephfsQuotaEvent  `json:",omitempty"`
+	Recalls []cephfsRecallEvent `json:",omitempty"`
+	Flushes []cephfsFlushEvent  `json:",omitempty"`
 }
 
 func (a *cephfsCapAgent) snapshot() cephfsAgentSnapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	s := cephfsAgentSnapshot{Records: slices.Clone(a.records), Pending: len(a.pending), Errors: slices.Clone(a.errs), Barrier: a.barrier}
+	s := cephfsAgentSnapshot{Records: slices.Clone(a.records), Pending: len(a.pending), Errors: slices.Clone(a.errs), Barrier: a.barrier, Pushes: a.pushes,
+		Leases: slices.Clone(a.leases), Snaps: slices.Clone(a.snaps), Quotas: slices.Clone(a.quotas), Recalls: slices.Clone(a.recalls), Flushes: slices.Clone(a.flushes)}
 	for _, c := range a.caps {
 		s.Caps = append(s.Caps, *c)
 	}

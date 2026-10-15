@@ -46,7 +46,7 @@ var metadataFiles = []string{
 	"mds-commands-oracle.json", "mds-commands-native-result.json", "mds-commands-results.json",
 	"mds-sessions-oracle.json", "mds-sessions-owned.json", "mds-sessions-result.json", "mds-sessions-results.json", "mds-sessions-cleanup.json",
 	"mds-cephfs-oracle.json", "mds-cephfs-owned.json", "mds-cephfs-result.json", "mds-cephfs-results.json", "mds-cephfs-cleanup.json",
-	"mds-cephfs-target.json", "mds-cephfs-recovery-results.json",
+	"mds-cephfs-target.json", "mds-cephfs-recovery-results.json", "mds-cephfs-push-results.json",
 	"osd-split-input.json", "osd-split-result.json", "osd-split-status.json", "osd-split-command.json", "osd-split-worker.log", "osd-split-results.json",
 	"osd-split-stale-input.json", "osd-split-stale-receipt.json",
 	"osd-pg-list-input.json", "osd-pg-list-result.json", "osd-pg-list-command.json", "osd-pg-list-results.json",

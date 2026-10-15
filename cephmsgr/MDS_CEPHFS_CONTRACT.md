@@ -232,9 +232,19 @@ release of all six caps to native `num_caps` 0; confirmed close; and
 Messenger resume of an idle and of an in-flight session (same native
 session and address, not blocklisted). See
 [the validation record](../integration/fixture/MDS_CEPHFS_VALIDATION.md).
-Lease, FLUSHMSG, RECALL_STATE, snap and quota pushes, flush/dirty caps,
-EXPORT/IMPORT, forwards, multiple ranks and failover were not exercised
-live. Synthetic peers cover
+A separate live push acceptance (product `c3bc350`, both profiles, seven
+leaves) received and answered a dentry-lease REVOKE (the native rename
+completed only after the Go RELEASE), snapshot UPDATE/SPLIT/DESTROY pushes
+whose traces decode as SnapRealmInfoNew, MClientQuota with the set
+`max_bytes`, RECALL_STATE (MaxCaps equal to `mds_min_caps_per_client`) with
+native `num_caps` falling to the target after `ReleaseCaps`, and FLUSHMSG
+during `cache drop` whose gather ended on the Go `AcknowledgeFlush`; push
+sequences equaled the pushes counted. See
+[the push record](../integration/fixture/MDS_CEPHFS_PUSH_VALIDATION.md).
+MKDIR replies grant dentry leases that the client's own later RMDIR may have
+to release first. `DecodeMDSSnapTrace` decodes push traces. Not exercised
+live: FORCE_RO, lease RENEW, cap snaps and FLUSHSNAP, EXPORT/IMPORT and
+FLUSHMSG from migration, forwards and multiple ranks. Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and
 safe replies, forwards, session loss, the data segment, push ordering and
 counting, client answers, close resend and protocol violations.

@@ -21,7 +21,7 @@ func TestMDSCephFSClosedProfileAndCredentials(t *testing.T) {
 		env := mdsCephFSProfileEnv()
 		env["CEPH_MSGR_TEST_RUNTIME"] = runtime
 		p, err := loadProfile(func(k string) string { return env[k] })
-		if err != nil || p.testRun != "^TestCephMDSCephFS(Recovery)?Integration$" || p.mdsCephFS != "1" || p.mdsSessions != "0" || p.mdsCommands != "0" || p.osdPGV8() || !p.mdsFreshOSDAllowed() || !p.mdsPublicClient() || p.cleanupBudget() != 2*time.Minute {
+		if err != nil || p.testRun != "^TestCephMDSCephFS(Push|Recovery)?Integration$" || p.mdsCephFS != "1" || p.mdsSessions != "0" || p.mdsCommands != "0" || p.osdPGV8() || !p.mdsFreshOSDAllowed() || !p.mdsPublicClient() || p.cleanupBudget() != 2*time.Minute {
 			t.Fatal("MDS CephFS did not select its isolated no-HASHPSPOOL fixture", p, err)
 		}
 		config := mdsFreshFilesystemConfig(p, "ceph-msgr-fresh-"+strings.Repeat("ab", 16))
@@ -42,7 +42,8 @@ func TestMDSCephFSClosedProfileAndCredentials(t *testing.T) {
 		{"CEPH_MSGR_TEST_MDS_FRESH": "0"}, {"CEPH_MSGR_TEST_MDS_CEPHFS": "true"}, {"CEPH_MSGR_TEST_MDS_COMMANDS": "1"}, {"CEPH_MSGR_TEST_MDS_SESSIONS": "1"},
 		{"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"}, {"CEPH_MSGR_TEST_RUN": "^TestCephMDSSessionsIntegration$"},
 		{"CEPH_MSGR_TEST_RUN": "^TestCeph(MDSFresh|MDSCephFS)Integration$"}, {"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSIntegration$"},
-		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSRecoveryIntegration$"}, {"CEPH_MSGR_TEST_OSD": "0"},
+		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSRecoveryIntegration$"}, {"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFS(Recovery)?Integration$"},
+		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSPushIntegration$"}, {"CEPH_MSGR_TEST_OSD": "0"},
 		{"CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"},
 	} {
 		env := mdsCephFSProfileEnv()
@@ -256,7 +257,8 @@ func TestMDSCephFSCleanupWithoutBaselineMutatesNothing(t *testing.T) {
 			}
 			continue
 		}
-		if err != nil || !receipt.Completed || !receipt.NamespaceRestored || !receipt.BlocklistRestored || len(receipt.NewBlocklist) != 0 || !receipt.RecoveryIdentityRemoved {
+		if err != nil || !receipt.Completed || !receipt.NamespaceRestored || !receipt.BlocklistRestored || len(receipt.NewBlocklist) != 0 || !receipt.RecoveryIdentityRemoved ||
+			!receipt.PushIdentityRemoved || !receipt.PushConfigRestored {
 			t.Fatal("cleanup before any owned mutation did not complete trivially", err, receipt)
 		}
 	}

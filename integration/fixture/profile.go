@@ -184,7 +184,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			selected = "^TestCephMDSSessionsIntegration$"
 		}
 		if p.mdsCephFS == "1" {
-			selected = "^TestCephMDSCephFS(Recovery)?Integration$"
+			selected = "^TestCephMDSCephFS(Push|Recovery)?Integration$"
 		}
 		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || p.sparseReadOracle != "" ||
 			p.testRun != "" && p.testRun != selected {
