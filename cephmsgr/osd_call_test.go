@@ -76,7 +76,10 @@ func TestOSDCallInvalidInputsNeverAllocateTIDOrSend(t *testing.T) {
 	write := OSDOperation{Code: OSDWrite, Length: 1, Data: []byte{1}}
 	check("CALL after staged write", ErrUnsupportedOSDOperation, true, write, valid)
 	check("read after CALL", ErrUnsupportedOSDOperation, false, valid, OSDOperation{Code: OSDStat})
-	check("CALL after CALL", ErrUnsupportedOSDOperation, false, valid, valid)
+	check("CALL after FAILOK CREATE", ErrUnsupportedOSDOperation, true, OSDOperation{Code: OSDCreate, Flags: OSDFailOK}, valid)
+	check("read after two CALLs", ErrUnsupportedOSDOperation, false, valid, valid, OSDOperation{Code: OSDStat})
+	writeCall := osdCallOp(OSDCallWrite, "write_return_data", nil, 64)
+	check("CALL after a write-mode CALL", ErrUnsupportedOSDOperation, true, writeCall, valid)
 	big := valid
 	big.Data = make([]byte, c.options.MaxFrameSize)
 	check("oversized CALL input", ErrLimitExceeded, false, big)
@@ -164,6 +167,92 @@ func TestOSDCallSentRepliesPreserveResultsAndOutput(t *testing.T) {
 			select {
 			case replay := <-peer.requests:
 				t.Fatal("CALL was resent", replay.Transaction)
+			default:
+			}
+		})
+	}
+}
+
+func TestOSDCallCompoundPreservesPerOpResults(t *testing.T) {
+	guard := osdCallOp(OSDCallRead, "say_hello", nil, 64)
+	update := osdCallOp(OSDCallWrite, "write_return_data", []byte{1, 2}, 64)
+	create := OSDOperation{Code: OSDCreate, Flags: OSDExclusiveCreate}
+	ondisk := uint64(osd.FlagOnDisk | osd.FlagAck)
+	for _, tc := range []struct {
+		name    string
+		ops     []OSDOperation
+		lengths []uint64
+		outputs [][]byte
+		results []int32
+		code    int32
+	}{
+		{name: "both methods succeed", ops: []OSDOperation{guard, update}, lengths: []uint64{0, 4}, outputs: [][]byte{nil, []byte("done")}, results: []int32{0, 0}},
+		{name: "failed guard leaves the update unexecuted", ops: []OSDOperation{guard, update}, lengths: []uint64{0, 0}, outputs: [][]byte{nil, nil}, results: []int32{-16, 0}, code: -16},
+		{name: "exclusive create then method", ops: []OSDOperation{create, update}, lengths: []uint64{0, 0}, outputs: [][]byte{nil, nil}, results: []int32{0, 0}},
+		{name: "existing object refuses the create", ops: []OSDOperation{create, update}, lengths: []uint64{0, 0}, outputs: [][]byte{nil, nil}, results: []int32{-17, 0}, code: -17},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, peers, _ := osdTestClient(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			o, err := c.OpenOSD(ctx, OSDTarget{Address: "192.0.2.1:6804"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer := <-peers
+			input := osdValidationRequest()
+			input.Operations = tc.ops
+			input.ModificationTime = OSDTime{Seconds: 1700000000}
+			type response struct {
+				reply OSDReply
+				err   error
+			}
+			done := make(chan response, 1)
+			go func() { reply, err := o.Request(ctx, input); done <- response{reply, err} }()
+			m := peer.next(t)
+			var want []byte
+			flags := uint32(osd.FlagWrite | osd.FlagOnDisk | osd.FlagReturnVec)
+			for _, op := range tc.ops {
+				if op.Code == OSDCall {
+					want = append(append(want, op.Class.Class+op.Class.Method...), op.Data...)
+					if op.Class.Mode == OSDCallRead {
+						flags |= uint32(osd.FlagRead)
+					}
+				}
+			}
+			if binary.LittleEndian.Uint32(m.Front[8:12]) != flags || !bytes.Equal(m.Data, want) {
+				t.Fatalf("compound request flags/data differ: %q", m.Data)
+			}
+			echo := make([]OSDOperation, len(tc.ops))
+			for i, op := range tc.ops {
+				echo[i] = op
+				if op.Code == OSDCall {
+					echo[i] = osdCallReplyOp(op, tc.lengths[i])
+				}
+			}
+			reply := osdXattrSyntheticReply(t, echo, tc.outputs, tc.results, tc.code, ondisk)
+			reply.Transaction = m.Transaction
+			_ = osdMapsWrite(peer, reply)
+			got := <-done
+			var server *OSDError
+			if tc.code < 0 {
+				if !errors.As(got.err, &server) || server.Code != tc.code {
+					t.Fatal("compound refusal changed", got.err)
+				}
+			} else if got.err != nil {
+				t.Fatal("valid compound reply rejected", got.err)
+			}
+			if got.reply.Code != tc.code || len(got.reply.Operations) != len(tc.ops) {
+				t.Fatalf("compound reply changed: %+v", got.reply)
+			}
+			for i, op := range got.reply.Operations {
+				if op.Result != tc.results[i] || !bytes.Equal(op.Data, tc.outputs[i]) {
+					t.Fatalf("op %d result or output changed: %+v", i, op)
+				}
+			}
+			select {
+			case replay := <-peer.requests:
+				t.Fatal("compound was resent", replay.Transaction)
 			default:
 			}
 		})

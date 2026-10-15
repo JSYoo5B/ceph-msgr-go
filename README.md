@@ -475,8 +475,9 @@ header와 object map에 lock을 걸고 AcquiredLock을 알린 다음 object map�
 OBJECT_EXISTS로 기록하고 data 객체를 썼다. 이어서 native librbd의 쓰기가 lock을 요청하자
 Go는 `ResponseMessage(0)`으로 답하고 lock을 풀었으며, librbd는 lock을 다시 잡아 쓰기를
 마쳤다. Native librbd는 Go가 쓴 bytes를 읽었고 `rbd object-map check`는 불일치를 찾지
-않았다. librbd는 `lock.assert_locked`와 `rbd.object_map_update`를 한 요청에 담아 보내지만
-제품은 CALL 뒤의 CALL을 아직 보내지 않으므로 시험은 두 CALL을 따로 보냈다.
+않았다. Go도 librbd처럼 `lock.assert_locked`(read mode)와 `rbd.object_map_update`를 한
+요청에 담아 보냈다. 다른 cookie로 보낸 같은 요청은 native와 같은 -16으로 끝났고 object map은
+바뀌지 않았다.
 [잠금 검증 기록](integration/fixture/RBD_LOCK_VALIDATION.md)에 두 구성의 결과를 남겼다.
 Clone/parent, journaling, lock 경합과 blocklist는 아직 검증하지 않았다.
 
@@ -735,9 +736,18 @@ signed per-op 결과와 raw 출력을 돌려준다. 양수 결과도 보존한�
 `OSDCallRead`·`OSDCallWrite` 중 하나를 반드시 지정한다. 다만 이 값은 request
 flag와 mtime 허용 여부만 정하고, Tentacle OSD는 method 등록 flag로 실제
 읽기·쓰기를 판정한다. 그래서 read mode로 보낸 write method도 쓰기로 실행된다.
-`MaxOutputBytes`는 양의 local 출력 제한이다. FAILOK CALL, staged write 뒤의
-CALL, CALL 뒤의 읽기·guard·CALL은 class method가 committed 상태를 읽거나 스스로
-쓰기를 staging할 수 있어 송신 전에 거절한다. 없는 class·method와 권한 부족은
+`MaxOutputBytes`는 양의 local 출력 제한이다. 한 요청에서 CALL은 guard·읽기,
+FAILOK가 아닌 CREATE, read mode CALL 뒤에 올 수 있다. librbd가 쓰는
+`create(true)`와 `rbd.set_id`, `lock.assert_locked`와 `rbd.object_map_update`
+형식이 여기에 해당한다. FAILOK CALL, write mode CALL이나 그 밖의 staged write
+뒤의 CALL, CALL 뒤의 읽기·guard는 송신 전에 거절한다. method의 data 읽기는
+길이와 full-object digest를 staged 상태에서 가져오면서 bytes는 committed 저장소에서
+읽는다. 그래서 쓰기 method 뒤에 전체를 읽는 method를 보내자 실제 Tentacle OSD가
+응답 없이 primary 복구를 반복했다. Read mode는 method가 읽기 전용으로 등록됐다는
+호출자의 선언이다. 첫 실패가 요청 전체를 중단하고 뒤의 operation은 결과 0과 빈
+출력으로 돌아온다. 이 동작을 native librados와 대조한 결과는
+[복합 CALL 검증 기록](integration/fixture/OSD_CALL_COMPOUND_VALIDATION.md)에 있다.
+없는 class·method와 권한 부족은
 서버 결과(`-1`·`-95` 등)로 그대로 전달한다. [CALL 계약](internal/osd/CLASS_CONTRACT.md)에
 출력 한도와 결과 의미를 정리했다.
 

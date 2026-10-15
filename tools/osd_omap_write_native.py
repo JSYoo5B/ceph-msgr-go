@@ -29,6 +29,13 @@ executes ONE native C write vector with explicit mtime, observes before/after
 and removes the mirror. --cleanup removes every owned name. No native mutation
 is retried; unit adaptation tests are not daemon proof.
 
+Compound class calls: --exec runs ONE read op of 1-4 CALLs (rados_read_op_exec,
+per-op output and prval, RETURNVEC); the OSD classifies the vector by the
+methods' registered flags, so a vector with a write method executes as a
+write. --compare also admits CREATE (rados_write_op_create, exclusive or not)
+before C write-op CALLs, whose prvals are exposed but whose outputs are not;
+CREATE has no native per-op result.
+
 Self-managed snapshot modes (librados.h:1358-1426, librados_c.cc:1278-1306 and
 1796-1857, IoCtxImpl.cc:253-272/388-481/646-654; rados.cc:3628-3755 for the
 CLI listing; OSDMonitor.cc:291-345/14649-14668 for the MON cap gate):
@@ -56,6 +63,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 import tempfile
 import uuid
 
@@ -73,10 +81,11 @@ MAX_RESERVED = 8
 MAX_OPERATIONS = 16
 MAX_CLI_OUTPUT = 16 << 10
 OWNED = "osd-omap-write-owned"
-WRITE_OPS = {"set", "remove", "clear", "cmp", "rmrange", "call", "allochint"}
+WRITE_OPS = {"set", "remove", "clear", "cmp", "rmrange", "call", "allochint", "create"}
 MAX_OBJECT_INFO = 64 << 10
 MAX_CLASS_NAME = 255
 MAX_CALL_OUTPUT = 1 << 20
+MAX_EXEC_CALLS = 4
 RETURNVEC = 1024  # librados.h:137 LIBRADOS_OPERATION_RETURNVEC
 ORDERSNAP = 512  # librados.h:135 LIBRADOS_OPERATION_ORDERSNAP
 SNAP_WRITE_OPS = WRITE_OPS | {"writefull", "write", "setxattr", "rmxattr", "delete"}
@@ -149,7 +158,8 @@ def operations(raw, allowed=WRITE_OPS):
             raise ValueError("unsupported native OMAP write operation")
         admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags", "cmp": "key", "rmrange": "begin",
                                     "call": "class", "allochint": "expected_object_size", "writefull": "data",
-                                    "write": "data", "setxattr": "name", "rmxattr": "name", "delete": "flags"}[action["op"]]}
+                                    "write": "data", "setxattr": "name", "rmxattr": "name", "delete": "flags",
+                                    "create": "exclusive"}[action["op"]]}
         if action["op"] == "write":
             admitted.add("offset")
         if action["op"] == "setxattr":
@@ -181,6 +191,11 @@ def operations(raw, allowed=WRITE_OPS):
         elif action["op"] == "call":
             decoded.update(cls=class_name(action.get("class")), method=class_name(action.get("method")),
                            input=binary(action.get("input", "")))
+        elif action["op"] == "create":
+            exclusive = action.get("exclusive", False)
+            if type(exclusive) is not bool:
+                raise ValueError("native create exclusive must be a boolean")
+            decoded["exclusive"] = exclusive
         elif action["op"] in ("writefull", "write"):
             decoded["data"] = binary(action.get("data", ""))
             if action["op"] == "write":
@@ -260,10 +275,11 @@ def validate_request(raw, mode):
     elif mode == "observe":
         request["object"] = xattr.identity(raw.get("object"), "object")
     elif mode == "exec":
-        # ONE read-op CALL, on an owned object or on a fresh seeded/absent mirror.
+        # ONE read op of 1-4 CALLs, on an owned object or on a fresh
+        # seeded/absent mirror.
         request["operations"] = operations(raw.get("operations"), {"call"})
-        if len(request["operations"]) != 1:
-            raise ValueError("exec runs exactly one CALL")
+        if len(request["operations"]) > MAX_EXEC_CALLS:
+            raise ValueError("exec runs one to four CALLs")
         request["role"] = raw.get("role", "test")
         if request["role"] not in xattr.CLIENT_ROLES:
             raise ValueError("unsupported fixture identity")
@@ -489,6 +505,9 @@ class Native(omap.Native):
                     self.lib.rados_write_op_rmxattr(operation, action["name"])
                 elif action["op"] == "delete":
                     self.lib.rados_write_op_remove(operation)
+                elif action["op"] == "create":
+                    # No per-op prval: the C (and C++) builder exposes none.
+                    self.lib.rados_write_op_create(operation, 1 if action["exclusive"] else 0, None)
                 elif action["op"] == "clear":
                     self.lib.rados_write_op_omap_clear(operation)
                 else:
@@ -501,25 +520,38 @@ class Native(omap.Native):
         finally:
             self.lib.rados_release_write_op(operation)
 
-    def exec_vector(self, io, name, action):
-        """One read-op CALL with RETURNVEC: the OSD classifies the method."""
+    def exec_vector(self, io, name, actions):
+        """One read op of CALLs with RETURNVEC and a per-op output and prval
+        each: the OSD classifies the vector by the methods' flags."""
         operation = self.lib.rados_create_read_op()
         if not operation:
             raise RuntimeError("native CALL allocation failed")
-        out, length, prval = C.c_void_p(), C.c_size_t(), C.c_int(999)
+        slots = []
         try:
-            self.lib.rados_read_op_exec(operation, action["cls"], action["method"], action["input"], len(action["input"]),
-                                        C.byref(out), C.byref(length), C.byref(prval))
-            if action["flags"]:
-                self.lib.rados_read_op_set_flags(operation, action["flags"])
+            for action in actions:
+                out, length, prval = C.c_void_p(), C.c_size_t(), C.c_int(999)
+                slots.append((out, length, prval))
+                self.lib.rados_read_op_exec(operation, action["cls"], action["method"], action["input"], len(action["input"]),
+                                            C.byref(out), C.byref(length), C.byref(prval))
+                if action["flags"]:
+                    self.lib.rados_read_op_set_flags(operation, action["flags"])
+            started = time.monotonic_ns()
             aggregate = self.lib.rados_read_op_operate(operation, io, name, RETURNVEC)
-            if length.value > MAX_CALL_OUTPUT:
-                raise ValueError("native CALL output exceeds oracle bound")
-            data = C.string_at(out.value, length.value) if out.value and length.value else b""
-            return {"aggregate": aggregate, "prvals": [{"index": 0, "prval": prval.value}], "output": xattr.encode(data)}
+            elapsed = time.monotonic_ns() - started
+            outputs = []
+            for out, length, _ in slots:
+                if length.value > MAX_CALL_OUTPUT:
+                    raise ValueError("native CALL output exceeds oracle bound")
+                outputs.append(xattr.encode(C.string_at(out.value, length.value) if out.value and length.value else b""))
+            result = {"aggregate": aggregate, "prvals": [{"index": i, "prval": s[2].value} for i, s in enumerate(slots)],
+                      "outputs": outputs, "elapsed_ms": elapsed // 1000000}
+            if len(outputs) == 1:
+                result["output"] = outputs[0]
+            return result
         finally:
-            if out.value:
-                self.lib.rados_buffer_free(out)
+            for out, _, _ in slots:
+                if out.value:
+                    self.lib.rados_buffer_free(out)
             self.lib.rados_release_read_op(operation)
 
     def object_info(self, io, name):
@@ -831,13 +863,13 @@ def execute(native, io, metadata, request, mode, out, cli):
         result["objects"] = [n.decode() for n in [main] + absent]
         return result
     if mode == "exec":
-        action = request["operations"][0]
+        actions = request["operations"]
         if "object" in request:
             owned = check_ownership(omap.read_json(out / (OWNED + ".json")), metadata)
             if request["object"] not in owned:
                 raise ValueError("exec is limited to owned objects")
             result["object"] = request["object"].decode()
-            result["vector"] = native.exec_vector(io, request["object"], action)
+            result["vector"] = native.exec_vector(io, request["object"], actions)
             return result
         mirror = owned_name(metadata, b"mirror-")
         created = False
@@ -852,7 +884,7 @@ def execute(native, io, metadata, request, mode, out, cli):
             result["object"] = mirror.decode()
             result["before"] = native.full_state(io, mirror, request["inventory_keys"], cli)
             created = True  # a write-classified method may create the mirror
-            result["vector"] = native.exec_vector(io, mirror, action)
+            result["vector"] = native.exec_vector(io, mirror, actions)
             result["after"] = native.full_state(io, mirror, request["inventory_keys"], cli)
             return result
         finally:

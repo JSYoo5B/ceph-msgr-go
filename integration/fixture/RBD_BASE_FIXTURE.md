@@ -224,9 +224,23 @@ re-checks every name against the token and the feature set 29.
 - `setup` requires the pool to hold the base image and at most the write
   image (the write test's setup admits this image the same way), creates the
   lock image, opens it read-write (librbd takes the lock for the write and
-  releases it at close), writes the setup extent, flushes and closes it.
+  releases it at close), writes the setup extent, flushes and closes it. It
+  then sends librbd's id-object creation vector (`CreateRequest::
+  create_id_object`: `create(exclusive)` then `rbd.set_id`, one python rados
+  write op with RETURNVEC and the current time) twice to
+  `rbd_id.ceph-msgr-setid-native-<token>` with the image id
+  `f00d<first 8 token characters>`, and records both aggregate codes, the
+  object's raw bytes and user version after each, and a native
+  `rbd.get_id` exec. The object names no image (the pool directory does not
+  list it) and goes with the owned pool.
 - `lock` opens the image read-write and writes the owner extent, which takes
-  the exclusive lock (automatic policy). It then publishes
+  the exclusive lock (automatic policy). While librbd holds the object-map
+  lock (empty cookie), the same rados client sends librbd's object-map update
+  vector `[lock.assert_locked(rbd_lock, exclusive, "ceph-msgr-wrong-cookie",
+  ""), rbd.object_map_update(4, 5, OBJECT_EXISTS, none)]` (python rados
+  write op, RETURNVEC; only the aggregate is exposed) and records its code,
+  both inputs and the raw object map before and after in the `owner` phase
+  (`negative_compound`). It then publishes
   `rbd-lock-state.json` after each phase: `owner`; `released`, `go-owner`
   (with librbd reads of the Go extents) and `reacquired` (after the
   reacquire write, with its duration and the Go extents read again), each
@@ -244,6 +258,9 @@ re-checks every name against the token and the feature set 29.
   --rbd_cache=false --log_to_stderr=false --err_to_stderr=true object-map
   check --no-progress <pool>/<image>` (60 s bound, output bounded to 4 KiB)
   and observes the image.
+- `observe-released` also reads the Go test's id object
+  `rbd_id.ceph-msgr-setid-go-<token>`: raw bytes and user version, and a
+  native `rbd.get_id` exec (reads only).
 - Every action ends with a read-only observation: `stat`, features, flags,
   `list_snaps` (none), `list_lockers`, `watchers_list`, the whole-object
   diff, a librbd read of the head, librados `stat`/`read` of every data object,

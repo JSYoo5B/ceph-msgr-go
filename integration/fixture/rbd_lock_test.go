@@ -59,6 +59,16 @@ func TestRBDLockPlanIsTokenBound(t *testing.T) {
 			t.Fatal("foreign lock plan admitted:", name)
 		}
 	}
+	nativeID, nativeImage := rbdLockSetIDNames(token, "native")
+	goID, goImage := rbdLockSetIDNames(token, "go")
+	if nativeID == goID || nativeImage == goImage || !strings.HasPrefix(nativeID, "rbd_id.ceph-msgr-setid-") || !strings.HasSuffix(goID, token) ||
+		nativeID == "rbd_id."+plan.Image || strings.Trim(nativeImage+goImage, "0123456789abcdef") != "" || len(goImage) != 12 {
+		t.Fatal("set_id compound names are not token-bound, distinct alphanumeric ids", nativeID, goID, nativeImage, goImage)
+	}
+	if !strings.Contains(rbdLockNativePython, `'f00d' + token[:8]`) || !strings.Contains(rbdLockNativePython, `'beef' + token[:8]`) ||
+		!strings.Contains(rbdLockNativePython, "WRONG_COOKIE = '"+rbdLockWrongCookie+"'") {
+		t.Fatal("native driver set_id names or cookie differ from the Go side")
+	}
 	if rbdLockNativeTimeout("lock") < 4*30*time.Second+60*time.Second || rbdLockNativeTimeout("setup") != time.Minute {
 		t.Fatal("native lock action budget cannot cover its four proceed waits and the check")
 	}
@@ -140,9 +150,19 @@ func rbdLockOutput(token string, plan rbdLockPlan, action string) map[string]any
 	for _, e := range plan.GoWrites {
 		sums = append(sums, map[string]any{"offset": e.Offset, "length": e.Length, "sha256": strings.Repeat("2", 64)})
 	}
+	versioned := func(object string) map[string]any {
+		return map[string]any{"object": object, "exists": true, "hex": "0c000000" + hex.EncodeToString([]byte("f00da1a1a1a1")), "version": 3}
+	}
 	switch action {
 	case "setup":
 		value["writes"] = writes("setup", plan.SetupWrites)
+		object, id := rbdLockSetIDNames(token, "native")
+		value["set_id"] = map[string]any{"object": object, "image_id": id, "input_hex": "0c000000", "first": 0, "first_view": versioned(object),
+			"second": -17, "second_view": versioned(object), "get_id": map[string]any{"object": object, "class": "rbd", "method": "get_id", "input_hex": "", "code": 0, "output_hex": "0c000000"}}
+	case "observe-released":
+		object, _ := rbdLockSetIDNames(token, "go")
+		value["set_id_go"] = map[string]any{"object": object, "view": versioned(object),
+			"get_id": map[string]any{"object": object, "class": "rbd", "method": "get_id", "input_hex": "", "code": 0, "output_hex": "0c000000"}}
 	case "lock":
 		watchers := []map[string]any{{"addr": "172.19.0.9:0/2", "id": 4242, "cookie": 1}}
 		phases := []map[string]any{}
@@ -159,6 +179,7 @@ func rbdLockOutput(token string, plan rbdLockPlan, action string) map[string]any
 			switch label {
 			case "owner":
 				p["writes"] = writes("owner", plan.OwnerWrites)
+				p["negative_compound"] = map[string]any{"object": omap, "inputs_hex": []string{"0101", "0400000000000000"}, "code": -16, "map_before": raw(), "map_after": raw()}
 			case "go-owner":
 				p["go_extents"] = sums
 			case "reacquired":
@@ -232,6 +253,14 @@ func TestRBDLockNativeOutputShapeIsClosed(t *testing.T) {
 		"watched after open": func(v map[string]any) {
 			v["watchers"] = []map[string]any{{"addr": "172.19.0.9:0/2", "id": 4242, "cookie": 1}}
 		},
+		"set_id missing":          func(v map[string]any) { delete(v, "set_id") },
+		"set_id of the Go name":   func(v map[string]any) { v["set_id"].(map[string]any)["object"], _ = rbdLockSetIDNames(token, "go") },
+		"set_id positive":         func(v map[string]any) { v["set_id"].(map[string]any)["second"] = 1 },
+		"set_id view unversioned": func(v map[string]any) { v["set_id"].(map[string]any)["first_view"].(map[string]any)["version"] = 0 },
+		"set_id get_id swapped":   func(v map[string]any) { v["set_id"].(map[string]any)["get_id"].(map[string]any)["method"] = "set_id" },
+		"Go set_id on setup": func(v map[string]any) {
+			v["set_id_go"] = map[string]any{"object": "x", "view": map[string]any{}, "get_id": map[string]any{}}
+		},
 	} {
 		value := rbdLockOutput(token, plan, "setup")
 		change(value)
@@ -268,11 +297,40 @@ func TestRBDLockNativeOutputShapeIsClosed(t *testing.T) {
 		"check not timed":       func(v map[string]any) { v["check"].(map[string]any)["elapsed_ns"] = 0 },
 		"check stderr bound":    func(v map[string]any) { v["check"].(map[string]any)["stderr"] = strings.Repeat("e", 4097) },
 		"writes on lock":        func(v map[string]any) { v["writes"] = []map[string]any{} },
+		"compound missing":      func(v map[string]any) { delete(phase(v, 0), "negative_compound") },
+		"compound on released":  func(v map[string]any) { phase(v, 1)["negative_compound"] = phase(v, 0)["negative_compound"] },
+		"compound on header": func(v map[string]any) {
+			phase(v, 0)["negative_compound"].(map[string]any)["object"] = "rbd_header.5678ef01"
+		},
+		"compound one input": func(v map[string]any) {
+			phase(v, 0)["negative_compound"].(map[string]any)["inputs_hex"] = []string{"0101"}
+		},
+		"compound positive": func(v map[string]any) { phase(v, 0)["negative_compound"].(map[string]any)["code"] = 1 },
+		"compound no after": func(v map[string]any) { delete(phase(v, 0)["negative_compound"].(map[string]any), "map_after") },
+		"set_id on lock":    func(v map[string]any) { v["set_id"] = rbdLockOutput(token, plan, "setup")["set_id"] },
 	} {
 		value := rbdLockOutput(token, plan, "lock")
 		change(value)
 		if _, err := decodeRBDLockNative("lock", token, 9, plan, encode(value)); err == nil {
 			t.Fatal("malformed RBD lock action output admitted:", name)
+		}
+	}
+	for name, change := range map[string]func(map[string]any){
+		"Go set_id missing": func(v map[string]any) { delete(v, "set_id_go") },
+		"Go set_id native name": func(v map[string]any) {
+			v["set_id_go"].(map[string]any)["object"], _ = rbdLockSetIDNames(token, "native")
+		},
+		"Go set_id absent with bytes": func(v map[string]any) {
+			v["set_id_go"].(map[string]any)["view"].(map[string]any)["exists"] = false
+		},
+		"Go get_id of another object": func(v map[string]any) {
+			v["set_id_go"].(map[string]any)["get_id"].(map[string]any)["object"] = "rbd_id." + plan.Image
+		},
+	} {
+		value := rbdLockOutput(token, plan, "observe-released")
+		change(value)
+		if _, err := decodeRBDLockNative("observe-released", token, 9, plan, encode(value)); err == nil {
+			t.Fatal("malformed RBD lock observation admitted:", name)
 		}
 	}
 	if _, err := decodeRBDLockNative("setup", token, 9, plan, bytes.Repeat([]byte(" "), rbdBaseJSONLimit+1)); err == nil {

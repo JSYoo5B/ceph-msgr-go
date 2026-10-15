@@ -197,7 +197,9 @@ class OmapWriteNativeTests(unittest.TestCase):
                     {"seed": {}, "operations": [{"op": "call", "class": "c\0", "method": "m"}]},
                     {"seed": {}, "role": "readonly", "operations": [{"op": "call", "class": "c", "method": "m"}]},
                     {"seed": {}, "object": owned(b"main-"), "operations": [{"op": "call", "class": "c", "method": "m"}]},
-                    {"seed": {}, "operations": [{"op": "call", "class": "c", "method": "m"}] * 2},
+                    {"seed": {}, "operations": [{"op": "call", "class": "c", "method": "m"}] * 5},
+                    {"seed": {}, "operations": [{"op": "create", "exclusive": True}]},
+                    {"seed": {}, "op_timeout": 4, "operations": [{"op": "call", "class": "c", "method": "m"}]},
                     {"seed": {}, "operations": [{"op": "set", "entries": []}]}]:
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 writes.validate_request(raw, "exec")
@@ -214,8 +216,9 @@ class OmapWriteNativeTests(unittest.TestCase):
         library.install("rados_read_op_operate", lambda op, io, name, value: flags.setdefault("read", value) and 42)
         native = writes.Native.__new__(writes.Native)
         native.lib = library
-        result = native.exec_vector(1, b"o", request["operations"][0])
-        self.assertEqual(result, {"aggregate": 42, "prvals": [{"index": 0, "prval": 42}], "output": encode(b"Hello\0!")})
+        result = native.exec_vector(1, b"o", request["operations"])
+        self.assertEqual(result, {"aggregate": 42, "prvals": [{"index": 0, "prval": 42}], "output": encode(b"Hello\0!"),
+                                  "outputs": [encode(b"Hello\0!")], "elapsed_ms": result["elapsed_ms"]})
         self.assertEqual(flags["read"], writes.RETURNVEC)
         names = [name for name, _ in library.calls]
         self.assertEqual(names[-2:], ["rados_buffer_free", "rados_release_read_op"])
@@ -225,6 +228,58 @@ class OmapWriteNativeTests(unittest.TestCase):
         library.install("rados_write_op_exec", lambda op, cls, method, inbuf, inlen, prval: setattr(prval._obj, "value", -17))
         library.install("rados_write_op_operate2", lambda op, io, name, stamp, value: -17)
         self.assertEqual(native.write_vector(1, b"o", write["operations"], {"seconds": 1, "nanos": 0}), (-17, [{"index": 0, "prval": -17}]))
+
+    def test_compound_exec_keeps_each_output_and_prval_in_order(self):
+        request = writes.validate_request({"seed": {}, "operations": [
+            {"op": "call", "class": "hello", "method": "record_hello"},
+            {"op": "call", "class": "hello", "method": "replay", "input": encode(b"\0")}]}, "exec")
+        self.assertEqual([a["method"] for a in request["operations"]], [b"record_hello", b"replay"])
+        library = Library()
+        library.install("rados_create_read_op", lambda: 8)
+        payloads = [C.create_string_buffer(b"", 1), C.create_string_buffer(b"HELLO\0", 6)]
+        seen = []
+
+        def exec_(op, cls, method, inbuf, inlen, out, outlen, prval):
+            index = len(seen)
+            seen.append((op, cls, method, inbuf[:inlen]))
+            # Only the second call returns bytes; the first keeps a NULL buffer.
+            if index == 1:
+                out._obj.value, outlen._obj.value = C.addressof(payloads[1]), 6
+            prval._obj.value = (0, -2)[index]
+
+        library.install("rados_read_op_exec", exec_)
+        library.install("rados_read_op_operate", lambda op, io, name, flags: -2)
+        native = writes.Native.__new__(writes.Native)
+        native.lib = library
+        result = native.exec_vector(1, b"o", request["operations"])
+        self.assertEqual(seen, [(8, b"hello", b"record_hello", b""), (8, b"hello", b"replay", b"\0")])
+        self.assertEqual(result["prvals"], [{"index": 0, "prval": 0}, {"index": 1, "prval": -2}])
+        self.assertEqual(result["outputs"], [encode(b""), encode(b"HELLO\0")])
+        self.assertNotIn("output", result)
+        self.assertEqual(result["aggregate"], -2)
+        names = [name for name, _ in library.calls]
+        self.assertEqual(names.count("rados_buffer_free"), 1)
+        self.assertEqual(names[-1], "rados_release_read_op")
+
+    def test_compare_create_precedes_calls_without_a_prval(self):
+        request = writes.validate_request({"seed": None, "mtime": MTIME, "operations": [
+            {"op": "create", "exclusive": True}, {"op": "call", "class": "rbd", "method": "set_id", "input": encode(b"\x02\0\0\0id")},
+            {"op": "create", "flags": 0}]}, "compare")
+        self.assertEqual(request["operations"][0], {"op": "create", "flags": 0, "exclusive": True})
+        self.assertEqual(request["operations"][2], {"op": "create", "flags": 0, "exclusive": False})
+        for bad in [{"op": "create", "exclusive": 1}, {"op": "create", "exclusive": True, "data": ""}]:
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                writes.validate_request({"seed": None, "mtime": MTIME, "operations": [bad]}, "compare")
+        library = Library()
+        library.install("rados_create_write_op", lambda: 12)
+        order = []
+        library.install("rados_write_op_create", lambda op, exclusive, category: order.append(("create", op, exclusive, category)))
+        library.install("rados_write_op_exec", lambda op, cls, method, inbuf, inlen, prval: order.append(("exec", method, inbuf[:inlen])) or setattr(prval._obj, "value", 0))
+        library.install("rados_write_op_operate2", lambda op, io, name, stamp, flags: order.append(("operate", flags)) or -17)
+        native = writes.Native.__new__(writes.Native)
+        native.lib = library
+        self.assertEqual(native.write_vector(1, b"o", request["operations"], MTIME), (-17, [{"index": 1, "prval": 0}]))
+        self.assertEqual(order, [("create", 12, 1, None), ("exec", b"set_id", b"\x02\0\0\0id"), ("create", 12, 0, None), ("operate", writes.RETURNVEC)])
 
     def test_allocation_hint_and_object_info_admission(self):
         request = writes.validate_request({"seed": None, "mtime": {"seconds": 1, "nanos": 0}, "object_info": True, "operations": [

@@ -132,7 +132,44 @@ type nativeRBDLockPhase struct {
 		Length uint64 `json:"length"`
 		SHA256 string `json:"sha256"`
 	} `json:"go_extents"`
-	CloseNS int64 `json:"close_ns"`
+	CloseNS  int64                  `json:"close_ns"`
+	Negative *nativeRBDLockCompound `json:"negative_compound"`
+}
+
+// nativeRBDLockCompound is the native owner's object-map update vector with
+// a non-matching lock cookie (python rados: aggregate only).
+type nativeRBDLockCompound struct {
+	Object    string           `json:"object"`
+	InputsHex []string         `json:"inputs_hex"`
+	Code      int32            `json:"code"`
+	MapBefore nativeRBDLockRaw `json:"map_before"`
+	MapAfter  nativeRBDLockRaw `json:"map_after"`
+}
+
+type nativeRBDLockVersioned struct {
+	Object  string `json:"object"`
+	Exists  bool   `json:"exists"`
+	Hex     string `json:"hex"`
+	Version uint64 `json:"version"`
+}
+
+// nativeRBDLockSetID is the native setup's librbd-form id-object creation
+// (create(exclusive) then rbd.set_id), sent twice.
+type nativeRBDLockSetID struct {
+	Object     string                  `json:"object"`
+	ImageID    string                  `json:"image_id"`
+	InputHex   string                  `json:"input_hex"`
+	First      int32                   `json:"first"`
+	FirstView  nativeRBDLockVersioned  `json:"first_view"`
+	Second     int32                   `json:"second"`
+	SecondView nativeRBDLockVersioned  `json:"second_view"`
+	GetID      nativeRBDWriteClassCall `json:"get_id"`
+}
+
+type nativeRBDLockSetIDGo struct {
+	Object string                  `json:"object"`
+	View   nativeRBDLockVersioned  `json:"view"`
+	GetID  nativeRBDWriteClassCall `json:"get_id"`
 }
 
 type nativeRBDLockCheck struct {
@@ -176,9 +213,11 @@ type nativeRBDLock struct {
 		Name  string              `json:"name"`
 		Head  nativeRBDObjectView `json:"head"`
 	} `json:"objects"`
-	Blobs  map[string]nativeRBDBlob `json:"blobs"`
-	Phases []nativeRBDLockPhase     `json:"phases"`
-	Check  *nativeRBDLockCheck      `json:"check"`
+	Blobs   map[string]nativeRBDBlob `json:"blobs"`
+	Phases  []nativeRBDLockPhase     `json:"phases"`
+	Check   *nativeRBDLockCheck      `json:"check"`
+	SetID   *nativeRBDLockSetID      `json:"set_id"`
+	SetIDGo *nativeRBDLockSetIDGo    `json:"set_id_go"`
 }
 
 type nativeRBDLockResult struct {
@@ -312,6 +351,19 @@ func rbdLockLockInputFor(cookie, tag string) []byte {
 	p := append(rbdString(rbdLockName), rbdLockExclusive)
 	p = append(append(append(p, rbdString(cookie)...), rbdString(tag)...), rbdString("")...)
 	return rbdEnvelope(append(p, make([]byte, 9)...))
+}
+
+// rbdLockWrongCookie is the cookie of the negative object-map update: librbd
+// locks the object map with an empty cookie (integration/fixture/rbd_lock.go
+// sends the same native vector).
+const rbdLockWrongCookie = "ceph-msgr-wrong-cookie"
+
+// rbdLockSetIDNames are the id objects and image ids of the librbd-form
+// id-object creation by native setup ("native") and by Go ("go"); neither
+// names an image (integration/fixture/rbd_lock.go).
+func rbdLockSetIDNames(token, who string) (object, id string) {
+	prefix := map[string]string{"native": "f00d", "go": "beef"}[who]
+	return "rbd_id.ceph-msgr-setid-" + who + "-" + token, prefix + token[:8]
 }
 
 // rbdLockAssertInput is cls_lock_assert_op: name, u8 type, cookie and tag.
@@ -699,6 +751,8 @@ type rbdLockTestEvidence struct {
 	LockState             *nativeRBDLockState
 	Check                 *nativeRBDLockCheck
 	CompoundObjectMapCall string
+	NegativeCompound      map[string]any
+	SetIDCompound         map[string]any
 	Timings               map[string]string
 	ExpectedHeadSHA       string
 }
@@ -1126,6 +1180,61 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 	sameHex(t, "setup", setup.ClassCalls[7], mapObject, "rbd", "object_map_load", nil, out)
 	objectMap(t, "setup_load", out, false, 1, 0, 0, 0, 0)
 
+	// librbd creates rbd_id.<name> as [create(exclusive), rbd.set_id(id)]
+	// (image/CreateRequest.cc create_id_object); the native setup sent the
+	// same vector twice on its own name.
+	setIDObject, setIDImage := rbdLockSetIDNames(token, "go")
+	var setIDVersion uint64
+	t.Run("create_set_id_compound", func(t *testing.T) {
+		n := setup.SetID
+		nativeObject, nativeImage := rbdLockSetIDNames(token, "native")
+		encoded := rbdString(nativeImage)
+		if n == nil || n.Object != nativeObject || n.ImageID != nativeImage || n.InputHex != hex.EncodeToString(encoded) || n.First != 0 || n.Second != -17 ||
+			!n.FirstView.Exists || n.FirstView.Hex != hex.EncodeToString(encoded) || n.SecondView != n.FirstView ||
+			n.GetID.Code != 0 || n.GetID.OutputHex != hex.EncodeToString(encoded) {
+			t.Fatalf("native librbd-form set_id differs: %+v", n)
+		}
+		input := rbdString(setIDImage)
+		ops := []cephmsgr.OSDOperation{{Code: cephmsgr.OSDCreate, Flags: cephmsgr.OSDExclusiveCreate},
+			{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: "rbd", Method: "set_id", Mode: cephmsgr.OSDCallWrite, MaxOutputBytes: 64}}}
+		r, o := route(t, setIDObject)
+		send := func(label string, code int32) cephmsgr.OSDReply {
+			t.Helper()
+			req := request(r, ops...)
+			req.ModificationTime = now()
+			reply, err := o.Request(ctx, req)
+			record(label, r, req, reply, err)
+			var server *cephmsgr.OSDError
+			if code == 0 && err != nil || code != 0 && (!errors.As(err, &server) || server.Code != code) {
+				t.Fatal(label, "librbd-form set_id result differs", err)
+			}
+			checkReply(t, r, reply, code, true)
+			if len(reply.Operations) != 2 || reply.Operations[0].Result != code || reply.Operations[1].Result != 0 || len(reply.Operations[0].Data) != 0 || len(reply.Operations[1].Data) != 0 ||
+				reply.Operations[1].Class.ClassLength != 3 || reply.Operations[1].Class.MethodLength != 6 || reply.Operations[1].Class.InputLength != uint32(len(input)) || reply.Operations[1].Class.OutputLength != 0 {
+				t.Fatalf("%s per-op results differ: %+v", label, reply.Operations)
+			}
+			return reply
+		}
+		first := send("set_id_compound_go", 0)
+		setIDVersion = first.UserVersion
+		raw := readRaw(t, "set_id_read_go", setIDObject)
+		out := call(t, "set_id_get_id_go", setIDObject, "rbd", "get_id", cephmsgr.OSDCallRead, nil)
+		if !bytes.Equal(raw, input) || !bytes.Equal(out, input) {
+			t.Fatal("Go id object differs from rbd.set_id's encoded id", raw, out)
+		}
+		// The repeat fails at the exclusive create; set_id is not executed.
+		second := send("set_id_compound_go_repeat", -17)
+		if got := readRaw(t, "set_id_read_go_repeat", setIDObject); !bytes.Equal(got, input) {
+			t.Fatal("refused repeat changed the Go id object", got)
+		}
+		evidence.SetIDCompound = map[string]any{"object": setIDObject, "image_id": setIDImage, "first": first.Code, "first_version": first.UserVersion, "first_flags": first.Flags,
+			"second": second.Code, "second_flags": second.Flags, "native": n}
+		t.Logf("librbd-form set_id: Go %d then %d (version %d); native %d then %d (version %d)", first.Code, second.Code, first.UserVersion, n.First, n.Second, n.FirstView.Version)
+	})
+	if t.Failed() {
+		return
+	}
+
 	// The native lock action runs in the background through four Go steps.
 	statePath := filepath.Join(dir, "rbd-lock-state.json")
 	for i := 0; i <= 4; i++ {
@@ -1509,36 +1618,69 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 		}
 		ownNotification(t, mark, "own AcquiredLock", rbdNotifyAcquiredLock)
 
-		// librbd's pre-write object-map update for an absent object:
-		// UpdateRequest sends [lock.assert_locked(rbd_lock, exclusive, "", ""),
-		// rbd.object_map_update(n, n+1, OBJECT_EXISTS, none)] as one write.
+		// librbd's pre-write object-map update (UpdateRequest) is one write
+		// vector [lock.assert_locked(rbd_lock, exclusive, cookie, ""),
+		// rbd.object_map_update(start, end, state, none)]; the assertion
+		// guards the update atomically against a writer that lost its lock.
+		// lock.assert_locked is registered read-only (CLS_METHOD_RD) and goes
+		// in read mode: the client admits a CALL only after read-mode CALLs.
+		mapCall := func(mode cephmsgr.OSDCallMode, class, method string, input []byte) cephmsgr.OSDOperation {
+			return cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: mode, MaxOutputBytes: 64}}
+		}
+		echoed := func(t *testing.T, label string, reply cephmsgr.OSDReply, inputs [][]byte, results ...int32) {
+			t.Helper()
+			methods := [][2]string{{"lock", "assert_locked"}, {"rbd", "object_map_update"}}
+			if len(reply.Operations) != 2 {
+				t.Fatal(label, "per-op results missing", reply.Operations)
+			}
+			for i, op := range reply.Operations {
+				if op.Result != results[i] || len(op.Data) != 0 || op.Class.ClassLength != uint8(len(methods[i][0])) || op.Class.MethodLength != uint8(len(methods[i][1])) ||
+					op.Class.InputLength != uint32(len(inputs[i])) || op.Class.OutputLength != 0 {
+					t.Fatalf("%s op %d differs: %+v", label, i, op)
+				}
+			}
+		}
+		// Negative form: a cookie that is not Go's object-map lock cookie
+		// (empty) fails the assertion; the update of object 4 is not run.
+		// The native owner sent the same vector against its own lock.
+		wrong, stale := rbdLockAssertInput(rbdLockWrongCookie, ""), rbdObjectMapUpdateInput(4, 5, rbdObjectExists, nil)
+		nn := owner.Negative
+		if nn == nil || nn.Object != mapObject || !slices.Equal(nn.InputsHex, []string{hex.EncodeToString(wrong), hex.EncodeToString(stale)}) || nn.Code != -16 ||
+			nn.MapBefore.Hex != nn.MapAfter.Hex || nn.MapAfter.Hex != owner.MapRaw.Hex {
+			t.Fatalf("native owner's non-matching-cookie object-map update differs: %+v", nn)
+		}
+		mapBeforeWrong := readRaw(t, "object_map_read_before_wrong_cookie", mapObject)
+		negative := request(mr, mapCall(cephmsgr.OSDCallRead, "lock", "assert_locked", wrong), mapCall(cephmsgr.OSDCallWrite, "rbd", "object_map_update", stale))
+		negative.ModificationTime = now()
+		reply, err := mo.Request(ctx, negative)
+		record("object_map_update_wrong_cookie", mr, negative, reply, err)
+		var server *cephmsgr.OSDError
+		if !errors.As(err, &server) || server.Code != nn.Code {
+			t.Fatal("non-matching-cookie object-map update differs from native", err, nn.Code)
+		}
+		checkReply(t, mr, reply, nn.Code, true)
+		echoed(t, "object_map_update_wrong_cookie", reply, [][]byte{wrong, stale}, nn.Code, 0)
+		if got := readRaw(t, "object_map_read_after_wrong_cookie", mapObject); !bytes.Equal(got, mapBeforeWrong) {
+			t.Fatal("refused object-map update changed the object map")
+		}
+		objectMap(t, "wrong_cookie_raw", mapBeforeWrong, true, 1, 1, 0, 0, 0)
+		evidence.NegativeCompound = map[string]any{"go_code": reply.Code, "go_flags": reply.Flags, "go_results": []int32{reply.Operations[0].Result, reply.Operations[1].Result},
+			"native_code": nn.Code, "map_hex": hex.EncodeToString(mapBeforeWrong), "inputs_hex": nn.InputsHex}
+
+		// librbd's form for an absent object, with Go's lock cookie: both
+		// operations return 0 and the update is committed.
 		number := plan.GoWrites[0].Offset >> order
 		update := rbdObjectMapUpdateInput(number, number+1, rbdObjectExists, nil)
-		compound := request(mr,
-			cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: rbdLockAssertInput("", ""), Class: cephmsgr.OSDClassInput{Class: "lock", Method: "assert_locked", Mode: cephmsgr.OSDCallWrite, MaxOutputBytes: 64}},
-			cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: update, Class: cephmsgr.OSDClassInput{Class: "rbd", Method: "object_map_update", Mode: cephmsgr.OSDCallWrite, MaxOutputBytes: 64}})
+		compound := request(mr, mapCall(cephmsgr.OSDCallRead, "lock", "assert_locked", rbdLockAssertInput("", "")), mapCall(cephmsgr.OSDCallWrite, "rbd", "object_map_update", update))
 		compound.ModificationTime = now()
-		reply, err := mo.Request(ctx, compound)
+		reply, err = mo.Request(ctx, compound)
 		record("object_map_update_librbd_form", mr, compound, reply, err)
-		switch {
-		case errors.Is(err, cephmsgr.ErrUnsupportedOSDOperation) && reply.Transaction == 0:
-			// The product refuses a CALL after a CALL locally (nothing is
-			// sent). The guard goes alone first; it is not atomic with the
-			// update, which the held object-map lock covers here.
-			evidence.CompoundObjectMapCall = "refused locally: " + err.Error()
-			if out := call(t, "map_assert_locked_go", mapObject, "lock", "assert_locked", cephmsgr.OSDCallRead, rbdLockAssertInput("", "")); len(out) != 0 {
-				t.Fatal("assert_locked returned output", out)
-			}
-			call(t, "object_map_update_go", mapObject, "rbd", "object_map_update", cephmsgr.OSDCallWrite, update)
-		case err == nil:
-			evidence.CompoundObjectMapCall = "sent"
-			checkReply(t, mr, reply, 0, true)
-			if len(reply.Operations) != 2 || reply.Operations[0].Result != 0 || reply.Operations[1].Result != 0 {
-				t.Fatal("librbd-form object-map update per-op results differ", reply.Operations)
-			}
-		default:
+		if err != nil {
 			t.Fatal("librbd-form object-map update", err)
 		}
+		evidence.CompoundObjectMapCall = "sent"
+		checkReply(t, mr, reply, 0, true)
+		echoed(t, "object_map_update_librbd_form", reply, [][]byte{rbdLockAssertInput("", ""), update}, 0, 0)
 		goMap = readRaw(t, "object_map_read_go_updated", mapObject)
 		objectMap(t, "go_updated_raw", goMap, true, 1, 1, 1, 0, 0)
 		out = call(t, "object_map_load_go_updated", mapObject, "rbd", "object_map_load", cephmsgr.OSDCallRead, nil)
@@ -1806,6 +1948,12 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 		}
 		if !bytes.Equal(views(t, released)["image_head"], expectedHead) {
 			t.Fatal("native head read changed after the Go cleanup")
+		}
+		// Native librados reads the Go id object as set_id wrote it, at the
+		// version of Go's first compound (the refused repeat changed nothing).
+		if g := released.SetIDGo; g == nil || g.Object != setIDObject || !g.View.Exists || g.View.Hex != hex.EncodeToString(rbdString(setIDImage)) || g.View.Version != setIDVersion ||
+			g.GetID.Code != 0 || g.GetID.OutputHex != g.View.Hex {
+			t.Fatalf("native observation of the Go id object differs: %+v (Go version %d)", released.SetIDGo, setIDVersion)
 		}
 		ops := map[uint32]int{}
 		for _, n := range events {

@@ -52,16 +52,29 @@ librbd's open does (`rbd.get_id`, `get_size`, `get_object_prefix`,
 object and `rbd.object_map_load`, each equal byte for byte to the native
 librados `exec` or read of the setup observation.
 
+The leaf table describes the current test. The compound class-call leaves
+(`create_set_id_compound`, the two object-map update vectors in
+`go_owner_object_map` and the native read of the Go id object in
+`cleanup_state`) were added on 2026-10-16 with the client rule that admits a
+CALL after read-mode CALLs and after a CREATE without FAILOK, and refuses a
+CALL after a write-mode CALL; see "Compound class calls" below and
+[OSD_CALL_COMPOUND_VALIDATION.md](OSD_CALL_COMPOUND_VALIDATION.md).
+
 | Leaf | Checked behavior |
 | --- | --- |
+| `create_set_id_compound` | librbd's `CreateRequest::create_id_object` vector `[CREATE(EXCL), rbd.set_id(id)]` (write mode, current mtime) on the fresh `rbd_id.ceph-msgr-setid-go-<token>` with id `beef<8 token characters>`: aggregate 0, per-op 0 and 0, ONDISK, no output; Go reads `<le32 12><id>` raw and through `rbd.get_id`. The same vector again: aggregate and op 0 -17 (`EEXIST` from the exclusive create), op 1 0 with its union echoed and no output, the object unchanged. The native setup sent the same vector twice through python rados on `rbd_id.ceph-msgr-setid-native-<token>`: 0, then -17 with bytes and user version unchanged, and `rbd.get_id` returned the encoded id |
 | `lock_owner_observation` | The lock action's first native write took the lock (librbd `is_exclusive_lock_owner()`). Go `lock.get_info(rbd_lock)` on the header equals the native exec of the same phase and decodes, as librbd's `GetLockerRequest` does, to one exclusive locker with tag `internal`, `client.<native gid>`, cookie `auto <handle>`, zero expiration, empty description and a non-blank LEGACY address. LIST_WATCHERS of the header holds exactly that client with cookie = handle and the same `ip:port/nonce` (librbd's `BreakRequest` liveness rule). Native `lock_get_owners()` reports that address in mode 0 (`RBD_LOCK_MODE_EXCLUSIVE`) and a fresh read-only `list_lockers()` the same locker. The object map is locked by the native owner with empty cookie and tag (`object_map::LockRequest`), and its raw bytes read by Go equal librados's: `[1 1 0 0 0]` (the owner write marked object 1); the native fast-diff lists objects 0 and 1 |
 | `request_lock_release` | Go registers its header watch (timeout 30 s); LIST_WATCHERS holds the native owner and Go. A responder goroutine answers every notification on the Go watch as librbd's `ImageWatcher::handle_payload` would (AcquiredLock and ReleasedLock empty; RequestLock `ResponseMessage(0)` while Go owns the lock, empty otherwise and for its own request; HeaderUpdate and unknown ops are failures) and pings the watch every 5 s it holds. Go `NotifyObject` with `NotifyMessage(RequestLockPayload{ClientId{Go gid, Go watch cookie}, force=false})` and librbd's 5 s timeout: completion return code 0, no missed watcher, two acknowledgements, empty from Go's own watch and `ResponseMessage(0)` from the native owner (librbd's `NotifyLockOwner` takes the single non-empty acknowledgement as the owner's answer). Native librbd then releases: Go receives `ReleasedLock(ClientId{native gid, handle})`, and `lock.get_info` shows neither the header nor the object map locked. Phase `released`: native `is_exclusive_lock_owner()` false, no owners, no lockers, its exec outputs equal Go's, object map unchanged |
-| `go_owner_object_map` | Go takes the lock as librbd's `AcquireRequest` and `PostAcquireRequest` do: `lock.lock` on the header (exclusive, `auto <Go watch cookie>`, `internal`), `lock.lock` on the object map (exclusive, empty cookie and tag), `rbd.object_map_load`, then `NotifyObject(AcquiredLock{Go})` (two empty acknowledgements). The Go locker's legacy address equals the Go watcher's. librbd's pre-write object-map update is the vector `[lock.assert_locked(rbd_lock, exclusive, "", ""), rbd.object_map_update(2, 3, OBJECT_EXISTS, none)]`; the product refuses it locally (below), so Go sends `lock.assert_locked` alone (result 0) and then `object_map_update` alone (result 0). The object map reads `[1 1 1 0 0]` with valid CRCs (raw and `object_map_load`). Go writes object 2 as librbd's `ObjectWriteRequest` does for an object the map called absent in an image without snapshots: `[SETALLOCHINT(65536, 65536, 0) FAILOK, WRITE(8192, 8 KiB)]` without SnapContext, and reads it back. Phase `go-owner`: native `is_exclusive_lock_owner()` false, `lock_get_owners()` = the Go address, `list_lockers()` = `client.<Go gid>`, `auto <cookie>`, that address; `watchers_list()` shows Go alive with the same address and cookie; the native header exec equals Go's locked `get_info`; the native librados read of the object map equals Go's; the native fast-diff (on-disk head map) lists objects 0, 1 and 2; librbd reads the Go extent |
+| `go_owner_object_map` | Go takes the lock as librbd's `AcquireRequest` and `PostAcquireRequest` do: `lock.lock` on the header (exclusive, `auto <Go watch cookie>`, `internal`), `lock.lock` on the object map (exclusive, empty cookie and tag), `rbd.object_map_load`, then `NotifyObject(AcquiredLock{Go})` (two empty acknowledgements). The Go locker's legacy address equals the Go watcher's. librbd's pre-write object-map update is the vector `[lock.assert_locked(rbd_lock, exclusive, cookie, ""), rbd.object_map_update(start, end, OBJECT_EXISTS, none)]`; Go declares `lock.assert_locked` (registered `CLS_METHOD_RD`) in read mode and the update in write mode, so the request carries READ and WRITE (librados's write op carries WRITE only; the OSD classifies CALLs by registration, not by these flags). Go first sends it with the cookie `ceph-msgr-wrong-cookie` and the range 4 to 5: aggregate -16, per-op -16 and 0, no output, the object map unchanged (`[1 1 0 0 0]` before and after); the native owner phase sent the same two inputs against its own object-map lock (empty cookie) and got -16 with an unchanged map. Go then sends librbd's form for object 2 with its own (empty) cookie as one vector: aggregate 0, per-op 0 and 0, ONDISK. The object map reads `[1 1 1 0 0]` with valid CRCs (raw and `object_map_load`). Go writes object 2 as librbd's `ObjectWriteRequest` does for an object the map called absent in an image without snapshots: `[SETALLOCHINT(65536, 65536, 0) FAILOK, WRITE(8192, 8 KiB)]` without SnapContext, and reads it back. Phase `go-owner`: native `is_exclusive_lock_owner()` false, `lock_get_owners()` = the Go address, `list_lockers()` = `client.<Go gid>`, `auto <cookie>`, that address; `watchers_list()` shows Go alive with the same address and cookie; the native header exec equals Go's locked `get_info`; the native librados read of the object map equals Go's; the native fast-diff (on-disk head map) lists objects 0, 1 and 2; librbd reads the Go extent |
 | `native_requests_lock_back` | After the third proceed signal the native write to object 3 finds the lock held by a live owner and asks: Go receives `RequestLock(ClientId{native gid, handle}, force=false)` and answers `ResponseMessage(0)`. Go releases as librbd's `PreReleaseRequest` and `ReleaseRequest` do: `lock.unlock(rbd_lock, "")` on the object map, `lock.unlock(rbd_lock, auto <cookie>)` on the header, then `NotifyObject(ReleasedLock{Go})` (two empty acknowledgements). Go then receives `AcquiredLock(ClientId{native gid, handle})`. Exactly one native RequestLock was sent. Phase `reacquired`: the native write took far less than librbd's 5 s notify timeout and 10 s request retry; librbd owns the lock again with the same cookie (Go `get_info` of header and object map equal the native exec); the object map is `[1 1 1 1 0]` in Go's and librados's reads; fast-diff lists objects 0 to 3; librbd, which now reads through its loaded object map, reads the Go extent (an object the loaded map called absent would read as zeros) |
 | `object_map_check` | After the fourth signal the driver closes the image and Go receives `ReleasedLock` from the native owner; `rbd object-map check` then runs as another client, and Go receives its `AcquiredLock` and `ReleasedLock` (all three acknowledged empty, nothing else). The check exits 0 with empty stdout and stderr (an object the map does not account for would be logged as an `object map error` and invalidate the map) and the image flags stay 0. The object map is unchanged by the check and equals Go's raw read and `object_map_load`; the final fast-diff lists objects 0 to 3; the librbd head read equals the setup, owner, Go and reacquire writes; librados and Go read objects 0 to 3 identically and object 4 is absent. The driver's stderr is empty for every action |
-| `cleanup_state` | The responder stops with no failure and no unacknowledged notification left; Go `Unwatch`; LIST_WATCHERS of the header is empty; `lock.get_info` of the header and of the object map list no lockers. The read-only native `observe-released` action shows no lockers, no watchers, flags 0, the same exec outputs as Go and an unchanged object map and head image. A deferred compensation (object-map and header unlock, never a repeated lock, then ReleasedLock and Unwatch) runs only after a failure |
+| `cleanup_state` | The responder stops with no failure and no unacknowledged notification left; Go `Unwatch`; LIST_WATCHERS of the header is empty; `lock.get_info` of the header and of the object map list no lockers. The read-only native `observe-released` action shows no lockers, no watchers, flags 0, the same exec outputs as Go and an unchanged object map and head image, and reads the Go id object as `set_id` wrote it (`rbd.get_id` and raw bytes) at the user version of Go's first set_id reply. A deferred compensation (object-map and header unlock, never a repeated lock, then ReleasedLock and Unwatch) runs only after a failure |
 
 ## Results
+
+The results below up to "Earlier attempts" are those of the earlier change
+set (exclusive-lock test 6/6); the compound class-call runs are recorded in
+"Compound class calls".
 
 Both selected configurations passed on 2026-10-16 (KST): the base test 5/5,
 the exclusive-lock test 6/6 and the write test 4/4 subtests in each, no skips,
@@ -246,6 +259,55 @@ Before cleanup the lock image had no lockers on the header or the object map
 and no watchers (Go and native). No Go compensation ran. The Go watch lived
 under 1 s, so no ping was due (0 pings).
 
+## Compound class calls
+
+Both configurations passed from the export of the complete working tree with
+the read-mode rule (HEAD `16faf1e` plus every modified and new file, 1200
+files, tree SHA-256
+`43662f91d260151ccff46412bfb83a2ec98e48edc5e581e1932d76d199128b51`, the same
+export as [OSD_CALL_COMPOUND_VALIDATION.md](OSD_CALL_COMPOUND_VALIDATION.md),
+where its static checks are listed): base 5/5, exclusive-lock 7/7, write
+4/4, no skips, no retries.
+
+| Configuration | Controller wall time (UTC, 2026-10-15) | Base | Exclusive-lock | Write |
+| --- | --- | --- | --- | --- |
+| CRC, AES, IPv4, Darwin arm64 host runtime, one BlueStore OSD | 23:42:57 to 23:44:15 (78 s) | 5.28 s | 1.01 s | 2.39 s |
+| secure, AES256K, IPv6, CGO=0 container runtime, one MemStore OSD | 23:44:15 to 23:45:27 (72 s) | 5.33 s | 0.99 s | 2.24 s |
+
+Each lock run records 55 Go requests (all sent, none refused locally),
+transactions 1 to 68. Native actions: `setup` 123 / 137 ms, `lock` 297 /
+320 ms, `observe-released` 124 / 99 ms (CRC / secure); every native stderr
+was empty.
+
+| Value | CRC/AES IPv4 BlueStore | secure/AES256K IPv6 MemStore |
+| --- | --- | --- |
+| Go set_id vector `[CREATE(EXCL), W rbd.set_id]` (tid 10) | 0, per-op 0 0, flags 0x4000025, user version 2 | same, user version 1 |
+| Go id object | `0c000000` `beef40d629c0`; `rbd.get_id` the same 16 bytes | `0c000000` `beef06dd30d5` |
+| Go repeat (tid 13) | -17, per-op -17 0, flags 0x4000025, bytes unchanged | same |
+| Native set_id vector, twice | 0 then -17; `0c000000` `f00d40d629c0`, user version 13 after both | 0 then -17; `f00d06dd30d5`, version 5 after both |
+| Native `observe-released` of the Go id object | same bytes and `get_id` output, user version 2 | same, version 1 |
+| Non-matching-cookie vector `[R lock.assert_locked, W rbd.object_map_update]` (Go tid 38; native owner phase) | Go -16, per-op -16 0, flags 0x4000035; native -16 | same |
+| Its inputs | `01012b000000 08000000 rbd_lock 01 16000000 ceph-msgr-wrong-cookie 00000000` and `0400000000000000 0500000000000000 01 00` | same |
+| Object map around it (Go and native) | data `50 00` (`[1 1 0 0 0]`), data CRC `8537d2c0`, unchanged | same |
+| librbd-form vector `[R lock.assert_locked, W rbd.object_map_update]` (tid 40) | 0, per-op 0 0, flags 0x4000035, user version 13; map then data `54 00` (`[1 1 1 0 0]`) | same, user version 14 |
+
+The flags 0x4000035 carry READ and WRITE because Go declared one CALL in read
+mode; a librados write op (librbd's and the native driver's) carries WRITE
+only (`Objecter::prepare_mutate_op`). The OSD classifies a CALL by the
+method's registration, and the results equal native. The rest of the
+protocol, the object-map check (exit 0, empty output, flags 0) and the
+cleanup matched the earlier record. python rados exposes only the aggregate
+of a native write op, so the native per-op results of the two native vectors
+are not observed; the positive object-map vector's native counterpart is
+librbd's own `UpdateRequest`, whose effect is the object map the native
+owner and reacquire writes leave behind.
+
+Earlier runs of these leaves, before the client refused a CALL after a
+write-mode CALL, sent `lock.assert_locked` in write mode (flags 0x4000025)
+from the exports `3df837796b5ab6580a63b5acb907ada18a04709f08ff1e6fd98ad4aa9c65adfe`
+and `fd6c929b6abc75b2831ce5529d2ce2c11e7525a8526cd95ddfa31c48b99fc333` and
+passed with the same codes, per-op results, inputs and object-map bytes.
+
 ## Earlier attempts
 
 No recorded run failed. The first failure of the change set was a unit
@@ -259,18 +321,17 @@ change.
 
 ## Findings and limits
 
-Product finding (missing wire capability, not changed here): librbd's
-object-map update is one write vector `[CALL lock.assert_locked, CALL
-rbd.object_map_update]` (`librbd/object_map/UpdateRequest.cc`, also
-`RefreshRequest::send_resize`). The product refuses any read, guard or CALL
-after a CALL in the same vector (`internal/osd/operations.go`, the CALL branch
-of `ValidateOperations`; documented on `OSDClassInput`). In both runs
-`Request` returned `ErrUnsupportedOSDOperation` ("ceph osd: unsupported
-operation") before transmission (no transaction). The test therefore sent the
-guard and the update as two requests; that is correct here only because Go
-held the object-map lock throughout, and it loses the atomic guard librbd
-relies on against a writer that lost its lock. The test accepts the compound
-form unchanged if the product admits it.
+Resolved product finding: librbd's object-map update is one write vector
+`[CALL lock.assert_locked, CALL rbd.object_map_update]`
+(`librbd/object_map/UpdateRequest.cc`, also `RefreshRequest::send_resize`).
+In the earlier change set's runs the product refused any CALL after a CALL
+before transmission (`ErrUnsupportedOSDOperation`, no transaction) and the
+test sent the guard and the update as two requests, which loses the atomic
+guard librbd relies on against a writer that lost its lock. The client now
+admits a CALL after read-mode CALLs; the test sends `lock.assert_locked` in
+read mode and requires the vector to be sent. See "Compound class calls" for
+the positive and the non-matching-cookie forms and librbd's
+`create(exclusive)` plus `rbd.set_id` form.
 
 No other product defect was found: WATCH, NOTIFY with completions carrying
 every acknowledgement, NOTIFY_ACK with empty and non-empty payloads from a

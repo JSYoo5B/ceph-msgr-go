@@ -88,7 +88,12 @@ sh integration/run.sh
 
 ## Remaining gaps
 
-Multi-op vectors mixing CALL with guards and writes, FAILOK CALL, methods that
-return -EAGAIN/-EINPROGRESS, positive read-path results (no stock read method
-returns one), EC pools, response loss/SIGKILL, classes beyond `hello`, broader
-profiles and remote CI for this subset need separate evidence.
+Compound vectors (a CALL after read-mode CALLs or a CREATE, writes after a
+CALL, the librbd forms, and the local refusal of a CALL after a write-mode
+CALL with the historical run that motivated it) are recorded in
+[OSD_CALL_COMPOUND_VALIDATION.md](OSD_CALL_COMPOUND_VALIDATION.md).
+Vectors mixing CALL with explicit guards and later writes, FAILOK CALL,
+methods that return -EAGAIN/-EINPROGRESS, positive read-path results (no
+stock read method returns one), EC pools, response loss/SIGKILL, classes
+beyond `hello`, `lock` and `rbd`, broader profiles and remote CI for this
+subset need separate evidence.

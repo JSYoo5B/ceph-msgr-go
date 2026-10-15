@@ -47,8 +47,8 @@ method reading without its RD flag or writing without WR gets -EIO
 
 The method return becomes the per-op result and positive values are kept; the
 aggregate can be positive. In a vector that stages a write, a successful
-result whose output exceeds `osd_max_write_op_reply_len` (64 bytes by default)
-becomes -EOVERFLOW for the aggregate and the op, the output is cleared while
+result whose own output exceeds `osd_max_write_op_reply_len` (64 bytes by
+default, per operation) becomes -EOVERFLOW for the aggregate and the op, the output is cleared while
 `extent.length` keeps the original length, and the transaction is not
 submitted (PrimaryLogPG.cc:4287-4323). As for OMAP, the primary's cached
 object_info has already advanced at that point (finish_ctx, 9154): live
@@ -66,13 +66,49 @@ output. Successful vectors in write mode require ONDISK.
 
 ## Ordering and flags
 
-A class method can read committed or staged state inconsistently and can stage
-data, xattr and OMAP writes itself (osd/objclass.cc:105-339). The client
-therefore rejects a CALL after any staged write in the vector (including FAILOK
-writes and DELETE) and any read, guard or CALL after a CALL. Guards and reads
-before a CALL and writes after it are admitted. FAILOK on CALL is rejected
-because a failing FAILOK method may leave staged writes; EXCL and unknown flags
-are rejected as for every opcode.
+A class method's helpers are sub-operations of the vector's transaction
+(osd/objclass.cc:105-339). `cls_cxx_stat` and the length of a data read see
+the staged object state (`ctx->new_obs`), the read bytes come from committed
+storage, and a full-object read is checked against the staged data digest;
+xattr and OMAP reads consult the committed backend of a replicated pool. The
+method can stage data, xattr and OMAP writes itself. Live Tentacle confirmed
+the staged stat and committed data views: CREATE then `hello.record_hello` on
+a fresh object fails with -EEXIST, and `record_hello` then `hello.replay` on
+a fresh object fails with -ENOENT, neither committing anything. A write
+method followed by a full-reading method is harmful: `turn_it_to_11` then
+`replay` on three BlueStore replicas never replied, the primary logged more
+than a thousand `full-object read crc` mismatches with `missing primary copy`
+repairs in four seconds and health raised OSD_TOO_MANY_REPAIRS, with the
+object unchanged once the client closed. With one replica the source would
+leave the object unfound.
+
+The client therefore admits a CALL after guards and reads, after a CREATE
+without FAILOK (with or without EXCL) and after read-mode CALLs, and rejects a
+CALL after a write-mode CALL or after any other staged write (including
+FAILOK writes, a FAILOK CREATE and DELETE). The read mode is the caller's
+declaration that the method is registered read-only. A read-only method
+that writes has the write staged and its result turned into -EIO, which
+aborts the vector because a CALL never carries FAILOK, so later methods
+observe no staged change from it. Declaring a write method as read mode voids that protection, since the
+OSD classifies by registration. The admitted forms include the native librbd
+compounds: `create(true)` then `rbd.set_id` on `rbd_id.<name>`
+(librbd/image/CreateRequest.cc) and `lock.assert_locked` (read mode) then
+`rbd.object_map_update` (librbd/object_map/UpdateRequest.cc). An explicit
+read or guard after a CALL stays rejected; writes after a CALL are admitted.
+
+The first failing operation aborts the transaction: later operations are not
+executed and return result 0 with their request union echoed, output length 0
+and no output, and nothing is committed. The aggregate result is the return
+of the last executed operation, so a write method returning 42 followed by a
+successful OMAPSETVALS yields aggregate 0 with per-op results 42 and 0. The
+`osd_max_write_op_reply_len` bound applies per operation: outputs of 58 and 18
+bytes in one vector succeed, while a 68-byte output turns that operation and
+the aggregate into -EOVERFLOW with its output cleared, other operations keep
+their results and outputs, and nothing is committed. FAILOK on CALL is
+rejected because a failing FAILOK method may leave staged writes; EXCL and
+unknown flags are rejected as for every opcode. Every observation above
+matched an independent native librados client sending the same vector; see
+[the compound record](../../integration/fixture/OSD_CALL_COMPOUND_VALIDATION.md).
 
 ## Provenance
 

@@ -77,6 +77,20 @@ var rbdLockClassCalls = [][3]string{
 // RBD_FEATURE_LAYERING | EXCLUSIVE_LOCK | OBJECT_MAP | FAST_DIFF.
 const rbdLockFeatures = 1 | 4 | 8 | 16
 
+// rbdLockWrongCookie is the lock cookie of the negative compound object-map
+// update: librbd locks the object map with an empty cookie, so an assertion
+// with this cookie never matches.
+const rbdLockWrongCookie = "ceph-msgr-wrong-cookie"
+
+// rbdLockSetIDNames are the id objects and image ids of librbd's id-object
+// creation form (create(exclusive) then rbd.set_id) for the native setup
+// action and for the Go test. Neither names an image: the pool directory
+// does not list them, and they go with the owned pool.
+func rbdLockSetIDNames(token, who string) (object, id string) {
+	prefix := map[string]string{"native": "f00d", "go": "beef"}[who]
+	return "rbd_id.ceph-msgr-setid-" + who + "-" + token, prefix + token[:8]
+}
+
 // rbdLockPlan is the fixed recipe of the lock image. SetupWrites are written
 // by the setup action, OwnerWrites by the lock action's first native write
 // (which takes the exclusive lock), GoWrites by the Go test while it holds
@@ -144,8 +158,39 @@ CONF = '/tmp/ceph-msgr-test/ceph.conf'
 NOSNAP = 0xfffffffffffffffe
 # cls_lock_get_info_op{name="rbd_lock"}: ENCODE_START(1, 1) and a string.
 LOCK_INFO = b'\x01\x01' + struct.pack('<II', 12, 8) + b'rbd_lock'
+RETURNVEC = 1024  # LIBRADOS_OPERATION_RETURNVEC
+WRONG_COOKIE = 'ceph-msgr-wrong-cookie'
+SET_ID = {'native': ('rbd_id.ceph-msgr-setid-native-' + token, 'f00d' + token[:8]),
+          'go': ('rbd_id.ceph-msgr-setid-go-' + token, 'beef' + token[:8])}
 pool, name = plan['pool'], plan['image']
 PREFIX = 'rbd-lock-%s-' % action
+
+def lstr(value):
+    data = value.encode()
+    return struct.pack('<I', len(data)) + data
+
+# cls_lock_assert_op: ENCODE_START(1, 1), name, u8 type (1 exclusive),
+# cookie and tag; cls_rbd object_map_update: start, end, new state and an
+# absent boost::optional current state.
+def assert_locked_input(cookie):
+    body = lstr('rbd_lock') + b'\x01' + lstr(cookie) + lstr('')
+    return b'\x01\x01' + struct.pack('<I', len(body)) + body
+
+def map_update_input(start, end, state):
+    return struct.pack('<QQB', start, end, state) + b'\x00'
+
+def write_vector(ioctx, oid, build):
+    # One librados write op with RETURNVEC and the current time; python
+    # rados exposes only the aggregate (no per-op prval).
+    with rados.WriteOpCtx() as op:
+        build(op)
+        try:
+            ioctx.operate_write_op(op, oid, mtime=int(time.time()), flags=RETURNVEC)
+        except rados.Error as error:
+            if not isinstance(error.errno, int) or error.errno <= 0:
+                raise
+            return -error.errno
+    return 0
 
 def text(value):
     return value.decode('utf-8') if isinstance(value, bytes) else value
@@ -188,6 +233,36 @@ def raw_object(ioctx, oid):
     if len(data) != length or length > 4096:
         raise ValueError('object map object read differs from its stat or exceeds its bound')
     return {'object': oid, 'exists': True, 'hex': data.hex()}
+
+def versioned(ioctx, oid):
+    entry = raw_object(ioctx, oid)
+    entry['version'] = ioctx.get_last_version() if entry['exists'] else 0
+    return entry
+
+def set_id_compound(ioctx, who):
+    # librbd CreateRequest::create_id_object: create(exclusive) then
+    # rbd.set_id(id) in one write; sent twice, the second must find the object.
+    oid, image_id = SET_ID[who]
+    data = lstr(image_id)
+    def build(op):
+        op.new(rados.LIBRADOS_CREATE_EXCLUSIVE)
+        op.execute('rbd', 'set_id', data)
+    first = write_vector(ioctx, oid, build)
+    first_view = versioned(ioctx, oid)
+    second = write_vector(ioctx, oid, build)
+    return {'object': oid, 'image_id': image_id, 'input_hex': data.hex(), 'first': first, 'first_view': first_view,
+            'second': second, 'second_view': versioned(ioctx, oid), 'get_id': call(ioctx, oid, 'rbd', 'get_id', b'')}
+
+def negative_compound(ioctx, oid):
+    # librbd's object-map update vector (UpdateRequest) asserting a cookie
+    # that is not the instance's object-map lock cookie (empty).
+    inputs = [assert_locked_input(WRONG_COOKIE), map_update_input(4, 5, 1)]
+    before = raw_object(ioctx, oid)
+    def build(op):
+        op.execute('lock', 'assert_locked', inputs[0])
+        op.execute('rbd', 'object_map_update', inputs[1])
+    code = write_vector(ioctx, oid, build)
+    return {'object': oid, 'inputs_hex': [i.hex() for i in inputs], 'code': code, 'map_before': before, 'map_after': raw_object(ioctx, oid)}
 
 def class_calls(ioctx, image_id):
     header, omap = 'rbd_header.' + image_id, 'rbd_object_map.' + image_id
@@ -334,6 +409,7 @@ try:
             with rbd.Image(ioctx, name) as image:
                 out['writes'] = [write(image, 'setup', e) for e in plan['setup_writes']]
                 image.flush()
+            out['set_id'] = set_id_compound(ioctx, 'native')
         elif action == 'lock':
             state = {'token': token, 'request_id': int(request_id), 'native_global_id': out['native_global_id'], 'phases': []}
             image = rbd.Image(ioctx, name)
@@ -350,7 +426,7 @@ try:
                 # The first write takes the exclusive lock (automatic policy).
                 owner = [write(image, 'owner', e) for e in plan['owner_writes']]
                 image.flush()
-                phase('owner', writes=owner)
+                phase('owner', writes=owner, negative_compound=negative_compound(ioctx, 'rbd_object_map.' + image_id))
                 phase('released', wait_ns=wait_proceed(1))
                 phase('go-owner', wait_ns=wait_proceed(2), go_extents=read_go(image))
                 waited = wait_proceed(3)
@@ -371,6 +447,9 @@ try:
             publish('rbd-lock-state.json', json.dumps(state, sort_keys=True).encode())
             out['phases'] = state['phases']
             out['check'] = object_map_check()
+        elif action == 'observe-released':
+            oid = SET_ID['go'][0]
+            out['set_id_go'] = {'object': oid, 'view': versioned(ioctx, oid), 'get_id': call(ioctx, oid, 'rbd', 'get_id', b'')}
         observe(ioctx, out)
     finally:
         ioctx.close()
@@ -436,6 +515,45 @@ type rbdLockPhase struct {
 	WriteNS    int64               `json:"write_ns,omitempty"`
 	GoExtents  []rbdLockExtentSum  `json:"go_extents,omitempty"`
 	CloseNS    int64               `json:"close_ns,omitempty"`
+	Negative   *rbdLockCompound    `json:"negative_compound,omitempty"`
+}
+
+// rbdLockVersioned is a raw object read with the object's user version.
+type rbdLockVersioned struct {
+	Object  string `json:"object"`
+	Exists  bool   `json:"exists"`
+	Hex     string `json:"hex"`
+	Version uint64 `json:"version"`
+}
+
+// rbdLockSetID is the native setup's librbd-form id-object creation, sent
+// twice, with the object after each and a native get_id.
+type rbdLockSetID struct {
+	Object     string             `json:"object"`
+	ImageID    string             `json:"image_id"`
+	InputHex   string             `json:"input_hex"`
+	First      int                `json:"first"`
+	FirstView  *rbdLockVersioned  `json:"first_view"`
+	Second     int                `json:"second"`
+	SecondView *rbdLockVersioned  `json:"second_view"`
+	GetID      *rbdWriteClassCall `json:"get_id"`
+}
+
+// rbdLockSetIDGo is the read-only native observation of the Go id object.
+type rbdLockSetIDGo struct {
+	Object string             `json:"object"`
+	View   *rbdLockVersioned  `json:"view"`
+	GetID  *rbdWriteClassCall `json:"get_id"`
+}
+
+// rbdLockCompound is the owner phase's native object-map update vector with
+// a non-matching lock cookie and the object map around it.
+type rbdLockCompound struct {
+	Object    string            `json:"object"`
+	InputsHex []string          `json:"inputs_hex"`
+	Code      int               `json:"code"`
+	MapBefore *rbdLockRawObject `json:"map_before"`
+	MapAfter  *rbdLockRawObject `json:"map_after"`
 }
 
 type rbdLockCheck struct {
@@ -478,6 +596,8 @@ type rbdLockNative struct {
 	Blobs          map[string]rbdBaseBlob `json:"blobs"`
 	Phases         []rbdLockPhase         `json:"phases,omitempty"`
 	Check          *rbdLockCheck          `json:"check,omitempty"`
+	SetID          *rbdLockSetID          `json:"set_id,omitempty"`
+	SetIDGo        *rbdLockSetIDGo        `json:"set_id_go,omitempty"`
 }
 
 func rbdLockCallValid(call *rbdWriteClassCall, object, class, method string) bool {
@@ -495,6 +615,37 @@ func rbdLockRawValid(raw *rbdLockRawObject, object string) bool {
 	}
 	_, err := hex.DecodeString(raw.Hex)
 	return raw.Object == object && err == nil && len(raw.Hex) <= 8192 && raw.Exists == (raw.Hex != "")
+}
+
+func rbdLockVersionedValid(v *rbdLockVersioned, object string) bool {
+	return v != nil && rbdLockRawValid(&rbdLockRawObject{Object: v.Object, Exists: v.Exists, Hex: v.Hex}, object) && v.Exists == (v.Version != 0)
+}
+
+func rbdLockSetIDValid(s *rbdLockSetID, token string) bool {
+	if s == nil {
+		return false
+	}
+	object, id := rbdLockSetIDNames(token, "native")
+	_, err := hex.DecodeString(s.InputHex)
+	return s.Object == object && s.ImageID == id && err == nil && s.First <= 0 && s.Second <= 0 &&
+		rbdLockVersionedValid(s.FirstView, object) && rbdLockVersionedValid(s.SecondView, object) && rbdLockCallValid(s.GetID, object, "rbd", "get_id")
+}
+
+func rbdLockSetIDGoValid(s *rbdLockSetIDGo, token string) bool {
+	object, _ := rbdLockSetIDNames(token, "go")
+	return s != nil && s.Object == object && rbdLockVersionedValid(s.View, object) && rbdLockCallValid(s.GetID, object, "rbd", "get_id")
+}
+
+func rbdLockCompoundValid(c *rbdLockCompound, object string) bool {
+	if c == nil || c.Object != object || len(c.InputsHex) != 2 || c.Code > 0 {
+		return false
+	}
+	for _, input := range c.InputsHex {
+		if _, err := hex.DecodeString(input); err != nil || len(input) > 512 {
+			return false
+		}
+	}
+	return rbdLockRawValid(c.MapBefore, object) && rbdLockRawValid(c.MapAfter, object)
 }
 
 func rbdLockLockersValid(l *rbdWriteLockers) bool {
@@ -581,12 +732,13 @@ func decodeRBDLockNative(action, token string, request int64, plan rbdLockPlan, 
 	ok = ok && result.Blobs["image_head"].Length == s.Size && result.Blobs["objects_head"].Length == offset
 	switch action {
 	case "setup":
-		ok = ok && rbdLockWritesValid(result.Writes, "setup", plan.SetupWrites) && result.Phases == nil && result.Check == nil && len(result.Watchers) == 0
+		ok = ok && rbdLockWritesValid(result.Writes, "setup", plan.SetupWrites) && result.Phases == nil && result.Check == nil && len(result.Watchers) == 0 &&
+			rbdLockSetIDValid(result.SetID, token) && result.SetIDGo == nil
 	case "observe-released":
-		ok = ok && result.Writes == nil && result.Phases == nil && result.Check == nil
+		ok = ok && result.Writes == nil && result.Phases == nil && result.Check == nil && result.SetID == nil && rbdLockSetIDGoValid(result.SetIDGo, token)
 	case "lock":
 		c := result.Check
-		ok = ok && result.Writes == nil && len(result.Phases) == len(rbdLockPhases) && c != nil && c.ElapsedNS > 0 && len(c.Stdout) <= 4096 && len(c.Stderr) <= 4096 &&
+		ok = ok && result.Writes == nil && result.SetID == nil && result.SetIDGo == nil && len(result.Phases) == len(rbdLockPhases) && c != nil && c.ElapsedNS > 0 && len(c.Stdout) <= 4096 && len(c.Stderr) <= 4096 &&
 			slices.Equal(c.Argv, []string{"--rbd_cache=false", "--log_to_stderr=false", "--err_to_stderr=true", "object-map", "check", "--no-progress", plan.Pool + "/" + plan.Image})
 		for i, label := range rbdLockPhases {
 			if i >= len(result.Phases) {
@@ -598,9 +750,10 @@ func decodeRBDLockNative(action, token string, request int64, plan rbdLockPlan, 
 				rbdLockCallValid(p.HeaderLock, result.HeaderObject, "lock", "get_info") && rbdLockCallValid(p.MapLock, result.MapObject, "lock", "get_info") &&
 				rbdLockRawValid(p.MapRaw, result.MapObject) && rbdWriteWatchersValid(p.Watchers) && len(p.Owners) <= 1 &&
 				(i == 0) == (p.WaitNS == 0) && p.WaitNS >= 0 && closed == (p.CloseNS > 0) && (!closed || !p.IsOwner && p.Owners == nil && p.Watchers == nil)
+			ok = ok && (label == "owner") == (p.Negative != nil)
 			switch label {
 			case "owner":
-				ok = ok && rbdLockWritesValid(p.Writes, "owner", plan.OwnerWrites) && p.WriteNS == 0 && p.GoExtents == nil
+				ok = ok && rbdLockWritesValid(p.Writes, "owner", plan.OwnerWrites) && p.WriteNS == 0 && p.GoExtents == nil && rbdLockCompoundValid(p.Negative, result.MapObject)
 			case "reacquired":
 				ok = ok && rbdLockWritesValid(p.Writes, "reacquire", plan.ReacquireWrites) && p.WriteNS > 0 && rbdLockExtentSumsValid(p.GoExtents, plan.GoWrites)
 			case "go-owner":

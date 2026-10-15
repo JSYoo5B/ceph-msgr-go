@@ -91,6 +91,7 @@ func TestClassCallAdmission(t *testing.T) {
 
 func TestClassCallStagedOrdering(t *testing.T) {
 	call := callOp(ClassWrite, "")
+	readCall := callOp(ClassRead, "")
 	read := Operation{Code: Read, Length: 4}
 	getxattr := Operation{Code: GetXattr, Xattr: XattrInput{Name: "a", MaxOutputBytes: 8}}
 	cmpxattr := Operation{Code: CompareXattr, Data: []byte("v"), Xattr: XattrInput{Name: "a", ComparisonOp: XattrCompareEqual, ComparisonMode: XattrCompareString}}
@@ -98,8 +99,11 @@ func TestClassCallStagedOrdering(t *testing.T) {
 	failOKSet := Operation{Code: SetXattr, Flags: OpFailOK, Data: []byte("v"), Xattr: XattrInput{Name: "a"}}
 	for _, ops := range [][]Operation{
 		{{Code: Write, Length: 1, Data: []byte{1}}, call}, {failOKSet, call}, {{Code: Delete}, call},
-		{{Code: OmapSetValues}, call}, {call, call}, {call, read}, {call, {Code: Stat}}, {call, getxattr},
+		{{Code: OmapSetValues}, call}, {call, read}, {call, {Code: Stat}}, {call, getxattr},
 		{call, cmpxattr}, {call, omapGet}, {call, {Code: AssertVersion, Version: 1}},
+		{{Code: Create, Flags: OpFailOK}, call}, {call, {Code: Write, Length: 1, Data: []byte{1}}, call},
+		{{Code: Create}, {Code: SetXattr, Data: []byte("v"), Xattr: XattrInput{Name: "a"}}, call}, {readCall, call, read},
+		{call, call}, {call, readCall}, {readCall, call, readCall}, {{Code: Create}, call, call},
 	} {
 		if _, _, err := ValidateOperations(ops, 1024); !errors.Is(err, ErrOperation) {
 			t.Fatal("unsupported CALL ordering admitted", ops[0].Code, ops[1].Code, err)
@@ -108,9 +112,11 @@ func TestClassCallStagedOrdering(t *testing.T) {
 	for _, ops := range [][]Operation{
 		{read, call}, {cmpxattr, call}, {{Code: Stat}, omapGet, call},
 		{call, {Code: Write, Length: 1, Data: []byte{1}}}, {call, failOKSet}, {call, {Code: OmapClear}},
+		{readCall, call}, {cmpxattr, readCall, readCall, call, {Code: OmapClear}}, {{Code: Create}, call},
+		{{Code: Create, Flags: OpExclusive}, readCall, call}, {readCall, {Code: Create, Flags: OpExclusive}, call},
 	} {
 		if _, _, err := ValidateOperations(ops, 1024); err != nil {
-			t.Fatal("guard-before-CALL or write-after-CALL rejected", err)
+			t.Fatal("guard-before-CALL, CREATE-before-CALL, CALL-after-CALL or write-after-CALL rejected", err)
 		}
 	}
 }

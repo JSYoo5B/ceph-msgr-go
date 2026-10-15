@@ -23,6 +23,8 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 	}
 	var flags, total uint64
 	var stagedDigestSize uint64
+	// stagedAny marks a staged write that a later CALL may not follow: every
+	// write except a read-mode CALL and a non-FAILOK CREATE.
 	var stagedXattr, stagedOmap, stagedAny, afterCall bool
 	for _, op := range ops {
 		if !SupportedOperation(op.Code) || op.Code == PGNLS || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
@@ -124,10 +126,20 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			return 0, 0, ErrRequest
 		}
 		if op.Code == Call {
-			// A class method reads committed or staged state inconsistently
-			// (pinned objclass.cc:105-339) and may stage data, xattr and OMAP
-			// writes itself. Refuse a CALL after any staged write, and any
-			// read, guard or CALL after a CALL, until characterized.
+			// A class method's helpers run as sub-operations of the same
+			// transaction (pinned objclass.cc:105-339): stat and the read
+			// length see the staged object state, a full-object read is
+			// checked against the staged data digest while the bytes come
+			// from committed storage, and the method may stage writes itself.
+			// A write method followed by a full-reading method fails that
+			// digest check; live Tentacle then repaired the primary copy in a
+			// loop and never replied. A CALL may therefore follow guards,
+			// reads, a non-FAILOK CREATE and read-mode CALLs (the caller's
+			// declaration of a read-only method), the native librbd forms
+			// create then rbd.set_id and lock.assert_locked then
+			// rbd.object_map_update. A CALL after a write-mode CALL or any
+			// other staged write, and an explicit read or guard after a
+			// CALL, stay rejected.
 			if stagedAny {
 				return 0, 0, ErrOperation
 			}
@@ -140,7 +152,8 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			}
 			flags |= mode
 			total += inputBytes
-			stagedAny, afterCall, stagedXattr, stagedOmap = true, true, true, true
+			afterCall, stagedXattr, stagedOmap = true, true, true
+			stagedAny = mode == FlagWrite
 			continue
 		}
 		if op.Class != (ClassInput{}) {
@@ -160,7 +173,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		if afterCall && readModeOperation(op.Code) {
 			return 0, 0, ErrOperation
 		}
-		stagedAny = stagedAny || writeOperation(op.Code)
+		stagedAny = stagedAny || writeOperation(op.Code) && (op.Code != Create || op.Flags&OpFailOK != 0)
 		if IsOmapOperation(op.Code) {
 			mode, inputBytes, err := validateOmapOperation(op, limit)
 			if err != nil {

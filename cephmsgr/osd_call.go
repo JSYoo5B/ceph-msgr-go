@@ -21,17 +21,26 @@ const (
 // OSDClassInput is the active union for OSDCall; OSDOperation.Data holds the
 // method input. Class and Method are 1-255 bytes without NUL. Mode is
 // required. MaxOutputBytes is a positive local receipt budget, not a remote
-// limit. FAILOK is not yet supported for OSDCall. A CALL after any staged write
-// in the same vector, or any read, guard or CALL after a CALL, is rejected with
-// ErrUnsupportedOSDOperation because a method may read committed state and
-// stage writes itself.
+// limit. FAILOK is not yet supported for OSDCall. A CALL may follow guards,
+// reads, a non-FAILOK OSDCreate and read-mode CALLs in the same vector, the
+// native forms of an exclusive create before a class initializer and of a
+// lock assertion (read mode) before a class update. A CALL after a write-mode
+// CALL or any other staged write, and any read or guard after a CALL, is
+// rejected with ErrUnsupportedOSDOperation: a method's data reads take their
+// length and full-object digest from the transaction's staged state but their
+// bytes from committed storage, and a write method followed by a full-reading
+// method made live Tentacle repair the primary copy in a loop without
+// replying. Read mode declares the method registered read-only; declaring a
+// write method as read mode voids that protection. The first failing
+// operation aborts the vector, later operations return result 0 and no
+// output, and the aggregate result is the last executed operation's return.
 //
 // Results: the method's signed return is the per-op Result (positive values
 // are preserved) and its output is Data. In a vector that stages a write,
-// Tentacle refuses output above osd_max_write_op_reply_len (64 bytes by
-// default) with -EOVERFLOW and does not commit. Unknown classes or methods,
-// classes outside the server's load list and missing capabilities are server
-// refusals returned unchanged.
+// Tentacle refuses an operation's output above osd_max_write_op_reply_len (64
+// bytes by default, per operation) with -EOVERFLOW and does not commit.
+// Unknown classes or methods, classes outside the server's load list and
+// missing capabilities are server refusals returned unchanged.
 type OSDClassInput struct {
 	Class, Method  string
 	Mode           OSDCallMode

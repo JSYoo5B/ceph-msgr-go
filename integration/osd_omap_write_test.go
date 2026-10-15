@@ -40,6 +40,7 @@ type omapWriteAction struct {
 	ObjectSize uint64            `json:"expected_object_size,omitempty"`
 	WriteSize  uint64            `json:"expected_write_size,omitempty"`
 	HintFlags  uint32            `json:"hint_flags,omitempty"`
+	Exclusive  bool              `json:"exclusive,omitempty"`
 }
 
 type omapObjectInfo struct {
@@ -107,6 +108,8 @@ type omapWriteReceipt struct {
 		Aggregate int32             `json:"aggregate"`
 		Prvals    []omapNativePrval `json:"prvals"`
 		Output    []byte            `json:"output"`
+		Outputs   [][]byte          `json:"outputs"`
+		ElapsedMS int64             `json:"elapsed_ms"`
 	} `json:"vector"`
 	Cleanup struct {
 		Objects []struct {
