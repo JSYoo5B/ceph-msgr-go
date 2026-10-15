@@ -184,14 +184,14 @@ def build(root, wrapper, build_target="mds_map_native_encoder", output_name="enc
     common = next((line for line in loader.splitlines() if "libceph-common.so" in line), "")
     if "=> " + str(builddir / "lib") + "/" not in common:
         raise RuntimeError("native encoder is not loading its matching freshly compiled ceph-common: " + common)
-    command([str(binary), str(output)], root, "native-direct-encoding", environment)
+    command([str(binary), str(output)], root, "native-canonical-message-encoding", environment)
     fixtures = {}
     for front in sorted(output.glob("*.front.bin")):
         name = front.name[:-len(".front.bin")]
         data = (output / (name + ".data.bin")).read_bytes()
         header = (output / (name + ".header.bin")).read_bytes()
         metadata = json.loads((output / (name + ".native-header.json")).read_text())
-        if len(header) != 41 or metadata["version"] != (1 if metadata["type"] == 103 else 2) or metadata["front_len"] != front.stat().st_size or metadata["middle_len"] != 0 or metadata["data_len"] != len(data):
+        if len(header) != 41 or metadata["version"] != (1 if metadata["type"] == 103 else 2) or metadata["compat"] != 1 or metadata["front_len"] != front.stat().st_size or metadata["middle_len"] != 0 or metadata["data_len"] != len(data):
             raise RuntimeError("native header/envelope proof is incomplete for " + name)
         fixtures[name] = {"front_hex": front.read_bytes().hex(), "data_hex": data.hex(),
                           "front_bytes": front.stat().st_size, "data_bytes": len(data),
@@ -212,6 +212,7 @@ def build(root, wrapper, build_target="mds_map_native_encoder", output_name="enc
               "wrapper_sha256": hashlib.sha256(wrapper.read_bytes()).hexdigest(),
               "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
               "native_payload_encoder_verified": True,
+              "canonical_message_encode_verified": True,
               "native_message_header_verified": True,
               "native_payload_decoder_verified": True,
               "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
@@ -221,7 +222,7 @@ def build(root, wrapper, build_target="mds_map_native_encoder", output_name="enc
               "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
               "native_library_sha256": hashlib.sha256((builddir / "lib/libceph-common.so.2").read_bytes()).hexdigest(),
               "loader_audit": loader,
-              "status": status or "five freshly constructed native FSMapUser/MDSMap messages directly encoded and separately decoded; decoded objects never re-encoded",
+              "status": status or "five freshly constructed native FSMapUser/MDSMap messages canonically Message::encode encoded once and separately decoded; empty payloads required and decoded objects never re-encoded",
               "fixtures": fixtures}
     print(json.dumps(result), flush=True)
 

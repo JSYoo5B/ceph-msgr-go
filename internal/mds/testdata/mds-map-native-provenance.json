@@ -1,8 +1,9 @@
 {
-  "binary_sha256": "44ed0ef681183c99db700b65f6945f0ed71eeb3769041a5df15567816970316a",
-  "build_driver_sha256": "53e482d791ce064d8fef58af5cbac3e7ed356f25ac25bd1d03168103938bf513",
-  "builder_container_id": "1cd14383d41bd1040feaf114d83e78184bc050d37d9f2aaa8a0f699cabf016c3",
+  "binary_sha256": "b8952d5dff994040d3aea6e67218251f30c62ce8d0ea097173511a7c718c74dc",
+  "build_driver_sha256": "74b5fa05c1fde6ff14813af07cb5cc8c79850d9c1d2a79df6bf76e7f2be0c340",
+  "builder_container_id": "cf83b48b6e3ec92ac7439d40f0e0065f2082d3d342ae7d7e718c2836a225be45",
   "builder_termination_completed": true,
+  "canonical_message_encode_verified": true,
   "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
   "fixtures": {
     "mds-map-native-fsmap-empty": {
@@ -18,10 +19,10 @@
       "front_bytes": 22,
       "front_sha256": "8393bcfdde05f7a988659eb8bb68b9dd71177d80748534b9dc098703aacae728",
       "header_bytes": 41,
-      "header_sha256": "bfa0b819347931c153335b13eebeb54a2cec0672973d31d02dab8cf5c6e811f2",
+      "header_sha256": "590486109fd95016aa80a54896f4454290aee5fb7e550ff6d23d7ac19d873012",
       "native_header": {
         "ack_seq": 3,
-        "compat": 0,
+        "compat": 1,
         "data_len": 0,
         "data_off": 0,
         "flags": 1,
@@ -48,10 +49,10 @@
       "front_bytes": 69,
       "front_sha256": "aa7982bc64e518987756a9e64743655017b7f6608d4231a9b6d5d7d0690c5a6a",
       "header_bytes": 41,
-      "header_sha256": "bfa0b819347931c153335b13eebeb54a2cec0672973d31d02dab8cf5c6e811f2",
+      "header_sha256": "590486109fd95016aa80a54896f4454290aee5fb7e550ff6d23d7ac19d873012",
       "native_header": {
         "ack_seq": 3,
-        "compat": 0,
+        "compat": 1,
         "data_len": 0,
         "data_off": 0,
         "flags": 1,
@@ -159,8 +160,8 @@
   "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
   "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
   "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
-  "launcher_sha256": "53e482d791ce064d8fef58af5cbac3e7ed356f25ac25bd1d03168103938bf513",
-  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffff8c30c000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffff89600000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffff8c1f8000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffff895af000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffff890e9000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffff890a8000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffff89077000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffff89056000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffff88e32000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffff88e01000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffff88c53000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffff8c2c0000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffff88bb2000)\n",
+  "launcher_sha256": "74b5fa05c1fde6ff14813af07cb5cc8c79850d9c1d2a79df6bf76e7f2be0c340",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffff99a17000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffff96c00000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffff99908000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffff998b7000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffff9673a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffff99876000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffff99845000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffff99824000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffff96516000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffff964e5000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffff96337000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffff999d0000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffff96296000)\n",
   "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
   "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
   "native_message_header_verified": true,
@@ -216,6 +217,6 @@
   },
   "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
   "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
-  "status": "five freshly constructed native FSMapUser/MDSMap messages directly encoded and separately decoded; decoded objects never re-encoded",
-  "wrapper_sha256": "178dbf4ed2fd8d77a6f26805df701064cb52a255f0592b5fe807541d32143f59"
+  "status": "five freshly constructed native FSMapUser/MDSMap messages canonically Message::encode encoded once and separately decoded; empty payloads required and decoded objects never re-encoded",
+  "wrapper_sha256": "2c376d57d1af6328efdd65662e7ade944eb044b44b10b50356bc12b84eac8bf2"
 }

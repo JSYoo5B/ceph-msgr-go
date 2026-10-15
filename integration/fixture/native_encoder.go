@@ -534,6 +534,9 @@ func closedMDSMapEncoderSpec(spec nativeEncoderSpec) bool {
 }
 
 func validateNativeMDSMapSourceProof(proof map[string]any) error {
+	if proof["canonical_message_encode_verified"] != true {
+		return errors.New("native MDS proof lacks fresh canonical Message::encode verification")
+	}
 	// This archive digest is shared with the independently retained Tentacle
 	// native proofs. A correct-looking commit label alone is insufficient.
 	if proof["source_archive_url"] != "https://codeload.github.com/ceph/ceph/tar.gz/"+nativeEncoderCommit ||
@@ -569,9 +572,9 @@ func validateNativeMDSMapFixture(name string, fixture map[string]any, segments m
 	expectedEntries := uint64(0)
 	switch name {
 	case "mds-map-native-fsmap-empty":
-		typ, version, compat = 103, 1, 0
+		typ, version, compat = 103, 1, 1
 	case "mds-map-native-fsmap-multi":
-		typ, version, compat, expectedEpoch = 103, 1, 0, 17
+		typ, version, compat, expectedEpoch = 103, 1, 1, 17
 		expectedEntries = 2
 	case "mds-map-native-mdsmap-empty":
 	case "mds-map-native-mdsmap-populated":

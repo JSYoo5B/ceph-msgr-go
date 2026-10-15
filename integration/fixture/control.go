@@ -381,6 +381,23 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-mds-maps")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || !c.profile.osdPGV8() || c.profile.osdReplicas != "1" ||
+			!slices.Contains([]string{"start", "observe", "finish"}, fields[1]) {
+			return errors.New("invalid owned single-OSD MDS maps oracle request")
+		}
+		args := []string{"python3", "/out/mds_maps_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "mds-maps-command.json", "native MON MDS maps oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "mds-maps-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-osd-split")
 	if err != nil {
 		return err

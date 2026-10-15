@@ -45,7 +45,7 @@ func decodeTime(d *wire.Decoder) Time { return Time{Seconds: d.U32(), Nanosecond
 
 func DecodeFSMapUser(m msgr.MessageData, limit uint32) (FSMapUser, error) {
 	var result FSMapUser
-	raw, err := frameFront(m, FSMapUserMessage, 1, 0, limit)
+	raw, err := frameFront(m, FSMapUserMessage, 1, 1, limit)
 	if err != nil {
 		return result, err
 	}

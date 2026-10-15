@@ -27,7 +27,7 @@ func testFSMap() msgr.MessageData {
 	e := wire.Encoder{}
 	e.U32(17)
 	e.Struct(1, 1, body.Data)
-	return msgr.MessageData{Type: FSMapUserMessage, Version: 1, CompatVersion: 0, Front: e.Data}
+	return msgr.MessageData{Type: FSMapUserMessage, Version: 1, CompatVersion: 1, Front: e.Data}
 }
 func emptyCompat(e *wire.Encoder) {
 	for i := 0; i < 3; i++ {
@@ -290,9 +290,19 @@ func FuzzDecodeCurrentMaps(f *testing.F) {
 		case 0:
 			DecodeMDSMap(data, 65536)
 		case 1:
-			DecodeFSMapUser(msgr.MessageData{Type: FSMapUserMessage, Version: 1, CompatVersion: 0, Front: data}, 65536)
+			DecodeFSMapUser(msgr.MessageData{Type: FSMapUserMessage, Version: 1, CompatVersion: 1, Front: data}, 65536)
 		case 2:
 			DecodeMDSMapMessage(msgr.MessageData{Type: MDSMapMessageType, Version: 2, CompatVersion: 1, Front: data}, 65536)
 		}
 	})
+}
+
+// A fresh MFSMapUser constructor starts with compat0, but Message::encode
+// normalizes it to version1 in its empty-payload path before transmission.
+func TestFSMapUserRejectsNoncanonicalCompatZero(t *testing.T) {
+	m := testFSMap()
+	m.CompatVersion = 0
+	if _, err := DecodeFSMapUser(m, 4096); !errors.Is(err, wire.ErrVersion) {
+		t.Fatal("noncanonical compat0 accepted", err)
+	}
 }

@@ -73,9 +73,12 @@ type MonAuth struct {
 	// explicitly selected client-wide OSD profile. It does not expand the
 	// unconditional MON-only CRUSH admission exception or select OSD codecs.
 	ReplicatedPGV8 bool
+	// MDSMaps enables only the audited current MON MDS map encoding.
+	MDSMaps bool
 }
 
 func (a MonAuth) replicatedPGV8MON() bool { return a.ReplicatedPGV8 }
+func (a MonAuth) mdsMapsMON() bool        { return a.MDSMaps }
 
 func (a MonAuth) Initial() ([]byte, error)      { return a.Client.Initial(), nil }
 func (a MonAuth) More(p []byte) ([]byte, error) { return a.Client.Challenge(p) }
@@ -104,6 +107,11 @@ func (a ServiceAuth) replicatedPGV8() bool { return a.ReplicatedPGV8 }
 func handshakeFeatures(role uint8, auth Authenticator) (supported, required uint64) {
 	supported, required = featuresForRole(role), RequiredFeatures
 	if role == 1 {
+		if profile, ok := auth.(interface{ mdsMapsMON() bool }); ok && profile.mdsMapsMON() {
+			// MMDSMap current encoding requires MDSENC (bit 29).
+			supported |= 1 << 29
+			required |= 1 << 29
+		}
 		if profile, ok := auth.(interface{ replicatedPGV8MON() bool }); ok && profile.replicatedPGV8MON() {
 			// include/ceph_features.h OSDHASHPSPOOL, bit 30/incarnation 1.
 			// MON admission precedes choosing an OSD target, so only this

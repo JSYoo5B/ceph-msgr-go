@@ -5,13 +5,15 @@ Pinned reference: Ceph `v20.2.4`, commit
 This package decodes bounded raw map messages and map metadata. It does not
 subscribe, select a filesystem or rank, authenticate/connect to an MDS, open an
 MDS session, route/replay metadata operations, or implement CephFS workflows.
-No Messenger or MDS client feature is advertised by adding these codecs.
+Adding these codecs alone advertises no Messenger or MDS client feature.
+The separately implemented public MON-only subscription opt-in is specified in
+[cephmsgr/MDS_MAPS_CONTRACT.md](../../cephmsgr/MDS_MAPS_CONTRACT.md).
 
 ## Exact current envelopes
 
 | Input | Accepted wire form | Preserved metadata |
 | --- | --- | --- |
-| `MFSMapUser`, type 103 | Header 1/compat0; epoch u32, `FSMapUser` struct 1/compat1 | Inner epoch, signed legacy-client FSCID, ordered `fs_info_t` vector (each struct 1/compat1: signed FSCID, raw name) and owned raw front/map |
+| `MFSMapUser`, type 103 | Header 1/compat1; epoch u32, `FSMapUser` struct 1/compat1 | Inner epoch, signed legacy-client FSCID, ordered `fs_info_t` vector (each struct 1/compat1: signed FSCID, raw name) and owned raw front/map |
 | `MMDSMap`, type 21 | Header 2/compat1; cluster FSID 16 bytes, epoch u32, length-prefixed map blob, length-prefixed map_fs_name | Cluster FSID, outer epoch/name, complete decoded inner map and owned raw front/map |
 | Inner `MDSMap` | Struct 5/compat4, current extension number 19 | Base metadata, daemon/rank tables, pools, compatibility sets, flags, required-client bitset, balance and quiesce metadata |
 | Inner `mds_info_t` | Struct 10/compat4 | GID/name, signed rank/incarnation/state, state sequence, original address vector, laggy time, export targets, feature/flag masks, join FSCID and compatibility set |
@@ -32,10 +34,10 @@ FSMapUser contains **no cluster FSID**. MMDSMap contains a cluster FSID but
 **no FSCID**. Its historical map_fs_name field is empty in the current native
 producer and does not supply an identity binding. The native Client resolves
 name-to-FSCID through `fsmap.user`, then subscribes to `mdsmap.<FSCID>`; the
-incoming MMDSMap does not echo that subscription ID. Future public subscriptions
-must define explicit caller/context binding rather than infer filesystem choice
-from a map name or treat an empty map as authorized discovery. Cluster-FSID
-validation belongs to the receiving authenticated connection.
+incoming MMDSMap does not echo that subscription ID. Public subscriptions use
+explicit caller FSCID and a per-MON-session watch tombstone; they never infer
+filesystem choice from a map name or treat an empty map as authorized discovery.
+Cluster-FSID validation belongs to the receiving authenticated connection.
 
 ## Metadata and policy boundaries
 
@@ -89,11 +91,11 @@ SERVER_NAUTILUS mask for struct10. Native address vectors also depend on the
 address feature. Defining these requirements adds no negotiation flag.
 
 The current MON common feature set contains these prerequisites except MDSENC.
-A future explicitly opted-in map subscription therefore needs an audited
-pre-Dial MDSENC contract; enabling it unconditionally or decoding a map and
-claiming MDS protocol support would be incorrect. This checkpoint changes no
-feature advertisement, public option, MON dispatcher, subscription or service
-authentication. MDS CephX service-ticket work is a separate foundation.
+`Options.EnableMDSMaps` therefore selects MDSENC before Dial for MON sessions
+only, with the fixed current map codecs and source/identity policy documented
+in the public contract. Default MON and all MGR/OSD feature masks remain
+unchanged. The option requests no MDS service ticket and claims no MDS daemon
+connection or session support; preserving maps alone does not establish either.
 
 ## Bounds, ownership and errors
 
@@ -127,9 +129,14 @@ MDSMap. The MDS maps include IPv4/IPv6 address vectors, active/replay/unknown
 state 777, high unknown daemon/map flags, named compatibility feature 62,
 required-client bit 511, signed sentinels and quiesce metadata.
 
-`tools/mds_map_native_encoder.cc` constructs fresh native objects and calls the
-unchanged native payload encoders, then separately decodes both message and inner
-map. It compares native epoch/identity, names, daemon metadata, addresses,
+`tools/mds_map_native_encoder.cc` constructs fresh native objects, asserts empty
+front/middle/data, and invokes canonical `Message::encode` exactly once. Its
+empty-payload branch dispatches the unchanged virtual payload encoder and
+normalizes a zero compatibility value to the selected header version. The
+MFSMapUser constructor's initial compat0 therefore becomes canonical wire
+compat1; direct payload encoding would incorrectly bypass this normalization.
+Compat0 is rejected by the current codec and a dedicated regression test. The
+wrapper then separately decodes both message and inner map. It compares native epoch/identity, names, daemon metadata, addresses,
 features and flags. Decoded messages/maps are never re-encoded. The independent
 `tools/mds_map_native_encoder.py` preserves pinned source/submodule, wrapper,
 driver, generated-configuration, native library/binary and segment hashes,
@@ -157,7 +164,8 @@ recovery, capability/lease or client-feature contracts.
 The audited files are `messages/MFSMapUser.h`, `messages/MMDSMap.h`,
 `mds/FSMapUser.{h,cc}`, `mds/MDSMap.{h,cc}`, `mds/mdstypes.{h,cc}`,
 `include/cephfs/types.h`, `include/CompatSet.h`, `include/ceph_features.h`,
-`include/ceph_fs.h`, and `client/Client.cc` at the pinned commit. Message/map/type
+`include/ceph_fs.h`, `msg/Message.cc` (canonical encode lines237-251), and
+`client/Client.cc` at the pinned commit. Message/map/type
 sources carry LGPL-2.1 notices; `ceph_fs.h` allows LGPL-2.1 or LGPL-3.0 and the
 project COPYING gives the default/file-specific terms. This implementation
 independently describes wire facts and incorporates no upstream native code.

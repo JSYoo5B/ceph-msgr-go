@@ -40,6 +40,7 @@ var metadataFiles = []string{
 	"osd-omap-range-results.json", "osd-call-results.json", "osd-alloc-hint-results.json",
 	"osd-watch-notify-status.json", "osd-watch-notify-worker.log", "osd-watch-notify-input.json", "osd-watch-notify-result.json", "osd-watch-notify-command.json", "osd-watch-notify-results.json",
 	"osd-watch-reconnect-results.json",
+	"mds-maps-input.json", "mds-maps-owned.json", "mds-maps-result.json", "mds-maps-commands.json", "mds-maps-command.json", "mds-maps-go.json",
 	"osd-split-input.json", "osd-split-result.json", "osd-split-status.json", "osd-split-command.json", "osd-split-worker.log", "osd-split-results.json",
 	"osd-split-stale-input.json", "osd-split-stale-receipt.json",
 	"osd-pg-list-input.json", "osd-pg-list-result.json", "osd-pg-list-command.json", "osd-pg-list-results.json",

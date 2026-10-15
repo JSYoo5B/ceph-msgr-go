@@ -100,6 +100,10 @@ type Options struct {
 	// credentials. OpenOSD requires this explicit opt-in. It does not subscribe
 	// to OSDMap or enable placement, routing or automatic object retries.
 	EnableOSD bool
+	// EnableMDSMaps opts MON sessions into the current Tentacle MDSENC map
+	// encoding before Dial. It permits explicit raw filesystem/MDS map watches;
+	// it requests no MDS service ticket and enables no MDS daemon or CephFS API.
+	EnableMDSMaps bool
 	// OSDProfile selects the fixed OSD wire contract before MON admission.
 	// ReplicatedPG requires EnableOSD and caller-supplied actual PG metadata.
 	OSDProfile OSDProfile

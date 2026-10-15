@@ -15,6 +15,7 @@ import (
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/maps"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/mds"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
@@ -45,9 +46,15 @@ type Client struct {
 	configWatch   *ConfigStream
 	digestWatch   *DigestStream
 	osdMapWatch   *OSDMapStream
+
 	osds          map[int32]*OSDConnection
 	osdNext       atomic.Uint64
 	osdGeneration uint64 // guarded by mu; local connection identity, separate from TIDs
+
+	fsMapWatch, mdsMapWatch             *monMDSMapWatch
+	mdsMapBindings                      map[*session.Session]mdsMapBinding
+	mdsMapSourceGenerations             map[*session.Session]uint64
+	nextMDSMapWatchID, mdsMapGeneration uint64
 }
 
 // Dial establishes and authenticates a MON connection and verifies a MonMap
@@ -304,7 +311,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		candidate := copyAuth(c.auth)
 		attemptEpoch, knownEpoch := c.monMap.AuthEpoch, c.monMap.Epoch != 0
 		c.mu.Unlock()
-		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile == OSDProfileReplicatedPG})
+		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate, MDSMaps: c.options.EnableMDSMaps, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile == OSDProfileReplicatedPG})
 		if err != nil {
 			release()
 			failures = append(failures, err)
@@ -322,6 +329,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		var candidateMonMap maps.Mon
 		var s *session.Session
 		s = session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
+			if m.Type == mds.FSMapUserMessage || m.Type == mds.MDSMapMessageType {
+				if !verifiedMon {
+					return nil
+				}
+				return c.handleMonMDSMap(s, m)
+			}
 			if m.Type == msgr.OSDMapMessage {
 				if !verifiedMon {
 					return nil
@@ -397,8 +410,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			c.stopConfigForFailedSession(s, err)
 			c.stopDigestForFailedSession(s, err)
 			c.stopOSDMapForFailedSession(s, err)
+			c.stopMDSMapsForFailedSession(s, err)
 			c.mu.Lock()
+			delete(c.mdsMapBindings, s)
+			delete(c.mdsMapSourceGenerations, s)
 			if c.mon == s {
+				c.resetMDSMapSourcesLocked()
 				wasReady := c.monReady
 				c.monReady = false
 				if c.logWatch != nil {
@@ -428,9 +445,11 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			c.stopConfigForFailedSession(old, old.Err())
 			c.stopDigestForFailedSession(old, old.Err())
 			c.stopOSDMapForFailedSession(old, old.Err())
+			c.stopMDSMapsForFailedSession(old, old.Err())
 		}
 		c.mu.Lock()
 		c.mon, c.monReady = s, false
+		c.resetMDSMapSourcesLocked()
 		if c.logWatch != nil {
 			// The log worker may miss a fast candidate failure and restoration
 			// of the same old session. Force a cursor-based registration even
@@ -793,6 +812,7 @@ func (c *Client) Close() error {
 		c.stopConfigForFailedSession(source, err)
 		c.stopDigestForFailedSession(source, err)
 		c.stopOSDMapForFailedSession(source, err)
+		c.stopMDSMapsForFailedSession(source, err)
 	}
 	c.mu.Lock()
 	if c.closed {
@@ -801,6 +821,7 @@ func (c *Client) Close() error {
 		return nil
 	}
 	c.closed = true
+	mdsMapWatches := c.stopMDSMapWatchesLocked(ErrClosed)
 	configWatch, logWatch := c.configWatch, c.logWatch
 	digestWatch := c.digestWatch
 	osdMapWatch := c.osdMapWatch
@@ -823,6 +844,9 @@ func (c *Client) Close() error {
 	}
 	c.mu.Unlock()
 	c.cancel()
+	for _, watch := range mdsMapWatches {
+		watch.cancel()
+	}
 	if configWatch != nil {
 		configWatch.cancel()
 	}

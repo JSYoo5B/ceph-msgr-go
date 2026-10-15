@@ -45,18 +45,20 @@ struct MapFixture: MDSMap {
 };
 void emit(const std::filesystem::path& root, const std::string& name,
           Message& message) {
-  if (message.get_payload().length() != 0 || message.get_data().length() != 0)
-    throw std::runtime_error("encoder input must have empty front and data");
-  // Direct dispatch invokes the actual native feature-selected payload encoder;
-  // Message::encode's decoded-payload reuse path is deliberately not involved.
-  message.encode_payload(features);
-  if (message.get_header().version != (message.get_type() == 103 ? 1 : 2))
-    throw std::runtime_error("native encoder did not select current map version");
-  // Message::encode now only updates the native envelope and footer after
-  // the direct fresh-object payload encode above. No decoded bytes are used.
+  if (message.get_payload().length() != 0 ||
+      message.get_middle().length() != 0 || message.get_data().length() != 0)
+    throw std::runtime_error("fresh encoder input must have empty front, middle and data");
   message.set_seq(1);  // Explicit offline transport input, not live session state.
   message.set_priority(CEPH_MSG_PRIO_DEFAULT);
+  // Invoke the canonical Message::encode path exactly once on a fresh object.
+  // Its empty-payload branch dispatches the unchanged virtual encode_payload
+  // and then normalizes an unset compat_version to the selected version.
+  // Direct encode_payload would bypass that branch for MFSMapUser (1/1).
+  // No decoded message or cached payload is reused.
   message.encode(features, MSG_CRC_ALL, true);
+  if (message.get_header().version != (message.get_type() == 103 ? 1 : 2) ||
+      message.get_header().compat_version != 1)
+    throw std::runtime_error("native canonical encoder did not select current map envelope");
   const auto& header = message.get_header();
   const auto& footer = message.get_footer();
   if (header.front_len != message.get_payload().length() ||

@@ -130,6 +130,7 @@ func TestMDSMapNativeProofClosedClassesAndCorruptions(t *testing.T) {
 			{"nonzero TID", func(h []byte) { binary.LittleEndian.PutUint64(h[8:16], 77) }},
 			{"wrong version", func(h []byte) { binary.LittleEndian.PutUint16(h[20:22], 8) }},
 			{"wrong compat", func(h []byte) { binary.LittleEndian.PutUint16(h[37:39], 2) }},
+			{"noncanonical compatibility zero", func(h []byte) { binary.LittleEndian.PutUint16(h[37:39], 0) }},
 			{"wrong sequence", func(h []byte) { binary.LittleEndian.PutUint64(h[:8], 2) }},
 		} {
 			t.Run(name+"/"+mutation.name, func(t *testing.T) {
@@ -182,10 +183,12 @@ func TestMDSMapNativeProofClosedClassesAndCorruptions(t *testing.T) {
 	}
 
 	for name, edit := range map[string]func(map[string]any){
-		"source archive":       func(p map[string]any) { p["source_archive_sha256"] = strings.Repeat("0", 64) },
-		"source URL":           func(p map[string]any) { p["source_archive_url"] = "https://example.invalid/source" },
-		"native decoder":       func(p map[string]any) { delete(p, "native_payload_decoder_verified") },
-		"empty library digest": func(p map[string]any) { p["native_library_sha256"] = "" },
+		"source archive":           func(p map[string]any) { p["source_archive_sha256"] = strings.Repeat("0", 64) },
+		"source URL":               func(p map[string]any) { p["source_archive_url"] = "https://example.invalid/source" },
+		"native decoder":           func(p map[string]any) { delete(p, "native_payload_decoder_verified") },
+		"missing canonical encode": func(p map[string]any) { delete(p, "canonical_message_encode_verified") },
+		"false canonical encode":   func(p map[string]any) { p["canonical_message_encode_verified"] = false },
+		"empty library digest":     func(p map[string]any) { p["native_library_sha256"] = "" },
 		"foreign native library": func(p map[string]any) {
 			p["loader_audit"] = "libceph-common.so.2 => /usr/lib64/ceph/libceph-common.so.2"
 		},

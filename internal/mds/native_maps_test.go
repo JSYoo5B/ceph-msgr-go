@@ -37,6 +37,9 @@ func nativeMapMessage(t *testing.T, name string) msgr.MessageData {
 	if m.Sequence != 1 || m.Transaction != 0 || m.AckSequence != 3 || m.Priority != 127 || len(m.Data) != 0 || !bytes.Equal(header, m.Frame().Segments[0]) {
 		t.Fatal("native offline map header lost", m)
 	}
+	if m.CompatVersion != 1 || (m.Type == FSMapUserMessage && m.Version != 1) || (m.Type == MDSMapMessageType && m.Version != 2) {
+		t.Fatal("native canonical current map version/compat lost", m)
+	}
 	return m
 }
 
@@ -135,13 +138,14 @@ func TestNativeMapProvenanceMatchesCurrentSourcesAndSegments(t *testing.T) {
 		Driver     string                    `json:"build_driver_sha256"`
 		Launcher   string                    `json:"launcher_sha256"`
 		Terminated bool                      `json:"builder_termination_completed"`
+		Canonical  bool                      `json:"canonical_message_encode_verified"`
 		Decoder    bool                      `json:"native_payload_decoder_verified"`
 		Fixtures   map[string]map[string]any `json:"fixtures"`
 	}
 	if err = json.Unmarshal(data, &proof); err != nil {
 		t.Fatal(err)
 	}
-	if proof.Commit != "7f793731f1b39eb4f465e960113d2363c311b964" || !proof.Terminated || !proof.Decoder || len(proof.Fixtures) != 5 {
+	if proof.Commit != "7f793731f1b39eb4f465e960113d2363c311b964" || !proof.Terminated || !proof.Decoder || !proof.Canonical || len(proof.Fixtures) != 5 {
 		t.Fatal("native proof lacks pinned source, cleanup or decoder")
 	}
 	for _, producer := range []struct{ hash, file string }{{proof.Wrapper, "mds_map_native_encoder.cc"}, {proof.Driver, "mds_map_native_encoder.py"}, {proof.Launcher, "mds_map_native_encoder.py"}} {

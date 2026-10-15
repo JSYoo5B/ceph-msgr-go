@@ -79,6 +79,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             "TestCephOSDReplicatedPGIntegration", "TestCephOSDPGListV8Integration",
             "TestCephOSDBackoffIntegration", "TestCephOSDBackoffLateAckIntegration",
             "TestCephOSDWatchReconnectIntegration", "TestCephOSDSplitIntegration",
+            "TestCephMDSMapsIntegration",
         }
         self.assertTrue(expected <= declared)
         for row in self.rows:
@@ -87,8 +88,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in declared if selector.search(name)}, expected)
             for unready in ("TestCephOSDSparseReadIntegration", "TestCephOSDPGListIntegration",
-                            "TestCephOSDMapExtIntegration", "TestCephOSDChecksumIntegration",
-                            "TestCephMDSMapIntegration"):
+                            "TestCephOSDMapExtIntegration", "TestCephOSDChecksumIntegration"):
                 self.assertIsNone(selector.search(unready))
             # Go also applies -run to subtest path components. Keep unrelated
             # names and similarly prefixed future tests outside this opt-in.

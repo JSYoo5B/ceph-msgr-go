@@ -98,11 +98,22 @@ func (c *Client) rejectAuthentication(err error) {
 	// cleanup still delays the map watch's worker/onClose. Inspect that source
 	// outside mu before recording a later authentication refusal for the watch.
 	c.mu.Lock()
+	var mdsSources []*session.Session
+	for _, watch := range []*monMDSMapWatch{c.fsMapWatch, c.mdsMapWatch} {
+		if watch != nil {
+			mdsSources = append(mdsSources, watch.observed)
+		}
+	}
 	var mapSource *session.Session
 	if watch := c.osdMapWatch; watch != nil {
 		mapSource = watch.observed
 	}
 	c.mu.Unlock()
+	for _, source := range mdsSources {
+		if source != nil {
+			c.stopMDSMapsForFailedSession(source, source.Err())
+		}
+	}
 	if mapSource != nil {
 		c.stopOSDMapForFailedSession(mapSource, mapSource.Err())
 	}
@@ -111,6 +122,7 @@ func (c *Client) rejectAuthentication(err error) {
 		c.mu.Unlock()
 		return
 	}
+	mdsMapWatches := c.stopMDSMapWatchesLocked(err)
 	c.authErr = err
 	c.monReady = false
 	c.mgr = nil
@@ -138,6 +150,9 @@ func (c *Client) rejectAuthentication(err error) {
 	}
 	c.signal()
 	c.mu.Unlock()
+	for _, watch := range mdsMapWatches {
+		watch.cancel()
+	}
 	if configWatch != nil {
 		configWatch.cancel()
 	}

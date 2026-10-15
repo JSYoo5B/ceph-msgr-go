@@ -192,6 +192,66 @@ CEPH_MSGR_TEST_RUNTIME=host \
   CEPH_MSGR_TEST_RUN='^TestCephMonOSDMaps.*Integration$' sh integration/run.sh
 ```
 
+## MON raw FSMapUser·MDSMap 구독
+
+`Options.EnableMDSMaps = true`를 Dial 전에 설정하면 MON에서 현재 Tentacle
+MDSENC bit29를 지원·필수 기능으로 협상한다. MGR/OSD 기능이나 MDS service
+티켓은 추가하지 않는다. `WatchFSMapUser`는 raw filesystem directory를,
+`WatchMDSMaps`는 호출자가 명시한 nonnegative FSCID의 raw 지도를 구독한다.
+파일시스템 선택·이름 조회·MDS daemon/session·CephFS 작업은 구현하지 않는다.
+
+```go
+options.EnableMDSMaps = true
+client, err := cephmsgr.Dial(ctx, options)
+if err != nil {
+    return err
+}
+defer client.Close()
+filesystems, err := client.WatchFSMapUser(ctx, cephmsgr.FSMapUserOptions{})
+if err != nil {
+    return err
+}
+defer filesystems.Close()
+mdsMaps, err := client.WatchMDSMaps(ctx, filesystemID, cephmsgr.MDSMapOptions{})
+if err != nil {
+    return err
+}
+defer mdsMaps.Close()
+update, err := mdsMaps.Next(ctx)
+// update.Map은 pools/ranks/daemon state/feature 요구 등 수신한 wire metadata다.
+// update.FilesystemID는 호출자가 준 local binding이며 응답에 실린 FSCID가 아니다.
+```
+
+두 종류는 client당 각각 하나이며 MON 명령과 함께 사용한다. StartEpoch는
+inclusive, 0은 현재 관찰이다. 중복·역행 epoch는 무시하고 MON 전환 시 마지막
+접수 epoch + 1로 재구독한다. 최대 uint32 epoch는 접수 후
+`ErrMDSMapEpochExhausted`로 끝내며 wrap하지 않는다. 각 FIFO는 64개와 보수적인
+metadata byte 예산으로 제한한다. `MaxBufferedBytes`는 기본 MaxFrameSize,
+1 KiB–1 GiB이며 초과하면 `ErrMDSMapWatchOverflow`로 해당 stream만 끝낸다.
+Next 대기 취소는 stream을 유지하고 lifetime 취소·Close는 로컬 작업이다.
+접수한 지도는 최초 terminal 오류 전에 drain한다.
+
+MMDSMap에는 FSCID가 없어 같은 MON session은 한 MDS watch에만 영구 binding된다.
+Close 뒤 같은 ID라도 새 MDS watch는 `ErrMDSMapSourceBound`다. 새 Client를
+사용하면 독립적으로 구독할 수 있다. FSMapUser는 같은 cluster-wide topic이라
+Close 후 재구독할 수 있지만 이전 구독의 늦은 frame도 새 StartEpoch를 만족하면
+전달될 수 있다. SourceGeneration은 같은 MON source에서 두 stream이 공유하는
+로컬 delivery context이며 wire generation이나 새 구독 이후 전송의 증거가 아니다.
+권한 부족·존재하지 않는 FSCID의 무응답을 서버 권한 판정으로 해석하지 않는다.
+
+수신 UUID·outer/inner epoch·source identity를 검증하고 raw front/map과 unknown
+state/flags/required-client-feature bytes를 보존한다. Native map 5개로 codec과
+public projection을 대조했고 synthetic MON은 feature 협상·queue bounds·복구·
+취소·tombstone·최초 오류를 검증한다. 실제 MON 연동 결과와 MDS daemon 지원은
+별도 검증 범위다. 상세한 API·identity·미지원 경계는
+[raw MON map 계약](cephmsgr/MDS_MAPS_CONTRACT.md)을 따른다.
+
+[지도 구독 실검증](integration/fixture/MDS_MAPS_VALIDATION.md)은 CRC/AES host IPv4
+single BlueStore와 secure/AES256K container IPv6 single MemStore에서 native 지도
+식별자·epoch·pool 대조, 취소, 일반 MON 명령 유지와 OSD 연결 0회를 확인했다.
+각 구성에서 MDS 지도 1개와 기존 OSD 12개 사례를 함께 실행했다. 실제 MDS daemon
+인증·session·CephFS 지원은 별도 단계다.
+
 ## OSD 객체 요청 통신
 
 `Options.EnableOSD: true`로 OSD service ticket 획득·갱신을 명시적으로 켠다.
@@ -251,6 +311,10 @@ Primary: targetID}`를 넣는다. `Object.Hash`는 계속 raw hash이며 `Placem
 배치·재라우팅을 하지 않는다. 현재 검증 구성은 legacy CRUSH와 HASHPSPOOL·8 PG의
 replicated pool이며, 기본 optimal CRUSH·EC 지원으로 확대해 해석하지 않는다.
 [O4 계약](internal/osd/O4_CONTRACT.md)에 feature와 검증 경계를 구분했다.
+[PG 분할 실검증](integration/fixture/OSD_SPLIT_VALIDATION.md)은 single OSD에서
+8→16→8 PG 변경, 기존 요청의 불명확 결과 보존, caller가 새 배치로 보낸 별도
+읽기·쓰기와 설정 복구를 확인한다. 라이브러리가 분할을 감지하거나 요청을
+재실행하지는 않는다.
 
 OSD 연결은 lossy session이며 전송한 요청을 재실행하지 않는다. 전송 후
 취소·단절·손상된 응답에는 `OutcomeUnknownError`를 보존한다. Messenger ACK는
