@@ -257,6 +257,20 @@ func TestMDSTicketRenewalAndGlobalIdentityRetirement(t *testing.T) {
 			if original.Expires.IsZero() || original.RenewAfter.IsZero() || !c.Snapshot().OSDTicket.Expires.IsZero() {
 				t.Fatal("independent MDS ticket unavailable")
 			}
+			id := uint64(42)
+			if changedID {
+				id = 99
+			}
+			// Swap the MON dialer while the supervisor is idle, before any
+			// renewal is due, so no reconnect reads it concurrently.
+			c.options.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+				if err := ctx.Err(); err != nil {
+					return nil, err
+				}
+				client, server := net.Pipe()
+				go mdsMockMonitorID(server, id)
+				return client, nil
+			}
 			// Force a local renewal due marker, then exercise the actual MON candidate
 			// authentication/install path without sleeping or opening another MDS.
 			c.mu.Lock()
@@ -269,30 +283,29 @@ func TestMDSTicketRenewalAndGlobalIdentityRetirement(t *testing.T) {
 			if needed, _, _ := c.renewalState(time.Now()); !needed {
 				t.Fatal("MDS ticket omitted from renewal scheduling")
 			}
-			id := uint64(42)
-			if changedID {
-				id = 99
-			}
-			c.options.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
-				if err := ctx.Err(); err != nil {
-					return nil, err
-				}
-				client, server := net.Pipe()
-				go mdsMockMonitorID(server, id)
-				return client, nil
-			}
 			var pending <-chan mdsCommandOutcome
 			var sent msgr.MessageData
 			if changedID {
 				pending = mdsStartCommand(m, ctx)
 				sent = peer.next(t)
 			}
-			if err := c.connectMonitor(ctx); err != nil {
-				t.Fatal("renew MON candidate", err)
-			}
-			now := c.Snapshot()
-			if now.GlobalID != id || now.MDSTicket.Expires.IsZero() || !now.MDSTicket.RenewAfter.After(ticket.RenewAfter) {
-				t.Fatal(now)
+			// Only the supervisor reconnects after bootstrap (see be968a3): a
+			// direct connectMonitor call races its renewal of the due ticket and
+			// can retire this candidate. Fail the MON session to drive renewal.
+			c.mu.Lock()
+			first := c.mon
+			c.mu.Unlock()
+			first.Fail(errors.New("test: force supervised MON renewal"))
+			for {
+				now := c.Snapshot()
+				if now.GlobalID == id && !now.MDSTicket.Expires.IsZero() && now.MDSTicket.RenewAfter.After(ticket.RenewAfter) {
+					break
+				}
+				select {
+				case <-ctx.Done():
+					t.Fatal("supervised MON renewal", ctx.Err(), now)
+				case <-time.After(time.Millisecond):
+				}
 			}
 			if changedID {
 				got := mdsAwaitOutcome(t, ctx, pending)
