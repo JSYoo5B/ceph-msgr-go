@@ -14,7 +14,11 @@ as for the session profile.
 
 The multi-rank acceptance uses its own profile and fixture,
 `CEPH_MSGR_TEST_MDS_CEPHFS_RANKS=1`; see
-[MDS_CEPHFS_RANKS_FIXTURE.md](MDS_CEPHFS_RANKS_FIXTURE.md).
+[MDS_CEPHFS_RANKS_FIXTURE.md](MDS_CEPHFS_RANKS_FIXTURE.md). The
+request-completion acceptance (lost replies, replay from the
+completed-request record, denied and late reconnects, read-only, lease RENEW
+and cap snap flush) uses `CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION=1`; see
+[MDS_CEPHFS_COMPLETION_FIXTURE.md](MDS_CEPHFS_COMPLETION_FIXTURE.md).
 
 The three tests share one fixture. `go test` runs them in source file
 order: `TestCephMDSCephFSPushIntegration` (`mds_cephfs_push_test.go`) runs

@@ -55,9 +55,10 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_SESSIONS: ${{ matrix.mds_sessions || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS: ${{ matrix.mds_cephfs || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS: ${{ matrix.mds_cephfs_ranks || '0' }}", self.workflow)
+        self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        self.assertEqual(len(self.rows), 46)
-        opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "rbd")
+        self.assertEqual(len(self.rows), 48)
+        opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "rbd")
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
         self.assertEqual(len(legacy), 30)
@@ -120,7 +121,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
     def test_fresh_mds_rows_require_explicit_opt_in_and_only_their_declared_test(self):
         rows = [row for row in self.rows if row.get("mds_fresh") == "1"
                 and row.get("mds_commands", "0") == "0" and row.get("mds_sessions", "0") == "0"
-                and row.get("mds_cephfs", "0") == "0" and row.get("mds_cephfs_ranks", "0") == "0"]
+                and row.get("mds_cephfs", "0") == "0" and row.get("mds_cephfs_ranks", "0") == "0"
+                and row.get("mds_cephfs_completion", "0") == "0"]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSFreshIntegration"}
         self.assertTrue(expected <= self.declared)
@@ -211,6 +213,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertIsNone(selector.search("TestCephMDSCephFSPushIntegrationExtended"))
             self.assertIsNone(selector.search("TestCephMDSCephFSPushRecoveryIntegration"))
             self.assertIsNone(selector.search("TestCephMDSCephFSRanksIntegration"))
+            self.assertIsNone(selector.search("TestCephMDSCephFSCompletionIntegration"))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"),
                 ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
@@ -246,6 +249,31 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             ("aes256k", "aes256k", "secure", "6", "container", "memstore"),
         })
 
+    def test_mds_cephfs_completion_rows_select_only_the_declared_completion_test(self):
+        rows = [row for row in self.rows if row.get("mds_cephfs_completion") == "1"]
+        self.assertEqual(len(rows), 2)
+        expected = {"TestCephMDSCephFSCompletionIntegration"}
+        self.assertTrue(expected <= self.declared)
+        observed = set()
+        for row in rows:
+            self.assertEqual((row["mds_fresh"], row["osd_profile"], row["osd"], row["osd_replicas"], row["stress"]),
+                             ("1", "legacy-v6", "1", "1", ""))
+            for field in ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "rbd", "image", "race"):
+                self.assertNotIn(field, row)
+            selector = re.compile(row["test_run"])
+            self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
+            self.assertIsNone(selector.search("TestCephMDSCephFSCompletionIntegrationExtended"))
+            self.assertIsNone(selector.search("PrefixTestCephMDSCephFSCompletionIntegration"))
+            self.assertIsNone(selector.search("TestCephMDSCephFSIntegration"))
+            self.assertIsNone(selector.search("TestCephMDSCephFSRecoveryIntegration"))
+            observed.add(tuple(row.get(field, fallback) for field, fallback in (
+                ("key", ""), ("service", ""), ("mode", "secure"),
+                ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
+        self.assertEqual(observed, {
+            ("aes", "aes", "crc", "4", "host", "bluestore"),
+            ("aes256k", "aes256k", "secure", "6", "container", "memstore"),
+        })
+
     def test_rbd_rows_select_only_the_declared_rbd_tests(self):
         rows = [row for row in self.rows if row.get("rbd") == "1"]
         self.assertEqual(len(rows), 2)
@@ -255,7 +283,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         for row in rows:
             self.assertEqual((row["osd_profile"], row["osd"], row["osd_replicas"], row["stress"]),
                              ("legacy-v6", "1", "1", ""))
-            for field in ("mds_fresh", "mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "image", "race"):
+            for field in ("mds_fresh", "mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "image", "race"):
                 self.assertNotIn(field, row)
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, expected)

@@ -24,7 +24,10 @@ import (
 // dirty or flushing, and directories are never marked complete. It also
 // restates handle_snap (realm moves on SPLIT), handle_quota, handle_session
 // RECALL_STATE (trim_caps) and FLUSHMSG, counting every capability, lease,
-// snapshot and quota push as got_mds_push does. Agents of one client's
+// snapshot and quota push as got_mds_push does. It records a lease RENEW
+// answer (handle_lease updates the dentry's lease sequence and expiry), a
+// FORCE_RO session push (force_session_readonly; nothing is sent) and the
+// FLUSHSNAP_ACK of a cap snap flush the test sent itself. Agents of one client's
 // sessions with several ranks share one lock and restate handle_cap_export
 // and handle_cap_import between them (cephfsRankedAgents).
 
@@ -186,6 +189,23 @@ type cephfsLeaseEvent struct {
 	Error        string `json:",omitempty"`
 }
 
+// cephfsLeaseRenewal is one MClientLease RENEW answering the client's RENEW.
+type cephfsLeaseRenewal struct {
+	Arrival      uint64
+	Received     time.Time
+	PushesBefore uint64
+	Lease        cephmsgr.MDSLease
+}
+
+// cephfsFlushSnapAck is one FLUSHSNAP_ACK matched to a FLUSHSNAP the test
+// registered (inode and flush TID).
+type cephfsFlushSnapAck struct {
+	Arrival     uint64
+	Received    time.Time
+	Transaction uint64
+	Caps        cephmsgr.MDSCaps
+}
+
 // cephfsSnapEvent is one MClientSnap with its decoded SnapRealmInfoNew trace
 // and the cached inodes moved into the split realm.
 type cephfsSnapEvent struct {
@@ -280,6 +300,10 @@ type cephfsCapAgent struct {
 	rank       int32
 	peers      map[int32]*cephfsCapAgent
 	migrations []cephfsMigrationEvent
+	renewals   []cephfsLeaseRenewal
+	readOnly   []time.Time
+	flushSnaps map[uint64]uint64 // expected FLUSHSNAP_ACK: inode -> flush TID
+	snapAcks   []cephfsFlushSnapAck
 }
 
 func newCephFSCapAgent(ctx context.Context, s *cephmsgr.MDSSession) *cephfsCapAgent {
@@ -356,6 +380,11 @@ func (a *cephfsCapAgent) handleLocked(e cephmsgr.MDSSessionEvent) {
 			}
 			r.Note = fmt.Sprintf("flushmsg seq=%d agent_pushes=%d", e.Sequence, a.pushes)
 			a.flushes = append(a.flushes, ev)
+		case cephmsgr.MDSSessionOpForceReadOnly:
+			// force_session_readonly marks the session read-only and wakes
+			// writers waiting for Fw; the client sends nothing.
+			a.readOnly = append(a.readOnly, e.Received)
+			r.Note = "force read-only"
 		case cephmsgr.MDSSessionOpRecallState:
 			ev := a.trimCapsLocked(e)
 			r.Note = fmt.Sprintf("recall max_caps=%d max_leases=%d caps %d->%d released=%d", e.MaxCaps, e.MaxLeases, ev.Before, ev.After, len(ev.Released))
@@ -377,6 +406,12 @@ func (a *cephfsCapAgent) handleLeaseLocked(e cephmsgr.MDSSessionEvent) {
 	l := *e.Lease
 	a.recordLocked(cephfsCapRecord{Kind: "lease", Received: e.Received, Arrival: e.Arrival, Ino: l.Ino, Op: uint32(l.Action), Seq: l.Seq,
 		Note: fmt.Sprintf("mask=%d dentry=%q first=%d last=%#x", l.Mask, l.DentryName, l.First, l.Last)})
+	if l.Action == cephmsgr.MDSLeaseRenew {
+		// handle_lease: a RENEW refreshes the dentry lease (sequence and
+		// duration); nothing is answered.
+		a.renewals = append(a.renewals, cephfsLeaseRenewal{Arrival: e.Arrival, Received: e.Received, PushesBefore: a.pushes - 1, Lease: l})
+		return
+	}
 	if l.Action != cephmsgr.MDSLeaseRevoke {
 		a.failLocked("unexpected MDS lease action %d", l.Action)
 		return
@@ -495,6 +530,24 @@ func (a *cephfsCapAgent) trimCapsLocked(e cephmsgr.MDSSessionEvent) cephfsRecall
 	return ev
 }
 
+// expectFlushSnap registers a FLUSHSNAP the test is about to send.
+func (a *cephfsCapAgent) expectFlushSnap(ino, tid uint64) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.flushSnaps == nil {
+		a.flushSnaps = map[uint64]uint64{}
+	}
+	a.flushSnaps[ino] = tid
+}
+
+// realm returns the newest SnapRealmInfoNew seen for a realm.
+func (a *cephfsCapAgent) realm(ino uint64) (cephmsgr.MDSSnapRealm, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	r, ok := a.realms[ino]
+	return r, ok
+}
+
 // holdLease delays the RELEASE answering the next REVOKE of one dentry name.
 func (a *cephfsCapAgent) holdLease(name string, delay time.Duration) {
 	a.mu.Lock()
@@ -580,7 +633,18 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 	case cephmsgr.MDSCapOpTrunc:
 		c.Size, c.TruncateSeq, c.TruncateSize = m.Size, m.TruncateSeq, m.TruncateSize
 		a.recordLocked(r)
-	case cephmsgr.MDSCapOpFlushAck, cephmsgr.MDSCapOpFlushSnapAck:
+	case cephmsgr.MDSCapOpFlushSnapAck:
+		if tid, ok := a.flushSnaps[m.Ino]; ok && tid == e.Transaction {
+			delete(a.flushSnaps, m.Ino)
+			a.snapAcks = append(a.snapAcks, cephfsFlushSnapAck{Arrival: e.Arrival, Received: e.Received, Transaction: e.Transaction, Caps: *m})
+			r.Note = fmt.Sprintf("flushsnap ack tid %d follows %d dirty %s", e.Transaction, m.SnapFollows, cephCapString(m.Dirty))
+			a.recordLocked(r)
+			return
+		}
+		r.Note = "flush acknowledgement without a flush from this client"
+		a.recordLocked(r)
+		a.failLocked("unexpected flush acknowledgement on %d", m.Ino)
+	case cephmsgr.MDSCapOpFlushAck:
 		r.Note = "flush acknowledgement without a flush from this client"
 		a.recordLocked(r)
 		a.failLocked("unexpected flush acknowledgement on %d", m.Ino)
@@ -1175,6 +1239,9 @@ type cephfsAgentSnapshot struct {
 	// Rank and Migrations are reported for agents of a multi-rank client.
 	Rank       int32                  `json:",omitempty"`
 	Migrations []cephfsMigrationEvent `json:",omitempty"`
+	Renewals   []cephfsLeaseRenewal   `json:",omitempty"`
+	ReadOnly   []time.Time            `json:",omitempty"`
+	SnapAcks   []cephfsFlushSnapAck   `json:",omitempty"`
 }
 
 func (a *cephfsCapAgent) snapshot() cephfsAgentSnapshot {
@@ -1182,7 +1249,7 @@ func (a *cephfsCapAgent) snapshot() cephfsAgentSnapshot {
 	defer a.mu.Unlock()
 	s := cephfsAgentSnapshot{Records: slices.Clone(a.records), Pending: len(a.pending), Errors: slices.Clone(a.errs), Barrier: a.barrier, Pushes: a.pushes,
 		Leases: slices.Clone(a.leases), Snaps: slices.Clone(a.snaps), Quotas: slices.Clone(a.quotas), Recalls: slices.Clone(a.recalls), Flushes: slices.Clone(a.flushes),
-		Rank: a.rank, Migrations: slices.Clone(a.migrations)}
+		Rank: a.rank, Migrations: slices.Clone(a.migrations), Renewals: slices.Clone(a.renewals), ReadOnly: slices.Clone(a.readOnly), SnapAcks: slices.Clone(a.snapAcks)}
 	for _, c := range a.caps {
 		s.Caps = append(s.Caps, *c)
 	}
