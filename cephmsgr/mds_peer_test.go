@@ -419,7 +419,7 @@ func (p *mdsTestPeer) serve() {
 		}
 		// D2 opens no filesystem client session. Session OPEN, map selection
 		// or any other MDS message would violate the command-only contract.
-		cephfsType := m.Type == 24 || m.Type == 0x310 || m.Type == 0x311 || m.Type == 0x313
+		cephfsType := m.Type == 23 || m.Type == 24 || m.Type == 0x310 || m.Type == 0x311 || m.Type == 0x313
 		if m.Type != msgr.TellCommandMessage && !(m.Type == 22 && p.sessions.Load()) && !(cephfsType && p.cephfs) {
 			p.errors <- fmt.Errorf("MDS command transport unexpectedly sent message %d", m.Type)
 			return

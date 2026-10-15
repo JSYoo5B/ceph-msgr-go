@@ -52,6 +52,38 @@ then Lost and its address unresolved, as before. Resume is neither a CephFS
 reconnect to a new MDS incarnation nor a replay of requests: MClientReconnect
 after failover and REPLAY of unsafe requests are not implemented.
 
+## Reconnect to a new MDS incarnation
+
+When the MDS daemon of a rank restarts or fails over, the new incarnation
+has a new address/nonce and loads the session table from its journal; it
+waits in its reconnect phase (`mds_reconnect_timeout`) for clients to restore
+their capabilities and evicts the rest. Messenger resume to the old address
+then ends in RESET and the session becomes Lost. The caller, driven by its
+MDSMap watch, closes the old connection, opens a connection to the new
+address and calls `MDSConnection.ReconnectSession(ctx, lost, state,
+options)` during that phase.
+
+`MDSReconnectState` carries the caller's capabilities (inode, cap ID,
+wanted/issued masks, snap realm, short path, first cap-snap follows and an
+opaque file-lock blob) and snap realms (inode, sequence, parent). It is sent
+as MClientReconnect v5/compat4 in the data segment (`cap_reconnect_t` v2,
+`snaprealm_reconnect_t` v1, caps ordered by inode), the current format
+native clients use when the MDS advertises MULTI_RECONNECT; that MDS feature
+is required. State larger than a frame is split into several messages with
+the `more` flag, all realms in the last one. The previous session must be
+Lost, belong to the same Client and GlobalID and name the same filesystem
+label and rank at a different exact address.
+
+The MDS answers OPEN on success (`Server::handle_client_reconnect`), which
+starts a new local session generation (`Status().ReconnectedFrom` names the
+Lost one) with push sequence zero and renewals; CLOSE returns
+`ErrMDSSessionReconnectDenied` (wrapping `ErrMDSSessionClosed`): the MDS was
+not in its reconnect phase, refuses sessions, lacks a required feature or no
+longer holds the session. REJECT returns `*MDSSessionRejectedError`. Requests
+of the Lost session are not resubmitted or replayed: the native REPLAY and
+same-TID resubmission paths are not implemented. The library interprets no
+capability; the MDS decides what it restores.
+
 ## Requests
 
 `MDSSession.Submit(ctx, MDSRequest)` queues one MClientRequest (header
@@ -153,7 +185,9 @@ counting, client answers, close resend and protocol violations.
 
 ## Limits
 
-Live Messenger resume against an MDS daemon has not been verified yet; the
+MClientReconnect has synthetic coverage (ordering, splitting, OPEN and CLOSE
+answers, validation) but no native vector or live MDS restart yet. Live
+Messenger resume against an MDS daemon has not been verified yet; the
 synthetic peers cover retransmission, retry/reset answers, bounds and the
 public request continuity. No path walking, inode or dentry cache, capability bookkeeping, lease
 expiry, snapshot realm tree, dirty metadata or data writeback, file locks,

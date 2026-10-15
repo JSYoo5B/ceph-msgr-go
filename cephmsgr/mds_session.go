@@ -148,6 +148,7 @@ type MDSSessionStatus struct {
 	Generation, ConnectionGeneration, GlobalID uint64
 	Target                                     MDSTarget
 	PushSequence, RenewSequence                uint64
+	ReconnectedFrom                            uint64
 	LastRenewal                                MDSSessionRenewal
 	Open                                       MDSSessionOpenInfo
 	ReadOnly                                   bool
@@ -184,6 +185,9 @@ type MDSSession struct {
 	queued bool
 	// requests tracks submitted CephFS metadata requests by TID.
 	requests map[uint64]*MDSRequestCall
+	// reconnectFrom is the generation of the Lost session this one
+	// reconnects (zero for a fresh REQUEST_OPEN).
+	reconnectFrom uint64
 }
 
 // OpenSession sends one REQUEST_OPEN on this connection and waits for OPEN.
@@ -197,14 +201,8 @@ func (m *MDSConnection) OpenSession(ctx context.Context, options MDSSessionOptio
 		return nil, err
 	}
 	c := m.client
-	if options.RenewInterval <= 0 {
-		return nil, errors.New("ceph: MDS session requires a positive RenewInterval")
-	}
-	if options.MaxEvents == 0 {
-		options.MaxEvents = 64
-	}
-	if options.MaxEvents < 1 || options.MaxEvents > 4096 {
-		return nil, errors.New("ceph: MDS session MaxEvents must be between 1 and 4096")
+	if err := validateSessionOptions(&options); err != nil {
+		return nil, err
 	}
 	if uint32(len(options.Metadata)) > mds.MaxSessionMetadata {
 		return nil, fmt.Errorf("ceph: MDS session metadata entry count: %w", ErrLimitExceeded)
@@ -217,6 +215,26 @@ func (m *MDSConnection) OpenSession(ctx context.Context, options MDSSessionOptio
 	if uint64(len(request.Front))+41 > uint64(c.options.MaxFrameSize) {
 		return nil, fmt.Errorf("ceph: MDS session metadata exceeds frame limit: %w", ErrLimitExceeded)
 	}
+	return m.beginSession(ctx, options, []msgr.MessageData{request}, 0)
+}
+
+func validateSessionOptions(options *MDSSessionOptions) error {
+	if options.RenewInterval <= 0 {
+		return errors.New("ceph: MDS session requires a positive RenewInterval")
+	}
+	if options.MaxEvents == 0 {
+		options.MaxEvents = 64
+	}
+	if options.MaxEvents < 1 || options.MaxEvents > 4096 {
+		return errors.New("ceph: MDS session MaxEvents must be between 1 and 4096")
+	}
+	return nil
+}
+
+// beginSession admits one session on m, queues its opening messages
+// (REQUEST_OPEN, or the MClientReconnect sequence) and waits for OPEN.
+func (m *MDSConnection) beginSession(ctx context.Context, options MDSSessionOptions, messages []msgr.MessageData, reconnectFrom uint64) (*MDSSession, error) {
+	c := m.client
 	c.mu.Lock()
 	if c.closed || m.closed || m.ctx.Err() != nil {
 		c.mu.Unlock()
@@ -252,18 +270,27 @@ func (m *MDSConnection) OpenSession(ctx context.Context, options MDSSessionOptio
 	c.mdsSessionGeneration++
 	session := &MDSSession{conn: m, generation: c.mdsSessionGeneration, renewInterval: options.RenewInterval, maxEvents: options.MaxEvents,
 		renewNow: make(chan struct{}, 1), closeNow: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}), state: MDSSessionOpening,
-		changed: make(chan struct{}), renewSent: make(map[uint64]time.Time)}
+		changed: make(chan struct{}), renewSent: make(map[uint64]time.Time), reconnectFrom: reconnectFrom}
 	m.cephfs = session
 	c.mu.Unlock()
-	// Admission only: after success the queued REQUEST_OPEN is ordered before
+	// Admission only: after success each queued message is ordered before
 	// every later message even if ctx ends.
-	session.mu.Lock()
-	err := s.SendControl(ctx, request)
-	session.queued = err == nil
-	session.mu.Unlock()
-	if err != nil {
-		session.finish(MDSSessionLost, err, false)
+	for i, message := range messages {
+		session.mu.Lock()
+		err := s.SendControl(ctx, message)
+		if err == nil {
+			session.queued = true
+		}
+		session.mu.Unlock()
+		if err == nil {
+			continue
+		}
+		// After the first message the MDS may hold a partial session.
+		session.finish(MDSSessionLost, err, i > 0)
 		close(session.stopped)
+		if i > 0 {
+			return nil, &OutcomeUnknownError{Cause: err}
+		}
 		if s.Err() != nil {
 			return nil, err
 		}
@@ -312,7 +339,7 @@ func (s *MDSSession) Status() MDSSessionStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return MDSSessionStatus{State: s.state, Generation: s.generation, ConnectionGeneration: m.generation, GlobalID: m.globalID, Target: m.target,
-		PushSequence: s.push, RenewSequence: s.renewSeq, LastRenewal: s.renewal, Open: cloneOpenInfo(s.open), ReadOnly: s.readOnly, Err: s.err}
+		PushSequence: s.push, RenewSequence: s.renewSeq, ReconnectedFrom: s.reconnectFrom, LastRenewal: s.renewal, Open: cloneOpenInfo(s.open), ReadOnly: s.readOnly, Err: s.err}
 }
 
 // Next returns the oldest unsolicited session event. Accepted events remain
@@ -625,6 +652,9 @@ func (s *MDSSession) dispatch(message mds.ClientSession, received time.Time) err
 		}
 	case mds.SessionClose:
 		terminal, cause = MDSSessionClosed, ErrMDSSessionClosed
+		if s.reconnectFrom != 0 && s.state == MDSSessionOpening {
+			cause = fmt.Errorf("%w: %w", ErrMDSSessionReconnectDenied, ErrMDSSessionClosed)
+		}
 	case mds.SessionReject:
 		reason := message.Metadata["error_string"]
 		terminal, cause = MDSSessionRejected, &MDSSessionRejectedError{Reason: reason, Flags: message.Flags, Blocklisted: message.Flags&mds.SessionFlagBlocklisted != 0, Metadata: message.Metadata}

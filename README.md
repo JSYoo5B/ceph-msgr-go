@@ -390,8 +390,15 @@ CephFS profile의 MDS 연결은 native client처럼 lossless로 동작한다. TC
 이어간다. 확인받지 못한 message는 원래 sequence로 다시 보내므로 CephFS session과
 진행 중 요청이 유지되며 `MDSConnection.Resumes`로 재개 횟수를 확인한다. MDS가
 RESET으로 답하거나 30초 안에 재개하지 못하면 연결을 끝내고 session은 Lost가 된다.
-이것은 MDS failover 뒤의 CephFS reconnect나 요청 replay가 아니며 두 기능은 아직
-구현하지 않았다.
+이것은 MDS 재시작 뒤의 CephFS reconnect와 다르다.
+
+MDS daemon이 재시작하거나 failover하면 새 incarnation은 새 주소·nonce를 쓰므로
+재개는 RESET으로 끝나고 session은 Lost가 된다. 호출자는 MDSMap에서 새 주소를 확인해
+이전 연결을 닫고 새 연결을 연 뒤, MDS의 reconnect 단계 안에
+`ReconnectSession(ctx, lost, state, options)`을 호출한다. 호출자가 보유한
+capability와 snap realm 상태를 MClientReconnect v5로 보내며 MDS가 OPEN으로 답하면
+새 session generation이 시작된다. CLOSE는 `ErrMDSSessionReconnectDenied`로 반환한다.
+이전 session의 요청 replay와 같은 TID 재전송은 아직 구현하지 않았다.
 
 MDS가 보내는 capability·lease·snap realm·quota 메시지는 MDS와 같은 방식으로 push
 sequence에 세고 `Next`로 도착 순서대로 전달한다. Revoke 응답, flush, capability
