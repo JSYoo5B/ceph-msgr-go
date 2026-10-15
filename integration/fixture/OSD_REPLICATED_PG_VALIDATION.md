@@ -129,9 +129,13 @@ Final logs, each with a matching diagnostic directory under `/private/tmp`:
 - `ceph-osd-backoff-crc-aes-final.log`
 - `ceph-osd-backoff-secure-aes256k-ipv6-final.log`
 
-Selected native profiles do not establish split/force-resend recovery, actual
-upmap changes, single-object backoff, backoff during authentication renewal or
-failover, broad platform/configuration coverage, or default optimal CRUSH.
+Subsequent [split/merge acceptance](OSD_SPLIT_VALIDATION.md) separately verifies
+single-OSD actual 8→16→8 PG changes, uncertain request identity preservation and
+caller-supplied fresh child I/O on CRC/AES BlueStore and secure/AES256K IPv6
+MemStore. It adds no automatic split detection, routing or replay. Selected
+native profiles still do not establish actual upmap changes, single-object
+backoff, backoff during authentication renewal or failover, broad
+platform/configuration coverage, or default optimal CRUSH.
 Standalone reply-v8 parity is not public v8-reply interoperability. Remote CI
 success is separate from these local results.
 

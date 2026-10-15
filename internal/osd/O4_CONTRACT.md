@@ -207,11 +207,20 @@ and PG delivery; it is not direct inspection of internal server ACKED state.
 Fresh native v8 request vectors and native BACKOFF vectors support the offline
 wire comparison. Synthetic tests separately cover fixed-profile negotiation,
 placement validation, source replacement, gate/ACK ordering, controls sharing a
-pending TID, cancellation, bounds, Close and no replay. These are not substitutes
-for forced native split, primary-change or every BACKOFF ordering.
+pending TID, cancellation, bounds, Close and no replay. These do not establish primary-change or every BACKOFF ordering.
 
-Remaining native acceptance includes single-object bounds, PG split/merge with
-an in-flight operation, primary changes, upmap placement, all operation families
+The subsequent [actual split/merge acceptance](../../integration/fixture/OSD_SPLIT_VALIDATION.md)
+passed one case each on CRC/AES single BlueStore and secure/AES256K IPv6 single
+MemStore. It holds an independently observed mutation's reply across an actual
+8→16 PG split, preserves two uncertain submissions' original identities,
+attributes a stale parent envelope in native history, and issues separate
+caller-placed child I/O before restoring all actual/target/pending PG counts to
+eight and cleaning owned heads. Native envelope reception and an unchanged
+snapshot do not establish nonexecution; no uncertain mutation is replayed.
+This remains selected single-OSD evidence, with no automatic split handling.
+
+Remaining native acceptance includes single-object bounds, primary changes,
+upmap placement, all operation families
 on the final profile, ticket renewal and broader security/topology combinations.
 The newer reply codec foundation does not activate bit 58; default optimal
 CRUSH/reply-bit58 profile acceptance remains a separate milestone.

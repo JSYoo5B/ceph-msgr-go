@@ -47,6 +47,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
     def test_closed_profile_and_selector_reach_the_fixture(self):
         self.assertIn("CEPH_MSGR_TEST_OSD_PROFILE: ${{ matrix.osd_profile || 'legacy-v6' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}", self.workflow)
+        self.assertEqual(len(self.rows), 32)
+        self.assertEqual(sum(row.get("osd_profile", "legacy-v6") == "legacy-v6" for row in self.rows), 30)
         for row in self.rows:
             profile = row.get("osd_profile", "legacy-v6")
             self.assertIn(profile, {"legacy-v6", "replicated-pg-v8"})
@@ -76,6 +78,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         expected = {
             "TestCephOSDReplicatedPGIntegration", "TestCephOSDPGListV8Integration",
             "TestCephOSDBackoffIntegration", "TestCephOSDBackoffLateAckIntegration",
+            "TestCephOSDWatchReconnectIntegration", "TestCephOSDSplitIntegration",
         }
         self.assertTrue(expected <= declared)
         for row in self.rows:
@@ -83,9 +86,15 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                 continue
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in declared if selector.search(name)}, expected)
-            for unready in ("TestCephOSDSplitIntegration", "TestCephOSDWatchReconnectIntegration",
-                            "TestCephOSDSparseReadIntegration", "TestCephOSDPGListIntegration"):
+            for unready in ("TestCephOSDSparseReadIntegration", "TestCephOSDPGListIntegration",
+                            "TestCephOSDMapExtIntegration", "TestCephOSDChecksumIntegration",
+                            "TestCephMDSMapIntegration"):
                 self.assertIsNone(selector.search(unready))
+            # Go also applies -run to subtest path components. Keep unrelated
+            # names and similarly prefixed future tests outside this opt-in.
+            for name in expected:
+                self.assertIsNone(selector.search(name + "Extended"))
+                self.assertIsNone(selector.search("Prefix" + name))
 
 
 if __name__ == "__main__":
