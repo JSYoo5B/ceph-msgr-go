@@ -139,11 +139,11 @@ and no pending revoke is never marked STALE first; STALE after
 closing connections or the Client; `Client.Close` does not perform a graceful
 CephFS close.
 
-Each Messenger connection of this client uses its own random address nonce.
-An eviction blocklist therefore names the MDS connection's address, not the
-client's MON/OSD connections. That is acceptable only because this stage
-performs no CephFS data I/O; coupling OSD writes to a CephFS session (M2) must
-first bind OSD connections to the blocklisted session identity.
+Without `EnableCephFS` each Messenger connection uses its own random address
+nonce, so an eviction blocklist names only the MDS connection's address. With
+`EnableCephFS` every MDS and OSD connection of the client shares one address
+nonce (`State.CephFSNonce`), as a native client's single messenger does; see
+`MDS_CEPHFS_CONTRACT.md` for the fencing consequence.
 
 ## Server behavior relied on
 

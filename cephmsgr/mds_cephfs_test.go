@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/mds"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
@@ -453,5 +454,72 @@ func TestCephFSMessengerResumeKeepsSessionAndRequests(t *testing.T) {
 	second.send(t, mdsSessionReply(mds.SessionClose, 0))
 	if err := <-closed; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCephFSClientSharesOneAddressNonceForMDSAndOSD(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	options := mockOptions(t, 20, [16]byte{1})
+	options.EnableMDS, options.EnableCephFS, options.EnableOSD, options.MaxMDSConnections = true, true, true, 4
+	nonces := make(chan uint32, 8)
+	capture := func(addresses []msgr.Address) {
+		if len(addresses) == 1 {
+			nonces <- addresses[0].Nonce
+		} else {
+			nonces <- 0
+		}
+	}
+	options.DialContext = func(ctx context.Context, _, endpoint string) (net.Conn, error) {
+		clientPipe, server := net.Pipe()
+		switch endpoint {
+		case "192.0.2.1:6805":
+			peer := &mdsTestPeer{conn: server, client: &mdsTestClientConn{Conn: clientPipe}, requests: make(chan msgr.MessageData, 8), done: make(chan struct{}), errors: make(chan error, 1), cephfs: true}
+			go func() {
+				defer server.Close()
+				r, _, err := mdsMockAuthenticate(server, peerConfig{role: 2, cephfs: true, clientAddresses: capture})
+				if err == nil {
+					r.Read()
+				}
+			}()
+			return peer.client, nil
+		case "192.0.2.1:6804":
+			go func() {
+				defer server.Close()
+				r, _, err := mockAuthenticate(server, peerConfig{role: 4, clientAddresses: capture})
+				if err == nil {
+					r.Read()
+				}
+			}()
+		default:
+			go mdsMockMonitorServices(server, 42, cephx.ServiceAuth|cephx.ServiceMgr|cephx.ServiceOSD|cephx.ServiceMDS)
+		}
+		return clientPipe, nil
+	}
+	c, err := Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	shared := c.Snapshot().CephFSNonce
+	if shared == 0 {
+		t.Fatal("CephFS client has no shared nonce")
+	}
+	if _, err := c.OpenMDS(ctx, MDSTarget{FilesystemID: 7, Rank: 0, Address: "v2:192.0.2.1:6805/17"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-nonces; got != shared {
+		t.Fatal("MDS ClientIdent nonce", got, shared)
+	}
+	if _, err := c.OpenOSD(ctx, OSDTarget{Address: "192.0.2.1:6804"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := <-nonces; got != shared {
+		t.Fatal("OSD ClientIdent nonce", got, shared)
+	}
+	// The MDS registers stateful connections by this address instance: a
+	// second handle (another filesystem label) at that address is refused.
+	if _, err := c.OpenMDS(ctx, MDSTarget{FilesystemID: 8, Rank: 0, Address: "v2:192.0.2.1:6805/17"}); !errors.Is(err, ErrMDSAddressInUse) {
+		t.Fatal("second CephFS handle at one MDS address", err)
 	}
 }

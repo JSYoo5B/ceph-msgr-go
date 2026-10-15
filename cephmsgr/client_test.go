@@ -181,6 +181,8 @@ type peerConfig struct {
 	// reconnect answers a SESSION_RECONNECT instead of ClientIdent; only a
 	// SESSION_RECONNECT_OK answer admits the resumed connection.
 	reconnect func(msgr.Frame) (msgr.Tag, []byte)
+	// clientAddresses observes the ClientIdent address vector.
+	clientAddresses func([]msgr.Address)
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
@@ -417,10 +419,13 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		return nil, nil, err
 	}
 	clientIdent := wire.NewDecoder(p)
-	msgr.DecodeAddresses(clientIdent)
+	clientAddresses := msgr.DecodeAddresses(clientIdent)
 	target := msgr.DecodeAddress(clientIdent)
 	if err := clientIdent.Err(); err != nil {
 		return nil, nil, err
+	}
+	if cfg.clientAddresses != nil {
+		cfg.clientAddresses(clientAddresses)
 	}
 	if cfg.ident != nil {
 		cfg.ident(target)

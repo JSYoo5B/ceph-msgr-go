@@ -97,6 +97,23 @@ duplicate-suppression scope. A request the MDS never received executes as
 new. `ReconnectSession` returns the new calls in the order given; they hold
 MaxInFlight slots like new requests. `oldest_client_tid` includes them.
 
+## Shared client address instance (fencing)
+
+An `EnableCephFS` client draws one nonzero random address nonce at Dial
+(`State.CephFSNonce`) and uses it in the ClientIdent address of every MDS and
+OSD connection (MON/MGR connections keep per-connection nonces). The address
+is the server-reported client IP with port 0. When an MDS evicts the
+session it blocklists that `ip:0/nonce`; OSDs compare an op's source address
+exactly (`OSDMap::is_blocklisted`, `PrimaryLogPG::do_op` returns
+`-EBLOCKLISTED`), so the same entry fences this client's OSD data I/O from
+that IP, as for a native client. Connections that reach the cluster through
+different local IPs are fenced only per IP. Because the MDS registers
+stateful connections by this address instance, the profile refuses a second
+handle to one MDS address under another filesystem label
+(`ErrMDSAddressInUse`). The OSD already keeps one connection per target.
+Clearing a blocklist entry or opening a new Client (new nonce) is the
+caller's decision.
+
 ## Requests
 
 `MDSSession.Submit(ctx, MDSRequest)` queues one MClientRequest (header
@@ -209,6 +226,5 @@ synthetic peers cover retransmission, retry/reset answers, bounds and the
 public request continuity. No path walking, inode or dentry cache, capability bookkeeping, lease
 expiry, snapshot realm tree, dirty metadata or data writeback, file locks,
 reconnect after MDS failover, request replay, delegated inodes or async
-operations are implemented. Data I/O against OSDs is not coupled to the
-session: OSD connections use their own address nonces, so an MDS eviction
-blocklist does not fence them (M2).
+operations are implemented. File data I/O semantics (layout, striping,
+flush ordering against capabilities) remain the consumer's.

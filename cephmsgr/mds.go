@@ -18,6 +18,9 @@ var (
 	ErrMDSConnectionLimit = errors.New("ceph: MDS connection limit reached")
 	ErrMDSTargetChanged   = errors.New("ceph: MDS filesystem/rank already has a different connection target")
 	ErrMDSIdentityChanged = errors.New("ceph: MDS connection belongs to an earlier client identity")
+	// ErrMDSAddressInUse refuses a second CephFS-profile connection to one
+	// MDS address under another filesystem label.
+	ErrMDSAddressInUse = errors.New("ceph: CephFS profile allows one connection per MDS address")
 )
 
 // MDSTarget is supplied by the caller's routing layer. FilesystemID is local
@@ -91,6 +94,13 @@ func (c *Client) OpenMDS(ctx context.Context, target MDSTarget) (*MDSConnection,
 		if other != key && held.address == address && held.cephfs != nil {
 			c.mu.Unlock()
 			return nil, ErrMDSSessionActive
+		}
+		// CephFS connections share one client address instance; the MDS
+		// registers stateful connections by it, so a second one would
+		// replace (and reset) the first.
+		if other != key && held.address == address && c.options.EnableCephFS {
+			c.mu.Unlock()
+			return nil, ErrMDSAddressInUse
 		}
 	}
 	if held := c.mdss[key]; held != nil {

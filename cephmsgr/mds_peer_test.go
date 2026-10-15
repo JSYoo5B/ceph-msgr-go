@@ -282,6 +282,9 @@ func mdsMockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Wri
 	clientIdent := wire.NewDecoder(p)
 	clientAddresses := msgr.DecodeAddresses(clientIdent)
 	target := msgr.DecodeAddress(clientIdent)
+	if cfg.clientAddresses != nil {
+		cfg.clientAddresses(clientAddresses)
+	}
 	clientID, _ := clientIdent.U64(), clientIdent.U64()
 	supported, required := clientIdent.U64(), clientIdent.U64()
 	flags, cookie := clientIdent.U64(), clientIdent.U64()
@@ -477,9 +480,13 @@ func mdsMockMonitor(conn net.Conn) error {
 }
 
 func mdsMockMonitorID(conn net.Conn, id uint64) error {
+	return mdsMockMonitorServices(conn, id, cephx.ServiceAuth|cephx.ServiceMgr|cephx.ServiceMDS)
+}
+
+func mdsMockMonitorServices(conn net.Conn, id uint64, services uint32) error {
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
-	r, w, err := mdsMockAuthenticate(conn, peerConfig{role: 1, clientID: id, services: cephx.ServiceAuth | cephx.ServiceMgr | cephx.ServiceMDS})
+	r, w, err := mdsMockAuthenticate(conn, peerConfig{role: 1, clientID: id, services: services})
 	if err != nil {
 		return err
 	}

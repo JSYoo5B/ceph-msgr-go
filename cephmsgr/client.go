@@ -2,6 +2,8 @@ package cephmsgr
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"net"
@@ -58,6 +60,9 @@ type Client struct {
 	// without a confirmed CLOSE/REJECT; mdsSessionGeneration counts sessions.
 	mdsUnresolved        map[msgr.Address]bool
 	mdsSessionGeneration uint64
+	// cephfsNonce is the shared MDS/OSD address nonce of an EnableCephFS
+	// client; immutable after Dial.
+	cephfsNonce uint32
 
 	fsMapWatch, mdsMapWatch             *monMDSMapWatch
 	mdsMapBindings                      map[*session.Session]mdsMapBinding
@@ -161,6 +166,16 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	}
 	base, cancel := context.WithCancel(context.Background())
 	c := &Client{options: options, ctx: base, cancel: cancel, changed: make(chan struct{}), auth: auth, sessions: make(map[*session.Session]struct{}), mgrGate: make(chan struct{}, 1), wake: make(chan struct{}, 1), calls: make(chan struct{}, options.MaxInFlight), osds: make(map[int32]*OSDConnection)}
+	if options.EnableCephFS {
+		var random [4]byte
+		for c.cephfsNonce == 0 {
+			if _, err := rand.Read(random[:]); err != nil {
+				cancel()
+				return nil, err
+			}
+			c.cephfsNonce = binary.LittleEndian.Uint32(random[:])
+		}
+	}
 	c.authTrace = authTraceFromContext(ctx)
 	if options.ExpectedFSID != "" {
 		c.fsid, err = parseFSID(options.ExpectedFSID)
@@ -293,7 +308,12 @@ func (c *Client) openHandshake(ctx context.Context, endpoint string, address msg
 		}
 	}
 	if freshMDSRank != nil && c.options.EnableCephFS {
-		return session.HandshakeFreshCephFS(ctx, conn, address, *freshMDSRank, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)
+		return session.HandshakeFreshCephFS(ctx, conn, address, *freshMDSRank, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout, c.cephfsNonce)
+	}
+	if role == 4 && c.options.EnableCephFS {
+		// OSD connections share the CephFS client's address instance so an
+		// MDS eviction blocklist entry also fences its data I/O.
+		return session.HandshakeNonce(ctx, conn, address, role, id, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout, c.cephfsNonce)
 	}
 	if freshMDSRank != nil {
 		return session.HandshakeFreshMDS(ctx, conn, address, *freshMDSRank, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)

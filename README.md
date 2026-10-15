@@ -345,10 +345,10 @@ MDS는 session을 연결이 아니라 client GlobalID에 묶는다. 같은 Globa
 같은 Client가 새 연결이나 두 번째 session을 만들지 않고 `ErrMDSSessionActive`를
 반환한다. 확인되지 않은 원격 session은 MDS의 `session_autoclose` 뒤 eviction되며 기본
 설정에서는 해당 주소가 blocklist된다. 기본값 `mds_defer_session_stale=true`에서는 cap이
-없는 session을 그 전에 STALE로 표시하지 않는다. 다른 session이 필요하면 새 Client를 사용한다. 각
-Messenger 연결은 별도의 주소 nonce를 쓰므로 eviction blocklist는 이 client의
-OSD 연결을 막지 않는다. 데이터 I/O를 session과 결합하는 단계(M2)에서 이 관계를
-먼저 맞춰야 한다. 자세한 범위는 [session 계약](cephmsgr/MDS_SESSION_CONTRACT.md)에
+없는 session을 그 전에 STALE로 표시하지 않는다. 다른 session이 필요하면 새 Client를 사용한다.
+기본 profile에서는 연결마다 별도의 주소 nonce를 쓰지만 `EnableCephFS` client는 native처럼
+MDS·OSD 연결이 하나의 nonce(`State.CephFSNonce`)를 공유한다. 그래서 MDS eviction이
+남기는 `ip:0/nonce` blocklist가 같은 IP에서 나간 이 client의 OSD I/O도 막는다. 자세한 범위는 [session 계약](cephmsgr/MDS_SESSION_CONTRACT.md)에
 정리했다. 실제 Tentacle 20.2.4 MDS에서 CRC/AES host IPv4 BlueStore와 secure/AES256K
 container IPv6 MemStore 구성이 각각 9개 사례를 통과했다. Native `session ls`의
 metadata·feature bit, 주기 갱신, STALE 뒤 자동 재개, 확인된 종료, 세 가지 REJECT

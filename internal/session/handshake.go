@@ -246,7 +246,16 @@ var ErrSessionReset = errors.New("ceph messenger: peer reset the stateful sessio
 // Handshake takes ownership of conn, closing it on failure. The context and
 // deadline govern only setup; a successful connection has its deadline cleared.
 func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (*Transport, error) {
-	return handshake(ctx, conn, target, role, expectedID, auth, mode, limit, timeout, lossyHandshake, nil)
+	return handshake(ctx, conn, target, role, expectedID, auth, mode, limit, timeout, lossyHandshake, nil, 0)
+}
+
+// HandshakeNonce is Handshake with a fixed client address nonce (nonzero).
+func HandshakeNonce(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, nonce uint32) (*Transport, error) {
+	if nonce == 0 {
+		conn.Close()
+		return nil, errors.New("ceph messenger: fixed client nonce must be nonzero")
+	}
+	return handshake(ctx, conn, target, role, expectedID, auth, mode, limit, timeout, lossyHandshake, nil, nonce)
 }
 
 // HandshakeFreshMDS authenticates one fresh Messenger connection to an active
@@ -259,7 +268,7 @@ func HandshakeFreshMDS(ctx context.Context, conn net.Conn, target msgr.Address, 
 		conn.Close()
 		return nil, errors.New("ceph messenger: fresh MDS connection requires a nonnegative active rank")
 	}
-	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshMDSHandshake, nil)
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshMDSHandshake, nil, 0)
 }
 
 // CephFSFeatures adds the Messenger features whose CephFS client encodings
@@ -274,12 +283,12 @@ const CephFSFeatures uint64 = Features | 1<<3 | 1<<7 | 1<<26 | 1<<27 | 1<<37 | 1
 // HandshakeFreshCephFS is HandshakeFreshMDS for a CephFS client profile. The
 // MDS must support every CephFSFeatures bit; a server lacking one is refused
 // before any CephFS message, instead of falling back to older encodings.
-func HandshakeFreshCephFS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (*Transport, error) {
+func HandshakeFreshCephFS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, nonce uint32) (*Transport, error) {
 	if rank < 0 {
 		conn.Close()
 		return nil, errors.New("ceph messenger: fresh MDS connection requires a nonnegative active rank")
 	}
-	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake, nil)
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake, nil, nonce)
 }
 
 // HandshakeResumeCephFS authenticates a new connection to the same MDS and
@@ -293,7 +302,7 @@ func HandshakeResumeCephFS(ctx context.Context, conn net.Conn, target msgr.Addre
 		conn.Close()
 		return nil, errors.New("ceph messenger: incomplete stateful MDS resume state")
 	}
-	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake, &state)
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake, &state, 0)
 }
 
 type handshakePolicy uint8
@@ -304,7 +313,7 @@ const (
 	freshCephFSHandshake
 )
 
-func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, policy handshakePolicy, resume *ResumeState) (_ *Transport, err error) {
+func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, policy handshakePolicy, resume *ResumeState, nonce uint32) (_ *Transport, err error) {
 	if target.Endpoint.IsValid() {
 		// Retain the target's wire family, including mapped IPv6. IPv6 scope
 		// is carried by ScopeID rather than a Go address zone.
@@ -546,6 +555,11 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 		return nil, err
 	}
 	myAddr.Type, myAddr.Nonce = 2, binary.LittleEndian.Uint32(random[:4])
+	if nonce != 0 {
+		// A caller-fixed client instance nonce (shared by a CephFS client's
+		// MDS and OSD connections so one blocklist entry fences both).
+		myAddr.Nonce = nonce
+	}
 	if myAddr.Endpoint.IsValid() {
 		myAddr.Endpoint = netip.AddrPortFrom(myAddr.Endpoint.Addr(), 0)
 	}

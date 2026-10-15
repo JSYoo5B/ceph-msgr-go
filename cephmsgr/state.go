@@ -22,6 +22,10 @@ type State struct {
 	MDSTicket     TicketState          // Zero unless EnableMDS obtained a service ticket.
 	OSDTicket     TicketState          // Zero unless EnableOSD obtained a service ticket.
 	AuthRejection *AuthenticationError // A copy of an explicit MON rejection.
+	// CephFSNonce is the client address nonce shared by every MDS and OSD
+	// connection of an EnableCephFS client (zero otherwise). An MDS eviction
+	// blocklists ip:0/nonce, which also fences those OSD connections.
+	CephFSNonce uint32
 }
 
 // MonitorState describes the authenticated MonMap and the held MON session.
@@ -114,7 +118,7 @@ type TicketState struct {
 // of the client. Ready is false after Close or an explicit auth rejection.
 func (c *Client) Snapshot() State {
 	c.mu.Lock()
-	state := State{Closed: c.closed, GlobalID: c.auth.GlobalID}
+	state := State{Closed: c.closed, GlobalID: c.auth.GlobalID, CephFSNonce: c.cephfsNonce}
 	if c.fsid != [16]byte{} {
 		state.FSID = fmt.Sprintf("%x-%x-%x-%x-%x", c.fsid[:4], c.fsid[4:6], c.fsid[6:8], c.fsid[8:10], c.fsid[10:])
 	}
