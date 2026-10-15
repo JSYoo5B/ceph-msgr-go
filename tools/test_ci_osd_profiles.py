@@ -249,7 +249,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
     def test_rbd_rows_select_only_the_declared_rbd_tests(self):
         rows = [row for row in self.rows if row.get("rbd") == "1"]
         self.assertEqual(len(rows), 2)
-        expected = {"TestCephRBDBaseIntegration", "TestCephRBDWriteIntegration"}
+        expected = {"TestCephRBDBaseIntegration", "TestCephRBDWriteIntegration", "TestCephRBDExclusiveLockIntegration"}
         self.assertTrue(expected <= self.declared)
         observed = set()
         for row in rows:
@@ -266,6 +266,9 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertIsNone(selector.search("TestCephRBDIntegration"))
             self.assertIsNone(selector.search("TestCephOSDIOIntegration"))
             self.assertIsNone(selector.search("TestRBDWriteTestOnlyEncodings"))
+            self.assertIsNone(selector.search("TestRBDLockTestOnlyEncodings"))
+            self.assertIsNone(selector.search("TestCephRBDExclusiveLockIntegrationExtended"))
+            self.assertIsNone(selector.search("TestCephRBDLockIntegration"))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"),
                 ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))

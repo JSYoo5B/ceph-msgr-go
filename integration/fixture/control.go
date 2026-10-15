@@ -159,6 +159,16 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	if fields, err := c.request(out, "rbd-lock"); err != nil {
+		return err
+	} else if fields != nil {
+		if err := c.rbdLockControl(ctx, out, fields); err != nil {
+			return err
+		}
+		if err := publishAck(out, "rbd-lock-completed."+fields[0]); err != nil {
+			return err
+		}
+	}
 	if fields, err := c.request(out, "mds-fresh-observe"); err != nil {
 		return err
 	} else if fields != nil {

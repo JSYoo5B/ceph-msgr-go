@@ -140,6 +140,12 @@ type rbdBaseScope struct {
 	writePlan          rbdWritePlan
 	writeLastRequestID int64
 	writeNext          int
+	// The RBD exclusive-lock acceptance's third image in the same owned
+	// pool (rbd_lock.go): its plan, the last control request and the index
+	// of the next admitted action.
+	lockPlan          rbdLockPlan
+	lockLastRequestID int64
+	lockNext          int
 }
 
 func (x *rbdBaseScope) mutated(kind string) bool {
@@ -183,7 +189,7 @@ func (c *fixtureCluster) rbdBaseJournal() error {
 		native = "client.rbd-base-native-" + x.token
 	}
 	return writeMDSFreshJSON(x.out, "rbd-base-owned.json", map[string]any{
-		"source_commit": rbdBaseSource, "token": x.token, "fsid": c.profile.fsid, "plan": x.plan, "write_plan": x.writePlan, "pool_intended": x.poolIntent, "pool_id": x.poolID,
+		"source_commit": rbdBaseSource, "token": x.token, "fsid": c.profile.fsid, "plan": x.plan, "write_plan": x.writePlan, "lock_plan": x.lockPlan, "pool_intended": x.poolIntent, "pool_id": x.poolID,
 		"client_identity": identity, "native_identity": native, "mutations": x.mutations,
 	})
 }
@@ -610,8 +616,8 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 		return err
 	}
 	token := hex.EncodeToString(raw[:])
-	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), writePlan: rbdWritePlanFor(token), poolID: -1}
-	if !x.plan.owned(token) || !x.writePlan.owned(token) {
+	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), writePlan: rbdWritePlanFor(token), lockPlan: rbdLockPlanFor(token), poolID: -1}
+	if !x.plan.owned(token) || !x.writePlan.owned(token) || !x.lockPlan.owned(token) {
 		return errors.New("RBD base plan is not bound to its token")
 	}
 	c.rbdBase = x
@@ -807,8 +813,9 @@ type rbdBaseCleanup struct {
 	Errors                []string           `json:"errors,omitempty"`
 }
 
-// finishRBDBase runs once. It removes only owned state: the pool (its image,
-// snapshot and CRUSH rule go with it; any lingering watch is discarded) and
+// finishRBDBase runs once. It removes only owned state: the pool (its images,
+// snapshots, lock attributes, object maps and CRUSH rule go with it; any
+// lingering watch is discarded) and
 // the two identities, then proves the pool's absence from a native OSDMap.
 func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 	if c == nil || c.rbdBase == nil {

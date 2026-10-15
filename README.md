@@ -456,7 +456,20 @@ Go가 보낸 `rbd.set_size`와 `rbd.metadata_set`은 native librbd의 stat과 me
 librbd가 image를 연 채로 있을 때 Go가 header 크기를 바꾸고 HeaderUpdate notify를 보내자
 librbd는 `ResponseMessage(0)`으로 ack했고, image를 다시 열지 않고도 바뀐 크기를 읽었다.
 [쓰기 검증 기록](integration/fixture/RBD_WRITE_VALIDATION.md)에 두 구성의 결과를 남겼다.
-Exclusive-lock·object-map image와 clone/parent는 아직 검증하지 않았다.
+Exclusive-lock 경로는 같은 pool에 `exclusive-lock`·`object-map`·`fast-diff` feature로 만든
+세 번째 image로 검증했다(시험 전용 코드 `integration/rbd_lock_test.go`). Native librbd가
+image를 쓰기 모드로 열어 lock을 잡은 상태에서 Go는 `lock.get_info`와 LIST_WATCHERS로
+소유자의 cookie(`auto <watch handle>`)와 tag(`internal`)를 읽었다. Go가 자기 header watch를
+등록하고 RequestLock notify를 보내자 librbd는 기본 자동 정책대로 `ResponseMessage(0)`으로
+답했고, object map과 header의 lock을 푼 뒤 ReleasedLock을 보냈다. Go는 librbd 형식으로
+header와 object map에 lock을 걸고 AcquiredLock을 알린 다음 object map에 객체를
+OBJECT_EXISTS로 기록하고 data 객체를 썼다. 이어서 native librbd의 쓰기가 lock을 요청하자
+Go는 `ResponseMessage(0)`으로 답하고 lock을 풀었으며, librbd는 lock을 다시 잡아 쓰기를
+마쳤다. Native librbd는 Go가 쓴 bytes를 읽었고 `rbd object-map check`는 불일치를 찾지
+않았다. librbd는 `lock.assert_locked`와 `rbd.object_map_update`를 한 요청에 담아 보내지만
+제품은 CALL 뒤의 CALL을 아직 보내지 않으므로 시험은 두 CALL을 따로 보냈다.
+[잠금 검증 기록](integration/fixture/RBD_LOCK_VALIDATION.md)에 두 구성의 결과를 남겼다.
+Clone/parent, journaling, lock 경합과 blocklist는 아직 검증하지 않았다.
 
 ## OSD 객체 요청 통신
 

@@ -283,10 +283,10 @@ jobs:
           # Only the multi-rank test is selected; product OSD sessions are not enabled.
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_ranks: '1', test_run: '^TestCephMDSCephFSRanksIntegration$' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_ranks: '1', test_run: '^TestCephMDSCephFSRanksIntegration$' }
-          # RBD acceptance owns a pool, two identities and two native librbd images on the legacy-v6 single-OSD fixture; its own opt-in excludes every MDS profile.
-          # Only the RBD base and write tests are selected; their Go client enables OSD sessions with the RBD capability profile.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write)Integration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write)Integration$' }
+          # RBD acceptance owns a pool, two identities and three native librbd images on the legacy-v6 single-OSD fixture; its own opt-in excludes every MDS profile.
+          # Only the RBD base, exclusive-lock and write tests are selected; their Go client enables OSD sessions with the RBD capability profile.
+          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write|ExclusiveLock)Integration$' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write|ExclusiveLock)Integration$' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

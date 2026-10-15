@@ -25,7 +25,7 @@ func TestRBDBaseClosedProfileAndCredentials(t *testing.T) {
 		env := rbdBaseProfileEnv()
 		env["CEPH_MSGR_TEST_RUNTIME"] = runtime
 		p, err := loadProfile(func(k string) string { return env[k] })
-		if err != nil || p.testRun != "^TestCephRBD(Base|Write)Integration$" || p.rbdBase != "1" || p.mdsFresh != "0" || p.osdPGV8() || p.cleanupBudget() != 2*time.Minute {
+		if err != nil || p.testRun != "^TestCephRBD(Base|Write|ExclusiveLock)Integration$" || p.rbdBase != "1" || p.mdsFresh != "0" || p.osdPGV8() || p.cleanupBudget() != 2*time.Minute {
 			t.Fatal("RBD base did not select its isolated legacy-v6 fixture", p, err)
 		}
 		if bootstrap := fixtureBootstrapConfig(p); !strings.Contains(bootstrap, "osd_pool_default_flag_hashpspool = false") || strings.Contains(bootstrap, "mon_allow_pool_delete") {
@@ -51,6 +51,7 @@ func TestRBDBaseClosedProfileAndCredentials(t *testing.T) {
 		{"CEPH_MSGR_TEST_MDS_FRESH": "1"}, {"CEPH_MSGR_TEST_MDS_FRESH": "1", "CEPH_MSGR_TEST_MDS_CEPHFS": "1"},
 		{"CEPH_MSGR_TEST_RUN": "^TestCephOSDIOIntegration$"}, {"CEPH_MSGR_TEST_RUN": "^TestCeph(RBDBase|OSDIO)Integration$"},
 		{"CEPH_MSGR_TEST_RUN": "^TestCephRBDBaseIntegration$"}, {"CEPH_MSGR_TEST_RUN": "^TestCephRBDWriteIntegration$"}, {"CEPH_MSGR_TEST_RUN": "^TestCephRBD.*Integration$"},
+		{"CEPH_MSGR_TEST_RUN": "^TestCephRBD(Base|Write)Integration$"}, {"CEPH_MSGR_TEST_RUN": "^TestCephRBDExclusiveLockIntegration$"},
 		{"CEPH_MSGR_TEST_SPARSE_READ_ORACLE": "/tmp/oracle"}, {"CEPH_MSGR_TEST_MGR_COUNT": "0"},
 	} {
 		env := rbdBaseProfileEnv()
@@ -62,7 +63,7 @@ func TestRBDBaseClosedProfileAndCredentials(t *testing.T) {
 		}
 	}
 	env := rbdBaseProfileEnv()
-	env["CEPH_MSGR_TEST_RUN"] = "^TestCephRBD(Base|Write)Integration$"
+	env["CEPH_MSGR_TEST_RUN"] = "^TestCephRBD(Base|Write|ExclusiveLock)Integration$"
 	env["CEPH_MSGR_TEST_OSD_STORE"] = "bluestore"
 	env["CEPH_MSGR_TEST_CONNECTION_MODE"] = "crc"
 	if p, err := loadProfile(func(k string) string { return env[k] }); err != nil || p.testRun != env["CEPH_MSGR_TEST_RUN"] {

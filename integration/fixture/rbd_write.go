@@ -280,8 +280,10 @@ try:
     try:
         out['pool_id'] = ioctx.get_pool_id()
         if action == 'setup':
-            if sorted(text(i) for i in rbd.RBD().list(ioctx)) != [plan['base_image']]:
-                raise ValueError('owned RBD pool does not hold exactly the base image')
+            # The exclusive-lock acceptance's image may already exist.
+            listed = sorted(text(i) for i in rbd.RBD().list(ioctx))
+            if plan['base_image'] not in listed or any(i not in (plan['base_image'], 'ceph-msgr-lock-' + token) for i in listed):
+                raise ValueError('owned RBD pool holds an unplanned image')
             rbd.RBD().create(ioctx, name, plan['size'], order=plan['order'], old_format=False, features=plan['features'])
             writes = []
             with rbd.Image(ioctx, name) as image:

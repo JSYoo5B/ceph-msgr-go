@@ -2,8 +2,9 @@
 
 `CEPH_MSGR_TEST_RBD=1` is a closed development-only extension of the opt-in
 OSD fixture (`CEPH_MSGR_TEST_OSD=1`). It selects only
-`^TestCephRBD(Base|Write)Integration$` (an explicit `CEPH_MSGR_TEST_RUN` must
-be that selector; `TestCephRBDBaseIntegration` runs first, then
+`^TestCephRBD(Base|Write|ExclusiveLock)Integration$` (an explicit
+`CEPH_MSGR_TEST_RUN` must be that selector; `go test` runs them in file order:
+`TestCephRBDBaseIntegration`, then `TestCephRBDExclusiveLockIntegration`, then
 `TestCephRBDWriteIntegration`) and requires the single-OSD `legacy-v6` recipe: one OSD
 (`CEPH_MSGR_TEST_OSD_REPLICAS=1`), the legacy CRUSH map and pools without
 HASHPSPOOL, so the Go client keeps the default `OSDProfileObjectHash` (v6
@@ -30,7 +31,13 @@ Reference: Tentacle Ceph 20.2.4 commit
 `metadata_list`), `cls/lock/cls_lock.cc` (`lock_obj`, `remove_lock`,
 `get_info`), `librbd/image/OpenRequest.cc` (no watch for read-only opens),
 `librbd/ImageState.cc` (`refresh_if_required`), `librbd/internal.cc`
-(`get_size`, `list_lockers`, `list_watchers`), `pybind/rbd/rbd.pyx` and
+(`get_size`, `list_lockers`, `list_watchers`), for the lock image
+`librbd/ImageCtx.cc` and `librbd/exclusive_lock/AutomaticPolicy.cc` (the
+default lock policy), `librbd/ImageWatcher.cc`, `librbd/ExclusiveLock.cc`,
+`librbd/internal.cc` (`is_exclusive_lock_owner`, `lock_get_owners`),
+`librbd/api/DiffIterate.cc`, `librbd/object_map/DiffRequest.cc`,
+`librbd/operation/ObjectMapIterate.cc` and `tools/rbd/action/ObjectMap.cc`
+(`object-map check`), `pybind/rbd/rbd.pyx` and
 `pybind/rados/rados.pyx` (LGPL-2.1 references; no code is copied). The
 provider is `github.com/JSYoo5B/ceph-testcontainers-go` v0.2.0
 (`CreatePool`, `rbd.InitPool`, `WaitForClean`, `CreateClient`,
@@ -52,6 +59,8 @@ in `rbd-base-owned.json` before it is issued and marked `applied` or
 | Go identity | `client.rbd-base-<token>`: MON `profile rbd`, OSD `profile rbd pool=<pool>`. Its key is written to `rbd-base.key`; the suite receives `CEPH_MSGR_RBD_BASE_IDENTITY` and `CEPH_MSGR_RBD_BASE_KEY_FILE` |
 | native identity | `client.rbd-base-native-<token>`: the same RBD profile; keyring `rbd-base-native.keyring`, used only by the native driver |
 | `native-setup` | the image `ceph-msgr-image-<token>` and its snapshot `ceph-msgr-snap-<token8>` (below) |
+| `native-write-<action>` | on the write test's request, the image `ceph-msgr-write-<token>` (section "Write image and closed write control") |
+| `native-lock-<action>` | on the exclusive-lock test's request, the image `ceph-msgr-lock-<token>` (section "Lock image and closed lock control") |
 
 Both identities hold RBD's standard capability profile bound to the owned
 pool. The Go client therefore authenticates and performs every RBD object
@@ -154,7 +163,8 @@ a closed sequence, each admitted once and only after its predecessor:
 carry `read_only: true`. The driver (Python `rbd`/`rados` bindings, librbd
 cache disabled, `err_to_stderr` only) re-checks every name against the token.
 
-- `setup` requires the pool to hold exactly the base image, creates the write
+- `setup` requires the pool to hold the base image and at most the lock image
+  (the exclusive-lock test runs before it), creates the write
   image, writes the native extents of the plan around the snapshot, flushes and
   closes it.
 - Every action then observes the image through a read-only librbd open
@@ -185,6 +195,73 @@ the test, so a Go-side failure is reported by the test rather than stopping
 the control loop. Each receipt is `rbd-write-<action>.json` (request ID,
 plan, journaled action, decoded native output, bounded process result).
 
+## Lock image and closed lock control
+
+`TestCephRBDExclusiveLockIntegration` (see
+[RBD_LOCK_VALIDATION.md](RBD_LOCK_VALIDATION.md)) uses the same token, pool and
+both identities, and a third image that exists only once the test asks for it.
+Its fixed plan is part of the journal from preparation on (`lock_plan` in
+`rbd-base-owned.json`):
+
+| Plan value | Content |
+| --- | --- |
+| image | `ceph-msgr-lock-<token>`, format 2, order 16 (64 KiB objects), 320 KiB (five objects), features 29 (`layering`, `exclusive-lock`, `object-map`, `fast-diff`), no snapshot |
+| setup write (native) | 0 to 64 KiB (object 0 entirely) |
+| owner write (native, takes the lock) | 64 to 80 KiB (object 1 0 to 16 KiB) |
+| Go write (while Go holds the lock) | 136 to 144 KiB (object 2 8 to 16 KiB, an absent object) |
+| reacquire write (native, asks Go for the lock) | 200 to 208 KiB (object 3 8 to 16 KiB, an absent object) |
+
+Object 4 is never written, so the object map keeps one nonexistent entry. The
+suite sends `rbd-lock` requests `<id> <token> <action>` through the control
+channel (`rbd-lock-completed.<id>` acknowledgement). The actions form a closed
+sequence, each admitted once and only after its predecessor: `setup`, `lock`,
+`observe-released`. Each is journaled in `rbd-base-owned.json` as
+`native-lock-<action>` before the native process starts; `observe-released`
+carries `read_only: true`. The driver (Python `rbd`/`rados` bindings, librbd
+cache disabled, `err_to_stderr` only, librbd's default exclusive-lock policy)
+re-checks every name against the token and the feature set 29.
+
+- `setup` requires the pool to hold the base image and at most the write
+  image (the write test's setup admits this image the same way), creates the
+  lock image, opens it read-write (librbd takes the lock for the write and
+  releases it at close), writes the setup extent, flushes and closes it.
+- `lock` opens the image read-write and writes the owner extent, which takes
+  the exclusive lock (automatic policy). It then publishes
+  `rbd-lock-state.json` after each phase: `owner`; `released`, `go-owner`
+  (with librbd reads of the Go extents) and `reacquired` (after the
+  reacquire write, with its duration and the Go extents read again), each
+  after the proceed signal `rbd-lock-proceed-<n>` (`n` 1 to 3, content
+  `<token> <request id> <n>`, 30 s each); then it waits for proceed signal 4,
+  closes the image (librbd releases the lock and its watch) and publishes
+  `closed`. Every phase holds librbd `is_exclusive_lock_owner()`,
+  `lock_get_owners()` and `watchers_list()` of the open image (not in
+  `closed`), `list_lockers()`, `flags()`, `size()` and a whole-object
+  `diff_iterate` from the beginning of time of a fresh read-only open (the
+  read-write instance caches lockers and flags), a native librados `exec` of
+  `lock.get_info(rbd_lock)` on the header and on `rbd_object_map.<id>`, and
+  the raw bytes of `rbd_object_map.<id>`. After `closed` the driver runs
+  `rbd --conf <conf> --id <native identity> --keyring <keyring>
+  --rbd_cache=false --log_to_stderr=false --err_to_stderr=true object-map
+  check --no-progress <pool>/<image>` (60 s bound, output bounded to 4 KiB)
+  and observes the image.
+- Every action ends with a read-only observation: `stat`, features, flags,
+  `list_snaps` (none), `list_lockers`, `watchers_list`, the whole-object
+  diff, a librbd read of the head, librados `stat`/`read` of every data object,
+  the raw object-map object and a native librados `exec` of eight methods with
+  raw inputs and outputs: `rbd.get_id` on the id object, `rbd.get_size`,
+  `get_object_prefix`, `get_features`, `get_snapcontext` and
+  `lock.get_info(rbd_lock)` on the header, then `lock.get_info(rbd_lock)` and
+  `rbd.object_map_load` on the object map. The two binary views are published
+  as `rbd-lock-<action>-image-head.bin` and `-objects-head.bin`.
+
+The fixture checks the structure of each output (identity, names, the plan,
+the closed phase sequence and its fields, the check's argument list, object
+and blob consistency); which owner, lock, object-map or check result each step
+must show is judged by the test. Each receipt is `rbd-lock-<action>.json`
+(request ID, plan, journaled action, decoded native output, bounded process
+result). The lock action is bounded to 220 s (four Go steps of at most 30 s,
+the check and the observation).
+
 ## Uncertain outcomes and cleanup
 
 A failed, killed or truncated native process is an error: its output is
@@ -193,9 +270,9 @@ stops (as for the other fixture controls). Cleanup runs once (in the runner
 after the suites, and again from `Terminate`, which returns the cached
 result) and writes `rbd-base-cleanup.json`: it removes the owned pool with
 the provider's `RemovePool` (temporarily allowing pool deletion in the MON
-configuration database and removing the pool's CRUSH rule; both images, their
-snapshots, image metadata, lock attributes and any lingering watch go with the
-pool), proves the pool's absence
+configuration database and removing the pool's CRUSH rule; the three images, their
+snapshots, image metadata, lock attributes, the lock image's object map and
+any lingering watch go with the pool), proves the pool's absence
 by name and ID in a fresh native OSDMap, and deletes both identities. An
 intended identity whose creation outcome is unknown is reported as an error.
 
@@ -203,9 +280,10 @@ intended identity whose creation outcome is unknown is reported as an error.
 
 `rbd-base-owned.json`, `rbd-base-setup.json`, `rbd-base-oracle.json`,
 `rbd-base-result.json`, `rbd-base-watch-state.json`, `rbd-base-cleanup.json`,
-the six `rbd-write-<action>.json` receipts, `rbd-write-watch-state.json` and
-the suites' own `rbd-base-results.json` and `rbd-write-results.json` are on
-the diagnostics allowlist.
+the six `rbd-write-<action>.json` receipts, `rbd-write-watch-state.json`, the
+three `rbd-lock-<action>.json` receipts, `rbd-lock-state.json` and the suites'
+own `rbd-base-results.json`, `rbd-write-results.json` and
+`rbd-lock-results.json` are on the diagnostics allowlist.
 The binary views and the keys are not archived.
 
 ## Unit coverage
@@ -228,3 +306,15 @@ checks the test-only image-to-object mapping, the overlap subtraction and the
 lock-class inputs, the managed-lock cookie, the metadata map, the
 `cls_lock_get_info_reply` decoder with IPv4 and IPv6 addresses (every
 truncation and a trailing byte) and the clone model.
+`integration/fixture/rbd_lock_test.go` checks the token-bound lock plan (one
+object per writer, object 4 absent), the closed and ordered lock request
+sequence, the closed-shape decoding of every lock action (phase order and
+fields, the check), the per-action binary views, the journal of the lock plan
+and of an uncertain lock action, and that the lock driver parses as Python.
+`TestRBDLockTestOnlyEncodings` in `integration/rbd_lock_test.go` checks the
+watch-notify `ClientId`, `NotifyMessage` and `ResponseMessage` encodings and
+decoders (every truncation, a trailing byte, compat 2, version 1 payloads,
+unknown ops), the object-map lock and `assert_locked` inputs, the
+`object_map_update` input, the `ceph_crc32c` restatement against Ceph's own
+test vectors and the `BitVector<2>` decoder with and without CRCs (every
+truncation, damaged bytes, a trailing byte).
