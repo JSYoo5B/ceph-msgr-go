@@ -146,7 +146,9 @@ class OmapWriteNativeTests(unittest.TestCase):
         cli = writes.HeaderCLI(Path("/root"), METADATA, "")
 
         def run(argv, **kwargs):
-            self.assertEqual(argv[:10], ["rados", "--conf", "/root/ceph.conf", "--keyring", "/root/keyring",
+            # The oracle runs inside Linux; derive paths with the host's Path
+            # so this argument test is independent of the checkout OS.
+            self.assertEqual(argv[:10], ["rados", "--conf", str(Path("/root") / "ceph.conf"), "--keyring", str(Path("/root") / "keyring"),
                                          "--name", "client.test", "--pool", "pool", "getomapheader"])
             self.assertEqual(argv[10], "object")
             Path(argv[11]).write_bytes(payload)
