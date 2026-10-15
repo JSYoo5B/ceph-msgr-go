@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test-only native stat and placement oracle for the explicit legacy OSD fixture."""
+"""Test-only native stat and placement oracle for explicit bounded OSD profiles."""
 
 import ctypes
 import hashlib
@@ -70,6 +70,11 @@ def native_stat(root, pool, object_name):
 
 
 def collect(root, output, pool, object_name):
+    profile = os.environ.get("CEPH_MSGR_TEST_OSD_PROFILE") or "legacy-v6"
+    if profile not in ("legacy-v6", "replicated-pg-v8"):
+        raise ValueError("Invalid explicit OSD fixture profile")
+    modern = profile == "replicated-pg-v8"
+    expected_pgs = 8 if modern else 1
     family_setting = os.environ.get("CEPH_MSGR_TEST_IP_FAMILY", "4")
     if family_setting not in ("4", "6"):
         raise ValueError("Invalid OSD fixture IP family")
@@ -119,20 +124,24 @@ def collect(root, output, pool, object_name):
             mapped["objname"] != object_name or mapped["epoch"] != topology["epoch"] or
             descriptor["pool_name"] != pool or
             descriptor["size"] != replicas or descriptor["min_size"] != min_size or
-            descriptor["pg_num"] != 1 or descriptor["pg_placement_num"] != 1 or
-            {"hashpspool", "creating"} & set(descriptor.get("flags_names", "").split(",")) or
-            any("hashpspool" in p.get("flags_names", "").split(",") for p in topology["pools"]) or
-            topology.get("pg_upmap") or topology.get("pg_upmap_items") or topology.get("pg_upmap_primaries") or
+            descriptor["pg_num"] != expected_pgs or descriptor["pg_placement_num"] != expected_pgs or
+            descriptor.get("type", 1) != 1 or int(actual[2], 16) >= expected_pgs or
+            "creating" in descriptor.get("flags_names", "").split(",") or
+            any((bool(p.get("flags", 0) & 1) != modern or
+                 ("hashpspool" in p.get("flags_names", "").split(",")) != modern) for p in topology["pools"]) or
+            (not modern and (topology.get("pg_upmap") or topology.get("pg_upmap_items"))) or
+            topology.get("pg_upmap_primaries") or
             any(b["alg"] != "straw" for b in crush["buckets"]) or
             crush.get("choose_args") or
             any(crush["tunables"].get(name) != value for name, value in legacy_tunables.items())):
-        raise ValueError("Native topology does not match the explicit legacy OSD fixture")
+        raise ValueError("Native topology does not match the explicit " + profile + " OSD fixture")
     endpoint = addresses[0]
     size, seconds, nanos = native_stat(root, pool, object_name)
     data = (output / "osd-native-read.bin").read_bytes()
     if len(data) != size or data != (output / "osd-object.bin").read_bytes():
         raise ValueError("Independent native read/stat does not match the prepared object")
     metadata = {
+        "profile": profile, "request_version": 8 if modern else 6, "pool_pg_num": expected_pgs,
         "pool": pool, "pool_id": pool_id, "object": object_name, "osd_id": primary,
         "acting": acting, "up": up, "replicas": replicas, "min_size": min_size,
         "ip_family": family,
@@ -143,6 +152,7 @@ def collect(root, output, pool, object_name):
         "size": size, "mtime_seconds": seconds, "mtime_nanoseconds": nanos,
         "sha256": hashlib.sha256(data).hexdigest(),
         "legacy_tunables": crush["tunables"],
+        "pg_upmap": topology.get("pg_upmap", []), "pg_upmap_items": topology.get("pg_upmap_items", []),
         "pool_flags": descriptor["flags"], "pool_flags_names": descriptor.get("flags_names", ""),
     }
     temporary = output / "osd-oracle.tmp"

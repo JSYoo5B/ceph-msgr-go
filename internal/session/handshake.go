@@ -67,7 +67,15 @@ type Authenticator interface {
 type authWriteObserver interface {
 	AuthWriteObserved(msgr.Tag, int, bool)
 }
-type MonAuth struct{ Client *cephx.Client }
+type MonAuth struct {
+	Client *cephx.Client
+	// ReplicatedPGV8 declares only HASHPSPOOL support to MON for the
+	// explicitly selected client-wide OSD profile. It does not expand the
+	// unconditional MON-only CRUSH admission exception or select OSD codecs.
+	ReplicatedPGV8 bool
+}
+
+func (a MonAuth) replicatedPGV8MON() bool { return a.ReplicatedPGV8 }
 
 func (a MonAuth) Initial() ([]byte, error)      { return a.Client.Initial(), nil }
 func (a MonAuth) More(p []byte) ([]byte, error) { return a.Client.Challenge(p) }
@@ -75,7 +83,45 @@ func (a MonAuth) Done(id uint64, p []byte, requireSecret bool) (cephx.Key, []byt
 	return a.Client.Finish(id, p, requireSecret)
 }
 
-type ServiceAuth struct{ Authorizer *cephx.Authorizer }
+type ServiceAuth struct {
+	Authorizer *cephx.Authorizer
+	// ReplicatedPGV8 selects the fixed caller-targeted replicated PG profile
+	// on OSD connections only. It never accepts an arbitrary feature mask or
+	// changes authentication, Messenger security or MON/MGR feature policy.
+	ReplicatedPGV8 bool
+}
+
+// Pinned Ceph 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964:
+// include/ceph_features.h OBJECTLOCATOR, PGID64, RESEND_ON_SPLIT (incarnation
+// 2), OSDHASHPSPOOL and NEW_OSDOP_ENCODING. Bit 21 also promises RADOS_BACKOFF,
+// OSDMAP_PG_UPMAP and CRUSH_CHOOSE_ARGS; selecting this internal profile is
+// therefore conditional on the complete profile's caller/codec/control gates.
+// NEW_OSDOPREPLY_ENCODING (58) and SERVER_SQUID (49) remain omitted.
+const replicatedPGV8Features uint64 = 1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<57
+
+func (a ServiceAuth) replicatedPGV8() bool { return a.ReplicatedPGV8 }
+
+func handshakeFeatures(role uint8, auth Authenticator) (supported, required uint64) {
+	supported, required = featuresForRole(role), RequiredFeatures
+	if role == 1 {
+		if profile, ok := auth.(interface{ replicatedPGV8MON() bool }); ok && profile.replicatedPGV8MON() {
+			// include/ceph_features.h OSDHASHPSPOOL, bit 30/incarnation 1.
+			// MON admission precedes choosing an OSD target, so only this
+			// fixed opt-in pool capability is declared on the MON session.
+			supported |= 1 << 30
+			required |= 1 << 30
+		}
+	}
+	if role == 4 {
+		// The private boolean seam preserves the fixed ServiceAuth policy
+		// through internal authentication wrappers without exposing mask bits.
+		if profile, ok := auth.(interface{ replicatedPGV8() bool }); ok && profile.replicatedPGV8() {
+			supported |= replicatedPGV8Features
+			required |= replicatedPGV8Features
+		}
+	}
+	return supported, required
+}
 
 func (a ServiceAuth) Initial() ([]byte, error)      { return a.Authorizer.Payload(nil) }
 func (a ServiceAuth) More(p []byte) ([]byte, error) { return a.Authorizer.Payload(p) }
@@ -385,9 +431,9 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	target.Encode(&ident)
 	ident.U64(globalID)
 	ident.U64(binary.LittleEndian.Uint64(random[:]))
-	supportedFeatures := featuresForRole(role)
+	supportedFeatures, requiredFeatures := handshakeFeatures(role, auth)
 	ident.U64(supportedFeatures)
-	ident.U64(RequiredFeatures)
+	ident.U64(requiredFeatures)
 	ident.U64(sessionFlagLossy)
 	ident.U64(0) // no client cookie: fresh lossy recovery only
 	if err = write(msgr.ClientIdent, ident.Data); err != nil {
@@ -427,7 +473,7 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if (role == 4 || expectedID != 0) && serverID != expectedID {
 		return nil, errors.New("ceph messenger: unexpected daemon ID")
 	}
-	if RequiredFeatures&^supported != 0 || required&^supportedFeatures != 0 {
+	if requiredFeatures&^supported != 0 || required&^supportedFeatures != 0 {
 		return nil, msgr.ErrFeatures
 	}
 	// SERVER_IDENT is authoritative about the selected policy. Reliable

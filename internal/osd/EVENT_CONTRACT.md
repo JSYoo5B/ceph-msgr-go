@@ -3,8 +3,8 @@
 Reference: Ceph 20.2.4, commit
 `7f793731f1b39eb4f465e960113d2363c311b964`.
 Source and product audit: 2026-10-15. This document completes a bounded source
-inventory for O0, updated for the bounded O3 watch/notify implementation. No
-additional features are advertised. [WATCH_NOTIFY_CONTRACT.md](WATCH_NOTIFY_CONTRACT.md)
+inventory for O0, updated for bounded O3 watch/notify and the fixed replicated-PG
+backoff profile. Feature additions require the explicit profile before Dial. [WATCH_NOTIFY_CONTRACT.md](WATCH_NOTIFY_CONTRACT.md)
 records its implementation and verification boundary. [CONTRACT.md](CONTRACT.md) defines
 current object vectors and their completion/uncertainty contract.
 
@@ -15,7 +15,7 @@ OSDMap publications, backoff instructions, watch notifications and OSD command
 replies. These are separate message classes, not interchangeable operation
 results. The first two are the required application messages for the current
 explicit-target, head-only replicated O1 profile. Backoff generation is gated
-by a feature the Go OSD session omits. Watch events use the cookie reserved by
+by a feature omitted by the default profile and negotiated by the explicit replicated-PG profile. Watch events use the cookie reserved by
 WatchObject or NotifyObject; raw object Request cannot submit these operations.
 OSD commands are implemented in the separate D1 milestone. This inventory is for the
 client public connection; replication, recovery, peering and heartbeat messages
@@ -27,7 +27,7 @@ on daemon connections remain final fixture requirements, not client codecs.
 | 42 / 0x2a | MOSDOp | Only supported request vector sent | Authenticated client, incarnation, header TID, attempt zero |
 | 43 / 0x2b | MOSDOpReply | Matched to a started pending request; validated against vector | Header TID plus returned wire identity/metadata |
 | 44 / 0x2c | MWatchNotify | Bounded per-stream FIFO with explicit acknowledgement | Registration/notify cookie and notify ID; not a pending call TID |
-| 61 / 0x3d | MOSDBackoff | Unsupported; fails OSD session | Current connection, actual PG/shard, connection-local backoff ID |
+| 61 / 0x3d | MOSDBackoff | Replicated-PG profile: bounded events, explicit ACK and writer gate; default: refused | Current connection, actual PG/shard, connection-local backoff ID |
 
 Message numbers come from [ceph_fs.h][ids]. Application message headers are
 separate from msgr2 frame tags. Messenger sequence ACK and keepalive/keepalive
@@ -35,7 +35,7 @@ ACK remain session transport controls; none supplies object ONDISK completion,
 notify acknowledgement, map application or permission to replay a mutation.
 
 The current [OSD callback](../../cephmsgr/osd.go) accepts MOSDMap and MWatchNotify
-outside normal reply dispatch and otherwise returns `ErrUnsupportedFeatures`.
+outside normal reply dispatch, and accepts MOSDBackoff only on the replicated-PG profile. Other controls return `ErrUnsupportedFeatures`.
 [Session dispatch](../session/session.go) matches reply type and header TID;
 late replies with no pending TID are discarded. A non-reply event must never be
 fed to this pending-call path, even if its header TID numerically equals an
@@ -71,7 +71,7 @@ viewing the caller-owned raw front buffer.
 
 ## Feature gates
 
-Current role-4 negotiation in [handshake.go](../session/handshake.go) adds
+Default role-4 negotiation in [handshake.go](../session/handshake.go) adds
 OBJECTLOCATOR (bit 8) and PGID64 (bit 9) to the implemented common transport/map
 features. It omits new object request/reply encodings and the MON-only admission
 CRUSH bits. Requiring an unsupported feature fails before object transmission;
@@ -81,10 +81,14 @@ In [ceph_features.h][features], RADOS_BACKOFF, RESEND_ON_SPLIT,
 OSDMAP_PG_UPMAP, CRUSH_CHOOSE_ARGS and SERVER_LUMINOUS share bit 21,
 incarnation 2. The incarnation marker is bit 57; the complete feature mask is
 `(1 << 21) | (1 << 57)`. This is not an independently selectable backoff promise.
-The current OSD set already includes bit 57 but omits bit 21. Adding bit 21
+The default OSD set includes bit 57 but omits bit 21. Adding bit 21
 requires the combined O3/O4 contracts and acceptance, including caller-owned
 placement/map input and split handling. A backoff decoder alone is insufficient.
-MON admission remains a narrow MON exception, with no transfer to OSD sessions.
+The replicated-PG profile now combines v8 actual-PG requests, caller placement,
+HASHPSPOOL and bounded backoff admission. It adds bit 30 to opt-in MON admission
+before Dial and a fixed bundle to OSD sessions. MON CRUSH admission remains a
+narrow exception, with no transfer to OSD sessions. Actual split recovery and
+broader CRUSH configurations remain unverified; see O4_CONTRACT.md.
 
 [PrimaryLogPG::do_request/do_op][backoff-gate] tests RADOS_BACKOFF before
 issuing PG-wide or object-specific blocks. Peering/down/incomplete PGs and
@@ -100,7 +104,8 @@ order, `spg_t`, map epoch u32, opcode u8, ID u64, begin hobject, end hobject.
 Block = 1, ACK_BLOCK = 2, UNBLOCK = 3, defined in [rados.h][rados].
 [spg_t][spg] is a versioned PG/shard structure, not the raw placement hash echoed by
 the current v6 object request. The caller must provide actual mapped PG/shard
-metadata before future send gating can match these instructions accurately.
+metadata. Current admission conservatively blocks the whole connection while
+any active or released-but-unacknowledged block remains.
 
 The [PG sender][pg-backoff] allocates IDs in the current client session.
 Begin/end denote a half-open range `[begin, end)`; equality denotes one object.
@@ -191,8 +196,9 @@ user callback decisions remain outside this repository.
 
 The original O0-E2/E3 inventory tests are synthetic dispatch/admission evidence.
 Watch/notify now also has 16 fresh native request/reply/event vectors and an
-independent native watcher/notifier fixture. Backoff delivery and combined
-feature semantics remain unverified. Existing records establish only their
+independent native watcher/notifier fixture. Backoff has five fresh native
+wire vectors and normal/late-ACK daemon acceptance on two narrow profiles.
+Broader split/CRUSH feature semantics remain unverified. Existing records establish only their
 described paths; a source inventory alone establishes no interoperability.
 
 | Work ID | Concrete check | Current status / next prerequisite |
@@ -200,10 +206,10 @@ described paths; a source inventory alone establishes no interoperability.
 | O0-E1 | Interleave maps before reply, preserve FIFO/ownership; cancel Next, overflow, malformed/foreign FSID, Close with pending mutation | Existing synthetic map tests; current native stale-map delivery recorded separately. Reuse exact-head results; add new cases only for uncovered behavior. |
 | O0-E2 | Inject valid type 44 and 61 controls with TID zero and with a pending mutation's TID; prove they cannot complete that call, preserve unsupported cause and uncertain submission, no retry | Synthetic `TestUnsupportedOSDControlsCannotCompleteOrReplaySentMutation` passes all four type/TID combinations under the race detector; source-derived payloads, no native event proof. |
 | O0-E3 | Assert role-4 feature mask omits bit 21 and MON admission bits; require combined bit-21 feature and observe pre-object rejection | Existing mask test covers omission/admission boundaries. Synthetic `TestOSDHandshakeRejectsCombinedBackoffRequirementBeforeApplication` passes under the race detector, with peer-observed EOF before any application frame. |
-| O3-E1 | Fresh native encoder/decoder vectors for spg_t/hobject bounds, BLOCK/ACK_BLOCK/UNBLOCK and all current watch events; reject malformed count/length/version/opcodes | Watch/notify has 16 fresh native vectors; malformed and ownership cases are synthetic. Native backoff vectors remain pending. |
-| O3-E2 | Native PG-wide and single-object block; observe original-epoch ACK and server unblock, split/connection replacement, zero automatic replay, cancellation/Close while blocked | Requires public fixture recipe and combined O3/O4 feature/identity contract; unverified. Config alone does not prove an event occurred. |
+| O3-E1 | Fresh native encoder/decoder vectors for spg_t/hobject bounds, BLOCK/ACK_BLOCK/UNBLOCK and all current watch events; reject malformed count/length/version/opcodes | Watch/notify has 16 fresh native vectors; malformed and ownership cases are synthetic. Backoff has five fresh native vectors, including original-epoch ACK and newer-epoch UNBLOCK. |
+| O3-E2 | Native PG-wide and single-object block; observe original-epoch ACK and server unblock, split/connection replacement, zero automatic replay, cancellation/Close while blocked | CRC/AES single BlueStore and secure/AES256K IPv6 single MemStore each pass normal and delayed ACK: real PG-wide BLOCK/UNBLOCK, exact native ACK reception, local unsent refusal and one explicit fresh append. Single-object block, split and failover remain unverified. |
 | O3-E3 | Native watcher and notifier on disposable objects; binary NOTIFY, explicit ACK reply, completion data, partial timeout, DISCONNECT, reconnect/renewal | CRC/AES host 3 BlueStore and secure/AES256K IPv6 container single MemStore each cover binary notify/ACK, two native watchers, partial timeout, explicit ping/unwatch. Live DISCONNECT/reconnect and failover remain unverified. |
-| O3-E4 | Queue overflow, duplicate/late/unknown cookie and notify ID, reused backoff ID across sessions, concurrent waits and Close; retained bytes and stable first cause | Watch queue/lifetime policy is implemented with synthetic race regressions, including authentication replacement and early completion correlation. Backoff identity/session acceptance remains pending. |
+| O3-E4 | Queue overflow, duplicate/late/unknown cookie and notify ID, reused backoff ID across sessions, concurrent waits and Close; retained bytes and stable first cause | Watch queue/lifetime policy is implemented with synthetic race regressions, including authentication replacement and early completion correlation. Backoff has bounded identity/session and FIFO ACK-order race tests, including released unACKed tombstones; broader daemon failure paths remain pending. |
 
 ## Source provenance
 

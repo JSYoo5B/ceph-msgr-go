@@ -176,6 +176,10 @@ func TestOSDPGListCancellationAndCloseNeverReplay(t *testing.T) {
 			if !errors.As(got.e, &unknown) || got.r.Submission.Transaction != sent.Transaction || got.r.Submission.MapEpoch != 11 {
 				t.Fatal("submitted listing outcome lost", got.r, got.e)
 			}
+			placement := got.r.Submission.Placement
+			if placement == nil || placement.PG != (OSDPG{Pool: 7, Seed: 0}) || placement.Primary != 0 {
+				t.Fatal("submitted listing lost explicit PG selection", got.r.Submission)
+			}
 			if closeConnection && !errors.Is(got.e, ErrClosed) {
 				t.Fatal("Close identity lost", got.e)
 			}

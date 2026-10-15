@@ -109,16 +109,19 @@ type OSDRequest struct {
 	ModificationTime  OSDTime
 	MapEpoch          uint32
 	Object            OSDObject
-	Operations        []OSDOperation
-	ReadSnapshot      uint64
-	SnapContext       OSDSnapContext
-	OrderSnapshots    bool
+	// Placement is mandatory for OSDProfileReplicatedPG and absent for
+	// OSDProfileObjectHash. The caller owns map application and target choice.
+	Placement      *OSDReplicatedPlacement
+	Operations     []OSDOperation
+	ReadSnapshot   uint64
+	SnapContext    OSDSnapContext
+	OrderSnapshots bool
 }
 
 type OSDPG struct {
 	Pool uint64
-	// Seed preserves the v6 reply pg_t seed, which echoes the request's raw
-	// object-placement hash. It does not identify the actual mapped PG.
+	// Seed is the actual PG for replicated-PG requests and ListPG; object-hash
+	// profile replies instead echo the raw object-placement hash.
 	Seed uint32
 }
 
@@ -176,6 +179,7 @@ type OSDSubmission struct {
 	Transaction, GlobalID       uint64
 	ClientIncarnation, MapEpoch uint32
 	Attempt                     uint32
+	Placement                   *OSDReplicatedPlacement
 }
 
 // OSDReply preserves the server's completion metadata and operation outputs.
@@ -236,6 +240,10 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	if c.ctx.Err() != nil || o.ctx.Err() != nil {
 		return result, ErrClosed
 	}
+	if err := o.validatePlacement(request); err != nil {
+		return result, err
+	}
+	request.Placement = cloneOSDPlacement(request.Placement)
 	if len(request.Operations) == 0 || len(request.Operations) > osd.MaxOperations {
 		return result, osd.ErrRequest
 	}
@@ -295,7 +303,14 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 			ListWatchers: osd.ListWatchersInput{MaxOutputBytes: op.ListWatchers.MaxOutputBytes},
 			Snap:         op.Snapshot, ListSnaps: osd.ListSnapsInput{MaxOutputBytes: op.ListSnapshots.MaxOutputBytes}}
 	}
-	m, err := osd.EncodeRequest(input, o.features, c.options.MaxFrameSize)
+	var m msgr.MessageData
+	var err error
+	if request.Placement != nil {
+		p := request.Placement.PG
+		m, err = osd.EncodeRequestV8(osd.V8Request{Request: input, PG: osd.PG{Pool: p.Pool, Seed: p.Seed}, Shard: -1}, o.features, c.options.MaxFrameSize)
+	} else {
+		m, err = osd.EncodeRequest(input, o.features, c.options.MaxFrameSize)
+	}
 	if err != nil {
 		if errors.Is(err, osd.ErrFeatures) {
 			err = fmt.Errorf("%w: %w", ErrUnsupportedFeatures, err)
@@ -303,7 +318,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		return result, err
 	}
 	reply, err := s.Call(operation, m)
-	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch}
+	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch, Placement: request.Placement}
 	result.Submission = submission
 	if err != nil {
 		return result, o.operationError(err)
@@ -314,6 +329,9 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	result.Transaction, result.GlobalID = reply.Transaction, o.globalID
 	redirect := errors.Is(err, osd.ErrRedirect)
 	if err == nil || redirect {
+		if request.Placement != nil {
+			input.Hash = request.Placement.PG.Seed
+		}
 		err = validateOSDReply(input, decoded, redirect)
 	}
 	if err != nil {

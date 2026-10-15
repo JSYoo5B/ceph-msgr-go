@@ -13,7 +13,7 @@ import osd_oracle
 
 class OSDOracleTests(unittest.TestCase):
     def setUp(self):
-        profile = mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_IP_FAMILY": "4"})
+        profile = mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_IP_FAMILY": "4", "CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6"})
         profile.start()
         self.addCleanup(profile.stop)
         self.temporary = tempfile.TemporaryDirectory()
@@ -90,6 +90,57 @@ class OSDOracleTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.collect(topology, crush)
                 self.assertFalse((self.output / "osd-oracle.json").exists())
+
+    def pg_v8(self):
+        os.environ["CEPH_MSGR_TEST_OSD_PROFILE"] = "replicated-pg-v8"
+        self.topology["pools"][0].update(pg_num=8, pg_placement_num=8, flags=1, flags_names="hashpspool")
+        self.mapped["pgid"] = "7.5"
+
+    def test_v8_profile_preserves_actual_pg_and_hashpspool_without_crush_expansion(self):
+        self.pg_v8()
+        self.topology["pg_upmap"] = [{"pgid": "7.5", "osds": [0]}]
+        self.topology["pg_upmap_items"] = [{"pgid": "7.5", "mappings": []}]
+        self.collect()
+        value = json.loads((self.output / "osd-oracle.json").read_bytes())
+        self.assertEqual((value["profile"], value["request_version"], value["pool_pg_num"]), ("replicated-pg-v8", 8, 8))
+        self.assertEqual((value["hash"], value["pg_seed"], value["pgid"]), (0xF123ABCD, 5, "7.5"))
+        self.assertEqual(value["pool_flags"], 1)
+        self.assertEqual(value["pg_upmap"], self.topology["pg_upmap"])
+
+    def test_v8_does_not_admit_new_crush_or_primary_requirements(self):
+        self.pg_v8()
+        cases = []
+        topology = copy.deepcopy(self.topology)
+        topology["pg_upmap_primaries"] = [{"pgid": "7.5", "primary_osd": 0}]
+        cases.append((topology, self.crush))
+        topology = copy.deepcopy(self.topology)
+        topology["pools"][0]["flags"] = 0
+        cases.append((topology, self.crush))
+        topology = copy.deepcopy(self.topology)
+        topology["pools"][0]["flags_names"] = ""
+        cases.append((topology, self.crush))
+        topology = copy.deepcopy(self.topology)
+        topology["pools"][0]["pg_num"] = 1
+        cases.append((topology, self.crush))
+        crush = copy.deepcopy(self.crush)
+        crush["buckets"][0]["alg"] = "straw2"
+        cases.append((self.topology, crush))
+        crush = copy.deepcopy(self.crush)
+        crush["choose_args"] = {"-1": [{"bucket_id": -1}]}
+        cases.append((self.topology, crush))
+        for topology, crush in cases:
+            with self.subTest(topology=topology, crush=crush), self.assertRaises(ValueError):
+                self.collect(topology, crush)
+
+    def test_v8_actual_pg_is_bounded_by_native_pool_count(self):
+        self.pg_v8()
+        self.mapped["pgid"] = "7.8"
+        with self.assertRaises(ValueError):
+            self.collect()
+
+    def test_unknown_osd_profile_rejected(self):
+        with mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_PROFILE": "automatic"}), self.assertRaises(ValueError):
+            self.collect()
 
     def test_independent_read_corruption_cannot_publish_oracle(self):
         (self.output / "osd-native-read.bin").write_bytes(self.data[:-1])

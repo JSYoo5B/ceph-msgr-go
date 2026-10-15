@@ -32,6 +32,7 @@ func TestProfileDefaults(t *testing.T) {
 		osd:                  "0",
 		osdStore:             "memstore",
 		osdReplicas:          "1",
+		osdProfile:           "legacy-v6",
 		testRun:              "^TestCeph.*Integration$",
 		testTimeout:          "10m",
 	}
@@ -58,6 +59,7 @@ func TestProfileSelection(t *testing.T) {
 		{"mapped", map[string]string{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCephMappedAddressIntegration$"},
 		{"replicated", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"bluestore", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
+		{"pg-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"ipv6-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"ipv6-replicated-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
@@ -255,7 +257,8 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		"CEPH_MSGR_TEST_MODE_REJECTION":         "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
 		"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
 		"CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
-		"CEPH_MSGR_STRESS_DURATION": "3m", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
+		"CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6",
+		"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
 	}
 	if !reflect.DeepEqual(container, wantContainer) {
 		t.Fatalf("container environment = %v, want %v", container, wantContainer)
@@ -275,7 +278,8 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_TEST_MODE_REJECTION":         "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
 				"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
 				"CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
-				"CEPH_MSGR_STRESS_DURATION": "3m", "CEPH_MSGR_TEST_PROXY": proxy,
+				"CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6",
+				"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_PROXY": proxy,
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("test environment = %v, want %v", got, want)
@@ -298,4 +302,15 @@ func copyProfileEnv(input map[string]string) map[string]string {
 		result[name] = value
 	}
 	return result
+}
+
+func TestOSDPGV8ProfileRequiresOSDAndRejectsUnknownValues(t *testing.T) {
+	for _, env := range []map[string]string{
+		{"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"},
+		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "modern"},
+	} {
+		if p, err := loadProfile(func(name string) string { return env[name] }); err == nil || p != (profile{}) {
+			t.Fatal("invalid explicit PG profile accepted", p, err)
+		}
+	}
 }

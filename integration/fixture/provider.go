@@ -74,7 +74,16 @@ func fixtureBootstrapConfig(p profile) string {
 		config = "[global]\nmon_tick_interval = 1\nmon_subscribe_interval = 2\nmon_session_timeout = 3\nmon_client_ping_interval = 1\nmon_client_hunt_interval = 1\n"
 	}
 	if p.osd == "1" {
-		config += "osd_pool_default_flag_hashpspool = false\nosd_crush_update_on_start = false\nosd_beacon_report_interval = 1\n[mon]\npaxos_service_trim_min = 1\nmon_min_osdmap_epochs = 5\nmon_osd_force_trim_to = 5\n"
+		hashPool := "false"
+		if p.osdPGV8() {
+			hashPool = "true"
+		}
+		config += "osd_pool_default_flag_hashpspool = " + hashPool + "\nosd_crush_update_on_start = false\nosd_beacon_report_interval = 1\n[mon]\npaxos_service_trim_min = 1\nmon_min_osdmap_epochs = 5\nmon_osd_force_trim_to = 5\n"
+		if p.osdPGV8() {
+			// Keep short ACK controls available for independent native
+			// history observation alongside the fixture's preparation work.
+			config += "[osd]\nosd_op_history_size = 1024\n"
+		}
 	}
 	return config
 }

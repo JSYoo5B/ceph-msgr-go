@@ -227,7 +227,7 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 허용하며 `MaxInFlight`는 MON/MGR/OSD 요청이 공유한다. Setup context는
 성공한 handle의 수명과 독립적이다. Handle·client 종료는 연결 정리를 기다린다.
 
-첫 codec은 Tentacle feature 협상으로 선택한 `MOSDOp/MOSDOpReply v6`다.
+기본 `OSDProfileObjectHash`는 `MOSDOp/MOSDOpReply v6`를 사용한다.
 요청·응답 `pg_t` seed는 **raw object hash**이며 실제 PG 번호가 아니다.
 Replicated pool의 현재 객체에 대한 stat과 양의 길이 read, write/writefull,
 append, truncate, zero, create/delete와 version/extent 조건을 제공한다.
@@ -239,17 +239,42 @@ Aggregate 서버 code와 operation별 result는 서로 다를 수 있다. 예를
 존재하지 않는 객체는 aggregate -2와 실행되지 않은 stat의 result 0을 반환한다.
 `*OSDError`는 서버의 aggregate 음수 code를 보존한다.
 
+`Options.OSDProfile=OSDProfileReplicatedPG`는 `Dial` 전에 선택하는 별도 고정
+통신 계약이다. `EnableOSD`도 켜야 하며, MON에는 HASHPSPOOL 지원을, OSD에는
+HASHPSPOOL·실제 PG·v8 request·backoff에 필요한 정해진 feature만 협상한다.
+객체 요청마다 `Placement: &cephmsgr.OSDReplicatedPlacement{PG: actualPG,
+Primary: targetID}`를 넣는다. `Object.Hash`는 계속 raw hash이며 `Placement.PG`
+는 caller가 지도에서 계산한 실제 PG다. pool/primary가 대상과 다르거나 배치가
+누락되면 송신 전에 거절한다. 이 profile의 v6 reply에는 실제 PG가 반환되고,
+`Submission.Placement`는 전송 후 취소·종료에도 선택한 배치를 보존한다.
+기본 profile은 객체 `Request`의 `Placement`를 받지 않는다. 두 profile 모두 CRUSH 계산·자동
+배치·재라우팅을 하지 않는다. 현재 검증 구성은 legacy CRUSH와 HASHPSPOOL·8 PG의
+replicated pool이며, 기본 optimal CRUSH·EC 지원으로 확대해 해석하지 않는다.
+[O4 계약](internal/osd/O4_CONTRACT.md)에 feature와 검증 경계를 구분했다.
+
 OSD 연결은 lossy session이며 전송한 요청을 재실행하지 않는다. 전송 후
 취소·단절·손상된 응답에는 `OutcomeUnknownError`를 보존한다. Messenger ACK는
 객체 요청 완료가 아니다. Redirect는 `ErrOSDRedirect`와 원본 metadata를
 반환하고 따라가지 않는다. 연결 실패나 client global ID 변경 후에는 handle을
 닫고 사용 레이어가 새 연결 여부를 결정한다. OSDMap 메시지는 다음의 raw
-지도 큐로 전달한다. Backoff 등 다른 미지원 control 메시지는 수신하면 세션을
-명시적으로 실패시킨다.
+지도 큐로 전달한다. watch/notify 이벤트는 소유한 stream으로 전달하며,
+replicated-PG profile은 backoff도 별도 처리한다. 미지원 control 메시지는
+세션을 명시적으로 실패시킨다.
 Watch/notify·backoff type에 요청과 같은 TID가 있어도 mutation 완료로
 처리하지 않으며, 이미 보낸 요청은 결과 불명확과 local submission을 유지한다.
 [control/event 계약](internal/osd/EVENT_CONTRACT.md)에 해당 합성 거절 시험과
-후속 wire·feature·native 검증 요구를 기록했다. 실제 backoff/watch 지원은 없다.
+후속 wire·feature·native 검증 요구를 기록했다.
+
+replicated-PG 연결의 `NextBackoff(ctx)`는 원본 PG/shard·epoch·ID·범위와 인증
+identity·연결 세대를 보존한다. `AckBackoff(ctx, block)`는 원 BLOCK의 명시적인
+protocol ACK이며 객체 실행 완료가 아니다. 수신과 dequeue만으로 ACK하지 않는다.
+차단 중 새 객체 요청은 전체 연결에서 미송신 `ErrOSDBackoff`로 거절한다.
+UNBLOCK이 ACK보다 먼저 와도 원 BLOCK의 기록과 gate를 보존하며, 단일 writer가
+원 ACK 차례에 도달한 뒤 해제한다. ACK가 큐에 접수된 뒤의 context 취소는
+그 ACK를 철회하지 않는다.
+이미 전송한 요청의 결과는 그대로 불명확할 수 있으며 UNBLOCK으로 재전송하지
+않는다. 늦은 ACK와 writer 순서, 큐·잔류 ACK 기록의 제한은
+[backoff 계약](internal/osd/BACKOFF_CONTRACT.md)에 기록한다.
 
 한 객체의 쓰기·조건 vector는 단일 요청으로 전송한다. `Data`의 byte 수와
 `Length`는 같아야 하며, truncate는 `Offset`에 새 크기를 넣는다.
@@ -1911,8 +1936,9 @@ legacy map과 `CreatePool(NoHashPSPool: true)`를 적용한다.
 OSD profile은 `[global] osd_pool_default_flag_hashpspool = false`를
 `WithConfigFile`로 Ceph 시작 전에 전달해 MGR 모듈의 자동 `.mgr` 풀에도
 적용한다. 시작 후 `.mgr` 플래그를 바꾸지 않으며, background 생성이 끝날
-때까지 유한 context 안에서 읽기 전용 native OSDMap을 확인한다. `.mgr`와
-데이터 풀의 존재 및 모든 풀의 HASHPSPOOL 미사용을 검사한다.
+때까지 유한 context 안에서 읽기 전용 native OSDMap을 확인한다. 기본
+`legacy-v6` fixture는 `.mgr`와 데이터 풀의 존재 및 모든 풀의 HASHPSPOOL
+미사용을 검사한다. 별도 `replicated-pg-v8` fixture는 HASHPSPOOL·8 PG를 검증한다.
 데이터 풀의 `NoHashPSPool`만으로 MON 요구 feature가 줄어들지는 않는다.
 제품이 미구현 bit를 광고해 admission을 통과시키지 않으며,
 bootstrap recipe와 실제 native 풀 정책은 `pool-policy.json`에 기록한다.

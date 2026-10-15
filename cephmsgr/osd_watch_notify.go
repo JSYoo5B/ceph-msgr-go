@@ -108,6 +108,10 @@ type OSDNotify struct{ *OSDWatchStream }
 func (w *OSDWatchStream) Cookie() uint64 { return w.cookie }
 
 func (o *OSDConnection) newWatchStream(request OSDRequest, options OSDWatchOptions, notifier bool) (*OSDWatchStream, error) {
+	if err := o.validatePlacement(request); err != nil {
+		return nil, err
+	}
+	request.Placement = cloneOSDPlacement(request.Placement)
 	if len(request.Operations) != 0 || request.ReadSnapshot != 0 && request.ReadSnapshot != OSDHeadSnapshot || request.SnapContext.Sequence != 0 || len(request.SnapContext.Snapshots) != 0 || request.OrderSnapshots {
 		return nil, osd.ErrRequest
 	}

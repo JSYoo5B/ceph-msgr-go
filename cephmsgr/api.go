@@ -100,6 +100,9 @@ type Options struct {
 	// credentials. OpenOSD requires this explicit opt-in. It does not subscribe
 	// to OSDMap or enable placement, routing or automatic object retries.
 	EnableOSD bool
+	// OSDProfile selects the fixed OSD wire contract before MON admission.
+	// ReplicatedPG requires EnableOSD and caller-supplied actual PG metadata.
+	OSDProfile OSDProfile
 	// MaxOSDConnections bounds OSD connections and concurrent setups held by
 	// this client. Defaults to 16; valid values are 1 through 1024. Close an
 	// OSDConnection to release its slot. It is independent of MaxInFlight.

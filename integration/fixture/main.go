@@ -66,6 +66,15 @@ func command(ctx context.Context, args []string) (result error) {
 	if len(args) != 0 && args[0] == "encode-osd-backoff" {
 		return runNativeEncoder(ctx, args[1:], backoffEncoderSpec)
 	}
+	if len(args) != 0 && args[0] == "encode-osd-request-v8" {
+		return runNativeEncoder(ctx, args[1:], requestV8EncoderSpec)
+	}
+	if len(args) != 0 && args[0] == "encode-osd-pg-list-v8" {
+		return runNativeEncoder(ctx, args[1:], pgListV8EncoderSpec)
+	}
+	if len(args) != 0 && args[0] == "encode-osd-reply-v8" {
+		return runNativeEncoder(ctx, args[1:], replyV8EncoderSpec)
+	}
 	if len(args) != 0 && args[0] == "encode-osd-sparse-read" {
 		return runNativeEncoder(ctx, args[1:], sparseReadEncoderSpec)
 	}
@@ -329,7 +338,7 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	}
 	manifest := map[string]any{"provider": "github.com/JSYoo5B/ceph-testcontainers-go", "provider_version": "v0.2.0", "image": p.image, "image_id": imageID, "architecture": architecture, "daemon_version": version,
 		"bootstrap": "public-api", "topology": "3 MON and 0/2 MGR owned daemon containers plus a native oracle client", "runtime": p.runtime, "fsid": p.fsid,
-		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd, "osd_store": p.osdStore, "osd_replicas": p.osdReplicas, "native_sparse_read_oracle": p.sparseReadOracle != ""}
+		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd, "osd_store": p.osdStore, "osd_replicas": p.osdReplicas, "osd_profile": p.osdProfile, "native_sparse_read_oracle": p.sparseReadOracle != ""}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return "", err

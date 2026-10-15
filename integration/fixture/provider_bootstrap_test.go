@@ -243,3 +243,33 @@ func TestLegacyPoolPolicyCanceledTimerReturnsPromptly(t *testing.T) {
 		t.Fatal("native readiness timer ignored cancellation", err)
 	}
 }
+
+func TestPGV8BootstrapKeepsLegacyCRUSHAndEnablesHashPSPool(t *testing.T) {
+	p := profile{osd: "1", osdProfile: "replicated-pg-v8"}
+	sections := bootstrapSections(t, fixtureBootstrapConfig(p))
+	if sections["osd"]["osd_op_history_size"] != "1024" {
+		t.Fatal("native ACK history observation is not configured", sections)
+	}
+	if sections["global"]["osd_pool_default_flag_hashpspool"] != "true" || sections["global"]["osd_crush_update_on_start"] != "false" {
+		t.Fatal("v8 changed narrow bootstrap profile", sections)
+	}
+	policy := poolPolicy{Epoch: 12, FSID: "fixture", Pools: []poolPolicyEntry{{ID: 1, Name: ".mgr", Flags: 1, FlagNames: "hashpspool"}, {ID: 2, Name: "ceph-msgr-osd-fixture", Flags: 1, FlagNames: "hashpspool"}}}
+	if err := validateReplicatedPGPoolPolicy(policy, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLegacyPoolPolicy(policy, true); err == nil {
+		t.Fatal("v6 admitted hashpspool")
+	}
+	for _, field := range []string{"numeric", "named"} {
+		bad := policy
+		bad.Pools = append([]poolPolicyEntry(nil), policy.Pools...)
+		if field == "numeric" {
+			bad.Pools[0].Flags = 0
+		} else {
+			bad.Pools[0].FlagNames = ""
+		}
+		if err := validateReplicatedPGPoolPolicy(bad, true); err == nil {
+			t.Fatal("v8 admitted inconsistent hashpspool", field)
+		}
+	}
+}

@@ -44,6 +44,7 @@ type OSDConnection struct {
 	features     uint64
 	globalID     uint64
 	watchState   *osdWatchState   // guarded by client.mu
+	backoffState *osdBackoffState // guarded by client.mu; inactive until writer gate is installed
 	generation   uint64
 	mapQueue     []queuedOSDMap // guarded by client.mu
 	mapBytes     uint64
@@ -65,6 +66,9 @@ func (c *Client) OpenOSD(ctx context.Context, target OSDTarget) (*OSDConnection,
 	}
 	if !c.options.EnableOSD {
 		return nil, ErrOSDDisabled
+	}
+	if c.options.OSDProfile != OSDProfileObjectHash && c.options.OSDProfile != OSDProfileReplicatedPG {
+		return nil, fmt.Errorf("%w: unknown OSD profile", ErrUnsupportedFeatures)
 	}
 	_, address, err := seedAddress(target.Address)
 	if err != nil || target.ID < 0 || !address.Endpoint.IsValid() {
@@ -170,7 +174,7 @@ func (o *OSDConnection) open(ctx context.Context) error {
 			return err
 		}
 		linked, release := c.linkedContext(ctx)
-		tr, err := c.open(linked, dialAddress(o.address), o.address, 4, uint64(o.target.ID), session.ServiceAuth{Authorizer: authorizer})
+		tr, err := c.open(linked, dialAddress(o.address), o.address, 4, uint64(o.target.ID), session.ServiceAuth{Authorizer: authorizer, ReplicatedPGV8: o.client.options.OSDProfile == OSDProfileReplicatedPG})
 		release()
 		if err != nil {
 			return err
@@ -181,6 +185,9 @@ func (o *OSDConnection) open(ctx context.Context) error {
 		}
 		config := c.sessionConfig()
 		config.NextTransaction = c.nextOSDTransaction
+		if o.client.options.OSDProfile == OSDProfileReplicatedPG {
+			config.BeforeWrite = o.beforeWriteBackoff
+		}
 		var s *session.Session
 		s = session.New(tr, config, func(m msgr.MessageData) error {
 			if m.Type == msgr.OSDMapMessage {
@@ -189,13 +196,22 @@ func (o *OSDConnection) open(ctx context.Context) error {
 			if m.Type == osd.WatchNotifyMessage {
 				return o.handleWatch(s, m)
 			}
+			if m.Type == osd.BackoffMessage && o.client.options.OSDProfile == OSDProfileReplicatedPG {
+				return o.handleBackoff(s, m)
+			}
 			// Other routing and backoff instructions remain unsupported.
 			return fmt.Errorf("%w: unsupported OSD control message %d", msgr.ErrFeatures, m.Type)
-		}, func(err error) { o.stopMaps(err); o.stopWatch(err) })
+		}, func(err error) { o.stopMaps(err); o.stopWatch(err); o.stopBackoffs(err) })
 		c.mu.Lock()
 		stale := c.closed || o.closed || c.authErr != nil || c.auth.GlobalID != auth.GlobalID
 		if !stale {
 			o.session, o.features, o.globalID = s, tr.Features, auth.GlobalID
+			if o.client.options.OSDProfile == OSDProfileReplicatedPG {
+				b := o.backoffsLocked()
+				b.mu.Lock()
+				b.gateInstalled = true
+				b.mu.Unlock()
+			}
 			stale = !c.attach(s)
 		}
 		c.mu.Unlock()

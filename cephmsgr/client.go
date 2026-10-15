@@ -57,6 +57,9 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if err := validateOSDProfile(options); err != nil {
+		return nil, err
+	}
 	if options.ConnectionMode.sessionMode() == 0 {
 		return nil, errors.New("ceph: invalid connection mode")
 	}
@@ -301,7 +304,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		candidate := copyAuth(c.auth)
 		attemptEpoch, knownEpoch := c.monMap.AuthEpoch, c.monMap.Epoch != 0
 		c.mu.Unlock()
-		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate})
+		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile == OSDProfileReplicatedPG})
 		if err != nil {
 			release()
 			failures = append(failures, err)

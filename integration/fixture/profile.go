@@ -15,6 +15,7 @@ type profile struct {
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
 	sparseReadOracle                                                      string
+	osdProfile                                                            string
 	nativeMgrPreparation                                                  string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
 	stressDuration, testRun, testTimeout, diagnostics                     string
@@ -28,6 +29,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		return fallback
 	}
 	p := profile{
+		osdProfile:           value("CEPH_MSGR_TEST_OSD_PROFILE", "legacy-v6"),
 		sparseReadOracle:     getenv("CEPH_MSGR_TEST_SPARSE_READ_ORACLE"),
 		image:                value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
 		keyType:              value("CEPH_MSGR_TEST_KEY_TYPE", "aes256k"),
@@ -69,6 +71,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_CONNECTION_MODE", p.connectionMode, []string{"secure", "crc"}},
 		{"CEPH_MSGR_TEST_MAPPED_IPV6", p.mappedIPv6, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_OSD", p.osd, []string{"0", "1"}},
+		{"CEPH_MSGR_TEST_OSD_PROFILE", p.osdProfile, []string{"legacy-v6", "replicated-pg-v8"}},
 		{"CEPH_MSGR_TEST_OSD_STORE", p.osdStore, []string{"memstore", "bluestore"}},
 		{"CEPH_MSGR_TEST_OSD_REPLICAS", p.osdReplicas, []string{"1", "3"}},
 		{"CEPH_MSGR_TEST_MGR_COUNT", p.mgrCount, []string{"0", "2"}},
@@ -77,6 +80,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if !slices.Contains(choice.allowed, choice.value) {
 			return profile{}, fmt.Errorf("%s must be one of %s", choice.name, strings.Join(choice.allowed, ", "))
 		}
+	}
+	if p.osdPGV8() && p.osd != "1" {
+		return profile{}, fmt.Errorf("replicated-pg-v8 requires CEPH_MSGR_TEST_OSD=1")
 	}
 	if p.sparseReadOracle != "" && p.osd != "1" {
 		return profile{}, fmt.Errorf("native sparse-read oracle requires OSD fixture")
@@ -154,6 +160,8 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	return p, nil
 }
 
+func (p profile) osdPGV8() bool { return p.osdProfile == "replicated-pg-v8" }
+
 func (p profile) monitors() string { return p.monAddresses }
 
 func (p profile) containerEnvironment() map[string]string {
@@ -175,6 +183,7 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_OSD":                    p.osd,
 		"CEPH_MSGR_TEST_OSD_STORE":              p.osdStore,
 		"CEPH_MSGR_TEST_OSD_REPLICAS":           p.osdReplicas,
+		"CEPH_MSGR_TEST_OSD_PROFILE":            p.osdProfile,
 		"CEPH_MSGR_STRESS_DURATION":             p.stressDuration,
 		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS":    "1",
 	}
@@ -206,6 +215,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_OSD":                    p.osd,
 		"CEPH_MSGR_TEST_OSD_STORE":              p.osdStore,
 		"CEPH_MSGR_TEST_OSD_REPLICAS":           p.osdReplicas,
+		"CEPH_MSGR_TEST_OSD_PROFILE":            p.osdProfile,
 		"CEPH_MSGR_STRESS_DURATION":             p.stressDuration,
 		"CEPH_MSGR_TEST_PROXY":                  proxy,
 	}

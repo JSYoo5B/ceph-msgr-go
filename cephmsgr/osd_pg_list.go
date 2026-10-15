@@ -98,7 +98,13 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 		return result, o.operationError(err)
 	}
 	input := pgListWireInput(request)
-	m, err := osd.EncodePGListRequest(input, o.features, c.options.MaxFrameSize)
+	var m msgr.MessageData
+	var err error
+	if c.options.OSDProfile == OSDProfileReplicatedPG {
+		m, err = osd.EncodePGListRequestV8(input, o.features, c.options.MaxFrameSize)
+	} else {
+		m, err = osd.EncodePGListRequest(input, o.features, c.options.MaxFrameSize)
+	}
 	if err != nil {
 		if errors.Is(err, osd.ErrFeatures) {
 			err = fmt.Errorf("%w: %w", ErrUnsupportedFeatures, err)
@@ -118,7 +124,8 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 		return result, errors.New("ceph: OSD connection belongs to an earlier client identity")
 	}
 	reply, err := s.Call(operation, m)
-	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch}
+	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch,
+		Placement: &OSDReplicatedPlacement{PG: OSDPG{Pool: request.PG.Pool, Seed: request.PG.Seed}, Primary: request.PG.Primary}}
 	result.Submission = submission
 	if err != nil {
 		return result, o.operationError(err)

@@ -43,6 +43,9 @@ var metadataFiles = []string{
 	"osd-sparse-read-input.json", "osd-sparse-read-result.json", "osd-sparse-read-command.json", "osd-sparse-read-results.json", "sparse-read-oracle-provenance.json",
 	"osd-checksum-command.json", "osd-checksum-input.json", "osd-checksum-result.json", "osd-checksum-results.json",
 	"osd-mapext-command.json", "osd-mapext-input.json", "osd-mapext-result.json", "osd-mapext-results.json",
+	"osd-replicated-pg-results.json", "osd-backoff-input.json", "osd-backoff-result.json", "osd-backoff-status.json", "osd-backoff-command.json", "osd-backoff-worker.log", "osd-backoff-results.json",
+	"osd-pg-list-v8-results.json", "osd-backoff-late-ack-results.json",
+	"osd-backoff-ack-input.json", "osd-backoff-ack-receipt.json",
 	"osd-watchers-result.json", "osd-watchers-status.json", "osd-watchers-worker.log", "osd-watchers-command.json", "osd-watchers-results.json",
 	"osd-omap-write-snaps.json", "osd-snap-results.json",
 }

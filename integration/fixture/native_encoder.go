@@ -28,9 +28,12 @@ type nativeEncoderSpec struct {
 	names                    []string
 	// requests is the number of leading MOSDOp vectors in names; zero
 	// keeps the original single request followed by replies.
-	requests int
-	events   int  // trailing native MWatchNotify vectors use header version 3
-	controls bool // all vectors are MOSDBackoff controls, version 1 and TID zero
+	requests       int
+	events         int    // trailing native MWatchNotify vectors use header version 3
+	controls       bool   // all vectors are MOSDBackoff controls, version 1 and TID zero
+	requestVersion uint16 // zero retains v6; explicit v8 suites declare their request class
+	mixedV8        bool   // explicitly permits leading v8 requests followed by native v6 replies
+	replyVersion   uint16 // explicit all-reply v8 suite; zero preserves the first-request default
 }
 
 var mutationEncoderSpec = nativeEncoderSpec{
@@ -113,6 +116,21 @@ var backoffEncoderSpec = nativeEncoderSpec{
 	names: []string{"backoff-native-event-v1-block-single", "backoff-native-event-v1-block-range", "backoff-native-event-v1-ack-range", "backoff-native-event-v1-unblock-range", "backoff-native-event-v1-block-sharded"},
 }
 
+var requestV8EncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-request-v8", wrapper: "osd_request_v8_native_encoder.cc", driver: "osd_request_v8_native_encoder.py", requests: 5, requestVersion: 8,
+	names: []string{"request-v8-native-read", "request-v8-native-mutation", "request-v8-native-snapshot", "request-v8-native-checksum", "request-v8-native-shard"},
+}
+
+var pgListV8EncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-pg-list-v8", wrapper: "osd_pg_list_v8_native_encoder.cc", driver: "osd_pg_list_v8_native_encoder.py", requests: 1, requestVersion: 8, mixedV8: true,
+	names: []string{"pg-list-v8-native-request-v8-list", "pg-list-v8-native-reply-v6-populated", "pg-list-v8-native-reply-v6-empty-end", "pg-list-v8-native-reply-v6-einval", "pg-list-v8-native-reply-v6-eacces"},
+}
+
+var replyV8EncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-reply-v8", wrapper: "osd_reply_v8_native_encoder.cc", driver: "osd_reply_v8_native_encoder.py", replyVersion: 8,
+	names: []string{"reply-v8-native-success", "reply-v8-native-enoent", "reply-v8-native-unknown-error", "reply-v8-native-mutation-ack", "reply-v8-native-redirect"},
+}
+
 // The offline encoder is a development oracle. It starts no Ceph daemon and
 // installs native build packages only in its owned disposable container.
 func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
@@ -192,7 +210,9 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	// A shared SDK cache can retain every oracle target. Supply all original
 	// wrapper sources during configuration, then build only the selected target.
 	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper, watchersEncoderSpec.wrapper, mapextEncoderSpec.wrapper, checksumEncoderSpec.wrapper, sparseReadEncoderSpec.wrapper, pgListEncoderSpec.wrapper, watchNotifyEncoderSpec.wrapper, allocHintEncoderSpec.driver}
-	files = append(files, backoffEncoderSpec.wrapper)
+	files = append(files, backoffEncoderSpec.wrapper, requestV8EncoderSpec.wrapper)
+	files = append(files, pgListV8EncoderSpec.wrapper)
+	files = append(files, replyV8EncoderSpec.wrapper)
 	if spec.command == sparseReadEncoderSpec.command {
 		files = append(files, "build_sparse_read_oracle.py", "osd_sparse_read_oracle.cc")
 	}
@@ -282,11 +302,32 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 			}
 			segments[segment] = data
 		}
-		if err := validateNativeEncoderHeaderFor(name, fixture, segments, i == 0 || i < spec.requests, spec.events > 0 && i >= len(spec.names)-spec.events, spec.controls); err != nil {
+		requestVersion := spec.requestVersion
+		if spec.replyVersion != 0 && (spec.replyVersion != 8 || spec.requests != 0 || spec.events != 0 || spec.controls || spec.requestVersion != 0 || spec.mixedV8) {
+			return nil, errors.New("native proof has unsupported all-reply v8 configuration")
+		}
+		if spec.mixedV8 && (requestVersion != 8 || spec.requests < 1 || spec.requests >= len(spec.names)) {
+			return nil, errors.New("native proof has unsupported mixed v8-request/v6-reply configuration")
+		}
+		if requestVersion != 0 && (requestVersion != 8 || !spec.mixedV8 && spec.requests != len(spec.names) || spec.events != 0 || spec.controls) {
+			return nil, errors.New("native proof has unsupported request-version suite configuration")
+		}
+		request := spec.replyVersion == 0 && (i == 0 || i < spec.requests)
+		if err := validateNativeEncoderHeaderVersions(name, fixture, segments, request, spec.events > 0 && i >= len(spec.names)-spec.events, spec.controls, requestVersion, spec.replyVersion); err != nil {
 			return nil, err
 		}
 		if spec.controls {
 			if err := validateNativeBackoffDecoder(name, fixture, segments["front"]); err != nil {
+				return nil, err
+			}
+		}
+		if requestVersion == 8 && (i == 0 || i < spec.requests) {
+			if err := validateNativeRequestV8Decoder(name, fixture, segments["front"]); err != nil {
+				return nil, err
+			}
+		}
+		if spec.replyVersion == 8 {
+			if err := validateNativeReplyV8Decoder(name, fixture, segments["data"]); err != nil {
 				return nil, err
 			}
 		}
@@ -299,6 +340,14 @@ func validateNativeEncoderHeader(name string, fixture map[string]any, segments m
 }
 
 func validateNativeEncoderHeaderFor(name string, fixture map[string]any, segments map[string][]byte, request, event, control bool) error {
+	return validateNativeEncoderHeaderClass(name, fixture, segments, request, event, control, 0)
+}
+
+func validateNativeEncoderHeaderClass(name string, fixture map[string]any, segments map[string][]byte, request, event, control bool, requestVersion uint16) error {
+	return validateNativeEncoderHeaderVersions(name, fixture, segments, request, event, control, requestVersion, 0)
+}
+
+func validateNativeEncoderHeaderVersions(name string, fixture map[string]any, segments map[string][]byte, request, event, control bool, requestVersion, replyVersion uint16) error {
 	metadata, ok := fixture["native_header"].(map[string]any)
 	if !ok {
 		return fmt.Errorf("native proof lacks %s native header metadata", name)
@@ -315,8 +364,20 @@ func validateNativeEncoderHeaderFor(name string, fixture map[string]any, segment
 		"front_len": uint64(len(segments["front"])), "middle_len": 0, "data_len": uint64(len(segments["data"])),
 	}
 	typ, compat, version := uint64(43), uint64(2), uint64(6)
+	if replyVersion != 0 {
+		version = uint64(replyVersion)
+		if expected["tid"] != 77 {
+			return fmt.Errorf("native proof has unsupported %s explicit reply identity", name)
+		}
+	}
 	if request {
 		typ, compat = 42, 3
+		if requestVersion != 0 {
+			version = uint64(requestVersion)
+			if expected["tid"] != 77 {
+				return fmt.Errorf("native proof has unsupported %s explicit request identity", name)
+			}
+		}
 	}
 	if event {
 		typ, compat, version = 44, 1, 3
@@ -363,6 +424,71 @@ func validateNativeBackoffDecoder(name string, fixture map[string]any, front []b
 	}
 	if _, ok := op["single"].(bool); !ok {
 		return fmt.Errorf("native proof lacks %s decoded control range classification", name)
+	}
+	return nil
+}
+
+func validateNativeRequestV8Decoder(name string, fixture map[string]any, front []byte) error {
+	// Current MOSDOp v8 begins with spg_t (24 bytes), raw hash, epoch and
+	// flags, osd_reqid_t v2 (27 bytes), a fixed 24-byte trace, then client_inc.
+	// Bind the independent native decoder receipt to these source-defined
+	// fields; actual PG and object hash must remain distinct.
+	routing, ok := fixture["decoded_routing"].(map[string]any)
+	if !ok || len(front) < 91 || front[0] != 1 || front[1] != 1 || binary.LittleEndian.Uint32(front[2:6]) != 18 || front[6] != 1 || front[36] != 2 || front[37] != 2 || binary.LittleEndian.Uint32(front[38:42]) != 21 {
+		return fmt.Errorf("native proof lacks %s current v8 routing decoder receipt", name)
+	}
+	for field, want := range map[string]uint64{
+		"pool": binary.LittleEndian.Uint64(front[7:15]), "seed": uint64(binary.LittleEndian.Uint32(front[15:19])),
+		"raw_hash": uint64(binary.LittleEndian.Uint32(front[24:28])), "client_inc": uint64(binary.LittleEndian.Uint32(front[87:91])),
+	} {
+		number, ok := routing[field].(json.Number)
+		got, err := strconv.ParseUint(number.String(), 10, 64)
+		if !ok || err != nil || got != want {
+			return fmt.Errorf("native proof has inconsistent %s v8 routing %s", name, field)
+		}
+	}
+	for field, want := range map[string]int64{
+		"shard": int64(int8(front[23])), "reqid_inc": int64(int32(binary.LittleEndian.Uint32(front[59:63]))),
+	} {
+		number, ok := routing[field].(json.Number)
+		got, err := strconv.ParseInt(number.String(), 10, 64)
+		if !ok || err != nil || got != want {
+			return fmt.Errorf("native proof has inconsistent %s v8 routing %s", name, field)
+		}
+	}
+	operations, ok := fixture["decoded_operations"].([]any)
+	if !ok || len(operations) == 0 {
+		return fmt.Errorf("native proof lacks %s independent v8 operation decoder receipt", name)
+	}
+	return nil
+}
+
+func validateNativeReplyV8Decoder(name string, fixture map[string]any, data []byte) error {
+	operations, ok := fixture["decoded_operations"].([]any)
+	if !ok || len(operations) == 0 || len(operations) > 64 {
+		return fmt.Errorf("native proof lacks %s independent reply-v8 operation decoder receipt", name)
+	}
+	position := 0
+	for _, entry := range operations {
+		op, ok := entry.(map[string]any)
+		if !ok {
+			return fmt.Errorf("native proof has invalid %s decoded reply operation", name)
+		}
+		result, ok := op["result"].(json.Number)
+		if _, err := strconv.ParseInt(result.String(), 10, 32); !ok || err != nil {
+			return fmt.Errorf("native proof has invalid %s signed reply result", name)
+		}
+		length, numeric := op["payload_len"].(json.Number)
+		count, err := strconv.ParseUint(length.String(), 10, 32)
+		hexData, present := op["outdata_hex"].(string)
+		output, hexErr := hex.DecodeString(hexData)
+		if !numeric || err != nil || !present || hexErr != nil || count != uint64(len(output)) || count > uint64(len(data)-position) || !bytes.Equal(output, data[position:position+len(output)]) {
+			return fmt.Errorf("native proof has inconsistent %s decoded reply output", name)
+		}
+		position += len(output)
+	}
+	if position != len(data) {
+		return fmt.Errorf("native proof has unclaimed %s decoded reply output", name)
 	}
 	return nil
 }

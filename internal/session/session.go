@@ -35,6 +35,9 @@ type request struct {
 	message msgr.MessageData
 	started bool
 	result  chan response
+	// completedErr preserves the first completed local/session failure when
+	// cancellation races with a writer admission rejection or Fail.
+	completedErr error // guarded by Session.mu
 }
 
 // Called with the session lock held. Completed calls can remain in the
@@ -52,6 +55,13 @@ type Config struct {
 	// OSD request identities must not restart on a new connection belonging to
 	// the same client. The coordinator can supply a client-wide transaction source.
 	NextTransaction func() (uint64, error)
+	// BeforeWrite runs on the single writer immediately before a queued
+	// message starts transmission, outside the session lock. The message is
+	// a read-only snapshot: the callback must not mutate or retain its bytes.
+	// An error completes an unstarted Call locally, without failing the
+	// transport or consuming a sequence number. A queued Send is discarded.
+	// The callback must return promptly and must not wait for this writer.
+	BeforeWrite func(msgr.MessageData) error
 }
 
 type Session struct {
@@ -134,6 +144,7 @@ func (s *Session) Fail(err error) {
 		if r.started {
 			cause = &OutcomeUnknownError{Cause: err}
 		}
+		r.completedErr = cause
 		r.releaseUnstarted()
 		r.result <- response{err: cause}
 	}
@@ -177,6 +188,9 @@ func (s *Session) abandon(id uint64, r *request, err error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.remove(id)
+	if r.completedErr != nil {
+		return r.completedErr
+	}
 	if r.started {
 		return &OutcomeUnknownError{Cause: err}
 	}
@@ -256,6 +270,27 @@ func (s *Session) Send(ctx context.Context, m msgr.MessageData) error {
 		return nil
 	}
 }
+
+// SendControl queues a protocol message on the ordinary ordered writer.
+// ctx governs queue admission only: after success, later caller cancellation
+// cannot discard this message before a later application message. Session
+// failure still stops transmission. Success is not proof of a full write or
+// peer receipt. The caller must keep the message bytes immutable after entry.
+func (s *Session) SendControl(ctx context.Context, m msgr.MessageData) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r := &request{ctx: context.Background(), message: m}
+	select {
+	case <-s.done:
+		return s.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	case s.queue <- r:
+		return nil
+	}
+}
+
 func (s *Session) control(f msgr.Frame) error {
 	select {
 	case s.controls <- f:
@@ -287,20 +322,39 @@ func (s *Session) writeLoop() {
 			err = s.writeFrame(msgr.Frame{Tag: msgr.Ack, Segments: [][]byte{e.Data}})
 		case r := <-s.queue:
 			s.mu.Lock()
-			id, ctx := r.message.Transaction, r.ctx
+			id, ctx, m := r.message.Transaction, r.ctx, r.message
 			valid := s.err == nil && (r.result == nil || s.pending[id] == r)
 			s.mu.Unlock()
-			// Context methods are caller code and may inspect this session.
-			// Cancellation or Fail can release the queued request during Err.
+			// Both context and admission callbacks run outside mu. Snapshot
+			// the message under mu because cancellation/Fail may clear the
+			// queued request while either callback is inspecting its bytes.
 			if !valid || ctx.Err() != nil {
 				continue
 			}
+			var admissionErr error
+			if s.config.BeforeWrite != nil {
+				admissionErr = s.config.BeforeWrite(m)
+				if ctx.Err() != nil {
+					continue
+				}
+			}
 			s.mu.Lock()
 			valid = s.err == nil && (r.result == nil || s.pending[id] == r)
+			if valid && admissionErr != nil {
+				if r.result != nil {
+					s.remove(id)
+					r.completedErr = admissionErr
+					r.releaseUnstarted()
+					r.result <- response{message: msgr.MessageData{Transaction: id}, err: admissionErr}
+				} else {
+					r.releaseUnstarted()
+				}
+				s.mu.Unlock()
+				continue
+			}
 			if valid && r.result != nil {
 				r.started = true
 			}
-			m := r.message
 			s.mu.Unlock()
 			if !valid {
 				continue

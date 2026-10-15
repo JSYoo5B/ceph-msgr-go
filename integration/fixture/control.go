@@ -364,6 +364,23 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-backoff")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || !c.profile.osdPGV8() || c.profile.osdReplicas != "1" ||
+			!slices.Contains([]string{"start", "observe", "finish"}, fields[1]) {
+			return errors.New("invalid owned single-OSD backoff oracle request")
+		}
+		args := []string{"python3", "/out/osd_backoff_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-backoff-command.json", "native backoff PG-state oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-backoff-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-osd-watch-notify")
 	if err != nil {
 		return err
@@ -990,21 +1007,30 @@ func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
 	if _, err := c.cluster.Ceph(ctx, "balancer", "off"); err != nil {
 		return err
 	}
-	_, err := c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: "ceph-msgr-osd-fixture", PGNum: 1, Replicas: count, MinSize: minimum, NoHashPSPool: true})
+	poolPGs, noHashPSPool := 1, true
+	if c.profile.osdPGV8() {
+		poolPGs, noHashPSPool = 8, false
+	}
+	_, err := c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: "ceph-msgr-osd-fixture", PGNum: poolPGs, Replicas: count, MinSize: minimum, NoHashPSPool: noHashPSPool})
 	if err != nil {
 		return fmt.Errorf("create legacy pool: %w", err)
 	}
 	// The global bootstrap default reaches automatic .mgr creation before
 	// startup. Never repair pool flags here: verify the recipe's actual result
 	// across every native pool and reject unsupported admission requirements.
-	policy, err := waitLegacyPoolPolicy(ctx, c.profile.mgrCount == "2", c.poolPolicy, waitLegacyPoolObservation)
+	validator := validateLegacyPoolPolicy
+	if c.profile.osdPGV8() {
+		validator = validateReplicatedPGPoolPolicy
+	}
+	policy, err := waitFixturePoolPolicy(ctx, c.profile.mgrCount == "2", c.poolPolicy, waitLegacyPoolObservation, validator)
 	if err != nil {
 		return err
 	}
 	evidence, err := json.MarshalIndent(map[string]any{
-		"bootstrap":                        map[string]any{"section": "global", "osd_pool_default_flag_hashpspool": false, "api": "WithConfigFile"},
-		"explicit_data_pool_no_hashpspool": true,
-		"verified":                         policy,
+		"bootstrap":                        map[string]any{"section": "global", "osd_pool_default_flag_hashpspool": !noHashPSPool, "api": "WithConfigFile"},
+		"explicit_data_pool_no_hashpspool": noHashPSPool,
+		"osd_profile":                      c.profile.osdProfile, "data_pool_pg_num": poolPGs,
+		"verified": policy,
 	}, "", "  ")
 	if err != nil {
 		return err
@@ -1015,6 +1041,14 @@ func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
 var errLegacyPoolsNotReady = errors.New("legacy fixture pools are not ready")
 
 func validateLegacyPoolPolicy(policy poolPolicy, managers bool) error {
+	return validateFixturePoolPolicy(policy, managers, false)
+}
+
+func validateReplicatedPGPoolPolicy(policy poolPolicy, managers bool) error {
+	return validateFixturePoolPolicy(policy, managers, true)
+}
+
+func validateFixturePoolPolicy(policy poolPolicy, managers, hashPSPool bool) error {
 	if policy.Epoch == 0 || policy.FSID == "" {
 		return errors.New("legacy pool policy has no actual map identity")
 	}
@@ -1027,8 +1061,13 @@ func validateLegacyPoolPolicy(policy poolPolicy, managers bool) error {
 		ids[pool.ID], names[pool.Name] = true, true
 		// Tentacle pg_pool_t::FLAG_HASHPSPOOL is bit 0. Check native numeric
 		// flags as well as display names so a missing label cannot admit it.
-		if pool.Flags&1 != 0 || strings.Contains(","+pool.FlagNames+",", ",hashpspool,") {
+		numericHash := pool.Flags&1 != 0
+		namedHash := strings.Contains(","+pool.FlagNames+",", ",hashpspool,")
+		if !hashPSPool && (numericHash || namedHash) {
 			return fmt.Errorf("legacy fixture still requires HASHPSPOOL in pool %s", pool.Name)
+		}
+		if hashPSPool && (!numericHash || !namedHash) {
+			return fmt.Errorf("replicated-pg-v8 fixture missing HASHPSPOOL in pool %s", pool.Name)
 		}
 		dataPool = dataPool || pool.Name == "ceph-msgr-osd-fixture"
 		managerPool = managerPool || pool.Name == ".mgr"
@@ -1047,6 +1086,13 @@ func validateLegacyPoolPolicy(policy poolPolicy, managers bool) error {
 func waitLegacyPoolPolicy(ctx context.Context, managers bool,
 	fetch func(context.Context) (poolPolicy, error), wait func(context.Context, time.Duration) error,
 ) (poolPolicy, error) {
+	return waitFixturePoolPolicy(ctx, managers, fetch, wait, validateLegacyPoolPolicy)
+}
+
+func waitFixturePoolPolicy(ctx context.Context, managers bool,
+	fetch func(context.Context) (poolPolicy, error), wait func(context.Context, time.Duration) error,
+	validate func(poolPolicy, bool) error,
+) (poolPolicy, error) {
 	ctx, cancel := context.WithTimeout(ctx, fixtureStartupTimeout)
 	defer cancel()
 	for {
@@ -1060,7 +1106,7 @@ func waitLegacyPoolPolicy(ctx context.Context, managers bool,
 		if err := ctx.Err(); err != nil {
 			return poolPolicy{}, err
 		}
-		err = validateLegacyPoolPolicy(policy, managers)
+		err = validate(policy, managers)
 		if err == nil {
 			return policy, nil
 		}
