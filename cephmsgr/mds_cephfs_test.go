@@ -559,3 +559,61 @@ func TestCephFSFlushJournalAndArrivalOrder(t *testing.T) {
 		t.Fatal("arrival order across pushes, replies and session events", lease.Arrival, reply.Arrival, recall.Arrival)
 	}
 }
+
+func TestCephFSResubmitForwardedKeepsTIDOnDestinationRank(t *testing.T) {
+	c, peers, ctx := cephfsTestClientWith(t, func(peer *mdsTestPeer, dial int) {
+		if dial == 2 {
+			peer.rank = 1
+		}
+	})
+	open := func(target MDSTarget) (*MDSSession, *mdsTestPeer) {
+		m, err := c.OpenMDS(ctx, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		peer := <-peers
+		pending := mdsStartSession(m, ctx, MDSSessionOptions{RenewInterval: time.Hour})
+		peer.next(t)
+		peer.send(t, mdsSessionV7(mds.SessionOpen, 0, nil, 0, false))
+		got := <-pending
+		if got.err != nil {
+			t.Fatal(got.err)
+		}
+		mdsSessionNext(t, peer, mds.SessionRequestRenewCaps)
+		return got.session, peer
+	}
+	s0, p0 := open(MDSTarget{FilesystemID: 7, Rank: 0, Address: "v2:192.0.2.1:6805/17"})
+	s1, p1 := open(MDSTarget{FilesystemID: 7, Rank: 1, Address: "v2:192.0.2.1:6805/0"})
+	call, err := s0.Submit(ctx, MDSRequest{Op: MDSOpLookup, Path: MDSFilePath{Ino: 1, Path: "pinned"}, Stamp: MDSTime{Seconds: 7}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p0.next(t)
+	f := wire.Encoder{}
+	f.U32(1)
+	f.U32(1)
+	f.U8(1)
+	p0.send(t, msgr.MessageData{Type: mds.ClientRequestForwardMessage, Version: 1, CompatVersion: 1, Transaction: call.Transaction(), Front: f.Data})
+	var forwarded *MDSRequestForwardedError
+	if _, err := call.Wait(ctx); !errors.As(err, &forwarded) || forwarded.Arrival == 0 {
+		t.Fatal("forward", err)
+	}
+	if _, err := s0.ResubmitForwarded(ctx, call); err == nil {
+		t.Fatal("resubmitted on the forwarding session")
+	}
+	resent, err := s1.ResubmitForwarded(ctx, call)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireRequest, err := mds.DecodeClientRequest(p1.next(t), 0)
+	if err != nil || resent.Transaction() != call.Transaction() || wireRequest.Forward != 1 || wireRequest.Stamp.Seconds != 7 || wireRequest.Path.Path != "pinned" {
+		t.Fatal("forward resubmission", wireRequest, err)
+	}
+	if _, err := s1.ResubmitForwarded(ctx, call); err == nil {
+		t.Fatal("forwarded call resubmitted twice")
+	}
+	p1.send(t, cephfsReply(MDSOpLookup, call.Transaction(), 0, true, nil))
+	if reply, err := resent.WaitSafe(ctx); err != nil || reply.Transaction != call.Transaction() {
+		t.Fatal(reply, err)
+	}
+}

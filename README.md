@@ -428,6 +428,10 @@ inode로 safe 완료됐고 응답이 없던 create는 한 번만 실행됐다. E
 [push 검증 기록](integration/fixture/MDS_CEPHFS_PUSH_VALIDATION.md)에는 dentry lease
 REVOKE와 RELEASE 응답, snapshot UPDATE·SPLIT·DESTROY, quota, RECALL_STATE와 cap 반환,
 `cache drop` 중 FLUSHMSG와 `AcknowledgeFlush` 응답을 실제 MDS에서 확인한 결과를 남겼다.
+[다중 rank 검증 기록](integration/fixture/MDS_CEPHFS_RANKS_VALIDATION.md)에는 active rank 두 개와
+standby 구성에서 rank별 session, rank 1로의 forward와 재제출, subtree 이동 중 cap
+EXPORT·IMPORT와 FLUSHMSG 응답, rank 0 standby takeover 뒤 `ReconnectSession` 결과를 남겼다.
+`ResubmitForwarded`는 forward된 요청을 원래 TID로 대상 rank session에 한 번 다시 보낸다.
 
 ## OSD 객체 요청 통신
 

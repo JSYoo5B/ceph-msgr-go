@@ -76,6 +76,8 @@ var (
 // rank. The library does not resend: the caller chooses whether to submit
 // the request to DestinationMDS with Forward attempts recorded.
 type MDSRequestForwardedError struct {
+	// Arrival orders the forward among the session's replies and pushes.
+	Arrival        uint64
 	Transaction    uint64
 	DestinationMDS int32
 	Forward        int32
@@ -158,6 +160,8 @@ type MDSRequestCall struct {
 	// request keeps the submitted request (stamp fixed) so the caller can
 	// explicitly resubmit it with the same TID after an MDS reconnect.
 	request MDSRequest
+	// forwarded marks a forwarded call already resubmitted (session.mu).
+	forwarded bool
 	// guarded by session.mu
 	first, safe *MDSReply
 	err         error
@@ -328,6 +332,72 @@ func (s *MDSSession) submit(ctx context.Context, request MDSRequest, features []
 	return call, nil
 }
 
+// ResubmitForwarded sends a forwarded call again on this session, with its
+// original TID and stamp and the forward count the MDS reported, as native
+// clients resend a forwarded request to the new rank. This session must name
+// the forward's destination rank on another connection of the same Client;
+// each forwarded call can be resubmitted once. The MDS forwards before
+// executing, so this is not a replay of executed work.
+func (s *MDSSession) ResubmitForwarded(ctx context.Context, call *MDSRequestCall) (*MDSRequestCall, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if !s.conn.client.options.EnableCephFS {
+		return nil, ErrCephFSDisabled
+	}
+	if call == nil || call.session == s || call.session.conn.client != s.conn.client {
+		return nil, errors.New("ceph: forwarded call does not belong to another session of this client")
+	}
+	previous := call.session
+	previous.mu.Lock()
+	var forward *MDSRequestForwardedError
+	ok := call.resolved && errors.As(call.err, &forward) && !call.forwarded
+	request := call.request
+	if ok {
+		call.forwarded = true
+	}
+	previous.mu.Unlock()
+	if !ok {
+		return nil, errors.New("ceph: only a forwarded call can be resubmitted once")
+	}
+	undo := func() {
+		previous.mu.Lock()
+		call.forwarded = false
+		previous.mu.Unlock()
+	}
+	if forward.DestinationMDS != s.conn.target.Rank {
+		undo()
+		return nil, ErrMDSTargetChanged
+	}
+	s.mu.Lock()
+	state, terminal, features := s.state, s.err, s.open.SupportedFeatures
+	s.mu.Unlock()
+	if state.terminal() {
+		undo()
+		return nil, terminal
+	}
+	if state != MDSSessionOpen && state != MDSSessionStale {
+		undo()
+		return nil, errors.New("ceph: MDS session is not open")
+	}
+	if err := requestFeatures(features); err != nil {
+		undo()
+		return nil, err
+	}
+	if forward.Forward >= 0 {
+		request.Forward = uint32(forward.Forward)
+	}
+	if err := s.acquireSlot(ctx); err != nil {
+		undo()
+		return nil, err
+	}
+	resent, err := s.submit(ctx, request, features, call.transaction)
+	if err != nil {
+		undo()
+	}
+	return resent, err
+}
+
 // resolveLocked completes a call and releases its slot. s.mu is held.
 func (s *MDSSession) resolveLocked(call *MDSRequestCall, err error) {
 	if call.resolved {
@@ -363,7 +433,8 @@ func (s *MDSSession) dispatchReplyLocked(message msgr.MessageData, received time
 		if call.first != nil {
 			return fmt.Errorf("%w: MDS forwarded a request after replying", msgr.ErrFrame)
 		}
-		s.resolveLocked(call, &MDSRequestForwardedError{Transaction: call.transaction, DestinationMDS: forward.DestinationMDS, Forward: forward.Forward, MustResend: forward.MustResend})
+		s.arrival++
+		s.resolveLocked(call, &MDSRequestForwardedError{Arrival: s.arrival, Transaction: call.transaction, DestinationMDS: forward.DestinationMDS, Forward: forward.Forward, MustResend: forward.MustResend})
 		return nil
 	}
 	decoded, err := mds.DecodeClientReply(message, s.conn.client.options.MaxFrameSize)

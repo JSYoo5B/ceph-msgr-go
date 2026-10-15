@@ -356,6 +356,8 @@ type mdsTestPeer struct {
 	cephfs bool
 	// serverFeatures overrides the features advertised in ServerIdent.
 	serverFeatures uint64
+	// rank is the active rank reported in ServerIdent.
+	rank uint64
 	// reconnect answers SESSION_RECONNECT (see peerConfig.reconnect).
 	reconnect func(msgr.Frame) (msgr.Tag, []byte)
 }
@@ -392,7 +394,7 @@ func (p *mdsTestPeer) serve() {
 	defer close(p.done)
 	defer p.conn.Close()
 	p.conn.SetDeadline(time.Now().Add(3 * time.Second))
-	r, w, err := mdsMockAuthenticate(p.conn, peerConfig{role: 2, id: 0, cephfs: p.cephfs, serverFeatures: p.serverFeatures, reconnect: p.reconnect})
+	r, w, err := mdsMockAuthenticate(p.conn, peerConfig{role: 2, id: p.rank, cephfs: p.cephfs, serverFeatures: p.serverFeatures, reconnect: p.reconnect})
 	if err != nil {
 		p.errors <- err
 		return

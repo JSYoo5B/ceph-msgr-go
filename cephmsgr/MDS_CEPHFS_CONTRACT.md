@@ -242,9 +242,22 @@ during `cache drop` whose gather ended on the Go `AcknowledgeFlush`; push
 sequences equaled the pushes counted. See
 [the push record](../integration/fixture/MDS_CEPHFS_PUSH_VALIDATION.md).
 MKDIR replies grant dentry leases that the client's own later RMDIR may have
-to release first. `DecodeMDSSnapTrace` decodes push traces. Not exercised
-live: FORCE_RO, lease RENEW, cap snaps and FLUSHSNAP, EXPORT/IMPORT and
-FLUSHMSG from migration, forwards and multiple ranks. Synthetic peers cover
+to release first. `DecodeMDSSnapTrace` decodes push traces.
+
+A two-active-rank plus standby acceptance (product `daa2494`, both profiles)
+held one session per rank under one GlobalID and address instance, saw a
+rank-0 request forwarded to rank 1 (Forward 1, MustResend) and completed on
+rank 1, received cap EXPORT on rank 0 and IMPORT on rank 1 (peer cap IDs,
+issue and migrate sequences) with FLUSHMSG acknowledged during a pinned
+subtree migration, and reattached rank 0 with `ReconnectSession` after a
+standby takeover while the rank-1 session stayed open. See
+[the ranks record](../integration/fixture/MDS_CEPHFS_RANKS_VALIDATION.md).
+`ResubmitForwarded` resends a forwarded call once on the destination rank's
+session with its original TID, stamp and the reported forward count, as
+native clients do; a forward carries `Arrival` like replies. Not exercised
+live: FORCE_RO, lease RENEW, cap snaps and FLUSHSNAP, forwarded mutations,
+requests in flight during migration, standby-replay and more than two
+ranks. Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and
 safe replies, forwards, session loss, the data segment, push ordering and
 counting, client answers, close resend and protocol violations.
