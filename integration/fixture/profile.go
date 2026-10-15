@@ -13,8 +13,8 @@ const profileDefaultImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf879
 // profile describes a development fixture, not product connection options.
 type profile struct {
 	monAddresses, fsid, peers, mdsFreshIdentity, mdsCommandsIdentity      string
-	mdsSessionsForeignIdentity                                            string
-	mdsFresh, mdsCommands, mdsSessions                                    string
+	mdsSessionsForeignIdentity, mdsCephFSIdentity                         string
+	mdsFresh, mdsCommands, mdsSessions, mdsCephFS                         string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
 	sparseReadOracle                                                      string
@@ -35,6 +35,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		mdsFresh:             value("CEPH_MSGR_TEST_MDS_FRESH", "0"),
 		mdsCommands:          value("CEPH_MSGR_TEST_MDS_COMMANDS", "0"),
 		mdsSessions:          value("CEPH_MSGR_TEST_MDS_SESSIONS", "0"),
+		mdsCephFS:            value("CEPH_MSGR_TEST_MDS_CEPHFS", "0"),
 		osdProfile:           value("CEPH_MSGR_TEST_OSD_PROFILE", "legacy-v6"),
 		sparseReadOracle:     getenv("CEPH_MSGR_TEST_SPARSE_READ_ORACLE"),
 		image:                value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
@@ -68,6 +69,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_MDS_FRESH", p.mdsFresh, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_COMMANDS", p.mdsCommands, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_SESSIONS", p.mdsSessions, []string{"0", "1"}},
+		{"CEPH_MSGR_TEST_MDS_CEPHFS", p.mdsCephFS, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_SERVICE_CIPHER", p.serviceCipher, []string{"aes", "aes256k"}},
 		{"CEPH_MSGR_TEST_RUNTIME", p.runtime, []string{"container", "host"}},
 		{"CEPH_MSGR_TEST_RACE", p.race, []string{"0", "1"}},
@@ -169,6 +171,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	if p.mdsSessions == "1" && (p.mdsFresh != "1" || p.mdsCommands == "1") {
 		return profile{}, fmt.Errorf("MDS sessions require CEPH_MSGR_TEST_MDS_FRESH=1 and exclude CEPH_MSGR_TEST_MDS_COMMANDS")
 	}
+	if p.mdsCephFS == "1" && (p.mdsFresh != "1" || p.mdsCommands == "1" || p.mdsSessions == "1") {
+		return profile{}, fmt.Errorf("MDS CephFS metadata acceptance requires CEPH_MSGR_TEST_MDS_FRESH=1 and excludes CEPH_MSGR_TEST_MDS_COMMANDS and CEPH_MSGR_TEST_MDS_SESSIONS")
+	}
 	if p.mdsFresh == "1" {
 		selected = "^TestCephMDSFreshIntegration$"
 		if p.mdsCommands == "1" {
@@ -176,6 +181,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		if p.mdsSessions == "1" {
 			selected = "^TestCephMDSSessionsIntegration$"
+		}
+		if p.mdsCephFS == "1" {
+			selected = "^TestCephMDSCephFSIntegration$"
 		}
 		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || p.sparseReadOracle != "" ||
 			p.testRun != "" && p.testRun != selected {
@@ -198,12 +206,15 @@ func (p profile) mdsFreshOSDAllowed() bool {
 // mdsPublicClient reports the closed MDS profiles whose public Go clients
 // enable only MDS. They use the legacy/no-HASHPSPOOL fixture so MON admission
 // needs neither EnableOSD nor the modern OSD profile's extra feature bits.
-func (p profile) mdsPublicClient() bool { return p.mdsCommands == "1" || p.mdsSessions == "1" }
+func (p profile) mdsPublicClient() bool {
+	return p.mdsCommands == "1" || p.mdsSessions == "1" || p.mdsCephFS == "1"
+}
 
-// cleanupBudget bounds fixture termination. Session acceptance restores owned
-// filesystem, configuration, blocklist and identity state before removal.
+// cleanupBudget bounds fixture termination. Session and CephFS metadata
+// acceptance restore or verify owned filesystem, configuration, blocklist and
+// identity state before removal.
 func (p profile) cleanupBudget() time.Duration {
-	if p.mdsSessions == "1" {
+	if p.mdsSessions == "1" || p.mdsCephFS == "1" {
 		return 2 * time.Minute
 	}
 	return time.Minute
@@ -220,6 +231,7 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_MDS_FRESH":              p.mdsFresh,
 		"CEPH_MSGR_TEST_MDS_COMMANDS":           p.mdsCommands,
 		"CEPH_MSGR_TEST_MDS_SESSIONS":           p.mdsSessions,
+		"CEPH_MSGR_TEST_MDS_CEPHFS":             p.mdsCephFS,
 		"CEPH_MSGR_TEST_KEY_TYPE":               p.keyType,
 		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
 		"CEPH_MSGR_TEST_IP_FAMILY":              p.ipFamily,
@@ -252,6 +264,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_MDS_FRESH":              p.mdsFresh,
 		"CEPH_MSGR_TEST_MDS_COMMANDS":           p.mdsCommands,
 		"CEPH_MSGR_TEST_MDS_SESSIONS":           p.mdsSessions,
+		"CEPH_MSGR_TEST_MDS_CEPHFS":             p.mdsCephFS,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":   marker,
 		"CEPH_MSGR_MONITORS":                    p.monitors(),
 		"CEPH_MSGR_KEY_FILE":                    filepath.Join(controlDir, "key"),
@@ -288,6 +301,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.mdsSessions == "1" {
 		result["CEPH_MSGR_MDS_SESSIONS_FOREIGN_IDENTITY"] = p.mdsSessionsForeignIdentity
 		result["CEPH_MSGR_MDS_SESSIONS_FOREIGN_KEY_FILE"] = filepath.Join(controlDir, "mds-sessions-foreign.key")
+	}
+	if p.mdsCephFS == "1" {
+		result["CEPH_MSGR_MDS_CEPHFS_IDENTITY"] = p.mdsCephFSIdentity
+		result["CEPH_MSGR_MDS_CEPHFS_KEY_FILE"] = filepath.Join(controlDir, "mds-cephfs.key")
 	}
 	return result
 }

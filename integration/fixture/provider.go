@@ -38,6 +38,7 @@ type fixtureCluster struct {
 	mdsFresh    *mdsFreshScope
 	mdsCommands *mdsCommandsScope
 	mdsSessions *mdsSessionsScope
+	mdsCephFS   *mdsCephFSScope
 }
 
 func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
@@ -315,6 +316,11 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	}
 	if p.mdsSessions == "1" {
 		if err = c.prepareMDSSessions(ctx, out); err != nil {
+			return c, err
+		}
+	}
+	if p.mdsCephFS == "1" {
+		if err = c.prepareMDSCephFS(ctx, out); err != nil {
 			return c, err
 		}
 	}

@@ -140,7 +140,10 @@ func (d *mdsCommandDials) latest(t *testing.T) *testcluster.StreamRelay {
 	return d.relays[len(d.relays)-1]
 }
 
-func mdsCommandClient(t *testing.T, ctx context.Context, identity, keyPath, endpoint string, enabled bool) (*cephmsgr.Client, *mdsCommandDials) {
+// mdsCommandClient dials an MDS-only client whose MDS connections pass through
+// counted, closable stream relays. configure may adjust options (for example
+// EnableCephFS) before Dial; the dial wrapper and limits are fixed here.
+func mdsCommandClient(t *testing.T, ctx context.Context, identity, keyPath, endpoint string, enabled bool, configure ...func(*cephmsgr.Options)) (*cephmsgr.Client, *mdsCommandDials) {
 	t.Helper()
 	options := integrationOptions(t)
 	encoded, err := os.ReadFile(keyPath)
@@ -161,6 +164,9 @@ func mdsCommandClient(t *testing.T, ctx context.Context, identity, keyPath, endp
 	options.KeepaliveInterval, options.KeepaliveTimeout = time.Hour, 2*time.Hour
 	options.ConnectTimeout = 5 * time.Second
 	options.MaxFrameSize = 1 << 20
+	for _, f := range configure {
+		f(&options)
+	}
 	dials := &mdsCommandDials{}
 	dial := options.DialContext
 	options.DialContext = func(call context.Context, network, address string) (net.Conn, error) {

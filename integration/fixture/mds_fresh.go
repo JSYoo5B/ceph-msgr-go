@@ -484,8 +484,9 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 	}
 	s := c.mdsFresh
 	budget := 45 * time.Second
-	if c.mdsSessions != nil {
-		// Session restoration has its own 45-second bound before removal.
+	if c.mdsSessions != nil || c.mdsCephFS != nil {
+		// Session restoration and CephFS verification each have their own
+		// 45-second bound before removal.
 		budget += 45 * time.Second
 	}
 	ctx, stop := context.WithTimeout(ctx, budget)
@@ -513,6 +514,7 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 		IdentityRemoved        bool            `json:"identity_removed"`
 		CommandIdentityRemoved bool            `json:"command_identity_removed,omitempty"`
 		SessionsRestored       bool            `json:"sessions_restored,omitempty"`
+		CephFSVerified         bool            `json:"cephfs_verified,omitempty"`
 		Completed              bool            `json:"completed"`
 		Error                  string          `json:"error,omitempty"`
 		FSDump                 json.RawMessage `json:"fs_dump,omitempty"`
@@ -527,6 +529,11 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 	// not prevent the filesystem removal below.
 	sessionsErr := c.finishMDSSessions(ctx)
 	receipt.SessionsRestored = c.mdsSessions != nil && sessionsErr == nil
+	// CephFS acceptance verifies its namespace, sessions and blocklist while
+	// the MDS still exists, then removes its two identities.
+	cephfsErr := c.finishMDSCephFS(ctx)
+	receipt.CephFSVerified = c.mdsCephFS != nil && cephfsErr == nil
+	sessionsErr = errors.Join(sessionsErr, cephfsErr)
 	var removeErr error
 	if s.removeFilesystem == nil {
 		removeErr = errors.New("owned MDS fresh removal operation unavailable")

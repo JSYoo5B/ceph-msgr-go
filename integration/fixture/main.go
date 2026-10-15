@@ -369,11 +369,15 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	manifest["mds_fresh"] = p.mdsFresh == "1"
 	manifest["mds_commands"] = p.mdsCommands == "1"
 	manifest["mds_sessions"] = p.mdsSessions == "1"
+	manifest["mds_cephfs"] = p.mdsCephFS == "1"
 	if p.mdsFresh == "1" {
 		manifest["topology"] = "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
 	}
 	if p.mdsSessions == "1" {
 		manifest["session_mutations"] = "owned refuse_client_session, required_client_features, session timeouts, mds_defer_session_stale, eviction blocklist entries and one foreign identity, each reconciled during cleanup"
+	}
+	if p.mdsCephFS == "1" {
+		manifest["cephfs_mutations"] = "owned Go and native LibCephFS identities, one directory with four files, one user xattr and one native write, removed through Go requests and verified natively during the test and cleanup"
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
