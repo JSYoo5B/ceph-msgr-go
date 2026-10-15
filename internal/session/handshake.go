@@ -239,11 +239,32 @@ func HandshakeFreshMDS(ctx context.Context, conn net.Conn, target msgr.Address, 
 	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshMDSHandshake)
 }
 
+// CephFSFeatures adds the Messenger features whose CephFS client encodings
+// and MDS behaviors are implemented: FLOCK (3) and EXPORT_PEER (37) select
+// MClientCaps v12 with flock/peer/barrier fields, DIRLAYOUTHASH (7) dir
+// layouts, REPLY_CREATE_INODE (27) the created inode in create replies,
+// CREATEPOOLID (26) caller pool IDs in open args, MDS_INLINE_DATA (40) inline
+// data in caps and inodes, MDS_QUOTA (47) quota fields and MClientQuota, and
+// FS_FILE_LAYOUT_V2 (58) pool namespaces. Pinned include/ceph_features.h.
+const CephFSFeatures uint64 = Features | 1<<3 | 1<<7 | 1<<26 | 1<<27 | 1<<37 | 1<<40 | 1<<47 | 1<<58
+
+// HandshakeFreshCephFS is HandshakeFreshMDS for a CephFS client profile. The
+// MDS must support every CephFSFeatures bit; a server lacking one is refused
+// before any CephFS message, instead of falling back to older encodings.
+func HandshakeFreshCephFS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (*Transport, error) {
+	if rank < 0 {
+		conn.Close()
+		return nil, errors.New("ceph messenger: fresh MDS connection requires a nonnegative active rank")
+	}
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake)
+}
+
 type handshakePolicy uint8
 
 const (
 	lossyHandshake handshakePolicy = iota
 	freshMDSHandshake
+	freshCephFSHandshake
 )
 
 func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, policy handshakePolicy) (_ *Transport, err error) {
@@ -480,11 +501,14 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	ident.U64(binary.LittleEndian.Uint64(random[:]))
 	supportedFeatures, requiredFeatures := handshakeFeatures(role, auth)
 	flags, cookie := sessionFlagLossy, uint64(0)
-	if policy == freshMDSHandshake {
+	if policy == freshMDSHandshake || policy == freshCephFSHandshake {
 		// Pinned ProtocolV2.cc:1963-1980: a fresh stateful connection has a
 		// nonzero client cookie and no LOSSY flag. Never offer MON/OSD policy
 		// extensions, even if an authentication wrapper exposes their seams.
 		supportedFeatures, requiredFeatures = Features, RequiredFeatures
+		if policy == freshCephFSHandshake {
+			supportedFeatures, requiredFeatures = CephFSFeatures, CephFSFeatures&^Features|RequiredFeatures
+		}
 		var cookieRandom [8]byte
 		if _, err = rand.Read(cookieRandom[:]); err != nil {
 			return nil, err
@@ -533,7 +557,7 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if !slices.Contains(serverAddresses, target) {
 		return nil, fmt.Errorf("%w: server identification does not include target address", msgr.ErrAuthentication)
 	}
-	if (role == 4 || policy == freshMDSHandshake || expectedID != 0) && serverID != expectedID {
+	if (role == 4 || policy != lossyHandshake || expectedID != 0) && serverID != expectedID {
 		return nil, errors.New("ceph messenger: unexpected daemon ID")
 	}
 	if requiredFeatures&^supported != 0 || required&^supportedFeatures != 0 {
@@ -542,7 +566,7 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	// SERVER_IDENT is authoritative. The ordinary policy remains lossy.
 	// Fresh MDS admits a single stateful transport, without retaining cookies
 	// for recovery. Any loss is terminal; it cannot become a resumed session.
-	if policy == freshMDSHandshake {
+	if policy != lossyHandshake {
 		if serverFlags != 0 || serverCookie == 0 {
 			return nil, fmt.Errorf("%w: fresh MDS requires stateful flags 0 and a nonzero server cookie", msgr.ErrFeatures)
 		}

@@ -101,7 +101,7 @@ func TestEncodeClientSessionMatchesFreshNative(t *testing.T) {
 		encode  func() (msgr.MessageData, error)
 	}{
 		{"request-open", 7, func() (msgr.MessageData, error) {
-			return EncodeRequestOpen(map[string]string{"entity_id": "admin", "root": "/"}), nil
+			return EncodeRequestOpen(map[string]string{"entity_id": "admin", "root": "/"}, ClientFeatures), nil
 		}},
 		{"request-renewcaps", 1, func() (msgr.MessageData, error) { return EncodeSessionControl(SessionRequestRenewCaps, 5) }},
 		{"request-close", 1, func() (msgr.MessageData, error) { return EncodeSessionControl(SessionRequestClose, 0) }},

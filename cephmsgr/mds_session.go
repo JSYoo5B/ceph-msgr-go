@@ -110,9 +110,18 @@ type MDSSessionOptions struct {
 	MaxEvents int
 }
 
-// MDSSessionEvent is one unsolicited MClientSession after OPEN: a duplicate
-// OPEN, STALE, RECALL_STATE, FLUSHMSG or FORCE_RO. Op is the raw wire value.
+// MDSSessionEvent is one unsolicited MDS message after OPEN. Type is the raw
+// Messenger type. For MClientSession (22) it is a duplicate OPEN, STALE,
+// RECALL_STATE, FLUSHMSG or FORCE_RO with Op as the raw wire value. With
+// EnableCephFS it can also be a counted push: Caps (0x310, Transaction is the
+// flush TID of FLUSH_ACK), Lease (0x311), Snap (0x312) or Quota (0x314).
 type MDSSessionEvent struct {
+	Type               uint16
+	Transaction        uint64
+	Caps               *MDSCaps
+	Lease              *MDSLease
+	Snap               *MDSSnap
+	Quota              *MDSQuota
 	Op                 uint32
 	Sequence           uint64
 	MaxCaps, MaxLeases uint32
@@ -154,6 +163,7 @@ type MDSSession struct {
 	renewInterval time.Duration
 	maxEvents     int
 	renewNow      chan struct{}
+	closeNow      chan struct{}
 	done          chan struct{}
 	stopped       chan struct{}
 
@@ -172,6 +182,8 @@ type MDSSession struct {
 	// queued records that REQUEST_OPEN entered the ordered writer; from then on
 	// the MDS may hold the session even if the transport ends.
 	queued bool
+	// requests tracks submitted CephFS metadata requests by TID.
+	requests map[uint64]*MDSRequestCall
 }
 
 // OpenSession sends one REQUEST_OPEN on this connection and waits for OPEN.
@@ -197,7 +209,11 @@ func (m *MDSConnection) OpenSession(ctx context.Context, options MDSSessionOptio
 	if uint32(len(options.Metadata)) > mds.MaxSessionMetadata {
 		return nil, fmt.Errorf("ceph: MDS session metadata entry count: %w", ErrLimitExceeded)
 	}
-	request := mds.EncodeRequestOpen(options.Metadata)
+	features := mds.ClientFeatures
+	if c.options.EnableCephFS {
+		features = mds.CephFSClientFeatures
+	}
+	request := mds.EncodeRequestOpen(options.Metadata, features)
 	if uint64(len(request.Front))+41 > uint64(c.options.MaxFrameSize) {
 		return nil, fmt.Errorf("ceph: MDS session metadata exceeds frame limit: %w", ErrLimitExceeded)
 	}
@@ -235,7 +251,7 @@ func (m *MDSConnection) OpenSession(ctx context.Context, options MDSSessionOptio
 	}
 	c.mdsSessionGeneration++
 	session := &MDSSession{conn: m, generation: c.mdsSessionGeneration, renewInterval: options.RenewInterval, maxEvents: options.MaxEvents,
-		renewNow: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}), state: MDSSessionOpening,
+		renewNow: make(chan struct{}, 1), closeNow: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}), state: MDSSessionOpening,
 		changed: make(chan struct{}), renewSent: make(map[uint64]time.Time)}
 	m.cephfs = session
 	c.mu.Unlock()
@@ -456,6 +472,7 @@ func (s *MDSSession) finish(state MDSSessionState, err error, unresolved bool) {
 	s.err = err
 	s.setStateLocked(state)
 	s.renewSent = nil
+	s.failRequestsLocked(err)
 	close(s.done)
 	s.mu.Unlock()
 	m := s.conn
@@ -525,6 +542,26 @@ func (s *MDSSession) renewLoop() {
 			return
 		case <-ticker.C:
 		case <-s.renewNow:
+		case <-s.closeNow:
+			// A counted push raised the sequence while closing; the MDS drops
+			// a REQUEST_CLOSE that is behind, so resend it as natively.
+			s.mu.Lock()
+			state, seq := s.state, s.push
+			s.mu.Unlock()
+			if state != MDSSessionClosing {
+				continue
+			}
+			message, err := mds.EncodeSessionControl(mds.SessionRequestClose, seq)
+			if err != nil {
+				return
+			}
+			ctx, cancel := context.WithTimeout(s.conn.ctx, s.renewInterval)
+			err = s.conn.session.SendControl(ctx, message)
+			cancel()
+			if err != nil && s.conn.session.Err() != nil {
+				return
+			}
+			continue
 		}
 		s.mu.Lock()
 		state := s.state
@@ -564,7 +601,7 @@ func (s *MDSSession) dispatch(message mds.ClientSession, received time.Time) err
 		s.mu.Unlock()
 		return fmt.Errorf("%w: MDS session message after terminal state", msgr.ErrFrame)
 	}
-	event := MDSSessionEvent{Op: message.Op, Sequence: message.Sequence, MaxCaps: message.MaxCaps, MaxLeases: message.MaxLeases,
+	event := MDSSessionEvent{Type: mds.ClientSessionMessage, Op: message.Op, Sequence: message.Sequence, MaxCaps: message.MaxCaps, MaxLeases: message.MaxLeases,
 		Flags: message.Flags, Metadata: message.Metadata, SupportedFeatures: message.SupportedFeatures, Received: received}
 	var terminal MDSSessionState
 	var cause error
@@ -672,11 +709,12 @@ func cloneOpenInfo(in MDSSessionOpenInfo) MDSSessionOpenInfo {
 	return out
 }
 
-// dispatchMDSMessage routes one non-reply MDS message. Only MClientSession is
-// implemented; anything else fails the transport as unsupported.
+// dispatchMDSMessage routes one non-reply MDS message. MClientSession is
+// always implemented; replies, forwards and counted pushes only with
+// EnableCephFS. Anything else fails the transport as unsupported.
 func (m *MDSConnection) dispatchMDSMessage(message msgr.MessageData) error {
 	if message.Type != mds.ClientSessionMessage {
-		return fmt.Errorf("%w: unsupported MDS message %d", msgr.ErrFeatures, message.Type)
+		return m.dispatchCephFS(message)
 	}
 	c := m.client
 	decoded, err := mds.DecodeClientSession(message, c.options.MaxFrameSize)
@@ -702,4 +740,68 @@ func (m *MDSConnection) mdsTransportEnded(cause error) {
 	if s != nil {
 		s.lost(cause)
 	}
+}
+
+// dispatchCephFS routes replies, forwards and counted pushes (EnableCephFS).
+func (m *MDSConnection) dispatchCephFS(message msgr.MessageData) error {
+	c := m.client
+	cephfs := c.options.EnableCephFS
+	switch message.Type {
+	case mds.ClientReplyMessage, mds.ClientRequestForwardMessage:
+	case mds.ClientCapsMessage, mds.ClientLeaseMessage, mds.ClientSnapMessage, mds.ClientQuotaMessage:
+	default:
+		cephfs = false
+	}
+	if !cephfs {
+		return fmt.Errorf("%w: unsupported MDS message %d", msgr.ErrFeatures, message.Type)
+	}
+	c.mu.Lock()
+	s := m.cephfs
+	c.mu.Unlock()
+	if s == nil {
+		return fmt.Errorf("%w: CephFS message without a local session", msgr.ErrFrame)
+	}
+	received := time.Now()
+	if message.Type == mds.ClientReplyMessage || message.Type == mds.ClientRequestForwardMessage {
+		s.mu.Lock()
+		err := s.dispatchReplyLocked(message, received)
+		if err == nil {
+			s.setStateLocked(s.state)
+		}
+		s.mu.Unlock()
+		return err
+	}
+	event, err := decodePush(message, c.options.MaxFrameSize)
+	if err != nil {
+		return err
+	}
+	event.Received = received
+	s.mu.Lock()
+	if s.state.terminal() || s.state == MDSSessionOpening {
+		s.mu.Unlock()
+		return fmt.Errorf("%w: MDS push outside an open session", msgr.ErrFrame)
+	}
+	if s.push == ^uint64(0) {
+		s.mu.Unlock()
+		return fmt.Errorf("%w: MDS push sequence exhausted", msgr.ErrFrame)
+	}
+	// Every capability, lease, snapshot and quota push is counted by the MDS
+	// (send_message_client_counted) and by the native client (got_mds_push).
+	s.push++
+	closing := s.state == MDSSessionClosing
+	err = s.pushEventLocked(event)
+	if err == nil {
+		s.setStateLocked(s.state)
+	}
+	s.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if closing {
+		select {
+		case s.closeNow <- struct{}{}:
+		default:
+		}
+	}
+	return nil
 }

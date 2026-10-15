@@ -142,7 +142,7 @@ func TestMDSSessionOpenRenewCloseWire(t *testing.T) {
 	metadata := map[string]string{"root": "/", "entity_id": "test"}
 	pending := mdsStartSession(m, ctx, MDSSessionOptions{Metadata: metadata, RenewInterval: time.Hour})
 	request := peer.next(t)
-	want := mds.EncodeRequestOpen(metadata)
+	want := mds.EncodeRequestOpen(metadata, mds.ClientFeatures)
 	if request.Version != 7 || request.CompatVersion != 1 || hex.EncodeToString(request.Front) != hex.EncodeToString(want.Front) || len(request.Data) != 0 {
 		t.Fatal("REQUEST_OPEN wire differs", request.Version, hex.EncodeToString(request.Front))
 	}

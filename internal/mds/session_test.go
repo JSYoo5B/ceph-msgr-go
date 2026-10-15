@@ -52,7 +52,7 @@ func serverOpen(t *testing.T) []byte {
 }
 
 func TestEncodeRequestOpenNativeLayout(t *testing.T) {
-	m := EncodeRequestOpen(map[string]string{"root": "/", "entity_id": "admin"})
+	m := EncodeRequestOpen(map[string]string{"root": "/", "entity_id": "admin"}, ClientFeatures)
 	if m.Type != ClientSessionMessage || m.Version != 7 || m.CompatVersion != 1 || m.Priority != 127 || len(m.Middle) != 0 || len(m.Data) != 0 {
 		t.Fatalf("header = %+v", m)
 	}

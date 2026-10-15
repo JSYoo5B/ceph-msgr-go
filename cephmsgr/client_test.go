@@ -174,6 +174,10 @@ type peerConfig struct {
 	ident       func(msgr.Address)
 	payload     func(msgr.Tag, []byte) []byte
 	initialMaps func(func(msgr.MessageData) error) error
+	// cephfs expects and advertises the CephFS MDS Messenger profile.
+	cephfs bool
+	// serverFeatures, when nonzero, replaces the advertised feature set.
+	serverFeatures uint64
 }
 
 // The synthetic peer exercises actual CephX state transitions and client

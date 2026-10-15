@@ -304,6 +304,91 @@ CRC/AES host IPv4 BlueStore와 secure/AES256K container IPv6 MemStore에서 각�
 11개 사례가 통과했다. 검증 구성은 legacy CRUSH·HASHPSPOOL 미사용 단일 OSD와
 active rank 0이다. 실제 다중 rank 전환·MDS failover·CephFS I/O는 미검증이다.
 
+## CephFS MDS session
+
+`MDSConnection.OpenSession`은 명시한 MDS 연결에서 CephFS client session을 연다.
+REQUEST_OPEN을 보내고 OPEN을 기다리며, 연결 하나에 session 하나만 둔다.
+
+```go
+session, err := mds.OpenSession(ctx, cephmsgr.MDSSessionOptions{
+    Metadata:      map[string]string{"entity_id": "app", "root": "/"},
+    RenewInterval: 15 * time.Second, // MDSMap session_timeout보다 짧게
+})
+if err != nil {
+    return err
+}
+defer session.Close(ctx)
+```
+
+`Metadata`는 그대로 전송하며 hostname·PID·버전을 추가하지 않는다. MDS는 `root`를
+MDS 경로 권한과 대조하고 중복 `uuid`를 거절한다. 기본 profile이 선언하는 CephFS
+client feature는 MIMIC까지의 bit 0–8로 고정되며 호출자가 넓힐 수 없다. 이후 형식이
+필요한 REPLY_ENCODING 등은 아래의 `EnableCephFS` profile에서만 선언한다. 그래서
+파일시스템이 선언하지 않은 feature를 필수로 요구하면 MDS의 `missing required features`
+거절을 그대로 반환한다.
+
+session이 열려 있거나 stale인 동안 라이브러리는 `RenewInterval`마다
+REQUEST_RENEWCAPS를 보내고, native client처럼 OPEN과 STALE 직후에도 한 번 보낸다.
+`Renew`는 명시적으로 갱신하고 응답을 기다린다. STALE·RECALL_STATE·FLUSHMSG·
+FORCE_RO와 이후의 OPEN은 `Next`로 도착 순서대로 받는다. FLUSHMSG의 응답은
+라이브러리가 대신 보내지 않으며 호출자가 `AcknowledgeFlush`를 호출한다.
+이벤트 큐가 넘치면 MDS 연결 전체를 실패시킨다.
+
+명시적인 REJECT는 `*MDSSessionRejectedError`(원문 `error_string`, blocklist flag)로,
+OPEN 전 CLOSE는 `ErrMDSSessionClosed`로 반환한다. REQUEST_OPEN을 보낸 뒤 ctx가
+끝나면 열리는 중인 session과 `OutcomeUnknownError`를 함께 반환한다. 이때 호출자는
+`WaitOpen`으로 계속 기다리거나 `Close`로 끝낸다. `Close`는 REQUEST_CLOSE를 보내고
+MDS의 CLOSE를 확인한다.
+
+MDS는 session을 연결이 아니라 client GlobalID에 묶는다. 같은 GlobalID의 새 연결은
+기존 session을 가져가므로, session이 살아 있거나 종료를 확인하지 못한 MDS 주소에는
+같은 Client가 새 연결이나 두 번째 session을 만들지 않고 `ErrMDSSessionActive`를
+반환한다. 확인되지 않은 원격 session은 MDS의 timeout 뒤 eviction되며 기본 설정에서는
+해당 주소가 blocklist된다. 다른 session이 필요하면 새 Client를 사용한다. 각
+Messenger 연결은 별도의 주소 nonce를 쓰므로 eviction blocklist는 이 client의
+OSD 연결을 막지 않는다. 데이터 I/O를 session과 결합하는 단계(M2)에서 이 관계를
+먼저 맞춰야 한다. 자세한 범위는 [session 계약](cephmsgr/MDS_SESSION_CONTRACT.md)에
+정리했다.
+
+## CephFS metadata 요청과 MDS push
+
+`Options.EnableCephFS = true`(EnableMDS 필요)를 Dial 전에 설정하면 모든 MDS 연결이
+CephFS profile을 사용한다. Messenger에서는 FLOCK·DIRLAYOUTHASH·CREATEPOOLID·
+REPLY_CREATE_INODE·EXPORT_PEER·MDS_INLINE_DATA·MDS_QUOTA·FS_FILE_LAYOUT_V2를
+지원·필수 기능으로 협상하며, 하나라도 없는 MDS는 handshake에서 거절한다. Session은
+bit 0–9와 ALTERNATE_NAME·32BITS_RETRY_FWD·NEW_SNAPREALM_INFO·HAS_OWNER_UIDGID를
+선언한다. Reclaim·multi-reconnect·delegated inode·metric 등은 선언하지 않는다.
+
+```go
+call, err := session.Submit(ctx, cephmsgr.MDSRequest{
+    Op:   cephmsgr.MDSOpLookup,
+    Path: cephmsgr.MDSFilePath{Ino: parentIno, Path: name},
+    Args: args, // 호출자가 구성한 56-byte ceph_mds_request_args
+    CallerUID: uid, CallerGID: gid, OwnerUID: uid, OwnerGID: gid,
+})
+if err != nil {
+    return err
+}
+reply, err := call.Wait(ctx) // 첫 응답(unsafe 또는 safe)
+trace, err := reply.DecodeTrace()
+```
+
+`Submit`은 호출자가 준비한 op·인자 union·경로·release·data segment를 MClientRequest
+v6(request head v3)로 보낸다. `Wait`는 첫 응답을, `WaitSafe`는 journal에 기록된 safe
+응답을 반환한다. Forward는 `*MDSRequestForwardedError`로 끝내며 라이브러리는 다시
+보내지 않는다. Session이 먼저 끝나면 `OutcomeUnknownError`를 반환하고 요청을
+재실행하지 않는다. 응답은 signed 결과 코드와 raw trace·extra·snap blob을 보존하며
+`DecodeTrace`·`DecodeReaddir`·`DecodeSnapTrace`로 native client 순서대로 해석한다.
+
+MDS가 보내는 capability·lease·snap realm·quota 메시지는 MDS와 같은 방식으로 push
+sequence에 세고 `Next`로 도착 순서대로 전달한다. Revoke 응답, flush, capability
+release, lease 응답은 호출자가 `SendCaps`·`ReleaseCaps`·`SendLease`로 명시적으로
+보낸다. 경로 해석·inode cache·capability 상태·데이터 flush·reconnect·replay는
+구현하지 않으며 상위 레이어가 담당한다. [CephFS 계약](cephmsgr/MDS_CEPHFS_CONTRACT.md)에
+native vector 범위와 남은 검증을 구분했다. Request·reply·forward codec은 고정
+소스의 native vector 7개와 일치했다. Capability 계열 codec과 실제 MDS 대상 요청은
+아직 합성 시험으로만 검증했다.
+
 ## OSD 객체 요청 통신
 
 `Options.EnableOSD: true`로 OSD service ticket 획득·갱신을 명시적으로 켠다.

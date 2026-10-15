@@ -114,6 +114,9 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if options.MaxInFlight < 1 || options.MaxInFlight > 1024 {
 		return nil, errors.New("ceph: MaxInFlight must be between 1 and 1024")
 	}
+	if options.EnableCephFS && !options.EnableMDS {
+		return nil, errors.New("ceph: EnableCephFS requires EnableMDS")
+	}
 	if options.MaxMDSConnections == 0 {
 		options.MaxMDSConnections = 16
 	}
@@ -278,6 +281,9 @@ func (c *Client) openHandshake(ctx context.Context, endpoint string, address msg
 			conn.Close()
 			return nil, errors.New("ceph: dialer returned no peer IP address")
 		}
+	}
+	if freshMDSRank != nil && c.options.EnableCephFS {
+		return session.HandshakeFreshCephFS(ctx, conn, address, *freshMDSRank, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)
 	}
 	if freshMDSRank != nil {
 		return session.HandshakeFreshMDS(ctx, conn, address, *freshMDSRank, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)

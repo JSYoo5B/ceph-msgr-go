@@ -273,7 +273,11 @@ func mdsMockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Wri
 	if err := clientIdent.Done(); err != nil {
 		return nil, nil, err
 	}
-	if cfg.role == 2 && (clientID != cfg.clientID || supported != session.Features || required != session.RequiredFeatures || flags != 0 || cookie == 0 || len(clientAddresses) != 1 || target.Type != 2 || target.Nonce != 0 && target.Nonce != 17 || target.Endpoint != netip.MustParseAddrPort("192.0.2.1:6805")) {
+	wantSupported, wantRequired := session.Features, session.RequiredFeatures
+	if cfg.cephfs {
+		wantSupported, wantRequired = session.CephFSFeatures, session.CephFSFeatures&^session.Features|session.RequiredFeatures
+	}
+	if cfg.role == 2 && (clientID != cfg.clientID || supported != wantSupported || required != wantRequired || flags != 0 || cookie == 0 || len(clientAddresses) != 1 || target.Type != 2 || target.Nonce != 0 && target.Nonce != 17 || target.Endpoint != netip.MustParseAddrPort("192.0.2.1:6805")) {
 		return nil, nil, errors.New("MDS fresh stateful client ident changed identity, address, flags, cookie or fixed features")
 	}
 	if err := clientIdent.Err(); err != nil {
@@ -291,6 +295,12 @@ func mdsMockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Wri
 	ident.U64(cfg.id)
 	ident.U64(1)
 	features := session.Features
+	if cfg.cephfs {
+		features = session.CephFSFeatures
+	}
+	if cfg.serverFeatures != 0 {
+		features = cfg.serverFeatures
+	}
 	if cfg.role == 4 {
 		features |= 1<<8 | 1<<9
 	}
@@ -321,6 +331,11 @@ type mdsTestPeer struct {
 	client   *mdsTestClientConn
 	// sessions admits MClientSession messages for CephFS session tests.
 	sessions atomic.Bool
+	// cephfs selects the CephFS profile handshake and admits request and
+	// client capability/lease messages.
+	cephfs bool
+	// serverFeatures overrides the features advertised in ServerIdent.
+	serverFeatures uint64
 }
 
 type mdsTestWritePause struct{ started, release chan struct{} }
@@ -355,7 +370,7 @@ func (p *mdsTestPeer) serve() {
 	defer close(p.done)
 	defer p.conn.Close()
 	p.conn.SetDeadline(time.Now().Add(3 * time.Second))
-	r, w, err := mdsMockAuthenticate(p.conn, peerConfig{role: 2, id: 0})
+	r, w, err := mdsMockAuthenticate(p.conn, peerConfig{role: 2, id: 0, cephfs: p.cephfs, serverFeatures: p.serverFeatures})
 	if err != nil {
 		p.errors <- err
 		return
@@ -385,7 +400,8 @@ func (p *mdsTestPeer) serve() {
 		}
 		// D2 opens no filesystem client session. Session OPEN, map selection
 		// or any other MDS message would violate the command-only contract.
-		if m.Type != msgr.TellCommandMessage && !(m.Type == 22 && p.sessions.Load()) {
+		cephfsType := m.Type == 24 || m.Type == 0x310 || m.Type == 0x311 || m.Type == 0x313
+		if m.Type != msgr.TellCommandMessage && !(m.Type == 22 && p.sessions.Load()) && !(cephfsType && p.cephfs) {
 			p.errors <- fmt.Errorf("MDS command transport unexpectedly sent message %d", m.Type)
 			return
 		}

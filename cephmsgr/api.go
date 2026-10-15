@@ -108,6 +108,12 @@ type Options struct {
 	// raw MDS command connections. It is independent of EnableMDSMaps/EnableOSD
 	// and opens no CephFS session or filesystem discovery workflow.
 	EnableMDS bool
+	// EnableCephFS selects the CephFS client profile for every MDS connection
+	// (requires EnableMDS): the CephFS Messenger features and client feature
+	// set required by metadata requests, capability/lease/snapshot/quota
+	// pushes and their answers. See cephmsgr/MDS_CEPHFS_CONTRACT.md. Without
+	// it, MDS connections stay command/session-only.
+	EnableCephFS bool
 	// MaxMDSConnections bounds cached MDS handles and concurrent setups.
 	// Defaults to 16; valid values are 1 through 1024. Close releases a slot.
 	MaxMDSConnections int

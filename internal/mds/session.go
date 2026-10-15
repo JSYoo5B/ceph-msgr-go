@@ -52,6 +52,16 @@ const (
 // 64-bit block, as feature_bitset_t::encode emits it.
 var ClientFeatures = []byte{0xff, 0x01, 0, 0, 0, 0, 0, 0}
 
+// CephFSClientFeatures is declared by the CephFS metadata profile: bits 0-8,
+// REPLY_ENCODING (9: versioned InodeStat/DirStat/LeaseStat replies),
+// ALTERNATE_NAME (15: alternate names in requests and leases),
+// 32BITS_RETRY_FWD (18: 32-bit retry/forward request fields),
+// NEW_SNAPREALM_INFO (19: SnapRealmInfoNew snap traces) and HAS_OWNER_UIDGID
+// (20: owner UID/GID in the v3 request head). Reclaim, lazy wanted caps,
+// multi-reconnect, delegated inodes, metrics, notify-session-state,
+// getvxattr, client auth-cap checks, charmap and blockdiff stay withheld.
+var CephFSClientFeatures = []byte{0xff, 0x83, 0x1c, 0, 0, 0, 0, 0}
+
 // NoOldestClientTID is the native MClientSession default. The MDS ignores it
 // for completed-request trimming; no metadata request exists in this stage.
 const NoOldestClientTID = ^uint64(0)
@@ -103,9 +113,10 @@ func sessionMessage(version uint16, front []byte) msgr.MessageData {
 }
 
 // EncodeRequestOpen builds the v7 REQUEST_OPEN that a current Tentacle client
-// sends: metadata in key order, the fixed ClientFeatures, an empty metric
-// spec (no metrics are sent), flags 0, no cap auths and the default oldest TID.
-func EncodeRequestOpen(metadata map[string]string) msgr.MessageData {
+// sends: metadata in key order, the declared feature bitset (ClientFeatures or
+// CephFSClientFeatures), an empty metric spec (no metrics are sent), flags 0,
+// no cap auths and the default oldest TID.
+func EncodeRequestOpen(metadata map[string]string, features []byte) msgr.MessageData {
 	e := wire.Encoder{}
 	encodeHead(&e, SessionRequestOpen, 0)
 	keys := make([]string, 0, len(metadata))
@@ -118,7 +129,7 @@ func EncodeRequestOpen(metadata map[string]string) msgr.MessageData {
 		e.String(k)
 		e.String(metadata[k])
 	}
-	e.Bytes(ClientFeatures)
+	e.Bytes(features)
 	metric := wire.Encoder{}
 	metric.Bytes(nil)
 	e.Struct(1, 1, metric.Data)

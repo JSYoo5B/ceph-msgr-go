@@ -44,7 +44,9 @@ Callers cannot widen the set. A filesystem whose `required_client_features`
 or `min_compat_client` requires a withheld bit makes the MDS REJECT the open
 with `missing required features`, which is returned explicitly.
 
-Messenger features are unchanged from the fresh MDS connection
+`Options.EnableCephFS` selects a separate CephFS profile with a larger,
+equally fixed declaration for metadata requests; see `MDS_CEPHFS_CONTRACT.md`.
+Without it, Messenger features are unchanged from the fresh MDS connection
 (`MDS_FRESH_CONTRACT.md`); CephFS client features and Messenger features are
 negotiated and reported separately.
 

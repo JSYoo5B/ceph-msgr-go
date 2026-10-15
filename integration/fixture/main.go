@@ -42,6 +42,9 @@ func command(ctx context.Context, args []string) (result error) {
 	if len(args) != 0 && args[0] == "encode-mds-sessions" {
 		return runNativeEncoder(ctx, args[1:], mdsSessionEncoderSpec)
 	}
+	if len(args) != 0 && args[0] == "encode-mds-requests" {
+		return runNativeEncoder(ctx, args[1:], mdsRequestEncoderSpec)
+	}
 	if len(args) != 0 && args[0] == "encode-osd-mutations" {
 		return nativeEncoderCommand(ctx, args[1:])
 	}
