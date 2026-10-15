@@ -214,7 +214,7 @@ jobs:
           retention-days: 7
 
   ceph:
-    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }}, profile=${{ matrix.osd_profile || 'legacy-v6' }}, store=${{ matrix.osd_store || 'memstore' }}, replicas=${{ matrix.osd_replicas || '1' }}, native-mgr-preparation=${{ matrix.native_mgr_preparation || '0' }}, race=${{ matrix.race || '0' }})${{ matrix.mds_fresh == '1' && ' MDS-fresh' || '' }}
+    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }}, profile=${{ matrix.osd_profile || 'legacy-v6' }}, store=${{ matrix.osd_store || 'memstore' }}, replicas=${{ matrix.osd_replicas || '1' }}, native-mgr-preparation=${{ matrix.native_mgr_preparation || '0' }}, race=${{ matrix.race || '0' }})${{ matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -267,6 +267,10 @@ jobs:
           # Fresh MDS transport is a separate opt-in; retain the OSD acceptance rows above.
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', mds_fresh: '1', test_run: '^TestCephMDSFreshIntegration$' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', mds_fresh: '1', test_run: '^TestCephMDSFreshIntegration$' }
+          # Public raw MDS commands use their own opt-in and legacy OSD fixture policy.
+          # Only the MDS command test is selected; product OSD sessions are not enabled.
+          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_commands: '1', test_run: '^TestCephMDSCommandsIntegration$' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_commands: '1', test_run: '^TestCephMDSCommandsIntegration$' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -296,6 +300,7 @@ jobs:
           CEPH_MSGR_TEST_OSD: ${{ matrix.osd || '0' }}
           CEPH_MSGR_TEST_OSD_PROFILE: ${{ matrix.osd_profile || 'legacy-v6' }}
           CEPH_MSGR_TEST_MDS_FRESH: ${{ matrix.mds_fresh || '0' }}
+          CEPH_MSGR_TEST_MDS_COMMANDS: ${{ matrix.mds_commands || '0' }}
           CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}
           CEPH_MSGR_TEST_OSD_STORE: ${{ matrix.osd_store || 'memstore' }}
           CEPH_MSGR_TEST_OSD_REPLICAS: ${{ matrix.osd_replicas || '1' }}

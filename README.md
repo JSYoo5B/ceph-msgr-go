@@ -258,7 +258,51 @@ CRC/AES host IPv4 및 secure/AES256K container IPv6의 실제 rank 0 MDS에서
 각각 인증과 keepalive ACK가 통과했다. 실제 client/service key 종류, 단일
 MON/MDS 연결, 살아 있는 연결의 OPEN 세션 부재와 자원 정리를
 [검증 기록](integration/fixture/MDS_FRESH_VALIDATION.md)에 남겼다.
-공개 MDS 연결 API·CephFS OPEN·metadata I/O·연결 복구는 아직 구현하지 않았다.
+공개 raw 명령 경로는 아래 별도 API를 사용한다. CephFS OPEN·metadata I/O·연결
+복구는 아직 구현하지 않았다.
+
+## MDS 대상 raw 명령
+
+`Options.EnableMDS = true`를 Dial 전에 설정하면 MON에서 MDS service ticket을
+획득·갱신한다. OSD 연결과 지도 구독은 각각 독립 옵션이다. 호출자는 native 지도
+등에서 확인한 FSCID·active rank·숫자 v2 주소와 명시 nonce를 전달한다.
+
+```go
+options.EnableMDS = true
+client, err := cephmsgr.Dial(ctx, options)
+if err != nil {
+    return err
+}
+defer client.Close()
+mds, err := client.OpenMDS(ctx, cephmsgr.MDSTarget{
+    FilesystemID: filesystemID,
+    Rank: rank,
+    Address: addressWithNonce,
+})
+if err != nil {
+    return err
+}
+defer mds.Close()
+result, err := mds.Command(ctx, cephmsgr.Command{JSON: commandJSON, Input: input})
+```
+
+결과는 원시 binary `Data`·서버 `Message`·signed `Code`와 로컬 요청의 TID,
+GlobalID, 연결 generation, 원래 target을 보존한다. 음수 서버 코드는
+`CommandError`와 함께 반환한다. 전송 후 취소·종료·단절은 `OutcomeUnknownError`를
+보존하며 재실행하지 않는다. 연결 실패 뒤에는 호출자가 Close하고 새 Open을
+명시해야 한다. 연결 수는 `MaxMDSConnections`(기본 16), 진행 요청은 공유
+`MaxInFlight`로 제한한다. `Snapshot().MDSTicket`은 비밀값 없이 갱신 시간을 제공한다.
+
+FSCID는 로컬 캐시·결과 metadata이며 wire 인증 대상이 아니다. ServerIdent는
+정확한 주소/nonce와 active rank를 확인하며 daemon GID를 증명하지 않는다.
+CephFS OPEN 없이 명령을 보낼 수 있으나 native `allow_all` 권한 검사를 받는다.
+`allow *`에 fsname을 붙여도 파일시스템별 명령 권한 격리를 보장하지 않는다.
+명령 schema, 대상 발견·선택, 권한 정책은 상위 레이어가 담당한다.
+[공개 계약](cephmsgr/MDS_COMMAND_CONTRACT.md)과
+[실검증 기록](integration/fixture/MDS_COMMAND_VALIDATION.md)에 정확한 범위를 구분했다.
+CRC/AES host IPv4 BlueStore와 secure/AES256K container IPv6 MemStore에서 각각
+11개 사례가 통과했다. 검증 구성은 legacy CRUSH·HASHPSPOOL 미사용 단일 OSD와
+active rank 0이다. 실제 다중 rank 전환·MDS failover·CephFS I/O는 미검증이다.
 
 ## OSD 객체 요청 통신
 

@@ -36,6 +36,7 @@ type fixtureCluster struct {
 	pauses      map[string]*ceph.ContainerPause
 	xattrLimits *xattrLimitsScope
 	mdsFresh    *mdsFreshScope
+	mdsCommands *mdsCommandsScope
 }
 
 func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
@@ -303,6 +304,11 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		// prepareOSD installs the fixture CRUSH hierarchy first. CephFS then
 		// adds its owned pool rules; a later CRUSH overwrite would lose them.
 		if err = c.prepareMDSFresh(ctx, out); err != nil {
+			return c, err
+		}
+	}
+	if p.mdsCommands == "1" {
+		if err = c.prepareMDSCommands(ctx, out); err != nil {
 			return c, err
 		}
 	}

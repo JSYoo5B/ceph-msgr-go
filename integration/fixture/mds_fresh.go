@@ -63,6 +63,7 @@ type mdsFreshScope struct {
 	out, token, name string
 	oracle           mdsFreshOracle
 	globalID         uint64
+	otherGlobalID    uint64
 	lastRequestID    int64
 	cleanupAttempted bool
 	cleanupErr       error
@@ -264,7 +265,7 @@ func (c *fixtureCluster) readMDSFreshOracle(ctx context.Context) (mdsFreshOracle
 }
 
 func (c *fixtureCluster) prepareMDSFresh(ctx context.Context, out string) error {
-	if c.profile.mdsFresh != "1" || c.profile.osd != "1" || !c.profile.osdPGV8() || c.profile.osdReplicas != "1" || c.mdsFresh != nil {
+	if c.profile.mdsFresh != "1" || c.profile.osd != "1" || !c.profile.mdsFreshOSDAllowed() || c.profile.osdReplicas != "1" || c.mdsFresh != nil {
 		return errors.New("invalid MDS fresh fixture preparation scope")
 	}
 	ctx, stop := context.WithTimeout(ctx, fixtureStartupTimeout)
@@ -289,9 +290,7 @@ func (c *fixtureCluster) prepareMDSFresh(ctx context.Context, out string) error 
 	if err := writeMDSFreshJSON(out, "mds-fresh-owned.json", map[string]any{"source_commit": mdsFreshSource, "token": s.token, "fsid": c.profile.fsid, "fs_name": s.name}); err != nil {
 		return err
 	}
-	s.fs, err = cephfs.Start(ctx, c.cluster, cephfs.Config{Name: s.name, ActiveMDS: 1,
-		MetadataPool: ceph.PoolConfig{Name: s.name + "-meta", PGNum: 16, Replicas: 1, MinSize: 1},
-		DataPool:     ceph.PoolConfig{Name: s.name + "-data", PGNum: 1, Replicas: 1, MinSize: 1}})
+	s.fs, err = cephfs.Start(ctx, c.cluster, mdsFreshFilesystemConfig(c.profile, s.name))
 	if err != nil {
 		return fmt.Errorf("prepare owned MDS fresh filesystem: %w", err)
 	}
@@ -354,6 +353,12 @@ func mdsFreshCaps(name string) ceph.ClientCaps {
 	return ceph.ClientCaps{Mon: "allow r", MDS: "allow r fsname=" + name}
 }
 
+func mdsFreshFilesystemConfig(p profile, name string) cephfs.Config {
+	return cephfs.Config{Name: name, ActiveMDS: 1,
+		MetadataPool: ceph.PoolConfig{Name: name + "-meta", PGNum: 16, Replicas: 1, MinSize: 1, NoHashPSPool: p.mdsCommands == "1"},
+		DataPool:     ceph.PoolConfig{Name: name + "-data", PGNum: 1, Replicas: 1, MinSize: 1, NoHashPSPool: p.mdsCommands == "1"}}
+}
+
 func parseMDSFreshObservation(fields []string, token string, previousID int64, previousGlobalID uint64) (int64, uint64, error) {
 	if len(fields) != 3 || len(token) != 32 || fields[1] != token {
 		return 0, 0, errors.New("invalid owned MDS fresh observation scope")
@@ -401,7 +406,18 @@ func (c *fixtureCluster) observeMDSFresh(ctx context.Context, out string, fields
 	if s.cleanupAttempted {
 		return errors.New("MDS fresh observation requested after cleanup began")
 	}
-	id, gid, err := parseMDSFreshObservation(fields, s.token, s.lastRequestID, s.globalID)
+	var id int64
+	var gid uint64
+	var gids []uint64
+	var err error
+	if c.profile.mdsCommands == "1" {
+		id, gids, err = parseMDSCommandsObservation(fields, s.token, s.lastRequestID, s.globalID, s.otherGlobalID)
+		if err == nil {
+			gid = gids[0]
+		}
+	} else {
+		id, gid, err = parseMDSFreshObservation(fields, s.token, s.lastRequestID, s.globalID)
+	}
 	if err != nil {
 		return err
 	}
@@ -417,11 +433,17 @@ func (c *fixtureCluster) observeMDSFresh(ctx context.Context, out string, fields
 		return errors.Join(err, errors.New("MDS fresh native sessions unavailable within bound"))
 	}
 	present := false
+	var presentIDs []uint64
 	for _, session := range sessions {
 		if session.Rank != 0 {
 			return errors.New("MDS fresh session observation includes another rank")
 		}
 		present = present || session.ID == gid
+		for _, expected := range gids {
+			if session.ID == expected {
+				present, presentIDs = true, append(presentIDs, expected)
+			}
+		}
 	}
 	result := struct {
 		Source     string           `json:"source_commit"`
@@ -433,15 +455,20 @@ func (c *fixtureCluster) observeMDSFresh(ctx context.Context, out string, fields
 		MDSGID     uint64           `json:"mds_gid"`
 		Rank       int32            `json:"rank"`
 		GlobalID   uint64           `json:"expected_global_id"`
+		GlobalIDs  []uint64         `json:"expected_global_ids,omitempty"`
+		PresentIDs []uint64         `json:"present_global_ids,omitempty"`
 		Present    bool             `json:"expected_global_id_present"`
 		Sessions   []cephfs.Session `json:"sessions"`
 		Filesystem json.RawMessage  `json:"filesystem"`
 		FSDump     json.RawMessage  `json:"fs_dump"`
-	}{mdsFreshSource, s.token, id, current.FSID, current.FSCID, current.FSName, current.MDS.GID, 0, gid, present, sessions, current.Filesystem, current.FSDump}
+	}{mdsFreshSource, s.token, id, current.FSID, current.FSCID, current.FSName, current.MDS.GID, 0, gid, gids, presentIDs, present, sessions, current.Filesystem, current.FSDump}
 	if err := writeMDSFreshJSON(out, "mds-fresh-session-result.json", result); err != nil {
 		return err
 	}
 	s.lastRequestID, s.globalID = id, gid
+	if len(gids) == 2 {
+		s.otherGlobalID = gids[1]
+	}
 	if present {
 		return errors.New("fresh Messenger client's GlobalID unexpectedly owns an open native MDS session")
 	}
@@ -466,22 +493,23 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 	}
 	s.cleanupAttempted = true
 	receipt := struct {
-		Source            string          `json:"source_commit"`
-		Token             string          `json:"token"`
-		FSID              string          `json:"fsid"`
-		FSName            string          `json:"fs_name"`
-		FSCID             int64           `json:"fscid"`
-		MetadataPool      int64           `json:"metadata_pool"`
-		DataPools         []int64         `json:"data_pools"`
-		Attempted         bool            `json:"attempted"`
-		RemovePending     bool            `json:"remove_pending"`
-		FilesystemRemoved bool            `json:"filesystem_removed"`
-		PoolsRemoved      bool            `json:"pools_removed"`
-		IdentityRemoved   bool            `json:"identity_removed"`
-		Completed         bool            `json:"completed"`
-		Error             string          `json:"error,omitempty"`
-		FSDump            json.RawMessage `json:"fs_dump,omitempty"`
-		OSDDump           json.RawMessage `json:"osd_dump,omitempty"`
+		Source                 string          `json:"source_commit"`
+		Token                  string          `json:"token"`
+		FSID                   string          `json:"fsid"`
+		FSName                 string          `json:"fs_name"`
+		FSCID                  int64           `json:"fscid"`
+		MetadataPool           int64           `json:"metadata_pool"`
+		DataPools              []int64         `json:"data_pools"`
+		Attempted              bool            `json:"attempted"`
+		RemovePending          bool            `json:"remove_pending"`
+		FilesystemRemoved      bool            `json:"filesystem_removed"`
+		PoolsRemoved           bool            `json:"pools_removed"`
+		IdentityRemoved        bool            `json:"identity_removed"`
+		CommandIdentityRemoved bool            `json:"command_identity_removed,omitempty"`
+		Completed              bool            `json:"completed"`
+		Error                  string          `json:"error,omitempty"`
+		FSDump                 json.RawMessage `json:"fs_dump,omitempty"`
+		OSDDump                json.RawMessage `json:"osd_dump,omitempty"`
 	}{Source: mdsFreshSource, Token: s.token, FSID: c.profile.fsid, FSName: s.name, FSCID: s.oracle.FSCID, MetadataPool: s.oracle.MetadataPool, DataPools: s.oracle.DataPools, Attempted: true, RemovePending: true}
 	if err := writeMDSFreshJSON(s.out, "mds-fresh-cleanup.json", receipt); err != nil {
 		s.cleanupErr = err
@@ -537,6 +565,10 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 				}
 			}
 		}
+	}
+	if removeErr == nil && c.mdsCommands != nil && c.mdsCommands.client != nil {
+		removeErr = c.cluster.DeleteClient(ctx, c.mdsCommands.client)
+		receipt.CommandIdentityRemoved = removeErr == nil
 	}
 	if removeErr == nil && s.client != nil {
 		removeErr = c.cluster.DeleteClient(ctx, s.client)

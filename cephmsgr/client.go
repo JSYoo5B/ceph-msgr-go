@@ -51,6 +51,10 @@ type Client struct {
 	osdNext       atomic.Uint64
 	osdGeneration uint64 // guarded by mu; local connection identity, separate from TIDs
 
+	mdss          map[mdsTargetKey]*MDSConnection
+	mdsNext       atomic.Uint64
+	mdsGeneration uint64
+
 	fsMapWatch, mdsMapWatch             *monMDSMapWatch
 	mdsMapBindings                      map[*session.Session]mdsMapBinding
 	mdsMapSourceGenerations             map[*session.Session]uint64
@@ -106,6 +110,12 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 	if options.MaxInFlight < 1 || options.MaxInFlight > 1024 {
 		return nil, errors.New("ceph: MaxInFlight must be between 1 and 1024")
 	}
+	if options.MaxMDSConnections == 0 {
+		options.MaxMDSConnections = 16
+	}
+	if options.MaxMDSConnections < 1 || options.MaxMDSConnections > 1024 {
+		return nil, errors.New("ceph: MaxMDSConnections must be between 1 and 1024")
+	}
 	if options.MaxOSDConnections == 0 {
 		options.MaxOSDConnections = 16
 	}
@@ -123,8 +133,14 @@ func Dial(ctx context.Context, options Options) (*Client, error) {
 		options.DialContext = dialer.DialContext
 	}
 	var services uint32
+	if options.EnableOSD || options.EnableMDS {
+		services = cephx.ServiceAuth | cephx.ServiceMgr
+	}
 	if options.EnableOSD {
-		services = cephx.ServiceAuth | cephx.ServiceMgr | cephx.ServiceOSD
+		services |= cephx.ServiceOSD
+	}
+	if options.EnableMDS {
+		services |= cephx.ServiceMDS
 	}
 	auth, err := cephx.NewClient(options.Identity, options.Key.value, services)
 	if err != nil {
@@ -229,6 +245,16 @@ func (c *Client) linkedContext(ctx context.Context) (context.Context, func()) {
 	return linked, func() { stop(); cancel() }
 }
 func (c *Client) open(ctx context.Context, endpoint string, address msgr.Address, role uint8, id uint64, auth session.Authenticator) (*session.Transport, error) {
+	return c.openHandshake(ctx, endpoint, address, role, id, auth, nil)
+}
+
+func (c *Client) openFreshMDS(ctx context.Context, address msgr.Address, rank int32, auth session.Authenticator) (*session.Transport, error) {
+	return c.openHandshake(ctx, dialAddress(address), address, 2, uint64(rank), auth, &rank)
+}
+
+// Both fixed policies share dialing/address ownership. Only the explicit MDS
+// entry selects fresh stateful admission; ordinary sessions stay lossy.
+func (c *Client) openHandshake(ctx context.Context, endpoint string, address msgr.Address, role uint8, id uint64, auth session.Authenticator, freshMDSRank *int32) (*session.Transport, error) {
 	conn, err := c.options.DialContext(ctx, "tcp", endpoint)
 	if err != nil {
 		return nil, err
@@ -248,6 +274,9 @@ func (c *Client) open(ctx context.Context, endpoint string, address msgr.Address
 			conn.Close()
 			return nil, errors.New("ceph: dialer returned no peer IP address")
 		}
+	}
+	if freshMDSRank != nil {
+		return session.HandshakeFreshMDS(ctx, conn, address, *freshMDSRank, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)
 	}
 	return session.Handshake(ctx, conn, address, role, id, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout)
 }
@@ -485,6 +514,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		var oldManager *session.Session
 		var installedObservation *authIssuerObservation
 		var oldOSDs []*session.Session
+		var oldMDSs []*session.Session
 		if err == nil {
 			c.mu.Lock()
 			if c.closed {
@@ -497,6 +527,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				}
 				if c.auth.GlobalID != candidate.GlobalID {
 					oldManager, c.mgr = c.mgr, nil
+					for _, mds := range c.mdss {
+						if mds.session != nil {
+							mds.session.Retire()
+							oldMDSs = append(oldMDSs, mds.session)
+						}
+					}
 					for _, osd := range c.osds {
 						if osd.session != nil {
 							osd.session.Retire()
@@ -523,6 +559,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 		if oldManager != nil {
 			oldManager.Fail(errors.New("ceph: authenticated client identity changed"))
+		}
+		for _, mds := range oldMDSs {
+			mds.Fail(ErrMDSIdentityChanged)
 		}
 		for _, osd := range oldOSDs {
 			osd.Fail(errors.New("ceph: authenticated client identity changed"))

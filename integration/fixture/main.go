@@ -355,6 +355,7 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 		"bootstrap": "public-api", "topology": "3 MON and 0/2 MGR owned daemon containers plus a native oracle client", "runtime": p.runtime, "fsid": p.fsid,
 		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd, "osd_store": p.osdStore, "osd_replicas": p.osdReplicas, "osd_profile": p.osdProfile, "native_sparse_read_oracle": p.sparseReadOracle != ""}
 	manifest["mds_fresh"] = p.mdsFresh == "1"
+	manifest["mds_commands"] = p.mdsCommands == "1"
 	if p.mdsFresh == "1" {
 		manifest["topology"] = "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
 	}

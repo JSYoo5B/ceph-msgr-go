@@ -1,6 +1,6 @@
 // Package cephmsgr provides native Go communication with Ceph Tentacle MON/MGR
-// and explicitly targeted OSD daemons over authenticated msgr2.1: raw commands,
-// wire maps and subscriptions, and bounded read-only object requests.
+// and explicitly targeted OSD/MDS daemons over authenticated msgr2.1: raw
+// commands, wire maps and subscriptions, and bounded object requests.
 // Callers own command construction, result interpretation and management policy.
 // No Ceph installation is required on the client host. See README.md for the
 // current verification status.
@@ -64,7 +64,7 @@ func (k Key) String() string   { return k.value.String() }
 func (k Key) GoString() string { return k.String() }
 
 // ConnectionMode selects the authenticated Messenger transport for every MON,
-// MGR and OSD connection, including renewal, recovery and named MON tell sessions.
+// MGR, OSD and MDS connection, including renewal, recovery and named MON tell sessions.
 type ConnectionMode uint8
 
 const (
@@ -104,6 +104,13 @@ type Options struct {
 	// encoding before Dial. It permits explicit raw filesystem/MDS map watches;
 	// it requests no MDS service ticket and enables no MDS daemon or CephFS API.
 	EnableMDSMaps bool
+	// EnableMDS requests and renews MDS service tickets for explicitly targeted
+	// raw MDS command connections. It is independent of EnableMDSMaps/EnableOSD
+	// and opens no CephFS session or filesystem discovery workflow.
+	EnableMDS bool
+	// MaxMDSConnections bounds cached MDS handles and concurrent setups.
+	// Defaults to 16; valid values are 1 through 1024. Close releases a slot.
+	MaxMDSConnections int
 	// OSDProfile selects the fixed OSD wire contract before MON admission.
 	// Both replicated profiles require EnableOSD and caller-supplied actual PG
 	// metadata. ReplyV8 additionally requires the fixed current v8 reply encoding.

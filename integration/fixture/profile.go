@@ -11,8 +11,8 @@ const profileDefaultImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf879
 
 // profile describes a development fixture, not product connection options.
 type profile struct {
-	monAddresses, fsid, peers, mdsFreshIdentity                           string
-	mdsFresh                                                              string
+	monAddresses, fsid, peers, mdsFreshIdentity, mdsCommandsIdentity      string
+	mdsFresh, mdsCommands                                                 string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
 	sparseReadOracle                                                      string
@@ -31,6 +31,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}
 	p := profile{
 		mdsFresh:             value("CEPH_MSGR_TEST_MDS_FRESH", "0"),
+		mdsCommands:          value("CEPH_MSGR_TEST_MDS_COMMANDS", "0"),
 		osdProfile:           value("CEPH_MSGR_TEST_OSD_PROFILE", "legacy-v6"),
 		sparseReadOracle:     getenv("CEPH_MSGR_TEST_SPARSE_READ_ORACLE"),
 		image:                value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
@@ -62,6 +63,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}{
 		{"CEPH_MSGR_TEST_KEY_TYPE", p.keyType, []string{"aes", "aes256k"}},
 		{"CEPH_MSGR_TEST_MDS_FRESH", p.mdsFresh, []string{"0", "1"}},
+		{"CEPH_MSGR_TEST_MDS_COMMANDS", p.mdsCommands, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_SERVICE_CIPHER", p.serviceCipher, []string{"aes", "aes256k"}},
 		{"CEPH_MSGR_TEST_RUNTIME", p.runtime, []string{"container", "host"}},
 		{"CEPH_MSGR_TEST_RACE", p.race, []string{"0", "1"}},
@@ -157,17 +159,30 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		selected = "^TestCephNativeManagerPreparationIntegration$"
 	}
+	if p.mdsCommands == "1" && p.mdsFresh != "1" {
+		return profile{}, fmt.Errorf("MDS commands require CEPH_MSGR_TEST_MDS_FRESH=1")
+	}
 	if p.mdsFresh == "1" {
-		if p.osd != "1" || !p.osdPGV8() || p.osdReplicas != "1" || p.sparseReadOracle != "" ||
-			p.testRun != "" && p.testRun != "^TestCephMDSFreshIntegration$" {
-			return profile{}, fmt.Errorf("MDS fresh fixture requires one modern OSD and only ^TestCephMDSFreshIntegration$")
-		}
 		selected = "^TestCephMDSFreshIntegration$"
+		if p.mdsCommands == "1" {
+			selected = "^TestCephMDSCommandsIntegration$"
+		}
+		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || p.sparseReadOracle != "" ||
+			p.testRun != "" && p.testRun != selected {
+			return profile{}, fmt.Errorf("MDS fixture requires its exclusive selector %s and one admitted OSD profile", selected)
+		}
 	}
 	if p.testRun == "" {
 		p.testRun = selected
 	}
 	return p, nil
+}
+
+func (p profile) mdsFreshOSDAllowed() bool {
+	if p.mdsCommands == "1" {
+		return p.osdProfile == "legacy-v6"
+	}
+	return p.osdPGV8()
 }
 
 func (p profile) osdPGV8() bool {
@@ -179,6 +194,7 @@ func (p profile) monitors() string { return p.monAddresses }
 func (p profile) containerEnvironment() map[string]string {
 	return map[string]string{
 		"CEPH_MSGR_TEST_MDS_FRESH":              p.mdsFresh,
+		"CEPH_MSGR_TEST_MDS_COMMANDS":           p.mdsCommands,
 		"CEPH_MSGR_TEST_KEY_TYPE":               p.keyType,
 		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
 		"CEPH_MSGR_TEST_IP_FAMILY":              p.ipFamily,
@@ -209,6 +225,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	}
 	result := map[string]string{
 		"CEPH_MSGR_TEST_MDS_FRESH":              p.mdsFresh,
+		"CEPH_MSGR_TEST_MDS_COMMANDS":           p.mdsCommands,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":   marker,
 		"CEPH_MSGR_MONITORS":                    p.monitors(),
 		"CEPH_MSGR_KEY_FILE":                    filepath.Join(controlDir, "key"),
@@ -237,6 +254,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.mdsFresh == "1" {
 		result["CEPH_MSGR_MDS_FRESH_IDENTITY"] = p.mdsFreshIdentity
 		result["CEPH_MSGR_MDS_FRESH_KEY_FILE"] = filepath.Join(controlDir, "mds-fresh.key")
+	}
+	if p.mdsCommands == "1" {
+		result["CEPH_MSGR_MDS_COMMANDS_IDENTITY"] = p.mdsCommandsIdentity
+		result["CEPH_MSGR_MDS_COMMANDS_KEY_FILE"] = filepath.Join(controlDir, "mds-commands.key")
 	}
 	return result
 }
