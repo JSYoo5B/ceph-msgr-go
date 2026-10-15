@@ -11,7 +11,8 @@ const profileDefaultImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf879
 
 // profile describes a development fixture, not product connection options.
 type profile struct {
-	monAddresses, fsid, peers                                             string
+	monAddresses, fsid, peers, mdsFreshIdentity                           string
+	mdsFresh                                                              string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
 	sparseReadOracle                                                      string
@@ -29,6 +30,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		return fallback
 	}
 	p := profile{
+		mdsFresh:             value("CEPH_MSGR_TEST_MDS_FRESH", "0"),
 		osdProfile:           value("CEPH_MSGR_TEST_OSD_PROFILE", "legacy-v6"),
 		sparseReadOracle:     getenv("CEPH_MSGR_TEST_SPARSE_READ_ORACLE"),
 		image:                value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
@@ -59,6 +61,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		allowed     []string
 	}{
 		{"CEPH_MSGR_TEST_KEY_TYPE", p.keyType, []string{"aes", "aes256k"}},
+		{"CEPH_MSGR_TEST_MDS_FRESH", p.mdsFresh, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_SERVICE_CIPHER", p.serviceCipher, []string{"aes", "aes256k"}},
 		{"CEPH_MSGR_TEST_RUNTIME", p.runtime, []string{"container", "host"}},
 		{"CEPH_MSGR_TEST_RACE", p.race, []string{"0", "1"}},
@@ -154,6 +157,13 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		selected = "^TestCephNativeManagerPreparationIntegration$"
 	}
+	if p.mdsFresh == "1" {
+		if p.osd != "1" || !p.osdPGV8() || p.osdReplicas != "1" || p.sparseReadOracle != "" ||
+			p.testRun != "" && p.testRun != "^TestCephMDSFreshIntegration$" {
+			return profile{}, fmt.Errorf("MDS fresh fixture requires one modern OSD and only ^TestCephMDSFreshIntegration$")
+		}
+		selected = "^TestCephMDSFreshIntegration$"
+	}
 	if p.testRun == "" {
 		p.testRun = selected
 	}
@@ -168,6 +178,7 @@ func (p profile) monitors() string { return p.monAddresses }
 
 func (p profile) containerEnvironment() map[string]string {
 	return map[string]string{
+		"CEPH_MSGR_TEST_MDS_FRESH":              p.mdsFresh,
 		"CEPH_MSGR_TEST_KEY_TYPE":               p.keyType,
 		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
 		"CEPH_MSGR_TEST_IP_FAMILY":              p.ipFamily,
@@ -196,7 +207,8 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.sparseReadOracle != "" {
 		marker = "1"
 	}
-	return map[string]string{
+	result := map[string]string{
+		"CEPH_MSGR_TEST_MDS_FRESH":              p.mdsFresh,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":   marker,
 		"CEPH_MSGR_MONITORS":                    p.monitors(),
 		"CEPH_MSGR_KEY_FILE":                    filepath.Join(controlDir, "key"),
@@ -204,6 +216,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_FSID":                        p.fsid,
 		"CEPH_MSGR_TEST_PEERS":                  p.peers,
 		"CEPH_MSGR_CONTROL_DIR":                 controlDir,
+		"CEPH_MSGR_TEST_KEY_TYPE":               p.keyType,
 		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
 		"CEPH_MSGR_TEST_MGR_COUNT":              p.mgrCount,
 		"CEPH_MSGR_TEST_EXPIRE_TICKETS":         p.expireTickets,
@@ -221,4 +234,9 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_STRESS_DURATION":             p.stressDuration,
 		"CEPH_MSGR_TEST_PROXY":                  proxy,
 	}
+	if p.mdsFresh == "1" {
+		result["CEPH_MSGR_MDS_FRESH_IDENTITY"] = p.mdsFreshIdentity
+		result["CEPH_MSGR_MDS_FRESH_KEY_FILE"] = filepath.Join(controlDir, "mds-fresh.key")
+	}
+	return result
 }

@@ -35,6 +35,7 @@ type fixtureCluster struct {
 	controlErr  error
 	pauses      map[string]*ceph.ContainerPause
 	xattrLimits *xattrLimitsScope
+	mdsFresh    *mdsFreshScope
 }
 
 func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
@@ -44,6 +45,7 @@ func (c *fixtureCluster) Terminate(ctx context.Context, opts ...testcontainers.T
 		<-c.done
 	}
 	var errs []error
+	errs = append(errs, c.finishMDSFresh(ctx))
 	// Restore paused containers before requesting their orderly cleanup.
 	for _, pause := range c.pauses {
 		errs = append(errs, pause.Resume(ctx))
@@ -70,6 +72,11 @@ func fixtureBootstrapConfig(p profile) string {
 		tick = 1
 	}
 	config := fmt.Sprintf("[global]\nmon_tick_interval = %d\nmon_subscribe_interval = 86400\n", tick)
+	if p.mdsFresh == "1" {
+		// Only this closed disposable fixture permits removal of its owned
+		// CephFS pools. Other profiles retain their existing deletion policy.
+		config += "mon_allow_pool_delete = true\n"
+	}
 	if p.idleSessions == "1" {
 		config = "[global]\nmon_tick_interval = 1\nmon_subscribe_interval = 2\nmon_session_timeout = 3\nmon_client_ping_interval = 1\nmon_client_hunt_interval = 1\n"
 	}
@@ -289,6 +296,13 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	}
 	if p.osd == "1" {
 		if err = c.prepareOSD(ctx, out); err != nil {
+			return c, err
+		}
+	}
+	if p.mdsFresh == "1" {
+		// prepareOSD installs the fixture CRUSH hierarchy first. CephFS then
+		// adds its owned pool rules; a later CRUSH overwrite would lose them.
+		if err = c.prepareMDSFresh(ctx, out); err != nil {
 			return c, err
 		}
 	}

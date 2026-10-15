@@ -42,6 +42,7 @@ var metadataFiles = []string{
 	"osd-watch-reconnect-results.json",
 	"osd-reply-v8-results.json",
 	"mds-maps-input.json", "mds-maps-owned.json", "mds-maps-result.json", "mds-maps-commands.json", "mds-maps-command.json", "mds-maps-go.json",
+	"mds-fresh-owned.json", "mds-fresh-oracle.json", "mds-fresh-session-result.json", "mds-fresh-results.json", "mds-fresh-cleanup.json",
 	"osd-split-input.json", "osd-split-result.json", "osd-split-status.json", "osd-split-command.json", "osd-split-worker.log", "osd-split-results.json",
 	"osd-split-stale-input.json", "osd-split-stale-receipt.json",
 	"osd-pg-list-input.json", "osd-pg-list-result.json", "osd-pg-list-command.json", "osd-pg-list-results.json",

@@ -222,7 +222,31 @@ type Transport struct {
 
 // Handshake takes ownership of conn, closing it on failure. The context and
 // deadline govern only setup; a successful connection has its deadline cleared.
-func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (_ *Transport, err error) {
+func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (*Transport, error) {
+	return handshake(ctx, conn, target, role, expectedID, auth, mode, limit, timeout, lossyHandshake)
+}
+
+// HandshakeFreshMDS authenticates one fresh Messenger connection to an active
+// MDS rank, including rank zero. It takes ownership of conn. It does not open a
+// CephFS session, reconnect, resume or replay messages. The context governs setup
+// only; after success the owner must close the transport on failure or shutdown.
+// Its bounded native acceptance is documented in MDS_FRESH_CONTRACT.md.
+func HandshakeFreshMDS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (*Transport, error) {
+	if rank < 0 {
+		conn.Close()
+		return nil, errors.New("ceph messenger: fresh MDS connection requires a nonnegative active rank")
+	}
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshMDSHandshake)
+}
+
+type handshakePolicy uint8
+
+const (
+	lossyHandshake handshakePolicy = iota
+	freshMDSHandshake
+)
+
+func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, policy handshakePolicy) (_ *Transport, err error) {
 	if target.Endpoint.IsValid() {
 		// Retain the target's wire family, including mapped IPv6. IPv6 scope
 		// is carried by ScopeID rather than a Go address zone.
@@ -455,10 +479,26 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	ident.U64(globalID)
 	ident.U64(binary.LittleEndian.Uint64(random[:]))
 	supportedFeatures, requiredFeatures := handshakeFeatures(role, auth)
+	flags, cookie := sessionFlagLossy, uint64(0)
+	if policy == freshMDSHandshake {
+		// Pinned ProtocolV2.cc:1963-1980: a fresh stateful connection has a
+		// nonzero client cookie and no LOSSY flag. Never offer MON/OSD policy
+		// extensions, even if an authentication wrapper exposes their seams.
+		supportedFeatures, requiredFeatures = Features, RequiredFeatures
+		var cookieRandom [8]byte
+		if _, err = rand.Read(cookieRandom[:]); err != nil {
+			return nil, err
+		}
+		cookie = binary.LittleEndian.Uint64(cookieRandom[:])
+		if cookie == 0 {
+			cookie = 1
+		}
+		flags = 0
+	}
 	ident.U64(supportedFeatures)
 	ident.U64(requiredFeatures)
-	ident.U64(sessionFlagLossy)
-	ident.U64(0) // no client cookie: fresh lossy recovery only
+	ident.U64(flags)
+	ident.U64(cookie)
 	if err = write(msgr.ClientIdent, ident.Data); err != nil {
 		return nil, err
 	}
@@ -485,25 +525,29 @@ func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	serverID := id.U64()
 	id.U64()
 	supported, required := id.U64(), id.U64()
-	flags := id.U64()
-	id.U64()
+	serverFlags := id.U64()
+	serverCookie := id.U64()
 	if err = id.Done(); err != nil {
 		return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 	}
 	if !slices.Contains(serverAddresses, target) {
 		return nil, fmt.Errorf("%w: server identification does not include target address", msgr.ErrAuthentication)
 	}
-	if (role == 4 || expectedID != 0) && serverID != expectedID {
+	if (role == 4 || policy == freshMDSHandshake || expectedID != 0) && serverID != expectedID {
 		return nil, errors.New("ceph messenger: unexpected daemon ID")
 	}
 	if requiredFeatures&^supported != 0 || required&^supportedFeatures != 0 {
 		return nil, msgr.ErrFeatures
 	}
-	// SERVER_IDENT is authoritative about the selected policy. Reliable
-	// sessions require cookie-based resumption and message replay, which this
-	// command-only client does not implement. Unknown flags are unsupported.
-	if flags != sessionFlagLossy {
-		return nil, fmt.Errorf("%w: unsupported session flags %#x", msgr.ErrFeatures, flags)
+	// SERVER_IDENT is authoritative. The ordinary policy remains lossy.
+	// Fresh MDS admits a single stateful transport, without retaining cookies
+	// for recovery. Any loss is terminal; it cannot become a resumed session.
+	if policy == freshMDSHandshake {
+		if serverFlags != 0 || serverCookie == 0 {
+			return nil, fmt.Errorf("%w: fresh MDS requires stateful flags 0 and a nonzero server cookie", msgr.ErrFeatures)
+		}
+	} else if serverFlags != sessionFlagLossy {
+		return nil, fmt.Errorf("%w: unsupported session flags %#x", msgr.ErrFeatures, serverFlags)
 	}
 	stopped = stop()
 	if !stopped || ctx.Err() != nil {

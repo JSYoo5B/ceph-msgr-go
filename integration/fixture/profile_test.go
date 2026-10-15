@@ -15,6 +15,7 @@ func TestProfileDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := profile{
+		mdsFresh:             "0",
 		image:                "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
 		keyType:              "aes256k",
 		serviceCipher:        "aes256k",
@@ -89,8 +90,8 @@ func TestProfileSelection(t *testing.T) {
 						t.Fatalf("container %s = %q, want %q", name, containerEnv[name], want)
 					}
 					switch name {
-					case "CEPH_MSGR_TEST_KEY_TYPE", "CEPH_MSGR_TEST_IP_FAMILY", "CEPH_MSGR_TEST_RUNTIME", "CEPH_MSGR_TEST_RACE":
-						// These select fixture key generation/build behavior, not test behavior.
+					case "CEPH_MSGR_TEST_IP_FAMILY", "CEPH_MSGR_TEST_RUNTIME", "CEPH_MSGR_TEST_RACE":
+						// These select fixture addressing/build behavior, not test behavior.
 					default:
 						if testEnv[name] != want {
 							t.Fatalf("test %s = %q, want %q", name, testEnv[name], want)
@@ -136,6 +137,7 @@ func TestProfileInvalidChoices(t *testing.T) {
 		"CEPH_MSGR_TEST_EXPIRE_TICKETS", "CEPH_MSGR_TEST_IDLE_SESSIONS", "CEPH_MSGR_TEST_AUTH_EPOCH",
 		"CEPH_MSGR_TEST_SHORT_TICKETS", "CEPH_MSGR_TEST_MODE_REJECTION", "CEPH_MSGR_TEST_CONNECTION_MODE",
 		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION",
+		"CEPH_MSGR_TEST_MDS_FRESH",
 		"CEPH_MSGR_TEST_MAPPED_IPV6", "CEPH_MSGR_TEST_OSD",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -249,7 +251,8 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 	p.peers = `{"mon.a":"172.22.0.2:3300"}`
 	container := p.containerEnvironment()
 	wantContainer := map[string]string{
-		"CEPH_MSGR_TEST_KEY_TYPE": "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k",
+		"CEPH_MSGR_TEST_MDS_FRESH": "0",
+		"CEPH_MSGR_TEST_KEY_TYPE":  "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k",
 		"CEPH_MSGR_TEST_IP_FAMILY": "4", "CEPH_MSGR_TEST_MGR_COUNT": "2",
 		"CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1",
 		"CEPH_MSGR_TEST_EXPIRE_TICKETS": "0", "CEPH_MSGR_TEST_IDLE_SESSIONS": "0",
@@ -268,10 +271,12 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		for _, proxy := range []string{"", "127.0.0.1:40123"} {
 			got := p.testEnvironment(controlDir, proxy)
 			want := map[string]string{
+				"CEPH_MSGR_TEST_MDS_FRESH":            "0",
 				"CEPH_MSGR_MONITORS":                  p.monAddresses,
 				"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE": "",
 				"CEPH_MSGR_KEY_FILE":                  filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
 				"CEPH_MSGR_TEST_PEERS": p.peers, "CEPH_MSGR_IDENTITY": "client.test", "CEPH_MSGR_FSID": p.fsid,
+				"CEPH_MSGR_TEST_KEY_TYPE":       "aes",
 				"CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k", "CEPH_MSGR_TEST_MGR_COUNT": "2",
 				"CEPH_MSGR_TEST_EXPIRE_TICKETS": "0", "CEPH_MSGR_TEST_IDLE_SESSIONS": "0",
 				"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",

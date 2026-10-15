@@ -176,6 +176,9 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 			if err := c.Terminate(cleanup); err != nil {
 				result = errors.Join(result, &cleanupFailure{cause: err})
 			}
+			if p.mdsFresh == "1" {
+				result = errors.Join(result, saveMetadata(out, p.diagnostics))
+			}
 		}
 	}()
 	if ownerErr := recordOwnership(c, out); ownerErr != nil {
@@ -219,6 +222,9 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 	if err := c.checkControl(); err != nil {
 		return err
 	}
+	if err := c.finishMDSFresh(ctx); err != nil {
+		return err
+	}
 	return saveMetadata(out, p.diagnostics)
 }
 
@@ -243,6 +249,9 @@ func serve(ctx context.Context, project, out string, p profile) (result error) {
 				_ = os.WriteFile(filepath.Join(out, "provider.cleanup.error"), []byte(err.Error()+"\n"), 0o600)
 			}
 			stop()
+			if p.mdsFresh == "1" {
+				result = errors.Join(result, saveMetadata(out, p.diagnostics))
+			}
 		}
 		if result != nil {
 			_ = os.WriteFile(filepath.Join(out, "provider.error"), []byte(result.Error()+"\n"), 0o600)
@@ -317,6 +326,9 @@ func recordOwnership(c *fixtureCluster, out string) error {
 	for _, osd := range c.cluster.OSDs() {
 		owned[fmt.Sprintf("osd.%d", osd.ID)] = osd.GetContainerID()
 	}
+	for name, id := range c.mdsFreshOwnership() {
+		owned[name] = id
+	}
 	if control := c.cluster.ControlContainer(); control != nil {
 		owned["control"] = control.GetContainerID()
 	}
@@ -342,6 +354,10 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	manifest := map[string]any{"provider": "github.com/JSYoo5B/ceph-testcontainers-go", "provider_version": "v0.2.0", "image": p.image, "image_id": imageID, "architecture": architecture, "daemon_version": version,
 		"bootstrap": "public-api", "topology": "3 MON and 0/2 MGR owned daemon containers plus a native oracle client", "runtime": p.runtime, "fsid": p.fsid,
 		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd, "osd_store": p.osdStore, "osd_replicas": p.osdReplicas, "osd_profile": p.osdProfile, "native_sparse_read_oracle": p.sparseReadOracle != ""}
+	manifest["mds_fresh"] = p.mdsFresh == "1"
+	if p.mdsFresh == "1" {
+		manifest["topology"] = "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
+	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return "", err

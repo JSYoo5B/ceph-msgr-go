@@ -99,6 +99,16 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 	if fileExists(filepath.Join(out, "native-oracles.error")) {
 		return errors.New("native oracle worker failed; inspect native-oracles.log")
 	}
+	if fields, err := c.request(out, "mds-fresh-observe"); err != nil {
+		return err
+	} else if fields != nil {
+		if err := c.observeMDSFresh(ctx, out, fields); err != nil {
+			return err
+		}
+		if err := publishAck(out, "mds-fresh-observed."+fields[0]); err != nil {
+			return err
+		}
+	}
 	for _, kind := range []string{"mon", "mgr", "osd"} {
 		for _, action := range []string{"pause", "resume", "stop", "start", "kill"} {
 			fields, err := c.request(out, action+"-"+kind)
@@ -386,7 +396,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		return err
 	}
 	if fields != nil {
-		if len(fields) != 2 || c.profile.osd != "1" || !c.profile.osdPGV8() || c.profile.osdReplicas != "1" ||
+		if len(fields) != 2 || c.profile.mdsFresh == "1" || c.profile.osd != "1" || !c.profile.osdPGV8() || c.profile.osdReplicas != "1" ||
 			!slices.Contains([]string{"start", "observe", "finish"}, fields[1]) {
 			return errors.New("invalid owned single-OSD MDS maps oracle request")
 		}

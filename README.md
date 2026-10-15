@@ -252,6 +252,14 @@ single BlueStore와 secure/AES256K container IPv6 single MemStore에서 native �
 각 구성에서 MDS 지도 1개와 기존 OSD 12개 사례를 함께 실행했다. 실제 MDS daemon
 인증·session·CephFS 지원은 별도 단계다.
 
+별도 [내부 fresh MDS Messenger 연결](internal/session/MDS_FRESH_CONTRACT.md)은
+고정 MDS role·명시 active rank·정확한 주소/nonce와 stateful 최초 연결을 구현했다.
+CRC/AES host IPv4 및 secure/AES256K container IPv6의 실제 rank 0 MDS에서
+각각 인증과 keepalive ACK가 통과했다. 실제 client/service key 종류, 단일
+MON/MDS 연결, 살아 있는 연결의 OPEN 세션 부재와 자원 정리를
+[검증 기록](integration/fixture/MDS_FRESH_VALIDATION.md)에 남겼다.
+공개 MDS 연결 API·CephFS OPEN·metadata I/O·연결 복구는 아직 구현하지 않았다.
+
 ## OSD 객체 요청 통신
 
 `Options.EnableOSD: true`로 OSD service ticket 획득·갱신을 명시적으로 켠다.
@@ -1579,6 +1587,13 @@ ticket-info bad magic을 기록했다. 이 관측은 Go ticket 발급과 MGR 검
 [fixture 질문과 추가 근거](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6174955026)를
 남겼으며, 이후 `d39cc93`의 CI 41개 통과도 원인이 해결됐다는 뜻으로
 처리하지 않는다. 최초 인증이나 wipe를 재시도해 실패를 숨기지 않는다.
+
+`b01a3cf`의 [CI 첫 실패](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38739526554/job/116437288897)에서도
+secure/AES256K·IPv6·Linux amd64의 두 번째 wipe 후 최초 cold MGR 인증이
+`-13`으로 거절됐다. MGR의 ticket-info 복호화 실패와 Go의 발급·선택·송신
+증거를 [별도 기록](integration/fixture/SERVICE_KEY_EPOCH_FAILURE_20261015.md)에
+보존했다. SecretID와 epoch, native 준비 probe 성공으로 실제 키 세대의
+일치를 단정하지 않으며, 이 실패는 아직 미해결이다.
 
 시험은 `cephmsgr/integration_auth_epoch_test.go`에 두어 비공개 cached 상태를
 함께 관측한다. 각 client의 MON dial 이력, 동일 lock 구간의 map/auth epoch와
