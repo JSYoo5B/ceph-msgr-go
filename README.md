@@ -433,6 +433,15 @@ REVOKE와 RELEASE 응답, snapshot UPDATE·SPLIT·DESTROY, quota, RECALL_STATE�
 standby 구성에서 rank별 session, rank 1로의 forward와 재제출, subtree 이동 중 cap
 EXPORT·IMPORT와 FLUSHMSG 응답, rank 0 standby takeover 뒤 `ReconnectSession` 결과를 남겼다.
 `ResubmitForwarded`는 forward된 요청을 원래 TID로 대상 rank session에 한 번 다시 보낸다.
+[완료 기록 검증 기록](integration/fixture/MDS_CEPHFS_COMPLETION_VALIDATION.md)에는 MDS를
+네 번 재시작하며 확인한 경계 사례를 남겼다. MDS가 실행하고 journal에 남겼지만 응답이
+버려진 create와 mkdir을 retry 1로 다시 보내자 MDS는 완료 기록으로 답했다. create는
+create 응답으로, mkdir은 LOOKUP으로 바뀐 응답으로 왔고 제품은 이 변환 응답을 받아들인다.
+Unsafe 응답만 받은 create의 REPLAY는 다시 실행되지 않고 완료 기록의 inode로 답을 받았다.
+`mds_deny_all_reconnect`와 reconnect 시한 초과에서는 `ErrMDSSessionReconnectDenied`가
+나왔고 주소 instance가 blocklist에 올라 같은 OSD 연결의 읽기가 -108을 받았다. FORCE_RO
+session event 뒤 mkdir은 -30, 조회는 성공했다. Dentry lease RENEW는 다음 sequence의 RENEW
+응답을 받았고, native snapshot 뒤 보낸 FLUSHSNAP은 FLUSHSNAP_ACK를 받았다.
 
 ## RBD 기반 통신 검증
 

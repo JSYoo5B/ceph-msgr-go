@@ -259,9 +259,30 @@ standby takeover while the rank-1 session stayed open. See
 `ResubmitForwarded` resends a forwarded call once on the destination rank's
 session with its original TID, stamp and the reported forward count, as
 native clients do; a forward carries `Arrival` like replies. Not exercised
-live: FORCE_RO, lease RENEW, cap snaps and FLUSHSNAP, forwarded mutations,
-requests in flight during migration, standby-replay and more than two
-ranks. Synthetic peers cover
+live: forwarded mutations, requests in flight during migration,
+standby-replay and more than two ranks.
+
+A completion acceptance (product `5c5db18`, both profiles, eight leaves
+each) restarted the MDS four times. Requests the MDS executed and journaled
+while `ms_blackhole_client` dropped their replies were resubmitted with retry
+1 after `ReconnectSession`: the CREATE was answered as a CREATE with its
+trace and created inode, and the MKDIR was converted to LOOKUP (dentry
+`lost-dir`, target equal to the recorded inode), both from the
+completed-request record. A create whose unsafe reply had arrived and whose
+safe reply was dropped was resubmitted with REPLAY and answered traceless
+from the record (`already completed`, extra holding the inode) instead of
+being executed. With `mds_deny_all_reconnect` the MDS answered CLOSE
+(`ErrMDSSessionReconnectDenied`), then evicted and blocklisted the address
+instance, so the same Client was rejected as blocklisted while a new Client
+opened normally. After a missed reconnect window CLOSE followed the eviction
+and the client's existing OSD connection read -108. FORCE_RO arrived as a
+session event and a MKDIR then returned -30 while LOOKUP and GETATTR
+succeeded. A dentry lease RENEW was answered with RENEW at the next sequence
+and the same duration. After a native snapshot a FLUSHSNAP with dirty Fw got
+FLUSHSNAP_ACK with the same TID and follows. See
+[the completion record](../integration/fixture/MDS_CEPHFS_COMPLETION_VALIDATION.md).
+
+Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and
 safe replies, forwards, session loss, the data segment, push ordering and
 counting, client answers, close resend and protocol violations.
@@ -290,9 +311,11 @@ cut the unsafe-to-safe latency from up to 5 s to a few milliseconds. See
 A consumer that installs caps only from reply traces can see a cap GRANT for
 a replayed inode before that request's reply; `Arrival` orders them. Standby
 takeover and multiple ranks are covered by the ranks acceptance under
-Evidence. Not exercised live: a REPLAY answered from the completed-request
-record, a lost reply of a delivered request, reconnect denial or a missed
-window, split reconnect messages and non-root realms.
+Evidence, and completed-record answers, denial and a missed window by the
+completion acceptance there. Not exercised live: split reconnect messages,
+non-root realms, the GETATTR conversion, completed-record answers for other
+operations, a lost reply of an OPEN with O_CREAT, dirty-data FLUSH and cap
+snaps across several snapshots.
 
 The library never reconnects, replays or resubmits on its own, and
 implements no path walking, inode or dentry cache, capability bookkeeping,
