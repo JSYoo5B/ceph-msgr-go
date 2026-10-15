@@ -109,6 +109,9 @@ type MDSRequest struct {
 	// Data is the data segment: a setxattr value or a create's encoded
 	// xattr map. It is copied before Submit returns.
 	Data []byte
+	// ino is the replayed request's target inode (REPLAY only, set by an
+	// explicit resubmission after reconnect).
+	ino uint64
 }
 
 // MDSReply is one MClientReply. Result is the signed wire code (Linux
@@ -145,6 +148,9 @@ type MDSRequestCall struct {
 	transaction uint64
 	op          uint32
 	submitted   time.Time
+	// request keeps the submitted request (stamp fixed) so the caller can
+	// explicitly resubmit it with the same TID after an MDS reconnect.
+	request MDSRequest
 	// guarded by session.mu
 	first, safe *MDSReply
 	err         error
@@ -203,16 +209,11 @@ func (s *MDSSession) Submit(ctx context.Context, request MDSRequest) (*MDSReques
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	m := s.conn
-	c := m.client
-	if !c.options.EnableCephFS {
+	if !s.conn.client.options.EnableCephFS {
 		return nil, ErrCephFSDisabled
 	}
 	if request.Flags&^mds.RequestFlagWantDentry != 0 {
 		return nil, errors.New("ceph: MDS request flags other than WANT_DENTRY are unsupported")
-	}
-	if uint32(len(request.Releases)) > mds.MaxRequestReleases || uint32(len(request.GIDs)) > mds.MaxRequestGIDs {
-		return nil, fmt.Errorf("ceph: MDS request releases or GIDs: %w", ErrLimitExceeded)
 	}
 	s.mu.Lock()
 	state, terminal, features := s.state, s.err, s.open.SupportedFeatures
@@ -223,29 +224,57 @@ func (s *MDSSession) Submit(ctx context.Context, request MDSRequest) (*MDSReques
 	if state != MDSSessionOpen && state != MDSSessionStale {
 		return nil, errors.New("ceph: MDS session is not open")
 	}
-	for _, bit := range []uint{mds.FeatureReplyEncoding, mds.Feature32BitsRetryFwd, mds.FeatureNewSnaprealmInfo, mds.FeatureHasOwnerUIDGID} {
-		if !mds.FeatureBitsetHas(features, bit) {
-			return nil, ErrMDSRequestFeatures
-		}
-	}
-	select {
-	case c.calls <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-s.done:
-		return nil, s.Err()
-	}
-	release := func() { <-c.calls }
-	transaction, err := c.nextMDSTransaction()
-	if err != nil {
-		release()
+	if err := requestFeatures(features); err != nil {
 		return nil, err
 	}
-	call := &MDSRequestCall{session: s, transaction: transaction, op: request.Op, submitted: time.Now()}
-	stamp := request.Stamp
-	if stamp == (MDSTime{}) {
-		stamp = MDSTime{Seconds: uint32(call.submitted.Unix()), Nanoseconds: uint32(call.submitted.Nanosecond())}
+	if err := s.acquireSlot(ctx); err != nil {
+		return nil, err
 	}
+	transaction, err := s.conn.client.nextMDSTransaction()
+	if err != nil {
+		<-s.conn.client.calls
+		return nil, err
+	}
+	return s.submit(ctx, request, features, transaction)
+}
+
+func requestFeatures(features []byte) error {
+	for _, bit := range []uint{mds.FeatureReplyEncoding, mds.Feature32BitsRetryFwd, mds.FeatureNewSnaprealmInfo, mds.FeatureHasOwnerUIDGID} {
+		if !mds.FeatureBitsetHas(features, bit) {
+			return ErrMDSRequestFeatures
+		}
+	}
+	return nil
+}
+
+func (s *MDSSession) acquireSlot(ctx context.Context) error {
+	select {
+	case s.conn.client.calls <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.done:
+		return s.Err()
+	}
+}
+
+// submit registers and queues one request with an already allocated TID
+// and an acquired MaxInFlight slot, which it releases on failure.
+func (s *MDSSession) submit(ctx context.Context, request MDSRequest, features []byte, transaction uint64) (*MDSRequestCall, error) {
+	m := s.conn
+	c := m.client
+	release := func() { <-c.calls }
+	if uint32(len(request.Releases)) > mds.MaxRequestReleases || uint32(len(request.GIDs)) > mds.MaxRequestGIDs {
+		release()
+		return nil, fmt.Errorf("ceph: MDS request releases or GIDs: %w", ErrLimitExceeded)
+	}
+	call := &MDSRequestCall{session: s, transaction: transaction, op: request.Op, submitted: time.Now()}
+	if request.Stamp == (MDSTime{}) {
+		request.Stamp = MDSTime{Seconds: uint32(call.submitted.Unix()), Nanoseconds: uint32(call.submitted.Nanosecond())}
+	}
+	request.GIDs, request.Releases, request.AlternateName = slices.Clone(request.GIDs), slices.Clone(request.Releases), slices.Clone(request.AlternateName)
+	request.FscryptAuth, request.FscryptFile, request.Data = slices.Clone(request.FscryptAuth), slices.Clone(request.FscryptFile), slices.Clone(request.Data)
+	call.request = request
 	s.mu.Lock()
 	if s.state.terminal() {
 		err := s.err
@@ -256,6 +285,11 @@ func (s *MDSSession) Submit(ctx context.Context, request MDSRequest) (*MDSReques
 	if s.requests == nil {
 		s.requests = make(map[uint64]*MDSRequestCall)
 	}
+	if s.requests[transaction] != nil {
+		s.mu.Unlock()
+		release()
+		return nil, errors.New("ceph: MDS request TID already tracked")
+	}
 	s.requests[transaction] = call
 	oldest := transaction
 	for tid := range s.requests {
@@ -263,9 +297,9 @@ func (s *MDSSession) Submit(ctx context.Context, request MDSRequest) (*MDSReques
 	}
 	s.mu.Unlock()
 	wire := mds.ClientRequest{OldestClientTID: oldest, MDSMapEpoch: request.MDSMapEpoch, Flags: request.Flags, Retry: request.Retry, Forward: request.Forward,
-		Op: request.Op, CallerUID: request.CallerUID, CallerGID: request.CallerGID, Args: request.Args, OwnerUID: request.OwnerUID, OwnerGID: request.OwnerGID,
-		Path: request.Path, Path2: request.Path2, Releases: slices.Clone(request.Releases), Stamp: stamp, GIDs: slices.Clone(request.GIDs),
-		AlternateName: slices.Clone(request.AlternateName), FscryptAuth: slices.Clone(request.FscryptAuth), FscryptFile: slices.Clone(request.FscryptFile), Data: slices.Clone(request.Data)}
+		Op: request.Op, CallerUID: request.CallerUID, CallerGID: request.CallerGID, Ino: request.ino, Args: request.Args, OwnerUID: request.OwnerUID, OwnerGID: request.OwnerGID,
+		Path: request.Path, Path2: request.Path2, Releases: request.Releases, Stamp: request.Stamp, GIDs: request.GIDs,
+		AlternateName: request.AlternateName, FscryptAuth: request.FscryptAuth, FscryptFile: request.FscryptFile, Data: request.Data}
 	message, err := mds.EncodeClientRequest(wire, features)
 	if err == nil && uint64(len(message.Front))+uint64(len(message.Data))+41 > uint64(c.options.MaxFrameSize) {
 		err = fmt.Errorf("ceph: MDS request exceeds frame limit: %w", ErrLimitExceeded)

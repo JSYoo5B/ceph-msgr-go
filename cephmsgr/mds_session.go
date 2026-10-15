@@ -215,7 +215,7 @@ func (m *MDSConnection) OpenSession(ctx context.Context, options MDSSessionOptio
 	if uint64(len(request.Front))+41 > uint64(c.options.MaxFrameSize) {
 		return nil, fmt.Errorf("ceph: MDS session metadata exceeds frame limit: %w", ErrLimitExceeded)
 	}
-	return m.beginSession(ctx, options, []msgr.MessageData{request}, 0)
+	return m.beginSession(ctx, options, []msgr.MessageData{request}, 0, nil)
 }
 
 func validateSessionOptions(options *MDSSessionOptions) error {
@@ -233,7 +233,7 @@ func validateSessionOptions(options *MDSSessionOptions) error {
 
 // beginSession admits one session on m, queues its opening messages
 // (REQUEST_OPEN, or the MClientReconnect sequence) and waits for OPEN.
-func (m *MDSConnection) beginSession(ctx context.Context, options MDSSessionOptions, messages []msgr.MessageData, reconnectFrom uint64) (*MDSSession, error) {
+func (m *MDSConnection) beginSession(ctx context.Context, options MDSSessionOptions, messages []msgr.MessageData, reconnectFrom uint64, prepare func(*MDSSession) error) (*MDSSession, error) {
 	c := m.client
 	c.mu.Lock()
 	if c.closed || m.closed || m.ctx.Err() != nil {
@@ -273,9 +273,23 @@ func (m *MDSConnection) beginSession(ctx context.Context, options MDSSessionOpti
 		changed: make(chan struct{}), renewSent: make(map[uint64]time.Time), reconnectFrom: reconnectFrom}
 	m.cephfs = session
 	c.mu.Unlock()
+	if prepare != nil {
+		// Resubmitted requests precede the opening messages, as natively.
+		if err := prepare(session); err != nil {
+			session.mu.Lock()
+			queued := session.queued
+			session.mu.Unlock()
+			session.finish(MDSSessionLost, err, queued)
+			close(session.stopped)
+			if queued {
+				return nil, &OutcomeUnknownError{Cause: err}
+			}
+			return nil, err
+		}
+	}
 	// Admission only: after success each queued message is ordered before
 	// every later message even if ctx ends.
-	for i, message := range messages {
+	for _, message := range messages {
 		session.mu.Lock()
 		err := s.SendControl(ctx, message)
 		if err == nil {
@@ -286,9 +300,12 @@ func (m *MDSConnection) beginSession(ctx context.Context, options MDSSessionOpti
 			continue
 		}
 		// After the first message the MDS may hold a partial session.
-		session.finish(MDSSessionLost, err, i > 0)
+		session.mu.Lock()
+		queued := session.queued
+		session.mu.Unlock()
+		session.finish(MDSSessionLost, err, queued)
 		close(session.stopped)
-		if i > 0 {
+		if queued {
 			return nil, &OutcomeUnknownError{Cause: err}
 		}
 		if s.Err() != nil {

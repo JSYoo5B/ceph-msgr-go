@@ -30,6 +30,16 @@ var ErrMDSSessionReconnectDenied = errors.New("ceph: MDS denied the CephFS sessi
 type MDSReconnectState struct {
 	Caps   []MDSCapReconnect
 	Realms []MDSRealmReconnect
+	// Resubmit lists calls of the Lost session that the caller explicitly
+	// chooses to send again with their original TIDs, before the reconnect
+	// message (as native clients do). A call that received an unsafe reply
+	// is sent with the REPLAY flag and the target inode from that reply; a
+	// call without any reply is sent with its retry count increased. Cap
+	// releases are dropped (they predate the capability reconnect). The MDS
+	// answers from its completed-request record when it already journaled
+	// the TID, so this is not a blind re-execution, but a request it never
+	// received does execute. Safe-replied and forwarded calls are refused.
+	Resubmit []*MDSRequestCall
 }
 
 // ReconnectSession reattaches the CephFS session of a Lost previous session
@@ -46,41 +56,133 @@ type MDSReconnectState struct {
 // *MDSSessionRejectedError. Requests of the previous session are not
 // resubmitted. ctx follows OpenSession: after the first message is queued its
 // expiry returns the still-opening session with an OutcomeUnknownError.
-func (m *MDSConnection) ReconnectSession(ctx context.Context, previous *MDSSession, state MDSReconnectState, options MDSSessionOptions) (*MDSSession, error) {
+func (m *MDSConnection) ReconnectSession(ctx context.Context, previous *MDSSession, state MDSReconnectState, options MDSSessionOptions) (*MDSSession, []*MDSRequestCall, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	c := m.client
 	if !c.options.EnableCephFS {
-		return nil, ErrCephFSDisabled
+		return nil, nil, ErrCephFSDisabled
 	}
 	if err := validateSessionOptions(&options); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if previous == nil || previous.conn.client != c || previous.conn == m {
-		return nil, errors.New("ceph: MDS reconnect requires a previous session of this client on another connection")
+		return nil, nil, errors.New("ceph: MDS reconnect requires a previous session of this client on another connection")
 	}
 	status := previous.Status()
 	if status.State != MDSSessionLost {
-		return nil, errors.New("ceph: MDS reconnect requires a Lost previous session")
+		return nil, nil, errors.New("ceph: MDS reconnect requires a Lost previous session")
 	}
 	if status.GlobalID != m.globalID {
-		return nil, ErrMDSIdentityChanged
+		return nil, nil, ErrMDSIdentityChanged
 	}
 	if status.Target.FilesystemID != m.target.FilesystemID || status.Target.Rank != m.target.Rank {
-		return nil, ErrMDSTargetChanged
+		return nil, nil, ErrMDSTargetChanged
 	}
 	if previous.conn.address == m.address {
-		return nil, ErrMDSSessionActive
+		return nil, nil, ErrMDSSessionActive
 	}
-	if !mds.FeatureBitsetHas(status.Open.SupportedFeatures, mds.FeatureMultiReconnect) {
-		return nil, ErrMDSRequestFeatures
+	features := status.Open.SupportedFeatures
+	if !mds.FeatureBitsetHas(features, mds.FeatureMultiReconnect) {
+		return nil, nil, ErrMDSRequestFeatures
+	}
+	resends, err := resubmissions(previous, state.Resubmit)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(resends) != 0 {
+		if err := requestFeatures(features); err != nil {
+			return nil, nil, err
+		}
 	}
 	messages, err := reconnectMessages(state, c.options.MaxFrameSize)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return m.beginSession(ctx, options, messages, status.Generation)
+	// Every resubmitted call holds a MaxInFlight slot like a new request.
+	acquired := 0
+	for range resends {
+		select {
+		case c.calls <- struct{}{}:
+			acquired++
+			continue
+		case <-ctx.Done():
+			err = ctx.Err()
+		case <-c.ctx.Done():
+			err = ErrClosed
+		}
+		for range acquired {
+			<-c.calls
+		}
+		return nil, nil, err
+	}
+	var calls []*MDSRequestCall
+	prepare := func(session *MDSSession) error {
+		for i, r := range resends {
+			call, err := session.submit(ctx, r.request, features, r.transaction)
+			if err != nil {
+				for range len(resends) - i - 1 {
+					<-c.calls
+				}
+				return err
+			}
+			session.mu.Lock()
+			session.queued = true
+			session.mu.Unlock()
+			calls = append(calls, call)
+		}
+		return nil
+	}
+	session, err := m.beginSession(ctx, options, messages, status.Generation, prepare)
+	if err != nil {
+		var unknown *OutcomeUnknownError
+		if session != nil && errors.As(err, &unknown) {
+			return session, calls, err
+		}
+		return nil, nil, err
+	}
+	return session, calls, nil
+}
+
+type resubmission struct {
+	request     MDSRequest
+	transaction uint64
+}
+
+// resubmissions validates the caller's choice and derives each resend.
+func resubmissions(previous *MDSSession, chosen []*MDSRequestCall) ([]resubmission, error) {
+	var out []resubmission
+	seen := make(map[uint64]bool, len(chosen))
+	for _, call := range chosen {
+		if call == nil || call.session != previous {
+			return nil, errors.New("ceph: resubmitted call does not belong to the Lost session")
+		}
+		previous.mu.Lock()
+		first, safe, resolved, cause := call.first, call.safe, call.resolved, call.err
+		request := call.request
+		previous.mu.Unlock()
+		var unknown *OutcomeUnknownError
+		if !resolved || safe != nil || !errors.As(cause, &unknown) || seen[call.transaction] {
+			return nil, errors.New("ceph: only distinct calls with an unknown outcome can be resubmitted")
+		}
+		seen[call.transaction] = true
+		if request.Retry == ^uint32(0) {
+			return nil, errors.New("ceph: MDS request retry count exhausted")
+		}
+		request.Retry++
+		request.Releases = nil
+		if first != nil && !first.Safe {
+			request.Flags |= mds.RequestFlagReplay
+			if first.IsTarget {
+				if trace, err := mds.DecodeTrace(first.Trace, first.IsDentry, true); err == nil && trace.Target != nil {
+					request.ino = trace.Target.Ino
+				}
+			}
+		}
+		out = append(out, resubmission{request: request, transaction: call.transaction})
+	}
+	return out, nil
 }
 
 // reconnectMessages splits the state into frame-sized MClientReconnect

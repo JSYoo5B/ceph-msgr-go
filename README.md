@@ -398,7 +398,11 @@ MDS daemon이 재시작하거나 failover하면 새 incarnation은 새 주소·n
 `ReconnectSession(ctx, lost, state, options)`을 호출한다. 호출자가 보유한
 capability와 snap realm 상태를 MClientReconnect v5로 보내며 MDS가 OPEN으로 답하면
 새 session generation이 시작된다. CLOSE는 `ErrMDSSessionReconnectDenied`로 반환한다.
-이전 session의 요청 replay와 같은 TID 재전송은 아직 구현하지 않았다.
+이전 session의 요청은 자동으로 다시 보내지 않는다. 호출자가
+`MDSReconnectState.Resubmit`에 결과 불명확 요청을 명시하면 native client처럼
+reconnect message보다 먼저 원래 TID로 보낸다. Unsafe 응답을 받은 요청은 REPLAY와
+대상 inode를, 응답이 없던 요청은 retry 증가를 표시한다. MDS가 이미 journal에 기록한
+TID는 완료 기록으로 답하고 다시 실행하지 않는다.
 
 MDS가 보내는 capability·lease·snap realm·quota 메시지는 MDS와 같은 방식으로 push
 sequence에 세고 `Next`로 도착 순서대로 전달한다. Revoke 응답, flush, capability

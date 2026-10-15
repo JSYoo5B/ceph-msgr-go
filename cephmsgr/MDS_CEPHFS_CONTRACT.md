@@ -79,10 +79,23 @@ starts a new local session generation (`Status().ReconnectedFrom` names the
 Lost one) with push sequence zero and renewals; CLOSE returns
 `ErrMDSSessionReconnectDenied` (wrapping `ErrMDSSessionClosed`): the MDS was
 not in its reconnect phase, refuses sessions, lacks a required feature or no
-longer holds the session. REJECT returns `*MDSSessionRejectedError`. Requests
-of the Lost session are not resubmitted or replayed: the native REPLAY and
-same-TID resubmission paths are not implemented. The library interprets no
-capability; the MDS decides what it restores.
+longer holds the session. REJECT returns `*MDSSessionRejectedError`. The
+library interprets no capability; the MDS decides what it restores.
+
+Nothing is resubmitted automatically. `MDSReconnectState.Resubmit` lists the
+Lost session's calls (unknown outcome only; safe-replied, forwarded and
+duplicate calls are refused) that the caller explicitly sends again, before
+the reconnect message as native clients do (`Client::send_reconnect`,
+`resend_unsafe_requests`, `send_request`). Each keeps its original TID and
+stamp, raises its retry count and drops its cap releases. A call that had an
+unsafe reply carries the REPLAY flag and the target inode decoded from that
+reply. During the reconnect phase the MDS queues REPLAY requests and
+retries it has already completed for client replay
+(`Server::dispatch`); a completed TID is answered from the session's
+journaled completed-request record rather than executed again, which is the
+duplicate-suppression scope. A request the MDS never received executes as
+new. `ReconnectSession` returns the new calls in the order given; they hold
+MaxInFlight slots like new requests. `oldest_client_tid` includes them.
 
 ## Requests
 
