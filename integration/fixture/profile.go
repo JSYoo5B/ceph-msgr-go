@@ -203,13 +203,14 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 	}
 	if p.rbdBase == "1" {
-		// The RBD base acceptance owns a pool, two identities and one native
-		// image on the single-OSD legacy-v6 fixture; its Go client admits no
-		// HASHPSPOOL bit, so every pool must keep the legacy placement seed.
-		selected = "^TestCephRBDBaseIntegration$"
+		// The RBD base and write acceptances own a pool, two identities and
+		// two native images on the single-OSD legacy-v6 fixture; their Go
+		// client admits no HASHPSPOOL bit, so every pool must keep the legacy
+		// placement seed.
+		selected = "^TestCephRBD(Base|Write)Integration$"
 		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || p.sparseReadOracle != "" ||
 			p.testRun != "" && p.testRun != selected {
-			return profile{}, fmt.Errorf("RBD base acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture and no MDS profile", selected)
+			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture and no MDS profile", selected)
 		}
 	}
 	if p.testRun == "" {
@@ -250,8 +251,8 @@ func (p profile) cleanupBudget() time.Duration {
 		return 3 * time.Minute
 	}
 	if p.mdsSessions == "1" || p.mdsCephFS == "1" || p.rbdBase == "1" {
-		// The RBD base cleanup removes its owned pool (with the temporary
-		// mon_allow_pool_delete window) and two identities.
+		// The RBD cleanup removes its owned pool (with the temporary
+		// mon_allow_pool_delete window, both images) and two identities.
 		return 2 * time.Minute
 	}
 	return time.Minute

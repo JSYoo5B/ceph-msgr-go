@@ -443,8 +443,19 @@ secure/AES256K container IPv6 MemStore의 legacy-v6 단일 OSD에서 각각 5개
 남겼다. `rbd` class의 get_id·get_size·get_features·get_snapcontext·snapshot_get 원본 출력,
 data 객체의 head·snapshot 읽기, LIST_SNAPS, SPARSE_READ가 native librbd·librados와 byte
 단위로 일치했다. librbd가 header에 건 watch를 LIST_WATCHERS로 확인했고, Go watch가
-resize notify를 받아 ack하면 native resize가 바로 끝났다. Exclusive-lock·object-map
-image, clone/parent, Go의 RBD 쓰기 경로는 아직 검증하지 않았다.
+resize notify를 받아 ack하면 native resize가 바로 끝났다.
+
+쓰기 경로는 같은 pool에 native librbd가 만든 두 번째 image로 검증했다(시험 전용 코드
+`integration/rbd_write_test.go`). Go는 header의 `get_snapcontext`로 얻은 SnapContext를 붙여
+data 객체에 SETALLOCHINT와 WRITE를 보냈고, OSD는 snapshot이 아직 필요로 하는 객체만
+clone했다. Native librbd는 head에서 Go가 쓴 bytes를, snapshot에서 쓰기 전 bytes를 읽었다.
+Go가 보낸 `rbd.set_size`와 `rbd.metadata_set`은 native librbd의 stat과 metadata 목록에 그대로
+나타났다. librbd managed-lock 형식(`rbd_lock`, tag `internal`, cookie `auto <watch cookie>`)으로
+건 `lock.lock`은 `lock.get_info`와 native `list_lockers`에 보였고 `lock.unlock` 뒤 사라졌다.
+librbd가 image를 연 채로 있을 때 Go가 header 크기를 바꾸고 HeaderUpdate notify를 보내자
+librbd는 `ResponseMessage(0)`으로 ack했고, image를 다시 열지 않고도 바뀐 크기를 읽었다.
+[쓰기 검증 기록](integration/fixture/RBD_WRITE_VALIDATION.md)에 두 구성의 결과를 남겼다.
+Exclusive-lock·object-map image와 clone/parent는 아직 검증하지 않았다.
 
 ## OSD 객체 요청 통신
 

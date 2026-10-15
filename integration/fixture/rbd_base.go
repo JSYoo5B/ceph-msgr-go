@@ -113,8 +113,11 @@ type rbdBaseMutation struct {
 	Kind      string `json:"kind"`
 	RequestID int64  `json:"request_id,omitempty"`
 	Target    string `json:"target"`
-	State     string `json:"state"`
-	Error     string `json:"error,omitempty"`
+	// ReadOnly marks a journaled native observation of the RBD write
+	// acceptance: one-shot like a mutation, but it changes nothing.
+	ReadOnly bool   `json:"read_only,omitempty"`
+	State    string `json:"state"`
+	Error    string `json:"error,omitempty"`
 }
 
 type rbdBaseScope struct {
@@ -131,6 +134,12 @@ type rbdBaseScope struct {
 	setup            *rbdBaseNative
 	cleanupAttempted bool
 	cleanupErr       error
+	// The RBD write acceptance's second image in the same owned pool
+	// (rbd_write.go): its plan, the last control request and the index of
+	// the next admitted action.
+	writePlan          rbdWritePlan
+	writeLastRequestID int64
+	writeNext          int
 }
 
 func (x *rbdBaseScope) mutated(kind string) bool {
@@ -140,11 +149,17 @@ func (x *rbdBaseScope) mutated(kind string) bool {
 // begin journals one owned mutation before it is issued. A kind is issued at
 // most once, whatever its outcome.
 func (c *fixtureCluster) rbdBaseBegin(kind, target string, request int64) (*rbdBaseMutation, error) {
+	return c.rbdBaseBeginAction(kind, target, request, false)
+}
+
+// rbdBaseBeginAction journals one native action; readOnly marks an
+// observation that changes no owned state.
+func (c *fixtureCluster) rbdBaseBeginAction(kind, target string, request int64, readOnly bool) (*rbdBaseMutation, error) {
 	x := c.rbdBase
 	if x.mutated(kind) {
 		return nil, fmt.Errorf("RBD base %s was already issued", kind)
 	}
-	m := &rbdBaseMutation{Kind: kind, RequestID: request, Target: target, State: "intended"}
+	m := &rbdBaseMutation{Kind: kind, RequestID: request, Target: target, ReadOnly: readOnly, State: "intended"}
 	x.mutations = append(x.mutations, m)
 	return m, c.rbdBaseJournal()
 }
@@ -168,7 +183,7 @@ func (c *fixtureCluster) rbdBaseJournal() error {
 		native = "client.rbd-base-native-" + x.token
 	}
 	return writeMDSFreshJSON(x.out, "rbd-base-owned.json", map[string]any{
-		"source_commit": rbdBaseSource, "token": x.token, "fsid": c.profile.fsid, "plan": x.plan, "pool_intended": x.poolIntent, "pool_id": x.poolID,
+		"source_commit": rbdBaseSource, "token": x.token, "fsid": c.profile.fsid, "plan": x.plan, "write_plan": x.writePlan, "pool_intended": x.poolIntent, "pool_id": x.poolID,
 		"client_identity": identity, "native_identity": native, "mutations": x.mutations,
 	})
 }
@@ -595,8 +610,8 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 		return err
 	}
 	token := hex.EncodeToString(raw[:])
-	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), poolID: -1}
-	if !x.plan.owned(token) {
+	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), writePlan: rbdWritePlanFor(token), poolID: -1}
+	if !x.plan.owned(token) || !x.writePlan.owned(token) {
 		return errors.New("RBD base plan is not bound to its token")
 	}
 	c.rbdBase = x

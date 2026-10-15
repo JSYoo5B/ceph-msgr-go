@@ -377,7 +377,7 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	manifest["rbd_base"] = p.rbdBase == "1"
 	if p.rbdBase == "1" {
 		manifest["topology"] = "3 MON, 0/2 MGR and one OSD with an owned RBD pool plus a native oracle client"
-		manifest["rbd_base_mutations"] = "one owned pool (application rbd, eight PGs without HASHPSPOOL) created, initialized and removed with its CRUSH rule; two owned identities (Go and native librbd, profile rbd bound to the pool) created and removed; one native format-2 layering image written, snapshotted, rewritten and resized twice, discarded with the pool"
+		manifest["rbd_base_mutations"] = "one owned pool (application rbd, eight PGs without HASHPSPOOL) created, initialized and removed with its CRUSH rule; two owned identities (Go and native librbd, profile rbd bound to the pool) created and removed; one native format-2 layering image written, snapshotted, rewritten and resized twice, discarded with the pool; on the write test's request a second native layering image written, snapshotted and rewritten, then written, resized, tagged with image metadata, locked and unlocked by the Go client, discarded with the pool"
 	}
 	if p.mdsFresh == "1" {
 		manifest["topology"] = "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"

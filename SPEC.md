@@ -246,7 +246,7 @@ metadata·service URI를 읽는 것과 설정 적용·실행 모듈 계산·HTTP
 | 객체 요청 | 읽기·쓰기·삭제·복합 opcode·조건·xattr·omap·class call·snapshot의 wire 계약 | 객체 API, pool·namespace 선택, OSDMap 적용·CRUSH·배치·라우팅 |
 | 객체 열거·이벤트 | PG 열거 요청·응답과 cursor, watch/notify·ack·오류와 연결 제어 이벤트 | pool 전체 열거·중복 처리, lock 정책, 이벤트 handler와 재등록 판단 |
 | MDS | 서비스 인증·지도·session·metadata 요청·응답·capability/lease·reconnect 메시지 | filesystem 선택·요청 라우팅, 경로·inode·파일 handle·캐시·권한과 일관성 판단 |
-| RBD 기반 통신 | RBD가 요구하는 OSD opcode·class payload·snapshot·watch/notify 전달(기초 [실검증](integration/fixture/RBD_BASE_VALIDATION.md): layering image의 header class call·head/snapshot 객체·LIST_SNAPS·SPARSE_READ·header watch/notify ack가 native librbd와 일치, 쓰기·lock·clone 미검증) | image metadata·striping·parent/clone·copy-up·lock·group·diff·mirror·migration 로직 |
+| RBD 기반 통신 | RBD가 요구하는 OSD opcode·class payload·snapshot·watch/notify 전달(기초 [실검증](integration/fixture/RBD_BASE_VALIDATION.md): layering image의 header class call·head/snapshot 객체·LIST_SNAPS·SPARSE_READ·header watch/notify ack가 native librbd와 일치. [쓰기 실검증](integration/fixture/RBD_WRITE_VALIDATION.md): image SnapContext를 붙인 data 쓰기와 OSD clone, `rbd.set_size`·`rbd.metadata_set`, managed-lock 형식의 `lock.lock`·`lock.unlock`, librbd가 ack하고 반영하는 HeaderUpdate notify가 native librbd와 일치. exclusive-lock·object-map feature와 clone 미검증) | image metadata·striping·parent/clone·copy-up·lock·group·diff·mirror·migration 로직 |
 | CephFS 기반 통신 | MDS wire metadata·이벤트와 연결된 OSD I/O의 입력·결과 보존 | 파일 layout·OSD 대상 계산, 데이터·metadata flush와 POSIX 의미 구현 |
 
 RADOS object class의 이름·method·입출력은 원본 bytes로 전달한다.
