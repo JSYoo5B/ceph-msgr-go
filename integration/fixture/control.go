@@ -806,7 +806,8 @@ func cephLogEntryTime(line string) (time.Time, string, error) {
 	return stamp, entry[2], err
 }
 
-// monitorReclaimLogLimit bounds each owned MON container's streamed log.
+// monitorReclaimLogLimit bounds candidate refusal evidence from each MON.
+// Unrelated debug history is streamed without being retained by the filter.
 const monitorReclaimLogLimit = 32 << 20
 
 // The three refusals in pinned CephxServiceHandler.cc:111-113, 126-128 and
@@ -883,7 +884,9 @@ func monitorReclaimRefusals(ctx context.Context, monitors []monitorLogSource, na
 		if err != nil {
 			return nil, fmt.Errorf("read mon.%s log for native MGR refusal attribution: %w", mon.name, err)
 		}
-		ids, scanErr := scanMonitorReclaimRefusals(logs, name, since, monitorReclaimLogLimit)
+		stopClose := context.AfterFunc(ctx, func() { _ = logs.Close() })
+		ids, scanErr := scanMonitorReclaimRefusals(newMonitorReclaimLogReader(ctx, logs, name), name, since, monitorReclaimLogLimit)
+		stopClose()
 		if err := errors.Join(scanErr, logs.Close()); err != nil {
 			return nil, fmt.Errorf("mon.%s native MGR refusal attribution: %w", mon.name, err)
 		}

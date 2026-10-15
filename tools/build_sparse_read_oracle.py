@@ -34,7 +34,7 @@ def build_environments(librados):
     # The GCC toolset linker itself needs its matching libctf. The finished
     # client's audit must instead resolve only the fixture image's libraries.
     runtime = dict(os.environ)
-    runtime["LD_LIBRARY_PATH"] = str(librados.parent) + ":/usr/lib64/ceph"
+    runtime["LD_LIBRARY_PATH"] = librados.parent.as_posix() + ":/usr/lib64/ceph"
     compile_env = dict(runtime)
     compile_env["LD_LIBRARY_PATH"] = "/opt/rh/gcc-toolset-14/root/usr/lib64:" + runtime["LD_LIBRARY_PATH"]
     return compile_env, runtime

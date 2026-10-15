@@ -1,5 +1,5 @@
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +18,12 @@ class BuildSparseReadOracleTest(unittest.TestCase):
         self.assertNotIn("gcc-toolset", runtime["LD_LIBRARY_PATH"])
         compile_env["KEEP"] = "changed"
         self.assertEqual(runtime["KEEP"], "value")
+
+    def test_container_library_paths_stay_posix_on_windows_hosts(self):
+        compile_env, runtime = builder.build_environments(PureWindowsPath("/usr/lib64/librados.so.2"))
+        self.assertEqual(compile_env["LD_LIBRARY_PATH"],
+                         "/opt/rh/gcc-toolset-14/root/usr/lib64:/usr/lib64:/usr/lib64/ceph")
+        self.assertEqual(runtime["LD_LIBRARY_PATH"], "/usr/lib64:/usr/lib64/ceph")
 
 
 if __name__ == "__main__":

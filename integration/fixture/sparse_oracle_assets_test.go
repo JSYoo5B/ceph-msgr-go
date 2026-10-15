@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -117,8 +118,13 @@ func TestSparseOracleAssetStagingIsOptionalAndPreservesVerifiedBytes(t *testing.
 	}
 	for name, want := range map[string]os.FileMode{"osd_sparse_read_oracle": 0700, "sparse-read-oracle-provenance.json": 0600} {
 		stat, err := os.Stat(filepath.Join(out, name))
-		if err != nil || stat.Mode().Perm() != want {
+		if err != nil {
 			t.Fatal("staged asset permissions", name, err)
+		}
+		// Windows represents only the read-only attribute through FileMode;
+		// owner-only and executable POSIX bits are verified on Unix hosts.
+		if runtime.GOOS != "windows" && stat.Mode().Perm() != want {
+			t.Fatalf("staged asset permissions %s: got %o, want %o", name, stat.Mode().Perm(), want)
 		}
 	}
 }

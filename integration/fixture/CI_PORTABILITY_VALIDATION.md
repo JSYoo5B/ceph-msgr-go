@@ -23,3 +23,24 @@ passed locally. The Windows job logs directly establish the original errors;
 the checkout-filter experiment independently establishes the line-ending
 cause. Successful Windows execution of this correction needs the new exact-
 head CI result; the local checks are not presented as that result.
+
+## Follow-up from ab2198c
+
+Run `38698420954` at `ab2198c27a939d295d4e8db487fe64d073c501bf`
+exposed three additional test-harness issues. Windows converted the native
+helper's Linux loader paths to backslashes, and a staging test assumed POSIX
+permission bits. The build helper now serializes Linux paths as POSIX paths;
+permission assertions apply only on systems implementing those bits. A
+PureWindowsPath regression reproduces the path issue independently of the host.
+
+The host MON fixture also exhausted a 32 MiB log bound on unrelated daemon
+debug history. A bounded-line streaming reader now passes only exact reclaim
+candidate lines to the existing strict timestamp/entity/GID/suffix parser. Its
+candidate evidence retains the original 32 MiB bound. Malformed candidate lines,
+read failures, oversized lines and cancellation still fail. The Docker log
+reader closes on context cancellation. A regression streams 64 MiB of unrelated
+history around the required native evidence without retaining that history.
+
+The exact isolated change set passed the fixture module's complete CGO=0 tests
+and 285 Python tests. Actual Windows and host MON CI execution remain separate
+verification; no run was canceled or retried for this change.
