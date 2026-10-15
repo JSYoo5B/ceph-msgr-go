@@ -94,16 +94,30 @@ func TestCephNativeManagerPreparationIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("missing once-only native restoration receipt", err)
 	}
+	// MgrMonitor retains a registration until beacon expiry, so after the
+	// resume the preparation can still see the refused standby registered
+	// (one receipt for that observation) before the map drops it and the
+	// restoration is recorded. Either way the restoration comes last and
+	// both receipts carry the same first native refusal.
 	lines := strings.Split(strings.TrimSpace(string(after)), "\n")
-	if len(lines) != 1 {
-		t.Fatalf("native restoration receipt count=%d want=1", len(lines))
+	if len(lines) != 1 && len(lines) != 2 {
+		t.Fatalf("native restoration receipt count=%d want 1, or 2 with a registered-slot observation first", len(lines))
 	}
-	var receipt struct {
-		Daemon    string `json:"daemon"`
-		Rejection string `json:"native_rejection"`
-	}
-	if err := json.Unmarshal([]byte(lines[0]), &receipt); err != nil || receipt.Daemon != "mgr."+name || receipt.Rejection != observed.Rejection {
-		t.Fatal("restoration did not retain the exact first native refusal", receipt, err)
+	for i, line := range lines {
+		var receipt struct {
+			Daemon     string `json:"daemon"`
+			Rejection  string `json:"native_rejection"`
+			Registered bool   `json:"registered"`
+			Action     string `json:"action"`
+		}
+		want := "restore missing native daemon before independent failover"
+		if i < len(lines)-1 {
+			want = "observe native refusal in registered slot before independent failover"
+		}
+		if err := json.Unmarshal([]byte(line), &receipt); err != nil || receipt.Daemon != "mgr."+name || receipt.Rejection != observed.Rejection ||
+			receipt.Action != want || i < len(lines)-1 && !receipt.Registered {
+			t.Fatal("restoration did not retain the exact first native refusal", i, receipt, err)
+		}
 	}
 	final := nativeManagerSnapshot(t, clientCtx, c, control, "restored").Manager
 	if final.Name != initial.Name || final.GlobalID != initial.GlobalID || len(final.Standbys) != 1 || final.Standbys[0].Name != name || final.Standbys[0].GlobalID == initial.Standbys[0].GlobalID || c.Snapshot().Manager.Ready {

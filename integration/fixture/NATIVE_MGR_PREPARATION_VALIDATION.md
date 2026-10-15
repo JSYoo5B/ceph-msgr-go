@@ -121,3 +121,25 @@ IPv4, container runtime, two MGRs, no OSD, arm64 Docker Desktop 29.8.2). No
 refusal occurred and no preparation receipt was written, so this run did not
 exercise the new branch. The trigger is intermittent, and a pass does not show
 that the CI race is fixed. Evidence: `/tmp/ceph-mgr-prep-fix-mapwait-20261015/`.
+
+## Registered-slot receipt before restoration (CI run 38824429432)
+
+`TestCephNativeManagerPreparationIntegration` failed on `cf36e6c` (AES/AES256K,
+secure, IPv4, container, two MGRs, native preparation enabled) with
+`native restoration receipt count=2 want=1`. After the 45-second pause and
+resume of `mgr.b`, the test's own `verify mgr-auth` saw the exact missing
+`-13` refusal, yet the preparation's first map read (epoch 6) still listed
+`b/14125` as a standby: MgrMonitor keeps a registration until beacon expiry
+(MgrMonitor.cc:747-798). The preparation therefore wrote the registered-slot
+receipt at epoch 6, waited for the map to drop the slot, and wrote the
+restoration receipt at epoch 7 before its once-only Stop/Start, exactly as the
+state machine above specifies. Both receipts carried the same first refusal
+line. The fixture was right and the test's single-receipt expectation was too
+narrow.
+
+The test now accepts one restoration receipt, or a registered-slot receipt
+(`registered: true`) followed by the restoration receipt, both naming the
+daemon and the first native refusal. Any other count, order, action or
+refusal still fails. The change is test-only; no product code or fixture
+behavior changed. Only `go vet` and the non-live `go test ./integration/`
+were run locally; the intermittent CI path itself was not reproduced.
