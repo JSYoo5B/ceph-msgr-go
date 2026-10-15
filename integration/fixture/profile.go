@@ -16,6 +16,7 @@ type profile struct {
 	mdsSessionsForeignIdentity, mdsCephFSIdentity                         string
 	mdsCephFSRecoveryIdentity, mdsCephFSRanksIdentity                     string
 	mdsFresh, mdsCommands, mdsSessions, mdsCephFS, mdsCephFSRanks         string
+	rbdBase, rbdBaseIdentity                                              string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
 	sparseReadOracle                                                      string
@@ -38,6 +39,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		mdsSessions:          value("CEPH_MSGR_TEST_MDS_SESSIONS", "0"),
 		mdsCephFS:            value("CEPH_MSGR_TEST_MDS_CEPHFS", "0"),
 		mdsCephFSRanks:       value("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS", "0"),
+		rbdBase:              value("CEPH_MSGR_TEST_RBD", "0"),
 		osdProfile:           value("CEPH_MSGR_TEST_OSD_PROFILE", "legacy-v6"),
 		sparseReadOracle:     getenv("CEPH_MSGR_TEST_SPARSE_READ_ORACLE"),
 		image:                value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
@@ -73,6 +75,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_MDS_SESSIONS", p.mdsSessions, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_CEPHFS", p.mdsCephFS, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS", p.mdsCephFSRanks, []string{"0", "1"}},
+		{"CEPH_MSGR_TEST_RBD", p.rbdBase, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_SERVICE_CIPHER", p.serviceCipher, []string{"aes", "aes256k"}},
 		{"CEPH_MSGR_TEST_RUNTIME", p.runtime, []string{"container", "host"}},
 		{"CEPH_MSGR_TEST_RACE", p.race, []string{"0", "1"}},
@@ -199,6 +202,16 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			return profile{}, fmt.Errorf("MDS fixture requires its exclusive selector %s and one admitted OSD profile", selected)
 		}
 	}
+	if p.rbdBase == "1" {
+		// The RBD base acceptance owns a pool, two identities and one native
+		// image on the single-OSD legacy-v6 fixture; its Go client admits no
+		// HASHPSPOOL bit, so every pool must keep the legacy placement seed.
+		selected = "^TestCephRBDBaseIntegration$"
+		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || p.sparseReadOracle != "" ||
+			p.testRun != "" && p.testRun != selected {
+			return profile{}, fmt.Errorf("RBD base acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture and no MDS profile", selected)
+		}
+	}
 	if p.testRun == "" {
 		p.testRun = selected
 	}
@@ -236,7 +249,9 @@ func (p profile) cleanupBudget() time.Duration {
 		// Pin restoration, standby return and three owned daemons.
 		return 3 * time.Minute
 	}
-	if p.mdsSessions == "1" || p.mdsCephFS == "1" {
+	if p.mdsSessions == "1" || p.mdsCephFS == "1" || p.rbdBase == "1" {
+		// The RBD base cleanup removes its owned pool (with the temporary
+		// mon_allow_pool_delete window) and two identities.
 		return 2 * time.Minute
 	}
 	return time.Minute
@@ -255,6 +270,7 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_MDS_SESSIONS":           p.mdsSessions,
 		"CEPH_MSGR_TEST_MDS_CEPHFS":             p.mdsCephFS,
 		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS":       p.mdsCephFSRanks,
+		"CEPH_MSGR_TEST_RBD":                    p.rbdBase,
 		"CEPH_MSGR_TEST_KEY_TYPE":               p.keyType,
 		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
 		"CEPH_MSGR_TEST_IP_FAMILY":              p.ipFamily,
@@ -289,6 +305,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_MDS_SESSIONS":           p.mdsSessions,
 		"CEPH_MSGR_TEST_MDS_CEPHFS":             p.mdsCephFS,
 		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS":       p.mdsCephFSRanks,
+		"CEPH_MSGR_TEST_RBD":                    p.rbdBase,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":   marker,
 		"CEPH_MSGR_MONITORS":                    p.monitors(),
 		"CEPH_MSGR_KEY_FILE":                    filepath.Join(controlDir, "key"),
@@ -335,6 +352,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.mdsCephFSRanks == "1" {
 		result["CEPH_MSGR_MDS_CEPHFS_RANKS_IDENTITY"] = p.mdsCephFSRanksIdentity
 		result["CEPH_MSGR_MDS_CEPHFS_RANKS_KEY_FILE"] = filepath.Join(controlDir, "mds-cephfs-ranks.key")
+	}
+	if p.rbdBase == "1" {
+		result["CEPH_MSGR_RBD_BASE_IDENTITY"] = p.rbdBaseIdentity
+		result["CEPH_MSGR_RBD_BASE_KEY_FILE"] = filepath.Join(controlDir, "rbd-base.key")
 	}
 	return result
 }

@@ -59,6 +59,7 @@ var metadataFiles = []string{
 	"osd-backoff-ack-input.json", "osd-backoff-ack-receipt.json",
 	"osd-watchers-result.json", "osd-watchers-status.json", "osd-watchers-worker.log", "osd-watchers-command.json", "osd-watchers-results.json",
 	"osd-omap-write-snaps.json", "osd-snap-results.json",
+	"rbd-base-owned.json", "rbd-base-setup.json", "rbd-base-oracle.json", "rbd-base-result.json", "rbd-base-watch-state.json", "rbd-base-cleanup.json", "rbd-base-results.json",
 }
 
 func saveMetadata(out, diagnostics string) error {

@@ -41,6 +41,8 @@ type fixtureCluster struct {
 	mdsCephFS   *mdsCephFSScope
 	// mdsCephFSRanks is the multi-rank CephFS acceptance scope.
 	mdsCephFSRanks *mdsCephFSRanksScope
+	// rbdBase is the RBD base acceptance scope (owned pool and image).
+	rbdBase *rbdBaseScope
 }
 
 func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
@@ -50,7 +52,7 @@ func (c *fixtureCluster) Terminate(ctx context.Context, opts ...testcontainers.T
 		<-c.done
 	}
 	var errs []error
-	errs = append(errs, c.finishMDSFresh(ctx))
+	errs = append(errs, c.finishMDSFresh(ctx), c.finishRBDBase(ctx))
 	// Restore paused containers before requesting their orderly cleanup.
 	for _, pause := range c.pauses {
 		errs = append(errs, pause.Resume(ctx))
@@ -342,6 +344,13 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 			return c, err
 		}
 		if err = wait.ForExec([]string{"test", "-f", "/out/relay.ready"}).WaitUntilReady(ctx, c.Container); err != nil {
+			return c, err
+		}
+	}
+	if p.rbdBase == "1" {
+		// After the oracle worker: the base OSD fixture is settled and the
+		// native driver's configuration copy exists.
+		if err = c.prepareRBDBase(ctx, out); err != nil {
 			return c, err
 		}
 	}

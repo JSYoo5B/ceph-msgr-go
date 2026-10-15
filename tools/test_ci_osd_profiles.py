@@ -55,28 +55,24 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_SESSIONS: ${{ matrix.mds_sessions || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS: ${{ matrix.mds_cephfs || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS: ${{ matrix.mds_cephfs_ranks || '0' }}", self.workflow)
-        self.assertEqual(len(self.rows), 44)
+        self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
+        self.assertEqual(len(self.rows), 46)
+        opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "rbd")
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
-                  and row.get("mds_commands", "0") == "0" and row.get("mds_sessions", "0") == "0"
-                  and row.get("mds_cephfs", "0") == "0" and row.get("mds_cephfs_ranks", "0") == "0"]
+                  and all(row.get(field, "0") == "0" for field in opt_ins)]
         self.assertEqual(len(legacy), 30)
         for row in self.rows:
             profile = row.get("osd_profile", "legacy-v6")
             self.assertIn(profile, {"legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8"})
             self.assertIn(row.get("mds_fresh", "0"), {"0", "1"})
-            self.assertIn(row.get("mds_commands", "0"), {"0", "1"})
-            self.assertIn(row.get("mds_sessions", "0"), {"0", "1"})
-            self.assertIn(row.get("mds_cephfs", "0"), {"0", "1"})
-            self.assertIn(row.get("mds_cephfs_ranks", "0"), {"0", "1"})
-            self.assertLessEqual(sum(row.get(field, "0") == "1" for field in ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks")), 1)
-            if profile == "legacy-v6" and row.get("mds_commands", "0") == "0" and row.get("mds_sessions", "0") == "0" \
-                    and row.get("mds_cephfs", "0") == "0" and row.get("mds_cephfs_ranks", "0") == "0":
+            for field in opt_ins:
+                self.assertIn(row.get(field, "0"), {"0", "1"})
+            self.assertLessEqual(sum(row.get(field, "0") == "1" for field in opt_ins), 1)
+            if profile == "legacy-v6" and all(row.get(field, "0") == "0" for field in opt_ins):
                 self.assertNotIn("test_run", row, "existing rows must retain their original suite selection")
                 self.assertNotIn("mds_fresh", row)
-                self.assertNotIn("mds_commands", row)
-                self.assertNotIn("mds_sessions", row)
-                self.assertNotIn("mds_cephfs", row)
-                self.assertNotIn("mds_cephfs_ranks", row)
+                for field in opt_ins:
+                    self.assertNotIn(field, row)
 
     def test_v8_rows_cover_both_security_store_and_address_profiles(self):
         for profile in ("replicated-pg-v8", "replicated-pg-reply-v8"):
@@ -242,6 +238,30 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertIsNone(selector.search("TestCephMDSCephFSRanksIntegrationExtended"))
             self.assertIsNone(selector.search("PrefixTestCephMDSCephFSRanksIntegration"))
             self.assertIsNone(selector.search("TestCephMDSCephFSIntegration"))
+            observed.add(tuple(row.get(field, fallback) for field, fallback in (
+                ("key", ""), ("service", ""), ("mode", "secure"),
+                ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
+        self.assertEqual(observed, {
+            ("aes", "aes", "crc", "4", "host", "bluestore"),
+            ("aes256k", "aes256k", "secure", "6", "container", "memstore"),
+        })
+
+    def test_rbd_base_rows_select_only_the_declared_rbd_test(self):
+        rows = [row for row in self.rows if row.get("rbd") == "1"]
+        self.assertEqual(len(rows), 2)
+        expected = {"TestCephRBDBaseIntegration"}
+        self.assertTrue(expected <= self.declared)
+        observed = set()
+        for row in rows:
+            self.assertEqual((row["osd_profile"], row["osd"], row["osd_replicas"], row["stress"]),
+                             ("legacy-v6", "1", "1", ""))
+            for field in ("mds_fresh", "mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "image", "race"):
+                self.assertNotIn(field, row)
+            selector = re.compile(row["test_run"])
+            self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
+            self.assertIsNone(selector.search("TestCephRBDBaseIntegrationExtended"))
+            self.assertIsNone(selector.search("PrefixTestCephRBDBaseIntegration"))
+            self.assertIsNone(selector.search("TestCephOSDIOIntegration"))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"),
                 ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))

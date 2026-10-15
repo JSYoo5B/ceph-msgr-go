@@ -188,7 +188,7 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 			if err := c.Terminate(cleanup); err != nil {
 				result = errors.Join(result, &cleanupFailure{cause: err})
 			}
-			if p.mdsFresh == "1" {
+			if p.mdsFresh == "1" || p.rbdBase == "1" {
 				result = errors.Join(result, saveMetadata(out, p.diagnostics))
 			}
 		}
@@ -237,6 +237,9 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 	if err := c.finishMDSFresh(ctx); err != nil {
 		return err
 	}
+	if err := c.finishRBDBase(ctx); err != nil {
+		return err
+	}
 	return saveMetadata(out, p.diagnostics)
 }
 
@@ -261,7 +264,7 @@ func serve(ctx context.Context, project, out string, p profile) (result error) {
 				_ = os.WriteFile(filepath.Join(out, "provider.cleanup.error"), []byte(err.Error()+"\n"), 0o600)
 			}
 			stop()
-			if p.mdsFresh == "1" {
+			if p.mdsFresh == "1" || p.rbdBase == "1" {
 				result = errors.Join(result, saveMetadata(out, p.diagnostics))
 			}
 		}
@@ -371,6 +374,11 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	manifest["mds_sessions"] = p.mdsSessions == "1"
 	manifest["mds_cephfs"] = p.mdsCephFS == "1"
 	manifest["mds_cephfs_ranks"] = p.mdsCephFSRanks == "1"
+	manifest["rbd_base"] = p.rbdBase == "1"
+	if p.rbdBase == "1" {
+		manifest["topology"] = "3 MON, 0/2 MGR and one OSD with an owned RBD pool plus a native oracle client"
+		manifest["rbd_base_mutations"] = "one owned pool (application rbd, eight PGs without HASHPSPOOL) created, initialized and removed with its CRUSH rule; two owned identities (Go and native librbd, profile rbd bound to the pool) created and removed; one native format-2 layering image written, snapshotted, rewritten and resized twice, discarded with the pool"
+	}
 	if p.mdsFresh == "1" {
 		manifest["topology"] = "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
 	}

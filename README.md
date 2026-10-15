@@ -433,6 +433,19 @@ standby 구성에서 rank별 session, rank 1로의 forward와 재제출, subtree
 EXPORT·IMPORT와 FLUSHMSG 응답, rank 0 standby takeover 뒤 `ReconnectSession` 결과를 남겼다.
 `ResubmitForwarded`는 forward된 요청을 원래 TID로 대상 rank session에 한 번 다시 보낸다.
 
+## RBD 기반 통신 검증
+
+RBD는 별도 Messenger 서버가 아니므로 제품은 RBD API를 제공하지 않는다. 대신 native
+librbd로 만든 image를 기존 명시적 OSD API만으로 읽어 대조했다. Image header·striping·객체
+이름 해석은 시험 전용 코드(`integration/rbd_base_test.go`)에 두었다.
+[검증 기록](integration/fixture/RBD_BASE_VALIDATION.md)에는 CRC/AES host IPv4 BlueStore와
+secure/AES256K container IPv6 MemStore의 legacy-v6 단일 OSD에서 각각 5개 사례가 통과한 결과를
+남겼다. `rbd` class의 get_id·get_size·get_features·get_snapcontext·snapshot_get 원본 출력,
+data 객체의 head·snapshot 읽기, LIST_SNAPS, SPARSE_READ가 native librbd·librados와 byte
+단위로 일치했다. librbd가 header에 건 watch를 LIST_WATCHERS로 확인했고, Go watch가
+resize notify를 받아 ack하면 native resize가 바로 끝났다. Exclusive-lock·object-map
+image, clone/parent, Go의 RBD 쓰기 경로는 아직 검증하지 않았다.
+
 ## OSD 객체 요청 통신
 
 `Options.EnableOSD: true`로 OSD service ticket 획득·갱신을 명시적으로 켠다.

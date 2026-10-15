@@ -20,6 +20,7 @@ func TestProfileDefaults(t *testing.T) {
 		mdsSessions:          "0",
 		mdsCephFS:            "0",
 		mdsCephFSRanks:       "0",
+		rbdBase:              "0",
 		image:                "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
 		keyType:              "aes256k",
 		serviceCipher:        "aes256k",
@@ -146,6 +147,7 @@ func TestProfileInvalidChoices(t *testing.T) {
 		"CEPH_MSGR_TEST_MDS_SESSIONS",
 		"CEPH_MSGR_TEST_MDS_CEPHFS",
 		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS",
+		"CEPH_MSGR_TEST_RBD",
 		"CEPH_MSGR_TEST_MAPPED_IPV6", "CEPH_MSGR_TEST_OSD",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -264,6 +266,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		"CEPH_MSGR_TEST_MDS_SESSIONS":     "0",
 		"CEPH_MSGR_TEST_MDS_CEPHFS":       "0",
 		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS": "0",
+		"CEPH_MSGR_TEST_RBD":              "0",
 		"CEPH_MSGR_TEST_KEY_TYPE":         "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k",
 		"CEPH_MSGR_TEST_IP_FAMILY": "4", "CEPH_MSGR_TEST_MGR_COUNT": "2",
 		"CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1",
@@ -288,6 +291,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_TEST_MDS_SESSIONS":         "0",
 				"CEPH_MSGR_TEST_MDS_CEPHFS":           "0",
 				"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS":     "0",
+				"CEPH_MSGR_TEST_RBD":                  "0",
 				"CEPH_MSGR_MONITORS":                  p.monAddresses,
 				"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE": "",
 				"CEPH_MSGR_KEY_FILE":                  filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
