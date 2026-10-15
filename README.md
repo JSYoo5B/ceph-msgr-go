@@ -391,8 +391,8 @@ release, lease 응답은 호출자가 `SendCaps`·`ReleaseCaps`·`SendLease`로 
 보낸다. 경로 해석·inode cache·capability 상태·데이터 flush·reconnect·replay는
 구현하지 않으며 상위 레이어가 담당한다. [CephFS 계약](cephmsgr/MDS_CEPHFS_CONTRACT.md)에
 native vector 범위와 남은 검증을 구분했다. Request·reply·forward codec은 고정
-소스의 native vector 7개와 일치했다. Capability 계열 codec과 실제 MDS 대상 요청은
-아직 합성 시험으로만 검증했다.
+소스의 native vector 7개와, capability·cap release·lease·snap·quota codec은 native
+vector 10개와 일치했다. 실제 MDS 대상 요청은 아직 합성 시험으로만 검증했다.
 
 ## OSD 객체 요청 통신
 

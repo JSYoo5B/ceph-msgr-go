@@ -119,9 +119,18 @@ outside an MDS: they are an independent restatement of its REPLY_ENCODING
 field order, proven only by the unchanged native decoders consuming them
 completely. See `internal/mds/testdata/mds-request-native-provenance.json`.
 
-The capability, cap-release, lease, snap and quota codecs are covered by
-synthetic round trips and fuzzing only; native vectors and live MDS
-acceptance are recorded separately when they exist. Synthetic peers cover
+Ten further fresh native vectors cover the capability family with the
+FLOCK/EXPORT_PEER/MDS_INLINE_DATA feature mask: MClientCaps v12 GRANT (snap
+trace, xattr middle segment, flock, inline data and every v4–v12 extension),
+EXPORT (zero-padded peer), IMPORT (peer after flock), FLUSH_ACK (header TID)
+and a client UPDATE, MClientCapRelease v2, lease REVOKE and RELEASE,
+MClientSnap SPLIT and MClientQuota. Go encoders reproduce the native client
+UPDATE, cap release and lease release front, middle and header bytes; server
+messages decode to the native decoders' receipts (the native decoder fills
+the cap peer only for EXPORT/IMPORT and applies `from_legacy` to the
+layout pool, both noted above). See
+`internal/mds/testdata/mds-caps-native-provenance.json`. Live MDS
+acceptance is recorded separately when it exists. Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and
 safe replies, forwards, session loss, the data segment, push ordering and
 counting, client answers, close resend and protocol violations.
