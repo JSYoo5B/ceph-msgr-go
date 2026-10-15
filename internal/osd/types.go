@@ -81,6 +81,8 @@ type Operation struct {
 	Xattr          XattrInput
 	Class          ClassInput
 	AllocHint      AllocHintInput
+	Checksum       ChecksumInput
+	MapExt         MapExtInput
 	ListWatchers   ListWatchersInput
 	ListSnaps      ListSnapsInput
 	Data           []byte
@@ -118,6 +120,7 @@ type OperationResult struct {
 	Xattr                        XattrResult
 	Class                        ClassResult
 	AllocHint                    AllocHintInput
+	Checksum                     ChecksumResult
 	Snap                         uint64 // ROLLBACK union echo.
 	Code                         uint16
 	Flags                        uint32

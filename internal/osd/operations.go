@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers:
+	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum:
 		return true
 	}
 	return false
@@ -33,6 +33,29 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		}
 		if op.Code != AssertVersion && op.Version != 0 {
 			return 0, 0, ErrRequest
+		}
+		if op.Code != MapExt && op.MapExt != (MapExtInput{}) || op.Code != Checksum && op.Checksum != (ChecksumInput{}) {
+			return 0, 0, ErrRequest
+		}
+		if op.Code == MapExt || op.Code == Checksum {
+			if len(ops) != 1 {
+				return 0, 0, ErrOperation
+			}
+			if op.ListWatchers != (ListWatchersInput{}) {
+				return 0, 0, ErrRequest
+			}
+			if op.Code == MapExt {
+				if err := validateMapExtOperation(op, limit); err != nil {
+					return 0, 0, err
+				}
+			} else {
+				if err := validateChecksumOperation(op, limit); err != nil {
+					return 0, 0, err
+				}
+				total += 4
+			}
+			flags |= FlagRead
+			continue
 		}
 		if op.Code == ListWatchers {
 			// Observe committed head registrations only; compound ordering and
@@ -233,7 +256,7 @@ func writeOperation(code uint16) bool {
 
 func readModeOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, OmapCompare, Call, ListSnaps:
+	case Read, Stat, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, OmapCompare, Call, ListSnaps, ListWatchers, MapExt, Checksum:
 		return true
 	}
 	return IsOmapOperation(code) && !isOmapMutation(code)

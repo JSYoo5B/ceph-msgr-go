@@ -1,8 +1,8 @@
 name,opcode,mode_bits,type_bits,status
 READ,0x1201,RD,DATA,implemented
 STAT,0x1202,RD,DATA,implemented
-MAPEXT,0x1203,RD,DATA,unsupported
-CHECKSUM,0x121f,RD,DATA,unsupported
+MAPEXT,0x1203,RD,DATA,implemented
+CHECKSUM,0x121f,RD,DATA,implemented
 MASKTRUNC,0x1204,RD,DATA,unsupported
 SPARSE_READ,0x1205,RD,DATA,unsupported
 NOTIFY,0x1206,RD,DATA,unsupported

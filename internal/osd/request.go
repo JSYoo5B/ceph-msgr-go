@@ -62,6 +62,10 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			outputBytes = uint64(op.Omap.MaxOutputBytes)
 		case Call:
 			outputBytes = uint64(op.Class.MaxOutputBytes)
+		case MapExt:
+			outputBytes = uint64(op.MapExt.MaxOutputBytes)
+		case Checksum:
+			outputBytes = checksumReplyBytes(op)
 		case ListWatchers:
 			outputBytes = uint64(op.ListWatchers.MaxOutputBytes)
 		case ListSnaps:
@@ -88,6 +92,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		e.U16(op.Code)
 		e.U32(op.Flags)
 		payloadBytes := uint64(len(op.Data))
+		if op.Code == Checksum {
+			payloadBytes = 4
+		}
 		if IsOmapOperation(op.Code) {
 			payloadBytes, _ = omapInputBytes(op, limit)
 		}
@@ -99,6 +106,8 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			payloadBytes += uint64(len(op.Class.Class)) + uint64(len(op.Class.Method))
 		} else if op.Code == SetAllocHint {
 			encodeAllocHintUnion(&e, op.AllocHint)
+		} else if op.Code == Checksum {
+			encodeChecksumUnion(&e, op)
 		} else if op.Code == Rollback {
 			encodeRollbackUnion(&e, op)
 		} else {
@@ -131,6 +140,10 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	e.Struct(2, 2, identity.Data)
 	data := make([]byte, 0, int(dataBytes))
 	for _, op := range r.Operations {
+		if op.Code == Checksum {
+			data = append(data, encodeChecksumData(op.Checksum.Seed)...)
+			continue
+		}
 		if IsOmapOperation(op.Code) {
 			data = appendOmapInput(data, op)
 			continue

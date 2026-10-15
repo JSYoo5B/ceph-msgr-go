@@ -60,6 +60,12 @@ func command(ctx context.Context, args []string) (result error) {
 	if len(args) != 0 && args[0] == "encode-osd-alloc-hint" {
 		return runNativeEncoder(ctx, args[1:], allocHintEncoderSpec)
 	}
+	if len(args) != 0 && args[0] == "encode-osd-checksum" {
+		return runNativeEncoder(ctx, args[1:], checksumEncoderSpec)
+	}
+	if len(args) != 0 && args[0] == "encode-osd-mapext" {
+		return runNativeEncoder(ctx, args[1:], mapextEncoderSpec)
+	}
 	if len(args) != 0 && args[0] == "encode-osd-watchers" {
 		return runNativeEncoder(ctx, args[1:], watchersEncoderSpec)
 	}

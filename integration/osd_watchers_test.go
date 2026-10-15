@@ -176,6 +176,24 @@ func TestCephOSDListWatchersIntegration(t *testing.T) {
 			t.Fatal("unwatch listing", reply, err)
 		}
 	})
+	t.Run("completed native scope can start again", func(t *testing.T) {
+		second := watcherOracle(t, ctx, "start")
+		watching = true
+		if second.GlobalID == 0 || len(second.Cookies) != 2 {
+			t.Fatal("second scope lacks native registrations")
+		}
+		reply, err := list(main, 4096)
+		if err != nil || len(reply.Operations[0].Watchers) != 2 {
+			t.Fatal("second watcher scope listing", err)
+		}
+		for _, watcher := range reply.Operations[0].Watchers {
+			if uint64(watcher.NameNumber) != second.GlobalID {
+				t.Fatal("stale watcher identity in new scope")
+			}
+		}
+		watcherOracle(t, ctx, "stop")
+		watching = false
+	})
 	data, err := json.Marshal(evidence)
 	if err != nil {
 		t.Fatal(err)

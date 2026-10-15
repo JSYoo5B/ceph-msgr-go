@@ -50,6 +50,8 @@ func DecodeReply(m msgr.MessageData, limit uint32) (Reply, error) {
 			op.Class = decodeClassUnion(d)
 		} else if op.Code == SetAllocHint {
 			op.AllocHint = decodeAllocHintUnion(d)
+		} else if op.Code == Checksum {
+			op.Offset, op.Length, op.Checksum = decodeChecksumUnion(d)
 		} else if op.Code == Rollback {
 			op.Snap = decodeRollbackUnion(d)
 		} else {

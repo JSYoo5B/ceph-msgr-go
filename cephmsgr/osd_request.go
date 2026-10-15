@@ -67,7 +67,8 @@ const (
 // OSDSetAllocHint, with every other field zero. Snapshot is the ROLLBACK
 // target (1 through OSDMaxSnapshot) and ListSnapshots the OSDListSnapshots
 // budget; both opcodes carry no other field and no flags. ListWatchers is the
-// local output budget for head-only, standalone OSDListWatchers.
+// local output budget for head-only, standalone OSDListWatchers. MapExt and
+// Checksum select bounded, standalone head reads using Offset/Length.
 // Caller must not mutate the vector, Data or Omap inputs until Request returns.
 type OSDOperation struct {
 	Code           OSDOpcode
@@ -80,6 +81,8 @@ type OSDOperation struct {
 	Class          OSDClassInput
 	AllocHint      OSDAllocHint
 	Snapshot       uint64
+	MapExt         OSDMapExtInput
+	Checksum       OSDChecksumInput
 	ListWatchers   OSDListWatchersInput
 	ListSnapshots  OSDListSnapshotsInput
 }
@@ -149,6 +152,10 @@ type OSDOperationResult struct {
 	Snapshots OSDSnapshotList
 	// Watchers is decoded on a successful OSDListWatchers; Data keeps raw bytes.
 	Watchers []OSDWatcher
+	// Extents decodes successful MAPEXT output; Data preserves the raw map.
+	Extents []OSDExtent
+	// Checksum retains the union on all replies; successful output adds Values.
+	Checksum OSDChecksumResult
 }
 
 type OSDRedirect struct {
@@ -262,6 +269,8 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 	for i, op := range request.Operations {
 		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
 			AllocHint:    osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},
+			MapExt:       osd.MapExtInput{MaxOutputBytes: op.MapExt.MaxOutputBytes},
+			Checksum:     osd.ChecksumInput{ChunkSize: op.Checksum.ChunkSize, Type: op.Checksum.Type, Seed: op.Checksum.Seed},
 			ListWatchers: osd.ListWatchersInput{MaxOutputBytes: op.ListWatchers.MaxOutputBytes},
 			Snap:         op.Snapshot, ListSnaps: osd.ListSnapsInput{MaxOutputBytes: op.ListSnapshots.MaxOutputBytes}}
 	}
@@ -372,6 +381,16 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 				return err
 			}
 			continue
+		case osd.MapExt:
+			if err := osd.ValidateMapExtReply(requested, op, success); err != nil {
+				return err
+			}
+			continue
+		case osd.Checksum:
+			if err := osd.ValidateChecksumReply(requested, op, success); err != nil {
+				return err
+			}
+			continue
 		case osd.ListWatchers:
 			if err := osd.ValidateListWatchersReply(requested, op, success); err != nil {
 				return err
@@ -431,7 +450,13 @@ func publicOSDReply(r osd.Reply) OSDReply {
 			Xattr:     OSDXattrResult{NameLength: op.Xattr.NameLength, ValueLength: op.Xattr.ValueLength, ComparisonOp: op.Xattr.ComparisonOp, ComparisonMode: op.Xattr.ComparisonMode},
 			Class:     OSDClassResult{ClassLength: op.Class.ClassLength, MethodLength: op.Class.MethodLength, Argc: op.Class.Argc, InputLength: op.Class.InputLength, OutputLength: op.Class.OutputLength},
 			AllocHint: OSDAllocHint{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: OSDAllocHintFlags(op.AllocHint.Flags)},
-			Snapshot:  op.Snap}
+			Snapshot:  op.Snap, Checksum: OSDChecksumResult{ChunkSize: op.Checksum.ChunkSize, Type: op.Checksum.Type}}
+		if op.Code == osd.MapExt && r.Result >= 0 && op.Result >= 0 && r.Redirect.Empty() {
+			result.Operations[i].Extents = publicMapExt(op.Data)
+		}
+		if op.Code == osd.Checksum && r.Result >= 0 && op.Result >= 0 && r.Redirect.Empty() {
+			result.Operations[i].Checksum = publicChecksum(op.Checksum, op.Data)
+		}
 		if op.Code == osd.ListWatchers && r.Result >= 0 && op.Result >= 0 && r.Redirect.Empty() {
 			result.Operations[i].Watchers = publicWatchers(op.Data)
 		}

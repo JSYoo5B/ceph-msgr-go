@@ -110,3 +110,20 @@ refusals, not daemon permission evidence. See
 cd integration/fixture
 go run . encode-osd-watchers -cache /tmp/ceph-native-encoder-cache -output /tmp/watchers-proof.json
 ```
+
+## MAPEXT and CRC32C CHECKSUM fresh native vectors (2026-10-15)
+
+`mapext-native-*` and `checksum-native-*` are five fresh native message
+encoder/decoder vectors per opcode. Each corresponding provenance JSON
+records the pinned source/build/wrapper and all header/front/data hashes.
+The native wrappers supply logical outputs to the real reply encoder. They
+do not prove server allocation layout or actual checksum calculations; the
+separate native CLI/librados daemon tests provide those observations.
+Go encodes its own request and compares the resulting bytes and public reply
+conversion against these stored native payloads.
+
+```sh
+cd integration/fixture
+go run . encode-osd-mapext -cache /tmp/ceph-native-encoder-cache -output /tmp/mapext-proof.json
+go run . encode-osd-checksum -cache /tmp/ceph-native-encoder-cache -output /tmp/checksum-proof.json
+```

@@ -427,6 +427,23 @@ advisory 쓰기다. 서버는 없는 객체를 만들고 값을 object_info에 �
 지정한 flag만 보낸다. [allocation hint 계약](internal/osd/ALLOC_HINT_CONTRACT.md)에
 근거를 정리했다.
 
+`OSDMapExt`는 `Offset`·양수 `Length` 범위의 논리적 할당 구간을 읽고,
+`MapExt.MaxOutputBytes`로 수신 출력 한도를 지정한다(최소 4 bytes).
+`Operations[0].Extents`와 원본 `Data`를 함께 제공한다. 물리적 저장 위치나
+객체 bytes를 반환하지 않으며 hole의 해석은 호출자 책임이다. 현재는 단독 head
+요청만 허용한다. 저장소별 구간 표현과 독립 native 비교 범위는
+[MAPEXT 계약](internal/osd/MAPEXT_CONTRACT.md)에 기록했다.
+
+`OSDChecksum`은 단독 head 요청의 `Offset`·양수 `Length`에 대해 CRC32C를
+계산하도록 요청한다. `Checksum.Type=OSDChecksumCRC32C`와 u32 `Seed`를 지정한다.
+`ChunkSize=0`은 전체 요청 구간에 하나의 CRC, 양수 값은 해당 크기의 chunk별
+CRC를 반환하며 요청 길이는 chunk 크기의 배수여야 한다.
+결과의 `Length`는 EOF에서 줄 수 있고, chunk에 맞지 않게 줄면 서버 `-EINVAL`을
+보존한다. EOF 이후 조회는 원래 길이와 빈 출력을 반환한다. 해석한 CRC 값은
+`Operations[0].Checksum.Values`, 원본은 `Data`에 남는다. xxHash와 길이 0의
+암묵적 전체 읽기는 거절한다. [CHECKSUM 계약](internal/osd/CHECKSUM_CONTRACT.md)과
+[실검증 기록](integration/fixture/OSD_READ_METADATA_VALIDATION.md)에 범위를 구분했다.
+
 `OSDListWatchers`는 head 객체의 현재 watcher 등록 목록을 읽는다. 단독 요청만
 허용하며 `ListWatchers.MaxOutputBytes`로 수신 출력의 로컬 한도를 지정한다(최소
 10 bytes). 성공하면 `Operations[0].Watchers`에 watcher entity·cookie·등록 timeout·

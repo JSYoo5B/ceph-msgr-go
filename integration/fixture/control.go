@@ -364,6 +364,38 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-checksum")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || fields[1] != "compare" {
+			return errors.New("invalid native checksum oracle request")
+		}
+		args := []string{"python3", "/out/osd_checksum_oracle.py", "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-checksum-command.json", "native checksum oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-checksum-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+	fields, err = c.request(out, "verify-osd-mapext")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || fields[1] != "observe" {
+			return errors.New("invalid native extent map oracle request")
+		}
+		args := []string{"python3", "/out/osd_mapext_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-mapext-command.json", "native extent map oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-mapext-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-osd-watchers")
 	if err != nil {
 		return err

@@ -82,6 +82,16 @@ var watchersEncoderSpec = nativeEncoderSpec{
 	names: []string{"watchers-native-request-v6-list", "watchers-native-reply-v6-populated", "watchers-native-reply-v6-empty", "watchers-native-reply-v6-enoent", "watchers-native-reply-v6-eacces"},
 }
 
+var mapextEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-mapext", wrapper: "osd_mapext_native_encoder.cc", driver: "osd_mapext_native_encoder.py",
+	names: []string{"mapext-native-request-v6-map", "mapext-native-reply-v6-populated", "mapext-native-reply-v6-empty", "mapext-native-reply-v6-enoent", "mapext-native-reply-v6-eacces"},
+}
+
+var checksumEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-checksum", wrapper: "osd_checksum_native_encoder.cc", driver: "osd_checksum_native_encoder.py",
+	names: []string{"checksum-native-request-v6-crc32c", "checksum-native-reply-v6-success", "checksum-native-reply-v6-trimmed", "checksum-native-reply-v6-eof", "checksum-native-reply-v6-unaligned"},
+}
+
 // The offline encoder is a development oracle. It starts no Ceph daemon and
 // installs native build packages only in its owned disposable container.
 func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
@@ -160,7 +170,7 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	}
 	// A shared SDK cache can retain every oracle target. Supply all original
 	// wrapper sources during configuration, then build only the selected target.
-	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper, watchersEncoderSpec.wrapper, allocHintEncoderSpec.driver}
+	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper, watchersEncoderSpec.wrapper, mapextEncoderSpec.wrapper, checksumEncoderSpec.wrapper, allocHintEncoderSpec.driver}
 	for _, name := range files {
 		if err := target.CopyFileToContainer(build, filepath.Join(root, "tools", name), "/tmp/"+name, 0600); err != nil {
 			return err
