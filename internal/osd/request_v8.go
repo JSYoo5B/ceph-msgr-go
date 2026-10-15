@@ -27,11 +27,13 @@ type V8Request struct {
 // osd/osd_types.h (spg_t/osd_reqid_t), include/ceph_features.h and
 // msg/Message.cc (empty three-u64 trace). LGPL-2.1; no native code copied.
 // It requires NEW_OSDOP_ENCODING plus the complete RESEND_ON_SPLIT mask, and
-// refuses SERVER_SQUID (v9) and NEW_OSDOPREPLY_ENCODING. It performs no routing,
+// permits implemented NEW_OSDOPREPLY_ENCODING (bit 58) and refuses SERVER_SQUID
+// (v9). Reply encoding does not change this request layout; negotiated features
+// are retained in the final u64. It performs no routing,
 // splitting, resend or feature advertisement. Session.Call supplies header TID;
 // reqid keeps ClientInc so the daemon can derive the authenticated identity.
 func EncodeRequestV8(r V8Request, features uint64, limit uint32) (msgr.MessageData, error) {
-	if features&(featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask) != featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask || features&featureNewOSDReply != 0 || features&featureServerSquidMask == featureServerSquidMask {
+	if features&(featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask) != featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask || features&featureServerSquidMask == featureServerSquidMask {
 		return msgr.MessageData{}, ErrFeatures
 	}
 	if limit == 0 {

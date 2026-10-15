@@ -42,8 +42,11 @@ is a closed enum, with no public raw-feature-mask override:
 | --- | --- | --- |
 | `OSDProfileObjectHash` (zero/default) | Existing restricted Tentacle v6 | Must be nil; `Object.Hash` is the raw hash |
 | `OSDProfileReplicatedPG` | Tentacle v8 object/PG requests and v6 replies | Mandatory per object request; actual PG is distinct from raw hash |
+| `OSDProfileReplicatedPGReplyV8` | Same v8 requests with strict v8/compat2 replies and required OSD bit58 | Same explicit replicated placement |
 
-An unknown enum fails locally; selecting the replicated profile without
+The third profile is detailed in [the v8 reply contract](OSD_REPLY_V8_CONTRACT.md).
+It is selected before Dial and does not change either prior profile.
+An unknown enum fails locally; selecting either replicated profile without
 EnableOSD fails before network activity. The profile applies to this Client's
 MON and OSD sessions and cannot be changed on an existing client. `OSDTarget`
 continues to identify only the OSD ID/address. There is no target-level Profile.
@@ -81,10 +84,14 @@ existing narrow MON-only CRUSH admission exception. OSD sessions do not inherit
 that exception. Other required feature bits still fail negotiation explicitly.
 No feature bit identifies the release family or proves CRUSH placement support.
 
-The controlled profile retains legacy CRUSH. Ordinary optimal CRUSH can require
+The previously verified `OSDProfileReplicatedPG` retains legacy CRUSH.
+Ordinary optimal CRUSH can require
 CRUSH_TUNABLES5, which shares bit 58 with NEW_OSDOPREPLY_ENCODING
-(`ceph_features.h:178-179`). That bit remains omitted; default optimal CRUSH,
-MSR, EC and other unimplemented requirements are not admitted by this profile.
+(`ceph_features.h:178-179`). That bit remains omitted from that v6-reply profile; default optimal CRUSH,
+MSR, EC and other unimplemented requirements are not admitted by it. The new
+ReplyV8 profile additionally requires OSD bit58 for its audited reply decoder;
+this does not establish default-CRUSH/map topology compatibility. Its native
+acceptance is separate from the older runs documented below.
 OSD admission policy derives requirements from all pools/CRUSH/upmaps, including
 `.mgr`, through `OSD::check_osdmap_features` and `OSDMap::get_features(TYPE_CLIENT)`
 (`osd/OSD.cc:8806-8826`, `osd/OSDMap.cc:1754-1848`).
@@ -222,5 +229,14 @@ This remains selected single-OSD evidence, with no automatic split handling.
 Remaining native acceptance includes single-object bounds, primary changes,
 upmap placement, all operation families
 on the final profile, ticket renewal and broader security/topology combinations.
-The newer reply codec foundation does not activate bit 58; default optimal
-CRUSH/reply-bit58 profile acceptance remains a separate milestone.
+The distinct `OSDProfileReplicatedPGReplyV8` now activates bit58 only for its
+strict OSD v8 reply contract. Its [actual validation](../../integration/fixture/OSD_REPLY_V8_VALIDATION.md)
+used legacy CRUSH/HASHPSPOOL/eight PGs with one OSD: CRC/AES host IPv4 BlueStore
+and secure/AES256K container IPv6 MemStore. Thirteen existing cases passed per
+configuration in earlier runs whose overall result failed a new test's incorrect
+zero-version expectation. With product code unchanged, the corrected three new
+cases passed separately in focused runs (2.78s CRC; 3.45s secure). No combined
+sixteen-case all-pass run is claimed. Failed replies can retain nonzero raw
+legacy/replay/user versions and earlier output; those values and negative-reply
+ONDISK flags do not establish commit or nonexecution. Default optimal CRUSH/EC
+compatibility and broader final-profile coverage remain unverified.

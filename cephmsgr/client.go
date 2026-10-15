@@ -311,7 +311,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		candidate := copyAuth(c.auth)
 		attemptEpoch, knownEpoch := c.monMap.AuthEpoch, c.monMap.Epoch != 0
 		c.mu.Unlock()
-		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate, MDSMaps: c.options.EnableMDSMaps, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile == OSDProfileReplicatedPG})
+		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate, MDSMaps: c.options.EnableMDSMaps, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile.replicatedPG()})
 		if err != nil {
 			release()
 			failures = append(failures, err)

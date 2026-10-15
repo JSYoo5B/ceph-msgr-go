@@ -13,7 +13,7 @@ import (
 
 func TestPGListV8RejectsUnsupportedFeaturesAndInput(t *testing.T) {
 	r := pgListNativeRequest()
-	for _, features := range []uint64{oracleFeatures, v8OracleFeatures &^ featureObjectLocator, v8OracleFeatures &^ featurePGID64, v8OracleFeatures &^ featureNewOSDOp, v8OracleFeatures &^ (1 << 21), v8OracleFeatures &^ (1 << 57), v8OracleFeatures | featureNewOSDReply, v8OracleFeatures | featureServerSquidMask} {
+	for _, features := range []uint64{oracleFeatures, v8OracleFeatures &^ featureObjectLocator, v8OracleFeatures &^ featurePGID64, v8OracleFeatures &^ featureNewOSDOp, v8OracleFeatures &^ (1 << 21), v8OracleFeatures &^ (1 << 57), v8OracleFeatures | featureServerSquidMask} {
 		if _, err := EncodePGListRequestV8(r, features, wire.DefaultLimit); !errors.Is(err, ErrFeatures) {
 			t.Fatal("unsupported v8 PG list feature admitted", features, err)
 		}

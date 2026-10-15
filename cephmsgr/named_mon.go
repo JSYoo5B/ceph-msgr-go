@@ -196,7 +196,7 @@ func (c *Client) openPrivateMonitor(ctx context.Context, name string, fsid [16]b
 	}
 	setup, release := c.linkedContext(ctx)
 	defer release()
-	transport, err := c.open(setup, dialAddress(address), address, 1, 0, session.MonAuth{Client: auth, MDSMaps: c.options.EnableMDSMaps, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile == OSDProfileReplicatedPG})
+	transport, err := c.open(setup, dialAddress(address), address, 1, 0, session.MonAuth{Client: auth, MDSMaps: c.options.EnableMDSMaps, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile.replicatedPG()})
 	if err != nil {
 		return nil, err
 	}

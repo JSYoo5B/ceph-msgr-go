@@ -22,6 +22,7 @@ class OSDOracleTests(unittest.TestCase):
         self.output = pathlib.Path(self.temporary.name) / "output"
         self.root.mkdir()
         self.output.mkdir()
+        self.manifest = dict(osd_profile="legacy-v6")
         (self.output / "peers.json").write_text(json.dumps({"osd.0":"127.0.0.1:36900"}))
         self.data = bytes(range(256)) * 41 + b"\x00\xfftail"
         (self.output / "osd-object.bin").write_bytes(self.data)
@@ -42,7 +43,9 @@ class OSDOracleTests(unittest.TestCase):
                                    "chooseleaf_vary_r": 0, "chooseleaf_stable": 0,
                                    "straw_calc_version": 0}}
 
-    def collect(self, topology=None, crush=None):
+    def collect(self, topology=None, crush=None, write_manifest=True):
+        if write_manifest:
+            (self.output / "fixture-manifest.json").write_text(json.dumps(self.manifest))
         for name, value in (("osd.object-map.json", self.mapped),
                             ("osd.dump.json", self.topology if topology is None else topology),
                             ("osd.crush.json", self.crush if crush is None else crush)):
@@ -93,6 +96,7 @@ class OSDOracleTests(unittest.TestCase):
 
     def pg_v8(self):
         os.environ["CEPH_MSGR_TEST_OSD_PROFILE"] = "replicated-pg-v8"
+        self.manifest["osd_profile"] = "replicated-pg-v8"
         self.topology["pools"][0].update(pg_num=8, pg_placement_num=8, flags=1, flags_names="hashpspool")
         self.mapped["pgid"] = "7.5"
 
@@ -106,6 +110,56 @@ class OSDOracleTests(unittest.TestCase):
         self.assertEqual((value["hash"], value["pg_seed"], value["pgid"]), (0xF123ABCD, 5, "7.5"))
         self.assertEqual(value["pool_flags"], 1)
         self.assertEqual(value["pg_upmap"], self.topology["pg_upmap"])
+
+    def test_reply_v8_profile_preserves_exact_name_and_same_native_topology(self):
+        self.pg_v8()
+        os.environ["CEPH_MSGR_TEST_OSD_PROFILE"] = "replicated-pg-reply-v8"
+        self.manifest["osd_profile"] = "replicated-pg-reply-v8"
+        self.collect()
+        value = json.loads((self.output / "osd-oracle.json").read_bytes())
+        self.assertEqual((value["profile"], value["request_version"], value["pool_pg_num"]), ("replicated-pg-reply-v8", 8, 8))
+        self.assertEqual((value["hash"], value["pg_seed"], value["pool_flags"]), (0xF123ABCD, 5, 1))
+        self.assertNotIn("reply_version", value)  # CLI metadata does not observe a reply wire header.
+
+    def test_read_only_bootstrap_precedes_manifest_for_each_closed_profile(self):
+        # Production order: provider native startup -> baseline oracle -> Go
+        # prepareEvidence writes fixture-manifest.json -> mutating controls.
+        for profile in ("legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8"):
+            with self.subTest(profile=profile):
+                os.environ["CEPH_MSGR_TEST_OSD_PROFILE"] = profile
+                modern = profile != "legacy-v6"
+                self.topology["pools"][0].update(pg_num=8 if modern else 1, pg_placement_num=8 if modern else 1,
+                                                flags=1 if modern else 0, flags_names="hashpspool" if modern else "")
+                self.mapped["pgid"] = "7.5" if modern else "7.0"
+                self.assertFalse((self.output / "fixture-manifest.json").exists())
+                self.collect(write_manifest=False)
+                value = json.loads((self.output / "osd-oracle.json").read_bytes())
+                self.assertEqual(value["profile"], profile)
+                self.assertEqual(value["pool_pg_num"], 8 if modern else 1)
+                self.assertFalse((self.output / "fixture-manifest.json").exists())
+
+    def test_manifest_absence_does_not_admit_unknown_profile_or_topology(self):
+        os.environ["CEPH_MSGR_TEST_OSD_PROFILE"] = "reply-v8"
+        with self.assertRaises(ValueError):
+            self.collect(write_manifest=False)
+        os.environ["CEPH_MSGR_TEST_OSD_PROFILE"] = "replicated-pg-reply-v8"
+        # A modern selection still refuses the default one-PG legacy topology.
+        with self.assertRaises(ValueError):
+            self.collect(write_manifest=False)
+        self.assertFalse((self.output / "osd-oracle.json").exists())
+
+    def test_native_profile_cannot_differ_from_manifest_or_use_alias(self):
+        self.pg_v8()
+        for selected, manifest in (("replicated-pg-v8", "replicated-pg-reply-v8"),
+                                   ("replicated-pg-reply-v8", "replicated-pg-v8"),
+                                   ("replicated-pg-reply-v8", "reply-v8"),
+                                   ("reply-v8", "reply-v8")):
+            with self.subTest(selected=selected, manifest=manifest):
+                os.environ["CEPH_MSGR_TEST_OSD_PROFILE"] = selected
+                self.manifest["osd_profile"] = manifest
+                with self.assertRaises(ValueError):
+                    self.collect()
+                self.assertFalse((self.output / "osd-oracle.json").exists())
 
     def test_v8_does_not_admit_new_crush_or_primary_requirements(self):
         self.pg_v8()

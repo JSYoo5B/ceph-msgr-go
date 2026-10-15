@@ -60,6 +60,7 @@ func TestProfileSelection(t *testing.T) {
 		{"replicated", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"bluestore", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"pg-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
+		{"pg-reply-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"ipv6-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"ipv6-replicated-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
@@ -307,10 +308,47 @@ func copyProfileEnv(input map[string]string) map[string]string {
 func TestOSDPGV8ProfileRequiresOSDAndRejectsUnknownValues(t *testing.T) {
 	for _, env := range []map[string]string{
 		{"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"},
+		{"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"},
 		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "modern"},
 	} {
 		if p, err := loadProfile(func(name string) string { return env[name] }); err == nil || p != (profile{}) {
 			t.Fatal("invalid explicit PG profile accepted", p, err)
 		}
+	}
+}
+
+func TestOSDPGProfileGateKeepsBothExplicitV8ModesAndRejectsAliases(t *testing.T) {
+	for _, mode := range []string{"replicated-pg-v8", "replicated-pg-reply-v8"} {
+		p, err := loadProfile(func(name string) string {
+			if name == "CEPH_MSGR_TEST_OSD" {
+				return "1"
+			}
+			if name == "CEPH_MSGR_TEST_OSD_PROFILE" {
+				return mode
+			}
+			return ""
+		})
+		if err != nil || !p.osdPGV8() || p.osdProfile != mode {
+			t.Fatal(mode, p, err)
+		}
+		if p.containerEnvironment()["CEPH_MSGR_TEST_OSD_PROFILE"] != mode || p.testEnvironment("/out", "")["CEPH_MSGR_TEST_OSD_PROFILE"] != mode {
+			t.Fatal("selected profile identity lost", mode)
+		}
+	}
+	for _, mode := range []string{"replicated-pg-reply-v8 ", "reply-v8", "replicated-pg-v9"} {
+		if p, err := loadProfile(func(name string) string {
+			if name == "CEPH_MSGR_TEST_OSD" {
+				return "1"
+			}
+			if name == "CEPH_MSGR_TEST_OSD_PROFILE" {
+				return mode
+			}
+			return ""
+		}); err == nil || p != (profile{}) {
+			t.Fatal("profile alias admitted", mode, p, err)
+		}
+	}
+	if (profile{osdProfile: "legacy-v6"}).osdPGV8() {
+		t.Fatal("legacy profile changed routing gate")
 	}
 }

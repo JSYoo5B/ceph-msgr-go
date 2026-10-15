@@ -1,8 +1,8 @@
 # Explicit actual-PG request framing
 
 `EncodeRequestV8` is an internal, independently selectable MOSDOp v8 encoder.
-Public Request selects it only after `Options.OSDProfile=OSDProfileReplicatedPG`
-is chosen before Dial. The encoder itself advertises no features; the fixed
+Public Request selects it only after `OSDProfileReplicatedPG` or
+`OSDProfileReplicatedPGReplyV8` is chosen before Dial. The encoder itself advertises no features; the fixed
 profile combines it with explicit placement and the bounded backoff writer gate.
 See [O4 contract](O4_CONTRACT.md) and [native acceptance](../../integration/fixture/OSD_REPLICATED_PG_VALIDATION.md).
 
@@ -34,8 +34,10 @@ incarnation, mtime, locator, object, operation unions, snapshot context, attempt
 zero and negotiated features. Unlike v6, default reqid.inc must equal the
 client incarnation; the daemon derives the authenticated entity and header TID
 without losing that incarnation. The encoder refuses SERVER_SQUID's full mask
-(which selects v9 and its additional OpenTelemetry trace), NEW_OSDOPREPLY_ENCODING,
-and incomplete incarnation masks. It performs no automatic resend, retry,
+(which selects v9 and its additional OpenTelemetry trace) and incomplete
+incarnation masks. NEW_OSDOPREPLY_ENCODING bit58 is permitted for the fixed
+ReplyV8 profile and is retained in the request's negotiated-feature tail; its
+strict reply selection is specified in [the v8 reply contract](OSD_REPLY_V8_CONTRACT.md). It performs no automatic resend, retry,
 redirect or map refresh despite the feature's historical name.
 
 Input and reply budgets, operation validation, snapshots and unknown-operation

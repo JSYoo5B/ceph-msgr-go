@@ -24,6 +24,7 @@ import osd_xattr_native as xattr
 NAME = "mds-maps"
 MAX_OUTPUT = 256 << 10
 MAX_COMMANDS = 128
+PROFILES = ("replicated-pg-v8", "replicated-pg-reply-v8")
 
 
 def integer(value, maximum, label):
@@ -45,9 +46,10 @@ def names(token):
 def fixture_identity(out):
     version = (out / "daemon-version").read_text().strip()
     manifest = omap.read_json(out / "fixture-manifest.json")
+    metadata = omap.read_json(out / "osd-oracle.json")
     if "20.2.4" not in version or xattr.SOURCE_COMMIT not in version:
         raise ValueError("MDS map oracle requires pinned Tentacle")
-    if manifest.get("osd") != "1" or manifest.get("osd_replicas") != "1" or manifest.get("osd_profile") != "replicated-pg-v8":
+    if manifest.get("osd") != "1" or manifest.get("osd_replicas") != "1" or manifest.get("osd_profile") not in PROFILES or metadata.get("profile") != manifest.get("osd_profile") or metadata.get("replicas") != 1:
         raise ValueError("MDS map oracle requires the controlled single-OSD fixture")
     fsid = manifest.get("fsid")
     if not isinstance(fsid, str) or str(uuid.UUID(fsid)) != fsid:

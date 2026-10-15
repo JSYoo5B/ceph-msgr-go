@@ -67,7 +67,7 @@ func (c *Client) OpenOSD(ctx context.Context, target OSDTarget) (*OSDConnection,
 	if !c.options.EnableOSD {
 		return nil, ErrOSDDisabled
 	}
-	if c.options.OSDProfile != OSDProfileObjectHash && c.options.OSDProfile != OSDProfileReplicatedPG {
+	if !c.options.OSDProfile.valid() {
 		return nil, fmt.Errorf("%w: unknown OSD profile", ErrUnsupportedFeatures)
 	}
 	_, address, err := seedAddress(target.Address)
@@ -174,7 +174,7 @@ func (o *OSDConnection) open(ctx context.Context) error {
 			return err
 		}
 		linked, release := c.linkedContext(ctx)
-		tr, err := c.open(linked, dialAddress(o.address), o.address, 4, uint64(o.target.ID), session.ServiceAuth{Authorizer: authorizer, ReplicatedPGV8: o.client.options.OSDProfile == OSDProfileReplicatedPG})
+		tr, err := c.open(linked, dialAddress(o.address), o.address, 4, uint64(o.target.ID), session.ServiceAuth{Authorizer: authorizer, ReplicatedPGV8: o.client.options.OSDProfile.replicatedPG(), ReplicatedPGReplyV8: o.client.options.OSDProfile.replyV8()})
 		release()
 		if err != nil {
 			return err
@@ -185,7 +185,7 @@ func (o *OSDConnection) open(ctx context.Context) error {
 		}
 		config := c.sessionConfig()
 		config.NextTransaction = c.nextOSDTransaction
-		if o.client.options.OSDProfile == OSDProfileReplicatedPG {
+		if o.client.options.OSDProfile.replicatedPG() {
 			config.BeforeWrite = o.beforeWriteBackoff
 		}
 		var s *session.Session
@@ -196,7 +196,7 @@ func (o *OSDConnection) open(ctx context.Context) error {
 			if m.Type == osd.WatchNotifyMessage {
 				return o.handleWatch(s, m)
 			}
-			if m.Type == osd.BackoffMessage && o.client.options.OSDProfile == OSDProfileReplicatedPG {
+			if m.Type == osd.BackoffMessage && o.client.options.OSDProfile.replicatedPG() {
 				return o.handleBackoff(s, m)
 			}
 			// Other routing and backoff instructions remain unsupported.
@@ -206,7 +206,7 @@ func (o *OSDConnection) open(ctx context.Context) error {
 		stale := c.closed || o.closed || c.authErr != nil || c.auth.GlobalID != auth.GlobalID
 		if !stale {
 			o.session, o.features, o.globalID = s, tr.Features, auth.GlobalID
-			if o.client.options.OSDProfile == OSDProfileReplicatedPG {
+			if o.client.options.OSDProfile.replicatedPG() {
 				b := o.backoffsLocked()
 				b.mu.Lock()
 				b.gateInstalled = true

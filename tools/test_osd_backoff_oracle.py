@@ -13,7 +13,7 @@ FSID = "12345678-1234-1234-1234-123456789abc"
 TOKEN = "1" * 32
 NEXT = "2" * 32
 OBJECT = "fixture-native-omapw-main-" + "a" * 32
-METADATA = dict(pool="ceph-msgr-osd-fixture", pool_id=7, object="fixture", profile=oracle.PROFILE,
+METADATA = dict(pool="ceph-msgr-osd-fixture", pool_id=7, object="fixture", profile=oracle.PROFILES[0],
                 replicas=1, pool_pg_num=8, osd_id=0)
 OWNERSHIP = dict(schema_version=1, source_commit=oracle.xattr.SOURCE_COMMIT, pool=METADATA["pool"],
                  pool_id=7, fixture_object="fixture", namespace="", objects=[OBJECT])
@@ -93,7 +93,7 @@ class BackoffOracleTests(unittest.TestCase):
     def test_manifest_rejects_legacy_and_three_replica_profiles_before_commands(self):
         self.owned_patch.stop()
         metadata = copy.deepcopy(METADATA)
-        manifest = dict(osd_profile=oracle.PROFILE, osd_replicas="1", osd="1", fsid=FSID)
+        manifest = dict(osd_profile=oracle.PROFILES[0], osd_replicas="1", osd="1", fsid=FSID)
         (self.out / "daemon-version").write_text("ceph version 20.2.4 " + oracle.xattr.SOURCE_COMMIT)
         for name, value in (("osd-oracle", metadata), ("fixture-manifest", manifest), (oracle.writes.OWNED, OWNERSHIP)):
             oracle.omap.publish(self.out, name, value)
@@ -101,6 +101,23 @@ class BackoffOracleTests(unittest.TestCase):
         for change in (dict(metadata, profile="legacy-v6"), dict(metadata, replicas=3), dict(metadata, pool="foreign")):
             oracle.omap.publish(self.out, "osd-oracle", change)
             with patch.object(oracle, "ceph") as ceph, self.assertRaises(ValueError):
+                oracle.owned(self.root, self.out)
+            ceph.assert_not_called()
+
+    def test_owned_scope_admits_exact_modern_profiles_and_rejects_mismatch(self):
+        self.owned_patch.stop()
+        (self.out / "daemon-version").write_text("20.2.4 " + oracle.xattr.SOURCE_COMMIT)
+        oracle.omap.publish(self.out, oracle.writes.OWNED, OWNERSHIP)
+        for profile in oracle.PROFILES:
+            oracle.omap.publish(self.out, "osd-oracle", dict(METADATA, profile=profile))
+            oracle.omap.publish(self.out, "fixture-manifest", dict(osd_profile=profile, osd_replicas="1", osd="1", fsid=FSID))
+            self.assertEqual(oracle.owned(self.root, self.out)[0]["profile"], profile)
+        for selected, actual in (("replicated-pg-v8", "replicated-pg-reply-v8"),
+                                 ("replicated-pg-reply-v8", "replicated-pg-v8"),
+                                 ("reply-v8", "reply-v8"), ("legacy-v6", "legacy-v6")):
+            oracle.omap.publish(self.out, "osd-oracle", dict(METADATA, profile=actual))
+            oracle.omap.publish(self.out, "fixture-manifest", dict(osd_profile=selected, osd_replicas="1", osd="1", fsid=FSID))
+            with self.subTest(selected=selected, actual=actual), patch.object(oracle, "ceph") as ceph, self.assertRaises(ValueError):
                 oracle.owned(self.root, self.out)
             ceph.assert_not_called()
 

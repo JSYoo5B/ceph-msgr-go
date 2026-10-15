@@ -71,9 +71,18 @@ def native_stat(root, pool, object_name):
 
 def collect(root, output, pool, object_name):
     profile = os.environ.get("CEPH_MSGR_TEST_OSD_PROFILE") or "legacy-v6"
-    if profile not in ("legacy-v6", "replicated-pg-v8"):
+    if profile not in ("legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8"):
         raise ValueError("Invalid explicit OSD fixture profile")
-    modern = profile == "replicated-pg-v8"
+    modern = profile in ("replicated-pg-v8", "replicated-pg-reply-v8")
+    # Provider startup collects this read-only baseline before the Go runner
+    # writes its final manifest. Closed environment selection and the native
+    # topology checks below still apply. Later mutating oracles always require
+    # both the completed manifest and this published metadata to agree.
+    manifest_path = output / "fixture-manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_bytes())
+        if not isinstance(manifest, dict) or manifest.get("osd_profile") != profile:
+            raise ValueError("Native OSD profile differs from its fixture manifest")
     expected_pgs = 8 if modern else 1
     family_setting = os.environ.get("CEPH_MSGR_TEST_IP_FAMILY", "4")
     if family_setting not in ("4", "6"):

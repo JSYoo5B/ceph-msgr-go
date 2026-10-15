@@ -63,6 +63,7 @@ class MDSMapOracleTest(unittest.TestCase):
         self.root.mkdir()
         self.fsid = "00112233-4455-6677-8899-aabbccddeeff"
         self.write("fixture-manifest", dict(osd="1", osd_replicas="1", osd_profile="replicated-pg-v8", fsid=self.fsid))
+        self.write("osd-oracle", dict(profile="replicated-pg-v8", replicas=1))
         self.write("fixture-ownership", dict(containers={"osd.0": "a" * 64, "mon.a": "b" * 64}))
         (self.out / "daemon-version").write_text("ceph version 20.2.4 " + oracle.xattr.SOURCE_COMMIT)
         _, digest = oracle.fixture_identity(self.out)
@@ -88,6 +89,20 @@ class MDSMapOracleTest(unittest.TestCase):
         self.write("fixture-manifest", dict(osd="1", osd_replicas="3", osd_profile="replicated-pg-v8", fsid=self.fsid))
         with self.assertRaises(ValueError):
             oracle.fixture_identity(self.out)
+
+    def test_only_matching_explicit_native_profiles_admit_mutating_scope(self):
+        for mode in oracle.PROFILES:
+            self.write("fixture-manifest", dict(osd="1", osd_replicas="1", osd_profile=mode, fsid=self.fsid))
+            self.write("osd-oracle", dict(profile=mode, replicas=1))
+            self.assertEqual(oracle.fixture_identity(self.out)[0], self.fsid)
+        for selected, actual in (("replicated-pg-v8", "replicated-pg-reply-v8"),
+                                 ("replicated-pg-reply-v8", "replicated-pg-v8"),
+                                 ("reply-v8", "reply-v8"), ("legacy-v6", "legacy-v6")):
+            self.write("fixture-manifest", dict(osd="1", osd_replicas="1", osd_profile=selected, fsid=self.fsid))
+            self.write("osd-oracle", dict(profile=actual, replicas=1))
+            with self.subTest(selected=selected, actual=actual), self.assertRaises(ValueError):
+                oracle.start(self.native)
+            self.assertEqual(self.world["mutations"], [])
 
     def test_owned_start_empty_native_maps_and_readonly_observation(self):
         result = oracle.start(self.native)
@@ -214,7 +229,7 @@ class MDSMapOracleTest(unittest.TestCase):
                     with tempfile.TemporaryDirectory() as temporary:
                         old_out, old_state, old_world, old_native = self.out, self.state, self.world, self.native
                         self.out = Path(temporary)
-                        for name in ("fixture-manifest.json", "fixture-ownership.json", "daemon-version"):
+                        for name in ("fixture-manifest.json", "fixture-ownership.json", "daemon-version", "osd-oracle.json"):
                             (self.out / name).write_bytes((old_out / name).read_bytes())
                         self.state = copy.deepcopy(old_state)
                         self.world = copy.deepcopy(old_world)

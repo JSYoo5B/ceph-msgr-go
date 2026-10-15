@@ -39,8 +39,8 @@ type pgListV8Evidence struct {
 }
 
 func TestCephOSDPGListV8Integration(t *testing.T) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-v8" {
-		t.Skip("requires explicit replicated-pg-v8 fixture profile")
+	if !isReplicatedPGFixtureProfile() {
+		t.Skip("requires an explicit replicated-PG fixture profile")
 	}
 	c, _, base, _ := replicatedPGFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
@@ -58,7 +58,7 @@ func TestCephOSDPGListV8Integration(t *testing.T) {
 				Profile                      string             `json:"profile"`
 				Cases                        []pgListV8Evidence `json:"cases"`
 				DefaultClean, NamespaceClean bool
-			}{"replicated-pg-v8", evidence, defaultClean, namespaceClean})
+			}{os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE"), evidence, defaultClean, namespaceClean})
 			if err == nil {
 				err = testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-pg-list-v8-results.json"), data)
 			}

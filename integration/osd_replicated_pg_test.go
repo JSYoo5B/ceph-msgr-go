@@ -22,13 +22,63 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
-// The profile must be selected before MON admission because HASHPSPOOL is a
-// cluster-wide required bit. The older fixture helper deliberately remains
-// unchanged for its v6 profile and cannot be used by this acceptance test.
+// The fixture name selects both the implemented request/admission contract and
+// its independently negotiated reply version. Keep this mapping closed so a
+// future fixture name cannot silently fall back to the older reply contract.
+func replicatedPGProfile(name string) (cephmsgr.OSDProfile, bool) {
+	switch name {
+	case "replicated-pg-v8":
+		return cephmsgr.OSDProfileReplicatedPG, true
+	case "replicated-pg-reply-v8":
+		return cephmsgr.OSDProfileReplicatedPGReplyV8, true
+	default:
+		return 0, false
+	}
+}
+
+func isReplicatedPGFixtureProfile() bool {
+	_, ok := replicatedPGProfile(os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE"))
+	return ok
+}
+
+func replicatedPGFixtureOSDProfile(t *testing.T) cephmsgr.OSDProfile {
+	t.Helper()
+	name := os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE")
+	profile, ok := replicatedPGProfile(name)
+	if !ok {
+		t.Fatalf("requires an explicit replicated-PG fixture profile, got %q", name)
+	}
+	return profile
+}
+
+func TestReplicatedPGFixtureProfiles(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		profile cephmsgr.OSDProfile
+		ok      bool
+	}{
+		{"replicated-pg-v8", cephmsgr.OSDProfileReplicatedPG, true},
+		{"replicated-pg-reply-v8", cephmsgr.OSDProfileReplicatedPGReplyV8, true},
+		{"", 0, false},
+		{"legacy-v6", 0, false},
+		{"replicated-pg-reply-v9", 0, false},
+		{"REPLICATED-PG-REPLY-V8", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile, ok := replicatedPGProfile(tc.name)
+			if ok != tc.ok || ok && profile != tc.profile {
+				t.Fatalf("fixture profile %q: got %d/%t, want %d/%t", tc.name, profile, ok, tc.profile, tc.ok)
+			}
+		})
+	}
+}
+
+// Select the profile before MON admission because HASHPSPOOL is a cluster-wide
+// required bit. The legacy helper deliberately skips these explicit-PG cases.
 func replicatedPGFixture(t *testing.T) (*cephmsgr.Client, context.Context, osdFixtureOracle, []byte) {
 	t.Helper()
-	if os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" || os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-v8" {
-		t.Skip("requires opt-in replicated-pg-v8 OSD fixture")
+	if os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" || !isReplicatedPGFixtureProfile() {
+		t.Skip("requires an opt-in replicated-PG OSD fixture")
 	}
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	metadata, err := os.ReadFile(filepath.Join(dir, "osd-oracle.json"))
@@ -53,7 +103,7 @@ func replicatedPGFixture(t *testing.T) (*cephmsgr.Client, context.Context, osdFi
 	}
 	options := integrationOptions(t)
 	options.EnableOSD = true
-	options.OSDProfile = cephmsgr.OSDProfileReplicatedPG
+	options.OSDProfile = replicatedPGFixtureOSDProfile(t)
 	c, err := cephmsgr.Dial(ctx, options)
 	if err != nil {
 		t.Fatal("replicated-PG MON admission", err)
@@ -148,8 +198,8 @@ type replicatedPGCase struct {
 }
 
 func TestCephOSDReplicatedPGIntegration(t *testing.T) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-v8" {
-		t.Skip("requires explicit replicated-pg-v8 fixture profile")
+	if !isReplicatedPGFixtureProfile() {
+		t.Skip("requires an explicit replicated-PG fixture profile")
 	}
 	c, _, base, original := replicatedPGFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
@@ -165,7 +215,7 @@ func TestCephOSDReplicatedPGIntegration(t *testing.T) {
 				Base    osdFixtureOracle   `json:"fixture"`
 				Cases   []replicatedPGCase `json:"cases"`
 				Cleanup bool               `json:"owned_cleanup"`
-			}{"replicated-pg-v8", base, evidence, cleanupOK})
+			}{os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE"), base, evidence, cleanupOK})
 			if err == nil {
 				err = testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-replicated-pg-results.json"), data)
 			}
@@ -278,7 +328,7 @@ func TestCephOSDReplicatedPGIntegration(t *testing.T) {
 			route = before.Placement
 			options := integrationOptions(t)
 			options.EnableOSD = true
-			options.OSDProfile = cephmsgr.OSDProfileReplicatedPG
+			options.OSDProfile = replicatedPGFixtureOSDProfile(t)
 			var armed atomic.Bool
 			var osdDials atomic.Int32
 			blocked := make(chan struct{}, 1)

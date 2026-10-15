@@ -44,7 +44,7 @@ func nativeV8Request(kind string) V8Request {
 
 func TestV8RequestRejectsIncompleteIncarnationAndUnsupportedLayout(t *testing.T) {
 	r := nativeV8Request("read")
-	for _, features := range []uint64{oracleFeatures, v8OracleFeatures &^ featureNewOSDOp, v8OracleFeatures &^ (1 << 21), v8OracleFeatures &^ (1 << 57), v8OracleFeatures &^ featureObjectLocator, v8OracleFeatures &^ featurePGID64, v8OracleFeatures | featureServerSquidMask, v8OracleFeatures | featureNewOSDReply} {
+	for _, features := range []uint64{oracleFeatures, v8OracleFeatures &^ featureNewOSDOp, v8OracleFeatures &^ (1 << 21), v8OracleFeatures &^ (1 << 57), v8OracleFeatures &^ featureObjectLocator, v8OracleFeatures &^ featurePGID64, v8OracleFeatures | featureServerSquidMask} {
 		if _, err := EncodeRequestV8(r, features, wire.DefaultLimit); !errors.Is(err, ErrFeatures) {
 			t.Fatal("unsupported encoding features admitted", features, err)
 		}

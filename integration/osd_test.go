@@ -41,6 +41,9 @@ func osdFixture(t *testing.T) (*cephmsgr.Client, context.Context, osdFixtureOrac
 	if os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {
 		t.Skip("requires the opt-in disposable OSD fixture")
 	}
+	if isReplicatedPGFixtureProfile() {
+		t.Skip("legacy-v6 OSD acceptance requires its own request and reply contract")
+	}
 	directory := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	metadata, err := os.ReadFile(filepath.Join(directory, "osd-oracle.json"))
 	if err != nil {

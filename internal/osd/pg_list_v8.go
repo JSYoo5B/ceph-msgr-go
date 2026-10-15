@@ -16,8 +16,10 @@ import (
 // hash both use the caller's explicit PG.Seed for this PG operation. An empty
 // object selects native object_locator_t's explicit-hash variant. This is not
 // object placement, a pool scan, split handling or automatic resubmission.
+// NEW_OSDOPREPLY_ENCODING changes only the final negotiated-feature u64 here;
+// SERVER_SQUID remains unsupported because it would select a v9 request.
 func EncodePGListRequestV8(r PGListRequest, features uint64, limit uint32) (msgr.MessageData, error) {
-	if features&(featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask) != featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask || features&featureNewOSDReply != 0 || features&featureServerSquidMask == featureServerSquidMask {
+	if features&(featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask) != featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask || features&featureServerSquidMask == featureServerSquidMask {
 		return msgr.MessageData{}, ErrFeatures
 	}
 	if limit == 0 {

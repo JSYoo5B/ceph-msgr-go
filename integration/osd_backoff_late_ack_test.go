@@ -35,8 +35,8 @@ type nativeLateAckReceipt struct {
 // until after activation delivered UNBLOCK. The same authenticated connection
 // must retain a bounded receipt and local gate until the original ACK is queued.
 func TestCephOSDBackoffLateAckIntegration(t *testing.T) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-v8" || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
-		t.Skip("requires opt-in single-OSD replicated-pg-v8 native late-ACK fixture")
+	if !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
+		t.Skip("requires an opt-in single-OSD replicated-PG native late-ACK fixture")
 	}
 	c, _, base, _ := replicatedPGFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -63,7 +63,7 @@ func TestCephOSDBackoffLateAckIntegration(t *testing.T) {
 				LateAckQueued, Restored, Cleaned                           bool
 				CleanupError                                               string
 				NativeAck                                                  nativeLateAckReceipt `json:"native_ack_receipt"`
-			}{"replicated-pg-v8", start, finish, block, unblock, pendingReply, blockedReply, appendReply, readReply, before, afterRestore, afterBlocked, afterAppend, afterRead, lateAckQueued, restored, cleaned, cleanupError, nativeAck})
+			}{os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE"), start, finish, block, unblock, pendingReply, blockedReply, appendReply, readReply, before, afterRestore, afterBlocked, afterAppend, afterRead, lateAckQueued, restored, cleaned, cleanupError, nativeAck})
 			if err == nil {
 				err = testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-backoff-late-ack-results.json"), data)
 			}

@@ -212,7 +212,7 @@ func (o *OSDConnection) NextBackoff(ctx context.Context) (OSDBackoffEvent, error
 	if err := ctx.Err(); err != nil {
 		return OSDBackoffEvent{}, err
 	}
-	if o.client.options.OSDProfile != OSDProfileReplicatedPG {
+	if !o.client.options.OSDProfile.replicatedPG() {
 		return OSDBackoffEvent{}, ErrUnsupportedFeatures
 	}
 	for {

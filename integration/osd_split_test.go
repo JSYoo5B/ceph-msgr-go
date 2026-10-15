@@ -146,8 +146,8 @@ func checkSplitUnknown(t *testing.T, reply cephmsgr.OSDReply, err error, request
 // The second is received at the old parent after its split epoch. Its native
 // envelope receipt and unchanged snapshot do not establish a mutation outcome.
 func TestCephOSDSplitIntegration(t *testing.T) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-v8" || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
-		t.Skip("requires owned single-OSD replicated-pg-v8 PG split fixture")
+	if !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
+		t.Skip("requires an owned single-OSD replicated-PG PG split fixture")
 	}
 	c, _, base, _ := replicatedPGFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
@@ -267,7 +267,7 @@ func TestCephOSDSplitIntegration(t *testing.T) {
 	blocked := make(chan struct{}, 1)
 	options := integrationOptions(t)
 	options.EnableOSD = true
-	options.OSDProfile = cephmsgr.OSDProfileReplicatedPG
+	options.OSDProfile = replicatedPGFixtureOSDProfile(t)
 	dial := options.DialContext
 	options.DialContext = func(call context.Context, network, endpoint string) (net.Conn, error) {
 		conn, e := dial(call, network, endpoint)
@@ -358,7 +358,7 @@ func TestCephOSDSplitIntegration(t *testing.T) {
 	// This is independent of the reply withholding fault above.
 	options = integrationOptions(t)
 	options.EnableOSD = true
-	options.OSDProfile = cephmsgr.OSDProfileReplicatedPG
+	options.OSDProfile = replicatedPGFixtureOSDProfile(t)
 	dial = options.DialContext
 	options.DialContext = func(call context.Context, network, endpoint string) (net.Conn, error) {
 		conn, e := dial(call, network, endpoint)

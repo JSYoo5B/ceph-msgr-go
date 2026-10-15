@@ -59,10 +59,13 @@ protocol acknowledgement on that same authenticated connection.
 ## Integration boundary
 
 The codec itself does not advertise features, install gates or submit work.
-The integrated opt-in `Options.OSDProfile = OSDProfileReplicatedPG` selects the
+The integrated opt-ins `OSDProfileReplicatedPG` and
+`OSDProfileReplicatedPGReplyV8` select the
 fixed OSD mask with HASHPSPOOL, NEW_OSDOP_ENCODING and the incarnation-aware
-bit-21 RESEND_ON_SPLIT/RADOS_BACKOFF/PG_UPMAP/CHOOSE_ARGS contract. This profile
-is selected before Dial; its MON session additionally declares HASHPSPOOL.
+bit-21 RESEND_ON_SPLIT/RADOS_BACKOFF/PG_UPMAP/CHOOSE_ARGS contract. Both profiles
+are selected before Dial; their MON sessions additionally declare HASHPSPOOL.
+ReplyV8 additionally requires OSD bit58 and a strict v8 reply decoder; it shares
+the same backoff queue, explicit ACK and single-writer gate.
 The default `OSDProfileObjectHash` keeps the restricted v6 behavior and rejects
 type 61. There is no raw feature-mask override. The [O4 contract](O4_CONTRACT.md)
 records the implemented profile and its restricted native acceptance.

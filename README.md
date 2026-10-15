@@ -316,6 +316,24 @@ replicated pool이며, 기본 optimal CRUSH·EC 지원으로 확대해 해석하
 읽기·쓰기와 설정 복구를 확인한다. 라이브러리가 분할을 감지하거나 요청을
 재실행하지는 않는다.
 
+`Options.OSDProfile=OSDProfileReplicatedPGReplyV8`은 같은 caller 배치·v8 request·
+backoff 계약에 OSD bit58(NEW_OSDOPREPLY_ENCODING)을 필수로 추가한다. Request와
+ListPG 모두 정확한 v8/compat2 reply만 받고 v6로 fallback하지 않는다. 기존
+ObjectHash와 ReplicatedPG의 v6 reply 계약은 그대로다. MON은 두 replicated
+profile에 같은 HASHPSPOOL 기능만 추가하며 MGR/MDS 기능은 바뀌지 않는다.
+FAILOK·ONDISK·signed 서버 code·request identity 검증과 redirect를 따라가지
+않는 정책도 공유한다. Native reply 5개와 기존 v6 vector, synthetic 공개 요청·
+PGNLS·backoff 경로를 대조했다. 실제 새 profile은 legacy CRUSH·HASHPSPOOL·8 PG의
+single OSD에서 CRC/AES host IPv4 BlueStore와 secure/AES256K container IPv6
+MemStore를 검증했다. 각 구성의 기존 13개 case는 앞선 run에서 통과했으나 그
+run 전체는 새 시험의 잘못된 zero-version 기대값으로 실패했다. 제품 변경 없이
+기대값을 고친 새 3개 case는 별도 focused run에서 모두 통과했다. 이를 하나의
+16-case 전체 통과나 기본 optimal CRUSH·EC 지원으로 해석하지 않는다.
+오류 응답도 nonzero legacy/replay/user version과 앞선 READ bytes를 가질 수 있다.
+이 필드나 음수 응답의 ONDISK flag를 변경의 commit·미실행 증거로 삼지 않는다.
+[실제 검증 기록](integration/fixture/OSD_REPLY_V8_VALIDATION.md)과
+[새 v8 reply 계약](internal/osd/OSD_REPLY_V8_CONTRACT.md)에 세부 경계를 적었다.
+
 OSD 연결은 lossy session이며 전송한 요청을 재실행하지 않는다. 전송 후
 취소·단절·손상된 응답에는 `OutcomeUnknownError`를 보존한다. Messenger ACK는
 객체 요청 완료가 아니다. Redirect는 `ErrOSDRedirect`와 원본 metadata를

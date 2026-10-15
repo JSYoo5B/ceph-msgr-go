@@ -12,7 +12,7 @@ import osd_split_oracle as oracle
 FSID="12345678-1234-1234-1234-123456789abc"
 TOKEN="1"*32
 NAME="fixture-native-omapw-main-"+"a"*32
-META=dict(pool="ceph-msgr-osd-fixture",pool_id=7,object="fixture",profile=oracle.PROFILE,replicas=1,pool_pg_num=8,osd_id=0)
+META=dict(pool="ceph-msgr-osd-fixture",pool_id=7,object="fixture",profile=oracle.PROFILES[0],replicas=1,pool_pg_num=8,osd_id=0)
 OWNED=dict(schema_version=1,source_commit=oracle.xattr.SOURCE_COMMIT,pool=META["pool"],pool_id=7,fixture_object="fixture",namespace="",objects=[NAME])
 STATE=dict(code=0,version=3,data="AP8=",seconds=1,nanos=2,attributes=[],gets=[])
 
@@ -61,7 +61,7 @@ class SplitOracleTests(unittest.TestCase):
             with self.assertRaises(ValueError):oracle.token_name(token,"status")
 
     def test_ownership_requires_optin_single_osd_and_owned_uuid(self):
-        manifest=dict(osd_profile=oracle.PROFILE,osd_replicas="1",osd="1",fsid=FSID)
+        manifest=dict(osd_profile=oracle.PROFILES[0],osd_replicas="1",osd="1",fsid=FSID)
         (self.out/"daemon-version").write_text("20.2.4 "+oracle.xattr.SOURCE_COMMIT)
         for name,value in (("osd-oracle",META),("fixture-manifest",manifest),(oracle.writes.OWNED,OWNED),(oracle.NAME+"-input",dict(object=NAME))):oracle.omap.publish(self.out,name,value)
         self.assertEqual(oracle.owned(self.root,self.out)[3],NAME)
@@ -71,6 +71,23 @@ class SplitOracleTests(unittest.TestCase):
         oracle.omap.publish(self.out,"osd-oracle",META)
         oracle.omap.publish(self.out,oracle.NAME+"-input",dict(object="unowned"))
         with self.assertRaises(ValueError):oracle.owned(self.root,self.out)
+
+    def test_owned_scope_keeps_selected_modern_profile_and_rejects_cross_profile(self):
+        (self.out / "daemon-version").write_text("20.2.4 " + oracle.xattr.SOURCE_COMMIT)
+        oracle.omap.publish(self.out, oracle.writes.OWNED, OWNED)
+        oracle.omap.publish(self.out, oracle.NAME + "-input", dict(object=NAME))
+        for profile in oracle.PROFILES:
+            oracle.omap.publish(self.out, "osd-oracle", dict(META, profile=profile))
+            oracle.omap.publish(self.out, "fixture-manifest", dict(osd_profile=profile, osd_replicas="1", osd="1", fsid=FSID))
+            self.assertEqual(oracle.owned(self.root, self.out)[0]["profile"], profile)
+        for selected, actual in (("replicated-pg-v8", "replicated-pg-reply-v8"),
+                                 ("replicated-pg-reply-v8", "replicated-pg-v8"),
+                                 ("reply-v8", "reply-v8"), ("legacy-v6", "legacy-v6")):
+            oracle.omap.publish(self.out, "osd-oracle", dict(META, profile=actual))
+            oracle.omap.publish(self.out, "fixture-manifest", dict(osd_profile=selected, osd_replicas="1", osd="1", fsid=FSID))
+            with self.subTest(selected=selected, actual=actual), patch.object(oracle, "ceph") as command, self.assertRaises(ValueError):
+                oracle.owned(self.root, self.out)
+            command.assert_not_called()
 
     def test_live_pool_checks_all_targets_pending_and_policy(self):
         self.assertEqual(oracle.checked_pool(topology(),META,FSID),pool())

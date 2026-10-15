@@ -79,7 +79,7 @@ func watchReconnectNotify(ctx context.Context, action, name string) (nativeRecon
 }
 
 func TestCephOSDWatchReconnectIntegration(t *testing.T) {
-	modern := os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") == "replicated-pg-v8"
+	modern := isReplicatedPGFixtureProfile()
 	var c *cephmsgr.Client
 	var base osdFixtureOracle
 	if modern {

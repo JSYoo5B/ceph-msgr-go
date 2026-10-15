@@ -32,7 +32,7 @@ import osd_omap_write_native as writes
 import osd_xattr_native as xattr
 
 NAME = "osd-backoff"
-PROFILE = "replicated-pg-v8"
+PROFILES = ("replicated-pg-v8", "replicated-pg-reply-v8")
 MAX_OUTPUT = 1 << 20
 HOLD_SECONDS = 180
 STATE_SECONDS = 20
@@ -57,10 +57,10 @@ def owned(root, out):
     version = (out / "daemon-version").read_text().strip()
     if "20.2.4" not in version or xattr.SOURCE_COMMIT not in version:
         raise ValueError("backoff oracle requires pinned Tentacle")
-    if (metadata.get("profile") != PROFILE or metadata.get("replicas") != 1
+    if (metadata.get("profile") not in PROFILES or metadata.get("replicas") != 1
             or metadata.get("pool_pg_num") != 8 or metadata.get("osd_id") != 0
             or metadata.get("pool") != "ceph-msgr-osd-fixture"
-            or manifest.get("osd_profile") != PROFILE or manifest.get("osd_replicas") != "1"
+            or manifest.get("osd_profile") != metadata.get("profile") or manifest.get("osd_replicas") != "1"
             or manifest.get("osd") != "1" or not isinstance(manifest.get("fsid"), str)
             or not re.fullmatch("[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", manifest["fsid"])):
         raise ValueError("backoff recipe requires the opt-in single-OSD replicated-PG fixture")

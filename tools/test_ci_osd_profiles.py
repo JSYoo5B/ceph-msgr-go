@@ -47,44 +47,49 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
     def test_closed_profile_and_selector_reach_the_fixture(self):
         self.assertIn("CEPH_MSGR_TEST_OSD_PROFILE: ${{ matrix.osd_profile || 'legacy-v6' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}", self.workflow)
-        self.assertEqual(len(self.rows), 32)
+        self.assertEqual(len(self.rows), 34)
         self.assertEqual(sum(row.get("osd_profile", "legacy-v6") == "legacy-v6" for row in self.rows), 30)
         for row in self.rows:
             profile = row.get("osd_profile", "legacy-v6")
-            self.assertIn(profile, {"legacy-v6", "replicated-pg-v8"})
+            self.assertIn(profile, {"legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8"})
             if profile == "legacy-v6":
                 self.assertNotIn("test_run", row, "existing rows must retain their original suite selection")
 
     def test_v8_rows_cover_both_security_store_and_address_profiles(self):
-        rows = [row for row in self.rows if row.get("osd_profile") == "replicated-pg-v8"]
-        self.assertEqual(len(rows), 2)
-        observed = set()
-        for row in rows:
-            self.assertEqual((row["osd"], row["osd_replicas"], row["stress"]), ("1", "1", ""))
-            self.assertNotIn("race", row)
-            self.assertNotIn("image", row, "v8 acceptance must retain the pinned Tentacle image")
-            observed.add(tuple(row.get(field, fallback) for field, fallback in (
-                ("key", ""), ("service", ""), ("mode", "secure"),
-                ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
-        self.assertEqual(observed, {
-            ("aes", "aes", "crc", "4", "host", "bluestore"),
-            ("aes256k", "aes256k", "secure", "6", "container", "memstore"),
-        })
+        for profile in ("replicated-pg-v8", "replicated-pg-reply-v8"):
+            with self.subTest(profile=profile):
+                rows = [row for row in self.rows if row.get("osd_profile") == profile]
+                self.assertEqual(len(rows), 2)
+                observed = set()
+                for row in rows:
+                    self.assertEqual((row["osd"], row["osd_replicas"], row["stress"]), ("1", "1", ""))
+                    self.assertNotIn("race", row)
+                    self.assertNotIn("image", row, "v8 acceptance must retain the pinned Tentacle image")
+                    observed.add(tuple(row.get(field, fallback) for field, fallback in (
+                        ("key", ""), ("service", ""), ("mode", "secure"),
+                        ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
+                self.assertEqual(observed, {
+                    ("aes", "aes", "crc", "4", "host", "bluestore"),
+                    ("aes256k", "aes256k", "secure", "6", "container", "memstore"),
+                })
 
     def test_v8_selector_names_existing_acceptance_tests_and_excludes_unready_paths(self):
         declared = set()
         for source in (ROOT / "integration").glob("*_test.go"):
             declared.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))
-        expected = {
+        common = {
             "TestCephOSDReplicatedPGIntegration", "TestCephOSDPGListV8Integration",
             "TestCephOSDBackoffIntegration", "TestCephOSDBackoffLateAckIntegration",
             "TestCephOSDWatchReconnectIntegration", "TestCephOSDSplitIntegration",
             "TestCephMDSMapsIntegration",
         }
-        self.assertTrue(expected <= declared)
+        reply_v8 = "TestCephOSDReplyV8Integration"
+        self.assertTrue(common | {reply_v8} <= declared)
         for row in self.rows:
-            if row.get("osd_profile") != "replicated-pg-v8":
+            profile = row.get("osd_profile")
+            if profile not in {"replicated-pg-v8", "replicated-pg-reply-v8"}:
                 continue
+            expected = common | ({reply_v8} if profile == "replicated-pg-reply-v8" else set())
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in declared if selector.search(name)}, expected)
             for unready in ("TestCephOSDSparseReadIntegration", "TestCephOSDPGListIntegration",

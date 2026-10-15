@@ -100,7 +100,7 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 	input := pgListWireInput(request)
 	var m msgr.MessageData
 	var err error
-	if c.options.OSDProfile == OSDProfileReplicatedPG {
+	if c.options.OSDProfile.replicatedPG() {
 		m, err = osd.EncodePGListRequestV8(input, o.features, c.options.MaxFrameSize)
 	} else {
 		m, err = osd.EncodePGListRequest(input, o.features, c.options.MaxFrameSize)
@@ -130,7 +130,7 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 	if err != nil {
 		return result, o.operationError(err)
 	}
-	decoded, err := osd.DecodeReply(reply, c.options.MaxFrameSize)
+	decoded, err := o.decodeReply(reply)
 	result.OSDReply = publicOSDReply(decoded)
 	result.Submission = submission
 	result.Transaction, result.GlobalID = reply.Transaction, o.globalID

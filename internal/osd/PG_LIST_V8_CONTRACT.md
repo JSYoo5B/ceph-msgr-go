@@ -39,9 +39,12 @@ StartEpoch and the exact raw cursor stay caller-controlled protocol metadata.
 
 Frame admission includes the 23-byte increase over v6: 250 fixed bytes including
 the header, plus namespace and cursor bytes. Reply admission still includes the
-ordinary v6 reply envelope and requested local output budget. No cursor count,
+conservative ordinary v6 reply envelope and requested local output budget
+(the v8 no-redirect envelope is smaller). No cursor count,
 allocation or input copy escapes those bounds. Unsupported feature combinations,
-SERVER_SQUID/v9, NEW_OSDOPREPLY_ENCODING and malformed cursors are refused.
+SERVER_SQUID/v9 and malformed cursors are refused. The fixed ReplyV8 profile
+permits NEW_OSDOPREPLY_ENCODING bit58 in the negotiated-feature tail and selects
+its strict v8 reply decoder; the v6 baseline vectors below remain unchanged.
 
 ## Native evidence and integration boundary
 
@@ -65,8 +68,8 @@ feature/input rejection, exact request/reply byte budgets, cursor ownership,
 raw-cursor continuation without target replacement, and explicit locator/reqid
 fields. Dedicated harness tests preserve mixed v8-request/v6-reply proof classes
 alongside existing v6, watch, backoff and all-request-v8 evidence checks.
-Public ListPG selects this encoder for the replicated-PG profile without new
-input fields. Default and isolated namespace inventories match count-one Go
+Public ListPG selects this encoder for either replicated-PG profile without
+new input fields; the runs below used the original v6-reply profile. Default and isolated namespace inventories match count-one Go
 pages in both CRC/AES host IPv4 with three BlueStore replicas and secure/AES256K
 IPv6 container with one MemStore. Wrong-primary requests fail locally.
 See [native acceptance](../../integration/fixture/OSD_REPLICATED_PG_VALIDATION.md).

@@ -109,7 +109,7 @@ type OSDRequest struct {
 	ModificationTime  OSDTime
 	MapEpoch          uint32
 	Object            OSDObject
-	// Placement is mandatory for OSDProfileReplicatedPG and absent for
+	// Placement is mandatory for both replicated PG profiles and absent for
 	// OSDProfileObjectHash. The caller owns map application and target choice.
 	Placement      *OSDReplicatedPlacement
 	Operations     []OSDOperation
@@ -323,7 +323,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	if err != nil {
 		return result, o.operationError(err)
 	}
-	decoded, err := osd.DecodeReply(reply, c.options.MaxFrameSize)
+	decoded, err := o.decodeReply(reply)
 	result = publicOSDReply(decoded)
 	result.Submission = submission
 	result.Transaction, result.GlobalID = reply.Transaction, o.globalID

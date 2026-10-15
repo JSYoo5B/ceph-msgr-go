@@ -4,7 +4,8 @@
 and `finish` actions. Each takes the fixture root and output directory; input
 `mds-maps-input.json` must be `{}`. It never starts an MDS, mounts a filesystem,
 opens an MDS session or performs CephFS I/O. The admitted fixture is one OSD with
-`replicated-pg-v8`, a matching pinned Tentacle daemon version, a recorded cluster
+one of the two closed profiles `replicated-pg-v8` or
+`replicated-pg-reply-v8`, a matching pinned Tentacle daemon version, a recorded cluster
 FSID and valid owned container identities. That fixture profile is a test recipe,
 not an MDS wire-protocol requirement. No provider repository is accessed.
 
@@ -104,3 +105,67 @@ This run verifies only the development oracle's native CLI creation, observation
 identity checks and cleanup policy. It does not verify the public Go filesystem
 map subscriptions, raw subscription payload equivalence to CLI JSON, MDS service
 authentication, an MDS connection/session, a filesystem mount or CephFS I/O.
+
+## Reply-v8 fixture admission revision
+
+The fixture oracle now admits exactly `replicated-pg-v8` and
+`replicated-pg-reply-v8`. Its actual `osd-oracle.json` profile must equal the
+fixture manifest's selected profile; unknown strings, legacy profiles and
+cross-profile metadata are refused before any mutation. Both retain the same
+single-OSD topology, named UUID resources and creation/cleanup lifecycle.
+The native CLI does not observe the Go connection's reply header version.
+
+This profile-gating revision changes the oracle source SHA-256 to
+`896c32112a64e8d449a1c03aa4ec37709a7eeedc4614788912a2ab7b2a6aad2c`. The previous source copy remains at
+`/private/tmp/mds-maps-oracle-pre-reply-v8-54e4c9d.py`, and the earlier native
+smoke evidence and its `54e4c9d...` producer hash above remain unchanged. The new
+source record is `/private/tmp/mds-maps-oracle-reply-v8-profile-proof.json`.
+The source record initially captured mock admission/lifecycle regression
+coverage. Separate live evidence for this revised producer follows below; the
+earlier `54e4c9d...` native smoke remains attributed only to its original source
+and CLI-only scope.
+
+
+## Revised producer exercised in separate reply-v8 profile runs
+
+The unchanged revised oracle source SHA-256
+`896c32112a64e8d449a1c03aa4ec37709a7eeedc4614788912a2ab7b2a6aad2c`
+was subsequently exercised under `replicated-pg-reply-v8` in both retained
+`*-final` runs. The `TestCephMDSMapsIntegration` leaf passed in 14.13s for CRC/AES
+with IPv4 host relay and one BlueStore OSD, and in 13.82s for secure/AES256K with
+IPv6 container runtime and one MemStore OSD. These are separate executions from
+the earlier `54e4c9d...` CLI-only smoke.
+
+| Configuration | Evidence directory | Native cluster FSID | UUID token |
+| --- | --- | --- | --- |
+| CRC/AES IPv4 BlueStore | `/private/tmp/ceph-osd-reply-v8-crc-aes-final/` | `48c6c098-0536-448b-8789-f5eca2ca77c3` | `7d3e1e910242499a950544e32db09e4a` |
+| Secure/AES256K IPv6 MemStore | `/private/tmp/ceph-osd-reply-v8-secure-aes256k-ipv6-final/` | `92197a9d-d0a5-4aa0-9722-f31336d3d299` | `b1e0984ac8fb4169b99ea652163fa1a9` |
+
+Each directory contains `mds-maps-go.json` with the separate native start,
+observe and finish receipts, plus `mds-maps-owned.json`,
+`mds-maps-commands.json`, `mds-maps-result.json`, the fixture manifest and
+ownership receipt. The sibling `.log` file retains the MDS leaf PASS and the
+later overall failure. The SHA-256 of `mds-maps-go.json` is
+`ccbfcc91a74fc3449e7f07c626a0f6dbf27cb52c94253622d03a9b1cf6678c5c`
+for CRC and
+`8b2ea1718a61db2736f2fe97dd70fb15c272a9b8aaa2964ef3a28fb1260bec83`
+for secure.
+
+Independent inspection of both result/ownership/command sets confirmed FSCID 1,
+metadata pool ID 3, data pool ID 4, FSMap epochs 1→2→3 and MDSMap epoch 2. All 52
+native commands per run returned zero without a timeout. Each confirmed
+filesystem was removed, final native FSMap was empty, and no pending or unresolved
+mutation remained. Pool deletion was disabled; two named pools per run were
+explicitly retained for fixture teardown, with no pool-delete or global-config
+mutation. Each runner log subsequently recorded termination of its eight owned
+containers.
+
+The MDS leaves belong to the thirteen existing leaves that passed in each
+`*-final` run. Both complete selectors nevertheless failed on the first new OSD
+reply-v8 case's incorrect error-version assertion. The three corrected new OSD
+leaves later passed in separate focused runs. See the
+[reply-v8 validation record](OSD_REPLY_V8_VALIDATION.md) and the separate
+[MDS map subscription validation](MDS_MAPS_VALIDATION.md) for those boundaries;
+no combined sixteen-case native pass is claimed here. This evidence does not
+add MDS service authentication, an MDS session, mounts, CephFS I/O or byte-for-byte
+CLI generation of the subscription payloads.

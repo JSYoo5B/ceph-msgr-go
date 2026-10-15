@@ -92,6 +92,10 @@ type ServiceAuth struct {
 	// on OSD connections only. It never accepts an arbitrary feature mask or
 	// changes authentication, Messenger security or MON/MGR feature policy.
 	ReplicatedPGV8 bool
+	// ReplicatedPGReplyV8 additionally selects the current OSD reply encoding.
+	// It includes the replicated PG request profile, even when its older
+	// selector is false, and applies only to OSD connections.
+	ReplicatedPGReplyV8 bool
 }
 
 // Pinned Ceph 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964:
@@ -99,10 +103,17 @@ type ServiceAuth struct {
 // 2), OSDHASHPSPOOL and NEW_OSDOP_ENCODING. Bit 21 also promises RADOS_BACKOFF,
 // OSDMAP_PG_UPMAP and CRUSH_CHOOSE_ARGS; selecting this internal profile is
 // therefore conditional on the complete profile's caller/codec/control gates.
-// NEW_OSDOPREPLY_ENCODING (58) and SERVER_SQUID (49) remain omitted.
+// NEW_OSDOPREPLY_ENCODING (58) is a separate explicit profile below.
+// SERVER_SQUID (49) remains omitted from both profiles.
 const replicatedPGV8Features uint64 = 1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<57
 
-func (a ServiceAuth) replicatedPGV8() bool { return a.ReplicatedPGV8 }
+// Bit 58/incarnation 1 also names CRUSH_TUNABLES5 and FS_FILE_LAYOUT_V2.
+// On this OSD-only profile it selects the audited reply wire encoding; it does
+// not extend MON's CRUSH admission exception or enable filesystem operations.
+const replicatedPGReplyV8Features uint64 = replicatedPGV8Features | 1<<58
+
+func (a ServiceAuth) replicatedPGV8() bool      { return a.ReplicatedPGV8 || a.ReplicatedPGReplyV8 }
+func (a ServiceAuth) replicatedPGReplyV8() bool { return a.ReplicatedPGReplyV8 }
 
 func handshakeFeatures(role uint8, auth Authenticator) (supported, required uint64) {
 	supported, required = featuresForRole(role), RequiredFeatures
@@ -126,6 +137,10 @@ func handshakeFeatures(role uint8, auth Authenticator) (supported, required uint
 		if profile, ok := auth.(interface{ replicatedPGV8() bool }); ok && profile.replicatedPGV8() {
 			supported |= replicatedPGV8Features
 			required |= replicatedPGV8Features
+		}
+		if profile, ok := auth.(interface{ replicatedPGReplyV8() bool }); ok && profile.replicatedPGReplyV8() {
+			supported |= replicatedPGReplyV8Features
+			required |= replicatedPGReplyV8Features
 		}
 	}
 	return supported, required

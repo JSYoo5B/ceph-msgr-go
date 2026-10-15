@@ -161,7 +161,7 @@ func mdsMapsCompare(t *testing.T, native nativeMDSMaps, fs cephmsgr.FSMapUserUpd
 
 func TestCephMDSMapsIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
-	if dir == "" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-v8" || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
+	if dir == "" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
 		t.Skip("MDS map observation requires the disposable single-OSD fixture with no MDS daemon")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
@@ -173,7 +173,7 @@ func TestCephMDSMapsIntegration(t *testing.T) {
 	// OpenOSD. MDS-map opt-in itself neither requests an MDS ticket nor opens
 	// an MDS connection. The fresh unknown-FSCID client uses these same options.
 	options.EnableOSD = true
-	options.OSDProfile = cephmsgr.OSDProfileReplicatedPG
+	options.OSDProfile = replicatedPGFixtureOSDProfile(t)
 	var osdDials atomic.Uint32
 	dial := options.DialContext
 	options.DialContext = func(call context.Context, network, endpoint string) (net.Conn, error) {

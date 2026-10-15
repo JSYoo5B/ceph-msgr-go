@@ -105,7 +105,8 @@ type Options struct {
 	// it requests no MDS service ticket and enables no MDS daemon or CephFS API.
 	EnableMDSMaps bool
 	// OSDProfile selects the fixed OSD wire contract before MON admission.
-	// ReplicatedPG requires EnableOSD and caller-supplied actual PG metadata.
+	// Both replicated profiles require EnableOSD and caller-supplied actual PG
+	// metadata. ReplyV8 additionally requires the fixed current v8 reply encoding.
 	OSDProfile OSDProfile
 	// MaxOSDConnections bounds OSD connections and concurrent setups held by
 	// this client. Defaults to 16; valid values are 1 through 1024. Close an

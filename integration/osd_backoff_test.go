@@ -119,8 +119,8 @@ func nativeBackoffRoute(t *testing.T, base osdFixtureOracle, state nativeBackoff
 }
 
 func TestCephOSDBackoffIntegration(t *testing.T) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-v8" || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
-		t.Skip("requires opt-in single-OSD replicated-pg-v8 native backoff fixture")
+	if !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
+		t.Skip("requires an opt-in single-OSD replicated-PG native backoff fixture")
 	}
 	c, _, base, _ := replicatedPGFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
@@ -147,7 +147,7 @@ func TestCephOSDBackoffIntegration(t *testing.T) {
 				Restored, Cleaned            bool
 				CleanupError                 string
 				NativeAck                    nativeLateAckReceipt `json:"native_ack_receipt"`
-			}{"replicated-pg-v8", start, observed, finish, block, unblock, pendingReply, blockedReply, newReply, finalNative, restored, cleaned, cleanupError, nativeAck})
+			}{os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE"), start, observed, finish, block, unblock, pendingReply, blockedReply, newReply, finalNative, restored, cleaned, cleanupError, nativeAck})
 			if err == nil {
 				err = testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-backoff-results.json"), data)
 			}
