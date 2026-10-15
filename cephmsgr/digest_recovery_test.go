@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/maps"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
@@ -28,8 +29,19 @@ func TestDigestWatchRecoversAndReregistersOnRenewal(t *testing.T) {
 			c.mu.Unlock()
 			if mode == "transport" {
 				first.conn.Close()
-			} else if err := c.connectMonitor(ctx); err != nil {
-				t.Fatal("renewal did not replace the MON source", err)
+			} else {
+				// Only the supervisor reconnects after bootstrap (see be968a3):
+				// make every ticket due and wake it, instead of racing it with a
+				// direct connectMonitor call that it can retire.
+				c.mu.Lock()
+				due := copyAuth(c.auth)
+				for service, ticket := range due.Tickets {
+					ticket.RenewAfter = time.Now().Add(-time.Second)
+					due.Tickets[service] = ticket
+				}
+				c.auth = due
+				c.mu.Unlock()
+				c.wakeMonitor()
 			}
 			second := configTestNextPeer(t, ctx, peers)
 			digestTestRegistration(t, ctx, second)

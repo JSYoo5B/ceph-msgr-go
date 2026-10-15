@@ -271,6 +271,14 @@ func TestMDSTicketRenewalAndGlobalIdentityRetirement(t *testing.T) {
 				go mdsMockMonitorID(server, id)
 				return client, nil
 			}
+			// Send the command before any renewal is due: once due, the
+			// supervisor may install the new identity at any moment.
+			var pending <-chan mdsCommandOutcome
+			var sent msgr.MessageData
+			if changedID {
+				pending = mdsStartCommand(m, ctx)
+				sent = peer.next(t)
+			}
 			// Force a local renewal due marker, then exercise the actual MON candidate
 			// authentication/install path without sleeping or opening another MDS.
 			c.mu.Lock()
@@ -282,12 +290,6 @@ func TestMDSTicketRenewalAndGlobalIdentityRetirement(t *testing.T) {
 			c.mu.Unlock()
 			if needed, _, _ := c.renewalState(time.Now()); !needed {
 				t.Fatal("MDS ticket omitted from renewal scheduling")
-			}
-			var pending <-chan mdsCommandOutcome
-			var sent msgr.MessageData
-			if changedID {
-				pending = mdsStartCommand(m, ctx)
-				sent = peer.next(t)
 			}
 			// Only the supervisor reconnects after bootstrap (see be968a3): a
 			// direct connectMonitor call races its renewal of the due ticket and
