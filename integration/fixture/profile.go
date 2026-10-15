@@ -14,6 +14,7 @@ type profile struct {
 	monAddresses, fsid, peers                                             string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
+	sparseReadOracle                                                      string
 	nativeMgrPreparation                                                  string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
 	stressDuration, testRun, testTimeout, diagnostics                     string
@@ -27,6 +28,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		return fallback
 	}
 	p := profile{
+		sparseReadOracle:     getenv("CEPH_MSGR_TEST_SPARSE_READ_ORACLE"),
 		image:                value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
 		keyType:              value("CEPH_MSGR_TEST_KEY_TYPE", "aes256k"),
 		ipFamily:             value("CEPH_MSGR_TEST_IP_FAMILY", "4"),
@@ -75,6 +77,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if !slices.Contains(choice.allowed, choice.value) {
 			return profile{}, fmt.Errorf("%s must be one of %s", choice.name, strings.Join(choice.allowed, ", "))
 		}
+	}
+	if p.sparseReadOracle != "" && p.osd != "1" {
+		return profile{}, fmt.Errorf("native sparse-read oracle requires OSD fixture")
 	}
 	if p.osdReplicas != "1" && p.osd != "1" {
 		return profile{}, fmt.Errorf("replicated fixture requires CEPH_MSGR_TEST_OSD=1")
@@ -176,7 +181,12 @@ func (p profile) containerEnvironment() map[string]string {
 }
 
 func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
+	marker := ""
+	if p.sparseReadOracle != "" {
+		marker = "1"
+	}
 	return map[string]string{
+		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":   marker,
 		"CEPH_MSGR_MONITORS":                    p.monitors(),
 		"CEPH_MSGR_KEY_FILE":                    filepath.Join(controlDir, "key"),
 		"CEPH_MSGR_IDENTITY":                    "client.test",

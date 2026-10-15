@@ -29,6 +29,8 @@ type nativeEncoderSpec struct {
 	// requests is the number of leading MOSDOp vectors in names; zero
 	// keeps the original single request followed by replies.
 	requests int
+	events   int  // trailing native MWatchNotify vectors use header version 3
+	controls bool // all vectors are MOSDBackoff controls, version 1 and TID zero
 }
 
 var mutationEncoderSpec = nativeEncoderSpec{
@@ -90,6 +92,25 @@ var mapextEncoderSpec = nativeEncoderSpec{
 var checksumEncoderSpec = nativeEncoderSpec{
 	command: "encode-osd-checksum", wrapper: "osd_checksum_native_encoder.cc", driver: "osd_checksum_native_encoder.py",
 	names: []string{"checksum-native-request-v6-crc32c", "checksum-native-reply-v6-success", "checksum-native-reply-v6-trimmed", "checksum-native-reply-v6-eof", "checksum-native-reply-v6-unaligned"},
+}
+
+var sparseReadEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-sparse-read", wrapper: "osd_sparse_read_native_encoder.cc", driver: "osd_sparse_read_native_encoder.py",
+	names: []string{"sparse-read-native-request-v6-map", "sparse-read-native-reply-v6-populated", "sparse-read-native-reply-v6-empty", "sparse-read-native-reply-v6-enoent", "sparse-read-native-reply-v6-eacces"},
+}
+var pgListEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-pg-list", wrapper: "osd_pg_list_native_encoder.cc", driver: "osd_pg_list_native_encoder.py",
+	names: []string{"pg-list-native-request-v6-list", "pg-list-native-reply-v6-populated", "pg-list-native-reply-v6-empty-end", "pg-list-native-reply-v6-einval", "pg-list-native-reply-v6-eacces"},
+}
+
+var watchNotifyEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-watch-notify", wrapper: "osd_watch_notify_native_encoder.cc", driver: "osd_watch_notify_native_encoder.py", requests: 6, events: 4,
+	names: []string{"watch-notify-native-request-v6-register", "watch-notify-native-request-v6-unwatch", "watch-notify-native-request-v6-ping", "watch-notify-native-request-v6-reconnect", "watch-notify-native-request-v6-notify", "watch-notify-native-request-v6-ack", "watch-notify-native-reply-v6-register", "watch-notify-native-reply-v6-unwatch", "watch-notify-native-reply-v6-ping", "watch-notify-native-reply-v6-reconnect", "watch-notify-native-reply-v6-notify", "watch-notify-native-reply-v6-ack", "watch-notify-native-event-v3-notify", "watch-notify-native-event-v3-complete", "watch-notify-native-event-v3-timeout", "watch-notify-native-event-v3-disconnect"},
+}
+
+var backoffEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-backoff", wrapper: "osd_backoff_native_encoder.cc", driver: "osd_backoff_native_encoder.py", controls: true,
+	names: []string{"backoff-native-event-v1-block-single", "backoff-native-event-v1-block-range", "backoff-native-event-v1-ack-range", "backoff-native-event-v1-unblock-range", "backoff-native-event-v1-block-sharded"},
 }
 
 // The offline encoder is a development oracle. It starts no Ceph daemon and
@@ -170,7 +191,11 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	}
 	// A shared SDK cache can retain every oracle target. Supply all original
 	// wrapper sources during configuration, then build only the selected target.
-	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper, watchersEncoderSpec.wrapper, mapextEncoderSpec.wrapper, checksumEncoderSpec.wrapper, allocHintEncoderSpec.driver}
+	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper, watchersEncoderSpec.wrapper, mapextEncoderSpec.wrapper, checksumEncoderSpec.wrapper, sparseReadEncoderSpec.wrapper, pgListEncoderSpec.wrapper, watchNotifyEncoderSpec.wrapper, allocHintEncoderSpec.driver}
+	files = append(files, backoffEncoderSpec.wrapper)
+	if spec.command == sparseReadEncoderSpec.command {
+		files = append(files, "build_sparse_read_oracle.py", "osd_sparse_read_oracle.cc")
+	}
 	for _, name := range files {
 		if err := target.CopyFileToContainer(build, filepath.Join(root, "tools", name), "/tmp/"+name, 0600); err != nil {
 			return err
@@ -203,7 +228,7 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	if err := os.WriteFile(*output, append(data, '\n'), 0600); err != nil {
 		return err
 	}
-	fmt.Println("Native v6 front/data/header proof:", *output)
+	fmt.Println("Native front/data/header proof:", *output)
 	return nil
 }
 
@@ -257,14 +282,23 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 			}
 			segments[segment] = data
 		}
-		if err := validateNativeEncoderHeader(name, fixture, segments, i == 0 || i < spec.requests); err != nil {
+		if err := validateNativeEncoderHeaderFor(name, fixture, segments, i == 0 || i < spec.requests, spec.events > 0 && i >= len(spec.names)-spec.events, spec.controls); err != nil {
 			return nil, err
+		}
+		if spec.controls {
+			if err := validateNativeBackoffDecoder(name, fixture, segments["front"]); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return proof, nil
 }
 
-func validateNativeEncoderHeader(name string, fixture map[string]any, segments map[string][]byte, request bool) error {
+func validateNativeEncoderHeader(name string, fixture map[string]any, segments map[string][]byte, request, event bool) error {
+	return validateNativeEncoderHeaderFor(name, fixture, segments, request, event, false)
+}
+
+func validateNativeEncoderHeaderFor(name string, fixture map[string]any, segments map[string][]byte, request, event, control bool) error {
 	metadata, ok := fixture["native_header"].(map[string]any)
 	if !ok {
 		return fmt.Errorf("native proof lacks %s native header metadata", name)
@@ -280,11 +314,20 @@ func validateNativeEncoderHeader(name string, fixture map[string]any, segments m
 		"compat": uint64(binary.LittleEndian.Uint16(h[37:39])), "reserved": uint64(binary.LittleEndian.Uint16(h[39:41])),
 		"front_len": uint64(len(segments["front"])), "middle_len": 0, "data_len": uint64(len(segments["data"])),
 	}
-	typ, compat := uint64(43), uint64(2)
+	typ, compat, version := uint64(43), uint64(2), uint64(6)
 	if request {
 		typ, compat = 42, 3
 	}
-	if expected["type"] != typ || expected["version"] != 6 || expected["compat"] != compat || binary.LittleEndian.Uint32(h[22:26]) != 0 || expected["reserved"] != 0 {
+	if event {
+		typ, compat, version = 44, 1, 3
+	}
+	if control {
+		typ, compat, version = 61, 1, 1
+		if expected["tid"] != 0 || expected["data_len"] != 0 {
+			return fmt.Errorf("native proof has unsupported %s control identity or data", name)
+		}
+	}
+	if expected["type"] != typ || expected["version"] != version || expected["compat"] != compat || binary.LittleEndian.Uint32(h[22:26]) != 0 || expected["reserved"] != 0 {
 		return fmt.Errorf("native proof has unsupported %s header encoding", name)
 	}
 	for field, want := range expected {
@@ -293,6 +336,33 @@ func validateNativeEncoderHeader(name string, fixture map[string]any, segments m
 		if !ok || err != nil || got != want {
 			return fmt.Errorf("native proof has inconsistent %s header %s", name, field)
 		}
+	}
+	return nil
+}
+
+func validateNativeBackoffDecoder(name string, fixture map[string]any, front []byte) error {
+	// The current spg_t occupies 24 bytes, followed by epoch/op/ID. Native
+	// separately decodes all ranges too; these receipts bind its observed
+	// control metadata to the fresh encoded front, without using Go's codec.
+	decoded, ok := fixture["decoded_operations"].([]any)
+	if !ok || len(decoded) != 1 || len(front) < 37 {
+		return fmt.Errorf("native proof lacks %s independent control decoder receipt", name)
+	}
+	op, ok := decoded[0].(map[string]any)
+	if !ok || front[28] < 1 || front[28] > 3 {
+		return fmt.Errorf("native proof has invalid %s control opcode", name)
+	}
+	for field, want := range map[string]uint64{
+		"code": uint64(front[28]), "map_epoch": uint64(binary.LittleEndian.Uint32(front[24:28])), "id": binary.LittleEndian.Uint64(front[29:37]),
+	} {
+		number, ok := op[field].(json.Number)
+		got, err := strconv.ParseUint(number.String(), 10, 64)
+		if !ok || err != nil || got != want {
+			return fmt.Errorf("native proof has inconsistent %s decoded control %s", name, field)
+		}
+	}
+	if _, ok := op["single"].(bool); !ok {
+		return fmt.Errorf("native proof lacks %s decoded control range classification", name)
 	}
 	return nil
 }

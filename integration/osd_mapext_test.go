@@ -37,7 +37,7 @@ func mapExtOracle(t *testing.T, ctx context.Context, name string, offset, length
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(dir, "osd-mapext-input.json"), data, 0600); err != nil {
+	if err = testcluster.WritePublicEvidence(filepath.Join(dir, "osd-mapext-input.json"), data); err != nil {
 		t.Fatal(err)
 	}
 	if err = testcluster.ControlDaemon(ctx, dir, "verify", "osd-mapext", "observe"); err != nil {
@@ -106,7 +106,7 @@ func TestCephOSDMapExtIntegration(t *testing.T) {
 	defer func() {
 		data, err := json.Marshal(evidence)
 		if err == nil {
-			err = os.WriteFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-mapext-results.json"), data, 0600)
+			err = testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-mapext-results.json"), data)
 		}
 		if err != nil {
 			t.Error(err)

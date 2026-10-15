@@ -47,6 +47,7 @@ type Client struct {
 	osdMapWatch   *OSDMapStream
 	osds          map[int32]*OSDConnection
 	osdNext       atomic.Uint64
+	osdGeneration uint64 // guarded by mu; local connection identity, separate from TIDs
 }
 
 // Dial establishes and authenticates a MON connection and verifies a MonMap

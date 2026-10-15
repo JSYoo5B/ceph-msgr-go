@@ -4,9 +4,9 @@ STAT,0x1202,RD,DATA,implemented
 MAPEXT,0x1203,RD,DATA,implemented
 CHECKSUM,0x121f,RD,DATA,implemented
 MASKTRUNC,0x1204,RD,DATA,unsupported
-SPARSE_READ,0x1205,RD,DATA,unsupported
-NOTIFY,0x1206,RD,DATA,unsupported
-NOTIFY_ACK,0x1207,RD,DATA,unsupported
+SPARSE_READ,0x1205,RD,DATA,implemented
+NOTIFY,0x1206,RD,DATA,implemented
+NOTIFY_ACK,0x1207,RD,DATA,implemented
 ASSERT_VER,0x1208,RD,DATA,implemented
 LIST_WATCHERS,0x1209,RD,DATA,implemented
 LIST_SNAPS,0x120a,RD,DATA,implemented
@@ -25,7 +25,7 @@ TMAPPUT,0x220b,WR,DATA,unsupported
 TMAPGET,0x120c,RD,DATA,unsupported
 CREATE,0x220d,WR,DATA,implemented
 ROLLBACK,0x220e,WR,DATA,implemented
-WATCH,0x220f,WR,DATA,unsupported
+WATCH,0x220f,WR,DATA,implemented
 OMAPGETKEYS,0x1211,RD,DATA,implemented
 OMAPGETVALS,0x1212,RD,DATA,implemented
 OMAPGETHEADER,0x1213,RD,DATA,implemented
@@ -76,6 +76,6 @@ PGLS,0x1501,RD,PG,unsupported
 PGLS_FILTER,0x1502,RD,PG,unsupported
 PG_HITSET_LS,0x1503,RD,PG,unsupported
 PG_HITSET_GET,0x1504,RD,PG,unsupported
-PGNLS,0x1505,RD,PG,unsupported
+PGNLS,0x1505,RD,PG,implemented
 PGNLS_FILTER,0x1506,RD,PG,unsupported
 SCRUBLS,0x1507,RD,PG,unsupported

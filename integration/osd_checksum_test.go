@@ -28,7 +28,7 @@ func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, le
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	input, err := json.Marshal(map[string]any{"object": object, "offset": offset, "length": length, "chunk_size": chunk, "seed": seed, "type": 2})
 	if err == nil {
-		err = os.WriteFile(filepath.Join(dir, "osd-checksum-input.json"), input, 0600)
+		err = testcluster.WritePublicEvidence(filepath.Join(dir, "osd-checksum-input.json"), input)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestCephOSDChecksumIntegration(t *testing.T) {
 	defer func() {
 		data, err := json.Marshal(evidence)
 		if err == nil && len(data) <= 512<<10 {
-			err = os.WriteFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-checksum-results.json"), data, 0644)
+			err = testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-checksum-results.json"), data)
 		}
 		if err != nil {
 			t.Error(err)

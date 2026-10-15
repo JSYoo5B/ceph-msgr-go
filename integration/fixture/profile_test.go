@@ -264,8 +264,9 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		for _, proxy := range []string{"", "127.0.0.1:40123"} {
 			got := p.testEnvironment(controlDir, proxy)
 			want := map[string]string{
-				"CEPH_MSGR_MONITORS": p.monAddresses,
-				"CEPH_MSGR_KEY_FILE": filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
+				"CEPH_MSGR_MONITORS":                  p.monAddresses,
+				"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE": "",
+				"CEPH_MSGR_KEY_FILE":                  filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
 				"CEPH_MSGR_TEST_PEERS": p.peers, "CEPH_MSGR_IDENTITY": "client.test", "CEPH_MSGR_FSID": p.fsid,
 				"CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k", "CEPH_MSGR_TEST_MGR_COUNT": "2",
 				"CEPH_MSGR_TEST_EXPIRE_TICKETS": "0", "CEPH_MSGR_TEST_IDLE_SESSIONS": "0",

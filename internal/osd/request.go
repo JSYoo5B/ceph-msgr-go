@@ -62,6 +62,10 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			outputBytes = uint64(op.Omap.MaxOutputBytes)
 		case Call:
 			outputBytes = uint64(op.Class.MaxOutputBytes)
+		case Notify:
+			outputBytes = 8
+		case SparseRead:
+			outputBytes = uint64(op.SparseRead.MaxOutputBytes)
 		case MapExt:
 			outputBytes = uint64(op.MapExt.MaxOutputBytes)
 		case Checksum:
@@ -95,10 +99,15 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		if op.Code == Checksum {
 			payloadBytes = 4
 		}
+		if IsWatchOperation(op.Code) {
+			payloadBytes = WatchDataBytes(op)
+		}
 		if IsOmapOperation(op.Code) {
 			payloadBytes, _ = omapInputBytes(op, limit)
 		}
-		if IsXattrOperation(op.Code) {
+		if IsWatchOperation(op.Code) {
+			EncodeWatchUnion(&e, op)
+		} else if IsXattrOperation(op.Code) {
 			encodeXattrUnion(&e, op)
 			payloadBytes += uint64(len(op.Xattr.Name))
 		} else if op.Code == Call {
@@ -140,6 +149,10 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	e.Struct(2, 2, identity.Data)
 	data := make([]byte, 0, int(dataBytes))
 	for _, op := range r.Operations {
+		if IsWatchOperation(op.Code) {
+			data = AppendWatchData(data, op)
+			continue
+		}
 		if op.Code == Checksum {
 			data = append(data, encodeChecksumData(op.Checksum.Seed)...)
 			continue

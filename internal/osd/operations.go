@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum:
+	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, Watch, Notify, NotifyAck:
 		return true
 	}
 	return false
@@ -25,7 +25,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 	var stagedDigestSize uint64
 	var stagedXattr, stagedOmap, stagedAny, afterCall bool
 	for _, op := range ops {
-		if !SupportedOperation(op.Code) || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
+		if !SupportedOperation(op.Code) || op.Code == PGNLS || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
 			return 0, 0, ErrOperation
 		}
 		if len(op.Data) > math.MaxUint32 {
@@ -33,6 +33,40 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		}
 		if op.Code != AssertVersion && op.Version != 0 {
 			return 0, 0, ErrRequest
+		}
+		if !IsWatchOperation(op.Code) && op.Watch != (WatchInput{}) {
+			return 0, 0, ErrRequest
+		}
+		if IsWatchOperation(op.Code) {
+			if len(ops) != 1 {
+				return 0, 0, ErrOperation
+			}
+			if op.SparseRead != (SparseReadInput{}) {
+				return 0, 0, ErrRequest
+			}
+			mode, inputBytes, err := ValidateWatchOperation(op, limit)
+			if err != nil {
+				return 0, 0, err
+			}
+			flags |= mode
+			total += inputBytes
+			continue
+		}
+		if op.Code != SparseRead && op.SparseRead != (SparseReadInput{}) {
+			return 0, 0, ErrRequest
+		}
+		if op.Code == SparseRead {
+			if len(ops) != 1 {
+				return 0, 0, ErrOperation
+			}
+			if op.MapExt != (MapExtInput{}) || op.Checksum != (ChecksumInput{}) {
+				return 0, 0, ErrRequest
+			}
+			if err := validateSparseReadOperation(op, limit); err != nil {
+				return 0, 0, err
+			}
+			flags |= FlagRead
+			continue
 		}
 		if op.Code != MapExt && op.MapExt != (MapExtInput{}) || op.Code != Checksum && op.Checksum != (ChecksumInput{}) {
 			return 0, 0, ErrRequest
@@ -256,7 +290,7 @@ func writeOperation(code uint16) bool {
 
 func readModeOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, OmapCompare, Call, ListSnaps, ListWatchers, MapExt, Checksum:
+	case Read, Stat, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, OmapCompare, Call, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, Watch, Notify, NotifyAck:
 		return true
 	}
 	return IsOmapOperation(code) && !isOmapMutation(code)

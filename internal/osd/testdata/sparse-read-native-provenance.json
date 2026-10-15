@@ -1,0 +1,250 @@
+{
+  "binary_sha256": "9df83f0b104df5be90de9bcd7eb6c5d55bf1a050dd0c104831c7270769f13493",
+  "build_driver_sha256": "79063616bd6254b2144dd2fb2a0199a57dc3d8c99e80700d3e720ab8c42d819f",
+  "builder_container_id": "ecc160130056d20489623f5e4cc521a67da220d5ebdac94296592ebc9db28a8a",
+  "builder_termination_completed": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "sparse-read-native-reply-v6-eacces": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_operations": [
+        {
+          "code": 4613,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 97,
+          "offset": 3,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -13,
+          "union_hex": "03000000000000006100000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 208,
+      "front_sha256": "b100828501e852361ad26916e57904030ff8428dd759477662d35729de89b151",
+      "header_bytes": 41,
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 208,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      }
+    },
+    "sparse-read-native-reply-v6-empty": {
+      "data_bytes": 8,
+      "data_sha256": "af5570f5a1810b7af78caf4bc70a660f0df51e42baf91d4de5b2328de0e83dfc",
+      "decoded_operations": [
+        {
+          "code": 4613,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 0,
+          "offset": 3,
+          "outdata_hex": "0000000000000000",
+          "payload_len": 8,
+          "result": 0,
+          "union_hex": "03000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 208,
+      "front_sha256": "67a7c0d81f38e110f62f31b7ccfbc466f8ed38e5510eb9816e5a234cfc6a7acb",
+      "header_bytes": 41,
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 8,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 208,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      }
+    },
+    "sparse-read-native-reply-v6-enoent": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_operations": [
+        {
+          "code": 4613,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 97,
+          "offset": 3,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -2,
+          "union_hex": "03000000000000006100000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 208,
+      "front_sha256": "539eb8e19907927305d9dbf32c0f5283eef4c59944001379621301d781e7a5c0",
+      "header_bytes": 41,
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 208,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      }
+    },
+    "sparse-read-native-reply-v6-populated": {
+      "data_bytes": 53,
+      "data_sha256": "bb263f3d6f64a13968914d313464590c54eba50ce14bb77a5200087ec694fd9a",
+      "decoded_operations": [
+        {
+          "code": 4613,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 13,
+          "offset": 3,
+          "outdata_hex": "0200000003000000000000000500000000000000140000000000000008000000000000000d000000410042ff5a3132333435363738",
+          "payload_len": 53,
+          "result": 0,
+          "union_hex": "03000000000000000d00000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 208,
+      "front_sha256": "ca79a0ca6abd721cde3b6723f8862ffa52f2ed2c3103de44b855819072cb9ca2",
+      "header_bytes": 41,
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 53,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 208,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      }
+    },
+    "sparse-read-native-request-v6-map": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_operations": [
+        {
+          "code": 4613,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 97,
+          "offset": 3,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "union_hex": "03000000000000006100000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 218,
+      "front_sha256": "45dcea4f4c58e2cd26a57ac854a3d3714110302f3ace4979252404a48f66d6c0",
+      "header_bytes": 41,
+      "header_sha256": "20e99f0e240771d043a3cbc8fe9bfeadb083e309ec975d2899c2d28a25b4a16e",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 3,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 218,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 42,
+        "version": 6
+      }
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "launcher_sha256": "bb1f03dc7fd133881dd9805e1d4e5948d96b8d54b44ce289de88947831c19e95",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffffabcbc000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffffa8e00000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffffabba8000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffffabb57000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffffa893a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffffabb16000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffffabae5000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffffabac4000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffffa8716000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffffaba93000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffffa8568000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffffabc80000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffffa84c7000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "five fresh native SPARSE_READ message vectors; native extent map and byte-buffer and message decoders verified independently of Go",
+  "wrapper_sha256": "aa94b85319100237602f91954fed39ee4eba453d0e59036a53c5214b5b14cbbf"
+}

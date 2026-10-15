@@ -44,7 +44,9 @@ func DecodeReply(m msgr.MessageData, limit uint32) (Reply, error) {
 		op := &r.Operations[i]
 		op.Code = d.U16()
 		op.Flags = d.U32()
-		if IsXattrOperation(op.Code) {
+		if IsWatchOperation(op.Code) {
+			op.Watch = DecodeWatchUnion(d, op.Code)
+		} else if IsXattrOperation(op.Code) {
 			op.Xattr = decodeXattrUnion(d, op.Code)
 		} else if op.Code == Call {
 			op.Class = decodeClassUnion(d)

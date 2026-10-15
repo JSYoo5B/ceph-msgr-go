@@ -198,7 +198,7 @@ func TestCephOSDListWatchersIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = os.WriteFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-watchers-results.json"), data, 0600); err != nil {
+	if err = testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-watchers-results.json"), data); err != nil {
 		t.Fatal(err)
 	}
 }

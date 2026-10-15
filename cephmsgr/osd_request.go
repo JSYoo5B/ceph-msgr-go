@@ -81,6 +81,8 @@ type OSDOperation struct {
 	Class          OSDClassInput
 	AllocHint      OSDAllocHint
 	Snapshot       uint64
+	Watch          OSDWatchInput
+	SparseRead     OSDSparseReadInput
 	MapExt         OSDMapExtInput
 	Checksum       OSDChecksumInput
 	ListWatchers   OSDListWatchersInput
@@ -153,7 +155,9 @@ type OSDOperationResult struct {
 	// Watchers is decoded on a successful OSDListWatchers; Data keeps raw bytes.
 	Watchers []OSDWatcher
 	// Extents decodes successful MAPEXT output; Data preserves the raw map.
-	Extents []OSDExtent
+	Extents    []OSDExtent
+	SparseRead OSDSparseReadResult
+	Watch      OSDWatchInput
 	// Checksum retains the union on all replies; successful output adds Values.
 	Checksum OSDChecksumResult
 }
@@ -218,6 +222,12 @@ func (e *OSDError) Error() string { return fmt.Sprintf("ceph: OSD result code %d
 // after transmission starts preserves OutcomeUnknownError. Replies expose the
 // wire pg_t, epoch and versions for the caller's routing layer; no retry occurs.
 func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDReply, error) {
+	return o.request(ctx, request, nil)
+}
+
+// Watch operations reserve event ownership before transmission. This private
+// path prevents raw callers from reusing a live stream's cookie on another object.
+func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *OSDWatchStream) (OSDReply, error) {
 	var result OSDReply
 	c := o.client
 	if err := ctx.Err(); err != nil {
@@ -228,6 +238,15 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 	}
 	if len(request.Operations) == 0 || len(request.Operations) > osd.MaxOperations {
 		return result, osd.ErrRequest
+	}
+	for _, op := range request.Operations {
+		if osd.IsWatchOperation(uint16(op.Code)) {
+			if owner == nil || owner.connection != o || owner.cookie != op.Watch.Cookie || owner.request.Object != request.Object || owner.request.ClientIncarnation != request.ClientIncarnation {
+				return result, ErrUnsupportedOSDOperation
+			}
+		} else if owner != nil {
+			return result, ErrUnsupportedOSDOperation
+		}
 	}
 	select {
 	case c.calls <- struct{}{}:
@@ -269,6 +288,8 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 	for i, op := range request.Operations {
 		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
 			AllocHint:    osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},
+			Watch:        watchWireInput(op.Watch),
+			SparseRead:   osd.SparseReadInput{MaxOutputBytes: op.SparseRead.MaxOutputBytes},
 			MapExt:       osd.MapExtInput{MaxOutputBytes: op.MapExt.MaxOutputBytes},
 			Checksum:     osd.ChecksumInput{ChunkSize: op.Checksum.ChunkSize, Type: op.Checksum.Type, Seed: op.Checksum.Seed},
 			ListWatchers: osd.ListWatchersInput{MaxOutputBytes: op.ListWatchers.MaxOutputBytes},
@@ -381,6 +402,16 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 				return err
 			}
 			continue
+		case osd.Watch, osd.Notify, osd.NotifyAck:
+			if err := osd.ValidateWatchReply(requested, op, success); err != nil {
+				return err
+			}
+			continue
+		case osd.SparseRead:
+			if err := osd.ValidateSparseReadReply(requested, op, success); err != nil {
+				return err
+			}
+			continue
 		case osd.MapExt:
 			if err := osd.ValidateMapExtReply(requested, op, success); err != nil {
 				return err
@@ -450,7 +481,11 @@ func publicOSDReply(r osd.Reply) OSDReply {
 			Xattr:     OSDXattrResult{NameLength: op.Xattr.NameLength, ValueLength: op.Xattr.ValueLength, ComparisonOp: op.Xattr.ComparisonOp, ComparisonMode: op.Xattr.ComparisonMode},
 			Class:     OSDClassResult{ClassLength: op.Class.ClassLength, MethodLength: op.Class.MethodLength, Argc: op.Class.Argc, InputLength: op.Class.InputLength, OutputLength: op.Class.OutputLength},
 			AllocHint: OSDAllocHint{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: OSDAllocHintFlags(op.AllocHint.Flags)},
+			Watch:     OSDWatchInput{Cookie: op.Watch.Cookie, Version: op.Watch.Version, NotifyID: op.Watch.NotifyID, Generation: op.Watch.Generation, TimeoutSeconds: op.Watch.TimeoutSeconds, ProtocolVersion: op.Watch.ProtocolVersion, Action: op.Watch.Action},
 			Snapshot:  op.Snap, Checksum: OSDChecksumResult{ChunkSize: op.Checksum.ChunkSize, Type: op.Checksum.Type}}
+		if op.Code == osd.SparseRead && r.Result >= 0 && op.Result >= 0 && r.Redirect.Empty() {
+			result.Operations[i].SparseRead = publicSparseRead(op.Data)
+		}
 		if op.Code == osd.MapExt && r.Result >= 0 && op.Result >= 0 && r.Redirect.Empty() {
 			result.Operations[i].Extents = publicMapExt(op.Data)
 		}

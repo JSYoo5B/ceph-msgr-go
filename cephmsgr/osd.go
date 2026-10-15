@@ -8,6 +8,7 @@ import (
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/osd"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/session"
 )
 
@@ -30,22 +31,24 @@ type OSDTarget struct {
 // connection slot and waits for cleanup; Client.Close also owns its lifetime.
 // A failed handle is not automatically reconnected and requests are not replayed.
 type OSDConnection struct {
-	client      *Client
-	target      OSDTarget
-	address     msgr.Address
-	ctx         context.Context
-	cancel      context.CancelFunc
-	setupDone   chan struct{}
-	closeOnce   sync.Once
-	closed      bool // guarded by client.mu, as are session and setupErr
-	session     *session.Session
-	setupErr    error
-	features    uint64
-	globalID    uint64
-	mapQueue    []queuedOSDMap // guarded by client.mu
-	mapBytes    uint64
-	mapTerminal error
-	mapChanged  chan struct{}
+	client       *Client
+	target       OSDTarget
+	address      msgr.Address
+	ctx          context.Context
+	cancel       context.CancelFunc
+	setupDone    chan struct{}
+	closeOnce    sync.Once
+	closed       bool // guarded by client.mu, as are session and setupErr
+	session      *session.Session
+	setupErr     error
+	features     uint64
+	globalID     uint64
+	watchState   *osdWatchState   // guarded by client.mu
+	generation   uint64
+	mapQueue     []queuedOSDMap // guarded by client.mu
+	mapBytes     uint64
+	mapTerminal  error
+	mapChanged   chan struct{}
 }
 
 // OpenOSD authenticates an OSD service connection using this client's MON-issued
@@ -102,8 +105,13 @@ func (c *Client) OpenOSD(ctx context.Context, target OSDTarget) (*OSDConnection,
 		c.mu.Unlock()
 		return nil, ErrOSDConnectionLimit
 	}
+	if c.osdGeneration == ^uint64(0) {
+		c.mu.Unlock()
+		return nil, errors.New("ceph: OSD connection generations exhausted")
+	}
+	c.osdGeneration++
 	base, cancel := context.WithCancel(c.ctx)
-	o := &OSDConnection{client: c, target: target, address: address, ctx: base, cancel: cancel, setupDone: make(chan struct{}), mapChanged: make(chan struct{})}
+	o := &OSDConnection{client: c, target: target, address: address, ctx: base, cancel: cancel, setupDone: make(chan struct{}), mapChanged: make(chan struct{}), generation: c.osdGeneration}
 	c.osds[target.ID] = o
 	c.wg.Add(1)
 	c.mu.Unlock()
@@ -178,9 +186,12 @@ func (o *OSDConnection) open(ctx context.Context) error {
 			if m.Type == msgr.OSDMapMessage {
 				return o.handleMap(s, m)
 			}
+			if m.Type == osd.WatchNotifyMessage {
+				return o.handleWatch(s, m)
+			}
 			// Other routing and backoff instructions remain unsupported.
 			return fmt.Errorf("%w: unsupported OSD control message %d", msgr.ErrFeatures, m.Type)
-		}, o.stopMaps)
+		}, func(err error) { o.stopMaps(err); o.stopWatch(err) })
 		c.mu.Lock()
 		stale := c.closed || o.closed || c.authErr != nil || c.auth.GlobalID != auth.GlobalID
 		if !stale {

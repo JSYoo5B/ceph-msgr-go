@@ -364,6 +364,54 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-watch-notify")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || (fields[1] != "start" && fields[1] != "observe" && fields[1] != "finish") {
+			return errors.New("invalid native watch notify oracle request")
+		}
+		args := []string{"python3", "/out/osd_watch_notify_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-watch-notify-command.json", "native watch notify oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-watch-notify-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+	fields, err = c.request(out, "verify-osd-sparse-read")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || fields[1] != "observe" {
+			return errors.New("invalid native sparse-read oracle request")
+		}
+		args := []string{"python3", "/out/osd_sparse_read_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-sparse-read-command.json", "native sparse-read oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-sparse-read-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+	fields, err = c.request(out, "verify-osd-pg-list")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || fields[1] != "observe" {
+			return errors.New("invalid native pg-list oracle request")
+		}
+		args := []string{"python3", "/out/osd_pg_list_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-pg-list-command.json", "native pg-list oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-pg-list-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-osd-checksum")
 	if err != nil {
 		return err

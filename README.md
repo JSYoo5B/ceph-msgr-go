@@ -444,6 +444,33 @@ CRC를 반환하며 요청 길이는 chunk 크기의 배수여야 한다.
 암묵적 전체 읽기는 거절한다. [CHECKSUM 계약](internal/osd/CHECKSUM_CONTRACT.md)과
 [실검증 기록](integration/fixture/OSD_READ_METADATA_VALIDATION.md)에 범위를 구분했다.
 
+`OSDSparseRead`는 단독 head 요청의 `Offset`·양수 `Length`에서 할당 구간과
+그 구간의 bytes를 함께 읽는다. `SparseRead.MaxOutputBytes`는 encoded extent map과
+byte buffer 전체의 로컬 출력 한도다(최소 8 bytes). 성공한
+`Operations[0].SparseRead`는 순서가 있는 `Extents`와 이어 붙인 `Data`를 제공하고,
+원본 encoded 출력은 operation의 `Data`에 남는다. 결과 `Length`는 반환된
+데이터 길이이며 hole은 포함하지 않는다. [계약](internal/osd/SPARSE_READ_CONTRACT.md)에
+범위·EOF·오류 검증을 정리했다.
+
+`ListPG`는 caller가 지정한 실제 PG와 primary OSD에 `PGNLS` 한 페이지를 보낸다.
+`OSDPGListRequest.PG.Seed`는 이미 접힌 실제 PG seed이며, `Primary`는 해당 연결의
+OSD ID와 같아야 한다. 최초 `Cursor`는 비워 두고 이후에는 직전 `Cursor.Raw`를
+그대로 넘긴다. `Count`는 서버 entry 한도이고 `MaxOutputBytes`는 로컬 수신 한도다.
+빈 페이지도 계속될 수 있으므로 `End`로 종료를 판단한다. `Namespace="\x01"`은
+모든 namespace를 지정한다. pool 순회·배치·epoch 변경·재시도는 caller 책임이다.
+[PG 열거 계약](internal/osd/PG_LIST_CONTRACT.md)에 cursor와 aggregate result를 구분했다.
+
+`WatchObject`는 명시적인 등록과 `Next` 이벤트 수신을, `NotifyObject`는 일반
+operation reply와 별도 completion 이벤트를 제공한다. 두 API는 `Operations`가 빈
+`OSDRequest`의 대상·객체 metadata와 `OSDWatchOptions`를 받는다. 등록 뒤 `Ping`,
+알림 처리 뒤 `Acknowledge`, 원격 해제 `Unwatch`는 caller가 명시적으로 호출한다.
+로컬 `Close`는 원격 해제가 아니며 자동 ping·ACK·재등록·notify 재실행은 없다.
+큐는 stream별 64개와 지정한 byte 한도로 제한하고 접수한 이벤트 뒤 최초 오류를
+전달한다. completion의 signed timeout·partial replies·missed identities와 원본
+front/data를 보존한다. 직접 `Request`로 watch opcode를 보내는 경로는 거절한다.
+[watch/notify 계약](internal/osd/WATCH_NOTIFY_CONTRACT.md)에 인증 identity·연결 세대와
+cookie 소유권·불확실한 송신 결과의 의미를 기록했다.
+
 `OSDListWatchers`는 head 객체의 현재 watcher 등록 목록을 읽는다. 단독 요청만
 허용하며 `ListWatchers.MaxOutputBytes`로 수신 출력의 로컬 한도를 지정한다(최소
 10 bytes). 성공하면 `Operations[0].Watchers`에 watcher entity·cookie·등록 timeout·

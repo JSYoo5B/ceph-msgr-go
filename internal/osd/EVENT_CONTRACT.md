@@ -3,8 +3,9 @@
 Reference: Ceph 20.2.4, commit
 `7f793731f1b39eb4f465e960113d2363c311b964`.
 Source and product audit: 2026-10-15. This document completes a bounded source
-inventory for O0; it does not implement O3 events, advertise additional features or
-establish native event interoperability. [CONTRACT.md](CONTRACT.md) defines
+inventory for O0, updated for the bounded O3 watch/notify implementation. No
+additional features are advertised. [WATCH_NOTIFY_CONTRACT.md](WATCH_NOTIFY_CONTRACT.md)
+records its implementation and verification boundary. [CONTRACT.md](CONTRACT.md) defines
 current object vectors and their completion/uncertainty contract.
 
 ## Current O1 boundary
@@ -14,9 +15,9 @@ OSDMap publications, backoff instructions, watch notifications and OSD command
 replies. These are separate message classes, not interchangeable operation
 results. The first two are the required application messages for the current
 explicit-target, head-only replicated O1 profile. Backoff generation is gated
-by a feature the Go OSD session omits. Watch events require registration or a
-notify operation, whose opcodes the current product rejects before submission.
-OSD commands belong to the separate D1 milestone. This inventory is for the
+by a feature the Go OSD session omits. Watch events use the cookie reserved by
+WatchObject or NotifyObject; raw object Request cannot submit these operations.
+OSD commands are implemented in the separate D1 milestone. This inventory is for the
 client public connection; replication, recovery, peering and heartbeat messages
 on daemon connections remain final fixture requirements, not client codecs.
 
@@ -25,7 +26,7 @@ on daemon connections remain final fixture requirements, not client codecs.
 | 41 / 0x29 | MOSDMap | Implemented bounded FIFO; caller applies maps | Authenticated connection and cluster FSID; map epochs, not pending operation TID |
 | 42 / 0x2a | MOSDOp | Only supported request vector sent | Authenticated client, incarnation, header TID, attempt zero |
 | 43 / 0x2b | MOSDOpReply | Matched to a started pending request; validated against vector | Header TID plus returned wire identity/metadata |
-| 44 / 0x2c | MWatchNotify | Unsupported; fails OSD session | Registration/notify cookie and notify ID; not a pending call TID |
+| 44 / 0x2c | MWatchNotify | Bounded per-stream FIFO with explicit acknowledgement | Registration/notify cookie and notify ID; not a pending call TID |
 | 61 / 0x3d | MOSDBackoff | Unsupported; fails OSD session | Current connection, actual PG/shard, connection-local backoff ID |
 
 Message numbers come from [ceph_fs.h][ids]. Application message headers are
@@ -33,8 +34,8 @@ separate from msgr2 frame tags. Messenger sequence ACK and keepalive/keepalive
 ACK remain session transport controls; none supplies object ONDISK completion,
 notify acknowledgement, map application or permission to replay a mutation.
 
-The current [OSD callback](../../cephmsgr/osd.go) accepts only MOSDMap outside
-normal reply dispatch and otherwise returns `ErrUnsupportedFeatures`.
+The current [OSD callback](../../cephmsgr/osd.go) accepts MOSDMap and MWatchNotify
+outside normal reply dispatch and otherwise returns `ErrUnsupportedFeatures`.
 [Session dispatch](../session/session.go) matches reply type and header TID;
 late replies with no pending TID are discarded. A non-reply event must never be
 fed to this pending-call path, even if its header TID numerically equals an
@@ -166,9 +167,9 @@ object locator to recover that association on its own.
 
 The standalone head LIST_WATCHERS `0x1209` observation is implemented in
 [WATCHERS_CONTRACT.md](WATCHERS_CONTRACT.md), with native acceptance recorded
-separately. It does not register or renew a watch. Required event companion
-operations remain unsupported: WATCH `0x220f`, NOTIFY `0x1206`, NOTIFY_ACK `0x1207`. Their packed unions
-and [ObjectOperation builders][watch-ops] require separate codecs. WATCH stores
+separately. It does not register or renew a watch. Event companion operations
+WATCH `0x220f`, NOTIFY `0x1206`, NOTIFY_ACK `0x1207` now have separate codecs and
+owner-bound APIs. Their packed unions follow the [ObjectOperation builders][watch-ops]. WATCH stores
 cookie, unused version, action, registration generation and timeout; actions
 are UNWATCH 0, WATCH 3, RECONNECT 5, PING 7. Historical action 1 is not an excuse
 to add older-release behavior. NOTIFY stores a cookie and input protocol
@@ -176,32 +177,33 @@ version u32, timeout u32, length-prefixed user blob. NOTIFY_ACK input is notify
 ID u64, cookie u64 and length-prefixed reply blob. Receiving a notification must
 not generate NOTIFY_ACK before the caller elects to acknowledge its handling.
 
-Future registration lifetime must distinguish local cancellation, explicit
-UNWATCH submission, server DISCONNECT, failed connection, renewal/PING and
-caller-directed RECONNECT. No implicit re-registration or replay of a notify
+The implemented registration lifetime distinguishes local cancellation, explicit
+UNWATCH submission, server DISCONNECT, failed connection and renewal/PING.
+RECONNECT has a native-tested wire codec; its public recovery lifetime remains
+unimplemented. No implicit re-registration or replay of a notify
 is authorized by ticket renewal. Bounded per-registration event queues, byte
 ownership, overflow terminal cause, concurrent Next cancellation, late delivery
-and Client Close need an explicit public contract before feature claims. Raw
+and Client Close are defined in WATCH_NOTIFY_CONTRACT.md. Raw
 server codes and completion data remain available; lock schema, RBD policy and
 user callback decisions remain outside this repository.
 
 ## Acceptance work
 
-This source inventory is documentation evidence. The new O0-E2/E3 tests are
-synthetic dispatch/admission acceptance, not native event evidence. Existing
-map/reply tests and
-native O1 records establish only their described paths. No watch/backoff native
-recipe, new codec or product feature was validated by writing this document.
+The original O0-E2/E3 inventory tests are synthetic dispatch/admission evidence.
+Watch/notify now also has 16 fresh native request/reply/event vectors and an
+independent native watcher/notifier fixture. Backoff delivery and combined
+feature semantics remain unverified. Existing records establish only their
+described paths; a source inventory alone establishes no interoperability.
 
 | Work ID | Concrete check | Current status / next prerequisite |
 | --- | --- | --- |
 | O0-E1 | Interleave maps before reply, preserve FIFO/ownership; cancel Next, overflow, malformed/foreign FSID, Close with pending mutation | Existing synthetic map tests; current native stale-map delivery recorded separately. Reuse exact-head results; add new cases only for uncovered behavior. |
 | O0-E2 | Inject valid type 44 and 61 controls with TID zero and with a pending mutation's TID; prove they cannot complete that call, preserve unsupported cause and uncertain submission, no retry | Synthetic `TestUnsupportedOSDControlsCannotCompleteOrReplaySentMutation` passes all four type/TID combinations under the race detector; source-derived payloads, no native event proof. |
 | O0-E3 | Assert role-4 feature mask omits bit 21 and MON admission bits; require combined bit-21 feature and observe pre-object rejection | Existing mask test covers omission/admission boundaries. Synthetic `TestOSDHandshakeRejectsCombinedBackoffRequirementBeforeApplication` passes under the race detector, with peer-observed EOF before any application frame. |
-| O3-E1 | Fresh native encoder/decoder vectors for spg_t/hobject bounds, BLOCK/ACK_BLOCK/UNBLOCK and all current watch events; reject malformed count/length/version/opcodes | No native event vectors. Build independent oracle first; product encoder round trips alone do not suffice. |
+| O3-E1 | Fresh native encoder/decoder vectors for spg_t/hobject bounds, BLOCK/ACK_BLOCK/UNBLOCK and all current watch events; reject malformed count/length/version/opcodes | Watch/notify has 16 fresh native vectors; malformed and ownership cases are synthetic. Native backoff vectors remain pending. |
 | O3-E2 | Native PG-wide and single-object block; observe original-epoch ACK and server unblock, split/connection replacement, zero automatic replay, cancellation/Close while blocked | Requires public fixture recipe and combined O3/O4 feature/identity contract; unverified. Config alone does not prove an event occurred. |
-| O3-E3 | Native watcher and notifier on disposable objects; binary NOTIFY, explicit ACK reply, completion data, partial timeout, DISCONNECT, reconnect/renewal | Requires unsupported companion opcode contracts and fixture oracle; unverified. Keep notifier/watcher identities distinct. |
-| O3-E4 | Queue overflow, duplicate/late/unknown cookie and notify ID, reused backoff ID across sessions, concurrent waits and Close; retained bytes and stable first cause | Public event lifetime/error policy undecided; no implementation or acceptance yet. |
+| O3-E3 | Native watcher and notifier on disposable objects; binary NOTIFY, explicit ACK reply, completion data, partial timeout, DISCONNECT, reconnect/renewal | CRC/AES host 3 BlueStore and secure/AES256K IPv6 container single MemStore each cover binary notify/ACK, two native watchers, partial timeout, explicit ping/unwatch. Live DISCONNECT/reconnect and failover remain unverified. |
+| O3-E4 | Queue overflow, duplicate/late/unknown cookie and notify ID, reused backoff ID across sessions, concurrent waits and Close; retained bytes and stable first cause | Watch queue/lifetime policy is implemented with synthetic race regressions, including authentication replacement and early completion correlation. Backoff identity/session acceptance remains pending. |
 
 ## Source provenance
 
