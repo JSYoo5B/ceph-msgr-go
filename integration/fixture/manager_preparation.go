@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
@@ -13,11 +14,22 @@ import (
 // authentication attempt or repeats the mutation under test.
 type managerPreparationBackend struct {
 	observe   func(context.Context) (managerPreparationMap, error)
-	rejection func(context.Context, string) (string, error)
+	rejection func(context.Context, string) (managerRefusal, error)
 	stop      func(context.Context, string) error
 	start     func(context.Context, string) error
 	record    func(managerPreparationReceipt) error
 	wait      func(context.Context) error
+}
+
+// managerRefusal is one latest-process refusal observation for an owned
+// daemon: its latest exact MonClient -13 line, and the global IDs whose
+// reclaim the owned MONs refused for that daemon's entity since the same
+// process started. A ceph-mgr runs several MonClients (the beacon client whose
+// global_id is the MgrMap GID, and module clients), so the line alone does not
+// say which client lost its MON session.
+type managerRefusal struct {
+	Line    string
+	Refused []uint64
 }
 
 type managerPreparationMap struct {
@@ -26,15 +38,22 @@ type managerPreparationMap struct {
 }
 
 type managerPreparationReceipt struct {
-	ObservedAt      time.Time `json:"observed_at"`
-	Daemon          string    `json:"daemon"`
-	NativeRejection string    `json:"native_rejection"`
-	Epoch           uint32    `json:"epoch"`
-	Registered      bool      `json:"registered"`
-	GID             uint64    `json:"gid"`
-	Action          string    `json:"action"`
+	ObservedAt       time.Time `json:"observed_at"`
+	Daemon           string    `json:"daemon"`
+	NativeRejection  string    `json:"native_rejection"`
+	RefusedGlobalIDs []uint64  `json:"refused_global_ids"`
+	Epoch            uint32    `json:"epoch"`
+	Registered       bool      `json:"registered"`
+	GID              uint64    `json:"gid"`
+	Action           string    `json:"action"`
 	ceph.ManagerStatus
 }
+
+const (
+	managerActionRegisteredRefusal = "observe native refusal in registered slot before independent failover"
+	managerActionRestoreMissing    = "restore missing native daemon before independent failover"
+	managerActionOtherClient       = "observe native refusal of a non-registered MonClient; registered slot retained"
+)
 
 func managerPreparationIdentities(state managerPreparationMap, names map[string]bool) (map[string]uint64, error) {
 	if state.Epoch == 0 || (state.ActiveName == "") != (state.ActiveGID == 0) || state.Available && state.ActiveGID == 0 {
@@ -70,12 +89,14 @@ func prepareManagerFailoverWithBackend(parent context.Context, owned []string, b
 	defer cancel()
 	names := map[string]bool{owned[0]: true, owned[1]: true}
 	type refusalState struct {
-		first           string
+		first           managerRefusal
 		observedPresent bool
+		stale           bool // The MONs refused the registered GID itself.
 		restarted       bool
 		gids            map[uint64]bool
 	}
 	refused := make(map[string]*refusalState)
+	retained := make(map[string]string)
 	wait := backend.wait
 	if wait == nil {
 		wait = func(call context.Context) error {
@@ -95,13 +116,16 @@ func prepareManagerFailoverWithBackend(parent context.Context, owned []string, b
 		}
 		// A grace-retained map entry is not a live MonClient health observation.
 		// Read latest-process refusals before considering membership ready.
-		rejections := make(map[string]string)
+		refusals := make(map[string]managerRefusal)
 		for _, name := range owned {
-			line, err := backend.rejection(ctx, name)
+			refusal, err := backend.rejection(ctx, name)
 			if err != nil {
 				return err
 			}
-			rejections[name] = line
+			if refusal.Line == "" && len(refusal.Refused) != 0 || slices.Contains(refusal.Refused, 0) {
+				return fmt.Errorf("invalid native refusal attribution for mgr.%s", name)
+			}
+			refusals[name] = refusal
 		}
 		state, err := backend.observe(ctx)
 		if err != nil {
@@ -117,41 +141,62 @@ func prepareManagerFailoverWithBackend(parent context.Context, owned []string, b
 		blocked := false
 		for _, name := range owned {
 			gid := identities[name]
-			line := rejections[name]
+			refusal := refusals[name]
+			line := refusal.Line
 			entry := refused[name]
-			record := func(rejection, action string) error {
+			record := func(evidence managerRefusal, action string) error {
 				return backend.record(managerPreparationReceipt{
-					ObservedAt: time.Now().UTC(), Daemon: "mgr." + name, NativeRejection: rejection,
-					Epoch: state.Epoch, Registered: gid != 0, GID: gid, Action: action, ManagerStatus: state.ManagerStatus,
+					ObservedAt: time.Now().UTC(), Daemon: "mgr." + name, NativeRejection: evidence.Line,
+					RefusedGlobalIDs: evidence.Refused, Epoch: state.Epoch, Registered: gid != 0, GID: gid,
+					Action: action, ManagerStatus: state.ManagerStatus,
 				})
 			}
-			if line != "" && entry == nil {
-				entry = &refusalState{first: line, observedPresent: gid != 0, gids: make(map[uint64]bool)}
-				refused[name] = entry
-				action := "observe native refusal in registered slot before independent failover"
-				if gid == 0 {
-					action = "restore missing native daemon before independent failover"
+			if line == "" {
+				// A clean respawn with an old map GID cannot claim restoration.
+				blocked = blocked || entry != nil && (gid == 0 || entry.gids[gid])
+				continue
+			}
+			registeredRefused := slices.Contains(refusal.Refused, gid)
+			// CephxServiceHandler.cc:111-143 names the global_id whose reclaim
+			// a MON refused. When every refused ID belongs to another MonClient
+			// of this process, the registered beacon client was not refused.
+			// Unattributed (empty) evidence never takes this branch, and neither
+			// does a slot already proven stale or a daemon already restarted.
+			if gid != 0 && len(refusal.Refused) != 0 && !registeredRefused && (entry == nil || !entry.stale && !entry.restarted) {
+				if key := fmt.Sprint(line, refusal.Refused); retained[name] != key {
+					retained[name] = key
+					if err := record(refusal, managerActionOtherClient); err != nil {
+						return err
+					}
 				}
-				if err := record(line, action); err != nil {
+				continue
+			}
+			if entry == nil {
+				entry = &refusalState{first: refusal, observedPresent: gid != 0, gids: make(map[uint64]bool)}
+				refused[name] = entry
+				action := managerActionRegisteredRefusal
+				if gid == 0 {
+					action = managerActionRestoreMissing
+				}
+				if err := record(refusal, action); err != nil {
 					return err
 				}
 			}
-			if entry == nil {
-				continue
-			}
-			if line != "" && gid != 0 {
+			entry.stale = entry.stale || registeredRefused
+			if gid != 0 {
 				entry.gids[gid] = true
 			}
-			// A clean respawn with an old map GID cannot claim restoration.
-			// A new GID in a process still carrying -13 cannot claim it either.
-			blocked = blocked || line != "" || gid == 0 || entry.gids[gid]
-			if gid != 0 || line == "" || entry.restarted {
+			// A registered GID the MONs refused, or a refusal they did not
+			// attribute, cannot satisfy readiness. A new GID in a process still
+			// carrying such a -13 cannot claim it either.
+			blocked = true
+			if gid != 0 || entry.restarted {
 				continue
 			}
 			// MgrMonitor.cc:747-798 retains registrations until beacon expiry.
 			// Actual map absence, rather than a fixed grace sleep, is the barrier.
 			if entry.observedPresent {
-				if err := record(entry.first, "restore missing native daemon before independent failover"); err != nil {
+				if err := record(entry.first, managerActionRestoreMissing); err != nil {
 					return err
 				}
 			}

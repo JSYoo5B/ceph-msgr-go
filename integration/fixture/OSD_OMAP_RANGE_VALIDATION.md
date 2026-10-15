@@ -41,6 +41,7 @@ rados CLI.
 | Actual profile | Observed result |
 | --- | --- |
 | CRC/AES entity/service, IPv4, Darwin arm64 host relay, three BlueStore/min2 | 8/8 subcases in 6.65s on the first run; OMAP writes 17/17 and comparison 25/25 passed in the same run |
+| secure/AES256K entity/service, IPv4, Linux arm64 container, three BlueStore/min2, CGO0 binaries | whole OSD suite 26/26 top-level, range removal 8/8; no FAIL/SKIP |
 
 | Case | Observation |
 | --- | --- |
@@ -54,7 +55,8 @@ rados CLI.
 
 Native cleanup removed every owned name; owned containers and network were
 independently absent afterwards. Logs and diagnostics:
-`/tmp/ceph-omap-range-crc-aes-20261015-first`.
+`/tmp/ceph-omap-range-crc-aes-20261015-first` and
+`/tmp/ceph-osd-whole-secure-aes256k-container-range-20261015-first`.
 
 ```sh
 CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
