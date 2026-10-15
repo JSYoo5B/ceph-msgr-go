@@ -197,7 +197,7 @@ func (x *mdsSessionsControl) request(ctx context.Context, action string, gids ..
 }
 
 func checkNativeOpenSession(n *nativeMDSSession, identity string, metadata map[string]string) error {
-	declared := nativeFeatureBits(cephmsgr.MDSClientFeatures())
+	declared := nativeFeatureBits(cephmsgr.MDSSessionClientFeatures())
 	if n == nil || n.State != "open" || n.AuthType != "client" || n.AuthID != strings.TrimPrefix(identity, "client.") || n.EntityType != "client" || n.Address == "" || n.Caps != 0 || n.Leases != 0 ||
 		n.ClientFeatures != declared || n.ClientFeatures != "0x00000000000001ff" || n.MetricFlags != "0x0" || !maps.Equal(n.Metadata, metadata) {
 		return fmt.Errorf("native open session differs from the declared client: %+v", n)
@@ -330,7 +330,7 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 			Dials        map[string][2]uint32       `json:"mds_osd_dials"`
 			CaseMillis   map[string]int64           `json:"case_ms"`
 			ElapsedMilli int64                      `json:"elapsed_ms"`
-		}{mdsFreshSource, oracle, target, hex.EncodeToString(cephmsgr.MDSClientFeatures()), sessions, receipts, dials, caseTimes, time.Since(started).Milliseconds()})
+		}{mdsFreshSource, oracle, target, hex.EncodeToString(cephmsgr.MDSSessionClientFeatures()), sessions, receipts, dials, caseTimes, time.Since(started).Milliseconds()})
 		if err == nil && len(data) > 8<<20 {
 			err = errors.New("MDS sessions evidence exceeds bound")
 		}
@@ -773,7 +773,7 @@ func TestMDSSessionNativeOpenImages(t *testing.T) {
 	if err != nil || open.Op != mds.SessionOpen || hex.EncodeToString(open.SupportedFeatures) != mdsSessionNativeSupportedHex || hex.EncodeToString(open.MetricFlags) != mdsSessionNativeMetricHex {
 		t.Fatal("native OPEN vector feature images differ from the acceptance constants", open, err)
 	}
-	if got := nativeFeatureBits(cephmsgr.MDSClientFeatures()); got != "0x00000000000001ff" {
+	if got := nativeFeatureBits(cephmsgr.MDSSessionClientFeatures()); got != "0x00000000000001ff" {
 		t.Fatal("declared client features do not print as bits 0-8", got)
 	}
 	for raw, want := range map[string]string{"": "0x0", "ff01": "0x00000000000001ff", "000000000000000001": "0x00000000000000010000000000000000"} {

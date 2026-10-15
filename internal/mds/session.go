@@ -140,10 +140,10 @@ func EncodeRequestOpen(metadata map[string]string, features []byte) msgr.Message
 }
 
 // EncodeSessionControl builds a head-only client message (REQUEST_RENEWCAPS,
-// REQUEST_CLOSE or FLUSHMSG_ACK). With empty metadata and features the native
+// REQUEST_CLOSE, FLUSHMSG_ACK or REQUEST_FLUSH_MDLOG). With empty metadata and features the native
 // encoder selects header version 1, so oldest_client_tid is not transmitted.
 func EncodeSessionControl(op uint32, seq uint64) (msgr.MessageData, error) {
-	if op != SessionRequestRenewCaps && op != SessionRequestClose && op != SessionFlushMessageAck {
+	if op != SessionRequestRenewCaps && op != SessionRequestClose && op != SessionFlushMessageAck && op != SessionRequestFlushMDLog {
 		return msgr.MessageData{}, ErrSession
 	}
 	e := wire.Encoder{}

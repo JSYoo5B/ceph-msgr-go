@@ -66,10 +66,22 @@ const (
 	MDSSessionOpForceReadOnly = mds.SessionForceReadOnly
 )
 
-// MDSClientFeatures is the exact CephFS client feature bitset declared in
-// REQUEST_OPEN (raw little-endian feature_bitset_t image). It is fixed by the
-// implemented message formats and cannot be widened by the caller.
-func MDSClientFeatures() []byte { return slices.Clone(mds.ClientFeatures) }
+// MDSSessionClientFeatures is the CephFS client feature bitset a session
+// declares without EnableCephFS: bits 0-8 (raw little-endian feature_bitset_t).
+func MDSSessionClientFeatures() []byte { return slices.Clone(mds.ClientFeatures) }
+
+// MDSCephFSClientFeatures is the bitset an EnableCephFS session declares:
+// bits 0-9, 15 and 18-20 (see MDS_CEPHFS_CONTRACT.md).
+func MDSCephFSClientFeatures() []byte { return slices.Clone(mds.CephFSClientFeatures) }
+
+// MDSClientFeatures is the exact bitset this client declares in REQUEST_OPEN.
+// It is fixed by the selected profile and cannot be widened by the caller.
+func (c *Client) MDSClientFeatures() []byte {
+	if c.options.EnableCephFS {
+		return MDSCephFSClientFeatures()
+	}
+	return MDSSessionClientFeatures()
+}
 
 // MDSFeatureBitsetHas tests one bit in a raw feature_bitset_t byte image, such
 // as MDSSessionOpenInfo.SupportedFeatures or MDSMap.RequiredClientFeatures.
@@ -116,6 +128,9 @@ type MDSSessionOptions struct {
 // EnableCephFS it can also be a counted push: Caps (0x310, Transaction is the
 // flush TID of FLUSH_ACK), Lease (0x311), Snap (0x312) or Quota (0x314).
 type MDSSessionEvent struct {
+	// Arrival orders every reply, push and session event of this session in
+	// receive order (shared with MDSReply.Arrival), starting at 1.
+	Arrival            uint64
 	Type               uint16
 	Transaction        uint64
 	Caps               *MDSCaps
@@ -140,9 +155,9 @@ type MDSSessionRenewal struct {
 }
 
 // MDSSessionStatus is a copy of local session state. Generation counts
-// OpenSession calls of this Client. PushSequence counts MDS messages the
-// server sequences against REQUEST_CLOSE; it stays zero in this stage because
-// capability, lease, snapshot and quota messages are unsupported.
+// OpenSession and ReconnectSession calls of this Client. PushSequence counts
+// the capability, lease, snapshot and quota messages the MDS sequences
+// against REQUEST_CLOSE (EnableCephFS only; zero otherwise).
 type MDSSessionStatus struct {
 	State                                      MDSSessionState
 	Generation, ConnectionGeneration, GlobalID uint64
@@ -155,9 +170,10 @@ type MDSSessionStatus struct {
 	Err                                        error
 }
 
-// MDSSession is one CephFS client session on an MDSConnection. It implements
-// session open/renew/close and event delivery only: no metadata request,
-// capability, lease, reconnect or replay exists in this stage.
+// MDSSession is one CephFS client session on an MDSConnection: open, renew,
+// close and session events, plus (with EnableCephFS) metadata requests, MDS
+// pushes, explicit capability/lease answers and reconnect. The library keeps
+// no inode, capability or cache state of its own.
 type MDSSession struct {
 	conn          *MDSConnection
 	generation    uint64
@@ -188,6 +204,8 @@ type MDSSession struct {
 	// reconnectFrom is the generation of the Lost session this one
 	// reconnects (zero for a fresh REQUEST_OPEN).
 	reconnectFrom uint64
+	// arrival numbers dispatched replies, pushes and session messages.
+	arrival uint64
 }
 
 // OpenSession sends one REQUEST_OPEN on this connection and waits for OPEN.
@@ -415,6 +433,34 @@ func (s *MDSSession) Renew(ctx context.Context) (MDSSessionRenewal, error) {
 			return MDSSessionRenewal{}, ctx.Err()
 		}
 	}
+}
+
+// FlushJournal asks the MDS to flush its journal now (REQUEST_FLUSH_MDLOG,
+// as native Client::flush_mdlog does) so pending unsafe requests become safe
+// sooner. The MDS sends no answer; safe replies remain the only completion
+// signal. ctx governs write admission only.
+func (s *MDSSession) FlushJournal(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	state, err, features := s.state, s.err, s.open.SupportedFeatures
+	s.mu.Unlock()
+	if state.terminal() {
+		return err
+	}
+	if state == MDSSessionOpening {
+		return errors.New("ceph: MDS session is not open")
+	}
+	// Native clients send this only to MDSs advertising LUMINOUS (bit 7).
+	if !mds.FeatureBitsetHas(features, 7) {
+		return ErrMDSRequestFeatures
+	}
+	message, err := mds.EncodeSessionControl(mds.SessionRequestFlushMDLog, 0)
+	if err != nil {
+		return err
+	}
+	return s.conn.session.SendControl(ctx, message)
 }
 
 // AcknowledgeFlush sends FLUSHMSG_ACK for a FLUSHMSG event's sequence. The
@@ -645,7 +691,8 @@ func (s *MDSSession) dispatch(message mds.ClientSession, received time.Time) err
 		s.mu.Unlock()
 		return fmt.Errorf("%w: MDS session message after terminal state", msgr.ErrFrame)
 	}
-	event := MDSSessionEvent{Type: mds.ClientSessionMessage, Op: message.Op, Sequence: message.Sequence, MaxCaps: message.MaxCaps, MaxLeases: message.MaxLeases,
+	s.arrival++
+	event := MDSSessionEvent{Arrival: s.arrival, Type: mds.ClientSessionMessage, Op: message.Op, Sequence: message.Sequence, MaxCaps: message.MaxCaps, MaxLeases: message.MaxLeases,
 		Flags: message.Flags, Metadata: message.Metadata, SupportedFeatures: message.SupportedFeatures, Received: received}
 	var terminal MDSSessionState
 	var cause error
@@ -835,6 +882,8 @@ func (m *MDSConnection) dispatchCephFS(message msgr.MessageData) error {
 	// Every capability, lease, snapshot and quota push is counted by the MDS
 	// (send_message_client_counted) and by the native client (got_mds_push).
 	s.push++
+	s.arrival++
+	event.Arrival = s.arrival
 	closing := s.state == MDSSessionClosing
 	err = s.pushEventLocked(event)
 	if err == nil {

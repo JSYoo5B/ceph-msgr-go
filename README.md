@@ -411,7 +411,13 @@ release, lease 응답은 호출자가 `SendCaps`·`ReleaseCaps`·`SendLease`로 
 구현하지 않으며 상위 레이어가 담당한다. [CephFS 계약](cephmsgr/MDS_CEPHFS_CONTRACT.md)에
 native vector 범위와 남은 검증을 구분했다. Request·reply·forward codec은 고정
 소스의 native vector 7개와, capability·cap release·lease·snap·quota codec은 native
-vector 10개와 일치했다. 실제 MDS 대상 요청은 아직 합성 시험으로만 검증했다.
+vector 10개와 일치했다. 실제 Tentacle 20.2.4 MDS에서 CRC/AES host IPv4 BlueStore와
+secure/AES256K container IPv6 MemStore 구성이 각각 9개 사례를 통과했다. mkdir·create·
+setxattr·readdir·lookup 결과를 native LibCephFS와 대조했고, native writer가 Go의 REVOKE
+응답을 기다렸다가 진행하는 것과 cap 반환, 확인된 종료, 연결 끊김 뒤 재개를
+[검증 기록](integration/fixture/MDS_CEPHFS_VALIDATION.md)에 남겼다. `FlushJournal`은
+REQUEST_FLUSH_MDLOG로 journal flush를 요청하며, 응답·push·session 이벤트의 `Arrival`은
+수신 순서를 하나의 번호로 알려준다.
 
 ## OSD 객체 요청 통신
 

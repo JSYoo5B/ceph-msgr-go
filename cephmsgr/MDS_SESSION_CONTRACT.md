@@ -76,7 +76,8 @@ waiting with `WaitOpen` or ends it with `Close`.
 generation, GlobalID, caller target, push sequence, renewal sequence, last
 acknowledged renewal, OPEN reply, read-only flag, terminal cause), `Done()`,
 `Err()`, `Next(ctx)`, `Renew(ctx)`, `AcknowledgeFlush(ctx, seq)` and
-`Close(ctx)`. `MDSClientFeatures()` returns the declared bitset and
+`Close(ctx)`. `MDSSessionClientFeatures()` returns the declared bitset
+(`Client.MDSClientFeatures()` returns the one a given client declares) and
 `MDSFeatureBitsetHas` tests raw bitsets (including MDSMap required features).
 
 States: Opening → Open ⇄ Stale → Closing → Closed; Rejected; Lost. Closed and

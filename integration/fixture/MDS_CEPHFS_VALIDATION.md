@@ -186,6 +186,10 @@ but are not the acceptance record.
 
 ## Findings and limits
 
+- Resolved after this record: `Client.MDSClientFeatures`,
+  `MDSCephFSClientFeatures`, corrected status comments, `FlushJournal`
+  (REQUEST_FLUSH_MDLOG) and a shared reply/push `Arrival` order now address
+  the first three findings below and the ordering note.
 - `cephmsgr.MDSClientFeatures()` and its doc ("the exact CephFS client
   feature bitset declared in REQUEST_OPEN") describe only the session-only
   profile. With `EnableCephFS` the declared set is `0x1c83ff`, as natively

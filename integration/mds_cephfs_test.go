@@ -358,7 +358,7 @@ func TestCephMDSCephFSIntegration(t *testing.T) {
 			Dials           [2]uint32                   `json:"mds_osd_dials"`
 			CaseMillis      map[string]int64            `json:"case_ms"`
 			ElapsedMilli    int64                       `json:"elapsed_ms"`
-		}{mdsFreshSource, oracle, target, gid, hex.EncodeToString(mds.CephFSClientFeatures), hex.EncodeToString(cephmsgr.MDSClientFeatures()), openEvidence, requests, snapshot, resumes, facts, pushes,
+		}{mdsFreshSource, oracle, target, gid, hex.EncodeToString(mds.CephFSClientFeatures), hex.EncodeToString(cephmsgr.MDSCephFSClientFeatures()), openEvidence, requests, snapshot, resumes, facts, pushes,
 			receipts, [2]uint32{dials.MDS.Load(), dials.OSD.Load()}, caseTimes, time.Since(started).Milliseconds()})
 		if err == nil && len(data) > 8<<20 {
 			err = errors.New("MDS CephFS evidence exceeds bound")
@@ -492,7 +492,7 @@ func TestCephMDSCephFSIntegration(t *testing.T) {
 				t.Fatal("MDS OPEN lacks a CephFS request feature", bit)
 			}
 		}
-		facts["mds_client_features_api"] = nativeFeatureBits(cephmsgr.MDSClientFeatures())
+		facts["mds_client_features_api"] = nativeFeatureBits(cephmsgr.MDSCephFSClientFeatures())
 		r, n := observe(t)
 		if err := checkNativeCephFSSession(n, identity, metadata); err != nil {
 			t.Fatal(err)

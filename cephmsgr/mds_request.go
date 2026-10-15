@@ -119,6 +119,9 @@ type MDSRequest struct {
 // Decode* methods. Unsafe replies precede the safe (journaled) reply of the
 // same request.
 type MDSReply struct {
+	// Arrival orders this reply among the session's replies, pushes and
+	// session events in receive order (see MDSSessionEvent.Arrival).
+	Arrival                  uint64
 	Transaction              uint64
 	Op                       uint32
 	Result                   int32
@@ -366,7 +369,8 @@ func (s *MDSSession) dispatchReplyLocked(message msgr.MessageData, received time
 	if decoded.Op != call.op {
 		return fmt.Errorf("%w: MDS reply operation differs from its request", msgr.ErrFrame)
 	}
-	reply := &MDSReply{Transaction: call.transaction, Op: decoded.Op, Result: decoded.Result, MDSMapEpoch: decoded.MDSMapEpoch, Safe: decoded.Safe,
+	s.arrival++
+	reply := &MDSReply{Arrival: s.arrival, Transaction: call.transaction, Op: decoded.Op, Result: decoded.Result, MDSMapEpoch: decoded.MDSMapEpoch, Safe: decoded.Safe,
 		IsDentry: decoded.IsDentry, IsTarget: decoded.IsTarget, Trace: decoded.Trace, Extra: decoded.Extra, SnapTrace: decoded.Snap, Received: received}
 	switch {
 	case call.first == nil:

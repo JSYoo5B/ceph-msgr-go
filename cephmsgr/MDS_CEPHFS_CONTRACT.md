@@ -160,6 +160,19 @@ exact (InodeStat v8, DirStat v1, LeaseStat v2, quota v1, optional metadata
 v1, SnapRealmInfoNew v1, all compat 1): a newer server encoding is refused
 rather than partially skipped, unlike native `DECODE_START`.
 
+## Journal flush and arrival order
+
+`FlushJournal` sends REQUEST_FLUSH_MDLOG (head-only v1, sequence 0) when the
+MDS advertises LUMINOUS, as native `Client::flush_mdlog` does, so unsafe
+requests become safe without waiting for the MDS journal tick. The MDS sends
+no answer; the safe reply stays the completion signal. Every reply, push and
+session event of a session carries `Arrival`, one counter in receive order,
+so a consumer can order replies against pushes (for example a REVOKE before
+or after the reply that granted the capability) without relying on
+timestamps. `Client.MDSClientFeatures` reports the bitset that client
+declares; `MDSSessionClientFeatures` and `MDSCephFSClientFeatures` report the
+two profiles.
+
 ## MDS pushes and client answers
 
 Every MClientCaps, MClientLease, MClientSnap and MClientQuota from the MDS
@@ -207,8 +220,21 @@ UPDATE, cap release and lease release front, middle and header bytes; server
 messages decode to the native decoders' receipts (the native decoder fills
 the cap peer only for EXPORT/IMPORT and applies `from_legacy` to the
 layout pool, both noted above). See
-`internal/mds/testdata/mds-caps-native-provenance.json`. Live MDS
-acceptance is recorded separately when it exists. Synthetic peers cover
+`internal/mds/testdata/mds-caps-native-provenance.json`.
+
+Live Tentacle 20.2.4 acceptance (product `16f77b9`) passed nine leaves on
+CRC/AES host IPv4 BlueStore and secure/AES256K container IPv6 MemStore:
+declared features `0x1c83ff` in native `session ls`; mkdir, create (8-byte
+REPLY_CREATE_INODE extra equal to the target inode), setxattr, readdir and
+lookup compared with native LibCephFS; unsafe-then-safe replies for
+mutations; a native writer blocked on a REVOKE until the Go UPDATE ack;
+release of all six caps to native `num_caps` 0; confirmed close; and
+Messenger resume of an idle and of an in-flight session (same native
+session and address, not blocklisted). See
+[the validation record](../integration/fixture/MDS_CEPHFS_VALIDATION.md).
+Lease, FLUSHMSG, RECALL_STATE, snap and quota pushes, flush/dirty caps,
+EXPORT/IMPORT, forwards, multiple ranks and failover were not exercised
+live. Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and
 safe replies, forwards, session loss, the data segment, push ordering and
 counting, client answers, close resend and protocol violations.
@@ -220,10 +246,8 @@ inserted out of inode order with a native `_encode_filelocks` blob and two
 realms, a `more` message, a realm-only message; see
 `internal/mds/testdata/mds-reconnect-native-provenance.json`); ordering,
 splitting, OPEN/CLOSE answers and resubmission have synthetic coverage. No
-live MDS restart has been exercised yet. Live
-Messenger resume against an MDS daemon has not been verified yet; the
-synthetic peers cover retransmission, retry/reset answers, bounds and the
-public request continuity. No path walking, inode or dentry cache, capability bookkeeping, lease
+live MDS restart, live fencing or resume RESET has been exercised yet;
+synthetic peers cover retransmission, retry/reset answers and bounds. No path walking, inode or dentry cache, capability bookkeeping, lease
 expiry, snapshot realm tree, dirty metadata or data writeback, file locks,
 reconnect after MDS failover, request replay, delegated inodes or async
 operations are implemented. File data I/O semantics (layout, striping,

@@ -523,3 +523,39 @@ func TestCephFSClientSharesOneAddressNonceForMDSAndOSD(t *testing.T) {
 		t.Fatal("second CephFS handle at one MDS address", err)
 	}
 }
+
+func TestCephFSFlushJournalAndArrivalOrder(t *testing.T) {
+	c, _, s, peer, ctx := cephfsOpen(t)
+	if got := c.MDSClientFeatures(); !bytes.Equal(got, mds.CephFSClientFeatures) || !bytes.Equal(MDSSessionClientFeatures(), mds.ClientFeatures) {
+		t.Fatal("declared feature accessors", got)
+	}
+	if err := s.FlushJournal(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if flush := mdsSessionNext(t, peer, mds.SessionRequestFlushMDLog); flush.Sequence != 0 || flush.Version != 1 {
+		t.Fatal("REQUEST_FLUSH_MDLOG", flush)
+	}
+	call, err := s.Submit(ctx, MDSRequest{Op: MDSOpGetattr, Path: MDSFilePath{Ino: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer.next(t)
+	peer.send(t, mds.EncodeLease(mds.Lease{Action: mds.LeaseRevoke, Ino: 1, Seq: 1, DentryName: "a"}))
+	peer.send(t, cephfsReply(MDSOpGetattr, call.Transaction(), 0, true, nil))
+	peer.send(t, mdsSessionReply(mds.SessionRecallState, 0))
+	lease, err := s.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply, err := call.WaitSafe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recall, err := s.Next(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.Lease == nil || !(lease.Arrival < reply.Arrival && reply.Arrival < recall.Arrival) || recall.Arrival != reply.Arrival+1 {
+		t.Fatal("arrival order across pushes, replies and session events", lease.Arrival, reply.Arrival, recall.Arrival)
+	}
+}
