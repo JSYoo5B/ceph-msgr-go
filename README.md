@@ -496,6 +496,15 @@ front/data를 보존한다. 직접 `Request`로 watch opcode를 보내는 경로
 [watch/notify 계약](internal/osd/WATCH_NOTIFY_CONTRACT.md)에 인증 identity·연결 세대와
 cookie 소유권·불확실한 송신 결과의 의미를 기록했다.
 
+`newConnection.ReconnectWatch(ctx, oldWatch, request)`는 성공이 확인된 watch를
+같은 Client/global ID의 더 새 연결로 명시적으로 옮긴다. caller가 새 epoch·배치를
+제공하고 `Operations`는 비워 둔다. cookie는 유지하고 등록 세대는 증가한다.
+이전 handle의 Ping·Unwatch·ACK는 로컬에서 거절하지만 이미 받은 이벤트는 읽을 수
+있다. 오류와 함께 새 handle이 반환되면 그 handle이 등록 권한을 소유한다.
+불명확한 WATCH/UNWATCH 뒤의 복구, 자동 재등록·알림 재실행은 제공하지 않는다.
+[재연결 실검증](integration/fixture/OSD_WATCH_RECONNECT_VALIDATION.md)에 실제 Ceph
+구성과 native 알림·응답·해제 증거를 기록했다.
+
 `OSDListWatchers`는 head 객체의 현재 watcher 등록 목록을 읽는다. 단독 요청만
 허용하며 `ListWatchers.MaxOutputBytes`로 수신 출력의 로컬 한도를 지정한다(최소
 10 bytes). 성공하면 `Operations[0].Watchers`에 watcher entity·cookie·등록 timeout·

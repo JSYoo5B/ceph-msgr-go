@@ -97,6 +97,7 @@ type OSDWatchStream struct {
 	notifyIDKnown  bool
 	completionSeen bool
 	completionID   uint64
+	registration   *osdWatchRegistration // immutable after construction/initial successful WATCH
 }
 
 // OSDWatch is an explicitly registered watch, without an automatic ping loop.
@@ -108,18 +109,9 @@ type OSDNotify struct{ *OSDWatchStream }
 func (w *OSDWatchStream) Cookie() uint64 { return w.cookie }
 
 func (o *OSDConnection) newWatchStream(request OSDRequest, options OSDWatchOptions, notifier bool) (*OSDWatchStream, error) {
-	if err := o.validatePlacement(request); err != nil {
+	request, options, err := o.prepareWatchStream(request, options)
+	if err != nil {
 		return nil, err
-	}
-	request.Placement = cloneOSDPlacement(request.Placement)
-	if len(request.Operations) != 0 || request.ReadSnapshot != 0 && request.ReadSnapshot != OSDHeadSnapshot || request.SnapContext.Sequence != 0 || len(request.SnapContext.Snapshots) != 0 || request.OrderSnapshots {
-		return nil, osd.ErrRequest
-	}
-	if options.MaxBufferedBytes == 0 {
-		options.MaxBufferedBytes = o.client.options.MaxFrameSize
-	}
-	if options.MaxBufferedBytes < 64 || options.MaxBufferedBytes > o.client.options.MaxFrameSize {
-		return nil, osd.ErrRequest
 	}
 	cookie, err := o.client.nextOSDTransaction()
 	if err != nil {
@@ -145,6 +137,23 @@ func (o *OSDConnection) newWatchStream(request OSDRequest, options OSDWatchOptio
 	return w, nil
 }
 
+func (o *OSDConnection) prepareWatchStream(request OSDRequest, options OSDWatchOptions) (OSDRequest, OSDWatchOptions, error) {
+	if err := o.validatePlacement(request); err != nil {
+		return request, options, err
+	}
+	request.Placement = cloneOSDPlacement(request.Placement)
+	if len(request.Operations) != 0 || request.ReadSnapshot != 0 && request.ReadSnapshot != OSDHeadSnapshot || request.SnapContext.Sequence != 0 || len(request.SnapContext.Snapshots) != 0 || request.OrderSnapshots {
+		return request, options, osd.ErrRequest
+	}
+	if options.MaxBufferedBytes == 0 {
+		options.MaxBufferedBytes = o.client.options.MaxFrameSize
+	}
+	if options.MaxBufferedBytes < 64 || options.MaxBufferedBytes > o.client.options.MaxFrameSize {
+		return request, options, osd.ErrRequest
+	}
+	return request, options, nil
+}
+
 // WatchObject installs delivery before submitting WATCH. request supplies
 // explicit routing metadata and no Operations. ctx controls registration only.
 // The returned handle is also retained on an uncertain submission error so the
@@ -160,6 +169,8 @@ func (o *OSDConnection) WatchObject(ctx context.Context, request OSDRequest, opt
 	reply, err := w.perform(ctx, request.MapEpoch, OSDOperation{Code: OSDWatchOperation, Watch: OSDWatchInput{Cookie: w.cookie, Action: OSDWatchRegister, Generation: options.RegistrationGeneration, TimeoutSeconds: options.TimeoutSeconds}})
 	if err != nil {
 		w.finish(err)
+	} else {
+		w.confirmWatchRegistration()
 	}
 	return &OSDWatch{w}, reply, err
 }
@@ -210,6 +221,10 @@ func (o *OSDConnection) NotifyObject(ctx context.Context, request OSDRequest, pa
 }
 
 func (w *OSDWatchStream) perform(ctx context.Context, epoch uint32, op OSDOperation) (OSDReply, error) {
+	return w.performWatchOperation(ctx, epoch, op)
+}
+
+func (w *OSDWatchStream) performRequest(ctx context.Context, epoch uint32, op OSDOperation) (OSDReply, error) {
 	r := w.request
 	r.MapEpoch = epoch
 	r.Operations = []OSDOperation{op}

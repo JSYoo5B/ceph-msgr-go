@@ -11,7 +11,8 @@ dependencies. Product builds and runtime remain native Go without CGO.
 
 The bounded subset accepts a single head-object operation, explicit caller
 pool/object/namespace/key/hash, target OSD and map epoch. It does not calculate
-placement, change epochs, redirect, retry or reconnect. Compound vectors,
+placement, change epochs, redirect or retry. Reconnect is an explicit caller
+operation described below. Compound vectors,
 snapshot inputs and operation flags are rejected. WATCH is write-mode but
 does not imply a user-visible object version change: the pinned OSD explicitly
 excludes it from `user_modify`. Successful WATCH replies must satisfy the
@@ -28,9 +29,9 @@ or replace asynchronous notify completion. Messenger ACK is unrelated.
 Current action values are UNWATCH 0, WATCH 3, RECONNECT 5 and PING 7. The codec
 preserves registration generation separately from local connection generation.
 Legacy WATCH action 1 is rejected. The public `WatchObject` path registers;
-`Ping`, `Unwatch` and `Acknowledge` are explicit requests. Caller-directed
-cross-connection reattachment is not yet a public lifecycle operation, even
-though the current RECONNECT wire union is encoded and independently tested.
+`Ping`, `Unwatch` and `Acknowledge` are explicit requests. `ReconnectWatch`
+reattaches a previously confirmed registration to a caller-selected newer
+connection without a fresh WATCH fallback.
 Public `Request` rejects these three opcodes before admission. Only a stream's
 private submission path can transmit them, after matching its connection,
 reserved cookie, object and client incarnation; arbitrary caller cookies cannot
@@ -53,7 +54,8 @@ generation. Events expose OSD target, authenticated client global ID, local
 session generation, watch/notify cookie and wire notify ID. A connection's
 local generation is independent of the WATCH registration generation. Delivery
 checks the current authenticated source both before decoding and before queue
-publication. Local handles cannot be transferred between connections.
+publication. A stream remains bound to that connection; an explicit reconnect
+creates a new stream with the same logical watch cookie.
 
 For example, after the caller has prepared `route` with no Operations:
 
@@ -100,9 +102,57 @@ An overflow terminates only that stream with `ErrOSDWatchOverflow`; accepted
 events drain before the first terminal cause. It does not implicitly unwatch,
 acknowledge or fail unrelated requests. After terminal delivery, later valid
 events for the retired cookie are discarded. Locally generated cookies are
-never reused. Concurrent `Next` calls each consume an event at most once;
+never reassigned to another logical registration. A `(cookie, local session
+generation)` pair is never reused, including by explicit reconnect.
+Concurrent `Next` calls each consume an event at most once;
 an already canceled Next context consumes nothing. Client/connection shutdown
 wakes all waiters and preserves queued events and the first terminal error.
+
+## Explicit watch reconnect
+
+`newConnection.ReconnectWatch(ctx, previous, route)` accepts an `OSDWatch`
+with a private receipt installed only after an initial ordinary WATCH success.
+An initial WATCH with an unknown outcome does not supply that proof. The target
+must belong to the same Client and current authenticated GlobalID, and its
+local session generation must be newer than every connection previously used
+by this logical registration. The object identity (including supplied hash)
+and client incarnation must match; the caller can update map epoch and
+placement. The route contains no Operations. Arbitrary cookies and manually
+constructed handles do not confer reconnect authority.
+
+The new stream inherits the normalized queue limits and retains the cookie.
+Its WATCH registration generation increments without wraparound. Admission
+installs the new consumer before one RECONNECT request, fences the prior
+handle's Ping/Unwatch/ACK locally, and terminates the old stream with
+`ErrOSDWatchSuperseded` unless it already has a terminal cause. Accepted old
+events drain before that cause; accepted new events remain available even if
+the ordinary reconnect reply is lost. These queues retain their independent
+bounds. The OSD's original watch timeout remains in force; no timer schedules
+PINGs in Go.
+
+Pre-admission errors return no new handle or submission. After local ownership
+transfer, the returned handle owns the receipt even if its operation fails or
+has an unknown outcome. Caller wire inputs, including epoch, modification time
+and encoder bounds, are validated with the negotiated encoder before waiting
+for the control gate or changing ownership, generation or stream slots. There
+is no rollback to the prior stream. Another
+explicit attempt must use the latest returned handle and a newer connection.
+Concurrent registration controls are serialized with a context-aware gate;
+cancellation while waiting for that gate leaves ownership unchanged. A
+successful UNWATCH retires the receipt. An uncertain sent UNWATCH also prevents
+reconnect because remote removal is unresolved, while explicit cleanup remains
+available on the current handle. No path automatically registers, reconnects,
+replays NOTIFY or discovers a target.
+
+This follows pinned `Objecter.cc` `_send_linger` (RECONNECT and incremented
+`register_gen`) and `PrimaryLogPG.cc` WATCH handling (lookup by cookie and
+authenticated entity; missing registration yields signed `-ENOTCONN`). The
+server can also return `-ENOENT` for a missing object; these errors are
+preserved without a WATCH fallback. `Watch.cc` `connect` can redeliver pending
+notifications. Consumers therefore decide deduplication across generations;
+an old-generation event cannot be acknowledged through the new handle.
+`MWatchNotify` has no registration-generation field, which is why a reconnect
+cannot return its cookie to an already used physical session.
 
 ## Separate asynchronous events
 
@@ -155,6 +205,15 @@ explicit ACK, authenticated identity changes between decode and publication,
 queue overflow, cancellation, local close and source metadata. These tests
 alone do not establish daemon interoperability.
 
+Reconnect synthetic race tests additionally cover receipt admission, current
+GlobalID, generation exhaustion, handoff during a pending reply, immediate old
+control fencing, accepted events on both streams, reply loss, explicit retry
+after an unknown outcome, signed `-ENOTCONN` without registration fallback,
+context cancellation while waiting for a control and uncertain UNWATCH.
+`TestCephOSDWatchReconnectIntegration` is the independent native acceptance
+recipe; its two successful executions are recorded below and separately from
+these synthetic checks.
+
 `TestCephOSDWatchNotifyIntegration` supplies the live acceptance recipe:
 independent native registrations receive Go NOTIFY; a Go registration explicitly
 PINGs; a Go notification timeout preserves native replies and the unacknowledged
@@ -181,8 +240,32 @@ the reproduction commands are recorded in
 These local runs do not establish remote CI results or support for other daemon
 configurations or platforms.
 
+The separate 2026-10-15 reconnect acceptance passed one test without skips in
+each of these pinned Ceph 20.2.4 profiles, with evidence export and fixture
+cleanup:
+
+| Verified reconnect profile | Result |
+| --- | --- |
+| Darwin arm64 host, IPv4 relay, CRC, AES client/service tickets, three BlueStore OSDs, object-hash v6 requests | 1/1 passed |
+| CGO=0 Linux arm64 container, IPv6, secure, AES256K client/service tickets, one MemStore OSD, replicated-PG v8 requests | 1/1 passed |
+
+Both preserve the native-listed cookie and authenticated entity across an
+explicit connection close and reconnect, with WATCH registration generation
+9 to 10 and local session generation 1 to 2. Each independently completes two
+native binary notifications (one per connection) with one explicit Go ACK and
+no missed watcher, confirms local old-handle/old-event fencing, then verifies
+new-handle UNWATCH, an empty native watch list and unchanged object bytes.
+The retained ordinary replies, separate events, native receipts and
+reproduction commands are described in
+[the reconnect acceptance checkpoint](../../integration/fixture/OSD_WATCH_RECONNECT_VALIDATION.md).
+These successful daemon paths do not directly exercise the later malformed
+route preflight correction; its ownership-preservation coverage is synthetic.
+Unknown reconnect replies, uncertain UNWATCH, overflow and concurrent handoff
+also remain synthetic coverage, rather than native results from these runs.
+
 Remaining live acceptance includes forced server DISCONNECT, timeout-driven
-watch loss, scoped watch permissions, failover and cross-connection
-caller-directed reconnect. Backoff/send gating
-and daemon-to-daemon event paths are separate milestones. This implementation
-does not advertise the combined RADOS_BACKOFF/CRUSH feature mask.
+watch loss, scoped watch permissions, OSD restart/failover and pending-notify
+redelivery across a reconnect. The local generation fence does not establish
+server-side generation rejection. Backoff/send gating has its
+[own contract](BACKOFF_CONTRACT.md); daemon-to-daemon event paths remain a
+separate milestone.
