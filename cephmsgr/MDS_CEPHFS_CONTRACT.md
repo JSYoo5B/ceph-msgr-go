@@ -198,8 +198,12 @@ counting, client answers, close resend and protocol violations.
 
 ## Limits
 
-MClientReconnect has synthetic coverage (ordering, splitting, OPEN and CLOSE
-answers, validation) but no native vector or live MDS restart yet. Live
+MClientReconnect matches three fresh native vectors byte for byte (two caps
+inserted out of inode order with a native `_encode_filelocks` blob and two
+realms, a `more` message, a realm-only message; see
+`internal/mds/testdata/mds-reconnect-native-provenance.json`); ordering,
+splitting, OPEN/CLOSE answers and resubmission have synthetic coverage. No
+live MDS restart has been exercised yet. Live
 Messenger resume against an MDS daemon has not been verified yet; the
 synthetic peers cover retransmission, retry/reset answers, bounds and the
 public request continuity. No path walking, inode or dentry cache, capability bookkeeping, lease
