@@ -101,3 +101,12 @@ CEPH_MSGR_TEST_CONNECTION_MODE=crc CEPH_MSGR_TEST_KEY_TYPE=aes \
 CEPH_MSGR_TEST_SERVICE_CIPHER=aes CEPH_MSGR_TEST_IP_FAMILY=4 \
 CEPH_MSGR_TEST_RUN='^TestCephOSDListWatchersIntegration$' sh integration/run.sh
 ```
+
+## Follow-up: repeatable native scope
+
+Source `6556509abac28ebd20505d1f896dce70bd9bda61` fixes completed-scope reuse, retains token-specific
+status/log receipts and adds a native second start/unwatch case. Both profiles
+above subsequently passed all six watcher cases, including output-budget
+isolation and repeated scope. See
+[the combined validation](OSD_READ_METADATA_VALIDATION.md) for exact final
+logs, independent review, 269 tool tests and current limitations.
