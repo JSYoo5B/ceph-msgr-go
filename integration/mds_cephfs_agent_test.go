@@ -24,7 +24,9 @@ import (
 // dirty or flushing, and directories are never marked complete. It also
 // restates handle_snap (realm moves on SPLIT), handle_quota, handle_session
 // RECALL_STATE (trim_caps) and FLUSHMSG, counting every capability, lease,
-// snapshot and quota push as got_mds_push does.
+// snapshot and quota push as got_mds_push does. Agents of one client's
+// sessions with several ranks share one lock and restate handle_cap_export
+// and handle_cap_import between them (cephfsRankedAgents).
 
 const (
 	cephCapLinkExcl     = 2 << 4
@@ -41,6 +43,10 @@ const (
 	cephFileModeRD   = 1
 	cephFileModeWR   = 2
 	cephFileModeRDWR = 3
+
+	// CEPH_CAP_FLAG_RELEASE in a cap peer asks the client to release the
+	// peer's cap.
+	cephCapFlagRelease = 2
 )
 
 // cephCapsForMode restates ceph_caps_for_mode.
@@ -113,6 +119,10 @@ type cephfsCap struct {
 	Added uint64 `json:",omitempty"`
 	// Quota is the latest MClientQuota for this inode (handle_quota).
 	Quota *cephmsgr.MDSQuota `json:",omitempty"`
+	// Exported reports that this rank's cap was removed by a cap migration
+	// (EXPORT, or IMPORT on another rank naming it as the peer); the inode
+	// stays known, as in the native inode cache.
+	Exported bool `json:",omitempty"`
 }
 
 func (c *cephfsCap) fileWanted() uint32 {
@@ -222,10 +232,29 @@ type cephfsFlushEvent struct {
 	Error       string `json:",omitempty"`
 }
 
+// cephfsMigrationEvent is one EXPORT or IMPORT of a multi-rank client and
+// what the agent did with it.
+type cephfsMigrationEvent struct {
+	Rank          int32
+	Arrival       uint64
+	Received      time.Time
+	PushSequence  uint64
+	Op            uint32
+	Ino, CapID    uint64
+	Seq, IssueSeq uint32
+	MSeq          uint32
+	Caps, Wanted  string
+	Realm         uint64
+	Peer          cephmsgr.MDSCapPeer
+	Action        string
+	Released      bool   `json:",omitempty"`
+	Error         string `json:",omitempty"`
+}
+
 type cephfsCapAgent struct {
 	s       *cephmsgr.MDSSession
 	ctx     context.Context
-	mu      sync.Mutex
+	mu      *sync.Mutex
 	caps    map[uint64]*cephfsCap
 	pending []cephmsgr.MDSSessionEvent
 	holds   map[uint64]*cephfsHold
@@ -246,10 +275,15 @@ type cephfsCapAgent struct {
 	quotas     []cephfsQuotaEvent
 	recalls    []cephfsRecallEvent
 	flushes    []cephfsFlushEvent
+	// rank and peers are set for one client's sessions with several ranks:
+	// peers maps every rank to its current agent, all sharing mu.
+	rank       int32
+	peers      map[int32]*cephfsCapAgent
+	migrations []cephfsMigrationEvent
 }
 
 func newCephFSCapAgent(ctx context.Context, s *cephmsgr.MDSSession) *cephfsCapAgent {
-	return &cephfsCapAgent{s: s, ctx: ctx, caps: map[uint64]*cephfsCap{}, holds: map[uint64]*cephfsHold{}, held: map[uint64]bool{}, done: make(chan struct{}),
+	return &cephfsCapAgent{s: s, ctx: ctx, mu: &sync.Mutex{}, caps: map[uint64]*cephfsCap{}, holds: map[uint64]*cephfsHold{}, held: map[uint64]bool{}, done: make(chan struct{}),
 		realms: map[uint64]cephmsgr.MDSSnapRealm{}, leaseHolds: map[string]time.Duration{}}
 }
 
@@ -491,6 +525,10 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 	m := e.Caps
 	if m.OSDEpochBarrier > a.barrier {
 		a.barrier = m.OSDEpochBarrier
+	}
+	if a.peers != nil && (m.Op == cephmsgr.MDSCapOpExport || m.Op == cephmsgr.MDSCapOpImport) {
+		a.migrateLocked(e)
+		return
 	}
 	c := a.caps[m.Ino]
 	r := cephfsCapRecord{Kind: "caps", Received: e.Received, Arrival: e.Arrival, Ino: m.Ino, CapID: m.CapID, Op: m.Op, Seq: m.Seq, IssueSeq: m.IssueSeq, MSeq: m.MigrateSeq, Caps: cephCapString(m.Caps), Wanted: cephCapString(m.Wanted)}
@@ -935,6 +973,190 @@ func startCephFSCapAgentFrom(ctx context.Context, s *cephmsgr.MDSSession, previo
 	return a
 }
 
+// cephfsRankedAgents holds the agents of one client's sessions with several
+// ranks of one filesystem. They share one lock, as the native client handles
+// every MDS message under client_lock, so a cap migration can move a cap
+// between two ranks' views atomically.
+type cephfsRankedAgents struct {
+	mu     *sync.Mutex
+	agents map[int32]*cephfsCapAgent
+}
+
+func newCephFSRankedAgents() *cephfsRankedAgents {
+	return &cephfsRankedAgents{mu: &sync.Mutex{}, agents: map[int32]*cephfsCapAgent{}}
+}
+
+// start begins the agent of a new session with one rank.
+func (g *cephfsRankedAgents) start(ctx context.Context, rank int32, s *cephmsgr.MDSSession) *cephfsCapAgent {
+	a := newCephFSCapAgent(ctx, s)
+	a.mu, a.rank, a.peers = g.mu, rank, g.agents
+	g.mu.Lock()
+	g.agents[rank] = a
+	g.mu.Unlock()
+	go a.run()
+	return a
+}
+
+// startFrom continues the Lost session's agent of one rank on the session
+// that reconnected it, as startCephFSCapAgentFrom does: sequences restart at
+// zero and issued equals implemented. It replaces that rank's agent.
+func (g *cephfsRankedAgents) startFrom(ctx context.Context, rank int32, s *cephmsgr.MDSSession, previous *cephfsCapAgent) *cephfsCapAgent {
+	g.mu.Lock()
+	a := newCephFSCapAgent(ctx, s)
+	a.mu, a.rank, a.peers = g.mu, rank, g.agents
+	a.barrier, a.added = previous.barrier, previous.added
+	maps.Copy(a.realms, previous.realms)
+	for ino, c := range previous.caps {
+		copied := *c
+		copied.Open = maps.Clone(c.Open)
+		if c.CapID == 0 || c.Released {
+			// The inode stays known without a cap of this rank.
+			copied.CapID, copied.Issued, copied.Implemented, copied.Wanted = 0, 0, 0, 0
+		} else {
+			copied.Seq, copied.IssueSeq, copied.MSeq, copied.Issued = 0, 0, 0, c.Implemented
+		}
+		a.caps[ino] = &copied
+	}
+	g.agents[rank] = a
+	a.recordLocked(cephfsCapRecord{Kind: "reconnect", Note: fmt.Sprintf("rank %d: %d inodes carried over with sequences reset", rank, len(a.caps))})
+	g.mu.Unlock()
+	go a.run()
+	return a
+}
+
+// inodeLocked returns this rank's entry for ino, creating it from another
+// rank's entry (the client's one inode cache) when only a peer knows it.
+func (a *cephfsCapAgent) inodeLocked(ino uint64) *cephfsCap {
+	if c := a.caps[ino]; c != nil {
+		return c
+	}
+	for rank, peer := range a.peers {
+		if rank == a.rank {
+			continue
+		}
+		if pc := peer.caps[ino]; pc != nil {
+			copied := *pc
+			copied.Open = maps.Clone(pc.Open)
+			copied.CapID, copied.Issued, copied.Implemented, copied.Wanted = 0, 0, 0, 0
+			copied.Seq, copied.IssueSeq, copied.MSeq, copied.Added, copied.Released, copied.Exported = 0, 0, 0, 0, false, false
+			a.caps[ino] = &copied
+			return &copied
+		}
+	}
+	return nil
+}
+
+// dropMigratedLocked removes this rank's cap after a migration without
+// queueing a release (remove_cap(cap, false)).
+func dropMigratedLocked(c *cephfsCap) {
+	c.CapID, c.Issued, c.Implemented, c.Wanted, c.Exported = 0, 0, 0, 0, true
+}
+
+// migrateLocked restates handle_cap_export and handle_cap_import for a
+// client with sessions to several ranks. EXPORT carries the importer's new
+// cap as the peer: the exporting rank's cap moves to the peer rank (or only
+// updates a cap that IMPORT already installed there). IMPORT installs the
+// importer's cap and removes the exporter's cap it names as the peer,
+// releasing it when the peer flags ask for that; IMPORT is then handled as a
+// GRANT, as handle_caps does.
+func (a *cephfsCapAgent) migrateLocked(e cephmsgr.MDSSessionEvent) {
+	m := e.Caps
+	ev := cephfsMigrationEvent{Rank: a.rank, Arrival: e.Arrival, Received: e.Received, PushSequence: a.s.Status().PushSequence, Op: m.Op, Ino: m.Ino, CapID: m.CapID, Seq: m.Seq,
+		IssueSeq: m.IssueSeq, MSeq: m.MigrateSeq, Caps: cephCapString(m.Caps), Wanted: cephCapString(m.Wanted), Realm: m.Realm, Peer: m.Peer}
+	r := cephfsCapRecord{Kind: "caps", Received: e.Received, Arrival: e.Arrival, Ino: m.Ino, CapID: m.CapID, Op: m.Op, Seq: m.Seq, IssueSeq: m.IssueSeq, MSeq: m.MigrateSeq,
+		Caps: cephCapString(m.Caps), Wanted: cephCapString(m.Wanted)}
+	defer func() {
+		r.Note, r.Error = fmt.Sprintf("rank %d: %s (peer mds %d cap %d seq %d mseq %d flags %d)", a.rank, ev.Action, m.Peer.MDS, m.Peer.CapID, m.Peer.IssueSeq, m.Peer.MSeq, m.Peer.Flags), ev.Error
+		a.migrations = append(a.migrations, ev)
+		a.recordLocked(r)
+	}()
+	switch m.Op {
+	case cephmsgr.MDSCapOpExport:
+		c := a.caps[m.Ino]
+		if c == nil || c.CapID == 0 || c.Released || c.CapID != m.CapID {
+			ev.Action = "export ignored: no matching cap of this rank"
+			return
+		}
+		r.Before = cephCapString(c.Issued)
+		if m.Peer.CapID == 0 {
+			dropMigratedLocked(c)
+			ev.Action = "export without peer: cap removed"
+			return
+		}
+		target := a.peers[m.Peer.MDS]
+		if target == nil || m.Peer.MDS == a.rank {
+			ev.Action, ev.Error = "export to a rank without a session", fmt.Sprintf("no agent for rank %d", m.Peer.MDS)
+			a.failLocked("cap export of %d to rank %d without a session", m.Ino, m.Peer.MDS)
+			return
+		}
+		tc := target.inodeLocked(m.Ino)
+		if tc.CapID != 0 && !tc.Released {
+			if tc.CapID == m.Peer.CapID && cephSeqAfter(m.Peer.IssueSeq, tc.Seq) {
+				tc.Seq, tc.IssueSeq = m.Peer.IssueSeq-1, m.Peer.IssueSeq-1
+				tc.Issued, tc.Implemented = tc.Issued|c.Issued, tc.Implemented|c.Issued
+				ev.Action = fmt.Sprintf("export: rank %d cap %d updated", m.Peer.MDS, tc.CapID)
+			} else {
+				ev.Action = fmt.Sprintf("export: rank %d cap %d already newer", m.Peer.MDS, tc.CapID)
+			}
+		} else {
+			target.addUpdateCapLocked(tc, m.Peer.CapID, c.Issued, 0, m.Peer.IssueSeq-1, m.Peer.MSeq, c.Realm)
+			tc.Exported = false
+			ev.Action = fmt.Sprintf("export: cap %d added for rank %d", m.Peer.CapID, m.Peer.MDS)
+		}
+		dropMigratedLocked(c)
+		r.After = "-"
+	case cephmsgr.MDSCapOpImport:
+		c := a.inodeLocked(m.Ino)
+		if c == nil {
+			r.Note = "deferred until the reply trace introducing the inode is applied"
+			a.pending = append(a.pending, e)
+			ev.Action = "import deferred: inode unknown to every rank"
+			return
+		}
+		if len(m.SnapTrace) != 0 {
+			realms, err := cephmsgr.DecodeMDSSnapTrace(m.SnapTrace)
+			if err != nil {
+				ev.Error = err.Error()
+				a.failLocked("import snap trace of %d: %v", m.Ino, err)
+				return
+			}
+			for _, realm := range realms {
+				a.realms[realm.Ino] = realm
+			}
+		}
+		var peerCap *cephfsCap
+		peer := a.peers[m.Peer.MDS]
+		if m.Peer.CapID != 0 && peer != nil && m.Peer.MDS != a.rank {
+			if pc := peer.caps[m.Ino]; pc != nil && pc.CapID != 0 && !pc.Released {
+				peerCap = pc
+			}
+		}
+		before := c.Issued
+		a.addUpdateCapLocked(c, m.CapID, m.Caps, m.Wanted, m.Seq, m.MigrateSeq, m.Realm)
+		c.Exported = false
+		ev.Action = fmt.Sprintf("import: cap %d installed", m.CapID)
+		if peerCap != nil && peerCap.CapID == m.Peer.CapID {
+			item := cephmsgr.MDSCapItem{Ino: m.Ino, CapID: peerCap.CapID, MigrateSeq: peerCap.MSeq, IssueSeq: peerCap.IssueSeq}
+			dropMigratedLocked(peerCap)
+			ev.Action += fmt.Sprintf("; rank %d cap %d removed", m.Peer.MDS, item.CapID)
+			if m.Peer.Flags&cephCapFlagRelease != 0 {
+				err := peer.send(func(ctx context.Context) error {
+					return peer.s.ReleaseCaps(ctx, []cephmsgr.MDSCapItem{item}, peer.barrier)
+				})
+				ev.Released = err == nil
+				if err != nil {
+					ev.Error = err.Error()
+					a.failLocked("release of migrated cap %d: %v", m.Ino, err)
+				}
+			}
+		}
+		r.Before, r.After = cephCapString(before), cephCapString(c.Issued)
+		// handle_caps continues an IMPORT as a GRANT on the installed cap.
+		a.grantLocked(c, e, cephfsCapRecord{Kind: "caps", Received: e.Received, Arrival: e.Arrival, Ino: m.Ino, CapID: m.CapID, Op: m.Op, Seq: m.Seq, IssueSeq: m.IssueSeq,
+			MSeq: m.MigrateSeq, Caps: cephCapString(m.Caps), Wanted: cephCapString(m.Wanted), Note: "import handled as grant"})
+	}
+}
+
 type cephfsAgentSnapshot struct {
 	Records  []cephfsCapRecord
 	Caps     []cephfsCap
@@ -950,13 +1172,17 @@ type cephfsAgentSnapshot struct {
 	Quotas  []cephfsQuotaEvent  `json:",omitempty"`
 	Recalls []cephfsRecallEvent `json:",omitempty"`
 	Flushes []cephfsFlushEvent  `json:",omitempty"`
+	// Rank and Migrations are reported for agents of a multi-rank client.
+	Rank       int32                  `json:",omitempty"`
+	Migrations []cephfsMigrationEvent `json:",omitempty"`
 }
 
 func (a *cephfsCapAgent) snapshot() cephfsAgentSnapshot {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	s := cephfsAgentSnapshot{Records: slices.Clone(a.records), Pending: len(a.pending), Errors: slices.Clone(a.errs), Barrier: a.barrier, Pushes: a.pushes,
-		Leases: slices.Clone(a.leases), Snaps: slices.Clone(a.snaps), Quotas: slices.Clone(a.quotas), Recalls: slices.Clone(a.recalls), Flushes: slices.Clone(a.flushes)}
+		Leases: slices.Clone(a.leases), Snaps: slices.Clone(a.snaps), Quotas: slices.Clone(a.quotas), Recalls: slices.Clone(a.recalls), Flushes: slices.Clone(a.flushes),
+		Rank: a.rank, Migrations: slices.Clone(a.migrations)}
 	for _, c := range a.caps {
 		s.Caps = append(s.Caps, *c)
 	}

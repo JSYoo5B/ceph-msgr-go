@@ -97,7 +97,7 @@ type mdsFreshNativeFS struct {
 // provider-owned filesystem, daemon descriptor and independent native OSDMap.
 func parseMDSFreshOracle(p profile, token, name, identity string, owned map[string]bool, status *cephfs.FilesystemStatus, get, dump, osd []byte) (mdsFreshOracle, error) {
 	var result mdsFreshOracle
-	if len(token) != 32 || name != "ceph-msgr-fresh-"+token || identity != "client.mds-fresh-"+token || status == nil || status.FilesystemName != name || len(owned) != 1 {
+	if len(token) != 32 || name != "ceph-msgr-fresh-"+token || identity != "client.mds-fresh-"+token || status == nil || status.FilesystemName != name || len(owned) == 0 {
 		return result, errors.New("MDS fresh owned scope differs")
 	}
 	if _, err := hex.DecodeString(token); err != nil {
@@ -131,7 +131,12 @@ func parseMDSFreshOracle(p profile, token, name, identity string, owned map[stri
 	if json.Unmarshal(get, &fs) != nil || json.Unmarshal(dump, &directory) != nil || json.Unmarshal(osd, &pools) != nil || p.fsid == "" || pools.FSID != p.fsid {
 		return result, errors.New("MDS fresh native cluster identity differs")
 	}
-	if directory.Epoch == 0 || len(directory.Filesystems) != 1 || directory.Standbys == nil || len(directory.Standbys) != 0 || fs.ID < 0 || fs.ID > math.MaxInt32 || fs.ID != status.FilesystemID || status.MaxMDS != 1 || len(status.Active) != 1 || len(status.Standby)+len(status.StandbyReplay) != 0 {
+	// The oracle describes rank 0. The multi-rank profile also requires its
+	// second active rank and one owned standby (mds_cephfs_ranks.go proves
+	// those daemons separately).
+	active, standby := p.mdsFreshTopology()
+	if directory.Epoch == 0 || len(directory.Filesystems) != 1 || directory.Standbys == nil || len(directory.Standbys) != standby || fs.ID < 0 || fs.ID > math.MaxInt32 || fs.ID != status.FilesystemID ||
+		status.MaxMDS != active || len(status.Active) != active || len(status.Standby) != standby || len(status.StandbyReplay) != 0 || len(owned) != active+standby {
 		return result, errors.New("MDS fresh filesystem or rank topology differs")
 	}
 	var fromGet, fromDump any
@@ -139,8 +144,17 @@ func parseMDSFreshOracle(p profile, token, name, identity string, owned map[stri
 		return result, errors.New("MDS fresh native fs get and fs dump disagree")
 	}
 	m := fs.Map
-	if m.Name != name || m.Epoch == 0 || !m.Enabled || m.MaxMDS != 1 || !reflect.DeepEqual(m.In, []int{0}) || len(m.Up) != 1 || len(m.Info) != 1 || len(m.Failed)+len(m.Stopped)+len(m.Damaged) != 0 || m.MetadataPool < 0 || len(m.DataPools) != 1 || m.DataPools[0] < 0 || m.DataPools[0] == m.MetadataPool {
+	in := make([]int, active)
+	for rank := range in {
+		in[rank] = rank
+	}
+	if m.Name != name || m.Epoch == 0 || !m.Enabled || m.MaxMDS != active || !reflect.DeepEqual(m.In, in) || len(m.Up) != active || len(m.Info) != active || len(m.Failed)+len(m.Stopped)+len(m.Damaged) != 0 || m.MetadataPool < 0 || len(m.DataPools) != 1 || m.DataPools[0] < 0 || m.DataPools[0] == m.MetadataPool {
 		return result, errors.New("MDS fresh native map metadata differs")
+	}
+	for _, d := range append(append([]cephfs.MDSStatus{}, status.Active...), status.Standby...) {
+		if !d.Owned || !owned[d.Name] || d.GID == 0 {
+			return result, errors.New("MDS fresh filesystem has a daemon it does not own")
+		}
 	}
 	a := status.Active[0]
 	info, ok := m.Info["gid_"+strconv.FormatUint(a.GID, 10)]
@@ -355,7 +369,8 @@ func mdsFreshCaps(name string) ceph.ClientCaps {
 
 func mdsFreshFilesystemConfig(p profile, name string) cephfs.Config {
 	legacy := p.mdsPublicClient()
-	return cephfs.Config{Name: name, ActiveMDS: 1,
+	active, standby := p.mdsFreshTopology()
+	return cephfs.Config{Name: name, ActiveMDS: active, StandbyMDS: standby,
 		MetadataPool: ceph.PoolConfig{Name: name + "-meta", PGNum: 16, Replicas: 1, MinSize: 1, NoHashPSPool: legacy},
 		DataPool:     ceph.PoolConfig{Name: name + "-data", PGNum: 1, Replicas: 1, MinSize: 1, NoHashPSPool: legacy}}
 }
@@ -489,6 +504,10 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 		// 45-second bound before removal.
 		budget += 45 * time.Second
 	}
+	if c.mdsCephFSRanks != nil {
+		// Topology return, pin restoration and readback before removal.
+		budget += 100 * time.Second
+	}
 	ctx, stop := context.WithTimeout(ctx, budget)
 	defer stop()
 	if err := lockMDSFresh(ctx, &s.mu); err != nil {
@@ -515,6 +534,7 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 		CommandIdentityRemoved bool            `json:"command_identity_removed,omitempty"`
 		SessionsRestored       bool            `json:"sessions_restored,omitempty"`
 		CephFSVerified         bool            `json:"cephfs_verified,omitempty"`
+		CephFSRanksVerified    bool            `json:"cephfs_ranks_verified,omitempty"`
 		Completed              bool            `json:"completed"`
 		Error                  string          `json:"error,omitempty"`
 		FSDump                 json.RawMessage `json:"fs_dump,omitempty"`
@@ -533,7 +553,9 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 	// the MDS still exists, then removes its two identities.
 	cephfsErr := c.finishMDSCephFS(ctx)
 	receipt.CephFSVerified = c.mdsCephFS != nil && cephfsErr == nil
-	sessionsErr = errors.Join(sessionsErr, cephfsErr)
+	ranksErr := c.finishMDSCephFSRanks(ctx)
+	receipt.CephFSRanksVerified = c.mdsCephFSRanks != nil && ranksErr == nil
+	sessionsErr = errors.Join(sessionsErr, cephfsErr, ranksErr)
 	var removeErr error
 	if s.removeFilesystem == nil {
 		removeErr = errors.New("owned MDS fresh removal operation unavailable")

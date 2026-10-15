@@ -370,8 +370,13 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	manifest["mds_commands"] = p.mdsCommands == "1"
 	manifest["mds_sessions"] = p.mdsSessions == "1"
 	manifest["mds_cephfs"] = p.mdsCephFS == "1"
+	manifest["mds_cephfs_ranks"] = p.mdsCephFSRanks == "1"
 	if p.mdsFresh == "1" {
 		manifest["topology"] = "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
+	}
+	if p.mdsCephFSRanks == "1" {
+		manifest["topology"] = "3 MON, 0/2 MGR, one OSD and an owned filesystem with two active MDS ranks and one standby plus a native oracle client"
+		manifest["cephfs_ranks_mutations"] = "owned Go and native LibCephFS identities, one directory tree created and removed through Go requests and verified natively; export pins on two owned directories set and restored with fresh-mount readbacks; one owned standby takeover of rank 0 (ceph mds fail of the proven GID) whose blocklist entries are removed and verified during cleanup"
 	}
 	if p.mdsSessions == "1" {
 		manifest["session_mutations"] = "owned refuse_client_session, required_client_features, session timeouts, mds_defer_session_stale, eviction blocklist entries and one foreign identity, each reconciled during cleanup"

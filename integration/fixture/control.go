@@ -129,6 +129,16 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	if fields, err := c.request(out, "mds-cephfs-ranks"); err != nil {
+		return err
+	} else if fields != nil {
+		if err := c.mdsCephFSRanksControl(ctx, out, fields); err != nil {
+			return err
+		}
+		if err := publishAck(out, "mds-cephfs-ranks-completed."+fields[0]); err != nil {
+			return err
+		}
+	}
 	if fields, err := c.request(out, "mds-fresh-observe"); err != nil {
 		return err
 	} else if fields != nil {

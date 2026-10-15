@@ -39,6 +39,8 @@ type fixtureCluster struct {
 	mdsCommands *mdsCommandsScope
 	mdsSessions *mdsSessionsScope
 	mdsCephFS   *mdsCephFSScope
+	// mdsCephFSRanks is the multi-rank CephFS acceptance scope.
+	mdsCephFSRanks *mdsCephFSRanksScope
 }
 
 func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
@@ -321,6 +323,11 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	}
 	if p.mdsCephFS == "1" {
 		if err = c.prepareMDSCephFS(ctx, out); err != nil {
+			return c, err
+		}
+	}
+	if p.mdsCephFSRanks == "1" {
+		if err = c.prepareMDSCephFSRanks(ctx, out); err != nil {
 			return c, err
 		}
 	}

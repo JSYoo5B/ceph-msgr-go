@@ -223,3 +223,8 @@ but are not the acceptance record.
   RECALL_STATE answered by cap releases and FLUSHMSG acknowledgement were
   later accepted live in
   [MDS_CEPHFS_PUSH_VALIDATION.md](MDS_CEPHFS_PUSH_VALIDATION.md).
+- Sessions with two active ranks, a request forward resubmitted to the
+  destination rank, cap EXPORT/IMPORT of a subtree migration (with the
+  exporter's FLUSHMSG) and a standby takeover of rank 0 followed by a
+  reconnect were later accepted live on a separate two-rank fixture in
+  [MDS_CEPHFS_RANKS_VALIDATION.md](MDS_CEPHFS_RANKS_VALIDATION.md).

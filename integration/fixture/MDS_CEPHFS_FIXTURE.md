@@ -12,6 +12,10 @@ fencing clients also enable OSD with the default v6 object-hash profile. No
 MON feature exception is added. The fixture termination budget is two minutes,
 as for the session profile.
 
+The multi-rank acceptance uses its own profile and fixture,
+`CEPH_MSGR_TEST_MDS_CEPHFS_RANKS=1`; see
+[MDS_CEPHFS_RANKS_FIXTURE.md](MDS_CEPHFS_RANKS_FIXTURE.md).
+
 The three tests share one fixture. `go test` runs them in source file
 order: `TestCephMDSCephFSPushIntegration` (`mds_cephfs_push_test.go`) runs
 first and removes or restores everything it changes (its snapshot, quota and
