@@ -574,6 +574,42 @@ CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_RUNTIME=host \
   CEPH_MSGR_TEST_CONNECTION_MODE=crc integration/run.sh
 ```
 
+### OSD·PG 대상 raw 명령
+
+`OSDConnection.Command`는 명시적으로 연결한 OSD에 daemon-local 명령을 보내고,
+`PGCommand`는 호출자가 primary로 고른 OSD에 PG 명령을 보낸다. 둘 다 객체 요청과
+같은 lossy 세션과 client 전체 OSD TID를 쓰는 `MCommand`/`MCommandReply`이며
+raw JSON·bulk 입력·출력 bytes·상태 문자열·signed 서버 코드를 그대로 보존한다.
+`pgid`가 들어 있는 JSON은 `PGCommand`로만 보낼 수 있다. `PGCommand`는 JSON의
+`pgid`가 `OSDCommandPG`의 `<pool>.<hex seed>`와 같고 `Primary`가 연결 대상 OSD
+ID와 같아야 송신하며 JSON을 고치거나 끼워 넣지 않는다. `Seed`는 caller의
+OSDMap에서 접은 실제 PG seed이고 `MapEpoch`는 wire에 없는 로컬 metadata다.
+
+```go
+pg := cephmsgr.OSDCommandPG{Pool: pool, Seed: seed, Primary: primaryID, MapEpoch: epoch}
+result, err := primary.PGCommand(ctx, pg, cephmsgr.Command{
+    JSON: []byte(`{"prefix":"query","pgid":"2.0"}`),
+})
+// result.Code·Message·Data와 result.Submission(TID·global ID·OSD·PG)을 보존한다.
+```
+
+OSD는 allow-all OSD capability가 없는 session의 명령을 `-13`으로 거절한다.
+PG 명령은 OSD가 자기 지도로 pgid를 해석해 primary가 아니면 `-11`, PG가 없으면
+`-2`를 반환하며 두 경우 모두 명령을 실행하지 않는다. Native librados는 `-11`에서
+즉시 재전송하지만 이 client는 서버 결과를 그대로 반환하고 재전송·재연결·대상
+변경을 하지 않는다. 취소·Close·연결 단절·잘못된 응답은 `OutcomeUnknownError`와
+local submission으로 남긴다. 코드는 Linux wire errno이므로 호스트 `syscall`
+상수와 비교하지 않는다. 같은 OSD의 명령은 서버에서 하나씩 실행되므로 긴 명령이
+뒤 명령을 지연시킬 수 있다.
+
+[OSD·PG 명령 검증](integration/fixture/OSD_COMMAND_VALIDATION.md)은 CRC/AES host
+3 BlueStore에서 11개 실서버 사례를 통과했고 secure/aes256k container의 CGO0 전체
+OSD 시험 25개도 통과했다. `version`(1 MiB bulk 입력 포함)과
+`config get`, 33,895 bytes `get_command_descriptions`, unknown prefix·잘못된 인자의
+`-22`, readonly의 `-13`이 native C API 결과와 byte 단위로 일치했다. Primary PG
+query, replica의 `-11` 1회 반환(native는 timeout까지 재전송), 없는 PG의 `-2`,
+동시 명령·객체 요청과 OSD 일시정지 중 취소·Close의 결과 불명확도 확인했다.
+
 ## Raw 명령 catalog
 
 명령 목록도 일반 raw 명령으로 조회한다. 경로는 호출자가 선택하고 성공 출력의

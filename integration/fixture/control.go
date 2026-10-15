@@ -359,6 +359,22 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-command")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || fields[1] != "run" {
+			return errors.New("invalid native OSD command oracle request")
+		}
+		args := []string{"python3", "/out/osd_command_native.py", "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-command-command.json", "native OSD command oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-command-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-osd-xattr-native")
 	if err != nil {
 		return err

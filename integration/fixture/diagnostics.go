@@ -36,6 +36,7 @@ var metadataFiles = []string{
 	"osd-omap-read-results.json",
 	"osd-omap-write-command.json", "osd-omap-write-result.json", "osd-omap-write-owned.json",
 	"osd-omap-write-results.json", "osd-omap-compare-results.json",
+	"osd-command-command.json", "osd-command-result.json", "osd-command-results.json",
 }
 
 func saveMetadata(out, diagnostics string) error {

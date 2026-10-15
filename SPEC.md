@@ -1,6 +1,6 @@
 # ceph-msgr-go 스펙 및 검증 기준
 
-조사 및 구현 기준일: 2026-10-01. 통신 계층으로의 범위 조정일: 2026-10-03. OSD 통신 기초 추가 결정일: 2026-10-04. 최종 테스트 환경 범위 및 후속 제품 통신 요구 확정일: 2026-10-13. 우선순위·진행상황 정리일: 2026-10-14. O0/O1 제한 범위 구현·native 검증 갱신일: 2026-10-15. O2 OMAP header·쓰기·비교 구현·native 검증 갱신일: 2026-10-15. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
+조사 및 구현 기준일: 2026-10-01. 통신 계층으로의 범위 조정일: 2026-10-03. OSD 통신 기초 추가 결정일: 2026-10-04. 최종 테스트 환경 범위 및 후속 제품 통신 요구 확정일: 2026-10-13. 우선순위·진행상황 정리일: 2026-10-14. O0/O1 제한 범위 구현·native 검증 갱신일: 2026-10-15. O2 OMAP header·쓰기·비교와 D1 OSD·PG 명령 구현·native 검증 갱신일: 2026-10-15. 이 문서는 프로젝트 정책과 검증 기준을 정의한다. 첫 MON/MGR 구현과 Ceph 20.2.4 실서버 검증을 완료했다. 현재 API, 재현 방법 및 검증 범위는 [README.md](README.md)에 기록한다.
 
 ## 확정된 프로젝트 정책
 
@@ -27,7 +27,7 @@
 | --- | --- | --- |
 | 기반 | 기존 Messenger·CephX·MON/MGR·OSD stat/read·raw 지도 수신을 유지 | 아래 제한 범위에서 구현 및 실검증 기록 있음 |
 | P0 | 객체 mutation의 입력·완료 계약과 최소 쓰기·복합 요청: O0 → O1 | 11개 stat/read·mutation/guard opcode 구현; single BlueStore와 3-replica primary SIGKILL native 검증; O0/O1 전체 완료 아님 |
-| P1 | OSD metadata·snapshot·class call, 열거·이벤트·backoff, OSD/PG 명령과 replicated feature 범위 확대 | 제한 xattr 5 opcode·OMAP 읽기 3 opcode·OMAP header 읽기와 쓰기 4 opcode·OMAP_CMP·fresh native wire/Go 비교 구현; OMAP 범위 삭제와 나머지 metadata·이벤트·명령 미구현 |
+| P1 | OSD metadata·snapshot·class call, 열거·이벤트·backoff, OSD/PG 명령과 replicated feature 범위 확대 | 제한 xattr 5 opcode·OMAP 읽기 3 opcode·OMAP header 읽기와 쓰기 4 opcode·OMAP_CMP·fresh native wire/Go 비교 구현; D1 OSD·PG 대상 raw 명령 구현; OMAP 범위 삭제와 나머지 metadata·이벤트 미구현 |
 | P2 | MDS 인증·지도·session → MDS 대상 명령 및 metadata·필수 이벤트 → 상태 복구·결합 I/O | MDS 제품 통신 미구현 |
 | P3 | EC·추가 feature/플랫폼 profile와 장시간 검증, 후속 제품 경로를 지원하는 최종 시험 환경 | 현재 일부 profile만 실검증 기록 있음; 전체 완료 아님 |
 
@@ -76,7 +76,7 @@ README에 실제 daemon·native oracle 결과가 기록되어 있다는 뜻이�
 | ID | 구현 범위와 상태 | 기록된 검증과 남은 제한 | 근거 |
 | --- | --- | --- | --- |
 | B1 | msgr2.1 secure/CRC, CephX aes/aes256k, MON/MGR ticket 갱신·세션 복구: 구현 있음 | 20.2.4의 역할·키·주소별 실검증 기록; CRC·혼합 cipher·Windows 조합을 모두 검증한 것은 아님; cookie 재개 없음 | [session](internal/session/handshake.go), [CephX](internal/cephx/auth.go), [검증 기록](README.md#검증-결과) |
-| B2 | raw MON/MGR 명령·현재 daemon Tell·이름 지정 MON Tell, 준비/지도 대기·wire metadata: 구현 있음 | native 명령·지도 및 failover·context·Close 시험 기록; 이름 지정 MGR·OSD/PG/MDS 대상 명령은 미구현 | [명령 API](cephmsgr/api.go), [MON 대상](cephmsgr/named_mon.go), [지도 대기](cephmsgr/map_wait.go), [검증 기록](README.md#검증-결과) |
+| B2 | raw MON/MGR 명령·현재 daemon Tell·이름 지정 MON Tell, 준비/지도 대기·wire metadata: 구현 있음 | native 명령·지도 및 failover·context·Close 시험 기록; OSD/PG 대상 명령은 D1에서 구현; 이름 지정 MGR·MDS 대상 명령은 미구현 | [명령 API](cephmsgr/api.go), [MON 대상](cephmsgr/named_mon.go), [지도 대기](cephmsgr/map_wait.go), [검증 기록](README.md#검증-결과) |
 | B3 | MON log·config·digest 구독: 구현 있음 | native oracle·갱신·복구·bounded 큐 시험 기록; 권한 ACK·완전한 변경 이력·원격 unsubscribe 보장 없음 | [로그](README.md#mon-로그), [설정](README.md#mon-설정), [digest](README.md#mon-health상태-구독) |
 | B4 | 명시적 OSD 연결·ticket·v6 stat/read·mutation/guard opcode 벡터·per-op 결과: 구현 있음 | 20.2.4 legacy CRUSH, HASHPSPOOL/upmap 미사용 replicated pool의 bytes/stat2·갱신, single/3-replica BlueStore mutation·compound·primary SIGKILL 실검증 기록; snapshot·EC와 일반 최신 CRUSH 미지원; IPv6 secure/aes256k 3-replica BlueStore 검증; OSD Windows 및 그 밖의 주소 조합 미검증 | [OSD API](cephmsgr/osd.go), [요청](cephmsgr/osd_request.go), [encoder](internal/osd/request.go), [native 시험](integration/osd_test.go), [지원 범위](README.md#osd-statread-통신-기초) |
 | B5 | MON raw OSDMap 최신 full·range 조회/연속 구독, OSD map 전달: 구현 있음 | native decoder/encoder와 epoch·bytes 비교 및 갱신·단절 기록; 내포 map 해석·적용·CRUSH는 사용 계층 책임; 전체 incremental chain 보장 없음 | [MON 조회](cephmsgr/mon_osd_request.go), [MON 구독](cephmsgr/mon_osd_maps.go), [OSD 전달](cephmsgr/osd_maps.go), [지원 범위](README.md#mon-raw-osdmap-조회구독) |
@@ -378,7 +378,7 @@ PG primary 재선택, 대상 이동·fan-out·wildcard 확장은 상위가 결�
 | O1 · P0 | replicated write/writefull·append·truncate·zero·create/delete와 조건·compound | O0 | 11개 stat/read·mutation/guard opcode 구현; single BlueStore 11개·3-replica/min_size 2 전체 선택 12개 시험 통과; 25 mutation/guard 사례(CMPEXT EOF normalized length·zero-extension 포함)·mixed read/stat 5개 vector·응답 손실·정상 재시작·SIGKILL 검증; 실제 primary SIGKILL 후 남은 2 replica native/Go bytes·version·mtime·재실행 금지 검증; 넓은 matrix/host·device 전원 장애 미완료; WRITEFULL/APPEND/offset 0 WRITE 뒤 offset 0 READ/CMPEXT full-payload 조합 거절 | native 쓰기·조건 실패·복합 원자성·readback·OSD 재시작·응답 손실·재실행 금지 |
 | O2 · P1 | xattr·omap·class call·allocation hint·snapshot context·rollback | O1; opcode별 O0 계약 보완 | 부분 구현: [xattr 5 opcode](internal/osd/METADATA_CONTRACT.md)의 fresh wire·43 사례·loss/Close/SIGKILL·서버 제한/rollback·readonly EPERM·namespace 격리를 CI 9 OSD profile에서 검증(bc2b9df 42/42); [OMAP 읽기 3 opcode](internal/osd/OMAP_CONTRACT.md)의 fresh encoder/decoder 5 vector·Go bytes 대조, CRC/AES host 3 BlueStore Go/native 23 사례 및 secure AES256K CGO0 container 전체 OSD 22 시험 통과; [OMAP header·쓰기 5 opcode](integration/fixture/OSD_OMAP_WRITE_VALIDATION.md)의 fresh encoder/decoder 5 vector·Go bytes 대조와 CRC/AES host 3 BlueStore Go/native 17 사례 통과(쓰기 vector의 64-byte RETURNVEC 출력 한도 EOVERFLOW와 primary cache의 object_info 선반영 관찰 포함); [OMAP_CMP](integration/fixture/OSD_OMAP_COMPARE_VALIDATION.md)의 fresh encoder/decoder 5 vector·Go bytes 대조와 CRC/AES host 3 BlueStore 25 사례 통과(단일 assertion 17개는 Go 결과·native C prval·signed-char 모델 일치, arm64 OSD에서 signed 순서 확인); OMAP 새 CI matrix·범위 삭제·쓰기 응답 손실/SIGKILL·권한·다중 assertion C++ oracle과 나머지 O2 미완료 | native metadata·class 원본 bytes·snapshot 읽기/쓰기·rollback·오류/조건 비교 |
 | O3 · P1 | PG 열거·cursor, watch/notify·ack/오류, backoff/unblock | O0; 알림 송신 opcode는 O1/O2; 이벤트 공통 계약 | 미구현; raw OSDMap만 B5 | native 열거·알림 ack/timeout·제어 제한·큐 overflow·갱신/단절과 identity/수명 |
-| D1 · P1 | OSD·PG 대상 raw 명령·bulk 입력·reply 연관 | B4·B5; 해당 명령 encoding·권한 확정 | 미구현 | native 동일 대상의 raw/binary 출력·권한 오류·지도/대상 변경·취소 |
+| D1 · P1 | OSD·PG 대상 raw 명령·bulk 입력·reply 연관 | B4·B5; 해당 명령 encoding·권한 확정 | 구현 있음: [OSD·PG 명령](integration/fixture/OSD_COMMAND_VALIDATION.md)의 `Command`/`PGCommand`, 명시 PG·primary 검증, 재전송 없음; CRC/AES host 3 BlueStore 11 사례(native byte 일치·권한 -13·비-primary -11·없는 PG -2·일시정지 취소/Close) 통과; OSD SIGKILL 중 명령·권한 변경 전파·CI matrix 미검증 | native 동일 대상의 raw/binary 출력·권한 오류·지도/대상 변경·취소 |
 | O4 · P1 | 일반 replicated 구성의 필수 OSD feature·encoding 범위 확대 | B4·B5 및 각 feature가 요구하는 O1–O3; 사용 계층 배치 입력 | 미구현; 제한 feature 거절은 B4 | HASHPSPOOL·CRUSH/upmap 등 profile별 native 대상/결과 및 미지원 거절 비교 |
 | M0 · P2 | MDS ticket·FSMap/MDSMap·feature·session과 상태/복구 입출력 계약 | B1·B6 및 MDS 필수 wire 목록 확정 | 미구현 | native 지도·권한·session 준비/거절·갱신·최소 복구와 제한 입력 비교 |
 | D2 · P2 | MDS 대상 raw 명령·bulk 입력·reply 연관 | M0 | 미구현 | native 동일 MDS의 출력·권한 오류·rank/대상 변경·취소 |
