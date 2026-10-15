@@ -52,19 +52,23 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_FRESH: ${{ matrix.mds_fresh || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_COMMANDS: ${{ matrix.mds_commands || '0' }}", self.workflow)
-        self.assertEqual(len(self.rows), 38)
+        self.assertIn("CEPH_MSGR_TEST_MDS_SESSIONS: ${{ matrix.mds_sessions || '0' }}", self.workflow)
+        self.assertEqual(len(self.rows), 40)
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
-                  and row.get("mds_commands", "0") == "0"]
+                  and row.get("mds_commands", "0") == "0" and row.get("mds_sessions", "0") == "0"]
         self.assertEqual(len(legacy), 30)
         for row in self.rows:
             profile = row.get("osd_profile", "legacy-v6")
             self.assertIn(profile, {"legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8"})
             self.assertIn(row.get("mds_fresh", "0"), {"0", "1"})
             self.assertIn(row.get("mds_commands", "0"), {"0", "1"})
-            if profile == "legacy-v6" and row.get("mds_commands", "0") == "0":
+            self.assertIn(row.get("mds_sessions", "0"), {"0", "1"})
+            self.assertFalse(row.get("mds_commands") == "1" and row.get("mds_sessions") == "1")
+            if profile == "legacy-v6" and row.get("mds_commands", "0") == "0" and row.get("mds_sessions", "0") == "0":
                 self.assertNotIn("test_run", row, "existing rows must retain their original suite selection")
                 self.assertNotIn("mds_fresh", row)
                 self.assertNotIn("mds_commands", row)
+                self.assertNotIn("mds_sessions", row)
 
     def test_v8_rows_cover_both_security_store_and_address_profiles(self):
         for profile in ("replicated-pg-v8", "replicated-pg-reply-v8"):
@@ -111,7 +115,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
 
     def test_fresh_mds_rows_require_explicit_opt_in_and_only_their_declared_test(self):
         rows = [row for row in self.rows if row.get("mds_fresh") == "1"
-                and row.get("mds_commands", "0") == "0"]
+                and row.get("mds_commands", "0") == "0" and row.get("mds_sessions", "0") == "0"]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSFreshIntegration"}
         self.assertTrue(expected <= self.declared)
@@ -148,6 +152,30 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
             self.assertIsNone(selector.search("TestCephMDSCommandsIntegrationExtended"))
             self.assertIsNone(selector.search("PrefixTestCephMDSCommandsIntegration"))
+            observed.add(tuple(row.get(field, fallback) for field, fallback in (
+                ("key", ""), ("service", ""), ("mode", "secure"),
+                ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
+        self.assertEqual(observed, {
+            ("aes", "aes", "crc", "4", "host", "bluestore"),
+            ("aes256k", "aes256k", "secure", "6", "container", "memstore"),
+        })
+
+    def test_mds_session_rows_select_only_the_declared_session_test(self):
+        rows = [row for row in self.rows if row.get("mds_sessions") == "1"]
+        self.assertEqual(len(rows), 2)
+        expected = {"TestCephMDSSessionsIntegration"}
+        self.assertTrue(expected <= self.declared)
+        observed = set()
+        for row in rows:
+            self.assertEqual((row["mds_fresh"], row["osd_profile"], row["osd"], row["osd_replicas"], row["stress"]),
+                             ("1", "legacy-v6", "1", "1", ""))
+            self.assertNotIn("mds_commands", row)
+            self.assertNotIn("image", row)
+            self.assertNotIn("race", row)
+            selector = re.compile(row["test_run"])
+            self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
+            self.assertIsNone(selector.search("TestCephMDSSessionsIntegrationExtended"))
+            self.assertIsNone(selector.search("PrefixTestCephMDSSessionsIntegration"))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"),
                 ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))

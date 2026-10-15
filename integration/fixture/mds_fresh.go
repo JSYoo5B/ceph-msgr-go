@@ -354,9 +354,10 @@ func mdsFreshCaps(name string) ceph.ClientCaps {
 }
 
 func mdsFreshFilesystemConfig(p profile, name string) cephfs.Config {
+	legacy := p.mdsPublicClient()
 	return cephfs.Config{Name: name, ActiveMDS: 1,
-		MetadataPool: ceph.PoolConfig{Name: name + "-meta", PGNum: 16, Replicas: 1, MinSize: 1, NoHashPSPool: p.mdsCommands == "1"},
-		DataPool:     ceph.PoolConfig{Name: name + "-data", PGNum: 1, Replicas: 1, MinSize: 1, NoHashPSPool: p.mdsCommands == "1"}}
+		MetadataPool: ceph.PoolConfig{Name: name + "-meta", PGNum: 16, Replicas: 1, MinSize: 1, NoHashPSPool: legacy},
+		DataPool:     ceph.PoolConfig{Name: name + "-data", PGNum: 1, Replicas: 1, MinSize: 1, NoHashPSPool: legacy}}
 }
 
 func parseMDSFreshObservation(fields []string, token string, previousID int64, previousGlobalID uint64) (int64, uint64, error) {
@@ -482,7 +483,12 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 		return nil
 	}
 	s := c.mdsFresh
-	ctx, stop := context.WithTimeout(ctx, 45*time.Second)
+	budget := 45 * time.Second
+	if c.mdsSessions != nil {
+		// Session restoration has its own 45-second bound before removal.
+		budget += 45 * time.Second
+	}
+	ctx, stop := context.WithTimeout(ctx, budget)
 	defer stop()
 	if err := lockMDSFresh(ctx, &s.mu); err != nil {
 		return err
@@ -506,6 +512,7 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 		PoolsRemoved           bool            `json:"pools_removed"`
 		IdentityRemoved        bool            `json:"identity_removed"`
 		CommandIdentityRemoved bool            `json:"command_identity_removed,omitempty"`
+		SessionsRestored       bool            `json:"sessions_restored,omitempty"`
 		Completed              bool            `json:"completed"`
 		Error                  string          `json:"error,omitempty"`
 		FSDump                 json.RawMessage `json:"fs_dump,omitempty"`
@@ -515,6 +522,11 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 		s.cleanupErr = err
 		return err
 	}
+	// Owned session mutations, blocklist entries and their identity are
+	// reconciled while the MDS still exists. Their failure is reported but does
+	// not prevent the filesystem removal below.
+	sessionsErr := c.finishMDSSessions(ctx)
+	receipt.SessionsRestored = c.mdsSessions != nil && sessionsErr == nil
 	var removeErr error
 	if s.removeFilesystem == nil {
 		removeErr = errors.New("owned MDS fresh removal operation unavailable")
@@ -574,6 +586,7 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 		removeErr = c.cluster.DeleteClient(ctx, s.client)
 		receipt.IdentityRemoved = removeErr == nil
 	}
+	removeErr = errors.Join(sessionsErr, removeErr)
 	receipt.Completed = removeErr == nil
 	if removeErr != nil {
 		receipt.Error = removeErr.Error()

@@ -177,7 +177,7 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 			if result != nil {
 				result = errors.Join(result, collectDiagnostics(c, out, p.diagnostics))
 			}
-			cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+			cleanup, cancel := context.WithTimeout(context.Background(), p.cleanupBudget())
 			defer cancel()
 			if err := c.Terminate(cleanup); err != nil {
 				result = errors.Join(result, &cleanupFailure{cause: err})
@@ -249,7 +249,7 @@ func serve(ctx context.Context, project, out string, p profile) (result error) {
 			if result != nil {
 				result = errors.Join(result, collectDiagnostics(c, out, p.diagnostics))
 			}
-			cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
+			cleanup, stop := context.WithTimeout(context.Background(), p.cleanupBudget())
 			if err := c.Terminate(cleanup); err != nil {
 				result = errors.Join(result, &cleanupFailure{cause: err})
 				_ = os.WriteFile(filepath.Join(out, "provider.cleanup.error"), []byte(err.Error()+"\n"), 0o600)
@@ -362,8 +362,12 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd, "osd_store": p.osdStore, "osd_replicas": p.osdReplicas, "osd_profile": p.osdProfile, "native_sparse_read_oracle": p.sparseReadOracle != ""}
 	manifest["mds_fresh"] = p.mdsFresh == "1"
 	manifest["mds_commands"] = p.mdsCommands == "1"
+	manifest["mds_sessions"] = p.mdsSessions == "1"
 	if p.mdsFresh == "1" {
 		manifest["topology"] = "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
+	}
+	if p.mdsSessions == "1" {
+		manifest["session_mutations"] = "owned refuse_client_session, required_client_features, session timeouts, mds_defer_session_stale, eviction blocklist entries and one foreign identity, each reconciled during cleanup"
 	}
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {

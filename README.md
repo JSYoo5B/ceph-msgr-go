@@ -343,12 +343,17 @@ MDS의 CLOSE를 확인한다.
 MDS는 session을 연결이 아니라 client GlobalID에 묶는다. 같은 GlobalID의 새 연결은
 기존 session을 가져가므로, session이 살아 있거나 종료를 확인하지 못한 MDS 주소에는
 같은 Client가 새 연결이나 두 번째 session을 만들지 않고 `ErrMDSSessionActive`를
-반환한다. 확인되지 않은 원격 session은 MDS의 timeout 뒤 eviction되며 기본 설정에서는
-해당 주소가 blocklist된다. 다른 session이 필요하면 새 Client를 사용한다. 각
+반환한다. 확인되지 않은 원격 session은 MDS의 `session_autoclose` 뒤 eviction되며 기본
+설정에서는 해당 주소가 blocklist된다. 기본값 `mds_defer_session_stale=true`에서는 cap이
+없는 session을 그 전에 STALE로 표시하지 않는다. 다른 session이 필요하면 새 Client를 사용한다. 각
 Messenger 연결은 별도의 주소 nonce를 쓰므로 eviction blocklist는 이 client의
 OSD 연결을 막지 않는다. 데이터 I/O를 session과 결합하는 단계(M2)에서 이 관계를
 먼저 맞춰야 한다. 자세한 범위는 [session 계약](cephmsgr/MDS_SESSION_CONTRACT.md)에
-정리했다.
+정리했다. 실제 Tentacle 20.2.4 MDS에서 CRC/AES host IPv4 BlueStore와 secure/AES256K
+container IPv6 MemStore 구성이 각각 9개 사례를 통과했다. Native `session ls`의
+metadata·feature bit, 주기 갱신, STALE 뒤 자동 재개, 확인된 종료, 세 가지 REJECT
+원문, eviction 뒤 Lost 상태와 정확한 주소의 blocklist를
+[검증 기록](integration/fixture/MDS_SESSIONS_VALIDATION.md)에 남겼다.
 
 ## CephFS metadata 요청과 MDS push
 

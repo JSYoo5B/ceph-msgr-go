@@ -131,9 +131,11 @@ library refuses to create that situation:
   to open another session.
 
 An unresolved remote session is not closed by the library. Without renewals
-the MDS marks it stale after `session_timeout` and evicts it after
-`session_autoclose`; with Ceph's default `mds_session_blocklist_on_timeout`
-the session's address is blocklisted. Callers should Close sessions before
+the MDS evicts it after `session_autoclose`; with Ceph's default
+`mds_session_blocklist_on_timeout` the session's address is blocklisted.
+With the default `mds_defer_session_stale=true` a session holding no caps
+and no pending revoke is never marked STALE first; STALE after
+`session_timeout` applies to sessions with caps or with deferral disabled. Callers should Close sessions before
 closing connections or the Client; `Client.Close` does not perform a graceful
 CephFS close.
 
@@ -155,8 +157,12 @@ first bind OSD connections to the blocklisted session identity.
   metric spec and cap auths for MIMIC clients; CLOSE after a journaled close,
   connection marked disposable; killed (evicted) sessions are marked down
   without CLOSE, which this client observes as Lost.
-- `mds/Server.cc:1190-1320` (find_idle_sessions): STALE after
-  `session_timeout`, autoclose eviction after `session_autoclose`.
+- `mds/Server.cc:1190-1320` (find_idle_sessions): autoclose eviction after
+  `session_autoclose`; STALE after `session_timeout` only when the session
+  holds caps or is being revoked, unless `mds_defer_session_stale` is false.
+- `mds/Server.cc:1778-1805` (update_required_client_features): adding a
+  required client feature evicts open sessions that lack it, so a filesystem
+  policy change can end a live session (observed as Lost).
 - `mds/MDSRank.cc:1523` (send_message_client_counted): the push sequence counts
   capability, lease, snapshot and quota messages, all unsupported here.
 - `client/Client.cc:2506-2690,3505,7459`: native open/close/renew sequencing
@@ -171,7 +177,18 @@ CLOSE before OPEN, canceled open with a retained handle, protocol violations,
 overflow, the address guard, unresolved addresses and connection close. They
 are policy evidence, not native interoperability.
 
-Live Tentacle MDS acceptance is recorded separately. Until then this stage is
-synthetic- and native-vector-verified only. Multi-rank, standby/failover,
+Live Tentacle 20.2.4 acceptance passed all nine leaves on CRC/AES host IPv4
+with one BlueStore OSD and on secure/AES256K container IPv6 with one MemStore
+OSD: native `session ls` metadata and feature bits (`0x1ff`), OPEN feature
+and metric images equal to the native vector, cap auths derived from the
+identity's grant, periodic renewal, STALE and automatic resumption (with
+`mds_defer_session_stale=false` and 30 s/120 s timeouts), confirmed close,
+the refuse-session, missing-required-feature and foreign-filesystem REJECT
+texts, and eviction observed as Lost with the exact address blocklisted and
+the address guard engaged. See
+[the validation record](../integration/fixture/MDS_SESSIONS_VALIDATION.md).
+RECALL_STATE, FLUSHMSG, FORCE_RO, nonzero push sequences, root-claim and
+duplicate-uuid rejects, canceled opens, autoclose eviction, failover and
+multiple ranks were not exercised live. Multi-rank, standby/failover,
 reconnect/reclaim, eviction recovery, metrics, capabilities and data I/O are
 not implemented.

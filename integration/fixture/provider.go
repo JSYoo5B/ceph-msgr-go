@@ -37,6 +37,7 @@ type fixtureCluster struct {
 	xattrLimits *xattrLimitsScope
 	mdsFresh    *mdsFreshScope
 	mdsCommands *mdsCommandsScope
+	mdsSessions *mdsSessionsScope
 }
 
 func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
@@ -309,6 +310,11 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	}
 	if p.mdsCommands == "1" {
 		if err = c.prepareMDSCommands(ctx, out); err != nil {
+			return c, err
+		}
+	}
+	if p.mdsSessions == "1" {
+		if err = c.prepareMDSSessions(ctx, out); err != nil {
 			return c, err
 		}
 	}

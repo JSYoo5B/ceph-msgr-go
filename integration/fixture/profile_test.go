@@ -17,6 +17,7 @@ func TestProfileDefaults(t *testing.T) {
 	want := profile{
 		mdsFresh:             "0",
 		mdsCommands:          "0",
+		mdsSessions:          "0",
 		image:                "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
 		keyType:              "aes256k",
 		serviceCipher:        "aes256k",
@@ -140,6 +141,7 @@ func TestProfileInvalidChoices(t *testing.T) {
 		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION",
 		"CEPH_MSGR_TEST_MDS_FRESH",
 		"CEPH_MSGR_TEST_MDS_COMMANDS",
+		"CEPH_MSGR_TEST_MDS_SESSIONS",
 		"CEPH_MSGR_TEST_MAPPED_IPV6", "CEPH_MSGR_TEST_OSD",
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -255,6 +257,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 	wantContainer := map[string]string{
 		"CEPH_MSGR_TEST_MDS_FRESH":    "0",
 		"CEPH_MSGR_TEST_MDS_COMMANDS": "0",
+		"CEPH_MSGR_TEST_MDS_SESSIONS": "0",
 		"CEPH_MSGR_TEST_KEY_TYPE":     "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k",
 		"CEPH_MSGR_TEST_IP_FAMILY": "4", "CEPH_MSGR_TEST_MGR_COUNT": "2",
 		"CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1",
@@ -276,6 +279,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 			want := map[string]string{
 				"CEPH_MSGR_TEST_MDS_FRESH":            "0",
 				"CEPH_MSGR_TEST_MDS_COMMANDS":         "0",
+				"CEPH_MSGR_TEST_MDS_SESSIONS":         "0",
 				"CEPH_MSGR_MONITORS":                  p.monAddresses,
 				"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE": "",
 				"CEPH_MSGR_KEY_FILE":                  filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
