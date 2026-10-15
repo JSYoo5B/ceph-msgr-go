@@ -50,6 +50,8 @@ func DecodeReply(m msgr.MessageData, limit uint32) (Reply, error) {
 			op.Class = decodeClassUnion(d)
 		} else if op.Code == SetAllocHint {
 			op.AllocHint = decodeAllocHintUnion(d)
+		} else if op.Code == Rollback {
+			op.Snap = decodeRollbackUnion(d)
 		} else {
 			op.Offset, op.Length = d.U64(), d.U64()
 			op.TruncateSize, op.TruncateSequence = d.U64(), d.U32()

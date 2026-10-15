@@ -28,12 +28,32 @@ CMP operations on one owned name and records per-op prvals and unchanged state. 
 executes ONE native C write vector with explicit mtime, observes before/after
 and removes the mirror. --cleanup removes every owned name. No native mutation
 is retried; unit adaptation tests are not daemon proof.
+
+Self-managed snapshot modes (librados.h:1358-1426, librados_c.cc:1278-1306 and
+1796-1857, IoCtxImpl.cc:253-272/388-481/646-654; rados.cc:3628-3755 for the
+CLI listing; OSDMonitor.cc:291-345/14649-14668 for the MON cap gate):
+--snapcreate allocates self-managed snap ids through the MON as client.test
+and records each id in a separate atomic receipt before returning it; the
+first id puts the shared fixture pool into SELFMANAGED_SNAPS mode for good.
+--snapwrite executes ONE native C write vector on an owned name under an
+explicit set_write_ctx SnapContext (caller order kept; librados validates it
+locally and its code is reported) with optional ORDERSNAP. --snapread
+executes ONE compound read (stat2, read, getxattrs, OMAP vals/bykeys) with
+rados_ioctx_snap_set_read and always restores LIBRADOS_SNAP_HEAD. The C API
+has no OMAP header read and the CLI cannot select a self-managed snap, so no
+header is observed at a snap. --snaprollback runs the C self-managed rollback
+under an explicit SnapContext; librados stamps mtime with its own clock.
+--listsnaps runs the pinned `rados listsnaps --format json` CLI (no C clone
+listing exists) and/or decodes caller-supplied raw obj_list_snap_response_t
+bytes with ceph-dencoder. --cleanup removes owned heads first, then every
+owned snap id with selfmanaged_snap_remove.
 """
 import argparse
 import ctypes as C
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -58,6 +78,18 @@ MAX_OBJECT_INFO = 64 << 10
 MAX_CLASS_NAME = 255
 MAX_CALL_OUTPUT = 1 << 20
 RETURNVEC = 1024  # librados.h:137 LIBRADOS_OPERATION_RETURNVEC
+ORDERSNAP = 512  # librados.h:135 LIBRADOS_OPERATION_ORDERSNAP
+SNAP_WRITE_OPS = WRITE_OPS | {"writefull", "write", "setxattr", "rmxattr", "delete"}
+SNAP_HEAD = (1 << 64) - 2  # librados.h:171 LIBRADOS_SNAP_HEAD
+MAX_SNAP_ID = (1 << 64) - 3  # CEPH_MAXSNAP
+MAX_SNAPC = 64
+MAX_OWNED_SNAPS = 32
+MAX_SNAP_CREATE = 4
+MAX_SNAP_JSON = 64 << 10
+SNAPS = "osd-omap-write-snaps"
+SNAP_MODES = ("snapcreate", "snapwrite", "snapread", "snaprollback", "listsnaps")
+OBJECT_INFO_FIELDS = ("oid", "version", "prior_version", "user_version", "size", "mtime", "flags",
+                      "expected_object_size", "expected_write_size", "alloc_hint_flags")
 
 
 def binary(text, limit=MAX_BINARY):
@@ -116,7 +148,12 @@ def operations(raw, allowed=WRITE_OPS):
         if not isinstance(action, dict) or action.get("op") not in allowed:
             raise ValueError("unsupported native OMAP write operation")
         admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags", "cmp": "key", "rmrange": "begin",
-                                    "call": "class", "allochint": "expected_object_size"}[action["op"]]}
+                                    "call": "class", "allochint": "expected_object_size", "writefull": "data",
+                                    "write": "data", "setxattr": "name", "rmxattr": "name", "delete": "flags"}[action["op"]]}
+        if action["op"] == "write":
+            admitted.add("offset")
+        if action["op"] == "setxattr":
+            admitted.add("value")
         if action["op"] == "allochint":
             admitted |= {"expected_write_size", "hint_flags"}
         if action["op"] == "call":
@@ -144,15 +181,18 @@ def operations(raw, allowed=WRITE_OPS):
         elif action["op"] == "call":
             decoded.update(cls=class_name(action.get("class")), method=class_name(action.get("method")),
                            input=binary(action.get("input", "")))
-        elif action["op"] == "allochint":
-            for field, limit in (("expected_object_size", (1 << 64) - 1), ("expected_write_size", (1 << 64) - 1), ("hint_flags", (1 << 32) - 1)):
-                value = action.get(field, 0)
-                if type(value) is not int or not 0 <= value <= limit:
-                    raise ValueError("invalid native allocation hint " + field)
-                decoded[field] = value
-        elif action["op"] == "call":
-            decoded.update(cls=class_name(action.get("class")), method=class_name(action.get("method")),
-                           input=binary(action.get("input", "")))
+        elif action["op"] in ("writefull", "write"):
+            decoded["data"] = binary(action.get("data", ""))
+            if action["op"] == "write":
+                offset = action.get("offset", 0)
+                if type(offset) is not int or not 0 <= offset < 1 << 64:
+                    raise ValueError("invalid native write offset")
+                decoded["offset"] = offset
+        elif action["op"] in ("setxattr", "rmxattr"):
+            # The C builders take NUL-terminated names; the value keeps its length.
+            decoded["name"] = xattr.checked_name(binary(action.get("name"), MAX_KEY))
+            if action["op"] == "setxattr":
+                decoded["value"] = binary(action.get("value", ""))
         elif action["op"] == "rmrange":
             # Reversed ranges stay expressible here to characterize the
             # server; the Go product refuses them before transmission.
@@ -169,11 +209,40 @@ def operations(raw, allowed=WRITE_OPS):
     return result
 
 
+def explicit_mtime(mtime, label):
+    if (not isinstance(mtime, dict) or set(mtime) != {"seconds", "nanos"} or type(mtime["seconds"]) is not int
+            or type(mtime["nanos"]) is not int or not 0 <= mtime["seconds"] < 1 << 32 or not 0 <= mtime["nanos"] < 10**9):
+        raise ValueError(label + " needs an explicit valid mtime")
+    return mtime
+
+
+def snap_id(value, label, minimum=1):
+    if type(value) is not int or not minimum <= value < 1 << 64:
+        raise ValueError("invalid " + label + " snap id")
+    return value
+
+
+def snap_context(raw):
+    if not isinstance(raw, dict) or set(raw) != {"seq", "snaps"}:
+        raise ValueError("snapc needs exactly seq and snaps")
+    snaps = raw["snaps"]
+    if not isinstance(snaps, list) or len(snaps) > MAX_SNAPC:
+        raise ValueError("invalid snapc snap count")
+    # Caller order and seq bounds are NOT normalized: librados set_write_ctx
+    # validates SnapContext locally and its exact code is the observation.
+    return {"seq": snap_id(raw["seq"], "snapc seq", 0), "snaps": [snap_id(s, "snapc", 0) for s in snaps]}
+
+
 def validate_request(raw, mode):
     allowed = {"prepare": {"seed", "reserve"}, "observe": {"object", "inventory_keys", "object_info"},
                "exec": {"seed", "object", "role", "operations", "inventory_keys"},
                "assert": {"object", "operations", "inventory_keys"},
-               "compare": {"seed", "operations", "mtime", "inventory_keys", "object_info"}, "cleanup": set()}
+               "compare": {"seed", "operations", "mtime", "inventory_keys", "object_info"}, "cleanup": set(),
+               "snapcreate": {"count"},
+               "snapwrite": {"object", "snapc", "ordersnap", "operations", "mtime", "inventory_keys", "object_info"},
+               "snapread": {"object", "snap", "inventory_keys", "object_info"},
+               "snaprollback": {"object", "snap", "snapc", "inventory_keys", "object_info"},
+               "listsnaps": {"object", "raw"}}
     if mode not in allowed:
         raise ValueError("invalid OMAP write oracle mode")
     if not isinstance(raw, dict) or set(raw) - allowed[mode]:
@@ -212,12 +281,36 @@ def validate_request(raw, mode):
     elif mode == "compare":
         request["seed"] = seed(raw.get("seed"))
         request["operations"] = operations(raw.get("operations"))
-        mtime = raw.get("mtime")
-        if (not isinstance(mtime, dict) or set(mtime) != {"seconds", "nanos"} or type(mtime["seconds"]) is not int
-                or type(mtime["nanos"]) is not int or not 0 <= mtime["seconds"] < 1 << 32 or not 0 <= mtime["nanos"] < 10**9):
-            raise ValueError("compare needs an explicit valid mtime")
-        request["mtime"] = mtime
-    total = sum(len(k) for k in request["inventory_keys"])
+        request["mtime"] = explicit_mtime(raw.get("mtime"), "compare")
+    elif mode == "snapcreate":
+        count = raw.get("count", 1)
+        if type(count) is not int or not 1 <= count <= MAX_SNAP_CREATE:
+            raise ValueError("invalid self-managed snap allocation count")
+        request["count"] = count
+    elif mode in ("snapwrite", "snapread", "snaprollback"):
+        request["object"] = xattr.identity(raw.get("object"), "object")
+        if mode != "snapread":
+            request["snapc"] = snap_context(raw.get("snapc"))
+        if mode == "snapwrite":
+            request["operations"] = operations(raw.get("operations"), SNAP_WRITE_OPS)
+            request["mtime"] = explicit_mtime(raw.get("mtime"), "snapwrite")
+            if type(raw.get("ordersnap", False)) is not bool:
+                raise ValueError("ordersnap must be a boolean")
+            request["ordersnap"] = raw.get("ordersnap", False)
+        elif mode == "snapread":
+            # Zero is rejected: librados silently maps it to the head.
+            request["snap"] = snap_id(raw.get("snap"), "read")
+        else:
+            # Zero stays expressible to characterize the server natively.
+            request["snap"] = snap_id(raw.get("snap"), "rollback", 0)
+    elif mode == "listsnaps":
+        if "object" not in raw and "raw" not in raw:
+            raise ValueError("listsnaps needs an owned object, raw response bytes, or both")
+        if "object" in raw:
+            request["object"] = xattr.identity(raw["object"], "object")
+        if "raw" in raw:
+            request["raw"] = binary(raw["raw"])
+    total = sum(len(k) for k in request["inventory_keys"]) + len(request.get("raw", b""))
     for source in (request.get("seed"),):
         if source:
             total += len(source["baseline"]) + sum(len(k) + len(v) for k, v in source["entries"] + source["attributes"])
@@ -225,6 +318,7 @@ def validate_request(raw, mode):
         total += sum(len(k) + len(v) for k, v in action.get("entries", [])) + sum(map(len, action.get("keys", [])))
         total += len(action.get("key", b"")) + len(action.get("value", b""))
         total += len(action.get("begin", b"")) + len(action.get("end", b"")) + len(action.get("input", b""))
+        total += len(action.get("data", b"")) + len(action.get("name", b""))
     if total > MAX_BINARY:
         raise ValueError("aggregate OMAP write oracle input exceeds 128 KiB")
     return request
@@ -265,6 +359,34 @@ class HeaderCLI:
                 raise ValueError("native OMAP header exceeds oracle bound")
             return header
 
+    def listsnaps(self, name):
+        """Pinned CLI clone listing (rados.cc:3628-3755). A refusal is kept as
+        the exit status plus the strerror text's errno, never retried."""
+        result = subprocess.run(self.base + ["listsnaps", name.decode(), "--format", "json"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        return tool_result(result, "native rados listsnaps")
+
+
+def tool_result(result, label):
+    if len(result.stdout) > MAX_SNAP_JSON:
+        raise ValueError(label + " output exceeds oracle bound")
+    stderr = result.stderr[-MAX_CLI_OUTPUT:].decode(errors="replace")
+    if result.returncode != 0:
+        # rados/ceph-dencoder report cpp_strerror text such as "(2) No such file".
+        errno = re.search(r"\((\d+)\) ", stderr)
+        return {"exit": result.returncode, "code": -int(errno.group(1)) if errno else None, "json": None, "stderr": stderr}
+    return {"exit": 0, "code": 0, "json": json.loads(result.stdout), "stderr": ""}
+
+
+def decode_snap_list(raw):
+    """Pinned ceph-dencoder decode of caller-supplied LIST_SNAPS output bytes."""
+    with tempfile.TemporaryDirectory(prefix="list-snaps-") as directory:
+        path = Path(directory) / "response"
+        path.write_bytes(raw)
+        result = subprocess.run(["ceph-dencoder", "type", "obj_list_snap_response_t", "import", str(path), "decode", "dump_json"],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    return tool_result(result, "ceph-dencoder obj_list_snap_response_t")
+
 
 class Native(omap.Native):
     def __init__(self, library=None):
@@ -281,6 +403,18 @@ class Native(omap.Native):
             function = getattr(self.lib, "rados_" + name)
             function.argtypes, function.restype = arguments, None
         self.lib.rados_buffer_free.argtypes, self.lib.rados_buffer_free.restype = [p], None
+        u64, i = C.c_uint64, C.c_int
+        for name, (arguments, result) in {
+                "ioctx_snap_set_read": ([p, u64], None),
+                "ioctx_selfmanaged_snap_create": ([p, C.POINTER(u64)], i),
+                "ioctx_selfmanaged_snap_remove": ([p, u64], i),
+                "ioctx_selfmanaged_snap_rollback": ([p, char, u64], i),
+                "ioctx_selfmanaged_snap_set_write_ctx": ([p, u64, C.POINTER(u64), i], i),
+                "write_op_write": ([p, p, s, u64], None), "write_op_remove": ([p], None),
+                "read_op_stat2": ([p, C.POINTER(u64), C.POINTER(xattr.Timespec), C.POINTER(i)], None),
+                "read_op_read": ([p, u64, s, p, C.POINTER(s), C.POINTER(i)], None)}.items():
+            function = getattr(self.lib, "rados_" + name)
+            function.argtypes, function.restype = arguments, result
 
     def append_cmp(self, operation, kind, index, action, outputs, buffers):
         prval = C.c_int(999)
@@ -306,7 +440,7 @@ class Native(omap.Native):
         finally:
             self.lib.rados_release_read_op(operation)
 
-    def write_vector(self, io, name, actions, mtime):
+    def write_vector(self, io, name, actions, mtime, flags=RETURNVEC):
         operation = self.lib.rados_create_write_op()
         if not operation:
             raise RuntimeError("native OMAP write allocation failed")
@@ -341,12 +475,28 @@ class Native(omap.Native):
                 elif action["op"] == "rmrange":
                     self.lib.rados_write_op_omap_rm_range2(operation, action["begin"], len(action["begin"]),
                                                            action["end"], len(action["end"]))
-                else:
+                elif action["op"] in ("writefull", "write", "setxattr"):
+                    payload = action["value"] if action["op"] == "setxattr" else action["data"]
+                    buffer = C.create_string_buffer(payload, len(payload) + 1)
+                    buffers.append(buffer)
+                    if action["op"] == "writefull":
+                        self.lib.rados_write_op_write_full(operation, buffer, len(payload))
+                    elif action["op"] == "write":
+                        self.lib.rados_write_op_write(operation, buffer, len(payload), action["offset"])
+                    else:
+                        self.lib.rados_write_op_setxattr(operation, action["name"], buffer, len(payload))
+                elif action["op"] == "rmxattr":
+                    self.lib.rados_write_op_rmxattr(operation, action["name"])
+                elif action["op"] == "delete":
+                    self.lib.rados_write_op_remove(operation)
+                elif action["op"] == "clear":
                     self.lib.rados_write_op_omap_clear(operation)
+                else:
+                    raise ValueError("unsupported native write operation")
                 if action["flags"]:
                     self.lib.rados_write_op_set_flags(operation, action["flags"])
             stamp = xattr.Timespec(mtime["seconds"], mtime["nanos"])
-            aggregate = self.lib.rados_write_op_operate2(operation, io, name, C.byref(stamp), RETURNVEC)
+            aggregate = self.lib.rados_write_op_operate2(operation, io, name, C.byref(stamp), flags)
             return aggregate, [{"index": i, "prval": v.value} for i, v in outputs]
         finally:
             self.lib.rados_release_write_op(operation)
@@ -373,11 +523,18 @@ class Native(omap.Native):
             self.lib.rados_release_read_op(operation)
 
     def object_info(self, io, name):
+        code, info = self.object_info_code(io, name)
+        self.check(code)
+        return info
+
+    def object_info_code(self, io, name):
         """Committed object_info via the empty xattr name, which the OSD maps
-        to OI_ATTR "_" (PrimaryLogPG.cc:6429), decoded by pinned ceph-dencoder."""
+        to OI_ATTR "_" (PrimaryLogPG.cc:6429), decoded by pinned ceph-dencoder.
+        With a read snap set this is the clone's object_info (oid.snapid)."""
         buffer = C.create_string_buffer(MAX_OBJECT_INFO + 1)
         length = self.lib.rados_getxattr(io, name, b"", buffer, MAX_OBJECT_INFO + 1)
-        self.check(length)
+        if length < 0:
+            return length, None
         if length > MAX_OBJECT_INFO:
             raise ValueError("native object_info exceeds oracle bound")
         with tempfile.TemporaryDirectory(prefix="object-info-") as directory:
@@ -388,7 +545,74 @@ class Native(omap.Native):
         if result.returncode != 0 or len(result.stdout) > MAX_OBJECT_INFO:
             raise RuntimeError("ceph-dencoder object_info_t failed: " + result.stderr[-MAX_CLI_OUTPUT:].decode(errors="replace"))
         decoded = json.loads(result.stdout)
-        return {field: decoded[field] for field in ("expected_object_size", "expected_write_size", "alloc_hint_flags", "size", "user_version")}
+        return 0, {field: decoded[field] for field in OBJECT_INFO_FIELDS}
+
+    def set_write_context(self, io, snapc):
+        """Exact librados SnapContext admission (IoCtxImpl.cc:261-272)."""
+        snaps = (C.c_uint64 * len(snapc["snaps"]))(*snapc["snaps"])
+        return self.lib.rados_ioctx_selfmanaged_snap_set_write_ctx(io, snapc["seq"], snaps, len(snapc["snaps"]))
+
+    def reset_write_context(self, io):
+        self.check(self.set_write_context(io, {"seq": 0, "snaps": []}))
+
+    def snap_read(self, io, name, snap, inventory_keys, object_info):
+        """ONE compound read at hobj.snap=snap with per-op prvals; the ioctx
+        read snap is always restored to the head afterwards."""
+        self.lib.rados_ioctx_snap_set_read(io, snap)
+        try:
+            operation = self.lib.rados_create_read_op()
+            if not operation:
+                raise RuntimeError("native snapshot read allocation failed")
+            size, mtime, stat_rval = C.c_uint64(), xattr.Timespec(), C.c_int(999)
+            data, count, read_rval = C.create_string_buffer(MAX_BINARY + 1), C.c_size_t(), C.c_int(999)
+            iterator, xattr_rval = C.c_void_p(), C.c_int(999)
+            outputs, keep = [], []
+            try:
+                self.lib.rados_read_op_stat2(operation, C.byref(size), C.byref(mtime), C.byref(stat_rval))
+                # One byte beyond the bound proves a complete bounded read.
+                self.lib.rados_read_op_read(operation, 0, MAX_BINARY + 1, data, C.byref(count), C.byref(read_rval))
+                self.lib.rados_read_op_getxattrs(operation, C.byref(iterator), C.byref(xattr_rval))
+                self.append_reads(operation, [
+                    {"op": "vals", "flags": 0, "start_after": b"", "prefix": b"", "max_return": MAX_ENTRIES},
+                    {"op": "bykeys", "flags": 0, "keys": sorted(set(inventory_keys + [b""]))}], outputs, keep)
+                aggregate = self.lib.rados_read_op_operate(operation, io, name, 0)
+                version = self.lib.rados_get_last_version(io)
+                ops = [{"index": 0, "op": "stat", "prval": stat_rval.value}, {"index": 1, "op": "read", "prval": read_rval.value},
+                       {"index": 2, "op": "getxattrs", "prval": xattr_rval.value}]
+                if aggregate >= 0 and stat_rval.value >= 0:
+                    if size.value > MAX_BINARY or not 0 <= mtime.tv_nsec < 10**9:
+                        raise ValueError("native snapshot object size/stat2 time exceeds oracle bound")
+                    ops[0].update(size=size.value, seconds=mtime.tv_sec, nanos=mtime.tv_nsec)
+                if aggregate >= 0 and read_rval.value >= 0:
+                    if count.value > MAX_BINARY or stat_rval.value >= 0 and count.value != size.value:
+                        raise ValueError("native snapshot read is unbounded or disagrees with stat2")
+                    ops[1]["data"] = xattr.encode(data.raw[:count.value])
+                if aggregate >= 0 and xattr_rval.value >= 0:
+                    ops[2]["entries"] = self.entries(iterator)
+                for index, op, omap_iterator, prval, more in outputs:
+                    success = aggregate >= 0 and prval.value >= 0
+                    if success and not omap_iterator.value:
+                        raise ValueError("successful native OMAP action has no iterator")
+                    if success and op != "bykeys" and more.value not in (0, 1):
+                        raise ValueError("native OMAP more is not bool")
+                    ops.append({"index": 3 + index, "op": "omap_" + op, "opcode": omap.READ_CODES[op], "prval": prval.value,
+                                "more": bool(more.value) if success and op != "bykeys" else None,
+                                "entries": self.omap_entries(omap_iterator, op == "keys") if success else None})
+                if aggregate >= 0 and ops[3]["more"]:
+                    raise ValueError("native snapshot OMAP inventory exceeds one bounded page")
+            finally:
+                if iterator.value:
+                    self.lib.rados_getxattrs_end(iterator)
+                for _, _, omap_iterator, _, _ in outputs:
+                    if omap_iterator.value:
+                        self.lib.rados_omap_get_end(omap_iterator)
+                self.lib.rados_release_read_op(operation)
+            result = {"aggregate": aggregate, "version": version, "operations": ops}
+            if object_info:
+                result["object_info_code"], result["object_info"] = self.object_info_code(io, name)
+            return result
+        finally:
+            self.lib.rados_ioctx_snap_set_read(io, SNAP_HEAD)
 
     def full_state(self, io, name, inventory_keys, cli):
         length, mtime = C.c_uint64(), xattr.Timespec()
@@ -452,12 +676,105 @@ def check_ownership(receipt, metadata):
     return result
 
 
+def snap_receipt(metadata, snaps):
+    return {"schema_version": 1, "source_commit": SOURCE_COMMIT, "pool": metadata["pool"], "pool_id": metadata["pool_id"],
+            "fixture_object": metadata["object"], "namespace": "", "snaps": snaps}
+
+
+def owned_snaps(out, metadata):
+    """Self-managed snap ids this oracle allocated in the fixture pool. They
+    accumulate across prepares until a cleanup removes them."""
+    path = out / (SNAPS + ".json")
+    if not path.exists():
+        return []
+    receipt = omap.read_json(path)
+    snaps = receipt.get("snaps") if isinstance(receipt, dict) else None
+    if (not isinstance(snaps, list) or receipt != snap_receipt(metadata, snaps) or len(snaps) > MAX_OWNED_SNAPS
+            or any(type(s) is not int or not 1 <= s <= MAX_SNAP_ID for s in snaps) or len(set(snaps)) != len(snaps)):
+        raise ValueError("invalid self-managed snapshot ownership provenance or scope")
+    return list(snaps)
+
+
+def publish_snaps(out, metadata, snaps):
+    if snaps:
+        publish(out, SNAPS, snap_receipt(metadata, snaps))
+    else:
+        (out / (SNAPS + ".json")).unlink(missing_ok=True)
+
+
+def owned_target(out, metadata, request, label):
+    if request["object"] not in check_ownership(omap.read_json(out / (OWNED + ".json")), metadata):
+        raise ValueError(label + " is limited to owned objects")
+    return request["object"]
+
+
+def execute_snapshot(native, io, metadata, request, mode, out, cli, result):
+    if mode == "snapcreate":
+        snaps = owned_snaps(out, metadata)
+        if len(snaps) + request["count"] > MAX_OWNED_SNAPS:
+            raise ValueError("self-managed snapshot ownership bound reached; clean up first")
+        result["snaps"] = []
+        for _ in range(request["count"]):
+            snap = C.c_uint64(0)
+            code = native.lib.rados_ioctx_selfmanaged_snap_create(io, C.byref(snap))
+            result["snaps"].append({"code": code, "snap": snap.value if code == 0 else None})
+            if code != 0:
+                break  # the exact MON refusal is the observation; no retry
+            if not 1 <= snap.value <= MAX_SNAP_ID or snap.value in snaps:
+                raise ValueError("MON returned an invalid or already-owned snap id")
+            try:
+                snaps.append(snap.value)
+                publish_snaps(out, metadata, snaps)
+            except BaseException:
+                # Unrecorded ids are never kept: repair once, never retry.
+                native.lib.rados_ioctx_selfmanaged_snap_remove(io, snap.value)
+                raise
+        result["owned_snaps"] = snaps
+        return result
+    if mode == "listsnaps":
+        if "object" in request:
+            result["object"] = owned_target(out, metadata, request, "listsnaps").decode()
+            result["listsnaps"] = cli.listsnaps(request["object"])
+        if "raw" in request:
+            result["raw_length"] = len(request["raw"])
+            result["decoded"] = decode_snap_list(request["raw"])
+        return result
+    name = owned_target(out, metadata, request, mode)
+    result["object"] = name.decode()
+    if mode == "snapread":
+        result["snap"] = request["snap"]
+        result["read"] = native.snap_read(io, name, request["snap"], request["inventory_keys"], request["object_info"])
+        return result
+    result["before"] = native.full_state(io, name, request["inventory_keys"], cli)
+    code = native.set_write_context(io, request["snapc"])
+    result["snapc"] = dict(request["snapc"], code=code)
+    try:
+        if mode == "snapwrite":
+            flags = RETURNVEC | (ORDERSNAP if request["ordersnap"] else 0)
+            result.update(ordersnap=request["ordersnap"], operate_flags=flags, aggregate=None, prvals=[], last_version=None)
+            if code == 0:
+                result["aggregate"], result["prvals"] = native.write_vector(io, name, request["operations"], request["mtime"], flags)
+                result["last_version"] = native.lib.rados_get_last_version(io)
+        else:
+            # librados sends ROLLBACK with the ioctx snapc and its own clock.
+            result["rollback"] = {"snap": request["snap"], "code": None}
+            if code == 0:
+                result["rollback"]["code"] = native.lib.rados_ioctx_selfmanaged_snap_rollback(io, name, request["snap"])
+    finally:
+        native.reset_write_context(io)
+    result["after"] = native.full_state(io, name, request["inventory_keys"], cli)
+    if request["object_info"] and result["after"]["code"] == 0:
+        result["object_info"] = native.object_info(io, name)
+    return result
+
+
 def execute(native, io, metadata, request, mode, out, cli):
     result = {"schema_version": 1, "source_commit": SOURCE_COMMIT, "mode": mode,
               "fixture": {k: metadata[k] for k in ("pool", "pool_id", "object")},
               "scope": {"independent_native_c_api": True, "header_via_pinned_rados_cli": True,
                         "raw_wire_payload_available": False, "native_write_per_op_results_available": False,
-                        "native_cmp_per_op_prval_available": True}}
+                        "native_cmp_per_op_prval_available": True, "listsnaps_via_pinned_rados_cli": True,
+                        "snap_read_header_available": False, "rollback_mtime_explicit": False}}
     if mode == "cleanup":
         codes = []
         for name in check_ownership(omap.read_json(out / (OWNED + ".json")), metadata):
@@ -465,7 +782,16 @@ def execute(native, io, metadata, request, mode, out, cli):
         result["cleanup"] = {"objects": codes, "objects_removed": all(c["code"] in (0, -2) for c in codes)}
         for entry in codes:
             native.check(entry["code"] if entry["code"] != -2 else 0)
+        # Snap ids go only after every owned head; the OSD then trims clones.
+        removed = [{"snap": snap, "code": native.lib.rados_ioctx_selfmanaged_snap_remove(io, snap)}
+                   for snap in owned_snaps(out, metadata)]
+        result["cleanup"].update(snaps=removed, snaps_removed=all(e["code"] == 0 for e in removed))
+        publish_snaps(out, metadata, [e["snap"] for e in removed if e["code"] != 0])
+        for entry in removed:
+            native.check(entry["code"])
         return result
+    if mode in SNAP_MODES:
+        return execute_snapshot(native, io, metadata, request, mode, out, cli, result)
     if mode in ("observe", "assert"):
         owned = check_ownership(omap.read_json(out / (OWNED + ".json")), metadata)
         if request["object"] not in owned:
@@ -587,7 +913,7 @@ if __name__ == "__main__":
     parser.add_argument("root", type=Path)
     parser.add_argument("out", type=Path)
     modes = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("prepare", "observe", "assert", "exec", "compare", "cleanup"):
+    for mode in ("prepare", "observe", "assert", "exec", "compare", "cleanup") + SNAP_MODES:
         modes.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     args = parser.parse_args()
     collect(args.root, args.out, args.mode)

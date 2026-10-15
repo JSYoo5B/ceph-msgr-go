@@ -81,8 +81,10 @@ type Operation struct {
 	Xattr          XattrInput
 	Class          ClassInput
 	AllocHint      AllocHintInput
+	ListSnaps      ListSnapsInput
 	Data           []byte
 	Version        uint64
+	Snap           uint64 // ROLLBACK target snap id.
 	Code           uint16
 	Flags          uint32
 	Offset, Length uint64
@@ -91,6 +93,8 @@ type Operation struct {
 // Request.Hash is the caller's raw object hash. MOSDOp v6 transmits this in
 // raw pg_t, not an independently chosen actual PG or erasure-code shard.
 // The server maps it using the supplied pool and its OSDMap.
+// ReadSnap zero (or NoSnap) reads the head; LIST_SNAPS sends SnapDir itself.
+// SnapSeq/Snaps form the write SnapContext and OrderSnap sets ORDERSNAP.
 type Request struct {
 	ClientInc                      uint32
 	MTimeSeconds, MTimeNanoseconds uint32
@@ -99,6 +103,9 @@ type Request struct {
 	Object                         string
 	Hash                           uint32
 	Operations                     []Operation
+	ReadSnap, SnapSeq              uint64
+	Snaps                          []uint64
+	OrderSnap                      bool
 }
 
 type Version struct {
@@ -110,6 +117,7 @@ type OperationResult struct {
 	Xattr                        XattrResult
 	Class                        ClassResult
 	AllocHint                    AllocHintInput
+	Snap                         uint64 // ROLLBACK union echo.
 	Code                         uint16
 	Flags                        uint32
 	Offset, Length, TruncateSize uint64

@@ -26,6 +26,9 @@ const nativeEncoderCommit = "7f793731f1b39eb4f465e960113d2363c311b964"
 type nativeEncoderSpec struct {
 	command, wrapper, driver string
 	names                    []string
+	// requests is the number of leading MOSDOp vectors in names; zero
+	// keeps the original single request followed by replies.
+	requests int
 }
 
 var mutationEncoderSpec = nativeEncoderSpec{
@@ -66,6 +69,12 @@ var callEncoderSpec = nativeEncoderSpec{
 var allocHintEncoderSpec = nativeEncoderSpec{
 	command: "encode-osd-alloc-hint", wrapper: "osd_alloc_hint_native_encoder.cc", driver: "osd_alloc_hint_native_encoder.py",
 	names: []string{"alloc-hint-native-request-v6-all", "alloc-hint-native-reply-v6-success", "alloc-hint-native-reply-v6-failok-refused", "alloc-hint-native-reply-v6-enospc", "alloc-hint-native-reply-v6-max"},
+}
+
+var snapEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-snap", wrapper: "osd_snap_native_encoder.cc", driver: "osd_snap_native_encoder.py",
+	names:    []string{"snap-native-request-v6-read", "snap-native-request-v6-write", "snap-native-request-v6-rollback", "snap-native-request-v6-list", "snap-native-reply-v6-list", "snap-native-reply-v6-rollback", "snap-native-reply-v6-eoldsnapc", "snap-native-reply-v6-read"},
+	requests: 4,
 }
 
 // The offline encoder is a development oracle. It starts no Ceph daemon and
@@ -146,7 +155,7 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	}
 	// A shared SDK cache can retain every oracle target. Supply all original
 	// wrapper sources during configuration, then build only the selected target.
-	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper}
+	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper}
 	for _, name := range files {
 		if err := target.CopyFileToContainer(build, filepath.Join(root, "tools", name), "/tmp/"+name, 0600); err != nil {
 			return err
@@ -215,7 +224,7 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 	}
 	fixtures, ok := proof["fixtures"].(map[string]any)
 	if !ok || len(fixtures) != len(spec.names) {
-		return nil, errors.New("native proof lacks five encoder vectors")
+		return nil, fmt.Errorf("native proof lacks its %d encoder vectors", len(spec.names))
 	}
 	for i, name := range spec.names {
 		fixture, ok := fixtures[name].(map[string]any)
@@ -233,7 +242,7 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 			}
 			segments[segment] = data
 		}
-		if err := validateNativeEncoderHeader(name, fixture, segments, i == 0); err != nil {
+		if err := validateNativeEncoderHeader(name, fixture, segments, i == 0 || i < spec.requests); err != nil {
 			return nil, err
 		}
 	}

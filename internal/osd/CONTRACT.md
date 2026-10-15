@@ -31,14 +31,16 @@ extents; [OMAP_CONTRACT.md](OMAP_CONTRACT.md) records their distinct union,
 pagination, comparison, write ordering and native acceptance. Object class
 CALL has its own union and ordering rules in [CLASS_CONTRACT.md](CLASS_CONTRACT.md),
 and the allocation hint in [ALLOC_HINT_CONTRACT.md](ALLOC_HINT_CONTRACT.md).
-Snapshots, U64 comparison and bulk xattr variants remain unsupported.
+The read snap id, write SnapContext, ORDERSNAP, ROLLBACK and LIST_SNAPS follow
+[SNAPSHOT_CONTRACT.md](SNAPSHOT_CONTRACT.md). U64 comparison and bulk xattr
+variants remain unsupported.
 
 Negotiated OBJECTLOCATOR and PGID64 select the supported request/reply v6
 branch; NEW_OSDOP_ENCODING and NEW_OSDOPREPLY_ENCODING are rejected. The caller
 supplies pool, namespace, locator key, object, raw placement hash, target OSD,
 numeric address/nonce and OSDMap epoch. The raw hash echoed in pg_t is not an
-actual mapped PG number. Only head/no-snapshot context and no EC shard are
-encoded. There is no hashing, placement, redirect following or retry policy.
+actual mapped PG number. The caller supplies any snapshot fields; no EC
+shard is encoded. There is no hashing, placement, redirect following or retry policy.
 
 Each packed operation is 38 bytes: opcode u16, flags u32, 28-byte union,
 payload length u32. Input bytes concatenate in vector order in the message

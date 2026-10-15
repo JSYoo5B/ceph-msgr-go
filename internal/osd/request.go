@@ -24,7 +24,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	}
 	// Include all fixed fields and length prefixes before allocating the front.
 	const fixed = 41 + 4 + 4 + 4 + 8 + 12 + 6 + 8 + 4 + 4 + 4 + 8 + 17 + 4 + 2 + 8 + 8 + 4 + 4 + 8 + 6 + 21
-	frontBytes, err := boundedBytes(limit, fixed, uint64(len(r.Locator.Key)), uint64(len(r.Locator.Namespace)), uint64(len(r.Object)), uint64(len(r.Operations))*opWireSize)
+	frontBytes, err := boundedBytes(limit, fixed, uint64(len(r.Locator.Key)), uint64(len(r.Locator.Namespace)), uint64(len(r.Object)), uint64(len(r.Operations))*opWireSize, uint64(len(r.Snaps))*8)
 	if err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -34,6 +34,13 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	}
 	if r.MTimeNanoseconds >= 1_000_000_000 || flags&FlagWrite == 0 && (r.MTimeSeconds != 0 || r.MTimeNanoseconds != 0) {
 		return msgr.MessageData{}, ErrRequest
+	}
+	snap, err := requestSnapshot(r, flags)
+	if err != nil {
+		return msgr.MessageData{}, err
+	}
+	if r.OrderSnap {
+		flags |= FlagOrderSnap
 	}
 	if _, err := boundedBytes(limit, frontBytes, dataBytes); err != nil {
 		return msgr.MessageData{}, err
@@ -55,6 +62,8 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			outputBytes = uint64(op.Omap.MaxOutputBytes)
 		case Call:
 			outputBytes = uint64(op.Class.MaxOutputBytes)
+		case ListSnaps:
+			outputBytes = uint64(op.ListSnaps.MaxOutputBytes)
 		}
 		replyBudget, err = boundedBytes(limit, replyBudget, outputBytes)
 		if err != nil {
@@ -88,6 +97,8 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			payloadBytes += uint64(len(op.Class.Class)) + uint64(len(op.Class.Method))
 		} else if op.Code == SetAllocHint {
 			encodeAllocHintUnion(&e, op.AllocHint)
+		} else if op.Code == Rollback {
+			encodeRollbackUnion(&e, op)
 		} else {
 			e.U64(op.Offset)
 			if IsOmapOperation(op.Code) {
@@ -102,9 +113,12 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		}
 		e.U32(uint32(payloadBytes))
 	}
-	e.U64(NoSnap)
-	e.U64(0) // snap sequence.
-	e.U32(0) // empty snap context.
+	e.U64(snap)
+	e.U64(r.SnapSeq)
+	e.U32(uint32(len(r.Snaps)))
+	for _, s := range r.Snaps {
+		e.U64(s)
+	}
 	e.U32(0) // first attempt, no automatic retry.
 	e.U64(features)
 	identity := wire.Encoder{}

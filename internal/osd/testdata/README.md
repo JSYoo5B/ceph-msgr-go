@@ -46,6 +46,13 @@ ENOSPC and maximum size/all-flag replies. They are offline codec proof only and
 claim no live hint recording, object store allocation, older-OSD behavior,
 ENOSPC semantics or durability.
 
+[Fresh snapshot context, ROLLBACK and LIST_SNAPS encoder/decoder fixtures](snap-native-README.md)
+independently construct eight message triples: a READ/STAT request at clone
+snap 4, an ORDERSNAP WRITEFULL and a ROLLBACK with snap context 7/[7,4,2], a
+LIST_SNAPS request at SNAPDIR, and listing, rollback, EOLDSNAPC and clone read
+replies. They are offline codec proof only and claim no live snapshot
+creation, clone layout, rollback execution, EOLDSNAPC detection or durability.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from

@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint:
+	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps:
 		return true
 	}
 	return false
@@ -32,6 +32,23 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			return 0, 0, wire.ErrLimit
 		}
 		if op.Code != AssertVersion && op.Version != 0 {
+			return 0, 0, ErrRequest
+		}
+		if op.Code == Rollback || op.Code == ListSnaps {
+			// ROLLBACK replaces or deletes the head through the committed
+			// snapset, and LIST_SNAPS must be alone at SNAPDIR. Neither
+			// is combined with other operations.
+			if len(ops) != 1 {
+				return 0, 0, ErrOperation
+			}
+			mode, err := validateSnapOperation(op, limit)
+			if err != nil {
+				return 0, 0, err
+			}
+			flags |= mode
+			continue
+		}
+		if op.Snap != 0 || op.ListSnaps != (ListSnapsInput{}) {
 			return 0, 0, ErrRequest
 		}
 		if op.Code == Call {
@@ -193,7 +210,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 
 func writeOperation(code uint16) bool {
 	switch code {
-	case Write, WriteFull, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint:
+	case Write, WriteFull, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint, Rollback:
 		return true
 	}
 	return isOmapMutation(code)
@@ -201,7 +218,7 @@ func writeOperation(code uint16) bool {
 
 func readModeOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, OmapCompare, Call:
+	case Read, Stat, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, OmapCompare, Call, ListSnaps:
 		return true
 	}
 	return IsOmapOperation(code) && !isOmapMutation(code)

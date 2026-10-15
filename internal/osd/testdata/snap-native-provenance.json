@@ -1,0 +1,658 @@
+{
+  "binary_sha256": "3604b7e7438e510f726dfbd98ce4b445245eead995f49c9ebe57217bd696ea26",
+  "build_driver_sha256": "5705fb239fe7d82c486ec8e6e93c505804de0091084766f0cb016180fbf0bed4",
+  "builder_container_id": "7dc2a5ec97a2f8c3e8373365ec8fba6bb56c4a74a92d5dec261f9bcc43d5458e",
+  "builder_termination_completed": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "snap-native-reply-v6-eoldsnapc": {
+      "data_bytes": 0,
+      "decoded_message": {
+        "flags": 67108964,
+        "map_epoch": 11,
+        "object": "snap-codec",
+        "replay_epoch": 0,
+        "replay_version": 0,
+        "result": -85,
+        "tid": 77,
+        "user_version": 0
+      },
+      "decoded_operations": [
+        {
+          "code": 8706,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 2,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": 0,
+          "truncate_seq": 0,
+          "truncate_size": 0,
+          "union_hex": "00000000000000000200000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 201,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 201,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "fb89db630dd4f639fedd86742942edeb45cf8b7bb084686edfddcf05512a654b",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "snap-native-reply-v6-list": {
+      "data_bytes": 180,
+      "decoded_message": {
+        "flags": 67108885,
+        "map_epoch": 11,
+        "object": "snap-codec",
+        "replay_epoch": 0,
+        "replay_version": 0,
+        "result": 0,
+        "tid": 77,
+        "user_version": 20
+      },
+      "decoded_operations": [
+        {
+          "code": 4618,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 0,
+          "listing": {
+            "clones": [
+              {
+                "cloneid": 2,
+                "overlap": [
+                  [
+                    0,
+                    3
+                  ]
+                ],
+                "size": 3,
+                "snaps": [
+                  2
+                ]
+              },
+              {
+                "cloneid": 7,
+                "overlap": [
+                  [
+                    0,
+                    2
+                  ],
+                  [
+                    4,
+                    4
+                  ]
+                ],
+                "size": 9,
+                "snaps": [
+                  4,
+                  7
+                ]
+              },
+              {
+                "cloneid": 18446744073709551614,
+                "overlap": [],
+                "size": 11,
+                "snaps": []
+              }
+            ],
+            "seq": 7
+          },
+          "offset": 0,
+          "outdata_hex": "0201ae00000003000000010130000000020000000000000001000000020000000000000001000000000000000000000003000000000000000300000000000000010148000000070000000000000002000000040000000000000007000000000000000200000000000000000000000200000000000000040000000000000004000000000000000900000000000000010118000000feffffffffffffff00000000000000000b000000000000000700000000000000",
+          "payload_len": 180,
+          "result": 0,
+          "truncate_seq": 0,
+          "truncate_size": 0,
+          "union_hex": "00000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 201,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 180,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 201,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "51f424a21ea83fade2e1136e5aa562294c099517ce5fc40d44092fec98351e87",
+      "data_sha256": "ab5c102d64d5a3f42ff345cede82eedd87c63995a84b41cd3be3d9497e26f42a",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "snap-native-reply-v6-read": {
+      "data_bytes": 20,
+      "decoded_message": {
+        "flags": 67108885,
+        "map_epoch": 11,
+        "object": "snap-codec",
+        "replay_epoch": 0,
+        "replay_version": 0,
+        "result": 0,
+        "tid": 77,
+        "user_version": 3
+      },
+      "decoded_operations": [
+        {
+          "code": 4609,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 4,
+          "offset": 0,
+          "outdata_hex": "76317631",
+          "payload_len": 4,
+          "result": 0,
+          "truncate_seq": 0,
+          "truncate_size": 0,
+          "union_hex": "00000000000000000400000000000000000000000000000000000000"
+        },
+        {
+          "code": 4610,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 0,
+          "offset": 0,
+          "outdata_hex": "0400000000000000f023b66703000000",
+          "payload_len": 16,
+          "result": 0,
+          "stat_mtime_nanoseconds": 3,
+          "stat_mtime_seconds": 1739990000,
+          "stat_size": 4,
+          "truncate_seq": 0,
+          "truncate_size": 0,
+          "union_hex": "00000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 243,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 20,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 243,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "11eff69706e7be6012253ece7a5cd49ee4cea33a02af6855980ba484e975124d",
+      "data_sha256": "4eaf3ec7d7fd0f74ebc9afe4107a166c9d4945643cc84d0baf28f2c55489f9ee",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "snap-native-reply-v6-rollback": {
+      "data_bytes": 0,
+      "decoded_message": {
+        "flags": 67108901,
+        "map_epoch": 11,
+        "object": "snap-codec",
+        "replay_epoch": 11,
+        "replay_version": 21,
+        "result": 0,
+        "tid": 77,
+        "user_version": 21
+      },
+      "decoded_operations": [
+        {
+          "code": 8718,
+          "flags": 0,
+          "indata_hex": "",
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": 0,
+          "snapid": 4,
+          "union_hex": "04000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 201,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 201,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "515177eb80cb573436be4223a61ccb120b330cb77de20f0cebaceb435499c3b1",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "snap-native-request-v6-list": {
+      "data_bytes": 0,
+      "decoded_message": {
+        "flags": 67108884,
+        "map_epoch": 11,
+        "mtime_nanoseconds": 0,
+        "mtime_seconds": 0,
+        "object": "snap-codec",
+        "snap_seq": 0,
+        "snapid": 18446744073709551615,
+        "snaps": [],
+        "tid": 77
+      },
+      "decoded_operations": [
+        {
+          "code": 4618,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 0,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "truncate_seq": 0,
+          "truncate_size": 0,
+          "union_hex": "00000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 211,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 3,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 211,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 42,
+        "version": 6
+      },
+      "front_sha256": "8161d494d0fbf7ab2340dbfed25204e6c65f989443b51cd0a39f2214faf23b1f",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "20e99f0e240771d043a3cbc8fe9bfeadb083e309ec975d2899c2d28a25b4a16e"
+    },
+    "snap-native-request-v6-read": {
+      "data_bytes": 0,
+      "decoded_message": {
+        "flags": 67108884,
+        "map_epoch": 11,
+        "mtime_nanoseconds": 0,
+        "mtime_seconds": 0,
+        "object": "snap-codec",
+        "snap_seq": 0,
+        "snapid": 4,
+        "snaps": [],
+        "tid": 77
+      },
+      "decoded_operations": [
+        {
+          "code": 4609,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 4,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "truncate_seq": 0,
+          "truncate_size": 0,
+          "union_hex": "00000000000000000400000000000000000000000000000000000000"
+        },
+        {
+          "code": 4610,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 0,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "truncate_seq": 0,
+          "truncate_size": 0,
+          "union_hex": "00000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 249,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 3,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 249,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 42,
+        "version": 6
+      },
+      "front_sha256": "3a1e3e35bd2cfb0b788a1c33bf895dd1564caefc733097938189b580baf768c9",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "20e99f0e240771d043a3cbc8fe9bfeadb083e309ec975d2899c2d28a25b4a16e"
+    },
+    "snap-native-request-v6-rollback": {
+      "data_bytes": 0,
+      "decoded_message": {
+        "flags": 67108900,
+        "map_epoch": 11,
+        "mtime_nanoseconds": 5,
+        "mtime_seconds": 1739999999,
+        "object": "snap-codec",
+        "snap_seq": 7,
+        "snapid": 18446744073709551614,
+        "snaps": [
+          7,
+          4,
+          2
+        ],
+        "tid": 77
+      },
+      "decoded_operations": [
+        {
+          "code": 8718,
+          "flags": 0,
+          "indata_hex": "",
+          "outdata_hex": "",
+          "payload_len": 0,
+          "snapid": 4,
+          "union_hex": "04000000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 235,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 3,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 235,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 42,
+        "version": 6
+      },
+      "front_sha256": "4da87fa5f9ea663321aaf547d5dc2af5f34b1a8b3954c997ce91cb32f6120dfc",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "20e99f0e240771d043a3cbc8fe9bfeadb083e309ec975d2899c2d28a25b4a16e"
+    },
+    "snap-native-request-v6-write": {
+      "data_bytes": 2,
+      "decoded_message": {
+        "flags": 67108964,
+        "map_epoch": 11,
+        "mtime_nanoseconds": 5,
+        "mtime_seconds": 1739999999,
+        "object": "snap-codec",
+        "snap_seq": 7,
+        "snapid": 18446744073709551614,
+        "snaps": [
+          7,
+          4,
+          2
+        ],
+        "tid": 77
+      },
+      "decoded_operations": [
+        {
+          "code": 8706,
+          "flags": 0,
+          "indata_hex": "7632",
+          "length": 2,
+          "offset": 0,
+          "outdata_hex": "",
+          "payload_len": 2,
+          "truncate_seq": 0,
+          "truncate_size": 0,
+          "union_hex": "00000000000000000200000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 235,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 3,
+        "data_len": 2,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 235,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 42,
+        "version": 6
+      },
+      "front_sha256": "5bb366120da779772ea612ae05f280e1c6246a45ea80cadccbd65581de391473",
+      "data_sha256": "fb04dcb6970e4c3d1873de51fd5a50d7bb46b3383113602665c350ec40b5f990",
+      "header_sha256": "20e99f0e240771d043a3cbc8fe9bfeadb083e309ec975d2899c2d28a25b4a16e"
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffff961ab000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffff93400000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffff96048000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffff95ff7000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffff92f3a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffff92ef9000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffff92ec8000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffff92ea7000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffff92c83000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffff92c52000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffff92aa4000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffff96160000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffff92a03000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "eight freshly constructed native snapshot context, ROLLBACK and LIST_SNAPS messages directly encoded and separately decoded; decoded objects never re-encoded",
+  "wrapper_sha256": "ee26e0a88289f9adc9301b67885ea432962e481e00178d6ddbee46161e4a61f5",
+  "generator": "tools/osd_snap_native_encoder.cc",
+  "build_driver": "tools/osd_snap_native_encoder.py",
+  "source_license": "MOSDOp/MOSDOpReply/Objecter/osd_types/PrimaryLogPG/OSD/librados and encoding: LGPL-2.1 notices; rados.h permits LGPL-2.1 or LGPL-3.0. This independent test wrapper invokes unchanged native code and copies no Ceph implementation.",
+  "source_files": {
+    "src/messages/MOSDOp.h": "68d6b0ed89f97761bb0fc575d3d5c17edd9003b8c0ac820d53728f945ac205f5",
+    "src/messages/MOSDOpReply.h": "6bd3e2cb240e3d245480d571e21a7ae6430c416aaa45c611d9ba5063e217d444",
+    "src/osdc/Objecter.h": "a821492fba9a486b0ac715f71b77a61a5dd10c6949ec56d48add6d054a459480",
+    "src/osdc/Objecter.cc": "ef60c3e95571be0dfb7ff83e7cbc6ae7d7f1119f4f2ee26443bfbd44475f057d",
+    "src/osd/osd_types.h": "8baa31f93e0694b7986381265f6af2294b23ce7cf98f8caf5bfde66c9abb84d1",
+    "src/osd/osd_types.cc": "614710847acaebd82e17787b91b38e07198eec58488cd9f6d7283499e0fa6d3b",
+    "src/osd/PrimaryLogPG.cc": "b05065f11e23e3920fe4d63d8d35e364a4289945f40c5791566d861fbc2ee28c",
+    "src/osd/OSD.cc": "f7757409b54b01a1cf216d2e368d60ba457f24e9e6b0a1f23d6f6234ed24cd4a",
+    "src/librados/librados_cxx.cc": "5d3901143e6058e64c9bded88be077e9daa655f63de256137371ab3480fede02",
+    "src/include/rados.h": "abd9410e17a9b93ad5c666197164f0b7f86a07da361e0cbf40451f93958a01fb",
+    "src/include/object.h": "b7d941528815c001e8340b63363c42ee817a93d85f619b3d722f064d806de07c",
+    "src/include/utime.h": "7f1b34eb5333b5bfdd138ec499579ac8e8576432a942f116dd82067656b49158",
+    "src/include/encoding.h": "6cbf988d836652f2d9410502dc918903cd4bf6a9f6aad5afdbcc302317352b06",
+    "src/include/buffer.h": "3474fa9f1d88945a5b351fd459fff1390d64fbfa90bc9f512e65cacecb6c3c3b",
+    "src/msg/Message.h": "81f9b84fc9f6b2bdd93aad232a441eae268ac337a1c8a2075b927b7a954a629a",
+    "src/msg/Message.cc": "9c778ea7185e1910fb6d97bbfdcfe446a52f4eac94ff9a89faf5a3cfcdf0f562",
+    "src/include/msgr.h": "7eb1d06765ef153f6480b0a28c410df7c56946e42ac98637139079b372134e23",
+    "src/msg/async/frames_v2.h": "67c10757b0692a45854333c55a6d67bd099e8937a7511d834401fb9f673dea94",
+    "COPYING": "26f44ffbf74cdf08b3e1fdcaf1d4cfa3893ba62107950e086868a686d5ff86c2"
+  },
+  "logical_inputs": {
+    "object": "snap-codec",
+    "pool": 7,
+    "key": "route-key",
+    "namespace": "tenant",
+    "raw_hash": 287454020,
+    "client_inc": 1,
+    "map_epoch": 11,
+    "tid": 77,
+    "retry_attempt": 0,
+    "requests": {
+      "request-v6-read": {
+        "operations": [
+          "READ(offset 0, length 4) through read(uint64_t, uint64_t, buffer::list*, int*, Context*) with null outputs",
+          "STAT through stat(uint64_t*, nullptr, nullptr)"
+        ],
+        "hobj_snap": 4,
+        "snap_seq": 0,
+        "snaps": [],
+        "flags": "READ|ONDISK|RETURNVEC (0x4000014): READ and STAT are RD (rados.h 250-251), so ceph_osd_op_mode_read derives READ",
+        "mtime": "zero; the vector does not write"
+      },
+      "request-v6-write": {
+        "operations": [
+          "WRITEFULL(offset 0, length 2, data 7632) through write_full(buffer::list&&)"
+        ],
+        "hobj_snap": "NOSNAP=2^64-2",
+        "snap_seq": 7,
+        "snaps": [
+          7,
+          4,
+          2
+        ],
+        "flags": "WRITE|ORDERSNAP|ONDISK|RETURNVEC (0x4000064): WRITEFULL is WR (rados.h 274); ORDERSNAP (rados.h 460) is an explicit request flag",
+        "mtime_seconds": 1739999999,
+        "mtime_nanoseconds": 5
+      },
+      "request-v6-rollback": {
+        "operations": [
+          "ROLLBACK(snapid 4) through rollback(uint64_t)"
+        ],
+        "hobj_snap": "NOSNAP=2^64-2",
+        "snap_seq": 7,
+        "snaps": [
+          7,
+          4,
+          2
+        ],
+        "flags": "WRITE|ONDISK|RETURNVEC (0x4000024): ROLLBACK is WR (rados.h 290)",
+        "mtime_seconds": 1739999999,
+        "mtime_nanoseconds": 5
+      },
+      "request-v6-list": {
+        "operations": [
+          "LIST_SNAPS through list_snaps(librados::snap_set_t*, int*) with null outputs"
+        ],
+        "hobj_snap": "SNAPDIR=2^64-1",
+        "snap_seq": 0,
+        "snaps": [],
+        "flags": "READ|ONDISK|RETURNVEC (0x4000014): LIST_SNAPS is RD (rados.h 267)",
+        "mtime": "zero; the vector does not write"
+      }
+    },
+    "request_fields": "The wrapper passes hobj.snap, snap_seq and snaps through the public MOSDOp set_snapid, set_snap_seq and set_snaps setters in the order Objecter::_prepare_osd_op uses (Objecter.cc 3394-3396). The v6 front carries them after the ops (MOSDOp.h 330-332): le64 snap, le64 snap_seq, le32 count and le64 snaps.",
+    "reply_requests": {
+      "reply-v6-list": "request-v6-list",
+      "reply-v6-rollback": "request-v6-rollback",
+      "reply-v6-eoldsnapc": "request-v6-write",
+      "reply-v6-read": "request-v6-read"
+    },
+    "reply_outputs": {
+      "reply-v6-list": "native obj_list_snap_response_t::encode (osd_types.h 6852-6900) of clones [{cloneid 2, snaps [2], overlap [(0,3)], size 3}, {cloneid 7, snaps [4,7], overlap [(0,2),(4,4)], size 9}, {cloneid NOSNAP (head), snaps [], overlap [], size 11}] and seq 7; clone_info entries use their native encoder (6786-6846)",
+      "reply-v6-read": "READ output 76317631 (v1v1) with extent length 4; STAT output native encode(uint64_t 4) then encode(utime_t 1739990000 s, 3 ns), 16 bytes, as the STAT handler encodes object_info size and mtime (PrimaryLogPG.cc 6270-6272)",
+      "reply-v6-rollback": "no output",
+      "reply-v6-eoldsnapc": "no output"
+    },
+    "native_builders": "ObjectOperation::read (Objecter.h 497-505, add_data 176-181), stat (427-431), write_full(buffer::list&&) (587-589), rollback(uint64_t) (1515-1518: add_op(CEPH_OSD_OP_ROLLBACK) and le64 snap.snapid at union offset 0, rados.h 610-612) and list_snaps(librados::snap_set_t*, int*) (1482-1490: add_op only when every output is null). No builder adds a per-op flag or sets another union field."
+  },
+  "reply_construction_scope": [
+    "Logical replies are freshly constructed codec inputs, not daemon-produced replies or proof of snapshot creation, clone layout, rollback execution, snap trimming, listing contents, durability or caps.",
+    "reply-v6-list, reply-v6-rollback and reply-v6-read use the public MOSDOpReply constructor (MOSDOpReply.h 143-166), which keeps the request READ/WRITE/RETURNVEC mode bits and replaces only ONDISK/ONNVRAM/ACK with the explicit acktype ACK|ONDISK. This equals the execute_ctx reply built with acktype 0 (PrimaryLogPG.cc 4310-4311) and finished with add_flags(ACK|ONDISK) by complete_read_ctx (9220) or the on-commit callback (4387).",
+    "reply-v6-list: LIST_SNAPS at CEPH_SNAPDIR resolves to the head object context (2317-2319) and is refused at any other snap (2321-2338); the handler encodes the listing with the head last (6571-6659). complete_read_ctx sets versions eversion_t() and the head object user version (9209-9210) and adds ACK|ONDISK (9220). The logical head user version is 20, so the legacy version is 0'20; flags are 0x4000015 (ACK|ONDISK|READ|RETURNVEC).",
+    "reply-v6-rollback: ROLLBACK (6901-6905, _rollback_to from 8373) leaves the union unchanged and produces no output; the commit path runs set_reply_versions(at_version, user_at_version) (4325) and the on-commit callback adds ACK|ONDISK (4387). The logical versions are 11'21 and 21; flags are 0x4000025 (ACK|ONDISK|WRITE|RETURNVEC).",
+    "reply-v6-eoldsnapc: with ORDERSNAP set and the snapc seq below the object snapset seq, execute_ctx calls reply_ctx(ctx, -EOLDSNAPC) (4223-4230, 4428-4433). The wrapper repeats the public calls of OSDService::reply_op_error(op, err) (OSD.cc 1630-1649): acktype is the request's own ACK|ONDISK bits (ONDISK only, because the request carries no ACK), output is ignored only without RETURNVEC, versions are eversion_t()/0 and op_returns is empty. The constructor copies the request ops with input data cleared and per-op result 0. Flags are 0x4000064 (WRITE|ORDERSNAP|ONDISK|RETURNVEC, no ACK); the aggregate result is -85, the Ceph-defined EOLDSNAPC (rados.h 498), not a host errno.",
+    "reply-v6-read: do_read keeps extent length 4 for four bytes read (5835-5929); READ at offset 0 sets data_off 0 (6142-6144) and complete_read_ctx copies it into the header (9196); complete_read_ctx sets versions eversion_t() and the clone user version 3 (9209-9210) and adds ACK|ONDISK (9220). Flags are 0x4000015.",
+    "Public claim_ops supplies the union echoes, explicit outputs and per-op results with input data cleared. Native merge_osd_op_vector_out_data independently derives each reply payload_len and the data segment order."
+  ],
+  "native_decoder_scope": "Separate new MOSDOp/MOSDOpReply objects receive only bytes directly generated by the fresh native encoder; native decode_payload verifies each packed union, request indata, reply outdata and result against the encoded native operations, and the decoded request snapid, snap_seq, snaps, flags, mtime and TID and the decoded reply flags, result and TID against the encoder inputs. The LIST_SNAPS output is decoded by native obj_list_snap_response_t::decode and STAT output by the native u64 and utime_t decoders; decoded fields are compared with the logical inputs. Decoded objects are never encoded or re-exported.",
+  "build_receipt": {
+    "completed_at": "2026-10-15T14:11:17+09:00",
+    "public_runner": "cd integration/fixture && GOWORK=off go run . encode-osd-snap -project ../.. -cache /private/tmp/ceph-native-encoder-cache -output /tmp/ceph-snap-native-encoder-attempt2-proof.json",
+    "log": "/tmp/ceph-snap-native-encoder-attempt2-proof.json.log",
+    "official_configuration": "Existing pinned SDK cache and official CMake generated acconfig.h; only the new snapshot target appended behind if(EXISTS wrapper), existing targets unchanged",
+    "incremental_compilation": "[1/2] Building CXX object src/CMakeFiles/osd_snap_native_encoder.dir/tmp/osd_snap_native_encoder.cc.o\n[2/2] Linking CXX executable bin/osd_snap_native_encoder\n",
+    "compiler": "GCC toolset 14, C++20, Debug -O0 -g0",
+    "native_library_cache": "same-source library SHA matches existing mutation/xattr/OMAP read/OMAP header-write/OMAP_CMP/OMAPRMKEYRANGE/CALL/SETALLOCHINT proofs; no common library rebuild",
+    "cleanup": "public Terminate completed 2026-10-15T14:11:17+09:00; docker ps -a --filter label=ceph-msgr-go.native-encoder and docker inspect of the builder ID afterwards found no container",
+    "attempts": "attempt1 (completed 2026-10-15T14:08:40+09:00) compiled, ran and emitted byte-identical vectors and the same binary hash, but its wrapper comments cited several pinned source line ranges imprecisely; after correcting only those comments, attempt2 is the recorded receipt. No compile or run failed.",
+    "encoding_log": "snap-native-request-v6-read\t249\t0\nsnap-native-request-v6-write\t235\t2\nsnap-native-request-v6-rollback\t235\t0\nsnap-native-request-v6-list\t211\t0\nsnap-native-reply-v6-list\t201\t180\nsnap-native-reply-v6-rollback\t201\t0\nsnap-native-reply-v6-eoldsnapc\t201\t0\nsnap-native-reply-v6-read\t243\t20\n"
+  },
+  "native_library_matches_mutation_receipt": true,
+  "native_library_matches_xattr_receipt": true,
+  "native_library_matches_omap_read_receipt": true,
+  "native_library_matches_omap_write_receipt": true,
+  "native_library_matches_omap_cmp_receipt": true,
+  "native_library_matches_omap_range_receipt": true,
+  "native_library_matches_call_receipt": true,
+  "native_library_matches_alloc_hint_receipt": true
+}

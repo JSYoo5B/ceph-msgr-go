@@ -9,7 +9,7 @@ NOTIFY,0x1206,RD,DATA,unsupported
 NOTIFY_ACK,0x1207,RD,DATA,unsupported
 ASSERT_VER,0x1208,RD,DATA,implemented
 LIST_WATCHERS,0x1209,RD,DATA,unsupported
-LIST_SNAPS,0x120a,RD,DATA,unsupported
+LIST_SNAPS,0x120a,RD,DATA,implemented
 SYNC_READ,0x120b,RD,DATA,unsupported
 WRITE,0x2201,WR,DATA,implemented
 WRITEFULL,0x2202,WR,DATA,implemented
@@ -24,7 +24,7 @@ TMAPUP,0x320a,RMW,DATA,unsupported
 TMAPPUT,0x220b,WR,DATA,unsupported
 TMAPGET,0x120c,RD,DATA,unsupported
 CREATE,0x220d,WR,DATA,implemented
-ROLLBACK,0x220e,WR,DATA,unsupported
+ROLLBACK,0x220e,WR,DATA,implemented
 WATCH,0x220f,WR,DATA,unsupported
 OMAPGETKEYS,0x1211,RD,DATA,implemented
 OMAPGETVALS,0x1212,RD,DATA,implemented

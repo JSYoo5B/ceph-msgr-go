@@ -427,6 +427,44 @@ advisory 쓰기다. 서버는 없는 객체를 만들고 값을 object_info에 �
 지정한 flag만 보낸다. [allocation hint 계약](internal/osd/ALLOC_HINT_CONTRACT.md)에
 근거를 정리했다.
 
+snapshot은 caller가 MON에서 할당한 self-managed snap id를 그대로 전달한다. 이
+client는 snap id를 할당·삭제하지 않고 pool의 snapshot 상태와 대조하지도 않는다.
+읽기 전용 요청의 `ReadSnapshot`은 관찰할 clone을 고른다. 0은 head이며 reply는
+snap id를 되돌려주지 않는다. 쓰기 요청의 `SnapContext`는 0이 아닌 snap id를
+내림차순으로 담고 `Sequence`보다 클 수 없다. 서버는 `Snapshots[0]`이 객체의
+snapset seq보다 새로우면 쓰기 전 head를 clone하며 clone id는 `Sequence`다.
+`OrderSnapshots`를 켜면 더 오래된 context의 쓰기를 실행 전에
+`OSDOldSnapContext`(EOLDSNAPC, 85)로 거절한다. snapshot을 지정한 쓰기, 읽기
+요청의 SnapContext·ORDERSNAP, 잘못된 순서의 snap id는 송신 전에 거절한다.
+
+`OSDListSnapshots`는 단독 요청으로만 보내며 client가 CEPH_SNAPDIR을 직접 지정한다.
+결과는 `Operations[0].Snapshots`에 해석되고 raw bytes도 `Data`에 남는다.
+`OSDRollback`도 단독 요청이다. `Snapshot`을 덮는 clone으로 head의 data·xattr·OMAP을
+되돌린다. 덮는 clone이 없으면 서버는 head를 삭제하거나 clone이 남아 있을 때
+whiteout으로 바꾸고 그래도 성공을 보고한다. 객체 snapset seq보다 큰 snap id는
+version만 올린다. 요청 mtime이 0이면 head의 기존 mtime을 유지한다.
+[snapshot 계약](internal/osd/SNAPSHOT_CONTRACT.md)에 근거를 정리했다.
+
+```go
+// 쓰기: snap 7이 객체의 snapset seq보다 새로우면 쓰기 전 head가 clone 7이 된다.
+_, err := osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch, Object: object, ModificationTime: mtime,
+    SnapContext: cephmsgr.OSDSnapContext{Sequence: 7, Snapshots: []uint64{7, 3}},
+    Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDWriteFull, Length: uint64(len(data)), Data: data}},
+})
+// 읽기: snap 3 시점의 clone을 읽는다.
+reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch, Object: object, ReadSnapshot: 3,
+    Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDRead, Length: 4096}},
+})
+// 목록: clone id·snap·overlap·크기와 snapset seq를 돌려준다.
+reply, err = osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch, Object: object,
+    Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDListSnapshots,
+        ListSnapshots: cephmsgr.OSDListSnapshotsInput{MaxOutputBytes: 4096}}},
+})
+```
+
 `ModificationTime`의 0은 그대로 전송하며 client 시각으로 대체하지 않는다.
 쓰기 성공은 서버의 `OSDReplyOnDisk`를 요구한다. 이것은 저장소가 보고한
 완료이며, MemStore 재시작 후 persistence나 전원 장애 내구성 보장이 아니다.
@@ -533,6 +571,16 @@ mirror와 같은 값임을 확인했다. 기존 객체의 bytes 유지, 최대�
 초기화, 없는 객체 생성, FAILOK 뒤 쓰기를 포함한다. secure/aes256k container의
 CGO0 전체 OSD 시험 28개도 통과했다.
 
+[snapshot 검증](integration/fixture/OSD_SNAPSHOT_VALIDATION.md)은 fresh native
+encoder/별도 decoder의 8개 vector 중 요청 4개(snap 읽기, ORDERSNAP 쓰기, ROLLBACK,
+LIST_SNAPS)와 Go bytes가 일치함을 확인했다. CRC/AES host 3 BlueStore의 11개
+실서버 사례에서는 native C로 할당한 self-managed snap으로 Go와 native twin을
+비교했다. 두 번의 clone 생성, snap·head·snapset seq보다 큰 snap 읽기, rados CLI와
+`ceph-dencoder`로 대조한 목록, ORDERSNAP `-85`, clone 복원·mtime 없는 rollback·seq
+위 rollback, whiteout 삭제, 부재 객체 rollback, 덮는 clone이 없는 rollback의 head
+삭제를 포함한다. secure/aes256k container의 CGO0 전체 OSD 시험 29개와 단일
+MemStore 전체 OSD 시험도 통과했다.
+
 [OMAP 비교 검증](integration/fixture/OSD_OMAP_COMPARE_VALIDATION.md)은 fresh
 native encoder/별도 decoder의 5개 vector와 Go bytes를 대조했다. 정렬하지 않은
 assertion 입력도 native map 순서로 인코딩함을 확인했다. CRC/AES host 3
@@ -601,7 +649,7 @@ MON의 CRUSH admission 예외는 OSD에 적용하지 않는다. 구현하지 않
 feature는 `ErrUnsupportedFeatures`로 거부한다. 현재 실제 검증은 legacy CRUSH,
 HASHPSPOOL·upmap을 사용하지 않는 replicated pool에 한정한다. 일반적인 최신
 CRUSH 설정의 OSD 접속 지원은 주장하지 않는다. 독립 EC shard 대상 지정,
-snapshot context, 자동 배치·라우팅·재시도, RADOS/RBD/CephFS는
+snap id 할당·pool snapshot, 자동 배치·라우팅·재시도, RADOS/RBD/CephFS는
 이 단계의 구현 범위 밖이다.
 
 20.2.4·Darwin arm64·IPv4 host relay의 aes256k secure/CRC와 Linux arm64
