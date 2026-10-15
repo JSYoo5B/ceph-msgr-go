@@ -1,0 +1,221 @@
+{
+  "binary_sha256": "44ed0ef681183c99db700b65f6945f0ed71eeb3769041a5df15567816970316a",
+  "build_driver_sha256": "53e482d791ce064d8fef58af5cbac3e7ed356f25ac25bd1d03168103938bf513",
+  "builder_container_id": "1cd14383d41bd1040feaf114d83e78184bc050d37d9f2aaa8a0f699cabf016c3",
+  "builder_termination_completed": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "mds-map-native-fsmap-empty": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_map": {
+        "encoded_map_sha256": "b84a5ce2c9e662f0b0e391b7f45ff34ba97d4fb87519b61e27848bee6d74d2bb",
+        "entry_count": 0,
+        "epoch": 0,
+        "fsid_hex": "",
+        "message_type": 103
+      },
+      "front_bytes": 22,
+      "front_sha256": "8393bcfdde05f7a988659eb8bb68b9dd71177d80748534b9dc098703aacae728",
+      "header_bytes": 41,
+      "header_sha256": "bfa0b819347931c153335b13eebeb54a2cec0672973d31d02dab8cf5c6e811f2",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 0,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 22,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 103,
+        "version": 1
+      }
+    },
+    "mds-map-native-fsmap-multi": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_map": {
+        "encoded_map_sha256": "e74bd5a12651ba19cc13da6b69510ee0646bd67e56ad4003578bd028df5ec8fc",
+        "entry_count": 2,
+        "epoch": 17,
+        "fsid_hex": "",
+        "message_type": 103
+      },
+      "front_bytes": 69,
+      "front_sha256": "aa7982bc64e518987756a9e64743655017b7f6608d4231a9b6d5d7d0690c5a6a",
+      "header_bytes": 41,
+      "header_sha256": "bfa0b819347931c153335b13eebeb54a2cec0672973d31d02dab8cf5c6e811f2",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 0,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 69,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 103,
+        "version": 1
+      }
+    },
+    "mds-map-native-mdsmap-empty": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_map": {
+        "encoded_map_sha256": "eddc64967a8016231e5ff3e55aff35665a7a1a294a482568d0955a392989b8a9",
+        "entry_count": 0,
+        "epoch": 0,
+        "fsid_hex": "00112233445566778899aabbccddeeff",
+        "message_type": 21
+      },
+      "front_bytes": 237,
+      "front_sha256": "031a39b623ebebf522917518f4bc10492701d18a643f65f44e326322f62fa1c5",
+      "header_bytes": 41,
+      "header_sha256": "a67615ab92675920167adac73351915419312b4b05e75e6da0dadb47c0927b17",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 237,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 21,
+        "version": 2
+      }
+    },
+    "mds-map-native-mdsmap-populated": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_map": {
+        "encoded_map_sha256": "0e432ff85fb64360aea3a89975f15b069b6811632298645dc1cc9629f17c814a",
+        "entry_count": 2,
+        "epoch": 23,
+        "fsid_hex": "00112233445566778899aabbccddeeff",
+        "message_type": 21
+      },
+      "front_bytes": 1964,
+      "front_sha256": "45d37dd81aa56e94a826a12b7fe38589a36b08ee29490d075911e4439f71d161",
+      "header_bytes": 41,
+      "header_sha256": "a67615ab92675920167adac73351915419312b4b05e75e6da0dadb47c0927b17",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 1964,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 21,
+        "version": 2
+      }
+    },
+    "mds-map-native-mdsmap-unknown": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_map": {
+        "encoded_map_sha256": "b88c9d1f202e4ab8e5d16ae773dc8da9d7514eef9cdcd0089373cd19d00cea4f",
+        "entry_count": 2,
+        "epoch": 24,
+        "fsid_hex": "00112233445566778899aabbccddeeff",
+        "message_type": 21
+      },
+      "front_bytes": 2012,
+      "front_sha256": "4aed09b4d7fec5a2888783e443b3201fffd00b6fb66e6f3039f96147d83190cc",
+      "header_bytes": 41,
+      "header_sha256": "a67615ab92675920167adac73351915419312b4b05e75e6da0dadb47c0927b17",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 2012,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 21,
+        "version": 2
+      }
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "launcher_sha256": "53e482d791ce064d8fef58af5cbac3e7ed356f25ac25bd1d03168103938bf513",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffff8c30c000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffff89600000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffff8c1f8000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffff895af000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffff890e9000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffff890a8000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffff89077000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffff89056000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffff88e32000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffff88e01000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffff88c53000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffff8c2c0000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffff88bb2000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "five freshly constructed native FSMapUser/MDSMap messages directly encoded and separately decoded; decoded objects never re-encoded",
+  "wrapper_sha256": "178dbf4ed2fd8d77a6f26805df701064cb52a255f0592b5fe807541d32143f59"
+}

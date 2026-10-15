@@ -14,7 +14,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
@@ -34,6 +36,7 @@ type nativeEncoderSpec struct {
 	requestVersion uint16 // zero retains v6; explicit v8 suites declare their request class
 	mixedV8        bool   // explicitly permits leading v8 requests followed by native v6 replies
 	replyVersion   uint16 // explicit all-reply v8 suite; zero preserves the first-request default
+	mdsMaps        bool   // closed five-vector MFSMapUser/MMDSMap suite, never an OSD header override
 }
 
 var mutationEncoderSpec = nativeEncoderSpec{
@@ -131,6 +134,11 @@ var replyV8EncoderSpec = nativeEncoderSpec{
 	names: []string{"reply-v8-native-success", "reply-v8-native-enoent", "reply-v8-native-unknown-error", "reply-v8-native-mutation-ack", "reply-v8-native-redirect"},
 }
 
+var mdsMapEncoderSpec = nativeEncoderSpec{
+	command: "encode-mds-maps", wrapper: "mds_map_native_encoder.cc", driver: "mds_map_native_encoder.py", mdsMaps: true,
+	names: []string{"mds-map-native-fsmap-empty", "mds-map-native-fsmap-multi", "mds-map-native-mdsmap-empty", "mds-map-native-mdsmap-populated", "mds-map-native-mdsmap-unknown"},
+}
+
 // The offline encoder is a development oracle. It starts no Ceph daemon and
 // installs native build packages only in its owned disposable container.
 func nativeEncoderCommand(ctx context.Context, args []string) (result error) {
@@ -212,7 +220,7 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	files := []string{spec.driver, mutationEncoderSpec.wrapper, xattrEncoderSpec.wrapper, omapEncoderSpec.wrapper, omapWriteEncoderSpec.wrapper, omapCmpEncoderSpec.wrapper, omapRangeEncoderSpec.wrapper, callEncoderSpec.wrapper, allocHintEncoderSpec.wrapper, snapEncoderSpec.wrapper, watchersEncoderSpec.wrapper, mapextEncoderSpec.wrapper, checksumEncoderSpec.wrapper, sparseReadEncoderSpec.wrapper, pgListEncoderSpec.wrapper, watchNotifyEncoderSpec.wrapper, allocHintEncoderSpec.driver}
 	files = append(files, backoffEncoderSpec.wrapper, requestV8EncoderSpec.wrapper)
 	files = append(files, pgListV8EncoderSpec.wrapper)
-	files = append(files, replyV8EncoderSpec.wrapper)
+	files = append(files, replyV8EncoderSpec.wrapper, mdsMapEncoderSpec.wrapper)
 	if spec.command == sparseReadEncoderSpec.command {
 		files = append(files, "build_sparse_read_oracle.py", "osd_sparse_read_oracle.cc")
 	}
@@ -236,6 +244,15 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	if err != nil {
 		return err
 	}
+	if spec.mdsMaps {
+		driver, err := os.ReadFile(filepath.Join(root, "tools", spec.driver))
+		if err != nil {
+			return err
+		}
+		if proof["build_driver_sha256"] != fmt.Sprintf("%x", sha256.Sum256(driver)) {
+			return errors.New("native MDS proof differs from its compiled driver")
+		}
+	}
 	proof["builder_container_id"] = target.GetContainerID()
 	if err := terminate(); err != nil {
 		return err
@@ -257,6 +274,9 @@ func readNativeEncoderProof(path, wrapperHash string) (map[string]any, error) {
 }
 
 func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec) (map[string]any, error) {
+	if spec.mdsMaps && !closedMDSMapEncoderSpec(spec) {
+		return nil, errors.New("unsupported native MDS map encoder specification")
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -282,6 +302,11 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 	if spec.command != mutationEncoderSpec.command && proof["native_payload_decoder_verified"] != true {
 		return nil, errors.New("native proof lacks its independent decoder receipt")
 	}
+	if spec.mdsMaps {
+		if err := validateNativeMDSMapSourceProof(proof); err != nil {
+			return nil, err
+		}
+	}
 	fixtures, ok := proof["fixtures"].(map[string]any)
 	if !ok || len(fixtures) != len(spec.names) {
 		return nil, fmt.Errorf("native proof lacks its %d encoder vectors", len(spec.names))
@@ -301,6 +326,12 @@ func readNativeEncoderProofFor(path, wrapperHash string, spec nativeEncoderSpec)
 				return nil, fmt.Errorf("native proof has invalid %s %s bytes", name, segment)
 			}
 			segments[segment] = data
+		}
+		if spec.mdsMaps {
+			if err := validateNativeMDSMapFixture(name, fixture, segments); err != nil {
+				return nil, err
+			}
+			continue
 		}
 		requestVersion := spec.requestVersion
 		if spec.replyVersion != 0 && (spec.replyVersion != 8 || spec.requests != 0 || spec.events != 0 || spec.controls || spec.requestVersion != 0 || spec.mixedV8) {
@@ -489,6 +520,130 @@ func validateNativeReplyV8Decoder(name string, fixture map[string]any, data []by
 	}
 	if position != len(data) {
 		return fmt.Errorf("native proof has unclaimed %s decoded reply output", name)
+	}
+	return nil
+}
+
+// Only this fixed family can enter the map-header path. In particular, callers
+// cannot use a version/type parameter to relax an existing OSD proof contract.
+func closedMDSMapEncoderSpec(spec nativeEncoderSpec) bool {
+	return spec.command == mdsMapEncoderSpec.command && spec.wrapper == mdsMapEncoderSpec.wrapper &&
+		spec.driver == mdsMapEncoderSpec.driver && slices.Equal(spec.names, mdsMapEncoderSpec.names) &&
+		spec.mdsMaps && spec.requests == 0 && spec.events == 0 && !spec.controls &&
+		spec.requestVersion == 0 && !spec.mixedV8 && spec.replyVersion == 0
+}
+
+func validateNativeMDSMapSourceProof(proof map[string]any) error {
+	// This archive digest is shared with the independently retained Tentacle
+	// native proofs. A correct-looking commit label alone is insufficient.
+	if proof["source_archive_url"] != "https://codeload.github.com/ceph/ceph/tar.gz/"+nativeEncoderCommit ||
+		proof["source_archive_sha256"] != "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d" {
+		return errors.New("native MDS proof differs from the pinned source archive")
+	}
+	for _, field := range []string{"wrapper_sha256", "generated_config_sha256", "native_library_sha256", "binary_sha256", "build_driver_sha256"} {
+		text, ok := proof[field].(string)
+		digest, err := hex.DecodeString(text)
+		if !ok || err != nil || len(digest) != sha256.Size || text != strings.ToLower(text) {
+			return fmt.Errorf("native MDS proof lacks its %s provenance digest", field)
+		}
+	}
+	if proof["launcher_sha256"] != proof["build_driver_sha256"] {
+		return errors.New("native MDS launcher differs from its build driver")
+	}
+	loader, ok := proof["loader_audit"].(string)
+	if !ok || strings.Contains(loader, "not found") || !strings.Contains(loader, "libceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2") {
+		return errors.New("native MDS proof does not load its matching pinned ceph-common")
+	}
+	return nil
+}
+
+func nativeProofNumber(m map[string]any, field string, want uint64) bool {
+	n, ok := m[field].(json.Number)
+	got, err := strconv.ParseUint(n.String(), 10, 64)
+	return ok && err == nil && got == want
+}
+
+func validateNativeMDSMapFixture(name string, fixture map[string]any, segments map[string][]byte) error {
+	typ, version, compat := uint64(21), uint64(2), uint64(1)
+	expectedEpoch := uint32(0)
+	expectedEntries := uint64(0)
+	switch name {
+	case "mds-map-native-fsmap-empty":
+		typ, version, compat = 103, 1, 0
+	case "mds-map-native-fsmap-multi":
+		typ, version, compat, expectedEpoch = 103, 1, 0, 17
+		expectedEntries = 2
+	case "mds-map-native-mdsmap-empty":
+	case "mds-map-native-mdsmap-populated":
+		expectedEpoch = 23
+		expectedEntries = 2
+	case "mds-map-native-mdsmap-unknown":
+		expectedEpoch = 24
+		expectedEntries = 2
+	default:
+		return fmt.Errorf("native proof has unknown MDS map vector %s", name)
+	}
+	h, front, data := segments["header"], segments["front"], segments["data"]
+	if len(h) != 41 || len(data) != 0 || binary.LittleEndian.Uint64(h[:8]) != 1 ||
+		binary.LittleEndian.Uint64(h[8:16]) != 0 || uint64(binary.LittleEndian.Uint16(h[16:18])) != typ ||
+		binary.LittleEndian.Uint16(h[18:20]) != 127 || uint64(binary.LittleEndian.Uint16(h[20:22])) != version ||
+		binary.LittleEndian.Uint32(h[22:26]) != 0 || binary.LittleEndian.Uint16(h[26:28]) != 0 ||
+		binary.LittleEndian.Uint64(h[28:36]) != 3 || h[36] != 1 ||
+		uint64(binary.LittleEndian.Uint16(h[37:39])) != compat || binary.LittleEndian.Uint16(h[39:41]) != 0 {
+		return fmt.Errorf("native proof has unsupported %s map header", name)
+	}
+	metadata, ok := fixture["native_header"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("native proof lacks %s header metadata", name)
+	}
+	for field, want := range map[string]uint64{"seq": 1, "tid": 0, "type": typ, "priority": 127, "version": version, "data_off": 0, "ack_seq": 3, "flags": 1, "compat": compat, "reserved": 0, "front_len": uint64(len(front)), "middle_len": 0, "data_len": 0} {
+		if !nativeProofNumber(metadata, field, want) {
+			return fmt.Errorf("native proof has inconsistent %s header %s", name, field)
+		}
+	}
+	for _, segment := range []string{"front", "data", "header"} {
+		if fixture[segment+"_sha256"] != fmt.Sprintf("%x", sha256.Sum256(segments[segment])) {
+			return fmt.Errorf("native proof has inconsistent %s %s digest", name, segment)
+		}
+	}
+	decoded, ok := fixture["decoded_map"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("native proof lacks %s independent map decoder receipt", name)
+	}
+	var epoch uint32
+	var encoded []byte
+	fsid := ""
+	if typ == 103 {
+		if len(front) < 22 {
+			return fmt.Errorf("native proof has short %s FSMapUser front", name)
+		}
+		epoch = binary.LittleEndian.Uint32(front[:4])
+		encoded = front[4:]
+		if encoded[0] != 1 || encoded[1] != 1 || uint64(binary.LittleEndian.Uint32(encoded[2:6])) != uint64(len(encoded)-6) || uint64(binary.LittleEndian.Uint32(encoded[14:18])) != expectedEntries {
+			return fmt.Errorf("native proof has unsupported %s FSMapUser structure", name)
+		}
+	} else {
+		if len(front) < 38 {
+			return fmt.Errorf("native proof has short %s MDSMap front", name)
+		}
+		fsid = hex.EncodeToString(front[:16])
+		if fsid != "00112233445566778899aabbccddeeff" {
+			return fmt.Errorf("native proof has foreign %s fixture FSID", name)
+		}
+		epoch = binary.LittleEndian.Uint32(front[16:20])
+		n := uint64(binary.LittleEndian.Uint32(front[20:24]))
+		if n > uint64(len(front)-28) || n != uint64(len(front)-28) || binary.LittleEndian.Uint32(front[24+int(n):]) != 0 {
+			return fmt.Errorf("native proof has invalid %s MDSMap blob/name extent", name)
+		}
+		encoded = front[24 : 24+int(n)]
+		if len(encoded) < 10 || encoded[0] != 5 || encoded[1] != 4 || uint64(binary.LittleEndian.Uint32(encoded[2:6])) != uint64(len(encoded)-6) {
+			return fmt.Errorf("native proof has unsupported %s current MDSMap structure", name)
+		}
+	}
+	if epoch != expectedEpoch || binary.LittleEndian.Uint32(encoded[6:10]) != epoch ||
+		!nativeProofNumber(decoded, "message_type", typ) || !nativeProofNumber(decoded, "epoch", uint64(epoch)) || !nativeProofNumber(decoded, "entry_count", expectedEntries) ||
+		decoded["fsid_hex"] != fsid || decoded["encoded_map_sha256"] != fmt.Sprintf("%x", sha256.Sum256(encoded)) {
+		return fmt.Errorf("native proof has inconsistent %s map identity/decoder receipt", name)
 	}
 	return nil
 }

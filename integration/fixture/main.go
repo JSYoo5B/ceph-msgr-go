@@ -36,6 +36,9 @@ func (e *cleanupFailure) Error() string { return "fixture cleanup: " + e.cause.E
 func (e *cleanupFailure) Unwrap() error { return e.cause }
 
 func command(ctx context.Context, args []string) (result error) {
+	if len(args) != 0 && args[0] == "encode-mds-maps" {
+		return runNativeEncoder(ctx, args[1:], mdsMapEncoderSpec)
+	}
 	if len(args) != 0 && args[0] == "encode-osd-mutations" {
 		return nativeEncoderCommand(ctx, args[1:])
 	}
