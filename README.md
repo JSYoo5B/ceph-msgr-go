@@ -302,7 +302,8 @@ CephFS OPEN 없이 명령을 보낼 수 있으나 native `allow_all` 권한 검�
 [실검증 기록](integration/fixture/MDS_COMMAND_VALIDATION.md)에 정확한 범위를 구분했다.
 CRC/AES host IPv4 BlueStore와 secure/AES256K container IPv6 MemStore에서 각각
 11개 사례가 통과했다. 검증 구성은 legacy CRUSH·HASHPSPOOL 미사용 단일 OSD와
-active rank 0이다. 실제 다중 rank 전환·MDS failover·CephFS I/O는 미검증이다.
+active rank 0이다. raw 명령의 다중 rank 대상 전환과 MDS failover 중 명령은 미검증이다.
+CephFS session과 metadata 통신의 검증은 아래 절에 따로 기록했다.
 
 ## CephFS MDS session
 

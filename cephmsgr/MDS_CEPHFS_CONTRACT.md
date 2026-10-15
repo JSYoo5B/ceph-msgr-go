@@ -284,11 +284,14 @@ and the same OSD read on the client's existing OSD connection returned
 cut the unsafe-to-safe latency from up to 5 s to a few milliseconds. See
 [the recovery record](../integration/fixture/MDS_CEPHFS_RECOVERY_VALIDATION.md).
 A consumer that installs caps only from reply traces can see a cap GRANT for
-a replayed inode before that request's reply; `Arrival` orders them. Not
-exercised live: a REPLAY answered from the completed-request record, a lost
-reply of a delivered request, reconnect denial or a missed window, standby
-takeover, multiple ranks, split reconnect messages and non-root realms. No path walking, inode or dentry cache, capability bookkeeping, lease
-expiry, snapshot realm tree, dirty metadata or data writeback, file locks,
-reconnect after MDS failover, request replay, delegated inodes or async
-operations are implemented. File data I/O semantics (layout, striping,
+a replayed inode before that request's reply; `Arrival` orders them. Standby
+takeover and multiple ranks are covered by the ranks acceptance under
+Evidence. Not exercised live: a REPLAY answered from the completed-request
+record, a lost reply of a delivered request, reconnect denial or a missed
+window, split reconnect messages and non-root realms.
+
+The library never reconnects, replays or resubmits on its own, and
+implements no path walking, inode or dentry cache, capability bookkeeping,
+lease expiry, snapshot realm tree, dirty metadata or data writeback, file
+locks, delegated inodes or async operations. File data I/O semantics (layout, striping,
 flush ordering against capabilities) remain the consumer's.
