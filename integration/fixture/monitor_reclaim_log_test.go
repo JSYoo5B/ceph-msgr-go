@@ -32,8 +32,20 @@ func TestMonitorReclaimFilterPreservesMalformedCandidatesAndResourceFailures(t *
 	if _, err := io.ReadAll(newMonitorReclaimLogReader(context.Background(), iotest.ErrReader(inputErr), "b")); !errors.Is(err, inputErr) {
 		t.Fatal("stream error hidden", err)
 	}
-	if _, err := io.ReadAll(newMonitorReclaimLogReader(context.Background(), strings.NewReader(strings.Repeat("x", monitorReclaimLineLimit+1)), "b")); err == nil {
-		t.Fatal("unbounded unrelated log line accepted")
+	// An over-long unrelated line (a native debug dump) is streamed through
+	// without retention; the relevant line after it is still delivered.
+	line := reclaimProcessStart + " 7ff7ec39b640  0 cephx server mgr.b:  attempt to reclaim global_id 15059 using bad ticket\n"
+	huge := strings.Repeat("x", 3*monitorReclaimLineLimit) + "\n"
+	got, err := scanMonitorReclaimRefusals(newMonitorReclaimLogReader(context.Background(), io.MultiReader(strings.NewReader(huge), strings.NewReader(line)), "b"), "b", reclaimSince(t), len(line))
+	if err != nil || !reflect.DeepEqual(got, []uint64{15059}) {
+		t.Fatal("over-long unrelated log line blocked attribution", got, err)
+	}
+	if _, err := io.ReadAll(newMonitorReclaimLogReader(context.Background(), strings.NewReader(strings.Repeat("x", 3*monitorReclaimLineLimit)), "b")); err != nil {
+		t.Fatal("unterminated unrelated tail", err)
+	}
+	candidate := reclaimProcessStart + " cephx server mgr.b:  attempt to reclaim global_id " + strings.Repeat("9", monitorReclaimLineLimit) + "\n"
+	if _, err := io.ReadAll(newMonitorReclaimLogReader(context.Background(), strings.NewReader(candidate), "b")); err == nil {
+		t.Fatal("unbounded reclaim candidate accepted")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -2,10 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
-	"strings"
 )
 
 // Bound memory for each streamed native log line independently of the amount
@@ -14,16 +15,52 @@ const monitorReclaimLineLimit = 1 << 20
 
 type monitorReclaimLogReader struct {
 	ctx     context.Context
-	scanner *bufio.Scanner
-	prefix  string
+	reader  *bufio.Reader
+	prefix  []byte
+	line    []byte
 	pending []byte
 }
 
 func newMonitorReclaimLogReader(ctx context.Context, input io.Reader, name string) io.Reader {
-	scanner := bufio.NewScanner(input)
-	scanner.Buffer(make([]byte, 64<<10), monitorReclaimLineLimit+1)
-	return &monitorReclaimLogReader{ctx: ctx, scanner: scanner,
-		prefix: "cephx server mgr." + name + ":  attempt to reclaim global_id "}
+	return &monitorReclaimLogReader{ctx: ctx, reader: bufio.NewReaderSize(input, 64<<10),
+		prefix: []byte("cephx server mgr." + name + ":  attempt to reclaim global_id ")}
+}
+
+// nextLine returns one line without its newline. A line longer than the
+// limit is consumed in bounded chunks; only its first limit bytes are kept
+// and overLong reports the truncation.
+func (r *monitorReclaimLogReader) nextLine() (line []byte, overLong bool, err error) {
+	r.line = r.line[:0]
+	for {
+		chunk, err := r.reader.ReadSlice('\n')
+		room := monitorReclaimLineLimit - len(r.line)
+		if len(chunk) > room {
+			r.line = append(r.line, chunk[:room]...)
+			overLong = true
+		} else {
+			r.line = append(r.line, chunk...)
+		}
+		switch {
+		case err == nil:
+			return trimNewline(r.line), overLong, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			if err := r.ctx.Err(); err != nil {
+				return nil, false, err
+			}
+			continue
+		case errors.Is(err, io.EOF) && (len(r.line) > 0 || overLong):
+			return trimNewline(r.line), overLong, nil
+		default:
+			return nil, false, err
+		}
+	}
+}
+
+func trimNewline(line []byte) []byte {
+	if n := len(line); n > 0 && line[n-1] == '\n' {
+		return line[:n-1]
+	}
+	return line
 }
 
 func (r *monitorReclaimLogReader) Read(p []byte) (int, error) {
@@ -34,18 +71,24 @@ func (r *monitorReclaimLogReader) Read(p []byte) (int, error) {
 		if err := r.ctx.Err(); err != nil {
 			return 0, err
 		}
-		if !r.scanner.Scan() {
-			if err := r.scanner.Err(); err != nil {
-				return 0, fmt.Errorf("native MON reclaim candidate line scan: %w", err)
+		line, overLong, err := r.nextLine()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return 0, io.EOF
 			}
-			return 0, io.EOF
+			return 0, fmt.Errorf("native MON reclaim candidate line scan: %w", err)
 		}
-		if !strings.Contains(r.scanner.Text(), r.prefix) {
+		if !bytes.Contains(line, r.prefix) {
+			// Unrelated history, including over-long debug dumps, is
+			// streamed through in bounded chunks and never retained.
 			continue
+		}
+		if overLong {
+			return 0, fmt.Errorf("native MON reclaim candidate line exceeds %d bytes", monitorReclaimLineLimit)
 		}
 		// Preserve every candidate unchanged for the existing strict native
 		// timestamp/entity/GID/suffix parser, including malformed candidates.
-		r.pending = append(r.pending[:0], r.scanner.Bytes()...)
+		r.pending = append(r.pending[:0], line...)
 		r.pending = append(r.pending, '\n')
 	}
 	n := copy(p, r.pending)
