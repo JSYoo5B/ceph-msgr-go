@@ -119,7 +119,8 @@ type MDSRequest struct {
 // MDSReply is one MClientReply. Result is the signed wire code (Linux
 // numbering); Trace, Extra and SnapTrace are raw blobs, decodable with the
 // Decode* methods. Unsafe replies precede the safe (journaled) reply of the
-// same request.
+// same request. Op is the MDS's: a retried MKNOD, MKDIR or SYMLINK already in
+// the MDS's completed-request record can be answered as LOOKUP or GETATTR.
 type MDSReply struct {
 	// Arrival orders this reply among the session's replies, pushes and
 	// session events in receive order (see MDSSessionEvent.Arrival).
@@ -417,6 +418,26 @@ func (s *MDSSession) failRequestsLocked(cause error) {
 }
 
 // dispatchReply routes MClientReply and MClientRequestForward. s.mu is held.
+// convertedCompletedReply reports the one reply whose operation legitimately
+// differs from its request. A retried non-REPLAY MKNOD, MKDIR or SYMLINK whose
+// journaled completed-request record holds the inode it created is rewritten
+// during clientreplay into LOOKUP (dentry wanted) or GETATTR
+// (Server::handle_client_request), and MClientReply copies the rewritten op.
+func convertedCompletedReply(request MDSRequest, op uint32) bool {
+	if request.Retry == 0 || request.Flags&mds.RequestFlagReplay != 0 {
+		return false
+	}
+	switch request.Op {
+	case mds.OpMknod, mds.OpMkdir, mds.OpSymlink:
+	default:
+		return false
+	}
+	if request.Flags&mds.RequestFlagWantDentry != 0 {
+		return op == mds.OpLookup
+	}
+	return op == mds.OpGetattr
+}
+
 func (s *MDSSession) dispatchReplyLocked(message msgr.MessageData, received time.Time) error {
 	call := s.requests[message.Transaction]
 	if call == nil {
@@ -441,7 +462,7 @@ func (s *MDSSession) dispatchReplyLocked(message msgr.MessageData, received time
 	if err != nil {
 		return fmt.Errorf("%w: invalid MDS reply: %w", msgr.ErrFrame, err)
 	}
-	if decoded.Op != call.op {
+	if decoded.Op != call.op && !convertedCompletedReply(call.request, decoded.Op) {
 		return fmt.Errorf("%w: MDS reply operation differs from its request", msgr.ErrFrame)
 	}
 	s.arrival++

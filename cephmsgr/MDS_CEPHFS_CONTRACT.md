@@ -147,10 +147,14 @@ trace flags and the raw trace, extra and snap blobs. `DecodeTrace`,
 `DecodeReaddir` and `DecodeSnapTrace` decode them in the native client order;
 `DecodeMDSXattrs` decodes an inode's xattr blob. Opaque optional metadata is
 kept as bytes. A call stays tracked until its safe reply or forward; afterwards the MDS
-sends nothing more for that TID on the connection. A reply whose operation
-differs from its request, a second unsafe reply, a forward after a reply and
-any reply or forward for an untracked TID (including a raw command TID) fail
-the transport.
+sends nothing more for that TID on the connection. A reply's `Op` is the
+MDS's: a retried non-REPLAY MKNOD, MKDIR or SYMLINK that the MDS finds in its
+completed-request record during clientreplay is executed as LOOKUP (dentry
+wanted) or GETATTR and answered with that op (`Server::handle_client_request`),
+which the call accepts. Any other reply whose operation differs from its
+request, a second unsafe reply, a forward after a reply and any reply or
+forward for an untracked TID (including a raw command TID) fail the
+transport.
 
 Decoded structures are raw wire values. `MDSFileLayout.Pool` keeps the
 legacy wire field: a directory's all-zero legacy layout decodes as pool 0,

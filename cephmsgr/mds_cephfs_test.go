@@ -617,3 +617,45 @@ func TestCephFSResubmitForwardedKeepsTIDOnDestinationRank(t *testing.T) {
 		t.Fatal(reply, err)
 	}
 }
+
+func TestCephFSCompletedCreateConversion(t *testing.T) {
+	for _, tc := range []struct {
+		request MDSRequest
+		op      uint32
+		want    bool
+	}{
+		{MDSRequest{Op: MDSOpMkdir, Retry: 1, Flags: MDSRequestFlagWantDentry}, MDSOpLookup, true},
+		{MDSRequest{Op: mds.OpMknod, Retry: 2}, MDSOpGetattr, true},
+		{MDSRequest{Op: mds.OpSymlink, Retry: 1, Flags: MDSRequestFlagWantDentry}, MDSOpLookup, true},
+		{MDSRequest{Op: MDSOpMkdir, Retry: 1, Flags: MDSRequestFlagWantDentry}, MDSOpGetattr, false},
+		{MDSRequest{Op: MDSOpMkdir, Retry: 1}, MDSOpLookup, false},
+		{MDSRequest{Op: MDSOpMkdir, Flags: MDSRequestFlagWantDentry}, MDSOpLookup, false},
+		{MDSRequest{Op: MDSOpMkdir, Retry: 1, Flags: MDSRequestFlagWantDentry | mds.RequestFlagReplay}, MDSOpLookup, false},
+		{MDSRequest{Op: MDSOpCreate, Retry: 1, Flags: MDSRequestFlagWantDentry}, MDSOpLookup, false},
+		{MDSRequest{Op: MDSOpRename, Retry: 1, Flags: MDSRequestFlagWantDentry}, MDSOpLookup, false},
+	} {
+		if got := convertedCompletedReply(tc.request, tc.op); got != tc.want {
+			t.Fatalf("op %#x retry %d flags %#x answered as %#x: %v", tc.request.Op, tc.request.Retry, tc.request.Flags, tc.op, got)
+		}
+	}
+	_, _, s, peer, ctx := cephfsOpen(t)
+	mkdir, err := s.Submit(ctx, MDSRequest{Op: MDSOpMkdir, Retry: 1, Flags: MDSRequestFlagWantDentry, Path: MDSFilePath{Ino: 1, Path: "d"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer.next(t)
+	peer.send(t, cephfsReply(MDSOpLookup, mkdir.Transaction(), 0, true, nil))
+	if reply, err := mkdir.WaitSafe(ctx); err != nil || reply.Op != MDSOpLookup || !reply.Safe {
+		t.Fatal("converted completed MKDIR", reply, err)
+	}
+	fresh, err := s.Submit(ctx, MDSRequest{Op: MDSOpMkdir, Flags: MDSRequestFlagWantDentry, Path: MDSFilePath{Ino: 1, Path: "e"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer.next(t)
+	peer.send(t, cephfsReply(MDSOpLookup, fresh.Transaction(), 0, true, nil))
+	var unknown *OutcomeUnknownError
+	if _, err := fresh.WaitSafe(ctx); !errors.As(err, &unknown) {
+		t.Fatal("first-attempt MKDIR answered as LOOKUP accepted", err)
+	}
+}
