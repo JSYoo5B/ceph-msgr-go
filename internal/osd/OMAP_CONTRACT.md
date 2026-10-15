@@ -47,8 +47,11 @@ omap_rm_range builder, the handler returns ENOENT for a missing/whiteout object,
 and BlueStore removes `[begin, end)` through RocksDBStore::rm_range_keys. Equal
 endpoints are an executed empty removal. A reversed range is empty on small
 objects, but past `rocksdb_delete_range_threshold` keys (1 Mi by default) the
-pinned RocksDBStore passes it unchanged to DeleteRange, so the client refuses
-begin > end before transmission. TMAP conversion, class calls, allocation
+pinned RocksDBStore passes it unchanged to DeleteRange, and the test-only
+MemStore passes `lower_bound(begin)` and `lower_bound(end)` to `std::map::erase`
+(os/memstore/MemStore.cc:1261-1278), undefined behavior that stopped the single
+memstore OSD in remote CI. The client therefore refuses begin > end before
+transmission. TMAP conversion, class calls, allocation
 hints, snapshots, rollback and watch remain separate work. No compatibility
 wrapper for an earlier Go API or earlier Ceph release is proposed.
 

@@ -196,16 +196,23 @@ func TestCephOSDOmapRangeRemovalIntegration(t *testing.T) {
 	}
 	t.Run("reversed range native no-op and Go local refusal", func(t *testing.T) {
 		selected, connection := route(main, true)
-		native := nativeOmapWrite(t, ctx, base, "compare", omapWriteInput{Seed: &omapWriteSeed{Baseline: baseline, Entries: omapWriteEntries(model)}, Operations: []omapWriteAction{{Op: "rmrange", Begin: []byte("z"), End: []byte("a")}},
-			MTime: &omapWriteMTime{Seconds: 1739999999}, InventoryKeys: inventory})
-		if native.Aggregate == nil || *native.Aggregate != 0 || !equalOmapModel(omapWriteInventory(t, native.After), model) {
-			t.Fatal("native reversed range was not an empty removal on a small object", native.Aggregate)
-		}
 		request := osdObjectRequest(selected, rmrange(0, "z", "a"))
 		request.ModificationTime = cephmsgr.OSDTime{Seconds: 1}
 		reply, err := connection.Request(ctx, request)
 		if err == nil || reply.Submission.Transaction != 0 {
 			t.Fatal("Go transmitted a reversed OMAP range", err)
+		}
+		if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
+			// MemStore::_omap_rmkeyrange passes lower_bound(first) and
+			// lower_bound(last) to std::map::erase; a reversed range is
+			// undefined behavior that stopped the single memstore OSD.
+			t.Logf("Go refused before transmission: %v; native reversed range is not sent to MemStore", err)
+			return
+		}
+		native := nativeOmapWrite(t, ctx, base, "compare", omapWriteInput{Seed: &omapWriteSeed{Baseline: baseline, Entries: omapWriteEntries(model)}, Operations: []omapWriteAction{{Op: "rmrange", Begin: []byte("z"), End: []byte("a")}},
+			MTime: &omapWriteMTime{Seconds: 1739999999}, InventoryKeys: inventory})
+		if native.Aggregate == nil || *native.Aggregate != 0 || !equalOmapModel(omapWriteInventory(t, native.After), model) {
+			t.Fatal("native reversed range was not an empty removal on a small object", native.Aggregate)
 		}
 		t.Logf("native reversed range aggregate=%d with unchanged inventory; Go refused before transmission: %v", *native.Aggregate, err)
 		evidence = append(evidence, caseEvidence{Name: "reversed range native", Native: &native})

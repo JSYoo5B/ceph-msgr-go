@@ -67,6 +67,16 @@ CEPH_MSGR_TEST_RUN='^TestCephOSDOmapRangeRemovalIntegration$' \
 sh integration/run.sh
 ```
 
+## Remote CI single memstore OSD
+
+The first remote CI runs after this milestone sent the native reversed range to
+the single-OSD memstore profiles. In all four such jobs the native command timed
+out, the OSD container stopped (`no route to host`) and every later OSD test
+failed. MemStore removes the range with `std::map::erase(lower_bound(begin),
+lower_bound(end))`, which is undefined for a reversed range. The test now sends
+the native reversed range only to BlueStore; on memstore it checks only the Go
+refusal before transmission.
+
 ## Remaining gaps
 
 The DeleteRange path above `rocksdb_delete_range_threshold` keys, EC pool
