@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
@@ -50,6 +51,7 @@ type MDSConnection struct {
 	setupErr                       error
 	session                        *session.Session
 	cephfs                         *MDSSession
+	resumes                        atomic.Uint64
 	closed                         bool
 	features, globalID, generation uint64
 }
@@ -205,6 +207,12 @@ func (m *MDSConnection) open(ctx context.Context) error {
 		}
 		config := c.sessionConfig()
 		config.NextTransaction = c.nextMDSTransaction
+		if c.options.EnableCephFS {
+			// The CephFS profile is a lossless client, as native clients use
+			// for MDS: transport faults resume the Messenger session.
+			config.Resume = m.resumeTransport
+			config.OnResume = func() { m.resumes.Add(1) }
+		}
 		s := session.New(tr, config, m.dispatchMDSMessage, m.mdsTransportEnded)
 		c.mu.Lock()
 		stale := c.closed || m.closed || c.authErr != nil || c.auth.GlobalID != auth.GlobalID
@@ -273,3 +281,43 @@ func (m *MDSConnection) operationError(err error) error {
 	}
 	return errors.Join(err, ErrClosed)
 }
+
+// resumeTransport authenticates a new connection to the same MDS address and
+// resumes the stateful Messenger session. The client GlobalID must be
+// unchanged; an expired ticket waits for renewal within ctx.
+func (m *MDSConnection) resumeTransport(ctx context.Context, state session.ResumeState) (*session.Transport, error) {
+	c := m.client
+	for {
+		c.mu.Lock()
+		auth, changed, closed := c.auth, c.changed, c.closed || m.closed
+		c.mu.Unlock()
+		if closed {
+			return nil, ErrClosed
+		}
+		if auth.GlobalID != state.GlobalID {
+			return nil, fmt.Errorf("%w: %w", msgr.ErrAuthentication, ErrMDSIdentityChanged)
+		}
+		authorizer, err := auth.Authorizer(cephx.ServiceMDS)
+		if errors.Is(err, cephx.ErrTicket) {
+			c.wakeMonitor()
+			select {
+			case <-changed:
+				continue
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", msgr.ErrAuthentication, err)
+		}
+		linked, release := c.linkedContext(ctx)
+		t, err := c.resumeCephFS(linked, m.address, m.target.Rank, session.ServiceAuth{Authorizer: authorizer}, state)
+		release()
+		return t, err
+	}
+}
+
+// Resumes counts Messenger session resumes after transport faults (CephFS
+// profile only). A resume preserves message order and pending requests; it
+// is neither a CephFS reconnect nor an application replay.
+func (m *MDSConnection) Resumes() uint64 { return m.resumes.Load() }

@@ -218,12 +218,35 @@ type Transport struct {
 	Writer   *msgr.Writer
 	GlobalID uint64
 	Features uint64 // Intersection of local and peer Messenger feature sets.
+	// Resume is the stateful Messenger identity of a fresh MDS/CephFS
+	// connection: what a later SESSION_RECONNECT must present.
+	Resume ResumeState
+	// PeerSequence is the peer's last received message sequence reported by
+	// SESSION_RECONNECT_OK on a resumed transport.
+	PeerSequence uint64
 }
+
+// ResumeState identifies a stateful Messenger session for SESSION_RECONNECT
+// (pinned msg/async/frames_v2.h ReconnectFrame; ProtocolV2.cc send_reconnect,
+// handle_reconnect). The server finds the existing connection by Addresses,
+// which must be exactly the original ClientIdent address vector (same nonce).
+type ResumeState struct {
+	Addresses                  []msgr.Address
+	ClientCookie, ServerCookie uint64
+	GlobalSeq, ConnectSeq      uint64
+	// InSeq is the last message sequence this side received; Features and
+	// GlobalID are the original session's and cannot change on resume.
+	InSeq, Features, GlobalID uint64
+}
+
+// ErrSessionReset reports a SESSION_RESET answer to SESSION_RECONNECT: the
+// server holds no resumable session, so message continuity is lost.
+var ErrSessionReset = errors.New("ceph messenger: peer reset the stateful session")
 
 // Handshake takes ownership of conn, closing it on failure. The context and
 // deadline govern only setup; a successful connection has its deadline cleared.
 func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (*Transport, error) {
-	return handshake(ctx, conn, target, role, expectedID, auth, mode, limit, timeout, lossyHandshake)
+	return handshake(ctx, conn, target, role, expectedID, auth, mode, limit, timeout, lossyHandshake, nil)
 }
 
 // HandshakeFreshMDS authenticates one fresh Messenger connection to an active
@@ -236,7 +259,7 @@ func HandshakeFreshMDS(ctx context.Context, conn net.Conn, target msgr.Address, 
 		conn.Close()
 		return nil, errors.New("ceph messenger: fresh MDS connection requires a nonnegative active rank")
 	}
-	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshMDSHandshake)
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshMDSHandshake, nil)
 }
 
 // CephFSFeatures adds the Messenger features whose CephFS client encodings
@@ -256,7 +279,21 @@ func HandshakeFreshCephFS(ctx context.Context, conn net.Conn, target msgr.Addres
 		conn.Close()
 		return nil, errors.New("ceph messenger: fresh MDS connection requires a nonnegative active rank")
 	}
-	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake)
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake, nil)
+}
+
+// HandshakeResumeCephFS authenticates a new connection to the same MDS and
+// resumes the stateful Messenger session described by state with
+// SESSION_RECONNECT instead of ClientIdent. On success PeerSequence tells the
+// caller which retained outgoing messages the server already received. RETRY
+// and RETRY_GLOBAL are answered within a fixed bound; RESET returns
+// ErrSessionReset and WAIT is terminal. It never falls back to a fresh ident.
+func HandshakeResumeCephFS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, state ResumeState) (*Transport, error) {
+	if rank < 0 || len(state.Addresses) == 0 || state.ClientCookie == 0 || state.ServerCookie == 0 || state.GlobalID == 0 {
+		conn.Close()
+		return nil, errors.New("ceph messenger: incomplete stateful MDS resume state")
+	}
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake, &state)
 }
 
 type handshakePolicy uint8
@@ -267,7 +304,7 @@ const (
 	freshCephFSHandshake
 )
 
-func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, policy handshakePolicy) (_ *Transport, err error) {
+func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, policy handshakePolicy, resume *ResumeState) (_ *Transport, err error) {
 	if target.Endpoint.IsValid() {
 		// Retain the target's wire family, including mapped IPv6. IPv6 scope
 		// is carried by ScopeID rather than a Go address zone.
@@ -485,6 +522,24 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 			return nil, errors.New("ceph messenger: compression unsupported")
 		}
 	}
+	if resume != nil {
+		stage = "session reconnect"
+		if globalID != resume.GlobalID {
+			return nil, fmt.Errorf("%w: resumed MDS authenticated a different client identity", msgr.ErrAuthentication)
+		}
+		state, peerSequence, err := reconnect(r, write, *resume)
+		if err != nil {
+			return nil, err
+		}
+		stopped = stop()
+		if !stopped || ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err = conn.SetDeadline(time.Time{}); err != nil {
+			return nil, err
+		}
+		return &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID, Features: resume.Features, Resume: state, PeerSequence: peerSequence}, nil
+	}
 	var random [8]byte
 	stage = "session identification"
 	if _, err = rand.Read(random[:]); err != nil {
@@ -498,7 +553,8 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	msgr.EncodeAddresses(&ident, []msgr.Address{myAddr})
 	target.Encode(&ident)
 	ident.U64(globalID)
-	ident.U64(binary.LittleEndian.Uint64(random[:]))
+	globalSeq := binary.LittleEndian.Uint64(random[:]) >> 1 // room to increase on resume
+	ident.U64(globalSeq)
 	supportedFeatures, requiredFeatures := handshakeFeatures(role, auth)
 	flags, cookie := sessionFlagLossy, uint64(0)
 	if policy == freshMDSHandshake || policy == freshCephFSHandshake {
@@ -580,5 +636,72 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if err = conn.SetDeadline(time.Time{}); err != nil {
 		return nil, err
 	}
-	return &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID, Features: supported & supportedFeatures}, nil
+	transport := &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID, Features: supported & supportedFeatures}
+	if policy != lossyHandshake {
+		transport.Resume = ResumeState{Addresses: []msgr.Address{myAddr}, ClientCookie: cookie, ServerCookie: serverCookie, GlobalSeq: globalSeq, Features: transport.Features, GlobalID: globalID}
+	}
+	return transport, nil
+}
+
+// reconnect sends SESSION_RECONNECT with the next global and connect
+// sequences and follows bounded RETRY/RETRY_GLOBAL answers. It returns the
+// updated state and the peer's last received message sequence.
+func reconnect(r *msgr.Reader, write func(msgr.Tag, []byte) error, state ResumeState) (ResumeState, uint64, error) {
+	if state.GlobalSeq == ^uint64(0) || state.ConnectSeq == ^uint64(0) {
+		return state, 0, errors.New("ceph messenger: stateful resume sequences exhausted")
+	}
+	state.GlobalSeq++
+	state.ConnectSeq++
+	for range 8 {
+		e := wire.Encoder{}
+		msgr.EncodeAddresses(&e, state.Addresses)
+		e.U64(state.ClientCookie)
+		e.U64(state.ServerCookie)
+		e.U64(state.GlobalSeq)
+		e.U64(state.ConnectSeq)
+		e.U64(state.InSeq)
+		if err := write(msgr.SessionReconnect, e.Data); err != nil {
+			return state, 0, err
+		}
+		f, err := r.Read()
+		if err != nil {
+			return state, 0, err
+		}
+		if len(f.Segments) != 1 {
+			return state, 0, msgr.ErrFrame
+		}
+		d := wire.NewDecoder(f.Segments[0])
+		switch f.Tag {
+		case msgr.SessionReconnectOK:
+			sequence := d.U64()
+			if err := d.Done(); err != nil {
+				return state, 0, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+			}
+			return state, sequence, nil
+		case msgr.SessionRetry:
+			// The server holds a newer connect sequence: continue above it.
+			seq := d.U64()
+			if err := d.Done(); err != nil || seq == ^uint64(0) {
+				return state, 0, fmt.Errorf("%w: invalid session retry", msgr.ErrFrame)
+			}
+			state.ConnectSeq = seq + 1
+		case msgr.SessionRetryGlobal:
+			seq := d.U64()
+			if err := d.Done(); err != nil || seq == ^uint64(0) {
+				return state, 0, fmt.Errorf("%w: invalid global session retry", msgr.ErrFrame)
+			}
+			state.GlobalSeq = max(state.GlobalSeq, seq) + 1
+		case msgr.SessionReset:
+			d.Bool()
+			if err := d.Done(); err != nil {
+				return state, 0, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+			}
+			return state, 0, ErrSessionReset
+		case msgr.Wait:
+			return state, 0, fmt.Errorf("%w: peer asked to wait during session resume", msgr.ErrFrame)
+		default:
+			return state, 0, fmt.Errorf("%w: tag %d during session resume", msgr.ErrFrame, f.Tag)
+		}
+	}
+	return state, 0, errors.New("ceph messenger: stateful session resume retries exhausted")
 }

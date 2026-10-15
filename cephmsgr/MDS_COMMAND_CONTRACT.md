@@ -100,8 +100,11 @@ CephFS Session object. It does not require the product to send SESSION_OPEN.
 Without a live application session it marks the connection disposable before
 command dispatch. Native disposable handling makes it lossy for recovery; it
 does not guarantee immediate close after one reply. An established connection
-can serve another command if the daemon leaves it open. Any later loss is
-terminal and is never resumed or replayed by this client.
+can serve another command if the daemon leaves it open. Without
+`EnableCephFS`, any later loss is terminal and is never resumed or replayed by
+this client. With `EnableCephFS` the connection is a lossless CephFS client:
+transport faults resume the Messenger session (`MDS_CEPHFS_CONTRACT.md`), so a
+sent command can still complete; a failed resume keeps the unknown outcome.
 
 The native command gate is `session->auth_caps.allow_all()`. A read-only MDS
 capability can authenticate but returns signed `-13` for a command. Importantly,

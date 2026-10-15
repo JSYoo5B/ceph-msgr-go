@@ -178,6 +178,9 @@ type peerConfig struct {
 	cephfs bool
 	// serverFeatures, when nonzero, replaces the advertised feature set.
 	serverFeatures uint64
+	// reconnect answers a SESSION_RECONNECT instead of ClientIdent; only a
+	// SESSION_RECONNECT_OK answer admits the resumed connection.
+	reconnect func(msgr.Frame) (msgr.Tag, []byte)
 }
 
 // The synthetic peer exercises actual CephX state transitions and client

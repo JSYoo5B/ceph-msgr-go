@@ -36,6 +36,22 @@ Without EnableCephFS the command-only and session-only contracts are
 unchanged: sessions declare bits 0–8 and any request, reply or push fails
 the transport.
 
+## Lossless Messenger resume
+
+Native CephFS clients use a lossless policy toward the MDS. With
+`EnableCephFS` each MDS connection keeps its stateful Messenger identity and,
+on a transport fault, redials the same address, re-authenticates with the
+current MDS ticket (waiting for renewal if needed) and resumes with
+SESSION_RECONNECT instead of failing. Unacknowledged messages are retransmitted
+with their original sequences and the MDS continues its gapless stream, so the
+CephFS session, pending requests and pushes survive. `MDSConnection.Resumes`
+counts successful resumes. A RESET (the MDS no longer holds the Messenger
+session, for example after a daemon restart), an identity change, protocol
+errors or an exhausted 30 s episode end the connection; the CephFS session is
+then Lost and its address unresolved, as before. Resume is neither a CephFS
+reconnect to a new MDS incarnation nor a replay of requests: MClientReconnect
+after failover and REPLAY of unsafe requests are not implemented.
+
 ## Requests
 
 `MDSSession.Submit(ctx, MDSRequest)` queues one MClientRequest (header
@@ -137,7 +153,9 @@ counting, client answers, close resend and protocol violations.
 
 ## Limits
 
-No path walking, inode or dentry cache, capability bookkeeping, lease
+Live Messenger resume against an MDS daemon has not been verified yet; the
+synthetic peers cover retransmission, retry/reset answers, bounds and the
+public request continuity. No path walking, inode or dentry cache, capability bookkeeping, lease
 expiry, snapshot realm tree, dirty metadata or data writeback, file locks,
 reconnect after MDS failover, request replay, delegated inodes or async
 operations are implemented. Data I/O against OSDs is not coupled to the

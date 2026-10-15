@@ -75,7 +75,7 @@ README에 실제 daemon·native oracle 결과가 기록되어 있다는 뜻이�
 
 | ID | 구현 범위와 상태 | 기록된 검증과 남은 제한 | 근거 |
 | --- | --- | --- | --- |
-| B1 | msgr2.1 secure/CRC, CephX aes/aes256k, MON/MGR ticket 갱신·세션 복구: 구현 있음 | 20.2.4의 역할·키·주소별 실검증 기록; CRC·혼합 cipher·Windows 조합을 모두 검증한 것은 아님; [b01a3cf 인증 epoch CI 실패](integration/fixture/SERVICE_KEY_EPOCH_FAILURE_20261015.md)는 두 번째 키 폐기 후 첫 cold MGR 인증의 ticket 복호화 거절(-13)이며 키 세대 불일치의 정확한 위치는 미확인; cookie 재개 없음 | [session](internal/session/handshake.go), [CephX](internal/cephx/auth.go), [검증 기록](README.md#검증-결과) |
+| B1 | msgr2.1 secure/CRC, CephX aes/aes256k, MON/MGR ticket 갱신·세션 복구: 구현 있음 | 20.2.4의 역할·키·주소별 실검증 기록; CRC·혼합 cipher·Windows 조합을 모두 검증한 것은 아님; [b01a3cf 인증 epoch CI 실패](integration/fixture/SERVICE_KEY_EPOCH_FAILURE_20261015.md)는 두 번째 키 폐기 후 첫 cold MGR 인증의 ticket 복호화 거절(-13)이며 키 세대 불일치의 정확한 위치는 미확인; MON/MGR/OSD는 cookie 재개 없음; opt-in CephFS profile의 MDS 연결만 cookie·sequence 기반 Messenger 재개 구현(합성 검증, 실제 MDS 재개 미검증) | [session](internal/session/handshake.go), [CephX](internal/cephx/auth.go), [검증 기록](README.md#검증-결과) |
 | B2 | raw MON/MGR 명령·현재 daemon Tell·이름 지정 MON Tell, 준비/지도 대기·wire metadata: 구현 있음 | native 명령·지도 및 failover·context·Close 시험 기록; OSD/PG 대상 명령은 D1, 명시 MDS raw 명령은 D2에서 구현; 이름 지정 MGR 대상 명령은 미구현 | [명령 API](cephmsgr/api.go), [MON 대상](cephmsgr/named_mon.go), [지도 대기](cephmsgr/map_wait.go), [검증 기록](README.md#검증-결과) |
 | B3 | MON log·config·digest 구독: 구현 있음 | native oracle·갱신·복구·bounded 큐 시험 기록; 권한 ACK·완전한 변경 이력·원격 unsubscribe 보장 없음 | [로그](README.md#mon-로그), [설정](README.md#mon-설정), [digest](README.md#mon-health상태-구독) |
 | B4 | 명시적 OSD 연결·ticket·v6 stat/read·MAPEXT·CRC32C CHECKSUM·mutation/guard opcode 벡터·per-op 결과: 구현 있음 | 20.2.4 legacy CRUSH, HASHPSPOOL/upmap 미사용 replicated pool의 bytes/stat2·갱신, single/3-replica BlueStore mutation·compound·primary SIGKILL 실검증 기록; snapshot·EC와 일반 최신 CRUSH 미지원; IPv6 secure/aes256k 3-replica BlueStore 검증; OSD Windows 및 그 밖의 주소 조합 미검증 | [OSD API](cephmsgr/osd.go), [요청](cephmsgr/osd_request.go), [encoder](internal/osd/request.go), [native 시험](integration/osd_test.go), [지원 범위](README.md#osd-statread-통신-기초) |
@@ -551,7 +551,7 @@ LGPL-2.1 고지를 확인하고 C++ 코드를 복사하지 않고 wire 의미를
 3. 32-byte preamble, segment, CRC32C, secure framing, AES-GCM tag 검증과 방향별 nonce 상태.
 4. AUTH_SIGNATURE를 포함한 인증 교환 및 세션 식별.
 5. Message header, front/middle/data, sequence, ACK, keepalive.
-6. Global ID, sequence, 종료, MON/MGR 변경과 재인증을 처리하는 상태 머신. 현재는 fresh lossy session으로 복구하며 이전 Messenger cookie로 session을 재개하는 기능은 구현하지 않는다. 새 세션으로 명령을 재실행하지 않는다. 이 현재 방식은 후속 MDS session·capability·요청 복구 계약을 대신하지 않는다.
+6. Global ID, sequence, 종료, MON/MGR 변경과 재인증을 처리하는 상태 머신. MON/MGR/OSD는 fresh lossy session으로 복구하며 이전 Messenger cookie로 session을 재개하지 않는다. opt-in CephFS profile의 MDS 연결은 native의 lossless client처럼 SESSION_RECONNECT로 같은 Messenger session을 재개하고 확인받지 못한 frame만 원래 sequence로 재전송한다. 새 세션으로 명령을 재실행하지 않는다. 이 현재 방식은 후속 MDS session·capability·요청 복구 계약을 대신하지 않는다.
 7. 서버가 보내는 입력의 길이·개수·산술 overflow 검증과 메모리 사용 상한.
 
 Tentacle이 실제 사용하는 구조체의 이전 encoding version을 읽는 것은 현재 wire 규약 구현이다. 이를 이전 Ceph 계열이나 이전 공개 API 지원과 혼동하지 않는다. C++ 구현의 객체 수명·락·메모리 배치를 그대로 이식하지 않고 wire 의미와 상태 전이를 Go로 표현한다.

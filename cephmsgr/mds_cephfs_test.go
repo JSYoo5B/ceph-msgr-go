@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,19 +20,35 @@ import (
 
 var allMDSCephFSFeatures = []byte{0xff, 0xff, 0xff, 0, 0, 0, 0, 0}
 
+// resetResume answers every SESSION_RECONNECT with a full SESSION_RESET.
+func resetResume(msgr.Frame) (msgr.Tag, []byte) { return msgr.SessionReset, []byte{1} }
+
 func cephfsTestClient(t *testing.T) (*Client, <-chan *mdsTestPeer, context.Context) {
+	t.Helper()
+	return cephfsTestClientWith(t, func(peer *mdsTestPeer, dial int) {
+		if dial > 1 {
+			peer.reconnect = resetResume
+		}
+	})
+}
+
+// cephfsTestClientWith lets a test configure each dialed MDS peer (dial
+// counts from 1); later dials are Messenger resume attempts.
+func cephfsTestClientWith(t *testing.T, configure func(*mdsTestPeer, int)) (*Client, <-chan *mdsTestPeer, context.Context) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	options := mockOptions(t, 20, [16]byte{1})
 	options.EnableMDS, options.EnableCephFS, options.MaxMDSConnections, options.MaxInFlight = true, true, 2, 4
 	peers := make(chan *mdsTestPeer, 16)
+	var dials atomic.Int32
 	options.DialContext = func(ctx context.Context, _, endpoint string) (net.Conn, error) {
 		clientPipe, server := net.Pipe()
 		client := &mdsTestClientConn{Conn: clientPipe}
 		if endpoint == "192.0.2.1:6805" {
 			peer := &mdsTestPeer{conn: server, client: client, requests: make(chan msgr.MessageData, 64), done: make(chan struct{}), errors: make(chan error, 1), cephfs: true}
 			peer.sessions.Store(true)
+			configure(peer, int(dials.Add(1)))
 			peers <- peer
 			go peer.serve()
 		} else {
@@ -369,6 +386,72 @@ func TestCephFSFeatureGatesAndDataSegment(t *testing.T) {
 	}
 	peer4.send(t, cephfsReply(MDSOpSetxattr, call.Transaction(), 0, true, nil))
 	if _, err := call.WaitSafe(ctx4); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCephFSMessengerResumeKeepsSessionAndRequests(t *testing.T) {
+	var reconnects []msgr.Frame
+	c, peers, ctx := cephfsTestClientWith(t, func(peer *mdsTestPeer, dial int) {
+		if dial == 2 {
+			peer.reconnect = func(f msgr.Frame) (msgr.Tag, []byte) {
+				reconnects = append(reconnects, f)
+				// The MDS received REQUEST_OPEN and the first renewal (seq 1,2)
+				// but not the request: it must be retransmitted.
+				e := wire.Encoder{}
+				e.U64(2)
+				return msgr.SessionReconnectOK, e.Data
+			}
+		}
+	})
+	m, err := c.OpenMDS(ctx, MDSTarget{FilesystemID: 7, Rank: 0, Address: "v2:192.0.2.1:6805/17"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := <-peers
+	pending := mdsStartSession(m, ctx, MDSSessionOptions{RenewInterval: time.Hour})
+	first.next(t)
+	first.send(t, mdsSessionV7(mds.SessionOpen, 0, nil, 0, false))
+	opened := <-pending
+	if opened.err != nil {
+		t.Fatal(opened.err)
+	}
+	s := opened.session
+	mdsSessionNext(t, first, mds.SessionRequestRenewCaps)
+	call, err := s.Submit(ctx, MDSRequest{Op: MDSOpGetattr, Path: MDSFilePath{Ino: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sent := first.next(t)
+	first.conn.Close()
+	second := <-peers
+	resent := second.next(t)
+	if resent.Transaction != call.Transaction() || resent.Sequence != sent.Sequence || resent.Type != mds.ClientRequestMessage {
+		t.Fatal("request not retransmitted with its original sequence", resent.Sequence, sent.Sequence)
+	}
+	if len(reconnects) != 1 {
+		t.Fatal("reconnect attempts", len(reconnects))
+	}
+	d := wire.NewDecoder(reconnects[0].Segments[0])
+	msgr.DecodeAddresses(d)
+	clientCookie, serverCookie, _, connectSeq, inSeq := d.U64(), d.U64(), d.U64(), d.U64(), d.U64()
+	if clientCookie == 0 || serverCookie != 0x1020304050607080 || connectSeq != 1 || inSeq != first.seq {
+		t.Fatal("reconnect identity", clientCookie, serverCookie, connectSeq, inSeq, first.seq)
+	}
+	// The MDS continues its own gapless stream on the resumed transport.
+	second.seq = first.seq
+	second.send(t, cephfsReply(MDSOpGetattr, call.Transaction(), 0, true, nil))
+	if reply, err := call.WaitSafe(ctx); err != nil || reply.Result != 0 {
+		t.Fatal("request did not complete across the resume", reply, err)
+	}
+	if m.Resumes() != 1 || s.Status().State != MDSSessionOpen || m.session.Err() != nil {
+		t.Fatal("resume did not preserve the session", m.Resumes(), s.Status().State, m.session.Err())
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close(ctx) }()
+	mdsSessionNext(t, second, mds.SessionRequestClose)
+	second.send(t, mdsSessionReply(mds.SessionClose, 0))
+	if err := <-closed; err != nil {
 		t.Fatal(err)
 	}
 }

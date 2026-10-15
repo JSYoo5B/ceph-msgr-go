@@ -27,7 +27,11 @@ MON admission, MON MDS-map opt-in and OSD profiles cannot widen these masks.
 CRC and secure modes each offer one mode; their CephX authorizer, transcript
 authentication and connection-secret requirements are unchanged.
 
-Only fresh ClientIdent → ServerIdent admission is implemented. Reset, Retry,
+Fresh MDS admission (`HandshakeFreshMDS`, `HandshakeFreshCephFS`) is only
+ClientIdent → ServerIdent; the transport records the stateful identity (client
+address vector with its nonce, both cookies, global sequence) in
+`Transport.Resume`. Only the CephFS profile resumes it, through
+`HandshakeResumeCephFS` (see Stateful resume below). Within fresh admission, Reset, Retry,
 RetryGlobal, ReconnectOK, SessionReconnect and Wait are terminal unexpected-frame
 errors, including Wait during a fresh connection race. The function does not
 redial, retain or resume a peer session, reset sequence state, or replay any
@@ -37,6 +41,34 @@ not prove remote execution or durability. This stage sends no application
 message, MClientSession OPEN, capability renewal, metadata operation or
 CephFS feature declaration. Future callers must not treat a fresh connection
 as reopening an earlier CephFS session, nor replay uncertain operations.
+
+## Stateful resume (CephFS profile)
+
+`HandshakeResumeCephFS` authenticates a new connection to the same MDS with a
+current MDS authorizer, requires the same GlobalID and then sends
+SESSION_RECONNECT (pinned `frames_v2.h` ReconnectFrame) with the original
+address vector and nonce, both cookies, the next global and connect sequences
+and the last received message sequence. The server finds the existing
+connection by that address vector (`ProtocolV2::handle_reconnect`). RETRY and
+RETRY_GLOBAL are answered by raising the connect/global sequence, at most
+eight times; RESET returns `ErrSessionReset`; WAIT is terminal. It never
+falls back to ClientIdent. SESSION_RECONNECT_OK reports the peer's received
+sequence.
+
+A `Session` configured with `Config.Resume` keeps every written message until
+the peer acknowledges it (ACK frames or message ack sequences; at most
+`MaxUnacked`, default 1024, else the session fails). A transport fault (I/O
+error or keepalive timeout) retires that transport generation, waits for its
+workers, and resumes in the background within `ResumeTimeout` (default 30 s)
+with bounded backoff. After RECONNECT_OK it drops messages the peer received,
+retransmits the rest with their original sequences before any new message,
+and requires a gapless incoming stream (duplicates are dropped, a gap fails
+the session). Malformed, CRC/authentication and feature errors, RESET, an
+identity change or an expired episode fail the session with the original
+cause. Pending calls stay pending across a resume. This is Messenger
+retransmission of unacknowledged frames, not an application replay.
+Lossy sessions (MON/MGR/OSD) and the command/session-only MDS profile are
+unchanged.
 
 The original `Handshake` keeps its existing lossy policy for every role and
 still refuses a stateful ServerIdent. Its callers and feature policy are

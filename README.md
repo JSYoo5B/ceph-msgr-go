@@ -385,6 +385,14 @@ v6(request head v3)로 보낸다. `Wait`는 첫 응답을, `WaitSafe`는 journal
 재실행하지 않는다. 응답은 signed 결과 코드와 raw trace·extra·snap blob을 보존하며
 `DecodeTrace`·`DecodeReaddir`·`DecodeSnapTrace`로 native client 순서대로 해석한다.
 
+CephFS profile의 MDS 연결은 native client처럼 lossless로 동작한다. TCP 연결이
+끊기면 같은 MDS 주소에 다시 인증하고 SESSION_RECONNECT로 Messenger session을
+이어간다. 확인받지 못한 message는 원래 sequence로 다시 보내므로 CephFS session과
+진행 중 요청이 유지되며 `MDSConnection.Resumes`로 재개 횟수를 확인한다. MDS가
+RESET으로 답하거나 30초 안에 재개하지 못하면 연결을 끝내고 session은 Lost가 된다.
+이것은 MDS failover 뒤의 CephFS reconnect나 요청 replay가 아니며 두 기능은 아직
+구현하지 않았다.
+
 MDS가 보내는 capability·lease·snap realm·quota 메시지는 MDS와 같은 방식으로 push
 sequence에 세고 `Next`로 도착 순서대로 전달한다. Revoke 응답, flush, capability
 release, lease 응답은 호출자가 `SendCaps`·`ReleaseCaps`·`SendLease`로 명시적으로

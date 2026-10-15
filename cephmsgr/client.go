@@ -259,6 +259,16 @@ func (c *Client) openFreshMDS(ctx context.Context, address msgr.Address, rank in
 	return c.openHandshake(ctx, dialAddress(address), address, 2, uint64(rank), auth, &rank)
 }
 
+// resumeCephFS dials the same MDS address and resumes a stateful CephFS
+// Messenger session with SESSION_RECONNECT.
+func (c *Client) resumeCephFS(ctx context.Context, address msgr.Address, rank int32, auth session.Authenticator, state session.ResumeState) (*session.Transport, error) {
+	conn, err := c.options.DialContext(ctx, "tcp", dialAddress(address))
+	if err != nil {
+		return nil, err
+	}
+	return session.HandshakeResumeCephFS(ctx, conn, address, rank, auth, c.options.ConnectionMode.sessionMode(), c.options.MaxFrameSize, c.options.ConnectTimeout, state)
+}
+
 // Both fixed policies share dialing/address ownership. Only the explicit MDS
 // entry selects fresh stateful admission; ordinary sessions stay lossy.
 func (c *Client) openHandshake(ctx context.Context, endpoint string, address msgr.Address, role uint8, id uint64, auth session.Authenticator, freshMDSRank *int32) (*session.Transport, error) {

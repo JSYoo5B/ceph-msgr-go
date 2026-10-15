@@ -260,10 +260,25 @@ func mdsMockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Wri
 	if err := write(msgr.CompressionDone, noCompression.Data); err != nil {
 		return nil, nil, err
 	}
-	p, err = read(msgr.ClientIdent)
+	f, err := r.Read()
 	if err != nil {
 		return nil, nil, err
 	}
+	if f.Tag == msgr.SessionReconnect && cfg.reconnect != nil {
+		tag, payload := cfg.reconnect(f)
+		if err := write(tag, payload); err != nil {
+			return nil, nil, err
+		}
+		if tag != msgr.SessionReconnectOK {
+			return nil, nil, errMockSessionNotResumed
+		}
+		conn.SetDeadline(time.Time{})
+		return r, w, nil
+	}
+	if f.Tag != msgr.ClientIdent || len(f.Segments) != 1 {
+		return nil, nil, fmt.Errorf("expected tag %d, got %d", msgr.ClientIdent, f.Tag)
+	}
+	p = f.Segments[0]
 	clientIdent := wire.NewDecoder(p)
 	clientAddresses := msgr.DecodeAddresses(clientIdent)
 	target := msgr.DecodeAddress(clientIdent)
@@ -320,6 +335,8 @@ func mdsMockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Wri
 	return r, w, nil
 }
 
+var errMockSessionNotResumed = errors.New("mock MDS answered SESSION_RECONNECT without resuming")
+
 type mdsTestPeer struct {
 	conn     net.Conn
 	writer   *msgr.Writer
@@ -336,6 +353,8 @@ type mdsTestPeer struct {
 	cephfs bool
 	// serverFeatures overrides the features advertised in ServerIdent.
 	serverFeatures uint64
+	// reconnect answers SESSION_RECONNECT (see peerConfig.reconnect).
+	reconnect func(msgr.Frame) (msgr.Tag, []byte)
 }
 
 type mdsTestWritePause struct{ started, release chan struct{} }
@@ -370,7 +389,7 @@ func (p *mdsTestPeer) serve() {
 	defer close(p.done)
 	defer p.conn.Close()
 	p.conn.SetDeadline(time.Now().Add(3 * time.Second))
-	r, w, err := mdsMockAuthenticate(p.conn, peerConfig{role: 2, id: 0, cephfs: p.cephfs, serverFeatures: p.serverFeatures})
+	r, w, err := mdsMockAuthenticate(p.conn, peerConfig{role: 2, id: 0, cephfs: p.cephfs, serverFeatures: p.serverFeatures, reconnect: p.reconnect})
 	if err != nil {
 		p.errors <- err
 		return

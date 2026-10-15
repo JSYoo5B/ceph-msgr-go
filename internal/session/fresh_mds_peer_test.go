@@ -33,6 +33,9 @@ type freshMDSPeerConfig struct {
 	identPayload                  []byte
 	clientIdent                   func(msgr.Address, uint64, uint64, uint64, uint64) error
 	beforeServerIdent, afterIdent func(*msgr.Reader, *msgr.Writer) error
+	// reconnect, when set, replaces ClientIdent handling: it receives the
+	// first post-authentication frame (expected SESSION_RECONNECT).
+	reconnect func(msgr.Frame, *msgr.Reader, *msgr.Writer) error
 }
 
 func freshMDSPeerDefaults() freshMDSPeerConfig {
@@ -264,6 +267,9 @@ func freshMDSPeer(conn net.Conn, fixture fixtureAuth, mode ConnectionMode, cfg f
 	f, err = r.Read()
 	if err != nil {
 		return err
+	}
+	if cfg.reconnect != nil {
+		return cfg.reconnect(f, r, w)
 	}
 	if f.Tag != msgr.ClientIdent || len(f.Segments) != 1 {
 		return errors.New("fresh MDS did not send ClientIdent")

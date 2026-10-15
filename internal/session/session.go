@@ -62,6 +62,19 @@ type Config struct {
 	// transport or consuming a sequence number. A queued Send is discarded.
 	// The callback must return promptly and must not wait for this writer.
 	BeforeWrite func(msgr.MessageData) error
+	// Resume, when set, makes the session stateful (lossless): a transport
+	// fault resumes the Messenger session on a new transport (pinned
+	// ProtocolV2 SESSION_RECONNECT) instead of failing. It receives the
+	// current ResumeState with InSeq filled and returns a resumed transport
+	// whose PeerSequence acknowledges retained messages. Protocol, CRC and
+	// authentication errors still fail the session.
+	Resume func(context.Context, ResumeState) (*Transport, error)
+	// ResumeTimeout bounds one resume episode (default 30s). MaxUnacked
+	// bounds retained unacknowledged messages (default 1024).
+	ResumeTimeout time.Duration
+	MaxUnacked    int
+	// OnResume runs after each successful resume, outside session locks.
+	OnResume func()
 }
 
 type Session struct {
@@ -84,6 +97,14 @@ type Session struct {
 	lastReceive    atomic.Pointer[time.Time]
 	onMessage      func(msgr.MessageData) error
 	onClose        func(error)
+	// Stateful resume (Config.Resume); guarded by mu.
+	epoch       uint64
+	stop        chan struct{}
+	loops       *sync.WaitGroup
+	resuming    bool
+	unacked     []msgr.MessageData
+	resumeState ResumeState
+	resumes     atomic.Uint64
 }
 
 func New(t *Transport, config Config, onMessage func(msgr.MessageData) error, onClose func(error)) *Session {
@@ -93,7 +114,29 @@ func New(t *Transport, config Config, onMessage func(msgr.MessageData) error, on
 	if config.KeepaliveTimeout == 0 {
 		config.KeepaliveTimeout = 45 * time.Second
 	}
-	return &Session{transport: t, config: config, pending: make(map[uint64]*request), idle: make(chan struct{}), queue: make(chan *request, 64), controls: make(chan msgr.Frame, 16), ack: make(chan struct{}, 1), done: make(chan struct{}), cleanupDone: make(chan struct{}), onMessage: onMessage, onClose: onClose}
+	if config.ResumeTimeout == 0 {
+		config.ResumeTimeout = 30 * time.Second
+	}
+	if config.MaxUnacked == 0 {
+		config.MaxUnacked = 1024
+	}
+	return &Session{transport: t, config: config, pending: make(map[uint64]*request), idle: make(chan struct{}), queue: make(chan *request, 64), controls: make(chan msgr.Frame, 16), ack: make(chan struct{}, 1), done: make(chan struct{}), cleanupDone: make(chan struct{}), onMessage: onMessage, onClose: onClose, resumeState: t.Resume}
+}
+
+// Resumes counts successful stateful transport resumes.
+func (s *Session) Resumes() uint64 { return s.resumes.Load() }
+
+// startLoopsLocked starts one transport generation's workers; s.mu is held.
+func (s *Session) startLoopsLocked(t *Transport, resend []msgr.MessageData) {
+	loops := &sync.WaitGroup{}
+	stop := make(chan struct{})
+	s.loops, s.stop = loops, stop
+	epoch := s.epoch
+	s.wg.Add(3)
+	loops.Add(3)
+	go s.readLoop(t, epoch, stop, loops)
+	go s.writeLoop(t, epoch, stop, loops, resend)
+	go s.keepaliveLoop(epoch, stop, loops)
 }
 func (s *Session) Start() {
 	s.startOnce.Do(func() {
@@ -104,15 +147,16 @@ func (s *Session) Start() {
 		}
 		now := time.Now()
 		s.lastReceive.Store(&now)
-		s.wg.Add(3)
-		go s.readLoop()
-		go s.writeLoop()
-		go s.keepaliveLoop()
+		s.startLoopsLocked(s.transport, nil)
 	})
 }
 func (s *Session) Done() <-chan struct{} { return s.done }
-func (s *Session) RemoteAddr() net.Addr  { return s.transport.Conn.RemoteAddr() }
-func (s *Session) Err() error            { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
+func (s *Session) RemoteAddr() net.Addr {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.transport.Conn.RemoteAddr()
+}
+func (s *Session) Err() error { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
 func (s *Session) Wait() {
 	// Fail closes admission under mu before done, so Start cannot add workers
 	// after this barrier. The failure owner can also be an application caller;
@@ -151,9 +195,11 @@ func (s *Session) Fail(err error) {
 	s.pending = make(map[uint64]*request)
 	close(s.idle)
 	s.idle = make(chan struct{})
+	s.unacked = nil
+	conn := s.transport.Conn
 	s.mu.Unlock()
 	defer close(s.cleanupDone)
-	s.transport.Conn.Close()
+	conn.Close()
 	if s.onClose != nil {
 		s.onClose(err)
 	}
@@ -301,25 +347,68 @@ func (s *Session) control(f msgr.Frame) error {
 		return errors.New("ceph messenger: control queue overflow")
 	}
 }
-func (s *Session) writeFrame(f msgr.Frame) error {
-	if err := s.transport.Conn.SetWriteDeadline(time.Now().Add(s.config.WriteTimeout)); err != nil {
+func (s *Session) writeFrame(t *Transport, f msgr.Frame) error {
+	if err := t.Conn.SetWriteDeadline(time.Now().Add(s.config.WriteTimeout)); err != nil {
 		return err
 	}
-	return s.transport.Writer.Write(f)
+	return t.Writer.Write(f)
 }
-func (s *Session) writeLoop() {
+
+// retain records a message about to be written so a stateful resume can
+// retransmit it until the peer acknowledges its sequence.
+func (s *Session) retain(m msgr.MessageData) error {
+	if s.config.Resume == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.unacked) >= s.config.MaxUnacked {
+		return fmt.Errorf("%w: unacknowledged message bound exceeded", wire.ErrLimit)
+	}
+	s.unacked = append(s.unacked, m)
+	return nil
+}
+
+// acknowledged drops retained messages the peer has received.
+func (s *Session) acknowledged(seq uint64) {
+	if s.config.Resume == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := 0
+	for n < len(s.unacked) && s.unacked[n].Sequence <= seq {
+		s.unacked[n] = msgr.MessageData{}
+		n++
+	}
+	s.unacked = s.unacked[n:]
+}
+
+func (s *Session) writeLoop(t *Transport, epoch uint64, stop <-chan struct{}, loops *sync.WaitGroup, resend []msgr.MessageData) {
 	defer s.wg.Done()
+	defer loops.Done()
+	// Retained messages of the previous transport go first, with their
+	// original sequences, so the peer sees one ordered stream.
+	for _, m := range resend {
+		m.AckSequence = s.received.Load()
+		if err := s.writeFrame(t, m.Frame()); err != nil {
+			s.fault(epoch, err)
+			return
+		}
+	}
 	for {
 		var err error
 		select {
 		case <-s.done:
 			return
+		case <-stop:
+			return
 		case f := <-s.controls:
-			err = s.writeFrame(f)
+			err = s.writeFrame(t, f)
 		case <-s.ack:
 			e := wire.Encoder{}
 			e.U64(s.received.Load())
-			err = s.writeFrame(msgr.Frame{Tag: msgr.Ack, Segments: [][]byte{e.Data}})
+			err = s.writeFrame(t, msgr.Frame{Tag: msgr.Ack, Segments: [][]byte{e.Data}})
 		case r := <-s.queue:
 			s.mu.Lock()
 			id, ctx, m := r.message.Transaction, r.ctx, r.message
@@ -361,21 +450,32 @@ func (s *Session) writeLoop() {
 			}
 			m.Sequence = s.sent.Add(1)
 			m.AckSequence = s.received.Load()
-			err = s.writeFrame(m.Frame())
+			if err := s.retain(m); err != nil {
+				s.Fail(err)
+				return
+			}
+			err = s.writeFrame(t, m.Frame())
 		}
 		if err != nil {
-			s.Fail(err)
+			s.fault(epoch, err)
 			return
 		}
 	}
 }
-func (s *Session) readLoop() {
+
+func (s *Session) readLoop(t *Transport, epoch uint64, stop <-chan struct{}, loops *sync.WaitGroup) {
 	defer s.wg.Done()
+	defer loops.Done()
 	for {
-		f, err := s.transport.Reader.Read()
+		f, err := t.Reader.Read()
 		aborted := errors.Is(err, msgr.ErrAborted)
 		if err != nil && !aborted {
-			s.Fail(err)
+			select {
+			case <-stop:
+				return // this transport generation was retired by a fault
+			default:
+			}
+			s.fault(epoch, err)
 			return
 		}
 		// Keep Go's monotonic clock component when publishing activity.
@@ -397,12 +497,18 @@ func (s *Session) readLoop() {
 				s.Fail(msgr.ErrFrame)
 				return
 			}
+			s.acknowledged(m.AckSequence)
 			if m.Sequence <= s.received.Load() {
 				select {
 				case s.ack <- struct{}{}:
 				default:
 				}
 				continue
+			}
+			if s.config.Resume != nil && m.Sequence != s.received.Load()+1 {
+				// A stateful stream is gapless; a gap means lost messages.
+				s.Fail(fmt.Errorf("%w: stateful message sequence gap", msgr.ErrFrame))
+				return
 			}
 			s.received.Store(m.Sequence)
 			select {
@@ -455,9 +561,13 @@ func (s *Session) readLoop() {
 				s.Fail(msgr.ErrFrame)
 				return
 			}
-			if f.Tag == msgr.Ack && wire.NewDecoder(f.Segments[0]).U64() > s.sent.Load() {
-				s.Fail(msgr.ErrFrame)
-				return
+			if f.Tag == msgr.Ack {
+				seq := wire.NewDecoder(f.Segments[0]).U64()
+				if seq > s.sent.Load() {
+					s.Fail(msgr.ErrFrame)
+					return
+				}
+				s.acknowledged(seq)
 			}
 		default:
 			s.Fail(fmt.Errorf("%w: unexpected established tag %d", msgr.ErrFrame, f.Tag))
@@ -465,17 +575,21 @@ func (s *Session) readLoop() {
 		}
 	}
 }
-func (s *Session) keepaliveLoop() {
+
+func (s *Session) keepaliveLoop(epoch uint64, stop <-chan struct{}, loops *sync.WaitGroup) {
 	defer s.wg.Done()
+	defer loops.Done()
 	timer := time.NewTicker(s.config.KeepaliveInterval)
 	defer timer.Stop()
 	for {
 		select {
 		case <-s.done:
 			return
+		case <-stop:
+			return
 		case now := <-timer.C:
 			if now.Sub(*s.lastReceive.Load()) >= s.config.KeepaliveTimeout {
-				s.Fail(ErrKeepaliveTimeout)
+				s.fault(epoch, ErrKeepaliveTimeout)
 				return
 			}
 			e := wire.Encoder{}
@@ -486,5 +600,114 @@ func (s *Session) keepaliveLoop() {
 				return
 			}
 		}
+	}
+}
+
+// resumableFault reports transport-level failures a stateful session may
+// survive. Malformed or unauthenticated frames and protocol refusals are
+// terminal; so is a peer RESET of the stateful session.
+func resumableFault(err error) bool {
+	switch {
+	case err == nil, errors.Is(err, msgr.ErrFrame), errors.Is(err, msgr.ErrCRC), errors.Is(err, msgr.ErrAuthentication),
+		errors.Is(err, msgr.ErrFeatures), errors.Is(err, wire.ErrLimit), errors.Is(err, wire.ErrVersion),
+		errors.Is(err, ErrSessionReset), errors.Is(err, ErrClosed), errors.Is(err, context.Canceled):
+		return false
+	}
+	return true
+}
+
+// fault ends one transport generation. Lossy sessions fail; stateful
+// sessions retire the transport and resume in the background.
+func (s *Session) fault(epoch uint64, err error) {
+	if s.config.Resume == nil || !resumableFault(err) {
+		s.Fail(err)
+		return
+	}
+	s.mu.Lock()
+	if s.err != nil || s.epoch != epoch || s.resuming {
+		s.mu.Unlock()
+		return
+	}
+	s.resuming = true
+	t, loops, stop := s.transport, s.loops, s.stop
+	s.wg.Add(1)
+	s.mu.Unlock()
+	close(stop)
+	t.Conn.Close()
+	go s.resume(err, loops)
+}
+
+func (s *Session) resume(cause error, loops *sync.WaitGroup) {
+	defer s.wg.Done()
+	// Every worker of the old generation must stop before a new writer may
+	// retransmit, so the retained list is final.
+	loops.Wait()
+	ctx, cancel := context.WithTimeout(context.Background(), s.config.ResumeTimeout)
+	defer cancel()
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+	go func() {
+		select {
+		case <-s.done:
+			cancel()
+		case <-stopWatch:
+		}
+	}()
+	backoff := 50 * time.Millisecond
+	for {
+		s.mu.Lock()
+		state := s.resumeState
+		s.mu.Unlock()
+		state.InSeq = s.received.Load()
+		t, err := s.config.Resume(ctx, state)
+		if err == nil {
+			s.install(t, cause)
+			return
+		}
+		if !resumableFault(err) || ctx.Err() != nil {
+			s.Fail(fmt.Errorf("%w; stateful resume failed: %w", cause, err))
+			return
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			s.Fail(fmt.Errorf("%w; stateful resume failed: %w", cause, ctx.Err()))
+			return
+		}
+		backoff = min(2*backoff, 2*time.Second)
+	}
+}
+
+// install publishes a resumed transport: retained messages the peer already
+// received are dropped and the rest are retransmitted first.
+func (s *Session) install(t *Transport, cause error) {
+	s.mu.Lock()
+	if s.err != nil {
+		s.mu.Unlock()
+		t.Conn.Close()
+		return
+	}
+	if t.PeerSequence > s.sent.Load() {
+		s.mu.Unlock()
+		t.Conn.Close()
+		s.Fail(fmt.Errorf("%w: peer acknowledged unsent messages on resume", msgr.ErrFrame))
+		return
+	}
+	n := 0
+	for n < len(s.unacked) && s.unacked[n].Sequence <= t.PeerSequence {
+		n++
+	}
+	s.unacked = s.unacked[n:]
+	resend := append([]msgr.MessageData(nil), s.unacked...)
+	s.transport, s.resumeState = t, t.Resume
+	s.epoch++
+	s.resuming = false
+	now := time.Now()
+	s.lastReceive.Store(&now)
+	s.startLoopsLocked(t, resend)
+	s.mu.Unlock()
+	s.resumes.Add(1)
+	if s.config.OnResume != nil {
+		s.config.OnResume()
 	}
 }

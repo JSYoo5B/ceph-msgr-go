@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -214,7 +215,9 @@ func TestReplyForUnsentRequestCannotCompleteIt(t *testing.T) {
 	}()
 	queued := <-s.queue // Writer remains paused; nothing has been transmitted.
 	s.wg.Add(1)
-	go s.readLoop()
+	loops := &sync.WaitGroup{}
+	loops.Add(1)
+	go s.readLoop(s.transport, 0, make(chan struct{}), loops)
 	m := msgr.MessageData{Sequence: 1, Transaction: queued.message.Transaction, Type: msgr.MonCommandReplyMessage}
 	if err := w.Write(m.Frame()); err != nil {
 		t.Fatal(err)
