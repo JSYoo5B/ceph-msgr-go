@@ -53,6 +53,8 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			outputBytes = uint64(op.Xattr.MaxOutputBytes)
 		case OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys:
 			outputBytes = uint64(op.Omap.MaxOutputBytes)
+		case Call:
+			outputBytes = uint64(op.Class.MaxOutputBytes)
 		}
 		replyBudget, err = boundedBytes(limit, replyBudget, outputBytes)
 		if err != nil {
@@ -81,6 +83,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		if IsXattrOperation(op.Code) {
 			encodeXattrUnion(&e, op)
 			payloadBytes += uint64(len(op.Xattr.Name))
+		} else if op.Code == Call {
+			encodeClassUnion(&e, op)
+			payloadBytes += uint64(len(op.Class.Class)) + uint64(len(op.Class.Method))
 		} else {
 			e.U64(op.Offset)
 			if IsOmapOperation(op.Code) {
@@ -114,6 +119,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		}
 		if IsXattrOperation(op.Code) {
 			data = append(data, op.Xattr.Name...)
+		}
+		if op.Code == Call {
+			data = append(append(data, op.Class.Class...), op.Class.Method...)
 		}
 		data = append(data, op.Data...)
 	}

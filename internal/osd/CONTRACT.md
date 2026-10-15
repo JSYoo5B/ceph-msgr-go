@@ -28,8 +28,9 @@ identity, per-op results, ONDISK and unknown-outcome rules also apply to them.
 Three bounded OMAP reads, the raw header read, OMAP_CMP and five OMAP writes
 (SETVALS, SETHEADER, CLEAR, RMKEYS, RMKEYRANGE) use derived input-length
 extents; [OMAP_CONTRACT.md](OMAP_CONTRACT.md) records their distinct union,
-pagination, comparison, write ordering and native acceptance. Class/snapshot,
-U64 comparison and bulk xattr variants remain unsupported.
+pagination, comparison, write ordering and native acceptance. Object class
+CALL has its own union and ordering rules in [CLASS_CONTRACT.md](CLASS_CONTRACT.md).
+Snapshots, U64 comparison and bulk xattr variants remain unsupported.
 
 Negotiated OBJECTLOCATOR and PGID64 select the supported request/reply v6
 branch; NEW_OSDOP_ENCODING and NEW_OSDOPREPLY_ENCODING are rejected. The caller

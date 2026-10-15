@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange:
+	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call:
 		return true
 	}
 	return false
@@ -23,7 +23,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 	}
 	var flags, total uint64
 	var stagedDigestSize uint64
-	var stagedXattr, stagedOmap bool
+	var stagedXattr, stagedOmap, stagedAny, afterCall bool
 	for _, op := range ops {
 		if !SupportedOperation(op.Code) || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
 			return 0, 0, ErrOperation
@@ -34,6 +34,33 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		if op.Code != AssertVersion && op.Version != 0 {
 			return 0, 0, ErrRequest
 		}
+		if op.Code == Call {
+			// A class method reads committed or staged state inconsistently
+			// (pinned objclass.cc:105-339) and may stage data, xattr and OMAP
+			// writes itself. Refuse a CALL after any staged write, and any
+			// read, guard or CALL after a CALL, until characterized.
+			if stagedAny {
+				return 0, 0, ErrOperation
+			}
+			mode, inputBytes, err := validateClassOperation(op, limit)
+			if err != nil {
+				return 0, 0, err
+			}
+			if inputBytes > uint64(limit)-total {
+				return 0, 0, wire.ErrLimit
+			}
+			flags |= mode
+			total += inputBytes
+			stagedAny, afterCall, stagedXattr, stagedOmap = true, true, true, true
+			continue
+		}
+		if op.Class != (ClassInput{}) {
+			return 0, 0, ErrRequest
+		}
+		if afterCall && readModeOperation(op.Code) {
+			return 0, 0, ErrOperation
+		}
+		stagedAny = stagedAny || writeOperation(op.Code)
 		if IsOmapOperation(op.Code) {
 			mode, inputBytes, err := validateOmapOperation(op, limit)
 			if err != nil {
@@ -151,4 +178,20 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		total += uint64(len(op.Data))
 	}
 	return flags, total, nil
+}
+
+func writeOperation(code uint16) bool {
+	switch code {
+	case Write, WriteFull, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr:
+		return true
+	}
+	return isOmapMutation(code)
+}
+
+func readModeOperation(code uint16) bool {
+	switch code {
+	case Read, Stat, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, OmapCompare, Call:
+		return true
+	}
+	return IsOmapOperation(code) && !isOmapMutation(code)
 }

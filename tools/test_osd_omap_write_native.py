@@ -112,6 +112,46 @@ class OmapWriteNativeTests(unittest.TestCase):
             writes.validate_request({"seed": None, "mtime": {"seconds": 1, "nanos": 0}, "operations": [
                 {"op": "rmrange", "begin": "", "end": "", "keys": []}]}, "compare")
 
+    def test_call_admission_and_exec_output_lifetime(self):
+        request = writes.validate_request({"seed": {}, "operations": [
+            {"op": "call", "flags": 0, "class": "hello", "method": "say_hello", "input": encode(b"T\0\xff")}]}, "exec")
+        self.assertEqual(request["operations"][0], {"op": "call", "flags": 0, "cls": b"hello", "method": b"say_hello", "input": b"T\0\xff"})
+        self.assertEqual(writes.validate_request({"object": owned(b"main-"), "role": "readonly", "operations": [
+            {"op": "call", "class": "hello", "method": "say_hello"}]}, "exec")["role"], "readonly")
+        for raw in [{"seed": {}, "operations": [{"op": "call", "class": "", "method": "m"}]},
+                    {"seed": {}, "operations": [{"op": "call", "class": "c" * 256, "method": "m"}]},
+                    {"seed": {}, "operations": [{"op": "call", "class": "c\0", "method": "m"}]},
+                    {"seed": {}, "role": "readonly", "operations": [{"op": "call", "class": "c", "method": "m"}]},
+                    {"seed": {}, "object": owned(b"main-"), "operations": [{"op": "call", "class": "c", "method": "m"}]},
+                    {"seed": {}, "operations": [{"op": "call", "class": "c", "method": "m"}] * 2},
+                    {"seed": {}, "operations": [{"op": "set", "entries": []}]}]:
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                writes.validate_request(raw, "exec")
+        library = Library()
+        library.install("rados_create_read_op", lambda: 5)
+        payload = C.create_string_buffer(b"Hello\0!", 7)
+
+        def exec_(op, cls, method, inbuf, inlen, out, outlen, prval):
+            self.assertEqual((op, cls, method, inbuf[:inlen]), (5, b"hello", b"say_hello", b"T\0\xff"))
+            out._obj.value, outlen._obj.value, prval._obj.value = C.addressof(payload), 7, 42
+
+        library.install("rados_read_op_exec", exec_)
+        flags = {}
+        library.install("rados_read_op_operate", lambda op, io, name, value: flags.setdefault("read", value) and 42)
+        native = writes.Native.__new__(writes.Native)
+        native.lib = library
+        result = native.exec_vector(1, b"o", request["operations"][0])
+        self.assertEqual(result, {"aggregate": 42, "prvals": [{"index": 0, "prval": 42}], "output": encode(b"Hello\0!")})
+        self.assertEqual(flags["read"], writes.RETURNVEC)
+        names = [name for name, _ in library.calls]
+        self.assertEqual(names[-2:], ["rados_buffer_free", "rados_release_read_op"])
+        write = writes.validate_request({"seed": None, "mtime": {"seconds": 1, "nanos": 0}, "operations": [
+            {"op": "call", "class": "hello", "method": "record_hello"}]}, "compare")
+        library.install("rados_create_write_op", lambda: 6)
+        library.install("rados_write_op_exec", lambda op, cls, method, inbuf, inlen, prval: setattr(prval._obj, "value", -17))
+        library.install("rados_write_op_operate2", lambda op, io, name, stamp, value: -17)
+        self.assertEqual(native.write_vector(1, b"o", write["operations"], {"seconds": 1, "nanos": 0}), (-17, [{"index": 0, "prval": -17}]))
+
     def test_ownership_is_limited_to_exact_fixture_uuid_names(self):
         receipt = {"schema_version": 1, "source_commit": writes.SOURCE_COMMIT, "pool": "pool", "pool_id": 7,
                    "fixture_object": "fixture", "namespace": "", "objects": [owned(b"main-"), owned(b"absent-")]}

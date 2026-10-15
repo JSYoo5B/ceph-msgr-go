@@ -46,6 +46,8 @@ func DecodeReply(m msgr.MessageData, limit uint32) (Reply, error) {
 		op.Flags = d.U32()
 		if IsXattrOperation(op.Code) {
 			op.Xattr = decodeXattrUnion(d, op.Code)
+		} else if op.Code == Call {
+			op.Class = decodeClassUnion(d)
 		} else {
 			op.Offset, op.Length = d.U64(), d.U64()
 			op.TruncateSize, op.TruncateSequence = d.U64(), d.U32()

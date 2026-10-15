@@ -294,7 +294,7 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 
 현재 SET/RM 뒤 같은 vector의 GET/GETALL/CMP는 staged-read 의미를 보장하지
 못해 송신 전에 거절한다. 비교를 먼저 놓는 순서가 지원된다. U64 비교,
-bulk SET/RESET, class·snapshot은 별도 미구현 단계다.
+bulk SET/RESET, snapshot은 별도 미구현 단계다.
 
 OMAP 읽기는 `Omap` 입력을 쓰며 extent·Version·Data·Xattr는 0이다.
 `StartAfter`는 exclusive cursor, `Prefix`는 GETVALS의 byte prefix이며
@@ -394,6 +394,32 @@ aggregate와 해당 operation에 `-EOVERFLOW`를 돌려주고 transaction을 com
 거절 응답에도 서버가 ACK·ONDISK flag를 붙이므로 음수 aggregate의 ONDISK를
 commit 근거로 해석하지 않는다.
 
+`OSDCall`은 RADOS object class method를 호출한다. `Class` 입력의 class·method
+이름(각각 1~255 bytes, NUL 불가)과 `Data`의 입력 bytes를 그대로 보내고, method의
+signed per-op 결과와 raw 출력을 돌려준다. 양수 결과도 보존한다. `Mode`는
+`OSDCallRead`·`OSDCallWrite` 중 하나를 반드시 지정한다. 다만 이 값은 request
+flag와 mtime 허용 여부만 정하고, Tentacle OSD는 method 등록 flag로 실제
+읽기·쓰기를 판정한다. 그래서 read mode로 보낸 write method도 쓰기로 실행된다.
+`MaxOutputBytes`는 양의 local 출력 제한이다. FAILOK CALL, staged write 뒤의
+CALL, CALL 뒤의 읽기·guard·CALL은 class method가 committed 상태를 읽거나 스스로
+쓰기를 staging할 수 있어 송신 전에 거절한다. 없는 class·method와 권한 부족은
+서버 결과(`-1`·`-95` 등)로 그대로 전달한다. [CALL 계약](internal/osd/CLASS_CONTRACT.md)에
+출력 한도와 결과 의미를 정리했다.
+
+```go
+reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
+    MapEpoch: epoch, Object: object,
+    Operations: []cephmsgr.OSDOperation{{
+        Code: cephmsgr.OSDCall, Data: input,
+        Class: cephmsgr.OSDClassInput{
+            Class: "hello", Method: "say_hello",
+            Mode: cephmsgr.OSDCallRead, MaxOutputBytes: 4096,
+        },
+    }},
+})
+// reply.Operations[0].Result는 method 반환값, Data는 method 출력이다.
+```
+
 `ModificationTime`의 0은 그대로 전송하며 client 시각으로 대체하지 않는다.
 쓰기 성공은 서버의 `OSDReplyOnDisk`를 요구한다. 이것은 저장소가 보고한
 완료이며, MemStore 재시작 후 persistence나 전원 장애 내구성 보장이 아니다.
@@ -481,6 +507,18 @@ Secure/aes256k container 3 BlueStore의 CGO0 전체 OSD 시험 23개도 통과�
 그대로였다. 다만 primary가 보고하는 user version과 mtime은 거절된 요청 값으로
 앞서 나갔으며, 고정 소스의 `finish_ctx`가 cache에 먼저 반영한 결과로 기록했다.
 쓰기 응답 손실·SIGKILL 복구, 권한 거절과 CI matrix는 별도 검증이 필요하다.
+
+[OMAP 범위 삭제 검증](integration/fixture/OSD_OMAP_RANGE_VALIDATION.md)은 fresh
+native encoder/별도 decoder의 5개 vector와 Go bytes를 대조했다. CRC/AES host 3
+BlueStore의 8개 실서버 사례가 native C mirror와 일치했고, secure/aes256k
+container의 CGO0 전체 OSD 시험 26개도 통과했다.
+
+[object class CALL 검증](integration/fixture/OSD_CALL_VALIDATION.md)은 hello class로
+18개 실서버 사례를 확인했고 secure/aes256k container의 CGO0 전체 OSD 시험 27개도
+통과했다. 모든 사례에서 Go aggregate·per-op 결과·출력 bytes가
+native C의 aggregate·prval·출력과 일치했다. 확인한 범위는 read/write method,
+양수 결과 42, 쓰기 오류의 출력 반환, 520-byte 출력의 `-75`, 실행 전 거절인
+`-95`·`-1`, read mode 요청의 쓰기 실행, readonly의 `-1`이다.
 
 [OMAP 비교 검증](integration/fixture/OSD_OMAP_COMPARE_VALIDATION.md)은 fresh
 native encoder/별도 decoder의 5개 vector와 Go bytes를 대조했다. 정렬하지 않은

@@ -71,7 +71,7 @@ SCRUB,0x4005,SUB,SUB,unsupported
 SCRUB_RESERVE,0x4006,SUB,SUB,unsupported
 SCRUB_UNRESERVE,0x4007,SUB,SUB,unsupported
 SCRUB_MAP,0x4009,SUB,SUB,unsupported
-CALL,0x1401,RD,EXEC,unsupported
+CALL,0x1401,RD,EXEC,implemented
 PGLS,0x1501,RD,PG,unsupported
 PGLS_FILTER,0x1502,RD,PG,unsupported
 PG_HITSET_LS,0x1503,RD,PG,unsupported

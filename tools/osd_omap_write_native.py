@@ -53,7 +53,9 @@ MAX_RESERVED = 8
 MAX_OPERATIONS = 16
 MAX_CLI_OUTPUT = 16 << 10
 OWNED = "osd-omap-write-owned"
-WRITE_OPS = {"set", "remove", "clear", "cmp", "rmrange"}
+WRITE_OPS = {"set", "remove", "clear", "cmp", "rmrange", "call"}
+MAX_CLASS_NAME = 255
+MAX_CALL_OUTPUT = 1 << 20
 RETURNVEC = 1024  # librados.h:137 LIBRADOS_OPERATION_RETURNVEC
 
 
@@ -83,6 +85,12 @@ def keys(values, label):
     return sorted(result)
 
 
+def class_name(text):
+    if not isinstance(text, str) or not 0 < len(text.encode()) <= MAX_CLASS_NAME or "\0" in text:
+        raise ValueError("invalid native class or method name")
+    return text.encode()
+
+
 def seed(raw):
     if raw is None:
         return None
@@ -106,7 +114,9 @@ def operations(raw, allowed=WRITE_OPS):
     for action in raw:
         if not isinstance(action, dict) or action.get("op") not in allowed:
             raise ValueError("unsupported native OMAP write operation")
-        admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags", "cmp": "key", "rmrange": "begin"}[action["op"]]}
+        admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags", "cmp": "key", "rmrange": "begin", "call": "class"}[action["op"]]}
+        if action["op"] == "call":
+            admitted |= {"method", "input"}
         if action["op"] == "rmrange":
             admitted.add("end")
         if action["op"] == "cmp":
@@ -121,6 +131,12 @@ def operations(raw, allowed=WRITE_OPS):
             decoded["entries"] = entries(action.get("entries", []), "set entry")
         elif action["op"] == "remove":
             decoded["keys"] = keys(action.get("keys", []), "removal key")
+        elif action["op"] == "call":
+            decoded.update(cls=class_name(action.get("class")), method=class_name(action.get("method")),
+                           input=binary(action.get("input", "")))
+        elif action["op"] == "call":
+            decoded.update(cls=class_name(action.get("class")), method=class_name(action.get("method")),
+                           input=binary(action.get("input", "")))
         elif action["op"] == "rmrange":
             # Reversed ranges stay expressible here to characterize the
             # server; the Go product refuses them before transmission.
@@ -139,6 +155,7 @@ def operations(raw, allowed=WRITE_OPS):
 
 def validate_request(raw, mode):
     allowed = {"prepare": {"seed", "reserve"}, "observe": {"object", "inventory_keys"},
+               "exec": {"seed", "object", "role", "operations", "inventory_keys"},
                "assert": {"object", "operations", "inventory_keys"},
                "compare": {"seed", "operations", "mtime", "inventory_keys"}, "cleanup": set()}
     if mode not in allowed:
@@ -154,6 +171,22 @@ def validate_request(raw, mode):
         request["reserve"] = reserve
     elif mode == "observe":
         request["object"] = xattr.identity(raw.get("object"), "object")
+    elif mode == "exec":
+        # ONE read-op CALL, on an owned object or on a fresh seeded/absent mirror.
+        request["operations"] = operations(raw.get("operations"), {"call"})
+        if len(request["operations"]) != 1:
+            raise ValueError("exec runs exactly one CALL")
+        request["role"] = raw.get("role", "test")
+        if request["role"] not in xattr.CLIENT_ROLES:
+            raise ValueError("unsupported fixture identity")
+        if "object" in raw:
+            if "seed" in raw:
+                raise ValueError("exec targets either an owned object or a mirror")
+            request["object"] = xattr.identity(raw["object"], "object")
+        else:
+            if request["role"] != "test":
+                raise ValueError("a restricted identity cannot create a mirror")
+            request["seed"] = seed(raw.get("seed"))
     elif mode == "assert":
         request["object"] = xattr.identity(raw.get("object"), "object")
         request["operations"] = operations(raw.get("operations"), {"cmp"})
@@ -172,7 +205,7 @@ def validate_request(raw, mode):
     for action in request.get("operations", []):
         total += sum(len(k) + len(v) for k, v in action.get("entries", [])) + sum(map(len, action.get("keys", [])))
         total += len(action.get("key", b"")) + len(action.get("value", b""))
-        total += len(action.get("begin", b"")) + len(action.get("end", b""))
+        total += len(action.get("begin", b"")) + len(action.get("end", b"")) + len(action.get("input", b""))
     if total > MAX_BINARY:
         raise ValueError("aggregate OMAP write oracle input exceeds 128 KiB")
     return request
@@ -222,9 +255,12 @@ class Native(omap.Native):
         for name, arguments in {"write_op_omap_rm_keys2": [p, C.POINTER(p), C.POINTER(s), s],
                                 "write_op_omap_clear": [p], "write_op_omap_cmp2": cmp2,
                                 "write_op_omap_rm_range2": [p, char, s, char, s],
+                                "write_op_exec": [p, char, char, char, s, C.POINTER(C.c_int)],
+                                "read_op_exec": [p, char, char, char, s, C.POINTER(p), C.POINTER(s), C.POINTER(C.c_int)],
                                 "read_op_omap_cmp2": cmp2}.items():
             function = getattr(self.lib, "rados_" + name)
             function.argtypes, function.restype = arguments, None
+        self.lib.rados_buffer_free.argtypes, self.lib.rados_buffer_free.restype = [p], None
 
     def append_cmp(self, operation, kind, index, action, outputs, buffers):
         prval = C.c_int(999)
@@ -260,6 +296,15 @@ class Native(omap.Native):
                 if action["op"] == "cmp":
                     self.append_cmp(operation, "write", index, action, outputs, buffers)
                     continue
+                if action["op"] == "call":
+                    prval = C.c_int(999)
+                    outputs.append((index, prval))
+                    buffers.append(prval)
+                    self.lib.rados_write_op_exec(operation, action["cls"], action["method"], action["input"],
+                                                 len(action["input"]), C.byref(prval))
+                    if action["flags"]:
+                        self.lib.rados_write_op_set_flags(operation, action["flags"])
+                    continue
                 if action["op"] == "set":
                     k, kl, kb = omap.pointers([key for key, _ in action["entries"]])
                     v, vl, vb = omap.pointers([value for _, value in action["entries"]])
@@ -281,6 +326,27 @@ class Native(omap.Native):
             return aggregate, [{"index": i, "prval": v.value} for i, v in outputs]
         finally:
             self.lib.rados_release_write_op(operation)
+
+    def exec_vector(self, io, name, action):
+        """One read-op CALL with RETURNVEC: the OSD classifies the method."""
+        operation = self.lib.rados_create_read_op()
+        if not operation:
+            raise RuntimeError("native CALL allocation failed")
+        out, length, prval = C.c_void_p(), C.c_size_t(), C.c_int(999)
+        try:
+            self.lib.rados_read_op_exec(operation, action["cls"], action["method"], action["input"], len(action["input"]),
+                                        C.byref(out), C.byref(length), C.byref(prval))
+            if action["flags"]:
+                self.lib.rados_read_op_set_flags(operation, action["flags"])
+            aggregate = self.lib.rados_read_op_operate(operation, io, name, RETURNVEC)
+            if length.value > MAX_CALL_OUTPUT:
+                raise ValueError("native CALL output exceeds oracle bound")
+            data = C.string_at(out.value, length.value) if out.value and length.value else b""
+            return {"aggregate": aggregate, "prvals": [{"index": 0, "prval": prval.value}], "output": xattr.encode(data)}
+        finally:
+            if out.value:
+                self.lib.rados_buffer_free(out)
+            self.lib.rados_release_read_op(operation)
 
     def full_state(self, io, name, inventory_keys, cli):
         length, mtime = C.c_uint64(), xattr.Timespec()
@@ -394,6 +460,37 @@ def execute(native, io, metadata, request, mode, out, cli):
                 native.lib.rados_remove(io, main)
         result["objects"] = [n.decode() for n in [main] + absent]
         return result
+    if mode == "exec":
+        action = request["operations"][0]
+        if "object" in request:
+            owned = check_ownership(omap.read_json(out / (OWNED + ".json")), metadata)
+            if request["object"] not in owned:
+                raise ValueError("exec is limited to owned objects")
+            result["object"] = request["object"].decode()
+            result["vector"] = native.exec_vector(io, request["object"], action)
+            return result
+        mirror = owned_name(metadata, b"mirror-")
+        created = False
+        try:
+            if request["seed"] is not None:
+                created = True
+                code = create_seeded(native, io, mirror, request["seed"])
+                result["seed_aggregate"] = code
+                if code == -17:
+                    created = False
+                native.check(code)
+            result["object"] = mirror.decode()
+            result["before"] = native.full_state(io, mirror, request["inventory_keys"], cli)
+            created = True  # a write-classified method may create the mirror
+            result["vector"] = native.exec_vector(io, mirror, action)
+            result["after"] = native.full_state(io, mirror, request["inventory_keys"], cli)
+            return result
+        finally:
+            if created:
+                code = native.lib.rados_remove(io, mirror)
+                result["cleanup"] = {"mirror_removed": code in (0, -2), "code": code}
+                if code not in (0, -2) and sys.exc_info()[0] is None:
+                    native.check(code)
     # compare: one disposable native mirror around one C write vector.
     mirror = owned_name(metadata, b"mirror-")
     created = False
@@ -433,7 +530,7 @@ def collect(root, out, mode):
         check_ownership(omap.read_json(out / (OWNED + ".json")), metadata)
     native = Native()
     cli = HeaderCLI(root, metadata, "")
-    with xattr.client_connection(native, root, metadata, "test") as io:
+    with xattr.client_connection(native, root, metadata, request.get("role", "test")) as io:
         result = execute(native, io, metadata, request, mode, out, cli)
         result["fixture_daemon_version"] = version
         publish(out, "osd-omap-write-result", result)
@@ -444,7 +541,7 @@ if __name__ == "__main__":
     parser.add_argument("root", type=Path)
     parser.add_argument("out", type=Path)
     modes = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("prepare", "observe", "assert", "compare", "cleanup"):
+    for mode in ("prepare", "observe", "assert", "exec", "compare", "cleanup"):
         modes.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     args = parser.parse_args()
     collect(args.root, args.out, args.mode)

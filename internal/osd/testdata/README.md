@@ -32,6 +32,13 @@ empty begin), and success, ENOENT, FAILOK-then-SETVALS and EOPNOTSUPP replies.
 They are offline codec proof only and claim no live range removal, erasure
 pool refusal, execution or durability.
 
+[Fresh CALL encoder/decoder fixtures](call-native-README.md) independently
+construct five message triples: a CMPXATTR guard before a write-mode
+`hello.write_return_data` call with binary input, and read output, positive
+method result 42, EOVERFLOW-cleared output and pre-execution EOPNOTSUPP
+replies. They are offline codec proof only and claim no live class loading,
+method execution, write-reply bound or durability.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from

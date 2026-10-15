@@ -34,6 +34,9 @@ type omapWriteAction struct {
 	Comparison *int              `json:"comparison,omitempty"`
 	Begin      []byte            `json:"begin,omitempty"`
 	End        []byte            `json:"end,omitempty"`
+	Class      string            `json:"class,omitempty"`
+	Method     string            `json:"method,omitempty"`
+	Input      []byte            `json:"input,omitempty"`
 }
 
 type omapNativePrval struct {
@@ -51,6 +54,7 @@ type omapWriteInput struct {
 	Seed          *omapWriteSeed    `json:"seed,omitempty"`
 	Reserve       int               `json:"reserve,omitempty"`
 	Object        string            `json:"object,omitempty"`
+	Role          string            `json:"role,omitempty"`
 	Operations    []omapWriteAction `json:"operations,omitempty"`
 	MTime         *omapWriteMTime   `json:"mtime,omitempty"`
 	InventoryKeys [][]byte          `json:"inventory_keys,omitempty"`
@@ -89,6 +93,7 @@ type omapWriteReceipt struct {
 	Vector    *struct {
 		Aggregate int32             `json:"aggregate"`
 		Prvals    []omapNativePrval `json:"prvals"`
+		Output    []byte            `json:"output"`
 	} `json:"vector"`
 	Cleanup struct {
 		Objects []struct {
