@@ -1,5 +1,7 @@
 # PGNLS, SPARSE_READ and watch/notify acceptance — 2026-10-15
 
+Tested product checkpoint: `ab2198c27a939d295d4e8db487fe64d073c501bf`.
+
 This checkpoint adds explicitly targeted, bounded PG listing and sparse reads,
 and owner-bound watch/notify streams. Callers still own placement, map changes,
 ping scheduling, acknowledgement decisions and recovery. No new OSD feature is
