@@ -110,12 +110,19 @@ type nativeMDSCephFSReceipt struct {
 		Target         string `json:"target"`
 		State          string `json:"state"`
 		NativeGlobalID uint64 `json:"native_global_id"`
+		GlobalID       uint64 `json:"global_id"`
+		Address        string `json:"address"`
+		Until          string `json:"blocklist_until"`
+		Output         string `json:"native_output"`
 		Error          string `json:"error"`
 	} `json:"mutation"`
-	Complete      bool   `json:"complete"`
-	Error         string `json:"error"`
-	ElapsedMillis int64  `json:"elapsed_ms"`
-	ObservedUTC   string `json:"observed_utc"`
+	Restart       *nativeMDSCephFSRestart     `json:"restart"`
+	RankStatus    *nativeMDSCephFSRankStatus  `json:"rank_status"`
+	HistoricOps   []nativeMDSCephFSHistoricOp `json:"historic_ops"`
+	Complete      bool                        `json:"complete"`
+	Error         string                      `json:"error"`
+	ElapsedMillis int64                       `json:"elapsed_ms"`
+	ObservedUTC   string                      `json:"observed_utc"`
 }
 
 func (r nativeMDSCephFSReceipt) session(gid uint64) *nativeMDSSession {
@@ -305,13 +312,23 @@ func TestCephMDSCephFSIntegration(t *testing.T) {
 	if err := readMDSFreshJSON(filepath.Join(dir, "mds-fresh-oracle.json"), &incarnation); err != nil || incarnation.MDS.Incarnation == nil {
 		t.Fatal("owned MDS incarnation missing", err)
 	}
+	startupGID := fresh.MDS.GID
+	// The recovery acceptance in the same fixture restarts the owned rank-0
+	// daemon; the fixture publishes the incarnation it adopted. Every native
+	// receipt below proves that current incarnation instead of the startup one.
+	current, err := readMDSCephFSTarget(dir, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh.MDS.GID, fresh.MDS.Endpoint, fresh.MDS.Nonce, fresh.MDS.State = current.MDS.GID, current.MDS.Endpoint, current.MDS.Nonce, current.MDS.State
+	incarnation.MDS.Incarnation = &current.MDS.Incarnation
 	identity, keyFile := os.Getenv("CEPH_MSGR_MDS_CEPHFS_IDENTITY"), os.Getenv("CEPH_MSGR_MDS_CEPHFS_KEY_FILE")
 	plan := oracle.Plan
 	token, tokenErr := hex.DecodeString(oracle.Token)
 	xattrValue, xattrErr := hex.DecodeString(plan.XattrValueHex)
 	payload, payloadErr := hex.DecodeString(plan.PayloadHex)
 	if oracle.Source != mdsFreshSource || tokenErr != nil || len(token) != 16 || oracle.Token != fresh.Token || oracle.FSID != os.Getenv("CEPH_MSGR_FSID") || oracle.FSID != fresh.FSID || oracle.FSCID != fresh.FSCID ||
-		oracle.FSName != fresh.FSName || oracle.MDSGID != fresh.MDS.GID || fresh.MDS.Rank != 0 || fresh.MDS.State != "up:active" || fresh.MDS.Nonce == 0 ||
+		oracle.FSName != fresh.FSName || oracle.MDSGID != startupGID || fresh.MDS.Rank != 0 || fresh.MDS.State != "up:active" || fresh.MDS.Nonce == 0 ||
 		identity != "client.mds-cephfs-"+oracle.Token || oracle.ClientIdentity != identity || oracle.NativeIdentity != "client.mds-cephfs-native-"+oracle.Token ||
 		oracle.ClientCaps["mds"] != "allow rw fsname="+fresh.FSName || oracle.ClientCaps["osd"] != "" || oracle.NativeCaps["osd"] != "allow rw tag cephfs data="+fresh.FSName ||
 		plan.Directory != "ceph-msgr-cephfs-"+oracle.Token || plan.GoFile != "go-file" || !slices.Equal(plan.NativeFiles, []string{"native-0", "native-1", "native-2"}) || plan.Missing != "missing" ||

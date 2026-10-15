@@ -21,17 +21,18 @@ func TestMDSCephFSClosedProfileAndCredentials(t *testing.T) {
 		env := mdsCephFSProfileEnv()
 		env["CEPH_MSGR_TEST_RUNTIME"] = runtime
 		p, err := loadProfile(func(k string) string { return env[k] })
-		if err != nil || p.testRun != "^TestCephMDSCephFSIntegration$" || p.mdsCephFS != "1" || p.mdsSessions != "0" || p.mdsCommands != "0" || p.osdPGV8() || !p.mdsFreshOSDAllowed() || !p.mdsPublicClient() || p.cleanupBudget() != 2*time.Minute {
+		if err != nil || p.testRun != "^TestCephMDSCephFS(Recovery)?Integration$" || p.mdsCephFS != "1" || p.mdsSessions != "0" || p.mdsCommands != "0" || p.osdPGV8() || !p.mdsFreshOSDAllowed() || !p.mdsPublicClient() || p.cleanupBudget() != 2*time.Minute {
 			t.Fatal("MDS CephFS did not select its isolated no-HASHPSPOOL fixture", p, err)
 		}
 		config := mdsFreshFilesystemConfig(p, "ceph-msgr-fresh-"+strings.Repeat("ab", 16))
 		if !config.MetadataPool.NoHashPSPool || !config.DataPool.NoHashPSPool {
 			t.Fatal("MDS-only CephFS clients require the legacy no-HASHPSPOOL pools", config)
 		}
-		p.mdsFreshIdentity, p.mdsCephFSIdentity = "client.readonly-owned", "client.cephfs-owned"
+		p.mdsFreshIdentity, p.mdsCephFSIdentity, p.mdsCephFSRecoveryIdentity = "client.readonly-owned", "client.cephfs-owned", "client.cephfs-recovery-owned"
 		for _, dir := range []string{"/out", t.TempDir()} {
 			x := p.testEnvironment(dir, "")
 			if x["CEPH_MSGR_MDS_CEPHFS_IDENTITY"] != p.mdsCephFSIdentity || x["CEPH_MSGR_MDS_CEPHFS_KEY_FILE"] != filepath.Join(dir, "mds-cephfs.key") || x["CEPH_MSGR_TEST_MDS_CEPHFS"] != "1" ||
+				x["CEPH_MSGR_MDS_CEPHFS_RECOVERY_IDENTITY"] != p.mdsCephFSRecoveryIdentity || x["CEPH_MSGR_MDS_CEPHFS_RECOVERY_KEY_FILE"] != filepath.Join(dir, "mds-cephfs-recovery.key") ||
 				p.containerEnvironment()["CEPH_MSGR_TEST_MDS_CEPHFS"] != "1" || x["CEPH_MSGR_MDS_COMMANDS_IDENTITY"] != "" || x["CEPH_MSGR_MDS_SESSIONS_FOREIGN_IDENTITY"] != "" {
 				t.Fatal("MDS CephFS credentials were mixed or lost", x)
 			}
@@ -40,7 +41,8 @@ func TestMDSCephFSClosedProfileAndCredentials(t *testing.T) {
 	for _, change := range []map[string]string{
 		{"CEPH_MSGR_TEST_MDS_FRESH": "0"}, {"CEPH_MSGR_TEST_MDS_CEPHFS": "true"}, {"CEPH_MSGR_TEST_MDS_COMMANDS": "1"}, {"CEPH_MSGR_TEST_MDS_SESSIONS": "1"},
 		{"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"}, {"CEPH_MSGR_TEST_RUN": "^TestCephMDSSessionsIntegration$"},
-		{"CEPH_MSGR_TEST_RUN": "^TestCeph(MDSFresh|MDSCephFS)Integration$"}, {"CEPH_MSGR_TEST_OSD": "0"},
+		{"CEPH_MSGR_TEST_RUN": "^TestCeph(MDSFresh|MDSCephFS)Integration$"}, {"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSIntegration$"},
+		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSRecoveryIntegration$"}, {"CEPH_MSGR_TEST_OSD": "0"},
 		{"CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"},
 	} {
 		env := mdsCephFSProfileEnv()
@@ -55,7 +57,10 @@ func TestMDSCephFSClosedProfileAndCredentials(t *testing.T) {
 
 func TestMDSCephFSIdentityCapsAndPlan(t *testing.T) {
 	name := "ceph-msgr-fresh-" + strings.Repeat("ab", 16)
-	goCaps, nativeCaps := mdsCephFSGoCaps(name), mdsCephFSNativeCaps(name)
+	goCaps, nativeCaps, recoveryCaps := mdsCephFSGoCaps(name), mdsCephFSNativeCaps(name), mdsCephFSRecoveryCaps(name)
+	if recoveryCaps.Mon != "allow r" || recoveryCaps.MDS != "allow rw fsname="+name || recoveryCaps.OSD != "allow r tag cephfs data="+name || recoveryCaps.MGR != "" {
+		t.Fatal("the recovery identity must hold only MON read, the filesystem-bound MDS grant and a data-pool read grant", recoveryCaps)
+	}
 	if goCaps.Mon != "allow r" || goCaps.MDS != "allow rw fsname="+name || goCaps.OSD != "" || goCaps.MGR != "" {
 		t.Fatal("the Go identity must hold only MON read and a filesystem-bound MDS read-write grant", goCaps)
 	}
@@ -87,6 +92,27 @@ func TestMDSCephFSIdentityCapsAndPlan(t *testing.T) {
 	if _, err := foreign.path("dir"); err == nil {
 		t.Fatal("plan outside the owned prefix admitted")
 	}
+	recovery := mdsCephFSRecoveryPlanFor(token)
+	fenced, _ := hex.DecodeString(recovery.FencedPayloadHex)
+	if recovery.Directory != "ceph-msgr-cephfs-"+token+"-recovery" || len(fenced) != mdsCephFSFencedBytes || recovery.Held != "held" || recovery.Replayed != "replayed" || recovery.Unanswered != "unanswered" ||
+		!reflect.DeepEqual(recovery, mdsCephFSRecoveryPlanFor(token)) || reflect.DeepEqual(recovery, mdsCephFSRecoveryPlanFor(strings.Repeat("b2", 16))) {
+		t.Fatal("owned recovery plan changed or is not token-bound", recovery.Directory, len(fenced))
+	}
+	for target, want := range map[string]string{"dir": "/" + recovery.Directory, "fenced": "/" + recovery.Directory + "/fenced", "flush-requested-2": "/" + recovery.Directory + "/flush-requested-2"} {
+		if got, err := recovery.path(target); err != nil || got != want {
+			t.Fatal("owned recovery path changed", target, got, err)
+		}
+	}
+	for _, target := range []string{"", "go-file", "native-0", "flush-plain-3", "held/x", ".."} {
+		if _, err := recovery.path(target); err == nil {
+			t.Fatal("unowned recovery target admitted", target)
+		}
+	}
+	other := recovery
+	other.Directory = "ceph-msgr-cephfs-" + token
+	if _, err := other.path("dir"); err == nil {
+		t.Fatal("recovery plan without its suffix admitted")
+	}
 }
 
 func TestMDSCephFSRequestIsClosedAndScoped(t *testing.T) {
@@ -105,6 +131,16 @@ func TestMDSCephFSRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"10", token, "create-native"}, "create-native", "dir", 0},
 		{[]string{"10", token, "write", "go-file"}, "write", "go-file", 0},
 		{[]string{"10", token, "read", "go-file"}, "read", "go-file", 0},
+		{[]string{"10", token, "evict", "42"}, "evict", "", 42},
+		{[]string{"10", token, "recovery-ops", "42"}, "recovery-ops", "", 42},
+		{[]string{"10", token, "recovery-stat", "dir"}, "recovery-stat", "dir", 0},
+		{[]string{"10", token, "recovery-stat", "replayed"}, "recovery-stat", "replayed", 0},
+		{[]string{"10", token, "recovery-list"}, "recovery-list", "dir", 0},
+		{[]string{"10", token, "recovery-write"}, "recovery-write", "fenced", 0},
+		{[]string{"10", token, "restart-arm"}, "restart-arm", "", 0},
+		{[]string{"10", token, "restart-fire"}, "restart-fire", "", 0},
+		{[]string{"10", token, "restart-status"}, "restart-status", "", 0},
+		{[]string{"10", token, "restart-adopt"}, "restart-adopt", "", 0},
 	} {
 		id, action, err := parseMDSCephFSRequest(tc.fields, token, 9)
 		if err != nil || id != 10 || action.name != tc.name || action.target != tc.target || action.gid != tc.gid {
@@ -116,6 +152,9 @@ func TestMDSCephFSRequestIsClosedAndScoped(t *testing.T) {
 		{"10", token, "observe", "42", "43"}, {"10", token, "stat", "/etc"}, {"10", token, "stat", "native-3"}, {"10", token, "getxattr", "native-0"},
 		{"10", token, "write", "native-0"}, {"10", token, "read", "dir"}, {"10", token, "list", "go-file"}, {"10", token, "create-native", "x"},
 		{"10", token, "unlink", "go-file"}, {"10", token, "rmdir", "dir"}, {"0", token, "stat", "dir"}, {"010", token, "stat", "dir"},
+		{"10", token, "evict"}, {"10", token, "evict", "0"}, {"10", token, "evict", "42", "43"}, {"10", token, "recovery-stat", "go-file"}, {"10", token, "recovery-stat", "/etc"},
+		{"10", token, "recovery-list", "dir"}, {"10", token, "recovery-write", "fenced"}, {"10", token, "restart-fire", "4242"}, {"10", token, "restart-arm", "x"},
+		{"10", token, "restart"}, {"10", token, "mds-fail"}, {"10", token, "recovery-ops"}, {"10", token, "recovery-ops", "x"},
 	} {
 		if _, _, err := parseMDSCephFSRequest(fields, token, 0); err == nil {
 			t.Fatal("unowned or caller-selected CephFS action admitted", fields)
@@ -202,7 +241,7 @@ func TestMDSCephFSCleanupWithoutBaselineMutatesNothing(t *testing.T) {
 	token := strings.Repeat("a1", 16)
 	for _, intent := range []bool{false, true} {
 		out := t.TempDir()
-		c := &fixtureCluster{mdsFresh: &mdsFreshScope{out: out, token: token, name: "owned"}, mdsCephFS: &mdsCephFSScope{out: out, plan: mdsCephFSPlanFor(token), goIntent: intent}}
+		c := &fixtureCluster{mdsFresh: &mdsFreshScope{out: out, token: token, name: "owned"}, mdsCephFS: &mdsCephFSScope{out: out, plan: mdsCephFSPlanFor(token), recovery: mdsCephFSRecoveryPlanFor(token), goIntent: intent}}
 		err := c.finishMDSCephFS(context.Background())
 		var receipt mdsCephFSCleanup
 		data, readErr := os.ReadFile(filepath.Join(out, "mds-cephfs-cleanup.json"))
@@ -217,7 +256,7 @@ func TestMDSCephFSCleanupWithoutBaselineMutatesNothing(t *testing.T) {
 			}
 			continue
 		}
-		if err != nil || !receipt.Completed || !receipt.NamespaceRestored || len(receipt.NewBlocklist) != 0 {
+		if err != nil || !receipt.Completed || !receipt.NamespaceRestored || !receipt.BlocklistRestored || len(receipt.NewBlocklist) != 0 || !receipt.RecoveryIdentityRemoved {
 			t.Fatal("cleanup before any owned mutation did not complete trivially", err, receipt)
 		}
 	}

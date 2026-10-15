@@ -419,6 +419,13 @@ setxattr·readdir·lookup 결과를 native LibCephFS와 대조했고, native wri
 REQUEST_FLUSH_MDLOG로 journal flush를 요청하며, 응답·push·session 이벤트의 `Arrival`은
 수신 순서를 하나의 번호로 알려준다.
 
+[복구 검증 기록](integration/fixture/MDS_CEPHFS_RECOVERY_VALIDATION.md)에는 같은 두 구성에서
+rank 0 MDS를 재시작한 결과를 남겼다. 이전 주소로의 재개는 SESSION_RESET으로 끝났고,
+새 incarnation에 `ReconnectSession`이 OPEN을 받았다. REPLAY로 다시 보낸 create는 원래
+inode로 safe 완료됐고 응답이 없던 create는 한 번만 실행됐다. Eviction 뒤 blocklist에는
+`<ip>:0/<CephFSNonce>` 하나가 생겼고 같은 client의 OSD 읽기는 -108을 받았다.
+`FlushJournal`은 unsafe→safe 지연을 최대 5초에서 수 ms로 줄였다.
+
 ## OSD 객체 요청 통신
 
 `Options.EnableOSD: true`로 OSD service ticket 획득·갱신을 명시적으로 켠다.

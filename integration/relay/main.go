@@ -23,7 +23,10 @@ func allowed(endpoint string, peers map[string]string) bool {
 		if e == nil && address == target {
 			return true
 		}
-		if len(name) >= 4 && name[:4] == "mgr." {
+		// MGR standbys publish no address, and an owned MDS that respawns
+		// after `ceph mds fail` may bind a different port: their container
+		// IP identifies the daemon.
+		if len(name) >= 4 && (name[:4] == "mgr." || name[:4] == "mds.") {
 			ip, e := netip.ParseAddr(peer)
 			if e != nil && address.IsValid() {
 				ip = address.Addr()

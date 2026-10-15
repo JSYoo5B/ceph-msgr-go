@@ -245,9 +245,26 @@ MClientReconnect matches three fresh native vectors byte for byte (two caps
 inserted out of inode order with a native `_encode_filelocks` blob and two
 realms, a `more` message, a realm-only message; see
 `internal/mds/testdata/mds-reconnect-native-provenance.json`); ordering,
-splitting, OPEN/CLOSE answers and resubmission have synthetic coverage. No
-live MDS restart, live fencing or resume RESET has been exercised yet;
-synthetic peers cover retransmission, retry/reset answers and bounds. No path walking, inode or dentry cache, capability bookkeeping, lease
+splitting, OPEN/CLOSE answers and resubmission have synthetic coverage.
+
+Live recovery acceptance (product `494071b`, both profiles above, five
+leaves each) restarted the rank-0 MDS right after an unsafe create: resume
+to the old address ended in SESSION_RESET and the session went Lost within
+about 0.4 s; `ReconnectSession` to the new incarnation (new GID and nonce,
+same port) got OPEN in the reconnect phase with ten caps and the root realm;
+the replayed create (REPLAY with its inode) completed safe with the same
+inode, an unanswered create resent with retry 1 executed once as new, and
+native listing showed each file exactly once with the Go session open again.
+After a native eviction the blocklist held exactly `<ip>:0/<CephFSNonce>`
+and the same OSD read on the client's existing OSD connection returned
+-108 (EBLOCKLISTED) while another client read the object. `FlushJournal`
+cut the unsafe-to-safe latency from up to 5 s to a few milliseconds. See
+[the recovery record](../integration/fixture/MDS_CEPHFS_RECOVERY_VALIDATION.md).
+A consumer that installs caps only from reply traces can see a cap GRANT for
+a replayed inode before that request's reply; `Arrival` orders them. Not
+exercised live: a REPLAY answered from the completed-request record, a lost
+reply of a delivered request, reconnect denial or a missed window, standby
+takeover, multiple ranks, split reconnect messages and non-root realms. No path walking, inode or dentry cache, capability bookkeeping, lease
 expiry, snapshot realm tree, dirty metadata or data writeback, file locks,
 reconnect after MDS failover, request replay, delegated inodes or async
 operations are implemented. File data I/O semantics (layout, striping,

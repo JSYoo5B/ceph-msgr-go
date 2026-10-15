@@ -190,10 +190,10 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             ("aes256k", "aes256k", "secure", "6", "container", "memstore"),
         })
 
-    def test_mds_cephfs_rows_select_only_the_declared_cephfs_test(self):
+    def test_mds_cephfs_rows_select_only_the_declared_cephfs_tests(self):
         rows = [row for row in self.rows if row.get("mds_cephfs") == "1"]
         self.assertEqual(len(rows), 2)
-        expected = {"TestCephMDSCephFSIntegration"}
+        expected = {"TestCephMDSCephFSIntegration", "TestCephMDSCephFSRecoveryIntegration"}
         self.assertTrue(expected <= self.declared)
         observed = set()
         for row in rows:
@@ -207,6 +207,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
             self.assertIsNone(selector.search("TestCephMDSCephFSIntegrationExtended"))
             self.assertIsNone(selector.search("PrefixTestCephMDSCephFSIntegration"))
+            self.assertIsNone(selector.search("TestCephMDSCephFSRecoveryIntegrationExtended"))
+            self.assertIsNone(selector.search("TestCephMDSCephFSRecoveryRecoveryIntegration"))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"),
                 ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))

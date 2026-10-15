@@ -40,10 +40,15 @@ native client sends the same UPDATE after `client_caps_release_delay`. Pushes
 for an inode whose reply was not applied yet are deferred until it is; their
 order relative to replies is known only from receive timestamps.
 
-Every native receipt must match the startup oracle (FSID, FSCID, filesystem
+Every native receipt must match the owned target (FSID, FSCID, filesystem
 name, daemon GID, rank 0, endpoint, nonce, incarnation), re-read before and
 after the action, and the daemon's applied MDSMap epoch must be at least the
 receipt's map epoch. Native oracle GlobalIDs must differ from the Go client's.
+The run recorded below used the startup daemon. Since the recovery
+acceptance was added to the same fixture, the test reads the target from
+`mds-cephfs-target.json`, which names the incarnation the fixture adopted
+after its owned restart (see
+[MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md)).
 
 | Leaf | Checked behavior |
 | --- | --- |
@@ -210,3 +215,7 @@ but are not the acceptance record.
   in MClientRequest, async or replayed requests, quota and snapshots. The
   agent models a client without file data: no used, dirty or flushing caps.
 - These are local selected-configuration results, separate from remote CI.
+- Journal flush, fencing through the shared address nonce, a resume that
+  meets a restarted MDS (RESET) and CephFS reconnect with replayed requests
+  were later accepted live in
+  [MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md).

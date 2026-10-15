@@ -277,8 +277,8 @@ jobs:
           - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_sessions: '1', test_run: '^TestCephMDSSessionsIntegration$' }
           # CephFS metadata acceptance mutates an owned namespace through Go and native LibCephFS clients; its own opt-in excludes MDS commands and sessions.
           # Only the CephFS metadata test is selected; product OSD sessions are not enabled.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs: '1', test_run: '^TestCephMDSCephFSIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs: '1', test_run: '^TestCephMDSCephFSIntegration$' }
+          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs: '1', test_run: '^TestCephMDSCephFS(Recovery)?Integration$' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs: '1', test_run: '^TestCephMDSCephFS(Recovery)?Integration$' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

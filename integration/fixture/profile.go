@@ -14,6 +14,7 @@ const profileDefaultImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf879
 type profile struct {
 	monAddresses, fsid, peers, mdsFreshIdentity, mdsCommandsIdentity      string
 	mdsSessionsForeignIdentity, mdsCephFSIdentity                         string
+	mdsCephFSRecoveryIdentity                                             string
 	mdsFresh, mdsCommands, mdsSessions, mdsCephFS                         string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
@@ -183,7 +184,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			selected = "^TestCephMDSSessionsIntegration$"
 		}
 		if p.mdsCephFS == "1" {
-			selected = "^TestCephMDSCephFSIntegration$"
+			selected = "^TestCephMDSCephFS(Recovery)?Integration$"
 		}
 		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || p.sparseReadOracle != "" ||
 			p.testRun != "" && p.testRun != selected {
@@ -305,6 +306,8 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.mdsCephFS == "1" {
 		result["CEPH_MSGR_MDS_CEPHFS_IDENTITY"] = p.mdsCephFSIdentity
 		result["CEPH_MSGR_MDS_CEPHFS_KEY_FILE"] = filepath.Join(controlDir, "mds-cephfs.key")
+		result["CEPH_MSGR_MDS_CEPHFS_RECOVERY_IDENTITY"] = p.mdsCephFSRecoveryIdentity
+		result["CEPH_MSGR_MDS_CEPHFS_RECOVERY_KEY_FILE"] = filepath.Join(controlDir, "mds-cephfs-recovery.key")
 	}
 	return result
 }

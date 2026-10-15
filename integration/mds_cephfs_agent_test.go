@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -100,6 +101,10 @@ type cephfsCap struct {
 	FscryptAuth, FscryptFile    []byte
 	Open                        map[int]int
 	Released                    bool
+	// ParentIno and Name are the first known dentry, as Inode::make_short_path
+	// uses for reconnect; zero when only the inode is known.
+	ParentIno uint64 `json:",omitempty"`
+	Name      string `json:",omitempty"`
 }
 
 func (c *cephfsCap) fileWanted() uint32 {
@@ -119,6 +124,7 @@ func (c *cephfsCap) fileWanted() uint32 {
 type cephfsCapRecord struct {
 	Order        int
 	At, Received time.Time `json:",omitempty"`
+	Arrival      uint64    `json:",omitempty"`
 	Kind         string
 	Ino          uint64 `json:",omitempty"`
 	CapID        uint64 `json:",omitempty"`
@@ -202,7 +208,7 @@ func (a *cephfsCapAgent) handleLocked(e cephmsgr.MDSSessionEvent) {
 		a.handleCapsLocked(e)
 	case e.Lease != nil:
 		l := e.Lease
-		a.recordLocked(cephfsCapRecord{Kind: "lease", Received: e.Received, Ino: l.Ino, Op: uint32(l.Action), Seq: l.Seq, Note: fmt.Sprintf("mask=%d dentry=%q", l.Mask, l.DentryName)})
+		a.recordLocked(cephfsCapRecord{Kind: "lease", Received: e.Received, Arrival: e.Arrival, Ino: l.Ino, Op: uint32(l.Action), Seq: l.Seq, Note: fmt.Sprintf("mask=%d dentry=%q", l.Mask, l.DentryName)})
 		if l.Action != cephmsgr.MDSLeaseRevoke {
 			a.failLocked("unexpected MDS lease action %d", l.Action)
 			return
@@ -217,11 +223,11 @@ func (a *cephfsCapAgent) handleLocked(e cephmsgr.MDSSessionEvent) {
 		}
 		a.recordLocked(r)
 	case e.Snap != nil:
-		a.recordLocked(cephfsCapRecord{Kind: "snap", Received: e.Received, Op: e.Snap.Op, Note: fmt.Sprintf("split=%d inos=%d realms=%d trace=%d", e.Snap.Split, len(e.Snap.SplitInos), len(e.Snap.SplitRealms), len(e.Snap.Trace))})
+		a.recordLocked(cephfsCapRecord{Kind: "snap", Received: e.Received, Arrival: e.Arrival, Op: e.Snap.Op, Note: fmt.Sprintf("split=%d inos=%d realms=%d trace=%d", e.Snap.Split, len(e.Snap.SplitInos), len(e.Snap.SplitRealms), len(e.Snap.Trace))})
 	case e.Quota != nil:
-		a.recordLocked(cephfsCapRecord{Kind: "quota", Received: e.Received, Ino: e.Quota.Ino})
+		a.recordLocked(cephfsCapRecord{Kind: "quota", Received: e.Received, Arrival: e.Arrival, Ino: e.Quota.Ino})
 	default:
-		r := cephfsCapRecord{Kind: "session", Received: e.Received, Op: e.Op, Seq: uint32(e.Sequence)}
+		r := cephfsCapRecord{Kind: "session", Received: e.Received, Arrival: e.Arrival, Op: e.Op, Seq: uint32(e.Sequence)}
 		switch e.Op {
 		case cephmsgr.MDSSessionOpFlushMessage:
 			// Native clients flush cap releases, then acknowledge.
@@ -250,7 +256,7 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 		a.barrier = m.OSDEpochBarrier
 	}
 	c := a.caps[m.Ino]
-	r := cephfsCapRecord{Kind: "caps", Received: e.Received, Ino: m.Ino, CapID: m.CapID, Op: m.Op, Seq: m.Seq, IssueSeq: m.IssueSeq, MSeq: m.MigrateSeq, Caps: cephCapString(m.Caps), Wanted: cephCapString(m.Wanted)}
+	r := cephfsCapRecord{Kind: "caps", Received: e.Received, Arrival: e.Arrival, Ino: m.Ino, CapID: m.CapID, Op: m.Op, Seq: m.Seq, IssueSeq: m.IssueSeq, MSeq: m.MigrateSeq, Caps: cephCapString(m.Caps), Wanted: cephCapString(m.Wanted)}
 	switch m.Op {
 	case cephmsgr.MDSCapOpGrant, cephmsgr.MDSCapOpRevoke, cephmsgr.MDSCapOpImport:
 		if c != nil && c.Released {
@@ -280,6 +286,22 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 	switch m.Op {
 	case cephmsgr.MDSCapOpGrant, cephmsgr.MDSCapOpRevoke:
 		a.grantLocked(c, e, r)
+	case cephmsgr.MDSCapOpImport:
+		// handle_cap_import -> add_update_cap with the message's cap; no
+		// peer cap exists on a single active rank.
+		before := c.Issued
+		a.addUpdateCapLocked(c, m.CapID, m.Caps, m.Wanted, m.Seq, m.MigrateSeq, m.Realm)
+		r.Before, r.After, r.Note = cephCapString(before), cephCapString(c.Issued), fmt.Sprintf("import from peer mds %d cap %d", m.Peer.MDS, m.Peer.CapID)
+		a.recordLocked(r)
+	case cephmsgr.MDSCapOpExport:
+		// handle_cap_export: a matching cap without a peer is removed
+		// without queueing a release; anything else is ignored.
+		if c.CapID == m.CapID && m.Peer.CapID == 0 {
+			c.Released, r.Note = true, "export without peer: cap removed"
+		} else {
+			r.Note = fmt.Sprintf("export for cap %d ignored (tracked cap %d, peer cap %d)", m.CapID, c.CapID, m.Peer.CapID)
+		}
+		a.recordLocked(r)
 	case cephmsgr.MDSCapOpTrunc:
 		c.Size, c.TruncateSeq, c.TruncateSize = m.Size, m.TruncateSeq, m.TruncateSize
 		a.recordLocked(r)
@@ -288,10 +310,27 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 		a.recordLocked(r)
 		a.failLocked("unexpected flush acknowledgement on %d", m.Ino)
 	default:
-		r.Note = "export/import on a single active rank"
+		r.Note = "unexpected cap operation"
 		a.recordLocked(r)
 		a.failLocked("unexpected cap operation %d on %d", m.Op, m.Ino)
 	}
+}
+
+// addUpdateCapLocked restates the cap fields of add_update_cap.
+func (a *cephfsCapAgent) addUpdateCapLocked(c *cephfsCap, capID uint64, issued, wanted, seq, mseq uint32, realm uint64) {
+	if c.CapID != 0 && !c.Released && !cephSeqAfter(seq, c.Seq) {
+		seq, mseq, issued = c.Seq, c.MSeq, issued|c.Issued
+	}
+	if c.Released {
+		c.Implemented, c.Wanted, c.Released = 0, 0, false
+	}
+	c.CapID, c.Issued, c.Implemented = capID, issued, c.Implemented|issued
+	if cephSeqAfter(mseq, c.MSeq) {
+		c.Wanted = wanted
+	} else {
+		c.Wanted |= wanted
+	}
+	c.Seq, c.IssueSeq, c.MSeq, c.Realm = seq, seq, mseq, realm
 }
 
 // grantLocked restates handle_cap_grant for a client that uses nothing.
@@ -469,6 +508,9 @@ func (a *cephfsCapAgent) applyReply(name string, r cephmsgr.MDSReply) (cephmsgr.
 		}
 		if trace.Target != nil {
 			a.applyStatLocked(trace.Target, name+" target")
+			if trace.DirInode != nil && trace.DentryName != "" {
+				a.linkLocked(trace.Target.Ino, trace.DirInode.Ino, trace.DentryName)
+			}
 		}
 	}
 	var listing *cephmsgr.MDSReaddir
@@ -480,6 +522,9 @@ func (a *cephfsCapAgent) applyReply(name string, r cephmsgr.MDSReply) (cephmsgr.
 		listing = &decoded
 		for i := range decoded.Entries {
 			a.applyStatLocked(&decoded.Entries[i].Inode, name+" entry "+decoded.Entries[i].Name)
+			if trace.Target != nil {
+				a.linkLocked(decoded.Entries[i].Inode.Ino, trace.Target.Ino, decoded.Entries[i].Name)
+			}
 		}
 	}
 	pending := a.pending
@@ -492,6 +537,13 @@ func (a *cephfsCapAgent) applyReply(name string, r cephmsgr.MDSReply) (cephmsgr.
 		}
 	}
 	return trace, listing, nil
+}
+
+// linkLocked records the first dentry naming an inode.
+func (a *cephfsCapAgent) linkLocked(ino, parent uint64, name string) {
+	if c := a.caps[ino]; c != nil && c.Name == "" {
+		c.ParentIno, c.Name = parent, name
+	}
 }
 
 // open and close restate get_open_ref/put_open_ref. Closing runs check_caps
@@ -567,6 +619,74 @@ func (a *cephfsCapAgent) releaseAll() ([]cephmsgr.MDSCapItem, uint32) {
 	}
 	slices.SortFunc(items, func(x, y cephmsgr.MDSCapItem) int { return cmp.Compare(x.Ino, y.Ino) })
 	return items, a.barrier
+}
+
+// reconnectState restates Client::send_reconnect for every cap this agent
+// holds: wanted is caps_wanted() (open-file wants and the wanted mask last
+// sent, FILE_BUFFER implying FILE_EXCL), issued is the implemented mask, the
+// short path is (parent inode, dentry name) when a dentry is known and
+// (inode, "") otherwise, no snap follows and no file locks. Each cap's realm
+// is listed once with the sequence and parent from the latest snap trace.
+// Sequence numbers are not sent; the agent continuing on the new session
+// resets them (startCephFSCapAgentFrom).
+func (a *cephfsCapAgent) reconnectState(realms map[uint64]cephmsgr.MDSSnapRealm) ([]cephmsgr.MDSCapReconnect, []cephmsgr.MDSRealmReconnect, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var caps []cephmsgr.MDSCapReconnect
+	var order []uint64
+	for _, c := range a.caps {
+		if c.CapID == 0 || c.Released {
+			continue
+		}
+		wanted := c.fileWanted() | c.Wanted
+		if wanted&cephCapFileBuffer != 0 {
+			wanted |= cephCapFileExcl
+		}
+		base, path := c.Ino, ""
+		if c.ParentIno != 0 && c.Name != "" {
+			base, path = c.ParentIno, c.Name
+		}
+		caps = append(caps, cephmsgr.MDSCapReconnect{Ino: c.Ino, CapID: c.CapID, Wanted: wanted, Issued: c.Implemented, SnapRealm: c.Realm, PathBase: base, Path: path})
+		if !slices.Contains(order, c.Realm) {
+			order = append(order, c.Realm)
+		}
+	}
+	slices.SortFunc(caps, func(x, y cephmsgr.MDSCapReconnect) int { return cmp.Compare(x.Ino, y.Ino) })
+	slices.Sort(order)
+	var out []cephmsgr.MDSRealmReconnect
+	for _, ino := range order {
+		r, ok := realms[ino]
+		if !ok {
+			return nil, nil, fmt.Errorf("no snap trace describes realm %d", ino)
+		}
+		out = append(out, cephmsgr.MDSRealmReconnect{Ino: r.Ino, Seq: r.Seq, Parent: r.Parent})
+	}
+	return caps, out, nil
+}
+
+// startCephFSCapAgentFrom continues a Lost session's capability state on the
+// session that reconnected it: as send_reconnect does, cap sequences, issue
+// sequences and migrate sequences restart at zero and issued equals
+// implemented. Open handles, wanted masks and dentries carry over; removed
+// caps do not.
+func startCephFSCapAgentFrom(ctx context.Context, s *cephmsgr.MDSSession, previous *cephfsCapAgent) *cephfsCapAgent {
+	previous.mu.Lock()
+	a := &cephfsCapAgent{s: s, ctx: ctx, caps: map[uint64]*cephfsCap{}, holds: map[uint64]*cephfsHold{}, held: map[uint64]bool{}, done: make(chan struct{}), barrier: previous.barrier}
+	for ino, c := range previous.caps {
+		if c.CapID == 0 || c.Released {
+			continue
+		}
+		copied := *c
+		copied.Open = maps.Clone(c.Open)
+		copied.Seq, copied.IssueSeq, copied.MSeq, copied.Issued = 0, 0, 0, c.Implemented
+		a.caps[ino] = &copied
+	}
+	previous.mu.Unlock()
+	a.mu.Lock()
+	a.recordLocked(cephfsCapRecord{Kind: "reconnect", Note: fmt.Sprintf("%d caps carried over with sequences reset", len(a.caps))})
+	a.mu.Unlock()
+	go a.run()
+	return a
 }
 
 type cephfsAgentSnapshot struct {
