@@ -1,5 +1,7 @@
 # Explicit replicated PG and backoff acceptance — 2026-10-15
 
+Tested product checkpoint: `3e24342e58a01ce3373e97629dad6940e5e718ca`.
+
 The fixed `Options.OSDProfile=OSDProfileReplicatedPG` is selected before Dial
 with `EnableOSD=true`. MON admission adds HASHPSPOOL for this selection; OSD
 negotiation adds the fixed actual-PG/v8-request/backoff bundle. The default
