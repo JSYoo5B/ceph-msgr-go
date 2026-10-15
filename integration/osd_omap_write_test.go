@@ -37,6 +37,17 @@ type omapWriteAction struct {
 	Class      string            `json:"class,omitempty"`
 	Method     string            `json:"method,omitempty"`
 	Input      []byte            `json:"input,omitempty"`
+	ObjectSize uint64            `json:"expected_object_size,omitempty"`
+	WriteSize  uint64            `json:"expected_write_size,omitempty"`
+	HintFlags  uint32            `json:"hint_flags,omitempty"`
+}
+
+type omapObjectInfo struct {
+	ExpectedObjectSize uint64 `json:"expected_object_size"`
+	ExpectedWriteSize  uint64 `json:"expected_write_size"`
+	AllocHintFlags     uint32 `json:"alloc_hint_flags"`
+	Size               uint64 `json:"size"`
+	UserVersion        uint64 `json:"user_version"`
 }
 
 type omapNativePrval struct {
@@ -55,6 +66,7 @@ type omapWriteInput struct {
 	Reserve       int               `json:"reserve,omitempty"`
 	Object        string            `json:"object,omitempty"`
 	Role          string            `json:"role,omitempty"`
+	ObjectInfo    bool              `json:"object_info,omitempty"`
 	Operations    []omapWriteAction `json:"operations,omitempty"`
 	MTime         *omapWriteMTime   `json:"mtime,omitempty"`
 	InventoryKeys [][]byte          `json:"inventory_keys,omitempty"`
@@ -82,15 +94,16 @@ type omapWriteReceipt struct {
 		PerOp       bool `json:"native_write_per_op_results_available"`
 		CmpPrval    bool `json:"native_cmp_per_op_prval_available"`
 	} `json:"scope"`
-	Objects   []string          `json:"objects"`
-	Object    string            `json:"object"`
-	SeedCode  *int32            `json:"seed_aggregate"`
-	State     omapWriteState    `json:"state"`
-	Before    omapWriteState    `json:"before"`
-	After     omapWriteState    `json:"after"`
-	Aggregate *int32            `json:"aggregate"`
-	Prvals    []omapNativePrval `json:"prvals"`
-	Vector    *struct {
+	Objects    []string          `json:"objects"`
+	Object     string            `json:"object"`
+	SeedCode   *int32            `json:"seed_aggregate"`
+	State      omapWriteState    `json:"state"`
+	Before     omapWriteState    `json:"before"`
+	After      omapWriteState    `json:"after"`
+	Aggregate  *int32            `json:"aggregate"`
+	Prvals     []omapNativePrval `json:"prvals"`
+	ObjectInfo *omapObjectInfo   `json:"object_info"`
+	Vector     *struct {
 		Aggregate int32             `json:"aggregate"`
 		Prvals    []omapNativePrval `json:"prvals"`
 		Output    []byte            `json:"output"`

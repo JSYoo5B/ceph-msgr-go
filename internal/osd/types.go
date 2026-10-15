@@ -80,6 +80,7 @@ type Operation struct {
 	Omap           OmapInput
 	Xattr          XattrInput
 	Class          ClassInput
+	AllocHint      AllocHintInput
 	Data           []byte
 	Version        uint64
 	Code           uint16
@@ -108,6 +109,7 @@ type Version struct {
 type OperationResult struct {
 	Xattr                        XattrResult
 	Class                        ClassResult
+	AllocHint                    AllocHintInput
 	Code                         uint16
 	Flags                        uint32
 	Offset, Length, TruncateSize uint64

@@ -420,6 +420,13 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 // reply.Operations[0].Result는 method 반환값, Data는 method 출력이다.
 ```
 
+`OSDSetAllocHint`는 `AllocHint`의 예상 객체 크기·예상 쓰기 크기·hint flag를 보내는
+advisory 쓰기다. 서버는 없는 객체를 만들고 값을 object_info에 기록한다. 고정
+소스에 정의된 hint flag 비트만 허용하며, 서버가 검증 없이 기록하는 미지의 비트는
+송신 전에 거절한다. native builder는 항상 FAILOK을 붙이지만 이 client는 caller가
+지정한 flag만 보낸다. [allocation hint 계약](internal/osd/ALLOC_HINT_CONTRACT.md)에
+근거를 정리했다.
+
 `ModificationTime`의 0은 그대로 전송하며 client 시각으로 대체하지 않는다.
 쓰기 성공은 서버의 `OSDReplyOnDisk`를 요구한다. 이것은 저장소가 보고한
 완료이며, MemStore 재시작 후 persistence나 전원 장애 내구성 보장이 아니다.
@@ -519,6 +526,12 @@ container의 CGO0 전체 OSD 시험 26개도 통과했다.
 native C의 aggregate·prval·출력과 일치했다. 확인한 범위는 read/write method,
 양수 결과 42, 쓰기 오류의 출력 반환, 520-byte 출력의 `-75`, 실행 전 거절인
 `-95`·`-1`, read mode 요청의 쓰기 실행, readonly의 `-1`이다.
+
+[allocation hint 검증](integration/fixture/OSD_ALLOC_HINT_VALIDATION.md)은 6개 실서버
+사례에서 Go가 기록한 object_info hint를 고정 `ceph-dencoder`로 해석했고, native C
+mirror와 같은 값임을 확인했다. 기존 객체의 bytes 유지, 최대값과 모든 flag, 0으로
+초기화, 없는 객체 생성, FAILOK 뒤 쓰기를 포함한다. secure/aes256k container의
+CGO0 전체 OSD 시험 28개도 통과했다.
 
 [OMAP 비교 검증](integration/fixture/OSD_OMAP_COMPARE_VALIDATION.md)은 fresh
 native encoder/별도 decoder의 5개 vector와 Go bytes를 대조했다. 정렬하지 않은

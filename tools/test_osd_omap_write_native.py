@@ -152,6 +152,26 @@ class OmapWriteNativeTests(unittest.TestCase):
         library.install("rados_write_op_operate2", lambda op, io, name, stamp, value: -17)
         self.assertEqual(native.write_vector(1, b"o", write["operations"], {"seconds": 1, "nanos": 0}), (-17, [{"index": 0, "prval": -17}]))
 
+    def test_allocation_hint_and_object_info_admission(self):
+        request = writes.validate_request({"seed": None, "mtime": {"seconds": 1, "nanos": 0}, "object_info": True, "operations": [
+            {"op": "allochint", "flags": 0, "expected_object_size": (1 << 64) - 1, "expected_write_size": 4096, "hint_flags": 2047}]}, "compare")
+        self.assertTrue(request["object_info"])
+        self.assertEqual(request["operations"][0]["expected_object_size"], (1 << 64) - 1)
+        for raw in [{"seed": None, "mtime": {"seconds": 1, "nanos": 0}, "operations": [{"op": "allochint", "expected_object_size": -1}]},
+                    {"seed": None, "mtime": {"seconds": 1, "nanos": 0}, "operations": [{"op": "allochint", "hint_flags": 1 << 32}]},
+                    {"seed": None, "mtime": {"seconds": 1, "nanos": 0}, "object_info": 1, "operations": [{"op": "clear"}]}]:
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                writes.validate_request(raw, "compare")
+        library = Library()
+        library.install("rados_create_write_op", lambda: 9)
+        seen = []
+        library.install("rados_write_op_set_alloc_hint2", lambda op, eos, ews, flags: seen.append((op, eos, ews, flags)))
+        library.install("rados_write_op_operate2", lambda op, io, name, stamp, value: 0)
+        native = writes.Native.__new__(writes.Native)
+        native.lib = library
+        self.assertEqual(native.write_vector(1, b"o", request["operations"], {"seconds": 1, "nanos": 0}), (0, []))
+        self.assertEqual(seen, [(9, (1 << 64) - 1, 4096, 2047)])
+
     def test_ownership_is_limited_to_exact_fixture_uuid_names(self):
         receipt = {"schema_version": 1, "source_commit": writes.SOURCE_COMMIT, "pool": "pool", "pool_id": 7,
                    "fixture_object": "fixture", "namespace": "", "objects": [owned(b"main-"), owned(b"absent-")]}

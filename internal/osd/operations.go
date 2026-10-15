@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call:
+	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint:
 		return true
 	}
 	return false
@@ -55,6 +55,17 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			continue
 		}
 		if op.Class != (ClassInput{}) {
+			return 0, 0, ErrRequest
+		}
+		if op.Code == SetAllocHint {
+			if err := validateAllocHintOperation(op); err != nil {
+				return 0, 0, err
+			}
+			stagedAny = true // a write; admitted after a CALL
+			flags |= FlagWrite
+			continue
+		}
+		if op.AllocHint != (AllocHintInput{}) {
 			return 0, 0, ErrRequest
 		}
 		if afterCall && readModeOperation(op.Code) {
@@ -182,7 +193,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 
 func writeOperation(code uint16) bool {
 	switch code {
-	case Write, WriteFull, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr:
+	case Write, WriteFull, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint:
 		return true
 	}
 	return isOmapMutation(code)

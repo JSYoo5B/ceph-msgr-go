@@ -63,7 +63,8 @@ const (
 // Omap is the active input for the OMAP reads and mutations, with zero
 // extent, Version, Data and Xattr. Its wire input length is derived locally.
 // Class is the active input for OSDCall, with zero extent, Version, Xattr
-// and Omap; Data holds the method input.
+// and Omap; Data holds the method input. AllocHint is the active input for
+// OSDSetAllocHint, with every other field zero.
 // Caller must not mutate the vector, Data or Omap inputs until Request returns.
 type OSDOperation struct {
 	Code           OSDOpcode
@@ -74,6 +75,7 @@ type OSDOperation struct {
 	Xattr          OSDXattrInput
 	Omap           OSDOmapInput
 	Class          OSDClassInput
+	AllocHint      OSDAllocHint
 }
 
 // OSDTime is Tentacle's raw utime_t. Zero preserves the server's zero-mtime
@@ -124,6 +126,7 @@ type OSDOperationResult struct {
 	Data                         []byte
 	Xattr                        OSDXattrResult
 	Class                        OSDClassResult
+	AllocHint                    OSDAllocHint
 }
 
 type OSDRedirect struct {
@@ -234,7 +237,8 @@ func (o *OSDConnection) Request(ctx context.Context, request OSDRequest) (OSDRep
 		Locator:    osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
 		Operations: make([]osd.Operation, len(request.Operations))}
 	for i, op := range request.Operations {
-		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class)}
+		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
+			AllocHint: osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)}}
 	}
 	m, err := osd.EncodeRequest(input, o.features, c.options.MaxFrameSize)
 	if err != nil {
@@ -333,6 +337,11 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 				return err
 			}
 			continue
+		case osd.SetAllocHint:
+			if err := osd.ValidateAllocHintReply(requested, op); err != nil {
+				return err
+			}
+			continue
 		}
 		if op.Offset != requested.Offset || op.Length > length || !shortExtent && op.Length != length || op.TruncateSize != 0 || op.TruncateSequence != 0 || op.Xattr != (osd.XattrResult{}) {
 			return errors.New("OSD reply extent differs from request")
@@ -379,8 +388,9 @@ func publicOSDReply(r osd.Reply) OSDReply {
 		result.Operations[i] = OSDOperationResult{Code: OSDOpcode(op.Code), Flags: op.Flags,
 			Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence,
 			PayloadLength: op.PayloadLength, Result: op.Result, Data: op.Data,
-			Xattr: OSDXattrResult{NameLength: op.Xattr.NameLength, ValueLength: op.Xattr.ValueLength, ComparisonOp: op.Xattr.ComparisonOp, ComparisonMode: op.Xattr.ComparisonMode},
-			Class: OSDClassResult{ClassLength: op.Class.ClassLength, MethodLength: op.Class.MethodLength, Argc: op.Class.Argc, InputLength: op.Class.InputLength, OutputLength: op.Class.OutputLength}}
+			Xattr:     OSDXattrResult{NameLength: op.Xattr.NameLength, ValueLength: op.Xattr.ValueLength, ComparisonOp: op.Xattr.ComparisonOp, ComparisonMode: op.Xattr.ComparisonMode},
+			Class:     OSDClassResult{ClassLength: op.Class.ClassLength, MethodLength: op.Class.MethodLength, Argc: op.Class.Argc, InputLength: op.Class.InputLength, OutputLength: op.Class.OutputLength},
+			AllocHint: OSDAllocHint{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: OSDAllocHintFlags(op.AllocHint.Flags)}}
 	}
 	return result
 }

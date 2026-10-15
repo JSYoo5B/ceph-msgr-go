@@ -86,6 +86,8 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		} else if op.Code == Call {
 			encodeClassUnion(&e, op)
 			payloadBytes += uint64(len(op.Class.Class)) + uint64(len(op.Class.Method))
+		} else if op.Code == SetAllocHint {
+			encodeAllocHintUnion(&e, op.AllocHint)
 		} else {
 			e.U64(op.Offset)
 			if IsOmapOperation(op.Code) {

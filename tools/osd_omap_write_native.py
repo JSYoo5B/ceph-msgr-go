@@ -53,7 +53,8 @@ MAX_RESERVED = 8
 MAX_OPERATIONS = 16
 MAX_CLI_OUTPUT = 16 << 10
 OWNED = "osd-omap-write-owned"
-WRITE_OPS = {"set", "remove", "clear", "cmp", "rmrange", "call"}
+WRITE_OPS = {"set", "remove", "clear", "cmp", "rmrange", "call", "allochint"}
+MAX_OBJECT_INFO = 64 << 10
 MAX_CLASS_NAME = 255
 MAX_CALL_OUTPUT = 1 << 20
 RETURNVEC = 1024  # librados.h:137 LIBRADOS_OPERATION_RETURNVEC
@@ -114,7 +115,10 @@ def operations(raw, allowed=WRITE_OPS):
     for action in raw:
         if not isinstance(action, dict) or action.get("op") not in allowed:
             raise ValueError("unsupported native OMAP write operation")
-        admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags", "cmp": "key", "rmrange": "begin", "call": "class"}[action["op"]]}
+        admitted = {"op", "flags", {"set": "entries", "remove": "keys", "clear": "flags", "cmp": "key", "rmrange": "begin",
+                                    "call": "class", "allochint": "expected_object_size"}[action["op"]]}
+        if action["op"] == "allochint":
+            admitted |= {"expected_write_size", "hint_flags"}
         if action["op"] == "call":
             admitted |= {"method", "input"}
         if action["op"] == "rmrange":
@@ -131,9 +135,21 @@ def operations(raw, allowed=WRITE_OPS):
             decoded["entries"] = entries(action.get("entries", []), "set entry")
         elif action["op"] == "remove":
             decoded["keys"] = keys(action.get("keys", []), "removal key")
+        elif action["op"] == "allochint":
+            for field, limit in (("expected_object_size", (1 << 64) - 1), ("expected_write_size", (1 << 64) - 1), ("hint_flags", (1 << 32) - 1)):
+                value = action.get(field, 0)
+                if type(value) is not int or not 0 <= value <= limit:
+                    raise ValueError("invalid native allocation hint " + field)
+                decoded[field] = value
         elif action["op"] == "call":
             decoded.update(cls=class_name(action.get("class")), method=class_name(action.get("method")),
                            input=binary(action.get("input", "")))
+        elif action["op"] == "allochint":
+            for field, limit in (("expected_object_size", (1 << 64) - 1), ("expected_write_size", (1 << 64) - 1), ("hint_flags", (1 << 32) - 1)):
+                value = action.get(field, 0)
+                if type(value) is not int or not 0 <= value <= limit:
+                    raise ValueError("invalid native allocation hint " + field)
+                decoded[field] = value
         elif action["op"] == "call":
             decoded.update(cls=class_name(action.get("class")), method=class_name(action.get("method")),
                            input=binary(action.get("input", "")))
@@ -154,15 +170,18 @@ def operations(raw, allowed=WRITE_OPS):
 
 
 def validate_request(raw, mode):
-    allowed = {"prepare": {"seed", "reserve"}, "observe": {"object", "inventory_keys"},
+    allowed = {"prepare": {"seed", "reserve"}, "observe": {"object", "inventory_keys", "object_info"},
                "exec": {"seed", "object", "role", "operations", "inventory_keys"},
                "assert": {"object", "operations", "inventory_keys"},
-               "compare": {"seed", "operations", "mtime", "inventory_keys"}, "cleanup": set()}
+               "compare": {"seed", "operations", "mtime", "inventory_keys", "object_info"}, "cleanup": set()}
     if mode not in allowed:
         raise ValueError("invalid OMAP write oracle mode")
     if not isinstance(raw, dict) or set(raw) - allowed[mode]:
         raise ValueError("unknown OMAP write oracle input fields")
     request = {"inventory_keys": keys(raw.get("inventory_keys", []), "inventory key")}
+    if type(raw.get("object_info", False)) is not bool:
+        raise ValueError("object_info must be a boolean")
+    request["object_info"] = raw.get("object_info", False)
     if mode == "prepare":
         request["seed"] = seed(raw.get("seed", {}))
         reserve = raw.get("reserve", 0)
@@ -256,6 +275,7 @@ class Native(omap.Native):
                                 "write_op_omap_clear": [p], "write_op_omap_cmp2": cmp2,
                                 "write_op_omap_rm_range2": [p, char, s, char, s],
                                 "write_op_exec": [p, char, char, char, s, C.POINTER(C.c_int)],
+                                "write_op_set_alloc_hint2": [p, C.c_uint64, C.c_uint64, C.c_uint32],
                                 "read_op_exec": [p, char, char, char, s, C.POINTER(p), C.POINTER(s), C.POINTER(C.c_int)],
                                 "read_op_omap_cmp2": cmp2}.items():
             function = getattr(self.lib, "rados_" + name)
@@ -314,6 +334,10 @@ class Native(omap.Native):
                     k, kl, kb = omap.pointers(action["keys"])
                     buffers.extend((k, kl, kb))
                     self.lib.rados_write_op_omap_rm_keys2(operation, k, kl, len(action["keys"]))
+                elif action["op"] == "allochint":
+                    # The pinned builder adds per-op FAILOK (Objecter.h:1640).
+                    self.lib.rados_write_op_set_alloc_hint2(operation, action["expected_object_size"],
+                                                            action["expected_write_size"], action["hint_flags"])
                 elif action["op"] == "rmrange":
                     self.lib.rados_write_op_omap_rm_range2(operation, action["begin"], len(action["begin"]),
                                                            action["end"], len(action["end"]))
@@ -347,6 +371,24 @@ class Native(omap.Native):
             if out.value:
                 self.lib.rados_buffer_free(out)
             self.lib.rados_release_read_op(operation)
+
+    def object_info(self, io, name):
+        """Committed object_info via the empty xattr name, which the OSD maps
+        to OI_ATTR "_" (PrimaryLogPG.cc:6429), decoded by pinned ceph-dencoder."""
+        buffer = C.create_string_buffer(MAX_OBJECT_INFO + 1)
+        length = self.lib.rados_getxattr(io, name, b"", buffer, MAX_OBJECT_INFO + 1)
+        self.check(length)
+        if length > MAX_OBJECT_INFO:
+            raise ValueError("native object_info exceeds oracle bound")
+        with tempfile.TemporaryDirectory(prefix="object-info-") as directory:
+            path = Path(directory) / "oi"
+            path.write_bytes(buffer.raw[:length])
+            result = subprocess.run(["ceph-dencoder", "type", "object_info_t", "import", str(path), "decode", "dump_json"],
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+        if result.returncode != 0 or len(result.stdout) > MAX_OBJECT_INFO:
+            raise RuntimeError("ceph-dencoder object_info_t failed: " + result.stderr[-MAX_CLI_OUTPUT:].decode(errors="replace"))
+        decoded = json.loads(result.stdout)
+        return {field: decoded[field] for field in ("expected_object_size", "expected_write_size", "alloc_hint_flags", "size", "user_version")}
 
     def full_state(self, io, name, inventory_keys, cli):
         length, mtime = C.c_uint64(), xattr.Timespec()
@@ -430,6 +472,8 @@ def execute(native, io, metadata, request, mode, out, cli):
             raise ValueError("observation is limited to owned OMAP write objects")
         result["object"] = request["object"].decode()
         result["state"] = native.full_state(io, request["object"], request["inventory_keys"], cli)
+        if request["object_info"] and result["state"]["code"] == 0:
+            result["object_info"] = native.object_info(io, request["object"])
         if mode == "assert":
             result["vector"] = native.assert_vector(io, request["object"], request["operations"])
             result["after"] = native.full_state(io, request["object"], request["inventory_keys"], cli)
@@ -507,6 +551,8 @@ def execute(native, io, metadata, request, mode, out, cli):
         created = True  # a write vector may create an absent mirror
         result["aggregate"], result["prvals"] = native.write_vector(io, mirror, request["operations"], request["mtime"])
         result["after"] = native.full_state(io, mirror, request["inventory_keys"], cli)
+        if request["object_info"] and result["after"]["code"] == 0:
+            result["object_info"] = native.object_info(io, mirror)
         return result
     finally:
         if created:

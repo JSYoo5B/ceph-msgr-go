@@ -39,6 +39,13 @@ method result 42, EOVERFLOW-cleared output and pre-execution EOPNOTSUPP
 replies. They are offline codec proof only and claim no live class loading,
 method execution, write-reply bound or durability.
 
+[Fresh SETALLOCHINT encoder/decoder fixtures](alloc-hint-native-README.md)
+independently construct five message triples: two builder-FAILOK allocation
+hints around a WRITEFULL, and commit success, FAILOK EOPNOTSUPP-then-WRITEFULL,
+ENOSPC and maximum size/all-flag replies. They are offline codec proof only and
+claim no live hint recording, object store allocation, older-OSD behavior,
+ENOSPC semantics or durability.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from

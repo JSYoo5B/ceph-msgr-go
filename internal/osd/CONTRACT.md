@@ -29,7 +29,8 @@ Three bounded OMAP reads, the raw header read, OMAP_CMP and five OMAP writes
 (SETVALS, SETHEADER, CLEAR, RMKEYS, RMKEYRANGE) use derived input-length
 extents; [OMAP_CONTRACT.md](OMAP_CONTRACT.md) records their distinct union,
 pagination, comparison, write ordering and native acceptance. Object class
-CALL has its own union and ordering rules in [CLASS_CONTRACT.md](CLASS_CONTRACT.md).
+CALL has its own union and ordering rules in [CLASS_CONTRACT.md](CLASS_CONTRACT.md),
+and the allocation hint in [ALLOC_HINT_CONTRACT.md](ALLOC_HINT_CONTRACT.md).
 Snapshots, U64 comparison and bulk xattr variants remain unsupported.
 
 Negotiated OBJECTLOCATOR and PGID64 select the supported request/reply v6
