@@ -436,7 +436,8 @@ type cephfsCapAgent struct {
 	migrations []cephfsMigrationEvent
 	renewals   []cephfsLeaseRenewal
 	readOnly   []time.Time
-	flushSnaps map[uint64]uint64 // expected FLUSHSNAP_ACK: inode -> flush TID
+	flushSnaps map[cephfsFlushSnapKey]cephfsFlushSnapExpected // inode/follows -> expected TID and dirty mask
+	capSnaps   map[cephfsFlushSnapKey]*cephfsCapSnap          // opt-in data-acceptance generations
 	snapAcks   []cephfsFlushSnapAck
 	// dirty holds the files the test wrote; flushing maps outstanding flush
 	// TIDs (last_flush_tid numbering from 1) to their inode.
@@ -615,10 +616,12 @@ func (a *cephfsCapAgent) handleLeaseLocked(e cephmsgr.MDSSessionEvent) {
 // handleSnapLocked restates handle_snap: on SPLIT the first realm of the
 // trace must be the split realm, and cached inodes listed in split_inos move
 // into it unless they already belong to a newer realm; every realm of the
-// trace is then recorded (update_snap_trace). Nothing is sent: this client
-// never has dirty data to flush as a cap snap.
+// trace is then recorded (update_snap_trace). The data acceptance opts into
+// capturing dirty cap-snap generations with their pre-update contexts; it
+// drains their writeback and sends FLUSHSNAP explicitly. Nothing is sent here.
 func (a *cephfsCapAgent) handleSnapLocked(e cephmsgr.MDSSessionEvent) {
 	m := e.Snap
+	oldContexts := a.oldDirtySnapContextsLocked()
 	ev := cephfsSnapEvent{Arrival: e.Arrival, Received: e.Received, Op: m.Op, Split: m.Split, SplitInos: slices.Clone(m.SplitInos), SplitRealms: slices.Clone(m.SplitRealms), TraceBytes: len(m.Trace)}
 	realms, err := cephmsgr.MDSReply{SnapTrace: m.Trace}.DecodeSnapTrace()
 	ev.Realms = realms
@@ -648,6 +651,9 @@ func (a *cephfsCapAgent) handleSnapLocked(e cephmsgr.MDSSessionEvent) {
 	}
 	for _, r := range realms {
 		a.realms[r.Ino] = r
+	}
+	if ev.Error == "" && m.Op != cephmsgr.MDSSnapOpDestroy {
+		a.queueChangedCapSnapsLocked(oldContexts)
 	}
 	a.snaps = append(a.snaps, ev)
 	a.recordLocked(cephfsCapRecord{Kind: "snap", Received: e.Received, Arrival: e.Arrival, Op: m.Op, Error: ev.Error,
@@ -700,13 +706,10 @@ func (a *cephfsCapAgent) trimCapsLocked(e cephmsgr.MDSSessionEvent) cephfsRecall
 }
 
 // expectFlushSnap registers a FLUSHSNAP the test is about to send.
-func (a *cephfsCapAgent) expectFlushSnap(ino, tid uint64) {
+func (a *cephfsCapAgent) expectFlushSnap(ino, follows, tid uint64, dirty uint32) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.flushSnaps == nil {
-		a.flushSnaps = map[uint64]uint64{}
-	}
-	a.flushSnaps[ino] = tid
+	return a.expectFlushSnapLocked(ino, follows, tid, dirty)
 }
 
 // realm returns the newest SnapRealmInfoNew seen for a realm.
@@ -827,8 +830,7 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 		r.Note = fmt.Sprintf("trunc size %d truncate_size %d truncate_seq %d -> size %d seq %d", m.Size, m.TruncateSize, m.TruncateSeq, c.Size, c.TruncateSeq)
 		a.recordLocked(r)
 	case cephmsgr.MDSCapOpFlushSnapAck:
-		if tid, ok := a.flushSnaps[m.Ino]; ok && tid == e.Transaction {
-			delete(a.flushSnaps, m.Ino)
+		if a.consumeFlushSnapLocked(m, e.Transaction, e.Received) {
 			a.snapAcks = append(a.snapAcks, cephfsFlushSnapAck{Arrival: e.Arrival, Received: e.Received, Transaction: e.Transaction, Caps: *m})
 			r.Note = fmt.Sprintf("flushsnap ack tid %d follows %d dirty %s", e.Transaction, m.SnapFollows, cephCapString(m.Dirty))
 			a.recordLocked(r)
@@ -1025,6 +1027,9 @@ func (a *cephfsCapAgent) checkCapsFlagsLocked(c *cephfsCap, reason string, flags
 		}
 		dirty, flushing = d.Dirty, d.Flushing
 	}
+	if a.snapBufferUsedLocked(c.Ino) {
+		used |= cephCapFileBuffer
+	}
 	retain := wanted | used | cephCapPin
 	if c.NLink > 0 {
 		if wanted != 0 {
@@ -1078,9 +1083,7 @@ func (a *cephfsCapAgent) checkCapsFlagsLocked(c *cephfsCap, reason string, flags
 		d.Flushing |= dirty
 		d.Dirty = 0
 	}
-	if len(a.flushing) != 0 {
-		msg.OldestFlushTID = slices.Min(slices.Collect(maps.Keys(a.flushing)))
-	}
+	msg.OldestFlushTID = a.oldestFlushTIDLocked()
 	err := a.send(func(ctx context.Context) error { return a.s.SendCaps(ctx, msg, tid) })
 	r := cephfsCapRecord{Kind: "update", Ino: c.Ino, CapID: c.CapID, Op: msg.Op, Seq: msg.Seq, IssueSeq: msg.IssueSeq, MSeq: msg.MigrateSeq, Caps: cephCapString(msg.Caps), Wanted: cephCapString(wanted),
 		Before: cephCapString(before), After: cephCapString(c.Issued), Note: reason}
@@ -1642,6 +1645,7 @@ type cephfsAgentSnapshot struct {
 	Migrations []cephfsMigrationEvent `json:",omitempty"`
 	Renewals   []cephfsLeaseRenewal   `json:",omitempty"`
 	ReadOnly   []time.Time            `json:",omitempty"`
+	CapSnaps   []cephfsCapSnap        `json:",omitempty"`
 	SnapAcks   []cephfsFlushSnapAck   `json:",omitempty"`
 	// Dirty, FlushAcks, Truncs and MaxSizes are reported for a client that
 	// wrote file data (the data acceptance).
@@ -1657,6 +1661,12 @@ func (a *cephfsCapAgent) snapshot() cephfsAgentSnapshot {
 	s := cephfsAgentSnapshot{Records: slices.Clone(a.records), Pending: len(a.pending), Errors: slices.Clone(a.errs), Barrier: a.barrier, Pushes: a.pushes,
 		Leases: slices.Clone(a.leases), Snaps: slices.Clone(a.snaps), Quotas: slices.Clone(a.quotas), Recalls: slices.Clone(a.recalls), Flushes: slices.Clone(a.flushes),
 		Rank: a.rank, Migrations: slices.Clone(a.migrations), Renewals: slices.Clone(a.renewals), ReadOnly: slices.Clone(a.readOnly), SnapAcks: slices.Clone(a.snapAcks)}
+	for _, capSnap := range a.capSnaps {
+		s.CapSnaps = append(s.CapSnaps, cloneCephFSCapSnap(capSnap))
+	}
+	slices.SortFunc(s.CapSnaps, func(x, y cephfsCapSnap) int {
+		return cmp.Or(cmp.Compare(x.Ino, y.Ino), cmp.Compare(x.Context.Sequence, y.Context.Sequence))
+	})
 	for _, c := range a.caps {
 		s.Caps = append(s.Caps, *c)
 	}

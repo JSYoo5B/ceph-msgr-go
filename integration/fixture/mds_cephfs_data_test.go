@@ -67,7 +67,7 @@ func TestMDSCephFSDataIdentityCapsAndPlan(t *testing.T) {
 	plan := mdsCephFSDataPlanFor(token)
 	if plan.Directory != "ceph-msgr-data-"+token || plan.Snapshot != "data-a1a1a1a1" || !slices.Equal(plan.Files, mdsCephFSDataFiles) || plan.StripeUnit != 65536 || plan.StripeCount != 2 ||
 		plan.ObjectSize != 131072 || plan.GoFileSize != 614523 || plan.NativeSize != 1620000 || plan.TruncWriteSize != 1228800 || plan.TruncSize != 280000 || plan.SharedSize != 200000 ||
-		plan.SnapV1Size != 600000 || plan.SnapV2Offset+plan.SnapV2Size <= plan.SnapV1Size || len(plan.Seeds) != 6 || len(plan.ObjectCounts) != len(plan.Files) {
+		plan.SnapV1Size != 600000 || plan.SnapV2Offset+plan.SnapV2Size <= plan.SnapV1Size || len(plan.Seeds) != 9 || len(plan.ObjectCounts) != len(plan.Files) {
 		t.Fatal("data plan differs", plan)
 	}
 	if plan.layout("owned-data") != "stripe_unit=65536 stripe_count=2 object_size=131072 pool=owned-data" || !mdsCephFSDataLayoutPattern.MatchString(plan.layout("owned-data")) {
@@ -91,7 +91,9 @@ func TestMDSCephFSDataIdentityCapsAndPlan(t *testing.T) {
 	}
 	for target, want := range map[string]string{
 		"dir": "/ceph-msgr-data-" + token, "go-file": "/ceph-msgr-data-" + token + "/go-file", "snapshot": "/ceph-msgr-data-" + token + "/.snap/data-a1a1a1a1",
-		"snapshot-file": "/ceph-msgr-data-" + token + "/.snap/data-a1a1a1a1/snap-file",
+		"snapshot-file":  "/ceph-msgr-data-" + token + "/.snap/data-a1a1a1a1/snap-file",
+		"capsnap-a":      "/ceph-msgr-data-" + token + "/.snap/data-a1a1a1a1-cap-a",
+		"capsnap-b-file": "/ceph-msgr-data-" + token + "/.snap/data-a1a1a1a1-cap-b/capsnap-file",
 	} {
 		if got, err := plan.path(target); err != nil || got != want {
 			t.Fatal("data path differs", target, got, err)
@@ -126,6 +128,12 @@ func TestMDSCephFSDataRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"6", token, "truncate"}, mdsCephFSDataAction{name: "truncate", target: "trunc-file"}},
 		{[]string{"7", token, "read-shared"}, mdsCephFSDataAction{name: "read-shared", target: "shared-file"}},
 		{[]string{"8", token, "snapshot-remove"}, mdsCephFSDataAction{name: "snapshot-remove", target: "snapshot"}},
+		{[]string{"9", token, "capsnap-create-a"}, mdsCephFSDataAction{name: "capsnap-create-a", target: "capsnap-a"}},
+		{[]string{"10", token, "capsnap-create-b"}, mdsCephFSDataAction{name: "capsnap-create-b", target: "capsnap-b"}},
+		{[]string{"11", token, "capsnap-remove-a"}, mdsCephFSDataAction{name: "capsnap-remove-a", target: "capsnap-a"}},
+		{[]string{"12", token, "capsnap-remove-b"}, mdsCephFSDataAction{name: "capsnap-remove-b", target: "capsnap-b"}},
+		{[]string{"13", token, "read", "capsnap-a-file"}, mdsCephFSDataAction{name: "read", target: "capsnap-a-file"}},
+		{[]string{"14", token, "stat", "capsnap-b-file"}, mdsCephFSDataAction{name: "stat", target: "capsnap-b-file"}},
 	} {
 		id, action, err := parse(0, tc.fields...)
 		if err != nil || action != tc.want || id <= 0 {
@@ -137,6 +145,9 @@ func TestMDSCephFSDataRequestIsClosedAndScoped(t *testing.T) {
 		{"1", token, "read", "dir"}, {"1", token, "read", "snapshot"}, {"1", token, "objects", "snapshot-file"}, {"1", token, "list", "dir"}, {"1", token, "truncate", "1"},
 		{"1", token, "write", "go-file"}, {"1", token, "evict", "4210"}, {"1", strings.Repeat("b2", 16), "list"}, {"0", token, "list"}, {"01", token, "list"}, {"1", token},
 		{"1", token, "stat", "dir", "x"},
+		{"1", token, "capsnap-create-c"}, {"1", token, "capsnap-create-a", "/etc/passwd"},
+		{"1", token, "read", "capsnap-a"}, {"1", token, "objects", "capsnap-a-file"},
+		{"1", token, "stat", "capsnap-c-file"},
 	} {
 		if _, _, err := parse(0, fields...); err == nil {
 			t.Fatal("unsafe data request admitted", fields)
@@ -239,7 +250,7 @@ func TestMDSCephFSDataMutationsAreOneShotAndOrdered(t *testing.T) {
 	var result mdsCephFSDataResult
 	// Ordered mutations are refused before any native work without their
 	// prerequisite (the cluster is absent, so native work would panic).
-	for _, name := range []string{"layout-clear", "write-native", "write-trunc", "truncate", "snapshot-create", "snapshot-remove"} {
+	for _, name := range []string{"layout-clear", "write-native", "write-trunc", "truncate", "snapshot-create", "snapshot-remove", "capsnap-create-a", "capsnap-create-b", "capsnap-remove-a", "capsnap-remove-b"} {
 		if err := c.mdsCephFSDataAct(context.Background(), 1, mdsCephFSDataAction{name: name, target: "dir"}, &result); err == nil {
 			t.Fatal("mutation admitted without its prerequisite", name)
 		}
@@ -248,6 +259,12 @@ func TestMDSCephFSDataMutationsAreOneShotAndOrdered(t *testing.T) {
 	for _, name := range []string{"layout-set", "write-trunc", "truncate"} {
 		if err := c.mdsCephFSDataAct(context.Background(), 2, mdsCephFSDataAction{name: name, target: "trunc-file"}, &result); err == nil {
 			t.Fatal("a repeated or unordered mutation was admitted", name)
+		}
+	}
+	x.mutations = append(x.mutations, &mdsCephFSMutation{Kind: "capsnap-create-a", State: "uncertain"})
+	for _, name := range []string{"capsnap-create-a", "capsnap-create-b", "capsnap-remove-a"} {
+		if err := c.mdsCephFSDataAct(context.Background(), 3, mdsCephFSDataAction{name: name, target: "capsnap-a"}, &result); err == nil {
+			t.Fatal("uncertain cap snapshot permitted replay or dependent mutation", name)
 		}
 	}
 	for kind, requires := range mdsCephFSDataMutations {

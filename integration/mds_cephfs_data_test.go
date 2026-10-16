@@ -337,6 +337,7 @@ type nativeMDSCephFSDataPlan struct {
 	SharedSize     uint64            `json:"shared_size"`
 	SnapV1Size     uint64            `json:"snap_v1_size"`
 	SnapV2Offset   uint64            `json:"snap_v2_offset"`
+	CapSnapSizes   [3]uint64         `json:"cap_snap_sizes"`
 	SnapV2Size     uint64            `json:"snap_v2_size"`
 	ObjectCounts   map[string]int    `json:"object_counts"`
 }
@@ -801,10 +802,10 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		oracle.ClientCaps["mon"] != "allow r" || oracle.ClientCaps["mds"] != "allow rw fsname="+fsName || oracle.ClientCaps["osd"] != "allow rw tag cephfs data="+fsName ||
 		oracle.NativeCaps["mds"] != "allow rwps fsname="+fsName || oracle.NativeCaps["osd"] != "allow rw tag cephfs data="+fsName ||
 		plan.Directory != "ceph-msgr-data-"+oracle.Token || plan.Snapshot != "data-"+oracle.Token[:8] ||
-		!slices.Equal(plan.Files, []string{"go-file", "native-file", "trunc-file", "shared-file", "snap-file"}) || layout != (cephfsStriping{65536, 2, 131072}) ||
-		oracle.DataPoolName != fsName+"-data" || oracle.DataPool <= 0 || oracle.DirLayout != wantLayout || len(plan.Seeds) != 6 ||
+		!slices.Equal(plan.Files, []string{"go-file", "native-file", "trunc-file", "shared-file", "snap-file", "capsnap-file"}) || layout != (cephfsStriping{65536, 2, 131072}) ||
+		oracle.DataPoolName != fsName+"-data" || oracle.DataPool <= 0 || oracle.DirLayout != wantLayout || len(plan.Seeds) != 9 ||
 		plan.GoFileSize != 614523 || plan.NativeSize != 1620000 || plan.TruncWriteSize != 1228800 || plan.TruncSize != 280000 || plan.SharedSize != 200000 ||
-		plan.SnapV1Size != 600000 || plan.SnapV2Offset != 400000 || plan.SnapV2Size != 320000 {
+		plan.CapSnapSizes != ([3]uint64{200000, 220000, 240000}) || plan.SnapV1Size != 600000 || plan.SnapV2Offset != 400000 || plan.SnapV2Size != 320000 {
 		t.Fatal("owned CephFS data oracle, plan or identities differ")
 	}
 	for purpose, seed := range plan.Seeds {
@@ -1913,11 +1914,178 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		return
 	}
 
+	capSnapsCreated := [2]bool{}
+	if !leaf("dirty_data_capsnaps_across_two_snapshots", func(t *testing.T) {
+		f := &cephfsDataFileEvidence{Name: "capsnap-file"}
+		files[f.Name] = f
+		st := create(t, f.Name)
+		f.Ino, f.ReplyCap, f.ReplyCaps, f.ReplyMaxSize = st.Ino, st.Cap, cephCapString(st.Cap.Caps), st.MaxSize
+		checkLayout(t, f, st)
+		ensureMaxSize(t, f, plan.CapSnapSizes[2])
+		c, _ := agent.cap(f.Ino)
+		if c.Issued&(cephCapFileWR|cephCapFileBuffer) != (cephCapFileWR | cephCapFileBuffer) {
+			t.Fatalf("file lacks Fwb: %s", cephCapString(c.Issued))
+		}
+		agent.enableCapSnaps(realms)
+		var images [3][]byte
+		var times [3]cephmsgr.MDSTime
+		var contexts [3]cephmsgr.OSDSnapContext
+		var ids [2]uint64
+		trunc := truncOf(f.Ino)
+		for generation, letter := range []string{"a", "b"} {
+			images[generation] = cephfsDataStream(plan.Seeds["capsnap-file-"+letter], plan.CapSnapSizes[generation])
+			times[generation] = newMTime(f.Ino)
+			// Capture values, not the loop variables, in this retained writeback.
+			payload, mtime := images[generation], times[generation]
+			context, err := agent.capSnapContext(f.Ino)
+			if err != nil {
+				t.Fatal(err)
+			}
+			contexts[generation] = context
+			if err := agent.markDirty(f.Ino, uint64(len(payload)), mtime, context.Sequence, true, 0, func() error {
+				return osdIO.write(f.Ino, layout, 0, payload, context, mtime, trunc)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			created := req(t, "capsnap-create-"+letter, "")
+			if created.Mutation == nil || created.Mutation.State != "applied" || !created.Native.Stat.Exists {
+				t.Fatal("cap snapshot creation differs", created)
+			}
+			capSnapsCreated[generation] = true
+			deadline := time.Now().Add(15 * time.Second)
+			for {
+				state := agent.snapshot()
+				found := slices.ContainsFunc(state.CapSnaps, func(s cephfsCapSnap) bool {
+					return s.Ino == f.Ino && s.Context.Sequence == context.Sequence && s.Buffered
+				})
+				if found {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("dirty cap snap %s was not queued: %+v", letter, state)
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			after, err := agent.capSnapContext(f.Ino)
+			if err != nil || after.Sequence <= context.Sequence || len(after.Snapshots) != len(context.Snapshots)+1 {
+				t.Fatal("snapshot context did not advance", after, context, err)
+			}
+			ids[generation] = after.Sequence
+		}
+		// Both data generations are retained before either FLUSHSNAP is sent.
+		// This establishes dirty generation overlap, not simultaneous pending ACKs.
+		queued := agent.snapshot().CapSnaps
+		if len(queued) != 2 || !queued[0].Buffered || !queued[1].Buffered || queued[0].Transaction != 0 || queued[1].Transaction != 0 {
+			t.Fatalf("two immutable dirty generations were not retained: %+v", queued)
+		}
+		facts["capsnap_queued"] = queued
+		if err := agent.drainCapSnaps(f.Ino); err != nil {
+			t.Fatal("cap-snap writeback/flush", err)
+		}
+		deadline := time.Now().Add(15 * time.Second)
+		for {
+			snaps := agent.snapshot().CapSnaps
+			if len(snaps) == 2 && !snaps[0].Acked.IsZero() && !snaps[1].Acked.IsZero() {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("cap-snap ACKs missing: %+v", agent.snapshot())
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		flushed := agent.snapshot().CapSnaps
+		for i, s := range flushed {
+			if s.Caps.Size != plan.CapSnapSizes[i] || s.Caps.MTime != times[i] || s.Caps.Dirty != cephCapFileWR || s.Context.Sequence != contexts[i].Sequence ||
+				s.WritebackCompleted.Before(s.WritebackStarted) || s.Sent.Before(s.WritebackCompleted) || s.Acked.Before(s.WritebackCompleted) || s.Transaction == 0 || s.Buffered || s.Error != "" {
+				t.Fatalf("cap snap %d differs: %+v", i, s)
+			}
+		}
+		if flushed[1].Transaction <= flushed[0].Transaction {
+			t.Fatal("cap-snap flush TIDs did not increase", flushed)
+		}
+		images[2] = cephfsDataStream(plan.Seeds["capsnap-file-c"], plan.CapSnapSizes[2])
+		times[2] = newMTime(f.Ino)
+		context, err := agent.capSnapContext(f.Ino)
+		if err != nil || !slices.Contains(context.Snapshots, ids[0]) || !slices.Contains(context.Snapshots, ids[1]) {
+			t.Fatal("head context omits snapshots", context, err)
+		}
+		contexts[2] = context
+		if err := osdIO.write(f.Ino, layout, 0, images[2], context, times[2], trunc); err != nil {
+			t.Fatal(err)
+		}
+		if err := agent.markDirty(f.Ino, plan.CapSnapSizes[2], times[2], context.Sequence, false, 0, nil); err != nil {
+			t.Fatal(err)
+		}
+		f.MTime = times[2]
+		flush(t, f)
+		closeFile(t, f, cephFileModeRDWR)
+		lists := map[uint64]cephmsgr.OSDSnapshotList{}
+		for objno := uint64(0); objno < 2; objno++ {
+			list, err := osdIO.listSnaps(f.Ino, objno)
+			if err != nil || len(list.Clones) != 3 || list.Sequence != context.Sequence {
+				t.Fatal("two-snapshot clone list differs", objno, list, err)
+			}
+			for i, clone := range list.Clones {
+				expectedID := cephmsgr.OSDHeadSnapshot
+				if i < 2 {
+					expectedID = ids[i]
+				}
+				expectedSize := cephfsObjectSizes(layout, [][2]uint64{{0, plan.CapSnapSizes[i]}})[objno]
+				if clone.ID != expectedID || clone.Size != expectedSize || len(clone.Overlap) != 0 || i < 2 && !slices.Equal(clone.Snapshots, []uint64{ids[i]}) {
+					t.Fatalf("clone %d object %d differs: %+v", i, objno, clone)
+				}
+			}
+			lists[objno] = list
+		}
+		native := nativeObjects(t, f.Name, f.Ino)
+		f.NativeObjects = native
+		for _, obj := range native {
+			list := lists[uint64(obj.ObjNo)]
+			if obj.Snaps == nil || obj.Snaps.Seq != list.Sequence || len(obj.Snaps.Clones) != 3 {
+				t.Fatal("native two-snapshot clones differ", obj)
+			}
+			for i, clone := range obj.Snaps.Clones {
+				g := list.Clones[i]
+				if clone.Head != (g.ID == cephmsgr.OSDHeadSnapshot) || !clone.Head && clone.ID != g.ID || clone.Size != g.Size || !slices.Equal(clone.Snapshots, g.Snapshots) || len(clone.Overlaps) != 0 {
+					t.Fatal("native cap-snap clone differs", obj.ObjNo, i, clone, g)
+				}
+			}
+		}
+		for i, letter := range []string{"a", "b"} {
+			got, holes, err := osdIO.read(f.Ino, layout, 0, plan.CapSnapSizes[i], ids[i], trunc)
+			if err != nil || len(holes) != 0 || !bytes.Equal(got, images[i]) {
+				t.Fatal("Go cap-snap bytes differ", letter, err, holes)
+			}
+			target := "capsnap-" + letter + "-file"
+			nativeRead(t, nil, target, images[i])
+			stat := req(t, "stat", target).Native.Stat
+			if stat == nil || !stat.Exists || stat.Size != plan.CapSnapSizes[i] || stat.MTime != int64(times[i].Seconds) {
+				t.Fatal("native cap-snap metadata differs", letter, stat)
+			}
+		}
+		head, holes, err := osdIO.read(f.Ino, layout, 0, plan.CapSnapSizes[2], cephmsgr.OSDHeadSnapshot, trunc)
+		if err != nil || len(holes) != 0 || !bytes.Equal(head, images[2]) {
+			t.Fatal("Go cap-snap head differs", err, holes)
+		}
+		nativeRead(t, f, f.Name, images[2])
+		facts["dirty_cap_snaps"] = map[string]any{"snapshot_ids": ids, "contexts": contexts, "completed": flushed, "lists": lists, "native_objects": native}
+	}) {
+		return
+	}
+
 	t.Run("cleanup_unlink_release_close", func(t *testing.T) {
 		begin := time.Now()
 		defer func() { caseTimes["cleanup_unlink_release_close"] = time.Since(begin).Milliseconds() }()
 		if session == nil || session.Status().State != cephmsgr.MDSSessionOpen {
 			t.Fatal("the Go session is not open for cleanup")
+		}
+		for i, letter := range []string{"a", "b"} {
+			if capSnapsCreated[i] {
+				removed := req(t, "capsnap-remove-"+letter, "")
+				if removed.Mutation == nil || removed.Mutation.State != "applied" || removed.Native.Stat.Exists {
+					t.Fatal("native cap snapshot removal differs", removed)
+				}
+			}
 		}
 		if snapCreated {
 			removed := req(t, "snapshot-remove", "")

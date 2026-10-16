@@ -1485,7 +1485,9 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 			e.FlushSnap = cephmsgr.MDSCaps{Op: cephmsgr.MDSCapOpFlushSnap, Ino: e.FileIno, Realm: c.Realm, CapID: c.CapID, MigrateSeq: c.MSeq, Caps: c.Issued, Dirty: cephCapFileWR,
 				SnapFollows: e.FollowsRealm.Seq, UID: c.UID, GID: c.GID, Mode: c.Mode, Size: c.Size, MTime: c.MTime, ATime: c.ATime, CTime: c.CTime, TimeWarpSeq: c.TimeWarpSeq,
 				OldestFlushTID: e.FlushTID, BTime: c.BTime, ChangeAttr: c.ChangeAttr, Files: -1, Subdirs: -1}
-			agentE.expectFlushSnap(e.FileIno, e.FlushTID)
+			if err := agentE.expectFlushSnap(e.FileIno, e.FollowsRealm.Seq, e.FlushTID, cephCapFileWR); err != nil {
+				t.Fatal(err)
+			}
 			sent := time.Now()
 			if err := sessionE.SendCaps(ctx, e.FlushSnap, e.FlushTID); err != nil {
 				t.Fatal("send FLUSHSNAP", err)

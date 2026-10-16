@@ -22,8 +22,8 @@ import (
 // The CephFS data acceptance drives file data I/O of an owned filesystem
 // through the Go client's MDS session and its own OSD writes and reads, and
 // compares every result with a native LibCephFS client on the same fixture.
-// It owns one directory with a small striped directory layout, five files,
-// one snapshot and two identities, both with OSD write grants on the owned
+// It owns one directory with a small striped directory layout, six files,
+// three snapshots and two identities, both with OSD write grants on the owned
 // data pool. It changes no daemon setting and restarts nothing. Native
 // behavior relied upon: client/Client.cc and libcephfs (striped reads and
 // writes, truncate, getxattr/setxattr/removexattr of the layout virtual
@@ -44,11 +44,11 @@ const (
 
 // mdsCephFSDataFiles are the closed file names directly below the owned
 // directory.
-var mdsCephFSDataFiles = []string{"go-file", "native-file", "trunc-file", "shared-file", "snap-file"}
+var mdsCephFSDataFiles = []string{"go-file", "native-file", "trunc-file", "shared-file", "snap-file", "capsnap-file"}
 
 // mdsCephFSDataTargets are every closed stat target: the directory, the files,
 // the snapshot directory and the snapshot's view of snap-file.
-var mdsCephFSDataTargets = append(append([]string{"dir"}, mdsCephFSDataFiles...), "snapshot", "snapshot-file")
+var mdsCephFSDataTargets = append(append([]string{"dir"}, mdsCephFSDataFiles...), "snapshot", "snapshot-file", "capsnap-a", "capsnap-b", "capsnap-a-file", "capsnap-b-file")
 
 // mdsCephFSDataPlan is the fixed data namespace of one run. Payload bytes are
 // SHA-256 chains of the seeds (the block of the seed, then the block of the
@@ -69,13 +69,14 @@ type mdsCephFSDataPlan struct {
 	SharedSize     uint64            `json:"shared_size"`
 	SnapV1Size     uint64            `json:"snap_v1_size"`
 	SnapV2Offset   uint64            `json:"snap_v2_offset"`
+	CapSnapSizes   [3]uint64         `json:"cap_snap_sizes"`
 	SnapV2Size     uint64            `json:"snap_v2_size"`
 	ObjectCounts   map[string]int    `json:"object_counts"`
 }
 
 func mdsCephFSDataPlanFor(token string) mdsCephFSDataPlan {
 	seeds := map[string]string{}
-	for _, purpose := range []string{"go-file", "native-file", "trunc-file", "shared-file", "snap-file-v1", "snap-file-v2"} {
+	for _, purpose := range []string{"go-file", "native-file", "trunc-file", "shared-file", "snap-file-v1", "snap-file-v2", "capsnap-file-a", "capsnap-file-b", "capsnap-file-c"} {
 		seeds[purpose] = "ceph-msgr-cephfs-data-" + purpose + ":" + token
 	}
 	return mdsCephFSDataPlan{Directory: "ceph-msgr-data-" + token, Snapshot: "data-" + token[:8], Files: slices.Clone(mdsCephFSDataFiles),
@@ -89,8 +90,8 @@ func mdsCephFSDataPlanFor(token string) mdsCephFSDataPlan {
 		// other halves stay holes.
 		NativeExtents: [][2]uint64{{0, 80000}, {600000, 120000}, {1600000, 20000}}, NativeSize: 1620000,
 		TruncWriteSize: 1228800, TruncSize: 280000, SharedSize: 200000,
-		SnapV1Size: 600000, SnapV2Offset: 400000, SnapV2Size: 320000,
-		ObjectCounts: map[string]int{"go-file": 6, "native-file": 14, "trunc-file": 10, "shared-file": 2, "snap-file": 6}}
+		CapSnapSizes: [3]uint64{200000, 220000, 240000}, SnapV1Size: 600000, SnapV2Offset: 400000, SnapV2Size: 320000,
+		ObjectCounts: map[string]int{"go-file": 6, "native-file": 14, "trunc-file": 10, "shared-file": 2, "snap-file": 6, "capsnap-file": 2}}
 }
 
 // layout is the native ceph.dir.layout value the plan sets on the directory.
@@ -111,6 +112,10 @@ func (p mdsCephFSDataPlan) path(target string) (string, error) {
 		return root + "/.snap/" + p.Snapshot, nil
 	case target == "snapshot-file":
 		return root + "/.snap/" + p.Snapshot + "/snap-file", nil
+	case target == "capsnap-a" || target == "capsnap-b":
+		return root + "/.snap/" + p.Snapshot + "-cap-" + strings.TrimPrefix(target, "capsnap-"), nil
+	case target == "capsnap-a-file" || target == "capsnap-b-file":
+		return root + "/.snap/" + p.Snapshot + "-cap-" + strings.TrimSuffix(strings.TrimPrefix(target, "capsnap-"), "-file") + "/capsnap-file", nil
 	case slices.Contains(p.Files, target):
 		return root + "/" + target, nil
 	}
@@ -141,7 +146,7 @@ import cephfs, hashlib, json, os, subprocess, sys, time
 identity, fsname, directory, snapshot, pool, action, path = sys.argv[1:8]
 extra = sys.argv[8:]
 CONF = '/tmp/ceph-msgr-test/ceph.conf'
-FILES = ('go-file', 'native-file', 'trunc-file', 'shared-file', 'snap-file')
+FILES = ('go-file', 'native-file', 'trunc-file', 'shared-file', 'snap-file', 'capsnap-file')
 CHUNK = 16384
 LIMIT = 4 << 20
 MASK = 0x13cf
@@ -150,7 +155,8 @@ if not directory.startswith('ceph-msgr-data-') or any(c in directory for c in '/
 root = '/' + directory
 files = [root + '/' + f for f in FILES]
 snapdir = root + '/.snap/' + snapshot
-if path != root and path not in files and path != snapdir and path != snapdir + '/snap-file':
+capdirs = [snapdir + '-cap-a', snapdir + '-cap-b']
+if path != root and path not in files and path not in [snapdir, snapdir + '/snap-file'] + capdirs + [d + '/capsnap-file' for d in capdirs]:
     raise ValueError('path outside the owned directory')
 start = time.monotonic_ns()
 def stream(seed, n):
@@ -246,7 +252,7 @@ try:
     out['native_global_id'] = fs.get_instance_id()
     if action == 'stat' and not extra:
         out['stat'] = stat(path)
-        if out['stat']['exists'] and not path.startswith(snapdir):
+        if out['stat']['exists'] and not path.startswith(root + '/.snap/'):
             out['layout'], out['layout_absent'] = layout(path, 'ceph.dir.layout' if path == root else 'ceph.file.layout')
     elif action == 'layout-set' and path == root and len(extra) == 4:
         fs.mkdir(path, 0o755)
@@ -263,7 +269,7 @@ try:
         fs.removexattr(path, 'ceph.dir.layout')
         out['layout'], out['layout_absent'] = layout(path, 'ceph.dir.layout')
         out['stat'] = stat(path)
-    elif action in ('read', 'read-shared') and path != root and path != snapdir and not extra:
+    elif action in ('read', 'read-shared') and path != root and path not in [snapdir] + capdirs and not extra:
         if action == 'read-shared' and path != root + '/shared-file':
             raise ValueError('the concurrent reader admits only shared-file')
         timings = {'start': 0}
@@ -285,7 +291,7 @@ try:
     elif action == 'truncate' and path == root + '/trunc-file' and len(extra) == 1:
         fs.truncate(path, int(extra[0]))
         out['stat'] = stat(path)
-    elif action in ('mksnap', 'rmsnap') and path == snapdir and not extra:
+    elif action in ('mksnap', 'rmsnap') and path in [snapdir] + capdirs and not extra:
         if action == 'mksnap':
             fs.mkdir(path, 0o755)
         else:
@@ -417,7 +423,7 @@ func decodeMDSCephFSDataNative(action, target, path, pool string, plan mdsCephFS
 	case "stat":
 		ok = stat && result.Read == nil && result.Objects == nil && result.Entries == nil && result.Written == 0
 		switch {
-		case !ok || !result.Stat.Exists || target == "snapshot" || target == "snapshot-file":
+		case !ok || !result.Stat.Exists || strings.HasPrefix(target, "snapshot") || strings.HasPrefix(target, "capsnap-a") || strings.HasPrefix(target, "capsnap-b"):
 			ok = ok && result.Layout == "" && !result.LayoutAbsent
 		case target == "dir":
 			// The directory layout is set or removed by owned actions only.
@@ -465,7 +471,7 @@ func decodeMDSCephFSDataNative(action, target, path, pool string, plan mdsCephFS
 		count := plan.ObjectCounts[target]
 		ok = stat && count > 0 && (result.Stat.Exists && len(result.Objects) == count || !result.Stat.Exists && len(result.Objects) == 0)
 		for i, o := range result.Objects {
-			ok = ok && o.ObjNo == i && o.Name == fmt.Sprintf("%x.%08x", result.Stat.Ino, i) && (o.Exists || o.Size == 0) && (o.Snaps == nil || target == "snap-file" && o.Exists)
+			ok = ok && o.ObjNo == i && o.Name == fmt.Sprintf("%x.%08x", result.Stat.Ino, i) && (o.Exists || o.Size == 0) && (o.Snaps == nil || (target == "snap-file" || target == "capsnap-file") && o.Exists)
 			if o.Snaps != nil {
 				ok = ok && len(o.Snaps.Clones) <= 64
 			}
@@ -512,6 +518,7 @@ type mdsCephFSDataAction struct {
 var mdsCephFSDataMutations = map[string]string{
 	"layout-set": "", "layout-clear": "layout-set", "write-native": "layout-set", "write-trunc": "layout-set", "truncate": "write-trunc",
 	"snapshot-create": "layout-set", "snapshot-remove": "snapshot-create",
+	"capsnap-create-a": "layout-set", "capsnap-create-b": "capsnap-create-a", "capsnap-remove-a": "capsnap-create-a", "capsnap-remove-b": "capsnap-create-b",
 }
 
 // parseMDSCephFSDataRequest admits <id> <token> <action> [argument]. Targets
@@ -546,7 +553,7 @@ func parseMDSCephFSDataRequest(fields []string, token string, previousID int64) 
 		}
 		action.target = arg
 	case "read":
-		if !hasArg || !slices.Contains(mdsCephFSDataFiles, arg) && arg != "snapshot-file" {
+		if !hasArg || !slices.Contains(mdsCephFSDataFiles, arg) && arg != "snapshot-file" && arg != "capsnap-a-file" && arg != "capsnap-b-file" {
 			return 0, mdsCephFSDataAction{}, errors.New("MDS CephFS data read target is not admitted")
 		}
 		action.target = arg
@@ -555,7 +562,7 @@ func parseMDSCephFSDataRequest(fields []string, token string, previousID int64) 
 			return 0, mdsCephFSDataAction{}, errors.New("MDS CephFS data object view admits only a planned file")
 		}
 		action.target = arg
-	case "list", "layout-set", "layout-clear", "write-native", "write-trunc", "truncate", "read-shared", "snapshot-create", "snapshot-remove":
+	case "list", "layout-set", "layout-clear", "write-native", "write-trunc", "truncate", "read-shared", "snapshot-create", "snapshot-remove", "capsnap-create-a", "capsnap-create-b", "capsnap-remove-a", "capsnap-remove-b":
 		if hasArg {
 			return 0, mdsCephFSDataAction{}, errors.New("MDS CephFS data action takes no caller argument")
 		}
@@ -566,6 +573,10 @@ func parseMDSCephFSDataRequest(fields []string, token string, previousID int64) 
 			action.target = "native-file"
 		case "write-trunc", "truncate":
 			action.target = "trunc-file"
+		case "capsnap-create-a", "capsnap-remove-a":
+			action.target = "capsnap-a"
+		case "capsnap-create-b", "capsnap-remove-b":
+			action.target = "capsnap-b"
 		case "read-shared":
 			action.target = "shared-file"
 		default:
@@ -815,7 +826,7 @@ func (x *mdsCephFSDataScope) extra(action, target string) []string {
 		return []string{strconv.FormatUint(p.TruncSize, 10)}
 	case "objects":
 		mode := "plain"
-		if target == "snap-file" {
+		if target == "snap-file" || target == "capsnap-file" {
 			mode = "snaps"
 		}
 		return []string{strconv.Itoa(p.ObjectCounts[target]), mode}
@@ -846,9 +857,9 @@ func (c *fixtureCluster) mdsCephFSDataAct(ctx context.Context, id int64, action 
 	}
 	native := action.name
 	switch action.name {
-	case "snapshot-create":
+	case "snapshot-create", "capsnap-create-a", "capsnap-create-b":
 		native = "mksnap"
-	case "snapshot-remove":
+	case "snapshot-remove", "capsnap-remove-a", "capsnap-remove-b":
 		native = "rmsnap"
 	}
 	var mutation *mdsCephFSMutation

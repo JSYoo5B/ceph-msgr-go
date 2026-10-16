@@ -6,7 +6,7 @@
 `CEPH_MSGR_TEST_MDS_COMMANDS=1`, `CEPH_MSGR_TEST_MDS_SESSIONS=1`,
 `CEPH_MSGR_TEST_MDS_CEPHFS=1`, `CEPH_MSGR_TEST_MDS_CEPHFS_RANKS=1` and
 `CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION=1`: it writes file data, sets a
-directory layout and takes a snapshot in the owned filesystem, which the
+directory layout and takes snapshots in the owned filesystem, which the
 other MDS receipts would observe. Like the other MDS profiles it requires one
 OSD with `legacy-v6` (no-HASHPSPOOL pools, 16/1 PGs, replication and
 min_size 1/1) and one active rank 0 without standby. Its Go client enables
@@ -43,7 +43,7 @@ journaling each name before the provider call:
 | Identity | Caps | Use |
 | --- | --- | --- |
 | `client.mds-cephfs-data-<token>` | MON `allow r`, MDS `allow rw fsname=<owned fs>`, OSD `allow rw tag cephfs data=<owned fs>` | the Go client: CephFS session, `osd map`/`osd dump` reads and object reads and writes of the owned data pool; no layout or snapshot permission, no MGR |
-| `client.mds-cephfs-data-native-<token>` | MON `allow r`, MDS `allow rwps fsname=<owned fs>`, OSD `allow rw tag cephfs data=<owned fs>` | the native LibCephFS oracle: directory layout (`p`), one snapshot (`s`), native writes, reads, truncate and object views |
+| `client.mds-cephfs-data-native-<token>` | MON `allow r`, MDS `allow rwps fsname=<owned fs>`, OSD `allow rw tag cephfs data=<owned fs>` | the native LibCephFS oracle: directory layout (`p`), the three planned snapshots (`s`), native writes, reads, truncate and object views |
 
 `CEPH_MSGR_MDS_CEPHFS_DATA_IDENTITY` and `CEPH_MSGR_MDS_CEPHFS_DATA_KEY_FILE`
 name the Go identity and `<controlDir>/mds-cephfs-data.key`. The native
@@ -66,17 +66,20 @@ plan:
   pool>` (a period of 256 KiB over two objects; 64 KiB is the smallest
   stripe unit `file_layout_t::is_valid` admits, and a 16 KiB unit is refused
   by `setxattr` with EINVAL);
-- files `go-file`, `native-file`, `trunc-file`, `shared-file`, `snap-file`;
-- snapshot `.snap/data-<token[:8]>` of the directory;
+- files `go-file`, `native-file`, `trunc-file`, `shared-file`, `snap-file`,
+  `capsnap-file`;
+- snapshot `.snap/data-<token[:8]>` of the directory, plus
+  `.snap/data-<token[:8]>-cap-a` and `-cap-b` for dirty cap-snap acceptance;
 - payload seeds `ceph-msgr-cephfs-data-<purpose>:<token>` for `go-file`,
   `native-file`, `trunc-file`, `shared-file`, `snap-file-v1` and
-  `snap-file-v2`; a payload is the SHA-256 of the seed followed by the
+  `snap-file-v2` and `capsnap-file-a`, `capsnap-file-b`, `capsnap-file-c`; a payload is the SHA-256 of the seed followed by the
   SHA-256 of each previous block, cut to its length;
 - sizes: `go-file` 614523 bytes; `native-file` 1620000 bytes written only
   at 0+80000, 600000+120000 and 1600000+20000; `trunc-file` 1228800 bytes
   truncated to 280000; `shared-file` 200000 bytes; `snap-file` 600000 bytes,
-  then 320000 bytes at 400000;
-- the object count of each file's object view (6, 14, 10, 2 and 6).
+  then 320000 bytes at 400000; cap-snap images A/B/C are
+  200000/220000/240000 bytes;
+- the object count of each file's object view (6, 14, 10, 2, 6 and 2).
 
 `mds-cephfs-data-owned.json` is the journal: it is rewritten before each
 identity creation and native mutation (intent) and after its outcome, and
@@ -92,8 +95,9 @@ testcluster.RequestControl(ctx, dir,
 
 The request is `<requestID> <ownership token> <action> [argument]`. IDs are
 positive canonical decimals and strictly increase. Targets are closed plan
-names (`dir`, the five files, `snapshot`, `snapshot-file` for
-`.snap/<name>/snap-file`); a GlobalID is a canonical decimal. No caller path,
+names (`dir`, the six files, `snapshot`, `snapshot-file` for
+`.snap/<name>/snap-file`, `capsnap-a/b` and `capsnap-a/b-file` for the
+added snapshots and their `capsnap-file` views); a GlobalID is a canonical decimal. No caller path,
 value or command reaches the fixture: payloads, sizes, extents, the layout
 string and object counts come from the plan. One request is outstanding at a
 time; the controller holds the shared MDS fresh scope lock and is bounded to
@@ -103,8 +107,10 @@ time; the controller holds the shared MDS fresh scope lock and is bounded to
 | --- | --- | --- |
 | `observe` | GlobalID | read only: `session ls` and `osd blocklist ls`; records the address of an owned Go session |
 | `stat` | a target | read only: LibCephFS `statx` (mode, nlink, uid, gid, mtime seconds, ctime, ino, size, change attribute) or ENOENT, and for the directory and files the `ceph.dir.layout` or `ceph.file.layout` virtual xattr (ENODATA reported as absent) |
-| `read` | a file or `snapshot-file` | read only: open read-only, read to EOF in 64 KiB calls (bounded to 4 MiB), then `statx`; reports length, SHA-256 and the SHA-256 of each 16 KiB chunk |
-| `objects` | a file | read only: `statx` for the inode, then the python rados binding's `stat` of `<ino hex>.<objno %08x>` for the planned object count; for `snap-file` also `rados --format json listsnaps` of each existing object (clone IDs, snapshots, sizes, overlaps) |
+| `read` | a file, `snapshot-file` or `capsnap-a/b-file` | read only: open read-only, read to EOF in 64 KiB calls (bounded to 4 MiB), then `statx`; reports length, SHA-256 and the SHA-256 of each 16 KiB chunk |
+| `objects` | a file | read only: `statx` for the inode, then the python rados binding's `stat` of `<ino hex>.<objno %08x>` for the planned object count; for `snap-file` and `capsnap-file` also `rados --format json listsnaps` of each existing object (clone IDs, snapshots, sizes, overlaps) |
+| `capsnap-create-a`, `capsnap-create-b` | none | mutation, once each: create the two fixed snapshots; B requires an applied A |
+| `capsnap-remove-a`, `capsnap-remove-b` | none | mutation, once each after the corresponding applied creation: remove the fixed snapshot |
 | `list` | none | read only: `opendir`/`readdir` of the directory with `statx` per entry; only plan files are admitted, each once |
 | `read-shared` | none | read only: the `read` of `shared-file` with monotonic timings (start, opened, read, closed); it waits for whatever capabilities the Go client holds |
 | `layout-set` | none | mutation, once: `mkdir` of the directory (0755), `setxattr ceph.dir.layout <plan layout>`, readback of the layout and `statx` |
@@ -158,3 +164,6 @@ closed actions and replay protection, native output shapes, the one-shot and
 ordered mutations (refused before native work), scope rejection before
 native work and cleanup without a baseline. They do not establish live
 behavior; see [MDS_CEPHFS_DATA_VALIDATION.md](MDS_CEPHFS_DATA_VALIDATION.md).
+
+The new dirty-data cap-snap recipe and its separate verification status are
+recorded in [MDS_CEPHFS_CAPSNAP_VALIDATION.md](MDS_CEPHFS_CAPSNAP_VALIDATION.md).
