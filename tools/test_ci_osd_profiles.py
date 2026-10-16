@@ -59,7 +59,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        self.assertEqual(len(self.rows), 54)
+        self.assertEqual(len(self.rows), 56)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd")
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
@@ -143,13 +143,14 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                 self.assertIsNone(selector.search(name + "Extended"))
                 self.assertIsNone(selector.search("Prefix" + name))
 
-    def test_three_replica_v8_rows_select_only_the_object_backoff_failover_test(self):
+    def test_three_replica_v8_rows_select_only_their_closed_acceptance(self):
         rows = [row for row in self.rows if row.get("osd_profile") in {"replicated-pg-v8", "replicated-pg-reply-v8"}
                 and row.get("osd_replicas") == "3"]
-        self.assertEqual(len(rows), 2)
-        expected = {"TestCephOSDObjectBackoffFailoverIntegration"}
+        self.assertEqual(len(rows), 4)
+        expected = {"TestCephOSDObjectBackoffFailoverIntegration", "TestCephOSDUpmapIntegration"}
         self.assertTrue(expected <= self.declared)
-        observed = set()
+        observed = {name: set() for name in expected}
+        counts = {name: 0 for name in expected}
         for row in rows:
             self.assertEqual((row["osd_profile"], row["osd"], row["osd_store"], row["stress"]),
                              ("replicated-pg-v8", "1", "bluestore", ""))
@@ -157,12 +158,19 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertNotIn("race", row)
             self.assertNotIn("mds_fresh", row)
             selector = re.compile(row["test_run"])
-            self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
-            self.assertIsNone(selector.search("TestCephOSDObjectBackoffFailoverIntegrationExtended"))
-            self.assertIsNone(selector.search("PrefixTestCephOSDObjectBackoffFailoverIntegration"))
-            observed.add(tuple(row.get(field, fallback) for field, fallback in (
+            selected = {name for name in self.declared if selector.search(name)}
+            self.assertEqual(len(selected), 1)
+            self.assertTrue(selected <= expected)
+            name = next(iter(selected))
+            self.assertIsNone(selector.search(name + "Extended"))
+            self.assertIsNone(selector.search("Prefix" + name))
+            counts[name] += 1
+            observed[name].add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"), ("family", ""), ("runtime", "container"))))
-        self.assertEqual(observed, {("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")})
+        for name in expected:
+            with self.subTest(test=name):
+                self.assertEqual(counts[name], 2)
+                self.assertEqual(observed[name], {("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")})
 
     def test_fresh_mds_rows_require_explicit_opt_in_and_only_their_declared_test(self):
         rows = [row for row in self.rows if row.get("mds_fresh") == "1"

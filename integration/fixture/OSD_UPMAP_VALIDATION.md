@@ -5,7 +5,7 @@ Prepared 2026-10-16 against Ceph 20.2.4 source
 This is a verification-only extension of the existing replicated-PG OSD
 protocol profile. It adds no placement algorithm, automatic routing or retry,
 inner OSDMap decoder, new Messenger feature bit, or typed management API.
-Actual daemon execution has not yet been completed for this recipe.
+The two actual daemon profiles below passed their first executions.
 
 ## Closed scope and observations
 
@@ -55,11 +55,60 @@ for disposable fixture teardown even when deletion is enabled. Therefore
 `finished=true` means the control finished, not that every resource was deleted.
 Container/network teardown is verified separately from in-cluster cleanup.
 
-## Verification status
+## Verification and actual daemon results
 
-The new mock-native regressions cover same/different PGs, deadlines,
-uncertain install/removal outcomes, stale process locks, pool-ID replacement,
-and confirmed removal followed by a failed observation and an alias attempt.
-These establish local control behavior only. Actual CRC/AES IPv4 and
-secure/AES256K IPv6 three-BlueStore runs, raw receipt audits, and final cleanup
-inventory are still pending. No successful live upmap coverage is claimed.
+The 18 new mock-native regressions passed independently, including a real
+POSIX child SIGKILL followed by same-inode lock reacquisition. The complete
+Python suite passed 407 tests. Root Go tests/vet and nested fixture tests/vet
+passed; source-level controls are separate from live interoperability.
+
+Both native runs used frozen source
+`9c1bb40f69262a21580dfd8a17153d5e05849f22`, based on main `57895ba`.
+The actual linked fixture provider was v0.3.0, checksum
+`h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY=`. Both used Linux arm64
+Ceph image
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`.
+Native require_min_compat_client remained luminous in the retained dump.
+
+| First execution | Actual configuration | Cases / time | Result |
+| --- | --- | --- | --- |
+| CRC | AES client/service keys, IPv4, host client, three BlueStore OSDs, request v8/reply v6 | items + full, 31.80 s | PASS, exit 0 |
+| Secure | AES256K client/service keys, IPv6, container client, three BlueStore OSDs, request v8/reply v6 | items + full, 31.86 s | PASS, exit 0 |
+
+Each run retained eight control receipts and ten Go request/reply records.
+In both runs, items PG 3.5 changed [2,1] to [2,0] and back; full PG 3.3
+changed [0,2] to [1,0] and back. Native coherent observation epochs were
+20/22/24/26/28 (CRC) and 21/23/25/27/29 (secure). Both owned heads retained
+the single submitted append, native own version matched its Go reply, and
+original pool policy/object state remained unchanged. Successful mutations
+reported ONDISK; hardware power loss and mutation failover during upmap were
+not tested. These two runs used different PGs; same-PG handling has model
+coverage, not a native same-PG execution claim.
+
+Both recipes restored the overrides and removed two objects with no cleanup
+errors. One empty owned pool per run was retained for fixture teardown;
+`pool_removed=false` remains explicit. A separate read-only Docker inventory
+confirmed all 20 owned containers and both fixture networks absent:
+`/private/tmp/upmap-owned-cleanup-audit-20261016.json`.
+
+Original artifacts and adjacent stdout logs:
+
+- `/private/tmp/upmap-crc-aes-ipv4-3blue-v8-20261016-first`
+- `/private/tmp/upmap-secure-aes256k-ipv6-3blue-v8-20261016-first`
+
+Raw results SHA-256, respectively:
+`30d522d197d514b5d9fd89e020e56179bf890f9bc4da36bec9e55f4034b76a01` and
+`6749921a7c46b19e329ffbba4a54218ff3d0b1662db42de64227eeba4ecdd8ff`.
+An independent audit of both original runs is retained at
+`/private/tmp/upmap-independent-audit-20261016.json`; it independently decoded
+raw replies and checked native observations, command intents and cleanup.
+No historical proof was rewritten. Live native worker-death/watchdog recovery,
+reply-v8 upmap acceptance, EC, optimal CRUSH, automatic routing, and complete
+remote CI success are not claimed.
+
+To reproduce either row, select `CEPH_MSGR_TEST_OSD=1`,
+`CEPH_MSGR_TEST_OSD_PROFILE=replicated-pg-v8`,
+`CEPH_MSGR_TEST_OSD_REPLICAS=3`, `CEPH_MSGR_TEST_OSD_STORE=bluestore`,
+`CEPH_MSGR_TEST_RUN=^TestCephOSDUpmapIntegration$`, a unique diagnostics
+directory, and that row's key/service cipher, connection mode, IP family
+and runtime before running `sh integration/run.sh` from the project root.

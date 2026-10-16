@@ -571,6 +571,12 @@ replicated pool이며, 기본 optimal CRUSH·EC 지원으로 확대해 해석하
 8→16→8 PG 변경, 기존 요청의 불명확 결과 보존, caller가 새 배치로 보낸 별도
 읽기·쓰기와 설정 복구를 확인한다. 라이브러리가 분할을 감지하거나 요청을
 재실행하지는 않는다.
+[실제 upmap 검증](integration/fixture/OSD_UPMAP_VALIDATION.md)은 별도 size/min_size 2
+소유 풀에서 secondary 교체와 primary·membership 교체 후 caller가 새 대상으로
+보낸 읽기·단일 APPEND 및 원복을 확인했다. CRC/AES IPv4 host와 secure/AES256K
+IPv6 container의 3 BlueStore 구성에서 각각 두 사례가 통과했다. 기존 프로토콜의
+검증 확장이며 배치 계산·자동 재라우팅을 추가하지 않는다. 두 객체와 override는
+정리하고 빈 소유 풀은 disposable fixture 종료에 맡긴다.
 
 `Options.OSDProfile=OSDProfileReplicatedPGReplyV8`은 같은 caller 배치·v8 request·
 backoff 계약에 OSD bit58(NEW_OSDOPREPLY_ENCODING)을 필수로 추가한다. Request와

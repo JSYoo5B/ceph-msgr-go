@@ -304,6 +304,10 @@ jobs:
           # on a degraded object plus in-flight primary SIGKILL and explicit resubmission).
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDObjectBackoffFailoverIntegration$' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDObjectBackoffFailoverIntegration$' }
+          # Existing request-v8/reply-v6 wire across actual secondary and primary
+          # upmaps in a separate owned two-replica pool; original fixture unchanged.
+          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDUpmapIntegration$' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDUpmapIntegration$' }
           # Reply v8 acceptance: eight top-level tests, sixteen actual cases per row
           # (the thirteen cases above plus three explicit reply-v8 cases).
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|ReplyV8)|MDSMaps)Integration$' }
