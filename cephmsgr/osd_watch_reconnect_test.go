@@ -17,9 +17,14 @@ import (
 )
 
 func reconnectTestClient(t *testing.T) (*Client, <-chan *osdTestPeer, *atomic.Uint32) {
+	return reconnectProfileTestClient(t, OSDProfileObjectHash)
+}
+
+func reconnectProfileTestClient(t *testing.T, profile OSDProfile) (*Client, <-chan *osdTestPeer, *atomic.Uint32) {
 	t.Helper()
 	options := mockOptions(t, 20, [16]byte{1})
 	options.EnableOSD = true
+	options.OSDProfile = profile
 	options.MaxOSDConnections = 2
 	peers := make(chan *osdTestPeer, 8)
 	dials := &atomic.Uint32{}
@@ -39,7 +44,12 @@ func reconnectTestClient(t *testing.T) (*Client, <-chan *osdTestPeer, *atomic.Ui
 			go func() {
 				defer close(p.done)
 				defer p.conn.Close()
-				reader, writer, err := mockAuthenticate(server, peerConfig{role: 4, id: id})
+				reader, writer, err := mockAuthenticate(server, peerConfig{role: 4, id: id, payload: func(tag msgr.Tag, p []byte) []byte {
+					if profile.requestV9() {
+						return backoffTransportFeatures(tag, p, 1<<8|1<<9|1<<21|1<<30|1<<49|1<<56|1<<57|1<<58)
+					}
+					return p
+				}})
 				if err != nil {
 					return
 				}
@@ -60,7 +70,12 @@ func reconnectTestClient(t *testing.T) (*Client, <-chan *osdTestPeer, *atomic.Ui
 				}
 			}()
 		} else {
-			go mockDaemon(server, peerConfig{role: 1, release: 20, fsid: [16]byte{1}, services: cephx.ServiceAuth | cephx.ServiceOSD | cephx.ServiceMgr})
+			go mockDaemon(server, peerConfig{role: 1, release: 20, fsid: [16]byte{1}, services: cephx.ServiceAuth | cephx.ServiceOSD | cephx.ServiceMgr, payload: func(tag msgr.Tag, p []byte) []byte {
+				if profile.replicatedPG() {
+					return backoffTransportFeatures(tag, p, 1<<30)
+				}
+				return p
+			}})
 		}
 		return client, nil
 	}

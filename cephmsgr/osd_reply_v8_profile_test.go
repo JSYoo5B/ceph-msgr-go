@@ -115,14 +115,18 @@ func replyV8ProfileMessage(input OSDRequest, outputs [][]byte, results []int32, 
 	for i, op := range input.Operations {
 		e.U16(uint16(op.Code))
 		e.U32(uint32(op.Flags))
-		e.U64(op.Offset)
-		length := op.Length
-		if op.Code == OSDAssertVersion {
-			length = op.Version
+		if osd.IsWatchOperation(uint16(op.Code)) {
+			osd.EncodeWatchUnion(&e, osd.Operation{Code: uint16(op.Code), Watch: watchWireInput(op.Watch)})
+		} else {
+			e.U64(op.Offset)
+			length := op.Length
+			if op.Code == OSDAssertVersion {
+				length = op.Version
+			}
+			e.U64(length)
+			e.U64(0)
+			e.U32(0)
 		}
-		e.U64(length)
-		e.U64(0)
-		e.U32(0)
 		e.U32(uint32(len(outputs[i])))
 		data = append(data, outputs[i]...)
 	}
