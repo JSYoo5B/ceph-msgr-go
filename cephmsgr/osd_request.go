@@ -223,6 +223,9 @@ var ErrOSDRedirect = osd.ErrRedirect
 // compound combinations before object-request transmission. In Tentacle,
 // offset-zero READ/CMPEXT after a possible full write can compare committed
 // bytes with a staged digest; these combinations are conservatively rejected.
+// A remote newer truncate sequence can shorten an offset-zero WRITE, so any
+// later positive offset-zero READ/CMPEXT is refused after that WRITE, even when
+// its requested length is smaller than the write payload.
 // OMAP and xattr reads after a staged write of the same metadata kind or a
 // DELETE, which may read committed rather than staged state, are rejected the
 // same way.

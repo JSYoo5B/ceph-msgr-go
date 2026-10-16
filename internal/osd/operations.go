@@ -256,11 +256,17 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 				return 0, 0, ErrRequest
 			}
 		case Write, WriteFull, Append:
-			// A WRITE at zero can replace the whole object too; callers do
-			// not provide its previous size. Retain the smallest possible
-			// staged digest boundary across FAILOK operations.
-			if (op.Code == WriteFull || op.Code == Append || op.Code == Write && op.Offset == 0) && op.Length > 0 && (stagedDigestSize == 0 || op.Length < stagedDigestSize) {
-				stagedDigestSize = op.Length
+			// A newer remote truncate sequence can clip an offset-zero WRITE
+			// below its requested length before setting a full-object digest
+			// (pinned PrimaryLogPG.cc:6774-6782,6836-6840). The caller does not
+			// supply that remote size: any positive prefix read may cover it.
+			// WRITEFULL is not clipped; APPEND copies the current sequence.
+			boundary := op.Length
+			if op.Code == Write && op.Offset == 0 && boundary > 0 {
+				boundary = 1
+			}
+			if (op.Code == WriteFull || op.Code == Append || op.Code == Write && op.Offset == 0) && boundary > 0 && (stagedDigestSize == 0 || boundary < stagedDigestSize) {
+				stagedDigestSize = boundary
 			}
 			flags |= FlagWrite
 			if op.Length != uint64(len(op.Data)) || op.Offset > math.MaxUint64-op.Length || op.Code != Write && op.Offset != 0 {

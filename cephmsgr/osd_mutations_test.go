@@ -90,6 +90,29 @@ func TestUnsafeOSDCompoundRejectedBeforeTransmission(t *testing.T) {
 			}
 		}
 	}
+	// A newer truncate sequence can clip a 12-byte offset-zero WRITE to
+	// six bytes; a six-byte prefix read then covers the whole staged object.
+	// No remote state is needed to enforce this source-derived local refusal.
+	for _, read := range []OSDOpcode{OSDRead, OSDCompareExtent} {
+		for _, flags := range []OSDOperationFlags{0, OSDFailOK} {
+			for _, truncateFirst := range []bool{false, true} {
+				op := OSDOperation{Code: read, Length: 6}
+				if read == OSDCompareExtent {
+					op.Data = make([]byte, 6)
+				}
+				r.Operations = nil
+				if truncateFirst {
+					r.Operations = append(r.Operations, OSDOperation{Code: OSDTruncate, Offset: 6, TruncateSize: 6, TruncateSequence: 2})
+				}
+				r.Operations = append(r.Operations, OSDOperation{Code: OSDWrite, Flags: flags, Length: 12, Data: make([]byte, 12)}, op)
+				reply, err := o.Request(context.Background(), r)
+				var unknown *OutcomeUnknownError
+				if !errors.Is(err, ErrUnsupportedOSDOperation) || errors.As(err, &unknown) || reply.Submission.Transaction != 0 || reply.Transaction != 0 || len(reply.RawFront) != 0 {
+					t.Fatal("possible clipped prefix read reached submission", reply, err)
+				}
+			}
+		}
+	}
 	select {
 	case request := <-peer.requests:
 		t.Fatal("unsafe native request was transmitted", request.Transaction)

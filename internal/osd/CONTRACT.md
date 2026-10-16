@@ -101,17 +101,25 @@ local clock is silently substituted. Nonzero mtime on a read-only vector is
 rejected because it would not set the object's mtime.
 
 A following READ or CMPEXT at offset 0 covering any preceding nonempty
-WRITEFULL, APPEND or offset-zero WRITE payload length is rejected before
-transmission. The conservative check retains the minimum positive payload
-length across intervening operations without assuming a known committed size.
+WRITEFULL or APPEND payload length is rejected before transmission. After an
+offset-zero nonempty WRITE, every positive offset-zero READ/CMPEXT is rejected:
+a newer remote truncate sequence can clip the WRITE below its requested length
+before setting a full-object digest (PrimaryLogPG.cc:6774–6782,6836–6840).
+The conservative boundary is therefore one byte, not the requested payload
+length. This applies even with zero request truncate fields, and survives
+intervening FAILOK operations and later writes. Neither the caller nor this
+transport establishes the remote object's truncate sequence or size.
 An actual native WRITEFULL/full-READ vector triggered a checksum failure:
 PrimaryLogPG::do_read compared committed bytes with the staged size/digest and
 marked the primary object unreadable. WRITE, APPEND and CMPEXT share relevant
 write/read paths in the pinned source; their same risk is source-derived,
 not an additional observed native failure. Unit tests reject all six guarded
-write/read-or-compare combinations before submission. Partial and EOF reads
-after replacement are separately verified; native checksum checks are not
+write/read-or-compare combinations before submission. Non-prefix partial and
+EOF reads after replacement are separately verified; native checksum checks are not
 disabled to claim broader support.
+The clipped-WRITE boundary extension is source-derived and checked by local
+v6/v8 admission and public known-unsent regressions, not another native failure
+reproduction. It changes no accepted operation's wire encoding.
 
 ## Identity, results and uncertainty
 

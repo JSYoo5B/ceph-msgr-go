@@ -969,9 +969,13 @@ CRC/AES/AES·IPv4·Darwin arm64 host relay의 3-BlueStore 구성에서 통과했
 version·ONDISK 및 native bytes/mtime을 비교했다. Append 완료 순서는
 가정하지 않고 record 집합을 비교하며, 자동 재실행은 없다.
 
-다만 nonempty WRITEFULL·APPEND·offset 0 WRITE 뒤 offset 0 READ/CMPEXT가
-앞선 payload 크기 이상을 검사하는 조합은 `ErrUnsupportedOSDOperation`으로
-송신 전에 거절한다. WRITEFULL 뒤 full READ는 실제 native checksum 실패를
+다만 nonempty WRITEFULL·APPEND 뒤 offset 0 READ/CMPEXT가 앞선 payload 크기
+이상을 검사하는 조합은 `ErrUnsupportedOSDOperation`으로 송신 전에 거절한다.
+offset 0의 nonempty WRITE 뒤에는 모든 양수 길이의 offset 0 READ/CMPEXT를
+거절한다. 원격 객체의 더 새로운 truncate sequence가 WRITE를 요청보다 짧게
+줄일 수 있어 요청 payload 크기를 안전 경계로 사용할 수 없기 때문이다.
+이 제한은 중간 FAILOK나 후속 쓰기가 있어도 유지한다.
+WRITEFULL 뒤 full READ는 실제 native checksum 실패를
 관찰했다. WRITE/APPEND/CMPEXT의 같은 위험은 pinned 소스의 공통 read/write
 경로에서 추론한 것으로 별도 실서버 실패 재현 주장은 아니다. Staged digest와
 committed bytes 비교로 객체가 unreadable이 될 수 있어 보수적으로 제한하며
