@@ -61,8 +61,11 @@ func FuzzXattrReplyDecode(f *testing.F) {
 					t.Fatal("xattr metadata acquired fabricated extents")
 				}
 				if op.Code == CompareXattr {
-					if op.Xattr.ComparisonMode != 1 || op.Xattr.ComparisonOp < 1 || op.Xattr.ComparisonOp > 6 {
+					if (op.Xattr.ComparisonMode != 1 && op.Xattr.ComparisonMode != 2) || op.Xattr.ComparisonOp < 1 || op.Xattr.ComparisonOp > 6 {
 						t.Fatal("unsupported xattr comparison accepted")
+					}
+					if op.Xattr.ComparisonMode == 2 && op.Xattr.ValueLength != 8 {
+						t.Fatal("numeric comparison accepted wrong operand width")
 					}
 				} else if op.Xattr.ComparisonMode != 0 || op.Xattr.ComparisonOp != 0 {
 					t.Fatal("noncomparison xattr acquired comparison semantics")

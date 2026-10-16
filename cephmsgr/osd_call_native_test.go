@@ -39,7 +39,7 @@ func TestOSDCallPublicRequestMatchesFreshNativePayload(t *testing.T) {
 	input := OSDRequest{ClientIncarnation: 1, MapEpoch: 11,
 		Object:           OSDObject{Pool: 7, Name: "call-codec", Key: "route-key", Namespace: "tenant", Hash: 0x11223344},
 		ModificationTime: OSDTime{Seconds: 1700000000, Nanoseconds: 5}, Operations: []OSDOperation{
-			{Code: OSDCompareXattr, Data: []byte("v"), Xattr: OSDXattrInput{Name: "a", Comparison: OSDXattrEqual}},
+			{Code: OSDCompareXattr, Data: []byte("v"), Xattr: OSDXattrInput{Name: "a", Comparison: OSDXattrEqual, Mode: OSDXattrString}},
 			nativeCallOperation(OSDCallWrite, "write_return_data", "T\x00\xff"),
 		}}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -24,6 +24,7 @@ func osdXattrOp(code OSDOpcode) OSDOperation {
 	case OSDGetXattrs:
 		op.Xattr.Name, op.Xattr.MaxOutputBytes = "", 64
 	case OSDCompareXattr:
+		op.Xattr.Mode = OSDXattrString
 		op.Xattr.Comparison, op.Data = OSDXattrGreater, []byte{0xff, 0, 10}
 	case OSDSetXattr:
 		op.Data = []byte{0xff, 0, 10}
@@ -84,6 +85,18 @@ func TestOSDXattrInvalidInputsNeverAllocateTIDOrSend(t *testing.T) {
 			op.Xattr.Comparison = OSDXattrEqual
 			check("comparison on non-CMP", []OSDOperation{op})
 		} else {
+			for _, mode := range []OSDXattrMode{0, 3, 255} {
+				op := base
+				op.Xattr.Mode = mode
+				check("missing or unsupported mode", []OSDOperation{op})
+			}
+			for _, length := range []int{0, 1, 7, 9, 16} {
+				op := base
+				op.Xattr.Mode = OSDXattrU64
+				op.Data = make([]byte, length)
+				check("wrong numeric operand width", []OSDOperation{op})
+			}
+
 			for _, comparison := range []OSDXattrComparison{0, 7, 255} {
 				op := base
 				op.Xattr.Comparison = comparison
@@ -166,7 +179,7 @@ func osdXattrSyntheticReply(t *testing.T, ops []OSDOperation, outputs [][]byte, 
 			e.U8(uint8(op.Xattr.Comparison))
 			mode := uint8(0)
 			if op.Code == OSDCompareXattr {
-				mode = 1
+				mode = uint8(op.Xattr.Mode)
 			}
 			e.U8(mode)
 			e.Raw(make([]byte, 18))
@@ -214,7 +227,7 @@ func TestOSDXattrSentVectorPreservesResultsAndFailsMalformedReplies(t *testing.T
 		{name: "changed echoed name length", ops: []OSDOperation{osdXattrOp(OSDSetXattr)}, outputs: [][]byte{nil}, results: []int32{0}, flags: OSDReplyOnDisk, invalid: true, edit: func(m *msgr.MessageData) { binary.LittleEndian.PutUint32(m.Front[68:72], 5) }},
 		{name: "SET returns unexpected output", ops: []OSDOperation{osdXattrOp(OSDSetXattr)}, outputs: [][]byte{{1}}, results: []int32{0}, flags: OSDReplyOnDisk, invalid: true},
 		{name: "nonzero packed reserved byte", ops: []OSDOperation{osdXattrOp(OSDSetXattr)}, outputs: [][]byte{nil}, results: []int32{0}, flags: OSDReplyOnDisk, invalid: true, edit: func(m *msgr.MessageData) { m.Front[78] = 1 }},
-		{name: "unsupported comparison mode", ops: []OSDOperation{osdXattrOp(OSDCompareXattr), osdXattrOp(OSDSetXattr)}, outputs: [][]byte{nil, nil}, results: []int32{1, 0}, flags: OSDReplyOnDisk, invalid: true, edit: func(m *msgr.MessageData) { m.Front[77] = 2 }},
+		{name: "different comparison mode", ops: []OSDOperation{osdXattrOp(OSDCompareXattr), osdXattrOp(OSDSetXattr)}, outputs: [][]byte{nil, nil}, results: []int32{1, 0}, flags: OSDReplyOnDisk, invalid: true, edit: func(m *msgr.MessageData) { m.Front[77] = 2 }},
 		{name: "truncated mixed reply data", ops: []OSDOperation{osdXattrOp(OSDGetXattr), osdXattrOp(OSDSetXattr)}, outputs: [][]byte{{1, 2}, nil}, results: []int32{0, 0}, flags: OSDReplyOnDisk, invalid: true, edit: func(m *msgr.MessageData) { m.Data = m.Data[:1] }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -317,7 +330,7 @@ func TestOSDXattrPublicResultsMatchFreshNativePayloads(t *testing.T) {
 	value := []byte{0, 0xff, 'A', 10}
 	get := OSDOperation{Code: OSDGetXattr, Xattr: OSDXattrInput{Name: name, MaxOutputBytes: 4}}
 	all := OSDOperation{Code: OSDGetXattrs, Xattr: OSDXattrInput{MaxOutputBytes: 34}}
-	cmp := OSDOperation{Code: OSDCompareXattr, Xattr: OSDXattrInput{Name: name, Comparison: OSDXattrEqual}, Data: value}
+	cmp := OSDOperation{Code: OSDCompareXattr, Xattr: OSDXattrInput{Name: name, Comparison: OSDXattrEqual, Mode: OSDXattrString}, Data: value}
 	for _, tc := range []struct {
 		fixture string
 		ops     []OSDOperation

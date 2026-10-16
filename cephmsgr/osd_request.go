@@ -305,7 +305,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		Operations: make([]osd.Operation, len(request.Operations)),
 		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots}
 	for i, op := range request.Operations {
-		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
+		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
 			AllocHint:    osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},
 			Watch:        watchWireInput(op.Watch),
 			SparseRead:   osd.SparseReadInput{MaxOutputBytes: op.SparseRead.MaxOutputBytes},

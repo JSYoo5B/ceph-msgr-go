@@ -54,6 +54,9 @@ func command(ctx context.Context, args []string) (result error) {
 	if len(args) != 0 && args[0] == "encode-osd-mutations" {
 		return nativeEncoderCommand(ctx, args[1:])
 	}
+	if len(args) != 0 && args[0] == "encode-osd-u64-xattrs" {
+		return runNativeEncoder(ctx, args[1:], u64XattrEncoderSpec)
+	}
 	if len(args) != 0 && args[0] == "encode-osd-xattrs" {
 		return runNativeEncoder(ctx, args[1:], xattrEncoderSpec)
 	}
@@ -375,6 +378,7 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	for field, value := range currentFixtureProviderIdentity() {
 		manifest[field] = value
 	}
+	manifest["native_u64_xattr_oracle"] = p.u64XattrOracle != ""
 	manifest["mds_fresh"] = p.mdsFresh == "1"
 	manifest["mds_commands"] = p.mdsCommands == "1"
 	manifest["mds_sessions"] = p.mdsSessions == "1"

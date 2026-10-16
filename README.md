@@ -639,7 +639,7 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
     MapEpoch: epoch, Object: object,
     Operations: []cephmsgr.OSDOperation{
         {Code: cephmsgr.OSDCompareXattr,
-         Xattr: cephmsgr.OSDXattrInput{Name: "tag", Comparison: cephmsgr.OSDXattrEqual},
+         Xattr: cephmsgr.OSDXattrInput{Name: "tag", Comparison: cephmsgr.OSDXattrEqual, Mode: cephmsgr.OSDXattrString},
          Data: expectedTag},
         {Code: cephmsgr.OSDSetXattr,
          Xattr: cephmsgr.OSDXattrInput{Name: "tag"}, Data: newTag},
@@ -648,8 +648,11 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 ```
 
 현재 SET/RM 뒤 같은 vector의 GET/GETALL/CMP는 staged-read 의미를 보장하지
-못해 송신 전에 거절한다. 비교를 먼저 놓는 순서가 지원된다. U64 비교,
-bulk SET/RESET, snapshot은 별도 미구현 단계다.
+못해 송신 전에 거절한다. 비교를 먼저 놓는 순서가 지원된다. 비교에는 `OSDXattrString` 또는
+`OSDXattrU64` 모드를 명시한다. U64 operand는 정확한 8-byte little-endian
+`Data`이고 저장값 해석은 서버에 맡긴다. 이 분기의 U64 구현은
+[별도 native 검증 대기 중](integration/fixture/OSD_U64_XATTR_VALIDATION.md)이다.
+Bulk SET/RESET은 별도 미구현 단계다.
 
 OMAP 읽기는 `Omap` 입력을 쓰며 extent·Version·Data·Xattr는 0이다.
 `StartAfter`는 exclusive cursor, `Prefix`는 GETVALS의 byte prefix이며

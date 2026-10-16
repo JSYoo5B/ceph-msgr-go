@@ -210,7 +210,7 @@ func TestCephOSDXattrsIntegration(t *testing.T) {
 	}
 	all := cephmsgr.OSDOperation{Code: cephmsgr.OSDGetXattrs, Xattr: cephmsgr.OSDXattrInput{MaxOutputBytes: 64 << 10}}
 	cmp := func(name string, comparison cephmsgr.OSDXattrComparison, operand []byte) cephmsgr.OSDOperation {
-		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCompareXattr, Xattr: cephmsgr.OSDXattrInput{Name: name, Comparison: comparison}, Data: operand}
+		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCompareXattr, Xattr: cephmsgr.OSDXattrInput{Name: name, Comparison: comparison, Mode: cephmsgr.OSDXattrString}, Data: operand}
 	}
 	defer func() {
 		restore, stop := context.WithTimeout(context.Background(), 15*time.Second)

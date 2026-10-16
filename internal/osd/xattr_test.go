@@ -84,7 +84,7 @@ func TestXattrInputValidationAndBudgets(t *testing.T) {
 		{"get-input-value", get, func(o *Operation) { o.Data = []byte{0} }, ErrRequest},
 		{"non-cmp-op", get, func(o *Operation) { o.Xattr.ComparisonOp = 1 }, ErrRequest},
 		{"non-cmp-mode", set, func(o *Operation) { o.Xattr.ComparisonMode = 1 }, ErrRequest},
-		{"unsupported-u64", cmp, func(o *Operation) { o.Xattr.ComparisonMode = 2 }, ErrOperation},
+		{"unknown-mode", cmp, func(o *Operation) { o.Xattr.ComparisonMode = 3 }, ErrOperation},
 		{"unknown-cmp", cmp, func(o *Operation) { o.Xattr.ComparisonOp = 7 }, ErrOperation},
 		{"missing-cmp", cmp, func(o *Operation) { o.Xattr.ComparisonOp = 0 }, ErrOperation},
 		{"cmp-output-budget", cmp, func(o *Operation) { o.Xattr.MaxOutputBytes = 1 }, ErrRequest},
@@ -206,7 +206,7 @@ func TestXattrReplyRawUnionAndMalformedReservedBytes(t *testing.T) {
 		{"reserved-last", GetXattr, func(m *msgr.MessageData) { m.Front[95] = 1 }, msgr.ErrFrame},
 		{"non-cmp-operator", GetXattr, func(m *msgr.MessageData) { m.Front[76] = 1 }, msgr.ErrFrame},
 		{"non-cmp-mode", GetXattr, func(m *msgr.MessageData) { m.Front[77] = 1 }, msgr.ErrFrame},
-		{"unsupported-u64", CompareXattr, func(m *msgr.MessageData) { m.Front[76], m.Front[77] = 1, 2 }, ErrOperation},
+		{"unknown-mode", CompareXattr, func(m *msgr.MessageData) { m.Front[76], m.Front[77] = 1, 3 }, ErrOperation},
 		{"unknown-operator", CompareXattr, func(m *msgr.MessageData) { m.Front[76], m.Front[77] = 7, 1 }, ErrOperation},
 		{"huge-payload", GetXattr, func(m *msgr.MessageData) { binary.LittleEndian.PutUint32(m.Front[96:100], math.MaxUint32) }, wire.ErrLimit},
 	} {

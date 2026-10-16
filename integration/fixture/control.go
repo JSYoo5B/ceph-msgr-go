@@ -630,6 +630,23 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-u64-xattr")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || c.profile.u64XattrOracle == "" || fields[1] != "compare" {
+			return errors.New("invalid native U64 xattr oracle request")
+		}
+		args := []string{"python3", "/out/osd_u64_xattr_oracle.py", "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-u64-xattr-command.json", "native U64 xattr oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-u64-xattr-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+
 	fields, err = c.request(out, "verify-osd-checksum")
 	if err != nil {
 		return err

@@ -9,8 +9,9 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 )
 
-// Current Tentacle comparison operands are caller-left. Only STRING mode is
-// supported: its values are length-delimited bytes, not normalized text.
+// Current Tentacle comparison operands are caller-left. STRING compares raw
+// bytes; U64 carries an eight-byte little-endian operand. Stored U64 values
+// are interpreted by the server as decimal text, never converted here.
 // https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/include/rados.h#L503
 const (
 	XattrCompareEqual        uint8 = 1
@@ -20,6 +21,7 @@ const (
 	XattrCompareLess         uint8 = 5
 	XattrCompareLessEqual    uint8 = 6
 	XattrCompareString       uint8 = 1
+	XattrCompareU64          uint8 = 2
 )
 
 // XattrInput is a request union variant; Data holds the SET/CMP operand.
@@ -79,8 +81,11 @@ func validateXattrOperation(op Operation, limit uint32) (uint64, uint64, error) 
 		if op.Xattr.MaxOutputBytes != 0 {
 			return 0, 0, ErrRequest
 		}
-		if op.Xattr.ComparisonMode != XattrCompareString || op.Xattr.ComparisonOp < XattrCompareEqual || op.Xattr.ComparisonOp > XattrCompareLessEqual {
+		if (op.Xattr.ComparisonMode != XattrCompareString && op.Xattr.ComparisonMode != XattrCompareU64) || op.Xattr.ComparisonOp < XattrCompareEqual || op.Xattr.ComparisonOp > XattrCompareLessEqual {
 			return 0, 0, ErrOperation
+		}
+		if op.Xattr.ComparisonMode == XattrCompareU64 && len(op.Data) != 8 {
+			return 0, 0, ErrRequest
 		}
 		return FlagRead, inputBytes, nil
 	case SetXattr:
@@ -149,8 +154,11 @@ func decodeXattrUnion(d *wire.Decoder, code uint16) XattrResult {
 		}
 	}
 	if code == CompareXattr {
-		if x.ComparisonMode != XattrCompareString || x.ComparisonOp < XattrCompareEqual || x.ComparisonOp > XattrCompareLessEqual {
+		if (x.ComparisonMode != XattrCompareString && x.ComparisonMode != XattrCompareU64) || x.ComparisonOp < XattrCompareEqual || x.ComparisonOp > XattrCompareLessEqual {
 			d.Fail(ErrOperation)
+		}
+		if x.ComparisonMode == XattrCompareU64 && x.ValueLength != 8 {
+			d.Fail(msgr.ErrFrame)
 		}
 	} else if x.ComparisonOp != 0 || x.ComparisonMode != 0 {
 		d.Fail(msgr.ErrFrame)

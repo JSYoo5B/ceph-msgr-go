@@ -88,7 +88,7 @@ func stageAssets(project, out string, p profile) error {
 			return err
 		}
 	}
-	return nil
+	return stageU64XattrOracle(project, out, p)
 }
 
 func buildTests(ctx context.Context, project, out, arch string, p profile) error {
