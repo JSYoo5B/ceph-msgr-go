@@ -58,14 +58,20 @@ func TestOSDWriteSamePublicFreshNativeReplies(t *testing.T) {
 				if !errors.As(got.e, &server) || server.Code != aggregate || errors.As(got.e, &unknown) {
 					t.Fatal("native signed refusal lost", got.e)
 				}
-			} else if got.e != nil {
-				t.Fatal(got.e)
+			} else {
+				// These logical native reply inputs explicitly supply ACK only;
+				// they prove wire encoding, never daemon commit or durability.
+				var unknown *OutcomeUnknownError
+				if !errors.As(got.e, &unknown) || !errors.Is(got.e, msgr.ErrFrame) {
+					t.Fatal("native ACK-only mutation established completion", got.e)
+				}
 			}
+
 			ws := got.r.Operations[0]
 			if got.r.Code != aggregate || ws.Result != perop || ws.Offset != ops[0].Offset || ws.Length != ops[0].Length || ws.WriteSamePatternLength != uint64(len(ops[0].Data)) || ws.TruncateSize != 0 || ws.TruncateSequence != 0 || got.r.Submission.Transaction != sent.Transaction || !bytes.Equal(got.r.RawFront, front) || !bytes.Equal(got.r.RawData, data) {
 				t.Fatal("native pattern, extent, signed result or raw receipt lost", got.r)
 			}
-			if o.session.Err() != nil || dials.Load() != 1 {
+			if aggregate < 0 && o.session.Err() != nil || dials.Load() != 1 {
 				t.Fatal("known native refusal reconnected")
 			}
 			select {

@@ -47,5 +47,8 @@ Current evidence: focused synthetic/unit/public tests and their race run pass;
 CGO-disabled product and fixture suites pass. Five fresh native v6 vectors were directly encoded and separately decoded by
 pinned Ceph; Go/public and fixture proof consumers pass. A separate public C++
 compound oracle compiled against the image librados and passed its loader audit.
-The two actual daemon fixture profiles remain pending.
+The logical native success/failok/zero reply inputs carry ACK alone; public
+consumers correctly retain them as unknown outcomes because ONDISK is missing.
+These wire vectors do not claim daemon execution. The two actual daemon
+fixture profiles remain pending.
 Synthetic tests do not establish native interoperability or zero-length effects.
