@@ -2,9 +2,10 @@
 
 `CEPH_MSGR_TEST_RBD=1` is a closed development-only extension of the opt-in
 OSD fixture (`CEPH_MSGR_TEST_OSD=1`). It selects only
-`^TestCephRBD(Base|Write|ExclusiveLock|Clone)Integration$` (an explicit
-`CEPH_MSGR_TEST_RUN` must be that selector; `go test` runs them in file order:
-`TestCephRBDBaseIntegration`, then `TestCephRBDCloneIntegration`, then
+`^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$` (an
+explicit `CEPH_MSGR_TEST_RUN` must be that selector; `go test` runs them in
+file order: `TestCephRBDBaseIntegration`, then `TestCephRBDCloneIntegration`,
+then `TestCephRBDJournalIntegration`, then
 `TestCephRBDExclusiveLockIntegration`, then `TestCephRBDWriteIntegration`) and
 requires the single-OSD `legacy-v6` recipe: one OSD
 (`CEPH_MSGR_TEST_OSD_REPLICAS=1`), the legacy CRUSH map and pools without
@@ -48,7 +49,13 @@ and `AttachChildRequest.cc` (clone format 2), `librbd/image/RefreshRequest.cc`
 `msg/DispatchQueue.cc` (the `debug_ms 1` lines), the `debug_rbd 20`
 `convert_copyup_extent_map` line of `CopyupRequest.cc`, `messages/MOSDOp.h` and
 `MOSDOpReply.h` (their print), `pybind/rbd/rbd.pyx` and
-`pybind/rados/rados.pyx` (LGPL-2.1 references; no code is copied). The
+`pybind/rados/rados.pyx`, and for the journaling image
+`cls/journal/cls_journal.cc`, `cls_journal_client.cc` and
+`cls_journal_types.cc`, `journal/Entry.cc`, `journal/JournalMetadata.cc`,
+`journal/JournalRecorder.cc`, `journal/ObjectRecorder.cc`,
+`journal/Journaler.cc`, `librbd/Journal.cc`,
+`librbd/journal/CreateRequest.cc`, `librbd/journal/Types.cc` and
+`tools/rbd/action/Journal.cc` (LGPL-2.1 references; no code is copied). The
 provider is `github.com/JSYoo5B/ceph-testcontainers-go` v0.2.0
 (`CreatePool`, `rbd.InitPool`, `WaitForClean`, `CreateClient`,
 `RunNativeCommand`, `RemovePool`, `DeleteClient`).
@@ -72,6 +79,7 @@ in `rbd-base-owned.json` before it is issued and marked `applied` or
 | `native-write-<action>` | on the write test's request, the image `ceph-msgr-write-<token>` (section "Write image and closed write control") |
 | `native-lock-<action>` | on the exclusive-lock test's request, the image `ceph-msgr-lock-<token>` (section "Lock image and closed lock control") |
 | `native-clone-<action>` | on the clone test's request, the parent `ceph-msgr-parent-<token>`, its snapshot and the clone `ceph-msgr-clone-<token>` (section "Clone images and closed clone control") |
+| `native-journal-<action>` | on the journaling test's request, the image `ceph-msgr-journal-<token>`, its journal and the native journal client `ceph-msgr-oracle-<token8>` (section "Journaling image and closed journal control") |
 
 Both identities hold RBD's standard capability profile bound to the owned
 pool. The Go client therefore authenticates and performs every RBD object
@@ -367,6 +375,74 @@ step must show is judged by the test. Each receipt is
 `rbd-clone-<action>.json` (request ID, plan, journaled action, decoded
 native output, bounded process result). Each action is bounded to 90 s.
 
+## Journaling image and closed journal control
+
+`TestCephRBDJournalIntegration` (see
+[RBD_JOURNAL_VALIDATION.md](RBD_JOURNAL_VALIDATION.md)) uses the same token,
+pool and both identities, and one more image that exists only once the test
+asks for it. Its fixed plan is part of the journal from preparation on
+(`journal_plan` in `rbd-base-owned.json`):
+
+| Plan value | Content |
+| --- | --- |
+| image | `ceph-msgr-journal-<token>`, format 2, order 16 (64 KiB objects), 256 KiB (four objects), features 69 (`layering`, `exclusive-lock`, `journaling`), default journal options (order 24, splay width 4, no journal pool) |
+| native journal client | `ceph-msgr-oracle-<token8>`, empty data, registered right after creation, so its commit position stays empty and `rbd journal inspect` replays every entry |
+| Go journal client | `ceph-msgr-mirror-<token8>` (registered and unregistered by the test, never by the fixture) |
+| setup events | writes 0 to 8 KiB, 72 to 80 KiB, 136 to 140 KiB, 196 to 204 KiB, then a discard of 192 to 256 KiB (object 3 whole) |
+| write events | writes 16 to 24 KiB, 80 to 84 KiB, then a discard of 128 to 192 KiB (object 2 whole) |
+| Go writes | 40 to 44 KiB and 100 to 104 KiB, appended by the test as journal entries only |
+
+Every write is at most 8 KiB (one AioWrite event below librbd's 16 KiB
+journal payload limit) and every discard covers a whole object (librbd's
+64 KiB discard granularity keeps it).
+
+The suite sends `rbd-journal` requests `<id> <token> <action>` through the
+control channel (`rbd-journal-completed.<id>` acknowledgement). The actions
+form a closed sequence, each admitted once and only after its predecessor:
+`setup`, `observe-registered`, `write`, `observe-committed`, `inspect`,
+`replay`. Each is journaled in `rbd-base-owned.json` as
+`native-journal-<action>` before the native process starts; the two
+observations carry `read_only: true`. `inspect` is journaled as a mutation
+because `rbd journal inspect` registers and unregisters its own `INSPECT`
+journal client. The driver (Python `rbd`/`rados` bindings, librbd cache
+disabled, `err_to_stderr` only) re-checks every name against the token and
+the feature set 69.
+
+- `setup` requires the pool to hold the base image and at most the clone
+  test's parent and clone, creates the image, registers the native journal
+  client with a librados `exec` of `journal.client_register`, then opens the
+  image read-write, applies the setup events and closes it (the first write
+  takes the exclusive lock and opens the journal; closing flushes the commit
+  position).
+- `write` applies the write events the same way.
+- `replay` opens the image read-write and calls `lock_acquire(exclusive)`,
+  which opens the journal and replays every entry after the image client's
+  commit position, records `is_exclusive_lock_owner()` and closes the image.
+- Every action ends with a read-only observation: librbd views (stat,
+  features, flags, lockers, watchers) and a librbd read of the whole image;
+  a native librados `exec` list with raw inputs and outputs on
+  `journal.<image id>`: `get_order`, `get_splay_width`, `get_pool_id`,
+  `get_minimum_set`, `get_active_set`, `client_list("", 256)`, `get_client`
+  of the image client `""`, of the Go client and of the native client,
+  `get_next_tag_tid` and `tag_list(0, 256, "", Some(0))`; librados
+  `stat`/`read` of the journal data objects
+  `journal_data.<pool id>.<image id>.<n>` for n 0 to 7 (object sets 0 and
+  1); `rbd journal info --format json` and `rbd journal status --format json`
+  on `<pool>/<image id>`; and for `setup`, `inspect` and `replay`
+  `rbd journal inspect --verbose`, whose entries (tag, commit tid, the
+  EventEntry dump) and summary the driver parses. The binary views are
+  published as `rbd-journal-<action>-image-head.bin` and
+  `-journal-objects.bin`.
+
+The fixture checks the structure of each output (identity, names, the plan,
+image layout and features, the exec list, object and blob consistency, the
+command lines and parsed outputs, the events); which clients, positions,
+tags, entries and image bytes each step must show is judged by the test.
+Each receipt is `rbd-journal-<action>.json` (request ID, plan, journaled
+action, decoded native output, bounded process result). Each action is
+bounded to 240 s. The lock and write drivers' setup actions admit the
+journaling image in the pool.
+
 ## Uncertain outcomes and cleanup
 
 A failed, killed or truncated native process is an error: its output is
@@ -375,9 +451,10 @@ stops (as for the other fixture controls). Cleanup runs once (in the runner
 after the suites, and again from `Terminate`, which returns the cached
 result) and writes `rbd-base-cleanup.json`: it removes the owned pool with
 the provider's `RemovePool` (temporarily allowing pool deletion in the MON
-configuration database and removing the pool's CRUSH rule; the five images, their
+configuration database and removing the pool's CRUSH rule; the six images, their
 snapshots, the clone's parent link, image metadata, lock attributes, the lock
-image's object map and any lingering watch go with the pool), proves the pool's absence
+image's object map, the journaling image's journal header and data objects
+and any lingering watch go with the pool), proves the pool's absence
 by name and ID in a fresh native OSDMap, and deletes both identities. An
 intended identity whose creation outcome is unknown is reported as an error.
 
@@ -387,9 +464,10 @@ intended identity whose creation outcome is unknown is reported as an error.
 `rbd-base-result.json`, `rbd-base-watch-state.json`, `rbd-base-cleanup.json`,
 the six `rbd-write-<action>.json` receipts, `rbd-write-watch-state.json`, the
 three `rbd-lock-<action>.json` receipts, `rbd-lock-state.json`, the six
-`rbd-clone-<action>.json` receipts and the suites' own
-`rbd-base-results.json`, `rbd-write-results.json`, `rbd-lock-results.json` and
-`rbd-clone-results.json` are on the diagnostics allowlist.
+`rbd-clone-<action>.json` receipts, the six `rbd-journal-<action>.json`
+receipts and the suites' own `rbd-base-results.json`,
+`rbd-write-results.json`, `rbd-lock-results.json`, `rbd-clone-results.json`
+and `rbd-journal-results.json` are on the diagnostics allowlist.
 The binary views and the keys are not archived.
 
 ## Unit coverage
@@ -437,3 +515,16 @@ the clone driver parses as Python. `TestRBDCloneTestOnlyEncodings` in
 context decoders (truncations and trailing bytes), the `sparse_copyup` input
 encoding, the partial and full copy-up extents, extent merging, sparse
 expansion and the Messenger line parser and request/reply pairing.
+`integration/fixture/rbd_journal_test.go` checks the token-bound journal plan
+(bounded writes, whole-object discards), that the lock and write drivers
+admit the journaling image, the closed and ordered journal request sequence
+and its read-only marking, the closed-shape decoding of every journal action
+(the exec list, the eight journal objects, the command lines, the events only
+for `setup` and `write`, the replay fields only for `replay`) and that the
+journal driver parses as Python. `TestRBDJournalTestOnlyEncodings` in
+`integration/rbd_journal_test.go` checks the seed-0 CRC-32C against Ceph's
+own test vectors, the Entry framing, padding walk and CRC refusal, the
+AioWrite and AioDiscard EventEntry encodings, `ObjectSetPosition`,
+`cls::journal::Client`, `TagData`, `MirrorPeerClientMeta` and
+`ImageClientMeta`, the commit-position rule, the hexdump parser and the
+list inputs.
