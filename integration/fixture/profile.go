@@ -28,6 +28,7 @@ type profile struct {
 	mdsCephFSCompletionIdentity, mdsCephFSCompletion                      string
 	mdsCephFSDataIdentity, mdsCephFSData                                  string
 	mdsFresh, mdsCommands, mdsSessions, mdsCephFS, mdsCephFSRanks         string
+	mdsCephFSRanksReplay                                                  string
 	rbdBase, rbdBaseIdentity                                              string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
@@ -52,6 +53,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		mdsSessions:          value("CEPH_MSGR_TEST_MDS_SESSIONS", "0"),
 		mdsCephFS:            value("CEPH_MSGR_TEST_MDS_CEPHFS", "0"),
 		mdsCephFSRanks:       value("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS", "0"),
+		mdsCephFSRanksReplay: value("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY", "0"),
 		mdsCephFSCompletion:  value("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION", "0"),
 		mdsCephFSData:        value("CEPH_MSGR_TEST_MDS_CEPHFS_DATA", "0"),
 		rbdBase:              value("CEPH_MSGR_TEST_RBD", "0"),
@@ -91,6 +93,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_MDS_SESSIONS", p.mdsSessions, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_CEPHFS", p.mdsCephFS, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS", p.mdsCephFSRanks, []string{"0", "1"}},
+		{"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY", p.mdsCephFSRanksReplay, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION", p.mdsCephFSCompletion, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_CEPHFS_DATA", p.mdsCephFSData, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_RBD", p.rbdBase, []string{"0", "1"}},
@@ -211,6 +214,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	if p.mdsCephFSRanks == "1" && (p.mdsFresh != "1" || p.mdsCommands == "1" || p.mdsSessions == "1" || p.mdsCephFS == "1") {
 		return profile{}, fmt.Errorf("MDS CephFS multi-rank acceptance requires CEPH_MSGR_TEST_MDS_FRESH=1 and excludes CEPH_MSGR_TEST_MDS_COMMANDS, CEPH_MSGR_TEST_MDS_SESSIONS and CEPH_MSGR_TEST_MDS_CEPHFS")
 	}
+	if p.mdsCephFSRanksReplay == "1" && p.mdsCephFSRanks != "1" {
+		return profile{}, fmt.Errorf("MDS CephFS standby-replay acceptance extends CEPH_MSGR_TEST_MDS_CEPHFS_RANKS=1")
+	}
 	if p.mdsCephFSCompletion == "1" && (p.mdsFresh != "1" || p.mdsCommands == "1" || p.mdsSessions == "1" || p.mdsCephFS == "1" || p.mdsCephFSRanks == "1") {
 		return profile{}, fmt.Errorf("MDS CephFS completion acceptance requires CEPH_MSGR_TEST_MDS_FRESH=1 and excludes CEPH_MSGR_TEST_MDS_COMMANDS, CEPH_MSGR_TEST_MDS_SESSIONS, CEPH_MSGR_TEST_MDS_CEPHFS and CEPH_MSGR_TEST_MDS_CEPHFS_RANKS")
 	}
@@ -230,6 +236,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		if p.mdsCephFSRanks == "1" {
 			selected = "^TestCephMDSCephFSRanksIntegration$"
+			if p.mdsCephFSRanksReplay == "1" {
+				selected = "^TestCephMDSCephFSRanksReplayIntegration$"
+			}
 		}
 		if p.mdsCephFSCompletion == "1" {
 			selected = "^TestCephMDSCephFSCompletionIntegration$"
@@ -273,9 +282,14 @@ func (p profile) mdsPublicClient() bool {
 	return p.mdsCommands == "1" || p.mdsSessions == "1" || p.mdsCephFS == "1" || p.mdsCephFSRanks == "1" || p.mdsCephFSCompletion == "1" || p.mdsCephFSData == "1"
 }
 
-// mdsFreshTopology is the owned filesystem's MDS shape: one active rank, or
-// two active ranks and one standby for the multi-rank acceptance.
+// mdsFreshTopology is the owned filesystem's MDS shape: one active rank, two
+// active ranks and one standby for the multi-rank acceptance, or three active
+// ranks and one standby (later a standby-replay follower) for its
+// standby-replay extension.
 func (p profile) mdsFreshTopology() (active, standby int) {
+	if p.mdsCephFSRanks == "1" && p.mdsCephFSRanksReplay == "1" {
+		return 3, 1
+	}
 	if p.mdsCephFSRanks == "1" {
 		return 2, 1
 	}
@@ -286,6 +300,11 @@ func (p profile) mdsFreshTopology() (active, standby int) {
 // acceptance restore or verify owned filesystem, configuration, blocklist and
 // identity state before removal.
 func (p profile) cleanupBudget() time.Duration {
+	if p.mdsCephFSRanksReplay == "1" {
+		// Four owned daemons, a runtime journal pause to verify discarded or
+		// restored, nested pins and the follower's return after the takeover.
+		return 4 * time.Minute
+	}
 	if p.mdsCephFSRanks == "1" || p.mdsCephFSCompletion == "1" {
 		// Pin restoration, standby return and three owned daemons; or the
 		// completion acceptance's runtime, central and blocklist restoration
@@ -309,34 +328,35 @@ func (p profile) monitors() string { return p.monAddresses }
 
 func (p profile) containerEnvironment() map[string]string {
 	return map[string]string{
-		"CEPH_MSGR_TEST_MDS_FRESH":              p.mdsFresh,
-		"CEPH_MSGR_TEST_MDS_COMMANDS":           p.mdsCommands,
-		"CEPH_MSGR_TEST_MDS_SESSIONS":           p.mdsSessions,
-		"CEPH_MSGR_TEST_MDS_CEPHFS":             p.mdsCephFS,
-		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS":       p.mdsCephFSRanks,
-		"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION":  p.mdsCephFSCompletion,
-		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":        p.mdsCephFSData,
-		"CEPH_MSGR_TEST_RBD":                    p.rbdBase,
-		"CEPH_MSGR_TEST_KEY_TYPE":               p.keyType,
-		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
-		"CEPH_MSGR_TEST_IP_FAMILY":              p.ipFamily,
-		"CEPH_MSGR_TEST_MGR_COUNT":              p.mgrCount,
-		"CEPH_MSGR_TEST_RUNTIME":                p.runtime,
-		"CEPH_MSGR_TEST_RACE":                   p.race,
-		"CEPH_MSGR_TEST_EXPIRE_TICKETS":         p.expireTickets,
-		"CEPH_MSGR_TEST_IDLE_SESSIONS":          p.idleSessions,
-		"CEPH_MSGR_TEST_AUTH_EPOCH":             p.authEpoch,
-		"CEPH_MSGR_TEST_SHORT_TICKETS":          p.shortTickets,
-		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": p.nativeMgrPreparation,
-		"CEPH_MSGR_TEST_MODE_REJECTION":         p.modeRejection,
-		"CEPH_MSGR_TEST_CONNECTION_MODE":        p.connectionMode,
-		"CEPH_MSGR_TEST_MAPPED_IPV6":            p.mappedIPv6,
-		"CEPH_MSGR_TEST_OSD":                    p.osd,
-		"CEPH_MSGR_TEST_OSD_STORE":              p.osdStore,
-		"CEPH_MSGR_TEST_OSD_REPLICAS":           p.osdReplicas,
-		"CEPH_MSGR_TEST_OSD_PROFILE":            p.osdProfile,
-		"CEPH_MSGR_STRESS_DURATION":             p.stressDuration,
-		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS":    "1",
+		"CEPH_MSGR_TEST_MDS_FRESH":               p.mdsFresh,
+		"CEPH_MSGR_TEST_MDS_COMMANDS":            p.mdsCommands,
+		"CEPH_MSGR_TEST_MDS_SESSIONS":            p.mdsSessions,
+		"CEPH_MSGR_TEST_MDS_CEPHFS":              p.mdsCephFS,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS":        p.mdsCephFSRanks,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY": p.mdsCephFSRanksReplay,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION":   p.mdsCephFSCompletion,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":         p.mdsCephFSData,
+		"CEPH_MSGR_TEST_RBD":                     p.rbdBase,
+		"CEPH_MSGR_TEST_KEY_TYPE":                p.keyType,
+		"CEPH_MSGR_TEST_SERVICE_CIPHER":          p.serviceCipher,
+		"CEPH_MSGR_TEST_IP_FAMILY":               p.ipFamily,
+		"CEPH_MSGR_TEST_MGR_COUNT":               p.mgrCount,
+		"CEPH_MSGR_TEST_RUNTIME":                 p.runtime,
+		"CEPH_MSGR_TEST_RACE":                    p.race,
+		"CEPH_MSGR_TEST_EXPIRE_TICKETS":          p.expireTickets,
+		"CEPH_MSGR_TEST_IDLE_SESSIONS":           p.idleSessions,
+		"CEPH_MSGR_TEST_AUTH_EPOCH":              p.authEpoch,
+		"CEPH_MSGR_TEST_SHORT_TICKETS":           p.shortTickets,
+		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION":  p.nativeMgrPreparation,
+		"CEPH_MSGR_TEST_MODE_REJECTION":          p.modeRejection,
+		"CEPH_MSGR_TEST_CONNECTION_MODE":         p.connectionMode,
+		"CEPH_MSGR_TEST_MAPPED_IPV6":             p.mappedIPv6,
+		"CEPH_MSGR_TEST_OSD":                     p.osd,
+		"CEPH_MSGR_TEST_OSD_STORE":               p.osdStore,
+		"CEPH_MSGR_TEST_OSD_REPLICAS":            p.osdReplicas,
+		"CEPH_MSGR_TEST_OSD_PROFILE":             p.osdProfile,
+		"CEPH_MSGR_STRESS_DURATION":              p.stressDuration,
+		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS":     "1",
 	}
 }
 
@@ -346,39 +366,40 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		marker = "1"
 	}
 	result := map[string]string{
-		"CEPH_MSGR_TEST_MDS_FRESH":              p.mdsFresh,
-		"CEPH_MSGR_TEST_MDS_COMMANDS":           p.mdsCommands,
-		"CEPH_MSGR_TEST_MDS_SESSIONS":           p.mdsSessions,
-		"CEPH_MSGR_TEST_MDS_CEPHFS":             p.mdsCephFS,
-		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS":       p.mdsCephFSRanks,
-		"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION":  p.mdsCephFSCompletion,
-		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":        p.mdsCephFSData,
-		"CEPH_MSGR_TEST_RBD":                    p.rbdBase,
-		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":   marker,
-		"CEPH_MSGR_MONITORS":                    p.monitors(),
-		"CEPH_MSGR_KEY_FILE":                    filepath.Join(controlDir, "key"),
-		"CEPH_MSGR_IDENTITY":                    "client.test",
-		"CEPH_MSGR_FSID":                        p.fsid,
-		"CEPH_MSGR_TEST_PEERS":                  p.peers,
-		"CEPH_MSGR_CONTROL_DIR":                 controlDir,
-		"CEPH_MSGR_TEST_KEY_TYPE":               p.keyType,
-		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
-		"CEPH_MSGR_TEST_MGR_COUNT":              p.mgrCount,
-		"CEPH_MSGR_TEST_EXPIRE_TICKETS":         p.expireTickets,
-		"CEPH_MSGR_TEST_IDLE_SESSIONS":          p.idleSessions,
-		"CEPH_MSGR_TEST_AUTH_EPOCH":             p.authEpoch,
-		"CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES":      p.authEpochCycles,
-		"CEPH_MSGR_TEST_SHORT_TICKETS":          p.shortTickets,
-		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": p.nativeMgrPreparation,
-		"CEPH_MSGR_TEST_MODE_REJECTION":         p.modeRejection,
-		"CEPH_MSGR_TEST_CONNECTION_MODE":        p.connectionMode,
-		"CEPH_MSGR_TEST_MAPPED_IPV6":            p.mappedIPv6,
-		"CEPH_MSGR_TEST_OSD":                    p.osd,
-		"CEPH_MSGR_TEST_OSD_STORE":              p.osdStore,
-		"CEPH_MSGR_TEST_OSD_REPLICAS":           p.osdReplicas,
-		"CEPH_MSGR_TEST_OSD_PROFILE":            p.osdProfile,
-		"CEPH_MSGR_STRESS_DURATION":             p.stressDuration,
-		"CEPH_MSGR_TEST_PROXY":                  proxy,
+		"CEPH_MSGR_TEST_MDS_FRESH":               p.mdsFresh,
+		"CEPH_MSGR_TEST_MDS_COMMANDS":            p.mdsCommands,
+		"CEPH_MSGR_TEST_MDS_SESSIONS":            p.mdsSessions,
+		"CEPH_MSGR_TEST_MDS_CEPHFS":              p.mdsCephFS,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS":        p.mdsCephFSRanks,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY": p.mdsCephFSRanksReplay,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION":   p.mdsCephFSCompletion,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":         p.mdsCephFSData,
+		"CEPH_MSGR_TEST_RBD":                     p.rbdBase,
+		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    marker,
+		"CEPH_MSGR_MONITORS":                     p.monitors(),
+		"CEPH_MSGR_KEY_FILE":                     filepath.Join(controlDir, "key"),
+		"CEPH_MSGR_IDENTITY":                     "client.test",
+		"CEPH_MSGR_FSID":                         p.fsid,
+		"CEPH_MSGR_TEST_PEERS":                   p.peers,
+		"CEPH_MSGR_CONTROL_DIR":                  controlDir,
+		"CEPH_MSGR_TEST_KEY_TYPE":                p.keyType,
+		"CEPH_MSGR_TEST_SERVICE_CIPHER":          p.serviceCipher,
+		"CEPH_MSGR_TEST_MGR_COUNT":               p.mgrCount,
+		"CEPH_MSGR_TEST_EXPIRE_TICKETS":          p.expireTickets,
+		"CEPH_MSGR_TEST_IDLE_SESSIONS":           p.idleSessions,
+		"CEPH_MSGR_TEST_AUTH_EPOCH":              p.authEpoch,
+		"CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES":       p.authEpochCycles,
+		"CEPH_MSGR_TEST_SHORT_TICKETS":           p.shortTickets,
+		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION":  p.nativeMgrPreparation,
+		"CEPH_MSGR_TEST_MODE_REJECTION":          p.modeRejection,
+		"CEPH_MSGR_TEST_CONNECTION_MODE":         p.connectionMode,
+		"CEPH_MSGR_TEST_MAPPED_IPV6":             p.mappedIPv6,
+		"CEPH_MSGR_TEST_OSD":                     p.osd,
+		"CEPH_MSGR_TEST_OSD_STORE":               p.osdStore,
+		"CEPH_MSGR_TEST_OSD_REPLICAS":            p.osdReplicas,
+		"CEPH_MSGR_TEST_OSD_PROFILE":             p.osdProfile,
+		"CEPH_MSGR_STRESS_DURATION":              p.stressDuration,
+		"CEPH_MSGR_TEST_PROXY":                   proxy,
 	}
 	if p.mdsFresh == "1" {
 		result["CEPH_MSGR_MDS_FRESH_IDENTITY"] = p.mdsFreshIdentity

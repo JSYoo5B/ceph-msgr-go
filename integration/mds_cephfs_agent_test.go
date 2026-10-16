@@ -308,7 +308,16 @@ type cephfsFlushEvent struct {
 	Sequence    uint64
 	AgentPushes uint64
 	Acked       time.Time
-	Error       string `json:",omitempty"`
+	// HeldFor is set when the test held this acknowledgement (holdNextFlush).
+	HeldFor time.Duration `json:",omitempty"`
+	Error   string        `json:",omitempty"`
+}
+
+// cephfsFlushHold delays the acknowledgement of the next FLUSHMSG until the
+// test releases it (bounded). Received closes when that FLUSHMSG arrives.
+type cephfsFlushHold struct {
+	received, release chan struct{}
+	limit             time.Duration
 }
 
 // cephfsDirtyFile is the write state of one file the test wrote through this
@@ -419,6 +428,7 @@ type cephfsCapAgent struct {
 	quotas     []cephfsQuotaEvent
 	recalls    []cephfsRecallEvent
 	flushes    []cephfsFlushEvent
+	flushHold  *cephfsFlushHold
 	// rank and peers are set for one client's sessions with several ranks:
 	// peers maps every rank to its current agent, all sharing mu.
 	rank       int32
@@ -504,6 +514,33 @@ func (a *cephfsCapAgent) handleLocked(e cephmsgr.MDSSessionEvent) {
 			// Native clients flush pending cap releases, then acknowledge. This
 			// agent sends releases at once, so nothing is pending here.
 			ev := cephfsFlushEvent{Arrival: e.Arrival, Received: e.Received, Sequence: e.Sequence, AgentPushes: a.pushes}
+			if h := a.flushHold; h != nil {
+				// The test holds this acknowledgement: a migration's exporter
+				// waits for it with the subtree frozen. The answer follows the
+				// release without the shared lock.
+				a.flushHold = nil
+				index, seq := len(a.flushes), e.Sequence
+				a.flushes = append(a.flushes, ev)
+				close(h.received)
+				go func() {
+					select {
+					case <-h.release:
+					case <-time.After(h.limit):
+					}
+					err := a.send(func(ctx context.Context) error { return a.s.AcknowledgeFlush(ctx, seq) })
+					a.mu.Lock()
+					defer a.mu.Unlock()
+					f := &a.flushes[index]
+					f.Acked = time.Now()
+					f.HeldFor = f.Acked.Sub(f.Received)
+					if err != nil {
+						f.Error = err.Error()
+						a.failLocked("held flush acknowledgement: %v", err)
+					}
+				}()
+				r.Note = fmt.Sprintf("flushmsg seq=%d agent_pushes=%d held", e.Sequence, a.pushes)
+				break
+			}
 			err := a.send(func(ctx context.Context) error { return a.s.AcknowledgeFlush(ctx, e.Sequence) })
 			ev.Acked = time.Now()
 			if err != nil {
@@ -678,6 +715,17 @@ func (a *cephfsCapAgent) realm(ino uint64) (cephmsgr.MDSSnapRealm, bool) {
 	defer a.mu.Unlock()
 	r, ok := a.realms[ino]
 	return r, ok
+}
+
+// holdNextFlush holds the acknowledgement of the next FLUSHMSG until release
+// is called or limit elapses. received closes when that FLUSHMSG arrives.
+func (a *cephfsCapAgent) holdNextFlush(limit time.Duration) (received <-chan struct{}, release func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	h := &cephfsFlushHold{received: make(chan struct{}), release: make(chan struct{}), limit: limit}
+	a.flushHold = h
+	var once sync.Once
+	return h.received, func() { once.Do(func() { close(h.release) }) }
 }
 
 // holdLease delays the RELEASE answering the next REVOKE of one dentry name.

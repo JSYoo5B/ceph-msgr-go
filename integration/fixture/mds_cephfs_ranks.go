@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -38,17 +39,39 @@ import (
 const mdsCephFSRanksJSONLimit = 64 << 10
 
 // mdsCephFSRanksPlan is the fixed namespace of one run. The Go client creates
-// it; the fixture only stats it and pins its two subdirectories.
+// it; the fixture only stats and lists it and pins its subdirectories. The
+// standby-replay extension adds a forward chain (chain pinned to rank 1,
+// chain/hop to rank 2), a directory exported while Go mutations wait on its
+// frozen subtree, and a directory for the takeover's in-flight requests.
 type mdsCephFSRanksPlan struct {
-	Directory    string   `json:"directory"`
-	Forward      string   `json:"forward"`
-	ForwardFile  string   `json:"forward_file"`
-	Migrate      string   `json:"migrate"`
-	MigrateFiles []string `json:"migrate_files"`
+	Directory     string   `json:"directory"`
+	Forward       string   `json:"forward"`
+	ForwardFile   string   `json:"forward_file"`
+	Migrate       string   `json:"migrate"`
+	MigrateFiles  []string `json:"migrate_files"`
+	Chain         string   `json:"chain,omitempty"`
+	ChainFiles    []string `json:"chain_files,omitempty"`
+	Inflight      string   `json:"inflight,omitempty"`
+	InflightFiles []string `json:"inflight_files,omitempty"`
+	Replayed      string   `json:"replayed,omitempty"`
+	ReplayedFiles []string `json:"replayed_files,omitempty"`
 }
 
-func mdsCephFSRanksPlanFor(token string) mdsCephFSRanksPlan {
-	return mdsCephFSRanksPlan{Directory: "ceph-msgr-ranks-" + token, Forward: "fwd", ForwardFile: "target", Migrate: "mig", MigrateFiles: []string{"file-0", "file-1", "file-2"}}
+func mdsCephFSRanksPlanFor(token string, replay bool) mdsCephFSRanksPlan {
+	p := mdsCephFSRanksPlan{Directory: "ceph-msgr-ranks-" + token, Forward: "fwd", ForwardFile: "target", Migrate: "mig", MigrateFiles: []string{"file-0", "file-1", "file-2"}}
+	if replay {
+		p.Chain, p.ChainFiles = "chain/hop", []string{"anchor", "forwarded-file", "forwarded-dir"}
+		p.Inflight, p.InflightFiles = "inflight", []string{"anchor", "held-file", "held-dir"}
+		p.Replayed, p.ReplayedFiles = "replay", []string{"safe-0", "safe-1", "inflight-file", "inflight-dir"}
+	}
+	return p
+}
+
+// chainParent is the chain's first directory (chain); Chain names its nested
+// directory (chain/hop).
+func (p mdsCephFSRanksPlan) chainParent() string {
+	parent, _, _ := strings.Cut(p.Chain, "/")
+	return parent
 }
 
 // targets lists the closed target names of the plan.
@@ -57,11 +80,40 @@ func (p mdsCephFSRanksPlan) targets() []string {
 	for _, name := range p.MigrateFiles {
 		result = append(result, p.Migrate+"/"+name)
 	}
+	if p.Chain == "" {
+		return result
+	}
+	result = append(result, p.chainParent())
+	for _, d := range []struct {
+		name  string
+		files []string
+	}{{p.Chain, p.ChainFiles}, {p.Inflight, p.InflightFiles}, {p.Replayed, p.ReplayedFiles}} {
+		result = append(result, d.name)
+		for _, name := range d.files {
+			result = append(result, d.name+"/"+name)
+		}
+	}
+	return result
+}
+
+// pinTargets lists the directories the fixture may pin, in restoration order
+// (a nested directory before its parent).
+func (p mdsCephFSRanksPlan) pinTargets() []string {
+	result := []string{p.Forward, p.Migrate}
+	if p.Chain != "" {
+		result = append(result, p.Chain, p.chainParent(), p.Inflight)
+	}
 	return result
 }
 
 func (p mdsCephFSRanksPlan) pinTarget(target string) bool {
-	return target == p.Forward || target == p.Migrate
+	return slices.Contains(p.pinTargets(), target)
+}
+
+// listTarget reports the directories the native oracle may list (the
+// standby-replay extension only).
+func (p mdsCephFSRanksPlan) listTarget(target string) bool {
+	return p.Chain != "" && (target == "dir" || target == p.Chain || target == p.Inflight || target == p.Replayed)
 }
 
 // path maps a closed target name to its absolute path in the owned filesystem.
@@ -108,7 +160,9 @@ func (d *mdsCephFSRanksDaemon) same(o *mdsCephFSRanksDaemon) bool {
 }
 
 // mdsCephFSRanksTopology is one native `fs dump` of the owned filesystem.
-// Ranks is indexed by rank and holds nil for a rank that is not up.
+// Ranks is indexed by rank and holds nil for a rank that is not up. Daemons
+// lists every daemon of the MDSMap, standby-replay followers included;
+// Followers lists those followers (their Rank is the rank they follow).
 type mdsCephFSRanksTopology struct {
 	FSMapEpoch    uint32                  `json:"fsmap_epoch"`
 	MDSMapEpoch   uint32                  `json:"mdsmap_epoch"`
@@ -118,7 +172,28 @@ type mdsCephFSRanksTopology struct {
 	Ranks         []*mdsCephFSRanksDaemon `json:"ranks"`
 	Daemons       []mdsCephFSRanksDaemon  `json:"daemons"`
 	Standbys      []mdsCephFSRanksDaemon  `json:"owned_standbys"`
+	Followers     []mdsCephFSRanksDaemon  `json:"standby_replay"`
 	OtherStandbys int                     `json:"other_standbys"`
+}
+
+// mdsCephFSRanksShape is the steady topology one profile expects: the number
+// of active ranks and whether its one spare daemon is a standby-replay
+// follower of rank 0 instead of an ordinary standby.
+type mdsCephFSRanksShape struct {
+	Ranks  int  `json:"ranks"`
+	Follow bool `json:"follow"`
+}
+
+// spare returns the one spare daemon of a stable topology: the owned standby
+// or the standby-replay follower.
+func (t mdsCephFSRanksTopology) spare() *mdsCephFSRanksDaemon {
+	if len(t.Standbys) == 1 && len(t.Followers) == 0 {
+		return &t.Standbys[0]
+	}
+	if len(t.Followers) == 1 && len(t.Standbys) == 0 {
+		return &t.Followers[0]
+	}
+	return nil
 }
 
 // parseMDSCephFSRanksTopology reads one native `fs dump`. Only the owned
@@ -174,11 +249,21 @@ func parseMDSCephFSRanksTopology(dump []byte, oracle mdsFreshOracle, family stri
 	if t.Failed == nil {
 		t.Failed = []int{}
 	}
-	t.Daemons, t.Standbys = []mdsCephFSRanksDaemon{}, []mdsCephFSRanksDaemon{}
+	t.Daemons, t.Standbys, t.Followers = []mdsCephFSRanksDaemon{}, []mdsCephFSRanksDaemon{}, []mdsCephFSRanksDaemon{}
 	for _, d := range m.Info {
 		t.Daemons = append(t.Daemons, describe(d))
+		if d.State == "up:standby-replay" {
+			t.Followers = append(t.Followers, describe(d))
+		}
 	}
-	slices.SortFunc(t.Daemons, func(a, b mdsCephFSRanksDaemon) int { return int(a.Rank) - int(b.Rank) })
+	byRankName := func(a, b mdsCephFSRanksDaemon) int {
+		if a.Rank != b.Rank {
+			return int(a.Rank) - int(b.Rank)
+		}
+		return strings.Compare(a.Name, b.Name)
+	}
+	slices.SortFunc(t.Daemons, byRankName)
+	slices.SortFunc(t.Followers, byRankName)
 	if m.MaxMDS < 0 || m.MaxMDS > 8 {
 		return t, errors.New("MDS CephFS ranks max_mds exceeds its bound")
 	}
@@ -206,20 +291,33 @@ func parseMDSCephFSRanksTopology(dump []byte, oracle mdsFreshOracle, family stri
 	return t, nil
 }
 
-// stable requires the steady topology: ranks 0 and 1 up:active on two owned
-// daemons with an address of the selected family, nothing failed, and exactly
-// one owned standby.
-func (t mdsCephFSRanksTopology) stable(owned func(string) bool) error {
-	if t.MaxMDS != 2 || !reflect.DeepEqual(t.In, []int{0, 1}) || len(t.Failed) != 0 || len(t.Daemons) != 2 || len(t.Ranks) != 2 || len(t.Standbys) != 1 || t.OtherStandbys != 0 {
-		return errors.New("MDS CephFS ranks topology is not two active ranks and one standby")
+// stable requires the steady topology of shape: ranks 0..n-1 up:active on n
+// owned daemons with an address of the selected family, nothing failed, and
+// exactly one owned spare: an up:standby with this filesystem's affinity, or,
+// when the shape follows, an up:standby-replay follower of rank 0.
+func (t mdsCephFSRanksTopology) stable(owned func(string) bool, shape mdsCephFSRanksShape) error {
+	in := make([]int, shape.Ranks)
+	for rank := range in {
+		in[rank] = rank
+	}
+	spare, followers, daemons := 1, 0, shape.Ranks
+	if shape.Follow {
+		spare, followers, daemons = 0, 1, shape.Ranks+1
+	}
+	if shape.Ranks < 2 || t.MaxMDS != shape.Ranks || !reflect.DeepEqual(t.In, in) || len(t.Failed) != 0 || len(t.Daemons) != daemons || len(t.Ranks) != shape.Ranks ||
+		len(t.Standbys) != spare || len(t.Followers) != followers || t.OtherStandbys != 0 {
+		return fmt.Errorf("MDS CephFS ranks topology is not %d active ranks and one %s", shape.Ranks, map[bool]string{false: "standby", true: "standby-replay follower of rank 0"}[shape.Follow])
 	}
 	names := map[string]bool{}
-	for rank, d := range append(slices.Clone(t.Ranks), &t.Standbys[0]) {
-		state := "up:active"
-		if rank == 2 {
-			state = "up:standby"
+	for rank, d := range append(slices.Clone(t.Ranks), t.spare()) {
+		state, wantRank := "up:active", rank
+		if rank == shape.Ranks {
+			state, wantRank = "up:standby", -1
+			if shape.Follow {
+				state, wantRank = "up:standby-replay", 0
+			}
 		}
-		if d == nil || !owned(d.Name) || names[d.Name] || d.GID == 0 || d.State != state || d.Endpoint == "" || d.Nonce == 0 || rank < 2 && int(d.Rank) != rank {
+		if d == nil || !owned(d.Name) || names[d.Name] || d.GID == 0 || d.State != state || d.Endpoint == "" || d.Nonce == 0 || (wantRank >= 0 && int(d.Rank) != wantRank) {
 			return errors.New("MDS CephFS ranks topology has an unowned, inactive or unreachable daemon")
 		}
 		names[d.Name] = true
@@ -227,13 +325,20 @@ func (t mdsCephFSRanksTopology) stable(owned func(string) bool) error {
 	return nil
 }
 
-// sameAs compares the daemon identities of two stable topologies.
+// sameAs compares the daemon identities of two stable topologies: every
+// rank's daemon incarnation and the spare's name, GID, endpoint, nonce and
+// state.
 func (t mdsCephFSRanksTopology) sameAs(o mdsCephFSRanksTopology) bool {
-	if len(t.Ranks) != 2 || len(o.Ranks) != 2 || len(t.Standbys) != 1 || len(o.Standbys) != 1 {
+	a, b := t.spare(), o.spare()
+	if len(t.Ranks) < 2 || len(t.Ranks) != len(o.Ranks) || a == nil || b == nil {
 		return false
 	}
-	return t.Ranks[0].same(o.Ranks[0]) && t.Ranks[1].same(o.Ranks[1]) && t.Standbys[0].Name == o.Standbys[0].Name && t.Standbys[0].GID == o.Standbys[0].GID &&
-		t.Standbys[0].Endpoint == o.Standbys[0].Endpoint && t.Standbys[0].Nonce == o.Standbys[0].Nonce
+	for rank := range t.Ranks {
+		if !t.Ranks[rank].same(o.Ranks[rank]) {
+			return false
+		}
+	}
+	return a.Name == b.Name && a.GID == b.GID && a.Endpoint == b.Endpoint && a.Nonce == b.Nonce && a.State == b.State
 }
 
 // mdsCephFSRanksSubtree is one `get subtrees` entry of the owned namespace
@@ -354,7 +459,7 @@ func (v mdsCephFSRanksView) subtree(path string) *mdsCephFSRanksSubtree {
 // rank: that rank reports it as its own subtree with a single authority and
 // no other rank claims it or reports another authority.
 func mdsCephFSRanksPlaced(views []mdsCephFSRanksView, path string, rank int32) bool {
-	if len(views) != 2 {
+	if len(views) < 2 || int(rank) >= len(views) {
 		return false
 	}
 	for _, v := range views {
@@ -398,13 +503,18 @@ type mdsCephFSRanksPlacement struct {
 
 // mdsCephFSRanksTakeover records the one owned standby takeover of rank 0.
 type mdsCephFSRanksTakeover struct {
-	State          string                  `json:"state"` // armed, intended, applied, uncertain, adopted
-	ArmRequestID   int64                   `json:"arm_request_id"`
-	FireRequestID  int64                   `json:"fire_request_id,omitempty"`
-	AdoptRequestID int64                   `json:"adopt_request_id,omitempty"`
-	Armed          mdsCephFSRanksDaemon    `json:"armed"`
-	Standby        mdsCephFSRanksDaemon    `json:"standby"`
-	Rank1          mdsCephFSRanksDaemon    `json:"rank1"`
+	State          string               `json:"state"` // armed, intended, applied, uncertain, adopted
+	ArmRequestID   int64                `json:"arm_request_id"`
+	FireRequestID  int64                `json:"fire_request_id,omitempty"`
+	AdoptRequestID int64                `json:"adopt_request_id,omitempty"`
+	Armed          mdsCephFSRanksDaemon `json:"armed"`
+	// Standby is the spare expected to take over rank 0: the ordinary
+	// standby, or the standby-replay follower of rank 0.
+	Standby mdsCephFSRanksDaemon `json:"standby"`
+	Rank1   mdsCephFSRanksDaemon `json:"rank1"`
+	// Others are the daemons of ranks 1..n-1, expected unchanged.
+	Others         []mdsCephFSRanksDaemon  `json:"other_ranks"`
+	Follow         bool                    `json:"follow"`
 	ArmedAddresses []string                `json:"armed_blocklist_addresses"`
 	Output         string                  `json:"native_output,omitempty"`
 	Error          string                  `json:"error,omitempty"`
@@ -420,6 +530,47 @@ func (t *mdsCephFSRanksTakeover) pending() bool {
 	return t != nil && t.State != "armed" && t.State != "adopted"
 }
 
+// mdsCephFSRanksReplayEnable records the one owned change of the filesystem's
+// allow_standby_replay flag and the follower assignment it caused.
+type mdsCephFSRanksReplayEnable struct {
+	State        string                  `json:"state"` // intended, applied, uncertain, following
+	RequestID    int64                   `json:"request_id"`
+	Standby      mdsCephFSRanksDaemon    `json:"standby"`
+	Output       string                  `json:"native_output,omitempty"`
+	Error        string                  `json:"error,omitempty"`
+	StartedUTC   string                  `json:"started_utc"`
+	AppliedUTC   string                  `json:"applied_utc,omitempty"`
+	FollowingUTC string                  `json:"following_utc,omitempty"`
+	Polls        int                     `json:"polls"`
+	WaitedMillis int64                   `json:"waited_ms"`
+	Follower     *mdsCephFSRanksDaemon   `json:"follower,omitempty"`
+	Topology     *mdsCephFSRanksTopology `json:"topology,omitempty"`
+}
+
+// mdsCephFSRanksRuntime records one owned runtime-only change of one rank-0
+// daemon incarnation (mds_log_pause through `tell config set`). A respawn of
+// that incarnation discards it.
+type mdsCephFSRanksRuntime struct {
+	Kind             string `json:"kind"` // log-pause
+	Name             string `json:"name"`
+	Value            string `json:"value"`
+	Baseline         string `json:"baseline"`
+	Daemon           string `json:"daemon"`
+	GID              uint64 `json:"gid"`
+	Incarnation      int32  `json:"incarnation"`
+	RequestID        int64  `json:"request_id"`
+	State            string `json:"state"` // intended, applied, uncertain, restore-intended, restored, restore-uncertain, discarded
+	Readback         string `json:"readback,omitempty"`
+	RestoreRequestID int64  `json:"restore_request_id,omitempty"`
+	RestoreReadback  string `json:"restore_readback,omitempty"`
+	Error            string `json:"error,omitempty"`
+}
+
+// active reports a change that may still be in effect on its incarnation.
+func (r *mdsCephFSRanksRuntime) active() bool {
+	return r != nil && r.State != "restored" && r.State != "discarded"
+}
+
 // mdsCephFSRanksStatus is a transitional read during the takeover.
 type mdsCephFSRanksStatus struct {
 	Topology       mdsCephFSRanksTopology `json:"topology"`
@@ -428,26 +579,28 @@ type mdsCephFSRanksStatus struct {
 }
 
 type mdsCephFSRanksNative struct {
-	Action         string         `json:"action"`
-	Path           string         `json:"path"`
-	NativeGlobalID uint64         `json:"native_global_id"`
-	Stat           *mdsCephFSStat `json:"stat,omitempty"`
-	Pin            *string        `json:"pin,omitempty"`
-	PinSet         *string        `json:"pin_set,omitempty"`
+	Action         string           `json:"action"`
+	Path           string           `json:"path"`
+	NativeGlobalID uint64           `json:"native_global_id"`
+	Stat           *mdsCephFSStat   `json:"stat,omitempty"`
+	Pin            *string          `json:"pin,omitempty"`
+	PinSet         *string          `json:"pin_set,omitempty"`
+	Entries        []mdsCephFSEntry `json:"entries,omitempty"`
 }
 
-// One fixed native LibCephFS driver: stat, read the local export pin, set
-// it. The fixture passes only plan paths and admitted values; the driver
-// re-checks that the path is inside the owned directory. It always shuts
-// down, which closes its CephFS sessions. Source: pybind/cephfs/cephfs.pyx at
-// mdsFreshSource; independent driver, no code copied.
+// One fixed native LibCephFS driver: stat, list a directory (each entry with
+// its statx), read the local export pin, set it. The fixture passes only plan
+// paths and admitted values; the driver re-checks that the path is inside the
+// owned directory. It always shuts down, which closes its CephFS sessions.
+// Source: pybind/cephfs/cephfs.pyx at mdsFreshSource; independent driver, no
+// code copied.
 const mdsCephFSRanksNativePython = `
 import cephfs, json, sys
 identity, keyring, fsname, directory, action, path = sys.argv[1:7]
 extra = sys.argv[7:]
 prefix = '/' + directory
 parts = path.split('/')
-if not directory.startswith('ceph-msgr-ranks-') or '/' in directory or not (path == prefix or (path.startswith(prefix + '/') and len(parts) <= 4 and '..' not in parts and '' not in parts[1:])):
+if not directory.startswith('ceph-msgr-ranks-') or '/' in directory or not (path == prefix or (path.startswith(prefix + '/') and len(parts) <= 5 and '..' not in parts and '' not in parts[1:])):
     raise ValueError('path outside the owned directory')
 MASK = 0x30f
 fs = cephfs.LibCephFS(conffile='/tmp/ceph-msgr-test/ceph.conf', auth_id=identity.removeprefix('client.'), conf={'keyring': keyring})
@@ -467,7 +620,23 @@ try:
         out['stat'] = stat(path)
         if out['stat']['exists']:
             out['pin'] = fs.getxattr(path, 'ceph.dir.pin').decode('ascii')
-    elif action == 'pin-set' and len(extra) == 1 and extra[0] in ('-1', '0', '1'):
+    elif action == 'list' and not extra:
+        out['entries'] = []
+        handle = fs.opendir(path)
+        try:
+            while True:
+                entry = fs.readdir(handle)
+                if entry is None:
+                    break
+                name = entry.d_name.decode('utf-8')
+                if name in ('.', '..'):
+                    continue
+                if len(out['entries']) == 64:
+                    raise ValueError('owned directory listing exceeds its bound')
+                out['entries'].append({'name': name, 'd_ino': entry.d_ino, 'stat': stat(path + '/' + name)})
+        finally:
+            fs.closedir(handle)
+    elif action == 'pin-set' and len(extra) == 1 and extra[0] in ('-1', '0', '1', '2'):
         fs.setxattr(path, 'ceph.dir.pin', extra[0].encode('ascii'), 0)
         out['pin_set'] = extra[0]
     else:
@@ -491,9 +660,16 @@ func decodeMDSCephFSRanksNative(action, path string, extra []string, data []byte
 	ok := false
 	switch action {
 	case "stat":
-		ok = len(extra) == 0 && result.Stat != nil && validMDSCephFSStat(*result.Stat) && result.Pin == nil && result.PinSet == nil
+		ok = len(extra) == 0 && result.Stat != nil && validMDSCephFSStat(*result.Stat) && result.Pin == nil && result.PinSet == nil && result.Entries == nil
+	case "list":
+		ok = len(extra) == 0 && result.Entries != nil && len(result.Entries) <= 64 && result.Stat == nil && result.Pin == nil && result.PinSet == nil
+		names := map[string]bool{}
+		for _, e := range result.Entries {
+			ok = ok && e.Name != "" && !strings.ContainsAny(e.Name, "/\x00") && !names[e.Name] && e.Stat.Exists && validMDSCephFSStat(e.Stat) && e.DIno == e.Stat.Ino
+			names[e.Name] = true
+		}
 	case "pin-get":
-		ok = len(extra) == 0 && result.Stat != nil && validMDSCephFSStat(*result.Stat) && result.PinSet == nil
+		ok = len(extra) == 0 && result.Stat != nil && validMDSCephFSStat(*result.Stat) && result.PinSet == nil && result.Entries == nil
 		if ok && result.Stat.Exists {
 			_, err := strconv.Atoi(derefString(result.Pin))
 			ok = result.Pin != nil && err == nil && result.Stat.Mode&0o170000 == 0o040000
@@ -501,7 +677,7 @@ func decodeMDSCephFSRanksNative(action, path string, extra []string, data []byte
 			ok = result.Pin == nil
 		}
 	case "pin-set":
-		ok = len(extra) == 1 && result.PinSet != nil && *result.PinSet == extra[0] && result.Stat == nil && result.Pin == nil
+		ok = len(extra) == 1 && result.PinSet != nil && *result.PinSet == extra[0] && result.Stat == nil && result.Pin == nil && result.Entries == nil
 	}
 	if !ok {
 		return mdsCephFSRanksNative{}, fmt.Errorf("native CephFS ranks %s output shape differs", action)
@@ -524,8 +700,14 @@ type mdsCephFSRanksScope struct {
 	baselineReady          bool
 	baselineBlocklist      []mdsSessionsBlock
 	lastRequestID          int64
+	// shape is the steady topology every action proves: two or three active
+	// ranks, and a spare that follows rank 0 once standby replay is enabled.
+	// replay admits the standby-replay extension's actions.
+	shape  mdsCephFSRanksShape
+	replay bool
 	// startup is the topology proven at preparation; current is the one every
-	// action proves (startup until the owned takeover is adopted).
+	// action proves (startup until standby replay is enabled or the owned
+	// takeover is adopted).
 	startup, current mdsCephFSRanksTopology
 	pins             []*mdsCephFSRanksPin
 	// pinBaseline is the value read before the first owned change of each
@@ -533,9 +715,21 @@ type mdsCephFSRanksScope struct {
 	pinBaseline, pinApplied map[string]string
 	pinInode                map[string]uint64
 	takeover                *mdsCephFSRanksTakeover
+	replayEnable            *mdsCephFSRanksReplayEnable
+	runtime                 []*mdsCephFSRanksRuntime
 	// owned maps session addresses of the owned Go identity, observed through
 	// observe, to their GlobalID.
 	owned map[string]uint64
+}
+
+// logPaused returns an owned journal pause that may still be in effect.
+func (x *mdsCephFSRanksScope) logPaused() *mdsCephFSRanksRuntime {
+	for _, r := range x.runtime {
+		if r.Kind == "log-pause" && r.active() {
+			return r
+		}
+	}
+	return nil
 }
 
 type mdsCephFSRanksAction struct {
@@ -544,10 +738,11 @@ type mdsCephFSRanksAction struct {
 }
 
 // The request is <id> <ownership token> <action> [arguments]. Only fixed
-// actions, plan targets and pin values exist.
-func parseMDSCephFSRanksRequest(fields []string, token string, plan mdsCephFSRanksPlan, previousID int64) (int64, mdsCephFSRanksAction, error) {
+// actions, plan targets, ranks of the owned shape and pin values exist; the
+// standby-replay extension's actions exist only in that profile.
+func parseMDSCephFSRanksRequest(fields []string, token string, plan mdsCephFSRanksPlan, ranks int, replay bool, previousID int64) (int64, mdsCephFSRanksAction, error) {
 	var action mdsCephFSRanksAction
-	if len(fields) < 3 || len(fields) > 5 || len(token) != 32 || fields[1] != token {
+	if len(fields) < 3 || len(fields) > 5 || len(token) != 32 || fields[1] != token || ranks < 2 || ranks > 3 {
 		return 0, action, errors.New("invalid owned MDS CephFS ranks request scope")
 	}
 	id, err := strconv.ParseInt(fields[0], 10, 64)
@@ -556,13 +751,25 @@ func parseMDSCephFSRanksRequest(fields []string, token string, plan mdsCephFSRan
 	}
 	action.name = fields[2]
 	args := fields[3:]
+	rankValues := []string{}
+	for rank := range ranks {
+		rankValues = append(rankValues, strconv.Itoa(rank))
+	}
+	canonicalGID := func(arg string) (uint64, bool) {
+		gid, err := strconv.ParseUint(arg, 10, 64)
+		return gid, err == nil && gid != 0 && strconv.FormatUint(gid, 10) == arg
+	}
+	extension := map[string]bool{"replay-enable": true, "log-pause": true, "log-resume": true, "ops": true, "list": true}
+	if extension[action.name] && !replay {
+		return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks action belongs to the standby-replay extension")
+	}
 	switch action.name {
 	case "observe":
 		if len(args) != 1 {
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks observation requires one GlobalID")
 		}
-		gid, err := strconv.ParseUint(args[0], 10, 64)
-		if err != nil || gid == 0 || strconv.FormatUint(gid, 10) != args[0] {
+		gid, ok := canonicalGID(args[0])
+		if !ok {
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks observation requires one canonical GlobalID")
 		}
 		action.gid = gid
@@ -571,10 +778,15 @@ func parseMDSCephFSRanksRequest(fields []string, token string, plan mdsCephFSRan
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks stat target is not admitted")
 		}
 		action.target = args[0]
+	case "list":
+		if len(args) != 1 || !plan.listTarget(args[0]) {
+			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks list target is not admitted")
+		}
+		action.target = args[0]
 	case "pin", "placement":
-		values := []string{"-1", "0", "1"}
+		values := append([]string{"-1"}, rankValues...)
 		if action.name == "placement" {
-			values = []string{"0", "1"}
+			values = rankValues
 		}
 		if len(args) != 2 || !plan.pinTarget(args[0]) || !slices.Contains(values, args[1]) {
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks pin target or rank is not admitted")
@@ -585,9 +797,18 @@ func parseMDSCephFSRanksRequest(fields []string, token string, plan mdsCephFSRan
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks pin restoration target is not admitted")
 		}
 		action.target = args[0]
-	case "takeover-arm", "takeover-fire", "takeover-status", "takeover-adopt":
+	case "ops":
+		gid, ok := uint64(0), false
+		if len(args) == 2 {
+			gid, ok = canonicalGID(args[1])
+		}
+		if !ok || !slices.Contains(rankValues, args[0]) {
+			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks historic ops require one rank and one canonical GlobalID")
+		}
+		action.value, action.gid = args[0], gid
+	case "takeover-arm", "takeover-fire", "takeover-status", "takeover-adopt", "replay-enable", "log-pause", "log-resume":
 		if len(args) != 0 {
-			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks takeover actions take no caller argument")
+			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks takeover, replay and runtime actions take no caller argument")
 		}
 	default:
 		return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks action is not admitted")
@@ -616,6 +837,10 @@ type mdsCephFSRanksResult struct {
 	Placement       *mdsCephFSRanksPlacement    `json:"placement,omitempty"`
 	Takeover        *mdsCephFSRanksTakeover     `json:"takeover,omitempty"`
 	Status          *mdsCephFSRanksStatus       `json:"status,omitempty"`
+	ReplayEnable    *mdsCephFSRanksReplayEnable `json:"replay_enable,omitempty"`
+	Runtime         *mdsCephFSRanksRuntime      `json:"runtime,omitempty"`
+	HistoricOps     []mdsCephFSHistoricOp       `json:"historic_ops,omitempty"`
+	OpsDaemon       *mdsCephFSRanksDaemon       `json:"ops_daemon,omitempty"`
 	Complete        bool                        `json:"complete"`
 	Error           string                      `json:"error,omitempty"`
 	ElapsedMillis   int64                       `json:"elapsed_ms"`
@@ -635,7 +860,7 @@ func (c *fixtureCluster) mdsCephFSRanksJournal() error {
 		"source_commit": mdsFreshSource, "token": s.token, "fsid": c.profile.fsid, "fs_name": s.name, "fscid": s.oracle.FSCID,
 		"client_identity": identity, "native_identity": native, "plan": x.plan, "baseline_blocklist": x.baselineBlocklist,
 		"startup_topology": x.startup, "current_topology": x.current, "pins": x.pins, "pin_baseline": x.pinBaseline, "takeover": x.takeover,
-		"owned_session_addresses": x.owned,
+		"owned_session_addresses": x.owned, "shape": x.shape, "replay_enable": x.replayEnable, "runtime": x.runtime,
 	})
 }
 
@@ -671,7 +896,7 @@ func (c *fixtureCluster) mdsCephFSRanksProve(ctx context.Context, daemons bool) 
 	if err != nil {
 		return t, err
 	}
-	if err := t.stable(c.mdsCephFSRankedOwned()); err != nil {
+	if err := t.stable(c.mdsCephFSRankedOwned(), x.shape); err != nil {
 		return t, err
 	}
 	if !t.sameAs(x.current) {
@@ -695,7 +920,7 @@ func (c *fixtureCluster) mdsCephFSRanksProve(ctx context.Context, daemons bool) 
 	return t, nil
 }
 
-// mdsCephFSRanksViews observes both ranks of the proven topology.
+// mdsCephFSRanksViews observes every rank of the proven topology.
 func (c *fixtureCluster) mdsCephFSRanksViews(ctx context.Context, t mdsCephFSRanksTopology, sessions bool) ([]mdsCephFSRanksView, error) {
 	x := c.mdsCephFSRanks
 	var views []mdsCephFSRanksView
@@ -741,7 +966,10 @@ func (c *fixtureCluster) prepareMDSCephFSRanks(ctx context.Context, out string) 
 		return errors.New("invalid MDS CephFS ranks preparation scope")
 	}
 	s := c.mdsFresh
-	x := &mdsCephFSRanksScope{out: out, plan: mdsCephFSRanksPlanFor(s.token), pinBaseline: map[string]string{}, pinApplied: map[string]string{}, pinInode: map[string]uint64{}, owned: map[string]uint64{}}
+	replay := p.mdsCephFSRanksReplay == "1"
+	active, _ := p.mdsFreshTopology()
+	x := &mdsCephFSRanksScope{out: out, plan: mdsCephFSRanksPlanFor(s.token, replay), shape: mdsCephFSRanksShape{Ranks: active}, replay: replay, pinBaseline: map[string]string{},
+		pinApplied: map[string]string{}, pinInode: map[string]uint64{}, owned: map[string]uint64{}}
 	c.mdsCephFSRanks = x
 	ctx, stop := context.WithTimeout(ctx, fixtureStartupTimeout)
 	defer stop()
@@ -749,7 +977,7 @@ func (c *fixtureCluster) prepareMDSCephFSRanks(ctx context.Context, out string) 
 	if err != nil {
 		return err
 	}
-	if err := t.stable(c.mdsCephFSRankedOwned()); err != nil {
+	if err := t.stable(c.mdsCephFSRankedOwned(), x.shape); err != nil {
 		return err
 	}
 	if r0 := t.Ranks[0]; r0.Name != s.oracle.MDS.Name || r0.GID != s.oracle.MDS.GID || r0.Endpoint != s.oracle.MDS.Endpoint || r0.Nonce != s.oracle.MDS.Nonce || r0.Incarnation != s.oracle.MDS.Incarnation {
@@ -804,13 +1032,13 @@ func (c *fixtureCluster) prepareMDSCephFSRanks(ctx context.Context, out string) 
 	if err := os.WriteFile(filepath.Join(out, "mds-cephfs-ranks-native.keyring"), nativeKeyring, 0600); err != nil {
 		return err
 	}
-	// Every owned daemon is a relay peer: rank 1 now, the standby after the
-	// takeover. The relay admits an MDS by its container IP.
+	// Every owned daemon is a relay peer: the other ranks now, the standby
+	// after the takeover. The relay admits an MDS by its container IP.
 	var peers map[string]string
 	if json.Unmarshal([]byte(c.profile.peers), &peers) != nil || peers == nil {
 		return errors.New("MDS CephFS ranks relay peer inventory missing")
 	}
-	for _, d := range append(slices.Clone(t.Ranks), &t.Standbys[0]) {
+	for _, d := range append(slices.Clone(t.Ranks), t.spare()) {
 		peers["mds."+d.Name] = d.Endpoint
 	}
 	encoded, _ := json.Marshal(peers)
@@ -827,7 +1055,7 @@ func (c *fixtureCluster) prepareMDSCephFSRanks(ctx context.Context, out string) 
 		"client_identity": c.profile.mdsCephFSRanksIdentity, "native_identity": "client.mds-cephfs-ranks-native-" + s.token,
 		"client_caps": map[string]string{"mon": goCaps.Mon, "mds": goCaps.MDS, "osd": goCaps.OSD},
 		"native_caps": map[string]string{"mon": nativeCaps.Mon, "mds": nativeCaps.MDS, "osd": nativeCaps.OSD},
-		"plan":        x.plan, "baseline_blocklist": x.baselineBlocklist, "topology": t, "views": views,
+		"plan":        x.plan, "baseline_blocklist": x.baselineBlocklist, "topology": t, "views": views, "shape": x.shape, "standby_replay_extension": x.replay,
 	})
 }
 
@@ -858,7 +1086,7 @@ func (c *fixtureCluster) mdsCephFSRanksControl(ctx context.Context, out string, 
 	if s.cleanupAttempted {
 		return errors.New("MDS CephFS ranks control requested after cleanup began")
 	}
-	id, action, err := parseMDSCephFSRanksRequest(fields, s.token, x.plan, x.lastRequestID)
+	id, action, err := parseMDSCephFSRanksRequest(fields, s.token, x.plan, x.shape.Ranks, x.replay, x.lastRequestID)
 	if err != nil {
 		return err
 	}
@@ -892,6 +1120,12 @@ func (c *fixtureCluster) mdsCephFSRanksControl(ctx context.Context, out string, 
 	default:
 		if x.takeover.pending() {
 			return errors.New("MDS CephFS ranks action refused while the owned takeover is not adopted")
+		}
+		// A native mount opens journaled sessions with every rank; while rank
+		// 0's journal is paused it would wait. Only map, admin and takeover
+		// actions run then.
+		if r := x.logPaused(); r != nil && !slices.Contains([]string{"observe", "ops", "placement", "log-resume", "takeover-arm"}, action.name) {
+			return fmt.Errorf("MDS CephFS ranks %s refused while the rank-0 journal pause is in effect", action.name)
 		}
 		if _, err := c.mdsCephFSRanksProve(ctx, false); err != nil {
 			return err
@@ -946,6 +1180,38 @@ func (c *fixtureCluster) mdsCephFSRanksAct(ctx context.Context, id int64, action
 		}
 		result.Native = &native
 		return nil
+	case "list":
+		path, err := x.plan.path(action.target)
+		if err != nil {
+			return err
+		}
+		process, native, err := c.mdsCephFSRanksRunNative(ctx, "list", path)
+		result.Processes = append(result.Processes, process)
+		if err != nil {
+			return err
+		}
+		result.Native = &native
+		return nil
+	case "ops":
+		// Completed requests of one observed owned Go session from the op
+		// tracker of one proven rank's daemon.
+		if !slices.Contains(slices.Collect(maps.Values(x.owned)), action.gid) {
+			return errors.New("MDS CephFS ranks historic ops are admitted only for an observed owned Go session")
+		}
+		rank, _ := strconv.Atoi(action.value)
+		d := x.current.Ranks[rank]
+		data, err := c.mdsCephFSRanksTell(ctx, d, "dump_historic_ops", "--format", "json")
+		if err != nil {
+			return err
+		}
+		described := *d
+		result.OpsDaemon = &described
+		result.HistoricOps, err = parseMDSCephFSHistoricOps(data, action.gid)
+		return err
+	case "replay-enable":
+		return c.mdsCephFSRanksReplayEnable(ctx, id, result)
+	case "log-pause", "log-resume":
+		return c.mdsCephFSRanksLogPause(ctx, id, action.name == "log-pause", result)
 	case "pin", "pin-restore":
 		return c.mdsCephFSRanksPin(ctx, id, action, result)
 	case "placement":
@@ -1079,6 +1345,142 @@ func (c *fixtureCluster) mdsCephFSRanksPlacement(ctx context.Context, action mds
 	return nil
 }
 
+// mdsCephFSRanksReplayEnable sets allow_standby_replay on the owned
+// filesystem once (journaled first, never reissued) and waits, bounded, until
+// the MON makes the owned standby follow rank 0 (MDSMonitor's
+// maybe_promote_standby assigns a free standby to the lowest followable rank
+// in `in`). The followed topology becomes the one every later action proves.
+func (c *fixtureCluster) mdsCephFSRanksReplayEnable(ctx context.Context, id int64, result *mdsCephFSRanksResult) error {
+	s, x := c.mdsFresh, c.mdsCephFSRanks
+	standby := x.current.spare()
+	if x.replayEnable != nil || x.shape.Follow || x.takeover != nil || standby == nil || standby.State != "up:standby" {
+		return errors.New("MDS CephFS ranks standby replay is enabled once, from the ordinary standby and before the takeover")
+	}
+	r := &mdsCephFSRanksReplayEnable{State: "intended", RequestID: id, Standby: *standby, StartedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
+	x.replayEnable, result.ReplayEnable = r, r
+	if err := c.mdsCephFSRanksJournal(); err != nil {
+		return err
+	}
+	started := time.Now()
+	output, err := c.cluster.Ceph(ctx, "fs", "set", s.name, "allow_standby_replay", "true")
+	r.AppliedUTC = time.Now().UTC().Format(time.RFC3339Nano)
+	if len(output) != 0 {
+		r.Output = strings.TrimSpace(string(output[:min(len(output), 4096)]))
+	}
+	if err != nil {
+		r.State, r.Error = "uncertain", err.Error()
+		return errors.Join(err, c.mdsCephFSRanksJournal())
+	}
+	r.State = "applied"
+	if err := c.mdsCephFSRanksJournal(); err != nil {
+		return err
+	}
+	follow := mdsCephFSRanksShape{Ranks: x.shape.Ranks, Follow: true}
+	owned := c.mdsCephFSRankedOwned()
+	deadline := started.Add(60 * time.Second)
+	var proofErr error
+	var t mdsCephFSRanksTopology
+	for {
+		r.Polls++
+		if t, err = c.mdsCephFSRanksTopology(ctx); err != nil {
+			return err
+		}
+		if proofErr = t.stable(owned, follow); proofErr == nil {
+			f := t.Followers[0]
+			for rank := range t.Ranks {
+				if !t.Ranks[rank].same(x.current.Ranks[rank]) {
+					proofErr = errors.New("MDS CephFS ranks active daemons changed while standby replay was enabled")
+				}
+			}
+			if proofErr == nil && (f.Name != standby.Name || f.GID != standby.GID || f.Endpoint != standby.Endpoint || f.Nonce != standby.Nonce) {
+				proofErr = errors.New("the standby-replay follower is not the owned standby")
+			}
+		}
+		if proofErr == nil || time.Now().After(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	r.WaitedMillis = time.Since(started).Milliseconds()
+	r.Topology = &t
+	if proofErr != nil {
+		return errors.Join(fmt.Errorf("MDS CephFS ranks standby replay did not produce the owned follower: %w", proofErr), c.mdsCephFSRanksJournal())
+	}
+	f := t.Followers[0]
+	r.Follower, r.State, r.FollowingUTC = &f, "following", time.Now().UTC().Format(time.RFC3339Nano)
+	x.shape, x.current = follow, t
+	return c.mdsCephFSRanksJournal()
+}
+
+// mdsCephFSRanksSetRuntime sets one runtime-only option of one proven daemon
+// through `tell config set` and returns the daemon's readback.
+func (c *fixtureCluster) mdsCephFSRanksSetRuntime(ctx context.Context, d *mdsCephFSRanksDaemon, name, value string) (string, error) {
+	if _, err := c.mdsCephFSRanksTell(ctx, d, "config", "set", name, value); err != nil {
+		return "", err
+	}
+	data, err := c.mdsCephFSRanksTell(ctx, d, "config", "get", name, "--format", "json")
+	if err != nil {
+		return "", err
+	}
+	readback, err := parseMDSCephFSCompletionConfig(bytes.TrimSpace(data), name)
+	if err == nil && readback != value {
+		err = fmt.Errorf("MDS daemon reports %s=%s after setting %s", name, readback, value)
+	}
+	return readback, err
+}
+
+// mdsCephFSRanksLogPause pauses (mds_log_pause) or resumes the journal of the
+// current rank-0 daemon incarnation. The pause is journaled before it is
+// issued; the resume restores the value read before it. A respawn of the
+// paused incarnation (the owned takeover) discards the change instead.
+func (c *fixtureCluster) mdsCephFSRanksLogPause(ctx context.Context, id int64, pause bool, result *mdsCephFSRanksResult) error {
+	x := c.mdsCephFSRanks
+	d := x.current.Ranks[0]
+	if pause {
+		if x.logPaused() != nil || x.takeover != nil || len(x.runtime) != 0 {
+			return errors.New("MDS CephFS ranks journal pause is issued once, before the takeover")
+		}
+		data, err := c.mdsCephFSRanksTell(ctx, d, "config", "get", "mds_log_pause", "--format", "json")
+		if err != nil {
+			return err
+		}
+		baseline, err := parseMDSCephFSCompletionConfig(bytes.TrimSpace(data), "mds_log_pause")
+		if err != nil || baseline != "false" {
+			return errors.Join(err, errors.New("MDS CephFS ranks rank-0 journal is not running before the owned pause"))
+		}
+		r := &mdsCephFSRanksRuntime{Kind: "log-pause", Name: "mds_log_pause", Value: "true", Baseline: baseline, Daemon: d.Name, GID: d.GID, Incarnation: d.Incarnation, RequestID: id, State: "intended"}
+		x.runtime, result.Runtime = append(x.runtime, r), r
+		if err := c.mdsCephFSRanksJournal(); err != nil {
+			return err
+		}
+		readback, err := c.mdsCephFSRanksSetRuntime(ctx, d, r.Name, r.Value)
+		r.Readback, r.State = readback, "applied"
+		if err != nil {
+			r.State, r.Error = "uncertain", err.Error()
+		}
+		return errors.Join(err, c.mdsCephFSRanksJournal())
+	}
+	r := x.logPaused()
+	if r == nil || r.GID != d.GID || r.Daemon != d.Name {
+		return errors.New("MDS CephFS ranks has no owned journal pause on the current rank-0 incarnation")
+	}
+	r.State, r.RestoreRequestID = "restore-intended", id
+	result.Runtime = r
+	if err := c.mdsCephFSRanksJournal(); err != nil {
+		return err
+	}
+	readback, err := c.mdsCephFSRanksSetRuntime(ctx, d, r.Name, r.Baseline)
+	r.RestoreReadback, r.State = readback, "restored"
+	if err != nil {
+		r.State, r.Error = "restore-uncertain", err.Error()
+	}
+	return errors.Join(err, c.mdsCephFSRanksJournal())
+}
+
 func (c *fixtureCluster) mdsCephFSRanksStatus(ctx context.Context) (mdsCephFSRanksStatus, error) {
 	x := c.mdsCephFSRanks
 	t, err := c.mdsCephFSRanksTopology(ctx)
@@ -1114,7 +1516,10 @@ func (c *fixtureCluster) mdsCephFSRanksTakeoverAct(ctx context.Context, id int64
 			return errors.New("MDS CephFS ranks takeover was already armed")
 		}
 		t := x.current
-		r := &mdsCephFSRanksTakeover{State: "armed", ArmRequestID: id, Armed: *t.Ranks[0], Standby: t.Standbys[0], Rank1: *t.Ranks[1], ArmedAddresses: []string{}}
+		r := &mdsCephFSRanksTakeover{State: "armed", ArmRequestID: id, Armed: *t.Ranks[0], Standby: *t.spare(), Rank1: *t.Ranks[1], Follow: x.shape.Follow, ArmedAddresses: []string{}}
+		for _, d := range t.Ranks[1:] {
+			r.Others = append(r.Others, *d)
+		}
 		for _, address := range r.Armed.Addresses {
 			formatted, err := mdsSessionsAddress(address.Addr, address.Nonce)
 			if err != nil {
@@ -1174,9 +1579,11 @@ func (c *fixtureCluster) mdsCephFSRanksTakeoverAct(ctx context.Context, id int64
 			return errors.New("MDS CephFS ranks takeover adoption requires a fired, unadopted takeover")
 		}
 		// Full native proof, waiting (bounded) for the failed daemon to return
-		// as the owned standby: the former standby holds rank 0 up:active with
-		// its own GID and a new incarnation, rank 1 is unchanged, the armed GID
-		// is gone and the failed daemon registered again with a new GID.
+		// as the owned spare: the former spare (standby or standby-replay
+		// follower) holds rank 0 up:active with its own GID and a new
+		// incarnation, the other ranks are unchanged, the armed GID is gone and
+		// the failed daemon registered again with a new GID, as the standby or,
+		// with standby replay enabled, as the new follower of rank 0.
 		owned := c.mdsCephFSRankedOwned()
 		deadline := time.Now().Add(60 * time.Second)
 		var status mdsCephFSRanksStatus
@@ -1188,18 +1595,22 @@ func (c *fixtureCluster) mdsCephFSRanksTakeoverAct(ctx context.Context, id int64
 				return err
 			}
 			t := status.Topology
-			proofErr = t.stable(owned)
+			proofErr = t.stable(owned, x.shape)
 			if proofErr == nil {
-				n0, n1, sb := t.Ranks[0], t.Ranks[1], t.Standbys[0]
+				n0, sb := t.Ranks[0], t.spare()
+				others := true
+				for i, d := range r.Others {
+					others = others && t.Ranks[i+1].same(&d)
+				}
 				switch {
 				case n0.Name != r.Standby.Name || n0.GID != r.Standby.GID || n0.Incarnation == r.Armed.Incarnation:
-					proofErr = errors.New("rank 0 is not held by the armed standby in a new incarnation")
-				case !n1.same(&r.Rank1):
-					proofErr = errors.New("rank 1 changed during the takeover")
+					proofErr = errors.New("rank 0 is not held by the armed spare in a new incarnation")
+				case !others:
+					proofErr = errors.New("another rank changed during the takeover")
 				case status.ArmedPresent:
 					proofErr = errors.New("the armed daemon incarnation is still mapped")
 				case sb.Name != r.Armed.Name || sb.GID == r.Armed.GID:
-					proofErr = errors.New("the failed daemon has not returned as the owned standby")
+					proofErr = errors.New("the failed daemon has not returned as the owned spare")
 				}
 			}
 			if proofErr == nil || time.Now().After(deadline) {
@@ -1219,6 +1630,12 @@ func (c *fixtureCluster) mdsCephFSRanksTakeoverAct(ctx context.Context, id int64
 		r.OldFencing = status.ArmedBlocklist
 		r.Adopted, r.AdoptRequestID, r.AdoptedUTC, r.State = &adopted, id, time.Now().UTC().Format(time.RFC3339Nano), "adopted"
 		x.current = adopted
+		// A runtime change of the failed incarnation went with its process.
+		for _, rt := range x.runtime {
+			if rt.active() && rt.GID == r.Armed.GID {
+				rt.State = "discarded"
+			}
+		}
 		return c.mdsCephFSRanksJournal()
 	}
 	return errors.New("MDS CephFS ranks takeover action is not admitted")
@@ -1233,41 +1650,47 @@ type mdsCephFSRanksPinCleanup struct {
 }
 
 type mdsCephFSRanksCleanup struct {
-	Source                string                     `json:"source_commit"`
-	Token                 string                     `json:"token"`
-	FSName                string                     `json:"fs_name"`
-	Attempted             bool                       `json:"attempted"`
-	Pins                  []*mdsCephFSRanksPin       `json:"pins"`
-	PinCleanup            []mdsCephFSRanksPinCleanup `json:"pin_cleanup"`
-	PinsRestored          bool                       `json:"pins_restored"`
-	Takeover              *mdsCephFSRanksTakeover    `json:"takeover,omitempty"`
-	Topology              *mdsCephFSRanksTopology    `json:"topology,omitempty"`
-	TopologyRestored      bool                       `json:"topology_restored"`
-	TopologyNote          string                     `json:"topology_note,omitempty"`
-	ResidualSessions      []mdsSessionsNative        `json:"residual_owned_sessions"`
-	NamespaceChecked      bool                       `json:"namespace_checked"`
-	NamespaceRestored     bool                       `json:"namespace_restored"`
-	NamespaceNote         string                     `json:"namespace_note,omitempty"`
-	Namespace             *mdsCephFSRanksNative      `json:"namespace,omitempty"`
-	NewBlocklist          []mdsSessionsBlock         `json:"new_blocklist"`
-	RemovedBlocklist      []mdsCephFSRemovedBlock    `json:"removed_blocklist"`
-	KeptBlocklist         []mdsSessionsBlock         `json:"kept_new_blocklist"`
-	FinalBlocklist        []mdsSessionsBlock         `json:"final_blocklist,omitempty"`
-	BlocklistRestored     bool                       `json:"blocklist_restored"`
-	ClientIdentityRemoved bool                       `json:"client_identity_removed"`
-	NativeIdentityRemoved bool                       `json:"native_identity_removed"`
-	Completed             bool                       `json:"completed"`
-	Errors                []string                   `json:"errors,omitempty"`
+	Source                string                      `json:"source_commit"`
+	Token                 string                      `json:"token"`
+	FSName                string                      `json:"fs_name"`
+	Attempted             bool                        `json:"attempted"`
+	Pins                  []*mdsCephFSRanksPin        `json:"pins"`
+	PinCleanup            []mdsCephFSRanksPinCleanup  `json:"pin_cleanup"`
+	PinsRestored          bool                        `json:"pins_restored"`
+	Takeover              *mdsCephFSRanksTakeover     `json:"takeover,omitempty"`
+	Shape                 mdsCephFSRanksShape         `json:"shape"`
+	ReplayEnable          *mdsCephFSRanksReplayEnable `json:"replay_enable,omitempty"`
+	Runtime               []*mdsCephFSRanksRuntime    `json:"runtime"`
+	RuntimeRestored       bool                        `json:"runtime_restored"`
+	Topology              *mdsCephFSRanksTopology     `json:"topology,omitempty"`
+	TopologyRestored      bool                        `json:"topology_restored"`
+	TopologyNote          string                      `json:"topology_note,omitempty"`
+	ResidualSessions      []mdsSessionsNative         `json:"residual_owned_sessions"`
+	NamespaceChecked      bool                        `json:"namespace_checked"`
+	NamespaceRestored     bool                        `json:"namespace_restored"`
+	NamespaceNote         string                      `json:"namespace_note,omitempty"`
+	Namespace             *mdsCephFSRanksNative       `json:"namespace,omitempty"`
+	NewBlocklist          []mdsSessionsBlock          `json:"new_blocklist"`
+	RemovedBlocklist      []mdsCephFSRemovedBlock     `json:"removed_blocklist"`
+	KeptBlocklist         []mdsSessionsBlock          `json:"kept_new_blocklist"`
+	FinalBlocklist        []mdsSessionsBlock          `json:"final_blocklist,omitempty"`
+	BlocklistRestored     bool                        `json:"blocklist_restored"`
+	ClientIdentityRemoved bool                        `json:"client_identity_removed"`
+	NativeIdentityRemoved bool                        `json:"native_identity_removed"`
+	Completed             bool                        `json:"completed"`
+	Errors                []string                    `json:"errors,omitempty"`
 }
 
 // finishMDSCephFSRanks runs once, inside the cached MDS fresh cleanup and
 // before the owned filesystem is removed. It waits for the stable topology
-// (the failed daemon returns as the standby by itself; nothing is restarted),
-// restores every owned pin whose directory still exists, reads the namespace
-// back, removes only blocklist entries attributable to the takeover or an
-// observed owned Go session, and removes its two identities. Residual
-// namespace entries are reported and discarded by the filesystem removal; no
-// session is evicted.
+// (the failed daemon returns as the spare by itself; nothing is restarted),
+// restores an owned journal pause its incarnation still holds (a respawned
+// incarnation discarded it), restores every owned pin whose directory still
+// exists, reads the namespace back, removes only blocklist entries
+// attributable to the takeover or an observed owned Go session, and removes
+// its two identities. Residual namespace entries are reported and discarded by
+// the filesystem removal; no session is evicted. The allow_standby_replay flag
+// belongs to the owned filesystem and is removed with it.
 func (c *fixtureCluster) finishMDSCephFSRanks(ctx context.Context) error {
 	s, x := c.mdsFresh, c.mdsCephFSRanks
 	if s == nil || x == nil {
@@ -1276,7 +1699,11 @@ func (c *fixtureCluster) finishMDSCephFSRanks(ctx context.Context) error {
 	ctx, stop := context.WithTimeout(ctx, 100*time.Second)
 	defer stop()
 	receipt := mdsCephFSRanksCleanup{Source: mdsFreshSource, Token: s.token, FSName: s.name, Attempted: true, Pins: x.pins, Takeover: x.takeover, PinCleanup: []mdsCephFSRanksPinCleanup{},
-		ResidualSessions: []mdsSessionsNative{}, NewBlocklist: []mdsSessionsBlock{}, RemovedBlocklist: []mdsCephFSRemovedBlock{}, KeptBlocklist: []mdsSessionsBlock{}}
+		Shape: x.shape, ReplayEnable: x.replayEnable, Runtime: x.runtime, ResidualSessions: []mdsSessionsNative{}, NewBlocklist: []mdsSessionsBlock{}, RemovedBlocklist: []mdsCephFSRemovedBlock{},
+		KeptBlocklist: []mdsSessionsBlock{}}
+	if receipt.Runtime == nil {
+		receipt.Runtime = []*mdsCephFSRanksRuntime{}
+	}
 	if err := writeMDSFreshJSON(x.out, "mds-cephfs-ranks-cleanup.json", receipt); err != nil {
 		return err
 	}
@@ -1291,11 +1718,21 @@ func (c *fixtureCluster) finishMDSCephFSRanks(ctx context.Context) error {
 		var t mdsCephFSRanksTopology
 		var err error
 		owned := c.mdsCephFSRankedOwned()
+		// An enable whose follower was never proven may still produce one.
+		shapes := []mdsCephFSRanksShape{x.shape}
+		if r := x.replayEnable; r != nil && r.State != "following" {
+			shapes = append(shapes, mdsCephFSRanksShape{Ranks: x.shape.Ranks, Follow: true})
+		}
 		deadline := time.Now().Add(60 * time.Second)
 		for {
 			t, err = c.mdsCephFSRanksTopology(ctx)
 			if err == nil {
-				err = t.stable(owned)
+				err = t.stable(owned, shapes[0])
+				for _, shape := range shapes[1:] {
+					if err != nil && t.stable(owned, shape) == nil {
+						err = nil
+					}
+				}
 			}
 			if err == nil || time.Now().After(deadline) || ctx.Err() != nil {
 				break
@@ -1305,10 +1742,41 @@ func (c *fixtureCluster) finishMDSCephFSRanks(ctx context.Context) error {
 		receipt.Topology = &t
 		receipt.TopologyRestored = err == nil
 		if err != nil {
-			receipt.TopologyNote = "the two-active and one-standby topology did not return; native mounts are skipped and the filesystem removal discards the namespace"
+			receipt.TopologyNote = "the owned active ranks and their spare did not return; native mounts are skipped and the filesystem removal discards the namespace"
 			fail(err)
 		}
-		goPresent := false
+		// A journal pause still in effect would stall every native mount (its
+		// session open is journaled on rank 0).
+		receipt.RuntimeRestored = true
+		for _, r := range x.runtime {
+			if !r.active() {
+				continue
+			}
+			present := false
+			for _, d := range append(slices.Clone(t.Daemons), t.Standbys...) {
+				present = present || d.GID == r.GID
+			}
+			switch {
+			case err == nil && !present:
+				// The incarnation respawned (or was replaced): its runtime-only
+				// setting is gone with its process.
+				r.State = "discarded"
+			case err == nil && len(t.Ranks) > 0 && t.Ranks[0].GID == r.GID && t.Ranks[0].Name == r.Daemon:
+				r.State = "restore-intended"
+				fail(c.mdsCephFSRanksJournal())
+				readback, setErr := c.mdsCephFSRanksSetRuntime(ctx, t.Ranks[0], r.Name, r.Baseline)
+				r.RestoreReadback, r.State = readback, "restored"
+				if setErr != nil {
+					r.State, r.Error, receipt.RuntimeRestored = "restore-uncertain", setErr.Error(), false
+					fail(setErr)
+				}
+			default:
+				receipt.RuntimeRestored = false
+				fail(errors.New("MDS CephFS ranks journal pause cannot be attributed to a proven rank-0 incarnation"))
+			}
+			fail(c.mdsCephFSRanksJournal())
+		}
+		goPresent := !receipt.RuntimeRestored
 		if receipt.TopologyRestored {
 			for _, d := range t.Ranks {
 				data, err := c.mdsCephFSRanksTell(ctx, d, "session", "ls", "--format", "json")
@@ -1339,10 +1807,10 @@ func (c *fixtureCluster) finishMDSCephFSRanks(ctx context.Context) error {
 		case goPresent:
 			// A native mount could wait on capability revocations from a Go
 			// session whose process is gone. The filesystem removal discards it.
-			receipt.NamespaceNote = "Go session still present; pin restoration and namespace readback skipped, both discarded with the owned filesystem"
+			receipt.NamespaceNote = "Go session or journal pause still present; pin restoration and namespace readback skipped, both discarded with the owned filesystem"
 			receipt.PinsRestored = len(x.pinBaseline) == 0
 		default:
-			for _, target := range []string{x.plan.Forward, x.plan.Migrate} {
+			for _, target := range x.plan.pinTargets() {
 				baseline, changed := x.pinBaseline[target]
 				if !changed {
 					continue
@@ -1378,6 +1846,7 @@ func (c *fixtureCluster) finishMDSCephFSRanks(ctx context.Context) error {
 		}
 	} else {
 		receipt.NamespaceChecked, receipt.NamespaceRestored, receipt.BlocklistRestored, receipt.PinsRestored, receipt.TopologyRestored = true, true, true, true, true
+		receipt.RuntimeRestored = true
 		receipt.NamespaceNote = "preparation ended before any owned mutation was possible"
 	}
 	remove := func(config *ceph.ClientConfig, intent bool, label string) bool {
@@ -1397,7 +1866,7 @@ func (c *fixtureCluster) finishMDSCephFSRanks(ctx context.Context) error {
 	for _, err := range errs {
 		receipt.Errors = append(receipt.Errors, err.Error())
 	}
-	receipt.Completed = len(errs) == 0 && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.PinsRestored && receipt.TopologyRestored &&
+	receipt.Completed = len(errs) == 0 && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.PinsRestored && receipt.TopologyRestored && receipt.RuntimeRestored &&
 		receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved
 	if !receipt.Completed && len(errs) == 0 {
 		errs = append(errs, errors.New("MDS CephFS ranks cleanup did not verify every check"))

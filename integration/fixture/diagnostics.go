@@ -47,7 +47,7 @@ var metadataFiles = []string{
 	"mds-sessions-oracle.json", "mds-sessions-owned.json", "mds-sessions-result.json", "mds-sessions-results.json", "mds-sessions-cleanup.json",
 	"mds-cephfs-oracle.json", "mds-cephfs-owned.json", "mds-cephfs-result.json", "mds-cephfs-results.json", "mds-cephfs-cleanup.json",
 	"mds-cephfs-target.json", "mds-cephfs-recovery-results.json", "mds-cephfs-push-results.json",
-	"mds-cephfs-ranks-oracle.json", "mds-cephfs-ranks-owned.json", "mds-cephfs-ranks-result.json", "mds-cephfs-ranks-results.json", "mds-cephfs-ranks-cleanup.json",
+	"mds-cephfs-ranks-oracle.json", "mds-cephfs-ranks-owned.json", "mds-cephfs-ranks-result.json", "mds-cephfs-ranks-results.json", "mds-cephfs-ranks-replay-results.json", "mds-cephfs-ranks-cleanup.json",
 	"mds-cephfs-completion-oracle.json", "mds-cephfs-completion-owned.json", "mds-cephfs-completion-result.json", "mds-cephfs-completion-target.json",
 	"mds-cephfs-completion-results.json", "mds-cephfs-completion-cleanup.json",
 	"mds-cephfs-data-oracle.json", "mds-cephfs-data-owned.json", "mds-cephfs-data-result.json", "mds-cephfs-data-results.json", "mds-cephfs-data-cleanup.json",

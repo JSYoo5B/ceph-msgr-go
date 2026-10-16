@@ -210,6 +210,64 @@ identities were removed. The MDS fresh cleanup receipt adds
 `cephfs_ranks_verified`; filesystem, pool and identity removal proceed even
 if this verification failed, and both errors are reported.
 
+## Standby-replay extension
+
+`CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY=1` extends this profile (it
+requires `CEPH_MSGR_TEST_MDS_CEPHFS_RANKS=1` and keeps every exclusion
+above). It selects only `^TestCephMDSCephFSRanksReplayIntegration$`, starts
+the owned filesystem with `cephfs.Config{ActiveMDS: 3, StandbyMDS: 1}` (four
+owned MDS containers; the provider still sets no standby replay) and has a
+four-minute termination budget. The base profile's plan, actions and
+receipts are unchanged. Additional relied-upon behavior:
+`mon/MDSMonitor.cc` (`maybe_promote_standby` assigns a free standby to the
+lowest followable rank, `fail_mds_gid` does not blocklist a standby-replay
+daemon), `mds/FSMap.cc` (`find_replacement_for` prefers the rank's
+standby-replay follower, `promote` moves it to `up:replay`),
+`mds/MDLog.cc` (`mds_log_pause`), `mds/Migrator.cc` (`export_frozen` flushes
+client sessions after the freeze and `export_go` waits for their
+acknowledgements; `export_finish` unfreezes and retries waiters) and
+`mds/MDCache.cc` (`path_traverse` waits on a frozen dirfrag, forwards to the
+known dirfrag authority, and discovers instead when the forward count
+exceeds the depth).
+
+The extension's steady topology is three active ranks and one spare. Before
+`replay-enable` the spare is the owned `up:standby`; afterwards it is an
+owned `up:standby-replay` follower of rank 0 (an MDSMap `info` entry with
+rank 0, not a standby), and every proof uses that shape.
+
+The plan adds `chain` with `chain/hop` and its files `anchor`,
+`forwarded-file`, `forwarded-dir`; `inflight` with `anchor`, `held-file`,
+`held-dir`; and `replay` with `safe-0`, `safe-1`, `inflight-file`,
+`inflight-dir`. The Go client creates and removes all of it. The driver
+admits paths up to three levels below the owned directory and adds `list`
+(readdir with each entry's `statx`, at most 64 entries, `d_ino` equal to the
+`statx` inode).
+
+| Action | Arguments | Native effect |
+| --- | --- | --- |
+| `pin`, `placement` | also `chain/hop`, `chain`, `inflight`; ranks up to 2 | as above |
+| `list` | `dir`, `chain/hop`, `inflight`, `replay` | read only: native listing |
+| `ops` | rank, an observed owned GlobalID | read only: that rank daemon's `dump_historic_ops`, client requests of that GlobalID only |
+| `replay-enable` | none | mutation: journals `intended`, runs `fs set <owned fs> allow_standby_replay true` once, then waits (60 s, 100 ms period) until the owned standby, same name, GID, endpoint and nonce, follows rank 0 with every rank unchanged; the followed topology becomes current |
+| `log-pause`, `log-resume` | none | mutation: runtime-only `mds_log_pause` of the current rank-0 incarnation through `tell mds.<name> config set`, read back with `config get`; the pause requires the read value `false`, is issued once before the takeover and is journaled first; the resume restores the read value |
+
+While a pause is in effect only `observe`, `ops`, `placement`,
+`log-resume` and the takeover actions run: a native mount opens a journaled
+session on every rank and would wait on rank 0. The takeover arms the spare
+(standby or follower) and records ranks 1 and 2; adoption requires the
+spare in rank 0 with a new incarnation, ranks 1 and 2 unchanged and the
+failed daemon back as the spare in the current shape (the new follower of
+rank 0 once replay is enabled). A pause of the failed incarnation is then
+recorded `discarded`: the runtime value went with the respawned process.
+
+Cleanup waits for the steady shape (either shape if the enable's outcome is
+not `following`), restores a pause its incarnation still holds or records it
+`discarded` when that GID is gone, and skips native mounts when a pause
+cannot be attributed. `runtime_restored` is part of `completed`. Pins are
+restored nested directory first. The `allow_standby_replay` flag belongs to
+the owned filesystem and is removed with it; no other blocklist entry is
+expected, since failing a follower does not blocklist it.
+
 ## Unit coverage
 
 Fixture unit tests cover the exclusive profile and selector (including its
@@ -221,5 +279,11 @@ transitional topology parsing with identity comparison, subtree, counter and
 daemon-status parsing, placement convergence (including an ambiguous
 authority and an auxiliary subtree on rank 0), native output shapes, the
 takeover pending rule, scope rejection before native work and cleanup
-without a baseline. They do not establish live MDS behavior; see
-[MDS_CEPHFS_RANKS_VALIDATION.md](MDS_CEPHFS_RANKS_VALIDATION.md).
+without a baseline. The extension's tests
+(`mds_cephfs_ranks_replay_test.go`) cover its profile and selector, the
+three-rank filesystem configuration, the extension plan, its actions and
+their refusal in the base profile, three-rank and follower topologies
+(including a follower of another rank), three-rank placement, the listing
+shape and the journal pause's active states. They do not establish live MDS
+behavior; see [MDS_CEPHFS_RANKS_VALIDATION.md](MDS_CEPHFS_RANKS_VALIDATION.md)
+and [MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md](MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md).

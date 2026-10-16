@@ -43,6 +43,13 @@ type nativeMDSCephFSRanksPlan struct {
 	ForwardFile  string   `json:"forward_file"`
 	Migrate      string   `json:"migrate"`
 	MigrateFiles []string `json:"migrate_files"`
+	// The standby-replay extension's directories.
+	Chain         string   `json:"chain"`
+	ChainFiles    []string `json:"chain_files"`
+	Inflight      string   `json:"inflight"`
+	InflightFiles []string `json:"inflight_files"`
+	Replayed      string   `json:"replayed"`
+	ReplayedFiles []string `json:"replayed_files"`
 }
 
 type nativeMDSCephFSRanksDaemon struct {
@@ -72,21 +79,54 @@ type nativeMDSCephFSRanksTopology struct {
 	Ranks         []*nativeMDSCephFSRanksDaemon `json:"ranks"`
 	Daemons       []nativeMDSCephFSRanksDaemon  `json:"daemons"`
 	Standbys      []nativeMDSCephFSRanksDaemon  `json:"owned_standbys"`
+	Followers     []nativeMDSCephFSRanksDaemon  `json:"standby_replay"`
 	OtherStandbys int                           `json:"other_standbys"`
+}
+
+// nativeMDSCephFSRanksShape is the steady topology of one profile: the number
+// of active ranks and whether the one spare follows rank 0 (standby replay).
+type nativeMDSCephFSRanksShape struct {
+	Ranks  int  `json:"ranks"`
+	Follow bool `json:"follow"`
+}
+
+// spare returns the one spare daemon: the standby or the follower.
+func (t nativeMDSCephFSRanksTopology) spare() *nativeMDSCephFSRanksDaemon {
+	if len(t.Standbys) == 1 && len(t.Followers) == 0 {
+		return &t.Standbys[0]
+	}
+	if len(t.Followers) == 1 && len(t.Standbys) == 0 {
+		return &t.Followers[0]
+	}
+	return nil
 }
 
 // stable reports two active ranks and one standby on three distinct daemons.
 func (t nativeMDSCephFSRanksTopology) stable() bool {
-	if t.MaxMDS != 2 || !slices.Equal(t.In, []int{0, 1}) || len(t.Failed) != 0 || len(t.Ranks) != 2 || len(t.Standbys) != 1 || t.OtherStandbys != 0 {
+	return t.stableAs(nativeMDSCephFSRanksShape{Ranks: 2})
+}
+
+// stableAs reports shape.Ranks active ranks and one spare on distinct
+// daemons: a standby, or with Follow a standby-replay follower of rank 0.
+func (t nativeMDSCephFSRanksTopology) stableAs(shape nativeMDSCephFSRanksShape) bool {
+	in := make([]int, shape.Ranks)
+	for rank := range in {
+		in[rank] = rank
+	}
+	spare := t.spare()
+	if t.MaxMDS != shape.Ranks || !slices.Equal(t.In, in) || len(t.Failed) != 0 || len(t.Ranks) != shape.Ranks || spare == nil || (len(t.Followers) == 1) != shape.Follow || t.OtherStandbys != 0 {
 		return false
 	}
 	names := map[string]bool{}
-	for rank, d := range append(slices.Clone(t.Ranks), &t.Standbys[0]) {
-		want := "up:active"
-		if rank == 2 {
-			want = "up:standby"
+	for rank, d := range append(slices.Clone(t.Ranks), spare) {
+		want, wantRank := "up:active", rank
+		if rank == shape.Ranks {
+			want, wantRank = "up:standby", -1
+			if shape.Follow {
+				want, wantRank = "up:standby-replay", 0
+			}
 		}
-		if d == nil || names[d.Name] || d.State != want || d.GID == 0 || d.Nonce == 0 || d.Endpoint == "" || rank < 2 && int(d.Rank) != rank {
+		if d == nil || names[d.Name] || d.State != want || d.GID == 0 || d.Nonce == 0 || d.Endpoint == "" || wantRank >= 0 && int(d.Rank) != wantRank {
 			return false
 		}
 		names[d.Name] = true
@@ -95,8 +135,16 @@ func (t nativeMDSCephFSRanksTopology) stable() bool {
 }
 
 func (t nativeMDSCephFSRanksTopology) sameAs(o nativeMDSCephFSRanksTopology) bool {
-	return t.stable() && o.stable() && t.Ranks[0].same(o.Ranks[0]) && t.Ranks[1].same(o.Ranks[1]) && t.Standbys[0].Name == o.Standbys[0].Name && t.Standbys[0].GID == o.Standbys[0].GID &&
-		t.Standbys[0].Nonce == o.Standbys[0].Nonce
+	a, b := t.spare(), o.spare()
+	if len(t.Ranks) < 2 || len(t.Ranks) != len(o.Ranks) || a == nil || b == nil {
+		return false
+	}
+	for rank := range t.Ranks {
+		if !t.Ranks[rank].same(o.Ranks[rank]) {
+			return false
+		}
+	}
+	return a.Name == b.Name && a.GID == b.GID && a.Nonce == b.Nonce && a.State == b.State
 }
 
 type nativeMDSCephFSRanksSubtree struct {
@@ -175,6 +223,8 @@ type nativeMDSCephFSRanksTakeover struct {
 	Armed          nativeMDSCephFSRanksDaemon    `json:"armed"`
 	Standby        nativeMDSCephFSRanksDaemon    `json:"standby"`
 	Rank1          nativeMDSCephFSRanksDaemon    `json:"rank1"`
+	Others         []nativeMDSCephFSRanksDaemon  `json:"other_ranks"`
+	Follow         bool                          `json:"follow"`
 	ArmedAddresses []string                      `json:"armed_blocklist_addresses"`
 	Output         string                        `json:"native_output"`
 	Error          string                        `json:"error"`
@@ -193,39 +243,71 @@ type nativeMDSCephFSRanksStatus struct {
 }
 
 type nativeMDSCephFSRanksNative struct {
-	Action         string               `json:"action"`
-	Path           string               `json:"path"`
-	NativeGlobalID uint64               `json:"native_global_id"`
-	Stat           *nativeMDSCephFSStat `json:"stat"`
-	Pin            *string              `json:"pin"`
-	PinSet         *string              `json:"pin_set"`
+	Action         string                 `json:"action"`
+	Path           string                 `json:"path"`
+	NativeGlobalID uint64                 `json:"native_global_id"`
+	Stat           *nativeMDSCephFSStat   `json:"stat"`
+	Pin            *string                `json:"pin"`
+	PinSet         *string                `json:"pin_set"`
+	Entries        []nativeMDSCephFSEntry `json:"entries"`
+}
+
+type nativeMDSCephFSRanksReplayEnable struct {
+	State        string                        `json:"state"`
+	Standby      nativeMDSCephFSRanksDaemon    `json:"standby"`
+	Output       string                        `json:"native_output"`
+	Error        string                        `json:"error"`
+	StartedUTC   string                        `json:"started_utc"`
+	AppliedUTC   string                        `json:"applied_utc"`
+	FollowingUTC string                        `json:"following_utc"`
+	Polls        int                           `json:"polls"`
+	WaitedMillis int64                         `json:"waited_ms"`
+	Follower     *nativeMDSCephFSRanksDaemon   `json:"follower"`
+	Topology     *nativeMDSCephFSRanksTopology `json:"topology"`
+}
+
+type nativeMDSCephFSRanksRuntime struct {
+	Kind            string `json:"kind"`
+	Name            string `json:"name"`
+	Value           string `json:"value"`
+	Baseline        string `json:"baseline"`
+	Daemon          string `json:"daemon"`
+	GID             uint64 `json:"gid"`
+	State           string `json:"state"`
+	Readback        string `json:"readback"`
+	RestoreReadback string `json:"restore_readback"`
+	Error           string `json:"error"`
 }
 
 type nativeMDSCephFSRanksReceipt struct {
-	Source          string                         `json:"source_commit"`
-	Token           string                         `json:"token"`
-	RequestID       int64                          `json:"request_id"`
-	Action          string                         `json:"action"`
-	Target          string                         `json:"target"`
-	Value           string                         `json:"value"`
-	GlobalID        uint64                         `json:"global_id"`
-	FSID            string                         `json:"fsid"`
-	FSCID           int32                          `json:"fscid"`
-	FSName          string                         `json:"fs_name"`
-	Topology        *nativeMDSCephFSRanksTopology  `json:"topology"`
-	IdentityChecked bool                           `json:"identity_checked"`
-	Views           []nativeMDSCephFSRanksView     `json:"views"`
-	Blocklist       []nativeMDSSessionsBlock       `json:"blocklist"`
-	Native          *nativeMDSCephFSRanksNative    `json:"native"`
-	Processes       json.RawMessage                `json:"native_processes,omitempty"`
-	Pin             *nativeMDSCephFSRanksPin       `json:"pin"`
-	Placement       *nativeMDSCephFSRanksPlacement `json:"placement"`
-	Takeover        *nativeMDSCephFSRanksTakeover  `json:"takeover"`
-	Status          *nativeMDSCephFSRanksStatus    `json:"status"`
-	Complete        bool                           `json:"complete"`
-	Error           string                         `json:"error"`
-	ElapsedMillis   int64                          `json:"elapsed_ms"`
-	ObservedUTC     string                         `json:"observed_utc"`
+	Source          string                            `json:"source_commit"`
+	Token           string                            `json:"token"`
+	RequestID       int64                             `json:"request_id"`
+	Action          string                            `json:"action"`
+	Target          string                            `json:"target"`
+	Value           string                            `json:"value"`
+	GlobalID        uint64                            `json:"global_id"`
+	FSID            string                            `json:"fsid"`
+	FSCID           int32                             `json:"fscid"`
+	FSName          string                            `json:"fs_name"`
+	Topology        *nativeMDSCephFSRanksTopology     `json:"topology"`
+	IdentityChecked bool                              `json:"identity_checked"`
+	Views           []nativeMDSCephFSRanksView        `json:"views"`
+	Blocklist       []nativeMDSSessionsBlock          `json:"blocklist"`
+	Native          *nativeMDSCephFSRanksNative       `json:"native"`
+	Processes       json.RawMessage                   `json:"native_processes,omitempty"`
+	Pin             *nativeMDSCephFSRanksPin          `json:"pin"`
+	Placement       *nativeMDSCephFSRanksPlacement    `json:"placement"`
+	Takeover        *nativeMDSCephFSRanksTakeover     `json:"takeover"`
+	Status          *nativeMDSCephFSRanksStatus       `json:"status"`
+	ReplayEnable    *nativeMDSCephFSRanksReplayEnable `json:"replay_enable"`
+	Runtime         *nativeMDSCephFSRanksRuntime      `json:"runtime"`
+	HistoricOps     []nativeMDSCephFSHistoricOp       `json:"historic_ops"`
+	OpsDaemon       *nativeMDSCephFSRanksDaemon       `json:"ops_daemon"`
+	Complete        bool                              `json:"complete"`
+	Error           string                            `json:"error"`
+	ElapsedMillis   int64                             `json:"elapsed_ms"`
+	ObservedUTC     string                            `json:"observed_utc"`
 }
 
 func (r nativeMDSCephFSRanksReceipt) view(rank int32) *nativeMDSCephFSRanksView {
@@ -250,6 +332,8 @@ type nativeMDSCephFSRanksOracle struct {
 	Plan              nativeMDSCephFSRanksPlan     `json:"plan"`
 	BaselineBlocklist []nativeMDSSessionsBlock     `json:"baseline_blocklist"`
 	Topology          nativeMDSCephFSRanksTopology `json:"topology"`
+	Shape             nativeMDSCephFSRanksShape    `json:"shape"`
+	Extension         bool                         `json:"standby_replay_extension"`
 }
 
 // mdsCephFSRanksControl drives the closed fixture control of this test. One
@@ -259,6 +343,7 @@ type mdsCephFSRanksControl struct {
 	dir      string
 	oracle   nativeMDSCephFSRanksOracle
 	topology nativeMDSCephFSRanksTopology
+	shape    nativeMDSCephFSRanksShape
 	last     int64
 	goGID    uint64
 	receipts []nativeMDSCephFSRanksReceipt
@@ -295,22 +380,41 @@ func (x *mdsCephFSRanksControl) request(ctx context.Context, action string, args
 		return result, nil
 	case "takeover-adopt":
 		r := result.Takeover
-		if r == nil || r.State != "adopted" || r.Adopted == nil || result.Topology == nil || !r.Adopted.sameAs(*result.Topology) {
+		if r == nil || r.State != "adopted" || r.Adopted == nil || result.Topology == nil || !r.Adopted.sameAs(*result.Topology) || !r.Adopted.stableAs(x.shape) {
 			return result, errors.New("native MDS CephFS ranks takeover adoption receipt differs")
 		}
 		old, adopted := x.topology, *r.Adopted
-		if adopted.Ranks[0].Name != old.Standbys[0].Name || adopted.Ranks[0].GID != old.Standbys[0].GID || adopted.Ranks[0].Incarnation == old.Ranks[0].Incarnation ||
-			!adopted.Ranks[1].same(old.Ranks[1]) || adopted.Standbys[0].Name != old.Ranks[0].Name || adopted.Standbys[0].GID == old.Ranks[0].GID {
-			return result, errors.New("adopted topology is not the standby takeover of rank 0")
+		oldSpare, newSpare := old.spare(), adopted.spare()
+		others := len(adopted.Ranks) == len(old.Ranks)
+		for rank := 1; others && rank < len(old.Ranks); rank++ {
+			others = adopted.Ranks[rank].same(old.Ranks[rank])
+		}
+		if adopted.Ranks[0].Name != oldSpare.Name || adopted.Ranks[0].GID != oldSpare.GID || adopted.Ranks[0].Incarnation == old.Ranks[0].Incarnation ||
+			!others || newSpare.Name != old.Ranks[0].Name || newSpare.GID == old.Ranks[0].GID {
+			return result, errors.New("adopted topology is not the spare's takeover of rank 0")
 		}
 		x.topology = adopted
+	case "replay-enable":
+		r := result.ReplayEnable
+		follow := nativeMDSCephFSRanksShape{Ranks: x.shape.Ranks, Follow: true}
+		old := x.topology.spare()
+		if r == nil || r.State != "following" || r.Follower == nil || r.Topology == nil || result.Topology == nil || !r.Topology.stableAs(follow) || !result.Topology.sameAs(*r.Topology) ||
+			old == nil || r.Follower.Name != old.Name || r.Follower.GID != old.GID || r.Follower.Rank != 0 || r.Follower.State != "up:standby-replay" {
+			return result, errors.New("native MDS CephFS ranks standby-replay receipt differs")
+		}
+		for rank := range x.topology.Ranks {
+			if !r.Topology.Ranks[rank].same(x.topology.Ranks[rank]) {
+				return result, errors.New("standby replay changed an active rank")
+			}
+		}
+		x.shape, x.topology = follow, *r.Topology
 	}
-	if !result.IdentityChecked || result.Topology == nil || !result.Topology.sameAs(x.topology) {
+	if !result.IdentityChecked || result.Topology == nil || !result.Topology.sameAs(x.topology) || !result.Topology.stableAs(x.shape) {
 		return result, errors.New("native MDS CephFS ranks receipt lacks its identity proof or names other daemons")
 	}
 	switch action {
 	case "observe":
-		if strconv.FormatUint(result.GlobalID, 10) != args[0] || len(result.Views) != 2 {
+		if strconv.FormatUint(result.GlobalID, 10) != args[0] || len(result.Views) != x.shape.Ranks {
 			return result, errors.New("native MDS CephFS ranks observation scope differs")
 		}
 		// The fixture proves each daemon's applied epoch after the views; a
@@ -334,13 +438,30 @@ func (x *mdsCephFSRanksControl) request(ctx context.Context, action string, args
 			return result, errors.New("native MDS CephFS ranks pin readback is not independent of the setting mount")
 		}
 	case "placement":
-		if result.Placement == nil || result.Placement.Target != args[0] || strconv.Itoa(int(result.Placement.Rank)) != args[1] || len(result.Views) != 2 {
+		if result.Placement == nil || result.Placement.Target != args[0] || strconv.Itoa(int(result.Placement.Rank)) != args[1] || len(result.Views) != x.shape.Ranks {
 			return result, errors.New("native MDS CephFS ranks placement receipt differs")
 		}
 	case "takeover-arm":
 		r := result.Takeover
-		if r == nil || r.State != "armed" || !r.Armed.same(x.topology.Ranks[0]) || !r.Rank1.same(x.topology.Ranks[1]) || r.Standby.GID != x.topology.Standbys[0].GID || len(r.ArmedAddresses) == 0 {
+		if r == nil || r.State != "armed" || !r.Armed.same(x.topology.Ranks[0]) || !r.Rank1.same(x.topology.Ranks[1]) || r.Standby.GID != x.topology.spare().GID || r.Follow != x.shape.Follow ||
+			len(r.ArmedAddresses) == 0 {
 			return result, errors.New("native MDS CephFS ranks takeover arm receipt differs")
+		}
+	case "list":
+		if result.Native == nil || result.Native.Entries == nil || result.Native.NativeGlobalID == 0 || result.Native.NativeGlobalID == x.goGID {
+			return result, errors.New("native CephFS ranks listing missing or bound to the Go client")
+		}
+	case "ops":
+		rank, _ := strconv.Atoi(args[0])
+		if result.OpsDaemon == nil || !result.OpsDaemon.same(x.topology.Ranks[rank]) || strconv.FormatUint(result.GlobalID, 10) != args[1] || result.HistoricOps == nil {
+			return result, errors.New("native MDS CephFS ranks historic ops receipt differs")
+		}
+	case "log-pause", "log-resume":
+		r, d := result.Runtime, x.topology.Ranks[0]
+		want := map[string]string{"log-pause": "applied", "log-resume": "restored"}[action]
+		if r == nil || r.Kind != "log-pause" || r.State != want || r.Daemon != d.Name || r.GID != d.GID || action == "log-pause" && r.Readback != "true" ||
+			action == "log-resume" && r.RestoreReadback != r.Baseline {
+			return result, errors.New("native MDS CephFS ranks journal pause receipt differs")
 		}
 	}
 	return result, nil
@@ -445,7 +566,7 @@ func TestCephMDSCephFSRanksIntegration(t *testing.T) {
 	}
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if dir == "" || os.Getenv("CEPH_MSGR_TEST_MDS_FRESH") != "1" || os.Getenv("CEPH_MSGR_TEST_MDS_COMMANDS") == "1" || os.Getenv("CEPH_MSGR_TEST_MDS_SESSIONS") == "1" ||
-		os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") == "1" || os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "legacy-v6" {
+		os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") == "1" || os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY") == "1" || os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "legacy-v6" {
 		t.Fatal("multi-rank CephFS acceptance requires its owned legacy/no-HASHPSPOOL two-rank fixture")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 9*time.Minute)
@@ -471,7 +592,7 @@ func TestCephMDSCephFSRanksIntegration(t *testing.T) {
 		topo.Ranks[0].Name != fresh.MDS.Name || topo.Ranks[0].GID != fresh.MDS.GID || topo.Ranks[0].Endpoint != fresh.MDS.Endpoint || topo.Ranks[0].Nonce != fresh.MDS.Nonce {
 		t.Fatal("owned multi-rank CephFS oracle, plan, identity or topology differ")
 	}
-	control := &mdsCephFSRanksControl{dir: dir, oracle: oracle, topology: topo}
+	control := &mdsCephFSRanksControl{dir: dir, oracle: oracle, topology: topo, shape: nativeMDSCephFSRanksShape{Ranks: 2}}
 	metadata := map[string]string{"entity_id": strings.TrimPrefix(identity, "client."), "hostname": "ceph-msgr-go-" + oracle.Token[:8] + "-ranks", "root": "/"}
 	options := cephmsgr.MDSSessionOptions{Metadata: metadata, RenewInterval: 2 * time.Second, MaxEvents: 1024}
 	dirPath := "/" + plan.Directory

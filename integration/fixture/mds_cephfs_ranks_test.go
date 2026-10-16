@@ -81,8 +81,8 @@ func TestMDSCephFSRanksIdentityCapsAndPlan(t *testing.T) {
 		t.Fatal("the native oracle needs only the filesystem-bound MDS grant with the vxattr flag", nativeCaps)
 	}
 	token := strings.Repeat("a1", 16)
-	plan := mdsCephFSRanksPlanFor(token)
-	if plan.Directory != "ceph-msgr-ranks-"+token || !reflect.DeepEqual(plan, mdsCephFSRanksPlanFor(token)) || reflect.DeepEqual(plan, mdsCephFSRanksPlanFor(strings.Repeat("b2", 16))) {
+	plan := mdsCephFSRanksPlanFor(token, false)
+	if plan.Directory != "ceph-msgr-ranks-"+token || !reflect.DeepEqual(plan, mdsCephFSRanksPlanFor(token, false)) || reflect.DeepEqual(plan, mdsCephFSRanksPlanFor(strings.Repeat("b2", 16), false)) {
 		t.Fatal("plan is not deterministic and token-bound", plan)
 	}
 	root := "/" + plan.Directory
@@ -108,7 +108,7 @@ func TestMDSCephFSRanksIdentityCapsAndPlan(t *testing.T) {
 
 func TestMDSCephFSRanksRequestIsClosedAndScoped(t *testing.T) {
 	token := strings.Repeat("a1", 16)
-	plan := mdsCephFSRanksPlanFor(token)
+	plan := mdsCephFSRanksPlanFor(token, false)
 	for _, tc := range []struct {
 		fields              []string
 		name, target, value string
@@ -126,7 +126,7 @@ func TestMDSCephFSRanksRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"10", token, "takeover-status"}, "takeover-status", "", "", 0},
 		{[]string{"10", token, "takeover-adopt"}, "takeover-adopt", "", "", 0},
 	} {
-		id, action, err := parseMDSCephFSRanksRequest(tc.fields, token, plan, 9)
+		id, action, err := parseMDSCephFSRanksRequest(tc.fields, token, plan, 2, false, 9)
 		if err != nil || id != 10 || action.name != tc.name || action.target != tc.target || action.value != tc.value || action.gid != tc.gid {
 			t.Fatal("closed MDS CephFS ranks action changed", tc.fields, id, action, err)
 		}
@@ -139,11 +139,11 @@ func TestMDSCephFSRanksRequestIsClosedAndScoped(t *testing.T) {
 		{"10", token, "takeover-arm", "x"}, {"10", token, "mds-fail"}, {"10", token, "evict", "42"}, {"0", token, "stat", "dir"}, {"010", token, "stat", "dir"},
 		{"10", token, "pin", "fwd", "1", "x"},
 	} {
-		if _, _, err := parseMDSCephFSRanksRequest(fields, token, plan, 0); err == nil {
+		if _, _, err := parseMDSCephFSRanksRequest(fields, token, plan, 2, false, 0); err == nil {
 			t.Fatal("unowned or caller-selected CephFS ranks action admitted", fields)
 		}
 	}
-	if _, _, err := parseMDSCephFSRanksRequest([]string{"10", token, "stat", "dir"}, token, plan, 10); err == nil {
+	if _, _, err := parseMDSCephFSRanksRequest([]string{"10", token, "stat", "dir"}, token, plan, 2, false, 10); err == nil {
 		t.Fatal("replayed MDS CephFS ranks request admitted")
 	}
 }
@@ -181,7 +181,7 @@ func (x ranksDumpFixture) parse() (mdsCephFSRanksTopology, error) {
 func TestMDSCephFSRanksTopology(t *testing.T) {
 	x := newRanksDumpFixture()
 	got, err := x.parse()
-	if err != nil || got.stable(func(name string) bool { return x.owned[name] }) != nil || got.FSMapEpoch != 9 || got.MDSMapEpoch != 9 || got.Ranks[0].GID != 51 || got.Ranks[1].GID != 52 ||
+	if err != nil || got.stable(func(name string) bool { return x.owned[name] }, mdsCephFSRanksShape{Ranks: 2}) != nil || got.FSMapEpoch != 9 || got.MDSMapEpoch != 9 || got.Ranks[0].GID != 51 || got.Ranks[1].GID != 52 ||
 		got.Ranks[1].Endpoint != "172.18.0.6:6800" || got.Ranks[1].Nonce != 12 || got.Standbys[0].GID != 53 || got.Standbys[0].Nonce != 13 || len(got.Daemons) != 2 || !got.sameAs(got) {
 		t.Fatal("stable two-rank topology was not parsed", got, err)
 	}
@@ -206,7 +206,7 @@ func TestMDSCephFSRanksTopology(t *testing.T) {
 		y := newRanksDumpFixture()
 		change(&y)
 		got, err := y.parse()
-		if err != nil || got.stable(func(name string) bool { return y.owned[name] }) == nil {
+		if err != nil || got.stable(func(name string) bool { return y.owned[name] }, mdsCephFSRanksShape{Ranks: 2}) == nil {
 			t.Fatal("transitional map was rejected or treated as stable", name, got, err)
 		}
 	}
@@ -309,7 +309,7 @@ func TestMDSCephFSRanksSubtreesCountersAndStatus(t *testing.T) {
 }
 
 func TestMDSCephFSRanksNativeOutputShapes(t *testing.T) {
-	plan := mdsCephFSRanksPlanFor(strings.Repeat("a1", 16))
+	plan := mdsCephFSRanksPlanFor(strings.Repeat("a1", 16), false)
 	dir, _ := plan.path("fwd")
 	file, _ := plan.path("fwd/target")
 	stat := map[string]any{"exists": true, "errno": 0, "ino": 1099511627777, "mode": 0o40755, "uid": 0, "gid": 0, "nlink": 1, "size": 0}
@@ -376,7 +376,7 @@ func TestMDSCephFSRanksCleanupWithoutBaselineMutatesNothing(t *testing.T) {
 	token := strings.Repeat("a1", 16)
 	for _, intent := range []bool{false, true} {
 		out := t.TempDir()
-		c := &fixtureCluster{mdsFresh: &mdsFreshScope{out: out, token: token, name: "owned"}, mdsCephFSRanks: &mdsCephFSRanksScope{out: out, plan: mdsCephFSRanksPlanFor(token), goIntent: intent}}
+		c := &fixtureCluster{mdsFresh: &mdsFreshScope{out: out, token: token, name: "owned"}, mdsCephFSRanks: &mdsCephFSRanksScope{out: out, plan: mdsCephFSRanksPlanFor(token, false), goIntent: intent}}
 		err := c.finishMDSCephFSRanks(context.Background())
 		var receipt mdsCephFSRanksCleanup
 		data, readErr := os.ReadFile(filepath.Join(out, "mds-cephfs-ranks-cleanup.json"))
