@@ -300,6 +300,10 @@ jobs:
           # (base I/O 5, PGNLS 3, normal ACK 1, late ACK 1, watch reconnect 1, split 1, MDS maps 1).
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split)|MDSMaps)Integration$' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'replicated-pg-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split)|MDSMaps)Integration$' }
+          # Three-BlueStore v8 acceptance: one top-level test (object-scope BLOCK/UNBLOCK
+          # on a degraded object plus in-flight primary SIGKILL and explicit resubmission).
+          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDObjectBackoffFailoverIntegration$' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDObjectBackoffFailoverIntegration$' }
           # Reply v8 acceptance: eight top-level tests, sixteen actual cases per row
           # (the thirteen cases above plus three explicit reply-v8 cases).
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|ReplyV8)|MDSMaps)Integration$' }

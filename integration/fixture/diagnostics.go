@@ -60,6 +60,7 @@ var metadataFiles = []string{
 	"osd-replicated-pg-results.json", "osd-backoff-input.json", "osd-backoff-result.json", "osd-backoff-status.json", "osd-backoff-command.json", "osd-backoff-worker.log", "osd-backoff-results.json",
 	"osd-pg-list-v8-results.json", "osd-backoff-late-ack-results.json",
 	"osd-backoff-ack-input.json", "osd-backoff-ack-receipt.json",
+	"osd-object-backoff-input.json", "osd-object-backoff-result.json", "osd-object-backoff-state.json", "osd-object-backoff-command.json", "osd-object-backoff-results.json",
 	"osd-watchers-result.json", "osd-watchers-status.json", "osd-watchers-worker.log", "osd-watchers-command.json", "osd-watchers-results.json",
 	"osd-omap-write-snaps.json", "osd-snap-results.json", "osd-snap-sparse-read-results.json",
 	"rbd-base-owned.json", "rbd-base-setup.json", "rbd-base-oracle.json", "rbd-base-result.json", "rbd-base-watch-state.json", "rbd-base-cleanup.json", "rbd-base-results.json",

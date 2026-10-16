@@ -516,6 +516,23 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-object-backoff")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || !c.profile.osdPGV8() || c.profile.osdReplicas != "3" || c.profile.osdStore != "bluestore" ||
+			!slices.Contains(objectBackoffActions, fields[1]) {
+			return errors.New("invalid owned three-replica object backoff oracle request")
+		}
+		args := []string{"python3", "/out/osd_object_backoff_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-object-backoff-command.json", "native object backoff recipe"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-object-backoff-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-mds-maps")
 	if err != nil {
 		return err
@@ -994,6 +1011,10 @@ func cephLogEntryTime(line string) (time.Time, string, error) {
 
 // monitorReclaimLogLimit bounds candidate refusal evidence from each MON.
 // Unrelated debug history is streamed without being retained by the filter.
+// objectBackoffActions is the closed native recipe action set of
+// tools/osd_object_backoff_oracle.py.
+var objectBackoffActions = []string{"prepare", "config", "wait-osd", "put", "wait-degraded", "native-start", "native-finish", "native-stat", "ops", "ack-history", "restore"}
+
 const monitorReclaimLogLimit = 32 << 20
 
 // The three refusals in pinned CephxServiceHandler.cc:111-113, 126-128 and
