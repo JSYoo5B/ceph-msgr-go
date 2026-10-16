@@ -174,7 +174,7 @@ func (o *OSDConnection) open(ctx context.Context) error {
 			return err
 		}
 		linked, release := c.linkedContext(ctx)
-		tr, err := c.open(linked, dialAddress(o.address), o.address, 4, uint64(o.target.ID), session.ServiceAuth{Authorizer: authorizer, ReplicatedPGV8: o.client.options.OSDProfile.replicatedPG(), ReplicatedPGReplyV8: o.client.options.OSDProfile.replyV8()})
+		tr, err := c.open(linked, dialAddress(o.address), o.address, 4, uint64(o.target.ID), session.ServiceAuth{Authorizer: authorizer, ReplicatedPGV8: o.client.options.OSDProfile.replicatedPG(), ReplicatedPGReplyV8: o.client.options.OSDProfile.replyV8(), ReplicatedPGRequestV9: o.client.options.OSDProfile.requestV9()})
 		release()
 		if err != nil {
 			return err

@@ -23,6 +23,10 @@ type RequestAdmissionTarget struct {
 // Pinned Ceph 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964:
 // MOSDOp.h:368-396,446-454; Objecter.h:1893-1905; LGPL-2.1, no code copied.
 func DecodeRequestV8AdmissionTarget(m msgr.MessageData, limit uint32) (RequestAdmissionTarget, error) {
+	return decodeReplicatedAdmissionTarget(m, limit, 8)
+}
+
+func decodeReplicatedAdmissionTarget(m msgr.MessageData, limit uint32, version uint16) (RequestAdmissionTarget, error) {
 	var target RequestAdmissionTarget
 	if limit == 0 {
 		limit = wire.DefaultLimit
@@ -33,7 +37,7 @@ func DecodeRequestV8AdmissionTarget(m msgr.MessageData, limit uint32) (RequestAd
 	if m.Type != RequestMessage || len(m.Middle) != 0 {
 		return target, msgr.ErrFrame
 	}
-	if m.Version != 8 || m.CompatVersion != 3 {
+	if m.Version != version || m.CompatVersion != 3 {
 		return target, wire.ErrVersion
 	}
 	d := wire.NewDecoderLimit(m.Front, limit)
@@ -52,7 +56,22 @@ func DecodeRequestV8AdmissionTarget(m msgr.MessageData, limit uint32) (RequestAd
 	if v != 2 || identityStart+1 < len(m.Front) && m.Front[identityStart+1] != 2 {
 		d.Fail(wire.ErrVersion)
 	}
-	d.Raw(24) // v8's fixed three-u64 trace, not v9 opentelemetry.
+	d.Raw(24) // Fixed three-u64 trace in both v8 and v9.
+	if version == 9 {
+		traceStart := len(m.Front) - d.Remaining()
+		v, trace := d.Struct(1)
+		valid := trace.U8()
+		d.Fail(trace.Done())
+		if v != 1 || traceStart+1 < len(m.Front) && m.Front[traceStart+1] != 1 {
+			d.Fail(wire.ErrVersion)
+		}
+		if valid != 0 {
+			d.Fail(ErrRequest)
+		}
+		if target.Shard != -1 {
+			d.Fail(ErrRequest)
+		}
+	}
 	d.Raw(12) // repeated incarnation and mtime seconds/nanoseconds.
 	locatorStart := len(m.Front) - d.Remaining()
 	loc := decodeLocator(d)

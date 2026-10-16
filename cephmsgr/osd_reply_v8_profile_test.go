@@ -19,10 +19,14 @@ import (
 // These authenticated synthetic peers exercise public transport and admission;
 // they do not establish live Ceph interoperability or pool compatibility.
 func replyV8ProfileOpen(t *testing.T) (*Client, *OSDConnection, *osdTestPeer, context.Context, *atomic.Uint32) {
+	return replicatedReplyV8ProfileOpen(t, OSDProfileReplicatedPGReplyV8)
+}
+
+func replicatedReplyV8ProfileOpen(t *testing.T, profile OSDProfile) (*Client, *OSDConnection, *osdTestPeer, context.Context, *atomic.Uint32) {
 	t.Helper()
 	options := mockOptions(t, 20, [16]byte{1})
 	options.EnableOSD = true
-	options.OSDProfile = OSDProfileReplicatedPGReplyV8
+	options.OSDProfile = profile
 	options.MaxOSDConnections = 1
 	peers := make(chan *osdTestPeer, 1)
 	ready := make(chan struct{})
@@ -43,7 +47,11 @@ func replyV8ProfileOpen(t *testing.T) (*Client, *OSDConnection, *osdTestPeer, co
 			defer close(peer.done)
 			defer server.Close()
 			r, w, err := mockAuthenticate(server, peerConfig{role: 4, payload: func(tag msgr.Tag, p []byte) []byte {
-				return backoffTransportFeatures(tag, p, 1<<8|1<<9|1<<21|1<<30|1<<56|1<<57|1<<58)
+				features := uint64(1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<57 | 1<<58)
+				if profile.requestV9() {
+					features |= 1 << 49
+				}
+				return backoffTransportFeatures(tag, p, features)
 			}})
 			if err != nil {
 				return
@@ -177,9 +185,13 @@ func TestOSDReplyV8ProfilePlacementAdmission(t *testing.T) {
 }
 
 func TestOSDReplyV8ProfileRequestResultAndNoReplay(t *testing.T) {
+	testReplicatedReplyV8RequestResults(t, OSDProfileReplicatedPGReplyV8)
+}
+
+func testReplicatedReplyV8RequestResults(t *testing.T, profile OSDProfile) {
 	for _, kind := range []string{"read", "enoent", "unknown-error", "mutation-ondisk", "mutation-ack-only", "failed-guard", "failok", "redirect", "wrong-pg", "wrong-version", "wrong-compat", "disconnect"} {
 		t.Run(kind, func(t *testing.T) {
-			c, o, peer, ctx, dials := replyV8ProfileOpen(t)
+			c, o, peer, ctx, dials := replicatedReplyV8ProfileOpen(t, profile)
 			input := backoffTransportRequest()
 			input.Object.Name = "object"
 			input.Placement.PG.Seed = 7
@@ -214,9 +226,7 @@ func TestOSDReplyV8ProfileRequestResultAndNoReplay(t *testing.T) {
 			done := make(chan response, 1)
 			go func() { r, e := o.Request(ctx, input); done <- response{r, e} }()
 			sent := peer.next(t)
-			if sent.Version != 8 || sent.CompatVersion != 3 || sent.Transaction == 0 {
-				t.Fatal("new profile did not use v8 requests", sent)
-			}
+			assertReplicatedRequestProfile(t, profile, sent)
 			// The negotiated-feature tail is explicit and includes bit58 only here.
 			if tail := binary.LittleEndian.Uint64(sent.Front[len(sent.Front)-8:]); tail&(1<<58) == 0 {
 				t.Fatal("v8 request feature tail omitted reply encoding", tail)
@@ -294,9 +304,13 @@ func TestOSDReplyV8ProfileRequestResultAndNoReplay(t *testing.T) {
 }
 
 func TestOSDReplyV8ProfileListPGStrictDecoder(t *testing.T) {
+	testReplicatedReplyV8PGListResults(t, OSDProfileReplicatedPGReplyV8)
+}
+
+func testReplicatedReplyV8PGListResults(t *testing.T, profile OSDProfile) {
 	for _, kind := range []string{"page", "end", "v6-forbidden", "redirect"} {
 		t.Run(kind, func(t *testing.T) {
-			_, o, peer, ctx, dials := replyV8ProfileOpen(t)
+			_, o, peer, ctx, dials := replicatedReplyV8ProfileOpen(t, profile)
 			r := pgListRequest()
 			r.PG.Primary = 0
 			r.PG.Seed = 7
@@ -307,9 +321,7 @@ func TestOSDReplyV8ProfileListPGStrictDecoder(t *testing.T) {
 			done := make(chan response, 1)
 			go func() { reply, err := o.ListPG(ctx, r); done <- response{reply, err} }()
 			sent := peer.next(t)
-			if sent.Version != 8 || sent.CompatVersion != 3 {
-				t.Fatal(sent)
-			}
+			assertReplicatedRequestProfile(t, profile, sent)
 			input := OSDRequest{MapEpoch: r.MapEpoch, Object: OSDObject{Pool: int64(r.PG.Pool)}, Placement: &OSDReplicatedPlacement{PG: OSDPG{Pool: r.PG.Pool, Seed: r.PG.Seed}}, Operations: []OSDOperation{{Code: OSDOpcode(osd.PGNLS), Offset: r.Count, Length: uint64(r.StartEpoch)}}}
 			data, aggregate := pgListData(), int32(0)
 			if kind == "end" {

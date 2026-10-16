@@ -118,8 +118,9 @@ type Options struct {
 	// Defaults to 16; valid values are 1 through 1024. Close releases a slot.
 	MaxMDSConnections int
 	// OSDProfile selects the fixed OSD wire contract before MON admission.
-	// Both replicated profiles require EnableOSD and caller-supplied actual PG
-	// metadata. ReplyV8 additionally requires the fixed current v8 reply encoding.
+	// Replicated profiles require EnableOSD and caller-supplied actual PG
+	// metadata. ReplyV8 profiles require the fixed v8 reply encoding; RequestV9
+	// additionally sends only the canonical empty OTEL context.
 	OSDProfile OSDProfile
 	// MaxOSDConnections bounds OSD connections and concurrent setups held by
 	// this client. Defaults to 16; valid values are 1 through 1024. Close an

@@ -129,7 +129,7 @@ type OSDRequest struct {
 	ModificationTime  OSDTime
 	MapEpoch          uint32
 	Object            OSDObject
-	// Placement is mandatory for both replicated PG profiles and absent for
+	// Placement is mandatory for replicated PG profiles and absent for
 	// OSDProfileObjectHash. The caller owns map application and target choice.
 	Placement      *OSDReplicatedPlacement
 	Operations     []OSDOperation
@@ -332,7 +332,11 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	var err error
 	if request.Placement != nil {
 		p := request.Placement.PG
-		m, err = osd.EncodeRequestV8(osd.V8Request{Request: input, PG: osd.PG{Pool: p.Pool, Seed: p.Seed}, Shard: -1}, o.features, c.options.MaxFrameSize)
+		if c.options.OSDProfile.requestV9() {
+			m, err = osd.EncodeRequestV9(osd.V9Request{Request: input, PG: osd.PG{Pool: p.Pool, Seed: p.Seed}, Shard: -1}, o.features, c.options.MaxFrameSize)
+		} else {
+			m, err = osd.EncodeRequestV8(osd.V8Request{Request: input, PG: osd.PG{Pool: p.Pool, Seed: p.Seed}, Shard: -1}, o.features, c.options.MaxFrameSize)
+		}
 	} else {
 		m, err = osd.EncodeRequest(input, o.features, c.options.MaxFrameSize)
 	}

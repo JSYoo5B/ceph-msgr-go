@@ -36,6 +36,19 @@ func EncodeRequestV8(r V8Request, features uint64, limit uint32) (msgr.MessageDa
 	if features&(featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask) != featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask || features&featureServerSquidMask == featureServerSquidMask {
 		return msgr.MessageData{}, ErrFeatures
 	}
+	return encodeReplicatedRequest(replicatedRequest(r), features, limit, 8)
+}
+
+type replicatedRequest struct {
+	Request
+	PG    PG
+	Shard int8
+}
+
+// The wire bodies differ only at the explicit empty OTEL envelope. The public
+// entry points select their fixed version and validate its feature contract;
+// this helper never selects a version from peer features or rewrites a frame.
+func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32, version uint16) (msgr.MessageData, error) {
 	if limit == 0 {
 		limit = wire.DefaultLimit
 	}
@@ -44,7 +57,11 @@ func EncodeRequestV8(r V8Request, features uint64, limit uint32) (msgr.MessageDa
 	}
 	// Include all fixed fields and length prefixes before allocating the front.
 	const fixed = 23 + 41 + 4 + 4 + 4 + 8 + 12 + 6 + 8 + 4 + 4 + 4 + 8 + 17 + 4 + 2 + 8 + 8 + 4 + 4 + 8 + 6 + 21
-	frontBytes, err := boundedBytes(limit, fixed, uint64(len(r.Locator.Key)), uint64(len(r.Locator.Namespace)), uint64(len(r.Object)), uint64(len(r.Operations))*opWireSize, uint64(len(r.Snaps))*8)
+	var traceBytes uint64
+	if version == 9 {
+		traceBytes = emptyOTELBytes
+	}
+	frontBytes, err := boundedBytes(limit, fixed, traceBytes, uint64(len(r.Locator.Key)), uint64(len(r.Locator.Namespace)), uint64(len(r.Object)), uint64(len(r.Operations))*opWireSize, uint64(len(r.Snaps))*8)
 	if err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -114,6 +131,9 @@ func EncodeRequestV8(r V8Request, features uint64, limit uint32) (msgr.MessageDa
 	e.U64(0)
 	e.U64(0)
 	e.U64(0) // empty native trace; always present in v8.
+	if version == 9 {
+		encodeEmptyOTEL(&e)
+	}
 	e.U32(r.ClientInc)
 	e.U32(r.MTimeSeconds)
 	e.U32(r.MTimeNanoseconds)
@@ -193,7 +213,7 @@ func EncodeRequestV8(r V8Request, features uint64, limit uint32) (msgr.MessageDa
 		}
 		data = append(data, op.Data...)
 	}
-	return msgr.MessageData{Data: data, Type: RequestMessage, Version: 8, CompatVersion: 3, Priority: 127, Front: e.Data}, nil
+	return msgr.MessageData{Data: data, Type: RequestMessage, Version: version, CompatVersion: 3, Priority: 127, Front: e.Data}, nil
 }
 
 // spg_t is a versioned pg_t plus native signed one-byte shard ID.

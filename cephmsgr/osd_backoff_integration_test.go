@@ -390,11 +390,13 @@ func backoffProfileReadReply(t *testing.T, peer *osdTestPeer, profile OSDProfile
 }
 
 func TestOSDBackoffTransportUnrelatedObjectsProgressBeforeLateAck(t *testing.T) {
-	for _, profile := range []OSDProfile{OSDProfileReplicatedPG, OSDProfileReplicatedPGReplyV8} {
+	for _, profile := range []OSDProfile{OSDProfileReplicatedPG, OSDProfileReplicatedPGReplyV8, OSDProfileReplicatedPGRequestV9ReplyV8} {
 		t.Run(string(rune('0'+profile)), func(t *testing.T) {
 			open := backoffTransportOpen
-			if profile == OSDProfileReplicatedPGReplyV8 {
-				open = replyV8ProfileOpen
+			if profile.replyV8() {
+				open = func(t *testing.T) (*Client, *OSDConnection, *osdTestPeer, context.Context, *atomic.Uint32) {
+					return replicatedReplyV8ProfileOpen(t, profile)
+				}
 			}
 			_, o, peer, ctx, dials := open(t)
 			if err := osdMapsWrite(peer, backoffTransportControl(t, 91, osd.BackoffBlock, 5)); err != nil {
@@ -435,7 +437,8 @@ func TestOSDBackoffTransportUnrelatedObjectsProgressBeforeLateAck(t *testing.T) 
 					done := make(chan outcome, 1)
 					go func() { r, e := o.Request(ctx, input); done <- outcome{r, e} }()
 					sent := peer.next(t)
-					identity, err := osd.DecodeRequestV8AdmissionTarget(sent, 4096)
+					identity, err := o.decodeRequestAdmissionTarget(sent)
+					assertReplicatedRequestProfile(t, profile, sent)
 					if err != nil || sent.Type != osd.RequestMessage || sent.Transaction <= refused.Submission.Transaction || identity.Object.Object != input.Object.Name || identity.PG.Seed != input.Placement.PG.Seed {
 						t.Fatal("unrelated request did not reach peer with its own identity", identity, err)
 					}

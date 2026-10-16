@@ -43,8 +43,11 @@ is a closed enum, with no public raw-feature-mask override:
 | `OSDProfileObjectHash` (zero/default) | Existing restricted Tentacle v6 | Must be nil; `Object.Hash` is the raw hash |
 | `OSDProfileReplicatedPG` | Tentacle v8 object/PG requests and v6 replies | Mandatory per object request; actual PG is distinct from raw hash |
 | `OSDProfileReplicatedPGReplyV8` | Same v8 requests with strict v8/compat2 replies and required OSD bit58 | Same explicit replicated placement |
+| `OSDProfileReplicatedPGRequestV9ReplyV8` | Untraced v9/compat3 requests and strict v8/compat2 replies; required OSD SERVER_SQUID49/57 | Same explicit replicated placement and NO_SHARD; no nonempty OTEL input |
 
 The third profile is detailed in [the v8 reply contract](OSD_REPLY_V8_CONTRACT.md).
+The fourth is detailed in [the untraced v9 contract](REQUEST_V9_CONTRACT.md);
+its native acceptance status is tracked separately from the earlier profiles.
 It is selected before Dial and does not change either prior profile.
 An unknown enum fails locally; selecting either replicated profile without
 EnableOSD fails before network activity. The profile applies to this Client's

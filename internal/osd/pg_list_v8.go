@@ -22,6 +22,10 @@ func EncodePGListRequestV8(r PGListRequest, features uint64, limit uint32) (msgr
 	if features&(featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask) != featureObjectLocator|featurePGID64|featureNewOSDOp|featureResendOnSplitMask || features&featureServerSquidMask == featureServerSquidMask {
 		return msgr.MessageData{}, ErrFeatures
 	}
+	return encodeReplicatedPGList(r, features, limit, 8)
+}
+
+func encodeReplicatedPGList(r PGListRequest, features uint64, limit uint32, version uint16) (msgr.MessageData, error) {
 	if limit == 0 {
 		limit = wire.DefaultLimit
 	}
@@ -34,7 +38,11 @@ func EncodePGListRequestV8(r PGListRequest, features uint64, limit uint32) (msgr
 	}
 	// v8 is 23 bytes larger than the corresponding v6 request: versioned spg
 	// and raw hash, preserved reqid incarnation and fixed three-u64 trace.
-	if _, err := boundedBytes(limit, 250, uint64(len(r.Namespace)), uint64(len(cursor))); err != nil {
+	var traceBytes uint64
+	if version == 9 {
+		traceBytes = emptyOTELBytes
+	}
+	if _, err := boundedBytes(limit, 250, traceBytes, uint64(len(r.Namespace)), uint64(len(cursor))); err != nil {
 		return msgr.MessageData{}, err
 	}
 	if _, err := boundedBytes(limit, 232, uint64(r.MaxOutputBytes)); err != nil {
@@ -57,6 +65,9 @@ func EncodePGListRequestV8(r PGListRequest, features uint64, limit uint32) (msgr
 	e.U64(0)
 	e.U64(0)
 	e.U64(0) // Empty native trace is always present in v8.
+	if version == 9 {
+		encodeEmptyOTEL(&e)
+	}
 	e.U32(r.ClientInc)
 	e.U32(0)
 	e.U32(0) // Read-only mtime.
@@ -75,5 +86,5 @@ func EncodePGListRequestV8(r PGListRequest, features uint64, limit uint32) (msgr
 	e.U32(0)
 	e.U32(0) // Attempt zero; no resend on split or unblock.
 	e.U64(features)
-	return msgr.MessageData{Type: RequestMessage, Version: 8, CompatVersion: 3, Priority: 127, Front: e.Data, Data: bytes.Clone(cursor)}, nil
+	return msgr.MessageData{Type: RequestMessage, Version: version, CompatVersion: 3, Priority: 127, Front: e.Data, Data: bytes.Clone(cursor)}, nil
 }

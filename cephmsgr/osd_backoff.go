@@ -370,7 +370,7 @@ func (o *OSDConnection) beforeWriteBackoff(message msgr.MessageData) error {
 		return nil
 	}
 	if len(b.active) != 0 {
-		target, err := osd.DecodeRequestV8AdmissionTarget(message, o.client.options.MaxFrameSize)
+		target, err := o.decodeRequestAdmissionTarget(message)
 		if err != nil {
 			return fmt.Errorf("%w: invalid outgoing OSD admission target: %w", msgr.ErrFrame, err)
 		}

@@ -31,6 +31,11 @@ const (
 	// NEW_OSDOPREPLY_ENCODING before Dial; it does not select placement, follow
 	// redirects, replay requests or establish general CRUSH/EC compatibility.
 	OSDProfileReplicatedPGReplyV8
+	// OSDProfileReplicatedPGRequestV9ReplyV8 uses untraced v9/compat3 requests
+	// and strict v8/compat2 replies with explicit replicated placement. The
+	// empty OTEL envelope is supported; nonempty trace input, CRUSH, erasure
+	// coding, automatic routing and uncertain-request replay are not provided.
+	OSDProfileReplicatedPGRequestV9ReplyV8
 )
 
 // OSDReplicatedPlacement is selected by the caller from its applied map.
@@ -63,13 +68,25 @@ func (o *OSDConnection) validatePlacement(request OSDRequest) error {
 	return nil
 }
 
-// These fixed predicates describe both replicated wire contracts. Keep shared
+// These fixed predicates describe the replicated wire contracts. Keep shared
 // placement, control and request capabilities independent of reply selection.
 func (p OSDProfile) valid() bool { return p == OSDProfileObjectHash || p.replicatedPG() }
 func (p OSDProfile) replicatedPG() bool {
-	return p == OSDProfileReplicatedPG || p == OSDProfileReplicatedPGReplyV8
+	return p == OSDProfileReplicatedPG || p == OSDProfileReplicatedPGReplyV8 || p == OSDProfileReplicatedPGRequestV9ReplyV8
 }
-func (p OSDProfile) replyV8() bool { return p == OSDProfileReplicatedPGReplyV8 }
+func (p OSDProfile) replyV8() bool   { return p == OSDProfileReplicatedPGReplyV8 || p.requestV9() }
+func (p OSDProfile) requestV9() bool { return p == OSDProfileReplicatedPGRequestV9ReplyV8 }
+
+func (o *OSDConnection) decodeRequestAdmissionTarget(m msgr.MessageData) (osd.RequestAdmissionTarget, error) {
+	switch o.client.options.OSDProfile {
+	case OSDProfileReplicatedPGRequestV9ReplyV8:
+		return osd.DecodeRequestV9AdmissionTarget(m, o.client.options.MaxFrameSize)
+	case OSDProfileReplicatedPG, OSDProfileReplicatedPGReplyV8:
+		return osd.DecodeRequestV8AdmissionTarget(m, o.client.options.MaxFrameSize)
+	default:
+		return osd.RequestAdmissionTarget{}, osd.ErrFeatures
+	}
+}
 
 // decodeReply selects only the pre-Dial profile's strict envelope. Header
 // inspection never changes the selected codec or permits protocol fallback.

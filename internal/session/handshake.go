@@ -96,6 +96,10 @@ type ServiceAuth struct {
 	// It includes the replicated PG request profile, even when its older
 	// selector is false, and applies only to OSD connections.
 	ReplicatedPGReplyV8 bool
+	// ReplicatedPGRequestV9 selects untraced MOSDOp v9/compat3 plus the fixed
+	// reply-v8/base profile. Only OSD role 4 gains SERVER_SQUID; no trace SDK,
+	// arbitrary feature mask or other service policy is enabled.
+	ReplicatedPGRequestV9 bool
 }
 
 // Pinned Ceph 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964:
@@ -104,7 +108,7 @@ type ServiceAuth struct {
 // OSDMAP_PG_UPMAP and CRUSH_CHOOSE_ARGS; selecting this internal profile is
 // therefore conditional on the complete profile's caller/codec/control gates.
 // NEW_OSDOPREPLY_ENCODING (58) is a separate explicit profile below.
-// SERVER_SQUID (49) remains omitted from both profiles.
+// SERVER_SQUID (49) remains omitted from the v8-request profiles.
 const replicatedPGV8Features uint64 = 1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<57
 
 // Bit 58/incarnation 1 also names CRUSH_TUNABLES5 and FS_FILE_LAYOUT_V2.
@@ -112,8 +116,18 @@ const replicatedPGV8Features uint64 = 1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<5
 // not extend MON's CRUSH admission exception or enable filesystem operations.
 const replicatedPGReplyV8Features uint64 = replicatedPGV8Features | 1<<58
 
-func (a ServiceAuth) replicatedPGV8() bool      { return a.ReplicatedPGV8 || a.ReplicatedPGReplyV8 }
-func (a ServiceAuth) replicatedPGReplyV8() bool { return a.ReplicatedPGReplyV8 }
+// Pinned MOSDOp.h:398-427 and common/tracer.h !HAVE_JAEGER implement the
+// untraced v9 envelope. The full SERVER_SQUID mask is incarnation 2 (49|57).
+// CRUSH_MSR is a distinct feature (38|57) and is not enabled here.
+const replicatedPGRequestV9Features uint64 = replicatedPGReplyV8Features | 1<<49 | 1<<57
+
+func (a ServiceAuth) replicatedPGV8() bool {
+	return a.ReplicatedPGV8 || a.ReplicatedPGReplyV8 || a.ReplicatedPGRequestV9
+}
+func (a ServiceAuth) replicatedPGReplyV8() bool {
+	return a.ReplicatedPGReplyV8 || a.ReplicatedPGRequestV9
+}
+func (a ServiceAuth) replicatedPGRequestV9() bool { return a.ReplicatedPGRequestV9 }
 
 func handshakeFeatures(role uint8, auth Authenticator) (supported, required uint64) {
 	supported, required = featuresForRole(role), RequiredFeatures
@@ -141,6 +155,10 @@ func handshakeFeatures(role uint8, auth Authenticator) (supported, required uint
 		if profile, ok := auth.(interface{ replicatedPGReplyV8() bool }); ok && profile.replicatedPGReplyV8() {
 			supported |= replicatedPGReplyV8Features
 			required |= replicatedPGReplyV8Features
+		}
+		if profile, ok := auth.(interface{ replicatedPGRequestV9() bool }); ok && profile.replicatedPGRequestV9() {
+			supported |= replicatedPGRequestV9Features
+			required |= replicatedPGRequestV9Features
 		}
 	}
 	return supported, required

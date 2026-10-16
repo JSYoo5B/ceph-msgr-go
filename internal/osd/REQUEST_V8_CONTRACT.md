@@ -40,6 +40,9 @@ ReplyV8 profile and is retained in the request's negotiated-feature tail; its
 strict reply selection is specified in [the v8 reply contract](OSD_REPLY_V8_CONTRACT.md). It performs no automatic resend, retry,
 redirect or map refresh despite the feature's historical name.
 
+The separate [untraced request-v9 profile](REQUEST_V9_CONTRACT.md) does not
+relax this v8 encoder or cause automatic version selection.
+
 Input and reply budgets, operation validation, snapshots and unknown-operation
 refusals are equivalent to the existing bounded object contract. The v8 front
 requires 23 additional bytes over v6 for the same logical request. Both request

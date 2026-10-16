@@ -25,6 +25,10 @@ exception is unchanged and is never copied to OSD. MGR and the independent
 MON MDS-map opt-in retain their own feature policies; no MDS daemon feature or
 service ticket is introduced. No arbitrary feature-mask API exists.
 
+The separately selected [untraced request-v9 profile](REQUEST_V9_CONTRACT.md)
+also uses this strict v8 reply codec. It does not change the v8-request profile
+or extend the native validation recorded for that earlier profile below.
+
 Bit58 also names CRUSH_TUNABLES5 in the pinned feature header. Negotiating it
 selects the implemented reply encoding; it does not implement CRUSH evaluation,
 automatic placement or compatibility with every map/pool topology. Native
