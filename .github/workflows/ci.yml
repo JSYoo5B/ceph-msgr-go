@@ -214,7 +214,7 @@ jobs:
           retention-days: 7
 
   ceph:
-    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }}, profile=${{ matrix.osd_profile || 'legacy-v6' }}, store=${{ matrix.osd_store || 'memstore' }}, replicas=${{ matrix.osd_replicas || '1' }}, native-mgr-preparation=${{ matrix.native_mgr_preparation || '0' }}, race=${{ matrix.race || '0' }})${{ matrix.rbd == '1' && ' RBD-base' || (matrix.mds_cephfs_ranks == '1' && ' MDS-cephfs-ranks' || (matrix.mds_cephfs_completion == '1' && ' MDS-cephfs-completion' || (matrix.mds_cephfs == '1' && ' MDS-cephfs' || (matrix.mds_sessions == '1' && ' MDS-sessions' || (matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || '')))))) }}
+    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }}, profile=${{ matrix.osd_profile || 'legacy-v6' }}, store=${{ matrix.osd_store || 'memstore' }}, replicas=${{ matrix.osd_replicas || '1' }}, native-mgr-preparation=${{ matrix.native_mgr_preparation || '0' }}, race=${{ matrix.race || '0' }})${{ matrix.rbd == '1' && ' RBD-base' || (matrix.mds_cephfs_ranks == '1' && ' MDS-cephfs-ranks' || (matrix.mds_cephfs_completion == '1' && ' MDS-cephfs-completion' || (matrix.mds_cephfs_data == '1' && ' MDS-cephfs-data' || (matrix.mds_cephfs == '1' && ' MDS-cephfs' || (matrix.mds_sessions == '1' && ' MDS-sessions' || (matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || ''))))))) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
@@ -287,6 +287,10 @@ jobs:
           # Only the completion test is selected; its fencing client also enables OSD sessions with the default v6 object-hash profile.
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_completion: '1', test_run: '^TestCephMDSCephFSCompletionIntegration$' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_completion: '1', test_run: '^TestCephMDSCephFSCompletionIntegration$' }
+          # CephFS data acceptance writes and reads file data through the Go client's MDS session and OSD requests against native LibCephFS (striping, sparse read, truncate, buffered-write revoke, snapshot clone); its own opt-in excludes the other MDS profiles.
+          # Only the data test is selected; its Go client enables MDS, CephFS and OSD sessions with the default v6 object-hash profile and an OSD write grant on the owned data pool.
+          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_data: '1', test_run: '^TestCephMDSCephFSDataIntegration$' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_data: '1', test_run: '^TestCephMDSCephFSDataIntegration$' }
           # RBD acceptance owns a pool, two identities and five native librbd images (a parent and its clone among them) on the legacy-v6 single-OSD fixture; its own opt-in excludes every MDS profile.
           # Only the RBD base, clone, exclusive-lock and write tests are selected; their Go client enables OSD sessions with the RBD capability profile.
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write|ExclusiveLock|Clone)Integration$' }
@@ -325,6 +329,7 @@ jobs:
           CEPH_MSGR_TEST_MDS_CEPHFS: ${{ matrix.mds_cephfs || '0' }}
           CEPH_MSGR_TEST_MDS_CEPHFS_RANKS: ${{ matrix.mds_cephfs_ranks || '0' }}
           CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}
+          CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}
           CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}
           CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}
           CEPH_MSGR_TEST_OSD_STORE: ${{ matrix.osd_store || 'memstore' }}

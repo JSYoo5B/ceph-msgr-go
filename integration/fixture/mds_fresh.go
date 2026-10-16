@@ -499,7 +499,7 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 	}
 	s := c.mdsFresh
 	budget := 45 * time.Second
-	if c.mdsSessions != nil || c.mdsCephFS != nil {
+	if c.mdsSessions != nil || c.mdsCephFS != nil || c.mdsCephFSData != nil {
 		// Session restoration and CephFS verification each have their own
 		// 45-second bound before removal.
 		budget += 45 * time.Second
@@ -537,6 +537,7 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 		CephFSVerified         bool            `json:"cephfs_verified,omitempty"`
 		CephFSRanksVerified    bool            `json:"cephfs_ranks_verified,omitempty"`
 		CephFSCompletion       bool            `json:"cephfs_completion_verified,omitempty"`
+		CephFSData             bool            `json:"cephfs_data_verified,omitempty"`
 		Completed              bool            `json:"completed"`
 		Error                  string          `json:"error,omitempty"`
 		FSDump                 json.RawMessage `json:"fs_dump,omitempty"`
@@ -559,7 +560,9 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 	receipt.CephFSRanksVerified = c.mdsCephFSRanks != nil && ranksErr == nil
 	completionErr := c.finishMDSCephFSCompletion(ctx)
 	receipt.CephFSCompletion = c.mdsCephFSCompletion != nil && completionErr == nil
-	sessionsErr = errors.Join(sessionsErr, cephfsErr, ranksErr, completionErr)
+	dataErr := c.finishMDSCephFSData(ctx)
+	receipt.CephFSData = c.mdsCephFSData != nil && dataErr == nil
+	sessionsErr = errors.Join(sessionsErr, cephfsErr, ranksErr, completionErr, dataErr)
 	var removeErr error
 	if s.removeFilesystem == nil {
 		removeErr = errors.New("owned MDS fresh removal operation unavailable")

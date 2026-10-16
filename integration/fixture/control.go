@@ -149,6 +149,16 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	if fields, err := c.request(out, "mds-cephfs-data"); err != nil {
+		return err
+	} else if fields != nil {
+		if err := c.mdsCephFSDataControl(ctx, out, fields); err != nil {
+			return err
+		}
+		if err := publishAck(out, "mds-cephfs-data-completed."+fields[0]); err != nil {
+			return err
+		}
+	}
 	if fields, err := c.request(out, "rbd-base"); err != nil {
 		return err
 	} else if fields != nil {

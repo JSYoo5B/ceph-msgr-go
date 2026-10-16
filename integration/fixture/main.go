@@ -375,6 +375,7 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	manifest["mds_cephfs"] = p.mdsCephFS == "1"
 	manifest["mds_cephfs_ranks"] = p.mdsCephFSRanks == "1"
 	manifest["mds_cephfs_completion"] = p.mdsCephFSCompletion == "1"
+	manifest["mds_cephfs_data"] = p.mdsCephFSData == "1"
 	manifest["rbd_base"] = p.rbdBase == "1"
 	if p.rbdBase == "1" {
 		manifest["topology"] = "3 MON, 0/2 MGR and one OSD with an owned RBD pool plus a native oracle client"
@@ -389,6 +390,9 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	}
 	if p.mdsCephFSCompletion == "1" {
 		manifest["cephfs_completion_mutations"] = "owned Go and native LibCephFS identities and one directory tree created and removed through Go requests and verified natively; one native create+write and one native snapshot created and removed; runtime-only admin-socket changes of ms_blackhole_client, mds_early_reply, mds_log_pause and debug levels on the owned daemon, each restored or discarded by a restart; owned central mds_deny_all_reconnect and mds_reconnect_timeout entries of the owned daemon's section, each restored; one force_readonly; up to four owned rank-0 restarts and evictions of owned Go sessions whose blocklist entries are removed and verified during cleanup"
+	}
+	if p.mdsCephFSData == "1" {
+		manifest["cephfs_data_mutations"] = "owned Go and native LibCephFS identities with OSD write grants on the owned data pool; one directory created natively with a small striped ceph.dir.layout that is removed again; five files created and written through Go requests and Go OSD writes or natively (one sparse, one truncated natively), all unlinked through Go requests; one native snapshot created and removed; the directory removed through a Go request and verified natively"
 	}
 	if p.mdsSessions == "1" {
 		manifest["session_mutations"] = "owned refuse_client_session, required_client_features, session timeouts, mds_defer_session_stale, eviction blocklist entries and one foreign identity, each reconciled during cleanup"

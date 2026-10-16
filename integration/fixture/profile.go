@@ -16,6 +16,7 @@ type profile struct {
 	mdsSessionsForeignIdentity, mdsCephFSIdentity                         string
 	mdsCephFSRecoveryIdentity, mdsCephFSRanksIdentity                     string
 	mdsCephFSCompletionIdentity, mdsCephFSCompletion                      string
+	mdsCephFSDataIdentity, mdsCephFSData                                  string
 	mdsFresh, mdsCommands, mdsSessions, mdsCephFS, mdsCephFSRanks         string
 	rbdBase, rbdBaseIdentity                                              string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
@@ -41,6 +42,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		mdsCephFS:            value("CEPH_MSGR_TEST_MDS_CEPHFS", "0"),
 		mdsCephFSRanks:       value("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS", "0"),
 		mdsCephFSCompletion:  value("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION", "0"),
+		mdsCephFSData:        value("CEPH_MSGR_TEST_MDS_CEPHFS_DATA", "0"),
 		rbdBase:              value("CEPH_MSGR_TEST_RBD", "0"),
 		osdProfile:           value("CEPH_MSGR_TEST_OSD_PROFILE", "legacy-v6"),
 		sparseReadOracle:     getenv("CEPH_MSGR_TEST_SPARSE_READ_ORACLE"),
@@ -78,6 +80,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_MDS_CEPHFS", p.mdsCephFS, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS", p.mdsCephFSRanks, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION", p.mdsCephFSCompletion, []string{"0", "1"}},
+		{"CEPH_MSGR_TEST_MDS_CEPHFS_DATA", p.mdsCephFSData, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_RBD", p.rbdBase, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_SERVICE_CIPHER", p.serviceCipher, []string{"aes", "aes256k"}},
 		{"CEPH_MSGR_TEST_RUNTIME", p.runtime, []string{"container", "host"}},
@@ -189,6 +192,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	if p.mdsCephFSCompletion == "1" && (p.mdsFresh != "1" || p.mdsCommands == "1" || p.mdsSessions == "1" || p.mdsCephFS == "1" || p.mdsCephFSRanks == "1") {
 		return profile{}, fmt.Errorf("MDS CephFS completion acceptance requires CEPH_MSGR_TEST_MDS_FRESH=1 and excludes CEPH_MSGR_TEST_MDS_COMMANDS, CEPH_MSGR_TEST_MDS_SESSIONS, CEPH_MSGR_TEST_MDS_CEPHFS and CEPH_MSGR_TEST_MDS_CEPHFS_RANKS")
 	}
+	if p.mdsCephFSData == "1" && (p.mdsFresh != "1" || p.mdsCommands == "1" || p.mdsSessions == "1" || p.mdsCephFS == "1" || p.mdsCephFSRanks == "1" || p.mdsCephFSCompletion == "1") {
+		return profile{}, fmt.Errorf("MDS CephFS data acceptance requires CEPH_MSGR_TEST_MDS_FRESH=1 and excludes CEPH_MSGR_TEST_MDS_COMMANDS, CEPH_MSGR_TEST_MDS_SESSIONS, CEPH_MSGR_TEST_MDS_CEPHFS, CEPH_MSGR_TEST_MDS_CEPHFS_RANKS and CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION")
+	}
 	if p.mdsFresh == "1" {
 		selected = "^TestCephMDSFreshIntegration$"
 		if p.mdsCommands == "1" {
@@ -205,6 +211,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		if p.mdsCephFSCompletion == "1" {
 			selected = "^TestCephMDSCephFSCompletionIntegration$"
+		}
+		if p.mdsCephFSData == "1" {
+			selected = "^TestCephMDSCephFSDataIntegration$"
 		}
 		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || p.sparseReadOracle != "" ||
 			p.testRun != "" && p.testRun != selected {
@@ -239,7 +248,7 @@ func (p profile) mdsFreshOSDAllowed() bool {
 // enable only MDS. They use the legacy/no-HASHPSPOOL fixture so MON admission
 // needs neither EnableOSD nor the modern OSD profile's extra feature bits.
 func (p profile) mdsPublicClient() bool {
-	return p.mdsCommands == "1" || p.mdsSessions == "1" || p.mdsCephFS == "1" || p.mdsCephFSRanks == "1" || p.mdsCephFSCompletion == "1"
+	return p.mdsCommands == "1" || p.mdsSessions == "1" || p.mdsCephFS == "1" || p.mdsCephFSRanks == "1" || p.mdsCephFSCompletion == "1" || p.mdsCephFSData == "1"
 }
 
 // mdsFreshTopology is the owned filesystem's MDS shape: one active rank, or
@@ -261,8 +270,9 @@ func (p profile) cleanupBudget() time.Duration {
 		// after up to four owned restarts.
 		return 3 * time.Minute
 	}
-	if p.mdsSessions == "1" || p.mdsCephFS == "1" || p.rbdBase == "1" {
-		// The RBD cleanup removes its owned pool (with the temporary
+	if p.mdsSessions == "1" || p.mdsCephFS == "1" || p.mdsCephFSData == "1" || p.rbdBase == "1" {
+		// The CephFS data cleanup reads the namespace back natively before
+		// removing two identities. The RBD cleanup removes its owned pool (with the temporary
 		// mon_allow_pool_delete window, the three images) and two identities.
 		return 2 * time.Minute
 	}
@@ -283,6 +293,7 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_MDS_CEPHFS":             p.mdsCephFS,
 		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS":       p.mdsCephFSRanks,
 		"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION":  p.mdsCephFSCompletion,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":        p.mdsCephFSData,
 		"CEPH_MSGR_TEST_RBD":                    p.rbdBase,
 		"CEPH_MSGR_TEST_KEY_TYPE":               p.keyType,
 		"CEPH_MSGR_TEST_SERVICE_CIPHER":         p.serviceCipher,
@@ -319,6 +330,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_MDS_CEPHFS":             p.mdsCephFS,
 		"CEPH_MSGR_TEST_MDS_CEPHFS_RANKS":       p.mdsCephFSRanks,
 		"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION":  p.mdsCephFSCompletion,
+		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":        p.mdsCephFSData,
 		"CEPH_MSGR_TEST_RBD":                    p.rbdBase,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":   marker,
 		"CEPH_MSGR_MONITORS":                    p.monitors(),
@@ -370,6 +382,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.mdsCephFSCompletion == "1" {
 		result["CEPH_MSGR_MDS_CEPHFS_COMPLETION_IDENTITY"] = p.mdsCephFSCompletionIdentity
 		result["CEPH_MSGR_MDS_CEPHFS_COMPLETION_KEY_FILE"] = filepath.Join(controlDir, "mds-cephfs-completion.key")
+	}
+	if p.mdsCephFSData == "1" {
+		result["CEPH_MSGR_MDS_CEPHFS_DATA_IDENTITY"] = p.mdsCephFSDataIdentity
+		result["CEPH_MSGR_MDS_CEPHFS_DATA_KEY_FILE"] = filepath.Join(controlDir, "mds-cephfs-data.key")
 	}
 	if p.rbdBase == "1" {
 		result["CEPH_MSGR_RBD_BASE_IDENTITY"] = p.rbdBaseIdentity

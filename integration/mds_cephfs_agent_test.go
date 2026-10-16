@@ -30,6 +30,15 @@ import (
 // FLUSHSNAP_ACK of a cap snap flush the test sent itself. Agents of one client's
 // sessions with several ranks share one lock and restate handle_cap_export
 // and handle_cap_import between them (cephfsRankedAgents).
+//
+// For the data acceptance a file the test writes through this client is
+// registered as dirty (cephfsDirtyFile): the agent then restates the
+// writer's part of check_caps and send_cap (dirty Fw flushed with a flush TID
+// and snap follows, max_size requests from get_caps, FILE_BUFFER in use while
+// buffered data is unwritten), handle_cap_grant's buffered-data flush on a
+// revoke of Fb, handle_cap_flush_ack, handle_cap_trunc, and
+// update_inode_file_size/update_inode_file_time, so a reply or push never
+// overwrites the writer's newer size or times.
 
 const (
 	cephCapLinkExcl     = 2 << 4
@@ -126,6 +135,56 @@ type cephfsCap struct {
 	// (EXPORT, or IMPORT on another rank naming it as the peer); the inode
 	// stays known, as in the native inode cache.
 	Exported bool `json:",omitempty"`
+	// WantedMaxSize and RequestedMaxSize restate the inode's wanted and
+	// requested max_size of get_caps and send_cap; InlineVersion is the
+	// reply's inline version a dirty Fw flush reports.
+	WantedMaxSize    uint64 `json:",omitempty"`
+	RequestedMaxSize uint64 `json:",omitempty"`
+	InlineVersion    uint64 `json:",omitempty"`
+}
+
+// cephfsTimeAfter orders two MDS times.
+func cephfsTimeAfter(a, b cephmsgr.MDSTime) bool {
+	return a.Seconds > b.Seconds || a.Seconds == b.Seconds && a.Nanoseconds > b.Nanoseconds
+}
+
+// updateFileSize restates update_inode_file_size: a size from the MDS is
+// taken only with a newer truncate sequence or when it grows the file; the
+// truncate size follows a sequence that is not older.
+func (c *cephfsCap) updateFileSize(size uint64, truncateSeq uint32, truncateSize uint64) {
+	if truncateSeq > c.TruncateSeq || truncateSeq == c.TruncateSeq && size > c.Size {
+		c.Size, c.ReportedSize = size, size
+		c.TruncateSeq = truncateSeq
+	}
+	if truncateSeq >= c.TruncateSeq && c.TruncateSize != truncateSize {
+		c.TruncateSize = truncateSize
+	}
+}
+
+// updateFileTime restates update_inode_file_time: with write, buffer or
+// exclusive caps (or dirty state) times only move forward; otherwise the
+// MDS's times are taken.
+func (c *cephfsCap) updateFileTime(issued, timeWarpSeq uint32, ctime, mtime, atime cephmsgr.MDSTime) {
+	if issued&(cephCapFileExcl|cephCapFileWR|cephCapFileBuffer|cephCapAuthExcl|cephCapXattrExcl) != 0 {
+		if cephfsTimeAfter(ctime, c.CTime) {
+			c.CTime = ctime
+		}
+		switch {
+		case timeWarpSeq > c.TimeWarpSeq:
+			c.MTime, c.ATime, c.TimeWarpSeq = mtime, atime, timeWarpSeq
+		case timeWarpSeq == c.TimeWarpSeq:
+			if cephfsTimeAfter(mtime, c.MTime) {
+				c.MTime = mtime
+			}
+			if cephfsTimeAfter(atime, c.ATime) {
+				c.ATime = atime
+			}
+		}
+		return
+	}
+	if timeWarpSeq >= c.TimeWarpSeq {
+		c.CTime, c.MTime, c.ATime, c.TimeWarpSeq = ctime, mtime, atime, timeWarpSeq
+	}
 }
 
 func (c *cephfsCap) fileWanted() uint32 {
@@ -252,6 +311,71 @@ type cephfsFlushEvent struct {
 	Error       string `json:",omitempty"`
 }
 
+// cephfsDirtyFile is the write state of one file the test wrote through this
+// client: dirty metadata not yet flushed (Dirty, as caps_dirty), metadata
+// being flushed (Flushing, as flushing_caps) and, while Buffered, data held
+// as the native ObjectCacher holds it (FILE_BUFFER in use). WriteBack writes
+// the buffered data to the OSDs; it runs without the agent lock after Hold.
+type cephfsDirtyFile struct {
+	Ino             uint64
+	Dirty, Flushing uint32
+	Follows         uint64
+	Buffered        bool
+	Hold            time.Duration
+	WriteBack       func() error `json:"-"`
+	writing         bool
+	Events          []cephfsDirtyEvent
+}
+
+// cephfsDirtyEvent is one step of a dirty file: a revoke received, a cap
+// message sent (with the flush TID when it flushed dirty metadata), the
+// buffered-data writeback and the FLUSH_ACK.
+type cephfsDirtyEvent struct {
+	At      time.Time
+	Arrival uint64 `json:",omitempty"`
+	Kind    string
+	Seq     uint32 `json:",omitempty"`
+	Caps    string `json:",omitempty"`
+	Revoked string `json:",omitempty"`
+	Dirty   string `json:",omitempty"`
+	TID     uint64 `json:",omitempty"`
+	Size    uint64 `json:",omitempty"`
+	Note    string `json:",omitempty"`
+	Error   string `json:",omitempty"`
+}
+
+// cephfsFlushAck is one FLUSH_ACK matched to a flush this agent sent.
+type cephfsFlushAck struct {
+	Arrival     uint64
+	Received    time.Time
+	Transaction uint64
+	Caps        cephmsgr.MDSCaps
+}
+
+// cephfsTruncEvent is one TRUNC push and the size state around it.
+type cephfsTruncEvent struct {
+	Arrival           uint64
+	Received          time.Time
+	Caps              cephmsgr.MDSCaps
+	SizeBefore        uint64
+	TruncateSeqBefore uint32
+	SizeAfter         uint64
+	TruncateSeqAfter  uint32
+}
+
+// cephfsMaxSizeEvent is one GRANT or REVOKE that changed max_size.
+type cephfsMaxSizeEvent struct {
+	Arrival  uint64
+	Received time.Time
+	Ino      uint64
+	Op       uint32
+	Seq      uint32
+	Before   uint64
+	MaxSize  uint64
+	Size     uint64
+	Caps     string
+}
+
 // cephfsMigrationEvent is one EXPORT or IMPORT of a multi-rank client and
 // what the agent did with it.
 type cephfsMigrationEvent struct {
@@ -304,11 +428,19 @@ type cephfsCapAgent struct {
 	readOnly   []time.Time
 	flushSnaps map[uint64]uint64 // expected FLUSHSNAP_ACK: inode -> flush TID
 	snapAcks   []cephfsFlushSnapAck
+	// dirty holds the files the test wrote; flushing maps outstanding flush
+	// TIDs (last_flush_tid numbering from 1) to their inode.
+	dirty     map[uint64]*cephfsDirtyFile
+	flushTID  uint64
+	flushing  map[uint64]uint64
+	flushAcks []cephfsFlushAck
+	truncs    []cephfsTruncEvent
+	maxSizes  []cephfsMaxSizeEvent
 }
 
 func newCephFSCapAgent(ctx context.Context, s *cephmsgr.MDSSession) *cephfsCapAgent {
 	return &cephfsCapAgent{s: s, ctx: ctx, mu: &sync.Mutex{}, caps: map[uint64]*cephfsCap{}, holds: map[uint64]*cephfsHold{}, held: map[uint64]bool{}, done: make(chan struct{}),
-		realms: map[uint64]cephmsgr.MDSSnapRealm{}, leaseHolds: map[string]time.Duration{}}
+		realms: map[uint64]cephmsgr.MDSSnapRealm{}, leaseHolds: map[string]time.Duration{}, dirty: map[uint64]*cephfsDirtyFile{}, flushing: map[uint64]uint64{}}
 }
 
 func startCephFSCapAgent(ctx context.Context, s *cephmsgr.MDSSession) *cephfsCapAgent {
@@ -631,7 +763,12 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 		}
 		a.recordLocked(r)
 	case cephmsgr.MDSCapOpTrunc:
-		c.Size, c.TruncateSeq, c.TruncateSize = m.Size, m.TruncateSeq, m.TruncateSize
+		// handle_cap_trunc -> update_inode_file_size.
+		ev := cephfsTruncEvent{Arrival: e.Arrival, Received: e.Received, Caps: *m, SizeBefore: c.Size, TruncateSeqBefore: c.TruncateSeq}
+		c.updateFileSize(m.Size, m.TruncateSeq, m.TruncateSize)
+		ev.SizeAfter, ev.TruncateSeqAfter = c.Size, c.TruncateSeq
+		a.truncs = append(a.truncs, ev)
+		r.Note = fmt.Sprintf("trunc size %d truncate_size %d truncate_seq %d -> size %d seq %d", m.Size, m.TruncateSize, m.TruncateSeq, c.Size, c.TruncateSeq)
 		a.recordLocked(r)
 	case cephmsgr.MDSCapOpFlushSnapAck:
 		if tid, ok := a.flushSnaps[m.Ino]; ok && tid == e.Transaction {
@@ -645,6 +782,25 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 		a.recordLocked(r)
 		a.failLocked("unexpected flush acknowledgement on %d", m.Ino)
 	case cephmsgr.MDSCapOpFlushAck:
+		if ino, ok := a.flushing[e.Transaction]; ok && ino == m.Ino {
+			// handle_cap_flush_ack: every flush of this inode up to the
+			// acknowledged TID is complete.
+			for tid, other := range a.flushing {
+				if other == m.Ino && tid <= e.Transaction {
+					delete(a.flushing, tid)
+				}
+			}
+			a.flushAcks = append(a.flushAcks, cephfsFlushAck{Arrival: e.Arrival, Received: e.Received, Transaction: e.Transaction, Caps: *m})
+			if d := a.dirty[m.Ino]; d != nil {
+				if !slices.Contains(slices.Collect(maps.Values(a.flushing)), m.Ino) {
+					d.Flushing = 0
+				}
+				d.Events = append(d.Events, cephfsDirtyEvent{At: time.Now(), Arrival: e.Arrival, Kind: "flush-ack", Seq: m.Seq, Caps: cephCapString(m.Caps), Dirty: cephCapString(m.Dirty), TID: e.Transaction})
+			}
+			r.Note = fmt.Sprintf("flush ack tid %d dirty %s", e.Transaction, cephCapString(m.Dirty))
+			a.recordLocked(r)
+			return
+		}
 		r.Note = "flush acknowledgement without a flush from this client"
 		a.recordLocked(r)
 		a.failLocked("unexpected flush acknowledgement on %d", m.Ino)
@@ -695,14 +851,24 @@ func (a *cephfsCapAgent) grantLocked(c *cephfsCap, e cephmsgr.MDSSessionEvent, r
 	if implemented&cephCapXattrExcl == 0 && len(m.Xattrs) != 0 && m.XattrVersion > c.XattrVersion {
 		c.XattrVersion = m.XattrVersion
 	}
+	issued := implemented
+	d := a.dirty[c.Ino]
+	if d != nil {
+		issued |= d.Dirty | d.Flushing
+	}
 	if newCaps&cephCapAnyRD != 0 {
-		c.MTime, c.ATime, c.CTime, c.TimeWarpSeq = m.MTime, m.ATime, m.CTime, m.TimeWarpSeq
+		c.updateFileTime(issued, m.TimeWarpSeq, m.CTime, m.MTime, m.ATime)
 	}
 	if newCaps&(cephCapAnyFileRD|cephCapAnyFileWR) != 0 {
-		c.Size, c.TruncateSeq, c.TruncateSize = m.Size, m.TruncateSeq, m.TruncateSize
+		c.updateFileSize(m.Size, m.TruncateSeq, m.TruncateSize)
 	}
 	if newCaps&cephCapAnyFileWR != 0 && m.MaxSize != c.MaxSize {
+		a.maxSizes = append(a.maxSizes, cephfsMaxSizeEvent{Arrival: e.Arrival, Received: e.Received, Ino: c.Ino, Op: m.Op, Seq: m.Seq, Before: c.MaxSize, MaxSize: m.MaxSize, Size: m.Size,
+			Caps: cephCapString(newCaps)})
 		c.MaxSize = m.MaxSize
+		if c.MaxSize > c.WantedMaxSize {
+			c.WantedMaxSize, c.RequestedMaxSize = 0, 0
+		}
 	}
 	if m.ChangeAttr > c.ChangeAttr {
 		c.ChangeAttr = m.ChangeAttr
@@ -722,6 +888,40 @@ func (a *cephfsCapAgent) grantLocked(c *cephfsCap, e cephmsgr.MDSSessionEvent, r
 	}
 	r.Before, r.After, r.Revoked = cephCapString(before), cephCapString(c.Issued), cephCapString(revoked)
 	a.recordLocked(r)
+	if d != nil && (revoked != 0 || m.Op == cephmsgr.MDSCapOpRevoke) {
+		d.Events = append(d.Events, cephfsDirtyEvent{At: time.Now(), Arrival: e.Arrival, Kind: "revoke", Seq: m.Seq, Caps: cephCapString(newCaps), Revoked: cephCapString(revoked),
+			Dirty: cephCapString(d.Dirty | d.Flushing), Note: fmt.Sprintf("op %d buffered %v", m.Op, d.Buffered)})
+	}
+	if d != nil && d.Buffered && !d.writing && revoked&cephCapFileBuffer != 0 {
+		// handle_cap_grant: FILE_BUFFER in use is revoked, so the buffered
+		// data is flushed (_flush) and the revocation completes only when
+		// that flush is done (_flushed -> put_cap_ref -> check_caps). A
+		// REVOKE op still runs check_caps now: it flushes the dirty metadata
+		// with FILE_BUFFER still implemented.
+		d.writing = true
+		if m.Op == cephmsgr.MDSCapOpRevoke {
+			c.Wanted = 0
+			a.checkCapsLocked(c, "revoke with buffered data: dirty metadata flush")
+		}
+		ino := c.Ino
+		time.AfterFunc(d.Hold, func() {
+			began := time.Now()
+			err := d.WriteBack()
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			ev := cephfsDirtyEvent{At: time.Now(), Kind: "data-writeback", Note: fmt.Sprintf("began %s", began.Format(time.RFC3339Nano))}
+			if err != nil {
+				ev.Error = err.Error()
+				a.failLocked("buffered data writeback of %d: %v", ino, err)
+			}
+			d.Events = append(d.Events, ev)
+			d.Buffered, d.writing = false, false
+			if c := a.caps[ino]; c != nil && c.CapID != 0 && !c.Released {
+				a.checkCapsLocked(c, "buffered data written back")
+			}
+		})
+		return
+	}
 	if !check {
 		return
 	}
@@ -749,11 +949,27 @@ func (a *cephfsCapAgent) grantLocked(c *cephfsCap, e cephmsgr.MDSSessionEvent, r
 }
 
 // checkCapsLocked restates check_caps with CHECK_CAPS_NODELAY followed by
-// send_cap, for a single auth cap with nothing used, dirty or flushing.
+// send_cap, for a single auth cap. Only a file registered as dirty has
+// anything used (FILE_BUFFER while buffered), dirty or flushing.
 func (a *cephfsCapAgent) checkCapsLocked(c *cephfsCap, reason string) (cephmsgr.MDSCaps, bool, error) {
+	msg, _, sent, err := a.checkCapsFlagsLocked(c, reason, 0)
+	return msg, sent, err
+}
+
+// checkCapsFlagsLocked is checkCapsLocked with MClientCaps flags (FLAG_SYNC
+// for CHECK_CAPS_SYNCHRONOUS). It also returns the flush TID when the message
+// flushed dirty metadata (mark_caps_flushing), zero otherwise.
+func (a *cephfsCapAgent) checkCapsFlagsLocked(c *cephfsCap, reason string, flags uint32) (cephmsgr.MDSCaps, uint64, bool, error) {
 	wanted := c.fileWanted()
-	var used uint32
-	retain := wanted | cephCapPin
+	var used, dirty, flushing uint32
+	d := a.dirty[c.Ino]
+	if d != nil {
+		if d.Buffered {
+			used |= cephCapFileBuffer
+		}
+		dirty, flushing = d.Dirty, d.Flushing
+	}
+	retain := wanted | used | cephCapPin
 	if c.NLink > 0 {
 		if wanted != 0 {
 			retain |= cephCapAny
@@ -765,36 +981,153 @@ func (a *cephfsCapAgent) checkCapsLocked(c *cephfsCap, reason string) (cephmsgr.
 		}
 	}
 	revoking := c.Implemented &^ c.Issued
-	approaching := c.Issued&cephCapFileWR != 0 && (c.Size >= c.MaxSize || c.MaxSize > c.ReportedSize && c.Size<<1 >= c.MaxSize+c.ReportedSize)
+	approaching := c.Issued&cephCapFileWR != 0 && flushing&cephCapFileWR == 0 && (c.Size >= c.MaxSize || c.MaxSize > c.ReportedSize && c.Size<<1 >= c.MaxSize+c.ReportedSize)
+	// get_caps raised wanted_max_size beyond max_size and what was requested.
+	wantMax := c.WantedMaxSize > c.MaxSize && c.WantedMaxSize > c.RequestedMaxSize
 	switch {
-	case approaching, revoking != 0 && revoking&used == 0, wanted&^(c.Wanted|c.Issued) != 0:
-	case c.Issued&^retain == 0:
-		return cephmsgr.MDSCaps{}, false, nil
+	case wantMax, approaching, revoking != 0 && revoking&used == 0, wanted&^(c.Wanted|c.Issued) != 0:
+	case c.Issued&^retain == 0 && dirty == 0:
+		return cephmsgr.MDSCaps{}, 0, false, nil
 	}
 	retain &^= revoking
 	before := c.Issued
 	c.Issued &= retain
 	c.Implemented &= c.Issued | used
 	c.Wanted = wanted
+	// send_cap: max_size is in->max_size, replaced by wanted_max_size (and
+	// recorded as requested) while the client wants a file write cap.
 	maxSize := c.MaxSize
 	if wanted&cephCapAnyFileWR != 0 {
-		// m->max_size = in->wanted_max_size, never raised by this client.
-		maxSize = 0
+		maxSize = c.WantedMaxSize
+		c.RequestedMaxSize = c.WantedMaxSize
+	} else {
+		c.RequestedMaxSize = 0
 	}
 	c.ReportedSize = c.Size
 	msg := cephmsgr.MDSCaps{Op: cephmsgr.MDSCapOpUpdate, Ino: c.Ino, CapID: c.CapID, Seq: c.Seq, IssueSeq: c.IssueSeq, Caps: c.Implemented, Wanted: wanted, MigrateSeq: c.MSeq,
 		UID: c.UID, GID: c.GID, Mode: c.Mode, NLink: c.NLink, Size: c.Size, MaxSize: maxSize, TruncateSize: c.TruncateSize, TruncateSeq: c.TruncateSeq,
 		MTime: c.MTime, ATime: c.ATime, CTime: c.CTime, TimeWarpSeq: c.TimeWarpSeq, OSDEpochBarrier: a.barrier, CallerUID: ^uint32(0), CallerGID: ^uint32(0),
-		BTime: c.BTime, ChangeAttr: c.ChangeAttr, Files: -1, Subdirs: -1, FscryptAuth: slices.Clone(c.FscryptAuth), FscryptFile: slices.Clone(c.FscryptFile)}
-	err := a.send(func(ctx context.Context) error { return a.s.SendCaps(ctx, msg, 0) })
+		BTime: c.BTime, ChangeAttr: c.ChangeAttr, Flags: flags, Files: -1, Subdirs: -1, FscryptAuth: slices.Clone(c.FscryptAuth), FscryptFile: slices.Clone(c.FscryptFile)}
+	var tid uint64
+	if dirty != 0 {
+		// mark_caps_flushing: a new flush TID; send_cap reports the snap
+		// context sequence as follows and, for Fw, the inline version.
+		a.flushTID++
+		tid = a.flushTID
+		a.flushing[tid] = c.Ino
+		msg.Dirty, msg.SnapFollows = dirty, d.Follows
+		if dirty&cephCapFileWR != 0 {
+			msg.InlineVersion = c.InlineVersion
+		}
+		d.Flushing |= dirty
+		d.Dirty = 0
+	}
+	if len(a.flushing) != 0 {
+		msg.OldestFlushTID = slices.Min(slices.Collect(maps.Keys(a.flushing)))
+	}
+	err := a.send(func(ctx context.Context) error { return a.s.SendCaps(ctx, msg, tid) })
 	r := cephfsCapRecord{Kind: "update", Ino: c.Ino, CapID: c.CapID, Op: msg.Op, Seq: msg.Seq, IssueSeq: msg.IssueSeq, MSeq: msg.MigrateSeq, Caps: cephCapString(msg.Caps), Wanted: cephCapString(wanted),
 		Before: cephCapString(before), After: cephCapString(c.Issued), Note: reason}
+	if tid != 0 || maxSize != 0 {
+		r.Note += fmt.Sprintf(" (dirty %s flush tid %d follows %d size %d max_size %d)", cephCapString(dirty), tid, msg.SnapFollows, msg.Size, maxSize)
+	}
 	if err != nil {
 		r.Error = err.Error()
 		a.failLocked("cap update on %d: %v", c.Ino, err)
 	}
 	a.recordLocked(r)
-	return msg, err == nil, err
+	if d != nil {
+		ev := cephfsDirtyEvent{At: time.Now(), Kind: "cap-update", Seq: msg.Seq, Caps: cephCapString(msg.Caps), Dirty: cephCapString(dirty), TID: tid, Size: msg.Size, Note: reason}
+		if err != nil {
+			ev.Error = err.Error()
+		}
+		d.Events = append(d.Events, ev)
+	}
+	return msg, tid, err == nil, err
+}
+
+// markDirty restates the writer's side of Client::_write for data the test
+// wrote (or buffered) through this client: the inode's size, mtime, ctime and
+// change attribute are updated and FILE_WR is marked dirty. follows is the
+// snap context sequence a later flush reports. With buffered set, writeBack
+// writes the data when FILE_BUFFER is revoked (after hold).
+func (a *cephfsCapAgent) markDirty(ino, size uint64, mtime cephmsgr.MDSTime, follows uint64, buffered bool, hold time.Duration, writeBack func() error) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c := a.caps[ino]
+	if c == nil || c.CapID == 0 || c.Released || c.Issued&cephCapFileWR == 0 || buffered && (c.Issued&cephCapFileBuffer == 0 || writeBack == nil) {
+		return fmt.Errorf("inode %d does not hold the caps for this write", ino)
+	}
+	if size > c.Size {
+		c.Size = size
+	}
+	c.MTime, c.CTime = mtime, mtime
+	c.ChangeAttr++
+	d := a.dirty[ino]
+	if d == nil {
+		d = &cephfsDirtyFile{Ino: ino}
+		a.dirty[ino] = d
+	}
+	if d.Buffered || d.writing {
+		return fmt.Errorf("inode %d still has buffered data", ino)
+	}
+	d.Dirty |= cephCapFileWR
+	d.Follows, d.Buffered, d.Hold, d.WriteBack = follows, buffered, hold, writeBack
+	d.Events = append(d.Events, cephfsDirtyEvent{At: time.Now(), Kind: "write", Dirty: cephCapString(d.Dirty), Size: c.Size, Note: fmt.Sprintf("buffered %v change_attr %d", buffered, c.ChangeAttr)})
+	return nil
+}
+
+// flushDirty restates fsync's check_caps(CHECK_CAPS_NODELAY |
+// CHECK_CAPS_SYNCHRONOUS): the dirty metadata is flushed in an UPDATE with
+// FLAG_SYNC. It returns the message and its flush TID.
+func (a *cephfsCapAgent) flushDirty(ino uint64) (cephmsgr.MDSCaps, uint64, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c, d := a.caps[ino], a.dirty[ino]
+	if c == nil || c.CapID == 0 || c.Released || d == nil || d.Dirty == 0 || d.Buffered {
+		return cephmsgr.MDSCaps{}, 0, fmt.Errorf("inode %d has no unbuffered dirty metadata to flush", ino)
+	}
+	const flagSync = 1 // MClientCaps::FLAG_SYNC
+	msg, tid, sent, err := a.checkCapsFlagsLocked(c, "fsync", flagSync)
+	if err == nil && (!sent || tid == 0) {
+		err = fmt.Errorf("inode %d flush was not sent", ino)
+	}
+	return msg, tid, err
+}
+
+// requestMaxSize restates get_caps for a write ending at endoff: a larger
+// wanted max_size is requested from the MDS with check_caps unless the
+// current max_size or an outstanding request covers it.
+func (a *cephfsCapAgent) requestMaxSize(ino, endoff uint64) (cephmsgr.MDSCaps, bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	c := a.caps[ino]
+	if c == nil || c.CapID == 0 || c.Released || c.Issued&cephCapFileWR == 0 {
+		return cephmsgr.MDSCaps{}, false, fmt.Errorf("inode %d does not hold Fw", ino)
+	}
+	if endoff <= c.MaxSize {
+		return cephmsgr.MDSCaps{}, false, nil
+	}
+	if endoff > c.WantedMaxSize {
+		c.WantedMaxSize = endoff
+	}
+	if c.WantedMaxSize <= c.RequestedMaxSize {
+		return cephmsgr.MDSCaps{}, false, nil
+	}
+	return a.checkCapsLocked(c, fmt.Sprintf("get_caps wants max_size %d", endoff))
+}
+
+// dirtyState returns a copy of one dirty file's state.
+func (a *cephfsCapAgent) dirtyState(ino uint64) (cephfsDirtyFile, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	d := a.dirty[ino]
+	if d == nil {
+		return cephfsDirtyFile{}, false
+	}
+	copied := *d
+	copied.WriteBack, copied.Events = nil, slices.Clone(d.Events)
+	return copied, true
 }
 
 // applyStatLocked restates add_update_inode/add_update_cap for one InodeStat.
@@ -806,8 +1139,20 @@ func (a *cephfsCapAgent) applyStatLocked(st *cephmsgr.MDSInodeStat, source strin
 	}
 	c.Dir = st.Mode&0o170000 == 0o040000
 	c.UID, c.GID, c.Mode, c.NLink = st.UID, st.GID, st.Mode, st.NLink
-	c.Size, c.MaxSize, c.TruncateSize, c.TruncateSeq = st.Size, st.MaxSize, st.TruncateSize, st.TruncateSeq
-	c.MTime, c.ATime, c.CTime, c.BTime, c.TimeWarpSeq, c.ChangeAttr = st.MTime, st.ATime, st.CTime, st.BTime, st.TimeWarpSeq, st.ChangeAttr
+	c.InlineVersion = st.InlineVersion
+	if d := a.dirty[st.Ino]; d != nil {
+		// A file this client wrote: add_update_inode applies the reply
+		// through update_inode_file_size and update_inode_file_time.
+		c.updateFileSize(st.Size, st.TruncateSeq, st.TruncateSize)
+		c.updateFileTime(c.Implemented|d.Dirty|d.Flushing, st.TimeWarpSeq, st.CTime, st.MTime, st.ATime)
+		c.MaxSize, c.BTime = st.MaxSize, st.BTime
+		if st.ChangeAttr > c.ChangeAttr {
+			c.ChangeAttr = st.ChangeAttr
+		}
+	} else {
+		c.Size, c.MaxSize, c.TruncateSize, c.TruncateSeq = st.Size, st.MaxSize, st.TruncateSize, st.TruncateSeq
+		c.MTime, c.ATime, c.CTime, c.BTime, c.TimeWarpSeq, c.ChangeAttr = st.MTime, st.ATime, st.CTime, st.BTime, st.TimeWarpSeq, st.ChangeAttr
+	}
 	c.FscryptAuth, c.FscryptFile = slices.Clone(st.FscryptAuth), slices.Clone(st.FscryptFile)
 	if st.XattrVersion > c.XattrVersion && len(st.Xattrs) != 0 {
 		c.XattrVersion = st.XattrVersion
@@ -1242,6 +1587,12 @@ type cephfsAgentSnapshot struct {
 	Renewals   []cephfsLeaseRenewal   `json:",omitempty"`
 	ReadOnly   []time.Time            `json:",omitempty"`
 	SnapAcks   []cephfsFlushSnapAck   `json:",omitempty"`
+	// Dirty, FlushAcks, Truncs and MaxSizes are reported for a client that
+	// wrote file data (the data acceptance).
+	Dirty     []cephfsDirtyFile    `json:",omitempty"`
+	FlushAcks []cephfsFlushAck     `json:",omitempty"`
+	Truncs    []cephfsTruncEvent   `json:",omitempty"`
+	MaxSizes  []cephfsMaxSizeEvent `json:",omitempty"`
 }
 
 func (a *cephfsCapAgent) snapshot() cephfsAgentSnapshot {
@@ -1257,6 +1608,13 @@ func (a *cephfsCapAgent) snapshot() cephfsAgentSnapshot {
 	for _, h := range a.holds {
 		s.Holds = append(s.Holds, *h)
 	}
+	for _, d := range a.dirty {
+		copied := *d
+		copied.WriteBack, copied.Events = nil, slices.Clone(d.Events)
+		s.Dirty = append(s.Dirty, copied)
+	}
+	slices.SortFunc(s.Dirty, func(x, y cephfsDirtyFile) int { return cmp.Compare(x.Ino, y.Ino) })
+	s.FlushAcks, s.Truncs, s.MaxSizes = slices.Clone(a.flushAcks), slices.Clone(a.truncs), slices.Clone(a.maxSizes)
 	if a.endErr != nil {
 		s.EndError = a.endErr.Error()
 	}

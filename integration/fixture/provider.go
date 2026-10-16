@@ -43,6 +43,8 @@ type fixtureCluster struct {
 	mdsCephFSRanks *mdsCephFSRanksScope
 	// mdsCephFSCompletion is the CephFS request-completion acceptance scope.
 	mdsCephFSCompletion *mdsCephFSCompletionScope
+	// mdsCephFSData is the CephFS file data acceptance scope.
+	mdsCephFSData *mdsCephFSDataScope
 	// rbdBase is the RBD base acceptance scope (owned pool and image).
 	rbdBase *rbdBaseScope
 }
@@ -337,6 +339,11 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	}
 	if p.mdsCephFSCompletion == "1" {
 		if err = c.prepareMDSCephFSCompletion(ctx, out); err != nil {
+			return c, err
+		}
+	}
+	if p.mdsCephFSData == "1" {
+		if err = c.prepareMDSCephFSData(ctx, out); err != nil {
 			return c, err
 		}
 	}
