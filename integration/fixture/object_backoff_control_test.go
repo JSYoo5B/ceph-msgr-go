@@ -83,9 +83,12 @@ func TestObjectBackoffNestedWaitBudgets(t *testing.T) {
 	if down <= 60*time.Second || objectBackoffOracleTimeout < down+3*command {
 		t.Fatal("outer command truncates the down/peering observation", down, command, objectBackoffOracleTimeout)
 	}
-	// The native append starts before the kill and remains alive through
-	// failure detection, peering and the caller's existing 45-second join.
-	if native <= objectBackoffOracleTimeout+45*time.Second {
+	// The append starts before the 20-second in-flight poll and a kill whose
+	// local Go outcome may take 60 seconds. Include those phases, the native
+	// observation, the existing 45-second join and margin for daemon controls.
+	beforeObservation := (20 + 60) * time.Second
+	joinAndControls := (45 + 30) * time.Second
+	if native <= beforeObservation+objectBackoffOracleTimeout+joinAndControls {
 		t.Fatal("native append can expire before the failover observation", native, objectBackoffOracleTimeout)
 	}
 }

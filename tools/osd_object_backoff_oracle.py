@@ -58,7 +58,9 @@ WAIT_SECONDS = 60
 # only after that grace, then MON commits a map and the surviving PG peers.
 # Keep a distinct DOWN phase budget rather than racing that first report.
 DOWN_WAIT_SECONDS = 120
-NATIVE_SECONDS = 240
+# Also cover the 20-second in-flight poll and 60-second local Go outcome
+# wait before the native down observation, plus the completion join.
+NATIVE_SECONDS = 360
 ACTIONS = ("prepare", "config", "wait-osd", "put", "wait-degraded", "native-start", "native-finish",
            "native-stat", "ops", "ack-history", "restore")
 
