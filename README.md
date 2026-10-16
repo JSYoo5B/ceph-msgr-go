@@ -1837,8 +1837,9 @@ ticket-info bad magic을 기록했다. 이 관측은 Go ticket 발급과 MGR 검
 공통 원인으로 확인됐고 `3d2645e`에서 수정됐다. 이 `2d1cc46` 실패는 그 네
 실패에 포함되지 않았으므로 같은 원인으로 다시 분류하지 않는다. 근거는 [별도 기록의 원인 절](integration/fixture/SERVICE_KEY_EPOCH_FAILURE_20261015.md#root-cause-ci-triage-2026-10-16)과
 [수정 후 로컬 soak](integration/fixture/SERVICE_KEY_EPOCH_FAILURE_20261015.md#local-soak-after-the-fix-2026-10-16)에
-있다. upstream #71은 그쪽 저장소에서 아직 열려 있으며, 이 저장소는 그 issue에
-새 글을 남기지 않았다.
+있다. 원인과 근거는 upstream #71에
+[댓글](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6208315401)로
+남겼으며, issue를 닫을지는 그쪽 저장소의 판단이다.
 
 `b01a3cf`의 [CI 첫 실패](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38739526554/job/116437288897)에서도
 secure/AES256K·IPv6·Linux amd64의 두 번째 wipe 후 최초 cold MGR 인증이

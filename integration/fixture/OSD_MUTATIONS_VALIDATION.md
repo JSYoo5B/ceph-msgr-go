@@ -266,7 +266,7 @@ and is not re-attributed. See the
 and the [local soak after the fix](SERVICE_KEY_EPOCH_FAILURE_20261015.md#local-soak-after-the-fix-2026-10-16)
 (680 of 680 first cold MGR authentications; CI amd64 runners were not
 soaked). The failure records in this section are kept as written. Upstream
-#71 remains open there; nothing was posted to it for this status.
+#71 remains open there; the root cause and evidence were posted as [a comment](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6208315401) on 2026-10-16.
 
 The conditional native AUTH preparation branch is now separately verified by
 `TestCephNativeManagerPreparationIntegration` in
