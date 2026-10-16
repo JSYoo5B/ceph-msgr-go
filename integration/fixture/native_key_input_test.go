@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -142,7 +143,10 @@ print(json.dumps({'len': len(NATIVE_KEY), 'mode': mode, 'dmode': dmode, 'body_ok
 	if err := json.Unmarshal(rest, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Len != len(testNativeKey) || got.Mode != 0o600 || got.DMode != 0o700 || !got.BodyOK || !strings.HasPrefix(got.Dir, tmp) {
+	// The prelude runs in Linux containers; Windows Python reports only the
+	// read-only bit, so POSIX modes are checked where they exist.
+	posix := runtime.GOOS != "windows"
+	if got.Len != len(testNativeKey) || posix && (got.Mode != 0o600 || got.DMode != 0o700) || !got.BodyOK || !strings.HasPrefix(got.Dir, tmp) {
 		t.Fatal("prelude keyring", got)
 	}
 	if _, err := os.Stat(got.Dir); !os.IsNotExist(err) {
