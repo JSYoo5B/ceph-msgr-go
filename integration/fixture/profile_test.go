@@ -33,6 +33,7 @@ func TestProfileDefaults(t *testing.T) {
 		expireTickets:        "0",
 		idleSessions:         "0",
 		authEpoch:            "0",
+		authEpochCycles:      "2",
 		shortTickets:         "0",
 		nativeMgrPreparation: "0",
 		connectionMode:       "secure",
@@ -232,6 +233,36 @@ func TestProfileCRCAndStressDoNotOverrestrictAuthentication(t *testing.T) {
 	}
 }
 
+func TestProfileAuthEpochCycles(t *testing.T) {
+	for _, tc := range []struct {
+		epoch, cycles, want string
+		ok                  bool
+	}{
+		{"1", "", "2", true}, {"0", "", "2", true}, {"1", "2", "2", true}, {"0", "2", "2", true},
+		{"1", "1", "1", true}, {"1", "150", "150", true}, {"1", "1000", "1000", true},
+		{"0", "150", "", false}, {"1", "0", "", false}, {"1", "1001", "", false},
+		{"1", "-3", "", false}, {"1", "+5", "", false}, {"1", "05", "", false}, {"1", " 5", "", false}, {"1", "x", "", false},
+	} {
+		env := map[string]string{"CEPH_MSGR_TEST_AUTH_EPOCH": tc.epoch, "CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES": tc.cycles}
+		p, err := loadProfile(func(name string) string { return env[name] })
+		if tc.ok != (err == nil) {
+			t.Fatalf("%v: %#v, %v", env, p, err)
+		}
+		if !tc.ok {
+			if !strings.Contains(err.Error(), "CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES") || p != (profile{}) {
+				t.Fatalf("%v: %#v, %v", env, p, err)
+			}
+			continue
+		}
+		if got := p.testEnvironment("/out", "")["CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES"]; got != tc.want {
+			t.Fatalf("%v: cycles %q, want %q", env, got, tc.want)
+		}
+		if _, leaked := p.containerEnvironment()["CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES"]; leaked {
+			t.Fatal("cycle count is a test input, not a daemon input")
+		}
+	}
+}
+
 func TestProfileMonitors(t *testing.T) {
 	p, err := loadProfile(func(string) string { return "" })
 	if err != nil {
@@ -307,7 +338,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_TEST_KEY_TYPE":       "aes",
 				"CEPH_MSGR_TEST_SERVICE_CIPHER": "aes256k", "CEPH_MSGR_TEST_MGR_COUNT": "2",
 				"CEPH_MSGR_TEST_EXPIRE_TICKETS": "0", "CEPH_MSGR_TEST_IDLE_SESSIONS": "0",
-				"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",
+				"CEPH_MSGR_TEST_AUTH_EPOCH": "0", "CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES": "2", "CEPH_MSGR_TEST_SHORT_TICKETS": "0",
 				"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": "0",
 				"CEPH_MSGR_TEST_MODE_REJECTION":         "", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
 				"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",

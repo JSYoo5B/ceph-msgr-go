@@ -4,8 +4,18 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+)
+
+// authEpochDefaultCycles is the CI cycle count of the service-key epoch
+// acceptance test. CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES raises it for local soak
+// runs; each cycle wipes the rotating service keys once and makes one new cold
+// client's first MGR handshake.
+const (
+	authEpochDefaultCycles = "2"
+	authEpochMaxCycles     = 1000
 )
 
 const profileDefaultImage = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
@@ -21,6 +31,7 @@ type profile struct {
 	rbdBase, rbdBaseIdentity                                              string
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
+	authEpochCycles                                                       string
 	sparseReadOracle                                                      string
 	osdProfile                                                            string
 	nativeMgrPreparation                                                  string
@@ -55,6 +66,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		expireTickets:        value("CEPH_MSGR_TEST_EXPIRE_TICKETS", "0"),
 		idleSessions:         value("CEPH_MSGR_TEST_IDLE_SESSIONS", "0"),
 		authEpoch:            value("CEPH_MSGR_TEST_AUTH_EPOCH", "0"),
+		authEpochCycles:      value("CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES", authEpochDefaultCycles),
 		shortTickets:         value("CEPH_MSGR_TEST_SHORT_TICKETS", "0"),
 		nativeMgrPreparation: value("CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION", "0"),
 		modeRejection:        getenv("CEPH_MSGR_TEST_MODE_REJECTION"),
@@ -140,6 +152,16 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			return profile{}, fmt.Errorf("idle-session fixture requires two managers and no expired-ticket fixture")
 		}
 		selected = "^TestCephIdleSessionsIntegration$"
+	}
+	if p.authEpochCycles != authEpochDefaultCycles {
+		// Local soak runs only. CI keeps the default two cycles.
+		cycles, err := strconv.Atoi(p.authEpochCycles)
+		if err != nil || cycles < 1 || cycles > authEpochMaxCycles || strconv.Itoa(cycles) != p.authEpochCycles {
+			return profile{}, fmt.Errorf("CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES must be an integer from 1 to %d", authEpochMaxCycles)
+		}
+		if p.authEpoch != "1" {
+			return profile{}, fmt.Errorf("CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES requires CEPH_MSGR_TEST_AUTH_EPOCH=1")
+		}
 	}
 	if p.authEpoch == "1" {
 		if p.mgrCount != "2" || p.expireTickets != "0" || p.idleSessions != "0" {
@@ -345,6 +367,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_EXPIRE_TICKETS":         p.expireTickets,
 		"CEPH_MSGR_TEST_IDLE_SESSIONS":          p.idleSessions,
 		"CEPH_MSGR_TEST_AUTH_EPOCH":             p.authEpoch,
+		"CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES":      p.authEpochCycles,
 		"CEPH_MSGR_TEST_SHORT_TICKETS":          p.shortTickets,
 		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION": p.nativeMgrPreparation,
 		"CEPH_MSGR_TEST_MODE_REJECTION":         p.modeRejection,

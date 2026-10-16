@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,7 +31,12 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_AUTH_EPOCH") != "1" {
 		t.Skip("requires an isolated service-key disposal fixture")
 	}
-	admin, ctx := fixtureClient(t, time.Minute)
+	cycles, err := authEpochCycles(os.Getenv("CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The CI default of two cycles keeps the one-minute fixture deadline.
+	admin, ctx := fixtureClient(t, max(time.Minute, time.Duration(cycles)*30*time.Second))
 	trace := newEpochTrace(t)
 	heldContext := context.WithValue(ctx, authTraceContextKey{}, trace.hooks("held"))
 	coldContext := context.WithValue(ctx, authTraceContextKey{}, trace.hooks("cold"))
@@ -91,7 +97,7 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 		return m
 	}
 	previous := queryMap()
-	for cycle := 1; cycle <= 2; cycle++ {
+	for cycle := 1; cycle <= cycles; cycle++ {
 		trace.beginCycle(cycle)
 		// Use a newly authenticated cold client in each cycle. Its first MGR
 		// handshake must use the replacement ticket, not an existing session.
@@ -115,6 +121,8 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 				t.Fatal("fixture tickets are too short to distinguish epoch notification from scheduled renewal")
 			}
 		}
+		heldDialsBefore, coldDialsBefore := len(heldDials.snapshot()), len(coldDials.snapshot())
+		wipeAt := time.Now()
 		result, err := admin.MonCommand(ctx, Command{JSON: []byte(`{"prefix":"auth wipe-rotating-service-keys"}`)})
 		if err != nil || result.Code != 0 {
 			// The mutation is submitted once. Never hide an uncertain result
@@ -136,6 +144,7 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 			}
 		}
 		cancel()
+		heldRenewalDials, coldRenewalDials := heldDials.snapshot()[heldDialsBefore:], coldDials.snapshot()[coldDialsBefore:]
 		heldRenewedBlob := held.snapshotAuth().Tickets[cephx.ServiceMgr].Blob
 		coldRenewedBlob := cold.snapshotAuth().Tickets[cephx.ServiceMgr].Blob
 		logState(cycle, "held", "after-renewal", held, heldDials, heldBeforeBlob, heldRenewedBlob)
@@ -186,12 +195,31 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 			t.Logf("service-key consumer auth provenance cycle=%d attempts=%s; cached epochs are observations; native verifier-cache equality unavailable", cycle, data)
 			return attempts
 		}
+		soak := authEpochSoakRecord{Cycle: cycle, MonEpoch: current.Epoch, AuthEpoch: *current.AuthEpoch,
+			ColdIssuer: expectedInstall.IssuerFixtureRole, ColdIssuerEndpoint: expectedInstall.IssuerEndpoint,
+			ColdIssuerAuthEpoch: expectedInstall.AuthEpoch, ColdRenewalMonDials: coldRenewalDials, HeldRenewalMonDials: heldRenewalDials,
+			ColdWipeToInstalledMS: float64(expectedInstall.InstalledAt.Sub(wipeAt).Microseconds()) / 1000, WipeSentAt: wipeAt.UTC()}
+		if heldTicket, ok := trace.reference(held.snapshotAuth().Tickets[cephx.ServiceMgr]); ok {
+			soak.HeldIssuer = heldTicket.IssuerFixtureRole
+			soak.HeldWipeToInstalledMS = float64(heldTicket.InstalledAt.Sub(wipeAt).Microseconds()) / 1000
+		}
 		if err := cold.WaitMgrReady(ctx); err != nil {
+			soak.FirstMgr = "refused_or_failed"
+			for _, a := range trace.snapshot("cold", cycle) {
+				soak.FirstMgrOutcome, soak.FirstMgrCode = a.Outcome, a.RefusalCode
+			}
+			logAuthEpochSoak(t, soak)
 			logAttempts()
 			logState(cycle, "cold", "first-MGR-rejected", cold, coldDials, coldBeforeBlob, coldRenewedBlob)
 			t.Fatalf("cold MGR with replacement service ticket: %q", fmt.Sprint(err))
 		}
 		attempts := logAttempts()
+		soak.FirstMgr = "ready"
+		if len(attempts) > 0 {
+			soak.FirstMgrOutcome, soak.FirstMgrCode = attempts[0].Outcome, attempts[0].RefusalCode
+		}
+		soak.FirstMgrAttempts = len(attempts)
+		logAuthEpochSoak(t, soak)
 		// This profile measures the first cold handshake. A later successful
 		// attempt must not turn an earlier rejection or uncertain write into a pass.
 		if len(attempts) != 1 || !epochAttemptMatches(attempts[0], expectedInstall, cycle, state.Manager.Name, state.Manager.GlobalID) ||
@@ -263,6 +291,51 @@ func observeEpochAuth(c *Client, before, renewed []byte) epochAuthObservation {
 	return result
 }
 
+// authEpochCycles parses the local soak cycle count. CI uses the default two.
+func authEpochCycles(value string) (int, error) {
+	if value == "" {
+		return 2, nil
+	}
+	cycles, err := strconv.Atoi(value)
+	if err != nil || cycles < 1 || cycles > 1000 || strconv.Itoa(cycles) != value {
+		return 0, fmt.Errorf("CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES=%q must be an integer from 1 to 1000", value)
+	}
+	return cycles, nil
+}
+
+// authEpochSoakRecord is one secret-free per-cycle summary for soak analysis.
+// Dial lists are MON roles successfully dialed after the wipe was sent and
+// before both clients installed renewed tickets; a renewal past the MON's key
+// refresh barrier shows as an additional dial of the same MON. Durations are
+// local observations from sending the wipe to the trace's installation hook.
+type authEpochSoakRecord struct {
+	Cycle                 int       `json:"cycle"`
+	MonEpoch              uint32    `json:"server_mon_epoch"`
+	AuthEpoch             uint32    `json:"server_auth_epoch"`
+	WipeSentAt            time.Time `json:"wipe_sent_at"`
+	ColdIssuer            string    `json:"cold_issuer_role"`
+	ColdIssuerEndpoint    string    `json:"cold_issuer_endpoint"`
+	ColdIssuerAuthEpoch   uint32    `json:"cold_issuer_cached_auth_epoch"`
+	ColdRenewalMonDials   []string  `json:"cold_renewal_mon_dials"`
+	ColdWipeToInstalledMS float64   `json:"cold_wipe_to_installed_ms"`
+	HeldIssuer            string    `json:"held_issuer_role"`
+	HeldRenewalMonDials   []string  `json:"held_renewal_mon_dials"`
+	HeldWipeToInstalledMS float64   `json:"held_wipe_to_installed_ms"`
+	FirstMgr              string    `json:"cold_first_mgr"`
+	FirstMgrAttempts      int       `json:"cold_first_mgr_attempts"`
+	FirstMgrOutcome       string    `json:"cold_first_mgr_outcome"`
+	FirstMgrCode          int32     `json:"cold_first_mgr_refusal_code,omitempty"`
+}
+
+func logAuthEpochSoak(t *testing.T, record authEpochSoakRecord) {
+	t.Helper()
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal("encode soak record")
+	}
+	t.Logf("service-key soak record %s", data)
+}
+
 type epochDialHistory struct {
 	mu       sync.Mutex
 	monitors []string
@@ -328,6 +401,19 @@ func TestEpochAuthObservationDoesNotRetainSecrets(t *testing.T) {
 	}
 }
 
+func TestAuthEpochCyclesDefaultAndBounds(t *testing.T) {
+	for value, want := range map[string]int{"": 2, "1": 1, "2": 2, "300": 300, "1000": 1000} {
+		if got, err := authEpochCycles(value); err != nil || got != want {
+			t.Fatalf("authEpochCycles(%q) = %d, %v; want %d", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"0", "1001", "-1", "+3", "03", " 3", "x"} {
+		if _, err := authEpochCycles(value); err == nil {
+			t.Fatalf("authEpochCycles(%q) accepted", value)
+		}
+	}
+}
+
 func TestEpochDialHistoriesAreIndependentAndOwned(t *testing.T) {
 	held, cold := &epochDialHistory{}, &epochDialHistory{}
 	held.record("mon.a")
@@ -379,6 +465,8 @@ type epochTrace struct {
 }
 
 type epochTicketInstall struct {
+	// InstalledAt is the local time the trace observed the installation.
+	InstalledAt       time.Time `json:"installed_at"`
 	Client            string    `json:"client"`
 	Cycle             int       `json:"cycle"`
 	Sequence          uint64    `json:"client_install_sequence"`
@@ -449,6 +537,7 @@ func (r *epochTrace) hooks(client string) *authTraceHooks {
 	return &authTraceHooks{
 		cycle: &r.cycle,
 		installed: func(issuer authIssuerObservation, auth *cephx.Client) {
+			installedAt := time.Now()
 			_, role, _ := testcluster.SplitPeer(issuer.endpoint)
 			r.mu.Lock()
 			defer r.mu.Unlock()
@@ -462,7 +551,7 @@ func (r *epochTrace) hooks(client string) *authTraceHooks {
 				if _, retained := r.installs[receipt]; retained {
 					continue
 				}
-				r.installs[receipt] = epochTicketInstall{Client: client, Cycle: issuer.cycle, Sequence: issuer.sequence, Service: service,
+				r.installs[receipt] = epochTicketInstall{InstalledAt: installedAt, Client: client, Cycle: issuer.cycle, Sequence: issuer.sequence, Service: service,
 					ClientID: auth.GlobalID, SecretID: ticket.SecretID, Expires: ticket.Expires, RenewAfter: ticket.RenewAfter,
 					BlobLabel: r.label("ticket-blob", ticket.Blob), IssuerSession: sessionLabel, IssuerEndpoint: issuer.endpoint,
 					IssuerFixtureRole: role, MonEpoch: issuer.monMap.Epoch, AuthEpoch: issuer.monMap.AuthEpoch}
