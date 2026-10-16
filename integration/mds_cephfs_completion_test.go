@@ -910,17 +910,14 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 			}
 			return mdsUnsafeWindowSample{MDSGID: r.MDSGID, SentAt: sent, ReturnedAt: time.Now(), Ops: r.Ops}
 		}
-		firstSample := sampleInFlight(t)
-		time.Sleep(time.Until(firstSample.ReturnedAt.Add(mdsUnsafeWindowGap)))
-		secondSample := sampleInFlight(t)
-		window, err := checkMDSUnsafeWindow(firstSample, secondSample, gidA, map[uint64]string{
+		window, err := awaitMDSUnsafeWindow(t, sampleInFlight, gidA, map[uint64]string{
 			e.ReplayedTID: mdsRequestUnsafe, e.LostFileTID: mdsRequestNoEarlyReply, e.LostDirTID: mdsRequestNoEarlyReply})
 		e.UnsafeWindow = &window
 		if err != nil {
 			t.Fatal(err)
 		}
-		if secondSample.MDSGID != e.ArmedGID {
-			t.Fatalf("the unsafe window was sampled on MDS %d, not the armed daemon %d", secondSample.MDSGID, e.ArmedGID)
+		if window.Second.MDSGID != e.ArmedGID {
+			t.Fatalf("the unsafe window was sampled on MDS %d, not the armed daemon %d", window.Second.MDSGID, e.ArmedGID)
 		}
 		// probe reports, without waiting, whether any reply arrived: a
 		// canceled local wait returns context.Canceled only without one.
@@ -938,7 +935,7 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 		}
 		e.NoReplyWithin = time.Since(submittedLM).Round(time.Millisecond).String()
 		observe(t, gidA)
-		e.InFlight = secondSample.Ops
+		e.InFlight = window.Second.Ops
 		// Drop every later message to clients, then let the journal commit.
 		req(t, "mds-log-mark")
 		req(t, "blackhole-on")

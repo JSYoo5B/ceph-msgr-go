@@ -44,6 +44,7 @@ type mdsUnsafeWindowEvidence struct {
 	First, Second mdsUnsafeWindowSample
 	GapMillis     int64             `json:"gap_ms"`
 	Classes       map[string]string `json:"classes"`
+	FirstAttempts int               `json:"first_attempts"`
 }
 
 func mdsRequestSafety(op nativeMDSCephFSHistoricOp) string {
@@ -89,26 +90,73 @@ func checkMDSUnsafeWindow(first, second mdsUnsafeWindowSample, client uint64, wa
 	if first.MDSGID == 0 || first.MDSGID != second.MDSGID {
 		return e, fmt.Errorf("MDS GID changed across the unsafe window: %d then %d", first.MDSGID, second.MDSGID)
 	}
-	if len(want) == 0 {
-		return e, fmt.Errorf("no request named for the unsafe window")
-	}
-	for tid, class := range want {
-		if class != mdsRequestUnsafe && class != mdsRequestNoEarlyReply {
-			return e, fmt.Errorf("request %d: unsupported wanted class %q", tid, class)
+	for i, sample := range []mdsUnsafeWindowSample{first, second} {
+		classes, err := checkMDSUnsafeSample(sample, client, want)
+		for tid, class := range classes {
+			e.Classes[fmt.Sprintf("%d/%d", tid, i+1)] = class
 		}
-		for i, sample := range []mdsUnsafeWindowSample{first, second} {
-			op, ok := findMDSClientOp(sample.Ops, client, tid)
-			if !ok {
-				return e, fmt.Errorf("sample %d: request client.%d:%d is not in flight", i+1, client, tid)
-			}
-			got := mdsRequestSafety(op)
-			e.Classes[fmt.Sprintf("%d/%d", tid, i+1)] = got
-			if op.FlagPoint != mdsJournalAndReply || slices.ContainsFunc(op.Events, func(ev string) bool { return strings.HasPrefix(ev, "journal_committed") }) || got != class {
-				return e, fmt.Errorf("sample %d: request %d is %s at %q, want %s waiting for the journal: %v", i+1, tid, got, op.FlagPoint, class, op.Events)
-			}
+		if err != nil {
+			return e, fmt.Errorf("sample %d: %w", i+1, err)
 		}
 	}
 	return e, nil
+}
+
+// checkMDSUnsafeSample checks one sample: every named request of the client
+// is in flight at the journal submission, without journal_committed, and of
+// its wanted class (mdsRequestUnsafe or mdsRequestNoEarlyReply).
+func checkMDSUnsafeSample(sample mdsUnsafeWindowSample, client uint64, want map[uint64]string) (map[uint64]string, error) {
+	if len(want) == 0 {
+		return nil, fmt.Errorf("no request named for the unsafe window")
+	}
+	classes := map[uint64]string{}
+	for tid, class := range want {
+		if class != mdsRequestUnsafe && class != mdsRequestNoEarlyReply {
+			return classes, fmt.Errorf("request %d: unsupported wanted class %q", tid, class)
+		}
+		op, ok := findMDSClientOp(sample.Ops, client, tid)
+		if !ok {
+			return classes, fmt.Errorf("request client.%d:%d is not in flight", client, tid)
+		}
+		got := mdsRequestSafety(op)
+		classes[tid] = got
+		if op.FlagPoint != mdsJournalAndReply || slices.ContainsFunc(op.Events, func(ev string) bool { return strings.HasPrefix(ev, "journal_committed") }) || got != class {
+			return classes, fmt.Errorf("request %d is %s at %q, want %s waiting for the journal: %v", tid, got, op.FlagPoint, class, op.Events)
+		}
+	}
+	return classes, nil
+}
+
+// mdsUnsafeWindowSettle bounds how long the first sample may wait for a
+// request that got no reply to reach the journal submission.
+const mdsUnsafeWindowSettle = 15 * time.Second
+
+// awaitMDSUnsafeWindow takes the first sample once every request is held (a
+// request without a reply gives the client no signal that the MDS dispatched
+// it), then the second sample at least mdsUnsafeWindowGap later, and checks
+// both. It only observes; it never changes the pause. The evidence is
+// returned with any error so that the caller keeps it.
+func awaitMDSUnsafeWindow(t *testing.T, sample func(*testing.T) mdsUnsafeWindowSample, client uint64, want map[uint64]string) (mdsUnsafeWindowEvidence, error) {
+	t.Helper()
+	deadline := time.Now().Add(mdsUnsafeWindowSettle)
+	attempts := 0
+	var first mdsUnsafeWindowSample
+	for {
+		attempts++
+		first = sample(t)
+		_, err := checkMDSUnsafeSample(first, client, want)
+		if err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			return mdsUnsafeWindowEvidence{First: first, FirstAttempts: attempts}, fmt.Errorf("the MDS did not hold every request at the journal submission within %s (%d samples): %w", mdsUnsafeWindowSettle, attempts, err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	time.Sleep(time.Until(first.ReturnedAt.Add(mdsUnsafeWindowGap)))
+	window, err := checkMDSUnsafeWindow(first, sample(t), client, want)
+	window.FirstAttempts = attempts
+	return window, err
 }
 
 func TestMDSUnsafeWindowClassification(t *testing.T) {
@@ -151,5 +199,34 @@ func TestMDSUnsafeWindowClassification(t *testing.T) {
 	}
 	if _, err := checkMDSUnsafeWindow(first, sample(77, at.Add(4*time.Second), unsafe, held), 4239, map[uint64]string{4: mdsRequestSafe}); err == nil {
 		t.Fatal("a safe class accepted as an unsafe window")
+	}
+}
+
+// The first sample waits until a request without a reply reaches the
+// journal submission; the second follows at least the gap later.
+func TestAwaitMDSUnsafeWindowSettlesThenWaitsTheGap(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits the 3 s window")
+	}
+	held := nativeMDSCephFSHistoricOp{Description: "client_request(client.9:5 mkdir #0x1/x 2026-10-15T15:51:25.344400+0000 caller_uid=0, caller_gid=0{})", FlagPoint: mdsJournalAndReply,
+		Events: []string{"initiated", "dispatched", mdsJournalAndReply}}
+	dispatching := nativeMDSCephFSHistoricOp{Description: held.Description, FlagPoint: "dispatched", Events: []string{"initiated", "dispatched"}}
+	calls := 0
+	sample := func(*testing.T) mdsUnsafeWindowSample {
+		calls++
+		sent := time.Now()
+		ops := []nativeMDSCephFSHistoricOp{held}
+		switch calls {
+		case 1:
+			ops = nil
+		case 2:
+			ops = []nativeMDSCephFSHistoricOp{dispatching}
+		}
+		return mdsUnsafeWindowSample{MDSGID: 7, SentAt: sent, ReturnedAt: time.Now(), Ops: ops}
+	}
+	started := time.Now()
+	window, err := awaitMDSUnsafeWindow(t, sample, 9, map[uint64]string{5: mdsRequestNoEarlyReply})
+	if err != nil || window.FirstAttempts != 3 || calls != 4 || window.GapMillis < mdsUnsafeWindowGap.Milliseconds() || time.Since(started) < mdsUnsafeWindowGap {
+		t.Fatal(window, err, calls)
 	}
 }

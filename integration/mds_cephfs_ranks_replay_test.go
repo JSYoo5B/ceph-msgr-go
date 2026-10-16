@@ -864,20 +864,17 @@ func TestCephMDSCephFSRanksReplayIntegration(t *testing.T) {
 			r := native(t, "ops-in-flight", "0", strconv.FormatUint(control.goGID, 10))
 			return mdsUnsafeWindowSample{MDSGID: r.OpsDaemon.GID, SentAt: sent, ReturnedAt: time.Now(), Ops: r.InFlightOps}
 		}
-		firstSample := sampleInFlight(t)
-		time.Sleep(time.Until(firstSample.ReturnedAt.Add(mdsUnsafeWindowGap)))
-		secondSample := sampleInFlight(t)
 		wantHeld := map[uint64]string{}
 		for _, p := range held {
 			wantHeld[p.e.Transaction] = mdsRequestUnsafe
 		}
-		window, err := checkMDSUnsafeWindow(firstSample, secondSample, control.goGID, wantHeld)
+		window, err := awaitMDSUnsafeWindow(t, sampleInFlight, control.goGID, wantHeld)
 		takeover.UnsafeWindow = &window
 		if err != nil {
 			t.Fatal(err)
 		}
-		if secondSample.MDSGID != control.topology.Ranks[0].GID {
-			t.Fatalf("the unsafe window was sampled on MDS %d, not rank 0's %d", secondSample.MDSGID, control.topology.Ranks[0].GID)
+		if window.Second.MDSGID != control.topology.Ranks[0].GID {
+			t.Fatalf("the unsafe window was sampled on MDS %d, not rank 0's %d", window.Second.MDSGID, control.topology.Ranks[0].GID)
 		}
 		takeover.UnsafeAfterFlushMillis = time.Since(flushed).Milliseconds()
 		probe, stop := context.WithCancel(ctx)
