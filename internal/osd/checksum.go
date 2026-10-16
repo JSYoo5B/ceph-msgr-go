@@ -13,29 +13,35 @@ import (
 // osdc/Objecter.h:623-650 and osd/PrimaryLogPG.cc:5533-5711. These sources
 // carry LGPL-2.1 notices; no upstream implementation is copied.
 const (
-	Checksum       uint16 = 0x121f
-	ChecksumCRC32C uint8  = 2
+	Checksum         uint16 = 0x121f
+	ChecksumXXHash32 uint8  = 0
+	ChecksumXXHash64 uint8  = 1
+	ChecksumCRC32C   uint8  = 2
 )
 
-// ChecksumInput selects a bounded CRC32C read. Seed is encoded little-endian
+// ChecksumInput selects a bounded checksum read. Seed is encoded little-endian
 // in the request payload; ChunkSize and Type occupy the checksum union.
 // ChunkSize zero requests one checksum over the requested extent.
 type ChecksumInput struct {
 	ChunkSize uint32
 	Type      uint8
-	Seed      uint32
+	Seed      uint64
 }
 
 // ChecksumResult is the union echoed by the OSD. The result's outer Length
-// may be shortened at EOF. Raw data contains a count and little-endian CRCs.
+// may be shortened at EOF. Raw data contains a count and little-endian digests.
 type ChecksumResult struct {
 	ChunkSize uint32
 	Type      uint8
 }
 
 func validateChecksumOperation(op Operation, limit uint32) error {
-	if op.Flags != 0 || op.Checksum.Type != ChecksumCRC32C {
+	width := checksumWidth(op.Checksum.Type)
+	if op.Flags != 0 || width == 0 {
 		return ErrOperation
+	}
+	if width == 4 && op.Checksum.Seed > math.MaxUint32 {
+		return ErrRequest
 	}
 	if op.Length == 0 || op.Offset > math.MaxUint64-op.Length || len(op.Data) != 0 || op.Version != 0 || op.Xattr != (XattrInput{}) || !omapInputEmpty(op.Omap) || op.Class != (ClassInput{}) || op.AllocHint != (AllocHintInput{}) || op.Snap != 0 || op.ListSnaps != (ListSnapsInput{}) || op.ListWatchers != (ListWatchersInput{}) {
 		return ErrRequest
@@ -56,7 +62,7 @@ func checksumReplyBytes(op Operation) uint64 {
 	if op.Checksum.ChunkSize != 0 {
 		count = op.Length / uint64(op.Checksum.ChunkSize)
 	}
-	return 4 + 4*count
+	return 4 + checksumWidth(op.Checksum.Type)*count
 }
 
 func encodeChecksumUnion(e *wire.Encoder, op Operation) {
@@ -78,15 +84,34 @@ func decodeChecksumUnion(d *wire.Decoder) (uint64, uint64, ChecksumResult) {
 	return offset, length, result
 }
 
-func encodeChecksumData(seed uint32) []byte {
+func checksumWidth(algorithm uint8) uint64 {
+	switch algorithm {
+	case ChecksumXXHash32, ChecksumCRC32C:
+		return 4
+	case ChecksumXXHash64:
+		return 8
+	default:
+		return 0
+	}
+}
+
+func encodeChecksumData(input ChecksumInput) []byte {
 	e := wire.Encoder{}
-	e.U32(seed)
+	if checksumWidth(input.Type) == 8 {
+		e.U64(input.Seed)
+	} else {
+		e.U32(uint32(input.Seed))
+	}
 	return e.Data
 }
 
-// DecodeChecksum decodes the CRC32C count and values without allocating from
+// DecodeChecksum decodes the algorithm-sized count and values without allocating from
 // an unchecked wire count. Empty data means the server skipped an EOF read.
-func DecodeChecksum(data []byte) ([]uint32, error) {
+func DecodeChecksum(algorithm uint8, data []byte) ([]uint64, error) {
+	width := checksumWidth(algorithm)
+	if width == 0 {
+		return nil, ErrOperation
+	}
 	if len(data) == 0 {
 		return nil, nil
 	}
@@ -94,10 +119,14 @@ func DecodeChecksum(data []byte) ([]uint32, error) {
 		return nil, wire.ErrLimit
 	}
 	d := wire.NewDecoderLimit(data, uint32(len(data)))
-	n := d.Count(4, math.MaxUint32)
-	values := make([]uint32, n)
+	n := d.Count(uint32(width), math.MaxUint32)
+	values := make([]uint64, n)
 	for i := range values {
-		values[i] = d.U32()
+		if width == 8 {
+			values[i] = d.U64()
+		} else {
+			values[i] = uint64(d.U32())
+		}
 	}
 	if err := d.Done(); err != nil {
 		return nil, err
@@ -106,7 +135,7 @@ func DecodeChecksum(data []byte) ([]uint32, error) {
 }
 
 func ValidateChecksumReply(requested Operation, reply OperationResult, success bool) error {
-	if requested.Code != Checksum {
+	if requested.Code != Checksum || checksumWidth(requested.Checksum.Type) == 0 {
 		return ErrOperation
 	}
 	if reply.Code != Checksum || reply.Offset != requested.Offset || reply.Length > requested.Length || reply.Checksum.ChunkSize != requested.Checksum.ChunkSize || reply.Checksum.Type != requested.Checksum.Type || reply.TruncateSize != 0 || reply.TruncateSequence != 0 || uint64(reply.PayloadLength) != uint64(len(reply.Data)) || uint64(reply.PayloadLength) > checksumReplyBytes(requested) {
@@ -131,7 +160,7 @@ func ValidateChecksumReply(requested Operation, reply OperationResult, success b
 	if reply.Length == 0 {
 		return errors.New("OSD counted checksum has zero returned length")
 	}
-	values, err := DecodeChecksum(reply.Data)
+	values, err := DecodeChecksum(requested.Checksum.Type, reply.Data)
 	if err != nil {
 		return err
 	}

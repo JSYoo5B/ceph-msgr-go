@@ -9,6 +9,7 @@
 #include "osdc/Objecter.h"
 #include <cerrno>
 #include <cstring>
+#include <cstdlib>
 #include <limits>
 #include <utility>
 
@@ -37,11 +38,14 @@ ceph::buffer::list value(const std::string& bytes) {
   return result;
 }
 
-std::vector<OSDOp> all_operations() {
+std::vector<OSDOp> all_operations(uint8_t type) {
  ObjectOperation op;
  ceph::buffer::list seed;
- encode(uint32_t(0xffffffffU), seed);
- op.checksum(CEPH_OSD_CHECKSUM_OP_TYPE_CRC32C, seed, 2, 8, 4,
+ if (type == CEPH_OSD_CHECKSUM_OP_TYPE_XXHASH64)
+  encode(uint64_t(0x0123456789abcdefULL), seed);
+ else
+  encode(uint32_t(type == CEPH_OSD_CHECKSUM_OP_TYPE_CRC32C ? 0xffffffffU : 0x89abcdefU), seed);
+ op.checksum(type, seed, 2, 8, 4,
              static_cast<ceph::buffer::list*>(nullptr), nullptr, nullptr);
  std::vector<OSDOp> result(op.ops.begin(), op.ops.end());
  for (auto& item : result) item.rval = 0;
@@ -49,11 +53,16 @@ std::vector<OSDOp> all_operations() {
 }
 
 // Explicit logical handler outputs, not native live CHECKSUM execution.
-ceph::buffer::list checksums(bool trimmed) {
+ceph::buffer::list checksums(uint8_t type, bool trimmed) {
  ceph::buffer::list out;
  encode(uint32_t(trimmed ? 1 : 2), out);
- encode(uint32_t(0x11223344), out);
- if (!trimmed) encode(uint32_t(0xaabbccdd), out);
+ if (type == CEPH_OSD_CHECKSUM_OP_TYPE_XXHASH64) {
+  encode(uint64_t(0x1122334455667788ULL), out);
+  if (!trimmed) encode(uint64_t(0xffeeddccbbaa0099ULL), out);
+ } else {
+  encode(uint32_t(0x11223344), out);
+  if (!trimmed) encode(uint32_t(0xaabbccdd), out);
+ }
  return out;
 }
 
@@ -241,11 +250,18 @@ int main(int argc, char** argv) {
   if (argc != 2) throw std::runtime_error("usage: native-checksum-encoder OUTPUT_DIR");
   const std::filesystem::path root(argv[1]);
   std::filesystem::create_directories(root);
-  auto req = request(all_operations());
-  emit(root, "checksum-native-request-v6-crc32c", *req);
-  decode_request(root, "checksum-native-request-v6-crc32c", *req);
+  for (const auto& [type, algorithm] : std::vector<std::pair<uint8_t, std::string>>{
+       {CEPH_OSD_CHECKSUM_OP_TYPE_CRC32C, "crc32c"},
+       {CEPH_OSD_CHECKSUM_OP_TYPE_XXHASH32, "xxhash32"},
+       {CEPH_OSD_CHECKSUM_OP_TYPE_XXHASH64, "xxhash64"}}) {
+  const char* selected = std::getenv("CEPH_CHECKSUM_ALGORITHM");
+  if (!selected || algorithm != selected) continue;
+  auto req = request(all_operations(type));
+  const auto request_name = "checksum-native-request-v6-" + algorithm;
+  emit(root, request_name, *req);
+  decode_request(root, request_name, *req);
   for (const auto& name : {"success", "trimmed", "eof", "unaligned"}) {
-   auto input = all_operations(), output = input;
+   auto input = all_operations(type), output = input;
    int result = 0;
    if (std::string(name) == "unaligned") {
     output[0].op.checksum.length = 6;
@@ -253,11 +269,13 @@ int main(int argc, char** argv) {
    } else if (std::string(name) != "eof") {
     bool trimmed = std::string(name) == "trimmed";
     if (trimmed) output[0].op.checksum.length = 4;
-    output[0].outdata = checksums(trimmed);
+    output[0].outdata = checksums(type, trimmed);
    }
    output[0].rval = result;
-   reply(root, std::string("checksum-native-reply-v6-") + name, input, output,
+   reply(root, std::string("checksum-native-reply-v6-") +
+         (algorithm == "crc32c" ? "" : algorithm + "-") + name, input, output,
          result, CEPH_OSD_FLAG_ACK | CEPH_OSD_FLAG_ONDISK, eversion_t(), 19);
+  }
   }
   return 0;
  } catch (const std::exception& error) { std::cerr << error.what() << "\n"; return 1; }

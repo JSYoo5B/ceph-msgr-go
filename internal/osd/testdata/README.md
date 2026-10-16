@@ -134,3 +134,16 @@ cd integration/fixture
 go run . encode-osd-mapext -cache /tmp/ceph-native-encoder-cache -output /tmp/mapext-proof.json
 go run . encode-osd-checksum -cache /tmp/ceph-native-encoder-cache -output /tmp/checksum-proof.json
 ```
+
+## CHECKSUM xxHash expansion (2026-10-16)
+
+The checksum generator now retains 15 native message vectors: one request
+and four logical replies per CRC32C, xxHash32 and xxHash64. The original CRC
+header/front/data bytes remain identical. Algorithm selections run through
+the unchanged shared five-vector builder separately; the merged provenance
+retains each selection's actual wrapper, binary, library, configuration and
+build-driver hashes. Other generators and their historical proof hashes are
+unchanged. The xxHash64 vectors include seed and result bits above uint32.
+These encoded logical replies prove wire format, not native hash execution;
+see [the algorithm acceptance](../../../integration/fixture/OSD_CHECKSUM_ALGORITHMS_VALIDATION.md)
+for separate live evidence.

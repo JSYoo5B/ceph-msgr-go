@@ -108,8 +108,8 @@ var mapextEncoderSpec = nativeEncoderSpec{
 }
 
 var checksumEncoderSpec = nativeEncoderSpec{
-	command: "encode-osd-checksum", wrapper: "osd_checksum_native_encoder.cc", driver: "osd_checksum_native_encoder.py",
-	names: []string{"checksum-native-request-v6-crc32c", "checksum-native-reply-v6-success", "checksum-native-reply-v6-trimmed", "checksum-native-reply-v6-eof", "checksum-native-reply-v6-unaligned"},
+	command: "encode-osd-checksum", wrapper: "osd_checksum_native_encoder.cc", driver: "osd_checksum_native_encoder.py", requests: 3,
+	names: []string{"checksum-native-request-v6-crc32c", "checksum-native-request-v6-xxhash32", "checksum-native-request-v6-xxhash64", "checksum-native-reply-v6-success", "checksum-native-reply-v6-trimmed", "checksum-native-reply-v6-eof", "checksum-native-reply-v6-unaligned", "checksum-native-reply-v6-xxhash32-success", "checksum-native-reply-v6-xxhash32-trimmed", "checksum-native-reply-v6-xxhash32-eof", "checksum-native-reply-v6-xxhash32-unaligned", "checksum-native-reply-v6-xxhash64-success", "checksum-native-reply-v6-xxhash64-trimmed", "checksum-native-reply-v6-xxhash64-eof", "checksum-native-reply-v6-xxhash64-unaligned"},
 }
 
 var sparseReadEncoderSpec = nativeEncoderSpec{

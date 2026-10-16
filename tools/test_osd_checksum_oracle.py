@@ -51,6 +51,22 @@ class ChecksumOracleTests(unittest.TestCase):
         result = oracle.Native(Library(empty)).checksum(7, self.request())
         self.assertEqual(base64.b64decode(result["data"]), b"\0\0\0\0")
 
+    def test_xxhash_native_abi_keeps_full_width(self):
+        for algorithm, width, seed, values in (
+                (0, 4, 0xffffffff, [0x87654321, 0xffffffff]),
+                (1, 8, 0xfedcba9876543210, [0x8123456789abcdef, 0xffffffffffffffff])):
+            with self.subTest(algorithm=algorithm):
+                fmt = "Q" if width == 8 else "I"
+                encoded = struct.pack("<I"+fmt*2, 2, *values)
+                def checksum(io, name, kind, initial, seed_len, length, offset, chunk, output, output_size):
+                    self.assertEqual((kind, initial, seed_len, output_size),
+                                     (algorithm, struct.pack("<"+fmt, seed), width, len(encoded)))
+                    C.memmove(output, encoded, len(encoded))
+                    return 0
+                result = oracle.Native(Library(checksum)).checksum(7, self.request(type=algorithm, seed=seed))
+                self.assertEqual(result["values"], values)
+                self.assertEqual(base64.b64decode(result["data"]), encoded)
+
     def test_signed_error_has_no_interpreted_output(self):
         result = oracle.Native(Library(lambda *args: -22)).checksum(7, self.request())
         self.assertEqual(result, dict(code=-22, data="", values=[]))
@@ -63,8 +79,9 @@ class ChecksumOracleTests(unittest.TestCase):
             oracle.Native(Library(bad)).checksum(7, self.request())
 
     def test_invalid_fields_refused_before_native_access(self):
-        for fields in (dict(type=0), dict(type=1), dict(offset=(1 << 64)-2), dict(length=0),
-                       dict(length=oracle.MAX_READ+1), dict(length=7), dict(seed=True), dict(chunk_size=-1)):
+        for fields in (dict(type=3), dict(type=True), dict(offset=(1 << 64)-2), dict(length=0),
+                       dict(length=oracle.MAX_READ+1), dict(length=7), dict(seed=True), dict(chunk_size=-1),
+                       dict(type=0, seed=1 << 32), dict(type=2, seed=1 << 32), dict(type=1, seed=1 << 64)):
             with self.subTest(fields=fields), self.assertRaises(ValueError):
                 self.request(**fields)
 

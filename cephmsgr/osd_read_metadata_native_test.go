@@ -23,12 +23,20 @@ func TestOSDReadMetadataPublicNativePayloads(t *testing.T) {
 		{"mapext", "mapext-native-request-v6-map", "mapext-native-reply-v6-", "empty", OSDOperation{Code: OSDMapExt, Offset: 3, Length: 97, MapExt: OSDMapExtInput{MaxOutputBytes: 512}}, 0},
 		{"mapext", "mapext-native-request-v6-map", "mapext-native-reply-v6-", "enoent", OSDOperation{Code: OSDMapExt, Offset: 3, Length: 97, MapExt: OSDMapExtInput{MaxOutputBytes: 512}}, -2},
 		{"mapext", "mapext-native-request-v6-map", "mapext-native-reply-v6-", "eacces", OSDOperation{Code: OSDMapExt, Offset: 3, Length: 97, MapExt: OSDMapExtInput{MaxOutputBytes: 512}}, -13},
-		{"checksum", "checksum-native-request-v6-crc32c", "checksum-native-reply-v6-", "success", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: 2, ChunkSize: 4, Seed: ^uint32(0)}}, 0},
-		{"checksum", "checksum-native-request-v6-crc32c", "checksum-native-reply-v6-", "trimmed", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: 2, ChunkSize: 4, Seed: ^uint32(0)}}, 0},
-		{"checksum", "checksum-native-request-v6-crc32c", "checksum-native-reply-v6-", "eof", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: 2, ChunkSize: 4, Seed: ^uint32(0)}}, 0},
-		{"checksum", "checksum-native-request-v6-crc32c", "checksum-native-reply-v6-", "unaligned", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: 2, ChunkSize: 4, Seed: ^uint32(0)}}, -22},
+		{"checksum", "checksum-native-request-v6-crc32c", "checksum-native-reply-v6-", "success", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: 2, ChunkSize: 4, Seed: uint64(^uint32(0))}}, 0},
+		{"checksum", "checksum-native-request-v6-crc32c", "checksum-native-reply-v6-", "trimmed", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: 2, ChunkSize: 4, Seed: uint64(^uint32(0))}}, 0},
+		{"checksum", "checksum-native-request-v6-crc32c", "checksum-native-reply-v6-", "eof", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: 2, ChunkSize: 4, Seed: uint64(^uint32(0))}}, 0},
+		{"checksum", "checksum-native-request-v6-crc32c", "checksum-native-reply-v6-", "unaligned", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: 2, ChunkSize: 4, Seed: uint64(^uint32(0))}}, -22},
+		{"checksum", "checksum-native-request-v6-xxhash32", "checksum-native-reply-v6-xxhash32-", "success", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash32, ChunkSize: 4, Seed: 0x89abcdef}}, 0},
+		{"checksum", "checksum-native-request-v6-xxhash32", "checksum-native-reply-v6-xxhash32-", "trimmed", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash32, ChunkSize: 4, Seed: 0x89abcdef}}, 0},
+		{"checksum", "checksum-native-request-v6-xxhash32", "checksum-native-reply-v6-xxhash32-", "eof", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash32, ChunkSize: 4, Seed: 0x89abcdef}}, 0},
+		{"checksum", "checksum-native-request-v6-xxhash32", "checksum-native-reply-v6-xxhash32-", "unaligned", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash32, ChunkSize: 4, Seed: 0x89abcdef}}, -22},
+		{"checksum", "checksum-native-request-v6-xxhash64", "checksum-native-reply-v6-xxhash64-", "success", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash64, ChunkSize: 4, Seed: 0x0123456789abcdef}}, 0},
+		{"checksum", "checksum-native-request-v6-xxhash64", "checksum-native-reply-v6-xxhash64-", "trimmed", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash64, ChunkSize: 4, Seed: 0x0123456789abcdef}}, 0},
+		{"checksum", "checksum-native-request-v6-xxhash64", "checksum-native-reply-v6-xxhash64-", "eof", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash64, ChunkSize: 4, Seed: 0x0123456789abcdef}}, 0},
+		{"checksum", "checksum-native-request-v6-xxhash64", "checksum-native-reply-v6-xxhash64-", "unaligned", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash64, ChunkSize: 4, Seed: 0x0123456789abcdef}}, -22},
 	} {
-		t.Run(tc.kind+"/"+tc.suffix, func(t *testing.T) {
+		t.Run(tc.request+"/"+tc.suffix, func(t *testing.T) {
 			c, peers, _ := osdTestClient(t)
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
@@ -64,7 +72,7 @@ func TestOSDReadMetadataPublicNativePayloads(t *testing.T) {
 			}
 			op := got.r.Operations[0]
 			if tc.kind == "checksum" {
-				if op.Checksum.Type != 2 || op.Checksum.ChunkSize != 4 {
+				if op.Checksum.Type != tc.op.Checksum.Type || op.Checksum.ChunkSize != 4 {
 					t.Fatal("checksum union lost", op)
 				}
 				want := 0
@@ -74,7 +82,11 @@ func TestOSDReadMetadataPublicNativePayloads(t *testing.T) {
 				if tc.suffix == "trimmed" {
 					want = 1
 				}
-				if len(op.Checksum.Values) != want || want > 0 && op.Checksum.Values[0] != 0x11223344 {
+				wantFirst := uint64(0x11223344)
+				if tc.op.Checksum.Type == OSDChecksumXXHash64 {
+					wantFirst = 0x1122334455667788
+				}
+				if len(op.Checksum.Values) != want || want > 0 && op.Checksum.Values[0] != wantFirst {
 					t.Fatal("checksum values lost", op)
 				}
 			} else if tc.suffix == "populated" && len(op.Extents) != 2 {

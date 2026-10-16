@@ -29,7 +29,7 @@ func nativeV8Request(kind string) V8Request {
 		r.Snaps = []uint64{7, 5, 2}
 		r.OrderSnap = true
 	case "checksum":
-		r.Operations = []Operation{{Code: Checksum, Offset: 2, Length: 8, Checksum: ChecksumInput{Type: ChecksumCRC32C, Seed: ^uint32(0), ChunkSize: 4}}}
+		r.Operations = []Operation{{Code: Checksum, Offset: 2, Length: 8, Checksum: ChecksumInput{Type: ChecksumCRC32C, Seed: uint64(^uint32(0)), ChunkSize: 4}}}
 	case "shard":
 		r.PG.Seed = 0x55
 		r.Hash = 0xabcdef01

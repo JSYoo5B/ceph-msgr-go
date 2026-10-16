@@ -97,7 +97,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		e.U32(op.Flags)
 		payloadBytes := uint64(len(op.Data))
 		if op.Code == Checksum {
-			payloadBytes = 4
+			payloadBytes = checksumWidth(op.Checksum.Type)
 		}
 		if IsWatchOperation(op.Code) {
 			payloadBytes = WatchDataBytes(op)
@@ -154,7 +154,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			continue
 		}
 		if op.Code == Checksum {
-			data = append(data, encodeChecksumData(op.Checksum.Seed)...)
+			data = append(data, encodeChecksumData(op.Checksum)...)
 			continue
 		}
 		if IsOmapOperation(op.Code) {

@@ -18,15 +18,15 @@ import (
 type checksumNativeReceipt struct {
 	Code   int32          `json:"code"`
 	Data   []byte         `json:"data"`
-	Values []uint32       `json:"values"`
+	Values []uint64       `json:"values"`
 	Before omapWriteState `json:"before"`
 	After  omapWriteState `json:"after"`
 }
 
-func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, length uint64, chunk, seed uint32) checksumNativeReceipt {
+func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, length uint64, chunk uint32, seed uint64, algorithm uint8) checksumNativeReceipt {
 	t.Helper()
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
-	input, err := json.Marshal(map[string]any{"object": object, "offset": offset, "length": length, "chunk_size": chunk, "seed": seed, "type": 2})
+	input, err := json.Marshal(map[string]any{"object": object, "offset": offset, "length": length, "chunk_size": chunk, "seed": seed, "type": algorithm})
 	if err == nil {
 		err = testcluster.WritePublicEvidence(filepath.Join(dir, "osd-checksum-input.json"), input)
 	}
@@ -74,11 +74,14 @@ func TestCephOSDChecksumIntegration(t *testing.T) {
 			conn.Close()
 		}
 	}()
-	var evidence []struct {
+	type caseReceipt struct {
 		Name   string                `json:"name"`
+		Type   uint8                 `json:"type"`
+		Seed   uint64                `json:"seed"`
 		Native checksumNativeReceipt `json:"native"`
 		Go     cephmsgr.OSDReply     `json:"go"`
 	}
+	var evidence []caseReceipt
 	defer func() {
 		data, err := json.Marshal(evidence)
 		if err == nil && len(data) <= 512<<10 {
@@ -88,60 +91,68 @@ func TestCephOSDChecksumIntegration(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	for _, tc := range []struct {
-		name, object   string
-		offset, length uint64
-		chunk, seed    uint32
-		code           int32
-	}{
-		{"single CRC32C", main, 0, 12, 0, 0xffffffff, 0},
-		{"chunked binary extent", main, 2, 8, 4, 0x12345678, 0},
-		{"trimmed aligned extent", main, 8, 8, 4, 0, 0},
-		{"trimmed unaligned signed EINVAL", main, 6, 8, 4, 0xffffffff, -22},
-		{"exact EOF empty output", main, 12, 8, 4, 0xffffffff, 0},
-		{"past EOF empty output", main, 20, 8, 4, 0xffffffff, 0},
-		{"absent signed ENOENT", absent, 0, 8, 4, 0xffffffff, -2},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			native := nativeChecksum(t, ctx, tc.object, tc.offset, tc.length, tc.chunk, tc.seed)
-			if native.Code != tc.code || !reflect.DeepEqual(native.Before, native.After) {
-				t.Fatal("native checksum result/state", native)
-			}
-			selected := nativeMutation(t, ctx, map[string]any{"compare": false, "placement": true, "object": tc.object, "namespace": ""}).Placement
-			if connections[selected.ID] == nil {
-				connections[selected.ID] = mutationConnection(t, c, ctx, selected)
-			}
-			op := cephmsgr.OSDOperation{Code: cephmsgr.OSDChecksum, Offset: tc.offset, Length: tc.length, Checksum: cephmsgr.OSDChecksumInput{Type: cephmsgr.OSDChecksumCRC32C, ChunkSize: tc.chunk, Seed: tc.seed}}
-			reply, err := connections[selected.ID].Request(ctx, osdObjectRequest(selected, op))
-			if tc.code < 0 {
-				var server *cephmsgr.OSDError
-				if !errors.As(err, &server) || server.Code != tc.code {
-					t.Fatal("checksum signed error", err)
+	for _, algorithm := range []struct {
+		name string
+		kind uint8
+	}{{"CRC32C", cephmsgr.OSDChecksumCRC32C}, {"XXHASH32", cephmsgr.OSDChecksumXXHash32}, {"XXHASH64", cephmsgr.OSDChecksumXXHash64}} {
+		for _, tc := range []struct {
+			name, object   string
+			offset, length uint64
+			chunk          uint32
+			seed           uint64
+			code           int32
+		}{
+			{"single seeded checksum", main, 0, 12, 0, 0xffffffff, 0},
+			{"single zero seed", main, 0, 12, 0, 0, 0},
+			{"chunked binary extent", main, 2, 8, 4, 0x12345678, 0},
+			{"trimmed aligned extent", main, 8, 8, 4, 0, 0},
+			{"trimmed unaligned signed EINVAL", main, 6, 8, 4, 0xffffffff, -22},
+			{"exact EOF empty output", main, 12, 8, 4, 0xffffffff, 0},
+			{"past EOF empty output", main, 20, 8, 4, 0xffffffff, 0},
+			{"absent signed ENOENT", absent, 0, 8, 4, 0xffffffff, -2},
+		} {
+			t.Run(algorithm.name+"/"+tc.name, func(t *testing.T) {
+				seed := tc.seed
+				if algorithm.kind == cephmsgr.OSDChecksumXXHash64 && seed != 0 {
+					seed |= 0xfedcba9800000000 // Exercise bits that a uint32 projection would lose.
 				}
-			} else if err != nil {
-				t.Fatal(err)
+				native := nativeChecksum(t, ctx, tc.object, tc.offset, tc.length, tc.chunk, seed, algorithm.kind)
+				if native.Code != tc.code || !reflect.DeepEqual(native.Before, native.After) {
+					t.Fatal("native checksum result/state", native)
+				}
+				selected := nativeMutation(t, ctx, map[string]any{"compare": false, "placement": true, "object": tc.object, "namespace": ""}).Placement
+				if connections[selected.ID] == nil {
+					connections[selected.ID] = mutationConnection(t, c, ctx, selected)
+				}
+				op := cephmsgr.OSDOperation{Code: cephmsgr.OSDChecksum, Offset: tc.offset, Length: tc.length, Checksum: cephmsgr.OSDChecksumInput{Type: algorithm.kind, ChunkSize: tc.chunk, Seed: seed}}
+				reply, err := connections[selected.ID].Request(ctx, osdObjectRequest(selected, op))
+				if tc.code < 0 {
+					var server *cephmsgr.OSDError
+					if !errors.As(err, &server) || server.Code != tc.code {
+						t.Fatal("checksum signed error", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				// The C convenience API exposes only the aggregate result. An early
+				// missing-object reply has aggregate -ENOENT with per-op result zero.
+				// Keep raw per-op metadata without inventing a C per-op observation.
+				if reply.Code != native.Code || len(reply.Operations) != 1 || tc.code >= 0 && reply.Operations[0].Result != 0 || !bytes.Equal(reply.Operations[0].Data, native.Data) || !reflect.DeepEqual(reply.Operations[0].Checksum.Values, native.Values) && (len(native.Values) != 0 || len(reply.Operations[0].Checksum.Values) != 0) {
+					t.Fatal("Go checksum differs from independent librados", reply, native)
+				}
+				if reply.Operations[0].Checksum.Type != algorithm.kind || reply.Operations[0].Checksum.ChunkSize != tc.chunk {
+					t.Fatal("checksum echoed union lost", reply.Operations[0])
+				}
+				after := nativeOmapWrite(t, ctx, base, "observe", omapWriteInput{Object: tc.object}).State
+				if after.Code != native.After.Code || after.Version != native.After.Version || after.Seconds != native.After.Seconds || after.Nanos != native.After.Nanos || !bytes.Equal(after.Data, native.After.Data) {
+					t.Fatal("checksum changed bytes/version/mtime", after, native.After)
+				}
+				evidence = append(evidence, caseReceipt{tc.name, algorithm.kind, seed, native, reply})
+			})
+			if t.Failed() {
+				return
 			}
-			// The C convenience API exposes only the aggregate result. An early
-			// missing-object reply has aggregate -ENOENT with per-op result zero.
-			// Keep raw per-op metadata without inventing a C per-op observation.
-			if reply.Code != native.Code || len(reply.Operations) != 1 || tc.code >= 0 && reply.Operations[0].Result != 0 || !bytes.Equal(reply.Operations[0].Data, native.Data) || !reflect.DeepEqual(reply.Operations[0].Checksum.Values, native.Values) && len(native.Values) != 0 {
-				t.Fatal("Go checksum differs from independent librados", reply, native)
-			}
-			if reply.Operations[0].Checksum.Type != 2 || reply.Operations[0].Checksum.ChunkSize != tc.chunk {
-				t.Fatal("checksum echoed union lost", reply.Operations[0])
-			}
-			after := nativeOmapWrite(t, ctx, base, "observe", omapWriteInput{Object: tc.object}).State
-			if after.Code != native.After.Code || after.Version != native.After.Version || !bytes.Equal(after.Data, native.After.Data) {
-				t.Fatal("checksum changed bytes/version", after, native.After)
-			}
-			evidence = append(evidence, struct {
-				Name   string                `json:"name"`
-				Native checksumNativeReceipt `json:"native"`
-				Go     cephmsgr.OSDReply     `json:"go"`
-			}{tc.name, native, reply})
-		})
-		if t.Failed() {
-			return
 		}
 	}
+
 }

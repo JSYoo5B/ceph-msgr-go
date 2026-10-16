@@ -91,7 +91,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 				if err := validateChecksumOperation(op, limit); err != nil {
 					return 0, 0, err
 				}
-				total += 4
+				total += checksumWidth(op.Checksum.Type)
 			}
 			flags |= FlagRead
 			continue

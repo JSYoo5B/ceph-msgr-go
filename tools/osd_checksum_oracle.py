@@ -19,16 +19,18 @@ import osd_xattr_native as xattr
 
 NAME = "osd-checksum"
 MAX_READ = 128 << 10
+WIDTHS = {0: 4, 1: 8, 2: 4}  # Tentacle XXHASH32, XXHASH64, CRC32C.
 
 
 def validate_request(raw):
     if not isinstance(raw, dict) or set(raw) != {"object", "offset", "length", "chunk_size", "seed", "type"}:
         raise ValueError("invalid checksum oracle fields")
     request = {"object": xattr.identity(raw["object"], "owned object")}
-    for field, maximum in (("offset", (1 << 64)-1), ("length", MAX_READ), ("chunk_size", MAX_READ), ("seed", (1 << 32)-1), ("type", 2)):
+    algorithm = omap.integer(raw["type"], 2, "type")
+    for field, maximum in (("offset", (1 << 64)-1), ("length", MAX_READ), ("chunk_size", MAX_READ), ("seed", (1 << (8*WIDTHS[algorithm]))-1), ("type", 2)):
         request[field] = omap.integer(raw[field], maximum, field)
-    if not request["length"] or request["type"] != 2 or request["offset"] + request["length"] >= 1 << 64:
-        raise ValueError("only bounded CRC32C reads are supported")
+    if not request["length"] or request["offset"] + request["length"] >= 1 << 64:
+        raise ValueError("only bounded checksum reads are supported")
     chunk = request["chunk_size"]
     if chunk and request["length"] % chunk:
         raise ValueError("unaligned checksum request")
@@ -45,11 +47,13 @@ class Native(xattr.Native):
 
     def checksum(self, io, request):
         chunk, length = request["chunk_size"], request["length"]
+        width = WIDTHS[request["type"]]
+        value_format = "Q" if width == 8 else "I"
         count = length // chunk if chunk else 1
-        size = 4 + 4*count
+        size = 4 + width*count
         sentinel = bytes([0xcc])*size
         output = C.create_string_buffer(sentinel, size)
-        code = self.lib.rados_checksum(io, request["object"], 2, struct.pack("<I", request["seed"]), 4,
+        code = self.lib.rados_checksum(io, request["object"], request["type"], struct.pack("<"+value_format, request["seed"]), width,
                                        length, request["offset"], chunk, output, size)
         raw = output.raw
         if code < 0 or raw == sentinel:
@@ -58,9 +62,9 @@ class Native(xattr.Native):
             observed = struct.unpack_from("<I", raw)[0]
             if observed > count:
                 raise ValueError("native checksum count exceeds receipt bound")
-            data = raw[:4+4*observed]
+            data = raw[:4+width*observed]
         return {"code": code, "data": base64.b64encode(data).decode(),
-                "values": list(struct.unpack_from("<"+"I"*((len(data)-4)//4), data, 4)) if data else []}
+                "values": list(struct.unpack_from("<"+value_format*((len(data)-4)//width), data, 4)) if data else []}
 
 
 def collect(root, out):
