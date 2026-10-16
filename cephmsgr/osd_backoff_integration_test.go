@@ -13,6 +13,7 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/cephx"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/osd"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 )
 
 // These tests exercise actual Dial/OpenOSD/session callbacks with synthetic
@@ -354,5 +355,124 @@ func TestOSDBackoffTransportUnblockBeforeAckKeepsGateAndOrdersLateAck(t *testing
 	got := <-done
 	if got.e != nil {
 		t.Fatal(got.r, got.e)
+	}
+}
+
+// The two fixed public profiles select different reply envelopes while sharing
+// the same v8 request identity. These replies only drive synthetic lifetime and
+// correlation checks; they are not independent native operation vectors.
+func backoffProfileReadReply(t *testing.T, peer *osdTestPeer, profile OSDProfile, input OSDRequest, sent msgr.MessageData) {
+	t.Helper()
+	m := replyV8ProfileMessage(input, [][]byte{{42}}, []int32{0}, 0, osd.FlagAck|osd.FlagOnDisk, false)
+	if profile == OSDProfileReplicatedPG {
+		locator := wire.Encoder{}
+		locator.U64(^uint64(0))
+		locator.U32(^uint32(0))
+		locator.String("")
+		locator.String("")
+		locator.U64(^uint64(0))
+		redirect := wire.Encoder{}
+		redirect.Struct(6, 3, locator.Data)
+		redirect.String("")
+		redirect.Bytes(nil)
+		empty := wire.Encoder{}
+		empty.Struct(1, 1, redirect.Data)
+		// v6 always includes the redirect structure; v8's empty redirect is
+		// a single false byte immediately preceding the three-u64 trace.
+		at := len(m.Front) - 25
+		m.Front = append(append(append([]byte(nil), m.Front[:at]...), empty.Data...), m.Front[at+1:]...)
+		m.Version = 6
+	}
+	m.Transaction = sent.Transaction
+	if err := osdMapsWrite(peer, m); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOSDBackoffTransportUnrelatedObjectsProgressBeforeLateAck(t *testing.T) {
+	for _, profile := range []OSDProfile{OSDProfileReplicatedPG, OSDProfileReplicatedPGReplyV8} {
+		t.Run(string(rune('0'+profile)), func(t *testing.T) {
+			open := backoffTransportOpen
+			if profile == OSDProfileReplicatedPGReplyV8 {
+				open = replyV8ProfileOpen
+			}
+			_, o, peer, ctx, dials := open(t)
+			if err := osdMapsWrite(peer, backoffTransportControl(t, 91, osd.BackoffBlock, 5)); err != nil {
+				t.Fatal(err)
+			}
+			original, err := o.NextBackoff(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			type outcome struct {
+				r OSDReply
+				e error
+			}
+			for _, released := range []bool{false, true} {
+				if released {
+					if err := osdMapsWrite(peer, backoffTransportControl(t, 91, osd.BackoffUnblock, 9)); err != nil {
+						t.Fatal(err)
+					}
+					if event, err := o.NextBackoff(ctx); err != nil || !event.Matched {
+						t.Fatal(event, err)
+					}
+				}
+				blocked := backoffTransportRequest()
+				blocked.Operations = []OSDOperation{{Code: OSDAppend, Length: 1, Data: []byte{255}}}
+				blocked.MapEpoch = 99 // A newer request epoch cannot evade this range.
+				refused, err := o.Request(ctx, blocked)
+				var unknown *OutcomeUnknownError
+				if !errors.Is(err, ErrOSDBackoff) || errors.As(err, &unknown) || refused.Submission.Transaction == 0 || refused.Transaction != 0 {
+					t.Fatal("matching object escaped or lost known unsent identity", released, refused, err)
+				}
+				for _, anotherPG := range []bool{false, true} {
+					input := backoffTransportRequest()
+					if anotherPG {
+						input.Placement.PG.Seed = 1
+					} else {
+						input.Object.Name = "unrelated-object"
+					}
+					done := make(chan outcome, 1)
+					go func() { r, e := o.Request(ctx, input); done <- outcome{r, e} }()
+					sent := peer.next(t)
+					identity, err := osd.DecodeRequestV8AdmissionTarget(sent, 4096)
+					if err != nil || sent.Type != osd.RequestMessage || sent.Transaction <= refused.Submission.Transaction || identity.Object.Object != input.Object.Name || identity.PG.Seed != input.Placement.PG.Seed {
+						t.Fatal("unrelated request did not reach peer with its own identity", identity, err)
+					}
+					backoffProfileReadReply(t, peer, profile, input, sent)
+					got := <-done
+					if got.e != nil || got.r.Transaction != sent.Transaction || !bytes.Equal(got.r.RawData, []byte{42}) {
+						t.Fatal("unrelated request did not finish during BLOCK/tombstone", released, anotherPG, got)
+					}
+				}
+			}
+			if err := o.AckBackoff(ctx, original); err != nil {
+				t.Fatal(err)
+			}
+			ack := peer.next(t)
+			decoded, err := osd.DecodeBackoff(ack, 4096)
+			if err != nil || decoded.MapEpoch != 5 || decoded.Op != osd.BackoffAckBlock {
+				t.Fatal("late ACK lost original epoch", decoded, err)
+			}
+			input := backoffTransportRequest()
+			done := make(chan outcome, 1)
+			go func() { r, e := o.Request(ctx, input); done <- outcome{r, e} }()
+			fresh := peer.next(t)
+			if fresh.Sequence != ack.Sequence+1 {
+				t.Fatal("fresh matching request did not follow late ACK on writer", ack, fresh)
+			}
+			backoffProfileReadReply(t, peer, profile, input, fresh)
+			if got := <-done; got.e != nil {
+				t.Fatal(got)
+			}
+			if dials.Load() != 1 {
+				t.Fatal("range backoff caused reconnect", dials.Load())
+			}
+			select {
+			case extra := <-peer.requests:
+				t.Fatal("refused mutation was replayed", extra.Transaction)
+			default:
+			}
+		})
 	}
 }

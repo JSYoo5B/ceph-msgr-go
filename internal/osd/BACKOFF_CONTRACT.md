@@ -94,30 +94,43 @@ ACKs and foreign/replaced receipts are refused. ctx controls queue admission
 only: after success, caller cancellation cannot discard the queued protocol
 message. Queue success proves neither full transmission nor remote receipt.
 
-The installed `BeforeWrite` barrier conservatively refuses all queued,
-unstarted type-42 object/PG work while a retained restriction exists. Requests
-now carry explicit actual PG metadata, but precise per-range scheduling is not
-implemented. Local refusal returns ErrOSDBackoff without transmission or an
-unknown-execution claim. Already started work retains the normal reply/context/
-session-failure semantics. No request is automatically replayed after UNBLOCK.
-The control ACK progresses on the same ordered writer, outside the ordinary
-application-call admission slots; a previously started frame finishes first.
+The installed `BeforeWrite` barrier checks each queued, unstarted type-42
+request against the retained restrictions on its authenticated connection.
+Only matching actual PG/shard and head hobject ranges return ErrOSDBackoff;
+unrelated objects and PGs can proceed on the same connection. Local refusal
+is a known unsent outcome, not an unknown-execution claim. Already started
+work retains the normal reply/context/session-failure semantics. No request is
+automatically replayed after UNBLOCK. The control ACK progresses on the same
+ordered writer, outside the ordinary application-call admission slots; a
+previously started frame finishes first.
+
+The gate extracts identity from the library's encoded v8 MOSDOp, with bounded
+current envelopes, locator/PG consistency and structural-tail checks. This
+extractor is not a general native request decoder or operation validator. It
+uses the caller's actual PG/shard and raw hash, locator pool/namespace/effective
+key and object name, with CEPH_NOSNAP as the head identity even for snapshot
+reads, as Objecter::op_target_t::get_hobj does. Empty PGNLS object names retain
+their own native head identity. No OSDMap folding, placement or feature
+inference is performed. Unsupported or malformed local encodings fail closed
+before transmission. At most 64 retained restrictions are scanned; range
+comparison uses signed pool, bit-reversed raw hash and native hobject ordering.
+The request epoch does not bypass an existing restriction.
 
 UNBLOCK before explicit ACK is a normal supported ordering. Pinned
 `PG::release_backoffs` leaves a NEW server entry in STATE_DELETING until ACK
 (`osd/PG.cc:645-655`, `osd/Session.cc:67-70`). The client consequently keeps
 the original receipt and gate after that UNBLOCK. ACK queue admission alone
-does not open the gate: an ordinary request already queued ahead of ACK must
-still be refused. At ACK's actual turn, the single-writer hook retires a
+does not open the gate: a matching request already queued ahead of ACK must
+still be refused; unrelated requests need not wait for that ACK. At ACK's actual turn, the single-writer hook retires a
 released tombstone. Later object frames cannot overtake that ACK. If ACK has
 already reached its writer turn when UNBLOCK arrives, UNBLOCK can retire the
 restriction directly. Writer failure stops the session instead of releasing
 later work onto an incomplete ACK stream.
 
 Context cancellation, Close, concurrent controls, source replacement and first
-terminal-cause preservation have synthetic coverage. Exact range comparison is
-a codec primitive; the public admission gate deliberately covers the entire
-connection. This is neither placement calculation nor automatic resend policy.
+terminal-cause preservation have synthetic coverage. UNBLOCK-before-ACK
+tombstones retain the same range restriction until the ACK's writer turn.
+This is neither placement calculation nor automatic resend policy.
 
 ## Verification assets
 

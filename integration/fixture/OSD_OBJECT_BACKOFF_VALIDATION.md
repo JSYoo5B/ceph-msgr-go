@@ -1,5 +1,10 @@
 # Object-scope backoff and in-flight primary failover — 2026-10-16
 
+This records the earlier connection-wide gate at its tested source. The
+subsequent product scope correction and new native runs are recorded in
+[range-scoped backoff admission](OSD_BACKOFF_SCOPE_VALIDATION.md). The
+earlier observations below are preserved as historical evidence.
+
 This acceptance extends the fixed `OSDProfileReplicatedPG` profile to a
 disposable pool with three BlueStore replicas. It exercises two native paths
 that the single-OSD PG-wide backoff acceptance ([recipe](OSD_BACKOFF_RECIPE.md),

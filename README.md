@@ -408,8 +408,10 @@ TID는 완료 기록으로 답하고 다시 실행하지 않는다.
 MDS가 보내는 capability·lease·snap realm·quota 메시지는 MDS와 같은 방식으로 push
 sequence에 세고 `Next`로 도착 순서대로 전달한다. Revoke 응답, flush, capability
 release, lease 응답은 호출자가 `SendCaps`·`ReleaseCaps`·`SendLease`로 명시적으로
-보낸다. 경로 해석·inode cache·capability 상태·데이터 flush·reconnect·replay는
-구현하지 않으며 상위 레이어가 담당한다. [CephFS 계약](cephmsgr/MDS_CEPHFS_CONTRACT.md)에
+보낸다. 경로 해석·inode cache·capability 상태와 데이터 flush 순서는 상위 레이어가
+담당한다. 같은 주소의 Messenger resume 외에 새 MDS incarnation으로의 reconnect와
+요청 replay·forward 재제출은 호출자가 명시 API로 결정하며, 파일 I/O를 자동으로
+재시도하지 않는다. [CephFS 계약](cephmsgr/MDS_CEPHFS_CONTRACT.md)에
 native vector 범위와 남은 검증을 구분했다. Request·reply·forward codec은 고정
 소스의 native vector 7개와, capability·cap release·lease·snap·quota codec은 native
 vector 10개와 일치했다. 실제 Tentacle 20.2.4 MDS에서 CRC/AES host IPv4 BlueStore와
@@ -586,7 +588,10 @@ Watch/notify·backoff type에 요청과 같은 TID가 있어도 mutation 완료�
 replicated-PG 연결의 `NextBackoff(ctx)`는 원본 PG/shard·epoch·ID·범위와 인증
 identity·연결 세대를 보존한다. `AckBackoff(ctx, block)`는 원 BLOCK의 명시적인
 protocol ACK이며 객체 실행 완료가 아니다. 수신과 dequeue만으로 ACK하지 않는다.
-차단 중 새 객체 요청은 전체 연결에서 미송신 `ErrOSDBackoff`로 거절한다.
+차단 중 실제 PG/shard와 head 객체 범위가 일치하는 새 요청만 미송신
+`ErrOSDBackoff`로 거절한다. 같은 연결의 다른 객체·PG 요청은 진행할 수 있다.
+범위 비교는 raw hash·pool·namespace·유효 locator key·객체 이름과 head snapshot을
+사용하며, snapshot 읽기도 head identity로 비교한다.
 UNBLOCK이 ACK보다 먼저 와도 원 BLOCK의 기록과 gate를 보존하며, 단일 writer가
 원 ACK 차례에 도달한 뒤 해제한다. ACK가 큐에 접수된 뒤의 context 취소는
 그 ACK를 철회하지 않는다.

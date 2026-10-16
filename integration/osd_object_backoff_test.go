@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -93,24 +94,26 @@ type objectBackoffAck struct {
 // objectBackoffEvidence is the public receipt retained by the diagnostics
 // collector. It holds no credentials.
 type objectBackoffEvidence struct {
-	Profile         string                            `json:"profile"`
-	Objects         map[string]string                 `json:"objects"`
-	Placements      map[string]objectBackoffPlacement `json:"placements"`
-	Degraded        []objectBackoffWait               `json:"degraded"`
-	Block, Unblock  cephmsgr.OSDBackoffEvent
-	GoAck           *objectBackoffAck              `json:"go_ack_receipt"`
-	NativeAcks      []objectBackoffAck             `json:"native_ack_history"`
-	Replies         map[string]cephmsgr.OSDReply   `json:"replies"`
-	Errors          map[string]string              `json:"errors"`
-	Native          map[string]objectBackoffNative `json:"native"`
-	NativeStat      json.RawMessage                `json:"native_stat"`
-	HeldOps         []objectBackoffOp              `json:"held_ops"`
-	Snapshots       map[string]mutationSnapshot    `json:"snapshots"`
-	FailoverRoute   objectBackoffWait              `json:"failover"`
-	TimingsMS       map[string]float64             `json:"timings_ms"`
-	Restored        bool                           `json:"restored"`
-	Cleaned         bool                           `json:"cleaned"`
-	CleanupFailures []string                       `json:"cleanup_failures"`
+	Profile                string                            `json:"profile"`
+	Objects                map[string]string                 `json:"objects"`
+	Placements             map[string]objectBackoffPlacement `json:"placements"`
+	SameSessionOtherSamePG bool                              `json:"same_session_other_same_pg"`
+	SameSessionRoutes      map[string]osdFixtureOracle       `json:"same_session_routes"`
+	Degraded               []objectBackoffWait               `json:"degraded"`
+	Block, Unblock         cephmsgr.OSDBackoffEvent
+	GoAck                  *objectBackoffAck              `json:"go_ack_receipt"`
+	NativeAcks             []objectBackoffAck             `json:"native_ack_history"`
+	Replies                map[string]cephmsgr.OSDReply   `json:"replies"`
+	Errors                 map[string]string              `json:"errors"`
+	Native                 map[string]objectBackoffNative `json:"native"`
+	NativeStat             json.RawMessage                `json:"native_stat"`
+	HeldOps                []objectBackoffOp              `json:"held_ops"`
+	Snapshots              map[string]mutationSnapshot    `json:"snapshots"`
+	FailoverRoute          objectBackoffWait              `json:"failover"`
+	TimingsMS              map[string]float64             `json:"timings_ms"`
+	Restored               bool                           `json:"restored"`
+	Cleaned                bool                           `json:"cleaned"`
+	CleanupFailures        []string                       `json:"cleanup_failures"`
 }
 
 func objectBackoffControl(ctx context.Context, action string, input, result any) error {
@@ -263,8 +266,9 @@ func TestCephOSDObjectBackoffFailoverIntegration(t *testing.T) {
 	objectBackoffMust(t, ctx, "prepare", map[string]any{"objects": owned.Objects}, &prep)
 	evidence.Placements = prep.Placements
 	// Choose a primary with at least three owned names (pigeonhole over nine
-	// names on three OSDs). X is the degraded object, Y an unrelated object
-	// on the same primary, X2 the failover object.
+	// names on three OSDs) as a fallback. Prefer two names in the same PG
+	// so the unrelated-object check also exercises hobject range selection.
+	// X is the degraded object, Y the other object, X2 the failover object.
 	groups := map[int32][]string{}
 	for _, name := range owned.Objects {
 		p := prep.Placements[name]
@@ -294,6 +298,21 @@ func TestCephOSDObjectBackoffFailoverIntegration(t *testing.T) {
 			x = name
 		} else if y == "" {
 			y = name
+		}
+	}
+	// Native placement is the only selection oracle. Keep the seeded object
+	// as Y when it belongs to the first same-PG pair, avoiding an extra put.
+samePGPair:
+	for i, first := range owned.Objects {
+		for _, second := range owned.Objects[i+1:] {
+			a, b := prep.Placements[first], prep.Placements[second]
+			if a.PGID != "" && a.PGID == b.PGID && a.Primary == b.Primary {
+				x, y, primary = first, second, a.Primary
+				if x == owned.Objects[0] {
+					x, y = y, x
+				}
+				break samePGPair
+			}
 		}
 	}
 	var x2 string
@@ -343,16 +362,20 @@ func TestCephOSDObjectBackoffFailoverIntegration(t *testing.T) {
 	if route.ID != primary || !bytes.Equal(nativeX.Actual.Data, baseX) {
 		t.Fatal("native degraded object routing/bytes differ", route, nativeX.Actual)
 	}
-	routeY := replicatedPGNative(t, ctx, y).Placement
-	if routeY.ID != primary {
-		t.Fatal("unrelated object moved away from the selected primary", routeY)
+	nativeY := replicatedPGNative(t, ctx, y)
+	routeY := nativeY.Placement
+	evidence.Snapshots["same-session-other-before"] = nativeY.Actual
+	evidence.SameSessionRoutes = map[string]osdFixtureOracle{"blocked": route, "other": routeY}
+	evidence.SameSessionOtherSamePG = route.Pool == routeY.Pool && route.PG == routeY.PG
+	if routeY.ID != primary || nativeY.Actual.Code != 0 || len(nativeY.Actual.Data) == 0 {
+		t.Fatal("unrelated object lacks native bytes on the selected primary", routeY, nativeY.Actual)
 	}
 	o := replicatedPGConnection(t, c, ctx, route)
 	connections = append(connections, o)
 	// The product keeps one connection per OSD ID within a Client (OpenOSD
 	// returns the held connection), so an independent daemon session needs a
 	// second authenticated Client.
-	if same := replicatedPGConnection(t, c, ctx, route); same != o {
+	if same := replicatedPGConnection(t, c, ctx, routeY); same != o {
 		t.Fatal("OpenOSD to the same OSD returned a distinct connection; update the session model", same, o)
 	}
 	secondOptions := integrationOptions(t)
@@ -406,16 +429,63 @@ func TestCephOSDObjectBackoffFailoverIntegration(t *testing.T) {
 	if err := o.AckBackoff(ctx, block); err != nil {
 		t.Fatal("explicit original-epoch ACK of object BLOCK", err)
 	}
-	// The product gate is connection-wide (BACKOFF_CONTRACT.md): an unrelated
-	// object on the same session is refused locally and unsent.
-	sameSession := replicatedPGRequest(routeY, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat})
-	sameSession.ClientIncarnation = 82
-	reply, err := o.Request(ctx, sameSession)
-	evidence.Replies["same-session-other-object"] = reply
-	evidence.Errors["same-session-other-object"] = fmt.Sprint(err)
+	// The acknowledged single-object BLOCK remains active while a different
+	// object on this exact authenticated connection completes STAT and READ.
+	statRequest := replicatedPGRequest(routeY, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat})
+	statRequest.ClientIncarnation = 82
+	statStarted := time.Now()
+	statY, err := o.Request(ctx, statRequest)
+	evidence.Replies["same-session-other-object-stat"] = statY
+	evidence.Errors["same-session-other-object-stat"] = fmt.Sprint(err)
+	evidence.TimingsMS["same-session-other-stat"] = float64(time.Since(statStarted).Microseconds()) / 1000
+	if err != nil {
+		t.Fatal("same session STAT of an unrelated object during object BLOCK", err)
+	}
+	checkReplicatedPGReply(t, statY, routeY)
+	if len(statY.Operations) != 1 || statY.Operations[0].Code != cephmsgr.OSDStat || len(statY.Operations[0].Data) != 16 ||
+		binary.LittleEndian.Uint64(statY.Operations[0].Data) != uint64(len(nativeY.Actual.Data)) ||
+		binary.LittleEndian.Uint32(statY.Operations[0].Data[8:]) != nativeY.Actual.Seconds ||
+		binary.LittleEndian.Uint32(statY.Operations[0].Data[12:]) != nativeY.Actual.Nanos || statY.UserVersion != nativeY.Actual.Version {
+		t.Fatal("same session STAT differs from native unrelated-object size/mtime/version", statY, nativeY.Actual)
+	}
+	readRequest := replicatedPGRequest(routeY, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: uint64(len(nativeY.Actual.Data))})
+	readRequest.ClientIncarnation = 84
+	readStarted := time.Now()
+	readY, err := o.Request(ctx, readRequest)
+	evidence.Replies["same-session-other-object-read"] = readY
+	evidence.Errors["same-session-other-object-read"] = fmt.Sprint(err)
+	evidence.TimingsMS["same-session-other-read"] = float64(time.Since(readStarted).Microseconds()) / 1000
+	if err != nil {
+		t.Fatal("same session READ of an unrelated object during object BLOCK", err)
+	}
+	checkReplicatedPGReply(t, readY, routeY)
+	if len(readY.Operations) != 1 || readY.Operations[0].Code != cephmsgr.OSDRead || !bytes.Equal(readY.Operations[0].Data, nativeY.Actual.Data) || readY.UserVersion != nativeY.Actual.Version ||
+		statY.GlobalID != block.GlobalID || readY.GlobalID != block.GlobalID || readY.Transaction <= statY.Transaction {
+		t.Fatal("same session unrelated-object READ lost native bytes/version or authenticated request identity", readY, statY, nativeY.Actual)
+	}
+	// This new matching request is known unsent. Session.Call still allocates
+	// a submission TID; no wire reply TID or raw reply exists for the refusal.
+	blockedStat := replicatedPGRequest(route, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat})
+	blockedStat.ClientIncarnation = 85
+	reply, err := o.Request(ctx, blockedStat)
+	evidence.Replies["same-session-blocked-object-stat"] = reply
+	evidence.Errors["same-session-blocked-object-stat"] = fmt.Sprint(err)
 	var unknown *cephmsgr.OutcomeUnknownError
-	if !errors.Is(err, cephmsgr.ErrOSDBackoff) || errors.As(err, &unknown) || reply.Submission.Transaction == 0 || reply.Transaction != 0 || len(reply.RawFront) != 0 {
-		t.Fatal("unrelated object on the blocked session was not a known local unsent refusal", reply, err)
+	if !errors.Is(err, cephmsgr.ErrOSDBackoff) || errors.As(err, &unknown) || reply.Submission.Transaction <= readY.Transaction ||
+		reply.Submission.GlobalID != block.GlobalID || reply.Transaction != 0 || len(reply.RawFront) != 0 ||
+		reply.Submission.ClientIncarnation != blockedStat.ClientIncarnation || reply.Submission.MapEpoch != blockedStat.MapEpoch ||
+		!reflect.DeepEqual(reply.Submission.Placement, blockedStat.Placement) {
+		t.Fatal("matching object on the blocked session was not a known local unsent refusal", reply, err)
+	}
+	select {
+	case completed := <-done:
+		t.Fatal("original blocked mutation completed while the stale replica was paused", completed.reply, completed.err)
+	default:
+	}
+	afterY := replicatedPGNative(t, ctx, y)
+	evidence.Snapshots["same-session-other-after"] = afterY.Actual
+	if !reflect.DeepEqual(afterY.Actual, nativeY.Actual) {
+		t.Fatal("same session unrelated-object reads changed native bytes/version/mtime", nativeY.Actual, afterY.Actual)
 	}
 	// Another session to the same primary has no daemon backoff: an unrelated
 	// stat and a read of the degraded (primary-readable) object proceed.

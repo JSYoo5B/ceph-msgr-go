@@ -5,9 +5,10 @@ Reference: Ceph Tentacle v20.2.4 commit
 CGO disabled. This stage adds raw CephFS metadata requests (MClientRequest,
 MClientReply, MClientRequestForward) and the MDS-pushed capability, lease,
 snapshot-realm and quota messages, with the client messages that answer
-them. It adds no path resolution, inode cache, capability state machine,
-dirty-data flush, file I/O, reconnect, replay or reclaim. Those belong to the
-consumer layer (cache, POSIX semantics) or to later milestones (reconnect).
+them. Same-address Messenger resume and explicit reconnect/resubmission APIs
+preserve transport and request identity as described below. Path resolution,
+inode/capability state, layout, writeback ordering and POSIX policy remain the
+consumer's; these wire APIs implement no filesystem cache or reclaim policy.
 
 ## Opt-in profile
 
@@ -48,9 +49,10 @@ CephFS session, pending requests and pushes survive. `MDSConnection.Resumes`
 counts successful resumes. A RESET (the MDS no longer holds the Messenger
 session, for example after a daemon restart), an identity change, protocol
 errors or an exhausted 30 s episode end the connection; the CephFS session is
-then Lost and its address unresolved, as before. Resume is neither a CephFS
-reconnect to a new MDS incarnation nor a replay of requests: MClientReconnect
-after failover and REPLAY of unsafe requests are not implemented.
+then Lost and its address unresolved, as before. This automatic transport
+resume does not choose a new MDS incarnation or initiate metadata-request
+replay. Those require an explicit `ReconnectSession` call and the caller's
+`MDSReconnectState.Resubmit` entries described next.
 
 ## Reconnect to a new MDS incarnation
 
@@ -123,8 +125,9 @@ and owner UID/GID, supplementary GIDs, paths (base inode and relative path),
 capability/lease releases, alternate name and fscrypt fields, the MDSMap
 epoch it routed with, and retry/forward counts. The legacy u8 retry/forward
 fields carry the low bytes of the 32-bit counts, as natively. REPLAY and
-ASYNC flags and a preset inode number are refused: replay and async
-directory operations are not implemented. Requests also require the MDS's
+ASYNC flags and a preset inode number are refused by fresh `Submit` calls.
+REPLAY is set only by the explicit recovery resubmission path described above;
+async directory operations remain unsupported. Requests also require the MDS's
 OPEN to advertise REPLY_ENCODING, 32BITS_RETRY_FWD, NEW_SNAPREALM_INFO and
 HAS_OWNER_UIDGID.
 
@@ -136,11 +139,13 @@ the end of the session; ctx bounds only slot and write admission.
 
 `MDSRequestCall.Wait` returns the first reply, `WaitSafe` the safe
 (journaled) reply. Read operations answer safe immediately. A forward
-resolves the call with `*MDSRequestForwardedError`; the library never
-resends. If the session ends before resolution the call returns an
-`OutcomeUnknownError`: the request may have executed. A call that already
-received an unsafe reply keeps that reply for `Wait`, but `WaitSafe` reports
-the unknown journaled outcome. No request is ever replayed.
+resolves the call with `*MDSRequestForwardedError`; resubmission to the caller's
+chosen destination requires an explicit `ResubmitForwarded` call. If the session
+ends before resolution the call returns an `OutcomeUnknownError`: the request
+may have executed. A call that already received an unsafe reply keeps that
+reply for `Wait`, but `WaitSafe` reports
+the unknown journaled outcome. Neither a forward nor an unknown result
+initiates automatic metadata-request replay.
 
 Replies preserve the signed result (Linux numbering), MDSMap epoch, safe and
 trace flags and the raw trace, extra and snap blobs. `DecodeTrace`,
@@ -294,6 +299,15 @@ and the same duration. After a native snapshot a FLUSHSNAP with dirty Fw got
 FLUSHSNAP_ACK with the same TID and follows. See
 [the completion record](../integration/fixture/MDS_CEPHFS_COMPLETION_VALIDATION.md).
 
+The [file-data acceptance](../integration/fixture/MDS_CEPHFS_DATA_VALIDATION.md)
+separately verifies caller-driven striped OSD writes followed by dirty-metadata
+UPDATE/FLUSH_ACK, buffered writeback during capability revocation, and a single
+snapshot whose object clones and file bytes match native clients. Its test-only
+consumer owns the layout, dirty buffers and data/metadata ordering; the product
+transports the OSD requests and cap messages without implementing that policy.
+This evidence does not cover dirty-data cap snaps spanning a snapshot or cap
+snaps across several snapshots.
+
 Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and
 safe replies, forwards, session loss, the data segment, push ordering and
@@ -326,11 +340,15 @@ takeover and multiple ranks are covered by the ranks acceptance under
 Evidence, and completed-record answers, denial and a missed window by the
 completion acceptance there. Not exercised live: split reconnect messages,
 non-root realms, the GETATTR conversion, completed-record answers for other
-operations, a lost reply of an OPEN with O_CREAT, dirty-data FLUSH and cap
-snaps across several snapshots.
+operations, a lost reply of an OPEN with O_CREAT, dirty-data cap snaps spanning
+a snapshot and cap snaps across several snapshots. Ordinary dirty-metadata
+UPDATE/FLUSH_ACK with OSD writeback has the separate file-data evidence above.
 
-The library never reconnects, replays or resubmits on its own, and
-implements no path walking, inode or dentry cache, capability bookkeeping,
+Recovery automatically resumes only the same-address Messenger transport.
+Selecting a new MDS incarnation and reconnect state, replaying an unknown
+request or resubmitting a forward requires the caller's explicit APIs. These
+APIs do not automatically retry file I/O. The library implements no path
+walking, inode or dentry cache, capability bookkeeping,
 lease expiry, snapshot realm tree, dirty metadata or data writeback, file
 locks, delegated inodes or async operations. File data I/O semantics (layout, striping,
 flush ordering against capabilities) remain the consumer's.

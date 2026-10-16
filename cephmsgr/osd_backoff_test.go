@@ -112,7 +112,7 @@ func TestOSDBackoffIdentityAndNoImplicitAck(t *testing.T) {
 	b.mu.Lock()
 	b.gateInstalled = true
 	b.mu.Unlock()
-	if err := o.beforeWriteBackoff(msgr.MessageData{Type: osd.RequestMessage}); !errors.Is(err, ErrOSDBackoff) {
+	if err := o.beforeWriteBackoff(backoffUnitMatchingRequest(t)); !errors.Is(err, ErrOSDBackoff) {
 		t.Fatal("released pending ACK did not retain conservative gate", err)
 	}
 	if err := o.AckBackoff(context.Background(), event); err != nil {
@@ -121,7 +121,7 @@ func TestOSDBackoffIdentityAndNoImplicitAck(t *testing.T) {
 	if len(b.active) != 1 || b.activeBytes == 0 {
 		t.Fatal("ACK queue admission prematurely released gate")
 	}
-	if err := o.beforeWriteBackoff(msgr.MessageData{Type: osd.RequestMessage}); !errors.Is(err, ErrOSDBackoff) {
+	if err := o.beforeWriteBackoff(backoffUnitMatchingRequest(t)); !errors.Is(err, ErrOSDBackoff) {
 		t.Fatal("ahead queued object passed before ACK writer turn", err)
 	}
 	ackMessage, err := osd.EncodeBackoffAck(block, 4096)
@@ -135,7 +135,7 @@ func TestOSDBackoffIdentityAndNoImplicitAck(t *testing.T) {
 		t.Fatal("ACK writer turn retained its released restriction")
 	}
 
-	if err := o.beforeWriteBackoff(msgr.MessageData{Type: osd.RequestMessage}); err != nil {
+	if err := o.beforeWriteBackoff(backoffUnitMatchingRequest(t)); err != nil {
 		t.Fatal("late ACK did not release local gate", err)
 	}
 	if err := b.accept(o, unblock, 11, 7); err != nil {
@@ -150,19 +150,19 @@ func TestOSDBackoffIdentityAndNoImplicitAck(t *testing.T) {
 	}
 }
 
-func TestOSDBackoffBoundedActiveSetAndWholeConnectionGate(t *testing.T) {
+func TestOSDBackoffBoundedActiveSetAndMatchingRangeGate(t *testing.T) {
 	o := backoffUnitConnection()
 	b := o.backoffState
 	if err := b.accept(o, backoffUnitControl(t, 1, osd.BackoffBlock), 11, 7); err != nil {
 		t.Fatal(err)
 	}
-	if err := o.beforeWriteBackoff(msgr.MessageData{Type: osd.RequestMessage}); err != nil {
+	if err := o.beforeWriteBackoff(backoffUnitMatchingRequest(t)); err != nil {
 		t.Fatal("unverified gate activated", err)
 	}
 	b.mu.Lock()
 	b.gateInstalled = true
 	b.mu.Unlock()
-	if err := o.beforeWriteBackoff(msgr.MessageData{Type: osd.RequestMessage}); !errors.Is(err, ErrOSDBackoff) {
+	if err := o.beforeWriteBackoff(backoffUnitMatchingRequest(t)); !errors.Is(err, ErrOSDBackoff) {
 		t.Fatal("active block did not refuse unsent object", err)
 	}
 	// The gate admits only an actually queued ACK with its exact identity.

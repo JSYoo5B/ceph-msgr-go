@@ -104,8 +104,10 @@ order, `spg_t`, map epoch u32, opcode u8, ID u64, begin hobject, end hobject.
 Block = 1, ACK_BLOCK = 2, UNBLOCK = 3, defined in [rados.h][rados].
 [spg_t][spg] is a versioned PG/shard structure, not the raw placement hash echoed by
 the current v6 object request. The caller must provide actual mapped PG/shard
-metadata. Current admission conservatively blocks the whole connection while
-any active or released-but-unacknowledged block remains.
+metadata. Admission matches that actual PG/shard and the outgoing request's
+head hobject against each active or released-but-unacknowledged range. An
+unrelated object or PG can proceed on the same connection; a matching request
+is refused locally before transmission, without automatic retry.
 
 The [PG sender][pg-backoff] allocates IDs in the current client session.
 Begin/end denote a half-open range `[begin, end)`; equality denotes one object.

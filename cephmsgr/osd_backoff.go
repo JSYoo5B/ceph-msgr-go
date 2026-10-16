@@ -60,7 +60,7 @@ type osdBackoffEntry struct {
 	acking, acked bool
 	ackStarted    bool
 	// UNBLOCK may precede the explicit ACK. Keep the original receipt and
-	// conservative gate until that ACK reaches its turn on the single writer.
+	// gate for its range until that ACK reaches the single writer.
 	unblocked bool
 }
 
@@ -205,8 +205,8 @@ func (o *OSDConnection) publishBackoff(source *session.Session, decoded osd.Back
 // already canceled. Queue and active set each retain at most 64 controls and
 // a conservative MaxFrameSize byte budget; overflow fails the connection.
 // Active restrictions and released pending-ACK receipts share one retained-set
-// budget. A received UNBLOCK keeps the conservative gate until the single
-// writer reaches its ACK, after refusing any earlier queued object requests.
+// budget. A received UNBLOCK keeps its range gated until the single writer
+// reaches its ACK, after refusing earlier queued matching object requests.
 // The default object-hash profile returns ErrUnsupportedFeatures immediately.
 func (o *OSDConnection) NextBackoff(ctx context.Context) (OSDBackoffEvent, error) {
 	if err := ctx.Err(); err != nil {
@@ -265,8 +265,8 @@ func (o *OSDConnection) NextBackoff(ctx context.Context) (OSDBackoffEvent, error
 // AckBackoff queues one explicit ACK_BLOCK using the retained original PG,
 // epoch, ID and range, at the same priority as object requests. It does not
 // acknowledge daemon receipt. After UNBLOCK, the original BLOCK event remains
-// acknowledgeable; the single writer releases its conservative local gate
-// when it reaches that late ACK, after rejecting earlier queued objects.
+// acknowledgeable; the single writer releases that range's local gate when it
+// reaches the late ACK, after rejecting earlier queued matching objects.
 // ctx controls queue admission only; cancellation after success cannot discard
 // the queued ACK. Duplicate queued ACKs are
 // refused. ACK transmission requires the replicated PG profile and its
@@ -321,7 +321,7 @@ func (o *OSDConnection) AckBackoff(ctx context.Context, event OSDBackoffEvent) e
 	return err
 }
 
-// beforeWriteBackoff is a conservative whole-connection object gate. Only a
+// beforeWriteBackoff gates the matching actual PG/shard and head-object range. Only a
 // single-writer pre-start hook can use this safely: an object already started
 // before BLOCK must be written before a subsequent queued ACK. Refusal is a
 // local unsent outcome; it never executes or replays a request after UNBLOCK.
@@ -359,9 +359,9 @@ func (o *OSDConnection) beforeWriteBackoff(message msgr.MessageData) error {
 		if current.ackStarted {
 			return ErrOSDBackoffAcknowledged
 		}
-		// This hook runs only on the single ordered writer. All object messages
-		// queued ahead of ACK have already been checked and refused. ACK is next
-		// to start, so later objects cannot overtake it after the gate is released.
+		// This hook runs only on the single ordered writer. Earlier matching
+		// object messages have been refused; unrelated objects may pass. ACK is
+		// next to start, so later matching objects cannot overtake its release.
 		current.ackStarted = true
 		if current.unblocked {
 			delete(b.active, ack.ID)
@@ -370,7 +370,16 @@ func (o *OSDConnection) beforeWriteBackoff(message msgr.MessageData) error {
 		return nil
 	}
 	if len(b.active) != 0 {
-		return ErrOSDBackoff
+		target, err := osd.DecodeRequestV8AdmissionTarget(message, o.client.options.MaxFrameSize)
+		if err != nil {
+			return fmt.Errorf("%w: invalid outgoing OSD admission target: %w", msgr.ErrFrame, err)
+		}
+		for _, entry := range b.active {
+			block := entry.receipt.block
+			if block.PG == target.PG && block.Shard == target.Shard && osd.BackoffContains(block, target.Object) {
+				return ErrOSDBackoff
+			}
+		}
 	}
 	return nil
 }

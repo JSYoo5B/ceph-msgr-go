@@ -83,8 +83,9 @@ Malformed or contradictory replies fail the OSD session and preserve
 A common fixed capability predicate enables placement, the single-writer BACKOFF
 admission hook, type61 dispatch, bounded control queue, explicit ACK and PGNLS v8
 for **both** replicated profiles. Selecting a different reply codec must not
-accidentally bypass those capabilities. The whole-connection conservative gate
-still refuses queued unstarted object work while blocked. UNBLOCK changes local
+accidentally bypass those capabilities. The gate refuses queued unstarted work
+only when its actual PG/shard and head hobject match a retained restriction;
+unrelated work can proceed on the same connection. UNBLOCK changes local
 admission only; it does not resend refused or uncertain work.
 
 Target ID/address, maps, epochs and placement remain caller-owned inputs. The

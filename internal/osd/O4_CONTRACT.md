@@ -133,9 +133,11 @@ local queue admission, not daemon receipt or processing.
 The queue and retained controls each have a 64-entry and conservative
 MaxFrameSize byte bound. Active restrictions and released pending-ACK receipts
 share that retained-control budget. Overflow fails the session; accepted events drain before its stable
-terminal error. A valid active BLOCK installs a conservative whole-connection
-MOSDOp gate, including unrelated PGs. This deliberately sacrifices concurrency
-instead of claiming precise per-range send scheduling.
+terminal error. A valid active BLOCK gates only MOSDOps with the same actual
+PG/shard and a head hobject inside its range. Unrelated objects and PGs proceed
+on the same connection. Released pending-ACK receipts retain that same scoped
+restriction until the original ACK reaches its writer turn; see the
+[backoff contract](BACKOFF_CONTRACT.md) for identity and ordering details.
 
 The session's single writer checks the gate immediately before starting an
 ordinary message. Blocked, unstarted work fails locally with ErrOSDBackoff,
