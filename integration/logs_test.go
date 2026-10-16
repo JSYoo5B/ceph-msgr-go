@@ -30,6 +30,7 @@ func ordinaryLogFixture(t *testing.T) string {
 	if os.Getenv("CEPH_MSGR_TEST_MODE_REJECTION") != "" {
 		t.Skip("requires secure MON and MGR listeners")
 	}
+	requireUsableFixture(t, control)
 	return control
 }
 

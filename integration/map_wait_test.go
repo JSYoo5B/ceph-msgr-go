@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"reflect"
 	"slices"
@@ -88,13 +89,34 @@ func TestCephMapWaitIntegration(t *testing.T) {
 		if removeSubmitted {
 			return
 		}
-		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		// The remove starts an election (on Tentacle 20.2.4 up to three
+		// rounds, about 7 s), so later tests must not start fresh clients
+		// before the same settled-election barrier as the main path.
+		cleanup, stop := context.WithTimeout(context.Background(), 75*time.Second)
 		defer stop()
+		before := admin.Snapshot().Monitor
 		payload, _ := json.Marshal(map[string]string{"prefix": "mon rm", "name": "map-wait-spare"})
 		result, err := admin.MonCommand(cleanup, cephmsgr.Command{JSON: payload})
 		if err != nil || result.Code != 0 {
+			// Submitted once; an uncertain remove is never resubmitted.
 			t.Errorf("remove disposable spare MON: code=%d error=%v", result.Code, err)
+			markFixtureUnusable(t, control, fmt.Sprintf("cleanup mon rm map-wait-spare: code=%d error=%v", result.Code, err))
+			return
 		}
+		removed := before
+		for err == nil && slices.ContainsFunc(removed.Members, func(m cephmsgr.MonitorMember) bool { return m.Name == "map-wait-spare" }) {
+			removed, err = admin.WaitMonMap(cleanup, removed.MapEpoch)
+		}
+		summary := ""
+		if err == nil {
+			summary, err = settleNativeMonitorElection(cleanup, admin, control, "removed", removed, mon.Members)
+		}
+		if err != nil {
+			t.Errorf("fixture error: cleanup MON remove did not reach a settled election: %v", err)
+			markFixtureUnusable(t, control, fmt.Sprintf("cleanup MON remove did not reach a settled election: %v", err))
+			return
+		}
+		t.Log("cleanup", summary)
 	})
 	var added cephmsgr.MonitorState
 	select {
