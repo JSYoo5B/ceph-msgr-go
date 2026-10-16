@@ -73,7 +73,9 @@ type Config struct {
 	// bounds retained unacknowledged messages (default 1024).
 	ResumeTimeout time.Duration
 	MaxUnacked    int
-	// OnResume runs after each successful resume, outside session locks.
+	// OnResume runs after each successful resume, under the session lock and
+	// before retained frames are resent; it must not block or call into the
+	// session.
 	OnResume func()
 }
 
@@ -704,12 +706,12 @@ func (s *Session) install(t *Transport, cause error) {
 	s.resuming = false
 	now := time.Now()
 	s.lastReceive.Store(&now)
-	// Count the resume before retransmitting, so a peer that sees the
-	// resent frames never observes a stale count.
+	// Count the resume (and run OnResume) before retransmitting, so a peer
+	// that sees the resent frames never observes a stale count.
 	s.resumes.Add(1)
-	s.startLoopsLocked(t, resend)
-	s.mu.Unlock()
 	if s.config.OnResume != nil {
 		s.config.OnResume()
 	}
+	s.startLoopsLocked(t, resend)
+	s.mu.Unlock()
 }
