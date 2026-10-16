@@ -35,8 +35,9 @@ The read snap id, write SnapContext, ORDERSNAP, ROLLBACK and LIST_SNAPS follow
 [SNAPSHOT_CONTRACT.md](SNAPSHOT_CONTRACT.md). Standalone head LIST_WATCHERS
 is specified in [WATCHERS_CONTRACT.md](WATCHERS_CONTRACT.md). Bounded standalone
 caller-selected-snapshot extent maps and CRC32C/xxHash checksums follow [MAPEXT_CONTRACT.md](MAPEXT_CONTRACT.md)
-and [CHECKSUM_CONTRACT.md](CHECKSUM_CONTRACT.md). U64 comparison and bulk xattr
-variants remain unsupported.
+and [CHECKSUM_CONTRACT.md](CHECKSUM_CONTRACT.md). U64 comparison has separate
+[native proof and bounded live coverage](../../integration/fixture/OSD_U64_XATTR_VALIDATION.md);
+bulk xattr variants remain unsupported.
 
 Negotiated OBJECTLOCATOR and PGID64 select the supported request/reply v6
 branch; NEW_OSDOP_ENCODING and NEW_OSDOPREPLY_ENCODING are rejected. The caller

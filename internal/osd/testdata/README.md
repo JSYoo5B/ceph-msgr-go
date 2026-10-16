@@ -147,3 +147,25 @@ unchanged. The xxHash64 vectors include seed and result bits above uint32.
 These encoded logical replies prove wire format, not native hash execution;
 see [the algorithm acceptance](../../../integration/fixture/OSD_CHECKSUM_ALGORITHMS_VALIDATION.md)
 for separate live evidence.
+
+## U64 CMPXATTR fresh native vectors (2026-10-16)
+
+`u64-xattr-native-*` is a separate five-vector suite: two fresh native
+requests (read and compare-before-SET) and three logical replies (true +1,
+false -125, invalid numeric -22). Pinned Ceph directly encoded each fresh
+object, then separately decoded it. Go compares complete front/data/header
+bytes and preserves v6/compat2, the U64 union and signed results. These logical
+reply inputs are not live daemon execution evidence. Existing historical
+STRING and other proofs/segments were not rewritten.
+
+`u64-xattr-native-provenance.json` retains exact source/build/wrapper/launcher
+and all segment hashes, plus successful builder termination. The same driver
+builds an independent public-C++ uint64 comparison client for opt-in live
+acceptance; its raw comparison per-op callback is unavailable. See
+[OSD_U64_XATTR_VALIDATION.md](../../../integration/fixture/OSD_U64_XATTR_VALIDATION.md)
+for the two separately verified 52-case configurations and their limits.
+
+```sh
+cd integration/fixture
+go run . encode-osd-u64-xattrs -cache /tmp/ceph-native-encoder-cache -output /tmp/u64-xattr-proof.json
+```

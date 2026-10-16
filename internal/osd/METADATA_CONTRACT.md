@@ -118,9 +118,10 @@ Existing `Data []byte` carries the raw SET value or CMP operand; lengths are
 derived from admitted bytes. CMP requires explicit `Mode`: `OSDXattrString`
 (1) or `OSDXattrU64` (2). Zero/unknown mode is refused without fallback. U64
 requires exactly eight little-endian operand bytes; the server alone interprets
-stored values. The new U64 path has local tests but native verification remains
-[pending](../../integration/fixture/OSD_U64_XATTR_VALIDATION.md). GETXATTRS accepts no name/operand. Extent and
-version inputs must be zero, and non-xattr opcodes require the zero variant.
+stored values. The U64 path has separate fresh native codec proof and two
+live 52-case [profiles](../../integration/fixture/OSD_U64_XATTR_VALIDATION.md); the raw
+native C++ per-op comparison callback remains unavailable. GETXATTRS accepts
+no name/operand. Extent and version inputs must be zero, and non-xattr opcodes require the zero variant.
 `OSDOperationResult.Xattr` exposes raw NameLength/ValueLength and comparison
 op/mode separately; it does not fabricate returned names or extent offsets.
 
@@ -211,7 +212,7 @@ fixture and explicit routing/native stat/read controls:
 | Names and namespace | Normal, leading underscore, non-UTF-8 names; local rejection of empty/NUL names before TID/send; different object namespace isolation | Byte-name profile and pre-send rejection passed; same bare object in slash/Unicode namespaces isolated in CRC/AES three-BlueStore native/Go with caller-prepared independent hashes/routes; no unsafe alias mutation performed |
 | Length limits | Configured name limit and value-size cap yield native `-ENAMETOOLONG`/`-EFBIG`; local frame/budget limits reject before send, received oversize retains uncertainty | CRC/AES three-BlueStore six-case native/Go 32/33 boundaries and staged-SET rollback passed; all-owned effective settings and exact prior entry/absence restored with public v0.2.0 handles |
 | Compare operators | Caller-left asymmetric GT/LT, all six ops, binary/empty STRING, true positive result, false `-ECANCELED`; missing attr vs missing object | Go/native matrix 36 cases and missing identities passed; actual Go per-op +1 preserved, C callback still unavailable |
-| U64 followup | LE operand 0/max; stored decimal, empty/missing, prefix, bad signs/whitespace/NUL, overflow; invalid input length/mode locally rejected | Product codecs and local tests added; independent U64 wire/server oracle prepared but not yet executed |
+| U64 followup | LE operand 0/max; stored decimal, empty/missing, prefix, bad signs/whitespace/NUL, overflow; invalid input length/mode locally rejected | Separate fresh five-vector proof and 52 native/Go cases passed in each CRC/AES IPv4 3-BlueStore and secure/AES256K IPv6 single-MemStore profile; raw native C++ per-op prvals remain unavailable |
 | Atomicity and FAILOK | Compare-before-SET/RM success; false guard after an earlier staged mutation restores pre-state; FAILOK permits later writes and retains per-op failure | Go/native guard-before-write and FAILOK passed; staged SET-before-CMP remains rejected and native-only rollback evidence |
 | Mixed requests | Xattr GET+READ+STAT output boundaries; SET/RM+data mutation followed by independent fresh reads/stat2; staged xattr reads characterized separately | Fresh vectors and GET/GETALL/READ/STAT passed; one APPEND+SET actual native execution/readback passed; staged xattr reads pending |
 | Refusal and uncertainty | Permission rejection vs missing object/attr; sent append+xattr vector loses response, retains identity/outcome, fresh session never replays it | CRC/AES three-BlueStore APPEND+SET receive withholding/Close passed; CRC/AES256K single-MemStore readonly GET/GETALL and known SET/RM EPERM passed with unchanged native state; raw Go per-op0 and echoed flags retained, same session remains usable |

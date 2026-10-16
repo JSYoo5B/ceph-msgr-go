@@ -650,8 +650,9 @@ reply, err := osd.Request(ctx, cephmsgr.OSDRequest{
 현재 SET/RM 뒤 같은 vector의 GET/GETALL/CMP는 staged-read 의미를 보장하지
 못해 송신 전에 거절한다. 비교를 먼저 놓는 순서가 지원된다. 비교에는 `OSDXattrString` 또는
 `OSDXattrU64` 모드를 명시한다. U64 operand는 정확한 8-byte little-endian
-`Data`이고 저장값 해석은 서버에 맡긴다. 이 분기의 U64 구현은
-[별도 native 검증 대기 중](integration/fixture/OSD_U64_XATTR_VALIDATION.md)이다.
+`Data`이고 저장값 해석은 서버에 맡긴다. U64는 CRC/AES IPv4 3-BlueStore와 secure/AES256K IPv6 단일 MemStore에서
+각 52개 native/Go 사례를 검증했다.
+[검증 범위와 기록](integration/fixture/OSD_U64_XATTR_VALIDATION.md)을 따른다.
 Bulk SET/RESET은 별도 미구현 단계다.
 
 OMAP 읽기는 `Omap` 입력을 쓰며 extent·Version·Data·Xattr는 0이다.
