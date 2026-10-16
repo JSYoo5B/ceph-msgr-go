@@ -1,5 +1,6 @@
 """Closed receipt/model tests; these syntheses are never retained native vectors."""
 import copy
+import hashlib
 from pathlib import Path
 import tempfile
 import unittest
@@ -44,13 +45,24 @@ class NativeV9ClosedModelTests(unittest.TestCase):
     def test_valid_sdk_must_be_off_and_have_jaeger_undefined(self):
         with tempfile.TemporaryDirectory() as directory:
             config,cache=Path(directory)/"acconfig.h",Path(directory)/"CMakeCache.txt"
-            config.write_text("/* #undef HAVE_JAEGER */\n");cache.write_text("WITH_JAEGER:BOOL=OFF\n")
-            self.assertFalse(oracle.off_sdk_proof(config,cache)["have_jaeger"])
-            for declaration in ("#define HAVE_JAEGER 1\n","#define HAVE_JAEGER 0\n",""):
-                config.write_text(declaration)
+            # Model the pinned Linux builder's exact LF output. write_text
+            # translated these bytes to CRLF on Windows before validation.
+            raw=b"/* #undef HAVE_JAEGER */\n";configured=b"WITH_JAEGER:BOOL=OFF\n"
+            config.write_bytes(raw);cache.write_bytes(configured)
+            proof=oracle.off_sdk_proof(config,cache)
+            self.assertFalse(proof["have_jaeger"])
+            self.assertEqual(config.read_bytes(),raw)
+            self.assertEqual(cache.read_bytes(),configured)
+            self.assertEqual(proof["generated_config_sha256"],hashlib.sha256(raw).hexdigest())
+            self.assertEqual(proof["cmake_cache_sha256"],hashlib.sha256(configured).hexdigest())
+            for declaration in (b"#define HAVE_JAEGER 1\n",b"#define HAVE_JAEGER 0\n",b""):
+                config.write_bytes(declaration)
                 with self.assertRaises(RuntimeError):oracle.off_sdk_proof(config,cache)
-            config.write_text("/* #undef HAVE_JAEGER */\n");cache.write_text("WITH_JAEGER:BOOL=ON\n")
-            with self.assertRaises(RuntimeError):oracle.off_sdk_proof(config,cache)
+            config.write_bytes(raw)
+            for option in (b"WITH_JAEGER:BOOL=ON\n",b"WITH_JAEGER:BOOL=OFF\r\n"):
+                cache.write_bytes(option)
+                with self.subTest(option=option),self.assertRaises(RuntimeError):
+                    oracle.off_sdk_proof(config,cache)
 
     def test_native_trace_or_header_substitutions_rejected(self):
         for position in (63,86,87,88,89,93,94):
