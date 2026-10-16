@@ -969,9 +969,20 @@ CRC/AES/AES·IPv4·Darwin arm64 host relay의 3-BlueStore 구성에서 통과했
 version·ONDISK 및 native bytes/mtime을 비교했다. Append 완료 순서는
 가정하지 않고 record 집합을 비교하며, 자동 재실행은 없다.
 
+`OSDWriteSame`은 같은 요청 API의 `Offset`·논리 `Length`·원본 pattern `Data`로
+bounded WRITESAME을 전송한다. 실제 wire 입력과 WRITE/WRITEFULL/APPEND/WRITESAME의
+누적 논리 쓰기량을 각각 frame 한도로 제한한다. CRC/AES IPv4 host의 3 BlueStore와
+secure/AES256K IPv6 container의 single MemStore에서 명시적 legacy-v6 구성의
+19개 사례를 모두 통과했다. 첫 CRC 준비 오류는 18/19 실패 기록으로 보존하고
+증가하는 truncate sequence·양쪽 실제 준비 크기 확인으로 수정한 뒤 다시 검증했다.
+Zero-length 동작, staged guard rollback, WRITESAME 자체 FAILOK, snapshot write
+context와 truncate clipping, raw per-op·ONDISK·독립 native bytes를 비교했다.
+논리 reply Length는 내부 WRITE가 실제로 적용한 바이트 수가 아니다.
+[검증 기록과 재현 조건](integration/fixture/OSD_WRITESAME_VALIDATION.md)을 참고한다.
+
 다만 nonempty WRITEFULL·APPEND 뒤 offset 0 READ/CMPEXT가 앞선 payload 크기
 이상을 검사하는 조합은 `ErrUnsupportedOSDOperation`으로 송신 전에 거절한다.
-offset 0의 nonempty WRITE 뒤에는 모든 양수 길이의 offset 0 READ/CMPEXT를
+offset 0의 nonempty WRITE 또는 WRITESAME 뒤에는 모든 양수 길이의 offset 0 READ/CMPEXT를
 거절한다. 원격 객체의 더 새로운 truncate sequence가 WRITE를 요청보다 짧게
 줄일 수 있어 요청 payload 크기를 안전 경계로 사용할 수 없기 때문이다.
 이 제한은 중간 FAILOK나 후속 쓰기가 있어도 유지한다.

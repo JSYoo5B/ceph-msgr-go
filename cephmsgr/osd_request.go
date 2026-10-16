@@ -54,8 +54,9 @@ const (
 	OSDFailOK OSDOperationFlags = OSDOperationFlags(osd.OpFailOK)
 )
 
-// OSDOperation is one ordered operation on the request's object. Writes and
-// CompareExtent require Length == len(Data); WriteFull/Append have Offset 0.
+// OSDOperation is one ordered operation on the request's object. Write,
+// WriteFull, Append and CompareExtent require Length == len(Data).
+// WriteFull/Append have Offset 0.
 // WriteSame repeats nonempty Data over Length bytes at Offset: Length must
 // be a multiple of len(Data), and may be zero. Its cumulative logical length
 // is bounded independently of the frame data. Zero-length effects and writes
