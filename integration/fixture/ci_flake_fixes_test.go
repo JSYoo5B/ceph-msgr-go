@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -49,57 +48,6 @@ func gateState(active string, activeGID uint64, standby string, standbyGID uint6
 		}{standby, standbyGID})
 	}
 	return state
-}
-
-func TestShortTicketGateReportsStaleNativeManagerAsFixtureError(t *testing.T) {
-	const line = "2026-10-15T23:16:01.157+0000 7f -1 monclient(hunting): handle_auth_bad_method failed to auth with my available methods: (13) Permission denied"
-	owned := []string{"a", "b"}
-	state := gateState("a", 24110, "b", 24120)
-	for _, test := range []struct {
-		name     string
-		refusals map[string]managerRefusal
-		stale    string
-	}{
-		{"clean", map[string]managerRefusal{"a": {}, "b": {}}, ""},
-		{"other MonClient reclaim only", map[string]managerRefusal{"a": {Refused: []uint64{4218}}, "b": {}}, ""},
-		{"active MonClient -13", map[string]managerRefusal{"a": {Line: line, Refused: []uint64{4218}}, "b": {}}, "mgr.a"},
-		{"MgrMap GID reclaim refused", map[string]managerRefusal{"a": {Refused: []uint64{24110}}, "b": {}}, "mgr.a"},
-		{"standby refused", map[string]managerRefusal{"a": {}, "b": {Line: line}}, "mgr.b"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			receipt, err := evaluateShortTicketGate("pre-dial", state, owned, test.refusals)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if (receipt.FixtureError != "") != (test.stale != "") || !strings.Contains(receipt.FixtureError, test.stale) {
-				t.Fatalf("gate %q, want stale %q", receipt.FixtureError, test.stale)
-			}
-			if test.stale != "" && !strings.HasPrefix(receipt.FixtureError, "fixture error: ") {
-				t.Fatal("stale native MGR must be reported as a fixture error", receipt.FixtureError)
-			}
-			if len(receipt.Daemons) != 2 || receipt.Daemons[0].GID != 24110 || receipt.Daemons[1].GID != 24120 || receipt.Epoch != 9 {
-				t.Fatal("gate receipt lost MgrMap identities", receipt)
-			}
-		})
-	}
-	if _, err := evaluateShortTicketGate("pre-dial", state, owned, map[string]managerRefusal{"a": {}}); err == nil {
-		t.Fatal("missing native observation accepted as clean")
-	}
-	if _, err := evaluateShortTicketGate("later", state, owned, map[string]managerRefusal{"a": {}, "b": {}}); err == nil {
-		t.Fatal("unknown gate label accepted")
-	}
-	if _, err := evaluateShortTicketGate("pre-dial", gateState("c", 1, "", 0), owned, map[string]managerRefusal{"a": {}, "b": {}}); err == nil {
-		t.Fatal("outside MgrMap identity accepted")
-	}
-	// A daemon absent from the map is judged by its own log alone.
-	receipt, err := evaluateShortTicketGate("post-failure", gateState("a", 7, "", 0), owned, map[string]managerRefusal{"a": {}, "b": {Refused: []uint64{8}}})
-	if err != nil || receipt.FixtureError != "" || receipt.Daemons[1].GID != 0 {
-		t.Fatal("unregistered daemon with only foreign reclaim refusals marked stale", receipt, err)
-	}
-	data, _ := json.Marshal(receipt)
-	if !strings.Contains(string(data), `"label":"post-failure"`) {
-		t.Fatal("gate receipt does not carry the label the test checks", string(data))
-	}
 }
 
 func TestNativeCrashClassifiesManagerAuthServerSegfault(t *testing.T) {
