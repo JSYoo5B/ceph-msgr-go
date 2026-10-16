@@ -93,7 +93,6 @@ func TestOSDSparseReadLocalRejectionNeverSends(t *testing.T) {
 	for _, edit := range []func(*OSDRequest){
 		func(r *OSDRequest) { r.Operations[0].SparseRead.MaxOutputBytes = 7 },
 		func(r *OSDRequest) { r.Operations[0].Length = 0 },
-		func(r *OSDRequest) { r.ReadSnapshot = 4 },
 		func(r *OSDRequest) { r.SnapContext = OSDSnapContext{Sequence: 4} },
 		func(r *OSDRequest) { r.Operations[0].Flags = OSDFailOK },
 		func(r *OSDRequest) { r.Operations = append(r.Operations, OSDOperation{Code: OSDStat}) },

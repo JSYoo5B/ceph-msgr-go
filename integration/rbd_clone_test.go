@@ -136,6 +136,12 @@ type nativeRBDCloneTrace struct {
 	Message   string `json:"message"`
 }
 
+// nativeRBDCopyupTrace is one librbd copy-up extent-map line (debug_rbd 20,
+// CopyupRequest::convert_copyup_extent_map, from the method name on).
+type nativeRBDCopyupTrace struct {
+	Message string `json:"message"`
+}
+
 type nativeRBDCloneWrite struct {
 	Phase     string `json:"phase"`
 	Offset    uint64 `json:"offset"`
@@ -167,6 +173,7 @@ type nativeRBDClone struct {
 	Blobs              map[string]nativeRBDBlob  `json:"blobs"`
 	Writes             []nativeRBDCloneWrite     `json:"writes"`
 	Trace              []nativeRBDCloneTrace     `json:"trace"`
+	CopyupTrace        []nativeRBDCopyupTrace    `json:"copyup_trace"`
 	FlattenNS          int64                     `json:"flatten_ns"`
 }
 
@@ -433,6 +440,74 @@ func parseRBDTrace(lines []nativeRBDCloneTrace) ([]rbdTraceMessage, error) {
 	return messages, nil
 }
 
+// rbdCopyupLine is "convert_copyup_extent_map: <object> image_extents=[..],
+// object_extents=[..]" (include/types.h prints a vector of pairs as a flat
+// comma list): the parent extents librbd's copy-up read returned, mapped to
+// the copied-up object's offsets, before the pending write is subtracted.
+var rbdCopyupLine = regexp.MustCompile(`^convert_copyup_extent_map: (rbd_data\.[0-9a-f]+\.[0-9a-f]{16}) image_extents=\[([0-9,]*)\], object_extents=\[([0-9,]*)\]$`)
+
+func parseRBDCopyupTrace(lines []nativeRBDCopyupTrace) (map[string][]cephmsgr.OSDExtent, error) {
+	maps := map[string][]cephmsgr.OSDExtent{}
+	for _, line := range lines {
+		g := rbdCopyupLine.FindStringSubmatch(line.Message)
+		if g == nil {
+			return nil, fmt.Errorf("unparsed librbd copy-up line %q", line.Message)
+		}
+		if _, seen := maps[g[1]]; seen {
+			return nil, fmt.Errorf("two librbd copy-up maps for %s", g[1])
+		}
+		var extents []cephmsgr.OSDExtent
+		var image []uint64
+		for i, list := range []string{g[2], g[3]} {
+			var values []uint64
+			for _, field := range strings.Split(list, ",") {
+				if field == "" {
+					continue
+				}
+				v, err := strconv.ParseUint(field, 10, 64)
+				if err != nil {
+					return nil, fmt.Errorf("librbd copy-up extent %q", field)
+				}
+				values = append(values, v)
+			}
+			if len(values)%2 != 0 {
+				return nil, fmt.Errorf("librbd copy-up extent list %q is not pairs", list)
+			}
+			if i == 0 {
+				image = values
+				continue
+			}
+			if len(values) != len(image) {
+				return nil, fmt.Errorf("librbd copy-up image and object extents differ in count: %q", line.Message)
+			}
+			for j := 0; j < len(values); j += 2 {
+				if values[j+1] != image[j+1] {
+					return nil, fmt.Errorf("librbd copy-up image and object extent lengths differ: %q", line.Message)
+				}
+				extents = append(extents, cephmsgr.OSDExtent{Offset: values[j], Length: values[j+1]})
+			}
+		}
+		maps[g[1]] = extents
+	}
+	return maps, nil
+}
+
+// rbdTraceOutLength is the out=<n>b of a reply op print (the per-op output
+// length), or -1 without one.
+var rbdTraceOut = regexp.MustCompile(` out=(\d+)b`)
+
+func rbdTraceOutLength(ops string) int {
+	g := rbdTraceOut.FindStringSubmatch(ops)
+	if g == nil {
+		return -1
+	}
+	n, err := strconv.Atoi(g[1])
+	if err != nil {
+		return -1
+	}
+	return n
+}
+
 // rbdTraceExchange is one native request with its reply.
 type rbdTraceExchange struct {
 	Request, Reply rbdTraceMessage
@@ -531,7 +606,10 @@ type rbdCloneEvidence struct {
 	ParentExtents                           map[string][]cephmsgr.OSDExtent
 	NativeTraces                            map[string][]rbdTraceMessage
 	NativeCopyupInputLength                 int
-	SnapshotSparseReadRefusal               string
+	NativeCopyupExtentMaps                  map[string][]cephmsgr.OSDExtent
+	NativeParentSparseReadOutputs           map[string]int
+	GoParentSparseReadOutputs               map[string]int
+	CopyupInputsEqualNative                 map[string]string
 	NativeFlattenCopyupInputs               map[string]int
 	NativeActions                           []rbdNativeActionEvidence
 	ImageSHA256                             map[string]string
@@ -640,6 +718,32 @@ func TestRBDCloneTestOnlyEncodings(t *testing.T) {
 	if _, err := parseRBDTrace([]nativeRBDCloneTrace{{"send", "osd_op(unknown.0.0:5 3.6 (undecoded) ondisk+write e24)"}}); err == nil {
 		t.Fatal("undecoded request line admitted")
 	}
+	if n := rbdTraceOutLength(exchanges[1].Reply.Ops); n != 12312 || rbdTraceOutLength("sparse-read 0~65536") != -1 {
+		t.Fatal("reply output length parsing", n)
+	}
+	// librbd copy-up maps (include/types.h prints pairs as a flat list).
+	maps, err := parseRBDCopyupTrace([]nativeRBDCopyupTrace{
+		{"convert_copyup_extent_map: rbd_data.10a2b3c4d5e6.0000000000000003 image_extents=[212992,4096,237568,8192], object_extents=[16384,4096,40960,8192]"},
+		{"convert_copyup_extent_map: rbd_data.10a2b3c4d5e6.0000000000000004 image_extents=[], object_extents=[]"},
+	})
+	if err != nil || !reflect.DeepEqual(maps["rbd_data.10a2b3c4d5e6.0000000000000003"], []cephmsgr.OSDExtent{{Offset: 16 * k, Length: 4 * k}, {Offset: 40 * k, Length: 8 * k}}) ||
+		len(maps["rbd_data.10a2b3c4d5e6.0000000000000004"]) != 0 || len(maps) != 2 {
+		t.Fatal("librbd copy-up map parsing", maps, err)
+	}
+	for _, bad := range []string{
+		"convert_copyup_extent_map: rbd_data.10a2b3c4d5e6.0000000000000003 image_extents=[1,2,3], object_extents=[1,2,3]",
+		"convert_copyup_extent_map: rbd_data.10a2b3c4d5e6.0000000000000003 image_extents=[1,2], object_extents=[1,3]",
+		"convert_copyup_extent_map: rbd_data.10a2b3c4d5e6.0000000000000003 image_extents=[1,2], object_extents=[]",
+		"prepare_copyup_data: rbd_data.10a2b3c4d5e6.0000000000000003 processing full copy-up",
+	} {
+		if _, err := parseRBDCopyupTrace([]nativeRBDCopyupTrace{{bad}}); err == nil {
+			t.Fatal("malformed librbd copy-up line admitted", bad)
+		}
+	}
+	twice := nativeRBDCopyupTrace{"convert_copyup_extent_map: rbd_data.10a2b3c4d5e6.0000000000000003 image_extents=[], object_extents=[]"}
+	if _, err := parseRBDCopyupTrace([]nativeRBDCopyupTrace{twice, twice}); err == nil {
+		t.Fatal("two copy-up maps of one object admitted")
+	}
 }
 
 func TestCephRBDCloneIntegration(t *testing.T) {
@@ -690,7 +794,8 @@ func TestCephRBDCloneIntegration(t *testing.T) {
 	gid := c.Snapshot().GlobalID
 	evidence := rbdCloneEvidence{Token: token, Pool: oracle.Plan.Pool, PoolID: oracle.Pool.ID, GoIdentity: identity, GoGlobalID: gid, Store: store, ClassOutputs: map[string]string{},
 		ListSnaps: map[string]map[string]any{}, ParentExtents: map[string][]cephmsgr.OSDExtent{}, NativeTraces: map[string][]rbdTraceMessage{}, ImageSHA256: map[string]string{},
-		Timings: map[string]string{}, NativeFlattenCopyupInputs: map[string]int{}, CloneObjectSizesAfterFlatten: map[string]uint64{}}
+		Timings: map[string]string{}, NativeFlattenCopyupInputs: map[string]int{}, CloneObjectSizesAfterFlatten: map[string]uint64{}, NativeCopyupExtentMaps: map[string][]cephmsgr.OSDExtent{},
+		NativeParentSparseReadOutputs: map[string]int{}, GoParentSparseReadOutputs: map[string]int{}, CopyupInputsEqualNative: map[string]string{}}
 	defer func() {
 		evidence.Timings["total"] = time.Since(started).String()
 		data, err := json.Marshal(evidence)
@@ -990,23 +1095,15 @@ func TestCephRBDCloneIntegration(t *testing.T) {
 		}
 	}
 	// sparseRead sends one SPARSE_READ alone (the product admits it only
-	// alone), at the head (snap 0) or a snapshot. It reports ENOENT.
-	//
-	// The product refuses SPARSE_READ with a read snapshot before
-	// transmission (internal/osd/snapshot.go requestSnapshot; the
-	// SPARSE_READ contract leaves snapshot sparse reads uncharacterized),
-	// while librbd reads the parent at the parent snapshot, and the clone at
-	// a clone snapshot, with SPARSE_READ for whole objects. At a snapshot
-	// this helper therefore sends a plain READ of the same range (librbd's
-	// own form below the sparse-read threshold) and reports its bytes as one
-	// dense extent: the same bytes, without the store's hole map.
+	// alone), at the head (snap 0) or at a read snapshot, as librbd does for
+	// whole-object reads of the clone, of the clone at a clone snapshot and
+	// of the parent at the parent snapshot. It reports ENOENT. The raw
+	// output length is kept by label for the native trace comparison.
+	sparseOutputs := map[string]int{}
 	sparseRead := func(t *testing.T, label, object string, snap, offset, length uint64) (cephmsgr.OSDSparseReadResult, bool) {
 		t.Helper()
 		r, o := route(t, object)
 		op := cephmsgr.OSDOperation{Code: cephmsgr.OSDSparseRead, Offset: offset, Length: length, SparseRead: cephmsgr.OSDSparseReadInput{MaxOutputBytes: 1 << 20}}
-		if snap != 0 {
-			op = cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Offset: offset, Length: length}
-		}
 		req := request(r, op)
 		req.ReadSnapshot = snap
 		reply, err := o.Request(ctx, req)
@@ -1019,28 +1116,12 @@ func TestCephRBDCloneIntegration(t *testing.T) {
 			t.Fatalf("%s read: %v", label, err)
 		}
 		checkReply(t, r, reply, 0, false)
-		if snap == 0 {
-			return reply.Operations[0].SparseRead, true
+		got := reply.Operations[0]
+		if got.Result != 0 || got.Offset != offset || got.Length != uint64(len(got.SparseRead.Data)) || len(got.Data) != 8+16*len(got.SparseRead.Extents)+len(got.SparseRead.Data) {
+			t.Fatalf("%s SPARSE_READ echo or encoding differs: %+v", label, got.SparseRead.Extents)
 		}
-		data := reply.Operations[0].Data
-		if len(data) == 0 {
-			return cephmsgr.OSDSparseReadResult{}, true
-		}
-		return cephmsgr.OSDSparseReadResult{Extents: []cephmsgr.OSDExtent{{Offset: offset, Length: uint64(len(data))}}, Data: data}, true
-	}
-	// The refusal itself, recorded once: SPARSE_READ of the parent object
-	// at the parent snapshot never leaves the client.
-	{
-		r, o := route(t, parentNames[0])
-		req := request(r, cephmsgr.OSDOperation{Code: cephmsgr.OSDSparseRead, Length: objectSize, SparseRead: cephmsgr.OSDSparseReadInput{MaxOutputBytes: 1 << 20}})
-		req.ReadSnapshot = parentSnapID
-		reply, err := o.Request(ctx, req)
-		record("snapshot_sparse_read_refused", r, req, reply, err)
-		var server *cephmsgr.OSDError
-		if err == nil || errors.As(err, &server) || reply.Transaction != 0 {
-			t.Fatal("SPARSE_READ at a snapshot was not refused locally", err, reply.Transaction)
-		}
-		evidence.SnapshotSparseReadRefusal = err.Error()
+		sparseOutputs[label] = len(got.Data)
+		return got.SparseRead, true
 	}
 	// objectState is a librados-style STAT and READ of a whole object.
 	objectState := func(t *testing.T, label, object string, snap uint64) ([]byte, bool) {
@@ -1085,12 +1166,36 @@ func TestCephRBDCloneIntegration(t *testing.T) {
 		evidence.ListSnaps[label][object] = reply.Operations[0].Snapshots
 		return reply.Operations[0].Snapshots, true
 	}
+	// storeParentExtents is the sparse map a SPARSE_READ of a whole parent
+	// object at the parent snapshot returns on the active store: BlueStore
+	// reports the written ranges (merged), MemStore the whole object up to
+	// its end; nil when the object did not exist at the snapshot. The bytes
+	// come from the test-only parent image, checked equal to native librbd's.
+	storeParentExtents := func(number uint64) ([]cephmsgr.OSDExtent, []byte) {
+		written := rbdMergeExtents(rbdObjectWrites(plan.ParentPreWrites, order)[number])
+		if len(written) == 0 {
+			return nil, nil
+		}
+		extents := written
+		if !bluestore {
+			last := written[len(written)-1]
+			extents = []cephmsgr.OSDExtent{{Offset: 0, Length: last.Offset + last.Length}}
+		}
+		var data []byte
+		for _, e := range extents {
+			lo := number*objectSize + e.Offset
+			data = append(data, parentSnap[lo:lo+e.Length]...)
+		}
+		return extents, data
+	}
 	// parentRead reads the parent object extent a clone object maps to, at
 	// the parent snapshot, pruned by the overlap (librbd io::util::read_parent
 	// and ObjectRequest::compute_parent_extents with the default striping:
-	// the same object number and offsets). It returns the object-relative
-	// sparse extents and bytes, nil when the overlap leaves nothing or the
-	// parent object is absent at the snapshot.
+	// the same object number and offsets), with librbd's SPARSE_READ at the
+	// parent snapshot. It returns the object-relative sparse extents and
+	// bytes, nil when the overlap leaves nothing or the parent object is
+	// absent at the snapshot. A whole-object read must return the store's
+	// map of the parent object at the snapshot.
 	parentRead := func(t *testing.T, label string, number uint64, overlap *uint64) ([]cephmsgr.OSDExtent, []byte) {
 		t.Helper()
 		start := number * objectSize
@@ -1099,6 +1204,10 @@ func TestCephRBDCloneIntegration(t *testing.T) {
 		}
 		length := min(objectSize, *overlap-start)
 		got, exists := sparseRead(t, label, parentNames[number], parentSnapID, 0, length)
+		wantExtents, wantData := storeParentExtents(number)
+		if length == objectSize && (exists != (wantExtents != nil) || !reflect.DeepEqual(got.Extents, wantExtents) || !bytes.Equal(got.Data, wantData)) {
+			t.Fatalf("%s: parent object %d SPARSE_READ at snapshot %d differs from the %s map %+v: got %+v (exists %v)", label, number, parentSnapID, store, wantExtents, got.Extents, exists)
+		}
 		if !exists {
 			return nil, nil
 		}
@@ -1227,29 +1336,6 @@ func TestCephRBDCloneIntegration(t *testing.T) {
 		return b.String()
 	}
 	const hintOps = "set-alloc-hint object_size 65536 write_size 65536"
-	// librbdParentExtents is the sparse map librbd's SPARSE_READ of a parent
-	// object at the parent snapshot returns: BlueStore reports the written
-	// ranges (merged), MemStore the whole object up to its end; nil when the
-	// object did not exist at the snapshot. The bytes come from the
-	// test-only parent image, checked equal to native librbd's.
-	librbdParentExtents := func(number uint64) ([]cephmsgr.OSDExtent, []byte) {
-		written := rbdMergeExtents(rbdObjectWrites(plan.ParentPreWrites, order)[number])
-		if len(written) == 0 {
-			return nil, nil
-		}
-		extents := written
-		if !bluestore {
-			last := written[len(written)-1]
-			extents = []cephmsgr.OSDExtent{{Offset: 0, Length: last.Offset + last.Length}}
-		}
-		var data []byte
-		for _, e := range extents {
-			lo := number*objectSize + e.Offset
-			data = append(data, parentSnap[lo:lo+e.Length]...)
-		}
-		return extents, data
-	}
-
 	var headOverlap *uint64
 	t.Run("clone_header_and_parent_reads", func(t *testing.T) {
 		// librbd's open: get_id, the initial get_object_prefix, then the
@@ -1504,6 +1590,65 @@ func TestCephRBDCloneIntegration(t *testing.T) {
 		return ev
 	}
 
+	// sameNativeCopyup checks Go's copy-up input for one object against the
+	// copy-up native librbd sent for the same object in a traced action:
+	// librbd's logged parent extent map (convert_copyup_extent_map) equals
+	// Go's SPARSE_READ map of the parent object at the parent snapshot, the
+	// parent sparse-read reply's output length equals Go's raw output, and
+	// the input rebuilt from librbd's map and the bytes cls_rbd wrote (native
+	// librados's read of the copied-up object) equals Go's input byte for
+	// byte; its length is the native CALL's in=<n>b minus the class and
+	// method names. exclude is the pending write of a partial copy-up.
+	sameNativeCopyup := func(t *testing.T, n *nativeRBDClone, views map[string][]byte, exchanges []rbdTraceExchange, number uint64, parentLabel string, goExtents []cephmsgr.OSDExtent, goData []byte, exclude []cephmsgr.OSDExtent) []byte {
+		t.Helper()
+		maps, err := parseRBDCopyupTrace(n.CopyupTrace)
+		if err != nil {
+			t.Fatal("native librbd copy-up trace", n.Action, err)
+		}
+		logged, ok := maps[cloneNames[number]]
+		evidence.NativeCopyupExtentMaps[n.Action+"/"+cloneNames[number]] = logged
+		if !ok || !reflect.DeepEqual(logged, goExtents) {
+			t.Fatalf("%s: librbd's copy-up parent map of object %d %+v (logged %v) differs from Go's SPARSE_READ at the parent snapshot %+v", n.Action, number, logged, ok, goExtents)
+		}
+		nativeOut := -1
+		for _, x := range exchanges {
+			if x.Request.Object == parentNames[number] && strings.HasPrefix(x.Request.Ops, "sparse-read ") {
+				nativeOut = rbdTraceOutLength(x.Reply.Ops)
+			}
+		}
+		evidence.NativeParentSparseReadOutputs[n.Action+"/"+parentNames[number]] = nativeOut
+		evidence.GoParentSparseReadOutputs[n.Action+"/"+parentNames[number]] = sparseOutputs[parentLabel]
+		if nativeOut < 0 || nativeOut != sparseOutputs[parentLabel] {
+			t.Fatalf("%s: native parent sparse-read output %d differs from Go's raw SPARSE_READ output %d", n.Action, nativeOut, sparseOutputs[parentLabel])
+		}
+		pieces, copied := rbdCopyupData(goExtents, goData, exclude)
+		input := rbdSparseCopyupInput(pieces, copied)
+		total := uint64(0)
+		for _, e := range logged {
+			total += e.Length
+		}
+		nativePieces, _ := rbdCopyupData(logged, make([]byte, total), exclude)
+		view := n.CloneObjects[number].Head
+		if view == nil || !view.Exists {
+			t.Fatalf("%s: native librados does not see copied-up object %d", n.Action, number)
+		}
+		object := views["clone_objects_head"][view.Offset : view.Offset+view.Size]
+		var written []byte
+		for _, p := range nativePieces {
+			if p.Offset+p.Length > uint64(len(object)) {
+				t.Fatalf("%s: copy-up extent %+v lies past native object %d (%d bytes)", n.Action, p, number, len(object))
+			}
+			written = append(written, object[p.Offset:p.Offset+p.Length]...)
+		}
+		nativeInput := rbdSparseCopyupInput(nativePieces, written)
+		sum := sha256.Sum256(input)
+		evidence.CopyupInputsEqualNative[n.Action+"/"+cloneNames[number]] = fmt.Sprintf("%d bytes sha256 %x", len(input), sum)
+		if !bytes.Equal(input, nativeInput) {
+			t.Fatalf("%s: Go's copy-up input for object %d (%d bytes) differs from librbd's (%d bytes, extents %+v)", n.Action, number, len(input), len(nativeInput), nativePieces)
+		}
+		return input
+	}
+
 	t.Run("go_copyup_write", func(t *testing.T) {
 		e := plan.GoCopyupWrites[0]
 		ev := copyup(t, "go_copyup", e, cephmsgr.OSDSnapContext{}, headOverlap)
@@ -1582,18 +1727,13 @@ func TestCephRBDCloneIntegration(t *testing.T) {
 		}
 		number, w := objectExtent(t, e)
 		// The copy-up input librbd builds for this write (partial: no clone
-		// snapshot yet) from its sparse parent read at the parent snapshot.
-		// Go's own READ there has no hole map, so the map is the store's,
-		// predicted from the parent's pre-snapshot writes and checked here
-		// against the native request's input length.
-		extents, parentData := librbdParentExtents(number)
-		pieces, copied := rbdCopyupData(extents, parentData, []cephmsgr.OSDExtent{w})
-		input := rbdSparseCopyupInput(pieces, copied)
-		evidence.NativeCopyupInputLength = len(input)
-		if goExtents, goData := parentRead(t, "native_copyup_parent", number, headOverlap); !bytes.Equal(rbdMustExpand(t, goExtents, goData, objectSize), rbdMustExpand(t, extents, parentData, objectSize)) {
-			t.Fatal("predicted librbd parent extents differ from the Go parent read")
-		}
+		// snapshot yet) from its SPARSE_READ of the parent object at the
+		// parent snapshot, rebuilt by Go from its own SPARSE_READ there.
+		extents, parentData := parentRead(t, "native_copyup_parent", number, headOverlap)
+		pieces, _ := rbdCopyupData(extents, parentData, []cephmsgr.OSDExtent{w})
 		exchanges := nativeTrace(t, written)
+		input := sameNativeCopyup(t, written, blobs(t, written), exchanges, number, "native_copyup_parent", extents, parentData, []cephmsgr.OSDExtent{w})
+		evidence.NativeCopyupInputLength = len(input)
 		writeOps := fmt.Sprintf("write %d~%d in=%db", w.Offset, w.Length, w.Length)
 		want := []struct {
 			object, snap, ops, snapc string
@@ -1798,17 +1938,18 @@ func TestCephRBDCloneIntegration(t *testing.T) {
 			expected[parentNames[i]+" sparse-read 0~65536"] = 1
 			// librbd's flatten writes the head, so the parent extent is
 			// pruned by the head overlap it had before the detach.
-			goExtents, goData := parentRead(t, fmt.Sprintf("flatten_parent_%d", i), i, headOverlap)
-			extents, parentData := librbdParentExtents(i)
-			if (goExtents == nil) != (extents == nil) || !bytes.Equal(rbdMustExpand(t, goExtents, goData, objectSize), rbdMustExpand(t, extents, parentData, objectSize)) {
-				t.Fatal("predicted librbd parent extents differ from the Go parent read", i)
-			}
+			label := fmt.Sprintf("flatten_parent_%d", i)
+			extents, parentData := parentRead(t, label, i, headOverlap)
 			if extents == nil {
 				parentAbsent[parentNames[i]] = true
+				maps, err := parseRBDCopyupTrace(flattened.CopyupTrace)
+				if logged, ok := maps[cloneNames[i]]; err != nil || ok && len(logged) != 0 {
+					t.Fatal("librbd logged parent data for an object absent at the parent snapshot", i, logged, err)
+				}
 				continue
 			}
-			pieces, copied := rbdCopyupData(extents, parentData, nil)
-			input := rbdSparseCopyupInput(pieces, copied)
+			pieces, _ := rbdCopyupData(extents, parentData, nil)
+			input := sameNativeCopyup(t, flattened, views, exchanges, i, label, extents, parentData, nil)
 			evidence.NativeFlattenCopyupInputs[cloneNames[i]] = len(input)
 			expected[cloneNames[i]+" "+fmt.Sprintf("call rbd.sparse_copyup in=%db,%s", 3+len("sparse_copyup")+len(input), hintOps)+" 0=[]"] = 1
 			expected[cloneNames[i]+" write 0~0 "+snapcText] = 1

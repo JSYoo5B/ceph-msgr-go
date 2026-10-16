@@ -1,5 +1,6 @@
 // Test-only native oracle. Ceph v20.2.4 public LGPL-2.1 librados SDK API;
-// no implementation copied. Caller supplies owned fixture identity/range.
+// no implementation copied. Caller supplies owned fixture identity/range and
+// optionally a read snap id (IoCtx::snap_set_read; absent means the head).
 #include "include/rados/librados.hpp"
 #include <cstdint>
 #include <cstdlib>
@@ -24,8 +25,13 @@ void trace(const char* stage) {
 }
 int main(int argc, char** argv) {
  try {
-  if (argc != 7) throw std::runtime_error("usage: oracle CONF KEYRING POOL OBJECT OFFSET LENGTH");
+  if (argc != 7 && argc != 8) throw std::runtime_error("usage: oracle CONF KEYRING POOL OBJECT OFFSET LENGTH [SNAP]");
   const auto offset = number(argv[5]), length = number(argv[6]);
+  const bool snapshot = argc == 8;
+  const auto snap = snapshot ? number(argv[7]) : 0;
+  // 0 and the reserved ids at and above CEPH_SNAPDIR are not read snap ids.
+  if (snapshot && (snap == 0 || snap >= std::numeric_limits<uint64_t>::max() - 1))
+   throw std::runtime_error("invalid read snap id");
   if (!length || length > (1U << 20) || offset > std::numeric_limits<uint64_t>::max() - length)
    throw std::runtime_error("invalid bounded range");
   librados::Rados client;
@@ -39,6 +45,7 @@ int main(int argc, char** argv) {
   trace("ioctx_create");
   r = client.ioctx_create(argv[3], io);
   if (r < 0) throw std::runtime_error("native pool " + std::to_string(r));
+  if (snapshot) { trace("snap_set_read"); io.snap_set_read(snap); }
   std::map<uint64_t,uint64_t> extents;
   librados::bufferlist data;
   trace("sparse_read");

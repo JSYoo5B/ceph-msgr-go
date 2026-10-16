@@ -93,6 +93,110 @@ CEPH_MSGR_TEST_RUN='^TestCephOSDSnapshotIntegration$' \
 sh integration/run.sh
 ```
 
+## Snapshot SPARSE_READ
+
+Run window: 2026-10-16 01:02 to 01:06 UTC. Product subset: SPARSE_READ with a
+nonzero `ReadSnapshot` (admitted by `internal/osd/snapshot.go`
+`requestSnapshot`; contract in
+[SPARSE_READ_CONTRACT.md](../../internal/osd/SPARSE_READ_CONTRACT.md)).
+`TestCephOSDSnapshotSparseReadIntegration` compares every Go request with the
+independent native C++ client on the same object, snap id, offset and length:
+`tools/osd_sparse_read_oracle.cc` now takes an optional read snap id and calls
+`IoCtx::snap_set_read` before `IoCtx::sparse_read`; the Python observer
+admits an optional `snap` (nonzero, below CEPH_NOSNAP) and still records C
+librados head snapshots before and after. The helper was rebuilt for this
+wrapper in an owned container from the pinned source and generated
+configuration with GCC toolset 14 against the image's `librados.so.2`
+(SHA-256
+`b630ea9d633d724bacfb116815915c852374d0a8ca351bdc488f0bbae4fb4bac`, the same
+library as the earlier helper):
+wrapper SHA-256 `849917e1478b5bc8359608cd39b1d75edbfba8ba3ea32f90354cc8b57ed02557`,
+binary SHA-256 `324804db60fe0da38c02351c15ec28b76c51c78ea29db1e09547a1dcc1311e75`.
+The fixture staged it only after its proof matched the export's wrapper.
+
+Each case compares the native result code with the Go reply code (and the
+`OSDError` for a failure), the extent map, the bytes, the raw encoded output
+(`u32` count, offset/length pairs, `u32` byte count, bytes) in both the
+operation data and `RawData`, the operation offset echo and length, and the
+reply user version with the native `get_last_version`. The expanded bytes
+must equal the test's model of the object at that snap, a Go READ of the same
+range at the same snap must return those zero-filled bytes with the same user
+version, and a second native read afterwards must observe the same map,
+bytes, version and head state.
+
+Setup, all native (snapshot oracle, librados C API): two self-managed snap
+ids, 2 and 3, on the fixture pool. Before any snapshot write (SnapContext
+0/[]): Y = the 31-byte seed plus 4 KiB at 12 KiB; X = 4 KiB at 0 and 4 KiB at
+16 KiB; W = 4 KiB at 0 and 4 KiB at 12 KiB. Under 2/[2]: X gets 4 KiB at
+8 KiB and 4 KiB at 28 KiB, Z is created with 4 KiB at 4 KiB, W is deleted.
+Native `rados listsnaps` then shows, on both profiles: Y seq 0, head 16384;
+X seq 2, clone 2 size 20480 with overlaps 0~8192 and 12288~8192, head 32768;
+Z seq 2, head 8192 and no clone; W seq 2, clone 2 size 16384 with no overlap
+and no head.
+
+| Actual profile | Controller wall time (UTC) | Result |
+| --- | --- | --- |
+| CRC/AES entity/service, IPv4, Darwin arm64 host relay, three BlueStore/min2 | 01:02:54 to 01:04:29 | snapshot SPARSE_READ 16/16 (14.97 s), snapshot 11/11, SPARSE_READ 10/10; no FAIL/SKIP |
+| secure/AES256K entity/service, IPv6, CGO=0 Linux arm64 container, single MemStore | 01:04:41 to 01:06:01 | 16/16 (13.65 s), 11/11, 10/10; no FAIL/SKIP |
+
+Go and native agreed in every case below. Extents are offset~length in bytes;
+a success has native result = extent count and Go per-op result 0.
+
+| Case (object, snap, offset~length) | Resolves to | BlueStore extents | MemStore extents | User version |
+| --- | --- | --- | --- | --- |
+| X, 2, 0~65536 | clone 2 (20480 bytes) | 0~4096, 16384~4096 | 0~20480 | 4 |
+| X, 2, 2048~16384 | clone 2 | 2048~2048, 16384~2048 | 2048~16384 | 4 |
+| X, 2, 6144~4096 (a hole) | clone 2 | none (raw 8 bytes) | 6144~4096 | 4 |
+| X, 2, 14336~16384 | clone 2, clipped at its 20480-byte end | 16384~4096 | 14336~6144 | 4 |
+| X, 2, 20480~4096 (clone EOF) | clone 2 | none, length 0 | none, length 0 | 4 |
+| X, 2, 28672~4096 (past clone EOF, data at the head) | clone 2 | none, length 0 | none, length 0 | 4 |
+| X, head, 0~65536 | head (32768 bytes) | 0~4096, 8192~4096, 16384~4096, 28672~4096 | 0~32768 | 7 |
+| X, 3, 0~65536 | head (3 > snapset seq 2) | as the head | as the head | 7 |
+| X, 1003, 0~65536 | head | as the head | as the head | 7 |
+| Y, 2, 0~65536 | head (snapset seq 0) | 0~31, 12288~4096 | 0~16384 | 3 |
+| Y, head, 0~65536 | head | 0~31, 12288~4096 | 0~16384 | 3 |
+| Z, 2, 0~65536 | no clone covers 2 (seq 2, no clones) | -2 ENOENT | -2 ENOENT | 0 |
+| Z, 3, 0~65536 | head | 4096~4096 | 0~8192 | 8 |
+| W, 2, 0~65536 | clone 2 of the deleted head | 0~4096, 12288~4096 | 0~16384 | 5 |
+| W, 2, 2048~12288 | clone 2 | 2048~2048, 12288~2048 | 2048~12288 | 5 |
+| W, head, 0~65536 | whiteout head | -2 ENOENT | -2 ENOENT | 0 |
+
+Reply flags were 0x4000015 for every success and 0x4000014 for both ENOENT
+replies; no retry; request and reply epochs 21 (BlueStore) and 14 (MemStore)
+throughout. The clone's own size bounds the read (cases at 20480 and 28672
+return nothing although the head holds data there), and the extents are the
+store's map of the clone object: BlueStore keeps the clone's holes
+(logical extents at the written 4 KiB ranges, also through a range that
+starts inside a hole), MemStore reports the whole selected range clipped to
+the resolved object's end, holes included. The ENOENT for Z at snap 2 shows
+that a snap id at or below the snapset seq with no covering clone is
+`-ENOENT`, not the head: pinned `PrimaryLogPG::find_object_context`
+returns the head only when the snap id exceeds the snapset seq
+(PrimaryLogPG.cc:12169) and otherwise the first clone at or above the snap id,
+or -ENOENT when there is none (12187-12194). Cleanup removed the four objects
+and both snap ids; native snap trim finished in 814 ms (BlueStore) and 810 ms
+(MemStore), and the fixture was clean before the snapshot test (snaps 4 and 5)
+and the head SPARSE_READ test ran.
+
+Tested source: tree `75285aba4d7d87422f1d5382a0ed4b0cdb3d7cd3` (HEAD
+`3c22e90`, the staged SPARSE_READ snapshot admission, and this change's test,
+fixture and tool files; not these documents), exported with `git archive` to
+a separate directory: 1210 files, SHA-256 of the sorted per-file SHA-256 list
+`608fd327282e22ce324c74863502909cf96b15609d74104ee89443312dbfec74`. Other
+unstaged product edits present in the shared checkout at the time (a separate
+truncate change) were not part of the export. Evidence:
+`osd-snap-sparse-read-results.json` in each diagnostics directory.
+
+```sh
+CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
+CEPH_MSGR_TEST_OSD_REPLICAS=3 CEPH_MSGR_TEST_RUNTIME=host \
+CEPH_MSGR_TEST_CONNECTION_MODE=crc CEPH_MSGR_TEST_KEY_TYPE=aes \
+CEPH_MSGR_TEST_SERVICE_CIPHER=aes CEPH_MSGR_TEST_IP_FAMILY=4 \
+CEPH_MSGR_TEST_SPARSE_READ_ORACLE=<helper beside its .proof.json> \
+CEPH_MSGR_TEST_RUN='^TestCephOSD(Snapshot|SparseRead|SnapshotSparseRead)Integration$' \
+sh integration/run.sh
+```
+
 ## Shared pool mode
 
 Snap allocation puts the shared fixture pool into self-managed snapshot mode
@@ -106,7 +210,9 @@ by the MON; no test uses them.
 
 ## Remaining gaps
 
-Response loss and SIGKILL during ROLLBACK or a cloning write, pool-snapshot
+Snapshot SPARSE_READ on three-replica MemStore or single BlueStore, at a
+snap id in the removed-snaps queue, on an EC pool or inside a compound vector
+is not characterized. Response loss and SIGKILL during ROLLBACK or a cloning write, pool-snapshot
 mode (where the server substitutes the pool context), a ROLLBACK refused with
 -EBUSY by a watcher, removed snaps still queued for trimming, read-only
 credentials, EC pools, broader profiles and remote CI for this subset need

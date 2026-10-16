@@ -4,10 +4,18 @@ import osd_sparse_read_oracle as oracle
 
 class SparseReadOracleTest(unittest.TestCase):
     def test_request_bounds(self):
-        self.assertEqual(oracle.request(dict(object="owned", offset=3, length=97)), (b"owned", 3, 97))
+        self.assertEqual(oracle.request(dict(object="owned", offset=3, length=97)), (b"owned", 3, 97, None))
+        self.assertEqual(oracle.request(dict(object="owned", offset=3, length=97, snap=4)), (b"owned", 3, 97, 4))
+        self.assertEqual(oracle.request(dict(object="owned", offset=0, length=1, snap=oracle.MAX_SNAP))[3], oracle.MAX_UINT64 - 2)
         for raw in [dict(object="owned", offset=0, length=0), dict(object="owned", offset=True, length=1),
                     dict(object="owned", offset=oracle.MAX_UINT64, length=1),
-                    dict(object="owned", offset=0, length=oracle.MAX_LENGTH + 1)]:
+                    dict(object="owned", offset=0, length=oracle.MAX_LENGTH + 1),
+                    dict(object="owned", offset=0, length=1, snap=0),
+                    dict(object="owned", offset=0, length=1, snap=oracle.MAX_UINT64 - 1),
+                    dict(object="owned", offset=0, length=1, snap=oracle.MAX_UINT64),
+                    dict(object="owned", offset=0, length=1, snap=True),
+                    dict(object="owned", offset=0, length=1, snap=None),
+                    dict(object="owned", offset=0, length=1, snap=1, extra=1)]:
             with self.assertRaises(ValueError):
                 oracle.request(raw)
 

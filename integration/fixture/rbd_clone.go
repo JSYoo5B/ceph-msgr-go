@@ -32,7 +32,9 @@ import (
 // clone snapshot, flatten the clone and observe everything read-only after
 // each step; the clone write and the flatten run in a separate native client
 // whose Messenger requests to data objects (debug_ms 1) are kept as the
-// independent record of the native op vectors. Every native action is
+// independent record of the native op vectors, and its librbd copy-up
+// extent maps (debug_rbd 20, CopyupRequest::convert_copyup_extent_map) are
+// kept as the record of each copy-up's sparse parent map. Every native action is
 // journaled in rbd-base-owned.json before it is issued and is never
 // reissued; both images go with the owned pool at cleanup. Clone layout,
 // class encodings and the copy-up construction stay in the test-only
@@ -40,7 +42,8 @@ import (
 // librbd/api/Image.cc and image/CloneRequest.cc (clone v2), image/
 // AttachChildRequest.cc, image/RefreshRequest.cc (parent_get,
 // parent_overlap_get, enable_sparse_copyup), io/ObjectRequest.cc,
-// io/CopyupRequest.cc, io/Utils.cc (read_parent), operation/FlattenRequest.cc,
+// io/CopyupRequest.cc (convert_copyup_extent_map log line, debug_rbd 20),
+// io/Utils.cc (read_parent), operation/FlattenRequest.cc,
 // cls/rbd/cls_rbd.cc (copyup, sparse_copyup, get_parent, parent_get,
 // parent_overlap_get, children_list, parent detach), msg/async/
 // AsyncConnection.cc and msg/DispatchQueue.cc (debug_ms 1 lines),
@@ -106,11 +109,18 @@ var rbdCloneParentCalls = [][3]string{
 }
 
 // rbdCloneTraceLimit and rbdCloneTraceWidth bound the kept native Messenger
-// lines of one traced action.
+// lines of one traced action; rbdCloneCopyupLimit bounds its kept librbd
+// copy-up extent-map lines (same width).
 const (
-	rbdCloneTraceLimit = 96
-	rbdCloneTraceWidth = 600
+	rbdCloneTraceLimit  = 96
+	rbdCloneTraceWidth  = 600
+	rbdCloneCopyupLimit = 16
 )
+
+// rbdCloneCopyupPrefix starts every kept librbd copy-up line: the method
+// name and the data object (CopyupRequest's dout prefix, without the
+// request pointer).
+const rbdCloneCopyupPrefix = "convert_copyup_extent_map: rbd_data."
 
 // rbdClonePlan is the fixed recipe of the parent and the clone. The native
 // driver writes the parent around its snapshot, clones it, writes
@@ -174,10 +184,12 @@ func (p rbdClonePlan) owned(token string) bool {
 // The fixed native clone driver. The fixture passes only the token-bound plan
 // and a closed action; the driver re-checks every name. librbd runs without
 // its cache and with error-level stderr only. The clone write and the flatten
-// run in a second client that logs its Messenger traffic (debug_ms 1) to a
-// private file; only the request and reply lines of data objects are kept
-// (AsyncConnection::send_msg "-->" and DispatchQueue::pre_dispatch "<=="
-// lines, cut at the message print). Read-only opens register no header
+// run in a second client that logs its Messenger traffic (debug_ms 1) and
+// librbd (debug_rbd 20) to a private file; only the request and reply lines
+// of data objects are kept (AsyncConnection::send_msg "-->" and
+// DispatchQueue::pre_dispatch "<==" lines, cut at the message print), and
+// librbd's copy-up extent maps (CopyupRequest::convert_copyup_extent_map,
+// from the method name on). Read-only opens register no header
 // watch. Sources: pybind/rbd/rbd.pyx and pybind/rados/rados.pyx at
 // rbdBaseSource; independent driver, no code copied.
 const rbdCloneNativePython = `
@@ -197,7 +209,7 @@ CONF = '/tmp/ceph-msgr-test/ceph.conf'
 NOSNAP = 0xfffffffffffffffe
 # cls_lock_get_info_op{name="rbd_lock"}: ENCODE_START(1, 1) and a string.
 LOCK_INFO = b'\x01\x01' + struct.pack('<II', 12, 8) + b'rbd_lock'
-TRACE_LIMIT, TRACE_WIDTH = 96, 600
+TRACE_LIMIT, TRACE_WIDTH, COPYUP_LIMIT = 96, 600, 16
 BASE = {'keyring': keyring, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'}
 pool, parent, clone = plan['pool'], plan['parent'], plan['clone']
 psnap, csnap = plan['parent_snapshot'], plan['clone_snapshot']
@@ -363,13 +375,14 @@ def write(image, phase, extent):
     return {'phase': phase, 'offset': extent['offset'], 'length': extent['length'], 'written': written, 'sha256': hashlib.sha256(data).hexdigest(), 'elapsed_ns': elapsed}
 
 def traced(label, run):
-    # A separate client logs its Messenger traffic (debug_ms 1) to a private
-    # file; only request ("-->") and reply ("<==") lines of data objects are
-    # kept, cut to the message print.
+    # A separate client logs its Messenger traffic (debug_ms 1) and librbd
+    # (debug_rbd 20) to a private file; only request ("-->") and reply ("<==")
+    # lines of data objects are kept, cut to the message print, and librbd's
+    # copy-up extent maps from the method name on.
     path = '/tmp/ceph-msgr-rbd-clone-%s-%s.log' % (token, label)
     if os.path.exists(path):
         os.remove(path)
-    traced_cluster = rados.Rados(conffile=CONF, rados_id=identity[len('client.'):], conf=dict(BASE, log_file=path, log_to_file='true', debug_ms='1'))
+    traced_cluster = rados.Rados(conffile=CONF, rados_id=identity[len('client.'):], conf=dict(BASE, log_file=path, log_to_file='true', debug_ms='1', debug_rbd='20'))
     traced_cluster.connect(timeout=30)
     try:
         traced_ioctx = traced_cluster.open_ioctx(pool)
@@ -379,9 +392,17 @@ def traced(label, run):
             traced_ioctx.close()
     finally:
         traced_cluster.shutdown()
-    lines = []
+    lines, copyups = [], []
     with open(path, errors='replace') as f:
         for line in f:
+            marker = line.find('librbd::io::CopyupRequest: ')
+            start = line.find('convert_copyup_extent_map: rbd_data.', marker) if marker >= 0 else -1
+            if start >= 0:
+                message = line[start:].rstrip('\n')
+                if len(message) > TRACE_WIDTH or len(copyups) >= COPYUP_LIMIT:
+                    raise ValueError('native copy-up trace exceeds its bound')
+                copyups.append({'message': message})
+                continue
             start = line.find('osd_op')
             if start < 0 or 'rbd_data.' not in line[start:]:
                 continue
@@ -397,7 +418,7 @@ def traced(label, run):
                 raise ValueError('native data-object trace exceeds its bound')
             lines.append({'direction': direction, 'message': message})
     os.remove(path)
-    return result, lines
+    return result, lines, copyups
 
 cluster = rados.Rados(conffile=CONF, rados_id=identity[len('client.'):], conf=BASE)
 cluster.connect(timeout=30)
@@ -427,7 +448,7 @@ try:
                     writes = [write(image, 'native', e) for e in plan['native_writes']]
                     image.flush()
                 return writes
-            out['writes'], out['trace'] = traced('write', run)
+            out['writes'], out['trace'], out['copyup_trace'] = traced('write', run)
         elif action == 'snapshot':
             with rbd.Image(ioctx, clone) as image:
                 image.create_snap(csnap)
@@ -437,7 +458,7 @@ try:
                 with rbd.Image(traced_ioctx, clone) as image:
                     image.flatten()
                 return time.monotonic_ns() - started
-            out['flatten_ns'], out['trace'] = traced('flatten', run)
+            out['flatten_ns'], out['trace'], out['copyup_trace'] = traced('flatten', run)
         observe(ioctx, out)
     finally:
         ioctx.close()
@@ -493,6 +514,11 @@ type rbdCloneTrace struct {
 	Message   string `json:"message"`
 }
 
+// rbdCloneCopyupLine is one kept librbd copy-up extent-map line.
+type rbdCloneCopyupLine struct {
+	Message string `json:"message"`
+}
+
 // rbdCloneNative is one complete clone-driver output; unknown fields are
 // refused.
 type rbdCloneNative struct {
@@ -517,6 +543,7 @@ type rbdCloneNative struct {
 	Blobs              map[string]rbdBaseBlob `json:"blobs"`
 	Writes             []rbdLockWrite         `json:"writes,omitempty"`
 	Trace              []rbdCloneTrace        `json:"trace,omitempty"`
+	CopyupTrace        []rbdCloneCopyupLine   `json:"copyup_trace,omitempty"`
 	FlattenNS          int64                  `json:"flatten_ns,omitempty"`
 }
 
@@ -595,6 +622,18 @@ func rbdCloneTraceValid(trace []rbdCloneTrace) bool {
 	return true
 }
 
+func rbdCloneCopyupTraceValid(lines []rbdCloneCopyupLine) bool {
+	if len(lines) > rbdCloneCopyupLimit {
+		return false
+	}
+	for _, line := range lines {
+		if len(line.Message) > rbdCloneTraceWidth || !strings.HasPrefix(line.Message, rbdCloneCopyupPrefix) {
+			return false
+		}
+	}
+	return true
+}
+
 // decodeRBDCloneNative accepts exactly the shape of one admitted action for
 // the owned plan. It checks structure only: which parent, overlap, object or
 // trace state each observation must show after the Go steps is the test's
@@ -653,7 +692,8 @@ func decodeRBDCloneNative(action, token string, request int64, plan rbdClonePlan
 		blob, present := result.Blobs[key]
 		ok = ok && present && blob.Name == rbdCloneBlobName(action, key) && blob.Length <= rbdBaseBlobLimit && blob.Length == lengths[key] && len(blob.SHA256) == 64
 	}
-	ok = ok && (result.Trace != nil) == rbdCloneTraced(action) && (result.Trace == nil || rbdCloneTraceValid(result.Trace)) && (action == "flatten") == (result.FlattenNS > 0) && result.FlattenNS >= 0
+	ok = ok && (result.Trace != nil) == rbdCloneTraced(action) && (result.Trace == nil || rbdCloneTraceValid(result.Trace)) && (action == "flatten") == (result.FlattenNS > 0) && result.FlattenNS >= 0 &&
+		(result.CopyupTrace == nil || rbdCloneTraced(action) && rbdCloneCopyupTraceValid(result.CopyupTrace))
 	switch action {
 	case "setup":
 		ok = ok && len(result.Writes) == len(plan.ParentPreWrites)+len(plan.ParentPostWrites) &&

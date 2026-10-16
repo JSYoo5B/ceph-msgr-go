@@ -789,8 +789,11 @@ CRC를 반환하며 요청 길이는 chunk 크기의 배수여야 한다.
 암묵적 전체 읽기는 거절한다. [CHECKSUM 계약](internal/osd/CHECKSUM_CONTRACT.md)과
 [실검증 기록](integration/fixture/OSD_READ_METADATA_VALIDATION.md)에 범위를 구분했다.
 
-`OSDSparseRead`는 단독 head 요청의 `Offset`·양수 `Length`에서 할당 구간과
-그 구간의 bytes를 함께 읽는다. `SparseRead.MaxOutputBytes`는 encoded extent map과
+`OSDSparseRead`는 단독 요청의 `Offset`·양수 `Length`에서 할당 구간과
+그 구간의 bytes를 함께 읽는다. `ReadSnapshot`을 지정하면 OSD가 그 snapshot id로
+고른 객체를 같은 방식으로 읽는다. snap id가 객체의 snapset sequence보다 크면 head를,
+아니면 그 id 이상인 첫 clone을 읽고 해당 clone이 없으면 -ENOENT다. librbd가 parent snapshot과
+clone snapshot을 읽을 때 쓰는 형식이다. `SparseRead.MaxOutputBytes`는 encoded extent map과
 byte buffer 전체의 로컬 출력 한도다(최소 8 bytes). 성공한
 `Operations[0].SparseRead`는 순서가 있는 `Extents`와 이어 붙인 `Data`를 제공하고,
 원본 encoded 출력은 operation의 `Data`에 남는다. 결과 `Length`는 반환된

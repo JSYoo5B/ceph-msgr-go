@@ -2,8 +2,9 @@
 """Test-only exact-range native C++ sparse-read observer on owned fixture objects.
 
 Ceph v20.2.4 public LGPL-2.1 API (no copied implementation). The C++ helper
-executes IoCtx::sparse_read; C librados snapshots independently preserve object
-bytes, mtime, xattrs and version. No mutations, retries or placement logic.
+executes IoCtx::sparse_read, at the head or at an optional read snap id
+(IoCtx::snap_set_read); C librados snapshots of the head independently preserve
+object bytes, mtime, xattrs and version. No mutations, retries or placement logic.
 """
 import argparse
 from pathlib import Path
@@ -17,17 +18,25 @@ import osd_xattr_native as xattr
 
 MAX_UINT64 = (1 << 64) - 1
 MAX_LENGTH = 1 << 20
+# CEPH_NOSNAP and CEPH_SNAPDIR are not read snap ids; 0 means the head and is
+# expressed by omitting the field.
+MAX_SNAP = MAX_UINT64 - 2
 
 
 def request(raw):
-    if not isinstance(raw, dict) or set(raw) != {"object", "offset", "length"}:
+    if not isinstance(raw, dict) or set(raw) not in ({"object", "offset", "length"}, {"object", "offset", "length", "snap"}):
         raise ValueError("invalid sparse read input fields")
     name = xattr.identity(raw["object"], "object")
     offset = omap.integer(raw["offset"], MAX_UINT64, "offset")
     length = omap.integer(raw["length"], MAX_LENGTH, "length")
     if not length or offset + length > MAX_UINT64:
         raise ValueError("zero or overflowing sparse read range")
-    return name, offset, length
+    snap = None
+    if "snap" in raw:
+        snap = omap.integer(raw["snap"], MAX_SNAP, "snap")
+        if not snap:
+            raise ValueError("zero read snap id; omit it for the head")
+    return name, offset, length, snap
 
 
 def validate_observation(result, offset, length):
@@ -77,7 +86,7 @@ def native_execution(args):
 
 
 def run(root, out):
-    name, offset, length = request(omap.read_json(out / "osd-sparse-read-input.json"))
+    name, offset, length, snap = request(omap.read_json(out / "osd-sparse-read-input.json"))
     metadata = omap.read_json(out / "osd-oracle.json")
     version = (out / "daemon-version").read_text().strip()
     if "20.2.4" not in version or xattr.SOURCE_COMMIT not in version:
@@ -89,18 +98,18 @@ def run(root, out):
     with xattr.client_connection(native, root, metadata, "test") as io:
         before = native.snapshot(io, name, [])
         args = [str(out / "osd_sparse_read_oracle"), str(root / "ceph.conf"), str(root / "keyring"),
-                metadata["pool"], name.decode(), str(offset), str(length)]
+                metadata["pool"], name.decode(), str(offset), str(length)] + ([str(snap)] if snap is not None else [])
         observed, execution, failed = native_execution(args)
         if failed:
             omap.publish(out, "osd-sparse-read-result", dict(source_commit=xattr.SOURCE_COMMIT,
-                         object=name.decode(), offset=offset, length=length, failed=True, native_execution=execution))
+                         object=name.decode(), offset=offset, length=length, snap=snap, failed=True, native_execution=execution))
             raise RuntimeError("native sparse read execution failed: " + json.dumps(execution))
         result = json.loads(observed.stdout)
         data = validate_observation(result, offset, length)
         after = native.snapshot(io, name, [])
         if before != after:
             raise RuntimeError("native sparse read altered object state")
-    result.update(source_commit=xattr.SOURCE_COMMIT, object=name.decode(), offset=offset, length=length,
+    result.update(source_commit=xattr.SOURCE_COMMIT, object=name.decode(), offset=offset, length=length, snap=snap,
                   data=xattr.encode(data), before=before, after=after, native_same_range=True, native_execution=execution)
     omap.publish(out, "osd-sparse-read-result", result)
 

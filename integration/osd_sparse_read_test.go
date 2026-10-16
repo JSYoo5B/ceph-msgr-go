@@ -22,6 +22,7 @@ type nativeSparseRead struct {
 	Code    int32                `json:"code"`
 	Offset  uint64               `json:"offset"`
 	Length  uint64               `json:"length"`
+	Snap    *uint64              `json:"snap"`
 	Extents []cephmsgr.OSDExtent `json:"extents"`
 	Data    []byte               `json:"data"`
 	Version uint64               `json:"version"`
@@ -32,8 +33,19 @@ type nativeSparseRead struct {
 
 func sparseReadOracle(t *testing.T, ctx context.Context, name string, offset, length uint64) nativeSparseRead {
 	t.Helper()
+	return sparseReadOracleAt(t, ctx, name, offset, length, 0)
+}
+
+// sparseReadOracleAt runs the native IoCtx::sparse_read at read snap id snap
+// (IoCtx::snap_set_read), or at the head when snap is 0.
+func sparseReadOracleAt(t *testing.T, ctx context.Context, name string, offset, length, snap uint64) nativeSparseRead {
+	t.Helper()
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
-	data, err := json.Marshal(map[string]any{"object": name, "offset": offset, "length": length})
+	input := map[string]any{"object": name, "offset": offset, "length": length}
+	if snap != 0 {
+		input["snap"] = snap
+	}
+	data, err := json.Marshal(input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +63,8 @@ func sparseReadOracle(t *testing.T, ctx context.Context, name string, offset, le
 	if err = json.Unmarshal(data, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Object != name || result.Offset != offset || result.Length != length || result.Commit != "7f793731f1b39eb4f465e960113d2363c311b964" || !reflect.DeepEqual(result.Before, result.After) {
+	if result.Object != name || result.Offset != offset || result.Length != length || (result.Snap == nil) != (snap == 0) || result.Snap != nil && *result.Snap != snap ||
+		result.Commit != "7f793731f1b39eb4f465e960113d2363c311b964" || !reflect.DeepEqual(result.Before, result.After) {
 		t.Fatal("native SPARSE_READ identity/state differs", result)
 	}
 	return result

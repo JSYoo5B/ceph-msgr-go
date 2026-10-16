@@ -3,9 +3,11 @@ package cephmsgr
 import "github.com/jsyoo5b/ceph-msgr-go/internal/osd"
 
 // OSDSparseRead reads allocated ranges and their bytes from an explicitly
-// targeted replicated-pool head object. The sole operation must have no flags,
-// snapshot metadata, or implicit whole-object range. Length must be positive
-// and bounded. Allocation granularity depends on the backing object store.
+// targeted replicated-pool object: the head, or at ReadSnapshot the clone (or
+// head) the OSD resolves for that snapshot. The sole operation must have no
+// flags, write context or implicit whole-object range. Length must be
+// positive and bounded. Allocation granularity depends on the backing object
+// store.
 const OSDSparseRead OSDOpcode = OSDOpcode(osd.SparseRead)
 
 // OSDSparseReadInput bounds accepted encoded output, including eight bytes of

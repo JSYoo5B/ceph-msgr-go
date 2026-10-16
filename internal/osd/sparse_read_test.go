@@ -53,8 +53,19 @@ func TestSparseReadBoundsAndIsolation(t *testing.T) {
 		t.Fatal("aggregate reply budget escaped", err)
 	}
 	r.ReadSnap = 1
+	m, err := EncodeRequest(r, oracleFeatures, 1024)
+	if err != nil {
+		t.Fatal("snapshot sparse read rejected", err)
+	}
+	head := sparseReadNativeRequest()
+	head.ReadSnap = 0
+	plain, err := EncodeRequest(head, oracleFeatures, 1024)
+	if err != nil || len(m.Front) != len(plain.Front) || bytes.Equal(m.Front, plain.Front) {
+		t.Fatal("snapshot sparse read did not carry its snap id", err)
+	}
+	r.SnapSeq = 1
 	if _, err := EncodeRequest(r, oracleFeatures, 1024); err == nil {
-		t.Fatal("snapshot accepted")
+		t.Fatal("read snapshot with a SnapContext accepted")
 	}
 }
 

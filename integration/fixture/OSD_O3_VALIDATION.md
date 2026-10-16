@@ -51,6 +51,15 @@ than normalized into one layout. The C++ helper links the selected image's
 librados/ceph-common; build and loader receipts are retained separately. Ordinary
 CI explicitly skips this comparison unless the optional helper is staged.
 
+Since 2026-10-16 the helper also takes an optional read snap id
+(`IoCtx::snap_set_read`), and SPARSE_READ at a read snapshot is compared on
+both profiles above: a clone with holes, the head through a later or higher
+snap id, ENOENT where no clone covers the snap id, reads past the clone's end
+and the clone of a deleted head. The rebuilt helper, its hashes and the
+observed maps are in
+[OSD_SNAPSHOT_VALIDATION.md](OSD_SNAPSHOT_VALIDATION.md) ("Snapshot
+SPARSE_READ"); the ten head cases above passed again with it.
+
 Watch/notify covers a Go notifier with two independent native watchers, explicit
 Go watch registration and ping, partial timeout with native replies and one
 unacknowledged Go watch, a native binary notifier receiving an explicit binary

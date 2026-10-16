@@ -45,7 +45,8 @@ and `AttachChildRequest.cc` (clone format 2), `librbd/image/RefreshRequest.cc`
 `librbd/operation/FlattenRequest.cc`, `cls/rbd/cls_rbd.cc` (`copyup`,
 `sparse_copyup`, `get_parent`, `parent_get`, `parent_overlap_get`,
 `children_list`, parent detach), `msg/async/AsyncConnection.cc` and
-`msg/DispatchQueue.cc` (the `debug_ms 1` lines), `messages/MOSDOp.h` and
+`msg/DispatchQueue.cc` (the `debug_ms 1` lines), the `debug_rbd 20`
+`convert_copyup_extent_map` line of `CopyupRequest.cc`, `messages/MOSDOp.h` and
 `MOSDOpReply.h` (their print), `pybind/rbd/rbd.pyx` and
 `pybind/rados/rados.pyx` (LGPL-2.1 references; no code is copied). The
 provider is `github.com/JSYoo5B/ceph-testcontainers-go` v0.2.0
@@ -326,12 +327,17 @@ against the token, the feature set 1 and clone format 2.
   with `RBD.clone(..., features=1, order=16, clone_format=2)`.
 - `write` writes the native extent to the clone and flushes, and `flatten`
   flattens the clone, each through an image opened read-write in a second
-  librados client whose Messenger traffic is logged (`debug_ms 1`) to a
-  private file in the oracle container. The driver keeps only the lines of
-  requests sent (`-->`) and replies received (`<==`) for data objects
-  (`rbd_data.`), cut to the `osd_op(...)` or `osd_op_reply(...)` print, at
-  most 96 lines of at most 600 characters, and deletes the file. These lines
-  are the native op vectors, SnapContexts, read snapshots and results.
+  librados client whose Messenger traffic (`debug_ms 1`) and librbd
+  (`debug_rbd 20`) are logged to a private file in the oracle container. The
+  driver keeps only the lines of requests sent (`-->`) and replies received
+  (`<==`) for data objects (`rbd_data.`), cut to the `osd_op(...)` or
+  `osd_op_reply(...)` print, at most 96 lines of at most 600 characters, and
+  librbd's copy-up extent maps (`CopyupRequest::convert_copyup_extent_map`,
+  kept from the method name on: the data object, the parent image extents
+  and the object extents), at most 16 lines of at most 600 characters, as
+  `copyup_trace`; then it deletes the file. These lines are the native op
+  vectors, SnapContexts, read snapshots and results, and the sparse parent
+  map each native copy-up was built from.
 - `snapshot` creates the clone snapshot through a read-write open.
 - Every action ends with a read-only observation: librbd views (stat,
   features, operation features, flags, snapshots, `get_parent_image_spec()`

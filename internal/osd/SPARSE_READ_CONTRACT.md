@@ -7,10 +7,19 @@ written from LGPL-2.1 `src/include/rados.h:257`,
 `src/osd/PrimaryLogPG.cc:5931-6024`; no implementation is copied.
 
 `OSDSparseRead` reads a caller-selected nonempty interval on a caller-targeted
-replicated-pool head object. The operation must be standalone, with no flags,
-write context or snapshot selection. Offset plus length must not overflow, and
-length must fit the configured message bound. EC, compound sequencing and
-snapshot sparse reads require separate characterization and are unsupported.
+replicated-pool object, the head or a read snapshot (`ReadSnap`). The
+operation must be standalone, with no flags or write context. Offset plus
+length must not overflow, and length must fit the configured message bound.
+At a snapshot the OSD resolves the object context for that snap id and runs
+the same handler on the resolved object (`oi.soid`, PrimaryLogPG.cc:5935): the
+head when the snap id is above the object's snapset sequence
+(PrimaryLogPG.cc:12169), otherwise the first clone at or above the snap id,
+or -ENOENT when there is none (12187-12194), as for READ. The resolved
+object's size bounds the read and its store allocation map gives the
+extents. librbd sends this form for whole-object parent reads at the parent
+snapshot (observed in native traces) and, per source, for clone-snapshot
+reads. EC and compound sequencing require
+separate characterization and are unsupported.
 The caller still supplies placement, map epoch and connection identity.
 
 The request uses the ordinary offset/length extent union and no input bytes.
@@ -39,7 +48,8 @@ wire compatibility when regenerated and compared; their replies are constructed
 values rather than observations of OSD execution.
 
 `tools/osd_sparse_read_oracle.cc` independently calls public C++
-`IoCtx::sparse_read` for the exact same offset/length. Its native return value
+`IoCtx::sparse_read` for the exact same offset/length, after
+`IoCtx::snap_set_read` when a snap id is given. Its native return value
 is the number of extents, unlike the wire operation result zero on success.
 `tools/osd_sparse_read_oracle.py` restricts reads to fixture-owned object names,
 checks the pinned daemon identity, bounds input/output and retains independent
@@ -53,6 +63,13 @@ read-only object preservation and local-budget session isolation. It writes
 host IPv4 with three BlueStore replicas, and secure/AES256K IPv6 CGO=0 container
 with one MemStore. Each ran all ten cases, including an exact same-range native
 C++ comparison; see [acceptance](../../integration/fixture/OSD_O3_VALIDATION.md). Product builds have no native dependencies.
+`integration/osd_snap_sparse_read_test.go` compares sixteen snapshot cases
+(a clone with holes, ranges inside and past the clone's EOF, snap ids that
+resolve to the head, an object created after the snapshot, the clone of a
+deleted head) with the native C++ client on CRC/AES host IPv4 three BlueStore
+replicas and secure/AES256K IPv6 container single MemStore; result code,
+extents, bytes and user version matched in every case. See
+[the snapshot record](../../integration/fixture/OSD_SNAPSHOT_VALIDATION.md).
 
 ## Optional independent native client staging
 

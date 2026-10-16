@@ -75,7 +75,8 @@ func TestRBDClonePlanIsTokenBound(t *testing.T) {
 			t.Fatal("RBD image driver does not admit the clone acceptance's images")
 		}
 	}
-	if !strings.Contains(rbdCloneNativePython, "TRACE_LIMIT, TRACE_WIDTH = 96, 600") || rbdCloneTraceLimit != 96 || rbdCloneTraceWidth != 600 {
+	if !strings.Contains(rbdCloneNativePython, "TRACE_LIMIT, TRACE_WIDTH, COPYUP_LIMIT = 96, 600, 16") || rbdCloneTraceLimit != 96 || rbdCloneTraceWidth != 600 || rbdCloneCopyupLimit != 16 ||
+		!strings.Contains(rbdCloneNativePython, "'"+strings.TrimSuffix(rbdCloneCopyupPrefix, "rbd_data.")+"rbd_data.'") || !strings.Contains(rbdCloneNativePython, "debug_rbd='20'") {
 		t.Fatal("native trace bounds differ between the driver and the fixture")
 	}
 }
@@ -196,13 +197,14 @@ func rbdCloneOutput(token string, plan rbdClonePlan, action string) map[string]a
 		{"direction": "send", "message": "osd_op(unknown.0.0:5 3.6 3:6c2e5d4f:::rbd_data." + cloneID + ".0000000000000003:head [stat] snapc 0=[] ondisk+write e24)"},
 		{"direction": "receive", "message": "osd_op_reply(5 rbd_data." + cloneID + ".0000000000000003 [stat] v0'0 uv0 ondisk = -2 ((2) No such file or directory))"},
 	}
+	copyups := []map[string]any{{"message": "convert_copyup_extent_map: rbd_data." + cloneID + ".0000000000000003 image_extents=[212992,4096], object_extents=[16384,4096]"}}
 	switch action {
 	case "setup":
 		value["writes"] = append(writes("parent-pre", plan.ParentPreWrites), writes("parent-post", plan.ParentPostWrites)...)
 	case "write":
-		value["writes"], value["trace"] = writes("native", plan.NativeWrites), trace
+		value["writes"], value["trace"], value["copyup_trace"] = writes("native", plan.NativeWrites), trace, copyups
 	case "flatten":
-		value["trace"], value["flatten_ns"] = trace, 17
+		value["trace"], value["flatten_ns"], value["copyup_trace"] = trace, 17, copyups
 	}
 	return value
 }
@@ -274,6 +276,7 @@ func TestRBDCloneNativeOutputShapeIsClosed(t *testing.T) {
 		"short write":           func(v map[string]any) { v["writes"].([]map[string]any)[0]["written"] = 1 },
 		"post write as pre":     func(v map[string]any) { v["writes"].([]map[string]any)[7]["phase"] = "parent-pre" },
 		"trace on setup":        func(v map[string]any) { v["trace"] = rbdCloneOutput(token, plan, "write")["trace"] },
+		"copy-ups on setup":     func(v map[string]any) { v["copyup_trace"] = rbdCloneOutput(token, plan, "write")["copyup_trace"] },
 		"flatten time on setup": func(v map[string]any) { v["flatten_ns"] = 3 },
 	} {
 		value := rbdCloneOutput(token, plan, "setup")
@@ -288,6 +291,13 @@ func TestRBDCloneNativeOutputShapeIsClosed(t *testing.T) {
 			v["trace"].([]map[string]any)[0]["message"] = "osd_op(unknown.0.0:5 rbd_header.c10e0001 [call])"
 		},
 		"trace other direction": func(v map[string]any) { v["trace"].([]map[string]any)[0]["direction"] = "other" },
+		"copy-up line of another method": func(v map[string]any) {
+			v["copyup_trace"].([]map[string]any)[0]["message"] = "prepare_copyup_data: rbd_data.c10e0001.0000000000000003"
+		},
+		"copy-up line too wide": func(v map[string]any) {
+			v["copyup_trace"].([]map[string]any)[0]["message"] = rbdCloneCopyupPrefix + strings.Repeat("x", rbdCloneTraceWidth)
+		},
+		"copy-up line field": func(v map[string]any) { v["copyup_trace"].([]map[string]any)[0]["direction"] = "send" },
 		"trace too wide": func(v map[string]any) {
 			v["trace"].([]map[string]any)[0]["message"] = "osd_op(rbd_data." + strings.Repeat("x", rbdCloneTraceWidth) + ")"
 		},
@@ -312,6 +322,20 @@ func TestRBDCloneNativeOutputShapeIsClosed(t *testing.T) {
 	tooLong["trace"] = lines
 	if _, err := decodeRBDCloneNative("write", token, 9, plan, encode(tooLong)); err == nil {
 		t.Fatal("trace beyond its bound admitted")
+	}
+	tooMany := rbdCloneOutput(token, plan, "flatten")
+	var copyups []map[string]any
+	for len(copyups) <= rbdCloneCopyupLimit {
+		copyups = append(copyups, tooMany["copyup_trace"].([]map[string]any)[0])
+	}
+	tooMany["copyup_trace"] = copyups
+	if _, err := decodeRBDCloneNative("flatten", token, 9, plan, encode(tooMany)); err == nil {
+		t.Fatal("copy-up trace beyond its bound admitted")
+	}
+	empty := rbdCloneOutput(token, plan, "flatten")
+	empty["copyup_trace"] = []map[string]any{}
+	if got, err := decodeRBDCloneNative("flatten", token, 9, plan, encode(empty)); err != nil || got.CopyupTrace == nil || len(got.CopyupTrace) != 0 {
+		t.Fatal("empty copy-up trace of a traced action refused", err)
 	}
 	for name, change := range map[string]func(map[string]any){
 		"no flatten time":         func(v map[string]any) { delete(v, "flatten_ns") },
