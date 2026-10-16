@@ -90,8 +90,9 @@ func (e *MDSRequestForwardedError) Error() string {
 
 // MDSRequest is one raw MClientRequest. Args is the packed op-specific
 // ceph_mds_request_args union, prepared by the caller. Retry and Forward are
-// the attempt counters the caller wants to report; resubmission after a
-// forward or failure is always a caller decision and gets a new TID.
+// the attempt counters the caller wants to report. Resubmission is always a
+// caller decision: ResubmitForwarded and ReconnectSession keep the original
+// TID, while a new Submit gets a new one.
 // Stamp zero means the local send time.
 type MDSRequest struct {
 	Op                   uint32

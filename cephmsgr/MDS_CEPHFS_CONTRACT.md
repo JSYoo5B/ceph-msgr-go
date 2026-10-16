@@ -258,9 +258,21 @@ standby takeover while the rank-1 session stayed open. See
 [the ranks record](../integration/fixture/MDS_CEPHFS_RANKS_VALIDATION.md).
 `ResubmitForwarded` resends a forwarded call once on the destination rank's
 session with its original TID, stamp and the reported forward count, as
-native clients do; a forward carries `Arrival` like replies. Not exercised
-live: forwarded mutations, requests in flight during migration,
-standby-replay and more than two ranks.
+native clients do; a forward carries `Arrival` like replies. A three-rank
+acceptance with a standby-replay follower (product `b50939e`, both profiles)
+resubmitted a CREATE and a MKDIR along a two-hop forward chain (rank 0 to 1
+to 2, forward counts 1 and 2) with the same TIDs and saw each executed once
+on rank 2; requests submitted while rank 0 held a FLUSHMSG for a subtree
+export were forwarded after the acknowledgement and executed once on rank 1;
+and after `mds fail` of rank 0 the follower took over (up:replay in about
+0.85 s, active in about 6 s), `ReconnectSession` resubmitted two unsafe
+requests that the new rank 0 answered safe and traceless, while ranks 1 and 2
+kept their sessions. A replayed MKDIR's inode is only in its earlier unsafe
+reply, and a rank that must allocate an inode answers CREATE safe first
+without an unsafe reply. See
+[the replay record](../integration/fixture/MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md).
+Not exercised live: followers or takeovers of ranks other than 0, a rank
+failing mid-forward and migration with dirty file caps.
 
 A completion acceptance (product `5c5db18`, both profiles, eight leaves
 each) restarted the MDS four times. Requests the MDS executed and journaled
