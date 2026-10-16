@@ -25,7 +25,7 @@ func TestRBDBaseClosedProfileAndCredentials(t *testing.T) {
 		env := rbdBaseProfileEnv()
 		env["CEPH_MSGR_TEST_RUNTIME"] = runtime
 		p, err := loadProfile(func(k string) string { return env[k] })
-		if err != nil || p.testRun != "^TestCephRBD(Base|Write|ExclusiveLock|Clone)Integration$" || p.rbdBase != "1" || p.mdsFresh != "0" || p.osdPGV8() || p.cleanupBudget() != 2*time.Minute {
+		if err != nil || p.testRun != "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$" || p.rbdBase != "1" || p.mdsFresh != "0" || p.osdPGV8() || p.cleanupBudget() != 2*time.Minute {
 			t.Fatal("RBD base did not select its isolated legacy-v6 fixture", p, err)
 		}
 		if bootstrap := fixtureBootstrapConfig(p); !strings.Contains(bootstrap, "osd_pool_default_flag_hashpspool = false") || strings.Contains(bootstrap, "mon_allow_pool_delete") {
@@ -64,7 +64,7 @@ func TestRBDBaseClosedProfileAndCredentials(t *testing.T) {
 		}
 	}
 	env := rbdBaseProfileEnv()
-	env["CEPH_MSGR_TEST_RUN"] = "^TestCephRBD(Base|Write|ExclusiveLock|Clone)Integration$"
+	env["CEPH_MSGR_TEST_RUN"] = "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
 	env["CEPH_MSGR_TEST_OSD_STORE"] = "bluestore"
 	env["CEPH_MSGR_TEST_CONNECTION_MODE"] = "crc"
 	if p, err := loadProfile(func(k string) string { return env[k] }); err != nil || p.testRun != env["CEPH_MSGR_TEST_RUN"] {

@@ -203,6 +203,16 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	if fields, err := c.request(out, "rbd-journal"); err != nil {
+		return err
+	} else if fields != nil {
+		if err := c.rbdJournalControl(ctx, out, fields); err != nil {
+			return err
+		}
+		if err := publishAck(out, "rbd-journal-completed."+fields[0]); err != nil {
+			return err
+		}
+	}
 	if fields, err := c.request(out, "mds-fresh-observe"); err != nil {
 		return err
 	} else if fields != nil {

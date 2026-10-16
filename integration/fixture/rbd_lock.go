@@ -404,7 +404,7 @@ try:
         if action == 'setup':
             # The clone acceptance's parent and clone precede this image.
             listed = sorted(text(i) for i in rbd.RBD().list(ioctx))
-            planned = (plan['base_image'], plan['write_image'], 'ceph-msgr-parent-' + token, 'ceph-msgr-clone-' + token)
+            planned = (plan['base_image'], plan['write_image'], 'ceph-msgr-parent-' + token, 'ceph-msgr-clone-' + token, 'ceph-msgr-journal-' + token)
             if plan['base_image'] not in listed or any(i not in planned for i in listed):
                 raise ValueError('owned RBD pool holds an unplanned image')
             rbd.RBD().create(ioctx, name, plan['size'], order=plan['order'], old_format=False, features=plan['features'])
