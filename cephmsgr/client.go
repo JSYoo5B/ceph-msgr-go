@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,14 @@ type Client struct {
 	mon, mgr      *session.Session
 	monReady      bool
 	authErr       error // Explicit MON reauthentication rejection, until recovery.
+	// authBarrier is the highest auth epoch learned as an increase over a
+	// known MonMap. authRefreshed holds, per MON endpoint, the auth epoch of
+	// the first MonMap a session to it received: that map answers our
+	// subscription under the MON's lock, after the commit's AuthMonitor
+	// refresh, so a handshake to that MON started afterwards mints tickets
+	// from refreshed keys.
+	authBarrier   uint32
+	authRefreshed map[string]uint32
 	sessions      map[*session.Session]struct{}
 	mgrGate       chan struct{}
 	wake          chan struct{}
@@ -370,7 +379,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		targets = append(targets, target{endpoint: dialAddress(address), address: address})
 	}
 	seen := make(map[target]bool)
-	for _, candidateTarget := range targets {
+	barrierRetried := make(map[target]bool)
+	for i := 0; i < len(targets); i++ {
+		candidateTarget := targets[i]
 		if seen[candidateTarget] {
 			continue
 		}
@@ -379,6 +390,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		c.mu.Lock()
 		candidate := copyAuth(c.auth)
 		attemptEpoch, knownEpoch := c.monMap.AuthEpoch, c.monMap.Epoch != 0
+		refreshedBefore := c.authRefreshed[candidateTarget.endpoint]
 		c.mu.Unlock()
 		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate, MDSMaps: c.options.EnableMDSMaps, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile.replicatedPG()})
 		if err != nil {
@@ -555,10 +567,24 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		var installedObservation *authIssuerObservation
 		var oldOSDs []*session.Session
 		var oldMDSs []*session.Session
+		barrierRetry := false
 		if err == nil {
 			c.mu.Lock()
+			if c.authRefreshed == nil {
+				c.authRefreshed = make(map[string]uint32)
+			}
+			c.authRefreshed[candidateTarget.endpoint] = max(c.authRefreshed[candidateTarget.endpoint], candidateEpoch)
 			if c.closed {
 				err = ErrClosed
+			} else if candidateEpoch >= c.authBarrier && refreshedBefore < c.authBarrier && !barrierRetried[candidateTarget] {
+				// A key wipe commits the MonMap auth epoch and the new keys
+				// together, but the MON pushes the MonMap before AuthMonitor
+				// applies the keys and handshakes mint tickets outside the
+				// MON's lock. This handshake may have used pre-wipe service
+				// keys; its MonMap reply now proves the refresh, so discard
+				// the tickets and authenticate to the same MON once more.
+				err = errAuthRefreshBarrier
+				barrierRetry = true
 			} else {
 				if (knownEpoch && c.monMap.AuthEpoch > attemptEpoch) || candidateEpoch < c.monMap.AuthEpoch {
 					// Authentication may precede a key wipe learned from MonMap.
@@ -619,13 +645,23 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			c.signal()
 		}
 		c.mu.Unlock()
-		failures = append(failures, err)
+		if barrierRetry {
+			barrierRetried[candidateTarget] = true
+			seen[candidateTarget] = false
+			targets = slices.Insert(targets, i+1, candidateTarget)
+		} else {
+			failures = append(failures, err)
+		}
 		if ctx.Err() != nil || c.ctx.Err() != nil {
-			return errors.Join(failures...)
+			return errors.Join(append(failures, err)...)
 		}
 	}
 	return errors.Join(failures...)
 }
+
+// errAuthRefreshBarrier discards a MON session whose tickets may predate the
+// auth epoch's key refresh on that MON; it is retried, never returned alone.
+var errAuthRefreshBarrier = errors.New("ceph: MON tickets may predate the auth epoch key refresh")
 
 func waitMonitorAdmission(ctx context.Context, s *session.Session, ready <-chan struct{}) error {
 	select {
@@ -681,6 +717,9 @@ func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (bool, e
 		c.fsid = mon.FSID
 		if mon.Epoch >= c.monMap.Epoch {
 			if mon.AuthEpoch > c.monMap.AuthEpoch {
+				if c.monMap.Epoch != 0 {
+					c.authBarrier = max(c.authBarrier, mon.AuthEpoch)
+				}
 				c.auth = invalidateAuthTickets(c.auth)
 				c.wakeMonitor()
 			}

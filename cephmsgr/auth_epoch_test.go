@@ -89,7 +89,15 @@ func TestAuthEpochInvalidatesNewAuthorizersAndPreservesEstablishedManager(t *tes
 		t.Run(name, func(t *testing.T) {
 			renewing, release := make(chan struct{}), make(chan struct{})
 			defer close(release)
+			var client atomic.Pointer[Client]
+			barrierHeld := make(chan bool, 1)
 			c, ctx, fixture := epochClient(t, 0, func(ctx context.Context, round uint32, cfg *peerConfig) error {
+				if round == 3 {
+					// The renewal handshake raced the key refresh: its tickets
+					// must not be published before the barrier handshake.
+					_, err := client.Load().snapshotAuth().Authorizer(cephx.ServiceMgr)
+					barrierHeld <- errors.Is(err, cephx.ErrTicket)
+				}
 				if round == 2 {
 					close(renewing)
 					select {
@@ -103,6 +111,7 @@ func TestAuthEpochInvalidatesNewAuthorizersAndPreservesEstablishedManager(t *tes
 				}
 				return nil
 			})
+			client.Store(c)
 			var mutation <-chan error
 			var cancelMutation context.CancelFunc
 			if established {
@@ -153,8 +162,14 @@ func TestAuthEpochInvalidatesNewAuthorizersAndPreservesEstablishedManager(t *tes
 			}
 			release <- struct{}{}
 			waitEpochTickets(t, c, ctx)
-			if c.Snapshot().GlobalID != before.GlobalID || fixture.monDials.Load() != 2 {
-				t.Fatal("auth-epoch renewal reset identity or repeated authentication")
+			// One renewal handshake plus one barrier handshake to the same MON:
+			// the first MonMap reply proves that MON applied the new keys only
+			// after the renewal's tickets were minted.
+			if c.Snapshot().GlobalID != before.GlobalID || fixture.monDials.Load() != 3 {
+				t.Fatal("auth-epoch renewal reset identity or did not authenticate once past the key refresh", fixture.monDials.Load())
+			}
+			if held := <-barrierHeld; !held {
+				t.Fatal("tickets minted before the key refresh barrier were published")
 			}
 			input := []byte{0, 255, 1}
 			if result, err := c.MgrCommand(ctx, Command{JSON: []byte(`{"prefix":"status"}`), Input: input}); err != nil || !bytes.Equal(result.Data, input) {

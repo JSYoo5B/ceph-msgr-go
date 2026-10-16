@@ -170,3 +170,33 @@ issuance and MGR verifier boundaries:
 
 This proposal requires new native diagnostic work and independent validation of
 its secrecy and correlation boundaries. It is not implemented or a fix claim.
+
+## Root cause (CI triage, 2026-10-16)
+
+The four auth-epoch failures (b01a3cf, 37d7a4d, 494071b, af2c4e9) share one
+mechanism. In each, three fresh native `tell mgr.a version` probes made after
+the second wipe succeeded shortly before the Go attempt, so `mgr.a` held the
+post-wipe key 2; the Go blob failed with `could not decrypt ticket info`,
+meaning it was encrypted with the pre-wipe key 2. The Go cold ticket was
+minted 2.6 to 5.4 ms after the wipe command on a new MON connection.
+
+In the pinned source the wipe and the auth epoch bump commit together
+(AuthMonitor.cc:2107-2141) and the commit is applied under `mon.lock`
+(Paxos.cc:831-842, 896-947), refreshing MONMAP before AUTH
+(Monitor.cc:1037-1042). MonmapMonitor pushes the new MonMap to subscribers
+during its refresh (MonmapMonitor.cc:85-114, 1535-1563), before AuthMonitor
+applies the keys (AuthMonitor.cc:333-398), while new msgr2 handshakes take
+only `auth_lock` (Monitor.cc:6522-6530) and can mint tickets from the
+KeyServer mid-refresh. The client renewed on a fresh connection right after
+the push and walked into that window. A native MonClient renews in-session
+with MAuth, dispatched under `mon.lock` (Monitor.h:980-984), so it always
+lands after the refresh. This is a client race, not a provider issue.
+
+The product now records, per MON endpoint, the auth epoch of the first
+MonMap a session receives (the reply to its subscription, sent under
+`mon.lock` after the refresh). Renewal tickets from a handshake that started
+before that MON proved the current auth epoch are discarded and the client
+authenticates to the same MON once more. The synthetic auth-epoch tests
+cover the extra handshake and that the raced tickets are never published;
+the live cold-cycle rate (about 2.3% per cycle before the change) has not yet
+been remeasured.

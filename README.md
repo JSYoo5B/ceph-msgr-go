@@ -1520,7 +1520,13 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
 - 인증된 MonMap의 `auth_epoch`가 증가하면 새 접속에 사용할 ticket을
   조기 갱신한다. 기존 global ID와 갱신 검증용 이전 proof는 보존하며,
   이미 인증된 MGR 연결과 진행 중 명령을 유지한다. 갱신 중인 MON 후보가
-  이전 epoch의 인증 결과를 뒤늦게 게시하지 못하도록 검사한다.
+  이전 epoch의 인증 결과를 뒤늦게 게시하지 못하도록 검사한다. MON은 key
+  wipe를 commit할 때 새 MonMap을 먼저 보내고 새 key는 그 뒤에 적용하며,
+  새 연결의 handshake는 MON lock 밖에서 ticket을 만든다. 그래서 갱신
+  연결이 wipe 이전 key로 만든 ticket을 받을 수 있다. 해당 MON에서 같거나
+  높은 auth epoch의 첫 MonMap 응답을 받기 전에 시작한 갱신 handshake의
+  ticket은 버리고, 같은 MON에 한 번 더 인증한다. 첫 MonMap 응답은 구독
+  처리 중 MON lock 안에서 나가므로 그 MON이 새 key를 적용했다는 근거가 된다.
 - MON 재인증을 서버가 명시적으로 거절하면 기존 MON/MGR 연결에서 새
   명령 접수를 중단한다. 새 호출에는 `AuthenticationError`, 이미 전송을
   시작한 호출에는 인증 거절을 원인으로 가진 `OutcomeUnknownError`를
