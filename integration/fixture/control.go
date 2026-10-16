@@ -555,6 +555,15 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-upmap")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if err := c.upmapControl(ctx, out, fields); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-mds-maps")
 	if err != nil {
 		return err
