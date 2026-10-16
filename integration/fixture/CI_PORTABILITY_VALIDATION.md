@@ -44,3 +44,20 @@ history around the required native evidence without retaining that history.
 The exact isolated change set passed the fixture module's complete CGO=0 tests
 and 285 Python tests. Actual Windows and host MON CI execution remain separate
 verification; no run was canceled or retried for this change.
+
+## Request-v9 Linux SDK proof regression — 2026-10-16
+
+Run `38890511851` at `1b84aa13db0fc797f2048427a02f1ceaed4b5e93`
+failed both Windows Go-version unit jobs in the request-v9 SDK proof model.
+Its text writer translated the modeled Linux CMake cache to CRLF, whereas
+the native Linux producer correctly requires exact LF bytes. Commit
+`04b58b47a23439b6d6cf19710fc543a83f7dc158` writes those modeled files as
+explicit bytes, verifies their bytes and hashes, and retains rejection of
+CRLF, enabled Jaeger and defined HAVE_JAEGER. The native producer and its
+historical proof artifacts are unchanged.
+
+The complete Python suite passed 413 tests locally. Run `38893912494` at
+that exact correction SHA passed Windows unit jobs `116949721132`
+(Go 1.27.x) and `116949721304` (Go 1.24.0), plus Windows fixture tools job
+`116949721240`. These completed jobs establish this Windows correction;
+they do not establish completion of the whole native matrix.

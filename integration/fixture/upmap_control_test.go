@@ -6,7 +6,36 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestUpmapAuthWindowKeepsServiceRenewalAndOtherProfiles(t *testing.T) {
+	selected := profile{osd: "1", osdProfile: "replicated-pg-v8", osdReplicas: "3", osdStore: "bluestore", testRun: "^TestCephOSDUpmapIntegration$"}
+	for _, tc := range []struct {
+		name   string
+		change func(*profile)
+		auth   time.Duration
+	}{
+		{"selected", func(*profile) {}, 120 * time.Second},
+		{"other selector", func(p *profile) { p.testRun = "^TestCephOSDObjectBackoffFailoverIntegration$" }, 12 * time.Second},
+		{"whole suite", func(p *profile) { p.testRun = "" }, 12 * time.Second},
+		{"one OSD", func(p *profile) { p.osdReplicas = "1" }, 12 * time.Second},
+		{"no OSD", func(p *profile) { p.osd = "0" }, 12 * time.Second},
+		{"other wire profile", func(p *profile) { p.osdProfile = "replicated-pg-reply-v8" }, 12 * time.Second},
+		{"other store", func(p *profile) { p.osdStore = "memstore" }, 12 * time.Second},
+		{"MDS workflow", func(p *profile) { p.mdsFresh = "1" }, 12 * time.Second},
+		{"fractional auth", func(p *profile) { p.shortTickets = "1" }, shortTicketAuthTTL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := selected
+			tc.change(&p)
+			auth, service := fixtureTicketTTLs(p)
+			if auth != tc.auth || service != 12*time.Second {
+				t.Fatal("upmap AUTH isolation changed another ticket contract", auth, service)
+			}
+		})
+	}
+}
 
 func TestUpmapControlRejectsUnownedOrUnboundedRecipe(t *testing.T) {
 	valid := profile{osd: "1", osdProfile: "replicated-pg-v8", osdReplicas: "3", osdStore: "bluestore"}

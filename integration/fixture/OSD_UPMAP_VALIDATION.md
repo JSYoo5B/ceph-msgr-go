@@ -112,3 +112,53 @@ To reproduce either row, select `CEPH_MSGR_TEST_OSD=1`,
 `CEPH_MSGR_TEST_RUN=^TestCephOSDUpmapIntegration$`, a unique diagnostics
 directory, and that row's key/service cipher, connection mode, IP family
 and runtime before running `sh integration/run.sh` from the project root.
+
+## CI authentication window correction
+
+Run `38888886288`, job `116933272778` at source `648140e` failed in the
+CRC upmap row after items passed and before a full-transition Go request
+was submitted. The original log and downloaded diagnostics are retained at
+`/private/tmp/ceph-ci-fix-20261016-job-116933272778-original.log` and
+`/private/tmp/ceph-ci-upmap-648140e-first/ceph-diagnostics`.
+MON logs report an unavailable AUTH service secret and rejection of the
+old ticket for the same Go GlobalID 4752. Cleanup still restored overrides
+and removed both owned objects. The truncated logs do not establish a
+product renewal defect or the exact sequence that lost the reclaim proof.
+The secure row at `1b84aa1`, run `38890511851`, job `116938585002`,
+independently showed the same MON rejection for Go GlobalID 4755 and
+AUTH secret ID 6; its original diagnostics are retained at
+`/private/tmp/ceph-ci-upmap-1b84-secure-first`. It also completed cleanup.
+
+The exact three-BlueStore `replicated-pg-v8` upmap selector now uses a
+120-second AUTH ticket while retaining 12-second service tickets. This
+isolates long native placement controls from aggressive AUTH reclaim-proof
+expiry and continues service renewal. Other selectors and dedicated
+6.5-second AUTH tests retain their existing contracts. No product
+authentication, rejection, retry, GlobalID, or mutation behavior changes.
+Each native control now records public AUTH/OSD deadlines, readiness,
+GlobalID and rejection before and after execution, without ticket secrets.
+Every successful Go reply must retain the initial GlobalID.
+
+The corrected source passed root and fixture Go tests/vet with CGO disabled.
+Fresh Ceph 20.2.4 arm64 executions, using the image above, passed without
+retry: CRC/AES/IPv4 host in 36.20 seconds and secure/AES256K/IPv6 container
+in 35.79 seconds. Each retained eight native controls and ten Go replies,
+restored both overrides, removed both owned heads and explicitly retained
+the empty owned pool for fixture teardown. The receipt deadlines advanced
+during native controls, so longer AUTH validity did not remove renewal
+from these runs. No initial GlobalID changed and no rejection was hidden.
+
+The exact tested source SHA-256 values are
+`f01e97f5049dbc75647c2649dd4de43ef602a2966db672df6df100c3422b72b4`
+(`provider.go`) and
+`73efc4192d1ad3ecad4dc54043073764297e3419cf8c8a7e4d0b71eeba796c85`
+(`../osd_upmap_test.go`), based on `04b58b4`; only validation prose was
+edited afterward. Fresh artifacts are retained separately at
+`/private/tmp/ceph-ci-upmap-auth-crc-20261016` and
+`/private/tmp/ceph-ci-upmap-auth-secure-20261016`, with result SHA-256
+`6d08842cb92bb60a60aaf1a52ce0ddeb868b48dbf1c6cc853e503ac190c3b4a8`
+and `a0ff3ff7a5ea563edb4151bdf3e27076b07f2eb49549c1a29a81a54c28646bef`.
+The read-only inventory
+`/private/tmp/ceph-ci-upmap-auth-cleanup-audit-20261016.json` confirms all
+20 owned containers and both networks absent. These local results do not
+establish full GitHub CI success.

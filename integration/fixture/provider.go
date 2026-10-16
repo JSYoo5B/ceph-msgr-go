@@ -123,6 +123,15 @@ func fixtureTicketTTLs(p profile) (auth, service time.Duration) {
 		service = 120 * time.Second
 	}
 	auth = service
+	if p.osd == "1" && p.osdProfile == "replicated-pg-v8" && p.osdReplicas == "3" &&
+		p.osdStore == "bluestore" && p.mdsFresh != "1" && p.testRun == "^TestCephOSDUpmapIntegration$" {
+		// This placement-only recipe can spend tens of seconds in native
+		// controls. A 12 s AUTH ticket leaves only 3 s at renewal, less than
+		// one 10 s MON setup attempt on a busy runner. Keep its reclaim proof
+		// alive without changing the 12 s service-ticket renewal workload.
+		// Dedicated short/fractional authentication profiles stay unchanged.
+		auth = 120 * time.Second
+	}
 	if p.shortTickets == "1" {
 		auth = shortTicketAuthTTL
 	}

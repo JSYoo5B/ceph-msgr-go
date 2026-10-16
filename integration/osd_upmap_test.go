@@ -64,11 +64,27 @@ type nativeUpmapScope struct {
 	Unresolved string            `json:"unresolved_mutation"`
 }
 type upmapControlEvidence struct {
-	Action string           `json:"action"`
-	Raw    []byte           `json:"raw_response"`
-	Scope  nativeUpmapScope `json:"decoded_response"`
-	Error  string           `json:"error,omitempty"`
+	Action     string             `json:"action"`
+	Raw        []byte             `json:"raw_response"`
+	Scope      nativeUpmapScope   `json:"decoded_response"`
+	Error      string             `json:"error,omitempty"`
+	AuthBefore *upmapAuthEvidence `json:"auth_before,omitempty"`
+	AuthAfter  *upmapAuthEvidence `json:"auth_after,omitempty"`
 }
+type upmapAuthEvidence struct {
+	ObservedAt   time.Time                     `json:"observed_at"`
+	GlobalID     uint64                        `json:"global_id"`
+	MonitorReady bool                          `json:"monitor_ready"`
+	AuthTicket   cephmsgr.TicketState          `json:"auth_ticket"`
+	OSDTicket    cephmsgr.TicketState          `json:"osd_ticket"`
+	Rejection    *cephmsgr.AuthenticationError `json:"rejection,omitempty"`
+}
+
+func upmapAuthObservation(c *cephmsgr.Client) *upmapAuthEvidence {
+	s := c.Snapshot()
+	return &upmapAuthEvidence{time.Now().UTC(), s.GlobalID, s.Monitor.Ready, s.AuthTicket, s.OSDTicket, s.AuthRejection}
+}
+
 type upmapGoEvidence struct {
 	Stage   string              `json:"stage"`
 	Route   osdFixtureOracle    `json:"native_route"`
@@ -236,6 +252,7 @@ func TestCephOSDUpmapIntegration(t *testing.T) {
 		t.Skip("requires opt-in three-BlueStore replicated-pg-v8 native upmap fixture")
 	}
 	c, _, base, _ := replicatedPGFixture(t)
+	globalID := c.Snapshot().GlobalID
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	t.Cleanup(cancel)
 	original := replicatedPGNative(t, ctx, base.Name)
@@ -246,7 +263,9 @@ func TestCephOSDUpmapIntegration(t *testing.T) {
 	attempted, finishAttempted, cleaned := false, false, false
 	cleanupError := ""
 	control := func(call context.Context, action string) (nativeUpmapScope, error) {
+		before := upmapAuthObservation(c)
 		record, err := upmapControl(call, action)
+		record.AuthBefore, record.AuthAfter = before, upmapAuthObservation(c)
 		controls = append(controls, record)
 		return record.Scope, err
 	}
@@ -327,7 +346,7 @@ func TestCephOSDUpmapIntegration(t *testing.T) {
 			t.Fatal("caller-targeted upmap request failed; original submission retained and never replayed", stage, proof.Unknown, r.Submission.Transaction, r.Submission.MapEpoch, e)
 		}
 		checkReplicatedPGReply(t, r, route)
-		if r.Submission.ClientIncarnation != request.ClientIncarnation || r.Flags&cephmsgr.OSDReplyOnDisk == 0 {
+		if r.Submission.GlobalID != globalID || r.Submission.ClientIncarnation != request.ClientIncarnation || r.Flags&cephmsgr.OSDReplyOnDisk == 0 {
 			t.Fatal("upmap reply incarnation/completion differs", stage, r.Submission, r.Flags)
 		}
 		return r
