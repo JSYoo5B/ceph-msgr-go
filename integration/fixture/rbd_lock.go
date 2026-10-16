@@ -402,8 +402,10 @@ try:
     try:
         out['pool_id'] = ioctx.get_pool_id()
         if action == 'setup':
+            # The clone acceptance's parent and clone precede this image.
             listed = sorted(text(i) for i in rbd.RBD().list(ioctx))
-            if plan['base_image'] not in listed or any(i not in (plan['base_image'], plan['write_image']) for i in listed):
+            planned = (plan['base_image'], plan['write_image'], 'ceph-msgr-parent-' + token, 'ceph-msgr-clone-' + token)
+            if plan['base_image'] not in listed or any(i not in planned for i in listed):
                 raise ValueError('owned RBD pool holds an unplanned image')
             rbd.RBD().create(ioctx, name, plan['size'], order=plan['order'], old_format=False, features=plan['features'])
             with rbd.Image(ioctx, name) as image:

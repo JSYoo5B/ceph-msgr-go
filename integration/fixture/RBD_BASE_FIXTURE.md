@@ -2,10 +2,11 @@
 
 `CEPH_MSGR_TEST_RBD=1` is a closed development-only extension of the opt-in
 OSD fixture (`CEPH_MSGR_TEST_OSD=1`). It selects only
-`^TestCephRBD(Base|Write|ExclusiveLock)Integration$` (an explicit
+`^TestCephRBD(Base|Write|ExclusiveLock|Clone)Integration$` (an explicit
 `CEPH_MSGR_TEST_RUN` must be that selector; `go test` runs them in file order:
-`TestCephRBDBaseIntegration`, then `TestCephRBDExclusiveLockIntegration`, then
-`TestCephRBDWriteIntegration`) and requires the single-OSD `legacy-v6` recipe: one OSD
+`TestCephRBDBaseIntegration`, then `TestCephRBDCloneIntegration`, then
+`TestCephRBDExclusiveLockIntegration`, then `TestCephRBDWriteIntegration`) and
+requires the single-OSD `legacy-v6` recipe: one OSD
 (`CEPH_MSGR_TEST_OSD_REPLICAS=1`), the legacy CRUSH map and pools without
 HASHPSPOOL, so the Go client keeps the default `OSDProfileObjectHash` (v6
 requests with a caller-supplied raw object hash) and needs no extra MON
@@ -37,7 +38,15 @@ default lock policy), `librbd/ImageWatcher.cc`, `librbd/ExclusiveLock.cc`,
 `librbd/internal.cc` (`is_exclusive_lock_owner`, `lock_get_owners`),
 `librbd/api/DiffIterate.cc`, `librbd/object_map/DiffRequest.cc`,
 `librbd/operation/ObjectMapIterate.cc` and `tools/rbd/action/ObjectMap.cc`
-(`object-map check`), `pybind/rbd/rbd.pyx` and
+(`object-map check`), for the clone images `librbd/image/CloneRequest.cc`
+and `AttachChildRequest.cc` (clone format 2), `librbd/image/RefreshRequest.cc`
+(`parent_get`, `parent_overlap_get`, `enable_sparse_copyup`),
+`librbd/io/ObjectRequest.cc`, `librbd/io/CopyupRequest.cc`,
+`librbd/operation/FlattenRequest.cc`, `cls/rbd/cls_rbd.cc` (`copyup`,
+`sparse_copyup`, `get_parent`, `parent_get`, `parent_overlap_get`,
+`children_list`, parent detach), `msg/async/AsyncConnection.cc` and
+`msg/DispatchQueue.cc` (the `debug_ms 1` lines), `messages/MOSDOp.h` and
+`MOSDOpReply.h` (their print), `pybind/rbd/rbd.pyx` and
 `pybind/rados/rados.pyx` (LGPL-2.1 references; no code is copied). The
 provider is `github.com/JSYoo5B/ceph-testcontainers-go` v0.2.0
 (`CreatePool`, `rbd.InitPool`, `WaitForClean`, `CreateClient`,
@@ -61,6 +70,7 @@ in `rbd-base-owned.json` before it is issued and marked `applied` or
 | `native-setup` | the image `ceph-msgr-image-<token>` and its snapshot `ceph-msgr-snap-<token8>` (below) |
 | `native-write-<action>` | on the write test's request, the image `ceph-msgr-write-<token>` (section "Write image and closed write control") |
 | `native-lock-<action>` | on the exclusive-lock test's request, the image `ceph-msgr-lock-<token>` (section "Lock image and closed lock control") |
+| `native-clone-<action>` | on the clone test's request, the parent `ceph-msgr-parent-<token>`, its snapshot and the clone `ceph-msgr-clone-<token>` (section "Clone images and closed clone control") |
 
 Both identities hold RBD's standard capability profile bound to the owned
 pool. The Go client therefore authenticates and performs every RBD object
@@ -163,9 +173,9 @@ a closed sequence, each admitted once and only after its predecessor:
 carry `read_only: true`. The driver (Python `rbd`/`rados` bindings, librbd
 cache disabled, `err_to_stderr` only) re-checks every name against the token.
 
-- `setup` requires the pool to hold the base image and at most the lock image
-  (the exclusive-lock test runs before it), creates the write
-  image, writes the native extents of the plan around the snapshot, flushes and
+- `setup` requires the pool to hold the base image and at most the lock
+  image, the clone parent and the clone (the clone and exclusive-lock tests
+  run before it), creates the write image, writes the native extents of the plan around the snapshot, flushes and
   closes it.
 - Every action then observes the image through a read-only librbd open
   (which registers no header watch): `stat`, features, `list_snaps`,
@@ -222,8 +232,8 @@ cache disabled, `err_to_stderr` only, librbd's default exclusive-lock policy)
 re-checks every name against the token and the feature set 29.
 
 - `setup` requires the pool to hold the base image and at most the write
-  image (the write test's setup admits this image the same way), creates the
-  lock image, opens it read-write (librbd takes the lock for the write and
+  image, the clone parent and the clone (the write test's setup admits this
+  image the same way), creates the lock image, opens it read-write (librbd takes the lock for the write and
   releases it at close), writes the setup extent, flushes and closes it. It
   then sends librbd's id-object creation vector (`CreateRequest::
   create_id_object`: `create(exclusive)` then `rbd.set_id`, one python rados
@@ -279,6 +289,78 @@ must show is judged by the test. Each receipt is `rbd-lock-<action>.json`
 result). The lock action is bounded to 220 s (four Go steps of at most 30 s,
 the check and the observation).
 
+## Clone images and closed clone control
+
+`TestCephRBDCloneIntegration` (see
+[RBD_CLONE_VALIDATION.md](RBD_CLONE_VALIDATION.md)) uses the same token, pool
+and both identities, and two more images that exist only once the test asks
+for them. Their fixed plan is part of the journal from preparation on
+(`clone_plan` in `rbd-base-owned.json`):
+
+| Plan value | Content |
+| --- | --- |
+| parent | `ceph-msgr-parent-<token>`, format 2, order 16 (64 KiB objects), 384 KiB (six objects), features `layering` only |
+| parent snapshot | `ceph-msgr-psnap-<token8>` (not protected) |
+| clone | `ceph-msgr-clone-<token>` of the parent snapshot, clone format 2, features `layering` requested, order 16; clone format 2 sets the `clone-parent` and `clone-child` operation features, so both images report features 257 (`layering` and `operations`) |
+| clone snapshot | `ceph-msgr-csnap-<token8>` |
+| parent writes before the snapshot | 0 to 64 KiB, 72 to 88 KiB, 104 to 112 KiB, 128 to 160 KiB, 208 to 212 KiB, 232 to 240 KiB, 380 to 384 KiB (object 4 absent at the snapshot) |
+| parent writes after the snapshot | 0 to 16 KiB, 80 to 96 KiB, 160 to 192 KiB, 192 to 196 KiB, 256 to 320 KiB, 376 to 384 KiB (every object differs at the head) |
+| Go copy-up write | 84 to 92 KiB (clone object 1, 20 to 28 KiB: across a parent extent and a hole) |
+| native clone write | 196 to 200 KiB (clone object 3, 4 to 8 KiB, between parent holes) |
+| Go writes after the clone snapshot | 108 to 116 KiB (object 1 again), 156 to 164 KiB (object 2, never written in the clone) |
+
+The suite sends `rbd-clone` requests `<id> <token> <action>` through the
+control channel (`rbd-clone-completed.<id>` acknowledgement). The actions form
+a closed sequence, each admitted once and only after its predecessor:
+`setup`, `observe-copyup`, `write`, `snapshot`, `observe-snapshot`,
+`flatten`. Each is journaled in `rbd-base-owned.json` as
+`native-clone-<action>` before the native process starts; the two
+observations carry `read_only: true`. The driver (Python `rbd`/`rados`
+bindings, librbd cache disabled, `err_to_stderr` only) re-checks every name
+against the token, the feature set 1 and clone format 2.
+
+- `setup` requires the pool to hold exactly the base image (the clone test
+  runs right after the base test), creates the parent, writes the
+  pre-snapshot extents, flushes, creates the parent snapshot, writes the
+  post-snapshot extents, flushes and closes it, then clones the snapshot
+  with `RBD.clone(..., features=1, order=16, clone_format=2)`.
+- `write` writes the native extent to the clone and flushes, and `flatten`
+  flattens the clone, each through an image opened read-write in a second
+  librados client whose Messenger traffic is logged (`debug_ms 1`) to a
+  private file in the oracle container. The driver keeps only the lines of
+  requests sent (`-->`) and replies received (`<==`) for data objects
+  (`rbd_data.`), cut to the `osd_op(...)` or `osd_op_reply(...)` print, at
+  most 96 lines of at most 600 characters, and deletes the file. These lines
+  are the native op vectors, SnapContexts, read snapshots and results.
+- `snapshot` creates the clone snapshot through a read-write open.
+- Every action ends with a read-only observation: librbd views (stat,
+  features, operation features, flags, snapshots, `get_parent_image_spec()`
+  and `overlap()`, null without a parent) of the clone head, of the clone at
+  its snapshot once it exists, of the parent and of the parent at its
+  snapshot; `list_children2()` of the parent snapshot; librbd reads of all
+  four; librados `stat`/`read` of every clone data object at the head (and at
+  the clone snapshot) and of every parent data object at the parent
+  snapshot; and native librados `exec` lists with raw inputs and outputs: on
+  the clone `rbd.get_id`, then on its header `get_size`, `get_features`,
+  `get_flags`, `get_snapcontext`, `lock.get_info(rbd_lock)`, `parent_get`,
+  `parent_overlap_get`, `get_parent` (all at the head), `get_object_prefix`
+  and `op_features_get`; once the clone snapshot exists `snapshot_get`,
+  `parent_overlap_get`, `get_flags`, `get_protection_status`, `get_parent`
+  and `get_size` at it; on the parent `rbd.get_id`, then `get_object_prefix`,
+  `get_size`, `get_snapcontext`, `snapshot_get` and `children_list` at the
+  parent snapshot and `op_features_get`. The binary views are published as
+  `rbd-clone-<action>-clone-head.bin`, `-clone-objects-head.bin`,
+  `-parent-head.bin`, `-parent-snap.bin`, `-parent-objects-snap.bin` and,
+  with the clone snapshot, `-clone-snap.bin` and `-clone-objects-snap.bin`.
+
+The fixture checks the structure of each output (identity, names, the plan,
+image layout and features, the parent link of the clone and of its snapshot,
+the exec lists, object and blob consistency, the writes, the trace bounds and
+line shape); which parent, overlap, object, trace or LIST_SNAPS state each
+step must show is judged by the test. Each receipt is
+`rbd-clone-<action>.json` (request ID, plan, journaled action, decoded
+native output, bounded process result). Each action is bounded to 90 s.
+
 ## Uncertain outcomes and cleanup
 
 A failed, killed or truncated native process is an error: its output is
@@ -287,9 +369,9 @@ stops (as for the other fixture controls). Cleanup runs once (in the runner
 after the suites, and again from `Terminate`, which returns the cached
 result) and writes `rbd-base-cleanup.json`: it removes the owned pool with
 the provider's `RemovePool` (temporarily allowing pool deletion in the MON
-configuration database and removing the pool's CRUSH rule; the three images, their
-snapshots, image metadata, lock attributes, the lock image's object map and
-any lingering watch go with the pool), proves the pool's absence
+configuration database and removing the pool's CRUSH rule; the five images, their
+snapshots, the clone's parent link, image metadata, lock attributes, the lock
+image's object map and any lingering watch go with the pool), proves the pool's absence
 by name and ID in a fresh native OSDMap, and deletes both identities. An
 intended identity whose creation outcome is unknown is reported as an error.
 
@@ -298,9 +380,10 @@ intended identity whose creation outcome is unknown is reported as an error.
 `rbd-base-owned.json`, `rbd-base-setup.json`, `rbd-base-oracle.json`,
 `rbd-base-result.json`, `rbd-base-watch-state.json`, `rbd-base-cleanup.json`,
 the six `rbd-write-<action>.json` receipts, `rbd-write-watch-state.json`, the
-three `rbd-lock-<action>.json` receipts, `rbd-lock-state.json` and the suites'
-own `rbd-base-results.json`, `rbd-write-results.json` and
-`rbd-lock-results.json` are on the diagnostics allowlist.
+three `rbd-lock-<action>.json` receipts, `rbd-lock-state.json`, the six
+`rbd-clone-<action>.json` receipts and the suites' own
+`rbd-base-results.json`, `rbd-write-results.json`, `rbd-lock-results.json` and
+`rbd-clone-results.json` are on the diagnostics allowlist.
 The binary views and the keys are not archived.
 
 ## Unit coverage
@@ -335,3 +418,16 @@ unknown ops), the object-map lock and `assert_locked` inputs, the
 `object_map_update` input, the `ceph_crc32c` restatement against Ceph's own
 test vectors and the `BitVector<2>` decoder with and without CRCs (every
 truncation, damaged bytes, a trailing byte).
+`integration/fixture/rbd_clone_test.go` checks the token-bound clone plan and
+its object layout, that the lock and write drivers admit the parent and the
+clone, the closed and ordered clone request sequence and its journal targets,
+the closed-shape decoding of every clone action (snapshot views only after
+the snapshot, a parent-less clone head only after the flatten, the trace only
+for the write and the flatten and within its bounds), the per-action binary
+views, the journal of the clone plan and of an uncertain flatten, and that
+the clone driver parses as Python. `TestRBDCloneTestOnlyEncodings` in
+`integration/rbd_clone_test.go` checks the `ParentImageSpec`,
+`std::optional<uint64_t>`, legacy `get_parent`, `children_list` and snap
+context decoders (truncations and trailing bytes), the `sparse_copyup` input
+encoding, the partial and full copy-up extents, extent merging, sparse
+expansion and the Messenger line parser and request/reply pairing.

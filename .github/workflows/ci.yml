@@ -287,10 +287,10 @@ jobs:
           # Only the completion test is selected; its fencing client also enables OSD sessions with the default v6 object-hash profile.
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_completion: '1', test_run: '^TestCephMDSCephFSCompletionIntegration$' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_completion: '1', test_run: '^TestCephMDSCephFSCompletionIntegration$' }
-          # RBD acceptance owns a pool, two identities and three native librbd images on the legacy-v6 single-OSD fixture; its own opt-in excludes every MDS profile.
-          # Only the RBD base, exclusive-lock and write tests are selected; their Go client enables OSD sessions with the RBD capability profile.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write|ExclusiveLock)Integration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write|ExclusiveLock)Integration$' }
+          # RBD acceptance owns a pool, two identities and five native librbd images (a parent and its clone among them) on the legacy-v6 single-OSD fixture; its own opt-in excludes every MDS profile.
+          # Only the RBD base, clone, exclusive-lock and write tests are selected; their Go client enables OSD sessions with the RBD capability profile.
+          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write|ExclusiveLock|Clone)Integration$' }
+          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write|ExclusiveLock|Clone)Integration$' }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

@@ -146,6 +146,12 @@ type rbdBaseScope struct {
 	lockPlan          rbdLockPlan
 	lockLastRequestID int64
 	lockNext          int
+	// The RBD clone acceptance's parent and clone images in the same owned
+	// pool (rbd_clone.go): their plan, the last control request and the
+	// index of the next admitted action.
+	clonePlan          rbdClonePlan
+	cloneLastRequestID int64
+	cloneNext          int
 }
 
 func (x *rbdBaseScope) mutated(kind string) bool {
@@ -189,7 +195,7 @@ func (c *fixtureCluster) rbdBaseJournal() error {
 		native = "client.rbd-base-native-" + x.token
 	}
 	return writeMDSFreshJSON(x.out, "rbd-base-owned.json", map[string]any{
-		"source_commit": rbdBaseSource, "token": x.token, "fsid": c.profile.fsid, "plan": x.plan, "write_plan": x.writePlan, "lock_plan": x.lockPlan, "pool_intended": x.poolIntent, "pool_id": x.poolID,
+		"source_commit": rbdBaseSource, "token": x.token, "fsid": c.profile.fsid, "plan": x.plan, "write_plan": x.writePlan, "lock_plan": x.lockPlan, "clone_plan": x.clonePlan, "pool_intended": x.poolIntent, "pool_id": x.poolID,
 		"client_identity": identity, "native_identity": native, "mutations": x.mutations,
 	})
 }
@@ -616,8 +622,8 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 		return err
 	}
 	token := hex.EncodeToString(raw[:])
-	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), writePlan: rbdWritePlanFor(token), lockPlan: rbdLockPlanFor(token), poolID: -1}
-	if !x.plan.owned(token) || !x.writePlan.owned(token) || !x.lockPlan.owned(token) {
+	x := &rbdBaseScope{out: out, token: token, plan: rbdBasePlanFor(token), writePlan: rbdWritePlanFor(token), lockPlan: rbdLockPlanFor(token), clonePlan: rbdClonePlanFor(token), poolID: -1}
+	if !x.plan.owned(token) || !x.writePlan.owned(token) || !x.lockPlan.owned(token) || !x.clonePlan.owned(token) {
 		return errors.New("RBD base plan is not bound to its token")
 	}
 	c.rbdBase = x
