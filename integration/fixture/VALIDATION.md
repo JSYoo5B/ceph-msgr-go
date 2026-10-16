@@ -70,6 +70,13 @@ is not proof of a root-cause fix; the original failure is retained in
 [upstream #65](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/65).
 The test now removes the spare member once during cleanup only if normal
 removal has not already been submitted; uncertain mutations are not replayed.
+ceph-testcontainers-go v0.3.0 publishes the answer to that usage question in
+its Messenger fixture guide ("Daemon controls", MON add/remove row, proven by
+`TestMessengerClientProfileUnreachableMonitor`): wait until `quorum_status`
+reports the new monmap and the same election epoch twice before starting new
+native clients. The main path already used that barrier after the add and the
+remove; the cleanup remove now waits for it as well and, when it cannot be
+established, marks the fixture unusable for later ordinary tests.
 
 The first valid public OSD topology started and its native byte/stat2 oracle
 passed, but every Go test was correctly rejected at MON SESSION_IDENT with
@@ -83,7 +90,10 @@ flags 0 at epoch 13. Those are historical post-bootstrap workaround results.
 The current OSD recipe instead writes
 `[global] osd_pool_default_flag_hashpspool = false` into `bootstrap.conf` and
 passes it through `WithConfigFile` before `ceph.Run`, following the public
-recipe in [upstream #68](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/68).
+recipe in [upstream #68](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/68),
+now part of the v0.3.0 Messenger fixture guide's "Profiles" table (check every
+pool's flags, `.mgr` included). The legacy MDS profiles also re-check every
+pool, the owned CephFS metadata and data pools included, after `cephfs.Start`.
 The explicit data pool still uses `CreatePool(NoHashPSPool: true)`. Preparation
 does not change `.mgr` flags afterward. It waits within the startup/parent
 context for the data pool and, for two-manager profiles, the background-created

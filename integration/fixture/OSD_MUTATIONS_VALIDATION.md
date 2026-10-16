@@ -258,6 +258,16 @@ generation used at issuance or MGR lookup. The recurrence is retained in
 [issue #71's follow-up](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6174955026).
 Subsequent successful CI runs do not establish a fix for this failure.
 
+Later status: a client race was identified as the common cause of four
+auth-epoch failures (`b01a3cf`, `37d7a4d`, `494071b`, `af2c4e9`) and fixed in
+the product by `3d2645e`; the `2d1cc46` recurrence above was not among them
+and is not re-attributed. See the
+[root cause](SERVICE_KEY_EPOCH_FAILURE_20261015.md#root-cause-ci-triage-2026-10-16)
+and the [local soak after the fix](SERVICE_KEY_EPOCH_FAILURE_20261015.md#local-soak-after-the-fix-2026-10-16)
+(680 of 680 first cold MGR authentications; CI amd64 runners were not
+soaked). The failure records in this section are kept as written. Upstream
+#71 remains open there; nothing was posted to it for this status.
+
 The conditional native AUTH preparation branch is now separately verified by
 `TestCephNativeManagerPreparationIntegration` in
 `/tmp/ceph-native-mgr-conditional.log` (PASS, 48.95 seconds). Public Pause/Resume
@@ -300,7 +310,10 @@ passed 39/41. Its IPv6 AES256K service-key epoch row rejected the second
 cycle's first MGR authentication even though the renewed cached blob remained
 unchanged between observations. The first-failure artifact and limitations are
 retained in [issue #71](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6175912840).
-This cause is unresolved; no wipe/authentication retry was added.
+This cause was unresolved when recorded; no wipe/authentication retry was
+added. The later [root cause](SERVICE_KEY_EPOCH_FAILURE_20261015.md#root-cause-ci-triage-2026-10-16),
+fixed by `3d2645e`, was derived from four other failures; this record was not
+re-attributed to it.
 
 `49e7599` [CI run 38622629859](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38622629859)
 passed 40/41, including every OSD row and both auth-epoch rows. Its Windows

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Test-only native oracles. Public v0.2.0 APIs own all daemons and keys.
+# Test-only native oracles. Public v0.3.0 APIs own all daemons and keys.
 set -eu
 trap 'code=$?; if test "$code" -ne 0; then printf "native oracle exit=%s phase=%s\n" "$code" "${fixture_phase:-startup}" > /out/native-oracles.error; fi' EXIT
 root=/tmp/ceph-msgr-test

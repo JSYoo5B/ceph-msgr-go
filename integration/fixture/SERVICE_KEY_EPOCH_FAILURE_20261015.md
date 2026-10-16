@@ -2,12 +2,22 @@
 
 ## Status and evidence boundary
 
-The first CI execution below failed its auth-epoch interoperability test. The
-failure is preserved and unresolved. No product fix, test workaround, additional
-delay, authentication retry, wipe retry, or weaker acceptance assertion was made
-as part of this investigation. A later successful execution would not establish
-the cause or repair of this first failure. This report does not claim that the
-whole CI run passed.
+The first CI execution below failed its auth-epoch interoperability test. That
+failure record is preserved as written. Its cause was later identified as a
+client race and fixed in the product by `3d2645e`; see
+[Root cause](#root-cause-ci-triage-2026-10-16) and the
+[local soak after the fix](#local-soak-after-the-fix-2026-10-16) (680 of 680
+first cold MGR authentications, CI amd64 runners not soaked). The sections
+before the root cause describe the investigation as it stood before that fix:
+no test workaround, additional delay, authentication retry, wipe retry, or
+weaker acceptance assertion was made for it. A later successful execution
+alone would not establish the cause; the root-cause section does that from the
+pinned source and the four failures. This report does not claim that the
+whole CI run passed. Upstream ceph-testcontainers-go
+[#71](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71) remains
+open there; its v0.3.0 first-failure bundle recipe is a diagnostic, not a fix,
+and this repository's copy of it (`collect-auth-bundle`) runs only after a
+first cold MGR refusal.
 
 The existing auth-epoch history and the limits of the native readiness probes
 are recorded in the [README](../../README.md) (the paragraphs beginning

@@ -1833,13 +1833,25 @@ ticket-info bad magic을 기록했다. 이 관측은 Go ticket 발급과 MGR 검
 [fixture 질문과 추가 근거](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/71#issuecomment-6174955026)를
 남겼으며, 이후 `d39cc93`의 CI 41개 통과도 원인이 해결됐다는 뜻으로
 처리하지 않는다. 최초 인증이나 wipe를 재시도해 실패를 숨기지 않는다.
+이후 `b01a3cf` 등 네 auth-epoch 실패에서 product client의 경쟁 조건이
+공통 원인으로 확인됐고 `3d2645e`에서 수정됐다. 이 `2d1cc46` 실패는 그 네
+실패에 포함되지 않았으므로 같은 원인으로 다시 분류하지 않는다. 근거는 [별도 기록의 원인 절](integration/fixture/SERVICE_KEY_EPOCH_FAILURE_20261015.md#root-cause-ci-triage-2026-10-16)과
+[수정 후 로컬 soak](integration/fixture/SERVICE_KEY_EPOCH_FAILURE_20261015.md#local-soak-after-the-fix-2026-10-16)에
+있다. upstream #71은 그쪽 저장소에서 아직 열려 있으며, 이 저장소는 그 issue에
+새 글을 남기지 않았다.
 
 `b01a3cf`의 [CI 첫 실패](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/38739526554/job/116437288897)에서도
 secure/AES256K·IPv6·Linux amd64의 두 번째 wipe 후 최초 cold MGR 인증이
 `-13`으로 거절됐다. MGR의 ticket-info 복호화 실패와 Go의 발급·선택·송신
 증거를 [별도 기록](integration/fixture/SERVICE_KEY_EPOCH_FAILURE_20261015.md)에
 보존했다. SecretID와 epoch, native 준비 probe 성공으로 실제 키 세대의
-일치를 단정하지 않으며, 이 실패는 아직 미해결이다.
+일치를 단정하지 않는다. 이 실패 기록은 그대로 보존한다. 원인과 `3d2645e`
+수정, 그리고 cold MGR 최초 인증 680회가 모두 성공한 로컬 soak는 같은 기록의
+원인 절과 soak 절에 있으며, CI amd64 runner에서는 soak를 실행하지 않았다.
+첫 cold MGR 거절이 다시 생기면 fixture의 `collect-auth-bundle`이 하나의
+예산 안에서 MON 상태, MON session, MgrMap GID, container 시작 시각과 새
+native control을 재시도 없이 수집해 진단 기록에 남긴다. 이 bundle은 키
+세대의 일치를 증명하지 않으며 해당 항목은 항상 unavailable/unverified다.
 
 시험은 `cephmsgr/integration_auth_epoch_test.go`에 두어 비공개 cached 상태를
 함께 관측한다. 각 client의 MON dial 이력, 동일 lock 구간의 map/auth epoch와
