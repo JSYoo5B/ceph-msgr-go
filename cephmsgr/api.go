@@ -208,10 +208,10 @@ const (
 )
 
 func (c *Client) MonCommand(ctx context.Context, command Command) (Result, error) {
-	return c.command(ctx, command, monitorCommand)
+	return c.command(ctx, command, monitorCommand, "")
 }
 func (c *Client) MgrCommand(ctx context.Context, command Command) (Result, error) {
-	return c.command(ctx, command, managerCommand)
+	return c.command(ctx, command, managerCommand, "")
 }
 
 // MonTell sends a daemon-local command to the currently admitted MON. Its
@@ -219,7 +219,7 @@ func (c *Client) MgrCommand(ctx context.Context, command Command) (Result, error
 // monitor by name, send to a quorum, or replay an uncertain command.
 // The server requires MON read, write and execute capabilities for tell.
 func (c *Client) MonTell(ctx context.Context, command Command) (Result, error) {
-	return c.command(ctx, command, monitorTell)
+	return c.command(ctx, command, monitorTell, "")
 }
 
 // MgrTell sends a daemon-local command to the current active MGR. These commands
@@ -227,10 +227,10 @@ func (c *Client) MonTell(ctx context.Context, command Command) (Result, error) {
 // require the server's allow-all MGR capability. Context cancellation ends the
 // local wait; an uncertain command is never replayed after recovery.
 func (c *Client) MgrTell(ctx context.Context, command Command) (Result, error) {
-	return c.command(ctx, command, managerTell)
+	return c.command(ctx, command, managerTell, "")
 }
 
-func (c *Client) command(ctx context.Context, command Command, operation commandOperation) (Result, error) {
+func (c *Client) command(ctx context.Context, command Command, operation commandOperation, managerName string) (Result, error) {
 	mgr := operation == managerCommand || operation == managerTell
 	tell := operation == monitorTell || operation == managerTell
 	var result Result
@@ -284,9 +284,16 @@ func (c *Client) command(ctx context.Context, command Command, operation command
 		request = msgr.CommandMessage(mgr, fsid, []string{jsonCommand}, input)
 	}
 	var reply msgr.MessageData
+	var binding *managerBinding
+	if managerName != "" {
+		binding, err = c.namedManagerBinding(ctx, managerName)
+		if err != nil {
+			return result, err
+		}
+	}
 	for {
 		if mgr {
-			s, err = c.manager(ctx)
+			s, err = c.managerForBinding(ctx, binding)
 		} else {
 			s, err = c.monitor(ctx)
 		}
@@ -295,7 +302,7 @@ func (c *Client) command(ctx context.Context, command Command, operation command
 		}
 		reply, err = s.Call(ctx, request)
 		var unknown *OutcomeUnknownError
-		if errors.Is(err, session.ErrRetired) && !errors.As(err, &unknown) {
+		if binding == nil && errors.Is(err, session.ErrRetired) && !errors.As(err, &unknown) {
 			// Retirement rejected this call before admission. Resolve the
 			// new session; never resend a call whose transmission started.
 			continue
@@ -303,6 +310,13 @@ func (c *Client) command(ctx context.Context, command Command, operation command
 		break
 	}
 	if err != nil {
+		if binding != nil && errors.Is(err, ErrManagerChanged) {
+			var unknown *OutcomeUnknownError
+			if errors.As(err, &unknown) {
+				return result, &OutcomeUnknownError{Cause: errors.Join(unknown.Cause, ErrManagerTargetChanged)}
+			}
+			return result, errors.Join(err, ErrManagerTargetChanged)
+		}
 		return result, err
 	}
 	code, message, err := msgr.CommandReply(reply, c.options.MaxFrameSize)

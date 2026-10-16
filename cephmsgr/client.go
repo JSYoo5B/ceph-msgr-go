@@ -737,7 +737,7 @@ func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (bool, e
 			c.mu.Unlock()
 			return false, nil
 		}
-		changed := mgr.GlobalID != c.mgrMap.GlobalID || mgr.Available != c.mgrMap.Available || !reflect.DeepEqual(mgr.Addresses, c.mgrMap.Addresses)
+		changed := mgr.Name != c.mgrMap.Name || mgr.GlobalID != c.mgrMap.GlobalID || mgr.Available != c.mgrMap.Available || !reflect.DeepEqual(mgr.Addresses, c.mgrMap.Addresses)
 		old := c.mgr
 		if changed {
 			c.mgr = nil
@@ -782,6 +782,10 @@ func (c *Client) monitor(ctx context.Context) (*session.Session, error) {
 	}
 }
 func (c *Client) manager(ctx context.Context) (*session.Session, error) {
+	return c.managerForBinding(ctx, nil)
+}
+
+func (c *Client) managerForBinding(ctx context.Context, binding *managerBinding) (*session.Session, error) {
 	select {
 	case c.mgrGate <- struct{}{}:
 	case <-ctx.Done():
@@ -812,6 +816,10 @@ retryManager:
 			return nil, err
 		}
 		c.mu.Lock()
+		if binding != nil && !binding.matches(c.mgrMap, c.auth.GlobalID) {
+			c.mu.Unlock()
+			return nil, ErrManagerTargetChanged
+		}
 		if c.mgr != nil && c.mgr.Err() == nil {
 			s := c.mgr
 			c.mu.Unlock()
@@ -871,7 +879,7 @@ retryManager:
 					return nil, err
 				}
 				c.mu.Lock()
-				stale := c.closed || c.authErr != nil || c.auth != auth || c.mgrMap.GlobalID != mapSnapshot.GlobalID || !c.mgrMap.Available || !reflect.DeepEqual(c.mgrMap.Addresses, mapSnapshot.Addresses)
+				stale := c.closed || c.authErr != nil || c.auth != auth || c.mgrMap.Name != mapSnapshot.Name || c.mgrMap.GlobalID != mapSnapshot.GlobalID || !c.mgrMap.Available || !reflect.DeepEqual(c.mgrMap.Addresses, mapSnapshot.Addresses)
 				c.mu.Unlock()
 				if stale {
 					// Setup has not submitted an application command. Resolve
@@ -883,7 +891,12 @@ retryManager:
 				continue
 			}
 			var s *session.Session
-			s = session.New(transport, c.sessionConfig(), nil, func(error) {
+			config := c.sessionConfig()
+			selected := bindManager(mapSnapshot, auth.GlobalID)
+			config.BeforeWrite = func(msgr.MessageData) error {
+				return c.managerBeforeWrite(s, selected)
+			}
+			s = session.New(transport, config, nil, func(error) {
 				c.mu.Lock()
 				if c.mgr == s {
 					c.mgr = nil
@@ -892,7 +905,7 @@ retryManager:
 				c.mu.Unlock()
 			})
 			c.mu.Lock()
-			stale := c.closed || c.authErr != nil || c.auth.GlobalID != auth.GlobalID || c.mgrMap.GlobalID != mapSnapshot.GlobalID || !c.mgrMap.Available || !reflect.DeepEqual(c.mgrMap.Addresses, mapSnapshot.Addresses)
+			stale := c.closed || c.authErr != nil || c.auth.GlobalID != auth.GlobalID || c.mgrMap.Name != mapSnapshot.Name || c.mgrMap.GlobalID != mapSnapshot.GlobalID || !c.mgrMap.Available || !reflect.DeepEqual(c.mgrMap.Addresses, mapSnapshot.Addresses)
 			if !stale {
 				c.mgr = s
 				stale = !c.attach(s)

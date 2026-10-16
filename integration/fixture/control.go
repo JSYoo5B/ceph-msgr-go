@@ -103,6 +103,13 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 	if fileExists(filepath.Join(out, "native-oracles.error")) {
 		return errors.New("native oracle worker failed; inspect native-oracles.log")
 	}
+	if fields, err := c.request(out, "observe-named-mgr"); err != nil {
+		return err
+	} else if fields != nil {
+		if err := c.namedManagerOracle(ctx, out, fields); err != nil {
+			return err
+		}
+	}
 	if fields, err := c.request(out, "mds-commands-native"); err != nil {
 		return err
 	} else if fields != nil {

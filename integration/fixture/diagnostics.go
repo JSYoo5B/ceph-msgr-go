@@ -19,6 +19,7 @@ var metadataFiles = []string{
 	"fixture-manifest.json", "fixture-ownership.json", "daemon-version", "relay.log", "native-oracles.log", "native-oracles.error", "osd-map-control.log", "peers.json", "pool-policy.json", "provider.error", "provider.cleanup.error",
 	"mapped-oracle-status.json", "mapped-oracle-mon.json", "mapped-oracle-mgr.json", "mapped-oracle-pg.json", "mapped-oracle-summary.json",
 	"tell-oracle-mon.json", "tell-oracle-mgr.json", "tell-oracle-mgr-map.json", "named-mon-b.json",
+	"named-mgr-oracle-before.json", "named-mgr-oracle-after.json", "named-mgr-results.json",
 	"log-oracle.json", "log-oracle-sentinel.txt", "config-oracle.json", "config-oracle-history.jsonl", "hostname-config-oracle.json",
 	"command-oracle-mon.json", "command-oracle-mgr.json", "command-oracle-summary.json",
 	"tell-command-oracle-mon-a.json", "tell-command-oracle-mon-b.json", "tell-command-oracle-mon-c.json", "tell-command-oracle-mgr.json", "tell-command-oracle-summary.json",
