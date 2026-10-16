@@ -5,6 +5,10 @@ Reference: Ceph Tentacle 20.2.4 commit
 with no CGO, Ceph CLI, librados, go-ceph or native runtime dependency.
 Native clients, daemon controls and containers are development-only.
 
+The later [failure-observation budget record](OSD_BACKOFF_FAILURE_BUDGET_VALIDATION.md)
+preserves separate amd64 CI failures and the fixture correction. The local
+first-attempt results below remain their original, narrower evidence.
+
 ## Change and protocol boundary
 
 The earlier [object-backoff acceptance](OSD_OBJECT_BACKOFF_VALIDATION.md)

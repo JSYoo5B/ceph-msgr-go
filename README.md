@@ -605,6 +605,9 @@ UNBLOCK이 ACK보다 먼저 와도 원 BLOCK의 기록과 gate를 보존하며, 
 이미 전송한 요청의 결과는 그대로 불명확할 수 있으며 UNBLOCK으로 재전송하지
 않는다. 늦은 ACK와 writer 순서, 큐·잔류 ACK 기록의 제한은
 [backoff 계약](internal/osd/BACKOFF_CONTRACT.md)에 기록한다.
+primary 강제 종료 뒤 down 상태를 기다리던 amd64 CI 실패와 fixture의
+대기 한도 수정은 [별도 검증 기록](integration/fixture/OSD_BACKOFF_FAILURE_BUDGET_VALIDATION.md)에
+원본 실패·로컬 arm64 회귀·CI 확인 범위를 구분해 남겼다.
 
 한 객체의 쓰기·조건 vector는 단일 요청으로 전송한다. `Data`의 byte 수와
 `Length`는 같아야 하며, truncate는 `Offset`에 새 크기를 넣는다.

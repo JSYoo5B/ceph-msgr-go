@@ -75,4 +75,63 @@ Fake-clock regressions require successful down/active-PG observation after
 map state. A cross-language fixture test checks nested command/process
 budgets. These checks establish the timeout behavior, not interoperability.
 
-Final native validation and exact final source identity are pending.
+## Final local native results
+
+Both final runs used `78cdb354c980fc633af6ca4d4850849c1f1acda5`, before
+this results update and later U64 integration. Image reference:
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`.
+These arm64 native regressions are distinct from the earlier amd64 CI failures.
+Selector: `^TestCephOSDObjectBackoffFailoverIntegration$`.
+
+| Configuration | Whole test | Go unknown after kill | Native completion after kill | Result |
+| --- | --- | --- | --- | --- |
+| CRC/AES client/service, IPv4 host, 3 BlueStore | 41.90 s | 305.5 ms | 1381.6 ms | PASS, runner exit 0 |
+| secure/AES256K client/service, IPv6 container, 3 BlueStore | 44.65 s | 504.1 ms | 2062.3 ms | PASS, runner exit 0 |
+
+Both restored flags/configuration and removed all nine owned object names;
+the final readiness oracle required all three OSDs up/in and all nine PGs
+active+clean. All ten recorded owned containers terminated in each run.
+The range admission and unrelated-object reads passed before the failover
+phase. The original held Go mutation retained its unknown outcome and
+submission tuple; native retry reached the new primary, then an explicit
+fresh Go request appended once. Final native bytes/version/mtime agreed
+after the former primary returned.
+
+The exported wait projection retains acting/up sets, active PG state and
+map epoch, but not the complete OSDMap's per-OSD up bits. The down-bit
+claim relies on the executed native predicate and passing test, not an
+archived full OSDMap. Native ACK history proves reception at the PG; it
+does not by itself prove mutation execution or durability.
+
+Both complete tests finished within 60 s, so these runs do not reproduce
+the longer amd64 detection boundary. The fake-clock tests cover that
+boundary. An exact final-main amd64 CI pass remains a separate requirement;
+no such result is claimed in this record.
+
+Before the final runs, an initial CRC run at `7975e7b` passed in 43.10 s
+with cleanup. Independent review then found the initial 240 s native
+process limit omitted pre-observation waits. The final source raises that
+limit to 360 s and tests the complete phase sum. The initial receipt is
+retained separately and does not replace either final-source result.
+
+Local artifact directories, each with an adjacent `.log`:
+
+- `/private/tmp/ceph-osd-backoff-budget-crc-aes-20261016-final/`
+- `/private/tmp/ceph-osd-backoff-budget-secure-aes256k-ipv6-20261016-final/`
+- Initial source: `/private/tmp/ceph-osd-backoff-budget-crc-aes-20261016-first/`
+
+Final `osd-object-backoff-results.json` SHA-256:
+
+- CRC: `775c6827d2d49f022f33d6394fb19c6f369fb14a33e9cb640d684748a3e8ec5a`
+- Secure: `822b773d13268bfd7e177f1fe376356e6b17d2233ff61403e0d690f87490ad3c`
+
+Tested source SHA-256:
+
+- `tools/osd_object_backoff_oracle.py`: `61c315e201913cc96993fda4743277a692c79d1e9eb62e97d8adb7b5be4f81ca`
+- `integration/fixture/control.go`: `d7fb6776abd4a821782b4d36d7ec95c983678687f556ec77becd99cf2f7cd3dd`
+- `integration/osd_object_backoff_test.go`: `89a6fca02e138431544f99ef1b43e4ba12d7d2c639391b62732c20ba1ab473c4`
+
+Python's eight oracle regressions and the fixture's focused nested-budget
+tests passed before native execution. After U64 integration at `10011ce`,
+whole-product and whole-fixture CGO-disabled tests and vet also passed.
+Those combined source checks are separate from the native runs above.
