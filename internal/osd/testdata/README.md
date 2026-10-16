@@ -53,6 +53,13 @@ LIST_SNAPS request at SNAPDIR, and listing, rollback, EOLDSNAPC and clone read
 replies. They are offline codec proof only and claim no live snapshot
 creation, clone layout, rollback execution, EOLDSNAPC detection or durability.
 
+[Fresh extent truncate-field encoder/decoder fixtures](truncate-native-README.md)
+independently construct six message triples: READ, WRITE and TRUNCATE
+requests carrying truncate_size/truncate_seq as the CephFS data path sends
+them, and a clipped READ, a trimmed old WRITE and a no-op sequenced TRUNCATE
+reply. They are offline codec proof only and claim no live truncation,
+trimming or durability.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from

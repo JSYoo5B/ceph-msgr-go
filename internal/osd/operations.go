@@ -36,6 +36,9 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		if op.Code != AssertVersion && op.Version != 0 {
 			return 0, 0, ErrRequest
 		}
+		if err := validateTruncateFields(op); err != nil {
+			return 0, 0, err
+		}
 		if !IsWatchOperation(op.Code) && op.Watch != (WatchInput{}) {
 			return 0, 0, ErrRequest
 		}
@@ -307,4 +310,28 @@ func readModeOperation(code uint16) bool {
 		return true
 	}
 	return IsOmapOperation(code) && !isOmapMutation(code)
+}
+
+// validateTruncateFields admits the extent truncate fields only where native
+// CephFS clients send them (Objecter read_trunc, write_trunc and trunc).
+// A size without a sequence has no effect on the OSD and is refused, as is
+// the (1, all-ones) pair the OSD silently rewrites to (0, 0)
+// (PrimaryLogPG.cc:6088-6093). A sequenced TRUNCATE must name its own
+// offset: the OSD asserts offset == truncate_size (PrimaryLogPG.cc:6987).
+func validateTruncateFields(op Operation) error {
+	if op.TruncateSize == 0 && op.TruncateSequence == 0 {
+		return nil
+	}
+	switch op.Code {
+	case Read, Write, Truncate:
+	default:
+		return ErrRequest
+	}
+	if op.TruncateSequence == 0 || op.TruncateSequence == 1 && op.TruncateSize == math.MaxUint64 {
+		return ErrRequest
+	}
+	if op.Code == Truncate && op.Offset != op.TruncateSize {
+		return ErrRequest
+	}
+	return nil
 }

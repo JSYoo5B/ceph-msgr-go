@@ -108,6 +108,9 @@ func command(ctx context.Context, args []string) (result error) {
 	if len(args) != 0 && args[0] == "encode-osd-snap" {
 		return runNativeEncoder(ctx, args[1:], snapEncoderSpec)
 	}
+	if len(args) != 0 && args[0] == "encode-osd-truncate" {
+		return runNativeEncoder(ctx, args[1:], truncateEncoderSpec)
+	}
 	if len(args) == 0 || (args[0] != "run" && args[0] != "serve") {
 		return errors.New("usage: fixture-controller run|serve -project PATH [-output PATH] [-diagnostics PATH]")
 	}

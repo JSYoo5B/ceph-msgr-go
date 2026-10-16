@@ -156,8 +156,8 @@ func EncodeRequestV8(r V8Request, features uint64, limit uint32) (msgr.MessageDa
 			} else {
 				e.U64(op.Length)
 			}
-			e.U64(0) // truncate_size.
-			e.U32(0) // truncate_seq.
+			e.U64(op.TruncateSize)
+			e.U32(op.TruncateSequence)
 		}
 		e.U32(uint32(payloadBytes))
 	}

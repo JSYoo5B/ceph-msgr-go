@@ -173,8 +173,8 @@ func osdXattrSyntheticReply(t *testing.T, ops []OSDOperation, outputs [][]byte, 
 		default:
 			e.U64(op.Offset)
 			e.U64(op.Length)
-			e.U64(0)
-			e.U32(0)
+			e.U64(op.TruncateSize)
+			e.U32(op.TruncateSequence)
 		}
 		e.U32(uint32(len(outputs[i])))
 		data = append(data, outputs[i]...)

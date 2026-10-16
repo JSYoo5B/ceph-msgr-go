@@ -442,6 +442,13 @@ Unsafe 응답만 받은 create의 REPLAY는 다시 실행되지 않고 완료 �
 나왔고 주소 instance가 blocklist에 올라 같은 OSD 연결의 읽기가 -108을 받았다. FORCE_RO
 session event 뒤 mkdir은 -30, 조회는 성공했다. Dentry lease RENEW는 다음 sequence의 RENEW
 응답을 받았고, native snapshot 뒤 보낸 FLUSHSNAP은 FLUSHSNAP_ACK를 받았다.
+[파일 데이터 검증 기록](integration/fixture/MDS_CEPHFS_DATA_VALIDATION.md)에는 MDS session과
+OSD 요청을 함께 쓰는 CephFS 파일 I/O를 native libcephfs와 비교한 결과를 남겼다. 시험 전용
+코드가 reply의 layout으로 striping된 객체에 쓰고 cap UPDATE로 크기와 mtime을 확정했으며,
+native가 쓴 sparse 파일 읽기, truncate 뒤 TRUNC push, revoke 중 buffer flush, snapshot 뒤
+SnapContext 쓰기와 clone까지 두 구성에서 native와 일치했다. OSD 요청은 inode의
+truncate_size·truncate_seq를 READ·WRITE·TRUNCATE에 실어 보낼 수 있다. OSD가 이전 sequence의
+쓰기를 객체 크기에서 자르면 결과는 0이고 응답 `Length`가 실제로 쓴 bytes 수가 된다.
 
 ## RBD 기반 통신 검증
 

@@ -89,6 +89,14 @@ var snapEncoderSpec = nativeEncoderSpec{
 	requests: 4,
 }
 
+// truncateEncoderSpec covers the extent truncate fields (truncate_size,
+// truncate_seq) that CephFS data I/O sends on READ, WRITE and TRUNCATE.
+var truncateEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-truncate", wrapper: "osd_truncate_native_encoder.cc", driver: "osd_truncate_native_encoder.py",
+	names:    []string{"truncate-native-request-v6-read", "truncate-native-request-v6-write", "truncate-native-request-v6-trunc", "truncate-native-reply-v6-read-clipped", "truncate-native-reply-v6-write-trimmed", "truncate-native-reply-v6-trunc-noop"},
+	requests: 3,
+}
+
 var watchersEncoderSpec = nativeEncoderSpec{
 	command: "encode-osd-watchers", wrapper: "osd_watchers_native_encoder.cc", driver: "osd_watchers_native_encoder.py",
 	names: []string{"watchers-native-request-v6-list", "watchers-native-reply-v6-populated", "watchers-native-reply-v6-empty", "watchers-native-reply-v6-enoent", "watchers-native-reply-v6-eacces"},
@@ -246,6 +254,7 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	files = append(files, pgListV8EncoderSpec.wrapper)
 	files = append(files, replyV8EncoderSpec.wrapper, mdsMapEncoderSpec.wrapper, mdsSessionEncoderSpec.wrapper, mdsRequestEncoderSpec.wrapper)
 	files = append(files, mdsCapsEncoderSpec.wrapper, mdsReconnectEncoderSpec.wrapper)
+	files = append(files, truncateEncoderSpec.wrapper)
 	if spec.command == sparseReadEncoderSpec.command {
 		files = append(files, "build_sparse_read_oracle.py", "osd_sparse_read_oracle.cc")
 	}

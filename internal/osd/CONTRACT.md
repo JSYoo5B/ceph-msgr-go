@@ -69,9 +69,28 @@ MaxFrameSize; vectors have 1–64 operations. Extents cannot overflow uint64.
 Version is rejected for other operations. Unknown flags are rejected before
 transmission. EXCL (1) is accepted only on Create; FAILOK (2) retains an
 operation's negative result while allowing subsequent vector operations to
-continue. Truncate sequences, category payloads and FADVISE input flags are
-unsupported. A zero range covering an object's tail can become truncation;
+continue. Category payloads and FADVISE input flags are unsupported. A zero range covering an object's tail can become truncation;
 zero beyond EOF is a native no-op, not an extension promise.
+
+The extent union's truncate fields (`TruncateSize`, `TruncateSequence`) are
+sent on READ, WRITE and TRUNCATE, the operations native CephFS clients send
+them on (Objecter read_trunc/write_trunc/trunc), and are refused elsewhere. A
+size requires a nonzero sequence, the pair (sequence 1, size all ones) that
+the OSD rewrites to (0, 0) is refused (PrimaryLogPG.cc:6088-6093), and a sequenced
+TRUNCATE must carry Offset equal to TruncateSize because the OSD asserts it
+(PrimaryLogPG.cc:6987). On the OSD a READ whose sequence is newer than the
+object's is clipped at TruncateSize (5850-5853); a WRITE whose sequence is
+older than the object's and that extends past the object's size is trimmed
+to that size, and one with a newer sequence truncates the object first
+(6768-6806); a sequenced TRUNCATE no newer than the object's is a no-op
+(6986-6992) that still advances the replay version but not the user
+version. The MDS gives a never-truncated inode exactly that refused pair
+(Server.cc:3639-3640) and libcephfs sends it unchanged, so a consumer sends
+(0, 0) instead, with identical OSD semantics. The trimming applies even to a WRITE with zero truncate fields
+on an object that carries a truncate sequence, so a WRITE reply may echo a
+shorter Length (possibly zero) than requested with result 0: that Length is
+the number of bytes written. Replies must echo both truncate fields
+unchanged.
 
 Mutation operations contribute WRITE; reads, stat and guards contribute READ.
 Requests add ONDISK and RETURNVEC. No separate preliminary ACK is requested.

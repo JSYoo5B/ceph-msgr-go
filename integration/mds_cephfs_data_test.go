@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -99,6 +100,55 @@ func (l cephfsStriping) extentToFile(objectno, off, length uint64) [][2]uint64 {
 }
 
 func cephfsObjectName(ino, objectno uint64) string { return fmt.Sprintf("%x.%08x", ino, objectno) }
+
+// cephfsTrunc is an inode's truncate state (InodeStat or a TRUNC push), the
+// truncate_size and truncate_seq the native client sends with every extent
+// operation (Client::_read_sync and Client::_write -> Filer::read_trunc and
+// Filer::write_trunc).
+type cephfsTrunc struct {
+	Size uint64
+	Seq  uint32
+}
+
+// objectTruncateSize restates Striper::object_truncate_size (Striper.cc
+// 309-347): the file truncate size as an in-object size. 0 and all ones are
+// passed unchanged.
+func (l cephfsStriping) objectTruncateSize(objectno, size uint64) uint64 {
+	if size == 0 || size == math.MaxUint64 {
+		return size
+	}
+	stripesPerObject := l.ObjectSize / l.StripeUnit
+	objectSet := objectno / l.StripeCount
+	truncSet := size / l.ObjectSize / l.StripeCount
+	switch {
+	case objectSet > truncSet:
+		return 0
+	case objectSet < truncSet:
+		return l.ObjectSize
+	}
+	block := size / l.StripeUnit
+	stripe := block / l.StripeCount
+	truncObject := truncSet*l.StripeCount + block%l.StripeCount
+	switch {
+	case objectno < truncObject:
+		return (stripe%stripesPerObject + 1) * l.StripeUnit
+	case objectno > truncObject:
+		return stripe % stripesPerObject * l.StripeUnit
+	}
+	return stripe%stripesPerObject*l.StripeUnit + size%l.StripeUnit
+}
+
+// wire is the pair the Go client sends for one object. A never-truncated
+// inode carries truncate_size all ones and truncate_seq 1 (Server.cc
+// 3639-3640), which the native client sends unchanged and the OSD rewrites
+// to (0, 0) before executing (PrimaryLogPG.cc 6088-6093). cephmsgr refuses
+// that pair, so the test sends the rewritten (0, 0) the OSD executes.
+func (c cephfsTrunc) wire(l cephfsStriping, objectno uint64) (uint64, uint32) {
+	if c.Seq == 1 && c.Size == math.MaxUint64 {
+		return 0, 0
+	}
+	return l.objectTruncateSize(objectno, c.Size), c.Seq
+}
 
 // cephfsDataStream is the plan payload: SHA-256 of the seed, then of each
 // previous block, concatenated (the fixture's native driver computes the
@@ -227,6 +277,34 @@ func TestCephFSStriperRestatement(t *testing.T) {
 				t.Fatal("range coverage differs", layout, r, covered)
 			}
 		}
+	}
+	// Striper::object_truncate_size for the acceptance layout and the
+	// native truncate to 280000: objects of earlier object sets keep the
+	// object size, object 2 holds the cut (17856), the rest 0.
+	acceptance := cephfsStriping{65536, 2, 131072}
+	for objectno, want := range []uint64{131072, 131072, 17856, 0, 0, 0, 0, 0, 0, 0} {
+		if got := acceptance.objectTruncateSize(uint64(objectno), 280000); got != want {
+			t.Fatal("object truncate size differs", objectno, got, want)
+		}
+		for _, end := range []uint64{0, math.MaxUint64} {
+			if acceptance.objectTruncateSize(uint64(objectno), end) != end {
+				t.Fatal("0 and all-ones truncate sizes are not passed unchanged")
+			}
+		}
+	}
+	// Inside object set 0: block 6 (stripe 3, position 0) of l at 100000;
+	// object 0 holds the cut (the extent start above), object 1 three full
+	// stripe units, set 1 nothing.
+	for objectno, want := range []uint64{50848, 49152, 0, 0, 0} {
+		if got := l.objectTruncateSize(uint64(objectno), 100000); got != want {
+			t.Fatal("object truncate size inside a set differs", objectno, got, want)
+		}
+	}
+	if size, seq := (cephfsTrunc{math.MaxUint64, 1}).wire(acceptance, 2); size != 0 || seq != 0 {
+		t.Fatal("never-truncated inode not sent as the OSD's (0, 0)")
+	}
+	if size, seq := (cephfsTrunc{280000, 2}).wire(acceptance, 2); size != 17856 || seq != 2 {
+		t.Fatal("truncated inode wire fields differ")
 	}
 	if s := cephfsDataStream("seed", 70); len(s) != 70 || !bytes.Equal(s[32:64], func() []byte { b := sha256.Sum256(s[:32]); return b[:] }()) {
 		t.Fatal("payload chain differs")
@@ -428,9 +506,12 @@ type cephfsDataObjectIO struct {
 	Op            string
 	Object        string
 	ObjectNo      uint64
-	Offset        uint64 `json:",omitempty"`
-	Length        uint64 `json:",omitempty"`
-	ReadSnapshot  uint64 `json:",omitempty"`
+	Offset        uint64  `json:",omitempty"`
+	Length        uint64  `json:",omitempty"`
+	TruncateSize  uint64  `json:",omitempty"`
+	TruncateSeq   uint32  `json:",omitempty"`
+	ReplyLength   *uint64 `json:",omitempty"`
+	ReadSnapshot  uint64  `json:",omitempty"`
 	SnapContext   *cephmsgr.OSDSnapContext
 	MapEpoch      uint32
 	Hash          uint32
@@ -465,6 +546,9 @@ type cephfsDataIO struct {
 
 func (d *cephfsDataIO) request(name string, objectno uint64, op string, request cephmsgr.OSDRequest) (cephmsgr.OSDReply, cephfsDataObjectIO, error) {
 	e := cephfsDataObjectIO{Leaf: d.leaf, Op: op, Object: name, ObjectNo: objectno, ReadSnapshot: request.ReadSnapshot}
+	if len(request.Operations) == 1 {
+		e.Offset, e.Length, e.TruncateSize, e.TruncateSeq = request.Operations[0].Offset, request.Operations[0].Length, request.Operations[0].TruncateSize, request.Operations[0].TruncateSequence
+	}
 	defer func() {
 		d.mu.Lock()
 		d.log = append(d.log, e)
@@ -497,6 +581,10 @@ func (d *cephfsDataIO) request(name string, objectno uint64, op string, request 
 	reply, err := d.osd.Request(ctx, request)
 	e.Micros = time.Since(begin).Microseconds()
 	e.Code, e.Transaction, e.ReplayVersion, e.UserVersion = reply.Code, reply.Transaction, reply.ReplayVersion, reply.UserVersion
+	if len(reply.Operations) == 1 && err == nil {
+		length := reply.Operations[0].Length
+		e.ReplyLength = &length
+	}
 	if err != nil {
 		e.Error = err.Error()
 		var osdErr *cephmsgr.OSDError
@@ -505,6 +593,13 @@ func (d *cephfsDataIO) request(name string, objectno uint64, op string, request 
 		}
 	}
 	return reply, e, err
+}
+
+// last is the most recent object request record.
+func (d *cephfsDataIO) last() cephfsDataObjectIO {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.log[len(d.log)-1]
 }
 
 // reset closes a failed OSD connection; the next request opens a new one.
@@ -516,22 +611,24 @@ func (d *cephfsDataIO) reset() {
 }
 
 // write writes data at a file offset: one request per object extent with the
-// caller's snap context and modification time.
-func (d *cephfsDataIO) write(ino uint64, l cephfsStriping, offset uint64, data []byte, snapc cephmsgr.OSDSnapContext, mtime cephmsgr.MDSTime) error {
+// caller's snap context, modification time and the inode's truncate state
+// (Filer::write_trunc). A reply whose extent the OSD trimmed is an error here.
+func (d *cephfsDataIO) write(ino uint64, l cephfsStriping, offset uint64, data []byte, snapc cephmsgr.OSDSnapContext, mtime cephmsgr.MDSTime, trunc cephfsTrunc) error {
 	for _, ext := range l.fileToExtents(offset, uint64(len(data))) {
 		buf := make([]byte, 0, ext.Length)
 		for _, b := range ext.Buffers {
 			buf = append(buf, data[b.Offset:b.Offset+b.Length]...)
 		}
 		name := cephfsObjectName(ino, ext.ObjectNo)
-		_, e, err := d.request(name, ext.ObjectNo, "write", cephmsgr.OSDRequest{ModificationTime: cephmsgr.OSDTime{Seconds: mtime.Seconds, Nanoseconds: mtime.Nanoseconds},
-			Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDWrite, Offset: ext.Offset, Length: ext.Length, Data: buf}}, SnapContext: snapc})
+		size, seq := trunc.wire(l, ext.ObjectNo)
+		reply, e, err := d.request(name, ext.ObjectNo, "write", cephmsgr.OSDRequest{ModificationTime: cephmsgr.OSDTime{Seconds: mtime.Seconds, Nanoseconds: mtime.Nanoseconds},
+			Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDWrite, Offset: ext.Offset, Length: ext.Length, Data: buf, TruncateSize: size, TruncateSequence: seq}}, SnapContext: snapc})
 		if err != nil || e.Code != 0 {
 			return fmt.Errorf("write %s at %d+%d: %w", name, ext.Offset, ext.Length, err)
 		}
-		d.mu.Lock()
-		d.log[len(d.log)-1].Offset, d.log[len(d.log)-1].Length = ext.Offset, ext.Length
-		d.mu.Unlock()
+		if reply.Operations[0].Length != ext.Length {
+			return fmt.Errorf("write %s at %d+%d was trimmed by the OSD to %d bytes", name, ext.Offset, ext.Length, reply.Operations[0].Length)
+		}
 	}
 	return nil
 }
@@ -539,13 +636,14 @@ func (d *cephfsDataIO) write(ino uint64, l cephfsStriping, offset uint64, data [
 // read reads [offset, offset+length) of a file at a snapshot (0 for the
 // head) as the native striped read assembles it: a missing object or a short
 // object read leaves zeros (StripedReadResult zero fill).
-func (d *cephfsDataIO) read(ino uint64, l cephfsStriping, offset, length, snap uint64) ([]byte, map[uint64]string, error) {
+func (d *cephfsDataIO) read(ino uint64, l cephfsStriping, offset, length, snap uint64, trunc cephfsTrunc) ([]byte, map[uint64]string, error) {
 	out := make([]byte, length)
 	holes := map[uint64]string{}
 	for _, ext := range l.fileToExtents(offset, length) {
 		name := cephfsObjectName(ino, ext.ObjectNo)
+		size, seq := trunc.wire(l, ext.ObjectNo)
 		reply, e, err := d.request(name, ext.ObjectNo, "read", cephmsgr.OSDRequest{ReadSnapshot: snap,
-			Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDRead, Offset: ext.Offset, Length: ext.Length}}})
+			Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDRead, Offset: ext.Offset, Length: ext.Length, TruncateSize: size, TruncateSequence: seq}}})
 		var data []byte
 		switch {
 		case e.OSDError == -2:
@@ -559,7 +657,7 @@ func (d *cephfsDataIO) read(ino uint64, l cephfsStriping, offset, length, snap u
 			}
 		}
 		d.mu.Lock()
-		d.log[len(d.log)-1].Offset, d.log[len(d.log)-1].Length, d.log[len(d.log)-1].DataBytes = ext.Offset, ext.Length, len(data)
+		d.log[len(d.log)-1].DataBytes = len(data)
 		d.mu.Unlock()
 		pos := 0
 		for _, b := range ext.Buffers {
@@ -660,6 +758,9 @@ type cephfsDataFileEvidence struct {
 	NativeRead     *nativeMDSCephFSDataDigest  `json:",omitempty"`
 	NativeObjects  []nativeMDSCephFSDataObject `json:",omitempty"`
 	CloseUpdate    *cephmsgr.MDSCaps           `json:",omitempty"`
+	// Truncate is the inode truncate state the Go client sent with its
+	// extent operations.
+	Truncate *cephfsTrunc `json:",omitempty"`
 }
 
 func TestCephMDSCephFSDataIntegration(t *testing.T) {
@@ -926,6 +1027,15 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		}
 		return context
 	}
+	// truncOf is the inode's truncate state as the agent holds it (from
+	// InodeStats and TRUNC pushes), sent with every extent operation.
+	truncOf := func(ino uint64) cephfsTrunc {
+		c, _ := agent.cap(ino)
+		return cephfsTrunc{c.TruncateSize, c.TruncateSeq}
+	}
+	// neverTruncated is the truncate state of an inode the MDS created
+	// (Server.cc 3639-3640).
+	neverTruncated := cephfsTrunc{math.MaxUint64, 1}
 	// ensureMaxSize requests a larger max_size as get_caps does and waits
 	// for the MDS to grant it.
 	ensureMaxSize := func(t *testing.T, f *cephfsDataFileEvidence, endoff uint64) {
@@ -1099,7 +1209,12 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		ensureMaxSize(t, f, plan.GoFileSize)
 		f.SnapContext = snapc(t, f.Ino)
 		f.MTime = newMTime(f.Ino)
-		if err := osdIO.write(f.Ino, layout, 0, goPayload, f.SnapContext, f.MTime); err != nil {
+		trunc := truncOf(f.Ino)
+		f.Truncate = &trunc
+		if trunc != neverTruncated {
+			t.Fatalf("the created inode's truncate state differs: %+v", trunc)
+		}
+		if err := osdIO.write(f.Ino, layout, 0, goPayload, f.SnapContext, f.MTime, trunc); err != nil {
 			t.Fatal(err)
 		}
 		if err := agent.markDirty(f.Ino, plan.GoFileSize, f.MTime, f.SnapContext.Sequence, false, 0, nil); err != nil {
@@ -1118,7 +1233,7 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		if trace.Target.Size != plan.GoFileSize || trace.Target.MTime != f.MTime {
 			t.Fatalf("MDS size or mtime after the flush differ: %d %+v", trace.Target.Size, trace.Target.MTime)
 		}
-		back, holes, err := osdIO.read(f.Ino, layout, 0, plan.GoFileSize, 0)
+		back, holes, err := osdIO.read(f.Ino, layout, 0, plan.GoFileSize, 0, truncOf(f.Ino))
 		if err != nil || len(holes) != 0 || !bytes.Equal(back, goPayload) {
 			t.Fatal("Go read-back of its own write differs", err, holes)
 		}
@@ -1149,7 +1264,12 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 			t.Fatalf("Go view of the native file differs: ino %#x size %d", st.Ino, st.Size)
 		}
 		waitCap(t, f.Ino, "Fr", 10*time.Second, func(c cephfsCap) bool { return c.Issued&cephCapFileRD != 0 })
-		data, holes, err := osdIO.read(f.Ino, layout, 0, st.Size, 0)
+		trunc := truncOf(f.Ino)
+		f.Truncate = &trunc
+		if trunc != neverTruncated {
+			t.Fatalf("the native file's truncate state differs: %+v", trunc)
+		}
+		data, holes, err := osdIO.read(f.Ino, layout, 0, st.Size, 0, trunc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1193,7 +1313,10 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		f.ReplyCap, f.ReplyCaps = st.Cap, cephCapString(st.Cap.Caps)
 		checkLayout(t, f, st)
 		before := waitCap(t, f.Ino, "Fr", 10*time.Second, func(c cephfsCap) bool { return c.Issued&cephCapFileRD != 0 })
-		data, _, err := osdIO.read(f.Ino, layout, 0, before.Size, 0)
+		if (cephfsTrunc{before.TruncateSize, before.TruncateSeq}) != neverTruncated {
+			t.Fatalf("the native file's truncate state before the truncate differs: %d seq %d", before.TruncateSize, before.TruncateSeq)
+		}
+		data, _, err := osdIO.read(f.Ino, layout, 0, before.Size, 0, truncOf(f.Ino))
 		if err != nil || before.Size != plan.TruncWriteSize || !bytes.Equal(data, truncPayload) {
 			t.Fatal("Go read before the truncate differs", err, before.Size)
 		}
@@ -1231,9 +1354,15 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		}
 		facts["trunc_cap_records"] = around
 		after := waitCap(t, f.Ino, "Fr after the truncate", 15*time.Second, func(c cephfsCap) bool { return c.Issued&cephCapFileRD != 0 && c.Size == plan.TruncSize })
-		// The Go read honours the TRUNC: it reads only up to the new size
-		// (the native client sends truncate_seq/size to the OSD instead).
-		data, _, err = osdIO.read(f.Ino, layout, 0, after.Size, 0)
+		// The Go read honours the TRUNC: it reads up to the new size and sends
+		// the new truncate_size/truncate_seq per object as the native client
+		// does (object 2: 17856, sequence 2).
+		state := truncOf(f.Ino)
+		f.Truncate = &state
+		if state != (cephfsTrunc{plan.TruncSize, m.TruncateSeq}) {
+			t.Fatalf("the truncate state after the TRUNC push differs: %+v", state)
+		}
+		data, _, err = osdIO.read(f.Ino, layout, 0, after.Size, 0, state)
 		if err != nil || !bytes.Equal(data, truncPayload[:plan.TruncSize]) {
 			t.Fatal("Go read after the TRUNC differs", err)
 		}
@@ -1290,17 +1419,42 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		return
 	}
 
-	// The product's OSD extent operations carry truncate_size and
-	// truncate_seq 0 (cephmsgr: "Truncate-sequence variants are
-	// unsupported"). The native client sends the inode's truncate sequence
-	// with every write. PrimaryLogPG treats a write whose sequence is older
-	// than the object's (set by the MDS's TRIMTRUNC) as a write that arrived
-	// after the truncate: it cuts the extent to the object size, here to
-	// length 0, executes nothing and echoes the cut extent in its reply. This
-	// leaf records how the Go client receives that reply for a write
-	// extending the truncated file; the file's metadata is not changed.
-	if !leaf("write_after_truncate_without_truncate_seq", func(t *testing.T) {
-		const probeBytes = 1000
+	// The native client sends the inode's truncate_size (per object,
+	// Striper::object_truncate_size) and truncate_seq with every extent
+	// operation (Filer::write_trunc, Filer::read_trunc); so does the Go
+	// client. After the native truncate the MDS's TRIMTRUNC gave every
+	// trimmed object the truncate sequence 2. The leaves below write at the
+	// new end of file with that sequence, replay a write with the previous
+	// sequence (PrimaryLogPG trims it at the object size), read with a newer
+	// sequence than an object's (the OSD clips at truncate_size) and send
+	// sequenced TRUNCATEs that are not newer (no-ops) and one that is.
+	const probeBytes = 1000
+	var (
+		truncObject, truncObjectStart, truncObjectSize uint64
+		truncImage                                     []byte
+		truncObjects                                   map[uint64]uint64
+	)
+	// objectBytes is the expected content of an object of trunc-file at
+	// in-object [0, n), from the expected file image.
+	objectBytes := func(objectno, n uint64) []byte {
+		var out []byte
+		for _, r := range layout.extentToFile(objectno, 0, n) {
+			out = append(out, truncImage[r[0]:r[0]+r[1]]...)
+		}
+		return out
+	}
+	// checkTruncFile compares both object views, the Go read and the native
+	// read with the expected state of trunc-file.
+	checkTruncFile := func(t *testing.T, f *cephfsDataFileEvidence) {
+		t.Helper()
+		checkObjects(t, f, truncObjects)
+		got, holes, err := osdIO.read(f.Ino, layout, 0, uint64(len(truncImage)), 0, truncOf(f.Ino))
+		if err != nil || !bytes.Equal(got, truncImage) {
+			t.Fatal("Go read of trunc-file differs from the expected image", err, holes)
+		}
+		nativeRead(t, f, "trunc-file", truncImage)
+	}
+	if !leaf("write_after_truncate_with_truncate_seq", func(t *testing.T) {
 		base := files["trunc-file"]
 		f := &cephfsDataFileEvidence{Name: "trunc-file", Ino: base.Ino}
 		files["trunc-file-extend"] = f
@@ -1308,44 +1462,188 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		f.ReplyCap, f.ReplyCaps, f.ReplyMaxSize = st.Cap, cephCapString(st.Cap.Caps), st.MaxSize
 		checkLayout(t, f, st)
 		c := waitCap(t, f.Ino, "Fw", 10*time.Second, func(c cephfsCap) bool { return c.Issued&cephCapFileWR != 0 })
-		if c.Size != plan.TruncSize || c.TruncateSeq < 2 {
-			t.Fatalf("the reopened file's size or truncate sequence differs: %d seq %d", c.Size, c.TruncateSeq)
+		trunc := truncOf(f.Ino)
+		f.Truncate = &trunc
+		if c.Size != plan.TruncSize || trunc != (cephfsTrunc{plan.TruncSize, 2}) || st.TruncateSeq != trunc.Seq || st.TruncateSize != trunc.Size {
+			t.Fatalf("the reopened file's size or truncate state differs: %d %+v (InodeStat %d seq %d)", c.Size, trunc, st.TruncateSize, st.TruncateSeq)
 		}
 		ensureMaxSize(t, f, plan.TruncSize+probeBytes)
 		probe := cephfsDataStream("ceph-msgr-cephfs-data-probe:"+oracle.Token, probeBytes)
 		f.SnapContext, f.MTime = snapc(t, f.Ino), newMTime(f.Ino)
 		ext := layout.fileToExtents(plan.TruncSize, probeBytes)
-		if len(ext) != 1 || truncExpected == nil || ext[0].Offset != truncExpected[ext[0].ObjectNo] {
+		if len(ext) != 1 || truncExpected == nil || ext[0].Offset != truncExpected[ext[0].ObjectNo] || layout.objectTruncateSize(ext[0].ObjectNo, trunc.Size) != ext[0].Offset {
 			t.Fatalf("the probe does not start at the trimmed end of one object: %+v %v", ext, truncExpected)
 		}
-		name := cephfsObjectName(f.Ino, ext[0].ObjectNo)
-		_, e, err := osdIO.request(name, ext[0].ObjectNo, "write", cephmsgr.OSDRequest{ModificationTime: cephmsgr.OSDTime{Seconds: f.MTime.Seconds, Nanoseconds: f.MTime.Nanoseconds},
-			Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDWrite, Offset: ext[0].Offset, Length: probeBytes, Data: probe}}, SnapContext: f.SnapContext})
-		var unknown *cephmsgr.OutcomeUnknownError
-		facts["truncate_seq_probe_write"] = e
-		if err == nil || !errors.As(err, &unknown) || !strings.Contains(err.Error(), "OSD reply extent differs from request") {
-			t.Fatalf("the clipped write reply was not refused as an extent mismatch: %v (%+v)", err, e)
-		}
-		// The connection failed with the malformed reply; a new one reads the
-		// object state.
-		osdIO.reset()
-		exists, size, err := osdIO.stat(f.Ino, ext[0].ObjectNo)
-		if err != nil {
+		truncObject, truncObjectStart = ext[0].ObjectNo, ext[0].Offset
+		if err := osdIO.write(f.Ino, layout, plan.TruncSize, probe, f.SnapContext, f.MTime, trunc); err != nil {
 			t.Fatal(err)
 		}
-		got, _, err := osdIO.read(f.Ino, layout, 0, plan.TruncSize, 0)
-		if err != nil {
+		w := osdIO.last()
+		if w.TruncateSize != truncObjectStart || w.TruncateSeq != trunc.Seq || w.Code != 0 || w.ReplyLength == nil || *w.ReplyLength != probeBytes {
+			t.Fatalf("the sequenced write was not executed in full: %+v", w)
+		}
+		newSize := plan.TruncSize + probeBytes
+		if err := agent.markDirty(f.Ino, newSize, f.MTime, f.SnapContext.Sequence, false, 0, nil); err != nil {
 			t.Fatal(err)
 		}
-		facts["truncate_seq_probe"] = map[string]any{"object": name, "object_offset": ext[0].Offset, "object_exists_after": exists, "object_size_after": size,
-			"truncate_seq": c.TruncateSeq, "write_error": e.Error, "osd_dials": dials.OSD.Load()}
-		if !exists || size != ext[0].Offset || !bytes.Equal(got, truncPayload[:plan.TruncSize]) {
-			t.Fatalf("the object after the clipped write differs: exists %v size %d", exists, size)
+		flush(t, f)
+		if m := f.FlushMessage; m.Size != newSize || m.Dirty != cephCapFileWR || m.TruncateSeq != trunc.Seq {
+			t.Fatalf("flush message differs: %+v", m)
 		}
-		nativeRead(t, f, f.Name, truncPayload[:plan.TruncSize])
-		findings = append(findings, fmt.Sprintf("A Go OSD WRITE without truncate_seq to %s after a native truncate (object truncate_seq %d from the MDS's TRIMTRUNC) is cut by PrimaryLogPG to length 0 and answered with the cut extent; cephmsgr refuses that reply (%q), fails the OSD connection and reports an unknown outcome. The object kept size %d. The native client sends truncate_seq/truncate_size with every extent op, which the product cannot encode.",
-			name, c.TruncateSeq, e.Error, size))
+		first, tr := submit(t, "getattr trunc-file after the sequenced write", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetattr, Args: cephfsGetattrArgs(cephStatAll), Path: cephmsgr.MDSFilePath{Ino: f.Ino}})
+		if first.Result != 0 || tr.Target == nil || tr.Target.Size != newSize || tr.Target.TruncateSeq != trunc.Seq || tr.Target.TruncateSize != trunc.Size {
+			t.Fatal("MDS size or truncate state after the sequenced write differ", first.Result)
+		}
+		f.GetattrSize, f.GetattrMTime, f.GetattrChange = tr.Target.Size, tr.Target.MTime, tr.Target.ChangeAttr
+		truncImage = append(slices.Clone(truncPayload[:plan.TruncSize]), probe...)
+		truncObjectSize = truncObjectStart + probeBytes
+		truncObjects = maps.Clone(truncExpected)
+		truncObjects[truncObject] = truncObjectSize
+		checkTruncFile(t, f)
+		facts["truncate_seq_write"] = map[string]any{"object": cephfsObjectName(f.Ino, truncObject), "object_offset": truncObjectStart, "truncate": trunc, "request": w,
+			"getattr_size": tr.Target.Size, "getattr_truncate_seq": tr.Target.TruncateSeq, "getattr_truncate_size": tr.Target.TruncateSize}
 		closeFile(t, f, cephFileModeRDWR)
+	}) {
+		return
+	}
+
+	// A write issued under the previous truncate sequence (here replayed
+	// after the truncate) that extends past the trimmed object is cut by
+	// PrimaryLogPG at the object size (PrimaryLogPG.cc 6768-6777). The OSD
+	// answers result 0 with the shortened extent; the product reports it as
+	// a success whose Length is the number of bytes written.
+	if !leaf("stale_truncate_seq_write_trimmed", func(t *testing.T) {
+		const staleBytes = 1000
+		f := &cephfsDataFileEvidence{Name: "trunc-file", Ino: files["trunc-file"].Ino}
+		files["trunc-file-stale"] = f
+		st := open(t, f.Ino, cephFileModeRDWR, f.Name+" for a stale write")
+		f.ReplyCap, f.ReplyCaps, f.ReplyMaxSize = st.Cap, cephCapString(st.Cap.Caps), st.MaxSize
+		waitCap(t, f.Ino, "Fw", 10*time.Second, func(c cephfsCap) bool { return c.Issued&cephCapFileWR != 0 })
+		trunc := truncOf(f.Ino)
+		f.Truncate = &trunc
+		stale := cephfsTrunc{trunc.Size, trunc.Seq - 1}
+		offset := uint64(len(truncImage)) - staleBytes/2
+		ext := layout.fileToExtents(offset, staleBytes)
+		if len(ext) != 1 || ext[0].ObjectNo != truncObject || ext[0].Offset != truncObjectSize-staleBytes/2 || st.Size != uint64(len(truncImage)) {
+			t.Fatalf("the stale write does not straddle the end of object %d: %+v (size %d)", truncObject, ext, st.Size)
+		}
+		size, seq := stale.wire(layout, truncObject)
+		payload := cephfsDataStream("ceph-msgr-cephfs-data-stale:"+oracle.Token, staleBytes)
+		f.SnapContext, f.MTime = snapc(t, f.Ino), newMTime(f.Ino)
+		name := cephfsObjectName(f.Ino, truncObject)
+		reply, e, err := osdIO.request(name, truncObject, "write", cephmsgr.OSDRequest{ModificationTime: cephmsgr.OSDTime{Seconds: f.MTime.Seconds, Nanoseconds: f.MTime.Nanoseconds},
+			Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDWrite, Offset: ext[0].Offset, Length: staleBytes, Data: payload, TruncateSize: size, TruncateSequence: seq}}, SnapContext: f.SnapContext})
+		kept := truncObjectSize - ext[0].Offset
+		facts["stale_truncate_seq_write"] = map[string]any{"object": name, "object_offset": ext[0].Offset, "requested": staleBytes, "kept": kept, "truncate_size": size, "truncate_seq": seq,
+			"object_truncate_seq": trunc.Seq, "request": e}
+		if err != nil || reply.Code != 0 || len(reply.Operations) != 1 {
+			t.Fatalf("the stale write did not complete: %v (%+v)", err, e)
+		}
+		op := reply.Operations[0]
+		if op.Result != 0 || op.Offset != ext[0].Offset || op.Length != kept || op.TruncateSize != size || op.TruncateSequence != seq || seq != 1 || size != truncObjectStart {
+			t.Fatalf("the stale write reply differs: %+v", op)
+		}
+		copy(truncImage[offset:], payload[:kept])
+		checkTruncFile(t, f)
+		findings = append(findings, fmt.Sprintf("A Go WRITE of %d bytes to %s with the previous truncate_seq %d (object truncate_seq %d) was trimmed by the OSD to %d bytes at the object size %d; cephmsgr returned success (result 0, user version %d) with the shortened Length %d. A caller must compare the reply Length with the request to see the trim.",
+			staleBytes, name, seq, trunc.Seq, kept, truncObjectSize, reply.UserVersion, op.Length))
+		closeFile(t, f, cephFileModeRDWR)
+	}) {
+		return
+	}
+
+	// A READ whose truncate_seq is newer than the object's and that extends
+	// past truncate_size is clipped there (PrimaryLogPG.cc 5849-5853): a
+	// reader that already holds a newer truncation than the object. Object 0
+	// was written natively with the never-truncated pair (OSD sequence 0);
+	// the trimmed object carries sequence 2.
+	if !leaf("read_with_newer_truncate_seq_clips", func(t *testing.T) {
+		f := &cephfsDataFileEvidence{Name: "trunc-file", Ino: files["trunc-file"].Ino}
+		files["trunc-file-newer-read"] = f
+		trunc := truncOf(f.Ino)
+		f.Truncate = &trunc
+		newer := trunc.Seq + 1
+		var records []any
+		for _, tc := range []struct {
+			objectno, size, clip uint64
+		}{{0, truncObjects[0], 65536}, {truncObject, truncObjectSize, 10000}} {
+			name := cephfsObjectName(f.Ino, tc.objectno)
+			want := objectBytes(tc.objectno, tc.size)
+			for _, seq := range []uint32{newer, trunc.Seq} {
+				size := tc.clip
+				if seq == trunc.Seq {
+					size, seq = trunc.wire(layout, tc.objectno)
+				}
+				reply, e, err := osdIO.request(name, tc.objectno, "read", cephmsgr.OSDRequest{Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDRead, Length: tc.size, TruncateSize: size, TruncateSequence: seq}}})
+				records = append(records, e)
+				if err != nil || len(reply.Operations) != 1 {
+					t.Fatalf("read of %s with truncate_seq %d failed: %v", name, seq, err)
+				}
+				op := reply.Operations[0]
+				wantLength := tc.size
+				if seq == newer {
+					wantLength = tc.clip
+				}
+				if op.Length != wantLength || !bytes.Equal(op.Data, want[:wantLength]) || op.TruncateSize != size || op.TruncateSequence != seq {
+					t.Fatalf("read of %s with truncate_seq %d (size %d) returned %d bytes, want %d", name, seq, size, len(op.Data), wantLength)
+				}
+			}
+		}
+		facts["newer_truncate_seq_reads"] = records
+		checkTruncFile(t, f)
+	}) {
+		return
+	}
+
+	// A sequenced TRUNCATE (offset = truncate_size, as Objecter::trunc sends
+	// it) that is not newer than the object's sequence is a no-op
+	// (PrimaryLogPG.cc 6986-6992). One that is newer applies: on the empty
+	// object beyond the end of file it raises the object's sequence, and a
+	// write with the inode's sequence is then cut to nothing.
+	if !leaf("sequenced_truncate_noop_when_not_newer", func(t *testing.T) {
+		f := &cephfsDataFileEvidence{Name: "trunc-file", Ino: files["trunc-file"].Ino}
+		files["trunc-file-sequenced-truncate"] = f
+		trunc := truncOf(f.Ino)
+		f.Truncate = &trunc
+		f.SnapContext, f.MTime = snapc(t, f.Ino), newMTime(f.Ino)
+		mtime := cephmsgr.OSDTime{Seconds: f.MTime.Seconds, Nanoseconds: f.MTime.Nanoseconds}
+		var records []any
+		truncate := func(objectno, offset uint64, seq uint32) cephmsgr.OSDReply {
+			t.Helper()
+			name := cephfsObjectName(f.Ino, objectno)
+			reply, e, err := osdIO.request(name, objectno, "truncate", cephmsgr.OSDRequest{ModificationTime: mtime, SnapContext: f.SnapContext,
+				Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDTruncate, Offset: offset, TruncateSize: offset, TruncateSequence: seq}}})
+			records = append(records, e)
+			if err != nil || reply.Code != 0 || len(reply.Operations) != 1 {
+				t.Fatalf("sequenced TRUNCATE of %s failed: %v", name, err)
+			}
+			if op := reply.Operations[0]; op.Result != 0 || op.Offset != offset || op.Length != 0 || op.TruncateSize != offset || op.TruncateSequence != seq {
+				t.Fatalf("sequenced TRUNCATE reply differs: %+v", op)
+			}
+			return reply
+		}
+		for _, seq := range []uint32{trunc.Seq, trunc.Seq - 1} {
+			truncate(truncObject, truncObjectStart, seq)
+			exists, size, err := osdIO.stat(f.Ino, truncObject)
+			if err != nil || !exists || size != truncObjectSize {
+				t.Fatalf("TRUNCATE to %d with truncate_seq %d changed object %d: exists %v size %d %v", truncObjectStart, seq, truncObject, exists, size, err)
+			}
+		}
+		// The last object of the old size is empty and beyond the end of file.
+		last := uint64(len(truncObjects) - 1)
+		if size, ok := truncObjects[last]; !ok || size != 0 || last <= truncObject {
+			t.Fatalf("no empty object beyond the end of file: %v", truncObjects)
+		}
+		truncate(last, 0, trunc.Seq+1)
+		name := cephfsObjectName(f.Ino, last)
+		reply, e, err := osdIO.request(name, last, "write", cephmsgr.OSDRequest{ModificationTime: mtime, SnapContext: f.SnapContext,
+			Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDWrite, Length: 100, Data: make([]byte, 100), TruncateSize: 0, TruncateSequence: trunc.Seq}}})
+		records = append(records, e)
+		if err != nil || reply.Code != 0 || len(reply.Operations) != 1 || reply.Operations[0].Length != 0 {
+			t.Fatalf("the write after the newer TRUNCATE was not cut to nothing: %v %+v", err, reply.Operations)
+		}
+		facts["sequenced_truncates"] = records
+		checkTruncFile(t, f)
 	}) {
 		return
 	}
@@ -1367,11 +1665,13 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 			sync.Mutex
 			began, done time.Time
 		}
+		trunc := truncOf(f.Ino)
+		f.Truncate = &trunc
 		err := agent.markDirty(f.Ino, plan.SharedSize, f.MTime, f.SnapContext.Sequence, true, hold, func() error {
 			writeback.Lock()
 			writeback.began = time.Now()
 			writeback.Unlock()
-			err := osdIO.write(f.Ino, layout, 0, sharedPayload, f.SnapContext, f.MTime)
+			err := osdIO.write(f.Ino, layout, 0, sharedPayload, f.SnapContext, f.MTime, trunc)
 			writeback.Lock()
 			writeback.done = time.Now()
 			writeback.Unlock()
@@ -1469,7 +1769,9 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		ensureMaxSize(t, f, plan.SnapV1Size)
 		before := snapc(t, f.Ino)
 		mtime1 := newMTime(f.Ino)
-		if err := osdIO.write(f.Ino, layout, 0, snapV1, before, mtime1); err != nil {
+		trunc := truncOf(f.Ino)
+		f.Truncate = &trunc
+		if err := osdIO.write(f.Ino, layout, 0, snapV1, before, mtime1, trunc); err != nil {
 			t.Fatal(err)
 		}
 		if err := agent.markDirty(f.Ino, plan.SnapV1Size, mtime1, before.Sequence, false, 0, nil); err != nil {
@@ -1524,7 +1826,7 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 			t.Fatalf("the snap context after the snapshot differs: %+v (snapshot %d, before %+v)", f.SnapContext, snapID, before)
 		}
 		f.MTime = newMTime(f.Ino)
-		if err := osdIO.write(f.Ino, layout, plan.SnapV2Offset, snapV2, f.SnapContext, f.MTime); err != nil {
+		if err := osdIO.write(f.Ino, layout, plan.SnapV2Offset, snapV2, f.SnapContext, f.MTime, truncOf(f.Ino)); err != nil {
 			t.Fatal(err)
 		}
 		if err := agent.markDirty(f.Ino, plan.SnapV2Offset+plan.SnapV2Size, f.MTime, f.SnapContext.Sequence, false, 0, nil); err != nil {
@@ -1577,7 +1879,7 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 		}
 		facts["snapshot"] = map[string]any{"snap_id": snapID, "split": split, "v1_flush": v1Flush, "pre_snapshot_lists": preLists, "lists": lists, "native_snapshot": created.Native.Stat}
 		// The snapshot through the OSD (snap id reads) and natively.
-		old, holes, err := osdIO.read(f.Ino, layout, 0, plan.SnapV1Size, snapID)
+		old, holes, err := osdIO.read(f.Ino, layout, 0, plan.SnapV1Size, snapID, truncOf(f.Ino))
 		if err != nil || len(holes) != 0 || !bytes.Equal(old, snapV1) {
 			t.Fatal("Go snapshot read differs from the pre-snapshot bytes", err, holes)
 		}

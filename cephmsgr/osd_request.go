@@ -57,7 +57,15 @@ const (
 // CompareExtent require Length == len(Data); WriteFull/Append have Offset 0.
 // Truncate uses Offset as the new size. Create/Delete/Stat have zero extents.
 // AssertVersion uses Version, with zero extents and no payload. Only Create
-// accepts ExclusiveCreate. Truncate-sequence variants are unsupported.
+// accepts ExclusiveCreate. TruncateSize/TruncateSequence are the extent
+// truncate fields CephFS data I/O sends on Read, Write and Truncate: a read
+// past a newer truncation is clipped at TruncateSize, a write with an older
+// sequence than the object's is trimmed at the object's size (the reply
+// Length is then the bytes actually written), a write with a newer sequence
+// truncates the object first, and a sequenced Truncate (Offset must equal
+// TruncateSize) is a no-op unless its sequence is newer. A size requires a
+// nonzero sequence. Even with zero fields the OSD trims a write that extends
+// an object carrying a truncate sequence.
 // Xattr is the active input union for Get/GetAll/Compare/Set/RemoveXattr;
 // their extent and Version fields are zero. Data holds the SET/CMP bytes.
 // Omap is the active input for the OMAP reads and mutations, with zero
@@ -87,6 +95,9 @@ type OSDOperation struct {
 	Checksum       OSDChecksumInput
 	ListWatchers   OSDListWatchersInput
 	ListSnapshots  OSDListSnapshotsInput
+
+	TruncateSize     uint64
+	TruncateSequence uint32
 }
 
 // OSDTime is Tentacle's raw utime_t. Zero preserves the server's zero-mtime
@@ -294,7 +305,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		Operations: make([]osd.Operation, len(request.Operations)),
 		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots}
 	for i, op := range request.Operations {
-		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
+		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Code, op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
 			AllocHint:    osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},
 			Watch:        watchWireInput(op.Watch),
 			SparseRead:   osd.SparseReadInput{MaxOutputBytes: op.SparseRead.MaxOutputBytes},
@@ -380,7 +391,9 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		if requested.Code == osd.AssertVersion {
 			length = requested.Version
 		}
-		shortExtent := requested.Code == osd.Read || requested.Code == osd.CompareExtent
+		// The OSD trims a WRITE that extends an object past a newer
+		// truncation and echoes the shortened extent (PrimaryLogPG.cc:6768-6777).
+		shortExtent := requested.Code == osd.Read || requested.Code == osd.CompareExtent || requested.Code == osd.Write
 		if op.Code != requested.Code && !normalizedZero || op.Flags&(osd.OpExclusive|osd.OpFailOK) != requested.Flags || uint64(len(op.Data)) != uint64(op.PayloadLength) {
 			return errors.New("OSD reply operation differs from request or payload metadata")
 		}
@@ -451,7 +464,7 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 			}
 			continue
 		}
-		if op.Offset != requested.Offset || op.Length > length || !shortExtent && op.Length != length || op.TruncateSize != 0 || op.TruncateSequence != 0 || op.Xattr != (osd.XattrResult{}) {
+		if op.Offset != requested.Offset || op.Length > length || !shortExtent && op.Length != length || op.TruncateSize != requested.TruncateSize || op.TruncateSequence != requested.TruncateSequence || op.Xattr != (osd.XattrResult{}) {
 			return errors.New("OSD reply extent differs from request")
 		}
 		switch requested.Code {

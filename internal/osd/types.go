@@ -93,6 +93,10 @@ type Operation struct {
 	Code           uint16
 	Flags          uint32
 	Offset, Length uint64
+	// TruncateSize and TruncateSequence are the extent union's truncate
+	// fields, admitted only on READ, WRITE and TRUNCATE (CephFS file data).
+	TruncateSize     uint64
+	TruncateSequence uint32
 }
 
 // Request.Hash is the caller's raw object hash. MOSDOp v6 transmits this in
