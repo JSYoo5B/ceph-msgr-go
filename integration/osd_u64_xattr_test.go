@@ -78,7 +78,11 @@ func TestCephOSDU64XattrIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_U64_XATTR_ORACLE") != "1" {
 		t.Skip("requires staged pinned native C++ U64 comparison oracle")
 	}
-	c, _, base, _ := osdFixture(t)
+	fixture := osdFixture
+	if isReplicatedPGFixtureProfile() {
+		fixture = replicatedPGFixture
+	}
+	c, _, base, _ := fixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 360*time.Second)
 	defer cancel()
 	prepared := false
@@ -184,6 +188,9 @@ func TestCephOSDU64XattrIntegration(t *testing.T) {
 				ops = append(ops, cephmsgr.OSDOperation{Code: cephmsgr.OSDSetXattr, Xattr: cephmsgr.OSDXattrInput{Name: "marker"}, Data: []byte("u64-native-marker")}, cephmsgr.OSDOperation{Code: cephmsgr.OSDRemoveXattr, Xattr: cephmsgr.OSDXattrInput{Name: "remove"}})
 			}
 			request := osdObjectRequest(route, ops...)
+			if isReplicatedPGFixtureProfile() {
+				request = replicatedPGRequest(route, ops...)
+			}
 			if tc.action != "read" {
 				request.ModificationTime = cephmsgr.OSDTime{Seconds: 1700000001}
 			}
@@ -200,6 +207,14 @@ func TestCephOSDU64XattrIntegration(t *testing.T) {
 			if reply.Code != tc.code || len(reply.Operations) != len(ops) || reply.Transaction == 0 || reply.Submission.Transaction != reply.Transaction || reply.MapEpoch < route.Epoch || reply.Object != subject || reply.RetryAttempt != 0 || len(reply.RawData) != 0 {
 				t.Fatal("numeric reply identity/result lost", reply)
 			}
+			expectedSeed := route.Hash
+			if request.Placement != nil {
+				expectedSeed = request.Placement.PG.Seed
+			}
+			if reply.PG.Pool != uint64(route.Pool) || reply.PG.Seed != expectedSeed || reply.GlobalID == 0 || reply.Submission.GlobalID != reply.GlobalID || reply.Submission.MapEpoch != route.Epoch {
+				t.Fatal("numeric reply placement/session identity differs", reply)
+			}
+
 			result := reply.Operations[cmpIndex]
 			if result.Result != tc.cmpResult || result.Xattr.ComparisonMode != 2 || result.Xattr.ValueLength != 8 || len(result.Data) != 0 {
 				t.Fatal("raw numeric union/result lost", result)
