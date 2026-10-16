@@ -130,12 +130,12 @@ func mdsCephFSDataGoCaps(fsName string) ceph.ClientCaps {
 
 func mdsCephFSDataNativeCaps(fsName string) ceph.ClientCaps {
 	// The native oracle sets and removes the directory layout (`p`), creates
-	// and removes one snapshot (`s`) and reads and writes file data.
+	// and removes three snapshots (`s`) and reads and writes file data.
 	return ceph.ClientCaps{Mon: "allow r", MDS: "allow rwps fsname=" + fsName, OSD: "allow rw tag cephfs data=" + fsName}
 }
 
 // One fixed native LibCephFS driver. It admits only the owned directory, its
-// five files, the planned snapshot and the snapshot's view of snap-file.
+// six files, the three planned snapshots and their admitted file views.
 // Payloads are regenerated from the plan seeds; nothing else reaches it.
 // Object views use the python rados binding and, for clones, the rados CLI's
 // listsnaps on the same identity. Sources: pybind/cephfs/cephfs.pyx,

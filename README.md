@@ -452,6 +452,13 @@ SnapContext 쓰기와 clone까지 두 구성에서 native와 일치했다. OSD �
 truncate_size·truncate_seq를 READ·WRITE·TRUNCATE에 실어 보낼 수 있다. OSD가 이전 sequence의
 쓰기를 객체 크기에서 자르면 결과는 0이고 응답 `Length`가 실제로 쓴 bytes 수가 된다.
 
+[Dirty-data cap-snap 검증 기록](integration/fixture/MDS_CEPHFS_CAPSNAP_VALIDATION.md)에서는
+시험 전용 consumer가 두 snapshot에 걸친 dirty A/B 세대를 보관하고 각 old-context OSD
+writeback 뒤 FLUSHSNAP을 보냈다. 두 구성에서 정확한 inode·follows·TID·dirty ACK를 받았고,
+Go와 native의 snapshot A/B 및 head C bytes·크기·mtime·clone 연결이 일치했다. Local pending
+ACK의 중첩을 관측했으며 서버 실행 동시성은 확인하지 않았다. 이 처리는 기존 raw API를
+사용하는 시험 코드에 있고, 제품에 cache나 자동 writeback 정책을 추가하지 않는다.
+
 ## RBD 기반 통신 검증
 
 RBD는 별도 Messenger 서버가 아니므로 제품은 RBD API를 제공하지 않는다. 대신 native

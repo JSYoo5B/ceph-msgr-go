@@ -6,13 +6,11 @@ independent test-only restatement, no native code copied).
 
 ## Implementation and current evidence
 
-The data acceptance has a new
-`dirty_data_capsnaps_across_two_snapshots` leaf. Native runs of this new leaf
-are **pending**. Earlier evidence in
+The data acceptance's `dirty_data_capsnaps_across_two_snapshots` leaf passed
+against actual Ceph in both configurations below. Earlier evidence in
 [MDS_CEPHFS_DATA_VALIDATION.md](MDS_CEPHFS_DATA_VALIDATION.md) and
 [MDS_CEPHFS_COMPLETION_VALIDATION.md](MDS_CEPHFS_COMPLETION_VALIDATION.md)
-does not establish this behavior. This record must be updated with the
-actual tested source and receipts after native execution.
+remains a record of its earlier, narrower tests.
 
 No product API, protocol feature or runtime dependency is added. The test
 consumer uses the existing `MDSSession.SendCaps`/cap events, explicit OSD
@@ -66,9 +64,11 @@ largest image before dirtying it:
    files, layout and directory; release caps and confirm session closure.
    Existing fixture ownership cleanup remains required.
 
-The two dirty generations coexist by construction. Simultaneous pending
-FLUSHSNAP_ACKs are a separate fact and are not claimed without observed
-receipts. Synthetic reverse-order ACK coverage is labeled separately.
+The two dirty generations coexist by construction. Both runs also recorded
+local pending-ACK overlap: the second `SendCaps` completed before the first
+ACK's transport-dispatch `Received` timestamp. This does not establish
+concurrent server execution. Synthetic reverse-order ACK coverage remains a
+separate claim.
 
 Pinned source basis: `client/Client.cc` `queue_cap_snap` (4245),
 `finish_cap_snap` (4283), `send_flush_snap` (4311), `flush_snaps` (4359),
@@ -77,10 +77,88 @@ Pinned source basis: `client/Client.cc` `queue_cap_snap` (4245),
 FLUSHSNAP handling (3504). These line numbers describe the pinned source,
 not the working Go files.
 
+## Native results and source identity
+
+Both final runs used the clean isolated source at commit
+`be23f24ce7baf15827d9e3ec5f2077e74db6e243`, based on `6a8fe88`, before
+this results update and the narrative-only manifest/comment correction.
+The product implementation was unchanged. Image (arm64):
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`.
+Provider ceph-testcontainers-go v0.3.0, Go 1.27.2, Docker Engine 29.8.2.
+Both use one active rank-0 MDS and the existing single-OSD `legacy-v6`
+profile. Selector: `^TestCephMDSCephFSDataIntegration$`.
+
+| Configuration | Runner log window (2026-10-16, Asia/Seoul) | Entire test | New leaf | Result |
+| --- | --- | --- | --- | --- |
+| Darwin arm64 host, IPv4 relay, CRC, AES client/service keys, BlueStore | 18:19:30–18:23:07 | 129.98 s | 32.22 s | 12/12 leaves, exit 0 |
+| CGO=0 Linux arm64 container, IPv6, secure, AES256K client/service keys, MemStore | 18:23:28–18:26:41 | 108.00 s | 23.71 s | 12/12 leaves, exit 0 |
+
+Both runs retained two buffered generations with transaction 0 before
+writeback. Snapshot IDs were 3 and 4; the previous ordinary snapshot was 2.
+Contexts were `{2,[2]}`, `{3,[3,2]}` and head `{4,[4,3,2]}`. The FLUSHSNAPs
+carried TIDs 6 and 7, follows 2 and 3, dirty FILE_WR (4096), sizes 200000 and
+220000 and oldest flush TID 6. Each matching ACK retained inode, follows,
+TID and dirty mask. The second send completed 4.958901 s / 0.704797 s before
+the first ACK's transport-dispatch timestamp (CRC / secure), establishing
+local pending-ACK overlap in these runs.
+
+Go snapshot reads matched A/B and head matched C (240000 bytes) with
+`bytes.Equal` assertions in the executed source. Native LibCephFS returned
+matching whole-file SHA-256 and every 16 KiB chunk digest, sizes and snapshot
+mtime seconds. Go and native LIST_SNAPS agreed for both objects: snapshot 3
+holds A, snapshot 4 holds B, and head holds C, with each version's striped
+object sizes and no clone overlap after the complete overwrites. The source
+requires ONDISK completion for successful OSD writes; raw OSD reply flags
+and Go object buffers are not archived, so their evidence is the executed
+assertions and passing test, not an archived wire capture.
+
+Cleanup passed in both configurations: all three snapshots removed, six
+files unlinked, layout and directory removed, caps returned, confirmed
+session closure, namespace/layout/blocklist restored, both data identities
+removed, owned filesystem/pools removed, and all 9 recorded owned containers
+terminated. The runner exited 0 only after cleanup. No daemon setting was
+changed for this new leaf.
+
+The first CRC attempt at earlier commit `380c9dd` also passed all 12 leaves
+(118.92 s; new leaf 27.72 s) and cleanup. Independent review subsequently
+found a synthetic failure-path defect: a failed cap send with an allocated
+transaction could be skipped by a later explicit drain. `be23f24` keeps
+that failure as a barrier and adds a regression test. The earlier raw
+receipt is preserved separately and does not replace either final run.
+
+Checks before the final native runs: full default integration tests and
+fixture tests with CGO=0 passed; focused generation/ACK tests passed normally
+and under the race detector after the failure-barrier correction. No product
+API or feature declaration changed. The final documentation also corrects
+the manifest's human-readable `cephfs_data_mutations` text from five files /
+one snapshot to six files / three snapshots. The archived manifests retain
+the older narrative; their actual owned plans, mutation journals and cleanup
+receipts contain the correct six-file/three-snapshot scope. Existing raw
+artifacts were not rewritten.
+
+Local artifacts, each with an adjacent `.log`:
+
+- `/private/tmp/ceph-mds-capsnap-crc-aes-20261016-final/`
+- `/private/tmp/ceph-mds-capsnap-secure-aes256k-ipv6-20261016-final/`
+- Earlier attempt: `/private/tmp/ceph-mds-capsnap-crc-aes-20261016-first/`
+
+`mds-cephfs-data-results.json` SHA-256:
+
+- CRC final: `7112ff21483ead5e6a80655496bc52968d3dcfcf961c6c0600846974b55a7fe8`
+- Secure final: `fa32990f9d0f5f0ed4b85511110fd48a5a2cc6fb2e233f9a8cf4f18574088b8d`
+
+Tested source SHA-256 (before the narrative-only comment correction):
+
+- `integration/mds_cephfs_capsnap_test.go`: `679a5f6e5817168d7df16a2a9caf7b5e76792f57720327e23d1f299c57ae0417`
+- `integration/mds_cephfs_capsnap_queue_test.go`: `853291cb4a57ce89fad4d3e62619748bbd19a0156f3fa168e6b7585a9d83cfa4`
+- `integration/mds_cephfs_agent_test.go`: `f203dc9d1dc666eab4e7e27bf9265b49bfa9d02c1555a12872b0c6ce98e28680`
+- `integration/mds_cephfs_data_test.go`: `0cc483195ff2d3e56af0b38f2f71377ece8b40a9da31f95dbcb8badf594fa674`
+- `integration/fixture/mds_cephfs_data.go`: `ab546f7c4aa1362a290ab7818bf9c20ddff53e715af783485486c24c95d394de`
+
 ## Limits
 
-Until native execution passes, dirty-data FLUSHSNAP and multi-snapshot
-interoperability remain unverified. This recipe does not cover file I/O
-retry, eviction/failover with dirty data, snapshot deletion while flushing,
-multiple writers, inline data, fscrypt or reconnect cap-snaps. The data
-fixture remains the existing single-OSD `legacy-v6` profile.
+This verifies the fixed two-snapshot, one-writer recipe on the configurations
+above. It does not cover file I/O retry, eviction/failover with dirty data,
+snapshot deletion while flushing, multiple writers, inline data, fscrypt,
+reconnect cap-snaps or concurrent server execution of the two FLUSHSNAPs.
+The data fixture remains the existing single-OSD `legacy-v6` profile.

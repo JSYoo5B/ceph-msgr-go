@@ -1,5 +1,10 @@
 # CephFS file data acceptance
 
+This records the earlier data acceptance. The later two-snapshot dirty-data
+cap-snap results are recorded separately in
+[MDS_CEPHFS_CAPSNAP_VALIDATION.md](MDS_CEPHFS_CAPSNAP_VALIDATION.md); the
+historical runs and their limits below are unchanged.
+
 Reference: Tentacle Ceph 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`. The product remains native Go,
 without CGO, librados, go-ceph, Ceph CLI subprocesses or native runtime

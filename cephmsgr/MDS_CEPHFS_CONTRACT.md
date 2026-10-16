@@ -305,8 +305,15 @@ UPDATE/FLUSH_ACK, buffered writeback during capability revocation, and a single
 snapshot whose object clones and file bytes match native clients. Its test-only
 consumer owns the layout, dirty buffers and data/metadata ordering; the product
 transports the OSD requests and cap messages without implementing that policy.
-This evidence does not cover dirty-data cap snaps spanning a snapshot or cap
-snaps across several snapshots.
+The [dirty-data cap-snap acceptance](../integration/fixture/MDS_CEPHFS_CAPSNAP_VALIDATION.md)
+adds two retained dirty generations across two snapshots using existing raw
+APIs. In both configurations its A/B writebacks preceded their separate
+FLUSHSNAPs, exact inode/follows/TID/dirty ACKs arrived, and Go/native snapshot
+and head bytes, sizes, mtimes and object clone associations matched A/B/C.
+Local pending ACKs overlapped; concurrent server execution was not established.
+The source asserts OSD ONDISK completion; raw reply flags are not archived.
+This fixed one-writer recipe does not cover dirty-data recovery or reconnect
+cap-snaps.
 
 Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and
@@ -340,9 +347,9 @@ takeover and multiple ranks are covered by the ranks acceptance under
 Evidence, and completed-record answers, denial and a missed window by the
 completion acceptance there. Not exercised live: split reconnect messages,
 non-root realms, the GETATTR conversion, completed-record answers for other
-operations, a lost reply of an OPEN with O_CREAT, dirty-data cap snaps spanning
-a snapshot and cap snaps across several snapshots. Ordinary dirty-metadata
-UPDATE/FLUSH_ACK with OSD writeback has the separate file-data evidence above.
+operations, a lost reply of an OPEN with O_CREAT, and reconnect or MDS
+failover with dirty cap-snaps. Ordinary dirty-metadata UPDATE/FLUSH_ACK and
+the fixed two-snapshot dirty-data recipe have the separate evidence above.
 
 Recovery automatically resumes only the same-address Messenger transport.
 Selecting a new MDS incarnation and reconnect state, replaying an unknown
