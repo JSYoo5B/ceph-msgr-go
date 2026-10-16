@@ -252,10 +252,11 @@ admits paths up to three levels below the owned directory and adds `list`
 | `pin`, `placement` | also `chain/hop`, `chain`, `inflight`; ranks up to 2 | as above |
 | `list` | `dir`, `chain/hop`, `inflight`, `replay` | read only: native listing |
 | `ops` | rank, an observed owned GlobalID | read only: that rank daemon's `dump_historic_ops`, client requests of that GlobalID only |
+| `ops-in-flight` | rank, an observed owned GlobalID | read only: that rank daemon's `dump_ops_in_flight`, client requests of that GlobalID only, in `ops_in_flight` with the sampled daemon in `ops_daemon`. The replay leaf takes two samples of rank 0 at least 3 s apart while its journal is paused (the ceph-testcontainers-go v0.3.0 unsafe-window receipt) |
 | `replay-enable` | none | mutation: journals `intended`, runs `fs set <owned fs> allow_standby_replay true` once, then waits (60 s, 100 ms period) until the owned standby, same name, GID, endpoint and nonce, follows rank 0 with every rank unchanged; the followed topology becomes current |
 | `log-pause`, `log-resume` | none | mutation: runtime-only `mds_log_pause` of the current rank-0 incarnation through `tell mds.<name> config set`, read back with `config get`; the pause requires the read value `false`, is issued once before the takeover and is journaled first; the resume restores the read value |
 
-While a pause is in effect only `observe`, `ops`, `placement`,
+While a pause is in effect only `observe`, `ops`, `ops-in-flight`, `placement`,
 `log-resume` and the takeover actions run: a native mount opens a journaled
 session on every rank and would wait on rank 0. The takeover arms the spare
 (standby or follower) and records ranks 1 and 2; adoption requires the

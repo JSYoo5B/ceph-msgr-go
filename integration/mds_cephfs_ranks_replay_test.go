@@ -119,6 +119,7 @@ type replayTakeoverEvidence struct {
 	Others                   []nativeMDSCephFSRanksDaemon
 	Pause                    *nativeMDSCephFSRanksRuntime
 	UnsafeAfterFlushMillis   int64
+	UnsafeWindow             *mdsUnsafeWindowEvidence
 	StillUnsafe              []bool
 	FireStarted, FireAcked   time.Time
 	FireAckMillis            int64
@@ -852,8 +853,33 @@ func TestCephMDSCephFSRanksReplayIntegration(t *testing.T) {
 		if err := sessions[0].FlushJournal(ctx); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(1500 * time.Millisecond)
-		takeover.UnsafeAfterFlushMillis = 1500
+		flushed := time.Now()
+		// The MDS side of the window (ceph-testcontainers-go v0.3.0 unsafe
+		// receipt): two dump_ops_in_flight samples of rank 0, at least 3 s
+		// apart and from the same daemon GID, hold both held requests after
+		// early_replied, at the journal submission and not journal_committed.
+		sampleInFlight := func(t *testing.T) mdsUnsafeWindowSample {
+			t.Helper()
+			sent := time.Now()
+			r := native(t, "ops-in-flight", "0", strconv.FormatUint(control.goGID, 10))
+			return mdsUnsafeWindowSample{MDSGID: r.OpsDaemon.GID, SentAt: sent, ReturnedAt: time.Now(), Ops: r.InFlightOps}
+		}
+		firstSample := sampleInFlight(t)
+		time.Sleep(time.Until(firstSample.ReturnedAt.Add(mdsUnsafeWindowGap)))
+		secondSample := sampleInFlight(t)
+		wantHeld := map[uint64]string{}
+		for _, p := range held {
+			wantHeld[p.e.Transaction] = mdsRequestUnsafe
+		}
+		window, err := checkMDSUnsafeWindow(firstSample, secondSample, control.goGID, wantHeld)
+		takeover.UnsafeWindow = &window
+		if err != nil {
+			t.Fatal(err)
+		}
+		if secondSample.MDSGID != control.topology.Ranks[0].GID {
+			t.Fatalf("the unsafe window was sampled on MDS %d, not rank 0's %d", secondSample.MDSGID, control.topology.Ranks[0].GID)
+		}
+		takeover.UnsafeAfterFlushMillis = time.Since(flushed).Milliseconds()
 		probe, stop := context.WithCancel(ctx)
 		stop()
 		for _, p := range held {

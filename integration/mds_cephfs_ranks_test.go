@@ -303,6 +303,7 @@ type nativeMDSCephFSRanksReceipt struct {
 	ReplayEnable    *nativeMDSCephFSRanksReplayEnable `json:"replay_enable"`
 	Runtime         *nativeMDSCephFSRanksRuntime      `json:"runtime"`
 	HistoricOps     []nativeMDSCephFSHistoricOp       `json:"historic_ops"`
+	InFlightOps     []nativeMDSCephFSHistoricOp       `json:"ops_in_flight"`
 	OpsDaemon       *nativeMDSCephFSRanksDaemon       `json:"ops_daemon"`
 	Complete        bool                              `json:"complete"`
 	Error           string                            `json:"error"`
@@ -451,10 +452,14 @@ func (x *mdsCephFSRanksControl) request(ctx context.Context, action string, args
 		if result.Native == nil || result.Native.Entries == nil || result.Native.NativeGlobalID == 0 || result.Native.NativeGlobalID == x.goGID {
 			return result, errors.New("native CephFS ranks listing missing or bound to the Go client")
 		}
-	case "ops":
+	case "ops", "ops-in-flight":
 		rank, _ := strconv.Atoi(args[0])
-		if result.OpsDaemon == nil || !result.OpsDaemon.same(x.topology.Ranks[rank]) || strconv.FormatUint(result.GlobalID, 10) != args[1] || result.HistoricOps == nil {
-			return result, errors.New("native MDS CephFS ranks historic ops receipt differs")
+		ops := result.HistoricOps
+		if action == "ops-in-flight" {
+			ops = result.InFlightOps
+		}
+		if result.OpsDaemon == nil || !result.OpsDaemon.same(x.topology.Ranks[rank]) || strconv.FormatUint(result.GlobalID, 10) != args[1] || ops == nil {
+			return result, errors.New("native MDS CephFS ranks op tracker receipt differs")
 		}
 	case "log-pause", "log-resume":
 		r, d := result.Runtime, x.topology.Ranks[0]

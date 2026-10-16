@@ -86,6 +86,7 @@ func TestMDSCephFSRanksReplayPlanAndRequests(t *testing.T) {
 		{[]string{"10", token, "placement", "chain/hop", "2"}, "placement", "chain/hop", "2", 0},
 		{[]string{"10", token, "list", "inflight"}, "list", "inflight", "", 0},
 		{[]string{"10", token, "ops", "2", "42"}, "ops", "", "2", 42},
+		{[]string{"10", token, "ops-in-flight", "0", "42"}, "ops-in-flight", "", "0", 42},
 		{[]string{"10", token, "replay-enable"}, "replay-enable", "", "", 0},
 		{[]string{"10", token, "log-pause"}, "log-pause", "", "", 0},
 		{[]string{"10", token, "log-resume"}, "log-resume", "", "", 0},
@@ -100,7 +101,7 @@ func TestMDSCephFSRanksReplayPlanAndRequests(t *testing.T) {
 	}
 	for _, fields := range [][]string{
 		{"10", token, "pin", "chain", "3"}, {"10", token, "placement", "chain", "-1"}, {"10", token, "list", "chain"}, {"10", token, "list", "/etc"},
-		{"10", token, "ops", "3", "42"}, {"10", token, "ops", "0"}, {"10", token, "ops", "0", "042"}, {"10", token, "replay-enable", "x"}, {"10", token, "log-pause", "true"},
+		{"10", token, "ops", "3", "42"}, {"10", token, "ops", "0"}, {"10", token, "ops", "0", "042"}, {"10", token, "ops-in-flight", "3", "42"}, {"10", token, "ops-in-flight", "0"}, {"10", token, "replay-enable", "x"}, {"10", token, "log-pause", "true"},
 		{"10", token, "pin", "replay", "1"},
 	} {
 		if _, _, err := parseMDSCephFSRanksRequest(fields, token, plan, 3, true, 0); err == nil {

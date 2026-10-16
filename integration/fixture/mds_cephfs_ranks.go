@@ -759,7 +759,7 @@ func parseMDSCephFSRanksRequest(fields []string, token string, plan mdsCephFSRan
 		gid, err := strconv.ParseUint(arg, 10, 64)
 		return gid, err == nil && gid != 0 && strconv.FormatUint(gid, 10) == arg
 	}
-	extension := map[string]bool{"replay-enable": true, "log-pause": true, "log-resume": true, "ops": true, "list": true}
+	extension := map[string]bool{"replay-enable": true, "log-pause": true, "log-resume": true, "ops": true, "ops-in-flight": true, "list": true}
 	if extension[action.name] && !replay {
 		return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks action belongs to the standby-replay extension")
 	}
@@ -797,7 +797,7 @@ func parseMDSCephFSRanksRequest(fields []string, token string, plan mdsCephFSRan
 			return 0, mdsCephFSRanksAction{}, errors.New("MDS CephFS ranks pin restoration target is not admitted")
 		}
 		action.target = args[0]
-	case "ops":
+	case "ops", "ops-in-flight":
 		gid, ok := uint64(0), false
 		if len(args) == 2 {
 			gid, ok = canonicalGID(args[1])
@@ -840,6 +840,7 @@ type mdsCephFSRanksResult struct {
 	ReplayEnable    *mdsCephFSRanksReplayEnable `json:"replay_enable,omitempty"`
 	Runtime         *mdsCephFSRanksRuntime      `json:"runtime,omitempty"`
 	HistoricOps     []mdsCephFSHistoricOp       `json:"historic_ops,omitempty"`
+	InFlightOps     []mdsCephFSHistoricOp       `json:"ops_in_flight,omitempty"`
 	OpsDaemon       *mdsCephFSRanksDaemon       `json:"ops_daemon,omitempty"`
 	Complete        bool                        `json:"complete"`
 	Error           string                      `json:"error,omitempty"`
@@ -1123,7 +1124,7 @@ func (c *fixtureCluster) mdsCephFSRanksControl(ctx context.Context, out string, 
 		// A native mount opens journaled sessions with every rank; while rank
 		// 0's journal is paused it would wait. Only map, admin and takeover
 		// actions run then.
-		if r := x.logPaused(); r != nil && !slices.Contains([]string{"observe", "ops", "placement", "log-resume", "takeover-arm"}, action.name) {
+		if r := x.logPaused(); r != nil && !slices.Contains([]string{"observe", "ops", "ops-in-flight", "placement", "log-resume", "takeover-arm"}, action.name) {
 			return fmt.Errorf("MDS CephFS ranks %s refused while the rank-0 journal pause is in effect", action.name)
 		}
 		if _, err := c.mdsCephFSRanksProve(ctx, false); err != nil {
@@ -1191,21 +1192,33 @@ func (c *fixtureCluster) mdsCephFSRanksAct(ctx context.Context, id int64, action
 		}
 		result.Native = &native
 		return nil
-	case "ops":
-		// Completed requests of one observed owned Go session from the op
-		// tracker of one proven rank's daemon.
+	case "ops", "ops-in-flight":
+		// Completed (ops) or pending (ops-in-flight) requests of one observed
+		// owned Go session from the op tracker of one proven rank's daemon.
+		// The pending view is the MDS side of the unsafe-to-safe window: a
+		// request answered early stays there, after early_replied and without
+		// journal_committed, while the rank's journal is paused.
 		if !slices.Contains(slices.Collect(maps.Values(x.owned)), action.gid) {
-			return errors.New("MDS CephFS ranks historic ops are admitted only for an observed owned Go session")
+			return errors.New("MDS CephFS ranks op tracker reads are admitted only for an observed owned Go session")
 		}
 		rank, _ := strconv.Atoi(action.value)
 		d := x.current.Ranks[rank]
-		data, err := c.mdsCephFSRanksTell(ctx, d, "dump_historic_ops", "--format", "json")
+		command := "dump_historic_ops"
+		if action.name == "ops-in-flight" {
+			command = "dump_ops_in_flight"
+		}
+		data, err := c.mdsCephFSRanksTell(ctx, d, command, "--format", "json")
 		if err != nil {
 			return err
 		}
 		described := *d
 		result.OpsDaemon = &described
-		result.HistoricOps, err = parseMDSCephFSHistoricOps(data, action.gid)
+		ops, err := parseMDSCephFSHistoricOps(data, action.gid)
+		if action.name == "ops-in-flight" {
+			result.InFlightOps = ops
+		} else {
+			result.HistoricOps = ops
+		}
 		return err
 	case "replay-enable":
 		return c.mdsCephFSRanksReplayEnable(ctx, id, result)

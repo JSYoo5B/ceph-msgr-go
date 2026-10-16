@@ -367,6 +367,7 @@ type completionLostEvidence struct {
 	ReplayedUnsafe                       completionReply
 	ReplayedIno                          uint64
 	NoReplyWithin                        string
+	UnsafeWindow                         *mdsUnsafeWindowEvidence
 	InFlight                             []nativeMDSCephFSHistoricOp
 	FlushJournal                         any
 	CompletedBefore                      *nativeMDSCephFSCompletionRecord
@@ -895,7 +896,32 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		e.LostFileTID, e.LostDirTID = callL.Transaction(), callM.Transaction()
-		time.Sleep(1500 * time.Millisecond)
+		submittedLM := time.Now()
+		// The MDS side of the window (ceph-testcontainers-go v0.3.0 unsafe
+		// receipt): two dump_ops_in_flight samples at least 3 s apart, from
+		// the same MDS GID, hold R after early_replied and L and M without a
+		// reply, all at the journal submission and none journal_committed.
+		sampleInFlight := func(t *testing.T) mdsUnsafeWindowSample {
+			t.Helper()
+			sent := time.Now()
+			r := req(t, "ops-in-flight", strconv.FormatUint(gidA, 10))
+			if !r.IdentityChecked || r.MDSGID == 0 {
+				t.Fatalf("in-flight sample lacks its MDS identity proof: %+v", r)
+			}
+			return mdsUnsafeWindowSample{MDSGID: r.MDSGID, SentAt: sent, ReturnedAt: time.Now(), Ops: r.Ops}
+		}
+		firstSample := sampleInFlight(t)
+		time.Sleep(time.Until(firstSample.ReturnedAt.Add(mdsUnsafeWindowGap)))
+		secondSample := sampleInFlight(t)
+		window, err := checkMDSUnsafeWindow(firstSample, secondSample, gidA, map[uint64]string{
+			e.ReplayedTID: mdsRequestUnsafe, e.LostFileTID: mdsRequestNoEarlyReply, e.LostDirTID: mdsRequestNoEarlyReply})
+		e.UnsafeWindow = &window
+		if err != nil {
+			t.Fatal(err)
+		}
+		if secondSample.MDSGID != e.ArmedGID {
+			t.Fatalf("the unsafe window was sampled on MDS %d, not the armed daemon %d", secondSample.MDSGID, e.ArmedGID)
+		}
 		// probe reports, without waiting, whether any reply arrived: a
 		// canceled local wait returns context.Canceled only without one.
 		probe := func() (map[string]recoveryErrorChain, bool) {
@@ -910,16 +936,9 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 		if p, none := probe(); !none {
 			t.Fatalf("a reply arrived while the journal was paused: %+v", p)
 		}
-		e.NoReplyWithin = "1.5s"
+		e.NoReplyWithin = time.Since(submittedLM).Round(time.Millisecond).String()
 		observe(t, gidA)
-		e.InFlight = req(t, "ops-in-flight", strconv.FormatUint(gidA, 10)).Ops
-		for _, tid := range []uint64{e.ReplayedTID, e.LostFileTID, e.LostDirTID} {
-			prefix := fmt.Sprintf("client_request(client.%d:%d ", gidA, tid)
-			i := slices.IndexFunc(e.InFlight, func(op nativeMDSCephFSHistoricOp) bool { return strings.HasPrefix(op.Description, prefix) })
-			if i < 0 || e.InFlight[i].FlagPoint != "submit entry: journal_and_reply" {
-				t.Fatalf("request %d is not in flight waiting for the journal: %+v", tid, e.InFlight)
-			}
-		}
+		e.InFlight = secondSample.Ops
 		// Drop every later message to clients, then let the journal commit.
 		req(t, "mds-log-mark")
 		req(t, "blackhole-on")
