@@ -41,7 +41,7 @@ class U64OracleTests(unittest.TestCase):
             value = oracle.request(valid())
             result = oracle.execute(Path("/fixture"), Path("/out"), {"pool":"owned-pool"}, value)
             args = run.call_args.args[0]
-            self.assertEqual(args[0], "/out/osd_u64_xattr_oracle")
+            self.assertEqual(args[0], str(Path("/out") / "osd_u64_xattr_oracle"))
             self.assertEqual(args[4:8], ["owned-b", "read", "3", str((1 << 64)-1)])
             self.assertEqual(result["code"], 1)
             self.assertFalse(result["raw_cmp_per_op_result_available"])
