@@ -157,6 +157,24 @@ runs with `err_to_stderr` only, so the receipt's stderr holds exactly those
 error lines. The receipt `rbd-base-result.json` keeps the request ID, the
 journaled mutation, the native output and the bounded process result.
 
+### Why proceed signals stay files
+
+ceph-testcontainers-go v0.3.0 can feed phased records to a running worker
+through `NativeCommand.Input`. The base, write and lock `watch`/`lock`
+actions keep their `/out/*-proceed-<n>` files for now. The fixture runs each
+native action synchronously inside its single 100 ms control loop
+(`controlLoop` in `control.go`), and the Go test sends each proceed signal
+while that action is still running, so the loop cannot accept a relay
+request then. Moving the signals to standard input would require running
+these three actions concurrently with the loop, acknowledging them after the
+worker ends, guarding every other RBD request against the open action and
+settling each uncertain `Write` as a possibly delivered step. The phase
+receipts (`*-watch-state.json`, `rbd-lock-state.json`) would still be files,
+so only half of each exchange would move. That rework is larger than the
+key-delivery change and would also shift the measured proceed waits that the
+librbd 5 s notify timeout checks rely on. The native keys of these workers do
+use standard input (see "Ownership and preparation").
+
 ## Write image and closed write control
 
 `TestCephRBDWriteIntegration` (see [RBD_WRITE_VALIDATION.md](RBD_WRITE_VALIDATION.md))
