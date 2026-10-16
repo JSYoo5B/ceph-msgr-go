@@ -47,6 +47,10 @@ func TestCephFractionalTicketRenewalIntegration(t *testing.T) {
 	}
 	defer c.Close()
 	if err := c.WaitMgrReady(ctx); err != nil {
+		// Freeze the first refusal and the identities the client saw, then
+		// collect the bounded native first-failure bundle before any other
+		// diagnostic. Neither step changes this failure.
+		collectAuthFirstFailureBundle(t, control, freezeAuthFirstFailure(t, "short-tickets", c.Snapshot(), 0, time.Now(), err))
 		// Attribute a native keyring fault before reporting a product failure.
 		gate, stop := context.WithTimeout(context.Background(), 30*time.Second)
 		defer stop()
@@ -108,9 +112,11 @@ func TestCephFractionalTicketRenewalIntegration(t *testing.T) {
 const shortTicketAuthTTL = 6500 * time.Millisecond
 
 // requireFreshNativeManagerKeyring asks the fixture whether an owned native MGR
-// lost its MON session (a MonClient -13, or a refused reclaim of its MgrMap
-// GID). Such a MGR keeps a stale rotating keyring and refuses current Go MGR
-// tickets with -13: a native fixture fault, not product evidence.
+// lost its registered MON session: an owned MON refused the reclaim of its
+// MgrMap GID, it is missing from the MgrMap, or no owned MON holds its beacon
+// session. Such a MGR keeps a stale rotating keyring and refuses current Go MGR
+// tickets with -13: a native fixture fault, not product evidence. A -13 of one
+// of its module MonClients is not that fault and does not excuse a Go -13.
 func requireFreshNativeManagerKeyring(t *testing.T, ctx context.Context, control, label string) {
 	t.Helper()
 	if err := testcluster.ControlDaemon(ctx, control, "verify", "mgr-keyring", label); err != nil {

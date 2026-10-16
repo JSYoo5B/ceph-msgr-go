@@ -384,6 +384,21 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "collect-auth-bundle")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 {
+			return errors.New("invalid auth first-failure bundle request")
+		}
+		if err = c.collectAuthBundleControl(ctx, out, fields[0], fields[1]); err != nil {
+			return err
+		}
+		if err = publishAck(out, "auth-bundle-collect."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "prepare-mgr-failover")
 	if err != nil {
 		return err
@@ -806,13 +821,11 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		if _, err = c.cluster.TemporaryMessengerPolicy(ctx, ceph.MessengerPolicy{Managers: []ceph.MessengerConnectionMode{ceph.MessengerSecure}}); err != nil {
 			return err
 		}
-		for _, d := range c.cluster.Managers() {
-			if err = d.Stop(ctx, nil); err != nil {
-				return err
-			}
-			if err = d.Start(ctx); err != nil {
-				return err
-			}
+		// Start waits only for the admin socket, and a pre-stop registration
+		// can outlive its process; acknowledge only an accepted MGR
+		// transition receipt with new GIDs and beacon sessions.
+		if err = c.restartManagersWithReceipt(ctx, out, fields[0]); err != nil {
+			return err
 		}
 		if err = c.waitReady(ctx, true); err != nil {
 			return err

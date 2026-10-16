@@ -204,6 +204,12 @@ func TestCephServiceKeyEpochIntegration(t *testing.T) {
 			soak.HeldWipeToInstalledMS = float64(heldTicket.InstalledAt.Sub(wipeAt).Microseconds()) / 1000
 		}
 		if err := cold.WaitMgrReady(ctx); err != nil {
+			rejectedAt := time.Now()
+			// Freeze the first rejection and the identities the clients saw,
+			// then collect the bounded native first-failure bundle before
+			// any other diagnostic. Neither step retries or changes it.
+			collectEpochAuthBundle(t, freezeEpochAuthFailure(t, cycle, rejectedAt, cold.Snapshot(), held.Snapshot(),
+				trace.snapshot("cold", cycle), trace.ticketReferences(cold.snapshotAuth()), err))
 			soak.FirstMgr = "refused_or_failed"
 			for _, a := range trace.snapshot("cold", cycle) {
 				soak.FirstMgrOutcome, soak.FirstMgrCode = a.Outcome, a.RefusalCode

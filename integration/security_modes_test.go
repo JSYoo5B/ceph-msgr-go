@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -244,11 +245,21 @@ func TestCephConnectionModeRejectionIntegration(t *testing.T) {
 	observer.enabled = false
 	observer.mu.Unlock()
 	// The fixture restores both MGRs, so a CRC-only standby cannot take over
-	// during restart. Its acknowledgement independently checks MGR readiness.
+	// during restart. It acknowledges only an accepted MGR transition
+	// receipt: two identical MgrMap reads with both MGRs registered under new
+	// GIDs, their same containers with new start times, and each GID's beacon
+	// session on an owned MON. That is native registration evidence, not
+	// evidence of the secure mode or of this client's MGR session; the
+	// client's own new MGR GID and MGR command are checked below.
 	if err := testcluster.ControlDaemon(ctx, control, "secure", "mgr", initial.Manager.Name); err != nil {
 		t.Fatal("restore secure fixture MGRs", err)
 	}
 	restored = true
+	if receipt, err := os.ReadFile(filepath.Join(control, "mgr-transition-receipt.json")); err != nil || len(receipt) > 1<<20 || !json.Valid(receipt) {
+		t.Fatal("secure MGR restart lacks its transition receipt", err)
+	} else {
+		t.Logf("MGR_TRANSITION_RECEIPT %s", receipt)
+	}
 	waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 		return s.Manager.Available && s.Manager.MapEpoch > initial.Manager.MapEpoch && s.Manager.GlobalID != initial.Manager.GlobalID
 	})
