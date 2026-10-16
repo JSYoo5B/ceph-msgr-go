@@ -151,11 +151,12 @@ func TestCephOSDU64XattrIntegration(t *testing.T) {
 		testCase{name: "FAILOK invalid numeric commits", action: "write", stored: stored("bad"), operand: 18, comparison: cephmsgr.OSDXattrEqual, flags: cephmsgr.OSDFailOK, exists: true, cmpResult: -22},
 	)
 	type evidence struct {
-		Name   string                `json:"name"`
-		Input  u64XattrNativeInput   `json:"input"`
-		Native u64XattrNativeReceipt `json:"native"`
-		Go     cephmsgr.OSDReply     `json:"go_reply"`
-		After  u64XattrNativeReceipt `json:"after"`
+		Name    string                `json:"name"`
+		Input   u64XattrNativeInput   `json:"input"`
+		Native  u64XattrNativeReceipt `json:"native"`
+		Go      cephmsgr.OSDReply     `json:"go_reply"`
+		GoError string                `json:"go_error,omitempty"`
+		After   u64XattrNativeReceipt `json:"after"`
 	}
 	var receipts []evidence
 	defer func() {
@@ -195,6 +196,12 @@ func TestCephOSDU64XattrIntegration(t *testing.T) {
 				request.ModificationTime = cephmsgr.OSDTime{Seconds: 1700000001}
 			}
 			reply, err := connection.Request(ctx, request)
+			goError := ""
+			if err != nil {
+				goError = err.Error()
+			}
+			receiptIndex := len(receipts)
+			receipts = append(receipts, evidence{Name: tc.name, Input: input, Native: native, Go: reply, GoError: goError})
 			if tc.code < 0 {
 				var server *cephmsgr.OSDError
 				var unknown *cephmsgr.OutcomeUnknownError
@@ -224,6 +231,7 @@ func TestCephOSDU64XattrIntegration(t *testing.T) {
 			}
 			input.Phase = "observe"
 			after := nativeU64Xattr(t, ctx, input)
+			receipts[receiptIndex].After = after
 			if !xattrSnapshotEqual(after.After, native.MirrorAfter, false) {
 				t.Fatal("Go guarded effects differ from independent native", after.After, native.MirrorAfter)
 			}
@@ -240,7 +248,6 @@ func TestCephOSDU64XattrIntegration(t *testing.T) {
 			if tc.name == "staged data rollback" && !bytes.Equal(after.After.Data, seed.After.Data) {
 				t.Fatal("failed numeric guard retained staged data")
 			}
-			receipts = append(receipts, evidence{tc.name, input, native, reply, after})
 			t.Logf("%s: native=%d Go=%d per-op=%d mode=%d caller=%d", tc.name, native.Native.Code, reply.Code, result.Result, result.Xattr.ComparisonMode, tc.operand)
 		})
 	}
