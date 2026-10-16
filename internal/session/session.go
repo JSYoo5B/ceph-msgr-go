@@ -704,9 +704,11 @@ func (s *Session) install(t *Transport, cause error) {
 	s.resuming = false
 	now := time.Now()
 	s.lastReceive.Store(&now)
+	// Count the resume before retransmitting, so a peer that sees the
+	// resent frames never observes a stale count.
+	s.resumes.Add(1)
 	s.startLoopsLocked(t, resend)
 	s.mu.Unlock()
-	s.resumes.Add(1)
 	if s.config.OnResume != nil {
 		s.config.OnResume()
 	}
