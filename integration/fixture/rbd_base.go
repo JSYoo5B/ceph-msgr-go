@@ -215,7 +215,7 @@ func (c *fixtureCluster) rbdBaseJournal() error {
 const rbdBaseNativePython = `
 import hashlib, json, os, struct, sys, time
 import rados, rbd
-identity, keyring, action, token, request_id, plan_json = sys.argv[1:7]
+identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('image') != 'ceph-msgr-image-' + token
@@ -344,7 +344,7 @@ def wait_proceed(step):
         time.sleep(0.02)
 
 cluster = rados.Rados(conffile='/tmp/ceph-msgr-test/ceph.conf', rados_id=identity[len('client.'):],
-                      conf={'keyring': keyring, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'})
+                      conf={'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'})
 cluster.connect(timeout=30)
 out = {'action': action, 'token': token, 'request_id': int(request_id), 'pool': pool, 'image': name, 'native_global_id': cluster.get_instance_id()}
 try:
@@ -599,8 +599,8 @@ func (c *fixtureCluster) rbdBaseRunNative(ctx context.Context, action string, re
 		// (librbd's 5 s timeout) and the observation that follows.
 		timeout = 100 * time.Second
 	}
-	argv := []string{"python3", "-c", rbdBaseNativePython, "client.rbd-base-native-" + x.token, "/out/rbd-base-native.keyring", action, x.token, strconv.FormatInt(request, 10), string(plan)}
-	process, err := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: rbdBaseJSONLimit, MaxStderr: 16 << 10, Label: "owned native RBD " + action})
+	argv := []string{"python3", "-c", rbdBaseNativePython, "client.rbd-base-native-" + x.token, action, x.token, strconv.FormatInt(request, 10), string(plan)}
+	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: rbdBaseJSONLimit, MaxStderr: 16 << 10, Label: "owned native RBD " + action}, x.native)
 	if err != nil || !process.Complete() || process.ExitCode != 0 {
 		return &process, rbdBaseNative{}, errors.Join(err, fmt.Errorf("native RBD %s did not complete (exit %d, timed out %v)", action, process.ExitCode, process.TimedOut))
 	}
@@ -708,9 +708,8 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if _, err := mdsSessionsKeyringSecret(nativeKeyring); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(out, "rbd-base-native.keyring"), nativeKeyring, 0600); err != nil {
-		return err
-	}
+	// The native-only key stays in memory and reaches each worker on its
+	// standard input (runKeyedNative); no host keyring file is written.
 	c.profile.rbdBaseIdentity = "client.rbd-base-" + token
 	m, err = c.rbdBaseBegin("native-setup", x.plan.Image, 0)
 	if err != nil {

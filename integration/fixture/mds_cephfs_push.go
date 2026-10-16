@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -335,7 +333,8 @@ func (c *fixtureCluster) prepareMDSCephFSPush(ctx context.Context, out string) e
 	if _, err := mdsSessionsKeyringSecret(keyring); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(out, "mds-cephfs-push-native.keyring"), keyring, 0600)
+	// The key reaches each push worker on its standard input only.
+	return nil
 }
 
 // The push driver is a separate fixed LibCephFS program bound to the push
@@ -345,8 +344,8 @@ func (c *fixtureCluster) prepareMDSCephFSPush(ctx context.Context, out string) e
 // Source: pybind/cephfs/cephfs.pyx at mdsFreshSource; independent driver.
 const mdsCephFSPushNativePython = `
 import cephfs, json, os, sys, time
-identity, keyring, fsname, directory, action, path = sys.argv[1:7]
-extra = sys.argv[7:]
+identity, fsname, directory, action, path = sys.argv[1:6]
+extra = sys.argv[6:]
 def owned(p):
     parts = p.split('/')
     if not directory.startswith('ceph-msgr-cephfs-') or not directory.endswith('-push') or '/' in directory:
@@ -362,7 +361,7 @@ snapshot = len(path.split('/')) == 5
 if not owned(path) or (action == 'rename' and (len(extra) != 1 or not owned(extra[0]) or snapshot or len(extra[0].split('/')) == 5)):
     raise ValueError('path outside the owned directory')
 MASK = 0x30f
-fs = cephfs.LibCephFS(conffile='/tmp/ceph-msgr-test/ceph.conf', auth_id=identity.removeprefix('client.'), conf={'keyring': keyring})
+fs = cephfs.LibCephFS(conffile='/tmp/ceph-msgr-test/ceph.conf', auth_id=identity.removeprefix('client.'), conf={'key': NATIVE_KEY})
 def stat(p):
     try:
         s = fs.statx(p, MASK, 0)
@@ -450,8 +449,8 @@ func (c *fixtureCluster) mdsCephFSRunPushNative(ctx context.Context, action, pat
 	if action != "stat" {
 		timeout = 45 * time.Second
 	}
-	argv := append([]string{"python3", "-c", mdsCephFSPushNativePython, "client.mds-cephfs-push-native-" + s.token, "/out/mds-cephfs-push-native.keyring", s.name, x.push.Directory, action, path}, extra...)
-	process, err := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: mdsCephFSJSONLimit, MaxStderr: 16 << 10, Label: "owned native CephFS push " + action})
+	argv := append([]string{"python3", "-c", mdsCephFSPushNativePython, "client.mds-cephfs-push-native-" + s.token, s.name, x.push.Directory, action, path}, extra...)
+	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: mdsCephFSJSONLimit, MaxStderr: 16 << 10, Label: "owned native CephFS push " + action}, x.pushNative)
 	if err != nil || !process.Complete() || process.ExitCode != 0 {
 		return &process, mdsCephFSNative{}, errors.Join(err, fmt.Errorf("native CephFS push %s did not complete (exit %d, timed out %v)", action, process.ExitCode, process.TimedOut))
 	}

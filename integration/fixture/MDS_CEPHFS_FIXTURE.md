@@ -70,9 +70,13 @@ first Go identity and `<controlDir>/mds-cephfs.key` (the metadata test and
 both clients of the push test use it, each with its own GlobalID);
 `CEPH_MSGR_MDS_CEPHFS_RECOVERY_IDENTITY` and
 `CEPH_MSGR_MDS_CEPHFS_RECOVERY_KEY_FILE` name the recovery identity and
-`<controlDir>/mds-cephfs-recovery.key`. The native keyrings stay at
-`/out/mds-cephfs-native.keyring` and `/out/mds-cephfs-push-native.keyring`
-for the fixture container only. Keys and
+`<controlDir>/mds-cephfs-recovery.key`. The keys of the native and push-native
+identities are never written to a host file: the fixture keeps them in memory and
+sends each as one bounded standard-input record to each native worker
+(`NativeCommand.Input`, ceph-testcontainers-go v0.3.0; see
+`native_key_input.go`). The worker prints only a byte-count receipt, and the
+fixture checks `InputWritten`, `InputDelivered`, `InputEOF` and that receipt
+separately from `Complete()`. Keys and
 keyrings are mode 0600 and excluded from diagnostics.
 
 `mds-cephfs-oracle.json` publishes source pin, token, FSID, FSCID, filesystem

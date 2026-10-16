@@ -47,8 +47,14 @@ journaling each name before the provider call:
 
 `CEPH_MSGR_MDS_CEPHFS_DATA_IDENTITY` and `CEPH_MSGR_MDS_CEPHFS_DATA_KEY_FILE`
 name the Go identity and `<controlDir>/mds-cephfs-data.key`. The native
-keyring stays at `/out/mds-cephfs-data-native.keyring` for the fixture
-container. Keys and keyrings are mode 0600 and excluded from diagnostics.
+key is never written to a host file: the fixture keeps it in memory and
+sends it as one bounded standard-input record to each native worker
+(`NativeCommand.Input`, ceph-testcontainers-go v0.3.0; see
+`native_key_input.go`). The worker prints only a byte-count receipt, and the
+fixture checks `InputWritten`, `InputDelivered`, `InputEOF` and that receipt
+separately from `Complete()`. For `rados listsnaps` the worker writes a
+keyring at mode 0600 in a private directory of the client container and removes
+it when it exits. Keys are mode 0600 and excluded from diagnostics.
 
 `mds-cephfs-data-oracle.json` publishes the source pin, token, FSID, FSCID,
 filesystem name, startup daemon GID, both identities and caps, the baseline

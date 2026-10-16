@@ -55,8 +55,12 @@ before the provider call:
 
 `CEPH_MSGR_MDS_CEPHFS_RANKS_IDENTITY` and `CEPH_MSGR_MDS_CEPHFS_RANKS_KEY_FILE`
 name the Go identity and `<controlDir>/mds-cephfs-ranks.key`. The native
-keyring stays at `/out/mds-cephfs-ranks-native.keyring` for the fixture
-container. Keys and keyrings are mode 0600 and excluded from diagnostics.
+key is never written to a host file: the fixture keeps it in memory and
+sends it as one bounded standard-input record to each native worker
+(`NativeCommand.Input`, ceph-testcontainers-go v0.3.0; see
+`native_key_input.go`). The worker prints only a byte-count receipt, and the
+fixture checks `InputWritten`, `InputDelivered`, `InputEOF` and that receipt
+separately from `Complete()`. Keys are mode 0600 and excluded from diagnostics.
 Every owned daemon (both ranks and the standby) is added to `peers.json`, so
 the host relay admits the standby once it takes over rank 0.
 

@@ -74,7 +74,7 @@ in `rbd-base-owned.json` before it is issued and marked `applied` or
 | `pool-create` | `ceph-msgr-rbd-<token>`: replicated, 8 PGs, size and min_size 1, application `rbd`, HASHPSPOOL cleared, its own `tc-<pool>-replicated` CRUSH rule |
 | `pool-init` | `rbd pool init` through the provider (`rbd.InitPool`), then `WaitForClean`. The native OSDMap is read again: every pool must still lack HASHPSPOOL (numeric flag bit 0 and the `hashpspool` name) |
 | Go identity | `client.rbd-base-<token>`: MON `profile rbd`, OSD `profile rbd pool=<pool>`. Its key is written to `rbd-base.key`; the suite receives `CEPH_MSGR_RBD_BASE_IDENTITY` and `CEPH_MSGR_RBD_BASE_KEY_FILE` |
-| native identity | `client.rbd-base-native-<token>`: the same RBD profile; keyring `rbd-base-native.keyring`, used only by the native driver |
+| native identity | `client.rbd-base-native-<token>`: the same RBD profile; used only by the native drivers; its key is never written to a host file but sent as one bounded standard-input record to each driver (`native_key_input.go`). The lock and journal drivers' `rbd` CLI reads a 0600 keyring that the driver writes in a private directory of the client container and removes when it exits |
 | `native-setup` | the image `ceph-msgr-image-<token>` and its snapshot `ceph-msgr-snap-<token8>` (below) |
 | `native-write-<action>` | on the write test's request, the image `ceph-msgr-write-<token>` (section "Write image and closed write control") |
 | `native-lock-<action>` | on the exclusive-lock test's request, the image `ceph-msgr-lock-<token>` (section "Lock image and closed lock control") |

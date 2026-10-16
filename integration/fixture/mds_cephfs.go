@@ -218,13 +218,13 @@ func parseMDSCephFSRequest(fields []string, token string, previousID int64) (int
 // independent driver, no code copied.
 const mdsCephFSNativePython = `
 import cephfs, json, os, sys, time
-identity, keyring, fsname, directory, action, path = sys.argv[1:7]
-extra = sys.argv[7:]
+identity, fsname, directory, action, path = sys.argv[1:6]
+extra = sys.argv[6:]
 prefix = '/' + directory
 if not directory.startswith('ceph-msgr-cephfs-') or '/' in directory or not (path == prefix or (path.startswith(prefix + '/') and path.count('/') == 2)):
     raise ValueError('path outside the owned directory')
 MASK = 0x30f
-fs = cephfs.LibCephFS(conffile='/tmp/ceph-msgr-test/ceph.conf', auth_id=identity.removeprefix('client.'), conf={'keyring': keyring})
+fs = cephfs.LibCephFS(conffile='/tmp/ceph-msgr-test/ceph.conf', auth_id=identity.removeprefix('client.'), conf={'key': NATIVE_KEY})
 def stat(p):
     try:
         s = fs.statx(p, MASK, 0)
@@ -509,9 +509,8 @@ func (c *fixtureCluster) prepareMDSCephFS(ctx context.Context, out string) error
 	if _, err := mdsSessionsKeyringSecret(nativeKeyring); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(out, "mds-cephfs-native.keyring"), nativeKeyring, 0600); err != nil {
-		return err
-	}
+	// The native-only key stays in memory and reaches each worker on its
+	// standard input (runKeyedNative); no host keyring file is written.
 	c.profile.mdsCephFSIdentity = "client.mds-cephfs-" + s.token
 	x.recIntent = true
 	if err := c.mdsCephFSJournal(); err != nil {
@@ -567,8 +566,8 @@ func (c *fixtureCluster) mdsCephFSRunNative(ctx context.Context, directory, acti
 	if action == "write" || action == "create-write" {
 		timeout = 45 * time.Second
 	}
-	argv := append([]string{"python3", "-c", mdsCephFSNativePython, "client.mds-cephfs-native-" + s.token, "/out/mds-cephfs-native.keyring", s.name, directory, action, path}, extra...)
-	process, err := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: mdsCephFSJSONLimit, MaxStderr: 16 << 10, Label: "owned native CephFS " + action})
+	argv := append([]string{"python3", "-c", mdsCephFSNativePython, "client.mds-cephfs-native-" + s.token, s.name, directory, action, path}, extra...)
+	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: mdsCephFSJSONLimit, MaxStderr: 16 << 10, Label: "owned native CephFS " + action}, x.native)
 	if err != nil || !process.Complete() || process.ExitCode != 0 {
 		return &process, mdsCephFSNative{}, errors.Join(err, fmt.Errorf("native CephFS %s did not complete (exit %d, timed out %v)", action, process.ExitCode, process.TimedOut))
 	}

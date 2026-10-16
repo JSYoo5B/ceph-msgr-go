@@ -195,7 +195,7 @@ func (p rbdClonePlan) owned(token string) bool {
 const rbdCloneNativePython = `
 import hashlib, json, os, struct, sys, time
 import rados, rbd
-identity, keyring, action, token, request_id, plan_json = sys.argv[1:7]
+identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
 ACTIONS = ('setup', 'observe-copyup', 'write', 'snapshot', 'observe-snapshot', 'flatten')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
@@ -210,7 +210,7 @@ NOSNAP = 0xfffffffffffffffe
 # cls_lock_get_info_op{name="rbd_lock"}: ENCODE_START(1, 1) and a string.
 LOCK_INFO = b'\x01\x01' + struct.pack('<II', 12, 8) + b'rbd_lock'
 TRACE_LIMIT, TRACE_WIDTH, COPYUP_LIMIT = 96, 600, 16
-BASE = {'keyring': keyring, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'}
+BASE = {'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'}
 pool, parent, clone = plan['pool'], plan['parent'], plan['clone']
 psnap, csnap = plan['parent_snapshot'], plan['clone_snapshot']
 PREFIX = 'rbd-clone-%s-' % action
@@ -746,8 +746,8 @@ func (c *fixtureCluster) rbdCloneRunNative(ctx context.Context, action string, r
 	if err != nil {
 		return nil, rbdCloneNative{}, err
 	}
-	argv := []string{"python3", "-c", rbdCloneNativePython, "client.rbd-base-native-" + x.token, "/out/rbd-base-native.keyring", action, x.token, strconv.FormatInt(request, 10), string(plan)}
-	process, err := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: rbdCloneNativeTimeout, MaxStdout: rbdBaseJSONLimit, MaxStderr: 16 << 10, Label: "owned native RBD clone " + action})
+	argv := []string{"python3", "-c", rbdCloneNativePython, "client.rbd-base-native-" + x.token, action, x.token, strconv.FormatInt(request, 10), string(plan)}
+	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: rbdCloneNativeTimeout, MaxStdout: rbdBaseJSONLimit, MaxStderr: 16 << 10, Label: "owned native RBD clone " + action}, x.native)
 	if err != nil || !process.Complete() || process.ExitCode != 0 {
 		return &process, rbdCloneNative{}, errors.Join(err, fmt.Errorf("native RBD clone %s did not complete (exit %d, timed out %v)", action, process.ExitCode, process.TimedOut))
 	}

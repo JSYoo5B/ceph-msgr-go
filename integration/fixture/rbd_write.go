@@ -124,7 +124,7 @@ func (p rbdWritePlan) sizes() []uint64 { return []uint64{p.Size, p.GoResize, p.G
 const rbdWriteNativePython = `
 import hashlib, json, os, struct, sys, time
 import rados, rbd
-identity, keyring, action, token, request_id, plan_json = sys.argv[1:7]
+identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
 ACTIONS = ('setup', 'observe-written', 'observe-resized', 'observe-locked', 'observe-unlocked', 'watch')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
@@ -272,7 +272,7 @@ def wait_proceed(step):
         time.sleep(0.02)
 
 cluster = rados.Rados(conffile='/tmp/ceph-msgr-test/ceph.conf', rados_id=identity[len('client.'):],
-                      conf={'keyring': keyring, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'})
+                      conf={'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'})
 cluster.connect(timeout=30)
 out = {'action': action, 'token': token, 'request_id': int(request_id), 'pool': pool, 'image': name, 'native_global_id': cluster.get_instance_id()}
 try:
@@ -516,8 +516,8 @@ func (c *fixtureCluster) rbdWriteRunNative(ctx context.Context, action string, r
 		// Two Go steps of at most 30 s each and the observation that follows.
 		timeout = 100 * time.Second
 	}
-	argv := []string{"python3", "-c", rbdWriteNativePython, "client.rbd-base-native-" + x.token, "/out/rbd-base-native.keyring", action, x.token, strconv.FormatInt(request, 10), string(plan)}
-	process, err := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: rbdBaseJSONLimit, MaxStderr: 16 << 10, Label: "owned native RBD write " + action})
+	argv := []string{"python3", "-c", rbdWriteNativePython, "client.rbd-base-native-" + x.token, action, x.token, strconv.FormatInt(request, 10), string(plan)}
+	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: rbdBaseJSONLimit, MaxStderr: 16 << 10, Label: "owned native RBD write " + action}, x.native)
 	if err != nil || !process.Complete() || process.ExitCode != 0 {
 		return &process, rbdWriteNative{}, errors.Join(err, fmt.Errorf("native RBD write %s did not complete (exit %d, timed out %v)", action, process.ExitCode, process.TimedOut))
 	}

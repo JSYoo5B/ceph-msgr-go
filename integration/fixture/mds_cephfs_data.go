@@ -138,8 +138,8 @@ func mdsCephFSDataNativeCaps(fsName string) ceph.ClientCaps {
 // independent driver, no code copied.
 const mdsCephFSDataNativePython = `
 import cephfs, hashlib, json, os, subprocess, sys, time
-identity, keyring, fsname, directory, snapshot, pool, action, path = sys.argv[1:9]
-extra = sys.argv[9:]
+identity, fsname, directory, snapshot, pool, action, path = sys.argv[1:8]
+extra = sys.argv[8:]
 CONF = '/tmp/ceph-msgr-test/ceph.conf'
 FILES = ('go-file', 'native-file', 'trunc-file', 'shared-file', 'snap-file')
 CHUNK = 16384
@@ -210,7 +210,7 @@ def objects(ino, count, snaps):
     if count < 1 or count > 16:
         raise ValueError('object count outside its bound')
     rid = identity.removeprefix('client.')
-    cluster = rados.Rados(conffile=CONF, rados_id=rid, conf={'keyring': keyring})
+    cluster = rados.Rados(conffile=CONF, rados_id=rid, conf={'key': NATIVE_KEY})
     cluster.connect()
     result = []
     try:
@@ -225,8 +225,8 @@ def objects(ino, count, snaps):
                 except rados.ObjectNotFound:
                     pass
                 if snaps and entry['exists']:
-                    proc = subprocess.run(['rados', '-c', CONF, '--id', rid, '--keyring', keyring, '-p', pool, '--format', 'json', 'listsnaps', name],
-                                          capture_output=True, timeout=30)
+                    proc = subprocess.run(['rados', '-c', CONF, '--id', rid, '--keyring', native_keyring_file(identity), '-p', pool, '--format', 'json', 'listsnaps', name],
+                                          stdin=subprocess.DEVNULL, capture_output=True, timeout=30)
                     if proc.returncode != 0:
                         raise IOError('rados listsnaps failed: ' + proc.stderr.decode('utf-8', 'replace')[-200:])
                     raw = json.loads(proc.stdout)
@@ -239,7 +239,7 @@ def objects(ino, count, snaps):
     finally:
         cluster.shutdown()
     return result
-fs = cephfs.LibCephFS(conffile=CONF, auth_id=identity.removeprefix('client.'), conf={'keyring': keyring})
+fs = cephfs.LibCephFS(conffile=CONF, auth_id=identity.removeprefix('client.'), conf={'key': NATIVE_KEY})
 out = {'action': action, 'path': path}
 try:
     fs.mount(filesystem_name=fsname)
@@ -687,9 +687,8 @@ func (c *fixtureCluster) prepareMDSCephFSData(ctx context.Context, out string) e
 	if _, err := mdsSessionsKeyringSecret(nativeKeyring); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(out, "mds-cephfs-data-native.keyring"), nativeKeyring, 0600); err != nil {
-		return err
-	}
+	// The native-only key stays in memory and reaches each worker on its
+	// standard input (runKeyedNative); no host keyring file is written.
 	c.profile.mdsCephFSDataIdentity = "client.mds-cephfs-data-" + s.token
 	if err := c.mdsCephFSDataJournal(); err != nil {
 		return err
@@ -719,10 +718,10 @@ func (c *fixtureCluster) mdsCephFSDataRunNative(ctx context.Context, action, tar
 		// buffered data and acknowledges the revoke.
 		timeout = 75 * time.Second
 	}
-	argv := append([]string{"python3", "-c", mdsCephFSDataNativePython, "client.mds-cephfs-data-native-" + s.token, "/out/mds-cephfs-data-native.keyring", s.name,
+	argv := append([]string{"python3", "-c", mdsCephFSDataNativePython, "client.mds-cephfs-data-native-" + s.token, s.name,
 		x.plan.Directory, x.plan.Snapshot, x.dataPoolName, action, path}, extra...)
-	process, err := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: mdsCephFSDataJSONLimit, MaxStderr: 16 << 10,
-		Label: "owned native CephFS data " + action})
+	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: timeout, MaxStdout: mdsCephFSDataJSONLimit, MaxStderr: 16 << 10,
+		Label: "owned native CephFS data " + action}, x.native)
 	if err != nil || !process.Complete() || process.ExitCode != 0 {
 		return &process, mdsCephFSDataNative{}, errors.Join(err, fmt.Errorf("native CephFS data %s did not complete (exit %d, timed out %v)", action, process.ExitCode, process.TimedOut))
 	}

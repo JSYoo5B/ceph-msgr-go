@@ -596,14 +596,14 @@ type mdsCephFSRanksNative struct {
 // code copied.
 const mdsCephFSRanksNativePython = `
 import cephfs, json, sys
-identity, keyring, fsname, directory, action, path = sys.argv[1:7]
-extra = sys.argv[7:]
+identity, fsname, directory, action, path = sys.argv[1:6]
+extra = sys.argv[6:]
 prefix = '/' + directory
 parts = path.split('/')
 if not directory.startswith('ceph-msgr-ranks-') or '/' in directory or not (path == prefix or (path.startswith(prefix + '/') and len(parts) <= 5 and '..' not in parts and '' not in parts[1:])):
     raise ValueError('path outside the owned directory')
 MASK = 0x30f
-fs = cephfs.LibCephFS(conffile='/tmp/ceph-msgr-test/ceph.conf', auth_id=identity.removeprefix('client.'), conf={'keyring': keyring})
+fs = cephfs.LibCephFS(conffile='/tmp/ceph-msgr-test/ceph.conf', auth_id=identity.removeprefix('client.'), conf={'key': NATIVE_KEY})
 def stat(p):
     try:
         s = fs.statx(p, MASK, 0)
@@ -1029,9 +1029,8 @@ func (c *fixtureCluster) prepareMDSCephFSRanks(ctx context.Context, out string) 
 	if _, err := mdsSessionsKeyringSecret(nativeKeyring); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(out, "mds-cephfs-ranks-native.keyring"), nativeKeyring, 0600); err != nil {
-		return err
-	}
+	// The native-only key stays in memory and reaches each worker on its
+	// standard input (runKeyedNative); no host keyring file is written.
 	// Every owned daemon is a relay peer: the other ranks now, the standby
 	// after the takeover. The relay admits an MDS by its container IP.
 	var peers map[string]string
@@ -1063,8 +1062,8 @@ func (c *fixtureCluster) prepareMDSCephFSRanks(ctx context.Context, out string) 
 // or truncated process is an error: its output is never trusted partially.
 func (c *fixtureCluster) mdsCephFSRanksRunNative(ctx context.Context, action, path string, extra ...string) (*ceph.NativeCommandResult, mdsCephFSRanksNative, error) {
 	s, x := c.mdsFresh, c.mdsCephFSRanks
-	argv := append([]string{"python3", "-c", mdsCephFSRanksNativePython, "client.mds-cephfs-ranks-native-" + s.token, "/out/mds-cephfs-ranks-native.keyring", s.name, x.plan.Directory, action, path}, extra...)
-	process, err := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: 30 * time.Second, MaxStdout: mdsCephFSRanksJSONLimit, MaxStderr: 16 << 10, Label: "owned native CephFS ranks " + action})
+	argv := append([]string{"python3", "-c", mdsCephFSRanksNativePython, "client.mds-cephfs-ranks-native-" + s.token, s.name, x.plan.Directory, action, path}, extra...)
+	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: 30 * time.Second, MaxStdout: mdsCephFSRanksJSONLimit, MaxStderr: 16 << 10, Label: "owned native CephFS ranks " + action}, x.native)
 	if err != nil || !process.Complete() || process.ExitCode != 0 {
 		return &process, mdsCephFSRanksNative{}, errors.Join(err, fmt.Errorf("native CephFS ranks %s did not complete (exit %d, timed out %v)", action, process.ExitCode, process.TimedOut))
 	}
