@@ -115,6 +115,53 @@ class ObjectBackoffOracleTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 oracle.prepare(Path("/root"), self.out, METADATA, FSID, [MAIN], {"objects": [MAIN]})
 
+    def test_down_wait_outlasts_heartbeat_and_still_requires_active_pg(self):
+        now = [0.0]
+        pg_queries = []
+
+        def sleep(seconds):
+            now[0] += seconds
+
+        def topology(root, fsid):
+            return dict(epoch=41, osds={i: dict(up=int(i != 0 or now[0] < 75), **{"in": 1})
+                                        for i in range(3)})
+
+        def pg(root, pgid):
+            pg_queries.append(now[0])
+            return dict(epoch=41, state="active+degraded" if now[0] >= 90 else "peering")
+
+        with patch.object(oracle.time, "monotonic", lambda: now[0]), \
+                patch.object(oracle.time, "sleep", sleep), patch.object(oracle, "dump", topology), \
+                patch.object(oracle, "placement", lambda *args: dict(acting=[1, 2], pgid="2.0")), \
+                patch.object(oracle, "pg_summary", pg):
+            result = oracle.wait_osd(Path("/root"), METADATA, FSID, [MAIN],
+                                     dict(osd=0, up=False, object=MAIN))
+        self.assertGreater(now[0], 60)
+        self.assertEqual(now[0], 90)
+        self.assertEqual(min(pg_queries), 75)
+        self.assertEqual(result["topology"]["osds"][0]["up"], 0)
+        self.assertEqual(result["pg"]["state"], "active+degraded")
+
+    def test_down_wait_remains_bounded_and_up_wait_keeps_its_bound(self):
+        for up, budget in ((False, oracle.DOWN_WAIT_SECONDS), (True, oracle.WAIT_SECONDS)):
+            with self.subTest(up=up):
+                now = [0.0]
+
+                def sleep(seconds):
+                    now[0] += seconds
+
+                topology = dict(epoch=41, osds={0: dict(up=int(not up), **{"in": 1})})
+                with patch.object(oracle.time, "monotonic", lambda: now[0]), \
+                        patch.object(oracle.time, "sleep", sleep), \
+                        patch.object(oracle, "dump", lambda *args: topology), \
+                        patch.object(oracle, "placement") as placement:
+                    with self.assertRaisesRegex(TimeoutError, "OSD 0 up=%s" % up):
+                        oracle.wait_osd(Path("/root"), METADATA, FSID, [MAIN],
+                                        dict(osd=0, up=up, object=MAIN))
+                placement.assert_not_called()
+                self.assertGreater(now[0], budget)
+                self.assertLessEqual(now[0], budget + .5)
+
 
 if __name__ == "__main__":
     unittest.main()

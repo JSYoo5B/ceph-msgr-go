@@ -54,7 +54,11 @@ MAX_DATA = 4096
 MAX_LOG = 4 << 20
 COMMAND_SECONDS = 8
 WAIT_SECONDS = 60
-NATIVE_SECONDS = 120
+# The recipe's heartbeat grace is 60 seconds. A dead primary is reported
+# only after that grace, then MON commits a map and the surviving PG peers.
+# Keep a distinct DOWN phase budget rather than racing that first report.
+DOWN_WAIT_SECONDS = 120
+NATIVE_SECONDS = 240
 ACTIONS = ("prepare", "config", "wait-osd", "put", "wait-degraded", "native-start", "native-finish",
            "native-stat", "ops", "ack-history", "restore")
 
@@ -256,7 +260,8 @@ def wait_osd(root, metadata, fsid, names, raw):
             return False, where
         pg = pg_summary(root, where["pgid"])
         return active(pg["state"]) and pg["epoch"] >= topology["epoch"], dict(topology=topology, placement=where, pg=pg)
-    return wait(reached, label="OSD %d up=%s and active PG" % (target, up))
+    return wait(reached, seconds=WAIT_SECONDS if up else DOWN_WAIT_SECONDS,
+                label="OSD %d up=%s and active PG" % (target, up))
 
 
 def put(root, metadata, names, raw):

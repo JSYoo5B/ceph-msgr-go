@@ -541,7 +541,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return errors.New("invalid owned three-replica object backoff oracle request")
 		}
 		args := []string{"python3", "/out/osd_object_backoff_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
-		if err = c.runOracleCommand(ctx, out, args, "osd-object-backoff-command.json", "native object backoff recipe"); err != nil {
+		if err = c.runOracleCommandWithTimeout(ctx, out, args, "osd-object-backoff-command.json", "native object backoff recipe", objectBackoffOracleTimeout); err != nil {
 			return err
 		}
 		if err = publishAck(out, "osd-object-backoff-verify."+fields[0]); err != nil {
@@ -935,10 +935,19 @@ func (c *fixtureCluster) runMutationCommand(ctx context.Context, out string) err
 		"osd-mutation-command.json", "native mutation oracle")
 }
 
+// The object-backoff DOWN phase must outlast its configured heartbeat grace,
+// including native query time and the monitor/PG transition. Other oracles
+// retain their existing 80-second command bound.
+const objectBackoffOracleTimeout = 150 * time.Second
+
 func (c *fixtureCluster) runOracleCommand(ctx context.Context, out string, args []string, receipt, label string) error {
+	return c.runOracleCommandWithTimeout(ctx, out, args, receipt, label, 80*time.Second)
+}
+
+func (c *fixtureCluster) runOracleCommandWithTimeout(ctx context.Context, out string, args []string, receipt, label string, timeout time.Duration) error {
 	result, runErr := c.cluster.RunNativeCommand(ctx, c.Container, ceph.NativeCommand{
 		Argv:    args,
-		Timeout: 80 * time.Second, MaxStdout: 64 << 10, MaxStderr: 16 << 10,
+		Timeout: timeout, MaxStdout: 64 << 10, MaxStderr: 16 << 10,
 		Label: label,
 	})
 	// This oracle contains only disposable object data and ordinary
