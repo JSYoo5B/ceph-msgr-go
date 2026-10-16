@@ -131,3 +131,17 @@ func TestCephFSCapSnapCapturesOldRealmContext(t *testing.T) {
 		t.Fatal("unchanged realm captured fresh head metadata")
 	}
 }
+
+func TestCephFSCapSnapUncertainSendBlocksNewerGenerations(t *testing.T) {
+	a := newCephFSCapAgent(context.Background(), nil)
+	a.enableCapSnaps(nil)
+	calls := 0
+	failed := &cephfsCapSnap{Ino: 17, Transaction: 7, Error: "uncertain cap send", WritebackStarted: time.Now(), WritebackCompleted: time.Now()}
+	a.capSnaps[cephfsFlushSnapKey{17, 1}] = failed
+	a.capSnaps[cephfsFlushSnapKey{17, 2}] = &cephfsCapSnap{Ino: 17, Buffered: true, writeBack: func() error { calls++; return nil }}
+	for range 2 {
+		if err := a.drainCapSnaps(17); err == nil || calls != 0 || failed.Transaction != 7 || !failed.Sent.IsZero() {
+			t.Fatal("uncertain older cap send did not retain its barrier", err, calls, failed)
+		}
+	}
+}

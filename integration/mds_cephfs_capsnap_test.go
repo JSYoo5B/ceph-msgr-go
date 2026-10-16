@@ -182,11 +182,17 @@ func (a *cephfsCapAgent) drainCapSnaps(ino uint64) error {
 		}
 		a.mu.Lock()
 		s := a.capSnaps[key]
+		// A send may fail after allocating a transaction. Retain its failure
+		// barrier before skipping successfully submitted generations.
+		if s.Error != "" {
+			a.mu.Unlock()
+			return fmt.Errorf("cap snap %d/%d failed: %s", ino, key.Follows, s.Error)
+		}
 		if s.Transaction != 0 {
 			a.mu.Unlock()
 			continue
 		}
-		if !s.WritebackStarted.IsZero() || s.Error != "" {
+		if !s.WritebackStarted.IsZero() {
 			a.mu.Unlock()
 			return fmt.Errorf("cap snap %d/%d already started or failed", ino, key.Follows)
 		}
