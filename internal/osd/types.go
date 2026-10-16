@@ -32,6 +32,7 @@ const (
 	RemoveXattr         uint16 = 0x2304
 	Write               uint16 = 0x2201
 	WriteFull           uint16 = 0x2202
+	WriteSame           uint16 = 0x2226
 	Truncate            uint16 = 0x2203
 	Zero                uint16 = 0x2204
 	Delete              uint16 = 0x2205
@@ -123,6 +124,8 @@ type Version struct {
 }
 
 type OperationResult struct {
+	// WriteSamePatternLength is the WRITESAME union's data_length echo.
+	WriteSamePatternLength       uint64
 	Xattr                        XattrResult
 	Class                        ClassResult
 	AllocHint                    AllocHintInput

@@ -145,6 +145,8 @@ func EncodeRequestV8(r V8Request, features uint64, limit uint32) (msgr.MessageDa
 			encodeAllocHintUnion(&e, op.AllocHint)
 		} else if op.Code == Checksum {
 			encodeChecksumUnion(&e, op)
+		} else if op.Code == WriteSame {
+			encodeWriteSameUnion(&e, op)
 		} else if op.Code == Rollback {
 			encodeRollbackUnion(&e, op)
 		} else {

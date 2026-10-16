@@ -16,6 +16,7 @@ const (
 	OSDStat          OSDOpcode = OSDOpcode(osd.Stat)
 	OSDWrite         OSDOpcode = OSDOpcode(osd.Write)
 	OSDWriteFull     OSDOpcode = OSDOpcode(osd.WriteFull)
+	OSDWriteSame     OSDOpcode = OSDOpcode(osd.WriteSame)
 	OSDAppend        OSDOpcode = OSDOpcode(osd.Append)
 	OSDTruncate      OSDOpcode = OSDOpcode(osd.Truncate)
 	OSDZero          OSDOpcode = OSDOpcode(osd.Zero)
@@ -55,6 +56,11 @@ const (
 
 // OSDOperation is one ordered operation on the request's object. Writes and
 // CompareExtent require Length == len(Data); WriteFull/Append have Offset 0.
+// WriteSame repeats nonempty Data over Length bytes at Offset: Length must
+// be a multiple of len(Data), and may be zero. Its cumulative logical length
+// is bounded independently of the frame data. Zero-length effects and writes
+// against an object with a truncate sequence follow the server; its reply
+// echoes the requested logical extent, not the nested WRITE's clipped extent.
 // Truncate uses Offset as the new size. Create/Delete/Stat have zero extents.
 // AssertVersion uses Version, with zero extents and no payload. Only Create
 // accepts ExclusiveCreate. TruncateSize/TruncateSequence are the extent
@@ -152,6 +158,8 @@ type OSDVersion struct {
 // including the page's more suffix, or the raw header; comparisons and
 // mutations return none.
 type OSDOperationResult struct {
+	// WriteSamePatternLength preserves the WRITESAME data_length union field.
+	WriteSamePatternLength       uint64
 	Code                         OSDOpcode
 	Flags                        uint32
 	Offset, Length, TruncateSize uint64
@@ -461,6 +469,11 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 				return err
 			}
 			continue
+		case osd.WriteSame:
+			if err := osd.ValidateWriteSameReply(requested, op); err != nil {
+				return err
+			}
+			continue
 		case osd.ListSnaps:
 			if err := osd.ValidateListSnapsReply(requested, op, success); err != nil {
 				return err
@@ -509,7 +522,7 @@ func publicOSDReply(r osd.Reply) OSDReply {
 			Hash: r.Redirect.Locator.Hash, Object: r.Redirect.Object, LegacyInstructions: r.Redirect.LegacyInstructions}}
 	result.Operations = make([]OSDOperationResult, len(r.Operations))
 	for i, op := range r.Operations {
-		result.Operations[i] = OSDOperationResult{Code: OSDOpcode(op.Code), Flags: op.Flags,
+		result.Operations[i] = OSDOperationResult{WriteSamePatternLength: op.WriteSamePatternLength, Code: OSDOpcode(op.Code), Flags: op.Flags,
 			Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence,
 			PayloadLength: op.PayloadLength, Result: op.Result, Data: op.Data,
 			Xattr:     OSDXattrResult{NameLength: op.Xattr.NameLength, ValueLength: op.Xattr.ValueLength, ComparisonOp: op.Xattr.ComparisonOp, ComparisonMode: op.Xattr.ComparisonMode},

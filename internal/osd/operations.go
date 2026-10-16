@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, Watch, Notify, NotifyAck:
+	case Read, Stat, Write, WriteFull, WriteSame, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, Watch, Notify, NotifyAck:
 		return true
 	}
 	return false
@@ -22,7 +22,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		return 0, 0, ErrRequest
 	}
 	var flags, total uint64
-	var stagedDigestSize uint64
+	var stagedDigestSize, logicalWriteBytes uint64
 	// stagedAny marks a staged write that a later CALL may not follow: every
 	// write except a read-mode CALL and a non-FAILOK CREATE.
 	var stagedXattr, stagedOmap, stagedAny, afterCall bool
@@ -255,6 +255,22 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			if op.Length == 0 || op.Length != uint64(len(op.Data)) || op.Offset > math.MaxUint64-op.Length {
 				return 0, 0, ErrRequest
 			}
+		case WriteSame:
+			// The daemon expands the pattern before invoking WRITE. Bound the
+			// cumulative logical work independently of the wire input budget.
+			if len(op.Data) == 0 || op.Length%uint64(len(op.Data)) != 0 || op.Offset > math.MaxUint64-op.Length {
+				return 0, 0, ErrRequest
+			}
+			if op.Length > uint64(limit)-logicalWriteBytes {
+				return 0, 0, wire.ErrLimit
+			}
+			logicalWriteBytes += op.Length
+			flags |= FlagWrite
+			// Its nested WRITE can install a full-object digest too, including
+			// when an earlier/later FAILOK operation changes the remote size.
+			if op.Offset == 0 && op.Length > 0 && (stagedDigestSize == 0 || op.Length < stagedDigestSize) {
+				stagedDigestSize = op.Length
+			}
 		case Write, WriteFull, Append:
 			// A newer remote truncate sequence can clip an offset-zero WRITE
 			// below its requested length before setting a full-object digest
@@ -272,6 +288,10 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			if op.Length != uint64(len(op.Data)) || op.Offset > math.MaxUint64-op.Length || op.Code != Write && op.Offset != 0 {
 				return 0, 0, ErrRequest
 			}
+			if op.Length > uint64(limit)-logicalWriteBytes {
+				return 0, 0, wire.ErrLimit
+			}
+			logicalWriteBytes += op.Length
 		case Truncate:
 			flags |= FlagWrite
 			if op.Length != 0 || len(op.Data) != 0 {
@@ -304,7 +324,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 
 func writeOperation(code uint16) bool {
 	switch code {
-	case Write, WriteFull, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint, Rollback:
+	case Write, WriteFull, WriteSame, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint, Rollback:
 		return true
 	}
 	return isOmapMutation(code)
