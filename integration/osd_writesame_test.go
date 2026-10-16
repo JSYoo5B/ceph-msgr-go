@@ -169,7 +169,7 @@ func TestCephOSDWriteSameIntegration(t *testing.T) {
 					t.Fatal("closed fixture clipping preparation needs one explicitly verified primary")
 				}
 				for _, target := range []osdFixtureOracle{route, mirrorRoute} {
-					op := cephmsgr.OSDOperation{Code: cephmsgr.OSDTruncate, Offset: 6, TruncateSize: 6, TruncateSequence: 2}
+					op := cephmsgr.OSDOperation{Code: cephmsgr.OSDTruncate, Offset: 6, TruncateSize: 6, TruncateSequence: uint32(index + 2)}
 					req := osdObjectRequest(target, op)
 					if isReplicatedPGFixtureProfile() {
 						req = replicatedPGRequest(target, op)
@@ -182,6 +182,12 @@ func TestCephOSDWriteSameIntegration(t *testing.T) {
 				}
 				input.Phase = "observe"
 				seed = nativeWriteSame(t, ctx, input)
+				// A previously used truncate sequence is a native no-op, even
+				// after a seed write. Require the actual preparatory state before
+				// comparing WRITESAME, rather than inferring it from code 0.
+				if len(seed.After.Data) != 6 || len(seed.MirrorAfter.Data) != 6 {
+					t.Fatal("sequenced TRUNCATE preparation did not establish both six-byte objects", seed.After, seed.MirrorAfter)
+				}
 			}
 			if tc.action == "snapshot" {
 				input.Action = "snapshot"
