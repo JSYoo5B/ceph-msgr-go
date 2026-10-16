@@ -129,8 +129,9 @@ independently showed the same MON rejection for Go GlobalID 4755 and
 AUTH secret ID 6; its original diagnostics are retained at
 `/private/tmp/ceph-ci-upmap-1b84-secure-first`. It also completed cleanup.
 
-The exact three-BlueStore `replicated-pg-v8` upmap selector now uses a
-120-second AUTH ticket while retaining 12-second service tickets. This
+The initial correction at `2696f06` gave the exact three-BlueStore
+`replicated-pg-v8` upmap selector a 120-second AUTH ticket while retaining
+12-second service tickets. This
 isolates long native placement controls from aggressive AUTH reclaim-proof
 expiry and continues service renewal. Other selectors and dedicated
 6.5-second AUTH tests retain their existing contracts. No product
@@ -162,3 +163,59 @@ The read-only inventory
 `/private/tmp/ceph-ci-upmap-auth-cleanup-audit-20261016.json` confirms all
 20 owned containers and both networks absent. These local results do not
 establish full GitHub CI success.
+
+### Service-window follow-up
+
+The first exact-`2696f06` CI attempt, run `38894829102`, passed both Windows
+unit jobs, Windows fixture tools and CRC upmap job `116952687062` (55.26 s).
+Secure upmap job `116952687149` failed with a different error: items passed,
+then `OpenOSD` reached the caller's 20-second deadline before any full-phase
+request was submitted. This was not an observed `-13` rejection.
+
+The new public timeline shows valid AUTH and unchanged GlobalID 4737
+throughout. The full control ended at 11:40:28.782724736 UTC with OSD ticket
+expiry 11:40:28.530546077; that ticket was still unchanged at 11:40:48.784.
+It was renewed by the final cleanup observation. Every observation reported
+MON ready and no rejection. The artifact lacks per-attempt setup outcomes,
+so it does not prove whether a slow/failed candidate or scheduling caused
+the delayed publication. The client correctly refused the expired service
+proof and ended before submitting a full-phase mutation. Native cleanup
+restored overrides and removed both heads.
+
+The original failure is retained separately at
+`/private/tmp/ceph-ci-final2696-job-116952687149-first-failure.log` and
+`/private/tmp/ceph-ci-final2696-secure-upmap-12042919864-first-failure/ceph-diagnostics`.
+The downloaded artifact ZIP SHA-256 is
+`ff9e32a3ed3c08d57673413130006d4a2d573a55df71997558296426a305d680`;
+the original Go result SHA-256 is
+`1881e3c11d9caf8b846ecd1fa4e01132a5e855116846f1a42ecf3b5d0687b662`.
+
+The final fixture policy therefore gives that exact placement-only selector
+both AUTH and service TTLs of 120 seconds, as other long-control profiles
+already use. The short-ticket opt-in is excluded from this selector override
+and retains AUTH 6.5 seconds/service 12 seconds. All other ordinary selectors
+retain 12-second service tickets. This separates placement verification from
+aggressive renewal timing; it is not a product renewal fix or a renewal
+interoperability claim. Caller deadlines, native bounds, error handling,
+request counts, identity checks and mutation replay policy are unchanged.
+
+The 120/120 policy passed the complete fixture Go tests/vet and fresh,
+first-attempt native runs: CRC/AES/IPv4 host 32.91 seconds and
+secure/AES256K/IPv6 container 35.09 seconds. Each retained eight controls and
+ten successful replies under the original GlobalID, completed items/full
+transitions and exact restoration, submitted each APPEND once, and removed
+both owned heads with the empty pool retained for fixture teardown. The
+public ticket windows covered these executions; these runs do not exercise
+renewal. The tested `provider.go` SHA-256 is
+`ff479de5c640edc6c837743b77257df62889bcd71ff19f51a43f8b3c54fbf5aa`;
+the integration test SHA above remains unchanged.
+
+Fresh artifacts are
+`/private/tmp/ceph-ci-upmap-window-crc-20261016` and
+`/private/tmp/ceph-ci-upmap-window-secure-20261016`, with result SHA-256
+`01bb0e2d620660aeb1f1f3a3910be1da6d567789e05a1c13ae8e1867cb724f8f`
+and `1121da8786876c4dbffbce7f9b59949f2ce7dd7cee7c9f6c259713b6f5750145`.
+The independent inventory
+`/private/tmp/ceph-ci-upmap-window-cleanup-audit-20261016.json` confirms
+all 20 owned containers and both networks absent. Final-head GitHub results
+remain separate from this local evidence.
