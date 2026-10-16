@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,10 +17,17 @@ import (
 
 func TestCephFractionalTicketRenewalIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_SHORT_TICKETS") != "1" {
-		t.Skip("requires the isolated 1.5-second ticket fixture")
+		t.Skip("requires the isolated fractional AUTH ticket fixture")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	// Four renewal cycles of about 3/4 of 6.5 s each, plus the initial
+	// handshakes and the native keyring gates.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	if control == "" {
+		t.Fatal("fractional ticket fixture has no control directory")
+	}
+	requireFreshNativeManagerKeyring(t, ctx, control, "pre-dial")
 	options := integrationOptions(t)
 	dial := options.DialContext
 	var managerDials atomic.Int32
@@ -39,6 +47,10 @@ func TestCephFractionalTicketRenewalIntegration(t *testing.T) {
 	}
 	defer c.Close()
 	if err := c.WaitMgrReady(ctx); err != nil {
+		// Attribute a native keyring fault before reporting a product failure.
+		gate, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		requireFreshNativeManagerKeyring(t, gate, control, "post-failure")
 		t.Fatalf("authenticate initial MGR: %q", fmt.Sprint(err))
 	}
 	initial := c.Snapshot()
@@ -50,10 +62,10 @@ func TestCephFractionalTicketRenewalIntegration(t *testing.T) {
 		// Both times share the decoding clock, so their difference proves
 		// fractional validity without latency bias. Ceph can cap the
 		// configured TTL to its rotating key's remaining lifetime.
-		if ttl := 4 * s.AuthTicket.Expires.Sub(s.AuthTicket.RenewAfter); ttl <= 0 || ttl > 1500*time.Millisecond || ttl%time.Second == 0 {
-			t.Fatalf("fixture did not issue a positive fractional AUTH ticket within its 1.5-second TTL: %v", ttl)
+		if ttl := 4 * s.AuthTicket.Expires.Sub(s.AuthTicket.RenewAfter); ttl <= 0 || ttl > shortTicketAuthTTL || ttl%time.Second == 0 {
+			t.Fatalf("fixture did not issue a positive fractional AUTH ticket within its %v TTL: %v", shortTicketAuthTTL, ttl)
 		}
-		if ttl := 4 * s.MgrTicket.Expires.Sub(s.MgrTicket.RenewAfter); ttl <= 1500*time.Millisecond || ttl > 12*time.Second {
+		if ttl := 4 * s.MgrTicket.Expires.Sub(s.MgrTicket.RenewAfter); ttl <= shortTicketAuthTTL || ttl > 12*time.Second {
 			t.Fatalf("fixture did not retain the ordinary MGR service ticket lifetime: %v", ttl)
 		}
 	}
@@ -89,4 +101,31 @@ func TestCephFractionalTicketRenewalIntegration(t *testing.T) {
 		t.Logf("fractional renewal cycle=%d auth-validity=%v mgr-validity=%v expiry-margin=%v retained-client-id=%d held-MGR-dials=%d", cycle, 4*state.AuthTicket.Expires.Sub(state.AuthTicket.RenewAfter), 4*state.MgrTicket.Expires.Sub(state.MgrTicket.RenewAfter), time.Until(deadline), state.GlobalID, managerDials.Load())
 		previous = state
 	}
+}
+
+// shortTicketAuthTTL is the fixture's fractional AUTH ticket lifetime
+// (integration/fixture/provider.go). The MGR service ticket keeps 12 s.
+const shortTicketAuthTTL = 6500 * time.Millisecond
+
+// requireFreshNativeManagerKeyring asks the fixture whether an owned native MGR
+// lost its MON session (a MonClient -13, or a refused reclaim of its MgrMap
+// GID). Such a MGR keeps a stale rotating keyring and refuses current Go MGR
+// tickets with -13: a native fixture fault, not product evidence.
+func requireFreshNativeManagerKeyring(t *testing.T, ctx context.Context, control, label string) {
+	t.Helper()
+	if err := testcluster.ControlDaemon(ctx, control, "verify", "mgr-keyring", label); err != nil {
+		t.Fatal("fixture error: native MGR keyring gate", err)
+	}
+	data, err := os.ReadFile(filepath.Join(control, "manager-keyring-gate.json"))
+	var receipt struct {
+		Label        string `json:"label"`
+		FixtureError string `json:"fixture_error"`
+	}
+	if err != nil || json.Unmarshal(data, &receipt) != nil || receipt.Label != label {
+		t.Fatal("fixture error: native MGR keyring gate receipt", err)
+	}
+	if receipt.FixtureError != "" {
+		t.Fatalf("%s: %s", receipt.FixtureError, data)
+	}
+	t.Logf("native MGR keyring gate %s: %s", label, data)
 }

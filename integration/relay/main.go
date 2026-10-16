@@ -76,7 +76,7 @@ func forward(conn net.Conn, peers map[string]string) {
 	<-done
 }
 func main() {
-	listen := flag.String("listen", ":40000", "fixture listener")
+	listen := flag.String("listen", ":30400", "fixture listener (below the Linux ephemeral port range)")
 	peersFile := flag.String("peers", "", "native daemon endpoint allowlist")
 	ready := flag.String("ready", "", "readiness file")
 	flag.Parse()

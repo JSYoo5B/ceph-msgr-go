@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 )
 
@@ -65,6 +66,9 @@ func (c *fixtureCluster) controlLoop(ctx context.Context, out string) {
 			return
 		case <-tick.C:
 			if err := c.controls(ctx, out); err != nil {
+				if ctx.Err() == nil {
+					err = c.classifyControlFailure(out, err)
+				}
 				c.mu.Lock()
 				c.controlErr = err
 				c.mu.Unlock()
@@ -245,16 +249,12 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 				if kind != "osd" {
 					return errors.New("forced crash is restricted to disposable OSDs")
 				}
-				zero := time.Duration(0)
-				err = daemon.Stop(ctx, &zero)
+				// Docker stop sends SIGTERM first even with a zero timeout,
+				// and an OSD with osd_fast_shutdown may then exit 0 before the
+				// SIGKILL. Send SIGKILL itself so the 137 receipt holds.
+				var state *container.State
+				state, err = forceKill(ctx, dockerKill(daemon.GetContainerID()), daemon.State, forcedKillTimeout)
 				if err == nil {
-					state, stateErr := daemon.State(ctx)
-					if stateErr != nil {
-						return stateErr
-					}
-					if state == nil || state.Running || state.ExitCode != 137 || state.OOMKilled {
-						return errors.New("OSD forced crash did not produce a non-OOM SIGKILL receipt")
-					}
 					data, encodeErr := json.Marshal(map[string]any{"daemon": key, "id": daemon.GetContainerID(), "exit_code": state.ExitCode, "oom_killed": state.OOMKilled})
 					if encodeErr != nil {
 						return encodeErr
@@ -356,6 +356,21 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 		if err = publishAck(out, "mgr-auth-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+	fields, err = c.request(out, "verify-mgr-keyring")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || !shortTicketGateLabels[fields[1]] || c.profile.shortTickets != "1" {
+			return errors.New("native MGR keyring gate is restricted to the short-ticket fixture")
+		}
+		if err = c.verifyShortTicketGate(ctx, out, fields[1]); err != nil {
+			return err
+		}
+		if err = publishAck(out, "mgr-keyring-verify."+fields[0]); err != nil {
 			return err
 		}
 	}
@@ -1064,45 +1079,69 @@ func managerFailoverReady(status ceph.ManagerStatus, names map[string]bool) bool
 		status.Standbys[0].GID != 0 && status.Standbys[0].GID != status.ActiveGID
 }
 
-func (c *fixtureCluster) prepareManagerFailover(ctx context.Context, out string) error {
+// nativeManagerRefusal reads one owned MGR's latest-process MonClient -13 line
+// and attributes it to MonClient global IDs using MON evidence from the same
+// process only. With scanAlways the MONs are read even without a -13 line.
+func (c *fixtureCluster) nativeManagerRefusal(ctx context.Context, name string, daemon testcontainers.Container, scanAlways bool) (managerRefusal, error) {
+	line, start, err := nativeManagerRejection(ctx, daemon)
+	if err != nil || line == "" && !scanAlways {
+		return managerRefusal{Line: line}, err
+	}
+	started, _, err := cephLogEntryTime(start)
+	if err != nil {
+		return managerRefusal{}, fmt.Errorf("native mgr.%s process start %q: %w", name, start, err)
+	}
+	var monitors []monitorLogSource
+	for _, mon := range c.cluster.Monitors() {
+		monitors = append(monitors, monitorLogSource{name: mon.DaemonName, logs: mon.Logs})
+	}
+	refused, err := monitorReclaimRefusals(ctx, monitors, name, started)
+	if err != nil {
+		return managerRefusal{}, err
+	}
+	return managerRefusal{Line: line, Refused: refused}, nil
+}
+
+// nativeManagerMapTimeout bounds one native `mgr dump`. A native CLI whose
+// MGR peer crashed mid-activation can hang; one call must not consume a whole
+// preparation budget silently.
+const nativeManagerMapTimeout = 15 * time.Second
+
+func (c *fixtureCluster) observeManagerMap(ctx context.Context) (managerPreparationMap, error) {
+	call, cancel := context.WithTimeout(ctx, nativeManagerMapTimeout)
+	defer cancel()
+	data, err := c.cluster.Ceph(call, "mgr", "dump", "--format", "json")
+	var state managerPreparationMap
+	if err == nil {
+		err = json.Unmarshal(data, &state)
+	} else if call.Err() != nil && ctx.Err() == nil {
+		err = fmt.Errorf("native mgr dump exceeded %v: %w", nativeManagerMapTimeout, err)
+	}
+	return state, err
+}
+
+func (c *fixtureCluster) ownedManagers() (map[string]testcontainers.Container, []string, error) {
 	daemons := make(map[string]testcontainers.Container)
 	var names []string
 	for _, d := range c.cluster.Managers() {
 		if _, duplicate := daemons[d.DaemonName]; duplicate {
-			return errors.New("duplicate owned MGR preparation identity")
+			return nil, nil, errors.New("duplicate owned MGR preparation identity")
 		}
 		daemons[d.DaemonName] = d.Container
 		names = append(names, d.DaemonName)
 	}
+	return daemons, names, nil
+}
+
+func (c *fixtureCluster) prepareManagerFailover(ctx context.Context, out string) error {
+	daemons, names, err := c.ownedManagers()
+	if err != nil {
+		return err
+	}
 	backend := managerPreparationBackend{
-		observe: func(call context.Context) (managerPreparationMap, error) {
-			data, err := c.cluster.Ceph(call, "mgr", "dump", "--format", "json")
-			var state managerPreparationMap
-			if err == nil {
-				err = json.Unmarshal(data, &state)
-			}
-			return state, err
-		},
+		observe: c.observeManagerMap,
 		rejection: func(call context.Context, name string) (managerRefusal, error) {
-			line, start, err := nativeManagerRejection(call, daemons[name])
-			if err != nil || line == "" {
-				return managerRefusal{Line: line}, err
-			}
-			// Attribute the daemon-side -13 to MonClient global IDs using
-			// MON evidence from the same process only.
-			started, _, err := cephLogEntryTime(start)
-			if err != nil {
-				return managerRefusal{}, fmt.Errorf("native mgr.%s process start %q: %w", name, start, err)
-			}
-			var monitors []monitorLogSource
-			for _, mon := range c.cluster.Monitors() {
-				monitors = append(monitors, monitorLogSource{name: mon.DaemonName, logs: mon.Logs})
-			}
-			refused, err := monitorReclaimRefusals(call, monitors, name, started)
-			if err != nil {
-				return managerRefusal{}, err
-			}
-			return managerRefusal{Line: line, Refused: refused}, nil
+			return c.nativeManagerRefusal(call, name, daemons[name], false)
 		},
 		stop:  func(call context.Context, name string) error { return daemons[name].Stop(call, nil) },
 		start: func(call context.Context, name string) error { return daemons[name].Start(call) },

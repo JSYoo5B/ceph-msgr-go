@@ -156,7 +156,7 @@ func pullFixtureImage(ctx context.Context, image string, pull func(context.Conte
 }
 
 func proxyEndpoint(ctx context.Context, c *fixtureCluster) (string, error) {
-	port, err := c.MappedPort(ctx, "40000/tcp")
+	port, err := c.MappedPort(ctx, relayContainerPort)
 	if err != nil {
 		return "", fmt.Errorf("resolve fixture relay port: %w", err)
 	}

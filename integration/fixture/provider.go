@@ -106,6 +106,29 @@ func fixtureBootstrapConfig(p profile) string {
 	return config
 }
 
+// shortTicketAuthTTL is the fractional AUTH ticket lifetime of the
+// short-ticket profile. Native MonClients renew at expiry minus a quarter of
+// the validity and only on their one-second tick (pinned CephxProtocol.cc
+// 218-223, MonClient.cc 1025-1107). Under the former 1.5 s TTL with one-second
+// MON key rotation they often presented an AUTH ticket whose key the MON had
+// already discarded and were refused for good, so the native MGR stopped
+// refreshing its rotating keys and refused Go authorizers with -13. 6.5 s keeps
+// native MonClients alive while staying fractional for the Go renewal test.
+const shortTicketAuthTTL = 6500 * time.Millisecond
+
+// fixtureTicketTTLs returns the AUTH and service ticket lifetimes of a profile.
+func fixtureTicketTTLs(p profile) (auth, service time.Duration) {
+	service = 12 * time.Second
+	if p.idleSessions == "1" || p.authEpoch == "1" {
+		service = 120 * time.Second
+	}
+	auth = service
+	if p.shortTickets == "1" {
+		auth = shortTicketAuthTTL
+	}
+	return auth, service
+}
+
 func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -121,14 +144,7 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	if !info.IsDir() {
 		return nil, errors.New("fixture output must be a directory")
 	}
-	ttl := 12 * time.Second
-	if p.idleSessions == "1" || p.authEpoch == "1" {
-		ttl = 120 * time.Second
-	}
-	authTTL := ttl
-	if p.shortTickets == "1" {
-		authTTL = 1500 * time.Millisecond
-	}
+	authTTL, ttl := fixtureTicketTTLs(p)
 	cfgPath := filepath.Join(out, "bootstrap.conf")
 	if err = os.WriteFile(cfgPath, []byte(fixtureBootstrapConfig(p)), 0600); err != nil {
 		return nil, err
@@ -293,10 +309,10 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		ip, _ := netip.ParseAddr(monHost)
 		host.ExtraHosts = append(host.ExtraHosts, "fixture-mon-a:"+ip.Unmap().String())
 		host.Mounts = append(host.Mounts, mount.Mount{Type: mount.TypeBind, Source: out, Target: "/out"})
-		host.PortBindings = network.PortMap{network.MustParsePort("40000/tcp"): {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "0"}}}
+		host.PortBindings = network.PortMap{network.MustParsePort(relayContainerPort): {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "0"}}}
 	})}
 	if p.runtime == "host" {
-		clientOpts = append(clientOpts, testcontainers.WithExposedPorts("40000/tcp"))
+		clientOpts = append(clientOpts, testcontainers.WithExposedPorts(relayContainerPort))
 	}
 	c.Container, err = testcontainers.Run(ctx, p.image, clientOpts...)
 	if err != nil {
@@ -354,10 +370,10 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		return c, fmt.Errorf("native oracle startup: %w", err)
 	}
 	if p.runtime == "host" {
-		if err = c.launch(ctx, "sh", "-c", "/out/relay -peers /out/peers.json -ready /out/relay.ready > /out/relay.log 2>&1 &"); err != nil {
+		if err = c.launch(ctx, "sh", "-c", "/out/relay -listen :"+relayListenPort+" -peers /out/peers.json -ready /out/relay.ready > /out/relay.log 2>&1 &"); err != nil {
 			return c, err
 		}
-		if err = wait.ForExec([]string{"test", "-f", "/out/relay.ready"}).WaitUntilReady(ctx, c.Container); err != nil {
+		if err = waitRelay(ctx, out, relayStartupTimeout); err != nil {
 			return c, err
 		}
 	}

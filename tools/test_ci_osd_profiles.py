@@ -76,6 +76,23 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                 for field in opt_ins:
                     self.assertNotIn(field, row)
 
+    def test_infrastructure_steps_are_bounded_and_retried(self):
+        # The reaper pre-pull precedes both jobs that start Testcontainers clusters.
+        for job in ("\n  race:\n", "\n  ceph:\n"):
+            body = self.workflow.split(job, 1)[1]
+            pull = body.index("name: Pre-pull the Testcontainers reaper image")
+            run = body.index("sh integration/run.sh")
+            self.assertLess(pull, run)
+            self.assertIn("docker pull testcontainers/ryuk:", body[pull:run])
+            self.assertIn("for attempt in", body[pull:run])
+        windows = self.workflow.split("\n  windows-ceph:\n", 1)[1].split("\n  ceph:\n", 1)[0]
+        step = windows.split("name: Import dedicated WSL2 development fixture", 1)[1].split("\n      - name:", 1)[0]
+        self.assertIn("timeout-minutes: 12", step)
+        self.assertIn("-TimeoutSec", step)
+        self.assertIn("WaitForExit(240000)", step)
+        self.assertIn("$attempt", step)
+        self.assertIn("$expected", step)
+
     def test_v8_rows_cover_both_security_store_and_address_profiles(self):
         for profile in ("replicated-pg-v8", "replicated-pg-reply-v8"):
             with self.subTest(profile=profile):
