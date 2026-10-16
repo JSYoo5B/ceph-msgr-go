@@ -134,4 +134,124 @@ exact copy-up and snapshot reads.
 
 ## Results
 
-To be recorded from the clean-export runs.
+Both selected configurations passed on 2026-10-16 (UTC): base 5/5, clone
+5/5, exclusive-lock 7/7 and write 4/4 subtests in each, no skips, no
+retries. The tested source is commit
+`db2df56` (this change set except this section), exported with
+`git archive db2df56` to a separate directory: 1209 files, SHA-256 of the
+sorted per-file SHA-256 list
+(`find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256`, run in
+the export root) `1f9b654934612e28d88d2abe1c5c20453d7cb70c72600a31762dd383a58e928e`,
+the same before the static checks and after the second run. In the export:
+`gofmt -l .` empty; `go vet ./...` and `go test -count=1 ./...` (product
+module, `GOWORK=off CGO_ENABLED=0`); `go -C integration/fixture vet
+-mod=readonly ./...` and `test -count=1 -mod=readonly ./...`;
+`PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tools -p
+'test_*.py'` (360 tests) all passed.
+
+Image `quay.io/ceph/ceph:v20.2.4`, daemon version `ceph version 20.2.4
+(7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)`, provider
+`github.com/JSYoo5B/ceph-testcontainers-go` v0.2.0, Docker Desktop on Darwin
+arm64 (4 CPUs, 4 GB). Topology: three MON, two MGR, one OSD, the native
+oracle container. Command from the export root (the second configuration
+changes the variables shown in the table):
+
+```sh
+GOWORK=off CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes \
+CEPH_MSGR_TEST_CONNECTION_MODE=crc CEPH_MSGR_TEST_IP_FAMILY=4 \
+CEPH_MSGR_TEST_RUNTIME=host CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
+CEPH_MSGR_TEST_OSD_REPLICAS=1 CEPH_MSGR_TEST_OSD_PROFILE=legacy-v6 CEPH_MSGR_TEST_RBD=1 \
+CEPH_MSGR_TEST_RUN='^TestCephRBD(Base|Write|ExclusiveLock|Clone)Integration$' CEPH_MSGR_TEST_DIAGNOSTICS=<dir> \
+sh integration/run.sh
+```
+
+| Configuration | Controller wall time (UTC) | Base | Clone | Exclusive-lock | Write |
+| --- | --- | --- | --- | --- | --- |
+| Darwin arm64 host runtime, IPv4, CRC, AES client and service keys, single BlueStore OSD | 00:37:03 to 00:38:21 (78 s) | 5.38 s | 2.67 s | 0.81 s | 1.80 s |
+| CGO=0 Linux arm64 container runtime, IPv6, secure, AES256K client and service keys, single MemStore OSD | 00:40:36 to 00:41:53 (77 s) | 5.33 s | 2.42 s | 0.78 s | 1.74 s |
+
+Clone subtests (CRC run, seconds): header and parent reads 0.03, Go copy-up
+0.36, native copy-up 0.23, clone snapshot 0.77, flatten 0.25. Native action
+durations (ms, CRC / secure): setup 879 / 655, observe-copyup 116 / 97, write
+124 / 122, snapshot 283 / 477, observe-snapshot 114 / 129, flatten 122 / 124
+(librbd's flatten itself about 15 to 21 ms). Every native stderr was empty.
+Each run sent 179 Go requests (178 transmitted, transactions 1 to 178, and
+the one refused SPARSE_READ); request epochs 24 or 25 before and 25 or 26
+after the clone snapshot (its snapshot ID allocation publishes a new
+OSDMap).
+
+### Observed values
+
+| Value | CRC/AES IPv4 BlueStore | secure/AES256K IPv6 MemStore |
+| --- | --- | --- |
+| Pool / parent / clone | pool 3, parent `12aeb0d16ceb`, clone `12ae38c68b33` | pool 3, `127e4efb296`, `127eb27ba466` |
+| Snapshots | parent 4, clone 5 | same |
+| Release gates (`osd dump`) | `require_osd_release` tentacle, `require_min_compat_client` luminous, `min_compat_client` argonaut | same |
+| `parent_get` | `0101 24000000 0300000000000000 00000000 0c000000 "12aeb0d16ceb" 0400000000000000` | same layout |
+| `parent_overlap_get(head)` | `01 0000060000000000` (Some 384 KiB); after the flatten `00` | same |
+| `get_parent(head)` after the flatten | pool 3, the parent ID, snap 4, overlap 0 | same |
+| Reply flags | 0x4000015 reads, 0x4000014 ENOENT reads, 0x4000025 class and data writes, 0x4000035 guarded vectors (STAT with writes) | same |
+
+### Copy-ups
+
+| Step | CRC/AES BlueStore | secure/AES256K MemStore |
+| --- | --- | --- |
+| Go object 1, guarded vector | aggregate -2, per-op `[-2, 0, 0]`, reply user version 10 (the PG's last) | `[-2, 0, 0]`, 4 |
+| Go object 1, parent READ at 4 | one dense extent 0~48 KiB (see the finding) | same |
+| Go object 1, copy-up vector | extents `0~20 KiB`, `28~20 KiB`, input 41000 bytes (prefix `02000000 0000…00 00500000… 00700000… 00500000… 00a00000`), per-op `[0, 0, 0]`, user version 12; object 48 KiB, one sparse extent 0~48 KiB | same extents and input, user version 4 |
+| Second `sparse_copyup` (65560 bytes) / `copyup` (65536 bytes) | result 0, user version 12 unchanged, replay version 24'13 and 24'14, bytes unchanged | 0, 4 unchanged, 25'5 and 25'6 |
+| Native object 3 (trace) | `sparse_copyup in=12344b`: extents `16~4 KiB`, `40~8 KiB` (12 KiB data), equal to the prediction; object extents after: `4~4 KiB`, `16~4 KiB`, `40~8 KiB` | `in=45112b`: extents `0~4 KiB`, `8~40 KiB` (44 KiB); object one extent 0~48 KiB |
+| Go object 2 under snapshot 5 | guarded `[-2, 0, 0]`; `[sparse_copyup (32792 bytes: extent 0~32 KiB), SETALLOCHINT]` with no SnapContext per-op `[0, 0]`; `[WRITE]` with 5/[5] `[0]` | same |
+| Native flatten copy-ups | object 0 `in=65576b` (0~64 KiB), object 5 `in=4136b` (60~4 KiB) | both `in=65576b` (0~64 KiB) |
+
+### LIST_SNAPS
+
+Identical in both runs:
+
+| Object | After the Go copy-up | After the post-snapshot writes | After the flatten |
+| --- | --- | --- | --- |
+| 0 | ENOENT | ENOENT | seq 5, clone 5 (64 KiB, overlap 0~64 KiB), head 64 KiB |
+| 1 | seq 0, head 48 KiB | seq 5, clone 5 (48 KiB, overlap 0~44 KiB), head 52 KiB | unchanged |
+| 2 | ENOENT | seq 5, clone 5 (32 KiB, overlap 0~28 KiB), head 36 KiB | unchanged |
+| 3 | ENOENT (native write later: seq 0, head 48 KiB) | seq 0, head 48 KiB | seq 5, clone 5 (48 KiB, overlap 0~48 KiB), head 48 KiB |
+| 4 | ENOENT | ENOENT | ENOENT |
+| 5 | ENOENT | ENOENT | seq 5, clone 5 (64 KiB, overlap 0~64 KiB), head 64 KiB |
+
+The flatten's empty writes under 5/[5] cloned the objects whose snapset
+sequence was still 0 (3, and 0 and 5 right after their copy-ups under the
+empty SnapContext); objects 1 and 2 already had sequence 5.
+
+### Cleanup verification
+
+Both runs: the journal held the base, lock and write actions and
+`native-clone-setup`, `-observe-copyup` (`read_only`), `-write`,
+`-snapshot`, `-observe-snapshot` (`read_only`) and `-flatten`, all
+`applied`; cleanup removed the pool with the five images, found neither its
+name nor its ID in a fresh native OSDMap and deleted both identities
+(`completed: true`, no error).
+
+## Not verified
+
+- librbd's exact copy-up vector from Go: the sparse extent map of a parent
+  object at a snapshot cannot be read through the product (see the finding),
+  so Go's own copy-up input differs from librbd's (dense); only the native
+  input length is checked against the predicted map.
+- Concurrent copy-ups of the same object by two clients, a copy-up racing a
+  flatten, copy-on-read (`rbd_clone_copy_on_read`), object-map or
+  exclusive-lock clones, deep-flatten, clone v1 (`rbd_children`), clones in
+  another pool or namespace, overlap pruning inside an object (the overlap
+  here equals the image size), parent images in the trash and migration
+  (`assert_snapc_seq` guard) are outside this acceptance.
+- The thick `rbd.copyup` path is exercised only as the no-op on an existing
+  object.
+
+## Earlier attempts
+
+On the working tree, before the exported runs: the first setup output was
+refused by the fixture's shape check (clone format 2 reports features 257,
+and pybind's `overlap()` returns 0 rather than raising for an image without a
+parent); the second run stopped at the first parent read at the snapshot,
+which the client refused before transmission (the finding). After the READ
+fallback both configurations passed from the working tree. During one of
+those runs another agent's cluster shared the Docker VM; the exported runs
+ran alone.
