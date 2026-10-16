@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -311,6 +312,9 @@ func (c *fixtureCluster) prepareMDSFresh(ctx context.Context, out string) error 
 	if err := s.fs.WaitReady(ctx); err != nil {
 		return err
 	}
+	if err := c.verifyMDSFreshPoolPolicy(ctx, out, s.name); err != nil {
+		return err
+	}
 	s.oracle, err = c.readMDSFreshOracle(ctx)
 	if err != nil {
 		return err
@@ -365,6 +369,37 @@ func (c *fixtureCluster) prepareMDSFresh(ctx context.Context, out string) error 
 
 func mdsFreshCaps(name string) ceph.ClientCaps {
 	return ceph.ClientCaps{Mon: "allow r", MDS: "allow r fsname=" + name}
+}
+
+// validateMDSFreshPoolPolicy checks every pool after cephfs.Start created the
+// owned filesystem's pools: the legacy profiles' clients lack HASHPSPOOL, so
+// no pool may carry it, the new metadata and data pools included
+// (ceph-testcontainers-go v0.3.0 "Profiles": check every pool's flags, not
+// only the pool under test). Flags are verified, never repaired.
+func validateMDSFreshPoolPolicy(policy poolPolicy, name string, managers bool) error {
+	if err := validateLegacyPoolPolicy(policy, managers); err != nil {
+		return fmt.Errorf("MDS fresh legacy pool policy: %w", err)
+	}
+	for _, pool := range []string{name + "-meta", name + "-data"} {
+		if !slices.ContainsFunc(policy.Pools, func(entry poolPolicyEntry) bool { return entry.Name == pool }) {
+			return fmt.Errorf("MDS fresh legacy pool policy lacks owned pool %s", pool)
+		}
+	}
+	return nil
+}
+
+func (c *fixtureCluster) verifyMDSFreshPoolPolicy(ctx context.Context, out, name string) error {
+	if !c.profile.mdsPublicClient() {
+		return nil
+	}
+	policy, err := c.poolPolicy(ctx)
+	if err != nil {
+		return err
+	}
+	if err := validateMDSFreshPoolPolicy(policy, name, c.profile.mgrCount == "2"); err != nil {
+		return err
+	}
+	return writeMDSFreshJSON(out, "mds-fresh-pool-policy.json", policy)
 }
 
 func mdsFreshFilesystemConfig(p profile, name string) cephfs.Config {
