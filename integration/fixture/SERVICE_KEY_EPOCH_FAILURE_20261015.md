@@ -200,3 +200,19 @@ authenticates to the same MON once more. The synthetic auth-epoch tests
 cover the extra handshake and that the raced tickets are never published;
 the live cold-cycle rate (about 2.3% per cycle before the change) has not yet
 been remeasured.
+
+## Local soak after the fix (2026-10-16)
+
+With `CEPH_MSGR_TEST_AUTH_EPOCH_CYCLES`, product `3d2645e` ran 300 cold cycles
+on each CI auth-epoch row profile (aes/aes IPv4, aes256k IPv6, container
+runtime, arm64 Docker Desktop) from a clean export, plus an 80-cycle run with
+MON debug logging: 680 of 680 first cold MGR authentications succeeded and no
+-13 occurred. The barrier handshake runs on every renewal after a wipe (two
+dials to the same MON, about 3 to 5 ms). With MON debug logging, two renewal
+handshakes of other clients were minted from the pre-wipe key between the
+MonMap push and the AuthMonitor refresh, and in both the barrier handshake
+replaced them with new-key tickets. Zero failures in 600 cycles bounds the
+post-fix rate below about 0.5% (95%), but no local pre-fix baseline was run,
+only the leader issued tickets, and CI amd64 runners were not used. MON
+`debug_auth` 10 logs plaintext session keys and service secrets in this
+image, so diagnostics must not raise it in collected artifacts.
