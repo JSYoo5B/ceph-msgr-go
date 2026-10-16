@@ -13,6 +13,11 @@ with 64 successful and two failed jobs. At the saved `4cbb5bb` snapshot,
 30 jobs succeeded, one failed, 26 were running and nine queued; that
 snapshot establishes no final workflow conclusion.
 
+A later final read of `4cbb5bb` found 65 successful jobs and one failed job,
+the same secure/IPv6 down-wait failure in the table below. Its CRC counterpart
+passed. No additional failure type was found; the final snapshot is retained
+at `/private/tmp/ceph-ci-38879391666-jobs-final-readonly.json`.
+
 All three observed failures were
 `TestCephOSDObjectBackoffFailoverIntegration`, three BlueStore OSDs,
 `replicated-pg-v8`, after the initial object BLOCK/UNBLOCK and unrelated
