@@ -777,6 +777,14 @@ func (a *cephfsCapAgent) handleCapsLocked(e cephmsgr.MDSSessionEvent) {
 			a.recordLocked(r)
 			return
 		}
+		if c != nil && c.CapID == 0 && c.Exported {
+			// Another rank's IMPORT or this rank's EXPORT moved the cap away:
+			// the inode is known but has no cap on this rank, which
+			// Client::handle_caps drops ("don't have ... cap on mds").
+			r.Note = "no cap on this rank after a migration; dropped as natively"
+			a.recordLocked(r)
+			return
+		}
 		if c == nil || c.CapID == 0 {
 			// The reply carrying this cap was not applied yet; its order
 			// relative to pushes is only known from receive timestamps.

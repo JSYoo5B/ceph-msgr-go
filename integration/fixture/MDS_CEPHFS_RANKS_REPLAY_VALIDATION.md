@@ -264,3 +264,20 @@ still follows.
 
 The attempt-1 failure is in rank 2's cleanup, after the rank-0 pause had
 ended, and is not classified. It is preserved here as a first failure.
+
+## Cleanup failure on CI: a GRANT for a cap migrated away (2026-10-16)
+
+CI runs 38849191998, 38851838575, 38851954628 and 38854103489 (both
+configurations) failed in `cleanup_restore_pins_unlink_release_close` with
+`capability agent ended with errors or unapplied pushes on rank 2 [] 1`. The
+retained rank-2 agent records show the order: rank 2 revoked `Ls` on the hop
+directory (arrival 65), another rank's IMPORT for the restored pins then
+removed rank 2's cap of that inode, and rank 2's following GRANT of the same
+cap ID (arrival 66, seq 4) found the inode with no cap on this rank. The test
+agent deferred it as if the reply introducing the cap were still unapplied,
+so it stayed pending until the session closed. `Client::handle_caps` drops
+such a message ("don't have ... cap on mds"); the agent now does the same for
+an inode whose cap on that rank was migrated away and records the drop. This
+is a test-agent fix only. Three local runs on secure/AES256K IPv6 container
+MemStore passed (63.7 s, 62.9 s, 60.9 s); the third hit exactly this case and
+recorded the drop.
