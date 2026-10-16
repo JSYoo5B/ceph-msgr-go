@@ -4,7 +4,8 @@ import "github.com/jsyoo5b/ceph-msgr-go/internal/osd"
 
 // OSDMapExt reads logical allocated extents in Offset/Length. Length must be
 // nonzero and Offset+Length must not overflow. This bounded subset permits a
-// standalone head read without operation flags. It reports the store's logical
+// standalone read at ReadSnapshot (zero selects the head), without operation
+// flags or a write SnapContext. It reports the store's logical
 // allocation map; holes, physical locations and bytes require interpretation
 // by the calling layer. Erasure-coded pools are unsupported.
 const OSDMapExt OSDOpcode = OSDOpcode(osd.MapExt)

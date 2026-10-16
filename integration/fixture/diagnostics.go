@@ -56,7 +56,7 @@ var metadataFiles = []string{
 	"osd-pg-list-input.json", "osd-pg-list-result.json", "osd-pg-list-command.json", "osd-pg-list-results.json",
 	"osd-sparse-read-input.json", "osd-sparse-read-result.json", "osd-sparse-read-command.json", "osd-sparse-read-results.json", "sparse-read-oracle-provenance.json",
 	"osd-checksum-command.json", "osd-checksum-input.json", "osd-checksum-result.json", "osd-checksum-results.json",
-	"osd-mapext-command.json", "osd-mapext-input.json", "osd-mapext-result.json", "osd-mapext-results.json",
+	"osd-mapext-command.json", "osd-mapext-input.json", "osd-mapext-result.json", "osd-mapext-results.json", "osd-snap-mapext-results.json", "mapext-range-oracle-provenance.json", "osd-mapext-range-input.json", "osd-mapext-range-result.json", "osd-mapext-range-command.json",
 	"osd-replicated-pg-results.json", "osd-backoff-input.json", "osd-backoff-result.json", "osd-backoff-status.json", "osd-backoff-command.json", "osd-backoff-worker.log", "osd-backoff-results.json",
 	"osd-pg-list-v8-results.json", "osd-backoff-late-ack-results.json",
 	"osd-backoff-ack-input.json", "osd-backoff-ack-receipt.json",

@@ -646,6 +646,22 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-mapext-range")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || fields[1] != "observe" {
+			return errors.New("invalid native exact-range extent map oracle request")
+		}
+		args := []string{"python3", "/out/osd_mapext_range_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-mapext-range-command.json", "native exact-range extent map oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-mapext-range-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 	fields, err = c.request(out, "verify-osd-mapext")
 	if err != nil {
 		return err

@@ -23,7 +23,8 @@ no upstream implementation is copied into the Go product.
 
 ## Product behavior
 
-`OSDMapExt` is a standalone head read with no operation flags. Callers supply
+`OSDMapExt` is a standalone read at the caller's `ReadSnapshot` (zero
+selects the head), with no operation flags or write SnapContext. Callers supply
 an explicit target, placement hash and map epoch through the existing OSD API.
 `Offset/Length` select a nonempty interval whose end does not overflow uint64.
 A zero length is refused: the pinned backends differ in how they encode this
@@ -43,8 +44,9 @@ validation requires every range to lie within the submitted interval. Both raw
 bytes and ordered `OSDExtent` metadata are exposed; no physical mapping or object
 routing is performed. A failed operation must return no extent-map output.
 
-Snapshot and compound MAPEXT are intentionally unsupported pending separate
-native characterization of committed versus staged store state. EC remains
+Snapshot MAPEXT resolves the selected clone/head on the daemon, without
+local snapshot discovery. Compound MAPEXT remains unsupported pending
+separate characterization of committed versus staged store state. EC remains
 unsupported. Allocation granularity and physical disk usage are outside this
 wire contract.
 
@@ -83,3 +85,14 @@ the corrected eight-case suite passed on CRC/AES IPv4 host-relay three-replica
 BlueStore and secure/AES256K IPv6 CGO=0 Linux-container single MemStore.
 [Exact runs and limits](../../integration/fixture/OSD_READ_METADATA_VALIDATION.md)
 retain the initial setup failure separately from the subsequent native evidence.
+
+## Selected-snapshot and exact-range follow-up (2026-10-16)
+
+The [snapshot acceptance](../../integration/fixture/OSD_SNAPSHOT_MAPEXT_VALIDATION.md)
+adds a separate opt-in C++ `IoCtx::mapext` oracle for the exact requested
+snapshot, offset and length. It preserves the API's extent count separately
+from the normalized aggregate result. The C++ convenience call does not
+update `get_last_version`; version evidence comes from an independent
+selected-snapshot STAT2. The existing CLI/intersection evidence above is
+preserved with its original scope. No fresh native combination vectors are
+claimed by the focused snapshot field tests.

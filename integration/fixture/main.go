@@ -371,7 +371,7 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	}
 	manifest := map[string]any{"image": p.image, "image_id": imageID, "architecture": architecture, "daemon_version": version,
 		"bootstrap": "public-api", "topology": "3 MON and 0/2 MGR owned daemon containers plus a native oracle client", "runtime": p.runtime, "fsid": p.fsid,
-		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd, "osd_store": p.osdStore, "osd_replicas": p.osdReplicas, "osd_profile": p.osdProfile, "native_sparse_read_oracle": p.sparseReadOracle != ""}
+		"key_type": p.keyType, "service_cipher": p.serviceCipher, "connection_mode": p.connectionMode, "ip_family": p.ipFamily, "osd": p.osd, "osd_store": p.osdStore, "osd_replicas": p.osdReplicas, "osd_profile": p.osdProfile, "native_sparse_read_oracle": p.sparseReadOracle != "", "native_mapext_range_oracle": p.mapExtOracle != ""}
 	for field, value := range currentFixtureProviderIdentity() {
 		manifest[field] = value
 	}

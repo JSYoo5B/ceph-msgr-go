@@ -34,7 +34,7 @@ and the allocation hint in [ALLOC_HINT_CONTRACT.md](ALLOC_HINT_CONTRACT.md).
 The read snap id, write SnapContext, ORDERSNAP, ROLLBACK and LIST_SNAPS follow
 [SNAPSHOT_CONTRACT.md](SNAPSHOT_CONTRACT.md). Standalone head LIST_WATCHERS
 is specified in [WATCHERS_CONTRACT.md](WATCHERS_CONTRACT.md). Bounded standalone
-head extent maps and caller-selected-snapshot CRC32C/xxHash checksums follow [MAPEXT_CONTRACT.md](MAPEXT_CONTRACT.md)
+caller-selected-snapshot extent maps and CRC32C/xxHash checksums follow [MAPEXT_CONTRACT.md](MAPEXT_CONTRACT.md)
 and [CHECKSUM_CONTRACT.md](CHECKSUM_CONTRACT.md). U64 comparison and bulk xattr
 variants remain unsupported.
 

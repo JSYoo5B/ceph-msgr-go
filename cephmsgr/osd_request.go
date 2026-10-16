@@ -76,7 +76,7 @@ const (
 // target (1 through OSDMaxSnapshot) and ListSnapshots the OSDListSnapshots
 // budget; both opcodes carry no other field and no flags. ListWatchers is the
 // local output budget for head-only, standalone OSDListWatchers. MapExt selects
-// a bounded standalone head extent read; Checksum selects a bounded standalone read at ReadSnapshot using Offset/Length.
+// a bounded standalone extent read at ReadSnapshot; Checksum selects a bounded standalone read at ReadSnapshot using Offset/Length.
 // Caller must not mutate the vector, Data or Omap inputs until Request returns.
 type OSDOperation struct {
 	Code           OSDOpcode

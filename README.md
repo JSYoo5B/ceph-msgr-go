@@ -787,9 +787,11 @@ advisory 쓰기다. 서버는 없는 객체를 만들고 값을 object_info에 �
 `OSDMapExt`는 `Offset`·양수 `Length` 범위의 논리적 할당 구간을 읽고,
 `MapExt.MaxOutputBytes`로 수신 출력 한도를 지정한다(최소 4 bytes).
 `Operations[0].Extents`와 원본 `Data`를 함께 제공한다. 물리적 저장 위치나
-객체 bytes를 반환하지 않으며 hole의 해석은 호출자 책임이다. 현재는 단독 head
-요청만 허용한다. 저장소별 구간 표현과 독립 native 비교 범위는
-[MAPEXT 계약](internal/osd/MAPEXT_CONTRACT.md)에 기록했다.
+객체 bytes를 반환하지 않으며 hole의 해석은 호출자 책임이다. 현재는 단독
+요청을 허용하며, `ReadSnapshot`으로 clone을 선택할 수 있다. 0은 head를 읽는다.
+저장소별 구간 표현과 독립 native 비교 범위는
+[MAPEXT 계약](internal/osd/MAPEXT_CONTRACT.md),
+[snapshot 실검증](integration/fixture/OSD_SNAPSHOT_MAPEXT_VALIDATION.md)에 기록했다.
 
 `OSDChecksum`은 단독 요청의 `Offset`·양수 `Length`에 대해 CRC32C,
 xxHash32 또는 xxHash64를 계산하도록 요청한다. `ReadSnapshot`으로 clone을 선택하고

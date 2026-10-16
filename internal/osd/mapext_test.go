@@ -52,8 +52,11 @@ func TestMapExtBoundsAndIsolation(t *testing.T) {
 		t.Fatal("aggregate reply budget escaped", err)
 	}
 	r.ReadSnap = 1
-	if _, err := EncodeRequest(r, oracleFeatures, 1024); err == nil {
-		t.Fatal("snapshot accepted")
+	if _, err := EncodeRequest(r, oracleFeatures, 1024); err != nil {
+		t.Fatal("snapshot read refused", err)
+	}
+	if _, err := EncodeRequest(r, oracleFeatures, 350); !errors.Is(err, wire.ErrLimit) {
+		t.Fatal("snapshot aggregate reply budget escaped", err)
 	}
 }
 

@@ -38,10 +38,7 @@ func TestOSDReadMetadataPublicNativePayloads(t *testing.T) {
 		{"checksum", "checksum-native-request-v6-xxhash64", "checksum-native-reply-v6-xxhash64-", "eof", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash64, ChunkSize: 4, Seed: 0x0123456789abcdef}}, 0},
 		{"checksum", "checksum-native-request-v6-xxhash64", "checksum-native-reply-v6-xxhash64-", "unaligned", OSDOperation{Code: OSDChecksum, Offset: 2, Length: 8, Checksum: OSDChecksumInput{Type: OSDChecksumXXHash64, ChunkSize: 4, Seed: 0x0123456789abcdef}}, -22},
 	} {
-		snapshots := []uint64{0}
-		if tc.kind == "checksum" {
-			snapshots = append(snapshots, 4)
-		}
+		snapshots := []uint64{0, 4}
 		for _, snapshot := range snapshots {
 			t.Run(fmt.Sprintf("%s/%s/snap-%d", tc.request, tc.suffix, snapshot), func(t *testing.T) {
 				c, peers, dials := osdTestClient(t)
@@ -62,8 +59,8 @@ func TestOSDReadMetadataPublicNativePayloads(t *testing.T) {
 				sent := peer.next(t)
 				expectedFront := bytes.Clone(nativeAllocHintFixture(t, tc.request, "front"))
 				// This composes the separately verified read-snapshot tail with
-				// the retained head checksum vector; it is not a fresh native
-				// snapshot CHECKSUM vector. Actual combination coverage is live.
+				// the retained head metadata vector; it is not a fresh native
+				// snapshot metadata vector. Actual combination coverage is live.
 				if snapshot != 0 {
 					binary.LittleEndian.PutUint64(expectedFront[len(expectedFront)-59:], snapshot)
 				}
@@ -76,7 +73,7 @@ func TestOSDReadMetadataPublicNativePayloads(t *testing.T) {
 				if tc.code < 0 {
 					var unknown *OutcomeUnknownError
 					if errors.As(got.e, &unknown) {
-						t.Fatal("known checksum refusal became unknown", got.e)
+						t.Fatal("known metadata refusal became unknown", got.e)
 					}
 					var server *OSDError
 					if !errors.As(got.e, &server) || server.Code != tc.code {

@@ -34,8 +34,14 @@ func stageAssets(project, out string, p profile) error {
 			return err
 		}
 	}
-	if p.sparseReadOracle != "" {
-		file, err := os.Open(p.sparseReadOracle)
+	for _, oracle := range []struct{ path, name, wrapper, proof string }{
+		{p.sparseReadOracle, "osd_sparse_read_oracle", "osd_sparse_read_oracle.cc", "sparse-read-oracle-provenance.json"},
+		{p.mapExtOracle, "osd_mapext_range_oracle", "osd_mapext_range_oracle.cc", "mapext-range-oracle-provenance.json"},
+	} {
+		if oracle.path == "" {
+			continue
+		}
+		file, err := os.Open(oracle.path)
 		if err != nil {
 			return err
 		}
@@ -45,19 +51,19 @@ func stageAssets(project, out string, p profile) error {
 			return err
 		}
 		if len(data) > 32<<20 || len(data) < 64 || !bytes.Equal(data[:4], []byte{0x7f, 'E', 'L', 'F'}) {
-			return fmt.Errorf("native sparse-read oracle must be a bounded ELF binary")
+			return fmt.Errorf("native read oracle must be a bounded ELF binary")
 		}
-		proofFile, err := os.Open(p.sparseReadOracle + ".proof.json")
+		proofFile, err := os.Open(oracle.path + ".proof.json")
 		if err != nil {
-			return fmt.Errorf("native sparse-read oracle lacks its build proof: %w", err)
+			return fmt.Errorf("native read oracle lacks its build proof: %w", err)
 		}
 		proof, err := io.ReadAll(io.LimitReader(proofFile, (128<<10)+1))
 		proofFile.Close()
 		if err != nil {
-			return fmt.Errorf("read native sparse-read oracle build proof: %w", err)
+			return fmt.Errorf("read native read oracle build proof: %w", err)
 		}
 		if len(proof) > 128<<10 {
-			return fmt.Errorf("native sparse-read oracle build proof exceeds limit")
+			return fmt.Errorf("native read oracle build proof exceeds limit")
 		}
 		var receipt struct {
 			SourceCommit  string `json:"source_commit"`
@@ -68,17 +74,17 @@ func stageAssets(project, out string, p profile) error {
 		if err := json.Unmarshal(proof, &receipt); err != nil {
 			return err
 		}
-		wrapper, err := os.ReadFile(filepath.Join(project, "tools/osd_sparse_read_oracle.cc"))
+		wrapper, err := os.ReadFile(filepath.Join(project, "tools/"+oracle.wrapper))
 		if err != nil {
 			return err
 		}
 		if receipt.SourceCommit != nativeEncoderCommit || receipt.Image != profileDefaultImage || receipt.Image != p.image || receipt.BinarySHA256 != fmt.Sprintf("%x", sha256.Sum256(data)) || receipt.WrapperSHA256 != fmt.Sprintf("%x", sha256.Sum256(wrapper)) {
-			return fmt.Errorf("native sparse-read oracle differs from its pinned source/binary proof")
+			return fmt.Errorf("native read oracle differs from its pinned source/binary proof")
 		}
-		if err := os.WriteFile(filepath.Join(out, "osd_sparse_read_oracle"), data, 0700); err != nil {
+		if err := os.WriteFile(filepath.Join(out, oracle.name), data, 0700); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(out, "sparse-read-oracle-provenance.json"), proof, 0600); err != nil {
+		if err := os.WriteFile(filepath.Join(out, oracle.proof), proof, 0600); err != nil {
 			return err
 		}
 	}

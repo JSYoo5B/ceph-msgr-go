@@ -10,18 +10,23 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
 )
 
-// The independent snapshot-read and CHECKSUM vectors prove the constituent
+// The independent snapshot-read, MAPEXT and CHECKSUM vectors prove the constituent
 // wire fields. These tests check their composition in both existing layouts;
 // they do not label Go-composed messages as new native snapshot vectors.
-func TestChecksumReadSnapshotWireAndRestrictions(t *testing.T) {
-	for _, algorithm := range []uint8{ChecksumCRC32C, ChecksumXXHash32, ChecksumXXHash64} {
+func TestReadMetadataSnapshotWireAndRestrictions(t *testing.T) {
+	for _, operation := range []struct {
+		name string
+		op   Operation
+	}{
+		{"crc32c", Operation{Code: Checksum, Offset: 2, Length: 8, Checksum: ChecksumInput{Type: ChecksumCRC32C, ChunkSize: 4, Seed: 0xffffffff}}},
+		{"xxhash32", Operation{Code: Checksum, Offset: 2, Length: 8, Checksum: ChecksumInput{Type: ChecksumXXHash32, ChunkSize: 4, Seed: 0xffffffff}}},
+		{"xxhash64", Operation{Code: Checksum, Offset: 2, Length: 8, Checksum: ChecksumInput{Type: ChecksumXXHash64, ChunkSize: 4, Seed: 0xfedcba9876543210}}},
+		{"mapext", Operation{Code: MapExt, Offset: 3, Length: 97, MapExt: MapExtInput{MaxOutputBytes: 128}}},
+	} {
 		for _, version := range []int{6, 8} {
-			t.Run(fmt.Sprintf("algorithm-%d/v%d", algorithm, version), func(t *testing.T) {
+			t.Run(fmt.Sprintf("%s/v%d", operation.name, version), func(t *testing.T) {
 				r := nativeV8Request("checksum")
-				r.Operations[0].Checksum.Type = algorithm
-				if algorithm == ChecksumXXHash64 {
-					r.Operations[0].Checksum.Seed = 0xfedcba9876543210
-				}
+				r.Operations = []Operation{operation.op}
 				encode := func(r V8Request) (msgr.MessageData, error) {
 					if version == 6 {
 						return EncodeRequest(r.Request, oracleFeatures, 1024)
@@ -57,7 +62,7 @@ func TestChecksumReadSnapshotWireAndRestrictions(t *testing.T) {
 					if version == 8 {
 						target, err := DecodeRequestV8AdmissionTarget(message, 1024)
 						if err != nil || target.Object.Snap != NoSnap || target.PG != r.PG || target.Object.Hash != r.Hash {
-							t.Fatal("snapshot checksum changed head-object backoff identity", target, err)
+							t.Fatal("snapshot metadata read changed head-object backoff identity", target, err)
 						}
 					}
 				}
@@ -80,7 +85,7 @@ func TestChecksumReadSnapshotWireAndRestrictions(t *testing.T) {
 						t.Fatal(tc.name, err)
 					}
 				}
-				for _, op := range []Operation{{Code: MapExt, Length: 8, MapExt: MapExtInput{MaxOutputBytes: 64}}, {Code: ListWatchers, ListWatchers: ListWatchersInput{MaxOutputBytes: 64}}} {
+				for _, op := range []Operation{{Code: ListWatchers, ListWatchers: ListWatchersInput{MaxOutputBytes: 64}}} {
 					bad := r
 					bad.ReadSnap, bad.Operations = 4, []Operation{op}
 					if _, err := encode(bad); !errors.Is(err, ErrRequest) {
@@ -88,7 +93,7 @@ func TestChecksumReadSnapshotWireAndRestrictions(t *testing.T) {
 					}
 				}
 				if _, err := encode(V8Request{Request: Request{MapEpoch: 11, Locator: r.Locator, Object: r.Object, Hash: r.Hash, ReadSnap: 4, Operations: []Operation{r.Operations[0], {Code: Stat}}}, PG: r.PG, Shard: -1}); !errors.Is(err, ErrOperation) {
-					t.Fatal("snapshot checksum compound admitted", err)
+					t.Fatal("snapshot metadata compound admitted", err)
 				}
 			})
 		}

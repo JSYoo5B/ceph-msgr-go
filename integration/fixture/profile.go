@@ -33,7 +33,7 @@ type profile struct {
 	image, keyType, serviceCipher, ipFamily, mgrCount, runtime, race      string
 	expireTickets, idleSessions, authEpoch, shortTickets                  string
 	authEpochCycles                                                       string
-	sparseReadOracle                                                      string
+	sparseReadOracle, mapExtOracle                                        string
 	osdProfile                                                            string
 	nativeMgrPreparation                                                  string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
@@ -59,6 +59,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		rbdBase:              value("CEPH_MSGR_TEST_RBD", "0"),
 		osdProfile:           value("CEPH_MSGR_TEST_OSD_PROFILE", "legacy-v6"),
 		sparseReadOracle:     getenv("CEPH_MSGR_TEST_SPARSE_READ_ORACLE"),
+		mapExtOracle:         getenv("CEPH_MSGR_TEST_MAPEXT_ORACLE"),
 		image:                value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
 		keyType:              value("CEPH_MSGR_TEST_KEY_TYPE", "aes256k"),
 		ipFamily:             value("CEPH_MSGR_TEST_IP_FAMILY", "4"),
@@ -122,8 +123,8 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	if p.osdPGV8() && p.osd != "1" {
 		return profile{}, fmt.Errorf("%s requires CEPH_MSGR_TEST_OSD=1", p.osdProfile)
 	}
-	if p.sparseReadOracle != "" && p.osd != "1" {
-		return profile{}, fmt.Errorf("native sparse-read oracle requires OSD fixture")
+	if (p.sparseReadOracle != "" || p.mapExtOracle != "") && p.osd != "1" {
+		return profile{}, fmt.Errorf("native read oracle requires OSD fixture")
 	}
 	if p.osdReplicas != "1" && p.osd != "1" {
 		return profile{}, fmt.Errorf("replicated fixture requires CEPH_MSGR_TEST_OSD=1")
@@ -246,7 +247,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if p.mdsCephFSData == "1" {
 			selected = "^TestCephMDSCephFSDataIntegration$"
 		}
-		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || p.sparseReadOracle != "" ||
+		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || (p.sparseReadOracle != "" || p.mapExtOracle != "") ||
 			p.testRun != "" && p.testRun != selected {
 			return profile{}, fmt.Errorf("MDS fixture requires its exclusive selector %s and one admitted OSD profile", selected)
 		}
@@ -257,7 +258,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		// legacy-v6 fixture; their Go client admits no HASHPSPOOL bit, so
 		// every pool must keep the legacy placement seed.
 		selected = "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
-		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || p.sparseReadOracle != "" ||
+		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || (p.sparseReadOracle != "" || p.mapExtOracle != "") ||
 			p.testRun != "" && p.testRun != selected {
 			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture and no MDS profile", selected)
 		}
@@ -362,8 +363,12 @@ func (p profile) containerEnvironment() map[string]string {
 
 func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	marker := ""
+	mapMarker := ""
 	if p.sparseReadOracle != "" {
 		marker = "1"
+	}
+	if p.mapExtOracle != "" {
+		mapMarker = "1"
 	}
 	result := map[string]string{
 		"CEPH_MSGR_TEST_MDS_FRESH":               p.mdsFresh,
@@ -376,6 +381,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":         p.mdsCephFSData,
 		"CEPH_MSGR_TEST_RBD":                     p.rbdBase,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    marker,
+		"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         mapMarker,
 		"CEPH_MSGR_MONITORS":                     p.monitors(),
 		"CEPH_MSGR_KEY_FILE":                     filepath.Join(controlDir, "key"),
 		"CEPH_MSGR_IDENTITY":                     "client.test",

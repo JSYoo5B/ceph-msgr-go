@@ -3,6 +3,10 @@
 Reference: Ceph Tentacle 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`.
 
+The subsequent [MAPEXT snapshot extension](OSD_SNAPSHOT_MAPEXT_VALIDATION.md)
+records the later removal of MAPEXT's head restriction. The head-only MAPEXT
+boundary below describes the source tested by this CHECKSUM checkpoint.
+
 ## Product change
 
 The existing bounded standalone CHECKSUM method now accepts ReadSnapshot
