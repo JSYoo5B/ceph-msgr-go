@@ -231,3 +231,36 @@ The same export passed `TestCephMDSCephFSRanksIntegration`
 - These are local selected-configuration results, separate from remote CI.
   The two new CI rows select `^TestCephMDSCephFSRanksReplayIntegration$`;
   they were not run remotely here.
+
+## ceph-testcontainers-go v0.3.0 unsafe window and key input
+
+Local runs on 2026-10-16 from clean `git archive` exports, darwin/arm64,
+Go 1.27.2, Docker Engine 29.8.2 (4 CPUs, 4 GiB), Ceph image
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a4...`, ceph-testcontainers-go
+v0.3.0. Configuration (a): aes/aes, CRC, IPv4, runtime `host`, BlueStore.
+Configuration (b): aes256k/aes256k, secure, IPv6, runtime `container`,
+MemStore. Both use the legacy-v6 single-OSD fixture.
+
+The native-only keys reach their workers as one bounded
+`NativeCommand.Input` record (`native_key_input.go`); no native keyring is
+written to the host control directory. Every worker run checks
+`InputWritten`, `InputDelivered`, `InputEOF` and the worker's byte-count
+receipt separately from `Complete()`. The attach path ran from the host
+fixture into the client container under both runtimes.
+
+`standby_replay_takeover_resubmit` no longer sleeps 1.5 s after
+`FlushJournal`. The new read-only `ops-in-flight` action samples rank 0's
+`dump_ops_in_flight` until both held requests are at
+`submit entry: journal_and_reply`, then again at least 3 s later. Both
+samples must come from rank 0's GID and show both requests after
+`early_replied` and without `journal_committed`; the Go `WaitSafe` probe
+still follows.
+
+| Export | Configuration | Result | Wall time |
+| --- | --- | --- | --- |
+| `36d5734` | (a) | PASS, 6 leaves (test 67.59 s) | 158 s |
+| `36d5734` | (b) attempt 1 | FAIL in `cleanup_restore_pins_unlink_release_close`: after the confirmed Close of the rank-2 session the capability agent held 1 unapplied push (`[] 1 ceph: MDS closed the CephFS session`); every earlier leaf, including the unsafe window, passed | 157 s |
+| `36d5734` | (b) attempt 2 | PASS, 6 leaves (test 63.62 s) | 218 s |
+
+The attempt-1 failure is in rank 2's cleanup, after the rank-0 pause had
+ended, and is not classified. It is preserved here as a first failure.

@@ -212,3 +212,32 @@ MKNOD and SYMLINK conversions, cap flushes with dirty data (`FLUSH`), cap
 snaps of more than one snapshot, reconnect denial for `mds is readonly` or
 missing features, standby takeover with these cases, IPv4/IPv6 crossings and
 other OSD stores.
+
+## ceph-testcontainers-go v0.3.0 unsafe window and key input
+
+Local runs on 2026-10-16 from clean `git archive` exports, darwin/arm64,
+Go 1.27.2, Docker Engine 29.8.2 (4 CPUs, 4 GiB), Ceph image
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a4...`, ceph-testcontainers-go
+v0.3.0. Configuration (a): aes/aes, CRC, IPv4, runtime `host`, BlueStore.
+Configuration (b): aes256k/aes256k, secure, IPv6, runtime `container`,
+MemStore. Both use the legacy-v6 single-OSD fixture.
+
+The native-only keys reach their workers as one bounded
+`NativeCommand.Input` record (`native_key_input.go`); no native keyring is
+written to the host control directory. Every worker run checks
+`InputWritten`, `InputDelivered`, `InputEOF` and the worker's byte-count
+receipt separately from `Complete()`. The attach path ran from the host
+fixture into the client container under both runtimes.
+
+`lost_reply_and_completed_replay` no longer sleeps 1.5 s after the journal
+pause. It samples the owned MDS's `dump_ops_in_flight` until the replayed
+create (answered unsafe) and the lost create and mkdir (no reply) are all at
+`submit entry: journal_and_reply`, then samples again at least 3 s later.
+Both samples must come from the armed MDS GID and show the replayed create
+after `early_replied`, the lost requests without it, and none
+`journal_committed` (the v0.3.0 `TestCephFSUnsafeRequestWindow` receipt).
+
+| Export | Configuration | Result | Wall time |
+| --- | --- | --- | --- |
+| `36d5734` | (a) | PASS, 8 leaves (test 168.67 s) | 261 s |
+| `36d5734` | (b) | PASS, 8 leaves (test 168.60 s) | 259 s |

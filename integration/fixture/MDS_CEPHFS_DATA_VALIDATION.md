@@ -285,3 +285,27 @@ reads with truncate fields, and the `shared-file` revoke sequences and
 arrivals above, which were recorded in the earlier run and not rechecked
 against these runs (the flush TIDs, max_size grants and the snapshot SPLIT
 arrival were).
+
+## ceph-testcontainers-go v0.3.0 key input
+
+Local runs on 2026-10-16 from clean `git archive` exports, darwin/arm64,
+Go 1.27.2, Docker Engine 29.8.2 (4 CPUs, 4 GiB), Ceph image
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a4...`, ceph-testcontainers-go
+v0.3.0. Configuration (a): aes/aes, CRC, IPv4, runtime `host`, BlueStore.
+Configuration (b): aes256k/aes256k, secure, IPv6, runtime `container`,
+MemStore. Both use the legacy-v6 single-OSD fixture.
+
+The native-only keys reach their workers as one bounded
+`NativeCommand.Input` record (`native_key_input.go`); no native keyring is
+written to the host control directory. Every worker run checks
+`InputWritten`, `InputDelivered`, `InputEOF` and the worker's byte-count
+receipt separately from `Complete()`. The attach path ran from the host
+fixture into the client container under both runtimes.
+
+`rados listsnaps` reads a 0600 keyring that the worker writes in a private
+directory of the client container and removes at exit.
+
+| Export | Configuration | Result | Wall time |
+| --- | --- | --- | --- |
+| `36d5734` | (a) | PASS (test 74.66 s) | 157 s |
+| `36d5734` | (b) | PASS (test 78.06 s) | 159 s |

@@ -228,3 +228,24 @@ but are not the acceptance record.
   exporter's FLUSHMSG) and a standby takeover of rank 0 followed by a
   reconnect were later accepted live on a separate two-rank fixture in
   [MDS_CEPHFS_RANKS_VALIDATION.md](MDS_CEPHFS_RANKS_VALIDATION.md).
+
+## ceph-testcontainers-go v0.3.0 key input
+
+Local runs on 2026-10-16 from clean `git archive` exports, darwin/arm64,
+Go 1.27.2, Docker Engine 29.8.2 (4 CPUs, 4 GiB), Ceph image
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a4...`, ceph-testcontainers-go
+v0.3.0. Configuration (a): aes/aes, CRC, IPv4, runtime `host`, BlueStore.
+Configuration (b): aes256k/aes256k, secure, IPv6, runtime `container`,
+MemStore. Both use the legacy-v6 single-OSD fixture.
+
+The native-only keys reach their workers as one bounded
+`NativeCommand.Input` record (`native_key_input.go`); no native keyring is
+written to the host control directory. Every worker run checks
+`InputWritten`, `InputDelivered`, `InputEOF` and the worker's byte-count
+receipt separately from `Complete()`. The attach path ran from the host
+fixture into the client container under both runtimes.
+
+| Export | Configuration | Result | Wall time |
+| --- | --- | --- | --- |
+| `ff5e7c8` | (a) | PASS: Push 55.65 s, Recovery 58.66 s, CephFS 69.15 s | 276 s |
+| `36d5734` | (b) | PASS: Push 56.33 s, Recovery 58.86 s, CephFS 76.25 s | 282 s |
