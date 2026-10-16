@@ -146,3 +146,45 @@ including the previously failed Linux container controls, MGR takeover,
 expired-ticket recovery, both legacy-cipher OSD profiles, race sessions and
 Windows native Ceph execution. This confirms the correction on Linux CI; the
 first failed run remains distinct evidence and was not rerun to erase it.
+
+## 2026-10-16 fixture hardening against recurring CI flakes
+
+The 1.5 s MON ticket row above is superseded. Triage of 45 main runs found the
+short-ticket MGR -13 (3 of 43 runs, aes/aes IPv4) to be a native fixture
+artifact: native MonClients renew at expiry minus a quarter of the validity and
+only on their one-second tick, so under a 1.5 s AUTH TTL with one-second MON
+key rotation the MONs refused their AUTH reclaim for good. The MGR's beacon
+MonClient then stopped refreshing rotating keys and refused current Go MGR
+tickets (`could not find secret_id`). Changes, all fixture/test/CI only:
+
+- Short-ticket AUTH TTL is 6.5 s (still fractional; MGR tickets keep 12 s,
+  `mon_tick_interval` stays 1). `TestCephFractionalTicketRenewalIntegration`
+  accepts an AUTH validity in (0, 6.5 s] that is not a whole second, requires
+  the MGR validity above it, and has a 60 s context. Before dialing, and again
+  after an initial MGR failure, it asks the fixture for a native MGR keyring
+  gate (`verify-mgr-keyring`, receipt `manager-keyring-gate.json`). An owned
+  MGR whose latest process logged a MonClient -13, or whose MgrMap GID an owned
+  MON refused to reclaim, is reported as a fixture error.
+- The host relay listens on 30400 (below the Linux ephemeral range) instead of
+  40000 and the fixture fails fast when `relay.log` reports a bind error.
+- The OSD forced crash sends SIGKILL through Docker ContainerKill. Docker stop
+  sent SIGTERM first, and `osd_fast_shutdown` could exit 0 before the SIGKILL.
+- A control failure that coincides with owned daemon crash metadata is
+  reported as a native crash fixture error (`native-crash.json`), naming the
+  ceph-mgr null `auth_server` segfault in `ProtocolV2::handle_auth_request`.
+  Each native `mgr dump` of the MGR preparation is bounded to 15 s.
+- CI pre-pulls `testcontainers/ryuk:0.14.0` with retries and bounds and retries
+  the Windows WSL rootfs download and import.
+
+Local evidence (Darwin arm64, Docker Desktop, Tentacle 20.2.4 pinned digest,
+commit `e0173c303a25125669069ca98779a6999e31844a` exported with `git archive`):
+
+| Profile | Result |
+| --- | --- |
+| aes/aes secure IPv4 container, short-tickets=1 (CI row) | 20 of 20 runs passed; all 20 pre-dial gates clean; 80 renewal cycles, AUTH validity 6.5 s (6 capped values between 6.08 s and 6.26 s), MGR validity 12 s |
+| aes/aes CRC IPv4 host relay, OSD=1 bluestore x3, selector `^TestCeph(OSDReplicas\|OSDMutationCrash\|OSDXattrCrash)Integration$` | 3 of 3 tests passed in one run; relay.log empty; every forced crash produced exit 137 without OOM |
+
+Not verified locally: the Windows WSL step, the CI reaper pre-pull, a live
+native ceph-mgr segfault (the classification is unit-tested against the
+recorded crash metadata shape), and the absence of `could not find secret_id`
+in MGR logs of passing runs (daemon logs are archived only on failure).
