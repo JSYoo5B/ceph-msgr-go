@@ -53,8 +53,10 @@ otherwise the first clone whose id is at least the snap id must list that
 snap, else -ENOENT. A missing or recovering clone makes the request wait
 without a reply. The reply's user version is the clone's, whose size and
 mtime were copied from the head when the clone was made; the reply does not
-echo the snap id. Every read opcode in the supported inventory can run at a
-snapshot; a read-mode CALL to a write method is refused by the server with
+echo the snap id. The product supports explicit snapshot reads including
+bounded standalone CHECKSUM (CRC32C/xxHash32/xxHash64); MAPEXT and
+LIST_WATCHERS remain head-only in the current public contract. A read-mode
+CALL to a write method is refused by the server with
 -EINVAL. Snap id 0 never names a clone; the client sends it as the head
 because zero is its head value.
 

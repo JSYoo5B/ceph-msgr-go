@@ -75,7 +75,7 @@ func TestPublicEvidenceCollectorPreservesPrivateDiagnosticCopies(t *testing.T) {
 	out, diagnostics := t.TempDir(), t.TempDir()
 	// These public receipts model the files published by the container suite.
 	// The host collector's archived copy remains private.
-	for _, name := range []string{"osd-checksum-input.json", "osd-mapext-input.json", "osd-watchers-results.json"} {
+	for _, name := range []string{"osd-checksum-input.json", "osd-mapext-input.json", "osd-watchers-results.json", "osd-snap-checksum-results.json"} {
 		if err := os.WriteFile(filepath.Join(out, name), []byte(`{"public":true}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -84,7 +84,7 @@ func TestPublicEvidenceCollectorPreservesPrivateDiagnosticCopies(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(diagnostics)
-	if err != nil || len(entries) != 3 {
+	if err != nil || len(entries) != 4 {
 		t.Fatal("public evidence collector", entries, err)
 	}
 	for _, entry := range entries {

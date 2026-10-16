@@ -16,17 +16,24 @@ import (
 )
 
 type checksumNativeReceipt struct {
-	Code   int32          `json:"code"`
-	Data   []byte         `json:"data"`
-	Values []uint64       `json:"values"`
-	Before omapWriteState `json:"before"`
-	After  omapWriteState `json:"after"`
+	Code           int32                `json:"code"`
+	Data           []byte               `json:"data"`
+	Values         []uint64             `json:"values"`
+	ReadSnap       uint64               `json:"read_snap"`
+	SelectedBefore *nativeXattrSnapshot `json:"selected_before,omitempty"`
+	SelectedAfter  *nativeXattrSnapshot `json:"selected_after,omitempty"`
+	Before         omapWriteState       `json:"before"`
+	After          omapWriteState       `json:"after"`
 }
 
-func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, length uint64, chunk uint32, seed uint64, algorithm uint8) checksumNativeReceipt {
+func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, length uint64, chunk uint32, seed uint64, algorithm uint8, snap uint64) checksumNativeReceipt {
 	t.Helper()
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
-	input, err := json.Marshal(map[string]any{"object": object, "offset": offset, "length": length, "chunk_size": chunk, "seed": seed, "type": algorithm})
+	fields := map[string]any{"object": object, "offset": offset, "length": length, "chunk_size": chunk, "seed": seed, "type": algorithm}
+	if snap != 0 {
+		fields["snap"] = snap
+	}
+	input, err := json.Marshal(fields)
 	if err == nil {
 		err = testcluster.WritePublicEvidence(filepath.Join(dir, "osd-checksum-input.json"), input)
 	}
@@ -116,7 +123,7 @@ func TestCephOSDChecksumIntegration(t *testing.T) {
 				if algorithm.kind == cephmsgr.OSDChecksumXXHash64 && seed != 0 {
 					seed |= 0xfedcba9800000000 // Exercise bits that a uint32 projection would lose.
 				}
-				native := nativeChecksum(t, ctx, tc.object, tc.offset, tc.length, tc.chunk, seed, algorithm.kind)
+				native := nativeChecksum(t, ctx, tc.object, tc.offset, tc.length, tc.chunk, seed, algorithm.kind, 0)
 				if native.Code != tc.code || !reflect.DeepEqual(native.Before, native.After) {
 					t.Fatal("native checksum result/state", native)
 				}

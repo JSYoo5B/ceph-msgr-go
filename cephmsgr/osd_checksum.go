@@ -2,9 +2,10 @@ package cephmsgr
 
 import "github.com/jsyoo5b/ceph-msgr-go/internal/osd"
 
-// OSDChecksum reads CRC32C, xxHash32, or xxHash64 checksums from an explicitly targeted head object.
-// It must be the sole operation, without flags or snapshot metadata. Length
-// must be positive and bounded; implicit whole-object reads are unsupported.
+// OSDChecksum reads CRC32C, xxHash32, or xxHash64 checksums from an explicitly
+// targeted object at ReadSnapshot (zero selects the head). It must be the sole
+// operation, without flags or a write SnapContext. Length must be positive and
+// bounded; implicit whole-object reads are unsupported.
 const OSDChecksum OSDOpcode = OSDOpcode(osd.Checksum)
 
 const (

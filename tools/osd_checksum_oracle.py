@@ -23,7 +23,8 @@ WIDTHS = {0: 4, 1: 8, 2: 4}  # Tentacle XXHASH32, XXHASH64, CRC32C.
 
 
 def validate_request(raw):
-    if not isinstance(raw, dict) or set(raw) != {"object", "offset", "length", "chunk_size", "seed", "type"}:
+    fields = {"object", "offset", "length", "chunk_size", "seed", "type"}
+    if not isinstance(raw, dict) or set(raw) not in (fields, fields | {"snap"}):
         raise ValueError("invalid checksum oracle fields")
     request = {"object": xattr.identity(raw["object"], "owned object")}
     algorithm = omap.integer(raw["type"], 2, "type")
@@ -34,6 +35,10 @@ def validate_request(raw):
     chunk = request["chunk_size"]
     if chunk and request["length"] % chunk:
         raise ValueError("unaligned checksum request")
+    if "snap" in raw:
+        request["snap"] = omap.integer(raw["snap"], (1 << 64)-3, "snap")
+        if not request["snap"]:
+            raise ValueError("omit snap for a head read")
     return request
 
 
@@ -44,6 +49,23 @@ class Native(xattr.Native):
         fn.argtypes = [C.c_void_p, C.c_char_p, C.c_int, C.c_char_p, C.c_size_t,
                        C.c_size_t, C.c_uint64, C.c_size_t, C.c_void_p, C.c_size_t]
         fn.restype = C.c_int
+        self.lib.rados_ioctx_snap_set_read.argtypes = [C.c_void_p, C.c_uint64]
+        self.lib.rados_ioctx_snap_set_read.restype = None
+
+    def selected_checksum(self, io, request):
+        if "snap" not in request:
+            return self.checksum(io, request)
+        self.lib.rados_ioctx_snap_set_read(io, request["snap"])
+        try:
+            before = self.snapshot(io, request["object"], [])
+            result = self.checksum(io, request)
+            after = self.snapshot(io, request["object"], [])
+            if before != after:
+                raise ValueError("native checksum changed selected snapshot state")
+            result.update(read_snap=request["snap"], selected_before=before, selected_after=after)
+            return result
+        finally:
+            self.lib.rados_ioctx_snap_set_read(io, writes.SNAP_HEAD)
 
     def checksum(self, io, request):
         chunk, length = request["chunk_size"], request["length"]
@@ -79,7 +101,7 @@ def collect(root, out):
     native = Native()
     with xattr.client_connection(native, root, metadata, "test") as io:
         before = native.snapshot(io, request["object"], [])
-        result = native.checksum(io, request)
+        result = native.selected_checksum(io, request)
         after = native.snapshot(io, request["object"], [])
     if before != after:
         raise ValueError("native checksum changed independently observed object state")

@@ -53,7 +53,7 @@ func TestChecksumBoundedAdmissionAndWire(t *testing.T) {
 	if _, _, err := ValidateOperations([]Operation{bad}, 32); !errors.Is(err, wire.ErrLimit) {
 		t.Fatal("checksum output bound omitted", err)
 	}
-	for _, snap := range []Request{{ReadSnap: 1}, {SnapSeq: 1, Snaps: []uint64{1}}, {OrderSnap: true}} {
+	for _, snap := range []Request{{ReadSnap: SnapDir}, {SnapSeq: 1, Snaps: []uint64{1}}, {OrderSnap: true}} {
 		snap.ClientInc = r.ClientInc
 		snap.MapEpoch = r.MapEpoch
 		snap.Locator = r.Locator
@@ -61,7 +61,7 @@ func TestChecksumBoundedAdmissionAndWire(t *testing.T) {
 		snap.Hash = r.Hash
 		snap.Operations = r.Operations
 		if _, err := EncodeRequest(snap, oracleFeatures, 1024); err == nil {
-			t.Fatal("snapshot checksum admitted")
+			t.Fatal("invalid snapshot checksum admitted")
 		}
 	}
 }

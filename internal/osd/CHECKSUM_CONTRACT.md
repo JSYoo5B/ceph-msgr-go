@@ -7,7 +7,7 @@ headers and source carry LGPL-2.1 notices (the public librados header also
 permits LGPL-3.0). The implementation translates wire semantics; it does not
 incorporate native code into the Go product.
 
-`OSDChecksum` (`0x121f`) is one explicitly targeted, read-only head operation.
+`OSDChecksum` (`0x121f`) is one explicitly targeted, read-only operation at the caller's read snapshot (zero selects the head).
 Callers supply placement, map epoch, object identity, offset and positive
 length. Its `Checksum` input selects `OSDChecksumXXHash32` (0),
 `OSDChecksumXXHash64` (1), or `OSDChecksumCRC32C` (2), a uint64 seed, and an
@@ -15,7 +15,7 @@ optional uint32 chunk size. The 32-bit algorithms reject seeds above
 MaxUint32 before transmission; no high bits are silently discarded. Chunk size zero means one checksum over the
 returned extent; otherwise the requested length must be a multiple of the
 chunk size. Both read length and maximum count-prefixed output are bounded
-before transmission. Unknown algorithms, flags, snapshot metadata, compound
+before transmission. Unknown algorithms, flags, write SnapContext metadata, compound
 operations, wrapping extents and implicit whole-object reads are rejected.
 
 The 28-byte union is little-endian offset (8), length (8), chunk size (4),
@@ -55,6 +55,11 @@ separate from wire encoding and unit evidence.
 The [algorithm expansion record](../../integration/fixture/OSD_CHECKSUM_ALGORITHMS_VALIDATION.md)
 distinguishes the new xxHash codec and native evidence from the earlier CRC run.
 
-Checksum compounds, snapshot checksums, automatic placement,
+The [snapshot acceptance](../../integration/fixture/OSD_SNAPSHOT_CHECKSUM_VALIDATION.md)
+separately covers caller-selected clones and head resolution using the same
+operation. The server does not echo the read snap id; caller submission state
+remains the source of that selection. Backoff still uses head object identity.
+
+Checksum compounds, automatic placement,
 erasure-coded pools and routing/retry policy remain unsupported here. The
 broader SPEC environment and object-I/O milestones remain in force.

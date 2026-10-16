@@ -62,7 +62,7 @@ var metadataFiles = []string{
 	"osd-backoff-ack-input.json", "osd-backoff-ack-receipt.json",
 	"osd-object-backoff-input.json", "osd-object-backoff-result.json", "osd-object-backoff-state.json", "osd-object-backoff-command.json", "osd-object-backoff-results.json",
 	"osd-watchers-result.json", "osd-watchers-status.json", "osd-watchers-worker.log", "osd-watchers-command.json", "osd-watchers-results.json",
-	"osd-omap-write-snaps.json", "osd-snap-results.json", "osd-snap-sparse-read-results.json",
+	"osd-omap-write-snaps.json", "osd-snap-results.json", "osd-snap-sparse-read-results.json", "osd-snap-checksum-results.json",
 	"rbd-base-owned.json", "rbd-base-setup.json", "rbd-base-oracle.json", "rbd-base-result.json", "rbd-base-watch-state.json", "rbd-base-cleanup.json", "rbd-base-results.json",
 	"rbd-write-setup.json", "rbd-write-observe-written.json", "rbd-write-observe-resized.json", "rbd-write-observe-locked.json", "rbd-write-observe-unlocked.json",
 	"rbd-write-watch.json", "rbd-write-watch-state.json", "rbd-write-results.json",

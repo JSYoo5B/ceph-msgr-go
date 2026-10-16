@@ -79,7 +79,7 @@ func requestSnapshot(r Request, flags uint64) (uint64, error) {
 	if snap == SnapDir {
 		return 0, ErrRequest
 	}
-	if (r.Operations[0].Code == ListWatchers || r.Operations[0].Code == MapExt || r.Operations[0].Code == Checksum) && snap != NoSnap {
+	if (r.Operations[0].Code == ListWatchers || r.Operations[0].Code == MapExt) && snap != NoSnap {
 		return 0, ErrRequest
 	}
 	if IsWatchOperation(r.Operations[0].Code) && (snap != NoSnap || r.SnapSeq != 0 || len(r.Snaps) != 0 || r.OrderSnap) {

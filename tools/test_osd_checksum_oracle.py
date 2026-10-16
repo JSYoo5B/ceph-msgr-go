@@ -71,6 +71,27 @@ class ChecksumOracleTests(unittest.TestCase):
         result = oracle.Native(Library(lambda *args: -22)).checksum(7, self.request())
         self.assertEqual(result, dict(code=-22, data="", values=[]))
 
+    def test_selected_snapshot_restores_head_and_preserves_observation(self):
+        calls = []
+        native = oracle.Native(Library(lambda *args: 0))
+        native.lib.rados_ioctx_snap_set_read = lambda io, snap: calls.append((io, snap))
+        native.snapshot = lambda *args: {"code": 0, "version": 17, "data": "AA=="}
+        result = native.selected_checksum(7, self.request(snap=123))
+        self.assertEqual(result["read_snap"], 123)
+        self.assertEqual(result["selected_before"], result["selected_after"])
+        self.assertEqual(calls, [(7, 123), (7, oracle.writes.SNAP_HEAD)])
+
+    def test_selected_snapshot_restores_head_after_failure(self):
+        calls = []
+        native = oracle.Native(Library(lambda *args: 0))
+        native.lib.rados_ioctx_snap_set_read = lambda io, snap: calls.append(snap)
+        def fail(*args):
+            raise RuntimeError("native snapshot observation failed")
+        native.snapshot = fail
+        with self.assertRaises(RuntimeError):
+            native.selected_checksum(7, self.request(snap=123))
+        self.assertEqual(calls, [123, oracle.writes.SNAP_HEAD])
+
     def test_bad_native_count_does_not_escape_buffer(self):
         def bad(*args):
             C.memmove(args[-2], b"\xff\xff\xff\xff", 4)
@@ -81,7 +102,8 @@ class ChecksumOracleTests(unittest.TestCase):
     def test_invalid_fields_refused_before_native_access(self):
         for fields in (dict(type=3), dict(type=True), dict(offset=(1 << 64)-2), dict(length=0),
                        dict(length=oracle.MAX_READ+1), dict(length=7), dict(seed=True), dict(chunk_size=-1),
-                       dict(type=0, seed=1 << 32), dict(type=2, seed=1 << 32), dict(type=1, seed=1 << 64)):
+                       dict(type=0, seed=1 << 32), dict(type=2, seed=1 << 32), dict(type=1, seed=1 << 64),
+                       dict(snap=0), dict(snap=True), dict(snap=(1 << 64)-2), dict(snap=(1 << 64)-1)):
             with self.subTest(fields=fields), self.assertRaises(ValueError):
                 self.request(**fields)
 

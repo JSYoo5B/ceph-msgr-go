@@ -791,8 +791,9 @@ advisory 쓰기다. 서버는 없는 객체를 만들고 값을 object_info에 �
 요청만 허용한다. 저장소별 구간 표현과 독립 native 비교 범위는
 [MAPEXT 계약](internal/osd/MAPEXT_CONTRACT.md)에 기록했다.
 
-`OSDChecksum`은 단독 head 요청의 `Offset`·양수 `Length`에 대해 CRC32C,
-xxHash32 또는 xxHash64를 계산하도록 요청한다. `Checksum.Type`으로
+`OSDChecksum`은 단독 요청의 `Offset`·양수 `Length`에 대해 CRC32C,
+xxHash32 또는 xxHash64를 계산하도록 요청한다. `ReadSnapshot`으로 clone을 선택하고
+0은 head를 읽는다. Snapshot 발견과 선택은 호출자가 담당한다. `Checksum.Type`으로
 `OSDChecksumCRC32C`·`OSDChecksumXXHash32`·`OSDChecksumXXHash64`를 고른다.
 `Seed`와 결과 `Values`는 u64이며, CRC32C와 xxHash32의 seed는 u32 범위만
 허용하고 결과는 u64로 확장한다. `ChunkSize=0`은 요청 구간에 하나의 값,
@@ -801,7 +802,8 @@ xxHash32 또는 xxHash64를 계산하도록 요청한다. `Checksum.Type`으로
 보존한다. EOF 이후 조회는 원래 길이와 빈 출력을 반환한다. 해석한 값은
 `Operations[0].Checksum.Values`, 원본은 `Data`에 남는다. 길이 0의 암묵적 전체
 읽기는 거절한다. [CHECKSUM 계약](internal/osd/CHECKSUM_CONTRACT.md)과
-[xxHash 검증 기록](integration/fixture/OSD_CHECKSUM_ALGORITHMS_VALIDATION.md)에 범위를 구분했다.
+[xxHash 검증 기록](integration/fixture/OSD_CHECKSUM_ALGORITHMS_VALIDATION.md),
+[snapshot 검증 기록](integration/fixture/OSD_SNAPSHOT_CHECKSUM_VALIDATION.md)에 범위를 구분했다.
 
 `OSDSparseRead`는 단독 요청의 `Offset`·양수 `Length`에서 할당 구간과
 그 구간의 bytes를 함께 읽는다. `ReadSnapshot`을 지정하면 OSD가 그 snapshot id로
