@@ -92,10 +92,21 @@ MON/MGR/OSD와 ticket 갱신·재접속·이름 지정 MON Tell 연결 전체에
 있다. MON 재접속·ticket 갱신으로 `MonTell`의 대상은 바뀔 수 있으며,
 `MonTellTo(ctx, "b", command)`는 MonMap의 정확한 bare name `b`를 지정한다.
 `mon.b` prefix를 제거하거나 숫자를 rank로 해석하지 않으며 wildcard를
-확장하지 않는다. MGR 대상은 현재 active MGR이다. Tell은 daemon의
+확장하지 않는다. `MgrTellTo(ctx, "a", command)`는 현재 available active MGR의
+정확한 bare 이름 `a`에 고정한다. MGR standby 접속이나 active 승격 대기는 제공하지
+않는다. Tell은 daemon의
 admin 명령 schema를 사용한다. MON은 read·write·execute, MGR은 allow-all
 권한을 요구하며, 인증된 read-only 계정의 거절은 `CommandError`로 반환한다.
 Tell에도 요청별 context·raw 출력·결과 불명확 및 자동 재실행 금지 계약이 적용된다.
+
+`MgrTellTo`는 기존 MGR 연결·ticket·명령 슬롯을 공유한다. 이름이 없으면
+`ErrManagerNotFound`, standby이거나 해당 active가 unavailable이면
+`ErrManagerNotActive`로 전송 전에 거절한다. 선택한 이름·daemon GID·보존된 v2 원주소
+벡터·client GlobalID를 setup 대기 전부터 writer 전송 직전까지 확인한다. Binding이
+바뀌면 `ErrManagerTargetChanged`로 다른 active를 대신 선택하지 않는다. 이미 전송을
+시작한 명령은 `OutcomeUnknownError`를 함께 보존하며 재실행하지 않는다.
+[계약](cephmsgr/MGR_TELL_CONTRACT.md)과
+[실검증 기록](integration/fixture/MGR_NAMED_TELL_VALIDATION.md)에 범위를 정리했다.
 
 `MonTellTo`는 먼저 주 MON의 admission을 기다리고 그 지도에서 대상 주소를
 선택한다. 지정 MON에 global ID 0으로 시작하는 독립 인증을 거친 뒤, 한 번 받은
@@ -1177,7 +1188,7 @@ result, err := client.MonCommand(ctx, cephmsgr.Command{
 // result.Data·Code·Message를 사용 레이어에 그대로 전달한다.
 ```
 
-같은 payload를 `MgrCommand`·`MonTell`·`MgrTell`·`MonTellTo`에 전달할 수 있다.
+같은 payload를 `MgrCommand`·`MonTell`·`MgrTell`·`MonTellTo`·`MgrTellTo`에 전달할 수 있다.
 MON/MGR 관리 catalog와 daemon-local admin catalog는 서로 다른 application
 schema다. Catalog가 실행 경로·권한·모듈 활성화를 보장하지 않으며 해당 의미를
 이 라이브러리에서 해석하지 않는다. 성공 응답은 JSON이 아니어도 그대로 반환한다.
@@ -1485,7 +1496,7 @@ epoch의 native `mgr dump`와 비교했다. 별도 포트를 사용한 두 fixtu
 제품에서 서비스 URI에 접속하거나 MGR session을 열지 않았다.
 
 `Manager.Available`은 마지막으로 수신한 MgrMap 값이다. MGR 접속은
-`MgrCommand`, `MgrTell` 또는 `WaitMgrReady`가 필요할 때 시작하므로 available이어도
+`MgrCommand`, `MgrTell`, `MgrTellTo` 또는 `WaitMgrReady`가 필요할 때 시작하므로 available이어도
 ready는 아닐 수 있다.
 MON 복구를 기다리거나 인증 갱신이 명시적으로 거절되면 MGR ready도 false다.
 Ready는 현재 알려진 명령 접수 조건이며 이후 명령 성공을 보장하지 않는다.
@@ -1572,8 +1583,10 @@ MGR이 없어도 MON 준비와 MON 명령은 별도로 사용할 수 있다.
   유효한 장기 키가 있어도 기존 global ID의 재사용을 거부할 수 있다.
   이 거부를 받은 client가 스스로 새 ID로 인증하지 않는다. 호출자는 원인을
   확인한 뒤 새 `Dial`을 명시적으로 수행할 수 있다.
-- MgrMap이 바뀌면 이전 MGR 연결을 종료하며 다음 호출은 새 active MGR로
-  연결한다. 전송 중이던 요청은 `ErrManagerChanged`를 원인으로 보존한다.
+- MgrMap의 active 이름·GID·주소·availability가 바뀌면 이전 MGR 연결을 종료하며
+  다음 일반 호출은 새 active MGR로 연결한다. `MgrTellTo`는 최초 선택한 binding을
+  바꾸지 않고 명시한 대상의 변경을 반환한다. 전송 중이던 요청은
+  `ErrManagerChanged`를 원인으로 보존한다.
   MGR 접속 중 client global ID가 바뀌면 이전 ID의 접속 결과를 폐기하고,
   아직 전송하지 않은 명령은 현재 ID로 인증한 연결에서 처리한다.
 - active MGR이 없거나 service ticket을 갱신 중이면 `MgrCommand`는 호출
@@ -1695,10 +1708,18 @@ CGO=0 및 race 20회와 Windows build가 통과했다.
 명령을 한 번만 전송했으며 주 인증·지도·MON/MGR 명령을 유지했다.
 이 경계 시험은 CGO=0 및 race 각 100회를 통과했다. 지도 parser fuzzing은
 20초 동안 2,487,568개 입력을 처리해 통과했다.
-이름 지정 Tell을 포함한 최종 Linux arm64·CGO=0·aes256k·직접 IPv6 전체
+이름 지정 MON Tell을 포함한 최종 Linux arm64·CGO=0·aes256k·직접 IPv6 전체
 통합시험은 36개가 통과했고, 별도 fixture가 필요한 9개는 제외됐다.
 기존 ticket 갱신·실제 MON/MGR 장애·불명확한 변경의 재실행 금지와
 트래픽 중 12회 종료도 통과했으며 FD 수는 6에서 6으로 유지됐다.
+
+별도 [이름 지정 active MGR Tell 검증](integration/fixture/MGR_NAMED_TELL_VALIDATION.md)은
+고정 구현 `9a5a111`에서 CRC/AES·Darwin arm64·IPv4 host와
+secure/AES256K·Linux arm64·IPv6 container 각각 7개 사례를 통과했다(11.69/11.06초).
+Fresh native map의 이름·GID·epoch와 exact-name tell을 Go 결과와 대조했고,
+권한 거절·동시 명령·ticket 갱신·failover 후 이전 이름 거절과 새 이름 명시 호출·Close를
+확인했다. 두 실행의 owned 컨테이너와 network 정리도 확인했다. 이 기록은 별도
+focused 수용 시험이며 전체 CI 통과나 standby 대상 명령 지원을 뜻하지 않는다.
 
 Tell 제품 구현 `6ba0d88`은 20.2.4의 Linux arm64·CGO=0·aes256k·직접 IPv6와
 Darwin arm64·aes·IPv4 host race에서 검증했다. native CLI의 MON/MGR 버전

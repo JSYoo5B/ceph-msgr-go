@@ -21,12 +21,16 @@ managers or wait for them to become active. `MgrTell` continues to mean the
 current active daemon without a caller-selected name.
 
 After command-slot admission, the operation selects the authenticated MgrMap's
-name, daemon GID and complete address vector, including nonce, along with the
+name, daemon GID and complete retained v2 address vector, including nonce, along with the
 client GlobalID. That binding is fixed before waiting for MGR setup. Setup
 never switches the operation to a replacement daemon. Messenger authenticates
 the MGR service and checks ServerIdent's daemon GID and the selected exact
 address; the name association comes from the authenticated MON map, not a
 separate daemon-name credential.
+
+The existing MgrMap codec retains usable v2 addresses for MGR connections. The
+binding covers that vector; it does not claim preservation of or sensitivity
+to changes in discarded v1 addresses, and no v1 connection is attempted.
 
 All calls sharing the active MGR session check its immutable binding at the
 single writer's existing BeforeWrite boundary. A changed name, GID, address
@@ -81,10 +85,13 @@ context cancellation, Close and no replay. The ordinary MGR recovery and
 ticket-renewal regressions remain applicable to the shared path.
 
 `TestCephNamedManagerTellIntegration` and the closed `observe-named-mgr` fixture
-control are prepared for fresh native before/after MgrMap and exact-name tell
-observations, allow-all denial, concurrent mixed command/tell calls, ticket
-renewal and explicit new-name selection after failover. The native command is
-read-only; the disposable failover mutation is submitted once. Actual results
-must be recorded separately before claiming a verified configuration. No
+control passed seven cases each on CRC/AES IPv4 host and secure/AES256K IPv6
+container configurations. Fresh native before/after MgrMap identity views and
+exact-name tell observations match the Go results, including allow-all denial,
+concurrent mixed command/tell calls, ticket renewal and explicit new-name
+selection after failover. The native command is read-only; the disposable
+failover mutation is submitted once. See the [acceptance record](../integration/fixture/MGR_NAMED_TELL_VALIDATION.md)
+for source hashes, raw command results, identities and owned cleanup. These
+focused runs do not establish full CI coverage. No
 standby command service, arbitrary named-daemon address discovery or typed
 manager operations are claimed.

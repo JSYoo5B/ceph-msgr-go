@@ -76,7 +76,7 @@ README에 실제 daemon·native oracle 결과가 기록되어 있다는 뜻이�
 | ID | 구현 범위와 상태 | 기록된 검증과 남은 제한 | 근거 |
 | --- | --- | --- | --- |
 | B1 | msgr2.1 secure/CRC, CephX aes/aes256k, MON/MGR ticket 갱신·세션 복구: 구현 있음 | 20.2.4의 역할·키·주소별 실검증 기록; CRC·혼합 cipher·Windows 조합을 모두 검증한 것은 아님; [b01a3cf 인증 epoch CI 실패](integration/fixture/SERVICE_KEY_EPOCH_FAILURE_20261015.md)는 두 번째 키 폐기 후 첫 cold MGR 인증의 ticket 복호화 거절(-13)이며, MON이 새 MonMap을 보낸 뒤 새 key를 적용하기 전에 갱신 handshake가 이전 key의 ticket을 받은 경쟁으로 분석됨(같은 MON의 첫 MonMap 응답 뒤 한 번 더 인증하도록 수정; 로컬 두 profile 600 cold cycle에서 -13 없음, CI amd64 재확인 전); MON/MGR/OSD는 cookie 재개 없음; opt-in CephFS profile의 MDS 연결만 cookie·sequence 기반 Messenger 재개 구현(합성 검증과 실제 MDS의 유휴·진행 중 요청 재개 실검증) | [session](internal/session/handshake.go), [CephX](internal/cephx/auth.go), [검증 기록](README.md#검증-결과) |
-| B2 | raw MON/MGR 명령·현재 daemon Tell·이름 지정 MON Tell, 준비/지도 대기·wire metadata: 구현 있음 | native 명령·지도 및 failover·context·Close 시험 기록; OSD/PG 대상 명령은 D1, 명시 MDS raw 명령은 D2에서 구현; 이름 지정 MGR 대상 명령은 미구현 | [명령 API](cephmsgr/api.go), [MON 대상](cephmsgr/named_mon.go), [지도 대기](cephmsgr/map_wait.go), [검증 기록](README.md#검증-결과) |
+| B2 | raw MON/MGR 명령·현재 daemon Tell·이름 지정 MON Tell 및 active MGR Tell, 준비/지도 대기·wire metadata: 구현 있음 | native 명령·지도 및 failover·context·Close 시험 기록; OSD/PG 대상 명령은 D1, 명시 MDS raw 명령은 D2에서 구현; [이름 지정 active MGR](integration/fixture/MGR_NAMED_TELL_VALIDATION.md)은 exact bare name과 GID·원주소·client ID를 고정하고 변경 시 다른 active로 대체하지 않음(CRC/AES IPv4 host·secure/AES256K IPv6 container 각 7 사례); standby 명령은 미지원 | [명령 API](cephmsgr/api.go), [MON 대상](cephmsgr/named_mon.go), [MGR 대상 계약](cephmsgr/MGR_TELL_CONTRACT.md), [지도 대기](cephmsgr/map_wait.go), [검증 기록](README.md#검증-결과) |
 | B3 | MON log·config·digest 구독: 구현 있음 | native oracle·갱신·복구·bounded 큐 시험 기록; 권한 ACK·완전한 변경 이력·원격 unsubscribe 보장 없음 | [로그](README.md#mon-로그), [설정](README.md#mon-설정), [digest](README.md#mon-health상태-구독) |
 | B4 | 명시적 OSD 연결·ticket·v6 stat/read·MAPEXT·CRC32C/xxHash CHECKSUM·mutation/guard opcode 벡터·per-op 결과: 구현 있음 | 20.2.4 legacy CRUSH, HASHPSPOOL/upmap 미사용 replicated pool의 bytes/stat2·갱신, single/3-replica BlueStore mutation·compound·primary SIGKILL 실검증 기록; snapshot은 O2에서 별도 추적; EC와 일반 최신 CRUSH 미지원; IPv6 secure/aes256k 3-replica BlueStore 검증; OSD Windows 및 그 밖의 주소 조합 미검증 | [OSD API](cephmsgr/osd.go), [요청](cephmsgr/osd_request.go), [encoder](internal/osd/request.go), [native 시험](integration/osd_test.go), [지원 범위](README.md#osd-statread-통신-기초) |
 | B5 | MON raw OSDMap 최신 full·range 조회/연속 구독, OSD map 전달: 구현 있음 | native decoder/encoder와 epoch·bytes 비교 및 갱신·단절 기록; 내포 map 해석·적용·CRUSH는 사용 계층 책임; 전체 incremental chain 보장 없음 | [MON 조회](cephmsgr/mon_osd_request.go), [MON 구독](cephmsgr/mon_osd_maps.go), [OSD 전달](cephmsgr/osd_maps.go), [지원 범위](README.md#mon-raw-osdmap-조회구독) |
@@ -590,6 +590,8 @@ MON 명령과 MGR 명령은 명시적인 API로 구분한다. 명령 prefix만 �
 
 현재 접속한 MON과 active MGR의 daemon-local 명령은 `MonTell`·`MgrTell`로 구분한다. `MonTellTo(ctx, name, command)`는 MonMap의 정확한 bare MON 이름을 지정한다. Prefix 제거·숫자의 rank 해석·wildcard 확장은 제공하지 않으며 MGR 대상은 active MGR로 한정한다. Tentacle의 `MCommand`(97)는 인증된 nonzero FSID와 command 문자열 벡터를 보내며, TID는 Messenger header에 둔다. `MCommandReply`(98)의 raw data, signed code, 상태 문자열을 보존한다. MGR의 zero-FSID legacy module 경로로 바꾸지 않는다.
 
+`MgrTellTo(ctx, name, command)`는 현재 available active의 정확한 bare 이름에 한정한다. MgrMap standby에는 주소가 없으므로 standby 접속·승격 대기를 제공하지 않는다. 기존 MGR session·ticket을 공유하고 최초 선택한 name·GID·보존된 v2 원주소 벡터·client GlobalID를 setup과 writer admission에서 고정한다. Binding이 바뀌면 전송 전 로컬 거절 또는 시작한 명령의 결과 불명확을 반환하며, 다른 active로 대체하거나 자동 재실행하지 않는다. [공개 계약](cephmsgr/MGR_TELL_CONTRACT.md)과 [두 구성의 focused 수용 결과](integration/fixture/MGR_NAMED_TELL_VALIDATION.md)를 구분한다.
+
 이름 지정 MON Tell은 주 MON admission 후 지도에서 대상의 v2 원주소를 선택한다. 이름·rank·전체 주소 벡터를 보존하며 family·nonce·scope·flow를 접속 문자열로 재해석하지 않는다. 지정 MON에 global ID 0으로 새 CephX 인증을 수행하고 `MMonGetMap`(5, header 1/compat 0, 빈 payload)의 독립 지도에서 FSID·최소 지원 계열·같은 이름과 원주소의 일치를 확인한다. 주 MON/MGR 연결·auth·map·log watch는 이 결과로 변경하지 않는다. 주 지도에 대상이 없으면 `ErrMonitorNotFound`, 독립 admission의 대상 연관이 바뀌면 `ErrMonitorTargetChanged`로 전송 전 실패를 알린다. 전송 후 변경은 결과 불명확 원인이 될 수 있다.
 
 일반 명령과 같은 `MaxInFlight` 슬롯을 입력 복사 전에 얻는다. Operation context는 전체 호출과 Client Close를 연결하며 `ConnectTimeout`은 endpoint별 setup만 제한한다. Client Close는 독립 handshake와 session 정리를 완료할 때까지 기다린다. 전송 전 setup의 일시적인 전송·연결 오류에 한해 같은 이름의 다른 v2 주소를 시도할 수 있지만, 다른 MON으로 대체하거나 전송 결과가 불명확한 Tell을 다시 실행하지 않는다.
@@ -660,7 +662,7 @@ LGPL-2.1 및 COPYING의 LGPL-2.1/LGPL-3 선택 고지를 확인했고 C++ 코드
 
 ## Go API 설계 기준
 
-현재 MON/MGR 공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`,
+현재 MON/MGR 공개 API는 `ParseKey`, `Dial`, `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell`, `MgrTellTo`,
 `WaitMonReady`, `WaitMgrReady`,
 `WaitMonMap`, `WaitMgrMap`,
 `WatchLogs`, `WatchConfig`, `WatchDigest`, `Snapshot`, `Close`를 중심으로 한다.
