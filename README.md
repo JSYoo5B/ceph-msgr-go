@@ -486,7 +486,7 @@ Go는 `ResponseMessage(0)`으로 답하고 lock을 풀었으며, librbd는 lock�
 요청에 담아 보냈다. 다른 cookie로 보낸 같은 요청은 native와 같은 -16으로 끝났고 object map은
 바뀌지 않았다.
 [잠금 검증 기록](integration/fixture/RBD_LOCK_VALIDATION.md)에 두 구성의 결과를 남겼다.
-Clone/parent, journaling, lock 경합과 blocklist는 아직 검증하지 않았다.
+Clone/parent는 [clone 검증 기록](integration/fixture/RBD_CLONE_VALIDATION.md)에, journaling image의 journal header·entry 해석과 Go 쪽 journal client·append는 [journal 검증 기록](integration/fixture/RBD_JOURNAL_VALIDATION.md)에 남겼다. Lock 경합과 blocklist는 아직 검증하지 않았다.
 
 ## OSD 객체 요청 통신
 
