@@ -31,6 +31,8 @@ func replicatedPGProfile(name string) (cephmsgr.OSDProfile, bool) {
 		return cephmsgr.OSDProfileReplicatedPG, true
 	case "replicated-pg-reply-v8":
 		return cephmsgr.OSDProfileReplicatedPGReplyV8, true
+	case "replicated-pg-request-v9-reply-v8":
+		return cephmsgr.OSDProfileReplicatedPGRequestV9ReplyV8, true
 	default:
 		return 0, false
 	}
@@ -59,9 +61,11 @@ func TestReplicatedPGFixtureProfiles(t *testing.T) {
 	}{
 		{"replicated-pg-v8", cephmsgr.OSDProfileReplicatedPG, true},
 		{"replicated-pg-reply-v8", cephmsgr.OSDProfileReplicatedPGReplyV8, true},
+		{"replicated-pg-request-v9-reply-v8", cephmsgr.OSDProfileReplicatedPGRequestV9ReplyV8, true},
 		{"", 0, false},
 		{"legacy-v6", 0, false},
 		{"replicated-pg-reply-v9", 0, false},
+		{"replicated-pg-request-v9", 0, false},
 		{"REPLICATED-PG-REPLY-V8", 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,6 +92,15 @@ func replicatedPGFixture(t *testing.T) (*cephmsgr.Client, context.Context, osdFi
 	var route osdFixtureOracle
 	if err := json.Unmarshal(metadata, &route); err != nil {
 		t.Fatal(err)
+	}
+	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") == "replicated-pg-request-v9-reply-v8" {
+		var selected struct {
+			Profile string `json:"profile"`
+			Request uint16 `json:"request_version"`
+		}
+		if err := json.Unmarshal(metadata, &selected); err != nil || selected.Profile != "replicated-pg-request-v9-reply-v8" || selected.Request != 9 {
+			t.Fatal("v9 fixture metadata cannot silently select v8", selected, err)
+		}
 	}
 	data, err := os.ReadFile(filepath.Join(dir, "osd-native-read.bin"))
 	if err != nil || uint64(len(data)) != route.Size {

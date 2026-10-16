@@ -25,7 +25,7 @@ import osd_omap_write_native as writes
 import osd_xattr_native as xattr
 
 NAME = "osd-split"
-PROFILES = ("replicated-pg-v8", "replicated-pg-reply-v8")
+PROFILES = ("replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8")
 COMMAND_SECONDS = 5
 STATE_SECONDS = 60
 HOLD_SECONDS = 120

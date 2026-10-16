@@ -32,7 +32,7 @@ import osd_omap_write_native as writes
 import osd_xattr_native as xattr
 
 NAME = "osd-backoff"
-PROFILES = ("replicated-pg-v8", "replicated-pg-reply-v8")
+PROFILES = ("replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8")
 MAX_OUTPUT = 1 << 20
 HOLD_SECONDS = 180
 STATE_SECONDS = 20

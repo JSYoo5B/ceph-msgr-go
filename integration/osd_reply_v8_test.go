@@ -104,7 +104,7 @@ func replyV8Omap(t *testing.T, state omapWriteState) map[string]string {
 // daemon requests supplement its independently built five reply codec vectors;
 // they do not establish every opcode family or general placement support.
 func TestCephOSDReplyV8Integration(t *testing.T) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-reply-v8" {
+	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-reply-v8" && os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-request-v9-reply-v8" {
 		t.Skip("requires explicit replicated-pg-reply-v8 fixture")
 	}
 	c, _, base, _ := replicatedPGFixture(t)
@@ -130,7 +130,7 @@ func TestCephOSDReplyV8Integration(t *testing.T) {
 				FixtureBefore, FixtureAfter mutationSnapshot
 				Cleanup                     omapWriteReceipt `json:"cleanup"`
 				Cleaned                     bool             `json:"cleaned"`
-			}{"replicated-pg-reply-v8", "native C mirror reconstructs write part only; earlier mixed READ is compared with independently observed committed bytes; different objects' versions are never equated", evidence, fixtureBefore, fixtureAfter, cleanupReceipt, cleaned})
+			}{os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE"), "native C mirror reconstructs write part only; earlier mixed READ is compared with independently observed committed bytes; different objects' versions are never equated", evidence, fixtureBefore, fixtureAfter, cleanupReceipt, cleaned})
 			if err == nil && len(data) <= 512<<10 {
 				err = testcluster.WritePublicEvidence(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "osd-reply-v8-results.json"), data)
 			} else if err == nil {

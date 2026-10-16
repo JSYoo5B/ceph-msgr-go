@@ -43,7 +43,7 @@ var metadataFiles = []string{
 	"osd-omap-range-results.json", "osd-call-results.json", "osd-call-compound-results.json", "osd-alloc-hint-results.json",
 	"osd-watch-notify-status.json", "osd-watch-notify-worker.log", "osd-watch-notify-input.json", "osd-watch-notify-result.json", "osd-watch-notify-command.json", "osd-watch-notify-results.json",
 	"osd-watch-reconnect-results.json",
-	"osd-reply-v8-results.json",
+	"osd-reply-v8-results.json", "osd-request-v9-results.json",
 	"osd-upmap-input.json", "osd-upmap-result.json", "osd-upmap-results.json", "osd-upmap-command.json",
 	"osd-upmap-owned.json", "osd-upmap-state.json", "osd-upmap-commands.json", "osd-upmap-native.json",
 	"osd-upmap-failure.json", "osd-upmap-guard-result.json", "osd-upmap-guard.log", "osd-upmap-seed-items.bin", "osd-upmap-seed-full.bin",

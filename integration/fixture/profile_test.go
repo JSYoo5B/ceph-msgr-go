@@ -71,6 +71,7 @@ func TestProfileSelection(t *testing.T) {
 		{"bluestore", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"pg-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"pg-reply-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
+		{"pg-request-v9", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-request-v9-reply-v8"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"ipv6-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
 		{"ipv6-replicated-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
@@ -389,7 +390,7 @@ func TestOSDPGV8ProfileRequiresOSDAndRejectsUnknownValues(t *testing.T) {
 }
 
 func TestOSDPGProfileGateKeepsBothExplicitV8ModesAndRejectsAliases(t *testing.T) {
-	for _, mode := range []string{"replicated-pg-v8", "replicated-pg-reply-v8"} {
+	for _, mode := range []string{"replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"} {
 		p, err := loadProfile(func(name string) string {
 			if name == "CEPH_MSGR_TEST_OSD" {
 				return "1"
@@ -406,7 +407,7 @@ func TestOSDPGProfileGateKeepsBothExplicitV8ModesAndRejectsAliases(t *testing.T)
 			t.Fatal("selected profile identity lost", mode)
 		}
 	}
-	for _, mode := range []string{"replicated-pg-reply-v8 ", "reply-v8", "replicated-pg-v9"} {
+	for _, mode := range []string{"replicated-pg-reply-v8 ", "reply-v8", "replicated-pg-v9", "replicated-pg-request-v9", "replicated-pg-request-v9-reply-v8 "} {
 		if p, err := loadProfile(func(name string) string {
 			if name == "CEPH_MSGR_TEST_OSD" {
 				return "1"

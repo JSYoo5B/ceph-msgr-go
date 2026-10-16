@@ -114,7 +114,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_CONNECTION_MODE", p.connectionMode, []string{"secure", "crc"}},
 		{"CEPH_MSGR_TEST_MAPPED_IPV6", p.mappedIPv6, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_OSD", p.osd, []string{"0", "1"}},
-		{"CEPH_MSGR_TEST_OSD_PROFILE", p.osdProfile, []string{"legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8"}},
+		{"CEPH_MSGR_TEST_OSD_PROFILE", p.osdProfile, []string{"legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"}},
 		{"CEPH_MSGR_TEST_OSD_STORE", p.osdStore, []string{"memstore", "bluestore"}},
 		{"CEPH_MSGR_TEST_OSD_REPLICAS", p.osdReplicas, []string{"1", "3"}},
 		{"CEPH_MSGR_TEST_MGR_COUNT", p.mgrCount, []string{"0", "2"}},
@@ -123,6 +123,12 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if !slices.Contains(choice.allowed, choice.value) {
 			return profile{}, fmt.Errorf("%s must be one of %s", choice.name, strings.Join(choice.allowed, ", "))
 		}
+	}
+	if p.osdProfile == "replicated-pg-request-v9-reply-v8" && p.osdReplicas != "1" {
+		return profile{}, fmt.Errorf("request-v9 fixture requires exactly one OSD for its verified acceptance recipes")
+	}
+	if p.osdProfile == "replicated-pg-request-v9-reply-v8" && (p.mdsFresh != "0" || p.rbdBase != "0") {
+		return profile{}, fmt.Errorf("request-v9 fixture requires isolated OSD acceptance, without MDS or RBD workflows")
 	}
 	if p.osdPGV8() && p.osd != "1" {
 		return profile{}, fmt.Errorf("%s requires CEPH_MSGR_TEST_OSD=1", p.osdProfile)
@@ -332,7 +338,8 @@ func (p profile) cleanupBudget() time.Duration {
 }
 
 func (p profile) osdPGV8() bool {
-	return p.osdProfile == "replicated-pg-v8" || p.osdProfile == "replicated-pg-reply-v8"
+	// This is the shared explicit-PG topology gate, not a request-version selector.
+	return p.osdProfile == "replicated-pg-v8" || p.osdProfile == "replicated-pg-reply-v8" || p.osdProfile == "replicated-pg-request-v9-reply-v8"
 }
 
 func (p profile) monitors() string { return p.monAddresses }

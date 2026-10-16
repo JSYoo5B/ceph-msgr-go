@@ -121,10 +121,19 @@ class OSDOracleTests(unittest.TestCase):
         self.assertEqual((value["hash"], value["pg_seed"], value["pool_flags"]), (0xF123ABCD, 5, 1))
         self.assertNotIn("reply_version", value)  # CLI metadata does not observe a reply wire header.
 
+    def test_request_v9_profile_preserves_explicit_versions_and_fixed_topology(self):
+        self.pg_v8()
+        os.environ["CEPH_MSGR_TEST_OSD_PROFILE"] = "replicated-pg-request-v9-reply-v8"
+        self.manifest["osd_profile"] = "replicated-pg-request-v9-reply-v8"
+        self.collect()
+        value = json.loads((self.output / "osd-oracle.json").read_bytes())
+        self.assertEqual((value["profile"], value["request_version"], value["pool_pg_num"]), ("replicated-pg-request-v9-reply-v8", 9, 8))
+        self.assertNotIn("reply_version", value) # CLI metadata is not observed wire evidence.
+
     def test_read_only_bootstrap_precedes_manifest_for_each_closed_profile(self):
         # Production order: provider native startup -> baseline oracle -> Go
         # prepareEvidence writes fixture-manifest.json -> mutating controls.
-        for profile in ("legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8"):
+        for profile in ("legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"):
             with self.subTest(profile=profile):
                 os.environ["CEPH_MSGR_TEST_OSD_PROFILE"] = profile
                 modern = profile != "legacy-v6"

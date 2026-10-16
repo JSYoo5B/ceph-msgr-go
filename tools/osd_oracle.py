@@ -71,9 +71,9 @@ def native_stat(root, pool, object_name):
 
 def collect(root, output, pool, object_name):
     profile = os.environ.get("CEPH_MSGR_TEST_OSD_PROFILE") or "legacy-v6"
-    if profile not in ("legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8"):
+    if profile not in ("legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"):
         raise ValueError("Invalid explicit OSD fixture profile")
-    modern = profile in ("replicated-pg-v8", "replicated-pg-reply-v8")
+    modern = profile in ("replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8")
     # Provider startup collects this read-only baseline before the Go runner
     # writes its final manifest. Closed environment selection and the native
     # topology checks below still apply. Later mutating oracles always require
@@ -150,7 +150,7 @@ def collect(root, output, pool, object_name):
     if len(data) != size or data != (output / "osd-object.bin").read_bytes():
         raise ValueError("Independent native read/stat does not match the prepared object")
     metadata = {
-        "profile": profile, "request_version": 8 if modern else 6, "pool_pg_num": expected_pgs,
+        "profile": profile, "request_version": 9 if profile == "replicated-pg-request-v9-reply-v8" else 8 if modern else 6, "pool_pg_num": expected_pgs,
         "pool": pool, "pool_id": pool_id, "object": object_name, "osd_id": primary,
         "acting": acting, "up": up, "replicas": replicas, "min_size": min_size,
         "ip_family": family,
