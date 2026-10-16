@@ -83,4 +83,153 @@ file's metadata is not changed.
 
 ## Results
 
-Pending: the runs of the committed tree are recorded here.
+The tested tree is commit `e54b02101a5adfa719875c4ca635f8a235baea50`,
+exported with `git archive` to a separate directory; this record (written
+after the runs) is the only difference from it. Image
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`
+(arm64), daemon version
+`ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)`.
+Selector `^TestCephMDSCephFSDataIntegration$`.
+
+| Configuration | Controller wall time (UTC, 2026-10-16) | Test | Result |
+| --- | --- | --- | --- |
+| Darwin arm64 host runtime, IPv4 relay, CRC, AES client and service keys, single BlueStore OSD | 00:37:41 to 00:40:09 (2 min 28 s) | 59.89 s | 8/8 leaves passed |
+| CGO=0 Linux arm64 container runtime, IPv6, secure, AES256K client and service keys, single MemStore OSD | 00:40:37 to 00:43:06 (2 min 29 s) | 63.81 s | 8/8 leaves passed |
+
+The shared capability agent changed for this test (the writer's side of
+check_caps/send_cap, `update_inode_file_size` and `update_inode_file_time` for
+grants and TRUNC), so the existing CephFS profile
+(`^TestCephMDSCephFS(Push|Recovery)?Integration$`) was run from the same
+export in the first configuration (00:43:21 to 00:48:05 UTC): push 7/7,
+recovery 5/5 and metadata 9/9 leaves passed. The completion profile
+(`^TestCephMDSCephFSCompletionIntegration$`), which also uses the agent, passed
+8/8 leaves from the same export in the first configuration (00:48:50 to
+00:53:15 UTC).
+
+Leaf durations (CRC / secure, seconds): open 4.22 / 4.41, Go write 6.09 /
+6.14, sparse read 6.05 / 6.43, truncate 8.06 / 8.53, truncate-sequence probe
+2.32 / 3.02, concurrent reader 6.12 / 6.12, snapshot 13.55 / 14.42, cleanup
+13.44 / 14.72. In both configurations the fixture cleanup completed: no
+residual session, the namespace and layout gone natively, no new blocklist
+entry, both identities removed (`cephfs_data_verified`), and the filesystem
+and pools removed. Each run made one MDS dial and two OSD dials (the second
+after the probe's refused reply).
+
+### Observed values
+
+Values are identical in both configurations unless two are given
+(CRC / secure); inode numbers, sizes, sequences and object views were equal.
+Go client GID 4932 / 4911; data pool 4, one PG on osd.0, OSDMap epoch 26 for
+every object request.
+
+Directory: inode `0x10000000000`; native readback `stripe_unit=65536
+stripe_count=2 object_size=131072 pool=<fs>-data`; the Go LOOKUP InodeStat
+layout {65536, 2, 131072, pool 4, no namespace}.
+
+`go-file` (`0x10000000001`): CREATE caps `pAsxLsXsxFsxcrwb` (cap ID 1,
+sequence 1, realm 1), layout equal to the directory's, max_size 65536 (the
+stripe unit, `handle_client_openc`). The max_size UPDATE (caps 16349, wanted
+16333, max_size 614523, size 0) was answered by a GRANT (sequence 2, Arrival
+7) raising max_size from 65536 to 1310720 (`calc_new_max_size`: twice the
+request rounded up to the 256 KiB period). Six WRITEs with SnapContext
+{sequence 1, no snaps}: objects 0-3 of 131072 bytes, 4 of 65536 and 5 of
+24699 bytes (user versions 1-6). The flush: op UPDATE, dirty Fw (4096), flush
+TID 1, oldest flush TID 1, follows 1, FLAG_SYNC, size 614523, inline version
+`CEPH_INLINE_NONE`; FLUSH_ACK (op 8, header TID 1, dirty Fw, cap ID 1,
+sequence 2, OSD epoch barrier 26) after 1.70 / 0.44 ms. GETATTR then reported
+size 614523 and the flushed mtime to the nanosecond. Native `statx`: size
+614523, mtime seconds equal, change attribute 1; native read SHA-256 and
+every 16 KiB chunk equal; native rados `stat` sizes equal to the Go STATs
+above. The close UPDATE kept `pAsLsXsFs` (341) with wanted 0.
+
+`native-file` (`0x100000003ea`): OPEN read-only caps `pAsLsXsFscr`, size
+1620000. Objects 0 (65536 bytes), 1 (14464), 4 (130176), 5 (65536) and 12
+(47136) exist; objects 2, 3 and 6-11 do not and were read as zeros (ENOENT),
+the existing ones as short reads; the Go image, the planned image and the
+native read are equal, and both object views agree, including object 13
+absent.
+
+`trunc-file` (`0x100000003eb`): OPEN read-only caps `pAsLsXsFscr`, size
+1228800, truncate sequence 1. The native truncate produced one TRUNC push
+(Arrival 24 / 25, cap sequence 3, caps `pAsLsXsFc` while Fr and Fs were revoked, size and
+truncate_size 280000, truncate_seq 2, max_size 0, OSD epoch barrier 26); the
+agent's size went from 1228800 to 280000. The objects were already trimmed at
+the first Go STAT after the push: objects 0 and 1 kept 131072 bytes, object
+2 (the start of [280000, 1310720)) was cut to 17856 and objects 3-9 to 0
+bytes (they remain as empty objects). The Go read of 280000 bytes and the
+native read are equal.
+
+Truncate-sequence probe: the reopened file got Fw and a max_size GRANT of
+786432. The 1000-byte WRITE at in-object offset 17856 of object 2 was
+answered with result 0 and user version 35 (a committed no-op) and the cut
+extent; cephmsgr returned `request outcome unknown: ... malformed frame:
+invalid OSD reply: OSD reply extent differs from request` and failed the OSD
+connection. A new connection stated object 2 at 17856 bytes; Go and native
+reads still returned the truncated 280000 bytes.
+
+`shared-file` (`0x10000000002`): CREATE caps `pAsxLsXsxFsxcrwb`, max_size
+65536 raised to 524288 by a GRANT after the UPDATE asking for 200000. With
+200000 bytes buffered and Fw dirty, the native reader's open was followed by
+REVOKE sequence 4 (revoked `Fsxrw`, kept `Fcb`), answered by the dirty
+metadata flush (flush TID 2, caps `pAsxLsXsxFcb`) and its FLUSH_ACK (Arrival
+64 / 62); REVOKE sequence 5 (`Ax`); REVOKE sequence 7 (revoked `XxFsxcb`),
+answered with Fb still implemented while the 2 s hold ran; the writeback of
+objects 0 (131072 bytes) and 1 (68928) took 20 / 5 ms; the next UPDATE
+dropped Fb (`pAsLsXsFrw`). The MDS then alternated revokes of Fw and Fsc that
+were acknowledged at once. The native read returned all 200000 bytes 2.04 /
+2.02 s after its process started (open at 12 / 11 ms), size 200000.
+
+`snap-file` (`0x10000000003`): CREATE, max_size 1310720, six WRITEs of the
+600000-byte first version with {1, no snaps}, flush TID 3 (follows 1),
+close. LIST_SNAPS before the snapshot: heads only, sequence 1. The native
+snapshot produced MClientSnap SPLIT (op 3, Arrival 107 / 94) of the directory
+with split inodes of the directory and all five files and realm records
+{`0x10000000000`, created 2, parent 1, parent_since 2, sequence 2, snaps [2]}
+then {1, sequence 1}; the agent moved all six caps into the new realm. After
+the read-write OPEN (cap realm `0x10000000000`, a max_size GRANT of 1310720
+with size 600000) the snap context was {2, [2]}. Four WRITEs of the 320000
+bytes at 400000: object 2 at 72320+58752, object 3 at 65536+65536, object 4
+at 0+130176, object 5 at 0+65536; each object's user version advanced by 2
+(clone and write). The flush: TID 4, follows 2, size 720000. LIST_SNAPS:
+objects 0 and 1 heads only (sequence 1); objects 2-5 sequence 2 with clone 2
+(snaps [2]) of sizes 131072, 131072, 65536 and 10176, overlaps [0, 72320),
+[0, 65536), none and none, and heads of 131072, 131072, 130176 and 65536
+bytes; the native `rados listsnaps` view is identical. The Go read at snap
+id 2 and the native read of `.snap/<name>/snap-file` returned the first
+version (600000 bytes, mtime of the first flush); the native head read
+returned the 720000-byte image.
+
+Cleanup: the snapshot removed, five UNLINKs and the RMDIR answered 0, the
+layout removal read back as absent, native `stat` ENOENT; the release of
+seven caps (root, directory, five files) dropped native `num_caps` from 7 to
+0; Close was confirmed and no session remained.
+
+### Product finding
+
+`cephmsgr.OSDOperation` cannot carry `truncate_size` and `truncate_seq`
+(the encoders write 0, `internal/osd/request.go`), and `validateOSDReply`
+requires a WRITE reply's extent to equal the request
+(`cephmsgr/osd_request.go`, "OSD reply extent differs from request").
+Native CephFS clients send the inode's truncate sequence and size with every
+extent operation (`Filer::write_trunc`, `Filer::read_trunc`). Without them a
+write to an object that the MDS trimmed after a truncate is handled by
+`PrimaryLogPG` as an old write that arrived after TRIMTRUNC and cut (here to
+length 0, committed with result 0); the OSD's reply then carries the cut
+extent, which cephmsgr treats as a malformed frame: the caller sees an
+unknown outcome and loses the OSD connection, although the OSD answered a
+valid reply. Reads have the matching gap: a consumer must clip reads at the
+size of the newest TRUNC itself, because the OSD cannot apply a truncate
+sequence the client does not send (`do_read`). Both are recorded by
+`write_after_truncate_without_truncate_seq` and `native_truncate_trunc_push`.
+
+### Not verified
+
+Writes and reads that race an MDS truncation in flight (objects not yet
+trimmed), a cap snap with dirty data (FLUSHSNAP) for a write that spans a
+snapshot, several snapshots, files without the directory layout (the 4 MiB
+default), pool namespaces, inline data, `O_TRUNC` opens, lazy I/O, multiple
+writers in LOCK_MIX, sparse reads through `OSDSparseRead`, MDS failover or
+eviction with dirty data, standby-replay, IPv4/IPv6 crossings and other OSD
+stores. The multi-rank profile, which also uses the changed agent, and the
+second configuration of the regression profiles were not rerun in this
+change.
