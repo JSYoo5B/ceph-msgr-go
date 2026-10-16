@@ -53,6 +53,11 @@ var xattrEncoderSpec = nativeEncoderSpec{
 	names: []string{"xattr-native-request-v6-all", "xattr-native-reply-v6-read-mixed", "xattr-native-reply-v6-cmp-false", "xattr-native-reply-v6-set-refused", "xattr-native-reply-v6-rm-refused"},
 }
 
+var writeSameEncoderSpec = nativeEncoderSpec{
+	command: "encode-osd-writesame", wrapper: "osd_writesame_native_encoder.cc", driver: "osd_writesame_native_encoder.py",
+	names: []string{"writesame-native-request-v6-all", "writesame-native-reply-v6-success", "writesame-native-reply-v6-refused", "writesame-native-reply-v6-failok", "writesame-native-reply-v6-zero"},
+}
+
 var u64XattrEncoderSpec = nativeEncoderSpec{
 	command: "encode-osd-u64-xattrs", wrapper: "osd_u64_xattr_native_encoder.cc", driver: "osd_u64_xattr_native_encoder.py", requests: 2,
 	names: []string{"u64-xattr-native-request-v6-read", "u64-xattr-native-request-v6-write", "u64-xattr-native-reply-v6-true", "u64-xattr-native-reply-v6-false", "u64-xattr-native-reply-v6-invalid"},
@@ -260,6 +265,9 @@ func runNativeEncoder(ctx context.Context, args []string, spec nativeEncoderSpec
 	files = append(files, replyV8EncoderSpec.wrapper, mdsMapEncoderSpec.wrapper, mdsSessionEncoderSpec.wrapper, mdsRequestEncoderSpec.wrapper)
 	files = append(files, mdsCapsEncoderSpec.wrapper, mdsReconnectEncoderSpec.wrapper)
 	files = append(files, truncateEncoderSpec.wrapper)
+	if spec.command == writeSameEncoderSpec.command {
+		files = append(files, "build_sparse_read_oracle.py", "osd_writesame_oracle.cc", writeSameEncoderSpec.wrapper)
+	}
 	if spec.command == u64XattrEncoderSpec.command {
 		files = append(files, "build_sparse_read_oracle.py", "osd_u64_xattr_oracle.cc", u64XattrEncoderSpec.wrapper)
 	}

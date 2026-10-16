@@ -26,9 +26,11 @@ written. No truncate fields are accepted for this different union.
 
 Head-only mutations may carry an explicit valid write SnapContext/ORDERSNAP;
 reading a snapshot in the same writing vector is refused. The existing
-staged-metadata and class ordering restrictions apply. Offset-zero writes add
-the logical length to the conservative staged digest boundary, retaining its
-minimum across FAILOK operations: following full READ/CMPEXT is refused.
+staged-metadata and class ordering restrictions apply. Offset-zero positive WRITESAME uses
+a conservative digest boundary of one byte: the nested WRITE may be clipped
+to an unknown smaller full-object size by a truncate sequence. Every subsequent
+positive offset-zero READ/CMPEXT is refused, including after a staged sequenced
+TRUNCATE or intervening FAILOK operations; later writes cannot erase the bound.
 Cancellation or malformed completion after send retains an unknown outcome;
 there is no automatic routing, retry or replay. A successful writing vector
 requires ONDISK, whose persistence still depends on its storage profile.
@@ -42,6 +44,8 @@ WRITESAME standalone and compound APIs, enabling a separate bounded native
 oracle; it supplies no corresponding public bulk-xattr APIs.
 
 Current evidence: focused synthetic/unit/public tests and their race run pass;
-CGO-disabled product and fixture suites pass. Fresh native vectors, a separately
-built native C++ compound oracle, and two real fixture profiles are pending.
+CGO-disabled product and fixture suites pass. Five fresh native v6 vectors were directly encoded and separately decoded by
+pinned Ceph; Go/public and fixture proof consumers pass. A separate public C++
+compound oracle compiled against the image librados and passed its loader audit.
+The two actual daemon fixture profiles remain pending.
 Synthetic tests do not establish native interoperability or zero-length effects.

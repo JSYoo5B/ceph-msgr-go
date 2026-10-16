@@ -27,6 +27,7 @@ var metadataFiles = []string{
 	"monitor-election-history.jsonl", "monitor-election-settled.json",
 	"monitor-election-settled-added.json", "monitor-election-settled-removed.json",
 	"osd-mutation-result.json", "osd-compound-result.json", "service-keys-history.jsonl", "manager-preparation.jsonl", "manager-native-auth.json", "manager-keyring-gate.json", "auth-first-failure-bundle.json", "mgr-transition-receipt.json", "fixture-unusable.json", "native-crash.json", "osd-crash-state.json", "osd-map-epoch.json", "osd-map-applied.json", "osd-native-stat.txt", "osd-object.bin", "osd-native-read.bin",
+	"osd-writesame-input.json", "osd-writesame-result.json", "osd-writesame-command.json", "osd-writesame-results.json", "writesame-oracle-provenance.json",
 	"osd-u64-xattr-input.json", "osd-u64-xattr-result.json", "osd-u64-xattr-command.json", "osd-u64-xattr-results.json", "u64-xattr-oracle-provenance.json",
 	"osd-xattr-native.json", "osd-xattr-native-command.json",
 	"osd-xattr-result.json", "osd-xattr-command.json",

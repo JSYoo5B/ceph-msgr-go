@@ -35,6 +35,7 @@ type profile struct {
 	authEpochCycles                                                       string
 	sparseReadOracle, mapExtOracle                                        string
 	u64XattrOracle                                                        string
+	writeSameOracle                                                       string
 	osdProfile                                                            string
 	nativeMgrPreparation                                                  string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
@@ -62,6 +63,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		sparseReadOracle:     getenv("CEPH_MSGR_TEST_SPARSE_READ_ORACLE"),
 		mapExtOracle:         getenv("CEPH_MSGR_TEST_MAPEXT_ORACLE"),
 		u64XattrOracle:       getenv("CEPH_MSGR_TEST_U64_XATTR_ORACLE"),
+		writeSameOracle:      getenv("CEPH_MSGR_TEST_WRITESAME_ORACLE"),
 		image:                value("CEPH_MSGR_TEST_IMAGE", profileDefaultImage),
 		keyType:              value("CEPH_MSGR_TEST_KEY_TYPE", "aes256k"),
 		ipFamily:             value("CEPH_MSGR_TEST_IP_FAMILY", "4"),
@@ -124,6 +126,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}
 	if p.osdPGV8() && p.osd != "1" {
 		return profile{}, fmt.Errorf("%s requires CEPH_MSGR_TEST_OSD=1", p.osdProfile)
+	}
+	if p.writeSameOracle != "" && p.osd != "1" {
+		return profile{}, fmt.Errorf("native WRITESAME oracle requires OSD fixture")
 	}
 	if p.u64XattrOracle != "" && p.osd != "1" {
 		return profile{}, fmt.Errorf("native U64 xattr oracle requires OSD fixture")
@@ -379,6 +384,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.u64XattrOracle != "" {
 		u64Marker = "1"
 	}
+	writeSameMarker := ""
+	if p.writeSameOracle != "" {
+		writeSameMarker = "1"
+	}
 	result := map[string]string{
 		"CEPH_MSGR_TEST_MDS_FRESH":               p.mdsFresh,
 		"CEPH_MSGR_TEST_MDS_COMMANDS":            p.mdsCommands,
@@ -392,6 +401,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    marker,
 		"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         mapMarker,
 		"CEPH_MSGR_NATIVE_U64_XATTR_ORACLE":      u64Marker,
+		"CEPH_MSGR_NATIVE_WRITESAME_ORACLE":      writeSameMarker,
 		"CEPH_MSGR_MONITORS":                     p.monitors(),
 		"CEPH_MSGR_KEY_FILE":                     filepath.Join(controlDir, "key"),
 		"CEPH_MSGR_IDENTITY":                     "client.test",

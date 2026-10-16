@@ -88,7 +88,10 @@ func stageAssets(project, out string, p profile) error {
 			return err
 		}
 	}
-	return stageU64XattrOracle(project, out, p)
+	if err := stageU64XattrOracle(project, out, p); err != nil {
+		return err
+	}
+	return stageWriteSameOracle(project, out, p)
 }
 
 func buildTests(ctx context.Context, project, out, arch string, p profile) error {

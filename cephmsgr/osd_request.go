@@ -61,6 +61,8 @@ const (
 // is bounded independently of the frame data. Zero-length effects and writes
 // against an object with a truncate sequence follow the server; its reply
 // echoes the requested logical extent, not the nested WRITE's clipped extent.
+// An offset-zero positive WriteSame refuses every subsequent offset-zero
+// positive Read/CompareExtent in the vector because that clipped size is unknown.
 // Truncate uses Offset as the new size. Create/Delete/Stat have zero extents.
 // AssertVersion uses Version, with zero extents and no payload. Only Create
 // accepts ExclusiveCreate. TruncateSize/TruncateSequence are the extent

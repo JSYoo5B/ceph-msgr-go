@@ -114,6 +114,31 @@ func TestWriteSameBoundsAndCompoundSafety(t *testing.T) {
 			t.Fatal("partial read disallowed", err)
 		}
 	}
+	for _, code := range []uint16{Read, CompareExtent} {
+		for _, stagedTruncate := range []bool{false, true} {
+			for _, flags := range []uint32{0, OpFailOK} {
+				ops := []Operation{}
+				if stagedTruncate {
+					ops = append(ops, Operation{Code: Truncate, Offset: 6, TruncateSize: 6, TruncateSequence: 2})
+				}
+				ws := base
+				ws.Flags = flags
+				ops = append(ops, ws, Operation{Code: WriteSame, Offset: 1, Length: 18, Data: []byte{1}, Flags: OpFailOK})
+				read := Operation{Code: code, Length: 6}
+				if code == CompareExtent {
+					read.Data = make([]byte, 6)
+				}
+				ops = append(ops, read)
+				if _, _, err := ValidateOperations(ops, 1024); !errors.Is(err, ErrOperation) {
+					t.Fatal("clipped staged digest prefix accepted", code, stagedTruncate, flags, err)
+				}
+				ops[len(ops)-1].Offset = 1
+				if _, _, err := ValidateOperations(ops, 1024); err != nil {
+					t.Fatal("nonprefix bounded read refused", err)
+				}
+			}
+		}
+	}
 	unsafe := [][]Operation{{base, {Code: Call, Class: ClassInput{Class: "hello", Method: "say_hello", Mode: ClassRead, MaxOutputBytes: 8}}}, {base, {Code: SetXattr, Xattr: XattrInput{Name: "a"}}, {Code: GetXattr, Xattr: XattrInput{Name: "a", MaxOutputBytes: 8}}}, {base, {Code: OmapClear}, {Code: OmapGetHeader, Omap: OmapInput{MaxOutputBytes: 8}}}}
 	for _, ops := range unsafe {
 		if _, _, err := ValidateOperations(ops, 1024); !errors.Is(err, ErrOperation) {

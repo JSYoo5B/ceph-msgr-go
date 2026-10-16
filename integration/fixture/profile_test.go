@@ -337,6 +337,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_TEST_RBD":                     "0",
 				"CEPH_MSGR_MONITORS":                     p.monAddresses,
 				"CEPH_MSGR_NATIVE_U64_XATTR_ORACLE":      "",
+				"CEPH_MSGR_NATIVE_WRITESAME_ORACLE":      "",
 				"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    "",
 				"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         "",
 				"CEPH_MSGR_KEY_FILE":                     filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,

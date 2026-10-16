@@ -266,11 +266,14 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			}
 			logicalWriteBytes += op.Length
 			flags |= FlagWrite
-			// Its nested WRITE can install a full-object digest too, including
-			// when an earlier/later FAILOK operation changes the remote size.
-			if op.Offset == 0 && op.Length > 0 && (stagedDigestSize == 0 || op.Length < stagedDigestSize) {
-				stagedDigestSize = op.Length
+			// A newer remote truncate sequence can clip the nested WRITE to
+			// any smaller whole-object size while the original union is echoed.
+			// Refuse every following positive full-prefix READ/CMPEXT: callers
+			// do not supply that committed size, even after a staged TRUNCATE.
+			if op.Offset == 0 && op.Length > 0 {
+				stagedDigestSize = 1
 			}
+
 		case Write, WriteFull, Append:
 			// A newer remote truncate sequence can clip an offset-zero WRITE
 			// below its requested length before setting a full-object digest

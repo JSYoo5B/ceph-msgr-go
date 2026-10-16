@@ -653,6 +653,22 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return err
 		}
 	}
+	fields, err = c.request(out, "verify-osd-writesame")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || c.profile.writeSameOracle == "" || fields[1] != "compare" {
+			return errors.New("invalid native WRITESAME oracle request")
+		}
+		args := []string{"python3", "/out/osd_writesame_oracle.py", "/tmp/ceph-msgr-test", "/out"}
+		if err = c.runOracleCommand(ctx, out, args, "osd-writesame-command.json", "native WRITESAME oracle"); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-writesame-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
 
 	fields, err = c.request(out, "verify-osd-checksum")
 	if err != nil {
