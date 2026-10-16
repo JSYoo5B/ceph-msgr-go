@@ -452,5 +452,5 @@ func TestCephOSDReplicatedPGIntegration(t *testing.T) {
 			evidence = append(evidence, replicatedPGCase{Name: caseName, Route: route, Before: before.Actual, After: final.Actual, Reply: outcome.reply, Unknown: true, FreshReply: &read})
 		})
 	}
-	t.Logf("replicated-PG v8 exercised native actual PG=%s distinct raw=%s; %d retained case receipts", route.PGID, route.RawPGID, len(evidence))
+	t.Logf("replicated-PG profile %s exercised native actual PG=%s distinct raw=%s; %d retained case receipts", os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE"), route.PGID, route.RawPGID, len(evidence))
 }

@@ -59,14 +59,14 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        self.assertEqual(len(self.rows), 56)
+        self.assertEqual(len(self.rows), 58)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd")
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
         self.assertEqual(len(legacy), 30)
         for row in self.rows:
             profile = row.get("osd_profile", "legacy-v6")
-            self.assertIn(profile, {"legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8"})
+            self.assertIn(profile, {"legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"})
             self.assertIn(row.get("mds_fresh", "0"), {"0", "1"})
             for field in opt_ins:
                 self.assertIn(row.get(field, "0"), {"0", "1"})
@@ -99,7 +99,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("$expected", step)
 
     def test_v8_rows_cover_both_security_store_and_address_profiles(self):
-        for profile in ("replicated-pg-v8", "replicated-pg-reply-v8"):
+        for profile in ("replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"):
             with self.subTest(profile=profile):
                 rows = [row for row in self.rows if row.get("osd_profile") == profile and row.get("mds_fresh", "0") == "0"
                         and row.get("osd_replicas") == "1"]
@@ -128,10 +128,12 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertTrue(common | {reply_v8} <= self.declared)
         for row in self.rows:
             profile = row.get("osd_profile")
-            if (profile not in {"replicated-pg-v8", "replicated-pg-reply-v8"} or row.get("mds_fresh", "0") != "0"
+            if (profile not in {"replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"} or row.get("mds_fresh", "0") != "0"
                     or row.get("osd_replicas") != "1"):
                 continue
             expected = common | ({reply_v8} if profile == "replicated-pg-reply-v8" else set())
+            if profile == "replicated-pg-request-v9-reply-v8":
+                expected = (common - {"TestCephMDSMapsIntegration"}) | {reply_v8, "TestCephOSDRequestV9Integration"}
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
             for unready in ("TestCephOSDSparseReadIntegration", "TestCephOSDPGListIntegration",

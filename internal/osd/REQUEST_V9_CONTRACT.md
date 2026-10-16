@@ -52,8 +52,9 @@ submission identity. Redirects do not cause automatic follow or resubmission.
 
 ## Features and source provenance
 
-OSD role 4 supported and required masks are the existing ReplyV8 profile plus
-the full SERVER_SQUID incarnation-2 mask (49|57): bits
+Alongside the shared Messenger supported set and required MSG_ADDR2, the
+OSD role 4 profile masks are the existing ReplyV8 additions plus the full
+SERVER_SQUID incarnation-2 mask (49|57): bits
 8, 9, 21, 30, 49, 56, 57 and 58. Missing any required capability fails setup.
 The request codec itself needs 8/9/21/49/56/57; the public profile additionally
 requires HASHPSPOOL 30 and reply encoding 58. Existing v6/v8 profiles do not
@@ -94,5 +95,5 @@ late ACK ordering, truncated/malformed/nonempty traces and rejection of older
 request headers by the v9 gate. Retained v8 native bytes support unchanged
 body regressions; those projections are not called fresh v9 native proof.
 
-Native vectors, exact tested configurations and first-failure records must be
-added in a separate validation record once those executions have occurred.
+Fresh native vectors and exact daemon execution status are recorded separately
+in `integration/fixture/OSD_REQUEST_V9_VALIDATION.md`.

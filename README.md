@@ -596,6 +596,19 @@ run 전체는 새 시험의 잘못된 zero-version 기대값으로 실패했다.
 [실제 검증 기록](integration/fixture/OSD_REPLY_V8_VALIDATION.md)과
 [새 v8 reply 계약](internal/osd/OSD_REPLY_V8_CONTRACT.md)에 세부 경계를 적었다.
 
+`Options.OSDProfile=OSDProfileReplicatedPGRequestV9ReplyV8`은 명시 배치를 사용하는
+별도 untraced 통신 계약이다. OSD에 full SERVER_SQUID(49|57)를 추가하고
+MOSDOp v9/compat3의 빈 OTEL envelope 7바이트를 송신한다. 응답은 엄격한
+v8/compat2만 받으며 Request·PGNLS·backoff와 명시 watch 재연결이 같은 profile을
+사용한다. MON에는 기존 HASHPSPOOL admission만 유지한다. Nonempty trace 입력과
+trace SDK, CRUSH 계산·자동 라우팅·재실행은 제공하지 않는다. 독립 native 요청
+5종과 합성 취소·Close·재연결 검증을 통과했다. CRC/AES IPv4 host·single BlueStore와
+secure/AES256K IPv6 container·single MemStore가 각각 16개 OSD 사례를 통과했다.
+CRC에서 실제 v9 요청·v8 응답 8개를 관찰했으며 secure 헤더 관찰과는 구분한다.
+구성과 원본 증거의 상태는
+[v9 검증 기록](integration/fixture/OSD_REQUEST_V9_VALIDATION.md), wire 경계는
+[v9 계약](internal/osd/REQUEST_V9_CONTRACT.md)에 구분했다.
+
 OSD 연결은 lossy session이며 전송한 요청을 재실행하지 않는다. 전송 후
 취소·단절·손상된 응답에는 `OutcomeUnknownError`를 보존한다. Messenger ACK는
 객체 요청 완료가 아니다. Redirect는 `ErrOSDRedirect`와 원본 metadata를
