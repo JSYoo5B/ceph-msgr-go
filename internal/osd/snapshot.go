@@ -28,6 +28,11 @@ const (
 	FlagFullTry   uint64 = 0x800000
 	FlagFullForce uint64 = 0x1000000
 
+	// FlagBalanceReads and FlagLocalizeReads are rados.h
+	// CEPH_OSD_FLAG_BALANCE_READS and CEPH_OSD_FLAG_LOCALIZE_READS.
+	FlagBalanceReads  uint64 = 0x100
+	FlagLocalizeReads uint64 = 0x2000
+
 	// OldSnapContext is EOLDSNAPC from include/rados.h, not a host errno.
 	OldSnapContext int32 = -85
 )

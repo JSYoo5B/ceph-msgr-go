@@ -229,7 +229,8 @@ def mode_place(rados, cluster, request, out):
     def command(*arguments, timeout):
         return mutation.native_mon_query(rados.lib, cluster, *arguments, timeout=timeout)
 
-    return {"placement": mutation.collect_placement(command, pool, request["object"], descriptor["pool"], namespace=namespace)}
+    target = request.get("osd")
+    return {"placement": mutation.collect_placement(command, pool, request["object"], descriptor["pool"], namespace=namespace, target_osd=target)}
 
 
 def mode_snapshot(rados, cluster, request, out):

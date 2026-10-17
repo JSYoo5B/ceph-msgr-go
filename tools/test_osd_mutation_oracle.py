@@ -35,12 +35,24 @@ class PlacementOracleTests(unittest.TestCase):
 
     def test_returns_one_matched_epoch_target_and_topology(self):
         result, calls = self.query(pair())
-        self.assertEqual(result, {"pool_id": 7, "object": "binary", "osd_id": 2,
+        self.assertEqual(result, {"pool_id": 7, "object": "binary", "osd_id": 2, "primary_id": 2,
                                   "epoch": 19, "hash": 0x123ABC,
                                   "address": "v2:192.0.2.4:6800/91", "up": [2, 0, 1],
                                   "acting": [2, 0, 1], "replicas": 3, "min_size": 2,
                                   "namespace": "", "raw_pgid": "7.123abc", "pgid": "7.0", "pg_seed": 0})
         self.assertEqual(calls, [(("osd", "map", "test", "binary"), 10), (("osd", "dump"), 10)])
+
+    def test_names_a_replica_target_and_still_reports_the_primary(self):
+        mapped, dump = pair()
+        dump["osds"].append({"osd": 0, "up": 1, "in": 1,
+                             "public_addrs": {"addrvec": [{"type": "v2", "addr": "192.0.2.5:6801", "nonce": 92}]}})
+        result = collect_placement(lambda *args, timeout: copy.deepcopy(mapped if args[:2] == ("osd", "map") else dump),
+                                   "test", "binary", 7, target_osd=0)
+        self.assertEqual((result["osd_id"], result["primary_id"], result["address"]), (0, 2, "v2:192.0.2.5:6801/92"))
+        for bad in (9, "0", True):
+            with self.assertRaises(ValueError):
+                collect_placement(lambda *args, timeout: copy.deepcopy(mapped if args[:2] == ("osd", "map") else dump),
+                                  "test", "binary", 7, target_osd=bad)
 
     def test_mismatched_epochs_requery_both_observations(self):
         old_map, _ = pair(19)

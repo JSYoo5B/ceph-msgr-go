@@ -134,7 +134,17 @@ func poolObserve(t *testing.T, ctx context.Context, slot int, object, namespace,
 
 func poolPlace(t *testing.T, ctx context.Context, slot int, object, namespace string) osdFixtureOracle {
 	t.Helper()
-	r := nativePool(t, ctx, "place", map[string]any{"slot": slot, "object": object, "namespace": namespace}).Placement
+	return poolPlaceOn(t, ctx, slot, object, namespace, nil)
+}
+
+// poolPlaceOn routes to an explicit acting-set member (a replica read target).
+func poolPlaceOn(t *testing.T, ctx context.Context, slot int, object, namespace string, osd *int32) osdFixtureOracle {
+	t.Helper()
+	in := map[string]any{"slot": slot, "object": object, "namespace": namespace}
+	if osd != nil {
+		in["osd"] = *osd
+	}
+	r := nativePool(t, ctx, "place", in).Placement
 	if r.Name != object || r.Namespace != namespace || r.ID < 0 || r.Address == "" {
 		t.Fatal("native owned-pool placement differs", r)
 	}

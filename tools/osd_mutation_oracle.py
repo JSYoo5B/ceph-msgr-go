@@ -151,7 +151,7 @@ def native_mon_query(lib, cluster, *arguments, timeout):
 
 
 def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
-                      timeout=30, clock=time.monotonic, namespace=""):
+                      timeout=30, clock=time.monotonic, namespace="", target_osd=None):
     """Collect one internally consistent native routing observation.
 
     Only osd map/dump reads are repeated, and only when their epochs differ.
@@ -205,10 +205,17 @@ def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
                 raise ValueError("invalid native placement " + field + " set")
         if primary not in mapped["acting"] or primary not in mapped["up"]:
             raise ValueError("native acting primary absent from current routing sets")
+        # A caller may name another member of the acting set as the connection
+        # target (replica reads); the primary is reported separately.
+        target = primary
+        if target_osd is not None:
+            if type(target_osd) is not int or target_osd not in mapped["acting"]:
+                raise ValueError("requested target OSD is not in the acting set")
+            target = target_osd
         osds, pools = topology.get("osds"), topology.get("pools")
         if not isinstance(osds, list) or not isinstance(pools, list):
             raise ValueError("invalid native OSDMap topology")
-        daemons = [o for o in osds if isinstance(o, dict) and type(o.get("osd")) is int and o["osd"] == primary]
+        daemons = [o for o in osds if isinstance(o, dict) and type(o.get("osd")) is int and o["osd"] == target]
         descriptors = [p for p in pools if isinstance(p, dict) and type(p.get("pool")) is int and p["pool"] == pool_id]
         if len(daemons) != 1 or len(descriptors) != 1:
             raise ValueError("native target OSD or pool is missing or ambiguous")
@@ -256,7 +263,7 @@ def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
             raise ValueError("invalid native mapped placement group")
         return {"up": mapped["up"], "acting": mapped["acting"], "replicas": pool["size"],
                 "min_size": pool["min_size"], "pool_id": pool_id, "object": object_name,
-                "osd_id": primary, "epoch": epochs[0], "hash": int(match[2], 16),
+                "osd_id": target, "primary_id": primary, "epoch": epochs[0], "hash": int(match[2], 16),
                 "namespace": namespace, "raw_pgid": raw_pg, "pgid": mapped_pg,
                 "pg_seed": int(pg_match[2], 16),
                 "address": "v2:" + address + "/" + str(endpoint["nonce"])}

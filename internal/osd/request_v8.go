@@ -84,6 +84,11 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 		return msgr.MessageData{}, err
 	}
 	flags |= full
+	replica, err := requestReplicaFlags(r.Request, flags)
+	if err != nil {
+		return msgr.MessageData{}, err
+	}
+	flags |= replica
 	if _, err := boundedBytes(limit, frontBytes, dataBytes); err != nil {
 		return msgr.MessageData{}, err
 	}

@@ -169,6 +169,13 @@ type OSDRequest struct {
 	// instead of being discarded unanswered; FullForce writes despite a full pool. At most one,
 	// writing vectors only.
 	FullTry, FullForce bool
+	// BalanceReads and LocalizeReads let a non-primary replica serve a
+	// read-only vector made of Read, Stat, GetXattr(s), the OMAP reads,
+	// MapExt, Checksum or SparseRead. The connection may then target any
+	// replica; the caller owns that choice and the PG's Primary field still
+	// names the primary. Replicas may answer -EAGAIN (unreadable object or
+	// unstable write), which is a known refusal the caller handles.
+	BalanceReads, LocalizeReads bool
 }
 
 type OSDPG struct {
@@ -353,7 +360,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		MapEpoch:         request.MapEpoch, Object: request.Object.Name, Hash: request.Object.Hash,
 		Locator:    osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
 		Operations: make([]osd.Operation, len(request.Operations)),
-		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, FullTry: request.FullTry, FullForce: request.FullForce}
+		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, FullTry: request.FullTry, FullForce: request.FullForce, BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads}
 	for i, op := range request.Operations {
 		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
 			AllocHint:    osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},

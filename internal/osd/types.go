@@ -120,6 +120,9 @@ type Request struct {
 	// FullTry and FullForce set CEPH_OSD_FLAG_FULL_TRY/FULL_FORCE on a
 	// writing vector; at most one. See FULL_CONTRACT.md.
 	FullTry, FullForce bool
+	// BalanceReads and LocalizeReads set CEPH_OSD_FLAG_BALANCE_READS and
+	// LOCALIZE_READS so a non-primary replica may serve a read-only vector.
+	BalanceReads, LocalizeReads bool
 }
 
 type Version struct {

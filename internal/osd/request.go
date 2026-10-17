@@ -47,6 +47,11 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		return msgr.MessageData{}, err
 	}
 	flags |= full
+	replica, err := requestReplicaFlags(r, flags)
+	if err != nil {
+		return msgr.MessageData{}, err
+	}
+	flags |= replica
 	if _, err := boundedBytes(limit, frontBytes, dataBytes); err != nil {
 		return msgr.MessageData{}, err
 	}

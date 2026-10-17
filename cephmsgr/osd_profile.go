@@ -62,7 +62,7 @@ func (o *OSDConnection) validatePlacement(request OSDRequest) error {
 		return nil
 	}
 	p := request.Placement
-	if !o.client.options.OSDProfile.replicatedPG() || p == nil || request.Object.Pool < 0 || p.PG.Pool != uint64(request.Object.Pool) || p.Primary != o.target.ID {
+	if !o.client.options.OSDProfile.replicatedPG() || p == nil || request.Object.Pool < 0 || p.PG.Pool != uint64(request.Object.Pool) || p.Primary != o.target.ID && !request.BalanceReads && !request.LocalizeReads {
 		return fmt.Errorf("%w: replicated request requires its explicit PG and connection primary", osd.ErrRequest)
 	}
 	return nil
