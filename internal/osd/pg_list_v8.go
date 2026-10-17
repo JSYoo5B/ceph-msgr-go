@@ -29,7 +29,7 @@ func encodeReplicatedPGList(r PGListRequest, features uint64, limit uint32, vers
 	if limit == 0 {
 		limit = wire.DefaultLimit
 	}
-	if r.MapEpoch == 0 || r.PG.Pool > math.MaxInt64 || r.Count == 0 || r.MaxOutputBytes < MinPGListBytes || r.MaxOutputBytes > limit {
+	if r.MapEpoch == 0 || r.PG.Pool > math.MaxInt64 || r.Count == 0 && r.scrub == nil || r.MaxOutputBytes < MinPGListBytes || r.MaxOutputBytes > limit {
 		return msgr.MessageData{}, ErrRequest
 	}
 	cursor := r.Cursor
@@ -52,7 +52,7 @@ func encodeReplicatedPGList(r PGListRequest, features uint64, limit uint32, vers
 	if _, err := boundedBytes(limit, 232, uint64(r.MaxOutputBytes)); err != nil {
 		return msgr.MessageData{}, err
 	}
-	if _, err := DecodePGCursor(cursor); err != nil {
+	if _, err := DecodePGCursor(cursor); err != nil && r.scrub == nil {
 		return msgr.MessageData{}, err
 	}
 	e := wire.Encoder{}
@@ -87,7 +87,7 @@ func encodeReplicatedPGList(r PGListRequest, features uint64, limit uint32, vers
 	e.U16(1)
 	e.U16(code)
 	e.U32(0)
-	e.U64(r.Count)
+	e.U64(r.Count) // pgls.count; zero for SCRUBLS
 	e.U32(r.StartEpoch)
 	e.U64(0)
 	e.U64(0)

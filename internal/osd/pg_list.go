@@ -63,12 +63,22 @@ type PGListRequest struct {
 	Shard   uint8
 	// Filter, when set, sends PGNLS_FILTER instead of PGNLS.
 	Filter *PGListFilter
+	// scrub, when set, makes the PG operation SCRUBLS with this encoded
+	// scrub_ls_arg_t as indata (EncodeScrubListRequest*); Count, StartEpoch,
+	// Cursor and Filter are then unused and zero.
+	scrub []byte
 }
 
 // pgListPayload returns the opcode and the operation's indata: the cursor
 // alone for PGNLS, or the fixed "pg"/"filter" names, the filter name, its raw
 // input and then the cursor for PGNLS_FILTER.
 func pgListPayload(r PGListRequest, cursor []byte) (uint16, []byte, error) {
+	if r.scrub != nil {
+		if r.Filter != nil || r.Count != 0 || r.StartEpoch != 0 || len(r.Cursor) != 0 {
+			return 0, nil, ErrRequest
+		}
+		return ScrubList, r.scrub, nil
+	}
 	if r.Filter == nil {
 		return PGNLS, cursor, nil
 	}
@@ -177,7 +187,7 @@ func EncodePGListRequest(r PGListRequest, features uint64, limit uint32) (msgr.M
 	if limit == 0 {
 		limit = wire.DefaultLimit
 	}
-	if r.MapEpoch == 0 || r.PG.Pool > math.MaxInt64 || r.Count == 0 || r.MaxOutputBytes < MinPGListBytes || r.MaxOutputBytes > limit {
+	if r.MapEpoch == 0 || r.PG.Pool > math.MaxInt64 || r.Count == 0 && r.scrub == nil || r.MaxOutputBytes < MinPGListBytes || r.MaxOutputBytes > limit {
 		return msgr.MessageData{}, ErrRequest
 	}
 	cursor := r.Cursor
@@ -194,7 +204,7 @@ func EncodePGListRequest(r PGListRequest, features uint64, limit uint32) (msgr.M
 	if _, err := boundedBytes(limit, 232, uint64(r.MaxOutputBytes)); err != nil {
 		return msgr.MessageData{}, err
 	}
-	if _, err := DecodePGCursor(cursor); err != nil {
+	if _, err := DecodePGCursor(cursor); err != nil && r.scrub == nil {
 		return msgr.MessageData{}, err
 	}
 	e := wire.Encoder{}
@@ -211,7 +221,7 @@ func EncodePGListRequest(r PGListRequest, features uint64, limit uint32) (msgr.M
 	e.U16(1)
 	e.U16(code)
 	e.U32(0)
-	e.U64(r.Count)
+	e.U64(r.Count) // pgls.count; zero for SCRUBLS
 	e.U32(r.StartEpoch)
 	e.U64(0)
 	e.U64(0)

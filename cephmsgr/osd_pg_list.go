@@ -111,86 +111,21 @@ func pgListWireInput(r OSDPGListRequest) osd.PGListRequest {
 // unknown outcomes are retained using the same rules as Request.
 func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (OSDPGListReply, error) {
 	var result OSDPGListReply
-	c := o.client
-	if err := ctx.Err(); err != nil {
-		return result, err
-	}
-	if c.ctx.Err() != nil || o.ctx.Err() != nil {
-		return result, ErrClosed
-	}
-	if request.PG.Primary != o.target.ID {
-		return result, ErrOSDPGListTarget
-	}
-	if !validShardPlacement(request.PG.Erasure, request.PG.Shard, request.PG.PrimaryFirst) || request.PG.Erasure && !c.options.OSDProfile.replicatedPG() {
-		return result, fmt.Errorf("%w: a PG shard needs erasure-coded placement and a replicated-PG profile", osd.ErrRequest)
-	}
-	select {
-	case c.calls <- struct{}{}:
-		defer func() { <-c.calls }()
-	case <-ctx.Done():
-		return result, ctx.Err()
-	case <-o.ctx.Done():
-		return result, ErrClosed
-	}
-	operation, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(o.ctx, cancel)
-	defer func() { stop(); cancel() }()
-	if err := operation.Err(); err != nil {
-		return result, o.operationError(err)
-	}
 	input := pgListWireInput(request)
-	var m msgr.MessageData
-	var err error
-	if c.options.OSDProfile.requestV9() {
-		m, err = osd.EncodePGListRequestV9(input, o.features, c.options.MaxFrameSize)
-	} else if c.options.OSDProfile.replicatedPG() {
-		m, err = osd.EncodePGListRequestV8(input, o.features, c.options.MaxFrameSize)
-	} else {
-		m, err = osd.EncodePGListRequest(input, o.features, c.options.MaxFrameSize)
-	}
-	if err != nil {
-		if errors.Is(err, osd.ErrFeatures) {
-			err = fmt.Errorf("%w: %w", ErrUnsupportedFeatures, err)
+	encode := func(v9, v8 bool) (msgr.MessageData, error) {
+		switch {
+		case v9:
+			return osd.EncodePGListRequestV9(input, o.features, o.client.options.MaxFrameSize)
+		case v8:
+			return osd.EncodePGListRequestV8(input, o.features, o.client.options.MaxFrameSize)
 		}
+		return osd.EncodePGListRequest(input, o.features, o.client.options.MaxFrameSize)
+	}
+	validate := func(decoded osd.Reply, redirect bool) error { return osd.ValidatePGListReply(input, decoded, redirect) }
+	reply, decoded, err := o.pgOperation(ctx, request.PG, request.ClientIncarnation, request.MapEpoch, "PG listing", encode, validate)
+	result.OSDReply = reply
+	if err != nil {
 		return result, err
-	}
-	if _, err := c.monitor(operation); err != nil {
-		return result, o.operationError(err)
-	}
-	c.mu.Lock()
-	s, closed, globalID := o.session, c.closed || o.closed, c.auth.GlobalID
-	c.mu.Unlock()
-	if closed {
-		return result, ErrClosed
-	}
-	if globalID != o.globalID {
-		return result, errors.New("ceph: OSD connection belongs to an earlier client identity")
-	}
-	reply, err := s.Call(operation, m)
-	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch,
-		Placement: &OSDPlacement{PG: OSDPG{Pool: request.PG.Pool, Seed: request.PG.Seed}, Primary: request.PG.Primary, Erasure: request.PG.Erasure, Shard: request.PG.Shard, PrimaryFirst: cloneOSDPrimaryFirst(request.PG.PrimaryFirst)}}
-	result.Submission = submission
-	if err != nil {
-		return result, o.operationError(err)
-	}
-	decoded, err := o.decodeReply(reply)
-	result.OSDReply = publicOSDReply(decoded)
-	result.Submission = submission
-	result.Transaction, result.GlobalID = reply.Transaction, o.globalID
-	redirect := errors.Is(err, osd.ErrRedirect)
-	if err == nil || redirect {
-		err = osd.ValidatePGListReply(input, decoded, redirect)
-	}
-	if err != nil {
-		cause := fmt.Errorf("%w: invalid OSD PG listing reply: %w", msgr.ErrFrame, err)
-		s.Fail(cause)
-		return result, &OutcomeUnknownError{Cause: cause}
-	}
-	if redirect {
-		return result, ErrOSDRedirect
-	}
-	if result.Code < 0 {
-		return result, &OSDError{Code: result.Code}
 	}
 	page, err := osd.DecodePGList(decoded.Operations[0].Data, request.Count)
 	if err != nil {
@@ -203,4 +138,83 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 	}
 	result.End = result.Code == 1
 	return result, nil
+}
+
+// pgOperation sends one PG-level operation to the explicit primary and
+// validates its reply; a refusal returns *OSDError with the reply retained.
+func (o *OSDConnection) pgOperation(ctx context.Context, target OSDPGListTarget, incarnation, epoch uint32, label string, encode func(v9, v8 bool) (msgr.MessageData, error), validate func(osd.Reply, bool) error) (OSDReply, osd.Reply, error) {
+	var result OSDReply
+	c := o.client
+	if err := ctx.Err(); err != nil {
+		return result, osd.Reply{}, err
+	}
+	if c.ctx.Err() != nil || o.ctx.Err() != nil {
+		return result, osd.Reply{}, ErrClosed
+	}
+	if target.Primary != o.target.ID {
+		return result, osd.Reply{}, ErrOSDPGListTarget
+	}
+	if !validShardPlacement(target.Erasure, target.Shard, target.PrimaryFirst) || target.Erasure && !c.options.OSDProfile.replicatedPG() {
+		return result, osd.Reply{}, fmt.Errorf("%w: a PG shard needs erasure-coded placement and a replicated-PG profile", osd.ErrRequest)
+	}
+	select {
+	case c.calls <- struct{}{}:
+		defer func() { <-c.calls }()
+	case <-ctx.Done():
+		return result, osd.Reply{}, ctx.Err()
+	case <-o.ctx.Done():
+		return result, osd.Reply{}, ErrClosed
+	}
+	operation, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(o.ctx, cancel)
+	defer func() { stop(); cancel() }()
+	if err := operation.Err(); err != nil {
+		return result, osd.Reply{}, o.operationError(err)
+	}
+	m, err := encode(c.options.OSDProfile.requestV9(), c.options.OSDProfile.replicatedPG())
+	if err != nil {
+		if errors.Is(err, osd.ErrFeatures) {
+			err = fmt.Errorf("%w: %w", ErrUnsupportedFeatures, err)
+		}
+		return result, osd.Reply{}, err
+	}
+	if _, err := c.monitor(operation); err != nil {
+		return result, osd.Reply{}, o.operationError(err)
+	}
+	c.mu.Lock()
+	s, closed, globalID := o.session, c.closed || o.closed, c.auth.GlobalID
+	c.mu.Unlock()
+	if closed {
+		return result, osd.Reply{}, ErrClosed
+	}
+	if globalID != o.globalID {
+		return result, osd.Reply{}, errors.New("ceph: OSD connection belongs to an earlier client identity")
+	}
+	reply, err := s.Call(operation, m)
+	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: incarnation, MapEpoch: epoch,
+		Placement: &OSDPlacement{PG: OSDPG{Pool: target.Pool, Seed: target.Seed}, Primary: target.Primary, Erasure: target.Erasure, Shard: target.Shard, PrimaryFirst: cloneOSDPrimaryFirst(target.PrimaryFirst)}}
+	result.Submission = submission
+	if err != nil {
+		return result, osd.Reply{}, o.operationError(err)
+	}
+	decoded, err := o.decodeReply(reply)
+	result = publicOSDReply(decoded)
+	result.Submission = submission
+	result.Transaction, result.GlobalID = reply.Transaction, o.globalID
+	redirect := errors.Is(err, osd.ErrRedirect)
+	if err == nil || redirect {
+		err = validate(decoded, redirect)
+	}
+	if err != nil {
+		cause := fmt.Errorf("%w: invalid OSD %s reply: %w", msgr.ErrFrame, label, err)
+		s.Fail(cause)
+		return result, decoded, &OutcomeUnknownError{Cause: cause}
+	}
+	if redirect {
+		return result, decoded, ErrOSDRedirect
+	}
+	if result.Code < 0 {
+		return result, decoded, &OSDError{Code: result.Code}
+	}
+	return result, decoded, nil
 }

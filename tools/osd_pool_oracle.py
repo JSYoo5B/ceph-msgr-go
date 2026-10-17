@@ -5,7 +5,9 @@ Test-only; never product code. It uses the public librados C API (LGPL-2.1,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
-Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, fullratios, osdflags, cleanup.
+Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, fullratios, osdflags, inconsistent, cleanup.
+inconsistent runs the native `rados list-inconsistent-obj` for one owned-pool
+PG and reports its interval and object names.
 fullratios changes the cluster-wide nearfull/backfillfull/full ratios of the
 disposable fixture; the caller restores the values it reported first.
 osdflags sets or unsets only the norecover and nobackfill OSDMap flags; the
@@ -18,6 +20,8 @@ import ctypes as C
 import json
 import os
 import pathlib
+import re
+import subprocess
 import sys
 
 import osd_mutation_oracle as mutation
@@ -25,7 +29,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "fullratios", "osdflags", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -432,6 +436,31 @@ def mode_osdflags(rados, cluster, request, out):
     return {"epoch": dump["epoch"], "osdmap_flags": flags}
 
 
+def mode_inconsistent(rados, cluster, request, out):
+    pgid = request.get("pgid")
+    if not isinstance(pgid, str) or not re.fullmatch(r"[0-9]{1,10}\.[0-9a-f]{1,8}", pgid):
+        raise ValueError("pgid must be <pool>.<hex seed>")
+    dump = rados.dump(cluster)
+    owned = {find_pool(dump, pool_name(slot))["pool"] for slot in SLOTS if find_pool(dump, pool_name(slot))}
+    if int(pgid.split(".")[0]) not in owned:
+        raise ValueError("pgid is not in an owned pool")
+    result = {"pgid": pgid}
+    for key, command in (("objects", "list-inconsistent-obj"), ("snapsets", "list-inconsistent-snapset")):
+        proc = subprocess.run(["rados", "-c", str(rados.root / "ceph.conf"), "--keyring", str(rados.root / "keyring"), "--id", "test",
+                               command, pgid, "--format=json"], stdin=subprocess.DEVNULL, capture_output=True, timeout=60)
+        if proc.returncode != 0:
+            text = proc.stderr.decode("utf-8", "replace")[-300:]
+            result[key] = {"code": -2 if "No scrub information" in text else -1, "stderr": text}
+            continue
+        raw = json.loads(proc.stdout)
+        if key == "objects":
+            names = [item.get("object", {}).get("name", "") for item in raw.get("inconsistents", [])]
+        else:
+            names = [item.get("name", "") for item in raw.get("inconsistents", [])]
+        result[key] = {"code": 0, "interval": raw.get("epoch"), "names": names}
+    return result
+
+
 def mode_cleanup(rados, cluster, request, out):
     removed = []
     code, _ = rados.mon(cluster, {"prefix": "config set", "who": "mon", "name": "mon_allow_pool_delete", "value": "true"})
@@ -453,7 +482,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 
 def main(argv):

@@ -48,6 +48,9 @@ type poolReceipt struct {
 	FullOSDs          []int32           `json:"full_osds"`
 	OwnedFlags        map[string]string `json:"owned_flags"`
 	OSDMapFlags       []string          `json:"osdmap_flags"`
+	// inconsistent mode.
+	ScrubObjects  nativeScrubList `json:"objects"`
+	ScrubSnapsets nativeScrubList `json:"snapsets"`
 	// NonprimaryShards is the pool's raw nonprimary_shards dump.
 	NonprimaryShards json.RawMessage `json:"nonprimary_shards"`
 	KB               uint64          `json:"kb"`
@@ -62,6 +65,13 @@ type poolReceipt struct {
 	} `json:"pool_snaps"`
 	RemovedSnaps      string            `json:"removed_snaps"`
 	RemovedSnapsQueue []json.RawMessage `json:"removed_snaps_queue"`
+}
+
+type nativeScrubList struct {
+	Code     int      `json:"code"`
+	Interval uint32   `json:"interval"`
+	Names    []string `json:"names"`
+	Stderr   string   `json:"stderr"`
 }
 
 func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolReceipt {
