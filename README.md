@@ -1011,6 +1011,28 @@ replicated-pg-v8, request-v9/reply-v8 secure/AES256K IPv6 single MemStore에서 
 [계약](internal/osd/COPY_FROM_CONTRACT.md)과
 [검증 기록](integration/fixture/OSD_COPY_FROM_VALIDATION.md)을 참고한다.
 
+같은 요청 API의 추가 필드와 별도 API는 아래와 같다. 각각 실서버·native 독립 관측으로
+검증했고 범위와 한계는 연결된 문서에 있다.
+
+- `OSDRequest.FullTry`/`FullForce`: full pool에서 기본 쓰기는 서버가 응답하지 않는다.
+  FULL_TRY는 `-122`(quota) 거절을, FULL_FORCE는 쓰기·삭제 진행을 얻는다.
+  [계약](internal/osd/FULL_CONTRACT.md), [검증](integration/fixture/OSD_FULL_VALIDATION.md).
+- `OSDRequest.BalanceReads`/`LocalizeReads`: 읽기 전용 vector를 primary가 아닌 acting
+  replica가 처리한다. [계약](internal/osd/REPLICA_READ_CONTRACT.md),
+  [검증](integration/fixture/OSD_REPLICA_READ_VALIDATION.md).
+- `OSDRequest.Resubmit`/`RetryAttempt`: 원 transaction ID·incarnation과 FLAG_RETRY로
+  명시 재제출해 서버 PG log가 중복 실행 없이 결과를 확정한다(결과 불명확 해소).
+  자동 재제출은 없다. [계약](internal/osd/RESUBMIT_CONTRACT.md),
+  [검증](integration/fixture/OSD_RESUBMIT_VALIDATION.md).
+- `Client.PoolOp`(MON MPoolOp): self-managed snapshot id 할당·삭제와 pool snapshot
+  생성·삭제. [계약](cephmsgr/POOL_OP_CONTRACT.md),
+  [검증](integration/fixture/MON_POOL_OP_VALIDATION.md).
+- `MDSSession.Reclaim`/`FinishReclaim`(MClientReclaim): uuid로 같은 CephX identity의
+  이전 session을 제거·blocklist한다. [계약](cephmsgr/MDS_SESSION_CONTRACT.md),
+  [검증](integration/fixture/MDS_RECLAIM_VALIDATION.md).
+- 추가 소유 pool 기반 시험(cross-pool·namespace COPY_FROM, pool snapshot 모드)은
+  [검증](integration/fixture/OSD_POOL_VALIDATION.md)에 있다.
+
 다만 nonempty WRITEFULL·APPEND 뒤 offset 0 READ/CMPEXT가 앞선 payload 크기
 이상을 검사하는 조합은 `ErrUnsupportedOSDOperation`으로 송신 전에 거절한다.
 offset 0의 nonempty WRITE 또는 WRITESAME 뒤에는 모든 양수 길이의 offset 0 READ/CMPEXT를
