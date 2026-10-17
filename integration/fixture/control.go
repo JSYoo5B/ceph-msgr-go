@@ -684,7 +684,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		return err
 	}
 	if fields != nil {
-		modes := map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "snapshot": true, "cleanup": true}
+		modes := map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "snapshot": true, "quota": true, "poolinfo": true, "cleanup": true}
 		if len(fields) != 2 || c.profile.osd != "1" || !modes[fields[1]] {
 			return errors.New("invalid native owned-pool oracle request")
 		}

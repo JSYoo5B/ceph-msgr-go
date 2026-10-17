@@ -5,7 +5,7 @@ Test-only; never product code. It uses the public librados C API (LGPL-2.1,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
-Go client. Modes: create, seed, observe, place, snapshot, cleanup. Every mode
+Go client. Modes: create, seed, observe, place, snapshot, quota, poolinfo, cleanup. Every mode
 reads one bounded JSON input and writes one bounded JSON result; native
 mutations are never retried and credentials/keys are never copied.
 """
@@ -21,7 +21,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "quota", "poolinfo", "cleanup")
 SLOTS = (1, 2)
 MAX_OUTPUT = 512 << 10
 MAX_MON_OUTPUT = 4 << 20
@@ -253,6 +253,25 @@ def mode_snapshot(rados, cluster, request, out):
         rados.lib.rados_ioctx_destroy(io)
 
 
+def mode_quota(rados, cluster, request, out):
+    name = pool_name(request["slot"])
+    limit = integer(request["max_objects"], 0, 1 << 20, "max_objects")
+    code, _ = rados.mon(cluster, {"prefix": "osd pool set-quota", "pool": name, "field": "max_objects", "val": str(limit)})
+    if code < 0:
+        raise RuntimeError("native quota change failed: %d" % code)
+    return {"pool": name, "max_objects": limit}
+
+
+def mode_poolinfo(rados, cluster, request, out):
+    name = pool_name(request["slot"])
+    dump = rados.dump(cluster)
+    pool = find_pool(dump, name)
+    if pool is None:
+        raise RuntimeError("owned pool is missing")
+    return {"pool": name, "pool_id": pool["pool"], "flags": pool["flags"], "flag_names": pool.get("flags_names", ""),
+            "epoch": dump["epoch"], "quota_max_objects": pool.get("quota_max_objects")}
+
+
 def mode_cleanup(rados, cluster, request, out):
     removed = []
     code, _ = rados.mon(cluster, {"prefix": "config set", "who": "mon", "name": "mon_allow_pool_delete", "value": "true"})
@@ -272,7 +291,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "quota": mode_quota, "poolinfo": mode_poolinfo, "cleanup": mode_cleanup}
 
 
 def main(argv):

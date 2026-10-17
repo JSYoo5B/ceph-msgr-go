@@ -23,6 +23,11 @@ const (
 	MaxSnap       uint64 = ^uint64(0) - 2
 	FlagOrderSnap uint64 = 0x40
 
+	// FlagFullTry and FlagFullForce are rados.h CEPH_OSD_FLAG_FULL_TRY and
+	// CEPH_OSD_FLAG_FULL_FORCE.
+	FlagFullTry   uint64 = 0x800000
+	FlagFullForce uint64 = 0x1000000
+
 	// OldSnapContext is EOLDSNAPC from include/rados.h, not a host errno.
 	OldSnapContext int32 = -85
 )

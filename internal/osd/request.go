@@ -42,6 +42,11 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	if r.OrderSnap {
 		flags |= FlagOrderSnap
 	}
+	full, err := requestFullFlags(r, flags)
+	if err != nil {
+		return msgr.MessageData{}, err
+	}
+	flags |= full
 	if _, err := boundedBytes(limit, frontBytes, dataBytes); err != nil {
 		return msgr.MessageData{}, err
 	}

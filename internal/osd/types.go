@@ -117,6 +117,9 @@ type Request struct {
 	ReadSnap, SnapSeq              uint64
 	Snaps                          []uint64
 	OrderSnap                      bool
+	// FullTry and FullForce set CEPH_OSD_FLAG_FULL_TRY/FULL_FORCE on a
+	// writing vector; at most one. See FULL_CONTRACT.md.
+	FullTry, FullForce bool
 }
 
 type Version struct {

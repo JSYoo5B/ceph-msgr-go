@@ -164,6 +164,11 @@ type OSDRequest struct {
 	ReadSnapshot   uint64
 	SnapContext    OSDSnapContext
 	OrderSnapshots bool
+	// FullTry makes a writing vector fail with the server's signed Linux code
+	// (-122 EDQUOT for a quota, -28 ENOSPC otherwise) when its pool is full
+	// instead of being discarded unanswered; FullForce writes despite a full pool. At most one,
+	// writing vectors only.
+	FullTry, FullForce bool
 }
 
 type OSDPG struct {
@@ -348,7 +353,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		MapEpoch:         request.MapEpoch, Object: request.Object.Name, Hash: request.Object.Hash,
 		Locator:    osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
 		Operations: make([]osd.Operation, len(request.Operations)),
-		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots}
+		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, FullTry: request.FullTry, FullForce: request.FullForce}
 	for i, op := range request.Operations {
 		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
 			AllocHint:    osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},

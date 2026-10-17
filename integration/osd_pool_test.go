@@ -34,6 +34,7 @@ type poolReceipt struct {
 	Placement     osdFixtureOracle    `json:"placement"`
 	SnapID        uint64              `json:"snap_id"`
 	PoolsRemoved  bool                `json:"pools_removed"`
+	FlagNames     string              `json:"flag_names"`
 }
 
 func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolReceipt {
@@ -46,7 +47,7 @@ func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolR
 	if err != nil || len(raw) > 1<<20 {
 		t.Fatal("bounded pool oracle input", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "osd-pool-input.json"), raw, 0600); err != nil {
+	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-pool-input.json"), raw); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Remove(filepath.Join(dir, "osd-pool-result.json")); err != nil && !errors.Is(err, os.ErrNotExist) {
