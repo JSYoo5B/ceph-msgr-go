@@ -58,3 +58,7 @@ snapshot ids were verified against a real clone; cross-pool and cross-namespace 
 ([record](../../integration/fixture/OSD_POOL_VALIDATION.md)); compound use and failover during a copy are unverified; a committed copy
 survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.
+
+`OSDCopyFromInput.SourceFadvise` sets the union's src_fadvise_flags (FADVISE
+hints only) for the OSD's read of the source; the reply must echo it. Live:
+[OSD_FADVISE_VALIDATION.md](../../integration/fixture/OSD_FADVISE_VALIDATION.md).

@@ -38,6 +38,9 @@ type CopyFromInput struct {
 	Flags            uint8
 	TruncateSequence uint32
 	TruncateSize     uint64
+	// SourceFadvise is the source read's FADVISE hint mask (COPY_FROM and
+	// COPY_FROM2 src_fadvise_flags); SET_REDIRECT carries none.
+	SourceFadvise uint32
 }
 
 // CopyFromResult preserves the echoed union (snapid, source version, copy
@@ -64,7 +67,7 @@ func usesCopyFromUnion(code uint16) bool {
 // validateRedirectOperation admits a flagless head redirect: the target
 // object, locator (no hash) and version; COPY_FROM's flags do not apply.
 func validateRedirectOperation(op Operation, limit uint32) (uint64, uint64, error) {
-	if op.CopyFrom.Flags != 0 || op.CopyFrom.TruncateSequence != 0 || op.CopyFrom.TruncateSize != 0 {
+	if op.CopyFrom.Flags != 0 || op.CopyFrom.SourceFadvise != 0 || op.CopyFrom.TruncateSequence != 0 || op.CopyFrom.TruncateSize != 0 {
 		return 0, 0, ErrOperation
 	}
 	redirect := op
@@ -86,6 +89,9 @@ func validateCopyFromOperation(op Operation, limit uint32) (uint64, uint64, erro
 		return 0, 0, ErrOperation
 	}
 	input := op.CopyFrom
+	if input.SourceFadvise&^OpFadviseMask != 0 {
+		return 0, 0, ErrOperation
+	}
 	if input.Snap > MaxSnap && input.Snap != NoSnap || input.Object == "" || input.Locator.Pool < 0 || input.Locator.Hash != -1 || strings.IndexByte(input.Object, 0) >= 0 {
 		return 0, 0, ErrRequest
 	}
@@ -133,7 +139,7 @@ func encodeCopyFromUnion(e *wire.Encoder, op Operation) {
 	e.U64(copyFromSnap(op.CopyFrom))
 	e.U64(op.CopyFrom.Version)
 	e.U8(op.CopyFrom.Flags)
-	e.U32(0) // src_fadvise_flags
+	e.U32(op.CopyFrom.SourceFadvise)
 	e.Raw(make([]byte, 7))
 }
 
@@ -164,7 +170,7 @@ func ValidateCopyFromReply(requested Operation, reply OperationResult) error {
 	if !usesCopyFromUnion(requested.Code) {
 		return ErrOperation
 	}
-	want := CopyFromResult{Snap: copyFromSnap(requested.CopyFrom), Version: requested.CopyFrom.Version, Flags: requested.CopyFrom.Flags}
+	want := CopyFromResult{Snap: copyFromSnap(requested.CopyFrom), Version: requested.CopyFrom.Version, Flags: requested.CopyFrom.Flags, Fadvise: requested.CopyFrom.SourceFadvise}
 	if reply.Code != requested.Code || reply.CopyFrom != want || reply.Offset != 0 || reply.Length != 0 || reply.TruncateSize != 0 || reply.TruncateSequence != 0 || reply.PayloadLength != 0 || len(reply.Data) != 0 || reply.Xattr != (XattrResult{}) || reply.Class != (ClassResult{}) || reply.AllocHint != (AllocHintInput{}) || reply.Checksum != (ChecksumResult{}) || reply.Snap != 0 || reply.WriteSamePatternLength != 0 {
 		return errors.New("OSD copy-from reply differs from submitted operation")
 	}

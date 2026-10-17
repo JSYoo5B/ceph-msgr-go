@@ -52,6 +52,18 @@ func TestCephOSDFadviseIntegration(t *testing.T) {
 		t.Fatal("hinted CMPEXT and READ", err)
 	}
 	t.Logf("echoed op flags: cmpext %#x, read %#x", reply.Operations[0].Flags, reply.Operations[1].Flags)
+	// COPY_FROM2 carries hints for the OSD's own read of the source.
+	copyRoute := poolPlace(t, ctx, 1, "fadvise-copy", "")
+	co := mutationConnection(t, c, ctx, copyRoute)
+	defer co.Close()
+	cp := pools.request(copyRoute, cephmsgr.OSDOperation{Code: cephmsgr.OSDCopyFrom2, CopyFrom: cephmsgr.OSDCopyFromInput{SourcePool: pools.ids[1], SourceName: object, SourceFadvise: cephmsgr.OSDFadviseDontNeed | cephmsgr.OSDFadviseNoCache}})
+	cp.ModificationTime = cephmsgr.OSDTime{Seconds: 1700008001}
+	if _, err := co.Request(ctx, cp); err != nil {
+		t.Fatal("copy with source hints", err)
+	}
+	if n := poolObserve(t, ctx, 1, "fadvise-copy", "", ""); !bytes.Equal(n.Data, want) {
+		t.Fatal("native copy differs")
+	}
 	for _, op := range []cephmsgr.OSDOperation{{Code: cephmsgr.OSDStat, Flags: cephmsgr.OSDFadviseNoCache}, {Code: cephmsgr.OSDCreate, Flags: cephmsgr.OSDFadviseDontNeed}} {
 		if reply, err := send(op); err == nil || reply.Submission != (cephmsgr.OSDSubmission{}) {
 			t.Fatal("a hint on an opcode without a data path was submitted", op.Code, err)

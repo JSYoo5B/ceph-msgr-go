@@ -142,7 +142,8 @@ type OSDOperation struct {
 // refuses a different one (ERANGE). TruncateSequence selects COPY_FROM2's
 // TRUNCATE_SEQ form: the destination gets TruncateSequence (nonzero) and
 // TruncateSize instead of the source's values; it is refused on OSDCopyFrom.
-// Fadvise hints and cache-tier copy flags are unsupported.
+// SourceFadvise carries FADVISE hints for the source read; cache-tier copy
+// flags are unsupported.
 // A reply with success reports server completion of the copy as ONDISK;
 // a cancelled or failed local wait leaves the outcome unknown.
 type OSDCopyFromInput struct {
@@ -153,6 +154,9 @@ type OSDCopyFromInput struct {
 	SourceVersion              uint64
 	TruncateSequence           uint32
 	TruncateSize               uint64
+	// SourceFadvise is the FADVISE hint mask for the OSD's read of the
+	// source (librados copy_from src_fadvise_flags); the reply echoes it.
+	SourceFadvise OSDOperationFlags
 }
 
 // OSDRedirectInput is the active input for OSDSetRedirect: the target head
@@ -677,7 +681,7 @@ func copyFromWireInput(op OSDOperation) osd.CopyFromInput {
 	if in == (OSDCopyFromInput{}) {
 		return osd.CopyFromInput{}
 	}
-	out := osd.CopyFromInput{Object: in.SourceName, Locator: osd.Locator{Pool: in.SourcePool, Key: in.SourceKey, Namespace: in.SourceNamespace, Hash: -1}, Snap: in.SourceSnapshot, Version: in.SourceVersion}
+	out := osd.CopyFromInput{Object: in.SourceName, Locator: osd.Locator{Pool: in.SourcePool, Key: in.SourceKey, Namespace: in.SourceNamespace, Hash: -1}, Snap: in.SourceSnapshot, Version: in.SourceVersion, SourceFadvise: uint32(in.SourceFadvise)}
 	if in.TruncateSequence != 0 || in.TruncateSize != 0 {
 		out.Flags = osd.CopyFromTruncateSequence
 		out.TruncateSequence, out.TruncateSize = in.TruncateSequence, in.TruncateSize
