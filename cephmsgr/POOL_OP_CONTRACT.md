@@ -20,8 +20,10 @@ self-managed or pool-snapshot mode, so the other family answers `-EINVAL`; an
 absent pool answers `-ENOENT` (deletion of an absent pool object answers 0);
 creating an existing pool snapshot and removing an absent or already removed
 one answer 0 (idempotent); removing a self-managed id above the pool's
-sequence answers `-ENOENT`; an identity without the needed MON capability gets
-`-EPERM`; pools attached to a filesystem refuse MON-managed snapshots with
+sequence answers `-ENOENT`; an identity without the needed capability gets
+`-EPERM` before pool existence or mode is checked (self-managed ids need MON
+`osd` write or an OSD write grant on the pool, other kinds MON `osd` write);
+pools attached to a filesystem refuse MON-managed snapshots with
 `-EOPNOTSUPP`. Negative codes come back as `*PoolOpError` together with the
 raw result.
 

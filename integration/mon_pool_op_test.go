@@ -4,6 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -158,6 +162,54 @@ func TestCephMonPoolOpIntegration(t *testing.T) {
 			if !errors.As(err, &refused) || errors.As(err, &unknown) || refused.Code != request.code || result.Code != request.code {
 				t.Fatal(name, "expected a known signed refusal", request.code, result, err)
 			}
+		}
+	})
+
+	// The MON checks capabilities before pool existence or snapshot mode: an
+	// identity with only "allow r" for mon and osd is answered EPERM (not
+	// dropped) for every kind, and the native pool state does not move.
+	t.Run("capability refusals are EPERM", func(t *testing.T) {
+		options := integrationOptions(t)
+		encoded, err := os.ReadFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "readonly.key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if options.Key, err = cephmsgr.ParseKey(strings.TrimSpace(string(encoded))); err != nil {
+			t.Fatal(err)
+		}
+		options.Identity = "client.readonly"
+		// Admission follows the fixture's OSD profile, as for the admin client.
+		options.EnableOSD = true
+		if isReplicatedPGFixtureProfile() {
+			options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+		}
+		readonly, err := cephmsgr.Dial(ctx, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer readonly.Close()
+		selfBefore, namedBefore := info(1), info(2)
+		for name, req := range map[string]cephmsgr.PoolOpRequest{
+			"self-managed allocation":         {Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotCreate},
+			"self-managed removal":            {Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotRemove, Snapshot: selfBefore.SnapSeq},
+			"pool snapshot creation":          {Pool: namedPool, Op: cephmsgr.PoolSnapshotCreate, Name: "denied"},
+			"pool snapshot removal":           {Pool: namedPool, Op: cephmsgr.PoolSnapshotRemove, Name: "pin-mode"},
+			"self-managed id in absent pool":  {Pool: 99999, Op: cephmsgr.SelfManagedSnapshotCreate},
+			"pool snapshot in a pool of mode": {Pool: selfPool, Op: cephmsgr.PoolSnapshotCreate, Name: "x"},
+		} {
+			result, err := readonly.PoolOp(ctx, req)
+			var unknown *cephmsgr.OutcomeUnknownError
+			if !errors.As(err, &refused) || errors.As(err, &unknown) || refused.Code != -1 || result.Code != -1 || result.Epoch == 0 {
+				t.Fatal(name, "expected a known EPERM reply", result, err)
+			}
+		}
+		selfAfter, namedAfter := info(1), info(2)
+		if selfAfter.SnapSeq != selfBefore.SnapSeq || selfAfter.SnapMode != "selfmanaged" || !reflect.DeepEqual(namedAfter.PoolSnaps, namedBefore.PoolSnaps) {
+			t.Fatalf("a refused pool op changed native pool state: seq %d->%d snaps %+v->%+v", selfBefore.SnapSeq, selfAfter.SnapSeq, namedBefore.PoolSnaps, namedAfter.PoolSnaps)
+		}
+		// Control: the same session still reads, so the refusals were per request.
+		if _, err := readonly.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"status","format":"json"}`)}); err != nil {
+			t.Fatal("read-only session lost its read permission", err)
 		}
 	})
 }

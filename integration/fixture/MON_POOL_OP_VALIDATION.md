@@ -26,6 +26,14 @@ owned pools (OSD_POOL_VALIDATION.md); the pool oracle gained the modes
 - Refusals are known signed codes with the raw result preserved: pool snapshot
   in a self-managed pool `-22`, self-managed id in a pool-snapshot pool `-22`,
   absent pool `-2` for both create and remove.
+- Capabilities: the fixture's `client.readonly` (mon, mgr and osd `allow r`)
+  gets a known `-1` (EPERM) reply with a map epoch, never a dropped request,
+  for self-managed allocation and removal, pool snapshot creation and removal,
+  a self-managed id in an absent pool and a pool snapshot in a self-managed
+  pool. The capability check precedes pool existence and snapshot mode (those
+  two would otherwise answer `-2` and `-22`). Native `snap_seq`, mode and the
+  pool snapshot list are unchanged, and the same session still runs a MON
+  read command, so the refusal is per request.
 - Wire: request and reply codecs are covered by byte-level unit tests and a
   synthetic MON; the daemon decoding our request and our decoding its reply is
   the interoperability evidence. No fresh native-encoder vector exists.
@@ -36,7 +44,11 @@ Passed first complete run in: legacy-v6 single BlueStore, legacy-v6 three
 BlueStore replicas, replicated-pg-v8 single BlueStore, request-v9/reply-v8
 secure AES256K IPv6 single MemStore.
 
-Not claimed: the `-EPERM` capability rules (the fixture identity is an admin),
+The capability subtest was added later the same day and passed in the same
+four profiles.
+
+Not claimed: grants that admit self-managed snapshots through a pool-scoped
+OSD write cap without MON write (no such identity exists in the fixture),
 `-EOPNOTSUPP` for filesystem pools, behavior across MON failover or a forwarded
 request to a peon, POOL_OP_CREATE/DELETE, and waiting for OSDs to apply the
 updated map after an allocation.
