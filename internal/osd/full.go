@@ -51,3 +51,6 @@ func requestReplicaFlags(r Request, flags uint64) (uint64, error) {
 	}
 	return out, nil
 }
+
+// MaxRetryAttempt bounds an explicit resubmission count.
+const MaxRetryAttempt = 1 << 16

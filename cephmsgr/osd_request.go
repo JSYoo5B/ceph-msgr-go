@@ -176,7 +176,21 @@ type OSDRequest struct {
 	// names the primary. Replicas may answer -EAGAIN (unreadable object or
 	// unstable write), which is a known refusal the caller handles.
 	BalanceReads, LocalizeReads bool
+	// Resubmit explicitly repeats an earlier request of this client under its
+	// original identity (transaction ID and incarnation) so the OSD can answer
+	// from its PG log instead of executing it again: pass the Submission an
+	// earlier Request returned, including after an unknown outcome, with the
+	// same ClientIncarnation, and a RetryAttempt of 1 or more that you raise
+	// per resubmission. The caller must resend the same operations; the
+	// client cannot check that. The server's duplicate detection covers only
+	// requests still in the PG log and is never a replay guarantee; nothing
+	// resubmits automatically.
+	Resubmit     *OSDSubmission
+	RetryAttempt int32
 }
+
+// OSDMaxRetryAttempt bounds RetryAttempt.
+const OSDMaxRetryAttempt int32 = osd.MaxRetryAttempt
 
 type OSDPG struct {
 	Pool uint64
@@ -350,6 +364,15 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	if globalID != o.globalID {
 		return result, errors.New("ceph: OSD connection belongs to an earlier client identity")
 	}
+	var fixedTID uint64
+	if request.Resubmit != nil || request.RetryAttempt != 0 {
+		prior := request.Resubmit
+		if prior == nil || owner != nil || request.RetryAttempt < 1 || request.RetryAttempt > OSDMaxRetryAttempt ||
+			prior.Transaction == 0 || prior.Transaction > c.osdNext.Load() || prior.GlobalID != globalID || prior.ClientIncarnation != request.ClientIncarnation {
+			return result, fmt.Errorf("%w: resubmission needs the earlier submission of this client identity and a positive retry attempt", osd.ErrRequest)
+		}
+		fixedTID = prior.Transaction
+	}
 	if err := osdOmapEntryBound(request.Operations, c.options.MaxFrameSize); err != nil {
 		return result, err
 	}
@@ -360,7 +383,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		MapEpoch:         request.MapEpoch, Object: request.Object.Name, Hash: request.Object.Hash,
 		Locator:    osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
 		Operations: make([]osd.Operation, len(request.Operations)),
-		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, FullTry: request.FullTry, FullForce: request.FullForce, BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads}
+		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, FullTry: request.FullTry, FullForce: request.FullForce, BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, RetryAttempt: request.RetryAttempt}
 	for i, op := range request.Operations {
 		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
 			AllocHint:    osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},
@@ -390,7 +413,12 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		}
 		return result, err
 	}
-	reply, err := s.Call(operation, m)
+	var reply msgr.MessageData
+	if fixedTID != 0 {
+		reply, err = s.CallAt(operation, m, fixedTID)
+	} else {
+		reply, err = s.Call(operation, m)
+	}
 	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch, Placement: request.Placement}
 	result.Submission = submission
 	if err != nil {
@@ -436,7 +464,7 @@ func osdOmapEntryBound(ops []OSDOperation, limit uint32) error {
 }
 
 func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
-	if reply.Object != input.Object || reply.PG.Pool != uint64(input.Locator.Pool) || reply.PG.Seed != input.Hash || reply.RetryAttempt != 0 || len(reply.Operations) != len(input.Operations) {
+	if reply.Object != input.Object || reply.PG.Pool != uint64(input.Locator.Pool) || reply.PG.Seed != input.Hash || reply.RetryAttempt != input.RetryAttempt || len(reply.Operations) != len(input.Operations) {
 		return errors.New("OSD reply does not match request identity or operations")
 	}
 	flags, _, err := osd.ValidateOperations(input.Operations, ^uint32(0))

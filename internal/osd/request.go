@@ -52,6 +52,12 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		return msgr.MessageData{}, err
 	}
 	flags |= replica
+	if r.RetryAttempt < 0 || r.RetryAttempt > MaxRetryAttempt {
+		return msgr.MessageData{}, ErrRequest
+	}
+	if r.RetryAttempt > 0 {
+		flags |= FlagRetry
+	}
 	if _, err := boundedBytes(limit, frontBytes, dataBytes); err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -154,7 +160,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	for _, s := range r.Snaps {
 		e.U64(s)
 	}
-	e.U32(0) // first attempt, no automatic retry.
+	e.U32(uint32(r.RetryAttempt)) // zero unless the caller explicitly resubmits.
 	e.U64(features)
 	identity := wire.Encoder{}
 	identity.U8(0) // default entity_name_t type.

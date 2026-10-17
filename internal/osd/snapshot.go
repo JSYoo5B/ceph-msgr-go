@@ -30,6 +30,8 @@ const (
 
 	// FlagBalanceReads and FlagLocalizeReads are rados.h
 	// CEPH_OSD_FLAG_BALANCE_READS and CEPH_OSD_FLAG_LOCALIZE_READS.
+	// FlagRetry is rados.h CEPH_OSD_FLAG_RETRY, set on a resubmission.
+	FlagRetry         uint64 = 0x8
 	FlagBalanceReads  uint64 = 0x100
 	FlagLocalizeReads uint64 = 0x2000
 

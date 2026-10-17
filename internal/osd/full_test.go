@@ -103,3 +103,38 @@ func TestReplicaReadFlagsEncodeAndRefuseUnsafeVectors(t *testing.T) {
 		}
 	}
 }
+
+func TestRetryAttemptSetsRetryFlagAndIsBounded(t *testing.T) {
+	for _, version := range []int{6, 8} {
+		encode := func(r V8Request) (uint32, error) {
+			if version == 6 {
+				m, err := EncodeRequest(r.Request, oracleFeatures, 1024)
+				if err != nil {
+					return 0, err
+				}
+				return binary.LittleEndian.Uint32(m.Front[8:]), nil
+			}
+			m, err := EncodeRequestV8(r, v8OracleFeatures, 1024)
+			if err != nil {
+				return 0, err
+			}
+			return binary.LittleEndian.Uint32(m.Front[32:]), nil
+		}
+		base := nativeV8Request("mutation")
+		plain, err := encode(base)
+		if err != nil || plain&uint32(FlagRetry) != 0 {
+			t.Fatal("first attempt carries the retry flag", err)
+		}
+		retry := base
+		retry.RetryAttempt = 3
+		if got, err := encode(retry); err != nil || got != plain|uint32(FlagRetry) {
+			t.Fatal("retry flag not set", version, got, err)
+		}
+		for _, bad := range []int32{-1, MaxRetryAttempt + 1} {
+			retry.RetryAttempt = bad
+			if _, err := encode(retry); !errors.Is(err, ErrRequest) {
+				t.Fatal("out-of-range retry attempt accepted", bad, err)
+			}
+		}
+	}
+}

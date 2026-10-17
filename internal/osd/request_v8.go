@@ -89,6 +89,12 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 		return msgr.MessageData{}, err
 	}
 	flags |= replica
+	if r.RetryAttempt < 0 || r.Request.RetryAttempt > MaxRetryAttempt {
+		return msgr.MessageData{}, ErrRequest
+	}
+	if r.Request.RetryAttempt > 0 {
+		flags |= FlagRetry
+	}
 	if _, err := boundedBytes(limit, frontBytes, dataBytes); err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -202,7 +208,7 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	for _, s := range r.Snaps {
 		e.U64(s)
 	}
-	e.U32(0) // first attempt, no automatic retry.
+	e.U32(uint32(r.RetryAttempt)) // zero unless the caller explicitly resubmits.
 	e.U64(features)
 	data := make([]byte, 0, int(dataBytes))
 	for _, op := range r.Operations {

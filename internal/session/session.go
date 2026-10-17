@@ -246,6 +246,24 @@ func (s *Session) abandon(id uint64, r *request, err error) error {
 	return err
 }
 func (s *Session) Call(ctx context.Context, m msgr.MessageData) (msgr.MessageData, error) {
+	return s.call(ctx, m, 0)
+}
+
+// ErrTransactionInUse reports that CallAt's transaction ID is still pending on
+// this session.
+var ErrTransactionInUse = errors.New("ceph: transaction ID is still pending")
+
+// CallAt is Call with a caller-chosen nonzero transaction ID, used to repeat an
+// earlier request under its original identity. It does not advance the
+// session's or the client's ID counter; the caller proves the ID was issued.
+func (s *Session) CallAt(ctx context.Context, m msgr.MessageData, id uint64) (msgr.MessageData, error) {
+	if id == 0 {
+		return msgr.MessageData{}, errors.New("ceph: invalid transaction ID")
+	}
+	return s.call(ctx, m, id)
+}
+
+func (s *Session) call(ctx context.Context, m msgr.MessageData, fixed uint64) (msgr.MessageData, error) {
 	if err := ctx.Err(); err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -259,11 +277,17 @@ func (s *Session) Call(ctx context.Context, m msgr.MessageData) (msgr.MessageDat
 		s.mu.Unlock()
 		return msgr.MessageData{}, ErrRetired
 	}
-	if s.config.NextTransaction == nil && s.nextID == ^uint64(0) {
+	if fixed == 0 && s.config.NextTransaction == nil && s.nextID == ^uint64(0) {
 		s.mu.Unlock()
 		return msgr.MessageData{}, errors.New("ceph: transaction IDs exhausted")
 	}
-	if s.config.NextTransaction != nil {
+	if fixed != 0 {
+		if _, busy := s.pending[fixed]; busy {
+			s.mu.Unlock()
+			return msgr.MessageData{}, ErrTransactionInUse
+		}
+		m.Transaction = fixed
+	} else if s.config.NextTransaction != nil {
 		id, err := s.config.NextTransaction()
 		if err != nil || id == 0 {
 			s.mu.Unlock()
