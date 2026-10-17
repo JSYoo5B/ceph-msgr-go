@@ -54,8 +54,18 @@ records `-115`):
 | replicated-pg-v8 (HASHPSPOOL, 8 PG) | container, single BlueStore | 6/6 |
 | replicated-pg-request-v9-reply-v8, secure, AES256K, IPv6 | container, single MemStore | 6/6 |
 
+## Lost reply (`TestCephOSDCopyFromLostReplyIntegration`)
+
+Legacy-v6 only. A relay drops every reply from the destination's primary. The
+COPY_FROM2 executes (native observation sees the source's bytes and xattr on
+the destination), then the caller cancels: Go returns an unknown outcome with
+its local transaction, global ID and map epoch and no server reply. A fresh
+session reads the copied bytes under a later transaction; a native observation
+after a delay shows the same version and mtime, so nothing was replayed.
+Passed on a single BlueStore and on three BlueStore replicas (one run each).
+
 Not claimed: native-encoded vectors, compound vectors, source snapshots,
 `MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints, cross-pool copy,
-copy under daemon failover or SIGKILL, response-loss behavior, EC, CRC mode
+copy under daemon failover or SIGKILL, EC, CRC mode
 and host runtime profiles. The in-OSD copy of a source in another PG is
 exercised only incidentally by the 8-PG profile.

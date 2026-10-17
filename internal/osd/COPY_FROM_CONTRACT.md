@@ -53,4 +53,5 @@ It uses native observation, not a native-encoded vector or twin execution.
 Observed: a copy that fails after the daemon started it reports its aggregate
 code (ENOENT, ERANGE, EOVERFLOW) with per-op `-115` (EINPROGRESS); the
 self-copy refusal reports `-22` in both places. Both are preserved raw. Source
-snapshots, compound use, failover and response-loss behavior are unverified.
+snapshots, compound use and failover are unverified; a lost reply was verified
+(unknown outcome, no replay) on single and three-replica BlueStore.
