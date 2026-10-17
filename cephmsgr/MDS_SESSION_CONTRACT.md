@@ -212,7 +212,9 @@ RECLAIM_CLIENT (`ErrMDSReclaimUnsupported`); a session cannot reclaim its own
 uuid (`ErrMDSReclaimSelf`); one reclaim may be pending per session
 (`ErrMDSReclaimPending`). `ctx` bounds only the local wait: after the message is
 sent a cancelled wait or a session end returns `OutcomeUnknownError`, since the
-target may already be evicted; a late reply is ignored. `FinishReclaim` sends
+target may already be evicted. Because the reply carries no request identity,
+a session whose reclaim wait ended without its reply refuses further reclaims
+(`ErrMDSReclaimUncertain`; open a new session) and ignores the late reply. `FinishReclaim` sends
 the FLAG_FINISH message the native client sends after a successful reclaim; the
 MDS sends no answer and a RESET reclaim leaves nothing to finish. The library
 does not wait for the blocklist to reach OSDs and does not change its own

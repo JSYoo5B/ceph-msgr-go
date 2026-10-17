@@ -75,6 +75,11 @@ var (
 	ErrMDSReclaimUnsupported = errors.New("ceph: MDS does not advertise RECLAIM_CLIENT")
 	// ErrMDSReclaimSelf refuses reclaiming this session's own uuid.
 	ErrMDSReclaimSelf = errors.New("ceph: a session cannot reclaim its own uuid")
+	// ErrMDSReclaimUncertain refuses a reclaim on a session whose earlier reclaim
+	// ended without its reply: the reply has no request identity, so a late one
+	// could not be told apart from the answer to a new request. Open a new
+	// session instead.
+	ErrMDSReclaimUncertain = errors.New("ceph: an earlier MDS reclaim on this session has an unknown outcome")
 	// ErrMDSReclaimPending refuses a second concurrent reclaim on a session.
 	ErrMDSReclaimPending = errors.New("ceph: an MDS reclaim is already pending on this session")
 )

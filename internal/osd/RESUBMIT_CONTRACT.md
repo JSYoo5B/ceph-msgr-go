@@ -23,6 +23,13 @@ not offered for watch/notify. The caller must resend the same operations; the
 client cannot verify that, and a different vector under a reused ID is the
 caller's error. The reply must echo the attempt.
 
+A late reply to an earlier attempt of the same transaction ID cannot be told
+from the answer to the resubmission except by its echoed attempt: such a reply
+fails the session and ends the resubmission as an unknown outcome (the request
+may still have executed). Resubmit on a fresh connection after the original's
+connection ended, as the verified flows do, rather than on a session that may
+still deliver the original's reply.
+
 Limits: the server's duplicate detection covers only entries still in the PG
 log (trimming and PG changes end it), applies to writes, and is not an
 exactly-once guarantee for the logical operation. A different primary after a

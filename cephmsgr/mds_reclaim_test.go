@@ -109,13 +109,26 @@ func TestMDSReclaimRefusalsAndUnknownOutcomes(t *testing.T) {
 	if s.Status().State != MDSSessionOpen {
 		t.Fatal("a late reclaim reply ended the session", s.Status().State, s.Err())
 	}
-	// A malformed reply is a protocol violation.
+	// The abandoned reclaim's reply cannot be told from a new one's, so the
+	// session refuses further reclaims instead of risking a mismatched answer.
+	if _, err := s.Reclaim(ctx, "victim"); !errors.Is(err, ErrMDSReclaimUncertain) {
+		t.Fatal("a reclaim after an abandoned one was admitted", err)
+	}
+	if err := s.FinishReclaim(ctx); err != nil {
+		t.Fatal("finish is independent of the abandoned reclaim", err)
+	}
+}
+
+func TestMDSReclaimMalformedReplyEndsTheSession(t *testing.T) {
+	_, m, peer, ctx, _ := mdsTestOpen(t)
+	s := mdsOpenUUIDSession(t, ctx, m, peer, "own-uuid")
 	bad := mdsReclaimReplyMessage(0, 1)
 	bad.Front = append(bad.Front, 1)
 	waiting := make(chan error, 1)
 	go func() { _, err := s.Reclaim(ctx, "victim"); waiting <- err }()
 	peer.next(t)
 	peer.send(t, bad)
+	var unknown *OutcomeUnknownError
 	if err := <-waiting; !errors.As(err, &unknown) {
 		t.Fatal("malformed reply did not end the reclaim as unknown", err)
 	}

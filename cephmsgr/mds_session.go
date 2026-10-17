@@ -210,6 +210,10 @@ type MDSSession struct {
 	// Reclaim refuses to target; reclaim holds the one pending reclaim wait.
 	uuid    string
 	reclaim chan mds.ReclaimReply
+	// reclaimUncertain is set when a reclaim wait ended without its reply. The
+	// reply carries no request identity, so a late one could not be told from
+	// the answer to a new reclaim; further reclaims on this session are refused.
+	reclaimUncertain bool
 }
 
 // OpenSession sends one REQUEST_OPEN on this connection and waits for OPEN.
@@ -512,27 +516,32 @@ func (s *MDSSession) Reclaim(ctx context.Context, uuid string) (MDSReclaimReply,
 	case s.reclaim != nil:
 		s.mu.Unlock()
 		return MDSReclaimReply{}, ErrMDSReclaimPending
+	case s.reclaimUncertain:
+		s.mu.Unlock()
+		return MDSReclaimReply{}, ErrMDSReclaimUncertain
 	}
 	wait := make(chan mds.ReclaimReply, 1)
 	s.reclaim = wait
 	s.mu.Unlock()
-	clear := func() {
+	clear := func(abandoned bool) {
 		s.mu.Lock()
 		if s.reclaim == wait {
 			s.reclaim = nil
+			if abandoned {
+				s.reclaimUncertain = true
+			}
 		}
 		s.mu.Unlock()
 	}
 	if err := s.conn.session.SendControl(ctx, message); err != nil {
-		clear()
+		clear(false)
 		return MDSReclaimReply{}, err
 	}
 	select {
 	case reply := <-wait:
-		clear()
 		return publicReclaimReply(reply), nil
 	case <-s.done:
-		clear()
+		clear(true)
 		select {
 		case reply := <-wait:
 			return publicReclaimReply(reply), nil
@@ -540,7 +549,12 @@ func (s *MDSSession) Reclaim(ctx context.Context, uuid string) (MDSReclaimReply,
 		}
 		return MDSReclaimReply{}, &OutcomeUnknownError{Cause: s.Err()}
 	case <-ctx.Done():
-		clear()
+		clear(true)
+		select {
+		case reply := <-wait:
+			return publicReclaimReply(reply), nil
+		default:
+		}
 		return MDSReclaimReply{}, &OutcomeUnknownError{Cause: ctx.Err()}
 	}
 }
@@ -581,7 +595,7 @@ func publicReclaimReply(r mds.ReclaimReply) MDSReclaimReply {
 }
 
 // deliverReclaim hands a reply to the pending Reclaim. A reply with no waiter
-// is a late answer to a cancelled wait and is ignored.
+// is a late answer to an abandoned wait and is ignored.
 func (s *MDSSession) deliverReclaim(reply mds.ReclaimReply) {
 	s.mu.Lock()
 	wait := s.reclaim
