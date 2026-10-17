@@ -6,6 +6,23 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 )
 
+// copyFromVectorAllowed admits a leading COPY_FROM/COPY_FROM2 followed only by
+// SETXATTR/RMXATTR, and SET_REDIRECT alone.
+func copyFromVectorAllowed(ops []Operation) bool {
+	if len(ops) == 0 || !usesCopyFromUnion(ops[0].Code) {
+		return false
+	}
+	if ops[0].Code == SetRedirect {
+		return len(ops) == 1
+	}
+	for _, later := range ops[1:] {
+		if later.Code != SetXattr && later.Code != RemoveXattr {
+			return false
+		}
+	}
+	return true
+}
+
 // fadviseFlags is the cache-hint mask an opcode accepts: the extent reads and
 // writes whose PrimaryLogPG paths pass op.flags to the object store.
 func fadviseFlags(code uint16) uint32 {
@@ -148,10 +165,11 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		}
 		if usesCopyFromUnion(op.Code) {
 			// The daemon completes the copy through a restartable finisher
-			// and the source may live in another PG. Only the standalone head
-			// form is characterized; it is never combined with other operations.
-			// SET_REDIRECT is likewise standalone.
-			if len(ops) != 1 {
+			// and the source may live in another PG; the whole vector runs
+			// again in one transaction once the copy is staged. A copy must
+			// lead its vector and may be followed only by xattr writes, the
+			// characterized compound; SET_REDIRECT stays standalone.
+			if !copyFromVectorAllowed(ops) {
 				return 0, 0, ErrOperation
 			}
 			validate := validateCopyFromOperation

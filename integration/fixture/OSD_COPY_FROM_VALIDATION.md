@@ -105,7 +105,18 @@ PGs within the fixture's wait when only thawed).
 | replicated-pg-v8, secure AES256K IPv4 | 28.8 s | osd.2 -> osd.1 (epoch 24 -> 26) | osd.1 |
 | legacy-v6, CRC with AES key and service cipher | 27.6 s | osd.0 -> osd.1 (epoch 25 -> 27) | osd.1 |
 
-Not claimed: native-encoded vectors, compound vectors,
+## Compound copy (2026-10-18)
+
+`TestCephOSDCopyFromCompoundIntegration` sends one vector of COPY_FROM2
+(native-seeded source with xattrs `keep` and `drop`), SETXATTR `added` and
+RMXATTR `drop` to an absent destination. It completes with ONDISK, and the
+native destination has the source's bytes, exactly the xattrs `keep` and
+`added`, and the reply's user version. A vector with SETXATTR before the copy
+is refused before submission. Passed in legacy-v6 single BlueStore (secure
+AES256K IPv4) and replicated-pg-v8 three BlueStore (secure AES256K IPv6).
+
+Not claimed: native-encoded vectors, compound vectors other than a copy
+followed by xattr writes,
 `MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints (cross-pool and
 cross-namespace copies are in OSD_POOL_VALIDATION.md),
 a destination primary killed during a copy, EC, and host runtime profiles. The in-OSD copy of a source in another PG is

@@ -62,3 +62,11 @@ survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 `OSDCopyFromInput.SourceFadvise` sets the union's src_fadvise_flags (FADVISE
 hints only) for the OSD's read of the source; the reply must echo it. Live:
 [OSD_FADVISE_VALIDATION.md](../../integration/fixture/OSD_FADVISE_VALIDATION.md).
+
+Compound form: a COPY_FROM or COPY_FROM2 may lead a vector whose later
+operations are only SETXATTR and RMXATTR. The OSD stages the copy through its
+finisher and then runs the whole vector in one transaction, so the
+destination gets the source's bytes and attributes as edited by the later
+operations. Any other operation, an operation before the copy, a second copy
+or SET_REDIRECT in a vector is refused before submission. Live:
+[OSD_COPY_FROM_VALIDATION.md](../../integration/fixture/OSD_COPY_FROM_VALIDATION.md).
