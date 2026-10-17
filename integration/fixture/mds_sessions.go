@@ -41,6 +41,11 @@ const mdsSessionsDeferOption = "mds_defer_session_stale"
 // without capabilities stale; it evicts it at autoclose instead.
 var mdsSessionsStaleWindow = cephfs.SessionTimeouts{Timeout: 30 * time.Second, Autoclose: 120 * time.Second}
 
+// The autoclose window keeps the native minimum timeout and shortens autoclose
+// (also at least 30 s in mon/FSCommands.cc) so a silent session is evicted
+// within the observation; it is applied after the stale window is restored.
+var mdsSessionsAutocloseWindow = cephfs.SessionTimeouts{Timeout: 30 * time.Second, Autoclose: 40 * time.Second}
+
 type mdsSessionsMap struct {
 	Epoch     uint32            `json:"mdsmap_epoch"`
 	Refuse    bool              `json:"refuse_client_session"`
@@ -89,6 +94,7 @@ type mdsSessionsScope struct {
 	mutations            []*mdsSessionsMutation
 	refuse, required     string
 	stale                string
+	windowKind           string
 	timeouts             *cephfs.SessionTimeoutsOverride
 	deferStale           *ceph.ConfigOverride
 	owned                map[string]uint64
@@ -302,7 +308,7 @@ func parseMDSSessionsRequest(fields []string, token string, previousID int64) (i
 		if len(args) != 1 {
 			return 0, mdsSessionsAction{}, errors.New("MDS sessions eviction requires exactly one GlobalID")
 		}
-	case "refuse-on", "refuse-off", "require-on", "require-off", "stale-on", "stale-off":
+	case "refuse-on", "refuse-off", "require-on", "require-off", "stale-on", "stale-off", "autoclose-on":
 		if len(args) != 0 {
 			return 0, mdsSessionsAction{}, errors.New("MDS sessions mutation takes no caller arguments")
 		}
@@ -741,17 +747,24 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 			return m.Refuse == baseline.Refuse && maps.Equal(m.Required, baseline.Required)
 		})
 		return err
-	case "stale-on":
-		if x.stale != "" || x.timeouts != nil || x.deferStale != nil {
+	case "stale-on", "autoclose-on":
+		window, kind := mdsSessionsStaleWindow, "stale_window"
+		if action.name == "autoclose-on" {
+			window, kind = mdsSessionsAutocloseWindow, "autoclose_window"
+		}
+		// A window is applied from the baseline or after the previous one
+		// was restored, never on top of an applied or uncertain one.
+		if x.stale != "" && x.stale != "restored" || x.stale == "" && (x.timeouts != nil || x.deferStale != nil) {
 			return errors.New("MDS sessions stale window is not at its owned baseline")
 		}
-		m := record("stale_window", fmt.Sprintf("session_timeout=%d session_autoclose=%d %s=false", mdsSessionsStaleWindow.Timeout/time.Second, mdsSessionsStaleWindow.Autoclose/time.Second, mdsSessionsDeferOption))
+		x.windowKind = kind
+		m := record(kind, fmt.Sprintf("session_timeout=%d session_autoclose=%d %s=false", window.Timeout/time.Second, window.Autoclose/time.Second, mdsSessionsDeferOption))
 		if err := c.mdsSessionsJournal(); err != nil {
 			return err
 		}
 		var err error
 		// Both providers retain a handle on uncertain replies for Restore.
-		x.timeouts, err = s.fs.TemporarySessionTimeouts(ctx, mdsSessionsStaleWindow)
+		x.timeouts, err = s.fs.TemporarySessionTimeouts(ctx, window)
 		if err == nil {
 			x.deferStale, err = c.cluster.TemporaryConfig(ctx, ceph.ConfigSetting{Section: "mds", Name: mdsSessionsDeferOption, Value: "false"})
 		}
@@ -763,7 +776,7 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 		if err := c.mdsSessionsRecord(m, "applied", nil, nil); err != nil {
 			return err
 		}
-		want := mdsSessionsStaleWindow
+		want := window
 		if _, _, err := c.mdsSessionsSettle(ctx, func(m mdsSessionsMap) bool {
 			return time.Duration(m.Timeout)*time.Second == want.Timeout && time.Duration(m.Autoclose)*time.Second == want.Autoclose
 		}); err != nil {
@@ -772,7 +785,7 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 		_, err = c.mdsSessionsWaitDaemonConfig(ctx, mdsSessionsDeferOption, "false")
 		return err
 	case "stale-off":
-		m := findMutation("stale_window")
+		m := findMutation(x.windowKind)
 		if x.stale != "applied" || m == nil || m.State != "applied" || x.timeouts == nil || x.deferStale == nil {
 			return errors.New("MDS sessions stale window restore requested without an applied owned mutation")
 		}

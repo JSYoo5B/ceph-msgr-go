@@ -172,3 +172,21 @@ match the recorded results but are not the acceptance record.
   eviction, standby/failover, multiple ranks, reconnect and capabilities.
   These remain covered only by synthetic peers or not at all.
 - These are local selected-configuration results, separate from remote CI.
+
+## Autoclose eviction (2026-10-18)
+
+Leaf `autoclose_eviction_is_lost`. The fixture gained an `autoclose-on`
+action: after the stale window is restored it applies session_timeout 30 s
+and session_autoclose 40 s (both at least the native minimum of 30 s) with
+`mds_defer_session_stale=false`, journaled as `autoclose_window` and restored
+by `stale-off` (also on cleanup). A Go session renewing every 2 s is opened
+through a connection wrapper that, once armed, holds all reads and writes, so
+the MDS sees a silent but open connection. Its native session is observed
+first, which registers the address as owned for blocklist cleanup.
+
+About 46 seconds after silencing, native observation shows the session gone
+and its address blocklisted (`mds_session_blocklist_on_timeout`, default
+true). When traffic resumes, the session ends locally as Lost with the
+transport error (`write pipe: i/o timeout`), never as a confirmed close, and
+it is not resurrected. Passed in CRC/AES BlueStore IPv4 and secure AES256K
+MemStore IPv6; the dial-count check now expects nine session clients.

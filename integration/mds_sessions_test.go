@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -740,6 +743,94 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 		return
 	}
 
+	// A session that goes silent (its connection held without traffic) past
+	// session_autoclose is evicted by the MDS itself, which blocklists its
+	// address. When traffic resumes the client must report the session Lost,
+	// never resurrect it.
+	if !leaf("autoclose_eviction_is_lost", func(t *testing.T) {
+		on, err := control.request(ctx, "autoclose-on")
+		if err != nil {
+			t.Fatal("apply owned autoclose window", err)
+		}
+		if on.Map.Timeout != 30 || on.Map.Autoclose != 40 || on.DeferStale != "false" {
+			t.Fatal("native autoclose window was not applied", on.Map, on.DeferStale)
+		}
+		defer func() {
+			if _, err := control.request(context.Background(), "stale-off"); err != nil {
+				t.Error("restore the autoclose window", err)
+			}
+		}()
+		var armed atomic.Bool
+		release := make(chan struct{})
+		var releaseOnce sync.Once
+		defer releaseOnce.Do(func() { close(release) })
+		client, dials := mdsCommandClient(t, ctx, identity, freshKey, fresh.MDS.Endpoint, true, func(o *cephmsgr.Options) {
+			dial := o.DialContext
+			o.DialContext = func(call context.Context, network, address string) (net.Conn, error) {
+				conn, err := dial(call, network, address)
+				if err != nil {
+					return nil, err
+				}
+				return &silencedConn{Conn: conn, armed: &armed, release: release}, nil
+			}
+		})
+		dialRecords = append(dialRecords, dialRecord{"G", dials})
+		conn, err := client.OpenMDS(ctx, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gid := client.Snapshot().GlobalID
+		meta := metadata("-g")
+		sG, err := conn.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: meta, RenewInterval: 2 * time.Second})
+		if err != nil {
+			t.Fatal("open session to silence", err)
+		}
+		closeLater(t, sG)
+		if _, err := waitMDSSession(ctx, sG, 5*time.Second, func(s cephmsgr.MDSSessionStatus) bool { return s.LastRenewal.Sequence >= 1 }); err != nil {
+			t.Fatal(err)
+		}
+		before, err := control.request(ctx, "observe", gid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		victim := before.session(gid)
+		if err := checkNativeOpenSession(victim, identity, meta); err != nil {
+			t.Fatal(err)
+		}
+		armed.Store(true)
+		silenced := time.Now()
+		var after nativeMDSSessionsReceipt
+		for {
+			if after, err = control.request(ctx, "observe", gid); err != nil {
+				t.Fatal(err)
+			}
+			if after.session(gid) == nil && after.blocked(victim.Address) != nil {
+				break
+			}
+			if time.Since(silenced) > 150*time.Second {
+				t.Fatal("the MDS did not evict the silent session", after.session(gid))
+			}
+			time.Sleep(5 * time.Second)
+		}
+		evicted := time.Since(silenced)
+		armed.Store(false)
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-sG.Done():
+		case <-time.After(60 * time.Second):
+			t.Fatal("the evicted session did not end locally", sG.Status().State)
+		}
+		e := describeMDSSession("G-autoclosed", identity, sG)
+		e.Metadata, e.EvictionToLostMillis = meta, time.Since(silenced).Milliseconds()
+		sessions = append(sessions, e)
+		t.Logf("silent session evicted after %s; local state %d err %v", evicted.Round(time.Second), sG.Status().State, sG.Err())
+		if sG.Status().State != cephmsgr.MDSSessionLost || sG.Err() == nil || errors.Is(sG.Err(), cephmsgr.ErrMDSSessionClosed) || evicted < 25*time.Second {
+			t.Fatal("an autoclosed session was not Lost", sG.Status().State, sG.Err(), evicted)
+		}
+	}) {
+		return
+	}
+
 	if !leaf("reclaim_evicts_the_target_session", func(t *testing.T) {
 		victimClient, victimConn, _ := newClient(t, "G", identity, freshKey)
 		reclaimClient, reclaimConn, _ := newClient(t, "H", identity, freshKey)
@@ -827,7 +918,7 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 				t.Fatal("session client dialed an OSD or redialed the MDS", r.name, r.dials.MDS.Load(), r.dials.OSD.Load())
 			}
 		}
-		if len(dialRecords) != 8 {
+		if len(dialRecords) != 9 {
 			t.Fatal("unexpected number of session clients", len(dialRecords))
 		}
 	})
@@ -863,4 +954,33 @@ func TestMDSSessionNativeOpenImages(t *testing.T) {
 			t.Fatal("feature_bitset_t rendering differs", raw, got, want)
 		}
 	}
+}
+
+// silencedConn holds all traffic while armed: reads and writes wait until it
+// is disarmed or released, so the peer sees a silent but open connection.
+type silencedConn struct {
+	net.Conn
+	armed   *atomic.Bool
+	release chan struct{}
+}
+
+func (c *silencedConn) hold() error {
+	for c.armed.Load() {
+		select {
+		case <-c.release:
+			return nil
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+	return nil
+}
+
+func (c *silencedConn) Read(p []byte) (int, error) {
+	c.hold()
+	return c.Conn.Read(p)
+}
+
+func (c *silencedConn) Write(p []byte) (int, error) {
+	c.hold()
+	return c.Conn.Write(p)
 }
