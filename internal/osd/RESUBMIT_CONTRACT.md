@@ -31,9 +31,12 @@ connection ended, as the verified flows do, rather than on a session that may
 still deliver the original's reply.
 
 Limits: the server's duplicate detection covers only entries still in the PG
-log (trimming and PG changes end it), applies to writes, and is not an
-exactly-once guarantee for the logical operation. A different primary after a
-map change must recognize the reqid through its own log, which this client
-does not verify. Reads need no duplicate detection.
+log (trimming ends it), applies to writes, and is not an exactly-once
+guarantee for the logical operation. The log entry and its reqid replicate
+with the write, so a replacement primary after a map change answers from its
+own copy: verified for an exclusive CREATE and a lost-reply APPEND resubmitted
+to the new primary after SIGKILL of the original (the client still routes the
+resubmission by the caller's new placement and does not check the reqid).
+PG split or merge is not verified. Reads need no duplicate detection.
 
 Verification: [OSD_RESUBMIT_VALIDATION.md](../../integration/fixture/OSD_RESUBMIT_VALIDATION.md).

@@ -37,7 +37,23 @@ legacy-v6 CRC with AES key and service cipher, replicated-pg-v8 single
 BlueStore, request-v9/reply-v8 with secure AES256K over IPv6 on single
 MemStore, and legacy-v6 secure AES256K over IPv6 on single MemStore.
 
-Not claimed: resubmission after PG log trimming, after a primary change or
-daemon restart, for read vectors, for OMAP/CALL/snapshot/COPY_FROM vectors
+## Primary change
+
+`TestCephOSDResubmitFailoverIntegration` (legacy-v6, three BlueStore replicas)
+uses one client throughout, because the resubmission is bound to its GlobalID.
+It runs an exclusive CREATE to completion on a reserved absent object, then an
+APPEND whose reply a relay drops after native observation shows it executed.
+The primary is SIGKILLed (exit 137); the caller gets an unknown outcome with
+its `Submission`. Native placement then shows a newer epoch and two acting
+replicas without the killed primary, holding the appended bytes at the
+executed version. Both requests are resubmitted to the replacement primary
+with their original transaction IDs and incarnation, `RetryAttempt` 1 and the
+new placement: the CREATE returns 0 (not EEXIST) with its original user
+version and the APPEND returns 0 with the native version, both with ONDISK,
+and native bytes and version show exactly one append. Passed in CRC with the
+legacy key and in secure AES256K (key and service cipher), 2026-10-17.
+
+Not claimed: resubmission after PG log trimming, PG split/merge or a restart
+of the daemon that keeps the primary role, for read vectors, for OMAP/CALL/snapshot/COPY_FROM vectors
 (the server may not log every opcode); resubmission through a different client
 identity (refused locally).
