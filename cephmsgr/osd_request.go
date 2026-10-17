@@ -12,13 +12,20 @@ import (
 type OSDOpcode uint16
 
 const (
-	OSDRead          OSDOpcode = OSDOpcode(osd.Read)
-	OSDStat          OSDOpcode = OSDOpcode(osd.Stat)
-	OSDWrite         OSDOpcode = OSDOpcode(osd.Write)
-	OSDWriteFull     OSDOpcode = OSDOpcode(osd.WriteFull)
-	OSDWriteSame     OSDOpcode = OSDOpcode(osd.WriteSame)
-	OSDCopyFrom      OSDOpcode = OSDOpcode(osd.CopyFrom)
-	OSDCopyFrom2     OSDOpcode = OSDOpcode(osd.CopyFrom2)
+	OSDRead      OSDOpcode = OSDOpcode(osd.Read)
+	OSDStat      OSDOpcode = OSDOpcode(osd.Stat)
+	OSDWrite     OSDOpcode = OSDOpcode(osd.Write)
+	OSDWriteFull OSDOpcode = OSDOpcode(osd.WriteFull)
+	OSDWriteSame OSDOpcode = OSDOpcode(osd.WriteSame)
+	OSDCopyFrom  OSDOpcode = OSDOpcode(osd.CopyFrom)
+	OSDCopyFrom2 OSDOpcode = OSDOpcode(osd.CopyFrom2)
+	// OSDSetRedirect turns the targeted object into a manifest redirect to the
+	// head of Redirect's target (librados set_redirect without
+	// WITH_REFERENCE): its data is truncated, later reads are served from
+	// the target, and its user version becomes TargetVersion. OSDUnsetManifest
+	// removes the manifest again. Both are standalone and flagless.
+	OSDSetRedirect   OSDOpcode = OSDOpcode(osd.SetRedirect)
+	OSDUnsetManifest OSDOpcode = OSDOpcode(osd.UnsetManifest)
 	OSDAppend        OSDOpcode = OSDOpcode(osd.Append)
 	OSDTruncate      OSDOpcode = OSDOpcode(osd.Truncate)
 	OSDZero          OSDOpcode = OSDOpcode(osd.Zero)
@@ -110,6 +117,7 @@ type OSDOperation struct {
 	ListWatchers   OSDListWatchersInput
 	ListSnapshots  OSDListSnapshotsInput
 	CopyFrom       OSDCopyFromInput
+	Redirect       OSDRedirectInput
 
 	TruncateSize     uint64
 	TruncateSequence uint32
@@ -135,6 +143,17 @@ type OSDCopyFromInput struct {
 	SourceVersion              uint64
 	TruncateSequence           uint32
 	TruncateSize               uint64
+}
+
+// OSDRedirectInput is the active input for OSDSetRedirect: the target head
+// named by pool, name, key and namespace (the OSD computes its PG; the target
+// must differ from the redirected object), and the user version the
+// redirected object reports afterwards.
+type OSDRedirectInput struct {
+	TargetPool                 int64
+	TargetName                 string
+	TargetKey, TargetNamespace string
+	TargetVersion              uint64
 }
 
 // OSDTime is Tentacle's raw utime_t. Zero preserves the server's zero-mtime
@@ -385,6 +404,9 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		Operations: make([]osd.Operation, len(request.Operations)),
 		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, FullTry: request.FullTry, FullForce: request.FullForce, BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, RetryAttempt: request.RetryAttempt}
 	for i, op := range request.Operations {
+		if (op.Code == OSDSetRedirect) != (op.Redirect != OSDRedirectInput{}) || op.Code == OSDSetRedirect && op.CopyFrom != (OSDCopyFromInput{}) {
+			return result, fmt.Errorf("%w: a redirect target belongs to OSDSetRedirect alone", osd.ErrRequest)
+		}
 		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence, Data: op.Data, Version: op.Version, Xattr: xattrWireInput(op.Xattr), Omap: omapWireInput(op.Omap), Class: classWireInput(op.Class),
 			AllocHint:    osd.AllocHintInput{ExpectedObjectSize: op.AllocHint.ExpectedObjectSize, ExpectedWriteSize: op.AllocHint.ExpectedWriteSize, Flags: uint32(op.AllocHint.Flags)},
 			Watch:        watchWireInput(op.Watch),
@@ -553,7 +575,7 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 				return err
 			}
 			continue
-		case osd.CopyFrom, osd.CopyFrom2:
+		case osd.CopyFrom, osd.CopyFrom2, osd.SetRedirect:
 			if err := osd.ValidateCopyFromReply(requested, op); err != nil {
 				return err
 			}
@@ -569,7 +591,10 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		}
 		switch requested.Code {
 		case osd.Read:
-			if uint64(op.PayloadLength) > requested.Length || success && uint64(op.PayloadLength) != op.Length {
+			// A local read sets the extent length to the bytes returned; a read
+			// the OSD proxies to a manifest object's redirect target echoes
+			// the requested length instead (observed live, Tentacle 20.2.4).
+			if uint64(op.PayloadLength) > requested.Length || success && uint64(op.PayloadLength) != op.Length && op.Length != requested.Length {
 				return errors.New("OSD read reply exceeds requested length or has inconsistent output")
 			}
 		case osd.Stat:
@@ -634,6 +659,10 @@ func publicOSDReply(r osd.Reply) OSDReply {
 }
 
 func copyFromWireInput(op OSDOperation) osd.CopyFromInput {
+	if op.Code == OSDSetRedirect {
+		r := op.Redirect
+		return osd.CopyFromInput{Object: r.TargetName, Locator: osd.Locator{Pool: r.TargetPool, Key: r.TargetKey, Namespace: r.TargetNamespace, Hash: -1}, Version: r.TargetVersion}
+	}
 	in := op.CopyFrom
 	if in == (OSDCopyFromInput{}) {
 		return osd.CopyFromInput{}

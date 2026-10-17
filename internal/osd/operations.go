@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, PGNLSFilter, ScrubList, Watch, Notify, NotifyAck:
+	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, SetRedirect, UnsetManifest, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, PGNLSFilter, ScrubList, Watch, Notify, NotifyAck:
 		return true
 	}
 	return false
@@ -128,14 +128,27 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		if op.Snap != 0 || op.ListSnaps != (ListSnapsInput{}) {
 			return 0, 0, ErrRequest
 		}
-		if op.Code == CopyFrom || op.Code == CopyFrom2 {
+		if op.Code == UnsetManifest {
+			// Characterized only as a standalone, inputless operation.
+			if len(ops) != 1 || op.Flags != 0 || op.Offset != 0 || op.Length != 0 || len(op.Data) != 0 || op.Xattr != (XattrInput{}) || !omapInputEmpty(op.Omap) || op.Class != (ClassInput{}) || op.AllocHint != (AllocHintInput{}) || op.CopyFrom != (CopyFromInput{}) {
+				return 0, 0, ErrOperation
+			}
+			flags |= FlagWrite
+			continue
+		}
+		if usesCopyFromUnion(op.Code) {
 			// The daemon completes the copy through a restartable finisher
 			// and the source may live in another PG. Only the standalone head
 			// form is characterized; it is never combined with other operations.
+			// SET_REDIRECT is likewise standalone.
 			if len(ops) != 1 {
 				return 0, 0, ErrOperation
 			}
-			mode, inputBytes, err := validateCopyFromOperation(op, limit)
+			validate := validateCopyFromOperation
+			if op.Code == SetRedirect {
+				validate = validateRedirectOperation
+			}
+			mode, inputBytes, err := validate(op, limit)
 			if err != nil {
 				return 0, 0, err
 			}
@@ -350,7 +363,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 
 func writeOperation(code uint16) bool {
 	switch code {
-	case Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint, Rollback:
+	case Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, SetRedirect, UnsetManifest, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint, Rollback:
 		return true
 	}
 	return isOmapMutation(code)

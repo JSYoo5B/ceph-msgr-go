@@ -135,7 +135,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 			encodeChecksumUnion(&e, op)
 		} else if op.Code == WriteSame {
 			encodeWriteSameUnion(&e, op)
-		} else if op.Code == CopyFrom || op.Code == CopyFrom2 {
+		} else if usesCopyFromUnion(op.Code) {
 			encodeCopyFromUnion(&e, op)
 			payloadBytes += copyFromDataBytes(op)
 		} else if op.Code == Rollback {
@@ -188,7 +188,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		if op.Code == Call {
 			data = append(append(data, op.Class.Class...), op.Class.Method...)
 		}
-		if op.Code == CopyFrom || op.Code == CopyFrom2 {
+		if usesCopyFromUnion(op.Code) {
 			data = appendCopyFromData(data, op)
 		}
 		data = append(data, op.Data...)

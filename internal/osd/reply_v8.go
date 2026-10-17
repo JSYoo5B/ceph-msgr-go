@@ -60,7 +60,7 @@ func DecodeReplyV8(m msgr.MessageData, limit uint32) (Reply, error) {
 			op.AllocHint = decodeAllocHintUnion(d)
 		} else if op.Code == Checksum {
 			op.Offset, op.Length, op.Checksum = decodeChecksumUnion(d)
-		} else if op.Code == CopyFrom || op.Code == CopyFrom2 {
+		} else if usesCopyFromUnion(op.Code) {
 			op.CopyFrom = decodeCopyFromUnion(d)
 		} else if op.Code == WriteSame {
 			op.Offset, op.Length, op.WriteSamePatternLength = decodeWriteSameUnion(d)

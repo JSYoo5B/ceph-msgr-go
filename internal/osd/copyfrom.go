@@ -48,6 +48,30 @@ type CopyFromResult struct {
 	Fadvise       uint32
 }
 
+// SET_REDIRECT (rados.h 0x2227) and UNSET_MANIFEST (0x222a) are translated
+// from the same pinned sources: osdc/Objecter.h set_redirect/unset_manifest
+// and osd/PrimaryLogPG.cc do_osd_ops. SET_REDIRECT carries the COPY_FROM
+// union (target snap and version) and indata (target object and locator).
+const (
+	SetRedirect   uint16 = 0x2227
+	UnsetManifest uint16 = 0x222a
+)
+
+func usesCopyFromUnion(code uint16) bool {
+	return code == CopyFrom || code == CopyFrom2 || code == SetRedirect
+}
+
+// validateRedirectOperation admits a flagless head redirect: the target
+// object, locator (no hash) and version; COPY_FROM's flags do not apply.
+func validateRedirectOperation(op Operation, limit uint32) (uint64, uint64, error) {
+	if op.CopyFrom.Flags != 0 || op.CopyFrom.TruncateSequence != 0 || op.CopyFrom.TruncateSize != 0 {
+		return 0, 0, ErrOperation
+	}
+	redirect := op
+	redirect.Code = CopyFrom
+	return validateCopyFromOperation(redirect, limit)
+}
+
 func copyFromTruncates(input CopyFromInput) bool {
 	return input.Flags&CopyFromTruncateSequence != 0
 }
@@ -137,7 +161,7 @@ func decodeCopyFromUnion(d *wire.Decoder) CopyFromResult {
 // ValidateCopyFromReply requires the original union and no output on success
 // or failure: the daemon keeps the request union and returns no payload.
 func ValidateCopyFromReply(requested Operation, reply OperationResult) error {
-	if requested.Code != CopyFrom && requested.Code != CopyFrom2 {
+	if !usesCopyFromUnion(requested.Code) {
 		return ErrOperation
 	}
 	want := CopyFromResult{Snap: copyFromSnap(requested.CopyFrom), Version: requested.CopyFrom.Version, Flags: requested.CopyFrom.Flags}
