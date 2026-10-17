@@ -88,7 +88,8 @@ service cipher over IPv4, and secure mode with AES256K key and service cipher
 over IPv6.
 
 Not claimed: native-encoded vectors, compound vectors,
-`MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints, cross-pool copy,
+`MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints (cross-pool and
+cross-namespace copies are in OSD_POOL_VALIDATION.md),
 copy killed in flight or failover during a copy, EC, CRC mode
 and host runtime profiles. The in-OSD copy of a source in another PG is
 exercised only incidentally by the 8-PG profile.
