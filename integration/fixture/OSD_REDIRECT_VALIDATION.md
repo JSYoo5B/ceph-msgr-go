@@ -15,6 +15,11 @@ in pool 1.
   read's reply echoed the requested length (4096) with a 23-byte payload, and
   the client treated that as a malformed reply (unknown outcome). The read
   validator now accepts an echoed request length; the rerun passed.
+- With `IgnoreRedirect` (CEPH_OSD_FLAG_IGNORE_REDIRECT) a Go READ of the
+  redirected object returns its own, truncated and empty, data; with
+  `OrderReadsWrites` (RWORDERED) the read still returns the target's bytes.
+  Added later; passed in legacy-v6 single BlueStore and request-v9 single
+  MemStore.
 - A Go WRITEFULL to the redirected object is proxied to the target: it
   completes with ONDISK, native reads of the target return the new bytes,
   and the redirected object keeps reading them.

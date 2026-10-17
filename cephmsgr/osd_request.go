@@ -209,6 +209,11 @@ type OSDRequest struct {
 	// names the primary. Replicas may answer -EAGAIN (unreadable object or
 	// unstable write), which is a known refusal the caller handles.
 	BalanceReads, LocalizeReads bool
+	// IgnoreRedirect (CEPH_OSD_FLAG_IGNORE_REDIRECT) makes the OSD serve a
+	// manifest redirect object itself rather than its target.
+	// OrderReadsWrites (CEPH_OSD_FLAG_RWORDERED, librados
+	// ORDER_READS_WRITES) orders a read with the object's writes.
+	IgnoreRedirect, OrderReadsWrites bool
 	// Resubmit explicitly repeats an earlier request of this client under its
 	// original identity (transaction ID and incarnation) so the OSD can answer
 	// from its PG log instead of executing it again: pass the Submission an
@@ -416,7 +421,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		MapEpoch:         request.MapEpoch, Object: request.Object.Name, Hash: request.Object.Hash,
 		Locator:    osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
 		Operations: make([]osd.Operation, len(request.Operations)),
-		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, FullTry: request.FullTry, FullForce: request.FullForce, BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, RetryAttempt: request.RetryAttempt}
+		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, FullTry: request.FullTry, FullForce: request.FullForce, BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, IgnoreRedirect: request.IgnoreRedirect, OrderReadsWrites: request.OrderReadsWrites, RetryAttempt: request.RetryAttempt}
 	for i, op := range request.Operations {
 		if (op.Code == OSDSetRedirect) != (op.Redirect != OSDRedirectInput{}) || op.Code == OSDSetRedirect && op.CopyFrom != (OSDCopyFromInput{}) {
 			return result, fmt.Errorf("%w: a redirect target belongs to OSDSetRedirect alone", osd.ErrRequest)

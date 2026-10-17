@@ -52,6 +52,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		return msgr.MessageData{}, err
 	}
 	flags |= replica
+	flags |= requestOrderingFlags(r)
 	if r.RetryAttempt < 0 || r.RetryAttempt > MaxRetryAttempt {
 		return msgr.MessageData{}, ErrRequest
 	}

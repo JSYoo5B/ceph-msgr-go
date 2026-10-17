@@ -54,3 +54,22 @@ func requestReplicaFlags(r Request, flags uint64) (uint64, error) {
 
 // MaxRetryAttempt bounds an explicit resubmission count.
 const MaxRetryAttempt = 1 << 16
+
+// FlagRWOrdered and FlagIgnoreRedirect are rados.h CEPH_OSD_FLAG_RWORDERED and
+// CEPH_OSD_FLAG_IGNORE_REDIRECT (osd/PrimaryLogPG.cc maybe_handle_manifest
+// and the read/write ordering of do_op).
+const (
+	FlagRWOrdered      uint64 = 0x4000
+	FlagIgnoreRedirect uint64 = 0x2000000
+)
+
+func requestOrderingFlags(r Request) uint64 {
+	var out uint64
+	if r.IgnoreRedirect {
+		out |= FlagIgnoreRedirect
+	}
+	if r.OrderReadsWrites {
+		out |= FlagRWOrdered
+	}
+	return out
+}

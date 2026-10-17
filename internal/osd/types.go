@@ -132,6 +132,10 @@ type Request struct {
 	// BalanceReads and LocalizeReads set CEPH_OSD_FLAG_BALANCE_READS and
 	// LOCALIZE_READS so a non-primary replica may serve a read-only vector.
 	BalanceReads, LocalizeReads bool
+	// IgnoreRedirect sets CEPH_OSD_FLAG_IGNORE_REDIRECT: a manifest redirect
+	// object is served locally instead of from its target. OrderReadsWrites
+	// sets CEPH_OSD_FLAG_RWORDERED: reads are ordered with writes.
+	IgnoreRedirect, OrderReadsWrites bool
 	// RetryAttempt is the wire retry count. Nonzero sets CEPH_OSD_FLAG_RETRY
 	// and marks a protocol resubmission under the original transaction ID.
 	RetryAttempt int32

@@ -16,6 +16,10 @@ clears the manifest; the object stays, now plain and empty. Both are
 standalone and flagless here; reference-counted redirects, SET_CHUNK and the
 tier operations are not implemented.
 
+`OSDRequest.IgnoreRedirect` sets CEPH_OSD_FLAG_IGNORE_REDIRECT so the OSD
+serves the manifest object itself (maybe_handle_manifest returns early);
+`OrderReadsWrites` sets RWORDERED and is accepted on any vector.
+
 A read the OSD proxies to the redirect target answers with the requested
 extent length echoed rather than the number of bytes returned (observed
 live); the read validator therefore accepts an extent length equal to either

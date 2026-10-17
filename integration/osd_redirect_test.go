@@ -64,6 +64,24 @@ func TestCephOSDRedirectIntegration(t *testing.T) {
 	if n := poolObserve(t, ctx, 2, "redirect-target", "", ""); !bytes.Equal(n.Data, target) || n.Version != targetState.Version {
 		t.Fatal("the target changed")
 	}
+	// IGNORE_REDIRECT serves the manifest object itself (truncated, empty);
+	// RWORDERED changes nothing visible.
+	flagged := func(edit func(*cephmsgr.OSDRequest)) []byte {
+		route := poolPlace(t, ctx, 1, "redirected", "")
+		r := pools.request(route, read)
+		edit(&r)
+		reply, err := connections[route.ID].Request(ctx, r)
+		if err != nil {
+			t.Fatal("flagged read", err)
+		}
+		return reply.Operations[0].Data
+	}
+	if got := flagged(func(r *cephmsgr.OSDRequest) { r.IgnoreRedirect = true }); len(got) != 0 {
+		t.Fatalf("IGNORE_REDIRECT still followed the redirect: %q", got)
+	}
+	if got := flagged(func(r *cephmsgr.OSDRequest) { r.OrderReadsWrites = true }); !bytes.Equal(got, target) {
+		t.Fatalf("RWORDERED read differs: %q", got)
+	}
 
 	written := []byte("written through the redirect")
 	wreply, werr := send("redirected", cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(written)), Data: written})
