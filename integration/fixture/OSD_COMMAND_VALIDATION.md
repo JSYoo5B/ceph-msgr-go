@@ -90,3 +90,14 @@ SIGKILL or restart of the OSD during a long command, a MON capability change
 on an existing connection, an OSD outside the acting set, larger outputs near
 MaxFrameSize, counting server-side executions through admin-socket debug logs,
 broader profiles and remote CI for this subset need separate evidence.
+
+## OSD SIGKILL (2026-10-17)
+
+`TestCephOSDCommandCrashIntegration` (legacy-v6, single BlueStore and three
+BlueStore replicas): `version` succeeds, the target OSD is SIGKILLed, and the
+next command on the same connection fails with the session's own cause (`EOF`:
+the session had already ended, so the command was never sent and is not an
+unknown outcome). The old connection never recovers by itself. After restart
+the OSD has a new address nonce; a new connection to it answers `version` with
+the same bytes and a later transaction ID. A command in flight at the moment
+of the kill was not reproduced.
