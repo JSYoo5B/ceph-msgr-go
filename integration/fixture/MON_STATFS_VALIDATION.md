@@ -21,6 +21,9 @@ the same MStatfs).
   and the object count are checked.
 - An absent pool id gets no reply: the call ends by its context as an unknown
   outcome and the session keeps working afterward.
+- Every monitor: one client seeded only with each of the three monitors
+  gets the cluster form with the same capacity; two of them answered as
+  peons. Passed in the same two profiles as the capability case.
 - Capability denial: `client.configwatch`, whose only MON grant is the `fsid`
   command (no `pg` read), gets no reply for either form; each call ends by its
   4-second context as an unknown outcome, the same session then runs its

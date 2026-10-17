@@ -131,4 +131,25 @@ func TestCephMonStatfsIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
+	// MStatfs is answered by whichever monitor the session holds, peons
+	// included; the cluster capacity they report is the same.
+	t.Run("every monitor answers", func(t *testing.T) {
+		reference, err := c.Statfs(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		peons := 0
+		for _, pinned := range pinnedMonitorClients(t, ctx, c) {
+			got, err := pinned.Statfs(ctx, nil)
+			if err != nil || got.KB != reference.KB || got.Version == 0 {
+				t.Fatalf("%s (leader %v): %+v %v", pinned.Seed, pinned.Leader, got, err)
+			}
+			if !pinned.Leader {
+				peons++
+			}
+		}
+		if peons == 0 {
+			t.Fatal("no monitor was a peon")
+		}
+	})
 }

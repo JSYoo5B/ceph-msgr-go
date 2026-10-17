@@ -42,4 +42,30 @@ func TestCephMonMapVersionIntegration(t *testing.T) {
 			time.Sleep(time.Second)
 		}
 	}
+	// Peons answer MMonGetVersion from their own committed state; every
+	// monitor converges on the native epoch.
+	peons := 0
+	for _, pinned := range pinnedMonitorClients(t, ctx, c) {
+		if !pinned.Leader {
+			peons++
+		}
+		native := nativePool(t, ctx, "versions", map[string]any{}).Epochs["osdmap"]
+		deadline := time.Now().Add(30 * time.Second)
+		for {
+			got, err := pinned.MapVersion(ctx, cephmsgr.OSDMapKind)
+			if err != nil {
+				t.Fatal(pinned.Seed, err)
+			}
+			if got.Newest == native {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: newest %d never matched native %d", pinned.Seed, got.Newest, native)
+			}
+			time.Sleep(time.Second)
+		}
+	}
+	if peons == 0 {
+		t.Fatal("no monitor was a peon")
+	}
 }
