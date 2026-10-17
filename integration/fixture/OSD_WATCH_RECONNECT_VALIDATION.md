@@ -172,3 +172,13 @@ is disconnected. The first client opens a new connection and calls
 ACK completes the notify with one reply and no missed watcher. Passed in
 legacy-v6 secure AES256K IPv4 single BlueStore and request-v9/reply-v8 secure
 AES256K IPv6 single MemStore.
+
+## Watch permissions — 2026-10-17
+
+`TestCephOSDWatchPermissionsIntegration`: WATCH is a WR opcode and NOTIFY an
+RD one (`include/rados.h`). The fixture's `client.readonly` (osd `allow r`)
+gets a known `-1` (EPERM) for WATCH, not an unknown outcome, and the native
+watcher list stays empty. Its NOTIFY is accepted: the admin client's watch
+receives it with the read-only client's GlobalID as notifier, and the admin
+ACK completes it. Passed in legacy-v6 secure AES256K IPv4 single BlueStore
+and request-v9/reply-v8 secure AES256K IPv6 single MemStore.

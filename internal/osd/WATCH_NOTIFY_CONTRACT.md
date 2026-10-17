@@ -269,8 +269,9 @@ missed ping timeout and deletion by another client
 Explicit RECONNECT to a replacement primary after SIGKILL is live-verified
 ([record](../../integration/fixture/OSD_WATCH_RECONNECT_VALIDATION.md)).
 Redelivery of a notify sent while the watcher was disconnected is also
-live-verified there. Remaining live acceptance includes scoped watch
-permissions. The local generation fence does not establish
+live-verified there, as is the capability split: an `allow r` identity is
+refused WATCH with EPERM but may NOTIFY. Pool-scoped capabilities remain
+unverified. The local generation fence does not establish
 server-side generation rejection. Backoff/send gating has its
 [own contract](BACKOFF_CONTRACT.md); daemon-to-daemon event paths remain a
 separate milestone.
