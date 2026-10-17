@@ -266,8 +266,10 @@ also remain synthetic coverage, rather than native results from these runs.
 Server DISCONNECT is live-verified for its two connected-watcher causes, a
 missed ping timeout and deletion by another client
 ([record](../../integration/fixture/OSD_WATCH_DISCONNECT_VALIDATION.md)).
-Remaining live acceptance includes scoped watch permissions, OSD restart/failover and pending-notify
-redelivery across a reconnect. The local generation fence does not establish
+Explicit RECONNECT to a replacement primary after SIGKILL is live-verified
+([record](../../integration/fixture/OSD_WATCH_RECONNECT_VALIDATION.md)).
+Remaining live acceptance includes scoped watch permissions and
+pending-notify redelivery across a reconnect. The local generation fence does not establish
 server-side generation rejection. Backoff/send gating has its
 [own contract](BACKOFF_CONTRACT.md); daemon-to-daemon event paths remain a
 separate milestone.

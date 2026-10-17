@@ -136,3 +136,27 @@ live successful paths do not substitute for those checks, whole-project CI or
 native verification of later source edits. The protocol and explicit ownership
 contract are described in
 [WATCH_NOTIFY_CONTRACT.md](../../internal/osd/WATCH_NOTIFY_CONTRACT.md).
+
+## Across a primary change — 2026-10-17
+
+`TestCephOSDWatchFailoverIntegration` (three BlueStore replicas) registers a
+Go WATCH (timeout 30 s, generation 3) on a native-seeded owned object; the
+native watcher list shows it. The object's primary is SIGKILLed and the old
+connection closed. Once native placement names a replacement primary at a
+newer epoch, the same client opens it and calls `ReconnectWatch` with the
+original handle and the new routing: the reply keeps cookie 1 and advances
+the generation to 4, and the native list still shows exactly that one
+registration (the watch is part of the replicated object info). A
+notification from a second, independent Go client through the new primary
+reaches the reconnected handle with its binary payload; the explicit ACK
+completes the notify with one reply and no missed watcher; UNWATCH succeeds.
+The killed OSD is restarted and the fixture returns to clean PGs.
+
+| Profile | Primary | Epochs |
+| --- | --- | --- |
+| legacy-v6, secure AES256K IPv4 | osd.1 -> osd.0 | 19 -> 21 |
+| replicated-pg-v8, secure AES256K IPv6 | osd.1 -> osd.2 | 18 -> 20 |
+
+Not claimed: notifications sent while the watcher was between primaries
+(redelivery of in-progress notifies), or a RECONNECT later than the watch
+timeout.
