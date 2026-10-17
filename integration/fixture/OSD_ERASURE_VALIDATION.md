@@ -44,6 +44,18 @@ Six objects are written by Go into the EC pool. Then:
   replicated-PG profile the same read with the old shard gets no answer.
 - Each killed OSD is restarted and PGs return to clean before the next step.
 
+## Snapshots and degraded writes (`TestCephOSDErasureSnapshotAndDegradedWriteIntegration`)
+
+- A self-managed snapshot id allocated through `Client.PoolOp` on the EC pool
+  serves as a write SnapContext: after a Go overwrite, Go and native reads at
+  the id return the original bytes and the head returns the new ones.
+- With one non-primary shard's OSD SIGKILLed and dropped from the acting set,
+  a Go WRITEFULL completes with ONDISK. After the OSD returns and PGs are clean,
+  the native bytes and version match the receipt; a native read with a
+  different shard's OSD then down still returns those bytes, so the shard
+  written while its OSD was absent was recovered.
+- Passed in legacy-v6 CRC/AES and replicated-pg-v8.
+
 ## Profiles
 
 Passed: legacy-v6 (object-hash v6 requests, the OSD derives the shard) with
@@ -56,5 +68,5 @@ Both EC tests passed in legacy-v6 CRC/AES and replicated-pg-v8 (IPv4); the
 first also in the profiles listed above.
 
 Not claimed: other EC profiles or plugins, MSR rules, writes while degraded,
-recovery or backfill progress, EC snapshots, watch/notify, compound vectors
+backfill progress, pool snapshots on EC, watch/notify, compound vectors
 beyond the cases above, replica (shard) reads, and multiple PG listing pages.
