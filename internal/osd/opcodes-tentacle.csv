@@ -36,8 +36,8 @@ OMAPCLEAR,0x2217,WR,DATA,implemented
 OMAPRMKEYS,0x2218,WR,DATA,implemented
 OMAPRMKEYRANGE,0x222c,WR,DATA,implemented
 OMAP_CMP,0x1219,RD,DATA,implemented
-COPY_FROM,0x221a,WR,DATA,unsupported
-COPY_FROM2,0x222d,WR,DATA,unsupported
+COPY_FROM,0x221a,WR,DATA,implemented
+COPY_FROM2,0x222d,WR,DATA,implemented
 UNDIRTY,0x221c,WR,DATA,unsupported
 ISDIRTY,0x121d,RD,DATA,unsupported
 COPY_GET,0x121e,RD,DATA,unsupported

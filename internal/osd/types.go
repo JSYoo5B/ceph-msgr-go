@@ -88,6 +88,7 @@ type Operation struct {
 	MapExt         MapExtInput
 	ListWatchers   ListWatchersInput
 	ListSnaps      ListSnapsInput
+	CopyFrom       CopyFromInput
 	Data           []byte
 	Version        uint64
 	Snap           uint64 // ROLLBACK target snap id.
@@ -127,6 +128,7 @@ type OperationResult struct {
 	// WriteSamePatternLength is the WRITESAME union's data_length echo.
 	WriteSamePatternLength       uint64
 	Xattr                        XattrResult
+	CopyFrom                     CopyFromResult
 	Class                        ClassResult
 	AllocHint                    AllocHintInput
 	Watch                        WatchInput

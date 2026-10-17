@@ -167,6 +167,9 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 			encodeChecksumUnion(&e, op)
 		} else if op.Code == WriteSame {
 			encodeWriteSameUnion(&e, op)
+		} else if op.Code == CopyFrom || op.Code == CopyFrom2 {
+			encodeCopyFromUnion(&e, op)
+			payloadBytes += copyFromDataBytes(op)
 		} else if op.Code == Rollback {
 			encodeRollbackUnion(&e, op)
 		} else {
@@ -210,6 +213,9 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 		}
 		if op.Code == Call {
 			data = append(append(data, op.Class.Class...), op.Class.Method...)
+		}
+		if op.Code == CopyFrom || op.Code == CopyFrom2 {
+			data = appendCopyFromData(data, op)
 		}
 		data = append(data, op.Data...)
 	}

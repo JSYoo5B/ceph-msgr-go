@@ -38,6 +38,7 @@ caller-selected-snapshot extent maps and CRC32C/xxHash checksums follow [MAPEXT_
 and [CHECKSUM_CONTRACT.md](CHECKSUM_CONTRACT.md). U64 comparison has separate
 [native proof and bounded live coverage](../../integration/fixture/OSD_U64_XATTR_VALIDATION.md);
 bulk xattr variants remain unsupported.
+Standalone COPY_FROM/COPY_FROM2 of a head source follows [COPY_FROM_CONTRACT.md](COPY_FROM_CONTRACT.md); it has synthetic coverage only.
 
 Negotiated OBJECTLOCATOR and PGID64 select the supported request/reply v6
 branch; NEW_OSDOP_ENCODING and NEW_OSDOPREPLY_ENCODING are rejected. The caller

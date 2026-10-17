@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, WriteSame, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, Watch, Notify, NotifyAck:
+	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, Watch, Notify, NotifyAck:
 		return true
 	}
 	return false
@@ -126,6 +126,27 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			continue
 		}
 		if op.Snap != 0 || op.ListSnaps != (ListSnapsInput{}) {
+			return 0, 0, ErrRequest
+		}
+		if op.Code == CopyFrom || op.Code == CopyFrom2 {
+			// The daemon completes the copy through a restartable finisher
+			// and the source may live in another PG. Only the standalone head
+			// form is characterized; it is never combined with other operations.
+			if len(ops) != 1 {
+				return 0, 0, ErrOperation
+			}
+			mode, inputBytes, err := validateCopyFromOperation(op, limit)
+			if err != nil {
+				return 0, 0, err
+			}
+			if inputBytes > uint64(limit)-total {
+				return 0, 0, wire.ErrLimit
+			}
+			flags |= mode
+			total += inputBytes
+			continue
+		}
+		if op.CopyFrom != (CopyFromInput{}) {
 			return 0, 0, ErrRequest
 		}
 		if op.Code == Call {
@@ -327,7 +348,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 
 func writeOperation(code uint16) bool {
 	switch code {
-	case Write, WriteFull, WriteSame, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint, Rollback:
+	case Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint, Rollback:
 		return true
 	}
 	return isOmapMutation(code)

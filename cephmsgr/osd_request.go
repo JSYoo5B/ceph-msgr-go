@@ -17,6 +17,8 @@ const (
 	OSDWrite         OSDOpcode = OSDOpcode(osd.Write)
 	OSDWriteFull     OSDOpcode = OSDOpcode(osd.WriteFull)
 	OSDWriteSame     OSDOpcode = OSDOpcode(osd.WriteSame)
+	OSDCopyFrom      OSDOpcode = OSDOpcode(osd.CopyFrom)
+	OSDCopyFrom2     OSDOpcode = OSDOpcode(osd.CopyFrom2)
 	OSDAppend        OSDOpcode = OSDOpcode(osd.Append)
 	OSDTruncate      OSDOpcode = OSDOpcode(osd.Truncate)
 	OSDZero          OSDOpcode = OSDOpcode(osd.Zero)
@@ -64,6 +66,9 @@ const (
 // echoes the requested logical extent, not the nested WRITE's clipped extent.
 // An offset-zero positive WriteSame refuses every subsequent offset-zero
 // positive Read/CompareExtent in the vector because that clipped size is unknown.
+// OSDCopyFrom and OSDCopyFrom2 make the targeted object a copy of the head of
+// the source in CopyFrom, which the OSD fetches itself. They are standalone,
+// flagless and carry no other field; see OSDCopyFromInput.
 // Truncate uses Offset as the new size. Create/Delete/Stat have zero extents.
 // AssertVersion uses Version, with zero extents and no payload. Only Create
 // accepts ExclusiveCreate. TruncateSize/TruncateSequence are the extent
@@ -104,9 +109,30 @@ type OSDOperation struct {
 	Checksum       OSDChecksumInput
 	ListWatchers   OSDListWatchersInput
 	ListSnapshots  OSDListSnapshotsInput
+	CopyFrom       OSDCopyFromInput
 
 	TruncateSize     uint64
 	TruncateSequence uint32
+}
+
+// OSDCopyFromInput is the active input for OSDCopyFrom and OSDCopyFrom2. The
+// source is the head of SourceName in SourcePool/SourceKey/SourceNamespace;
+// the OSD computes the source PG and fetches it with its own connection, so
+// the caller supplies no source placement. The source must differ from the
+// target. SourceVersion zero accepts any source version, otherwise the OSD
+// refuses a different one (ERANGE). TruncateSequence selects COPY_FROM2's
+// TRUNCATE_SEQ form: the destination gets TruncateSequence (nonzero) and
+// TruncateSize instead of the source's values; it is refused on OSDCopyFrom.
+// Source snapshots, fadvise hints and cache-tier copy flags are unsupported.
+// A reply with success reports server completion of the copy as ONDISK;
+// a cancelled or failed local wait leaves the outcome unknown.
+type OSDCopyFromInput struct {
+	SourcePool                 int64
+	SourceName                 string
+	SourceKey, SourceNamespace string
+	SourceVersion              uint64
+	TruncateSequence           uint32
+	TruncateSize               uint64
 }
 
 // OSDTime is Tentacle's raw utime_t. Zero preserves the server's zero-mtime
@@ -173,6 +199,8 @@ type OSDOperationResult struct {
 	Xattr                        OSDXattrResult
 	Class                        OSDClassResult
 	AllocHint                    OSDAllocHint
+	// CopyFromVersion echoes the COPY_FROM source version field.
+	CopyFromVersion uint64
 	// Snapshot echoes the ROLLBACK target. Snapshots is decoded from Data
 	// for a successful OSDListSnapshots, which also keeps the raw bytes.
 	Snapshot  uint64
@@ -326,6 +354,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 			MapExt:       osd.MapExtInput{MaxOutputBytes: op.MapExt.MaxOutputBytes},
 			Checksum:     osd.ChecksumInput{ChunkSize: op.Checksum.ChunkSize, Type: op.Checksum.Type, Seed: op.Checksum.Seed},
 			ListWatchers: osd.ListWatchersInput{MaxOutputBytes: op.ListWatchers.MaxOutputBytes},
+			CopyFrom:     copyFromWireInput(op),
 			Snap:         op.Snapshot, ListSnaps: osd.ListSnapsInput{MaxOutputBytes: op.ListSnapshots.MaxOutputBytes}}
 	}
 	var m msgr.MessageData
@@ -481,6 +510,11 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 				return err
 			}
 			continue
+		case osd.CopyFrom, osd.CopyFrom2:
+			if err := osd.ValidateCopyFromReply(requested, op); err != nil {
+				return err
+			}
+			continue
 		case osd.ListSnaps:
 			if err := osd.ValidateListSnapsReply(requested, op, success); err != nil {
 				return err
@@ -529,7 +563,7 @@ func publicOSDReply(r osd.Reply) OSDReply {
 			Hash: r.Redirect.Locator.Hash, Object: r.Redirect.Object, LegacyInstructions: r.Redirect.LegacyInstructions}}
 	result.Operations = make([]OSDOperationResult, len(r.Operations))
 	for i, op := range r.Operations {
-		result.Operations[i] = OSDOperationResult{WriteSamePatternLength: op.WriteSamePatternLength, Code: OSDOpcode(op.Code), Flags: op.Flags,
+		result.Operations[i] = OSDOperationResult{WriteSamePatternLength: op.WriteSamePatternLength, CopyFromVersion: op.CopyFrom.Version, Code: OSDOpcode(op.Code), Flags: op.Flags,
 			Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence,
 			PayloadLength: op.PayloadLength, Result: op.Result, Data: op.Data,
 			Xattr:     OSDXattrResult{NameLength: op.Xattr.NameLength, ValueLength: op.Xattr.ValueLength, ComparisonOp: op.Xattr.ComparisonOp, ComparisonMode: op.Xattr.ComparisonMode},
@@ -554,4 +588,17 @@ func publicOSDReply(r osd.Reply) OSDReply {
 		}
 	}
 	return result
+}
+
+func copyFromWireInput(op OSDOperation) osd.CopyFromInput {
+	in := op.CopyFrom
+	if in == (OSDCopyFromInput{}) {
+		return osd.CopyFromInput{}
+	}
+	out := osd.CopyFromInput{Object: in.SourceName, Locator: osd.Locator{Pool: in.SourcePool, Key: in.SourceKey, Namespace: in.SourceNamespace, Hash: -1}, Version: in.SourceVersion}
+	if in.TruncateSequence != 0 || in.TruncateSize != 0 {
+		out.Flags = osd.CopyFromTruncateSequence
+		out.TruncateSequence, out.TruncateSize = in.TruncateSequence, in.TruncateSize
+	}
+	return out
 }

@@ -999,6 +999,14 @@ context와 truncate clipping, raw per-op·ONDISK·독립 native bytes를 비교�
 논리 reply Length는 내부 WRITE가 실제로 적용한 바이트 수가 아니다.
 [검증 기록과 재현 조건](integration/fixture/OSD_WRITESAME_VALIDATION.md)을 참고한다.
 
+`OSDCopyFrom`/`OSDCopyFrom2`는 `OSDCopyFromInput`의 명시적 source pool·이름·key·
+namespace로 대상 객체를 source head의 복사본으로 만드는 단독 요청을 전송한다.
+OSD가 source를 직접 가져오므로 호출자가 source 배치를 제공하지 않는다.
+Source snapshot·fadvise·cache-tier flag와 다른 operation과의 조합은 송신 전에
+거절하고 COPY_FROM2의 TRUNCATE_SEQ 형태만 허용한다. 현재는 합성 wire·공개 transport
+시험만 있고 native vector나 실제 daemon 검증은 없으므로 검증된 profile이 아니다.
+[계약](internal/osd/COPY_FROM_CONTRACT.md)을 참고한다.
+
 다만 nonempty WRITEFULL·APPEND 뒤 offset 0 READ/CMPEXT가 앞선 payload 크기
 이상을 검사하는 조합은 `ErrUnsupportedOSDOperation`으로 송신 전에 거절한다.
 offset 0의 nonempty WRITE 또는 WRITESAME 뒤에는 모든 양수 길이의 offset 0 READ/CMPEXT를
