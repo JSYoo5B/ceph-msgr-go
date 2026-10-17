@@ -5,7 +5,7 @@ Test-only; never product code. It uses the public librados C API (LGPL-2.1,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
-Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, cleanup. Every mode
+Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, cleanup. Every mode
 reads one bounded JSON input and writes one bounded JSON result; native
 mutations are never retried and credentials/keys are never copied.
 """
@@ -21,7 +21,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "cleanup")
 SLOTS = (1, 2)
 MAX_OUTPUT = 512 << 10
 MAX_MON_OUTPUT = 4 << 20
@@ -326,6 +326,33 @@ def mode_versions(rados, cluster, request, out):
     return {"epochs": result}
 
 
+def mode_service(rados, cluster, request, out):
+    # Register a service daemon as a native client does (an RGW or mirror
+    # daemon uses the same call), keep the connection long enough for the MGR
+    # to publish it, then read the MON's service map dump.
+    import time
+    daemon = request["daemon"]
+    xattr.identity(daemon, "daemon")
+    hold = integer(request["hold_seconds"], 1, 60, "hold_seconds")
+    rados.lib.rados_service_register.argtypes = [C.c_void_p, C.c_char_p, C.c_char_p, C.c_char_p]
+    rados.lib.rados_service_register.restype = C.c_int
+    metadata = b"ceph_msgr_role\x00oracle\x00ceph_msgr_daemon\x00" + daemon.encode() + b"\x00\x00"
+    rados.native.check(rados.lib.rados_service_register(cluster, b"ceph-msgr", daemon.encode(), metadata))
+    # Hold the registration for the whole window so a concurrent watcher sees
+    # it; record the first MON dump that lists the daemon.
+    deadline = time.monotonic() + hold
+    dump = None
+    while time.monotonic() < deadline:
+        if dump is None:
+            code, text = rados.mon(cluster, {"prefix": "service dump", "format": "json"})
+            if code == 0:
+                current = json.loads(text)
+                if daemon in current.get("services", {}).get("ceph-msgr", {}).get("daemons", {}):
+                    dump = current
+        time.sleep(1)
+    return {"service_dump": dump}
+
+
 def mode_quota(rados, cluster, request, out):
     name = pool_name(request["slot"])
     limit = integer(request["max_objects"], 0, 1 << 20, "max_objects")
@@ -368,7 +395,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "cleanup": mode_cleanup}
 
 
 def main(argv):

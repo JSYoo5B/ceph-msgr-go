@@ -46,17 +46,18 @@ type Client struct {
 	// subscription under the MON's lock, after the commit's AuthMonitor
 	// refresh, so a handshake to that MON started afterwards mints tickets
 	// from refreshed keys.
-	authBarrier   uint32
-	authRefreshed map[string]uint32
-	sessions      map[*session.Session]struct{}
-	mgrGate       chan struct{}
-	wake          chan struct{}
-	calls         chan struct{}
-	wg            sync.WaitGroup
-	logWatch      *LogStream
-	configWatch   *ConfigStream
-	digestWatch   *DigestStream
-	osdMapWatch   *OSDMapStream
+	authBarrier     uint32
+	authRefreshed   map[string]uint32
+	sessions        map[*session.Session]struct{}
+	mgrGate         chan struct{}
+	wake            chan struct{}
+	calls           chan struct{}
+	wg              sync.WaitGroup
+	logWatch        *LogStream
+	configWatch     *ConfigStream
+	digestWatch     *DigestStream
+	serviceMapWatch *ServiceMapStream
+	osdMapWatch     *OSDMapStream
 
 	osds          map[int32]*OSDConnection
 	osdNext       atomic.Uint64
@@ -429,6 +430,12 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				}
 				return c.handleDigest(s, m)
 			}
+			if m.Type == msgr.ServiceMapMessage {
+				if !verifiedMon {
+					return nil
+				}
+				return c.handleServiceMap(s, m)
+			}
 			if m.Type == msgr.ConfigMessage {
 				if !verifiedMon {
 					return nil
@@ -491,6 +498,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			c.stopLogForFailedSession(s, err)
 			c.stopConfigForFailedSession(s, err)
 			c.stopDigestForFailedSession(s, err)
+			c.stopServiceMapForFailedSession(s, err)
 			c.stopOSDMapForFailedSession(s, err)
 			c.stopMDSMapsForFailedSession(s, err)
 			c.mu.Lock()
@@ -509,6 +517,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				if c.digestWatch != nil {
 					c.digestWatch.source = nil
 				}
+				if c.serviceMapWatch != nil {
+					c.serviceMapWatch.source = nil
+				}
 				if c.osdMapWatch != nil {
 					c.osdMapWatch.source = nil
 				}
@@ -526,6 +537,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			c.stopLogForFailedSession(old, old.Err())
 			c.stopConfigForFailedSession(old, old.Err())
 			c.stopDigestForFailedSession(old, old.Err())
+			c.stopServiceMapForFailedSession(old, old.Err())
 			c.stopOSDMapForFailedSession(old, old.Err())
 			c.stopMDSMapsForFailedSession(old, old.Err())
 		}
@@ -547,6 +559,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			// Resubscribe even if the worker misses a failed candidate and
 			// observes only restoration of the same admitted MON session.
 			c.digestWatch.source = nil
+		}
+		if c.serviceMapWatch != nil {
+			c.serviceMapWatch.source = nil
 		}
 		if c.osdMapWatch != nil {
 			c.osdMapWatch.source = nil
@@ -943,6 +958,7 @@ func (c *Client) Close() error {
 		c.stopLogForFailedSession(source, err)
 		c.stopConfigForFailedSession(source, err)
 		c.stopDigestForFailedSession(source, err)
+		c.stopServiceMapForFailedSession(source, err)
 		c.stopOSDMapForFailedSession(source, err)
 		c.stopMDSMapsForFailedSession(source, err)
 	}
@@ -956,9 +972,13 @@ func (c *Client) Close() error {
 	mdsMapWatches := c.stopMDSMapWatchesLocked(ErrClosed)
 	configWatch, logWatch := c.configWatch, c.logWatch
 	digestWatch := c.digestWatch
+	serviceMapWatch := c.serviceMapWatch
 	osdMapWatch := c.osdMapWatch
 	if configWatch != nil {
 		configWatch.stopLocked(ErrClosed)
+	}
+	if serviceMapWatch != nil {
+		serviceMapWatch.stopLocked(ErrClosed)
 	}
 	if logWatch != nil {
 		logWatch.stopLocked(ErrClosed)
@@ -987,6 +1007,9 @@ func (c *Client) Close() error {
 	}
 	if digestWatch != nil {
 		digestWatch.cancel()
+	}
+	if serviceMapWatch != nil {
+		serviceMapWatch.cancel()
 	}
 	if osdMapWatch != nil {
 		osdMapWatch.cancel()

@@ -70,6 +70,17 @@ func decodeAddressBody(d *wire.Decoder) Address {
 	port := binary.BigEndian.Uint16(sock[2:])
 	var ip netip.Addr
 	switch family {
+	case 0:
+		// An unset entity_addr_t (AF_UNSPEC) encodes a zero-filled sockaddr,
+		// as service-map daemons registered without an address do. Keep it as
+		// "no endpoint"; any nonzero byte is still malformed.
+		for _, b := range sock {
+			if b != 0 {
+				d.Fail(ErrFrame)
+				return Address{}
+			}
+		}
+		return a
 	case 2:
 		if len(sock) != 16 {
 			d.Fail(ErrFrame)

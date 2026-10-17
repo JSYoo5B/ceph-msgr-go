@@ -128,7 +128,11 @@ func (c *Client) rejectAuthentication(err error) {
 	c.mgr = nil
 	configWatch, logWatch := c.configWatch, c.logWatch
 	digestWatch := c.digestWatch
+	serviceMapWatch := c.serviceMapWatch
 	osdMapWatch := c.osdMapWatch
+	if serviceMapWatch != nil && !serviceMapWatch.stopLocked(err) {
+		serviceMapWatch = nil
+	}
 	if configWatch != nil && !configWatch.stopLocked(err) {
 		configWatch = nil
 	}
@@ -161,6 +165,9 @@ func (c *Client) rejectAuthentication(err error) {
 	}
 	if digestWatch != nil {
 		digestWatch.cancel()
+	}
+	if serviceMapWatch != nil {
+		serviceMapWatch.cancel()
 	}
 	if osdMapWatch != nil {
 		osdMapWatch.cancel()
