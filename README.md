@@ -1042,6 +1042,15 @@ replicated-pg-v8, request-v9/reply-v8 secure/AES256K IPv6 single MemStore에서 
   optimized EC pool의 PG에 pg_temp가 있으면 `PrimaryFirst`로 pool size와
   nonprimary shard 수를 넘겨 OSD가 기대하는 primary-first shard 번호로 보낸다.
   [계약](internal/osd/ERASURE_CONTRACT.md), [검증](integration/fixture/OSD_ERASURE_VALIDATION.md).
+- `OSDPGListRequest.Filter`(PGNLS_FILTER): OSD 내장 `plain` 필터나 object class 필터로
+  PG 열거를 서버에서 거른다. `OSDPlainPGListFilter`가 plain 입력을 만든다.
+  [계약](internal/osd/PG_LIST_CONTRACT.md), [검증](integration/fixture/OSD_PG_LIST_FILTER_VALIDATION.md).
+- `OSDConnection.ListInconsistent`(SCRUBLS): PG primary가 보관한 scrub 오류를 raw 값으로
+  읽는다(scrub·repair는 하지 않음). [계약](internal/osd/SCRUB_LIST_CONTRACT.md),
+  [검증](integration/fixture/OSD_SCRUB_LIST_VALIDATION.md).
+- `OSDSetRedirect`/`OSDUnsetManifest`(manifest redirect): 객체를 다른 pool 객체로의
+  redirect로 만들고 해제한다. [계약](internal/osd/MANIFEST_CONTRACT.md),
+  [검증](integration/fixture/OSD_REDIRECT_VALIDATION.md).
 - 추가 소유 pool 기반 시험(cross-pool·namespace COPY_FROM, pool snapshot 모드)은
   [검증](integration/fixture/OSD_POOL_VALIDATION.md)에 있다.
 
