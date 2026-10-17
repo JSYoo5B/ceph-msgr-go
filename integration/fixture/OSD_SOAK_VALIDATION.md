@@ -69,6 +69,20 @@ inside the PG log's duplicate tracking; a resubmission later than that could
 execute again, which is the documented limit of server-side duplicate
 detection.
 
+## OSD I/O across a MON leader stop (`TestCephOSDIOAcrossMonLeaderStopIntegration`)
+
+A client seeded only with the leader MON opens an OSD connection and appends
+every 20 ms. The leader is stopped: the client's MON session recovers to
+another member by itself (a MON command then succeeds) while the appends keep
+completing on the open OSD session, none unknown. After the leader restarts
+and the fixture's settled-election barrier sees the full quorum twice, native
+bytes equal every acknowledged append.
+
+| Profile | Writes | After the stop | MON session |
+| --- | --- | --- | --- |
+| legacy-v6 single BlueStore, secure AES256K IPv4 | 401 | 118 | leader -> second member |
+| replicated-pg-v8 three BlueStore, secure AES256K IPv6 | 389 | 113 | leader -> second member |
+
 Two earlier attempts failed for test reasons, kept here because they show
 real limits: sharing one client let one worker's Close end another worker's
 handle (`client closed`); and unthrottled 4 KiB appends filled the 1 GiB
@@ -76,7 +90,7 @@ sparse BlueStore devices within about 40 seconds, after which writes (and the
 native cleanup) were never answered, as a full pool does by design. A reread
 of a 16 MiB object was also refused locally by the frame bound.
 
-Not claimed: soak under MON failure, two OSDs down at once, PG splits, ticket
+Not claimed: a long soak under MON failure, two OSDs down at once, PG splits, ticket
 renewal during the soak (the default ticket lifetime exceeds these runs),
 EC pools, or durations beyond the runs above. CI runs both for 4 minutes on
 legacy-v6 three BlueStore.
