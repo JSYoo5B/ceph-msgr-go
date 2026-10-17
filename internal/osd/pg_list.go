@@ -39,6 +39,10 @@ type PGListRequest struct {
 	Cursor                     []byte // nil selects hobject_t(), the native minimum sentinel.
 	Count                      uint64
 	StartEpoch, MaxOutputBytes uint32
+	// Erasure and Shard address an erasure-coded PG's shard in spg_t (v8/v9
+	// only); a replicated PG uses NO_SHARD.
+	Erasure bool
+	Shard   uint8
 }
 
 func initialPGCursor() []byte {

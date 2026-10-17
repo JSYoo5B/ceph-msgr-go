@@ -32,8 +32,13 @@ primary shard itself (observed live). There is no automatic shard selection.
 Object operations travel unchanged; the pool decides what it supports. Live on
 k=2, m=1 with `allow_ec_overwrites`: WRITEFULL, partial READ, partial WRITE,
 APPEND, SETXATTR/GETXATTR, STAT, TRUNCATE and DELETE behaved as natively; OMAP
-writes are refused with `-95` (EOPNOTSUPP). Other opcodes, snapshots, watch,
-PG listing (`ListPG` still sends NO_SHARD and is not offered for EC),
-recovery, degraded reads and EC profiles other than k=2,m=1 are unverified.
+writes are refused with `-95` (EOPNOTSUPP). `OSDPGListTarget.Erasure/Shard`
+addresses PG listing the same way (replicated-PG profiles; the v6 object-hash
+listing has no shard and the OSD derives it). With one shard's OSD down the
+primary reconstructs reads; after the primary dies the new primary holds a
+different shard and only requests naming it are answered, so the caller must
+re-derive the shard from the new map along with the primary. Other opcodes,
+snapshots, watch, recovery traffic and EC profiles other than k=2,m=1 are
+unverified.
 
 Verification: [OSD_ERASURE_VALIDATION.md](../../integration/fixture/OSD_ERASURE_VALIDATION.md).

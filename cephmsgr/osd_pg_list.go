@@ -11,11 +11,15 @@ import (
 
 // OSDPGListTarget identifies one actual PG and the primary OSD chosen by the
 // caller. Seed is already folded by that caller's map; no CRUSH or pool scan
-// is performed. Primary must equal this connection's target OSD ID.
+// is performed. Primary must equal this connection's target OSD ID. For an
+// erasure-coded PG set Erasure and Shard to the primary's acting-set position
+// (replicated-PG profiles; the object-hash profile's v6 request has no shard).
 type OSDPGListTarget struct {
 	Pool    uint64
 	Seed    uint32
 	Primary int32
+	Erasure bool
+	Shard   uint8
 }
 
 // OSDPGListRequest asks for one head-only PGNLS page. Namespace may be the
@@ -65,7 +69,7 @@ type OSDPGListReply struct {
 var ErrOSDPGListTarget = errors.New("ceph: OSD PG listing target differs from its explicit metadata")
 
 func pgListWireInput(r OSDPGListRequest) osd.PGListRequest {
-	return osd.PGListRequest{ClientInc: r.ClientIncarnation, MapEpoch: r.MapEpoch, PG: osd.PG{Pool: r.PG.Pool, Seed: r.PG.Seed}, Namespace: r.Namespace, Cursor: r.Cursor, Count: r.Count, StartEpoch: r.StartEpoch, MaxOutputBytes: r.MaxOutputBytes}
+	return osd.PGListRequest{ClientInc: r.ClientIncarnation, MapEpoch: r.MapEpoch, PG: osd.PG{Pool: r.PG.Pool, Seed: r.PG.Seed}, Namespace: r.Namespace, Cursor: r.Cursor, Count: r.Count, StartEpoch: r.StartEpoch, MaxOutputBytes: r.MaxOutputBytes, Erasure: r.PG.Erasure, Shard: r.PG.Shard}
 }
 
 // ListPG sends exactly one bounded PGNLS request to an explicit primary.
@@ -82,6 +86,9 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 	}
 	if request.PG.Primary != o.target.ID {
 		return result, ErrOSDPGListTarget
+	}
+	if request.PG.Shard > 127 || !request.PG.Erasure && request.PG.Shard != 0 || request.PG.Erasure && !c.options.OSDProfile.replicatedPG() {
+		return result, fmt.Errorf("%w: a PG shard needs erasure-coded placement and a replicated-PG profile", osd.ErrRequest)
 	}
 	select {
 	case c.calls <- struct{}{}:
@@ -127,7 +134,7 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 	}
 	reply, err := s.Call(operation, m)
 	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch,
-		Placement: &OSDPlacement{PG: OSDPG{Pool: request.PG.Pool, Seed: request.PG.Seed}, Primary: request.PG.Primary}}
+		Placement: &OSDPlacement{PG: OSDPG{Pool: request.PG.Pool, Seed: request.PG.Seed}, Primary: request.PG.Primary, Erasure: request.PG.Erasure, Shard: request.PG.Shard}}
 	result.Submission = submission
 	if err != nil {
 		return result, o.operationError(err)

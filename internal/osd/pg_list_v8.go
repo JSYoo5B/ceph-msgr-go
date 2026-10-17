@@ -52,7 +52,14 @@ func encodeReplicatedPGList(r PGListRequest, features uint64, limit uint32, vers
 		return msgr.MessageData{}, err
 	}
 	e := wire.Encoder{}
-	encodeSPG(&e, r.PG, -1)
+	shard := int8(-1)
+	if r.Erasure {
+		if r.Shard > 127 {
+			return msgr.MessageData{}, ErrRequest
+		}
+		shard = int8(r.Shard)
+	}
+	encodeSPG(&e, r.PG, shard)
 	e.U32(r.PG.Seed)
 	e.U32(r.MapEpoch)
 	e.U32(uint32(FlagRead | FlagOnDisk | FlagReturnVec | flagPGOp))
