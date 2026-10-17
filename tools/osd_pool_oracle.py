@@ -5,7 +5,7 @@ Test-only; never product code. It uses the public librados C API (LGPL-2.1,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
-Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, cleanup. Every mode
+Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, cleanup. Every mode
 reads one bounded JSON input and writes one bounded JSON result; native
 mutations are never retried and credentials/keys are never copied.
 """
@@ -21,7 +21,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "cleanup")
 SLOTS = (1, 2)
 MAX_OUTPUT = 512 << 10
 MAX_MON_OUTPUT = 4 << 20
@@ -314,6 +314,18 @@ def mode_clusterstat(rados, cluster, request, out):
     return {"kb": stat.kb, "kb_used": stat.kb_used, "kb_avail": stat.kb_avail, "num_objects": stat.num_objects}
 
 
+def mode_versions(rados, cluster, request, out):
+    # Map epochs as the native CLI path reports them: each is the committed
+    # version of the MON service MMonGetVersion reads.
+    result = {}
+    for key, prefix in (("osdmap", "osd dump"), ("monmap", "mon dump"), ("fsmap", "fs dump")):
+        code, text = rados.mon(cluster, {"prefix": prefix, "format": "json"})
+        if code < 0:
+            raise RuntimeError("native %s failed: %d" % (prefix, code))
+        result[key] = json.loads(text)["epoch"]
+    return {"epochs": result}
+
+
 def mode_quota(rados, cluster, request, out):
     name = pool_name(request["slot"])
     limit = integer(request["max_objects"], 0, 1 << 20, "max_objects")
@@ -356,7 +368,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "cleanup": mode_cleanup}
 
 
 def main(argv):

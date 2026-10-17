@@ -1033,6 +1033,8 @@ replicated-pg-v8, request-v9/reply-v8 secure/AES256K IPv6 single MemStore에서 
 - `Client.Statfs`(MON MStatfs): cluster 또는 pool 사용량. MON이 오류 응답을 두지 않아
   무시된 요청은 결과 불명확으로 끝난다. [계약](cephmsgr/STATFS_CONTRACT.md),
   [검증](integration/fixture/MON_STATFS_VALIDATION.md).
+- `Client.MapVersion`(MON MMonGetVersion): osdmap/monmap/fsmap의 최신·가장 오래된 committed
+  version만 조회한다. [계약](cephmsgr/MAP_VERSION_CONTRACT.md).
 - Erasure-coded pool: CRUSH_V2를 MON·OSD admission 전용으로 광고하고(EC rule이 있으면
   필수), `OSDPlacement.Erasure`/`Shard`로 EC PG의 primary shard를 지정한다.
   [계약](internal/osd/ERASURE_CONTRACT.md), [검증](integration/fixture/OSD_ERASURE_VALIDATION.md).

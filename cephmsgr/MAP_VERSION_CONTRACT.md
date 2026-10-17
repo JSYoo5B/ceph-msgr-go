@@ -1,0 +1,26 @@
+# MON map versions (MMonGetVersion)
+
+Reference: Ceph 20.2.4, commit `7f793731f1b39eb4f465e960113d2363c311b964`
+(`messages/MMonGetVersion.h`, `messages/MMonGetVersionReply.h`,
+`mon/Monitor.cc` handle_get_version; LGPL-2.1, independently translated).
+
+`Client.MapVersion(ctx, kind)` sends MMonGetVersion (message 19: a u64 handle
+and the map name) for `osdmap`, `monmap`, `mdsmap` or `fsmap` (the last two
+name the same MON service) and returns the MMonGetVersionReply (message 20,
+header v2): the newest committed version, which is the newest map's epoch,
+and the oldest version the MON keeps. It fetches no map; librados uses the same
+request before waiting for the latest OSDMap. The MON copies the request's
+header TID and handle into the reply; both are checked.
+
+The MON answers only in quorum and once the service is readable, and silently
+ignores other map names, so those are refused locally. ctx bounds the wait;
+after transmission it ends as an `OutcomeUnknownError` (read-only). A reply
+with another handle or an oldest version above the newest fails the session.
+
+Verification: the newest version equals the epoch native `osd dump`,
+`mon dump` and `fs dump` report, for all four names, in legacy-v6 single
+BlueStore (IPv4, secure) and request-v9 single MemStore (IPv6, AES256K)
+(`TestCephMonMapVersionIntegration`, 2026-10-17, Ceph 20.2.4 image
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`).
+The oldest version is only checked to lie between 1 and the newest; no native
+client reports it. MON failover during a request is unverified.

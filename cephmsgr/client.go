@@ -60,6 +60,7 @@ type Client struct {
 
 	osds          map[int32]*OSDConnection
 	osdNext       atomic.Uint64
+	versionHandle atomic.Uint64
 	osdGeneration uint64 // guarded by mu; local connection identity, separate from TIDs
 
 	mdss          map[mdsTargetKey]*MDSConnection
