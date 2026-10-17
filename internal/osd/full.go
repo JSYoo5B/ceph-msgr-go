@@ -60,16 +60,26 @@ const MaxRetryAttempt = 1 << 16
 // and the read/write ordering of do_op).
 const (
 	FlagRWOrdered      uint64 = 0x4000
+	FlagSkipRWLocks    uint64 = 0x10000
 	FlagIgnoreRedirect uint64 = 0x2000000
 )
 
-func requestOrderingFlags(r Request) uint64 {
+// requestOrderingFlags returns the redirect, ordering and lock flags.
+// SKIPRWLOCKS (PrimaryLogPG do_op) is refused on a writing vector: without
+// the object lock concurrent writes would not be serialized.
+func requestOrderingFlags(r Request, flags uint64) (uint64, error) {
 	var out uint64
+	if r.SkipRWLocks {
+		if flags&FlagWrite != 0 {
+			return 0, ErrRequest
+		}
+		out |= FlagSkipRWLocks
+	}
 	if r.IgnoreRedirect {
 		out |= FlagIgnoreRedirect
 	}
 	if r.OrderReadsWrites {
 		out |= FlagRWOrdered
 	}
-	return out
+	return out, nil
 }

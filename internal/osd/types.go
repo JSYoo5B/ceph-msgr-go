@@ -136,6 +136,9 @@ type Request struct {
 	// object is served locally instead of from its target. OrderReadsWrites
 	// sets CEPH_OSD_FLAG_RWORDERED: reads are ordered with writes.
 	IgnoreRedirect, OrderReadsWrites bool
+	// SkipRWLocks sets CEPH_OSD_FLAG_SKIPRWLOCKS: the OSD takes no object
+	// read/write lock. Admitted only on vectors that do not write.
+	SkipRWLocks bool
 	// RetryAttempt is the wire retry count. Nonzero sets CEPH_OSD_FLAG_RETRY
 	// and marks a protocol resubmission under the original transaction ID.
 	RetryAttempt int32

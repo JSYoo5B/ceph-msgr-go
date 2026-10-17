@@ -89,7 +89,11 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 		return msgr.MessageData{}, err
 	}
 	flags |= replica
-	flags |= requestOrderingFlags(r.Request)
+	ordering, err := requestOrderingFlags(r.Request, flags)
+	if err != nil {
+		return msgr.MessageData{}, err
+	}
+	flags |= ordering
 	if r.RetryAttempt < 0 || r.Request.RetryAttempt > MaxRetryAttempt {
 		return msgr.MessageData{}, ErrRequest
 	}

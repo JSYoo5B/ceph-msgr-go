@@ -18,7 +18,9 @@ tier operations are not implemented.
 
 `OSDRequest.IgnoreRedirect` sets CEPH_OSD_FLAG_IGNORE_REDIRECT so the OSD
 serves the manifest object itself (maybe_handle_manifest returns early);
-`OrderReadsWrites` sets RWORDERED and is accepted on any vector.
+`OrderReadsWrites` sets RWORDERED and is accepted on any vector;
+`SkipRWLocks` sets SKIPRWLOCKS and is refused on a writing vector, whose
+writes would otherwise go unserialized.
 
 A read the OSD proxies to the redirect target answers with the requested
 extent length echoed rather than the number of bytes returned (observed

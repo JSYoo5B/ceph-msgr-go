@@ -82,6 +82,9 @@ func TestCephOSDRedirectIntegration(t *testing.T) {
 	if got := flagged(func(r *cephmsgr.OSDRequest) { r.OrderReadsWrites = true }); !bytes.Equal(got, target) {
 		t.Fatalf("RWORDERED read differs: %q", got)
 	}
+	if got := flagged(func(r *cephmsgr.OSDRequest) { r.SkipRWLocks = true }); !bytes.Equal(got, target) {
+		t.Fatalf("SKIPRWLOCKS read differs: %q", got)
+	}
 
 	written := []byte("written through the redirect")
 	wreply, werr := send("redirected", cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(written)), Data: written})
@@ -121,6 +124,14 @@ func TestCephOSDRedirectIntegration(t *testing.T) {
 	self := cephmsgr.OSDOperation{Code: cephmsgr.OSDSetRedirect, Redirect: cephmsgr.OSDRedirectInput{TargetPool: pools.ids[1], TargetName: "plain"}}
 	if _, err := send("plain", self); !errors.As(err, &server) || errors.As(err, &unknown) || server.Code != -22 {
 		t.Fatal("a self redirect must be a known -EINVAL", err)
+	}
+	// SKIPRWLOCKS on a writing vector is refused locally.
+	if route := poolPlace(t, ctx, 1, "plain", ""); true {
+		w := pools.request(route, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: 1, Data: []byte{1}})
+		w.ModificationTime, w.SkipRWLocks = cephmsgr.OSDTime{Seconds: 1700007001}, true
+		if reply, err := connections[route.ID].Request(ctx, w); err == nil || reply.Submission != (cephmsgr.OSDSubmission{}) {
+			t.Fatal("SKIPRWLOCKS on a write was submitted", err)
+		}
 	}
 	// Local refusals: a target without the opcode, and the opcode with COPY_FROM input.
 	for _, op := range []cephmsgr.OSDOperation{{Code: cephmsgr.OSDRead, Length: 1, Redirect: cephmsgr.OSDRedirectInput{TargetName: "x"}}, {Code: cephmsgr.OSDSetRedirect}} {

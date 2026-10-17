@@ -17,7 +17,10 @@ in pool 1.
   validator now accepts an echoed request length; the rerun passed.
 - With `IgnoreRedirect` (CEPH_OSD_FLAG_IGNORE_REDIRECT) a Go READ of the
   redirected object returns its own, truncated and empty, data; with
-  `OrderReadsWrites` (RWORDERED) the read still returns the target's bytes.
+  `OrderReadsWrites` (RWORDERED) or `SkipRWLocks` (SKIPRWLOCKS) the read
+  still returns the target's bytes; SKIPRWLOCKS on a write is refused locally
+  (the SKIPRWLOCKS case passed in legacy-v6 and replicated-pg-v8 three
+  BlueStore).
   Added later; passed in legacy-v6 single BlueStore and request-v9 single
   MemStore.
 - A Go WRITEFULL to the redirected object is proxied to the target: it
