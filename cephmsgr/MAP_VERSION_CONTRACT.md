@@ -23,4 +23,6 @@ BlueStore (IPv4, secure) and request-v9 single MemStore (IPv6, AES256K)
 (`TestCephMonMapVersionIntegration`, 2026-10-17, Ceph 20.2.4 image
 `quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`).
 The oldest version is only checked to lie between 1 and the newest; no native
-client reports it. MON failover during a request is unverified.
+client reports it. Clients seeded with each of the three monitors also match
+the native OSDMap epoch, two of them answered by peons from their own
+committed state. MON failover during a request is unverified.
