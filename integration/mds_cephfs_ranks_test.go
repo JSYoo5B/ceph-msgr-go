@@ -1274,6 +1274,70 @@ func TestCephMDSCephFSRanksIntegration(t *testing.T) {
 		return
 	}
 
+	// An MDS command goes to the daemon its explicit target names. The ranks
+	// identity's MDS grant is not admin, so a test-only identity with an MDS
+	// admin grant (created and removed through the fixture admin's MON auth
+	// commands) sends "status" to rank 1 and to the daemon that took over
+	// rank 0; each answers as that rank with its own GID.
+	if !leaf("commands_follow_rank_targets", func(t *testing.T) {
+		monAdmin, err := cephmsgr.Dial(ctx, integrationOptions(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer monAdmin.Close()
+		const entity = "client.ceph-msgr-ranks-commands"
+		mon := func(call context.Context, fields map[string]any) cephmsgr.Result {
+			encoded, _ := json.Marshal(fields)
+			result, err := monAdmin.MonCommand(call, cephmsgr.Command{JSON: encoded})
+			if err != nil {
+				t.Fatal(fields["prefix"], err)
+			}
+			return result
+		}
+		created := mon(ctx, map[string]any{"prefix": "auth get-or-create", "entity": entity, "format": "json", "caps": []string{"mon", "allow r", "mds", "allow *"}})
+		defer func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			mon(cleanup, map[string]any{"prefix": "auth rm", "entity": entity})
+		}()
+		var keys []struct{ Key string }
+		if err := json.Unmarshal(created.Data, &keys); err != nil || len(keys) != 1 {
+			t.Fatal("auth get-or-create output", err)
+		}
+		options := integrationOptions(t)
+		if options.Key, err = cephmsgr.ParseKey(keys[0].Key); err != nil {
+			t.Fatal(err)
+		}
+		options.Identity = entity
+		options.EnableMDS, options.EnableOSD, options.EnableMDSMaps, options.MaxMDSConnections = true, false, false, 2
+		admin, err := cephmsgr.Dial(ctx, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer admin.Close()
+		for _, tc := range []struct {
+			rank   int32
+			target cephmsgr.MDSTarget
+			gid    uint64
+		}{{0, takeover.ReconnectTarget, takeover.Standby.GID}, {1, topo.Ranks[1].target(fresh.FSCID, 1), topo.Ranks[1].GID}} {
+			conn, err := admin.OpenMDS(ctx, tc.target)
+			if err != nil {
+				t.Fatal("open the rank target for a command", tc.rank, err)
+			}
+			result, err := conn.Command(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"status","format":"json"}`)})
+			var status struct {
+				Whoami int32  `json:"whoami"`
+				ID     uint64 `json:"id"`
+				State  string `json:"state"`
+			}
+			if err != nil || result.Code != 0 || json.Unmarshal(result.Data, &status) != nil || status.Whoami != tc.rank || status.ID != tc.gid || status.State != "up:active" {
+				t.Fatalf("rank %d command answered as %+v (want GID %d): %v", tc.rank, status, tc.gid, err)
+			}
+		}
+	}) {
+		return
+	}
+
 	t.Run("cleanup_restore_pins_unlink_release_close", func(t *testing.T) {
 		begin := time.Now()
 		defer func() { caseTimes["cleanup_restore_pins_unlink_release_close"] = time.Since(begin).Milliseconds() }()

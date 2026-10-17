@@ -307,3 +307,16 @@ Public evidence roots and logs are under
 - These are local selected-configuration results, separate from remote CI.
   The two new CI rows select `^TestCephMDSCephFSRanksIntegration$`; they
   were not run remotely here.
+
+## Commands follow rank targets (2026-10-18)
+
+Leaf `commands_follow_rank_targets`, after the standby takeover: the ranks
+identity's MDS grant is not admin, so the test creates
+`client.ceph-msgr-ranks-commands` (`mon 'allow r'`, `mds 'allow *'`) through
+the fixture admin's MON `auth get-or-create` and removes it with `auth rm`.
+With it, an MDS `status` command sent to rank 1's explicit target answers
+`whoami` 1, state `up:active` and rank 1's GID; the same command sent to the
+target of the daemon that took over rank 0 answers `whoami` 0 with the
+former standby's GID. A first attempt with the fixture admin identity was
+refused at MDS authentication (-13: that identity has no MDS grant). Passed
+in CRC/AES BlueStore IPv4 and secure AES256K MemStore IPv6.
