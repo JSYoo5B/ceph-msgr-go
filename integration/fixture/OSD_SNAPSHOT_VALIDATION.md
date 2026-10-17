@@ -217,3 +217,14 @@ mode (where the server substitutes the pool context), a ROLLBACK refused with
 -EBUSY by a watcher, removed snaps still queued for trimming, read-only
 credentials, EC pools, broader profiles and remote CI for this subset need
 separate evidence.
+
+## SIGKILL durability (2026-10-17)
+
+`TestCephOSDSnapshotDurabilityIntegration`: on an owned pool, a self-managed
+snapshot id allocated with `Client.PoolOp` serves as the SnapContext of an
+ONDISK Go WRITEFULL, which creates a clone. The object's primary is SIGKILLed
+and restarted and PGs return to clean; native reads then return the new head
+(with the receipt's version) and the original bytes at the snapshot id, and a
+Go LIST_SNAPS still names the snapshot. Passed on legacy-v6 single BlueStore
+(secure, IPv4) and replicated-pg-v8 with three BlueStore replicas. A lost
+reply of a snapshot write and ROLLBACK under failover remain unverified.
