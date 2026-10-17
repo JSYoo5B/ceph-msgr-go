@@ -82,7 +82,22 @@ four profiles.
   ungranted pool is unchanged. Passed in legacy-v6 single BlueStore and
   request-v9/reply-v8 secure AES256K IPv6 single MemStore.
 
-Not claimed: `-EOPNOTSUPP` for filesystem pools, loss of the MON the client is connected
-to while a pool op is in flight (other than the lost-reply case),
-POOL_OP_CREATE/DELETE, and waiting for OSDs to apply the updated map after an
-allocation.
+- Connected MON frozen (`TestCephMonPoolOpConnectedStallIntegration`,
+  2026-10-18): a client seeded only with a peon allocates once, the peon is
+  frozen with `docker pause`, and a self-managed allocation, a cluster statfs
+  and an OSDMap version request are sent to it together. All three end as
+  unknown outcomes when the 2 s keepalive retires the session (about 2.1 s).
+  The client then leaves its only seed (3 s connect timeout) for a member of
+  its authenticated map and answers fresh map-version and statfs requests
+  about 12.8 s later, through the re-election. While the peon is still frozen
+  native `snap_seq` is unchanged, so the allocation was not replayed. After
+  the peon resumes and the election settles (barrier label `restarted`), the
+  frozen MON did not execute the request it had buffered (`snap_seq`
+  unchanged after 5 s), and the next allocation returns the id after the
+  native `snap_seq`. Passed in legacy-v6 single BlueStore (IPv4) and
+  request-v9/reply-v8 secure AES256K IPv6 single MemStore; the test accepts
+  either fate of the buffered request and only the dropped one was observed.
+
+Not claimed: `-EOPNOTSUPP` for filesystem pools, a connected MON that dies
+(rather than freezes) after forwarding a pool op, POOL_OP_CREATE/DELETE, and
+waiting for OSDs to apply the updated map after an allocation.

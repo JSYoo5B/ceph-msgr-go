@@ -30,4 +30,8 @@ a client pinned to a peon gets MMonGetVersion and MStatfs answers at once
 while the peon's lease lasts, and after it (6 s later) the requests wait
 about 8 s for the re-election and are then answered; after the leader
 restarts and the election settles, the version equals the native epoch.
-Loss of the connected MON during a request is unverified.
+A frozen connected MON (`docker pause`) ends an in-flight request as an
+unknown outcome at the keepalive timeout; the client moves to another member
+of its map and answers fresh requests there (2026-10-18, two profiles; see
+`integration/fixture/MON_POOL_OP_VALIDATION.md`). A MON that dies outright
+during a request is unverified.

@@ -50,6 +50,11 @@ Passed first complete run in legacy-v6 single BlueStore, legacy-v6 three
 BlueStore replicas, replicated-pg-v8 single BlueStore and request-v9/reply-v8
 secure AES256K IPv6 single MemStore.
 
-Not claimed: the FSID-mismatch ignore, loss of the connected MON during a
-request (a leader stop is covered with the map version record), and any scaling
-of the figures.
+A frozen connected MON (`docker pause`, 2026-10-18) ends an in-flight cluster
+statfs as an unknown outcome at the 2 s keepalive, and the client answers a
+fresh statfs from another MON of its map; recorded with the pool-op case in
+MON_POOL_OP_VALIDATION.md (legacy-v6 single BlueStore and request-v9/reply-v8
+secure AES256K IPv6 single MemStore).
+
+Not claimed: the FSID-mismatch ignore, a connected MON that dies (rather than
+freezes) during a request, and any scaling of the figures.
