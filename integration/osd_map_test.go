@@ -97,9 +97,29 @@ func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 			cancel()
 			t.Fatal("negotiated native map envelope metadata", batch.Version, batch.CompatVersion)
 		}
-		if phase == 0 && len(batch.IncrementalMaps) == 0 || phase == 1 && len(batch.FullMaps) == 0 {
+		// OSDService::send_incremental_map sends the latest full map only when
+		// the requested epoch is below the OSD's own oldest retained map;
+		// otherwise it sends at most osd_map_share_max_epochs (40) of the most
+		// recent incrementals. Earlier tests in a long suite can create more
+		// than 40 epochs while the OSD still retains epoch 1, so an ancient
+		// request may legitimately receive only the newest 40 incrementals.
+		// The window is the OSD's own newest 40 epochs, which may trail the MON's
+		// current epoch by a map or two: require 40 contiguous ascending epochs
+		// that start well after the requested one.
+		sharedRecent := phase == 1 && len(batch.FullMaps) == 0 && len(batch.IncrementalMaps) == 40 && batch.IncrementalMaps[0].Epoch > epoch+1
+		for i := 1; sharedRecent && i < len(batch.IncrementalMaps); i++ {
+			sharedRecent = batch.IncrementalMaps[i].Epoch == batch.IncrementalMaps[i-1].Epoch+1
+		}
+		if sharedRecent {
+			t.Logf("ancient request answered with the newest 40 incrementals (epochs %d..%d)", batch.IncrementalMaps[0].Epoch, batch.IncrementalMaps[39].Epoch)
+		}
+		if phase == 0 && len(batch.IncrementalMaps) == 0 || phase == 1 && len(batch.FullMaps) == 0 && !sharedRecent {
 			cancel()
-			t.Fatalf("native map history: phase=%d request epoch=%d trim=%d full=%d incremental=%d", phase, epoch, applied.Trim, len(batch.FullMaps), len(batch.IncrementalMaps))
+			var epochs []uint32
+			for _, m := range batch.IncrementalMaps {
+				epochs = append(epochs, m.Epoch)
+			}
+			t.Fatalf("native map history: phase=%d request epoch=%d trim=%d full=%d incremental=%d epochs=%v current=%d", phase, epoch, applied.Trim, len(batch.FullMaps), len(batch.IncrementalMaps), epochs, current.Epoch)
 		}
 		for _, set := range []struct {
 			kind string
