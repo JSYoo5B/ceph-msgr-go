@@ -59,9 +59,9 @@ func validateClassOperation(op Operation, limit uint32) (uint64, uint64, error) 
 	if input.MaxOutputBytes > limit || uint64(len(op.Data)) > math.MaxUint32 {
 		return 0, 0, wire.ErrLimit
 	}
-	// A FAILOK method may leave staged writes after failing; keep it
-	// unsupported until independently characterized.
-	if op.Flags != 0 {
+	// FAILOK continues the vector after a failing method; see
+	// CLASS_CONTRACT.md for what such a method's own staged writes do.
+	if op.Flags&^OpFailOK != 0 {
 		return 0, 0, ErrOperation
 	}
 	size, err := boundedBytes(limit, uint64(len(input.Class)), uint64(len(input.Method)), uint64(len(op.Data)))

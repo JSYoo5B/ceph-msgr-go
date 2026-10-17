@@ -57,7 +57,7 @@ func TestClassCallAdmission(t *testing.T) {
 		{"unknown mode", func(op *Operation) { op.Class.Mode = 3 }, ErrRequest},
 		{"zero budget", func(op *Operation) { op.Class.MaxOutputBytes = 0 }, ErrRequest},
 		{"frame budget", func(op *Operation) { op.Class.MaxOutputBytes = 1025 }, wire.ErrLimit},
-		{"FAILOK", func(op *Operation) { op.Flags = OpFailOK }, ErrOperation},
+		{"FAILOK with EXCL", func(op *Operation) { op.Flags = OpFailOK | OpExclusive }, ErrOperation},
 		{"EXCL", func(op *Operation) { op.Flags = OpExclusive }, ErrOperation},
 		{"caller extent", func(op *Operation) { op.Length = 1 }, ErrRequest},
 		{"caller version", func(op *Operation) { op.Version = 1 }, ErrRequest},
@@ -74,6 +74,18 @@ func TestClassCallAdmission(t *testing.T) {
 				t.Fatal("invalid CALL admitted", err)
 			}
 		})
+	}
+	failOK := callOp(ClassRead, "x")
+	failOK.Flags = OpFailOK
+	r := oracleRequest()
+	r.Operations = []Operation{failOK}
+	if _, err := EncodeRequest(r, oracleFeatures, 1024); err != nil {
+		t.Fatal("FAILOK CALL refused", err)
+	}
+	// A FAILOK method may have staged writes before failing: another CALL may
+	// not follow it, even in read mode.
+	if _, _, err := ValidateOperations([]Operation{failOK, callOp(ClassRead, "y")}, 1024); !errors.Is(err, ErrOperation) {
+		t.Fatal("CALL after a FAILOK CALL admitted", err)
 	}
 	maxName := strings.Repeat("m", 255)
 	op := callOp(ClassRead, "")

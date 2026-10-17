@@ -88,7 +88,7 @@ CALL after a write-mode CALL or after any other staged write (including
 FAILOK writes, a FAILOK CREATE and DELETE). The read mode is the caller's
 declaration that the method is registered read-only. A read-only method
 that writes has the write staged and its result turned into -EIO, which
-aborts the vector because a CALL never carries FAILOK, so later methods
+aborts the vector unless that CALL carries FAILOK, so later methods
 observe no staged change from it. Declaring a write method as read mode voids that protection, since the
 OSD classifies by registration. The admitted forms include the native librbd
 compounds: `create(true)` then `rbd.set_id` on `rbd_id.<name>`
@@ -104,9 +104,19 @@ successful OMAPSETVALS yields aggregate 0 with per-op results 42 and 0. The
 `osd_max_write_op_reply_len` bound applies per operation: outputs of 58 and 18
 bytes in one vector succeed, while a 68-byte output turns that operation and
 the aggregate into -EOVERFLOW with its output cleared, other operations keep
-their results and outputs, and nothing is committed. FAILOK on CALL is
-rejected because a failing FAILOK method may leave staged writes; EXCL and
-unknown flags are rejected as for every opcode. Every observation above
+their results and outputs, and nothing is committed. EXCL and unknown flags
+are rejected as for every opcode.
+
+FAILOK on CALL is admitted with observed, non-atomic semantics (2026-10-17,
+`TestCephOSDCallFailOKIntegration`, legacy-v6 single BlueStore and three
+BlueStore replicas with CRC/AES): `hello.write_return_data` with input stages
+xattr `foo` and then fails with -EINVAL. Without FAILOK the vector is refused
+with -22 and nothing changes. With FAILOK the vector commits with ONDISK and
+aggregate 0, the method's per-op result -22 and its error output are kept, and
+the xattr the failed method staged **is committed** together with the later
+SETXATTR. A failing FAILOK method's partial writes therefore persist; callers
+that need all-or-nothing must not set FAILOK. Because such a method may leave
+staged writes whatever its declared mode, no CALL may follow a FAILOK CALL. Every observation above
 matched an independent native librados client sending the same vector; see
 [the compound record](../../integration/fixture/OSD_CALL_COMPOUND_VALIDATION.md).
 

@@ -69,8 +69,10 @@ func TestOSDCallInvalidInputsNeverAllocateTIDOrSend(t *testing.T) {
 		check("invalid CALL input", osd.ErrRequest, false, op)
 	}
 	failOK := valid
+	failOK.Flags = OSDFailOK | OSDExclusiveCreate
+	check("FAILOK EXCL CALL", ErrUnsupportedOSDOperation, false, failOK)
 	failOK.Flags = OSDFailOK
-	check("FAILOK CALL", ErrUnsupportedOSDOperation, false, failOK)
+	check("CALL after a FAILOK CALL", ErrUnsupportedOSDOperation, false, failOK, valid)
 	check("read-mode CALL with mtime", osd.ErrRequest, true, valid)
 	check("class variant on another opcode", osd.ErrRequest, false, OSDOperation{Code: OSDStat, Class: OSDClassInput{Class: "hello"}})
 	write := OSDOperation{Code: OSDWrite, Length: 1, Data: []byte{1}}

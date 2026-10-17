@@ -177,7 +177,9 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			flags |= mode
 			total += inputBytes
 			afterCall, stagedXattr, stagedOmap = true, true, true
-			stagedAny = mode == FlagWrite
+			// A FAILOK method may have staged writes before failing, whatever
+			// mode the caller declared.
+			stagedAny = mode == FlagWrite || op.Flags&OpFailOK != 0
 			continue
 		}
 		if op.Class != (ClassInput{}) {
