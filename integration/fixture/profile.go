@@ -42,6 +42,9 @@ type profile struct {
 	stressDuration, testRun, testTimeout, diagnostics                     string
 	// osdSoak is the opt-in OSD soak duration; it selects only the soak test.
 	osdSoak string
+	// monFreeze opts in to the connected-MON freeze tests, which can leave the
+	// OSD on an old OSDMap (integration/fixture/MON_FREEZE_FIXTURE_ISSUE.md).
+	monFreeze string
 }
 
 func loadProfile(getenv func(string) string) (profile, error) {
@@ -86,6 +89,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		osdReplicas:          value("CEPH_MSGR_TEST_OSD_REPLICAS", "1"),
 		stressDuration:       getenv("CEPH_MSGR_STRESS_DURATION"),
 		osdSoak:              getenv("CEPH_MSGR_TEST_OSD_SOAK"),
+		monFreeze:            getenv("CEPH_MSGR_TEST_MON_FREEZE"),
 		testRun:              getenv("CEPH_MSGR_TEST_RUN"),
 		testTimeout:          value("CEPH_MSGR_TEST_TIMEOUT", "10m"),
 		diagnostics:          getenv("CEPH_MSGR_TEST_DIAGNOSTICS"),
@@ -389,6 +393,7 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_OSD_PROFILE":             p.osdProfile,
 		"CEPH_MSGR_STRESS_DURATION":              p.stressDuration,
 		"CEPH_MSGR_TEST_OSD_SOAK":                p.osdSoak,
+		"CEPH_MSGR_TEST_MON_FREEZE":              p.monFreeze,
 		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS":     "1",
 	}
 }
@@ -448,6 +453,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_OSD_PROFILE":             p.osdProfile,
 		"CEPH_MSGR_STRESS_DURATION":              p.stressDuration,
 		"CEPH_MSGR_TEST_OSD_SOAK":                p.osdSoak,
+		"CEPH_MSGR_TEST_MON_FREEZE":              p.monFreeze,
 		"CEPH_MSGR_TEST_PROXY":                   proxy,
 	}
 	if p.mdsFresh == "1" {

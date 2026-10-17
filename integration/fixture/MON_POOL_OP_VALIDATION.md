@@ -97,6 +97,9 @@ four profiles.
   native `snap_seq`. Passed in legacy-v6 single BlueStore (IPv4) and
   request-v9/reply-v8 secure AES256K IPv6 single MemStore; the test accepts
   either fate of the buffered request and only the dropped one was observed.
+  The test is opt-in (`CEPH_MSGR_TEST_MON_FREEZE=1`): after it the fixture's
+  OSD sometimes stays on an old OSDMap and a later pool creation times out
+  (open issue, MON_FREEZE_FIXTURE_ISSUE.md).
 
 Not claimed: `-EOPNOTSUPP` for filesystem pools, a connected MON that dies
 (rather than freezes) after forwarding a pool op, POOL_OP_CREATE/DELETE, and

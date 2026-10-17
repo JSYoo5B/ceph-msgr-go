@@ -325,7 +325,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
 		"CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
 		"CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6",
-		"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_OSD_SOAK": "", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
+		"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_OSD_SOAK": "", "CEPH_MSGR_TEST_MON_FREEZE": "", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
 	}
 	if !reflect.DeepEqual(container, wantContainer) {
 		t.Fatalf("container environment = %v, want %v", container, wantContainer)
@@ -359,7 +359,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
 				"CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
 				"CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6",
-				"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_OSD_SOAK": "", "CEPH_MSGR_TEST_PROXY": proxy,
+				"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_OSD_SOAK": "", "CEPH_MSGR_TEST_MON_FREEZE": "", "CEPH_MSGR_TEST_PROXY": proxy,
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("test environment = %v, want %v", got, want)
