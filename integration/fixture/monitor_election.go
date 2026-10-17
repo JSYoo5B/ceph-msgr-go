@@ -70,7 +70,7 @@ func electionMembers(members []electionMember) (map[string]uint32, error) {
 	return names, nil
 }
 func electionExpected(expected electionExpectation) error {
-	if expected.FSID == "" || len(expected.FSID) > 128 || expected.Epoch == 0 || (expected.Label != "added" && expected.Label != "removed") {
+	if expected.FSID == "" || len(expected.FSID) > 128 || expected.Epoch == 0 || !slices.Contains([]string{"added", "removed", "restarted"}, expected.Label) {
 		return errors.New("invalid native election expectation")
 	}
 	names, err := electionMembers(expected.Members)

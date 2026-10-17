@@ -42,6 +42,15 @@ owned pools (OSD_POOL_VALIDATION.md); the pool oracle gained the modes
   neither replayed nor hidden. Passed in legacy-v6 single BlueStore and
   request-v9/reply-v8 secure AES256K IPv6 single MemStore (the client
   reconnected to the same MON in both).
+- Leader stop (`TestCephMonPoolOpLeaderStopIntegration`): a client pinned to
+  a peon allocates once, then the leader MON is stopped and the next
+  allocation is sent to the same peon. It completes after about 14.7 s (the
+  election) with the next id under a new leader whose quorum excludes the
+  stopped MON, and native `snap_seq` equals that id, so it executed once. The
+  stopped MON is restarted, the fixture's settled-election barrier (new
+  closed label `restarted`) sees the full quorum twice, and a further
+  allocation returns the following id. Passed in legacy-v6 single BlueStore
+  and request-v9/reply-v8 secure AES256K IPv6 single MemStore.
 - Capabilities: the fixture's `client.readonly` (mon, mgr and osd `allow r`)
   gets a known `-1` (EPERM) reply with a map epoch, never a dropped request,
   for self-managed allocation and removal, pool snapshot creation and removal,
@@ -65,7 +74,7 @@ four profiles.
 
 Not claimed: grants that admit self-managed snapshots through a pool-scoped
 OSD write cap without MON write (no such identity exists in the fixture),
-`-EOPNOTSUPP` for filesystem pools, a MON daemon failure or leader election
-during a pool op,
+`-EOPNOTSUPP` for filesystem pools, loss of the MON the client is connected
+to while a pool op is in flight (other than the lost-reply case),
 POOL_OP_CREATE/DELETE, and waiting for OSDs to apply the updated map after an
 allocation.

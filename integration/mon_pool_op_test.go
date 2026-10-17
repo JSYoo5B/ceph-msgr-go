@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -377,4 +378,125 @@ func TestCephMonPoolOpLostReplyIntegration(t *testing.T) {
 		t.Fatalf("native snap_seq %d: the lost allocation executed more than once", seq)
 	}
 	t.Logf("lost allocation (id %d) ended unknown (%v); session %s -> %s", baseline+1, lost.err, before.Monitor.Endpoint, c.Snapshot().Monitor.Endpoint)
+}
+
+// With the leader stopped, an allocation sent to a peon waits through the
+// election and completes once on the new leader: exactly one id is consumed.
+// The stopped MON is restarted and the election settled on every path.
+func TestCephMonPoolOpLeaderStopIntegration(t *testing.T) {
+	fixture := osdFixture
+	if isReplicatedPGFixtureProfile() {
+		fixture = replicatedPGFixture
+	}
+	c, _, base, _ := fixture(t)
+	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	requireUsableFixture(t, control)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	pools := createOwnedPools(t, ctx, base, 1)
+	pool := uint32(pools.ids[1])
+	info := func() poolReceipt { return nativePool(t, ctx, "poolinfo", map[string]any{"slot": 1}) }
+	type quorumStatus struct {
+		Leader string   `json:"quorum_leader_name"`
+		Names  []string `json:"quorum_names"`
+		Map    struct {
+			Mons []struct {
+				Name  string `json:"name"`
+				Addrs struct {
+					Vec []struct{ Type, Addr string } `json:"addrvec"`
+				} `json:"public_addrs"`
+			} `json:"mons"`
+		} `json:"monmap"`
+	}
+	status := func(client *cephmsgr.Client) quorumStatus {
+		result, err := client.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"quorum_status","format":"json"}`)})
+		var s quorumStatus
+		if err != nil || json.Unmarshal(result.Data, &s) != nil || s.Leader == "" {
+			t.Fatal("quorum status", err)
+		}
+		return s
+	}
+	initial := status(c)
+	if len(initial.Map.Mons) < 3 || len(initial.Names) != len(initial.Map.Mons) {
+		t.Skip("needs a full quorum of at least three monitors")
+	}
+	addrs := map[string]string{}
+	for _, m := range initial.Map.Mons {
+		for _, a := range m.Addrs.Vec {
+			if a.Type == "v2" {
+				addrs[m.Name] = a.Addr
+			}
+		}
+	}
+	var peonSeed string
+	for _, seed := range integrationOptions(t).Monitors {
+		if !strings.Contains(seed, addrs[initial.Leader]) && addrs[initial.Leader] != "" {
+			peonSeed = seed
+			break
+		}
+	}
+	if peonSeed == "" {
+		t.Fatal("no peon seed address found", initial.Leader, addrs)
+	}
+	options := integrationOptions(t)
+	options.Monitors = []string{peonSeed}
+	options.EnableOSD = true
+	if isReplicatedPGFixtureProfile() {
+		options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+	}
+	pinned, err := cephmsgr.Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.Close()
+	first, err := pinned.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, _ := first.SnapshotID()
+	monState := c.Snapshot().Monitor
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", initial.Leader); err != nil {
+		t.Fatal("stop leader", err)
+	}
+	stopped := true
+	defer func() {
+		if !stopped {
+			return
+		}
+		restore, stop := context.WithTimeout(context.Background(), 180*time.Second)
+		defer stop()
+		if err := testcluster.ControlDaemon(restore, control, "start", "mon", initial.Leader); err != nil {
+			markFixtureUnusable(t, control, "stopped leader MON did not restart")
+			t.Error(err)
+			return
+		}
+		if _, err := settleNativeMonitorElection(restore, c, control, "restarted", monState, monState.Members); err != nil {
+			markFixtureUnusable(t, control, "election did not settle after the leader restart")
+			t.Error(err)
+		}
+	}()
+	started := time.Now()
+	during, err := pinned.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	if err != nil {
+		t.Fatal("allocation through a peon while the leader is stopped", err)
+	}
+	id, _ := during.SnapshotID()
+	elapsed := time.Since(started)
+	after := status(pinned)
+	t.Logf("allocated id %d through %s in %s; leader %s -> %s, quorum %v", id, pinned.Snapshot().Monitor.Endpoint, elapsed.Round(time.Millisecond), initial.Leader, after.Leader, after.Names)
+	if id != baseline+1 || after.Leader == initial.Leader || slices.Contains(after.Names, initial.Leader) {
+		t.Fatalf("expected one new id under a new leader: id %d after %d, status %+v", id, baseline, after)
+	}
+	if seq := info().SnapSeq; seq != id {
+		t.Fatalf("native snap_seq %d differs from the single allocation %d", seq, id)
+	}
+	if err := testcluster.ControlDaemon(ctx, control, "start", "mon", initial.Leader); err != nil {
+		t.Fatal("restart leader", err)
+	}
+	stopped = false
+	waitNativeMonitorElection(t, ctx, c, control, "restarted", monState, monState.Members)
+	next, err := pinned.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	if nextID, _ := next.SnapshotID(); err != nil || nextID != id+1 {
+		t.Fatal("allocation after the restart", nextID, err)
+	}
 }
