@@ -39,13 +39,16 @@ type poolReceipt struct {
 	Epochs        map[string]uint64   `json:"epochs"`
 	PoolType      int                 `json:"pool_type"`
 	CrushRule     json.RawMessage     `json:"crush_rule"`
-	KB            uint64              `json:"kb"`
-	KBUsed        uint64              `json:"kb_used"`
-	KBAvail       uint64              `json:"kb_avail"`
-	NumObjects    uint64              `json:"num_objects"`
-	SnapSeq       uint64              `json:"snap_seq"`
-	SnapMode      string              `json:"snap_mode"`
-	PoolSnaps     []struct {
+	ECOptimized   bool                `json:"ec_optimized"`
+	// NonprimaryShards is the pool's raw nonprimary_shards dump.
+	NonprimaryShards json.RawMessage `json:"nonprimary_shards"`
+	KB               uint64          `json:"kb"`
+	KBUsed           uint64          `json:"kb_used"`
+	KBAvail          uint64          `json:"kb_avail"`
+	NumObjects       uint64          `json:"num_objects"`
+	SnapSeq          uint64          `json:"snap_seq"`
+	SnapMode         string          `json:"snap_mode"`
+	PoolSnaps        []struct {
 		ID   uint64 `json:"snapid"`
 		Name string `json:"name"`
 	} `json:"pool_snaps"`

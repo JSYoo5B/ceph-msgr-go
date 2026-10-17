@@ -143,6 +143,9 @@ def mode_create(rados, cluster, request, out):
     erasure = request.get("erasure", False)
     if type(erasure) is not bool:
         raise ValueError("erasure must be boolean")
+    optimized = request.get("optimized", False)
+    if type(optimized) is not bool or optimized and not erasure:
+        raise ValueError("optimized must be boolean and needs erasure")
     hashpspool = request["hashpspool"]
     if type(hashpspool) is not bool:
         raise ValueError("hashpspool must be boolean")
@@ -156,6 +159,11 @@ def mode_create(rados, cluster, request, out):
         steps = [{"prefix": "osd erasure-code-profile set", "name": EC_PROFILE, "profile": profile, "force": True},
                  {"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "erasure", "erasure_code_profile": EC_PROFILE},
                  {"prefix": "osd pool set", "pool": name, "var": "allow_ec_overwrites", "val": "true"}]
+        if optimized:
+            # Tentacle's optimized EC (OSDMonitor::enable_pool_ec_optimizations):
+            # irreversible, restricts which shards may be primary and stores
+            # pg_temp primary-first.
+            steps.append({"prefix": "osd pool set", "pool": name, "var": "allow_ec_optimizations", "val": "true"})
     else:
         size = integer(request["size"], 1, 3, "size")
         minimum = integer(request["min_size"], 1, size, "min_size")
@@ -180,13 +188,18 @@ def mode_create(rados, cluster, request, out):
         minimum = pool["min_size"]
     if pool is None or bool(pool["flags"] & 1) != hashpspool or pool["size"] != size or pool["min_size"] != minimum or pool["pg_num"] != pg or (pool["type"] == 3) != erasure:
         raise RuntimeError("native pool does not match the requested closed shape")
+    if erasure:
+        code, text = rados.mon(cluster, {"prefix": "osd pool get", "pool": name, "var": "allow_ec_optimizations", "format": "json"})
+        if code < 0 or json.loads(text).get("allow_ec_optimizations") is not optimized:
+            raise RuntimeError("native pool EC optimization state differs: %d %s" % (code, text))
     rule = None
     code, text = rados.mon(cluster, {"prefix": "osd crush rule dump", "format": "json"})
     if code == 0:
         rules = [r for r in json.loads(text) if r.get("rule_id") == pool.get("crush_rule")]
         rule = rules[0] if rules else None
     return {"pool": name, "pool_id": pool["pool"], "flags": pool["flags"], "size": size, "min_size": minimum,
-            "pg_num": pg, "epoch": rados.dump(cluster)["epoch"], "pool_type": pool["type"], "crush_rule": rule}
+            "pg_num": pg, "epoch": rados.dump(cluster)["epoch"], "pool_type": pool["type"], "crush_rule": rule,
+            "ec_optimized": optimized, "nonprimary_shards": pool.get("nonprimary_shards")}
 
 
 def seed_object(rados, io, name, data, attributes):

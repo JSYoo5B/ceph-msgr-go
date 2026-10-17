@@ -39,7 +39,8 @@ class PlacementOracleTests(unittest.TestCase):
                                   "epoch": 19, "hash": 0x123ABC,
                                   "address": "v2:192.0.2.4:6800/91", "up": [2, 0, 1],
                                   "acting": [2, 0, 1], "replicas": 3, "min_size": 2,
-                                  "namespace": "", "raw_pgid": "7.123abc", "pgid": "7.0", "pg_seed": 0})
+                                  "namespace": "", "raw_pgid": "7.123abc", "pgid": "7.0", "pg_seed": 0,
+                              "pg_temp": False, "nonprimary_shard_count": 0})
         self.assertEqual(calls, [(("osd", "map", "test", "binary"), 10), (("osd", "dump"), 10)])
 
     def test_names_a_replica_target_and_still_reports_the_primary(self):
@@ -383,6 +384,21 @@ class MutationIdentityTests(unittest.TestCase):
         self.assertEqual(len(library.commands), 2)
         self.assertEqual(len(library.freed), 4)
         self.assertFalse(any(name in ("rados_remove", "rados_write_op_operate2") for name, _ in library.calls))
+
+
+class ErasureShardTests(unittest.TestCase):
+    def test_plain_pool_uses_first_position(self):
+        pool = {"type": 3, "nonprimary_shards": "{}"}
+        self.assertEqual(oracle.erasure_shard([4, 2, 2], 2, pool), 1)
+
+    def test_optimized_pool_prefers_primary_eligible_shard(self):
+        # osd.2 holds nonprimary shard 1 and parity shard 2; Objecter's
+        # primary-first search names shard 2.
+        pool = {"type": 3, "nonprimary_shards": "{1}"}
+        self.assertEqual(oracle.erasure_shard([4, 2, 2], 2, pool), 2)
+        self.assertEqual(oracle.erasure_shard([4, 2, 3], 4, pool), 0)
+        # A target found only on a nonprimary shard keeps that position.
+        self.assertEqual(oracle.erasure_shard([4, 2, 3], 2, pool), 1)
 
 
 if __name__ == "__main__":

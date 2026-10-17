@@ -1039,6 +1039,8 @@ replicated-pg-v8, request-v9/reply-v8 secure/AES256K IPv6 single MemStore에서 
   version만 조회한다. [계약](cephmsgr/MAP_VERSION_CONTRACT.md).
 - Erasure-coded pool: CRUSH_V2를 MON·OSD admission 전용으로 광고하고(EC rule이 있으면
   필수), `OSDPlacement.Erasure`/`Shard`로 EC PG의 primary shard를 지정한다.
+  optimized EC pool의 PG에 pg_temp가 있으면 `PrimaryFirst`로 pool size와
+  nonprimary shard 수를 넘겨 OSD가 기대하는 primary-first shard 번호로 보낸다.
   [계약](internal/osd/ERASURE_CONTRACT.md), [검증](integration/fixture/OSD_ERASURE_VALIDATION.md).
 - 추가 소유 pool 기반 시험(cross-pool·namespace COPY_FROM, pool snapshot 모드)은
   [검증](integration/fixture/OSD_POOL_VALIDATION.md)에 있다.

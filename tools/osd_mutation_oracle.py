@@ -150,6 +150,23 @@ def native_mon_query(lib, cluster, *arguments, timeout):
             lib.rados_buffer_free(diagnostic)
 
 
+def erasure_shard(acting, target, pool):
+    """The target's shard, as osdc/Objecter.cc _calc_target finds it.
+
+    An optimized EC pool (allow_ec_optimizations) may place one OSD on several
+    shards; Objecter then searches in primary-first order, so primary-eligible
+    shards win over the pool's nonprimary_shards. Without optimization every
+    shard is eligible and this is the first position.
+    """
+    # Only enable_pool_ec_optimizations fills nonprimary_shards (dumped as
+    # "{1}"); it is "{}" otherwise.
+    nonprimary = {int(n) for n in re.findall(r"[0-9]+", str(pool.get("nonprimary_shards", "")))}
+    eligible = [i for i, osd in enumerate(acting) if osd == target and i not in nonprimary]
+    if eligible:
+        return eligible[0]
+    return acting.index(target)
+
+
 def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
                       timeout=30, clock=time.monotonic, namespace="", target_osd=None):
     """Collect one internally consistent native routing observation.
@@ -266,7 +283,11 @@ def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
                 "osd_id": target, "primary_id": primary, "epoch": epochs[0],
                 # Erasure-coded PGs address a shard: the target's position in
                 # the acting set. Replicated PGs use NO_SHARD (-1).
-                "pg_shard": mapped["acting"].index(target) if pool["type"] == 3 else -1,
+                "pg_shard": erasure_shard(mapped["acting"], target, pool) if pool["type"] == 3 else -1,
+                # A caller encodes an optimized pool's shard primary-first only
+                # while the PG has a pg_temp (cephmsgr.OSDPrimaryFirst).
+                "pg_temp": any(isinstance(e, dict) and e.get("pgid") == mapped_pg for e in topology.get("pg_temp", [])),
+                "nonprimary_shard_count": len(set(re.findall(r"[0-9]+", str(pool.get("nonprimary_shards", ""))))),
                 "pool_type": pool["type"], "hash": int(match[2], 16),
                 "namespace": namespace, "raw_pgid": raw_pg, "pgid": mapped_pg,
                 "pg_seed": int(pg_match[2], 16),

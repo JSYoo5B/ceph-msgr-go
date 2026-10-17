@@ -183,9 +183,18 @@ func replicatedPGRequest(route osdFixtureOracle, ops ...cephmsgr.OSDOperation) c
 	r := osdObjectRequest(route, ops...)
 	r.Placement = &cephmsgr.OSDPlacement{PG: cephmsgr.OSDPG{Pool: uint64(route.Pool), Seed: route.PG}, Primary: route.ID}
 	if route.PoolType == 3 {
-		r.Placement.Erasure, r.Placement.Shard = true, uint8(route.Shard)
+		r.Placement.Erasure, r.Placement.Shard, r.Placement.PrimaryFirst = true, uint8(route.Shard), routePrimaryFirst(route)
 	}
 	return r
+}
+
+// routePrimaryFirst gives the facts an optimized EC pool's PG needs while it
+// has a pg_temp, as a caller derives them from its map.
+func routePrimaryFirst(route osdFixtureOracle) *cephmsgr.OSDPrimaryFirst {
+	if route.PoolType != 3 || !route.PGTemp || route.Nonprimary == 0 {
+		return nil
+	}
+	return &cephmsgr.OSDPrimaryFirst{PoolSize: uint8(route.Replicas), NonprimaryShards: uint8(route.Nonprimary)}
 }
 func replicatedPGConnection(t *testing.T, c *cephmsgr.Client, ctx context.Context, route osdFixtureOracle) *cephmsgr.OSDConnection {
 	t.Helper()

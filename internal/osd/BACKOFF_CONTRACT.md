@@ -97,7 +97,11 @@ message. Queue success proves neither full transmission nor remote receipt.
 The installed `BeforeWrite` barrier checks each queued, unstarted type-42
 request against the retained restrictions on its authenticated connection.
 Only matching actual PG/shard and head hobject ranges return ErrOSDBackoff;
-unrelated objects and PGs can proceed on the same connection. Local refusal
+unrelated objects and PGs can proceed on the same connection. For an
+erasure-coded PG every shard matches, because a request's shard may be encoded
+in the pre-Tentacle primary-first numbering (`OSDPrimaryFirst`) while BLOCK
+names the OSD's actual shard; the gate over-refuses rather than letting a
+blocked object through. Local refusal
 is a known unsent outcome, not an unknown-execution claim. Already started
 work retains the normal reply/context/session-failure semantics. No request is
 automatically replayed after UNBLOCK. The control ACK progresses on the same

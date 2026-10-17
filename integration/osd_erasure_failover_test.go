@@ -19,7 +19,16 @@ import (
 // degraded PG (one non-primary shard's OSD killed) reconstructs the bytes; after
 // the primary is killed the new primary holds a different shard, and only a
 // request carrying that new shard is answered.
-func TestCephOSDErasureFailoverIntegration(t *testing.T) {
+func TestCephOSDErasureFailoverIntegration(t *testing.T) { erasureFailoverScenario(t, false) }
+
+// With allow_ec_optimizations, raw shard 1 (the second data shard) may never be
+// primary: when the primary is lost the MON picks a parity shard instead, and
+// the caller's placement must carry that shard.
+func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
+	erasureFailoverScenario(t, true)
+}
+
+func erasureFailoverScenario(t *testing.T, optimized bool) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("k=2,m=1 with overwrites needs three BlueStore OSDs")
 	}
@@ -42,8 +51,8 @@ func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 	if hash {
 		pg = 8
 	}
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true})
-	if created.PoolType != 3 {
+	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "optimized": optimized})
+	if created.PoolType != 3 || created.ECOptimized != optimized {
 		t.Fatal("pool is not erasure-coded")
 	}
 	payloads := map[string][]byte{}
@@ -71,7 +80,7 @@ func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 		if !hash {
 			target.Seed = route.Hash
 		} else {
-			target.Erasure, target.Shard = true, uint8(route.Shard)
+			target.Erasure, target.Shard, target.PrimaryFirst = true, uint8(route.Shard), routePrimaryFirst(route)
 		}
 		reply, err := o.ListPG(ctx, cephmsgr.OSDPGListRequest{MapEpoch: route.Epoch, PG: target, Namespace: "", Count: 64, MaxOutputBytes: 64 << 10})
 		if err != nil {
@@ -174,18 +183,53 @@ func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 		deadline := time.Now().Add(120 * time.Second)
 		for {
 			fresh = poolPlace(t, ctx, 1, subject, "")
-			if fresh.ID != old.ID && fresh.ID >= 0 {
+			// An optimized pool's first map after the loss may still name the
+			// nonprimary shard's OSD (pure CRUSH order); that OSD then has the
+			// MON set a primary-first pg_temp, and the next map names a parity
+			// shard. Wait for that settled placement.
+			if fresh.ID != old.ID && fresh.ID >= 0 && (!optimized || fresh.Shard != 1) {
 				break
+			}
+			if optimized && fresh.ID >= 0 && fresh.Shard == 1 {
+				t.Logf("transient: epoch %d names osd.%d on nonprimary shard 1 (acting %v)", fresh.Epoch, fresh.ID, fresh.Acting)
 			}
 			if time.Now().After(deadline) {
 				t.Fatal("no new primary was chosen")
 			}
 			time.Sleep(2 * time.Second)
 		}
-		t.Logf("primary osd.%d shard %d -> osd.%d shard %d (acting %v -> %v)", old.ID, old.Shard, fresh.ID, fresh.Shard, old.Acting, fresh.Acting)
-		data, err := read(t, fresh, nil, 60*time.Second)
-		if err != nil || !bytes.Equal(data, payloads[subject]) {
-			t.Fatal("read through the new primary", err)
+		t.Logf("primary osd.%d shard %d -> osd.%d shard %d at epoch %d pg_temp %v (acting %v -> %v)", old.ID, old.Shard, fresh.ID, fresh.Shard, fresh.Epoch, fresh.PGTemp, old.Acting, fresh.Acting)
+		if optimized && old.Shard == 1 {
+			t.Fatal("an optimized EC pool started with its nonprimary shard 1 as primary")
+		}
+		// The OSD silently discards a request older than its PG's current
+		// interval, and the map may still move while peering settles. Like
+		// Objecter on a new map, the caller resends with the newer placement;
+		// a request is never resent under the same epoch.
+		var data []byte
+		var err error
+		for attempt := 0; ; attempt++ {
+			data, err = read(t, fresh, nil, 15*time.Second)
+			if err == nil {
+				break
+			}
+			now := poolPlace(t, ctx, 1, subject, "")
+			t.Logf("attempt %d at epoch %d (osd.%d shard %d pg_temp %v): %v; placement now epoch %d osd.%d shard %d acting %v", attempt, fresh.Epoch, fresh.ID, fresh.Shard, fresh.PGTemp, err, now.Epoch, now.ID, now.Shard, now.Acting)
+			if now.Epoch == fresh.Epoch || attempt == 4 {
+				n := poolObserve(t, ctx, 1, subject, "", "")
+				t.Fatalf("read through the new primary: %v (native code %d equal=%v)", err, n.Code, bytes.Equal(n.Data, payloads[subject]))
+			}
+			fresh = now
+		}
+		if !bytes.Equal(data, payloads[subject]) {
+			t.Fatal("read through the new primary differs")
+		}
+		if hash && optimized && fresh.PGTemp && fresh.Shard != 0 {
+			// Control: sent in the actual numbering, the shard reaches another
+			// shard's PG on this OSD after the OSD's pre-Tentacle conversion.
+			if _, err := read(t, fresh, func(r *cephmsgr.OSDRequest) { r.Placement.PrimaryFirst = nil }, 5*time.Second); err == nil {
+				t.Fatal("the OSD answered an optimized pool's shard sent without primary-first numbering")
+			}
 		}
 		if hash && fresh.Shard != old.Shard {
 			if _, err := read(t, fresh, func(r *cephmsgr.OSDRequest) { r.Placement.Shard = uint8(old.Shard) }, 5*time.Second); err == nil {

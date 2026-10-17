@@ -16,7 +16,15 @@ import (
 // to the PG primary with that primary's shard in spg_t (replicated-PG
 // profiles) or with the raw hash the OSD maps itself (object-hash profile).
 // The independent native client observes every result.
-func TestCephOSDErasureIntegration(t *testing.T) {
+func TestCephOSDErasureIntegration(t *testing.T) { erasureScenario(t, false) }
+
+// Tentacle's optimized EC (allow_ec_optimizations) changes the OSD write and
+// read paths, makes the non-first data shards ineligible as primary and stores
+// pg_temp primary-first. None of that is on this client's wire: the caller's
+// placement still names the primary and its shard, so the same cases apply.
+func TestCephOSDErasureOptimizedIntegration(t *testing.T) { erasureScenario(t, true) }
+
+func erasureScenario(t *testing.T, optimized bool) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("k=2,m=1 with overwrites needs three BlueStore OSDs")
 	}
@@ -38,11 +46,11 @@ func TestCephOSDErasureIntegration(t *testing.T) {
 	if hash {
 		pg = 8
 	}
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true})
-	if created.PoolType != 3 || created.Size != 3 {
-		t.Fatal("native pool is not k=2,m=1 erasure-coded", created.PoolType, created.Size)
+	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "optimized": optimized})
+	if created.PoolType != 3 || created.Size != 3 || created.ECOptimized != optimized {
+		t.Fatal("native pool is not the requested k=2,m=1 erasure-coded shape", created.PoolType, created.Size, created.ECOptimized)
 	}
-	t.Logf("EC pool %d rule %s", created.PoolID, created.CrushRule)
+	t.Logf("EC pool %d optimized=%v nonprimary shards %s rule %s", created.PoolID, optimized, created.NonprimaryShards, created.CrushRule)
 
 	t.Run("admission with an erasure-code rule present", func(t *testing.T) {
 		options := integrationOptions(t)

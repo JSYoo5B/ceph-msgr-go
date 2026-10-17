@@ -43,7 +43,44 @@ primary reconstructs reads; after the primary dies the new primary holds a
 different shard and only requests naming it are answered, so the caller must
 re-derive the shard from the new map along with the primary. Other opcodes,
 recovery traffic and EC profiles other than k=2,m=1 are
-unverified. Self-managed snapshots, watch/notify and a write during one
+unverified.
+
+## Optimized EC pools (`allow_ec_optimizations`)
+
+Tentacle's optimized EC (`OSDMonitor::enable_pool_ec_optimizations`, Ceph
+20.2.4) marks the data shards other than the first as `nonprimary_shards`
+(`{1}` for k=2, m=1) and stores such a PG's pg_temp primary-first. The OSD
+reads an EC request's spg_t shard from a client lacking SERVER_TENTACLE
+(bit 50, incarnation 2) in that pre-Tentacle primary-first numbering whenever
+the pool is optimized and the PG has a pg_temp, and converts it back
+(`osd/OSD.cc` ms_fast_dispatch and dispatch_session_waiting,
+`OSDMap::pgtemp_undo_primaryfirst`). This client's OSD sessions do not
+declare SERVER_TENTACLE: it would also select Tentacle-only encodings such as
+pg_pool_t v32, which this client does not implement. Instead
+`OSDPlacement.PrimaryFirst` (and `OSDPGListTarget.PrimaryFirst`) carries the
+pool size and nonprimary shard count, and the client encodes the actual
+`Shard` with `OSDMap::pgtemp_primaryfirst`; `Submission.Placement` keeps the
+actual shard. Set it exactly when the caller's map shows an optimized pool
+and a pg_temp for the PG; shard 0 is never renumbered. Observed live: after
+the shard-0 primary died, the new primary held parity shard 2 under a
+primary-first pg_temp and answered only the renumbered request (wire shard
+1); the actual shard 2 on the wire went unanswered. The legacy-v6 object-hash
+profile sends no shard and the OSD maps the PG itself.
+
+Primary selection also changes. A nonprimary shard never becomes primary for
+long: the first map after the loss of the primary named the OSD on shard 1
+(pure CRUSH order); that OSD had the MON set a primary-first pg_temp and two
+epochs later the map named the parity shard's OSD. A request built from the
+transient map reaches a PG that is about to change interval and may be
+discarded without a reply, like any request from an epoch older than the
+PG's current primary interval; the caller re-derives placement from the newer
+map and resends (nothing resends automatically). For finding the shard of an
+OSD that appears twice in an optimized acting set, Objecter searches the
+primary-eligible shards first; the fixture oracle does the same.
+
+The writer-side backoff gate cannot undo the renumbering from the encoded
+request, so a BLOCK on an EC PG gates requests for its object range on every
+shard of that PG on the connection (over-refusal, never a bypass). Self-managed snapshots, watch/notify and a write during one
 shard's absence (later recovered) were verified.
 
 Verification: [OSD_ERASURE_VALIDATION.md](../../integration/fixture/OSD_ERASURE_VALIDATION.md).

@@ -20,6 +20,8 @@ type OSDPGListTarget struct {
 	Primary int32
 	Erasure bool
 	Shard   uint8
+	// PrimaryFirst has the meaning of OSDPlacement.PrimaryFirst.
+	PrimaryFirst *OSDPrimaryFirst
 }
 
 // OSDPGListRequest asks for one head-only PGNLS page. Namespace may be the
@@ -69,7 +71,7 @@ type OSDPGListReply struct {
 var ErrOSDPGListTarget = errors.New("ceph: OSD PG listing target differs from its explicit metadata")
 
 func pgListWireInput(r OSDPGListRequest) osd.PGListRequest {
-	return osd.PGListRequest{ClientInc: r.ClientIncarnation, MapEpoch: r.MapEpoch, PG: osd.PG{Pool: r.PG.Pool, Seed: r.PG.Seed}, Namespace: r.Namespace, Cursor: r.Cursor, Count: r.Count, StartEpoch: r.StartEpoch, MaxOutputBytes: r.MaxOutputBytes, Erasure: r.PG.Erasure, Shard: r.PG.Shard}
+	return osd.PGListRequest{ClientInc: r.ClientIncarnation, MapEpoch: r.MapEpoch, PG: osd.PG{Pool: r.PG.Pool, Seed: r.PG.Seed}, Namespace: r.Namespace, Cursor: r.Cursor, Count: r.Count, StartEpoch: r.StartEpoch, MaxOutputBytes: r.MaxOutputBytes, Erasure: r.PG.Erasure, Shard: primaryFirstShard(r.PG.Shard, r.PG.PrimaryFirst)}
 }
 
 // ListPG sends exactly one bounded PGNLS request to an explicit primary.
@@ -87,7 +89,7 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 	if request.PG.Primary != o.target.ID {
 		return result, ErrOSDPGListTarget
 	}
-	if request.PG.Shard > 127 || !request.PG.Erasure && request.PG.Shard != 0 || request.PG.Erasure && !c.options.OSDProfile.replicatedPG() {
+	if !validShardPlacement(request.PG.Erasure, request.PG.Shard, request.PG.PrimaryFirst) || request.PG.Erasure && !c.options.OSDProfile.replicatedPG() {
 		return result, fmt.Errorf("%w: a PG shard needs erasure-coded placement and a replicated-PG profile", osd.ErrRequest)
 	}
 	select {
@@ -134,7 +136,7 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 	}
 	reply, err := s.Call(operation, m)
 	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch,
-		Placement: &OSDPlacement{PG: OSDPG{Pool: request.PG.Pool, Seed: request.PG.Seed}, Primary: request.PG.Primary, Erasure: request.PG.Erasure, Shard: request.PG.Shard}}
+		Placement: &OSDPlacement{PG: OSDPG{Pool: request.PG.Pool, Seed: request.PG.Seed}, Primary: request.PG.Primary, Erasure: request.PG.Erasure, Shard: request.PG.Shard, PrimaryFirst: cloneOSDPrimaryFirst(request.PG.PrimaryFirst)}}
 	result.Submission = submission
 	if err != nil {
 		return result, o.operationError(err)

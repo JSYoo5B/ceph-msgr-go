@@ -28,6 +28,8 @@ type osdFixtureOracle struct {
 	PrimaryID   int32   `json:"primary_id"`
 	Shard       int8    `json:"pg_shard"`
 	PoolType    int     `json:"pool_type"`
+	PGTemp      bool    `json:"pg_temp"`
+	Nonprimary  int     `json:"nonprimary_shard_count"`
 	Epoch       uint32  `json:"epoch"`
 	Hash        uint32  `json:"hash"`
 	PG          uint32  `json:"pg_seed"`

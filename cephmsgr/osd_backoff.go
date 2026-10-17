@@ -376,7 +376,13 @@ func (o *OSDConnection) beforeWriteBackoff(message msgr.MessageData) error {
 		}
 		for _, entry := range b.active {
 			block := entry.receipt.block
-			if block.PG == target.PG && block.Shard == target.Shard && osd.BackoffContains(block, target.Object) {
+			// A BLOCK names the OSD's actual shard, while an erasure-coded
+			// request may carry it in the pre-Tentacle primary-first
+			// numbering (OSDPrimaryFirst), which these bytes cannot undo. So
+			// any shard of a blocked erasure-coded PG matches: refusal is a
+			// known unsent outcome and never lets a blocked object through.
+			sameShard := block.Shard == target.Shard || block.Shard >= 0 && target.Shard >= 0
+			if block.PG == target.PG && sameShard && osd.BackoffContains(block, target.Object) {
 				return ErrOSDBackoff
 			}
 		}

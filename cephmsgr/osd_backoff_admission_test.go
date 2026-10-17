@@ -64,6 +64,26 @@ func TestOSDBackoffAdmissionMatchesOnlyActualPGAndHeadObjectRange(t *testing.T) 
 	}
 }
 
+// A BLOCK names the OSD's actual shard; an optimized EC request may carry its
+// shard in primary-first numbering, so every shard of the PG is gated.
+func TestOSDBackoffAdmissionGatesEveryShardOfAnErasurePG(t *testing.T) {
+	object := osd.PGCursor{Pool: 7, Object: "b", Snap: osd.NoSnap}
+	for _, tc := range []struct {
+		shard int8
+		want  bool
+	}{{2, true}, {1, true}, {0, true}, {-1, false}} {
+		o := backoffUnitConnection()
+		o.backoffState.gateInstalled = true
+		if err := o.backoffState.accept(o, osd.Backoff{PG: osd.PG{Pool: 7, Seed: 3}, Shard: 2, Op: osd.BackoffBlock, ID: 1, Begin: object, End: object}, 11, 7); err != nil {
+			t.Fatal(err)
+		}
+		err := o.beforeWriteBackoff(backoffUnitRequest(t, object, osd.PG{Pool: 7, Seed: 3}, tc.shard, 16, 0))
+		if tc.want && !errors.Is(err, ErrOSDBackoff) || !tc.want && err != nil {
+			t.Fatal("erasure shard gate differs", tc.shard, err)
+		}
+	}
+}
+
 func TestOSDBackoffAdmissionHalfOpenRangesAndEffectiveKey(t *testing.T) {
 	for _, singleton := range []bool{false, true} {
 		o := backoffUnitConnection()

@@ -44,11 +44,32 @@ const (
 // For an erasure-coded pool set Erasure and Shard to the shard the connection
 // target holds in the PG's acting set (its position there), which the OSD
 // requires in spg_t; the caller derives it from its own map, as for Primary.
+// For an optimized pool whose PG has a pg_temp also set PrimaryFirst.
 type OSDPlacement struct {
 	PG      OSDPG
 	Primary int32
 	Erasure bool
 	Shard   uint8
+	// PrimaryFirst is set exactly when the pool has allow_ec_optimizations and
+	// the caller's map holds a pg_temp for this PG.
+	PrimaryFirst *OSDPrimaryFirst
+}
+
+// OSDPrimaryFirst carries the two pool facts with which an OSD reinterprets
+// the erasure-coded shard sent by this client. OSD sessions here do not
+// declare SERVER_TENTACLE, so for an optimized pool (allow_ec_optimizations)
+// whose PG has a pg_temp the OSD reads spg_t's shard in the pre-Tentacle
+// numbering, in which pg_temp lists the primary-eligible shards first, and
+// converts it back with OSDMap::pgtemp_undo_primaryfirst (Ceph 20.2.4
+// osd/OSD.cc ms_fast_dispatch and dispatch_session_waiting). With it set the
+// client encodes the actual Shard in that numbering
+// (OSDMap::pgtemp_primaryfirst), so the OSD resolves the shard the caller
+// named. Without it a non-zero shard reaches another shard's PG, which
+// answers nothing.
+type OSDPrimaryFirst struct {
+	// PoolSize is the pool's size (k+m) and NonprimaryShards the number of
+	// its nonprimary_shards (k-1 for a plugin without a chunk remapping).
+	PoolSize, NonprimaryShards uint8
 }
 
 // wireShard is the spg_t shard: NO_SHARD for replicated placement.
@@ -56,7 +77,33 @@ func (p *OSDPlacement) wireShard() int8 {
 	if p == nil || !p.Erasure {
 		return -1
 	}
-	return int8(p.Shard)
+	return int8(primaryFirstShard(p.Shard, p.PrimaryFirst))
+}
+
+func primaryFirstShard(shard uint8, f *OSDPrimaryFirst) uint8 {
+	if f == nil || shard == 0 {
+		return shard
+	}
+	parity := f.PoolSize - f.NonprimaryShards - 1
+	if shard >= f.PoolSize-parity {
+		return shard + parity + 1 - f.PoolSize
+	}
+	return shard + parity
+}
+
+func validShardPlacement(erasure bool, shard uint8, f *OSDPrimaryFirst) bool {
+	if shard > 127 || !erasure && (shard != 0 || f != nil) {
+		return false
+	}
+	return f == nil || f.PoolSize >= 2 && f.PoolSize <= 128 && f.NonprimaryShards < f.PoolSize && shard < f.PoolSize
+}
+
+func cloneOSDPrimaryFirst(f *OSDPrimaryFirst) *OSDPrimaryFirst {
+	if f == nil {
+		return nil
+	}
+	copy := *f
+	return &copy
 }
 
 func cloneOSDPlacement(p *OSDPlacement) *OSDPlacement {
@@ -64,6 +111,7 @@ func cloneOSDPlacement(p *OSDPlacement) *OSDPlacement {
 		return nil
 	}
 	copy := *p
+	copy.PrimaryFirst = cloneOSDPrimaryFirst(p.PrimaryFirst)
 	return &copy
 }
 
@@ -75,7 +123,7 @@ func (o *OSDConnection) validatePlacement(request OSDRequest) error {
 		return nil
 	}
 	p := request.Placement
-	if p != nil && (p.Shard > 127 || !p.Erasure && p.Shard != 0) {
+	if p != nil && !validShardPlacement(p.Erasure, p.Shard, p.PrimaryFirst) {
 		return fmt.Errorf("%w: a shard is meaningful only for erasure-coded placement", osd.ErrRequest)
 	}
 	if !o.client.options.OSDProfile.replicatedPG() || p == nil || request.Object.Pool < 0 || p.PG.Pool != uint64(request.Object.Pool) || p.Primary != o.target.ID && !request.BalanceReads && !request.LocalizeReads {
