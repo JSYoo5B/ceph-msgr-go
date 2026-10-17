@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -162,6 +163,77 @@ func TestCephMonPoolOpIntegration(t *testing.T) {
 			if !errors.As(err, &refused) || errors.As(err, &unknown) || refused.Code != request.code || result.Code != request.code {
 				t.Fatal(name, "expected a known signed refusal", request.code, result, err)
 			}
+		}
+	})
+
+	// A peon forwards MPoolOp to the leader and routes the reply back. One
+	// client pinned to each monitor allocates an id: the sequence is shared,
+	// and at least one of them is a peon.
+	t.Run("every monitor, peons forwarding to the leader", func(t *testing.T) {
+		quorum, err := c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"quorum_status","format":"json"}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var status struct {
+			Leader string `json:"quorum_leader_name"`
+			Map    struct {
+				Mons []struct {
+					Name  string `json:"name"`
+					Addrs struct {
+						Vec []struct {
+							Type, Addr string
+						} `json:"addrvec"`
+					} `json:"public_addrs"`
+				} `json:"mons"`
+			} `json:"monmap"`
+		}
+		if err := json.Unmarshal(quorum.Data, &status); err != nil || status.Leader == "" {
+			t.Fatal("quorum status", err)
+		}
+		var leaderAddr string
+		for _, m := range status.Map.Mons {
+			for _, a := range m.Addrs.Vec {
+				if m.Name == status.Leader && a.Type == "v2" {
+					leaderAddr = a.Addr
+				}
+			}
+		}
+		seeds := integrationOptions(t).Monitors
+		if len(seeds) < 2 || leaderAddr == "" {
+			t.Skip("needs at least two monitors and a known leader address")
+		}
+		before := info(1).SnapSeq
+		last, peons := before, 0
+		for _, seed := range seeds {
+			options := integrationOptions(t)
+			options.Monitors = []string{seed}
+			options.EnableOSD = true
+			if isReplicatedPGFixtureProfile() {
+				options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+			}
+			pinned, err := cephmsgr.Dial(ctx, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			endpoint := pinned.Snapshot().Monitor.Endpoint
+			result, err := pinned.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotCreate})
+			pinned.Close()
+			id, idErr := result.SnapshotID()
+			if err != nil || idErr != nil || id != last+1 {
+				t.Fatalf("allocation through %s: id %d after %d: %v %v", endpoint, id, last, err, idErr)
+			}
+			last = id
+			leader := strings.Contains(endpoint, leaderAddr)
+			if !leader {
+				peons++
+			}
+			t.Logf("allocated id %d through %s (leader %v)", id, endpoint, leader)
+		}
+		if peons == 0 {
+			t.Fatal("no allocation went through a peon")
+		}
+		if state := info(1); state.SnapSeq != last {
+			t.Fatalf("native snap_seq %d differs from the last id %d", state.SnapSeq, last)
 		}
 	})
 

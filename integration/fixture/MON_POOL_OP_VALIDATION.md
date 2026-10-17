@@ -26,6 +26,13 @@ owned pools (OSD_POOL_VALIDATION.md); the pool oracle gained the modes
 - Refusals are known signed codes with the raw result preserved: pool snapshot
   in a self-managed pool `-22`, self-managed id in a pool-snapshot pool `-22`,
   absent pool `-2` for both create and remove.
+- Forwarding: one client pinned to each of the three monitors allocates a
+  self-managed id; the ids are consecutive whichever MON took the request,
+  two of the three went through peons (identified against
+  `quorum_status`'s leader address) that forwarded to the leader and routed
+  the reply back, and native `snap_seq` equals the last id. Passed in
+  legacy-v6 single BlueStore (IPv4) and request-v9/reply-v8 secure AES256K
+  IPv6 single MemStore.
 - Capabilities: the fixture's `client.readonly` (mon, mgr and osd `allow r`)
   gets a known `-1` (EPERM) reply with a map epoch, never a dropped request,
   for self-managed allocation and removal, pool snapshot creation and removal,
@@ -49,6 +56,6 @@ four profiles.
 
 Not claimed: grants that admit self-managed snapshots through a pool-scoped
 OSD write cap without MON write (no such identity exists in the fixture),
-`-EOPNOTSUPP` for filesystem pools, behavior across MON failover or a forwarded
-request to a peon, POOL_OP_CREATE/DELETE, and waiting for OSDs to apply the
-updated map after an allocation.
+`-EOPNOTSUPP` for filesystem pools, behavior across MON failover,
+POOL_OP_CREATE/DELETE, and waiting for OSDs to apply the updated map after an
+allocation.
