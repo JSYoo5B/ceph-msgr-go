@@ -48,7 +48,7 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 		if !prepared {
 			return
 		}
-		cleanup, stop := context.WithTimeout(context.Background(), 60*time.Second)
+		cleanup, stop := context.WithTimeout(context.Background(), 180*time.Second)
 		defer stop()
 		if result := nativeOmapWrite(t, cleanup, base, "cleanup", omapWriteInput{}); !result.Cleanup.Removed {
 			t.Error("owned soak objects were not removed", result.Cleanup)

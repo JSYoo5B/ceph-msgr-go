@@ -225,7 +225,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if duration, err := time.ParseDuration(p.osdSoak); err != nil || duration < 30*time.Second || p.osd != "1" {
 			return profile{}, fmt.Errorf("OSD soak requires CEPH_MSGR_TEST_OSD=1 and a duration of at least 30s")
 		}
-		selected = "^TestCephOSDSoakIntegration$"
+		selected = "^TestCephOSDSoak(Failover)?Integration$"
 	}
 	if p.nativeMgrPreparation == "1" {
 		if p.mgrCount != "2" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.osd != "0" || p.stressDuration != "" {

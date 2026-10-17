@@ -303,8 +303,9 @@ jobs:
           # Native OSD I/O with instrumented host client binaries; ordinary row retained.
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3', race: '1' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', osd: '1', osd_store: 'bluestore', osd_replicas: '3' }
-          # OSD soak: four writers with checked reads, connection churn and short-deadline
-          # appends resolved only by explicit resubmission; native bytes compared at the end.
+          # OSD soaks: four writers with checked reads, connection churn and short-deadline
+          # appends resolved only by explicit resubmission, then the same under repeated
+          # OSD SIGKILL; native bytes compared at the end of each.
           - { key: aes256k, service: aes256k, family: '4', stress: '', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_soak: '4m' }
           # Explicit v8 acceptance: seven top-level tests, thirteen actual cases per row
           # (base I/O 5, PGNLS 3, normal ACK 1, late ACK 1, watch reconnect 1, split 1, MDS maps 1).

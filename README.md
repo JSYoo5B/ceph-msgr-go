@@ -2382,7 +2382,7 @@ CEPH_MSGR_TEST_SHORT_TICKETS=1 sh integration/run.sh # 별도 fractional AUTH ti
 CEPH_MSGR_TEST_MODE_REJECTION=mon sh integration/run.sh # 실제 CRC-only MON 거절
 CEPH_MSGR_TEST_MODE_REJECTION=mgr sh integration/run.sh # 실제 CRC-only MGR 거절·secure 복구
 CEPH_MSGR_STRESS_DURATION=1h CEPH_MSGR_TEST_TIMEOUT=70m sh integration/run.sh
-CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore CEPH_MSGR_TEST_OSD_REPLICAS=3 CEPH_MSGR_TEST_OSD_SOAK=4m sh integration/run.sh # OSD soak만 실행
+CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore CEPH_MSGR_TEST_OSD_REPLICAS=3 CEPH_MSGR_TEST_OSD_SOAK=4m sh integration/run.sh # OSD soak 두 개(장애 동반 포함)만 실행
 ```
 
 부하 시험 시간은 45초 이상으로 설정한다. 더 긴 시험에는
@@ -2390,7 +2390,7 @@ CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore CEPH_MSGR_TEST_OSD_REPLI
 `CEPH_MSGR_TEST_OSD=1`이면 3 BlueStore 기본 선택이 10분을 넘으므로 30분이다.
 OSD fixture의 기본 선택은 `TestCephOSD*`, `TestCephMonOSDMaps*`와 OSD pool을
 쓰는 MON 시험(`MonPoolOp`, `MonStatfs`, `MonMapVersion`, `MonServiceMap`)이다.
-`CEPH_MSGR_TEST_OSD_SOAK`(30초 이상)는 OSD fixture에서 soak 시험만 선택한다.
+`CEPH_MSGR_TEST_OSD_SOAK`(30초 이상)는 OSD fixture에서 soak 시험(3 BlueStore면 OSD 반복 SIGKILL soak 포함)만 선택한다.
 
 [공개 API 통합시험](integration/)은 별도 Go 시험 패키지에서 제품을 import한다.
 명령·권한·인증 키 회수와 교체·운영 상태·연결 준비 검사를 포함한다.

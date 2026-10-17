@@ -73,7 +73,7 @@ func TestProfileSelection(t *testing.T) {
 		{"pg-reply-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
 		{"pg-request-v9", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-request-v9-reply-v8"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
 		{"osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
-		{"osd-soak", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_SOAK": "4m"}, "^TestCephOSDSoakIntegration$"},
+		{"osd-soak", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_SOAK": "4m"}, "^TestCephOSDSoak(Failover)?Integration$"},
 		{"ipv6-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
 		{"ipv6-replicated-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
 		{"crc-host-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
