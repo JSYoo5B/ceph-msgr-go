@@ -1002,11 +1002,11 @@ context와 truncate clipping, raw per-op·ONDISK·독립 native bytes를 비교�
 `OSDCopyFrom`/`OSDCopyFrom2`는 `OSDCopyFromInput`의 명시적 source pool·이름·key·
 namespace로 대상 객체를 source head의 복사본으로 만드는 단독 요청을 전송한다.
 OSD가 source를 직접 가져오므로 호출자가 source 배치를 제공하지 않는다.
-Source snapshot·fadvise·cache-tier flag와 다른 operation과의 조합은 송신 전에
-거절하고 COPY_FROM2의 TRUNCATE_SEQ 형태만 허용한다. 현재는 합성 wire·공개 transport
+Source snapshot id는 허용하고 fadvise·cache-tier flag와 다른 operation과의 조합은 송신 전에
+거절하며 COPY_FROM2의 TRUNCATE_SEQ 형태만 허용한다. 현재는 합성 wire·공개 transport
 시험과 실제 daemon 시험이 있다. Native client는 실행하지 않고 source·대상 bytes/xattr/OMAP/
 version을 독립 관측한다(native encoder vector 없음). single·3-replica BlueStore,
-replicated-pg-v8, request-v9/reply-v8 secure/AES256K IPv6 single MemStore에서 6 사례가
+replicated-pg-v8, request-v9/reply-v8 secure/AES256K IPv6 single MemStore에서 7 사례(source snapshot 포함)가
 통과했다. 비동기 실패의 per-op 결과는 `-115`로 원본 보존한다.
 [계약](internal/osd/COPY_FROM_CONTRACT.md)과
 [검증 기록](integration/fixture/OSD_COPY_FROM_VALIDATION.md)을 참고한다.

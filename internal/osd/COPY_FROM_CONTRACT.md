@@ -22,9 +22,10 @@ The payload length in the op header covers all of it.
 - Standalone vectors only: every combination with another operation is refused
   before submission (the daemon completes the copy through a restartable
   finisher and the combined semantics are not characterized).
-- Source snapid is always `CEPH_NOSNAP`: the source is the head object. Source
-  snapshots, `MAP_SNAP_CLONE`, fadvise hints and the cache-tier flags
-  (`FLUSH`, `IGNORE_OVERLAY`, `IGNORE_CACHE`, `RWORDERED`) are unsupported.
+- Source snapid is `CEPH_NOSNAP` (the head) unless a snapshot id 1 through
+  `MaxSnap` is supplied, which the OSD resolves to the covering clone.
+  `MAP_SNAP_CLONE`, fadvise hints and the cache-tier flags (`FLUSH`,
+  `IGNORE_OVERLAY`, `IGNORE_CACHE`, `RWORDERED`) are unsupported.
 - COPY_FROM carries flags 0 (librados `copy_from`). COPY_FROM2 carries flags 0
   or `TRUNCATE_SEQ` with a nonzero sequence. A size without the flag, a zero
   sequence, and the `(1, all-ones)` pair the OSD rewrites to `(0, 0)` are
@@ -53,5 +54,5 @@ It uses native observation, not a native-encoded vector or twin execution.
 Observed: a copy that fails after the daemon started it reports its aggregate
 code (ENOENT, ERANGE, EOVERFLOW) with per-op `-115` (EINPROGRESS); the
 self-copy refusal reports `-22` in both places. Both are preserved raw. Source
-snapshots, compound use and failover are unverified; a lost reply was verified
+snapshot ids were verified against a real clone; compound use and failover are unverified; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.

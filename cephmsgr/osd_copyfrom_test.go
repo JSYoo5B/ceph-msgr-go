@@ -31,7 +31,11 @@ func copyFromSyntheticReply(t *testing.T, input OSDRequest, results []int32, agg
 	for i, op := range input.Operations {
 		if op.Code == OSDCopyFrom || op.Code == OSDCopyFrom2 {
 			u := m.Front[start+38*i+6:]
-			binary.LittleEndian.PutUint64(u, osd.NoSnap)
+			snap := op.CopyFrom.SourceSnapshot
+			if snap == 0 {
+				snap = osd.NoSnap
+			}
+			binary.LittleEndian.PutUint64(u, snap)
 			binary.LittleEndian.PutUint64(u[8:], op.CopyFrom.SourceVersion)
 			clear(u[16:28])
 			if op.CopyFrom.TruncateSequence != 0 {

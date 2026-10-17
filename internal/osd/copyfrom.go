@@ -24,14 +24,16 @@ const (
 	CopyFromTruncateSequence uint8 = 32
 )
 
-// CopyFromInput is the COPY_FROM/COPY_FROM2 union and indata. The source is a
-// head object named by an explicit pool, key and namespace; the OSD maps it
-// to its own PG. Version zero disables the source version check. Only the
-// librados flags (zero) and COPY_FROM2's TRUNCATE_SEQ are admitted, source
-// snapshots, fadvise hints and cache-tier flags are not.
+// CopyFromInput is the COPY_FROM/COPY_FROM2 union and indata. The source is
+// named by an explicit pool, key and namespace; the OSD maps it to its own PG.
+// Snap zero (or NoSnap) selects the head and 1 through MaxSnap a snapshot the
+// OSD resolves to the covering clone. Version zero disables the source version
+// check. Only the librados flags (zero) and COPY_FROM2's TRUNCATE_SEQ are
+// admitted; fadvise hints and cache-tier flags are not.
 type CopyFromInput struct {
 	Object           string
 	Locator          Locator
+	Snap             uint64
 	Version          uint64
 	Flags            uint8
 	TruncateSequence uint32
@@ -60,7 +62,7 @@ func validateCopyFromOperation(op Operation, limit uint32) (uint64, uint64, erro
 		return 0, 0, ErrOperation
 	}
 	input := op.CopyFrom
-	if input.Object == "" || input.Locator.Pool < 0 || input.Locator.Hash != -1 || strings.IndexByte(input.Object, 0) >= 0 {
+	if input.Snap > MaxSnap && input.Snap != NoSnap || input.Object == "" || input.Locator.Pool < 0 || input.Locator.Hash != -1 || strings.IndexByte(input.Object, 0) >= 0 {
 		return 0, 0, ErrRequest
 	}
 	switch {
@@ -96,8 +98,15 @@ func copyFromDataBytes(op Operation) uint64 {
 	return n
 }
 
+func copyFromSnap(input CopyFromInput) uint64 {
+	if input.Snap == 0 {
+		return NoSnap
+	}
+	return input.Snap
+}
+
 func encodeCopyFromUnion(e *wire.Encoder, op Operation) {
-	e.U64(NoSnap)
+	e.U64(copyFromSnap(op.CopyFrom))
 	e.U64(op.CopyFrom.Version)
 	e.U8(op.CopyFrom.Flags)
 	e.U32(0) // src_fadvise_flags
@@ -131,7 +140,7 @@ func ValidateCopyFromReply(requested Operation, reply OperationResult) error {
 	if requested.Code != CopyFrom && requested.Code != CopyFrom2 {
 		return ErrOperation
 	}
-	want := CopyFromResult{Snap: NoSnap, Version: requested.CopyFrom.Version, Flags: requested.CopyFrom.Flags}
+	want := CopyFromResult{Snap: copyFromSnap(requested.CopyFrom), Version: requested.CopyFrom.Version, Flags: requested.CopyFrom.Flags}
 	if reply.Code != requested.Code || reply.CopyFrom != want || reply.Offset != 0 || reply.Length != 0 || reply.TruncateSize != 0 || reply.TruncateSequence != 0 || reply.PayloadLength != 0 || len(reply.Data) != 0 || reply.Xattr != (XattrResult{}) || reply.Class != (ClassResult{}) || reply.AllocHint != (AllocHintInput{}) || reply.Checksum != (ChecksumResult{}) || reply.Snap != 0 || reply.WriteSamePatternLength != 0 {
 		return errors.New("OSD copy-from reply differs from submitted operation")
 	}

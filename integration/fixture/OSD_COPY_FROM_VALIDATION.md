@@ -18,7 +18,7 @@ source and destination (bytes, xattrs, OMAP inventory and header, version) and
 by the daemon accepting the wire. Consequently the encoded bytes are verified
 by daemon behavior, not byte-compared with a native encoder.
 
-## Cases (`TestCephOSDCopyFromIntegration`, six subtests)
+## Cases (`TestCephOSDCopyFromIntegration`, seven subtests)
 
 - COPY_FROM2 and COPY_FROM (flags 0) to an absent destination: native
   destination equals the native-seeded source exactly (binary data, two
@@ -39,6 +39,12 @@ by daemon behavior, not byte-compared with a native encoder.
   (object grows to 100 bytes, source sequence 0) but trimmed to nothing by the
   sequenced copy (still 32 bytes), so the flag installs the supplied sequence.
 
+- Snapshot source: after the head is overwritten under a SnapContext (the
+  original becomes a clone), COPY_FROM2 with the snapshot id yields the
+  original bytes and xattrs, and a head copy yields the new bytes; the reply
+  echoes the snapshot id. (Seventh subtest, added after the first profile runs;
+  rerun on all four profiles, 7/7.)
+
 ## Profiles
 
 All passed on the first complete run after test-expectation corrections (the
@@ -49,10 +55,10 @@ records `-115`):
 
 | Profile | Runtime / store | Result |
 | --- | --- | --- |
-| legacy-v6, default secure CephX, IPv4 | container, single BlueStore | 6/6 |
-| legacy-v6, 3 replicas | container, BlueStore | 6/6 |
-| replicated-pg-v8 (HASHPSPOOL, 8 PG) | container, single BlueStore | 6/6 |
-| replicated-pg-request-v9-reply-v8, secure, AES256K, IPv6 | container, single MemStore | 6/6 |
+| legacy-v6, default secure CephX, IPv4 | container, single BlueStore | 7/7 |
+| legacy-v6, 3 replicas | container, BlueStore | 7/7 |
+| replicated-pg-v8 (HASHPSPOOL, 8 PG) | container, single BlueStore | 7/7 |
+| replicated-pg-request-v9-reply-v8, secure, AES256K, IPv6 | container, single MemStore | 7/7 |
 
 ## Lost reply (`TestCephOSDCopyFromLostReplyIntegration`)
 
@@ -64,7 +70,7 @@ session reads the copied bytes under a later transaction; a native observation
 after a delay shows the same version and mtime, so nothing was replayed.
 Passed on a single BlueStore and on three BlueStore replicas (one run each).
 
-Not claimed: native-encoded vectors, compound vectors, source snapshots,
+Not claimed: native-encoded vectors, compound vectors,
 `MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints, cross-pool copy,
 copy under daemon failover or SIGKILL, EC, CRC mode
 and host runtime profiles. The in-OSD copy of a source in another PG is

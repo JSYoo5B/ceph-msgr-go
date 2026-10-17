@@ -301,4 +301,45 @@ func TestCephOSDCopyFromIntegration(t *testing.T) {
 			t.Fatal("TRUNCATE_SEQ copy did not install the supplied truncate sequence", seqResult.Length, len(seqState.Data))
 		}
 	})
+	t.Run("snapshot source", func(t *testing.T) {
+		// Overwrite the head under a SnapContext so the original becomes a clone,
+		// then copy the clone and the new head to separate absent destinations.
+		snap := nativeSnapCreate(t, ctx, base, 1)[0]
+		fresh := []byte("new head, no longer the original\x00\xff")
+		target, connection := route(src)
+		write := request(target, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(fresh)), Data: fresh})
+		write.ModificationTime = cephmsgr.OSDTime{Seconds: 1700000200}
+		write.SnapContext = cephmsgr.OSDSnapContext{Sequence: snap, Snapshots: []uint64{snap}}
+		if _, err := connection.Request(ctx, write); err != nil {
+			t.Fatal("head overwrite under SnapContext", err)
+		}
+		headState := observe(src)
+		if !bytes.Equal(headState.Data, fresh) {
+			t.Fatal("native head differs after overwrite")
+		}
+		fromSnap, fromHead := absent[4], absent[5]
+		op := copyOp(cephmsgr.OSDCopyFrom2, src, func(in *cephmsgr.OSDCopyFromInput) { in.SourceSnapshot = snap })
+		reply, err := send(fromSnap, op)
+		s := record("COPY_FROM2 from a snapshot", fromSnap, reply, err, op)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkReceipt(t, reply, fromSnap, op, 0, 0)
+		if reply.Operations[0].CopyFromSnapshot != snap {
+			t.Fatal("snapshot echo lost", reply.Operations[0].CopyFromSnapshot)
+		}
+		if s.After.Code != 0 || !bytes.Equal(s.After.Data, source.Data) || !reflect.DeepEqual(s.After.Attributes, source.Attributes) {
+			t.Fatalf("snapshot copy is not the original clone: %x", s.After.Data)
+		}
+		op = copyOp(cephmsgr.OSDCopyFrom2, src, nil)
+		reply, err = send(fromHead, op)
+		s = record("COPY_FROM2 from the new head", fromHead, reply, err, op)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checkReceipt(t, reply, fromHead, op, 0, 0)
+		if !bytes.Equal(s.After.Data, fresh) {
+			t.Fatalf("head copy is not the new head: %x", s.After.Data)
+		}
+	})
 }

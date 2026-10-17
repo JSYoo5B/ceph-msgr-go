@@ -54,6 +54,7 @@ func TestCopyFromV6V8UnionAndIndata(t *testing.T) {
 					op := copyFromOperation(code)
 					if truncate {
 						op.CopyFrom.Flags, op.CopyFrom.TruncateSequence, op.CopyFrom.TruncateSize = CopyFromTruncateSequence, 9, 0xfedcba98
+						op.CopyFrom.Snap = 6 // a snapshot source changes only the union's snapid
 					}
 					r.Operations = []Operation{op}
 					r.SnapSeq, r.Snaps = 4, []uint64{4, 2}
@@ -73,7 +74,7 @@ func TestCopyFromV6V8UnionAndIndata(t *testing.T) {
 					union := m.Front[start : start+opWireSize]
 					want := expectedCopyFromData(op.CopyFrom)
 					if binary.LittleEndian.Uint16(union) != code || binary.LittleEndian.Uint32(union[2:]) != 0 ||
-						binary.LittleEndian.Uint64(union[6:]) != NoSnap || binary.LittleEndian.Uint64(union[14:]) != op.CopyFrom.Version ||
+						binary.LittleEndian.Uint64(union[6:]) != copyFromSnap(op.CopyFrom) || binary.LittleEndian.Uint64(union[14:]) != op.CopyFrom.Version ||
 						union[22] != op.CopyFrom.Flags || binary.LittleEndian.Uint32(union[23:]) != 0 || !bytes.Equal(union[27:34], make([]byte, 7)) ||
 						binary.LittleEndian.Uint32(union[34:]) != uint32(len(want)) {
 						t.Fatalf("packed copy_from union %x", union)
@@ -97,6 +98,7 @@ func TestCopyFromValidationBounds(t *testing.T) {
 		o.CopyFrom.Flags, o.CopyFrom.TruncateSequence, o.CopyFrom.TruncateSize = CopyFromTruncateSequence, 2, 1
 	}
 	bad := map[string]func(*Operation){
+		"snap dir":            func(o *Operation) { o.CopyFrom.Snap = SnapDir },
 		"empty source":        func(o *Operation) { o.CopyFrom.Object = "" },
 		"nul source":          func(o *Operation) { o.CopyFrom.Object = "a\x00b" },
 		"negative pool":       func(o *Operation) { o.CopyFrom.Locator.Pool = -1 },
@@ -180,6 +182,8 @@ func copyFromReply(t *testing.T, version int, code uint16, union []byte, payload
 func TestCopyFromReplyUnionEchoAndValidation(t *testing.T) {
 	op := copyFromOperation(CopyFrom2)
 	op.CopyFrom.Flags, op.CopyFrom.TruncateSequence, op.CopyFrom.TruncateSize = CopyFromTruncateSequence, 3, 4
+	snapOp := op
+	snapOp.CopyFrom.Snap = 9
 	union := func(snap uint64) []byte {
 		e := wire.Encoder{}
 		e.U64(snap)
@@ -207,6 +211,9 @@ func TestCopyFromReplyUnionEchoAndValidation(t *testing.T) {
 			}
 			if err := ValidateCopyFromReply(op, got); err != nil {
 				t.Fatal(err)
+			}
+			if ValidateCopyFromReply(snapOp, got) == nil {
+				t.Fatal("head echo accepted for a snapshot source")
 			}
 			for name, edit := range map[string]func(*OperationResult){
 				"code":    func(o *OperationResult) { o.Code = CopyFrom },

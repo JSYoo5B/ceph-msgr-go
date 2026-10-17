@@ -118,18 +118,20 @@ type OSDOperation struct {
 // OSDCopyFromInput is the active input for OSDCopyFrom and OSDCopyFrom2. The
 // source is the head of SourceName in SourcePool/SourceKey/SourceNamespace;
 // the OSD computes the source PG and fetches it with its own connection, so
-// the caller supplies no source placement. The source must differ from the
-// target. SourceVersion zero accepts any source version, otherwise the OSD
+// the caller supplies no source placement. SourceSnapshot zero is the head;
+// 1 through OSDMaxSnapshot names a snapshot the OSD resolves to a clone. The
+// source must differ from the target. SourceVersion zero accepts any source version, otherwise the OSD
 // refuses a different one (ERANGE). TruncateSequence selects COPY_FROM2's
 // TRUNCATE_SEQ form: the destination gets TruncateSequence (nonzero) and
 // TruncateSize instead of the source's values; it is refused on OSDCopyFrom.
-// Source snapshots, fadvise hints and cache-tier copy flags are unsupported.
+// Fadvise hints and cache-tier copy flags are unsupported.
 // A reply with success reports server completion of the copy as ONDISK;
 // a cancelled or failed local wait leaves the outcome unknown.
 type OSDCopyFromInput struct {
 	SourcePool                 int64
 	SourceName                 string
 	SourceKey, SourceNamespace string
+	SourceSnapshot             uint64
 	SourceVersion              uint64
 	TruncateSequence           uint32
 	TruncateSize               uint64
@@ -199,8 +201,9 @@ type OSDOperationResult struct {
 	Xattr                        OSDXattrResult
 	Class                        OSDClassResult
 	AllocHint                    OSDAllocHint
-	// CopyFromVersion echoes the COPY_FROM source version field.
-	CopyFromVersion uint64
+	// CopyFromVersion and CopyFromSnapshot echo the COPY_FROM source version
+	// and source snapid (OSDHeadSnapshot for the head).
+	CopyFromVersion, CopyFromSnapshot uint64
 	// Snapshot echoes the ROLLBACK target. Snapshots is decoded from Data
 	// for a successful OSDListSnapshots, which also keeps the raw bytes.
 	Snapshot  uint64
@@ -563,7 +566,7 @@ func publicOSDReply(r osd.Reply) OSDReply {
 			Hash: r.Redirect.Locator.Hash, Object: r.Redirect.Object, LegacyInstructions: r.Redirect.LegacyInstructions}}
 	result.Operations = make([]OSDOperationResult, len(r.Operations))
 	for i, op := range r.Operations {
-		result.Operations[i] = OSDOperationResult{WriteSamePatternLength: op.WriteSamePatternLength, CopyFromVersion: op.CopyFrom.Version, Code: OSDOpcode(op.Code), Flags: op.Flags,
+		result.Operations[i] = OSDOperationResult{WriteSamePatternLength: op.WriteSamePatternLength, CopyFromVersion: op.CopyFrom.Version, CopyFromSnapshot: op.CopyFrom.Snap, Code: OSDOpcode(op.Code), Flags: op.Flags,
 			Offset: op.Offset, Length: op.Length, TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence,
 			PayloadLength: op.PayloadLength, Result: op.Result, Data: op.Data,
 			Xattr:     OSDXattrResult{NameLength: op.Xattr.NameLength, ValueLength: op.Xattr.ValueLength, ComparisonOp: op.Xattr.ComparisonOp, ComparisonMode: op.Xattr.ComparisonMode},
@@ -595,7 +598,7 @@ func copyFromWireInput(op OSDOperation) osd.CopyFromInput {
 	if in == (OSDCopyFromInput{}) {
 		return osd.CopyFromInput{}
 	}
-	out := osd.CopyFromInput{Object: in.SourceName, Locator: osd.Locator{Pool: in.SourcePool, Key: in.SourceKey, Namespace: in.SourceNamespace, Hash: -1}, Version: in.SourceVersion}
+	out := osd.CopyFromInput{Object: in.SourceName, Locator: osd.Locator{Pool: in.SourcePool, Key: in.SourceKey, Namespace: in.SourceNamespace, Hash: -1}, Snap: in.SourceSnapshot, Version: in.SourceVersion}
 	if in.TruncateSequence != 0 || in.TruncateSize != 0 {
 		out.Flags = osd.CopyFromTruncateSequence
 		out.TruncateSequence, out.TruncateSize = in.TruncateSequence, in.TruncateSize
