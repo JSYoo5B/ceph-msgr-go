@@ -9,6 +9,13 @@ on:
 permissions:
   contents: read
 
+# A newer commit on the same branch (or pull request) cancels the run still in
+# progress for the older one. Events stay separate so a push run never cancels
+# the pull-request run for the same commit, or a manual dispatch.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     shell: bash
