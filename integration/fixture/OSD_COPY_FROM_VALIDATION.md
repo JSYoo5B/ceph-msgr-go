@@ -87,9 +87,26 @@ three tests (main 7 subtests, lost reply, SIGKILL): CRC mode with AES key and
 service cipher over IPv4, and secure mode with AES256K key and service cipher
 over IPv6.
 
+## Source failover during a copy
+
+`TestCephOSDCopyFromSourceFailoverIntegration` (three BlueStore replicas)
+seeds a 64 KiB source with an xattr in one owned pool and picks a destination
+in the other whose primary differs from the source's. The source primary is
+frozen with `docker pause`, then one Go COPY_FROM2 is sent to the destination
+primary. The destination OSD's internal read of the source cannot finish
+until the frozen OSD is marked down and the source PG gets a new primary; the
+copy then completes with ONDISK, and the destination's native bytes, xattrs
+and version match. The frozen OSD is afterwards resumed, SIGKILLed and
+restarted (a daemon frozen past its heartbeat grace did not return to clean
+PGs within the fixture's wait when only thawed).
+
+| Profile | Copy time | Source primary | Destination primary |
+| --- | --- | --- | --- |
+| replicated-pg-v8, secure AES256K IPv4 | 28.8 s | osd.2 -> osd.1 (epoch 24 -> 26) | osd.1 |
+| legacy-v6, CRC with AES key and service cipher | 27.6 s | osd.0 -> osd.1 (epoch 25 -> 27) | osd.1 |
+
 Not claimed: native-encoded vectors, compound vectors,
 `MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints (cross-pool and
 cross-namespace copies are in OSD_POOL_VALIDATION.md),
-copy killed in flight or failover during a copy, EC, CRC mode
-and host runtime profiles. The in-OSD copy of a source in another PG is
+a destination primary killed during a copy, EC, and host runtime profiles. The in-OSD copy of a source in another PG is
 exercised only incidentally by the 8-PG profile.
