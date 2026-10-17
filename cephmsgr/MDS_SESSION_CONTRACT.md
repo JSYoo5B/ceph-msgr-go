@@ -193,3 +193,29 @@ duplicate-uuid rejects, canceled opens, autoclose eviction, failover and
 multiple ranks were not exercised live. Multi-rank, standby/failover,
 reconnect/reclaim, eviction recovery, metrics, capabilities and data I/O are
 not implemented.
+
+## Session reclaim (MClientReclaim)
+
+`MDSSession.Reclaim(ctx, uuid)` sends MClientReclaim with `CEPH_RECLAIM_RESET`
+(message 27, header v1/compat 1, uuid string and u32 flags) and returns the
+MDS's MClientReclaimReply (message 28): signed result, the OSD map epoch the
+MDS held when it removed the target, and the target's addresses. The MDS finds
+the target by the `uuid` client-metadata key given at OPEN (the key must be
+unique among sessions), requires the same CephX identity (`-EPERM` otherwise),
+evicts it and, with `mds_session_blocklist_on_evict`, blocklists its address
+before answering. A uuid no session carries is answered with result 0 and no
+address; the native client reports that as ENOENT, so callers treat an empty
+address list as "nothing reclaimed".
+
+Local rules: the session must be open and the MDS's OPEN must advertise
+RECLAIM_CLIENT (`ErrMDSReclaimUnsupported`); a session cannot reclaim its own
+uuid (`ErrMDSReclaimSelf`); one reclaim may be pending per session
+(`ErrMDSReclaimPending`). `ctx` bounds only the local wait: after the message is
+sent a cancelled wait or a session end returns `OutcomeUnknownError`, since the
+target may already be evicted; a late reply is ignored. `FinishReclaim` sends
+the FLAG_FINISH message the native client sends after a successful reclaim; the
+MDS sends no answer and a RESET reclaim leaves nothing to finish. The library
+does not wait for the blocklist to reach OSDs and does not change its own
+declared client features (RECLAIM_CLIENT is checked on the MDS side only).
+
+Verification: [MDS_RECLAIM_VALIDATION.md](../integration/fixture/MDS_RECLAIM_VALIDATION.md).

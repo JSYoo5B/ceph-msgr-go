@@ -70,6 +70,13 @@ var (
 	// ErrMDSRequestFeatures refuses requests when the MDS's OPEN did not
 	// advertise the CephFS features this request/reply codec requires.
 	ErrMDSRequestFeatures = errors.New("ceph: MDS does not advertise the required CephFS request features")
+	// ErrMDSReclaimUnsupported refuses a reclaim when the MDS's OPEN did not
+	// advertise RECLAIM_CLIENT.
+	ErrMDSReclaimUnsupported = errors.New("ceph: MDS does not advertise RECLAIM_CLIENT")
+	// ErrMDSReclaimSelf refuses reclaiming this session's own uuid.
+	ErrMDSReclaimSelf = errors.New("ceph: a session cannot reclaim its own uuid")
+	// ErrMDSReclaimPending refuses a second concurrent reclaim on a session.
+	ErrMDSReclaimPending = errors.New("ceph: an MDS reclaim is already pending on this session")
 )
 
 // MDSRequestForwardedError completes a request the MDS forwarded to another

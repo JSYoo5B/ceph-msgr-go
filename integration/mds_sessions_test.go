@@ -740,13 +740,94 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 		return
 	}
 
+	if !leaf("reclaim_evicts_the_target_session", func(t *testing.T) {
+		victimClient, victimConn, _ := newClient(t, "G", identity, freshKey)
+		reclaimClient, reclaimConn, _ := newClient(t, "H", identity, freshKey)
+		victimGID, reclaimGID := victimClient.Snapshot().GlobalID, reclaimClient.Snapshot().GlobalID
+		victimUUID, reclaimUUID := "ceph-msgr-reclaim-victim-"+prefix, "ceph-msgr-reclaim-taker-"+prefix
+		victimMeta, reclaimMeta := metadata("-g"), metadata("-h")
+		victimMeta["uuid"], reclaimMeta["uuid"] = victimUUID, reclaimUUID
+		victim, err := victimConn.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: victimMeta, RenewInterval: 2 * time.Second})
+		if err != nil {
+			t.Fatal("open reclaim target session", err)
+		}
+		closeLater(t, victim)
+		taker, err := reclaimConn.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: reclaimMeta, RenewInterval: 2 * time.Second})
+		if err != nil {
+			t.Fatal("open reclaiming session", err)
+		}
+		closeLater(t, taker)
+		before, err := control.request(ctx, "observe", victimGID, reclaimGID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		victimNative := before.session(victimGID)
+		if err := checkNativeOpenSession(victimNative, identity, victimMeta); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkNativeOpenSession(before.session(reclaimGID), identity, reclaimMeta); err != nil {
+			t.Fatal(err)
+		}
+		// Reclaiming a uuid no session carries: the MDS answers 0 with no address
+		// (the native client reports ENOENT) and changes nothing.
+		e := describeMDSSession("H-reclaim-miss", identity, taker)
+		missing, err := taker.Reclaim(ctx, "ceph-msgr-reclaim-absent-"+prefix)
+		if err != nil || missing.Result != 0 || len(missing.Addresses) != 0 {
+			sessions = append(sessions, e)
+			t.Fatal("reclaim of an absent uuid", missing, err)
+		}
+		afterMiss, err := control.request(ctx, "observe", victimGID, reclaimGID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if afterMiss.session(victimGID) == nil || afterMiss.session(reclaimGID) == nil || afterMiss.blocked(victimNative.Address) != nil {
+			t.Fatal("an absent-uuid reclaim changed native state")
+		}
+		requested := time.Now()
+		reply, err := taker.Reclaim(ctx, victimUUID)
+		if err != nil {
+			sessions = append(sessions, e)
+			t.Fatal("reclaim of the target session", err)
+		}
+		e.Metadata = reclaimMeta
+		e.EvictionToLostMillis = time.Since(requested).Milliseconds()
+		t.Logf("reclaim reply: result=%d epoch=%d addresses=%+v native victim address=%s", reply.Result, reply.Epoch, reply.Addresses, victimNative.Address)
+		sessions = append(sessions, e)
+		if reply.Result != 0 || reply.Epoch == 0 || len(reply.Addresses) != 1 || reply.Addresses[0].Endpoint.Port() != 0 || reply.Addresses[0].Nonce == 0 || !strings.Contains(victimNative.Address, reply.Addresses[0].Endpoint.Addr().String()) || !strings.Contains(victimNative.Address, fmt.Sprint(reply.Addresses[0].Nonce)) {
+			t.Fatal("reclaim reply does not identify the evicted session", reply)
+		}
+		after, err := control.request(ctx, "observe", victimGID, reclaimGID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after.session(victimGID) != nil || after.session(reclaimGID) == nil || after.blocked(victimNative.Address) == nil {
+			t.Fatal("reclaim did not evict and blocklist the target while keeping the reclaimer")
+		}
+		select {
+		case <-victim.Done():
+		case <-time.After(30 * time.Second):
+			t.Fatal("reclaimed session did not end locally")
+		}
+		if victim.Status().State != cephmsgr.MDSSessionLost || taker.Status().State != cephmsgr.MDSSessionOpen {
+			t.Fatal("session states after reclaim", victim.Status().State, taker.Status().State)
+		}
+		if err := taker.FinishReclaim(ctx); err != nil {
+			t.Fatal("finish reclaim", err)
+		}
+		if still, err := control.request(ctx, "observe", reclaimGID); err != nil || still.session(reclaimGID) == nil {
+			t.Fatal("FINISH disturbed the reclaiming session", err)
+		}
+	}) {
+		return
+	}
+
 	t.Run("mds_only_dials", func(t *testing.T) {
 		for _, r := range dialRecords {
 			if r.dials.OSD.Load() != 0 || r.dials.MDS.Load() != 1 {
 				t.Fatal("session client dialed an OSD or redialed the MDS", r.name, r.dials.MDS.Load(), r.dials.OSD.Load())
 			}
 		}
-		if len(dialRecords) != 6 {
+		if len(dialRecords) != 8 {
 			t.Fatal("unexpected number of session clients", len(dialRecords))
 		}
 	})
