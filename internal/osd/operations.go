@@ -6,6 +6,16 @@ import (
 	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 )
 
+// fadviseFlags is the cache-hint mask an opcode accepts: the extent reads and
+// writes whose PrimaryLogPG paths pass op.flags to the object store.
+func fadviseFlags(code uint16) uint32 {
+	switch code {
+	case Read, SparseRead, Checksum, CompareExtent, Write, WriteFull, WriteSame, Append:
+		return OpFadviseMask
+	}
+	return 0
+}
+
 func SupportedOperation(code uint16) bool {
 	switch code {
 	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, SetRedirect, UnsetManifest, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, PGNLSFilter, ScrubList, Watch, Notify, NotifyAck:
@@ -27,7 +37,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 	// write except a read-mode CALL and a non-FAILOK CREATE.
 	var stagedXattr, stagedOmap, stagedAny, afterCall bool
 	for _, op := range ops {
-		if !SupportedOperation(op.Code) || op.Code == PGNLS || op.Code == PGNLSFilter || op.Code == ScrubList || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
+		if !SupportedOperation(op.Code) || op.Code == PGNLS || op.Code == PGNLSFilter || op.Code == ScrubList || op.Flags&^(OpExclusive|OpFailOK|fadviseFlags(op.Code)) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
 			return 0, 0, ErrOperation
 		}
 		if len(op.Data) > math.MaxUint32 {

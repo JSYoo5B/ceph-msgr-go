@@ -61,6 +61,16 @@ const (
 	// OSDFailOK continues a compound vector after this operation's error. Its
 	// negative per-op result is retained even if later mutations commit.
 	OSDFailOK OSDOperationFlags = OSDOperationFlags(osd.OpFailOK)
+	// OSDFadvise* are cache hints (rados.h CEPH_OSD_OP_FLAG_FADVISE_*) that
+	// READ, SPARSE_READ, CHECKSUM, CMPEXT, WRITE, WRITEFULL, WRITESAME and
+	// APPEND pass to the OSD's object store; other opcodes refuse them before
+	// submission. They change no result: the reply echoes them (the OSD may
+	// add DONTNEED to a write) and only EXCL and FAILOK are compared.
+	OSDFadviseRandom     OSDOperationFlags = OSDOperationFlags(osd.OpFadviseRandom)
+	OSDFadviseSequential OSDOperationFlags = OSDOperationFlags(osd.OpFadviseSequential)
+	OSDFadviseWillNeed   OSDOperationFlags = OSDOperationFlags(osd.OpFadviseWillNeed)
+	OSDFadviseDontNeed   OSDOperationFlags = OSDOperationFlags(osd.OpFadviseDontNeed)
+	OSDFadviseNoCache    OSDOperationFlags = OSDOperationFlags(osd.OpFadviseNoCache)
 )
 
 // OSDOperation is one ordered operation on the request's object. Write,
@@ -506,7 +516,7 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		// The OSD trims a WRITE that extends an object past a newer
 		// truncation and echoes the shortened extent (PrimaryLogPG.cc:6768-6777).
 		shortExtent := requested.Code == osd.Read || requested.Code == osd.CompareExtent || requested.Code == osd.Write
-		if op.Code != requested.Code && !normalizedZero || op.Flags&(osd.OpExclusive|osd.OpFailOK) != requested.Flags || uint64(len(op.Data)) != uint64(op.PayloadLength) {
+		if op.Code != requested.Code && !normalizedZero || op.Flags&(osd.OpExclusive|osd.OpFailOK) != requested.Flags&(osd.OpExclusive|osd.OpFailOK) || uint64(len(op.Data)) != uint64(op.PayloadLength) {
 			return errors.New("OSD reply operation differs from request or payload metadata")
 		}
 		// Tentacle stops a vector on an ordinary failed operation. Only

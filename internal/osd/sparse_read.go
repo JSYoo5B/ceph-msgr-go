@@ -26,7 +26,7 @@ type SparseReadResult struct {
 }
 
 func validateSparseReadOperation(op Operation, limit uint32) error {
-	if op.Flags != 0 {
+	if op.Flags&^OpFadviseMask != 0 {
 		return ErrOperation
 	}
 	if op.Length == 0 || op.Offset > math.MaxUint64-op.Length || op.Version != 0 || len(op.Data) != 0 || op.Xattr != (XattrInput{}) || !omapInputEmpty(op.Omap) || op.Class != (ClassInput{}) || op.AllocHint != (AllocHintInput{}) || op.Snap != 0 || op.ListSnaps != (ListSnapsInput{}) || op.ListWatchers != (ListWatchersInput{}) || op.MapExt != (MapExtInput{}) || op.Checksum != (ChecksumInput{}) {

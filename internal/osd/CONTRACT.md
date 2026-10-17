@@ -223,3 +223,14 @@ The IPv6 secure/aes256k three-BlueStore-replica container profile passes all
 arm64. The oracle verifies every owned OSD's numeric IPv6 public endpoint,
 port and nonce, including the replacement primary. This is distinct from the
 IPv4 host-relay evidence and does not establish other IPv6 configurations.
+
+## FADVISE hints
+
+The per-op FADVISE flags (`include/rados.h` CEPH_OSD_OP_FLAG_FADVISE_RANDOM,
+SEQUENTIAL, WILLNEED, DONTNEED and NOCACHE; 0x4-0x40) are admitted on READ,
+SPARSE_READ, CHECKSUM, CMPEXT, WRITE, WRITEFULL, WRITESAME and APPEND, whose
+PrimaryLogPG paths pass op.flags to the object store, and refused on every
+other opcode before submission. They are advisory and change no result. The
+reply echoes them, and the OSD may add DONTNEED to a write, so reply
+validation compares only EXCL and FAILOK. Live record:
+[OSD_FADVISE_VALIDATION.md](../../integration/fixture/OSD_FADVISE_VALIDATION.md).

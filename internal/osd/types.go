@@ -40,6 +40,15 @@ const (
 	Create              uint16 = 0x220d
 	OpExclusive         uint32 = 1
 	OpFailOK            uint32 = 2
+	// OpFadvise* are include/rados.h CEPH_OSD_OP_FLAG_FADVISE_* cache hints.
+	// They pass unchanged to the object store on the data paths that take
+	// per-op flags; the OSD may add DONTNEED to a write itself.
+	OpFadviseRandom     uint32 = 0x4
+	OpFadviseSequential uint32 = 0x8
+	OpFadviseWillNeed   uint32 = 0x10
+	OpFadviseDontNeed   uint32 = 0x20
+	OpFadviseNoCache    uint32 = 0x40
+	OpFadviseMask              = OpFadviseRandom | OpFadviseSequential | OpFadviseWillNeed | OpFadviseDontNeed | OpFadviseNoCache
 	FlagAck             uint64 = 0x0001
 	FlagOnNVRAM         uint64 = 0x0002
 	FlagOnDisk          uint64 = 0x0004

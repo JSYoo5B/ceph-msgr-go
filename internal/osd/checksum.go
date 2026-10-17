@@ -37,7 +37,7 @@ type ChecksumResult struct {
 
 func validateChecksumOperation(op Operation, limit uint32) error {
 	width := checksumWidth(op.Checksum.Type)
-	if op.Flags != 0 || width == 0 {
+	if op.Flags&^OpFadviseMask != 0 || width == 0 {
 		return ErrOperation
 	}
 	if width == 4 && op.Checksum.Seed > math.MaxUint32 {

@@ -29,8 +29,7 @@ Passed in legacy-v6 single BlueStore (secure AES256K IPv4), replicated-pg-v8
 three BlueStore (secure AES256K IPv6) and request-v9/reply-v8 single MemStore
 (secure AES256K IPv6).
 
-The write case was added afterwards and passed in legacy-v6 single
-BlueStore.
+The write case was added afterwards; it passed in all three profiles.
 
 Not claimed: other write opcodes through a redirect, reference-counted
 redirects, SET_CHUNK, TIER_PROMOTE/FLUSH/EVICT and
