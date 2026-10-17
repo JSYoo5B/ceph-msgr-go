@@ -70,8 +70,20 @@ session reads the copied bytes under a later transaction; a native observation
 after a delay shows the same version and mtime, so nothing was replayed.
 Passed on a single BlueStore and on three BlueStore replicas (one run each).
 
+## SIGKILL (`TestCephOSDCopyFromCrashIntegration`)
+
+BlueStore only. After an ONDISK COPY_FROM2, the native client observes the
+destination's bytes, xattr, OMAP inventory, version and mtime; the fixture OSD
+(the one the placement oracle names for the fixture object) is then SIGKILLed
+(exit 137, no OOM) and restarted. Native observation after recovery matches
+exactly and a fresh Go session reads the copied bytes under a later transaction.
+Passed on a single BlueStore and on three replicas. In the three-replica run
+the killed OSD was the fixture object's primary and not necessarily the
+destination's. This is daemon termination, not host power loss or device
+durability, and no copy was in flight when the daemon died.
+
 Not claimed: native-encoded vectors, compound vectors,
 `MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints, cross-pool copy,
-copy under daemon failover or SIGKILL, EC, CRC mode
+copy killed in flight or failover during a copy, EC, CRC mode
 and host runtime profiles. The in-OSD copy of a source in another PG is
 exercised only incidentally by the 8-PG profile.
