@@ -24,6 +24,26 @@ optional acting-set target OSD, reported with the primary in `primary_id`).
   write is part of the passing recipe, not a retry.
 - A write vector carrying a flag is refused before submission.
 
+## Bounces (`TestCephOSDReplicaReadBounceIntegration`)
+
+The pool oracle's `osdflags` mode sets and unsets only `norecover` and
+`nobackfill` (unset again on every path).
+
+- Unstable write: after a Go WRITEFULL that is the PG's last write, a
+  BALANCE_READS read at a replica gets a known `-11` (EAGAIN) with retry
+  attempt 0 (nothing resent); native bytes show the write. After one more Go
+  write in the same PG the replica serves the new bytes.
+- Missing object: with recovery held, a replica's OSD is SIGKILLed and leaves
+  the acting set; a Go write (ONDISK on two replicas) and a same-PG write
+  follow; the OSD restarts and rejoins the acting set without the object.
+  After another same-PG write (ruling out the unstable cause) its balanced
+  read still gets `-11`, while the primary serves the new bytes. With the
+  flags unset and PGs clean, the recovered replica serves them; in one
+  replicated-pg-v8 run it bounced once more right after recovery and served on
+  the next read.
+- Passed in legacy-v6 three BlueStore (secure/AES256K IPv4 and CRC/AES) and
+  replicated-pg-v8 three BlueStore secure/AES256K IPv6, 2026-10-17.
+
 ## Profiles
 
 Passed: legacy-v6 three BlueStore (secure/AES256K defaults), legacy-v6 CRC with
@@ -31,6 +51,6 @@ AES key and service cipher, replicated-pg-v8 three BlueStore (HASHPSPOOL, 8 PG;
 `Placement.Primary` names the PG primary while the connection targets a
 replica). Single-OSD profiles do not apply.
 
-Not claimed: EC replica reads, reads during failover or recovery, the other
-read opcodes beyond those listed, automatic replica selection or `-EAGAIN`
-redirect to the primary (the caller decides), MemStore/IPv6 profiles.
+Not claimed: EC replica reads, reads racing an in-flight write or a primary
+change, the other read opcodes beyond those listed, automatic replica
+selection or `-EAGAIN` redirect to the primary (the caller decides), MemStore.

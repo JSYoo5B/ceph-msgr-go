@@ -20,5 +20,11 @@ object is unreadable there or has a write newer than its `pg_committed_to`;
 that is a known refusal preserved raw. `pg_committed_to` advances on a replica
 only with the next write in the same PG, so an object written and then left
 idle can be bounced to the primary until another write lands in its PG.
+Both causes were observed live: an object whose write was the PG's last, and an
+object a replica still lacked after rejoining with recovery held
+(`norecover`/`nobackfill`), each answered `-11` with no effect and no local
+resend. A replica just recovered may bounce once more after the next write.
+The client never redirects or repeats a bounced read; the caller may resend
+it (to the primary, or later), since a read has no effect.
 
 Verification: [OSD_REPLICA_READ_VALIDATION.md](../../integration/fixture/OSD_REPLICA_READ_VALIDATION.md).

@@ -47,6 +47,7 @@ type poolReceipt struct {
 	Epoch             uint32            `json:"epoch"`
 	FullOSDs          []int32           `json:"full_osds"`
 	OwnedFlags        map[string]string `json:"owned_flags"`
+	OSDMapFlags       []string          `json:"osdmap_flags"`
 	// NonprimaryShards is the pool's raw nonprimary_shards dump.
 	NonprimaryShards json.RawMessage `json:"nonprimary_shards"`
 	KB               uint64          `json:"kb"`

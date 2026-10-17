@@ -5,9 +5,11 @@ Test-only; never product code. It uses the public librados C API (LGPL-2.1,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
-Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, fullratios, cleanup.
+Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, fullratios, osdflags, cleanup.
 fullratios changes the cluster-wide nearfull/backfillfull/full ratios of the
-disposable fixture; the caller restores the values it reported first. Every mode
+disposable fixture; the caller restores the values it reported first.
+osdflags sets or unsets only the norecover and nobackfill OSDMap flags; the
+caller unsets them again. Every mode
 reads one bounded JSON input and writes one bounded JSON result; native
 mutations are never retried and credentials/keys are never copied.
 """
@@ -23,7 +25,8 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "fullratios", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "fullratios", "osdflags", "cleanup")
+RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
 MAX_OUTPUT = 512 << 10
@@ -415,6 +418,20 @@ def mode_fullratios(rados, cluster, request, out):
             "full_ratio": dump["full_ratio"], "epoch": dump["epoch"], "full_osds": full, "owned_flags": owned}
 
 
+def mode_osdflags(rados, cluster, request, out):
+    action = request.get("action")
+    if action not in ("set", "unset", "show"):
+        raise ValueError("action must be set, unset or show")
+    if action != "show":
+        for flag in RECOVERY_FLAGS:
+            code, _ = rados.mon(cluster, {"prefix": "osd " + action, "key": flag})
+            if code < 0:
+                raise RuntimeError("native osd %s %s failed: %d %s" % (action, flag, code, rados.last_status))
+    dump = rados.dump(cluster)
+    flags = [f for f in str(dump.get("flags", "")).split(",") if f]
+    return {"epoch": dump["epoch"], "osdmap_flags": flags}
+
+
 def mode_cleanup(rados, cluster, request, out):
     removed = []
     code, _ = rados.mon(cluster, {"prefix": "config set", "who": "mon", "name": "mon_allow_pool_delete", "value": "true"})
@@ -436,7 +453,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "fullratios": mode_fullratios, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "cleanup": mode_cleanup}
 
 
 def main(argv):
