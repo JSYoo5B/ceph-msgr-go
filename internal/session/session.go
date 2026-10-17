@@ -541,7 +541,7 @@ func (s *Session) readLoop(t *Transport, epoch uint64, stop <-chan struct{}, loo
 			case s.ack <- struct{}{}:
 			default:
 			}
-			if m.Type == msgr.MonCommandReplyMessage || m.Type == msgr.MgrCommandReplyMessage || m.Type == msgr.TellCommandReplyMessage || m.Type == msgr.OSDOpReplyMessage {
+			if m.Type == msgr.MonCommandReplyMessage || m.Type == msgr.MgrCommandReplyMessage || m.Type == msgr.TellCommandReplyMessage || m.Type == msgr.OSDOpReplyMessage || m.Type == msgr.PoolOpReplyMessage {
 				s.mu.Lock()
 				r := s.pending[m.Transaction]
 				if r != nil {
@@ -553,6 +553,8 @@ func (s *Session) readLoop(t *Transport, epoch uint64, stop <-chan struct{}, loo
 						expected = msgr.TellCommandReplyMessage
 					case msgr.OSDOpMessage:
 						expected = msgr.OSDOpReplyMessage
+					case msgr.PoolOpMessage:
+						expected = msgr.PoolOpReplyMessage
 					}
 					if !r.started || m.Type != expected {
 						// Leave it pending so Fail preserves whether transmission

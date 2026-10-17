@@ -35,6 +35,14 @@ type poolReceipt struct {
 	SnapID        uint64              `json:"snap_id"`
 	PoolsRemoved  bool                `json:"pools_removed"`
 	FlagNames     string              `json:"flag_names"`
+	SnapSeq       uint64              `json:"snap_seq"`
+	SnapMode      string              `json:"snap_mode"`
+	PoolSnaps     []struct {
+		ID   uint64 `json:"snapid"`
+		Name string `json:"name"`
+	} `json:"pool_snaps"`
+	RemovedSnaps      string            `json:"removed_snaps"`
+	RemovedSnapsQueue []json.RawMessage `json:"removed_snaps_queue"`
 }
 
 func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolReceipt {
@@ -125,9 +133,18 @@ func poolSeed(t *testing.T, ctx context.Context, slot int, object, namespace str
 
 func poolObserve(t *testing.T, ctx context.Context, slot int, object, namespace, snap string) nativeXattrSnapshot {
 	t.Helper()
+	return poolObserveSnap(t, ctx, slot, object, namespace, snap, 0)
+}
+
+// poolObserveSnap reads at a pool snapshot name or a self-managed snapshot id.
+func poolObserveSnap(t *testing.T, ctx context.Context, slot int, object, namespace, snap string, snapID uint64) nativeXattrSnapshot {
+	t.Helper()
 	in := map[string]any{"slot": slot, "object": object, "namespace": namespace}
 	if snap != "" {
 		in["snap"] = snap
+	}
+	if snapID != 0 {
+		in["snap_id"] = snapID
 	}
 	return nativePool(t, ctx, "observe", in).State
 }

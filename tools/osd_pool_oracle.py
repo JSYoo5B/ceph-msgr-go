@@ -5,7 +5,7 @@ Test-only; never product code. It uses the public librados C API (LGPL-2.1,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
-Go client. Modes: create, seed, observe, place, snapshot, quota, poolinfo, cleanup. Every mode
+Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, cleanup. Every mode
 reads one bounded JSON input and writes one bounded JSON result; native
 mutations are never retried and credentials/keys are never copied.
 """
@@ -21,7 +21,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "quota", "poolinfo", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "cleanup")
 SLOTS = (1, 2)
 MAX_OUTPUT = 512 << 10
 MAX_MON_OUTPUT = 4 << 20
@@ -68,6 +68,8 @@ class Rados:
             "ioctx_snap_remove": ([p, char], i),
             "ioctx_snap_lookup": ([p, char, C.POINTER(u64)], i),
             "ioctx_snap_set_read": ([p, u64], None),
+            "ioctx_selfmanaged_snap_create": ([p, C.POINTER(u64)], i),
+            "ioctx_selfmanaged_snap_remove": ([p, u64], i),
             "write_full": ([p, char, p, s], i),
         }.items():
             function = getattr(self.lib, "rados_" + name)
@@ -208,6 +210,9 @@ def mode_observe(rados, cluster, request, out):
     name, namespace = object_request(request)
     io = rados.ioctx(cluster, pool, namespace)
     try:
+        snap_id = request.get("snap_id")
+        if snap_id:
+            rados.lib.rados_ioctx_snap_set_read(io, integer(snap_id, 1, (1 << 64) - 3, "snap_id"))
         snap = request.get("snap")
         if snap:
             snap_id = C.c_uint64()
@@ -254,6 +259,25 @@ def mode_snapshot(rados, cluster, request, out):
         rados.lib.rados_ioctx_destroy(io)
 
 
+def mode_selfmanaged(rados, cluster, request, out):
+    pool = pool_name(request["slot"])
+    action = request["action"]
+    io = rados.ioctx(cluster, pool)
+    try:
+        if action == "create":
+            snap_id = C.c_uint64()
+            code = rados.lib.rados_ioctx_selfmanaged_snap_create(io, C.byref(snap_id))
+            rados.native.check(code)
+            return {"pool": pool, "action": action, "snap_id": snap_id.value}
+        if action == "remove":
+            snap = integer(request["snap_id"], 1, (1 << 64) - 3, "snap_id")
+            rados.native.check(rados.lib.rados_ioctx_selfmanaged_snap_remove(io, snap))
+            return {"pool": pool, "action": action, "snap_id": snap}
+        raise ValueError("invalid self-managed snapshot action")
+    finally:
+        rados.lib.rados_ioctx_destroy(io)
+
+
 def mode_quota(rados, cluster, request, out):
     name = pool_name(request["slot"])
     limit = integer(request["max_objects"], 0, 1 << 20, "max_objects")
@@ -270,7 +294,9 @@ def mode_poolinfo(rados, cluster, request, out):
     if pool is None:
         raise RuntimeError("owned pool is missing")
     return {"pool": name, "pool_id": pool["pool"], "flags": pool["flags"], "flag_names": pool.get("flags_names", ""),
-            "epoch": dump["epoch"], "quota_max_objects": pool.get("quota_max_objects")}
+            "epoch": dump["epoch"], "quota_max_objects": pool.get("quota_max_objects"),
+            "snap_seq": pool.get("snap_seq"), "snap_mode": pool.get("snap_mode"), "pool_snaps": pool.get("pool_snaps", []),
+            "removed_snaps": pool.get("removed_snaps"), "removed_snaps_queue": pool.get("removed_snaps_queue", [])}
 
 
 def mode_cleanup(rados, cluster, request, out):
@@ -292,7 +318,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "quota": mode_quota, "poolinfo": mode_poolinfo, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "cleanup": mode_cleanup}
 
 
 def main(argv):

@@ -524,6 +524,18 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		if m.Type == msgr.SubscribeMessage {
 			continue
 		}
+		if m.Type == msgr.PoolOpMessage && cfg.role == 1 {
+			if cfg.command != nil {
+				cfg.command(m)
+			}
+			if strings.Contains(string(m.Front), "block") {
+				continue
+			}
+			if err := send(mockPoolOpReply(cfg.fsid, m)); err != nil {
+				return err
+			}
+			continue
+		}
 		tell := m.Type == msgr.TellCommandMessage
 		if !tell && (cfg.role == 1 && m.Type != msgr.MonCommandMessage || cfg.role == 16 && m.Type != msgr.MgrCommandMessage) {
 			return errors.New("wrong command daemon")
@@ -661,4 +673,37 @@ func TestManagerMapChangeSelectsNewDaemon(t *testing.T) {
 	if id != 100 {
 		t.Fatal("stale manager")
 	}
+}
+
+// mockPoolOpReply answers an MPoolOp like the MON would for a pool that
+// accepts it: unmanaged-snapshot creation returns snapshot id 7, the name
+// "deny" is refused with EPERM and every other operation succeeds without data.
+func mockPoolOpReply(fsid [16]byte, request msgr.MessageData) msgr.MessageData {
+	d := wire.NewDecoder(request.Front)
+	d.U64()
+	d.U16()
+	d.U64()
+	d.Raw(16)
+	d.U32()
+	op := d.U32()
+	d.U64()
+	d.U64()
+	name := d.String()
+	e := wire.Encoder{}
+	msgr.Paxos(&e)
+	e.Raw(fsid[:])
+	code := int32(0)
+	if name == "deny" {
+		code = -1
+	}
+	e.U32(uint32(code))
+	e.U32(5) // epoch
+	if op == msgr.PoolOpCreateUnmanagedSnap && code == 0 {
+		e.U8(1)
+		e.U32(8)
+		e.U64(7)
+	} else {
+		e.U8(0)
+	}
+	return msgr.MessageData{Type: msgr.PoolOpReplyMessage, Version: 1, Transaction: request.Transaction, Front: e.Data}
 }
