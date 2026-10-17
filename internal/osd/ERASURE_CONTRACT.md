@@ -16,7 +16,11 @@ MON commands or replicated-pool I/O (observed live: "peer requires
 0x0000001000000000"). The bit is admission only: the client computes no CRUSH
 placement, applies no OSDMap and claims no other CRUSH generation. CRUSH_MSR
 (multi-step retry rules) and the other OSD-side CRUSH bits remain
-unadvertised; clusters requiring them are still refused explicitly.
+unadvertised; clusters requiring them are still refused explicitly. Creating
+an MSR erasure rule (for example `crush-osds-per-failure-domain=3`) was
+observed to need `require_min_compat_client squid` first ("new crush map
+requires client version squid"), a cluster-wide client baseline beyond this
+admission exception; such clusters are not supported.
 
 ## Requests to an EC pool
 

@@ -105,6 +105,8 @@ class Rados:
             if output_length.value > MAX_MON_OUTPUT or diagnostic_length.value > 64 << 10:
                 raise ValueError("native MON output exceeds bound")
             text = C.string_at(output, output_length.value) if output.value else b""
+            # The MON's status text explains refusals; it holds no credentials.
+            self.last_status = C.string_at(diagnostic, diagnostic_length.value).decode(errors="replace")[:512] if diagnostic.value else ""
             return code, text
         finally:
             if output.value:
@@ -150,7 +152,8 @@ def mode_create(rados, cluster, request, out):
         # k=2, m=1 over three OSDs with an OSD failure domain; overwrites need
         # BlueStore. The MON derives size 3 and min_size k+1 itself.
         size, minimum = 3, None
-        steps = [{"prefix": "osd erasure-code-profile set", "name": EC_PROFILE, "profile": ["k=2", "m=1", "crush-failure-domain=osd"], "force": True},
+        profile = ["k=2", "m=1", "crush-failure-domain=osd"]
+        steps = [{"prefix": "osd erasure-code-profile set", "name": EC_PROFILE, "profile": profile, "force": True},
                  {"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "erasure", "erasure_code_profile": EC_PROFILE},
                  {"prefix": "osd pool set", "pool": name, "var": "allow_ec_overwrites", "val": "true"}]
     else:
@@ -162,7 +165,7 @@ def mode_create(rados, cluster, request, out):
     for command in steps:
         code, _ = rados.mon(cluster, command)
         if code < 0:
-            raise RuntimeError("native pool step %s failed: %d" % (command["prefix"], code))
+            raise RuntimeError("native pool step %s failed: %d %s" % (command["prefix"], code, rados.last_status))
     io = rados.ioctx(cluster, name)
     try:
         # A write blocks until every PG is active; a bounded timeout fails it.
