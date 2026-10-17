@@ -500,3 +500,80 @@ func TestCephMonPoolOpLeaderStopIntegration(t *testing.T) {
 		t.Fatal("allocation after the restart", nextID, err)
 	}
 }
+
+// A self-managed snapshot id may also be allocated by an identity whose only
+// write grant is an OSD capability on that pool (OSDMonitor.cc
+// is_unmanaged_snap_op_permitted); every other pool-op kind still needs MON
+// osd write. The test-only identity is created and removed through MON auth
+// commands on the disposable fixture.
+func TestCephMonPoolOpScopedCapsIntegration(t *testing.T) {
+	fixture := osdFixture
+	if isReplicatedPGFixtureProfile() {
+		fixture = replicatedPGFixture
+	}
+	c, _, base, _ := fixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	pools := createOwnedPools(t, ctx, base, 1, 2)
+	const entity = "client.ceph-msgr-scoped-snap"
+	mon := func(call context.Context, fields map[string]any) cephmsgr.Result {
+		encoded, _ := json.Marshal(fields)
+		result, err := c.MonCommand(call, cephmsgr.Command{JSON: encoded})
+		if err != nil {
+			t.Fatal(fields["prefix"], err)
+		}
+		return result
+	}
+	created := mon(ctx, map[string]any{"prefix": "auth get-or-create", "entity": entity, "format": "json",
+		"caps": []string{"mon", "allow r", "osd", "allow rw pool=ceph-msgr-owned-pool-1"}})
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		mon(cleanup, map[string]any{"prefix": "auth rm", "entity": entity})
+	})
+	var keys []struct {
+		Entity string `json:"entity"`
+		Key    string `json:"key"`
+	}
+	if err := json.Unmarshal(created.Data, &keys); err != nil || len(keys) != 1 || keys[0].Entity != entity {
+		t.Fatal("auth get-or-create output", err)
+	}
+	options := integrationOptions(t)
+	key, err := cephmsgr.ParseKey(keys[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Key, options.Identity = key, entity
+	options.EnableOSD = true
+	if isReplicatedPGFixtureProfile() {
+		options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+	}
+	scoped, err := cephmsgr.Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scoped.Close()
+	granted, other := uint32(pools.ids[1]), uint32(pools.ids[2])
+	allocated, err := scoped.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: granted, Op: cephmsgr.SelfManagedSnapshotCreate})
+	id, idErr := allocated.SnapshotID()
+	if err != nil || idErr != nil || id == 0 {
+		t.Fatal("self-managed allocation through the pool-scoped OSD grant", err, idErr)
+	}
+	if seq := nativePool(t, ctx, "poolinfo", map[string]any{"slot": 1}).SnapSeq; seq != id {
+		t.Fatalf("native snap_seq %d differs from the allocated id %d", seq, id)
+	}
+	var refused *cephmsgr.PoolOpError
+	for name, req := range map[string]cephmsgr.PoolOpRequest{
+		"self-managed id in an ungranted pool": {Pool: other, Op: cephmsgr.SelfManagedSnapshotCreate},
+		"pool snapshot in the granted pool":    {Pool: granted, Op: cephmsgr.PoolSnapshotCreate, Name: "scoped"},
+	} {
+		result, err := scoped.PoolOp(ctx, req)
+		if !errors.As(err, &refused) || refused.Code != -1 || result.Code != -1 {
+			t.Fatal(name, "expected EPERM", result, err)
+		}
+	}
+	if state := nativePool(t, ctx, "poolinfo", map[string]any{"slot": 2}); state.SnapSeq != 0 || len(state.PoolSnaps) != 0 {
+		t.Fatal("a refused pool op changed the ungranted pool", state.SnapSeq, state.PoolSnaps)
+	}
+	t.Logf("pool-scoped OSD write grant allocated id %d; other kinds and pools were EPERM (key type of %s accepted)", id, entity)
+}

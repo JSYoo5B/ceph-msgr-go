@@ -72,9 +72,17 @@ secure AES256K IPv6 single MemStore.
 The capability subtest was added later the same day and passed in the same
 four profiles.
 
-Not claimed: grants that admit self-managed snapshots through a pool-scoped
-OSD write cap without MON write (no such identity exists in the fixture),
-`-EOPNOTSUPP` for filesystem pools, loss of the MON the client is connected
+- Pool-scoped grant (`TestCephMonPoolOpScopedCapsIntegration`): the test
+  creates `client.ceph-msgr-scoped-snap` with `mon 'allow r'` and
+  `osd 'allow rw pool=ceph-msgr-owned-pool-1'` through MON
+  `auth get-or-create` (removed with `auth rm` in cleanup) and dials with the
+  key the MON generated. A self-managed allocation on the granted pool
+  succeeds and equals native `snap_seq`; a self-managed allocation on the
+  other owned pool and a pool snapshot on the granted pool are EPERM, and the
+  ungranted pool is unchanged. Passed in legacy-v6 single BlueStore and
+  request-v9/reply-v8 secure AES256K IPv6 single MemStore.
+
+Not claimed: `-EOPNOTSUPP` for filesystem pools, loss of the MON the client is connected
 to while a pool op is in flight (other than the lost-reply case),
 POOL_OP_CREATE/DELETE, and waiting for OSDs to apply the updated map after an
 allocation.
