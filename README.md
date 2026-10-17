@@ -1030,6 +1030,9 @@ replicated-pg-v8, request-v9/reply-v8 secure/AES256K IPv6 single MemStore에서 
 - `MDSSession.Reclaim`/`FinishReclaim`(MClientReclaim): uuid로 같은 CephX identity의
   이전 session을 제거·blocklist한다. [계약](cephmsgr/MDS_SESSION_CONTRACT.md),
   [검증](integration/fixture/MDS_RECLAIM_VALIDATION.md).
+- `Client.Statfs`(MON MStatfs): cluster 또는 pool 사용량. MON이 오류 응답을 두지 않아
+  무시된 요청은 결과 불명확으로 끝난다. [계약](cephmsgr/STATFS_CONTRACT.md),
+  [검증](integration/fixture/MON_STATFS_VALIDATION.md).
 - 추가 소유 pool 기반 시험(cross-pool·namespace COPY_FROM, pool snapshot 모드)은
   [검증](integration/fixture/OSD_POOL_VALIDATION.md)에 있다.
 

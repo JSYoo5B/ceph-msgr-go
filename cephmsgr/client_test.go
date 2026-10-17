@@ -524,6 +524,22 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		if m.Type == msgr.SubscribeMessage {
 			continue
 		}
+		if m.Type == msgr.StatfsMessage && cfg.role == 1 {
+			if len(m.Front) == 43 && m.Front[34] == 1 && m.Front[42] == 0x7f {
+				continue // the pool id 0x7f... stands for a request the MON ignores
+			}
+			e := wire.Encoder{}
+			e.Raw(cfg.fsid[:])
+			e.U64(41)
+			e.U64(1000)
+			e.U64(300)
+			e.U64(700)
+			e.U64(12)
+			if err := send(msgr.MessageData{Type: msgr.StatfsReplyMessage, Version: 1, Transaction: m.Transaction, Front: e.Data}); err != nil {
+				return err
+			}
+			continue
+		}
 		if m.Type == msgr.PoolOpMessage && cfg.role == 1 {
 			if cfg.command != nil {
 				cfg.command(m)

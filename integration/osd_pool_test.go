@@ -35,6 +35,10 @@ type poolReceipt struct {
 	SnapID        uint64              `json:"snap_id"`
 	PoolsRemoved  bool                `json:"pools_removed"`
 	FlagNames     string              `json:"flag_names"`
+	KB            uint64              `json:"kb"`
+	KBUsed        uint64              `json:"kb_used"`
+	KBAvail       uint64              `json:"kb_avail"`
+	NumObjects    uint64              `json:"num_objects"`
 	SnapSeq       uint64              `json:"snap_seq"`
 	SnapMode      string              `json:"snap_mode"`
 	PoolSnaps     []struct {
