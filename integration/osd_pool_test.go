@@ -40,6 +40,13 @@ type poolReceipt struct {
 	PoolType      int                 `json:"pool_type"`
 	CrushRule     json.RawMessage     `json:"crush_rule"`
 	ECOptimized   bool                `json:"ec_optimized"`
+	// fullratios mode.
+	NearfullRatio     float64           `json:"nearfull_ratio"`
+	BackfillfullRatio float64           `json:"backfillfull_ratio"`
+	FullRatio         float64           `json:"full_ratio"`
+	Epoch             uint32            `json:"epoch"`
+	FullOSDs          []int32           `json:"full_osds"`
+	OwnedFlags        map[string]string `json:"owned_flags"`
 	// NonprimaryShards is the pool's raw nonprimary_shards dump.
 	NonprimaryShards json.RawMessage `json:"nonprimary_shards"`
 	KB               uint64          `json:"kb"`

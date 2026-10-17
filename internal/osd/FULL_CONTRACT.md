@@ -19,4 +19,5 @@ them before submission. ENFORCE_SNAPC, FLUSH and the other rados.h request
 flags remain unsupported.
 
 Status: unit-tested for v6/v8 encoding and verified live on four profiles with
-a quota-full pool ([record](../../integration/fixture/OSD_FULL_VALIDATION.md)).
+a quota-full pool, and on two BlueStore profiles with OSD fullness (lowered
+cluster full ratios: `-ENOSPC` for FULL_TRY, flag cleared after restoration) ([record](../../integration/fixture/OSD_FULL_VALIDATION.md)).

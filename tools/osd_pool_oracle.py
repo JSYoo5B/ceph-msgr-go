@@ -5,7 +5,9 @@ Test-only; never product code. It uses the public librados C API (LGPL-2.1,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
-Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, cleanup. Every mode
+Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, fullratios, cleanup.
+fullratios changes the cluster-wide nearfull/backfillfull/full ratios of the
+disposable fixture; the caller restores the values it reported first. Every mode
 reads one bounded JSON input and writes one bounded JSON result; native
 mutations are never retried and credentials/keys are never copied.
 """
@@ -21,7 +23,8 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "fullratios", "cleanup")
+RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
 MAX_OUTPUT = 512 << 10
 MAX_MON_OUTPUT = 4 << 20
@@ -387,6 +390,31 @@ def mode_poolinfo(rados, cluster, request, out):
             "removed_snaps": pool.get("removed_snaps"), "removed_snaps_queue": pool.get("removed_snaps_queue", [])}
 
 
+def mode_fullratios(rados, cluster, request, out):
+    wanted = request.get("set")
+    if wanted is not None:
+        if not isinstance(wanted, dict) or set(wanted) != {name for name, _ in RATIO_COMMANDS}:
+            raise ValueError("set needs exactly nearfull, backfillfull and full")
+        values = [wanted[name] for name, _ in RATIO_COMMANDS]
+        if any(type(v) is not float or not 0 < v <= 1 for v in values) or not values[0] <= values[1] <= values[2]:
+            raise ValueError("ratios must be ordered floats in (0, 1]")
+        # Raise full first and lower it last so the order never inverts.
+        order = RATIO_COMMANDS if wanted["full"] <= rados.dump(cluster)["full_ratio"] else tuple(reversed(RATIO_COMMANDS))
+        for name, prefix in order:
+            code, _ = rados.mon(cluster, {"prefix": prefix, "ratio": wanted[name]})
+            if code < 0:
+                raise RuntimeError("native %s failed: %d %s" % (prefix, code, rados.last_status))
+    dump = rados.dump(cluster)
+    owned = {}
+    for slot in SLOTS:
+        pool = find_pool(dump, pool_name(slot))
+        if pool is not None:
+            owned[str(slot)] = pool.get("flags_names", "")
+    full = sorted(o["osd"] for o in dump.get("osds", []) if isinstance(o, dict) and "full" in o.get("state", []))
+    return {"nearfull_ratio": dump["nearfull_ratio"], "backfillfull_ratio": dump["backfillfull_ratio"],
+            "full_ratio": dump["full_ratio"], "epoch": dump["epoch"], "full_osds": full, "owned_flags": owned}
+
+
 def mode_cleanup(rados, cluster, request, out):
     removed = []
     code, _ = rados.mon(cluster, {"prefix": "config set", "who": "mon", "name": "mon_allow_pool_delete", "value": "true"})
@@ -408,7 +436,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "fullratios": mode_fullratios, "cleanup": mode_cleanup}
 
 
 def main(argv):

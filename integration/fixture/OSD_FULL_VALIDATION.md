@@ -34,7 +34,30 @@ Passed first run in legacy-v6 single BlueStore, legacy-v6 three BlueStore
 replicas, replicated-pg-v8 single BlueStore, and request-v9/reply-v8 secure
 AES256K IPv6 single MemStore.
 
-Not claimed: `-ENOSPC` from an OSD-fullness (not quota) full flag, FULL_FORCE
+## OSD fullness (`TestCephOSDFullRatioIntegration`)
+
+The pool oracle's `fullratios` mode reports and sets the cluster-wide
+nearfull, backfillfull and full ratios (disposable fixture only); the test
+records the original values and restores them, also on failure. With the
+ratios lowered to 0.0005/0.0008/0.001, below the BlueStore OSDs' actual use,
+the OSDs report full and the MON flags the owned pool `full` (not
+`full_quota`) within one or two polls.
+
+- A plain WRITEFULL is never answered and ends as an unknown outcome; the
+  object stays absent natively.
+- With FULL_TRY the OSD answers `-28` (ENOSPC), a known refusal with no
+  effect, where the quota case answers `-122`.
+- With FULL_FORCE the write completes with ONDISK and matching native bytes
+  and version; a read of a seeded object is answered normally.
+- After the ratios are restored the MON clears the flag (three or four epochs
+  later), the reported ratios equal the originals, and a plain write is
+  answered with ONDISK.
+- Passed in legacy-v6 single BlueStore (osd.0 full) and replicated-pg-v8
+  secure AES256K IPv6 with three BlueStore replicas (two OSDs full when the
+  pool was flagged), 2026-10-17. MemStore is not used: fullness is measured
+  on the BlueStore devices.
+
+Not claimed: FULL_FORCE
 semantics for the MDS path, behavior under failover while full, EC, or other
 request flags (ENFORCE_SNAPC, FLUSH). The `-122` value is the signed Linux
 code the server sends; it is preserved raw, not translated to a host errno.
