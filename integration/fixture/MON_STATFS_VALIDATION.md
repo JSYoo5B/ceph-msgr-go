@@ -50,5 +50,6 @@ Passed first complete run in legacy-v6 single BlueStore, legacy-v6 three
 BlueStore replicas, replicated-pg-v8 single BlueStore and request-v9/reply-v8
 secure AES256K IPv6 single MemStore.
 
-Not claimed: the FSID-mismatch ignore, behavior across MON failover, and any scaling
+Not claimed: the FSID-mismatch ignore, loss of the connected MON during a
+request (a leader stop is covered with the map version record), and any scaling
 of the figures.

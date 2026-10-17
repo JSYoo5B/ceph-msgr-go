@@ -2,10 +2,13 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 // MapVersion's newest committed version equals the map epoch the native
@@ -67,5 +70,83 @@ func TestCephMonMapVersionIntegration(t *testing.T) {
 	}
 	if peons == 0 {
 		t.Fatal("no monitor was a peon")
+	}
+}
+
+// MMonGetVersion and MStatfs sent to a peon while the leader is stopped are
+// answered once the remaining monitors re-elect; the stopped leader is
+// restarted and the election settled on every path.
+func TestCephMonMapVersionLeaderStopIntegration(t *testing.T) {
+	fixture := osdFixture
+	if isReplicatedPGFixtureProfile() {
+		fixture = replicatedPGFixture
+	}
+	c, _, _, _ := fixture(t)
+	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	requireUsableFixture(t, control)
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	defer cancel()
+	clients := pinnedMonitorClients(t, ctx, c)
+	var peon *pinnedMonitorClient
+	for i := range clients {
+		if !clients[i].Leader {
+			peon = &clients[i]
+			break
+		}
+	}
+	quorum, err := c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"quorum_status","format":"json"}`)})
+	var status struct {
+		Leader string `json:"quorum_leader_name"`
+	}
+	if err != nil || json.Unmarshal(quorum.Data, &status) != nil || peon == nil {
+		t.Fatal("quorum status or peon", err)
+	}
+	monState := c.Snapshot().Monitor
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", status.Leader); err != nil {
+		t.Fatal("stop leader", err)
+	}
+	stopped := true
+	defer func() {
+		if !stopped {
+			return
+		}
+		restore, stop := context.WithTimeout(context.Background(), 180*time.Second)
+		defer stop()
+		if err := testcluster.ControlDaemon(restore, control, "start", "mon", status.Leader); err != nil {
+			markFixtureUnusable(t, control, "stopped leader MON did not restart")
+			return
+		}
+		if _, err := settleNativeMonitorElection(restore, c, control, "restarted", monState, monState.Members); err != nil {
+			markFixtureUnusable(t, control, "election did not settle after the leader restart")
+		}
+	}()
+	started := time.Now()
+	version, err := peon.MapVersion(ctx, cephmsgr.OSDMapKind)
+	if err != nil || version.Newest == 0 {
+		t.Fatal("map version through a peon during the election", err)
+	}
+	stat, err := peon.Statfs(ctx, nil)
+	if err != nil || stat.KB == 0 {
+		t.Fatal("statfs through a peon during the election", err)
+	}
+	t.Logf("map version %d and statfs answered %s after the leader stopped (peon lease still valid)", version.Newest, time.Since(started).Round(time.Millisecond))
+	// Past the peon's lease the requests wait for the re-election.
+	time.Sleep(6 * time.Second)
+	waited := time.Now()
+	if v, err := peon.MapVersion(ctx, cephmsgr.OSDMapKind); err != nil || v.Newest < version.Newest {
+		t.Fatal("map version through a peon after its lease", err)
+	}
+	if st, err := peon.Statfs(ctx, nil); err != nil || st.KB == 0 {
+		t.Fatal("statfs through a peon after its lease", err)
+	}
+	t.Logf("after the lease: answered in %s", time.Since(waited).Round(time.Millisecond))
+	if err := testcluster.ControlDaemon(ctx, control, "start", "mon", status.Leader); err != nil {
+		t.Fatal("restart leader", err)
+	}
+	stopped = false
+	waitNativeMonitorElection(t, ctx, c, control, "restarted", monState, monState.Members)
+	native := nativePool(t, ctx, "versions", map[string]any{}).Epochs["osdmap"]
+	if again, err := peon.MapVersion(ctx, cephmsgr.OSDMapKind); err != nil || again.Newest < version.Newest || again.Newest != native {
+		t.Fatal("map version after the restart", again, native, err)
 	}
 }

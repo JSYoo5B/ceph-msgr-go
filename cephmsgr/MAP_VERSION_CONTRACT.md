@@ -25,4 +25,9 @@ BlueStore (IPv4, secure) and request-v9 single MemStore (IPv6, AES256K)
 The oldest version is only checked to lie between 1 and the newest; no native
 client reports it. Clients seeded with each of the three monitors also match
 the native OSDMap epoch, two of them answered by peons from their own
-committed state. MON failover during a request is unverified.
+committed state. Leader stop (`TestCephMonMapVersionLeaderStopIntegration`):
+a client pinned to a peon gets MMonGetVersion and MStatfs answers at once
+while the peon's lease lasts, and after it (6 s later) the requests wait
+about 8 s for the re-election and are then answered; after the leader
+restarts and the election settles, the version equals the native epoch.
+Loss of the connected MON during a request is unverified.
