@@ -158,6 +158,32 @@ func TestCephOSDErasureIntegration(t *testing.T) {
 		})
 	}
 
+	t.Run("watch and notify on an EC object", func(t *testing.T) {
+		watchRequest := request(route)
+		w, _, err := o.WatchObject(ctx, watchRequest, cephmsgr.OSDWatchOptions{TimeoutSeconds: 30})
+		if err != nil {
+			t.Fatal("watch", err)
+		}
+		defer w.Close()
+		payload := []byte{0, 0xff, 'e', 'c'}
+		n, _, err := o.NotifyObject(ctx, request(route), payload, cephmsgr.OSDWatchOptions{TimeoutSeconds: 10})
+		if err != nil {
+			t.Fatal("notify", err)
+		}
+		defer n.Close()
+		event, err := w.Next(ctx)
+		if err != nil || !bytes.Equal(event.Payload, payload) || event.Cookie != w.Cookie() {
+			t.Fatal("notification", event, err)
+		}
+		if _, err := w.Acknowledge(ctx, route.Epoch, event, []byte("ack")); err != nil {
+			t.Fatal("acknowledge", err)
+		}
+		done, err := n.Next(ctx)
+		if err != nil || done.ReturnCode != 0 || len(done.Replies) != 1 || !bytes.Equal(done.Replies[0].Data, []byte("ack")) || len(done.Missed) != 0 {
+			t.Fatal("notify completion", done, err)
+		}
+	})
+
 	t.Run("delete", func(t *testing.T) {
 		must(t, "delete", cephmsgr.OSDOperation{Code: cephmsgr.OSDDelete})
 		if n := native(); n.Code != -2 {

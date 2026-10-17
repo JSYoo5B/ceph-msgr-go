@@ -42,8 +42,8 @@ listing has no shard and the OSD derives it). With one shard's OSD down the
 primary reconstructs reads; after the primary dies the new primary holds a
 different shard and only requests naming it are answered, so the caller must
 re-derive the shard from the new map along with the primary. Other opcodes,
-snapshots, watch, recovery traffic and EC profiles other than k=2,m=1 are
-unverified. Self-managed snapshots and a write during one shard's absence
-(later recovered) were verified.
+recovery traffic and EC profiles other than k=2,m=1 are
+unverified. Self-managed snapshots, watch/notify and a write during one
+shard's absence (later recovered) were verified.
 
 Verification: [OSD_ERASURE_VALIDATION.md](../../integration/fixture/OSD_ERASURE_VALIDATION.md).

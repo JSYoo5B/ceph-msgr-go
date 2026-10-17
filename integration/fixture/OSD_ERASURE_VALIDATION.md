@@ -24,6 +24,9 @@ both refused: "peer requires 0x0000001000000000" (CRUSH_V2).
   native bytes and version equal), partial READ, partial overwrite, APPEND,
   SETXATTR and GETXATTR, STAT size, TRUNCATE and DELETE all match native
   observation. OMAP SETVALS is a known refusal `-95`.
+- Watch/notify on the EC object: a Go watch receives a Go notification, the
+  explicit acknowledgement payload reaches the notifier, and the completion has
+  code 0, one reply and no missed watcher (legacy-v6 and replicated-pg-v8).
 - Shard addressing (replicated-PG profile): NO_SHARD and a different shard get
   no reply; the five-second wait ends as an unknown outcome.
 
@@ -68,5 +71,5 @@ Both EC tests passed in legacy-v6 CRC/AES and replicated-pg-v8 (IPv4); the
 first also in the profiles listed above.
 
 Not claimed: other EC profiles or plugins, MSR rules, writes while degraded,
-backfill progress, pool snapshots on EC, watch/notify, compound vectors
+backfill progress, pool snapshots on EC, notify across clients, compound vectors
 beyond the cases above, replica (shard) reads, and multiple PG listing pages.
