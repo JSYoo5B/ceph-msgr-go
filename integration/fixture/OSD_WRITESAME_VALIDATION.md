@@ -45,7 +45,7 @@ never labeled actual bytes written. Product runs remain pure Go/CGO-disabled.
 Fresh native v8 WRITESAME combination vectors are not claimed: v8 composition
 is covered by unit/public tests against the independently proven existing v8
 message base. Actual daemon profiles and ONDISK receipts are recorded below. No EC,
-automatic placement/retry, WRITESAME primary-failure persistence, hardware power
+automatic placement/retry, hardware power
 loss, or broad release/CI completion is claimed.
 
 
@@ -172,3 +172,21 @@ selects key/service `aes256k`, connection `secure`, IP family `6`, runtime
 `CEPH_MSGR_TEST_*` fixture configuration and is retained in the manifest.
 Run the controller's `run -project PATH -diagnostics UNIQUE_PATH` sequentially;
 keep a distinct diagnostic path and stdout log for every attempt.
+
+## Primary SIGKILL
+
+2026-10-17, `TestCephOSDWriteSameFailoverIntegration` (legacy-v6, container,
+three BlueStore replicas, min_size 2, default secure CephX/IPv4; one run). A
+native-seeded owned object receives an ONDISK Go WRITESAME (offset 2, length 12,
+three-byte binary pattern, explicit mtime); native observation matches the
+expected bytes, the receipt user version and the mtime. The object's primary is
+then SIGKILLed (exit 137, no OOM). Native observation through the surviving
+two replicas shows identical bytes, xattr, version and mtime; the refreshed
+placement has a newer epoch, a different primary and a two-OSD acting set; a
+caller-targeted Go read on the new primary returns the same bytes and version
+under a later transaction; a final native observation shows no replay. This is
+OSD process termination with surviving replicas, not host power loss, and no
+WRITESAME was in flight when the primary died. Other profiles are not claimed:
+the shared restoration helper is legacy-v6 only (a replicated-pg-v8 attempt
+passed the test body but failed in that helper's fixture restore, so it is not
+recorded as a result).

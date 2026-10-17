@@ -61,5 +61,5 @@ sequenced-TRUNCATE preparations prove clipping while the original logical
 reply extent remains unchanged. Full bytes, attributes, stat2, own version,
 raw signed results and successful ONDISK receipts were checked. See
 [the full evidence and limits](../../integration/fixture/OSD_WRITESAME_VALIDATION.md).
-No EC, new v8 live profile, primary-failure persistence, automatic placement or
+No EC, new v8 live profile, automatic placement or
 mutation replay is added by this work.
