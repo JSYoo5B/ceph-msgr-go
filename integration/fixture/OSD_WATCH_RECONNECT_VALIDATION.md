@@ -160,3 +160,15 @@ The killed OSD is restarted and the fixture returns to clean PGs.
 Not claimed: notifications sent while the watcher was between primaries
 (redelivery of in-progress notifies), or a RECONNECT later than the watch
 timeout.
+
+## Pending-notify redelivery — 2026-10-17
+
+`TestCephOSDWatchNotifyRedeliveryIntegration` registers a Go WATCH (timeout
+30 s) and closes its connection. A second Go client then notifies (timeout
+20 s); the notify does not complete within 2 seconds because its only watcher
+is disconnected. The first client opens a new connection and calls
+`ReconnectWatch`: the OSD redelivers the pending notification
+(`Watch::connect`), the handle receives its binary payload, and the explicit
+ACK completes the notify with one reply and no missed watcher. Passed in
+legacy-v6 secure AES256K IPv4 single BlueStore and request-v9/reply-v8 secure
+AES256K IPv6 single MemStore.
