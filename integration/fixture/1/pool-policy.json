@@ -1,0 +1,28 @@
+{
+  "bootstrap": {
+    "api": "WithConfigFile",
+    "osd_pool_default_flag_hashpspool": false,
+    "section": "global"
+  },
+  "data_pool_pg_num": 1,
+  "explicit_data_pool_no_hashpspool": true,
+  "osd_profile": "legacy-v6",
+  "verified": {
+    "epoch": 13,
+    "fsid": "940c2be2-230d-4434-aff6-30a50aaa4298",
+    "pools": [
+      {
+        "pool": 1,
+        "pool_name": ".mgr",
+        "flags": 0,
+        "flags_names": ""
+      },
+      {
+        "pool": 2,
+        "pool_name": "ceph-msgr-osd-fixture",
+        "flags": 0,
+        "flags_names": ""
+      }
+    ]
+  }
+}

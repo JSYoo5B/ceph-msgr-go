@@ -1,0 +1,21 @@
+{
+  "sentinel": "ceph-msgr-log-oracle-c7f7a38e9c234981ac14d7c2c1d9e62b",
+  "entry": {
+    "name": "client.test",
+    "rank": "client.?",
+    "addrs": {
+      "addrvec": [
+        {
+          "type": "any",
+          "addr": "172.19.0.9:0",
+          "nonce": 955204697
+        }
+      ]
+    },
+    "stamp": "2026-10-17T03:15:02.888836+0000",
+    "seq": 0,
+    "channel": "cluster",
+    "priority": "[INF]",
+    "message": "ceph-msgr-log-oracle-c7f7a38e9c234981ac14d7c2c1d9e62b"
+  }
+}

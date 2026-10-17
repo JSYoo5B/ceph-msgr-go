@@ -47,7 +47,10 @@ routed again.
 ## Status
 
 Synthetic wire, validation and public-transport tests pass for v6 and v8
-requests/replies (v9 shares the v8 encoder). No fresh native encoder vector
-and no actual daemon result exists yet: nothing here is a verified Tentacle
-profile. In particular the reply-union echo and failure-path payload rules are
-derived from the pinned source and are unconfirmed against a live OSD.
+requests/replies (v9 shares the v8 encoder). Live acceptance passes on four
+single/3-replica profiles ([record](../../integration/fixture/OSD_COPY_FROM_VALIDATION.md)).
+It uses native observation, not a native-encoded vector or twin execution.
+Observed: a copy that fails after the daemon started it reports its aggregate
+code (ENOENT, ERANGE, EOVERFLOW) with per-op `-115` (EINPROGRESS); the
+self-copy refusal reports `-22` in both places. Both are preserved raw. Source
+snapshots, compound use, failover and response-loss behavior are unverified.

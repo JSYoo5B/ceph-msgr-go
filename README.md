@@ -1004,8 +1004,12 @@ namespace로 대상 객체를 source head의 복사본으로 만드는 단독 �
 OSD가 source를 직접 가져오므로 호출자가 source 배치를 제공하지 않는다.
 Source snapshot·fadvise·cache-tier flag와 다른 operation과의 조합은 송신 전에
 거절하고 COPY_FROM2의 TRUNCATE_SEQ 형태만 허용한다. 현재는 합성 wire·공개 transport
-시험만 있고 native vector나 실제 daemon 검증은 없으므로 검증된 profile이 아니다.
-[계약](internal/osd/COPY_FROM_CONTRACT.md)을 참고한다.
+시험과 실제 daemon 시험이 있다. Native client는 실행하지 않고 source·대상 bytes/xattr/OMAP/
+version을 독립 관측한다(native encoder vector 없음). single·3-replica BlueStore,
+replicated-pg-v8, request-v9/reply-v8 secure/AES256K IPv6 single MemStore에서 6 사례가
+통과했다. 비동기 실패의 per-op 결과는 `-115`로 원본 보존한다.
+[계약](internal/osd/COPY_FROM_CONTRACT.md)과
+[검증 기록](integration/fixture/OSD_COPY_FROM_VALIDATION.md)을 참고한다.
 
 다만 nonempty WRITEFULL·APPEND 뒤 offset 0 READ/CMPEXT가 앞선 payload 크기
 이상을 검사하는 조합은 `ErrUnsupportedOSDOperation`으로 송신 전에 거절한다.

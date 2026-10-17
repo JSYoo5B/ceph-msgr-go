@@ -1,0 +1,43 @@
+{
+  "architecture": "arm64",
+  "bootstrap": "public-api",
+  "connection_mode": "secure",
+  "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+  "fsid": "940c2be2-230d-4434-aff6-30a50aaa4298",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "ip_family": "4",
+  "key_type": "aes256k",
+  "mds_cephfs": false,
+  "mds_cephfs_completion": false,
+  "mds_cephfs_data": false,
+  "mds_cephfs_ranks": false,
+  "mds_commands": false,
+  "mds_fresh": false,
+  "mds_sessions": false,
+  "native_mapext_range_oracle": false,
+  "native_sparse_read_oracle": false,
+  "native_u64_xattr_oracle": false,
+  "native_writesame_oracle": false,
+  "osd": "1",
+  "osd_profile": "legacy-v6",
+  "osd_replicas": "1",
+  "osd_store": "bluestore",
+  "provider": "github.com/JSYoo5B/ceph-testcontainers-go",
+  "provider_effective_module": {
+    "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+    "version": "v0.3.0",
+    "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+  },
+  "provider_identity_status": "module",
+  "provider_original_module": {
+    "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+    "version": "v0.3.0",
+    "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+  },
+  "provider_version": "v0.3.0",
+  "rbd_base": false,
+  "runtime": "container",
+  "service_cipher": "aes256k",
+  "topology": "3 MON and 0/2 MGR owned daemon containers plus a native oracle client"
+}

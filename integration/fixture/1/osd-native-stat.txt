@@ -1,0 +1,1 @@
+ceph-msgr-osd-fixture/ceph-msgr-native-object mtime 2026-10-17T03:15:03.000000+0000, size 10513
