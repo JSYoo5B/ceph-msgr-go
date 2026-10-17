@@ -16,6 +16,16 @@ import (
 // a write SnapContext; a write accepted while one shard's OSD is down is
 // recovered onto that shard after it returns.
 func TestCephOSDErasureSnapshotAndDegradedWriteIntegration(t *testing.T) {
+	erasureSnapshotScenario(t, false)
+}
+
+// The same on an optimized pool, whose partial-stripe write path and recovery
+// differ inside the OSDs; nothing differs on this client's wire.
+func TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration(t *testing.T) {
+	erasureSnapshotScenario(t, true)
+}
+
+func erasureSnapshotScenario(t *testing.T, optimized bool) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("k=2,m=1 with overwrites needs three BlueStore OSDs")
 	}
@@ -38,7 +48,10 @@ func TestCephOSDErasureSnapshotAndDegradedWriteIntegration(t *testing.T) {
 	if hash {
 		pg = 8
 	}
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true})
+	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "optimized": optimized})
+	if created.ECOptimized != optimized {
+		t.Fatal("native pool optimization state differs", created.ECOptimized)
+	}
 	write := func(t *testing.T, object string, data []byte, snap uint64) cephmsgr.OSDReply {
 		t.Helper()
 		route := poolPlace(t, ctx, 1, object, "")

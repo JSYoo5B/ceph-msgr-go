@@ -81,6 +81,12 @@ dump then shows `nonprimary_shards` `{1}`. The same two scenarios run on it.
   returns the bytes, and as a control the same request without it is
   unanswered. The pre-fix runs also used an epoch-34 placement that stayed
   current, so the silence was not an old-epoch discard.
+- `TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration` repeats
+  the snapshot and degraded-write scenario on the optimized pool: the
+  self-managed snapshot keeps the original bytes, and a WRITEFULL accepted with
+  one shard's OSD down is recovered onto it (a later read with another
+  shard's OSD down matched). Passed in replicated-pg-v8 CRC/AES IPv4 and
+  legacy-v6 CRC/AES.
 - The placement oracle now finds an OSD's shard as Objecter does
   (primary-eligible shards first) and reports `pg_temp` presence and the
   nonprimary shard count.
@@ -100,7 +106,6 @@ Both EC tests passed in legacy-v6 CRC/AES and replicated-pg-v8 (IPv4); the
 first also in the profiles listed above.
 
 Not claimed: other EC profiles or plugins (beyond k=2,m=1 with and without
-`allow_ec_optimizations`), the snapshot/degraded-write scenario on an optimized
-pool, EC partial-read or direct shard reads of optimized pools, MSR rules, writes while degraded,
+`allow_ec_optimizations`), EC partial-read or direct shard reads of optimized pools, MSR rules, writes while degraded,
 backfill progress, pool snapshots on EC, notify across clients, compound vectors
 beyond the cases above, replica (shard) reads, and multiple PG listing pages.
