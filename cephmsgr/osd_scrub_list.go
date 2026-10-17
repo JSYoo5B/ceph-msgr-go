@@ -56,7 +56,9 @@ func (o *OSDConnection) ListInconsistent(ctx context.Context, request OSDInconsi
 		}
 		return osd.EncodeScrubListRequest(input, o.features, o.client.options.MaxFrameSize)
 	}
-	validate := func(decoded osd.Reply, redirect bool) error { return osd.ValidateScrubListReply(input, decoded, redirect) }
+	validate := func(decoded osd.Reply, redirect bool) error {
+		return osd.ValidateScrubListReply(input, decoded, redirect)
+	}
 	reply, decoded, err := o.pgOperation(ctx, request.PG, request.ClientIncarnation, request.MapEpoch, "scrub listing", encode, validate)
 	result.OSDReply = reply
 	if err != nil {
