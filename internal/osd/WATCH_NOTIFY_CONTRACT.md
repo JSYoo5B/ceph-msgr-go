@@ -263,8 +263,10 @@ route preflight correction; its ownership-preservation coverage is synthetic.
 Unknown reconnect replies, uncertain UNWATCH, overflow and concurrent handoff
 also remain synthetic coverage, rather than native results from these runs.
 
-Remaining live acceptance includes forced server DISCONNECT, timeout-driven
-watch loss, scoped watch permissions, OSD restart/failover and pending-notify
+Server DISCONNECT is live-verified for its two connected-watcher causes, a
+missed ping timeout and deletion by another client
+([record](../../integration/fixture/OSD_WATCH_DISCONNECT_VALIDATION.md)).
+Remaining live acceptance includes scoped watch permissions, OSD restart/failover and pending-notify
 redelivery across a reconnect. The local generation fence does not establish
 server-side generation rejection. Backoff/send gating has its
 [own contract](BACKOFF_CONTRACT.md); daemon-to-daemon event paths remain a
