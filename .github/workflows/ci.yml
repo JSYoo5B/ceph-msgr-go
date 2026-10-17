@@ -261,9 +261,9 @@ jobs:
           retention-days: 7
 
   ceph:
-    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }}, profile=${{ matrix.osd_profile || 'legacy-v6' }}, store=${{ matrix.osd_store || 'memstore' }}, replicas=${{ matrix.osd_replicas || '1' }}, native-mgr-preparation=${{ matrix.native_mgr_preparation || '0' }}, race=${{ matrix.race || '0' }})${{ matrix.rbd == '1' && ' RBD-base' || (matrix.mds_cephfs_ranks_replay == '1' && ' MDS-cephfs-ranks-replay' || (matrix.mds_cephfs_ranks == '1' && ' MDS-cephfs-ranks' || (matrix.mds_cephfs_completion == '1' && ' MDS-cephfs-completion' || (matrix.mds_cephfs_data == '1' && ' MDS-cephfs-data' || (matrix.mds_cephfs == '1' && ' MDS-cephfs' || (matrix.mds_sessions == '1' && ' MDS-sessions' || (matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || '')))))))) }}
+    name: Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }}, profile=${{ matrix.osd_profile || 'legacy-v6' }}, store=${{ matrix.osd_store || 'memstore' }}, replicas=${{ matrix.osd_replicas || '1' }}, native-mgr-preparation=${{ matrix.native_mgr_preparation || '0' }}, race=${{ matrix.race || '0' }}${{ matrix.osd_soak && format(', soak={0}', matrix.osd_soak) || '' }})${{ matrix.rbd == '1' && ' RBD-base' || (matrix.mds_cephfs_ranks_replay == '1' && ' MDS-cephfs-ranks-replay' || (matrix.mds_cephfs_ranks == '1' && ' MDS-cephfs-ranks' || (matrix.mds_cephfs_completion == '1' && ' MDS-cephfs-completion' || (matrix.mds_cephfs_data == '1' && ' MDS-cephfs-data' || (matrix.mds_cephfs == '1' && ' MDS-cephfs' || (matrix.mds_sessions == '1' && ' MDS-sessions' || (matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || '')))))))) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     env:
       CGO_ENABLED: '0'
       GOTOOLCHAIN: local
@@ -303,6 +303,9 @@ jobs:
           # Native OSD I/O with instrumented host client binaries; ordinary row retained.
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3', race: '1' }
           - { key: aes256k, service: aes256k, family: '6', stress: '', osd: '1', osd_store: 'bluestore', osd_replicas: '3' }
+          # OSD soak: four writers with checked reads, connection churn and short-deadline
+          # appends resolved only by explicit resubmission; native bytes compared at the end.
+          - { key: aes256k, service: aes256k, family: '4', stress: '', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_soak: '4m' }
           # Explicit v8 acceptance: seven top-level tests, thirteen actual cases per row
           # (base I/O 5, PGNLS 3, normal ACK 1, late ACK 1, watch reconnect 1, split 1, MDS maps 1).
           - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split)|MDSMaps)Integration$' }
@@ -405,6 +408,7 @@ jobs:
           CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}
           CEPH_MSGR_TEST_OSD_STORE: ${{ matrix.osd_store || 'memstore' }}
           CEPH_MSGR_TEST_OSD_REPLICAS: ${{ matrix.osd_replicas || '1' }}
+          CEPH_MSGR_TEST_OSD_SOAK: ${{ matrix.osd_soak || '' }}
           CEPH_MSGR_TEST_RUNTIME: ${{ matrix.runtime || 'container' }}
           CEPH_MSGR_TEST_RACE: ${{ matrix.race || '0' }}
           CEPH_MSGR_TEST_EXPIRE_TICKETS: ${{ matrix.expiry || '0' }}

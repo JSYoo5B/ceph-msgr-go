@@ -67,16 +67,17 @@ func TestProfileSelection(t *testing.T) {
 		{"reject-mon", map[string]string{"CEPH_MSGR_TEST_MODE_REJECTION": "mon"}, "^TestCephConnectionModeRejectionIntegration$"},
 		{"reject-mgr", map[string]string{"CEPH_MSGR_TEST_MODE_REJECTION": "mgr"}, "^TestCephConnectionModeRejectionIntegration$"},
 		{"mapped", map[string]string{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCephMappedAddressIntegration$"},
-		{"replicated", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
-		{"bluestore", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
-		{"pg-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
-		{"pg-reply-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
-		{"pg-request-v9", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-request-v9-reply-v8"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
-		{"osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
-		{"ipv6-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
-		{"ipv6-replicated-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
-		{"crc-host-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
-		{"crc-aes-host-race-replicated-osd", map[string]string{"CEPH_MSGR_TEST_KEY_TYPE": "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes", "CEPH_MSGR_TEST_IP_FAMILY": "4", "CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps).*Integration$"},
+		{"replicated", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		{"bluestore", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		{"pg-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		{"pg-reply-v8", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		{"pg-request-v9", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-request-v9-reply-v8"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		{"osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		{"osd-soak", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_SOAK": "4m"}, "^TestCephOSDSoakIntegration$"},
+		{"ipv6-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		{"ipv6-replicated-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		{"crc-host-osd", map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		{"crc-aes-host-race-replicated-osd", map[string]string{"CEPH_MSGR_TEST_KEY_TYPE": "aes", "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes", "CEPH_MSGR_TEST_IP_FAMILY": "4", "CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RACE": "1"}, "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,6 +87,9 @@ func TestProfileSelection(t *testing.T) {
 				p, err := loadProfile(func(name string) string { return env[name] })
 				if err != nil {
 					t.Fatal(err)
+				}
+				if want := map[bool]string{true: "30m", false: "10m"}[env["CEPH_MSGR_TEST_OSD"] == "1"]; p.testTimeout != want {
+					t.Fatalf("default test timeout %q, want %q", p.testTimeout, want)
 				}
 				want := tc.want
 				if override != "" {
@@ -190,6 +194,9 @@ func TestProfileInvalidCombinations(t *testing.T) {
 		{"CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6", "CEPH_MSGR_TEST_MODE_REJECTION": "mon"},
 		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_MGR_COUNT": "0"},
 		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_STRESS_DURATION": "0"},
+		{"CEPH_MSGR_TEST_OSD_SOAK": "4m"},
+		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_SOAK": "10s"},
+		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_SOAK": "forever"},
 		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_MODE_REJECTION": "mgr"},
 		{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_MAPPED_IPV6": "1", "CEPH_MSGR_TEST_IP_FAMILY": "6"},
 	}
@@ -318,7 +325,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 		"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
 		"CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
 		"CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6",
-		"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
+		"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_OSD_SOAK": "", "CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS": "1",
 	}
 	if !reflect.DeepEqual(container, wantContainer) {
 		t.Fatalf("container environment = %v, want %v", container, wantContainer)
@@ -352,7 +359,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_TEST_MAPPED_IPV6": "0", "CEPH_MSGR_TEST_OSD": "0",
 				"CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
 				"CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6",
-				"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_PROXY": proxy,
+				"CEPH_MSGR_STRESS_DURATION":  "3m", "CEPH_MSGR_TEST_OSD_SOAK": "", "CEPH_MSGR_TEST_PROXY": proxy,
 			}
 			if !reflect.DeepEqual(got, want) {
 				t.Fatalf("test environment = %v, want %v", got, want)

@@ -40,6 +40,8 @@ type profile struct {
 	nativeMgrPreparation                                                  string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
 	stressDuration, testRun, testTimeout, diagnostics                     string
+	// osdSoak is the opt-in OSD soak duration; it selects only the soak test.
+	osdSoak string
 }
 
 func loadProfile(getenv func(string) string) (profile, error) {
@@ -83,6 +85,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		osdStore:             value("CEPH_MSGR_TEST_OSD_STORE", "memstore"),
 		osdReplicas:          value("CEPH_MSGR_TEST_OSD_REPLICAS", "1"),
 		stressDuration:       getenv("CEPH_MSGR_STRESS_DURATION"),
+		osdSoak:              getenv("CEPH_MSGR_TEST_OSD_SOAK"),
 		testRun:              getenv("CEPH_MSGR_TEST_RUN"),
 		testTimeout:          value("CEPH_MSGR_TEST_TIMEOUT", "10m"),
 		diagnostics:          getenv("CEPH_MSGR_TEST_DIAGNOSTICS"),
@@ -211,7 +214,18 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if p.mgrCount != "2" || p.mappedIPv6 != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.modeRejection != "" || p.stressDuration != "" {
 			return profile{}, fmt.Errorf("OSD fixture requires two managers and no mapped-IPv6, authentication, mode-rejection, or stress fixture")
 		}
-		selected = "^TestCeph(OSD|MonOSDMaps).*Integration$"
+		selected = "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"
+	}
+	// The default OSD selection on three BlueStore replicas runs past ten
+	// minutes; an explicit CEPH_MSGR_TEST_TIMEOUT still wins.
+	if p.osd == "1" && getenv("CEPH_MSGR_TEST_TIMEOUT") == "" {
+		p.testTimeout = "30m"
+	}
+	if p.osdSoak != "" {
+		if duration, err := time.ParseDuration(p.osdSoak); err != nil || duration < 30*time.Second || p.osd != "1" {
+			return profile{}, fmt.Errorf("OSD soak requires CEPH_MSGR_TEST_OSD=1 and a duration of at least 30s")
+		}
+		selected = "^TestCephOSDSoakIntegration$"
 	}
 	if p.nativeMgrPreparation == "1" {
 		if p.mgrCount != "2" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.osd != "0" || p.stressDuration != "" {
@@ -374,6 +388,7 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_OSD_REPLICAS":            p.osdReplicas,
 		"CEPH_MSGR_TEST_OSD_PROFILE":             p.osdProfile,
 		"CEPH_MSGR_STRESS_DURATION":              p.stressDuration,
+		"CEPH_MSGR_TEST_OSD_SOAK":                p.osdSoak,
 		"CEPH_MSGR_TEST_CONTROL_DIAGNOSTICS":     "1",
 	}
 }
@@ -432,6 +447,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_OSD_REPLICAS":            p.osdReplicas,
 		"CEPH_MSGR_TEST_OSD_PROFILE":             p.osdProfile,
 		"CEPH_MSGR_STRESS_DURATION":              p.stressDuration,
+		"CEPH_MSGR_TEST_OSD_SOAK":                p.osdSoak,
 		"CEPH_MSGR_TEST_PROXY":                   proxy,
 	}
 	if p.mdsFresh == "1" {
