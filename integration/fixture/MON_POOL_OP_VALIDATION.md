@@ -33,6 +33,15 @@ owned pools (OSD_POOL_VALIDATION.md); the pool oracle gained the modes
   the reply back, and native `snap_seq` equals the last id. Passed in
   legacy-v6 single BlueStore (IPv4) and request-v9/reply-v8 secure AES256K
   IPv6 single MemStore.
+- Lost reply (`TestCephMonPoolOpLostReplyIntegration`): a relay stops
+  delivering the MON connection's bytes right after an allocation is sent.
+  Native `snap_seq` shows the id consumed; the keepalive timeout (2 s) retires
+  the session and the call returns an unknown outcome. The next allocation,
+  on the client's recovered session, returns the id after the lost one and
+  native `snap_seq` advances by exactly one more, so the lost request was
+  neither replayed nor hidden. Passed in legacy-v6 single BlueStore and
+  request-v9/reply-v8 secure AES256K IPv6 single MemStore (the client
+  reconnected to the same MON in both).
 - Capabilities: the fixture's `client.readonly` (mon, mgr and osd `allow r`)
   gets a known `-1` (EPERM) reply with a map epoch, never a dropped request,
   for self-managed allocation and removal, pool snapshot creation and removal,
@@ -56,6 +65,7 @@ four profiles.
 
 Not claimed: grants that admit self-managed snapshots through a pool-scoped
 OSD write cap without MON write (no such identity exists in the fixture),
-`-EOPNOTSUPP` for filesystem pools, behavior across MON failover,
+`-EOPNOTSUPP` for filesystem pools, a MON daemon failure or leader election
+during a pool op,
 POOL_OP_CREATE/DELETE, and waiting for OSDs to apply the updated map after an
 allocation.

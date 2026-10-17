@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jsyoo5b/ceph-msgr-go/cephmsgr"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/testcluster"
 )
 
 // MPoolOp is the only route to self-managed snapshot ids (no CLI command
@@ -284,4 +287,94 @@ func TestCephMonPoolOpIntegration(t *testing.T) {
 			t.Fatal("read-only session lost its read permission", err)
 		}
 	})
+}
+
+// A self-managed allocation whose reply is lost with its MON session ends as an
+// unknown outcome. The client neither replays it on the recovered session nor
+// hides it: the native pool shows the id consumed, and the next allocation
+// returns the id after it.
+func TestCephMonPoolOpLostReplyIntegration(t *testing.T) {
+	fixture := osdFixture
+	if isReplicatedPGFixtureProfile() {
+		fixture = replicatedPGFixture
+	}
+	_, _, base, _ := fixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	defer cancel()
+	pools := createOwnedPools(t, ctx, base, 1)
+	info := func() poolReceipt { return nativePool(t, ctx, "poolinfo", map[string]any{"slot": 1}) }
+	options := integrationOptions(t)
+	options.EnableOSD = true
+	if isReplicatedPGFixtureProfile() {
+		options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+	}
+	options.KeepaliveInterval, options.KeepaliveTimeout = 200*time.Millisecond, 2*time.Second
+	var armed atomic.Bool
+	blocked := make(chan struct{}, 1)
+	dial := options.DialContext
+	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+		conn, err := dial(ctx, network, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{}), SignalBlocked: func() {
+			// Only the armed connection blocks; its successor reads freely.
+			armed.Store(false)
+			select {
+			case blocked <- struct{}{}:
+			default:
+			}
+		}}, nil
+	}
+	c, err := cephmsgr.Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	pool := uint32(pools.ids[1])
+	first, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, _ := first.SnapshotID()
+	before := c.Snapshot()
+	type result struct {
+		err error
+	}
+	done := make(chan result, 1)
+	armed.Store(true)
+	go func() {
+		_, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+		done <- result{err}
+	}()
+	select {
+	case <-blocked:
+	case <-ctx.Done():
+		t.Fatal("receive fault not activated")
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for info().SnapSeq != baseline+1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the allocation never executed natively")
+		}
+		time.Sleep(time.Second)
+	}
+	lost := <-done
+	var unknown *cephmsgr.OutcomeUnknownError
+	if !errors.As(lost.err, &unknown) {
+		t.Fatal("a pool op whose session was lost must be an unknown outcome", lost.err)
+	}
+	// The next request waits for the client's own recovery to another session.
+	next, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := next.SnapshotID(); id != baseline+2 {
+		t.Fatalf("the lost allocation was replayed or skipped differently: next id %d after %d", id, baseline)
+	}
+	time.Sleep(time.Second)
+	if seq := info().SnapSeq; seq != baseline+2 {
+		t.Fatalf("native snap_seq %d: the lost allocation executed more than once", seq)
+	}
+	t.Logf("lost allocation (id %d) ended unknown (%v); session %s -> %s", baseline+1, lost.err, before.Monitor.Endpoint, c.Snapshot().Monitor.Endpoint)
 }
