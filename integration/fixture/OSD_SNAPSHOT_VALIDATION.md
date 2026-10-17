@@ -226,5 +226,12 @@ ONDISK Go WRITEFULL, which creates a clone. The object's primary is SIGKILLed
 and restarted and PGs return to clean; native reads then return the new head
 (with the receipt's version) and the original bytes at the snapshot id, and a
 Go LIST_SNAPS still names the snapshot. Passed on legacy-v6 single BlueStore
-(secure, IPv4) and replicated-pg-v8 with three BlueStore replicas. A lost
-reply of a snapshot write and ROLLBACK under failover remain unverified.
+(secure, IPv4) and replicated-pg-v8 with three BlueStore replicas. 
+`TestCephOSDSnapshotLostReplyIntegration`: a relay drops the reply of a Go
+WRITEFULL under a self-managed SnapContext after it executes; the caller gets
+an unknown outcome, and an explicit resubmission on a fresh connection returns
+success with the native head version and ONDISK. Native reads show the new head
+and the original bytes at the snapshot id, and Go LIST_SNAPS shows exactly one
+clone, so nothing was cloned or written twice. Passed on legacy-v6 single
+BlueStore and replicated-pg-v8 with three replicas. ROLLBACK under failover
+remains unverified.
