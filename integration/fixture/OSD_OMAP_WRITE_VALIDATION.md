@@ -145,3 +145,23 @@ subset need separate evidence. The pinned C API exposes no per-op results for
 SET2/RM_KEYS2/CLEAR, so native per-op comparison is limited to aggregates and
 final state. No CMP, RMKEYRANGE, staged-read, EC, snapshot or all-O2 completion
 is claimed.
+
+## Durability and lost replies (2026-10-17)
+
+`TestCephOSDOmapDurabilityIntegration` (legacy-v6; single BlueStore with the
+default secure CephX, and three BlueStore replicas with CRC/AES):
+
+- One ONDISK vector of SETOMAPHEADER, SETOMAPVALS, RMKEYS and SETXATTR on a
+  native-seeded object; native observation shows the header, keys, removed key,
+  xattr and receipt version. The fixture OSD is SIGKILLed (the object's primary
+  in the single-OSD run) and restarted; native observation then matches exactly.
+- A relay drops the reply of an OMAP_CMP(k1 == "one") plus SETOMAPVALS(k1 =
+  "two") vector after it executes; the caller gets an unknown outcome with its
+  submission. An explicit resubmission (same transaction ID, retry attempt 1)
+  on a fresh connection returns success with the native version and ONDISK,
+  although re-executing the vector would fail its compare. Control: the same
+  vector as a new request is refused with -125 and changes nothing.
+
+Not claimed: OMAP writes under primary failover on three replicas (the killed
+OSD there was the fixture object's primary), host power loss, and other OMAP
+opcodes than those listed.
