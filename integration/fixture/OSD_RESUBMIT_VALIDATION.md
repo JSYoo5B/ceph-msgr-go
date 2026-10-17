@@ -20,6 +20,12 @@ version).
   connection is replaced (same client identity), the resubmission returns
   success with the native version and ONDISK, and native bytes show exactly one
   append. This resolves the unknown outcome without a second execution.
+- Vectors whose re-execution would differ: an exclusive CREATE (re-execution
+  would answer EEXIST), a DELETE (ENOENT) and a compound APPEND plus SETXATTR
+  (bytes would double). Each resubmission returns the original code, per-op
+  results, user version and ONDISK, and native bytes, version and attributes
+  are unchanged. A third subtest (`non-idempotent vectors answered from the PG
+  log`) covers them on the same profiles.
 - First attempt of the live test failed only on a test bug (it expected the
   seed baseline on an object that starts absent); the product was unchanged.
 - Local refusals and the retry-echo check are in `cephmsgr/osd_resubmit_test.go`.
@@ -32,6 +38,6 @@ BlueStore, request-v9/reply-v8 with secure AES256K over IPv6 on single
 MemStore, and legacy-v6 secure AES256K over IPv6 on single MemStore.
 
 Not claimed: resubmission after PG log trimming, after a primary change or
-daemon restart, for compound vectors beyond APPEND, or for read vectors;
-whether the server logs every opcode; resubmission through a different client
+daemon restart, for read vectors, for OMAP/CALL/snapshot/COPY_FROM vectors
+(the server may not log every opcode); resubmission through a different client
 identity (refused locally).

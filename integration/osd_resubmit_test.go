@@ -38,9 +38,9 @@ func TestCephOSDResubmitIntegration(t *testing.T) {
 			t.Error("owned objects were not removed", result.Cleanup)
 		}
 	})
-	owned := nativeOmapWrite(t, ctx, base, "prepare", omapWriteInput{Seed: &omapWriteSeed{Baseline: baseline}, Reserve: 2})
+	owned := nativeOmapWrite(t, ctx, base, "prepare", omapWriteInput{Seed: &omapWriteSeed{Baseline: baseline}, Reserve: 5})
 	prepared = true
-	if owned.SeedCode == nil || *owned.SeedCode != 0 || len(owned.Objects) != 3 {
+	if owned.SeedCode == nil || *owned.SeedCode != 0 || len(owned.Objects) != 6 {
 		t.Fatal("native seed differs", owned.SeedCode, owned.Objects)
 	}
 	observe := func(name string) omapWriteState {
@@ -190,6 +190,75 @@ func TestCephOSDResubmitIntegration(t *testing.T) {
 		time.Sleep(300 * time.Millisecond)
 		if after := observe(owned.Objects[1]); !bytes.Equal(after.Data, want) || after.Version != executed.Version {
 			t.Fatalf("resubmission appended again: %x version %d", after.Data, after.Version)
+		}
+	})
+
+	// Re-executing these vectors would give a different reply or state: CREATE
+	// with EXCL would answer EEXIST, DELETE would answer ENOENT and a second
+	// APPEND would double the bytes. The logged answer must come back instead.
+	t.Run("non-idempotent vectors answered from the PG log", func(t *testing.T) {
+		client, _, _, _ := fixture(t)
+		for _, tc := range []struct {
+			name, object string
+			prepare      []cephmsgr.OSDOperation
+			ops          []cephmsgr.OSDOperation
+			check        func(t *testing.T, state omapWriteState)
+		}{
+			{name: "exclusive create", object: owned.Objects[2], ops: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDCreate, Flags: cephmsgr.OSDExclusiveCreate}},
+				check: func(t *testing.T, s omapWriteState) {
+					if s.Code != 0 || len(s.Data) != 0 {
+						t.Fatal("created object differs", s.Code, len(s.Data))
+					}
+				}},
+			{name: "delete", object: owned.Objects[3], prepare: []cephmsgr.OSDOperation{appendOp("doomed")}, ops: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDDelete}},
+				check: func(t *testing.T, s omapWriteState) {
+					if s.Code != -2 {
+						t.Fatal("object survived the delete", s.Code)
+					}
+				}},
+			{name: "append with xattr", object: owned.Objects[4], ops: []cephmsgr.OSDOperation{appendOp("ab"), {Code: cephmsgr.OSDSetXattr, Xattr: cephmsgr.OSDXattrInput{Name: "k"}, Data: []byte("v")}},
+				check: func(t *testing.T, s omapWriteState) {
+					if s.Code != 0 || !bytes.Equal(s.Data, []byte("ab")) || len(s.Attributes) != 1 {
+						t.Fatalf("compound state differs: %q %v", s.Data, s.Attributes)
+					}
+				}},
+		} {
+			target := route(tc.object)
+			o := mutationConnection(t, client, ctx, target)
+			if len(tc.prepare) > 0 {
+				prepared := request(target, tc.prepare...)
+				prepared.ClientIncarnation, prepared.ModificationTime = incarnation, cephmsgr.OSDTime{Seconds: 1700001001}
+				if _, err := o.Request(ctx, prepared); err != nil {
+					t.Fatal(tc.name, "prepare", err)
+				}
+			}
+			original := request(target, tc.ops...)
+			original.ClientIncarnation, original.ModificationTime = incarnation, cephmsgr.OSDTime{Seconds: 1700001002}
+			first, err := o.Request(ctx, original)
+			if err != nil {
+				t.Fatal(tc.name, "first", err)
+			}
+			before := observe(tc.object)
+			again := original
+			again.Resubmit, again.RetryAttempt = &first.Submission, 1
+			second, err := o.Request(ctx, again)
+			if err != nil {
+				t.Fatalf("%s: resubmission was re-executed or refused: %v", tc.name, err)
+			}
+			if second.Code != first.Code || second.UserVersion != first.UserVersion || len(second.Operations) != len(first.Operations) || second.Flags&cephmsgr.OSDReplyOnDisk == 0 {
+				t.Fatalf("%s: resubmitted receipt differs: first=%+v second=%+v", tc.name, first, second)
+			}
+			for i := range first.Operations {
+				if second.Operations[i].Result != first.Operations[i].Result {
+					t.Fatalf("%s: per-op result %d differs", tc.name, i)
+				}
+			}
+			after := observe(tc.object)
+			if after.Version != before.Version || !bytes.Equal(after.Data, before.Data) {
+				t.Fatalf("%s: native state changed under the resubmission", tc.name)
+			}
+			tc.check(t, after)
+			o.Close()
 		}
 	})
 }
