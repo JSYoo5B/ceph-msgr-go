@@ -3,6 +3,9 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -87,6 +90,45 @@ func TestCephMonStatfsIntegration(t *testing.T) {
 		}
 		if _, err := c.Statfs(ctx, nil); err != nil {
 			t.Fatal("the session did not survive the ignored request", err)
+		}
+	})
+	// An identity whose only MON grant is the fsid command lacks "pg" read: the
+	// MON drops the request without a reply, and the session stays usable.
+	t.Run("a capability-denied request is ignored by the MON", func(t *testing.T) {
+		options := integrationOptions(t)
+		encoded, err := os.ReadFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "configwatch.key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if options.Key, err = cephmsgr.ParseKey(strings.TrimSpace(string(encoded))); err != nil {
+			t.Fatal(err)
+		}
+		options.Identity = "client.configwatch"
+		options.EnableOSD = true
+		if isReplicatedPGFixtureProfile() {
+			options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+		}
+		restricted, err := cephmsgr.Dial(ctx, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer restricted.Close()
+		for _, pool := range []*int64{nil, &base.Pool} {
+			waitCtx, stop := context.WithTimeout(ctx, 4*time.Second)
+			_, err := restricted.Statfs(waitCtx, pool)
+			stop()
+			var unknown *cephmsgr.OutcomeUnknownError
+			if !errors.As(err, &unknown) {
+				t.Fatal("a capability-denied statfs must end as an unknown outcome", pool, err)
+			}
+		}
+		result, err := restricted.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"fsid","format":"json"}`)})
+		if err != nil || result.Code != 0 {
+			t.Fatal("the restricted session did not survive the ignored requests", result.Code, err)
+		}
+		// Control: the admin identity gets the figures on the same MON.
+		if _, err := c.Statfs(ctx, nil); err != nil {
+			t.Fatal(err)
 		}
 	})
 }

@@ -21,6 +21,12 @@ the same MStatfs).
   and the object count are checked.
 - An absent pool id gets no reply: the call ends by its context as an unknown
   outcome and the session keeps working afterward.
+- Capability denial: `client.configwatch`, whose only MON grant is the `fsid`
+  command (no `pg` read), gets no reply for either form; each call ends by its
+  4-second context as an unknown outcome, the same session then runs its
+  allowed `fsid` command, and the admin identity still gets figures. Added
+  later the same day; passed in legacy-v6 single BlueStore and
+  request-v9/reply-v8 secure AES256K IPv6 single MemStore.
 - Wire: byte-level unit tests (request layout, 56-byte reply) and a synthetic
   MON; the daemon decoding our request and our decoding its reply is the
   interoperability evidence. No native-encoder vector exists.
@@ -31,6 +37,6 @@ Passed first complete run in legacy-v6 single BlueStore, legacy-v6 three
 BlueStore replicas, replicated-pg-v8 single BlueStore and request-v9/reply-v8
 secure AES256K IPv6 single MemStore.
 
-Not claimed: the capability-denied and FSID-mismatch ignores, equality of pool
+Not claimed: the FSID-mismatch ignore, equality of pool
 figures with libcephfs `statfs`, behavior across MON failover, and any scaling
 of the figures.
