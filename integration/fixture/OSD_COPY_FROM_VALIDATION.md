@@ -82,6 +82,11 @@ the killed OSD was the fixture object's primary and not necessarily the
 destination's. This is daemon termination, not host power loss or device
 durability, and no copy was in flight when the daemon died.
 
+Additional legacy-v6 three-BlueStore container runs (2026-10-17) passed all
+three tests (main 7 subtests, lost reply, SIGKILL): CRC mode with AES key and
+service cipher over IPv4, and secure mode with AES256K key and service cipher
+over IPv6.
+
 Not claimed: native-encoded vectors, compound vectors,
 `MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints, cross-pool copy,
 copy killed in flight or failover during a copy, EC, CRC mode
