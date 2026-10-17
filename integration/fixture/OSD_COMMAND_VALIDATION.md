@@ -101,3 +101,17 @@ unknown outcome). The old connection never recovers by itself. After restart
 the OSD has a new address nonce; a new connection to it answers `version` with
 the same bytes and a later transaction ID. A command in flight at the moment
 of the kill was not reproduced.
+
+## Capability change propagation (2026-10-17)
+
+`TestCephOSDCommandCapsChangeIntegration` creates a test-only identity with
+`mon 'allow r'` and `osd 'allow r'` through MON `auth get-or-create` (removed
+with `auth rm` in cleanup). Its `{"prefix":"version"}` OSD command is refused
+with -13. MON `auth caps` then widens the OSD grant to `allow *`. Two seconds
+later the same OSD session still gets -13, and so does a new OSD session of
+the same client: that client reuses its cached OSD service ticket, which
+carries the capabilities the OSD evaluates. A newly dialed client with fresh
+tickets gets 0. The client never refreshes tickets because of a capability
+change; a caller that needs the new grant sooner dials anew (or waits for the
+normal ticket renewal). Passed in legacy-v6 single BlueStore (secure AES256K
+IPv4) and request-v9/reply-v8 secure AES256K IPv6 single MemStore.
