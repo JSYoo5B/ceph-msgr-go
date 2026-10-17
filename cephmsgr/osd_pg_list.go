@@ -7,6 +7,7 @@ import (
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/osd"
+	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
 )
 
 // OSDPGListTarget identifies one actual PG and the primary OSD chosen by the
@@ -38,6 +39,33 @@ type OSDPGListRequest struct {
 	Cursor                      []byte
 	Count                       uint64
 	StartEpoch, MaxOutputBytes  uint32
+	// Filter, when set, sends PGNLS_FILTER: the OSD returns only the entries
+	// its named filter accepts. Rejected entries still advance the cursor, so
+	// a filtered page may be empty without being the PG's end. The caller must
+	// not modify Filter.Input until ListPG returns.
+	Filter *OSDPGListFilter
+}
+
+// OSDPGListFilter names an OSD-side PGNLS filter: "plain" (built into the
+// OSD) or "<class>.<filter>" from an object class the OSD loads. Input is the
+// filter's raw parameters, sent unchanged. An unknown class or filter is
+// refused by the OSD with -EINVAL (-EPERM when class loading is denied).
+type OSDPGListFilter struct {
+	Name  string
+	Input []byte
+}
+
+// OSDPlainPGListFilter builds the OSD's built-in "plain" filter, which keeps
+// objects whose attribute key equals value byte for byte and drops objects
+// without that attribute (osd_types.cc PGLSPlainFilter). key is the OSD's
+// attribute key: an xattr set through SETXATTR with name n is stored under
+// "_" + n.
+func OSDPlainPGListFilter(key string, value []byte) OSDPGListFilter {
+	e := wire.Encoder{}
+	e.String(key)
+	e.U32(uint32(len(value)))
+	e.Raw(value)
+	return OSDPGListFilter{Name: "plain", Input: e.Data}
 }
 
 // OSDPGCursor preserves a current compatible hobject_t and its raw envelope.
@@ -71,7 +99,11 @@ type OSDPGListReply struct {
 var ErrOSDPGListTarget = errors.New("ceph: OSD PG listing target differs from its explicit metadata")
 
 func pgListWireInput(r OSDPGListRequest) osd.PGListRequest {
-	return osd.PGListRequest{ClientInc: r.ClientIncarnation, MapEpoch: r.MapEpoch, PG: osd.PG{Pool: r.PG.Pool, Seed: r.PG.Seed}, Namespace: r.Namespace, Cursor: r.Cursor, Count: r.Count, StartEpoch: r.StartEpoch, MaxOutputBytes: r.MaxOutputBytes, Erasure: r.PG.Erasure, Shard: primaryFirstShard(r.PG.Shard, r.PG.PrimaryFirst)}
+	input := osd.PGListRequest{ClientInc: r.ClientIncarnation, MapEpoch: r.MapEpoch, PG: osd.PG{Pool: r.PG.Pool, Seed: r.PG.Seed}, Namespace: r.Namespace, Cursor: r.Cursor, Count: r.Count, StartEpoch: r.StartEpoch, MaxOutputBytes: r.MaxOutputBytes, Erasure: r.PG.Erasure, Shard: primaryFirstShard(r.PG.Shard, r.PG.PrimaryFirst)}
+	if r.Filter != nil {
+		input.Filter = &osd.PGListFilter{Name: r.Filter.Name, Input: r.Filter.Input}
+	}
+	return input
 }
 
 // ListPG sends exactly one bounded PGNLS request to an explicit primary.

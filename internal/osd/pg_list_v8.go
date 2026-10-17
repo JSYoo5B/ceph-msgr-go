@@ -42,7 +42,11 @@ func encodeReplicatedPGList(r PGListRequest, features uint64, limit uint32, vers
 	if version == 9 {
 		traceBytes = emptyOTELBytes
 	}
-	if _, err := boundedBytes(limit, 250, traceBytes, uint64(len(r.Namespace)), uint64(len(cursor))); err != nil {
+	code, payload, err := pgListPayload(r, cursor)
+	if err != nil {
+		return msgr.MessageData{}, err
+	}
+	if _, err := boundedBytes(limit, 250, traceBytes, uint64(len(r.Namespace)), uint64(len(payload))); err != nil {
 		return msgr.MessageData{}, err
 	}
 	if _, err := boundedBytes(limit, 232, uint64(r.MaxOutputBytes)); err != nil {
@@ -81,17 +85,17 @@ func encodeReplicatedPGList(r PGListRequest, features uint64, limit uint32, vers
 	encodeLocator(&e, Locator{Pool: int64(r.PG.Pool), Namespace: r.Namespace, Hash: int64(r.PG.Seed)})
 	e.String("")
 	e.U16(1)
-	e.U16(PGNLS)
+	e.U16(code)
 	e.U32(0)
 	e.U64(r.Count)
 	e.U32(r.StartEpoch)
 	e.U64(0)
 	e.U64(0)
-	e.U32(uint32(len(cursor)))
+	e.U32(uint32(len(payload)))
 	e.U64(NoSnap)
 	e.U64(0)
 	e.U32(0)
 	e.U32(0) // Attempt zero; no resend on split or unblock.
 	e.U64(features)
-	return msgr.MessageData{Type: RequestMessage, Version: version, CompatVersion: 3, Priority: 127, Front: e.Data, Data: bytes.Clone(cursor)}, nil
+	return msgr.MessageData{Type: RequestMessage, Version: version, CompatVersion: 3, Priority: 127, Front: e.Data, Data: bytes.Clone(payload)}, nil
 }

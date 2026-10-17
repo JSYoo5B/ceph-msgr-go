@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"strings"
 
 	"github.com/jsyoo5b/ceph-msgr-go/internal/msgr"
 	"github.com/jsyoo5b/ceph-msgr-go/internal/wire"
@@ -13,6 +14,23 @@ import (
 // include/rados.h, messages/MOSDOp.h, common/hobject.{h,cc}, osdc/Objecter.h
 // and osd/PrimaryLogPG.cc:1261-1445. LGPL-2.1; no implementation copied.
 const PGNLS uint16 = 0x1505
+
+// PGNLSFilter is PGNLS with an OSD-side filter (Objecter add_pgls_filter;
+// PrimaryLogPG::do_pg_op and get_pgls_filter).
+const PGNLSFilter uint16 = 0x1506
+
+// MaxPGListFilterName bounds a filter name: "plain" or "<class>.<filter>".
+const MaxPGListFilterName = 256
+
+// PGListFilter names an OSD-side PGNLS filter and its raw parameters. The
+// OSD decodes Input with the filter's own init (for "plain": an attribute key
+// and a value, each a length-prefixed string); entries the filter rejects are
+// skipped but still advance the cursor.
+type PGListFilter struct {
+	Name  string
+	Input []byte
+}
+
 const flagPGOp uint64 = 0x0400
 const MinPGListBytes uint32 = 49
 
@@ -43,6 +61,27 @@ type PGListRequest struct {
 	// only); a replicated PG uses NO_SHARD.
 	Erasure bool
 	Shard   uint8
+	// Filter, when set, sends PGNLS_FILTER instead of PGNLS.
+	Filter *PGListFilter
+}
+
+// pgListPayload returns the opcode and the operation's indata: the cursor
+// alone for PGNLS, or the fixed "pg"/"filter" names, the filter name, its raw
+// input and then the cursor for PGNLS_FILTER.
+func pgListPayload(r PGListRequest, cursor []byte) (uint16, []byte, error) {
+	if r.Filter == nil {
+		return PGNLS, cursor, nil
+	}
+	if r.Filter.Name == "" || len(r.Filter.Name) > MaxPGListFilterName || strings.IndexByte(r.Filter.Name, 0) >= 0 {
+		return 0, nil, ErrRequest
+	}
+	e := wire.Encoder{}
+	e.String("pg")
+	e.String("filter")
+	e.String(r.Filter.Name)
+	e.Raw(r.Filter.Input)
+	e.Raw(cursor)
+	return PGNLSFilter, e.Data, nil
 }
 
 func initialPGCursor() []byte {
@@ -145,7 +184,11 @@ func EncodePGListRequest(r PGListRequest, features uint64, limit uint32) (msgr.M
 	if len(cursor) == 0 {
 		cursor = initialPGCursor()
 	}
-	if _, err := boundedBytes(limit, 227, uint64(len(r.Namespace)), uint64(len(cursor))); err != nil {
+	code, payload, err := pgListPayload(r, cursor)
+	if err != nil {
+		return msgr.MessageData{}, err
+	}
+	if _, err := boundedBytes(limit, 227, uint64(len(r.Namespace)), uint64(len(payload))); err != nil {
 		return msgr.MessageData{}, err
 	}
 	if _, err := boundedBytes(limit, 232, uint64(r.MaxOutputBytes)); err != nil {
@@ -166,13 +209,13 @@ func EncodePGListRequest(r PGListRequest, features uint64, limit uint32) (msgr.M
 	encodePG(&e, r.PG)
 	e.String("")
 	e.U16(1)
-	e.U16(PGNLS)
+	e.U16(code)
 	e.U32(0)
 	e.U64(r.Count)
 	e.U32(r.StartEpoch)
 	e.U64(0)
 	e.U64(0)
-	e.U32(uint32(len(cursor)))
+	e.U32(uint32(len(payload)))
 	e.U64(NoSnap)
 	e.U64(0)
 	e.U32(0)
@@ -184,15 +227,19 @@ func EncodePGListRequest(r PGListRequest, features uint64, limit uint32) (msgr.M
 	id.U64(0)
 	id.U32(0)
 	e.Struct(2, 2, id.Data)
-	return msgr.MessageData{Type: RequestMessage, Version: 6, CompatVersion: 3, Priority: 127, Front: e.Data, Data: bytes.Clone(cursor)}, nil
+	return msgr.MessageData{Type: RequestMessage, Version: 6, CompatVersion: 3, Priority: 127, Front: e.Data, Data: bytes.Clone(payload)}, nil
 }
 
 func ValidatePGListReply(r PGListRequest, reply Reply, redirect bool) error {
 	if reply.Object != "" || reply.PG != r.PG || reply.RetryAttempt != 0 || len(reply.Operations) != 1 {
 		return errors.New("OSD PG listing reply identity differs from request")
 	}
+	want := PGNLS
+	if r.Filter != nil {
+		want = PGNLSFilter
+	}
 	op := reply.Operations[0]
-	if op.Code != PGNLS || op.Flags != 0 || op.Offset != r.Count || op.Length != uint64(r.StartEpoch) || op.TruncateSize != 0 || op.TruncateSequence != 0 || uint64(len(op.Data)) != uint64(op.PayloadLength) || op.PayloadLength > r.MaxOutputBytes {
+	if op.Code != want || op.Flags != 0 || op.Offset != r.Count || op.Length != uint64(r.StartEpoch) || op.TruncateSize != 0 || op.TruncateSequence != 0 || uint64(len(op.Data)) != uint64(op.PayloadLength) || op.PayloadLength > r.MaxOutputBytes {
 		return errors.New("OSD PG listing reply union or budget differs from request")
 	}
 	if redirect || reply.Result < 0 {

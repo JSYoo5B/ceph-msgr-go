@@ -8,7 +8,7 @@ import (
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, Watch, Notify, NotifyAck:
+	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, PGNLSFilter, Watch, Notify, NotifyAck:
 		return true
 	}
 	return false
@@ -27,7 +27,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 	// write except a read-mode CALL and a non-FAILOK CREATE.
 	var stagedXattr, stagedOmap, stagedAny, afterCall bool
 	for _, op := range ops {
-		if !SupportedOperation(op.Code) || op.Code == PGNLS || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
+		if !SupportedOperation(op.Code) || op.Code == PGNLS || op.Code == PGNLSFilter || op.Flags&^(OpExclusive|OpFailOK) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
 			return 0, 0, ErrOperation
 		}
 		if len(op.Data) > math.MaxUint32 {
@@ -358,7 +358,7 @@ func writeOperation(code uint16) bool {
 
 func readModeOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, OmapCompare, Call, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, Watch, Notify, NotifyAck:
+	case Read, Stat, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, OmapCompare, Call, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, PGNLSFilter, Watch, Notify, NotifyAck:
 		return true
 	}
 	return IsOmapOperation(code) && !isOmapMutation(code)

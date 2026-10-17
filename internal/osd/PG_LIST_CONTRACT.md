@@ -83,3 +83,27 @@ passed all four subcases and the complete PG test including cleanup (3.42s);
 it retained six/one/zero entries in seven count-one Go pages per namespace.
 The combined run still failed its separate watch/notify test, so this is a
 PG-specific result rather than a whole-suite pass.
+
+## Filtered listing (PGNLS_FILTER)
+
+`OSDPGListRequest.Filter` sends PGNLS_FILTER (0x1506) instead of PGNLS. As
+Objecter's add_pgls_filter does, the operation's indata is the strings `pg`
+and `filter`, the filter name, the filter's raw input and then the cursor; the
+operation union, flags, routing and reply handling are those of PGNLS, and the
+reply must echo the filtered opcode. The OSD (PrimaryLogPG do_pg_op,
+get_pgls_filter) builds the filter from the name: `plain` is built in
+(osd_types.cc PGLSPlainFilter: keep objects whose attribute key equals the
+value byte for byte, drop objects without it), any other name must be
+`<class>.<filter>` from an object class it may load. Objects the filter drops
+still advance the cursor, so a filtered page can be empty before the PG's end.
+`OSDPlainPGListFilter` encodes the plain filter's input (attribute key, then
+value, each length-prefixed); the key is the OSD's attribute key, `_` + name
+for a user xattr. The OSD reads the filter input and the cursor from one
+stream, so the client cannot detect input that consumes cursor bytes; it only
+bounds the name (1-256 bytes, no NUL) and the frame.
+
+Live ([record](../../integration/fixture/OSD_PG_LIST_FILTER_VALIDATION.md)):
+the plain filter and cls_hello's `hello.hello` class filter returned exactly
+the natively observed matches; a class
+outside `osd_class_load_list` is refused with -EPERM (-1), a missing filter of a
+loadable class and input running past the end with -EINVAL (-22).

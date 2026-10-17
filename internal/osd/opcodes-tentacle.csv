@@ -77,5 +77,5 @@ PGLS_FILTER,0x1502,RD,PG,unsupported
 PG_HITSET_LS,0x1503,RD,PG,unsupported
 PG_HITSET_GET,0x1504,RD,PG,unsupported
 PGNLS,0x1505,RD,PG,implemented
-PGNLS_FILTER,0x1506,RD,PG,unsupported
+PGNLS_FILTER,0x1506,RD,PG,implemented
 SCRUBLS,0x1507,RD,PG,unsupported
