@@ -194,9 +194,9 @@ func parseMDSCephFSRequest(fields []string, token string, previousID int64) (int
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS file action admits only the Go-created file")
 		}
 		action.target = arg
-	case "list":
+	case "list", "statfs":
 		if arg != "dir" {
-			return 0, mdsCephFSAction{}, errors.New("MDS CephFS listing admits only the owned directory")
+			return 0, mdsCephFSAction{}, errors.New("MDS CephFS listing and statfs admit only the owned directory")
 		}
 		action.target = arg
 	case "create-native":
@@ -237,6 +237,11 @@ try:
     out['native_global_id'] = fs.get_instance_id()
     if action == 'stat' and not extra:
         out['stat'] = stat(path)
+    elif action == 'statfs' and path == prefix and not extra:
+        # Client::statfs: a filesystem with one data pool asks the MON for that
+        # pool's figures (MStatfs with data_pool) and reports 4 MiB blocks.
+        v = fs.statfs(path)
+        out['statfs'] = {k: v[k] for k in ('f_bsize', 'f_frsize', 'f_blocks', 'f_bfree', 'f_bavail', 'f_files')}
     elif action == 'getxattr' and len(extra) == 1:
         out['value_hex'] = fs.getxattr(path, extra[0], 65536).hex()
     elif action == 'create' and path == prefix and len(extra) == 3:
@@ -323,6 +328,17 @@ type mdsCephFSNative struct {
 	Written        int              `json:"written,omitempty"`
 	TimingsNS      map[string]int64 `json:"timings_ns,omitempty"`
 	DataHex        string           `json:"data_hex,omitempty"`
+	Statfs         *mdsCephFSStatfs `json:"statfs,omitempty"`
+}
+
+// mdsCephFSStatfs is libcephfs statvfs output (Client::statfs).
+type mdsCephFSStatfs struct {
+	BlockSize    uint64 `json:"f_bsize"`
+	FragmentSize uint64 `json:"f_frsize"`
+	Blocks       uint64 `json:"f_blocks"`
+	Free         uint64 `json:"f_bfree"`
+	Available    uint64 `json:"f_bavail"`
+	Files        uint64 `json:"f_files"`
 }
 
 func validMDSCephFSStat(s mdsCephFSStat) bool {
@@ -384,6 +400,8 @@ func decodeMDSCephFSNative(action, path string, plan mdsCephFSPlan, data []byte)
 	case "read":
 		_, err := hex.DecodeString(result.DataHex)
 		ok = err == nil && result.Stat != nil && validMDSCephFSStat(*result.Stat)
+	case "statfs":
+		ok = result.Statfs != nil && result.Statfs.BlockSize > 0 && result.Statfs.Blocks >= result.Statfs.Free
 	}
 	if !ok {
 		return mdsCephFSNative{}, fmt.Errorf("native CephFS %s output shape differs", action)

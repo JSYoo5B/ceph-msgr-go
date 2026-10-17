@@ -50,6 +50,7 @@ type nativeMDSCephFSOracle struct {
 	NativeCaps        map[string]string        `json:"native_caps"`
 	Plan              nativeMDSCephFSPlan      `json:"plan"`
 	BaselineBlocklist []nativeMDSSessionsBlock `json:"baseline_blocklist"`
+	DataPool          int64                    `json:"data_pool"`
 }
 
 type nativeMDSCephFSStat struct {
@@ -82,6 +83,13 @@ type nativeMDSCephFSOutput struct {
 	Written        int                    `json:"written"`
 	TimingsNS      map[string]int64       `json:"timings_ns"`
 	DataHex        string                 `json:"data_hex"`
+	Statfs         *struct {
+		BlockSize uint64 `json:"f_bsize"`
+		Blocks    uint64 `json:"f_blocks"`
+		Free      uint64 `json:"f_bfree"`
+		Available uint64 `json:"f_bavail"`
+		Files     uint64 `json:"f_files"`
+	} `json:"statfs"`
 }
 
 type nativeMDSCephFSReceipt struct {
@@ -654,6 +662,40 @@ func TestCephMDSCephFSIntegration(t *testing.T) {
 			if !ok || want[entry.Name] == 0 || st.Ino != want[entry.Name] || entry.DIno != st.Ino || entry.Stat.Ino != st.Ino || entry.Stat.Mode != st.Mode || entry.Stat.UID != st.UID || entry.Stat.GID != st.GID || entry.Stat.NLink != nativeStatxNLink(&st) {
 				t.Fatalf("readdir entry differs from native listing: %s go=%+v native=%+v", entry.Name, summarizeInode(&st), entry)
 			}
+		}
+	}) {
+		return
+	}
+
+	// libcephfs statfs on a filesystem with one data pool sends MStatfs for
+	// that pool and reports 4 MiB blocks (Client::statfs, CEPH_BLOCK_SHIFT
+	// 22): the pool form of Client.Statfs is its native twin for the blocks.
+	if !leaf("statfs_matches_libcephfs", func(t *testing.T) {
+		pool := control.oracle.DataPool
+		deadline := time.Now().Add(60 * time.Second)
+		for {
+			got, err := client.Statfs(ctx, &pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			native, err := control.request(ctx, "statfs", "dir")
+			if err != nil {
+				t.Fatal(err)
+			}
+			n := native.Native.Statfs
+			if n == nil || n.BlockSize != 1<<22 {
+				t.Fatal("native statfs missing or unexpected block size", n)
+			}
+			// f_files comes from the root's recursive MDS stats (rfiles +
+			// rsubdirs), not from MStatfs, so only the block figures compare.
+			if got.KB>>12 == n.Blocks && got.KBAvail>>12 == n.Free && got.KBAvail>>12 == n.Available {
+				facts["statfs"] = map[string]uint64{"kb": got.KB, "kb_avail": got.KBAvail, "objects": got.Objects, "native_blocks": n.Blocks}
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("Go pool statfs %+v never matched libcephfs %+v", got, *n)
+			}
+			time.Sleep(2 * time.Second)
 		}
 	}) {
 		return

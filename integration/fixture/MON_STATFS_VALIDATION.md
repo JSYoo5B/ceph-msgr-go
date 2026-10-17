@@ -24,6 +24,16 @@ the same MStatfs).
 - Every monitor: one client seeded only with each of the three monitors
   gets the cluster form with the same capacity; two of them answered as
   peons. Passed in the same two profiles as the capability case.
+- Native twin of the pool form (`statfs_matches_libcephfs` leaf of
+  `TestCephMDSCephFSIntegration`, CephFS profile, 2026-10-18): the owned
+  filesystem has one data pool, so native libcephfs `statfs` sends MStatfs
+  for that pool and reports 4 MiB blocks (Client::_statfs). Go's
+  `Statfs(&dataPool)` KB total and available, shifted by 12, equal the
+  native f_blocks, f_bfree and f_bavail. f_files differs by design: Tentacle
+  takes it from the root's recursive MDS stats (rfiles + rsubdirs), not from
+  MStatfs (6 native against 0 objects in the data pool). The fixture's native
+  driver gained a `statfs` action for this. Passed in CRC/AES IPv4 BlueStore
+  and secure AES256K IPv6 MemStore.
 - Capability denial: `client.configwatch`, whose only MON grant is the `fsid`
   command (no `pg` read), gets no reply for either form; each call ends by its
   4-second context as an unknown outcome, the same session then runs its
@@ -40,6 +50,5 @@ Passed first complete run in legacy-v6 single BlueStore, legacy-v6 three
 BlueStore replicas, replicated-pg-v8 single BlueStore and request-v9/reply-v8
 secure AES256K IPv6 single MemStore.
 
-Not claimed: the FSID-mismatch ignore, equality of pool
-figures with libcephfs `statfs`, behavior across MON failover, and any scaling
+Not claimed: the FSID-mismatch ignore, behavior across MON failover, and any scaling
 of the figures.
