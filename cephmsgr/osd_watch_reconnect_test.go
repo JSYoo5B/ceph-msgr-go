@@ -267,7 +267,7 @@ func TestOSDWatchReconnectAdmissionRetainsOldOwner(t *testing.T) {
 		{"snapshot vector", func(r *OSDRequest) { r.SnapContext.Snapshots = []uint64{1} }},
 		{"ordered snapshots", func(r *OSDRequest) { r.OrderSnapshots = true }},
 		{"operations", func(r *OSDRequest) { r.Operations = []OSDOperation{{Code: OSDStat}} }},
-		{"invalid placement", func(r *OSDRequest) { r.Placement = &OSDReplicatedPlacement{} }},
+		{"invalid placement", func(r *OSDRequest) { r.Placement = &OSDPlacement{} }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			route := watchTestRoute()

@@ -47,7 +47,7 @@ func TestReplicatedPGV8MONProfileAddsOnlyOptInHashPSPool(t *testing.T) {
 		}
 	}
 	// The pre-existing unconditional admission exception stays exactly fixed.
-	if monAdmissionFeatures != 1<<18|1<<25|1<<41|1<<48|1<<58 {
+	if monAdmissionFeatures != 1<<18|1<<25|1<<36|1<<41|1<<48|1<<58 {
 		t.Fatal("MON admission exception changed")
 	}
 }

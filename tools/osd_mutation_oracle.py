@@ -222,10 +222,10 @@ def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
         daemon, pool = daemons[0], descriptors[0]
         if daemon.get("up") != 1 or daemon.get("in") != 1:
             raise ValueError("native target OSD is not up and in")
-        if (pool.get("pool_name") != pool_name or pool.get("type") != 1
+        if (pool.get("pool_name") != pool_name or pool.get("type") not in (1, 3)
                 or type(pool.get("size")) is not int or type(pool.get("min_size")) is not int
                 or not 1 <= pool["min_size"] <= pool["size"] <= 64):
-            raise ValueError("native target pool is not the expected replicated pool")
+            raise ValueError("native target pool is not a replicated or erasure-coded pool")
         public = daemon.get("public_addrs", {})
         if not isinstance(public, dict):
             raise ValueError("invalid native target address vector")
@@ -263,7 +263,11 @@ def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
             raise ValueError("invalid native mapped placement group")
         return {"up": mapped["up"], "acting": mapped["acting"], "replicas": pool["size"],
                 "min_size": pool["min_size"], "pool_id": pool_id, "object": object_name,
-                "osd_id": target, "primary_id": primary, "epoch": epochs[0], "hash": int(match[2], 16),
+                "osd_id": target, "primary_id": primary, "epoch": epochs[0],
+                # Erasure-coded PGs address a shard: the target's position in
+                # the acting set. Replicated PGs use NO_SHARD (-1).
+                "pg_shard": mapped["acting"].index(target) if pool["type"] == 3 else -1,
+                "pool_type": pool["type"], "hash": int(match[2], 16),
                 "namespace": namespace, "raw_pgid": raw_pg, "pgid": mapped_pg,
                 "pg_seed": int(pg_match[2], 16),
                 "address": "v2:" + address + "/" + str(endpoint["nonce"])}

@@ -326,7 +326,7 @@ func testReplicatedReplyV8PGListResults(t *testing.T, profile OSDProfile) {
 			go func() { reply, err := o.ListPG(ctx, r); done <- response{reply, err} }()
 			sent := peer.next(t)
 			assertReplicatedRequestProfile(t, profile, sent)
-			input := OSDRequest{MapEpoch: r.MapEpoch, Object: OSDObject{Pool: int64(r.PG.Pool)}, Placement: &OSDReplicatedPlacement{PG: OSDPG{Pool: r.PG.Pool, Seed: r.PG.Seed}}, Operations: []OSDOperation{{Code: OSDOpcode(osd.PGNLS), Offset: r.Count, Length: uint64(r.StartEpoch)}}}
+			input := OSDRequest{MapEpoch: r.MapEpoch, Object: OSDObject{Pool: int64(r.PG.Pool)}, Placement: &OSDPlacement{PG: OSDPG{Pool: r.PG.Pool, Seed: r.PG.Seed}}, Operations: []OSDOperation{{Code: OSDOpcode(osd.PGNLS), Offset: r.Count, Length: uint64(r.StartEpoch)}}}
 			data, aggregate := pgListData(), int32(0)
 			if kind == "end" {
 				aggregate = 1

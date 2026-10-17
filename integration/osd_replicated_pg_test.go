@@ -181,7 +181,10 @@ func replicatedPGOwned(t *testing.T, ctx context.Context, base osdFixtureOracle,
 }
 func replicatedPGRequest(route osdFixtureOracle, ops ...cephmsgr.OSDOperation) cephmsgr.OSDRequest {
 	r := osdObjectRequest(route, ops...)
-	r.Placement = &cephmsgr.OSDReplicatedPlacement{PG: cephmsgr.OSDPG{Pool: uint64(route.Pool), Seed: route.PG}, Primary: route.ID}
+	r.Placement = &cephmsgr.OSDPlacement{PG: cephmsgr.OSDPG{Pool: uint64(route.Pool), Seed: route.PG}, Primary: route.ID}
+	if route.PoolType == 3 {
+		r.Placement.Erasure, r.Placement.Shard = true, uint8(route.Shard)
+	}
 	return r
 }
 func replicatedPGConnection(t *testing.T, c *cephmsgr.Client, ctx context.Context, route osdFixtureOracle) *cephmsgr.OSDConnection {

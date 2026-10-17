@@ -15,7 +15,7 @@ func TestOSDProfilePlacementAdmission(t *testing.T) {
 	if err := o.validatePlacement(request); err != nil {
 		t.Fatal(err)
 	}
-	request.Placement = &OSDReplicatedPlacement{PG: OSDPG{Pool: 7, Seed: 3}, Primary: 3}
+	request.Placement = &OSDPlacement{PG: OSDPG{Pool: 7, Seed: 3}, Primary: 3}
 	if _, err := o.Request(context.Background(), request); !errors.Is(err, osd.ErrRequest) {
 		t.Fatal("object-hash profile accepted actual PG", err)
 	}

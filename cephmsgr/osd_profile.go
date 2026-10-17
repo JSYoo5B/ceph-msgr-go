@@ -38,15 +38,28 @@ const (
 	OSDProfileReplicatedPGRequestV9ReplyV8
 )
 
-// OSDReplicatedPlacement is selected by the caller from its applied map.
+// OSDPlacement is selected by the caller from its applied map.
 // PG.Seed is the actual folded PG, distinct from Object.Hash. The connection
-// primary must match Primary. Replicated requests always use NO_SHARD (-1).
-type OSDReplicatedPlacement struct {
+// primary must match Primary. A replicated pool's requests use NO_SHARD (-1).
+// For an erasure-coded pool set Erasure and Shard to the shard the connection
+// target holds in the PG's acting set (its position there), which the OSD
+// requires in spg_t; the caller derives it from its own map, as for Primary.
+type OSDPlacement struct {
 	PG      OSDPG
 	Primary int32
+	Erasure bool
+	Shard   uint8
 }
 
-func cloneOSDPlacement(p *OSDReplicatedPlacement) *OSDReplicatedPlacement {
+// wireShard is the spg_t shard: NO_SHARD for replicated placement.
+func (p *OSDPlacement) wireShard() int8 {
+	if p == nil || !p.Erasure {
+		return -1
+	}
+	return int8(p.Shard)
+}
+
+func cloneOSDPlacement(p *OSDPlacement) *OSDPlacement {
 	if p == nil {
 		return nil
 	}
@@ -62,6 +75,9 @@ func (o *OSDConnection) validatePlacement(request OSDRequest) error {
 		return nil
 	}
 	p := request.Placement
+	if p != nil && (p.Shard > 127 || !p.Erasure && p.Shard != 0) {
+		return fmt.Errorf("%w: a shard is meaningful only for erasure-coded placement", osd.ErrRequest)
+	}
 	if !o.client.options.OSDProfile.replicatedPG() || p == nil || request.Object.Pool < 0 || p.PG.Pool != uint64(request.Object.Pool) || p.Primary != o.target.ID && !request.BalanceReads && !request.LocalizeReads {
 		return fmt.Errorf("%w: replicated request requires its explicit PG and connection primary", osd.ErrRequest)
 	}

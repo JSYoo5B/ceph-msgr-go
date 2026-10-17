@@ -28,9 +28,18 @@ const sessionFlagLossy uint64 = 1       // CEPH_MSG_CONNECT_LOSSY
 
 // Ceph MON admission requires these CRUSH-generation bits from every CLIENT,
 // even clients that only issue commands. These bits satisfy MON admission
-// only; they do not imply OSDMap subscriptions or CRUSH placement support
-// and are never copied to OSD connections.
-const monAdmissionFeatures uint64 = 1<<18 | 1<<25 | 1<<41 | 1<<48 | 1<<58
+// only; they do not imply OSDMap subscriptions or CRUSH placement support.
+// CRUSH_V2 (36) is required as soon as any rule uses indep or SET_*_TRIES
+// steps, as every erasure-code rule does (OSDMap::get_features,
+// CrushWrapper::is_v2_rule); see crushV2AdmissionFeature.
+const monAdmissionFeatures uint64 = 1<<18 | 1<<25 | 1<<41 | 1<<48 | 1<<58 | crushV2AdmissionFeature
+
+// crushV2AdmissionFeature is include/ceph_features.h CRUSH_V2. By explicit
+// user policy (2026-10-17) it is the one CRUSH bit also advertised on OSD
+// connections: MONs and OSDs refuse every client lacking it once the OSDMap
+// holds an erasure-code rule, even for replicated-pool I/O. It is admission
+// only; this client computes no CRUSH placement of any rule version.
+const crushV2AdmissionFeature uint64 = 1 << 36
 
 func featuresForRole(role uint8) uint64 {
 	if role == 1 {
@@ -41,8 +50,9 @@ func featuresForRole(role uint8) uint64 {
 	}
 	if role == 4 {
 		// Implemented OSD object-locator and PGID64 encodings. In particular,
-		// omit CRUSH, upmap, resend-on-split and new OSD reply encoding bits.
-		return Features | 1<<8 | 1<<9
+		// omit CRUSH, upmap, resend-on-split and new OSD reply encoding bits,
+		// except the CRUSH_V2 admission bit erasure-code rules require.
+		return Features | 1<<8 | 1<<9 | crushV2AdmissionFeature
 	}
 	return Features
 }

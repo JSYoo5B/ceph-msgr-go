@@ -28,7 +28,7 @@ func TestOSDHandshakeBindsZeroIDAndNegotiatesImplementedFeatures(t *testing.T) {
 				done <- handshakePeer(peer, auth, handshakePeerConfig{mode: 2, peerRole: 4, serverFlags: 1,
 					serverSupported: Features | 1<<8 | 1<<9, serverRequired: test.required,
 					identFeatures: func(bits uint64) error {
-						if bits != Features|1<<8|1<<9 || bits&monAdmissionFeatures != 0 {
+						if bits != Features|1<<8|1<<9|crushV2AdmissionFeature || bits&(monAdmissionFeatures&^crushV2AdmissionFeature) != 0 {
 							return errors.New("OSD advertised unsupported admission or object features")
 						}
 						return nil

@@ -127,7 +127,7 @@ func (o *OSDConnection) ListPG(ctx context.Context, request OSDPGListRequest) (O
 	}
 	reply, err := s.Call(operation, m)
 	submission := OSDSubmission{Transaction: reply.Transaction, GlobalID: o.globalID, ClientIncarnation: request.ClientIncarnation, MapEpoch: request.MapEpoch,
-		Placement: &OSDReplicatedPlacement{PG: OSDPG{Pool: request.PG.Pool, Seed: request.PG.Seed}, Primary: request.PG.Primary}}
+		Placement: &OSDPlacement{PG: OSDPG{Pool: request.PG.Pool, Seed: request.PG.Seed}, Primary: request.PG.Primary}}
 	result.Submission = submission
 	if err != nil {
 		return result, o.operationError(err)

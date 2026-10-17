@@ -132,19 +132,33 @@ def find_pool(dump, name):
     return matches[0] if matches else None
 
 
+EC_PROFILE = "ceph-msgr-owned-ec"
+
+
 def mode_create(rados, cluster, request, out):
     name = pool_name(request["slot"])
     pg = integer(request["pg_num"], 1, 32, "pg_num")
-    size = integer(request["size"], 1, 3, "size")
-    minimum = integer(request["min_size"], 1, size, "min_size")
+    erasure = request.get("erasure", False)
+    if type(erasure) is not bool:
+        raise ValueError("erasure must be boolean")
     hashpspool = request["hashpspool"]
     if type(hashpspool) is not bool:
         raise ValueError("hashpspool must be boolean")
     if find_pool(rados.dump(cluster), name):
         raise RuntimeError("owned pool already exists")
-    steps = [{"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "replicated"},
-             {"prefix": "osd pool set", "pool": name, "var": "size", "val": str(size), "yes_i_really_mean_it": True},
-             {"prefix": "osd pool set", "pool": name, "var": "min_size", "val": str(minimum)}]
+    if erasure:
+        # k=2, m=1 over three OSDs with an OSD failure domain; overwrites need
+        # BlueStore. The MON derives size 3 and min_size k+1 itself.
+        size, minimum = 3, None
+        steps = [{"prefix": "osd erasure-code-profile set", "name": EC_PROFILE, "profile": ["k=2", "m=1", "crush-failure-domain=osd"], "force": True},
+                 {"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "erasure", "erasure_code_profile": EC_PROFILE},
+                 {"prefix": "osd pool set", "pool": name, "var": "allow_ec_overwrites", "val": "true"}]
+    else:
+        size = integer(request["size"], 1, 3, "size")
+        minimum = integer(request["min_size"], 1, size, "min_size")
+        steps = [{"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "replicated"},
+                 {"prefix": "osd pool set", "pool": name, "var": "size", "val": str(size), "yes_i_really_mean_it": True},
+                 {"prefix": "osd pool set", "pool": name, "var": "min_size", "val": str(minimum)}]
     for command in steps:
         code, _ = rados.mon(cluster, command)
         if code < 0:
@@ -159,10 +173,17 @@ def mode_create(rados, cluster, request, out):
     finally:
         rados.lib.rados_ioctx_destroy(io)
     pool = find_pool(rados.dump(cluster), name)
-    if pool is None or bool(pool["flags"] & 1) != hashpspool or pool["size"] != size or pool["min_size"] != minimum or pool["pg_num"] != pg:
+    if minimum is None and pool is not None:
+        minimum = pool["min_size"]
+    if pool is None or bool(pool["flags"] & 1) != hashpspool or pool["size"] != size or pool["min_size"] != minimum or pool["pg_num"] != pg or (pool["type"] == 3) != erasure:
         raise RuntimeError("native pool does not match the requested closed shape")
+    rule = None
+    code, text = rados.mon(cluster, {"prefix": "osd crush rule dump", "format": "json"})
+    if code == 0:
+        rules = [r for r in json.loads(text) if r.get("rule_id") == pool.get("crush_rule")]
+        rule = rules[0] if rules else None
     return {"pool": name, "pool_id": pool["pool"], "flags": pool["flags"], "size": size, "min_size": minimum,
-            "pg_num": pg, "epoch": rados.dump(cluster)["epoch"]}
+            "pg_num": pg, "epoch": rados.dump(cluster)["epoch"], "pool_type": pool["type"], "crush_rule": rule}
 
 
 def seed_object(rados, io, name, data, attributes):
@@ -325,6 +346,8 @@ def mode_cleanup(rados, cluster, request, out):
         if code < 0:
             raise RuntimeError("native pool removal failed: %d" % code)
         removed.append({"pool": name, "existed": True})
+    # The owned erasure-code profile is unused once its pools are gone.
+    rados.mon(cluster, {"prefix": "osd erasure-code-profile rm", "name": EC_PROFILE})
     gone = all(find_pool(rados.dump(cluster), pool_name(slot)) is None for slot in SLOTS)
     return {"removed": removed, "pools_removed": gone}
 

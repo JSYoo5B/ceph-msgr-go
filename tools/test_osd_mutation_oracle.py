@@ -35,7 +35,7 @@ class PlacementOracleTests(unittest.TestCase):
 
     def test_returns_one_matched_epoch_target_and_topology(self):
         result, calls = self.query(pair())
-        self.assertEqual(result, {"pool_id": 7, "object": "binary", "osd_id": 2, "primary_id": 2,
+        self.assertEqual(result, {"pool_id": 7, "object": "binary", "osd_id": 2, "primary_id": 2, "pg_shard": -1, "pool_type": 1,
                                   "epoch": 19, "hash": 0x123ABC,
                                   "address": "v2:192.0.2.4:6800/91", "up": [2, 0, 1],
                                   "acting": [2, 0, 1], "replicas": 3, "min_size": 2,
@@ -97,7 +97,7 @@ class PlacementOracleTests(unittest.TestCase):
                     self.query([mapped, dump])
 
     def test_required_pool_object_and_replication_identity(self):
-        for fault in ("map pool name", "map pool id", "object", "dump pool name", "EC", "min size", "raw hash"):
+        for fault in ("map pool name", "map pool id", "object", "dump pool name", "unknown pool type", "min size", "raw hash"):
             with self.subTest(fault=fault):
                 mapped, dump = pair()
                 if fault == "map pool name":
@@ -108,14 +108,24 @@ class PlacementOracleTests(unittest.TestCase):
                     mapped["objname"] = "other"
                 elif fault == "dump pool name":
                     dump["pools"][0]["pool_name"] = "other"
-                elif fault == "EC":
-                    dump["pools"][0]["type"] = 3
+                elif fault == "unknown pool type":
+                    dump["pools"][0]["type"] = 4
                 elif fault == "min size":
                     dump["pools"][0]["min_size"] = 4
                 else:
                     mapped["raw_pgid"] = "8.123abc"
                 with self.assertRaises(ValueError):
                     self.query([mapped, dump])
+
+    def test_erasure_pool_reports_the_target_shard(self):
+        mapped, dump = pair()
+        dump["pools"][0]["type"] = 3
+        dump["osds"].append({"osd": 1, "up": 1, "in": 1,
+                             "public_addrs": {"addrvec": [{"type": "v2", "addr": "192.0.2.6:6802", "nonce": 93}]}})
+        primary = collect_placement(lambda *args, timeout: copy.deepcopy(mapped if args[:2] == ("osd", "map") else dump), "test", "binary", 7)
+        replica = collect_placement(lambda *args, timeout: copy.deepcopy(mapped if args[:2] == ("osd", "map") else dump), "test", "binary", 7, target_osd=1)
+        self.assertEqual((primary["pg_shard"], primary["pool_type"]), (0, 3))
+        self.assertEqual((replica["osd_id"], replica["pg_shard"]), (1, 2))
 
     def test_each_read_respects_remaining_deadline(self):
         times = iter([0, 0, 4, 4, 8])

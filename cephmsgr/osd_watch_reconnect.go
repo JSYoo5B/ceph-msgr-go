@@ -120,9 +120,9 @@ func (o *OSDConnection) preflightWatchReconnect(request OSDRequest, cookie uint6
 	if p := request.Placement; p != nil {
 		pg := osd.PG{Pool: p.PG.Pool, Seed: p.PG.Seed}
 		if o.client.options.OSDProfile.requestV9() {
-			_, err = osd.EncodeRequestV9(osd.V9Request{Request: input, PG: pg, Shard: -1}, o.features, o.client.options.MaxFrameSize)
+			_, err = osd.EncodeRequestV9(osd.V9Request{Request: input, PG: pg, Shard: p.wireShard()}, o.features, o.client.options.MaxFrameSize)
 		} else {
-			_, err = osd.EncodeRequestV8(osd.V8Request{Request: input, PG: pg, Shard: -1}, o.features, o.client.options.MaxFrameSize)
+			_, err = osd.EncodeRequestV8(osd.V8Request{Request: input, PG: pg, Shard: p.wireShard()}, o.features, o.client.options.MaxFrameSize)
 		}
 	} else {
 		_, err = osd.EncodeRequest(input, o.features, o.client.options.MaxFrameSize)

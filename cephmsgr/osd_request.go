@@ -159,7 +159,7 @@ type OSDRequest struct {
 	Object            OSDObject
 	// Placement is mandatory for replicated PG profiles and absent for
 	// OSDProfileObjectHash. The caller owns map application and target choice.
-	Placement      *OSDReplicatedPlacement
+	Placement      *OSDPlacement
 	Operations     []OSDOperation
 	ReadSnapshot   uint64
 	SnapContext    OSDSnapContext
@@ -258,7 +258,7 @@ type OSDSubmission struct {
 	Transaction, GlobalID       uint64
 	ClientIncarnation, MapEpoch uint32
 	Attempt                     uint32
-	Placement                   *OSDReplicatedPlacement
+	Placement                   *OSDPlacement
 }
 
 // OSDReply preserves the server's completion metadata and operation outputs.
@@ -400,9 +400,9 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	if request.Placement != nil {
 		p := request.Placement.PG
 		if c.options.OSDProfile.requestV9() {
-			m, err = osd.EncodeRequestV9(osd.V9Request{Request: input, PG: osd.PG{Pool: p.Pool, Seed: p.Seed}, Shard: -1}, o.features, c.options.MaxFrameSize)
+			m, err = osd.EncodeRequestV9(osd.V9Request{Request: input, PG: osd.PG{Pool: p.Pool, Seed: p.Seed}, Shard: request.Placement.wireShard()}, o.features, c.options.MaxFrameSize)
 		} else {
-			m, err = osd.EncodeRequestV8(osd.V8Request{Request: input, PG: osd.PG{Pool: p.Pool, Seed: p.Seed}, Shard: -1}, o.features, c.options.MaxFrameSize)
+			m, err = osd.EncodeRequestV8(osd.V8Request{Request: input, PG: osd.PG{Pool: p.Pool, Seed: p.Seed}, Shard: request.Placement.wireShard()}, o.features, c.options.MaxFrameSize)
 		}
 	} else {
 		m, err = osd.EncodeRequest(input, o.features, c.options.MaxFrameSize)

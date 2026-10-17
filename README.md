@@ -558,7 +558,7 @@ Aggregate 서버 code와 operation별 result는 서로 다를 수 있다. 예를
 `Options.OSDProfile=OSDProfileReplicatedPG`는 `Dial` 전에 선택하는 별도 고정
 통신 계약이다. `EnableOSD`도 켜야 하며, MON에는 HASHPSPOOL 지원을, OSD에는
 HASHPSPOOL·실제 PG·v8 request·backoff에 필요한 정해진 feature만 협상한다.
-객체 요청마다 `Placement: &cephmsgr.OSDReplicatedPlacement{PG: actualPG,
+객체 요청마다 `Placement: &cephmsgr.OSDPlacement{PG: actualPG,
 Primary: targetID}`를 넣는다. `Object.Hash`는 계속 raw hash이며 `Placement.PG`
 는 caller가 지도에서 계산한 실제 PG다. pool/primary가 대상과 다르거나 배치가
 누락되면 송신 전에 거절한다. 이 profile의 v6 reply에는 실제 PG가 반환되고,
@@ -1033,6 +1033,9 @@ replicated-pg-v8, request-v9/reply-v8 secure/AES256K IPv6 single MemStore에서 
 - `Client.Statfs`(MON MStatfs): cluster 또는 pool 사용량. MON이 오류 응답을 두지 않아
   무시된 요청은 결과 불명확으로 끝난다. [계약](cephmsgr/STATFS_CONTRACT.md),
   [검증](integration/fixture/MON_STATFS_VALIDATION.md).
+- Erasure-coded pool: CRUSH_V2를 MON·OSD admission 전용으로 광고하고(EC rule이 있으면
+  필수), `OSDPlacement.Erasure`/`Shard`로 EC PG의 primary shard를 지정한다.
+  [계약](internal/osd/ERASURE_CONTRACT.md), [검증](integration/fixture/OSD_ERASURE_VALIDATION.md).
 - 추가 소유 pool 기반 시험(cross-pool·namespace COPY_FROM, pool snapshot 모드)은
   [검증](integration/fixture/OSD_POOL_VALIDATION.md)에 있다.
 

@@ -27,7 +27,7 @@ connection, err := client.OpenOSD(ctx, cephmsgr.OSDTarget{
     ID: callerPrimary, Address: callerEndpoint,
 })
 // Handle err before using connection.
-request.Placement = &cephmsgr.OSDReplicatedPlacement{
+request.Placement = &cephmsgr.OSDPlacement{
     PG: cephmsgr.OSDPG{Pool: uint64(request.Object.Pool), Seed: callerActualPG},
     Primary: callerPrimary,
 }
@@ -54,7 +54,7 @@ EnableOSD fails before network activity. The profile applies to this Client's
 MON and OSD sessions and cannot be changed on an existing client. `OSDTarget`
 continues to identify only the OSD ID/address. There is no target-level Profile.
 
-`OSDReplicatedPlacement.PG.Pool` must match the nonnegative object pool, and
+`OSDPlacement.PG.Pool` must match the nonnegative object pool, and
 Primary must equal the connection target ID. A pointer distinguishes absent
 placement from valid PG seed zero. The public profile fixes replicated shard
 identity to native NO_SHARD (-1). It exposes no arbitrary EC shard override.

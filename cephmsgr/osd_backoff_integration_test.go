@@ -106,7 +106,7 @@ func backoffTransportRequest() OSDRequest {
 	r := osdTestRequest()
 	r.ClientIncarnation = 9
 	r.Object.Hash = 0x12345678
-	r.Placement = &OSDReplicatedPlacement{PG: OSDPG{Pool: 1, Seed: 0}, Primary: 0}
+	r.Placement = &OSDPlacement{PG: OSDPG{Pool: 1, Seed: 0}, Primary: 0}
 	return r
 }
 func backoffTransportControl(t *testing.T, id uint64, op uint8, epoch uint32) msgr.MessageData {

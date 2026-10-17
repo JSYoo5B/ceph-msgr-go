@@ -26,6 +26,8 @@ type osdFixtureOracle struct {
 	Namespace   string  `json:"namespace"`
 	ID          int32   `json:"osd_id"`
 	PrimaryID   int32   `json:"primary_id"`
+	Shard       int8    `json:"pg_shard"`
+	PoolType    int     `json:"pool_type"`
 	Epoch       uint32  `json:"epoch"`
 	Hash        uint32  `json:"hash"`
 	PG          uint32  `json:"pg_seed"`

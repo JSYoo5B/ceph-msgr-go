@@ -49,7 +49,7 @@ func TestReplicatedPGV8HandshakeFeaturePolicyIsFixedAndOSDOnly(t *testing.T) {
 				if supported != wantSupported || required != wantRequired {
 					t.Fatal("profile escaped role or changed a default", role, enabled, supported, required)
 				}
-				if role == 4 && supported&(1<<58|1<<49|monAdmissionFeatures) != 0 {
+				if role == 4 && supported&(1<<58|1<<49|monAdmissionFeatures&^crushV2AdmissionFeature) != 0 {
 					t.Fatal("OSD profile added unsupported reply, server or MON bits")
 				}
 			}
@@ -98,7 +98,7 @@ func TestReplicatedPGV8HandshakeRejectsEveryMissingProfileCapabilityBeforeApplic
 				if !errors.Is(err, msgr.ErrFeatures) {
 					t.Fatal("profile silently downgraded", err)
 				}
-				if got := <-advertised; got != full {
+				if got := <-advertised; got != full|crushV2AdmissionFeature {
 					t.Fatal("peer did not receive fixed profile", got)
 				}
 				if err := <-done; err != nil {
@@ -126,7 +126,7 @@ func TestReplicatedPGV8HandshakeIntersectsFeaturesWithoutNewReplyOrSquid(t *test
 						mode: uint32(mode), offeredMode: mode, peerRole: 4, serverFlags: 1,
 						serverSupported: Features | profile | 1<<58 | 1<<49 | 1<<18, serverRequired: peerRequired,
 						identFeatures: func(bits uint64) error {
-							if bits != Features|profile {
+							if bits != Features|profile|crushV2AdmissionFeature {
 								return errors.New("OSD profile advertised uncontrolled features")
 							}
 							return nil

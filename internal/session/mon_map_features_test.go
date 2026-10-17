@@ -9,7 +9,10 @@ import "testing"
 func TestMONMapFeaturesKeepImplementedCapabilitiesScoped(t *testing.T) {
 	const pgid64 = uint64(1 << 9)
 	const objectLocator = uint64(1 << 8)
+	// MON-only CRUSH admission bits; CRUSH_V2 (36) is the one admission bit
+	// also sent to OSDs, because erasure-code rules make both peers require it.
 	const admission = uint64(1<<18 | 1<<25 | 1<<41 | 1<<48 | 1<<58)
+	const crushV2 = uint64(1 << 36)
 	// INCSUBOSDMAP, PGPOOL3, OSDREPLYMUX, OSDENC, RADOS_BACKOFF/
 	// OSDMAP_PG_UPMAP/RESEND_ON_SPLIT/CRUSH_CHOOSE_ARGS, CRUSH_MSR,
 	// OSDMAP_ENC, OSD_POOLRESEND, NEW_OSDOP_ENCODING and encoder sentinels.
@@ -19,9 +22,9 @@ func TestMONMapFeaturesKeepImplementedCapabilitiesScoped(t *testing.T) {
 		role uint8
 		want uint64
 	}{
-		{"MON", 1, Features | admission | pgid64},
+		{"MON", 1, Features | admission | crushV2 | pgid64},
 		{"MGR", 16, Features},
-		{"OSD", 4, Features | objectLocator | pgid64},
+		{"OSD", 4, Features | objectLocator | pgid64 | crushV2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			got := featuresForRole(test.role)
@@ -33,7 +36,10 @@ func TestMONMapFeaturesKeepImplementedCapabilitiesScoped(t *testing.T) {
 			}
 		})
 	}
-	if Features&pgid64 != 0 || Features&admission != 0 {
+	if featuresForRole(16)&crushV2 != 0 {
+		t.Fatal("CRUSH_V2 admission bit reached the MGR role")
+	}
+	if Features&pgid64 != 0 || Features&admission != 0 || Features&crushV2 != 0 {
 		t.Fatal("MON-specific additions changed the common feature mask")
 	}
 }
