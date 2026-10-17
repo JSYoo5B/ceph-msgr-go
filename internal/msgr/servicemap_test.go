@@ -114,3 +114,14 @@ func TestUnspecifiedAddressFamilyIsNoEndpoint(t *testing.T) {
 		t.Fatal("nonzero AF_UNSPEC sockaddr accepted")
 	}
 }
+
+func FuzzDecodeServiceMap(f *testing.F) {
+	f.Add(serviceMapFront(1))
+	f.Add(serviceMapFront(2))
+	f.Fuzz(func(t *testing.T, front []byte) {
+		m, err := DecodeServiceMap(MessageData{Type: ServiceMapMessage, Front: front}, 1<<16)
+		if err == nil && len(m.Raw) != len(front) {
+			t.Fatal("raw map differs from the frame")
+		}
+	})
+}
