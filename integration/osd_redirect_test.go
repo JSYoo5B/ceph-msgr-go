@@ -65,6 +65,16 @@ func TestCephOSDRedirectIntegration(t *testing.T) {
 		t.Fatal("the target changed")
 	}
 
+	written := []byte("written through the redirect")
+	wreply, werr := send("redirected", cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(written)), Data: written})
+	tgt := poolObserve(t, ctx, 2, "redirect-target", "", "")
+	src := poolObserve(t, ctx, 1, "redirected", "", "")
+	// The OSD proxies the write to the target: the target changes and the
+	// redirect keeps reading it.
+	if werr != nil || wreply.Flags&cephmsgr.OSDReplyOnDisk == 0 || !bytes.Equal(tgt.Data, written) || !bytes.Equal(src.Data, written) {
+		t.Fatalf("write through the redirect: err=%v target %q redirected %q", werr, tgt.Data, src.Data)
+	}
+
 	if _, err := send("redirected", cephmsgr.OSDOperation{Code: cephmsgr.OSDUnsetManifest}); err != nil {
 		t.Fatal("unset manifest", err)
 	}

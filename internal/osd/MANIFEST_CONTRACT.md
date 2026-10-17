@@ -10,7 +10,8 @@ and the target version) and indata (target object name and locator), exactly
 as Objecter's set_redirect without CEPH_OSD_OP_FLAG_WITH_REFERENCE. The OSD
 makes the targeted object a manifest of type redirect, truncates its data,
 sets its user version to the given target version and from then on serves
-its reads from the target (in any pool). `OSDUnsetManifest` has no input and
+its reads from the target (in any pool); a WRITEFULL to it was observed to be
+proxied to the target as well. `OSDUnsetManifest` has no input and
 clears the manifest; the object stays, now plain and empty. Both are
 standalone and flagless here; reference-counted redirects, SET_CHUNK and the
 tier operations are not implemented.
