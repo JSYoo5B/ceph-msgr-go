@@ -105,6 +105,25 @@ PGs within the fixture's wait when only thawed).
 | replicated-pg-v8, secure AES256K IPv4 | 28.8 s | osd.2 -> osd.1 (epoch 24 -> 26) | osd.1 |
 | legacy-v6, CRC with AES key and service cipher | 27.6 s | osd.0 -> osd.1 (epoch 25 -> 27) | osd.1 |
 
+## Destination primary killed during a copy (2026-10-18)
+
+`TestCephOSDCopyFromDestinationCrashIntegration` (three BlueStore replicas)
+uses the same source/destination pair selection as the source failover test.
+The source primary is frozen (`docker pause`), one Go COPY_FROM2 is sent to the
+destination primary, and 3 s later, with the copy still waiting on its source
+read, the destination primary is SIGKILLed (exit 137). The request ends at once
+as an unknown outcome (connection EOF) with its transaction and map epoch;
+nothing is resent. Both OSDs are restored (the frozen one resumed, killed and
+started, the killed one started) and the PGs return to clean. Native
+observation then finds the destination absent (`-2`), and the same 5 s later.
+The test accepts an exact copy as the other non-partial outcome; only the
+absent one was observed.
+
+| Profile | Source primary | Destination primary (killed) |
+| --- | --- | --- |
+| legacy-v6, secure AES256K IPv4 | osd.0 | osd.1 (epoch 25) |
+| replicated-pg-v8, secure AES256K IPv6 | osd.2 | osd.0 (epoch 37) |
+
 ## Compound copy (2026-10-18)
 
 `TestCephOSDCopyFromCompoundIntegration` sends one vector of COPY_FROM2
@@ -118,6 +137,6 @@ AES256K IPv4) and replicated-pg-v8 three BlueStore (secure AES256K IPv6).
 Not claimed: native-encoded vectors, compound vectors other than a copy
 followed by xattr writes,
 `MAP_SNAP_CLONE` and the cache-tier flags, fadvise hints (cross-pool and
-cross-namespace copies are in OSD_POOL_VALIDATION.md),
-a destination primary killed during a copy, EC, and host runtime profiles. The in-OSD copy of a source in another PG is
+cross-namespace copies are in OSD_POOL_VALIDATION.md), a destination primary
+killed after the copy's source read completed, EC, and host runtime profiles. The in-OSD copy of a source in another PG is
 exercised only incidentally by the 8-PG profile.
