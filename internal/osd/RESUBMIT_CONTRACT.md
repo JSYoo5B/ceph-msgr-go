@@ -31,7 +31,8 @@ connection ended, as the verified flows do, rather than on a session that may
 still deliver the original's reply.
 
 Limits: the server's duplicate detection covers only entries still in the PG
-log (trimming ends it), applies to writes, and is not an exactly-once
+log or its duplicate tracking (trimming ends it; a trimmed request was
+observed live to execute a second time under its original identity), applies to writes, and is not an exactly-once
 guarantee for the logical operation. The log entry and its reqid replicate
 with the write, so a replacement primary after a map change answers from its
 own copy: verified for an exclusive CREATE and a lost-reply APPEND resubmitted

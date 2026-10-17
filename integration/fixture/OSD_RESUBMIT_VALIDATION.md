@@ -53,7 +53,23 @@ version and the APPEND returns 0 with the native version, both with ONDISK,
 and native bytes and version show exactly one append. Passed in CRC with the
 legacy key and in secure AES256K (key and service cipher), 2026-10-17.
 
-Not claimed: resubmission after PG log trimming, PG split/merge or a restart
+## After PG log trimming
+
+`TestCephOSDResubmitAfterTrimIntegration` characterizes the limit. A Go
+APPEND of `once` completes on an owned pool (user version 3). The test then
+sets `osd_min_pg_log_entries` and `osd_max_pg_log_entries` to 10,
+`osd_pg_log_trim_min` to 1 and `osd_pg_log_dups_tracked` to 10 for all OSDs
+through MON `config set` (removed again with `config rm` in cleanup), and
+writes 200 one-byte appends to another object of the same PG. Resubmitting
+the original APPEND under its transaction ID, incarnation and attempt 1 then
+succeeds with a new user version (204), and native bytes read `onceonce`: the
+OSD no longer remembered the request and executed it again. The client has
+no way to detect this; resubmission resolves an unknown outcome only while the
+request is still within the PG's log and duplicate tracking, and nothing
+resubmits automatically. Passed in legacy-v6 single BlueStore (secure AES256K
+IPv4) and replicated-pg-v8 three BlueStore (secure AES256K IPv6).
+
+Not claimed: PG split/merge or a restart
 of the daemon that keeps the primary role, for read vectors, for OMAP/CALL/snapshot/COPY_FROM vectors
 (the server may not log every opcode); resubmission through a different client
 identity (refused locally).
