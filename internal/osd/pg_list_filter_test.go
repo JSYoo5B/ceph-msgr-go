@@ -17,7 +17,9 @@ import (
 func TestPGListFilterEncodesObjecterLayout(t *testing.T) {
 	input := []byte{3, 0, 0, 0, '_', 'k', 'x', 1, 0, 0, 0, 'v'}
 	for name, encode := range map[string]func(PGListRequest) (msgr.MessageData, error){
-		"v6": func(r PGListRequest) (msgr.MessageData, error) { return EncodePGListRequest(r, oracleFeatures, wire.DefaultLimit) },
+		"v6": func(r PGListRequest) (msgr.MessageData, error) {
+			return EncodePGListRequest(r, oracleFeatures, wire.DefaultLimit)
+		},
 		"v8": func(r PGListRequest) (msgr.MessageData, error) {
 			return EncodePGListRequestV8(r, v8OracleFeatures, wire.DefaultLimit)
 		},
