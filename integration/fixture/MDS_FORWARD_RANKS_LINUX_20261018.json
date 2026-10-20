@@ -1,0 +1,2700 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-18",
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "source_base": "f0a062421e1af1dea0e68a37b45d72b0dd9fa892",
+  "source_sha256": {
+    "integration/mds_cephfs_ranks_replay_test.go": "defa24be52b8490d47b81364d768ea2fe326ebed279eb1e2dc8c7bef753b0ddf"
+  },
+  "selector": "^TestCephMDSCephFSRanksReplayIntegration$",
+  "checks": {
+    "root_go_tests": "PASS",
+    "integration_race": "PASS",
+    "root_vet": "PASS"
+  },
+  "scope": "Source retry 3 CREATE/MKDIR, same TID through actual ranks 0/1/2, native parsed retry 3 then 0/0 and forward counts 0/1/2, safe completion and independent native entries; existing export and follower takeover cases also pass. Wrong-filesystem refusal and nonempty source-release omission remain source/synthetic coverage, not native multi-filesystem or release-side-effect claims.",
+  "runs": [
+    {
+      "profile": {
+        "architecture": "amd64",
+        "runtime": "host",
+        "connection_mode": "crc",
+        "ip_family": "4",
+        "key_type": "aes",
+        "service_cipher": "aes",
+        "osd_store": "bluestore",
+        "osd_profile": "legacy-v6",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "provider_version": "v0.3.0"
+      },
+      "start": "2026-10-18T05:05:08.333646+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T05:08:21.336699+00:00",
+      "global_id": 5259,
+      "fsid": "d0cdad25-d7f0-4d7f-b9a9-0a7107b7b680",
+      "go_test": {
+        "name": "TestCephMDSCephFSRanksReplayIntegration",
+        "seconds": 79.48,
+        "passed_leaves": 6
+      },
+      "case_ms": {
+        "cleanup_restore_pins_unlink_release_close": 13518,
+        "enable_standby_replay": 4301,
+        "forward_chain_across_ranks": 20362,
+        "inflight_mutation_during_export": 15906,
+        "open_sessions_on_three_ranks": 2626,
+        "standby_replay_takeover_resubmit": 22754
+      },
+      "chain": {
+        "forward_counters": {
+          "after": [
+            2,
+            3,
+            0
+          ],
+          "before": [
+            0,
+            1,
+            0
+          ],
+          "go_hops_from_rank": [
+            2,
+            2,
+            0
+          ]
+        },
+        "historic_ops": {
+          "rank0/chained forwarded-dir": {
+            "description": "client_request(client.5259:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/chain/hop/forwarded-dir 2026-10-18T05:06:52.059091+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:52.059187+0000",
+            "duration": 5.5681e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank0/chained forwarded-file": {
+            "description": "client_request(client.5259:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/chain/hop/forwarded-file 2026-10-18T05:06:52.051414+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:52.051721+0000",
+            "duration": 0.000147103,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank1/chained forwarded-dir": {
+            "description": "client_request(client.5259:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/chain/hop/forwarded-dir 2026-10-18T05:06:52.059091+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:52.059437+0000",
+            "duration": 4.7791e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.2",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank1/chained forwarded-file": {
+            "description": "client_request(client.5259:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/chain/hop/forwarded-file 2026-10-18T05:06:52.051414+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:52.052144+0000",
+            "duration": 0.000106832,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.2",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank2/chained forwarded-dir": {
+            "description": "client_request(client.5259:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/chain/hop/forwarded-dir 2026-10-18T05:06:52.059091+0000 FWD=2 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:52.059650+0000",
+            "duration": 0.00594584,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank2/chained forwarded-file": {
+            "description": "client_request(client.5259:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/chain/hop/forwarded-file 2026-10-18T05:06:52.051414+0000 FWD=2 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:52.052481+0000",
+            "duration": 0.006354519,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          }
+        },
+        "listing": [
+          {
+            "name": "anchor",
+            "d_ino": 1099511627779,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627779,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "forwarded-dir",
+            "d_ino": 3298534883329,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 3298534883329,
+              "mode": 16877,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 2,
+              "size": 0
+            }
+          },
+          {
+            "name": "forwarded-file",
+            "d_ino": 3298534883328,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 3298534883328,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          }
+        ],
+        "requests": [
+          {
+            "Name": "chained forwarded-file",
+            "Op": 4865,
+            "Transaction": 5,
+            "MDSMapEpoch": 15,
+            "InitialRetry": 3,
+            "StartRank": 0,
+            "FinalRank": 2,
+            "Hops": [
+              {
+                "FromRank": 0,
+                "Transaction": 5,
+                "SentForward": 0,
+                "ForwardedTo": 1,
+                "ForwardedCount": 1,
+                "MustResend": true,
+                "Arrival": 29,
+                "Micros": 617,
+                "ResubmittedTID": 5
+              },
+              {
+                "FromRank": 1,
+                "Transaction": 5,
+                "SentForward": 1,
+                "ForwardedTo": 2,
+                "ForwardedCount": 2,
+                "MustResend": true,
+                "Arrival": 19,
+                "Micros": 970,
+                "ResubmittedTID": 5
+              }
+            ],
+            "FirstOp": 4865,
+            "FirstSafe": true,
+            "FirstResult": 0,
+            "FirstArrival": 14,
+            "FirstMicros": 7606,
+            "FlushRequested": false,
+            "SafeResult": 0,
+            "SafeArrival": 14,
+            "SafeMicros": 7606,
+            "DentryName": "forwarded-file",
+            "TargetIno": 3298534883328,
+            "TargetCapID": 1,
+            "TargetCaps": "pAsxLsXsxFsxcrwb",
+            "ExtraIno": 3298534883328
+          },
+          {
+            "Name": "chained forwarded-dir",
+            "Op": 4640,
+            "Transaction": 6,
+            "MDSMapEpoch": 15,
+            "InitialRetry": 3,
+            "StartRank": 0,
+            "FinalRank": 2,
+            "Hops": [
+              {
+                "FromRank": 0,
+                "Transaction": 6,
+                "SentForward": 0,
+                "ForwardedTo": 1,
+                "ForwardedCount": 1,
+                "MustResend": true,
+                "Arrival": 30,
+                "Micros": 261,
+                "ResubmittedTID": 6
+              },
+              {
+                "FromRank": 1,
+                "Transaction": 6,
+                "SentForward": 1,
+                "ForwardedTo": 2,
+                "ForwardedCount": 2,
+                "MustResend": true,
+                "Arrival": 20,
+                "Micros": 488,
+                "ResubmittedTID": 6
+              }
+            ],
+            "FirstOp": 4640,
+            "FirstSafe": false,
+            "FirstResult": 0,
+            "FirstArrival": 15,
+            "FirstMicros": 763,
+            "FlushRequested": true,
+            "SafeResult": 0,
+            "SafeArrival": 16,
+            "SafeMicros": 6673,
+            "DentryName": "forwarded-dir",
+            "TargetIno": 3298534883329,
+            "TargetCapID": 1,
+            "TargetCaps": "pAsxLsXsxFsx"
+          }
+        ]
+      },
+      "osd_dials": 0,
+      "inflight_during_export": {
+        "FlushArrival": 45,
+        "FlushSequence": 12,
+        "FlushReceived": "2026-10-18T05:07:04.954593344Z",
+        "HeldFor": 501247569,
+        "PinStarted": "2026-10-18T05:07:01.49402635Z",
+        "FlushAfterPinMs": 3460,
+        "SubmittedAfterMs": [
+          0,
+          0
+        ],
+        "ResolvedInHold": [
+          false,
+          false
+        ],
+        "ReleasedAt": "2026-10-18T05:07:05.45575436Z",
+        "Outcomes": [
+          "answered by rank 1 after 1 forward(s)",
+          "answered by rank 1 after 1 forward(s)"
+        ],
+        "ForwardArrivals": [
+          48,
+          47
+        ],
+        "ExportArrival": 46,
+        "Rank0Ops": [
+          {
+            "description": "client_request(client.5259:1 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1 2026-10-18T05:06:38.507596+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:38.507775+0000",
+            "duration": 0.014367655,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to wrlock, waiting",
+              "failed to wrlock, waiting",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:2 mkdir owner_uid=0, owner_gid=0 #0x10000000000/chain 2026-10-18T05:06:38.522362+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:38.522454+0000",
+            "duration": 0.006174436,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to rdlock, waiting",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:3 mkdir owner_uid=0, owner_gid=0 #0x10000000001/hop 2026-10-18T05:06:38.528796+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:38.528883+0000",
+            "duration": 0.006228247,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to rdlock, waiting",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:4 create owner_uid=0, owner_gid=0 #0x10000000002/anchor 2026-10-18T05:06:38.535281+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:38.535368+0000",
+            "duration": 0.01049705,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to rdlock, waiting",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/chain/hop/forwarded-file 2026-10-18T05:06:52.051414+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:52.051721+0000",
+            "duration": 0.000147103,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/chain/hop/forwarded-dir 2026-10-18T05:06:52.059091+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:52.059187+0000",
+            "duration": 5.5681e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:7 mkdir owner_uid=0, owner_gid=0 #0x10000000000/inflight 2026-10-18T05:06:58.870213+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:58.870594+0000",
+            "duration": 0.015230025,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:8 create owner_uid=0, owner_gid=0 #0x10000000004/anchor 2026-10-18T05:06:58.886158+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:58.886353+0000",
+            "duration": 0.006462371,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to rdlock, waiting",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:9 create owner_uid=0, owner_gid=0 #0x10000000004/held-file 2026-10-18T05:07:04.954660+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:04.954731+0000",
+            "duration": 0.525188603,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:10 mkdir owner_uid=0, owner_gid=0 #0x10000000004/held-dir 2026-10-18T05:07:04.954668+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:04.954736+0000",
+            "duration": 0.525170793,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          }
+        ],
+        "Rank1Ops": [
+          {
+            "description": "client_request(client.5259:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/chain/hop/forwarded-file 2026-10-18T05:06:52.051414+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:52.052144+0000",
+            "duration": 0.000106832,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.2",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:9 create owner_uid=0, owner_gid=0 #0x10000000004/held-file 2026-10-18T05:07:04.954660+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:08.857465+0000",
+            "duration": 0.008123378,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:10 mkdir owner_uid=0, owner_gid=0 #0x10000000004/held-dir 2026-10-18T05:07:04.954668+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:08.865989+0000",
+            "duration": 0.006172785,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          }
+        ],
+        "Migration": {
+          "Target": "inflight",
+          "ToRank": 1,
+          "Pin": {
+            "kind": "pin",
+            "request_id": 1792300021494085982,
+            "target": "inflight",
+            "path": "/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/inflight",
+            "inode": 1099511627780,
+            "previous": "-1",
+            "value": "1",
+            "state": "applied",
+            "setter_global_id": 18208,
+            "readback": "1",
+            "reader_global_id": 8343,
+            "error": ""
+          },
+          "Placement": {
+            "target": "inflight",
+            "path": "/ceph-msgr-ranks-01c571badc0d2fef84bb626e9fffb1d1/inflight",
+            "rank": 1,
+            "converged": true,
+            "polls": 1,
+            "waited_ms": 1073
+          },
+          "SettledMillis": 0,
+          "AgentCapsAfter": {
+            "rank1": [
+              {
+                "Ino": 1099511627781,
+                "CapID": 34,
+                "Issued": 341,
+                "Implemented": 341,
+                "Wanted": 0,
+                "Seq": 1,
+                "IssueSeq": 1,
+                "MSeq": 1,
+                "Realm": 1,
+                "Flags": 1,
+                "Dir": false,
+                "UID": 0,
+                "GID": 0,
+                "Mode": 33188,
+                "NLink": 1,
+                "Size": 0,
+                "MaxSize": 4194304,
+                "TruncateSize": 18446744073709551615,
+                "ReportedSize": 0,
+                "TruncateSeq": 1,
+                "TimeWarpSeq": 0,
+                "MTime": {
+                  "Seconds": 1792300018,
+                  "Nanoseconds": 886158915
+                },
+                "ATime": {
+                  "Seconds": 1792300018,
+                  "Nanoseconds": 886158915
+                },
+                "CTime": {
+                  "Seconds": 1792300018,
+                  "Nanoseconds": 886158915
+                },
+                "BTime": {
+                  "Seconds": 1792300018,
+                  "Nanoseconds": 886158915
+                },
+                "ChangeAttr": 0,
+                "XattrVersion": 1,
+                "Open": {
+                  "3": 0
+                },
+                "Released": false,
+                "ParentIno": 1099511627780,
+                "Name": "anchor",
+                "Added": 3,
+                "InlineVersion": 18446744073709551615
+              }
+            ]
+          },
+          "MigrationEvents": [
+            {
+              "Rank": 0,
+              "Arrival": 46,
+              "Received": "2026-10-18T05:07:05.480083824Z",
+              "PushSequence": 13,
+              "Op": 3,
+              "Ino": 1099511627781,
+              "CapID": 1,
+              "Seq": 0,
+              "IssueSeq": 0,
+              "MSeq": 0,
+              "Caps": "-",
+              "Wanted": "-",
+              "Realm": 0,
+              "Peer": {
+                "CapID": 34,
+                "IssueSeq": 1,
+                "MSeq": 1,
+                "MDS": 1,
+                "Flags": 0
+              },
+              "Action": "export: cap 34 added for rank 1"
+            },
+            {
+              "Rank": 1,
+              "Arrival": 27,
+              "Received": "2026-10-18T05:07:05.480103434Z",
+              "PushSequence": 6,
+              "Op": 4,
+              "Ino": 1099511627781,
+              "CapID": 34,
+              "Seq": 1,
+              "IssueSeq": 1,
+              "MSeq": 1,
+              "Caps": "pAsLsXsFs",
+              "Wanted": "-",
+              "Realm": 1,
+              "Peer": {
+                "CapID": 1,
+                "IssueSeq": 2,
+                "MSeq": 0,
+                "MDS": 0,
+                "Flags": 1
+              },
+              "Action": "import: cap 34 installed"
+            }
+          ]
+        },
+        "Listing": [
+          {
+            "name": "held-file",
+            "d_ino": 2199023255552,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 2199023255552,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "anchor",
+            "d_ino": 1099511627781,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627781,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "held-dir",
+            "d_ino": 2199023255553,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 2199023255553,
+              "mode": 16877,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 2,
+              "size": 0
+            }
+          }
+        ]
+      },
+      "takeover": {
+        "Armed": {
+          "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-1",
+          "gid": 4707,
+          "rank": 0,
+          "state": "up:active",
+          "incarnation": 6,
+          "endpoint": "172.18.0.11:6800",
+          "nonce": 1917473593
+        },
+        "Follower": {
+          "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-3",
+          "gid": 14609,
+          "rank": 0,
+          "state": "up:standby-replay",
+          "incarnation": 0,
+          "endpoint": "172.18.0.13:6800",
+          "nonce": 670175431
+        },
+        "LostError": {
+          "Error": "io: read/write on closed pipe; stateful resume failed: ceph messenger session reconnect: ceph messenger: peer reset the stateful session",
+          "SessionReset": true,
+          "EOF": false,
+          "ConnectionRefused": false,
+          "ResumeDeadline": false,
+          "OutcomeUnknown": false,
+          "MDSSessionClosed": false,
+          "MDSSessionReconnectDenied": false
+        },
+        "LostGeneration": 1,
+        "ReconnectTarget": {
+          "FilesystemID": 1,
+          "Rank": 0,
+          "Address": "v2:172.18.0.13:6800/670175431"
+        },
+        "Reopened": {
+          "Name": "rank0-reconnected",
+          "Identity": "client.mds-cephfs-ranks-01c571badc0d2fef84bb626e9fffb1d1",
+          "GlobalID": 5259,
+          "State": 2,
+          "Generation": 4,
+          "ConnectionGeneration": 4,
+          "RenewSequence": 1,
+          "LastRenewal": {
+            "Sequence": 0,
+            "Requested": "0001-01-01T00:00:00Z",
+            "Confirmed": "0001-01-01T00:00:00Z"
+          },
+          "SupportedFeaturesHex": "ffffff0000000000",
+          "MetricFlagsHex": "ffff000000000000",
+          "OpenFlags": 0,
+          "OpenMetadata": {},
+          "CapAuths": [
+            {
+              "UID": -1,
+              "GIDs": [],
+              "Path": "",
+              "FilesystemName": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1",
+              "RootSquash": false,
+              "Readable": true,
+              "Writeable": true
+            }
+          ],
+          "Err": "",
+          "RejectReason": "",
+          "RejectFlags": 0,
+          "RejectBlocklisted": false,
+          "CloseError": "",
+          "ReopenMDSError": "",
+          "MDSDials": 0,
+          "OSDDials": 0
+        },
+        "Adopted": {
+          "fsmap_epoch": 23,
+          "mdsmap_epoch": 23,
+          "max_mds": 3,
+          "in": [
+            0,
+            1,
+            2
+          ],
+          "failed": [],
+          "ranks": [
+            {
+              "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-3",
+              "gid": 14609,
+              "rank": 0,
+              "state": "up:active",
+              "incarnation": 17,
+              "endpoint": "172.18.0.13:6800",
+              "nonce": 670175431
+            },
+            {
+              "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-2",
+              "gid": 4719,
+              "rank": 1,
+              "state": "up:active",
+              "incarnation": 8,
+              "endpoint": "172.18.0.12:6800",
+              "nonce": 2271955963
+            },
+            {
+              "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-0",
+              "gid": 14576,
+              "rank": 2,
+              "state": "up:active",
+              "incarnation": 10,
+              "endpoint": "172.18.0.10:6800",
+              "nonce": 1926029258
+            }
+          ],
+          "daemons": [
+            {
+              "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-1",
+              "gid": 10032,
+              "rank": 0,
+              "state": "up:standby-replay",
+              "incarnation": 0,
+              "endpoint": "172.18.0.11:6800",
+              "nonce": 3255666227
+            },
+            {
+              "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-3",
+              "gid": 14609,
+              "rank": 0,
+              "state": "up:active",
+              "incarnation": 17,
+              "endpoint": "172.18.0.13:6800",
+              "nonce": 670175431
+            },
+            {
+              "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-2",
+              "gid": 4719,
+              "rank": 1,
+              "state": "up:active",
+              "incarnation": 8,
+              "endpoint": "172.18.0.12:6800",
+              "nonce": 2271955963
+            },
+            {
+              "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-0",
+              "gid": 14576,
+              "rank": 2,
+              "state": "up:active",
+              "incarnation": 10,
+              "endpoint": "172.18.0.10:6800",
+              "nonce": 1926029258
+            }
+          ],
+          "owned_standbys": [],
+          "standby_replay": [
+            {
+              "name": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-1",
+              "gid": 10032,
+              "rank": 0,
+              "state": "up:standby-replay",
+              "incarnation": 0,
+              "endpoint": "172.18.0.11:6800",
+              "nonce": 3255666227
+            }
+          ],
+          "other_standbys": 0
+        },
+        "OthersStatus": [
+          [
+            {
+              "State": 2,
+              "Generation": 2,
+              "ConnectionGeneration": 2,
+              "GlobalID": 5259,
+              "Target": {
+                "FilesystemID": 1,
+                "Rank": 1,
+                "Address": "v2:172.18.0.12:6800/2271955963"
+              },
+              "PushSequence": 7,
+              "RenewSequence": 27,
+              "ReconnectedFrom": 0,
+              "LastRenewal": {
+                "Sequence": 27,
+                "Requested": "2026-10-18T05:07:23.588832251Z",
+                "Confirmed": "2026-10-18T05:07:23.58927396Z"
+              },
+              "Open": {
+                "Sequence": 0,
+                "SupportedFeatures": "////AAAAAAA=",
+                "MetricFlags": "//8AAAAAAAA=",
+                "Flags": 0,
+                "Metadata": {},
+                "CapAuths": [
+                  {
+                    "UID": -1,
+                    "GIDs": [],
+                    "Path": "",
+                    "FilesystemName": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1",
+                    "RootSquash": false,
+                    "Readable": true,
+                    "Writeable": true
+                  }
+                ]
+              },
+              "ReadOnly": false
+            },
+            {
+              "State": 2,
+              "Generation": 3,
+              "ConnectionGeneration": 3,
+              "GlobalID": 5259,
+              "Target": {
+                "FilesystemID": 1,
+                "Rank": 2,
+                "Address": "v2:172.18.0.10:6800/1926029258"
+              },
+              "PushSequence": 2,
+              "RenewSequence": 27,
+              "ReconnectedFrom": 0,
+              "LastRenewal": {
+                "Sequence": 27,
+                "Requested": "2026-10-18T05:07:23.599592066Z",
+                "Confirmed": "2026-10-18T05:07:23.599975985Z"
+              },
+              "Open": {
+                "Sequence": 0,
+                "SupportedFeatures": "////AAAAAAA=",
+                "MetricFlags": "//8AAAAAAAA=",
+                "Flags": 0,
+                "Metadata": {},
+                "CapAuths": [
+                  {
+                    "UID": -1,
+                    "GIDs": [],
+                    "Path": "",
+                    "FilesystemName": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1",
+                    "RootSquash": false,
+                    "Readable": true,
+                    "Writeable": true
+                  }
+                ]
+              },
+              "ReadOnly": false
+            }
+          ],
+          [
+            {
+              "State": 2,
+              "Generation": 2,
+              "ConnectionGeneration": 2,
+              "GlobalID": 5259,
+              "Target": {
+                "FilesystemID": 1,
+                "Rank": 1,
+                "Address": "v2:172.18.0.12:6800/2271955963"
+              },
+              "PushSequence": 7,
+              "RenewSequence": 32,
+              "ReconnectedFrom": 0,
+              "LastRenewal": {
+                "Sequence": 32,
+                "Requested": "2026-10-18T05:07:33.588835888Z",
+                "Confirmed": "2026-10-18T05:07:33.589083334Z"
+              },
+              "Open": {
+                "Sequence": 0,
+                "SupportedFeatures": "////AAAAAAA=",
+                "MetricFlags": "//8AAAAAAAA=",
+                "Flags": 0,
+                "Metadata": {},
+                "CapAuths": [
+                  {
+                    "UID": -1,
+                    "GIDs": [],
+                    "Path": "",
+                    "FilesystemName": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1",
+                    "RootSquash": false,
+                    "Readable": true,
+                    "Writeable": true
+                  }
+                ]
+              },
+              "ReadOnly": false
+            },
+            {
+              "State": 2,
+              "Generation": 3,
+              "ConnectionGeneration": 3,
+              "GlobalID": 5259,
+              "Target": {
+                "FilesystemID": 1,
+                "Rank": 2,
+                "Address": "v2:172.18.0.10:6800/1926029258"
+              },
+              "PushSequence": 2,
+              "RenewSequence": 32,
+              "ReconnectedFrom": 0,
+              "LastRenewal": {
+                "Sequence": 32,
+                "Requested": "2026-10-18T05:07:33.599235536Z",
+                "Confirmed": "2026-10-18T05:07:33.599534852Z"
+              },
+              "Open": {
+                "Sequence": 0,
+                "SupportedFeatures": "////AAAAAAA=",
+                "MetricFlags": "//8AAAAAAAA=",
+                "Flags": 0,
+                "Metadata": {},
+                "CapAuths": [
+                  {
+                    "UID": -1,
+                    "GIDs": [],
+                    "Path": "",
+                    "FilesystemName": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1",
+                    "RootSquash": false,
+                    "Readable": true,
+                    "Writeable": true
+                  }
+                ]
+              },
+              "ReadOnly": false
+            }
+          ]
+        ],
+        "OthersResumes": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "Rank0Ops": [
+          {
+            "description": "client_request(client.5259:14 create owner_uid=0, owner_gid=0 #0x10000000006/inflight-file 2026-10-18T05:07:16.205075+0000 RETRY=1 REPLAY QUEUED_FOR_REPLAY caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:28.517337+0000",
+            "duration": 1.454999939,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5259:15 mkdir owner_uid=0, owner_gid=0 #0x10000000006/inflight-dir 2026-10-18T05:07:16.205798+0000 RETRY=1 REPLAY QUEUED_FOR_REPLAY caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:28.517346+0000",
+            "duration": 1.455003229,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          }
+        ],
+        "Listing": [
+          {
+            "name": "safe-1",
+            "d_ino": 1099511627784,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627784,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "safe-0",
+            "d_ino": 1099511627783,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627783,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "inflight-dir",
+            "d_ino": 1099511627786,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627786,
+              "mode": 16877,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 2,
+              "size": 0
+            }
+          },
+          {
+            "name": "inflight-file",
+            "d_ino": 1099511627785,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627785,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          }
+        ]
+      },
+      "cleanup": {
+        "checks": {
+          "pins_restored": true,
+          "runtime_restored": true,
+          "topology_restored": true,
+          "namespace_checked": true,
+          "namespace_restored": true,
+          "blocklist_restored": true,
+          "client_identity_removed": true,
+          "native_identity_removed": true,
+          "completed": true
+        },
+        "fresh_checks": {
+          "filesystem_removed": true,
+          "pools_removed": true,
+          "identity_removed": true,
+          "cephfs_ranks_verified": true,
+          "completed": true
+        },
+        "runtime": [
+          {
+            "kind": "log-pause",
+            "name": "mds_log_pause",
+            "value": "true",
+            "baseline": "false",
+            "daemon": "ceph-msgr-fresh-01c571badc0d2fef84bb626e9fffb1d1-1",
+            "gid": 4707,
+            "incarnation": 6,
+            "request_id": 1792300034804177673,
+            "state": "discarded",
+            "readback": "true"
+          }
+        ],
+        "pins": [
+          {
+            "target": "chain/hop",
+            "baseline": "-1",
+            "state": "directory-absent"
+          },
+          {
+            "target": "chain",
+            "baseline": "-1",
+            "state": "directory-absent"
+          },
+          {
+            "target": "inflight",
+            "baseline": "-1",
+            "state": "directory-absent"
+          }
+        ],
+        "removed_blocklist": [
+          {
+            "kind": "mds-takeover",
+            "entry": {
+              "address": "172.18.0.11:6800/1917473593",
+              "range": false,
+              "until": "2026-10-19T05:07:25.65916Z"
+            }
+          }
+        ],
+        "containers_removed": 12,
+        "network_removed": true
+      },
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "b1ec142ca781d0683b94ae8208af466e99a8653cf00e4c5d851404e0ed406e0b",
+        "fixture-manifest.json": "14ed11295231ae1768f9c749ef2942245f00373a895116dbe3124e4bb9746c95",
+        "mds-cephfs-ranks-cleanup.json": "aec127b70de971641c7c6c1b1e9ef479918618c46466d884e385cc31b3eb37da",
+        "mds-cephfs-ranks-oracle.json": "2ca4e1293a08cb197c37c9348e503e336867f0f097babe9e4f27e52c0d2a020c",
+        "mds-cephfs-ranks-replay-results.json": "a4df097a0b5d50a7785b4c19d8e28138764eef42e29cc8685fd84ac2ead16e41",
+        "mds-fresh-cleanup.json": "bfd9abbea3e629f337ec04967246f775e32552fd89b7e643a81f72bba67b3cda",
+        "run-receipt.json": "b9b098b6e33dbeb117e18f39bc2689035554b6e9d49394a1cef4172c35e7d5a8",
+        "run.log": "0d89b9d157a79465f0d89ea709144be6c4c3a76196e28d222c8af75caea46d4b"
+      },
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "profile": {
+        "architecture": "amd64",
+        "runtime": "container",
+        "connection_mode": "secure",
+        "ip_family": "6",
+        "key_type": "aes256k",
+        "service_cipher": "aes256k",
+        "osd_store": "memstore",
+        "osd_profile": "legacy-v6",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "provider_version": "v0.3.0"
+      },
+      "start": "2026-10-18T05:05:07.106802+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T05:08:20.194733+00:00",
+      "global_id": 5223,
+      "fsid": "22f9c871-df26-4a87-ab78-de125810bf6e",
+      "go_test": {
+        "name": "TestCephMDSCephFSRanksReplayIntegration",
+        "seconds": 80.41,
+        "passed_leaves": 6
+      },
+      "case_ms": {
+        "cleanup_restore_pins_unlink_release_close": 13319,
+        "enable_standby_replay": 4401,
+        "forward_chain_across_ranks": 20715,
+        "inflight_mutation_during_export": 15970,
+        "open_sessions_on_three_ranks": 2704,
+        "standby_replay_takeover_resubmit": 23291
+      },
+      "chain": {
+        "forward_counters": {
+          "after": [
+            2,
+            3,
+            0
+          ],
+          "before": [
+            0,
+            1,
+            0
+          ],
+          "go_hops_from_rank": [
+            2,
+            2,
+            0
+          ]
+        },
+        "historic_ops": {
+          "rank0/chained forwarded-dir": {
+            "description": "client_request(client.5223:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/chain/hop/forwarded-dir 2026-10-18T05:06:48.772094+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:48.772127+0000",
+            "duration": 4.3391e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank0/chained forwarded-file": {
+            "description": "client_request(client.5223:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/chain/hop/forwarded-file 2026-10-18T05:06:48.770849+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:48.770929+0000",
+            "duration": 8.9822e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank1/chained forwarded-dir": {
+            "description": "client_request(client.5223:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/chain/hop/forwarded-dir 2026-10-18T05:06:48.772094+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:48.772306+0000",
+            "duration": 2.312e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.2",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank1/chained forwarded-file": {
+            "description": "client_request(client.5223:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/chain/hop/forwarded-file 2026-10-18T05:06:48.770849+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:48.771180+0000",
+            "duration": 7.5992e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.2",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank2/chained forwarded-dir": {
+            "description": "client_request(client.5223:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/chain/hop/forwarded-dir 2026-10-18T05:06:48.772094+0000 FWD=2 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:48.772387+0000",
+            "duration": 0.000308818,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          "rank2/chained forwarded-file": {
+            "description": "client_request(client.5223:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/chain/hop/forwarded-file 2026-10-18T05:06:48.770849+0000 FWD=2 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:48.771420+0000",
+            "duration": 0.000571105,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          }
+        },
+        "listing": [
+          {
+            "name": "anchor",
+            "d_ino": 1099511627779,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627779,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "forwarded-dir",
+            "d_ino": 3298534883329,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 3298534883329,
+              "mode": 16877,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 2,
+              "size": 0
+            }
+          },
+          {
+            "name": "forwarded-file",
+            "d_ino": 3298534883328,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 3298534883328,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          }
+        ],
+        "requests": [
+          {
+            "Name": "chained forwarded-file",
+            "Op": 4865,
+            "Transaction": 5,
+            "MDSMapEpoch": 15,
+            "InitialRetry": 3,
+            "StartRank": 0,
+            "FinalRank": 2,
+            "Hops": [
+              {
+                "FromRank": 0,
+                "Transaction": 5,
+                "SentForward": 0,
+                "ForwardedTo": 1,
+                "ForwardedCount": 1,
+                "MustResend": true,
+                "Arrival": 29,
+                "Micros": 255,
+                "ResubmittedTID": 5
+              },
+              {
+                "FromRank": 1,
+                "Transaction": 5,
+                "SentForward": 1,
+                "ForwardedTo": 2,
+                "ForwardedCount": 2,
+                "MustResend": true,
+                "Arrival": 19,
+                "Micros": 507,
+                "ResubmittedTID": 5
+              }
+            ],
+            "FirstOp": 4865,
+            "FirstSafe": true,
+            "FirstResult": 0,
+            "FirstArrival": 14,
+            "FirstMicros": 1185,
+            "FlushRequested": false,
+            "SafeResult": 0,
+            "SafeArrival": 14,
+            "SafeMicros": 1185,
+            "DentryName": "forwarded-file",
+            "TargetIno": 3298534883328,
+            "TargetCapID": 1,
+            "TargetCaps": "pAsxLsXsxFsxcrwb",
+            "ExtraIno": 3298534883328
+          },
+          {
+            "Name": "chained forwarded-dir",
+            "Op": 4640,
+            "Transaction": 6,
+            "MDSMapEpoch": 15,
+            "InitialRetry": 3,
+            "StartRank": 0,
+            "FinalRank": 2,
+            "Hops": [
+              {
+                "FromRank": 0,
+                "Transaction": 6,
+                "SentForward": 0,
+                "ForwardedTo": 1,
+                "ForwardedCount": 1,
+                "MustResend": true,
+                "Arrival": 30,
+                "Micros": 172,
+                "ResubmittedTID": 6
+              },
+              {
+                "FromRank": 1,
+                "Transaction": 6,
+                "SentForward": 1,
+                "ForwardedTo": 2,
+                "ForwardedCount": 2,
+                "MustResend": true,
+                "Arrival": 20,
+                "Micros": 275,
+                "ResubmittedTID": 6
+              }
+            ],
+            "FirstOp": 4640,
+            "FirstSafe": false,
+            "FirstResult": 0,
+            "FirstArrival": 15,
+            "FirstMicros": 376,
+            "FlushRequested": true,
+            "SafeResult": 0,
+            "SafeArrival": 16,
+            "SafeMicros": 627,
+            "DentryName": "forwarded-dir",
+            "TargetIno": 3298534883329,
+            "TargetCapID": 1,
+            "TargetCaps": "pAsxLsXsxFsx"
+          }
+        ]
+      },
+      "osd_dials": 0,
+      "inflight_during_export": {
+        "FlushArrival": 45,
+        "FlushSequence": 12,
+        "FlushReceived": "2026-10-18T05:07:01.840134542Z",
+        "HeldFor": 500483105,
+        "PinStarted": "2026-10-18T05:06:58.582232606Z",
+        "FlushAfterPinMs": 3257,
+        "SubmittedAfterMs": [
+          0,
+          0
+        ],
+        "ResolvedInHold": [
+          false,
+          false
+        ],
+        "ReleasedAt": "2026-10-18T05:07:02.340561576Z",
+        "Outcomes": [
+          "answered by rank 1 after 1 forward(s)",
+          "answered by rank 1 after 1 forward(s)"
+        ],
+        "ForwardArrivals": [
+          49,
+          48
+        ],
+        "ExportArrival": 47,
+        "Rank0Ops": [
+          {
+            "description": "client_request(client.5223:1 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1 2026-10-18T05:06:35.162738+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:35.162988+0000",
+            "duration": 0.001440257,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to wrlock, waiting",
+              "failed to wrlock, waiting",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:2 mkdir owner_uid=0, owner_gid=0 #0x10000000000/chain 2026-10-18T05:06:35.164501+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:35.164542+0000",
+            "duration": 0.000406641,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to rdlock, waiting",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:3 mkdir owner_uid=0, owner_gid=0 #0x10000000001/hop 2026-10-18T05:06:35.164991+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:35.165017+0000",
+            "duration": 0.00036608,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to rdlock, waiting",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:4 create owner_uid=0, owner_gid=0 #0x10000000002/anchor 2026-10-18T05:06:35.165423+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:35.165457+0000",
+            "duration": 0.00037964,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to rdlock, waiting",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/chain/hop/forwarded-file 2026-10-18T05:06:48.770849+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:48.770929+0000",
+            "duration": 8.9822e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/chain/hop/forwarded-dir 2026-10-18T05:06:48.772094+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:48.772127+0000",
+            "duration": 4.3391e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:7 mkdir owner_uid=0, owner_gid=0 #0x10000000000/inflight 2026-10-18T05:06:55.878748+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:55.878946+0000",
+            "duration": 0.000964725,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:8 create owner_uid=0, owner_gid=0 #0x10000000004/anchor 2026-10-18T05:06:55.879974+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:55.880007+0000",
+            "duration": 0.000509973,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "failed to rdlock, waiting",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:9 create owner_uid=0, owner_gid=0 #0x10000000004/held-file 2026-10-18T05:07:01.840208+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:01.840245+0000",
+            "duration": 0.502282422,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:10 mkdir owner_uid=0, owner_gid=0 #0x10000000004/held-dir 2026-10-18T05:07:01.840215+0000 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:01.840296+0000",
+            "duration": 0.502225941,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "forwarding request to mds.1",
+              "cleaned up request",
+              "done"
+            ]
+          }
+        ],
+        "Rank1Ops": [
+          {
+            "description": "client_request(client.5223:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/chain/hop/forwarded-file 2026-10-18T05:06:48.770849+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:06:48.771180+0000",
+            "duration": 7.5992e-05,
+            "flag_point": "done",
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "acquired locks",
+              "forwarding request to mds.2",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:9 create owner_uid=0, owner_gid=0 #0x10000000004/held-file 2026-10-18T05:07:01.840208+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:05.841685+0000",
+            "duration": 0.000823141,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:10 mkdir owner_uid=0, owner_gid=0 #0x10000000004/held-dir 2026-10-18T05:07:01.840215+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:05.842834+0000",
+            "duration": 0.00040187,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "early_replied",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          }
+        ],
+        "Migration": {
+          "Target": "inflight",
+          "ToRank": 1,
+          "Pin": {
+            "kind": "pin",
+            "request_id": 1792300018582314958,
+            "target": "inflight",
+            "path": "/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/inflight",
+            "inode": 1099511627780,
+            "previous": "-1",
+            "value": "1",
+            "state": "applied",
+            "setter_global_id": 18178,
+            "readback": "1",
+            "reader_global_id": 18184,
+            "error": ""
+          },
+          "Placement": {
+            "target": "inflight",
+            "path": "/ceph-msgr-ranks-b9d05b412f1c89363f5bef61179a5fe1/inflight",
+            "rank": 1,
+            "converged": true,
+            "polls": 1,
+            "waited_ms": 1043
+          },
+          "SettledMillis": 0,
+          "AgentCapsAfter": {
+            "rank1": [
+              {
+                "Ino": 1099511627781,
+                "CapID": 34,
+                "Issued": 341,
+                "Implemented": 341,
+                "Wanted": 0,
+                "Seq": 1,
+                "IssueSeq": 1,
+                "MSeq": 1,
+                "Realm": 1,
+                "Flags": 1,
+                "Dir": false,
+                "UID": 0,
+                "GID": 0,
+                "Mode": 33188,
+                "NLink": 1,
+                "Size": 0,
+                "MaxSize": 4194304,
+                "TruncateSize": 18446744073709551615,
+                "ReportedSize": 0,
+                "TruncateSeq": 1,
+                "TimeWarpSeq": 0,
+                "MTime": {
+                  "Seconds": 1792300015,
+                  "Nanoseconds": 879974347
+                },
+                "ATime": {
+                  "Seconds": 1792300015,
+                  "Nanoseconds": 879974347
+                },
+                "CTime": {
+                  "Seconds": 1792300015,
+                  "Nanoseconds": 879974347
+                },
+                "BTime": {
+                  "Seconds": 1792300015,
+                  "Nanoseconds": 879974347
+                },
+                "ChangeAttr": 0,
+                "XattrVersion": 1,
+                "Open": {
+                  "3": 0
+                },
+                "Released": false,
+                "ParentIno": 1099511627780,
+                "Name": "anchor",
+                "Added": 3,
+                "InlineVersion": 18446744073709551615
+              }
+            ]
+          },
+          "MigrationEvents": [
+            {
+              "Rank": 0,
+              "Arrival": 47,
+              "Received": "2026-10-18T05:07:02.342506316Z",
+              "PushSequence": 13,
+              "Op": 3,
+              "Ino": 1099511627781,
+              "CapID": 1,
+              "Seq": 0,
+              "IssueSeq": 0,
+              "MSeq": 0,
+              "Caps": "-",
+              "Wanted": "-",
+              "Realm": 0,
+              "Peer": {
+                "CapID": 34,
+                "IssueSeq": 1,
+                "MSeq": 1,
+                "MDS": 1,
+                "Flags": 0
+              },
+              "Action": "export: cap 34 added for rank 1"
+            },
+            {
+              "Rank": 1,
+              "Arrival": 28,
+              "Received": "2026-10-18T05:07:02.342603049Z",
+              "PushSequence": 6,
+              "Op": 4,
+              "Ino": 1099511627781,
+              "CapID": 34,
+              "Seq": 1,
+              "IssueSeq": 1,
+              "MSeq": 1,
+              "Caps": "pAsLsXsFs",
+              "Wanted": "-",
+              "Realm": 1,
+              "Peer": {
+                "CapID": 1,
+                "IssueSeq": 2,
+                "MSeq": 0,
+                "MDS": 0,
+                "Flags": 1
+              },
+              "Action": "import: cap 34 installed"
+            }
+          ]
+        },
+        "Listing": [
+          {
+            "name": "held-file",
+            "d_ino": 2199023255552,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 2199023255552,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "anchor",
+            "d_ino": 1099511627781,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627781,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "held-dir",
+            "d_ino": 2199023255553,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 2199023255553,
+              "mode": 16877,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 2,
+              "size": 0
+            }
+          }
+        ]
+      },
+      "takeover": {
+        "Armed": {
+          "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-0",
+          "gid": 4665,
+          "rank": 0,
+          "state": "up:active",
+          "incarnation": 6,
+          "endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+          "nonce": 1909818747
+        },
+        "Follower": {
+          "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-3",
+          "gid": 14581,
+          "rank": 0,
+          "state": "up:standby-replay",
+          "incarnation": 0,
+          "endpoint": "[fdf1:f2e6:6e7f::d]:6800",
+          "nonce": 1578257660
+        },
+        "LostError": {
+          "Error": "io: read/write on closed pipe; stateful resume failed: ceph messenger session reconnect: ceph messenger: peer reset the stateful session",
+          "SessionReset": true,
+          "EOF": false,
+          "ConnectionRefused": false,
+          "ResumeDeadline": false,
+          "OutcomeUnknown": false,
+          "MDSSessionClosed": false,
+          "MDSSessionReconnectDenied": false
+        },
+        "LostGeneration": 1,
+        "ReconnectTarget": {
+          "FilesystemID": 1,
+          "Rank": 0,
+          "Address": "v2:[fdf1:f2e6:6e7f::d]:6800/1578257660"
+        },
+        "Reopened": {
+          "Name": "rank0-reconnected",
+          "Identity": "client.mds-cephfs-ranks-b9d05b412f1c89363f5bef61179a5fe1",
+          "GlobalID": 5223,
+          "State": 2,
+          "Generation": 4,
+          "ConnectionGeneration": 4,
+          "RenewSequence": 1,
+          "LastRenewal": {
+            "Sequence": 0,
+            "Requested": "0001-01-01T00:00:00Z",
+            "Confirmed": "0001-01-01T00:00:00Z"
+          },
+          "SupportedFeaturesHex": "ffffff0000000000",
+          "MetricFlagsHex": "ffff000000000000",
+          "OpenFlags": 0,
+          "OpenMetadata": {},
+          "CapAuths": [
+            {
+              "UID": -1,
+              "GIDs": [],
+              "Path": "",
+              "FilesystemName": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1",
+              "RootSquash": false,
+              "Readable": true,
+              "Writeable": true
+            }
+          ],
+          "Err": "",
+          "RejectReason": "",
+          "RejectFlags": 0,
+          "RejectBlocklisted": false,
+          "CloseError": "",
+          "ReopenMDSError": "",
+          "MDSDials": 0,
+          "OSDDials": 0
+        },
+        "Adopted": {
+          "fsmap_epoch": 23,
+          "mdsmap_epoch": 23,
+          "max_mds": 3,
+          "in": [
+            0,
+            1,
+            2
+          ],
+          "failed": [],
+          "ranks": [
+            {
+              "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-3",
+              "gid": 14581,
+              "rank": 0,
+              "state": "up:active",
+              "incarnation": 17,
+              "endpoint": "[fdf1:f2e6:6e7f::d]:6800",
+              "nonce": 1578257660
+            },
+            {
+              "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-1",
+              "gid": 14558,
+              "rank": 1,
+              "state": "up:active",
+              "incarnation": 8,
+              "endpoint": "[fdf1:f2e6:6e7f::b]:6800",
+              "nonce": 677261126
+            },
+            {
+              "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-2",
+              "gid": 14569,
+              "rank": 2,
+              "state": "up:active",
+              "incarnation": 10,
+              "endpoint": "[fdf1:f2e6:6e7f::c]:6800",
+              "nonce": 4179620371
+            }
+          ],
+          "daemons": [
+            {
+              "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-0",
+              "gid": 9999,
+              "rank": 0,
+              "state": "up:standby-replay",
+              "incarnation": 0,
+              "endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+              "nonce": 1862495551
+            },
+            {
+              "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-3",
+              "gid": 14581,
+              "rank": 0,
+              "state": "up:active",
+              "incarnation": 17,
+              "endpoint": "[fdf1:f2e6:6e7f::d]:6800",
+              "nonce": 1578257660
+            },
+            {
+              "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-1",
+              "gid": 14558,
+              "rank": 1,
+              "state": "up:active",
+              "incarnation": 8,
+              "endpoint": "[fdf1:f2e6:6e7f::b]:6800",
+              "nonce": 677261126
+            },
+            {
+              "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-2",
+              "gid": 14569,
+              "rank": 2,
+              "state": "up:active",
+              "incarnation": 10,
+              "endpoint": "[fdf1:f2e6:6e7f::c]:6800",
+              "nonce": 4179620371
+            }
+          ],
+          "owned_standbys": [],
+          "standby_replay": [
+            {
+              "name": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-0",
+              "gid": 9999,
+              "rank": 0,
+              "state": "up:standby-replay",
+              "incarnation": 0,
+              "endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+              "nonce": 1862495551
+            }
+          ],
+          "other_standbys": 0
+        },
+        "OthersStatus": [
+          [
+            {
+              "State": 2,
+              "Generation": 2,
+              "ConnectionGeneration": 2,
+              "GlobalID": 5223,
+              "Target": {
+                "FilesystemID": 1,
+                "Rank": 1,
+                "Address": "v2:[fdf1:f2e6:6e7f::b]:6800/677261126"
+              },
+              "PushSequence": 7,
+              "RenewSequence": 27,
+              "ReconnectedFrom": 0,
+              "LastRenewal": {
+                "Sequence": 27,
+                "Requested": "2026-10-18T05:07:20.058868696Z",
+                "Confirmed": "2026-10-18T05:07:20.059122953Z"
+              },
+              "Open": {
+                "Sequence": 0,
+                "SupportedFeatures": "////AAAAAAA=",
+                "MetricFlags": "//8AAAAAAAA=",
+                "Flags": 0,
+                "Metadata": {},
+                "CapAuths": [
+                  {
+                    "UID": -1,
+                    "GIDs": [],
+                    "Path": "",
+                    "FilesystemName": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1",
+                    "RootSquash": false,
+                    "Readable": true,
+                    "Writeable": true
+                  }
+                ]
+              },
+              "ReadOnly": false
+            },
+            {
+              "State": 2,
+              "Generation": 3,
+              "ConnectionGeneration": 3,
+              "GlobalID": 5223,
+              "Target": {
+                "FilesystemID": 1,
+                "Rank": 2,
+                "Address": "v2:[fdf1:f2e6:6e7f::c]:6800/4179620371"
+              },
+              "PushSequence": 2,
+              "RenewSequence": 27,
+              "ReconnectedFrom": 0,
+              "LastRenewal": {
+                "Sequence": 27,
+                "Requested": "2026-10-18T05:07:20.06019365Z",
+                "Confirmed": "2026-10-18T05:07:20.060351815Z"
+              },
+              "Open": {
+                "Sequence": 0,
+                "SupportedFeatures": "////AAAAAAA=",
+                "MetricFlags": "//8AAAAAAAA=",
+                "Flags": 0,
+                "Metadata": {},
+                "CapAuths": [
+                  {
+                    "UID": -1,
+                    "GIDs": [],
+                    "Path": "",
+                    "FilesystemName": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1",
+                    "RootSquash": false,
+                    "Readable": true,
+                    "Writeable": true
+                  }
+                ]
+              },
+              "ReadOnly": false
+            }
+          ],
+          [
+            {
+              "State": 2,
+              "Generation": 2,
+              "ConnectionGeneration": 2,
+              "GlobalID": 5223,
+              "Target": {
+                "FilesystemID": 1,
+                "Rank": 1,
+                "Address": "v2:[fdf1:f2e6:6e7f::b]:6800/677261126"
+              },
+              "PushSequence": 7,
+              "RenewSequence": 33,
+              "ReconnectedFrom": 0,
+              "LastRenewal": {
+                "Sequence": 33,
+                "Requested": "2026-10-18T05:07:32.059216746Z",
+                "Confirmed": "2026-10-18T05:07:32.059492064Z"
+              },
+              "Open": {
+                "Sequence": 0,
+                "SupportedFeatures": "////AAAAAAA=",
+                "MetricFlags": "//8AAAAAAAA=",
+                "Flags": 0,
+                "Metadata": {},
+                "CapAuths": [
+                  {
+                    "UID": -1,
+                    "GIDs": [],
+                    "Path": "",
+                    "FilesystemName": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1",
+                    "RootSquash": false,
+                    "Readable": true,
+                    "Writeable": true
+                  }
+                ]
+              },
+              "ReadOnly": false
+            },
+            {
+              "State": 2,
+              "Generation": 3,
+              "ConnectionGeneration": 3,
+              "GlobalID": 5223,
+              "Target": {
+                "FilesystemID": 1,
+                "Rank": 2,
+                "Address": "v2:[fdf1:f2e6:6e7f::c]:6800/4179620371"
+              },
+              "PushSequence": 2,
+              "RenewSequence": 33,
+              "ReconnectedFrom": 0,
+              "LastRenewal": {
+                "Sequence": 33,
+                "Requested": "2026-10-18T05:07:32.059409451Z",
+                "Confirmed": "2026-10-18T05:07:32.059601986Z"
+              },
+              "Open": {
+                "Sequence": 0,
+                "SupportedFeatures": "////AAAAAAA=",
+                "MetricFlags": "//8AAAAAAAA=",
+                "Flags": 0,
+                "Metadata": {},
+                "CapAuths": [
+                  {
+                    "UID": -1,
+                    "GIDs": [],
+                    "Path": "",
+                    "FilesystemName": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1",
+                    "RootSquash": false,
+                    "Readable": true,
+                    "Writeable": true
+                  }
+                ]
+              },
+              "ReadOnly": false
+            }
+          ]
+        ],
+        "OthersResumes": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "Rank0Ops": [
+          {
+            "description": "client_request(client.5223:14 create owner_uid=0, owner_gid=0 #0x10000000006/inflight-file 2026-10-18T05:07:13.252564+0000 RETRY=1 REPLAY QUEUED_FOR_REPLAY caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:25.485491+0000",
+            "duration": 1.996716938,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          },
+          {
+            "description": "client_request(client.5223:15 mkdir owner_uid=0, owner_gid=0 #0x10000000006/inflight-dir 2026-10-18T05:07:13.253087+0000 RETRY=1 REPLAY QUEUED_FOR_REPLAY caller_uid=0, caller_gid=0{})",
+            "initiated_at": "2026-10-18T05:07:25.485524+0000",
+            "duration": 1.996690147,
+            "flag_point": "done",
+            "result": 0,
+            "events": [
+              "initiated",
+              "header_read",
+              "throttled",
+              "all_read",
+              "dispatched",
+              "acquired locks",
+              "submit entry: journal_and_reply",
+              "journal_committed: ",
+              "replying",
+              "finishing request",
+              "cleaned up request",
+              "done"
+            ]
+          }
+        ],
+        "Listing": [
+          {
+            "name": "safe-1",
+            "d_ino": 1099511627784,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627784,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "safe-0",
+            "d_ino": 1099511627783,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627783,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          },
+          {
+            "name": "inflight-dir",
+            "d_ino": 1099511627786,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627786,
+              "mode": 16877,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 2,
+              "size": 0
+            }
+          },
+          {
+            "name": "inflight-file",
+            "d_ino": 1099511627785,
+            "stat": {
+              "exists": true,
+              "errno": 0,
+              "ino": 1099511627785,
+              "mode": 33188,
+              "uid": 0,
+              "gid": 0,
+              "nlink": 1,
+              "size": 0
+            }
+          }
+        ]
+      },
+      "cleanup": {
+        "checks": {
+          "pins_restored": true,
+          "runtime_restored": true,
+          "topology_restored": true,
+          "namespace_checked": true,
+          "namespace_restored": true,
+          "blocklist_restored": true,
+          "client_identity_removed": true,
+          "native_identity_removed": true,
+          "completed": true
+        },
+        "fresh_checks": {
+          "filesystem_removed": true,
+          "pools_removed": true,
+          "identity_removed": true,
+          "cephfs_ranks_verified": true,
+          "completed": true
+        },
+        "runtime": [
+          {
+            "kind": "log-pause",
+            "name": "mds_log_pause",
+            "value": "true",
+            "baseline": "false",
+            "daemon": "ceph-msgr-fresh-b9d05b412f1c89363f5bef61179a5fe1-0",
+            "gid": 4665,
+            "incarnation": 6,
+            "request_id": 1792300031851147977,
+            "state": "discarded",
+            "readback": "true"
+          }
+        ],
+        "pins": [
+          {
+            "target": "chain/hop",
+            "baseline": "-1",
+            "state": "directory-absent"
+          },
+          {
+            "target": "chain",
+            "baseline": "-1",
+            "state": "directory-absent"
+          },
+          {
+            "target": "inflight",
+            "baseline": "-1",
+            "state": "directory-absent"
+          }
+        ],
+        "removed_blocklist": [
+          {
+            "kind": "mds-takeover",
+            "entry": {
+              "address": "[fdf1:f2e6:6e7f::a]:6800/1909818747",
+              "range": false,
+              "until": "2026-10-19T05:07:22.693041Z"
+            }
+          }
+        ],
+        "containers_removed": 12,
+        "network_removed": true
+      },
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "820cd52eef44c01e98052bf27bf86c15dc300c504fadbc0afdf255e13add751f",
+        "fixture-manifest.json": "0d7b8bc0856de077c3565a70d7e5b7a02a4bb2968ff2b0d9c9b8e24a696ca9b7",
+        "mds-cephfs-ranks-cleanup.json": "cadf6b09419e5230663f3c2e681ff4e91150b69d315db3c04ed7a4f91071e3ab",
+        "mds-cephfs-ranks-oracle.json": "0dfeb124d5a4a40b911d9928b5fdbd2e8e7da67a59f38f10949c12e59aacaba9",
+        "mds-cephfs-ranks-replay-results.json": "ed297c03afec9cd0dca3d84bb5594973bb1b1850bb0f0459333631667ebe76a0",
+        "mds-fresh-cleanup.json": "7a8e2212a74936e8c734d66ae78687dca81e5509dc6838f2d6ad4a809b5617cf",
+        "run-receipt.json": "c8290b11d23b7211cd361f0ab3bd7e87f9eb88fa1a3230970ea1f0de11b9fb54",
+        "run.log": "8cd64cf473aacacfd1bce1fabdff772d001dc0db2632e50977d3a12267a55dc5"
+      },
+      "local_evidence_directory": "<path>"
+    }
+  ],
+  "initial_runs_before_native_retry_assertion": [
+    {
+      "profile": "crc-host",
+      "start": "2026-10-18T04:58:42.790184+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T05:01:55.342947+00:00",
+      "source_base": "f0a062421e1af1dea0e68a37b45d72b0dd9fa892",
+      "source_sha256": {
+        "integration/mds_cephfs_ranks_replay_test.go": "e4ecfa6f56c2de6b6ce8e2d216e9ee8fd1311db78ddcb7a8eea0efd9f80ea72d"
+      },
+      "containers_removed": 12,
+      "network_removed": true,
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "4e6cb9a4cb3f6a32206e95ba5ab4d7a2a49aab19e4d67c43e009b9164b35930a",
+        "fixture-manifest.json": "cb60411e14d75fe6869ffbaa8fdd6d56ee987bca59b7d9910b0a9c1a17547cdf",
+        "mds-cephfs-ranks-cleanup.json": "60af0f6c973c399ae6470e167995714be5b8f5c8e7508825c46478890e442688",
+        "mds-cephfs-ranks-oracle.json": "0762a6ab57b6415dfdcacc8e4e7bf7e7dc215e0588f36b484bbee0e0d7921c71",
+        "mds-cephfs-ranks-replay-results.json": "9a22dc712803fbbcf2587f4844deebd744ad1892f370d62df66bcd7e52fd5bde",
+        "mds-fresh-cleanup.json": "1eb2a777ad7d3dd1312bd1757ef75fa6f5b68243706e78533b83fad18f3e0885",
+        "run-receipt.json": "4656904e698e74f69e60f880bc5801901c3b661f7b30bce480b961831a775ea4",
+        "run.log": "0a86ee1c48af4f6acd2c981f7ab11c67ae873e14206d12d610ede8e2b6536d64"
+      },
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "profile": "secure-ipv6",
+      "start": "2026-10-18T04:58:40.960806+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T05:01:52.649520+00:00",
+      "source_base": "f0a062421e1af1dea0e68a37b45d72b0dd9fa892",
+      "source_sha256": {
+        "integration/mds_cephfs_ranks_replay_test.go": "e4ecfa6f56c2de6b6ce8e2d216e9ee8fd1311db78ddcb7a8eea0efd9f80ea72d"
+      },
+      "containers_removed": 12,
+      "network_removed": true,
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "c68d0b40f498448dc2354e813de203ce0cb427662800b4c7cbda72c1c51f4270",
+        "fixture-manifest.json": "7cb47b11b6899e4fbd78e17c1ac910b8882c38f105117512f8695797479862ac",
+        "mds-cephfs-ranks-cleanup.json": "e0c8d8c8681966675cdc200da50d53dedcaa5f64bc9d306e0ce251656ef8b519",
+        "mds-cephfs-ranks-oracle.json": "2ed6aad85528b43582937f9070be4ac28be271354a4fbff8fccbac49d1788f10",
+        "mds-cephfs-ranks-replay-results.json": "e4b1d9a84f5ec3e68734e6a439a6bb99aea5da7c2d5e1b04702fc51396ef167d",
+        "mds-fresh-cleanup.json": "b399bc997adaaebc78f989128765f161892dbd6ab00a7e59d08f01c19c435a05",
+        "run-receipt.json": "0cfddf6f8dd0940545a5f4a2e4548cb170d26c3bc9fc4484b2d5c91b0cbb3bd2",
+        "run.log": "fa29b72cd1db456f5f0d90b6d4f56ae753f072bd875c0f8785bfb623af51bda9"
+      },
+      "local_evidence_directory": "<path>"
+    }
+  ]
+}

@@ -1,0 +1,249 @@
+{
+  "binary_sha256": "fc3d980dd8443e1789de28c1340c136b6fb4a2f3c98ad0a438980276df2bd393",
+  "blob_proof_scope": "the flock blob uses the native ceph_filelock encoder in the Client::_encode_filelocks layout and is decoded natively in the Server::recover_filelocks layout; MClientReconnect carries it opaquely",
+  "build_driver_sha256": "370643ac2be290d9cb1e17eaac980fda088505f7f2a7444a09e6d8b53e2607c0",
+  "builder_container_id": "e138e8580b4d8a24453fe35a7acef3cdecc507eb8d06281590b42fe8baec3ab6",
+  "builder_termination_completed": true,
+  "canonical_message_encode_verified": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "mds-reconnect-native-reconnect-empty": {
+      "data_bytes": 39,
+      "data_sha256": "54aa08dffd2213d42c27cd45b15d5f8ec07979370022427034b0da04b34a4472",
+      "decoded_reconnect": {
+        "caps": [],
+        "compat_version": 4,
+        "message_type": 23,
+        "more": false,
+        "realms": [
+          {
+            "ino": 1,
+            "parent": 0,
+            "seq": 3
+          }
+        ],
+        "tid": 0,
+        "version": 5
+      },
+      "front_bytes": 0,
+      "front_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_bytes": 41,
+      "header_sha256": "452effafe774244deeb4075008d570171375fdabd324458c0c96880f965c474b",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 4,
+        "data_len": 39,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 0,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 23,
+        "version": 5
+      }
+    },
+    "mds-reconnect-native-reconnect-more": {
+      "data_bytes": 80,
+      "data_sha256": "eb0ae121a8e9166ca350e9435260ee93219eac2cea2ee565c99304c27e64402e",
+      "decoded_reconnect": {
+        "caps": [
+          {
+            "cap_id": 28675,
+            "fcntl_locks": [],
+            "flock_len": 0,
+            "flock_locks": [],
+            "flockbl_hex": "",
+            "ino": 1099511627782,
+            "issued": 3329,
+            "path": "notes.txt",
+            "pathbase": 1099511627779,
+            "snap_follows": 0,
+            "snaprealm": 1,
+            "wanted": 3072
+          }
+        ],
+        "compat_version": 4,
+        "message_type": 23,
+        "more": true,
+        "realms": [],
+        "tid": 0,
+        "version": 5
+      },
+      "front_bytes": 0,
+      "front_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_bytes": 41,
+      "header_sha256": "452effafe774244deeb4075008d570171375fdabd324458c0c96880f965c474b",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 4,
+        "data_len": 80,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 0,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 23,
+        "version": 5
+      }
+    },
+    "mds-reconnect-native-reconnect-two-caps": {
+      "data_bytes": 294,
+      "data_sha256": "6646a45032f61b471d7f4975b343e704b8d92eb9091b87c389d8eec6c180424c",
+      "decoded_reconnect": {
+        "caps": [
+          {
+            "cap_id": 28673,
+            "fcntl_locks": [],
+            "flock_len": 0,
+            "flock_locks": [],
+            "flockbl_hex": "",
+            "ino": 1099511627779,
+            "issued": 277,
+            "path": "dir",
+            "pathbase": 1,
+            "snap_follows": 0,
+            "snaprealm": 1,
+            "wanted": 256
+          },
+          {
+            "cap_id": 28674,
+            "fcntl_locks": [
+              {
+                "client": 4100,
+                "length": 8192,
+                "owner": 34952,
+                "pid": 4242,
+                "start": 4096,
+                "type": 1
+              }
+            ],
+            "flock_len": 90,
+            "flock_locks": [
+              {
+                "client": 4100,
+                "length": 0,
+                "owner": 39321,
+                "pid": 4243,
+                "start": 0,
+                "type": 2
+              }
+            ],
+            "flockbl_hex": "010000000010000000000000002000000000000004100000000000008888000000000000921000000000000001010000000000000000000000000000000000000004100000000000009999000000000000931000000000000002",
+            "ino": 1099511627781,
+            "issued": 15701,
+            "path": "data.bin",
+            "pathbase": 1099511627780,
+            "snap_follows": 9,
+            "snaprealm": 1099511627780,
+            "wanted": 15360
+          }
+        ],
+        "compat_version": 4,
+        "message_type": 23,
+        "more": false,
+        "realms": [
+          {
+            "ino": 1099511627780,
+            "parent": 1,
+            "seq": 9
+          },
+          {
+            "ino": 1,
+            "parent": 0,
+            "seq": 3
+          }
+        ],
+        "tid": 0,
+        "version": 5
+      },
+      "front_bytes": 0,
+      "front_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_bytes": 41,
+      "header_sha256": "452effafe774244deeb4075008d570171375fdabd324458c0c96880f965c474b",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 4,
+        "data_len": 294,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 0,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 23,
+        "version": 5
+      }
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "launcher_sha256": "370643ac2be290d9cb1e17eaac980fda088505f7f2a7444a09e6d8b53e2607c0",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffffa9e0d000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffffa7000000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffffa9d28000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffffa9cd7000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffffa6b3a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffffa9c96000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffffa9c65000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffffa9c44000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffffa6916000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffffa9c13000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffffa6768000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffffa9dc0000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffffa66c7000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "message_features": "CEPH_FEATURE_FLOCK | CEPH_FEATURE_MDSENC (ignored at the default header version 5)",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "three freshly constructed native MClientReconnect v5/compat4 messages filled with add_cap/add_snaprealm/mark_more, canonically Message::encode encoded once and separately decoded from their data segment; empty front and middle required and decoded objects never re-encoded",
+  "wrapper_sha256": "b84ce974e022f98643a63be4d3d4cf66db0cd7e769e8d2d06b13c6501cf5dd89"
+}

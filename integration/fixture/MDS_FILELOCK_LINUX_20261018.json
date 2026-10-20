@@ -1,0 +1,2779 @@
+{
+  "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "live_test_base": "d9d2833baab59e1345f2775afabaf234c1965751",
+  "live_overlay": [
+    {
+      "file": "integration/fixture/mds_cephfs.go",
+      "bytes": 43911,
+      "sha256": "2f0c85413d4da9ada8195520ffdb33d7a5645a633c3214fb24e67c258c5d54de"
+    },
+    {
+      "file": "integration/fixture/mds_cephfs_filelock_test.go",
+      "bytes": 2903,
+      "sha256": "c485d754ee17b48831610a2c0ac713a14d7f6b4554b6d8048835f798caca080f"
+    },
+    {
+      "file": "integration/mds_cephfs_filelock_test.go",
+      "bytes": 1326,
+      "sha256": "c2ce8b4538901d43850b8e23acffc79869d023eec01ab7b18b3c84f279e86258"
+    },
+    {
+      "file": "integration/mds_cephfs_test.go",
+      "bytes": 50173,
+      "sha256": "a1bd76801229abb7fef586d60fbe791ee9f4c86f6879edcee9008cf1c7516f43"
+    }
+  ],
+  "profiles": [
+    {
+      "profile": "crc-host",
+      "run": {
+        "profile": "crc-host",
+        "start": "2026-10-18T05:55:58.405452+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:03:00.662439+00:00"
+      },
+      "manifest": {
+        "architecture": "amd64",
+        "bootstrap": "public-api",
+        "cephfs_mutations": "owned Go, recovery, native and push-native LibCephFS identities, three directories with their files, one user xattr and two native writes removed through Go requests and verified natively; one native rename, one snapshot and one quota created and removed natively; the owned daemon's mds_min_caps_per_client and mds_max_caps_per_client lowered and restored, and one cache drop; one owned client eviction and one owned rank-0 MDS restart whose blocklist entries are removed and verified during cleanup",
+        "connection_mode": "crc",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "fsid": "63520c4a-d4d4-491e-bde7-76d8fac7c9da",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ip_family": "4",
+        "key_type": "aes",
+        "mds_cephfs": true,
+        "mds_cephfs_completion": false,
+        "mds_cephfs_data": false,
+        "mds_cephfs_ranks": false,
+        "mds_commands": false,
+        "mds_fresh": true,
+        "mds_sessions": false,
+        "native_mapext_range_oracle": false,
+        "native_sparse_read_oracle": false,
+        "native_u64_xattr_oracle": false,
+        "native_writesame_oracle": false,
+        "osd": "1",
+        "osd_profile": "legacy-v6",
+        "osd_replicas": "1",
+        "osd_store": "bluestore",
+        "provider": "github.com/JSYoo5B/ceph-testcontainers-go",
+        "provider_effective_module": {
+          "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+          "version": "v0.3.0",
+          "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+        },
+        "provider_identity_status": "module",
+        "provider_original_module": {
+          "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+          "version": "v0.3.0",
+          "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+        },
+        "provider_version": "v0.3.0",
+        "rbd_base": false,
+        "runtime": "host",
+        "service_cipher": "aes",
+        "topology": "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
+      },
+      "global_id": 8994,
+      "target": {
+        "FilesystemID": 1,
+        "Rank": 0,
+        "Address": "v2:172.18.0.10:6800/3302681223"
+      },
+      "flock_facts": {
+        "flock_conflict": {
+          "Start": 0,
+          "Length": 0,
+          "Client": 8994,
+          "Owner": 9223372038051135489,
+          "PID": 0,
+          "Type": 2
+        },
+        "flock_mds_inode_after": {
+          "Ino": 1099511627817,
+          "SnapID": 18446744073709551614,
+          "Rdev": 0,
+          "Version": 80,
+          "XattrVersion": 2,
+          "Cap": {
+            "Caps": 16349,
+            "Wanted": 16333,
+            "CapID": 1,
+            "Seq": 236,
+            "MSeq": 0,
+            "Realm": 1,
+            "Flags": 1
+          },
+          "Layout": {
+            "StripeUnit": 4194304,
+            "StripeCount": 1,
+            "ObjectSize": 4194304,
+            "CASHash": 0,
+            "ObjectStripeUnit": 0,
+            "Unused": 0,
+            "Pool": 4,
+            "PoolNamespace": ""
+          },
+          "CTime": {
+            "Seconds": 1792303232,
+            "Nanoseconds": 994638689
+          },
+          "MTime": {
+            "Seconds": 1792303226,
+            "Nanoseconds": 53668360
+          },
+          "ATime": {
+            "Seconds": 1792303226,
+            "Nanoseconds": 53668360
+          },
+          "TimeWarpSeq": 0,
+          "Size": 0,
+          "MaxSize": 4194304,
+          "TruncateSize": 18446744073709551615,
+          "TruncateSeq": 1,
+          "Mode": 33188,
+          "UID": 0,
+          "GID": 0,
+          "NLink": 1,
+          "Files": 0,
+          "Subdirs": 0,
+          "RBytes": 0,
+          "RFiles": 1,
+          "RSubdirs": 0,
+          "RCTime": {
+            "Seconds": 1792303232,
+            "Nanoseconds": 994638689
+          },
+          "Symlink": "",
+          "DirHash": 0,
+          "DirLayout": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "Xattrs": "AQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgAbUnElUyT+lGrhGjCgHx80",
+          "InlineVersion": 18446744073709551615,
+          "QuotaMaxBytes": 0,
+          "QuotaMaxFiles": 0,
+          "BTime": {
+            "Seconds": 1792303226,
+            "Nanoseconds": 53668360
+          },
+          "ChangeAttr": 1,
+          "DirPin": -1,
+          "SnapBTime": {
+            "Seconds": 0,
+            "Nanoseconds": 0
+          },
+          "RSnaps": 0,
+          "Fscrypt": false,
+          "OptionalMetadata": "AAAAAA=="
+        },
+        "flock_mds_inode_before": {
+          "Ino": 1099511627817,
+          "SnapID": 18446744073709551614,
+          "Rdev": 0,
+          "Version": 13,
+          "XattrVersion": 0,
+          "Cap": {
+            "Caps": 16349,
+            "Wanted": 16333,
+            "CapID": 1,
+            "Seq": 7,
+            "MSeq": 0,
+            "Realm": 1,
+            "Flags": 1
+          },
+          "Layout": {
+            "StripeUnit": 4194304,
+            "StripeCount": 1,
+            "ObjectSize": 4194304,
+            "CASHash": 0,
+            "ObjectStripeUnit": 0,
+            "Unused": 0,
+            "Pool": 4,
+            "PoolNamespace": ""
+          },
+          "CTime": {
+            "Seconds": 1792303232,
+            "Nanoseconds": 994638689
+          },
+          "MTime": {
+            "Seconds": 1792303226,
+            "Nanoseconds": 53668360
+          },
+          "ATime": {
+            "Seconds": 1792303226,
+            "Nanoseconds": 53668360
+          },
+          "TimeWarpSeq": 0,
+          "Size": 0,
+          "MaxSize": 0,
+          "TruncateSize": 18446744073709551615,
+          "TruncateSeq": 1,
+          "Mode": 33188,
+          "UID": 0,
+          "GID": 0,
+          "NLink": 1,
+          "Files": 0,
+          "Subdirs": 0,
+          "RBytes": 0,
+          "RFiles": 1,
+          "RSubdirs": 0,
+          "RCTime": {
+            "Seconds": 1792303232,
+            "Nanoseconds": 994638689
+          },
+          "Symlink": "",
+          "DirHash": 0,
+          "DirLayout": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "InlineVersion": 18446744073709551615,
+          "QuotaMaxBytes": 0,
+          "QuotaMaxFiles": 0,
+          "BTime": {
+            "Seconds": 1792303226,
+            "Nanoseconds": 53668360
+          },
+          "ChangeAttr": 1,
+          "DirPin": -1,
+          "SnapBTime": {
+            "Seconds": 0,
+            "Nanoseconds": 0
+          },
+          "RSnaps": 0,
+          "Fscrypt": false,
+          "OptionalMetadata": "AAAAAA=="
+        },
+        "flock_native_probes": [
+          {
+            "Action": "flock-ex-nb",
+            "GlobalID": 19600,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 11,
+              "acquired": false,
+              "unlocked": false,
+              "elapsed_ns": 192854,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              }
+            }
+          },
+          {
+            "Action": "flock-sh-nb",
+            "GlobalID": 9819,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 11,
+              "acquired": false,
+              "unlocked": false,
+              "elapsed_ns": 187173,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              }
+            }
+          },
+          {
+            "Action": "flock-sh-nb",
+            "GlobalID": 19751,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 0,
+              "acquired": true,
+              "unlocked": true,
+              "elapsed_ns": 424551,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              }
+            }
+          },
+          {
+            "Action": "flock-ex-nb",
+            "GlobalID": 19829,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 11,
+              "acquired": false,
+              "unlocked": false,
+              "elapsed_ns": 176453,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              }
+            }
+          },
+          {
+            "Action": "flock-ex-nb",
+            "GlobalID": 10053,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 0,
+              "acquired": true,
+              "unlocked": true,
+              "elapsed_ns": 325475,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303226,
+                "data_hex": ""
+              }
+            }
+          }
+        ],
+        "flock_native_unchanged": {
+          "ino": 1099511627817,
+          "size": 0,
+          "version": 1,
+          "mtime": 1792303226,
+          "data_hex": ""
+        },
+        "flock_unlock_replies": [
+          {
+            "Arrival": 141,
+            "Transaction": 11,
+            "Op": 4361,
+            "Result": 0,
+            "MDSMapEpoch": 14,
+            "Safe": true,
+            "IsDentry": false,
+            "IsTarget": false,
+            "Received": "2026-10-18T06:01:01.905701501Z"
+          },
+          {
+            "Arrival": 235,
+            "Transaction": 13,
+            "Op": 4361,
+            "Result": 0,
+            "MDSMapEpoch": 14,
+            "Safe": true,
+            "IsDentry": false,
+            "IsTarget": false,
+            "Received": "2026-10-18T06:01:08.70795543Z"
+          }
+        ]
+      },
+      "flock_requests": [
+        {
+          "Name": "flock-open",
+          "Op": 770,
+          "Transaction": 8,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": true,
+          "TraceBytes": 340,
+          "ExtraBytes": 0,
+          "SnapBytes": 70,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "Target": {
+            "Ino": 1099511627817,
+            "Version": 13,
+            "XattrVersion": 0,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Size": 0,
+            "MaxSize": 0,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 7,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "CapString": "pAsxLsXsxFsxcrwb",
+            "CapWantedString": "pAsxXsxFsxcrwb",
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "XattrBytes": 0,
+            "OptionalBytes": 4,
+            "InlineVersion": 18446744073709551615,
+            "ChangeAttr": 1,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFile": 0
+          },
+          "Realms": [
+            {
+              "Ino": 1,
+              "Created": 0,
+              "Parent": 0,
+              "ParentSince": 1,
+              "Seq": 1,
+              "LastModified": {
+                "Seconds": 1792303025,
+                "Nanoseconds": 78839191
+              },
+              "ChangeAttr": 0
+            }
+          ],
+          "PushBefore": 6,
+          "PushAfter": 6,
+          "ReaddirFlags": 0
+        },
+        {
+          "Name": "flock-exclusive",
+          "Op": 4361,
+          "Transaction": 9,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": false,
+          "TraceBytes": 0,
+          "ExtraBytes": 0,
+          "SnapBytes": 0,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "PushBefore": 6,
+          "PushAfter": 6,
+          "ReaddirFlags": 0
+        },
+        {
+          "Name": "flock-get-conflict",
+          "Op": 272,
+          "Transaction": 10,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": false,
+          "TraceBytes": 0,
+          "ExtraBytes": 41,
+          "SnapBytes": 0,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "ExtraHex": "00000000000000000000000000000000222300000000000001004f4700000080000000000000000002",
+          "PushBefore": 105,
+          "PushAfter": 105,
+          "ReaddirFlags": 0
+        },
+        {
+          "Name": "flock-shared",
+          "Op": 4361,
+          "Transaction": 12,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": false,
+          "TraceBytes": 0,
+          "ExtraBytes": 0,
+          "SnapBytes": 0,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "PushBefore": 105,
+          "PushAfter": 105,
+          "ReaddirFlags": 0
+        },
+        {
+          "Name": "flock-getattr-after",
+          "Op": 257,
+          "Transaction": 14,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": true,
+          "TraceBytes": 394,
+          "ExtraBytes": 0,
+          "SnapBytes": 70,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "Target": {
+            "Ino": 1099511627817,
+            "Version": 80,
+            "XattrVersion": 2,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 236,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "CapString": "pAsxLsXsxFsxcrwb",
+            "CapWantedString": "pAsxXsxFsxcrwb",
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "XattrBytes": 54,
+            "OptionalBytes": 4,
+            "InlineVersion": 18446744073709551615,
+            "ChangeAttr": 1,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFile": 0
+          },
+          "Realms": [
+            {
+              "Ino": 1,
+              "Created": 0,
+              "Parent": 0,
+              "ParentSince": 1,
+              "Seq": 1,
+              "LastModified": {
+                "Seconds": 1792303025,
+                "Nanoseconds": 78839191
+              },
+              "ChangeAttr": 0
+            }
+          ],
+          "PushBefore": 234,
+          "PushAfter": 234,
+          "ReaddirFlags": 0
+        }
+      ],
+      "suites": {
+        "mds-cephfs-results.json": {
+          "case_ms": {
+            "cleanup_unlink_release_close": 49386,
+            "create_reports_created_inode": 6940,
+            "filelock_nonblocking_native_conflict": 16907,
+            "lookup_existing_and_missing": 6802,
+            "messenger_resume_keeps_session": 3706,
+            "mkdir_matches_native_stat": 3311,
+            "open_cephfs_session": 3712,
+            "readdir_matches_native_listing": 6902,
+            "revoke_acknowledged_before_native_write": 12503,
+            "setxattr_matches_native_getxattr": 5101,
+            "statfs_matches_libcephfs": 3401
+          },
+          "elapsed_ms": 118678
+        },
+        "mds-cephfs-recovery-results.json": {
+          "case_ms": {
+            "cleanup_unlink_release_close": 14544,
+            "eviction_fences_shared_nonce": 15724,
+            "journal_flush_unsafe_to_safe": 16287,
+            "mds_restart_reconnect_replay": 36185,
+            "open_recovery_session": 3710
+          },
+          "elapsed_ms": 86455
+        },
+        "mds-cephfs-push-results.json": {
+          "case_ms": {
+            "cleanup_snapshot_quota_namespace_release_close": 33099,
+            "dentry_lease_revoke_released": 5307,
+            "flushmsg_acknowledged_after_cache_drop": 15205,
+            "open_push_sessions": 7337,
+            "quota_push_on_native_setxattr": 3429,
+            "recall_state_released_to_target": 21968,
+            "snapshot_realm_split_push": 4319
+          },
+          "elapsed_ms": 90673
+        }
+      },
+      "native_scope_cleanup": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "1b5271255324fe946ae11a30a01f1f34",
+        "fs_name": "ceph-msgr-fresh-1b5271255324fe946ae11a30a01f1f34",
+        "attempted": true,
+        "mutations": [
+          {
+            "kind": "push-rename",
+            "request_id": 1792303049243952576,
+            "target": "victim->renamed",
+            "state": "applied",
+            "native_global_id": 15113
+          },
+          {
+            "kind": "push-snapshot-create",
+            "request_id": 1792303054563924726,
+            "target": "snap/.snap/ceph-msgr-snap-1b527125",
+            "state": "applied",
+            "native_global_id": 15191
+          },
+          {
+            "kind": "push-quota-set",
+            "request_id": 1792303058893538045,
+            "target": "quota ceph.quota.max_bytes=45424640",
+            "state": "applied",
+            "native_global_id": 15274
+          },
+          {
+            "kind": "push-config-min",
+            "request_id": 1792303069659966382,
+            "target": "mds.ceph-msgr-fresh-1b5271255324fe946ae11a30a01f1f34-0 mds_min_caps_per_client=8",
+            "state": "restored"
+          },
+          {
+            "kind": "push-config-max",
+            "request_id": 1792303069659966382,
+            "target": "mds.ceph-msgr-fresh-1b5271255324fe946ae11a30a01f1f34-0 mds_max_caps_per_client=12",
+            "state": "restored"
+          },
+          {
+            "kind": "push-cache-drop",
+            "request_id": 1792303087864895610,
+            "target": "tell mds.ceph-msgr-fresh-1b5271255324fe946ae11a30a01f1f34:0 cache drop 10",
+            "state": "applied",
+            "native_output": "{\"client_recall\":{\"return_code\":0,\"message\":\"(0) Success\",\"recalled\":22},\"flush_journal\":{\"return_code\":0,\"message\":\"\"},\"trim_cache\":{\"trimmed\":25},\"cache\":{\"pool\":{\"items\":468,\"bytes\":87511}},\"duration\":0.01444139}"
+          },
+          {
+            "kind": "push-snapshot-remove",
+            "request_id": 1792303099468234134,
+            "target": "snap/.snap/ceph-msgr-snap-1b527125",
+            "state": "applied",
+            "native_global_id": 6510
+          },
+          {
+            "kind": "push-quota-clear",
+            "request_id": 1792303103768721260,
+            "target": "quota ceph.quota.max_bytes=0",
+            "state": "applied",
+            "native_global_id": 6588
+          },
+          {
+            "kind": "native-create-write",
+            "request_id": 1792303152571049730,
+            "target": "fenced",
+            "state": "applied",
+            "native_global_id": 17362
+          },
+          {
+            "kind": "eviction",
+            "request_id": 1792303159482159193,
+            "target": "7548",
+            "state": "evicted",
+            "global_id": 7548,
+            "address": "172.18.0.9:0/4278372500",
+            "blocklist_until": "2026-10-18T06:59:21.356499Z"
+          },
+          {
+            "kind": "native-create",
+            "request_id": 1792303238095856936,
+            "target": "native-0,native-1,native-2",
+            "state": "applied",
+            "native_global_id": 19210
+          },
+          {
+            "kind": "native-flock-ex-nb",
+            "request_id": 1792303255203708518,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 19600
+          },
+          {
+            "kind": "native-flock-sh-nb",
+            "request_id": 1792303258504468636,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 9819
+          },
+          {
+            "kind": "native-flock-sh-nb",
+            "request_id": 1792303261906023609,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 19751
+          },
+          {
+            "kind": "native-flock-ex-nb",
+            "request_id": 1792303265306856790,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 19829
+          },
+          {
+            "kind": "native-flock-ex-nb",
+            "request_id": 1792303268708037265,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 10053
+          },
+          {
+            "kind": "native-write",
+            "request_id": 1792303272110241682,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 19985
+          }
+        ],
+        "restart": {
+          "state": "adopted",
+          "arm_request_id": 1792303168295867911,
+          "fire_request_id": 1792303174268776705,
+          "adopt_request_id": 1792303180475394299,
+          "armed": {
+            "name": "ceph-msgr-fresh-1b5271255324fe946ae11a30a01f1f34-0",
+            "gid": 14534,
+            "rank": 0,
+            "state": "up:active",
+            "incarnation": 6,
+            "addresses": [
+              {
+                "type": "v2",
+                "addr": "172.18.0.10:6800",
+                "nonce": 560638210
+              }
+            ],
+            "endpoint": "172.18.0.10:6800",
+            "nonce": 560638210
+          },
+          "armed_blocklist_addresses": [
+            "172.18.0.10:6800/560638210"
+          ],
+          "fire_started_utc": "2026-10-18T05:59:34.281964601Z",
+          "fired_utc": "2026-10-18T05:59:34.667571657Z",
+          "adopted": {
+            "name": "ceph-msgr-fresh-1b5271255324fe946ae11a30a01f1f34-0",
+            "gid": 17849,
+            "rank": 0,
+            "state": "up:active",
+            "incarnation": 10,
+            "addresses": [
+              {
+                "type": "v2",
+                "addr": "172.18.0.10:6800",
+                "nonce": 3302681223
+              }
+            ],
+            "endpoint": "172.18.0.10:6800",
+            "nonce": 3302681223
+          },
+          "adopted_utc": "2026-10-18T05:59:42.428623321Z",
+          "old_incarnation_blocklist": [
+            {
+              "address": "172.18.0.10:6800/560638210",
+              "range": false,
+              "until": "2026-10-19T05:59:34.645964Z"
+            }
+          ]
+        },
+        "residual_owned_sessions": [],
+        "namespace_checked": true,
+        "namespace_restored": true,
+        "namespace": {
+          "action": "stat",
+          "path": "/ceph-msgr-cephfs-1b5271255324fe946ae11a30a01f1f34",
+          "native_global_id": 11193,
+          "stat": {
+            "exists": false,
+            "errno": 2,
+            "ino": 0,
+            "mode": 0,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 0,
+            "size": 0
+          }
+        },
+        "recovery_namespace": {
+          "action": "stat",
+          "path": "/ceph-msgr-cephfs-1b5271255324fe946ae11a30a01f1f34-recovery",
+          "native_global_id": 21058,
+          "stat": {
+            "exists": false,
+            "errno": 2,
+            "ino": 0,
+            "mode": 0,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 0,
+            "size": 0
+          }
+        },
+        "push_namespace": {
+          "action": "stat",
+          "path": "/ceph-msgr-cephfs-1b5271255324fe946ae11a30a01f1f34-push",
+          "native_global_id": 21064,
+          "stat": {
+            "exists": false,
+            "errno": 2,
+            "ino": 0,
+            "mode": 0,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 0,
+            "size": 0
+          }
+        },
+        "push_config": {
+          "section": "mds.ceph-msgr-fresh-1b5271255324fe946ae11a30a01f1f34-0",
+          "daemon_mds_min_caps_per_client": 100,
+          "daemon_mds_max_caps_per_client": 1048576,
+          "central_entries": 0
+        },
+        "push_config_restored": true,
+        "new_blocklist": [
+          {
+            "address": "172.18.0.10:6800/560638210",
+            "range": false,
+            "until": "2026-10-19T05:59:34.645964Z"
+          },
+          {
+            "address": "172.18.0.9:0/4278372500",
+            "range": false,
+            "until": "2026-10-18T06:59:21.356499Z"
+          }
+        ],
+        "removed_blocklist": [
+          {
+            "kind": "mds-restart",
+            "entry": {
+              "address": "172.18.0.10:6800/560638210",
+              "range": false,
+              "until": "2026-10-19T05:59:34.645964Z"
+            }
+          },
+          {
+            "kind": "eviction",
+            "entry": {
+              "address": "172.18.0.9:0/4278372500",
+              "range": false,
+              "until": "2026-10-18T06:59:21.356499Z"
+            }
+          }
+        ],
+        "kept_new_blocklist": [],
+        "blocklist_restored": true,
+        "client_identity_removed": true,
+        "native_identity_removed": true,
+        "recovery_identity_removed": true,
+        "push_identity_removed": true,
+        "completed": true
+      },
+      "fresh_cleanup": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "1b5271255324fe946ae11a30a01f1f34",
+        "fsid": "63520c4a-d4d4-491e-bde7-76d8fac7c9da",
+        "fs_name": "ceph-msgr-fresh-1b5271255324fe946ae11a30a01f1f34",
+        "fscid": 1,
+        "metadata_pool": 3,
+        "data_pools": [
+          4
+        ],
+        "attempted": true,
+        "remove_pending": false,
+        "filesystem_removed": true,
+        "pools_removed": true,
+        "identity_removed": true,
+        "cephfs_verified": true,
+        "completed": true,
+        "fs_dump": {
+          "epoch": 17,
+          "btime": "2026-10-18T06:02:44:824733+0000",
+          "default_fscid": -1,
+          "compat": {
+            "compat": {},
+            "ro_compat": {},
+            "incompat": {
+              "feature_1": "base v0.20",
+              "feature_2": "client writeable ranges",
+              "feature_3": "default file layouts on dirs",
+              "feature_4": "dir inode in separate object",
+              "feature_5": "mds uses versioned encoding",
+              "feature_6": "dirfrag is stored in omap",
+              "feature_8": "no anchor table",
+              "feature_9": "file layout v2",
+              "feature_10": "snaprealm v2",
+              "feature_11": "minor log segments",
+              "feature_12": "quiesce subvolumes"
+            }
+          },
+          "feature_flags": {
+            "enable_multiple": true,
+            "ever_enabled_multiple": true
+          },
+          "standbys": [],
+          "filesystems": []
+        },
+        "osd_dump": {
+          "epoch": 38,
+          "fsid": "63520c4a-d4d4-491e-bde7-76d8fac7c9da",
+          "created": "2026-10-18T05:56:08.239119+0000",
+          "modified": "2026-10-18T06:02:52.897687+0000",
+          "last_up_change": "2026-10-18T05:56:31.242269+0000",
+          "last_in_change": "2026-10-18T05:56:28.837892+0000",
+          "flags": "sortbitwise,recovery_deletes,purged_snapdirs,pglog_hardlimit",
+          "flags_num": 5799936,
+          "flags_set": [
+            "pglog_hardlimit",
+            "purged_snapdirs",
+            "recovery_deletes",
+            "sortbitwise"
+          ],
+          "crush_version": 8,
+          "full_ratio": 0.949999988079071,
+          "backfillfull_ratio": 0.8999999761581421,
+          "nearfull_ratio": 0.8500000238418579,
+          "cluster_snapshot": "",
+          "pool_max": 4,
+          "max_osd": 1,
+          "require_min_compat_client": "luminous",
+          "min_compat_client": "argonaut",
+          "require_osd_release": "tentacle",
+          "allow_crimson": false,
+          "pools": [
+            {
+              "pool": 1,
+              "pool_name": ".mgr",
+              "create_time": "2026-10-18T05:56:32.170321+0000",
+              "flags": 0,
+              "flags_names": "",
+              "type": 1,
+              "size": 1,
+              "min_size": 1,
+              "crush_rule": 0,
+              "peering_crush_bucket_count": 0,
+              "peering_crush_bucket_target": 0,
+              "peering_crush_bucket_barrier": 0,
+              "peering_crush_bucket_mandatory_member": 2147483647,
+              "is_stretch_pool": false,
+              "object_hash": 2,
+              "pg_autoscale_mode": "off",
+              "pg_num": 1,
+              "pg_placement_num": 1,
+              "pg_placement_num_target": 1,
+              "pg_num_target": 1,
+              "pg_num_pending": 1,
+              "last_pg_merge_meta": {
+                "source_pgid": "0.0",
+                "ready_epoch": 0,
+                "last_epoch_started": 0,
+                "last_epoch_clean": 0,
+                "source_version": "0'0",
+                "target_version": "0'0"
+              },
+              "last_change": "9",
+              "last_force_op_resend": "0",
+              "last_force_op_resend_prenautilus": "0",
+              "last_force_op_resend_preluminous": "0",
+              "auid": 0,
+              "snap_mode": "selfmanaged",
+              "snap_seq": 0,
+              "snap_epoch": 0,
+              "pool_snaps": [],
+              "removed_snaps": "[]",
+              "quota_max_bytes": 0,
+              "quota_max_objects": 0,
+              "tiers": [],
+              "tier_of": -1,
+              "read_tier": -1,
+              "write_tier": -1,
+              "cache_mode": "none",
+              "target_max_bytes": 0,
+              "target_max_objects": 0,
+              "cache_target_dirty_ratio_micro": 400000,
+              "cache_target_dirty_high_ratio_micro": 600000,
+              "cache_target_full_ratio_micro": 800000,
+              "cache_min_flush_age": 0,
+              "cache_min_evict_age": 0,
+              "erasure_code_profile": "",
+              "hit_set_params": {
+                "type": "none"
+              },
+              "hit_set_period": 0,
+              "hit_set_count": 0,
+              "use_gmt_hitset": true,
+              "min_read_recency_for_promote": 0,
+              "min_write_recency_for_promote": 0,
+              "hit_set_grade_decay_rate": 0,
+              "hit_set_search_last_n": 0,
+              "grade_table": [],
+              "stripe_width": 0,
+              "expected_num_objects": 0,
+              "fast_read": false,
+              "nonprimary_shards": "{}",
+              "options": {
+                "pg_num_max": 32,
+                "pg_num_min": 1
+              },
+              "application_metadata": {
+                "mgr": {}
+              },
+              "read_balance": {
+                "score_type": "Fair distribution",
+                "score_acting": 1,
+                "score_stable": 1,
+                "optimal_score": 1,
+                "raw_score_acting": 1,
+                "raw_score_stable": 1,
+                "primary_affinity_weighted": 1,
+                "average_primary_affinity": 1,
+                "average_primary_affinity_weighted": 1
+              }
+            },
+            {
+              "pool": 2,
+              "pool_name": "ceph-msgr-osd-fixture",
+              "create_time": "2026-10-18T05:56:42.947662+0000",
+              "flags": 0,
+              "flags_names": "",
+              "type": 1,
+              "size": 1,
+              "min_size": 1,
+              "crush_rule": 1,
+              "peering_crush_bucket_count": 0,
+              "peering_crush_bucket_target": 0,
+              "peering_crush_bucket_barrier": 0,
+              "peering_crush_bucket_mandatory_member": 2147483647,
+              "is_stretch_pool": false,
+              "object_hash": 2,
+              "pg_autoscale_mode": "off",
+              "pg_num": 1,
+              "pg_placement_num": 1,
+              "pg_placement_num_target": 1,
+              "pg_num_target": 1,
+              "pg_num_pending": 1,
+              "last_pg_merge_meta": {
+                "source_pgid": "0.0",
+                "ready_epoch": 0,
+                "last_epoch_started": 0,
+                "last_epoch_clean": 0,
+                "source_version": "0'0",
+                "target_version": "0'0"
+              },
+              "last_change": "13",
+              "last_force_op_resend": "0",
+              "last_force_op_resend_prenautilus": "0",
+              "last_force_op_resend_preluminous": "0",
+              "auid": 0,
+              "snap_mode": "selfmanaged",
+              "snap_seq": 0,
+              "snap_epoch": 0,
+              "pool_snaps": [],
+              "removed_snaps": "[]",
+              "quota_max_bytes": 0,
+              "quota_max_objects": 0,
+              "tiers": [],
+              "tier_of": -1,
+              "read_tier": -1,
+              "write_tier": -1,
+              "cache_mode": "none",
+              "target_max_bytes": 0,
+              "target_max_objects": 0,
+              "cache_target_dirty_ratio_micro": 400000,
+              "cache_target_dirty_high_ratio_micro": 600000,
+              "cache_target_full_ratio_micro": 800000,
+              "cache_min_flush_age": 0,
+              "cache_min_evict_age": 0,
+              "erasure_code_profile": "",
+              "hit_set_params": {
+                "type": "none"
+              },
+              "hit_set_period": 0,
+              "hit_set_count": 0,
+              "use_gmt_hitset": true,
+              "min_read_recency_for_promote": 0,
+              "min_write_recency_for_promote": 0,
+              "hit_set_grade_decay_rate": 0,
+              "hit_set_search_last_n": 0,
+              "grade_table": [],
+              "stripe_width": 0,
+              "expected_num_objects": 0,
+              "fast_read": false,
+              "nonprimary_shards": "{}",
+              "options": {},
+              "application_metadata": {},
+              "read_balance": {
+                "score_type": "Fair distribution",
+                "score_acting": 1,
+                "score_stable": 1,
+                "optimal_score": 1,
+                "raw_score_acting": 1,
+                "raw_score_stable": 1,
+                "primary_affinity_weighted": 1,
+                "average_primary_affinity": 1,
+                "average_primary_affinity_weighted": 1
+              }
+            }
+          ],
+          "osds": [
+            {
+              "osd": 0,
+              "uuid": "1707e7fd-bc91-4c30-bde8-59eab0543840",
+              "up": 1,
+              "in": 1,
+              "weight": 1,
+              "primary_affinity": 1,
+              "last_clean_begin": 0,
+              "last_clean_end": 0,
+              "up_from": 4,
+              "up_thru": 21,
+              "down_at": 0,
+              "lost_at": 0,
+              "public_addrs": {
+                "addrvec": [
+                  {
+                    "type": "v2",
+                    "addr": "172.18.0.8:6800",
+                    "nonce": 3201942787
+                  }
+                ]
+              },
+              "cluster_addrs": {
+                "addrvec": [
+                  {
+                    "type": "v2",
+                    "addr": "172.18.0.8:6801",
+                    "nonce": 3201942787
+                  }
+                ]
+              },
+              "heartbeat_back_addrs": {
+                "addrvec": [
+                  {
+                    "type": "v2",
+                    "addr": "172.18.0.8:6803",
+                    "nonce": 3201942787
+                  }
+                ]
+              },
+              "heartbeat_front_addrs": {
+                "addrvec": [
+                  {
+                    "type": "v2",
+                    "addr": "172.18.0.8:6802",
+                    "nonce": 3201942787
+                  }
+                ]
+              },
+              "public_addr": "172.18.0.8:6800/3201942787",
+              "cluster_addr": "172.18.0.8:6801/3201942787",
+              "heartbeat_back_addr": "172.18.0.8:6803/3201942787",
+              "heartbeat_front_addr": "172.18.0.8:6802/3201942787",
+              "state": [
+                "exists",
+                "up"
+              ]
+            }
+          ],
+          "osd_xinfo": [
+            {
+              "osd": 0,
+              "down_stamp": "0.000000",
+              "laggy_probability": 0,
+              "laggy_interval": 0,
+              "features": 4541880224203014143,
+              "old_weight": 0,
+              "last_purged_snaps_scrub": "2026-10-18T05:56:31.143186+0000",
+              "dead_epoch": 0
+            }
+          ],
+          "pg_upmap": [],
+          "pg_upmap_items": [],
+          "pg_upmap_primaries": [],
+          "pg_temp": [],
+          "primary_temp": [],
+          "blocklist": {
+            "172.18.0.10:6800/3302681223": "2026-10-19T06:02:42.790524+0000"
+          },
+          "range_blocklist": {},
+          "erasure_code_profiles": {
+            "default": {
+              "k": "2",
+              "m": "2",
+              "plugin": "isa",
+              "technique": "reed_sol_van"
+            }
+          },
+          "removed_snaps_queue": [],
+          "new_removed_snaps": [],
+          "new_purged_snaps": [],
+          "crush_node_flags": {},
+          "device_class_flags": {},
+          "stretch_mode": {
+            "stretch_mode_enabled": false,
+            "stretch_bucket_count": 0,
+            "degraded_stretch_mode": 0,
+            "recovering_stretch_mode": 0,
+            "stretch_mode_bucket": 0
+          }
+        }
+      },
+      "resource_cleanup": {
+        "containers": {
+          "control": {
+            "id": "bc7085195d11eb34528973e46d834598a96f59fed30f82197bfa062ca25cbc14",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-1b5271255324fe946ae11a30a01f1f34-0": {
+            "id": "5cd26569b7a04224e5e269284eed38bc43ea94a51503036d7c4055b444cd1938",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "918b8560f4df2a20c7bec9fb905a34161430af155337c01792e1a3a017b4f143",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "e85943f2f1f98f8252250d7ec4ec86c11be0fefc04d22074b3aef330835a3b81",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "d1d23ba6d3fbda501fdd823e0386023decd49f81d1c0f6020b44b71597441759",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "796c47dbe59a569dfa53dd3a2fbd65a38ab5dccde3bafc19d1137b36bcaebf4c",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "9557629603b34504d0025dc1d7898dc147fddcb5d0ac0c7f5ca09773a9aff319",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "f9277247642ae691bf7ed8521a9a12412b80454756b70ad3049dab7ee752360c",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "1780779c941a172809d47cdeb1a54b07d2acd65635a7d5346af5ce7053a6753f",
+            "exists": false
+          }
+        },
+        "network": "24e52aac-bc02-4eee-acc5-09cec8ca2748",
+        "network_exists": false
+      },
+      "first_failed_run": {
+        "run": {
+          "profile": "crc-host",
+          "start": "2026-10-18T05:43:12.826615+00:00",
+          "exit_code": 1,
+          "end": "2026-10-18T05:49:12.403878+00:00"
+        },
+        "log_sha256": "cae53614ddaf3a4adce6a28362d7d48f35f53ea88d82b0dd897447063c90303c",
+        "cause": "incorrect equality check of projected/internal inode Version; native probes and GETFILELOCK had passed; before precise MTime was not retained, so it is not retrospectively claimed equal"
+      }
+    },
+    {
+      "profile": "secure-ipv6",
+      "run": {
+        "profile": "secure-ipv6",
+        "start": "2026-10-18T05:56:00.509115+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:02:05.908225+00:00"
+      },
+      "manifest": {
+        "architecture": "amd64",
+        "bootstrap": "public-api",
+        "cephfs_mutations": "owned Go, recovery, native and push-native LibCephFS identities, three directories with their files, one user xattr and two native writes removed through Go requests and verified natively; one native rename, one snapshot and one quota created and removed natively; the owned daemon's mds_min_caps_per_client and mds_max_caps_per_client lowered and restored, and one cache drop; one owned client eviction and one owned rank-0 MDS restart whose blocklist entries are removed and verified during cleanup",
+        "connection_mode": "secure",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "fsid": "bd69af0e-e979-4c6a-9477-1a42b660f19d",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ip_family": "6",
+        "key_type": "aes256k",
+        "mds_cephfs": true,
+        "mds_cephfs_completion": false,
+        "mds_cephfs_data": false,
+        "mds_cephfs_ranks": false,
+        "mds_commands": false,
+        "mds_fresh": true,
+        "mds_sessions": false,
+        "native_mapext_range_oracle": false,
+        "native_sparse_read_oracle": false,
+        "native_u64_xattr_oracle": false,
+        "native_writesame_oracle": false,
+        "osd": "1",
+        "osd_profile": "legacy-v6",
+        "osd_replicas": "1",
+        "osd_store": "memstore",
+        "provider": "github.com/JSYoo5B/ceph-testcontainers-go",
+        "provider_effective_module": {
+          "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+          "version": "v0.3.0",
+          "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+        },
+        "provider_identity_status": "module",
+        "provider_original_module": {
+          "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+          "version": "v0.3.0",
+          "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+        },
+        "provider_version": "v0.3.0",
+        "rbd_base": false,
+        "runtime": "container",
+        "service_cipher": "aes256k",
+        "topology": "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
+      },
+      "global_id": 9024,
+      "target": {
+        "FilesystemID": 1,
+        "Rank": 0,
+        "Address": "v2:[fdf1:f2e6:6e7f::a]:6800/1776651838"
+      },
+      "flock_facts": {
+        "flock_conflict": {
+          "Start": 0,
+          "Length": 0,
+          "Client": 9024,
+          "Owner": 9223372038051135489,
+          "PID": 0,
+          "Type": 2
+        },
+        "flock_mds_inode_after": {
+          "Ino": 1099511627817,
+          "SnapID": 18446744073709551614,
+          "Rdev": 0,
+          "Version": 80,
+          "XattrVersion": 2,
+          "Cap": {
+            "Caps": 16349,
+            "Wanted": 16333,
+            "CapID": 1,
+            "Seq": 236,
+            "MSeq": 0,
+            "Realm": 1,
+            "Flags": 1
+          },
+          "Layout": {
+            "StripeUnit": 4194304,
+            "StripeCount": 1,
+            "ObjectSize": 4194304,
+            "CASHash": 0,
+            "ObjectStripeUnit": 0,
+            "Unused": 0,
+            "Pool": 4,
+            "PoolNamespace": ""
+          },
+          "CTime": {
+            "Seconds": 1792303197,
+            "Nanoseconds": 690553147
+          },
+          "MTime": {
+            "Seconds": 1792303192,
+            "Nanoseconds": 341264066
+          },
+          "ATime": {
+            "Seconds": 1792303192,
+            "Nanoseconds": 341264066
+          },
+          "TimeWarpSeq": 0,
+          "Size": 0,
+          "MaxSize": 4194304,
+          "TruncateSize": 18446744073709551615,
+          "TruncateSeq": 1,
+          "Mode": 33188,
+          "UID": 0,
+          "GID": 0,
+          "NLink": 1,
+          "Files": 0,
+          "Subdirs": 0,
+          "RBytes": 0,
+          "RFiles": 1,
+          "RSubdirs": 0,
+          "RCTime": {
+            "Seconds": 1792303197,
+            "Nanoseconds": 690553147
+          },
+          "Symlink": "",
+          "DirHash": 0,
+          "DirLayout": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "Xattrs": "AQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgCkZUBDzMlcmEZdzfCFGYhz",
+          "InlineVersion": 18446744073709551615,
+          "QuotaMaxBytes": 0,
+          "QuotaMaxFiles": 0,
+          "BTime": {
+            "Seconds": 1792303192,
+            "Nanoseconds": 341264066
+          },
+          "ChangeAttr": 1,
+          "DirPin": -1,
+          "SnapBTime": {
+            "Seconds": 0,
+            "Nanoseconds": 0
+          },
+          "RSnaps": 0,
+          "Fscrypt": false,
+          "OptionalMetadata": "AAAAAA=="
+        },
+        "flock_mds_inode_before": {
+          "Ino": 1099511627817,
+          "SnapID": 18446744073709551614,
+          "Rdev": 0,
+          "Version": 13,
+          "XattrVersion": 0,
+          "Cap": {
+            "Caps": 16349,
+            "Wanted": 16333,
+            "CapID": 1,
+            "Seq": 7,
+            "MSeq": 0,
+            "Realm": 1,
+            "Flags": 1
+          },
+          "Layout": {
+            "StripeUnit": 4194304,
+            "StripeCount": 1,
+            "ObjectSize": 4194304,
+            "CASHash": 0,
+            "ObjectStripeUnit": 0,
+            "Unused": 0,
+            "Pool": 4,
+            "PoolNamespace": ""
+          },
+          "CTime": {
+            "Seconds": 1792303197,
+            "Nanoseconds": 690553147
+          },
+          "MTime": {
+            "Seconds": 1792303192,
+            "Nanoseconds": 341264066
+          },
+          "ATime": {
+            "Seconds": 1792303192,
+            "Nanoseconds": 341264066
+          },
+          "TimeWarpSeq": 0,
+          "Size": 0,
+          "MaxSize": 0,
+          "TruncateSize": 18446744073709551615,
+          "TruncateSeq": 1,
+          "Mode": 33188,
+          "UID": 0,
+          "GID": 0,
+          "NLink": 1,
+          "Files": 0,
+          "Subdirs": 0,
+          "RBytes": 0,
+          "RFiles": 1,
+          "RSubdirs": 0,
+          "RCTime": {
+            "Seconds": 1792303197,
+            "Nanoseconds": 690553147
+          },
+          "Symlink": "",
+          "DirHash": 0,
+          "DirLayout": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "InlineVersion": 18446744073709551615,
+          "QuotaMaxBytes": 0,
+          "QuotaMaxFiles": 0,
+          "BTime": {
+            "Seconds": 1792303192,
+            "Nanoseconds": 341264066
+          },
+          "ChangeAttr": 1,
+          "DirPin": -1,
+          "SnapBTime": {
+            "Seconds": 0,
+            "Nanoseconds": 0
+          },
+          "RSnaps": 0,
+          "Fscrypt": false,
+          "OptionalMetadata": "AAAAAA=="
+        },
+        "flock_native_probes": [
+          {
+            "Action": "flock-ex-nb",
+            "GlobalID": 19636,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 11,
+              "acquired": false,
+              "unlocked": false,
+              "elapsed_ns": 129083,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              }
+            }
+          },
+          {
+            "Action": "flock-sh-nb",
+            "GlobalID": 19714,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 11,
+              "acquired": false,
+              "unlocked": false,
+              "elapsed_ns": 107822,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              }
+            }
+          },
+          {
+            "Action": "flock-sh-nb",
+            "GlobalID": 9930,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 0,
+              "acquired": true,
+              "unlocked": true,
+              "elapsed_ns": 191705,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              }
+            }
+          },
+          {
+            "Action": "flock-ex-nb",
+            "GlobalID": 19865,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 11,
+              "acquired": false,
+              "unlocked": false,
+              "elapsed_ns": 131563,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              }
+            }
+          },
+          {
+            "Action": "flock-ex-nb",
+            "GlobalID": 10086,
+            "Probe": {
+              "owner": 9223372038522368104,
+              "errno": 0,
+              "acquired": true,
+              "unlocked": true,
+              "elapsed_ns": 219766,
+              "before": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              },
+              "after": {
+                "ino": 1099511627817,
+                "size": 0,
+                "version": 1,
+                "mtime": 1792303192,
+                "data_hex": ""
+              }
+            }
+          }
+        ],
+        "flock_native_unchanged": {
+          "ino": 1099511627817,
+          "size": 0,
+          "version": 1,
+          "mtime": 1792303192,
+          "data_hex": ""
+        },
+        "flock_unlock_replies": [
+          {
+            "Arrival": 130,
+            "Transaction": 11,
+            "Op": 4361,
+            "Result": 0,
+            "MDSMapEpoch": 14,
+            "Safe": true,
+            "IsDentry": false,
+            "IsTarget": false,
+            "Received": "2026-10-18T06:00:21.402036255Z"
+          },
+          {
+            "Arrival": 228,
+            "Transaction": 13,
+            "Op": 4361,
+            "Result": 0,
+            "MDSMapEpoch": 14,
+            "Safe": true,
+            "IsDentry": false,
+            "IsTarget": false,
+            "Received": "2026-10-18T06:00:26.804326349Z"
+          }
+        ]
+      },
+      "flock_requests": [
+        {
+          "Name": "flock-open",
+          "Op": 770,
+          "Transaction": 8,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": true,
+          "TraceBytes": 340,
+          "ExtraBytes": 0,
+          "SnapBytes": 70,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "Target": {
+            "Ino": 1099511627817,
+            "Version": 13,
+            "XattrVersion": 0,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Size": 0,
+            "MaxSize": 0,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 7,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "CapString": "pAsxLsXsxFsxcrwb",
+            "CapWantedString": "pAsxXsxFsxcrwb",
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "XattrBytes": 0,
+            "OptionalBytes": 4,
+            "InlineVersion": 18446744073709551615,
+            "ChangeAttr": 1,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFile": 0
+          },
+          "Realms": [
+            {
+              "Ino": 1,
+              "Created": 0,
+              "Parent": 0,
+              "ParentSince": 1,
+              "Seq": 1,
+              "LastModified": {
+                "Seconds": 1792303025,
+                "Nanoseconds": 455359081
+              },
+              "ChangeAttr": 0
+            }
+          ],
+          "PushBefore": 6,
+          "PushAfter": 6,
+          "ReaddirFlags": 0
+        },
+        {
+          "Name": "flock-exclusive",
+          "Op": 4361,
+          "Transaction": 9,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": false,
+          "TraceBytes": 0,
+          "ExtraBytes": 0,
+          "SnapBytes": 0,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "PushBefore": 6,
+          "PushAfter": 6,
+          "ReaddirFlags": 0
+        },
+        {
+          "Name": "flock-get-conflict",
+          "Op": 272,
+          "Transaction": 10,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": false,
+          "TraceBytes": 0,
+          "ExtraBytes": 41,
+          "SnapBytes": 0,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "ExtraHex": "00000000000000000000000000000000402300000000000001004f4700000080000000000000000002",
+          "PushBefore": 98,
+          "PushAfter": 98,
+          "ReaddirFlags": 0
+        },
+        {
+          "Name": "flock-shared",
+          "Op": 4361,
+          "Transaction": 12,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": false,
+          "TraceBytes": 0,
+          "ExtraBytes": 0,
+          "SnapBytes": 0,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "PushBefore": 98,
+          "PushAfter": 98,
+          "ReaddirFlags": 0
+        },
+        {
+          "Name": "flock-getattr-after",
+          "Op": 257,
+          "Transaction": 14,
+          "MDSMapEpoch": 14,
+          "FirstSafe": true,
+          "UnsafeSeen": false,
+          "FirstResult": 0,
+          "SafeResult": 0,
+          "ReplyMDSMapEpoch": 14,
+          "FirstMillis": 0,
+          "SafeMillis": 0,
+          "IsDentry": false,
+          "IsTarget": true,
+          "TraceBytes": 394,
+          "ExtraBytes": 0,
+          "SnapBytes": 70,
+          "SafeTraceBytes": 0,
+          "SafeExtraBytes": 0,
+          "Target": {
+            "Ino": 1099511627817,
+            "Version": 80,
+            "XattrVersion": 2,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 236,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "CapString": "pAsxLsXsxFsxcrwb",
+            "CapWantedString": "pAsxXsxFsxcrwb",
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "XattrBytes": 54,
+            "OptionalBytes": 4,
+            "InlineVersion": 18446744073709551615,
+            "ChangeAttr": 1,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFile": 0
+          },
+          "Realms": [
+            {
+              "Ino": 1,
+              "Created": 0,
+              "Parent": 0,
+              "ParentSince": 1,
+              "Seq": 1,
+              "LastModified": {
+                "Seconds": 1792303025,
+                "Nanoseconds": 455359081
+              },
+              "ChangeAttr": 0
+            }
+          ],
+          "PushBefore": 234,
+          "PushAfter": 234,
+          "ReaddirFlags": 0
+        }
+      ],
+      "suites": {
+        "mds-cephfs-results.json": {
+          "case_ms": {
+            "cleanup_unlink_release_close": 44588,
+            "create_reports_created_inode": 5349,
+            "filelock_nonblocking_native_conflict": 13407,
+            "lookup_existing_and_missing": 5403,
+            "messenger_resume_keeps_session": 2903,
+            "mkdir_matches_native_stat": 2802,
+            "open_cephfs_session": 3002,
+            "readdir_matches_native_listing": 5301,
+            "revoke_acknowledged_before_native_write": 10403,
+            "setxattr_matches_native_getxattr": 5000,
+            "statfs_matches_libcephfs": 2702
+          },
+          "elapsed_ms": 100867
+        },
+        "mds-cephfs-recovery-results.json": {
+          "case_ms": {
+            "cleanup_unlink_release_close": 11510,
+            "eviction_fences_shared_nonce": 13313,
+            "journal_flush_unsafe_to_safe": 16330,
+            "mds_restart_reconnect_replay": 29442,
+            "open_recovery_session": 3001
+          },
+          "elapsed_ms": 73602
+        },
+        "mds-cephfs-push-results.json": {
+          "case_ms": {
+            "cleanup_snapshot_quota_namespace_release_close": 26424,
+            "dentry_lease_revoke_released": 4702,
+            "flushmsg_acknowledged_after_cache_drop": 12205,
+            "open_push_sessions": 5907,
+            "quota_push_on_native_setxattr": 2702,
+            "recall_state_released_to_target": 17613,
+            "snapshot_realm_split_push": 3703
+          },
+          "elapsed_ms": 73270
+        }
+      },
+      "native_scope_cleanup": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "a4654043ccc95c98465dcdf085198873",
+        "fs_name": "ceph-msgr-fresh-a4654043ccc95c98465dcdf085198873",
+        "attempted": true,
+        "mutations": [
+          {
+            "kind": "push-rename",
+            "request_id": 1792303045576701814,
+            "target": "victim->renamed",
+            "state": "applied",
+            "native_global_id": 15137
+          },
+          {
+            "kind": "push-snapshot-create",
+            "request_id": 1792303050280016073,
+            "target": "snap/.snap/ceph-msgr-snap-a4654043",
+            "state": "applied",
+            "native_global_id": 15215
+          },
+          {
+            "kind": "push-quota-set",
+            "request_id": 1792303053982346664,
+            "target": "quota ceph.quota.max_bytes=189157376",
+            "state": "applied",
+            "native_global_id": 15298
+          },
+          {
+            "kind": "push-config-min",
+            "request_id": 1792303062494709927,
+            "target": "mds.ceph-msgr-fresh-a4654043ccc95c98465dcdf085198873-0 mds_min_caps_per_client=8",
+            "state": "restored"
+          },
+          {
+            "kind": "push-config-max",
+            "request_id": 1792303062494709927,
+            "target": "mds.ceph-msgr-fresh-a4654043ccc95c98465dcdf085198873-0 mds_max_caps_per_client=12",
+            "state": "restored"
+          },
+          {
+            "kind": "push-cache-drop",
+            "request_id": 1792303077200112317,
+            "target": "tell mds.ceph-msgr-fresh-a4654043ccc95c98465dcdf085198873:0 cache drop 10",
+            "state": "applied",
+            "native_output": "{\"client_recall\":{\"return_code\":0,\"message\":\"(0) Success\",\"recalled\":22},\"flush_journal\":{\"return_code\":0,\"message\":\"\"},\"trim_cache\":{\"trimmed\":25},\"cache\":{\"pool\":{\"items\":470,\"bytes\":87767}},\"duration\":0.001868338}"
+          },
+          {
+            "kind": "push-snapshot-remove",
+            "request_id": 1792303086502892988,
+            "target": "snap/.snap/ceph-msgr-snap-a4654043",
+            "state": "applied",
+            "native_global_id": 16402
+          },
+          {
+            "kind": "push-quota-clear",
+            "request_id": 1792303090204634603,
+            "target": "quota ceph.quota.max_bytes=0",
+            "state": "applied",
+            "native_global_id": 16475
+          },
+          {
+            "kind": "native-create-write",
+            "request_id": 1792303132264831239,
+            "target": "fenced",
+            "state": "applied",
+            "native_global_id": 17386
+          },
+          {
+            "kind": "eviction",
+            "request_id": 1792303137972559256,
+            "target": "7566",
+            "state": "evicted",
+            "global_id": 7566,
+            "address": "[fdf1:f2e6:6e7f::9]:0/3687317471",
+            "blocklist_until": "2026-10-18T06:58:59.56167Z"
+          },
+          {
+            "kind": "native-create",
+            "request_id": 1792303202691490921,
+            "target": "native-0,native-1,native-2",
+            "state": "applied",
+            "native_global_id": 19246
+          },
+          {
+            "kind": "native-flock-ex-nb",
+            "request_id": 1792303216099375161,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 19636
+          },
+          {
+            "kind": "native-flock-sh-nb",
+            "request_id": 1792303218800190840,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 19714
+          },
+          {
+            "kind": "native-flock-sh-nb",
+            "request_id": 1792303221402262101,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 9930
+          },
+          {
+            "kind": "native-flock-ex-nb",
+            "request_id": 1792303224103048608,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 19865
+          },
+          {
+            "kind": "native-flock-ex-nb",
+            "request_id": 1792303226804406081,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 10086
+          },
+          {
+            "kind": "native-write",
+            "request_id": 1792303229506268896,
+            "target": "go-file",
+            "state": "applied",
+            "native_global_id": 10164
+          }
+        ],
+        "restart": {
+          "state": "adopted",
+          "arm_request_id": 1792303145578707664,
+          "fire_request_id": 1792303149564390302,
+          "adopt_request_id": 1792303155715744420,
+          "armed": {
+            "name": "ceph-msgr-fresh-a4654043ccc95c98465dcdf085198873-0",
+            "gid": 4671,
+            "rank": 0,
+            "state": "up:active",
+            "incarnation": 6,
+            "addresses": [
+              {
+                "type": "v2",
+                "addr": "[fdf1:f2e6:6e7f::a]:6800",
+                "nonce": 1730441861
+              }
+            ],
+            "endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+            "nonce": 1730441861
+          },
+          "armed_blocklist_addresses": [
+            "[fdf1:f2e6:6e7f::a]:6800/1730441861"
+          ],
+          "fire_started_utc": "2026-10-18T05:59:09.631094316Z",
+          "fired_utc": "2026-10-18T05:59:09.975361038Z",
+          "adopted": {
+            "name": "ceph-msgr-fresh-a4654043ccc95c98465dcdf085198873-0",
+            "gid": 8013,
+            "rank": 0,
+            "state": "up:active",
+            "incarnation": 10,
+            "addresses": [
+              {
+                "type": "v2",
+                "addr": "[fdf1:f2e6:6e7f::a]:6800",
+                "nonce": 1776651838
+              }
+            ],
+            "endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+            "nonce": 1776651838
+          },
+          "adopted_utc": "2026-10-18T05:59:17.289902931Z",
+          "old_incarnation_blocklist": [
+            {
+              "address": "[fdf1:f2e6:6e7f::a]:6800/1730441861",
+              "range": false,
+              "until": "2026-10-19T05:59:09.912708Z"
+            }
+          ]
+        },
+        "residual_owned_sessions": [],
+        "namespace_checked": true,
+        "namespace_restored": true,
+        "namespace": {
+          "action": "stat",
+          "path": "/ceph-msgr-cephfs-a4654043ccc95c98465dcdf085198873",
+          "native_global_id": 21082,
+          "stat": {
+            "exists": false,
+            "errno": 2,
+            "ino": 0,
+            "mode": 0,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 0,
+            "size": 0
+          }
+        },
+        "recovery_namespace": {
+          "action": "stat",
+          "path": "/ceph-msgr-cephfs-a4654043ccc95c98465dcdf085198873-recovery",
+          "native_global_id": 21086,
+          "stat": {
+            "exists": false,
+            "errno": 2,
+            "ino": 0,
+            "mode": 0,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 0,
+            "size": 0
+          }
+        },
+        "push_namespace": {
+          "action": "stat",
+          "path": "/ceph-msgr-cephfs-a4654043ccc95c98465dcdf085198873-push",
+          "native_global_id": 21094,
+          "stat": {
+            "exists": false,
+            "errno": 2,
+            "ino": 0,
+            "mode": 0,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 0,
+            "size": 0
+          }
+        },
+        "push_config": {
+          "section": "mds.ceph-msgr-fresh-a4654043ccc95c98465dcdf085198873-0",
+          "daemon_mds_min_caps_per_client": 100,
+          "daemon_mds_max_caps_per_client": 1048576,
+          "central_entries": 0
+        },
+        "push_config_restored": true,
+        "new_blocklist": [
+          {
+            "address": "[fdf1:f2e6:6e7f::9]:0/3687317471",
+            "range": false,
+            "until": "2026-10-18T06:58:59.56167Z"
+          },
+          {
+            "address": "[fdf1:f2e6:6e7f::a]:6800/1730441861",
+            "range": false,
+            "until": "2026-10-19T05:59:09.912708Z"
+          }
+        ],
+        "removed_blocklist": [
+          {
+            "kind": "eviction",
+            "entry": {
+              "address": "[fdf1:f2e6:6e7f::9]:0/3687317471",
+              "range": false,
+              "until": "2026-10-18T06:58:59.56167Z"
+            }
+          },
+          {
+            "kind": "mds-restart",
+            "entry": {
+              "address": "[fdf1:f2e6:6e7f::a]:6800/1730441861",
+              "range": false,
+              "until": "2026-10-19T05:59:09.912708Z"
+            }
+          }
+        ],
+        "kept_new_blocklist": [],
+        "blocklist_restored": true,
+        "client_identity_removed": true,
+        "native_identity_removed": true,
+        "recovery_identity_removed": true,
+        "push_identity_removed": true,
+        "completed": true
+      },
+      "fresh_cleanup": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "a4654043ccc95c98465dcdf085198873",
+        "fsid": "bd69af0e-e979-4c6a-9477-1a42b660f19d",
+        "fs_name": "ceph-msgr-fresh-a4654043ccc95c98465dcdf085198873",
+        "fscid": 1,
+        "metadata_pool": 3,
+        "data_pools": [
+          4
+        ],
+        "attempted": true,
+        "remove_pending": false,
+        "filesystem_removed": true,
+        "pools_removed": true,
+        "identity_removed": true,
+        "cephfs_verified": true,
+        "completed": true,
+        "fs_dump": {
+          "epoch": 17,
+          "btime": "2026-10-18T06:01:51:185034+0000",
+          "default_fscid": -1,
+          "compat": {
+            "compat": {},
+            "ro_compat": {},
+            "incompat": {
+              "feature_1": "base v0.20",
+              "feature_2": "client writeable ranges",
+              "feature_3": "default file layouts on dirs",
+              "feature_4": "dir inode in separate object",
+              "feature_5": "mds uses versioned encoding",
+              "feature_6": "dirfrag is stored in omap",
+              "feature_8": "no anchor table",
+              "feature_9": "file layout v2",
+              "feature_10": "snaprealm v2",
+              "feature_11": "minor log segments",
+              "feature_12": "quiesce subvolumes"
+            }
+          },
+          "feature_flags": {
+            "enable_multiple": true,
+            "ever_enabled_multiple": true
+          },
+          "standbys": [],
+          "filesystems": []
+        },
+        "osd_dump": {
+          "epoch": 38,
+          "fsid": "bd69af0e-e979-4c6a-9477-1a42b660f19d",
+          "created": "2026-10-18T05:56:08.511503+0000",
+          "modified": "2026-10-18T06:01:58.534260+0000",
+          "last_up_change": "2026-10-18T05:56:33.256079+0000",
+          "last_in_change": "2026-10-18T05:56:30.640746+0000",
+          "flags": "sortbitwise,recovery_deletes,purged_snapdirs,pglog_hardlimit",
+          "flags_num": 5799936,
+          "flags_set": [
+            "pglog_hardlimit",
+            "purged_snapdirs",
+            "recovery_deletes",
+            "sortbitwise"
+          ],
+          "crush_version": 8,
+          "full_ratio": 0.949999988079071,
+          "backfillfull_ratio": 0.8999999761581421,
+          "nearfull_ratio": 0.8500000238418579,
+          "cluster_snapshot": "",
+          "pool_max": 4,
+          "max_osd": 1,
+          "require_min_compat_client": "luminous",
+          "min_compat_client": "argonaut",
+          "require_osd_release": "tentacle",
+          "allow_crimson": false,
+          "pools": [
+            {
+              "pool": 1,
+              "pool_name": ".mgr",
+              "create_time": "2026-10-18T05:56:35.133226+0000",
+              "flags": 0,
+              "flags_names": "",
+              "type": 1,
+              "size": 1,
+              "min_size": 1,
+              "crush_rule": 0,
+              "peering_crush_bucket_count": 0,
+              "peering_crush_bucket_target": 0,
+              "peering_crush_bucket_barrier": 0,
+              "peering_crush_bucket_mandatory_member": 2147483647,
+              "is_stretch_pool": false,
+              "object_hash": 2,
+              "pg_autoscale_mode": "off",
+              "pg_num": 1,
+              "pg_placement_num": 1,
+              "pg_placement_num_target": 1,
+              "pg_num_target": 1,
+              "pg_num_pending": 1,
+              "last_pg_merge_meta": {
+                "source_pgid": "0.0",
+                "ready_epoch": 0,
+                "last_epoch_started": 0,
+                "last_epoch_clean": 0,
+                "source_version": "0'0",
+                "target_version": "0'0"
+              },
+              "last_change": "10",
+              "last_force_op_resend": "0",
+              "last_force_op_resend_prenautilus": "0",
+              "last_force_op_resend_preluminous": "0",
+              "auid": 0,
+              "snap_mode": "selfmanaged",
+              "snap_seq": 0,
+              "snap_epoch": 0,
+              "pool_snaps": [],
+              "removed_snaps": "[]",
+              "quota_max_bytes": 0,
+              "quota_max_objects": 0,
+              "tiers": [],
+              "tier_of": -1,
+              "read_tier": -1,
+              "write_tier": -1,
+              "cache_mode": "none",
+              "target_max_bytes": 0,
+              "target_max_objects": 0,
+              "cache_target_dirty_ratio_micro": 400000,
+              "cache_target_dirty_high_ratio_micro": 600000,
+              "cache_target_full_ratio_micro": 800000,
+              "cache_min_flush_age": 0,
+              "cache_min_evict_age": 0,
+              "erasure_code_profile": "",
+              "hit_set_params": {
+                "type": "none"
+              },
+              "hit_set_period": 0,
+              "hit_set_count": 0,
+              "use_gmt_hitset": true,
+              "min_read_recency_for_promote": 0,
+              "min_write_recency_for_promote": 0,
+              "hit_set_grade_decay_rate": 0,
+              "hit_set_search_last_n": 0,
+              "grade_table": [],
+              "stripe_width": 0,
+              "expected_num_objects": 0,
+              "fast_read": false,
+              "nonprimary_shards": "{}",
+              "options": {
+                "pg_num_max": 32,
+                "pg_num_min": 1
+              },
+              "application_metadata": {
+                "mgr": {}
+              },
+              "read_balance": {
+                "score_type": "Fair distribution",
+                "score_acting": 1,
+                "score_stable": 1,
+                "optimal_score": 1,
+                "raw_score_acting": 1,
+                "raw_score_stable": 1,
+                "primary_affinity_weighted": 1,
+                "average_primary_affinity": 1,
+                "average_primary_affinity_weighted": 1
+              }
+            },
+            {
+              "pool": 2,
+              "pool_name": "ceph-msgr-osd-fixture",
+              "create_time": "2026-10-18T05:56:43.073390+0000",
+              "flags": 0,
+              "flags_names": "",
+              "type": 1,
+              "size": 1,
+              "min_size": 1,
+              "crush_rule": 1,
+              "peering_crush_bucket_count": 0,
+              "peering_crush_bucket_target": 0,
+              "peering_crush_bucket_barrier": 0,
+              "peering_crush_bucket_mandatory_member": 2147483647,
+              "is_stretch_pool": false,
+              "object_hash": 2,
+              "pg_autoscale_mode": "off",
+              "pg_num": 1,
+              "pg_placement_num": 1,
+              "pg_placement_num_target": 1,
+              "pg_num_target": 1,
+              "pg_num_pending": 1,
+              "last_pg_merge_meta": {
+                "source_pgid": "0.0",
+                "ready_epoch": 0,
+                "last_epoch_started": 0,
+                "last_epoch_clean": 0,
+                "source_version": "0'0",
+                "target_version": "0'0"
+              },
+              "last_change": "13",
+              "last_force_op_resend": "0",
+              "last_force_op_resend_prenautilus": "0",
+              "last_force_op_resend_preluminous": "0",
+              "auid": 0,
+              "snap_mode": "selfmanaged",
+              "snap_seq": 0,
+              "snap_epoch": 0,
+              "pool_snaps": [],
+              "removed_snaps": "[]",
+              "quota_max_bytes": 0,
+              "quota_max_objects": 0,
+              "tiers": [],
+              "tier_of": -1,
+              "read_tier": -1,
+              "write_tier": -1,
+              "cache_mode": "none",
+              "target_max_bytes": 0,
+              "target_max_objects": 0,
+              "cache_target_dirty_ratio_micro": 400000,
+              "cache_target_dirty_high_ratio_micro": 600000,
+              "cache_target_full_ratio_micro": 800000,
+              "cache_min_flush_age": 0,
+              "cache_min_evict_age": 0,
+              "erasure_code_profile": "",
+              "hit_set_params": {
+                "type": "none"
+              },
+              "hit_set_period": 0,
+              "hit_set_count": 0,
+              "use_gmt_hitset": true,
+              "min_read_recency_for_promote": 0,
+              "min_write_recency_for_promote": 0,
+              "hit_set_grade_decay_rate": 0,
+              "hit_set_search_last_n": 0,
+              "grade_table": [],
+              "stripe_width": 0,
+              "expected_num_objects": 0,
+              "fast_read": false,
+              "nonprimary_shards": "{}",
+              "options": {},
+              "application_metadata": {},
+              "read_balance": {
+                "score_type": "Fair distribution",
+                "score_acting": 1,
+                "score_stable": 1,
+                "optimal_score": 1,
+                "raw_score_acting": 1,
+                "raw_score_stable": 1,
+                "primary_affinity_weighted": 1,
+                "average_primary_affinity": 1,
+                "average_primary_affinity_weighted": 1
+              }
+            }
+          ],
+          "osds": [
+            {
+              "osd": 0,
+              "uuid": "b1e29e05-5f72-4b68-aeeb-bfd72ea465b0",
+              "up": 1,
+              "in": 1,
+              "weight": 1,
+              "primary_affinity": 1,
+              "last_clean_begin": 0,
+              "last_clean_end": 0,
+              "up_from": 4,
+              "up_thru": 21,
+              "down_at": 0,
+              "lost_at": 0,
+              "public_addrs": {
+                "addrvec": [
+                  {
+                    "type": "v2",
+                    "addr": "[fdf1:f2e6:6e7f::8]:6800",
+                    "nonce": 2675174098
+                  }
+                ]
+              },
+              "cluster_addrs": {
+                "addrvec": [
+                  {
+                    "type": "v2",
+                    "addr": "[fdf1:f2e6:6e7f::8]:6801",
+                    "nonce": 2675174098
+                  }
+                ]
+              },
+              "heartbeat_back_addrs": {
+                "addrvec": [
+                  {
+                    "type": "v2",
+                    "addr": "[fdf1:f2e6:6e7f::8]:6803",
+                    "nonce": 2675174098
+                  }
+                ]
+              },
+              "heartbeat_front_addrs": {
+                "addrvec": [
+                  {
+                    "type": "v2",
+                    "addr": "[fdf1:f2e6:6e7f::8]:6802",
+                    "nonce": 2675174098
+                  }
+                ]
+              },
+              "public_addr": "[fdf1:f2e6:6e7f::8]:6800/2675174098",
+              "cluster_addr": "[fdf1:f2e6:6e7f::8]:6801/2675174098",
+              "heartbeat_back_addr": "[fdf1:f2e6:6e7f::8]:6803/2675174098",
+              "heartbeat_front_addr": "[fdf1:f2e6:6e7f::8]:6802/2675174098",
+              "state": [
+                "exists",
+                "up"
+              ]
+            }
+          ],
+          "osd_xinfo": [
+            {
+              "osd": 0,
+              "down_stamp": "0.000000",
+              "laggy_probability": 0,
+              "laggy_interval": 0,
+              "features": 4541880224203014143,
+              "old_weight": 0,
+              "last_purged_snaps_scrub": "2026-10-18T05:56:32.238468+0000",
+              "dead_epoch": 0
+            }
+          ],
+          "pg_upmap": [],
+          "pg_upmap_items": [],
+          "pg_upmap_primaries": [],
+          "pg_temp": [],
+          "primary_temp": [],
+          "blocklist": {
+            "[fdf1:f2e6:6e7f::a]:6800/1776651838": "2026-10-19T06:01:49.113328+0000"
+          },
+          "range_blocklist": {},
+          "erasure_code_profiles": {
+            "default": {
+              "k": "2",
+              "m": "2",
+              "plugin": "isa",
+              "technique": "reed_sol_van"
+            }
+          },
+          "removed_snaps_queue": [],
+          "new_removed_snaps": [],
+          "new_purged_snaps": [],
+          "crush_node_flags": {},
+          "device_class_flags": {},
+          "stretch_mode": {
+            "stretch_mode_enabled": false,
+            "stretch_bucket_count": 0,
+            "degraded_stretch_mode": 0,
+            "recovering_stretch_mode": 0,
+            "stretch_mode_bucket": 0
+          }
+        }
+      },
+      "resource_cleanup": {
+        "containers": {
+          "control": {
+            "id": "c5a8f5ee24ec66c53455aacc17ac1c57b615c9fd23cfefbc50e2de7b0c3bb794",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-a4654043ccc95c98465dcdf085198873-0": {
+            "id": "77f0c01f7ed8335d50691bdf613e7a9e556463f7f910724fef4383561576b0a0",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "cdd5be91c50505758f4a72f1217e41076063e15655d39bb138d34cceb53630b6",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "312930bbd6d4643f2f33ebf1080b29753edea4d1b9d071c3f5d6eeb6328cc56e",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "b4a81a54dc0e3500f4989fc03881ec0ff3b8cf5fef1282c027f856e36c9c28b0",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "7ffea10ed67c11b5c9c5006c8a475536b92d7835604b7142abd3417e870c3207",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "dd6e3d343e518e99498497fe5e23731f1cf2023299f91bc8bb2b5c633bf76ce1",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "39075dcb02caefcf798be91363ac5bc5041780c9d76fa897239ad58bcdb44f6e",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "dc6179d920a20f6fed78abf955fc5fd08f811ad9eb8357439603280bcbc6d1f0",
+            "exists": false
+          }
+        },
+        "network": "192024c1-fc3c-45d3-8b52-0f182615b3b0",
+        "network_exists": false
+      },
+      "first_failed_run": {
+        "run": {
+          "profile": "secure-ipv6",
+          "start": "2026-10-18T05:43:14.119516+00:00",
+          "exit_code": 1,
+          "end": "2026-10-18T05:48:21.826202+00:00"
+        },
+        "log_sha256": "22c541de0074869eb22aece9beb052e27e44b649fe1ad687b522105d66511255",
+        "cause": "incorrect equality check of projected/internal inode Version; native probes and GETFILELOCK had passed; before precise MTime was not retained, so it is not retrospectively claimed equal"
+      }
+    }
+  ],
+  "merged_checks": {
+    "start": "2026-10-18T06:03:24.301258+00:00",
+    "steps": [
+      {
+        "name": "root-cgo0",
+        "argv": [
+          "go",
+          "test",
+          "./..."
+        ],
+        "start": "2026-10-18T06:03:24.301269+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:03:40.113947+00:00"
+      },
+      {
+        "name": "race",
+        "argv": [
+          "go",
+          "test",
+          "-race",
+          "./integration",
+          "./cephmsgr"
+        ],
+        "start": "2026-10-18T06:03:40.114280+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:04:05.626841+00:00"
+      },
+      {
+        "name": "vet",
+        "argv": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "start": "2026-10-18T06:04:05.627207+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:04:06.442745+00:00"
+      },
+      {
+        "name": "fixture",
+        "argv": [
+          "go",
+          "test",
+          "-mod=readonly",
+          "./..."
+        ],
+        "start": "2026-10-18T06:04:06.443063+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:04:11.716711+00:00"
+      },
+      {
+        "name": "fixture-vet",
+        "argv": [
+          "go",
+          "vet",
+          "-mod=readonly",
+          "./..."
+        ],
+        "start": "2026-10-18T06:04:11.717043+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:04:12.131590+00:00"
+      },
+      {
+        "name": "python",
+        "argv": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools",
+          "-p",
+          "test_*.py"
+        ],
+        "start": "2026-10-18T06:04:12.132011+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:04:18.603579+00:00"
+      }
+    ]
+  },
+  "merged_check_base": "b5892a5517aef9dcaf927838dfe94810376cf0db"
+}

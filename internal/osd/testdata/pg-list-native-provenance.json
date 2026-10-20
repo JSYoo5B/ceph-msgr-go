@@ -1,0 +1,250 @@
+{
+  "binary_sha256": "25826512893aa852636980d0973bbbe153cb99f1cdaf5eb8ccc379deb9e99938",
+  "build_driver_sha256": "79063616bd6254b2144dd2fb2a0199a57dc3d8c99e80700d3e720ab8c42d819f",
+  "builder_container_id": "eebc588a9644d2db05776a7da7d68a0ddb35d3aa018a5b1e70408455a67138a5",
+  "builder_termination_completed": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "pg-list-native-reply-v6-eacces": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_operations": [
+        {
+          "code": 5381,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 9,
+          "offset": 2,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -13,
+          "union_hex": "02000000000000000900000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 191,
+      "front_sha256": "ff9b071880c9ab7d074172648b51da99cff54acad6f276188cc0c83d579e73de",
+      "header_bytes": 41,
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 191,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      }
+    },
+    "pg-list-native-reply-v6-einval": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_operations": [
+        {
+          "code": 5381,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 9,
+          "offset": 2,
+          "outdata_hex": "",
+          "payload_len": 0,
+          "result": -22,
+          "union_hex": "02000000000000000900000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 191,
+      "front_sha256": "e7b6fc87042487949cc93b66adc1ebcb0ff7eb6bc1513524e057e2ab598c4f7c",
+      "header_bytes": 41,
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 191,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      }
+    },
+    "pg-list-native-reply-v6-empty-end": {
+      "data_bytes": 64,
+      "data_sha256": "9a62caae610ab9027f3e6d83035b7c861acc85ff13b530e48f49a87b0d46f7ff",
+      "decoded_operations": [
+        {
+          "code": 5381,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 9,
+          "offset": 2,
+          "outdata_hex": "01013a00000004033000000005000000726f757465040000006c617374feffffffffffffff44332211000600000074656e616e74070000000000000000000000",
+          "payload_len": 64,
+          "result": 0,
+          "union_hex": "02000000000000000900000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 191,
+      "front_sha256": "6f551cb84e0861eb98bcaf7f7085c87ee2e09e9ade7aab6290adf7fb668007e7",
+      "header_bytes": 41,
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 64,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 191,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      }
+    },
+    "pg-list-native-reply-v6-populated": {
+      "data_bytes": 111,
+      "data_sha256": "646ef0cde5d1c003f546d8a8c8fc3edb4aea77dc0904f3070d80f448a4f161af",
+      "decoded_operations": [
+        {
+          "code": 5381,
+          "flags": 0,
+          "indata_hex": "",
+          "length": 9,
+          "offset": 2,
+          "outdata_hex": "01016900000004033000000005000000726f757465040000006c617374feffffffffffffff44332211000600000074656e616e740700000000000000020000000600000074656e616e74030000006f6e65000000000600000074656e616e740300000074776f05000000726f757465",
+          "payload_len": 111,
+          "result": 0,
+          "union_hex": "02000000000000000900000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 191,
+      "front_sha256": "8fac52945559eb825f06b23812e1a8e5c4575e92659070d5fef1be4d01755c41",
+      "header_bytes": 41,
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 111,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 191,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      }
+    },
+    "pg-list-native-request-v6-list": {
+      "data_bytes": 39,
+      "data_sha256": "8d2b1a72e88f9f0906e35ed93d81fca52a354f80a3727728232dc001ebe91282",
+      "decoded_operations": [
+        {
+          "code": 5381,
+          "flags": 0,
+          "indata_hex": "040321000000000000000000000000000000000000000000000000000000000000000000000080",
+          "length": 9,
+          "offset": 2,
+          "outdata_hex": "",
+          "payload_len": 39,
+          "union_hex": "02000000000000000900000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 192,
+      "front_sha256": "085e4ab851fa609e0ecd531ec6383c81eecc1869db6c1a5828de0c4e8df18e57",
+      "header_bytes": 41,
+      "header_sha256": "20e99f0e240771d043a3cbc8fe9bfeadb083e309ec975d2899c2d28a25b4a16e",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 3,
+        "data_len": 39,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 192,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 42,
+        "version": 6
+      }
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "launcher_sha256": "d7c5759f9a991f6279b4d63d30b6a9d06f473b44877e5f1175289dc1d0ae18b8",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffffbbf4a000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffffb9200000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffffbbe28000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffffb91af000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffffb8ce9000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffffb8ca8000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffffbbdf7000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffffb8c87000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffffb8a63000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffffb8a32000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffffb8884000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffffbbf00000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffffb87e3000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "five fresh native PGNLS message vectors; native page and message decode verified independently of Go",
+  "wrapper_sha256": "6c6905170da696855d6097d945756b264499a30158fbe6a1e201062e47e3e6b9"
+}

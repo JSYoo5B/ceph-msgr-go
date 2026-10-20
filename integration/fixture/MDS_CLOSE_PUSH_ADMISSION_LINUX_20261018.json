@@ -1,0 +1,5827 @@
+{
+  "native_source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "scope": "post-CLOSE queue-admission push correction; controlled peer wire regressions plus two native 25-leaf runs",
+  "source_audit": {
+    "path": "<path>",
+    "bytes": 285444,
+    "sha256": "e952799f80c2df7c0ad242f388ef72bce7fa93d0262dfa9d3d1cdb3cd6a0ccd9",
+    "overlay": [
+      "cephmsgr/mds_session.go",
+      "cephmsgr/mds_close_push_admission_test.go"
+    ],
+    "inventory_files": 1588,
+    "selected_source_hashes": [
+      {
+        "file": "cephmsgr/mds_close_push_admission_test.go",
+        "bytes": 5883,
+        "sha256": "92d8a2887f052bfd4255896ace4e966d8593068a15a7f65c638fe2a3ef691ac0"
+      },
+      {
+        "file": "cephmsgr/mds_request.go",
+        "bytes": 19758,
+        "sha256": "8c9267b33e575f8552d699e79409172e934b0c5f3cb1e2caf99a8112669ee070"
+      },
+      {
+        "file": "cephmsgr/mds_request_close_admission_test.go",
+        "bytes": 9160,
+        "sha256": "5de3921aaca5a61b0ba4b3707a592bb48638236bad9ecb3c4d980b012f7a09f4"
+      },
+      {
+        "file": "cephmsgr/mds_session.go",
+        "bytes": 35614,
+        "sha256": "b35f2da3129ef785d318bffcfe260276488ae496d34e3560ee6e44b2d298136f"
+      },
+      {
+        "file": "integration/fixture/mds_cephfs.go",
+        "bytes": 43911,
+        "sha256": "2f0c85413d4da9ada8195520ffdb33d7a5645a633c3214fb24e67c258c5d54de"
+      },
+      {
+        "file": "integration/mds_cephfs_interrupt_filelock_test.go",
+        "bytes": 10767,
+        "sha256": "9d085af51876542dfecc904b59fbc144b03bd287545250f0234defd60bb79813"
+      },
+      {
+        "file": "integration/mds_cephfs_pending_filelock_test.go",
+        "bytes": 10345,
+        "sha256": "c7a9668e3639c554276dffa3a4d17d229f6214c0ef37dec8fd5e162a8cb7b500"
+      },
+      {
+        "file": "integration/mds_cephfs_test.go",
+        "bytes": 50562,
+        "sha256": "8f1ab086a64953a715b007e0597143a2cfc994cd6870b5788aa17098b6ae25a3"
+      }
+    ]
+  },
+  "runs": {
+    "crc-host": {
+      "directory": "<path>",
+      "run": {
+        "profile": "crc-host",
+        "start": "2026-10-18T06:40:46.025492+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:48:00.445758+00:00"
+      },
+      "manifest": {
+        "architecture": "amd64",
+        "bootstrap": "public-api",
+        "cephfs_mutations": "owned Go, recovery, native and push-native LibCephFS identities, three directories with their files, one user xattr and two native writes removed through Go requests and verified natively; one native rename, one snapshot and one quota created and removed natively; the owned daemon's mds_min_caps_per_client and mds_max_caps_per_client lowered and restored, and one cache drop; one owned client eviction and one owned rank-0 MDS restart whose blocklist entries are removed and verified during cleanup",
+        "connection_mode": "crc",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "fsid": "c02c20fa-02ff-415e-8249-7315b5c59dba",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ip_family": "4",
+        "key_type": "aes",
+        "mds_cephfs": true,
+        "mds_cephfs_completion": false,
+        "mds_cephfs_data": false,
+        "mds_cephfs_ranks": false,
+        "mds_commands": false,
+        "mds_fresh": true,
+        "mds_sessions": false,
+        "mon_ping": false,
+        "native_mapext_range_oracle": false,
+        "native_sparse_read_oracle": false,
+        "native_u64_xattr_oracle": false,
+        "native_writesame_oracle": false,
+        "osd": "1",
+        "osd_profile": "legacy-v6",
+        "osd_replicas": "1",
+        "osd_store": "bluestore",
+        "provider": "github.com/JSYoo5B/ceph-testcontainers-go",
+        "provider_effective_module": {
+          "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+          "version": "v0.3.0",
+          "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+        },
+        "provider_identity_status": "module",
+        "provider_original_module": {
+          "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+          "version": "v0.3.0",
+          "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+        },
+        "provider_version": "v0.3.0",
+        "rbd_base": false,
+        "runtime": "host",
+        "service_cipher": "aes",
+        "topology": "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
+      },
+      "selected_leaf_passes": 25,
+      "selected_top_level_passes": 3,
+      "skips": 0,
+      "leaf_seconds": {
+        "TestCephMDSCephFSPushIntegration": 90.56,
+        "TestCephMDSCephFSPushIntegration/open_push_sessions": 7.33,
+        "TestCephMDSCephFSPushIntegration/dentry_lease_revoke_released": 5.31,
+        "TestCephMDSCephFSPushIntegration/snapshot_realm_split_push": 4.32,
+        "TestCephMDSCephFSPushIntegration/quota_push_on_native_setxattr": 3.32,
+        "TestCephMDSCephFSPushIntegration/recall_state_released_to_target": 21.86,
+        "TestCephMDSCephFSPushIntegration/flushmsg_acknowledged_after_cache_drop": 15.3,
+        "TestCephMDSCephFSPushIntegration/cleanup_snapshot_quota_namespace_release_close": 33.1,
+        "TestCephMDSCephFSRecoveryIntegration": 86.77,
+        "TestCephMDSCephFSRecoveryIntegration/open_recovery_session": 3.63,
+        "TestCephMDSCephFSRecoveryIntegration/journal_flush_unsafe_to_safe": 16.79,
+        "TestCephMDSCephFSRecoveryIntegration/eviction_fences_shared_nonce": 16.13,
+        "TestCephMDSCephFSRecoveryIntegration/mds_restart_reconnect_replay": 35.68,
+        "TestCephMDSCephFSRecoveryIntegration/cleanup_unlink_release_close": 14.54,
+        "TestCephMDSCephFSIntegration": 128.9,
+        "TestCephMDSCephFSIntegration/open_cephfs_session": 3.71,
+        "TestCephMDSCephFSIntegration/mkdir_matches_native_stat": 3.31,
+        "TestCephMDSCephFSIntegration/create_reports_created_inode": 7.15,
+        "TestCephMDSCephFSIntegration/setxattr_matches_native_getxattr": 5.01,
+        "TestCephMDSCephFSIntegration/readdir_matches_native_listing": 6.8,
+        "TestCephMDSCephFSIntegration/statfs_matches_libcephfs": 3.4,
+        "TestCephMDSCephFSIntegration/lookup_existing_and_missing": 6.7,
+        "TestCephMDSCephFSIntegration/filelock_nonblocking_native_conflict": 17.01,
+        "TestCephMDSCephFSIntegration/filelock_local_wait_timeout_then_same_call_grant": 4.05,
+        "TestCephMDSCephFSIntegration/filelock_explicit_interrupt_returns_original_eintr": 4.05,
+        "TestCephMDSCephFSIntegration/revoke_acknowledged_before_native_write": 12.4,
+        "TestCephMDSCephFSIntegration/messenger_resume_keeps_session": 3.61,
+        "TestCephMDSCephFSIntegration/cleanup_unlink_release_close": 51.68
+      },
+      "cleanup_audit": {
+        "containers": {
+          "control": {
+            "id": "0de3e20509805384a09540febb4700bf93b9bd797120979fd640ada188150c7b",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-5ad0046816a14a2890dfa43b8483b49e-0": {
+            "id": "6b9f067a629683404b4dfd74a8165ec3a62b66b04b05f7240d47716f3fc33b95",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "9d9d88d5d441fdb8f1e8dd5fa583617e8b31d758cf8f03911313d25d91e2174b",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "1a3253e5952eda70e288fef0ebaffd1657c67e6f29a7f2d17b031166ef8d2022",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "0b8336a639ad6c363e39f29816fb7b2e0c1ca68c312f083090d525d9ec3cf96b",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "2e47222c682fa3eb83783e6588460a4ba8da6a1dfdb20464ed9feb02270400ca",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "fc6cb4a2109e087d2ea5f1dcd2d03f74ffa28881df93271a36528e6fb3549d6a",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "b2d4c67c378af11a679de0ebb6868b521203aa74f0396826ca244e8c3b926d11",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "6a344c3264d66464f21cfe9313481665f9ff3f832498d11097eba350aa978237",
+            "exists": false
+          }
+        },
+        "network": "6c95e63e-9200-478f-be72-6cd1509a9ac6",
+        "network_exists": false
+      },
+      "scoped_cleanup_verified": true,
+      "fresh_cleanup_verified": true,
+      "nonblocking_native_probes": [
+        {
+          "Action": "flock-ex-nb",
+          "GlobalID": 9756,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 11,
+            "acquired": false,
+            "unlocked": false,
+            "elapsed_ns": 186863,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            }
+          }
+        },
+        {
+          "Action": "flock-sh-nb",
+          "GlobalID": 19699,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 11,
+            "acquired": false,
+            "unlocked": false,
+            "elapsed_ns": 176674,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            }
+          }
+        },
+        {
+          "Action": "flock-sh-nb",
+          "GlobalID": 9912,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 0,
+            "acquired": true,
+            "unlocked": true,
+            "elapsed_ns": 310617,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            }
+          }
+        },
+        {
+          "Action": "flock-ex-nb",
+          "GlobalID": 19855,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 11,
+            "acquired": false,
+            "unlocked": false,
+            "elapsed_ns": 201901,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            }
+          }
+        },
+        {
+          "Action": "flock-ex-nb",
+          "GlobalID": 19933,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 0,
+            "acquired": true,
+            "unlocked": true,
+            "elapsed_ns": 294386,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305915,
+              "data_hex": ""
+            }
+          }
+        }
+      ],
+      "nonblocking_inode_before": {
+        "Ino": 1099511627817,
+        "SnapID": 18446744073709551614,
+        "Rdev": 0,
+        "Version": 13,
+        "XattrVersion": 0,
+        "Cap": {
+          "Caps": 16349,
+          "Wanted": 16333,
+          "CapID": 1,
+          "Seq": 7,
+          "MSeq": 0,
+          "Realm": 1,
+          "Flags": 1
+        },
+        "Layout": {
+          "StripeUnit": 4194304,
+          "StripeCount": 1,
+          "ObjectSize": 4194304,
+          "CASHash": 0,
+          "ObjectStripeUnit": 0,
+          "Unused": 0,
+          "Pool": 4,
+          "PoolNamespace": ""
+        },
+        "CTime": {
+          "Seconds": 1792305923,
+          "Nanoseconds": 15951650
+        },
+        "MTime": {
+          "Seconds": 1792305915,
+          "Nanoseconds": 862389427
+        },
+        "ATime": {
+          "Seconds": 1792305915,
+          "Nanoseconds": 862389427
+        },
+        "TimeWarpSeq": 0,
+        "Size": 0,
+        "MaxSize": 0,
+        "TruncateSize": 18446744073709551615,
+        "TruncateSeq": 1,
+        "Mode": 33188,
+        "UID": 0,
+        "GID": 0,
+        "NLink": 1,
+        "Files": 0,
+        "Subdirs": 0,
+        "RBytes": 0,
+        "RFiles": 1,
+        "RSubdirs": 0,
+        "RCTime": {
+          "Seconds": 1792305923,
+          "Nanoseconds": 15951650
+        },
+        "Symlink": "",
+        "DirHash": 0,
+        "DirLayout": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "InlineVersion": 18446744073709551615,
+        "QuotaMaxBytes": 0,
+        "QuotaMaxFiles": 0,
+        "BTime": {
+          "Seconds": 1792305915,
+          "Nanoseconds": 862389427
+        },
+        "ChangeAttr": 1,
+        "DirPin": -1,
+        "SnapBTime": {
+          "Seconds": 0,
+          "Nanoseconds": 0
+        },
+        "RSnaps": 0,
+        "Fscrypt": false,
+        "OptionalMetadata": "AAAAAA=="
+      },
+      "nonblocking_inode_after": {
+        "Ino": 1099511627817,
+        "SnapID": 18446744073709551614,
+        "Rdev": 0,
+        "Version": 80,
+        "XattrVersion": 2,
+        "Cap": {
+          "Caps": 16349,
+          "Wanted": 16333,
+          "CapID": 1,
+          "Seq": 227,
+          "MSeq": 0,
+          "Realm": 1,
+          "Flags": 1
+        },
+        "Layout": {
+          "StripeUnit": 4194304,
+          "StripeCount": 1,
+          "ObjectSize": 4194304,
+          "CASHash": 0,
+          "ObjectStripeUnit": 0,
+          "Unused": 0,
+          "Pool": 4,
+          "PoolNamespace": ""
+        },
+        "CTime": {
+          "Seconds": 1792305923,
+          "Nanoseconds": 15951650
+        },
+        "MTime": {
+          "Seconds": 1792305915,
+          "Nanoseconds": 862389427
+        },
+        "ATime": {
+          "Seconds": 1792305915,
+          "Nanoseconds": 862389427
+        },
+        "TimeWarpSeq": 0,
+        "Size": 0,
+        "MaxSize": 4194304,
+        "TruncateSize": 18446744073709551615,
+        "TruncateSeq": 1,
+        "Mode": 33188,
+        "UID": 0,
+        "GID": 0,
+        "NLink": 1,
+        "Files": 0,
+        "Subdirs": 0,
+        "RBytes": 0,
+        "RFiles": 1,
+        "RSubdirs": 0,
+        "RCTime": {
+          "Seconds": 1792305923,
+          "Nanoseconds": 15951650
+        },
+        "Symlink": "",
+        "DirHash": 0,
+        "DirLayout": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "Xattrs": "AQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgBa0ARoFqFKKJDfpDuEg7Se",
+        "InlineVersion": 18446744073709551615,
+        "QuotaMaxBytes": 0,
+        "QuotaMaxFiles": 0,
+        "BTime": {
+          "Seconds": 1792305915,
+          "Nanoseconds": 862389427
+        },
+        "ChangeAttr": 1,
+        "DirPin": -1,
+        "SnapBTime": {
+          "Seconds": 0,
+          "Nanoseconds": 0
+        },
+        "RSnaps": 0,
+        "Fscrypt": false,
+        "OptionalMetadata": "AAAAAA=="
+      },
+      "completion_facts": {
+        "pending_flock": {
+          "Source": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "Observation": "same-session ordered requests and local wait expiry; no direct native wait-queue observation",
+          "Ino": 1099511627817,
+          "GlobalID": 9009,
+          "BeforeSession": {
+            "State": 2,
+            "Generation": 1,
+            "ConnectionGeneration": 1,
+            "GlobalID": 9009,
+            "Target": {
+              "FilesystemID": 1,
+              "Rank": 0,
+              "Address": "v2:172.18.0.10:6800/2065481956"
+            },
+            "PushSequence": 225,
+            "RenewSequence": 27,
+            "ReconnectedFrom": 0,
+            "LastRenewal": {
+              "Sequence": 27,
+              "Requested": "2026-10-18T06:46:00.842364127Z",
+              "Confirmed": "2026-10-18T06:46:00.842637544Z"
+            },
+            "Open": {
+              "Sequence": 0,
+              "SupportedFeatures": "////AAAAAAA=",
+              "MetricFlags": "//8AAAAAAAA=",
+              "Flags": 0,
+              "Metadata": {},
+              "CapAuths": [
+                {
+                  "UID": -1,
+                  "GIDs": [],
+                  "Path": "",
+                  "FilesystemName": "ceph-msgr-fresh-5ad0046816a14a2890dfa43b8483b49e",
+                  "RootSquash": false,
+                  "Readable": true,
+                  "Writeable": true
+                }
+              ]
+            },
+            "ReadOnly": false
+          },
+          "AfterSession": {
+            "State": 2,
+            "Generation": 1,
+            "ConnectionGeneration": 1,
+            "GlobalID": 9009,
+            "Target": {
+              "FilesystemID": 1,
+              "Rank": 0,
+              "Address": "v2:172.18.0.10:6800/2065481956"
+            },
+            "PushSequence": 276,
+            "RenewSequence": 29,
+            "ReconnectedFrom": 0,
+            "LastRenewal": {
+              "Sequence": 29,
+              "Requested": "2026-10-18T06:46:04.842031486Z",
+              "Confirmed": "2026-10-18T06:46:04.842415702Z"
+            },
+            "Open": {
+              "Sequence": 0,
+              "SupportedFeatures": "////AAAAAAA=",
+              "MetricFlags": "//8AAAAAAAA=",
+              "Flags": 0,
+              "Metadata": {},
+              "CapAuths": [
+                {
+                  "UID": -1,
+                  "GIDs": [],
+                  "Path": "",
+                  "FilesystemName": "ceph-msgr-fresh-5ad0046816a14a2890dfa43b8483b49e",
+                  "RootSquash": false,
+                  "Readable": true,
+                  "Writeable": true
+                }
+              ]
+            },
+            "ReadOnly": false
+          },
+          "ResumesBefore": 0,
+          "ResumesAfter": 0,
+          "BeforeInode": {
+            "Ino": 1099511627817,
+            "SnapID": 18446744073709551614,
+            "Rdev": 0,
+            "Version": 81,
+            "XattrVersion": 0,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 228,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "CTime": {
+              "Seconds": 1792305923,
+              "Nanoseconds": 15951650
+            },
+            "MTime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "ATime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "TimeWarpSeq": 0,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "TruncateSize": 18446744073709551615,
+            "TruncateSeq": 1,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "RFiles": 1,
+            "RSubdirs": 0,
+            "RCTime": {
+              "Seconds": 1792305923,
+              "Nanoseconds": 15951650
+            },
+            "Symlink": "",
+            "DirHash": 0,
+            "DirLayout": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "InlineVersion": 18446744073709551615,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFiles": 0,
+            "BTime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "ChangeAttr": 1,
+            "DirPin": -1,
+            "SnapBTime": {
+              "Seconds": 0,
+              "Nanoseconds": 0
+            },
+            "RSnaps": 0,
+            "Fscrypt": false,
+            "OptionalMetadata": "AAAAAA=="
+          },
+          "AfterInode": {
+            "Ino": 1099511627817,
+            "SnapID": 18446744073709551614,
+            "Rdev": 0,
+            "Version": 96,
+            "XattrVersion": 2,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 281,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "CTime": {
+              "Seconds": 1792305923,
+              "Nanoseconds": 15951650
+            },
+            "MTime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "ATime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "TimeWarpSeq": 0,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "TruncateSize": 18446744073709551615,
+            "TruncateSeq": 1,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "RFiles": 1,
+            "RSubdirs": 0,
+            "RCTime": {
+              "Seconds": 1792305923,
+              "Nanoseconds": 15951650
+            },
+            "Symlink": "",
+            "DirHash": 0,
+            "DirLayout": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "Xattrs": "AQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgBa0ARoFqFKKJDfpDuEg7Se",
+            "InlineVersion": 18446744073709551615,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFiles": 0,
+            "BTime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "ChangeAttr": 1,
+            "DirPin": -1,
+            "SnapBTime": {
+              "Seconds": 0,
+              "Nanoseconds": 0
+            },
+            "RSnaps": 0,
+            "Fscrypt": false,
+            "OptionalMetadata": "AAAAAA=="
+          },
+          "NativeBefore": {
+            "ino": 1099511627817,
+            "size": 0,
+            "version": 1,
+            "mtime": 1792305915,
+            "data_hex": ""
+          },
+          "NativeBeforeSource": "filelock_nonblocking_native_conflict",
+          "NativeAfter": {
+            "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+            "token": "5ad0046816a14a2890dfa43b8483b49e",
+            "request_id": 1792305962691205529,
+            "action": "flock-ex-nb",
+            "target": "go-file",
+            "global_id": 0,
+            "fsid": "c02c20fa-02ff-415e-8249-7315b5c59dba",
+            "fscid": 1,
+            "fs_name": "ceph-msgr-fresh-5ad0046816a14a2890dfa43b8483b49e",
+            "mds_gid": 17873,
+            "mds_endpoint": "172.18.0.10:6800",
+            "mds_nonce": 2065481956,
+            "mds_incarnation": 10,
+            "rank": 0,
+            "identity_checked": true,
+            "map": {
+              "mdsmap_epoch": 14,
+              "refuse_client_session": false,
+              "required_client_features": {},
+              "session_timeout": 60,
+              "session_autoclose": 300
+            },
+            "daemon_mdsmap_epoch": 14,
+            "native": {
+              "action": "flock-ex-nb",
+              "path": "/ceph-msgr-cephfs-5ad0046816a14a2890dfa43b8483b49e/go-file",
+              "native_global_id": 10146,
+              "quota_absent": false,
+              "value_hex": "",
+              "written": 0,
+              "data_hex": "",
+              "flock": {
+                "owner": 9223372038522368104,
+                "errno": 0,
+                "acquired": true,
+                "unlocked": true,
+                "elapsed_ns": 358356,
+                "before": {
+                  "ino": 1099511627817,
+                  "size": 0,
+                  "version": 1,
+                  "mtime": 1792305915,
+                  "data_hex": ""
+                },
+                "after": {
+                  "ino": 1099511627817,
+                  "size": 0,
+                  "version": 1,
+                  "mtime": 1792305915,
+                  "data_hex": ""
+                }
+              }
+            },
+            "native_process": {
+              "Stdout": "eyJhY3Rpb24iOiAiZmxvY2stZXgtbmIiLCAicGF0aCI6ICIvY2VwaC1tc2dyLWNlcGhmcy01YWQwMDQ2ODE2YTE0YTI4OTBkZmE0M2I4NDgzYjQ5ZS9nby1maWxlIiwgIm5hdGl2ZV9nbG9iYWxfaWQiOiAxMDE0NiwgImZsb2NrIjogeyJvd25lciI6IDkyMjMzNzIwMzg1MjIzNjgxMDQsICJlcnJubyI6IDAsICJhY3F1aXJlZCI6IHRydWUsICJ1bmxvY2tlZCI6IHRydWUsICJiZWZvcmUiOiB7ImlubyI6IDEwOTk1MTE2Mjc4MTcsICJzaXplIjogMCwgInZlcnNpb24iOiAxLCAibXRpbWUiOiAxNzkyMzA1OTE1LCAiZGF0YV9oZXgiOiAiIn0sICJlbGFwc2VkX25zIjogMzU4MzU2LCAiYWZ0ZXIiOiB7ImlubyI6IDEwOTk1MTE2Mjc4MTcsICJzaXplIjogMCwgInZlcnNpb24iOiAxLCAibXRpbWUiOiAxNzkyMzA1OTE1LCAiZGF0YV9oZXgiOiAiIn19fQo=",
+              "Stderr": "",
+              "ExitCode": 0,
+              "TimedOut": false,
+              "StdoutTruncated": false,
+              "StderrTruncated": false,
+              "InputWritten": 41,
+              "InputDelivered": 41,
+              "InputEOF": true
+            },
+            "mutation": {
+              "kind": "native-flock-ex-nb",
+              "request_id": 1792305962691205529,
+              "target": "go-file",
+              "state": "applied",
+              "native_global_id": 10146,
+              "global_id": 0,
+              "address": "",
+              "blocklist_until": "",
+              "native_output": "",
+              "error": ""
+            },
+            "complete": true,
+            "error": "",
+            "elapsed_ms": 3239,
+            "observed_utc": "2026-10-18T06:46:05.950393378Z"
+          },
+          "Requests": [
+            {
+              "Name": "pending-flock-open",
+              "Request": {
+                "Op": 770,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  255,
+                  255,
+                  255,
+                  255,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:01.939291063Z",
+              "Admitted": "2026-10-18T06:46:01.939299699Z",
+              "Transaction": 15,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:01.939301512Z",
+                  "Finished": "2026-10-18T06:46:01.939560351Z",
+                  "Reply": {
+                    "Arrival": 270,
+                    "Transaction": 15,
+                    "Op": 770,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAFOAQAAKQAAAAABAAD+/////////wAAAABRAAAAAAAAAAAAAAAAAAAA3T8AAM0/AAABAAAAAAAAAOQAAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAAANr1GoiZ/MA+2rUarMEZzP7atRqswRnMwAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAADa9RqImfzAAAAAAAAAAAAAAAAAAAAAAAAAAAA//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD7atRqswRnMwEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAMmrUavc0OjoAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:46:01.939536506Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-acquire-a",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:01.9395812Z",
+              "Admitted": "2026-10-18T06:46:01.939586851Z",
+              "Transaction": 16,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:01.939588715Z",
+                  "Finished": "2026-10-18T06:46:01.939843265Z",
+                  "Reply": {
+                    "Arrival": 271,
+                    "Transaction": 16,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:46:01.939816835Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-acquire-b-once",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:01.939845289Z",
+              "Admitted": "2026-10-18T06:46:01.939852232Z",
+              "Transaction": 17,
+              "Waits": [
+                {
+                  "Safe": false,
+                  "Started": "2026-10-18T06:46:01.940112102Z",
+                  "Finished": "2026-10-18T06:46:02.690140979Z",
+                  "Error": "context deadline exceeded"
+                },
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:02.690630744Z",
+                  "Finished": "2026-10-18T06:46:02.690660911Z",
+                  "Reply": {
+                    "Arrival": 276,
+                    "Transaction": 17,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:46:02.690632998Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-getattr-barrier",
+              "Request": {
+                "Op": 257,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  85,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:01.939853795Z",
+              "Admitted": "2026-10-18T06:46:01.93985647Z",
+              "Transaction": 18,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:01.939857893Z",
+                  "Finished": "2026-10-18T06:46:01.940101592Z",
+                  "Reply": {
+                    "Arrival": 272,
+                    "Transaction": 18,
+                    "Op": 257,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAGEAQAAKQAAAAABAAD+/////////wAAAABRAAAAAAAAAAIAAAAAAAAA3T8AAM0/AAABAAAAAAAAAOUAAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAAANr1GoiZ/MA+2rUarMEZzP7atRqswRnMwAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAADa9RqImfzAAAAAAAAAAAAAAAAAAAAAAA2AAAAAQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgBa0ARoFqFKKJDfpDuEg7Se//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD7atRqswRnMwEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAMmrUavc0OjoAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:46:01.940083017Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-unlock-a",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  4,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:02.690153162Z",
+              "Admitted": "2026-10-18T06:46:02.690191765Z",
+              "Transaction": 19,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:02.690192476Z",
+                  "Finished": "2026-10-18T06:46:02.690626405Z",
+                  "Reply": {
+                    "Arrival": 275,
+                    "Transaction": 19,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:46:02.690606738Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-query-b",
+              "Request": {
+                "Op": 272,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:02.69067125Z",
+              "Admitted": "2026-10-18T06:46:02.690678223Z",
+              "Transaction": 20,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:02.690680558Z",
+                  "Finished": "2026-10-18T06:46:02.690900513Z",
+                  "Reply": {
+                    "Arrival": 277,
+                    "Transaction": 20,
+                    "Op": 272,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Extra": "AAAAAAAAAAAAAAAAAAAAADEjAAAAAAAAAgBPRwAAAIAAAAAAAAAAAAI=",
+                    "Received": "2026-10-18T06:46:02.690890835Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-unlock-b",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  4,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:02.690907225Z",
+              "Admitted": "2026-10-18T06:46:02.690922334Z",
+              "Transaction": 21,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:02.690922554Z",
+                  "Finished": "2026-10-18T06:46:02.691133312Z",
+                  "Reply": {
+                    "Arrival": 278,
+                    "Transaction": 21,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:46:02.691123894Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-getattr-after",
+              "Request": {
+                "Op": 257,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  85,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:05.991997136Z",
+              "Admitted": "2026-10-18T06:46:05.992013777Z",
+              "Transaction": 22,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:05.992019097Z",
+                  "Finished": "2026-10-18T06:46:05.99261363Z",
+                  "Reply": {
+                    "Arrival": 330,
+                    "Transaction": 22,
+                    "Op": 257,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAGEAQAAKQAAAAABAAD+/////////wAAAABgAAAAAAAAAAIAAAAAAAAA3T8AAM0/AAABAAAAAAAAABkBAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAAANr1GoiZ/MA+2rUarMEZzP7atRqswRnMwAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAADa9RqImfzAAAAAAAAAAAAAAAAAAAAAAA2AAAAAQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgBa0ARoFqFKKJDfpDuEg7Se//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD7atRqswRnMwEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAMmrUavc0OjoAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:46:05.992591989Z"
+                  }
+                }
+              ]
+            }
+          ],
+          "WaitTimeoutMillis": 750,
+          "CleanupErrors": [],
+          "CleanupComplete": true
+        },
+        "interrupt_flock": {
+          "Source": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "Observation": "same-session ordered barrier, local wait expiry, explicit interrupt and original acquire replies; no direct native wait-queue observation",
+          "Ino": 1099511627817,
+          "GlobalID": 9009,
+          "BeforeSession": {
+            "State": 2,
+            "Generation": 1,
+            "ConnectionGeneration": 1,
+            "GlobalID": 9009,
+            "Target": {
+              "FilesystemID": 1,
+              "Rank": 0,
+              "Address": "v2:172.18.0.10:6800/2065481956"
+            },
+            "PushSequence": 276,
+            "RenewSequence": 29,
+            "ReconnectedFrom": 0,
+            "LastRenewal": {
+              "Sequence": 29,
+              "Requested": "2026-10-18T06:46:04.842031486Z",
+              "Confirmed": "2026-10-18T06:46:04.842415702Z"
+            },
+            "Open": {
+              "Sequence": 0,
+              "SupportedFeatures": "////AAAAAAA=",
+              "MetricFlags": "//8AAAAAAAA=",
+              "Flags": 0,
+              "Metadata": {},
+              "CapAuths": [
+                {
+                  "UID": -1,
+                  "GIDs": [],
+                  "Path": "",
+                  "FilesystemName": "ceph-msgr-fresh-5ad0046816a14a2890dfa43b8483b49e",
+                  "RootSquash": false,
+                  "Readable": true,
+                  "Writeable": true
+                }
+              ]
+            },
+            "ReadOnly": false
+          },
+          "AfterSession": {
+            "State": 2,
+            "Generation": 1,
+            "ConnectionGeneration": 1,
+            "GlobalID": 9009,
+            "Target": {
+              "FilesystemID": 1,
+              "Rank": 0,
+              "Address": "v2:172.18.0.10:6800/2065481956"
+            },
+            "PushSequence": 327,
+            "RenewSequence": 31,
+            "ReconnectedFrom": 0,
+            "LastRenewal": {
+              "Sequence": 31,
+              "Requested": "2026-10-18T06:46:08.841974613Z",
+              "Confirmed": "2026-10-18T06:46:08.842343319Z"
+            },
+            "Open": {
+              "Sequence": 0,
+              "SupportedFeatures": "////AAAAAAA=",
+              "MetricFlags": "//8AAAAAAAA=",
+              "Flags": 0,
+              "Metadata": {},
+              "CapAuths": [
+                {
+                  "UID": -1,
+                  "GIDs": [],
+                  "Path": "",
+                  "FilesystemName": "ceph-msgr-fresh-5ad0046816a14a2890dfa43b8483b49e",
+                  "RootSquash": false,
+                  "Readable": true,
+                  "Writeable": true
+                }
+              ]
+            },
+            "ReadOnly": false
+          },
+          "ResumesBefore": 0,
+          "ResumesAfter": 0,
+          "BeforeInode": {
+            "Ino": 1099511627817,
+            "SnapID": 18446744073709551614,
+            "Rdev": 0,
+            "Version": 97,
+            "XattrVersion": 0,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 282,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "CTime": {
+              "Seconds": 1792305923,
+              "Nanoseconds": 15951650
+            },
+            "MTime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "ATime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "TimeWarpSeq": 0,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "TruncateSize": 18446744073709551615,
+            "TruncateSeq": 1,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "RFiles": 1,
+            "RSubdirs": 0,
+            "RCTime": {
+              "Seconds": 1792305923,
+              "Nanoseconds": 15951650
+            },
+            "Symlink": "",
+            "DirHash": 0,
+            "DirLayout": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "InlineVersion": 18446744073709551615,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFiles": 0,
+            "BTime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "ChangeAttr": 1,
+            "DirPin": -1,
+            "SnapBTime": {
+              "Seconds": 0,
+              "Nanoseconds": 0
+            },
+            "RSnaps": 0,
+            "Fscrypt": false,
+            "OptionalMetadata": "AAAAAA=="
+          },
+          "AfterInode": {
+            "Ino": 1099511627817,
+            "SnapID": 18446744073709551614,
+            "Rdev": 0,
+            "Version": 112,
+            "XattrVersion": 2,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 335,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "CTime": {
+              "Seconds": 1792305923,
+              "Nanoseconds": 15951650
+            },
+            "MTime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "ATime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "TimeWarpSeq": 0,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "TruncateSize": 18446744073709551615,
+            "TruncateSeq": 1,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "RFiles": 1,
+            "RSubdirs": 0,
+            "RCTime": {
+              "Seconds": 1792305923,
+              "Nanoseconds": 15951650
+            },
+            "Symlink": "",
+            "DirHash": 0,
+            "DirLayout": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "Xattrs": "AQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgBa0ARoFqFKKJDfpDuEg7Se",
+            "InlineVersion": 18446744073709551615,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFiles": 0,
+            "BTime": {
+              "Seconds": 1792305915,
+              "Nanoseconds": 862389427
+            },
+            "ChangeAttr": 1,
+            "DirPin": -1,
+            "SnapBTime": {
+              "Seconds": 0,
+              "Nanoseconds": 0
+            },
+            "RSnaps": 0,
+            "Fscrypt": false,
+            "OptionalMetadata": "AAAAAA=="
+          },
+          "NativeBefore": {
+            "ino": 1099511627817,
+            "size": 0,
+            "version": 1,
+            "mtime": 1792305915,
+            "data_hex": ""
+          },
+          "NativeBeforeSource": "filelock_nonblocking_native_conflict",
+          "NativeAfter": {
+            "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+            "token": "5ad0046816a14a2890dfa43b8483b49e",
+            "request_id": 1792305966745817324,
+            "action": "flock-ex-nb",
+            "target": "go-file",
+            "global_id": 0,
+            "fsid": "c02c20fa-02ff-415e-8249-7315b5c59dba",
+            "fscid": 1,
+            "fs_name": "ceph-msgr-fresh-5ad0046816a14a2890dfa43b8483b49e",
+            "mds_gid": 17873,
+            "mds_endpoint": "172.18.0.10:6800",
+            "mds_nonce": 2065481956,
+            "mds_incarnation": 10,
+            "rank": 0,
+            "identity_checked": true,
+            "map": {
+              "mdsmap_epoch": 14,
+              "refuse_client_session": false,
+              "required_client_features": {},
+              "session_timeout": 60,
+              "session_autoclose": 300
+            },
+            "daemon_mdsmap_epoch": 14,
+            "native": {
+              "action": "flock-ex-nb",
+              "path": "/ceph-msgr-cephfs-5ad0046816a14a2890dfa43b8483b49e/go-file",
+              "native_global_id": 10224,
+              "quota_absent": false,
+              "value_hex": "",
+              "written": 0,
+              "data_hex": "",
+              "flock": {
+                "owner": 9223372038522368104,
+                "errno": 0,
+                "acquired": true,
+                "unlocked": true,
+                "elapsed_ns": 305227,
+                "before": {
+                  "ino": 1099511627817,
+                  "size": 0,
+                  "version": 1,
+                  "mtime": 1792305915,
+                  "data_hex": ""
+                },
+                "after": {
+                  "ino": 1099511627817,
+                  "size": 0,
+                  "version": 1,
+                  "mtime": 1792305915,
+                  "data_hex": ""
+                }
+              }
+            },
+            "native_process": {
+              "Stdout": "eyJhY3Rpb24iOiAiZmxvY2stZXgtbmIiLCAicGF0aCI6ICIvY2VwaC1tc2dyLWNlcGhmcy01YWQwMDQ2ODE2YTE0YTI4OTBkZmE0M2I4NDgzYjQ5ZS9nby1maWxlIiwgIm5hdGl2ZV9nbG9iYWxfaWQiOiAxMDIyNCwgImZsb2NrIjogeyJvd25lciI6IDkyMjMzNzIwMzg1MjIzNjgxMDQsICJlcnJubyI6IDAsICJhY3F1aXJlZCI6IHRydWUsICJ1bmxvY2tlZCI6IHRydWUsICJiZWZvcmUiOiB7ImlubyI6IDEwOTk1MTE2Mjc4MTcsICJzaXplIjogMCwgInZlcnNpb24iOiAxLCAibXRpbWUiOiAxNzkyMzA1OTE1LCAiZGF0YV9oZXgiOiAiIn0sICJlbGFwc2VkX25zIjogMzA1MjI3LCAiYWZ0ZXIiOiB7ImlubyI6IDEwOTk1MTE2Mjc4MTcsICJzaXplIjogMCwgInZlcnNpb24iOiAxLCAibXRpbWUiOiAxNzkyMzA1OTE1LCAiZGF0YV9oZXgiOiAiIn19fQo=",
+              "Stderr": "",
+              "ExitCode": 0,
+              "TimedOut": false,
+              "StdoutTruncated": false,
+              "StderrTruncated": false,
+              "InputWritten": 41,
+              "InputDelivered": 41,
+              "InputEOF": true
+            },
+            "mutation": {
+              "kind": "native-flock-ex-nb",
+              "request_id": 1792305966745817324,
+              "target": "go-file",
+              "state": "applied",
+              "native_global_id": 10224,
+              "global_id": 0,
+              "address": "",
+              "blocklist_until": "",
+              "native_output": "",
+              "error": ""
+            },
+            "complete": true,
+            "error": "",
+            "elapsed_ms": 3218,
+            "observed_utc": "2026-10-18T06:46:10.029690279Z"
+          },
+          "Requests": [
+            {
+              "Name": "interrupt-flock-open",
+              "Request": {
+                "Op": 770,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  255,
+                  255,
+                  255,
+                  255,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:05.99287864Z",
+              "Admitted": "2026-10-18T06:46:05.992887787Z",
+              "Transaction": 23,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:05.992890933Z",
+                  "Finished": "2026-10-18T06:46:05.993169639Z",
+                  "Reply": {
+                    "Arrival": 331,
+                    "Transaction": 23,
+                    "Op": 770,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAFOAQAAKQAAAAABAAD+/////////wAAAABhAAAAAAAAAAAAAAAAAAAA3T8AAM0/AAABAAAAAAAAABoBAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAAANr1GoiZ/MA+2rUarMEZzP7atRqswRnMwAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAADa9RqImfzAAAAAAAAAAAAAAAAAAAAAAAAAAAA//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD7atRqswRnMwEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAMmrUavc0OjoAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:46:05.993149211Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-acquire-a",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:05.993189907Z",
+              "Admitted": "2026-10-18T06:46:05.993194326Z",
+              "Transaction": 24,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:05.993195698Z",
+                  "Finished": "2026-10-18T06:46:05.993417778Z",
+                  "Reply": {
+                    "Arrival": 332,
+                    "Transaction": 24,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:46:05.993412878Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-acquire-b-once",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:05.993419411Z",
+              "Admitted": "2026-10-18T06:46:05.993422446Z",
+              "Transaction": 25,
+              "Waits": [
+                {
+                  "Safe": false,
+                  "Started": "2026-10-18T06:46:05.993708506Z",
+                  "Finished": "2026-10-18T06:46:06.744657264Z",
+                  "Error": "context deadline exceeded"
+                },
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:06.745251005Z",
+                  "Finished": "2026-10-18T06:46:06.745251666Z",
+                  "Reply": {
+                    "Arrival": 337,
+                    "Transaction": 25,
+                    "Op": 4361,
+                    "Result": -4,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:46:06.745197774Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-getattr-barrier",
+              "Request": {
+                "Op": 257,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  85,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:05.993424089Z",
+              "Admitted": "2026-10-18T06:46:05.993425893Z",
+              "Transaction": 26,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:05.993427366Z",
+                  "Finished": "2026-10-18T06:46:05.993700321Z",
+                  "Reply": {
+                    "Arrival": 333,
+                    "Transaction": 26,
+                    "Op": 257,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAGEAQAAKQAAAAABAAD+/////////wAAAABhAAAAAAAAAAIAAAAAAAAA3T8AAM0/AAABAAAAAAAAABsBAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAAANr1GoiZ/MA+2rUarMEZzP7atRqswRnMwAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAADa9RqImfzAAAAAAAAAAAAAAAAAAAAAAA2AAAAAQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgBa0ARoFqFKKJDfpDuEg7Se//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD7atRqswRnMwEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAMmrUavc0OjoAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:46:05.993681505Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-interrupt-b-once",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  4,
+                  4,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:06.744661853Z",
+              "Admitted": "2026-10-18T06:46:06.744685988Z",
+              "Transaction": 27,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:06.744691479Z",
+                  "Finished": "2026-10-18T06:46:06.745243361Z",
+                  "Reply": {
+                    "Arrival": 336,
+                    "Transaction": 27,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:46:06.745181454Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-query-a-still-held",
+              "Request": {
+                "Op": 272,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:06.745259341Z",
+              "Admitted": "2026-10-18T06:46:06.74526948Z",
+              "Transaction": 28,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:06.745270832Z",
+                  "Finished": "2026-10-18T06:46:06.745528459Z",
+                  "Reply": {
+                    "Arrival": 338,
+                    "Transaction": 28,
+                    "Op": 272,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Extra": "AAAAAAAAAAAAAAAAAAAAADEjAAAAAAAAAQBPRwAAAIAAAAAAAAAAAAI=",
+                    "Received": "2026-10-18T06:46:06.745508942Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-unlock-a",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  4,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:06.745532015Z",
+              "Admitted": "2026-10-18T06:46:06.745535803Z",
+              "Transaction": 29,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:06.745536013Z",
+                  "Finished": "2026-10-18T06:46:06.7457463Z",
+                  "Reply": {
+                    "Arrival": 339,
+                    "Transaction": 29,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:46:06.745732133Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-getattr-after",
+              "Request": {
+                "Op": 257,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  85,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:46:10.046970515Z",
+              "Admitted": "2026-10-18T06:46:10.046981275Z",
+              "Transaction": 30,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:46:10.046984682Z",
+                  "Finished": "2026-10-18T06:46:10.047457554Z",
+                  "Reply": {
+                    "Arrival": 391,
+                    "Transaction": 30,
+                    "Op": 257,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAGEAQAAKQAAAAABAAD+/////////wAAAABwAAAAAAAAAAIAAAAAAAAA3T8AAM0/AAABAAAAAAAAAE8BAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAAANr1GoiZ/MA+2rUarMEZzP7atRqswRnMwAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAADa9RqImfzAAAAAAAAAAAAAAAAAAAAAAA2AAAAAQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgBa0ARoFqFKKJDfpDuEg7Se//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD7atRqswRnMwEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAMmrUavc0OjoAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:46:10.047427167Z"
+                  }
+                }
+              ]
+            }
+          ],
+          "WaitTimeoutMillis": 750,
+          "CleanupErrors": [],
+          "CleanupComplete": true
+        }
+      }
+    },
+    "secure-ipv6": {
+      "directory": "<path>",
+      "run": {
+        "profile": "secure-ipv6",
+        "start": "2026-10-18T06:40:45.639773+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:46:57.608549+00:00"
+      },
+      "manifest": {
+        "architecture": "amd64",
+        "bootstrap": "public-api",
+        "cephfs_mutations": "owned Go, recovery, native and push-native LibCephFS identities, three directories with their files, one user xattr and two native writes removed through Go requests and verified natively; one native rename, one snapshot and one quota created and removed natively; the owned daemon's mds_min_caps_per_client and mds_max_caps_per_client lowered and restored, and one cache drop; one owned client eviction and one owned rank-0 MDS restart whose blocklist entries are removed and verified during cleanup",
+        "connection_mode": "secure",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "fsid": "7fd0c7bf-acfc-40f9-b957-ccadb8c18586",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "ip_family": "6",
+        "key_type": "aes256k",
+        "mds_cephfs": true,
+        "mds_cephfs_completion": false,
+        "mds_cephfs_data": false,
+        "mds_cephfs_ranks": false,
+        "mds_commands": false,
+        "mds_fresh": true,
+        "mds_sessions": false,
+        "mon_ping": false,
+        "native_mapext_range_oracle": false,
+        "native_sparse_read_oracle": false,
+        "native_u64_xattr_oracle": false,
+        "native_writesame_oracle": false,
+        "osd": "1",
+        "osd_profile": "legacy-v6",
+        "osd_replicas": "1",
+        "osd_store": "memstore",
+        "provider": "github.com/JSYoo5B/ceph-testcontainers-go",
+        "provider_effective_module": {
+          "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+          "version": "v0.3.0",
+          "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+        },
+        "provider_identity_status": "module",
+        "provider_original_module": {
+          "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+          "version": "v0.3.0",
+          "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+        },
+        "provider_version": "v0.3.0",
+        "rbd_base": false,
+        "runtime": "container",
+        "service_cipher": "aes256k",
+        "topology": "3 MON, 0/2 MGR, one OSD and one active rank 0 MDS with an owned filesystem plus a native oracle client"
+      },
+      "selected_leaf_passes": 25,
+      "selected_top_level_passes": 3,
+      "skips": 0,
+      "leaf_seconds": {
+        "TestCephMDSCephFSPushIntegration": 73.87,
+        "TestCephMDSCephFSPushIntegration/open_push_sessions": 5.91,
+        "TestCephMDSCephFSPushIntegration/dentry_lease_revoke_released": 4.7,
+        "TestCephMDSCephFSPushIntegration/snapshot_realm_split_push": 3.7,
+        "TestCephMDSCephFSPushIntegration/quota_push_on_native_setxattr": 2.8,
+        "TestCephMDSCephFSPushIntegration/recall_state_released_to_target": 17.82,
+        "TestCephMDSCephFSPushIntegration/flushmsg_acknowledged_after_cache_drop": 12.4,
+        "TestCephMDSCephFSPushIntegration/cleanup_snapshot_quota_namespace_release_close": 26.53,
+        "TestCephMDSCephFSRecoveryIntegration": 72.81,
+        "TestCephMDSCephFSRecoveryIntegration/open_recovery_session": 2.9,
+        "TestCephMDSCephFSRecoveryIntegration/journal_flush_unsafe_to_safe": 15.85,
+        "TestCephMDSCephFSRecoveryIntegration/eviction_fences_shared_nonce": 13.42,
+        "TestCephMDSCephFSRecoveryIntegration/mds_restart_reconnect_replay": 29.23,
+        "TestCephMDSCephFSRecoveryIntegration/cleanup_unlink_release_close": 11.41,
+        "TestCephMDSCephFSIntegration": 105.97,
+        "TestCephMDSCephFSIntegration/open_cephfs_session": 3.0,
+        "TestCephMDSCephFSIntegration/mkdir_matches_native_stat": 2.8,
+        "TestCephMDSCephFSIntegration/create_reports_created_inode": 5.45,
+        "TestCephMDSCephFSIntegration/setxattr_matches_native_getxattr": 5.0,
+        "TestCephMDSCephFSIntegration/readdir_matches_native_listing": 5.4,
+        "TestCephMDSCephFSIntegration/statfs_matches_libcephfs": 2.7,
+        "TestCephMDSCephFSIntegration/lookup_existing_and_missing": 5.4,
+        "TestCephMDSCephFSIntegration/filelock_nonblocking_native_conflict": 13.31,
+        "TestCephMDSCephFSIntegration/filelock_local_wait_timeout_then_same_call_grant": 3.55,
+        "TestCephMDSCephFSIntegration/filelock_explicit_interrupt_returns_original_eintr": 3.45,
+        "TestCephMDSCephFSIntegration/revoke_acknowledged_before_native_write": 10.4,
+        "TestCephMDSCephFSIntegration/messenger_resume_keeps_session": 2.9,
+        "TestCephMDSCephFSIntegration/cleanup_unlink_release_close": 42.58
+      },
+      "cleanup_audit": {
+        "containers": {
+          "control": {
+            "id": "c12fd54cc8c00ce6da88c42b9392f8c4d505d5536e092f8896aba80fe74c9fd4",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-c69e80f0b45253b35802d554ac7f463b-0": {
+            "id": "4b55cfbbe314648c6b7471d10f741622f33b15568a43aa27511faef5478b108d",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "529e70b98354f0be6767f6fa6d7ccdd32bc9047c7df3721f54f5b0c84e70d2f1",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "b9c26400aae856e14c6c3b0d5c500d3989b2e32106e502a78c0f2c7421e1e029",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "73c2f2f34675039cab3d91a5649e3f06004f961756a9cf885833b83d1ce62c2b",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "7b3a3d1cb2e2c96519bced300f714fa37ebf86430aac27de09c3363d9ca9e3fe",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "e6450f0dbb8fe8d7c8833a33f13e9a6988aca571d49c243d23f0f6721fcffc3b",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "40134778f6ce20f003a264cbbcdc95293d5f4967171664e80cfa532c54b9bc72",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "eb7bda363a8ef732d28575b8312fa030c9f2a737735fc299abe54f4af5dde6b8",
+            "exists": false
+          }
+        },
+        "network": "bcdbee2f-44e6-4576-a2cf-fcc1fee93198",
+        "network_exists": false
+      },
+      "scoped_cleanup_verified": true,
+      "fresh_cleanup_verified": true,
+      "nonblocking_native_probes": [
+        {
+          "Action": "flock-ex-nb",
+          "GlobalID": 9771,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 11,
+            "acquired": false,
+            "unlocked": false,
+            "elapsed_ns": 112223,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            }
+          }
+        },
+        {
+          "Action": "flock-sh-nb",
+          "GlobalID": 19706,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 11,
+            "acquired": false,
+            "unlocked": false,
+            "elapsed_ns": 158155,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            }
+          }
+        },
+        {
+          "Action": "flock-sh-nb",
+          "GlobalID": 19789,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 0,
+            "acquired": true,
+            "unlocked": true,
+            "elapsed_ns": 232636,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            }
+          }
+        },
+        {
+          "Action": "flock-ex-nb",
+          "GlobalID": 10005,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 11,
+            "acquired": false,
+            "unlocked": false,
+            "elapsed_ns": 137013,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            }
+          }
+        },
+        {
+          "Action": "flock-ex-nb",
+          "GlobalID": 19940,
+          "Probe": {
+            "owner": 9223372038522368104,
+            "errno": 0,
+            "acquired": true,
+            "unlocked": true,
+            "elapsed_ns": 195525,
+            "before": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            },
+            "after": {
+              "ino": 1099511627817,
+              "size": 0,
+              "version": 1,
+              "mtime": 1792305878,
+              "data_hex": ""
+            }
+          }
+        }
+      ],
+      "nonblocking_inode_before": {
+        "Ino": 1099511627817,
+        "SnapID": 18446744073709551614,
+        "Rdev": 0,
+        "Version": 13,
+        "XattrVersion": 0,
+        "Cap": {
+          "Caps": 16349,
+          "Wanted": 16333,
+          "CapID": 1,
+          "Seq": 7,
+          "MSeq": 0,
+          "Realm": 1,
+          "Flags": 1
+        },
+        "Layout": {
+          "StripeUnit": 4194304,
+          "StripeCount": 1,
+          "ObjectSize": 4194304,
+          "CASHash": 0,
+          "ObjectStripeUnit": 0,
+          "Unused": 0,
+          "Pool": 4,
+          "PoolNamespace": ""
+        },
+        "CTime": {
+          "Seconds": 1792305883,
+          "Nanoseconds": 784803414
+        },
+        "MTime": {
+          "Seconds": 1792305878,
+          "Nanoseconds": 338353095
+        },
+        "ATime": {
+          "Seconds": 1792305878,
+          "Nanoseconds": 338353095
+        },
+        "TimeWarpSeq": 0,
+        "Size": 0,
+        "MaxSize": 0,
+        "TruncateSize": 18446744073709551615,
+        "TruncateSeq": 1,
+        "Mode": 33188,
+        "UID": 0,
+        "GID": 0,
+        "NLink": 1,
+        "Files": 0,
+        "Subdirs": 0,
+        "RBytes": 0,
+        "RFiles": 1,
+        "RSubdirs": 0,
+        "RCTime": {
+          "Seconds": 1792305883,
+          "Nanoseconds": 784803414
+        },
+        "Symlink": "",
+        "DirHash": 0,
+        "DirLayout": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "InlineVersion": 18446744073709551615,
+        "QuotaMaxBytes": 0,
+        "QuotaMaxFiles": 0,
+        "BTime": {
+          "Seconds": 1792305878,
+          "Nanoseconds": 338353095
+        },
+        "ChangeAttr": 1,
+        "DirPin": -1,
+        "SnapBTime": {
+          "Seconds": 0,
+          "Nanoseconds": 0
+        },
+        "RSnaps": 0,
+        "Fscrypt": false,
+        "OptionalMetadata": "AAAAAA=="
+      },
+      "nonblocking_inode_after": {
+        "Ino": 1099511627817,
+        "SnapID": 18446744073709551614,
+        "Rdev": 0,
+        "Version": 80,
+        "XattrVersion": 2,
+        "Cap": {
+          "Caps": 16349,
+          "Wanted": 16333,
+          "CapID": 1,
+          "Seq": 243,
+          "MSeq": 0,
+          "Realm": 1,
+          "Flags": 1
+        },
+        "Layout": {
+          "StripeUnit": 4194304,
+          "StripeCount": 1,
+          "ObjectSize": 4194304,
+          "CASHash": 0,
+          "ObjectStripeUnit": 0,
+          "Unused": 0,
+          "Pool": 4,
+          "PoolNamespace": ""
+        },
+        "CTime": {
+          "Seconds": 1792305883,
+          "Nanoseconds": 784803414
+        },
+        "MTime": {
+          "Seconds": 1792305878,
+          "Nanoseconds": 338353095
+        },
+        "ATime": {
+          "Seconds": 1792305878,
+          "Nanoseconds": 338353095
+        },
+        "TimeWarpSeq": 0,
+        "Size": 0,
+        "MaxSize": 4194304,
+        "TruncateSize": 18446744073709551615,
+        "TruncateSeq": 1,
+        "Mode": 33188,
+        "UID": 0,
+        "GID": 0,
+        "NLink": 1,
+        "Files": 0,
+        "Subdirs": 0,
+        "RBytes": 0,
+        "RFiles": 1,
+        "RSubdirs": 0,
+        "RCTime": {
+          "Seconds": 1792305883,
+          "Nanoseconds": 784803414
+        },
+        "Symlink": "",
+        "DirHash": 0,
+        "DirLayout": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "Xattrs": "AQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgDGnoDwtFJTs1gC1VSsf0Y7",
+        "InlineVersion": 18446744073709551615,
+        "QuotaMaxBytes": 0,
+        "QuotaMaxFiles": 0,
+        "BTime": {
+          "Seconds": 1792305878,
+          "Nanoseconds": 338353095
+        },
+        "ChangeAttr": 1,
+        "DirPin": -1,
+        "SnapBTime": {
+          "Seconds": 0,
+          "Nanoseconds": 0
+        },
+        "RSnaps": 0,
+        "Fscrypt": false,
+        "OptionalMetadata": "AAAAAA=="
+      },
+      "completion_facts": {
+        "pending_flock": {
+          "Source": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "Observation": "same-session ordered requests and local wait expiry; no direct native wait-queue observation",
+          "Ino": 1099511627817,
+          "GlobalID": 9021,
+          "BeforeSession": {
+            "State": 2,
+            "Generation": 1,
+            "ConnectionGeneration": 1,
+            "GlobalID": 9021,
+            "Target": {
+              "FilesystemID": 1,
+              "Rank": 0,
+              "Address": "v2:[fdf1:f2e6:6e7f::a]:6800/1888409153"
+            },
+            "PushSequence": 241,
+            "RenewSequence": 22,
+            "ReconnectedFrom": 0,
+            "LastRenewal": {
+              "Sequence": 22,
+              "Requested": "2026-10-18T06:45:14.535739935Z",
+              "Confirmed": "2026-10-18T06:45:14.536068633Z"
+            },
+            "Open": {
+              "Sequence": 0,
+              "SupportedFeatures": "////AAAAAAA=",
+              "MetricFlags": "//8AAAAAAAA=",
+              "Flags": 0,
+              "Metadata": {},
+              "CapAuths": [
+                {
+                  "UID": -1,
+                  "GIDs": [],
+                  "Path": "",
+                  "FilesystemName": "ceph-msgr-fresh-c69e80f0b45253b35802d554ac7f463b",
+                  "RootSquash": false,
+                  "Readable": true,
+                  "Writeable": true
+                }
+              ]
+            },
+            "ReadOnly": false
+          },
+          "AfterSession": {
+            "State": 2,
+            "Generation": 1,
+            "ConnectionGeneration": 1,
+            "GlobalID": 9021,
+            "Target": {
+              "FilesystemID": 1,
+              "Rank": 0,
+              "Address": "v2:[fdf1:f2e6:6e7f::a]:6800/1888409153"
+            },
+            "PushSequence": 291,
+            "RenewSequence": 24,
+            "ReconnectedFrom": 0,
+            "LastRenewal": {
+              "Sequence": 24,
+              "Requested": "2026-10-18T06:45:18.535374589Z",
+              "Confirmed": "2026-10-18T06:45:18.535648307Z"
+            },
+            "Open": {
+              "Sequence": 0,
+              "SupportedFeatures": "////AAAAAAA=",
+              "MetricFlags": "//8AAAAAAAA=",
+              "Flags": 0,
+              "Metadata": {},
+              "CapAuths": [
+                {
+                  "UID": -1,
+                  "GIDs": [],
+                  "Path": "",
+                  "FilesystemName": "ceph-msgr-fresh-c69e80f0b45253b35802d554ac7f463b",
+                  "RootSquash": false,
+                  "Readable": true,
+                  "Writeable": true
+                }
+              ]
+            },
+            "ReadOnly": false
+          },
+          "ResumesBefore": 0,
+          "ResumesAfter": 0,
+          "BeforeInode": {
+            "Ino": 1099511627817,
+            "SnapID": 18446744073709551614,
+            "Rdev": 0,
+            "Version": 81,
+            "XattrVersion": 0,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 244,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "CTime": {
+              "Seconds": 1792305883,
+              "Nanoseconds": 784803414
+            },
+            "MTime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "ATime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "TimeWarpSeq": 0,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "TruncateSize": 18446744073709551615,
+            "TruncateSeq": 1,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "RFiles": 1,
+            "RSubdirs": 0,
+            "RCTime": {
+              "Seconds": 1792305883,
+              "Nanoseconds": 784803414
+            },
+            "Symlink": "",
+            "DirHash": 0,
+            "DirLayout": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "InlineVersion": 18446744073709551615,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFiles": 0,
+            "BTime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "ChangeAttr": 1,
+            "DirPin": -1,
+            "SnapBTime": {
+              "Seconds": 0,
+              "Nanoseconds": 0
+            },
+            "RSnaps": 0,
+            "Fscrypt": false,
+            "OptionalMetadata": "AAAAAA=="
+          },
+          "AfterInode": {
+            "Ino": 1099511627817,
+            "SnapID": 18446744073709551614,
+            "Rdev": 0,
+            "Version": 96,
+            "XattrVersion": 2,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 296,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "CTime": {
+              "Seconds": 1792305883,
+              "Nanoseconds": 784803414
+            },
+            "MTime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "ATime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "TimeWarpSeq": 0,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "TruncateSize": 18446744073709551615,
+            "TruncateSeq": 1,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "RFiles": 1,
+            "RSubdirs": 0,
+            "RCTime": {
+              "Seconds": 1792305883,
+              "Nanoseconds": 784803414
+            },
+            "Symlink": "",
+            "DirHash": 0,
+            "DirLayout": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "Xattrs": "AQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgDGnoDwtFJTs1gC1VSsf0Y7",
+            "InlineVersion": 18446744073709551615,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFiles": 0,
+            "BTime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "ChangeAttr": 1,
+            "DirPin": -1,
+            "SnapBTime": {
+              "Seconds": 0,
+              "Nanoseconds": 0
+            },
+            "RSnaps": 0,
+            "Fscrypt": false,
+            "OptionalMetadata": "AAAAAA=="
+          },
+          "NativeBefore": {
+            "ino": 1099511627817,
+            "size": 0,
+            "version": 1,
+            "mtime": 1792305878,
+            "data_hex": ""
+          },
+          "NativeBeforeSource": "filelock_nonblocking_native_conflict",
+          "NativeAfter": {
+            "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+            "token": "c69e80f0b45253b35802d554ac7f463b",
+            "request_id": 1792305916354052319,
+            "action": "flock-ex-nb",
+            "target": "go-file",
+            "global_id": 0,
+            "fsid": "7fd0c7bf-acfc-40f9-b957-ccadb8c18586",
+            "fscid": 1,
+            "fs_name": "ceph-msgr-fresh-c69e80f0b45253b35802d554ac7f463b",
+            "mds_gid": 8010,
+            "mds_endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+            "mds_nonce": 1888409153,
+            "mds_incarnation": 10,
+            "rank": 0,
+            "identity_checked": true,
+            "map": {
+              "mdsmap_epoch": 14,
+              "refuse_client_session": false,
+              "required_client_features": {},
+              "session_timeout": 60,
+              "session_autoclose": 300
+            },
+            "daemon_mdsmap_epoch": 14,
+            "native": {
+              "action": "flock-ex-nb",
+              "path": "/ceph-msgr-cephfs-c69e80f0b45253b35802d554ac7f463b/go-file",
+              "native_global_id": 20023,
+              "quota_absent": false,
+              "value_hex": "",
+              "written": 0,
+              "data_hex": "",
+              "flock": {
+                "owner": 9223372038522368104,
+                "errno": 0,
+                "acquired": true,
+                "unlocked": true,
+                "elapsed_ns": 181584,
+                "before": {
+                  "ino": 1099511627817,
+                  "size": 0,
+                  "version": 1,
+                  "mtime": 1792305878,
+                  "data_hex": ""
+                },
+                "after": {
+                  "ino": 1099511627817,
+                  "size": 0,
+                  "version": 1,
+                  "mtime": 1792305878,
+                  "data_hex": ""
+                }
+              }
+            },
+            "native_process": {
+              "Stdout": "eyJhY3Rpb24iOiAiZmxvY2stZXgtbmIiLCAicGF0aCI6ICIvY2VwaC1tc2dyLWNlcGhmcy1jNjllODBmMGI0NTI1M2IzNTgwMmQ1NTRhYzdmNDYzYi9nby1maWxlIiwgIm5hdGl2ZV9nbG9iYWxfaWQiOiAyMDAyMywgImZsb2NrIjogeyJvd25lciI6IDkyMjMzNzIwMzg1MjIzNjgxMDQsICJlcnJubyI6IDAsICJhY3F1aXJlZCI6IHRydWUsICJ1bmxvY2tlZCI6IHRydWUsICJiZWZvcmUiOiB7ImlubyI6IDEwOTk1MTE2Mjc4MTcsICJzaXplIjogMCwgInZlcnNpb24iOiAxLCAibXRpbWUiOiAxNzkyMzA1ODc4LCAiZGF0YV9oZXgiOiAiIn0sICJlbGFwc2VkX25zIjogMTgxNTg0LCAiYWZ0ZXIiOiB7ImlubyI6IDEwOTk1MTE2Mjc4MTcsICJzaXplIjogMCwgInZlcnNpb24iOiAxLCAibXRpbWUiOiAxNzkyMzA1ODc4LCAiZGF0YV9oZXgiOiAiIn19fQo=",
+              "Stderr": "",
+              "ExitCode": 0,
+              "TimedOut": false,
+              "StdoutTruncated": false,
+              "StderrTruncated": false,
+              "InputWritten": 61,
+              "InputDelivered": 61,
+              "InputEOF": true
+            },
+            "mutation": {
+              "kind": "native-flock-ex-nb",
+              "request_id": 1792305916354052319,
+              "target": "go-file",
+              "state": "applied",
+              "native_global_id": 20023,
+              "global_id": 0,
+              "address": "",
+              "blocklist_until": "",
+              "native_output": "",
+              "error": ""
+            },
+            "complete": true,
+            "error": "",
+            "elapsed_ms": 2638,
+            "observed_utc": "2026-10-18T06:45:19.070764587Z"
+          },
+          "Requests": [
+            {
+              "Name": "pending-flock-open",
+              "Request": {
+                "Op": 770,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  255,
+                  255,
+                  255,
+                  255,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:15.601284484Z",
+              "Admitted": "2026-10-18T06:45:15.601290084Z",
+              "Transaction": 15,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:15.601291044Z",
+                  "Finished": "2026-10-18T06:45:15.601557541Z",
+                  "Reply": {
+                    "Arrival": 281,
+                    "Transaction": 15,
+                    "Op": 770,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAFOAQAAKQAAAAABAAD+/////////wAAAABRAAAAAAAAAAAAAAAAAAAA3T8AAM0/AAABAAAAAAAAAPQAAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAANtq1GpWJscu1mrUasfbKhTWatRqx9sqFAAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAADbatRqVibHLgAAAAAAAAAAAAAAAAAAAAAAAAAA//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADWatRqx9sqFAEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAL2rUavSC7yIAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:45:15.6015172Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-acquire-a",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:15.601581242Z",
+              "Admitted": "2026-10-18T06:45:15.601587522Z",
+              "Transaction": 16,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:15.601588902Z",
+                  "Finished": "2026-10-18T06:45:15.601781917Z",
+                  "Reply": {
+                    "Arrival": 282,
+                    "Transaction": 16,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:45:15.601752856Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-acquire-b-once",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:15.601783557Z",
+              "Admitted": "2026-10-18T06:45:15.601787177Z",
+              "Transaction": 17,
+              "Waits": [
+                {
+                  "Safe": false,
+                  "Started": "2026-10-18T06:45:15.602278989Z",
+                  "Finished": "2026-10-18T06:45:16.352788836Z",
+                  "Error": "context deadline exceeded"
+                },
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:16.353464154Z",
+                  "Finished": "2026-10-18T06:45:16.353464274Z",
+                  "Reply": {
+                    "Arrival": 287,
+                    "Transaction": 17,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:45:16.353455514Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-getattr-barrier",
+              "Request": {
+                "Op": 257,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  85,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:15.601789137Z",
+              "Admitted": "2026-10-18T06:45:15.601791387Z",
+              "Transaction": 18,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:15.601792607Z",
+                  "Finished": "2026-10-18T06:45:15.602246059Z",
+                  "Reply": {
+                    "Arrival": 285,
+                    "Transaction": 18,
+                    "Op": 257,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAGEAQAAKQAAAAABAAD+/////////wAAAABYAAAAAAAAAAIAAAAAAAAA3T8AAM0/AAABAAAAAAAAAPcAAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAANtq1GpWJscu1mrUasfbKhTWatRqx9sqFAAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAADbatRqVibHLgAAAAAAAAAAAAAAAAAAAAA2AAAAAQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgDGnoDwtFJTs1gC1VSsf0Y7//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADWatRqx9sqFAEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAL2rUavSC7yIAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:45:15.602229078Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-unlock-a",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  4,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:16.352804067Z",
+              "Admitted": "2026-10-18T06:45:16.352830657Z",
+              "Transaction": 19,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:16.352831117Z",
+                  "Finished": "2026-10-18T06:45:16.353457774Z",
+                  "Reply": {
+                    "Arrival": 286,
+                    "Transaction": 19,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:45:16.353443703Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-query-b",
+              "Request": {
+                "Op": 272,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:16.353472144Z",
+              "Admitted": "2026-10-18T06:45:16.353476234Z",
+              "Transaction": 20,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:16.353477074Z",
+                  "Finished": "2026-10-18T06:45:16.353761222Z",
+                  "Reply": {
+                    "Arrival": 288,
+                    "Transaction": 20,
+                    "Op": 272,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Extra": "AAAAAAAAAAAAAAAAAAAAAD0jAAAAAAAAAgBPRwAAAIAAAAAAAAAAAAI=",
+                    "Received": "2026-10-18T06:45:16.353746781Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-unlock-b",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  4,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:16.353765662Z",
+              "Admitted": "2026-10-18T06:45:16.353771362Z",
+              "Transaction": 21,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:16.353771432Z",
+                  "Finished": "2026-10-18T06:45:16.353944386Z",
+                  "Reply": {
+                    "Arrival": 289,
+                    "Transaction": 21,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:45:16.353918846Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "pending-flock-getattr-after",
+              "Request": {
+                "Op": 257,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  85,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:19.154975882Z",
+              "Admitted": "2026-10-18T06:45:19.154993532Z",
+              "Transaction": 22,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:19.154999112Z",
+                  "Finished": "2026-10-18T06:45:19.155582177Z",
+                  "Reply": {
+                    "Arrival": 340,
+                    "Transaction": 22,
+                    "Op": 257,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAGEAQAAKQAAAAABAAD+/////////wAAAABgAAAAAAAAAAIAAAAAAAAA3T8AAM0/AAABAAAAAAAAACgBAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAANtq1GpWJscu1mrUasfbKhTWatRqx9sqFAAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAADbatRqVibHLgAAAAAAAAAAAAAAAAAAAAA2AAAAAQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgDGnoDwtFJTs1gC1VSsf0Y7//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADWatRqx9sqFAEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAL2rUavSC7yIAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:45:19.155568877Z"
+                  }
+                }
+              ]
+            }
+          ],
+          "WaitTimeoutMillis": 750,
+          "CleanupErrors": [],
+          "CleanupComplete": true
+        },
+        "interrupt_flock": {
+          "Source": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "Observation": "same-session ordered barrier, local wait expiry, explicit interrupt and original acquire replies; no direct native wait-queue observation",
+          "Ino": 1099511627817,
+          "GlobalID": 9021,
+          "BeforeSession": {
+            "State": 2,
+            "Generation": 1,
+            "ConnectionGeneration": 1,
+            "GlobalID": 9021,
+            "Target": {
+              "FilesystemID": 1,
+              "Rank": 0,
+              "Address": "v2:[fdf1:f2e6:6e7f::a]:6800/1888409153"
+            },
+            "PushSequence": 291,
+            "RenewSequence": 24,
+            "ReconnectedFrom": 0,
+            "LastRenewal": {
+              "Sequence": 24,
+              "Requested": "2026-10-18T06:45:18.535374589Z",
+              "Confirmed": "2026-10-18T06:45:18.535648307Z"
+            },
+            "Open": {
+              "Sequence": 0,
+              "SupportedFeatures": "////AAAAAAA=",
+              "MetricFlags": "//8AAAAAAAA=",
+              "Flags": 0,
+              "Metadata": {},
+              "CapAuths": [
+                {
+                  "UID": -1,
+                  "GIDs": [],
+                  "Path": "",
+                  "FilesystemName": "ceph-msgr-fresh-c69e80f0b45253b35802d554ac7f463b",
+                  "RootSquash": false,
+                  "Readable": true,
+                  "Writeable": true
+                }
+              ]
+            },
+            "ReadOnly": false
+          },
+          "AfterSession": {
+            "State": 2,
+            "Generation": 1,
+            "ConnectionGeneration": 1,
+            "GlobalID": 9021,
+            "Target": {
+              "FilesystemID": 1,
+              "Rank": 0,
+              "Address": "v2:[fdf1:f2e6:6e7f::a]:6800/1888409153"
+            },
+            "PushSequence": 336,
+            "RenewSequence": 26,
+            "ReconnectedFrom": 0,
+            "LastRenewal": {
+              "Sequence": 26,
+              "Requested": "2026-10-18T06:45:22.534877703Z",
+              "Confirmed": "2026-10-18T06:45:22.53515038Z"
+            },
+            "Open": {
+              "Sequence": 0,
+              "SupportedFeatures": "////AAAAAAA=",
+              "MetricFlags": "//8AAAAAAAA=",
+              "Flags": 0,
+              "Metadata": {},
+              "CapAuths": [
+                {
+                  "UID": -1,
+                  "GIDs": [],
+                  "Path": "",
+                  "FilesystemName": "ceph-msgr-fresh-c69e80f0b45253b35802d554ac7f463b",
+                  "RootSquash": false,
+                  "Readable": true,
+                  "Writeable": true
+                }
+              ]
+            },
+            "ReadOnly": false
+          },
+          "ResumesBefore": 0,
+          "ResumesAfter": 0,
+          "BeforeInode": {
+            "Ino": 1099511627817,
+            "SnapID": 18446744073709551614,
+            "Rdev": 0,
+            "Version": 97,
+            "XattrVersion": 0,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 297,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "CTime": {
+              "Seconds": 1792305883,
+              "Nanoseconds": 784803414
+            },
+            "MTime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "ATime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "TimeWarpSeq": 0,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "TruncateSize": 18446744073709551615,
+            "TruncateSeq": 1,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "RFiles": 1,
+            "RSubdirs": 0,
+            "RCTime": {
+              "Seconds": 1792305883,
+              "Nanoseconds": 784803414
+            },
+            "Symlink": "",
+            "DirHash": 0,
+            "DirLayout": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "InlineVersion": 18446744073709551615,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFiles": 0,
+            "BTime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "ChangeAttr": 1,
+            "DirPin": -1,
+            "SnapBTime": {
+              "Seconds": 0,
+              "Nanoseconds": 0
+            },
+            "RSnaps": 0,
+            "Fscrypt": false,
+            "OptionalMetadata": "AAAAAA=="
+          },
+          "AfterInode": {
+            "Ino": 1099511627817,
+            "SnapID": 18446744073709551614,
+            "Rdev": 0,
+            "Version": 112,
+            "XattrVersion": 2,
+            "Cap": {
+              "Caps": 16349,
+              "Wanted": 16333,
+              "CapID": 1,
+              "Seq": 344,
+              "MSeq": 0,
+              "Realm": 1,
+              "Flags": 1
+            },
+            "Layout": {
+              "StripeUnit": 4194304,
+              "StripeCount": 1,
+              "ObjectSize": 4194304,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 4,
+              "PoolNamespace": ""
+            },
+            "CTime": {
+              "Seconds": 1792305883,
+              "Nanoseconds": 784803414
+            },
+            "MTime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "ATime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "TimeWarpSeq": 0,
+            "Size": 0,
+            "MaxSize": 4194304,
+            "TruncateSize": 18446744073709551615,
+            "TruncateSeq": 1,
+            "Mode": 33188,
+            "UID": 0,
+            "GID": 0,
+            "NLink": 1,
+            "Files": 0,
+            "Subdirs": 0,
+            "RBytes": 0,
+            "RFiles": 1,
+            "RSubdirs": 0,
+            "RCTime": {
+              "Seconds": 1792305883,
+              "Nanoseconds": 784803414
+            },
+            "Symlink": "",
+            "DirHash": 0,
+            "DirLayout": [
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0
+            ],
+            "Xattrs": "AQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgDGnoDwtFJTs1gC1VSsf0Y7",
+            "InlineVersion": 18446744073709551615,
+            "QuotaMaxBytes": 0,
+            "QuotaMaxFiles": 0,
+            "BTime": {
+              "Seconds": 1792305878,
+              "Nanoseconds": 338353095
+            },
+            "ChangeAttr": 1,
+            "DirPin": -1,
+            "SnapBTime": {
+              "Seconds": 0,
+              "Nanoseconds": 0
+            },
+            "RSnaps": 0,
+            "Fscrypt": false,
+            "OptionalMetadata": "AAAAAA=="
+          },
+          "NativeBefore": {
+            "ino": 1099511627817,
+            "size": 0,
+            "version": 1,
+            "mtime": 1792305878,
+            "data_hex": ""
+          },
+          "NativeBeforeSource": "filelock_nonblocking_native_conflict",
+          "NativeAfter": {
+            "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+            "token": "c69e80f0b45253b35802d554ac7f463b",
+            "request_id": 1792305919907859421,
+            "action": "flock-ex-nb",
+            "target": "go-file",
+            "global_id": 0,
+            "fsid": "7fd0c7bf-acfc-40f9-b957-ccadb8c18586",
+            "fscid": 1,
+            "fs_name": "ceph-msgr-fresh-c69e80f0b45253b35802d554ac7f463b",
+            "mds_gid": 8010,
+            "mds_endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+            "mds_nonce": 1888409153,
+            "mds_incarnation": 10,
+            "rank": 0,
+            "identity_checked": true,
+            "map": {
+              "mdsmap_epoch": 14,
+              "refuse_client_session": false,
+              "required_client_features": {},
+              "session_timeout": 60,
+              "session_autoclose": 300
+            },
+            "daemon_mdsmap_epoch": 14,
+            "native": {
+              "action": "flock-ex-nb",
+              "path": "/ceph-msgr-cephfs-c69e80f0b45253b35802d554ac7f463b/go-file",
+              "native_global_id": 10239,
+              "quota_absent": false,
+              "value_hex": "",
+              "written": 0,
+              "data_hex": "",
+              "flock": {
+                "owner": 9223372038522368104,
+                "errno": 0,
+                "acquired": true,
+                "unlocked": true,
+                "elapsed_ns": 187745,
+                "before": {
+                  "ino": 1099511627817,
+                  "size": 0,
+                  "version": 1,
+                  "mtime": 1792305878,
+                  "data_hex": ""
+                },
+                "after": {
+                  "ino": 1099511627817,
+                  "size": 0,
+                  "version": 1,
+                  "mtime": 1792305878,
+                  "data_hex": ""
+                }
+              }
+            },
+            "native_process": {
+              "Stdout": "eyJhY3Rpb24iOiAiZmxvY2stZXgtbmIiLCAicGF0aCI6ICIvY2VwaC1tc2dyLWNlcGhmcy1jNjllODBmMGI0NTI1M2IzNTgwMmQ1NTRhYzdmNDYzYi9nby1maWxlIiwgIm5hdGl2ZV9nbG9iYWxfaWQiOiAxMDIzOSwgImZsb2NrIjogeyJvd25lciI6IDkyMjMzNzIwMzg1MjIzNjgxMDQsICJlcnJubyI6IDAsICJhY3F1aXJlZCI6IHRydWUsICJ1bmxvY2tlZCI6IHRydWUsICJiZWZvcmUiOiB7ImlubyI6IDEwOTk1MTE2Mjc4MTcsICJzaXplIjogMCwgInZlcnNpb24iOiAxLCAibXRpbWUiOiAxNzkyMzA1ODc4LCAiZGF0YV9oZXgiOiAiIn0sICJlbGFwc2VkX25zIjogMTg3NzQ1LCAiYWZ0ZXIiOiB7ImlubyI6IDEwOTk1MTE2Mjc4MTcsICJzaXplIjogMCwgInZlcnNpb24iOiAxLCAibXRpbWUiOiAxNzkyMzA1ODc4LCAiZGF0YV9oZXgiOiAiIn19fQo=",
+              "Stderr": "",
+              "ExitCode": 0,
+              "TimedOut": false,
+              "StdoutTruncated": false,
+              "StderrTruncated": false,
+              "InputWritten": 61,
+              "InputDelivered": 61,
+              "InputEOF": true
+            },
+            "mutation": {
+              "kind": "native-flock-ex-nb",
+              "request_id": 1792305919907859421,
+              "target": "go-file",
+              "state": "applied",
+              "native_global_id": 10239,
+              "global_id": 0,
+              "address": "",
+              "blocklist_until": "",
+              "native_output": "",
+              "error": ""
+            },
+            "complete": true,
+            "error": "",
+            "elapsed_ms": 2617,
+            "observed_utc": "2026-10-18T06:45:22.550542149Z"
+          },
+          "Requests": [
+            {
+              "Name": "interrupt-flock-open",
+              "Request": {
+                "Op": 770,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  255,
+                  255,
+                  255,
+                  255,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:19.155770522Z",
+              "Admitted": "2026-10-18T06:45:19.155775932Z",
+              "Transaction": 23,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:19.155776812Z",
+                  "Finished": "2026-10-18T06:45:19.156110551Z",
+                  "Reply": {
+                    "Arrival": 341,
+                    "Transaction": 23,
+                    "Op": 770,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAFOAQAAKQAAAAABAAD+/////////wAAAABhAAAAAAAAAAAAAAAAAAAA3T8AAM0/AAABAAAAAAAAACkBAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAANtq1GpWJscu1mrUasfbKhTWatRqx9sqFAAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAADbatRqVibHLgAAAAAAAAAAAAAAAAAAAAAAAAAA//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADWatRqx9sqFAEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAL2rUavSC7yIAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:45:19.15609016Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-acquire-a",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:19.156136422Z",
+              "Admitted": "2026-10-18T06:45:19.156140622Z",
+              "Transaction": 24,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:19.156141812Z",
+                  "Finished": "2026-10-18T06:45:19.156324846Z",
+                  "Reply": {
+                    "Arrival": 342,
+                    "Transaction": 24,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:45:19.156285395Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-acquire-b-once",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:19.156327116Z",
+              "Admitted": "2026-10-18T06:45:19.156332787Z",
+              "Transaction": 25,
+              "Waits": [
+                {
+                  "Safe": false,
+                  "Started": "2026-10-18T06:45:19.156543722Z",
+                  "Finished": "2026-10-18T06:45:19.906740572Z",
+                  "Error": "context deadline exceeded"
+                },
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:19.907300856Z",
+                  "Finished": "2026-10-18T06:45:19.907301116Z",
+                  "Reply": {
+                    "Arrival": 347,
+                    "Transaction": 25,
+                    "Op": 4361,
+                    "Result": -4,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:45:19.907290536Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-getattr-barrier",
+              "Request": {
+                "Op": 257,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  85,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:19.156335087Z",
+              "Admitted": "2026-10-18T06:45:19.156337907Z",
+              "Transaction": 26,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:19.156339697Z",
+                  "Finished": "2026-10-18T06:45:19.156531592Z",
+                  "Reply": {
+                    "Arrival": 343,
+                    "Transaction": 26,
+                    "Op": 257,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAGEAQAAKQAAAAABAAD+/////////wAAAABhAAAAAAAAAAIAAAAAAAAA3T8AAM0/AAABAAAAAAAAACoBAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAANtq1GpWJscu1mrUasfbKhTWatRqx9sqFAAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAADbatRqVibHLgAAAAAAAAAAAAAAAAAAAAA2AAAAAQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgDGnoDwtFJTs1gC1VSsf0Y7//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADWatRqx9sqFAEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAL2rUavSC7yIAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:45:19.156500701Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-interrupt-b-once",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  4,
+                  4,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:19.906745812Z",
+              "Admitted": "2026-10-18T06:45:19.906761262Z",
+              "Transaction": 27,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:19.906767652Z",
+                  "Finished": "2026-10-18T06:45:19.907293176Z",
+                  "Reply": {
+                    "Arrival": 346,
+                    "Transaction": 27,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:45:19.907269855Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-query-a-still-held",
+              "Request": {
+                "Op": 272,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  2,
+                  2,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:19.907308067Z",
+              "Admitted": "2026-10-18T06:45:19.907311807Z",
+              "Transaction": 28,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:19.907312487Z",
+                  "Finished": "2026-10-18T06:45:19.907531722Z",
+                  "Reply": {
+                    "Arrival": 348,
+                    "Transaction": 28,
+                    "Op": 272,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Extra": "AAAAAAAAAAAAAAAAAAAAAD0jAAAAAAAAAQBPRwAAAIAAAAAAAAAAAAI=",
+                    "Received": "2026-10-18T06:45:19.907513702Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-unlock-a",
+              "Request": {
+                "Op": 4361,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  2,
+                  4,
+                  1,
+                  0,
+                  79,
+                  71,
+                  0,
+                  0,
+                  0,
+                  128,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:19.907535793Z",
+              "Admitted": "2026-10-18T06:45:19.907540403Z",
+              "Transaction": 29,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:19.907540483Z",
+                  "Finished": "2026-10-18T06:45:19.907765608Z",
+                  "Reply": {
+                    "Arrival": 349,
+                    "Transaction": 29,
+                    "Op": 4361,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": false,
+                    "Received": "2026-10-18T06:45:19.907752738Z"
+                  }
+                }
+              ]
+            },
+            {
+              "Name": "interrupt-flock-getattr-after",
+              "Request": {
+                "Op": 257,
+                "Flags": 0,
+                "MDSMapEpoch": 14,
+                "Retry": 0,
+                "Forward": 0,
+                "CallerUID": 0,
+                "CallerGID": 0,
+                "OwnerUID": 0,
+                "OwnerGID": 0,
+                "Args": [
+                  85,
+                  1,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0
+                ],
+                "Path": {
+                  "Ino": 1099511627817,
+                  "Path": ""
+                },
+                "Path2": {
+                  "Ino": 0,
+                  "Path": ""
+                },
+                "Stamp": {
+                  "Seconds": 0,
+                  "Nanoseconds": 0
+                }
+              },
+              "Selected": "2026-10-18T06:45:22.609223232Z",
+              "Admitted": "2026-10-18T06:45:22.609242012Z",
+              "Transaction": 30,
+              "Waits": [
+                {
+                  "Safe": true,
+                  "Started": "2026-10-18T06:45:22.609247672Z",
+                  "Finished": "2026-10-18T06:45:22.609795396Z",
+                  "Reply": {
+                    "Arrival": 395,
+                    "Transaction": 30,
+                    "Op": 257,
+                    "Result": 0,
+                    "MDSMapEpoch": 14,
+                    "Safe": true,
+                    "IsDentry": false,
+                    "IsTarget": true,
+                    "Trace": "CAGEAQAAKQAAAAABAAD+/////////wAAAABwAAAAAAAAAAIAAAAAAAAA3T8AAM0/AAABAAAAAAAAAFgBAAAAAAAAAQAAAAAAAAABAABAAAEAAAAAAEAAAAAAAAAAAAAAAAAABAAAANtq1GpWJscu1mrUasfbKhTWatRqx9sqFAAAAAAAAAAAAAAAAAAAQAAAAAAA//////////8BAAAApIEAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAADbatRqVibHLgAAAAAAAAAAAAAAAAAAAAA2AAAAAQAAAA4AAAB1c2VyLmNlcGgtbXNnchwAAAAA/2NlcGgtbXNncgDGnoDwtFJTs1gC1VSsf0Y7//////////8AAAAAAQEQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADWatRqx9sqFAEAAAAAAAAA/////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEEAAAAAAAAAA==",
+                    "SnapTrace": "AQFAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAABAAAAAAAAAAAAAAAAAAAAL2rUavSC7yIAAAAAAAAAAA==",
+                    "Received": "2026-10-18T06:45:22.609788966Z"
+                  }
+                }
+              ]
+            }
+          ],
+          "WaitTimeoutMillis": 750,
+          "CleanupErrors": [],
+          "CleanupComplete": true
+        }
+      }
+    }
+  },
+  "linux_checks": {
+    "receipt": {
+      "start": "2026-10-18T06:40:49.845129+00:00",
+      "steps": [
+        {
+          "name": "root-cgo0",
+          "argv": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "start": "2026-10-18T06:40:49.845151+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:41:06.533156+00:00"
+        },
+        {
+          "name": "race",
+          "argv": [
+            "go",
+            "test",
+            "-race",
+            "./integration",
+            "./cephmsgr"
+          ],
+          "start": "2026-10-18T06:41:06.533495+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:41:32.650699+00:00"
+        },
+        {
+          "name": "vet",
+          "argv": [
+            "go",
+            "vet",
+            "./..."
+          ],
+          "start": "2026-10-18T06:41:32.651079+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:41:33.570316+00:00"
+        },
+        {
+          "name": "fixture",
+          "argv": [
+            "go",
+            "test",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T06:41:33.570700+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:41:39.047221+00:00"
+        },
+        {
+          "name": "fixture-vet",
+          "argv": [
+            "go",
+            "vet",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T06:41:39.047504+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:41:39.461941+00:00"
+        },
+        {
+          "name": "python",
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tools",
+            "-p",
+            "test_*.py"
+          ],
+          "start": "2026-10-18T06:41:39.462242+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:41:45.934607+00:00"
+        }
+      ]
+    }
+  },
+  "pre_fix_regression": {
+    "receipt": {
+      "start": "2026-10-18T06:40:44.158666+00:00",
+      "expected_failure_names": [
+        "TestMDSClosePushDuringQueueAdmissionResendsCurrentSequence"
+      ],
+      "files": {
+        "cephmsgr/mds_request.go": "8c9267b33e575f8552d699e79409172e934b0c5f3cb1e2caf99a8112669ee070",
+        "cephmsgr/mds_session.go": "ab61d5a5ac71c82efb398f4f41f0a8485138c63135c631b411540d7f74a4c30e",
+        "cephmsgr/mds_close_push_admission_test.go": "92d8a2887f052bfd4255896ace4e966d8593068a15a7f65c638fe2a3ef691ac0"
+      },
+      "exit_code": 1,
+      "end": "2026-10-18T06:40:49.843377+00:00",
+      "expected_failures_observed": true
+    }
+  },
+  "baseline_ci": {
+    "sha": "608bdee23e86c5e6d37e715aa84e0b78e1defaf2",
+    "successful_jobs": 73
+  },
+  "limitations": [
+    "The queue-backpressure/CLOSE sequence race is forced with a controlled peer, not an actual native daemon.",
+    "Native runs verify the ordinary CephFS push/recovery/metadata family on the changed source; they do not establish every queue-race interleaving.",
+    "Local validation and earlier baseline CI are not complete CI at the resulting commit."
+  ]
+}

@@ -1,0 +1,2156 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-18",
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "source_sha256": {
+    "cephmsgr/mds_reconnect.go": "b75ea34ef546c98f0b8ca90bbadfc26da8996377d4eb6a175c00453957dcd0bf",
+    "cephmsgr/mds_reconnect_slots_test.go": "43a56a235e1b47462faf6c9a2a785a244e7ed8cfe4ba8ede4163782006f0805d",
+    "integration/fixture/main.go": "5e6c0a0f16999dbe7fdb24f00fa2ea3f6d6782fd0373e0133c3a3dc4951069e5",
+    "integration/fixture/mds_cephfs_data.go": "814ce60a79105a7157e9db91d6883188d341ffe8015f34a92abf318d022ec70f",
+    "integration/fixture/mds_cephfs_data_runtime.go": "31b581c9dacaab43bdfa6315cf688664b75fc869f4bad133c83fbaec07e539a8",
+    "integration/fixture/mds_cephfs_data_runtime_test.go": "b01d43fc567b7afe27341d6ef6fb4c324da94b76d419590c5c98cdb896c7a560",
+    "integration/mds_cephfs_capsnap_recovery_test.go": "26a721eaf80e84c1dc961dc095126c9fd24772ea2ef3c505524ab3ca73358fed",
+    "integration/mds_cephfs_data_test.go": "5a4a7a0793facb0d15aabbfce5993156c15e5502ce69bd0220c2208997e33d5f",
+    "internal/session/abandon_identity_test.go": "dbf4afbf246fcff569cb0a4f10435648d2e2b8cfb5ff29799b48d49d41140ae7",
+    "internal/session/session.go": "645f83cd86da91d4324b0a355d21eab8c37ebc0768dccc1d7e7527972e24283a"
+  },
+  "selector": "^TestCephMDSCephFSDataIntegration$",
+  "verification_scope": "A completed its journaled update on the old MDS while an attributed native FLUSHSNAP_ACK was blackholed. After Lost and baseline-verified ACTIVE adoption, explicit same-TID A resubmission reached the completed-flush branch. B was first-sent, native A/B/C reads and clones matched, and object I/O was not replayed. No SendCaps-error, interrupted-writeback or OSD-restart claim.",
+  "checks": {
+    "root_go_tests": "PASS",
+    "race_packages": [
+      "integration",
+      "cephmsgr",
+      "internal/session"
+    ],
+    "root_and_fixture_vet": "PASS",
+    "fixture_go_tests": "PASS",
+    "python_tests": 422
+  },
+  "runs": [
+    {
+      "profile": {
+        "architecture": "amd64",
+        "runtime": "host",
+        "connection_mode": "crc",
+        "ip_family": "4",
+        "key_type": "aes",
+        "service_cipher": "aes",
+        "osd_store": "bluestore",
+        "osd_profile": "legacy-v6",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "provider_version": "v0.3.0"
+      },
+      "start": "2026-10-18T04:41:47.601751+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T04:46:40.716186+00:00",
+      "fsid": "522b2e2a-2c4a-43be-a283-6ad08c5b6f33",
+      "global_id": 4971,
+      "cephfs_nonce": 3833804504,
+      "mds_osd_dials": [
+        4,
+        1
+      ],
+      "go_tests": [
+        {
+          "test": "TestCephMDSCephFSDataIntegration",
+          "seconds": 185.04
+        }
+      ],
+      "passed_leaf_count": 12,
+      "case_ms": {
+        "cleanup_unlink_release_close": 25683,
+        "concurrent_reader_flushes_buffered_write": 7436,
+        "dirty_data_capsnaps_across_two_snapshots_and_mds_restart": 80574,
+        "go_striped_write_flush": 8216,
+        "native_sparse_file_read": 8125,
+        "native_truncate_trunc_push": 10534,
+        "open_data_session_and_layout": 5719,
+        "read_with_newer_truncate_seq_clips": 5526,
+        "sequenced_truncate_noop_when_not_newer": 5428,
+        "snapshot_write_clones_objects": 16782,
+        "stale_truncate_seq_write_trimmed": 5426,
+        "write_after_truncate_with_truncate_seq": 5567
+      },
+      "restart": {
+        "state": "adopted",
+        "arm_request_id": 1792298696458797934,
+        "fire_request_id": 1792298699260071079,
+        "adopt_request_id": 1792298704388056712,
+        "armed": {
+          "name": "ceph-msgr-fresh-63a521237d4b0a535d5652fcc697104f-0",
+          "gid": 4695,
+          "rank": 0,
+          "state": "up:active",
+          "incarnation": 6,
+          "endpoint": "172.18.0.10:6800",
+          "nonce": 2927596593
+        },
+        "armed_blocklist_addresses": [
+          "172.18.0.10:6800/2927596593"
+        ],
+        "native_output": "",
+        "error": "",
+        "fire_started_utc": "2026-10-18T04:44:59.31336052Z",
+        "fired_utc": "2026-10-18T04:44:59.623261715Z",
+        "adopted": {
+          "name": "ceph-msgr-fresh-63a521237d4b0a535d5652fcc697104f-0",
+          "gid": 17192,
+          "rank": 0,
+          "state": "up:active",
+          "incarnation": 10,
+          "endpoint": "172.18.0.10:6800",
+          "nonce": 2222261179
+        },
+        "adopted_utc": "2026-10-18T04:45:06.650957468Z",
+        "old_incarnation_blocklist": [
+          {
+            "address": "172.18.0.10:6800/2927596593",
+            "range": false,
+            "until": "2026-10-19T04:44:59.583702Z"
+          }
+        ]
+      },
+      "old_admitted": [
+        {
+          "Ino": 1099511627780,
+          "Context": {
+            "Sequence": 2,
+            "Snapshots": [
+              2
+            ]
+          },
+          "Caps": {
+            "Op": 9,
+            "Ino": 1099511627780,
+            "Realm": 1099511627776,
+            "CapID": 0,
+            "Seq": 0,
+            "IssueSeq": 0,
+            "Caps": 16349,
+            "Wanted": 0,
+            "Dirty": 4096,
+            "MigrateSeq": 0,
+            "SnapFollows": 2,
+            "UID": 0,
+            "GID": 0,
+            "Mode": 33188,
+            "NLink": 0,
+            "XattrVersion": 0,
+            "Size": 200000,
+            "MaxSize": 0,
+            "TruncateSize": 0,
+            "TruncateSeq": 0,
+            "MTime": {
+              "Seconds": 1792298665,
+              "Nanoseconds": 709465604
+            },
+            "ATime": {
+              "Seconds": 1792298665,
+              "Nanoseconds": 683641782
+            },
+            "CTime": {
+              "Seconds": 1792298665,
+              "Nanoseconds": 709465604
+            },
+            "Layout": {
+              "StripeUnit": 0,
+              "StripeCount": 0,
+              "ObjectSize": 0,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 0,
+              "PoolNamespace": ""
+            },
+            "TimeWarpSeq": 0,
+            "Peer": {
+              "CapID": 0,
+              "IssueSeq": 0,
+              "MSeq": 0,
+              "MDS": 0,
+              "Flags": 0
+            },
+            "InlineVersion": 18446744073709551615,
+            "OSDEpochBarrier": 26,
+            "OldestFlushTID": 6,
+            "CallerUID": 4294967295,
+            "CallerGID": 4294967295,
+            "BTime": {
+              "Seconds": 1792298665,
+              "Nanoseconds": 683641782
+            },
+            "ChangeAttr": 1,
+            "Flags": 0,
+            "Files": -1,
+            "Subdirs": -1
+          },
+          "Buffered": false,
+          "WritebackStarted": "2026-10-18T04:44:33.011558886Z",
+          "WritebackCompleted": "2026-10-18T04:44:33.035354204Z",
+          "Sent": "2026-10-18T04:44:42.154550397Z",
+          "Acked": "0001-01-01T00:00:00Z",
+          "Transaction": 6,
+          "SentGeneration": 1
+        },
+        {
+          "Ino": 1099511627780,
+          "Context": {
+            "Sequence": 3,
+            "Snapshots": [
+              3,
+              2
+            ]
+          },
+          "Caps": {
+            "Op": 9,
+            "Ino": 1099511627780,
+            "Realm": 1099511627776,
+            "CapID": 0,
+            "Seq": 0,
+            "IssueSeq": 0,
+            "Caps": 16349,
+            "Wanted": 0,
+            "Dirty": 4096,
+            "MigrateSeq": 0,
+            "SnapFollows": 3,
+            "UID": 0,
+            "GID": 0,
+            "Mode": 33188,
+            "NLink": 0,
+            "XattrVersion": 0,
+            "Size": 220000,
+            "MaxSize": 0,
+            "TruncateSize": 0,
+            "TruncateSeq": 0,
+            "MTime": {
+              "Seconds": 1792298669,
+              "Nanoseconds": 311068464
+            },
+            "ATime": {
+              "Seconds": 1792298665,
+              "Nanoseconds": 683641782
+            },
+            "CTime": {
+              "Seconds": 1792298669,
+              "Nanoseconds": 311068464
+            },
+            "Layout": {
+              "StripeUnit": 0,
+              "StripeCount": 0,
+              "ObjectSize": 0,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 0,
+              "PoolNamespace": ""
+            },
+            "TimeWarpSeq": 0,
+            "Peer": {
+              "CapID": 0,
+              "IssueSeq": 0,
+              "MSeq": 0,
+              "MDS": 0,
+              "Flags": 0
+            },
+            "InlineVersion": 18446744073709551615,
+            "OSDEpochBarrier": 26,
+            "OldestFlushTID": 6,
+            "CallerUID": 4294967295,
+            "CallerGID": 4294967295,
+            "BTime": {
+              "Seconds": 1792298665,
+              "Nanoseconds": 683641782
+            },
+            "ChangeAttr": 2,
+            "Flags": 0,
+            "Files": -1,
+            "Subdirs": -1
+          },
+          "Buffered": false,
+          "WritebackStarted": "2026-10-18T04:44:33.035356874Z",
+          "WritebackCompleted": "2026-10-18T04:44:33.051027655Z",
+          "Sent": "0001-01-01T00:00:00Z",
+          "Acked": "0001-01-01T00:00:00Z",
+          "Transaction": 7,
+          "SentGeneration": 0
+        }
+      ],
+      "old_caps_log": {
+        "mark": 143,
+        "total_lines": 854,
+        "lines": [
+          "2026-10-18T04:44:42.153+0000 7212070ec640  1 -- v2:172.18.0.10:6800/2927596593 <== client.4971 v2:172.18.0.9:0/3833804504 136 ==== client_caps(flushsnap ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=pAsxLsXsxFsxcrwb dirty=Fw wanted=- follows 2 size 200000/0 mtime 2026-10-18T04:44:25.709465+0000 ctime 2026-10-18T04:44:25.709465+0000 change_attr 1) ==== 260+0+0 (crc 0 0 0) 0x580721ff2700 con 0x580721c56c00",
+          "2026-10-18T04:44:42.153+0000 7212070ec640  7 mds.0.locker handle_client_caps on 0x10000000004 tid 6 follows 2 op flushsnap flags 0x0",
+          "2026-10-18T04:44:42.153+0000 7212070ec640  7 mds.0.locker  flushsnap snap 3 client.4971 on [inode 0x10000000004 [3,head] /ceph-msgr-data-63a521237d4b0a535d5652fcc697104f/capsnap-file auth v72 DIRTYPARENT s=0 n(v0 1=1+0) (iauth excl) (ifile excl) (ixattr excl) cr={4971=0-524288@2} caps={4971=pAsxLsXsxFsxcrwb/pAsxXsxFsxcrwb@3},l=4971 | ptrwaiter=0 request=0 lock=0 caps=1 dirtyparent=1 dirty=1 authpin=0 0x580721e01700]",
+          "2026-10-18T04:44:49.115+0000 7212008df640 10 mds.0.6 send_message_client_counted client.4971 seq 114 client_caps(flushsnap_ack ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=- dirty=Fw wanted=- follows 2 size 0/0 mtime 0.000000 ctime 0.000000 change_attr 0)",
+          "2026-10-18T04:44:49.115+0000 7212008df640  1 -- v2:172.18.0.10:6800/2927596593 --> v2:172.18.0.9:0/3833804504 -- client_caps(flushsnap_ack ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=- dirty=Fw wanted=- follows 2 size 0/0 mtime 0.000000 ctime 0.000000 change_attr 0) -- 0x580721f1ea80 con 0x580721c56c00",
+          "2026-10-18T04:44:49.115+0000 7212008df640  0 send_msgclient blackhole client_caps(flushsnap_ack ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=- dirty=Fw wanted=- follows 2 size 0/0 mtime 0.000000 ctime 0.000000 change_attr 0)"
+        ],
+        "dropped": 0,
+        "global_id": 4971,
+        "nonce": 3833804504
+      },
+      "new_caps_log": {
+        "mark": 4256,
+        "total_lines": 4325,
+        "lines": [
+          "2026-10-18T04:45:16.990+0000 705756243640  1 -- v2:172.18.0.10:6800/2222261179 <== client.4971 v2:172.18.0.9:0/3833804504 10 ==== client_caps(flushsnap ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=pAsxLsXsxFsxcrwb dirty=Fw wanted=- follows 2 size 200000/0 mtime 2026-10-18T04:44:25.709465+0000 ctime 2026-10-18T04:44:25.709465+0000 change_attr 1) ==== 260+0+0 (crc 0 0 0) 0x55f16c780000 con 0x55f16c6aa800",
+          "2026-10-18T04:45:16.990+0000 705756243640  7 mds.0.locker handle_client_caps on 0x10000000004 tid 6 follows 2 op flushsnap flags 0x0",
+          "2026-10-18T04:45:16.990+0000 705756243640  7 mds.0.locker handle_client_caps already flushed tid 6 for client.4971"
+        ],
+        "dropped": 0,
+        "global_id": 4971,
+        "nonce": 3833804504
+      },
+      "journal_barrier": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "63a521237d4b0a535d5652fcc697104f",
+        "request_id": 1792298690857638441,
+        "action": "flush-journal",
+        "target": "",
+        "global_id": 0,
+        "fsid": "522b2e2a-2c4a-43be-a283-6ad08c5b6f33",
+        "fscid": 1,
+        "fs_name": "ceph-msgr-fresh-63a521237d4b0a535d5652fcc697104f",
+        "mds_gid": 4695,
+        "mds_endpoint": "172.18.0.10:6800",
+        "mds_nonce": 2927596593,
+        "mds_incarnation": 6,
+        "rank": 0,
+        "identity_checked": true,
+        "map": {
+          "mdsmap_epoch": 7,
+          "refuse_client_session": false,
+          "required_client_features": {},
+          "session_timeout": 60,
+          "session_autoclose": 300
+        },
+        "daemon_mdsmap_epoch": 7,
+        "flush_journal": {
+          "return_code": 0,
+          "message": ""
+        },
+        "complete": true,
+        "error": "",
+        "elapsed_ms": 2878,
+        "observed_utc": "2026-10-18T04:44:53.790689516Z"
+      },
+      "ack_blackhole": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "63a521237d4b0a535d5652fcc697104f",
+        "request_id": 1792298684755532414,
+        "action": "blackhole-on",
+        "target": "",
+        "global_id": 0,
+        "fsid": "522b2e2a-2c4a-43be-a283-6ad08c5b6f33",
+        "fscid": 1,
+        "fs_name": "ceph-msgr-fresh-63a521237d4b0a535d5652fcc697104f",
+        "mds_gid": 4695,
+        "mds_endpoint": "172.18.0.10:6800",
+        "mds_nonce": 2927596593,
+        "mds_incarnation": 6,
+        "rank": 0,
+        "identity_checked": true,
+        "map": {
+          "mdsmap_epoch": 7,
+          "refuse_client_session": false,
+          "required_client_features": {},
+          "session_timeout": 60,
+          "session_autoclose": 300
+        },
+        "daemon_mdsmap_epoch": 7,
+        "runtime": {
+          "kind": "blackhole-on",
+          "settings": {
+            "ms_blackhole_client": "true"
+          },
+          "baseline": {
+            "ms_blackhole_client": "false"
+          },
+          "incarnation_gid": 4695,
+          "request_id": 1792298684755532414,
+          "state": "applied",
+          "readback": {
+            "ms_blackhole_client": "true"
+          }
+        },
+        "complete": true,
+        "error": "",
+        "elapsed_ms": 2926,
+        "observed_utc": "2026-10-18T04:44:47.739387614Z"
+      },
+      "journal_resume": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "63a521237d4b0a535d5652fcc697104f",
+        "request_id": 1792298687756490967,
+        "action": "log-resume",
+        "target": "",
+        "global_id": 0,
+        "fsid": "522b2e2a-2c4a-43be-a283-6ad08c5b6f33",
+        "fscid": 1,
+        "fs_name": "ceph-msgr-fresh-63a521237d4b0a535d5652fcc697104f",
+        "mds_gid": 4695,
+        "mds_endpoint": "172.18.0.10:6800",
+        "mds_nonce": 2927596593,
+        "mds_incarnation": 6,
+        "rank": 0,
+        "identity_checked": true,
+        "map": {
+          "mdsmap_epoch": 7,
+          "refuse_client_session": false,
+          "required_client_features": {},
+          "session_timeout": 60,
+          "session_autoclose": 300
+        },
+        "daemon_mdsmap_epoch": 7,
+        "runtime": {
+          "kind": "log-pause",
+          "settings": {
+            "mds_log_pause": "true"
+          },
+          "baseline": {
+            "mds_log_pause": "false"
+          },
+          "incarnation_gid": 4695,
+          "request_id": 1792298679052911253,
+          "state": "restored",
+          "readback": {
+            "mds_log_pause": "true"
+          },
+          "restore_request_id": 1792298687756490967,
+          "restore_readback": {
+            "mds_log_pause": "false"
+          }
+        },
+        "complete": true,
+        "error": "",
+        "elapsed_ms": 2988,
+        "observed_utc": "2026-10-18T04:44:50.801168101Z"
+      },
+      "old_pending_ack": {
+        "TID": 6,
+        "Dirty": 4096
+      },
+      "old_resume_error": {
+        "Error": "io: read/write on closed pipe; stateful resume failed: ceph messenger session reconnect: ceph messenger: peer reset the stateful session",
+        "SessionReset": true,
+        "EOF": false,
+        "ConnectionRefused": false,
+        "ResumeDeadline": false,
+        "OutcomeUnknown": false,
+        "MDSSessionClosed": false,
+        "MDSSessionReconnectDenied": false
+      },
+      "explicit_resubmitted_tids": [
+        6
+      ],
+      "reconnect_caps": [
+        {
+          "Ino": 1,
+          "CapID": 2,
+          "Wanted": 0,
+          "Issued": 85,
+          "SnapRealm": 1,
+          "PathBase": 1,
+          "Path": "",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627776,
+          "CapID": 3,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1,
+          "Path": "ceph-msgr-data-63a521237d4b0a535d5652fcc697104f",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627777,
+          "CapID": 1,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "go-file",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627778,
+          "CapID": 1,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "shared-file",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627779,
+          "CapID": 1,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "snap-file",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627780,
+          "CapID": 1,
+          "Wanted": 16333,
+          "Issued": 16349,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "capsnap-file",
+          "SnapFollows": 2
+        },
+        {
+          "Ino": 1099511628778,
+          "CapID": 15,
+          "Wanted": 3329,
+          "Issued": 3413,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "native-file",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511628779,
+          "CapID": 24,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "trunc-file",
+          "SnapFollows": 0
+        }
+      ],
+      "reconnect_realms": [
+        {
+          "Ino": 1,
+          "Seq": 1,
+          "Parent": 0
+        },
+        {
+          "Ino": 1099511627776,
+          "Seq": 4,
+          "Parent": 1
+        }
+      ],
+      "object_requests_before_restart": 178,
+      "object_requests_after_reconnect_and_flush": 178,
+      "writeback": [
+        {
+          "Leaf": "dirty_data_capsnaps_across_two_snapshots_and_mds_restart",
+          "Op": "write",
+          "Object": "10000000004.00000000",
+          "ObjectNo": 0,
+          "Length": 131072,
+          "ReplyLength": 131072,
+          "SnapContext": {
+            "Sequence": 2,
+            "Snapshots": [
+              2
+            ]
+          },
+          "MapEpoch": 26,
+          "Hash": 398845637,
+          "Code": 0,
+          "Transaction": 175,
+          "ReplayVersion": {
+            "Epoch": 26,
+            "Version": 63
+          },
+          "ReplyFlags": 67108901,
+          "Started": "2026-10-18T04:44:33.012479676Z",
+          "Completed": "2026-10-18T04:44:33.027334569Z",
+          "RequestBytes": 131072,
+          "RequestSHA256": "210b2b00e3c5b7728c151c28c54af7f5dfe1a3e7dc21cbcb40fd3cca5779509c",
+          "UserVersion": 63,
+          "Micros": 14855
+        },
+        {
+          "Leaf": "dirty_data_capsnaps_across_two_snapshots_and_mds_restart",
+          "Op": "write",
+          "Object": "10000000004.00000001",
+          "ObjectNo": 1,
+          "Length": 68928,
+          "ReplyLength": 68928,
+          "SnapContext": {
+            "Sequence": 2,
+            "Snapshots": [
+              2
+            ]
+          },
+          "MapEpoch": 26,
+          "Hash": 3227076529,
+          "Code": 0,
+          "Transaction": 176,
+          "ReplayVersion": {
+            "Epoch": 26,
+            "Version": 64
+          },
+          "ReplyFlags": 67108901,
+          "Started": "2026-10-18T04:44:33.027991354Z",
+          "Completed": "2026-10-18T04:44:33.035352564Z",
+          "RequestBytes": 68928,
+          "RequestSHA256": "30016eff26fc0df3db8cc3268da03476b94b3485cadb0a8421bae50dd20e4bdb",
+          "UserVersion": 64,
+          "Micros": 7361
+        },
+        {
+          "Leaf": "dirty_data_capsnaps_across_two_snapshots_and_mds_restart",
+          "Op": "write",
+          "Object": "10000000004.00000000",
+          "ObjectNo": 0,
+          "Length": 131072,
+          "ReplyLength": 131072,
+          "SnapContext": {
+            "Sequence": 3,
+            "Snapshots": [
+              3,
+              2
+            ]
+          },
+          "MapEpoch": 26,
+          "Hash": 398845637,
+          "Code": 0,
+          "Transaction": 177,
+          "ReplayVersion": {
+            "Epoch": 26,
+            "Version": 66
+          },
+          "ReplyFlags": 67108901,
+          "Started": "2026-10-18T04:44:33.035836594Z",
+          "Completed": "2026-10-18T04:44:33.043170014Z",
+          "RequestBytes": 131072,
+          "RequestSHA256": "75b7de79b130957062557ea7259a838d415140e138a08fea4b88627aaa39f258",
+          "UserVersion": 66,
+          "Micros": 7333
+        },
+        {
+          "Leaf": "dirty_data_capsnaps_across_two_snapshots_and_mds_restart",
+          "Op": "write",
+          "Object": "10000000004.00000001",
+          "ObjectNo": 1,
+          "Length": 88928,
+          "ReplyLength": 88928,
+          "SnapContext": {
+            "Sequence": 3,
+            "Snapshots": [
+              3,
+              2
+            ]
+          },
+          "MapEpoch": 26,
+          "Hash": 3227076529,
+          "Code": 0,
+          "Transaction": 178,
+          "ReplayVersion": {
+            "Epoch": 26,
+            "Version": 68
+          },
+          "ReplyFlags": 67108901,
+          "Started": "2026-10-18T04:44:33.043659705Z",
+          "Completed": "2026-10-18T04:44:33.051026345Z",
+          "RequestBytes": 88928,
+          "RequestSHA256": "17c082c34a6f951ad783c4a4d641321471f2613080fa5b2ca7fbd588162ada0a",
+          "UserVersion": 68,
+          "Micros": 7366
+        }
+      ],
+      "flushes": [
+        {
+          "inode": 1099511627780,
+          "tid": 6,
+          "oldest_tid": 6,
+          "follows": 2,
+          "dirty": 4096,
+          "size": 200000,
+          "mtime": {
+            "Seconds": 1792298665,
+            "Nanoseconds": 709465604
+          },
+          "original_admission_generation": 1,
+          "resubmissions": [
+            {
+              "Generation": 2,
+              "ReconnectedFrom": 1,
+              "Selected": "2026-10-18T04:45:16.990912489Z",
+              "Started": "2026-10-18T04:45:16.990913319Z",
+              "Sent": "2026-10-18T04:45:16.990929589Z"
+            }
+          ],
+          "writeback_started": "2026-10-18T04:44:33.011558886Z",
+          "writeback_completed": "2026-10-18T04:44:33.035354204Z",
+          "sent": "2026-10-18T04:44:42.154550397Z",
+          "acked": "2026-10-18T04:45:16.991650115Z",
+          "ack": {
+            "tid": 6,
+            "inode": 1099511627780,
+            "follows": 2,
+            "dirty": 4096,
+            "arrival": 11
+          }
+        },
+        {
+          "inode": 1099511627780,
+          "tid": 7,
+          "oldest_tid": 6,
+          "follows": 3,
+          "dirty": 4096,
+          "size": 220000,
+          "mtime": {
+            "Seconds": 1792298669,
+            "Nanoseconds": 311068464
+          },
+          "original_admission_generation": 2,
+          "resubmissions": [],
+          "writeback_started": "2026-10-18T04:44:33.035356874Z",
+          "writeback_completed": "2026-10-18T04:44:33.051027655Z",
+          "sent": "2026-10-18T04:45:22.992313092Z",
+          "acked": "2026-10-18T04:45:24.652916478Z",
+          "ack": {
+            "tid": 7,
+            "inode": 1099511627780,
+            "follows": 3,
+            "dirty": 4096,
+            "arrival": 16
+          }
+        }
+      ],
+      "snapshot_ids": [
+        3,
+        4
+      ],
+      "contexts": [
+        {
+          "Sequence": 2,
+          "Snapshots": [
+            2
+          ]
+        },
+        {
+          "Sequence": 3,
+          "Snapshots": [
+            3,
+            2
+          ]
+        },
+        {
+          "Sequence": 4,
+          "Snapshots": [
+            4,
+            3,
+            2
+          ]
+        }
+      ],
+      "go_lists": {
+        "0": {
+          "Sequence": 4,
+          "Clones": [
+            {
+              "ID": 3,
+              "Snapshots": [
+                3
+              ],
+              "Overlap": [],
+              "Size": 131072
+            },
+            {
+              "ID": 4,
+              "Snapshots": [
+                4
+              ],
+              "Overlap": [],
+              "Size": 131072
+            },
+            {
+              "ID": 18446744073709551614,
+              "Snapshots": [],
+              "Overlap": [],
+              "Size": 131072
+            }
+          ]
+        },
+        "1": {
+          "Sequence": 4,
+          "Clones": [
+            {
+              "ID": 3,
+              "Snapshots": [
+                3
+              ],
+              "Overlap": [],
+              "Size": 68928
+            },
+            {
+              "ID": 4,
+              "Snapshots": [
+                4
+              ],
+              "Overlap": [],
+              "Size": 88928
+            },
+            {
+              "ID": 18446744073709551614,
+              "Snapshots": [],
+              "Overlap": [],
+              "Size": 108928
+            }
+          ]
+        }
+      },
+      "native_objects": [
+        {
+          "objno": 0,
+          "name": "10000000004.00000000",
+          "exists": true,
+          "size": 131072,
+          "snaps": {
+            "seq": 4,
+            "clones": [
+              {
+                "head": false,
+                "id": 3,
+                "snapshots": [
+                  3
+                ],
+                "size": 131072,
+                "overlaps": []
+              },
+              {
+                "head": false,
+                "id": 4,
+                "snapshots": [
+                  4
+                ],
+                "size": 131072,
+                "overlaps": []
+              },
+              {
+                "head": true,
+                "id": 0,
+                "snapshots": [],
+                "size": 131072,
+                "overlaps": []
+              }
+            ]
+          }
+        },
+        {
+          "objno": 1,
+          "name": "10000000004.00000001",
+          "exists": true,
+          "size": 108928,
+          "snaps": {
+            "seq": 4,
+            "clones": [
+              {
+                "head": false,
+                "id": 3,
+                "snapshots": [
+                  3
+                ],
+                "size": 68928,
+                "overlaps": []
+              },
+              {
+                "head": false,
+                "id": 4,
+                "snapshots": [
+                  4
+                ],
+                "size": 88928,
+                "overlaps": []
+              },
+              {
+                "head": true,
+                "id": 0,
+                "snapshots": [],
+                "size": 108928,
+                "overlaps": []
+              }
+            ]
+          }
+        }
+      ],
+      "native_reads": [
+        {
+          "target": "capsnap-a-file",
+          "bytes": 200000,
+          "sha256": "ccc89fd8f3ce002e71ff7811df34aea87f9c02c209fd77c6f1b4e1f36547bad8",
+          "native_stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 1099511627780,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 200000,
+            "mtime": 1792298665,
+            "version": 1
+          },
+          "chunk_count": 13
+        },
+        {
+          "target": "capsnap-b-file",
+          "bytes": 220000,
+          "sha256": "65ff0fd5e3ae8a63e1ae5ee1c389bf5b1ec7fe5d58194f6a30f0c1653f5fd1f2",
+          "native_stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 1099511627780,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 220000,
+            "mtime": 1792298669,
+            "version": 2
+          },
+          "chunk_count": 14
+        },
+        {
+          "target": "capsnap-file",
+          "bytes": 240000,
+          "sha256": "6916811e9fba7757d11bdfd1ded7707e0491a7c01ae60d84f40aea2dd16e4466",
+          "native_stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 1099511627780,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 240000,
+            "mtime": 1792298725,
+            "version": 3
+          },
+          "chunk_count": 15
+        }
+      ],
+      "cleanup": {
+        "owned_containers_removed": 9,
+        "owned_network_removed": true,
+        "native_checks": {
+          "config_restored": true,
+          "namespace_checked": true,
+          "namespace_restored": true,
+          "layout_restored": true,
+          "blocklist_restored": true,
+          "client_identity_removed": true,
+          "native_identity_removed": true,
+          "completed": true
+        },
+        "fresh_checks": {
+          "filesystem_removed": true,
+          "pools_removed": true,
+          "identity_removed": true,
+          "cephfs_data_verified": true,
+          "completed": true
+        },
+        "removed_blocklist": [
+          {
+            "kind": "mds-restart",
+            "entry": {
+              "address": "172.18.0.10:6800/2927596593",
+              "range": false,
+              "until": "2026-10-19T04:44:59.583702Z"
+            }
+          }
+        ],
+        "runtime": [
+          {
+            "kind": "debug-on",
+            "settings": {
+              "debug_mds": "10/10",
+              "debug_ms": "1/5"
+            },
+            "baseline": {
+              "debug_mds": "1/5",
+              "debug_ms": "0/0"
+            },
+            "incarnation_gid": 4695,
+            "request_id": 1792298673051206519,
+            "state": "discarded-by-restart",
+            "readback": {
+              "debug_mds": "10/10",
+              "debug_ms": "1/5"
+            }
+          },
+          {
+            "kind": "log-pause",
+            "settings": {
+              "mds_log_pause": "true"
+            },
+            "baseline": {
+              "mds_log_pause": "false"
+            },
+            "incarnation_gid": 4695,
+            "request_id": 1792298679052911253,
+            "state": "restored",
+            "readback": {
+              "mds_log_pause": "true"
+            },
+            "restore_request_id": 1792298687756490967,
+            "restore_readback": {
+              "mds_log_pause": "false"
+            }
+          },
+          {
+            "kind": "blackhole-on",
+            "settings": {
+              "ms_blackhole_client": "true"
+            },
+            "baseline": {
+              "ms_blackhole_client": "false"
+            },
+            "incarnation_gid": 4695,
+            "request_id": 1792298684755532414,
+            "state": "discarded-by-restart",
+            "readback": {
+              "ms_blackhole_client": "true"
+            }
+          },
+          {
+            "kind": "debug-on",
+            "settings": {
+              "debug_mds": "10/10",
+              "debug_ms": "1/5"
+            },
+            "baseline": {
+              "debug_mds": "1/5",
+              "debug_ms": "0/0"
+            },
+            "incarnation_gid": 17192,
+            "request_id": 1792298711089688077,
+            "state": "restored",
+            "readback": {
+              "debug_mds": "10/10",
+              "debug_ms": "1/5"
+            },
+            "restore_request_id": 1792298719591698070,
+            "restore_readback": {
+              "debug_mds": "1/5",
+              "debug_ms": "0/0"
+            }
+          }
+        ],
+        "config": {
+          "debug_mds": "1/5",
+          "debug_ms": "0/0",
+          "mds_log_pause": "false",
+          "ms_blackhole_client": "false"
+        }
+      },
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "de15c91e54bf6535c455154be9bc25c8d203ac1df40ac0f7df906d38f11508eb",
+        "fixture-manifest.json": "eff333b2924d5422f8adbde4bb0f2e66c6af773606676c214623d179bea8fc4a",
+        "mds-cephfs-data-cleanup.json": "5f7d418338c30caeb4003ec84d5b6362327b24ed1d084062a93cab844116f61f",
+        "mds-cephfs-data-results.json": "2d447c5d47dff0062e1927dfc630c3effd8c17332538a9a9ba092d4520f1eb29",
+        "mds-cephfs-data-target.json": "c4f0f6e1ce24ef759384abe09362f7a8e12b384254605f81d8ba3d29cfcae504",
+        "mds-fresh-cleanup.json": "6f80b69f61296ecdbb260bbc9211302216d5395dbd4a719bea8dd8212aa6817f",
+        "run-receipt.json": "f7fb62eb73f9186e02236c693b436acf9f351c6dd1c39c4927f2119c32a4665c",
+        "run.log": "ba9b07425d4b94668bfd182e3b02aa59d93fa0e5fb5510b6bf1746086d7acedb"
+      },
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "profile": {
+        "architecture": "amd64",
+        "runtime": "container",
+        "connection_mode": "secure",
+        "ip_family": "6",
+        "key_type": "aes256k",
+        "service_cipher": "aes256k",
+        "osd_store": "memstore",
+        "osd_profile": "legacy-v6",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "provider_version": "v0.3.0"
+      },
+      "start": "2026-10-18T04:41:49.822348+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T04:46:43.402582+00:00",
+      "fsid": "0afd3d4c-7dcf-4529-a870-fe5ad187fe82",
+      "global_id": 4944,
+      "cephfs_nonce": 999554897,
+      "mds_osd_dials": [
+        4,
+        1
+      ],
+      "go_tests": [
+        {
+          "test": "TestCephMDSCephFSDataIntegration",
+          "seconds": 185.03
+        }
+      ],
+      "passed_leaf_count": 12,
+      "case_ms": {
+        "cleanup_unlink_release_close": 25214,
+        "concurrent_reader_flushes_buffered_write": 7516,
+        "dirty_data_capsnaps_across_two_snapshots_and_mds_restart": 80823,
+        "go_striped_write_flush": 7947,
+        "native_sparse_file_read": 8411,
+        "native_truncate_trunc_push": 10918,
+        "open_data_session_and_layout": 5604,
+        "read_with_newer_truncate_seq_clips": 5308,
+        "sequenced_truncate_noop_when_not_newer": 5609,
+        "snapshot_write_clones_objects": 16795,
+        "stale_truncate_seq_write_trimmed": 5408,
+        "write_after_truncate_with_truncate_seq": 5454
+      },
+      "restart": {
+        "state": "adopted",
+        "arm_request_id": 1792298698521203521,
+        "fire_request_id": 1792298701322279757,
+        "adopt_request_id": 1792298706471050304,
+        "armed": {
+          "name": "ceph-msgr-fresh-16babf37c61d44414e8b09266054bb23-0",
+          "gid": 14551,
+          "rank": 0,
+          "state": "up:active",
+          "incarnation": 6,
+          "endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+          "nonce": 716868881
+        },
+        "armed_blocklist_addresses": [
+          "[fdf1:f2e6:6e7f::a]:6800/716868881"
+        ],
+        "native_output": "",
+        "error": "",
+        "fire_started_utc": "2026-10-18T04:45:01.371613047Z",
+        "fired_utc": "2026-10-18T04:45:01.71393197Z",
+        "adopted": {
+          "name": "ceph-msgr-fresh-16babf37c61d44414e8b09266054bb23-0",
+          "gid": 17176,
+          "rank": 0,
+          "state": "up:active",
+          "incarnation": 10,
+          "endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+          "nonce": 1813207681
+        },
+        "adopted_utc": "2026-10-18T04:45:08.754269104Z",
+        "old_incarnation_blocklist": [
+          {
+            "address": "[fdf1:f2e6:6e7f::a]:6800/716868881",
+            "range": false,
+            "until": "2026-10-19T04:45:01.651889Z"
+          }
+        ]
+      },
+      "old_admitted": [
+        {
+          "Ino": 1099511627780,
+          "Context": {
+            "Sequence": 2,
+            "Snapshots": [
+              2
+            ]
+          },
+          "Caps": {
+            "Op": 9,
+            "Ino": 1099511627780,
+            "Realm": 1099511627776,
+            "CapID": 0,
+            "Seq": 0,
+            "IssueSeq": 0,
+            "Caps": 16349,
+            "Wanted": 0,
+            "Dirty": 4096,
+            "MigrateSeq": 0,
+            "SnapFollows": 2,
+            "UID": 0,
+            "GID": 0,
+            "Mode": 33188,
+            "NLink": 0,
+            "XattrVersion": 0,
+            "Size": 200000,
+            "MaxSize": 0,
+            "TruncateSize": 0,
+            "TruncateSeq": 0,
+            "MTime": {
+              "Seconds": 1792298667,
+              "Nanoseconds": 806915565
+            },
+            "ATime": {
+              "Seconds": 1792298667,
+              "Nanoseconds": 794392345
+            },
+            "CTime": {
+              "Seconds": 1792298667,
+              "Nanoseconds": 806915565
+            },
+            "Layout": {
+              "StripeUnit": 0,
+              "StripeCount": 0,
+              "ObjectSize": 0,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 0,
+              "PoolNamespace": ""
+            },
+            "TimeWarpSeq": 0,
+            "Peer": {
+              "CapID": 0,
+              "IssueSeq": 0,
+              "MSeq": 0,
+              "MDS": 0,
+              "Flags": 0
+            },
+            "InlineVersion": 18446744073709551615,
+            "OSDEpochBarrier": 27,
+            "OldestFlushTID": 6,
+            "CallerUID": 4294967295,
+            "CallerGID": 4294967295,
+            "BTime": {
+              "Seconds": 1792298667,
+              "Nanoseconds": 794392345
+            },
+            "ChangeAttr": 1,
+            "Flags": 0,
+            "Files": -1,
+            "Subdirs": -1
+          },
+          "Buffered": false,
+          "WritebackStarted": "2026-10-18T04:44:35.209815053Z",
+          "WritebackCompleted": "2026-10-18T04:44:35.211798574Z",
+          "Sent": "2026-10-18T04:44:44.316603522Z",
+          "Acked": "0001-01-01T00:00:00Z",
+          "Transaction": 6,
+          "SentGeneration": 1
+        },
+        {
+          "Ino": 1099511627780,
+          "Context": {
+            "Sequence": 3,
+            "Snapshots": [
+              3,
+              2
+            ]
+          },
+          "Caps": {
+            "Op": 9,
+            "Ino": 1099511627780,
+            "Realm": 1099511627776,
+            "CapID": 0,
+            "Seq": 0,
+            "IssueSeq": 0,
+            "Caps": 16349,
+            "Wanted": 0,
+            "Dirty": 4096,
+            "MigrateSeq": 0,
+            "SnapFollows": 3,
+            "UID": 0,
+            "GID": 0,
+            "Mode": 33188,
+            "NLink": 0,
+            "XattrVersion": 0,
+            "Size": 220000,
+            "MaxSize": 0,
+            "TruncateSize": 0,
+            "TruncateSeq": 0,
+            "MTime": {
+              "Seconds": 1792298671,
+              "Nanoseconds": 508608685
+            },
+            "ATime": {
+              "Seconds": 1792298667,
+              "Nanoseconds": 794392345
+            },
+            "CTime": {
+              "Seconds": 1792298671,
+              "Nanoseconds": 508608685
+            },
+            "Layout": {
+              "StripeUnit": 0,
+              "StripeCount": 0,
+              "ObjectSize": 0,
+              "CASHash": 0,
+              "ObjectStripeUnit": 0,
+              "Unused": 0,
+              "Pool": 0,
+              "PoolNamespace": ""
+            },
+            "TimeWarpSeq": 0,
+            "Peer": {
+              "CapID": 0,
+              "IssueSeq": 0,
+              "MSeq": 0,
+              "MDS": 0,
+              "Flags": 0
+            },
+            "InlineVersion": 18446744073709551615,
+            "OSDEpochBarrier": 27,
+            "OldestFlushTID": 6,
+            "CallerUID": 4294967295,
+            "CallerGID": 4294967295,
+            "BTime": {
+              "Seconds": 1792298667,
+              "Nanoseconds": 794392345
+            },
+            "ChangeAttr": 2,
+            "Flags": 0,
+            "Files": -1,
+            "Subdirs": -1
+          },
+          "Buffered": false,
+          "WritebackStarted": "2026-10-18T04:44:35.211800074Z",
+          "WritebackCompleted": "2026-10-18T04:44:35.212965394Z",
+          "Sent": "0001-01-01T00:00:00Z",
+          "Acked": "0001-01-01T00:00:00Z",
+          "Transaction": 7,
+          "SentGeneration": 0
+        }
+      ],
+      "old_caps_log": {
+        "mark": 156,
+        "total_lines": 843,
+        "lines": [
+          "2026-10-18T04:44:44.316+0000 7c65d3d38640  1 -- v2:[fdf1:f2e6:6e7f::a]:6800/716868881 <== client.4944 v2:[fdf1:f2e6:6e7f::9]:0/999554897 136 ==== client_caps(flushsnap ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=pAsxLsXsxFsxcrwb dirty=Fw wanted=- follows 2 size 200000/0 mtime 2026-10-18T04:44:27.806915+0000 ctime 2026-10-18T04:44:27.806915+0000 change_attr 1) ==== 260+0+0 (secure 0 0 0) 0x5a62f211ea80 con 0x5a62f1e28400",
+          "2026-10-18T04:44:44.316+0000 7c65d3d38640  7 mds.0.locker handle_client_caps on 0x10000000004 tid 6 follows 2 op flushsnap flags 0x0",
+          "2026-10-18T04:44:44.316+0000 7c65d3d38640  7 mds.0.locker  flushsnap snap 3 client.4944 on [inode 0x10000000004 [3,head] /ceph-msgr-data-16babf37c61d44414e8b09266054bb23/capsnap-file auth v72 DIRTYPARENT s=0 n(v0 1=1+0) (iauth excl) (ifile excl) (ixattr excl) cr={4944=0-524288@2} caps={4944=pAsxLsXsxFsxcrwb/pAsxXsxFsxcrwb@3},l=4944 | ptrwaiter=0 request=0 lock=0 caps=1 dirtyparent=1 dirty=1 authpin=0 0x5a62f1e82000]",
+          "2026-10-18T04:44:51.239+0000 7c65cd52b640 10 mds.0.6 send_message_client_counted client.4944 seq 114 client_caps(flushsnap_ack ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=- dirty=Fw wanted=- follows 2 size 0/0 mtime 0.000000 ctime 0.000000 change_attr 0)",
+          "2026-10-18T04:44:51.239+0000 7c65cd52b640  1 -- v2:[fdf1:f2e6:6e7f::a]:6800/716868881 --> v2:[fdf1:f2e6:6e7f::9]:0/999554897 -- client_caps(flushsnap_ack ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=- dirty=Fw wanted=- follows 2 size 0/0 mtime 0.000000 ctime 0.000000 change_attr 0) -- 0x5a62f1ffae00 con 0x5a62f1e28400",
+          "2026-10-18T04:44:51.239+0000 7c65cd52b640  0 send_msgclient blackhole client_caps(flushsnap_ack ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=- dirty=Fw wanted=- follows 2 size 0/0 mtime 0.000000 ctime 0.000000 change_attr 0)"
+        ],
+        "dropped": 0,
+        "global_id": 4944,
+        "nonce": 999554897
+      },
+      "new_caps_log": {
+        "mark": 4282,
+        "total_lines": 4331,
+        "lines": [
+          "2026-10-18T04:45:19.274+0000 78ba32088640  1 -- v2:[fdf1:f2e6:6e7f::a]:6800/1813207681 <== client.4944 v2:[fdf1:f2e6:6e7f::9]:0/999554897 10 ==== client_caps(flushsnap ino 0x10000000004 0 seq 0 issue_seq 0 tid 6 caps=pAsxLsXsxFsxcrwb dirty=Fw wanted=- follows 2 size 200000/0 mtime 2026-10-18T04:44:27.806915+0000 ctime 2026-10-18T04:44:27.806915+0000 change_attr 1) ==== 260+0+0 (secure 0 0 0) 0x5e8809d58e00 con 0x5e8809cbcc00",
+          "2026-10-18T04:45:19.274+0000 78ba32088640  7 mds.0.locker handle_client_caps on 0x10000000004 tid 6 follows 2 op flushsnap flags 0x0",
+          "2026-10-18T04:45:19.274+0000 78ba32088640  7 mds.0.locker handle_client_caps already flushed tid 6 for client.4944"
+        ],
+        "dropped": 0,
+        "global_id": 4944,
+        "nonce": 999554897
+      },
+      "journal_barrier": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "16babf37c61d44414e8b09266054bb23",
+        "request_id": 1792298692919736958,
+        "action": "flush-journal",
+        "target": "",
+        "global_id": 0,
+        "fsid": "0afd3d4c-7dcf-4529-a870-fe5ad187fe82",
+        "fscid": 1,
+        "fs_name": "ceph-msgr-fresh-16babf37c61d44414e8b09266054bb23",
+        "mds_gid": 14551,
+        "mds_endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+        "mds_nonce": 716868881,
+        "mds_incarnation": 6,
+        "rank": 0,
+        "identity_checked": true,
+        "map": {
+          "mdsmap_epoch": 7,
+          "refuse_client_session": false,
+          "required_client_features": {},
+          "session_timeout": 60,
+          "session_autoclose": 300
+        },
+        "daemon_mdsmap_epoch": 7,
+        "flush_journal": {
+          "return_code": 0,
+          "message": ""
+        },
+        "complete": true,
+        "error": "",
+        "elapsed_ms": 2870,
+        "observed_utc": "2026-10-18T04:44:55.842251032Z"
+      },
+      "ack_blackhole": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "16babf37c61d44414e8b09266054bb23",
+        "request_id": 1792298686917685560,
+        "action": "blackhole-on",
+        "target": "",
+        "global_id": 0,
+        "fsid": "0afd3d4c-7dcf-4529-a870-fe5ad187fe82",
+        "fscid": 1,
+        "fs_name": "ceph-msgr-fresh-16babf37c61d44414e8b09266054bb23",
+        "mds_gid": 14551,
+        "mds_endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+        "mds_nonce": 716868881,
+        "mds_incarnation": 6,
+        "rank": 0,
+        "identity_checked": true,
+        "map": {
+          "mdsmap_epoch": 7,
+          "refuse_client_session": false,
+          "required_client_features": {},
+          "session_timeout": 60,
+          "session_autoclose": 300
+        },
+        "daemon_mdsmap_epoch": 7,
+        "runtime": {
+          "kind": "blackhole-on",
+          "settings": {
+            "ms_blackhole_client": "true"
+          },
+          "baseline": {
+            "ms_blackhole_client": "false"
+          },
+          "incarnation_gid": 14551,
+          "request_id": 1792298686917685560,
+          "state": "applied",
+          "readback": {
+            "ms_blackhole_client": "true"
+          }
+        },
+        "complete": true,
+        "error": "",
+        "elapsed_ms": 2942,
+        "observed_utc": "2026-10-18T04:44:49.913794998Z"
+      },
+      "journal_resume": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "token": "16babf37c61d44414e8b09266054bb23",
+        "request_id": 1792298689918956550,
+        "action": "log-resume",
+        "target": "",
+        "global_id": 0,
+        "fsid": "0afd3d4c-7dcf-4529-a870-fe5ad187fe82",
+        "fscid": 1,
+        "fs_name": "ceph-msgr-fresh-16babf37c61d44414e8b09266054bb23",
+        "mds_gid": 14551,
+        "mds_endpoint": "[fdf1:f2e6:6e7f::a]:6800",
+        "mds_nonce": 716868881,
+        "mds_incarnation": 6,
+        "rank": 0,
+        "identity_checked": true,
+        "map": {
+          "mdsmap_epoch": 7,
+          "refuse_client_session": false,
+          "required_client_features": {},
+          "session_timeout": 60,
+          "session_autoclose": 300
+        },
+        "daemon_mdsmap_epoch": 7,
+        "runtime": {
+          "kind": "log-pause",
+          "settings": {
+            "mds_log_pause": "true"
+          },
+          "baseline": {
+            "mds_log_pause": "false"
+          },
+          "incarnation_gid": 14551,
+          "request_id": 1792298681215317551,
+          "state": "restored",
+          "readback": {
+            "mds_log_pause": "true"
+          },
+          "restore_request_id": 1792298689918956550,
+          "restore_readback": {
+            "mds_log_pause": "false"
+          }
+        },
+        "complete": true,
+        "error": "",
+        "elapsed_ms": 2933,
+        "observed_utc": "2026-10-18T04:44:52.90573301Z"
+      },
+      "old_pending_ack": {
+        "TID": 6,
+        "Dirty": 4096
+      },
+      "old_resume_error": {
+        "Error": "io: read/write on closed pipe; stateful resume failed: ceph messenger session reconnect: ceph messenger: peer reset the stateful session",
+        "SessionReset": true,
+        "EOF": false,
+        "ConnectionRefused": false,
+        "ResumeDeadline": false,
+        "OutcomeUnknown": false,
+        "MDSSessionClosed": false,
+        "MDSSessionReconnectDenied": false
+      },
+      "explicit_resubmitted_tids": [
+        6
+      ],
+      "reconnect_caps": [
+        {
+          "Ino": 1,
+          "CapID": 2,
+          "Wanted": 0,
+          "Issued": 85,
+          "SnapRealm": 1,
+          "PathBase": 1,
+          "Path": "",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627776,
+          "CapID": 3,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1,
+          "Path": "ceph-msgr-data-16babf37c61d44414e8b09266054bb23",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627777,
+          "CapID": 1,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "go-file",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627778,
+          "CapID": 1,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "shared-file",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627779,
+          "CapID": 1,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "snap-file",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511627780,
+          "CapID": 1,
+          "Wanted": 16333,
+          "Issued": 16349,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "capsnap-file",
+          "SnapFollows": 2
+        },
+        {
+          "Ino": 1099511628778,
+          "CapID": 15,
+          "Wanted": 3329,
+          "Issued": 3413,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "native-file",
+          "SnapFollows": 0
+        },
+        {
+          "Ino": 1099511628779,
+          "CapID": 24,
+          "Wanted": 0,
+          "Issued": 341,
+          "SnapRealm": 1099511627776,
+          "PathBase": 1099511627776,
+          "Path": "trunc-file",
+          "SnapFollows": 0
+        }
+      ],
+      "reconnect_realms": [
+        {
+          "Ino": 1,
+          "Seq": 1,
+          "Parent": 0
+        },
+        {
+          "Ino": 1099511627776,
+          "Seq": 4,
+          "Parent": 1
+        }
+      ],
+      "object_requests_before_restart": 178,
+      "object_requests_after_reconnect_and_flush": 178,
+      "writeback": [
+        {
+          "Leaf": "dirty_data_capsnaps_across_two_snapshots_and_mds_restart",
+          "Op": "write",
+          "Object": "10000000004.00000000",
+          "ObjectNo": 0,
+          "Length": 131072,
+          "ReplyLength": 131072,
+          "SnapContext": {
+            "Sequence": 2,
+            "Snapshots": [
+              2
+            ]
+          },
+          "MapEpoch": 27,
+          "Hash": 398845637,
+          "Code": 0,
+          "Transaction": 175,
+          "ReplayVersion": {
+            "Epoch": 27,
+            "Version": 63
+          },
+          "ReplyFlags": 67108901,
+          "Started": "2026-10-18T04:44:35.210611073Z",
+          "Completed": "2026-10-18T04:44:35.211315181Z",
+          "RequestBytes": 131072,
+          "RequestSHA256": "0ea071857617d489a32cc248a60e6730680877d7915d9c5d2a6c72a33d5eacc6",
+          "UserVersion": 63,
+          "Micros": 704
+        },
+        {
+          "Leaf": "dirty_data_capsnaps_across_two_snapshots_and_mds_restart",
+          "Op": "write",
+          "Object": "10000000004.00000001",
+          "ObjectNo": 1,
+          "Length": 68928,
+          "ReplyLength": 68928,
+          "SnapContext": {
+            "Sequence": 2,
+            "Snapshots": [
+              2
+            ]
+          },
+          "MapEpoch": 27,
+          "Hash": 3227076529,
+          "Code": 0,
+          "Transaction": 176,
+          "ReplayVersion": {
+            "Epoch": 27,
+            "Version": 64
+          },
+          "ReplyFlags": 67108901,
+          "Started": "2026-10-18T04:44:35.211618979Z",
+          "Completed": "2026-10-18T04:44:35.211797814Z",
+          "RequestBytes": 68928,
+          "RequestSHA256": "d581e5f837beacbf769ad0abf952ecb2dd2db5e31856ce2666db17f733fe0c9f",
+          "UserVersion": 64,
+          "Micros": 178
+        },
+        {
+          "Leaf": "dirty_data_capsnaps_across_two_snapshots_and_mds_restart",
+          "Op": "write",
+          "Object": "10000000004.00000000",
+          "ObjectNo": 0,
+          "Length": 131072,
+          "ReplyLength": 131072,
+          "SnapContext": {
+            "Sequence": 3,
+            "Snapshots": [
+              3,
+              2
+            ]
+          },
+          "MapEpoch": 27,
+          "Hash": 398845637,
+          "Code": 0,
+          "Transaction": 177,
+          "ReplayVersion": {
+            "Epoch": 27,
+            "Version": 66
+          },
+          "ReplyFlags": 67108901,
+          "Started": "2026-10-18T04:44:35.212065791Z",
+          "Completed": "2026-10-18T04:44:35.212590344Z",
+          "RequestBytes": 131072,
+          "RequestSHA256": "f383a522d6ffbe78466d3304c43aab0631843d1c94025f2ae7cb9c180226d1dd",
+          "UserVersion": 66,
+          "Micros": 524
+        },
+        {
+          "Leaf": "dirty_data_capsnaps_across_two_snapshots_and_mds_restart",
+          "Op": "write",
+          "Object": "10000000004.00000001",
+          "ObjectNo": 1,
+          "Length": 88928,
+          "ReplyLength": 88928,
+          "SnapContext": {
+            "Sequence": 3,
+            "Snapshots": [
+              3,
+              2
+            ]
+          },
+          "MapEpoch": 27,
+          "Hash": 3227076529,
+          "Code": 0,
+          "Transaction": 178,
+          "ReplayVersion": {
+            "Epoch": 27,
+            "Version": 68
+          },
+          "ReplyFlags": 67108901,
+          "Started": "2026-10-18T04:44:35.212765558Z",
+          "Completed": "2026-10-18T04:44:35.212964583Z",
+          "RequestBytes": 88928,
+          "RequestSHA256": "1f76a953e87e744f0b9197c7f0e47734bd0ce8094ebcfc20dc526fdaf01cb3fb",
+          "UserVersion": 68,
+          "Micros": 199
+        }
+      ],
+      "flushes": [
+        {
+          "inode": 1099511627780,
+          "tid": 6,
+          "oldest_tid": 6,
+          "follows": 2,
+          "dirty": 4096,
+          "size": 200000,
+          "mtime": {
+            "Seconds": 1792298667,
+            "Nanoseconds": 806915565
+          },
+          "original_admission_generation": 1,
+          "resubmissions": [
+            {
+              "Generation": 2,
+              "ReconnectedFrom": 1,
+              "Selected": "2026-10-18T04:45:19.275096228Z",
+              "Started": "2026-10-18T04:45:19.275096788Z",
+              "Sent": "2026-10-18T04:45:19.275110028Z"
+            }
+          ],
+          "writeback_started": "2026-10-18T04:44:35.209815053Z",
+          "writeback_completed": "2026-10-18T04:44:35.211798574Z",
+          "sent": "2026-10-18T04:44:44.316603522Z",
+          "acked": "2026-10-18T04:45:19.275455577Z",
+          "ack": {
+            "tid": 6,
+            "inode": 1099511627780,
+            "follows": 2,
+            "dirty": 4096,
+            "arrival": 11
+          }
+        },
+        {
+          "inode": 1099511627780,
+          "tid": 7,
+          "oldest_tid": 6,
+          "follows": 3,
+          "dirty": 4096,
+          "size": 220000,
+          "mtime": {
+            "Seconds": 1792298671,
+            "Nanoseconds": 508608685
+          },
+          "original_admission_generation": 2,
+          "resubmissions": [],
+          "writeback_started": "2026-10-18T04:44:35.211800074Z",
+          "writeback_completed": "2026-10-18T04:44:35.212965394Z",
+          "sent": "2026-10-18T04:45:25.276976777Z",
+          "acked": "2026-10-18T04:45:26.723336537Z",
+          "ack": {
+            "tid": 7,
+            "inode": 1099511627780,
+            "follows": 3,
+            "dirty": 4096,
+            "arrival": 16
+          }
+        }
+      ],
+      "snapshot_ids": [
+        3,
+        4
+      ],
+      "contexts": [
+        {
+          "Sequence": 2,
+          "Snapshots": [
+            2
+          ]
+        },
+        {
+          "Sequence": 3,
+          "Snapshots": [
+            3,
+            2
+          ]
+        },
+        {
+          "Sequence": 4,
+          "Snapshots": [
+            4,
+            3,
+            2
+          ]
+        }
+      ],
+      "go_lists": {
+        "0": {
+          "Sequence": 4,
+          "Clones": [
+            {
+              "ID": 3,
+              "Snapshots": [
+                3
+              ],
+              "Overlap": [],
+              "Size": 131072
+            },
+            {
+              "ID": 4,
+              "Snapshots": [
+                4
+              ],
+              "Overlap": [],
+              "Size": 131072
+            },
+            {
+              "ID": 18446744073709551614,
+              "Snapshots": [],
+              "Overlap": [],
+              "Size": 131072
+            }
+          ]
+        },
+        "1": {
+          "Sequence": 4,
+          "Clones": [
+            {
+              "ID": 3,
+              "Snapshots": [
+                3
+              ],
+              "Overlap": [],
+              "Size": 68928
+            },
+            {
+              "ID": 4,
+              "Snapshots": [
+                4
+              ],
+              "Overlap": [],
+              "Size": 88928
+            },
+            {
+              "ID": 18446744073709551614,
+              "Snapshots": [],
+              "Overlap": [],
+              "Size": 108928
+            }
+          ]
+        }
+      },
+      "native_objects": [
+        {
+          "objno": 0,
+          "name": "10000000004.00000000",
+          "exists": true,
+          "size": 131072,
+          "snaps": {
+            "seq": 4,
+            "clones": [
+              {
+                "head": false,
+                "id": 3,
+                "snapshots": [
+                  3
+                ],
+                "size": 131072,
+                "overlaps": []
+              },
+              {
+                "head": false,
+                "id": 4,
+                "snapshots": [
+                  4
+                ],
+                "size": 131072,
+                "overlaps": []
+              },
+              {
+                "head": true,
+                "id": 0,
+                "snapshots": [],
+                "size": 131072,
+                "overlaps": []
+              }
+            ]
+          }
+        },
+        {
+          "objno": 1,
+          "name": "10000000004.00000001",
+          "exists": true,
+          "size": 108928,
+          "snaps": {
+            "seq": 4,
+            "clones": [
+              {
+                "head": false,
+                "id": 3,
+                "snapshots": [
+                  3
+                ],
+                "size": 68928,
+                "overlaps": []
+              },
+              {
+                "head": false,
+                "id": 4,
+                "snapshots": [
+                  4
+                ],
+                "size": 88928,
+                "overlaps": []
+              },
+              {
+                "head": true,
+                "id": 0,
+                "snapshots": [],
+                "size": 108928,
+                "overlaps": []
+              }
+            ]
+          }
+        }
+      ],
+      "native_reads": [
+        {
+          "target": "capsnap-a-file",
+          "bytes": 200000,
+          "sha256": "fdf8e7231447d3b3db57fbb490db1eb6b269654777101911a2a1d3c7342b9940",
+          "native_stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 1099511627780,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 200000,
+            "mtime": 1792298667,
+            "version": 1
+          },
+          "chunk_count": 13
+        },
+        {
+          "target": "capsnap-b-file",
+          "bytes": 220000,
+          "sha256": "2c4ee40205ddb83f8a73ef14c9166bd270fa0cb9275549af0ecf77209940044e",
+          "native_stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 1099511627780,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 220000,
+            "mtime": 1792298671,
+            "version": 2
+          },
+          "chunk_count": 14
+        },
+        {
+          "target": "capsnap-file",
+          "bytes": 240000,
+          "sha256": "0def84fd5ad5d512f4bb9243b3374c35a3f355d97ce6f1f9e8422c3d6f388963",
+          "native_stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 1099511627780,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 240000,
+            "mtime": 1792298728,
+            "version": 3
+          },
+          "chunk_count": 15
+        }
+      ],
+      "cleanup": {
+        "owned_containers_removed": 9,
+        "owned_network_removed": true,
+        "native_checks": {
+          "config_restored": true,
+          "namespace_checked": true,
+          "namespace_restored": true,
+          "layout_restored": true,
+          "blocklist_restored": true,
+          "client_identity_removed": true,
+          "native_identity_removed": true,
+          "completed": true
+        },
+        "fresh_checks": {
+          "filesystem_removed": true,
+          "pools_removed": true,
+          "identity_removed": true,
+          "cephfs_data_verified": true,
+          "completed": true
+        },
+        "removed_blocklist": [
+          {
+            "kind": "mds-restart",
+            "entry": {
+              "address": "[fdf1:f2e6:6e7f::a]:6800/716868881",
+              "range": false,
+              "until": "2026-10-19T04:45:01.651889Z"
+            }
+          }
+        ],
+        "runtime": [
+          {
+            "kind": "debug-on",
+            "settings": {
+              "debug_mds": "10/10",
+              "debug_ms": "1/5"
+            },
+            "baseline": {
+              "debug_mds": "1/5",
+              "debug_ms": "0/0"
+            },
+            "incarnation_gid": 14551,
+            "request_id": 1792298675213072746,
+            "state": "discarded-by-restart",
+            "readback": {
+              "debug_mds": "10/10",
+              "debug_ms": "1/5"
+            }
+          },
+          {
+            "kind": "log-pause",
+            "settings": {
+              "mds_log_pause": "true"
+            },
+            "baseline": {
+              "mds_log_pause": "false"
+            },
+            "incarnation_gid": 14551,
+            "request_id": 1792298681215317551,
+            "state": "restored",
+            "readback": {
+              "mds_log_pause": "true"
+            },
+            "restore_request_id": 1792298689918956550,
+            "restore_readback": {
+              "mds_log_pause": "false"
+            }
+          },
+          {
+            "kind": "blackhole-on",
+            "settings": {
+              "ms_blackhole_client": "true"
+            },
+            "baseline": {
+              "ms_blackhole_client": "false"
+            },
+            "incarnation_gid": 14551,
+            "request_id": 1792298686917685560,
+            "state": "discarded-by-restart",
+            "readback": {
+              "ms_blackhole_client": "true"
+            }
+          },
+          {
+            "kind": "debug-on",
+            "settings": {
+              "debug_mds": "10/10",
+              "debug_ms": "1/5"
+            },
+            "baseline": {
+              "debug_mds": "1/5",
+              "debug_ms": "0/0"
+            },
+            "incarnation_gid": 17176,
+            "request_id": 1792298713273818554,
+            "state": "restored",
+            "readback": {
+              "debug_mds": "10/10",
+              "debug_ms": "1/5"
+            },
+            "restore_request_id": 1792298721875977458,
+            "restore_readback": {
+              "debug_mds": "1/5",
+              "debug_ms": "0/0"
+            }
+          }
+        ],
+        "config": {
+          "debug_mds": "1/5",
+          "debug_ms": "0/0",
+          "mds_log_pause": "false",
+          "ms_blackhole_client": "false"
+        }
+      },
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "9b1744e3d770b4c473ad98805be41ac5e9de6e0c4c07d50609c7be6057160629",
+        "fixture-manifest.json": "e2fa4e3a20bd27fe3a2b1a9e0999ce1b0155d1880acc18028ede7d5e504c9813",
+        "mds-cephfs-data-cleanup.json": "29a6eb9e412b35d0beb8af9eb77a83775cdc70bdb31de1c4c786a5e508355f46",
+        "mds-cephfs-data-results.json": "8dcc5e22e45b5cac3c8041288263a7062ca829d57485430cf1523f1cb983aade",
+        "mds-cephfs-data-target.json": "dbf6586b49b1d1f256e6ebd105ac1a78869b970e23a515f809dbdc3c6c6685a6",
+        "mds-fresh-cleanup.json": "6ec52933507bb4ba92943f37b57acdb1f670ffcd6bf5160e06fbbef348e752f0",
+        "run-receipt.json": "5f48a4867b8ba1bc76e3b83cce4c3f2bba4f32df7033a80abad929cecc91b836",
+        "run.log": "330c8425bbb90fdd0da0fb82f723df79e1f22a0a57f3ab8ead6598a861dd3365"
+      },
+      "local_evidence_directory": "<path>"
+    }
+  ],
+  "initial_runs_before_independent_session_fixes": [
+    {
+      "profile": "crc-host",
+      "start": "2026-10-18T04:35:37.980405+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T04:40:40.087406+00:00",
+      "source_base": "210e06f6ff296f8fb7b3a87cdd48cae42e0e8049",
+      "source_sha256": {
+        "integration/fixture/main.go": "5e6c0a0f16999dbe7fdb24f00fa2ea3f6d6782fd0373e0133c3a3dc4951069e5",
+        "integration/fixture/mds_cephfs_data.go": "814ce60a79105a7157e9db91d6883188d341ffe8015f34a92abf318d022ec70f",
+        "integration/fixture/mds_cephfs_data_runtime.go": "31b581c9dacaab43bdfa6315cf688664b75fc869f4bad133c83fbaec07e539a8",
+        "integration/fixture/mds_cephfs_data_runtime_test.go": "b01d43fc567b7afe27341d6ef6fb4c324da94b76d419590c5c98cdb896c7a560",
+        "integration/mds_cephfs_capsnap_recovery_test.go": "26a721eaf80e84c1dc961dc095126c9fd24772ea2ef3c505524ab3ca73358fed",
+        "integration/mds_cephfs_data_test.go": "5a4a7a0793facb0d15aabbfce5993156c15e5502ce69bd0220c2208997e33d5f"
+      },
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "843b774381fd000e8482f1220c38afcad31d6ec125ee0584cf8cbaaab3b4c000",
+        "fixture-manifest.json": "c6db080cb5d22529beac5e49a186fa67d37c980a38702803ad2e2d833a03ae5c",
+        "mds-cephfs-data-cleanup.json": "bbd2acf5ca5a3f3296e0084305e73df9d64072a896ce7487380d500209213c31",
+        "mds-cephfs-data-results.json": "dfa37d73ccfdcd7d7e63f52e560951e3a4ffb37e4c83f9018cd0b00d1dfd51af",
+        "mds-cephfs-data-target.json": "de5a6ccbeb9d1247c90cd058360f41c29997ab1e07fcbd9fe44eb397c316b93d",
+        "mds-fresh-cleanup.json": "9084e51ac16827b128f40660e87a17d8394ca7c92518a07889757e12e37e4263",
+        "run-receipt.json": "f79a1afcb6debb614e9ba0fe4fb3b006d19edb5a1083225d0f4713215227ff96",
+        "run.log": "ceee020ddd4dfb55b5150c8170e2f880d0468064fae462e7387b5b5ffc030cc3"
+      },
+      "owned_containers_removed": 9,
+      "owned_network_removed": true,
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "profile": "secure-ipv6",
+      "start": "2026-10-18T04:35:37.807797+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T04:40:31.226216+00:00",
+      "source_base": "210e06f6ff296f8fb7b3a87cdd48cae42e0e8049",
+      "source_sha256": {
+        "integration/fixture/main.go": "5e6c0a0f16999dbe7fdb24f00fa2ea3f6d6782fd0373e0133c3a3dc4951069e5",
+        "integration/fixture/mds_cephfs_data.go": "814ce60a79105a7157e9db91d6883188d341ffe8015f34a92abf318d022ec70f",
+        "integration/fixture/mds_cephfs_data_runtime.go": "31b581c9dacaab43bdfa6315cf688664b75fc869f4bad133c83fbaec07e539a8",
+        "integration/fixture/mds_cephfs_data_runtime_test.go": "b01d43fc567b7afe27341d6ef6fb4c324da94b76d419590c5c98cdb896c7a560",
+        "integration/mds_cephfs_capsnap_recovery_test.go": "26a721eaf80e84c1dc961dc095126c9fd24772ea2ef3c505524ab3ca73358fed",
+        "integration/mds_cephfs_data_test.go": "5a4a7a0793facb0d15aabbfce5993156c15e5502ce69bd0220c2208997e33d5f"
+      },
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "09f2c34959ffa4cfcca0c957cb2302197af3cfda136f157ec46ea4bceb61aa56",
+        "fixture-manifest.json": "8e95916e96ec2c4377f9496902247e2790c9fa6e90adfcd8fd3580c1e7342a02",
+        "mds-cephfs-data-cleanup.json": "9181b3d893088acff9b7f49634527eb990894926320cab6b78d552c283cff200",
+        "mds-cephfs-data-results.json": "1644fda86b87deacf33978d74706a3ce306e1d6c359a9ceb524be594a5124cf7",
+        "mds-cephfs-data-target.json": "9b89e30bdabf37bdc7b0c268e2695493494bce74ac2e928e7220fca01518a331",
+        "mds-fresh-cleanup.json": "5f87fa75900ed2281b5ca5334c60560a641382ad68d598dad1f30d4905c5dd02",
+        "run-receipt.json": "a1526cb40d8413ecad3074bcdfd3fae39b069b35cbe5ad86c41faa8e59b88abb",
+        "run.log": "92c9a3ff54e72e15222c1bce98086e30015b5abba11aa1f52e935eb8da63fcc9"
+      },
+      "owned_containers_removed": 9,
+      "owned_network_removed": true,
+      "local_evidence_directory": "<path>"
+    }
+  ]
+}

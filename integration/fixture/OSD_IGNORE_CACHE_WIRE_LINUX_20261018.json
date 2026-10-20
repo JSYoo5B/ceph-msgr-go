@@ -1,0 +1,217 @@
+{
+  "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "native offline wire and synthetic authenticated transport verified; Go live cache-pool interoperability pending",
+  "source": {
+    "selected_files": [
+      {
+        "file": "cephmsgr/api.go",
+        "bytes": 13742,
+        "sha256": "5b8e958157b6709f4e29a4aae26f8aad1344f152768029c5604128f90463ef19"
+      },
+      {
+        "file": "cephmsgr/client.go",
+        "bytes": 32031,
+        "sha256": "c48411f4bab8ab1e89309ecbb42dac995aa6ee0b2312c539ba145848cc774208"
+      },
+      {
+        "file": "cephmsgr/named_mon.go",
+        "bytes": 8822,
+        "sha256": "e6701fe7894448f429011027116fafde70171190c92af39cec0b14b11a6ff6aa"
+      },
+      {
+        "file": "cephmsgr/osd.go",
+        "bytes": 7604,
+        "sha256": "97cb480ea1c01d255826fe2081ddf627838a30ec3de98b8df80c82dfc209824a"
+      },
+      {
+        "file": "cephmsgr/osd_ignore_cache_test.go",
+        "bytes": 11212,
+        "sha256": "e325f9ead871ac8fea4ea1bfe38288f3c4c4b41f87211075c81f4608f206babf"
+      },
+      {
+        "file": "cephmsgr/osd_profile.go",
+        "bytes": 6868,
+        "sha256": "1ccb9ac21f43143eefaa727009943714fcf35b61a4e358636f3e5f7cc2ca1e3e"
+      },
+      {
+        "file": "cephmsgr/osd_request.go",
+        "bytes": 35299,
+        "sha256": "080cb81efbc00fada76877877edc5ea33848039e1f6e932f0c9d5eb42bb96723"
+      },
+      {
+        "file": "internal/osd/CACHE_POOL_CONTRACT.md",
+        "bytes": 4264,
+        "sha256": "9670cac503e236e5fb564ff6f6cba55f060edddfa53062cb856cd9942438f1a0"
+      },
+      {
+        "file": "internal/osd/CONTRACT.md",
+        "bytes": 16235,
+        "sha256": "eb70a04c03715715ab3553bd37204f585f933b38f9bd07655fb7d9c7e61d3ce6"
+      },
+      {
+        "file": "internal/osd/cache_pool.go",
+        "bytes": 1193,
+        "sha256": "926fed8149bb6fec281347066fc6a40a70f0b88d2cfb290f207d0b0e0ea37621"
+      },
+      {
+        "file": "internal/osd/cache_pool_test.go",
+        "bytes": 4306,
+        "sha256": "e03c1277e7fd85a4a9e91864012c56aed63fae9c4f30db4b3b215ed1be121156"
+      },
+      {
+        "file": "internal/osd/ignore_cache_native_test.go",
+        "bytes": 12617,
+        "sha256": "74a764ff5664d6b68efd2516126ae8d238ec99f5dff5730ce53e6f232ee60f89"
+      },
+      {
+        "file": "internal/osd/request.go",
+        "bytes": 7126,
+        "sha256": "4878a6dc32a1f60cfb85a83c9eb59785293af4839f94c7673e232102f09583b5"
+      },
+      {
+        "file": "internal/osd/request_v8.go",
+        "bytes": 8772,
+        "sha256": "4ff2fb9f36e03f1fa751bbb86fc33a3c73768c3af70414a59a5204d55ac31ea2"
+      },
+      {
+        "file": "internal/osd/testdata/ignore-cache-native-README.md",
+        "bytes": 3276,
+        "sha256": "d7f9c0ff5e69f20d9dc2abcb1785455d3a44025193d5bdab1b0f03eb7cde39b4"
+      },
+      {
+        "file": "internal/osd/testdata/ignore-cache-native-provenance.json",
+        "bytes": 56084,
+        "sha256": "e83d6a6b92b89cc8d0d5ad3dec2d6f4f383ad192ef641c548fef3851fdbce3aa"
+      },
+      {
+        "file": "internal/osd/types.go",
+        "bytes": 7191,
+        "sha256": "6b818224d379a12d5309d3a0256cca4e8a5f46074f509065cf9b225c795e0170"
+      },
+      {
+        "file": "internal/session/handshake.go",
+        "bytes": 29306,
+        "sha256": "221447335c5fbabd907fc6f1bd79989f08f9a46b1db9b5e0cfd292b3a5269d57"
+      },
+      {
+        "file": "internal/session/osd_cache_pool_features_test.go",
+        "bytes": 3916,
+        "sha256": "6a18bfa380429e4b3c2727222004a97472ced6c1dc527ab04689adbaeb69d26d"
+      },
+      {
+        "file": "tools/osd_ignore_cache_native_encoder.cc",
+        "bytes": 8859,
+        "sha256": "e2f460a0b76f998ae00e7132b0981b2e923f654b9654ca152a8e5fbd1b904118"
+      },
+      {
+        "file": "tools/osd_ignore_cache_native_encoder.py",
+        "bytes": 12170,
+        "sha256": "4e3f3a47fc28317f16dc673822724160837aee63aeef33bbe4bcd1e99417866c"
+      }
+    ],
+    "all_go_files": 700,
+    "all_go_path_sha256_inventory": "9df03ffb0df10a0a0e5e8c7d4bd8d09dd7862490628c3fe84e6145ad2cdd89a0",
+    "inventory_format": "sorted relative path, one space, lowercase SHA256, newline; all selected snapshot .go files including root/nested fixture tests"
+  },
+  "native": {
+    "proof_file": "internal/osd/testdata/ignore-cache-native-provenance.json",
+    "proof_sha256": "e83d6a6b92b89cc8d0d5ad3dec2d6f4f383ad192ef641c548fef3851fdbce3aa",
+    "vectors": 24,
+    "execution": {
+      "start": "2026-10-18T07:01:19.189302+00:00",
+      "name": "ceph-msgr-ignore-cache-encoder-amd64-20261018",
+      "profile": "fresh-amd64-native-offline-pinned-20.2.4",
+      "exit_code": 0,
+      "container_exists_after_cleanup": false,
+      "end": "2026-10-18T07:04:22.520480+00:00"
+    },
+    "build_log_sha256": "1d21a9cd3422af15597477b2658e73d813709d1a1fb6822c2d002cc0ce2cbabd"
+  },
+  "linux": {
+    "start": "2026-10-18T07:10:44.124339+00:00",
+    "steps": [
+      {
+        "name": "root-cgo0",
+        "argv": [
+          "go",
+          "test",
+          "./..."
+        ],
+        "start": "2026-10-18T07:10:44.124350+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:10:59.094278+00:00"
+      },
+      {
+        "name": "race",
+        "argv": [
+          "go",
+          "test",
+          "-race",
+          "./integration",
+          "./cephmsgr"
+        ],
+        "start": "2026-10-18T07:10:59.094515+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:11:22.023006+00:00"
+      },
+      {
+        "name": "vet",
+        "argv": [
+          "go",
+          "vet",
+          "./..."
+        ],
+        "start": "2026-10-18T07:11:22.023283+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:11:22.738957+00:00"
+      },
+      {
+        "name": "fixture",
+        "argv": [
+          "go",
+          "test",
+          "-mod=readonly",
+          "./..."
+        ],
+        "start": "2026-10-18T07:11:22.739411+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:11:27.218087+00:00"
+      },
+      {
+        "name": "fixture-vet",
+        "argv": [
+          "go",
+          "vet",
+          "-mod=readonly",
+          "./..."
+        ],
+        "start": "2026-10-18T07:11:27.218621+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:11:27.533310+00:00"
+      },
+      {
+        "name": "python",
+        "argv": [
+          "python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools",
+          "-p",
+          "test_*.py"
+        ],
+        "start": "2026-10-18T07:11:27.533608+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:11:33.385207+00:00"
+      }
+    ]
+  },
+  "limitations": [
+    "No Go-to-Ceph cache-pool operation was executed by this snapshot.",
+    "Offline v6/v8/v9 vectors do not establish live profile compatibility.",
+    "Synthetic uncertain WRITEFULL is not a native fault/durability test.",
+    "Earlier native-only cache probe remains separate.",
+    "In-progress main CI and independent MDS fixture correction are outside this snapshot."
+  ]
+}

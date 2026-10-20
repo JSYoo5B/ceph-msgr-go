@@ -1,0 +1,50 @@
+package main
+
+import (
+ "bufio"
+ "context"
+ "crypto/sha256"
+ "encoding/json"
+ "errors"
+ "fmt"
+ "io"
+ "os"
+ "path/filepath"
+ "strings"
+ "time"
+
+ "github.com/testcontainers/testcontainers-go"
+ containerexec "github.com/testcontainers/testcontainers-go/exec"
+)
+
+func main(){if err:=run();err!=nil {fmt.Fprintln(os.Stderr,err);os.Exit(1)}}
+func run()(result error){
+ if len(os.Args)!=4 {return errors.New("usage: native-v9-host-runner PROJECT CACHE PROOF")}
+ project,cache,output:=os.Args[1],os.Args[2],os.Args[3]
+ log,err:=os.OpenFile(output+".log",os.O_CREATE|os.O_EXCL|os.O_WRONLY,0600);if err!=nil{return err};defer log.Close()
+ ctx,cancel:=context.WithTimeout(context.Background(),28*time.Minute);defer cancel()
+ image:="quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+ target,err:=testcontainers.GenericContainer(ctx,testcontainers.GenericContainerRequest{ContainerRequest:testcontainers.ContainerRequest{Image:image,Entrypoint:[]string{"/usr/bin/sleep"},Cmd:[]string{"infinity"},Labels:map[string]string{"ceph-msgr-go.native-v9-encoder":"true"},Mounts:testcontainers.ContainerMounts{testcontainers.BindMount(cache,"/native-cache")}},Started:true})
+ if err!=nil{return err}
+ cid:=target.GetContainerID();fmt.Println("Owned native builder:",cid)
+ terminated:=false
+ terminate:=func()error {if terminated{return nil};cleanup,stop:=context.WithTimeout(context.Background(),time.Minute);defer stop();if err:=target.Terminate(cleanup);err!=nil{return err};terminated=true;return nil}
+ defer func(){result=errors.Join(result,terminate());if result!=nil {raw,_:=json.MarshalIndent(map[string]any{"builder_container_id":cid,"builder_termination_completed":terminated,"error":result.Error(),"stdout_log":output+".log"},"","  ");_ = os.WriteFile(output+".failure.json",append(raw,'\n'),0600)}}()
+ files,err:=filepath.Glob(filepath.Join(project,"tools","*_native_encoder.cc"));if err!=nil{return err}
+ files=append(files,filepath.Join(project,"tools","osd_request_v9_native_encoder.py"))
+ for _,path:=range files {if err:=target.CopyFileToContainer(ctx,path,"/tmp/"+filepath.Base(path),0600);err!=nil{return err}}
+ code,stream,err:=target.Exec(ctx,[]string{"python3","-u","/tmp/osd_request_v9_native_encoder.py","--build-native","--work","/native-cache/work","--wrapper","/tmp/osd_request_v9_native_encoder.cc"},containerexec.Multiplexed())
+ if stream!=nil {_,copyErr:=io.Copy(log,io.LimitReader(stream,2<<20));err=errors.Join(err,copyErr)}
+ if err!=nil||code!=0{return fmt.Errorf("native driver exit=%d, original stdout %s: %w",code,output+".log",errors.Join(err,errors.New("native v9 encoding failed")))}
+ if err:=log.Close();err!=nil{return err}
+ reader,err:=os.Open(output+".log");if err!=nil{return err};defer reader.Close()
+ scanner:=bufio.NewScanner(reader);scanner.Buffer(make([]byte,64<<10),2<<20);var proof map[string]any
+ for scanner.Scan(){var candidate map[string]any;decoder:=json.NewDecoder(strings.NewReader(scanner.Text()));decoder.UseNumber();if decoder.Decode(&candidate)==nil&&candidate["ceph_commit"]!=nil{proof=candidate}}
+ if err:=scanner.Err();err!=nil{return err};if proof==nil{return errors.New("native driver emitted no complete proof")}
+ for key,name:=range map[string]string{"wrapper_sha256":"osd_request_v9_native_encoder.cc","build_driver_sha256":"osd_request_v9_native_encoder.py"}{raw,err:=os.ReadFile(filepath.Join(project,"tools",name));if err!=nil{return err};if proof[key]!=fmt.Sprintf("%x",sha256.Sum256(raw)){return fmt.Errorf("native proof differs from frozen source %s",name)}}
+ if err:=terminate();err!=nil{return err}
+ proof["builder_container_id"]=cid;proof["builder_termination_completed"]=true
+ raw,err:=os.ReadFile(filepath.Join(project,"internal","osd","testdata","request-v9-native","builder-runner.go.txt"));if err!=nil{return err};proof["builder_runner_source_sha256"]=fmt.Sprintf("%x",sha256.Sum256(raw))
+ data,err:=json.MarshalIndent(proof,"","  ");if err!=nil{return err}
+ if err:=os.WriteFile(output,append(data,'\n'),0600);err!=nil{return err};fmt.Println("Native v9 proof:",output);return nil
+}

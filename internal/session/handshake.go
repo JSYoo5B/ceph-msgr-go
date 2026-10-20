@@ -1,0 +1,786 @@
+// Package session coordinates authenticated msgr2.1 client connections.
+package session
+
+import (
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"slices"
+	"time"
+
+	"github.com/JSYoo5B/ceph-msgr-go/internal/cephx"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
+)
+
+// Transport and map encodings used by MON/MGR sessions. Do not substitute
+// CEPH_FEATURES_ALL: that also promises unsupported OSD message codecs.
+const Features uint64 = 1<<1 | 1<<2 | 1<<4 | 1<<5 | 1<<15 | 1<<23 | 1<<28 | 1<<42 | 1<<57 | 1<<59 | 1<<61
+const RequiredFeatures uint64 = 1 << 59 // MSG_ADDR2
+const sessionFlagLossy uint64 = 1       // CEPH_MSG_CONNECT_LOSSY
+
+// Ceph MON admission requires these CRUSH-generation bits from every CLIENT,
+// even clients that only issue commands. These bits satisfy MON admission
+// only; they do not imply OSDMap subscriptions or CRUSH placement support.
+// CRUSH_V2 (36) is required as soon as any rule uses indep or SET_*_TRIES
+// steps, as every erasure-code rule does (OSDMap::get_features,
+// CrushWrapper::is_v2_rule); see crushV2AdmissionFeature.
+const monAdmissionFeatures uint64 = 1<<18 | 1<<25 | 1<<41 | 1<<48 | 1<<58 | crushV2AdmissionFeature
+
+// crushV2AdmissionFeature is include/ceph_features.h CRUSH_V2. By explicit
+// user policy (2026-10-17) it is the one CRUSH bit also advertised on OSD
+// connections: MONs and OSDs refuse every client lacking it once the OSDMap
+// holds an erasure-code rule, even for replicated-pool I/O. It is admission
+// only; this client computes no CRUSH placement of any rule version.
+const crushV2AdmissionFeature uint64 = 1 << 36
+
+func featuresForRole(role uint8) uint64 {
+	if role == 1 {
+		// PGID64 is implemented by our 64-bit pool/PG wire codecs. MON map
+		// acquisition negotiates that same format while delivering inner maps
+		// as opaque bytes; it does not enable placement or map application.
+		return Features | monAdmissionFeatures | 1<<9
+	}
+	if role == 4 {
+		// Implemented OSD object-locator and PGID64 encodings. In particular,
+		// omit CRUSH, upmap, resend-on-split and new OSD reply encoding bits,
+		// except the CRUSH_V2 admission bit erasure-code rules require.
+		return Features | 1<<8 | 1<<9 | crushV2AdmissionFeature
+	}
+	return Features
+}
+
+// ConnectionMode is the selected msgr2 wire mode. Only one mode is offered;
+// authentication may not substitute a different mode.
+type ConnectionMode uint32
+
+const (
+	CRCMode    ConnectionMode = 1
+	SecureMode ConnectionMode = 2
+)
+
+type Authenticator interface {
+	Initial() ([]byte, error)
+	More([]byte) ([]byte, error)
+	Done(uint64, []byte, bool) (cephx.Key, []byte, error)
+}
+
+// This optional internal seam reports only local protocol-write facts. A full
+// write is not server acceptance. No frame bytes or errors reach the observer.
+type authWriteObserver interface {
+	AuthWriteObserved(msgr.Tag, int, bool)
+}
+type MonAuth struct {
+	Client *cephx.Client
+	// ReplicatedPGV8 declares only HASHPSPOOL support to MON for the
+	// explicitly selected client-wide OSD profile. It does not expand the
+	// unconditional MON-only CRUSH admission exception or select OSD codecs.
+	ReplicatedPGV8 bool
+	// MDSMaps enables only the audited current MON MDS map encoding.
+	MDSMaps bool
+	// OSDCachePools opts into the fixed cache-pool capability on MON only.
+	OSDCachePools bool
+}
+
+func (a MonAuth) replicatedPGV8MON() bool { return a.ReplicatedPGV8 }
+func (a MonAuth) mdsMapsMON() bool        { return a.MDSMaps }
+func (a MonAuth) osdCachePoolsMON() bool  { return a.OSDCachePools }
+
+func (a MonAuth) Initial() ([]byte, error)      { return a.Client.Initial(), nil }
+func (a MonAuth) More(p []byte) ([]byte, error) { return a.Client.Challenge(p) }
+func (a MonAuth) Done(id uint64, p []byte, requireSecret bool) (cephx.Key, []byte, error) {
+	return a.Client.Finish(id, p, requireSecret)
+}
+
+type ServiceAuth struct {
+	Authorizer *cephx.Authorizer
+	// ReplicatedPGV8 selects the fixed caller-targeted replicated PG profile
+	// on OSD connections only. It never accepts an arbitrary feature mask or
+	// changes authentication, Messenger security or MON/MGR feature policy.
+	ReplicatedPGV8 bool
+	// ReplicatedPGReplyV8 additionally selects the current OSD reply encoding.
+	// It includes the replicated PG request profile, even when its older
+	// selector is false, and applies only to OSD connections.
+	ReplicatedPGReplyV8 bool
+	// ReplicatedPGRequestV9 selects untraced MOSDOp v9/compat3 plus the fixed
+	// reply-v8/base profile. Only OSD role 4 gains SERVER_SQUID; no trace SDK,
+	// arbitrary feature mask or other service policy is enabled.
+	ReplicatedPGRequestV9 bool
+	// OSDCachePools applies only to OSD sessions, independently of wire profile.
+	OSDCachePools bool
+}
+
+// Pinned Ceph 20.2.4 7f793731f1b39eb4f465e960113d2363c311b964:
+// include/ceph_features.h OBJECTLOCATOR, PGID64, RESEND_ON_SPLIT (incarnation
+// 2), OSDHASHPSPOOL and NEW_OSDOP_ENCODING. Bit 21 also promises RADOS_BACKOFF,
+// OSDMAP_PG_UPMAP and CRUSH_CHOOSE_ARGS; selecting this internal profile is
+// therefore conditional on the complete profile's caller/codec/control gates.
+// NEW_OSDOPREPLY_ENCODING (58) is a separate explicit profile below.
+// SERVER_SQUID (49) remains omitted from the v8-request profiles.
+const replicatedPGV8Features uint64 = 1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<57
+
+// Bit 58/incarnation 1 also names CRUSH_TUNABLES5 and FS_FILE_LAYOUT_V2.
+// On this OSD-only profile it selects the audited reply wire encoding; it does
+// not extend MON's CRUSH admission exception or enable filesystem operations.
+const replicatedPGReplyV8Features uint64 = replicatedPGV8Features | 1<<58
+
+// Pinned MOSDOp.h:398-427 and common/tracer.h !HAVE_JAEGER implement the
+// untraced v9 envelope. The full SERVER_SQUID mask is incarnation 2 (49|57).
+// CRUSH_MSR is a distinct feature (38|57) and is not enabled here.
+const replicatedPGRequestV9Features uint64 = replicatedPGReplyV8Features | 1<<49 | 1<<57
+
+func (a ServiceAuth) replicatedPGV8() bool {
+	return a.ReplicatedPGV8 || a.ReplicatedPGReplyV8 || a.ReplicatedPGRequestV9
+}
+func (a ServiceAuth) replicatedPGReplyV8() bool {
+	return a.ReplicatedPGReplyV8 || a.ReplicatedPGRequestV9
+}
+func (a ServiceAuth) replicatedPGRequestV9() bool { return a.ReplicatedPGRequestV9 }
+func (a ServiceAuth) osdCachePools() bool         { return a.OSDCachePools }
+
+func handshakeFeatures(role uint8, auth Authenticator) (supported, required uint64) {
+	supported, required = featuresForRole(role), RequiredFeatures
+	if role == 1 {
+		if profile, ok := auth.(interface{ osdCachePoolsMON() bool }); ok && profile.osdCachePoolsMON() {
+			supported |= 1 << 35
+			required |= 1 << 35
+		}
+		if profile, ok := auth.(interface{ mdsMapsMON() bool }); ok && profile.mdsMapsMON() {
+			// MMDSMap current encoding requires MDSENC (bit 29).
+			supported |= 1 << 29
+			required |= 1 << 29
+		}
+		if profile, ok := auth.(interface{ replicatedPGV8MON() bool }); ok && profile.replicatedPGV8MON() {
+			// include/ceph_features.h OSDHASHPSPOOL, bit 30/incarnation 1.
+			// MON admission precedes choosing an OSD target, so only this
+			// fixed opt-in pool capability is declared on the MON session.
+			supported |= 1 << 30
+			required |= 1 << 30
+		}
+	}
+	if role == 4 {
+		if profile, ok := auth.(interface{ osdCachePools() bool }); ok && profile.osdCachePools() {
+			supported |= 1 << 35
+			required |= 1 << 35
+		}
+		// The private boolean seam preserves the fixed ServiceAuth policy
+		// through internal authentication wrappers without exposing mask bits.
+		if profile, ok := auth.(interface{ replicatedPGV8() bool }); ok && profile.replicatedPGV8() {
+			supported |= replicatedPGV8Features
+			required |= replicatedPGV8Features
+		}
+		if profile, ok := auth.(interface{ replicatedPGReplyV8() bool }); ok && profile.replicatedPGReplyV8() {
+			supported |= replicatedPGReplyV8Features
+			required |= replicatedPGReplyV8Features
+		}
+		if profile, ok := auth.(interface{ replicatedPGRequestV9() bool }); ok && profile.replicatedPGRequestV9() {
+			supported |= replicatedPGRequestV9Features
+			required |= replicatedPGRequestV9Features
+		}
+	}
+	return supported, required
+}
+
+func (a ServiceAuth) Initial() ([]byte, error)      { return a.Authorizer.Payload(nil) }
+func (a ServiceAuth) More(p []byte) ([]byte, error) { return a.Authorizer.Payload(p) }
+func (a ServiceAuth) Done(_ uint64, p []byte, requireSecret bool) (cephx.Key, []byte, error) {
+	secret, err := a.Authorizer.Finish(p, requireSecret)
+	return a.Authorizer.Key(), secret, err
+}
+
+func authPayloadError(err error) error {
+	// Authenticators can also fail while generating local proofs. Mark only
+	// peer encoding failures whose EOF could otherwise resemble network loss;
+	// explicit rejection and local/cryptographic errors retain their classes.
+	var rejection *cephx.AuthenticationError
+	if !errors.As(err, &rejection) && (errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, wire.ErrVersion)) {
+		return fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+	}
+	return err
+}
+
+type recordingReader struct {
+	io.Reader
+	active bool
+	data   bytes.Buffer
+	err    error
+}
+
+func (r *recordingReader) Read(p []byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	if r.active {
+		remaining := (1 << 20) - r.data.Len()
+		if len(p) > remaining {
+			if remaining == 0 {
+				r.err = wire.ErrLimit
+				return 0, r.err
+			}
+			// io.ReadFull discards errors when n fills its request. Read only
+			// bytes that fit, then fail the next read before consuming any
+			// bytes omitted from the signed authentication transcript.
+			p = p[:remaining]
+		}
+	}
+	n, err := r.Reader.Read(p)
+	if r.active && n > 0 {
+		r.data.Write(p[:n])
+	}
+	return n, err
+}
+
+type recordingWriter struct {
+	io.Writer
+	active bool
+	data   bytes.Buffer
+}
+
+func (w *recordingWriter) Write(p []byte) (int, error) {
+	if w.active && w.data.Len()+len(p) > 1<<20 {
+		return 0, wire.ErrLimit
+	}
+	n, err := w.Writer.Write(p)
+	if w.active && n > 0 {
+		w.data.Write(p[:n])
+	}
+	return n, err
+}
+
+type Transport struct {
+	Conn     net.Conn
+	Reader   *msgr.Reader
+	Writer   *msgr.Writer
+	GlobalID uint64
+	Features uint64 // Intersection of local and peer Messenger feature sets.
+	// Resume is the stateful Messenger identity of a fresh MDS/CephFS
+	// connection: what a later SESSION_RECONNECT must present.
+	Resume ResumeState
+	// PeerSequence is the peer's last received message sequence reported by
+	// SESSION_RECONNECT_OK on a resumed transport.
+	PeerSequence uint64
+	// Compression is the negotiated onwire method (CompAlgNone when none). The
+	// Reader/Writer already carry it; this is for observation.
+	Compression msgr.CompressionAlgorithm
+}
+
+// ResumeState identifies a stateful Messenger session for SESSION_RECONNECT
+// (pinned msg/async/frames_v2.h ReconnectFrame; ProtocolV2.cc send_reconnect,
+// handle_reconnect). The server finds the existing connection by Addresses,
+// which must be exactly the original ClientIdent address vector (same nonce).
+type ResumeState struct {
+	Addresses                  []msgr.Address
+	ClientCookie, ServerCookie uint64
+	GlobalSeq, ConnectSeq      uint64
+	// InSeq is the last message sequence this side received; Features and
+	// GlobalID are the original session's and cannot change on resume.
+	InSeq, Features, GlobalID uint64
+}
+
+// ErrSessionReset reports a SESSION_RESET answer to SESSION_RECONNECT: the
+// server holds no resumable session, so message continuity is lost.
+var ErrSessionReset = errors.New("ceph messenger: peer reset the stateful session")
+
+// Handshake takes ownership of conn, closing it on failure. The context and
+// deadline govern only setup; a successful connection has its deadline cleared.
+func Handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (*Transport, error) {
+	return handshake(ctx, conn, target, role, expectedID, auth, mode, limit, timeout, lossyHandshake, nil, 0)
+}
+
+// HandshakeNonce is Handshake with a fixed client address nonce (nonzero).
+func HandshakeNonce(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, nonce uint32) (*Transport, error) {
+	if nonce == 0 {
+		conn.Close()
+		return nil, errors.New("ceph messenger: fixed client nonce must be nonzero")
+	}
+	return handshake(ctx, conn, target, role, expectedID, auth, mode, limit, timeout, lossyHandshake, nil, nonce)
+}
+
+// HandshakeFreshMDS authenticates one fresh Messenger connection to an active
+// MDS rank, including rank zero. It takes ownership of conn. It does not open a
+// CephFS session, reconnect, resume or replay messages. The context governs setup
+// only; after success the owner must close the transport on failure or shutdown.
+// Its bounded native acceptance is documented in MDS_FRESH_CONTRACT.md.
+func HandshakeFreshMDS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration) (*Transport, error) {
+	if rank < 0 {
+		conn.Close()
+		return nil, errors.New("ceph messenger: fresh MDS connection requires a nonnegative active rank")
+	}
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshMDSHandshake, nil, 0)
+}
+
+// CephFSFeatures adds the Messenger features whose CephFS client encodings
+// and MDS behaviors are implemented: FLOCK (3) and EXPORT_PEER (37) select
+// MClientCaps v12 with flock/peer/barrier fields, DIRLAYOUTHASH (7) dir
+// layouts, REPLY_CREATE_INODE (27) the created inode in create replies,
+// CREATEPOOLID (26) caller pool IDs in open args, MDS_INLINE_DATA (40) inline
+// data in caps and inodes, MDS_QUOTA (47) quota fields and MClientQuota, and
+// FS_FILE_LAYOUT_V2 (58) pool namespaces. Pinned include/ceph_features.h.
+const CephFSFeatures uint64 = Features | 1<<3 | 1<<7 | 1<<26 | 1<<27 | 1<<37 | 1<<40 | 1<<47 | 1<<58
+
+// HandshakeFreshCephFS is HandshakeFreshMDS for a CephFS client profile. The
+// MDS must support every CephFSFeatures bit; a server lacking one is refused
+// before any CephFS message, instead of falling back to older encodings.
+func HandshakeFreshCephFS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, nonce uint32) (*Transport, error) {
+	if rank < 0 {
+		conn.Close()
+		return nil, errors.New("ceph messenger: fresh MDS connection requires a nonnegative active rank")
+	}
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake, nil, nonce)
+}
+
+// HandshakeResumeCephFS authenticates a new connection to the same MDS and
+// resumes the stateful Messenger session described by state with
+// SESSION_RECONNECT instead of ClientIdent. On success PeerSequence tells the
+// caller which retained outgoing messages the server already received. RETRY
+// and RETRY_GLOBAL are answered within a fixed bound; RESET returns
+// ErrSessionReset and WAIT is terminal. It never falls back to a fresh ident.
+func HandshakeResumeCephFS(ctx context.Context, conn net.Conn, target msgr.Address, rank int32, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, state ResumeState) (*Transport, error) {
+	if rank < 0 || len(state.Addresses) == 0 || state.ClientCookie == 0 || state.ServerCookie == 0 || state.GlobalID == 0 {
+		conn.Close()
+		return nil, errors.New("ceph messenger: incomplete stateful MDS resume state")
+	}
+	return handshake(ctx, conn, target, 2, uint64(rank), auth, mode, limit, timeout, freshCephFSHandshake, &state, 0)
+}
+
+type handshakePolicy uint8
+
+const (
+	lossyHandshake handshakePolicy = iota
+	freshMDSHandshake
+	freshCephFSHandshake
+)
+
+func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, policy handshakePolicy, resume *ResumeState, nonce uint32) (_ *Transport, err error) {
+	if target.Endpoint.IsValid() {
+		// Retain the target's wire family, including mapped IPv6. IPv6 scope
+		// is carried by ScopeID rather than a Go address zone.
+		target.Endpoint = netip.AddrPortFrom(target.Endpoint.Addr().WithZone(""), target.Endpoint.Port())
+	}
+	stage := "banner"
+	cancelDone := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		defer close(cancelDone)
+		conn.Close()
+	})
+	stopped := false
+	defer func() {
+		// A completed refusal must not become a retryable timeout while Close
+		// finishes its cleanup. Network errors still map to a context that ends
+		// during cleanup, including a socket deadline preceding its timer.
+		preserveFailure := err != nil && ctx.Err() == nil && !setupTransportError(err, true)
+		if !stopped && !stop() {
+			// A repeated Conn.Close need not wait for another Close's cleanup.
+			// Keep cancellation-owned cleanup within this handshake's lifetime.
+			<-cancelDone
+		}
+		if err != nil {
+			conn.Close()
+		}
+		if ctx.Err() != nil && !preserveFailure {
+			err = ctx.Err()
+			conn.Close()
+		}
+		if err != nil {
+			err = fmt.Errorf("ceph messenger %s: %w", stage, err)
+		}
+	}()
+	if mode != SecureMode && mode != CRCMode {
+		return nil, errors.New("ceph messenger: invalid connection mode")
+	}
+	deadline := time.Now().Add(timeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if err = conn.SetDeadline(deadline); err != nil {
+		return nil, err
+	}
+	rx := &recordingReader{Reader: conn, active: true}
+	tx := &recordingWriter{Writer: conn, active: true}
+	r, w := msgr.NewReader(rx, limit), msgr.NewWriter(tx, limit)
+	local := msgr.Banner{Supported: msgr.Revision1 | msgr.Compression, Required: msgr.Revision1}
+	if err = msgr.WriteFull(tx, local.Encode()); err != nil {
+		return nil, err
+	}
+	peer, err := msgr.ReadBanner(rx, local)
+	if err != nil {
+		return nil, err
+	}
+	write := func(tag msgr.Tag, p []byte) error { return w.Write(msgr.Frame{Tag: tag, Segments: [][]byte{p}}) }
+	stage = "hello"
+	hello := wire.Encoder{}
+	hello.U8(8)
+	target.Encode(&hello)
+	if err = write(msgr.Hello, hello.Data); err != nil {
+		return nil, err
+	}
+	f, err := r.Read()
+	if err != nil {
+		return nil, err
+	}
+	if f.Tag != msgr.Hello || len(f.Segments) != 1 {
+		return nil, msgr.ErrFrame
+	}
+	hd := wire.NewDecoder(f.Segments[0])
+	peerRole := hd.U8()
+	myAddr := msgr.DecodeAddress(hd)
+	if err = hd.Done(); err != nil {
+		return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+	}
+	if peerRole != role {
+		return nil, errors.New("ceph messenger: unexpected daemon role")
+	}
+	stage = "authentication"
+	payload, err := auth.Initial()
+	if err != nil {
+		return nil, err
+	}
+	authReq := wire.Encoder{}
+	authReq.U32(2)
+	authReq.U32(1)
+	authReq.U32(uint32(mode))
+	authReq.Bytes(payload)
+	writeAuth := func(tag msgr.Tag, payload []byte) error {
+		before := tx.data.Len()
+		err := write(tag, payload)
+		if observer, ok := auth.(authWriteObserver); ok {
+			observer.AuthWriteObserved(tag, tx.data.Len()-before, err == nil)
+		}
+		return err
+	}
+	if err = writeAuth(msgr.AuthRequest, authReq.Data); err != nil {
+		return nil, err
+	}
+	var sessionKey cephx.Key
+	var secret []byte
+	var globalID uint64
+	var negotiatedComp msgr.CompressionAlgorithm
+	authenticated := false
+	for round := 0; round < 8; round++ {
+		f, err = r.Read()
+		if err != nil {
+			return nil, err
+		}
+		if len(f.Segments) != 1 {
+			return nil, msgr.ErrFrame
+		}
+		d := wire.NewDecoder(f.Segments[0])
+		switch f.Tag {
+		case msgr.AuthReplyMore:
+			payload = d.Bytes()
+			if err = d.Done(); err != nil {
+				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+			}
+			reply, err := auth.More(payload)
+			if err != nil {
+				return nil, authPayloadError(err)
+			}
+			e := wire.Encoder{}
+			e.Bytes(reply)
+			if err = writeAuth(msgr.AuthRequestMore, e.Data); err != nil {
+				return nil, err
+			}
+		case msgr.AuthBadMethod:
+			method, code := d.U32(), int32(d.U32())
+			for field := 0; field < 2; field++ {
+				n := d.Count(4, 32) // allowed methods and allowed connection modes
+				for i := 0; i < n; i++ {
+					d.U32()
+				}
+			}
+			if err := d.Done(); err != nil {
+				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+			}
+			return nil, &cephx.AuthenticationError{Method: method, Code: code}
+		case msgr.AuthDone:
+			globalID = d.U64()
+			selectedMode := d.U32()
+			payload = d.Bytes()
+			if err = d.Done(); err != nil {
+				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+			}
+			if selectedMode != uint32(mode) {
+				return nil, fmt.Errorf("ceph messenger: server selected connection mode %d, requested %d", selectedMode, mode)
+			}
+			sessionKey, secret, err = auth.Done(globalID, payload, mode == SecureMode)
+			if err != nil {
+				return nil, authPayloadError(err)
+			}
+			authenticated = true
+		default:
+			return nil, fmt.Errorf("%w: tag %d during authentication", msgr.ErrFrame, f.Tag)
+		}
+		if f.Tag == msgr.AuthDone {
+			break
+		}
+	}
+	if !authenticated || (mode == SecureMode && len(secret) < 40) {
+		return nil, errors.New("ceph messenger: incomplete authentication")
+	}
+	stage = "signature"
+	if mode == SecureMode {
+		if err = r.EnableSecure(secret[:16], secret[16:28]); err != nil {
+			return nil, err
+		}
+		if err = w.EnableSecure(secret[:16], secret[28:40]); err != nil {
+			return nil, err
+		}
+	}
+	// CRC keeps the plaintext frame codec, but still authenticates both
+	// transcripts using the CephX session key before admitting a session.
+	sig := sessionKey.Signature(rx.data.Bytes())
+	expectedSig := sessionKey.Signature(tx.data.Bytes())
+	rx.active, tx.active = false, false
+	if err = write(msgr.AuthSignature, sig); err != nil {
+		return nil, err
+	}
+	f, err = r.Read()
+	if err != nil {
+		return nil, err
+	}
+	if f.Tag != msgr.AuthSignature || len(f.Segments) != 1 || !hmac.Equal(expectedSig, f.Segments[0]) {
+		return nil, msgr.ErrAuthentication
+	}
+	rx.data.Reset()
+	tx.data.Reset()
+	if peer.Supported&msgr.Compression != 0 {
+		stage = "compression negotiation"
+		// Compression is offered only on CRC-mode connections for now; the
+		// secure frame path is not yet wired for it. CompressionRequest carries
+		// is_compress (1 byte) then a u32 count and u32 method ids.
+		offer := mode == CRCMode && len(msgr.SupportedCompressionMethods) > 0
+		e := wire.Encoder{}
+		if offer {
+			e.U8(1)
+			e.U32(uint32(len(msgr.SupportedCompressionMethods)))
+			for _, method := range msgr.SupportedCompressionMethods {
+				e.U32(uint32(method))
+			}
+		} else {
+			e.U8(0)
+			e.U32(0)
+		}
+		if err = write(msgr.CompressionRequest, e.Data); err != nil {
+			return nil, err
+		}
+		f, err = r.Read()
+		if err != nil {
+			return nil, err
+		}
+		if f.Tag != msgr.CompressionDone || len(f.Segments) != 1 {
+			return nil, msgr.ErrFrame
+		}
+		d := wire.NewDecoder(f.Segments[0])
+		enabled := d.Bool()
+		method := msgr.CompressionAlgorithm(d.U32())
+		if err = d.Done(); err != nil {
+			return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+		}
+		if enabled {
+			if !offer || !msgr.CompressionSupported(method) {
+				return nil, fmt.Errorf("ceph messenger: server selected unsupported compression method %d", method)
+			}
+			if err = r.EnableCompression(method); err != nil {
+				return nil, err
+			}
+			if err = w.EnableCompression(method, 0); err != nil {
+				return nil, err
+			}
+			negotiatedComp = method
+		}
+	}
+	if resume != nil {
+		stage = "session reconnect"
+		if globalID != resume.GlobalID {
+			return nil, fmt.Errorf("%w: resumed MDS authenticated a different client identity", msgr.ErrAuthentication)
+		}
+		state, peerSequence, err := reconnect(r, write, *resume)
+		if err != nil {
+			return nil, err
+		}
+		stopped = stop()
+		if !stopped || ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err = conn.SetDeadline(time.Time{}); err != nil {
+			return nil, err
+		}
+		return &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID, Features: resume.Features, Resume: state, PeerSequence: peerSequence, Compression: negotiatedComp}, nil
+	}
+	var random [8]byte
+	stage = "session identification"
+	if _, err = rand.Read(random[:]); err != nil {
+		return nil, err
+	}
+	myAddr.Type, myAddr.Nonce = 2, binary.LittleEndian.Uint32(random[:4])
+	if nonce != 0 {
+		// A caller-fixed client instance nonce (shared by a CephFS client's
+		// MDS and OSD connections so one blocklist entry fences both).
+		myAddr.Nonce = nonce
+	}
+	if myAddr.Endpoint.IsValid() {
+		myAddr.Endpoint = netip.AddrPortFrom(myAddr.Endpoint.Addr(), 0)
+	}
+	ident := wire.Encoder{}
+	msgr.EncodeAddresses(&ident, []msgr.Address{myAddr})
+	target.Encode(&ident)
+	ident.U64(globalID)
+	globalSeq := binary.LittleEndian.Uint64(random[:]) >> 1 // room to increase on resume
+	ident.U64(globalSeq)
+	supportedFeatures, requiredFeatures := handshakeFeatures(role, auth)
+	flags, cookie := sessionFlagLossy, uint64(0)
+	if policy == freshMDSHandshake || policy == freshCephFSHandshake {
+		// Pinned ProtocolV2.cc:1963-1980: a fresh stateful connection has a
+		// nonzero client cookie and no LOSSY flag. Never offer MON/OSD policy
+		// extensions, even if an authentication wrapper exposes their seams.
+		supportedFeatures, requiredFeatures = Features, RequiredFeatures
+		if policy == freshCephFSHandshake {
+			supportedFeatures, requiredFeatures = CephFSFeatures, CephFSFeatures&^Features|RequiredFeatures
+		}
+		var cookieRandom [8]byte
+		if _, err = rand.Read(cookieRandom[:]); err != nil {
+			return nil, err
+		}
+		cookie = binary.LittleEndian.Uint64(cookieRandom[:])
+		if cookie == 0 {
+			cookie = 1
+		}
+		flags = 0
+	}
+	ident.U64(supportedFeatures)
+	ident.U64(requiredFeatures)
+	ident.U64(flags)
+	ident.U64(cookie)
+	if err = write(msgr.ClientIdent, ident.Data); err != nil {
+		return nil, err
+	}
+	f, err = r.Read()
+	if err != nil {
+		return nil, err
+	}
+	if len(f.Segments) != 1 {
+		return nil, msgr.ErrFrame
+	}
+	if f.Tag == msgr.IdentMissingFeatures {
+		d := wire.NewDecoder(f.Segments[0])
+		missing := d.U64()
+		if err := d.Done(); err != nil {
+			return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+		}
+		return nil, fmt.Errorf("%w: peer requires 0x%016x", msgr.ErrFeatures, missing)
+	}
+	if f.Tag != msgr.ServerIdent {
+		return nil, fmt.Errorf("%w: expected server ident, got %d", msgr.ErrFrame, f.Tag)
+	}
+	id := wire.NewDecoder(f.Segments[0])
+	serverAddresses := msgr.DecodeAddresses(id)
+	serverID := id.U64()
+	id.U64()
+	supported, required := id.U64(), id.U64()
+	serverFlags := id.U64()
+	serverCookie := id.U64()
+	if err = id.Done(); err != nil {
+		return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+	}
+	if !slices.Contains(serverAddresses, target) {
+		return nil, fmt.Errorf("%w: server identification does not include target address", msgr.ErrAuthentication)
+	}
+	if (role == 4 || policy != lossyHandshake || expectedID != 0) && serverID != expectedID {
+		return nil, errors.New("ceph messenger: unexpected daemon ID")
+	}
+	if requiredFeatures&^supported != 0 || required&^supportedFeatures != 0 {
+		return nil, msgr.ErrFeatures
+	}
+	// SERVER_IDENT is authoritative. The ordinary policy remains lossy.
+	// Fresh MDS admits a single stateful transport, without retaining cookies
+	// for recovery. Any loss is terminal; it cannot become a resumed session.
+	if policy != lossyHandshake {
+		if serverFlags != 0 || serverCookie == 0 {
+			return nil, fmt.Errorf("%w: fresh MDS requires stateful flags 0 and a nonzero server cookie", msgr.ErrFeatures)
+		}
+	} else if serverFlags != sessionFlagLossy {
+		return nil, fmt.Errorf("%w: unsupported session flags %#x", msgr.ErrFeatures, serverFlags)
+	}
+	stopped = stop()
+	if !stopped || ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err = conn.SetDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	transport := &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID, Features: supported & supportedFeatures, Compression: negotiatedComp}
+	if policy != lossyHandshake {
+		transport.Resume = ResumeState{Addresses: []msgr.Address{myAddr}, ClientCookie: cookie, ServerCookie: serverCookie, GlobalSeq: globalSeq, Features: transport.Features, GlobalID: globalID}
+	}
+	return transport, nil
+}
+
+// reconnect sends SESSION_RECONNECT with the next global and connect
+// sequences and follows bounded RETRY/RETRY_GLOBAL answers. It returns the
+// updated state and the peer's last received message sequence.
+func reconnect(r *msgr.Reader, write func(msgr.Tag, []byte) error, state ResumeState) (ResumeState, uint64, error) {
+	if state.GlobalSeq == ^uint64(0) || state.ConnectSeq == ^uint64(0) {
+		return state, 0, errors.New("ceph messenger: stateful resume sequences exhausted")
+	}
+	state.GlobalSeq++
+	state.ConnectSeq++
+	for range 8 {
+		e := wire.Encoder{}
+		msgr.EncodeAddresses(&e, state.Addresses)
+		e.U64(state.ClientCookie)
+		e.U64(state.ServerCookie)
+		e.U64(state.GlobalSeq)
+		e.U64(state.ConnectSeq)
+		e.U64(state.InSeq)
+		if err := write(msgr.SessionReconnect, e.Data); err != nil {
+			return state, 0, err
+		}
+		f, err := r.Read()
+		if err != nil {
+			return state, 0, err
+		}
+		if len(f.Segments) != 1 {
+			return state, 0, msgr.ErrFrame
+		}
+		d := wire.NewDecoder(f.Segments[0])
+		switch f.Tag {
+		case msgr.SessionReconnectOK:
+			sequence := d.U64()
+			if err := d.Done(); err != nil {
+				return state, 0, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+			}
+			return state, sequence, nil
+		case msgr.SessionRetry:
+			// The server holds a newer connect sequence: continue above it.
+			seq := d.U64()
+			if err := d.Done(); err != nil || seq == ^uint64(0) {
+				return state, 0, fmt.Errorf("%w: invalid session retry", msgr.ErrFrame)
+			}
+			state.ConnectSeq = seq + 1
+		case msgr.SessionRetryGlobal:
+			seq := d.U64()
+			if err := d.Done(); err != nil || seq == ^uint64(0) {
+				return state, 0, fmt.Errorf("%w: invalid global session retry", msgr.ErrFrame)
+			}
+			state.GlobalSeq = max(state.GlobalSeq, seq) + 1
+		case msgr.SessionReset:
+			d.Bool()
+			if err := d.Done(); err != nil {
+				return state, 0, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+			}
+			return state, 0, ErrSessionReset
+		case msgr.Wait:
+			return state, 0, fmt.Errorf("%w: peer asked to wait during session resume", msgr.ErrFrame)
+		default:
+			return state, 0, fmt.Errorf("%w: tag %d during session resume", msgr.ErrFrame, f.Tag)
+		}
+	}
+	return state, 0, errors.New("ceph messenger: stateful session resume retries exhausted")
+}

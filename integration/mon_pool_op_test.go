@@ -1,0 +1,590 @@
+package integration_test
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
+)
+
+// MPoolOp is the only route to self-managed snapshot ids (no CLI command
+// exists) and also creates and removes pool snapshots by name. The independent
+// native client observes the OSDMap pool state and uses the ids end to end.
+func TestCephMonPoolOpIntegration(t *testing.T) {
+	fixture := osdFixture
+	if isReplicatedPGFixtureProfile() {
+		fixture = replicatedPGFixture
+	}
+	c, _, base, _ := fixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	pools := createOwnedPools(t, ctx, base, 1, 2)
+	selfPool, namedPool := uint32(pools.ids[1]), uint32(pools.ids[2])
+	info := func(slot int) poolReceipt { return nativePool(t, ctx, "poolinfo", map[string]any{"slot": slot}) }
+	var refused *cephmsgr.PoolOpError
+
+	t.Run("self-managed ids", func(t *testing.T) {
+		first, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotCreate})
+		if err != nil {
+			t.Fatal(err)
+		}
+		id1, err := first.SnapshotID()
+		if err != nil || id1 == 0 || first.Code != 0 || first.Epoch == 0 {
+			t.Fatalf("first allocation %+v %v", first, err)
+		}
+		second, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotCreate})
+		id2, _ := second.SnapshotID()
+		if err != nil || id2 != id1+1 {
+			t.Fatalf("second allocation %d after %d: %v", id2, id1, err)
+		}
+		state := info(1)
+		if state.SnapSeq != id2 || state.SnapMode != "selfmanaged" {
+			t.Fatalf("native pool state after allocation: seq=%d mode=%q", state.SnapSeq, state.SnapMode)
+		}
+		// The independent native client continues the same id sequence.
+		native := nativePool(t, ctx, "selfmanaged", map[string]any{"slot": 1, "action": "create"})
+		if native.SnapID != id2+1 {
+			t.Fatalf("native allocation %d does not follow Go's %d", native.SnapID, id2)
+		}
+		// End to end: the allocated id is a real SnapContext for a Go write.
+		const object = "pool-op-object"
+		original := []byte("before the snapshot")
+		poolSeed(t, ctx, 1, object, "", original, nil)
+		route := poolPlace(t, ctx, 1, object, "")
+		o := mutationConnection(t, c, ctx, route)
+		defer o.Close()
+		overwrite := pools.request(route, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: 5, Data: []byte("after")})
+		overwrite.ModificationTime = cephmsgr.OSDTime{Seconds: 1700001100}
+		overwrite.SnapContext = cephmsgr.OSDSnapContext{Sequence: native.SnapID, Snapshots: []uint64{native.SnapID}}
+		if _, err := o.Request(ctx, overwrite); err != nil {
+			t.Fatal("write under an allocated SnapContext", err)
+		}
+		clone := poolObserveSnap(t, ctx, 1, object, "", "", native.SnapID)
+		head := poolObserve(t, ctx, 1, object, "", "")
+		if !bytes.Equal(clone.Data, original) || !bytes.Equal(head.Data, []byte("after")) {
+			t.Fatalf("clone/head differ: %q %q", clone.Data, head.Data)
+		}
+		// Removal: first reports success, a repeat is idempotent, an id beyond the
+		// sequence is ENOENT.
+		if _, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotRemove, Snapshot: id1}); err != nil {
+			t.Fatal("remove", err)
+		}
+		if again, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotRemove, Snapshot: id1}); err != nil || again.Code != 0 {
+			t.Fatal("repeated removal is not idempotent", again, err)
+		}
+		_, err = c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotRemove, Snapshot: native.SnapID + 100})
+		if !errors.As(err, &refused) || refused.Code != -2 {
+			t.Fatal("an id beyond the sequence was not ENOENT", err)
+		}
+		// Removing the id that holds a clone makes the OSDs trim it: the independent
+		// native client stops seeing the snapshot.
+		if _, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotRemove, Snapshot: native.SnapID}); err != nil {
+			t.Fatal("remove the cloned id", err)
+		}
+		deadline := time.Now().Add(120 * time.Second)
+		for {
+			if state := poolObserveSnap(t, ctx, 1, object, "", "", native.SnapID); state.Code == -2 || !bytes.Equal(state.Data, original) {
+				t.Logf("clone for the removed id %d trimmed (native code %d)", native.SnapID, state.Code)
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the OSDs did not trim the clone of the removed self-managed snapshot")
+			}
+			time.Sleep(2 * time.Second)
+		}
+	})
+
+	t.Run("pool snapshots", func(t *testing.T) {
+		const object, name = "pool-op-named", "go-made-snap"
+		original := []byte("original bytes")
+		poolSeed(t, ctx, 2, object, "", original, nil)
+		created, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: namedPool, Op: cephmsgr.PoolSnapshotCreate, Name: name})
+		if err != nil || len(created.Data) != 0 {
+			t.Fatal("create", created, err)
+		}
+		if again, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: namedPool, Op: cephmsgr.PoolSnapshotCreate, Name: name}); err != nil || again.Code != 0 {
+			t.Fatal("repeated creation is not idempotent", again, err)
+		}
+		state := info(2)
+		found := false
+		for _, s := range state.PoolSnaps {
+			found = found || s.Name == name
+		}
+		if !found || state.SnapMode != "pool" {
+			t.Fatalf("native pool state lacks the snapshot: %+v mode=%q", state.PoolSnaps, state.SnapMode)
+		}
+		route := poolPlace(t, ctx, 2, object, "")
+		o := mutationConnection(t, c, ctx, route)
+		defer o.Close()
+		overwrite := pools.request(route, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: 3, Data: []byte("new")})
+		overwrite.ModificationTime = cephmsgr.OSDTime{Seconds: 1700001200}
+		if _, err := o.Request(ctx, overwrite); err != nil {
+			t.Fatal(err)
+		}
+		if clone := poolObserve(t, ctx, 2, object, "", name); !bytes.Equal(clone.Data, original) {
+			t.Fatalf("the Go-created pool snapshot did not keep the original: %q", clone.Data)
+		}
+		if _, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: namedPool, Op: cephmsgr.PoolSnapshotRemove, Name: name}); err != nil {
+			t.Fatal("remove", err)
+		}
+		if gone := info(2); len(gone.PoolSnaps) != 0 {
+			t.Fatalf("snapshot still listed after removal: %+v", gone.PoolSnaps)
+		}
+		if missing, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: namedPool, Op: cephmsgr.PoolSnapshotRemove, Name: name}); err != nil || missing.Code != 0 {
+			t.Fatal("removing an absent snapshot is not idempotent", missing, err)
+		}
+	})
+
+	t.Run("refusals are known server codes", func(t *testing.T) {
+		// Pool 1 is now self-managed, pool 2 uses pool snapshots only after its first
+		// one; create one again to pin that mode before the cross-mode attempts.
+		if _, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: namedPool, Op: cephmsgr.PoolSnapshotCreate, Name: "pin-mode"}); err != nil {
+			t.Fatal(err)
+		}
+		for name, request := range map[string]struct {
+			req  cephmsgr.PoolOpRequest
+			code int32
+		}{
+			"pool snapshot in a self-managed pool": {cephmsgr.PoolOpRequest{Pool: selfPool, Op: cephmsgr.PoolSnapshotCreate, Name: "x"}, -22},
+			"self-managed id in a pool-snap pool":  {cephmsgr.PoolOpRequest{Pool: namedPool, Op: cephmsgr.SelfManagedSnapshotCreate}, -22},
+			"snapshot operation on an absent pool": {cephmsgr.PoolOpRequest{Pool: 99999, Op: cephmsgr.SelfManagedSnapshotCreate}, -2},
+			"pool snapshot removal on absent pool": {cephmsgr.PoolOpRequest{Pool: 99999, Op: cephmsgr.PoolSnapshotRemove, Name: "x"}, -2},
+		} {
+			result, err := c.PoolOp(ctx, request.req)
+			var unknown *cephmsgr.OutcomeUnknownError
+			if !errors.As(err, &refused) || errors.As(err, &unknown) || refused.Code != request.code || result.Code != request.code {
+				t.Fatal(name, "expected a known signed refusal", request.code, result, err)
+			}
+		}
+	})
+
+	// A peon forwards MPoolOp to the leader and routes the reply back. One
+	// client pinned to each monitor allocates an id: the sequence is shared,
+	// and at least one of them is a peon.
+	t.Run("every monitor, peons forwarding to the leader", func(t *testing.T) {
+		quorum, err := c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"quorum_status","format":"json"}`)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var status struct {
+			Leader string `json:"quorum_leader_name"`
+			Map    struct {
+				Mons []struct {
+					Name  string `json:"name"`
+					Addrs struct {
+						Vec []struct {
+							Type, Addr string
+						} `json:"addrvec"`
+					} `json:"public_addrs"`
+				} `json:"mons"`
+			} `json:"monmap"`
+		}
+		if err := json.Unmarshal(quorum.Data, &status); err != nil || status.Leader == "" {
+			t.Fatal("quorum status", err)
+		}
+		var leaderAddr string
+		for _, m := range status.Map.Mons {
+			for _, a := range m.Addrs.Vec {
+				if m.Name == status.Leader && a.Type == "v2" {
+					leaderAddr = a.Addr
+				}
+			}
+		}
+		seeds := integrationOptions(t).Monitors
+		if len(seeds) < 2 || leaderAddr == "" {
+			t.Skip("needs at least two monitors and a known leader address")
+		}
+		before := info(1).SnapSeq
+		last, peons := before, 0
+		for _, seed := range seeds {
+			options := integrationOptions(t)
+			options.Monitors = []string{seed}
+			options.EnableOSD = true
+			if isReplicatedPGFixtureProfile() {
+				options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+			}
+			pinned, err := cephmsgr.Dial(ctx, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			endpoint := pinned.Snapshot().Monitor.Endpoint
+			result, err := pinned.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotCreate})
+			pinned.Close()
+			id, idErr := result.SnapshotID()
+			if err != nil || idErr != nil || id != last+1 {
+				t.Fatalf("allocation through %s: id %d after %d: %v %v", endpoint, id, last, err, idErr)
+			}
+			last = id
+			leader := strings.Contains(endpoint, leaderAddr)
+			if !leader {
+				peons++
+			}
+			t.Logf("allocated id %d through %s (leader %v)", id, endpoint, leader)
+		}
+		if peons == 0 {
+			t.Fatal("no allocation went through a peon")
+		}
+		if state := info(1); state.SnapSeq != last {
+			t.Fatalf("native snap_seq %d differs from the last id %d", state.SnapSeq, last)
+		}
+	})
+
+	// The MON checks capabilities before pool existence or snapshot mode: an
+	// identity with only "allow r" for mon and osd is answered EPERM (not
+	// dropped) for every kind, and the native pool state does not move.
+	t.Run("capability refusals are EPERM", func(t *testing.T) {
+		options := integrationOptions(t)
+		encoded, err := os.ReadFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "readonly.key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if options.Key, err = cephmsgr.ParseKey(strings.TrimSpace(string(encoded))); err != nil {
+			t.Fatal(err)
+		}
+		options.Identity = "client.readonly"
+		// Admission follows the fixture's OSD profile, as for the admin client.
+		options.EnableOSD = true
+		if isReplicatedPGFixtureProfile() {
+			options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+		}
+		readonly, err := cephmsgr.Dial(ctx, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer readonly.Close()
+		selfBefore, namedBefore := info(1), info(2)
+		for name, req := range map[string]cephmsgr.PoolOpRequest{
+			"self-managed allocation":         {Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotCreate},
+			"self-managed removal":            {Pool: selfPool, Op: cephmsgr.SelfManagedSnapshotRemove, Snapshot: selfBefore.SnapSeq},
+			"pool snapshot creation":          {Pool: namedPool, Op: cephmsgr.PoolSnapshotCreate, Name: "denied"},
+			"pool snapshot removal":           {Pool: namedPool, Op: cephmsgr.PoolSnapshotRemove, Name: "pin-mode"},
+			"self-managed id in absent pool":  {Pool: 99999, Op: cephmsgr.SelfManagedSnapshotCreate},
+			"pool snapshot in a pool of mode": {Pool: selfPool, Op: cephmsgr.PoolSnapshotCreate, Name: "x"},
+		} {
+			result, err := readonly.PoolOp(ctx, req)
+			var unknown *cephmsgr.OutcomeUnknownError
+			if !errors.As(err, &refused) || errors.As(err, &unknown) || refused.Code != -1 || result.Code != -1 || result.Epoch == 0 {
+				t.Fatal(name, "expected a known EPERM reply", result, err)
+			}
+		}
+		selfAfter, namedAfter := info(1), info(2)
+		if selfAfter.SnapSeq != selfBefore.SnapSeq || selfAfter.SnapMode != "selfmanaged" || !reflect.DeepEqual(namedAfter.PoolSnaps, namedBefore.PoolSnaps) {
+			t.Fatalf("a refused pool op changed native pool state: seq %d->%d snaps %+v->%+v", selfBefore.SnapSeq, selfAfter.SnapSeq, namedBefore.PoolSnaps, namedAfter.PoolSnaps)
+		}
+		// Control: the same session still reads, so the refusals were per request.
+		if _, err := readonly.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"status","format":"json"}`)}); err != nil {
+			t.Fatal("read-only session lost its read permission", err)
+		}
+	})
+}
+
+// A self-managed allocation whose reply is lost with its MON session ends as an
+// unknown outcome. The client neither replays it on the recovered session nor
+// hides it: the native pool shows the id consumed, and the next allocation
+// returns the id after it.
+func TestCephMonPoolOpLostReplyIntegration(t *testing.T) {
+	fixture := osdFixture
+	if isReplicatedPGFixtureProfile() {
+		fixture = replicatedPGFixture
+	}
+	_, _, base, _ := fixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	defer cancel()
+	pools := createOwnedPools(t, ctx, base, 1)
+	info := func() poolReceipt { return nativePool(t, ctx, "poolinfo", map[string]any{"slot": 1}) }
+	options := integrationOptions(t)
+	options.EnableOSD = true
+	if isReplicatedPGFixtureProfile() {
+		options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+	}
+	options.KeepaliveInterval, options.KeepaliveTimeout = 200*time.Millisecond, 2*time.Second
+	var armed atomic.Bool
+	blocked := make(chan struct{}, 1)
+	dial := options.DialContext
+	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+		conn, err := dial(ctx, network, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{}), SignalBlocked: func() {
+			// Only the armed connection blocks; its successor reads freely.
+			armed.Store(false)
+			select {
+			case blocked <- struct{}{}:
+			default:
+			}
+		}}, nil
+	}
+	c, err := cephmsgr.Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	pool := uint32(pools.ids[1])
+	first, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, _ := first.SnapshotID()
+	before := c.Snapshot()
+	type result struct {
+		err error
+	}
+	done := make(chan result, 1)
+	armed.Store(true)
+	go func() {
+		_, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+		done <- result{err}
+	}()
+	select {
+	case <-blocked:
+	case <-ctx.Done():
+		t.Fatal("receive fault not activated")
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for info().SnapSeq != baseline+1 {
+		if time.Now().After(deadline) {
+			t.Fatal("the allocation never executed natively")
+		}
+		time.Sleep(time.Second)
+	}
+	lost := <-done
+	var unknown *cephmsgr.OutcomeUnknownError
+	if !errors.As(lost.err, &unknown) {
+		t.Fatal("a pool op whose session was lost must be an unknown outcome", lost.err)
+	}
+	// The next request waits for the client's own recovery to another session.
+	next, err := c.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, _ := next.SnapshotID(); id != baseline+2 {
+		t.Fatalf("the lost allocation was replayed or skipped differently: next id %d after %d", id, baseline)
+	}
+	time.Sleep(time.Second)
+	if seq := info().SnapSeq; seq != baseline+2 {
+		t.Fatalf("native snap_seq %d: the lost allocation executed more than once", seq)
+	}
+	t.Logf("lost allocation (id %d) ended unknown (%v); session %s -> %s", baseline+1, lost.err, before.Monitor.Endpoint, c.Snapshot().Monitor.Endpoint)
+}
+
+// With the leader stopped, an allocation sent to a peon waits through the
+// election and completes once on the new leader: exactly one id is consumed.
+// The stopped MON is restarted and the election settled on every path.
+func TestCephMonPoolOpLeaderStopIntegration(t *testing.T) {
+	fixture := osdFixture
+	if isReplicatedPGFixtureProfile() {
+		fixture = replicatedPGFixture
+	}
+	c, _, base, _ := fixture(t)
+	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	requireUsableFixture(t, control)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	pools := createOwnedPools(t, ctx, base, 1)
+	pool := uint32(pools.ids[1])
+	info := func() poolReceipt { return nativePool(t, ctx, "poolinfo", map[string]any{"slot": 1}) }
+	type quorumStatus struct {
+		Leader string   `json:"quorum_leader_name"`
+		Names  []string `json:"quorum_names"`
+		Map    struct {
+			Mons []struct {
+				Name  string `json:"name"`
+				Addrs struct {
+					Vec []struct{ Type, Addr string } `json:"addrvec"`
+				} `json:"public_addrs"`
+			} `json:"mons"`
+		} `json:"monmap"`
+	}
+	status := func(client *cephmsgr.Client) quorumStatus {
+		result, err := client.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"quorum_status","format":"json"}`)})
+		var s quorumStatus
+		if err != nil || json.Unmarshal(result.Data, &s) != nil || s.Leader == "" {
+			t.Fatal("quorum status", err)
+		}
+		return s
+	}
+	initial := status(c)
+	if len(initial.Map.Mons) < 3 || len(initial.Names) != len(initial.Map.Mons) {
+		t.Skip("needs a full quorum of at least three monitors")
+	}
+	addrs := map[string]string{}
+	for _, m := range initial.Map.Mons {
+		for _, a := range m.Addrs.Vec {
+			if a.Type == "v2" {
+				addrs[m.Name] = a.Addr
+			}
+		}
+	}
+	var peonSeed string
+	for _, seed := range integrationOptions(t).Monitors {
+		if !strings.Contains(seed, addrs[initial.Leader]) && addrs[initial.Leader] != "" {
+			peonSeed = seed
+			break
+		}
+	}
+	if peonSeed == "" {
+		t.Fatal("no peon seed address found", initial.Leader, addrs)
+	}
+	options := integrationOptions(t)
+	options.Monitors = []string{peonSeed}
+	// A pending allocation must have time to receive its original reply after
+	// an election, even if short-ticket renewal retires its admitted MON.
+	// This is a subject-only caller option, not a product or fixture default.
+	leaderStopMonitorOptions(&options)
+	options.EnableOSD = true
+	if isReplicatedPGFixtureProfile() {
+		options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+	}
+	pinned, err := cephmsgr.Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pinned.Close()
+	subjectBefore := pinned.Snapshot()
+	t.Logf("leader-stop subject seed=%s endpoint=%s GID=%d setup/drain budget=%s; operation context remains 300s",
+		peonSeed, subjectBefore.Monitor.Endpoint, subjectBefore.GlobalID, leaderStopMONDrainBudget)
+	first, err := pinned.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	assertLeaderStopClientIdentity(t, pinned, subjectBefore, "baseline allocation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, _ := first.SnapshotID()
+	monState := c.Snapshot().Monitor
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", initial.Leader); err != nil {
+		t.Fatal("stop leader", err)
+	}
+	stopped := true
+	defer func() {
+		if !stopped {
+			return
+		}
+		restore, stop := context.WithTimeout(context.Background(), 180*time.Second)
+		defer stop()
+		if err := testcluster.ControlDaemon(restore, control, "start", "mon", initial.Leader); err != nil {
+			markFixtureUnusable(t, control, "stopped leader MON did not restart")
+			t.Error(err)
+			return
+		}
+		if _, err := settleNativeMonitorElection(restore, c, control, "restarted", monState, monState.Members); err != nil {
+			markFixtureUnusable(t, control, "election did not settle after the leader restart")
+			t.Error(err)
+		}
+	}()
+	started := time.Now()
+	during, err := pinned.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	assertLeaderStopClientIdentity(t, pinned, subjectBefore, "allocation during election")
+	if err != nil {
+		t.Fatal("allocation through a peon while the leader is stopped", err)
+	}
+	id, _ := during.SnapshotID()
+	elapsed := time.Since(started)
+	after := status(pinned)
+	t.Logf("allocated id %d through %s in %s; leader %s -> %s, quorum %v", id, pinned.Snapshot().Monitor.Endpoint, elapsed.Round(time.Millisecond), initial.Leader, after.Leader, after.Names)
+	if id != baseline+1 || after.Leader == initial.Leader || slices.Contains(after.Names, initial.Leader) {
+		t.Fatalf("expected one new id under a new leader: id %d after %d, status %+v", id, baseline, after)
+	}
+	if seq := info().SnapSeq; seq != id {
+		t.Fatalf("native snap_seq %d differs from the single allocation %d", seq, id)
+	}
+	assertLeaderStopClientIdentity(t, pinned, subjectBefore, "native single allocation comparison")
+	if err := testcluster.ControlDaemon(ctx, control, "start", "mon", initial.Leader); err != nil {
+		t.Fatal("restart leader", err)
+	}
+	stopped = false
+	waitNativeMonitorElection(t, ctx, c, control, "restarted", monState, monState.Members)
+	next, err := pinned.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: pool, Op: cephmsgr.SelfManagedSnapshotCreate})
+	assertLeaderStopClientIdentity(t, pinned, subjectBefore, "allocation after restart")
+	if nextID, _ := next.SnapshotID(); err != nil || nextID != id+1 {
+		t.Fatal("allocation after the restart", nextID, err)
+	}
+}
+
+// A self-managed snapshot id may also be allocated by an identity whose only
+// write grant is an OSD capability on that pool (OSDMonitor.cc
+// is_unmanaged_snap_op_permitted); every other pool-op kind still needs MON
+// osd write. The test-only identity is created and removed through MON auth
+// commands on the disposable fixture.
+func TestCephMonPoolOpScopedCapsIntegration(t *testing.T) {
+	fixture := osdFixture
+	if isReplicatedPGFixtureProfile() {
+		fixture = replicatedPGFixture
+	}
+	c, _, base, _ := fixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+	pools := createOwnedPools(t, ctx, base, 1, 2)
+	const entity = "client.ceph-msgr-scoped-snap"
+	mon := func(call context.Context, fields map[string]any) cephmsgr.Result {
+		encoded, _ := json.Marshal(fields)
+		result, err := c.MonCommand(call, cephmsgr.Command{JSON: encoded})
+		if err != nil {
+			t.Fatal(fields["prefix"], err)
+		}
+		return result
+	}
+	created := mon(ctx, map[string]any{"prefix": "auth get-or-create", "entity": entity, "format": "json",
+		"caps": []string{"mon", "allow r", "osd", "allow rw pool=ceph-msgr-owned-pool-1"}})
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		mon(cleanup, map[string]any{"prefix": "auth rm", "entity": entity})
+	})
+	var keys []struct {
+		Entity string `json:"entity"`
+		Key    string `json:"key"`
+	}
+	if err := json.Unmarshal(created.Data, &keys); err != nil || len(keys) != 1 || keys[0].Entity != entity {
+		t.Fatal("auth get-or-create output", err)
+	}
+	options := integrationOptions(t)
+	key, err := cephmsgr.ParseKey(keys[0].Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Key, options.Identity = key, entity
+	options.EnableOSD = true
+	if isReplicatedPGFixtureProfile() {
+		options.OSDProfile = replicatedPGFixtureOSDProfile(t)
+	}
+	scoped, err := cephmsgr.Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer scoped.Close()
+	granted, other := uint32(pools.ids[1]), uint32(pools.ids[2])
+	allocated, err := scoped.PoolOp(ctx, cephmsgr.PoolOpRequest{Pool: granted, Op: cephmsgr.SelfManagedSnapshotCreate})
+	id, idErr := allocated.SnapshotID()
+	if err != nil || idErr != nil || id == 0 {
+		t.Fatal("self-managed allocation through the pool-scoped OSD grant", err, idErr)
+	}
+	if seq := nativePool(t, ctx, "poolinfo", map[string]any{"slot": 1}).SnapSeq; seq != id {
+		t.Fatalf("native snap_seq %d differs from the allocated id %d", seq, id)
+	}
+	var refused *cephmsgr.PoolOpError
+	for name, req := range map[string]cephmsgr.PoolOpRequest{
+		"self-managed id in an ungranted pool": {Pool: other, Op: cephmsgr.SelfManagedSnapshotCreate},
+		"pool snapshot in the granted pool":    {Pool: granted, Op: cephmsgr.PoolSnapshotCreate, Name: "scoped"},
+	} {
+		result, err := scoped.PoolOp(ctx, req)
+		if !errors.As(err, &refused) || refused.Code != -1 || result.Code != -1 {
+			t.Fatal(name, "expected EPERM", result, err)
+		}
+	}
+	if state := nativePool(t, ctx, "poolinfo", map[string]any{"slot": 2}); state.SnapSeq != 0 || len(state.PoolSnaps) != 0 {
+		t.Fatal("a refused pool op changed the ungranted pool", state.SnapSeq, state.PoolSnaps)
+	}
+	t.Logf("pool-scoped OSD write grant allocated id %d; other kinds and pools were EPERM (key type of %s accepted)", id, entity)
+}

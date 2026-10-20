@@ -1,0 +1,109 @@
+package cephmsgr
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"runtime"
+	"testing"
+	"time"
+
+	"github.com/JSYoo5B/ceph-msgr-go/internal/session"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
+)
+
+func controlFixtureMonitors(ctx context.Context, control string, start bool) error {
+	request, response := "stop-mons", "mons-stopped"
+	if start {
+		request, response = "start-mons", "mons-started"
+	}
+	return testcluster.RequestControl(ctx, control, request, response)
+}
+
+func fixtureRecoveryRead(ctx context.Context, c *Client, mgr bool) error {
+	call, prefix := c.MonCommand, "status"
+	if mgr {
+		call, prefix = c.MgrCommand, "pg stat"
+	}
+	command, _ := json.Marshal(map[string]string{"prefix": prefix, "format": "json"})
+	for {
+		result, err := call(ctx, Command{JSON: command})
+		if err == nil {
+			if result.Code != 0 || !json.Valid(result.Data) {
+				return fmt.Errorf("invalid %s output after quorum recovery", prefix)
+			}
+			return nil
+		}
+		if !testcluster.IsRecoveryError(err, ErrManagerChanged, ErrKeepaliveTimeout, session.ErrRetired) {
+			return err
+		}
+		// This is a read-only oracle. Mutations are never retried by this
+		// helper or by the product's session recovery.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func TestCephCompleteMonitorOutageIntegration(t *testing.T) {
+	baseline := runtime.NumGoroutine()
+	c, ctx := fixtureClient(t, 2*time.Minute)
+	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	if err := fixtureRecoveryRead(ctx, c, true); err != nil {
+		t.Fatal(err)
+	}
+	for cycle := 0; cycle < 3; cycle++ {
+		c.mu.Lock()
+		old := c.mon
+		c.mu.Unlock()
+		if err := controlFixtureMonitors(ctx, control, false); err != nil {
+			t.Fatal("stop all MONs", err)
+		}
+		select {
+		case <-old.Done():
+		case <-ctx.Done():
+			t.Fatal("old MON session remained open", ctx.Err())
+		}
+		for _, call := range []func(context.Context, Command) (Result, error){c.MonCommand, c.MgrCommand} {
+			short, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
+			_, err := call(short, Command{JSON: []byte(`{"prefix":"status"}`)})
+			cancel()
+			var unknown *OutcomeUnknownError
+			if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &unknown) {
+				t.Fatal("untransmitted outage wait has incorrect result", err)
+			}
+		}
+		waiting := make(chan error, 2)
+		for _, mgr := range []bool{false, true} {
+			go func(mgr bool) { waiting <- fixtureRecoveryRead(ctx, c, mgr) }(mgr)
+		}
+		// Keep the operation contexts alive while the cluster has no MONs.
+		select {
+		case err := <-waiting:
+			t.Fatal("request returned before MONs restarted", err)
+		case <-time.After(100 * time.Millisecond):
+		}
+		if err := controlFixtureMonitors(ctx, control, true); err != nil {
+			t.Fatal("restart all MONs", err)
+		}
+		for i := 0; i < cap(waiting); i++ {
+			select {
+			case err := <-waiting:
+				if err != nil {
+					t.Fatal("command after complete MON outage", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("restarted MONs did not release callers", ctx.Err())
+			}
+		}
+		t.Logf("complete MON outage/recovery cycle=%d passed", cycle+1)
+	}
+	c.Close()
+	if after := runtime.NumGoroutine(); after > baseline+4 {
+		t.Errorf("workers remain after quorum recovery: before=%d after=%d", baseline, after)
+	}
+}

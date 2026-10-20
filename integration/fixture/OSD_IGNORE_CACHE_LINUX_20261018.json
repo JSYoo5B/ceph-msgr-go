@@ -1,0 +1,3873 @@
+{
+  "schema": "ceph-msgr-ignore-cache-live-validation/v1",
+  "date": "2026-10-18",
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "source": {
+    "selected_overlay_files": [
+      {
+        "file": ".github/workflows/ci.yml",
+        "bytes": 32864,
+        "sha256": "48fa52fa6be045d0f776e0bd355eef0044e9da1c39b3d1a2fa6df4a772f62c0a"
+      },
+      {
+        "file": "integration/fixture/control.go",
+        "bytes": 52149,
+        "sha256": "290472a701a1ca919f910cf7e0c01b90874909beb56fbad21f7bdb550685868f"
+      },
+      {
+        "file": "integration/fixture/diagnostics.go",
+        "bytes": 10460,
+        "sha256": "8426ddd39eebab5424d8e737d2c3d5532e50614afe97399479f07a938e6b20f5"
+      },
+      {
+        "file": "integration/fixture/main.go",
+        "bytes": 19512,
+        "sha256": "271992139afcb8f4859810069ccdda2687d1399fde7e0fd1d50264b768b7e0ff"
+      },
+      {
+        "file": "integration/fixture/osd_cache_pools.go",
+        "bytes": 12951,
+        "sha256": "ae99fd2331d67234fee60cc31ef6c4545e6570562d4dc39b400143144e46cc3a"
+      },
+      {
+        "file": "integration/fixture/osd_cache_pools_test.go",
+        "bytes": 3748,
+        "sha256": "c3af3e0fbb2d4fb422079263a4748351de1b35e54a0484dbf1f1b18b2df9ecae"
+      },
+      {
+        "file": "integration/fixture/osd_ignore_cache_probe.go",
+        "bytes": 12876,
+        "sha256": "83c59b1595b8c48cdafbaac7d752b9fe5b3f3fbe8075efb6116203dab6a45e6b"
+      },
+      {
+        "file": "integration/fixture/profile.go",
+        "bytes": 27170,
+        "sha256": "154e43cc2308aebb5bb06f517a174027e4932fd83007e5cfbb296bb8c5c47fdd"
+      },
+      {
+        "file": "integration/fixture/profile_test.go",
+        "bytes": 20655,
+        "sha256": "c6f467cad811f61bd1c55a01c19ef50fcc8144b0abb34ac47fb8f26732799940"
+      },
+      {
+        "file": "integration/fixture/provider.go",
+        "bytes": 17233,
+        "sha256": "ee4149b32f550ff7610e9935f555c86763cf691ea5179440c82bf486a8bbc53e"
+      },
+      {
+        "file": "integration/osd_ignore_cache_test.go",
+        "bytes": 21184,
+        "sha256": "15ba80b53c0b1108e65ffdae3f167026e670de69fd2a31cf06262b3d94e75606"
+      },
+      {
+        "file": "tools/osd_ignore_cache_integration_oracle.py",
+        "bytes": 17182,
+        "sha256": "4e45aeaf6d4b5a4ae044c2debfc90cf4363c8dbd705000796bd1dd8beff36f0b"
+      },
+      {
+        "file": "tools/test_ci_osd_profiles.py",
+        "bytes": 30356,
+        "sha256": "03b60c1319b5d6b5d68f6c336c85ecc5a19032fb2b3f6ba7d5cb54eb3ded7277"
+      },
+      {
+        "file": "tools/test_osd_ignore_cache_integration_oracle.py",
+        "bytes": 18117,
+        "sha256": "b95c79125b7bfbe7aa6f2cf1cc98c691d1dd2b39eb7e2be6e75777d0ef0303f4"
+      },
+      {
+        "file": "tools/test_osd_ignore_cache_oracle.py",
+        "bytes": 10400,
+        "sha256": "a7171693d390435ad6c8fea1d7fe05b3cf0f8e99688a585275efbdc6152bdebe"
+      }
+    ],
+    "go_source_file_count": 703,
+    "go_source_inventory_sha256": "194e502d331867954baf55c6d8a3dddb7c045404d49d50f21d4a3750fba413c2",
+    "inventory_format": "sorted relative path + space + SHA256 + newline",
+    "all_703_Go_files_and_selected_15_matched": true
+  },
+  "live_runs": [
+    {
+      "profile": "crc-host",
+      "run": {
+        "profile": "crc-host",
+        "start": "2026-10-18T07:32:57.884004+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:34:45.811832+00:00"
+      },
+      "test_duration": "28.78s",
+      "leaves": [
+        "default_client_refuses_native_MON_cache_feature",
+        "opted_private_MON_and_MGR_commands_preserve_identity",
+        "stat-normal",
+        "stat-ignore",
+        "read-normal",
+        "read-ignore",
+        "writefull-normal",
+        "writefull-ignore",
+        "delete-normal",
+        "delete-ignore",
+        "scoped_pool_namespace_and_readonly_refusals_preserve_state",
+        "primary_channel_survives_all_cache_operations"
+      ],
+      "manifest": {
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "architecture": "amd64",
+        "connection_mode": "crc",
+        "key_type": "aes",
+        "service_cipher": "aes",
+        "runtime": "host",
+        "ip_family": "4",
+        "osd_store": "bluestore",
+        "osd_replicas": "1",
+        "osd_profile": "legacy-v6"
+      },
+      "plan": {
+        "base": "ceph-msgr-cache-base-953167280d21",
+        "clients": {
+          "base": "client.cache-base-953167280d21",
+          "ro": "client.cache-ro-953167280d21",
+          "rw": "client.cache-rw-953167280d21"
+        },
+        "fsid": "1dbc2d79-5280-4383-ba98-e65bf38b541c",
+        "namespace": "cache-probe",
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "tier": "ceph-msgr-cache-tier-953167280d21",
+        "token": "953167280d21"
+      },
+      "primary_before": {
+        "Closed": false,
+        "FSID": "1dbc2d79-5280-4383-ba98-e65bf38b541c",
+        "GlobalID": 4830,
+        "AuthTicket": {
+          "Expires": "2026-10-18T07:34:26.57528994Z",
+          "RenewAfter": "2026-10-18T07:34:23.57528994Z"
+        },
+        "MgrTicket": {
+          "Expires": "2026-10-18T07:34:26.57528994Z",
+          "RenewAfter": "2026-10-18T07:34:23.57528994Z"
+        },
+        "MDSTicket": {
+          "Expires": "0001-01-01T00:00:00Z",
+          "RenewAfter": "0001-01-01T00:00:00Z"
+        },
+        "OSDTicket": {
+          "Expires": "2026-10-18T07:34:26.57528994Z",
+          "RenewAfter": "2026-10-18T07:34:23.57528994Z"
+        },
+        "Monitor": {
+          "Ready": true,
+          "Endpoint": "172.18.0.2:3300",
+          "MapEpoch": 3,
+          "MinimumRelease": 20
+        },
+        "Manager": {
+          "Ready": true,
+          "Endpoint": "172.18.0.6:6800",
+          "MapEpoch": 5,
+          "Available": true,
+          "Name": "a",
+          "GlobalID": 4167
+        }
+      },
+      "primary_after": {
+        "Closed": false,
+        "FSID": "1dbc2d79-5280-4383-ba98-e65bf38b541c",
+        "GlobalID": 4830,
+        "AuthTicket": {
+          "Expires": "2026-10-18T07:34:26.57528994Z",
+          "RenewAfter": "2026-10-18T07:34:23.57528994Z"
+        },
+        "MgrTicket": {
+          "Expires": "2026-10-18T07:34:26.57528994Z",
+          "RenewAfter": "2026-10-18T07:34:23.57528994Z"
+        },
+        "MDSTicket": {
+          "Expires": "0001-01-01T00:00:00Z",
+          "RenewAfter": "0001-01-01T00:00:00Z"
+        },
+        "OSDTicket": {
+          "Expires": "2026-10-18T07:34:26.57528994Z",
+          "RenewAfter": "2026-10-18T07:34:23.57528994Z"
+        },
+        "Monitor": {
+          "Ready": true,
+          "Endpoint": "172.18.0.2:3300",
+          "MapEpoch": 3,
+          "MinimumRelease": 20
+        },
+        "Manager": {
+          "Ready": true,
+          "Endpoint": "172.18.0.6:6800",
+          "MapEpoch": 5,
+          "Available": true,
+          "Name": "a",
+          "GlobalID": 4167
+        }
+      },
+      "requests": [
+        {
+          "case": "stat-normal",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "stat-normal-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 783239980,
+            "pg_seed": 0,
+            "raw_pgid": "4.2eaf4b2c",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 1,
+          "global_id": 4830,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67108885,
+          "user_version": 1,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 1
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": false,
+          "operation": 4610,
+          "raw": {
+            "front_bytes": 205,
+            "front_sha256": "739a67cbb660c29bd4e747f88cc62e3fd3cd596e9fb285f0233ebd154ef7d2b5",
+            "data_bytes": 16,
+            "data_sha256": "57446673fc0900845af9ae923687eae0ce87d7907372c5938f343bee20dc7d93",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "stat-ignore",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "stat-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 917107629,
+            "pg_seed": 0,
+            "raw_pgid": "4.36a9f3ad",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 2,
+          "global_id": 4830,
+          "code": -2,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4610,
+          "raw": {
+            "front_bytes": 205,
+            "front_sha256": "c6c163e568186c91d58eeca0aae4765b9b43ac3a2d7b5f1326091a3e6a462ad1",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -2"
+        },
+        {
+          "case": "read-normal",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "read-normal-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 1369238923,
+            "pg_seed": 0,
+            "raw_pgid": "4.519ced8b",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 3,
+          "global_id": 4830,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67108885,
+          "user_version": 5,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 5
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": false,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 205,
+            "front_sha256": "5d30bbf9c62ccb5f42fc837d3a259efcd7ae870f253a611770e6fdb153fe0034",
+            "data_bytes": 19,
+            "data_sha256": "9f31225ddf8e80e65104e38a3bb196531bb29b7d5e5c0e2b5b11a527eb486b6f",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "read-ignore",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "read-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 526589077,
+            "pg_seed": 0,
+            "raw_pgid": "4.1f631c95",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 4,
+          "global_id": 4830,
+          "code": -2,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 205,
+            "front_sha256": "641f7dafadf8202939c1bc382179f16434b41fe360e43cc9517b2a9720ddf07b",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -2"
+        },
+        {
+          "case": "writefull-normal",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-normal-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 876895268,
+            "pg_seed": 0,
+            "raw_pgid": "4.34445c24",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 5,
+          "global_id": 4830,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67108901,
+          "user_version": 10,
+          "legacy_version": {
+            "Epoch": 27,
+            "Version": 10
+          },
+          "replay_version": {
+            "Epoch": 27,
+            "Version": 10
+          },
+          "map_epoch": 27,
+          "ignore_cache": false,
+          "operation": 8706,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "d0356c8591caf62c052c4342ded2f3984b6937086a4b234017f86f73042e8b71",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "writefull-ignore",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "4.caa4b6d9",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 6,
+          "global_id": 4830,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67141669,
+          "user_version": 13,
+          "legacy_version": {
+            "Epoch": 27,
+            "Version": 13
+          },
+          "replay_version": {
+            "Epoch": 27,
+            "Version": 13
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 8706,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "ab798ba5d845146e900ca5b141c7d6d1d8fd86466e526f38ec11e883e5a66daf",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "delete-normal",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "delete-normal-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 1357782017,
+            "pg_seed": 0,
+            "raw_pgid": "4.50ee1c01",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 7,
+          "global_id": 4830,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67108901,
+          "user_version": 15,
+          "legacy_version": {
+            "Epoch": 27,
+            "Version": 15
+          },
+          "replay_version": {
+            "Epoch": 27,
+            "Version": 15
+          },
+          "map_epoch": 27,
+          "ignore_cache": false,
+          "operation": 8709,
+          "raw": {
+            "front_bytes": 207,
+            "front_sha256": "ff239ac189f941050a1957151a65332db9cdc17a82d02005609460fe53f46d3c",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "delete-ignore",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "delete-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 4257809601,
+            "pg_seed": 0,
+            "raw_pgid": "4.fdc904c1",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 8,
+          "global_id": 4830,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67141669,
+          "user_version": 17,
+          "legacy_version": {
+            "Epoch": 27,
+            "Version": 17
+          },
+          "replay_version": {
+            "Epoch": 27,
+            "Version": 17
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 8709,
+          "raw": {
+            "front_bytes": 207,
+            "front_sha256": "64286be6a7f20d30639117c685b181d6da2b3999f1dc9af46ef06b6fa3e7a384",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "read-only-read",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "4.caa4b6d9",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 1,
+          "global_id": 4980,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67141653,
+          "user_version": 13,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 13
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "f52f698c5fcf654f9389885ce78fa80522322e37a9018464b5e18548c42384ff",
+            "data_bytes": 19,
+            "data_sha256": "35acd20bfebb84ed02b69b7587b51c739cc9ae7ae24127b766f95f1006f62467",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "base-only-base-read",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 3,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "3.caa4b6d9",
+            "pgid": "3.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-base-953167280d21"
+          },
+          "transaction": 1,
+          "global_id": 4983,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67141653,
+          "user_version": 11,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 11
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "c567c9dda09a3bf6a72786ea1a88bce18f54ad6567120316bb04344f6af25dce",
+            "data_bytes": 19,
+            "data_sha256": "9f31225ddf8e80e65104e38a3bb196531bb29b7d5e5c0e2b5b11a527eb486b6f",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "read-only-write",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "4.caa4b6d9",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 2,
+          "global_id": 4980,
+          "code": -1,
+          "per_op_result": 0,
+          "flags": 67141668,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 8706,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "abdd4b521a23dcbab812f37f6619b5ef8bc1a0eea2eea6b7573f9fb5d8432f17",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -1"
+        },
+        {
+          "case": "base-only-tier-read",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "4.caa4b6d9",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 2,
+          "global_id": 4983,
+          "code": -1,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "68cf36076bf91138a49620a496439080fc469cae15aaf38b429e63cc58a37dc2",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -1"
+        },
+        {
+          "case": "wrong-namespace",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-foreign",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 2853986117,
+            "pg_seed": 0,
+            "raw_pgid": "4.aa1c5f45",
+            "pgid": "4.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-953167280d21"
+          },
+          "transaction": 9,
+          "global_id": 4830,
+          "code": -1,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "c9c6c0c5fd5aa1427391c481bbc67c2455adc8663df1fa2f905f81e7fc018459",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -1"
+        },
+        {
+          "case": "tier-only-base-read",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 3,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "3.caa4b6d9",
+            "pgid": "3.0",
+            "address": "v2:172.18.0.8:6800/3731988302",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-base-953167280d21"
+          },
+          "transaction": 10,
+          "global_id": 4830,
+          "code": -1,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "a512d87078b35ec353529aa306a25ea8aa15e807846fe9449975e3a8af9b9506",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -1"
+        }
+      ],
+      "cases": {
+        "stat-normal": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 1,
+          "native_own_version": 2,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            }
+          }
+        },
+        "stat-ignore": {
+          "go_code": -2,
+          "native_code": -2,
+          "go_user_version": 0,
+          "native_own_version": 0,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          }
+        },
+        "read-normal": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 5,
+          "native_own_version": 6,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 6
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 6
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 6
+            }
+          }
+        },
+        "read-ignore": {
+          "go_code": -2,
+          "native_code": -2,
+          "go_user_version": 0,
+          "native_own_version": 0,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 7
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 8
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 7
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 8
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          }
+        },
+        "writefull-normal": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 10,
+          "native_own_version": 12,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 9
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 10
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 9
+            },
+            "tier": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 10
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 10
+            },
+            "tier": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 12
+            }
+          }
+        },
+        "writefull-ignore": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 13,
+          "native_own_version": 14,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 11
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 12
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 11
+            },
+            "tier": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 13
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 12
+            },
+            "tier": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 14
+            }
+          }
+        },
+        "delete-normal": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 15,
+          "native_own_version": 16,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 13
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 14
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 13
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 14
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_followup": {
+            "code": -2,
+            "read_prval": 0,
+            "version": 0
+          },
+          "native_followup": {
+            "code": -2,
+            "read_prval": 0,
+            "version": 0
+          },
+          "go_after_followup": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 13
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after_followup": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 14
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          }
+        },
+        "delete-ignore": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 17,
+          "native_own_version": 18,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 15
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 16
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 15
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 16
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_followup": {
+            "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+            "code": 0,
+            "read_prval": 0,
+            "version": 15
+          },
+          "native_followup": {
+            "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+            "code": 0,
+            "read_prval": 0,
+            "version": 16
+          },
+          "go_after_followup": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 15
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 15
+            }
+          },
+          "native_after_followup": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 16
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 16
+            }
+          }
+        }
+      },
+      "native_calls": {
+        "count": 172,
+        "per_step_identity_verified": true,
+        "count_by_role": {
+          "observer": 160,
+          "rw": 12
+        },
+        "global_ids_by_role": {
+          "observer": [
+            4851,
+            4875,
+            4887,
+            4923,
+            4929,
+            4941,
+            4959,
+            4989,
+            4995,
+            14704,
+            14722,
+            14738,
+            14740,
+            14762,
+            14780,
+            14788,
+            14830,
+            14846,
+            14848,
+            14878
+          ],
+          "rw": [
+            4863,
+            4881,
+            4899,
+            14728,
+            14786,
+            14804,
+            14836,
+            14854
+          ]
+        }
+      },
+      "placements": {
+        "head_count": 16,
+        "base_and_tier_count": 32,
+        "foreign_namespace_count": 1,
+        "all_explicit_routes_coherent": true
+      },
+      "controls_count": 19,
+      "permissions": {
+        "default_MON_refusal": "ceph messenger session identification: ceph messenger: unsupported required features: peer requires 0x0000000800000000\nceph messenger session identification: ceph messenger: unsupported required features: peer requires 0x0000000800000000\nceph messenger session identification: ceph messenger: unsupported required features: peer requires 0x0000000800000000",
+        "scoped_private_tell": {
+          "Message": "insufficient caps",
+          "Code": -13
+        },
+        "private_tell": {
+          "Data": "eyJ2ZXJzaW9uIjoiMjAuMi40IiwicmVsZWFzZSI6InRlbnRhY2xlIiwicmVsZWFzZV90eXBlIjoic3RhYmxlIn0=",
+          "Message": "",
+          "Code": 0
+        },
+        "manager_command": {
+          "Data": "eyJwZ19yZWFkeSI6dHJ1ZSwicGdfc3VtbWFyeSI6eyJudW1fcGdfYnlfc3RhdGUiOlt7Im5hbWUiOiJhY3RpdmUrY2xlYW4iLCJudW0iOjR9XSwibnVtX3BncyI6NCwibnVtX2J5dGVzIjo0Njk3OTMsInRvdGFsX2J5dGVzIjoxMDczNzQxODI0LCJ0b3RhbF9hdmFpbF9ieXRlcyI6MTA0NTU1MzE1MiwidG90YWxfdXNlZF9ieXRlcyI6MjgxODg2NzIsInRvdGFsX3VzZWRfcmF3X2J5dGVzIjoyODE4ODY3Mn0KfQ==",
+          "Message": "",
+          "Code": 0
+        },
+        "signed_EPERM_cases": 4,
+        "positive_read_cases": 2,
+        "state_preserved": true
+      },
+      "cleanup": {
+        "owned_clients_absent": true,
+        "owned_pools_absent": true,
+        "owned_rules_absent": true,
+        "pool_delete_baseline": "false",
+        "pool_delete_override_absent": true,
+        "remaining_pool_names": [
+          ".mgr",
+          "ceph-msgr-osd-fixture"
+        ],
+        "remaining_rule_names": [
+          "replicated_rule",
+          "tc-ceph-msgr-osd-fixture-replicated"
+        ]
+      },
+      "resource_absence": {
+        "containers": {
+          "control": {
+            "id": "e4004603ff5ac719cffb6af7a5316299a98aa36a6b4eb87d15c45351dbb2142e",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "1e2f25c5d5a4445edc16f0ab39fdbd5b50c1b89a04bd2f328dd1f85c69f1d328",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "009a42c5c88588f0f4888c089a9b140222f190ab6d011960646e86c66a00d0c4",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "999acb7e33687c3e570e804f3341d396a73ebd04495dd44e75d6b41bbfe18af9",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "d80ca7b10636a3187236b650c6fd5cb15613e881f7bc14bd9eb11b56e693d3ae",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "55287108f90ef35618ac7ea5792a04e876152b4cb419b9872d08b4e3ae5d4f8e",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "85a15bcfc5f8a4297cc06b1405f6965fadffbcf29ebbb9811e0e48229e63a45f",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "88ff185bdf5d083eee9a4189aca7e94ed9747e4ea8804dc89dabb8418f8b7572",
+            "exists": false
+          }
+        },
+        "network": "ad384252-382b-4818-9d7b-8ec5404634de",
+        "network_exists": false
+      },
+      "raw_public_evidence": {}
+    },
+    {
+      "profile": "secure-ipv6",
+      "run": {
+        "profile": "secure-ipv6",
+        "start": "2026-10-18T07:32:59.323407+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:34:45.851723+00:00"
+      },
+      "test_duration": "30.43s",
+      "leaves": [
+        "default_client_refuses_native_MON_cache_feature",
+        "opted_private_MON_and_MGR_commands_preserve_identity",
+        "stat-normal",
+        "stat-ignore",
+        "read-normal",
+        "read-ignore",
+        "writefull-normal",
+        "writefull-ignore",
+        "delete-normal",
+        "delete-ignore",
+        "scoped_pool_namespace_and_readonly_refusals_preserve_state",
+        "primary_channel_survives_all_cache_operations"
+      ],
+      "manifest": {
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "architecture": "amd64",
+        "connection_mode": "secure",
+        "key_type": "aes256k",
+        "service_cipher": "aes256k",
+        "runtime": "container",
+        "ip_family": "6",
+        "osd_store": "bluestore",
+        "osd_replicas": "1",
+        "osd_profile": "legacy-v6"
+      },
+      "plan": {
+        "base": "ceph-msgr-cache-base-bcc0d344c588",
+        "clients": {
+          "base": "client.cache-base-bcc0d344c588",
+          "ro": "client.cache-ro-bcc0d344c588",
+          "rw": "client.cache-rw-bcc0d344c588"
+        },
+        "fsid": "20770dc2-3d45-40e0-b8d9-b265504f6b6f",
+        "namespace": "cache-probe",
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "tier": "ceph-msgr-cache-tier-bcc0d344c588",
+        "token": "bcc0d344c588"
+      },
+      "primary_before": {
+        "Closed": false,
+        "FSID": "20770dc2-3d45-40e0-b8d9-b265504f6b6f",
+        "GlobalID": 4812,
+        "AuthTicket": {
+          "Expires": "2026-10-18T07:34:25.388965052Z",
+          "RenewAfter": "2026-10-18T07:34:22.433082483Z"
+        },
+        "MgrTicket": {
+          "Expires": "2026-10-18T07:34:25.388967607Z",
+          "RenewAfter": "2026-10-18T07:34:22.4330844Z"
+        },
+        "MDSTicket": {
+          "Expires": "0001-01-01T00:00:00Z",
+          "RenewAfter": "0001-01-01T00:00:00Z"
+        },
+        "OSDTicket": {
+          "Expires": "2026-10-18T07:34:25.388960394Z",
+          "RenewAfter": "2026-10-18T07:34:22.43307899Z"
+        },
+        "Monitor": {
+          "Ready": true,
+          "Endpoint": "[fd0c:20e8:5ad1::2]:3300",
+          "MapEpoch": 3,
+          "MinimumRelease": 20
+        },
+        "Manager": {
+          "Ready": true,
+          "Endpoint": "[fd0c:20e8:5ad1::6]:6800",
+          "MapEpoch": 5,
+          "Available": true,
+          "Name": "a",
+          "GlobalID": 4167
+        }
+      },
+      "primary_after": {
+        "Closed": false,
+        "FSID": "20770dc2-3d45-40e0-b8d9-b265504f6b6f",
+        "GlobalID": 4812,
+        "AuthTicket": {
+          "Expires": "2026-10-18T07:34:25.388965052Z",
+          "RenewAfter": "2026-10-18T07:34:22.433082483Z"
+        },
+        "MgrTicket": {
+          "Expires": "2026-10-18T07:34:25.388967607Z",
+          "RenewAfter": "2026-10-18T07:34:22.4330844Z"
+        },
+        "MDSTicket": {
+          "Expires": "0001-01-01T00:00:00Z",
+          "RenewAfter": "0001-01-01T00:00:00Z"
+        },
+        "OSDTicket": {
+          "Expires": "2026-10-18T07:34:25.388960394Z",
+          "RenewAfter": "2026-10-18T07:34:22.43307899Z"
+        },
+        "Monitor": {
+          "Ready": true,
+          "Endpoint": "[fd0c:20e8:5ad1::2]:3300",
+          "MapEpoch": 3,
+          "MinimumRelease": 20
+        },
+        "Manager": {
+          "Ready": true,
+          "Endpoint": "[fd0c:20e8:5ad1::6]:6800",
+          "MapEpoch": 5,
+          "Available": true,
+          "Name": "a",
+          "GlobalID": 4167
+        }
+      },
+      "requests": [
+        {
+          "case": "stat-normal",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "stat-normal-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 783239980,
+            "pg_seed": 0,
+            "raw_pgid": "4.2eaf4b2c",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 1,
+          "global_id": 4812,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67108885,
+          "user_version": 1,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 1
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": false,
+          "operation": 4610,
+          "raw": {
+            "front_bytes": 205,
+            "front_sha256": "739a67cbb660c29bd4e747f88cc62e3fd3cd596e9fb285f0233ebd154ef7d2b5",
+            "data_bytes": 16,
+            "data_sha256": "57446673fc0900845af9ae923687eae0ce87d7907372c5938f343bee20dc7d93",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "stat-ignore",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "stat-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 917107629,
+            "pg_seed": 0,
+            "raw_pgid": "4.36a9f3ad",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 2,
+          "global_id": 4812,
+          "code": -2,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4610,
+          "raw": {
+            "front_bytes": 205,
+            "front_sha256": "c6c163e568186c91d58eeca0aae4765b9b43ac3a2d7b5f1326091a3e6a462ad1",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -2"
+        },
+        {
+          "case": "read-normal",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "read-normal-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 1369238923,
+            "pg_seed": 0,
+            "raw_pgid": "4.519ced8b",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 3,
+          "global_id": 4812,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67108885,
+          "user_version": 5,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 5
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": false,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 205,
+            "front_sha256": "5d30bbf9c62ccb5f42fc837d3a259efcd7ae870f253a611770e6fdb153fe0034",
+            "data_bytes": 19,
+            "data_sha256": "9f31225ddf8e80e65104e38a3bb196531bb29b7d5e5c0e2b5b11a527eb486b6f",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "read-ignore",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "read-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 526589077,
+            "pg_seed": 0,
+            "raw_pgid": "4.1f631c95",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 4,
+          "global_id": 4812,
+          "code": -2,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 205,
+            "front_sha256": "641f7dafadf8202939c1bc382179f16434b41fe360e43cc9517b2a9720ddf07b",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -2"
+        },
+        {
+          "case": "writefull-normal",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-normal-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 876895268,
+            "pg_seed": 0,
+            "raw_pgid": "4.34445c24",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 5,
+          "global_id": 4812,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67108901,
+          "user_version": 10,
+          "legacy_version": {
+            "Epoch": 27,
+            "Version": 10
+          },
+          "replay_version": {
+            "Epoch": 27,
+            "Version": 10
+          },
+          "map_epoch": 27,
+          "ignore_cache": false,
+          "operation": 8706,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "d0356c8591caf62c052c4342ded2f3984b6937086a4b234017f86f73042e8b71",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "writefull-ignore",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "4.caa4b6d9",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 6,
+          "global_id": 4812,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67141669,
+          "user_version": 13,
+          "legacy_version": {
+            "Epoch": 27,
+            "Version": 13
+          },
+          "replay_version": {
+            "Epoch": 27,
+            "Version": 13
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 8706,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "ab798ba5d845146e900ca5b141c7d6d1d8fd86466e526f38ec11e883e5a66daf",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "delete-normal",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "delete-normal-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 1357782017,
+            "pg_seed": 0,
+            "raw_pgid": "4.50ee1c01",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 7,
+          "global_id": 4812,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67108901,
+          "user_version": 15,
+          "legacy_version": {
+            "Epoch": 27,
+            "Version": 15
+          },
+          "replay_version": {
+            "Epoch": 27,
+            "Version": 15
+          },
+          "map_epoch": 27,
+          "ignore_cache": false,
+          "operation": 8709,
+          "raw": {
+            "front_bytes": 207,
+            "front_sha256": "ff239ac189f941050a1957151a65332db9cdc17a82d02005609460fe53f46d3c",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "delete-ignore",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "delete-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 4257809601,
+            "pg_seed": 0,
+            "raw_pgid": "4.fdc904c1",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 8,
+          "global_id": 4812,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67141669,
+          "user_version": 17,
+          "legacy_version": {
+            "Epoch": 27,
+            "Version": 17
+          },
+          "replay_version": {
+            "Epoch": 27,
+            "Version": 17
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 8709,
+          "raw": {
+            "front_bytes": 207,
+            "front_sha256": "64286be6a7f20d30639117c685b181d6da2b3999f1dc9af46ef06b6fa3e7a384",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "read-only-read",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "4.caa4b6d9",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 1,
+          "global_id": 4962,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67141653,
+          "user_version": 13,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 13
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "f52f698c5fcf654f9389885ce78fa80522322e37a9018464b5e18548c42384ff",
+            "data_bytes": 19,
+            "data_sha256": "35acd20bfebb84ed02b69b7587b51c739cc9ae7ae24127b766f95f1006f62467",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "base-only-base-read",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 3,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "3.caa4b6d9",
+            "pgid": "3.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-base-bcc0d344c588"
+          },
+          "transaction": 1,
+          "global_id": 4965,
+          "code": 0,
+          "per_op_result": 0,
+          "flags": 67141653,
+          "user_version": 11,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 11
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "c567c9dda09a3bf6a72786ea1a88bce18f54ad6567120316bb04344f6af25dce",
+            "data_bytes": 19,
+            "data_sha256": "9f31225ddf8e80e65104e38a3bb196531bb29b7d5e5c0e2b5b11a527eb486b6f",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": ""
+        },
+        {
+          "case": "read-only-write",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "4.caa4b6d9",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 2,
+          "global_id": 4962,
+          "code": -1,
+          "per_op_result": 0,
+          "flags": 67141668,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 8706,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "abdd4b521a23dcbab812f37f6619b5ef8bc1a0eea2eea6b7573f9fb5d8432f17",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -1"
+        },
+        {
+          "case": "base-only-tier-read",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "4.caa4b6d9",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 2,
+          "global_id": 4965,
+          "code": -1,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "68cf36076bf91138a49620a496439080fc469cae15aaf38b429e63cc58a37dc2",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -1"
+        },
+        {
+          "case": "wrong-namespace",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 4,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-foreign",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 2853986117,
+            "pg_seed": 0,
+            "raw_pgid": "4.aa1c5f45",
+            "pgid": "4.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-tier-bcc0d344c588"
+          },
+          "transaction": 9,
+          "global_id": 4812,
+          "code": -1,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "c9c6c0c5fd5aa1427391c481bbc67c2455adc8663df1fa2f905f81e7fc018459",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -1"
+        },
+        {
+          "case": "tier-only-base-read",
+          "route": {
+            "up": [
+              0
+            ],
+            "acting": [
+              0
+            ],
+            "replicas": 1,
+            "min_size": 1,
+            "pool_id": 3,
+            "object": "writefull-ignore-go",
+            "namespace": "cache-probe",
+            "osd_id": 0,
+            "primary_id": 0,
+            "pg_shard": -1,
+            "pool_type": 1,
+            "pg_temp": false,
+            "nonprimary_shard_count": 0,
+            "epoch": 27,
+            "hash": 3399792345,
+            "pg_seed": 0,
+            "raw_pgid": "3.caa4b6d9",
+            "pgid": "3.0",
+            "address": "v2:[fd0c:20e8:5ad1::8]:6800/1119799127",
+            "size": 0,
+            "mtime_seconds": 0,
+            "mtime_nanoseconds": 0,
+            "pool_name": "ceph-msgr-cache-base-bcc0d344c588"
+          },
+          "transaction": 10,
+          "global_id": 4812,
+          "code": -1,
+          "per_op_result": 0,
+          "flags": 67141652,
+          "user_version": 0,
+          "legacy_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "replay_version": {
+            "Epoch": 0,
+            "Version": 0
+          },
+          "map_epoch": 27,
+          "ignore_cache": true,
+          "operation": 4609,
+          "raw": {
+            "front_bytes": 210,
+            "front_sha256": "a512d87078b35ec353529aa306a25ea8aa15e807846fe9449975e3a8af9b9506",
+            "data_bytes": 0,
+            "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "prefix_identity_independently_decoded": true
+          },
+          "error": "ceph: OSD result code -1"
+        }
+      ],
+      "cases": {
+        "stat-normal": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 1,
+          "native_own_version": 2,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            }
+          }
+        },
+        "stat-ignore": {
+          "go_code": -2,
+          "native_code": -2,
+          "go_user_version": 0,
+          "native_own_version": 0,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          }
+        },
+        "read-normal": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 5,
+          "native_own_version": 6,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 6
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 6
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 6
+            }
+          }
+        },
+        "read-ignore": {
+          "go_code": -2,
+          "native_code": -2,
+          "go_user_version": 0,
+          "native_own_version": 0,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 7
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 8
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 7
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 8
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          }
+        },
+        "writefull-normal": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 10,
+          "native_own_version": 12,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 9
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 10
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 9
+            },
+            "tier": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 10
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 10
+            },
+            "tier": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 12
+            }
+          }
+        },
+        "writefull-ignore": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 13,
+          "native_own_version": 14,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 11
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 12
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 11
+            },
+            "tier": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 13
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 12
+            },
+            "tier": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 14
+            }
+          }
+        },
+        "delete-normal": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 15,
+          "native_own_version": 16,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 13
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 14
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 13
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 14
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_followup": {
+            "code": -2,
+            "read_prval": 0,
+            "version": 0
+          },
+          "native_followup": {
+            "code": -2,
+            "read_prval": 0,
+            "version": 0
+          },
+          "go_after_followup": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 13
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after_followup": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 14
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          }
+        },
+        "delete-ignore": {
+          "go_code": 0,
+          "native_code": 0,
+          "go_user_version": 17,
+          "native_own_version": 18,
+          "go_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 15
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            }
+          },
+          "native_own_baseline": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 16
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            }
+          },
+          "go_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 15
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "native_after": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 16
+            },
+            "tier": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            }
+          },
+          "go_followup": {
+            "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+            "code": 0,
+            "read_prval": 0,
+            "version": 15
+          },
+          "native_followup": {
+            "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+            "code": 0,
+            "read_prval": 0,
+            "version": 16
+          },
+          "go_after_followup": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 15
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 15
+            }
+          },
+          "native_after_followup": {
+            "base": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 16
+            },
+            "tier": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 16
+            }
+          }
+        }
+      },
+      "native_calls": {
+        "count": 172,
+        "per_step_identity_verified": true,
+        "count_by_role": {
+          "observer": 160,
+          "rw": 12
+        },
+        "global_ids_by_role": {
+          "observer": [
+            4875,
+            4887,
+            4893,
+            4923,
+            4977,
+            14675,
+            14684,
+            14702,
+            14710,
+            14714,
+            14720,
+            14732,
+            14774,
+            14782,
+            14804,
+            14806,
+            14810,
+            14836,
+            14840,
+            14842
+          ],
+          "rw": [
+            4881,
+            4899,
+            14690,
+            14722,
+            14740,
+            14780,
+            14812,
+            14830
+          ]
+        }
+      },
+      "placements": {
+        "head_count": 16,
+        "base_and_tier_count": 32,
+        "foreign_namespace_count": 1,
+        "all_explicit_routes_coherent": true
+      },
+      "controls_count": 19,
+      "permissions": {
+        "default_MON_refusal": "ceph messenger session identification: ceph messenger: unsupported required features: peer requires 0x0000000800000000\nceph messenger session identification: ceph messenger: unsupported required features: peer requires 0x0000000800000000\nceph messenger session identification: ceph messenger: unsupported required features: peer requires 0x0000000800000000",
+        "scoped_private_tell": {
+          "Message": "insufficient caps",
+          "Code": -13
+        },
+        "private_tell": {
+          "Data": "eyJ2ZXJzaW9uIjoiMjAuMi40IiwicmVsZWFzZSI6InRlbnRhY2xlIiwicmVsZWFzZV90eXBlIjoic3RhYmxlIn0=",
+          "Message": "",
+          "Code": 0
+        },
+        "manager_command": {
+          "Data": "eyJwZ19yZWFkeSI6dHJ1ZSwicGdfc3VtbWFyeSI6eyJudW1fcGdfYnlfc3RhdGUiOlt7Im5hbWUiOiJhY3RpdmUrY2xlYW4iLCJudW0iOjR9XSwibnVtX3BncyI6NCwibnVtX2J5dGVzIjo0Njk3OTMsInRvdGFsX2J5dGVzIjoxMDczNzQxODI0LCJ0b3RhbF9hdmFpbF9ieXRlcyI6MTA0NTU1MzE1MiwidG90YWxfdXNlZF9ieXRlcyI6MjgxODg2NzIsInRvdGFsX3VzZWRfcmF3X2J5dGVzIjoyODE4ODY3Mn0KfQ==",
+          "Message": "",
+          "Code": 0
+        },
+        "signed_EPERM_cases": 4,
+        "positive_read_cases": 2,
+        "state_preserved": true
+      },
+      "cleanup": {
+        "owned_clients_absent": true,
+        "owned_pools_absent": true,
+        "owned_rules_absent": true,
+        "pool_delete_baseline": "false",
+        "pool_delete_override_absent": true,
+        "remaining_pool_names": [
+          ".mgr",
+          "ceph-msgr-osd-fixture"
+        ],
+        "remaining_rule_names": [
+          "replicated_rule",
+          "tc-ceph-msgr-osd-fixture-replicated"
+        ]
+      },
+      "resource_absence": {
+        "containers": {
+          "control": {
+            "id": "a4afb83dcc8979ac3aeafcbce703b7079a1cf464094790188a3dd1e301031c50",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "0736127ddc95159ac17671b97531d8453d0895b6f0ade2dfe65af4dc414c7fe3",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "9c4548fd56353b7358324e2119e391feb62794d24c17ff68f01f2a4169d5b03a",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "470c14d8378b33cf27a601ce3b28079d79661a8f7e41980eed50fc1b26fc609c",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "87d9a118405ada386b38129dc367d9011844dedc3c73dc94a21f234249937ac5",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "421cb2d14ba8908b04d54e75a72ba91b6315fd5e33bf2eaa2c27e12c1c39cb70",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "99976164b0ab586b99b1c7f61c23043c4ae77ff3cdd3c4c5eecb2951b41a92cf",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "4743d1d1c0f7a7b183a0eb69dcfa192f05303e44af9c348822dbafe3388621d1",
+            "exists": false
+          }
+        },
+        "network": "3a19d2e2-971a-43e8-9fbe-ec2528fdb402",
+        "network_exists": false
+      },
+      "raw_public_evidence": {}
+    }
+  ],
+  "final_local_checks": {
+    "receipt": {
+      "start": "2026-10-18T07:33:02.364349+00:00",
+      "steps": [
+        {
+          "name": "root-cgo0",
+          "argv": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "start": "2026-10-18T07:33:02.364360+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:33:17.480970+00:00"
+        },
+        {
+          "name": "race",
+          "argv": [
+            "go",
+            "test",
+            "-race",
+            "./integration",
+            "./cephmsgr"
+          ],
+          "start": "2026-10-18T07:33:17.481294+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:33:40.469943+00:00"
+        },
+        {
+          "name": "vet",
+          "argv": [
+            "go",
+            "vet",
+            "./..."
+          ],
+          "start": "2026-10-18T07:33:40.470195+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:33:41.188503+00:00"
+        },
+        {
+          "name": "fixture",
+          "argv": [
+            "go",
+            "test",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T07:33:41.188934+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:33:45.669121+00:00"
+        },
+        {
+          "name": "fixture-vet",
+          "argv": [
+            "go",
+            "vet",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T07:33:45.669791+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:33:45.985390+00:00"
+        },
+        {
+          "name": "python",
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tools",
+            "-p",
+            "test_*.py"
+          ],
+          "start": "2026-10-18T07:33:45.985687+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:33:51.279724+00:00"
+        }
+      ]
+    },
+    "python_tests": 443,
+    "raw_evidence": {}
+  },
+  "native_only_shared_lifecycle_regressions": {
+    "runs": {
+      "crc-ipv4": {
+        "run": {
+          "profile": "crc-ipv4",
+          "native_only": true,
+          "start": "2026-10-18T07:27:04.728728+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:28:35.899911+00:00"
+        },
+        "independent_audit": {
+          "passed": true,
+          "completed_controller_steps": 18,
+          "completed_capi_calls": 66,
+          "coherent_placements": 10,
+          "same_plan_and_fsid": true,
+          "four_distinct_native_global_ids": true,
+          "base_bytes_size_version_mtime_preserved": true,
+          "authorization_denials_preserved_tier_snapshot": true,
+          "detached_relationship_verified": true,
+          "all_eight_containers_absent": true,
+          "network_absent": true,
+          "cleanup_gate_evidence": "Completed frozen controller: owned pools/rules removed, config override absent and effective mon_allow_pool_delete=false, owned clients absent, owned pool names absent. These final inventories are checked in code but not separately archived."
+        },
+        "raw_public_evidence": {}
+      },
+      "secure-ipv6": {
+        "run": {
+          "profile": "secure-ipv6",
+          "native_only": true,
+          "start": "2026-10-18T07:30:40.442505+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:32:11.267086+00:00"
+        },
+        "independent_audit": {
+          "passed": true,
+          "completed_controller_steps": 18,
+          "completed_capi_calls": 66,
+          "coherent_placements": 10,
+          "same_plan_and_fsid": true,
+          "four_distinct_native_global_ids": true,
+          "base_bytes_size_version_mtime_preserved": true,
+          "authorization_denials_preserved_tier_snapshot": true,
+          "detached_relationship_verified": true,
+          "all_eight_containers_absent": true,
+          "network_absent": true,
+          "cleanup_gate_evidence": "Completed frozen controller: owned pools/rules removed, config override absent and effective mon_allow_pool_delete=false, owned clients absent, owned pool names absent. These final inventories are checked in code but not separately archived."
+        },
+        "raw_public_evidence": {}
+      }
+    }
+  },
+  "preserved_failures": {
+    "first_live": {
+      "crc-host": {
+        "run": {
+          "profile": "crc-host",
+          "start": "2026-10-18T07:26:56.495477+00:00",
+          "exit_code": 1,
+          "end": "2026-10-18T07:28:39.517263+00:00"
+        },
+        "evidence": {},
+        "reason": "Scoped MON allow r correctly rejects version tell with EACCES; acceptance expectation corrected, product and scoped grants unchanged."
+      },
+      "secure-ipv6": {
+        "run": {
+          "profile": "secure-ipv6",
+          "start": "2026-10-18T07:26:54.640995+00:00",
+          "exit_code": 1,
+          "end": "2026-10-18T07:28:38.022712+00:00"
+        },
+        "evidence": {},
+        "reason": "Scoped MON allow r correctly rejects version tell with EACCES; acceptance expectation corrected, product and scoped grants unchanged."
+      }
+    },
+    "first_fixture_checks": {
+      "receipt": {
+        "start": "2026-10-18T07:27:08.017194+00:00",
+        "steps": [
+          {
+            "name": "root-cgo0",
+            "argv": [
+              "go",
+              "test",
+              "./..."
+            ],
+            "start": "2026-10-18T07:27:08.017205+00:00",
+            "exit_code": 0,
+            "end": "2026-10-18T07:27:23.134931+00:00"
+          },
+          {
+            "name": "race",
+            "argv": [
+              "go",
+              "test",
+              "-race",
+              "./integration",
+              "./cephmsgr"
+            ],
+            "start": "2026-10-18T07:27:23.135207+00:00",
+            "exit_code": 0,
+            "end": "2026-10-18T07:27:46.131577+00:00"
+          },
+          {
+            "name": "vet",
+            "argv": [
+              "go",
+              "vet",
+              "./..."
+            ],
+            "start": "2026-10-18T07:27:46.131884+00:00",
+            "exit_code": 0,
+            "end": "2026-10-18T07:27:46.796818+00:00"
+          },
+          {
+            "name": "fixture",
+            "argv": [
+              "go",
+              "test",
+              "-mod=readonly",
+              "./..."
+            ],
+            "start": "2026-10-18T07:27:46.797094+00:00",
+            "exit_code": 1,
+            "end": "2026-10-18T07:27:51.225972+00:00"
+          }
+        ]
+      },
+      "raw_evidence": {},
+      "reason": "Two preexisting default profile assertions lacked the new zero-valued opt-in; expectations corrected."
+    },
+    "windows_first": {
+      "raw_evidence": {},
+      "reason": "POSIX mode0644 assertion saw Windows0666; exact mode check restricted to POSIX, universal atomic/content/bounds coverage retained."
+    }
+  },
+  "windows_revalidation": {
+    "source": "97d56b121bd39a6a04625dff5056609c54ac1dd2",
+    "overall_status": "queued",
+    "overall_conclusion": "",
+    "unit_jobs": [
+      {
+        "id": 117618058740,
+        "name": "unit (windows-latest, 1.24.0)",
+        "conclusion": "success"
+      },
+      {
+        "id": 117618058802,
+        "name": "unit (windows-latest, 1.27.x)",
+        "conclusion": "success"
+      }
+    ],
+    "whole_ci_pass_claimed": false
+  },
+  "limits": [
+    "Live coverage is legacy-v6 single BlueStore only, in two listed configurations.",
+    "v8/v9 have a separate24-vector offline encoder proof, not live cache-pool interoperability.",
+    "Versions are compared only to each object own baseline/state, never for equality across Go/native objects.",
+    "Whiteout evidence is subsequent native read behavior; raw FLAG_WHITEOUT was not observed.",
+    "No live EC/snapshot/FULL/replica-read/fault/extra durability guarantee or full CI success is claimed."
+  ]
+}

@@ -1,0 +1,1257 @@
+{
+  "scope": "development fixture history query acceptance; no product protocol change",
+  "date": "2026-10-18",
+  "reference_ceph": "20.2.4",
+  "reference_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "original_github_ci": {
+    "completed_jobs": 75,
+    "success": 71,
+    "failure": 4,
+    "failed_jobs": [
+      {
+        "id": 117631343082,
+        "name": "Ceph 20.2.4 (aes/aes, crc, IPv4, MGR=2, host, expiry=0, idle=0, auth-epoch=0, short-tickets=0, mode-rejection=none, mapped=0, OSD=1, profile=replicated-pg-request-v9-reply-v8, store=bluestore, replicas=1, native-mgr-preparation=0, race=0)"
+      },
+      {
+        "id": 117631343100,
+        "name": "Ceph 20.2.4 (aes/aes, crc, IPv4, MGR=2, host, expiry=0, idle=0, auth-epoch=0, short-tickets=0, mode-rejection=none, mapped=0, OSD=1, profile=replicated-pg-reply-v8, store=bluestore, replicas=1, native-mgr-preparation=0, race=0)"
+      },
+      {
+        "id": 117631343120,
+        "name": "Ceph 20.2.4 (aes256k/aes256k, secure, IPv6, MGR=2, container, expiry=0, idle=0, auth-epoch=0, short-tickets=0, mode-rejection=none, mapped=0, OSD=1, profile=replicated-pg-reply-v8, store=memstore, replicas=1, native-mgr-preparation=0, race=0)"
+      },
+      {
+        "id": 117631343168,
+        "name": "Ceph 20.2.4 (aes256k/aes256k, secure, IPv6, MGR=2, container, expiry=0, idle=0, auth-epoch=0, short-tickets=0, mode-rejection=none, mapped=0, OSD=1, profile=replicated-pg-request-v9-reply-v8, store=memstore, replicas=1, native-mgr-preparation=0, race=0)"
+      }
+    ],
+    "preserved_files": [],
+    "limit": "Original CI errors combine returncode/stdout/stderr rejection; exact byte counts were not retained there."
+  },
+  "instrumented_first_failure": {
+    "source_base": "df08fde0457f258173e133a455aa7d693fed8776",
+    "stage_manifest": "<path>",
+    "stage_manifest_sha256": "34ea13743811ac00d0f13f1a57124f399680909b46f7a2bc1422a5d4e095cfa5",
+    "stage_files": 1642,
+    "stage_overlay": [
+      "tools/osd_backoff_oracle.py"
+    ],
+    "run": {
+      "profile": "request-v9-reply-v8-crc-ipv4-host-bluestore1-full-matrix-selector",
+      "start": "2026-10-18T08:58:09.436067+00:00",
+      "selector": "^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$",
+      "matrix_row": "- { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-request-v9-reply-v8', test_run: '^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$' }",
+      "environment": {
+        "CEPH_MSGR_TEST_IMAGE": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "CEPH_MSGR_TEST_OSD": "1",
+        "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-request-v9-reply-v8",
+        "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
+        "CEPH_MSGR_TEST_OSD_STORE": "bluestore",
+        "CEPH_MSGR_TEST_RUNTIME": "host",
+        "CEPH_MSGR_TEST_CONNECTION_MODE": "crc",
+        "CEPH_MSGR_TEST_KEY_TYPE": "aes",
+        "CEPH_MSGR_TEST_SERVICE_CIPHER": "aes",
+        "CEPH_MSGR_TEST_IP_FAMILY": "4",
+        "CEPH_MSGR_TEST_RUN": "^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$",
+        "CEPH_MSGR_TEST_DIAGNOSTICS": "<path>"
+      },
+      "exit_code": 1,
+      "end": "2026-10-18T09:01:41.112049+00:00"
+    },
+    "top_level_passed": [
+      [
+        "TestCephOSDBackoffLateAckIntegration",
+        "10.03s"
+      ],
+      [
+        "TestCephOSDBackoffIntegration",
+        "10.52s"
+      ],
+      [
+        "TestCephOSDChecksumCompoundIntegration",
+        "6.55s"
+      ],
+      [
+        "TestCephOSDEnforceSnapContextIntegration",
+        "9.34s"
+      ],
+      [
+        "TestCephOSDFadviseIntegration",
+        "5.14s"
+      ],
+      [
+        "TestCephOSDPGListFilterIntegration",
+        "9.54s"
+      ],
+      [
+        "TestCephOSDPGListV8Integration",
+        "5.10s"
+      ],
+      [
+        "TestCephOSDRedirectIntegration",
+        "15.82s"
+      ],
+      [
+        "TestCephOSDReplicatedPGIntegration",
+        "3.35s"
+      ],
+      [
+        "TestCephOSDReplyV8Integration",
+        "3.53s"
+      ],
+      [
+        "TestCephOSDRequestV9Integration",
+        "1.62s"
+      ],
+      [
+        "TestCephOSDSplitResubmitIntegration",
+        "62.36s"
+      ]
+    ],
+    "top_level_failed": [
+      [
+        "TestCephOSDSplitIntegration",
+        "12.03s"
+      ],
+      [
+        "TestCephOSDWatchBlocklistIntegration",
+        "0.00s"
+      ],
+      [
+        "TestCephOSDWatchDisconnectIntegration",
+        "0.00s"
+      ],
+      [
+        "TestCephOSDWatchExpiredReconnectIntegration",
+        "0.00s"
+      ],
+      [
+        "TestCephOSDWatchPermissionsIntegration",
+        "0.00s"
+      ],
+      [
+        "TestCephOSDWatchReconnectIntegration",
+        "0.00s"
+      ],
+      [
+        "TestCephOSDWatchNotifyRedeliveryIntegration",
+        "0.00s"
+      ]
+    ],
+    "first_failure": "native split stale-parent history observation; subsequent six tests inherited failed provider state",
+    "native_command": {
+      "returncode": 0,
+      "stdout_bytes": 1312961,
+      "stderr_bytes": 0,
+      "stdout_limit": 1048576,
+      "stderr_limit": 4096,
+      "history_ops_count": 1024,
+      "stdout_sha256": "74e8deccfbc03f42080c798de9066150a53c6dab08ff3777e195649aa683e76b"
+    },
+    "cleanup": {
+      "containers": {
+        "control": {
+          "id": "361d96e25c62fa28897bed8fad924ab26b4d0c70e7a92d7232058665374e5ace",
+          "exists": false
+        },
+        "messenger-oracles": {
+          "id": "e9aedff044b7c6379581be1617e72364cbed0fa3c3315facca9e182755c8f10f",
+          "exists": false
+        },
+        "mgr.a": {
+          "id": "594c730145617dfb32b9310c5cb7b767a579f6ba61ffa1ba9a56de4379ff9bd4",
+          "exists": false
+        },
+        "mgr.b": {
+          "id": "e0bff7c9ec75aaefb0d6777c679a501c1ac6517dff5e4cad83b1ab2e16e7efbb",
+          "exists": false
+        },
+        "mon.a": {
+          "id": "84fe9be879cdae172eda32535577cb0b54c04be4594bf0f5b0ef64ae15189de5",
+          "exists": false
+        },
+        "mon.b": {
+          "id": "5f6c731e4c9570e3dea1023f9e5d6084351878c31fc3dbef3e6e509a0f11e2ea",
+          "exists": false
+        },
+        "mon.c": {
+          "id": "56b8df3ebd64042777a287292c6583feddb95e33021a34da729d7c717e653d2e",
+          "exists": false
+        },
+        "osd.0": {
+          "id": "04dae73b73c72ba4faa5d932a4578533194c24fc4b17fd565d526030c62d0f34",
+          "exists": false
+        }
+      },
+      "network": "42ecaa20-3f42-4e59-80fe-567bcdd500ff",
+      "network_exists": false
+    },
+    "public_inventory": [],
+    "limitations": [
+      "single fresh Linux reproduction; no retry or production change",
+      "native command succeeded; local test helper output bound rejected history",
+      "does not identify byte sizes of the preserved original GitHub failures",
+      "initial106-op observation was read before final1024-op snapshot; only final raw snapshot is retained in dedicated file"
+    ]
+  },
+  "instrumented_history_measurement": {
+    "returncode": 0,
+    "stdout_bytes": 1312961,
+    "stderr_bytes": 0,
+    "stdout_limit": 1048576,
+    "stderr_limit": 4096,
+    "stdout_sha256": "74e8deccfbc03f42080c798de9066150a53c6dab08ff3777e195649aa683e76b",
+    "history_root_type": "dict",
+    "history_ops_count": 1024
+  },
+  "source": {
+    "overlay": [
+      "tools/osd_backoff_oracle.py",
+      "tools/osd_split_oracle.py",
+      "tools/test_osd_backoff_oracle.py",
+      "tools/test_osd_split_oracle.py",
+      "integration/fixture/diagnostics.go"
+    ],
+    "go_file_count": 712,
+    "go_inventory_format": "sha256 + two spaces + relative path + newline; sorted relative path",
+    "go_inventory_sha256": "a6ff145127c91cc724025c5cb12c8eb20ddc29c2ec0ef58a53255520705db168",
+    "go_change_from_base": [
+      "integration/fixture/diagnostics.go"
+    ],
+    "product_go_unchanged": true,
+    "documentation_not_executed": true
+  },
+  "fixed_independent_audit": {
+    "test_helper_checks": {
+      "receipt": {
+        "start": "2026-10-18T09:04:05.202189+00:00",
+        "steps": [
+          {
+            "name": "python",
+            "argv": [
+              "python3",
+              "-m",
+              "unittest",
+              "discover",
+              "-s",
+              "tools",
+              "-p",
+              "test_*.py"
+            ],
+            "start": "2026-10-18T09:04:05.202200+00:00",
+            "exit_code": 0,
+            "end": "2026-10-18T09:04:10.493787+00:00"
+          },
+          {
+            "name": "fixture",
+            "argv": [
+              "go",
+              "test",
+              "-mod=readonly",
+              "./..."
+            ],
+            "start": "2026-10-18T09:04:10.494337+00:00",
+            "exit_code": 0,
+            "end": "2026-10-18T09:04:14.975560+00:00"
+          },
+          {
+            "name": "fixture-vet",
+            "argv": [
+              "go",
+              "vet",
+              "-mod=readonly",
+              "./..."
+            ],
+            "start": "2026-10-18T09:04:14.975812+00:00",
+            "exit_code": 0,
+            "end": "2026-10-18T09:04:15.292412+00:00"
+          }
+        ],
+        "end": "2026-10-18T09:04:15.292689+00:00"
+      },
+      "files": [],
+      "python_test_count": 459
+    },
+    "source_base": "df08fde0457f258173e133a455aa7d693fed8776",
+    "source_manifest": "<path>",
+    "source_manifest_sha256": "c1d8f530c921e4c2e26a21c4bc3bed369f8b32bf4f1b22883e82f66694c23f3a",
+    "selected_source_hashes": {
+      "integration/fixture/diagnostics.go": "f36ac7c00cb82ab0910b4a48e23d43b888365d66d2198697b6f2fa7e7c2c665a",
+      "tools/osd_backoff_oracle.py": "c313be4228b20b81ddb44a0191e750648f41415138e336ea529a8ca99383aa4f",
+      "tools/osd_split_oracle.py": "682ded0ffb4b422b4eee6a101d980d282f797c9d42d669759de1e96660ce60d2",
+      "tools/test_osd_backoff_oracle.py": "9ba026308d6b6ea5ab71ddf7d7dd6a631f12ed1f6d053dfd4c51cd0d7bbdc73e",
+      "tools/test_osd_split_oracle.py": "91ab3d43df5b9c851e947c4d8b3ed1fd21c758faf3e98b8190023a6f8d37fd9a"
+    },
+    "results": [
+      {
+        "profile": "v8-crc",
+        "run": {
+          "profile": "v8-crc",
+          "matrix_row": "- { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$' }",
+          "test_run": "^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$",
+          "start": "2026-10-18T08:59:19.776008+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T09:03:39.226194+00:00"
+        },
+        "top_level_passes": [
+          [
+            "TestCephMDSMapsIntegration",
+            "18.71s"
+          ],
+          [
+            "TestCephOSDBackoffLateAckIntegration",
+            "10.82s"
+          ],
+          [
+            "TestCephOSDBackoffIntegration",
+            "10.44s"
+          ],
+          [
+            "TestCephOSDChecksumCompoundIntegration",
+            "8.25s"
+          ],
+          [
+            "TestCephOSDEnforceSnapContextIntegration",
+            "8.94s"
+          ],
+          [
+            "TestCephOSDPGListV8Integration",
+            "5.08s"
+          ],
+          [
+            "TestCephOSDReplicatedPGIntegration",
+            "3.34s"
+          ],
+          [
+            "TestCephOSDSplitResubmitIntegration",
+            "65.63s"
+          ],
+          [
+            "TestCephOSDSplitIntegration",
+            "65.45s"
+          ],
+          [
+            "TestCephOSDWatchReconnectIntegration",
+            "3.43s"
+          ]
+        ],
+        "final_history_query": {
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "command": "dump_historic_ops",
+          "osd_id": 0,
+          "returncode": 0,
+          "stdout_bytes": 986245,
+          "stderr_bytes": 0,
+          "stdout_limit": 4194304,
+          "stderr_limit": 4096,
+          "timeout_seconds": 2,
+          "stdout_sha256": "fd19d3dd2ea4a9c7feb9812c6597ba38807cf09590960eaa6c5df76aedc5607e",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_complete": true,
+          "classification": [],
+          "operation_count": 765
+        },
+        "exceeds_original_1MiB": false,
+        "normal_ack": {
+          "token": "cef578bfeb33421a8bfd3de69dd9da41",
+          "global_id": 5187,
+          "pg": "2.0",
+          "id": 1,
+          "block_epoch": 26,
+          "unblock_epoch": 27,
+          "append_tid": 3,
+          "append_version": 2,
+          "restored": true,
+          "cleaned": true
+        },
+        "late_ack": {
+          "token": "094905e80301411995ebb0aeee37bbe3",
+          "global_id": 4965,
+          "pg": "2.2",
+          "id": 1,
+          "block_epoch": 20,
+          "unblock_epoch": 21,
+          "append_tid": 3,
+          "append_version": 2,
+          "restored": true,
+          "cleaned": true
+        },
+        "stale": {
+          "token": "a38924f59c184ff09a863e5862e8a189",
+          "global_id": 7758,
+          "tid": 1,
+          "inc": 95,
+          "map_epoch": 81,
+          "pool": 2,
+          "pg_seed": 3,
+          "raw_hash": 4081388027,
+          "unknown_preserved": true,
+          "restored": true,
+          "cleaned": true
+        },
+        "cleanup": {
+          "containers": {
+            "control": {
+              "id": "166d061dbf368591b9f399da4e6f99cdba43eaa4674ec0c7eab6a9981f83d83d",
+              "exists": false
+            },
+            "messenger-oracles": {
+              "id": "a27d2ac23ffd5c47dcaa67155330f80a5beaa51eb5401c611c7cca252207ba14",
+              "exists": false
+            },
+            "mgr.a": {
+              "id": "04349afb67c7a2e661d252fed4760b1ca72d191adfaae1b0243e94642f171ac9",
+              "exists": false
+            },
+            "mgr.b": {
+              "id": "bca2fde5fc4bade2e8c291b25f4dc56a9fb292ac87f68f5814b260d705a95272",
+              "exists": false
+            },
+            "mon.a": {
+              "id": "52555cdafbdd16a391592cdc29d3f0895f204b93c53c1135716ed663046bb142",
+              "exists": false
+            },
+            "mon.b": {
+              "id": "86e1809298c542f67e839094180d7102d22ac34399a5c8387f3bad111c9f298d",
+              "exists": false
+            },
+            "mon.c": {
+              "id": "e470d0341ab5f5ec394d91592a27aabb6c106d2e20e7638b2a7aa7b7b0bdea91",
+              "exists": false
+            },
+            "osd.0": {
+              "id": "77b48c882ab4206dd9105db041c19ea121fc2031a11a5e3e0ae2c705a927df66",
+              "exists": false
+            }
+          },
+          "network": "cf15fce6-2a7a-4522-9b43-2f652622957e",
+          "network_exists": false
+        },
+        "files": []
+      },
+      {
+        "profile": "v8-secure",
+        "run": {
+          "profile": "v8-secure",
+          "matrix_row": "- { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'replicated-pg-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$' }",
+          "test_run": "^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$",
+          "start": "2026-10-18T08:59:20.140993+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T09:03:41.808067+00:00"
+        },
+        "top_level_passes": [
+          [
+            "TestCephMDSMapsIntegration",
+            "18.91s"
+          ],
+          [
+            "TestCephOSDBackoffLateAckIntegration",
+            "10.72s"
+          ],
+          [
+            "TestCephOSDBackoffIntegration",
+            "10.61s"
+          ],
+          [
+            "TestCephOSDChecksumCompoundIntegration",
+            "8.45s"
+          ],
+          [
+            "TestCephOSDEnforceSnapContextIntegration",
+            "7.91s"
+          ],
+          [
+            "TestCephOSDPGListV8Integration",
+            "4.73s"
+          ],
+          [
+            "TestCephOSDReplicatedPGIntegration",
+            "3.83s"
+          ],
+          [
+            "TestCephOSDSplitResubmitIntegration",
+            "67.12s"
+          ],
+          [
+            "TestCephOSDSplitIntegration",
+            "67.33s"
+          ],
+          [
+            "TestCephOSDWatchReconnectIntegration",
+            "2.92s"
+          ]
+        ],
+        "final_history_query": {
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "command": "dump_historic_ops",
+          "osd_id": 0,
+          "returncode": 0,
+          "stdout_bytes": 994638,
+          "stderr_bytes": 0,
+          "stdout_limit": 4194304,
+          "stderr_limit": 4096,
+          "timeout_seconds": 2,
+          "stdout_sha256": "61bc605144ff04702bc3f05bd54d0e42725305f815e032af4c47f2cf2eeec99e",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_complete": true,
+          "classification": [],
+          "operation_count": 766
+        },
+        "exceeds_original_1MiB": false,
+        "normal_ack": {
+          "token": "e8319db4547f46d98209bfacf3f631bf",
+          "global_id": 5175,
+          "pg": "2.4",
+          "id": 1,
+          "block_epoch": 27,
+          "unblock_epoch": 28,
+          "append_tid": 3,
+          "append_version": 2,
+          "restored": true,
+          "cleaned": true
+        },
+        "late_ack": {
+          "token": "a49dd2d220c24b1a8aed73019fe762ab",
+          "global_id": 4953,
+          "pg": "2.7",
+          "id": 1,
+          "block_epoch": 21,
+          "unblock_epoch": 22,
+          "append_tid": 3,
+          "append_version": 2,
+          "restored": true,
+          "cleaned": true
+        },
+        "stale": {
+          "token": "263840271afb490aa09ef234ee55cdcf",
+          "global_id": 7779,
+          "tid": 1,
+          "inc": 95,
+          "map_epoch": 81,
+          "pool": 2,
+          "pg_seed": 6,
+          "raw_hash": 497668638,
+          "unknown_preserved": true,
+          "restored": true,
+          "cleaned": true
+        },
+        "cleanup": {
+          "containers": {
+            "control": {
+              "id": "dc1948e9e55390fe12866b0f63d5e305a339ed7d7a0f54d4e6518053a1cb0151",
+              "exists": false
+            },
+            "messenger-oracles": {
+              "id": "79aeb67c3bb7b6a46c98724807ebce942fe77402b4af33b74342ee267c85a43e",
+              "exists": false
+            },
+            "mgr.a": {
+              "id": "e4093066abaab23a9e6c4a826a1511132139ddb46c3be51f71df6508fdf44333",
+              "exists": false
+            },
+            "mgr.b": {
+              "id": "cb66a8261d8a843cec80c483cee61b22a224bc2ad1485effccc6a8fe30ac0969",
+              "exists": false
+            },
+            "mon.a": {
+              "id": "ddd62ea7e3690f5dfe9d7c72125eee375ee77b77081330a275e22f0caf28cbf8",
+              "exists": false
+            },
+            "mon.b": {
+              "id": "a07766828f46300cb87c2a7dccd3bc884b01515f12e460197cc24793ec10c539",
+              "exists": false
+            },
+            "mon.c": {
+              "id": "e0214be111f9769b288aac4acacffda1421b6e74221449ad73dc8df129dc19b7",
+              "exists": false
+            },
+            "osd.0": {
+              "id": "c50aabfa7c399e7a363487ee8ebf80ba30388f14d5bded1e3dab5a8d12c1e470",
+              "exists": false
+            }
+          },
+          "network": "19cb3574-f84e-4521-b27f-a60cac2edc1d",
+          "network_exists": false
+        },
+        "files": []
+      },
+      {
+        "profile": "replyv8-crc",
+        "run": {
+          "profile": "replyv8-crc",
+          "matrix_row": "- { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$' }",
+          "test_run": "^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$",
+          "start": "2026-10-18T09:04:24.139619+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T09:08:38.775742+00:00"
+        },
+        "top_level_passes": [
+          [
+            "TestCephMDSMapsIntegration",
+            "18.51s"
+          ],
+          [
+            "TestCephOSDBackoffLateAckIntegration",
+            "10.82s"
+          ],
+          [
+            "TestCephOSDBackoffIntegration",
+            "10.52s"
+          ],
+          [
+            "TestCephOSDChecksumCompoundIntegration",
+            "7.15s"
+          ],
+          [
+            "TestCephOSDEnforceSnapContextIntegration",
+            "8.93s"
+          ],
+          [
+            "TestCephOSDPGListV8Integration",
+            "5.26s"
+          ],
+          [
+            "TestCephOSDReplicatedPGIntegration",
+            "3.57s"
+          ],
+          [
+            "TestCephOSDReplyV8Integration",
+            "3.42s"
+          ],
+          [
+            "TestCephOSDSplitResubmitIntegration",
+            "67.23s"
+          ],
+          [
+            "TestCephOSDSplitIntegration",
+            "68.13s"
+          ],
+          [
+            "TestCephOSDWatchReconnectIntegration",
+            "2.92s"
+          ]
+        ],
+        "final_history_query": {
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "command": "dump_historic_ops",
+          "osd_id": 0,
+          "returncode": 0,
+          "stdout_bytes": 1164984,
+          "stderr_bytes": 0,
+          "stdout_limit": 4194304,
+          "stderr_limit": 4096,
+          "timeout_seconds": 2,
+          "stdout_sha256": "9e6e1bb5f799e7aa1b8bb475a6e6f4dcbf1bb136ddd942b61c2ae0c5a1b70ee5",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_complete": true,
+          "classification": [],
+          "operation_count": 903
+        },
+        "exceeds_original_1MiB": true,
+        "normal_ack": {
+          "token": "b2ede67be1c64bbaad8bfa845ce08148",
+          "global_id": 5163,
+          "pg": "2.6",
+          "id": 1,
+          "block_epoch": 26,
+          "unblock_epoch": 27,
+          "append_tid": 3,
+          "append_version": 6,
+          "restored": true,
+          "cleaned": true
+        },
+        "late_ack": {
+          "token": "9da3a6c1d0fe435dbd251c6ac719d6ac",
+          "global_id": 4941,
+          "pg": "2.6",
+          "id": 1,
+          "block_epoch": 20,
+          "unblock_epoch": 21,
+          "append_tid": 3,
+          "append_version": 3,
+          "restored": true,
+          "cleaned": true
+        },
+        "stale": {
+          "token": "e3641f6c46b64e6c86affa65121c526a",
+          "global_id": 7980,
+          "tid": 1,
+          "inc": 95,
+          "map_epoch": 81,
+          "pool": 2,
+          "pg_seed": 0,
+          "raw_hash": 1328678312,
+          "unknown_preserved": true,
+          "restored": true,
+          "cleaned": true
+        },
+        "cleanup": {
+          "containers": {
+            "control": {
+              "id": "5927d434cabf739abb5f07608aa918fb74f21096c2db33c391ece1c238665089",
+              "exists": false
+            },
+            "messenger-oracles": {
+              "id": "b91375511e2c11c8f308c8963d4699830919f3a775b4f01e6c6abdc868aea783",
+              "exists": false
+            },
+            "mgr.a": {
+              "id": "b0f0f47e43b30c8fd642da2143a860241af835d4f602a2d3d4c8f565c97a9287",
+              "exists": false
+            },
+            "mgr.b": {
+              "id": "8e599c9591594786295dc414706c11ae86660a3740b3809d092d12eb31e9b8bf",
+              "exists": false
+            },
+            "mon.a": {
+              "id": "aa1e3569d68e66bafaa4e20a2cfd98220eb65a752fcc84a92efc07758cb5e1c5",
+              "exists": false
+            },
+            "mon.b": {
+              "id": "b09919c27757c7da1ed160a8cd77b136d9ebcc35122ae7ed91600698d403354a",
+              "exists": false
+            },
+            "mon.c": {
+              "id": "c83c00aea16e7df30db9a614300697cb0eb52872654cb26f1f1b1eae2e737330",
+              "exists": false
+            },
+            "osd.0": {
+              "id": "e9032779c54a2ba9e3a819889721b0a838e233a9bf08fcdb0e04022e1bcbb3db",
+              "exists": false
+            }
+          },
+          "network": "b0aef06e-d6b4-4d10-b131-d26443f8cfde",
+          "network_exists": false
+        },
+        "files": []
+      },
+      {
+        "profile": "replyv8-secure",
+        "run": {
+          "profile": "replyv8-secure",
+          "matrix_row": "- { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$' }",
+          "test_run": "^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$",
+          "start": "2026-10-18T09:04:23.681447+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T09:08:36.275506+00:00"
+        },
+        "top_level_passes": [
+          [
+            "TestCephMDSMapsIntegration",
+            "18.71s"
+          ],
+          [
+            "TestCephOSDBackoffLateAckIntegration",
+            "10.82s"
+          ],
+          [
+            "TestCephOSDBackoffIntegration",
+            "10.52s"
+          ],
+          [
+            "TestCephOSDChecksumCompoundIntegration",
+            "8.45s"
+          ],
+          [
+            "TestCephOSDEnforceSnapContextIntegration",
+            "8.65s"
+          ],
+          [
+            "TestCephOSDPGListV8Integration",
+            "5.23s"
+          ],
+          [
+            "TestCephOSDReplicatedPGIntegration",
+            "3.33s"
+          ],
+          [
+            "TestCephOSDReplyV8Integration",
+            "3.62s"
+          ],
+          [
+            "TestCephOSDSplitResubmitIntegration",
+            "64.52s"
+          ],
+          [
+            "TestCephOSDSplitIntegration",
+            "67.33s"
+          ],
+          [
+            "TestCephOSDWatchReconnectIntegration",
+            "2.92s"
+          ]
+        ],
+        "final_history_query": {
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "command": "dump_historic_ops",
+          "osd_id": 0,
+          "returncode": 0,
+          "stdout_bytes": 1186557,
+          "stderr_bytes": 0,
+          "stdout_limit": 4194304,
+          "stderr_limit": 4096,
+          "timeout_seconds": 2,
+          "stdout_sha256": "effdd45f486cc086d09a30d0e730dbc94a40a290b10c62c0ee7f0c0c3d3cf4c7",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_complete": true,
+          "classification": [],
+          "operation_count": 913
+        },
+        "exceeds_original_1MiB": true,
+        "normal_ack": {
+          "token": "e7c11c624b4640c1946373b0fbc62ed0",
+          "global_id": 5154,
+          "pg": "2.6",
+          "id": 1,
+          "block_epoch": 27,
+          "unblock_epoch": 28,
+          "append_tid": 3,
+          "append_version": 3,
+          "restored": true,
+          "cleaned": true
+        },
+        "late_ack": {
+          "token": "c7b8987552c84f5ab964f10ee7c1dea3",
+          "global_id": 4935,
+          "pg": "2.4",
+          "id": 1,
+          "block_epoch": 21,
+          "unblock_epoch": 22,
+          "append_tid": 3,
+          "append_version": 2,
+          "restored": true,
+          "cleaned": true
+        },
+        "stale": {
+          "token": "744156a59d914d54865665d4604dca29",
+          "global_id": 7842,
+          "tid": 1,
+          "inc": 95,
+          "map_epoch": 82,
+          "pool": 2,
+          "pg_seed": 1,
+          "raw_hash": 3530854697,
+          "unknown_preserved": true,
+          "restored": true,
+          "cleaned": true
+        },
+        "cleanup": {
+          "containers": {
+            "control": {
+              "id": "7aba2374d02b9bbe04e381b7d1a7f233ef658fe9db5c586b292fbe4b428ed62f",
+              "exists": false
+            },
+            "messenger-oracles": {
+              "id": "9c36a18bb51af3e5f2834b183be5abb387ec2d2a522164172e202eed9708c316",
+              "exists": false
+            },
+            "mgr.a": {
+              "id": "7a94ac32b38fdace783e2a0b5546b4fe268099788b845cf1af404c4d690bf588",
+              "exists": false
+            },
+            "mgr.b": {
+              "id": "a7020edc301b05ff3c531f8f039d8e298fe9b4844d273eca8fac33f8854f51ea",
+              "exists": false
+            },
+            "mon.a": {
+              "id": "c14571575009306dbc2c51a3299e25800359ff3d9f2d3de5f1e8d755bd77b9c2",
+              "exists": false
+            },
+            "mon.b": {
+              "id": "4b2134025f5593079e586ce9bf3d99862f3a34245fc72ee4cc47187734e35370",
+              "exists": false
+            },
+            "mon.c": {
+              "id": "aa4091ae970c4d189523f688878177276a8985a2a16eec2d0ee7f89c3a902f4d",
+              "exists": false
+            },
+            "osd.0": {
+              "id": "a011d3a410f89d816bcc9e22d45cfa2c6c5236b79ca1f726c314c9a7dd6ffefb",
+              "exists": false
+            }
+          },
+          "network": "9295ae40-8f7e-4998-befe-8634cb1f8d92",
+          "network_exists": false
+        },
+        "files": []
+      },
+      {
+        "profile": "v9-crc",
+        "run": {
+          "profile": "v9-crc",
+          "matrix_row": "- { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-request-v9-reply-v8', test_run: '^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$' }",
+          "test_run": "^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$",
+          "start": "2026-10-18T09:03:00.311255+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T09:07:52.669024+00:00"
+        },
+        "top_level_passes": [
+          [
+            "TestCephOSDBackoffLateAckIntegration",
+            "11.33s"
+          ],
+          [
+            "TestCephOSDBackoffIntegration",
+            "10.72s"
+          ],
+          [
+            "TestCephOSDChecksumCompoundIntegration",
+            "6.65s"
+          ],
+          [
+            "TestCephOSDEnforceSnapContextIntegration",
+            "9.60s"
+          ],
+          [
+            "TestCephOSDFadviseIntegration",
+            "5.35s"
+          ],
+          [
+            "TestCephOSDPGListFilterIntegration",
+            "9.44s"
+          ],
+          [
+            "TestCephOSDPGListV8Integration",
+            "4.69s"
+          ],
+          [
+            "TestCephOSDRedirectIntegration",
+            "15.30s"
+          ],
+          [
+            "TestCephOSDReplicatedPGIntegration",
+            "3.35s"
+          ],
+          [
+            "TestCephOSDReplyV8Integration",
+            "3.83s"
+          ],
+          [
+            "TestCephOSDRequestV9Integration",
+            "1.52s"
+          ],
+          [
+            "TestCephOSDSplitResubmitIntegration",
+            "66.64s"
+          ],
+          [
+            "TestCephOSDSplitIntegration",
+            "65.35s"
+          ],
+          [
+            "TestCephOSDWatchBlocklistIntegration",
+            "2.85s"
+          ],
+          [
+            "TestCephOSDWatchDisconnectIntegration",
+            "6.32s"
+          ],
+          [
+            "TestCephOSDWatchExpiredReconnectIntegration",
+            "6.12s"
+          ],
+          [
+            "TestCephOSDWatchPermissionsIntegration",
+            "0.82s"
+          ],
+          [
+            "TestCephOSDWatchReconnectIntegration",
+            "2.53s"
+          ],
+          [
+            "TestCephOSDWatchNotifyRedeliveryIntegration",
+            "2.82s"
+          ]
+        ],
+        "final_history_query": {
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "command": "dump_historic_ops",
+          "osd_id": 0,
+          "returncode": 0,
+          "stdout_bytes": 1311270,
+          "stderr_bytes": 0,
+          "stdout_limit": 4194304,
+          "stderr_limit": 4096,
+          "timeout_seconds": 2,
+          "stdout_sha256": "8317e3c6220e8cb46afccb34d48026559a8a3c0b83b075d06dfcc5ae832522d9",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_complete": true,
+          "classification": [],
+          "operation_count": 1024
+        },
+        "exceeds_original_1MiB": true,
+        "normal_ack": {
+          "token": "c8e246f232d7405fb837998fe1ab087f",
+          "global_id": 4899,
+          "pg": "2.2",
+          "id": 1,
+          "block_epoch": 22,
+          "unblock_epoch": 23,
+          "append_tid": 3,
+          "append_version": 2,
+          "restored": true,
+          "cleaned": true
+        },
+        "late_ack": {
+          "token": "d280b81f4a7b42189e056e148f86ef08",
+          "global_id": 4659,
+          "pg": "2.0",
+          "id": 1,
+          "block_epoch": 16,
+          "unblock_epoch": 17,
+          "append_tid": 3,
+          "append_version": 2,
+          "restored": true,
+          "cleaned": true
+        },
+        "stale": {
+          "token": "8b30981b9135417aabd867003fad6be5",
+          "global_id": 8457,
+          "tid": 1,
+          "inc": 95,
+          "map_epoch": 91,
+          "pool": 2,
+          "pg_seed": 7,
+          "raw_hash": 283735375,
+          "unknown_preserved": true,
+          "restored": true,
+          "cleaned": true
+        },
+        "cleanup": {
+          "containers": {
+            "control": {
+              "id": "5ae4daa1746531fe0c76c84ca04447e26c58e0ef52c6a5e66dfec4ef2e20a760",
+              "exists": false
+            },
+            "messenger-oracles": {
+              "id": "b319b7817af765317d762377de5f1969ac17a3ac98b571113366d7bf221ee520",
+              "exists": false
+            },
+            "mgr.a": {
+              "id": "eb7b9e57c7c613842cd4f8c8ebcf33e85980fda2f5bd33e5b430f6ce206d65cd",
+              "exists": false
+            },
+            "mgr.b": {
+              "id": "630fd3efac0abd71981b8c1735362a63b18850359b1b17e927472b12aab67abd",
+              "exists": false
+            },
+            "mon.a": {
+              "id": "80f943ea2cd00d0ad62c5836f5ed936c53aa4ca75fe059286e3a0b4b87c6e79d",
+              "exists": false
+            },
+            "mon.b": {
+              "id": "a0e0f9608ecb0d7fd4d3619772391d597bad4dd13d9d632ef8e4e348300b2322",
+              "exists": false
+            },
+            "mon.c": {
+              "id": "bd058d9815816be4093e1db9e5563916d4c3967ed82a869747fa0a0a62a85d25",
+              "exists": false
+            },
+            "osd.0": {
+              "id": "e75f56f221e89b29fcf403a3c226c935723138b2738a59d76077e489fd3c2292",
+              "exists": false
+            }
+          },
+          "network": "7feda32b-bc33-4e14-aa36-6788749bb955",
+          "network_exists": false
+        },
+        "files": []
+      },
+      {
+        "profile": "v9-secure",
+        "run": {
+          "profile": "v9-secure",
+          "matrix_row": "- { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'replicated-pg-request-v9-reply-v8', test_run: '^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$' }",
+          "test_run": "^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$",
+          "start": "2026-10-18T08:59:20.633950+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T09:04:05.021196+00:00"
+        },
+        "top_level_passes": [
+          [
+            "TestCephOSDBackoffLateAckIntegration",
+            "10.92s"
+          ],
+          [
+            "TestCephOSDBackoffIntegration",
+            "8.82s"
+          ],
+          [
+            "TestCephOSDChecksumCompoundIntegration",
+            "7.25s"
+          ],
+          [
+            "TestCephOSDEnforceSnapContextIntegration",
+            "8.72s"
+          ],
+          [
+            "TestCephOSDFadviseIntegration",
+            "5.22s"
+          ],
+          [
+            "TestCephOSDPGListFilterIntegration",
+            "9.44s"
+          ],
+          [
+            "TestCephOSDPGListV8Integration",
+            "4.73s"
+          ],
+          [
+            "TestCephOSDRedirectIntegration",
+            "15.36s"
+          ],
+          [
+            "TestCephOSDReplicatedPGIntegration",
+            "3.33s"
+          ],
+          [
+            "TestCephOSDReplyV8Integration",
+            "3.72s"
+          ],
+          [
+            "TestCephOSDRequestV9Integration",
+            "1.41s"
+          ],
+          [
+            "TestCephOSDSplitResubmitIntegration",
+            "64.23s"
+          ],
+          [
+            "TestCephOSDSplitIntegration",
+            "65.63s"
+          ],
+          [
+            "TestCephOSDWatchBlocklistIntegration",
+            "2.19s"
+          ],
+          [
+            "TestCephOSDWatchDisconnectIntegration",
+            "6.62s"
+          ],
+          [
+            "TestCephOSDWatchExpiredReconnectIntegration",
+            "6.21s"
+          ],
+          [
+            "TestCephOSDWatchPermissionsIntegration",
+            "0.91s"
+          ],
+          [
+            "TestCephOSDWatchReconnectIntegration",
+            "2.62s"
+          ],
+          [
+            "TestCephOSDWatchNotifyRedeliveryIntegration",
+            "2.61s"
+          ]
+        ],
+        "final_history_query": {
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "command": "dump_historic_ops",
+          "osd_id": 0,
+          "returncode": 0,
+          "stdout_bytes": 1321078,
+          "stderr_bytes": 0,
+          "stdout_limit": 4194304,
+          "stderr_limit": 4096,
+          "timeout_seconds": 2,
+          "stdout_sha256": "3020fc6487523f9fd655b5249ceb8ef490dc0f1e648231f1d85a51ebd0c0e28c",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "output_complete": true,
+          "classification": [],
+          "operation_count": 1024
+        },
+        "exceeds_original_1MiB": true,
+        "normal_ack": {
+          "token": "c7b5834c7f784ed6b556e904887cb084",
+          "global_id": 4875,
+          "pg": "2.1",
+          "id": 1,
+          "block_epoch": 21,
+          "unblock_epoch": 22,
+          "append_tid": 3,
+          "append_version": 2,
+          "restored": true,
+          "cleaned": true
+        },
+        "late_ack": {
+          "token": "7cb554b75fe24000a690edfc5d19be19",
+          "global_id": 4635,
+          "pg": "2.0",
+          "id": 1,
+          "block_epoch": 15,
+          "unblock_epoch": 16,
+          "append_tid": 3,
+          "append_version": 2,
+          "restored": true,
+          "cleaned": true
+        },
+        "stale": {
+          "token": "ec927a71e52c466783637608791081c7",
+          "global_id": 8370,
+          "tid": 1,
+          "inc": 95,
+          "map_epoch": 91,
+          "pool": 2,
+          "pg_seed": 7,
+          "raw_hash": 126965199,
+          "unknown_preserved": true,
+          "restored": true,
+          "cleaned": true
+        },
+        "cleanup": {
+          "containers": {
+            "control": {
+              "id": "ec7e3ddcaf4b75895582a7cfe821418c7150216d6a0f033bc5111867e8c03518",
+              "exists": false
+            },
+            "messenger-oracles": {
+              "id": "edc768539af9d010da118eff1955d2208f6b97e694fb9dced808c6d4c8776a39",
+              "exists": false
+            },
+            "mgr.a": {
+              "id": "876a3f6e56f5fdd3d3a4309c614f28bb819dc1df277324b5ad103fd39d3c32a6",
+              "exists": false
+            },
+            "mgr.b": {
+              "id": "96e9039c6a39afe6eea8386bcc1180c947d93eba1cbc373db9bae91e755d6a57",
+              "exists": false
+            },
+            "mon.a": {
+              "id": "3112e49102b9ede7aa32317831512a469190d3a0be5be72879dd861d88487156",
+              "exists": false
+            },
+            "mon.b": {
+              "id": "ffea7d1abe9d7c3c29221f0351a326c718135f39f312c7e9d332714eccdc6c31",
+              "exists": false
+            },
+            "mon.c": {
+              "id": "70ed2f9b87c223edddb66593371b433adb59e075cd22e35d00a540da17bcc8ee",
+              "exists": false
+            },
+            "osd.0": {
+              "id": "b0b14274c24d99b5aa2e689124448fc361572847b4832c052f42132255256079",
+              "exists": false
+            }
+          },
+          "network": "878d5da4-97ee-4903-a563-74bbad7ce49a",
+          "network_exists": false
+        },
+        "files": []
+      }
+    ],
+    "total_top_level_passes": 80,
+    "limitations": [
+      "local exact-selector runs are not the entire GitHub matrix",
+      "fixed query receipts retain output lengths/hashes/counts, not unfiltered native JSON; hashes checked for syntax and source-backed production, not recomputed from absent raw history",
+      "ACK history proves reception only; stale envelope body undecoded and both original execution outcomes remain unknown"
+    ]
+  },
+  "limitations": [
+    "The instrumented Linux first failure establishes its actual byte count, not the original GitHub jobs byte counts.",
+    "Final fixed query receipts retain lengths/hashes/counts, not unfiltered native histories; those digests were not independently rehashed.",
+    "4 MiB is a post-capture response acceptance limit, not a streaming heap ceiling.",
+    "Six local complete selectors and helper checks are not a verdict on a later GitHub run."
+  ]
+}

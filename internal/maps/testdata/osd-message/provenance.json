@@ -1,0 +1,33 @@
+{
+  "ceph_version": "20.2.4",
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "nested_map_features": 3026423347916342070,
+  "validation": "Independent reference envelopes accepted by native MOSDMap decoder; native export retains decoded payload and recomputes envelope CRCs. This does not re-execute feature-selected encode_payload.",
+  "fsid": "00112233-4455-6677-8899-aabbccddeeff",
+  "full_epochs": [
+    10
+  ],
+  "incremental_epochs": [
+    11,
+    12
+  ],
+  "fixtures": {
+    "v1": {
+      "message_type": 41,
+      "message_version": 1,
+      "message_compat": 1,
+      "front_bytes": 2834,
+      "native_validated_envelope_sha256": "f2aa9a99e8c1b339ab67e6d3c47fbc755def4d1b95a9d7d0c5c9b5d1f4cb343c",
+      "native_summary": "osd_map(10..12)"
+    },
+    "v4": {
+      "message_type": 41,
+      "message_version": 4,
+      "message_compat": 3,
+      "front_bytes": 2846,
+      "native_validated_envelope_sha256": "44bc5987d6cba03f00aaf385593162cfdcdc41cc212bd337e1602ea9ab1a8e9f",
+      "native_summary": "osd_map(10..12 src has 10..12)"
+    }
+  }
+}

@@ -1,0 +1,219 @@
+{
+  "binary_sha256": "4c61da8fca6d4bf9297f07e434a0dca4709c78660fa738d0aef076b962ddea5c",
+  "build_architecture": "x86_64",
+  "build_driver_sha256": "a0f5856cd9f7b842a3a14ad873f1ca20b0a9a4bd9729385fe8bf16823793f399",
+  "canonical_message_encode_verified": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "mon-ping-native-reply-binary": {
+      "data_bytes": 0,
+      "data_hex": "",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_ping": {
+        "is_reply": true,
+        "payload_bytes": 7,
+        "payload_prepopulated": true,
+        "raw_hex": "72617700ff800a"
+      },
+      "front_bytes": 11,
+      "front_hex": "0700000072617700ff800a",
+      "front_sha256": "683a4a6103c0a8b4004c5ee7054299eec5a2b4fed3efe2f2ca112817fffdb609",
+      "header_bytes": 41,
+      "header_hex": "0100000000000000000000000000000002007f00010000000000000003000000000000000100000000",
+      "header_sha256": "b1131a1af865066467bc172369f23f73d00ec04b48a0a24ef578d605df06489c",
+      "middle_bytes": 0,
+      "middle_hex": "",
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 0,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 11,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 2,
+        "version": 1
+      }
+    },
+    "mon-ping-native-reply-empty": {
+      "data_bytes": 0,
+      "data_hex": "",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_ping": {
+        "is_reply": true,
+        "payload_bytes": 0,
+        "payload_prepopulated": true,
+        "raw_hex": ""
+      },
+      "front_bytes": 4,
+      "front_hex": "00000000",
+      "front_sha256": "df3f619804a92fdb4057192dc43dd748ea778adc52bc498ce80524c014b81119",
+      "header_bytes": 41,
+      "header_hex": "0100000000000000000000000000000002007f00010000000000000003000000000000000100000000",
+      "header_sha256": "b1131a1af865066467bc172369f23f73d00ec04b48a0a24ef578d605df06489c",
+      "middle_bytes": 0,
+      "middle_hex": "",
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 0,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 4,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 2,
+        "version": 1
+      }
+    },
+    "mon-ping-native-reply-json": {
+      "data_bytes": 0,
+      "data_hex": "",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_ping": {
+        "is_reply": true,
+        "payload_bytes": 36,
+        "payload_prepopulated": true,
+        "raw_hex": "7b0a202022706f6e67223a207b2266697874757265223a20226e6174697665227d0a7d0a"
+      },
+      "front_bytes": 40,
+      "front_hex": "240000007b0a202022706f6e67223a207b2266697874757265223a20226e6174697665227d0a7d0a",
+      "front_sha256": "efa16e9a41e4d2ddd6a7d2e51edadd02b39f3d73a8e6e52ebd65f51c2d35f732",
+      "header_bytes": 41,
+      "header_hex": "0100000000000000000000000000000002007f00010000000000000003000000000000000100000000",
+      "header_sha256": "b1131a1af865066467bc172369f23f73d00ec04b48a0a24ef578d605df06489c",
+      "middle_bytes": 0,
+      "middle_hex": "",
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 0,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 40,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 2,
+        "version": 1
+      }
+    },
+    "mon-ping-native-request": {
+      "data_bytes": 0,
+      "data_hex": "",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_ping": {
+        "is_reply": false,
+        "payload_bytes": 0,
+        "payload_prepopulated": false,
+        "raw_hex": ""
+      },
+      "front_bytes": 0,
+      "front_hex": "",
+      "front_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_bytes": 41,
+      "header_hex": "0100000000000000000000000000000002007f00010000000000000003000000000000000101000000",
+      "header_sha256": "6ada7a788be07efafad1c4aec03d0a514784eca4f122fdaa0d6c4a3cda4960ac",
+      "middle_bytes": 0,
+      "middle_hex": "",
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 0,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 2,
+        "version": 1
+      }
+    }
+  },
+  "generated_config_sha256": "6862c10879b053f147c02df3b508fb2514951f656e6aa7e972284a09d48d7cd2",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "launcher_sha256": "a0f5856cd9f7b842a3a14ad873f1ca20b0a9a4bd9729385fe8bf16823793f399",
+  "loader_audit": "\tlinux-vdso.so.1 (0x00007ffdd5559000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x00007aa43ca00000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x00007aa43f60f000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x00007aa43f5d8000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x00007aa43c439000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x00007aa43f5a5000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x00007aa43f58b000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x00007aa43f581000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x00007aa43c210000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x00007aa43c1f3000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x00007aa43bfe9000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x00007aa43bf0c000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007aa43f654000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "3fa96d4f675c9421b7419102e45568e4ed465767dd7d0e952ae6041e6e180357",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "producer_contract": "fresh empty request normalizes compat to 1; native string-prefilled MON reply retains compat 0",
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "source_files_sha256": {
+    "src/messages/MPing.h": "61b7e745e77661bc982952bdb9f7c14c26b8e27b3c774bcacab07c9635940865",
+    "src/mon/MonClient.h": "8e6276fef77e33d68c583966ef5a6097b98f9cf2538e052410dc8ed7852f0e54",
+    "src/mon/Monitor.cc": "d4d74e7a21a825bd74bda86db8d64e4e7464a001fe955907043aa1d4d2e5d6b3",
+    "src/msg/Message.cc": "9c778ea7185e1910fb6d97bbfdcfe446a52f4eac94ff9a89faf5a3cfcdf0f562",
+    "src/msg/Message.h": "81f9b84fc9f6b2bdd93aad232a441eae268ac337a1c8a2075b927b7a954a629a"
+  },
+  "status": "four fresh native MPing objects, source-shaped payload production then one canonical Message::encode, separate native MPing and Ceph string decoders; no decoded message re-encoded",
+  "wrapper_sha256": "9ebb1fbf6d3c6e2434ceccf55e57ee6ff9a2ff08ad0061864b4681a841359231"
+}

@@ -1,0 +1,233 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-18",
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "source_sha256": {
+    "cephmsgr/mds_caps.go": "ec5fe2ed9901740006c272205a7dc89770fff43c8dde12958689350d408ee7b2",
+    "cephmsgr/mds_reconnect.go": "245b06df3ac128994ea32cdf1769a3a284751a28d2c3aa7fe14a5c631537902a",
+    "cephmsgr/mds_reconnect_caps_test.go": "fb5569177b3f218e78dbd43c5a0668e12b14dd8c4c35d2b0d209a4b8a2d635b6",
+    "cephmsgr/mds_reconnect_test.go": "e6016cfff6d3d9a56bfeb2bed8b4edddd10a446d0acdae7b76791e46d44c0ad1",
+    "integration/mds_cephfs_agent_test.go": "8790e7adb4cc3251136b7f2b432abf7e9f2f8d459ba1b479305953fddad57c9a",
+    "integration/mds_cephfs_recovery_test.go": "88fd6e254bc57d569dc5297cd160fd2f4c2169f7f8a0ab0fd968b20f8f4459ef"
+  },
+  "selector": "^TestCephMDSCephFS(Push|Recovery)?Integration$",
+  "verification_scope": "Caller-selected dirty head UPDATE first sent after Lost, before MClientReconnect; no previous send, no OSD writeback, no dirty cap-snap failover or uncertain flush replay claim.",
+  "checks": {
+    "root_go_tests": "PASS",
+    "race_packages": [
+      "cephmsgr",
+      "internal/mds"
+    ],
+    "root_and_fixture_vet": "PASS",
+    "fixture_go_tests": "PASS",
+    "python_tests": 422
+  },
+  "runs": [
+    {
+      "profile": {
+        "architecture": "amd64",
+        "runtime": "host",
+        "connection_mode": "crc",
+        "ip_family": "4",
+        "key_type": "aes",
+        "service_cipher": "aes",
+        "osd_store": "bluestore",
+        "osd_profile": "legacy-v6",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "provider_version": "v0.3.0"
+      },
+      "start": "2026-10-18T03:42:39.303778+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T03:48:40.951121+00:00",
+      "fsid": "0a567a15-65d3-487e-8429-3a9cde1d831c",
+      "go_tests": [
+        {
+          "test": "TestCephMDSCephFSPushIntegration",
+          "seconds": 76.1
+        },
+        {
+          "test": "TestCephMDSCephFSRecoveryIntegration",
+          "seconds": 75.92
+        },
+        {
+          "test": "TestCephMDSCephFSIntegration",
+          "seconds": 89.74
+        }
+      ],
+      "passed_leaf_count": 22,
+      "restart": {
+        "ArmedGID": 14581,
+        "AdoptedGID": 17900,
+        "ArmedNonce": 2125481458,
+        "AdoptedNonce": 3644690319,
+        "ArmedIncarnation": 6,
+        "AdoptedIncarnation": 10,
+        "ReconnectStateSeen": "up:reconnect",
+        "ReconnectStarted": "2026-10-18T03:45:58.062085508Z",
+        "ReconnectMicros": 1820,
+        "ActiveAfterFireMicros": 6651210,
+        "ReconnectedFrom": 1,
+        "LostGeneration": 1
+      },
+      "flush": {
+        "tid": 1,
+        "inode": 1099511627813,
+        "dirty": 4096,
+        "oldest_tid": 1,
+        "snap_follows": 1,
+        "reset_sequences": [
+          0,
+          0,
+          0
+        ],
+        "requested_size": 4096,
+        "ack": {
+          "tid": 1,
+          "inode": 1099511627813,
+          "dirty": 4096,
+          "received": "2026-10-18T03:45:59.960586528Z",
+          "arrival": 4
+        },
+        "native_stat": {
+          "exists": true,
+          "errno": 0,
+          "ino": 1099511627813,
+          "mode": 33188,
+          "uid": 0,
+          "gid": 0,
+          "nlink": 1,
+          "size": 4096
+        }
+      },
+      "cleanup": {
+        "owned_containers_removed": 9,
+        "owned_network_removed": true,
+        "native_checks": {
+          "namespace_checked": true,
+          "namespace_restored": true,
+          "push_config_restored": true,
+          "blocklist_restored": true,
+          "client_identity_removed": true,
+          "native_identity_removed": true,
+          "recovery_identity_removed": true,
+          "push_identity_removed": true,
+          "completed": true
+        },
+        "residual_owned_sessions": []
+      },
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "68efde8e9643a69fbfd4d0c126ed906d53020ff851c7aafefcb372f9b5383f05",
+        "fixture-manifest.json": "b59c649c20c903140c7687872ac2d25c489a241dab23f72694f54bf420ca72a3",
+        "mds-cephfs-cleanup.json": "345b04b9c817c1140090be50cdddeed54a83b86f267de19451f012b4cc3e3664",
+        "mds-cephfs-recovery-results.json": "98635bfaf8441ef225feb9501e76c64b934441459064654cc448b86716e594b3",
+        "run-receipt.json": "7a58d3219f62b3bbd07709d5ed9ccb6fb7669900c6afaff64e3b728a92e2c02a",
+        "run.log": "142bdd7cd73d5452bc7c3ba89112fbc6fd65514e83807cac910c33c4521c4aba"
+      },
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "profile": {
+        "architecture": "amd64",
+        "runtime": "container",
+        "connection_mode": "secure",
+        "ip_family": "6",
+        "key_type": "aes256k",
+        "service_cipher": "aes256k",
+        "osd_store": "memstore",
+        "osd_profile": "legacy-v6",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "provider_version": "v0.3.0"
+      },
+      "start": "2026-10-18T03:44:33.377418+00:00",
+      "exit_code": 0,
+      "end": "2026-10-18T03:50:24.783098+00:00",
+      "fsid": "0e13a262-3e92-4a3b-b952-0eec8b00d1c7",
+      "go_tests": [
+        {
+          "test": "TestCephMDSCephFSPushIntegration",
+          "seconds": 73.57
+        },
+        {
+          "test": "TestCephMDSCephFSRecoveryIntegration",
+          "seconds": 72.86
+        },
+        {
+          "test": "TestCephMDSCephFSIntegration",
+          "seconds": 85.1
+        }
+      ],
+      "passed_leaf_count": 22,
+      "restart": {
+        "ArmedGID": 14551,
+        "AdoptedGID": 17870,
+        "ArmedNonce": 1733725794,
+        "AdoptedNonce": 1610999343,
+        "ArmedIncarnation": 6,
+        "AdoptedIncarnation": 10,
+        "ReconnectStateSeen": "up:reconnect",
+        "ReconnectStarted": "2026-10-18T03:47:46.947898228Z",
+        "ReconnectMicros": 1196,
+        "ActiveAfterFireMicros": 6501749,
+        "ReconnectedFrom": 1,
+        "LostGeneration": 1
+      },
+      "flush": {
+        "tid": 1,
+        "inode": 1099511627813,
+        "dirty": 4096,
+        "oldest_tid": 1,
+        "snap_follows": 1,
+        "reset_sequences": [
+          0,
+          0,
+          0
+        ],
+        "requested_size": 4096,
+        "ack": {
+          "tid": 1,
+          "inode": 1099511627813,
+          "dirty": 4096,
+          "received": "2026-10-18T03:47:48.674988168Z",
+          "arrival": 4
+        },
+        "native_stat": {
+          "exists": true,
+          "errno": 0,
+          "ino": 1099511627813,
+          "mode": 33188,
+          "uid": 0,
+          "gid": 0,
+          "nlink": 1,
+          "size": 4096
+        }
+      },
+      "cleanup": {
+        "owned_containers_removed": 9,
+        "owned_network_removed": true,
+        "native_checks": {
+          "namespace_checked": true,
+          "namespace_restored": true,
+          "push_config_restored": true,
+          "blocklist_restored": true,
+          "client_identity_removed": true,
+          "native_identity_removed": true,
+          "recovery_identity_removed": true,
+          "push_identity_removed": true,
+          "completed": true
+        },
+        "residual_owned_sessions": []
+      },
+      "raw_evidence_sha256": {
+        "cleanup-audit.json": "60d50c552dc2729732fcc6f3cb0f2d8341b567aafdda8212df88497c17f1ab0d",
+        "fixture-manifest.json": "1d56d9e6e2b2817375cc27bca74fe26ccee0f921584956d2eea4a2fca354d344",
+        "mds-cephfs-cleanup.json": "b07a21d396883d1b74abdd594a3494e72fb3c7ac1cdec086b5e025aa662c66e6",
+        "mds-cephfs-recovery-results.json": "728ab8a8f3e3e8c28241dd5ff020cc59f2630216b8a36996040e9afb79760f05",
+        "run-receipt.json": "ba792b60bfb8cb52954257bdcd213edff73d97b80bd828683c72d76d9c41d504",
+        "run.log": "af1ec9ffe8ad421798237130afa1a41e11a8cde4e79b66fb1b047401d102b6f9"
+      },
+      "local_evidence_directory": "<path>"
+    }
+  ]
+}

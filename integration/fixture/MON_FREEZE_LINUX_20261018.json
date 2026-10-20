@@ -1,0 +1,779 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-18",
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "profile": {
+    "connection_mode": "secure",
+    "client_key_type": "aes256k",
+    "service_key_type": "aes256k",
+    "ip_family": 4,
+    "mon_count": 3,
+    "mgr_count": 2,
+    "osd_count": 1,
+    "osd_store": "bluestore",
+    "osd_wire_profile": "legacy-v6"
+  },
+  "final_go_source_sha256": {
+    "integration/fixture/provider.go": "6d5e7f469287e1c9fb94b1b56788b86696f1837bb3b782237173c40696697781",
+    "integration/fixture/ci_flake_fixes_test.go": "a61a875ffd2a1424fe20d0f79bb7883e9e7e7f1644b76aed90986132d24afc75",
+    "integration/mon_connected_stall_test.go": "fedd3ad7a3439b89a3a102bd94c6ec5b1682ff220b8134f83e57101de73145cc"
+  },
+  "runs": [
+    {
+      "id": "linux-01",
+      "source_variant": "baseline AUTH12/service12; Go subject drain3",
+      "fsid": "b03df1a3-2426-4ac8-9769-b22afbe49a7a",
+      "controller_runtime": "container",
+      "osd_status_epoch_observed": {
+        "min": 17,
+        "max": 44,
+        "first_at": "2026-10-18T03:02:47.060071+00:00",
+        "last_at": "2026-10-18T03:04:00.878265+00:00"
+      },
+      "sampled_osd_global_ids": [
+        14189
+      ],
+      "sampled_osd_address_nonces": [
+        114749845
+      ],
+      "cleanup": {
+        "owned_containers_removed": 8,
+        "owned_network_removed": true
+      },
+      "go_tests": [
+        {
+          "test": "TestCephMonPoolOpConnectedStallIntegration",
+          "result": "PASS",
+          "seconds": 30.43
+        },
+        {
+          "test": "TestCephMonPoolOpConnectedStopIntegration",
+          "result": "PASS",
+          "seconds": 26.19
+        },
+        {
+          "test": "TestCephMonPoolOpIntegration",
+          "result": "PASS",
+          "seconds": 20.64
+        }
+      ],
+      "raw_evidence_sha256": {
+        "run.log": "9440a07d4800b309a590ae9752ad5a1d3e75c9d5a53fcb4828ccc20f023e6331",
+        "observations.jsonl": "7f9ce32bf0cc89b1c95e9f86f6c75cb7a2813e0eac02ae061de6e9c540c20a15",
+        "fixture-manifest.json": "10c3755efd1edeb9c72f318c647910541503c68445d26bda1b5294f00afeed4a",
+        "cleanup-audit.json": "f2c3254106ba0e7d26e41a78ba2330839520df85780b3554ab8c69bff27cf365"
+      },
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "id": "linux-held-02",
+      "source_variant": "baseline AUTH12/service12; Go subject drain3",
+      "fsid": "791d2944-1b12-449d-ba37-0a530c0c0095",
+      "controller_runtime": "host",
+      "osd_status_epoch_observed": {
+        "min": 14,
+        "max": 49,
+        "first_at": "2026-10-18T03:05:27.572449+00:00",
+        "last_at": "2026-10-18T03:08:23.004358+00:00"
+      },
+      "sampled_osd_global_ids": [
+        4308
+      ],
+      "sampled_osd_address_nonces": [
+        3517441939
+      ],
+      "cleanup": {
+        "owned_containers_removed": 8,
+        "owned_network_removed": true
+      },
+      "go_tests": [
+        {
+          "test": "TestCephMonPoolOpConnectedStallIntegration",
+          "result": "PASS",
+          "seconds": 30.86
+        },
+        {
+          "test": "TestCephMonPoolOpConnectedStopIntegration",
+          "result": "PASS",
+          "seconds": 25.08
+        },
+        {
+          "test": "TestCephMonPoolOpConnectedStallIntegration",
+          "result": "PASS",
+          "seconds": 30.4
+        },
+        {
+          "test": "TestCephMonPoolOpConnectedStopIntegration",
+          "result": "PASS",
+          "seconds": 24.79
+        }
+      ],
+      "native_faults": [],
+      "native_writes": [
+        {
+          "iteration": 1,
+          "seconds": 0.08588287399470573,
+          "exit_code": 0,
+          "stderr": ""
+        },
+        {
+          "iteration": 2,
+          "seconds": 0.08281414800148923,
+          "exit_code": 0,
+          "stderr": ""
+        },
+        {
+          "iteration": 3,
+          "seconds": 0.08105325100041227,
+          "exit_code": 0,
+          "stderr": ""
+        },
+        {
+          "iteration": 4,
+          "seconds": 0.08513923799910117,
+          "exit_code": 0,
+          "stderr": ""
+        }
+      ],
+      "pg_observations": [
+        {
+          "time": "2026-10-18T03:06:14.322525+00:00",
+          "stage": "native-pg-state",
+          "exit_code": 124
+        },
+        {
+          "time": "2026-10-18T03:06:57.076543+00:00",
+          "stage": "native-pg-state",
+          "exit_code": 124
+        },
+        {
+          "time": "2026-10-18T03:07:45.140702+00:00",
+          "stage": "native-pg-state",
+          "exit_code": 124
+        },
+        {
+          "time": "2026-10-18T03:08:27.616243+00:00",
+          "stage": "native-pg-state",
+          "exit_code": 124
+        }
+      ],
+      "raw_evidence_sha256": {
+        "events.jsonl": "415fe6789ab5b322a05d1e24ea2ee528706e41f983bab32c2552b4eff60f42cf",
+        "observations.jsonl": "4a1d30f8f76d2c465650f84e42ee70fdd82743760350d1ea9e9ea1e10ff7ca83",
+        "fixture-manifest.json": "b45b7e09adfd8e02a10e985164977a65e3c6a3f58ccdfaa169ab24a0774d954a",
+        "cleanup-audit.json": "1f8a8985b12b7dbd13a150ce5686b36db8a61824b3cbc50528f4fb491d320eeb",
+        "test-1.log": "41c76fa192e897aa531db2ae7e6d776cd7b459dfd8523dd721973a4084f91508",
+        "test-2.log": "2011d50bd2e310f226f5577241db9893e8993e10c33fdf4ed2ea9167623b02e7",
+        "test-3.log": "b26252126ef7a1b75805e6226d5eefea085dbc7d5846e210af479a0f3901c1a8",
+        "test-4.log": "13e62ebde9646fe0e8a84f7286923da23e51b39b60fc4eabfa1e26ae597df62a"
+      },
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "id": "linux-native-03",
+      "source_variant": "baseline AUTH12/service12; no Go product client",
+      "fsid": "e0f2d75e-4179-4760-affa-6b4a2b00371d",
+      "controller_runtime": "host",
+      "osd_status_epoch_observed": {
+        "min": 14,
+        "max": 14,
+        "first_at": "2026-10-18T03:09:20.202414+00:00",
+        "last_at": "2026-10-18T03:13:16.688757+00:00"
+      },
+      "sampled_osd_global_ids": [
+        14189
+      ],
+      "sampled_osd_address_nonces": [
+        2284854997
+      ],
+      "cleanup": {
+        "owned_containers_removed": 8,
+        "owned_network_removed": true
+      },
+      "native_faults": [
+        {
+          "iteration": 1,
+          "target": "mon.c",
+          "pause_seconds": 20,
+          "restart_after_resume": false
+        }
+      ],
+      "native_writes": [
+        {
+          "iteration": 1,
+          "seconds": 45.07682383900101,
+          "exit_code": 1,
+          "stderr": "error putting ceph-msgr-native-freeze-experiment-1/probe-original: (110) Connection timed out\n"
+        }
+      ],
+      "before_any_object_io": [
+        {
+          "iteration": 1,
+          "mon_epoch": 17,
+          "osd_epochs": [
+            14,
+            14,
+            14,
+            14,
+            14,
+            14,
+            14
+          ]
+        }
+      ],
+      "pg_observations": [
+        {
+          "time": "2026-10-18T03:11:12.930492+00:00",
+          "stage": "native-pg-state",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:11:23.177685+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:11:33.417130+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:11:43.659235+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:11:53.910527+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:12:04.157848+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:12:14.401917+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:12:24.655060+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:12:34.899439+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:12:45.150007+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:12:55.399925+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:13:05.640612+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:13:15.880475+00:00",
+          "stage": "unmodified-wait-pg",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "unknown",
+              "up": [],
+              "acting": [],
+              "up_primary": -1,
+              "acting_primary": -1
+            }
+          ]
+        }
+      ],
+      "driver_errors": [
+        "RuntimeError('expected one connected native OSD MON session')"
+      ],
+      "effective_ticket_config": [
+        {
+          "daemon": "mon.a",
+          "option": "auth_mon_ticket_ttl",
+          "reply": {
+            "auth_mon_ticket_ttl": "12.000000"
+          }
+        },
+        {
+          "daemon": "mon.a",
+          "option": "auth_service_ticket_ttl",
+          "reply": {
+            "auth_service_ticket_ttl": "12.000000"
+          }
+        },
+        {
+          "daemon": "mon.b",
+          "option": "auth_mon_ticket_ttl",
+          "reply": {
+            "auth_mon_ticket_ttl": "12.000000"
+          }
+        },
+        {
+          "daemon": "mon.b",
+          "option": "auth_service_ticket_ttl",
+          "reply": {
+            "auth_service_ticket_ttl": "12.000000"
+          }
+        },
+        {
+          "daemon": "mon.c",
+          "option": "auth_mon_ticket_ttl",
+          "reply": {
+            "auth_mon_ticket_ttl": "12.000000"
+          }
+        },
+        {
+          "daemon": "mon.c",
+          "option": "auth_service_ticket_ttl",
+          "reply": {
+            "auth_service_ticket_ttl": "12.000000"
+          }
+        },
+        {
+          "daemon": "osd.0",
+          "option": "mon_client_ping_interval",
+          "reply": {
+            "mon_client_ping_interval": "10.000000"
+          }
+        },
+        {
+          "daemon": "osd.0",
+          "option": "mon_client_ping_timeout",
+          "reply": {
+            "mon_client_ping_timeout": "30.000000"
+          }
+        },
+        {
+          "daemon": "osd.0",
+          "option": "mon_client_hunt_interval",
+          "reply": {
+            "mon_client_hunt_interval": "3.000000"
+          }
+        }
+      ],
+      "raw_evidence_sha256": {
+        "events.jsonl": "f10402e33b241484a4d8b644a4e586a673535e57582755e70eb1a47f4e424384",
+        "observations.jsonl": "3b5e773b93a572ce922a26f0bfd4a8a9b917d4a5f2e6bdfd307c1f2cbef39001",
+        "fixture-manifest.json": "e404b1c4e0be05b340967d8bd01e88a739cc98c07899910a218d23033af9109e",
+        "cleanup-audit.json": "dcf0f6ef49007014d9f593ddd86ea1a15fdad2bfaa03f3a678a9eb46f9888f7c",
+        "effective-ticket-config.json": "8fd4a28e562eab62a3414de4ca114e441b22c00ee7f85b12bd04e5029066c5f9",
+        "native-osd-selected-log.txt": "2898050e8c9b7bc9305cb54d68f4092257314c0b7259d554f4c34faa84c78dcf"
+      },
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "id": "linux-native-auth120-04",
+      "source_variant": "AUTH120/service12; no Go product client",
+      "fsid": "f4d1fa66-60ad-4836-be0c-6857f227b998",
+      "controller_runtime": "host",
+      "osd_status_epoch_observed": {
+        "min": 14,
+        "max": 20,
+        "first_at": "2026-10-18T03:14:10.435692+00:00",
+        "last_at": "2026-10-18T03:16:23.390725+00:00"
+      },
+      "sampled_osd_global_ids": [
+        14189
+      ],
+      "sampled_osd_address_nonces": [
+        1690627099
+      ],
+      "cleanup": {
+        "owned_containers_removed": 8,
+        "owned_network_removed": true
+      },
+      "native_faults": [
+        {
+          "iteration": 1,
+          "target": "mon.c",
+          "pause_seconds": 20,
+          "restart_after_resume": false
+        },
+        {
+          "iteration": 2,
+          "target": "mon.c",
+          "pause_seconds": 20,
+          "restart_after_resume": true
+        }
+      ],
+      "native_writes": [
+        {
+          "iteration": 1,
+          "seconds": 0.08434937299898593,
+          "exit_code": 0,
+          "stderr": ""
+        },
+        {
+          "iteration": 2,
+          "seconds": 0.09763742799987085,
+          "exit_code": 0,
+          "stderr": ""
+        }
+      ],
+      "before_any_object_io": [
+        {
+          "iteration": 1,
+          "mon_epoch": 17,
+          "osd_epochs": [
+            17,
+            17,
+            17,
+            17,
+            17,
+            17,
+            17
+          ]
+        },
+        {
+          "iteration": 2,
+          "mon_epoch": 20,
+          "osd_epochs": [
+            20,
+            20,
+            20,
+            20,
+            20,
+            20,
+            20
+          ]
+        }
+      ],
+      "pg_observations": [
+        {
+          "time": "2026-10-18T03:15:13.409147+00:00",
+          "stage": "native-pg-state",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "3.0",
+              "state": "active+clean",
+              "up": [
+                0
+              ],
+              "acting": [
+                0
+              ],
+              "up_primary": 0,
+              "acting_primary": 0
+            }
+          ]
+        },
+        {
+          "time": "2026-10-18T03:16:27.409050+00:00",
+          "stage": "native-pg-state",
+          "exit_code": 0,
+          "pgs": [
+            {
+              "pgid": "4.0",
+              "state": "active+clean",
+              "up": [
+                0
+              ],
+              "acting": [
+                0
+              ],
+              "up_primary": 0,
+              "acting_primary": 0
+            }
+          ]
+        }
+      ],
+      "effective_ticket_config": [
+        {
+          "daemon": "mon.a",
+          "option": "auth_mon_ticket_ttl",
+          "reply": {
+            "auth_mon_ticket_ttl": "120.000000"
+          }
+        },
+        {
+          "daemon": "mon.a",
+          "option": "auth_service_ticket_ttl",
+          "reply": {
+            "auth_service_ticket_ttl": "12.000000"
+          }
+        },
+        {
+          "daemon": "mon.b",
+          "option": "auth_mon_ticket_ttl",
+          "reply": {
+            "auth_mon_ticket_ttl": "120.000000"
+          }
+        },
+        {
+          "daemon": "mon.b",
+          "option": "auth_service_ticket_ttl",
+          "reply": {
+            "auth_service_ticket_ttl": "12.000000"
+          }
+        },
+        {
+          "daemon": "mon.c",
+          "option": "auth_mon_ticket_ttl",
+          "reply": {
+            "auth_mon_ticket_ttl": "120.000000"
+          }
+        },
+        {
+          "daemon": "mon.c",
+          "option": "auth_service_ticket_ttl",
+          "reply": {
+            "auth_service_ticket_ttl": "12.000000"
+          }
+        }
+      ],
+      "raw_evidence_sha256": {
+        "events.jsonl": "cd419baa27fc8a0bb087d7a7dabd7f6352c145819592261cd5db5486c38fa909",
+        "observations.jsonl": "4335a917964e3245c15b6b303d4cccc0f5c42456764aba4989ffb8025f8b15a7",
+        "fixture-manifest.json": "faf48ce0fbf635df2e6cc6b3aa2cb50ed0062df53b6b7047c9a5a2bcd9c53f97",
+        "cleanup-audit.json": "e5bf7e317a88b16c94332dc2366a4d72c4cd72ff10adc2d935e64612fe749d13",
+        "effective-ticket-config.json": "885f1065905584e267a6363181963b5c88c230a239056c02ae6ead19830df8d4",
+        "native-osd-selected-log.txt": "3b15d6d926aaa54a409ad44dc6c8f3a85117d4b0d0ba5f0eaa9ea4d12c61f2ad"
+      },
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "id": "linux-auth120-05",
+      "source_variant": "AUTH120/service12; Go subject drain3",
+      "fsid": "07260d4a-7ae6-4b5c-9643-1cad9f4119db",
+      "controller_runtime": "container",
+      "osd_status_epoch_observed": {
+        "min": 16,
+        "max": 43,
+        "first_at": "2026-10-18T03:17:20.533641+00:00",
+        "last_at": "2026-10-18T03:18:44.396573+00:00"
+      },
+      "sampled_osd_global_ids": [
+        14188
+      ],
+      "sampled_osd_address_nonces": [
+        823193109
+      ],
+      "cleanup": {
+        "owned_containers_removed": 8,
+        "owned_network_removed": true
+      },
+      "go_tests": [
+        {
+          "test": "TestCephMonPoolOpConnectedStallIntegration",
+          "result": "PASS",
+          "seconds": 30.22
+        },
+        {
+          "test": "TestCephMonPoolOpConnectedStopIntegration",
+          "result": "FAIL",
+          "seconds": 36.47
+        },
+        {
+          "test": "TestCephMonPoolOpIntegration",
+          "result": "PASS",
+          "seconds": 21.33
+        }
+      ],
+      "raw_evidence_sha256": {
+        "run.log": "599d2ed1381800a12ef47a0a8533e3b6d627d631dc78584b797e423b474b97b9",
+        "observations.jsonl": "43bfa8756997a9c9ec5f2e04983682597525e5892d6a9f36ca0a9edd666e97b3",
+        "fixture-manifest.json": "7221500b88c6f11075d1b3999997129227bcaae75f81d5ac83ebcffd3e4bf8b1",
+        "cleanup-audit.json": "f03c72c6c8e2585ba0f7ade30c084dd3988065627a78efb90350fabd5cc8cb11"
+      },
+      "local_evidence_directory": "<path>"
+    },
+    {
+      "id": "linux-auth120-drain60-06",
+      "source_variant": "final patch AUTH120/service12; Go subject drain60",
+      "fsid": "b96abe12-cb22-435d-9732-1c6c94bc8e99",
+      "controller_runtime": "container",
+      "osd_status_epoch_observed": {
+        "min": 17,
+        "max": 44,
+        "first_at": "2026-10-18T03:22:28.665254+00:00",
+        "last_at": "2026-10-18T03:24:29.472823+00:00"
+      },
+      "sampled_osd_global_ids": [
+        4305
+      ],
+      "sampled_osd_address_nonces": [
+        2809512380
+      ],
+      "cleanup": {
+        "owned_containers_removed": 8,
+        "owned_network_removed": true
+      },
+      "go_tests": [
+        {
+          "test": "TestCephMonPoolOpConnectedStallIntegration",
+          "result": "PASS",
+          "seconds": 78.53
+        },
+        {
+          "test": "TestCephMonPoolOpConnectedStopIntegration",
+          "result": "PASS",
+          "seconds": 26.12
+        },
+        {
+          "test": "TestCephMonPoolOpIntegration",
+          "result": "PASS",
+          "seconds": 20.71
+        }
+      ],
+      "raw_evidence_sha256": {
+        "run.log": "24d8fbc51c4e7ba6e77f6364a118919a99e39a3ec16e7f83500a353e0eb667b5",
+        "observations.jsonl": "d0f3550f4d7b40811e8790abfe8e37dace90417d2da9678998691abc7f82cb35",
+        "fixture-manifest.json": "d17c88ac0397936af36ff4f14b2aae82e4a330dae1d83f8fbb23f80af69da3b2",
+        "cleanup-audit.json": "06911ab82040aa13d5dc9d9233ec974488cc292276234d47a214949af8f50f7e"
+      },
+      "local_evidence_directory": "<path>"
+    }
+  ],
+  "cleanup_total": {
+    "owned_containers_removed": 48,
+    "owned_networks_removed": 6
+  },
+  "limitations": [
+    "Original macOS/arm64 failure not rerun.",
+    "MemStore, request-v9 and three-OSD variants unverified for this mitigation.",
+    "No precise native internal-state or rejection-reason trace.",
+    "No uncertain write replay; delivery of a newer-epoch STAT/READ nudge was not established.",
+    "Gate remains opt-in; these experiments do not close the original issue."
+  ],
+  "validation": [
+    "CGO_ENABLED=0 fixture package tests and go vet passed on Linux.",
+    "Focused default/short-ticket/upmap TTL regression checks passed."
+  ]
+}

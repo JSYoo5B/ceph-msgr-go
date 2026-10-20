@@ -1,0 +1,883 @@
+{
+  "binary_sha256": "2128d2279a8c1c1606f834463d60bf271b9a29d2caf0cfe39804370a4ff92898",
+  "blob_proof_scope": "snap traces use native SnapRealmInfoNew encode/decode, xattr blobs the native map<string,bufferptr> encode/decode and the flock blob the native ceph_filelock encoder in the Client::_encode_filelocks layout; MClientCaps carries the flock blob opaquely",
+  "build_driver_sha256": "10341474db5b13030fbf9428da4d9848a7468cc0bcda21356b6b0520306d9dc6",
+  "builder_container_id": "adc781f5e2ffebf633d9933031885d1d38c5d45f3233ec8f464d3c3800ec4adf",
+  "builder_termination_completed": true,
+  "canonical_message_encode_verified": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "mds-caps-native-cap-release": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_cap_release": {
+        "caps": [
+          {
+            "cap_id": 49,
+            "ino": 1099511627779,
+            "issue_seq": 7,
+            "migrate_seq": 2
+          },
+          {
+            "cap_id": 50,
+            "ino": 1099511627780,
+            "issue_seq": 1,
+            "migrate_seq": 0
+          }
+        ],
+        "message_type": 787,
+        "num": 2,
+        "osd_epoch_barrier": 21,
+        "tid": 0,
+        "version": 2
+      },
+      "front_bytes": 56,
+      "front_sha256": "681a969a65c84e065fc8edf0e4bbfb8349884827b9f94efa59a726b7e6fbd897",
+      "header_bytes": 41,
+      "header_sha256": "955bb2060c27a03df4a9ba1eb40cba0239397cbf9733dbf3a7c058f833419c9b",
+      "middle_bytes": 0,
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 56,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 787,
+        "version": 2
+      }
+    },
+    "mds-caps-native-caps-export": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_caps": {
+        "atime": {
+          "nsec": 0,
+          "sec": 0
+        },
+        "btime": {
+          "nsec": 0,
+          "sec": 0
+        },
+        "caller_gid": 0,
+        "caller_uid": 0,
+        "cap_id": 30583,
+        "caps": 0,
+        "change_attr": 0,
+        "ctime": {
+          "nsec": 0,
+          "sec": 0
+        },
+        "dirty": 0,
+        "flags": 0,
+        "flockbl_hex": "",
+        "fscrypt_auth_hex": "",
+        "fscrypt_file_hex": "",
+        "gid": 0,
+        "inline_data_hex": "",
+        "inline_version": 0,
+        "ino": 1099511627777,
+        "issue_seq": 0,
+        "layout": {
+          "object_size": 0,
+          "pool_id": -1,
+          "pool_ns": "",
+          "stripe_count": 0,
+          "stripe_unit": 0
+        },
+        "max_size": 0,
+        "message_type": 784,
+        "migrate_seq": 12,
+        "mode": 0,
+        "mtime": {
+          "nsec": 0,
+          "sec": 0
+        },
+        "nfiles": -1,
+        "nlink": 0,
+        "nsubdirs": -1,
+        "oldest_flush_tid": 0,
+        "op": 3,
+        "osd_epoch_barrier": 21,
+        "peer": {
+          "cap_id": 34952,
+          "flags": 1,
+          "issue_seq": 15,
+          "mds": 1,
+          "mseq": 16
+        },
+        "realm": 0,
+        "seq": 0,
+        "size": 0,
+        "snap_follows": 0,
+        "snap_realms": [],
+        "snap_trace_len": 0,
+        "snapbl_hex": "",
+        "tid": 0,
+        "time_warp_seq": 0,
+        "truncate_seq": 0,
+        "truncate_size": 0,
+        "uid": 0,
+        "version": 12,
+        "wanted": 0,
+        "xattr_len": 0,
+        "xattr_version": 0,
+        "xattrbl_hex": "",
+        "xattrs": []
+      },
+      "front_bytes": 260,
+      "front_sha256": "a5683437490232b6fc3e23ec99025f9b58bb38fbc093d1829945fe7e9079fdfb",
+      "header_bytes": 41,
+      "header_sha256": "387da8978f75f64de19d31b279bc0aa5f65551d9c4d50237425a888f24ca00f8",
+      "middle_bytes": 0,
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 260,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 784,
+        "version": 12
+      }
+    },
+    "mds-caps-native-caps-flush-ack": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_caps": {
+        "atime": {
+          "nsec": 0,
+          "sec": 0
+        },
+        "btime": {
+          "nsec": 0,
+          "sec": 0
+        },
+        "caller_gid": 0,
+        "caller_uid": 0,
+        "cap_id": 30583,
+        "caps": 15701,
+        "change_attr": 0,
+        "ctime": {
+          "nsec": 0,
+          "sec": 0
+        },
+        "dirty": 4224,
+        "flags": 0,
+        "flockbl_hex": "",
+        "fscrypt_auth_hex": "",
+        "fscrypt_file_hex": "",
+        "gid": 0,
+        "inline_data_hex": "",
+        "inline_version": 0,
+        "ino": 1099511627777,
+        "issue_seq": 0,
+        "layout": {
+          "object_size": 0,
+          "pool_id": -1,
+          "pool_ns": "",
+          "stripe_count": 0,
+          "stripe_unit": 0
+        },
+        "max_size": 0,
+        "message_type": 784,
+        "migrate_seq": 0,
+        "mode": 0,
+        "mtime": {
+          "nsec": 0,
+          "sec": 0
+        },
+        "nfiles": -1,
+        "nlink": 0,
+        "nsubdirs": -1,
+        "oldest_flush_tid": 76,
+        "op": 8,
+        "osd_epoch_barrier": 21,
+        "peer": null,
+        "realm": 0,
+        "seq": 11,
+        "size": 0,
+        "snap_follows": 5,
+        "snap_realms": [],
+        "snap_trace_len": 0,
+        "snapbl_hex": "",
+        "tid": 77,
+        "time_warp_seq": 0,
+        "truncate_seq": 0,
+        "truncate_size": 0,
+        "uid": 0,
+        "version": 12,
+        "wanted": 0,
+        "xattr_len": 0,
+        "xattr_version": 0,
+        "xattrbl_hex": "",
+        "xattrs": []
+      },
+      "front_bytes": 260,
+      "front_sha256": "73e40aa43d11a492fdaee66bad9bd6e5c27fe25d96f1258ef238dc9386bfc3bf",
+      "header_bytes": 41,
+      "header_sha256": "67a9599cf970fa4073a5d431a625e196ebc16ff518736928afe9e449bead965f",
+      "middle_bytes": 0,
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 260,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 784,
+        "version": 12
+      }
+    },
+    "mds-caps-native-caps-grant": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_caps": {
+        "atime": {
+          "nsec": 3,
+          "sec": 1700000102
+        },
+        "btime": {
+          "nsec": 9,
+          "sec": 1700000000
+        },
+        "caller_gid": 2001,
+        "caller_uid": 2000,
+        "cap_id": 30583,
+        "caps": 15701,
+        "change_attr": 153,
+        "ctime": {
+          "nsec": 1,
+          "sec": 1700000100
+        },
+        "dirty": 8,
+        "flags": 1,
+        "flockbl_hex": "01000000001000000000000000200000000000000410000000000000999900000000000041010000000000000200000000",
+        "fscrypt_auth_hex": "aabb",
+        "fscrypt_file_hex": "cc",
+        "gid": 1001,
+        "inline_data_hex": "696e6c696e6521",
+        "inline_version": 6,
+        "ino": 1099511627777,
+        "issue_seq": 13,
+        "layout": {
+          "object_size": 8388608,
+          "pool_id": 3,
+          "pool_ns": "ns-a",
+          "stripe_count": 2,
+          "stripe_unit": 4194304
+        },
+        "max_size": 4194304,
+        "message_type": 784,
+        "migrate_seq": 12,
+        "mode": 33188,
+        "mtime": {
+          "nsec": 2,
+          "sec": 1700000101
+        },
+        "nfiles": 6,
+        "nlink": 2,
+        "nsubdirs": 7,
+        "oldest_flush_tid": 9,
+        "op": 0,
+        "osd_epoch_barrier": 21,
+        "peer": null,
+        "realm": 1099511627776,
+        "seq": 11,
+        "size": 12345,
+        "snap_follows": 14,
+        "snap_realms": [
+          {
+            "change_attr": 8,
+            "created": 2,
+            "ino": 1099511627776,
+            "last_modified": {
+              "nsec": 7,
+              "sec": 1700000200
+            },
+            "my_snaps": [
+              5,
+              4
+            ],
+            "num_prior_parent_snaps": 1,
+            "num_snaps": 2,
+            "parent": 1,
+            "parent_since": 3,
+            "prior_parent_snaps": [
+              2
+            ],
+            "seq": 5
+          }
+        ],
+        "snap_trace_len": 94,
+        "snapbl_hex": "010158000000000000000001000002000000000000000100000000000000030000000000000005000000000000000200000001000000050000000000000004000000000000000200000000000000c8f15365070000000800000000000000",
+        "tid": 0,
+        "time_warp_seq": 4,
+        "truncate_seq": 5,
+        "truncate_size": 100,
+        "uid": 1000,
+        "version": 12,
+        "wanted": 7168,
+        "xattr_len": 39,
+        "xattr_version": 7,
+        "xattrbl_hex": "0200000006000000757365722e6102000000766108000000757365722e62696e0300000000ff10",
+        "xattrs": [
+          {
+            "name": "user.a",
+            "value_hex": "7661"
+          },
+          {
+            "name": "user.bin",
+            "value_hex": "00ff10"
+          }
+        ]
+      },
+      "front_bytes": 417,
+      "front_sha256": "e29332abacc2daf1971904b49541fbd27530824fa15be28be88a04067bb06366",
+      "header_bytes": 41,
+      "header_sha256": "387da8978f75f64de19d31b279bc0aa5f65551d9c4d50237425a888f24ca00f8",
+      "middle_bytes": 39,
+      "middle_sha256": "e506e8237fd0835a3dc446302b735b92ae2b6fb7160412ca788cf94f26664cf3",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 417,
+        "middle_len": 39,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 784,
+        "version": 12
+      }
+    },
+    "mds-caps-native-caps-import": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_caps": {
+        "atime": {
+          "nsec": 0,
+          "sec": 1700000300
+        },
+        "btime": {
+          "nsec": 0,
+          "sec": 1700000000
+        },
+        "caller_gid": 0,
+        "caller_uid": 0,
+        "cap_id": 34952,
+        "caps": 261,
+        "change_attr": 4,
+        "ctime": {
+          "nsec": 500,
+          "sec": 1700000301
+        },
+        "dirty": 0,
+        "flags": 0,
+        "flockbl_hex": "",
+        "fscrypt_auth_hex": "",
+        "fscrypt_file_hex": "",
+        "gid": 1001,
+        "inline_data_hex": "",
+        "inline_version": 18446744073709551615,
+        "ino": 1099511627776,
+        "issue_seq": 2,
+        "layout": {
+          "object_size": 0,
+          "pool_id": -1,
+          "pool_ns": "",
+          "stripe_count": 0,
+          "stripe_unit": 0
+        },
+        "max_size": 0,
+        "message_type": 784,
+        "migrate_seq": 16,
+        "mode": 16877,
+        "mtime": {
+          "nsec": 0,
+          "sec": 1700000300
+        },
+        "nfiles": 3,
+        "nlink": 1,
+        "nsubdirs": 1,
+        "oldest_flush_tid": 0,
+        "op": 4,
+        "osd_epoch_barrier": 21,
+        "peer": {
+          "cap_id": 30583,
+          "flags": 1,
+          "issue_seq": 13,
+          "mds": 0,
+          "mseq": 12
+        },
+        "realm": 1099511627776,
+        "seq": 3,
+        "size": 0,
+        "snap_follows": 0,
+        "snap_realms": [
+          {
+            "change_attr": 8,
+            "created": 2,
+            "ino": 1099511627776,
+            "last_modified": {
+              "nsec": 7,
+              "sec": 1700000200
+            },
+            "my_snaps": [
+              5,
+              4
+            ],
+            "num_prior_parent_snaps": 1,
+            "num_snaps": 2,
+            "parent": 1,
+            "parent_since": 3,
+            "prior_parent_snaps": [
+              2
+            ],
+            "seq": 5
+          },
+          {
+            "change_attr": 2,
+            "created": 1,
+            "ino": 1,
+            "last_modified": {
+              "nsec": 0,
+              "sec": 1700000201
+            },
+            "my_snaps": [
+              3
+            ],
+            "num_prior_parent_snaps": 0,
+            "num_snaps": 1,
+            "parent": 0,
+            "parent_since": 1,
+            "prior_parent_snaps": [],
+            "seq": 3
+          }
+        ],
+        "snap_trace_len": 172,
+        "snapbl_hex": "010158000000000000000001000002000000000000000100000000000000030000000000000005000000000000000200000001000000050000000000000004000000000000000200000000000000c8f153650700000008000000000000000101480000000100000000000000010000000000000000000000000000000100000000000000030000000000000001000000000000000300000000000000c9f15365000000000200000000000000",
+        "tid": 0,
+        "time_warp_seq": 0,
+        "truncate_seq": 0,
+        "truncate_size": 0,
+        "uid": 1000,
+        "version": 12,
+        "wanted": 256,
+        "xattr_len": 0,
+        "xattr_version": 0,
+        "xattrbl_hex": "",
+        "xattrs": []
+      },
+      "front_bytes": 453,
+      "front_sha256": "05dd43809e11bffe85834bf511a76db876c1f6db89ac8a13787f988f433a62dc",
+      "header_bytes": 41,
+      "header_sha256": "387da8978f75f64de19d31b279bc0aa5f65551d9c4d50237425a888f24ca00f8",
+      "middle_bytes": 0,
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 453,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 784,
+        "version": 12
+      }
+    },
+    "mds-caps-native-caps-update": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_caps": {
+        "atime": {
+          "nsec": 456,
+          "sec": 1700000400
+        },
+        "btime": {
+          "nsec": 9,
+          "sec": 1700000000
+        },
+        "caller_gid": 4294967295,
+        "caller_uid": 4294967295,
+        "cap_id": 30583,
+        "caps": 15701,
+        "change_attr": 154,
+        "ctime": {
+          "nsec": 124,
+          "sec": 1700000500
+        },
+        "dirty": 4224,
+        "flags": 4,
+        "flockbl_hex": "",
+        "fscrypt_auth_hex": "",
+        "fscrypt_file_hex": "",
+        "gid": 1001,
+        "inline_data_hex": "",
+        "inline_version": 18446744073709551615,
+        "ino": 1099511627777,
+        "issue_seq": 13,
+        "layout": {
+          "object_size": 0,
+          "pool_id": -1,
+          "pool_ns": "",
+          "stripe_count": 0,
+          "stripe_unit": 0
+        },
+        "max_size": 8388608,
+        "message_type": 784,
+        "migrate_seq": 12,
+        "mode": 33152,
+        "mtime": {
+          "nsec": 123,
+          "sec": 1700000500
+        },
+        "nfiles": -1,
+        "nlink": 1,
+        "nsubdirs": -1,
+        "oldest_flush_tid": 76,
+        "op": 5,
+        "osd_epoch_barrier": 21,
+        "peer": null,
+        "realm": 0,
+        "seq": 11,
+        "size": 20000,
+        "snap_follows": 5,
+        "snap_realms": [],
+        "snap_trace_len": 0,
+        "snapbl_hex": "",
+        "tid": 77,
+        "time_warp_seq": 4,
+        "truncate_seq": 5,
+        "truncate_size": 100,
+        "uid": 1000,
+        "version": 12,
+        "wanted": 6144,
+        "xattr_len": 27,
+        "xattr_version": 8,
+        "xattrbl_hex": "010000000c000000757365722e666c757368656403000000796573",
+        "xattrs": [
+          {
+            "name": "user.flushed",
+            "value_hex": "796573"
+          }
+        ]
+      },
+      "front_bytes": 260,
+      "front_sha256": "c6857fbad70b769d12c482b21365f84b88480f734c09ec7e6eefe5d3761b5736",
+      "header_bytes": 41,
+      "header_sha256": "67a9599cf970fa4073a5d431a625e196ebc16ff518736928afe9e449bead965f",
+      "middle_bytes": 27,
+      "middle_sha256": "d7900056a29adcdb884f9ec611b2fc9338e0b666e354610fbdcf3f3a24106705",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 260,
+        "middle_len": 27,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 784,
+        "version": 12
+      }
+    },
+    "mds-caps-native-lease-release": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_lease": {
+        "action": 2,
+        "dname": "file",
+        "duration_ms": 0,
+        "first": 2,
+        "ino": 1099511627776,
+        "last": 18446744073709551614,
+        "mask": 3,
+        "message_type": 785,
+        "seq": 4,
+        "tid": 0,
+        "version": 1
+      },
+      "front_bytes": 43,
+      "front_sha256": "554dcbcdb94c60d64b9489863c568bc0deb176b807a3ebc94a01edcc7c3bcf98",
+      "header_bytes": 41,
+      "header_sha256": "f54d3449aed54d263d97312aac20e03250423fc08d135a6aab57b3b589dc4678",
+      "middle_bytes": 0,
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 43,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 785,
+        "version": 1
+      }
+    },
+    "mds-caps-native-lease-revoke": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_lease": {
+        "action": 1,
+        "dname": "file",
+        "duration_ms": 0,
+        "first": 2,
+        "ino": 1099511627776,
+        "last": 18446744073709551614,
+        "mask": 3,
+        "message_type": 785,
+        "seq": 4,
+        "tid": 0,
+        "version": 1
+      },
+      "front_bytes": 43,
+      "front_sha256": "f909323763976693657d820402d8c3d5ba365242b5a94a94d99ddcb4ef672b71",
+      "header_bytes": 41,
+      "header_sha256": "f54d3449aed54d263d97312aac20e03250423fc08d135a6aab57b3b589dc4678",
+      "middle_bytes": 0,
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 43,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 785,
+        "version": 1
+      }
+    },
+    "mds-caps-native-quota": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_quota": {
+        "ino": 1099511627776,
+        "max_bytes": 1073741824,
+        "max_files": 1000,
+        "message_type": 788,
+        "rbytes": 1048576,
+        "rctime": {
+          "nsec": 5,
+          "sec": 1700000400
+        },
+        "rfiles": 12,
+        "rsubdirs": 3,
+        "tid": 0,
+        "version": 1
+      },
+      "front_bytes": 62,
+      "front_sha256": "e5f605dcc96eb6ec9e35718e6632836ecacb104233259f966cabb7caf2ecc4bc",
+      "header_bytes": 41,
+      "header_sha256": "817afbc04c4b6de1f1c50831320712538fa12293b86165107719cb59ddd25c10",
+      "middle_bytes": 0,
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 62,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 788,
+        "version": 1
+      }
+    },
+    "mds-caps-native-snap-split": {
+      "data_bytes": 0,
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "decoded_snap": {
+        "message_type": 786,
+        "num_split_inos": 2,
+        "num_split_realms": 1,
+        "op": 3,
+        "snap_realms": [
+          {
+            "change_attr": 3,
+            "created": 9,
+            "ino": 1099511627781,
+            "last_modified": {
+              "nsec": 1,
+              "sec": 1700000600
+            },
+            "my_snaps": [
+              9
+            ],
+            "num_prior_parent_snaps": 2,
+            "num_snaps": 1,
+            "parent": 1099511627776,
+            "parent_since": 9,
+            "prior_parent_snaps": [
+              5,
+              4
+            ],
+            "seq": 9
+          },
+          {
+            "change_attr": 9,
+            "created": 2,
+            "ino": 1099511627776,
+            "last_modified": {
+              "nsec": 1,
+              "sec": 1700000600
+            },
+            "my_snaps": [
+              9,
+              5,
+              4
+            ],
+            "num_prior_parent_snaps": 1,
+            "num_snaps": 3,
+            "parent": 1,
+            "parent_since": 3,
+            "prior_parent_snaps": [
+              2
+            ],
+            "seq": 9
+          }
+        ],
+        "split": 1099511627781,
+        "split_inos": [
+          1099511627782,
+          1099511627783
+        ],
+        "split_realms": [
+          1099511627784
+        ],
+        "tid": 0,
+        "trace_hex": "01015800000005000000000100000900000000000000000000000001000009000000000000000900000000000000010000000200000009000000000000000500000000000000040000000000000058f35365010000000300000000000000010160000000000000000001000002000000000000000100000000000000030000000000000009000000000000000300000001000000090000000000000005000000000000000400000000000000020000000000000058f35365010000000900000000000000",
+        "trace_len": 196,
+        "version": 1
+      },
+      "front_bytes": 244,
+      "front_sha256": "d57b7dbdfa0c1d400e3bca6a8d28da9b2af076f52a321af5ddb30c6c15f6c26b",
+      "header_bytes": 41,
+      "header_sha256": "1a16104ae6c6977e32a5611ddc5d0616ee18d9b2fd9e7ff1facdeb903fcf6038",
+      "middle_bytes": 0,
+      "middle_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 1,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 244,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 0,
+        "type": 786,
+        "version": 1
+      }
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "launcher_sha256": "10341474db5b13030fbf9428da4d9848a7468cc0bcda21356b6b0520306d9dc6",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffffa801c000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffffa5200000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffffa7f18000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffffa7ec7000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffffa4d3a000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffffa7e86000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffffa7e55000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffffa7e34000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffffa4b16000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffffa7e03000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffffa4968000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffffa7fe0000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffffa48c7000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "flush_transaction": 77,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "message_features": "CEPH_FEATURE_FLOCK | CEPH_FEATURE_EXPORT_PEER | CEPH_FEATURE_MDS_INLINE_DATA",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "ten freshly constructed native MClientCaps/MClientCapRelease/MClientLease/MClientSnap/MClientQuota messages canonically Message::encode encoded once and separately decoded with their middle segment; empty payloads required and decoded objects never re-encoded",
+  "wrapper_sha256": "1413693d2b9613f1247586f0a57adc700462a6c44c8bfa0b393fbd4aecb6e8c1"
+}

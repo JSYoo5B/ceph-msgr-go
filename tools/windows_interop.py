@@ -1,0 +1,360 @@
+"""Development-only Windows executables talking to an isolated WSL Ceph fixture."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+
+import go_test_annotations
+
+
+MODULE = "github.com/JSYoo5B/ceph-msgr-go"
+DAEMON_VERSION = "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)"
+SUITES = {
+    "api": ("integration", (
+        "TestCephContextAdmissionIntegration", "TestCephTellIntegration",
+        "TestCephNamedMonitorTellIntegration", "TestCephReadinessIntegration",
+        "TestCephSnapshotIntegration", "TestCephLogWatchIntegration",
+        "TestCephConfigStreamIntegration", "TestCephDigestIntegration",
+        "TestCephHostnameConfigIntegration",
+        "TestCephMonOSDMapsIntegration", "TestCephMonOSDMapsRecoveryIntegration",
+    )),
+    "client": ("cephmsgr", ("TestCephIntegration",)),
+}
+
+
+def required_passes(lines, package, tests):
+    """Exit zero alone can mean every opt-in test was skipped or unmatched."""
+    outcomes = {name: [] for name in tests}
+    package_outcomes = []
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except (ValueError, UnicodeError) as error:
+            raise ValueError("invalid test2json event") from error
+        if not isinstance(event, dict) or event.get("Package") != package:
+            raise ValueError("unexpected test2json package")
+        action, name = event.get("Action"), event.get("Test")
+        if action in ("pass", "fail", "skip"):
+            if name in outcomes:
+                outcomes[name].append(action)
+            elif name is None:
+                package_outcomes.append(action)
+            elif action != "pass":
+                raise ValueError("a subtest did not pass")
+    if package_outcomes != ["pass"]:
+        raise ValueError("suite did not report exactly one package pass")
+    missing = [name for name, events in outcomes.items() if events != ["pass"]]
+    if missing:
+        raise ValueError("required tests missing, skipped or failed: " + ", ".join(missing))
+    return list(tests)
+
+
+def proxy_endpoint(text):
+    value = text.strip()
+    if not re.fullmatch(r"127\.0\.0\.1:[0-9]{1,5}", value):
+        raise ValueError("fixture relay must use a Windows loopback endpoint")
+    if not 0 < int(value.rsplit(":", 1)[1]) < 65536:
+        raise ValueError("fixture relay port is out of range")
+    return value
+
+
+def native_environment():
+    if sys.platform != "win32":
+        raise RuntimeError("this verifier must execute on Windows")
+    env = os.environ.copy()
+    # Do not inherit selectors for special fixtures or unrelated test clusters.
+    for name in list(env):
+        if name.startswith("CEPH_MSGR_"):
+            del env[name]
+    env.update(CGO_ENABLED="0", GOTOOLCHAIN="local", GOWORK="off", GOOS="windows", GOARCH="amd64")
+    return env
+
+
+def command(args, *, cwd, env, timeout=300, capture=False, log=None):
+    result = subprocess.run(args, cwd=cwd, env=env, check=False, timeout=timeout,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            encoding="utf-8", errors="replace")
+    if log is not None:
+        with log.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(args) + "\n" + result.stdout)
+    if not capture or result.returncode:
+        print(result.stdout, end="", flush=True)
+    result.check_returncode()
+    return result
+
+
+def run_test_process(args, *, cwd, env, log, timeout=420):
+    """Join the native test runner and terminate only its owned tree on failure."""
+    if sys.platform != "win32":
+        raise RuntimeError("the native test process runner requires Windows")
+    process = subprocess.Popen(args, cwd=cwd, env=env, stdout=log,
+                               stderr=subprocess.STDOUT)
+    try:
+        return process.wait(timeout=timeout)
+    except BaseException:
+        cleanup_error = None
+        try:
+            cleanup = subprocess.run(
+                ["taskkill.exe", "/PID", str(process.pid), "/T", "/F"],
+                cwd=cwd, env=env, check=False, timeout=30,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                encoding="utf-8", errors="replace")
+            cleanup.check_returncode()
+        except Exception as error:
+            cleanup_error = error
+        try:
+            process.wait(timeout=30)
+        except Exception as error:
+            if cleanup_error is None:
+                cleanup_error = error
+        if cleanup_error is not None:
+            raise RuntimeError("could not confirm termination of owned Windows test process tree "
+                               + str(process.pid)) from cleanup_error
+        raise
+
+
+def new_evidence_directory(base):
+    base.mkdir(parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix="run-", dir=base))
+
+
+def wait_for_holder(holder, output, timeout=30):
+    deadline = time.monotonic() + timeout
+    while not (output / "holder.ready").exists():
+        if holder.poll() is not None or time.monotonic() >= deadline:
+            raise RuntimeError("foreground WSL session did not become ready")
+        time.sleep(0.1)
+
+
+def require_provider_running(provider):
+    code = provider.poll()
+    if code is not None:
+        raise RuntimeError("foreground WSL fixture exited unexpectedly with code " + str(code))
+
+
+def wait_for_provider(provider, output, timeout=900):
+    deadline = time.monotonic() + timeout
+    while not (output / "provider.ready").exists():
+        require_provider_running(provider)
+        if (output / "provider.error").exists() or (output / "provider.stopped").exists():
+            raise RuntimeError("fixture controller failed before readiness; see provider.log")
+        if time.monotonic() >= deadline:
+            raise RuntimeError("foreground WSL fixture did not become ready")
+        time.sleep(0.1)
+    require_provider_running(provider)
+    version = (output / "daemon-version").read_text(encoding="utf-8").strip()
+    if version != DAEMON_VERSION:
+        raise RuntimeError("fixture daemon version does not match the fixed Tentacle reference")
+    return version, proxy_endpoint((output / "proxy").read_text(encoding="utf-8"))
+
+
+def finish_provider(provider, output, stop_fixture, timeout=30):
+    # Publish cancellation before querying provider.pid: preflight may still be
+    # running, so absence of that marker does not prove the child has finished.
+    (output / "provider.stop").touch()
+    stop_error = None
+    try:
+        stop_fixture()
+    except BaseException as error:
+        stop_error = error
+    try:
+        code = provider.wait(timeout=timeout)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError("foreground WSL fixture did not exit after cleanup request; ownership retained") from error
+    if (output / "provider.cleanup.error").exists():
+        raise RuntimeError("fixture controller cleanup failed; ownership retained") from stop_error
+    if (output / "provider.pid").exists():
+        if not (output / "provider.stopped").exists():
+            raise RuntimeError("fixture controller exited without confirming cleanup") from stop_error
+    # The joined foreground process cannot publish a late PID. Its final
+    # markers, rather than an interrupted stop command, establish cleanup.
+    return code
+
+
+def check_relay(proxy, endpoint):
+    host, port = proxy_endpoint(proxy).rsplit(":", 1)
+    with socket.create_connection((host, int(port)), timeout=5) as connection:
+        encoded = endpoint.encode("ascii")
+        connection.sendall(len(encoded).to_bytes(2, "big") + encoded)
+        if connection.recv(1) != b"\x00":
+            raise RuntimeError("Windows relay did not reach the fixture MON listener")
+
+
+def run(distro, diagnostics):
+    project = Path(__file__).resolve().parent.parent
+    diagnostics = diagnostics.resolve()
+    diagnostics.mkdir(parents=True, exist_ok=True)
+    (diagnostics / "startup.json").write_text(json.dumps({"platform": sys.platform,
+        "distro": distro, "project": str(project)}, indent=2) + "\n", encoding="utf-8")
+    env = native_environment()
+
+    def execute(args, *, env=env, cwd=project, timeout=300, capture=False):
+        return command(args, cwd=cwd, env=env, timeout=timeout,
+                       capture=capture, log=diagnostics / "bootstrap.log")
+
+    host = json.loads(execute(
+        ["go", "env", "-json", "GOHOSTOS", "GOHOSTARCH", "GOOS", "GOARCH", "CGO_ENABLED"],
+        capture=True).stdout)
+    if host != {"GOHOSTOS": "windows", "GOHOSTARCH": "amd64", "GOOS": "windows",
+                "GOARCH": "amd64", "CGO_ENABLED": "0"}:
+        raise RuntimeError("expected a native Windows amd64 toolchain with CGO disabled")
+    external = execute(["go", "list", "-deps", "-f",
+                        "{{if not .Standard}}{{if not .Module.Main}}{{.ImportPath}}{{end}}{{end}}",
+                        "./cephmsgr"], capture=True).stdout.strip()
+    if external:
+        raise RuntimeError("product has non-standard-library dependencies")
+    revision = execute(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
+    version = execute(["go", "version"], capture=True).stdout.strip()
+    toolchain = re.search(r"\bgo([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[a-z]+[0-9]+)?\b", version)
+    if toolchain is None or tuple(map(int, toolchain.groups())) < (1, 26):
+        raise RuntimeError("the development fixture controller requires Go 1.26 or later")
+    out = Path(tempfile.mkdtemp(prefix="ceph-msgr-windows-", dir=os.getenv("RUNNER_TEMP")))
+    # --exec preserves argv: a default shell consumes Windows backslashes.
+    wsl = ["wsl.exe", "--distribution", distro, "--user", "root", "--exec"]
+    attempted = False
+    provider = None
+    provider_output = None
+    provider_exit = None
+    holder = None
+    holder_output = None
+    report = {"revision": revision, "go": version, "host": host,
+              "ceph": "20.2.4", "credential": "aes256k", "service_cipher": "aes256k",
+              "connection_mode": "secure", "wire_family": "IPv4", "transport": "WSL loopback relay",
+              "product_dependencies": "Go standard library", "suites": {}}
+    try:
+        for name, (package, _) in SUITES.items():
+            execute(["go", "test", "-c", "-o", str(out / (name + ".test.exe")), "./" + package])
+        linux = dict(env, GOOS="linux", GOARCH="amd64")
+        execute(["go", "build", "-o", str(out / "relay"), "./integration/relay"], env=linux)
+        execute(["go", "build", "-mod=readonly", "-o", str(out / "fixture-controller"), "."],
+                cwd=project / "integration/fixture", env=linux)
+
+        def wsl_path(path):
+            return execute(wsl + ["wslpath", "-a", "-u", str(path)],
+                           capture=True, timeout=60).stdout.strip()
+
+        fixture = wsl_path(project / "integration/windows-fixture.sh")
+        output = wsl_path(out)
+        target = wsl_path(diagnostics)
+
+        def fixture_action(action, timeout=60):
+            return execute(wsl + ["bash", fixture, action, output, target], timeout=timeout)
+
+        holder_output = (diagnostics / "holder.log").open("w", encoding="utf-8")
+        holder = subprocess.Popen(wsl + ["bash", fixture, "hold", output, target],
+                                  cwd=project, env=env, stdout=holder_output, stderr=subprocess.STDOUT)
+        wait_for_holder(holder, out)
+        provider_output = (diagnostics / "provider.log").open("w", encoding="utf-8")
+        provider = subprocess.Popen(wsl + ["bash", fixture, "start", output, target],
+                                    cwd=project, env=env, stdout=provider_output, stderr=subprocess.STDOUT)
+        attempted = True
+        daemon_version, proxy = wait_for_provider(provider, out)
+        report["fixture_provider"] = "github.com/JSYoo5B/ceph-testcontainers-go@v0.2.0"
+        report["daemon_version"] = daemon_version
+        report["fixture_image"] = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+        peers = json.loads((out / "peers.json").read_text())
+        manifest = json.loads((out / "fixture-manifest.json").read_text())
+        check_relay(proxy, peers["mon.a"])
+        require_provider_running(provider)
+        report["windows_relay_admission"] = True
+        env.update(CEPH_MSGR_MONITORS=",".join(peers["mon." + name] for name in ("a", "b", "c")),
+                   CEPH_MSGR_KEY_FILE=str(out / "key"), CEPH_MSGR_IDENTITY="client.test",
+                   CEPH_MSGR_FSID=manifest["fsid"], CEPH_MSGR_TEST_PEERS=json.dumps(peers),
+                   CEPH_MSGR_CONTROL_DIR=str(out), CEPH_MSGR_TEST_PROXY=proxy,
+                   CEPH_MSGR_TEST_SERVICE_CIPHER="aes256k", CEPH_MSGR_TEST_MGR_COUNT="2")
+        for name, (package, tests) in SUITES.items():
+            require_provider_running(provider)
+            full_package = MODULE + "/" + package
+            print("Executing Windows native " + name + " suite", flush=True)
+            log = diagnostics / (name + "-tests.jsonl")
+            with log.open("w", encoding="utf-8") as events:
+                result = run_test_process(
+                    ["go", "tool", "test2json", "-p", full_package, str(out / (name + ".test.exe")),
+                     "-test.v=test2json", "-test.timeout=6m", "-test.run=^(" + "|".join(tests) + ")$"],
+                    cwd=project, env=env, log=events, timeout=420)
+            lines = log.read_text(encoding="utf-8").splitlines()
+            for line in lines:
+                try:
+                    output_event = json.loads(line).get("Output", "")
+                except (ValueError, AttributeError):
+                    continue
+                if output_event:
+                    print(output_event, end="", flush=True)
+            if result:
+                for annotation in go_test_annotations.annotations(lines, result):
+                    print(annotation, flush=True)
+                raise RuntimeError(name + " native suite failed")
+            require_provider_running(provider)
+            report["suites"][name] = required_passes(lines, full_package, tests)
+        fixture_action("diagnostics")
+    except BaseException:
+        if attempted:
+            try:
+                fixture_action("diagnostics")
+            except Exception as error:
+                print("Could not collect fixture diagnostics: " + str(error), file=sys.stderr)
+        raise
+    finally:
+        try:
+            try:
+                if provider is not None:
+                    provider_exit = finish_provider(provider, out, lambda: fixture_action("stop", timeout=150))
+            finally:
+                # Do not end WSL lifetime while foreground startup or cleanup
+                # still owns resources. Failed joins retain both PID handles.
+                if holder is not None and (provider is None or provider.poll() is not None):
+                    (out / "holder.stop").touch()
+                    if holder.wait(timeout=30) != 0:
+                        raise RuntimeError("foreground WSL session did not finish successfully")
+        except BaseException as error:
+            marker = out / "container-name"
+            provider_marker = out / "provider.pid"
+            (diagnostics / "cleanup-failure.json").write_text(json.dumps({
+                "distro": distro, "fixture_output": str(out),
+                "container": marker.read_text(encoding="utf-8").strip() if marker.exists() else None,
+                "provider_pid": provider_marker.read_text(encoding="utf-8").strip() if provider_marker.exists() else None,
+                "provider_session_pid": provider.pid if provider is not None else None,
+                "holder_pid": holder.pid if holder is not None else None,
+                "error": str(error),
+            }, indent=2) + "\n", encoding="utf-8")
+            # Keep the ownership handle for the caller to complete cleanup.
+            raise
+        finally:
+            if provider_output is not None:
+                provider_output.close()
+            if holder_output is not None:
+                holder_output.close()
+        shutil.rmtree(out)
+    if provider_exit not in (None, 0):
+        raise RuntimeError("foreground WSL fixture finished with code " + str(provider_exit))
+    report["cleanup_complete"] = True
+    (diagnostics / "verification.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    print("Windows native interoperability verified: " + revision, flush=True)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--distro", required=True, help="dedicated WSL2 development distribution")
+    parser.add_argument("--diagnostics", type=Path, required=True)
+    args = parser.parse_args()
+    evidence = new_evidence_directory(args.diagnostics)
+    print("Windows evidence directory: " + str(evidence), flush=True)
+    try:
+        run(args.distro, evidence)
+    except Exception as error:
+        (evidence / "failure.json").write_text(json.dumps({
+            "error_type": type(error).__name__, "error": str(error),
+            "traceback": traceback.format_exc(),
+        }, indent=2) + "\n", encoding="utf-8")
+        message = str(error).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+        print("::error title=Windows interoperability verification::" + message, flush=True)
+        raise

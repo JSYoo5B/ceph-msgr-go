@@ -1,0 +1,351 @@
+{
+  "binary_sha256": "23f3243c857fa8f37f008d6b7dbfcef0ca32f5d9e0f2dee3de067b40ed8fe3df",
+  "build_driver_sha256": "f81bd34425c7051c5f679dd58e70455304241acefec639e3cae3472770808c92",
+  "builder_container_id": "9916c09d6c908c09efd5efecea995b0b1403b6a0cdaf7db08385750a0e302da8",
+  "builder_termination_completed": true,
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "fixtures": {
+    "call-native-reply-v6-eopnotsupp": {
+      "data_bytes": 0,
+      "decoded_operations": [
+        {
+          "argc": 0,
+          "class_len": 5,
+          "code": 5121,
+          "flags": 0,
+          "indata_hex": "",
+          "indata_len": 0,
+          "method_len": 4,
+          "outdata_hex": "",
+          "output_len": 0,
+          "payload_len": 0,
+          "result": 0,
+          "union_hex": "05040000000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 201,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 201,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "29b611eb3fc7333d0862bfbc1ce2fea4f046c6e6ee10c31d21227cc35aa0330b",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "call-native-reply-v6-eoverflow": {
+      "data_bytes": 0,
+      "decoded_operations": [
+        {
+          "argc": 0,
+          "class_len": 5,
+          "code": 5121,
+          "flags": 0,
+          "indata_hex": "",
+          "indata_len": 0,
+          "method_len": 26,
+          "outdata_hex": "",
+          "output_len": 520,
+          "payload_len": 0,
+          "result": -75,
+          "union_hex": "051a0000000000000802000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 201,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 0,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 201,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "ff66c18599bd76f4b7225cf43e6bc909101a7af8dd94b49d3f9f0f0fcf721341",
+      "data_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "call-native-reply-v6-positive": {
+      "data_bytes": 18,
+      "decoded_operations": [
+        {
+          "argc": 0,
+          "class_len": 5,
+          "code": 5121,
+          "flags": 0,
+          "indata_hex": "",
+          "indata_len": 0,
+          "method_len": 17,
+          "outdata_hex": "796f75206d69676874207365652074686973",
+          "output_len": 18,
+          "payload_len": 18,
+          "result": 42,
+          "union_hex": "05110000000000001200000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 201,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 18,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 201,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "544ac655b92f12b8f4e14155784cd585f2a0f32299dc57b831bede992dbf3c6b",
+      "data_sha256": "41bd8d0aa7ea592c46e4e09230172678c97a951b72da9a6efa9cebbf31edd8d8",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "call-native-reply-v6-read-output": {
+      "data_bytes": 14,
+      "decoded_operations": [
+        {
+          "argc": 0,
+          "class_len": 5,
+          "code": 5121,
+          "flags": 0,
+          "indata_hex": "",
+          "indata_len": 6,
+          "method_len": 9,
+          "outdata_hex": "48656c6c6f2c2054657374657221",
+          "output_len": 14,
+          "payload_len": 14,
+          "result": 0,
+          "union_hex": "05090006000000000e00000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 201,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 2,
+        "data_len": 14,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 201,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 43,
+        "version": 6
+      },
+      "front_sha256": "57cda140864fffb1474a1850cef98ffb7cbc97514f362b56edc1aad59845744f",
+      "data_sha256": "42459f55c5dd72ff7494f1aecb2128d0c6fc264680fa32ee781cd06762c1bbf0",
+      "header_sha256": "1c6f2b7ff75b7b68b0c2f6d8f462e454e5353c9053b5d1cb9db565a6e5505322"
+    },
+    "call-native-request-v6-all": {
+      "data_bytes": 27,
+      "decoded_operations": [
+        {
+          "cmp_mode": 1,
+          "cmp_op": 1,
+          "code": 4867,
+          "flags": 0,
+          "indata_hex": "6176",
+          "name_len": 1,
+          "outdata_hex": "",
+          "payload_len": 2,
+          "union_hex": "01000000010000000101000000000000000000000000000000000000",
+          "value_len": 1
+        },
+        {
+          "argc": 0,
+          "class_len": 5,
+          "code": 5121,
+          "flags": 0,
+          "indata_hex": "68656c6c6f77726974655f72657475726e5f646174615400ff",
+          "indata_len": 3,
+          "method_len": 17,
+          "outdata_hex": "",
+          "output_len": 0,
+          "payload_len": 25,
+          "union_hex": "05110003000000000000000000000000000000000000000000000000"
+        }
+      ],
+      "front_bytes": 249,
+      "header_bytes": 41,
+      "native_header": {
+        "ack_seq": 3,
+        "compat": 3,
+        "data_len": 27,
+        "data_off": 0,
+        "flags": 1,
+        "front_len": 249,
+        "middle_len": 0,
+        "priority": 127,
+        "reserved": 0,
+        "seq": 1,
+        "tid": 77,
+        "type": 42,
+        "version": 6
+      },
+      "front_sha256": "bdb4575b2a97b655989b2a9dc14f0d8d7c0ae95b2ef27fdb7940c6f678a5d625",
+      "data_sha256": "a02d1f7e083dd16f7be9e840c3ec4bae6c6790fc7aadd0be49525f9cc4f44c9f",
+      "header_sha256": "20e99f0e240771d043a3cbc8fe9bfeadb083e309ec975d2899c2d28a25b4a16e"
+    }
+  },
+  "generated_config_sha256": "822c996c07edba730f5f54ec99022ebfdecfbc55b92bdbaf53fe775548a5f5af",
+  "header_proof_scope": "native Message envelope settings and MessageFrame serialization of an explicit offline header2 projection; not ProtocolV2 live session execution",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "loader_audit": "\tlinux-vdso.so.1 (0x0000ffffb0b0c000)\n\tlibceph-common.so.2 => /native-cache/work/build/lib/libceph-common.so.2 (0x0000ffffade00000)\n\tlibresolv.so.2 => /lib64/libresolv.so.2 (0x0000ffffb09f8000)\n\tlibblkid.so.1 => /lib64/libblkid.so.1 (0x0000ffffaddaf000)\n\tlibcrypto.so.3 => /lib64/libcrypto.so.3 (0x0000ffffad8e9000)\n\tlibudev.so.1 => /lib64/libudev.so.1 (0x0000ffffad8a8000)\n\tlibz.so.1 => /lib64/libz.so.1 (0x0000ffffad877000)\n\tlibcap.so.2 => /lib64/libcap.so.2 (0x0000ffffad856000)\n\tlibstdc++.so.6 => /lib64/libstdc++.so.6 (0x0000ffffad632000)\n\tlibgcc_s.so.1 => /lib64/libgcc_s.so.1 (0x0000ffffad601000)\n\tlibc.so.6 => /lib64/libc.so.6 (0x0000ffffad453000)\n\t/lib/ld-linux-aarch64.so.1 (0x0000ffffb0ad0000)\n\tlibm.so.6 => /lib64/libm.so.6 (0x0000ffffad3b2000)\n",
+  "native_library": "ceph-common built from the same pinned source and official generated configuration as the wrapper",
+  "native_library_sha256": "6aeade266daf768deaa05ef44d5d8af1eaaf0421825696e445482a8e1bdfe24a",
+  "native_message_header_verified": true,
+  "native_payload_decoder_verified": true,
+  "native_payload_encoder_verified": true,
+  "offline_transport_inputs": {
+    "ack_sequence": 3,
+    "message_crc_flags": "MSG_CRC_ALL",
+    "priority": "CEPH_MSG_PRIO_DEFAULT",
+    "sequence": 1
+  },
+  "pinned_submodules": {
+    "src/BLAKE3": {
+      "archive_sha256": "88930a1b7f3f910eda85219d29197611ee8ef468b9617285233af885eab86533",
+      "commit": "92e4cd71be48fdf9a79e88ef37b8f415ec5ac210",
+      "repository": "BLAKE3-team/BLAKE3"
+    },
+    "src/erasure-code/jerasure/gf-complete": {
+      "archive_sha256": "8ff04510527262fbc741d9d84b1c9c6066e1dd909b3d5d37dc33dde27b0bc749",
+      "commit": "7e61b44404f0ed410c83cfd3947a52e88ae044e1",
+      "repository": "ceph/gf-complete"
+    },
+    "src/erasure-code/jerasure/jerasure": {
+      "archive_sha256": "d6c24102341e7ec40cc63925e3a8b53a39bff088c8c04f166991f69bd954457c",
+      "commit": "96c76b89d661c163f65a014b8042c9354ccf7f31",
+      "repository": "ceph/jerasure"
+    },
+    "src/fmt": {
+      "archive_sha256": "f94052c10b611fd374194ca6e0dc4d159459c0b370abfe9002c13058863b7039",
+      "commit": "0c9fce2ffefecfdce794e1859584e25877b7b592",
+      "repository": "ceph/fmt"
+    },
+    "src/isa-l": {
+      "archive_sha256": "569dd67a430d33400a147177b4e8d970a353d5528bfafd57da08f1bcffa50c25",
+      "commit": "bee5180a1517f8b5e70b02fcd66790c623536c5d",
+      "repository": "ceph/isa-l"
+    },
+    "src/rocksdb": {
+      "archive_sha256": "9ba915ce46e788e797aaae93d79f84e14ed32bb25965009b3f689194e0b3e8db",
+      "commit": "9fa4990159853479a222244574ca41202e4c95c1",
+      "repository": "ceph/rocksdb"
+    },
+    "src/xxHash": {
+      "archive_sha256": "716fbe4fc85ecd36488afbbc635b59b5ab6aba5ed3b69d4a32a46eae5a453d38",
+      "commit": "bbb27a5efb85b92a0486cf361a8635715a53f6ba",
+      "repository": "ceph/xxHash"
+    },
+    "src/zstd": {
+      "archive_sha256": "c05687566bf68a5182d11a3e3498060f5b4d4243cf3c7e72c02d3cd4dadaeda7",
+      "commit": "b706286adbba780006a47ef92df0ad7a785666b6",
+      "repository": "facebook/zstd"
+    }
+  },
+  "source_archive_sha256": "f2144fc4375532342657dc531e256f04aab51ad35e46beec6d6b940eeccbbc1d",
+  "source_archive_url": "https://codeload.github.com/ceph/ceph/tar.gz/7f793731f1b39eb4f465e960113d2363c311b964",
+  "status": "five freshly constructed native CALL messages directly encoded and separately decoded; decoded objects never re-encoded",
+  "wrapper_sha256": "dd33e5e4c222edd0f8ea14c62fc6b81285ec9f27d2be21e4190908055d0a21bf",
+  "generator": "tools/osd_call_native_encoder.cc",
+  "build_driver": "tools/osd_call_native_encoder.py",
+  "source_license": "MOSDOp/MOSDOpReply/Objecter/osd_types/PrimaryLogPG/osd_op_util/OSD/cls_hello and encoding: LGPL-2.1 notices; rados.h permits LGPL-2.1 or LGPL-3.0. This independent test wrapper invokes unchanged native code and copies no Ceph implementation.",
+  "source_files": {
+    "src/messages/MOSDOp.h": "68d6b0ed89f97761bb0fc575d3d5c17edd9003b8c0ac820d53728f945ac205f5",
+    "src/messages/MOSDOpReply.h": "6bd3e2cb240e3d245480d571e21a7ae6430c416aaa45c611d9ba5063e217d444",
+    "src/osdc/Objecter.h": "a821492fba9a486b0ac715f71b77a61a5dd10c6949ec56d48add6d054a459480",
+    "src/osd/osd_types.h": "8baa31f93e0694b7986381265f6af2294b23ce7cf98f8caf5bfde66c9abb84d1",
+    "src/osd/osd_types.cc": "614710847acaebd82e17787b91b38e07198eec58488cd9f6d7283499e0fa6d3b",
+    "src/osd/PrimaryLogPG.cc": "b05065f11e23e3920fe4d63d8d35e364a4289945f40c5791566d861fbc2ee28c",
+    "src/osd/osd_op_util.cc": "f3b42591488d29cdbf3d7a0599ac2e2f56171d3b185f0f6a24d54959a3edc701",
+    "src/osd/OSD.cc": "f7757409b54b01a1cf216d2e368d60ba457f24e9e6b0a1f23d6f6234ed24cd4a",
+    "src/osd/ClassHandler.cc": "8d7156c35c5be06537146177e2b1089eab893f5057f4372828293efffd4e278d",
+    "src/cls/hello/cls_hello.cc": "a0a6fb3020e59ee548a4122bdaf90269d7965b7a0b8b23eff8eb3d1c4d061bc4",
+    "src/include/rados.h": "abd9410e17a9b93ad5c666197164f0b7f86a07da361e0cbf40451f93958a01fb",
+    "src/include/encoding.h": "6cbf988d836652f2d9410502dc918903cd4bf6a9f6aad5afdbcc302317352b06",
+    "src/include/buffer.h": "3474fa9f1d88945a5b351fd459fff1390d64fbfa90bc9f512e65cacecb6c3c3b",
+    "src/msg/Message.h": "81f9b84fc9f6b2bdd93aad232a441eae268ac337a1c8a2075b927b7a954a629a",
+    "src/msg/Message.cc": "9c778ea7185e1910fb6d97bbfdcfe446a52f4eac94ff9a89faf5a3cfcdf0f562",
+    "src/include/msgr.h": "7eb1d06765ef153f6480b0a28c410df7c56946e42ac98637139079b372134e23",
+    "src/msg/async/frames_v2.h": "67c10757b0692a45854333c55a6d67bd099e8937a7511d834401fb9f673dea94",
+    "COPYING": "26f44ffbf74cdf08b3e1fdcaf1d4cfa3893ba62107950e086868a686d5ff86c2"
+  },
+  "logical_inputs": {
+    "object": "call-codec",
+    "pool": 7,
+    "key": "route-key",
+    "namespace": "tenant",
+    "raw_hash": 287454020,
+    "client_inc": 1,
+    "map_epoch": 11,
+    "tid": 77,
+    "mtime_seconds": 1700000000,
+    "mtime_nanoseconds": 5,
+    "mtime_scope": "explicit caller mtime only for write-mode vectors (request-v6-all, positive, eoverflow); read-mode vectors (read-output, eopnotsupp) carry zero mtime",
+    "snap": "NOSNAP=-2",
+    "retry_attempt": 0,
+    "request_order": [
+      "CMPXATTR(name 61, value 76, EQ=1, STRING=1)",
+      "CALL(hello, write_return_data, input 5400ff)"
+    ],
+    "reply_requests": {
+      "read-output": "CALL(hello, say_hello, input 546573746572) read mode",
+      "positive": "CALL(hello, write_return_data, empty input) write mode",
+      "eoverflow": "CALL(hello, write_too_much_return_data, empty input) write mode",
+      "eopnotsupp": "CALL(hello, nope, empty input) read mode"
+    },
+    "flags": "CALL READ/WRITE is the explicit caller mode (CALL is RD|EXEC, so ceph_osd_op_mode_modify cannot select WRITE; the OSD classifies by registered method flags, osd_op_util.cc 189-204); CMPXATTR READ derived by native ceph_osd_op_mode_read; ONDISK and RETURNVEC explicitly requested. request-v6-all is READ|WRITE|ONDISK|RETURNVEC.",
+    "native_builder": "ObjectOperation::cmpxattr(std::string_view, uint8_t, uint8_t, const buffer::list&) (pinned Objecter.h 922-925) then call(const char*, const char*, buffer::list&) (1404-1406), the only three-argument call overload, which add_call (227-242) turns into u8 class_len, u8 method_len, argc 0, u32 indata_len and indata class bytes, method bytes, input bytes"
+  },
+  "reply_construction_scope": [
+    "Logical replies are freshly constructed codec inputs, not daemon-produced replies or proof of class loading, method execution, staging, durability, caps, osd_max_write_op_reply_len or EOPNOTSUPP semantics.",
+    "The public MOSDOpReply constructor keeps the request READ/WRITE/RETURNVEC mode bits and replaces only ONDISK/ONNVRAM/ACK with the explicit acktype: ACK|ONDISK for read-output, positive and eoverflow; ONDISK for eopnotsupp.",
+    "read-output follows execute_ctx without a staged write: complete_read_ctx adds ACK|ONDISK (PrimaryLogPG.cc 9220) and sets eversion_t() with the object user version (9208-9213); the logical user version is 19.",
+    "positive follows the commit path: do_osd_ops keeps the method result 42 (8205-8213), prepare_transaction returns it (9042), the RETURNVEC bound admits 18 bytes (4288-4301), set_reply_versions(at_version, user_at_version) (4325) and the on-commit callback adds ACK|ONDISK (4387); the logical versions are 11'20 and 20.",
+    "eoverflow follows the RETURNVEC bound: the CALL handler records extent.length = outdata.length() = 520 (6257; cls_hello.cc 172-188 appends a 52-byte sentence ten times), then 4294-4300 set the aggregate and per-op result to -EOVERFLOW and clear outdata; the negative result takes complete_read_ctx (4316-4322), which adds ACK|ONDISK and sets no versions, so versions stay zero.",
+    "eopnotsupp follows the pre-execution refusal: OpInfo::set_from_op maps get_method_flags -ENOENT to -EOPNOTSUPP (osd_op_util.cc 189-195), do_op calls reply_op_error (PrimaryLogPG.cc 2051-2054), and OSDService::reply_op_error (OSD.cc 1635-1648) keeps only the request ACK|ONDISK bits (ONDISK for this request), zero versions, and the unexecuted operation echo with per-op result 0 and extent.length 0.",
+    "Public claim_ops supplies input-union echoes, explicit per-op results, the recorded extent.length and output bytes. Native merge_osd_op_vector_out_data independently derives payload_len from outdata (14, 18, 0, 0)."
+  ],
+  "native_decoder_scope": "Separate new MOSDOp/MOSDOpReply objects receive only bytes directly generated by the fresh native encoder; native decode_payload verifies each packed union and request indata/reply outdata/result against encoded native operations. Decoded objects are never encoded or re-exported.",
+  "build_receipt": {
+    "completed_at": "2026-10-15T09:52:34+09:00",
+    "official_configuration": "Existing pinned SDK cache and official CMake generated acconfig.h; only new CALL target appended behind if(EXISTS wrapper), existing targets unchanged",
+    "compiler": "GCC toolset 14, C++20, Debug -O0 -g0",
+    "native_library_cache": "same-source library SHA matches existing mutation/xattr/OMAP read/OMAP header-write/OMAP_CMP/OMAPRMKEYRANGE proofs; no common library rebuild",
+    "cleanup": "public Terminate completed 2026-10-15T09:52:34+09:00; docker ps -a --filter label=ceph-msgr-go.native-encoder and docker inspect of the builder ID afterwards found no container",
+    "attempts": "attempt1 succeeded on the first compile and run; no failed compile or run preceded it",
+    "encoding_log": "call-native-request-v6-all\t249\t27\ncall-native-reply-v6-read-output\t201\t14\ncall-native-reply-v6-positive\t201\t18\ncall-native-reply-v6-eoverflow\t201\t0\ncall-native-reply-v6-eopnotsupp\t201\t0\n"
+  },
+  "native_library_matches_mutation_receipt": true,
+  "native_library_matches_xattr_receipt": true,
+  "native_library_matches_omap_read_receipt": true,
+  "native_library_matches_omap_write_receipt": true,
+  "native_library_matches_omap_cmp_receipt": true,
+  "native_library_matches_omap_range_receipt": true
+}

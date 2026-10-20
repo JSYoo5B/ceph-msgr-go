@@ -1,0 +1,5490 @@
+{
+  "schema_version": 1,
+  "native_source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "native_only": true,
+  "product_support_claimed": false,
+  "scope": "Closed native librados cache-tier behavior and scoped authorization probe; no product Go client execution or support claim.",
+  "source_audit": {
+    "bytes": 286168,
+    "sha256": "24169e782a68d4559a164a39fd93d5c8c500f07259ee64bde93701906da57995",
+    "overlay": [
+      "integration/fixture/main.go",
+      "integration/fixture/diagnostics.go",
+      "integration/fixture/osd_ignore_cache_probe.go",
+      "integration/fixture/osd_ignore_cache_probe_test.go",
+      "tools/osd_ignore_cache_oracle.py",
+      "tools/test_osd_ignore_cache_oracle.py"
+    ],
+    "inventory_files": 1591,
+    "selected_source_hashes": [
+      {
+        "file": "integration/fixture/main.go",
+        "bytes": 19338,
+        "sha256": "7f4b1bad5dc3c3038b144a14cbe5b47366ce2fed70ea62eb531a656eb3be4d5d"
+      },
+      {
+        "file": "integration/fixture/diagnostics.go",
+        "bytes": 10332,
+        "sha256": "4b5db2653b17d93bec6620750434286d747a4c871dab82609b9f20a9882eb8ac"
+      },
+      {
+        "file": "integration/fixture/osd_ignore_cache_probe.go",
+        "bytes": 17315,
+        "sha256": "e34cb1f5f31620ef82a7566fb611fd575f3e32bdba8dc1ae0e334223394969d3"
+      },
+      {
+        "file": "integration/fixture/osd_ignore_cache_probe_test.go",
+        "bytes": 5967,
+        "sha256": "9851ab162759aa9e2f43bd9c49c6706d110fcdc87c5d7da9abda1c0b26b01e88"
+      },
+      {
+        "file": "tools/osd_ignore_cache_oracle.py",
+        "bytes": 14810,
+        "sha256": "61cca4bdaa8ee2aa335c3d7ce2709702ddd3616ec147b6659672c0e0e07f298f"
+      },
+      {
+        "file": "tools/test_osd_ignore_cache_oracle.py",
+        "bytes": 10215,
+        "sha256": "d201305242aa7056f75dd4a9c29ae58b198b18d2a01b43147339cec92322474a"
+      },
+      {
+        "file": "tools/osd_mutation_oracle.py",
+        "bytes": 23709,
+        "sha256": "6199e7322eeb7cab68d3a811d26d5da1bdd9a641851e42b903574fca2c476f95"
+      },
+      {
+        "file": "tools/osd_oracle.py",
+        "bytes": 9765,
+        "sha256": "06ac30a2e9d66319db3e661f5163280e8c11fd359bc7d00af404bbedbd267517"
+      }
+    ]
+  },
+  "runs": {
+    "crc-ipv4": {
+      "directory": "<path>",
+      "run": {
+        "profile": "crc-ipv4",
+        "native_only": true,
+        "start": "2026-10-18T06:43:23.547634+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:44:57.566007+00:00"
+      },
+      "probe": {
+        "schema_version": 1,
+        "native_only": true,
+        "product_support_claimed": false,
+        "complete": true,
+        "plan": {
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "fsid": "045575f6-fb2d-49ce-8741-575fd16879e6",
+          "token": "5b70e249b4b3",
+          "base": "ceph-msgr-cache-base-5b70e249b4b3",
+          "tier": "ceph-msgr-cache-tier-5b70e249b4b3",
+          "namespace": "cache-probe",
+          "clients": {
+            "base": "client.cache-base-5b70e249b4b3",
+            "ro": "client.cache-ro-5b70e249b4b3",
+            "rw": "client.cache-rw-5b70e249b4b3"
+          }
+        },
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "architecture": "amd64",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "source_sha256": {
+          "integration/fixture/osd_ignore_cache_probe.go": "e34cb1f5f31620ef82a7566fb611fd575f3e32bdba8dc1ae0e334223394969d3",
+          "tools/osd_ignore_cache_oracle.py": "61cca4bdaa8ee2aa335c3d7ce2709702ddd3616ec147b6659672c0e0e07f298f",
+          "tools/osd_mutation_oracle.py": "6199e7322eeb7cab68d3a811d26d5da1bdd9a641851e42b903574fca2c476f95",
+          "tools/osd_oracle.py": "06ac30a2e9d66319db3e661f5163280e8c11fd359bc7d00af404bbedbd267517"
+        },
+        "configuration": {
+          "auth_ticket_ttl": "12s",
+          "connection_mode": "crc",
+          "ip_family": "4",
+          "key_type": "aes",
+          "osd_store": "bluestore",
+          "service_cipher": "aes",
+          "service_ticket_ttl": "12s"
+        },
+        "steps": [
+          {
+            "action": "create-pool-ceph-msgr-cache-base-5b70e249b4b3",
+            "state": "completed"
+          },
+          {
+            "action": "create-pool-ceph-msgr-cache-tier-5b70e249b4b3",
+            "state": "completed"
+          },
+          {
+            "action": "create-client-rw",
+            "state": "completed"
+          },
+          {
+            "action": "create-client-ro",
+            "state": "completed"
+          },
+          {
+            "action": "create-client-base",
+            "state": "completed"
+          },
+          {
+            "action": "attach-tier",
+            "state": "completed"
+          },
+          {
+            "action": "writeback-mode",
+            "state": "completed"
+          },
+          {
+            "action": "native-fixed-matrix",
+            "state": "completed"
+          },
+          {
+            "action": "detach-tier",
+            "state": "completed"
+          },
+          {
+            "action": "enable-owned-pool-removal",
+            "state": "completed"
+          },
+          {
+            "action": "remove-pool-ceph-msgr-cache-base-5b70e249b4b3",
+            "state": "completed"
+          },
+          {
+            "action": "remove-rule-tc-ceph-msgr-cache-base-5b70e249b4b3-replicated",
+            "state": "completed"
+          },
+          {
+            "action": "remove-pool-ceph-msgr-cache-tier-5b70e249b4b3",
+            "state": "completed"
+          },
+          {
+            "action": "remove-rule-tc-ceph-msgr-cache-tier-5b70e249b4b3-replicated",
+            "state": "completed"
+          },
+          {
+            "action": "restore-pool-removal-baseline",
+            "state": "completed"
+          },
+          {
+            "action": "remove-client-rw",
+            "state": "completed"
+          },
+          {
+            "action": "remove-client-ro",
+            "state": "completed"
+          },
+          {
+            "action": "remove-client-base",
+            "state": "completed"
+          }
+        ]
+      },
+      "plan": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "fsid": "045575f6-fb2d-49ce-8741-575fd16879e6",
+        "token": "5b70e249b4b3",
+        "base": "ceph-msgr-cache-base-5b70e249b4b3",
+        "tier": "ceph-msgr-cache-tier-5b70e249b4b3",
+        "namespace": "cache-probe",
+        "clients": {
+          "base": "client.cache-base-5b70e249b4b3",
+          "ro": "client.cache-ro-5b70e249b4b3",
+          "rw": "client.cache-rw-5b70e249b4b3"
+        }
+      },
+      "native": {
+        "complete": true,
+        "native_identities": {
+          "base": {
+            "global_id": 4824,
+            "name": "client.cache-base-5b70e249b4b3"
+          },
+          "observer": {
+            "global_id": 14675,
+            "name": "client.test"
+          },
+          "ro": {
+            "global_id": 4818,
+            "name": "client.cache-ro-5b70e249b4b3"
+          },
+          "rw": {
+            "global_id": 4812,
+            "name": "client.cache-rw-5b70e249b4b3"
+          }
+        },
+        "placements": [
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 2218048876,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "miss",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.8434bd6c",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 2621858526,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "write-normal",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.9c4662de",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 257196905,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "write-ignore",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.f548369",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 2683214497,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "delete-normal",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.9fee9aa1",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 1736349049,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "delete-ignore",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.677e9579",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 2218048876,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "miss",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.8434bd6c",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 2621858526,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "write-normal",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.9c4662de",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 257196905,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "write-ignore",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.f548369",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 2683214497,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "delete-normal",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.9fee9aa1",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:172.18.0.8:6800/459377327",
+            "epoch": 27,
+            "hash": 1736349049,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "delete-ignore",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.677e9579",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          }
+        ],
+        "plan": {
+          "base": "ceph-msgr-cache-base-5b70e249b4b3",
+          "clients": {
+            "base": "client.cache-base-5b70e249b4b3",
+            "ro": "client.cache-ro-5b70e249b4b3",
+            "rw": "client.cache-rw-5b70e249b4b3"
+          },
+          "fsid": "045575f6-fb2d-49ce-8741-575fd16879e6",
+          "namespace": "cache-probe",
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "tier": "ceph-msgr-cache-tier-5b70e249b4b3",
+          "token": "5b70e249b4b3"
+        },
+        "schema_version": 1,
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "steps": [
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-miss",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-write-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 2
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-write-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-write-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-write-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-write-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-write-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-delete-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-delete-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-delete-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-delete-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-delete-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-delete-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "ignore-cache-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "miss-still-absent",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "normal-read-promotes",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "promoted-tier",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "promoted-base-unchanged",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "write-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "write-normal-tier",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "write-normal-base-unchanged",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "write-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "write-ignore-tier",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "write-ignore-base-unchanged",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-normal-promote",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 6
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-normal-local-absent",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-normal-subsequent-normal-read",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-normal-base-preserved",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-normal-tier-behavior",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-ignore-promote",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "delete-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 8
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-ignore-local-absent",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-ignore-subsequent-normal-read",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-ignore-base-preserved",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-ignore-tier-behavior",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "auth-before",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "ro",
+            "label": "scoped-ro-read",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "ro",
+            "label": "scoped-ro-write-refused",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -1,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "base",
+            "label": "base-only-tier-read-refused",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -1,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "tier-rw-base-read-refused",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": -1,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "tier-rw-foreign-namespace-refused",
+            "may_mutate": false,
+            "namespace": "cache-foreign",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -1,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "base",
+            "label": "base-only-base-read",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "auth-after",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-5b70e249b4b3-miss",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 10
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-5b70e249b4b3-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-5b70e249b4b3-write-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 11
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-5b70e249b4b3-write-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-5b70e249b4b3-write-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 12
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-5b70e249b4b3-write-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-5b70e249b4b3-delete-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 13
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-5b70e249b4b3-delete-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-5b70e249b4b3-delete-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 14
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-5b70e249b4b3-delete-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-5b70e249b4b3-miss",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 6
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-5b70e249b4b3-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-5b70e249b4b3-write-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 7
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-5b70e249b4b3-write-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-5b70e249b4b3-write-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 8
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-5b70e249b4b3-write-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-5b70e249b4b3-delete-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 9
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-5b70e249b4b3-delete-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-5b70e249b4b3-delete-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": 0,
+              "version": 10
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-5b70e249b4b3-delete-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-5b70e249b4b3",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          }
+        ],
+        "whiteout_evidence": "subsequent native read behavior only; raw FLAG_WHITEOUT was not observed"
+      },
+      "attached": {
+        "epoch": 27,
+        "fsid": "045575f6-fb2d-49ce-8741-575fd16879e6",
+        "created": "2026-10-18T06:43:28.610871+0000",
+        "modified": "2026-10-18T06:44:31.970216+0000",
+        "last_up_change": "2026-10-18T06:43:51.714738+0000",
+        "last_in_change": "2026-10-18T06:43:49.289357+0000",
+        "flags": "sortbitwise,recovery_deletes,purged_snapdirs,pglog_hardlimit",
+        "flags_num": 5799936,
+        "flags_set": [
+          "pglog_hardlimit",
+          "purged_snapdirs",
+          "recovery_deletes",
+          "sortbitwise"
+        ],
+        "crush_version": 6,
+        "full_ratio": 0.949999988079071,
+        "backfillfull_ratio": 0.8999999761581421,
+        "nearfull_ratio": 0.8500000238418579,
+        "cluster_snapshot": "",
+        "pool_max": 4,
+        "max_osd": 1,
+        "require_min_compat_client": "luminous",
+        "min_compat_client": "firefly",
+        "require_osd_release": "tentacle",
+        "allow_crimson": false,
+        "pools": [
+          {
+            "pool": 1,
+            "pool_name": ".mgr",
+            "create_time": "2026-10-18T06:43:52.635179+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 0,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "9",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 0,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {
+              "pg_num_max": 32,
+              "pg_num_min": 1
+            },
+            "application_metadata": {
+              "mgr": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 2,
+            "pool_name": "ceph-msgr-osd-fixture",
+            "create_time": "2026-10-18T06:44:03.396091+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 1,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "13",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 0,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {},
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 3,
+            "pool_name": "ceph-msgr-cache-base-5b70e249b4b3",
+            "create_time": "2026-10-18T06:44:14.951733+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 2,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "26",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 26,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [
+              4
+            ],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {
+              "rados": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 4,
+            "pool_name": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "create_time": "2026-10-18T06:44:21.040718+0000",
+            "flags": 8,
+            "flags_names": "incomplete_clones",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 3,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "27",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 26,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": 3,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "writeback",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {
+              "rados": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          }
+        ],
+        "osds": [
+          {
+            "osd": 0,
+            "uuid": "c05d8352-763f-409b-b16c-af8dd6509d66",
+            "up": 1,
+            "in": 1,
+            "weight": 1,
+            "primary_affinity": 1,
+            "last_clean_begin": 0,
+            "last_clean_end": 0,
+            "up_from": 4,
+            "up_thru": 21,
+            "down_at": 0,
+            "lost_at": 0,
+            "public_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "172.18.0.8:6800",
+                  "nonce": 459377327
+                }
+              ]
+            },
+            "cluster_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "172.18.0.8:6801",
+                  "nonce": 459377327
+                }
+              ]
+            },
+            "heartbeat_back_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "172.18.0.8:6803",
+                  "nonce": 459377327
+                }
+              ]
+            },
+            "heartbeat_front_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "172.18.0.8:6802",
+                  "nonce": 459377327
+                }
+              ]
+            },
+            "public_addr": "172.18.0.8:6800/459377327",
+            "cluster_addr": "172.18.0.8:6801/459377327",
+            "heartbeat_back_addr": "172.18.0.8:6803/459377327",
+            "heartbeat_front_addr": "172.18.0.8:6802/459377327",
+            "state": [
+              "exists",
+              "up"
+            ]
+          }
+        ],
+        "osd_xinfo": [
+          {
+            "osd": 0,
+            "down_stamp": "0.000000",
+            "laggy_probability": 0,
+            "laggy_interval": 0,
+            "features": 4541880224203014143,
+            "old_weight": 0,
+            "last_purged_snaps_scrub": "2026-10-18T06:43:51.560857+0000",
+            "dead_epoch": 0
+          }
+        ],
+        "pg_upmap": [],
+        "pg_upmap_items": [],
+        "pg_upmap_primaries": [],
+        "pg_temp": [],
+        "primary_temp": [],
+        "blocklist": {},
+        "range_blocklist": {},
+        "erasure_code_profiles": {
+          "default": {
+            "k": "2",
+            "m": "2",
+            "plugin": "isa",
+            "technique": "reed_sol_van"
+          }
+        },
+        "removed_snaps_queue": [],
+        "new_removed_snaps": [],
+        "new_purged_snaps": [],
+        "crush_node_flags": {},
+        "device_class_flags": {},
+        "stretch_mode": {
+          "stretch_mode_enabled": false,
+          "stretch_bucket_count": 0,
+          "degraded_stretch_mode": 0,
+          "recovering_stretch_mode": 0,
+          "stretch_mode_bucket": 0
+        }
+      },
+      "detached": {
+        "epoch": 28,
+        "fsid": "045575f6-fb2d-49ce-8741-575fd16879e6",
+        "created": "2026-10-18T06:43:28.610871+0000",
+        "modified": "2026-10-18T06:44:32.982182+0000",
+        "last_up_change": "2026-10-18T06:43:51.714738+0000",
+        "last_in_change": "2026-10-18T06:43:49.289357+0000",
+        "flags": "sortbitwise,recovery_deletes,purged_snapdirs,pglog_hardlimit",
+        "flags_num": 5799936,
+        "flags_set": [
+          "pglog_hardlimit",
+          "purged_snapdirs",
+          "recovery_deletes",
+          "sortbitwise"
+        ],
+        "crush_version": 6,
+        "full_ratio": 0.949999988079071,
+        "backfillfull_ratio": 0.8999999761581421,
+        "nearfull_ratio": 0.8500000238418579,
+        "cluster_snapshot": "",
+        "pool_max": 4,
+        "max_osd": 1,
+        "require_min_compat_client": "luminous",
+        "min_compat_client": "argonaut",
+        "require_osd_release": "tentacle",
+        "allow_crimson": false,
+        "pools": [
+          {
+            "pool": 1,
+            "pool_name": ".mgr",
+            "create_time": "2026-10-18T06:43:52.635179+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 0,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "9",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 0,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {
+              "pg_num_max": 32,
+              "pg_num_min": 1
+            },
+            "application_metadata": {
+              "mgr": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 2,
+            "pool_name": "ceph-msgr-osd-fixture",
+            "create_time": "2026-10-18T06:44:03.396091+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 1,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "13",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 0,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {},
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 3,
+            "pool_name": "ceph-msgr-cache-base-5b70e249b4b3",
+            "create_time": "2026-10-18T06:44:14.951733+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 2,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "28",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 26,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {
+              "rados": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 4,
+            "pool_name": "ceph-msgr-cache-tier-5b70e249b4b3",
+            "create_time": "2026-10-18T06:44:21.040718+0000",
+            "flags": 8,
+            "flags_names": "incomplete_clones",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 3,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "28",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 26,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 0,
+            "cache_target_dirty_high_ratio_micro": 0,
+            "cache_target_full_ratio_micro": 0,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {
+              "rados": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          }
+        ],
+        "osds": [
+          {
+            "osd": 0,
+            "uuid": "c05d8352-763f-409b-b16c-af8dd6509d66",
+            "up": 1,
+            "in": 1,
+            "weight": 1,
+            "primary_affinity": 1,
+            "last_clean_begin": 0,
+            "last_clean_end": 0,
+            "up_from": 4,
+            "up_thru": 21,
+            "down_at": 0,
+            "lost_at": 0,
+            "public_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "172.18.0.8:6800",
+                  "nonce": 459377327
+                }
+              ]
+            },
+            "cluster_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "172.18.0.8:6801",
+                  "nonce": 459377327
+                }
+              ]
+            },
+            "heartbeat_back_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "172.18.0.8:6803",
+                  "nonce": 459377327
+                }
+              ]
+            },
+            "heartbeat_front_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "172.18.0.8:6802",
+                  "nonce": 459377327
+                }
+              ]
+            },
+            "public_addr": "172.18.0.8:6800/459377327",
+            "cluster_addr": "172.18.0.8:6801/459377327",
+            "heartbeat_back_addr": "172.18.0.8:6803/459377327",
+            "heartbeat_front_addr": "172.18.0.8:6802/459377327",
+            "state": [
+              "exists",
+              "up"
+            ]
+          }
+        ],
+        "osd_xinfo": [
+          {
+            "osd": 0,
+            "down_stamp": "0.000000",
+            "laggy_probability": 0,
+            "laggy_interval": 0,
+            "features": 4541880224203014143,
+            "old_weight": 0,
+            "last_purged_snaps_scrub": "2026-10-18T06:43:51.560857+0000",
+            "dead_epoch": 0
+          }
+        ],
+        "pg_upmap": [],
+        "pg_upmap_items": [],
+        "pg_upmap_primaries": [],
+        "pg_temp": [],
+        "primary_temp": [],
+        "blocklist": {},
+        "range_blocklist": {},
+        "erasure_code_profiles": {
+          "default": {
+            "k": "2",
+            "m": "2",
+            "plugin": "isa",
+            "technique": "reed_sol_van"
+          }
+        },
+        "removed_snaps_queue": [],
+        "new_removed_snaps": [],
+        "new_purged_snaps": [],
+        "crush_node_flags": {},
+        "device_class_flags": {},
+        "stretch_mode": {
+          "stretch_mode_enabled": false,
+          "stretch_bucket_count": 0,
+          "degraded_stretch_mode": 0,
+          "recovering_stretch_mode": 0,
+          "stretch_mode_bucket": 0
+        }
+      },
+      "command": {
+        "Stdout": "eyJjb21wbGV0ZSI6IHRydWUsICJzdGVwcyI6IDY2fQo=",
+        "Stderr": "",
+        "ExitCode": 0,
+        "TimedOut": false,
+        "StdoutTruncated": false,
+        "StderrTruncated": false,
+        "InputWritten": 0,
+        "InputDelivered": 0,
+        "InputEOF": false
+      },
+      "cleanup_audit": {
+        "containers": {
+          "control": {
+            "id": "c689b3ac5fa062a7286eec8225ff240f1cf080b42843d767349a584018bc678d",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "382b66b3a2d7281b12b8770f14e89eb774131b85593f59e13e3c5bda4c5f4a5b",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "1e8176f115c26f5b9660fd307b630ad3c9bd9f009e370d0f17ff807796d84ec1",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "b84eefd7976661443905399d3548304bb0925b4cfaf4cc506135405c6d7837f3",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "ee7346fa5f0efd9d99afad5866b97cc4e2636b73bce5c70e660752a2522a53e6",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "d98038b63fca6ee375b440f609613426efd5111022eb597143ece96d40ee0a4d",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "ffc84438f4345fbcf65cace76cd08203ec0393bebe2d289aa6ae3dadc8989161",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "ac3bfc8793d28deaf1e2e2c56a3e65b5c8eab89e684979aeb1532d791e63378d",
+            "exists": false
+          }
+        },
+        "network": "c6c4fd15-1741-42d2-a5c0-59dfd94264da",
+        "network_exists": false
+      },
+      "independent_audit": {
+        "passed": true,
+        "completed_controller_steps": 18,
+        "completed_capi_calls": 66,
+        "coherent_placements": 10,
+        "same_plan_and_fsid": true,
+        "four_distinct_native_global_ids": true,
+        "base_bytes_size_version_mtime_preserved": true,
+        "authorization_denials_preserved_tier_snapshot": true,
+        "detached_relationship_verified": true,
+        "all_eight_containers_absent": true,
+        "network_absent": true,
+        "cleanup_gate_evidence": "Completed frozen controller: owned pools/rules removed, config override absent and effective mon_allow_pool_delete=false, owned clients absent, owned pool names absent. These final inventories are checked in code but not separately archived."
+      },
+      "runtime": "container"
+    },
+    "secure-ipv6": {
+      "directory": "<path>",
+      "run": {
+        "profile": "secure-ipv6",
+        "native_only": true,
+        "start": "2026-10-18T06:47:10.552393+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T06:48:43.947289+00:00"
+      },
+      "probe": {
+        "schema_version": 1,
+        "native_only": true,
+        "product_support_claimed": false,
+        "complete": true,
+        "plan": {
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "fsid": "477ca0dc-a27b-4eed-87f4-d70996e23c8c",
+          "token": "72ed401d4592",
+          "base": "ceph-msgr-cache-base-72ed401d4592",
+          "tier": "ceph-msgr-cache-tier-72ed401d4592",
+          "namespace": "cache-probe",
+          "clients": {
+            "base": "client.cache-base-72ed401d4592",
+            "ro": "client.cache-ro-72ed401d4592",
+            "rw": "client.cache-rw-72ed401d4592"
+          }
+        },
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "architecture": "amd64",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "source_sha256": {
+          "integration/fixture/osd_ignore_cache_probe.go": "e34cb1f5f31620ef82a7566fb611fd575f3e32bdba8dc1ae0e334223394969d3",
+          "tools/osd_ignore_cache_oracle.py": "61cca4bdaa8ee2aa335c3d7ce2709702ddd3616ec147b6659672c0e0e07f298f",
+          "tools/osd_mutation_oracle.py": "6199e7322eeb7cab68d3a811d26d5da1bdd9a641851e42b903574fca2c476f95",
+          "tools/osd_oracle.py": "06ac30a2e9d66319db3e661f5163280e8c11fd359bc7d00af404bbedbd267517"
+        },
+        "configuration": {
+          "auth_ticket_ttl": "12s",
+          "connection_mode": "secure",
+          "ip_family": "6",
+          "key_type": "aes256k",
+          "osd_store": "bluestore",
+          "service_cipher": "aes256k",
+          "service_ticket_ttl": "12s"
+        },
+        "steps": [
+          {
+            "action": "create-pool-ceph-msgr-cache-base-72ed401d4592",
+            "state": "completed"
+          },
+          {
+            "action": "create-pool-ceph-msgr-cache-tier-72ed401d4592",
+            "state": "completed"
+          },
+          {
+            "action": "create-client-rw",
+            "state": "completed"
+          },
+          {
+            "action": "create-client-ro",
+            "state": "completed"
+          },
+          {
+            "action": "create-client-base",
+            "state": "completed"
+          },
+          {
+            "action": "attach-tier",
+            "state": "completed"
+          },
+          {
+            "action": "writeback-mode",
+            "state": "completed"
+          },
+          {
+            "action": "native-fixed-matrix",
+            "state": "completed"
+          },
+          {
+            "action": "detach-tier",
+            "state": "completed"
+          },
+          {
+            "action": "enable-owned-pool-removal",
+            "state": "completed"
+          },
+          {
+            "action": "remove-pool-ceph-msgr-cache-base-72ed401d4592",
+            "state": "completed"
+          },
+          {
+            "action": "remove-rule-tc-ceph-msgr-cache-base-72ed401d4592-replicated",
+            "state": "completed"
+          },
+          {
+            "action": "remove-pool-ceph-msgr-cache-tier-72ed401d4592",
+            "state": "completed"
+          },
+          {
+            "action": "remove-rule-tc-ceph-msgr-cache-tier-72ed401d4592-replicated",
+            "state": "completed"
+          },
+          {
+            "action": "restore-pool-removal-baseline",
+            "state": "completed"
+          },
+          {
+            "action": "remove-client-rw",
+            "state": "completed"
+          },
+          {
+            "action": "remove-client-ro",
+            "state": "completed"
+          },
+          {
+            "action": "remove-client-base",
+            "state": "completed"
+          }
+        ]
+      },
+      "plan": {
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "fsid": "477ca0dc-a27b-4eed-87f4-d70996e23c8c",
+        "token": "72ed401d4592",
+        "base": "ceph-msgr-cache-base-72ed401d4592",
+        "tier": "ceph-msgr-cache-tier-72ed401d4592",
+        "namespace": "cache-probe",
+        "clients": {
+          "base": "client.cache-base-72ed401d4592",
+          "ro": "client.cache-ro-72ed401d4592",
+          "rw": "client.cache-rw-72ed401d4592"
+        }
+      },
+      "native": {
+        "complete": true,
+        "native_identities": {
+          "base": {
+            "global_id": 14728,
+            "name": "client.cache-base-72ed401d4592"
+          },
+          "observer": {
+            "global_id": 4830,
+            "name": "client.test"
+          },
+          "ro": {
+            "global_id": 14717,
+            "name": "client.cache-ro-72ed401d4592"
+          },
+          "rw": {
+            "global_id": 4836,
+            "name": "client.cache-rw-72ed401d4592"
+          }
+        },
+        "placements": [
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 2218048876,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "miss",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.8434bd6c",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 2621858526,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "write-normal",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.9c4662de",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 257196905,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "write-ignore",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.f548369",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 2683214497,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "delete-normal",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.9fee9aa1",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 1736349049,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "delete-ignore",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "3.0",
+            "pool_id": 3,
+            "pool_name": "ceph-msgr-cache-base-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "3.677e9579",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 2218048876,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "miss",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.8434bd6c",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 2621858526,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "write-normal",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.9c4662de",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 257196905,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "write-ignore",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.f548369",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 2683214497,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "delete-normal",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.9fee9aa1",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          },
+          {
+            "acting": [
+              0
+            ],
+            "address": "v2:[fd67:e0c9:dc00::8]:6800/2079573905",
+            "epoch": 27,
+            "hash": 1736349049,
+            "min_size": 1,
+            "namespace": "cache-probe",
+            "nonprimary_shard_count": 0,
+            "object": "delete-ignore",
+            "osd_id": 0,
+            "pg_seed": 0,
+            "pg_shard": -1,
+            "pg_temp": false,
+            "pgid": "4.0",
+            "pool_id": 4,
+            "pool_name": "ceph-msgr-cache-tier-72ed401d4592",
+            "pool_type": 1,
+            "primary_id": 0,
+            "raw_pgid": "4.677e9579",
+            "replicas": 1,
+            "up": [
+              0
+            ]
+          }
+        ],
+        "plan": {
+          "base": "ceph-msgr-cache-base-72ed401d4592",
+          "clients": {
+            "base": "client.cache-base-72ed401d4592",
+            "ro": "client.cache-ro-72ed401d4592",
+            "rw": "client.cache-rw-72ed401d4592"
+          },
+          "fsid": "477ca0dc-a27b-4eed-87f4-d70996e23c8c",
+          "namespace": "cache-probe",
+          "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+          "tier": "ceph-msgr-cache-tier-72ed401d4592",
+          "token": "72ed401d4592"
+        },
+        "schema_version": 1,
+        "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+        "steps": [
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-miss",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-write-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 2
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-write-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-write-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-write-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-write-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-write-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-delete-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-delete-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-delete-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "seed-base-delete-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "base-before-delete-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "tier-before-delete-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "ignore-cache-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "miss-still-absent",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "normal-read-promotes",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "promoted-tier",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "promoted-base-unchanged",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 1
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "write-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "write-normal-tier",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "write-normal-base-unchanged",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 2
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "write-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "write-ignore-tier",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "write-ignore-base-unchanged",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-normal-promote",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 6
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-normal-local-absent",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-normal-subsequent-normal-read",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-normal-base-preserved",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-normal-tier-behavior",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-ignore-promote",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "delete-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 8
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-ignore-local-absent",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 0,
+            "identity_role": "rw",
+            "label": "delete-ignore-subsequent-normal-read",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-ignore-base-preserved",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "delete-ignore-tier-behavior",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 5
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "auth-before",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "ro",
+            "label": "scoped-ro-read",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "ro",
+            "label": "scoped-ro-write-refused",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "write",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -1,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "base",
+            "label": "base-only-tier-read-refused",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -1,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "tier-rw-base-read-refused",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": -1,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "rw",
+            "label": "tier-rw-foreign-namespace-refused",
+            "may_mutate": false,
+            "namespace": "cache-foreign",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -1,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "base",
+            "label": "base-only-base-read",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 3
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "auth-after",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+              "code": 0,
+              "mtime": 1700000800,
+              "read_prval": 0,
+              "size": 19,
+              "stat_prval": 0,
+              "version": 4
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-72ed401d4592-miss",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 10
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-72ed401d4592-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-72ed401d4592-write-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 11
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-72ed401d4592-write-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-72ed401d4592-write-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 12
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-72ed401d4592-write-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-72ed401d4592-delete-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 13
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-72ed401d4592-delete-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-tier-72ed401d4592-delete-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 14
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-tier-72ed401d4592-delete-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-tier-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-72ed401d4592-miss",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 6
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-72ed401d4592-miss",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "miss",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-72ed401d4592-write-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 7
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-72ed401d4592-write-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-72ed401d4592-write-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 8
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-72ed401d4592-write-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "write-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-72ed401d4592-delete-normal",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 9
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-72ed401d4592-delete-normal",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-normal",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-ceph-msgr-cache-base-72ed401d4592-delete-ignore",
+            "may_mutate": true,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "delete",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": 0,
+              "version": 10
+            },
+            "state": "completed"
+          },
+          {
+            "capi_flags": 8,
+            "identity_role": "observer",
+            "label": "cleanup-absent-ceph-msgr-cache-base-72ed401d4592-delete-ignore",
+            "may_mutate": false,
+            "namespace": "cache-probe",
+            "object": "delete-ignore",
+            "operation": "read",
+            "pool": "ceph-msgr-cache-base-72ed401d4592",
+            "result": {
+              "code": -2,
+              "read_prval": 0,
+              "stat_prval": -5,
+              "version": 0
+            },
+            "state": "completed"
+          }
+        ],
+        "whiteout_evidence": "subsequent native read behavior only; raw FLAG_WHITEOUT was not observed"
+      },
+      "attached": {
+        "epoch": 27,
+        "fsid": "477ca0dc-a27b-4eed-87f4-d70996e23c8c",
+        "created": "2026-10-18T06:47:11.756456+0000",
+        "modified": "2026-10-18T06:48:17.807683+0000",
+        "last_up_change": "2026-10-18T06:47:36.861111+0000",
+        "last_in_change": "2026-10-18T06:47:33.680584+0000",
+        "flags": "sortbitwise,recovery_deletes,purged_snapdirs,pglog_hardlimit",
+        "flags_num": 5799936,
+        "flags_set": [
+          "pglog_hardlimit",
+          "purged_snapdirs",
+          "recovery_deletes",
+          "sortbitwise"
+        ],
+        "crush_version": 6,
+        "full_ratio": 0.949999988079071,
+        "backfillfull_ratio": 0.8999999761581421,
+        "nearfull_ratio": 0.8500000238418579,
+        "cluster_snapshot": "",
+        "pool_max": 4,
+        "max_osd": 1,
+        "require_min_compat_client": "luminous",
+        "min_compat_client": "firefly",
+        "require_osd_release": "tentacle",
+        "allow_crimson": false,
+        "pools": [
+          {
+            "pool": 1,
+            "pool_name": ".mgr",
+            "create_time": "2026-10-18T06:47:37.843816+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 0,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "9",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 0,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {
+              "pg_num_max": 32,
+              "pg_num_min": 1
+            },
+            "application_metadata": {
+              "mgr": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 2,
+            "pool_name": "ceph-msgr-osd-fixture",
+            "create_time": "2026-10-18T06:47:49.406450+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 1,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "13",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 0,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {},
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 3,
+            "pool_name": "ceph-msgr-cache-base-72ed401d4592",
+            "create_time": "2026-10-18T06:48:00.647042+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 2,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "26",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 26,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [
+              4
+            ],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {
+              "rados": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 4,
+            "pool_name": "ceph-msgr-cache-tier-72ed401d4592",
+            "create_time": "2026-10-18T06:48:06.770401+0000",
+            "flags": 8,
+            "flags_names": "incomplete_clones",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 3,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "27",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 26,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": 3,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "writeback",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {
+              "rados": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          }
+        ],
+        "osds": [
+          {
+            "osd": 0,
+            "uuid": "1b1dc0a2-b501-4b81-98c7-80f43981cd76",
+            "up": 1,
+            "in": 1,
+            "weight": 1,
+            "primary_affinity": 1,
+            "last_clean_begin": 0,
+            "last_clean_end": 0,
+            "up_from": 4,
+            "up_thru": 21,
+            "down_at": 0,
+            "lost_at": 0,
+            "public_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "[fd67:e0c9:dc00::8]:6800",
+                  "nonce": 2079573905
+                }
+              ]
+            },
+            "cluster_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "[fd67:e0c9:dc00::8]:6801",
+                  "nonce": 2079573905
+                }
+              ]
+            },
+            "heartbeat_back_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "[fd67:e0c9:dc00::8]:6803",
+                  "nonce": 2079573905
+                }
+              ]
+            },
+            "heartbeat_front_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "[fd67:e0c9:dc00::8]:6802",
+                  "nonce": 2079573905
+                }
+              ]
+            },
+            "public_addr": "[fd67:e0c9:dc00::8]:6800/2079573905",
+            "cluster_addr": "[fd67:e0c9:dc00::8]:6801/2079573905",
+            "heartbeat_back_addr": "[fd67:e0c9:dc00::8]:6803/2079573905",
+            "heartbeat_front_addr": "[fd67:e0c9:dc00::8]:6802/2079573905",
+            "state": [
+              "exists",
+              "up"
+            ]
+          }
+        ],
+        "osd_xinfo": [
+          {
+            "osd": 0,
+            "down_stamp": "0.000000",
+            "laggy_probability": 0,
+            "laggy_interval": 0,
+            "features": 4541880224203014143,
+            "old_weight": 0,
+            "last_purged_snaps_scrub": "2026-10-18T06:47:36.518164+0000",
+            "dead_epoch": 0
+          }
+        ],
+        "pg_upmap": [],
+        "pg_upmap_items": [],
+        "pg_upmap_primaries": [],
+        "pg_temp": [],
+        "primary_temp": [],
+        "blocklist": {},
+        "range_blocklist": {},
+        "erasure_code_profiles": {
+          "default": {
+            "k": "2",
+            "m": "2",
+            "plugin": "isa",
+            "technique": "reed_sol_van"
+          }
+        },
+        "removed_snaps_queue": [],
+        "new_removed_snaps": [],
+        "new_purged_snaps": [],
+        "crush_node_flags": {},
+        "device_class_flags": {},
+        "stretch_mode": {
+          "stretch_mode_enabled": false,
+          "stretch_bucket_count": 0,
+          "degraded_stretch_mode": 0,
+          "recovering_stretch_mode": 0,
+          "stretch_mode_bucket": 0
+        }
+      },
+      "detached": {
+        "epoch": 28,
+        "fsid": "477ca0dc-a27b-4eed-87f4-d70996e23c8c",
+        "created": "2026-10-18T06:47:11.756456+0000",
+        "modified": "2026-10-18T06:48:18.812947+0000",
+        "last_up_change": "2026-10-18T06:47:36.861111+0000",
+        "last_in_change": "2026-10-18T06:47:33.680584+0000",
+        "flags": "sortbitwise,recovery_deletes,purged_snapdirs,pglog_hardlimit",
+        "flags_num": 5799936,
+        "flags_set": [
+          "pglog_hardlimit",
+          "purged_snapdirs",
+          "recovery_deletes",
+          "sortbitwise"
+        ],
+        "crush_version": 6,
+        "full_ratio": 0.949999988079071,
+        "backfillfull_ratio": 0.8999999761581421,
+        "nearfull_ratio": 0.8500000238418579,
+        "cluster_snapshot": "",
+        "pool_max": 4,
+        "max_osd": 1,
+        "require_min_compat_client": "luminous",
+        "min_compat_client": "argonaut",
+        "require_osd_release": "tentacle",
+        "allow_crimson": false,
+        "pools": [
+          {
+            "pool": 1,
+            "pool_name": ".mgr",
+            "create_time": "2026-10-18T06:47:37.843816+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 0,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "9",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 0,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {
+              "pg_num_max": 32,
+              "pg_num_min": 1
+            },
+            "application_metadata": {
+              "mgr": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 2,
+            "pool_name": "ceph-msgr-osd-fixture",
+            "create_time": "2026-10-18T06:47:49.406450+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 1,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "13",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 0,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {},
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 3,
+            "pool_name": "ceph-msgr-cache-base-72ed401d4592",
+            "create_time": "2026-10-18T06:48:00.647042+0000",
+            "flags": 0,
+            "flags_names": "",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 2,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "28",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 26,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 400000,
+            "cache_target_dirty_high_ratio_micro": 600000,
+            "cache_target_full_ratio_micro": 800000,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {
+              "rados": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          },
+          {
+            "pool": 4,
+            "pool_name": "ceph-msgr-cache-tier-72ed401d4592",
+            "create_time": "2026-10-18T06:48:06.770401+0000",
+            "flags": 8,
+            "flags_names": "incomplete_clones",
+            "type": 1,
+            "size": 1,
+            "min_size": 1,
+            "crush_rule": 3,
+            "peering_crush_bucket_count": 0,
+            "peering_crush_bucket_target": 0,
+            "peering_crush_bucket_barrier": 0,
+            "peering_crush_bucket_mandatory_member": 2147483647,
+            "is_stretch_pool": false,
+            "object_hash": 2,
+            "pg_autoscale_mode": "off",
+            "pg_num": 1,
+            "pg_placement_num": 1,
+            "pg_placement_num_target": 1,
+            "pg_num_target": 1,
+            "pg_num_pending": 1,
+            "last_pg_merge_meta": {
+              "source_pgid": "0.0",
+              "ready_epoch": 0,
+              "last_epoch_started": 0,
+              "last_epoch_clean": 0,
+              "source_version": "0'0",
+              "target_version": "0'0"
+            },
+            "last_change": "28",
+            "last_force_op_resend": "0",
+            "last_force_op_resend_prenautilus": "0",
+            "last_force_op_resend_preluminous": "0",
+            "auid": 0,
+            "snap_mode": "selfmanaged",
+            "snap_seq": 0,
+            "snap_epoch": 26,
+            "pool_snaps": [],
+            "removed_snaps": "[]",
+            "quota_max_bytes": 0,
+            "quota_max_objects": 0,
+            "tiers": [],
+            "tier_of": -1,
+            "read_tier": -1,
+            "write_tier": -1,
+            "cache_mode": "none",
+            "target_max_bytes": 0,
+            "target_max_objects": 0,
+            "cache_target_dirty_ratio_micro": 0,
+            "cache_target_dirty_high_ratio_micro": 0,
+            "cache_target_full_ratio_micro": 0,
+            "cache_min_flush_age": 0,
+            "cache_min_evict_age": 0,
+            "erasure_code_profile": "",
+            "hit_set_params": {
+              "type": "none"
+            },
+            "hit_set_period": 0,
+            "hit_set_count": 0,
+            "use_gmt_hitset": true,
+            "min_read_recency_for_promote": 0,
+            "min_write_recency_for_promote": 0,
+            "hit_set_grade_decay_rate": 0,
+            "hit_set_search_last_n": 0,
+            "grade_table": [],
+            "stripe_width": 0,
+            "expected_num_objects": 0,
+            "fast_read": false,
+            "nonprimary_shards": "{}",
+            "options": {},
+            "application_metadata": {
+              "rados": {}
+            },
+            "read_balance": {
+              "score_type": "Fair distribution",
+              "score_acting": 1,
+              "score_stable": 1,
+              "optimal_score": 1,
+              "raw_score_acting": 1,
+              "raw_score_stable": 1,
+              "primary_affinity_weighted": 1,
+              "average_primary_affinity": 1,
+              "average_primary_affinity_weighted": 1
+            }
+          }
+        ],
+        "osds": [
+          {
+            "osd": 0,
+            "uuid": "1b1dc0a2-b501-4b81-98c7-80f43981cd76",
+            "up": 1,
+            "in": 1,
+            "weight": 1,
+            "primary_affinity": 1,
+            "last_clean_begin": 0,
+            "last_clean_end": 0,
+            "up_from": 4,
+            "up_thru": 21,
+            "down_at": 0,
+            "lost_at": 0,
+            "public_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "[fd67:e0c9:dc00::8]:6800",
+                  "nonce": 2079573905
+                }
+              ]
+            },
+            "cluster_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "[fd67:e0c9:dc00::8]:6801",
+                  "nonce": 2079573905
+                }
+              ]
+            },
+            "heartbeat_back_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "[fd67:e0c9:dc00::8]:6803",
+                  "nonce": 2079573905
+                }
+              ]
+            },
+            "heartbeat_front_addrs": {
+              "addrvec": [
+                {
+                  "type": "v2",
+                  "addr": "[fd67:e0c9:dc00::8]:6802",
+                  "nonce": 2079573905
+                }
+              ]
+            },
+            "public_addr": "[fd67:e0c9:dc00::8]:6800/2079573905",
+            "cluster_addr": "[fd67:e0c9:dc00::8]:6801/2079573905",
+            "heartbeat_back_addr": "[fd67:e0c9:dc00::8]:6803/2079573905",
+            "heartbeat_front_addr": "[fd67:e0c9:dc00::8]:6802/2079573905",
+            "state": [
+              "exists",
+              "up"
+            ]
+          }
+        ],
+        "osd_xinfo": [
+          {
+            "osd": 0,
+            "down_stamp": "0.000000",
+            "laggy_probability": 0,
+            "laggy_interval": 0,
+            "features": 4541880224203014143,
+            "old_weight": 0,
+            "last_purged_snaps_scrub": "2026-10-18T06:47:36.518164+0000",
+            "dead_epoch": 0
+          }
+        ],
+        "pg_upmap": [],
+        "pg_upmap_items": [],
+        "pg_upmap_primaries": [],
+        "pg_temp": [],
+        "primary_temp": [],
+        "blocklist": {},
+        "range_blocklist": {},
+        "erasure_code_profiles": {
+          "default": {
+            "k": "2",
+            "m": "2",
+            "plugin": "isa",
+            "technique": "reed_sol_van"
+          }
+        },
+        "removed_snaps_queue": [],
+        "new_removed_snaps": [],
+        "new_purged_snaps": [],
+        "crush_node_flags": {},
+        "device_class_flags": {},
+        "stretch_mode": {
+          "stretch_mode_enabled": false,
+          "stretch_bucket_count": 0,
+          "degraded_stretch_mode": 0,
+          "recovering_stretch_mode": 0,
+          "stretch_mode_bucket": 0
+        }
+      },
+      "command": {
+        "Stdout": "eyJjb21wbGV0ZSI6IHRydWUsICJzdGVwcyI6IDY2fQo=",
+        "Stderr": "",
+        "ExitCode": 0,
+        "TimedOut": false,
+        "StdoutTruncated": false,
+        "StderrTruncated": false,
+        "InputWritten": 0,
+        "InputDelivered": 0,
+        "InputEOF": false
+      },
+      "cleanup_audit": {
+        "containers": {
+          "control": {
+            "id": "dc80261b4708b28fd5d813f7a828981581e4b27cfb7f0e739ddd04ff0a6ad9d6",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "b1324bc0cc2bca4c327d718711604b9921cd80ef12250b23639f7e483664a0d0",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "45eddfca1511db88ce0ca4d0d88a1d53a3462b147ed0ef08558cf2f7bd91d8a8",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "d1c3440c9e7c5e9f850e2004c42adfbc3b7c35be0b8a07de3870149fa94b4acc",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "e2fd840121e30f9dff44c2afda614f267cb9f034e752e275265c37e9349d485a",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "cccdff5d219344909416ad78a71e292fd7f26523942ac0ad512f1f8723c24f89",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "f5639ea5665b75218be751c345cf3171d8ff808b8d89ad574d131cf13eae3cf6",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "8f225fae8c6e29f1dc5ac1e0d22d12fabebda07b0fc551587a3321c658e314a0",
+            "exists": false
+          }
+        },
+        "network": "efb29f44-f8b6-4438-b557-45c1d479decd",
+        "network_exists": false
+      },
+      "independent_audit": {
+        "passed": true,
+        "completed_controller_steps": 18,
+        "completed_capi_calls": 66,
+        "coherent_placements": 10,
+        "same_plan_and_fsid": true,
+        "four_distinct_native_global_ids": true,
+        "base_bytes_size_version_mtime_preserved": true,
+        "authorization_denials_preserved_tier_snapshot": true,
+        "detached_relationship_verified": true,
+        "all_eight_containers_absent": true,
+        "network_absent": true,
+        "cleanup_gate_evidence": "Completed frozen controller: owned pools/rules removed, config override absent and effective mon_allow_pool_delete=false, owned clients absent, owned pool names absent. These final inventories are checked in code but not separately archived."
+      },
+      "runtime": "container"
+    }
+  },
+  "limitations": [
+    "Neither the product Go client nor a Go wire flag implementation is exercised; the native C API translates flag 8 into wire IGNORE_CACHE 0x8000.",
+    "Whiteout is inferred only from subsequent native read behavior; the raw object_info FLAG_WHITEOUT bit is not observed.",
+    "Only one replicated BlueStore OSD, no overlay, no hit set, head objects and the two recorded container profiles are validated.",
+    "Complete controller receipts establish its pool/rule/auth removal and configuration-baseline gates; raw final auth/pool/config inventories are not separately archived.",
+    "Source audit starts at 8979180 plus the six fixture/oracle files; later MDS CLOSE changes and other product work are outside this native-only run.",
+    "These fixture/unit checks and native runs do not establish complete CI for a resulting commit."
+  ],
+  "linux_checks": {
+    "directory": "<path>",
+    "environment": {
+      "CGO_ENABLED": "0",
+      "GOWORK": "off"
+    },
+    "receipt": {
+      "start": "2026-10-18T06:43:25.053634+00:00",
+      "steps": [
+        {
+          "name": "fixture",
+          "argv": [
+            "go",
+            "test",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T06:43:25.053659+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:43:31.704622+00:00"
+        },
+        {
+          "name": "fixture-vet",
+          "argv": [
+            "go",
+            "vet",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T06:43:31.704958+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:43:33.976891+00:00"
+        },
+        {
+          "name": "python",
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tools",
+            "-p",
+            "test_*.py"
+          ],
+          "start": "2026-10-18T06:43:33.977259+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:43:40.498952+00:00"
+        }
+      ]
+    },
+    "python_tests": 429
+  },
+  "execution": {
+    "common_environment": {
+      "CGO_ENABLED": "0",
+      "GOWORK": "off",
+      "CEPH_MSGR_TEST_OSD": "1",
+      "CEPH_MSGR_TEST_OSD_PROFILE": "legacy-v6",
+      "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
+      "CEPH_MSGR_TEST_OSD_STORE": "bluestore",
+      "CEPH_MSGR_TEST_RUNTIME": "container"
+    }
+  },
+  "subsequent_checkpoint_checks": {
+    "scope": "Later full checks combine MDS CLOSE checkpoint fcfb959 with the identical six native-probe fixture/oracle files. These are not additional native runs and do not include other product IgnoreCache work.",
+    "source_audit": {
+      "bytes": 286738,
+      "sha256": "72e522c474bf677865ec77b4316624487abeb476c69c0147fc1c63b2c7024765",
+      "overlay": [
+        "integration/fixture/main.go",
+        "integration/fixture/diagnostics.go",
+        "integration/fixture/osd_ignore_cache_probe.go",
+        "integration/fixture/osd_ignore_cache_probe_test.go",
+        "tools/osd_ignore_cache_oracle.py",
+        "tools/test_osd_ignore_cache_oracle.py"
+      ],
+      "inventory_files": 1594,
+      "go_files": 695,
+      "selected_source_hashes": [
+        {
+          "file": "integration/fixture/main.go",
+          "bytes": 19338,
+          "sha256": "7f4b1bad5dc3c3038b144a14cbe5b47366ce2fed70ea62eb531a656eb3be4d5d"
+        },
+        {
+          "file": "integration/fixture/diagnostics.go",
+          "bytes": 10332,
+          "sha256": "4b5db2653b17d93bec6620750434286d747a4c871dab82609b9f20a9882eb8ac"
+        },
+        {
+          "file": "integration/fixture/osd_ignore_cache_probe.go",
+          "bytes": 17315,
+          "sha256": "e34cb1f5f31620ef82a7566fb611fd575f3e32bdba8dc1ae0e334223394969d3"
+        },
+        {
+          "file": "integration/fixture/osd_ignore_cache_probe_test.go",
+          "bytes": 5967,
+          "sha256": "9851ab162759aa9e2f43bd9c49c6706d110fcdc87c5d7da9abda1c0b26b01e88"
+        },
+        {
+          "file": "tools/osd_ignore_cache_oracle.py",
+          "bytes": 14810,
+          "sha256": "61cca4bdaa8ee2aa335c3d7ce2709702ddd3616ec147b6659672c0e0e07f298f"
+        },
+        {
+          "file": "tools/test_osd_ignore_cache_oracle.py",
+          "bytes": 10215,
+          "sha256": "d201305242aa7056f75dd4a9c29ae58b198b18d2a01b43147339cec92322474a"
+        }
+      ]
+    },
+    "independent_source_audit": {
+      "six_overlay_files_identical_to_native_snapshot": true,
+      "all_695_frozen_go_hashes_match": true
+    },
+    "directory": "<path>",
+    "receipt": {
+      "start": "2026-10-18T06:54:08.840642+00:00",
+      "steps": [
+        {
+          "name": "root-cgo0",
+          "argv": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "start": "2026-10-18T06:54:08.840655+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:54:24.859733+00:00"
+        },
+        {
+          "name": "race",
+          "argv": [
+            "go",
+            "test",
+            "-race",
+            "./integration",
+            "./cephmsgr"
+          ],
+          "start": "2026-10-18T06:54:24.859986+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:54:50.566383+00:00"
+        },
+        {
+          "name": "vet",
+          "argv": [
+            "go",
+            "vet",
+            "./..."
+          ],
+          "start": "2026-10-18T06:54:50.566675+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:54:51.431932+00:00"
+        },
+        {
+          "name": "fixture",
+          "argv": [
+            "go",
+            "test",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T06:54:51.432308+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:54:56.857699+00:00"
+        },
+        {
+          "name": "fixture-vet",
+          "argv": [
+            "go",
+            "vet",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T06:54:56.858089+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:54:57.273026+00:00"
+        },
+        {
+          "name": "python",
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tools",
+            "-p",
+            "test_*.py"
+          ],
+          "start": "2026-10-18T06:54:57.273444+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T06:55:03.744266+00:00"
+        }
+      ]
+    },
+    "python_tests": 429,
+    "environment_by_step": {
+      "root-cgo0": {
+        "CGO_ENABLED": "0",
+        "GOWORK": "off"
+      },
+      "race": {
+        "CGO_ENABLED": "1",
+        "GOWORK": "off"
+      },
+      "vet": {
+        "CGO_ENABLED": "0",
+        "GOWORK": "off"
+      },
+      "fixture": {
+        "CGO_ENABLED": "0",
+        "GOWORK": "off"
+      },
+      "fixture-vet": {
+        "CGO_ENABLED": "0",
+        "GOWORK": "off"
+      },
+      "python": {
+        "CGO_ENABLED": "0",
+        "GOWORK": "off"
+      }
+    },
+    "complete_ci_claimed": false
+  }
+}

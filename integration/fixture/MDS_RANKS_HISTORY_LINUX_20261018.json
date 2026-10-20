@@ -1,0 +1,1450 @@
+{
+  "schema": "ceph-msgr-mds-ranks-history-validation/v1",
+  "date": "2026-10-18",
+  "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "source": {
+    "selected_overlay_files": [
+      {
+        "file": "integration/fixture/mds_cephfs_ranks.go",
+        "bytes": 88735,
+        "sha256": "8554c0b94d7c1d6d2164e2be5e2547ba39a31ee59bc0e4ad1ca6f54297f81ba7"
+      },
+      {
+        "file": "integration/fixture/mds_cephfs_ranks_replay_test.go",
+        "bytes": 15757,
+        "sha256": "08982629561ded462e260bd06ec50451b0897da2568b0a1034162353fa081e19"
+      },
+      {
+        "file": "integration/mds_cephfs_ranks_replay_test.go",
+        "bytes": 54642,
+        "sha256": "c9d126ab29c247d78b25e39b9395d51d6b0b60f75b000943a3c95afcfabee055"
+      },
+      {
+        "file": "integration/mds_cephfs_ranks_test.go",
+        "bytes": 63682,
+        "sha256": "f679d77302d554dc22288171a53745429fb734d229cebd6e08bde753083a5019"
+      }
+    ]
+  },
+  "scope": "Fixture-native operation-history retention correction; no product retirement, forward, retry or replay policy change.",
+  "original_ci": {
+    "source": "fcfb9590cce84bec6160c01827b68cb2b84d7526",
+    "originals": {},
+    "finding": "The acceptance required every short forwarding op to remain in native history, but pinned OpHistory retains only the longest configured count. The original fixture did not reserve or record that retention scope.",
+    "specific_eviction_unproven": "The original receipts retain only owned filtered ops, not raw unfiltered history or its effective size. Rank1 TID6 absence cannot by itself prove exactly when or why it left the tracker."
+  },
+  "profiles": [
+    {
+      "profile": "crc-host",
+      "execution": {
+        "profile": "crc-host",
+        "start": "2026-10-18T07:12:15.610195+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:15:57.120332+00:00"
+      },
+      "manifest": {
+        "architecture": "amd64",
+        "connection_mode": "crc",
+        "key_type": "aes",
+        "service_cipher": "aes",
+        "runtime": "host",
+        "ip_family": "4",
+        "osd_store": "bluestore",
+        "osd_replicas": "1",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "provider_version": "v0.3.0"
+      },
+      "fsid": "21a47a5b-7851-4e20-9ef5-b1b9c37c5fa9",
+      "token": "8510539c193951172c89cbccd4fb3567",
+      "global_id": 5457,
+      "cephfs_nonce": 272066761,
+      "elapsed_ms": 98076,
+      "passed_leaves": [
+        "open_sessions_on_three_ranks",
+        "enable_standby_replay",
+        "forward_chain_across_ranks",
+        "inflight_mutation_during_export",
+        "standby_replay_takeover_resubmit",
+        "cleanup_restore_pins_unlink_release_close"
+      ],
+      "case_ms": {
+        "cleanup_restore_pins_unlink_release_close": 16290,
+        "enable_standby_replay": 6002,
+        "forward_chain_across_ranks": 27148,
+        "inflight_mutation_during_export": 20080,
+        "open_sessions_on_three_ranks": 3220,
+        "standby_replay_takeover_resubmit": 25330
+      },
+      "original_transactions": [
+        5,
+        6
+      ],
+      "forward_counters": {
+        "after": [
+          2,
+          3,
+          0
+        ],
+        "before": [
+          0,
+          1,
+          0
+        ],
+        "go_hops_from_rank": [
+          2,
+          2,
+          0
+        ]
+      },
+      "history_coverage": {
+        "0": {
+          "Size": 256,
+          "Duration": 600,
+          "TotalOps": 10
+        },
+        "1": {
+          "Size": 256,
+          "Duration": 600,
+          "TotalOps": 30
+        },
+        "2": {
+          "Size": 256,
+          "Duration": 600,
+          "TotalOps": 2
+        }
+      },
+      "original_native_ops": {
+        "rank0/chained forwarded-file": {
+          "description": "client_request(client.5457:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-8510539c193951172c89cbccd4fb3567/chain/hop/forwarded-file 2026-10-18T07:14:12.178107+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "forwarding request to mds.1",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank0/chained forwarded-dir": {
+          "description": "client_request(client.5457:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-8510539c193951172c89cbccd4fb3567/chain/hop/forwarded-dir 2026-10-18T07:14:12.195834+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "forwarding request to mds.1",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank1/chained forwarded-file": {
+          "description": "client_request(client.5457:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-8510539c193951172c89cbccd4fb3567/chain/hop/forwarded-file 2026-10-18T07:14:12.178107+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "forwarding request to mds.2",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank1/chained forwarded-dir": {
+          "description": "client_request(client.5457:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-8510539c193951172c89cbccd4fb3567/chain/hop/forwarded-dir 2026-10-18T07:14:12.195834+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "forwarding request to mds.2",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank2/chained forwarded-file": {
+          "description": "client_request(client.5457:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-8510539c193951172c89cbccd4fb3567/chain/hop/forwarded-file 2026-10-18T07:14:12.178107+0000 FWD=2 caller_uid=0, caller_gid=0{})",
+          "result": 0,
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "submit entry: journal_and_reply",
+            "journal_committed: ",
+            "replying",
+            "finishing request",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank2/chained forwarded-dir": {
+          "description": "client_request(client.5457:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-8510539c193951172c89cbccd4fb3567/chain/hop/forwarded-dir 2026-10-18T07:14:12.195834+0000 FWD=2 caller_uid=0, caller_gid=0{})",
+          "result": 0,
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "early_replied",
+            "submit entry: journal_and_reply",
+            "journal_committed: ",
+            "replying",
+            "finishing request",
+            "cleaned up request",
+            "done"
+          ]
+        }
+      },
+      "forwarded_safe_requests": [
+        {
+          "Name": "chained forwarded-file",
+          "Op": 4865,
+          "Transaction": 5,
+          "MDSMapEpoch": 15,
+          "InitialRetry": 3,
+          "StartRank": 0,
+          "FinalRank": 2,
+          "Hops": [
+            {
+              "FromRank": 0,
+              "Transaction": 5,
+              "SentForward": 0,
+              "ForwardedTo": 1,
+              "ForwardedCount": 1,
+              "MustResend": true,
+              "Arrival": 32,
+              "Micros": 440,
+              "ResubmittedTID": 5
+            },
+            {
+              "FromRank": 1,
+              "Transaction": 5,
+              "SentForward": 1,
+              "ForwardedTo": 2,
+              "ForwardedCount": 2,
+              "MustResend": true,
+              "Arrival": 22,
+              "Micros": 739,
+              "ResubmittedTID": 5
+            }
+          ],
+          "FirstOp": 4865,
+          "FirstSafe": true,
+          "FirstResult": 0,
+          "FirstArrival": 17,
+          "FirstMicros": 17655,
+          "FlushRequested": false,
+          "SafeResult": 0,
+          "SafeArrival": 17,
+          "SafeMicros": 17655,
+          "DentryName": "forwarded-file",
+          "TargetIno": 3298534883328,
+          "TargetCapID": 1,
+          "TargetCaps": "pAsxLsXsxFsxcrwb",
+          "ExtraIno": 3298534883328
+        },
+        {
+          "Name": "chained forwarded-dir",
+          "Op": 4640,
+          "Transaction": 6,
+          "MDSMapEpoch": 15,
+          "InitialRetry": 3,
+          "StartRank": 0,
+          "FinalRank": 2,
+          "Hops": [
+            {
+              "FromRank": 0,
+              "Transaction": 6,
+              "SentForward": 0,
+              "ForwardedTo": 1,
+              "ForwardedCount": 1,
+              "MustResend": true,
+              "Arrival": 33,
+              "Micros": 304,
+              "ResubmittedTID": 6
+            },
+            {
+              "FromRank": 1,
+              "Transaction": 6,
+              "SentForward": 1,
+              "ForwardedTo": 2,
+              "ForwardedCount": 2,
+              "MustResend": true,
+              "Arrival": 23,
+              "Micros": 578,
+              "ResubmittedTID": 6
+            }
+          ],
+          "FirstOp": 4640,
+          "FirstSafe": false,
+          "FirstResult": 0,
+          "FirstArrival": 18,
+          "FirstMicros": 813,
+          "FlushRequested": true,
+          "SafeResult": 0,
+          "SafeArrival": 19,
+          "SafeMicros": 2383,
+          "DentryName": "forwarded-dir",
+          "TargetIno": 3298534883329,
+          "TargetCapID": 1,
+          "TargetCaps": "pAsxLsXsxFsx"
+        }
+      ],
+      "native_final_entries": [
+        {
+          "name": "anchor",
+          "d_ino": 1099511627779,
+          "stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 1099511627779,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 0
+          }
+        },
+        {
+          "name": "forwarded-dir",
+          "d_ino": 3298534883329,
+          "stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 3298534883329,
+            "mode": 16877,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 2,
+            "size": 0
+          }
+        },
+        {
+          "name": "forwarded-file",
+          "d_ino": 3298534883328,
+          "stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 3298534883328,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 0
+          }
+        }
+      ],
+      "runtime": [
+        {
+          "kind": "op-history",
+          "name": "mds_op_history_size",
+          "value": "256",
+          "baseline": "20",
+          "daemon": "ceph-msgr-fresh-8510539c193951172c89cbccd4fb3567-0",
+          "gid": 14563,
+          "incarnation": 6,
+          "request_id": 0,
+          "state": "discarded",
+          "readback": "256"
+        },
+        {
+          "kind": "op-history",
+          "name": "mds_op_history_size",
+          "value": "256",
+          "baseline": "20",
+          "daemon": "ceph-msgr-fresh-8510539c193951172c89cbccd4fb3567-1",
+          "gid": 14576,
+          "incarnation": 8,
+          "request_id": 0,
+          "state": "restored",
+          "readback": "256",
+          "restore_readback": "20"
+        },
+        {
+          "kind": "op-history",
+          "name": "mds_op_history_size",
+          "value": "256",
+          "baseline": "20",
+          "daemon": "ceph-msgr-fresh-8510539c193951172c89cbccd4fb3567-2",
+          "gid": 14587,
+          "incarnation": 10,
+          "request_id": 0,
+          "state": "restored",
+          "readback": "256",
+          "restore_readback": "20"
+        },
+        {
+          "kind": "op-history",
+          "name": "mds_op_history_size",
+          "value": "256",
+          "baseline": "20",
+          "daemon": "ceph-msgr-fresh-8510539c193951172c89cbccd4fb3567-3",
+          "gid": 14599,
+          "incarnation": 0,
+          "request_id": 0,
+          "state": "restored",
+          "readback": "256",
+          "restore_readback": "20"
+        },
+        {
+          "kind": "log-pause",
+          "name": "mds_log_pause",
+          "value": "true",
+          "baseline": "false",
+          "daemon": "ceph-msgr-fresh-8510539c193951172c89cbccd4fb3567-0",
+          "gid": 14563,
+          "incarnation": 6,
+          "request_id": 1792307680699020605,
+          "state": "discarded",
+          "readback": "true"
+        }
+      ],
+      "runtime_state_counts": {
+        "discarded": 2,
+        "restored": 3
+      },
+      "takeover": {
+        "old_gid": 14563,
+        "follower_gid": 14599,
+        "adopted_gid": 14599,
+        "same_client_global_id": true,
+        "uncertain_outcomes": [
+          {
+            "Error": "ceph: request outcome unknown: io: read/write on closed pipe; stateful resume failed: ceph messenger session reconnect: ceph messenger: peer reset the stateful session",
+            "SessionReset": true,
+            "EOF": false,
+            "ConnectionRefused": false,
+            "ResumeDeadline": false,
+            "OutcomeUnknown": true,
+            "MDSSessionClosed": false,
+            "MDSSessionReconnectDenied": false
+          },
+          {
+            "Error": "ceph: request outcome unknown: io: read/write on closed pipe; stateful resume failed: ceph messenger session reconnect: ceph messenger: peer reset the stateful session",
+            "SessionReset": true,
+            "EOF": false,
+            "ConnectionRefused": false,
+            "ResumeDeadline": false,
+            "OutcomeUnknown": true,
+            "MDSSessionClosed": false,
+            "MDSSessionReconnectDenied": false
+          }
+        ],
+        "explicit_replays": [
+          {
+            "name": "inflight-file",
+            "description": "client_request(client.5457:14 create owner_uid=0, owner_gid=0 #0x10000000006/inflight-file 2026-10-18T07:14:42.200099+0000 RETRY=1 REPLAY QUEUED_FOR_REPLAY caller_uid=0, caller_gid=0{})",
+            "native_result": 0,
+            "reply": {
+              "extra_ino": 1099511627785,
+              "op": 4865,
+              "safe_first": true,
+              "traceless": true
+            }
+          },
+          {
+            "name": "inflight-dir",
+            "description": "client_request(client.5457:15 mkdir owner_uid=0, owner_gid=0 #0x10000000006/inflight-dir 2026-10-18T07:14:42.200752+0000 RETRY=1 REPLAY QUEUED_FOR_REPLAY caller_uid=0, caller_gid=0{})",
+            "native_result": 0,
+            "reply": {
+              "extra_ino": 0,
+              "op": 4640,
+              "safe_first": true,
+              "traceless": true
+            }
+          }
+        ],
+        "reconnect_cap_count": 9,
+        "reconnect_realm_count": 1
+      },
+      "caps_before_after_release": [
+        [
+          9,
+          6,
+          4
+        ],
+        [
+          0,
+          0,
+          0
+        ]
+      ],
+      "capability_agents": {
+        "lost0": {
+          "record_count": 54,
+          "cap_count": 12,
+          "pending": 0
+        },
+        "rank0": {
+          "record_count": 66,
+          "cap_count": 12,
+          "pending": 0
+        },
+        "rank1": {
+          "record_count": 50,
+          "cap_count": 7,
+          "pending": 0
+        },
+        "rank2": {
+          "record_count": 28,
+          "cap_count": 4,
+          "pending": 0
+        }
+      },
+      "cleanup": {
+        "completed": true,
+        "runtime_restored": true,
+        "topology_restored": true,
+        "pins_restored": true,
+        "namespace_checked": true,
+        "namespace_restored": true,
+        "blocklist_restored": true,
+        "client_identity_removed": true,
+        "native_identity_removed": true,
+        "owned_container_count": 12,
+        "containers": {
+          "control": {
+            "id": "2690ae07b1162488d1a9cf5c9cd035ee22292f9053c4a34f2d59ef881122c17b",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-8510539c193951172c89cbccd4fb3567-0": {
+            "id": "2e13e63e0955721e1b5fdb499ddc90108c943dd58d39556db627efc3bd4524ab",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-8510539c193951172c89cbccd4fb3567-1": {
+            "id": "2ec31c75af148e1c91e65c50371fa6db68d1fdc6e40cd891ae549cffc003f3b7",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-8510539c193951172c89cbccd4fb3567-2": {
+            "id": "47893302e9fceb475a64aae9e067cb5df225b01c26627bc2fa1d4dbc3f721e64",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-8510539c193951172c89cbccd4fb3567-3": {
+            "id": "bfb91771c0df52b3da822e33bb362993ebc44496ecac191668004171190ac0aa",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "e06331489282b93de0cd029e98b885ebc2803819f1dc17207c7a5d0324237cfa",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "9052b803449884772e3e528a7ea3527276dbafe3eb8037a4246b90545d3144be",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "3020f1a3aa0a2e4f340704fec84464503dfe8f5c45f9c79eadc540f42e892a33",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "288cee58aa3c8457675474b2f73cf70a5fb295085e7684b77dfbf0a3d774aa0e",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "8cec42f4185331ba241adbc9af5ab4fee9d84cd363d24b5ec77c820d39b9d39a",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "a1bc41cfb5f0fc79069fad4d2563b7051a2a78391acc76279df3a94e5f2a0f4d",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "e20514340952310c3dcc715743df8ea83b3a4467366fee1311788b5295af2376",
+            "exists": false
+          }
+        },
+        "network": "b7837f13-de59-46fb-88d5-6c79e7d821a1",
+        "network_exists": false,
+        "filesystem_removed": true,
+        "pools_removed": true,
+        "residual_owned_sessions": []
+      },
+      "raw_public_evidence": {}
+    },
+    {
+      "profile": "secure-ipv6",
+      "execution": {
+        "profile": "secure-ipv6",
+        "start": "2026-10-18T07:12:16.516541+00:00",
+        "exit_code": 0,
+        "end": "2026-10-18T07:15:56.373642+00:00"
+      },
+      "manifest": {
+        "architecture": "amd64",
+        "connection_mode": "secure",
+        "key_type": "aes256k",
+        "service_cipher": "aes256k",
+        "runtime": "container",
+        "ip_family": "6",
+        "osd_store": "memstore",
+        "osd_replicas": "1",
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "provider_version": "v0.3.0"
+      },
+      "fsid": "8af73807-0547-40ba-854c-f96d336aef09",
+      "token": "bdaf3cadd88f7388f9ffe3d24e3f31c2",
+      "global_id": 5427,
+      "cephfs_nonce": 3158714615,
+      "elapsed_ms": 97898,
+      "passed_leaves": [
+        "open_sessions_on_three_ranks",
+        "enable_standby_replay",
+        "forward_chain_across_ranks",
+        "inflight_mutation_during_export",
+        "standby_replay_takeover_resubmit",
+        "cleanup_restore_pins_unlink_release_close"
+      ],
+      "case_ms": {
+        "cleanup_restore_pins_unlink_release_close": 15524,
+        "enable_standby_replay": 5902,
+        "forward_chain_across_ranks": 26916,
+        "inflight_mutation_during_export": 20640,
+        "open_sessions_on_three_ranks": 3105,
+        "standby_replay_takeover_resubmit": 25806
+      },
+      "original_transactions": [
+        5,
+        6
+      ],
+      "forward_counters": {
+        "after": [
+          2,
+          3,
+          0
+        ],
+        "before": [
+          0,
+          1,
+          0
+        ],
+        "go_hops_from_rank": [
+          2,
+          2,
+          0
+        ]
+      },
+      "history_coverage": {
+        "0": {
+          "Size": 256,
+          "Duration": 600,
+          "TotalOps": 10
+        },
+        "1": {
+          "Size": 256,
+          "Duration": 600,
+          "TotalOps": 30
+        },
+        "2": {
+          "Size": 256,
+          "Duration": 600,
+          "TotalOps": 2
+        }
+      },
+      "original_native_ops": {
+        "rank0/chained forwarded-file": {
+          "description": "client_request(client.5427:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-bdaf3cadd88f7388f9ffe3d24e3f31c2/chain/hop/forwarded-file 2026-10-18T07:14:10.444959+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "forwarding request to mds.1",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank0/chained forwarded-dir": {
+          "description": "client_request(client.5427:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-bdaf3cadd88f7388f9ffe3d24e3f31c2/chain/hop/forwarded-dir 2026-10-18T07:14:10.446258+0000 RETRY=3 caller_uid=0, caller_gid=0{})",
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "forwarding request to mds.1",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank1/chained forwarded-file": {
+          "description": "client_request(client.5427:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-bdaf3cadd88f7388f9ffe3d24e3f31c2/chain/hop/forwarded-file 2026-10-18T07:14:10.444959+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "forwarding request to mds.2",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank1/chained forwarded-dir": {
+          "description": "client_request(client.5427:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-bdaf3cadd88f7388f9ffe3d24e3f31c2/chain/hop/forwarded-dir 2026-10-18T07:14:10.446258+0000 FWD=1 caller_uid=0, caller_gid=0{})",
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "forwarding request to mds.2",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank2/chained forwarded-file": {
+          "description": "client_request(client.5427:5 create owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-bdaf3cadd88f7388f9ffe3d24e3f31c2/chain/hop/forwarded-file 2026-10-18T07:14:10.444959+0000 FWD=2 caller_uid=0, caller_gid=0{})",
+          "result": 0,
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "submit entry: journal_and_reply",
+            "journal_committed: ",
+            "replying",
+            "finishing request",
+            "cleaned up request",
+            "done"
+          ]
+        },
+        "rank2/chained forwarded-dir": {
+          "description": "client_request(client.5427:6 mkdir owner_uid=0, owner_gid=0 #0x1/ceph-msgr-ranks-bdaf3cadd88f7388f9ffe3d24e3f31c2/chain/hop/forwarded-dir 2026-10-18T07:14:10.446258+0000 FWD=2 caller_uid=0, caller_gid=0{})",
+          "result": 0,
+          "events": [
+            "initiated",
+            "header_read",
+            "throttled",
+            "all_read",
+            "dispatched",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "acquired locks",
+            "early_replied",
+            "submit entry: journal_and_reply",
+            "journal_committed: ",
+            "replying",
+            "finishing request",
+            "cleaned up request",
+            "done"
+          ]
+        }
+      },
+      "forwarded_safe_requests": [
+        {
+          "Name": "chained forwarded-file",
+          "Op": 4865,
+          "Transaction": 5,
+          "MDSMapEpoch": 15,
+          "InitialRetry": 3,
+          "StartRank": 0,
+          "FinalRank": 2,
+          "Hops": [
+            {
+              "FromRank": 0,
+              "Transaction": 5,
+              "SentForward": 0,
+              "ForwardedTo": 1,
+              "ForwardedCount": 1,
+              "MustResend": true,
+              "Arrival": 33,
+              "Micros": 334,
+              "ResubmittedTID": 5
+            },
+            {
+              "FromRank": 1,
+              "Transaction": 5,
+              "SentForward": 1,
+              "ForwardedTo": 2,
+              "ForwardedCount": 2,
+              "MustResend": true,
+              "Arrival": 22,
+              "Micros": 573,
+              "ResubmittedTID": 5
+            }
+          ],
+          "FirstOp": 4865,
+          "FirstSafe": true,
+          "FirstResult": 0,
+          "FirstArrival": 17,
+          "FirstMicros": 1206,
+          "FlushRequested": false,
+          "SafeResult": 0,
+          "SafeArrival": 17,
+          "SafeMicros": 1206,
+          "DentryName": "forwarded-file",
+          "TargetIno": 3298534883328,
+          "TargetCapID": 1,
+          "TargetCaps": "pAsxLsXsxFsxcrwb",
+          "ExtraIno": 3298534883328
+        },
+        {
+          "Name": "chained forwarded-dir",
+          "Op": 4640,
+          "Transaction": 6,
+          "MDSMapEpoch": 15,
+          "InitialRetry": 3,
+          "StartRank": 0,
+          "FinalRank": 2,
+          "Hops": [
+            {
+              "FromRank": 0,
+              "Transaction": 6,
+              "SentForward": 0,
+              "ForwardedTo": 1,
+              "ForwardedCount": 1,
+              "MustResend": true,
+              "Arrival": 34,
+              "Micros": 149,
+              "ResubmittedTID": 6
+            },
+            {
+              "FromRank": 1,
+              "Transaction": 6,
+              "SentForward": 1,
+              "ForwardedTo": 2,
+              "ForwardedCount": 2,
+              "MustResend": true,
+              "Arrival": 23,
+              "Micros": 298,
+              "ResubmittedTID": 6
+            }
+          ],
+          "FirstOp": 4640,
+          "FirstSafe": false,
+          "FirstResult": 0,
+          "FirstArrival": 18,
+          "FirstMicros": 450,
+          "FlushRequested": true,
+          "SafeResult": 0,
+          "SafeArrival": 19,
+          "SafeMicros": 755,
+          "DentryName": "forwarded-dir",
+          "TargetIno": 3298534883329,
+          "TargetCapID": 1,
+          "TargetCaps": "pAsxLsXsxFsx"
+        }
+      ],
+      "native_final_entries": [
+        {
+          "name": "anchor",
+          "d_ino": 1099511627779,
+          "stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 1099511627779,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 0
+          }
+        },
+        {
+          "name": "forwarded-dir",
+          "d_ino": 3298534883329,
+          "stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 3298534883329,
+            "mode": 16877,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 2,
+            "size": 0
+          }
+        },
+        {
+          "name": "forwarded-file",
+          "d_ino": 3298534883328,
+          "stat": {
+            "exists": true,
+            "errno": 0,
+            "ino": 3298534883328,
+            "mode": 33188,
+            "uid": 0,
+            "gid": 0,
+            "nlink": 1,
+            "size": 0
+          }
+        }
+      ],
+      "runtime": [
+        {
+          "kind": "op-history",
+          "name": "mds_op_history_size",
+          "value": "256",
+          "baseline": "20",
+          "daemon": "ceph-msgr-fresh-bdaf3cadd88f7388f9ffe3d24e3f31c2-0",
+          "gid": 4653,
+          "incarnation": 6,
+          "request_id": 0,
+          "state": "discarded",
+          "readback": "256"
+        },
+        {
+          "kind": "op-history",
+          "name": "mds_op_history_size",
+          "value": "256",
+          "baseline": "20",
+          "daemon": "ceph-msgr-fresh-bdaf3cadd88f7388f9ffe3d24e3f31c2-1",
+          "gid": 4665,
+          "incarnation": 8,
+          "request_id": 0,
+          "state": "restored",
+          "readback": "256",
+          "restore_readback": "20"
+        },
+        {
+          "kind": "op-history",
+          "name": "mds_op_history_size",
+          "value": "256",
+          "baseline": "20",
+          "daemon": "ceph-msgr-fresh-bdaf3cadd88f7388f9ffe3d24e3f31c2-2",
+          "gid": 14551,
+          "incarnation": 10,
+          "request_id": 0,
+          "state": "restored",
+          "readback": "256",
+          "restore_readback": "20"
+        },
+        {
+          "kind": "op-history",
+          "name": "mds_op_history_size",
+          "value": "256",
+          "baseline": "20",
+          "daemon": "ceph-msgr-fresh-bdaf3cadd88f7388f9ffe3d24e3f31c2-3",
+          "gid": 14563,
+          "incarnation": 0,
+          "request_id": 0,
+          "state": "restored",
+          "readback": "256",
+          "restore_readback": "20"
+        },
+        {
+          "kind": "log-pause",
+          "name": "mds_log_pause",
+          "value": "true",
+          "baseline": "false",
+          "daemon": "ceph-msgr-fresh-bdaf3cadd88f7388f9ffe3d24e3f31c2-0",
+          "gid": 4653,
+          "incarnation": 6,
+          "request_id": 1792307679395738267,
+          "state": "discarded",
+          "readback": "true"
+        }
+      ],
+      "runtime_state_counts": {
+        "discarded": 2,
+        "restored": 3
+      },
+      "takeover": {
+        "old_gid": 4653,
+        "follower_gid": 14563,
+        "adopted_gid": 14563,
+        "same_client_global_id": true,
+        "uncertain_outcomes": [
+          {
+            "Error": "ceph: request outcome unknown: io: read/write on closed pipe; stateful resume failed: ceph messenger session reconnect: ceph messenger: peer reset the stateful session",
+            "SessionReset": true,
+            "EOF": false,
+            "ConnectionRefused": false,
+            "ResumeDeadline": false,
+            "OutcomeUnknown": true,
+            "MDSSessionClosed": false,
+            "MDSSessionReconnectDenied": false
+          },
+          {
+            "Error": "ceph: request outcome unknown: io: read/write on closed pipe; stateful resume failed: ceph messenger session reconnect: ceph messenger: peer reset the stateful session",
+            "SessionReset": true,
+            "EOF": false,
+            "ConnectionRefused": false,
+            "ResumeDeadline": false,
+            "OutcomeUnknown": true,
+            "MDSSessionClosed": false,
+            "MDSSessionReconnectDenied": false
+          }
+        ],
+        "explicit_replays": [
+          {
+            "name": "inflight-file",
+            "description": "client_request(client.5427:14 create owner_uid=0, owner_gid=0 #0x10000000006/inflight-file 2026-10-18T07:14:40.996891+0000 RETRY=1 REPLAY QUEUED_FOR_REPLAY caller_uid=0, caller_gid=0{})",
+            "native_result": 0,
+            "reply": {
+              "extra_ino": 1099511627785,
+              "op": 4865,
+              "safe_first": true,
+              "traceless": true
+            }
+          },
+          {
+            "name": "inflight-dir",
+            "description": "client_request(client.5427:15 mkdir owner_uid=0, owner_gid=0 #0x10000000006/inflight-dir 2026-10-18T07:14:40.997224+0000 RETRY=1 REPLAY QUEUED_FOR_REPLAY caller_uid=0, caller_gid=0{})",
+            "native_result": 0,
+            "reply": {
+              "extra_ino": 0,
+              "op": 4640,
+              "safe_first": true,
+              "traceless": true
+            }
+          }
+        ],
+        "reconnect_cap_count": 9,
+        "reconnect_realm_count": 1
+      },
+      "caps_before_after_release": [
+        [
+          9,
+          6,
+          4
+        ],
+        [
+          0,
+          0,
+          0
+        ]
+      ],
+      "capability_agents": {
+        "lost0": {
+          "record_count": 62,
+          "cap_count": 12,
+          "pending": 0
+        },
+        "rank0": {
+          "record_count": 66,
+          "cap_count": 12,
+          "pending": 0
+        },
+        "rank1": {
+          "record_count": 47,
+          "cap_count": 7,
+          "pending": 0
+        },
+        "rank2": {
+          "record_count": 27,
+          "cap_count": 4,
+          "pending": 0
+        }
+      },
+      "cleanup": {
+        "completed": true,
+        "runtime_restored": true,
+        "topology_restored": true,
+        "pins_restored": true,
+        "namespace_checked": true,
+        "namespace_restored": true,
+        "blocklist_restored": true,
+        "client_identity_removed": true,
+        "native_identity_removed": true,
+        "owned_container_count": 12,
+        "containers": {
+          "control": {
+            "id": "4bd1d483c0df92ea06953f697d41ea1270a066e4747bd74bf57390e1cb99a357",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-bdaf3cadd88f7388f9ffe3d24e3f31c2-0": {
+            "id": "1c63b418864d9acfc46383d8ab3fb03f614c67b111fb94a90b06744830b677ba",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-bdaf3cadd88f7388f9ffe3d24e3f31c2-1": {
+            "id": "c17f045f739c5740792a6630443fe42cb2ff946bd294989e4e144e06c9a43278",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-bdaf3cadd88f7388f9ffe3d24e3f31c2-2": {
+            "id": "462b01e2bfed367e8f42fdda2007c06a9f68175d01e444fe1f076dc459a6d366",
+            "exists": false
+          },
+          "mds.ceph-msgr-fresh-bdaf3cadd88f7388f9ffe3d24e3f31c2-3": {
+            "id": "83faf86f27c9cc4dabce4f8abc609c1e57a19f573f510ff916675cb86778e567",
+            "exists": false
+          },
+          "messenger-oracles": {
+            "id": "8540aa47eadace65ec26befe1a6259dbf10311ba0376c3c39a9c4a9efcac8c17",
+            "exists": false
+          },
+          "mgr.a": {
+            "id": "939a97922c9d22f8f5d81a0328d9e482237364a56dc97c7e6cc63eb1b1c46282",
+            "exists": false
+          },
+          "mgr.b": {
+            "id": "acf22f5cc8347b0d9f79117552fef121fa58542579371789858afc128eb76480",
+            "exists": false
+          },
+          "mon.a": {
+            "id": "f31537ebeaa876a79d39c709596405e53c46759d2aaa7662b0122831171a518e",
+            "exists": false
+          },
+          "mon.b": {
+            "id": "830085cd87f9311150a1517c054076790b44abe24f6ee1b611d9981716744a19",
+            "exists": false
+          },
+          "mon.c": {
+            "id": "2eedc1c56536107753d64872477d7de8f6c92ab164ea7a9b186d2ae1fd49a907",
+            "exists": false
+          },
+          "osd.0": {
+            "id": "1dfe978943ec89b2a59f8958487e36752c5df71cf57e9d0dd95ef9e9ea95549d",
+            "exists": false
+          }
+        },
+        "network": "d1ba8ef9-fe62-441a-8912-a6ca7b3e8d84",
+        "network_exists": false,
+        "filesystem_removed": true,
+        "pools_removed": true,
+        "residual_owned_sessions": []
+      },
+      "raw_public_evidence": {}
+    }
+  ],
+  "local_checks": {
+    "source_scope": "base plus four selected MDS Go files",
+    "receipt": {
+      "start": "2026-10-18T07:12:20.490368+00:00",
+      "steps": [
+        {
+          "name": "root-cgo0",
+          "argv": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "start": "2026-10-18T07:12:20.490377+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:12:35.555302+00:00"
+        },
+        {
+          "name": "race",
+          "argv": [
+            "go",
+            "test",
+            "-race",
+            "./integration",
+            "./cephmsgr"
+          ],
+          "start": "2026-10-18T07:12:35.555579+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:12:58.394446+00:00"
+        },
+        {
+          "name": "vet",
+          "argv": [
+            "go",
+            "vet",
+            "./..."
+          ],
+          "start": "2026-10-18T07:12:58.394880+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:12:59.563839+00:00"
+        },
+        {
+          "name": "fixture",
+          "argv": [
+            "go",
+            "test",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T07:12:59.564301+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:13:04.040800+00:00"
+        },
+        {
+          "name": "fixture-vet",
+          "argv": [
+            "go",
+            "vet",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T07:13:04.041082+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:13:05.410769+00:00"
+        },
+        {
+          "name": "python",
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tools",
+            "-p",
+            "test_*.py"
+          ],
+          "start": "2026-10-18T07:13:05.411242+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:13:11.664838+00:00"
+        }
+      ]
+    },
+    "evidence": {},
+    "python_test_count": 429
+  },
+  "separate_combined_check": {
+    "status": "failed; follow-up remains separate",
+    "receipt": {
+      "start": "2026-10-18T07:14:08.654262+00:00",
+      "steps": [
+        {
+          "name": "root-cgo0",
+          "argv": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "start": "2026-10-18T07:14:08.654273+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:14:23.622470+00:00"
+        },
+        {
+          "name": "race",
+          "argv": [
+            "go",
+            "test",
+            "-race",
+            "./integration",
+            "./cephmsgr"
+          ],
+          "start": "2026-10-18T07:14:23.622702+00:00",
+          "exit_code": 1,
+          "end": "2026-10-18T07:14:50.535606+00:00"
+        }
+      ]
+    },
+    "evidence": {},
+    "failure": "TestMDSClosePushLossBeforeAdmissionDoesNotResend: fill ordered writer queue context deadline exceeded",
+    "remaining_steps_not_run": true
+  },
+  "final_combined_check": {
+    "status": "seven steps passed on a distinct final source",
+    "source": {
+      "selected_overlay_files": [
+        {
+          "file": "cephmsgr/mds_close_push_admission_test.go",
+          "bytes": 7934,
+          "sha256": "31f947835764ff1adf8c3e7a407d4d909b3f8e66eec7a21c3476cca5eacc20ea"
+        },
+        {
+          "file": "cephmsgr/mds_peer_test.go",
+          "bytes": 18379,
+          "sha256": "7cd5e480dd7f5199779555b9fee67a8f78fa3e6c13d21d5fdb49626d0b515b22"
+        },
+        {
+          "file": "integration/fixture/mds_cephfs_ranks.go",
+          "bytes": 88735,
+          "sha256": "8554c0b94d7c1d6d2164e2be5e2547ba39a31ee59bc0e4ad1ca6f54297f81ba7"
+        },
+        {
+          "file": "integration/fixture/mds_cephfs_ranks_replay_test.go",
+          "bytes": 15757,
+          "sha256": "08982629561ded462e260bd06ec50451b0897da2568b0a1034162353fa081e19"
+        },
+        {
+          "file": "integration/mds_cephfs_ranks_replay_test.go",
+          "bytes": 54642,
+          "sha256": "c9d126ab29c247d78b25e39b9395d51d6b0b60f75b000943a3c95afcfabee055"
+        },
+        {
+          "file": "integration/mds_cephfs_ranks_test.go",
+          "bytes": 63682,
+          "sha256": "f679d77302d554dc22288171a53745429fb734d229cebd6e08bde753083a5019"
+        }
+      ]
+    },
+    "receipt": {
+      "start": "2026-10-18T07:19:24.727376+00:00",
+      "steps": [
+        {
+          "name": "close-push-race-100",
+          "argv": [
+            "go",
+            "test",
+            "-race",
+            "./cephmsgr",
+            "-run",
+            "^TestMDSClosePush",
+            "-count=100"
+          ],
+          "start": "2026-10-18T07:19:24.727387+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:19:35.733495+00:00"
+        },
+        {
+          "name": "root-cgo0",
+          "argv": [
+            "go",
+            "test",
+            "./..."
+          ],
+          "start": "2026-10-18T07:19:35.733760+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:19:50.857098+00:00"
+        },
+        {
+          "name": "race",
+          "argv": [
+            "go",
+            "test",
+            "-race",
+            "./integration",
+            "./cephmsgr"
+          ],
+          "start": "2026-10-18T07:19:50.857544+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:20:13.133733+00:00"
+        },
+        {
+          "name": "vet",
+          "argv": [
+            "go",
+            "vet",
+            "./..."
+          ],
+          "start": "2026-10-18T07:20:13.134066+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:20:13.802467+00:00"
+        },
+        {
+          "name": "fixture",
+          "argv": [
+            "go",
+            "test",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T07:20:13.802750+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:20:18.332125+00:00"
+        },
+        {
+          "name": "fixture-vet",
+          "argv": [
+            "go",
+            "vet",
+            "-mod=readonly",
+            "./..."
+          ],
+          "start": "2026-10-18T07:20:18.332666+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:20:18.647201+00:00"
+        },
+        {
+          "name": "python",
+          "argv": [
+            "python3",
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tools",
+            "-p",
+            "test_*.py"
+          ],
+          "start": "2026-10-18T07:20:18.647519+00:00",
+          "exit_code": 0,
+          "end": "2026-10-18T07:20:24.495689+00:00"
+        }
+      ]
+    },
+    "evidence": {},
+    "python_test_count": 429
+  },
+  "original_final_ci": {
+    "source": "fcfb9590cce84bec6160c01827b68cb2b84d7526",
+    "conclusion": "failure",
+    "status": "completed",
+    "jobs": 73,
+    "success": 72,
+    "failure": 1,
+    "failed_jobs": [
+      {
+        "id": 117610680671,
+        "name": "Ceph 20.2.4 (aes/aes, crc, IPv4, MGR=2, host, expiry=0, idle=0, auth-epoch=0, short-tickets=0, mode-rejection=none, mapped=0, OSD=1, profile=legacy-v6, store=bluestore, replicas=1, native-mgr-preparation=0, race=0) MDS-cephfs-ranks-replay",
+        "conclusion": "failure"
+      }
+    ],
+    "retry_or_skip": false
+  },
+  "boundaries": [
+    "Original missing history entry does not prove a specific eviction.",
+    "Current unsaturated counts are observation-time evidence, not a universal history delivery guarantee.",
+    "Two first native runs retain their original source; the distinct final combined source passed seven local checks, not a new full CI matrix.",
+    "Cleanup absence is independently checked from the retained audit; this offline generator does not query Docker."
+  ]
+}

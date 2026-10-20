@@ -1,0 +1,8 @@
+# Development fixtures execute inside Linux even when checked out on Windows.
+*.sh text eol=lf
+*.py text eol=lf
+# Native proof provenance hashes the exact checked-out encoder source bytes.
+# Include future encoders so Windows checkouts preserve the Linux build inputs.
+tools/*_native_encoder.cc text eol=lf
+# Optional native client oracle provenance also hashes source bytes.
+tools/*_oracle.cc text eol=lf

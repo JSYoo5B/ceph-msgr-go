@@ -1,0 +1,184 @@
+{
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "ceph_version": "20.2.4",
+  "features": 3026423347916342070,
+  "fixtures": {
+    "mutation-reply-v6-all-success": {
+      "compat": 2,
+      "data_bytes": 0,
+      "front_bytes": 541,
+      "input_envelope_sha256": "e7126b7c5dc8f41f9554ef8727e83bd0b77c035b887c45299892e4e23cb93770",
+      "native_argv": [
+        "ceph-dencoder",
+        "type",
+        "MOSDOpReply",
+        "import",
+        "<scratch>/mutation-reply-v6-all-success-input.bin",
+        "decode",
+        "dump_json",
+        "set_features",
+        "3026423347916342070",
+        "encode",
+        "export",
+        "<scratch>/mutation-reply-v6-all-success-native.bin"
+      ],
+      "native_envelope_sha256": "011a1929062e0827af4e7aec4e061b524ab3c3eeee7349b92d0891a08277fbde",
+      "summary": {
+        "summary": "osd_op_reply(77 mutation-codec [create,write 2~4,writefull 0~3,append 0~2,truncate 7,zero 1~2,assert-version v19,cmpext 1~2 [failok],delete] v11'20 uv19 ondisk = 0)"
+      },
+      "type": 43,
+      "version": 6
+    },
+    "mutation-reply-v6-cmpext-mismatch": {
+      "compat": 2,
+      "data_bytes": 0,
+      "front_bytes": 205,
+      "input_envelope_sha256": "35231400b4952182035f2ecf71305f29b8c732f4cc2436016b40d9516574b3fa",
+      "native_argv": [
+        "ceph-dencoder",
+        "type",
+        "MOSDOpReply",
+        "import",
+        "<scratch>/mutation-reply-v6-cmpext-mismatch-input.bin",
+        "decode",
+        "dump_json",
+        "set_features",
+        "3026423347916342070",
+        "encode",
+        "export",
+        "<scratch>/mutation-reply-v6-cmpext-mismatch-native.bin"
+      ],
+      "native_envelope_sha256": "dfc1a9d1265283e7d617a341cb7173f603f2edb2cbfda35579c7578932e3905c",
+      "summary": {
+        "summary": "osd_op_reply(77 mutation-codec [cmpext 1~2 [failok]] v11'20 uv19 ondisk = -4097 ((4097) Unknown error 4097))"
+      },
+      "type": 43,
+      "version": 6
+    },
+    "mutation-reply-v6-exclusive-eexist": {
+      "compat": 2,
+      "data_bytes": 0,
+      "front_bytes": 205,
+      "input_envelope_sha256": "8c60024798342fe27f11224262114560492ddaf8d68ae1ab6d0a4b65aeb18de3",
+      "native_argv": [
+        "ceph-dencoder",
+        "type",
+        "MOSDOpReply",
+        "import",
+        "<scratch>/mutation-reply-v6-exclusive-eexist-input.bin",
+        "decode",
+        "dump_json",
+        "set_features",
+        "3026423347916342070",
+        "encode",
+        "export",
+        "<scratch>/mutation-reply-v6-exclusive-eexist-native.bin"
+      ],
+      "native_envelope_sha256": "4824ccb2b0a3a1992fdd4117e8c1ef9023a9657a9965271ff9b062fb314f05ea",
+      "summary": {
+        "summary": "osd_op_reply(77 mutation-codec [create] v11'20 uv19 ondisk = -17 ((17) File exists))"
+      },
+      "type": 43,
+      "version": 6
+    },
+    "mutation-reply-v6-zero-as-truncate": {
+      "compat": 2,
+      "data_bytes": 0,
+      "front_bytes": 205,
+      "input_envelope_sha256": "b07dd795682b0408838f3e7b26c91ebfd3b0fef501d3a7b388f5b1cc0ba46174",
+      "native_argv": [
+        "ceph-dencoder",
+        "type",
+        "MOSDOpReply",
+        "import",
+        "<scratch>/mutation-reply-v6-zero-as-truncate-input.bin",
+        "decode",
+        "dump_json",
+        "set_features",
+        "3026423347916342070",
+        "encode",
+        "export",
+        "<scratch>/mutation-reply-v6-zero-as-truncate-native.bin"
+      ],
+      "native_envelope_sha256": "045cc4fe7d47bb3879f371ae0eeb2f72b53d290e3744593cd973de074a6a5fd3",
+      "summary": {
+        "summary": "osd_op_reply(77 mutation-codec [truncate 1] v11'20 uv19 ondisk = 0)"
+      },
+      "type": 43,
+      "version": 6
+    },
+    "mutation-request-v6-all": {
+      "compat": 3,
+      "data_bytes": 11,
+      "front_bytes": 519,
+      "input_envelope_sha256": "13d4e8e5fb0d5963fcb708be3e045315464675e687624e46ba3d410b09c42da0",
+      "native_argv": [
+        "ceph-dencoder",
+        "type",
+        "MOSDOp",
+        "import",
+        "<scratch>/mutation-request-v6-all-input.bin",
+        "decode",
+        "dump_json",
+        "set_features",
+        "3026423347916342070",
+        "encode",
+        "export",
+        "<scratch>/mutation-request-v6-all-native.bin"
+      ],
+      "native_envelope_sha256": "9cdfa68b6a513fcc027e93769b7df8d10d0d157350828b51d4210331a0c4b28f",
+      "summary": {
+        "summary": "osd_op(client.123.1:77 7.11223344 7:22cc4488:tenant:route-key:mutation-codec:head [create,write 2~4 in=4b,writefull 0~3 in=3b,append 0~2 in=2b,truncate 7,zero 1~2,assert-version v19,cmpext 1~2 [failok] in=2b,delete] snapc 0=[] ondisk+read+write+returnvec e11)"
+      },
+      "type": 42,
+      "version": 6
+    }
+  },
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "native_invocation": "ceph.Container.RunNativeCommand on ceph.Run disposable 1 MON/0 MGR/0 OSD cluster; worker ceph-dencoder performs no Ceph object execution",
+  "native_payload_encoder_verified": false,
+  "sources": {
+    "src/include/msgr.h": {
+      "license": "LGPL-2.1",
+      "sha256": "7eb1d06765ef153f6480b0a28c410df7c56946e42ac98637139079b372134e23",
+      "url": "https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/include/msgr.h"
+    },
+    "src/include/rados.h": {
+      "license": "LGPL-2.1",
+      "sha256": "abd9410e17a9b93ad5c666197164f0b7f86a07da361e0cbf40451f93958a01fb",
+      "url": "https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/include/rados.h"
+    },
+    "src/messages/MOSDOp.h": {
+      "license": "LGPL-2.1",
+      "sha256": "68d6b0ed89f97761bb0fc575d3d5c17edd9003b8c0ac820d53728f945ac205f5",
+      "url": "https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MOSDOp.h"
+    },
+    "src/messages/MOSDOpReply.h": {
+      "license": "LGPL-2.1",
+      "sha256": "6bd3e2cb240e3d245480d571e21a7ae6430c416aaa45c611d9ba5063e217d444",
+      "url": "https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/messages/MOSDOpReply.h"
+    },
+    "src/msg/Message.cc": {
+      "license": "LGPL-2.1",
+      "sha256": "9c778ea7185e1910fb6d97bbfdcfe446a52f4eac94ff9a89faf5a3cfcdf0f562",
+      "url": "https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/msg/Message.cc"
+    },
+    "src/msg/Message.h": {
+      "license": "LGPL-2.1",
+      "sha256": "81f9b84fc9f6b2bdd93aad232a441eae268ac337a1c8a2075b927b7a954a629a",
+      "url": "https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/msg/Message.h"
+    },
+    "src/osd/osd_types.cc": {
+      "license": "LGPL-2.1",
+      "sha256": "614710847acaebd82e17787b91b38e07198eec58488cd9f6d7283499e0fa6d3b",
+      "url": "https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/osd_types.cc"
+    },
+    "src/osd/osd_types.h": {
+      "license": "LGPL-2.1",
+      "sha256": "8baa31f93e0694b7986381265f6af2294b23ce7cf98f8caf5bfde66c9abb84d1",
+      "url": "https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/osd/osd_types.h"
+    }
+  },
+  "testcontainers_version": "github.com/JSYoo5B/ceph-testcontainers-go v0.2.0",
+  "validation": "Independent Python field encoding; native decoder acceptance and envelope re-export only. Message::encode retains nonempty decoded front and does not rerun encode_payload."
+}
