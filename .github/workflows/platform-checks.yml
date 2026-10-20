@@ -67,7 +67,8 @@ jobs:
         with:
           name: go-tests-${{ matrix.os }}-${{ matrix.go }}
           path: ${{ runner.temp }}/go-tests.jsonl
-          retention-days: 7
+          retention-days: 14
+          compression-level: 9
 
   fixture-tools:
     if: contains(fromJSON(inputs.matrix).fixed, 'fixture-tools')
@@ -148,7 +149,8 @@ jobs:
           path: |
             ${{ runner.temp }}/ceph-tests.log
             ${{ runner.temp }}/ceph-diagnostics/
-          retention-days: 7
+          retention-days: 14
+          compression-level: 9
 
   fuzz:
     if: contains(fromJSON(inputs.matrix).fixed, 'fuzz')
@@ -265,5 +267,6 @@ jobs:
         with:
           name: ceph-windows-evidence
           path: ${{ runner.temp }}/ceph-windows-diagnostics/
-          retention-days: 7
+          retention-days: ${{ job.status == 'failure' && 14 || 7 }}
+          compression-level: 9
 
