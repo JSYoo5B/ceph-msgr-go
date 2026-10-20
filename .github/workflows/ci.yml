@@ -1,8 +1,6 @@
 name: Native Go and Tentacle interoperability
 
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -15,8 +13,8 @@ on:
 permissions:
   contents: read
 
-# Branch changes run through pull_request only, avoiding duplicate push checks.
-# Main keeps full push coverage. New commits cancel older runs for the same
+# Changes run through pull_request only, avoiding duplicate push checks.
+# Periodic coverage verifies main. New commits cancel older runs for the same
 # pull request; manual dispatches remain separate from baseline checks.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -278,7 +276,7 @@ jobs:
       - name: Validate the catalog and plan the selection
         id: plan
         env:
-          # Push and pull-request events always run the full catalog; only a
+          # Pull-request events always run the full catalog; only a
           # manual dispatch can narrow it (see .github/scenarios/README.md).
           SELECTORS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || 'all' }}
         run: |

@@ -1,6 +1,6 @@
 name: Native interoperability scenarios
 
-# Reusable by ci.yml (push, pull request, dispatch), ci-command.yml (a reviewer's
+# Reusable by ci.yml (pull request, dispatch), ci-command.yml (a reviewer's
 # request for named scenarios on one pull-request commit) and periodic.yml.
 # Test code runs with read-only repository permissions and no persisted credential.
 on:

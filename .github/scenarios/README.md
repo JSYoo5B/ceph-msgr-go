@@ -32,7 +32,7 @@ against another revision's catalog while running the trusted script.
 
 | Workflow | Selection | Notes |
 | --- | --- | --- |
-| `ci.yml` (main push, pull request) | always `all` | Branch pushes use PR checks once; main retains full coverage. |
+| `ci.yml` (pull request) | always `all` | Push events do not duplicate PR checks; periodic coverage verifies main. |
 | `ci.yml` manual dispatch | `scenarios` input (space-separated selectors, default `all`) | The `plan` job validates, then plans. |
 | `ci-command.yml` | the `/ci run` comment | See below. |
 | `periodic.yml` | `all`, weekly (Sunday 03:17 UTC) and on dispatch | A `summary` job fails unless every scenario job succeeded. |
