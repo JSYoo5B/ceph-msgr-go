@@ -56,11 +56,29 @@ and deadline regressions, which were not part of that first experiment.
 - Requests published after an existing provider/oracle failure are identified
   as unexecuted cascading failures. The originating error remains intact.
 
+## Fullness in failure messages
+
+Readiness failures also summarize the number of successful status observations
+containing a `toofull` PG state and the first/last offsets from the wait start.
+The existing recovery-mode fullness snapshot at the last such observation is
+included with its independently observed dump epoch, effective ratios and each
+OSD's up/in/state flags. This summary reuses collected data; it adds no native
+commands and changes neither readiness nor deadline handling. The bounded JSON
+timeline remains available even when the wait succeeds.
+
+An observation without a fullness snapshot clears the earlier snapshot from
+this summary. Failure text reports it as unavailable rather than labeling older
+data as current. Ordinary `clean` waits do not collect fullness snapshots; their
+toofull summary can therefore report unavailable fullness. A later non-toofull
+observation does not overwrite the last toofull snapshot.
+
 ## Verification
 
 `go -C integration/fixture test -run 'Test(OSDClean|WaitOSDClean)' ./...`
 exercises delayed clean recovery, permanently unclean state, status invocation
 failures, pre-cancellation, late clean output and error-cause preservation.
+The same tests cover fullness error summaries, distinct status/dump epochs,
+toofull counts across clean recovery and stale-snapshot exclusion.
 `internal/testcluster` tests cover originating and cascading worker errors.
 These are synthetic regressions, separate from native interoperability.
 
