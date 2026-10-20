@@ -40,13 +40,14 @@ def command_lines(body):
     found, fence = [], None
     for raw in body.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = raw.rstrip()
-        marker = line.lstrip()[:3]
+        marker = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
         if fence is not None:
-            if marker == fence:
+            if (marker and marker[1][0] == fence[0]
+                    and len(marker[1]) >= len(fence) and not marker[2].strip()):
                 fence = None
             continue
-        if marker in ("```", "~~~"):
-            fence = marker
+        if marker:
+            fence = marker[1]
             continue
         if line.startswith(">"):
             continue

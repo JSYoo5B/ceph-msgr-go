@@ -35,6 +35,13 @@ class ParseTests(unittest.TestCase):
     def test_unterminated_fence_hides_the_rest(self):
         self.assertIsNone(cmd.parse_comment("```\n/ci run all"))
 
+    def test_shorter_fences_and_info_strings_cannot_end_a_quote(self):
+        for fence in ("````", "~~~~"):
+            body = fence + "\n" + fence[:3] + "\n/ci run all\n" + fence
+            self.assertIsNone(cmd.parse_comment(body))
+        self.assertIsNone(cmd.parse_comment("```\n```sh\n/ci run all\n```"))
+        self.assertEqual(cmd.parse_comment("````\n```\n/ci run quoted\n`````\n/ci run all"), ["all"])
+
 
 class AuthorizationTests(unittest.TestCase):
     def test_trusted_associations_on_pull_requests_only(self):

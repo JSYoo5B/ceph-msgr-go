@@ -131,7 +131,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state=pending \
-            -f context="ci-command/run" -f description="Requested scenarios are running" -f target_url="$RUN_URL"
+            -f context="ci-command/run-$GITHUB_RUN_ID" -f description="Requested scenarios are running" -f target_url="$RUN_URL"
 
   run:
     name: Scenarios
@@ -174,7 +174,7 @@ jobs:
             *) state=error; description="Requested scenarios have no result" ;;
           esac
           gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$state" \
-            -f context="ci-command/run" -f description="$description" -f target_url="$RUN_URL"
+            -f context="ci-command/run-$GITHUB_RUN_ID" -f description="$description" -f target_url="$RUN_URL"
           printf '`/ci run %s` on commit `%s`: **%s** (%s).\n\nRun: %s\n\nThe result belongs to this exact commit; later pushes need a new request. Baseline checks run independently. Per-scenario results are in the run'"'"'s `scenario-*` artifacts.\n' \
             "$SELECTORS" "$SHA" "$RESULT" "$description" "$RUN_URL" > "$RUNNER_TEMP/final.md"
           gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/final.md"
