@@ -63,21 +63,48 @@ func TestWaitOSDCleanAcceptsDelayedRecovery(t *testing.T) {
 	if len(tl.observations) != 4 || !strings.Contains(tl.observations[0].Summary, "recovery_toofull") || strings.Contains(tl.observations[3].Summary, "recovery_toofull") {
 		t.Fatal("native recovery transition was not retained", tl.observations)
 	}
+	if tl.toofullPolls != 3 || tl.firstToofullAt > tl.lastToofullAt {
+		t.Fatal("toofull timeline was not retained across recovery", tl)
+	}
 }
 
 func TestWaitOSDCleanReportsLastUncleanObservation(t *testing.T) {
+	var fullness osdFullnessStatus
+	if err := json.Unmarshal([]byte(`{"epoch":43,"nearfull_ratio":0.85,"backfillfull_ratio":0.9,"full_ratio":0.95,"osds":[{"osd":1,"up":1,"in":1,"state":["exists","up","backfillfull"]}]}`), &fullness); err != nil {
+		t.Fatal(err)
+	}
 	_, err := waitOSDClean(context.Background(), 50*time.Millisecond, time.Second, time.Millisecond, 3, func(context.Context) (osdCleanStatus, error) {
 		s := cleanStatus("active+clean", "active+recovery_toofull+degraded")
 		s.Health.Checks = map[string]json.RawMessage{"PG_RECOVERY_FULL": nil, "OSD_BACKFILLFULL": nil}
+		s.Fullness = &fullness
 		return s, nil
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal("permanently unclean state succeeded")
 	}
-	for _, want := range []string{"restore native OSD fixture readiness", "deadline exceeded", "budget 50ms", "osdmap epoch 42", "1xactive+recovery_toofull+degraded", "OSD_BACKFILLFULL,PG_RECOVERY_FULL", "0 status invocation failures", "before the controller observed clean state"} {
+	for _, want := range []string{"restore native OSD fixture readiness", "deadline exceeded", "budget 50ms", "osdmap epoch 42", "1xactive+recovery_toofull+degraded", "OSD_BACKFILLFULL,PG_RECOVERY_FULL", "0 status invocation failures", "before the controller observed clean state", "toofull PG states in", "first at +", "last at +", "dump epoch 43", "ratios nearfull/backfillfull/full 0.85/0.9/0.95", "osd.1 up=1 in=1 [exists,up,backfillfull]"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("failure lacks %q: %v", want, err)
 		}
+	}
+}
+
+func TestOSDCleanTimelineDoesNotAttributeAStaleSnapshotToALaterPoll(t *testing.T) {
+	var tl osdCleanTimeline
+	s := cleanStatus("active+recovery_toofull")
+	s.Fullness = &osdFullnessStatus{Epoch: 43}
+	tl.observeToofull(s, time.Second)
+	tl.observeToofull(cleanStatus("active+degraded"), 2*time.Second)
+	if tl.toofullPolls != 1 || tl.lastToofullAt != time.Second || tl.lastToofullFullness != s.Fullness {
+		t.Fatal("unrelated state changed the toofull snapshot", tl)
+	}
+	tl.observeToofull(cleanStatus("active+backfill_toofull"), 3*time.Second)
+	if tl.toofullPolls != 2 || tl.firstToofullAt != time.Second || tl.lastToofullAt != 3*time.Second {
+		t.Fatal("toofull observations lost their count or timing", tl)
+	}
+	err := tl.failure(context.Background(), time.Second, time.Now(), 3)
+	if !strings.Contains(err.Error(), "fullness snapshot unavailable at the last toofull observation") || strings.Contains(err.Error(), "dump epoch 43") {
+		t.Fatal("old fullness state was attributed to the latest toofull poll", err)
 	}
 }
 

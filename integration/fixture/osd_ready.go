@@ -67,6 +67,15 @@ type osdFullnessStatus struct {
 	} `json:"osds"`
 }
 
+func (f osdFullnessStatus) summary() string {
+	osds := make([]string, 0, len(f.OSDs))
+	for _, osd := range f.OSDs {
+		osds = append(osds, fmt.Sprintf("osd.%d up=%d in=%d [%s]", osd.ID, osd.Up, osd.In, strings.Join(osd.State, ",")))
+	}
+	return fmt.Sprintf("dump epoch %d, ratios nearfull/backfillfull/full %g/%g/%g; %s",
+		f.Epoch, f.NearfullRatio, f.BackfillRatio, f.FullRatio, strings.Join(osds, "; "))
+}
+
 type osdCleanObservation struct {
 	ElapsedMS        int64              `json:"elapsed_ms"`
 	Summary          string             `json:"summary,omitempty"`
@@ -130,6 +139,25 @@ type osdCleanTimeline struct {
 	slowestPoll  time.Duration
 	observations []osdCleanObservation
 	omitted      int
+
+	toofullPolls        int
+	firstToofullAt      time.Duration
+	lastToofullAt       time.Duration
+	lastToofullFullness *osdFullnessStatus
+}
+
+// observeToofull reuses the already collected snapshot. A missing snapshot
+// replaces an older one, so failure text cannot attribute stale state to the
+// latest toofull observation.
+func (tl *osdCleanTimeline) observeToofull(s osdCleanStatus, at time.Duration) {
+	if !strings.Contains(s.pgSummary(), "toofull") {
+		return
+	}
+	if tl.toofullPolls == 0 {
+		tl.firstToofullAt = at
+	}
+	tl.toofullPolls++
+	tl.lastToofullAt, tl.lastToofullFullness = at, s.Fullness
 }
 
 // waitOSDClean polls until every owned OSD is up and in and every PG is
@@ -172,6 +200,7 @@ func waitOSDClean(ctx context.Context, budget, pollTimeout, interval time.Durati
 			tl.statusErrs++
 			tl.lastErr, tl.lastErrAt = err, now.Sub(start)
 		} else {
+			tl.observeToofull(s, now.Sub(start))
 			ok, reason := s.clean(expected)
 			if ok {
 				if deadline.Err() != nil {
@@ -207,6 +236,15 @@ func (tl osdCleanTimeline) failure(parent context.Context, budget time.Duration,
 		fmt.Fprintf(&b, "; last unclean observation at +%s: %s: %s", tl.lastAt.Round(time.Millisecond), tl.lastReason, tl.last.summary(expected))
 	case tl.lastErr != nil:
 		b.WriteString("; no status observation succeeded")
+	}
+	if tl.toofullPolls > 0 {
+		fmt.Fprintf(&b, "; toofull PG states in %d polls, first at +%s, last at +%s",
+			tl.toofullPolls, tl.firstToofullAt.Round(time.Millisecond), tl.lastToofullAt.Round(time.Millisecond))
+		if tl.lastToofullFullness != nil {
+			fmt.Fprintf(&b, "; fullness at the last toofull observation: %s", tl.lastToofullFullness.summary())
+		} else {
+			b.WriteString("; fullness snapshot unavailable at the last toofull observation")
+		}
 	}
 	if tl.lastErr != nil {
 		fmt.Fprintf(&b, "; last status invocation error at +%s: %v", tl.lastErrAt.Round(time.Millisecond), tl.lastErr)
