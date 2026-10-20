@@ -336,7 +336,9 @@ func adoptMutationPlacement(t *testing.T, original, fresh osdFixtureOracle) osdF
 
 func recoverMutationFixture(t *testing.T, c *cephmsgr.Client, oracle osdFixtureOracle, original []byte, stoppedName string, stopped bool) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// The controller permits 90 s for native recovery reservation retries;
+	// leave separate room for daemon restart and native placement/restoration.
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if stopped {
@@ -345,7 +347,11 @@ func recoverMutationFixture(t *testing.T, c *cephmsgr.Client, oracle osdFixtureO
 			return
 		}
 	}
-	waitOSDFixtureClean(t, ctx, oracle)
+	if oracle.Replicas == 3 {
+		if err := testcluster.ControlDaemon(ctx, dir, "verify", "osd-ready", "recovery"); err != nil {
+			t.Fatal("restore three-OSD clean fixture after mutation", err)
+		}
+	}
 	// A restarted daemon need not become primary again. Read current native
 	// placement on both success and failure paths before restoring the object.
 	fresh := nativeMutation(t, ctx, map[string]any{"compare": false, "placement": true}).Placement
