@@ -158,7 +158,9 @@ opcodes, encodings and required features explicitly.
 Required operation groups include read/stat, writes/partial writes/append/truncate/
 delete, conditions and compound vectors, xattrs/OMAP, class calls, allocation hints,
 sparse reads/checksums, snapshots/clones and relevant cache/control operations.
-The opcode catalog is [opcodes-tentacle.csv](internal/osd/opcodes-tentacle.csv).
+The opcode catalog is [opcodes-tentacle.csv](internal/osd/opcodes-tentacle.csv);
+its unsupported entries are classified in
+[UNSUPPORTED_OPCODES.md](internal/osd/UNSUPPORTED_OPCODES.md).
 Detailed supported subsets are the contracts in `internal/osd/`.
 
 Do not equate Messenger ACK with execution, or an operation reply with a stronger
