@@ -183,6 +183,10 @@ type peerConfig struct {
 	reconnect func(msgr.Frame) (msgr.Tag, []byte)
 	// clientAddresses observes the ClientIdent address vector.
 	clientAddresses func([]msgr.Address)
+	// service, when set, sees every message first; handled messages are not
+	// treated as commands. It is how a synthetic MGR answers service
+	// registration.
+	service func(m msgr.MessageData, send func(msgr.MessageData) error) (handled bool, err error)
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
@@ -523,6 +527,15 @@ func mockDaemon(conn net.Conn, cfg peerConfig) error {
 		}
 		if m.Type == msgr.SubscribeMessage {
 			continue
+		}
+		if cfg.service != nil {
+			handled, err := cfg.service(m, send)
+			if err != nil {
+				return err
+			}
+			if handled {
+				continue
+			}
 		}
 		if m.Type == msgr.MonGetVersionMessage && cfg.role == 1 {
 			d := wire.NewDecoder(m.Front)
