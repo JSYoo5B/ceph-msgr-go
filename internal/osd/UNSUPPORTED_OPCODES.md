@@ -38,9 +38,9 @@ Classes:
 | SCRUB_UNRESERVE | Daemon-only operation | As PULL. | none |
 | SCRUB_MAP | Daemon-only operation | As PULL. | none |
 | COPY_GET | Daemon-originated operation | Handled by `PrimaryLogPG`; its only caller outside `Objecter.h` is `PrimaryLogPG` copy/promote (the OSD's own Objecter). No librados entry point. | #7 (COPY_FROM) classifies the client-visible copy path |
-| SYNC_READ | Current server path, deferred configuration | Handled together with READ (same extent semantics), also used internally by manifest reads. No Objecter or librados builder emits it; READ is implemented. | none; no consumer need |
-| STARTSYNC | Current server path, deferred configuration | Handler is a no-result nop write. No builder or librados entry point. | none; no consumer need |
-| TRIMTRUNC | Current server path, deferred configuration | Handler falls through into TRUNCATE (implemented) with the truncate size as offset. No builder or librados entry point. | none; no consumer need |
+| SYNC_READ | Current server path, deferred primitive | Handled together with READ (same extent semantics), also used internally by manifest reads. No Objecter or librados builder emits it; READ is implemented. | none; no consumer need |
+| STARTSYNC | Current server path, deferred primitive | Handler is a no-result nop write. No builder or librados entry point. | none; no consumer need |
+| TRIMTRUNC | Current server path, deferred primitive | Handler falls through into TRUNCATE (implemented) with the truncate size as offset. No builder or librados entry point. | none; no consumer need |
 | TMAPGET | Current server path, deferred legacy format | Handler returns EOPNOTSUPP on erasure-coded pools. Tmap is the pre-OMAP object format; OMAP operations are implemented. Older APIs are not restored. | none |
 | TMAPPUT | Current server path, deferred legacy format | As TMAPGET. | none |
 | TMAPUP | Current server path, deferred legacy format | As TMAPGET; `Objecter.h` and `librados` still expose a builder. | none |
