@@ -743,20 +743,17 @@ func (s *MDSSession) setStateLocked(state MDSSessionState) {
 // session slot. unresolved records the address because the MDS may still hold
 // the session; the caller must not hold s.mu or the client mutex.
 func (s *MDSSession) finish(state MDSSessionState, err error, unresolved bool) {
+	m := s.conn
+	c := m.client
+	// Match the client-before-session lock order used for admission. Retire
+	// the slot and record uncertainty before publishing any terminal signal.
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	s.mu.Lock()
 	if s.state.terminal() {
 		s.mu.Unlock()
 		return
 	}
-	s.err = err
-	s.setStateLocked(state)
-	s.renewSent = nil
-	s.failRequestsLocked(err)
-	close(s.done)
-	s.mu.Unlock()
-	m := s.conn
-	c := m.client
-	c.mu.Lock()
 	if m.cephfs == s {
 		m.cephfs = nil
 	}
@@ -766,7 +763,12 @@ func (s *MDSSession) finish(state MDSSessionState, err error, unresolved bool) {
 		}
 		c.mdsUnresolved[m.address] = true
 	}
-	c.mu.Unlock()
+	s.err = err
+	s.setStateLocked(state)
+	s.renewSent = nil
+	s.failRequestsLocked(err)
+	close(s.done)
+	s.mu.Unlock()
 }
 
 // lost is called when the owning transport ends. A session whose
