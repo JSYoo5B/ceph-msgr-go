@@ -24,6 +24,9 @@ defaults:
   run:
     shell: bash
 
+env:
+  GOPROXY: 'https://proxy.golang.org|direct'
+
 jobs:
   request:
     name: Check the request
@@ -136,7 +139,7 @@ jobs:
   run:
     name: Scenarios
     needs: request
-    if: needs.request.outputs.accepted == 'true'
+    if: needs.request.outputs.accepted == 'true' && fromJSON(needs.request.outputs.matrix).include[0] != null
     permissions:
       contents: read
     uses: ./.github/workflows/native-scenarios.yml
@@ -144,9 +147,20 @@ jobs:
       matrix: ${{ needs.request.outputs.matrix }}
       ref: ${{ needs.request.outputs.sha }}
 
+  checks:
+    name: Selected platform checks
+    needs: request
+    if: needs.request.outputs.accepted == 'true' && fromJSON(needs.request.outputs.matrix).fixed[0] != null
+    permissions:
+      contents: read
+    uses: ./.github/workflows/platform-checks.yml
+    with:
+      matrix: ${{ needs.request.outputs.matrix }}
+      ref: ${{ needs.request.outputs.sha }}
+
   report:
     name: Report the result
-    needs: [request, run]
+    needs: [request, run, checks]
     if: always() && needs.request.outputs.accepted == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -163,9 +177,20 @@ jobs:
           NUMBER: ${{ github.event.issue.number }}
           SHA: ${{ needs.request.outputs.sha }}
           SELECTORS: ${{ needs.request.outputs.selectors }}
-          RESULT: ${{ needs.run.result }}
+          NATIVE: ${{ needs.run.result }}
+          CHECKS: ${{ needs.checks.result }}
+          HAS_NATIVE: ${{ fromJSON(needs.request.outputs.matrix).include[0] != null }}
+          HAS_CHECKS: ${{ fromJSON(needs.request.outputs.matrix).fixed[0] != null }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          RESULT=success
+          for item in "$HAS_NATIVE:$NATIVE" "$HAS_CHECKS:$CHECKS"; do
+            case "$item" in
+              false:*|true:success) ;;
+              true:failure) RESULT=failure; break ;;
+              true:*) RESULT=${item#true:} ;;
+            esac
+          done
           case "$RESULT" in
             success) state=success; description="Requested scenarios passed" ;;
             failure) state=failure; description="Requested scenarios failed" ;;

@@ -2,9 +2,9 @@
 """Validate the native interoperability scenario catalog and plan a selection.
 
 The catalog (.github/scenarios/catalog.json) is the discoverable list of the
-real-daemon scenarios. Each entry has a stable identifier, a group and the
-parameters of its workflow matrix row. This tool validates the catalog, checks
-it against the mandatory list and the workflow's fixed jobs, and prints the
+real-daemon scenarios and selectable platform check suites. Each native entry
+has a stable identifier, group and workflow matrix parameters. This tool
+validates the catalog against the mandatory list and reusable check jobs and prints the
 selected matrix with an explanation. It reads local files only and executes no
 test.
 
@@ -27,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / ".github" / "scenarios" / "catalog.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "platform-checks.yml"
 MANDATORY = ROOT / ".github" / "scenarios" / "mandatory.txt"
 REQUIRED_PARAMS = ("key", "service", "family")
 SUPPORTED_RELEASE = re.compile(r"^20\.2\.\d+$")
@@ -57,6 +58,8 @@ def validate_catalog(scenarios):
         if not isinstance(sid, str) or not sid:
             problems.append("entry %d has no identifier" % index)
             continue
+        if not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,159}", sid) or sid == "all":
+            problems.append("entry %d has an invalid identifier" % index)
         if sid in seen:
             problems.append("duplicate identifier %s" % sid)
         seen.add(sid)
@@ -107,13 +110,16 @@ def load_mandatory(path=MANDATORY):
 
 
 def fixed_job_problems(document, workflow_text):
-    """Windows, race, fuzz and the other fixed jobs must exist in the workflow."""
-    problems, seen = [], set()
+    """Selectable suites must exist in the reusable platform workflow."""
+    problems = []
+    seen = {entry.get("id") for entry in document.get("scenarios", [])}
     jobs = document.get("fixed_jobs", [])
     if not jobs:
         problems.append("catalog lists no fixed jobs")
     for job in jobs:
         name = job.get("job", "")
+        if job.get("id") != name:
+            problems.append("fixed check identifier must equal its job name: %r" % job.get("id"))
         if job.get("id") in seen:
             problems.append("duplicate fixed job %s" % job.get("id"))
         seen.add(job.get("id"))
@@ -167,7 +173,16 @@ def select(scenarios, selectors):
 
 
 def matrix(entries):
-    return {"include": [dict(entry["params"], scenario=entry["id"]) for entry in entries]}
+    return {
+        "include": [dict(entry["params"], scenario=entry["id"])
+                    for entry in entries if "check" not in entry["params"]],
+        "fixed": [entry["params"]["check"] for entry in entries if "check" in entry["params"]],
+    }
+
+
+def fixed_entries(document):
+    return [{"id": job["id"], "group": "checks", "params": {"check": job["id"]}}
+            for job in document.get("fixed_jobs", [])]
 
 
 def main(argv=None):
@@ -185,7 +200,7 @@ def main(argv=None):
         if args.command == "validate":
             document = load_catalog_document()
             problems = (validate_catalog(scenarios) + mandatory_problems(scenarios, load_mandatory())
-                        + fixed_job_problems(document, WORKFLOW.read_text(encoding="utf-8"))
+                        + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
                         + selector_problems(scenarios, integration_tests()))
             for problem in problems:
                 print(problem, file=sys.stderr)
@@ -193,16 +208,20 @@ def main(argv=None):
                 return 1
             print("catalog valid: %d scenarios, all mandatory, selecting existing tests" % len(scenarios))
         elif args.command == "list":
-            for entry in scenarios:
+            for entry in scenarios + fixed_entries(load_catalog_document(args.catalog)):
                 print(entry["id"])
         else:
             problems = validate_catalog(scenarios)
+            document = load_catalog_document(args.catalog)
+            if "fixed_jobs" in document:
+                problems += fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
             if problems:
                 raise PlanError("; ".join(problems))
-            entries, explanation = select(scenarios, args.select)
+            vocabulary = scenarios + fixed_entries(document)
+            entries, explanation = select(vocabulary, args.select)
             for line in explanation:
                 print(line, file=sys.stderr)
-            print("selected %d of %d scenarios" % (len(entries), len(scenarios)), file=sys.stderr)
+            print("selected %d of %d scenarios/checks" % (len(entries), len(vocabulary)), file=sys.stderr)
             print(json.dumps(matrix(entries), separators=(",", ":")))
     except PlanError as error:
         print("scenario_plan: %s" % error, file=sys.stderr)

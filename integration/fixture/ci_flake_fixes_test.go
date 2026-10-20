@@ -181,8 +181,8 @@ func TestRelayListensBelowEphemeralRangeAndFailsFastOnBind(t *testing.T) {
 func TestCIPrePullsTheTestcontainersReaperWithRetry(t *testing.T) {
 	pull := "docker pull " + testcontainers.ReaperDefaultImage
 	// Both jobs that start Testcontainers clusters pre-pull the exact reaper
-	// image this module's Testcontainers version runs. The Ceph job is reusable.
-	for _, name := range []string{"ci.yml", "native-scenarios.yml"} {
+	// image this module's Testcontainers version runs. Both jobs are reusable.
+	for _, name := range []string{"platform-checks.yml", "native-scenarios.yml"} {
 		data, err := os.ReadFile("../../.github/workflows/" + name)
 		if err != nil {
 			t.Fatal(err)

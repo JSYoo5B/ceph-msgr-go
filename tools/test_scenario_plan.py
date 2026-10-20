@@ -17,21 +17,23 @@ class CatalogTests(unittest.TestCase):
         scenarios = document["scenarios"]
         self.assertEqual(plan.validate_catalog(scenarios), [])
         self.assertEqual(plan.mandatory_problems(scenarios, plan.load_mandatory()), [])
-        self.assertEqual(plan.fixed_job_problems(document, plan.WORKFLOW.read_text(encoding="utf-8")), [])
+        self.assertEqual(plan.fixed_job_problems(document, plan.CHECKS_WORKFLOW.read_text(encoding="utf-8")), [])
         self.assertEqual(plan.selector_problems(scenarios, plan.integration_tests()), [])
 
     def test_workflows_use_the_planner_and_the_reusable_runtime(self):
         root = plan.ROOT / ".github" / "workflows"
         ci = (root / "ci.yml").read_text(encoding="utf-8")
-        self.assertIn("scenario_plan.py plan", ci)
-        self.assertIn("uses: ./.github/workflows/native-scenarios.yml", ci)
-        self.assertNotIn("include:\n          - { key:", ci, "a static matrix would bypass the catalog")
+        self.assertNotIn("matrix:", ci, "automatic CI must not expand scenario/platform matrices")
+        self.assertNotIn("integration/run.sh", ci, "native sessions require an explicit request")
+        self.assertNotIn("native-scenarios.yml", ci)
         for name in ("ci-command.yml", "periodic.yml"):
             text = (root / name).read_text(encoding="utf-8")
             self.assertIn("native-scenarios.yml", text)
+            self.assertIn("platform-checks.yml", text)
+            self.assertIn("scenario_plan.py plan", text)
         runtime = (root / "native-scenarios.yml").read_text(encoding="utf-8")
         self.assertIn("persist-credentials: false", runtime)
-        self.assertIn("fromJSON(inputs.matrix)", runtime)
+        self.assertIn("fromJSON(inputs.matrix).include", runtime)
 
     def test_rejects_duplicates_empty_selectors_and_unsupported_releases(self):
         scenarios = [entry("a"), entry("a"), entry("b", test_run=""), entry("c", release="19.2.3")]
@@ -61,6 +63,14 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(plan.fixed_job_problems(document, "jobs:\n  unit:\n    x: 1\n  fuzz:\n"), [])
         self.assertIn("'fuzz'", "\n".join(plan.fixed_job_problems(document, "jobs:\n  unit:\n")))
         self.assertIn("no fixed jobs", "\n".join(plan.fixed_job_problems({}, "")))
+        collision = {"scenarios": [entry("unit")], "fixed_jobs": [{"id": "unit", "job": "unit"}]}
+        self.assertIn("duplicate fixed job unit", plan.fixed_job_problems(collision, "  unit:\n"))
+        alias = {"fixed_jobs": [{"id": "unknown", "job": "unit"}]}
+        self.assertIn("must equal its job name", "\n".join(plan.fixed_job_problems(alias, "  unit:\n")))
+
+    def test_identifiers_must_be_safe_command_and_artifact_names(self):
+        for sid in ("all", "UPPER", 'name"with-quote', "x\ny", "x" * 161):
+            self.assertIn("invalid identifier", "\n".join(plan.validate_catalog([entry(sid)])))
 
     def test_selector_that_matches_no_test_is_reported(self):
         scenarios = [entry("a", test_run="^TestNothing$"), entry("b", test_run="^TestReal$"), entry("c")]
@@ -85,6 +95,16 @@ class PlannerTests(unittest.TestCase):
         for selectors in ([], ["nope"], ["group:nope"], ["m1", "typo"]):
             with self.assertRaises(plan.PlanError):
                 plan.select(self.scenarios, selectors)
+
+    def test_platform_checks_can_be_requested_without_native_scenarios(self):
+        document = {"fixed_jobs": [{"id": "race"}, {"id": "windows-ceph"}]}
+        vocabulary = self.scenarios + plan.fixed_entries(document)
+        selected, _ = plan.select(vocabulary, ["race", "windows-ceph"])
+        self.assertEqual(plan.matrix(selected), {"include": [], "fixed": ["race", "windows-ceph"]})
+        selected, _ = plan.select(vocabulary, ["m1", "group:checks"])
+        result = plan.matrix(selected)
+        self.assertEqual([r["scenario"] for r in result["include"]], ["m1"])
+        self.assertEqual(result["fixed"], ["race", "windows-ceph"])
 
     def test_matrix_carries_parameters_and_scenario_identifier(self):
         chosen, _ = plan.select(self.scenarios, ["o1"])

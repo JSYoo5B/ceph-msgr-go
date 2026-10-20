@@ -1,8 +1,8 @@
 """Static admission checks for explicitly selected native OSD and MDS CI profiles.
 
 The matrix rows come from .github/scenarios/catalog.json (standard library only,
-for all three runner OSes); the workflow text checked here is ci.yml plus the
-reusable native-scenarios.yml. Workflow syntax is checked separately with the
+for all three runner OSes); checked workflow text includes basic CI and the
+reusable platform/native workflows. Workflow syntax is checked separately with the
 available workflow/YAML tooling.
 """
 from pathlib import Path
@@ -25,7 +25,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
     def setUpClass(cls):
         # The matrix lives in the catalog; its job runs in the reusable workflow.
         cls.workflow = "\n".join((ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
-                                 for name in ("ci.yml", "native-scenarios.yml"))
+                                 for name in ("ci.yml", "platform-checks.yml", "native-scenarios.yml"))
         cls.rows = ceph_rows()
         cls.declared = set()
         for source in (ROOT / "integration").glob("*_test.go"):

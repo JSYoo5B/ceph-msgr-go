@@ -1,194 +1,69 @@
-name: Native Go and Tentacle interoperability
+name: Basic CI
 
 on:
   pull_request:
   workflow_dispatch:
-    inputs:
-      scenarios:
-        description: Space-separated scenario selectors (all, group:<group> or an identifier); see .github/scenarios/README.md
-        required: false
-        type: string
-        default: all
 
 permissions:
   contents: read
 
-# Changes run through pull_request only, avoiding duplicate push checks.
-# Periodic coverage verifies main. New commits cancel older runs for the same
-# pull request; manual dispatches remain separate from baseline checks.
+# One automatic run per PR; a new commit cancels its previous checks.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: basic-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 defaults:
   run:
     shell: bash
 
+env:
+  GOPROXY: 'https://proxy.golang.org|direct'
+  CGO_ENABLED: '0'
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+
 jobs:
-  unit:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        go: ['1.24.0', '1.27.x']
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    env:
-      CGO_ENABLED: '0'
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
-      DIAGNOSTIC_PYTHON: ${{ matrix.os == 'windows-latest' && 'python' || 'python3' }}
-      PYTHONIOENCODING: utf-8
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: ${{ matrix.go }}
-      - name: Test CI diagnostic tools
-        run: |
-          "$DIAGNOSTIC_PYTHON" -m unittest discover -s tools -p 'test_*.py'
-      - name: Unit tests with per-test failure annotations
-        id: unit_tests
-        run: |
-          result=0
-          go test -json -fullpath ./... > "$RUNNER_TEMP/go-tests.jsonl" 2>&1 || result=$?
-          if test "$result" -ne 0; then
-            "$DIAGNOSTIC_PYTHON" tools/go_test_annotations.py "$RUNNER_TEMP/go-tests.jsonl" "$result"
-          fi
-          exit "$result"
-      - run: go vet ./...
-      - name: Enforce pure-Go product dependency policy
-        run: '"$DIAGNOSTIC_PYTHON" tools/product_dependencies.py'
-      - name: Preserve failed Go test events
-        if: failure() && steps.unit_tests.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: go-tests-${{ matrix.os }}-${{ matrix.go }}
-          path: ${{ runner.temp }}/go-tests.jsonl
-          retention-days: 7
-
-  fixture-tools:
-    name: Fixture development tools (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    env:
-      CGO_ENABLED: '0'
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Keep the Go 1.26+ Testcontainers module outside the product's Go 1.24 checks.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.x'
-          cache-dependency-path: integration/fixture/go.sum
-      - name: Download fixture-only dependencies
-        run: go -C integration/fixture mod download
-      - name: Test fixture development tools without a running cluster
-        run: go -C integration/fixture test -mod=readonly ./...
-      - name: Vet fixture development tools
-        run: go -C integration/fixture vet -mod=readonly ./...
-
-  race:
+  basic:
+    name: Build, lint and unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.x'
-          cache-dependency-path: integration/fixture/go.sum
-      - name: Download fixture-only dependencies
-        run: go -C integration/fixture mod download
-      # The race detector needs CGO instrumentation; product builds use CGO=0.
-      - run: go test -race ./...
+          go-version: '1.24.0'
+      - name: Check Go formatting
+        run: |
+          files=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
+          if test -n "$files"; then printf '%s\n' "$files"; exit 1; fi
+      - name: Test Python tools and validate scenarios
+        run: |
+          python3 -m unittest discover -s tools -p 'test_*.py'
+          python3 tools/scenario_plan.py validate
+      - name: Build and lint the product
+        run: |
+          go build -mod=readonly ./...
+          go vet -mod=readonly ./...
+          python3 tools/product_dependencies.py
+      - name: Unit tests without integration tests
+        run: |
+          packages=$(go list -mod=readonly ./... | sed '\|/integration$|d; \|/integration/|d')
+          go test -mod=readonly $packages
+      - name: Race detector on unit tests without integration tests
         env:
           CGO_ENABLED: '1'
-      # Docker Hub pulls of the reaper occasionally fail; Testcontainers
-      # reuses a present image instead of pulling it inside the fixture.
-      - name: Pre-pull the Testcontainers reaper image
-        timeout-minutes: 5
         run: |
-          for attempt in 1 2 3 4 5; do
-            docker pull testcontainers/ryuk:0.14.0 && exit 0
-            sleep $((attempt * 10))
-          done
-          exit 1
-      - name: Race detector with actual Tentacle MON and MGR sessions
-        id: race_ceph
-        run: |
-          result=0
-          sh integration/run.sh 2>&1 | tee "$RUNNER_TEMP/ceph-tests.log" || result=$?
-          if test "$result" -ne 0; then
-            python3 tools/ci_failure_annotations.py "$RUNNER_TEMP/ceph-tests.log" "$result"
-          fi
-          exit "$result"
-        env:
-          CEPH_MSGR_TEST_RUNTIME: host
-          CEPH_MSGR_TEST_RACE: '1'
-          CEPH_MSGR_TEST_DIAGNOSTICS: ${{ runner.temp }}/ceph-diagnostics
-      - name: Preserve failed Ceph race test logs and crash metadata
-        if: failure() && steps.race_ceph.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ceph-race-diagnostics
-          path: |
-            ${{ runner.temp }}/ceph-tests.log
-            ${{ runner.temp }}/ceph-diagnostics/
-          retention-days: 7
+          packages=$(go list -mod=readonly ./... | sed '\|/integration$|d; \|/integration/|d')
+          go test -mod=readonly -race $packages
+      - name: Validate workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= -pyflakes=
 
-  fuzz:
+  fixture-static:
+    name: Fixture build and unit checks without a cluster
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      CGO_ENABLED: '0'
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.x'
-      - name: Test development crash metadata selection
-        run: python3 -m unittest discover -s tools -p 'test_*.py'
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzFrameReader$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzSecureFrameReader$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzDecodeLog$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzDecodeConfig$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzPingReply$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/maps -run '^$' -fuzz '^FuzzMaps$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/maps -run '^$' -fuzz '^FuzzOSDMessage$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPublication$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPlaintextPublication$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/osd -run '^$' -fuzz '^FuzzReplyDecode$' -fuzztime=20s -parallel=2
-
-  windows-ceph:
-    name: Windows native Ceph 20.2.4 (aes256k, secure, IPv4 relay)
-    runs-on: windows-2025
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: pwsh
-    env:
-      CGO_ENABLED: '0'
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
-      PYTHONIOENCODING: utf-8
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -197,98 +72,9 @@ jobs:
         with:
           go-version: '1.27.x'
           cache-dependency-path: integration/fixture/go.sum
-      - name: Download fixture-only dependencies
-        run: go -C integration/fixture mod download
-      # A stalled download or wsl.exe import once consumed the whole job
-      # timeout; bound and retry each phase so the job reports the stall.
-      - name: Import dedicated WSL2 development fixture
-        timeout-minutes: 12
+      - name: Build and lint fixture tools
         run: |
-          $ErrorActionPreference = 'Stop'
-          $archive = Join-Path $env:RUNNER_TEMP 'ubuntu-wsl-rootfs.tar.gz'
-          # Canonical's fixed archive and published SHA256SUMS; no Store login
-          # or interactive first-user creation is required for this import.
-          $expected = '8251e27ffff381a4af5f41dcb94d867de3e0d9774a9241908ab34555d99315ea'
-          $downloaded = $false
-          for ($attempt = 1; $attempt -le 3 -and -not $downloaded; $attempt++) {
-            try {
-              Invoke-WebRequest -Uri 'https://cloud-images.ubuntu.com/wsl/releases/noble/20240423/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz' -OutFile $archive -TimeoutSec 180
-              $downloaded = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -eq $expected
-              if (-not $downloaded) { Write-Warning "WSL development rootfs checksum mismatch (attempt $attempt)" }
-            } catch {
-              Write-Warning "WSL development rootfs download failed (attempt $attempt): $_"
-            }
-            if (-not $downloaded) {
-              Remove-Item $archive -ErrorAction SilentlyContinue
-              Start-Sleep -Seconds (15 * $attempt)
-            }
-          }
-          if (-not $downloaded) { throw 'WSL development rootfs download failed or checksum mismatch' }
-          $fixtureDistro = "CephMsgrFixture-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $storage = Join-Path $env:RUNNER_TEMP 'ceph-wsl'
-          $imported = $false
-          for ($attempt = 1; $attempt -le 2 -and -not $imported; $attempt++) {
-            $import = Start-Process -FilePath 'wsl.exe' -ArgumentList @('--import', $fixtureDistro, $storage, $archive, '--version', '2') -NoNewWindow -PassThru
-            $null = $import.Handle # keep the handle so ExitCode stays readable
-            if ($import.WaitForExit(240000)) {
-              $imported = $import.ExitCode -eq 0
-              if (-not $imported) { Write-Warning "WSL2 fixture import exited $($import.ExitCode) (attempt $attempt)" }
-            } else {
-              $import.Kill($true)
-              Write-Warning "WSL2 fixture import exceeded 240 s (attempt $attempt)"
-            }
-            if (-not $imported) {
-              wsl.exe --unregister $fixtureDistro 2>&1 | Out-Null
-              Remove-Item -Recurse -Force $storage -ErrorAction SilentlyContinue
-              Start-Sleep -Seconds 10
-            }
-          }
-          if (-not $imported) { throw 'WSL2 fixture import failed' }
-          "CEPH_MSGR_WSL_DISTRO=$fixtureDistro" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Remove-Item $archive
-          wsl.exe --distribution $fixtureDistro --user root -- uname -m
-          if ($LASTEXITCODE -ne 0) { throw 'WSL2 fixture startup failed' }
-      - name: Execute Windows binaries against real MON and MGR
-        run: python tools/windows_interop.py --distro $env:CEPH_MSGR_WSL_DISTRO --diagnostics "$env:RUNNER_TEMP/ceph-windows-diagnostics"
-      - name: Remove dedicated WSL fixture
-        if: always() && env.CEPH_MSGR_WSL_DISTRO != ''
-        run: |
-          wsl.exe --unregister $env:CEPH_MSGR_WSL_DISTRO
-          if ($LASTEXITCODE -ne 0) { throw 'WSL2 fixture cleanup failed' }
-      - name: Preserve Windows interoperability evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ceph-windows-evidence
-          path: ${{ runner.temp }}/ceph-windows-diagnostics/
-          retention-days: 7
-
-  plan:
-    name: Plan native scenarios
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Validate the catalog and plan the selection
-        id: plan
-        env:
-          # Pull-request events always run the full catalog; only a
-          # manual dispatch can narrow it (see .github/scenarios/README.md).
-          SELECTORS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || 'all' }}
-        run: |
-          python3 tools/scenario_plan.py validate
-          args=()
-          for selector in $SELECTORS; do args+=(--select "$selector"); done
-          matrix=$(python3 tools/scenario_plan.py plan "${args[@]}")
-          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
-
-  ceph:
-    name: ceph
-    needs: plan
-    uses: ./.github/workflows/native-scenarios.yml
-    with:
-      matrix: ${{ needs.plan.outputs.matrix }}
+          go -C integration/fixture build -mod=readonly ./...
+          go -C integration/fixture vet -mod=readonly ./...
+      - name: Unit test fixture tools without a cluster
+        run: go -C integration/fixture test -mod=readonly ./...

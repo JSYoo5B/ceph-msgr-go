@@ -1,75 +1,97 @@
-# Interoperability scenario catalog
+# CI checks and selected interoperability scenarios
 
-`catalog.json` is the single list of the real-daemon scenarios the `ceph` job
-runs, plus the fixed jobs (`unit`, `fixture-tools`, `race`, `fuzz`,
-`windows-ceph`) that must exist in `ci.yml`. A scenario has a stable lowercase
-identifier (its group plus the parameters that distinguish it, so a changed
-parameter is a new scenario), a group, and the matrix parameters: `key`,
-`service`, `family`, optional `release`, `mode`, `runtime`, OSD/MDS/RBD opt-ins
-and the `test_run` selector. Only Tentacle 20.2.x releases are accepted.
-`mandatory.txt` lists every scenario the default coverage must run; dropping
-one needs an explicit edit of both files.
+Automatic pull-request CI is Docker-free and has no scenario or OS/version
+matrix. It checks Go formatting, builds, vet, workflow syntax, Python tools,
+product dependencies and unit tests on Linux. Unit-test race detection is part
+of these basic checks; `integration/` tests are excluded. Fixture-tool unit
+checks run in their separate Go module without starting a cluster. A new PR
+commit cancels its previous basic checks. Push events do not repeat PR CI.
 
-## Planner
+## Catalog and planner
 
-`tools/scenario_plan.py` reads local files and runs no test:
+`catalog.json` preserves the original 63 native interoperability matrix rows.
+Each entry has a stable identifier, group and concrete fixture parameters.
+Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
+coverage; deleting a row requires an explicit coverage change.
+
+The catalog also names five selectable check suites:
+
+| Selector | Work |
+| --- | --- |
+| `unit` | Product unit checks on Linux, macOS and Windows, Go 1.24/1.27 |
+| `fixture-tools` | Fixture-tool unit checks on those three operating systems |
+| `race` | Race detection against actual Tentacle MON/MGR sessions |
+| `fuzz` | Bounded fuzz runs of protocol decoders |
+| `windows-ceph` | Windows binaries against actual MON/MGR through WSL |
+
+The `race` suite is an integration test. The basic unit race check does not
+start Ceph and is independent of this suite.
 
 ```
 python3 tools/scenario_plan.py validate
 python3 tools/scenario_plan.py list
-python3 tools/scenario_plan.py plan --select all --select group:rbd --select <id>
+python3 tools/scenario_plan.py plan --select group:rbd --select windows-ceph
 ```
 
-`validate` fails on duplicate or empty identifiers, missing parameters, an
-unsupported release, an empty, malformed or non-matching `test_run`, a
-catalog/mandatory-list mismatch in either direction, and a fixed job missing
-from `ci.yml`. A selector is `all`, `group:<group>` or an identifier; an unknown
-selector is an error, never an empty or conservative selection. `plan` prints
-the matrix JSON on stdout and the explanation on stderr. `--catalog` plans
-against another revision's catalog while running the trusted script.
+The planner emits native rows in `include` and selected check suites in `fixed`.
+`--catalog` reads the tested revision's vocabulary using the trusted planner.
+Unknown selectors fail rather than silently matching nothing. Validation rejects
+duplicate identifiers, unsupported releases, missing parameters, bad or empty
+test selectors, selectors matching no test, missing mandatory native rows and
+missing suite definitions.
 
-## Where the catalog is used
-
-| Workflow | Selection | Notes |
-| --- | --- | --- |
-| `ci.yml` (pull request) | always `all` | Push events do not duplicate PR checks; periodic coverage verifies main. |
-| `ci.yml` manual dispatch | `scenarios` input (space-separated selectors, default `all`) | The `plan` job validates, then plans. |
-| `ci-command.yml` | the `/ci run` comment | See below. |
-| `periodic.yml` | `all`, weekly (Sunday 03:17 UTC) and on dispatch | A `summary` job fails unless every scenario job succeeded. |
-
-All of them call `native-scenarios.yml`, which checks out the requested commit
-with `persist-credentials: false` and read-only permissions, runs each scenario,
-and keeps `scenario-<index>-<id>` artifacts with the exact commit, image digest
-and run link (7 days; 30 days for the periodic run). Pull-request check names
-changed because the matrix now runs in a reusable workflow.
-
-## PR comment command
+## Comment selection
 
 ```
-/ci run <scenario-id | group:<group> | all> [...]
+/ci run <scenario-id | group:<group> | unit | fixture-tools | race | fuzz | windows-ceph | all> ...
 ```
 
-One command per comment, on its own line, at most 20 selectors. Lines in fenced
-code blocks or block quotes are ignored; a comment without a `/ci` line is
-ignored; a malformed, ambiguous (two commands) or unauthorized command gets a
-refusal reply and executes nothing. Only owners, members and collaborators are
-accepted, only on open pull requests whose head is in this repository (forks are
-refused). The workflow runs from the default branch, reads the head commit once,
-resolves selectors against that commit's catalog, runs exactly that commit, and
-sets a request-specific `ci-command/run-<run-id>` status (pending, then success, failure or error for
-canceled, skipped or missing) on it with a summary comment that links the run
-and states the commit. A later request does not erase an earlier failure
-comment or status. Requests for one pull request use a separate concurrency group;
-baseline checks are unaffected. The status and comment permissions are held by
-the job that never executes pull-request code.
+For example, `/ci run windows-ceph race` runs those two suites without starting
+the native scenario matrix. `/ci run group:rbd` runs just the RBD rows.
+`group:checks` selects all five check suites. `all` selects everything.
 
-Architecture adapted from the reference described in #1; no source was copied.
+One command per comment, on its own line, with at most 20 selectors. Quoted and
+fenced lines are ignored, including longer Markdown fences. Malformed commands,
+unauthorized callers, closed PRs, forks and unavailable vocabulary are refused
+without running PR code. Only owners, members and collaborators are accepted.
 
-## Not covered yet
+Trusted default-branch control code records the PR head once and resolves names
+against that revision. Test jobs check out that exact SHA with read-only access
+and no persisted credentials. Separate trusted jobs publish a request-specific
+`ci-command/run-<run-id>` status and summary. A failed, canceled, skipped or
+missing selected suite cannot become a pass; unselected suites are skipped.
+Later requests preserve earlier statuses and results. Each PR has its own
+command concurrency group, separate from basic checks. GitHub permits one
+running and one pending request per group; a newer pending request can replace
+an older pending request.
 
-Declaration-level changed-scenario selection, repeated campaigns and durable
-historical classification, and a live exercise of the comment command (it only
-exists on the default branch once merged: `issue_comment` workflows are loaded
-from there). Parser and planner behavior is covered by `tools/test_ci_command.py`
-and `tools/test_scenario_plan.py`. Earlier CI runs exercised the reusable workflow;
-verification of each new revision still requires its own CI result.
+Native jobs run with at most eight concurrent runners and keep per-scenario
+commit, image, result and run artifacts. The selected platform suites retain
+their existing test and time bounds. Module downloads fall back from the Go
+proxy to the origin while `go.sum` verification remains in force. The native
+runtime explicitly pre-pulls its pinned Ceph image before harness execution.
+
+## Periodic main verification
+
+`periodic.yml` runs all native rows and all check suites every Sunday at
+03:17 UTC, and on manual dispatch. It explicitly checks out `main` once and
+passes that SHA to every test job, even if manually dispatched from another
+branch. Native artifacts are retained for 30 days. The final verdict requires
+both native and platform suites to succeed; failures and skipped selected
+suites are not a full-coverage pass. Periodic runs have a separate concurrency
+group and do not cancel PR checks.
+
+## References and evidence
+
+The separation of code checks, requested runtime checks, independent request
+statuses, module-proxy fallback and bounded runtime concurrency follows the CI
+architecture in `ceph-testcontainers-go` at
+`e19e5218f8aab2a6befde5a0ee140bb1f5682850`. No source was copied. This project
+retains its own Tentacle-only catalog, fixture inputs and coverage contracts.
+
+Planner/parser and workflow-contract tests are synthetic checks. Native daemon
+interoperability and a live PR-comment request are separate evidence. Comment
+workflows become available only after their definition reaches the default
+branch. Declaration-level changed-scenario selection, repeated campaigns and
+durable historical classification remain outside this checkpoint; issue #1
+stays open.
