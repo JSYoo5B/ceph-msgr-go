@@ -12,7 +12,9 @@ defines raw completion and per-op outputs. [PrimaryLogPG.cc](https://github.com/
 defines execution, normalization, guards, rollback and completion.
 
 The exhaustive `__CEPH_FORALL_OSD_OPS` inventory is recorded in
-[opcodes-tentacle.csv](opcodes-tentacle.csv). Entries marked unsupported cannot
+[opcodes-tentacle.csv](opcodes-tentacle.csv); each unsupported entry is classified
+against the pinned source in [UNSUPPORTED_OPCODES.md](UNSUPPORTED_OPCODES.md).
+Entries marked unsupported cannot
 be transmitted or accepted as ordinary operation replies. Mode bits alone do
 not establish semantics: notably CALL uses a read bit but its class determines
 its behavior. The inventory does not claim that deferred payloads, control
