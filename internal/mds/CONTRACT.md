@@ -152,7 +152,11 @@ codec. These results establish current wire decoding only. No actual FSMap/MDSMa
 subscription, native filesystem/rank discovery, MDS connection/session, failover,
 capability event or CephFS operation has been verified by these fixtures.
 
-Related native event identities from `ceph_fs.h` remain **unsupported** here:
+The following native event identities from `ceph_fs.h` were **outside the
+map-codec validation stage described above**. Later request, capability and
+recovery paths are implemented and specified in
+[cephmsgr/MDS_CEPHFS_CONTRACT.md](../../cephmsgr/MDS_CEPHFS_CONTRACT.md);
+this historical list is not a current unsupported-feature backlog:
 CLIENT_SESSION 22, RECONNECT 23, REQUEST 24, REQUEST_FORWARD 25, REPLY 26,
 RECLAIM 27/RECLAIM_REPLY 28, METRICS 29, CAPS 0x310, LEASE 0x311,
 SNAP 0x312, CAPRELEASE 0x313 and QUOTA 0x314. Full FSMap type45 is also outside
