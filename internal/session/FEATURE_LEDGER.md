@@ -15,8 +15,7 @@ the contracts and validation records named in the last column.
 Bit names (pinned header): 1 NOSRCADDR, 2 SERVER_NAUTILUS (incarnation 3),
 4 SUBSCRIBE2, 5 MONNAMES, 15 MONENC, 23 MSG_AUTH, 28 SERVER_MIMIC,
 42 MSGR_KEEPALIVE2, 57 SERVER_JEWEL/MON_STATEFUL_SUB, 59 MSG_ADDR2
-(FS_BTIME/FS_CHANGE_ATTR overlap), 61 CEPHX_V2. Bits 2 and 28 are the
-incarnation-3 marker pair with 57.
+(FS_BTIME/FS_CHANGE_ATTR overlap), 61 CEPHX_V2. Bit 2 names SERVER_NAUTILUS; its incarnation-3 marker pair is bits 28 and 57.
 
 | Role / profile | Supported mask | Required mask | Added bits and meaning | Evidence |
 | --- | --- | --- | --- | --- |
@@ -27,7 +26,7 @@ incarnation-3 marker pair with 57.
 | OSD reply-v8 profile (opt-in) | adds `0x0700000040200300` | adds the same | v8 profile + bit 58 (NEW_OSDOPREPLY_ENCODING; also CRUSH_TUNABLES5, FS_FILE_LAYOUT_V2) | [OSD CONTRACT](../osd/CONTRACT.md) |
 | OSD request-v9 profile (opt-in) | adds `0x0702000040200300` | adds the same | reply-v8 profile + SERVER_SQUID (49, incarnation 2 with 57); CRUSH_MSR (38) is not enabled | [OSD CONTRACT](../osd/CONTRACT.md) |
 | Fresh MDS session | `0x2a00040010808036` | `0x0800000000000000` | Base only; MON/OSD policy extensions are never offered | [MDS_FRESH_CONTRACT.md](MDS_FRESH_CONTRACT.md) |
-| Fresh CephFS session | `0x2e0085201c8080be` | `0x0c0081200c000088` | Base + FLOCK (3), DIRLAYOUTHASH (7), CREATEPOOLID (26), REPLY_CREATE_INODE (27), EXPORT_PEER (37), MDS_INLINE_DATA (40), MDS_QUOTA (47), FS_FILE_LAYOUT_V2 (58). A server lacking any bit is refused before any CephFS message. | [MDS_CEPHFS_CONTRACT.md](../../cephmsgr/MDS_CEPHFS_CONTRACT.md) |
+| Fresh CephFS session | `0x2e0085201c8080be` | `0x0c0081200c000088` | Base + FLOCK (3), DIRLAYOUTHASH (7), CREATEPOOLID (26), REPLY_CREATE_INODE (27), EXPORT_PEER (37), MDS_INLINE_DATA (40), MDS_QUOTA (47), FS_FILE_LAYOUT_V2 (58). Every added CephFS bit is required together with the base required mask; a missing required bit is refused before any CephFS message. | [MDS_CEPHFS_CONTRACT.md](../../cephmsgr/MDS_CEPHFS_CONTRACT.md) |
 
 Opt-in additions on a single role (not shown in the masks above):
 OSD_CACHEPOOL (35) on MON and OSD sessions for the cache-pool profile, MDSENC
