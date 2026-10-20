@@ -1,48 +1,32 @@
 """Static admission checks for explicitly selected native OSD and MDS CI profiles.
 
-The matrix uses flat YAML flow rows; parse only that bounded scalar subset here
-to keep the diagnostic suite standard-library-only on all three runner OSes.
-Workflow syntax is checked separately with the available workflow/YAML tooling.
+The matrix rows come from .github/scenarios/catalog.json (standard library only,
+for all three runner OSes); the workflow text checked here is ci.yml plus the
+reusable native-scenarios.yml. Workflow syntax is checked separately with the
+available workflow/YAML tooling.
 """
 from pathlib import Path
+import json
 import re
-import shlex
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def ceph_rows(workflow):
-    job = workflow.split("\n  ceph:\n", 1)[1]
-    matrix = job.split("        include:\n", 1)[1].split("\n    steps:", 1)[0]
-    rows = []
-    for line in matrix.splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        match = re.fullmatch(r"\s*- \{ (.*) \}", line)
-        if not match:
-            raise ValueError("Ceph matrix row is outside the checked scalar flow subset")
-        fields = shlex.shlex(match[1], posix=True)
-        fields.whitespace = ","
-        fields.whitespace_split = True
-        fields.commenters = ""
-        row = {}
-        for field in fields:
-            key, separator, value = field.partition(":")
-            key, value = key.strip(), value.strip()
-            if not separator or not re.fullmatch(r"[a-z_]+", key) or key in row:
-                raise ValueError("invalid or duplicate Ceph matrix field")
-            row[key] = value
-        rows.append(row)
-    return rows
+def ceph_rows():
+    """The scenario matrix rows, from the catalog that drives the workflow."""
+    document = json.loads((ROOT / ".github/scenarios/catalog.json").read_text(encoding="utf-8"))
+    return [dict(entry["params"]) for entry in document["scenarios"]]
 
 
 class NativeOSDCIProfilesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        cls.rows = ceph_rows(cls.workflow)
+        # The matrix lives in the catalog; its job runs in the reusable workflow.
+        cls.workflow = "\n".join((ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+                                 for name in ("ci.yml", "native-scenarios.yml"))
+        cls.rows = ceph_rows()
         cls.declared = set()
         for source in (ROOT / "integration").glob("*_test.go"):
             cls.declared.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))

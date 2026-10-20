@@ -3,14 +3,17 @@
 
 The catalog (.github/scenarios/catalog.json) is the discoverable list of the
 real-daemon scenarios. Each entry has a stable identifier, a group and the
-parameters the workflow matrix row uses. This tool validates the catalog,
-compares it with the static matrix of .github/workflows/ci.yml, and prints the
+parameters of its workflow matrix row. This tool validates the catalog, checks
+it against the mandatory list and the workflow's fixed jobs, and prints the
 selected matrix with an explanation. It reads local files only and executes no
 test.
 
-  scenario_plan.py validate           catalog invariants, workflow parity, selector targets
-  scenario_plan.py list               one identifier per line
-  scenario_plan.py plan --select S    matrix JSON on stdout, explanation on stderr
+  scenario_plan.py validate               invariants, mandatory list, fixed jobs, selector targets
+  scenario_plan.py list                   one identifier per line
+  scenario_plan.py plan --select S        matrix JSON on stdout, explanation on stderr
+
+Both `list` and `plan` accept --catalog FILE to plan against another revision's
+catalog (a pull request's vocabulary) while running this trusted script.
 
 A selector S is "all", "group:<group>" or a scenario identifier; several can be
 given. An unknown selector is an error, never an empty or conservative match.
@@ -24,6 +27,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / ".github" / "scenarios" / "catalog.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+MANDATORY = ROOT / ".github" / "scenarios" / "mandatory.txt"
 REQUIRED_PARAMS = ("key", "service", "family")
 SUPPORTED_RELEASE = re.compile(r"^20\.2\.\d+$")
 
@@ -32,11 +36,15 @@ class PlanError(Exception):
     pass
 
 
-def load_catalog(path=CATALOG):
+def load_catalog_document(path=CATALOG):
     data = json.loads(Path(path).read_text(encoding="utf-8"))
     if data.get("version") != 1:
         raise PlanError("unsupported catalog version %r" % data.get("version"))
-    return data["scenarios"]
+    return data
+
+
+def load_catalog(path=CATALOG):
+    return load_catalog_document(path)["scenarios"]
 
 
 def validate_catalog(scenarios):
@@ -76,60 +84,41 @@ def validate_catalog(scenarios):
     return problems
 
 
-def _split_flow(body):
-    parts, current, quote = [], "", None
-    for char in body:
-        if quote:
-            current += char
-            if char == quote:
-                quote = None
-        elif char in "'\"":
-            quote = char
-            current += char
-        elif char == ",":
-            parts.append(current)
-            current = ""
-        else:
-            current += char
-    parts.append(current)
-    return parts
+def mandatory_problems(scenarios, mandatory):
+    """The mandatory list names every scenario the default coverage must run.
 
-
-def workflow_matrix(path=WORKFLOW):
-    """Parse the one-line flow rows of the ceph job's static matrix."""
-    text = Path(path).read_text(encoding="utf-8")
-    job = text.index("\n  ceph:\n")
-    start = text.index("        include:\n", job) + len("        include:\n")
-    end = text.index("    steps:", start)
-    rows = []
-    for line in text[start:end].splitlines():
-        line = line.strip()
-        if not line.startswith("- {"):
-            continue
-        row = {}
-        for part in _split_flow(line[3 : line.rindex("}")]):
-            name, value = part.split(":", 1)
-            value = value.strip()
-            if value[:1] in "'\"":
-                value = value[1:-1]
-            row[name.strip()] = value
-        rows.append(row)
-    return rows
-
-
-def parity_problems(scenarios, rows):
-    """Compare catalog parameters with the workflow rows, in both directions."""
-    wanted = [json.dumps(entry["params"], sort_keys=True) for entry in scenarios]
-    actual = [json.dumps(row, sort_keys=True) for row in rows]
+    Removing or renaming a scenario therefore needs an explicit edit of both
+    files; a scenario cannot be dropped from the catalog silently."""
+    ids = [entry["id"] for entry in scenarios if isinstance(entry.get("id"), str)]
     problems = []
-    for row in actual:
-        if row not in wanted:
-            problems.append("workflow row not in catalog: %s" % row)
-    for row in wanted:
-        if row not in actual:
-            problems.append("catalog scenario not in workflow: %s" % row)
-    if len(wanted) != len(actual):
-        problems.append("catalog has %d scenarios, workflow %d rows" % (len(wanted), len(actual)))
+    for sid in mandatory:
+        if sid not in ids:
+            problems.append("mandatory scenario missing from catalog: %s" % sid)
+    for sid in ids:
+        if sid not in mandatory:
+            problems.append("catalog scenario not in the mandatory list: %s" % sid)
+    if len(set(mandatory)) != len(mandatory):
+        problems.append("mandatory list has duplicates")
+    return problems
+
+
+def load_mandatory(path=MANDATORY):
+    return [line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+def fixed_job_problems(document, workflow_text):
+    """Windows, race, fuzz and the other fixed jobs must exist in the workflow."""
+    problems, seen = [], set()
+    jobs = document.get("fixed_jobs", [])
+    if not jobs:
+        problems.append("catalog lists no fixed jobs")
+    for job in jobs:
+        name = job.get("job", "")
+        if job.get("id") in seen:
+            problems.append("duplicate fixed job %s" % job.get("id"))
+        seen.add(job.get("id"))
+        if not re.search(r"(?m)^  %s:\s*$" % re.escape(name), workflow_text):
+            problems.append("fixed job %r is not defined in the workflow" % name)
     return problems
 
 
@@ -185,20 +174,24 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("validate")
-    sub.add_parser("list")
+    listing = sub.add_parser("list")
+    listing.add_argument("--catalog", default=str(CATALOG))
     plan = sub.add_parser("plan")
     plan.add_argument("--select", action="append", required=True)
+    plan.add_argument("--catalog", default=str(CATALOG))
     args = parser.parse_args(argv)
     try:
-        scenarios = load_catalog()
+        scenarios = load_catalog(getattr(args, "catalog", CATALOG))
         if args.command == "validate":
-            problems = (validate_catalog(scenarios) + parity_problems(scenarios, workflow_matrix())
+            document = load_catalog_document()
+            problems = (validate_catalog(scenarios) + mandatory_problems(scenarios, load_mandatory())
+                        + fixed_job_problems(document, WORKFLOW.read_text(encoding="utf-8"))
                         + selector_problems(scenarios, integration_tests()))
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
                 return 1
-            print("catalog valid: %d scenarios match the workflow matrix and select existing tests" % len(scenarios))
+            print("catalog valid: %d scenarios, all mandatory, selecting existing tests" % len(scenarios))
         elif args.command == "list":
             for entry in scenarios:
                 print(entry["id"])

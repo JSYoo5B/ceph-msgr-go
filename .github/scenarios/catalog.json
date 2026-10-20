@@ -920,5 +920,32 @@
     "test_run": "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
    }
   }
+ ],
+ "fixed_jobs": [
+  {
+   "id": "unit",
+   "job": "unit",
+   "description": "Go unit tests on Linux, macOS and Windows with Go 1.24 and 1.27, vet and the pure-Go dependency policy"
+  },
+  {
+   "id": "fixture-tools",
+   "job": "fixture-tools",
+   "description": "Fixture development tools without a running cluster"
+  },
+  {
+   "id": "race",
+   "job": "race",
+   "description": "Race detector with actual Tentacle MON and MGR sessions"
+  },
+  {
+   "id": "fuzz",
+   "job": "fuzz",
+   "description": "Bounded fuzz runs of the frame, log, config, ping, map, CephX and OSD reply decoders"
+  },
+  {
+   "id": "windows-ceph",
+   "job": "windows-ceph",
+   "description": "Windows binaries against a real Tentacle MON and MGR (aes256k, secure, IPv4 relay)"
+  }
  ]
 }
