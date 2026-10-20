@@ -16,10 +16,15 @@ on:
         type: string
         default: ''
       retention_days:
-        description: Artifact retention in days, as a JSON number
+        description: Scenario result retention in days, as a JSON number
         required: false
         type: string
         default: '7'
+      diagnostic_retention_days:
+        description: Failed test diagnostic retention in days, as a JSON number
+        required: false
+        type: string
+        default: '14'
 
 permissions:
   contents: read
@@ -55,16 +60,71 @@ jobs:
           cache-dependency-path: integration/fixture/go.sum
       - name: Download fixture-only dependencies
         run: go -C integration/fixture mod download
+      - name: Identify the fixture image cache
+        id: image_cache
+        env:
+          IMAGE: ${{ matrix.image || 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9' }}
+        run: |
+          # Only immutable references may share an archive across runs.
+          if [[ "$IMAGE" =~ @sha256:[0-9a-f]{64}$ ]]; then
+            digest=$(printf '%s' "$IMAGE" | sha256sum | cut -d ' ' -f 1)
+            echo "key=ceph-image-v1-${RUNNER_OS}-${RUNNER_ARCH}-$digest" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Restore shared fixture image layers
+        id: image_restore
+        if: steps.image_cache.outputs.key != ''
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/ceph-image-cache
+          key: ${{ steps.image_cache.outputs.key }}
+      - name: Load cached fixture image layers
+        if: steps.image_restore.outputs.cache-hit == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          # A missing or unusable cache must fall back to the registry.
+          docker load --input "$RUNNER_TEMP/ceph-image-cache/image.tar" || true
       - name: Pre-pull the pinned Ceph fixture image
         timeout-minutes: 5
         env:
           IMAGE: ${{ matrix.image || 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9' }}
         run: |
+          # docker save/load can lose RepoDigests. Always pull the original
+          # reference to restore its identity, reusing the cached local layers.
           for attempt in 1 2 3; do
             docker pull "$IMAGE" && exit 0
             sleep $((attempt * 10))
           done
           exit 1
+      - name: Prepare a bounded shared fixture image archive
+        id: image_archive
+        # One writer per run, on the scheduled default branch only. Requested
+        # PR revisions consume the cache without creating branch copies.
+        if: github.event_name == 'schedule' && strategy.job-index == 0 && steps.image_cache.outputs.key != '' && steps.image_restore.outputs.cache-hit != 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          IMAGE: ${{ matrix.image || 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/ceph-image-cache"
+          archive="$RUNNER_TEMP/ceph-image-cache/image.tar"
+          docker image save --output "$archive" "$IMAGE"
+          if test "$(stat -c %s "$archive")" -le 2147483648; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo '::notice::Fixture image archive exceeds the 2 GiB cache limit; using registry pulls'
+            rm -f "$archive"
+          fi
+      - name: Save shared fixture image layers
+        if: steps.image_archive.outputs.ready == 'true'
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/ceph-image-cache
+          key: ${{ steps.image_cache.outputs.key }}
       - name: Pre-pull the Testcontainers reaper image
         timeout-minutes: 5
         run: |
@@ -125,7 +185,8 @@ jobs:
           path: |
             ${{ runner.temp }}/ceph-tests.log
             ${{ runner.temp }}/ceph-diagnostics/
-          retention-days: ${{ fromJSON(inputs.retention_days) }}
+          retention-days: ${{ fromJSON(inputs.diagnostic_retention_days) }}
+          compression-level: 9
       - name: Record the scenario result
         if: always()
         env:

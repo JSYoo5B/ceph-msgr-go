@@ -2,7 +2,7 @@ name: Periodic full interoperability coverage
 
 # Weekly full run of the scenario catalog on the default branch, independent of
 # pull-request selection. Every scenario records its exact commit and image in a
-# scenario-* artifact kept for 30 days; the summary job fails unless every
+# scenario-* artifact kept for 7 days; the summary job fails unless every
 # scenario job succeeded, so a skipped or missing scenario is never a pass.
 on:
   schedule:
@@ -52,7 +52,8 @@ jobs:
     uses: ./.github/workflows/native-scenarios.yml
     with:
       matrix: ${{ needs.plan.outputs.matrix }}
-      retention_days: '30'
+      retention_days: '7'
+      diagnostic_retention_days: '14'
       ref: ${{ needs.plan.outputs.sha }}
 
   checks:
