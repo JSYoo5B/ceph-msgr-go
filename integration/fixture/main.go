@@ -200,7 +200,7 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 			if err := c.Terminate(cleanup); err != nil {
 				result = errors.Join(result, &cleanupFailure{cause: err})
 			}
-			if p.mdsFresh == "1" || p.rbdBase == "1" || p.osdCachePools == "1" {
+			if p.osd == "1" || p.mdsFresh == "1" || p.rbdBase == "1" || p.osdCachePools == "1" {
 				result = errors.Join(result, saveMetadata(out, p.diagnostics))
 			}
 		}
