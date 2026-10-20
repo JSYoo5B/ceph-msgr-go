@@ -9,6 +9,7 @@ import unittest
 from unittest import mock
 
 import windows_interop as verifier
+from test_product_dependencies import graph_output, product_graph
 
 
 PACKAGE = "github.com/JSYoo5B/ceph-msgr-go/integration"
@@ -154,6 +155,60 @@ class NativeEnvironmentTest(unittest.TestCase):
             self.assertEqual(dict(os.environ), inherited)
             env["UNRELATED_SETTING"] = "changed copy"
             self.assertEqual(os.environ["UNRELATED_SETTING"], "preserved")
+
+
+class StartupPolicyTest(unittest.TestCase):
+    def run_until_build(self, graph):
+        commands = []
+
+        class BuildReached(Exception):
+            pass
+
+        def execute(args, **kwargs):
+            commands.append(args)
+            if args[:3] == ["go", "env", "-json"]:
+                values = {"GOHOSTOS": "windows", "GOHOSTARCH": "amd64", "GOOS": "windows",
+                          "GOARCH": "amd64", "CGO_ENABLED": "0", "GOWORK": "off"}
+                output = json.dumps({name: values[name] for name in args[3:]})
+            elif args[:2] == ["go", "list"]:
+                self.assertEqual(kwargs["env"]["CGO_ENABLED"], "0")
+                self.assertEqual(args[-1], "./...")
+                output = graph_output(graph)
+            elif args == ["git", "rev-parse", "HEAD"]:
+                output = "a" * 40
+            elif args == ["go", "version"]:
+                output = "go version go1.27.0 windows/amd64"
+            elif args[:3] == ["go", "test", "-c"]:
+                raise BuildReached()
+            else:
+                self.fail("unexpected startup command: " + str(args))
+            return subprocess.CompletedProcess(args, 0, stdout=output)
+
+        with tempfile.TemporaryDirectory() as directory:
+            with mock.patch.object(verifier.sys, "platform", "win32"):
+                with mock.patch.object(verifier, "command", side_effect=execute):
+                    with mock.patch.object(verifier.subprocess, "Popen") as start:
+                        with self.assertRaises((BuildReached, RuntimeError)) as raised:
+                            verifier.run("test-distro", Path(directory))
+                        start.assert_not_called()
+        return raised.exception, commands
+
+    def test_approved_graph_reaches_native_test_compilation(self):
+        error, commands = self.run_until_build(product_graph())
+        self.assertEqual(type(error).__name__, "BuildReached")
+        self.assertTrue(any(args[:3] == ["go", "test", "-c"] for args in commands))
+
+    def test_unapproved_module_and_native_sources_stop_before_build_or_wsl(self):
+        unknown = product_graph() + [{"ImportPath": "example.com/unapproved/client",
+                                     "Module": {"Path": "example.com/unapproved", "Version": "v1.0.0"}}]
+        native = product_graph()
+        native[-1]["CgoFiles"] = ["native.go"]
+        for graph, reason in ((unknown, "unexpected external module"),
+                              (native, "native source dependencies")):
+            with self.subTest(reason=reason):
+                error, commands = self.run_until_build(graph)
+                self.assertIn(reason, str(error))
+                self.assertFalse(any(args[:3] == ["go", "test", "-c"] for args in commands))
 
 
 class CommandDiagnosticsTest(unittest.TestCase):
