@@ -76,6 +76,8 @@ type MgrService struct {
 	periodWake chan struct{}
 	closeAck   chan struct{}
 	closing    bool
+	closeDone  chan struct{} // closed once the first Close has its terminal result
+	closeErr   error         // that result; guarded by mu, valid after closeDone
 	err        error
 	done       chan struct{}
 	doneOnce   sync.Once
@@ -98,7 +100,7 @@ func (c *Client) OpenMgrService(ctx context.Context, options MgrServiceOptions) 
 	svc := &MgrService{
 		c: c, options: options, key: mgrServiceKey{options.Service, options.Daemon},
 		configured: make(chan struct{}), periodWake: make(chan struct{}, 1),
-		closeAck: make(chan struct{}), done: make(chan struct{}),
+		closeAck: make(chan struct{}), closeDone: make(chan struct{}), done: make(chan struct{}),
 	}
 	if err := c.reserveMgrService(svc); err != nil {
 		return nil, err
@@ -455,17 +457,38 @@ func (s *MgrService) finish(err error) {
 // Close sends MMgrClose and waits for the MGR's echoed acknowledgement, then
 // closes the connection. ctx bounds the wait. Without an acknowledgement it
 // still tears the connection down and returns ErrMgrServiceCloseUnconfirmed:
-// the MGR may keep the daemon until its beacon grace. Close is idempotent.
+// the MGR may keep the daemon until its beacon grace.
+//
+// Close may be called concurrently and repeatedly. Only the first call sends
+// MMgrClose. Every other call waits for that call's terminal result under its
+// own context and then returns the same result, so an unconfirmed close is
+// never reported as success; a caller whose context ends first gets
+// ErrMgrServiceCloseUnconfirmed wrapping its own context error.
 func (s *MgrService) Close(ctx context.Context) error {
 	s.mu.Lock()
 	if s.closing {
 		s.mu.Unlock()
-		<-s.done
-		return nil
+		select {
+		case <-s.closeDone:
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			return s.closeErr
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %w", ErrMgrServiceCloseUnconfirmed, ctx.Err())
+		}
 	}
 	s.closing = true
 	failed := s.err
 	s.mu.Unlock()
+	result := s.closeOnce(ctx, failed)
+	s.mu.Lock()
+	s.closeErr = result
+	close(s.closeDone)
+	s.mu.Unlock()
+	return result
+}
+
+func (s *MgrService) closeOnce(ctx context.Context, failed error) error {
 	if failed != nil {
 		s.finish(ErrMgrServiceClosed)
 		return failed

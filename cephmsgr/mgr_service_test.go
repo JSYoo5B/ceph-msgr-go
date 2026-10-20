@@ -363,3 +363,68 @@ func TestMgrServiceCloseOfTheClientEndsHandles(t *testing.T) {
 		t.Fatal("registration on a closed client")
 	}
 }
+
+func TestMgrServiceConcurrentCloseHonorsEachContextAndSharesTheResult(t *testing.T) {
+	mgr := &serviceMGR{ack: false}
+	c, ctx := dialService(t, mgr)
+	svc, err := c.OpenMgrService(ctx, MgrServiceOptions{Service: "svc", Daemon: "d1", DisableBeacon: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCtx, cancelFirst := context.WithTimeout(ctx, 600*time.Millisecond)
+	defer cancelFirst()
+	first := make(chan error, 1)
+	go func() { first <- svc.Close(firstCtx) }()
+	waitFor(t, ctx, "the first Close to send MMgrClose", func() bool { return len(mgr.messages(msgr.MgrCloseMessage)) == 1 })
+
+	// A second caller with a short deadline must return on its own deadline,
+	// as unconfirmed, while the first caller is still waiting.
+	secondCtx, cancelSecond := context.WithTimeout(ctx, 30*time.Millisecond)
+	defer cancelSecond()
+	began := time.Now()
+	err = svc.Close(secondCtx)
+	if elapsed := time.Since(began); elapsed > 300*time.Millisecond {
+		t.Fatalf("second Close ignored its deadline for %v", elapsed)
+	}
+	if !errors.Is(err, ErrMgrServiceCloseUnconfirmed) || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("second Close:", err)
+	}
+	select {
+	case err := <-first:
+		t.Fatal("the first Close ended early:", err)
+	default:
+	}
+
+	// The first call's terminal result is unconfirmed, and later and
+	// concurrent callers receive that same result rather than success.
+	if err := <-first; !errors.Is(err, ErrMgrServiceCloseUnconfirmed) {
+		t.Fatal("first Close:", err)
+	}
+	if err := svc.Close(ctx); !errors.Is(err, ErrMgrServiceCloseUnconfirmed) {
+		t.Fatal("a later Close turned an unconfirmed close into success:", err)
+	}
+	if n := len(mgr.messages(msgr.MgrCloseMessage)); n != 1 {
+		t.Fatalf("%d MMgrClose messages were sent", n)
+	}
+}
+
+func TestMgrServiceConcurrentCloseOfAnAcknowledgedCloseSucceedsForEveryCaller(t *testing.T) {
+	mgr := &serviceMGR{ack: true}
+	c, ctx := dialService(t, mgr)
+	svc, err := c.OpenMgrService(ctx, MgrServiceOptions{Service: "svc", Daemon: "d1", DisableBeacon: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make(chan error, 8)
+	for i := 0; i < cap(results); i++ {
+		go func() { results <- svc.Close(ctx) }()
+	}
+	for i := 0; i < cap(results); i++ {
+		if err := <-results; err != nil {
+			t.Fatal("concurrent Close:", err)
+		}
+	}
+	if n := len(mgr.messages(msgr.MgrCloseMessage)); n != 1 {
+		t.Fatalf("%d MMgrClose messages were sent", n)
+	}
+}
