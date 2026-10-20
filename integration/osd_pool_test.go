@@ -133,6 +133,8 @@ func createOwnedPools(t *testing.T, ctx context.Context, base osdFixtureOracle, 
 		defer stop()
 		if r := nativePool(t, cleanup, "cleanup", nil); !r.PoolsRemoved {
 			t.Error("owned pools were not removed")
+		} else {
+			t.Log("native owned-pool cleanup confirmed")
 		}
 	})
 	for _, slot := range slots {
