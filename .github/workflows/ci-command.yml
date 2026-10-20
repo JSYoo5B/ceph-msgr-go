@@ -1,0 +1,205 @@
+name: CI command
+
+# A reviewer asks for named scenarios with a pull-request comment:
+#   /ci run <scenario-id|group:<group>|all> ...
+# issue_comment workflows always execute the default branch's definition, so the
+# parser, planner and this file are trusted control code. The pull request's code
+# is only checked out inside native-scenarios.yml (read-only, no persisted
+# credential). The comment text is passed through environment variables and
+# parsed by tools/ci_command.py; it is never interpolated into a shell command.
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+# One request per pull request at a time; a second request waits instead of
+# cancelling a running one. Baseline pull-request checks are separate workflows.
+concurrency:
+  group: ci-command-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GOPROXY: 'https://proxy.golang.org|direct'
+
+jobs:
+  request:
+    name: Check the request
+    if: startsWith(github.event.comment.body, '/ci') || contains(github.event.comment.body, '/ci ')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    outputs:
+      accepted: ${{ steps.verdict.outputs.accepted }}
+      sha: ${{ steps.pull.outputs.sha }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      selectors: ${{ steps.parse.outputs.selectors }}
+    steps:
+      # Default branch only: trusted scripts.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Parse and authorize the command
+        id: parse
+        env:
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
+          IS_PULL_REQUEST: ${{ github.event.issue.pull_request != null }}
+        run: python3 tools/ci_command.py parse
+      - name: Read the pull request head once
+        id: pull
+        if: steps.parse.outputs.command == 'accepted'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" \
+            --jq '"sha=\(.head.sha)\nhead_repo=\(.head.repo.full_name // "")\nbase_repo=\(.base.repo.full_name)\nstate=\(.state)"' \
+            >> "$GITHUB_OUTPUT"
+      - name: Check the pull request
+        id: pullcheck
+        if: steps.parse.outputs.command == 'accepted'
+        env:
+          HEAD_REPO: ${{ steps.pull.outputs.head_repo }}
+          BASE_REPO: ${{ steps.pull.outputs.base_repo }}
+          HEAD_SHA: ${{ steps.pull.outputs.sha }}
+          PR_STATE: ${{ steps.pull.outputs.state }}
+        run: python3 tools/ci_command.py pull
+      # The vocabulary comes from the tested revision (a same-repository commit,
+      # forks are refused above); the planner that reads it is the trusted one.
+      - name: Resolve the selectors against the tested revision
+        id: plan
+        if: steps.pullcheck.outputs.pull == 'accepted'
+        env:
+          SELECTORS: ${{ steps.parse.outputs.selectors }}
+          SHA: ${{ steps.pull.outputs.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$SHA"
+          if ! git show "$SHA:.github/scenarios/catalog.json" > "$RUNNER_TEMP/catalog.json"; then
+            echo "reason=the tested revision has no scenario catalog" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          args=()
+          for selector in $SELECTORS; do args+=(--select "$selector"); done
+          if matrix=$(python3 tools/scenario_plan.py plan --catalog "$RUNNER_TEMP/catalog.json" "${args[@]}" 2> "$RUNNER_TEMP/plan.txt"); then
+            echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          else
+            echo "reason=$(tr '\n' ' ' < "$RUNNER_TEMP/plan.txt")" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Decide
+        id: verdict
+        env:
+          COMMAND: ${{ steps.parse.outputs.command }}
+          REFUSAL: ${{ steps.parse.outputs.reason }}
+          PULL: ${{ steps.pullcheck.outputs.pull }}
+          PULL_REFUSAL: ${{ steps.pullcheck.outputs.reason }}
+          MATRIX: ${{ steps.plan.outputs.matrix }}
+          PLAN_REFUSAL: ${{ steps.plan.outputs.reason }}
+        run: |
+          reason=
+          if test "$COMMAND" = refused; then reason=$REFUSAL
+          elif test "$COMMAND" = accepted; then
+            if test "$PULL" != accepted; then reason=$PULL_REFUSAL
+            elif test -z "$MATRIX"; then reason=${PLAN_REFUSAL:-the selectors could not be resolved}
+            fi
+          else
+            echo "accepted=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if test -n "$reason"; then
+            echo "accepted=false" >> "$GITHUB_OUTPUT"
+            printf 'The `/ci run` request was refused: %s.\n\nNo pull-request code was executed.\n' "$reason" > "$RUNNER_TEMP/reply.md"
+          else
+            echo "accepted=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Explain a refusal
+        if: steps.verdict.outputs.accepted == 'false' && steps.parse.outputs.command != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/reply.md"
+      - name: Mark the requested commit pending
+        if: steps.verdict.outputs.accepted == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.pull.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state=pending \
+            -f context="ci-command/run-$GITHUB_RUN_ID" -f description="Requested scenarios are running" -f target_url="$RUN_URL"
+
+  run:
+    name: Scenarios
+    needs: request
+    if: needs.request.outputs.accepted == 'true' && fromJSON(needs.request.outputs.matrix).include[0] != null
+    permissions:
+      contents: read
+    uses: ./.github/workflows/native-scenarios.yml
+    with:
+      matrix: ${{ needs.request.outputs.matrix }}
+      ref: ${{ needs.request.outputs.sha }}
+
+  checks:
+    name: Selected platform checks
+    needs: request
+    if: needs.request.outputs.accepted == 'true' && fromJSON(needs.request.outputs.matrix).fixed[0] != null
+    permissions:
+      contents: read
+    uses: ./.github/workflows/platform-checks.yml
+    with:
+      matrix: ${{ needs.request.outputs.matrix }}
+      ref: ${{ needs.request.outputs.sha }}
+
+  report:
+    name: Report the result
+    needs: [request, run, checks]
+    if: always() && needs.request.outputs.accepted == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write
+      statuses: write
+    steps:
+      # Only conclusions of the scenario jobs matter here: failed, canceled and
+      # skipped are all reported as not passed; only success is a pass.
+      - name: Publish the final status and a summary comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.issue.number }}
+          SHA: ${{ needs.request.outputs.sha }}
+          SELECTORS: ${{ needs.request.outputs.selectors }}
+          NATIVE: ${{ needs.run.result }}
+          CHECKS: ${{ needs.checks.result }}
+          HAS_NATIVE: ${{ fromJSON(needs.request.outputs.matrix).include[0] != null }}
+          HAS_CHECKS: ${{ fromJSON(needs.request.outputs.matrix).fixed[0] != null }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          RESULT=success
+          for item in "$HAS_NATIVE:$NATIVE" "$HAS_CHECKS:$CHECKS"; do
+            case "$item" in
+              false:*|true:success) ;;
+              true:failure) RESULT=failure; break ;;
+              true:*) RESULT=${item#true:} ;;
+            esac
+          done
+          case "$RESULT" in
+            success) state=success; description="Requested scenarios passed" ;;
+            failure) state=failure; description="Requested scenarios failed" ;;
+            cancelled) state=error; description="Requested scenarios were canceled" ;;
+            skipped) state=error; description="Requested scenarios were skipped" ;;
+            *) state=error; description="Requested scenarios have no result" ;;
+          esac
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$state" \
+            -f context="ci-command/run-$GITHUB_RUN_ID" -f description="$description" -f target_url="$RUN_URL"
+          printf '`/ci run %s` on commit `%s`: **%s** (%s).\n\nRun: %s\n\nThe result belongs to this exact commit; later pushes need a new request. Baseline checks run independently. Per-scenario results are in the run'"'"'s `scenario-*` artifacts.\n' \
+            "$SELECTORS" "$SHA" "$RESULT" "$description" "$RUN_URL" > "$RUNNER_TEMP/final.md"
+          gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/final.md"

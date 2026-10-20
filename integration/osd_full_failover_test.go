@@ -3,8 +3,10 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -164,4 +166,26 @@ func TestCephOSDFullFailoverIntegration(t *testing.T) {
 	if state := poolObserve(t, ctx, 1, "full-failover-held", "", ""); state.Code != -2 {
 		t.Fatal("the write held by the killed primary executed", state.Code, state.Data)
 	}
+	if state := poolObserve(t, ctx, 1, "full-failover-forced", "", ""); state.Code != 0 || !bytes.Equal(state.Data, []byte("forced after failover")) || state.Version != forced.UserVersion {
+		t.Fatal("native forced object differs after recovery", state.Code, state.Version)
+	}
+	restored := nativeFullRatios(t, ctx, nil)
+	if restored.Nearfull != ratios.Nearfull || restored.Backfillfull != ratios.Backfillfull || restored.Full != ratios.Full || len(restored.FullOSDs) != 0 || hasPoolFlag(restored.OwnedFlags["1"], "full") {
+		t.Fatal("native full ratios or flags were not restored", restored)
+	}
+	receipt, err := json.Marshal(map[string]any{
+		"original_ratios": ratios, "restored_ratios": restored,
+		"original_primary": held.ID, "replacement_primary": moved.ID,
+		"original_epoch": held.Epoch, "replacement_epoch": moved.Epoch,
+		"held_outcome_unknown": true, "held_native_code_after_recovery": -2,
+		"full_try_code": -28, "forced_ondisk": true,
+		"forced_native_version_after_recovery": forced.UserVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := testcluster.WritePublicEvidence(filepath.Join(dir, "osd-full-failover-results.json"), receipt); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("native recovery complete: restored ratios %.4f/%.4f/%.4f at epoch %d; held object absent; forced bytes/version %d preserved", restored.Nearfull, restored.Backfillfull, restored.Full, restored.Epoch, forced.UserVersion)
 }

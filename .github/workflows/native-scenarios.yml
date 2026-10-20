@@ -1,0 +1,147 @@
+name: Native interoperability scenarios
+
+# Reusable by ci.yml (pull request, dispatch), ci-command.yml (a reviewer's
+# request for named scenarios on one pull-request commit) and periodic.yml.
+# Test code runs with read-only repository permissions and no persisted credential.
+on:
+  workflow_call:
+    inputs:
+      matrix:
+        description: Matrix JSON produced by tools/scenario_plan.py
+        required: true
+        type: string
+      ref:
+        description: Exact commit to test; empty tests the calling event's own revision
+        required: false
+        type: string
+        default: ''
+      retention_days:
+        description: Artifact retention in days, as a JSON number
+        required: false
+        type: string
+        default: '7'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ceph:
+    if: fromJSON(inputs.matrix).include[0] != null
+    name: ${{ matrix.mon_ping == '1' && 'MON-ping ' || '' }}${{ matrix.osd_cache_pools == '1' && 'OSD-cache-pools ' || '' }}Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }}, profile=${{ matrix.osd_profile || 'legacy-v6' }}, store=${{ matrix.osd_store || 'memstore' }}, replicas=${{ matrix.osd_replicas || '1' }}, native-mgr-preparation=${{ matrix.native_mgr_preparation || '0' }}, race=${{ matrix.race || '0' }}${{ matrix.osd_soak && format(', soak={0}', matrix.osd_soak) || '' }})${{ matrix.rbd == '1' && ' RBD-base' || (matrix.mds_cephfs_ranks_replay == '1' && ' MDS-cephfs-ranks-replay' || (matrix.mds_cephfs_ranks == '1' && ' MDS-cephfs-ranks' || (matrix.mds_cephfs_completion == '1' && ' MDS-cephfs-completion' || (matrix.mds_cephfs_data == '1' && ' MDS-cephfs-data' || (matrix.mds_cephfs == '1' && ' MDS-cephfs' || (matrix.mds_sessions == '1' && ' MDS-sessions' || (matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || '')))))))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GOPROXY: 'https://proxy.golang.org|direct'
+      CGO_ENABLED: '0'
+      GOTOOLCHAIN: local
+      GOWORK: 'off'
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix:
+        include: ${{ fromJSON(inputs.matrix).include }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
+      - name: Download fixture-only dependencies
+        run: go -C integration/fixture mod download
+      - name: Pre-pull the pinned Ceph fixture image
+        timeout-minutes: 5
+        env:
+          IMAGE: ${{ matrix.image || 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9' }}
+        run: |
+          for attempt in 1 2 3; do
+            docker pull "$IMAGE" && exit 0
+            sleep $((attempt * 10))
+          done
+          exit 1
+      - name: Pre-pull the Testcontainers reaper image
+        timeout-minutes: 5
+        run: |
+          for attempt in 1 2 3 4 5; do
+            docker pull testcontainers/ryuk:0.14.0 && exit 0
+            sleep $((attempt * 10))
+          done
+          exit 1
+      - name: Real MON, MGR and opt-in OSD protocol verification
+        id: ceph
+        run: |
+          result=0
+          sh integration/run.sh 2>&1 | tee "$RUNNER_TEMP/ceph-tests.log" || result=$?
+          if test "$result" -ne 0; then
+            python3 tools/ci_failure_annotations.py "$RUNNER_TEMP/ceph-tests.log" "$result"
+          fi
+          exit "$result"
+        env:
+          CEPH_MSGR_TEST_IMAGE: ${{ matrix.image || 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9' }}
+          CEPH_MSGR_TEST_KEY_TYPE: ${{ matrix.key }}
+          CEPH_MSGR_TEST_SERVICE_CIPHER: ${{ matrix.service }}
+          CEPH_MSGR_TEST_IP_FAMILY: ${{ matrix.family }}
+          CEPH_MSGR_STRESS_DURATION: ${{ matrix.stress }}
+          CEPH_MSGR_TEST_MGR_COUNT: ${{ matrix.managers || '2' }}
+          CEPH_MSGR_TEST_OSD: ${{ matrix.osd || '0' }}
+          CEPH_MSGR_TEST_OSD_PROFILE: ${{ matrix.osd_profile || 'legacy-v6' }}
+          CEPH_MSGR_TEST_OSD_CACHE_POOLS: ${{ matrix.osd_cache_pools || '0' }}
+          CEPH_MSGR_TEST_MDS_FRESH: ${{ matrix.mds_fresh || '0' }}
+          CEPH_MSGR_TEST_MDS_COMMANDS: ${{ matrix.mds_commands || '0' }}
+          CEPH_MSGR_TEST_MDS_SESSIONS: ${{ matrix.mds_sessions || '0' }}
+          CEPH_MSGR_TEST_MDS_CEPHFS: ${{ matrix.mds_cephfs || '0' }}
+          CEPH_MSGR_TEST_MDS_CEPHFS_RANKS: ${{ matrix.mds_cephfs_ranks || '0' }}
+          CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY: ${{ matrix.mds_cephfs_ranks_replay || '0' }}
+          CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}
+          CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}
+          CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}
+          CEPH_MSGR_TEST_MON_PING: ${{ matrix.mon_ping || '0' }}
+          CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}
+          CEPH_MSGR_TEST_OSD_STORE: ${{ matrix.osd_store || 'memstore' }}
+          CEPH_MSGR_TEST_OSD_REPLICAS: ${{ matrix.osd_replicas || '1' }}
+          CEPH_MSGR_TEST_OSD_SOAK: ${{ matrix.osd_soak || '' }}
+          CEPH_MSGR_TEST_RUNTIME: ${{ matrix.runtime || 'container' }}
+          CEPH_MSGR_TEST_RACE: ${{ matrix.race || '0' }}
+          CEPH_MSGR_TEST_EXPIRE_TICKETS: ${{ matrix.expiry || '0' }}
+          CEPH_MSGR_TEST_IDLE_SESSIONS: ${{ matrix.idle || '0' }}
+          CEPH_MSGR_TEST_AUTH_EPOCH: ${{ matrix.auth_epoch || '0' }}
+          CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION: ${{ matrix.native_mgr_preparation || '0' }}
+          CEPH_MSGR_TEST_SHORT_TICKETS: ${{ matrix.short_tickets || '0' }}
+          CEPH_MSGR_TEST_MODE_REJECTION: ${{ matrix.mode_rejection || '' }}
+          CEPH_MSGR_TEST_CONNECTION_MODE: ${{ matrix.mode || 'secure' }}
+          CEPH_MSGR_TEST_MAPPED_IPV6: ${{ matrix.mapped || '0' }}
+          CEPH_MSGR_TEST_DIAGNOSTICS: ${{ runner.temp }}/ceph-diagnostics
+      - name: Preserve failed Ceph test logs and crash metadata
+        if: failure() && steps.ceph.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ceph-diagnostics-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/ceph-tests.log
+            ${{ runner.temp }}/ceph-diagnostics/
+          retention-days: ${{ fromJSON(inputs.retention_days) }}
+      - name: Record the scenario result
+        if: always()
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+          RESULT: ${{ job.status }}
+          IMAGE: ${{ matrix.image || 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/scenario-result"
+          sha=$(git rev-parse HEAD)
+          printf '{"scenario":"%s","commit":"%s","result":"%s","image":"%s","workflow_run":"%s/%s/actions/runs/%s"}\n' \
+            "$SCENARIO" "$sha" "$RESULT" "$IMAGE" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" \
+            > "$RUNNER_TEMP/scenario-result/result.json"
+      - name: Preserve the scenario result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: scenario-${{ strategy.job-index }}-${{ matrix.scenario }}
+          path: ${{ runner.temp }}/scenario-result/result.json
+          retention-days: ${{ fromJSON(inputs.retention_days) }}

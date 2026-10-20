@@ -51,13 +51,29 @@ func TestControlRequestIsHostReadableAndAcknowledged(t *testing.T) {
 func TestControllerFailureReachesWaitingTest(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"provider.error", "native-oracles.error"} {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte("control permission denied\n"), 0600); err != nil {
-			t.Fatal(err)
-		}
+		// The worker fails while the request is waiting for its acknowledgement.
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			_ = os.WriteFile(filepath.Join(dir, name), []byte("control permission denied\n"), 0600)
+		}()
 		err := RequestControl(context.Background(), dir, "restart-mon", "mon-restarted", "a")
 		if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("fixture %s: control permission denied", name)) {
 			t.Fatal("worker failure became an unbounded wait", err)
 		}
 		os.Remove(filepath.Join(dir, name))
+	}
+}
+
+func TestControllerFailureRecordedBeforeRequestIsMarkedCascading(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "provider.error"), []byte("originating failure\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	err := RequestControl(context.Background(), dir, "restart-mon", "mon-restarted", "a")
+	if err == nil || !strings.Contains(err.Error(), "cascading failure") || !strings.Contains(err.Error(), "not executed") || !strings.Contains(err.Error(), "originating failure") {
+		t.Fatal("later request did not identify the earlier controller failure", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
+		t.Fatal("a request that cannot run was published", entries)
 	}
 }
