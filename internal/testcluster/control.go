@@ -14,6 +14,14 @@ import (
 // fixture directory bounds access, while 0644 lets a non-root Linux host read
 // files produced by the root container test process. Keys remain separate.
 func RequestControl(ctx context.Context, control, request, response string, args ...string) error {
+	// A worker error recorded before this request was published is an earlier
+	// failure: the request would never run, so say so instead of repeating the
+	// originating text as if this request had caused it.
+	if name, text, err := controlWorkerError(control); err != nil {
+		return err
+	} else if name != "" {
+		return fmt.Errorf("fixture %s recorded before this %q request was published; the request was not executed and this is a cascading failure, not a new one: %s", name, request, text)
+	}
 	id := time.Now().UnixNano()
 	file, err := os.CreateTemp(control, request+"-")
 	if err != nil {
@@ -46,14 +54,10 @@ func RequestControl(ctx context.Context, control, request, response string, args
 		}
 		// Preserve the first controller/oracle error instead of hiding a dead
 		// worker behind repeated per-test context deadlines.
-		for _, name := range []string{"provider.error", "native-oracles.error"} {
-			data, err := os.ReadFile(filepath.Join(control, name))
-			if err == nil {
-				return fmt.Errorf("fixture %s: %s", name, strings.TrimSpace(string(data)))
-			}
-			if !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
+		if name, text, err := controlWorkerError(control); err != nil {
+			return err
+		} else if name != "" {
+			return fmt.Errorf("fixture %s: %s", name, text)
 		}
 		select {
 		case <-ctx.Done():
@@ -69,4 +73,18 @@ func RestartMonitor(ctx context.Context, control, name string) error {
 
 func ControlDaemon(ctx context.Context, control, action, daemon, name string) error {
 	return RequestControl(ctx, control, action+"-"+daemon, daemon+"-"+action, name)
+}
+
+// controlWorkerError returns the first recorded controller/oracle error file.
+func controlWorkerError(control string) (name, text string, err error) {
+	for _, name := range []string{"provider.error", "native-oracles.error"} {
+		data, err := os.ReadFile(filepath.Join(control, name))
+		if err == nil {
+			return name, strings.TrimSpace(string(data)), nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", "", err
+		}
+	}
+	return "", "", nil
 }

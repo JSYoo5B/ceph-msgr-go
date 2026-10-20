@@ -14,6 +14,7 @@ import time
 import traceback
 
 import go_test_annotations
+import product_dependencies
 
 
 MODULE = "github.com/JSYoo5B/ceph-msgr-go"
@@ -207,11 +208,7 @@ def run(distro, diagnostics):
     if host != {"GOHOSTOS": "windows", "GOHOSTARCH": "amd64", "GOOS": "windows",
                 "GOARCH": "amd64", "CGO_ENABLED": "0"}:
         raise RuntimeError("expected a native Windows amd64 toolchain with CGO disabled")
-    external = execute(["go", "list", "-deps", "-f",
-                        "{{if not .Standard}}{{if not .Module.Main}}{{.ImportPath}}{{end}}{{end}}",
-                        "./cephmsgr"], capture=True).stdout.strip()
-    if external:
-        raise RuntimeError("product has non-standard-library dependencies")
+    dependencies = product_dependencies.check(execute)
     revision = execute(["git", "rev-parse", "HEAD"], capture=True).stdout.strip()
     version = execute(["go", "version"], capture=True).stdout.strip()
     toolchain = re.search(r"\bgo([0-9]+)\.([0-9]+)(?:\.[0-9]+)?(?:[a-z]+[0-9]+)?\b", version)
@@ -229,7 +226,7 @@ def run(distro, diagnostics):
     report = {"revision": revision, "go": version, "host": host,
               "ceph": "20.2.4", "credential": "aes256k", "service_cipher": "aes256k",
               "connection_mode": "secure", "wire_family": "IPv4", "transport": "WSL loopback relay",
-              "product_dependencies": "Go standard library", "suites": {}}
+              "product_dependencies": dependencies, "suites": {}}
     try:
         for name, (package, _) in SUITES.items():
             execute(["go", "test", "-c", "-o", str(out / (name + ".test.exe")), "./" + package])

@@ -16,6 +16,7 @@ import (
 // Deliberately select public native metadata rather than archiving /out, the
 // Ceph configuration, keyrings, auth databases or process memory.
 var metadataFiles = []string{
+	"osd-readiness.jsonl", "osd-full-failover-results.json",
 	"osd-checksum-compound-input.json", "osd-checksum-compound-result.json", "osd-checksum-compound-command.json", "osd-checksum-compound-results.json",
 	"osd-enforce-snap-context-input.json", "osd-enforce-snap-context-result.json", "osd-enforce-snap-context-command.json", "osd-enforce-snap-context-results.json", "osd-enforce-snap-context-native-write.json",
 	"osd-cache-pools-fixture.json", "osd-cache-pools-native.json", "osd-cache-pools-command.json", "osd-cache-pools-results.json",
