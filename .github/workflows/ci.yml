@@ -1,194 +1,69 @@
-name: Native Go and Tentacle interoperability
+name: Basic CI
 
 on:
-  push:
-    branches: ['**']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer commit on the same branch (or pull request) cancels the run still in
-# progress for the older one. Events stay separate so a push run never cancels
-# the pull-request run for the same commit, or a manual dispatch.
+# One automatic run per PR; a new commit cancels its previous checks.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: basic-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 defaults:
   run:
     shell: bash
 
+env:
+  GOPROXY: 'https://proxy.golang.org|direct'
+  CGO_ENABLED: '0'
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+
 jobs:
-  unit:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        go: ['1.24.0', '1.27.x']
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    env:
-      CGO_ENABLED: '0'
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
-      DIAGNOSTIC_PYTHON: ${{ matrix.os == 'windows-latest' && 'python' || 'python3' }}
-      PYTHONIOENCODING: utf-8
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: ${{ matrix.go }}
-      - name: Test CI diagnostic tools
-        run: |
-          "$DIAGNOSTIC_PYTHON" -m unittest discover -s tools -p 'test_*.py'
-      - name: Unit tests with per-test failure annotations
-        id: unit_tests
-        run: |
-          result=0
-          go test -json -fullpath ./... > "$RUNNER_TEMP/go-tests.jsonl" 2>&1 || result=$?
-          if test "$result" -ne 0; then
-            "$DIAGNOSTIC_PYTHON" tools/go_test_annotations.py "$RUNNER_TEMP/go-tests.jsonl" "$result"
-          fi
-          exit "$result"
-      - run: go vet ./...
-      - name: Enforce pure-Go product dependency policy
-        run: |
-          external=$(go list -deps -f '{{if not .Standard}}{{if not .Module.Main}}{{.Module.Path}}{{end}}{{end}}' ./... | sort -u)
-          test "$external" = github.com/klauspost/compress || { echo "$external"; exit 1; }
-          native=$(go list -deps -f '{{if .CgoFiles}}{{.ImportPath}}{{end}}' ./...)
-          test -z "$native" || { echo "$native"; exit 1; }
-      - name: Preserve failed Go test events
-        if: failure() && steps.unit_tests.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: go-tests-${{ matrix.os }}-${{ matrix.go }}
-          path: ${{ runner.temp }}/go-tests.jsonl
-          retention-days: 7
-
-  fixture-tools:
-    name: Fixture development tools (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    env:
-      CGO_ENABLED: '0'
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      # Keep the Go 1.26+ Testcontainers module outside the product's Go 1.24 checks.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.x'
-          cache-dependency-path: integration/fixture/go.sum
-      - name: Download fixture-only dependencies
-        run: go -C integration/fixture mod download
-      - name: Test fixture development tools without a running cluster
-        run: go -C integration/fixture test -mod=readonly ./...
-      - name: Vet fixture development tools
-        run: go -C integration/fixture vet -mod=readonly ./...
-
-  race:
+  basic:
+    name: Build, lint and unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.x'
-          cache-dependency-path: integration/fixture/go.sum
-      - name: Download fixture-only dependencies
-        run: go -C integration/fixture mod download
-      # The race detector needs CGO instrumentation; product builds use CGO=0.
-      - run: go test -race ./...
+          go-version: '1.24.0'
+      - name: Check Go formatting
+        run: |
+          files=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
+          if test -n "$files"; then printf '%s\n' "$files"; exit 1; fi
+      - name: Test Python tools and validate scenarios
+        run: |
+          python3 -m unittest discover -s tools -p 'test_*.py'
+          python3 tools/scenario_plan.py validate
+      - name: Build and lint the product
+        run: |
+          go build -mod=readonly ./...
+          go vet -mod=readonly ./...
+          python3 tools/product_dependencies.py
+      - name: Unit tests without integration tests
+        run: |
+          packages=$(go list -mod=readonly ./... | sed '\|/integration$|d; \|/integration/|d')
+          go test -mod=readonly $packages
+      - name: Race detector on unit tests without integration tests
         env:
           CGO_ENABLED: '1'
-      # Docker Hub pulls of the reaper occasionally fail; Testcontainers
-      # reuses a present image instead of pulling it inside the fixture.
-      - name: Pre-pull the Testcontainers reaper image
-        timeout-minutes: 5
         run: |
-          for attempt in 1 2 3 4 5; do
-            docker pull testcontainers/ryuk:0.14.0 && exit 0
-            sleep $((attempt * 10))
-          done
-          exit 1
-      - name: Race detector with actual Tentacle MON and MGR sessions
-        id: race_ceph
-        run: |
-          result=0
-          sh integration/run.sh 2>&1 | tee "$RUNNER_TEMP/ceph-tests.log" || result=$?
-          if test "$result" -ne 0; then
-            python3 tools/ci_failure_annotations.py "$RUNNER_TEMP/ceph-tests.log" "$result"
-          fi
-          exit "$result"
-        env:
-          CEPH_MSGR_TEST_RUNTIME: host
-          CEPH_MSGR_TEST_RACE: '1'
-          CEPH_MSGR_TEST_DIAGNOSTICS: ${{ runner.temp }}/ceph-diagnostics
-      - name: Preserve failed Ceph race test logs and crash metadata
-        if: failure() && steps.race_ceph.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ceph-race-diagnostics
-          path: |
-            ${{ runner.temp }}/ceph-tests.log
-            ${{ runner.temp }}/ceph-diagnostics/
-          retention-days: 7
+          packages=$(go list -mod=readonly ./... | sed '\|/integration$|d; \|/integration/|d')
+          go test -mod=readonly -race $packages
+      - name: Validate workflow syntax
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= -pyflakes=
 
-  fuzz:
+  fixture-static:
+    name: Fixture build and unit checks without a cluster
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      CGO_ENABLED: '0'
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.x'
-      - name: Test development crash metadata selection
-        run: python3 -m unittest discover -s tools -p 'test_*.py'
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzFrameReader$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzSecureFrameReader$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzDecodeLog$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzDecodeConfig$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzPingReply$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/maps -run '^$' -fuzz '^FuzzMaps$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/maps -run '^$' -fuzz '^FuzzOSDMessage$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPublication$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPlaintextPublication$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/osd -run '^$' -fuzz '^FuzzReplyDecode$' -fuzztime=20s -parallel=2
-
-  windows-ceph:
-    name: Windows native Ceph 20.2.4 (aes256k, secure, IPv4 relay)
-    runs-on: windows-2025
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: pwsh
-    env:
-      CGO_ENABLED: '0'
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
-      PYTHONIOENCODING: utf-8
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -197,248 +72,9 @@ jobs:
         with:
           go-version: '1.27.x'
           cache-dependency-path: integration/fixture/go.sum
-      - name: Download fixture-only dependencies
-        run: go -C integration/fixture mod download
-      # A stalled download or wsl.exe import once consumed the whole job
-      # timeout; bound and retry each phase so the job reports the stall.
-      - name: Import dedicated WSL2 development fixture
-        timeout-minutes: 12
+      - name: Build and lint fixture tools
         run: |
-          $ErrorActionPreference = 'Stop'
-          $archive = Join-Path $env:RUNNER_TEMP 'ubuntu-wsl-rootfs.tar.gz'
-          # Canonical's fixed archive and published SHA256SUMS; no Store login
-          # or interactive first-user creation is required for this import.
-          $expected = '8251e27ffff381a4af5f41dcb94d867de3e0d9774a9241908ab34555d99315ea'
-          $downloaded = $false
-          for ($attempt = 1; $attempt -le 3 -and -not $downloaded; $attempt++) {
-            try {
-              Invoke-WebRequest -Uri 'https://cloud-images.ubuntu.com/wsl/releases/noble/20240423/ubuntu-noble-wsl-amd64-wsl.rootfs.tar.gz' -OutFile $archive -TimeoutSec 180
-              $downloaded = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant() -eq $expected
-              if (-not $downloaded) { Write-Warning "WSL development rootfs checksum mismatch (attempt $attempt)" }
-            } catch {
-              Write-Warning "WSL development rootfs download failed (attempt $attempt): $_"
-            }
-            if (-not $downloaded) {
-              Remove-Item $archive -ErrorAction SilentlyContinue
-              Start-Sleep -Seconds (15 * $attempt)
-            }
-          }
-          if (-not $downloaded) { throw 'WSL development rootfs download failed or checksum mismatch' }
-          $fixtureDistro = "CephMsgrFixture-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          $storage = Join-Path $env:RUNNER_TEMP 'ceph-wsl'
-          $imported = $false
-          for ($attempt = 1; $attempt -le 2 -and -not $imported; $attempt++) {
-            $import = Start-Process -FilePath 'wsl.exe' -ArgumentList @('--import', $fixtureDistro, $storage, $archive, '--version', '2') -NoNewWindow -PassThru
-            $null = $import.Handle # keep the handle so ExitCode stays readable
-            if ($import.WaitForExit(240000)) {
-              $imported = $import.ExitCode -eq 0
-              if (-not $imported) { Write-Warning "WSL2 fixture import exited $($import.ExitCode) (attempt $attempt)" }
-            } else {
-              $import.Kill($true)
-              Write-Warning "WSL2 fixture import exceeded 240 s (attempt $attempt)"
-            }
-            if (-not $imported) {
-              wsl.exe --unregister $fixtureDistro 2>&1 | Out-Null
-              Remove-Item -Recurse -Force $storage -ErrorAction SilentlyContinue
-              Start-Sleep -Seconds 10
-            }
-          }
-          if (-not $imported) { throw 'WSL2 fixture import failed' }
-          "CEPH_MSGR_WSL_DISTRO=$fixtureDistro" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Remove-Item $archive
-          wsl.exe --distribution $fixtureDistro --user root -- uname -m
-          if ($LASTEXITCODE -ne 0) { throw 'WSL2 fixture startup failed' }
-      - name: Execute Windows binaries against real MON and MGR
-        run: python tools/windows_interop.py --distro $env:CEPH_MSGR_WSL_DISTRO --diagnostics "$env:RUNNER_TEMP/ceph-windows-diagnostics"
-      - name: Remove dedicated WSL fixture
-        if: always() && env.CEPH_MSGR_WSL_DISTRO != ''
-        run: |
-          wsl.exe --unregister $env:CEPH_MSGR_WSL_DISTRO
-          if ($LASTEXITCODE -ne 0) { throw 'WSL2 fixture cleanup failed' }
-      - name: Preserve Windows interoperability evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ceph-windows-evidence
-          path: ${{ runner.temp }}/ceph-windows-diagnostics/
-          retention-days: 7
-
-  ceph:
-    name: ${{ matrix.mon_ping == '1' && 'MON-ping ' || '' }}${{ matrix.osd_cache_pools == '1' && 'OSD-cache-pools ' || '' }}Ceph ${{ matrix.release || '20.2.4' }} (${{ matrix.key }}/${{ matrix.service }}, ${{ matrix.mode || 'secure' }}, IPv${{ matrix.family }}, MGR=${{ matrix.managers || '2' }}, ${{ matrix.runtime || 'container' }}, expiry=${{ matrix.expiry || '0' }}, idle=${{ matrix.idle || '0' }}, auth-epoch=${{ matrix.auth_epoch || '0' }}, short-tickets=${{ matrix.short_tickets || '0' }}, mode-rejection=${{ matrix.mode_rejection || 'none' }}, mapped=${{ matrix.mapped || '0' }}, OSD=${{ matrix.osd || '0' }}, profile=${{ matrix.osd_profile || 'legacy-v6' }}, store=${{ matrix.osd_store || 'memstore' }}, replicas=${{ matrix.osd_replicas || '1' }}, native-mgr-preparation=${{ matrix.native_mgr_preparation || '0' }}, race=${{ matrix.race || '0' }}${{ matrix.osd_soak && format(', soak={0}', matrix.osd_soak) || '' }})${{ matrix.rbd == '1' && ' RBD-base' || (matrix.mds_cephfs_ranks_replay == '1' && ' MDS-cephfs-ranks-replay' || (matrix.mds_cephfs_ranks == '1' && ' MDS-cephfs-ranks' || (matrix.mds_cephfs_completion == '1' && ' MDS-cephfs-completion' || (matrix.mds_cephfs_data == '1' && ' MDS-cephfs-data' || (matrix.mds_cephfs == '1' && ' MDS-cephfs' || (matrix.mds_sessions == '1' && ' MDS-sessions' || (matrix.mds_commands == '1' && ' MDS-commands' || (matrix.mds_fresh == '1' && ' MDS-fresh' || '')))))))) }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      CGO_ENABLED: '0'
-      GOTOOLCHAIN: local
-      GOWORK: 'off'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { key: aes256k, service: aes256k, family: '4', stress: '3m' }
-          - { key: aes, service: aes, family: '4', stress: '' }
-          # Dedicated MPing/native rados_ping_monitor comparisons; ordinary rows retained.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', mon_ping: '1', test_run: '^TestCephMonPingIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', mon_ping: '1', test_run: '^TestCephMonPingIntegration$' }
-          # Explicit cache-pool admission and IgnoreCache I/O own one BlueStore OSD.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', osd_cache_pools: '1', test_run: '^TestCephOSDIgnoreCacheIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', osd_cache_pools: '1', test_run: '^TestCephOSDIgnoreCacheIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '' }
-          - { key: aes, service: aes256k, family: '4', stress: '' }
-          - { key: aes256k, service: aes, family: '4', stress: '' }
-          - { key: aes256k, service: aes256k, family: '4', stress: '', managers: '0' }
-          - { release: '20.2.3', key: aes, service: aes, family: '4', stress: '3m', image: 'quay.io/ceph/ceph:v20.2.3@sha256:d195020de02512030118e772cef7859e92904e91eb4cb21acb503f8b94118137' }
-          - { key: aes256k, service: aes256k, family: '4', stress: '', runtime: 'host' }
-          - { key: aes256k, service: aes256k, family: '4', stress: '', expiry: '1' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'host', idle: '1' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', auth_epoch: '1' }
-          - { key: aes, service: aes, family: '4', stress: '', auth_epoch: '1' }
-          - { key: aes, service: aes256k, family: '4', stress: '', native_mgr_preparation: '1' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', short_tickets: '1' }
-          - { key: aes, service: aes, family: '4', stress: '', short_tickets: '1' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', mode_rejection: 'mon' }
-          - { key: aes, service: aes, family: '4', stress: '', mode_rejection: 'mgr' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', mapped: '1' }
-          - { key: aes256k, service: aes256k, mode: 'crc', family: '4', stress: '', runtime: 'host' }
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host' }
-          - { key: aes256k, service: aes256k, mode: 'crc', family: '6', stress: '' }
-          - { key: aes256k, service: aes256k, family: '4', stress: '', runtime: 'host', osd: '1' }
-          - { key: aes, service: aes, family: '4', stress: '', osd: '1' }
-          - { key: aes256k, service: aes256k, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1' }
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', osd: '1' }
-          - { key: aes256k, service: aes256k, family: '4', stress: '', osd: '1', osd_store: 'bluestore' }
-          - { key: aes256k, service: aes256k, family: '4', stress: '', osd: '1', osd_store: 'bluestore', osd_replicas: '3' }
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3' }
-          # Native OSD I/O with instrumented host client binaries; ordinary row retained.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3', race: '1' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', osd: '1', osd_store: 'bluestore', osd_replicas: '3' }
-          # OSD soaks: four writers with checked reads, connection churn and short-deadline
-          # appends resolved only by explicit resubmission, then the same under repeated
-          # OSD SIGKILL; native bytes compared at the end of each.
-          - { key: aes256k, service: aes256k, family: '4', stress: '', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_soak: '4m' }
-          # Explicit v8 acceptance: base I/O, PGNLS, backoff/watch, split/merge,
-          # original-identity resubmission across that split/merge, and MDS maps.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'replicated-pg-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$' }
-          # Three-BlueStore v8 acceptance: one top-level test (object-scope BLOCK/UNBLOCK
-          # on a degraded object plus in-flight primary SIGKILL and explicit resubmission).
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDObjectBackoffFailoverIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDObjectBackoffFailoverIntegration$' }
-          # Existing request-v8/reply-v6 wire across actual secondary and primary
-          # upmaps in a separate owned two-replica pool; original fixture unchanged.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDUpmapIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'bluestore', osd_replicas: '3', osd_profile: 'replicated-pg-v8', test_run: '^TestCephOSDUpmapIntegration$' }
-          # Reply v8 acceptance retains the tests above and adds explicit reply-v8 cases.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', test_run: '^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$' }
-          # Explicit untraced request v9 / strict reply v8 includes the OSD tests
-          # above plus request-v9 acceptance; MDS maps are excluded from this profile.
-          # Filtered PGNLS, redirect, FADVISE, watch DISCONNECT, blocklisting,
-          # late RECONNECT, notify redelivery and watch permissions also use v9 here.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-request-v9-reply-v8', test_run: '^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'replicated-pg-request-v9-reply-v8', test_run: '^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$' }
-          # Fresh MDS transport is a separate opt-in; retain the OSD acceptance rows above.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', mds_fresh: '1', test_run: '^TestCephMDSFreshIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'replicated-pg-reply-v8', mds_fresh: '1', test_run: '^TestCephMDSFreshIntegration$' }
-          # Public raw MDS commands use their own opt-in and legacy OSD fixture policy.
-          # Only the MDS command test is selected; product OSD sessions are not enabled.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_commands: '1', test_run: '^TestCephMDSCommandsIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_commands: '1', test_run: '^TestCephMDSCommandsIntegration$' }
-          # CephFS client sessions mutate owned filesystem state; their own opt-in excludes MDS commands.
-          # Only the MDS session test is selected; product OSD sessions are not enabled.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_sessions: '1', test_run: '^TestCephMDSSessionsIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_sessions: '1', test_run: '^TestCephMDSSessionsIntegration$' }
-          # CephFS metadata acceptance mutates an owned namespace through Go and native LibCephFS clients; its own opt-in excludes MDS commands and sessions.
-          # Only the CephFS push, recovery and metadata tests are selected (in that file order); only recovery's fencing clients enable OSD sessions.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs: '1', test_run: '^TestCephMDSCephFS(Push|Recovery)?Integration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs: '1', test_run: '^TestCephMDSCephFS(Push|Recovery)?Integration$' }
-          # Multi-rank CephFS acceptance owns a filesystem with two active ranks and one standby, pins and a standby takeover; its own opt-in excludes the other MDS profiles.
-          # Only the multi-rank test is selected; product OSD sessions are not enabled.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_ranks: '1', test_run: '^TestCephMDSCephFSRanksIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_ranks: '1', test_run: '^TestCephMDSCephFSRanksIntegration$' }
-          # Standby-replay extension of the multi-rank acceptance: three active ranks, the owned standby made rank 0's standby-replay follower, a forward chain across ranks, mutations held in a frozen export and the follower's takeover with resubmitted requests (rank-0 journal paused at runtime); it requires the multi-rank opt-in and selects only its own test.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_ranks: '1', mds_cephfs_ranks_replay: '1', test_run: '^TestCephMDSCephFSRanksReplayIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_ranks: '1', mds_cephfs_ranks_replay: '1', test_run: '^TestCephMDSCephFSRanksReplayIntegration$' }
-          # CephFS completion acceptance restarts its owned rank-0 MDS up to four times (lost reply and completed replay, denied reconnect, missed window, read-only restore) and changes owned runtime and central MDS settings; its own opt-in excludes the other MDS profiles.
-          # Only the completion test is selected; its fencing client also enables OSD sessions with the default v6 object-hash profile.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_completion: '1', test_run: '^TestCephMDSCephFSCompletionIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_completion: '1', test_run: '^TestCephMDSCephFSCompletionIntegration$' }
-          # CephFS data acceptance writes and reads file data through the Go client's MDS session and OSD requests against native LibCephFS (striping, sparse read, truncate, buffered-write revoke, snapshot clone); its own opt-in excludes the other MDS profiles.
-          # Only the data test is selected; its Go client enables MDS, CephFS and OSD sessions with the default v6 object-hash profile and an OSD write grant on the owned data pool.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_data: '1', test_run: '^TestCephMDSCephFSDataIntegration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', mds_fresh: '1', mds_cephfs_data: '1', test_run: '^TestCephMDSCephFSDataIntegration$' }
-          # RBD acceptance owns a pool, two identities and five native librbd images (a parent and its clone among them) on the legacy-v6 single-OSD fixture; its own opt-in excludes every MDS profile.
-          # Only the RBD base, clone, exclusive-lock and write tests are selected; their Go client enables OSD sessions with the RBD capability profile.
-          - { key: aes, service: aes, mode: 'crc', family: '4', stress: '', runtime: 'host', osd: '1', osd_store: 'bluestore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$' }
-          - { key: aes256k, service: aes256k, family: '6', stress: '', runtime: 'container', osd: '1', osd_store: 'memstore', osd_replicas: '1', osd_profile: 'legacy-v6', rbd: '1', test_run: '^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$' }
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: '1.27.x'
-          cache-dependency-path: integration/fixture/go.sum
-      - name: Download fixture-only dependencies
-        run: go -C integration/fixture mod download
-      - name: Pre-pull the Testcontainers reaper image
-        timeout-minutes: 5
-        run: |
-          for attempt in 1 2 3 4 5; do
-            docker pull testcontainers/ryuk:0.14.0 && exit 0
-            sleep $((attempt * 10))
-          done
-          exit 1
-      - name: Real MON, MGR and opt-in OSD protocol verification
-        id: ceph
-        run: |
-          result=0
-          sh integration/run.sh 2>&1 | tee "$RUNNER_TEMP/ceph-tests.log" || result=$?
-          if test "$result" -ne 0; then
-            python3 tools/ci_failure_annotations.py "$RUNNER_TEMP/ceph-tests.log" "$result"
-          fi
-          exit "$result"
-        env:
-          CEPH_MSGR_TEST_IMAGE: ${{ matrix.image || 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9' }}
-          CEPH_MSGR_TEST_KEY_TYPE: ${{ matrix.key }}
-          CEPH_MSGR_TEST_SERVICE_CIPHER: ${{ matrix.service }}
-          CEPH_MSGR_TEST_IP_FAMILY: ${{ matrix.family }}
-          CEPH_MSGR_STRESS_DURATION: ${{ matrix.stress }}
-          CEPH_MSGR_TEST_MGR_COUNT: ${{ matrix.managers || '2' }}
-          CEPH_MSGR_TEST_OSD: ${{ matrix.osd || '0' }}
-          CEPH_MSGR_TEST_OSD_PROFILE: ${{ matrix.osd_profile || 'legacy-v6' }}
-          CEPH_MSGR_TEST_OSD_CACHE_POOLS: ${{ matrix.osd_cache_pools || '0' }}
-          CEPH_MSGR_TEST_MDS_FRESH: ${{ matrix.mds_fresh || '0' }}
-          CEPH_MSGR_TEST_MDS_COMMANDS: ${{ matrix.mds_commands || '0' }}
-          CEPH_MSGR_TEST_MDS_SESSIONS: ${{ matrix.mds_sessions || '0' }}
-          CEPH_MSGR_TEST_MDS_CEPHFS: ${{ matrix.mds_cephfs || '0' }}
-          CEPH_MSGR_TEST_MDS_CEPHFS_RANKS: ${{ matrix.mds_cephfs_ranks || '0' }}
-          CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY: ${{ matrix.mds_cephfs_ranks_replay || '0' }}
-          CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}
-          CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}
-          CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}
-          CEPH_MSGR_TEST_MON_PING: ${{ matrix.mon_ping || '0' }}
-          CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}
-          CEPH_MSGR_TEST_OSD_STORE: ${{ matrix.osd_store || 'memstore' }}
-          CEPH_MSGR_TEST_OSD_REPLICAS: ${{ matrix.osd_replicas || '1' }}
-          CEPH_MSGR_TEST_OSD_SOAK: ${{ matrix.osd_soak || '' }}
-          CEPH_MSGR_TEST_RUNTIME: ${{ matrix.runtime || 'container' }}
-          CEPH_MSGR_TEST_RACE: ${{ matrix.race || '0' }}
-          CEPH_MSGR_TEST_EXPIRE_TICKETS: ${{ matrix.expiry || '0' }}
-          CEPH_MSGR_TEST_IDLE_SESSIONS: ${{ matrix.idle || '0' }}
-          CEPH_MSGR_TEST_AUTH_EPOCH: ${{ matrix.auth_epoch || '0' }}
-          CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION: ${{ matrix.native_mgr_preparation || '0' }}
-          CEPH_MSGR_TEST_SHORT_TICKETS: ${{ matrix.short_tickets || '0' }}
-          CEPH_MSGR_TEST_MODE_REJECTION: ${{ matrix.mode_rejection || '' }}
-          CEPH_MSGR_TEST_CONNECTION_MODE: ${{ matrix.mode || 'secure' }}
-          CEPH_MSGR_TEST_MAPPED_IPV6: ${{ matrix.mapped || '0' }}
-          CEPH_MSGR_TEST_DIAGNOSTICS: ${{ runner.temp }}/ceph-diagnostics
-      - name: Preserve failed Ceph test logs and crash metadata
-        if: failure() && steps.ceph.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ceph-diagnostics-${{ strategy.job-index }}
-          path: |
-            ${{ runner.temp }}/ceph-tests.log
-            ${{ runner.temp }}/ceph-diagnostics/
-          retention-days: 7
+          go -C integration/fixture build -mod=readonly ./...
+          go -C integration/fixture vet -mod=readonly ./...
+      - name: Unit test fixture tools without a cluster
+        run: go -C integration/fixture test -mod=readonly ./...
