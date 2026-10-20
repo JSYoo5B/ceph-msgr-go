@@ -284,7 +284,13 @@ CGO_ENABLED=1 go test -race ./...
 go -C integration/fixture test -mod=readonly ./...
 go -C integration/fixture vet -mod=readonly ./...
 python3 -m unittest discover -s tools -p 'test_*.py'
+CGO_ENABLED=0 python3 tools/product_dependencies.py
 ```
+
+CI and the Windows interoperability verifier share this dependency check. It
+checks the root module's build graph, permits only the documented compression
+module externally, and rejects native sources, module replacements and subprocess
+dependencies. Fixture-only dependencies remain in `integration/fixture/`.
 
 `integration/fixture/` contains bounded native setup/control/oracle recipes.
 Run Docker profiles on Linux with their documented selectors. Native vectors,

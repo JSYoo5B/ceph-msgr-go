@@ -324,14 +324,11 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		return err
 	}
 	if fields != nil {
-		if len(fields) != 2 || fields[1] != "clean" || c.profile.osd != "1" {
+		if len(fields) != 2 || (fields[1] != "clean" && fields[1] != "recovery") || c.profile.osd != "1" {
 			return errors.New("invalid OSD clean readiness request")
 		}
-		readyCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err := c.cluster.WaitForClean(readyCtx)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("restore native OSD fixture readiness: %w", err)
+		if err := c.waitOSDReady(ctx, out, fields[1]); err != nil {
+			return err
 		}
 		if err := publishAck(out, "osd-ready-verify."+fields[0]); err != nil {
 			return err

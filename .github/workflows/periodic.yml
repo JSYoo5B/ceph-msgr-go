@@ -1,0 +1,82 @@
+name: Periodic full interoperability coverage
+
+# Weekly full run of the scenario catalog on the default branch, independent of
+# pull-request selection. Every scenario records its exact commit and image in a
+# scenario-* artifact kept for 30 days; the summary job fails unless every
+# scenario job succeeded, so a skipped or missing scenario is never a pass.
+on:
+  schedule:
+    - cron: '17 3 * * 0'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: periodic-${{ github.ref }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GOPROXY: 'https://proxy.golang.org|direct'
+
+jobs:
+  plan:
+    name: Plan the full catalog
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      scenarios: ${{ steps.plan.outputs.scenarios }}
+      sha: ${{ steps.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: main
+      - name: Validate the catalog and select everything
+        id: plan
+        run: |
+          python3 tools/scenario_plan.py validate
+          matrix=$(python3 tools/scenario_plan.py plan --select all)
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "scenarios=$(python3 tools/scenario_plan.py list | wc -l | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+  ceph:
+    name: ceph
+    needs: plan
+    uses: ./.github/workflows/native-scenarios.yml
+    with:
+      matrix: ${{ needs.plan.outputs.matrix }}
+      retention_days: '30'
+      ref: ${{ needs.plan.outputs.sha }}
+
+  checks:
+    name: Platform checks
+    needs: plan
+    uses: ./.github/workflows/platform-checks.yml
+    with:
+      matrix: ${{ needs.plan.outputs.matrix }}
+      ref: ${{ needs.plan.outputs.sha }}
+
+  summary:
+    name: Full coverage verdict
+    needs: [plan, ceph, checks]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every scenario to have passed
+        env:
+          RESULT: ${{ needs.ceph.result }}
+          EXPECTED: ${{ needs.plan.outputs.scenarios }}
+          CHECKS: ${{ needs.checks.result }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          echo "commit $SHA: $EXPECTED catalog scenarios/checks, native: $RESULT, platform: $CHECKS"
+          test "$RESULT" = success
+          test "$CHECKS" = success
