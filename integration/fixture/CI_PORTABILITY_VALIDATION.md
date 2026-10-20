@@ -131,3 +131,33 @@ manifest cannot by itself establish native revalidation. The fresh daemon
 run above supplies the actual native map comparison; the repeated-40-window
 deduplication has separate regression coverage. Local arm64 results do not
 establish a new amd64 or whole-matrix CI pass.
+
+## Windows dependency-policy regression — 2026-10-21
+
+[Run 39452520225, attempt 1](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39452520225)
+at `32fa0b96cee5ab5a956e1e5025a9b0aafafa29e6` failed the Windows native job
+before test compilation or fixture startup with
+`RuntimeError: product has non-standard-library dependencies`. The verifier
+still required a standard-library-only graph after the product added the
+approved pure-Go `github.com/klauspost/compress` module. WSL import passed;
+this failure supplies no Windows daemon interoperability evidence.
+
+The unit workflow and Windows startup now use `tools/product_dependencies.py`.
+It checks the root product graph with CGO disabled and workspace mode off,
+compares external module identities, rejects replacement/native/subprocess
+dependencies and returns the actual external module paths and versions for
+`verification.json`. The separate fixture module is outside this graph.
+
+Focused regressions exercise approved and rejected dependency records and the
+Windows verifier's startup path through its first test compilation. Run them
+with `PYTHONPATH=tools python3 -m unittest test_product_dependencies test_windows_interop`.
+The real graph can be checked with
+`CGO_ENABLED=0 python3 tools/product_dependencies.py`.
+
+Policy checks and a Windows-target graph check are distinct from Windows
+execution. Native acceptance still requires the final fix SHA's Windows job
+to start the pinned Tentacle 20.2.4 fixture, execute every required MON/MGR
+test in `tools/windows_interop.py:SUITES`, and retain pass events plus successful
+cleanup in `verification.json`. The original failed run remains separate from
+that later evidence; a full-matrix pass also requires resolving the independent
+OSD restoration failure tracked in issue #3.
