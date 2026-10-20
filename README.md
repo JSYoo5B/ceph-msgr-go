@@ -292,8 +292,10 @@ unit/race/fuzz tests, live interoperability and full CI are separate evidence.
 Skipped/canceled jobs and other-source results do not prove the current commit.
 Selected profiles do not establish full RADOS/RBD/CephFS or long-duration coverage.
 
-Snappy/zstd codec and frame round trips are unit-tested; live daemon compression
-interoperability is pending. Secure-mode compression and zlib are deferred.
+Snappy/zstd codec and frame round trips are unit-tested. The live CRC test shows
+only that the pinned MON and OSD decline the offer and commands still succeed;
+daemons apply onwire compression policy only toward OSD peers, so live compressed
+frames are unreachable from a client. Secure-mode compression and zlib are deferred.
 See [compression](internal/msgr/COMPRESSION_PLAN.md),
 [fixture validation](integration/fixture/VALIDATION.md) and
 [completion criteria](SPEC.md#verification-and-completion).
