@@ -726,8 +726,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		return err
 	}
 	if fields != nil {
-		modes := map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "snapshot": true, "selfmanaged": true, "quota": true, "poolinfo": true, "clusterstat": true, "versions": true, "service": true, "fullratios": true, "osdflags": true, "inconsistent": true, "cleanup": true}
-		if len(fields) != 2 || c.profile.osd != "1" || !modes[fields[1]] {
+		if len(fields) != 2 || c.profile.osd != "1" || !nativeOwnedPoolModes[fields[1]] {
 			return errors.New("invalid native owned-pool oracle request")
 		}
 		args := []string{"python3", "/out/osd_pool_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
@@ -1558,3 +1557,6 @@ func (c *fixtureCluster) poolPolicy(ctx context.Context) (poolPolicy, error) {
 	}
 	return decodeLegacyPoolPolicy(observation.Stdout, c.profile.fsid)
 }
+
+// nativeOwnedPoolModes are the requests the native owned-pool oracle accepts.
+var nativeOwnedPoolModes = map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "snapshot": true, "selfmanaged": true, "quota": true, "poolinfo": true, "clusterstat": true, "versions": true, "service": true, "servicewatch": true, "fullratios": true, "osdflags": true, "inconsistent": true, "cleanup": true}

@@ -919,6 +919,41 @@
     "rbd": "1",
     "test_run": "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
    }
+  },
+  {
+   "id": "mgr-service.aes.ip4.crc.host.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration",
+   "group": "mgr-service",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "memstore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "mgr_service": "1",
+    "test_run": "^TestCephMgrServiceRegistrationIntegration$"
+   }
+  },
+  {
+   "id": "mgr-service.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration",
+   "group": "mgr-service",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "memstore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "mgr_service": "1",
+    "test_run": "^TestCephMgrServiceRegistrationIntegration$"
+   }
   }
  ],
  "fixed_jobs": [

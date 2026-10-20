@@ -9,7 +9,8 @@ commit cancels its previous basic checks. Push events do not repeat PR CI.
 
 ## Catalog and planner
 
-`catalog.json` preserves the original 63 native interoperability matrix rows.
+`catalog.json` preserves the original 63 native interoperability matrix rows and adds
+the two opt-in `mgr-service` rows for Go service registration.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

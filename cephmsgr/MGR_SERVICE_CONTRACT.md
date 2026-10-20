@@ -65,18 +65,40 @@ defined for registration itself.
 Source-derived byte vectors for every message (`internal/msgr/mgr_service_test.go`),
 and unit and race tests against a synthetic MGR that shares the Go frame codec
 (`cephmsgr/mgr_service_test.go`): open/update/report/close bytes, configure
-handling, duplicate and bound refusals, unconfirmed open and close, connection
-loss, failover, a service beside ordinary MGR commands, and client close.
-These are **not** native encoder vectors and **not** live daemon evidence.
+handling, duplicate and bound refusals, unconfirmed open and close, concurrent
+`Close` callers, connection loss, failover, a service beside ordinary MGR
+commands, and client close. These are **not** native encoder vectors and **not**
+live daemon evidence.
+
+### Native observation test (written, not yet executed)
+
+`TestCephMgrServiceRegistrationIntegration` (`integration/mgr_service_test.go`)
+registers a Go service daemon and has the native owned-pool oracle's
+`servicewatch` mode (`tools/osd_pool_oracle.py`, public librados MON and MGR
+commands) observe it independently of the Go client:
+
+1. after `OpenMgrService`: the native MON `service dump` lists the daemon with
+   the sent metadata and the client's authenticated GID, and the MGR's
+   `service status` shows the sent status; the Go service map watch must show
+   the same GID and metadata;
+2. after `UpdateMetadata` and `Report`: native metadata, status and task status
+   equal the new values;
+3. after an acknowledged `Close`: the daemon is absent from the native dump, and
+   a report on the closed handle is refused locally.
+
+It runs only in the opt-in profile `CEPH_MSGR_TEST_MGR_SERVICE=1` (single-OSD
+legacy-v6 fixture, two MGRs), selected by the catalog group `mgr-service`:
+`/ci run group:mgr-service`. No result of that run exists yet; until one does,
+the lifecycle above is not accepted.
 
 ## Not verified
 
 - Fresh native request vectors for each message.
-- A Go-originated registration observed natively: ServiceMap visibility, status
-  and metadata, update, removal after Close.
+- The native observation test above on a Linux runner at the final commit.
 - Service-ticket renewal, MGR failover and bounded close against real daemons,
-  and the comparison with a native librados service registration.
+  and the comparison with a native librados service registration of the same
+  fields.
 - A registration made while the MGR is not yet active waits for the map; no live
   test covers that.
 
-These need a disposable Linux fixture and remain open in #6.
+These remain open in #6.

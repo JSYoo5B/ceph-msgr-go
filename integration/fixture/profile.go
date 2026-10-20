@@ -37,7 +37,7 @@ type profile struct {
 	u64XattrOracle                                                        string
 	writeSameOracle                                                       string
 	osdProfile                                                            string
-	nativeMgrPreparation, monPing, osdCachePools                          string
+	nativeMgrPreparation, monPing, osdCachePools, mgrService              string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
 	stressDuration, testRun, testTimeout, diagnostics                     string
 	// osdSoak is the opt-in OSD soak duration; it selects only the soak test.
@@ -83,6 +83,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		nativeMgrPreparation: value("CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION", "0"),
 		monPing:              value("CEPH_MSGR_TEST_MON_PING", "0"),
 		osdCachePools:        value("CEPH_MSGR_TEST_OSD_CACHE_POOLS", "0"),
+		mgrService:           value("CEPH_MSGR_TEST_MGR_SERVICE", "0"),
 		modeRejection:        getenv("CEPH_MSGR_TEST_MODE_REJECTION"),
 		connectionMode:       value("CEPH_MSGR_TEST_CONNECTION_MODE", "secure"),
 		mappedIPv6:           value("CEPH_MSGR_TEST_MAPPED_IPV6", "0"),
@@ -121,6 +122,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION", p.nativeMgrPreparation, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MON_PING", p.monPing, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_OSD_CACHE_POOLS", p.osdCachePools, []string{"0", "1"}},
+		{"CEPH_MSGR_TEST_MGR_SERVICE", p.mgrService, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_MODE_REJECTION", p.modeRejection, []string{"", "mon", "mgr"}},
 		{"CEPH_MSGR_TEST_CONNECTION_MODE", p.connectionMode, []string{"secure", "crc"}},
 		{"CEPH_MSGR_TEST_MAPPED_IPV6", p.mappedIPv6, []string{"0", "1"}},
@@ -319,6 +321,17 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			return profile{}, err
 		}
 	}
+	if p.mgrService == "1" {
+		// Go service registration changes the cluster's service map, observed by
+		// the native owned-pool oracle; it needs the single-OSD legacy-v6 fixture.
+		selected = "^TestCephMgrServiceRegistrationIntegration$"
+		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mgrCount != "2" || p.mdsFresh != "0" || p.rbdBase != "0" ||
+			p.monPing != "0" || p.osdCachePools != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" ||
+			p.nativeMgrPreparation != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.stressDuration != "" || p.osdSoak != "" || p.monFreeze != "" ||
+			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.testRun != "" && p.testRun != selected {
+			return profile{}, fmt.Errorf("MGR service registration acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture and two MGRs", selected)
+		}
+	}
 	if p.testRun == "" {
 		p.testRun = selected
 	}
@@ -408,6 +421,7 @@ func (p profile) containerEnvironment() map[string]string {
 		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION":  p.nativeMgrPreparation,
 		"CEPH_MSGR_TEST_MON_PING":                p.monPing,
 		"CEPH_MSGR_TEST_OSD_CACHE_POOLS":         p.osdCachePools,
+		"CEPH_MSGR_TEST_MGR_SERVICE":             p.mgrService,
 		"CEPH_MSGR_TEST_MODE_REJECTION":          p.modeRejection,
 		"CEPH_MSGR_TEST_CONNECTION_MODE":         p.connectionMode,
 		"CEPH_MSGR_TEST_MAPPED_IPV6":             p.mappedIPv6,
@@ -470,6 +484,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION":  p.nativeMgrPreparation,
 		"CEPH_MSGR_TEST_MON_PING":                p.monPing,
 		"CEPH_MSGR_TEST_OSD_CACHE_POOLS":         p.osdCachePools,
+		"CEPH_MSGR_TEST_MGR_SERVICE":             p.mgrService,
 		"CEPH_MSGR_TEST_MODE_REJECTION":          p.modeRejection,
 		"CEPH_MSGR_TEST_CONNECTION_MODE":         p.connectionMode,
 		"CEPH_MSGR_TEST_MAPPED_IPV6":             p.mappedIPv6,

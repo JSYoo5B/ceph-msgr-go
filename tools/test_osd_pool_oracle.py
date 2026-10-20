@@ -1,9 +1,67 @@
+import json
 import pathlib
 import sys
 import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import osd_pool_oracle as oracle
+
+
+class FakeServiceRados:
+    """Answers service dump (MON) and service status (MGR) from scripted states."""
+
+    def __init__(self, states):
+        self.states, self.polls, self.last_status = list(states), 0, ""
+
+    def current(self):
+        return self.states[min(self.polls, len(self.states) - 1)]
+
+    def mon(self, cluster, command):
+        assert command == {"prefix": "service dump", "format": "json"}
+        self.polls += 1
+        daemons = {} if self.current() is None else {"d1": self.current()["dump"]}
+        return 0, json.dumps({"epoch": 7, "services": {"svc": {"daemons": daemons}}}).encode()
+
+    def mgr(self, cluster, command):
+        assert command == {"prefix": "service status", "format": "json"}
+        # The pinned formatter prints the named top-level section without its name.
+        return 0, json.dumps({"svc": {"d1": {"status": self.current()["status"]}}}).encode()
+
+
+def watch(states, **request):
+    base = {"service": "svc", "daemon": "d1", "expect": "present", "wait_seconds": 1}
+    return oracle.mode_servicewatch(FakeServiceRados(states), None, dict(base, **request), None)
+
+
+class ServiceWatchTest(unittest.TestCase):
+    present = {"dump": {"gid": 5, "metadata": {"zone": "a"}, "task_status": {"t": "1"}}, "status": {"state": "up"}}
+
+    def test_matches_a_registered_daemon_with_expected_fields(self):
+        result = watch([self.present], metadata={"zone": "a"}, status={"state": "up"}, task_status={"t": "1"})
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["entry"]["gid"], 5)
+        self.assertEqual(result["dump_epoch"], 7)
+
+    def test_a_mismatch_reports_the_last_observation_instead_of_matching(self):
+        for request in ({"metadata": {"zone": "b"}}, {"status": {"state": "busy"}}, {"task_status": {"t": "2"}}):
+            result = watch([self.present], **request)
+            self.assertFalse(result["matched"], request)
+            self.assertEqual(result["entry"]["gid"], 5)
+
+    def test_absent_and_present_expectations(self):
+        self.assertTrue(watch([None], expect="absent")["matched"])
+        self.assertFalse(watch([self.present], expect="absent")["matched"])
+        self.assertFalse(watch([None])["matched"])
+
+    def test_waits_for_a_late_registration(self):
+        self.assertTrue(watch([None, self.present], wait_seconds=5, metadata={"zone": "a"})["matched"])
+
+    def test_inputs_are_bounded_and_validated(self):
+        for bad in ({"service": "a b"}, {"daemon": ""}, {"daemon": "x" * 65}, {"expect": "maybe"}, {"wait_seconds": 0},
+                    {"wait_seconds": 91}, {"metadata": {"k": 1}}, {"status": {str(i): "v" for i in range(17)}},
+                    {"task_status": {"k": "v" * 257}}, {"metadata": []}):
+            with self.assertRaises((ValueError, KeyError, TypeError), msg=str(bad)):
+                watch([self.present], **bad)
 
 
 class PoolOracleTest(unittest.TestCase):

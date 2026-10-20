@@ -43,8 +43,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        self.assertEqual(len(self.rows), 63)
-        opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "osd_cache_pools")
+        self.assertEqual(len(self.rows), 65)
+        opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak")
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
@@ -105,6 +105,27 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             for unrelated in (expected + "Extended", "Prefix" + expected,
                               "TestCephOSDIOIntegration", "TestCephOSDReplicatedPGIntegration",
                               "TestCephMonPingIntegration", "TestCephMDSFreshIntegration"):
+                self.assertIsNone(selector.search(unrelated))
+
+    def test_mgr_service_rows_require_explicit_opt_in_and_only_the_declared_test(self):
+        self.assertIn("CEPH_MSGR_TEST_MGR_SERVICE: ${{ matrix.mgr_service || '0' }}", self.workflow)
+        self.assertIn("${{ matrix.mgr_service == '1' && 'MGR-service ' || '' }}", self.workflow)
+        rows = [row for row in self.rows if row.get("mgr_service") == "1"]
+        common = {
+            "stress": "", "osd": "1", "osd_store": "memstore", "osd_replicas": "1",
+            "osd_profile": "legacy-v6", "mgr_service": "1",
+            "test_run": "^TestCephMgrServiceRegistrationIntegration$",
+        }
+        self.assertEqual(rows, [
+            dict(common, key="aes", service="aes", mode="crc", family="4", runtime="host"),
+            dict(common, key="aes256k", service="aes256k", family="6", runtime="container"),
+        ])
+        expected = "TestCephMgrServiceRegistrationIntegration"
+        self.assertIn(expected, self.declared)
+        for row in rows:
+            selector = re.compile(row["test_run"])
+            self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
+            for unrelated in (expected + "Extended", "Prefix" + expected, "TestCephMonServiceMapIntegration"):
                 self.assertIsNone(selector.search(unrelated))
 
     def test_infrastructure_steps_are_bounded_and_retried(self):
