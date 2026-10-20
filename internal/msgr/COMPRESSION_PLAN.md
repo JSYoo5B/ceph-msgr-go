@@ -2,9 +2,11 @@
 
 Status: 2026-10-20. snappy + zstd **implemented and unit-tested** (codec
 round-trip + in-memory Writer/Reader frame round-trip through the real
-preamble/CRC path, negotiation wired for CRC connections). **Live verification
-against the daemon is still pending** — see "Remaining" at the end. zlib and
-secure-mode compression are deferred. Reference: Ceph 20.2.4
+preamble/CRC path, negotiation wired for CRC connections). **Live compressed
+frames are unreachable from a client**: the pinned daemons decline compression
+toward client peers, and only the declined-offer result is verified live (see
+"Live finding"). Codec round trips, the declined-offer test and live compressed
+frames are three distinct results. zlib and secure-mode compression are deferred. Reference: Ceph 20.2.4
 commit `7f793731f1b39eb4f465e960113d2363c311b964`
 (`src/msg/async/ProtocolV2.cc`, `frames_v2.h`, `frames_v2.cc`,
 `compression_onwire.cc`; LGPL-2.1, independently translated).
@@ -119,7 +121,7 @@ ignore it.
    preamble `0x1` flag, and use compressed lengths; on read, when the flag is
    set, decompress each segment after decryption. Keep uncompressed frames
    working (min-size and negotiated-none paths).
-5. Live-verify against the native fixture with compression enabled: round-trip
+5. (Superseded by "Live finding" below: not reachable from a client.) Live-verify against the native fixture with compression enabled: round-trip
    MON/OSD traffic, compare native observations, confirm the daemon accepts our
    compressed frames and we decode its compressed replies. Pick the profile by
    the secure-mode behavior found in item 5 above.
