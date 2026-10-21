@@ -12,8 +12,23 @@ type LostReplyConn struct {
 	net.Conn
 	Armed         *atomic.Bool
 	SignalBlocked func()
-	Closed        chan struct{}
-	closeOnce     sync.Once
+	// DropWrites discards outgoing bytes while reporting a successful local
+	// write. It never proves peer receipt. Arm only after authentication and
+	// disable automatic beacons when isolating a service close.
+	DropWrites         *atomic.Bool
+	SignalWriteDropped func()
+	Closed             chan struct{}
+	closeOnce          sync.Once
+}
+
+func (c *LostReplyConn) Write(p []byte) (int, error) {
+	if len(p) > 0 && c.DropWrites != nil && c.DropWrites.Load() {
+		if c.SignalWriteDropped != nil {
+			c.SignalWriteDropped()
+		}
+		return len(p), nil
+	}
+	return c.Conn.Write(p)
 }
 
 func (c *LostReplyConn) Read(p []byte) (int, error) {

@@ -174,6 +174,9 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 	t.Run("renewal_and_active_manager_change", func(t *testing.T) {
 		testMgrServiceRecovery(t, ctx, c, service, daemon+"-recovery")
 	})
+	t.Run("unconfirmed_close", func(t *testing.T) {
+		testMgrServiceUnconfirmedClose(t, ctx)
+	})
 }
 
 // Preserve only public identities and oracle outcomes, never session error text
