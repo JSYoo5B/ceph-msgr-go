@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CATALOG = ROOT / ".github" / "scenarios" / "catalog.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "platform-checks.yml"
+NATIVE_WORKFLOW = ROOT / ".github" / "workflows" / "native-scenarios.yml"
 MANDATORY = ROOT / ".github" / "scenarios" / "mandatory.txt"
 REQUIRED_PARAMS = ("key", "service", "family")
 SUPPORTED_RELEASE = re.compile(r"^20\.2\.\d+$")
@@ -51,6 +52,11 @@ def load_catalog(path=CATALOG):
 def validate_catalog(scenarios):
     """Return a list of problems; empty when the catalog is consistent."""
     problems, seen = [], set()
+    # This file and workflow belong to the trusted calling revision, even
+    # when the catalog is read from a newer pull-request commit.
+    supported = set(re.findall(r"(?m)^ +CEPH_[A-Z0-9_]+: \$\{\{ matrix\.([a-z_]+)",
+                               NATIVE_WORKFLOW.read_text(encoding="utf-8")))
+    supported.add("release")  # Display/validated family; image selects the daemon.
     if not scenarios:
         problems.append("catalog has no scenarios")
     for index, entry in enumerate(scenarios):
@@ -69,6 +75,8 @@ def validate_catalog(scenarios):
         if not isinstance(params, dict) or not params:
             problems.append("%s has no parameters" % sid)
             continue
+        for name in sorted(params.keys() - supported):
+            problems.append("%s: trusted native runner does not support parameter %s" % (sid, name))
         for name in REQUIRED_PARAMS:
             if not params.get(name):
                 problems.append("%s lacks required parameter %s" % (sid, name))
@@ -80,6 +88,8 @@ def validate_catalog(scenarios):
             if not pattern:
                 problems.append("%s has an empty test selector" % sid)
             else:
+                if "/" in pattern:
+                    problems.append("%s: only top-level test selectors are supported" % sid)
                 try:
                     re.compile(pattern)
                 except re.error as error:
