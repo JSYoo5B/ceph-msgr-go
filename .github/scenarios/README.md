@@ -15,6 +15,21 @@ Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
 
+The trusted planner refuses catalog parameters that its native workflow cannot
+forward. Land new workflow opt-ins before requesting a feature PR's new profile;
+checking out that PR does not replace the default branch's reusable workflow.
+The MGR-service opt-in is forwarded in advance of its feature implementation.
+
+Native runs use the calling revision's result gate. For an explicit `test_run`,
+it inventories matching top-level tests in the tested checkout before execution
+and requires a complete PASS result for every selected test. A skipped, missing
+or failed selected test fails the job even if the process exits zero. An empty
+secondary package is permitted; a selector matching no tests is refused.
+Selectors address top-level tests only, without subtest paths. Broad fixture
+defaults retain their optional skips and require at least one actual PASS;
+success does not claim that those optional tests ran. Scenario artifacts include
+the expected tests, observed results and verdict in `tests.json`.
+
 The catalog also names five selectable check suites:
 
 | Selector | Work |
@@ -77,10 +92,67 @@ runtime explicitly pre-pulls its pinned Ceph image before harness execution.
 `periodic.yml` runs all native rows and all check suites every Sunday at
 03:17 UTC, and on manual dispatch. It explicitly checks out `main` once and
 passes that SHA to every test job, even if manually dispatched from another
-branch. Native artifacts are retained for 30 days. The final verdict requires
-both native and platform suites to succeed; failures and skipped selected
+branch. Native scenario results are retained for seven days. The final verdict
+requires both native and platform suites to succeed; failures and skipped selected
 suites are not a full-coverage pass. Periodic runs have a separate concurrency
 group and do not cancel PR checks.
+
+## Storage and image reuse
+
+Artifact retention follows the purpose of each upload:
+
+| Artifact category | Retention | Current uploads |
+| --- | --- | --- |
+| General results | 7 days | Scenario result JSON for requested and periodic runs; successful Windows interoperability evidence |
+| Failure diagnostics | 14 days | Failed native, race and unit-test logs/metadata; Windows evidence when the job fails |
+| Deployment evidence | 30 days | Policy for future deployment workflows; no deployment workflow currently uploads evidence |
+
+Diagnostic and Windows evidence uploads use compression level 9. Periodic runs
+use the same retention policy as requested runs. These settings affect new
+uploads; they do not shorten existing artifacts' retention or delete historical
+evidence. Future deployment uploads must explicitly set `retention-days: 30`.
+
+Native scenario jobs restore a shared Docker image archive from Actions cache.
+The exact image reference, runner OS and architecture identify the cache; scenario,
+commit, Go version and run ID do not create additional copies. Only digest-pinned
+images are eligible, with no prefix fallback to another image. The first native
+matrix job of a scheduled default-branch run may save a missing archive before
+running its tests. Requested PR revisions only restore it. This avoids a writer
+per scenario and branch-specific archives. Jobs starting before the archive is
+saved still pull independently. Other image references remain cold until a
+scheduled first row uses them. A saved archive may be at most 2 GiB before cache
+compression.
+
+After loading an archive, each job still pulls the original pinned reference:
+Docker archive loading can omit `RepoDigests`, so skipping that pull would not
+preserve fixture image identity. The pull reuses local layers and retains the
+registry manifest/digest check. Cache restore, load and save have five-minute
+bounds and are optional; a miss or cache failure falls back to the existing
+bounded registry pulls. Registry failures still fail the job. No Docker images
+are uploaded as workflow artifacts. Ryuk continues to use its small, retried
+registry pull. Go dependency/build caches remain managed by `setup-go`.
+
+According to
+[GitHub's Actions billing documentation](https://docs.github.com/en/billing/concepts/product-billing/github-actions),
+artifact/Packages storage and the included 10 GiB per-repository cache allowance
+are separate. Reusing image layers reduces registry downloads; shorter artifact
+retention reduces future artifact storage accrual. Neither change resets
+already accrued account usage. Repository limits and account budgets are not
+changed by these workflows.
+
+Cache service behavior, eviction and default-branch visibility follow the
+[Actions cache contract](https://github.com/actions/cache). Hosted-runner cache
+hit rates and overall workflow timing require live CI measurement; an archive
+restore is not evidence of native interoperability or a faster full matrix.
+
+On a Linux amd64 Docker 29.9.1 runner, saving the pinned `v20.2.4` image by
+digest produced a 542,868,480-byte archive, below the cache limit. Loading that
+archive and pulling the same reference preserved the image ID. That check used
+an already populated Docker store; it does not measure transfer savings on a
+fresh hosted runner. The 500 Python tool tests, catalog validation and focused
+fixture reaper workflow check, and actionlint validation of all workflows passed
+on Linux. Live Actions cache upload/restore and full native coverage remain
+separate verification.
 
 ## References and evidence
 
