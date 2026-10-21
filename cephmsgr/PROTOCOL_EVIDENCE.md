@@ -125,16 +125,16 @@ selected MON/active-MGR Tell only; MDS and OSD command acceptance remains in #5.
 | 786 | Next Snap event; consumer applies snapshot realm state | [TestDecodeFreshNativeSnapSplit](../internal/mds/native_caps_test.go) | R8 |
 | 787 | ReleaseCaps; bounded explicit consumer releases | [TestEncodeCapReleaseMatchesFreshNative](../internal/mds/native_caps_test.go) | R8 |
 | 788 | Next Quota event; raw limits, consumer enforcement | [TestDecodeFreshNativeQuota](../internal/mds/native_caps_test.go) | R8 |
-| 1792 | EnableMgrService/OpenMgrService only; ordinary MGR commands unchanged | [TestMgrServiceRequiresOptInAndValidIdentity](mgr_service_test.go) | R2 |
-| 1793 | MgrService.Configure; unknown extensions preserved raw | [TestMgrConfigureDecoding](../internal/msgr/mgr_service_test.go) | R2 |
-| 1794 | MgrService.Report; bounded metadata/status, no perf schema API | [TestMgrReportEncoding](../internal/msgr/mgr_service_test.go) | R2 |
+| 1792 | EnableMgrService/OpenMgrService only; ordinary MGR commands unchanged | [TestMgrServiceRequiresOptInAndValidIdentity](mgr_service_test.go), [TestMgrServiceNativeVectors](../internal/msgr/mgr_service_native_test.go) | R2, R18 |
+| 1793 | MgrService.Configure; unknown extensions preserved raw | [TestMgrConfigureDecoding](../internal/msgr/mgr_service_test.go), [TestMgrServiceNativeVectors](../internal/msgr/mgr_service_native_test.go) | R2, R18 |
+| 1794 | MgrService.Report; bounded metadata/status, no perf schema API | [TestMgrReportEncoding](../internal/msgr/mgr_service_test.go), [TestMgrServiceNativeVectors](../internal/msgr/mgr_service_native_test.go) | R2, R18 |
 | 1796 | Snapshot active-MGR discovery; current daemon identity, no standby reroute | [TestNativeMONAndMGRCommandPath](client_test.go) | R3 |
 | 1797 | WatchDigest Next; raw status/health pair, no typed module policy | [TestDigestWatchCoalescesRawPairsAndTransfersOwnership](digest_test.go) | U |
 | 1799 | WatchServiceMap Next; raw daemon metadata/epochs, not service registration | [TestDecodeServiceMap](../internal/msgr/servicemap_test.go) | R2 |
-| 1800 | MgrService.Close; require echo or retain unknown outcome | [TestMgrServiceUnconfirmedOpenAndCloseKeepUncertainty](mgr_service_test.go) | R2 |
+| 1800 | MgrService.Close; require echo or retain unknown outcome | [TestMgrServiceUnconfirmedOpenAndCloseKeepUncertainty](mgr_service_test.go), [TestMgrServiceNativeVectors](../internal/msgr/mgr_service_native_test.go) | R2, R18 |
 | 1801 | MgrCommand; raw JSON/binary input to active manager | [TestNativeMONAndMGRCommandPath](client_test.go) | R3 |
 | 1802 | MgrCommand Result; raw bytes/signed code, no uncertain replay | [TestMalformedCommandReplyPreservesOutputAndUnknownOutcome](reply_test.go) | R3 |
-| 1803 | MgrService.UpdateMetadata; explicit update, no replay after loss | [TestMgrUpdateEncoding](../internal/msgr/mgr_service_test.go) | R2 |
+| 1803 | MgrService.UpdateMetadata; explicit update, no replay after loss | [TestMgrUpdateEncoding](../internal/msgr/mgr_service_test.go), [TestMgrServiceNativeVectors](../internal/msgr/mgr_service_native_test.go) | R2, R18 |
 
 ## Implemented opcode evidence
 
@@ -242,7 +242,7 @@ Nothing in this document relabels those runs as passes of the present commit.
 | --- | --- | --- | --- |
 | U | unjoined | No retained native receipt joined to this row; unit/reference evidence only | none |
 | R1 | exact-commit | `da661e737bca69f3dd5695eed9ba26a13188ea55`, Linux/amd64 host, IPv4, CRC, AES/AES. Manual run 39574326673 actually passed TestCephMonPingIntegration and five leaves; final status/artifact match that SHA/image, seven containers terminated. Only MON ping, not full command acceptance | [Manual request receipt](../.github/scenarios/README.md) |
-| R2 | exact-commit | `dec9084f0a858e51224f16a9178c1218f8dd8e12` CRC/AES/AES IPv4 host and `66084e170a7f5805bd9126ac28e9f08f8c92b25a` secure/aes256k/aes256k IPv6 container, Linux/amd64. Go service registration, metadata/status update, native ServiceMap observation, acknowledged removal and cleanup passed; no renewal/failover claim | [MGR service](../integration/fixture/MGR_SERVICE_VALIDATION.md) |
+| R2 | exact-commit | `dec9084f0a858e51224f16a9178c1218f8dd8e12` CRC/AES/AES IPv4 host and `66084e170a7f5805bd9126ac28e9f08f8c92b25a` secure/aes256k/aes256k IPv6 container, Linux/amd64. Go service registration, status/task report, native ServiceMap observation, acknowledged removal and cleanup passed; metadata update was queued only, application unverified; no renewal/failover claim | [MGR service](../integration/fixture/MGR_SERVICE_VALIDATION.md) |
 | R3 | historical | Migration working tree `source-1`, Linux/arm64 daemons with Darwin/arm64 host relay or Linux/arm64 container clients. Selected MON/MGR commands/Tell, maps and legacy OSD I/O passed across listed key/mode/address profiles. No common committed tree or full matrix acceptance; scopes remain those of each original row | [Migration](../integration/fixture/VALIDATION.md) |
 | R4 | historical | No committed tested tree/file hashes identified by this record; container runtime, selected legacy-v6/replicated-PG BlueStore and secure/aes256k IPv6 request-v9 MemStore profiles. Native cluster counters matched; pool counts checked for consistency, with the later CephFS pool-statfs comparison recorded separately | [Statfs](../integration/fixture/MON_STATFS_VALIDATION.md) |
 | R5 | historical | No committed tested tree/file hashes identified by this record; container runtime, selected legacy-v6/replicated-PG BlueStore and secure/aes256k IPv6 request-v9 MemStore pool/snapshot operations. Native pre/postconditions and lost-reply boundaries are those in the record; not every command mutation | [Pool operations](../integration/fixture/MON_POOL_OP_VALIDATION.md) |
@@ -258,6 +258,7 @@ Nothing in this document relabels those runs as passes of the present commit.
 | R15 | file-attributed | Frozen source hashes with historical `source-1` base, CRC/AES IPv4 host and secure/aes256k IPv6 container, arm64. Native pinned-rank LOOKUP produced destination/forward count, explicit resubmission succeeded on rank 1, and native counters/statx independently matched. Initial CephFS R8 did not observe forwarding | [Multiple ranks](../integration/fixture/MDS_CEPHFS_RANKS_VALIDATION.md) |
 | R16 | historical | No committed tested tree/file hashes identified by this record; container runtime, secure/aes256k IPv4 BlueStore and IPv6 MemStore. Reclaim and FinishReclaim passed with native session removal/blocklist observation. Different-identity EPERM, native twin sender and MDS failover remain unverified | [MDS reclaim](../integration/fixture/MDS_RECLAIM_VALIDATION.md) |
 | R17 | historical | No committed tested tree/file hashes identified by this record; container runtime, CRC, AES client/service, IPv4, legacy-v6 single BlueStore. MON and OSD declined the snappy/zstd offer while commands succeeded. No live compressed frame, secure compression, zlib or daemon-peer proof | [Compression decline](../integration/fixture/MSGR_COMPRESSION_VALIDATION.md) |
+| R18 | file-attributed | Pinned source/archive and producer/build/segment hashes in the receipt, Linux/amd64. Eight fresh native MGR service vectors cover five message types, binary map values, omitted versus empty reports, current configure and close codec. Offline header projection; no live lifecycle/renewal/failover or metadata-application claim | [MGR codec vectors](../internal/msgr/testdata/mgr-service-native-README.md) |
 
 ## Acceptance boundary
 
