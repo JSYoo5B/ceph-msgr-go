@@ -28,7 +28,9 @@ service daemon or a non-CLIENT entity).
 `handle_update` replaces metadata in the MGR's daemon-state index. It does not
 replace the initial registration metadata in the MON's ServiceMap. Observing
 that map or `service status` therefore cannot establish an applied metadata
-update. The native test queues one update but makes no applied-update claim.
+update. A separate [native daemon-state oracle](../integration/fixture/MGR_SERVICE_METADATA_VALIDATION.md)
+observes replacement and removal of omitted keys on selected profiles. Empty
+updates are refused locally because the native handler ignores an empty map.
 
 The packed counter buffer of a report must be the empty versioned envelope
 (version 1, compat 1, zero length): `DaemonPerfCounters::update` runs
@@ -95,7 +97,9 @@ commands) observe it independently of the Go client:
    the same GID and metadata;
 2. after queuing `UpdateMetadata` and `Report`: native status and task status
    equal the new report values, while the ServiceMap still carries the initial
-   metadata; application of the metadata update inside the MGR is unverified;
+   metadata. The separate native daemon-state query must observe the exact
+   replacement, preserve it after a locally refused empty update, and remove
+   omitted keys on a second nonempty replacement;
 3. after an acknowledged `Close`: the daemon is absent from the native dump, and
    a report on the closed handle is refused locally.
 
@@ -125,7 +129,6 @@ keeps local write/dial counts separate from native receipt and sampled absence.
 
 - Native vectors for nonempty daemon extensions and older configure versions
   (only the current v4 empty-extension service profile has a fresh vector).
-- Applied metadata updates in the MGR daemon-state index (not ServiceMap).
 - Profiles beyond the two key/mode/address/runtime combinations recorded above.
 - Comparison with a native librados registration of the same fields.
 - Failure configurations beyond the selected receive-withholding and write-

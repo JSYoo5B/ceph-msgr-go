@@ -88,8 +88,8 @@ records ticket expiry/renewed connection and actual MGR takeover. It does not
 retroactively extend the two earlier runs above.
 
 A separate [close-fault checkpoint](MGR_SERVICE_CLOSE_VALIDATION.md) records
-unconfirmed Close, native removal and grace expiry. Independently observed
-applied metadata updates and comparison against a native registration with
-identical fields remain
-unverified. Keep #6 open; this checkpoint covers selected open/report/close
-observations only.
+unconfirmed Close, native removal and grace expiry. A later
+[metadata checkpoint](MGR_SERVICE_METADATA_VALIDATION.md) independently reads
+the MGR daemon-state index; it does not extend this earlier run. Comparison
+against a native registration with identical fields remains unverified. Keep
+#6 open; this checkpoint covers selected open/report/close observations only.

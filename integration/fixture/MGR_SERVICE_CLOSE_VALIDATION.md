@@ -99,7 +99,8 @@ original scopes and source identities. Separate Linux checks passed the new
 helper tests, `-race -count=5`, shared request serialization, integration vet,
 fixture unit/vet, all 546 Python tool tests and the 65-entry scenario catalog.
 
-Applied metadata changes inside the native MGR daemon-state index, same-field
-native service registration comparison, and other profiles remain separate
-requirements in #6. These injected transport faults do not prove every possible
-connection failure or server shutdown behavior.
+The separate [metadata checkpoint](MGR_SERVICE_METADATA_VALIDATION.md) observes
+applied updates inside the native MGR daemon-state index. Same-field native
+service registration comparison and other profiles remain requirements in #6.
+These injected transport faults do not prove every possible connection failure
+or server shutdown behavior.
