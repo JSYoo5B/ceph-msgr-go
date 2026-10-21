@@ -66,9 +66,9 @@ func TestServiceWatchRequestMatchesNativeOracleInputs(t *testing.T) {
 // A Go-originated service registration is observed natively: the MON service
 // map (service dump) and the MGR (service status) show the daemon with the
 // initial metadata, status and task status the Go client sent, follow a report,
-// and drop the daemon after the acknowledged close. MMgrUpdate changes only
-// MGR daemon-state metadata, which these commands do not expose. The Go service map
-// watch is cross-checked against the native dump.
+// and drop the daemon after the acknowledged close. A separate native metadata
+// oracle reads MGR daemon-state replacement and key removal; the MON ServiceMap
+// retains its initial metadata. The Go stream is cross-checked with that map.
 //
 // The test registers a daemon in the cluster's service map, so it runs only in
 // the opt-in CEPH_MSGR_TEST_MGR_SERVICE=1 profile; see
@@ -82,6 +82,7 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
+	metadataOracle := prepareMgrServiceMetadata(t, ctx)
 	options := integrationOptions(t)
 	options.EnableMgrService = true
 	c, err := cephmsgr.Dial(ctx, options)
@@ -97,7 +98,7 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 
 	const service = "ceph-msgr-go"
 	daemon := "go-" + time.Now().Format("150405")
-	metadata := map[string]string{"ceph_msgr_role": "go", "ceph_msgr_daemon": daemon}
+	metadata := map[string]string{"ceph_msgr_role": "go", "ceph_msgr_daemon": daemon, "registration_only": "initial"}
 	status := map[string]string{"state": "registered"}
 	svc, err := c.OpenMgrService(ctx, cephmsgr.MgrServiceOptions{Service: service, Daemon: daemon, Metadata: metadata, Status: status})
 	if err != nil {
@@ -126,6 +127,7 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 	if err := json.Unmarshal(native.ServiceEntry, &entry); err != nil || entry.GID == 0 || entry.GID != c.Snapshot().GlobalID {
 		t.Fatalf("native daemon GID %d differs from the Go client's authenticated ID %d (%v)", entry.GID, c.Snapshot().GlobalID, err)
 	}
+	metadataOracle.observe(t, ctx, "initial", service, daemon, metadata)
 	// The Go stream must show the same daemon.
 	for seen := false; !seen; {
 		waitCtx, stop := context.WithTimeout(ctx, 60*time.Second)
@@ -142,14 +144,24 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 		}
 	}
 
-	// Queue a metadata update, then independently observe the report. The
-	// pinned handle_update changes daemon_state only: the MON's ServiceMap
-	// retains the initial registration metadata. This does not verify that
-	// the replacement metadata was applied inside the MGR.
+	// The native daemon-state oracle must see replacement (including removal
+	// of registration_only), while the MON map retains the initial metadata.
 	updated := map[string]string{"ceph_msgr_role": "go", "ceph_msgr_daemon": daemon, "zone": "b"}
 	if err := svc.UpdateMetadata(ctx, updated); err != nil {
 		t.Fatal(err)
 	}
+	metadataOracle.observe(t, ctx, "replacement", service, daemon, updated)
+	// An empty update is rejected locally because the native handler ignores
+	// it. Replacement with a nonempty map removes keys that are left out.
+	if err := svc.UpdateMetadata(ctx, map[string]string{}); err == nil {
+		t.Fatal("empty metadata update was accepted")
+	}
+	metadataOracle.observe(t, ctx, "after_empty_refusal", service, daemon, updated)
+	reduced := map[string]string{"ceph_msgr_role": "go-reduced"}
+	if err := svc.UpdateMetadata(ctx, reduced); err != nil {
+		t.Fatal(err)
+	}
+	metadataOracle.observe(t, ctx, "removed_previous_keys", service, daemon, reduced)
 	busy, task := map[string]string{"state": "busy"}, map[string]string{"task": "x"}
 	if err := svc.Report(ctx, busy, task); err != nil {
 		t.Fatal(err)
@@ -170,7 +182,7 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 	if err := svc.Report(ctx, nil, nil); err == nil {
 		t.Fatal("a closed registration accepted a report")
 	}
-	t.Logf("native observation confirmed open, report and close of %s/%s; metadata update was queued only", service, daemon)
+	t.Logf("native observation confirmed open, report, metadata replacement/key removal and close of %s/%s", service, daemon)
 	t.Run("renewal_and_active_manager_change", func(t *testing.T) {
 		testMgrServiceRecovery(t, ctx, c, service, daemon+"-recovery")
 	})

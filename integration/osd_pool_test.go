@@ -44,6 +44,10 @@ type poolReceipt struct {
 	ServiceDumpEpoch     uint32            `json:"dump_epoch"`
 	ServiceStableSeconds float64           `json:"matched_for_seconds"`
 	ServiceObservations  int               `json:"observations"`
+	DaemonMetadata       map[string]string `json:"daemon_metadata"`
+	MetadataReady        bool              `json:"ready"`
+	MetadataModuleOwned  bool              `json:"module_enabled_by_test"`
+	MetadataRestored     bool              `json:"restored"`
 	Epochs               map[string]uint64 `json:"epochs"`
 	PoolType             int               `json:"pool_type"`
 	CrushRule            json.RawMessage   `json:"crush_rule"`
