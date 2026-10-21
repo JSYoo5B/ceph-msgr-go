@@ -87,7 +87,9 @@ A later [recovery checkpoint](MGR_SERVICE_RECOVERY_VALIDATION.md) separately
 records ticket expiry/renewed connection and actual MGR takeover. It does not
 retroactively extend the two earlier runs above.
 
-Independently observed applied metadata updates, unacknowledged-close grace expiry,
-and comparison against a native registration with identical fields remain
+A separate [close-fault checkpoint](MGR_SERVICE_CLOSE_VALIDATION.md) records
+unconfirmed Close, native removal and grace expiry. Independently observed
+applied metadata updates and comparison against a native registration with
+identical fields remain
 unverified. Keep #6 open; this checkpoint covers selected open/report/close
 observations only.
