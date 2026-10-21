@@ -57,6 +57,7 @@ type handshakePeerConfig struct {
 	authMoreRounds  int
 	peerRole        uint8
 	serverID        uint64
+	serverCookie    uint64
 	serverSupported uint64
 	serverRequired  uint64
 	identFeatures   func(uint64) error
@@ -272,7 +273,7 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	ident.U64(supported)
 	ident.U64(required)
 	ident.U64(cfg.serverFlags)
-	ident.U64(0)
+	ident.U64(cfg.serverCookie)
 	if err := write(msgr.ServerIdent, ident.Data); err != nil {
 		return err
 	}

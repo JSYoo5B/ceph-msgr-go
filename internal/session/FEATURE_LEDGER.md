@@ -50,3 +50,8 @@ codecs this repository does not implement.
 its public opt-in/refusal, a checked-in test and a source-attributed native
 receipt or explicit gap. A handshake's admission does not independently prove
 every semantic promise sharing a feature bit.
+
+[FEATURE_SEMANTICS.md](FEATURE_SEMANTICS.md) records every advertised bit's
+active Tentacle names, incarnation markers, role obligations and limits.
+The complete CRC/secure admission matrix checks all 64 peer-required bits and
+every locally required bit across the composed role/option profiles.
