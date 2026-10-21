@@ -410,11 +410,15 @@ def mode_servicewatch(rados, cluster, request, out):
     if request["expect"] not in ("present", "absent"):
         raise ValueError("invalid expectation")
     wait = integer(request["wait_seconds"], 1, 90, "wait_seconds")
+    stable = integer(request.get("stable_seconds", 0), 0, 10, "stable_seconds")
+    if stable >= wait:
+        raise ValueError("stable_seconds must be shorter than wait_seconds")
     want_metadata = string_map(request.get("metadata", {}), "metadata")
     want_status = string_map(request.get("status", {}), "status")
     want_task = string_map(request.get("task_status", {}), "task_status")
     deadline = time.monotonic() + wait
     observed = {}
+    matched_since, observations = None, 0
     while True:
         code, text = rados.mon(cluster, {"prefix": "service dump", "format": "json"})
         dump = json.loads(text) if code == 0 else {}
@@ -435,8 +439,17 @@ def mode_servicewatch(rados, cluster, request, out):
                        and all(entry.get("task_status", {}).get(k) == v for k, v in want_task.items())
                        and (not want_status or (status_entry is not None
                             and all(status_entry.get("status", {}).get(k) == v for k, v in want_status.items()))))
-        if matched or time.monotonic() >= deadline:
-            return dict(observed, matched=matched, expect=request["expect"])
+        observations += 1
+        now = time.monotonic()
+        if not matched:
+            matched_since = None
+        elif matched_since is None:
+            matched_since = now
+        duration = 0 if matched_since is None else now - matched_since
+        settled = matched and duration >= stable
+        if settled or now >= deadline:
+            return dict(observed, matched=settled, expect=request["expect"],
+                        matched_for_seconds=duration, observations=observations)
         time.sleep(1)
 
 

@@ -3,28 +3,32 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
 // serviceWatch asks the native oracle (public librados MON and MGR commands,
 // not the Go client) to wait until the named daemon matches, or is absent.
 type serviceWatchRequest struct {
-	Service     string            `json:"service"`
-	Daemon      string            `json:"daemon"`
-	Expect      string            `json:"expect"`
-	WaitSeconds int               `json:"wait_seconds"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	Status      map[string]string `json:"status,omitempty"`
-	TaskStatus  map[string]string `json:"task_status,omitempty"`
+	Service       string            `json:"service"`
+	Daemon        string            `json:"daemon"`
+	Expect        string            `json:"expect"`
+	WaitSeconds   int               `json:"wait_seconds"`
+	StableSeconds int               `json:"stable_seconds,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	Status        map[string]string `json:"status,omitempty"`
+	TaskStatus    map[string]string `json:"task_status,omitempty"`
 }
 
 func serviceWatchInput(service, daemon, expect string, metadata, status, task map[string]string) serviceWatchRequest {
-	return serviceWatchRequest{service, daemon, expect, 60, metadata, status, task}
+	return serviceWatchRequest{Service: service, Daemon: daemon, Expect: expect, WaitSeconds: 60, Metadata: metadata, Status: status, TaskStatus: task}
 }
 
 func serviceWatch(t *testing.T, ctx context.Context, service, daemon, expect string, metadata, status, task map[string]string) poolReceipt {
@@ -167,4 +171,154 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 		t.Fatal("a closed registration accepted a report")
 	}
 	t.Logf("native observation confirmed open, report and close of %s/%s; metadata update was queued only", service, daemon)
+	t.Run("renewal_and_active_manager_change", func(t *testing.T) {
+		testMgrServiceRecovery(t, ctx, c, service, daemon+"-recovery")
+	})
+}
+
+// Preserve only public identities and oracle outcomes, never session error text
+// (which can contain runner endpoints). The full native maps are recorded by
+// the existing fixture oracle separately.
+type mgrServiceRecoveryReceipt struct {
+	ClientGID           uint64            `json:"client_gid"`
+	Before              namedMgrNativeMap `json:"before"`
+	After               namedMgrNativeMap `json:"after"`
+	InitialTicketExpiry time.Time         `json:"initial_ticket_expiry"`
+	RenewedTicketExpiry time.Time         `json:"renewed_ticket_expiry"`
+	RenewedReport       bool              `json:"renewed_report"`
+	Terminal            bool              `json:"terminal"`
+	ManagerChangedCause bool              `json:"manager_changed_cause"`
+	ReportRefused       bool              `json:"report_refused"`
+	UpdateRefused       bool              `json:"update_refused"`
+	ClosePreservedCause bool              `json:"close_preserved_cause"`
+	AbsentSeconds       float64           `json:"absent_seconds"`
+	AbsenceObservations int               `json:"absence_observations"`
+	ReopenedGID         uint64            `json:"reopened_gid"`
+	ReopenedStartEpoch  uint32            `json:"reopened_start_epoch"`
+	Removed             bool              `json:"removed"`
+}
+
+func testMgrServiceRecovery(t *testing.T, ctx context.Context, c *cephmsgr.Client, service, daemon string) {
+	t.Helper()
+	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	var receipt mgrServiceRecoveryReceipt
+	defer func() {
+		data, err := json.MarshalIndent(receipt, "", "  ")
+		if err == nil {
+			err = testcluster.WritePublicEvidence(filepath.Join(control, "mgr-service-recovery.json"), append(data, '\n'))
+		}
+		if err != nil {
+			t.Error("preserve service recovery receipt", err)
+		}
+	}()
+	prepareNativeManagerFailover(t, ctx, control)
+	before := namedMgrNativeObserve(t, ctx, control, "before")
+	receipt.Before = before.After
+	initial := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
+		return s.Manager.Available && s.Manager.GlobalID == before.After.GID && s.Manager.MapEpoch >= before.After.Epoch
+	})
+	receipt.ClientGID, receipt.InitialTicketExpiry = initial.GlobalID, initial.MgrTicket.Expires
+	options := cephmsgr.MgrServiceOptions{Service: service, Daemon: daemon,
+		Metadata: map[string]string{"phase": "before"}, Status: map[string]string{"state": "before"}}
+	svc, err := c.OpenMgrService(ctx, options)
+	if err != nil {
+		t.Fatal("open recovery service", err)
+	}
+	defer func() {
+		stop, done := context.WithTimeout(context.Background(), 10*time.Second)
+		defer done()
+		svc.Close(stop)
+	}()
+	if !serviceWatch(t, ctx, service, daemon, "present", options.Metadata, options.Status, nil).ServiceMatched {
+		t.Fatal("initial recovery service was not observed natively")
+	}
+	// A report on an established session does not itself authenticate a renewed
+	// ticket. The later explicit Open uses the current ticket after this expiry.
+	renewed := waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
+		return time.Now().After(initial.MgrTicket.Expires) && s.MgrTicket.Expires.After(initial.MgrTicket.Expires)
+	})
+	if renewed.GlobalID != initial.GlobalID {
+		t.Fatal("renewal changed client identity")
+	}
+	receipt.RenewedTicketExpiry = renewed.MgrTicket.Expires
+	status := map[string]string{"state": "renewed"}
+	if err := svc.Report(ctx, status, nil); err != nil {
+		t.Fatal("report across ticket expiry", err)
+	}
+	receipt.RenewedReport = serviceWatch(t, ctx, service, daemon, "present", options.Metadata, status, nil).ServiceMatched
+	if !receipt.RenewedReport {
+		t.Fatal("post-renewal report was not observed natively")
+	}
+
+	// One explicit mutation, never retried on an uncertain result.
+	command, _ := json.Marshal(map[string]string{"prefix": "mgr fail", "who": before.After.Name})
+	if _, err := c.MonCommand(ctx, cephmsgr.Command{JSON: command}); err != nil {
+		t.Fatal("fail active MGR once", err)
+	}
+	after := namedMgrNativeObserve(t, ctx, control, "after")
+	receipt.After = after.After
+	waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
+		return s.Manager.Available && s.Manager.GlobalID == after.After.GID && s.Manager.MapEpoch >= after.After.Epoch
+	})
+	select {
+	case <-svc.Done():
+	case <-ctx.Done():
+		t.Fatal("old service did not terminate", ctx.Err())
+	}
+	terminal := svc.Err()
+	if terminal == nil {
+		t.Fatal("failover invented an acknowledged service close")
+	}
+	receipt.Terminal, receipt.ManagerChangedCause = true, errors.Is(terminal, cephmsgr.ErrManagerChanged)
+	checkRefusal := func(err error) bool {
+		return errors.Is(err, cephmsgr.ErrMgrServiceClosed) && errors.Is(err, terminal)
+	}
+	receipt.ReportRefused = checkRefusal(svc.Report(ctx, nil, nil))
+	receipt.UpdateRefused = checkRefusal(svc.UpdateMetadata(ctx, map[string]string{"phase": "forbidden"}))
+	receipt.ClosePreservedCause = errors.Is(svc.Close(ctx), terminal)
+	if !receipt.ReportRefused || !receipt.UpdateRefused || !receipt.ClosePreservedCause {
+		t.Fatal("failed handle lost its terminal cause or admitted another message")
+	}
+	// Recover ordinary commands without invoking OpenMgrService again. Native
+	// absence must persist across polls after beacon grace; this is bounded
+	// observation, not a count of wire transmissions or server executions.
+	if err := c.WaitMgrReady(ctx); err != nil {
+		t.Fatal("prepare replacement command session", err)
+	}
+	absent := serviceWatchInput(service, daemon, "absent", nil, nil, nil)
+	absent.WaitSeconds, absent.StableSeconds = 90, 3
+	missing := nativePool(t, ctx, "servicewatch", absent)
+	if !missing.ServiceMatched || missing.ServiceStableSeconds < 3 || missing.ServiceObservations < 4 {
+		t.Fatal("native service did not remain absent before explicit re-registration")
+	}
+	receipt.AbsentSeconds, receipt.AbsenceObservations = missing.ServiceStableSeconds, missing.ServiceObservations
+	options.Metadata, options.Status = map[string]string{"phase": "explicit"}, map[string]string{"state": "reopened"}
+	reopened, err := c.OpenMgrService(ctx, options)
+	if err != nil {
+		t.Fatal("explicit re-registration", err)
+	}
+	defer func() {
+		stop, done := context.WithTimeout(context.Background(), 10*time.Second)
+		defer done()
+		reopened.Close(stop)
+	}()
+	visible := serviceWatch(t, ctx, service, daemon, "present", options.Metadata, options.Status, nil)
+	var entry struct {
+		GID        uint64 `json:"gid"`
+		StartEpoch uint32 `json:"start_epoch"`
+	}
+	if !visible.ServiceMatched || json.Unmarshal(visible.ServiceEntry, &entry) != nil || entry.GID != initial.GlobalID || entry.StartEpoch <= missing.ServiceDumpEpoch {
+		t.Fatal("explicit service lacks the expected native identity/start epoch", entry)
+	}
+	receipt.ReopenedGID, receipt.ReopenedStartEpoch = entry.GID, entry.StartEpoch
+	if err := reopened.Close(ctx); err != nil {
+		t.Fatal("close replacement service", err)
+	}
+	receipt.Removed = serviceWatch(t, ctx, service, daemon, "absent", nil, nil, nil).ServiceMatched
+	if !receipt.Removed {
+		t.Fatal("replacement service removal not observed natively")
+	}
+	t.Logf("service recovery: client GID %d, MGR %s/%d -> %s/%d, native absence %.1fs across %d observations, explicit start epoch %d",
+		receipt.ClientGID, receipt.Before.Name, receipt.Before.GID, receipt.After.Name, receipt.After.GID,
+		receipt.AbsentSeconds, receipt.AbsenceObservations, receipt.ReopenedStartEpoch)
 }

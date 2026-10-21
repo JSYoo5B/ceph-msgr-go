@@ -2,6 +2,7 @@ import json
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import osd_pool_oracle as oracle
@@ -59,9 +60,26 @@ class ServiceWatchTest(unittest.TestCase):
     def test_inputs_are_bounded_and_validated(self):
         for bad in ({"service": "a b"}, {"daemon": ""}, {"daemon": "x" * 65}, {"expect": "maybe"}, {"wait_seconds": 0},
                     {"wait_seconds": 91}, {"metadata": {"k": 1}}, {"status": {str(i): "v" for i in range(17)}},
-                    {"task_status": {"k": "v" * 257}}, {"metadata": []}):
+                    {"task_status": {"k": "v" * 257}}, {"metadata": []},
+                    {"stable_seconds": True}, {"stable_seconds": -1},
+                    {"stable_seconds": 11}, {"stable_seconds": 1}):
             with self.assertRaises((ValueError, KeyError, TypeError), msg=str(bad)):
                 watch([self.present], **bad)
+
+    def test_stable_absence_resets_after_reappearance(self):
+        with patch("time.monotonic", side_effect=range(20)), patch("time.sleep"):
+            result = watch([None, None, self.present, None, None, None, None],
+                           expect="absent", wait_seconds=12, stable_seconds=3)
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["matched_for_seconds"], 3)
+        self.assertEqual(result["observations"], 7)
+
+    def test_deadline_does_not_accept_a_brief_absence(self):
+        with patch("time.monotonic", side_effect=range(20)), patch("time.sleep"):
+            result = watch([self.present, self.present, None, None],
+                           expect="absent", wait_seconds=4, stable_seconds=3)
+        self.assertFalse(result["matched"])
+        self.assertEqual(result["matched_for_seconds"], 1)
 
     def test_actual_go_request_fixtures_omit_unset_maps_and_match_pinned_states(self):
         path = pathlib.Path(__file__).resolve().parents[1] / "integration/testdata/mgr-service-watch.json"
