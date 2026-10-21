@@ -14,6 +14,21 @@ Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
 
+The trusted planner refuses catalog parameters that its native workflow cannot
+forward. Land new workflow opt-ins before requesting a feature PR's new profile;
+checking out that PR does not replace the default branch's reusable workflow.
+The MGR-service opt-in is forwarded in advance of its feature implementation.
+
+Native runs use the calling revision's result gate. For an explicit `test_run`,
+it inventories matching top-level tests in the tested checkout before execution
+and requires a complete PASS result for every selected test. A skipped, missing
+or failed selected test fails the job even if the process exits zero. An empty
+secondary package is permitted; a selector matching no tests is refused.
+Selectors address top-level tests only, without subtest paths. Broad fixture
+defaults retain their optional skips and require at least one actual PASS;
+success does not claim that those optional tests ran. Scenario artifacts include
+the expected tests, observed results and verdict in `tests.json`.
+
 The catalog also names five selectable check suites:
 
 | Selector | Work |

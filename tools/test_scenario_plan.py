@@ -78,6 +78,19 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("a: selector", problems[0])
 
+    def test_pr_catalog_cannot_silently_add_a_trusted_runner_parameter(self):
+        from unittest.mock import patch
+        future = entry("future", mgr_service="1")
+        # Simulate main's old runner reading a PR's newer catalog.
+        with patch("scenario_plan.NATIVE_WORKFLOW") as workflow:
+            workflow.read_text.return_value = "\n".join(
+                "  CEPH_TEST_%s: ${{ matrix.%s }}" % (name.upper(), name)
+                for name in ("key", "service", "family")) + "\nname: matrix.mgr_service"
+            self.assertIn("does not support parameter mgr_service", "\n".join(plan.validate_catalog([future])))
+        self.assertEqual(plan.validate_catalog([future]), [])
+        self.assertIn("CEPH_MSGR_TEST_MGR_SERVICE: ${{ matrix.mgr_service || '0' }}",
+                      plan.NATIVE_WORKFLOW.read_text(encoding="utf-8"))
+
 
 class PlannerTests(unittest.TestCase):
     scenarios = [entry("m1"), entry("m2", family="6"), entry("o1", group="osd", osd="1")]
