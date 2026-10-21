@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import protocol_evidence as evidence
@@ -15,6 +17,69 @@ class ProtocolEvidenceTests(unittest.TestCase):
         self.assertEqual(self.check(self.text), [])
         self.assertEqual(len(evidence.message_rows(evidence.ROOT)), 50)
         self.assertEqual(len(evidence.feature_rows(evidence.ROOT)), 11)
+        self.assertEqual(len(evidence.frame_rows(evidence.ROOT)), 22)
+        catalog = evidence.opcode_rows(evidence.ROOT)
+        self.assertEqual(len(catalog), 80)
+        self.assertEqual(sum(row["status"] == "implemented" for row in catalog.values()), 47)
+
+    def test_every_implemented_opcode_needs_its_own_join(self):
+        row = next(line for line in self.text.splitlines() if line.startswith("| READ |"))
+        self.assertIn("opcodes: missing row READ", self.check(self.text.replace(row, "")))
+        self.assertIn("opcodes: duplicate row READ", self.check(self.text.replace(row, row + "\n" + row)))
+        text = self.text.replace(row, row.replace("| READ |", "| MASKTRUNC |"))
+        self.assertIn("opcodes: undeclared row MASKTRUNC", self.check(text))
+
+    def test_opcode_requires_the_catalog_wire_value_and_a_contract(self):
+        row = next(line for line in self.text.splitlines() if line.startswith("| READ |"))
+        text = self.text.replace(row, row.replace("`0x1201`", "`0x2201`"))
+        self.assertIn("opcode READ: wrong wire value", self.check(text))
+        text = self.text.replace(row, row.replace("[CONTRACT.md](../internal/osd/CONTRACT.md)", "none"))
+        self.assertIn("opcode READ: missing contract link", self.check(text))
+
+    def test_malformed_opcode_catalog_cannot_silently_omit_rows(self):
+        documents = [
+            "name,opcode\nREAD,0x1201\n",
+            "name,opcode,status\nREAD,0x1201,unknown\n",
+            "name,opcode,status\nREAD,0x1201,implemented\nREAD,0x1202,implemented\n",
+            "name,opcode,status\nREAD,0x1201,implemented\nSTAT,0x1201,implemented\n",
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "internal/osd/opcodes-tentacle.csv"
+            path.parent.mkdir(parents=True)
+            for document in documents:
+                with self.subTest(document=document):
+                    path.write_text(document)
+                    with self.assertRaises(ValueError):
+                        evidence.opcode_rows(root)
+
+    def test_every_frame_needs_a_distinct_join(self):
+        row = next(line for line in self.text.splitlines() if line.startswith("| 12 |"))
+        self.assertIn("frames: missing row 12", self.check(self.text.replace(row, "")))
+        self.assertIn("frames: duplicate row 12", self.check(self.text.replace(row, row + "\n" + row)))
+        self.assertIn("frames: undeclared row 99", self.check(self.text.replace(row, row.replace("| 12 |", "| 99 |"))))
+
+    def test_frame_observation_needs_both_attribution_and_observation_kind(self):
+        receipts = {"R1": ["R1", "exact-commit", "profile", "record"],
+                    "U": ["U", "unjoined", "gap", "none"]}
+        for value in ("R1:inferred", "R1:reported", "R1:captured", "U:unobserved",
+                      "R1:inferred, U:unobserved"):
+            with self.subTest(value=value):
+                self.assertEqual(evidence.frame_receipt_problems(value, receipts), [])
+        for value in ("R1", "R1:PASS", "U:captured", "R1:unobserved", "missing:reported"):
+            with self.subTest(value=value):
+                self.assertTrue(evidence.frame_receipt_problems(value, receipts))
+
+    def test_frame_join_rejects_unknown_receipt_and_invalid_observation(self):
+        text = self.text.replace("| R9:reported |", "| missing:reported |")
+        self.assertIn("frame 12: unknown receipt missing", self.check(text))
+        text = self.text.replace("| R9:reported |", "| R9:passed |")
+        self.assertIn("frame 12: invalid observation R9:passed", self.check(text))
+
+    def test_frame_unit_selector_is_not_an_integration_receipt(self):
+        text = self.text.replace("[TestHandshakeMissingFeaturesPreservesPeerMask](../internal/session/handshake_refusal_test.go)",
+                                 "[TestCephMonPingIntegration](../integration/mon_ping_test.go)")
+        self.assertIn("frame 10: integration selector is not unit evidence", self.check(text))
 
     def test_deleted_or_duplicated_message_cannot_hide_in_another_row(self):
         row = next(line for line in self.text.splitlines() if line.startswith("| 42 |"))

@@ -4,14 +4,18 @@ Reference: Ceph 20.2.4, commit `7f793731f1b39eb4f465e960113d2363c311b964`
 (`src/msg/async/frames_v2.h`, `ProtocolV2.cc`). Code: tag values in
 [frame.go](../msgr/frame.go), handshake in [handshake.go](handshake.go),
 established-session dispatch in [session.go](session.go).
-`TestFrameTagLedgerCoversEveryTag` fails if a tag value is missing here.
+`TestFrameTagLedgerCoversEveryTag` inventories source declarations and rejects
+missing, duplicate, undeclared or renamed rows; it does not mirror a fixed enum.
 
 This repository implements the **client** side only. "Sent" and "Received"
 describe what the Go client does; a received tag that this client does not
 expect in that phase is a terminal protocol failure (`ErrFrame`), never
 ignored. Unit tests, live interoperability and CI are different evidence; the
 Selector column names the unit tests, and live behavior is in the fixture
-validation records ([VALIDATION.md](../../integration/fixture/VALIDATION.md)).
+validation records. [PROTOCOL_EVIDENCE.md](../../cephmsgr/PROTOCOL_EVIDENCE.md#frame-evidence)
+joins every tag to a caller boundary, concrete unit selector and retained
+receipt or explicit unobserved native boundary. Captured headers, reported
+native results and source-path inference are distinct observation kinds.
 Nested authentication payloads, caller-visible ticket selection and their
 source-attributed profile limits are in the
 [CephX exchange ledger](../cephx/EXCHANGE_LEDGER.md).

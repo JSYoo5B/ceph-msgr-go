@@ -82,10 +82,11 @@ Available integration selectors include
 guards before selecting them. Catalog membership is configuration, not a run
 receipt; the N2 observation does not prove every selector in this list.
 
-## Remaining evidence join
+## Evidence boundaries
 
 - [PROTOCOL_EVIDENCE.md](../../cephmsgr/PROTOCOL_EVIDENCE.md) now joins each
-  message and role-feature row to a public boundary/refusal, unit selector and
+  frame, message, implemented-opcode and role-feature row to a public
+  boundary/refusal, unit selector and
   retained native receipt or explicit gap. Its reference check does not turn
   historical sources or unjoined profiles into current-tree acceptance. MGR
   service evidence does not widen ordinary MGR transport, OSD or MDS masks.
@@ -96,5 +97,8 @@ receipt; the N2 observation does not prove every selector in this list.
   are synthetic peer checks. Pinned daemons declining compression toward
   clients remains an upstream constraint, not a request to enable secure/zlib
   compression. No daemon peer roles or consumer retry/routing policy are added.
-- This checkpoint leaves #4 open. Per-bit semantic promises, remaining native
-  evidence gaps and a broader stale-contract sweep still require review.
+- [FEATURE_SEMANTICS.md](../session/FEATURE_SEMANTICS.md) records every
+  advertised bit's role obligations and alias/incarnation limits. The protocol
+  evidence join now explicitly separates captured, reported, inferred and
+  unobserved frame receipts. Broader native oracle/profile/failure acceptance
+  remains separate from #4's implementation/evidence accounting.
