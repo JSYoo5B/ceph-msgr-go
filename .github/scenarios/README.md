@@ -87,6 +87,43 @@ their existing test and time bounds. Module downloads fall back from the Go
 proxy to the origin while `go.sum` verification remains in force. The native
 runtime explicitly pre-pulls its pinned Ceph image before harness execution.
 
+## Manual selection
+
+`ci-command.yml` also accepts manual dispatch with required `selectors` and an
+optional `pull_request` number. The selector grammar, catalog, refusal policy,
+read-only test runners and request-specific statuses are shared with comments.
+There is no implicit `all` selection. Dispatch the workflow on the default
+branch (`main` here); another branch or a tag is refused before checkout or
+test execution, without a write token in that refusal job. GitHub itself
+requires repository write access to
+[dispatch a workflow](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow).
+
+```sh
+# One native row on the default-branch revision captured by this dispatch:
+gh workflow run ci-command.yml --ref main \
+  -f selectors='mon-ping.aes.ip4.crc.host.t-monping'
+
+# Select checks on an open same-repository PR (example PR number):
+gh workflow run ci-command.yml --ref main \
+  -f pull_request=123 -f selectors='unit fixture-tools'
+```
+
+With a PR number, trusted control reads its head once and applies the same
+open/non-fork checks as a comment request. An empty number tests the exact
+default-branch workflow commit, not a moving branch name in each job. Control
+scripts and the native result gate use the calling workflow SHA so a newer
+catalog cannot silently outrun that runner's capabilities. PR and default-branch
+requests each have separate command concurrency groups; baseline CI remains
+independent.
+
+Every accepted request publishes its pending/final status on the tested SHA.
+The Actions summary always records selection, SHA, result and run link; a PR
+target also receives the existing summary comment. Main-only requests post no
+PR comments. Invalid selectors, malformed PR numbers and unavailable PR/catalog
+metadata are refusals, never permission to select all or execute an unpinned
+revision. A rejected nonexistent PR is reported in the Actions summary without
+attempting to comment on it.
+
 ## Periodic main verification
 
 `periodic.yml` runs all native rows and all check suites every Sunday at
@@ -165,6 +202,12 @@ retains its own Tentacle-only catalog, fixture inputs and coverage contracts.
 Planner/parser and workflow-contract tests are synthetic checks. Native daemon
 interoperability and a live PR-comment request are separate evidence. Comment
 workflows become available only after their definition reaches the default
-branch. Declaration-level changed-scenario selection, repeated campaigns and
-durable historical classification remain outside this checkpoint; issue #1
-stays open.
+branch. The live request on PR #29 passed at
+`523cfa254a7639a7574c34da7fe00f8a4d866bb4` in
+[run 39568633356](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39568633356):
+one expected MON-ping test actually passed, its artifact and final status named
+the same SHA/image, and no platform matrix was selected. This is a bounded
+request receipt, not full periodic coverage. Manual execution likewise needs
+its merged default-branch definition and an actual run before acceptance.
+Declaration-level changed-scenario selection, repeated campaigns and durable
+historical classification remain outside this checkpoint.
