@@ -10,6 +10,17 @@ name: CI command
 on:
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      selectors:
+        description: Scenario IDs, group selectors or check suites (same as /ci run)
+        required: true
+        type: string
+      pull_request:
+        description: Open same-repository PR number; empty tests this default-branch revision
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -17,7 +28,7 @@ permissions:
 # One request per pull request at a time; a second request waits instead of
 # cancelling a running one. Baseline pull-request checks are separate workflows.
 concurrency:
-  group: ci-command-${{ github.event.issue.number }}
+  group: ci-command-${{ github.event.issue.number || inputs.pull_request || 'main' }}
   cancel-in-progress: false
 
 defaults:
@@ -28,9 +39,20 @@ env:
   GOPROXY: 'https://proxy.golang.org|direct'
 
 jobs:
+  refuse-branch:
+    name: Refuse manual control from another branch
+    if: github.event_name == 'workflow_dispatch' && github.ref != format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      # No checkout, write token or PR code in this refusal path.
+      - run: |
+          echo 'Manual selection must use the default branch workflow; no test code was executed.' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
   request:
     name: Check the request
-    if: startsWith(github.event.comment.body, '/ci') || contains(github.event.comment.body, '/ci ')
+    if: (github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)) || (github.event_name == 'issue_comment' && (startsWith(github.event.comment.body, '/ci') || contains(github.event.comment.body, '/ci ')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -42,10 +64,12 @@ jobs:
       sha: ${{ steps.pull.outputs.sha }}
       matrix: ${{ steps.plan.outputs.matrix }}
       selectors: ${{ steps.parse.outputs.selectors }}
+      number: ${{ steps.parse.outputs.number }}
     steps:
       # Default branch only: trusted scripts.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
       - name: Parse and authorize the command
         id: parse
@@ -53,31 +77,46 @@ jobs:
           COMMENT_BODY: ${{ github.event.comment.body }}
           AUTHOR_ASSOCIATION: ${{ github.event.comment.author_association }}
           IS_PULL_REQUEST: ${{ github.event.issue.pull_request != null }}
-        run: python3 tools/ci_command.py parse
-      - name: Read the pull request head once
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DISPATCH_PR: ${{ inputs.pull_request }}
+          DISPATCH_SELECTORS: ${{ inputs.selectors }}
+        run: python3 tools/ci_command.py request
+      - name: Capture the tested revision once
         id: pull
         if: steps.parse.outputs.command == 'accepted'
         env:
           GH_TOKEN: ${{ github.token }}
-          NUMBER: ${{ github.event.issue.number }}
+          NUMBER: ${{ steps.parse.outputs.number }}
+          TARGET: ${{ steps.parse.outputs.target }}
         run: |
-          gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" \
+          if test "$TARGET" = main; then
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! gh api "repos/$GITHUB_REPOSITORY/pulls/$NUMBER" \
             --jq '"sha=\(.head.sha)\nhead_repo=\(.head.repo.full_name // "")\nbase_repo=\(.base.repo.full_name)\nstate=\(.state)"' \
-            >> "$GITHUB_OUTPUT"
+            > "$RUNNER_TEMP/pull-head.txt"; then
+            echo 'exists=false' >> "$GITHUB_OUTPUT"
+            echo 'reason=pull request metadata is unavailable' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cat "$RUNNER_TEMP/pull-head.txt" >> "$GITHUB_OUTPUT"
       - name: Check the pull request
         id: pullcheck
-        if: steps.parse.outputs.command == 'accepted'
+        if: steps.parse.outputs.command == 'accepted' && steps.parse.outputs.target == 'pull'
         env:
           HEAD_REPO: ${{ steps.pull.outputs.head_repo }}
           BASE_REPO: ${{ steps.pull.outputs.base_repo }}
           HEAD_SHA: ${{ steps.pull.outputs.sha }}
           PR_STATE: ${{ steps.pull.outputs.state }}
+          PULL_LOOKUP_ERROR: ${{ steps.pull.outputs.reason }}
         run: python3 tools/ci_command.py pull
       # The vocabulary comes from the tested revision (a same-repository commit,
       # forks are refused above); the planner that reads it is the trusted one.
       - name: Resolve the selectors against the tested revision
         id: plan
-        if: steps.pullcheck.outputs.pull == 'accepted'
+        if: steps.parse.outputs.command == 'accepted' && (steps.parse.outputs.target == 'main' || steps.pullcheck.outputs.pull == 'accepted')
         env:
           SELECTORS: ${{ steps.parse.outputs.selectors }}
           SHA: ${{ steps.pull.outputs.sha }}
@@ -103,11 +142,12 @@ jobs:
           PULL_REFUSAL: ${{ steps.pullcheck.outputs.reason }}
           MATRIX: ${{ steps.plan.outputs.matrix }}
           PLAN_REFUSAL: ${{ steps.plan.outputs.reason }}
+          TARGET: ${{ steps.parse.outputs.target }}
         run: |
           reason=
           if test "$COMMAND" = refused; then reason=$REFUSAL
           elif test "$COMMAND" = accepted; then
-            if test "$PULL" != accepted; then reason=$PULL_REFUSAL
+            if test "$TARGET" = pull && test "$PULL" != accepted; then reason=$PULL_REFUSAL
             elif test -z "$MATRIX"; then reason=${PLAN_REFUSAL:-the selectors could not be resolved}
             fi
           else
@@ -116,7 +156,7 @@ jobs:
           fi
           if test -n "$reason"; then
             echo "accepted=false" >> "$GITHUB_OUTPUT"
-            printf 'The `/ci run` request was refused: %s.\n\nNo pull-request code was executed.\n' "$reason" > "$RUNNER_TEMP/reply.md"
+            printf 'The CI selection request was refused: %s.\n\nNo test code was executed.\n' "$reason" > "$RUNNER_TEMP/reply.md"
           else
             echo "accepted=true" >> "$GITHUB_OUTPUT"
           fi
@@ -124,8 +164,13 @@ jobs:
         if: steps.verdict.outputs.accepted == 'false' && steps.parse.outputs.command != 'none'
         env:
           GH_TOKEN: ${{ github.token }}
-          NUMBER: ${{ github.event.issue.number }}
-        run: gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/reply.md"
+          NUMBER: ${{ steps.parse.outputs.number }}
+          EXISTS: ${{ steps.pull.outputs.exists }}
+        run: |
+          cat "$RUNNER_TEMP/reply.md" >> "$GITHUB_STEP_SUMMARY"
+          if test -n "$NUMBER" && test "$EXISTS" != false; then
+            gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/reply.md"
+          fi
       - name: Mark the requested commit pending
         if: steps.verdict.outputs.accepted == 'true'
         env:
@@ -174,7 +219,8 @@ jobs:
       - name: Publish the final status and a summary comment
         env:
           GH_TOKEN: ${{ github.token }}
-          NUMBER: ${{ github.event.issue.number }}
+          NUMBER: ${{ needs.request.outputs.number }}
+          REQUEST_SOURCE: ${{ github.event_name }}
           SHA: ${{ needs.request.outputs.sha }}
           SELECTORS: ${{ needs.request.outputs.selectors }}
           NATIVE: ${{ needs.run.result }}
@@ -200,6 +246,9 @@ jobs:
           esac
           gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f state="$state" \
             -f context="ci-command/run-$GITHUB_RUN_ID" -f description="$description" -f target_url="$RUN_URL"
-          printf '`/ci run %s` on commit `%s`: **%s** (%s).\n\nRun: %s\n\nThe result belongs to this exact commit; later pushes need a new request. Baseline checks run independently. Per-scenario results are in the run'"'"'s `scenario-*` artifacts.\n' \
-            "$SELECTORS" "$SHA" "$RESULT" "$description" "$RUN_URL" > "$RUNNER_TEMP/final.md"
-          gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/final.md"
+          printf 'CI selection `%s` (%s) on commit `%s`: **%s** (%s).\n\nRun: %s\n\nThe result belongs to this exact commit; later pushes need a new request. Baseline checks run independently. Per-scenario results are in the run'"'"'s `scenario-*` artifacts.\n' \
+            "$SELECTORS" "$REQUEST_SOURCE" "$SHA" "$RESULT" "$description" "$RUN_URL" > "$RUNNER_TEMP/final.md"
+          cat "$RUNNER_TEMP/final.md" >> "$GITHUB_STEP_SUMMARY"
+          if test -n "$NUMBER"; then
+            gh pr comment "$NUMBER" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/final.md"
+          fi

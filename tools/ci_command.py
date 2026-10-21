@@ -18,6 +18,7 @@ a command and is ignored silently; a malformed or ambiguous command is refused
 with an explanation.
 
   ci_command.py parse    env COMMENT_BODY AUTHOR_ASSOCIATION IS_PULL_REQUEST
+  ci_command.py request  comment or default-branch manual selection
   ci_command.py pull     env HEAD_REPO BASE_REPO HEAD_SHA PR_STATE
 """
 import os
@@ -28,6 +29,7 @@ TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 MAX_SELECTORS = 20
 SELECTOR = re.compile(r"^(all|group:[a-z0-9][a-z0-9-]*|[a-z0-9][a-z0-9._-]*)$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
+PR_NUMBER = re.compile(r"^[1-9][0-9]{0,9}$")
 USAGE = "usage: `/ci run <scenario-id|group:<group>|all> ...` on its own line"
 
 
@@ -129,18 +131,63 @@ def run_parse(env):
     return 0
 
 
+def run_request(env):
+    """Normalize both entry points before any PR/API lookup or test execution.
+
+    GitHub requires repository write access for workflow_dispatch. Manual
+    control is additionally restricted to the default branch, never a PR ref.
+    Comment requests retain their independent association/PR authorization.
+    """
+    number, target = "", "pull"
+    try:
+        event = env.get("GITHUB_EVENT_NAME")
+        if event == "workflow_dispatch":
+            target = "main"
+            default = env.get("DEFAULT_BRANCH")
+            if not default or env.get("GITHUB_REF") != "refs/heads/" + default:
+                raise CommandError("manual selection must use the default branch workflow")
+            supplied = env.get("DISPATCH_PR", "")
+            if supplied:
+                if not PR_NUMBER.fullmatch(supplied):
+                    raise CommandError("pull_request must be a positive PR number or empty for the default branch")
+                number, target = supplied, "pull"
+            selection = env.get("DISPATCH_SELECTORS", "")
+            if not selection.strip() or len(selection) > 4096 or "\n" in selection or "\r" in selection:
+                raise CommandError("selectors must be one nonempty line of at most 20 scenario/check selectors")
+            selectors = parse_comment("/ci run " + selection)
+        elif event == "issue_comment":
+            selectors = parse_comment(env.get("COMMENT_BODY", ""))
+            if selectors is None:
+                write_output(command="none", selectors="", number="", target=target, reason="")
+                return 0
+            supplied = env.get("ISSUE_NUMBER", "")
+            if not PR_NUMBER.fullmatch(supplied):
+                raise CommandError("the comment has no valid pull request number")
+            number = supplied
+            reason = authorize(env.get("AUTHOR_ASSOCIATION", ""), env.get("IS_PULL_REQUEST") == "true")
+            if reason:
+                raise CommandError(reason)
+        else:
+            raise CommandError("unsupported CI request event")
+    except CommandError as error:
+        write_output(command="refused", selectors="", number=number, target=target, reason=str(error))
+        return 0
+    write_output(command="accepted", selectors=" ".join(selectors), number=number, target=target, reason="")
+    return 0
+
+
 def run_pull(env):
-    reason = check_pull(env.get("HEAD_REPO"), env.get("BASE_REPO"), env.get("HEAD_SHA"), env.get("PR_STATE"))
+    reason = env.get("PULL_LOOKUP_ERROR") or check_pull(env.get("HEAD_REPO"), env.get("BASE_REPO"), env.get("HEAD_SHA"), env.get("PR_STATE"))
     write_output(pull="refused" if reason else "accepted", reason=reason or "")
     return 0
 
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 1 or argv[0] not in ("parse", "pull"):
+    if len(argv) != 1 or argv[0] not in ("parse", "request", "pull"):
         print(__doc__, file=sys.stderr)
         return 2
-    return {"parse": run_parse, "pull": run_pull}[argv[0]](os.environ)
+    return {"parse": run_parse, "request": run_request, "pull": run_pull}[argv[0]](os.environ)
 
 
 if __name__ == "__main__":
