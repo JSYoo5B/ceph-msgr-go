@@ -14,7 +14,7 @@ class FakeServiceRados:
         self.states, self.polls, self.last_status = list(states), 0, ""
 
     def current(self):
-        return self.states[min(self.polls, len(self.states) - 1)]
+        return self.states[min(max(self.polls - 1, 0), len(self.states) - 1)]
 
     def mon(self, cluster, command):
         assert command == {"prefix": "service dump", "format": "json"}
@@ -62,6 +62,18 @@ class ServiceWatchTest(unittest.TestCase):
                     {"task_status": {"k": "v" * 257}}, {"metadata": []}):
             with self.assertRaises((ValueError, KeyError, TypeError), msg=str(bad)):
                 watch([self.present], **bad)
+
+    def test_actual_go_request_fixtures_omit_unset_maps_and_match_pinned_states(self):
+        path = pathlib.Path(__file__).resolve().parents[1] / "integration/testdata/mgr-service-watch.json"
+        fixtures = json.loads(path.read_text(encoding="utf-8"))
+        reported = {"dump": {"gid": 5, "metadata": {"zone": "a"}, "task_status": {"t": "2"}},
+                    "status": {"state": "busy"}}
+        # MMgrUpdate changes daemon_state, not the initial ServiceMap metadata.
+        # MMgrReport changes service status and the map's task status instead.
+        for name, state in (("open", self.present), ("report", reported), ("absent", None)):
+            request = fixtures[name]
+            self.assertNotIn(None, request.values())
+            self.assertTrue(oracle.mode_servicewatch(FakeServiceRados([state]), None, request, None)["matched"], name)
 
 
 class PoolOracleTest(unittest.TestCase):

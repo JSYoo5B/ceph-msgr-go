@@ -25,6 +25,11 @@ service daemon or a non-CLIENT entity).
 | MMgrClose | 0x708 | 1/1 | sent and received | unregister; the MGR echoes the same message back |
 | MMgrUpdate | 0x70b | 2/1 | sent | replacement metadata (the MGR ignores the status map of an update) |
 
+`handle_update` replaces metadata in the MGR's daemon-state index. It does not
+replace the initial registration metadata in the MON's ServiceMap. Observing
+that map or `service status` therefore cannot establish an applied metadata
+update. The native test queues one update but makes no applied-update claim.
+
 The packed counter buffer of a report must be the empty versioned envelope
 (version 1, compat 1, zero length): `DaemonPerfCounters::update` runs
 `DECODE_START` on it even without counters. `daemon_status`/`task_status` are
@@ -81,8 +86,9 @@ commands) observe it independently of the Go client:
    the sent metadata and the client's authenticated GID, and the MGR's
    `service status` shows the sent status; the Go service map watch must show
    the same GID and metadata;
-2. after `UpdateMetadata` and `Report`: native metadata, status and task status
-   equal the new values;
+2. after queuing `UpdateMetadata` and `Report`: native status and task status
+   equal the new report values, while the ServiceMap still carries the initial
+   metadata; application of the metadata update inside the MGR is unverified;
 3. after an acknowledged `Close`: the daemon is absent from the native dump, and
    a report on the closed handle is refused locally.
 
@@ -94,6 +100,7 @@ the lifecycle above is not accepted.
 ## Not verified
 
 - Fresh native request vectors for each message.
+- Applied metadata updates in the MGR daemon-state index (not ServiceMap).
 - The native observation test above on a Linux runner at the final commit.
 - Service-ticket renewal, MGR failover and bounded close against real daemons,
   and the comparison with a native librados service registration of the same

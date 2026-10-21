@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -12,18 +13,57 @@ import (
 
 // serviceWatch asks the native oracle (public librados MON and MGR commands,
 // not the Go client) to wait until the named daemon matches, or is absent.
+type serviceWatchRequest struct {
+	Service     string            `json:"service"`
+	Daemon      string            `json:"daemon"`
+	Expect      string            `json:"expect"`
+	WaitSeconds int               `json:"wait_seconds"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	Status      map[string]string `json:"status,omitempty"`
+	TaskStatus  map[string]string `json:"task_status,omitempty"`
+}
+
+func serviceWatchInput(service, daemon, expect string, metadata, status, task map[string]string) serviceWatchRequest {
+	return serviceWatchRequest{service, daemon, expect, 60, metadata, status, task}
+}
+
 func serviceWatch(t *testing.T, ctx context.Context, service, daemon, expect string, metadata, status, task map[string]string) poolReceipt {
 	t.Helper()
-	return nativePool(t, ctx, "servicewatch", map[string]any{
-		"service": service, "daemon": daemon, "expect": expect, "wait_seconds": 60,
-		"metadata": metadata, "status": status, "task_status": task,
-	})
+	return nativePool(t, ctx, "servicewatch", serviceWatchInput(service, daemon, expect, metadata, status, task))
+}
+
+// The Python oracle tests consume the same fixtures. Compare the actual Go
+// serialization, including omitted optional maps, against that shared input.
+func TestServiceWatchRequestMatchesNativeOracleInputs(t *testing.T) {
+	data, err := os.ReadFile("testdata/mgr-service-watch.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixtures map[string]any
+	if err := json.Unmarshal(data, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	for name, request := range map[string]serviceWatchRequest{
+		"open":   serviceWatchInput("svc", "d1", "present", map[string]string{"zone": "a"}, map[string]string{"state": "up"}, nil),
+		"report": serviceWatchInput("svc", "d1", "present", map[string]string{"zone": "a"}, map[string]string{"state": "busy"}, map[string]string{"t": "2"}),
+		"absent": serviceWatchInput("svc", "d1", "absent", nil, nil, nil),
+	} {
+		raw, err := json.Marshal(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var actual any
+		if err := json.Unmarshal(raw, &actual); err != nil || !reflect.DeepEqual(actual, fixtures[name]) {
+			t.Fatalf("%s Go serialization differs from the native oracle input: %s (%v)", name, raw, err)
+		}
+	}
 }
 
 // A Go-originated service registration is observed natively: the MON service
 // map (service dump) and the MGR (service status) show the daemon with the
-// metadata, status and task status the Go client sent, follow an update and a
-// report, and drop the daemon after the acknowledged close. The Go service map
+// initial metadata, status and task status the Go client sent, follow a report,
+// and drop the daemon after the acknowledged close. MMgrUpdate changes only
+// MGR daemon-state metadata, which these commands do not expose. The Go service map
 // watch is cross-checked against the native dump.
 //
 // The test registers a daemon in the cluster's service map, so it runs only in
@@ -98,7 +138,10 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 		}
 	}
 
-	// Update and report: new metadata, status and task status.
+	// Queue a metadata update, then independently observe the report. The
+	// pinned handle_update changes daemon_state only: the MON's ServiceMap
+	// retains the initial registration metadata. This does not verify that
+	// the replacement metadata was applied inside the MGR.
 	updated := map[string]string{"ceph_msgr_role": "go", "ceph_msgr_daemon": daemon, "zone": "b"}
 	if err := svc.UpdateMetadata(ctx, updated); err != nil {
 		t.Fatal(err)
@@ -107,9 +150,9 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 	if err := svc.Report(ctx, busy, task); err != nil {
 		t.Fatal(err)
 	}
-	native = serviceWatch(t, ctx, service, daemon, "present", updated, busy, task)
+	native = serviceWatch(t, ctx, service, daemon, "present", metadata, busy, task)
 	if !native.ServiceMatched {
-		t.Fatalf("native observation lacks the update and report: entry=%s status=%s", native.ServiceEntry, native.ServiceStatusEntry)
+		t.Fatalf("native observation lacks the report: entry=%s status=%s", native.ServiceEntry, native.ServiceStatusEntry)
 	}
 
 	// Acknowledged close removes the daemon natively.
@@ -123,5 +166,5 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 	if err := svc.Report(ctx, nil, nil); err == nil {
 		t.Fatal("a closed registration accepted a report")
 	}
-	t.Logf("native observation confirmed open, update, report and close of %s/%s", service, daemon)
+	t.Logf("native observation confirmed open, report and close of %s/%s; metadata update was queued only", service, daemon)
 }
