@@ -79,8 +79,12 @@ Go request test and 515 Python tool tests passed. Actionlint 1.7.7 first caught
 the integration-time duplicate environment entry and passed after its removal.
 These checks are separate from the two native runs.
 
-Fresh native encoder vectors, independently observed applied metadata updates,
-service-ticket renewal, real MGR failover, unacknowledged-close grace expiry,
+A later independent [codec checkpoint](../../internal/msgr/testdata/mgr-service-native-README.md)
+adds fresh native vectors for all five admitted messages; it does not change
+the scope or source identities of these two live runs.
+
+Independently observed applied metadata updates, service-ticket renewal,
+real MGR failover, unacknowledged-close grace expiry,
 and comparison against a native registration with identical fields remain
 unverified. Keep #6 open; this checkpoint covers selected open/report/close
 observations only.

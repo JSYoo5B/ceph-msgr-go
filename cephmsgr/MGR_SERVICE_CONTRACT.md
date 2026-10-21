@@ -72,8 +72,15 @@ and unit and race tests against a synthetic MGR that shares the Go frame codec
 (`cephmsgr/mgr_service_test.go`): open/update/report/close bytes, configure
 handling, duplicate and bound refusals, unconfirmed open and close, concurrent
 `Close` callers, connection loss, failover, a service beside ordinary MGR
-commands, and client close. These are **not** native encoder vectors and **not**
-live daemon evidence.
+commands, and client close. These source-derived and synthetic checks are
+**not** native encoder vectors and **not** live daemon evidence. Separately,
+[TestMgrServiceNativeVectors](../internal/msgr/mgr_service_native_test.go) compares
+eight retained fresh native vectors for all five messages, including omitted
+versus empty report maps, binary values, configure and close decoding. The
+[codec record](../internal/msgr/testdata/mgr-service-native-README.md) and
+[hashed receipt](../internal/msgr/testdata/mgr-service-native-provenance.json)
+define the source/build and offline-header scope; no daemon lifecycle follows
+from these vectors.
 
 ### Native observation on selected profiles
 
@@ -102,7 +109,8 @@ These are direct native results, not a claim that the PR-comment workflow ran.
 
 ## Not verified
 
-- Fresh native request vectors for each message.
+- Native vectors for nonempty daemon extensions and older configure versions
+  (only the current v4 empty-extension service profile has a fresh vector).
 - Applied metadata updates in the MGR daemon-state index (not ServiceMap).
 - Profiles beyond the two native runs recorded above.
 - Service-ticket renewal, MGR failover and bounded close against real daemons,
