@@ -83,8 +83,11 @@ A later independent [codec checkpoint](../../internal/msgr/testdata/mgr-service-
 adds fresh native vectors for all five admitted messages; it does not change
 the scope or source identities of these two live runs.
 
-Independently observed applied metadata updates, service-ticket renewal,
-real MGR failover, unacknowledged-close grace expiry,
+A later [recovery checkpoint](MGR_SERVICE_RECOVERY_VALIDATION.md) separately
+records ticket expiry/renewed connection and actual MGR takeover. It does not
+retroactively extend the two earlier runs above.
+
+Independently observed applied metadata updates, unacknowledged-close grace expiry,
 and comparison against a native registration with identical fields remain
 unverified. Keep #6 open; this checkpoint covers selected open/report/close
 observations only.

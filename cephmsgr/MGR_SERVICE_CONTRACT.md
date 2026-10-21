@@ -107,15 +107,22 @@ cleanup and limits are in
 [MGR_SERVICE_VALIDATION.md](../integration/fixture/MGR_SERVICE_VALIDATION.md).
 These are direct native results, not a claim that the PR-comment workflow ran.
 
+The parent test now also requires `renewal_and_active_manager_change`: it
+observes a report after the original ticket expiry, a native active-MGR
+transition, terminal old-handle refusals, sampled stable native absence and
+caller-initiated registration on a new connection with the current ticket.
+The [recovery record](../integration/fixture/MGR_SERVICE_RECOVERY_VALIDATION.md)
+separates these observations from the earlier lifecycle and codec checkpoints.
+
 ## Not verified
 
 - Native vectors for nonempty daemon extensions and older configure versions
   (only the current v4 empty-extension service profile has a fresh vector).
 - Applied metadata updates in the MGR daemon-state index (not ServiceMap).
-- Profiles beyond the two native runs recorded above.
-- Service-ticket renewal, MGR failover and bounded close against real daemons,
-  and the comparison with a native librados service registration of the same
-  fields.
+- Profiles beyond the two key/mode/address/runtime combinations recorded above.
+- A deliberately lost close echo with ErrMgrServiceCloseUnconfirmed and grace
+  expiry, and comparison with a native librados registration of the same fields.
+  A terminal handle after MGR replacement is a separate failure boundary.
 - A registration made while the MGR is not yet active waits for the map; no live
   test covers that.
 
