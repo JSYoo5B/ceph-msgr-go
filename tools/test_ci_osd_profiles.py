@@ -108,7 +108,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                 self.assertIsNone(selector.search(unrelated))
 
     def test_mgr_service_rows_require_explicit_opt_in_and_only_the_declared_test(self):
-        self.assertIn("CEPH_MSGR_TEST_MGR_SERVICE: ${{ matrix.mgr_service || '0' }}", self.workflow)
+        self.assertEqual(self.workflow.count("CEPH_MSGR_TEST_MGR_SERVICE: ${{ matrix.mgr_service || '0' }}"), 1)
         self.assertIn("${{ matrix.mgr_service == '1' && 'MGR-service ' || '' }}", self.workflow)
         rows = [row for row in self.rows if row.get("mgr_service") == "1"]
         common = {

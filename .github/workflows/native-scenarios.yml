@@ -179,7 +179,6 @@ jobs:
           CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}
           CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}
           CEPH_MSGR_TEST_MON_PING: ${{ matrix.mon_ping || '0' }}
-          CEPH_MSGR_TEST_MGR_SERVICE: ${{ matrix.mgr_service || '0' }}
           CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}
           CEPH_MSGR_TEST_OSD_STORE: ${{ matrix.osd_store || 'memstore' }}
           CEPH_MSGR_TEST_OSD_REPLICAS: ${{ matrix.osd_replicas || '1' }}
