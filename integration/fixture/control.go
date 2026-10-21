@@ -730,7 +730,13 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			return errors.New("invalid native owned-pool oracle request")
 		}
 		args := []string{"python3", "/out/osd_pool_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
-		if err = c.runOracleCommand(ctx, out, args, "osd-pool-command.json", "native owned-pool oracle"); err != nil {
+		budget := 80 * time.Second
+		if fields[1] == "servicewatch" {
+			// A bounded 90 s watch may wait through the native 60 s beacon
+			// grace and then require a stable absence interval.
+			budget = 120 * time.Second
+		}
+		if err = c.runOracleCommandWithTimeout(ctx, out, args, "osd-pool-command.json", "native owned-pool oracle", budget); err != nil {
 			return err
 		}
 		if err = publishAck(out, "osd-pool-verify."+fields[0]); err != nil {
