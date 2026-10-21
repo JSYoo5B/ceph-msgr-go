@@ -11,8 +11,13 @@ inner-structure versions are stated separately below. Decoders without an
 additional header-version check are marked explicitly; no uniform exact-version
 refusal policy is implied.
 Contract documents hold the field-level rules and the evidence profiles.
-`TestMessageLedgerCoversEveryType` fails if a constant's value or name is not
-in this table. This is a source reading, not an interoperability result.
+`TestMessageLedgerCoversEveryType` inventories explicit `uint16` message constants
+in the msgr/mds/osd source files, including shared-ID names. It rejects missing,
+duplicate or undeclared rows and mismatched names. Session operation codes and
+frame tags are separate inventories. This is a source reading, not an
+interoperability result. The nested authentication exchanges are recorded in
+[the CephX exchange ledger](../internal/cephx/EXCHANGE_LEDGER.md), rather than
+being implied by the defined-only AuthMessage/AuthReplyMessage constants.
 
 | Type | Message | Direction | Header version / compat | Contract |
 | --- | --- | --- | --- | --- |
@@ -56,11 +61,25 @@ in this table. This is a source reading, not an interoperability result.
 | 0x312 | ClientSnapMessage | Received | exact 1/1 | [MDS_CEPHFS_CONTRACT.md](MDS_CEPHFS_CONTRACT.md) |
 | 0x313 | ClientCapReleaseMessage | Sent (decoder for verification) | 2/1 | [MDS_CEPHFS_CONTRACT.md](MDS_CEPHFS_CONTRACT.md) |
 | 0x314 | ClientQuotaMessage | Received | exact 1/1 | [MDS_CEPHFS_CONTRACT.md](MDS_CEPHFS_CONTRACT.md) |
+| 0x700 | MgrOpenMessage | Sent (opt-in service daemon) | 3/1 | [MGR_SERVICE_CONTRACT.md](MGR_SERVICE_CONTRACT.md) |
+| 0x701 | MgrConfigureMessage | Received (opt-in service daemon) | versions 1-4, compat exactly 1; nonempty middle/data refused; unimplemented extension bytes preserved raw | [MGR_SERVICE_CONTRACT.md](MGR_SERVICE_CONTRACT.md) |
+| 0x702 | MgrReportMessage | Sent (opt-in service daemon) | 9/1 | [MGR_SERVICE_CONTRACT.md](MGR_SERVICE_CONTRACT.md) |
 | 0x704 | MgrMapMessage | Received | compat above 1 refused | [SPEC.md](../SPEC.md) |
 | 0x705 | MgrDigestMessage | Received | version at least 1, compat at most 1 | [SPEC.md](../SPEC.md) |
 | 0x707 | ServiceMapMessage | Received | no additional header-version check; empty middle/data; ServiceMap/service structs compat at most 1 and daemon struct compat at most 2 | [SERVICE_MAP_CONTRACT.md](SERVICE_MAP_CONTRACT.md) |
+| 0x708 | MgrCloseMessage | Sent and received (opt-in service daemon) | exact 1/1 on echo; nonempty middle/data refused | [MGR_SERVICE_CONTRACT.md](MGR_SERVICE_CONTRACT.md) |
 | 0x709 | MgrCommandMessage | Sent | 1/0 | [SPEC.md](../SPEC.md) |
 | 0x70a | MgrCommandReplyMessage | Received | compat at most 1; matched by type and transaction | [SPEC.md](../SPEC.md) |
+| 0x70b | MgrUpdateMessage | Sent (opt-in service daemon) | 2/1 | [MGR_SERVICE_CONTRACT.md](MGR_SERVICE_CONTRACT.md) |
+
+The service-daemon rows use `Options.EnableMgrService` and `OpenMgrService`,
+`Configure`, `Report`, `UpdateMetadata` and `Close`; ordinary MGR command sessions
+emit none of these service lifecycle messages. `TestMgrOpenEncoding`,
+`TestMgrUpdateEncoding`, `TestMgrReportEncoding`, `TestMgrConfigureDecoding`,
+`TestMgrCloseEncodingAndEchoDecoding` and
+`TestMgrServiceOpenUpdateReportAndAcknowledgedClose` are synthetic checks;
+the retained selected native evidence
+is [MGR_SERVICE_VALIDATION.md](../integration/fixture/MGR_SERVICE_VALIDATION.md).
 
 Not represented by a constant, hence not implemented: CephFS client metrics
 (CEPH_MSG_CLIENT_METRICS 29), the full FSMap (type 45), and daemon-only message types outside this ledger. This client does not

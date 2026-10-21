@@ -12,6 +12,11 @@ the codec or admission rule it promises is implemented, and a Messenger feature
 bit does not establish the Ceph release family. Evidence for each profile is in
 the contracts and validation records named in the last column.
 
+The [CephX exchange ledger](../cephx/EXCHANGE_LEDGER.md) joins role-specific
+ticket/authorizer behavior to unit selectors and retained native profiles.
+Those authentication observations do not validate every feature bit or widen
+the profile-specific evidence in this table.
+
 Bit names (pinned header): 1 NOSRCADDR, 2 SERVER_NAUTILUS (incarnation 3),
 4 SUBSCRIBE2, 5 MONNAMES, 15 MONENC, 23 MSG_AUTH, 28 SERVER_MIMIC,
 42 MSGR_KEEPALIVE2, 57 SERVER_JEWEL/MON_STATEFUL_SUB, 59 MSG_ADDR2

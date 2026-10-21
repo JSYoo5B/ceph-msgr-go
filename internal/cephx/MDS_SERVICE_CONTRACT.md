@@ -26,6 +26,12 @@ their original service key when a new ticket snapshot is published.
 and secure-secret modes, with and without OSD selection. It covers the selected
 wire service mask, service-key separation, challenge/reply nonce checks,
 atomic renewal refusal, successful renewal and expired-ticket rejection.
-These tests are not independent native MDS authentication proof. They do not
-add public MDS options, daemon connections, MDS map/rank selection, filesystem
-sessions, requests or I/O, and they do not establish CephFS support.
+These tests are not independent native MDS authentication proof. This contract
+describes the ticket foundation, not the current boundary of all MDS support.
+Public `Options.EnableMDS`, targeted connections and later session/request/
+recovery primitives are described by the
+[MDS session contract](../../cephmsgr/MDS_SESSION_CONTRACT.md) and
+[CephFS contract](../../cephmsgr/MDS_CEPHFS_CONTRACT.md). Their independent
+evidence is separate from these ticket tests. See the
+[exchange ledger](EXCHANGE_LEDGER.md) for source-attributed fresh-MDS
+authentication profiles; none of these unit tests alone establishes CephFS.
