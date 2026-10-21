@@ -60,7 +60,11 @@ type handshakePeerConfig struct {
 	serverSupported uint64
 	serverRequired  uint64
 	identFeatures   func(uint64) error
-	afterIdent      func(net.Conn, *msgr.Reader, *msgr.Writer) error
+	missingFeatures *uint64
+	// selectedCompression sends a complete enabled selection, after checking
+	// that the client did not offer it. Zero keeps the normal declined offer.
+	selectedCompression msgr.CompressionAlgorithm
+	afterIdent          func(net.Conn, *msgr.Reader, *msgr.Writer) error
 }
 
 func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error {
@@ -189,6 +193,26 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	if err != nil || f.Tag != msgr.CompressionRequest {
 		return errors.New("compression negotiation")
 	}
+	if cfg.selectedCompression != msgr.CompAlgNone {
+		if len(f.Segments) != 1 {
+			return errors.New("compression request segments")
+		}
+		request := wire.NewDecoder(f.Segments[0])
+		enabled := request.Bool()
+		count := request.Count(4, 16)
+		for range count {
+			if method := msgr.CompressionAlgorithm(request.U32()); enabled && method == cfg.selectedCompression {
+				return errors.New("refusal test selected an offered compression method")
+			}
+		}
+		if err := request.Done(); err != nil {
+			return err
+		}
+		selection := wire.Encoder{}
+		selection.U8(1)
+		selection.U32(uint32(cfg.selectedCompression))
+		return write(msgr.CompressionDone, selection.Data)
+	}
 	e := wire.Encoder{}
 	e.U8(0)
 	e.U32(0)
@@ -215,6 +239,11 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	}
 	if d.Err() != nil {
 		return d.Err()
+	}
+	if cfg.missingFeatures != nil {
+		missing := wire.Encoder{}
+		missing.U64(*cfg.missingFeatures)
+		return write(msgr.IdentMissingFeatures, missing.Data)
 	}
 	if cfg.malformedTag == msgr.IdentMissingFeatures {
 		missing := wire.Encoder{}

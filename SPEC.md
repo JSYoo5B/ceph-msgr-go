@@ -56,7 +56,7 @@ constitute complete RADOS, RBD or CephFS clients.
 
 | Area | Contract and evidence | Remaining boundary |
 | --- | --- | --- |
-| Messenger/CephX | `internal/msgr/`, `internal/cephx/`, `internal/session/`; native role/key/mode profiles | A wire feature does not prove a release family or every security/platform combination; declared masks per role are in [FEATURE_LEDGER.md](internal/session/FEATURE_LEDGER.md) |
+| Messenger/CephX | `internal/msgr/`, `internal/cephx/`, `internal/session/`; native role/key/mode profiles | A wire feature does not prove a release family or every security/platform combination; declared masks are in [FEATURE_LEDGER.md](internal/session/FEATURE_LEDGER.md), nested auth exchanges and source-attributed evidence in [EXCHANGE_LEDGER.md](internal/cephx/EXCHANGE_LEDGER.md) |
 | MON/MGR commands | `cephmsgr/api.go`, `cephmsgr/named_mon.go`, [MGR Tell](cephmsgr/MGR_TELL_CONTRACT.md) | No typed management layer, standby command routing or automatic mutation replay |
 | MON subscriptions | Log/config/digest and raw map APIs in `cephmsgr/` | No authorization ACK, complete event history or autonomous map application |
 | OSD operations | [core](internal/osd/CONTRACT.md), [completion](internal/osd/O4_CONTRACT.md), [EC](internal/osd/ERASURE_CONTRACT.md) | Explicit target/profile/version/feature requirements; no automatic placement or universal durability claim |

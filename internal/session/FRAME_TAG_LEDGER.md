@@ -12,6 +12,9 @@ expect in that phase is a terminal protocol failure (`ErrFrame`), never
 ignored. Unit tests, live interoperability and CI are different evidence; the
 Selector column names the unit tests, and live behavior is in the fixture
 validation records ([VALIDATION.md](../../integration/fixture/VALIDATION.md)).
+Nested authentication payloads, caller-visible ticket selection and their
+source-attributed profile limits are in the
+[CephX exchange ledger](../cephx/EXCHANGE_LEDGER.md).
 
 | Tag | Name | Phase | Go client behavior | Refusal | Selector |
 | --- | --- | --- | --- | --- | --- |
@@ -23,10 +26,10 @@ validation records ([VALIDATION.md](../../integration/fixture/VALIDATION.md)).
 | 6 | AuthDone | Authentication | Received; global ID taken, selected mode must equal the requested mode, ticket/secret finished | Mode mismatch, missing secret in secure mode, or no AuthDone within 8 rounds | `TestCRCHandshakeCannotCompleteWithoutAuthDone`, `TestHandshakeRejectsTamperingAndDowngrade` |
 | 7 | AuthSignature | Authentication | Sent and received in both modes; the client signs its received transcript and verifies the peer signature over its sent transcript with the CephX session key before session admission | Mismatch is an authentication failure | `TestHandshakePinsModeAndRequiresSignature`, `TestHandshakeRejectsTamperingAndDowngrade` |
 | 21 | CompressionRequest | Post-auth | Sent only when the peer banner supports compression; offers snappy/zstd on CRC connections, declines on secure connections | n/a (sent) | `TestCRCHandshakeAuthenticatesAndRetainsCRCFraming`, `TestFrameCompressionRoundTrip` |
-| 22 | CompressionDone | Post-auth | Received; a selected method must have been offered and implemented | Unoffered or unsupported method | `TestCompleteMalformedHandshakePayloadIsProtocolFailure` (malformed body only; no dedicated unoffered-method refusal assertion) |
+| 22 | CompressionDone | Post-auth | Received; a selected method must have been offered and implemented | Unoffered or unsupported method | `TestHandshakeRejectsUnofferedCompressionSelection` (complete CRC/zlib and secure/zstd selections); `TestCompleteMalformedHandshakePayloadIsProtocolFailure` (parser) |
 | 8 | ClientIdent | Identification | Sent with the role's supported/required feature masks, session flags and cookie | n/a (sent) | `TestCRCHandshakeAuthenticatesAndRetainsCRCFraming` |
 | 9 | ServerIdent | Identification | Received; target address must be among the server's addresses, daemon ID must match where required, features and flags must be acceptable | Missing target address, wrong ID, unmet required features, unsupported session flags | `TestHandshakeValidatesServerAddressIdentity`, `TestHandshakeRejectsUnsupportedSessionFlags` |
-| 10 | IdentMissingFeatures | Identification | Received; reported as a typed feature error with the peer's missing mask | Always terminal; no silent downgrade | `TestCompleteMalformedHandshakePayloadIsProtocolFailure` (malformed body only; no test asserts the typed missing-mask error) |
+| 10 | IdentMissingFeatures | Identification | Received; `ErrFeatures` plus the peer's full 64-bit missing mask in error text (no structured mask field) | Always terminal; no silent downgrade | `TestHandshakeMissingFeaturesPreservesPeerMask` (complete CRC/secure refusals); `TestCompleteMalformedHandshakePayloadIsProtocolFailure` (parser) |
 | 11 | SessionReconnect | Resume | Sent only for an explicit stateful resume (fresh MDS/CephFS), with the next global/connect sequences | n/a (sent) | `TestResumeHandshakeFollowsRetriesAndReset` |
 | 12 | SessionReset | Resume | Received; terminal for the stateful session (`ErrSessionReset`), requests whose transmission began retain an unknown outcome | Always terminal | `TestStatefulSessionTerminalResumeOutcomes` |
 | 13 | SessionRetry | Resume | Received; the connect sequence is advanced and the reconnect resent, bounded to 8 attempts | Sequence overflow or malformed body | `TestResumeHandshakeFollowsRetriesAndReset` |
