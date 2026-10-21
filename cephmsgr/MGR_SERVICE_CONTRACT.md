@@ -75,7 +75,7 @@ handling, duplicate and bound refusals, unconfirmed open and close, concurrent
 commands, and client close. These are **not** native encoder vectors and **not**
 live daemon evidence.
 
-### Native observation test (written, not yet executed)
+### Native observation on selected profiles
 
 `TestCephMgrServiceRegistrationIntegration` (`integration/mgr_service_test.go`)
 registers a Go service daemon and has the native owned-pool oracle's
@@ -94,14 +94,17 @@ commands) observe it independently of the Go client:
 
 It runs only in the opt-in profile `CEPH_MSGR_TEST_MGR_SERVICE=1` (single-OSD
 legacy-v6 fixture, two MGRs), selected by the catalog group `mgr-service`:
-`/ci run group:mgr-service`. No result of that run exists yet; until one does,
-the lifecycle above is not accepted.
+`/ci run group:mgr-service`. Direct Linux runs passed CRC/aes/IPv4/host and
+secure/aes256k/IPv6/container profiles; exact tested commits, execution gates,
+cleanup and limits are in
+[MGR_SERVICE_VALIDATION.md](../integration/fixture/MGR_SERVICE_VALIDATION.md).
+These are direct native results, not a claim that the PR-comment workflow ran.
 
 ## Not verified
 
 - Fresh native request vectors for each message.
 - Applied metadata updates in the MGR daemon-state index (not ServiceMap).
-- The native observation test above on a Linux runner at the final commit.
+- Profiles beyond the two native runs recorded above.
 - Service-ticket renewal, MGR failover and bounded close against real daemons,
   and the comparison with a native librados service registration of the same
   fields.

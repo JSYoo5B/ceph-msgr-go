@@ -213,9 +213,10 @@ registration (MMgrOpen/Update/Report/Close) on a dedicated connection to the
 active MGR, with caller-supplied raw service/daemon names, metadata and status.
 It changes no ordinary MON/MGR command behavior or feature mask. The handle
 fails on connection loss or active-MGR change and never re-registers by itself;
-`Close` reports an unconfirmed acknowledgement explicitly. Verified by
-source-derived vectors and synthetic-MGR unit and race tests only: no native
-vectors or live ServiceMap observation yet. See
+`Close` reports an unconfirmed acknowledgement explicitly. Source-derived vectors
+and synthetic unit/race tests are supplemented by native registration, status,
+task-status and close observation on two selected Tentacle profiles. Native
+encoder vectors, applied metadata updates and live failover remain unverified. See
 [the contract](cephmsgr/MGR_SERVICE_CONTRACT.md).
 
 ## Command descriptions
