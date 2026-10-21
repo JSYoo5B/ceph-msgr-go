@@ -32,8 +32,11 @@ Bit names (pinned header): 1 NOSRCADDR, 2 SERVER_NAUTILUS (incarnation 3),
 | OSD request-v9 profile (opt-in) | adds `0x0702000040200300` | adds `0x0702000040200300` | reply-v8 profile + SERVER_SQUID (49, incarnation 2 with 57); CRUSH_MSR (38) is not enabled | [OSD CONTRACT](../osd/CONTRACT.md) |
 | Fresh MDS session | `0x2a00040010808036` | `0x0800000000000000` | Base only; MON/OSD policy extensions are never offered | [MDS_FRESH_CONTRACT.md](MDS_FRESH_CONTRACT.md) |
 | Fresh CephFS session | `0x2e0085201c8080be` | `0x0c0081200c000088` | Base + FLOCK (3), DIRLAYOUTHASH (7), CREATEPOOLID (26), REPLY_CREATE_INODE (27), EXPORT_PEER (37), MDS_INLINE_DATA (40), MDS_QUOTA (47), FS_FILE_LAYOUT_V2 (58). Every added CephFS bit is required together with the base required mask; a missing required bit is refused before any CephFS message. | [MDS_CEPHFS_CONTRACT.md](../../cephmsgr/MDS_CEPHFS_CONTRACT.md) |
+| MON MDSENC opt-in | adds `0x0000000020000000` | adds `0x0000000020000000` | Current MON MDS map encoding only; EnableMDS | [MDS_MAPS_CONTRACT.md](../../cephmsgr/MDS_MAPS_CONTRACT.md) |
+| MON HASHPSPOOL opt-in | adds `0x0000000040000000` | adds `0x0000000040000000` | Modern OSD profile's MON admission only | [OSD CONTRACT](../osd/CONTRACT.md) |
+| MON/OSD CACHEPOOL opt-in | adds `0x0000000800000000` | adds `0x0000000800000000` | EnableOSDCachePools on MON/OSD, independent of the selected OSD wire profile | [CACHE_POOL_CONTRACT.md](../osd/CACHE_POOL_CONTRACT.md) |
 
-Opt-in additions on a single role (not shown in the masks above):
+The final three rows are additions to the selected role/profile, not full masks:
 OSD_CACHEPOOL (35) on MON and OSD sessions for the cache-pool profile, MDSENC
 (29) on MON sessions for MDS map subscriptions, and OSDHASHPSPOOL (30) on MON
 sessions for the replicated-PG profile. Each is added to both `supported` and
@@ -42,3 +45,8 @@ sessions for the replicated-PG profile. Each is added to both `supported` and
 Bits not listed are not advertised. In particular the full
 `CEPH_FEATURES_ALL` mask is never used, because it would promise OSD message
 codecs this repository does not implement.
+
+[PROTOCOL_EVIDENCE.md](../../cephmsgr/PROTOCOL_EVIDENCE.md) joins each row to
+its public opt-in/refusal, a checked-in test and a source-attributed native
+receipt or explicit gap. A handshake's admission does not independently prove
+every semantic promise sharing a feature bit.

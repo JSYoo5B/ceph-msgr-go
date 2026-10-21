@@ -84,10 +84,11 @@ receipt; the N2 observation does not prove every selector in this list.
 
 ## Remaining evidence join
 
-- The message and role-feature ledgers still need per-row public API/refusal,
-  selector and actual profile attribution beyond these authentication joins.
-  MGR service rows have their own selected native record; that does not widen
-  ordinary MGR transport, OSD or MDS feature masks.
+- [PROTOCOL_EVIDENCE.md](../../cephmsgr/PROTOCOL_EVIDENCE.md) now joins each
+  message and role-feature row to a public boundary/refusal, unit selector and
+  retained native receipt or explicit gap. Its reference check does not turn
+  historical sources or unjoined profiles into current-tree acceptance. MGR
+  service evidence does not widen ordinary MGR transport, OSD or MDS masks.
 - Missing independent codec vectors are distinct from implemented wire paths
   and from incomplete native failure/topology/platform profiles. A missing
   receipt does not establish a missing encoder or a product defect.
@@ -95,5 +96,5 @@ receipt; the N2 observation does not prove every selector in this list.
   are synthetic peer checks. Pinned daemons declining compression toward
   clients remains an upstream constraint, not a request to enable secure/zlib
   compression. No daemon peer roles or consumer retry/routing policy are added.
-- This checkpoint leaves #4 open. A complete advertised-feature evidence map
-  and a broader stale-contract sweep are still required by its acceptance.
+- This checkpoint leaves #4 open. Per-bit semantic promises, remaining native
+  evidence gaps and a broader stale-contract sweep still require review.

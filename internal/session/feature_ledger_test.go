@@ -17,6 +17,15 @@ func TestFeatureLedgerMasks(t *testing.T) {
 	mgrS, mgrR := handshakeFeatures(16, nil)
 	monS, monR := handshakeFeatures(1, nil)
 	osdS, osdR := handshakeFeatures(4, nil)
+	delta := func(role uint8, auth Authenticator) [2]uint64 {
+		baseS, baseR := handshakeFeatures(role, nil)
+		gotS, gotR := handshakeFeatures(role, auth)
+		return [2]uint64{gotS &^ baseS, gotR &^ baseR}
+	}
+	cache := delta(1, MonAuth{OSDCachePools: true})
+	if osdCache := delta(4, ServiceAuth{OSDCachePools: true}); osdCache != cache {
+		t.Fatalf("cache-pool additions differ by role: MON %x, OSD %x", cache, osdCache)
+	}
 	want := map[string][2]uint64{
 		"Base (MGR and any role without a row below)": {mgrS, mgrR},
 		"MON (entity type 1)":                         {monS, monR},
@@ -26,6 +35,9 @@ func TestFeatureLedgerMasks(t *testing.T) {
 		"OSD request-v9 profile (opt-in)":             {replicatedPGRequestV9Features, replicatedPGRequestV9Features},
 		"Fresh MDS session":                           {Features, RequiredFeatures},
 		"Fresh CephFS session":                        {CephFSFeatures, CephFSFeatures&^Features | RequiredFeatures},
+		"MON MDSENC opt-in":                           delta(1, MonAuth{MDSMaps: true}),
+		"MON HASHPSPOOL opt-in":                       delta(1, MonAuth{ReplicatedPGV8: true}),
+		"MON/OSD CACHEPOOL opt-in":                    cache,
 	}
 	seen := map[string]bool{}
 	for _, line := range strings.Split(string(doc), "\n") {

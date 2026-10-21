@@ -19,6 +19,11 @@ interoperability result. The nested authentication exchanges are recorded in
 [the CephX exchange ledger](../internal/cephx/EXCHANGE_LEDGER.md), rather than
 being implied by the defined-only AuthMessage/AuthReplyMessage constants.
 
+[PROTOCOL_EVIDENCE.md](PROTOCOL_EVIDENCE.md) joins every message row to its
+caller boundary or explicit refusal, a concrete unit/vector selector, and a
+retained native receipt or explicit gap. Reference checks do not establish
+that a selector ran or every target sharing a message ID was verified.
+
 | Type | Message | Direction | Header version / compat | Contract |
 | --- | --- | --- | --- | --- |
 | 2 | PingMessage | Sent; reply received | sent 1/1; reply must be 1 with compat 0, empty middle/data, transaction 0 | [MON_PING_CONTRACT.md](MON_PING_CONTRACT.md) |
