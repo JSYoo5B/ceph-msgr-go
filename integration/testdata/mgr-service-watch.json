@@ -1,0 +1,5 @@
+{
+  "open": {"service": "svc", "daemon": "d1", "expect": "present", "wait_seconds": 60, "metadata": {"zone": "a"}, "status": {"state": "up"}},
+  "report": {"service": "svc", "daemon": "d1", "expect": "present", "wait_seconds": 60, "metadata": {"zone": "a"}, "status": {"state": "busy"}, "task_status": {"t": "2"}},
+  "absent": {"service": "svc", "daemon": "d1", "expect": "absent", "wait_seconds": 60}
+}

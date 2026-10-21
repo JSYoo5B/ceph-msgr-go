@@ -5,7 +5,10 @@ Test-only; never product code. It uses the public librados C API (LGPL-2.1,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
-Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, fullratios, osdflags, inconsistent, cleanup.
+Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
+servicewatch polls the native MON `service dump` and MGR `service status` until a
+named service daemon matches the expected metadata/status/task status, or is
+absent, and reports the last native observation; it registers nothing.
 inconsistent runs the native `rados list-inconsistent-obj` for one owned-pool
 PG and reports its interval and object names.
 fullratios changes the cluster-wide nearfull/backfillfull/full ratios of the
@@ -29,7 +32,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "fullratios", "osdflags", "inconsistent", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "servicewatch", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -78,6 +81,7 @@ class Rados:
         for name, (args, result) in {
             "mon_command": ([p, C.POINTER(char), s, char, s, C.POINTER(p), C.POINTER(s), C.POINTER(p), C.POINTER(s)], i),
             "buffer_free": ([p], None),
+            "mgr_command": ([p, C.POINTER(char), s, char, s, C.POINTER(p), C.POINTER(s), C.POINTER(p), C.POINTER(s)], i),
             "ioctx_snap_create": ([p, char], i),
             "ioctx_snap_remove": ([p, char], i),
             "ioctx_snap_lookup": ([p, char, C.POINTER(u64)], i),
@@ -105,17 +109,23 @@ class Rados:
         return cluster
 
     def mon(self, cluster, command):
+        return self._command(self.lib.rados_mon_command, cluster, command)
+
+    def mgr(self, cluster, command):
+        return self._command(self.lib.rados_mgr_command, cluster, command)
+
+    def _command(self, function, cluster, command):
         encoded = json.dumps(command, ensure_ascii=False).encode("utf-8")
         commands = (C.c_char_p * 1)(encoded)
         output, diagnostic = C.c_void_p(), C.c_void_p()
         output_length, diagnostic_length = C.c_size_t(), C.c_size_t()
         try:
-            code = self.lib.rados_mon_command(cluster, commands, 1, None, 0, C.byref(output), C.byref(output_length),
-                                              C.byref(diagnostic), C.byref(diagnostic_length))
+            code = function(cluster, commands, 1, None, 0, C.byref(output), C.byref(output_length),
+                            C.byref(diagnostic), C.byref(diagnostic_length))
             if output_length.value > MAX_MON_OUTPUT or diagnostic_length.value > 64 << 10:
-                raise ValueError("native MON output exceeds bound")
+                raise ValueError("native command output exceeds bound")
             text = C.string_at(output, output_length.value) if output.value else b""
-            # The MON's status text explains refusals; it holds no credentials.
+            # The daemon's status text explains refusals; it holds no credentials.
             self.last_status = C.string_at(diagnostic, diagnostic_length.value).decode(errors="replace")[:512] if diagnostic.value else ""
             return code, text
         finally:
@@ -380,6 +390,56 @@ def mode_service(rados, cluster, request, out):
     return {"service_dump": dump}
 
 
+SERVICE_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
+
+
+def string_map(value, label):
+    if type(value) is not dict or len(value) > 16 or not all(
+            type(k) is str and type(v) is str and len(k) <= 64 and len(v) <= 256 for k, v in value.items()):
+        raise ValueError("invalid " + label)
+    return value
+
+
+def mode_servicewatch(rados, cluster, request, out):
+    # Observe a service daemon registered by another client (the Go client under
+    # test) through the native MON service map and the MGR's service status.
+    import time
+    service, daemon = request["service"], request["daemon"]
+    if type(service) is not str or type(daemon) is not str or not SERVICE_NAME.fullmatch(service) or not SERVICE_NAME.fullmatch(daemon):
+        raise ValueError("invalid service or daemon name")
+    if request["expect"] not in ("present", "absent"):
+        raise ValueError("invalid expectation")
+    wait = integer(request["wait_seconds"], 1, 90, "wait_seconds")
+    want_metadata = string_map(request.get("metadata", {}), "metadata")
+    want_status = string_map(request.get("status", {}), "status")
+    want_task = string_map(request.get("task_status", {}), "task_status")
+    deadline = time.monotonic() + wait
+    observed = {}
+    while True:
+        code, text = rados.mon(cluster, {"prefix": "service dump", "format": "json"})
+        dump = json.loads(text) if code == 0 else {}
+        entry = dump.get("services", {}).get(service, {}).get("daemons", {}).get(daemon)
+        status_entry, status_code = None, None
+        if entry is not None:
+            status_code, status_text = rados.mgr(cluster, {"prefix": "service status", "format": "json"})
+            if status_code == 0:
+                document = json.loads(status_text)
+                status_entry = document.get("service_status", document).get(service, {}).get(daemon)
+        observed = {"dump_code": code, "dump_epoch": dump.get("epoch"), "entry": entry,
+                    "status_code": status_code, "status_entry": status_entry}
+        if request["expect"] == "absent":
+            matched = code == 0 and entry is None
+        else:
+            matched = (entry is not None
+                       and all(entry.get("metadata", {}).get(k) == v for k, v in want_metadata.items())
+                       and all(entry.get("task_status", {}).get(k) == v for k, v in want_task.items())
+                       and (not want_status or (status_entry is not None
+                            and all(status_entry.get("status", {}).get(k) == v for k, v in want_status.items()))))
+        if matched or time.monotonic() >= deadline:
+            return dict(observed, matched=matched, expect=request["expect"])
+        time.sleep(1)
+
+
 def mode_quota(rados, cluster, request, out):
     name = pool_name(request["slot"])
     limit = integer(request["max_objects"], 0, 1 << 20, "max_objects")
@@ -486,7 +546,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "servicewatch": mode_servicewatch, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 
 def main(argv):

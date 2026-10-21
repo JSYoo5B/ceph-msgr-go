@@ -36,10 +36,16 @@ type poolReceipt struct {
 	PoolsRemoved  bool                `json:"pools_removed"`
 	FlagNames     string              `json:"flag_names"`
 	ServiceDump   json.RawMessage     `json:"service_dump"`
-	Epochs        map[string]uint64   `json:"epochs"`
-	PoolType      int                 `json:"pool_type"`
-	CrushRule     json.RawMessage     `json:"crush_rule"`
-	ECOptimized   bool                `json:"ec_optimized"`
+	// servicewatch mode: the last native MON service dump entry and MGR
+	// service status entry of the watched daemon, and whether they matched.
+	ServiceMatched     bool              `json:"matched"`
+	ServiceEntry       json.RawMessage   `json:"entry"`
+	ServiceStatusEntry json.RawMessage   `json:"status_entry"`
+	ServiceDumpEpoch   uint32            `json:"dump_epoch"`
+	Epochs             map[string]uint64 `json:"epochs"`
+	PoolType           int               `json:"pool_type"`
+	CrushRule          json.RawMessage   `json:"crush_rule"`
+	ECOptimized        bool              `json:"ec_optimized"`
 	// fullratios mode.
 	NearfullRatio     float64           `json:"nearfull_ratio"`
 	BackfillfullRatio float64           `json:"backfillfull_ratio"`

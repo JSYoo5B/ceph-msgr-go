@@ -118,6 +118,11 @@ type Options struct {
 	// pushes and their answers. See cephmsgr/MDS_CEPHFS_CONTRACT.md. Without
 	// it, MDS connections stay command/session-only.
 	EnableCephFS bool
+	// EnableMgrService permits OpenMgrService: an explicit service-daemon
+	// registration on a dedicated MGR connection (MMgrOpen/Update/Report/Close).
+	// It adds no Messenger feature bit and changes no MON/MGR command behavior;
+	// see cephmsgr/MGR_SERVICE_CONTRACT.md.
+	EnableMgrService bool
 	// MaxMDSConnections bounds cached MDS handles and concurrent setups.
 	// Defaults to 16; valid values are 1 through 1024. Close releases a slot.
 	MaxMDSConnections int

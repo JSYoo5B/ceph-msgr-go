@@ -389,6 +389,7 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 	}
 	manifest["mon_ping"] = p.monPing == "1"
 	manifest["osd_cache_pools"] = p.osdCachePools == "1"
+	manifest["mgr_service"] = p.mgrService == "1"
 	manifest["native_u64_xattr_oracle"] = p.u64XattrOracle != ""
 	manifest["native_writesame_oracle"] = p.writeSameOracle != ""
 	manifest["mds_fresh"] = p.mdsFresh == "1"

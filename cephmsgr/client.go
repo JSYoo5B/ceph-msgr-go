@@ -60,6 +60,8 @@ type Client struct {
 	serviceMapWatch *ServiceMapStream
 	osdMapWatch     *OSDMapStream
 
+	mgrServices map[mgrServiceKey]*MgrService // guarded by mu
+
 	osds          map[int32]*OSDConnection
 	osdNext       atomic.Uint64
 	versionHandle atomic.Uint64
