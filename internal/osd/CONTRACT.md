@@ -19,8 +19,8 @@ be transmitted or accepted as ordinary operation replies. Mode bits alone do
 not establish semantics: notably CALL uses a read bit but its class determines
 its behavior. The inventory does not claim that deferred payloads, control
 messages or unsolicited events have been implemented. The separate
-[control/event contract](EVENT_CONTRACT.md) inventories current map/reply
-delivery, future backoff/watch wire requirements and their acceptance gaps.
+[control/event contract](EVENT_CONTRACT.md) inventories current map/reply,
+bounded watch/notify and opt-in backoff delivery, with their acceptance gaps.
 
 ## Bounded v6 vector
 
@@ -49,8 +49,11 @@ follow [CACHE_POOL_CONTRACT.md](CACHE_POOL_CONTRACT.md), with offline codec,
 synthetic transport, native-only behavior and bounded Go/native live evidence
 distinguished there.
 
-Negotiated OBJECTLOCATOR and PGID64 select the supported request/reply v6
-branch; NEW_OSDOP_ENCODING and NEW_OSDOPREPLY_ENCODING are rejected. The caller
+In the base object-hash profile, negotiated OBJECTLOCATOR and PGID64 select
+request/reply v6; NEW_OSDOP_ENCODING and NEW_OSDOPREPLY_ENCODING requirements
+are rejected. The separate [v8](REQUEST_V8_CONTRACT.md),
+[reply-v8](OSD_REPLY_V8_CONTRACT.md) and [v9](REQUEST_V9_CONTRACT.md) profiles
+are explicit opt-ins, not automatic fallback branches. The caller
 supplies pool, namespace, locator key, object, raw placement hash, target OSD,
 numeric address/nonce and OSDMap epoch. The raw hash echoed in pg_t is not an
 actual mapped PG number. The caller supplies any snapshot fields; no EC
@@ -80,7 +83,8 @@ MaxFrameSize; vectors have 1–64 operations. Extents cannot overflow uint64.
 Version is rejected for other operations. Unknown flags are rejected before
 transmission. EXCL (1) is accepted only on Create; FAILOK (2) retains an
 operation's negative result while allowing subsequent vector operations to
-continue. Category payloads and FADVISE input flags are unsupported. A zero range covering an object's tail can become truncation;
+continue. Category payloads are unsupported. FADVISE input flags are admitted
+only on the data paths listed in the later FADVISE section. A zero range covering an object's tail can become truncation;
 zero beyond EOF is a native no-op, not an extension promise.
 
 The extent union's truncate fields (`TruncateSize`, `TruncateSequence`) are

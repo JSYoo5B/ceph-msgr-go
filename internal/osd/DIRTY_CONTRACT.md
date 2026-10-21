@@ -65,8 +65,12 @@ cannot be driven from a client against a plain replicated pool:
   encoded indata and requires the WITH_REFERENCE flag plus dedup setup, failing
   with **-EOPNOTSUPP/-EINVAL/-ERANGE** otherwise (`:7280`). Not a simple probe.
 
-These need a cache-tier overlay or dedup manifest configuration that is outside
-the current fixture and milestone.
+These remain unimplemented client operations. The development fixture can now
+prepare an owned cache tier for the bounded IGNORE_CACHE capability; see
+[CACHE_POOL_CONTRACT.md](CACHE_POOL_CONTRACT.md) and its separate native
+validation records. That setup does not implement or verify flush/evict/pin
+messages. Manifest/chunk preparation and its independent oracle remain separate
+requirements in #8. Plain-pool refusal is not absence of a daemon handler.
 
 ## Verification
 
