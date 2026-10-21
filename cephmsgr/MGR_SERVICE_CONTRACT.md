@@ -114,15 +114,23 @@ caller-initiated registration on a new connection with the current ticket.
 The [recovery record](../integration/fixture/MGR_SERVICE_RECOVERY_VALIDATION.md)
 separates these observations from the earlier lifecycle and codec checkpoints.
 
+The same parent now requires `unconfirmed_close` with two native-observed faults:
+withheld receive bytes leave the caller uncertain even after native removal;
+discarded writes leave the daemon visible after local teardown until native
+beacon grace removes it. Both preserve cancellation, terminal state and the
+repeated Close result. The [close record](../integration/fixture/MGR_SERVICE_CLOSE_VALIDATION.md)
+keeps local write/dial counts separate from native receipt and sampled absence.
+
 ## Not verified
 
 - Native vectors for nonempty daemon extensions and older configure versions
   (only the current v4 empty-extension service profile has a fresh vector).
 - Applied metadata updates in the MGR daemon-state index (not ServiceMap).
 - Profiles beyond the two key/mode/address/runtime combinations recorded above.
-- A deliberately lost close echo with ErrMgrServiceCloseUnconfirmed and grace
-  expiry, and comparison with a native librados registration of the same fields.
-  A terminal handle after MGR replacement is a separate failure boundary.
+- Comparison with a native librados registration of the same fields.
+- Failure configurations beyond the selected receive-withholding and write-
+  discarding faults. A terminal handle after MGR replacement is a separate
+  failure boundary.
 - A registration made while the MGR is not yet active waits for the map; no live
   test covers that.
 

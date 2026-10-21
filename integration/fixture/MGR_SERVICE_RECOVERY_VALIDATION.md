@@ -91,8 +91,9 @@ and the existing optional-map serialization contract. Full Linux Python tools
 passed 546 tests, scenario validation passed 65 entries, and integration vet plus
 fixture unit/vet checks passed. These are separate from live daemon evidence.
 
-Applied metadata updates inside the MGR daemon-state index, a lost close echo
-with ErrMgrServiceCloseUnconfirmed and grace expiry, comparison against a native
-registration with identical fields, and other profiles remain unverified. The
+A later [close-fault checkpoint](MGR_SERVICE_CLOSE_VALIDATION.md) separately
+observes unconfirmed Close with native removal/expiry. Applied metadata updates
+inside the MGR daemon-state index, comparison against a native registration
+with identical fields, and other profiles remain unverified. The
 failed old handle here follows MGR replacement, not a deliberately lost close
 acknowledgement. This checkpoint does not complete #6.
