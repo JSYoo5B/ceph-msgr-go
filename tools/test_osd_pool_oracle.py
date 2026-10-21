@@ -2,7 +2,7 @@ import json
 import pathlib
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).parent))
 import osd_pool_oracle as oracle
@@ -92,6 +92,86 @@ class ServiceWatchTest(unittest.TestCase):
             request = fixtures[name]
             self.assertNotIn(None, request.values())
             self.assertTrue(oracle.mode_servicewatch(FakeServiceRados([state]), None, request, None)["matched"], name)
+
+
+class ServiceMetadataTest(unittest.TestCase):
+    def observe(self, responses, metadata, **fields):
+        rados = Mock()
+        rados.mgr.side_effect = responses
+        request = dict(action="observe", service="svc", daemon="d1", metadata=metadata, wait_seconds=2)
+        request.update(fields)
+        with patch("time.monotonic", side_effect=range(20)), patch("time.sleep"):
+            result = oracle.mode_servicemetadata(rados, None, request, None)
+        return result, rados
+
+    def test_replacement_requires_removing_old_keys(self):
+        result, rados = self.observe([(0, b'{"zone":"b","old":"a"}'),
+                                     (0, b'{"zone":"b","hostname":""}')], {"zone": "b"})
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["observations"], 2)
+        self.assertEqual(rados.mgr.call_args.args[1], {
+            "prefix": "mgr self-test eval",
+            "s": "print(__import__('json').dumps(mgr.get_metadata('svc', 'd1')))"})
+        rados.mon.assert_not_called()
+
+    def test_empty_metadata_is_distinct_from_a_missing_daemon(self):
+        result, _ = self.observe([(0, b'null'), (0, b'{"hostname":""}')], {})
+        self.assertTrue(result["matched"])
+        self.assertEqual(result["observations"], 2)
+
+    def test_refusal_and_old_metadata_cannot_pass(self):
+        for response in ((-13, b''), (0, b'{"zone":"a"}'), (0, b'null')):
+            result, _ = self.observe([response, response], {"zone": "b"})
+            self.assertFalse(result["matched"])
+
+    def test_invalid_inputs_cannot_form_an_expression(self):
+        for fields in ({"service": "svc');print(1)#"}, {"daemon": "a b"},
+                       {"wait_seconds": 46}, {"wait_seconds": True},
+                       {"metadata": {"hostname": "x"}}, {"metadata": None}):
+            rados = Mock()
+            request = dict(action="observe", service="svc", daemon="d1", metadata={}, wait_seconds=2)
+            request.update(fields)
+            with self.assertRaises((ValueError, TypeError)):
+                oracle.mode_servicemetadata(rados, None, request, None)
+            rados.mgr.assert_not_called()
+            rados.mon.assert_not_called()
+
+    def test_enable_is_once_only_readiness_is_polled(self):
+        rados = Mock()
+        rados.mon.side_effect = [(0, b'{"enabled_modules":[]}'), (0, b'')]
+        rados.mgr.side_effect = [(-22, b''), (0, b'3')]
+        with patch("time.sleep"):
+            result = oracle.mode_servicemetadata(rados, None, {"action": "prepare"}, None)
+        self.assertTrue(result["module_enabled_by_test"])
+        self.assertTrue(result["ready"])
+        self.assertEqual(rados.mon.call_count, 2)
+        self.assertEqual(rados.mgr.call_count, 2)
+
+    def test_existing_module_is_preserved_and_failed_mutations_are_not_retried(self):
+        rados = Mock()
+        rados.mon.return_value = (0, b'{"enabled_modules":["selftest"]}')
+        rados.mgr.return_value = (0, b'3')
+        result = oracle.mode_servicemetadata(rados, None, {"action": "prepare"}, None)
+        self.assertFalse(result["module_enabled_by_test"])
+        self.assertEqual(rados.mon.call_count, 1)
+        for action in ("prepare", "restore"):
+            rados = Mock()
+            rados.mon.side_effect = [(0, json.dumps({"enabled_modules": [] if action == "prepare" else ["selftest"]}).encode()),
+                                     (-13, b'')]
+            with self.assertRaises(RuntimeError):
+                oracle.mode_servicemetadata(rados, None, {"action": action}, None)
+            self.assertEqual(rados.mon.call_count, 2)
+
+    def test_restoration_requires_observed_removal(self):
+        for modules, passes in (([], True), (["selftest"], False)):
+            rados = Mock()
+            rados.mon.side_effect = [(0, b'{"enabled_modules":["selftest"]}'), (0, b''),
+                                     (0, json.dumps({"enabled_modules": modules}).encode())]
+            if passes:
+                self.assertTrue(oracle.mode_servicemetadata(rados, None, {"action": "restore"}, None)["restored"])
+            else:
+                with self.assertRaises(RuntimeError):
+                    oracle.mode_servicemetadata(rados, None, {"action": "restore"}, None)
 
 
 class PoolOracleTest(unittest.TestCase):

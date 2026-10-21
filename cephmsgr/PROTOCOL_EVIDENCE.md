@@ -134,7 +134,7 @@ selected MON/active-MGR Tell only; MDS and OSD command acceptance remains in #5.
 | 1800 | MgrService.Close; require echo or retain unknown outcome | [TestMgrServiceUnconfirmedOpenAndCloseKeepUncertainty](mgr_service_test.go), [TestMgrServiceNativeVectors](../internal/msgr/mgr_service_native_test.go) | R2, R18, R19, R20 |
 | 1801 | MgrCommand; raw JSON/binary input to active manager | [TestNativeMONAndMGRCommandPath](client_test.go) | R3 |
 | 1802 | MgrCommand Result; raw bytes/signed code, no uncertain replay | [TestMalformedCommandReplyPreservesOutputAndUnknownOutcome](reply_test.go) | R3 |
-| 1803 | MgrService.UpdateMetadata; explicit update, no replay after loss | [TestMgrUpdateEncoding](../internal/msgr/mgr_service_test.go), [TestMgrServiceNativeVectors](../internal/msgr/mgr_service_native_test.go) | R2, R18 |
+| 1803 | MgrService.UpdateMetadata; explicit update, no replay after loss | [TestMgrUpdateEncoding](../internal/msgr/mgr_service_test.go), [TestMgrServiceNativeVectors](../internal/msgr/mgr_service_native_test.go) | R2, R18, R21 |
 
 ## Implemented opcode evidence
 
@@ -261,6 +261,7 @@ Nothing in this document relabels those runs as passes of the present commit.
 | R18 | file-attributed | Pinned source/archive and producer/build/segment hashes in the receipt, Linux/amd64. Eight fresh native MGR service vectors cover five message types, binary map values, omitted versus empty reports, current configure and close codec. Offline header projection; no live lifecycle/renewal/failover or metadata-application claim | [MGR codec vectors](../internal/msgr/testdata/mgr-service-native-README.md) |
 | R19 | exact-commit | `97ad9d7a245f952d038e1574a5903bd93729ea1a`, Linux/amd64, CRC/AES IPv4 host and secure/aes256k IPv6 container. Ticket-expiry report, new active MGR identity, terminal old-handle refusals, sampled stable native absence, explicit registration and acknowledged removal. No applied metadata, lost-close echo or wire replay-count claim | [MGR service recovery](../integration/fixture/MGR_SERVICE_RECOVERY_VALIDATION.md) |
 | R20 | exact-commit | `bbb84c8590222dd70bf8fe13967995ae2e84de9a`, Linux/amd64 CRC/AES IPv4 host and secure/aes256k IPv6 container. Withheld receive: native removal precedes local cancellation; discarded send: native registration outlasts local unconfirmed Close, then expires. Both preserve uncertainty/terminal/idempotent result and show one MGR dial. No captured echo or native execution-count claim | [MGR unconfirmed close](../integration/fixture/MGR_SERVICE_CLOSE_VALIDATION.md) |
+| R21 | exact-commit | `e8c18f7c9f9913f6abacf12184943fd5b8d0c46e`, Linux/amd64 CRC/AES IPv4 host and secure/aes256k IPv6 container. Independent native MGR daemon-state reads match initial metadata, exact replacements and removal of omitted keys; a locally refused empty update leaves previous state intact. Initial MON ServiceMap metadata remains distinct. Owned selftest module restored; no same-field native registration parity claim | [MGR metadata application](../integration/fixture/MGR_SERVICE_METADATA_VALIDATION.md) |
 
 ## Acceptance boundary
 

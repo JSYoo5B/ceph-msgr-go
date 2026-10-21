@@ -6,6 +6,8 @@ Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
 Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
+servicemetadata prepares/restores the native selftest module and reads only a
+fixed get_metadata expression for the exclusive MGR service fixture.
 servicewatch polls the native MON `service dump` and MGR `service status` until a
 named service daemon matches the expected metadata/status/task status, or is
 absent, and reports the last native observation; it registers nothing.
@@ -32,7 +34,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "servicewatch", "fullratios", "osdflags", "inconsistent", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "servicewatch", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -453,6 +455,63 @@ def mode_servicewatch(rados, cluster, request, out):
         time.sleep(1)
 
 
+def mode_servicemetadata(rados, cluster, request, out):
+    # get_metadata is not exposed by cli_api. The disposable fixture alone
+    # enables the upstream selftest module, using only a fixed read expression.
+    # No source text or arbitrary command is accepted from the requester.
+    import time
+    action = request["action"]
+    if action in ("prepare", "restore"):
+        code, text = rados.mon(cluster, {"prefix": "mgr module ls", "format": "json"})
+        if code != 0:
+            raise RuntimeError("native module inventory failed: %d" % code)
+        enabled = "selftest" in json.loads(text)["enabled_modules"]
+        if action == "restore":
+            if enabled:
+                code, _ = rados.mon(cluster, {"prefix": "mgr module disable", "module": "selftest"})
+                if code != 0:
+                    raise RuntimeError("native selftest restoration failed: %d" % code)
+            code, text = rados.mon(cluster, {"prefix": "mgr module ls", "format": "json"})
+            if code != 0 or "selftest" in json.loads(text)["enabled_modules"]:
+                raise RuntimeError("native selftest removal was not observed")
+            return {"restored": True}
+        if not enabled:
+            code, _ = rados.mon(cluster, {"prefix": "mgr module enable", "module": "selftest"})
+            if code != 0:
+                raise RuntimeError("native selftest preparation failed: %d" % code)
+        deadline = time.monotonic() + 45
+        while True:
+            code, _ = rados.mgr(cluster, {"prefix": "mgr self-test python-version"})
+            if code == 0:
+                return {"ready": True, "module_enabled_by_test": not enabled}
+            if time.monotonic() >= deadline:
+                raise RuntimeError("native selftest command did not become ready: %d" % code)
+            time.sleep(1)
+    if action != "observe":
+        raise ValueError("invalid metadata action")
+    service, daemon = request["service"], request["daemon"]
+    if type(service) is not str or type(daemon) is not str or not SERVICE_NAME.fullmatch(service) or not SERVICE_NAME.fullmatch(daemon):
+        raise ValueError("invalid service or daemon name")
+    wanted = string_map(request["metadata"], "metadata")
+    if "hostname" in wanted:
+        raise ValueError("hostname is reserved by the native metadata projection")
+    wait = integer(request["wait_seconds"], 1, 45, "wait_seconds")
+    expression = "print(__import__('json').dumps(mgr.get_metadata(%r, %r)))" % (service, daemon)
+    deadline, observations = time.monotonic() + wait, 0
+    while True:
+        code, text = rados.mgr(cluster, {"prefix": "mgr self-test eval", "s": expression})
+        metadata = json.loads(text) if code == 0 else None
+        observations += 1
+        # The native projection adds hostname separately. All caller-supplied
+        # metadata must match exactly, including removal of previous keys.
+        matched = (type(metadata) is dict
+                   and {k: v for k, v in metadata.items() if k != "hostname"} == wanted)
+        if matched or time.monotonic() >= deadline:
+            return {"matched": matched, "metadata_code": code,
+                    "daemon_metadata": metadata, "observations": observations}
+        time.sleep(1)
+
+
 def mode_quota(rados, cluster, request, out):
     name = pool_name(request["slot"])
     limit = integer(request["max_objects"], 0, 1 << 20, "max_objects")
@@ -559,7 +618,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "servicewatch": mode_servicewatch, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "servicewatch": mode_servicewatch, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 
 def main(argv):
