@@ -207,7 +207,15 @@ branch. The live request on PR #29 passed at
 [run 39568633356](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39568633356):
 one expected MON-ping test actually passed, its artifact and final status named
 the same SHA/image, and no platform matrix was selected. This is a bounded
-request receipt, not full periodic coverage. Manual execution likewise needs
-its merged default-branch definition and an actual run before acceptance.
+request receipt, not full periodic coverage. After #30 merged, manual selection
+on main passed at `da661e737bca69f3dd5695eed9ba26a13188ea55` in
+[run 39574326673](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39574326673).
+It selected only `mon-ping.aes.ip4.crc.host.t-monping` (Linux/amd64 host,
+CRC, AES client/service, IPv4). The expected `TestCephMonPingIntegration` and
+five subtests actually passed, `tests.json` reported no problems, and the final
+request status and result artifact named that SHA and the pinned Ceph 20.2.4
+image digest. All seven fixture containers were terminated. No platform matrix
+was selected and the main-only request posted no PR comment. These are two
+bounded request receipts, not a full native matrix pass.
 Declaration-level changed-scenario selection, repeated campaigns and durable
 historical classification remain outside this checkpoint.

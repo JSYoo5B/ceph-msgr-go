@@ -49,6 +49,12 @@ Track implementation and verification separately:
 - Verification: unverified, synthetic/unit-tested, verified on selected native
   profiles, or accepted against every requirement of the specified stage.
 
+[PROTOCOL_EVIDENCE.md](cephmsgr/PROTOCOL_EVIDENCE.md) joins each declared client
+message and role-feature profile to its public boundary, unit/vector selector
+and attributed native receipt or explicit gap. Reference validation prevents
+missing rows/tests/records; it does not execute those tests or establish every
+semantic promise of an advertised feature bit.
+
 Current code includes secure/CRC framing, CephX aes/aes256k, MON/MGR commands,
 subscriptions and recovery; targeted OSD operations and control messages; and
 opt-in MDS sessions, metadata and explicit recovery primitives. These do not
