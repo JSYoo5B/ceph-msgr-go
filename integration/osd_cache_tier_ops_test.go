@@ -338,6 +338,17 @@ func TestCephOSDCacheTierOpsIntegration(t *testing.T) {
 		}
 	}
 	results["cache_operation_codes"], results["try_flush"], results["stopped"] = codes, n.TryFlush, n.Stopped
+	// Successful CI runs keep no diagnostics, so log the bounded observed
+	// outcome (codes, flags, synthetic versions); no identities or keys.
+	summary := map[string]any{"codes": codes, "try_flush": n.TryFlush, "stopped": n.Stopped, "steps": len(n.Steps), "native_sha256": results["native_sha256"]}
+	versions := map[string][2]uint64{}
+	for label, o := range n.Observations {
+		versions[label] = [2]uint64{o["base"].Version, o["tier"].Version}
+	}
+	summary["base_tier_versions"] = versions
+	if encoded, e := json.Marshal(summary); e == nil && len(encoded) < 16<<10 {
+		t.Logf("native tier-ops observed: %s", encoded)
+	}
 	if controlErr != nil {
 		t.Fatal("tier-ops control", controlErr, n.Stopped, n.Error)
 	}
