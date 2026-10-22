@@ -102,8 +102,11 @@ request shapes on v6, v8 and untraced v9, and the Go encoder matches each
 header, front, middle and data byte. The
 [native-only checkpoint](../../integration/fixture/OSD_CACHE_TIER_OPS_NATIVE_VALIDATION.md)
 records the server results of the same operations from librados on one
-fixture profile; it is not Go interoperability. No Go-originated cache
-operation has run against a daemon yet.
+fixture profile. The [Go acceptance](../../integration/fixture/OSD_CACHE_OP_GO_VALIDATION.md)
+sent all five operations from the Go client on one secure/aes256k IPv6
+container legacy-v6 single-BlueStore profile and matched a closed native
+observer at every step; other profiles, a live EAGAIN try-flush and a live
+lost reply remain unverified (the lost-reply boundary is synthetic).
 
 ## Evidence boundaries
 
