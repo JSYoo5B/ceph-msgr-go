@@ -15,7 +15,13 @@ pool, name, key and namespace. The packed 21-byte union plus 7 zero bytes is
 `snapid u64, src_version u64, flags u8, src_fadvise_flags u32`; the payload is
 the source `object_t` string, its `object_locator_t` struct, and, for
 COPY_FROM2 with `TRUNCATE_SEQ` (flag 32), `truncate_seq u32, truncate_size u64`.
-The payload length in the op header covers all of it.
+The payload length in the op header covers all of it. Go deliberately sends
+the minimal flagless COPY_FROM2 input. The pinned native Objecter builder
+always appends the two truncate fields, even when the flag is clear; its
+flagless input is therefore 12 bytes longer. PrimaryLogPG decodes these
+fields only with the flag set. The retained
+[native request vectors](testdata/copy-from-native-README.md) preserve that
+difference and do not claim raw-byte equality for flagless COPY_FROM2.
 
 `CopyFrom` input must be zero on every opcode other than COPY_FROM,
 COPY_FROM2 and SET_REDIRECT. This is checked before standalone opcode
@@ -27,12 +33,14 @@ plus continued use of the same public connection after rejection.
 
 ## Admitted subset
 
-- Standalone vectors only: every combination with another operation is refused
-  before submission (the daemon completes the copy through a restartable
-  finisher and the combined semantics are not characterized).
+- A copy may stand alone or lead a vector followed only by SETXATTR/RMXATTR.
+  A prefix, a second copy, data writes, reads, STAT and other suffixes are
+  refused before submission. The narrow copy/xattr contract is below; it
+  does not admit arbitrary operations through the restartable finisher.
 - Source snapid is `CEPH_NOSNAP` (the head) unless a snapshot id 1 through
   `MaxSnap` is supplied, which the OSD resolves to the covering clone.
-  `MAP_SNAP_CLONE`, fadvise hints and the cache-tier flags (`FLUSH`,
+  Source FADVISE hints are admitted within `OpFadviseMask`.
+  `MAP_SNAP_CLONE` and the cache-tier flags (`FLUSH`,
   `IGNORE_OVERLAY`, `IGNORE_CACHE`, `RWORDERED`) are unsupported.
 - COPY_FROM carries flags 0 (librados `copy_from`). COPY_FROM2 carries flags 0
   or `TRUNCATE_SEQ` with a nonzero sequence. A size without the flag, a zero
@@ -58,12 +66,22 @@ routed again.
 Synthetic wire, validation and public-transport tests pass for v6 and v8
 requests/replies (v9 shares the v8 encoder). Live acceptance passes on four
 single/3-replica profiles ([record](../../integration/fixture/OSD_COPY_FROM_VALIDATION.md)).
-It uses native observation, not a native-encoded vector or twin execution.
+Those historical live profiles use native observation, not twin execution.
+Fresh [native request vectors](testdata/copy-from-native-README.md) separately
+verify COPY_FROM and truncate-enabled COPY_FROM2 byte parity and the explicit
+flagless COPY_FROM2 difference. They do not execute an object copy.
 Observed: a copy that fails after the daemon started it reports its aggregate
 code (ENOENT, ERANGE, EOVERFLOW) with per-op `-115` (EINPROGRESS); the
 self-copy refusal reports `-22` in both places. Both are preserved raw. Source
 snapshot ids were verified against a real clone; cross-pool and cross-namespace sources were verified
-([record](../../integration/fixture/OSD_POOL_VALIDATION.md)); compound use and failover during a copy are unverified; a committed copy
+([record](../../integration/fixture/OSD_POOL_VALIDATION.md)). Later sections of
+the copy validation record cover COPY_FROM2 with xattr edits, source-primary
+change while its source is frozen, and destination loss while that source
+read is blocked. A later [compound checkpoint](../../integration/fixture/OSD_COPY_FROM_COMPOUND_VALIDATION.md)
+verifies both copy opcodes with xattr suffixes on absent/populated destinations,
+using an independent native copy baseline, object bytes/xattrs/OMAP/header,
+source mtime, user versions and known-unsent refusal/connection checks.
+Destination loss after source-read completion/staging remains unverified. A committed copy
 survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.
 
@@ -78,3 +96,14 @@ destination gets the source's bytes and attributes as edited by the later
 operations. Any other operation, an operation before the copy, a second copy
 or SET_REDIRECT in a vector is refused before submission. Live:
 [OSD_COPY_FROM_VALIDATION.md](../../integration/fixture/OSD_COPY_FROM_VALIDATION.md).
+
+## Native OMAP copy boundary
+
+On the pinned selected profiles, a source's empty OMAP key is omitted by
+COPY_FROM/COPY_FROM2 even when the native OSD reports success. Independent
+`rados cp` reproduces the same result. `PrimaryLogPG::do_copy_get` starts
+its OMAP walk with UPPER_BOUND at the empty cursor; nonempty keys and the
+header are copied in these tests. This is server-copy behavior, not a Go
+encoder correction or a promise of complete OMAP preservation. The product
+returns the raw result without inspecting source OMAP or emulating lost keys.
+See the [first failures, independent baseline and bounded acceptance](../../integration/fixture/OSD_COPY_FROM_COMPOUND_VALIDATION.md).

@@ -91,9 +91,9 @@ const (
 // echoes the requested logical extent, not the nested WRITE's clipped extent.
 // An offset-zero positive WriteSame refuses every subsequent offset-zero
 // positive Read/CompareExtent in the vector because that clipped size is unknown.
-// OSDCopyFrom and OSDCopyFrom2 make the targeted object a copy of the head of
-// the source in CopyFrom, which the OSD fetches itself. They are standalone,
-// flagless and carry no other field; see OSDCopyFromInput.
+// OSDCopyFrom and OSDCopyFrom2 copy the source selected by CopyFrom; the OSD
+// fetches it itself. A copy may stand alone or lead only SetXattr/RemoveXattr
+// operations. Other source/snapshot/truncate limits are in OSDCopyFromInput.
 // Truncate uses Offset as the new size. Create/Delete/Stat have zero extents.
 // AssertVersion uses Version, with zero extents and no payload. Only Create
 // accepts ExclusiveCreate. TruncateSize/TruncateSequence are the extent
