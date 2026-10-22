@@ -2394,5 +2394,21 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		checkInspect(t, "concurrent", n, all)
 		evidence.Positions["image_after_concurrent"] = v.Image.Positions
 		step("concurrent", map[string]any{"owner_tag": ownerTag.TID, "go_tag": goTag, "native_tag": nativeTag.TID, "entries": len(all), "close_ns": n.CloseNS})
+		// A compact record of the observed identities for the validation
+		// record; the full evidence is in rbd-journal-results.json.
+		where := func(entries []journalEntry) []string {
+			var out []string
+			for _, e := range entries {
+				out = append(out, fmt.Sprintf("%d/%d@obj%d+%d", e.Tag, e.EntryID, e.Object, e.ObjectOffset))
+			}
+			return out
+		}
+		t.Logf("tags: native owner %d pred (%d,%d), Go %d pred (%d,%d), native reacquire %d pred (%d,%d); next %d", ownerTag.TID, td.PredecessorTag, td.PredecessorEnt,
+			goTag, gtd.PredecessorTag, gtd.PredecessorEnt, nativeTag.TID, ntd.PredecessorTag, ntd.PredecessorEnt, v.NextTag)
+		t.Logf("entries: owner %v, Go %v, native %v; inspect %d entries, %d errors", where(ownerEntries), where(decodedGo), where(nativeEntries), len(all), inspectOf(t, n).Summary.Errors)
+		t.Logf("image client commit: at Go lock %v, after Go %v, final %v", imageAtLock.Positions, goCommitted, v.Image.Positions)
+		t.Logf("Go appends: tid %d (uv %d), concurrent tids %d and %d (uv %d, %d); notifications own %v native %v; lock held %s; aio returns %v; native close %d us",
+			evidence.ConcurrentOutcomes[0]["transaction"], evidence.ConcurrentOutcomes[0]["user_version"], concurrent[0].reply.Transaction, concurrent[1].reply.Transaction,
+			concurrent[0].reply.UserVersion, concurrent[1].reply.UserVersion, ownOps, nativeOps, evidence.Timings["concurrent_go_lock_held"], n.AioReturns, n.CloseNS/1000)
 	})
 }
