@@ -111,6 +111,8 @@ func erasureScenario(t *testing.T, width erasureWidth, optimized bool, plugin st
 		t.Fatalf("native EC placement differs: %+v", route)
 	}
 	controlShard := facts.checkPlacement(t, route)
+	t.Logf("native placement epoch %d pg %s acting %v up %v primary osd.%d shard %d (control shard %d)",
+		route.Epoch, route.PGID, route.Acting, route.Up, route.ID, route.Shard, controlShard)
 	o := mutationConnection(t, c, ctx, route)
 	defer o.Close()
 	send := func(timeout time.Duration, edit func(*cephmsgr.OSDRequest), ops ...cephmsgr.OSDOperation) (cephmsgr.OSDReply, error) {
