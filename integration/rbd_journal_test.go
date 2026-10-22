@@ -48,7 +48,7 @@ import (
 // concurrent session, native librbd keeps the image open read-write while
 // the exclusive lock goes native -> Go -> native through librbd's own lock
 // notifications: Go appends three entries under its own tag (two of them in
-// flight at once, guarded by `lock.assert_locked`) while native aio writes
+// flight at once) while native aio writes
 // wait for the lock, applies them to the data objects and commits the image
 // client's position, and native librbd then appends its queued writes under
 // a new tag. See integration/fixture/RBD_BASE_FIXTURE.md,
@@ -2157,18 +2157,6 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		// Entry 0 in librbd's form while the native writer is idle.
 		reply = vector(t, "concurrent_append_0", names[0], 0, classOp("journal", "append", cephmsgr.OSDCallWrite, append(slices.Clone(softMax), rbdJournalBL(entries[0])...)))
 		outcome("concurrent_append_0", reply, nil)
-		// A consumer may make an append conditional on its lock: with a
-		// cookie that is not the lock's, the OSD refuses the vector at the
-		// assertion and the journal object stays unchanged.
-		reply = vector(t, "concurrent_append_wrong_cookie", names[1], -16, classOp("lock", "assert_locked", cephmsgr.OSDCallRead, rbdLockAssertInput(rbdLockWrongCookie, rbdLockTag)),
-			classOp("journal", "append", cephmsgr.OSDCallWrite, append(slices.Clone(softMax), rbdJournalBL(entries[1])...)))
-		if reply.Operations[0].Result != -16 || reply.Operations[1].Result != 0 {
-			t.Fatal("refused guarded append per-op results differ", reply.Operations)
-		}
-		outcome("concurrent_append_wrong_cookie", reply, nil)
-		if got := readRaw(t, "concurrent_append_wrong_cookie_after", names[1], 256<<10); !bytes.Equal(got, olds[before.ActiveSet*splay+1]) {
-			t.Fatal("refused guarded append changed the journal object")
-		}
 
 		// The native writer issues its aio writes now; librbd queues them and
 		// asks Go, the lock owner, for the lock.
@@ -2182,8 +2170,12 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 			t.Fatal("native RequestLock while Go owns the lock differs", asked, issued.IsOwner)
 		}
 
-		// Entries 1 and 2 go out at once, each guarded by Go's lock cookie,
-		// while the native writes wait for the lock.
+		// Entries 1 and 2 go out at once, in librbd's form, while the native
+		// writes wait for the lock. cls_journal's append checks no lock: the
+		// image's exclusive lock lives on rbd_header.<id>, and a class method
+		// acts only on its request's object, so a journal data object append
+		// cannot carry an assertion of that lock. Ownership is the client
+		// protocol's alone.
 		type sent struct {
 			route rbdRoute
 			ops   []cephmsgr.OSDOperation
@@ -2195,8 +2187,7 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		for j := range concurrent {
 			i := j + 1
 			concurrent[j].route, conns[j] = route(t, names[i])
-			concurrent[j].ops = []cephmsgr.OSDOperation{classOp("lock", "assert_locked", cephmsgr.OSDCallRead, rbdLockAssertInput(cookie, rbdLockTag)),
-				classOp("journal", "append", cephmsgr.OSDCallWrite, append(slices.Clone(softMax), rbdJournalBL(entries[i])...))}
+			concurrent[j].ops = []cephmsgr.OSDOperation{classOp("journal", "append", cephmsgr.OSDCallWrite, append(slices.Clone(softMax), rbdJournalBL(entries[i])...))}
 		}
 		var wg sync.WaitGroup
 		for j := range concurrent {
@@ -2215,11 +2206,11 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		wg.Wait()
 		for j, s := range concurrent {
 			if s.err != nil {
-				t.Fatalf("Go guarded append %d: %v (recorded, not resent)", j+1, s.err)
+				t.Fatalf("Go concurrent append %d: %v (recorded, not resent)", j+1, s.err)
 			}
 			checkReply(t, s.route, s.reply, 0, true)
-			if len(s.reply.Operations) != 2 || s.reply.Operations[0].Result != 0 || s.reply.Operations[1].Result != 0 {
-				t.Fatal("guarded append per-op results differ", s.reply.Operations)
+			if len(s.reply.Operations) != 1 || s.reply.Operations[0].Result != 0 || s.reply.Operations[0].Class.OutputLength != 0 {
+				t.Fatal("concurrent append per-op results differ", s.reply.Operations)
 			}
 		}
 		if concurrent[0].reply.Transaction == concurrent[1].reply.Transaction {
