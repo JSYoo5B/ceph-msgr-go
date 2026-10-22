@@ -1,5 +1,9 @@
 # Standalone COPY_FROM / COPY_FROM2 verification
 
+Later codec checkpoint: [fresh native request vectors](../../internal/osd/testdata/copy-from-native-README.md)
+provide independent native encodings and retain the flagless COPY_FROM2
+12-byte difference. They are separate from the historical live results below.
+
 Run 2026-10-17 against Ceph 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`, image
 `quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`,

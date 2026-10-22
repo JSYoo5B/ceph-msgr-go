@@ -135,7 +135,8 @@ func TestCopyFromValidationBounds(t *testing.T) {
 			t.Fatal("valid copy", flags, n, err)
 		}
 	}
-	// Other opcodes may not carry the union, and COPY_FROM never composes.
+	// Other opcodes may not carry the union. Prefixes, non-xattr suffixes
+	// and multiple copies remain refused; the narrow xattr exception is separate.
 	other := Operation{Code: Stat, CopyFrom: base.CopyFrom}
 	if _, _, err := ValidateOperations([]Operation{other}, 4096); !errors.Is(err, ErrRequest) {
 		t.Fatal("stat carried copy input", err)

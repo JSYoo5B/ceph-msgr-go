@@ -29,7 +29,9 @@ const (
 // Snap zero (or NoSnap) selects the head and 1 through MaxSnap a snapshot the
 // OSD resolves to the covering clone. Version zero disables the source version
 // check. Only the librados flags (zero) and COPY_FROM2's TRUNCATE_SEQ are
-// admitted; fadvise hints and cache-tier flags are not.
+// admitted; SourceFadvise admits the source-read FADVISE hints. Cache-tier
+// flags are not admitted. Flagless COPY_FROM2 omits the unused 12-byte
+// truncate tail emitted by the native Objecter builder; see COPY_FROM_CONTRACT.md.
 type CopyFromInput struct {
 	Object           string
 	Locator          Locator
