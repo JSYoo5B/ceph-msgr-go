@@ -543,7 +543,7 @@ func (x *mdsCephFSDataControl) request(ctx context.Context, action string, argum
 		if !maps.Equal(result.Config, x.oracle.BaselineConfig) {
 			return result, errors.New("adopted data MDS runtime differs from its baseline")
 		}
-	case "debug-on", "debug-off", "log-pause", "log-resume", "blackhole-on":
+	case "debug-on", "debug-off", "log-pause", "log-resume", "blackhole-on", "client-drop-on":
 		var runtime struct {
 			Kind            string            `json:"kind"`
 			State           string            `json:"state"`
@@ -573,6 +573,9 @@ func (x *mdsCephFSDataControl) request(ctx context.Context, action string, argum
 		if action == "log-resume" && (runtime.Kind != "log-pause" || runtime.RestoreReadback["mds_log_pause"] != "false") ||
 			action == "blackhole-on" && (runtime.Kind != "blackhole-on" || runtime.Readback["ms_blackhole_client"] != "true") {
 			return result, errors.New("native data ACK-loss control was not read back")
+		}
+		if action == "client-drop-on" && (runtime.Kind != "client-drop-on" || len(runtime.Settings) != 2 || runtime.Readback["ms_blackhole_client"] != "true" || runtime.Readback["debug_ms"] != "10/10") {
+			return result, errors.New("native data incoming client drop was not read back")
 		}
 	case "flush-journal":
 		if result.FlushJournal == nil || result.FlushJournal.ReturnCode != 0 {
@@ -873,7 +876,31 @@ type cephfsDataFileEvidence struct {
 	Truncate *cephfsTrunc `json:",omitempty"`
 }
 
+// cephfsDataRestartRecipe selects the single owned MDS restart of one data
+// fixture run. Every other leaf is shared.
+type cephfsDataRestartRecipe int
+
+const (
+	// cephfsDataCapSnapRestart: dirty cap-snap generations, a dropped durable
+	// FLUSHSNAP ACK and completed-flush deduplication.
+	cephfsDataCapSnapRestart cephfsDataRestartRecipe = iota
+	// cephfsDataCapSendRestart: an admitted head UPDATE dropped before
+	// dispatch and a second UPDATE refused by the Lost session, both
+	// recovered explicitly after reconnect.
+	cephfsDataCapSendRestart
+)
+
 func TestCephMDSCephFSDataIntegration(t *testing.T) {
+	runCephMDSCephFSDataAcceptance(t, cephfsDataCapSnapRestart)
+}
+
+// TestCephMDSCephFSCapSendRecoveryIntegration runs the same owned data
+// fixture with the cap-send recovery restart instead of the cap-snap one.
+func TestCephMDSCephFSCapSendRecoveryIntegration(t *testing.T) {
+	runCephMDSCephFSDataAcceptance(t, cephfsDataCapSendRestart)
+}
+
+func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_DATA") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS_DATA=1 for owned native CephFS data acceptance")
 	}
@@ -2027,7 +2054,122 @@ func TestCephMDSCephFSDataIntegration(t *testing.T) {
 	}
 
 	capSnapsCreated := [2]bool{}
-	if !leaf("dirty_data_capsnaps_across_two_snapshots_and_mds_restart", func(t *testing.T) {
+	facts["restart_recipe"] = map[cephfsDataRestartRecipe]string{cephfsDataCapSnapRestart: "cap-snap", cephfsDataCapSendRestart: "cap-send"}[recipe]
+	if recipe == cephfsDataCapSendRestart && !leaf("uncertain_and_refused_cap_sends_recovered_across_mds_restart", func(t *testing.T) {
+		f := &cephfsDataFileEvidence{Name: "capsnap-file"}
+		files[f.Name] = f
+		st := create(t, f.Name)
+		f.Ino, f.ReplyCap, f.ReplyCaps, f.ReplyMaxSize = st.Ino, st.Cap, cephCapString(st.Cap.Caps), st.MaxSize
+		checkLayout(t, f, st)
+		sizes := [2]uint64{plan.CapSnapSizes[0], plan.CapSnapSizes[1]}
+		ensureMaxSize(t, f, sizes[1])
+		if c, _ := agent.cap(f.Ino); c.Issued&cephCapFileWR == 0 {
+			t.Fatalf("file lacks Fw: %s", cephCapString(c.Issued))
+		}
+		trunc := truncOf(f.Ino)
+		context := snapc(t, f.Ino)
+		gen1 := cephfsDataStream(plan.Seeds["capsnap-file-a"], sizes[0])
+		gen2 := cephfsDataStream(plan.Seeds["capsnap-file-b"], sizes[1])
+		image := append(slices.Clone(gen1), gen2[sizes[0]:]...)
+		var times [2]cephmsgr.MDSTime
+		// Each data write completes (ONDISK) before its metadata flush is
+		// prepared; recovery never repeats it.
+		times[0] = newMTime(f.Ino)
+		if err := osdIO.write(f.Ino, layout, 0, gen1, context, times[0], trunc); err != nil {
+			t.Fatal(err)
+		}
+		uncertain, err := agent.prepareHeadFlush(f.Ino, sizes[0], times[0], context.Sequence)
+		if err != nil {
+			t.Fatal("prepare the first UPDATE", err)
+		}
+		prepareRefused := func() *cephfsHeadFlush {
+			times[1] = newMTime(f.Ino)
+			if err := osdIO.write(f.Ino, layout, sizes[0], gen2[sizes[0]:], context, times[1], trunc); err != nil {
+				t.Fatal(err)
+			}
+			refused, err := agent.prepareHeadFlush(f.Ino, sizes[1], times[1], context.Sequence)
+			if err != nil {
+				t.Fatal("prepare the second UPDATE", err)
+			}
+			return refused
+		}
+		osdIO.mu.Lock()
+		for _, op := range osdIO.log {
+			if op.Leaf == osdIO.leaf && (op.Op != "write" || op.Code != 0 || op.ReplyFlags&cephmsgr.OSDReplyOnDisk == 0) {
+				osdIO.mu.Unlock()
+				t.Fatal("first data generation lacks ONDISK completion", op)
+			}
+		}
+		osdIO.mu.Unlock()
+		recoveryFacts := map[string]any{"context": context, "sizes": sizes}
+		facts["cap_send_recovery"] = recoveryFacts
+		var refused *cephfsHeadFlush
+		connection, session, agent, target, refused = recoverUncertainCapSends(t, ctx, control, client, dials, connection, session, agent, realms, metadata, osdIO, uncertain, prepareRefused, recoveryFacts)
+		osdIO.mu.Lock()
+		var written []cephfsDataObjectIO
+		for _, op := range osdIO.log {
+			if op.Leaf == osdIO.leaf && op.Op == "write" {
+				written = append(written, op)
+			}
+		}
+		osdIO.mu.Unlock()
+		recoveryFacts["writeback"] = written
+		for _, op := range written {
+			if op.Code != 0 || op.ReplyFlags&cephmsgr.OSDReplyOnDisk == 0 || op.RequestBytes == 0 || op.RequestSHA256 == "" {
+				t.Fatal("data generation lacks independent ONDISK completion metadata", op)
+			}
+		}
+		var acks [2]*cephfsFlushAck
+		deadline := time.Now().Add(15 * time.Second)
+		for acks[0] == nil || acks[1] == nil {
+			for _, ack := range agent.snapshot().FlushAcks {
+				for i, flush := range []*cephfsHeadFlush{uncertain, refused} {
+					if ack.Transaction == flush.Transaction && acks[i] == nil {
+						a := ack
+						acks[i] = &a
+					}
+				}
+			}
+			if (acks[0] == nil || acks[1] == nil) && time.Now().After(deadline) {
+				t.Fatalf("recovered UPDATE FLUSH_ACKs missing: %+v", agent.snapshot().FlushAcks)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		current, _ := agent.cap(f.Ino)
+		for i, flush := range []*cephfsHeadFlush{uncertain, refused} {
+			last := flush.Attempts[len(flush.Attempts)-1]
+			a := acks[i]
+			if a.Caps.Op != cephmsgr.MDSCapOpFlushAck || a.Caps.Ino != f.Ino || a.Caps.Dirty != cephCapFileWR || a.Caps.CapID != current.CapID ||
+				!last.Admitted || last.Generation != session.Status().Generation || a.Received.Before(last.Started) {
+				t.Fatalf("FLUSH_ACK %d does not correlate with its explicit recovery send: %+v %+v", i, a, last)
+			}
+		}
+		if acks[1].Arrival <= acks[0].Arrival {
+			t.Fatal("recovered FLUSH_ACKs arrived out of flush order", acks)
+		}
+		if k0, k1 := uncertain.Attempts[len(uncertain.Attempts)-1].Kind, refused.Attempts[len(refused.Attempts)-1].Kind; k0 != "resubmit" || k1 != "first-send" ||
+			len(uncertain.Attempts) != 2 || len(refused.Attempts) != 2 || refused.Attempts[0].Admitted || !uncertain.Attempts[0].Admitted {
+			t.Fatal("recovery attempt classes differ", uncertain.Attempts, refused.Attempts)
+		}
+		recoveryFacts["flushes"] = []cephfsHeadFlush{cloneCephFSHeadFlush(uncertain), cloneCephFSHeadFlush(refused)}
+		recoveryFacts["acks"] = acks
+		f.MTime = times[1]
+		closeFile(t, f, cephFileModeRDWR)
+		head, holes, err := osdIO.read(f.Ino, layout, 0, sizes[1], cephmsgr.OSDHeadSnapshot, trunc)
+		if err != nil || len(holes) != 0 || !bytes.Equal(head, image) {
+			t.Fatal("Go head bytes differ after cap-send recovery", err, holes)
+		}
+		nativeRead(t, f, f.Name, image)
+		stat := req(t, "stat", f.Name).Native.Stat
+		if stat == nil || !stat.Exists || stat.Ino != f.Ino || stat.Size != sizes[1] || stat.MTime != int64(times[1].Seconds) {
+			t.Fatal("native metadata after cap-send recovery differs", stat)
+		}
+		f.NativeStat = stat
+		recoveryFacts["native_stat"] = stat
+	}) {
+		return
+	}
+	if recipe == cephfsDataCapSnapRestart && !leaf("dirty_data_capsnaps_across_two_snapshots_and_mds_restart", func(t *testing.T) {
 		f := &cephfsDataFileEvidence{Name: "capsnap-file"}
 		files[f.Name] = f
 		st := create(t, f.Name)

@@ -19,7 +19,12 @@ One further `osd-cache-pools` row selects only
 `TestCephOSDCacheTierOpsIntegration`, the native-only cache-tier operation
 checkpoint. It reuses the already-forwarded `osd_cache_pools` input; the
 cache-pool fixture accepts only that selector or
-`TestCephOSDIgnoreCacheIntegration`. The catalog has 67 native rows in total.
+`TestCephOSDIgnoreCacheIntegration`.
+Two `mds-cephfs-capsend` rows select only
+`TestCephMDSCephFSCapSendRecoveryIntegration` in the two selected MDS
+profiles. They reuse the already-forwarded `mds_cephfs_data` input; the
+data fixture accepts only that selector or `TestCephMDSCephFSDataIntegration`.
+The catalog has 69 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

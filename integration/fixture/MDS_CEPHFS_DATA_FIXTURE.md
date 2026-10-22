@@ -2,7 +2,9 @@
 
 `CEPH_MSGR_TEST_MDS_CEPHFS_DATA=1` is a closed development-only extension of
 `CEPH_MSGR_TEST_MDS_FRESH=1`. It selects only
-`^TestCephMDSCephFSDataIntegration$` and excludes
+`^TestCephMDSCephFSDataIntegration$` or
+`^TestCephMDSCephFSCapSendRecoveryIntegration$` (one per run; they share
+every leaf except the single owned restart recipe) and excludes
 `CEPH_MSGR_TEST_MDS_COMMANDS=1`, `CEPH_MSGR_TEST_MDS_SESSIONS=1`,
 `CEPH_MSGR_TEST_MDS_CEPHFS=1`, `CEPH_MSGR_TEST_MDS_CEPHFS_RANKS=1` and
 `CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION=1`: it writes file data, sets a
@@ -131,8 +133,9 @@ time; the controller holds the shared MDS fresh scope lock and is bounded to
 | `restart-status` | none | read the transitional FSMap, owned rank, old GID presence and exact old-address fencing after fire and before adoption |
 | `restart-adopt` | none | prove the same owned daemon is active rank 0 with new GID, nonce and incarnation, old GID absent and unchanged FSID/FSCID/pools; publish the new target |
 | `debug-on`, `debug-off` | none | temporarily set `debug_mds=10/10`, `debug_ms=1/5` on the proven owned incarnation, or restore their baselines; journal intent and readback |
-| `log-pause` | none | once: set daemon-local `mds_log_pause=true` from a false baseline; journal intent and readback; restart discards the override only after the new incarnation reports baseline values |
+| `log-pause` | none | once, never while `client-drop-on` is active (including an intended or uncertain change): set daemon-local `mds_log_pause=true` from a false baseline; journal intent and readback; restart discards the override only after the new incarnation reports baseline values |
 | `blackhole-on` | none | once per owned incarnation, after confirmed pause: set and read back `ms_blackhole_client=true`; no client RPC is used for subsequent controls |
+| `client-drop-on` | none | cap-send recipe only, once per owned incarnation, after confirmed `debug-on` and never beside a journal pause or `blackhole-on`: set and read back `ms_blackhole_client=true` and `debug_ms=10/10`, so incoming client messages are dropped after Messenger receipt and before dispatch and each drop is logged; it has no restore action and is discarded only by the owned restart or restored by cleanup |
 | `log-resume` | none | restore/read back the existing pause only after its client blackhole is confirmed |
 | `flush-journal` | none | one journaled admin-socket barrier after confirmed resume/blackhole; require return code zero; an uncertain result is not retried |
 | `cap-log-mark` | none | mark the bounded owned daemon log after debug-on |
@@ -161,7 +164,12 @@ Cap-log input is bounded to 16 MiB, output to 64 groups and 2 KiB per line.
 An incoming caps message must name the exact registered client GlobalID and
 nonce; its handler must match operation, inode, TID and follows on the same
 logger thread. Only that context's matching snapshot or completed-flush
-branch is retained. Dropped ACKs separately require a same-thread counted
+branch is retained; for an UPDATE that is its completed-flush branch or the
+dirty-flush branch naming the client GlobalID and inode. An incoming client
+caps message dropped by `client-drop-on` is one ProtocolV2
+`handle_message blackhole` line; it carries no GlobalID, so only its exact
+peer address nonce (between `>>` and `conn(`) and an UPDATE/FLUSHSNAP tuple
+attribute it. Dropped ACKs separately require a same-thread counted
 GlobalID, destination nonce and identical ACK tuple before the blackhole
 line is retained. Other clients, unbound handler lines and pre-mark history are not
 evidence. A nonzero dropped count invalidates the acceptance.
