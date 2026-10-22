@@ -729,7 +729,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		if len(fields) != 2 || c.profile.osd != "1" || !nativeOwnedPoolModes[fields[1]] {
 			return errors.New("invalid native owned-pool oracle request")
 		}
-		if fields[1] == "servicemetadata" && c.profile.mgrService != "1" {
+		if (fields[1] == "servicemetadata" || fields[1] == "servicecompare") && c.profile.mgrService != "1" {
 			return errors.New("native metadata observation requires the exclusive MGR service profile")
 		}
 		args := []string{"python3", "/out/osd_pool_oracle.py", fields[1], "/tmp/ceph-msgr-test", "/out"}
@@ -738,6 +738,9 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			// A bounded 90 s watch may wait through the native 60 s beacon
 			// grace and then require a stable absence interval.
 			budget = 120 * time.Second
+		}
+		if fields[1] == "servicecompare" {
+			budget = 240 * time.Second
 		}
 		if err = c.runOracleCommandWithTimeout(ctx, out, args, "osd-pool-command.json", "native owned-pool oracle", budget); err != nil {
 			return err
@@ -1568,4 +1571,4 @@ func (c *fixtureCluster) poolPolicy(ctx context.Context) (poolPolicy, error) {
 }
 
 // nativeOwnedPoolModes are the requests the native owned-pool oracle accepts.
-var nativeOwnedPoolModes = map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "snapshot": true, "selfmanaged": true, "quota": true, "poolinfo": true, "clusterstat": true, "versions": true, "service": true, "servicewatch": true, "servicemetadata": true, "fullratios": true, "osdflags": true, "inconsistent": true, "cleanup": true}
+var nativeOwnedPoolModes = map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "snapshot": true, "selfmanaged": true, "quota": true, "poolinfo": true, "clusterstat": true, "versions": true, "service": true, "servicewatch": true, "servicecompare": true, "servicemetadata": true, "fullratios": true, "osdflags": true, "inconsistent": true, "cleanup": true}

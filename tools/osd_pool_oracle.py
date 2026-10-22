@@ -8,6 +8,8 @@ observe cross-pool, namespace and pool-snapshot behavior independently of the
 Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
+servicecompare independently registers a native service with the Go caller's
+fields, observes exact status replacements and confirms removal after shutdown.
 servicewatch polls the native MON `service dump` and MGR `service status` until a
 named service daemon matches the expected metadata/status/task status, or is
 absent, and reports the last native observation; it registers nothing.
@@ -34,7 +36,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "servicewatch", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -418,6 +420,12 @@ def mode_servicewatch(rados, cluster, request, out):
     want_metadata = string_map(request.get("metadata", {}), "metadata")
     want_status = string_map(request.get("status", {}), "status")
     want_task = string_map(request.get("task_status", {}), "task_status")
+    exact_status = request.get("exact_status", False)
+    if type(exact_status) is not bool:
+        raise ValueError("invalid exact_status")
+    after_beacon = request.get("after_beacon", "")
+    if type(after_beacon) is not str or len(after_beacon) > 64 or "\0" in after_beacon:
+        raise ValueError("invalid after_beacon")
     deadline = time.monotonic() + wait
     observed = {}
     matched_since, observations = None, 0
@@ -436,11 +444,15 @@ def mode_servicewatch(rados, cluster, request, out):
         if request["expect"] == "absent":
             matched = code == 0 and entry is None
         else:
+            status_matches = (status_entry is not None and status_entry.get("status") == want_status
+                              if exact_status else (not want_status or (status_entry is not None
+                                  and all(status_entry.get("status", {}).get(k) == v for k, v in want_status.items()))))
+            beacon = status_entry.get("last_beacon") if status_entry is not None else None
+            beacon_matches = not after_beacon or (type(beacon) is str and beacon > after_beacon)
             matched = (entry is not None
                        and all(entry.get("metadata", {}).get(k) == v for k, v in want_metadata.items())
                        and all(entry.get("task_status", {}).get(k) == v for k, v in want_task.items())
-                       and (not want_status or (status_entry is not None
-                            and all(status_entry.get("status", {}).get(k) == v for k, v in want_status.items()))))
+                       and status_matches and beacon_matches)
         observations += 1
         now = time.monotonic()
         if not matched:
@@ -453,6 +465,70 @@ def mode_servicewatch(rados, cluster, request, out):
             return dict(observed, matched=settled, expect=request["expect"],
                         matched_for_seconds=duration, observations=observations)
         time.sleep(1)
+
+
+def service_dictionary(value, label):
+    value = string_map(value, label)
+    if any(not k or "\0" in k or "\0" in v for k, v in value.items()):
+        raise ValueError("invalid native C string dictionary")
+    return b"".join(k.encode() + b"\0" + value[k].encode() + b"\0" for k in sorted(value)) + b"\0"
+
+
+def mode_servicecompare(rados, cluster, request, out):
+    # A separate native registration handle is shut down exactly once. The
+    # original handle remains an independent MON/MGR observer of its removal.
+    import time
+    service, daemon = request["service"], request["daemon"]
+    if type(service) is not str or type(daemon) is not str or not SERVICE_NAME.fullmatch(service) or not SERVICE_NAME.fullmatch(daemon):
+        raise ValueError("invalid service or daemon name")
+    metadata = service_dictionary(request["metadata"], "metadata")
+    statuses = request["statuses"]
+    if type(statuses) is not dict or set(statuses) != {"initial", "replacement", "empty"} or statuses["empty"] != {}:
+        raise ValueError("invalid comparison status phases")
+    encoded = {phase: service_dictionary(statuses[phase], "status") for phase in statuses}
+    register, update = rados.lib.rados_service_register, rados.lib.rados_service_update_status
+    register.argtypes, register.restype = [C.c_void_p, C.c_char_p, C.c_char_p, C.c_char_p], C.c_int
+    update.argtypes, update.restype = [C.c_void_p, C.c_char_p], C.c_int
+    native = rados.connect()
+    result = {"metadata": {}, "statuses": {}}
+    try:
+        rados.native.check(register(native, service.encode(), daemon.encode(), metadata))
+        for phase in ("initial", "replacement", "empty"):
+            rados.native.check(update(native, encoded[phase]))
+            observed = mode_servicewatch(rados, cluster, {
+                "service": service, "daemon": daemon, "expect": "present", "wait_seconds": 20,
+                "metadata": request["metadata"], "status": statuses[phase], "exact_status": True}, out)
+            if not observed["matched"]:
+                raise RuntimeError("native comparison status did not match: " + phase)
+            entry = observed["entry"]
+            if phase == "initial":
+                # librados also collects system metadata. Retain only fields
+                # supplied for comparison, never the native host inventory.
+                result.update(gid=entry["gid"], start_epoch=entry["start_epoch"], dump_epoch=observed["dump_epoch"])
+                result["metadata"] = {k: entry["metadata"][k] for k in request["metadata"]}
+            elif entry["gid"] != result["gid"] or entry["start_epoch"] != result["start_epoch"]:
+                raise RuntimeError("native registration identity changed during comparison")
+            result["statuses"][phase] = observed["status_entry"]["status"]
+    finally:
+        rados.lib.rados_shutdown(native)
+    # The void shutdown API is not a removal acknowledgement. Preserve an
+    # independent post-return observation and allow the native beacon grace.
+    started = time.monotonic()
+    code, text = rados.mon(cluster, {"prefix": "service dump", "format": "json"})
+    if code != 0:
+        raise RuntimeError("native post-shutdown observation failed: %d" % code)
+    entry = json.loads(text).get("services", {}).get(service, {}).get("daemons", {}).get(daemon)
+    result["present_after_shutdown"] = entry is not None
+    if entry is not None and entry["gid"] != result["gid"]:
+        raise RuntimeError("native identity changed after shutdown")
+    gone = mode_servicewatch(rados, cluster, {"service": service, "daemon": daemon,
+        "expect": "absent", "wait_seconds": 90, "stable_seconds": 3}, out)
+    result["removed"] = gone["matched"]
+    result["absence_seconds"] = gone["matched_for_seconds"]
+    result["removal_seconds"] = time.monotonic() - started
+    if not result["removed"]:
+        raise RuntimeError("native registration remains after shutdown")
+    return {"comparison": result}
 
 
 def mode_servicemetadata(rados, cluster, request, out):
@@ -618,7 +694,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "servicewatch": mode_servicewatch, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "servicewatch": mode_servicewatch, "servicecompare": mode_servicecompare, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 
 def main(argv):
