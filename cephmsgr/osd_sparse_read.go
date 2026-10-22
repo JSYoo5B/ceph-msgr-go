@@ -4,10 +4,17 @@ import "github.com/JSYoo5B/ceph-msgr-go/internal/osd"
 
 // OSDSparseRead reads allocated ranges and their bytes from an explicitly
 // targeted replicated-pool object: the head, or at ReadSnapshot the clone (or
-// head) the OSD resolves for that snapshot. The sole operation must have no
-// flags, write context or implicit whole-object range. Length must be
-// positive and bounded. Allocation granularity depends on the backing object
-// store.
+// head) the OSD resolves for that snapshot. Only fadvise cache hints are
+// accepted as operation flags; there is no write context or implicit
+// whole-object range. Length must be positive and bounded. Allocation
+// granularity depends on the backing object store.
+//
+// It may be standalone, or combined only with further OSDSparseRead and
+// OSDRead operations (the native librbd object read) in a head-only request
+// to the replicated primary, without FAILOK, extent truncate fields,
+// snapshot, replica reads or resubmission. Decoded compound results appear
+// only after the whole reply validates; on a negative aggregate they cover
+// the completed prefix. See internal/osd/SPARSE_READ_CONTRACT.md.
 const OSDSparseRead OSDOpcode = OSDOpcode(osd.SparseRead)
 
 // OSDSparseReadInput bounds accepted encoded output, including eight bytes of

@@ -58,7 +58,10 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	if err := ValidateChecksumCompoundRequest(r.Request); err != nil {
 		return msgr.MessageData{}, err
 	}
-	if ChecksumCompound(r.Operations) && r.Shard != -1 {
+	if err := ValidateSparseReadCompoundRequest(r.Request); err != nil {
+		return msgr.MessageData{}, err
+	}
+	if (ChecksumCompound(r.Operations) || SparseReadCompound(r.Operations)) && r.Shard != -1 {
 		return msgr.MessageData{}, ErrRequest
 	}
 	if r.IgnoreCache && r.Shard != -1 {

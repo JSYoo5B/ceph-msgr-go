@@ -7,8 +7,10 @@ written from LGPL-2.1 `src/include/rados.h:257`,
 `src/osd/PrimaryLogPG.cc:5931-6024`; no implementation is copied.
 
 `OSDSparseRead` reads a caller-selected nonempty interval on a caller-targeted
-replicated-pool object, the head or a read snapshot (`ReadSnap`). The
-operation must be standalone, with no flags or write context. Offset plus
+replicated-pool object, the head or a read snapshot (`ReadSnap`). Outside the
+[bounded compound subset](#bounded-sparse_readread-compounds) the operation is
+standalone. Only fadvise cache hints are accepted as operation flags, and
+there is no write context. Offset plus
 length must not overflow, and length must fit the configured message bound.
 At a snapshot the OSD resolves the object context for that snap id and runs
 the same handler on the resolved object (`oi.soid`, PrimaryLogPG.cc:5935): the
@@ -18,8 +20,8 @@ or -ENOENT when there is none (12187-12194), as for READ. The resolved
 object's size bounds the read and its store allocation map gives the
 extents. librbd sends this form for whole-object parent reads at the parent
 snapshot (observed in native traces) and, per source, for clone-snapshot
-reads. EC and compound sequencing require
-separate characterization and are unsupported.
+reads. EC requires separate characterization and is unsupported;
+compounds are limited to the subset below.
 The caller still supplies placement, map epoch and connection identity.
 
 The request uses the ordinary offset/length extent union and no input bytes.
@@ -96,3 +98,90 @@ retains proof, and injects only the opt-in marker into the test process. The Pyt
 `out/osd_sparse_read_oracle`; configuration/keyring files remain in the fixture
 root. Setting the marker without a valid staged matching binary fails the test
 instead of silently falling back to a Go-derived or modeled oracle.
+
+## Bounded SPARSE_READ/READ compounds
+
+The native caller is the librbd object read
+(`librbd/io/ObjectRequest.cc:238-246` at the pinned commit). It builds one
+read operation per image extent, choosing SPARSE_READ at or above
+`sparse_read_threshold_bytes` and READ below it, then applies one fadvise hint
+to the last operation (`librbd/io/Utils.cc:28-44`,
+`neorados/RADOS.cc:449-452`). The admitted subset follows that shape.
+
+A vector with at least two operations and at least one SPARSE_READ admits
+only SPARSE_READ and READ, up to the ordinary 64-operation bound. Each
+operation may carry fadvise hints and nothing else. FAILOK, EXCL, unknown
+flags, extent truncate fields, input bytes and every other opcode (including
+STAT, ASSERT_VER, CMPEXT, xattr/OMAP reads, CHECKSUM, MAPEXT, CALL and all
+mutations) are refused before a transaction ID is allocated. The request is
+head-only (`ReadSnap` zero or `NoSnap`) and explicitly targets the replicated
+primary. Snapshot selection, balanced/localized replica reads, IgnoreCache,
+EnforceSnapContext, explicit resubmission, erasure placement and a v8/v9 shard
+other than `NO_SHARD` are refused for this subset. Ordering, lock-bypass and
+redirect request flags keep their ordinary validators. Standalone SPARSE_READ,
+including its snapshot form, is unchanged. CHECKSUM compounds keep their own
+subset, so a vector containing both CHECKSUM and SPARSE_READ is refused.
+
+Both pinned handlers read `ctx->new_obs.oi` (`PrimaryLogPG.cc:5835-6024`).
+Because no admitted operation stages a write, that object state is the
+committed state for every operation in the vector. The staged-versus-committed
+divergence that keeps MAPEXT, metadata reads after writes and full-object
+digest reads after writes refused cannot arise in this subset. Each operation
+is evaluated on the same object context in order and sees the same size,
+truncate sequence and data digest.
+
+Each SPARSE_READ keeps its own `MaxOutputBytes`, and each READ is bounded by
+its own length. Their sum, and separately the sum of all logical extent
+lengths, must fit the local frame limit, so many small output budgets cannot
+multiply server read work beyond one frame. The enclosing reply budget adds
+every per-operation output bound. Each reply operation consumes exactly its
+`payload_len` bytes of reply data, and SPARSE_READ output must still decode
+to an in-range, ordered extent map whose byte count matches its returned
+length.
+
+Tentacle stops at the first negative operation and keeps the output of earlier
+operations (`PrimaryLogPG.cc:8205-8213`). Because FAILOK is refused, a
+negative aggregate must equal the first negative per-op result. Earlier
+operations validate as successes. A failed SPARSE_READ returns its original
+union and no output, because the handler returns before encoding. A failed
+READ has a zero length and may keep bytes read before a digest failure, bounded
+by its request. Later operations must keep result zero, no output and their
+original union. A missing object fails before any operation runs, with
+all-zero per-op results and no output. That ambiguity is preserved: no prefix
+is attributed and no failed operation is synthesized. Malformed or
+contradictory replies keep raw front/data and fail the session through the
+existing uncertain-outcome path.
+
+Decoded `SparseRead` results of a compound appear only after the complete
+reply validates, and on a negative aggregate only for the completed prefix.
+Raw `Data` and `RawData` stay available. The native C++ convenience callback
+differs from the raw wire: `CB_ObjectOperation_sparse_read` turns a zero
+result with an empty buffer into -EIO (`osdc/Objecter.h:526-548`). A native
+comparison must preserve that boundary rather than reading it as a raw rval.
+
+### Evidence for the compound subset
+
+These kinds of evidence are distinct:
+
+- Native request codec: the [15-request fresh native proof](testdata/sparse-read-compound-native-README.md)
+  matches complete v6/v8/v9 request segments for five layouts, including
+  per-operation fadvise flags. It contains no replies and no execution.
+- Unit tests: `TestSparseReadCompound*` in this package cover admitted and
+  refused shapes across the three encoders, aggregate budgets, request scope
+  and reply prefix/terminal/suffix/ambiguity rules. `TestOSDSparseReadCompound*`
+  in `cephmsgr` cover public refusal before admission, prefix decoding on all
+  four profiles and session failure on malformed replies, against synthetic
+  transcripts rather than native bytes.
+- Live daemon: `integration/osd_sparse_read_compound_test.go` compares each
+  operation of five Go compounds with independent native readback (the
+  pinned `rados mapext` CLI's full allocation map plus C librados stat and
+  dense read bytes). It also checks version and unchanged state,
+  missing-object ambiguity, local refusal before transmission and
+  output-budget session isolation. The native client does not execute the
+  compound or a partial SPARSE_READ; per-op extents are the intersection of
+  the native full map with each clipped range. [The validation record](../../integration/fixture/OSD_SPARSE_READ_COMPOUND_VALIDATION.md)
+  lists the configurations actually run.
+
+Snapshot compounds, replica reads, EC, MAPEXT compounds, compounds with
+STAT/ASSERT_VER/CMPEXT/xattr guards, mid-vector daemon errors and faults remain
+unverified and refused.

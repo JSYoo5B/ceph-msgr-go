@@ -60,6 +60,12 @@ them, and a clipped READ, a trimmed old WRITE and a no-op sequenced TRUNCATE
 reply. They are offline codec proof only and claim no live truncation,
 trimming or durability.
 
+[Fresh SPARSE_READ/READ compound request fixtures](sparse-read-compound-native-README.md)
+independently construct fifteen requests: five librbd-shaped layouts of
+SPARSE_READ with READ or SPARSE_READ, with native fadvise hints, across v6, v8
+and v9. They are offline request codec proof only and claim no allocation
+map, EOF behavior or execution outcome.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from
