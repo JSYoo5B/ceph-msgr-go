@@ -171,13 +171,14 @@ func TestOSDCachePoolPublicTransportAndUnknownMutation(t *testing.T) {
 					}
 					return client, nil
 				}
-				osdDials.Add(1)
+				// Each OSD session identifies as the ID the test opened it with.
+				osdID := osdDials.Add(1) - 1
 				peer := &osdTestPeer{conn: server, requests: make(chan msgr.MessageData, 8), done: make(chan struct{})}
 				peers <- peer
 				go func() {
 					defer close(peer.done)
 					defer server.Close()
-					r, w, err := mockAuthenticate(server, peerConfig{role: 4, payload: func(tag msgr.Tag, p []byte) []byte {
+					r, w, err := mockAuthenticate(server, peerConfig{role: 4, id: uint64(osdID), payload: func(tag msgr.Tag, p []byte) []byte {
 						mask := osd.FeatureCachePool
 						if profile.replicatedPG() {
 							mask |= 1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<57
@@ -277,6 +278,39 @@ func TestOSDCachePoolPublicTransportAndUnknownMutation(t *testing.T) {
 				}
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
+			}
+			// A sent cache flush whose connection is lost stays unknown with
+			// its identity and is neither redialed nor resent.
+			// A distinct OSD ID opens a fresh session; the lost one is not reused.
+			o, err = c.OpenOSD(ctx, OSDTarget{ID: 1, Address: "192.0.2.1:6804"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer = <-peers
+			flush := request
+			flush.IgnoreOverlay, flush.Operations = true, []OSDOperation{{Code: OSDCacheFlush}}
+			if profile.replicatedPG() {
+				flush.Placement = &OSDPlacement{PG: OSDPG{Pool: 1}, Primary: 1}
+			}
+			go func() { r, err := o.Request(ctx, flush); done <- result{r, err} }()
+			cached := peer.next(t)
+			if flags := uint64(binary.LittleEndian.Uint32(cached.Front[offset:])); flags&(osd.FlagIgnoreCache|osd.FlagIgnoreOverlay|osd.FlagRead) != osd.FlagIgnoreCache|osd.FlagIgnoreOverlay|osd.FlagRead || flags&(osd.FlagWrite|osd.FlagSkipRWLocks) != 0 {
+				t.Fatalf("cache flush request flags %#x", flags)
+			}
+			peer.conn.Close()
+			select {
+			case got := <-done:
+				var unknown *OutcomeUnknownError
+				if !errors.As(got.err, &unknown) || got.reply.Submission.Transaction != cached.Transaction || cached.Transaction == mutation.Transaction || osdDials.Load() != 2 {
+					t.Fatal("uncertain cache flush lost identity or retried", got.reply.Submission, got.err, osdDials.Load())
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			select {
+			case extra := <-peer.requests:
+				t.Fatal("cache flush was resent", extra.Transaction)
+			default:
 			}
 		})
 	}
