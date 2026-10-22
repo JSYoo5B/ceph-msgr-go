@@ -66,6 +66,12 @@ SPARSE_READ with READ or SPARSE_READ, with native fadvise hints, across v6, v8
 and v9. They are offline request codec proof only and claim no allocation
 map, EOF behavior or execution outcome.
 
+[Fresh cache-tier operation request fixtures](cache-op-native-README.md)
+independently construct twenty-one requests: CACHE_FLUSH, CACHE_TRY_FLUSH,
+CACHE_EVICT, and CACHE_PIN/CACHE_UNPIN with and without IGNORE_CACHE, with
+native-caller request flags, across v6, v8 and v9. They are offline request
+codec proof only; the Go encoder still refuses these opcodes.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from
