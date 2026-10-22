@@ -72,7 +72,21 @@ FLUSH_ACK), `_do_cap_update`, `file_update_finish`; Client.cc
 
 ## Native results (2026-10-22)
 
-### After rebase onto main and the symmetric runtime guard
+### After rebase onto main with #40, #41, #44, #45 and #47
+
+Tested PR head `38556edd7c9239d3e2fc51db931c41834952ac21` (rebased onto
+`4f9fd9d`; 69-row combined catalog), workflow from that main commit:
+[run 39829344102](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39829344102).
+Basic PR CI also passed at this head.
+
+| Selector | Configuration | Entire test | Restart leaf | Result |
+| --- | --- | --- | --- | --- |
+| cap-send | IPv4 host, CRC, AES, BlueStore | 225.53 s | 71.97 s | PASS |
+| cap-send | IPv6 container, secure, AES256K, MemStore | 180.68 s | 57.65 s | PASS |
+| data (regression) | IPv4 host, CRC, AES, BlueStore | 293.23 s | 127.64 s | PASS |
+| data (regression) | IPv6 container, secure, AES256K, MemStore | 255.30 s | 108.65 s | PASS |
+
+### After the first rebase onto main and the symmetric runtime guard
 
 Tested PR head `c2d6cd3da9517a8024dc294918149b3b46c0e39b`: the branch rebased
 onto `3de2098eb6c9eec5a1e1228208f0714d9ace8cb3`, with `log-pause` refused
