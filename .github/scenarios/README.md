@@ -11,6 +11,10 @@ commit cancels its previous basic checks. Push events do not repeat PR CI.
 
 `catalog.json` preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
+One further `osd` row selects only `TestCephOSDErasureK2M2Integration` on the
+four-OSD erasure-capacity topology (`osd_replicas` value `4`). That value
+travels in the already-forwarded `osd_replicas` input, so it needs no new
+workflow parameter; the fixture refuses it with any other selector.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

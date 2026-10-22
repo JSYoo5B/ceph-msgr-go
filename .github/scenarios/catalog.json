@@ -524,6 +524,22 @@
    }
   },
   {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasurek2m2",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureK2M2Integration$"
+   }
+  },
+  {
    "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-suite-16671c",
    "group": "osd",
    "params": {
