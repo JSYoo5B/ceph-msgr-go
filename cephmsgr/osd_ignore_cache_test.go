@@ -281,3 +281,50 @@ func TestOSDCachePoolPublicTransportAndUnknownMutation(t *testing.T) {
 		})
 	}
 }
+
+func TestOSDCacheOperationPreflight(t *testing.T) {
+	native := map[OSDOpcode]OSDRequest{
+		OSDCacheFlush:    {IgnoreCache: true, IgnoreOverlay: true},
+		OSDCacheTryFlush: {IgnoreCache: true, IgnoreOverlay: true, SkipRWLocks: true},
+		OSDCacheEvict:    {IgnoreCache: true, IgnoreOverlay: true, SkipRWLocks: true},
+		OSDCachePin:      {},
+		OSDCacheUnpin:    {IgnoreCache: true},
+	}
+	for code, r := range native {
+		o := backoffUnitConnection()
+		o.client.options.EnableOSDCachePools = true
+		o.features |= osd.FeatureCachePool
+		r.Operations = []OSDOperation{{Code: code}}
+		if err := o.validateIgnoreCache(r); err != nil {
+			t.Fatal("IgnoreCache preflight refused a cache operation", code, err)
+		}
+		if err := o.validateCacheOperation(r); err != nil {
+			t.Fatal("native cache flag set refused", code, err)
+		}
+		for name, edit := range map[string]func(*OSDConnection, *OSDRequest){
+			"default-deny":    func(o *OSDConnection, r *OSDRequest) { o.client.options.EnableOSDCachePools = false },
+			"missing-feature": func(o *OSDConnection, r *OSDRequest) { o.features &^= osd.FeatureCachePool },
+			"resubmit":        func(o *OSDConnection, r *OSDRequest) { r.Resubmit = &OSDSubmission{Transaction: 1} },
+			"erasure":         func(o *OSDConnection, r *OSDRequest) { r.Placement = &OSDPlacement{Erasure: true} },
+			"compound": func(o *OSDConnection, r *OSDRequest) {
+				r.Operations = append(r.Operations, OSDOperation{Code: OSDStat})
+			},
+			"wrong-locks": func(o *OSDConnection, r *OSDRequest) { r.SkipRWLocks = !r.SkipRWLocks },
+		} {
+			o, r := backoffUnitConnection(), r
+			o.client.options.EnableOSDCachePools = true
+			o.features |= osd.FeatureCachePool
+			edit(o, &r)
+			if err := o.validateCacheOperation(r); err == nil {
+				t.Fatal("invalid cache request passed preflight", code, name)
+			}
+		}
+	}
+	o := backoffUnitConnection()
+	if err := o.validateCacheOperation(OSDRequest{Operations: []OSDOperation{{Code: OSDRead}}}); err != nil {
+		t.Fatal("ordinary request policy changed", err)
+	}
+	if err := o.validateCacheOperation(OSDRequest{Operations: []OSDOperation{{Code: OSDRead}}, IgnoreOverlay: true}); err == nil {
+		t.Fatal("IgnoreOverlay admitted outside a cache operation")
+	}
+}

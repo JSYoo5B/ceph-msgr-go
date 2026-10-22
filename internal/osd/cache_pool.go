@@ -13,6 +13,10 @@ func ValidateIgnoreCache(r Request, features uint64) error {
 	if !r.IgnoreCache {
 		return nil
 	}
+	// A cache-tier operation carries its own request contract.
+	if len(r.Operations) == 1 && IsCacheOperation(r.Operations[0].Code) {
+		return ValidateCacheRequest(r, features)
+	}
 	if features&FeatureCachePool == 0 {
 		return ErrFeatures
 	}

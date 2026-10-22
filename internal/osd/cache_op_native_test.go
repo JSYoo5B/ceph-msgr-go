@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,29 +14,39 @@ import (
 )
 
 // Offline native request encoding/decoding only. These vectors do not prove
-// tier state, dirty or pin flags, lock modes or any server execution. The Go
-// encoder does not implement these opcodes yet; this test retains the native
-// requests and binds the current refusal so that a later admission stage must
-// replace it with byte parity.
+// tier state, dirty or pin flags, lock modes or any server execution. Each Go
+// request with the matching IgnoreCache/IgnoreOverlay/SkipRWLocks inputs must
+// equal its native header, front, middle and data.
 var cacheOpNativeShapes = []struct {
-	name  string
-	code  uint16
-	flags uint64
-	write bool
+	name                            string
+	code                            uint16
+	flags                           uint64
+	write                           bool
+	ignoreCache, overlay, skipLocks bool
 }{
-	{"flush", 0x821f, 0x10 | 0x8000 | 0x20000, false},
-	{"try-flush", 0x8221, 0x10 | 0x8000 | 0x20000 | 0x10000, false},
-	{"evict", 0x8220, 0x10 | 0x8000 | 0x20000 | 0x10000, false},
-	{"pin", 0x2224, 0x20, true},
-	{"pin-ignore-cache", 0x2224, 0x20 | 0x8000, true},
-	{"unpin", 0x2225, 0x20, true},
-	{"unpin-ignore-cache", 0x2225, 0x20 | 0x8000, true},
+	{"flush", 0x821f, 0x10 | 0x8000 | 0x20000, false, true, true, false},
+	{"try-flush", 0x8221, 0x10 | 0x8000 | 0x20000 | 0x10000, false, true, true, true},
+	{"evict", 0x8220, 0x10 | 0x8000 | 0x20000 | 0x10000, false, true, true, true},
+	{"pin", 0x2224, 0x20, true, false, false, false},
+	{"pin-ignore-cache", 0x2224, 0x20 | 0x8000, true, true, false, false},
+	{"unpin", 0x2225, 0x20, true, false, false, false},
+	{"unpin-ignore-cache", 0x2225, 0x20 | 0x8000, true, true, false, false},
+}
+
+func cacheOpNativeRequest(code uint16, write, ignoreCache, overlay, skipLocks bool) Request {
+	r := Request{ClientInc: 1, MapEpoch: 11, Locator: Locator{Pool: 7, Key: "route-key", Namespace: "tenant", Hash: -1}, Object: "cache-op-codec", Hash: 0x11223344,
+		Operations: []Operation{{Code: code}}, IgnoreCache: ignoreCache, IgnoreOverlay: overlay, SkipRWLocks: skipLocks}
+	if write {
+		r.MTimeSeconds, r.MTimeNanoseconds = 1700000000, 123456789
+	}
+	return r
 }
 
 type cacheOpNativeFixture struct {
 	ignoreCacheNativeFixture
 	Shape   string `json:"shape"`
 	Decoded struct {
+		Features   uint64 `json:"features"`
 		Flags      uint64 `json:"flags"`
 		MTime      uint32 `json:"mtime_seconds"`
 		MTimeNanos uint32 `json:"mtime_nanoseconds"`
@@ -90,6 +99,9 @@ func TestCacheOperationsRetain21FreshNativeRequests(t *testing.T) {
 				if version != 6 {
 					offset = 32
 				}
+				if f.Decoded.Features != ignoreCacheNativeFeatures[version] {
+					t.Fatal("native vector must carry the negotiated cache-pool capability")
+				}
 				if f.Decoded.Flags != flags || uint64(binary.LittleEndian.Uint32(front[offset:])) != flags {
 					t.Fatalf("native request flags %#x, want %#x", f.Decoded.Flags, flags)
 				}
@@ -105,10 +117,24 @@ func TestCacheOperationsRetain21FreshNativeRequests(t *testing.T) {
 				if bytes.Count(front, packed) != 1 {
 					t.Fatal("native wire op count/order/packed union differs")
 				}
-				// Codec stage only: the Go encoder still refuses every cache opcode.
-				r := Request{ClientInc: 1, MapEpoch: 11, Locator: Locator{Pool: 7, Key: "route-key", Namespace: "tenant", Hash: -1}, Object: "cache-op-codec", Hash: 0x11223344, Operations: []Operation{{Code: shape.code}}}
-				if _, err := EncodeRequest(r, ignoreCacheNativeFeatures[6], wire.DefaultLimit); !errors.Is(err, ErrOperation) {
-					t.Fatalf("cache opcode %#x must remain refused before admission: %v", shape.code, err)
+				r := cacheOpNativeRequest(shape.code, shape.write, shape.ignoreCache, shape.overlay, shape.skipLocks)
+				features := ignoreCacheNativeFeatures[version]
+				var got msgr.MessageData
+				switch version {
+				case 6:
+					got, err = EncodeRequest(r, features, wire.DefaultLimit)
+				case 8:
+					got, err = EncodeRequestV8(V8Request{Request: r, PG: PG{Pool: 7, Seed: 0x44}, Shard: -1}, features, wire.DefaultLimit)
+				case 9:
+					got, err = EncodeRequestV9(V9Request{Request: r, PG: PG{Pool: 7, Seed: 0x44}, Shard: -1}, features, wire.DefaultLimit)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				// Both sides encode the negotiated cache-pool bit 35 in the front.
+				got.Sequence, got.Transaction, got.AckSequence = 1, 77, 3
+				if !bytes.Equal(got.Frame().Segments[0], header) || !bytes.Equal(got.Front, front) || !bytes.Equal(got.Middle, middle) || !bytes.Equal(got.Data, data) {
+					t.Fatal("Go header/front/middle/data differ from canonical fresh native request")
 				}
 			})
 		}

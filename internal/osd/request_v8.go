@@ -55,6 +55,9 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	if err := ValidateIgnoreCache(r.Request, features); err != nil {
 		return msgr.MessageData{}, err
 	}
+	if err := ValidateCacheRequest(r.Request, features); err != nil {
+		return msgr.MessageData{}, err
+	}
 	if err := ValidateChecksumCompoundRequest(r.Request); err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -114,6 +117,9 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	flags |= ordering
 	if r.IgnoreCache {
 		flags |= FlagIgnoreCache
+	}
+	if r.IgnoreOverlay {
+		flags |= FlagIgnoreOverlay
 	}
 	if r.RetryAttempt < 0 || r.Request.RetryAttempt > MaxRetryAttempt {
 		return msgr.MessageData{}, ErrRequest
