@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import osd_omap_write_native as writes
 from test_osd_xattr_native import Library
@@ -92,6 +92,51 @@ class FakeSnapNative:
 
 
 class OmapWriteNativeTests(unittest.TestCase):
+    def test_native_copy_rejects_aliases_and_unsupported_inputs(self):
+        source, destination = owned(b"main-"), owned(b"absent-")
+        valid = dict(source=source, object=destination)
+        self.assertEqual(writes.validate_request(valid, "copy")["source"], source.encode())
+        for bad in (dict(valid, object=source), dict(valid, source=None),
+                    dict(valid, namespace="other"), dict(valid, operations=[])):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                writes.validate_request(bad, "copy")
+
+    def test_native_copy_requires_owned_absent_target_and_never_retries(self):
+        source, destination = owned(b"main-"), owned(b"absent-")
+        request = writes.validate_request(dict(source=source, object=destination), "copy")
+        with tempfile.TemporaryDirectory() as directory:
+            out = Path(directory)
+            (out / (writes.OWNED + ".json")).write_text(json.dumps(ownership_receipt([source, destination])))
+            for exit_code in (0, 1):
+                native, cli = Mock(), Mock()
+                native.full_state.side_effect = [{"code": -2}, {"code": 0}]
+                cli.copy.return_value = exit_code
+                result = writes.execute(native, None, METADATA, request, "copy", out, cli)
+                self.assertEqual(result["copy_exit"], exit_code)
+                cli.copy.assert_called_once_with(source.encode(), destination.encode())
+                self.assertEqual(native.full_state.call_count, 2)
+            native, cli = Mock(), Mock()
+            native.full_state.return_value = {"code": 0}
+            with self.assertRaises(ValueError):
+                writes.execute(native, None, METADATA, request, "copy", out, cli)
+            cli.copy.assert_not_called()
+            foreign = dict(request, source=b"foreign")
+            with self.assertRaises(ValueError):
+                writes.execute(native, None, METADATA, foreign, "copy", out, cli)
+            cli.copy.assert_not_called()
+
+    def test_native_copy_uses_fixed_argv_and_does_not_retry_timeout(self):
+        cli = writes.HeaderCLI(Path("fixture"), METADATA, "")
+        with patch.object(writes.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"", b"")) as run:
+            self.assertEqual(cli.copy(b"source", b"destination"), 0)
+            self.assertEqual(run.call_args.args[0], cli.base + ["cp", "source", "destination"])
+            self.assertEqual(run.call_args.kwargs["timeout"], 30)
+            run.assert_called_once()
+        with patch.object(writes.subprocess, "run", side_effect=subprocess.TimeoutExpired([], 30)) as run:
+            with self.assertRaises(subprocess.TimeoutExpired):
+                cli.copy(b"source", b"destination")
+            run.assert_called_once()
+
     def test_admits_bounded_binary_inputs_and_rejects_ambiguity(self):
         prepared = writes.validate_request({"seed": {"baseline": encode(b"\0\xff"),
                                                      "entries": [{"key": "", "value": ""},

@@ -51,9 +51,10 @@ func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 		RefusedVectors int            `json:"refused_vectors"`
 	}
 	receipt := struct {
-		Source  omapWriteState `json:"source"`
-		Cases   []caseReceipt  `json:"cases"`
-		Removed bool           `json:"objects_removed"`
+		Source     omapWriteState `json:"source"`
+		NativeCopy omapWriteState `json:"native_copy"`
+		Cases      []caseReceipt  `json:"cases"`
+		Removed    bool           `json:"objects_removed"`
 	}{}
 	prepared := false
 	t.Cleanup(func() {
@@ -61,7 +62,7 @@ func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 			cleanup, stop := context.WithTimeout(context.Background(), 40*time.Second)
 			defer stop()
 			r := nativeOmapWrite(t, cleanup, base, "cleanup", omapWriteInput{})
-			receipt.Removed = r.Cleanup.Removed && len(r.Cleanup.Objects) == 5
+			receipt.Removed = r.Cleanup.Removed && len(r.Cleanup.Objects) == 6
 			if !receipt.Removed {
 				t.Error("compound copy owned-object cleanup differs", r.Cleanup)
 			}
@@ -75,10 +76,10 @@ func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 		}
 	})
 	owned := nativeOmapWrite(t, ctx, base, "prepare", omapWriteInput{
-		Seed: &omapWriteSeed{Baseline: data, Attributes: attrs, Entries: omapWriteEntries(model)}, Reserve: 4,
+		Seed: &omapWriteSeed{Baseline: data, Attributes: attrs, Entries: omapWriteEntries(model)}, Reserve: 5,
 	})
 	prepared = true
-	if owned.SeedCode == nil || *owned.SeedCode != 0 || len(owned.Objects) != 5 {
+	if owned.SeedCode == nil || *owned.SeedCode != 0 || len(owned.Objects) != 6 {
 		t.Fatal("compound source preparation differs")
 	}
 	sourceName := owned.Objects[0]
@@ -100,6 +101,21 @@ func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 	if !bytes.Equal(receipt.Source.Data, data) || !equalOmapModel(omapWriteInventory(t, receipt.Source), model) ||
 		receipt.Source.Header == nil || !bytes.Equal(*receipt.Source.Header, header) || receipt.Source.Version == 0 {
 		t.Fatal("independent native source differs")
+	}
+	// The native copy source walker uses UPPER_BOUND even at its initial
+	// empty cursor. Characterize that server boundary with an independent
+	// native cp before comparing Go results, rather than silently losing a key
+	// in an expected model. No client-side filtering or emulation is added.
+	nativeCopy := nativeOmapWrite(t, ctx, base, "copy", omapWriteInput{Source: sourceName, Object: owned.Objects[5], InventoryKeys: inventory})
+	if nativeCopy.CopyExit == nil || *nativeCopy.CopyExit != 0 || nativeCopy.Before.Code != -2 {
+		t.Fatal("native CLI copy failed or destination was not absent")
+	}
+	receipt.NativeCopy = nativeCopy.After
+	copyModel := map[string][]byte{"a": model["a"], "z": model["z"]}
+	if !equalOmapModel(omapWriteInventory(t, receipt.NativeCopy), copyModel) || !bytes.Equal(receipt.NativeCopy.Data, data) ||
+		!reflect.DeepEqual(receipt.NativeCopy.Attributes, receipt.Source.Attributes) || receipt.NativeCopy.Header == nil || !bytes.Equal(*receipt.NativeCopy.Header, header) ||
+		receipt.NativeCopy.Seconds != receipt.Source.Seconds || receipt.NativeCopy.Nanos != receipt.Source.Nanos {
+		t.Fatal("native copy boundary differs from pinned source cursor semantics")
 	}
 	for slot, tc := range []struct {
 		name      string
@@ -164,7 +180,7 @@ func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 			entry := &receipt.Cases[len(receipt.Cases)-1]
 			nativeAttrs := xattrInventory(after.nativeXattrSnapshot)
 			if after.Code != 0 || !bytes.Equal(after.Data, data) || len(nativeAttrs) != 2 || nativeAttrs["keep"] != "k" || nativeAttrs["added"] != string([]byte{0, 'a'}) ||
-				!equalOmapModel(omapWriteInventory(t, after), model) || after.Header == nil || !bytes.Equal(*after.Header, header) ||
+				!equalOmapModel(omapWriteInventory(t, after), copyModel) || after.Header == nil || !bytes.Equal(*after.Header, header) ||
 				after.Version != reply.UserVersion || after.Version <= before.Version || after.Seconds != receipt.Source.Seconds || after.Nanos != receipt.Source.Nanos {
 				t.Fatal("native destination data/metadata/version/mtime differs", after)
 			}

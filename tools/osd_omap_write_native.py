@@ -23,6 +23,8 @@ daemon-version and bounded osd-omap-write-input.json.
 attrs, OMAP entries; no header) and reserves separate absent UUID names that a
 Go mutation may create. Ownership is published atomically before any Go write.
 --observe records bytes/stat2/version/attrs/OMAP/header for one owned name
+--copy executes one pinned rados cp between two distinct owned names, requiring
+an absent destination, then observes it independently. No copy is retried.
 without writes. --assert executes ONE read-only vector of single-assertion
 CMP operations on one owned name and records per-op prvals and unchanged state. --compare seeds a separate native mirror (or leaves it absent),
 executes ONE native C write vector with explicit mtime, observes before/after
@@ -250,6 +252,7 @@ def snap_context(raw):
 
 def validate_request(raw, mode):
     allowed = {"prepare": {"seed", "reserve"}, "observe": {"object", "inventory_keys", "object_info"},
+               "copy": {"source", "object", "inventory_keys"},
                "exec": {"seed", "object", "role", "operations", "inventory_keys"},
                "assert": {"object", "operations", "inventory_keys"},
                "compare": {"seed", "operations", "mtime", "inventory_keys", "object_info"}, "cleanup": set(),
@@ -274,6 +277,11 @@ def validate_request(raw, mode):
         request["reserve"] = reserve
     elif mode == "observe":
         request["object"] = xattr.identity(raw.get("object"), "object")
+    elif mode == "copy":
+        request["source"] = xattr.identity(raw.get("source"), "copy source")
+        request["object"] = xattr.identity(raw.get("object"), "copy destination")
+        if request["source"] == request["object"]:
+            raise ValueError("native copy needs distinct owned objects")
     elif mode == "exec":
         # ONE read op of 1-4 CALLs, on an owned object or on a fresh
         # seeded/absent mirror.
@@ -374,6 +382,15 @@ class HeaderCLI:
             if len(header) > MAX_HEADER:
                 raise ValueError("native OMAP header exceeds oracle bound")
             return header
+
+    def copy(self, source, destination):
+        """ONE native copy (rados.cc do_copy); timeout/refusal is not retried."""
+        result = subprocess.run(self.base + ["cp", source.decode(), destination.decode()],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=30)
+        if len(result.stdout) > MAX_CLI_OUTPUT or len(result.stderr) > MAX_CLI_OUTPUT:
+            raise ValueError("native copy diagnostics exceed oracle bound")
+        return result.returncode
 
     def listsnaps(self, name):
         """Pinned CLI clone listing (rados.cc:3628-3755). A refusal is kept as
@@ -824,6 +841,17 @@ def execute(native, io, metadata, request, mode, out, cli):
         return result
     if mode in SNAP_MODES:
         return execute_snapshot(native, io, metadata, request, mode, out, cli, result)
+    if mode == "copy":
+        owned = check_ownership(omap.read_json(out / (OWNED + ".json")), metadata)
+        if request["source"] not in owned or request["object"] not in owned:
+            raise ValueError("native copy is limited to owned OMAP write objects")
+        result["before"] = native.full_state(io, request["object"], request["inventory_keys"], cli)
+        if result["before"]["code"] != -2:
+            raise ValueError("native copy destination must be absent")
+        result["scope"]["copy_via_pinned_rados_cli"] = True
+        result["copy_exit"] = cli.copy(request["source"], request["object"])
+        result["after"] = native.full_state(io, request["object"], request["inventory_keys"], cli)
+        return result
     if mode in ("observe", "assert"):
         owned = check_ownership(omap.read_json(out / (OWNED + ".json")), metadata)
         if request["object"] not in owned:
@@ -945,7 +973,7 @@ if __name__ == "__main__":
     parser.add_argument("root", type=Path)
     parser.add_argument("out", type=Path)
     modes = parser.add_mutually_exclusive_group(required=True)
-    for mode in ("prepare", "observe", "assert", "exec", "compare", "cleanup") + SNAP_MODES:
+    for mode in ("prepare", "observe", "copy", "assert", "exec", "compare", "cleanup") + SNAP_MODES:
         modes.add_argument("--" + mode, dest="mode", action="store_const", const=mode)
     args = parser.parse_args()
     collect(args.root, args.out, args.mode)

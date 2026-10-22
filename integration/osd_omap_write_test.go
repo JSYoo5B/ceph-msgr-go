@@ -66,6 +66,7 @@ type omapWriteInput struct {
 	Seed          *omapWriteSeed    `json:"seed,omitempty"`
 	Reserve       int               `json:"reserve,omitempty"`
 	Object        string            `json:"object,omitempty"`
+	Source        string            `json:"source,omitempty"`
 	Role          string            `json:"role,omitempty"`
 	ObjectInfo    bool              `json:"object_info,omitempty"`
 	Operations    []omapWriteAction `json:"operations,omitempty"`
@@ -102,6 +103,7 @@ type omapWriteReceipt struct {
 	Before     omapWriteState    `json:"before"`
 	After      omapWriteState    `json:"after"`
 	Aggregate  *int32            `json:"aggregate"`
+	CopyExit   *int              `json:"copy_exit"`
 	Prvals     []omapNativePrval `json:"prvals"`
 	ObjectInfo *omapObjectInfo   `json:"object_info"`
 	Vector     *struct {
