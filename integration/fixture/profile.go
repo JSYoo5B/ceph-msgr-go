@@ -286,6 +286,11 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		if p.mdsCephFSData == "1" {
 			selected = "^TestCephMDSCephFSDataIntegration$"
+			// The cap-send recovery variant shares the owned data fixture and
+			// is admitted only when explicitly selected.
+			if p.testRun == "^TestCephMDSCephFSCapSendRecoveryIntegration$" {
+				selected = p.testRun
+			}
 		}
 		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || (p.sparseReadOracle != "" || p.mapExtOracle != "") ||
 			p.testRun != "" && p.testRun != selected {
