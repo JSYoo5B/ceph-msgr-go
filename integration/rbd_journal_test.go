@@ -47,9 +47,9 @@ import (
 // acquisition observe each step independently. Finally, in one bounded
 // concurrent session, native librbd keeps the image open read-write while
 // the exclusive lock goes native -> Go -> native through librbd's own lock
-// notifications: Go appends three entries under its own tag (two of them in
-// flight at once) while native aio writes
-// wait for the lock, applies them to the data objects and commits the image
+// notifications: Go appends three entries under its own tag (two submitted
+// from concurrent goroutines; their wire overlap is not observed) while
+// native aio writes wait for the lock, applies them to the data objects and commits the image
 // client's position, and native librbd then appends its queued writes under
 // a new tag. See integration/fixture/RBD_BASE_FIXTURE.md,
 // RBD_JOURNAL_VALIDATION.md and RBD_JOURNAL_CONCURRENT_VALIDATION.md.
@@ -570,6 +570,54 @@ func rbdJournalCommitPosition(previous []rbdJournalPosition, committed []rbdJour
 	return pruned
 }
 
+// rbdMutationOutcome classifies one mutation's result for the outcome
+// ledger. A reply without error is applied (code 0) or an expected server
+// refusal (a negative code the caller asked for). An OSDError is a server
+// refusal: the OSD answered and applied nothing. OutcomeUnknownError means
+// transmission had started without a reply, and any other error is treated
+// the same way, conservatively: the mutation may or may not have been
+// applied. The caller never resends a mutation of any class.
+func rbdMutationOutcome(reply cephmsgr.OSDReply, err error) (class, detail string) {
+	var server *cephmsgr.OSDError
+	var unknown *cephmsgr.OutcomeUnknownError
+	switch {
+	case err == nil && reply.Code == 0:
+		return "applied", ""
+	case err == nil:
+		return "refused", ""
+	case errors.As(err, &server):
+		return "refused", err.Error()
+	case errors.As(err, &unknown):
+		return "uncertain", err.Error()
+	default:
+		return "uncertain", err.Error()
+	}
+}
+
+func TestRBDMutationOutcomeLedger(t *testing.T) {
+	// Unit level: a lost reply cannot be induced safely on the live journal,
+	// so the unknown-result classes are checked here; the live session
+	// covers applied and refused.
+	for _, c := range []struct {
+		reply cephmsgr.OSDReply
+		err   error
+		want  string
+	}{
+		{cephmsgr.OSDReply{Transaction: 7}, nil, "applied"},
+		{cephmsgr.OSDReply{Transaction: 7, Code: -17}, nil, "refused"},
+		{cephmsgr.OSDReply{Transaction: 7, Code: -16}, &cephmsgr.OSDError{Code: -16}, "refused"},
+		{cephmsgr.OSDReply{}, fmt.Errorf("wrapped: %w", &cephmsgr.OSDError{Code: -2}), "refused"},
+		{cephmsgr.OSDReply{}, &cephmsgr.OutcomeUnknownError{Cause: context.Canceled}, "uncertain"},
+		{cephmsgr.OSDReply{}, fmt.Errorf("wrapped: %w", &cephmsgr.OutcomeUnknownError{Cause: errors.New("connection reset")}), "uncertain"},
+		{cephmsgr.OSDReply{}, context.DeadlineExceeded, "uncertain"},
+	} {
+		class, detail := rbdMutationOutcome(c.reply, c.err)
+		if class != c.want || (c.err == nil) != (detail == "") {
+			t.Fatalf("outcome of %+v / %v: %s %q, want %s", c.reply, c.err, class, detail, c.want)
+		}
+	}
+}
+
 // rbdJournalHexdump parses bufferlist::hexdump lines ("<offset>  <16 hex
 // bytes>  |ascii|", then the final offset).
 func rbdJournalHexdump(s string) ([]byte, error) {
@@ -1032,6 +1080,10 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 	classOp := func(class, method string, mode cephmsgr.OSDCallMode, input []byte) cephmsgr.OSDOperation {
 		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: mode, MaxOutputBytes: 65536}}
 	}
+	// onMutation, when set, receives every mutation vector's reply and error
+	// right after the raw record and before any assertion, so a classified
+	// outcome is kept even when the vector then fails the test.
+	var onMutation func(label string, reply cephmsgr.OSDReply, err error)
 	// vector sends one request and requires the aggregate code; write
 	// vectors carry a modification time and no SnapContext, as librados
 	// sends the journal's metadata operations.
@@ -1047,6 +1099,9 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		}
 		reply, err := o.Request(ctx, req)
 		record(label, r, req, reply, err)
+		if mutation && onMutation != nil {
+			onMutation(label, reply, err)
+		}
 		var server *cephmsgr.OSDError
 		if code != 0 && errors.As(err, &server) && server.Code == code {
 			err = nil
@@ -1765,6 +1820,31 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 			t.Fatal("journal state before the concurrent session differs", err, before.ActiveSet, before.MinimumSet)
 		}
 		splay := uint64(before.Splay)
+		// The outcome ledger: every Go mutation of the session, classified
+		// before any assertion; a failed mutation is never resent.
+		outcome := func(label string, reply cephmsgr.OSDReply, err error) {
+			class, detail := rbdMutationOutcome(reply, err)
+			o := map[string]any{"label": label, "transaction": reply.Transaction, "submission": reply.Submission.Transaction, "code": reply.Code,
+				"user_version": reply.UserVersion, "outcome": class}
+			if detail != "" {
+				o["error"] = detail
+			}
+			evidenceMu.Lock()
+			evidence.ConcurrentOutcomes = append(evidence.ConcurrentOutcomes, o)
+			evidenceMu.Unlock()
+		}
+		onMutation = outcome
+		defer func() { onMutation = nil }()
+		ledgerOf := func(label string) map[string]any {
+			evidenceMu.Lock()
+			defer evidenceMu.Unlock()
+			for _, o := range evidence.ConcurrentOutcomes {
+				if o["label"] == label {
+					return o
+				}
+			}
+			return nil
+		}
 		statePath := filepath.Join(dir, "rbd-journal-state.json")
 		for i := 0; i <= 3; i++ {
 			name := statePath
@@ -1905,6 +1985,7 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 				req.ModificationTime = now()
 				reply, err := ho.Request(cleanup, req)
 				record("concurrent_unlock_compensate", hr, req, reply, err)
+				outcome("concurrent_unlock_compensate", reply, err)
 				notify := request(hr)
 				notify.Operations = nil
 				if n, reply, err := ho.NotifyObject(cleanup, notify, rbdLockNotify(rbdNotifyReleasedLock, goID), cephmsgr.OSDWatchOptions{TimeoutSeconds: 5}); err == nil {
@@ -2123,7 +2204,14 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 			t.Fatal("next tag or commit front differs", goTag, front)
 		}
 		tagData := rbdJournalTagDataEncode(rbdJournalTagData{CommitValid: true, PredecessorTag: front.Tag, PredecessorEnt: front.Entry})
-		vector(t, "concurrent_tag_create", journalHeader, 0, classOp("journal", "tag_create", cephmsgr.OSDCallWrite, append(append(rbdLE64(goTag), rbdLE64(class)...), rbdJournalBL(tagData)...)))
+		tagInput := append(append(rbdLE64(goTag), rbdLE64(class)...), rbdJournalBL(tagData)...)
+		vector(t, "concurrent_tag_create", journalHeader, 0, classOp("journal", "tag_create", cephmsgr.OSDCallWrite, tagInput))
+		// A live server refusal through the ledger: the same tag_create again
+		// is refused with -EEXIST, changes nothing and is not resent.
+		vector(t, "concurrent_tag_create_repeat", journalHeader, -17, classOp("journal", "tag_create", cephmsgr.OSDCallWrite, tagInput))
+		if o := ledgerOf("concurrent_tag_create_repeat"); o == nil || o["outcome"] != "refused" || o["code"] != int32(-17) {
+			t.Fatal("refused tag_create is not in the outcome ledger as refused", o)
+		}
 		journalNotify(t, "concurrent_journal_notify_tag")
 
 		softMax := rbdLE64(1 << before.Order)
@@ -2135,28 +2223,8 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 			entries[i] = rbdJournalEntryEncode(goTag, uint64(i), rbdJournalWriteEvent(e.Offset, rbdJournalPattern(token, "go-concurrent", e.Offset, e.Length), stamps[i]))
 			names[i] = prefix + strconv.FormatUint(before.ActiveSet*splay+uint64(i)%splay, 10)
 		}
-		outcome := func(label string, reply cephmsgr.OSDReply, err error) {
-			o := map[string]any{"label": label, "transaction": reply.Transaction, "submission": reply.Submission.Transaction, "code": reply.Code, "user_version": reply.UserVersion}
-			var server *cephmsgr.OSDError
-			switch {
-			case err == nil && reply.Code != 0:
-				o["outcome"] = "refused"
-			case err == nil:
-				o["outcome"] = "applied"
-			case errors.As(err, &server):
-				o["outcome"], o["error"] = "server-error", err.Error()
-			default:
-				// No reply: the mutation may or may not have been applied. It
-				// is recorded and never resent.
-				o["outcome"], o["error"] = "uncertain", err.Error()
-			}
-			evidenceMu.Lock()
-			evidence.ConcurrentOutcomes = append(evidence.ConcurrentOutcomes, o)
-			evidenceMu.Unlock()
-		}
 		// Entry 0 in librbd's form while the native writer is idle.
 		reply = vector(t, "concurrent_append_0", names[0], 0, classOp("journal", "append", cephmsgr.OSDCallWrite, append(slices.Clone(softMax), rbdJournalBL(entries[0])...)))
-		outcome("concurrent_append_0", reply, nil)
 
 		// The native writer issues its aio writes now; librbd queues them and
 		// asks Go, the lock owner, for the lock.
@@ -2170,8 +2238,11 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 			t.Fatal("native RequestLock while Go owns the lock differs", asked, issued.IsOwner)
 		}
 
-		// Entries 1 and 2 go out at once, in librbd's form, while the native
-		// writes wait for the lock. cls_journal's append checks no lock: the
+		// Entries 1 and 2 are submitted from two goroutines started together,
+		// in librbd's form, while the native writes wait for the lock. The
+		// API exposes no submission event, so whether both were on the wire
+		// at the same time is not observed and not claimed; only distinct
+		// transactions and complete reply identity are checked. cls_journal's append checks no lock: the
 		// image's exclusive lock lives on rbd_header.<id>, and a class method
 		// acts only on its request's object, so a journal data object append
 		// cannot carry an assertion of that lock. Ownership is the client
@@ -2237,7 +2308,6 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 			reply = vector(t, label, fmt.Sprintf("%s.%016x", setup.Stat.Prefix, number),
 				0, cephmsgr.OSDOperation{Code: cephmsgr.OSDSetAllocHint, Flags: cephmsgr.OSDFailOK, AllocHint: cephmsgr.OSDAllocHint{ExpectedObjectSize: objectSize, ExpectedWriteSize: objectSize}},
 				cephmsgr.OSDOperation{Code: cephmsgr.OSDWrite, Offset: offset, Length: e.Length, Data: data})
-			outcome(label, reply, nil)
 			copy(expected[e.Offset:], data)
 		}
 		// The commit position of the applied entries
@@ -2408,7 +2478,7 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		t.Logf("entries: owner %v, Go %v, native %v; inspect %d entries, %d errors", where(ownerEntries), where(decodedGo), where(nativeEntries), len(all), inspectOf(t, n).Summary.Errors)
 		t.Logf("image client commit: at Go lock %v, after Go %v, final %v", imageAtLock.Positions, goCommitted, v.Image.Positions)
 		t.Logf("Go appends: tid %d (uv %d), concurrent tids %d and %d (uv %d, %d); notifications own %v native %v; lock held %s; aio returns %v; native close %d us",
-			evidence.ConcurrentOutcomes[0]["transaction"], evidence.ConcurrentOutcomes[0]["user_version"], concurrent[0].reply.Transaction, concurrent[1].reply.Transaction,
+			ledgerOf("concurrent_append_0")["transaction"], ledgerOf("concurrent_append_0")["user_version"], concurrent[0].reply.Transaction, concurrent[1].reply.Transaction,
 			concurrent[0].reply.UserVersion, concurrent[1].reply.UserVersion, ownOps, nativeOps, evidence.Timings["concurrent_go_lock_held"], n.AioReturns, n.CloseNS/1000)
 	})
 }
