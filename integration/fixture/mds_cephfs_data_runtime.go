@@ -156,6 +156,11 @@ func (x *mdsCephFSDataScope) newRuntime(id int64, kind string) (*mdsCephFSDataRu
 		if x.baselineConfig["mds_log_pause"] != "false" {
 			return nil, errors.New("DATA owned journal baseline must be false")
 		}
+		// The journal-pause recipe needs its own later blackhole-on, which an
+		// active (even uncertain) cap-send client drop would refuse.
+		if x.activeRuntime("client-drop-on", x.current.GID) != nil {
+			return nil, errors.New("DATA journal pause refused while the cap-send client drop is active")
+		}
 		settings["mds_log_pause"] = "true"
 	case "blackhole-on":
 		pause := x.activeRuntime("log-pause", x.current.GID)

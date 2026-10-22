@@ -169,3 +169,44 @@ func TestMDSCephFSDataProfileAdmitsOnlyTheExplicitCapSendSelector(t *testing.T) 
 		}
 	}
 }
+
+func TestMDSCephFSDataClientDropAndJournalPauseExcludeEachOther(t *testing.T) {
+	// client-drop-on first: log-pause is refused while the drop is applied,
+	// intended or uncertain, and admitted again only once it is inactive.
+	for _, state := range []string{"applied", "intended", "uncertain", "restore-intended", "restore-uncertain"} {
+		x := dataRuntimeDebugApplied(t)
+		drop, err := x.newRuntime(2, "client-drop-on")
+		if err != nil {
+			t.Fatal(err)
+		}
+		drop.State = state
+		if _, err := x.newRuntime(3, "log-pause"); err == nil {
+			t.Fatal("journal pause admitted beside an active client drop", state)
+		}
+		if _, err := x.newRuntime(3, "blackhole-on"); err == nil {
+			t.Fatal("journal-pause blackhole admitted beside an active client drop", state)
+		}
+	}
+	x := dataRuntimeDebugApplied(t)
+	drop, err := x.newRuntime(2, "client-drop-on")
+	if err != nil {
+		t.Fatal(err)
+	}
+	drop.State = "restored"
+	if _, err := x.newRuntime(3, "log-pause"); err != nil {
+		t.Fatal("journal pause refused after the client drop ended", err)
+	}
+	// log-pause first: client-drop-on is refused while the pause is applied,
+	// intended or uncertain.
+	for _, state := range []string{"applied", "intended", "uncertain", "restore-intended", "restore-uncertain"} {
+		x := dataRuntimeDebugApplied(t)
+		pause, err := x.newRuntime(2, "log-pause")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pause.State = state
+		if _, err := x.newRuntime(3, "client-drop-on"); err == nil {
+			t.Fatal("client drop admitted beside an active journal pause", state)
+		}
+	}
+}
