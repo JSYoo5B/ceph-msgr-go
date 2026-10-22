@@ -494,3 +494,5 @@ walking, inode or dentry cache, capability bookkeeping,
 lease expiry, snapshot realm tree, dirty metadata or data writeback, file
 locks, delegated inodes or async operations. File data I/O semantics (layout, striping,
 flush ordering against capabilities) remain the consumer's.
+
+Withheld CephFS client feature decisions: [CLIENT_EXTENSION_DECISIONS.md](../internal/mds/CLIENT_EXTENSION_DECISIONS.md).
