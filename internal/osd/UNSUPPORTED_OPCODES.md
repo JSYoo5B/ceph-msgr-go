@@ -49,10 +49,10 @@ Classes:
 | PGLS_FILTER | Current server path, deferred legacy format | As PGLS; PGNLS_FILTER is implemented. | none |
 | PG_HITSET_LS | Current client primitive, cache-tier dependent | Handled in the PG-op path from the PG's hit-set history; `Objecter.h` and `librados` expose it. Meaningful only with a hit-set configured. | #8 |
 | PG_HITSET_GET | Current client primitive, cache-tier dependent | As PG_HITSET_LS; `librados` exposes it. | #8 |
-| CACHE_FLUSH | Current client primitive, cache-tier dependent | Handled in `do_osd_ops`; builder in `Objecter.h` and `librados`. | #8 |
+| CACHE_FLUSH | Current client primitive, cache-tier dependent | Handled in `do_osd_ops`; builder in `Objecter.h` and `librados`. Native-only fixture behavior and [fresh native request vectors](testdata/cache-op-native-README.md) exist; Go admission is pending. | #8 |
 | CACHE_TRY_FLUSH | Current client primitive, cache-tier dependent | As CACHE_FLUSH. | #8 |
 | CACHE_EVICT | Current client primitive, cache-tier dependent | As CACHE_FLUSH. | #8 |
-| CACHE_PIN | Current client primitive, cache-tier dependent | Handled in `do_osd_ops`; exposed by `librados` (`cache_pin`). | #8 |
+| CACHE_PIN | Current client primitive, cache-tier dependent | Handled in `do_osd_ops`; exposed by `librados` (`cache_pin`). Native-only fixture behavior and [fresh native request vectors](testdata/cache-op-native-README.md) exist; Go admission is pending. | #8 |
 | CACHE_UNPIN | Current client primitive, cache-tier dependent | As CACHE_PIN. | #8 |
 | SET_CHUNK | Current client primitive, manifest dependent | Handled in `do_osd_ops`; used by `rados` and the dedup tools. | #8 |
 | TIER_PROMOTE | Current client primitive, manifest dependent | Handled in `do_osd_ops`; exposed by `librados` and the `rados` tool. | #8 |
