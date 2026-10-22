@@ -38,11 +38,7 @@ def go_tests(root):
 
 
 def catalog_vocabulary(root):
-    data = json.loads((root / CATALOG).read_text())
-    scenarios = {row["id"] for row in data["scenarios"]}
-    groups = {row["group"] for row in data["scenarios"]}
-    suites = {row["id"] for row in data.get("fixed_jobs", [])}
-    return scenarios, groups, suites
+    return catalog_from(json.loads((root / CATALOG).read_text()))
 
 
 def spec_paths(root):
@@ -135,18 +131,30 @@ def token_problems(token, tests, scenarios, groups, suites):
     if re.fullmatch(r"Test\w+(?:/[\w./-]+)?", token):
         name = token.split("/", 1)[0]
         return [] if name in tests else ["missing top-level Go test " + name]
-    if SCENARIO.match(token) and token.split(".", 1)[0] in groups:
+    # Every scenario-shaped token is checked, so a mistyped or removed group
+    # cannot hide a reference behind an unrecognized prefix.
+    if SCENARIO.match(token):
         return [] if token in scenarios else ["unknown scenario " + token]
     return []
 
 
-def check(root=ROOT, text=None, tests=None):
+def catalog_from(data):
+    """Return the (scenarios, groups, suites) vocabulary of catalog data."""
+    scenarios = {row["id"] for row in data["scenarios"]}
+    groups = {row["group"] for row in data["scenarios"]}
+    suites = {row["id"] for row in data.get("fixed_jobs", [])}
+    return scenarios, groups, suites
+
+
+def check(root=ROOT, text=None, tests=None, catalog=None):
     root = Path(root)
     if text is None:
         text = (root / COVERAGE).read_text()
     if tests is None:
         tests = go_tests(root)
-    scenarios, groups, suites = catalog_vocabulary(root)
+    if catalog is None:
+        catalog = catalog_vocabulary(root)
+    scenarios, groups, suites = catalog
     problems = []
 
     for token in sorted(set(CODE.findall(text))):

@@ -1,3 +1,4 @@
+import json
 import unittest
 
 import native_path_coverage as coverage
@@ -37,6 +38,17 @@ class NativePathCoverageTests(unittest.TestCase):
         text = self.text.replace("`suite:race`", "`suite:races`")
         self.assertIn("unknown check suite suite:races", self.check(text))
 
+    def test_scenario_with_unknown_prefix_is_reported(self):
+        text = self.text.replace("`mon-mgr.aes256k.ip4.expiry-1`", "`mon-mgx.aes256k.ip4.expiry-1`")
+        self.assertIn("unknown scenario mon-mgx.aes256k.ip4.expiry-1", self.check(text))
+
+    def test_scenarios_of_a_removed_group_are_reported(self):
+        data = json.loads((coverage.ROOT / coverage.CATALOG).read_text())
+        data["scenarios"] = [row for row in data["scenarios"] if row["group"] != "mon-mgr"]
+        problems = coverage.check(text=self.text, tests=self.tests, catalog=coverage.catalog_from(data))
+        self.assertIn("unknown scenario mon-mgr.aes256k.ip4.expiry-1", problems)
+        self.assertIn("unknown catalog group group:mon-mgr", problems)
+
     def test_test_names_and_selectors_must_resolve(self):
         text = self.text.replace("`TestCephMonPingIntegration`", "`TestCephMonPongIntegration`")
         self.assertIn("missing top-level Go test TestCephMonPongIntegration", self.check(text))
@@ -66,9 +78,9 @@ class NativePathCoverageTests(unittest.TestCase):
         self.assertIn("row MSG-1: expected 8 nonempty columns", self.check(text))
 
     def test_unmerged_pull_requests_are_not_capabilities(self):
-        row = self.row("OSD-12")
+        row = self.row("MDS-9")
         text = self.text.replace(row, row.replace("`proposed`", "`released`"))
-        self.assertIn("row OSD-12: unmerged PR #42 cited as released", self.check(text))
+        self.assertIn("row MDS-9: unmerged PR #43 cited as released", self.check(text))
 
 
 if __name__ == "__main__":
