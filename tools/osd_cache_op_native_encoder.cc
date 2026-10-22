@@ -37,10 +37,15 @@ static_assert(CEPH_OSD_OP_CACHE_UNPIN == 0x2225);
 static_assert(CEPH_OSD_FLAG_IGNORE_CACHE == 0x8000);
 static_assert(CEPH_OSD_FLAG_SKIPRWLOCKS == 0x10000);
 static_assert(CEPH_OSD_FLAG_IGNORE_OVERLAY == 0x20000);
+// Default features plus OSD_CACHEPOOL (bit 35): a client that sends cache
+// operations negotiates that capability, and MOSDOp encodes its features in
+// the front, so the bit is part of the request bytes.
+static_assert(CEPH_FEATURE_OSD_CACHEPOOL == (1ULL << 35));
 uint64_t features(unsigned version) {
-  if (version == 6) return 3026423347916342070ULL;
-  if (version == 8) return 3386711319181820726ULL;
-  if (version == 9) return 3387274269135242038ULL;
+  constexpr uint64_t cache_pool = 1ULL << 35;
+  if (version == 6) return 3026423347916342070ULL | cache_pool;
+  if (version == 8) return 3386711319181820726ULL | cache_pool;
+  if (version == 9) return 3387274269135242038ULL | cache_pool;
   throw std::runtime_error("unsupported oracle request version");
 }
 std::string hex(const std::string& bytes) {

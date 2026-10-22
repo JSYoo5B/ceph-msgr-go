@@ -45,8 +45,10 @@ decoded request with its own independent model of opcodes, flags and mtimes,
 and locates the packed operation exactly once in the front. Request identity,
 locator, PG seeds, the modern trace envelopes and the 41-byte offline
 Messenger v2 header follow the existing request-vector convention (sequence 1,
-TID 77, ACK sequence 3, priority 127). Cache-pool feature bit 35 is a session
-capability and is absent from these encoding inputs.
+TID 77, ACK sequence 3, priority 127). The features are the default
+implemented set plus OSD_CACHEPOOL (bit 35), which a client sending cache
+operations negotiates. MOSDOp encodes its features in the front on every
+version, so that bit is part of the request bytes.
 
 ## Generation
 
@@ -57,31 +59,36 @@ configuration, compiler, library and executable.
 
 The vectors were generated on 2026-10-22 by a disposable GitHub Actions job on
 a GitHub-hosted `ubuntu-latest` runner
-([run 39848093345](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39848093345),
+([run 39859265228](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39859265228),
 scratch branch `claude/native-vectors-cache-op`, not merged), with the same
 fresh-container procedure as the
 [SPARSE_READ/READ compound vectors](sparse-read-compound-native-README.md). Its
-first and only attempt ran from 20:21:35 to 20:33:07 UTC, exited zero, and its
+first and only attempt ran from 21:41:53 to 21:50:32 UTC, exited zero, and its
 container was absent after removal; the proof's `execution` object and
 `build_log_sha256` record it. Every retained hexadecimal segment was compared
 with the raw files of the run artifact before this proof was committed.
 
-An earlier run on the same branch
-([39846819636](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39846819636))
+Two earlier runs on the same branch are superseded. Run
+[39846819636](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39846819636)
 failed before producing a complete set: the wrapper compared the integer
 result of `ceph_osd_op_mode_modify` directly with a boolean, so the pin shapes
-were refused by the wrapper's own check. The retained wrapper compares the mode
-bit as a boolean; that earlier partial output is not used.
+were refused by the wrapper's own check. Run
+[39848093345](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39848093345)
+succeeded and its 21 vectors were retained first (#52), but they were encoded
+without bit 35. When the Go encoder was compared with them, every vector
+differed only in that encoded feature bit, because a cache-pool session
+negotiates it. Those vectors are replaced, not normalized. The retained
+wrapper compares the mode bit as a boolean and includes bit 35.
 
-## Current Go status
+## Go comparison
 
-The Go encoder does not implement these opcodes. The Go test checks the
-retained segments, flags, mtime presence and packed operation, and requires
-`EncodeRequest` to keep refusing every cache opcode until a reviewed admission
-stage replaces that check with byte parity:
+The Go encoder implements these operations (see
+[CACHE_POOL_CONTRACT.md](../CACHE_POOL_CONTRACT.md#cache-tier-operations)).
+For each vector, the Go request with the matching IgnoreCache, IgnoreOverlay
+and SkipRWLocks inputs equals the native header, front, middle and data:
 
 ```sh
-CGO_ENABLED=0 go test ./internal/osd -run '^TestCacheOperationsRetain21FreshNativeRequests$' -count=1
+CGO_ENABLED=0 go test ./internal/osd -run '^TestCacheOperation' -count=1
 ```
 
 Ceph development headers and libraries carry LGPL-2.1 notices. Native tools
