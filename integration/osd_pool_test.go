@@ -56,6 +56,14 @@ type poolReceipt struct {
 	PoolType    int               `json:"pool_type"`
 	CrushRule   json.RawMessage   `json:"crush_rule"`
 	ECOptimized bool              `json:"ec_optimized"`
+	// Erasure-coded create mode: the oracle's closed width, the pool's
+	// profile name, the profile it read back and the overwrite flag.
+	Width              string            `json:"width"`
+	ErasureCodeProfile string            `json:"erasure_code_profile"`
+	ECProfile          map[string]string `json:"ec_profile"`
+	ECOverwrites       *bool             `json:"ec_overwrites"`
+	// cleanup mode: owned erasure-code profiles still readable afterwards.
+	ECProfilesRemaining []string `json:"ec_profiles_remaining"`
 	// fullratios mode.
 	NearfullRatio     float64           `json:"nearfull_ratio"`
 	BackfillfullRatio float64           `json:"backfillfull_ratio"`

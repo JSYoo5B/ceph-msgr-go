@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -18,22 +19,29 @@ import (
 // to the PG primary with that primary's shard in spg_t (replicated-PG
 // profiles) or with the raw hash the OSD maps itself (object-hash profile).
 // The independent native client observes every result.
-func TestCephOSDErasureIntegration(t *testing.T) { erasureScenario(t, false, "") }
+func TestCephOSDErasureIntegration(t *testing.T) { erasureScenario(t, erasureK2M1, false, "") }
 
 // Tentacle's optimized EC (allow_ec_optimizations) changes the OSD write and
 // read paths, makes the non-first data shards ineligible as primary and stores
 // pg_temp primary-first. None of that is on this client's wire: the caller's
 // placement still names the primary and its shard, so the same cases apply.
-func TestCephOSDErasureOptimizedIntegration(t *testing.T) { erasureScenario(t, true, "") }
+func TestCephOSDErasureOptimizedIntegration(t *testing.T) { erasureScenario(t, erasureK2M1, true, "") }
 
 // The same cases on a pool whose k=2,m=1 profile names the jerasure plugin
 // instead of Tentacle's default isa: the encoding is inside the OSDs, so the
 // client's requests and the native observations are the same.
-func TestCephOSDErasureJerasureIntegration(t *testing.T) { erasureScenario(t, false, "jerasure") }
+func TestCephOSDErasureJerasureIntegration(t *testing.T) {
+	erasureScenario(t, erasureK2M1, false, "jerasure")
+}
 
-func erasureScenario(t *testing.T, optimized bool, plugin string) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
-		t.Skip("k=2,m=1 with overwrites needs three BlueStore OSDs")
+// The first wider width: an isa k=2,m=2 pool on the four-OSD topology, with
+// no optimizations and no faults. Size, min_size, acting set, primary shard
+// and control shard all come from the native pool and map, not from k=2,m=1.
+func TestCephOSDErasureK2M2Integration(t *testing.T) { erasureScenario(t, erasureK2M2, false, "isa") }
+
+func erasureScenario(t *testing.T, width erasureWidth, optimized bool, plugin string) {
+	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
+		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
 	}
 	fixture, request, hash := osdFixture, osdObjectRequest, false
 	if isReplicatedPGFixtureProfile() {
@@ -45,20 +53,25 @@ func erasureScenario(t *testing.T, optimized bool, plugin string) {
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
-		if r := nativePool(t, cleanup, "cleanup", nil); !r.PoolsRemoved {
+		r := nativePool(t, cleanup, "cleanup", nil)
+		if !r.PoolsRemoved {
 			t.Error("owned erasure-coded pool was not removed")
+		}
+		if slices.Contains(r.ECProfilesRemaining, width.profile) {
+			t.Error("owned erasure-code profile was not removed", width.profile)
 		}
 	})
 	pg := 1
 	if hash {
 		pg = 8
 	}
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "optimized": optimized, "plugin": plugin})
-	if created.PoolType != 3 || created.Size != 3 || created.ECOptimized != optimized {
-		t.Fatal("native pool is not the requested k=2,m=1 erasure-coded shape", created.PoolType, created.Size, created.ECOptimized)
+	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": optimized, "plugin": plugin})
+	if created.PoolType != 3 || created.Size != width.size() || created.ECOptimized != optimized || created.Width != width.name || created.ErasureCodeProfile != width.profile {
+		t.Fatal("native pool is not the requested erasure-coded shape", width, created.PoolType, created.Size, created.ECOptimized, created.Width, created.ErasureCodeProfile)
 	}
+	facts := erasurePoolMapFacts(t, ctx, c, created, width, optimized)
 	profiles := map[string]string{}
-	for _, name := range []string{"ceph-msgr-owned-ec", "default"} {
+	for _, name := range []string{width.profile, "default"} {
 		got, err := c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"osd erasure-code-profile get","name":"` + name + `","format":"json"}`)})
 		var profile struct {
 			Plugin string `json:"plugin"`
@@ -68,10 +81,11 @@ func erasureScenario(t *testing.T, optimized bool, plugin string) {
 		}
 		profiles[name] = profile.Plugin
 	}
-	if want := cmp.Or(plugin, profiles["default"]); profiles["ceph-msgr-owned-ec"] != want {
-		t.Fatalf("owned profile plugin %q, expected %q", profiles["ceph-msgr-owned-ec"], want)
+	if want := cmp.Or(plugin, profiles["default"]); profiles[width.profile] != want {
+		t.Fatalf("owned profile plugin %q, expected %q", profiles[width.profile], want)
 	}
-	t.Logf("EC pool %d plugin=%s (cluster default %s) optimized=%v nonprimary shards %s rule %s", created.PoolID, profiles["ceph-msgr-owned-ec"], profiles["default"], optimized, created.NonprimaryShards, created.CrushRule)
+	t.Logf("EC pool %d %s plugin=%s (cluster default %s) optimized=%v size=%d min_size=%d nonprimary shards %s rule %s owned OSDs %v",
+		created.PoolID, width, profiles[width.profile], profiles["default"], optimized, facts.size, facts.minSize, created.NonprimaryShards, created.CrushRule, facts.owned)
 
 	t.Run("admission with an erasure-code rule present", func(t *testing.T) {
 		options := integrationOptions(t)
@@ -93,9 +107,10 @@ func erasureScenario(t *testing.T, optimized bool, plugin string) {
 
 	const object = "erasure-object"
 	route := poolPlace(t, ctx, 1, object, "")
-	if route.PoolType != 3 || route.Shard < 0 || len(route.Acting) != 3 || route.Acting[route.Shard] != route.ID {
+	if route.PoolType != 3 || route.Shard < 0 || len(route.Acting) != facts.size || route.Acting[route.Shard] != route.ID {
 		t.Fatalf("native EC placement differs: %+v", route)
 	}
+	controlShard := facts.checkPlacement(t, route)
 	o := mutationConnection(t, c, ctx, route)
 	defer o.Close()
 	send := func(timeout time.Duration, edit func(*cephmsgr.OSDRequest), ops ...cephmsgr.OSDOperation) (cephmsgr.OSDReply, error) {
@@ -176,7 +191,7 @@ func erasureScenario(t *testing.T, optimized bool, plugin string) {
 		t.Run("the OSD requires the primary's shard", func(t *testing.T) {
 			for name, edit := range map[string]func(*cephmsgr.OSDRequest){
 				"NO_SHARD":    func(r *cephmsgr.OSDRequest) { r.Placement.Erasure, r.Placement.Shard = false, 0 },
-				"other shard": func(r *cephmsgr.OSDRequest) { r.Placement.Shard = uint8((int(route.Shard) + 1) % 3) },
+				"other shard": func(r *cephmsgr.OSDRequest) { r.Placement.Shard = controlShard },
 			} {
 				reply, err := send(5*time.Second, edit, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: 16})
 				t.Logf("%s: code=%d err=%v", name, reply.Code, err)
