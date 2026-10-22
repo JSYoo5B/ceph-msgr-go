@@ -565,7 +565,7 @@ func parseMDSCephFSDataRequest(fields []string, token string, previousID int64) 
 			return 0, action, errors.New("DATA cap-log identity must be canonical nonzero decimals")
 		}
 		action.gid, action.nonce = gid, uint32(nonce)
-	case "debug-on", "debug-off", "log-pause", "blackhole-on", "log-resume", "flush-journal", "cap-log-mark":
+	case "debug-on", "debug-off", "log-pause", "blackhole-on", "client-drop-on", "log-resume", "flush-journal", "cap-log-mark":
 		if len(fields) != 3 {
 			return 0, action, errors.New("DATA runtime action takes no caller argument")
 		}
@@ -912,7 +912,7 @@ func (c *fixtureCluster) mdsCephFSDataAct(ctx context.Context, id int64, action 
 		return errors.New("MDS CephFS data action refused while the owned restart is not adopted")
 	}
 	switch action.name {
-	case "debug-on", "debug-off", "log-pause", "blackhole-on", "log-resume", "flush-journal", "cap-log-mark", "cap-log":
+	case "debug-on", "debug-off", "log-pause", "blackhole-on", "client-drop-on", "log-resume", "flush-journal", "cap-log-mark", "cap-log":
 		return c.mdsCephFSDataRuntimeAct(ctx, id, action, result)
 	}
 	if action.name == "restart-arm" {

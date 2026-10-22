@@ -43,8 +43,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        # 63 original rows, 2 mgr-service, 1 erasure k2m2 and 1 cache-tier-ops.
-        self.assertEqual(len(self.rows), 67)
+        # 63 original rows, 2 mgr-service, 1 erasure k2m2, 1 cache-tier-ops and 2 mds-cephfs-capsend.
+        self.assertEqual(len(self.rows), 69)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak")
@@ -452,7 +452,11 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         })
 
     def test_mds_cephfs_data_rows_select_only_the_declared_data_test(self):
-        rows = [row for row in self.rows if row.get("mds_cephfs_data") == "1"]
+        data = [row for row in self.rows if row.get("mds_cephfs_data") == "1"]
+        self.assertEqual(len(data), 4)
+        # The cap-send recovery rows reuse the owned data fixture opt-in with
+        # their own selector; they are checked separately below.
+        rows = [row for row in data if row["test_run"] != "^TestCephMDSCephFSCapSendRecoveryIntegration$"]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSCephFSDataIntegration"}
         self.assertTrue(expected <= self.declared)
@@ -469,6 +473,31 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertIsNone(selector.search("TestCephMDSCephFSIntegration"))
             self.assertIsNone(selector.search("TestCephMDSCephFSCompletionIntegration"))
             self.assertIsNone(selector.search("TestCephFSStriperRestatement"))
+            observed.add(tuple(row.get(field, fallback) for field, fallback in (
+                ("key", ""), ("service", ""), ("mode", "secure"),
+                ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
+        self.assertEqual(observed, {
+            ("aes", "aes", "crc", "4", "host", "bluestore"),
+            ("aes256k", "aes256k", "secure", "6", "container", "memstore"),
+        })
+
+    def test_mds_cephfs_capsend_rows_reuse_the_data_fixture_with_their_own_test(self):
+        rows = [row for row in self.rows if row.get("test_run") == "^TestCephMDSCephFSCapSendRecoveryIntegration$"]
+        self.assertEqual(len(rows), 2)
+        expected = {"TestCephMDSCephFSCapSendRecoveryIntegration"}
+        self.assertTrue(expected <= self.declared)
+        observed = set()
+        for row in rows:
+            # Only already-forwarded workflow parameters: the data opt-in.
+            self.assertEqual((row["mds_fresh"], row["mds_cephfs_data"], row["osd_profile"], row["osd"], row["osd_replicas"], row["stress"]),
+                             ("1", "1", "legacy-v6", "1", "1", ""))
+            for field in ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "rbd", "image", "race"):
+                self.assertNotIn(field, row)
+            selector = re.compile(row["test_run"])
+            self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
+            self.assertIsNone(selector.search("TestCephMDSCephFSDataIntegration"))
+            self.assertIsNone(selector.search("TestCephMDSCephFSCapSendRecoveryIntegrationExtended"))
+            self.assertIsNone(selector.search("PrefixTestCephMDSCephFSCapSendRecoveryIntegration"))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"),
                 ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))

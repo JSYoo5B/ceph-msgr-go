@@ -61,6 +61,8 @@ mds-cephfs-completion.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-pr
 mds-cephfs-completion.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscompletion
 mds-cephfs-data.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsdata
 mds-cephfs-data.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsdata
+mds-cephfs-capsend.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscapsendrecovery
+mds-cephfs-capsend.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscapsendrecovery
 rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-37bcdb
 rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-suite-37bcdb
 mgr-service.aes.ip4.crc.host.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration

@@ -1113,6 +1113,10 @@ func (a *cephfsCapAgent) checkCapsFlagsLocked(c *cephfsCap, reason string, flags
 func (a *cephfsCapAgent) markDirty(ino, size uint64, mtime cephmsgr.MDSTime, follows uint64, buffered bool, hold time.Duration, writeBack func() error) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.markDirtyLocked(ino, size, mtime, follows, buffered, hold, writeBack)
+}
+
+func (a *cephfsCapAgent) markDirtyLocked(ino, size uint64, mtime cephmsgr.MDSTime, follows uint64, buffered bool, hold time.Duration, writeBack func() error) error {
 	c := a.caps[ino]
 	if c == nil || c.CapID == 0 || c.Released || c.Issued&cephCapFileWR == 0 || buffered && (c.Issued&cephCapFileBuffer == 0 || writeBack == nil) {
 		return fmt.Errorf("inode %d does not hold the caps for this write", ino)

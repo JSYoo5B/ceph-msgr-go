@@ -57,7 +57,8 @@ func (x *mdsCephFSDataScope) activeRuntime(kind string, gid uint64) *mdsCephFSDa
 	return nil
 }
 func (x *mdsCephFSDataScope) nativeReady() error {
-	if x.restart.pending() || x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil {
+	if x.restart.pending() || x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil ||
+		x.activeRuntime("client-drop-on", x.current.GID) != nil {
 		return errors.New("MDS CephFS data native action refused while restart, journal pause or client blackhole is in effect")
 	}
 	return nil
@@ -158,10 +159,22 @@ func (x *mdsCephFSDataScope) newRuntime(id int64, kind string) (*mdsCephFSDataRu
 		settings["mds_log_pause"] = "true"
 	case "blackhole-on":
 		pause := x.activeRuntime("log-pause", x.current.GID)
-		if x.baselineConfig["ms_blackhole_client"] != "false" || pause == nil || pause.State != "applied" || pause.Readback["mds_log_pause"] != "true" {
+		if x.baselineConfig["ms_blackhole_client"] != "false" || pause == nil || pause.State != "applied" || pause.Readback["mds_log_pause"] != "true" ||
+			x.activeRuntime("client-drop-on", x.current.GID) != nil {
 			return nil, errors.New("DATA client blackhole requires a proven owned journal pause and false baseline")
 		}
 		settings["ms_blackhole_client"] = "true"
+	case "client-drop-on":
+		// The cap-send recovery recipe drops incoming client messages after
+		// Messenger receipt and before dispatch (ProtocolV2::handle_message
+		// logs that branch at debug_ms 10). It needs the owned debug change for
+		// handler evidence and never combines with the journal-pause recipe.
+		debug := x.activeRuntime("debug-on", x.current.GID)
+		if x.baselineConfig["ms_blackhole_client"] != "false" || debug == nil || debug.State != "applied" || debug.Readback["debug_mds"] != "10/10" ||
+			x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil {
+			return nil, errors.New("DATA client drop requires the owned debug change, a false baseline and no journal-pause recipe")
+		}
+		settings["ms_blackhole_client"], settings["debug_ms"] = "true", "10/10"
 	case "debug-on":
 		settings["debug_mds"], settings["debug_ms"] = "10/10", "1/5"
 	default:
@@ -182,7 +195,7 @@ func (x *mdsCephFSDataScope) newRuntime(id int64, kind string) (*mdsCephFSDataRu
 func (c *fixtureCluster) mdsCephFSDataRuntimeAct(ctx context.Context, id int64, a mdsCephFSDataAction, result *mdsCephFSDataResult) error {
 	x := c.mdsCephFSData
 	switch a.name {
-	case "debug-on", "log-pause", "blackhole-on":
+	case "debug-on", "log-pause", "blackhole-on", "client-drop-on":
 		r, err := x.newRuntime(id, a.name)
 		if err != nil {
 			return err
@@ -379,6 +392,7 @@ var dataCapLogMessage = regexp.MustCompile(`client_caps\(([a-z_]+) ino (0x[0-9a-
 var dataCapLogHandler = regexp.MustCompile(`handle_client_caps\s+on (0x[0-9a-fA-F]+|[0-9]+) tid ([0-9]+) follows ([0-9a-fA-F]+) op ([a-z_]+)\b`)
 var dataCapLogSnap = regexp.MustCompile(`\bflushsnap snap ([0-9a-fA-F]+) client\.([0-9]+) on .*\binode (0x[0-9a-fA-F]+|[0-9]+)\b`)
 var dataCapLogDedupe = regexp.MustCompile(`handle_client_caps already flushed tid ([0-9]+) for client\.([0-9]+)\b`)
+var dataCapLogFlush = regexp.MustCompile(`\bflush client\.([0-9]+) dirty ([A-Za-z]+) seq [0-9]+ on \[inode (0x[0-9a-fA-F]+|[0-9]+)\b`)
 
 type dataCapLogTuple struct {
 	op                string
@@ -407,6 +421,11 @@ func dataCapLogTupleFrom(op, ino, tid, follows string) (dataCapLogTuple, bool) {
 // branch. Dropped ACK evidence is a separate same-thread triple: counted
 // client GID, exact ACK tuple sent to the registered peer nonce, and native
 // blackhole of that same tuple. A bare ACK/drop/dedupe line is never evidence.
+// An incoming client message dropped after Messenger receipt is one
+// ProtocolV2 handle_message blackhole line whose peer address carries the
+// registered nonce; it has no GlobalID, so only the exact peer address and
+// tuple attribute it. An UPDATE handler may be followed by its completed-flush
+// branch or by the dirty-flush branch naming the client GID and inode.
 func filterMDSCephFSDataCapLog(lines []string, gid uint64, nonce uint32) ([]string, int) {
 	type pending struct {
 		tuple           dataCapLogTuple
@@ -493,6 +512,25 @@ func filterMDSCephFSDataCapLog(lines []string, gid uint64, nonce uint32) ([]stri
 			out.peer = line
 			continue
 		}
+		if strings.Contains(line, ".handle_message blackhole ") {
+			delete(outgoingContexts, key)
+			parts := strings.SplitN(line, " >> ", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			peer := strings.SplitN(parts[1], " conn(", 2)
+			tuple, ok := messageTuple(line)
+			if !ok || tuple.op != "update" && tuple.op != "flushsnap" || len(peer) != 2 || strings.Contains(peer[0], " ") || !address.MatchString(peer[0]+" ") {
+				continue
+			}
+			if len(line) > mdsCephFSDataCapLogLineBytes || groups == mdsCephFSDataCapLogGroups {
+				dropped++
+				continue
+			}
+			kept = append(kept, line)
+			groups++
+			continue
+		}
 		if strings.Contains(line, " blackhole ") {
 			out := outgoingContexts[key]
 			delete(outgoingContexts, key)
@@ -531,13 +569,31 @@ func filterMDSCephFSDataCapLog(lines []string, gid uint64, nonce uint32) ([]stri
 			p.handled = true
 			continue
 		}
-		if !p.handled || p.branch || p.tuple.op != "flushsnap" {
+		if !p.handled || p.branch || p.tuple.op != "flushsnap" && p.tuple.op != "update" {
 			continue
 		}
 		if m := dataCapLogDedupe.FindStringSubmatch(line); m != nil {
 			tid, e1 := strconv.ParseUint(m[1], 10, 64)
 			observedGID, e2 := strconv.ParseUint(m[2], 10, 64)
 			if e1 != nil || e2 != nil || tid != p.tuple.tid || observedGID != gid {
+				continue
+			}
+			if len(line) > mdsCephFSDataCapLogLineBytes {
+				dropped++
+				continue
+			}
+			kept = append(kept, line)
+			p.branch = true
+			continue
+		}
+		if p.tuple.op == "update" {
+			m := dataCapLogFlush.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			observedGID, e1 := strconv.ParseUint(m[1], 10, 64)
+			ino, e2 := dataCapLogNumber(m[3])
+			if e1 != nil || e2 != nil || observedGID != gid || ino != p.tuple.ino {
 				continue
 			}
 			if len(line) > mdsCephFSDataCapLogLineBytes {
