@@ -277,8 +277,50 @@ class OSDOracleTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.collect()
 
+    def four_daemons(self):
+        self.replicated()
+        os.environ["CEPH_MSGR_TEST_OSD_REPLICAS"] = "4"
+        self.mapped.update(acting=[3, 0, 2], up=[3, 0, 2], acting_primary=3)
+        self.topology["osds"] = [
+            {"osd": i, "public_addrs": {"addrvec": [
+                {"type": "v2", "addr": "127.0.0.1:" + str(36900+i), "nonce": 100+i}]}}
+            for i in range(4)]
+        self.crush["devices"] = [{"id": i} for i in range(4)]
+        (self.output / "peers.json").write_text(json.dumps({"osd." + str(i): "127.0.0.1:" + str(36900+i) for i in range(4)}))
+
+    def test_four_daemons_keep_the_three_replica_data_pool(self):
+        self.four_daemons()
+        self.collect()
+        value = json.loads((self.output / "osd-oracle.json").read_bytes())
+        self.assertEqual((value["replicas"], value["min_size"]), (3, 2))
+        self.assertEqual((value["osd_id"], value["acting"], value["address"]), (3, [3, 0, 2], "v2:127.0.0.1:36903/103"))
+
+    def test_four_daemon_inventory_and_data_pool_are_exact(self):
+        self.four_daemons()
+        for field, bad in (("acting", [3, 0, 2, 1]), ("acting", [3, 0]), ("acting", [3, 0, 4]),
+                           ("acting", [3, 3, 2]), ("acting_primary", 1)):
+            previous = self.mapped[field]
+            self.mapped[field] = bad
+            with self.subTest(field=field, bad=bad), self.assertRaises(ValueError):
+                self.collect()
+            self.mapped[field] = previous
+        for size, minimum in ((4, 3), (4, 2), (3, 3)):
+            self.topology["pools"][0].update(size=size, min_size=minimum)
+            with self.subTest(size=size, minimum=minimum), self.assertRaises(ValueError):
+                self.collect()
+        self.topology["pools"][0].update(size=3, min_size=2)
+        for devices in ([{"id": i} for i in range(3)], [{"id": i} for i in (0, 1, 2, 2)], [{"id": i} for i in range(5)]):
+            self.crush["devices"] = devices
+            with self.subTest(devices=devices), self.assertRaises(ValueError):
+                self.collect()
+        self.crush["devices"] = [{"id": i} for i in range(4)]
+        self.topology["osds"] = self.topology["osds"][:3]
+        with self.assertRaises(ValueError):
+            self.collect()
+        self.assertFalse((self.output / "osd-oracle.json").exists())
+
     def test_unknown_replica_profiles_are_rejected(self):
-        for value in ("", "0", "2", "03", "4"):
+        for value in ("", "0", "2", "03", "04", "5", "6"):
             with self.subTest(value=value), mock.patch.dict(os.environ, {"CEPH_MSGR_TEST_OSD_REPLICAS": value}), self.assertRaises(ValueError):
                 self.collect()
 

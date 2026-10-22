@@ -129,7 +129,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		{"CEPH_MSGR_TEST_OSD", p.osd, []string{"0", "1"}},
 		{"CEPH_MSGR_TEST_OSD_PROFILE", p.osdProfile, []string{"legacy-v6", "replicated-pg-v8", "replicated-pg-reply-v8", "replicated-pg-request-v9-reply-v8"}},
 		{"CEPH_MSGR_TEST_OSD_STORE", p.osdStore, []string{"memstore", "bluestore"}},
-		{"CEPH_MSGR_TEST_OSD_REPLICAS", p.osdReplicas, []string{"1", "3"}},
+		{"CEPH_MSGR_TEST_OSD_REPLICAS", p.osdReplicas, osdTopologyNames()},
 		{"CEPH_MSGR_TEST_MGR_COUNT", p.mgrCount, []string{"0", "2"}},
 		{"CEPH_MSGR_TEST_IP_FAMILY", p.ipFamily, []string{"4", "6"}},
 	} {
@@ -158,8 +158,8 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	if p.osdReplicas != "1" && p.osd != "1" {
 		return profile{}, fmt.Errorf("replicated fixture requires CEPH_MSGR_TEST_OSD=1")
 	}
-	if p.osdReplicas == "3" && p.osdStore != "bluestore" {
-		return profile{}, fmt.Errorf("replicated crash profile requires BlueStore")
+	if p.osdTopology().daemons > 1 && p.osdStore != "bluestore" {
+		return profile{}, fmt.Errorf("multi-OSD replicated and erasure-capacity profiles require BlueStore")
 	}
 	if p.osdStore != "memstore" && p.osd != "1" {
 		return profile{}, fmt.Errorf("BlueStore fixture requires CEPH_MSGR_TEST_OSD=1")
@@ -332,11 +332,65 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			return profile{}, fmt.Errorf("MGR service registration acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture and two MGRs", selected)
 		}
 	}
+	if p.osdTopology().erasureCapacity {
+		// The four-daemon topology exists only for the bounded k=2,m=2
+		// erasure-width baseline. The fixture's ordinary pools keep the
+		// three-replica policy; broad OSD selections stay on topology "3".
+		selected = osdErasureWidthSelector
+		if p.osd != "1" || (p.osdProfile != "legacy-v6" && p.osdProfile != "replicated-pg-v8") || p.osdSoak != "" || p.monFreeze != "" ||
+			p.osdCachePools != "0" || p.mgrService != "0" || p.mdsFresh != "0" || p.rbdBase != "0" ||
+			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.u64XattrOracle != "" || p.writeSameOracle != "" ||
+			p.testRun != "" && p.testRun != selected {
+			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires its exclusive selector %s, BlueStore and the legacy-v6 or replicated-pg-v8 profile", selected)
+		}
+	}
 	if p.testRun == "" {
 		p.testRun = selected
 	}
 	return p, nil
 }
+
+// osdErasureWidthSelector is the only test the four-OSD topology admits.
+const osdErasureWidthSelector = "^TestCephOSDErasureK2M2Integration$"
+
+// osdTopology is one closed OSD fixture shape. Daemon capacity and the
+// replication policy of the fixture's own replicated pools are separate
+// facts: a wider erasure-code profile needs more daemons, not a different
+// replicated bootstrap pool size.
+type osdTopology struct {
+	// daemons is the number of owned OSD daemons (IDs 0..daemons-1).
+	daemons int
+	// poolSize and poolMinSize are the replicated bootstrap defaults and
+	// the fixture data pool's size and min_size.
+	poolSize, poolMinSize int
+	// erasureCapacity marks a topology that exists only to host a wider
+	// erasure-coded pool owned by its exclusive test.
+	erasureCapacity bool
+}
+
+// osdTopologies is the closed CEPH_MSGR_TEST_OSD_REPLICAS vocabulary. The
+// variable keeps its historical name because the trusted native workflow
+// already forwards it; its value selects a topology, not an arbitrary count.
+// "1" and "3" keep their original meaning. "4" adds a fourth BlueStore
+// daemon for a k=2,m=2 pool while the replicated pools stay size 3/min_size 2.
+var osdTopologies = map[string]osdTopology{
+	"1": {daemons: 1, poolSize: 1, poolMinSize: 1},
+	"3": {daemons: 3, poolSize: 3, poolMinSize: 2},
+	"4": {daemons: 4, poolSize: 3, poolMinSize: 2, erasureCapacity: true},
+}
+
+func osdTopologyNames() []string {
+	names := make([]string, 0, len(osdTopologies))
+	for name := range osdTopologies {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// osdTopology returns the profile's validated topology. An unvalidated
+// value yields the zero topology, which has no daemons.
+func (p profile) osdTopology() osdTopology { return osdTopologies[p.osdReplicas] }
 
 func (p profile) mdsFreshOSDAllowed() bool {
 	if p.mdsPublicClient() {

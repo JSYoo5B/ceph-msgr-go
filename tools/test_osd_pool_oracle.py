@@ -301,6 +301,142 @@ class ServiceMetadataTest(unittest.TestCase):
                     oracle.mode_servicemetadata(rados, None, {"action": "restore"}, None)
 
 
+class FakeErasureRados:
+    """A scripted MON for erasure-coded pool creation and cleanup.
+
+    It applies profile/pool commands to an in-memory map the way the pinned
+    MON reports them, so the oracle's independent read-backs see real shapes.
+    """
+
+    def __init__(self, existing_profiles=(), min_size=None, overwrites=True, rule_op="choose_indep", profile_override=None):
+        self.profiles = {name: {"k": "2", "m": "1", "plugin": "isa", "crush-failure-domain": "osd"} for name in existing_profiles}
+        self.pools, self.commands, self.last_status = [], [], ""
+        self.min_size, self.overwrites, self.rule_op, self.profile_override = min_size, overwrites, rule_op, profile_override
+        self.removable = True
+        self.native = Mock()
+        self.lib = Mock()
+
+    def dump(self, cluster):
+        return {"epoch": 40, "pools": self.pools}
+
+    def ioctx(self, cluster, name, namespace=""):
+        return object()
+
+    def mon(self, cluster, command):
+        self.commands.append(command)
+        prefix = command["prefix"]
+        if prefix == "osd erasure-code-profile get":
+            profile = self.profiles.get(command["name"])
+            return (-2, b"") if profile is None else (0, json.dumps(profile).encode())
+        if prefix == "osd erasure-code-profile set":
+            if command["name"] in self.profiles and not command.get("force"):
+                return -17, b""
+            values = dict(item.split("=", 1) for item in command["profile"])
+            values.setdefault("plugin", "isa")
+            values.update(self.profile_override or {})
+            self.profiles[command["name"]] = values
+            return 0, b""
+        if prefix == "osd erasure-code-profile rm":
+            if self.removable:
+                self.profiles.pop(command["name"], None)
+            return 0, b""
+        if prefix == "osd pool create":
+            profile = self.profiles[command["erasure_code_profile"]]
+            k, m = int(profile["k"]), int(profile["m"])
+            self.pools.append({"pool": 5, "pool_name": command["pool"], "flags": 1, "flags_names": "hashpspool",
+                               "type": 3, "size": k + m, "pg_num": command["pg_num"], "crush_rule": 2,
+                               "min_size": self.min_size or k + min(1, m - 1),
+                               "erasure_code_profile": command["erasure_code_profile"], "nonprimary_shards": "{}"})
+            return 0, b""
+        if prefix == "osd pool set":
+            if command["var"] == "allow_ec_overwrites" and self.overwrites:
+                self.pools[0]["flags_names"] += ",ec_overwrites"
+            return 0, b""
+        if prefix == "osd pool get":
+            if command["var"] == "allow_ec_overwrites":
+                return 0, json.dumps({"allow_ec_overwrites": self.overwrites}).encode()
+            return 0, json.dumps({"allow_ec_optimizations": False}).encode()
+        if prefix == "osd crush rule dump":
+            return 0, json.dumps([{"rule_id": 2, "type": 3, "steps": [{"op": "take", "item_name": "default"},
+                                                                        {"op": self.rule_op, "num": 0, "type": "osd"}, {"op": "emit"}]}]).encode()
+        if prefix in ("config set", "osd pool rm"):
+            if prefix == "osd pool rm":
+                self.pools = [p for p in self.pools if p["pool_name"] != command["pool"]]
+            return 0, b""
+        raise AssertionError("unexpected native command %r" % command)
+
+
+def create(rados, **request):
+    base = {"slot": 1, "pg_num": 8, "hashpspool": True, "erasure": True}
+    return oracle.mode_create(rados, None, dict(base, **request), None)
+
+
+class ErasureWidthTest(unittest.TestCase):
+    def test_k2m2_uses_its_own_profile_and_verifies_the_native_shape(self):
+        rados = FakeErasureRados(existing_profiles=[oracle.EC_PROFILE])
+        before = dict(rados.profiles[oracle.EC_PROFILE])
+        result = create(rados, width="k2m2", plugin="isa")
+        self.assertEqual((result["width"], result["size"], result["min_size"], result["pool_type"]), ("k2m2", 4, 3, 3))
+        self.assertEqual(result["erasure_code_profile"], "ceph-msgr-owned-ec-k2m2")
+        self.assertEqual((result["ec_profile"]["k"], result["ec_profile"]["m"], result["ec_profile"]["plugin"]), ("2", "2", "isa"))
+        self.assertIs(result["ec_overwrites"], True)
+        self.assertFalse(result["ec_optimized"])
+        setter = [c for c in rados.commands if c["prefix"] == "osd erasure-code-profile set"]
+        self.assertEqual(len(setter), 1)
+        self.assertNotIn("force", setter[0])
+        self.assertEqual(setter[0]["profile"], ["k=2", "m=2", "crush-failure-domain=osd", "plugin=isa"])
+        # The shared k=2,m=1 profile is neither read for writing nor changed.
+        self.assertEqual(rados.profiles[oracle.EC_PROFILE], before)
+        self.assertFalse(any(c.get("name") == oracle.EC_PROFILE for c in rados.commands))
+
+    def test_k2m2_refuses_to_overwrite_an_existing_owned_profile(self):
+        rados = FakeErasureRados(existing_profiles=["ceph-msgr-owned-ec-k2m2"])
+        with self.assertRaises(RuntimeError):
+            create(rados, width="k2m2", plugin="isa")
+        self.assertFalse(any(c["prefix"] in ("osd erasure-code-profile set", "osd pool create") for c in rados.commands))
+
+    def test_k2m2_inputs_are_closed(self):
+        for request in (dict(width="k2m2"), dict(width="k2m2", plugin="jerasure"), dict(width="k2m2", plugin="isa", optimized=True),
+                        dict(width="k4m2", plugin="isa"), dict(width="", plugin="isa"), dict(width="k2m2", plugin="isa", erasure=False, size=3, min_size=2)):
+            with self.subTest(request=request), self.assertRaises(ValueError):
+                create(FakeErasureRados(), **request)
+
+    def test_k2m2_native_differences_fail_instead_of_being_repaired(self):
+        cases = {
+            "lowered min_size": dict(min_size=2),
+            "missing overwrites": dict(overwrites=False),
+            "replicated rule step": dict(rule_op="choose_firstn"),
+            "different m": dict(profile_override={"m": "1"}),
+            "different plugin": dict(profile_override={"plugin": "jerasure"}),
+            "host failure domain": dict(profile_override={"crush-failure-domain": "host"}),
+        }
+        for name, fake in cases.items():
+            rados = FakeErasureRados(**fake)
+            with self.subTest(name=name), self.assertRaises(RuntimeError):
+                create(rados, width="k2m2", plugin="isa")
+            # No step is retried after a failed check.
+            self.assertLessEqual(sum(c["prefix"] == "osd erasure-code-profile set" for c in rados.commands), 1)
+
+    def test_k2m1_keeps_its_profile_and_force_set(self):
+        rados = FakeErasureRados()
+        result = create(rados, plugin="jerasure")
+        self.assertEqual((result["width"], result["size"], result["min_size"], result["erasure_code_profile"]), ("k2m1", 3, 2, oracle.EC_PROFILE))
+        setter = [c for c in rados.commands if c["prefix"] == "osd erasure-code-profile set"]
+        self.assertEqual(setter, [{"prefix": "osd erasure-code-profile set", "name": oracle.EC_PROFILE,
+                                   "profile": ["k=2", "m=1", "crush-failure-domain=osd", "plugin=jerasure"], "force": True}])
+
+    def test_cleanup_removes_every_owned_profile_and_reports_survivors(self):
+        rados = FakeErasureRados(existing_profiles=list(oracle.EC_PROFILES))
+        result = oracle.mode_cleanup(rados, None, {}, None)
+        self.assertTrue(result["pools_removed"])
+        self.assertEqual(result["ec_profiles_remaining"], [])
+        self.assertEqual({c["name"] for c in rados.commands if c["prefix"] == "osd erasure-code-profile rm"}, set(oracle.EC_PROFILES))
+        stuck = FakeErasureRados(existing_profiles=list(oracle.EC_PROFILES))
+        stuck.removable = False
+        self.assertEqual(oracle.mode_cleanup(stuck, None, {}, None)["ec_profiles_remaining"], list(oracle.EC_PROFILES))
+        self.assertEqual(oracle.EC_PROFILES, ("ceph-msgr-owned-ec", "ceph-msgr-owned-ec-k2m2"))
+
+
 class PoolOracleTest(unittest.TestCase):
     def test_only_two_owned_pool_names_exist(self):
         self.assertEqual(oracle.pool_name(1), "ceph-msgr-owned-pool-1")

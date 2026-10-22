@@ -5,7 +5,10 @@ Test-only; never product code. It uses the public librados C API (LGPL-2.1,
 Ceph 20.2.4 commit 7f793731f1b39eb4f465e960113d2363c311b964) through ctypes
 and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
-Go client. Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
+Go client. create also makes an erasure-coded pool of a closed width: k2m1
+(profile ceph-msgr-owned-ec) or k2m2 (its own ceph-msgr-owned-ec-k2m2 profile,
+isa, never overwritten, no optimizations); cleanup removes both profiles.
+Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
 servicecompare independently registers a native service with the Go caller's
@@ -160,6 +163,43 @@ def find_pool(dump, name):
 
 
 EC_PROFILE = "ceph-msgr-owned-ec"
+# Closed erasure-code widths. k2m1 keeps its original profile name, plugin
+# choices and force-set behaviour. A wider width owns a distinct profile that
+# is never force-overwritten, so it cannot change the profile another owned
+# pool still uses; it starts without optimizations and names its plugin.
+EC_WIDTHS = {
+    "k2m1": {"profile": EC_PROFILE, "k": 2, "m": 1, "plugins": ("", "jerasure", "isa"), "optimized": True, "force": True},
+    "k2m2": {"profile": "ceph-msgr-owned-ec-k2m2", "k": 2, "m": 2, "plugins": ("isa",), "optimized": False, "force": False},
+}
+EC_PROFILES = tuple(width["profile"] for width in EC_WIDTHS.values())
+# Pinned OSDMonitor::prepare_pool_size: an EC pool's MON-derived min_size.
+def ec_min_size(k, m):
+    return k + min(1, m - 1)
+
+
+def ec_profile_get(rados, cluster, name):
+    code, text = rados.mon(cluster, {"prefix": "osd erasure-code-profile get", "name": name, "format": "json"})
+    if code < 0:
+        return code, None
+    profile = json.loads(text)
+    if not isinstance(profile, dict) or not all(type(k) is str and type(v) is str for k, v in profile.items()):
+        raise ValueError("invalid native erasure-code profile")
+    return code, profile
+
+
+def check_ec_profile(profile, width, plugin):
+    """Independent read-back of the owned profile after setting it."""
+    if (profile is None or profile.get("k") != str(width["k"]) or profile.get("m") != str(width["m"])
+            or profile.get("crush-failure-domain") != "osd" or plugin and profile.get("plugin") != plugin):
+        raise RuntimeError("native erasure-code profile differs from the requested width: %r" % (profile,))
+
+
+def check_ec_rule(rule):
+    """An erasure rule that selects independent OSDs (failure domain osd)."""
+    steps = rule.get("steps") if isinstance(rule, dict) else None
+    if (not isinstance(steps, list) or rule.get("type") != 3
+            or not any(isinstance(s, dict) and s.get("op") in ("choose_indep", "chooseleaf_indep") and s.get("type") == "osd" for s in steps)):
+        raise RuntimeError("native pool rule is not an OSD-domain erasure rule: %r" % (rule,))
 
 
 def mode_create(rados, cluster, request, out):
@@ -168,25 +208,37 @@ def mode_create(rados, cluster, request, out):
     erasure = request.get("erasure", False)
     if type(erasure) is not bool:
         raise ValueError("erasure must be boolean")
+    width_name = request.get("width", "k2m1" if erasure else "")
+    if erasure and width_name not in EC_WIDTHS or not erasure and width_name != "":
+        raise ValueError("width must be k2m1 or k2m2 and needs erasure")
+    width = EC_WIDTHS.get(width_name)
     optimized = request.get("optimized", False)
-    if type(optimized) is not bool or optimized and not erasure:
-        raise ValueError("optimized must be boolean and needs erasure")
+    if type(optimized) is not bool or optimized and not (erasure and width["optimized"]):
+        raise ValueError("optimized must be boolean and needs an erasure width that admits it")
     # Empty keeps the cluster default plugin (isa in Tentacle).
     plugin = request.get("plugin", "")
-    if plugin not in ("", "jerasure", "isa") or plugin and not erasure:
-        raise ValueError("plugin must be empty, jerasure or isa and needs erasure")
+    if plugin not in ("", "jerasure", "isa") or plugin and not erasure or erasure and plugin not in width["plugins"]:
+        raise ValueError("plugin must be one the erasure width admits and needs erasure")
     hashpspool = request["hashpspool"]
     if type(hashpspool) is not bool:
         raise ValueError("hashpspool must be boolean")
     if find_pool(rados.dump(cluster), name):
         raise RuntimeError("owned pool already exists")
     if erasure:
-        # k=2, m=1 over three OSDs with an OSD failure domain; overwrites need
-        # BlueStore. The MON derives size 3 and min_size k+1 itself.
-        size, minimum = 3, None
-        profile = ["k=2", "m=1", "crush-failure-domain=osd"] + (["plugin=" + plugin] if plugin else [])
-        steps = [{"prefix": "osd erasure-code-profile set", "name": EC_PROFILE, "profile": profile, "force": True},
-                 {"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "erasure", "erasure_code_profile": EC_PROFILE},
+        # OSD failure domain; overwrites need BlueStore. The MON derives the
+        # pool's size (k+m) and min_size itself; neither is lowered here.
+        size, minimum = width["k"] + width["m"], None
+        if not width["force"]:
+            code, _ = ec_profile_get(rados, cluster, width["profile"])
+            if code != -2:
+                raise RuntimeError("owned erasure-code profile %s already exists (%d); refusing to overwrite it" % (width["profile"], code))
+            minimum = ec_min_size(width["k"], width["m"])
+        profile = ["k=%d" % width["k"], "m=%d" % width["m"], "crush-failure-domain=osd"] + (["plugin=" + plugin] if plugin else [])
+        setter = {"prefix": "osd erasure-code-profile set", "name": width["profile"], "profile": profile}
+        if width["force"]:
+            setter["force"] = True
+        steps = [setter,
+                 {"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "erasure", "erasure_code_profile": width["profile"]},
                  {"prefix": "osd pool set", "pool": name, "var": "allow_ec_overwrites", "val": "true"}]
         if optimized:
             # Tentacle's optimized EC (OSDMonitor::enable_pool_ec_optimizations):
@@ -199,10 +251,14 @@ def mode_create(rados, cluster, request, out):
         steps = [{"prefix": "osd pool create", "pool": name, "pg_num": pg, "pgp_num": pg, "pool_type": "replicated"},
                  {"prefix": "osd pool set", "pool": name, "var": "size", "val": str(size), "yes_i_really_mean_it": True},
                  {"prefix": "osd pool set", "pool": name, "var": "min_size", "val": str(minimum)}]
+    ec_profile = None
     for command in steps:
         code, _ = rados.mon(cluster, command)
         if code < 0:
             raise RuntimeError("native pool step %s failed: %d %s" % (command["prefix"], code, rados.last_status))
+        if command["prefix"] == "osd erasure-code-profile set":
+            _, ec_profile = ec_profile_get(rados, cluster, width["profile"])
+            check_ec_profile(ec_profile, width, plugin)
     io = rados.ioctx(cluster, name)
     try:
         # A write blocks until every PG is active; a bounded timeout fails it.
@@ -216,19 +272,32 @@ def mode_create(rados, cluster, request, out):
     if minimum is None and pool is not None:
         minimum = pool["min_size"]
     if pool is None or bool(pool["flags"] & 1) != hashpspool or pool["size"] != size or pool["min_size"] != minimum or pool["pg_num"] != pg or (pool["type"] == 3) != erasure:
-        raise RuntimeError("native pool does not match the requested closed shape")
+        raise RuntimeError("native pool does not match the requested closed shape: %r" % (
+            None if pool is None else {key: pool.get(key) for key in ("type", "size", "min_size", "pg_num", "flags")},))
+    overwrites = None
     if erasure:
         code, text = rados.mon(cluster, {"prefix": "osd pool get", "pool": name, "var": "allow_ec_optimizations", "format": "json"})
         if code < 0 or json.loads(text).get("allow_ec_optimizations") is not optimized:
             raise RuntimeError("native pool EC optimization state differs: %d %s" % (code, text))
+        code, text = rados.mon(cluster, {"prefix": "osd pool get", "pool": name, "var": "allow_ec_overwrites", "format": "json"})
+        overwrites = json.loads(text).get("allow_ec_overwrites") if code == 0 else None
+        if not width["force"] and (overwrites is not True or pool.get("erasure_code_profile") != width["profile"]
+                                   or "ec_overwrites" not in pool.get("flags_names", "").split(",")):
+            raise RuntimeError("native pool overwrite flag or profile differs: %r %r" % (overwrites, pool.get("erasure_code_profile")))
     rule = None
     code, text = rados.mon(cluster, {"prefix": "osd crush rule dump", "format": "json"})
     if code == 0:
         rules = [r for r in json.loads(text) if r.get("rule_id") == pool.get("crush_rule")]
         rule = rules[0] if rules else None
-    return {"pool": name, "pool_id": pool["pool"], "flags": pool["flags"], "size": size, "min_size": minimum,
-            "pg_num": pg, "epoch": rados.dump(cluster)["epoch"], "pool_type": pool["type"], "crush_rule": rule,
-            "ec_optimized": optimized, "nonprimary_shards": pool.get("nonprimary_shards")}
+    if erasure and not width["force"]:
+        check_ec_rule(rule)
+    result = {"pool": name, "pool_id": pool["pool"], "flags": pool["flags"], "size": size, "min_size": minimum,
+              "pg_num": pg, "epoch": rados.dump(cluster)["epoch"], "pool_type": pool["type"], "crush_rule": rule,
+              "ec_optimized": optimized, "nonprimary_shards": pool.get("nonprimary_shards")}
+    if erasure:
+        result.update(width=width_name, erasure_code_profile=pool.get("erasure_code_profile"), ec_profile=ec_profile,
+                      ec_overwrites=overwrites, flag_names=pool.get("flags_names", ""))
+    return result
 
 
 def seed_object(rados, io, name, data, attributes):
@@ -706,10 +775,16 @@ def mode_cleanup(rados, cluster, request, out):
         if code < 0:
             raise RuntimeError("native pool removal failed: %d" % code)
         removed.append({"pool": name, "existed": True})
-    # The owned erasure-code profile is unused once its pools are gone.
-    rados.mon(cluster, {"prefix": "osd erasure-code-profile rm", "name": EC_PROFILE})
+    # Every owned erasure-code profile is unused once its pools are gone.
+    # Removal is not retried; a profile still readable afterwards is reported.
+    remaining = []
+    for profile in EC_PROFILES:
+        rados.mon(cluster, {"prefix": "osd erasure-code-profile rm", "name": profile})
+        code, _ = ec_profile_get(rados, cluster, profile)
+        if code != -2:
+            remaining.append(profile)
     gone = all(find_pool(rados.dump(cluster), pool_name(slot)) is None for slot in SLOTS)
-    return {"removed": removed, "pools_removed": gone}
+    return {"removed": removed, "pools_removed": gone, "ec_profiles_remaining": remaining}
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,

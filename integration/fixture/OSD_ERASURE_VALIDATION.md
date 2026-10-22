@@ -150,8 +150,71 @@ BlueStore (secure AES256K IPv4) and replicated-pg-v8 three BlueStore (secure
 AES256K IPv6, explicit shards); the default-plugin tests reran and passed in
 both, with the plugin logged as `isa`.
 
+## k=2,m=2 on four OSDs (2026-10-22)
+
+Fixture: `CEPH_MSGR_TEST_OSD_REPLICAS` now selects a closed topology rather
+than a daemon count. `4` starts four BlueStore OSDs (IDs 0-3) while the
+replicated bootstrap and fixture data pools keep size 3/min_size 2. It is
+admitted only with the selector `^TestCephOSDErasureK2M2Integration$` on
+legacy-v6 or replicated-pg-v8. Before installing the legacy CRUSH map, the
+preparation checks that the started daemons are exactly IDs 0-3, and after
+installing it verifies the devices and the single root's items. The pool
+oracle's `k2m2` width uses its own profile `ceph-msgr-owned-ec-k2m2` (isa,
+`crush-failure-domain=osd`). It never force-sets that profile and refuses to
+create a pool if the profile already exists. After setting the profile it
+reads it back, and after creating the pool it verifies the pool, overwrite
+flag and rule. Cleanup removes both owned profiles and reports any that are
+still readable.
+
+`TestCephOSDErasureK2M2Integration` takes size, min_size, owned OSDs,
+nonprimary shards and the control shard from the oracle receipt
+cross-checked with the Go client's authenticated `osd dump` and profile.
+Hardcoded k=2,m=1 values are gone. The placement checks complete before
+any Go I/O.
+
+Observed in replicated-pg-v8, four BlueStore OSDs, secure AES256K, IPv4,
+container runtime:
+
+- Pool: type 3, plugin `isa` (cluster default also `isa`), k=2, m=2, size 4,
+  min_size 3 (the pinned `OSDMonitor::prepare_pool_size` value
+  `k + min(1, m-1)`, not lowered), `ec_overwrites` set, no
+  `allow_ec_optimizations`, `nonprimary_shards` `{}`. The rule is
+  `set_chooseleaf_tries 5, set_choose_tries 100, take default, choose_indep 0
+  type osd, emit`, as for k=2,m=1.
+- Placement at epoch 26: PG `3.0`, acting and up `[1 2 0 3]`, primary osd.1
+  on shard 0, derived control shard 1.
+- MON admission and replicated-pool I/O of a fresh client with the rule
+  present; WRITEFULL of 10000 bytes (ONDISK), partial READ, partial WRITE,
+  APPEND, SETXATTR/GETXATTR, STAT size, TRUNCATE and DELETE matched the
+  independent native readback; OMAP SETVALS was refused with `-95`;
+  NO_SHARD and the control shard got no reply within five seconds (unknown
+  outcome); a cross-client watch/notify completed with one ACK reply.
+- Owned pool and profile removal was confirmed by the test cleanup.
+
+Receipts:
+[run 39800399137](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39800399137)
+at `f5b252adb14c1edc01f959afc5ef273d38ecbc90` (every subtest passed; that
+source did not yet log the placement), and
+[run 39804387429](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39804387429)
+at `6dd4a94c608390e2ea26415a4b38d35518184060` (every subtest passed, with
+the placement above). In the same run 39800399137 at `f5b252a`, the legacy-v6
+three-BlueStore row (secure AES256K, IPv4, broad OSD selection) passed
+`TestCephOSDErasureIntegration`, its optimized and jerasure variants, both
+failover tests, both snapshot/degraded-write tests and the pool-snapshot
+test. The three k=2,m=1 pools of the shared scenario (default isa,
+optimized, jerasure) logged size 3 and min_size 2 under the new fact
+checks; the failover and snapshot tests do not use those checks. The k=2,m=2 test was skipped there as intended.
+
+Not verified for k=2,m=2: legacy-v6, other security, address or runtime
+profiles, jerasure, `allow_ec_optimizations` and primary-first numbering,
+degraded reads or writes, failover, listing, snapshots and any in-flight
+mutation or epoch-change case. The unit-level numeric-domain test of
+`OSDPrimaryFirst` (PoolSize 2..128) is synthetic and does not accept those
+combinations as EC configurations.
+
 Not claimed: other EC profiles or plugins (beyond k=2,m=1 with isa and
-jerasure, with and without `allow_ec_optimizations` for isa), EC partial-read or direct shard reads of optimized pools, MSR rules, writes while
+jerasure, with and without `allow_ec_optimizations` for isa, and the
+non-optimized isa k=2,m=2 baseline above), EC partial-read or direct shard reads of optimized pools, MSR rules, writes while
 degraded beyond the WRITEFULL case above,
 backfill progress, compound vectors
 beyond the cases above, and replica (shard) reads: a balanced read routed to

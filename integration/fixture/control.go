@@ -1350,22 +1350,29 @@ func (c *fixtureCluster) prepareManagerFailover(ctx context.Context, out string)
 	return prepareManagerFailoverWithBackend(ctx, names, backend, 45*time.Second)
 }
 func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
-	count, _ := strconv.Atoi(c.profile.osdReplicas)
-	minimum := 1
-	if count == 3 {
-		minimum = 2
-		path := filepath.Join(out, "legacy.crush.txt")
-		source, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		text := strings.Replace(string(source), "device 0 osd.0", "device 0 osd.0\ndevice 1 osd.1\ndevice 2 osd.2", 1)
-		text = strings.Replace(text, "item osd.0 weight 1.00000", "item osd.0 weight 1.00000\n    item osd.1 weight 1.00000\n    item osd.2 weight 1.00000", 1)
-		if err := os.WriteFile(path, []byte(text), 0600); err != nil {
-			return err
-		}
+	topology := c.profile.osdTopology()
+	var started []int
+	for _, daemon := range c.cluster.OSDs() {
+		started = append(started, daemon.ID)
 	}
-
+	// The CRUSH root lists exactly the daemons this fixture owns, never a
+	// count inferred from the profile name alone.
+	owned, err := ownedOSDInventory(started, topology)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(out, "legacy.crush.txt")
+	source, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	text, err := legacyCRUSHForInventory(string(source), owned)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(text), 0600); err != nil {
+		return err
+	}
 	if err := c.exec(ctx, "crushtool", "-c", "/out/legacy.crush.txt", "-o", "/out/legacy.crush"); err != nil {
 		return err
 	}
@@ -1376,6 +1383,13 @@ func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
 	if _, err := c.cluster.Ceph(ctx, "osd", "setcrushmap", "-i", "/tmp/legacy.crush"); err != nil {
 		return err
 	}
+	installed, err := c.cluster.Ceph(ctx, "osd", "crush", "dump", "--format", "json")
+	if err != nil {
+		return err
+	}
+	if err := verifyCRUSHInventory(installed, owned); err != nil {
+		return err
+	}
 	if _, err := c.cluster.Ceph(ctx, "balancer", "off"); err != nil {
 		return err
 	}
@@ -1383,7 +1397,7 @@ func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
 	if c.profile.osdPGV8() {
 		poolPGs, noHashPSPool = 8, false
 	}
-	_, err := c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: "ceph-msgr-osd-fixture", PGNum: poolPGs, Replicas: count, MinSize: minimum, NoHashPSPool: noHashPSPool})
+	_, err = c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: "ceph-msgr-osd-fixture", PGNum: poolPGs, Replicas: topology.poolSize, MinSize: topology.poolMinSize, NoHashPSPool: noHashPSPool})
 	if err != nil {
 		return fmt.Errorf("create legacy pool: %w", err)
 	}
