@@ -1,0 +1,36 @@
+# Cluster-free top-level tests of the integration package.
+#
+# Basic CI runs exactly these tests, without a Ceph fixture, and requires each
+# one to report PASS (tools/cluster_free_tests.py). Every other top-level test
+# in integration/*_test.go must be a TestCeph* native fixture test; those stay
+# opt-in and run only through the native scenario workflow. Keep one name per
+# line, sorted.
+TestAuthenticationRejectionOracle
+TestAwaitMDSUnsafeWindowSettlesThenWaitsTheGap
+TestChainedForwardFailureRetainsPartialNativeEvidence
+TestErasureFactsFollowTheNativeWidth
+TestErasurePlacementControlUsesThePoolSize
+TestFixtureCommandArguments
+TestFixtureKeyringSelection
+TestMDSFreshNativeAddressSchema
+TestMDSFreshRequiresExplicitKeyProfiles
+TestMDSFreshRequiresExplicitWireModeMapping
+TestMDSSessionNativeOpenImages
+TestMDSUnsafeWindowClassification
+TestOSDMapEvidenceKeepsDistinctMapsAndRejectsChangedDuplicates
+TestOSDMapWaitAfterMapFailureIsBoundedByContext
+TestOSDMapWaitAllowsDeliveredMapAndAncientDroppedRead
+TestOSDMapWaitContextBoundaryRetainsCompletedFailures
+TestOSDMapWaitPreservesAncientRPCErrorWithMapFailure
+TestOSDMapWaitReportsRPCFailureWithoutWaitingForMapDeadline
+TestOSDMapWaitRetainsBothAlreadyBufferedFailures
+TestRBDBaseTestOnlyLayoutAndDecoders
+TestRBDCloneTestOnlyEncodings
+TestRBDJournalTestOnlyEncodings
+TestRBDLockTestOnlyEncodings
+TestRBDMutationOutcomeLedger
+TestRBDWriteTestOnlyEncodings
+TestReplicatedPGFixtureProfiles
+TestSecurityModeObserver
+TestSeedPathFaultBlocksLateDialAndClosesLatestOutsideLock
+TestServiceWatchRequestMatchesNativeOracleInputs

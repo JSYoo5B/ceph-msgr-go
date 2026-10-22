@@ -305,6 +305,11 @@ checks the root module's build graph, permits only the documented compression
 module externally, and rejects native sources, module replacements and subprocess
 dependencies. Fixture-only dependencies remain in `integration/fixture/`.
 
+Basic CI also runs, with the race detector, exactly the cluster-free
+integration-package tests listed in `integration/cluster_free_tests.txt`, and
+`tools/cluster_free_tests.py` requires each of them to report PASS. Every other
+top-level test there must be a `TestCeph*` native test, which stays opt-in.
+
 `integration/fixture/` contains bounded native setup/control/oracle recipes.
 Run Docker profiles on Linux with their documented selectors. Native vectors,
 unit/race/fuzz tests, live interoperability and full CI are separate evidence.
