@@ -43,7 +43,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        self.assertEqual(len(self.rows), 66)
+        # 63 original rows, 2 mgr-service, 1 erasure k2m2 and 1 cache-tier-ops.
+        self.assertEqual(len(self.rows), 67)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak")

@@ -138,6 +138,14 @@ at `ccdee9045a776b340ebd141b090a14c351c58ac5`, also passed the same assertions
 (20.40 s). It did not log the summary, so it does not show which accepted
 try-flush value occurred.
 
+Both runs predate the rebase onto main with the four-OSD erasure baseline
+and the MDS feature decision. Their results are not a pass of the rebased
+head. The selector was requested again on the final rebased PR head. That
+run, its exact commit and its logged summary are cited in PR #41, because
+this record cannot name the commit that contains it. The rebased run's
+cache operation codes and try-flush outcome were compared with the table
+above before the PR was updated.
+
 Pin evidence is behavioral: the -1 results follow pin and stop after unpin.
 The raw object_info FLAG_CACHE_PIN and FLAG_DIRTY bits were not decoded;
 dirty state comes from native `is_dirty`.
