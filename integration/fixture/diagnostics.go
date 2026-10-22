@@ -20,6 +20,7 @@ var metadataFiles = []string{
 	"osd-checksum-compound-input.json", "osd-checksum-compound-result.json", "osd-checksum-compound-command.json", "osd-checksum-compound-results.json",
 	"osd-enforce-snap-context-input.json", "osd-enforce-snap-context-result.json", "osd-enforce-snap-context-command.json", "osd-enforce-snap-context-results.json", "osd-enforce-snap-context-native-write.json",
 	"osd-cache-pools-fixture.json", "osd-cache-pools-native.json", "osd-cache-pools-command.json", "osd-cache-pools-results.json",
+	"osd-cache-tier-ops-native.json", "osd-cache-tier-ops-command.json", "osd-cache-tier-ops-results.json",
 	"osd-ignore-cache-probe.json", "osd-ignore-cache-plan.json", "osd-ignore-cache-attached.json", "osd-ignore-cache-detached.json", "osd-ignore-cache-native.json", "osd-ignore-cache-command.json",
 	"fixture-manifest.json", "fixture-ownership.json", "daemon-version", "relay.log", "native-oracles.log", "native-oracles.error", "osd-map-control.log", "peers.json", "pool-policy.json", "provider.error", "provider.cleanup.error",
 	"mapped-oracle-status.json", "mapped-oracle-mon.json", "mapped-oracle-mgr.json", "mapped-oracle-pg.json", "mapped-oracle-summary.json",

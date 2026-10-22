@@ -84,6 +84,23 @@
    }
   },
   {
+   "id": "osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcachetierops",
+   "group": "osd-cache-pools",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "osd_cache_pools": "1",
+    "test_run": "^TestCephOSDCacheTierOpsIntegration$"
+   }
+  },
+  {
    "id": "mon-mgr.aes256k.ip6",
    "group": "mon-mgr",
    "params": {

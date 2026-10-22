@@ -93,13 +93,18 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             "osd_profile": "legacy-v6", "osd_cache_pools": "1",
             "test_run": "^TestCephOSDIgnoreCacheIntegration$",
         }
+        # The native-only tier-ops checkpoint reuses the same fixture opt-in
+        # with its own exclusive selector; no new workflow parameter exists.
         self.assertEqual(rows, [
             dict(common, key="aes", service="aes", mode="crc", family="4", runtime="host"),
             dict(common, key="aes256k", service="aes256k", family="6", runtime="container"),
+            dict(common, key="aes256k", service="aes256k", family="6", runtime="container",
+                 test_run="^TestCephOSDCacheTierOpsIntegration$"),
         ])
-        expected = "TestCephOSDIgnoreCacheIntegration"
-        self.assertIn(expected, self.declared)
         for row in rows:
+            expected = re.fullmatch(r"\^(\w+)\$", row["test_run"]).group(1)
+            self.assertIn(expected, {"TestCephOSDIgnoreCacheIntegration", "TestCephOSDCacheTierOpsIntegration"})
+            self.assertIn(expected, self.declared)
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
             for unrelated in (expected + "Extended", "Prefix" + expected,

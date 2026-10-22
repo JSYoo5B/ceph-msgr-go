@@ -311,8 +311,8 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}
 	if p.osdCachePools == "1" {
 		selected = "^TestCephOSDIgnoreCacheIntegration$"
-		if p.mgrCount != "2" || p.testRun != "" && p.testRun != selected {
-			return profile{}, fmt.Errorf("cache-pool acceptance requires two MGRs and its exclusive selector %s", selected)
+		if p.mgrCount != "2" || p.testRun != "" && p.testRun != selected && p.testRun != cacheTierOpsSelector {
+			return profile{}, fmt.Errorf("cache-pool acceptance requires two MGRs and an exclusive selector %s or %s", selected, cacheTierOpsSelector)
 		}
 		checked := p
 		checked.osdCachePools = "0"

@@ -227,6 +227,7 @@ type osdCachePoolScope struct {
 	Resources       *cachePoolResources
 	Steps           []ignoreCacheProbeStep
 	LastID          int64
+	TierOps         bool
 	Finished        bool
 	FinishAttempted bool
 	FinishError     error
@@ -243,7 +244,7 @@ func (x *osdCachePoolScope) save() error {
 	}
 	return writeIgnoreCacheJSON(x.Out, "osd-cache-pools-fixture.json", map[string]any{
 		"source_commit": nativeEncoderCommit, "plan": x.Plan, "live_go_fixture": true,
-		"steps": x.Steps, "finished": x.Finished, "finish_attempted": x.FinishAttempted,
+		"steps": x.Steps, "finished": x.Finished, "finish_attempted": x.FinishAttempted, "tier_ops_selected": x.TierOps,
 		"cleanup_error": errorText,
 		"cleanup":       cleanup,
 	})
@@ -347,9 +348,9 @@ func (c *fixtureCluster) osdCachePoolsControl(ctx context.Context, out string, f
 		return errors.New("stale cache-pool control identity")
 	}
 	action, which := fields[2], ""
-	if action == "finish" {
+	if action == "finish" || action == cacheTierOpsAction {
 		if len(fields) != 3 {
-			return errors.New("finish takes no case")
+			return errors.New(action + " takes no case")
 		}
 	} else {
 		if len(fields) != 4 || !cachePoolCase(fields[3]) || (action != "native" && action != "observe") {
@@ -360,6 +361,9 @@ func (c *fixtureCluster) osdCachePoolsControl(ctx context.Context, out string, f
 	x.LastID = id
 	if action == "finish" {
 		return c.finishOSDCachePools(ctx)
+	}
+	if action == cacheTierOpsAction {
+		return c.cacheTierOpsNative(ctx)
 	}
 	return c.cachePoolNative(ctx, action, which)
 }
