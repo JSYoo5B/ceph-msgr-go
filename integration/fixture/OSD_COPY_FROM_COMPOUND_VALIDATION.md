@@ -67,7 +67,7 @@ reply/native versions matched. This identifies the overbroad expectation in
 the unchanged comparison; it did not fix a product failure.
 All first/diagnostic runs confirmed owned-object and container/network cleanup.
 
-The pinned `PrimaryLogPG::fill_in_copy_get` source (PrimaryLogPG.cc:9397-9413)
+The pinned `PrimaryLogPG::do_copy_get` source (PrimaryLogPG.cc:9397-9413)
 starts OMAP enumeration at cursor `""` with `ObjectStore::UPPER_BOUND`. The final
 checkpoint separately executes native `rados cp` (`rados.cc:541-551`,
 `ObjectWriteOperation::copy_from`), which also omits that key on both profiles.

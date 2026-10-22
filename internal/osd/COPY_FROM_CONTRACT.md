@@ -101,7 +101,7 @@ or SET_REDIRECT in a vector is refused before submission. Live:
 
 On the pinned selected profiles, a source's empty OMAP key is omitted by
 COPY_FROM/COPY_FROM2 even when the native OSD reports success. Independent
-`rados cp` reproduces the same result. `PrimaryLogPG::fill_in_copy_get` starts
+`rados cp` reproduces the same result. `PrimaryLogPG::do_copy_get` starts
 its OMAP walk with UPPER_BOUND at the empty cursor; nonempty keys and the
 header are copied in these tests. This is server-copy behavior, not a Go
 encoder correction or a promise of complete OMAP preservation. The product
