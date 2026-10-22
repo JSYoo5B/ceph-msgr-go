@@ -292,6 +292,20 @@ sequences, migrate sequences, wanted/issued/dirty masks, snapshot follows
 and barriers are the caller's state; the library checks only the operation
 direction and frame bounds.
 
+These sends have two outcome classes. An error is returned only before the
+message enters the session's ordered writer: an invalid operation, the frame
+limit, a cancelled ctx, a closed, rejected or Lost session, or an ended
+transport. That message is never transmitted by this session, so a caller
+may send the same flush TID later (known unsent). A nil return means
+admission only. The frame may already have reached the MDS, may be
+retransmitted by same-address Messenger resume, or may be discarded with
+the session; whether the MDS applied it stays unknown until a correlated
+FLUSH_ACK/FLUSHSNAP_ACK. The library resends neither class on another
+session. Synthetic peers verify that a cancelled send is never written
+ahead of a later admitted one, and that a send on a Lost session returns the
+session's terminal cause, is not replayed before or after reconnect, and
+can then be sent explicitly once with its original TID and ACK identity.
+
 ## Evidence
 
 Seven fresh native vectors from the pinned source cover three client

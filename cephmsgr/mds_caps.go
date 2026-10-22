@@ -81,6 +81,16 @@ func (s *MDSSession) sendMessage(ctx context.Context, message msgr.MessageData) 
 // transaction for a dirty UPDATE, FLUSH or FLUSHSNAP, echoed in the MDS
 // FLUSH_ACK or FLUSHSNAP_ACK event. ctx
 // governs write admission only; success is not proof of MDS processing.
+//
+// The outcome has two classes. A non-nil error is returned only before the
+// message enters the session's ordered writer (invalid operation, frame
+// limit, cancelled ctx, a closed, rejected or Lost session, or an ended
+// transport): this session never transmits that message, so the caller may
+// send the same flush TID again later. A nil return means the message was
+// admitted. It may already be on the wire, retransmitted by Messenger resume
+// or dropped with the session, and the MDS may or may not have applied it;
+// only a correlated ACK resolves that uncertainty. The library never resends
+// an admitted or refused message on another session by itself.
 func (s *MDSSession) SendCaps(ctx context.Context, caps MDSCaps, flushTID uint64) error {
 	message, err := encodeMDSCaps(caps, flushTID, s.conn.client.options.MaxFrameSize)
 	if err != nil {
