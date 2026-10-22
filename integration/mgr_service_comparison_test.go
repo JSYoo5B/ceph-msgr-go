@@ -14,13 +14,15 @@ import (
 )
 
 type mgrServiceComparison struct {
-	GID            uint64                       `json:"gid"`
-	StartEpoch     uint32                       `json:"start_epoch"`
-	DumpEpoch      uint32                       `json:"dump_epoch"`
-	Metadata       map[string]string            `json:"metadata"`
-	Statuses       map[string]map[string]string `json:"statuses"`
-	Removed        bool                         `json:"removed"`
-	AbsenceSeconds float64                      `json:"absence_seconds"`
+	GID                  uint64                       `json:"gid"`
+	StartEpoch           uint32                       `json:"start_epoch"`
+	DumpEpoch            uint32                       `json:"dump_epoch"`
+	Metadata             map[string]string            `json:"metadata"`
+	Statuses             map[string]map[string]string `json:"statuses"`
+	Removed              bool                         `json:"removed"`
+	AbsenceSeconds       float64                      `json:"absence_seconds"`
+	PresentAfterShutdown bool                         `json:"present_after_shutdown"`
+	RemovalSeconds       float64                      `json:"removal_seconds"`
 }
 
 func testMgrServiceNativeComparison(t *testing.T, ctx context.Context, c *cephmsgr.Client) {

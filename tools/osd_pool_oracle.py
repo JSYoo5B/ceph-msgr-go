@@ -477,6 +477,7 @@ def service_dictionary(value, label):
 def mode_servicecompare(rados, cluster, request, out):
     # A separate native registration handle is shut down exactly once. The
     # original handle remains an independent MON/MGR observer of its removal.
+    import time
     service, daemon = request["service"], request["daemon"]
     if type(service) is not str or type(daemon) is not str or not SERVICE_NAME.fullmatch(service) or not SERVICE_NAME.fullmatch(daemon):
         raise ValueError("invalid service or daemon name")
@@ -510,10 +511,21 @@ def mode_servicecompare(rados, cluster, request, out):
             result["statuses"][phase] = observed["status_entry"]["status"]
     finally:
         rados.lib.rados_shutdown(native)
+    # The void shutdown API is not a removal acknowledgement. Preserve an
+    # independent post-return observation and allow the native beacon grace.
+    started = time.monotonic()
+    code, text = rados.mon(cluster, {"prefix": "service dump", "format": "json"})
+    if code != 0:
+        raise RuntimeError("native post-shutdown observation failed: %d" % code)
+    entry = json.loads(text).get("services", {}).get(service, {}).get("daemons", {}).get(daemon)
+    result["present_after_shutdown"] = entry is not None
+    if entry is not None and entry["gid"] != result["gid"]:
+        raise RuntimeError("native identity changed after shutdown")
     gone = mode_servicewatch(rados, cluster, {"service": service, "daemon": daemon,
-        "expect": "absent", "wait_seconds": 30, "stable_seconds": 3}, out)
+        "expect": "absent", "wait_seconds": 90, "stable_seconds": 3}, out)
     result["removed"] = gone["matched"]
     result["absence_seconds"] = gone["matched_for_seconds"]
+    result["removal_seconds"] = time.monotonic() - started
     if not result["removed"]:
         raise RuntimeError("native registration remains after shutdown")
     return {"comparison": result}

@@ -740,7 +740,7 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 			budget = 120 * time.Second
 		}
 		if fields[1] == "servicecompare" {
-			budget = 180 * time.Second
+			budget = 240 * time.Second
 		}
 		if err = c.runOracleCommandWithTimeout(ctx, out, args, "osd-pool-command.json", "native owned-pool oracle", budget); err != nil {
 			return err

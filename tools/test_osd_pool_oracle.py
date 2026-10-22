@@ -130,12 +130,15 @@ class ServiceComparisonTest(unittest.TestCase):
     def test_independent_handle_status_phases_redaction_and_cleanup(self):
         rados = Mock()
         rados.connect.return_value = "registration-handle"
+        rados.mon.return_value = (0, b'{"services":{"svc":{"daemons":{"native":{"gid":8}}}}}')
         with patch.object(oracle, "mode_servicewatch", side_effect=self.observations()) as observe:
             result = oracle.mode_servicecompare(rados, "observer-handle", self.request, None)["comparison"]
         self.assertEqual(result["metadata"], self.request["metadata"])
         self.assertEqual(result["statuses"], self.request["statuses"])
         self.assertTrue(result["removed"])
         self.assertEqual(result["gid"], 8)
+        self.assertTrue(result["present_after_shutdown"])
+        self.assertEqual(observe.call_args.args[2]["wait_seconds"], 90)
         self.assertEqual(rados.lib.rados_service_register.call_count, 1)
         self.assertEqual(rados.lib.rados_service_update_status.call_count, 3)
         self.assertEqual(rados.lib.rados_service_update_status.call_args.args, ("registration-handle", b"\0"))
@@ -171,10 +174,19 @@ class ServiceComparisonTest(unittest.TestCase):
 
     def test_shutdown_return_without_observed_removal_is_failure(self):
         rados = Mock()
+        rados.mon.return_value = (0, b'{"services":{}}')
         observed = self.observations()
         observed[-1]["matched"] = False
         with patch.object(oracle, "mode_servicewatch", side_effect=observed):
             with self.assertRaises(RuntimeError):
+                oracle.mode_servicecompare(rados, None, self.request, None)
+        rados.lib.rados_shutdown.assert_called_once()
+
+    def test_failed_post_shutdown_inventory_cannot_prove_absence(self):
+        rados = Mock()
+        rados.mon.return_value = (-13, b'')
+        with patch.object(oracle, "mode_servicewatch", side_effect=self.observations()[:3]):
+            with self.assertRaisesRegex(RuntimeError, "post-shutdown observation failed"):
                 oracle.mode_servicecompare(rados, None, self.request, None)
         rados.lib.rados_shutdown.assert_called_once()
 
