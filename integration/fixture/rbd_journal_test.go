@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -22,13 +23,13 @@ func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 	// Writes stay inside one object and below librbd's 16 KiB journal
 	// payload; discards cover whole objects (64 KiB discard granularity).
 	objectSize := uint64(1) << plan.Order
-	for _, e := range append(append([]rbdJournalEvent{}, plan.SetupEvents...), plan.WriteEvents...) {
+	for _, e := range slices.Concat(plan.SetupEvents, plan.WriteEvents, plan.ConcurrentOwnerEvents, plan.ConcurrentEvents) {
 		inside := e.Length > 0 && e.Offset%4096 == 0 && e.Offset+e.Length <= plan.Size && e.Offset/objectSize == (e.Offset+e.Length-1)/objectSize
 		if !inside || e.Kind == "write" && e.Length > 8<<10 || e.Kind == "discard" && (e.Offset%objectSize != 0 || e.Length != objectSize) || e.Kind != "write" && e.Kind != "discard" {
 			t.Fatal("plan event is not a bounded write or a whole-object discard", e)
 		}
 	}
-	for _, e := range plan.GoWrites {
+	for _, e := range slices.Concat(plan.GoWrites, plan.GoConcurrentWrites) {
 		if e.Length == 0 || e.Length > 8<<10 || e.Offset+e.Length > plan.Size || e.Offset/objectSize != (e.Offset+e.Length-1)/objectSize {
 			t.Fatal("Go journal write is not bounded", e)
 		}
@@ -38,6 +39,11 @@ func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 		"foreign image":  func(p *rbdJournalPlan) { p.Image = p.BaseImage },
 		"foreign client": func(p *rbdJournalPlan) { p.GoClient = "" },
 		"no Go writes":   func(p *rbdJournalPlan) { p.GoWrites = nil },
+		"no concurrency": func(p *rbdJournalPlan) { p.ConcurrentEvents = nil },
+		"no Go appender": func(p *rbdJournalPlan) { p.GoConcurrentWrites = nil },
+		"discard in session": func(p *rbdJournalPlan) {
+			p.ConcurrentEvents = []rbdJournalEvent{{"discard", 0, 64 << 10}}
+		},
 	} {
 		changed := rbdJournalPlanFor(token)
 		change(&changed)
@@ -49,6 +55,23 @@ func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 		if !strings.Contains(rbdJournalNativePython, field) {
 			t.Fatal("native journal driver no longer checks", field)
 		}
+	}
+	// The concurrent session gives Go one entry per splay offset 0 to 2, and
+	// one native aio write overlaps a Go extent so that the image shows the
+	// order of the two owners.
+	if len(plan.GoConcurrentWrites) != 3 || !slices.ContainsFunc(plan.ConcurrentEvents, func(e rbdJournalEvent) bool {
+		return slices.ContainsFunc(plan.GoConcurrentWrites, func(g rbdBaseExtent) bool { return e.Offset < g.Offset+g.Length && g.Offset < e.Offset+e.Length })
+	}) {
+		t.Fatal("concurrent plan lacks an overlap between the two owners", plan)
+	}
+	for _, field := range []string{"image.aio_write(", "wait_proceed(3)", "'rbd-journal-proceed-%d'", "'rbd-journal-state.json'"} {
+		if !strings.Contains(rbdJournalNativePython, field) {
+			t.Fatal("native journal driver concurrent session lacks", field)
+		}
+	}
+	// A user flush would journal an AioFlush event the test does not plan.
+	if strings.Contains(rbdJournalNativePython, ".flush()") {
+		t.Fatal("native journal driver flushes")
 	}
 	for _, driver := range []string{rbdLockNativePython, rbdWriteNativePython} {
 		if !strings.Contains(driver, "'ceph-msgr-journal-' + token") {
@@ -142,6 +165,20 @@ func rbdJournalOutput(token string, plan rbdJournalPlan, action string) map[stri
 		value["events"], value["close_ns"] = events("write", plan.WriteEvents), 5
 	case "replay":
 		value["acquire_ns"], value["owner"], value["close_ns"] = 7, true, 5
+	case "concurrent":
+		owner, issued, completed := events("concurrent-owner", plan.ConcurrentOwnerEvents), events("concurrent", plan.ConcurrentEvents), events("concurrent", plan.ConcurrentEvents)
+		for _, e := range issued {
+			delete(e, "finished_ns")
+		}
+		watchers := []map[string]any{{"addr": "10.0.0.1:0/1", "id": 4242, "cookie": 7}}
+		returns := make([]int, len(plan.ConcurrentEvents))
+		value["events"], value["close_ns"], value["aio_return_values"], value["final_wait_ns"] = slices.Concat(owner, completed), 5, returns, 6
+		value["phases"] = []map[string]any{
+			{"phase": "owner", "time_ns": 1, "is_owner": true, "owners": []map[string]any{{"mode": 0, "owner": "10.0.0.1:0/1"}}, "watchers": watchers, "events": owner},
+			{"phase": "issued", "time_ns": 2, "is_owner": false, "owners": []map[string]any{}, "watchers": watchers, "wait_ns": 3, "events": issued},
+			{"phase": "completed", "time_ns": 3, "is_owner": true, "owners": []map[string]any{}, "watchers": watchers, "events": completed, "aio_return_values": returns},
+			{"phase": "closed", "time_ns": 4, "is_owner": false, "owners": []map[string]any{}, "watchers": []map[string]any{}, "wait_ns": 4},
+		}
 	}
 	return value
 }
@@ -187,6 +224,30 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 	}
 	if _, err := decodeRBDJournalNative("replay", token, 9, plan, encode(rbdJournalOutput(token, plan, "write"))); err == nil {
 		t.Fatal("write output admitted as replay")
+	}
+	phases := func(v map[string]any) []map[string]any { return v["phases"].([]map[string]any) }
+	for name, change := range map[string]func(map[string]any){
+		"missing phase":          func(v map[string]any) { v["phases"] = phases(v)[:3] },
+		"reordered phases":       func(v map[string]any) { p := phases(v); p[1], p[2] = p[2], p[1] },
+		"owner without lock":     func(v map[string]any) { phases(v)[0]["is_owner"] = false },
+		"completed without lock": func(v map[string]any) { phases(v)[2]["is_owner"] = false },
+		"issued already done":    func(v map[string]any) { phases(v)[1]["events"].([]map[string]any)[0]["finished_ns"] = 9 },
+		"watcher after close":    func(v map[string]any) { phases(v)[3]["watchers"] = phases(v)[0]["watchers"] },
+		"missing aio results":    func(v map[string]any) { delete(v, "aio_return_values") },
+		"no final signal":        func(v map[string]any) { delete(v, "final_wait_ns") },
+		"no inspect":             func(v map[string]any) { delete(v, "inspect") },
+		"native events only":     func(v map[string]any) { v["events"] = v["events"].([]map[string]any)[2:] },
+	} {
+		value := rbdJournalOutput(token, plan, "concurrent")
+		change(value)
+		if _, err := decodeRBDJournalNative("concurrent", token, 9, plan, encode(value)); err == nil {
+			t.Fatal("malformed concurrent journal output admitted", name)
+		}
+	}
+	replay := rbdJournalOutput(token, plan, "replay")
+	replay["phases"] = rbdJournalOutput(token, plan, "concurrent")["phases"]
+	if _, err := decodeRBDJournalNative("replay", token, 9, plan, encode(replay)); err == nil {
+		t.Fatal("replay output with concurrent phases admitted")
 	}
 	if err := (&fixtureCluster{profile: profile{rbdBase: "1"}}).rbdJournalControl(t.Context(), t.TempDir(), []string{"1", token, "setup"}); err == nil {
 		t.Fatal("journal control admitted without a prepared scope")

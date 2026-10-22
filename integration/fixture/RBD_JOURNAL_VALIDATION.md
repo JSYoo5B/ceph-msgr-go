@@ -239,5 +239,10 @@ client would, and the `inspect` observation requires no header watcher.
 - Header-update notifies sent by Go (Go only received and acknowledged
   native ones), and AcquiredLock or ReleasedLock notifies around Go's lock
   (no other image watcher existed while Go held it).
-- Concurrent native and Go appenders; Go held the lock only while the image
-  was closed natively.
+- Concurrent native and Go appenders in this acceptance: Go held the lock
+  only while the image was closed natively. One bounded session with both
+  clients live, appends serialized by an exclusive-lock handoff native -> Go
+  -> native, is recorded in
+  [RBD_JOURNAL_CONCURRENT_VALIDATION.md](RBD_JOURNAL_CONCURRENT_VALIDATION.md)
+  with its own limits (single OSD, `legacy-v6`, one handoff cycle, no
+  faults).

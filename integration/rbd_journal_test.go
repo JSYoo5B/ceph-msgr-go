@@ -44,8 +44,15 @@ import (
 // octopus or later) and one with `journal.guard_append` then APPEND (its
 // older compat form). Native librados `exec`, librados reads, `rbd journal
 // info`, `status` and `inspect` and a native librbd journal replay on lock
-// acquisition observe each step independently. See
-// integration/fixture/RBD_BASE_FIXTURE.md and RBD_JOURNAL_VALIDATION.md.
+// acquisition observe each step independently. Finally, in one bounded
+// concurrent session, native librbd keeps the image open read-write while
+// the exclusive lock goes native -> Go -> native through librbd's own lock
+// notifications: Go appends three entries under its own tag (two submitted
+// from concurrent goroutines; their wire overlap is not observed) while
+// native aio writes wait for the lock, applies them to the data objects and commits the image
+// client's position, and native librbd then appends its queued writes under
+// a new tag. See integration/fixture/RBD_BASE_FIXTURE.md,
+// RBD_JOURNAL_VALIDATION.md and RBD_JOURNAL_CONCURRENT_VALIDATION.md.
 //
 // Everything journal-specific below is test-only consumer logic: the
 // cls_journal encodings, the Entry framing, the librbd EventEntry,
@@ -103,6 +110,10 @@ type nativeRBDJournalPlan struct {
 	SetupEvents  []nativeRBDJournalEvent `json:"setup_events"`
 	WriteEvents  []nativeRBDJournalEvent `json:"write_events"`
 	GoWrites     []nativeRBDExtent       `json:"go_writes"`
+
+	ConcurrentOwnerEvents []nativeRBDJournalEvent `json:"concurrent_owner_events"`
+	GoConcurrentWrites    []nativeRBDExtent       `json:"go_concurrent_writes"`
+	ConcurrentEvents      []nativeRBDJournalEvent `json:"concurrent_events"`
 }
 
 type nativeRBDJournalApplied struct {
@@ -113,6 +124,30 @@ type nativeRBDJournalApplied struct {
 	SHA256     string `json:"sha256"`
 	StartedNS  int64  `json:"started_ns"`
 	FinishedNS int64  `json:"finished_ns"`
+}
+
+// nativeRBDJournalPhase is one phase the concurrent action publishes in
+// rbd-journal-state.json and returns in its output.
+type nativeRBDJournalPhase struct {
+	Phase   string `json:"phase"`
+	TimeNS  int64  `json:"time_ns"`
+	IsOwner bool   `json:"is_owner"`
+	Owners  []struct {
+		Mode  int    `json:"mode"`
+		Owner string `json:"owner"`
+	} `json:"owners"`
+	Watchers        []nativeRBDWatcher        `json:"watchers"`
+	WaitNS          int64                     `json:"wait_ns"`
+	Events          []nativeRBDJournalApplied `json:"events"`
+	AioReturnValues []int64                   `json:"aio_return_values"`
+}
+
+type nativeRBDJournalState struct {
+	Token          string                  `json:"token"`
+	RequestID      int64                   `json:"request_id"`
+	NativeGlobalID uint64                  `json:"native_global_id"`
+	Phase          string                  `json:"phase"`
+	Phases         []nativeRBDJournalPhase `json:"phases"`
 }
 
 type nativeRBDJournalObject struct {
@@ -166,6 +201,9 @@ type nativeRBDJournal struct {
 	CloseNS        int64                     `json:"close_ns"`
 	AcquireNS      int64                     `json:"acquire_ns"`
 	Owner          *bool                     `json:"owner"`
+	Phases         []nativeRBDJournalPhase   `json:"phases"`
+	AioReturns     []int64                   `json:"aio_return_values"`
+	FinalWaitNS    int64                     `json:"final_wait_ns"`
 }
 
 type nativeRBDJournalResult struct {
@@ -532,6 +570,54 @@ func rbdJournalCommitPosition(previous []rbdJournalPosition, committed []rbdJour
 	return pruned
 }
 
+// rbdMutationOutcome classifies one mutation's result for the outcome
+// ledger. A reply without error is applied (code 0) or an expected server
+// refusal (a negative code the caller asked for). An OSDError is a server
+// refusal: the OSD answered and applied nothing. OutcomeUnknownError means
+// transmission had started without a reply, and any other error is treated
+// the same way, conservatively: the mutation may or may not have been
+// applied. The caller never resends a mutation of any class.
+func rbdMutationOutcome(reply cephmsgr.OSDReply, err error) (class, detail string) {
+	var server *cephmsgr.OSDError
+	var unknown *cephmsgr.OutcomeUnknownError
+	switch {
+	case err == nil && reply.Code == 0:
+		return "applied", ""
+	case err == nil:
+		return "refused", ""
+	case errors.As(err, &server):
+		return "refused", err.Error()
+	case errors.As(err, &unknown):
+		return "uncertain", err.Error()
+	default:
+		return "uncertain", err.Error()
+	}
+}
+
+func TestRBDMutationOutcomeLedger(t *testing.T) {
+	// Unit level: a lost reply cannot be induced safely on the live journal,
+	// so the unknown-result classes are checked here; the live session
+	// covers applied and refused.
+	for _, c := range []struct {
+		reply cephmsgr.OSDReply
+		err   error
+		want  string
+	}{
+		{cephmsgr.OSDReply{Transaction: 7}, nil, "applied"},
+		{cephmsgr.OSDReply{Transaction: 7, Code: -17}, nil, "refused"},
+		{cephmsgr.OSDReply{Transaction: 7, Code: -16}, &cephmsgr.OSDError{Code: -16}, "refused"},
+		{cephmsgr.OSDReply{}, fmt.Errorf("wrapped: %w", &cephmsgr.OSDError{Code: -2}), "refused"},
+		{cephmsgr.OSDReply{}, &cephmsgr.OutcomeUnknownError{Cause: context.Canceled}, "uncertain"},
+		{cephmsgr.OSDReply{}, fmt.Errorf("wrapped: %w", &cephmsgr.OutcomeUnknownError{Cause: errors.New("connection reset")}), "uncertain"},
+		{cephmsgr.OSDReply{}, context.DeadlineExceeded, "uncertain"},
+	} {
+		class, detail := rbdMutationOutcome(c.reply, c.err)
+		if class != c.want || (c.err == nil) != (detail == "") {
+			t.Fatalf("outcome of %+v / %v: %s %q, want %s", c.reply, c.err, class, detail, c.want)
+		}
+	}
+}
+
 // rbdJournalHexdump parses bufferlist::hexdump lines ("<offset>  <16 hex
 // bytes>  |ascii|", then the final offset).
 func rbdJournalHexdump(s string) ([]byte, error) {
@@ -696,6 +782,14 @@ type rbdJournalTestEvidence struct {
 	// InspectShutdownLines counts the tolerated "failed to locate client:
 	// INSPECT" lines of rbd journal inspect.
 	InspectShutdownLines int
+	// The concurrent session: the native driver's published state, Go's
+	// notifies on the image and journal headers, the notifications Go's
+	// image header watch received and answered, and the outcome of every Go
+	// append and data write sent while Go owned the lock.
+	ConcurrentState         *nativeRBDJournalState `json:",omitempty"`
+	ConcurrentNotifies      []*rbdLockGoNotify
+	ConcurrentNotifications []rbdLockNotification
+	ConcurrentOutcomes      []map[string]any
 }
 
 var rbdJournalInspectShutdownLine = regexp.MustCompile(`^\S+ [0-9a-f]+ -1 JournalMetadata: 0x[0-9a-f]+ failed to locate client: INSPECT$`)
@@ -764,16 +858,16 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 	// fixture and answered with its own receipt.
 	var plan nativeRBDJournalPlan
 	results := map[string]nativeRBDJournalResult{}
-	native := func(t *testing.T, action string) *nativeRBDJournal {
+	clearReceipt := func(t *testing.T, action string) {
 		t.Helper()
-		receipt := filepath.Join(dir, "rbd-journal-"+action+".json")
-		if err := os.Remove(receipt); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := os.Remove(filepath.Join(dir, "rbd-journal-"+action+".json")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			t.Fatal(err)
 		}
-		begun := time.Now()
-		if err := testcluster.RequestControl(ctx, dir, "rbd-journal", "rbd-journal-completed", token, action); err != nil {
-			t.Fatal("native RBD journal", action, err)
-		}
+	}
+	// nativeReceipt validates the receipt of one completed native action.
+	nativeReceipt := func(t *testing.T, action string, begun time.Time) *nativeRBDJournal {
+		t.Helper()
+		receipt := filepath.Join(dir, "rbd-journal-"+action+".json")
 		evidence.Timings["native_"+action] = time.Since(begun).String()
 		var result nativeRBDJournalResult
 		if err := readMDSFreshJSON(receipt, &result); err != nil {
@@ -821,6 +915,15 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		evidence.NativeActions = append(evidence.NativeActions, rbdNativeActionEvidence{Action: action, RequestID: result.RequestID, NativeGlobalID: n.NativeGlobalID, ElapsedMS: result.ElapsedMS, StderrBytes: len(result.Process.Stderr)})
 		return n
 	}
+	native := func(t *testing.T, action string) *nativeRBDJournal {
+		t.Helper()
+		clearReceipt(t, action)
+		begun := time.Now()
+		if err := testcluster.RequestControl(ctx, dir, "rbd-journal", "rbd-journal-completed", token, action); err != nil {
+			t.Fatal("native RBD journal", action, err)
+		}
+		return nativeReceipt(t, action, begun)
+	}
 	statusOf := func(t *testing.T, n *nativeRBDJournal) nativeRBDJournalStatus {
 		t.Helper()
 		var s nativeRBDJournalStatus
@@ -845,7 +948,10 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		plan.Features != rbdJournalImageFeatures || plan.OracleClient != "ceph-msgr-oracle-"+token[:8] || plan.GoClient != "ceph-msgr-mirror-"+token[:8] ||
 		!reflect.DeepEqual(plan.SetupEvents, []nativeRBDJournalEvent{{"write", 0, 8 * k}, {"write", 72 * k, 8 * k}, {"write", 136 * k, 4 * k}, {"write", 196 * k, 8 * k}, {"discard", 192 * k, 64 * k}}) ||
 		!reflect.DeepEqual(plan.WriteEvents, []nativeRBDJournalEvent{{"write", 16 * k, 8 * k}, {"write", 80 * k, 4 * k}, {"discard", 128 * k, 64 * k}}) ||
-		!reflect.DeepEqual(plan.GoWrites, []nativeRBDExtent{{40 * k, 4 * k}, {100 * k, 4 * k}}) {
+		!reflect.DeepEqual(plan.GoWrites, []nativeRBDExtent{{40 * k, 4 * k}, {100 * k, 4 * k}}) ||
+		!reflect.DeepEqual(plan.ConcurrentOwnerEvents, []nativeRBDJournalEvent{{"write", 24 * k, 4 * k}, {"write", 152 * k, 4 * k}}) ||
+		!reflect.DeepEqual(plan.GoConcurrentWrites, []nativeRBDExtent{{48 * k, 8 * k}, {112 * k, 4 * k}, {176 * k, 4 * k}}) ||
+		!reflect.DeepEqual(plan.ConcurrentEvents, []nativeRBDJournalEvent{{"write", 52 * k, 4 * k}, {"write", 200 * k, 4 * k}, {"write", 232 * k, 4 * k}}) {
 		t.Fatal("RBD journal plan differs", plan)
 	}
 	imageID := setup.ImageID
@@ -932,6 +1038,10 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 			sum := sha256.Sum256(op.Data)
 			in := rbdOperationInputEvidence{Code: uint16(op.Code), Flags: uint32(op.Flags), Offset: op.Offset, Length: op.Length, DataLength: len(op.Data), DataSHA256: hex.EncodeToString(sum[:]),
 				Class: op.Class.Class, Method: op.Class.Method, Mode: uint8(op.Class.Mode)}
+			if op.Code == cephmsgr.OSDSetAllocHint {
+				hint := op.AllocHint
+				in.AllocHint = &hint
+			}
 			if len(op.Data) <= 512 {
 				in.DataHex = hex.EncodeToString(op.Data)
 			}
@@ -970,6 +1080,10 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 	classOp := func(class, method string, mode cephmsgr.OSDCallMode, input []byte) cephmsgr.OSDOperation {
 		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: mode, MaxOutputBytes: 65536}}
 	}
+	// onMutation, when set, receives every mutation vector's reply and error
+	// right after the raw record and before any assertion, so a classified
+	// outcome is kept even when the vector then fails the test.
+	var onMutation func(label string, reply cephmsgr.OSDReply, err error)
 	// vector sends one request and requires the aggregate code; write
 	// vectors carry a modification time and no SnapContext, as librados
 	// sends the journal's metadata operations.
@@ -978,13 +1092,16 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		r, o := route(t, object)
 		req := request(r, ops...)
 		mutation := slices.ContainsFunc(ops, func(op cephmsgr.OSDOperation) bool {
-			return op.Code == cephmsgr.OSDCall && op.Class.Mode == cephmsgr.OSDCallWrite || op.Code == cephmsgr.OSDAppend
+			return op.Code == cephmsgr.OSDCall && op.Class.Mode == cephmsgr.OSDCallWrite || op.Code == cephmsgr.OSDAppend || op.Code == cephmsgr.OSDWrite
 		})
 		if mutation {
 			req.ModificationTime = now()
 		}
 		reply, err := o.Request(ctx, req)
 		record(label, r, req, reply, err)
+		if mutation && onMutation != nil {
+			onMutation(label, reply, err)
+		}
 		var server *cephmsgr.OSDError
 		if code != 0 && errors.As(err, &server) && server.Code == code {
 			err = nil
@@ -1281,8 +1398,8 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		return out
 	}
 
-	var setupView headerView
-	var setupEntries []journalEntry
+	var setupView, replayView headerView
+	var setupEntries, replayEntries []journalEntry
 	var setupTag uint64
 	t.Run("journal_header", func(t *testing.T) {
 		v := headerReads(t, "setup", setup)
@@ -1681,5 +1798,687 @@ func TestCephRBDJournalIntegration(t *testing.T) {
 		}
 		evidence.Positions["image_after_replay"] = v.Image.Positions
 		step("replay", map[string]any{"acquire_ns": p.AcquireNS, "close_ns": p.CloseNS, "tag": last.TID})
+		replayView, replayEntries = v, all
+	})
+	if t.Failed() {
+		return
+	}
+
+	// The concurrent session: native librbd keeps the image open read-write
+	// throughout, and the image's exclusive lock goes native -> Go -> native
+	// by librbd's own protocol (RequestLock, ReleasedLock, AcquiredLock).
+	// Native aio writes are issued while Go owns the lock, so both clients
+	// have journal appends outstanding at once; the lock decides who appends.
+	// Go appends, applies and commits as a librbd lock owner would, and
+	// releases when native librbd asks. Simultaneous appends by two lock
+	// owners are not a valid librbd configuration and are not attempted.
+	t.Run("concurrent_appenders", func(t *testing.T) {
+		before := replayView
+		lastTag := before.Tags[len(before.Tags)-1].TID
+		_, class, _, err := decodeRBDJournalImageClientMeta(before.Image.Data)
+		if err != nil || before.ActiveSet != 0 || before.MinimumSet != 0 {
+			t.Fatal("journal state before the concurrent session differs", err, before.ActiveSet, before.MinimumSet)
+		}
+		splay := uint64(before.Splay)
+		// The outcome ledger: every Go mutation of the session, classified
+		// before any assertion; a failed mutation is never resent.
+		outcome := func(label string, reply cephmsgr.OSDReply, err error) {
+			class, detail := rbdMutationOutcome(reply, err)
+			o := map[string]any{"label": label, "transaction": reply.Transaction, "submission": reply.Submission.Transaction, "code": reply.Code,
+				"user_version": reply.UserVersion, "outcome": class}
+			if detail != "" {
+				o["error"] = detail
+			}
+			evidenceMu.Lock()
+			evidence.ConcurrentOutcomes = append(evidence.ConcurrentOutcomes, o)
+			evidenceMu.Unlock()
+		}
+		onMutation = outcome
+		defer func() { onMutation = nil }()
+		ledgerOf := func(label string) map[string]any {
+			evidenceMu.Lock()
+			defer evidenceMu.Unlock()
+			for _, o := range evidence.ConcurrentOutcomes {
+				if o["label"] == label {
+					return o
+				}
+			}
+			return nil
+		}
+		statePath := filepath.Join(dir, "rbd-journal-state.json")
+		for i := 0; i <= 3; i++ {
+			name := statePath
+			if i > 0 {
+				name = filepath.Join(dir, fmt.Sprintf("rbd-journal-proceed-%d", i))
+			}
+			if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+				t.Fatal(err)
+			}
+		}
+		clearReceipt(t, "concurrent")
+		begun := time.Now()
+		var controlErr error
+		controlDone := make(chan struct{})
+		go func() {
+			controlErr = testcluster.RequestControl(ctx, dir, "rbd-journal", "rbd-journal-completed", token, "concurrent")
+			close(controlDone)
+		}()
+		defer func() {
+			// After a failure the driver gives up at its own 30 s proceed
+			// deadline; do not leave the control request behind.
+			select {
+			case <-controlDone:
+			case <-time.After(45 * time.Second):
+			}
+		}()
+		var state nativeRBDJournalState
+		waitState := func(t *testing.T, phase string) nativeRBDJournalPhase {
+			t.Helper()
+			read := func() (nativeRBDJournalPhase, bool) {
+				data, err := os.ReadFile(statePath)
+				var s nativeRBDJournalState
+				if err != nil || json.Unmarshal(data, &s) != nil {
+					return nativeRBDJournalPhase{}, false
+				}
+				i := slices.IndexFunc(s.Phases, func(p nativeRBDJournalPhase) bool { return p.Phase == phase })
+				if i < 0 {
+					return nativeRBDJournalPhase{}, false
+				}
+				state = s
+				evidence.ConcurrentState = &state
+				return s.Phases[i], true
+			}
+			for {
+				if p, ok := read(); ok {
+					return p
+				}
+				select {
+				case <-controlDone:
+					if p, ok := read(); ok {
+						return p
+					}
+					t.Fatalf("native concurrent action ended before phase %s: %v", phase, controlErr)
+				case <-ctx.Done():
+					t.Fatal(ctx.Err())
+				case <-time.After(20 * time.Millisecond):
+				}
+			}
+		}
+		proceed := func(t *testing.T, step int) {
+			t.Helper()
+			signal := fmt.Sprintf("%s %d %d", token, state.RequestID, step)
+			if err := testcluster.WritePublicEvidence(filepath.Join(dir, fmt.Sprintf("rbd-journal-proceed-%d", step)), []byte(signal)); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		// Native owner: its synchronous writes took the lock and appended
+		// under a new local tag.
+		owner := waitState(t, "owner")
+		nativeGID := state.NativeGlobalID
+		if state.Token != token || nativeGID == 0 || nativeGID == gid || state.RequestID <= 0 || !owner.IsOwner || len(owner.Watchers) != 1 || owner.Watchers[0].ID != nativeGID {
+			t.Fatal("native concurrent session scope differs", state.Token, nativeGID, owner)
+		}
+		nativeID := rbdClientID{GID: nativeGID, Handle: owner.Watchers[0].Cookie}
+		applyEvents(t, "concurrent-owner", owner.Events, plan.ConcurrentOwnerEvents)
+
+		// Go's image header watch and its librbd-style responder.
+		hr, ho := route(t, header)
+		watchRequest := request(hr)
+		watchRequest.Operations = nil
+		w, reply, err := ho.WatchObject(ctx, watchRequest, cephmsgr.OSDWatchOptions{TimeoutSeconds: 30})
+		record("concurrent_watch_register", hr, watchRequest, reply, err)
+		if err != nil {
+			t.Fatal("Go image header watch", err)
+		}
+		goID := rbdClientID{GID: gid, Handle: w.Cookie()}
+		cookie := rbdLockCookie(w.Cookie())
+		responder := &rbdLockResponder{changed: make(chan struct{})}
+		respondCtx, stopResponding := context.WithCancel(ctx)
+		responderDone := make(chan struct{})
+		responderStarted := time.Now()
+		go func() {
+			defer close(responderDone)
+			lastPing := time.Now()
+			for {
+				if time.Since(lastPing) >= rbdJournalPingInterval {
+					_, err := w.Ping(respondCtx, hr.Epoch)
+					if respondCtx.Err() != nil {
+						return
+					}
+					lastPing = time.Now()
+					responder.mu.Lock()
+					responder.pings++
+					if err != nil {
+						responder.pingErrors = append(responder.pingErrors, err.Error())
+					}
+					responder.mu.Unlock()
+				}
+				wait, stop := context.WithDeadline(respondCtx, lastPing.Add(rbdJournalPingInterval))
+				event, err := w.Next(wait)
+				stop()
+				if respondCtx.Err() != nil {
+					return
+				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					continue
+				}
+				if err != nil {
+					responder.fail(fmt.Errorf("image header watch ended: %w", err))
+					return
+				}
+				responder.handle(respondCtx, w, hr.Epoch, goID, responderStarted, event)
+			}
+		}()
+		watching, lockSent, unlocked := true, false, false
+		stopResponder := func() {
+			stopResponding()
+			<-responderDone
+		}
+		defer func() {
+			// Compensation after a failure: unlock what Go may hold (never a
+			// repeated lock or append), tell librbd, then remove the watch.
+			cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
+			defer stop()
+			if lockSent && !unlocked {
+				req := request(hr, classOp("lock", "unlock", cephmsgr.OSDCallWrite, rbdLockUnlockInput(cookie)))
+				req.ModificationTime = now()
+				reply, err := ho.Request(cleanup, req)
+				record("concurrent_unlock_compensate", hr, req, reply, err)
+				outcome("concurrent_unlock_compensate", reply, err)
+				notify := request(hr)
+				notify.Operations = nil
+				if n, reply, err := ho.NotifyObject(cleanup, notify, rbdLockNotify(rbdNotifyReleasedLock, goID), cephmsgr.OSDWatchOptions{TimeoutSeconds: 5}); err == nil {
+					record("concurrent_released_lock_compensate", hr, notify, reply, err)
+					_, _ = n.Next(cleanup)
+					n.Close()
+				}
+			}
+			stopResponder()
+			if watching {
+				reply, err := w.Unwatch(cleanup, hr.Epoch)
+				record("concurrent_watch_unwatch_compensate", hr, watchRequest, reply, err)
+			}
+			events, _ := responder.snapshot()
+			evidenceMu.Lock()
+			evidence.ConcurrentNotifications = events
+			evidenceMu.Unlock()
+		}()
+		waitNotification := func(t *testing.T, from int, label string, match func(rbdLockNotification) bool) rbdLockNotification {
+			t.Helper()
+			deadline := time.After(20 * time.Second)
+			for {
+				responder.mu.Lock()
+				for _, n := range responder.events[min(from, len(responder.events)):] {
+					if match(n) {
+						responder.mu.Unlock()
+						return n
+					}
+				}
+				changed, failure := responder.changed, responder.failure
+				responder.mu.Unlock()
+				if failure != nil {
+					t.Fatal(label, "image header watch responder:", failure)
+				}
+				select {
+				case <-changed:
+				case <-deadline:
+					t.Fatal(label, "notification not received")
+				case <-ctx.Done():
+					t.Fatal(label, ctx.Err())
+				}
+			}
+		}
+		notifications := func() int {
+			responder.mu.Lock()
+			defer responder.mu.Unlock()
+			return len(responder.events)
+		}
+		// goNotify sends one notify with librbd's 5 s timeout and returns
+		// its completion; the caller judges the acknowledgements.
+		goNotify := func(t *testing.T, label, object string, payload []byte) *rbdLockGoNotify {
+			t.Helper()
+			r, o := route(t, object)
+			req := request(r)
+			req.Operations = nil
+			notifyStarted := time.Now()
+			n, reply, err := o.NotifyObject(ctx, req, payload, cephmsgr.OSDWatchOptions{TimeoutSeconds: 5})
+			record(label, r, req, reply, err)
+			if err != nil {
+				t.Fatal("Go notify", label, err)
+			}
+			defer n.Close()
+			checkReply(t, r, reply, 0, false)
+			notifyID := binary.LittleEndian.Uint64(reply.Operations[0].Data)
+			wait, stop := context.WithTimeout(ctx, 20*time.Second)
+			defer stop()
+			completion, err := n.Next(wait)
+			if err != nil {
+				t.Fatal("Go notify completion", label, err)
+			}
+			e := &rbdLockGoNotify{Label: label, PayloadHex: hex.EncodeToString(payload), Cookie: n.Cookie(), NotifyID: notifyID, ReplyDataHex: hex.EncodeToString(reply.Operations[0].Data),
+				Opcode: completion.Opcode, CompletionID: completion.NotifyID, ReturnCode: completion.ReturnCode, Missed: completion.Missed,
+				RawFrontHex: hex.EncodeToString(completion.RawFront), RawDataHex: hex.EncodeToString(completion.RawData), CompletedAfterMS: float64(time.Since(notifyStarted).Microseconds()) / 1000}
+			for _, reply := range completion.Replies {
+				e.Replies = append(e.Replies, rbdNotifyReplyEvidence{GlobalID: reply.GlobalID, Cookie: reply.Cookie, DataHex: hex.EncodeToString(reply.Data)})
+			}
+			evidenceMu.Lock()
+			evidence.ConcurrentNotifies = append(evidence.ConcurrentNotifies, e)
+			evidenceMu.Unlock()
+			if completion.Opcode != cephmsgr.OSDWatchCompletion || completion.NotifyID != notifyID || completion.Cookie != n.Cookie() || completion.ReturnCode != 0 || len(completion.Missed) != 0 ||
+				time.Since(notifyStarted) >= rbdNotifyTimeout {
+				t.Fatalf("%s completion differs: %+v", label, e)
+			}
+			if _, err := n.Next(ctx); !errors.Is(err, cephmsgr.ErrOSDNotifyComplete) {
+				t.Fatal("notify stream did not end after its completion", label, err)
+			}
+			return e
+		}
+		// imageNotify is a lock notify on the image header: native librbd and
+		// Go's own watch must both acknowledge, both empty unless native
+		// librbd answers as the lock owner.
+		imageNotify := func(t *testing.T, label string, payload []byte) *rbdLockGoNotify {
+			t.Helper()
+			e := goNotify(t, label, header, payload)
+			if len(e.Replies) != 2 || !slices.ContainsFunc(e.Replies, func(r rbdNotifyReplyEvidence) bool {
+				return r.GlobalID == gid && r.Cookie == goID.Handle && r.DataHex == ""
+			}) ||
+				!slices.ContainsFunc(e.Replies, func(r rbdNotifyReplyEvidence) bool { return r.GlobalID == nativeID.GID && r.Cookie == nativeID.Handle }) {
+				t.Fatalf("%s acknowledgements differ: %+v", label, e.Replies)
+			}
+			return e
+		}
+		// journalNotify is JournalMetadata's header update: an empty payload;
+		// every watcher present acknowledges empty.
+		journalNotify := func(t *testing.T, label string) {
+			t.Helper()
+			e := goNotify(t, label, journalHeader, nil)
+			for _, r := range e.Replies {
+				if r.DataHex != "" {
+					t.Fatalf("%s acknowledgement differs: %+v", label, r)
+				}
+			}
+		}
+
+		// Go asks for the lock; native librbd (automatic policy) answers
+		// ResponseMessage(0) and releases it.
+		mark := notifications()
+		requested := imageNotify(t, "concurrent_notify_request_lock", rbdRequestLockNotify(goID, false))
+		answer := slices.IndexFunc(requested.Replies, func(r rbdNotifyReplyEvidence) bool { return r.GlobalID == nativeID.GID })
+		data, _ := hex.DecodeString(requested.Replies[answer].DataHex)
+		if result, err := decodeRBDResponseMessage(data); err != nil || result != 0 {
+			t.Fatal("native librbd did not answer RequestLock with a release", result, err)
+		}
+		released := waitNotification(t, mark, "native ReleasedLock", func(n rbdLockNotification) bool {
+			return n.Op == rbdNotifyReleasedLock && n.NotifierGlobalID == nativeGID
+		})
+		if released.Client != nativeID || released.AckHex != "" || released.AckError != "" {
+			t.Fatal("native ReleasedLock differs", released)
+		}
+
+		// Go takes the lock as librbd's AcquireRequest does and announces it.
+		lockSent = true
+		vector(t, "concurrent_lock_lock", header, 0, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInput(cookie)))
+		responder.setOwning(true)
+		r := vector(t, "concurrent_lock_get_info", header, 0, classOp("lock", "get_info", cephmsgr.OSDCallRead, rbdLockGetInfoInput()))
+		info, err := decodeRBDLockInfo(r.Operations[0].Data)
+		if err != nil || len(info.Lockers) != 1 || info.Lockers[0].NameNumber != int64(gid) || info.Lockers[0].Cookie != cookie || info.Tag != rbdLockTag {
+			t.Fatal("Go does not hold the image's exclusive lock", info, err)
+		}
+		imageNotify(t, "concurrent_notify_acquired_lock", rbdLockNotify(rbdNotifyAcquiredLock, goID))
+		lockedAt := time.Now()
+
+		// Journal open as the new owner: the metadata vectors, the image
+		// client, the tags and every entry of object set 0. The native owner
+		// must have committed every entry when it released the lock; Go does
+		// not replay a journal, so an uncommitted entry stops the test.
+		r = vector(t, "concurrent_immutable", journalHeader, 0, classOp("journal", "get_order", cephmsgr.OSDCallRead, nil),
+			classOp("journal", "get_splay_width", cephmsgr.OSDCallRead, nil), classOp("journal", "get_pool_id", cephmsgr.OSDCallRead, nil))
+		if !bytes.Equal(r.Operations[0].Data, []byte{before.Order}) || !bytes.Equal(r.Operations[1].Data, []byte{before.Splay}) {
+			t.Fatal("journal immutable metadata changed")
+		}
+		r = vector(t, "concurrent_mutable", journalHeader, 0, classOp("journal", "get_minimum_set", cephmsgr.OSDCallRead, nil), classOp("journal", "get_active_set", cephmsgr.OSDCallRead, nil))
+		if binary.LittleEndian.Uint64(r.Operations[0].Data) != before.MinimumSet || binary.LittleEndian.Uint64(r.Operations[1].Data) != before.ActiveSet {
+			t.Fatal("journal object sets changed")
+		}
+		r = vector(t, "concurrent_get_client_image", journalHeader, 0, classOp("journal", "get_client", cephmsgr.OSDCallRead, rbdString("")))
+		imageAtLock, err := decodeRBDJournalClient(r.Operations[0].Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r = vector(t, "concurrent_tag_list", journalHeader, 0, classOp("journal", "tag_list", cephmsgr.OSDCallRead, rbdJournalTagListInput("", 0)))
+		tagsAtLock, err := decodeRBDJournalTags(r.Operations[0].Data)
+		if err != nil || len(tagsAtLock) != len(before.Tags)+1 || !reflect.DeepEqual(tagsAtLock[:len(before.Tags)], before.Tags) {
+			t.Fatal("native owner did not allocate exactly one new tag", tagsAtLock, err)
+		}
+		ownerTag := tagsAtLock[len(tagsAtLock)-1]
+		td, err := decodeRBDJournalTagData(ownerTag.Data)
+		replayFront := before.Image.Positions[0]
+		if err != nil || ownerTag.TID <= lastTag || ownerTag.Class != class || td.MirrorUUID != "" || !td.CommitValid || td.PredecessorTag != replayFront.Tag || td.PredecessorEnt != replayFront.Entry {
+			t.Fatal("native owner's local tag differs", ownerTag, td, replayFront, err)
+		}
+		olds := map[uint64][]byte{}
+		var atLock []journalEntry
+		for i := uint64(0); i < 2*splay; i++ {
+			object := before.ActiveSet*splay + i
+			data := readRaw(t, fmt.Sprintf("concurrent_lock_object_%d", object), prefix+strconv.FormatUint(object, 10), 256<<10)
+			if i >= splay {
+				if data != nil {
+					t.Fatal("journal object set 1 exists", object)
+				}
+				continue
+			}
+			olds[object] = data
+			entries, err := decodeRBDJournalObject(object, data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, e := range entries {
+				ev, err := decodeRBDJournalEvent(e.Payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				atLock = append(atLock, journalEntry{e, ev})
+			}
+		}
+		sort.Slice(atLock, func(i, j int) bool {
+			return atLock[i].Tag < atLock[j].Tag || atLock[i].Tag == atLock[j].Tag && atLock[i].EntryID < atLock[j].EntryID
+		})
+		ownerEntries := entriesOfTag(atLock, ownerTag.TID)
+		if len(atLock) != len(replayEntries)+len(ownerEntries) || !reflect.DeepEqual(atLock[:len(replayEntries)], replayEntries) {
+			t.Fatal("journal entries at Go's lock acquisition differ", len(atLock), len(replayEntries), len(ownerEntries))
+		}
+		checkEvents(t, "concurrent_owner", ownerEntries, "concurrent-owner", plan.ConcurrentOwnerEvents, owner.Events)
+		committed := rbdJournalCommitPosition(before.Image.Positions, plainEntries(ownerEntries), splay)
+		if !reflect.DeepEqual(imageAtLock.Positions, committed) {
+			t.Fatalf("image client commit position %+v does not cover the native owner's entries (%+v); Go does not replay", imageAtLock.Positions, committed)
+		}
+		evidence.Positions["image_at_go_lock"] = imageAtLock.Positions
+
+		// Tag allocation (Journal::allocate_local_tag): the predecessor is
+		// the image client's commit front, the native owner's last entry.
+		r = vector(t, "concurrent_get_next_tag_tid", journalHeader, 0, classOp("journal", "get_next_tag_tid", cephmsgr.OSDCallRead, nil))
+		goTag := binary.LittleEndian.Uint64(r.Operations[0].Data)
+		front := imageAtLock.Positions[0]
+		if goTag != ownerTag.TID+1 || front.Tag != ownerTag.TID || front.Entry != uint64(len(ownerEntries)-1) {
+			t.Fatal("next tag or commit front differs", goTag, front)
+		}
+		tagData := rbdJournalTagDataEncode(rbdJournalTagData{CommitValid: true, PredecessorTag: front.Tag, PredecessorEnt: front.Entry})
+		tagInput := append(append(rbdLE64(goTag), rbdLE64(class)...), rbdJournalBL(tagData)...)
+		vector(t, "concurrent_tag_create", journalHeader, 0, classOp("journal", "tag_create", cephmsgr.OSDCallWrite, tagInput))
+		// A live server refusal through the ledger: the same tag_create again
+		// is refused with -EEXIST, changes nothing and is not resent.
+		vector(t, "concurrent_tag_create_repeat", journalHeader, -17, classOp("journal", "tag_create", cephmsgr.OSDCallWrite, tagInput))
+		if o := ledgerOf("concurrent_tag_create_repeat"); o == nil || o["outcome"] != "refused" || o["code"] != int32(-17) {
+			t.Fatal("refused tag_create is not in the outcome ledger as refused", o)
+		}
+		journalNotify(t, "concurrent_journal_notify_tag")
+
+		softMax := rbdLE64(1 << before.Order)
+		entries := make([][]byte, len(plan.GoConcurrentWrites))
+		stamps := make([]cephmsgr.OSDTime, len(entries))
+		names := make([]string, len(entries))
+		for i, e := range plan.GoConcurrentWrites {
+			stamps[i] = now()
+			entries[i] = rbdJournalEntryEncode(goTag, uint64(i), rbdJournalWriteEvent(e.Offset, rbdJournalPattern(token, "go-concurrent", e.Offset, e.Length), stamps[i]))
+			names[i] = prefix + strconv.FormatUint(before.ActiveSet*splay+uint64(i)%splay, 10)
+		}
+		// Entry 0 in librbd's form while the native writer is idle.
+		reply = vector(t, "concurrent_append_0", names[0], 0, classOp("journal", "append", cephmsgr.OSDCallWrite, append(slices.Clone(softMax), rbdJournalBL(entries[0])...)))
+
+		// The native writer issues its aio writes now; librbd queues them and
+		// asks Go, the lock owner, for the lock.
+		mark = notifications()
+		proceed(t, 1)
+		issued := waitState(t, "issued")
+		asked := waitNotification(t, mark, "native RequestLock", func(n rbdLockNotification) bool {
+			return n.Op == rbdNotifyRequestLock && n.NotifierGlobalID == nativeGID
+		})
+		if asked.Client != nativeID || asked.Force || !asked.AnsweredAsOwner || asked.AckHex != hex.EncodeToString(rbdResponseMessage(0)) || issued.IsOwner {
+			t.Fatal("native RequestLock while Go owns the lock differs", asked, issued.IsOwner)
+		}
+
+		// Entries 1 and 2 are submitted from two goroutines started together,
+		// in librbd's form, while the native writes wait for the lock. The
+		// API exposes no submission event, so whether both were on the wire
+		// at the same time is not observed and not claimed; only distinct
+		// transactions and complete reply identity are checked. cls_journal's append checks no lock: the
+		// image's exclusive lock lives on rbd_header.<id>, and a class method
+		// acts only on its request's object, so a journal data object append
+		// cannot carry an assertion of that lock. Ownership is the client
+		// protocol's alone.
+		type sent struct {
+			route rbdRoute
+			ops   []cephmsgr.OSDOperation
+			reply cephmsgr.OSDReply
+			err   error
+		}
+		concurrent := make([]sent, len(entries)-1)
+		conns := make([]*cephmsgr.OSDConnection, len(concurrent))
+		for j := range concurrent {
+			i := j + 1
+			concurrent[j].route, conns[j] = route(t, names[i])
+			concurrent[j].ops = []cephmsgr.OSDOperation{classOp("journal", "append", cephmsgr.OSDCallWrite, append(slices.Clone(softMax), rbdJournalBL(entries[i])...))}
+		}
+		var wg sync.WaitGroup
+		for j := range concurrent {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				s := &concurrent[j]
+				req := request(s.route, s.ops...)
+				req.ModificationTime = now()
+				s.reply, s.err = conns[j].Request(ctx, req)
+				label := fmt.Sprintf("concurrent_append_%d", j+1)
+				record(label, s.route, req, s.reply, s.err)
+				outcome(label, s.reply, s.err)
+			}()
+		}
+		wg.Wait()
+		for j, s := range concurrent {
+			if s.err != nil {
+				t.Fatalf("Go concurrent append %d: %v (recorded, not resent)", j+1, s.err)
+			}
+			checkReply(t, s.route, s.reply, 0, true)
+			if len(s.reply.Operations) != 1 || s.reply.Operations[0].Result != 0 || s.reply.Operations[0].Class.OutputLength != 0 {
+				t.Fatal("concurrent append per-op results differ", s.reply.Operations)
+			}
+		}
+		if concurrent[0].reply.Transaction == concurrent[1].reply.Transaction {
+			t.Fatal("concurrent appends share a transaction")
+		}
+		for i := range entries {
+			object := before.ActiveSet*splay + uint64(i)%splay
+			if got := readRaw(t, fmt.Sprintf("concurrent_append_%d_after", i), names[i], 256<<10); !bytes.Equal(got, append(slices.Clone(olds[object]), entries[i]...)) {
+				t.Fatalf("journal object %s is not its previous bytes followed by Go entry %d", names[i], i)
+			}
+		}
+		for i, e := range entries {
+			evidence.GoAppends = append(evidence.GoAppends, map[string]any{"label": fmt.Sprintf("concurrent_append_%d", i), "object": names[i], "tag": goTag, "entry": i,
+				"offset": len(olds[before.ActiveSet*splay+uint64(i)%splay]), "length": len(e), "entry_sha256": fmt.Sprintf("%x", sha256.Sum256(e)), "timestamp": stamps[i]})
+		}
+
+		// After the journal is safe, librbd's ObjectWriteRequest applies each
+		// event: [SETALLOCHINT FAILOK, WRITE] without SnapContext.
+		objectSize := uint64(1) << plan.Order
+		for i, e := range plan.GoConcurrentWrites {
+			number, offset := e.Offset/objectSize, e.Offset%objectSize
+			data := rbdJournalPattern(token, "go-concurrent", e.Offset, e.Length)
+			label := fmt.Sprintf("concurrent_data_write_%d", i)
+			reply = vector(t, label, fmt.Sprintf("%s.%016x", setup.Stat.Prefix, number),
+				0, cephmsgr.OSDOperation{Code: cephmsgr.OSDSetAllocHint, Flags: cephmsgr.OSDFailOK, AllocHint: cephmsgr.OSDAllocHint{ExpectedObjectSize: objectSize, ExpectedWriteSize: objectSize}},
+				cephmsgr.OSDOperation{Code: cephmsgr.OSDWrite, Offset: offset, Length: e.Length, Data: data})
+			copy(expected[e.Offset:], data)
+		}
+		// The commit position of the applied entries
+		// (JournalMetadata::committed), then the header update.
+		goEntries := make([]rbdJournalEntry, len(entries))
+		for i := range entries {
+			object := before.ActiveSet*splay + uint64(i)%splay
+			goEntries[i] = rbdJournalEntry{Object: object, Tag: goTag, EntryID: uint64(i)}
+		}
+		goCommitted := rbdJournalCommitPosition(imageAtLock.Positions, goEntries, splay)
+		vector(t, "concurrent_client_commit", journalHeader, 0, classOp("journal", "client_commit", cephmsgr.OSDCallWrite, append(rbdString(""), rbdJournalPositionsEncode(goCommitted)...)))
+		r = vector(t, "concurrent_get_client_committed", journalHeader, 0, classOp("journal", "get_client", cephmsgr.OSDCallRead, rbdString("")))
+		if c, err := decodeRBDJournalClient(r.Operations[0].Data); err != nil || !reflect.DeepEqual(c.Positions, goCommitted) {
+			t.Fatal("image client commit after Go's entries differs", c, err)
+		}
+		journalNotify(t, "concurrent_journal_notify_commit")
+		evidence.Positions["image_after_go"] = goCommitted
+
+		// Release as librbd's ReleaseRequest does; native librbd then
+		// reacquires the lock for its queued writes.
+		mark = notifications()
+		responder.setOwning(false)
+		vector(t, "concurrent_lock_unlock", header, 0, classOp("lock", "unlock", cephmsgr.OSDCallWrite, rbdLockUnlockInput(cookie)))
+		unlocked = true
+		evidence.Timings["concurrent_go_lock_held"] = time.Since(lockedAt).String()
+		imageNotify(t, "concurrent_notify_released_lock", rbdLockNotify(rbdNotifyReleasedLock, goID))
+		acquired := waitNotification(t, mark, "native AcquiredLock", func(n rbdLockNotification) bool {
+			return n.Op == rbdNotifyAcquiredLock && n.NotifierGlobalID == nativeGID
+		})
+		if acquired.Client != nativeID || acquired.AckHex != "" || acquired.AckError != "" {
+			t.Fatal("native AcquiredLock differs", acquired)
+		}
+		completed := waitState(t, "completed")
+		if !completed.IsOwner || len(completed.AioReturnValues) != len(plan.ConcurrentEvents) {
+			t.Fatal("native librbd does not own the lock after its queued writes", completed)
+		}
+		for i, rv := range completed.AioReturnValues {
+			if rv != 0 {
+				t.Fatalf("native aio write %d returned %d", i, rv)
+			}
+		}
+		applyEvents(t, "concurrent", completed.Events, plan.ConcurrentEvents)
+
+		// Native librbd closes the image (ReleasedLock); Go unwatches.
+		mark = notifications()
+		proceed(t, 2)
+		closing := waitNotification(t, mark, "native ReleasedLock on close", func(n rbdLockNotification) bool {
+			return n.Op == rbdNotifyReleasedLock && n.NotifierGlobalID == nativeGID
+		})
+		if closing.Client != nativeID || closing.AckHex != "" {
+			t.Fatal("native ReleasedLock on close differs", closing)
+		}
+		waitState(t, "closed")
+		stopResponder()
+		events, failure := responder.snapshot()
+		if failure != nil {
+			t.Fatal("image header watch responder", failure)
+		}
+		reply, err = w.Unwatch(ctx, hr.Epoch)
+		record("concurrent_watch_unwatch", hr, watchRequest, reply, err)
+		watching = false
+		if err != nil {
+			t.Fatal("Go image header unwatch", err)
+		}
+		// Every notification came from native librbd or Go's own watch.
+		var nativeOps, ownOps []uint32
+		for _, n := range events {
+			switch {
+			case n.Own && n.NotifierGlobalID == gid:
+				ownOps = append(ownOps, n.Op)
+			case n.NotifierGlobalID == nativeGID && n.Client == nativeID:
+				nativeOps = append(nativeOps, n.Op)
+			default:
+				t.Fatal("image header notification from another client", n)
+			}
+		}
+		if !slices.Equal(ownOps, []uint32{rbdNotifyRequestLock, rbdNotifyAcquiredLock, rbdNotifyReleasedLock}) || len(nativeOps) < 4 || nativeOps[0] != rbdNotifyReleasedLock ||
+			nativeOps[len(nativeOps)-2] != rbdNotifyAcquiredLock || nativeOps[len(nativeOps)-1] != rbdNotifyReleasedLock ||
+			slices.ContainsFunc(nativeOps[1:len(nativeOps)-2], func(op uint32) bool { return op != rbdNotifyRequestLock }) {
+			t.Fatal("image header notification sequence differs", ownOps, nativeOps)
+		}
+		step("concurrent_lock_handoff", map[string]any{"native_request_locks": len(nativeOps) - 3, "native_client": nativeID, "go_client": goID, "pings": responder.pings})
+		proceed(t, 3)
+		select {
+		case <-controlDone:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		if controlErr != nil {
+			t.Fatal("native RBD journal concurrent", controlErr)
+		}
+		n := nativeReceipt(t, "concurrent", begun)
+		if !reflect.DeepEqual(n.Phases, state.Phases) || !slices.Equal(n.AioReturns, completed.AioReturnValues) {
+			t.Fatal("native concurrent output differs from its published state")
+		}
+
+		// Independent native views after the session.
+		checkImage(t, n)
+		sum := sha256.Sum256(expected)
+		evidence.ExpectedFinalHead = hex.EncodeToString(sum[:])
+		v := headerReads(t, "concurrent", n)
+		all := readEntries(t, "concurrent", n, splay)
+		if len(v.Tags) != len(before.Tags)+3 || !reflect.DeepEqual(v.Tags[:len(tagsAtLock)], tagsAtLock) || v.Tags[len(tagsAtLock)].TID != goTag || v.NextTag != goTag+2 {
+			t.Fatal("tags after the concurrent session differ", v.Tags, v.NextTag)
+		}
+		goTagView, nativeTag := v.Tags[len(tagsAtLock)], v.Tags[len(tagsAtLock)+1]
+		gtd, _ := decodeRBDJournalTagData(goTagView.Data)
+		ntd, _ := decodeRBDJournalTagData(nativeTag.Data)
+		if goTagView.Class != class || !bytes.Equal(goTagView.Data, tagData) || nativeTag.TID != goTag+1 || nativeTag.Class != class || ntd.MirrorUUID != "" || !ntd.CommitValid ||
+			ntd.PredecessorTag != goTag || ntd.PredecessorEnt != uint64(len(entries)-1) {
+			t.Fatal("Go or native reacquisition tag differs", goTagView, gtd, nativeTag, ntd)
+		}
+		if !reflect.DeepEqual(all[:len(atLock)], atLock) {
+			t.Fatal("entries before Go's appends changed")
+		}
+		decodedGo := entriesOfTag(all, goTag)
+		if len(decodedGo) != len(entries) {
+			t.Fatal("Go entries after the session differ", len(decodedGo))
+		}
+		for i, e := range decodedGo {
+			want := plan.GoConcurrentWrites[i]
+			if e.Object != before.ActiveSet*splay+uint64(i)%splay || e.ObjectOffset != len(olds[e.Object]) || e.Length != len(entries[i]) || e.Event.Type != rbdJournalEventWrite ||
+				e.Event.Offset != want.Offset || !bytes.Equal(e.Event.Data, rbdJournalPattern(token, "go-concurrent", want.Offset, want.Length)) {
+				t.Fatal("Go journal entry decodes differently", e.rbdJournalEntry, e.Event.Offset)
+			}
+		}
+		// The queued native writes: one entry each under the reacquisition
+		// tag, in librbd's dispatch order, each matched by its offset.
+		nativeEntries := entriesOfTag(all, nativeTag.TID)
+		if len(nativeEntries)+len(decodedGo)+len(atLock) != len(all) || len(nativeEntries) != len(plan.ConcurrentEvents) {
+			t.Fatal("native entries after the session differ", len(nativeEntries), len(all))
+		}
+		seen := map[uint64]bool{}
+		for _, e := range nativeEntries {
+			i := slices.IndexFunc(plan.ConcurrentEvents, func(p nativeRBDJournalEvent) bool { return p.Offset == e.Event.Offset })
+			if i < 0 || seen[e.Event.Offset] {
+				t.Fatal("native entry has no planned write", e.Event.Offset)
+			}
+			seen[e.Event.Offset] = true
+			want, applied := plan.ConcurrentEvents[i], completed.Events[i]
+			at := time.Unix(int64(e.Event.Seconds), int64(e.Event.Nanosecond)).UnixNano()
+			if e.Event.Version != 5 || e.Event.Type != rbdJournalEventWrite || e.Event.Length != want.Length || !bytes.Equal(e.Event.Data, rbdJournalPattern(token, "concurrent", want.Offset, want.Length)) ||
+				at < applied.StartedNS-int64(time.Second) || at > applied.FinishedNS+int64(time.Second) {
+				t.Fatal("native concurrent entry differs from its aio write", e.rbdJournalEntry, applied)
+			}
+		}
+		finalPositions := rbdJournalCommitPosition(goCommitted, plainEntries(nativeEntries), splay)
+		if !reflect.DeepEqual(v.Image.Positions, finalPositions) {
+			t.Fatalf("image client commit position %+v, commit rule over the native entries gives %+v", v.Image.Positions, finalPositions)
+		}
+		if v.Go != nil || len(v.Clients) != 2 || v.Oracle == nil || len(v.Oracle.Positions) != 0 || !n.Lockers.Empty || len(n.Watchers) != 0 {
+			t.Fatal("journal clients or image lock after the session differ", v.Clients, n.Lockers, n.Watchers)
+		}
+		checkInspect(t, "concurrent", n, all)
+		evidence.Positions["image_after_concurrent"] = v.Image.Positions
+		step("concurrent", map[string]any{"owner_tag": ownerTag.TID, "go_tag": goTag, "native_tag": nativeTag.TID, "entries": len(all), "close_ns": n.CloseNS})
+		// A compact record of the observed identities for the validation
+		// record; the full evidence is in rbd-journal-results.json.
+		where := func(entries []journalEntry) []string {
+			var out []string
+			for _, e := range entries {
+				out = append(out, fmt.Sprintf("%d/%d@obj%d+%d", e.Tag, e.EntryID, e.Object, e.ObjectOffset))
+			}
+			return out
+		}
+		t.Logf("tags: native owner %d pred (%d,%d), Go %d pred (%d,%d), native reacquire %d pred (%d,%d); next %d", ownerTag.TID, td.PredecessorTag, td.PredecessorEnt,
+			goTag, gtd.PredecessorTag, gtd.PredecessorEnt, nativeTag.TID, ntd.PredecessorTag, ntd.PredecessorEnt, v.NextTag)
+		t.Logf("entries: owner %v, Go %v, native %v; inspect %d entries, %d errors", where(ownerEntries), where(decodedGo), where(nativeEntries), len(all), inspectOf(t, n).Summary.Errors)
+		t.Logf("image client commit: at Go lock %v, after Go %v, final %v", imageAtLock.Positions, goCommitted, v.Image.Positions)
+		t.Logf("Go appends: tid %d (uv %d), concurrent tids %d and %d (uv %d, %d); notifications own %v native %v; lock held %s; aio returns %v; native close %d us",
+			ledgerOf("concurrent_append_0")["transaction"], ledgerOf("concurrent_append_0")["user_version"], concurrent[0].reply.Transaction, concurrent[1].reply.Transaction,
+			concurrent[0].reply.UserVersion, concurrent[1].reply.UserVersion, ownOps, nativeOps, evidence.Timings["concurrent_go_lock_held"], n.AioReturns, n.CloseNS/1000)
 	})
 }

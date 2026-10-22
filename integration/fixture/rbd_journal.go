@@ -32,7 +32,11 @@ import (
 // journal inspect` replays every entry), write and discard through librbd,
 // observe the journal with librados `exec`, librados reads and the `rbd
 // journal info`, `status` and `inspect` commands, and finally replay the
-// journal by acquiring the exclusive lock. Every native action is journaled
+// journal by acquiring the exclusive lock, and run one bounded concurrent
+// session in which native librbd and the Go test hand the image's exclusive
+// lock to each other while both append to the same journal (proceed signals
+// rbd-journal-proceed-<n>, published state rbd-journal-state.json). Every
+// native action is journaled
 // in rbd-base-owned.json before it is issued and is never reissued; the image
 // goes with the owned pool at cleanup. The journal encodings, decodings and
 // the append protocol stay in the test-only consumer
@@ -47,12 +51,16 @@ import (
 
 // rbdJournalActions is the closed, ordered action sequence of the journal
 // control. Each action runs at most once and only after its predecessors.
-var rbdJournalActions = []string{"setup", "observe-registered", "write", "observe-committed", "inspect", "replay"}
+var rbdJournalActions = []string{"setup", "observe-registered", "write", "observe-committed", "inspect", "replay", "concurrent"}
 
 // rbdJournalInspected names the actions that run `rbd journal inspect`.
 func rbdJournalInspected(action string) bool {
-	return action == "setup" || action == "inspect" || action == "replay"
+	return action == "setup" || action == "inspect" || action == "replay" || action == "concurrent"
 }
+
+// rbdJournalPhases is the ordered phase list the concurrent action publishes
+// in rbd-journal-state.json and returns in its output.
+var rbdJournalPhases = []string{"owner", "issued", "completed", "closed"}
 
 // rbdJournalReadOnly names the observations that change no owned state.
 // `rbd journal inspect` registers and unregisters its own journal client, so
@@ -98,6 +106,10 @@ type rbdJournalEvent struct {
 // rbdJournalPlan is the fixed recipe of the journaling image. SetupEvents
 // are librbd writes and discards of the setup action, WriteEvents those of
 // the write action, GoWrites the AioWrite events the Go test appends.
+// ConcurrentOwnerEvents are the synchronous librbd writes that open the
+// concurrent session (native owner), GoConcurrentWrites the AioWrite events
+// the Go test appends and applies while it owns the lock, and
+// ConcurrentEvents the librbd aio writes issued while Go owns the lock.
 type rbdJournalPlan struct {
 	Pool         string            `json:"pool"`
 	BaseImage    string            `json:"base_image"`
@@ -110,6 +122,10 @@ type rbdJournalPlan struct {
 	SetupEvents  []rbdJournalEvent `json:"setup_events"`
 	WriteEvents  []rbdJournalEvent `json:"write_events"`
 	GoWrites     []rbdBaseExtent   `json:"go_writes"`
+
+	ConcurrentOwnerEvents []rbdJournalEvent `json:"concurrent_owner_events"`
+	GoConcurrentWrites    []rbdBaseExtent   `json:"go_concurrent_writes"`
+	ConcurrentEvents      []rbdJournalEvent `json:"concurrent_events"`
 }
 
 // rbdJournalPlanFor places a 256 KiB, four-object image: setup writes
@@ -118,21 +134,31 @@ type rbdJournalPlan struct {
 // objects 0 and 1 that only a journal replay applies. Every write is at most
 // 8 KiB, below librbd's 16 KiB journal payload limit, so each is one
 // AioWrite event; every discard covers a whole 64 KiB object, so librbd's
-// 64 KiB discard granularity keeps it.
+// 64 KiB discard granularity keeps it. The concurrent session writes objects
+// 0 and 2 as the native owner, then Go writes objects 0 to 2 (three entries,
+// one per splay offset 0 to 2), and the native aio writes issued while Go
+// owns the lock cover objects 0 and 3; the first overlaps the second half of
+// Go's first extent, so the image shows which owner wrote last.
 func rbdJournalPlanFor(token string) rbdJournalPlan {
 	const k = 1 << 10
 	return rbdJournalPlan{Pool: "ceph-msgr-rbd-" + token, BaseImage: "ceph-msgr-image-" + token, Image: "ceph-msgr-journal-" + token,
 		Order: 16, Size: 256 * k, Features: rbdJournalFeatures,
 		OracleClient: "ceph-msgr-oracle-" + token[:8], GoClient: "ceph-msgr-mirror-" + token[:8],
-		SetupEvents: []rbdJournalEvent{{"write", 0, 8 * k}, {"write", 72 * k, 8 * k}, {"write", 136 * k, 4 * k}, {"write", 196 * k, 8 * k}, {"discard", 192 * k, 64 * k}},
-		WriteEvents: []rbdJournalEvent{{"write", 16 * k, 8 * k}, {"write", 80 * k, 4 * k}, {"discard", 128 * k, 64 * k}},
-		GoWrites:    []rbdBaseExtent{{40 * k, 4 * k}, {100 * k, 4 * k}}}
+		SetupEvents:           []rbdJournalEvent{{"write", 0, 8 * k}, {"write", 72 * k, 8 * k}, {"write", 136 * k, 4 * k}, {"write", 196 * k, 8 * k}, {"discard", 192 * k, 64 * k}},
+		WriteEvents:           []rbdJournalEvent{{"write", 16 * k, 8 * k}, {"write", 80 * k, 4 * k}, {"discard", 128 * k, 64 * k}},
+		GoWrites:              []rbdBaseExtent{{40 * k, 4 * k}, {100 * k, 4 * k}},
+		ConcurrentOwnerEvents: []rbdJournalEvent{{"write", 24 * k, 4 * k}, {"write", 152 * k, 4 * k}},
+		GoConcurrentWrites:    []rbdBaseExtent{{48 * k, 8 * k}, {112 * k, 4 * k}, {176 * k, 4 * k}},
+		ConcurrentEvents:      []rbdJournalEvent{{"write", 52 * k, 4 * k}, {"write", 200 * k, 4 * k}, {"write", 232 * k, 4 * k}}}
 }
 
 func (p rbdJournalPlan) owned(token string) bool {
 	return len(token) == 32 && p.Pool == "ceph-msgr-rbd-"+token && p.BaseImage == "ceph-msgr-image-"+token && p.Image == "ceph-msgr-journal-"+token &&
 		p.Order == 16 && p.Size == 256<<10 && p.Features == rbdJournalFeatures && p.OracleClient == "ceph-msgr-oracle-"+token[:8] &&
-		p.GoClient == "ceph-msgr-mirror-"+token[:8] && len(p.SetupEvents) > 0 && len(p.WriteEvents) > 0 && len(p.GoWrites) > 0
+		p.GoClient == "ceph-msgr-mirror-"+token[:8] && len(p.SetupEvents) > 0 && len(p.WriteEvents) > 0 && len(p.GoWrites) > 0 &&
+		len(p.ConcurrentOwnerEvents) > 0 && len(p.GoConcurrentWrites) > 0 && len(p.ConcurrentEvents) > 0 &&
+		!slices.ContainsFunc(p.ConcurrentOwnerEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" }) &&
+		!slices.ContainsFunc(p.ConcurrentEvents, func(e rbdJournalEvent) bool { return e.Kind != "write" })
 }
 
 // The fixed native journal driver. The fixture passes only the token-bound
@@ -148,7 +174,7 @@ import hashlib, json, os, struct, subprocess, sys, time
 import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
-ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay')
+ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
@@ -296,7 +322,7 @@ def observe(ioctx, out):
     spec = pool + '/' + image_id
     out['info'] = cli(['journal', 'info', '--format', 'json', spec], json.loads)
     out['status'] = cli(['journal', 'status', '--format', 'json', spec], json.loads)
-    if action in ('setup', 'inspect', 'replay'):
+    if action in ('setup', 'inspect', 'replay', 'concurrent'):
         out['inspect'] = cli(['journal', 'inspect', '--verbose', spec], parse_inspect)
     out['blobs'] = {'image_head': publish(PREFIX + 'image-head.bin', head), 'journal_objects': publish(PREFIX + 'journal-objects.bin', view)}
 
@@ -314,6 +340,87 @@ def apply(image, phase, event):
         raise ValueError('unplanned native RBD journal event')
     return {'phase': phase, 'kind': event['kind'], 'offset': event['offset'], 'length': event['length'], 'sha256': digest,
             'started_ns': started, 'finished_ns': time.time_ns()}
+
+def watchers(image):
+    return [{'addr': text(w['addr']), 'id': w['id'], 'cookie': w['cookie']} for w in image.watchers_list()]
+
+def wait_proceed(step):
+    path, expected = os.path.join(OUT, 'rbd-journal-proceed-%d' % step), '%s %s %d' % (token, request_id, step)
+    started, deadline = time.monotonic_ns(), time.monotonic() + 30
+    while True:
+        try:
+            with open(path) as f:
+                value = f.read(256).strip()
+        except FileNotFoundError:
+            value = None
+        if value is not None:
+            if value != expected:
+                raise ValueError('proceed signal belongs to another request')
+            os.remove(path)
+            return time.monotonic_ns() - started
+        if time.monotonic() > deadline:
+            raise TimeoutError('proceed signal %d missing' % step)
+        time.sleep(0.02)
+
+def concurrent(ioctx, out):
+    # One read-write image instance for the whole session. Its first
+    # synchronous write takes the exclusive lock (automatic policy), opens
+    # the journal and allocates a local tag; librbd hands the lock to the Go
+    # test on its RequestLock. After the first proceed signal the aio writes
+    # are issued while Go owns the lock: librbd queues them, asks Go for the
+    # lock and, once Go has released it, reacquires it, opens the journal
+    # (replaying whatever the image client has not committed), allocates a
+    # new local tag and appends and applies the queued writes. No flush is
+    # requested: a user flush would journal an AioFlush event.
+    state = {'token': token, 'request_id': int(request_id), 'native_global_id': out['native_global_id'], 'phases': []}
+    def phase(label, image, **extra):
+        entry = dict(phase=label, time_ns=time.time_ns(), **extra)
+        if image is not None:
+            entry.update(is_owner=image.is_exclusive_lock_owner(), owners=[{'mode': o['mode'], 'owner': text(o['owner'])} for o in image.lock_get_owners()],
+                         watchers=watchers(image))
+        else:
+            entry.update(is_owner=False, owners=[], watchers=[])
+        state['phases'].append(entry)
+        state['phase'] = label
+        publish('rbd-journal-state.json', json.dumps(state, sort_keys=True).encode())
+    image = rbd.Image(ioctx, name)
+    try:
+        owner = [apply(image, 'concurrent-owner', e) for e in plan['concurrent_owner_events']]
+        phase('owner', image, events=owner)
+        waited = wait_proceed(1)
+        issued, returns = [], {}
+        def issue(index, event):
+            data = pattern('concurrent', event['offset'], event['length'])
+            record = {'phase': 'concurrent', 'kind': 'write', 'offset': event['offset'], 'length': event['length'], 'sha256': hashlib.sha256(data).hexdigest(),
+                      'started_ns': time.time_ns()}
+            def complete(completion):
+                returns[index] = (completion.get_return_value(), time.time_ns())
+            completion = image.aio_write(data, event['offset'], complete)
+            issued.append((record, completion))
+        for index, event in enumerate(plan['concurrent_events']):
+            issue(index, event)
+        phase('issued', image, wait_ns=waited, events=[dict(r) for r, _ in issued])
+        deadline = time.monotonic() + 60
+        while len(returns) < len(issued):
+            if time.monotonic() > deadline:
+                raise TimeoutError('native aio writes did not complete')
+            time.sleep(0.01)
+        for index, (record, completion) in enumerate(issued):
+            completion.wait_for_complete_and_cb()
+            record['finished_ns'] = returns[index][1]
+        out['aio_return_values'] = [returns[i][0] for i in range(len(issued))]
+        out['events'] = owner + [r for r, _ in issued]
+        phase('completed', image, events=[r for r, _ in issued], aio_return_values=out['aio_return_values'])
+        waited = wait_proceed(2)
+    except BaseException:
+        image.close()
+        raise
+    started = time.monotonic_ns()
+    image.close()
+    out['close_ns'] = time.monotonic_ns() - started
+    phase('closed', None, wait_ns=waited)
+    out['phases'] = state['phases']
+    out['final_wait_ns'] = wait_proceed(3)
 
 cluster = rados.Rados(conffile=CONF, rados_id=identity[len('client.'):],
                       conf={'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_to_stderr': 'true'})
@@ -339,7 +446,9 @@ try:
             out['oracle_register'] = call(ioctx, 'journal.' + image_id, 'journal', 'client_register', lstr(plan['oracle_client']) + lstr(b''))
             if out['oracle_register']['code'] != 0:
                 raise ValueError('native oracle journal client registration failed')
-        if action in ('setup', 'write'):
+        if action == 'concurrent':
+            concurrent(ioctx, out)
+        elif action in ('setup', 'write'):
             phase = 'setup' if action == 'setup' else 'write'
             image = rbd.Image(ioctx, name)
             try:
@@ -397,6 +506,25 @@ type rbdJournalStat struct {
 	Prefix     string `json:"block_name_prefix"`
 }
 
+type rbdJournalOwner struct {
+	Mode  int    `json:"mode"`
+	Owner string `json:"owner"`
+}
+
+// rbdJournalPhase is one published phase of the concurrent action: the
+// native instance's lock ownership, lock owners and header watchers (empty
+// once the image is closed) and the events of that phase.
+type rbdJournalPhase struct {
+	Phase           string              `json:"phase"`
+	TimeNS          int64               `json:"time_ns"`
+	IsOwner         bool                `json:"is_owner"`
+	Owners          []rbdJournalOwner   `json:"owners"`
+	Watchers        []rbdBaseWatcher    `json:"watchers"`
+	WaitNS          int64               `json:"wait_ns,omitempty"`
+	Events          []rbdJournalApplied `json:"events,omitempty"`
+	AioReturnValues []int64             `json:"aio_return_values,omitempty"`
+}
+
 // rbdJournalCLI is one `rbd journal` command with its parsed output (the
 // JSON of info and status, the entries and summary of inspect).
 type rbdJournalCLI struct {
@@ -440,6 +568,40 @@ type rbdJournalNative struct {
 	CloseNS        int64                  `json:"close_ns,omitempty"`
 	AcquireNS      int64                  `json:"acquire_ns,omitempty"`
 	Owner          *bool                  `json:"owner,omitempty"`
+	Phases         []rbdJournalPhase      `json:"phases,omitempty"`
+	AioReturns     []int64                `json:"aio_return_values,omitempty"`
+	FinalWaitNS    int64                  `json:"final_wait_ns,omitempty"`
+}
+
+// rbdJournalPhasesValid checks the concurrent action's phase list: every
+// phase once and in order, the native instance owning the lock with its
+// header watch registered after its own writes and after its queued aio
+// writes completed, and nothing observed after the close.
+func rbdJournalPhasesValid(phases []rbdJournalPhase, plan rbdJournalPlan) bool {
+	if len(phases) != len(rbdJournalPhases) {
+		return false
+	}
+	for i, p := range phases {
+		ok := p.Phase == rbdJournalPhases[i] && p.TimeNS > 0 && len(p.Owners) <= 4 && rbdWriteWatchersValid(p.Watchers) && (i == 0 || p.TimeNS >= phases[i-1].TimeNS)
+		switch p.Phase {
+		case "owner":
+			ok = ok && p.IsOwner && len(p.Watchers) > 0 && p.WaitNS == 0 && rbdJournalEventsValid(p.Events, "concurrent-owner", plan.ConcurrentOwnerEvents) && p.AioReturnValues == nil
+		case "issued":
+			ok = ok && p.WaitNS > 0 && len(p.Events) == len(plan.ConcurrentEvents) && p.AioReturnValues == nil
+			for j, e := range p.Events {
+				want := plan.ConcurrentEvents[min(j, len(plan.ConcurrentEvents)-1)]
+				ok = ok && e.Phase == "concurrent" && e.Kind == want.Kind && e.Offset == want.Offset && e.Length == want.Length && len(e.SHA256) == 64 && e.StartedNS > 0 && e.FinishedNS == 0
+			}
+		case "completed":
+			ok = ok && p.IsOwner && p.WaitNS == 0 && rbdJournalEventsValid(p.Events, "concurrent", plan.ConcurrentEvents) && len(p.AioReturnValues) == len(plan.ConcurrentEvents)
+		case "closed":
+			ok = ok && !p.IsOwner && len(p.Owners) == 0 && len(p.Watchers) == 0 && p.WaitNS > 0 && p.Events == nil && p.AioReturnValues == nil
+		}
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func rbdJournalCLIValid(c *rbdJournalCLI, args ...string) bool {
@@ -513,6 +675,7 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 	} else {
 		ok = ok && result.Inspect == nil
 	}
+	ok = ok && (action == "concurrent") == (result.Phases != nil) && (action == "concurrent") == (result.AioReturns != nil) && (action == "concurrent") == (result.FinalWaitNS > 0)
 	ok = ok && (action == "setup") == (result.OracleRegister != nil) && (action == "replay") == (result.Owner != nil) && (action == "replay") == (result.AcquireNS > 0)
 	if result.OracleRegister != nil {
 		ok = ok && rbdLockCallValid(result.OracleRegister, result.JournalHeader, "journal", "client_register") && result.OracleRegister.Code == 0
@@ -524,6 +687,11 @@ func decodeRBDJournalNative(action, token string, request int64, plan rbdJournal
 		ok = ok && rbdJournalEventsValid(result.Events, "write", plan.WriteEvents) && result.CloseNS > 0
 	case "replay":
 		ok = ok && result.Events == nil && result.CloseNS > 0
+	case "concurrent":
+		owner := min(len(plan.ConcurrentOwnerEvents), len(result.Events))
+		ok = ok && rbdJournalEventsValid(result.Events[:owner], "concurrent-owner", plan.ConcurrentOwnerEvents) &&
+			rbdJournalEventsValid(result.Events[owner:], "concurrent", plan.ConcurrentEvents) && result.CloseNS > 0 &&
+			len(result.AioReturns) == len(plan.ConcurrentEvents) && result.FinalWaitNS > 0 && rbdJournalPhasesValid(result.Phases, plan)
 	default:
 		ok = ok && result.Events == nil && result.CloseNS == 0
 	}
@@ -560,8 +728,9 @@ func checkRBDJournalBlobs(out, action string, blobs map[string]rbdBaseBlob) erro
 }
 
 // rbdJournalNativeTimeout bounds one native journal action: image creation
-// or I/O, then the observation with up to three `rbd journal` commands of at
-// most 60 s each.
+// or I/O (the concurrent session waits at most 30 s for each of its three
+// proceed signals and 60 s for its aio writes), then the observation with up
+// to three `rbd journal` commands of at most 60 s each.
 const rbdJournalNativeTimeout = 240 * time.Second
 
 func (c *fixtureCluster) rbdJournalRunNative(ctx context.Context, action string, request int64) (*ceph.NativeCommandResult, rbdJournalNative, error) {
@@ -612,6 +781,8 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 		return plan.Image + ":journal-inspect"
 	case "replay":
 		return plan.Image + ":exclusive-lock,journal-replay"
+	case "concurrent":
+		return plan.Image + ":exclusive-lock-handoff,native-write,journal-replay"
 	}
 	return plan.Image
 }
