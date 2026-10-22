@@ -25,6 +25,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	if err := ValidateChecksumCompoundRequest(r); err != nil {
 		return msgr.MessageData{}, err
 	}
+	if err := ValidateSparseReadCompoundRequest(r); err != nil {
+		return msgr.MessageData{}, err
+	}
 	if r.MapEpoch == 0 || r.Locator.Pool < 0 || r.Object == "" || r.Locator.Hash != -1 || len(r.Operations) == 0 || len(r.Operations) > MaxOperations {
 		return msgr.MessageData{}, ErrRequest
 	}

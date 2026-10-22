@@ -51,6 +51,9 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 	if err := validateChecksumCompoundWork(ops, limit); err != nil {
 		return 0, 0, err
 	}
+	if err := validateSparseReadCompoundWork(ops, limit); err != nil {
+		return 0, 0, err
+	}
 	var flags, total uint64
 	var stagedDigestSize, logicalWriteBytes uint64
 	// stagedAny marks a staged write that a later CALL may not follow: every
@@ -96,7 +99,9 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 			return 0, 0, ErrRequest
 		}
 		if op.Code == SparseRead {
-			if len(ops) != 1 {
+			// Standalone, or the reviewed SPARSE_READ/READ compound whose
+			// shape and summed budgets validateSparseReadCompoundWork checked.
+			if len(ops) != 1 && !SparseReadCompound(ops) {
 				return 0, 0, ErrOperation
 			}
 			if op.MapExt != (MapExtInput{}) || op.Checksum != (ChecksumInput{}) {

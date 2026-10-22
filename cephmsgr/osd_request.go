@@ -426,17 +426,19 @@ func (o *OSDConnection) validateEnforceSnapContext(request OSDRequest) error {
 	return osd.ValidateEnforceSnapContext(input, o.client.options.MaxFrameSize)
 }
 
-// The compound checksum subset is head-only and caller-targeted at a
-// replicated primary. This projection adds no policy to other vectors.
+// The compound checksum and sparse-read subsets are head-only and
+// caller-targeted at a replicated primary. This projection adds no policy to
+// other vectors.
 func (o *OSDConnection) validateChecksumCompound(request OSDRequest) error {
 	if len(request.Operations) < 2 {
 		return nil
 	}
-	compound := false
+	checksum, sparse := false, false
 	for _, op := range request.Operations {
-		compound = compound || op.Code == OSDChecksum
+		checksum = checksum || op.Code == OSDChecksum
+		sparse = sparse || op.Code == OSDSparseRead
 	}
-	if !compound {
+	if !checksum && !sparse {
 		return nil
 	}
 	if len(request.Operations) > osd.MaxOperations {
@@ -449,9 +451,12 @@ func (o *OSDConnection) validateChecksumCompound(request OSDRequest) error {
 		LocalizeReads: request.LocalizeReads, RetryAttempt: request.RetryAttempt,
 		Operations: make([]osd.Operation, len(request.Operations))}
 	for i, op := range request.Operations {
-		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags)}
+		input.Operations[i] = osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence}
 	}
-	return osd.ValidateChecksumCompoundRequest(input)
+	if err := osd.ValidateChecksumCompoundRequest(input); err != nil {
+		return err
+	}
+	return osd.ValidateSparseReadCompoundRequest(input)
 }
 
 // Watch operations reserve event ownership before transmission. This private
@@ -590,6 +595,13 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 			result.Operations[i].Checksum.Values = nil
 		}
 	}
+	if osd.SparseReadCompound(input.Operations) {
+		// Decoded compound sparse-read output likewise waits for complete
+		// validation; raw Data and RawData remain available.
+		for i := range result.Operations {
+			result.Operations[i].SparseRead = OSDSparseReadResult{}
+		}
+	}
 	result.Submission = submission
 	result.Transaction, result.GlobalID = reply.Transaction, o.globalID
 	redirect := errors.Is(err, osd.ErrRedirect)
@@ -610,6 +622,13 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		for i := 0; i < osd.ChecksumCompoundPrefix(decoded); i++ {
 			if op := decoded.Operations[i]; op.Code == osd.Checksum {
 				result.Operations[i].Checksum = publicChecksum(op.Checksum, op.Data)
+			}
+		}
+	}
+	if !redirect && osd.SparseReadCompound(input.Operations) {
+		for i := 0; i < osd.SparseReadCompoundPrefix(decoded); i++ {
+			if op := decoded.Operations[i]; op.Code == osd.SparseRead {
+				result.Operations[i].SparseRead = publicSparseRead(op.Data)
 			}
 		}
 	}
@@ -649,6 +668,9 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 	}
 	if !redirect && osd.ChecksumCompound(input.Operations) {
 		return osd.ValidateChecksumCompoundReply(input.Operations, reply)
+	}
+	if !redirect && osd.SparseReadCompound(input.Operations) {
+		return osd.ValidateSparseReadCompoundReply(input.Operations, reply)
 	}
 	for i, requested := range input.Operations {
 		op := reply.Operations[i]
