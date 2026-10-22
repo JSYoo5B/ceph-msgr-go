@@ -1,0 +1,279 @@
+# Native path coverage map
+
+This map answers the first work item of issue #14: every mandatory native path
+of the [final test-environment scope](../../SPEC.md#final-test-environment-scope)
+is joined to its reproducible setup, control, independently attributed
+observation, fault and cleanup recipe, and classified by where the required
+fixture capability actually lives. It is an inventory of recipes and retained
+records. It adds no fixture API, runs no native test and claims no new native
+result. A row's class is not an acceptance verdict: final acceptance still
+needs successful native operation, fault and cleanup evidence on the tested
+SHA, as SPEC.md requires.
+
+Reviewed on 2026-10-23 against this repository at
+`c081c22e5277f1cd479b0ca6bda7e013aa0e9d6f`, Ceph Tentacle v20.2.4 source
+`7f793731f1b39eb4f465e960113d2363c311b964`, the pinned provider
+`github.com/JSYoo5B/ceph-testcontainers-go v0.3.0` (tag commit
+`c899ebcc83d6122992613dcb1bdb5420016ccc82`, see `go.mod` in this directory)
+and that provider's unreleased `main` at
+`caf5357fc335aa1602ed3c344b39e4f8d65f2bb8`, 83 commits ahead of v0.3.0.
+
+## Classes
+
+Each row has exactly one class. The order below is also the precedence: a row
+takes the first class that applies.
+
+| Class | Meaning |
+| --- | --- |
+| `released` | This repository has a reproducible recipe on the pinned v0.3.0 provider: a catalog scenario or a documented opt-in selector, with a validation record or a named test. |
+| `main-only` | The fixture capability the path needs (not only a recipe) exists only on provider `main`, not in v0.3.0. |
+| `primitive` | v0.3.0 public APIs express the native condition, but this repository has no recipe or record for it. An upstream provider receipt may exist and is cited as a reference, not as local evidence. |
+| `proposed` | Neither a local recipe nor a provider capability exists; an open issue or unmerged pull request proposes one. |
+| `absent` | No capability, recipe or open proposal exists. |
+
+SPEC.md also names `unverified`. Here that is a property of evidence, not a
+class: it appears in the Visibility column (historical record, first failure
+retained, skipped by default, outcome only) so that a `released` recipe is
+never read as an accepted path.
+
+## Reading the evidence column
+
+- `group:<name>` and full scenario IDs refer to
+  [catalog.json](../../.github/scenarios/catalog.json); `suite:<id>` refers to
+  its check suites. Every native row of that catalog is in `mandatory.txt`.
+- A plain `TestCeph...` name is a top-level Go test in this repository.
+- `ctg@v0.3.0:` and `ctg@main:` name a native receipt test of the provider at
+  that revision. These are fixture readiness receipts with native clients;
+  they do not exercise the Go implementation of this repository.
+- Linked Markdown files are the retained validation records in this directory.
+  Their own attribution (exact commit, file hashes, historical working tree)
+  is summarized in [PROTOCOL_EVIDENCE.md](../../cephmsgr/PROTOCOL_EVIDENCE.md#native-receipts)
+  and is not upgraded by this map.
+
+## Selection visibility
+
+Catalog rows run through the native result gate described in
+[the scenario README](../../.github/scenarios/README.md). An explicit
+`test_run` row requires a PASS of every selected test. A broad row (the
+`mon-mgr` rows and the plain `osd` rows) tolerates optional skips and only
+requires at least one PASS, so a broad row's verdict does not establish that
+a particular test in it ran. The Visibility column states which applies:
+
+- **dedicated row**: the scenario's selector names the test; a skip fails it.
+- **broad row**: the test runs under a broad selector and may skip, for
+  example a three-replica test on a single-OSD row.
+- **opt-in, not in catalog**: an environment switch selects it; no catalog row
+  runs it, so CI never reports it.
+- **staged native oracle**: the native comparison needs a separately staged
+  pinned C++ oracle and skips without it; catalog rows do not stage it.
+- **outcome only** or **native state**: what the independent oracle observed,
+  following the provider's daemon-to-daemon terminology.
+- **upstream receipt only**: the only native recipe is in the provider.
+
+## Coverage
+
+### Messenger/CephX
+
+| ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| MSG-1 | Role-specific CephX with `aes` and `aes256k` keys and mixed service ciphers | `released` | Three MONs and two MGRs from `ceph.Run` with `WithAuth` key type and service cipher; Go authenticates to MON and MGR (OSD and MDS rows add their roles) | Native CLI commands with the same identity; provider quorum and manager status | Rejected key; container and network teardown | `mon-mgr.aes256k.ip4`, `mon-mgr.aes.ip4`, `mon-mgr.aes-svc-aes256k.ip4`, `mon-mgr.aes256k-svc-aes.ip4`, `TestCephRejectedKeyIntegration`, `TestCephKeyringIntegration`, [VALIDATION.md](VALIDATION.md) | broad rows; migration record is historical |
+| MSG-2 | Ticket expiry, renewal and idle sessions | `released` | Expiry, idle and fractional-ticket profiles shorten MON and service ticket lifetimes; sessions are held past them | Native commands and service-key history in the fixture diagnostics | Expired and discarded tickets; teardown | `mon-mgr.aes256k.ip4.expiry-1`, `mon-mgr.aes256k.ip6.host.idle-1`, `mon-mgr.aes256k.ip6.short-tickets-1`, `mon-mgr.aes.ip4.short-tickets-1`, `TestCephExpiredTicketRecoveryIntegration`, `TestCephDiscardedTicketProofIntegration`, `TestCephIdleSessionsIntegration`, `TestCephFractionalTicketRenewalIntegration`, `TestCephOSDRenewalIntegration` | dedicated rows; OSD renewal on broad `osd` rows |
+| MSG-3 | Rotating service-key wipe, credential replacement and revocation | `released` | Auth-epoch profile performs two rotating-key wipes; native `auth` commands replace or revoke a client key | Native service-key history and commands with the replaced identity | Wipe and revocation, restoration of the original key | `mon-mgr.aes256k.ip6.auth-epoch-1`, `mon-mgr.aes.ip4.auth-epoch-1`, `TestCephServiceKeyEpochIntegration`, `TestCephReplacedCredentialIntegration`, `TestCephRevokedCredentialRecoveryIntegration`, [SERVICE_KEY_EPOCH_FAILURE_20261015.md](SERVICE_KEY_EPOCH_FAILURE_20261015.md) | dedicated rows; a first failure is retained and later passes do not explain it |
+| MSG-4 | Capabilities and permission failures | `released` | Restricted identities and native capability changes during a session | Native refusal codes for the same identity and command | Capability change and renewal under new capabilities; identities removed | `TestCephReadOnlyPermissionsIntegration`, `TestCephMonCommandCapsChangeIntegration`, `TestCephOSDCommandCapsChangeIntegration`, `TestCephOSDCommandCapsRenewalIntegration`, `TestCephMonPoolOpScopedCapsIntegration`, `TestCephOSDWatchPermissionsIntegration`, `TestCephOSDXattrPermissionsIntegration`, [OSD_COMMAND_VALIDATION.md](OSD_COMMAND_VALIDATION.md) | broad rows |
+| MSG-5 | Secure and CRC modes, mode rejection | `released` | Provider Messenger policy per daemon type; Go offers one mode per connection | The daemons' configured service modes read natively | Mismatched mode is refused without downgrade; teardown | `mon-mgr.aes256k.ip4.crc.host`, `mon-mgr.aes.ip4.crc.host`, `mon-mgr.aes256k.ip6.crc`, `mon-mgr.aes256k.ip6.mode-rejection-mon`, `mon-mgr.aes.ip4.mode-rejection-mgr`, `TestCephCRCConnectionModeIntegration`, `TestCephConnectionModeRejectionIntegration`, `TestSecurityModeObserver` | dedicated rejection rows; CRC on broad rows |
+| MSG-6 | Addresses, nonces and address families | `released` | IPv4, IPv6 and container-local IPv4-mapped IPv6; host runtime through the owned relay | Native MonMap and daemon address vectors compared with Go's recorded addresses | Hostname and seed faults; teardown | `mon-mgr.aes256k.ip6`, `mon-mgr.aes256k.ip6.mapped-1`, `mon-mgr.aes256k.ip4.host`, `TestCephMappedAddressIntegration`, `TestCephHostnameConfigIntegration`, `TestCephHostnameSeedIntegration`, `TestCephGenericHostnameSeedIntegration` | dedicated mapped row; IPv6 on the host network is not offered by the provider |
+| MSG-7 | Feature negotiation and explicit refusal of unsupported requirements | `released` | Legacy-v6, replicated-PG v8 and request-v9 OSD profiles with HASHPSPOOL-free legacy pools | Native pool flags and native replies to the same requests | A requirement for an unimplemented feature is refused explicitly | `group:osd`, `TestCephOSDUnsupportedFeaturesIntegration`, `TestReplicatedPGFixtureProfiles`, [OSD_REQUEST_V9_VALIDATION.md](OSD_REQUEST_V9_VALIDATION.md), [OSD_REPLY_V8_VALIDATION.md](OSD_REPLY_V8_VALIDATION.md) | broad rows; per-session negotiated features read from the MON are an upstream receipt only (`ctg@main:TestMessengerCompressionReceipt`) |
+| MSG-8 | Keepalive, ACK sequence and reset with an independent native observation | `proposed` | Go-side liveness recipes stall writes or receives; no recipe makes a native peer report keepalive or ACK state | None independent of Go; the provider manifest row `messenger/keepalive-ack-reconnect` is uncovered | Write and receive stalls; teardown | `TestCephMonitorWriteStallIntegration`, `TestCephManagerReceiveStallIntegration`, [MDS_FRESH_VALIDATION.md](MDS_FRESH_VALIDATION.md) | proposed in provider issue JSYoo5B/ceph-testcontainers-go#5; MDS keepalive is a Go-side receipt |
+| MSG-9 | Lossless Messenger resume meeting a restarted MDS | `released` | Owned MDS restart in the CephFS metadata fixture | Native session listing and the new MDS incarnation | MDS restart; owned restart adopted and cleaned up | `group:mds-cephfs`, `TestCephMDSCephFSRecoveryIntegration`, [MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md), [MDS_CEPHFS_FIXTURE.md](MDS_CEPHFS_FIXTURE.md) | dedicated rows; MON, MGR and OSD sessions do not implement cookie resume by design |
+| MSG-10 | Partial sends, late and lost replies | `released` | Counted relays and withheld replies; seed-path dial faults | Native readback of the mutation postcondition after the lost reply | Lost reply, late dial; owned objects removed | `TestCephLostMutationReplyIntegration`, `TestCephOSDMutationLostReplyIntegration`, `TestCephMonPoolOpLostReplyIntegration`, `TestCephOSDCopyFromLostReplyIntegration`, `TestSeedPathFaultBlocksLateDialAndClosesLatestOutsideLock`, [OSD_MUTATIONS_VALIDATION.md](OSD_MUTATIONS_VALIDATION.md) | broad rows |
+| MSG-11 | Cancellation, Close and shutdown races | `released` | Concurrent operations with local cancellation, Close during handshakes and repeated shutdown under traffic | Native postconditions for mutations; owned workers return | Race instrumentation on the host runtime | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.race-1`, `suite:race`, `TestCephStreamCancellationIntegration`, `TestCephRepeatedShutdownUnderTrafficIntegration`, `TestCephCloseDuringManagerHandshakeIntegration`, `TestCephContextAdmissionIntegration`, `TestCephContextRecoveryIntegration`, `TestCephOSDMutationCloseIntegration` | broad rows |
+| MSG-12 | Compression offer toward MON and OSD | `released` | CRC client offers snappy and zstd | Go reports no negotiated compression and commands still succeed; the record read the daemons' compression options natively | None beyond the declined offer | `TestCephMsgrCompressionOfferIntegration`, [MSGR_COMPRESSION_VALIDATION.md](MSGR_COMPRESSION_VALIDATION.md) | not selected by any catalog row (broad CRC MON/MGR rows skip it without an OSD; `osd` rows do not select it); historical record |
+| MSG-13 | Compressed frames sent by a daemon to a client | `absent` | Not reachable on the pinned release: daemons apply compression policy only toward OSD peers | None | None | [MSGR_COMPRESSION_VALIDATION.md](MSGR_COMPRESSION_VALIDATION.md) | unreachable natively; the daemon-peer case is D2D-17 |
+| MSG-14 | Windows clients against OSD and MDS | `proposed` | Windows binaries reach MON and MGR through the WSL relay only | None for OSD and MDS | None | `suite:windows-ceph` | the suite covers MON/MGR, aes256k, secure, IPv4 relay; OSD/MDS expansion is issue #14 work item 4 |
+
+### CLIENT to MON/MGR
+
+| ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| MM-1 | Raw MON/MGR commands with JSON, bulk and binary data and server errors | `released` | Ordinary three-MON, two-MGR fixture; Go sends raw commands | Native CLI output of the same command; raw bytes and signed codes compared | Frame limits and server refusals; restored configuration | `group:mon-mgr`, `TestCephCommandErrorsAndBinaryOutputIntegration`, `TestCephBinaryBulkInputIntegration`, `TestCephLargeMonitorReplyIntegration`, `TestCephCommandDescriptionsIntegration`, `TestCephConfigCommandsIntegration`, `TestCephPublicLimitErrorsIntegration` | broad rows |
+| MM-2 | Tell to the active MGR and exact-name MON and MGR | `released` | Exact target names from native maps | Native daemon identity in the reply and native map | Target change and absence before send; Tell recovery | `TestCephTellIntegration`, `TestCephTellDescriptionsIntegration`, `TestCephTellRecoveryIntegration`, `TestCephNamedMonitorTellIntegration`, `TestCephNamedManagerTellIntegration`, [MGR_NAMED_TELL_VALIDATION.md](MGR_NAMED_TELL_VALIDATION.md) | broad rows; standby MGR routing is outside the product |
+| MM-3 | Discovery through MonMap, MgrMap, modules and ServiceMap | `released` | Native module and service changes on the disposable cluster | Native `mon dump`, `mgr dump` and service dumps | Module policy restored | `TestCephMonitorMembersIntegration`, `TestCephManagerStandbysIntegration`, `TestCephManagerServicesIntegration`, `TestCephManagerModulesIntegration`, `TestCephManagerModuleOptionsIntegration`, `TestCephManagerModulePolicyIntegration`, `TestCephMonServiceMapIntegration` | broad rows; ServiceMap removal and large maps unverified |
+| MM-4 | Subscriptions for logs, config, digest, OSDMap and FSMap/MDSMap | `released` | Go subscribes; native commands produce log entries, config changes and map epochs | Native map dumps and log markers at the same epochs | Subscription recovery across session loss | `TestCephLogWatchIntegration`, `TestCephLogRecoveryIntegration`, `TestCephConfigStreamIntegration`, `TestCephDigestIntegration`, `TestCephMonOSDMapsIntegration`, `TestCephMonOSDMapsRecoveryIntegration`, `TestCephMDSMapsIntegration`, [MDS_MAPS_VALIDATION.md](MDS_MAPS_VALIDATION.md), [MDS_MAPS_ORACLE.md](MDS_MAPS_ORACLE.md) | broad rows; what a native client receives on the same subscriptions is an upstream receipt only (`ctg@main:TestNativeWatchNotifyAndSubscriptions`) |
+| MM-5 | Map epochs, readiness and waits | `released` | Native epoch changes while Go waits | Native map epochs | Wait recovery after session loss | `TestCephMapWaitIntegration`, `TestCephMapWaitRecoveryIntegration`, `TestCephMonMapVersionIntegration`, `TestCephReadinessIntegration` | broad rows |
+| MM-6 | MON failover: leader stop, paused MON, complete outage | `released` | Provider MON Stop/Start and pause; the fixture's `wait-monitor-election` control | Native quorum and election epoch | Leader stop, pause, outage; every MON restarted | `TestCephMonMapVersionLeaderStopIntegration`, `TestCephMonPoolOpLeaderStopIntegration`, `TestCephPausedMonitorIntegration`, `TestCephCompleteMonitorOutageIntegration`, `TestCephRepeatedMonitorRecoveryIntegration`, `TestCephRecoveryIntegration` | broad rows |
+| MM-7 | Freeze of the connected MON while requests wait | `released` | Pause of the connected peon or leader, then stop, resume and restart | Native pool state after the freeze | Freeze and restart; cleanup can leave an OSD on an old OSDMap | `TestCephMonPoolOpConnectedStallIntegration`, `TestCephMonPoolOpConnectedStopIntegration`, [MON_FREEZE_FIXTURE_ISSUE.md](MON_FREEZE_FIXTURE_ISSUE.md) | opt-in, not in catalog (`CEPH_MSGR_TEST_MON_FREEZE=1`); open fixture issue, not accepted |
+| MM-8 | MGR failover, unavailable MGR and stale registrations | `released` | `mgr fail`, MGR Stop/Start, no-MGR profile, native MGR preparation | Native MgrMap GIDs and epochs, MON refusal lines | Failover and restart; preparation restores membership | `mon-mgr.aes256k.ip4.managers-0`, `mon-mgr.aes-svc-aes256k.ip4.native-mgr-preparation-1`, `TestCephManagerAvailabilityIntegration`, `TestCephNativeManagerPreparationIntegration`, `TestCephNaturalManagerFailoverIntegration`, `TestCephManagerSetupFailoverIntegration`, `TestCephPausedManagerIntegration`, [NATIVE_MGR_PREPARATION_VALIDATION.md](NATIVE_MGR_PREPARATION_VALIDATION.md) | dedicated rows for no-MGR and preparation; failover on broad rows; first failure retained |
+| MM-9 | MGR service registration, report and close | `released` | Opt-in Go registration on the single-OSD legacy fixture | Native ServiceMap, MGR daemon state and a native librados registration | Ticket expiry, active MGR change, unconfirmed close, unavailable MGR; module and flag state restored | `group:mgr-service`, `TestCephMgrServiceRegistrationIntegration`, [MGR_SERVICE_VALIDATION.md](MGR_SERVICE_VALIDATION.md), [MGR_SERVICE_RECOVERY_VALIDATION.md](MGR_SERVICE_RECOVERY_VALIDATION.md), [MGR_SERVICE_CLOSE_VALIDATION.md](MGR_SERVICE_CLOSE_VALIDATION.md), [MGR_SERVICE_METADATA_VALIDATION.md](MGR_SERVICE_METADATA_VALIDATION.md), [MGR_SERVICE_COMPARISON_VALIDATION.md](MGR_SERVICE_COMPARISON_VALIDATION.md), [MGR_SERVICE_UNAVAILABLE_VALIDATION.md](MGR_SERVICE_UNAVAILABLE_VALIDATION.md) | dedicated rows; zero-daemon cold bootstrap unverified |
+| MM-10 | MON ping, pool operations and statfs | `released` | Native MPing through `ceph ping`; owned pools and pool snapshots | Native ping JSON, pool dumps and statfs counters | Lost reply and leader stop; owned pools removed | `group:mon-ping`, `TestCephMonPingIntegration`, `TestCephMonPoolOpIntegration`, `TestCephMonPoolOpFilesystemPoolIntegration`, `TestCephMonStatfsIntegration`, [MON_PING_VALIDATION.md](MON_PING_VALIDATION.md), [MON_POOL_OP_VALIDATION.md](MON_POOL_OP_VALIDATION.md), [MON_STATFS_VALIDATION.md](MON_STATFS_VALIDATION.md) | dedicated ping rows; pool and statfs on broad `osd` rows; statfs and pool records are historical |
+| MM-11 | Applied mutations not replayed after a failure | `released` | A MON or MGR mutation whose reply is lost | Native state shows a single application | Session loss after send | `TestCephAppliedMonitorMutationIsNotReplayedIntegration`, `TestCephAppliedManagerMutationIsNotReplayedIntegration` | broad rows |
+| MM-12 | Bounded MON/MGR concurrency and an older patch release | `released` | Three-minute stress on one row; one row on 20.2.3 | Native commands during and after the stress | Concurrent sessions; teardown | `mon-mgr.aes256k.ip4`, `mon-mgr.aes.ip4.release-20.2.3`, `TestCephStressIntegration` | three-minute bound; no hour-long claim |
+
+### CLIENT to OSD
+
+| ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| OSD-1 | Reads, writes, append, truncate, delete, conditions and compound vectors | `released` | Legacy-v6 and replicated-PG profiles with MemStore or BlueStore, one or three replicas; caller-supplied placement from the native oracle | Native librados readback of bytes, versions and per-op results | OSD SIGKILL and restart on BlueStore, lost replies; owned objects removed and fixture recovered | `group:osd`, `TestCephOSDIOIntegration`, `TestCephOSDMutationsIntegration`, `TestCephOSDCompoundIntegration`, `TestCephOSDMutationConcurrencyIntegration`, `TestCephOSDMutationCrashIntegration`, `TestCephOSDMutationRestartIntegration`, [OSD_MUTATIONS_VALIDATION.md](OSD_MUTATIONS_VALIDATION.md), [OSD_REPLICATED_PG_VALIDATION.md](OSD_REPLICATED_PG_VALIDATION.md) | broad rows; three-replica cases skip on single-OSD rows |
+| OSD-2 | Xattrs and OMAP | `released` | Owned objects with native seeds | Native xattr and OMAP readback, server limits | OSD crash during xattr writes; owned objects removed | `TestCephOSDXattrsIntegration`, `TestCephOSDXattrNativeOracleIntegration`, `TestCephOSDXattrServerLimitsIntegration`, `TestCephOSDXattrCrashIntegration`, `TestCephOSDU64XattrIntegration`, `TestCephOSDOmapReadsIntegration`, `TestCephOSDOmapWritesIntegration`, `TestCephOSDOmapCompareIntegration`, `TestCephOSDOmapRangeRemovalIntegration`, `TestCephOSDOmapDurabilityIntegration`, [OSD_XATTR_VALIDATION.md](OSD_XATTR_VALIDATION.md), [OSD_OMAP_VALIDATION.md](OSD_OMAP_VALIDATION.md), [OSD_OMAP_WRITE_VALIDATION.md](OSD_OMAP_WRITE_VALIDATION.md), [OSD_U64_XATTR_VALIDATION.md](OSD_U64_XATTR_VALIDATION.md) | broad rows; U64 comparison needs a staged native oracle |
+| OSD-3 | Object class calls | `released` | Native classes on owned objects | Native class results and object state | Failed-OK compounds | `TestCephOSDClassCallIntegration`, `TestCephOSDClassCallCompoundIntegration`, `TestCephOSDCallFailOKIntegration`, [OSD_CALL_VALIDATION.md](OSD_CALL_VALIDATION.md), [OSD_CALL_COMPOUND_VALIDATION.md](OSD_CALL_COMPOUND_VALIDATION.md) | broad rows |
+| OSD-4 | Sparse reads, MAPEXT, checksums, allocation hints, FADVISE and WRITESAME | `released` | Owned objects written natively | Native reads and pinned C++ oracles for sparse read, MAPEXT and WRITESAME | WRITESAME across OSD failover | `TestCephOSDSparseReadIntegration`, `TestCephOSDMapExtIntegration`, `TestCephOSDChecksumIntegration`, `TestCephOSDChecksumCompoundIntegration`, `TestCephOSDAllocationHintIntegration`, `TestCephOSDFadviseIntegration`, `TestCephOSDWriteSameIntegration`, `TestCephOSDWriteSameFailoverIntegration`, [OSD_READ_METADATA_VALIDATION.md](OSD_READ_METADATA_VALIDATION.md), [OSD_CHECKSUM_COMPOUND_VALIDATION.md](OSD_CHECKSUM_COMPOUND_VALIDATION.md), [OSD_ALLOC_HINT_VALIDATION.md](OSD_ALLOC_HINT_VALIDATION.md), [OSD_FADVISE_VALIDATION.md](OSD_FADVISE_VALIDATION.md), [OSD_WRITESAME_VALIDATION.md](OSD_WRITESAME_VALIDATION.md) | staged native oracle for sparse read, MAPEXT and WRITESAME (skipped in catalog rows); checksum compounds in dedicated suite rows |
+| OSD-5 | Enumeration: PG listing, filters, scrub errors and watchers | `released` | Owned pools and objects; a replica data error for scrub listing | Native object listing, scrub and watcher listings | Paging across cursors | `TestCephOSDPGListIntegration`, `TestCephOSDPGListV8Integration`, `TestCephOSDPGListFilterIntegration`, `TestCephOSDScrubListIntegration`, `TestCephOSDScrubListPagingIntegration`, `TestCephOSDListWatchersIntegration`, [OSD_O3_VALIDATION.md](OSD_O3_VALIDATION.md), [OSD_PG_LIST_FILTER_VALIDATION.md](OSD_PG_LIST_FILTER_VALIDATION.md), [OSD_SCRUB_LIST_VALIDATION.md](OSD_SCRUB_LIST_VALIDATION.md), [OSD_WATCHERS_VALIDATION.md](OSD_WATCHERS_VALIDATION.md) | PG v8 and filter listing in dedicated suite rows; scrub listing needs three BlueStore replicas |
+| OSD-6 | Watch, notify, disconnect, blocklist, reconnect and redelivery | `released` | Go and native watchers on owned objects | Native watcher listings and notify acknowledgements | Blocklist, expired watch, primary failover; watches removed | `TestCephOSDWatchNotifyIntegration`, `TestCephOSDWatchReconnectIntegration`, `TestCephOSDWatchDisconnectIntegration`, `TestCephOSDWatchBlocklistIntegration`, `TestCephOSDWatchExpiredReconnectIntegration`, `TestCephOSDWatchFailoverIntegration`, `TestCephOSDWatchNotifyRedeliveryIntegration`, [OSD_WATCH_RECONNECT_VALIDATION.md](OSD_WATCH_RECONNECT_VALIDATION.md), [OSD_WATCH_DISCONNECT_VALIDATION.md](OSD_WATCH_DISCONNECT_VALIDATION.md) | dedicated request-v9 suite rows for the newer cases; failover on broad three-replica rows |
+| OSD-7 | Snapshots, rollback, snapshot contexts and pool snapshots | `released` | Owned pools with self-managed and pool snapshots | Native snapshot listing and reads at snapshot IDs | Lost reply and OSD restart; snapshots removed | `TestCephOSDSnapshotIntegration`, `TestCephOSDSnapshotDurabilityIntegration`, `TestCephOSDSnapshotLostReplyIntegration`, `TestCephOSDEnforceSnapContextIntegration`, `TestCephOSDPoolSnapshotIntegration`, [OSD_SNAPSHOT_VALIDATION.md](OSD_SNAPSHOT_VALIDATION.md), [OSD_ENFORCE_SNAP_CONTEXT_VALIDATION.md](OSD_ENFORCE_SNAP_CONTEXT_VALIDATION.md), [OSD_POOL_VALIDATION.md](OSD_POOL_VALIDATION.md) | broad rows; snapshot-context checks in dedicated suite rows |
+| OSD-8 | Unknown outcomes, explicit resubmission, redirect and PG split | `released` | Withheld replies, native split and merge of an owned pool, manifest redirect | Native object state, PG and epoch after the split, a single execution | Primary failover, restart, PG log trim; pool restored | `TestCephOSDResubmitIntegration`, `TestCephOSDResubmitFailoverIntegration`, `TestCephOSDResubmitRestartIntegration`, `TestCephOSDResubmitAfterTrimIntegration`, `TestCephOSDSplitIntegration`, `TestCephOSDSplitResubmitIntegration`, `TestCephOSDRedirectIntegration`, [OSD_RESUBMIT_VALIDATION.md](OSD_RESUBMIT_VALIDATION.md), [OSD_SPLIT_RECIPE.md](OSD_SPLIT_RECIPE.md), [OSD_SPLIT_VALIDATION.md](OSD_SPLIT_VALIDATION.md), [OSD_REDIRECT_VALIDATION.md](OSD_REDIRECT_VALIDATION.md) | split in dedicated suite rows; failover cases on broad three-replica rows |
+| OSD-9 | PG and object backoff with late ACK and primary failover | `released` | Native PG-wide backoff recipe and object-scope backoff | Native ACK reception and the OSD's backoff state | Late ACK, in-flight primary failover; recipe cleanup | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover`, `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover`, `TestCephOSDBackoffIntegration`, `TestCephOSDBackoffLateAckIntegration`, `TestCephOSDObjectBackoffFailoverIntegration`, [OSD_BACKOFF_RECIPE.md](OSD_BACKOFF_RECIPE.md), [OSD_OBJECT_BACKOFF_VALIDATION.md](OSD_OBJECT_BACKOFF_VALIDATION.md), [OSD_BACKOFF_SCOPE_VALIDATION.md](OSD_BACKOFF_SCOPE_VALIDATION.md), [OSD_BACKOFF_FAILURE_BUDGET_VALIDATION.md](OSD_BACKOFF_FAILURE_BUDGET_VALIDATION.md) | dedicated rows |
+| OSD-10 | Full ratios, full-pool flags and blocklist | `released` | Native quota and full-ratio changes | Native pool flags and OSDMap fullness | Full-ratio failover and recovery; ratios restored | `TestCephOSDFullRatioIntegration`, `TestCephOSDFullPoolFlagsIntegration`, `TestCephOSDFullFailoverIntegration`, [OSD_FULL_VALIDATION.md](OSD_FULL_VALIDATION.md), [OSD_READINESS_DIAGNOSTICS.md](OSD_READINESS_DIAGNOSTICS.md) | broad rows; restoration first failures retained |
+| OSD-11 | Erasure-coded k=2,m=1 pools, jerasure and optimized | `released` | Three BlueStore OSDs with owned EC pools | Native reads, shard placement and pool snapshots | OSD failover and degraded writes | `TestCephOSDErasureIntegration`, `TestCephOSDErasureJerasureIntegration`, `TestCephOSDErasureOptimizedIntegration`, `TestCephOSDErasureFailoverIntegration`, `TestCephOSDErasureOptimizedFailoverIntegration`, `TestCephOSDErasureSnapshotAndDegradedWriteIntegration`, `TestCephOSDErasurePoolSnapshotIntegration`, [OSD_ERASURE_VALIDATION.md](OSD_ERASURE_VALIDATION.md), [EC_NONPRIMARY_READ_CRASH.md](EC_NONPRIMARY_READ_CRASH.md) | broad three-replica rows; a native OSD assertion on balanced non-primary EC reads is recorded and deliberately not exercised |
+| OSD-12 | Wider EC profiles and EC epoch or primary change campaigns | `proposed` | Four or more OSDs and k=2,m=2 or wider profiles | Not yet defined locally | Not yet defined locally | issue #9; open PR #42 | open PR, unmerged |
+| OSD-13 | Targeted OSD and PG commands | `released` | Explicit OSD and PG targets from native maps | Native command output and refusal codes for the same target | OSD crash during a command, target outside the acting set, frame limit | `TestCephOSDCommandsIntegration`, `TestCephOSDCommandCrashIntegration`, `TestCephOSDCommandCrashInFlightIntegration`, `TestCephOSDCommandOutsideActingSetIntegration`, `TestCephOSDCommandFrameLimitIntegration`, [OSD_COMMAND_VALIDATION.md](OSD_COMMAND_VALIDATION.md) | broad rows |
+| OSD-14 | COPY_FROM and COPY_FROM2 within and across pools | `released` | Owned source and destination objects and pools | Native readback of the destination | Source failover, source and destination crash, lost reply | `TestCephOSDCopyFromIntegration`, `TestCephOSDCopyFromCompoundIntegration`, `TestCephOSDCopyFromSourceFailoverIntegration`, `TestCephOSDCopyFromCrashIntegration`, `TestCephOSDCopyFromDestinationCrashIntegration`, `TestCephOSDCrossPoolAndNamespaceCopyFromIntegration`, [OSD_COPY_FROM_VALIDATION.md](OSD_COPY_FROM_VALIDATION.md) | broad rows |
+| OSD-15 | Independent COPY_FROM encodings and further compounds | `proposed` | Not yet merged | Not yet merged | Not yet merged | issue #7; open PR #40 | open PR, unmerged |
+| OSD-16 | IGNORE_CACHE over native cache-tier pools | `released` | Opt-in native cache-tier overlay on the legacy fixture | Native tier state and object reads | Flag isolation; overlay removed | `group:osd-cache-pools`, `TestCephOSDIgnoreCacheIntegration`, [OSD_IGNORE_CACHE_VALIDATION.md](OSD_IGNORE_CACHE_VALIDATION.md), [OSD_IGNORE_CACHE_NATIVE_PROBE_VALIDATION.md](OSD_IGNORE_CACHE_NATIVE_PROBE_VALIDATION.md) | dedicated rows; selected bypass operations only |
+| OSD-17 | Cache-tier promotion, eviction and dedup-manifest operations | `proposed` | Not yet merged | Not yet merged | Not yet merged | issue #8; open PR #41 | open PR, unmerged; the opcodes are also a product wire gap |
+| OSD-18 | Replica reads with balance and localize flags | `released` | Three BlueStore replicas; reads sent to each acting member | Native bytes, attributes and versions | Primary failover and bounce | `TestCephOSDReplicaReadIntegration`, `TestCephOSDReplicaReadBounceIntegration`, `TestCephOSDReplicaReadPrimaryFailoverIntegration`, [OSD_REPLICA_READ_VALIDATION.md](OSD_REPLICA_READ_VALIDATION.md) | broad three-replica rows |
+| OSD-19 | Caller-routed placement change through upmap | `released` | Owned pool with upmap item and full transitions | Native epoch, PG, up and acting sets and readback | Membership and primary change; exact baseline restored | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap`, `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap`, `TestCephOSDUpmapIntegration`, [OSD_UPMAP_VALIDATION.md](OSD_UPMAP_VALIDATION.md) | dedicated rows |
+| OSD-20 | Bounded OSD soak with OSD kills | `released` | Four workers on three BlueStore replicas; one OSD killed every 15 s | Native bytes and xattrs after PGs are clean | SIGKILL and restart; owned objects removed | `osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m`, `TestCephOSDSoakIntegration`, `TestCephOSDSoakFailoverIntegration`, [OSD_SOAK_VALIDATION.md](OSD_SOAK_VALIDATION.md) | four-minute bound; the record's capacity failure is retained |
+| OSD-21 | Hour-long concurrency, renewal, recovery and shutdown campaigns | `proposed` | Not defined | Not defined | Not defined | issue #14 work item 3 | no long-run pass exists |
+
+### CLIENT to MDS/CephFS
+
+| ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| MDS-1 | MDS authentication, keepalive and target discovery | `released` | Owned filesystem with one active MDS; dedicated identities | Native FSMap target and daemon identity | Read-only control; identities removed | `group:mds-fresh`, `TestCephMDSFreshIntegration`, [MDS_FRESH_FIXTURE.md](MDS_FRESH_FIXTURE.md), [MDS_FRESH_VALIDATION.md](MDS_FRESH_VALIDATION.md) | dedicated rows |
+| MDS-2 | Raw MDS commands with exact targets | `released` | Two identities with different MDS capabilities | Native `tell mds` output and refusals | Native OPEN-session absence checked; identities removed | `group:mds-commands`, `TestCephMDSCommandsIntegration`, [MDS_COMMAND_FIXTURE.md](MDS_COMMAND_FIXTURE.md), [MDS_COMMAND_VALIDATION.md](MDS_COMMAND_VALIDATION.md) | dedicated rows |
+| MDS-3 | Session open, renewal, close, reclaim and close-push admission | `released` | Owned session fixture | Native session listing, blocklist after reclaim | Uncertain close; sessions and identities removed | `group:mds-sessions`, `TestCephMDSSessionsIntegration`, [MDS_SESSIONS_FIXTURE.md](MDS_SESSIONS_FIXTURE.md), [MDS_SESSIONS_VALIDATION.md](MDS_SESSIONS_VALIDATION.md), [MDS_RECLAIM_VALIDATION.md](MDS_RECLAIM_VALIDATION.md), [MDS_CLOSE_PUSH_ADMISSION_VALIDATION.md](MDS_CLOSE_PUSH_ADMISSION_VALIDATION.md) | dedicated rows; reclaim record is historical and its MDS failover case unverified |
+| MDS-4 | Metadata requests, capabilities, leases and pushes | `released` | Owned filesystem; a native LibCephFS client as a second actor | Native mount reads, `dump inode` and session counters | Revocation by a native writer; namespace cleanup | `group:mds-cephfs`, `TestCephMDSCephFSIntegration`, `TestCephMDSCephFSPushIntegration`, [MDS_CEPHFS_VALIDATION.md](MDS_CEPHFS_VALIDATION.md), [MDS_CEPHFS_PUSH_VALIDATION.md](MDS_CEPHFS_PUSH_VALIDATION.md) | dedicated rows |
+| MDS-5 | Unsafe and safe completion with journal control | `released` | Owned completion fixture with runtime overrides and owned restarts | MDS admin socket ops in flight and daemon log | Journal pause and MDS restart; overrides restored | `group:mds-cephfs-completion`, `TestCephMDSCephFSCompletionIntegration`, [MDS_CEPHFS_COMPLETION_FIXTURE.md](MDS_CEPHFS_COMPLETION_FIXTURE.md), [MDS_CEPHFS_COMPLETION_VALIDATION.md](MDS_CEPHFS_COMPLETION_VALIDATION.md) | dedicated rows |
+| MDS-6 | Reconnect and replay to a new MDS incarnation | `released` | Owned MDS restart with outstanding requests and caps | Native session state and namespace after replay | MDS restart; pending cap flush extension | `TestCephMDSCephFSRecoveryIntegration`, [MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md) | dedicated `mds-cephfs` rows |
+| MDS-7 | Multi-rank forwarding, cap export and import, standby and standby-replay takeover | `released` | Two or three active ranks with a standby; owned pins and takeover controls | Native `get subtrees`, MDS perf counters, FSMap and blocklist | `mds fail` of rank 0; pins, blocklist entries and identities restored | `group:mds-cephfs-ranks`, `group:mds-cephfs-ranks-replay`, `TestCephMDSCephFSRanksIntegration`, `TestCephMDSCephFSRanksReplayIntegration`, [MDS_CEPHFS_RANKS_FIXTURE.md](MDS_CEPHFS_RANKS_FIXTURE.md), [MDS_CEPHFS_RANKS_VALIDATION.md](MDS_CEPHFS_RANKS_VALIDATION.md), [MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md](MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md), [MDS_RANKS_HISTORY_VALIDATION.md](MDS_RANKS_HISTORY_VALIDATION.md) | dedicated rows |
+| MDS-8 | Coupled object I/O, cap snapshots and FLOCK | `released` | Owned data fixture with layout-based OSD I/O | Native file reads, snapshot reads and lock conflicts | MDS restart with pending cap snapshots, lost FLUSHSNAP ACK, lock interrupt | `group:mds-cephfs-data`, `TestCephMDSCephFSDataIntegration`, [MDS_CEPHFS_DATA_FIXTURE.md](MDS_CEPHFS_DATA_FIXTURE.md), [MDS_CEPHFS_DATA_VALIDATION.md](MDS_CEPHFS_DATA_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_VALIDATION.md](MDS_CEPHFS_CAPSNAP_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_RECOVERY_VALIDATION.md](MDS_CEPHFS_CAPSNAP_RECOVERY_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_RESUBMIT_VALIDATION.md](MDS_CEPHFS_CAPSNAP_RESUBMIT_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_DEDUPE_VALIDATION.md](MDS_CEPHFS_CAPSNAP_DEDUPE_VALIDATION.md), [MDS_FILELOCK_VALIDATION.md](MDS_FILELOCK_VALIDATION.md), [MDS_FILELOCK_COMPLETION_VALIDATION.md](MDS_FILELOCK_COMPLETION_VALIDATION.md) | dedicated rows |
+| MDS-9 | Cap-send uncertainty, interrupted writeback and buffered-data eviction | `proposed` | Not yet merged | Not yet merged | Not yet merged | issue #10; open PR #43 | open PR, unmerged |
+| MDS-10 | POSIX record locks across MDS failover and client metrics messages | `proposed` | No local recipe; the provider has only an opt-in FUSE contention recipe on `main` | None | None | issue #11; provider issue JSYoo5B/ceph-testcontainers-go#5 | product features are withheld until the audit; upstream receipt only for FUSE locks |
+
+### RBD underlying I/O
+
+| ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| RBD-1 | Image header, object prefix and data objects | `released` | Owned pool, two identities and native images on the single-OSD legacy fixture | librbd and native object reads | Uncertain outcomes kept; images and pool removed | `group:rbd`, `TestCephRBDBaseIntegration`, [RBD_BASE_FIXTURE.md](RBD_BASE_FIXTURE.md), [RBD_BASE_VALIDATION.md](RBD_BASE_VALIDATION.md) | dedicated rows |
+| RBD-2 | Writes and object map updates | `released` | Write image with closed write control | librbd reads and native object map | Closed control; image removed | `TestCephRBDWriteIntegration`, [RBD_WRITE_VALIDATION.md](RBD_WRITE_VALIDATION.md) | dedicated rows |
+| RBD-3 | Exclusive lock handoff and notifications | `released` | Lock image with a native lock owner | Native lock owner and notifications | Lock handoff; watchers removed | `TestCephRBDExclusiveLockIntegration`, [RBD_LOCK_VALIDATION.md](RBD_LOCK_VALIDATION.md) | dedicated rows |
+| RBD-4 | Clone, parent metadata and copy-up | `released` | Native parent snapshot and clone images | librbd parent spec and native clone objects | Closed clone control; clones removed | `TestCephRBDCloneIntegration`, [RBD_CLONE_VALIDATION.md](RBD_CLONE_VALIDATION.md) | dedicated rows |
+| RBD-5 | Journal entries and replay observation | `released` | Journaling image with closed journal control | Native journal objects and librbd replay | Closed control; journal and image removed | `TestCephRBDJournalIntegration`, [RBD_JOURNAL_VALIDATION.md](RBD_JOURNAL_VALIDATION.md) | dedicated rows |
+| RBD-6 | Concurrent journal, lock and notification paths under backend faults | `proposed` | Not defined | Not defined | Not defined | issue #12 | none yet |
+
+### Daemon-to-daemon
+
+| ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| D2D-1 | MON quorum and elections after a MON stops or freezes | `released` | Three MONs; provider Stop/Start and pause; `wait-monitor-election` control | Native quorum membership and election epoch | Leader stop, pause and complete outage; every MON restarted | `TestCephMonMapVersionLeaderStopIntegration`, `TestCephOSDIOAcrossMonLeaderStopIntegration`, `TestCephPausedMonitorIntegration`, `TestCephCompleteMonitorOutageIntegration` | outcome only; MON-to-MON messages are not observed |
+| D2D-2 | MON quorum under a network partition | `primitive` | v0.3.0 `InterruptNetwork` and five MONs express it | Native quorum membership in the upstream receipt | Endpoint cut and restore | `ctg@v0.3.0:TestFiveMonitorQuorumAndNetworkRecovery` | upstream receipt only |
+| D2D-3 | Map distribution to each MON and OSD (per-daemon epoch) | `primitive` | v0.3.0 `AdminSocket`, `AddMonitor`, `RemoveMonitor` and pool creation express it | Each daemon's own map epoch on its admin socket in the upstream receipt; locally only the OSD-to-client MOSDMap path is observed | Monmap change, pool creation | `ctg@main:TestMapPropagationReceipt`, `TestCephOSDMapDeliveryIntegration`, [MON_FREEZE_FIXTURE_ISSUE.md](MON_FREEZE_FIXTURE_ISSUE.md) | upstream receipt only (on `main`); the local open issue records an OSD left on an old OSDMap after a MON freeze |
+| D2D-4 | OSD heartbeat failure detection on the cluster network | `primitive` | v0.3.0 `WithSeparateClusterNetwork` and `InterruptNetwork` on the cluster plane express it | MON failure reports, OSDMap down marking and the OSD's own log in the upstream receipt | Cluster endpoint cut, restore and OSD restart | `ctg@main:TestOSDHeartbeatFailure` | upstream receipt only (on `main`) |
+| D2D-5 | Directional and peer-specific faults on replication and heartbeats | `main-only` | Needs `ApplyNetworkProfile` with `Peer`, which v0.3.0 lacks | The primary's in-flight op, MON failure reports and netem counters in the upstream receipt | One-direction loss and restore | `ctg@main:TestOSDReplicationPeerPathCut` | upstream receipt only |
+| D2D-6 | Replication: acknowledged writes survive loss of the primary | `released` | Three BlueStore replicas on the public network; OSD SIGKILL and restart under load | Native readback after PGs are clean; replica reads of native versions | Primary kill, restart and clean PG wait | `osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m`, `TestCephOSDSoakFailoverIntegration`, `TestCephOSDMutationCrashIntegration`, `TestCephOSDReplicaReadPrimaryFailoverIntegration`, `TestCephOSDResubmitFailoverIntegration`, [OSD_SOAK_VALIDATION.md](OSD_SOAK_VALIDATION.md), [OSD_REPLICA_READ_VALIDATION.md](OSD_REPLICA_READ_VALIDATION.md) | outcome only; sub-operations are not observed and there is no separate cluster network |
+| D2D-7 | Replication held on a separate cluster network | `primitive` | v0.3.0 `WithSeparateClusterNetwork` and `InterruptNetwork` express it | The primary's `waiting for sub ops` and an independent readback in the upstream receipt | Cluster endpoint cut and restore | `ctg@v0.3.0:TestSeparateClusterNetworksAndInterruptions` | upstream receipt only |
+| D2D-8 | Recovery and backfill outcome after restart, remap and fullness | `released` | OSD kill and restart, upmap transitions, full-ratio failover | Native PG state until every PG is `active+clean`; native readback | Restart, remap, `recovery_toofull` retry; baselines restored | `TestCephOSDSoakFailoverIntegration`, `TestCephOSDUpmapIntegration`, `TestCephOSDFullFailoverIntegration`, `TestCephOSDErasureFailoverIntegration`, [OSD_UPMAP_VALIDATION.md](OSD_UPMAP_VALIDATION.md), [OSD_READINESS_DIAGNOSTICS.md](OSD_READINESS_DIAGNOSTICS.md), [OSD_ERASURE_VALIDATION.md](OSD_ERASURE_VALIDATION.md) | outcome only; log recovery and backfill are not told apart |
+| D2D-9 | Log recovery versus backfill attribution | `primitive` | v0.3.0 `TemporaryOSDFlag`, `TemporaryConfig` and `AdminSocket` express it | The primary's `pg query` and recovered object counts in the upstream receipt | Replica stop with recovery held, flag restore | `ctg@v0.3.0:TestOSDRecoveryAndBackfillReceipts` | upstream receipt only |
+| D2D-10 | Peering outcome across PG split and merge, remap and primary change | `released` | Native split and merge, upmap transitions and OSD kills | Native PG, epoch, up and acting sets once active and clean | Split, merge, remap, kill; pools restored | `TestCephOSDSplitIntegration`, `TestCephOSDUpmapIntegration`, `TestCephOSDSoakFailoverIntegration`, [OSD_SPLIT_VALIDATION.md](OSD_SPLIT_VALIDATION.md), [OSD_UPMAP_VALIDATION.md](OSD_UPMAP_VALIDATION.md) | outcome only |
+| D2D-11 | Per-step peering, PG creation and replica scrub | `proposed` | No recipe observes per-step state; scrub is exercised locally only through error listing | None | None | provider issue JSYoo5B/ceph-testcontainers-go#5, `TestCephOSDScrubListIntegration` | the provider manifest marks peering and scrub as outcome-only |
+| D2D-12 | MDS metadata movement through subtree export and import | `released` | Owned export pins on two or three active ranks | Native `get subtrees` on every rank and export and import perf counters | Pins restored to baseline | `TestCephMDSCephFSRanksIntegration`, `TestCephMDSCephFSRanksReplayIntegration`, [MDS_CEPHFS_RANKS_VALIDATION.md](MDS_CEPHFS_RANKS_VALIDATION.md), [MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md](MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md) | native state |
+| D2D-13 | MDS takeover by a standby or standby-replay follower | `released` | `mds fail` of the armed rank-0 GID | Native FSMap ranks, GIDs and blocklist entries | Takeover adoption; blocklist entries attributed and removed | `group:mds-cephfs-ranks`, `group:mds-cephfs-ranks-replay`, [MDS_CEPHFS_RANKS_FIXTURE.md](MDS_CEPHFS_RANKS_FIXTURE.md), [MDS_RANKS_HISTORY_VALIDATION.md](MDS_RANKS_HISTORY_VALIDATION.md) | native state |
+| D2D-14 | MGR registration and failover with the MONs | `released` | `mgr fail`, MGR Stop/Start and native MGR preparation | Native MgrMap GIDs and MON refusal lines | Failover, restart; membership restored | `TestCephNaturalManagerFailoverIntegration`, `TestCephNativeManagerPreparationIntegration`, [NATIVE_MGR_PREPARATION_VALIDATION.md](NATIVE_MGR_PREPARATION_VALIDATION.md), [MGR_SERVICE_RECOVERY_VALIDATION.md](MGR_SERVICE_RECOVERY_VALIDATION.md) | native state (MgrMap); MON beacon sessions are matched only in the upstream `ctg@v0.3.0:TestMessengerClientProfileManagerTransition` |
+| D2D-15 | MDS-to-OSD journal path and client-to-MDS paths cut in one direction | `main-only` | Needs `ApplyNetworkProfile` with `Peer` | Objecter requests, MDS request dumps and netem counters in the upstream receipts | One-direction loss and restore | `ctg@main:TestCephFSMDSOSDPathCut`, `ctg@main:TestCephFSClientMDSPathCut` | upstream receipt only |
+| D2D-16 | Separate public and cluster networks | `primitive` | v0.3.0 `WithSeparateClusterNetwork`, IPv4 and IPv6 | Daemon address vectors on both networks | None by itself | `ctg@v0.3.0:TestSeparateIPv6ClusterNetworksAndInterruptions` | the local fixture uses one network for every daemon |
+| D2D-17 | Compression and negotiated features between daemons | `primitive` | v0.3.0 `TemporaryConfig` and `AdminSocket` express the policy change and `messenger dump` | Each session's mode and compression in the upstream receipt | OSD restart to renegotiate | `ctg@main:TestMessengerCompressionReceipt` | upstream receipt only (on `main`) |
+| D2D-18 | OSD replacement that retains BlueStore data | `proposed` | Not available in v0.3.0 or `main` | None | None | provider issue JSYoo5B/ceph-testcontainers-go#6 | none yet |
+| D2D-19 | Message-level capture of daemon-to-daemon frames | `absent` | No recipe captures internal frames; secure daemon sessions are encrypted | None; every daemon-to-daemon row relies on native state or outcome | None | [OSD_REQUEST_V9_VALIDATION.md](OSD_REQUEST_V9_VALIDATION.md) | only client CRC captures exist locally |
+
+### Service-induced paths
+
+| ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| SVC-1 | RGW-induced RADOS objects, bucket index OMAP and garbage collection | `primitive` | v0.3.0 `rgw.Run` and native commands express it; S3 is input only | RADOS objects, index OMAP and GC queue in the upstream receipt | Object delete and GC processing | `ctg@main:TestRGWRadosReceipt` | upstream receipt only (on `main`); a local profile is issue #13 |
+| SVC-2 | rbd-mirror and cephfs-mirror daemons in steady state | `primitive` | v0.3.0 `RunMirror` in the `rbd` and `cephfs` packages | None locally | None locally | none locally | no local or upstream steady-state receipt is cited here |
+| SVC-3 | Source OSD to mirror daemon with one path cut | `main-only` | Needs `ApplyNetworkProfile` with `Peer` | Mirror snapshot progress and netem counters in the upstream receipts | One-direction loss and restore | `ctg@main:TestRBDMirrorPeerPathCut`, `ctg@main:TestCephFSMirrorPeerPathCut` | upstream receipt only |
+
+## Classification summary
+
+| Class | Rows |
+| --- | --- |
+| `released` | 60 |
+| `main-only` | 3 |
+| `primitive` | 9 |
+| `proposed` | 11 |
+| `absent` | 2 |
+
+The `released` rows are recipes, not accepted paths: most have native evidence
+only on selected profiles, several records are historical, and some selected
+cases skip on broad rows. The daemon-to-daemon paths with a local recipe
+(D2D-1, D2D-6, D2D-8, D2D-10) observe outcomes only; native state is recorded
+locally only for MDS movement and takeover and for MGR registration.
+
+## Most significant absences and gaps
+
+- **No local daemon-to-daemon network faults.** The local fixture never
+  separates the cluster network and has no network fault control, so OSD
+  heartbeat failure (D2D-4), held replication (D2D-7), quorum partitions
+  (D2D-2) and every directional fault (D2D-5, D2D-15, SVC-3) have only
+  upstream receipts. Peer-specific faults need provider `main`.
+- **Map distribution is unobserved locally and has an open anomaly.** No
+  local recipe reads each daemon's own map epoch (D2D-3), and
+  [MON_FREEZE_FIXTURE_ISSUE.md](MON_FREEZE_FIXTURE_ISSUE.md) records an OSD
+  that stopped following the OSDMap after a MON freeze, with its cause open.
+- **Service-induced paths have no local recipe.** RGW and mirror daemons
+  (SVC-1 to SVC-3) are absent from the catalog.
+- **Native Messenger state is unobserved.** No recipe reports native
+  keepalive, ACK or reset state (MSG-8), and no recipe captures daemon frames
+  (D2D-19).
+- **Endurance is bounded to minutes.** The longest runs are the four-minute
+  OSD soak and the three-minute MON/MGR stress (OSD-20, MM-12); hour-long
+  campaigns are planned work (OSD-21).
+- **Some recipes never run in CI.** The MON freeze recipe (MM-7), the
+  compression offer test (MSG-12) and the staged native oracles (OSD-2,
+  OSD-4) are not selected by any catalog row.
+
+## Open pull requests
+
+These are listed as unmerged work only. None of them is a capability in the
+classification above.
+
+| Pull request | Scope | Status |
+| --- | --- | --- |
+| #40 | COPY_FROM encodings and native compounds (issue #7) | open PR, unmerged |
+| #41 | Native-only cache-tier operation checkpoint (issue #8) | open PR, unmerged |
+| #42 | Four-OSD topology and k=2,m=2 erasure baseline (issue #9) | open PR, unmerged |
+| #43 | MDS cap-send recovery across an MDS restart (issue #10) | open PR, unmerged |
+
+## Product wire gaps (separate from environment completeness)
+
+These are gaps in the Go implementation. A fixture recipe for the matching
+native path does not close them, and closing them does not complete the
+environment.
+
+- Secure-mode compression and zlib are deferred
+  ([compression plan](../../internal/msgr/COMPRESSION_PLAN.md)).
+- Cache-tier promotion and eviction and dedup-manifest opcodes are not
+  implemented ([unsupported opcodes](../../internal/osd/UNSUPPORTED_OPCODES.md), issue #8).
+- Unadvertised CephFS client features remain withheld pending the audit in
+  issue #11.
+- MON, MGR and OSD sessions do not implement cookie resume; this is a
+  documented contract boundary, not a gap.
+- Daemon-to-daemon paths need no Go server implementation; their rows above
+  are environment requirements only.
+
+## Upper-layer applications (outside this repository)
+
+RBD image, lock, clone and journal policy; CephFS filesystem state and POSIX
+semantics; RGW HTTP and S3 administration; CRUSH placement, automatic routing
+and retry policy. Test-only consumers in `integration/` exercise the
+underlying Messenger paths and are not application completeness claims.
+
+## Drift check
+
+`python3 tools/native_path_coverage.py` checks this document without running
+any test: every scenario ID, `group:` and `suite:` reference exists in the
+catalog, every plain test name is a top-level Go test in this repository,
+every linked record exists, each row has one known class, unmerged pull
+requests are not cited by `released`, `main-only` or `primitive` rows, every
+SPEC.md final-scope path has a section, and the summary counts match the rows.
+Upstream `ctg@` receipts are checked for form only. The unit test
+`tools/test_native_path_coverage.py` runs this check in basic CI.
