@@ -25,11 +25,14 @@ journal.
 librbd lets only the holder of the image's exclusive lock append to the
 image journal. Two lock owners appending at the same time is not a valid
 librbd configuration, so it was not attempted. In the tested session both
-clients are live and both have journal appends outstanding at once. Native
-librbd keeps the image open read-write for the whole session, and its aio
-writes are issued and queued while Go owns the lock. The lock moves native
--> Go -> native only through librbd's own notifications. Go also has two
-appends in flight at once on one OSD connection.
+clients are live. Native librbd keeps the image open read-write for the
+whole session. Its aio writes are issued and queued (their journal appends
+waiting for the lock, as its RequestLock to Go shows) while Go owns the lock
+and appends. The lock moves native
+-> Go -> native only through librbd's own notifications. Go submits two of
+its appends from two goroutines started together. The API exposes no
+submission event, so whether both were on the wire at the same time was not
+observed and is not claimed.
 
 ## Test shape
 
@@ -48,18 +51,27 @@ waits for proceed signals.
 | Handoff to Go | Go watches `rbd_header.<id>` with a responder that answers as librbd's `ImageWatcher` does. Go notifies `RequestLock(ClientId{Go}, force=false)` with a 5 s timeout: two acknowledgements, Go's own empty and native `ResponseMessage(0)`. Native librbd then sends `ReleasedLock(ClientId{native})` |
 | Go acquires | `lock.lock` (exclusive, `auto <Go watch handle>`, `internal`); `lock.get_info` names Go; `AcquiredLock(ClientId{Go})` acknowledged empty by both watchers |
 | Journal open by Go | The immutable and mutable metadata vectors, `get_client("")`, `tag_list` and STAT+READ of journal objects 0 to 7. Exactly one new tag (the native owner's) with mirror UUID `""` and its predecessor equal to the image client's commit front after the replay. The native owner's entries match its writes. Every other entry equals the replay observation, and object set 1 is absent. The image client's commit position equals the commit rule over the owner's entries, so nothing is left to replay. The test refuses to continue otherwise (Go never replays) |
-| Go tag and entry 0 | `get_next_tag_tid`, then `tag_create(next, class 0, TagData{"" , {"" , true, front}})`, then an empty journal-header notify (`JournalMetadata::C_NotifyUpdate`). Entry 0 (AioWrite 48 to 56 KiB) in librbd's `[journal.append(2^24, entry)]` form |
+| Go tag and entry 0 | `get_next_tag_tid`, then `tag_create(next, class 0, TagData{"" , {"" , true, front}})`. The same `tag_create` again is refused with -17 (`EEXIST`) and is recorded in the outcome ledger as `refused`. Then an empty journal-header notify (`JournalMetadata::C_NotifyUpdate`). Entry 0 (AioWrite 48 to 56 KiB) in librbd's `[journal.append(2^24, entry)]` form |
 | Native writes queued | Proceed signal 1: the driver issues three `aio_write`s (52 to 56 KiB, overlapping the second half of Go's first extent, 200 to 204 KiB and 232 to 236 KiB) and publishes `issued` (not owner). Go's responder receives native `RequestLock(ClientId{native}, force=false)` and answers `ResponseMessage(0)` as owner |
-| Go appends in flight together | Entries 1 (112 to 116 KiB) and 2 (176 to 180 KiB) are sent concurrently from two goroutines, each `[journal.append]`. Each reply carries its own transaction, ONDISK and a user version. Every journal object Go wrote then reads as its bytes at lock acquisition followed by Go's entry |
+| Go appends from two goroutines | Entries 1 (112 to 116 KiB) and 2 (176 to 180 KiB) are submitted from two goroutines started together, each `[journal.append]`. Each reply carries its own transaction, ONDISK and a user version. Every journal object Go wrote then reads as its bytes at lock acquisition followed by Go's entry. Wire overlap of the two requests is not observed |
 | Go applies and commits | Each event is applied as `[SETALLOCHINT(65536, 65536) FAILOK, WRITE]` without SnapContext. `client_commit("", ...)` writes the commit rule over Go's entries, and `get_client` returns it. A second empty journal-header notify follows |
 | Release to native | `lock.unlock`, then `ReleasedLock(ClientId{Go})` acknowledged empty by both watchers. Native librbd sends `AcquiredLock(ClientId{native})`. Phase `completed`: owner again, all three aio return values 0 |
 | Close | Proceed signal 2: the driver closes the image; Go receives `ReleasedLock(ClientId{native})`, stops its responder and unwatches. Proceed signal 3: the observation runs |
 | Native oracle | librados `exec` of the journal header list equals Go's per-op outputs byte for byte; librados reads of journal objects 0 to 7 equal Go's; `rbd journal info` and `status` equal Go's decoding. Tags: the owner's, Go's (data byte-equal to what Go created) and the native reacquisition tag, whose predecessor is Go's last entry. The three native entries each match one aio write (offset, length, data pattern, timestamp within a second of the native call). The image client's final position equals the commit rule over the native entries after Go's commit. Two clients remain (image and oracle, the oracle at an empty position). No lockers or watchers remain. `rbd journal inspect --verbose` replays every entry in tag and entry order with 0 errors. The librbd read of the whole image equals the model: native owner writes, then Go's writes, then the native aio writes (so 52 to 56 KiB holds native data) |
 
 Every Go request is recorded with its inputs, transaction, submission,
-GlobalID, PG, map epoch, flags and versions. Each Go append and data write
-also records an outcome (`applied`, `refused`, `server-error` or
-`uncertain`). A failed mutation is never resent. After a failure the
+GlobalID, PG, map epoch, flags and versions. Every Go mutation of the
+session (lock, unlock, tag creation, appends, data writes, commit and the
+compensating unlock) also enters an outcome ledger with its transaction,
+submission, code and error. The entry is written right after the raw record
+and before any assertion, so a failing mutation keeps its classified
+outcome. The classes are `applied` (code 0), `refused` (an OSD error reply,
+or the negative code the test asked for) and `uncertain`
+(`OutcomeUnknownError`, or conservatively any other error). A mutation of
+any class is never resent. The live session exercises `applied` and
+`refused`. `uncertain` is covered only by the unit test
+`TestRBDMutationOutcomeLedger`, because a lost reply cannot be induced
+safely on the live journal. After a failure the
 deferred compensation unlocks the header (never relocking or reappending),
 notifies `ReleasedLock` and unwatches. The published state, Go's notifies,
 the notifications Go received and the outcomes are written into
@@ -80,16 +92,21 @@ Topology: three MON, two MGR, one OSD and the native oracle container, the
 | [39811417103](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39811417103) | `101862d` | both RBD rows | failed: guarded appends refused (see "Development observation") |
 | [39812345146](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39812345146) | `d9bc548` | both RBD rows | passed |
 | [39813062712](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39813062712) | `5561555` | both RBD rows | passed |
+| [39823842597](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39823842597) | `9da73a0` | both RBD rows | passed |
 
-The values below are from run 39813062712 (commit
-`55615555567439aa27f8a39a6b9c91f027f54633`, which adds only the summary log
-lines to `d9bc548`). The two rows are
+The first three commits were on the branch before it was rebased onto
+`3de2098`. They had no outcome ledger, and their record described the
+goroutine appends as overlapping. `9da73a0` is the rebased branch with the
+ledger and the narrowed claim, and it is the tested source of this record.
+Later commits change only documentation. The values below are from run
+39823842597 (commit `9da73a09359d616f90b65013e691c4c3336c77e5`). The two
+rows are
 `rbd.aes.ip4.crc.host.osd-store-bluestore...` (CRC, AES client and service
 keys, IPv4, host runtime, single BlueStore OSD) and
 `rbd.aes256k.ip6.container.osd-store-memstore...` (secure, AES256K keys,
 IPv6, container runtime, single MemStore OSD). In both rows the base, clone,
 journal (6/6 subtests), exclusive-lock and write tests passed with no skips.
-`concurrent_appenders` took 0.62 s and 0.61 s.
+`concurrent_appenders` took 0.62 s and 0.51 s.
 
 | Value | CRC/AES IPv4 BlueStore | secure/AES256K IPv6 MemStore |
 | --- | --- | --- |
@@ -101,21 +118,22 @@ journal (6/6 subtests), exclusive-lock and write tests passed with no skips.
 | After Go's commit | `[(2,6,2), (1,6,1), (0,6,0), (3,1,3)]` | same |
 | Final | `[(2,7,2), (1,7,1), (0,7,0), (3,1,3)]` | same |
 | `rbd journal inspect` | 18 entries, 0 errors | same |
-| Go append transactions | entry 0: 135; entries 1 and 2 in flight together: 138 and 137 (the second goroutine's request was submitted first) | same transactions |
+| Go append transactions | entry 0: 136; entries 1 and 2 (goroutines): 139 and 138 | entry 0: 136; entries 1 and 2: 138 and 139 |
 | Header notifications to Go's image watch | Go's own: RequestLock, AcquiredLock, ReleasedLock; native: ReleasedLock, RequestLock (exactly one), AcquiredLock, ReleasedLock | same |
-| Go lock held | 54.3 ms | 58.3 ms |
+| Go lock held | 59.8 ms | 40.5 ms |
 | Native aio return values | 0, 0, 0 | same |
-| Native close | 4.4 ms | 2.9 ms |
+| Native close | 4.7 ms | 3.0 ms |
 
-Run 39812345146 passed the same assertions on `d9bc548`. It printed no
-summary lines, so its values are not recorded here. Diagnostics are archived
+Run 39813062712 on `5561555` logged the same tags, entry positions, commit
+positions and notification sequence. Run 39812345146 printed no summary
+lines. Diagnostics are archived
 only for failed scenarios, so the passing runs' `rbd-journal-results.json`
 files were not retrieved. The table comes from the test's own log lines.
 
 Local checks on the tested tree: `go build ./...`, `go vet ./...`,
 `go test -race ./...` (unit tests only; integration tests skip without the
 fixture), `go -C integration/fixture vet ./...` and `test -race ./...`, and
-`python3 -m unittest discover -s tools -p 'test_*.py'` (563 tests) passed.
+`python3 -m unittest discover -s tools -p 'test_*.py'` passed.
 
 ## Development observation
 
@@ -139,16 +157,19 @@ cascading fixture error. The fixed test sends librbd's unguarded form.
   calls, appends, data writes with an allocation hint, watch, notify,
   acknowledgement and ping) uses existing primitives, so no product
   primitive was added.
-- Concurrent mutations from one client on one OSD connection kept distinct
-  transactions and complete reply identity.
+- Two mutations submitted from concurrent goroutines on one OSD connection
+  received distinct transactions and complete reply identity. Whether they
+  overlapped on the wire was not observed.
 
 ## Not verified
 
 - Two lock owners appending at once, or Go appending without holding the
   lock (not valid librbd behavior and not attempted).
+- That the OSD accepted two Go appends that were simultaneously on the wire:
+  the goroutine submissions are not observed to overlap.
 - Lost notifications or acknowledgements, lock-owner loss, blocklisting
   during handoff, a reply lost after an append (an `uncertain` outcome was
-  never observed) and primary changes. These are issue #12 items 3 and 4.
+  never observed live and is unit-tested only) and primary changes. These are issue #12 items 3 and 4.
 - Go replaying uncommitted entries left by another owner: the test requires
   a fully committed journal at acquisition.
 - Native librbd replaying a Go entry during a live reacquisition. Go
