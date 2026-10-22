@@ -190,6 +190,78 @@ func TestMgrServiceRequiresOptInAndValidIdentity(t *testing.T) {
 	}
 }
 
+func TestMgrServiceUnavailableWaitIsKnownBeforeSendAndReleasesReservation(t *testing.T) {
+	for _, ending := range []string{"deadline", "cancel", "client-close"} {
+		t.Run(ending, func(t *testing.T) {
+			mgr := &serviceMGR{ack: true}
+			c, ctx := dialService(t, mgr)
+			if _, err := c.WaitMgrMap(ctx, 0); err != nil {
+				t.Fatal(err)
+			}
+			c.mu.Lock()
+			original := c.mgrMap
+			c.mgrMap.Available = false
+			c.signal()
+			c.mu.Unlock()
+			call, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+			defer cancel()
+			result := make(chan error, 1)
+			go func() {
+				svc, err := c.OpenMgrService(call, MgrServiceOptions{Service: "svc", Daemon: "waiting"})
+				if svc != nil {
+					result <- errors.New("unavailable wait returned a handle")
+					return
+				}
+				result <- err
+			}()
+			waitFor(t, ctx, "reserved unavailable wait", func() bool {
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				return c.mgrServices[mgrServiceKey{"svc", "waiting"}] != nil && len(c.mgrGate) == 1
+			})
+			want := context.DeadlineExceeded
+			switch ending {
+			case "cancel":
+				want = context.Canceled
+				cancel()
+			case "client-close":
+				want = ErrClosed
+				if err := c.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case err := <-result:
+				if !errors.Is(err, want) || errors.Is(err, ErrMgrServiceOutcomeUnknown) {
+					t.Fatal("unavailable wait classification", err)
+				}
+			case <-ctx.Done():
+				t.Fatal("unavailable wait did not return")
+			}
+			c.mu.Lock()
+			held, gate := len(c.mgrServices), len(c.mgrGate)
+			c.mgrMap = original
+			c.signal()
+			c.mu.Unlock()
+			mgr.mu.Lock()
+			dials := mgr.connects
+			mgr.mu.Unlock()
+			if held != 0 || gate != 0 || dials != 0 || len(mgr.messages(msgr.MgrOpenMessage)) != 0 {
+				t.Fatal("wait retained capacity or sent an open", held, gate, dials)
+			}
+			if ending != "client-close" {
+				svc, err := c.OpenMgrService(ctx, MgrServiceOptions{Service: "svc", Daemon: "waiting"})
+				if err != nil {
+					t.Fatal("explicit registration could not reuse reservation", err)
+				}
+				if err := svc.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestMgrServiceDuplicateAndBoundAreRefusedBeforeSending(t *testing.T) {
 	mgr := &serviceMGR{ack: true}
 	c, ctx := dialService(t, mgr)
