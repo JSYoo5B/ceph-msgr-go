@@ -15,6 +15,11 @@ One further `osd` row selects only `TestCephOSDErasureK2M2Integration` on the
 four-OSD erasure-capacity topology (`osd_replicas` value `4`). That value
 travels in the already-forwarded `osd_replicas` input, so it needs no new
 workflow parameter; the fixture refuses it with any other selector.
+One further `osd-cache-pools` row selects only
+`TestCephOSDCacheTierOpsIntegration`, the native-only cache-tier operation
+checkpoint. It reuses the already-forwarded `osd_cache_pools` input; the
+cache-pool fixture accepts only that selector or
+`TestCephOSDIgnoreCacheIntegration`. The catalog has 67 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
