@@ -11,7 +11,7 @@ needs successful native operation, fault and cleanup evidence on the tested
 SHA, as SPEC.md requires.
 
 Reviewed on 2026-10-23 against this repository at
-`3de2098eb6c9eec5a1e1228208f0714d9ace8cb3`, Ceph Tentacle v20.2.4 source
+`ecbcfafce65e9be8cf69f71e1dff7e035cac8759`, Ceph Tentacle v20.2.4 source
 `7f793731f1b39eb4f465e960113d2363c311b964`, the pinned provider
 `github.com/JSYoo5B/ceph-testcontainers-go v0.3.0` (tag commit
 `c899ebcc83d6122992613dcb1bdb5420016ccc82`, see `go.mod` in this directory)
@@ -135,9 +135,10 @@ a particular test in it ran. The Visibility column states which applies:
 | OSD-12 | Erasure-coded k=2,m=2 baseline on four OSDs | `released` | Closed four-BlueStore topology (`osd-replicas-4`), owned isa k=2,m=2 profile and pool; caller-supplied placement | Native oracle: pool, profile and rule readback, placement and readback of every Go mutation | No fault; owned pool and profile removed | `osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasurek2m2`, `TestCephOSDErasureK2M2Integration`, [OSD_ERASURE_VALIDATION.md](OSD_ERASURE_VALIDATION.md) | dedicated row; merged in #42 as `620fdce`; one profile (replicated-pg-v8, secure, aes256k, IPv4, container); no failover, degraded or epoch-change case |
 | OSD-13 | Targeted OSD and PG commands | `released` | Explicit OSD and PG targets from native maps | Native command output and refusal codes for the same target | OSD crash during a command, target outside the acting set, frame limit | `TestCephOSDCommandsIntegration`, `TestCephOSDCommandCrashIntegration`, `TestCephOSDCommandCrashInFlightIntegration`, `TestCephOSDCommandOutsideActingSetIntegration`, `TestCephOSDCommandFrameLimitIntegration`, [OSD_COMMAND_VALIDATION.md](OSD_COMMAND_VALIDATION.md) | broad rows |
 | OSD-14 | COPY_FROM and COPY_FROM2 within and across pools | `released` | Owned source and destination objects and pools | Native readback of the destination | Source failover, source and destination crash, lost reply | `TestCephOSDCopyFromIntegration`, `TestCephOSDCopyFromCompoundIntegration`, `TestCephOSDCopyFromSourceFailoverIntegration`, `TestCephOSDCopyFromCrashIntegration`, `TestCephOSDCopyFromDestinationCrashIntegration`, `TestCephOSDCrossPoolAndNamespaceCopyFromIntegration`, [OSD_COPY_FROM_VALIDATION.md](OSD_COPY_FROM_VALIDATION.md) | broad rows |
-| OSD-15 | Independent COPY_FROM encodings and further compounds | `proposed` | Not yet merged | Not yet merged | Not yet merged | issue #7; open PR #40 | open PR, unmerged |
+| OSD-15 | Independent COPY_FROM request vectors, copy/xattr compounds and SPARSE_READ/READ compounds | `released` | Owned source and destination objects; native request vectors built from native `ObjectOperation` and `MOSDOp` | Native oracle: retained native request vectors, native bytes, xattrs, OMAP, versions and mtime after copies, `rados mapext` allocation map and C librados reads for sparse compounds | Refused shapes stay unsent; owned objects removed | `TestCephOSDCopyFromCompoundIntegration`, `TestCephOSDSparseReadCompoundIntegration`, [OSD_COPY_FROM_COMPOUND_VALIDATION.md](OSD_COPY_FROM_COMPOUND_VALIDATION.md), [OSD_SPARSE_READ_COMPOUND_VALIDATION.md](OSD_SPARSE_READ_COMPOUND_VALIDATION.md) | broad three-replica and MemStore rows; merged in #40 (`8d9f39e`) and #47 (`4f9fd9d`); sparse compound expectations are the native map intersected per range, not a native twin compound; staged-copy destination loss, modern-profile sparse compounds and mid-vector faults remain issue #7 |
 | OSD-16 | IGNORE_CACHE over native cache-tier pools | `released` | Opt-in native cache-tier overlay on the legacy fixture | Native tier state and object reads | Flag isolation; overlay removed | `group:osd-cache-pools`, `TestCephOSDIgnoreCacheIntegration`, [OSD_IGNORE_CACHE_VALIDATION.md](OSD_IGNORE_CACHE_VALIDATION.md), [OSD_IGNORE_CACHE_NATIVE_PROBE_VALIDATION.md](OSD_IGNORE_CACHE_NATIVE_PROBE_VALIDATION.md) | dedicated rows; selected bypass operations only |
-| OSD-17 | Cache-tier promotion, eviction and dedup-manifest operations | `proposed` | Not yet merged | Not yet merged | Not yet merged | issue #8; open PR #41 | open PR, unmerged; the opcodes are also a product wire gap |
+| OSD-17 | Native cache flush, try-flush, evict, pin and unpin on a writeback tier | `released` | Existing owned writeback tier without overlay; once-issued native librados operations with explicit request flags | Native oracle: signed librados results, direct tier and base reads, `is_dirty` | Pinned, dirty, absent-head and wrong-lock-mode refusals; owned heads, tier, pools, rule and identities removed | `osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcachetierops`, `TestCephOSDCacheTierOpsIntegration`, [OSD_CACHE_TIER_OPS_NATIVE_VALIDATION.md](OSD_CACHE_TIER_OPS_NATIVE_VALIDATION.md) | dedicated row; merged in #41 (`0784e93`); native fixture only, the Go client sends none of these opcodes; one profile; try-flush EAGAIN and overlays unverified |
+| OSD-23 | Go cache-tier opcodes and the SET_CHUNK dedup manifest | `proposed` | Not defined | Not defined | Not defined | issue #8 | needs native request vectors and bounded Go admission; also a product wire gap |
 | OSD-18 | Replica reads with balance and localize flags | `released` | Three BlueStore replicas; reads sent to each acting member | Native bytes, attributes and versions | Primary failover and bounce | `TestCephOSDReplicaReadIntegration`, `TestCephOSDReplicaReadBounceIntegration`, `TestCephOSDReplicaReadPrimaryFailoverIntegration`, [OSD_REPLICA_READ_VALIDATION.md](OSD_REPLICA_READ_VALIDATION.md) | broad three-replica rows |
 | OSD-19 | Caller-routed placement change through upmap | `released` | Owned pool with upmap item and full transitions | Native epoch, PG, up and acting sets and readback | Membership and primary change; exact baseline restored | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap`, `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap`, `TestCephOSDUpmapIntegration`, [OSD_UPMAP_VALIDATION.md](OSD_UPMAP_VALIDATION.md) | dedicated rows |
 | OSD-20 | Bounded OSD soak with OSD kills | `released` | Four workers on three BlueStore replicas; one OSD killed every 15 s | Native bytes and xattrs after PGs are clean | SIGKILL and restart; owned objects removed | `osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m`, `TestCephOSDSoakIntegration`, `TestCephOSDSoakFailoverIntegration`, [OSD_SOAK_VALIDATION.md](OSD_SOAK_VALIDATION.md) | four-minute bound; the record's capacity failure is retained |
@@ -156,7 +157,8 @@ a particular test in it ran. The Visibility column states which applies:
 | MDS-6 | Reconnect and replay to a new MDS incarnation | `released` | Owned MDS restart with outstanding requests and caps | Native session state and namespace after replay | MDS restart; pending cap flush extension | `TestCephMDSCephFSRecoveryIntegration`, [MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md) | dedicated `mds-cephfs` rows |
 | MDS-7 | Multi-rank forwarding, cap export and import, standby and standby-replay takeover | `released` | Two or three active ranks with a standby; owned pins and takeover controls | Native `get subtrees`, MDS perf counters, FSMap and blocklist | `mds fail` of rank 0; pins, blocklist entries and identities restored | `group:mds-cephfs-ranks`, `group:mds-cephfs-ranks-replay`, `TestCephMDSCephFSRanksIntegration`, `TestCephMDSCephFSRanksReplayIntegration`, [MDS_CEPHFS_RANKS_FIXTURE.md](MDS_CEPHFS_RANKS_FIXTURE.md), [MDS_CEPHFS_RANKS_VALIDATION.md](MDS_CEPHFS_RANKS_VALIDATION.md), [MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md](MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md), [MDS_RANKS_HISTORY_VALIDATION.md](MDS_RANKS_HISTORY_VALIDATION.md) | dedicated rows |
 | MDS-8 | Coupled object I/O, cap snapshots and FLOCK | `released` | Owned data fixture with layout-based OSD I/O | Native file reads, snapshot reads and lock conflicts | MDS restart with pending cap snapshots, lost FLUSHSNAP ACK, lock interrupt | `group:mds-cephfs-data`, `TestCephMDSCephFSDataIntegration`, [MDS_CEPHFS_DATA_FIXTURE.md](MDS_CEPHFS_DATA_FIXTURE.md), [MDS_CEPHFS_DATA_VALIDATION.md](MDS_CEPHFS_DATA_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_VALIDATION.md](MDS_CEPHFS_CAPSNAP_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_RECOVERY_VALIDATION.md](MDS_CEPHFS_CAPSNAP_RECOVERY_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_RESUBMIT_VALIDATION.md](MDS_CEPHFS_CAPSNAP_RESUBMIT_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_DEDUPE_VALIDATION.md](MDS_CEPHFS_CAPSNAP_DEDUPE_VALIDATION.md), [MDS_FILELOCK_VALIDATION.md](MDS_FILELOCK_VALIDATION.md), [MDS_FILELOCK_COMPLETION_VALIDATION.md](MDS_FILELOCK_COMPLETION_VALIDATION.md) | dedicated rows |
-| MDS-9 | Cap-send uncertainty, interrupted writeback and buffered-data eviction | `proposed` | Not yet merged | Not yet merged | Not yet merged | issue #10; open PR #43 | open PR, unmerged |
+| MDS-9 | Cap-send uncertainty and explicit recovery across an MDS restart | `released` | Owned data fixture; closed `client-drop-on` runtime action drops one admitted UPDATE, then an owned MDS restart | Native oracle: MDS ProtocolV2 drop line and cap-handler log for the exact op, inode and TID, native LibCephFS size, mtime and bytes | MDS restart and session reset; runtime overrides restored | `group:mds-cephfs-capsend`, `TestCephMDSCephFSCapSendRecoveryIntegration`, [MDS_CEPHFS_CAPSEND_RECOVERY_VALIDATION.md](MDS_CEPHFS_CAPSEND_RECOVERY_VALIDATION.md) | dedicated rows; merged in #43 (`ecbcfaf`); head UPDATE only, the drop happens after MDS receipt, FLUSHSNAP not run live |
+| MDS-11 | Interrupted OSD writeback, buffered-data eviction, large reconnect state and held-lock recovery | `proposed` | Not defined | Not defined | Not defined | issue #10 checkpoints 2 and 3 | none yet |
 | MDS-10 | POSIX record locks across MDS failover and client metrics messages | `proposed` | No local recipe; the provider has only an opt-in FUSE contention recipe on `main` | None | None | issue #11; [CLIENT_EXTENSION_DECISIONS.md](../../internal/mds/CLIENT_EXTENSION_DECISIONS.md); provider issue JSYoo5B/ceph-testcontainers-go#5 | the merged decision record (#46, `3de2098`) is a source audit, not a capability: `metric_collect` is deferred and no bit is enabled; upstream receipt only for FUSE locks |
 
 ### RBD underlying I/O
@@ -167,8 +169,8 @@ a particular test in it ran. The Visibility column states which applies:
 | RBD-2 | Writes and object map updates | `released` | Write image with closed write control | librbd reads and native object map | Closed control; image removed | `TestCephRBDWriteIntegration`, [RBD_WRITE_VALIDATION.md](RBD_WRITE_VALIDATION.md) | dedicated rows |
 | RBD-3 | Exclusive lock handoff and notifications | `released` | Lock image with a native lock owner | Native lock owner and notifications | Lock handoff; watchers removed | `TestCephRBDExclusiveLockIntegration`, [RBD_LOCK_VALIDATION.md](RBD_LOCK_VALIDATION.md) | dedicated rows |
 | RBD-4 | Clone, parent metadata and copy-up | `released` | Native parent snapshot and clone images | librbd parent spec and native clone objects | Closed clone control; clones removed | `TestCephRBDCloneIntegration`, [RBD_CLONE_VALIDATION.md](RBD_CLONE_VALIDATION.md) | dedicated rows |
-| RBD-5 | Journal entries and replay observation | `released` | Journaling image with closed journal control | Native journal objects and librbd replay | Closed control; journal and image removed | `TestCephRBDJournalIntegration`, [RBD_JOURNAL_VALIDATION.md](RBD_JOURNAL_VALIDATION.md) | dedicated rows |
-| RBD-6 | Concurrent journal, lock and notification paths under backend faults | `proposed` | Not defined | Not defined | Not defined | issue #12 | none yet |
+| RBD-5 | Journal entries, replay observation and a native/Go appender lock handoff | `released` | Journaling image with closed journal control; a native librbd writer and a Go appender hand the exclusive lock over through librbd notifications | Native journal objects, `rbd journal inspect`, tags, commit positions and librbd replay and image reads | Closed control; journal and image removed | `TestCephRBDJournalIntegration`, [RBD_JOURNAL_VALIDATION.md](RBD_JOURNAL_VALIDATION.md), [RBD_JOURNAL_CONCURRENT_VALIDATION.md](RBD_JOURNAL_CONCURRENT_VALIDATION.md) | dedicated rows; appender handoff merged in #45 (`e1f01d3`); one handoff cycle on one OSD; simultaneous Go appends on the wire and live uncertain outcomes unverified |
+| RBD-6 | Concurrent journal, lock and notification paths under backend faults | `proposed` | Not defined | Not defined | Not defined | issue #12 | the fault-free appender handoff is RBD-5; lost notification or ACK, owner loss and primary change remain |
 
 ### Daemon-to-daemon
 
@@ -206,10 +208,10 @@ a particular test in it ran. The Visibility column states which applies:
 
 | Class | Rows |
 | --- | --- |
-| `released` | 61 |
+| `released` | 64 |
 | `main-only` | 3 |
 | `primitive` | 9 |
-| `proposed` | 11 |
+| `proposed` | 10 |
 | `absent` | 2 |
 
 The `released` rows are recipes, not accepted paths: most have native evidence
@@ -246,16 +248,9 @@ independent native observation is still missing.
 
 ## Open pull requests
 
-These are listed as unmerged work only. None of them is a capability in the
-classification above. #42 (k=2,m=2 baseline, `620fdce`) and #46 (CephFS
-client feature decisions, `3de2098`) have merged and are classified in OSD-12
-and MDS-10.
-
-| Pull request | Scope | Status |
-| --- | --- | --- |
-| #40 | COPY_FROM encodings and native compounds (issue #7) | open PR, unmerged |
-| #41 | Native-only cache-tier operation checkpoint (issue #8) | open PR, unmerged |
-| #43 | MDS cap-send recovery across an MDS restart (issue #10) | open PR, unmerged |
+No pull request that changes a path in this map is open at the reviewed
+commit. #40, #41, #42, #43, #45, #46 and #47 have merged and are classified in
+OSD-15, OSD-17, OSD-12, MDS-9, RBD-5, MDS-10 and OSD-15 respectively.
 
 ## Product wire gaps (separate from environment completeness)
 
