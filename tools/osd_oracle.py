@@ -10,6 +10,11 @@ import pathlib
 import re
 import sys
 
+# The closed CEPH_MSGR_TEST_OSD_REPLICAS topologies (integration/fixture/profile.go):
+# owned daemon count, then the fixture data pool's size and min_size. "4" adds
+# erasure-code capacity without widening the replicated data pool.
+OSD_TOPOLOGIES = {"1": (1, 1, 1), "3": (3, 3, 2), "4": (4, 3, 2)}
+
 
 class Timespec(ctypes.Structure):
     _fields_ = [("tv_sec", ctypes.c_long), ("tv_nsec", ctypes.c_long)]
@@ -89,11 +94,10 @@ def collect(root, output, pool, object_name):
         raise ValueError("Invalid OSD fixture IP family")
     family = int(family_setting)
     replica_setting = os.environ.get("CEPH_MSGR_TEST_OSD_REPLICAS", "1")
-    if replica_setting not in ("1", "3"):
+    if replica_setting not in OSD_TOPOLOGIES:
         raise ValueError("Invalid OSD replica fixture profile")
-    replicas = int(replica_setting)
-    min_size = 1 if replicas == 1 else 2
-    expected_osds = set(range(replicas))
+    daemons, replicas, min_size = OSD_TOPOLOGIES[replica_setting]
+    expected_osds = set(range(daemons))
     mapped = json.loads((root / "osd.object-map.json").read_bytes())
     topology = json.loads((root / "osd.dump.json").read_bytes())
     crush = json.loads((root / "osd.crush.json").read_bytes())
@@ -105,13 +109,14 @@ def collect(root, output, pool, object_name):
     pool_id = int(raw[1])
     descriptor = next((p for p in topology["pools"] if p["pool"] == pool_id), None)
     acting, up, primary = mapped.get("acting"), mapped.get("up"), mapped.get("acting_primary")
-    def exact_osds(ids):
-        return (isinstance(ids, list) and len(ids) == replicas and
-                all(type(i) is int for i in ids) and set(ids) == expected_osds)
-    if (descriptor is None or not exact_osds(acting) or not exact_osds(up) or
-            type(primary) is not int or primary not in expected_osds or
-            not exact_osds([o["osd"] for o in topology["osds"]]) or
-            not exact_osds([d["id"] for d in crush["devices"]])):
+    def owned_osds(ids, count):
+        # Distinct owned daemons; a placement set may be a subset of them.
+        return (isinstance(ids, list) and len(ids) == count and
+                all(type(i) is int for i in ids) and len(set(ids)) == count and set(ids) <= expected_osds)
+    if (descriptor is None or not owned_osds(acting, replicas) or not owned_osds(up, replicas) or
+            type(primary) is not int or primary not in acting or
+            not owned_osds([o["osd"] for o in topology["osds"]], daemons) or
+            not owned_osds([d["id"] for d in crush["devices"]], daemons)):
         raise ValueError("Native replica topology does not match the controlled fixture")
     osd = next(o for o in topology["osds"] if o["osd"] == primary)
     addresses = osd["public_addrs"]["addrvec"]

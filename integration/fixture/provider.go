@@ -10,7 +10,6 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -204,12 +203,13 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		opts = append(opts, ceph.WithAddressFamily(ceph.AddressIPv6))
 	}
 	if p.osd == "1" {
-		count, _ := strconv.Atoi(p.osdReplicas)
-		minimum := 1
-		if count == 3 {
-			minimum = 2
+		// Daemon capacity and replicated pool defaults come from separate
+		// topology fields; an erasure-capacity daemon does not widen them.
+		topology := p.osdTopology()
+		if topology.daemons == 0 {
+			return nil, fmt.Errorf("unvalidated OSD topology %q", p.osdReplicas)
 		}
-		opts = append(opts, ceph.WithOSDCount(count), ceph.WithOSDObjectStore(ceph.OSDObjectStore(p.osdStore)), ceph.WithPoolDefaults(count, minimum))
+		opts = append(opts, ceph.WithOSDCount(topology.daemons), ceph.WithOSDObjectStore(ceph.OSDObjectStore(p.osdStore)), ceph.WithPoolDefaults(topology.poolSize, topology.poolMinSize))
 		if size := fixtureOSDBlockSize(p); size != 0 {
 			opts = append(opts, ceph.WithOSDBlockSize(size))
 		}
