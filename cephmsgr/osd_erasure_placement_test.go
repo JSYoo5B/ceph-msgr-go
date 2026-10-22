@@ -2,6 +2,7 @@ package cephmsgr
 
 import (
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/osd"
@@ -61,6 +62,68 @@ func TestOSDPrimaryFirstShard(t *testing.T) {
 	}
 	if primaryFirstShard(5, nil) != 5 {
 		t.Fatal("no primary-first facts changed the shard")
+	}
+}
+
+// Every locally accepted numeric domain of primaryFirstShard (PoolSize
+// 2..128, NonprimaryShards 0..PoolSize-1, every actual shard) against an
+// independent reference: the wire order [0, eligible suffix, nonprimary
+// prefix] of OSDMap::pgtemp_primaryfirst with contiguous nonprimary shards
+// 1..NonprimaryShards, where an actual shard's wire shard is its position.
+// It does not reuse the production arithmetic. Synthetic facts only: this is
+// not a claim that each combination is a real EC configuration.
+func TestOSDPrimaryFirstNumericDomain(t *testing.T) {
+	pairs, mappings := 0, 0
+	for size := 2; size <= 128; size++ {
+		for nonprimary := 0; nonprimary < size; nonprimary++ {
+			order := []int{0}
+			for shard := nonprimary + 1; shard < size; shard++ {
+				order = append(order, shard)
+			}
+			for shard := 1; shard <= nonprimary; shard++ {
+				order = append(order, shard)
+			}
+			facts := &OSDPrimaryFirst{PoolSize: uint8(size), NonprimaryShards: uint8(nonprimary)}
+			seen := make([]bool, size)
+			for position, actual := range order {
+				if !validShardPlacement(true, uint8(actual), facts) {
+					t.Fatalf("%+v: in-range shard %d refused", facts, actual)
+				}
+				wire := primaryFirstShard(uint8(actual), facts)
+				if int(wire) != position || wire > 127 || int8(wire) < 0 || seen[wire] {
+					t.Fatalf("%+v: actual shard %d -> wire %d, want position %d", facts, actual, wire, position)
+				}
+				seen[wire] = true
+				if order[wire] != actual {
+					t.Fatalf("%+v: wire %d does not invert to actual %d", facts, wire, actual)
+				}
+				mappings++
+			}
+			if primaryFirstShard(0, facts) != 0 {
+				t.Fatalf("%+v moved shard 0", facts)
+			}
+			if validShardPlacement(true, uint8(size), facts) {
+				t.Fatalf("%+v: out-of-pool shard %d accepted", facts, size)
+			}
+			// The caller's placement keeps its actual shard (no in-place edit).
+			placement := OSDPlacement{Erasure: true, Shard: uint8(size - 1), PrimaryFirst: facts}
+			wire := placement.wireShard()
+			if placement.Shard != uint8(size-1) || int(wire) != slices.Index(order, size-1) {
+				t.Fatal("wire numbering modified the actual shard or differs from the reference", wire)
+			}
+			pairs++
+		}
+		if validShardPlacement(true, 0, &OSDPrimaryFirst{PoolSize: uint8(size), NonprimaryShards: uint8(size)}) {
+			t.Fatalf("nonprimary count equal to pool size %d accepted", size)
+		}
+	}
+	for _, size := range []int{0, 1, 129, 255} {
+		if validShardPlacement(true, 0, &OSDPrimaryFirst{PoolSize: uint8(size)}) {
+			t.Fatalf("pool size %d outside 2..128 accepted", size)
+		}
+	}
+	if pairs != 8255 || mappings != 707263 {
+		t.Fatalf("enumerated %d fact pairs and %d mappings", pairs, mappings)
 	}
 }
 
