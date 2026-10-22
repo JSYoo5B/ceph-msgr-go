@@ -46,7 +46,11 @@ routing is performed. A failed operation must return no extent-map output.
 
 Snapshot MAPEXT resolves the selected clone/head on the daemon, without
 local snapshot discovery. Compound MAPEXT remains unsupported pending
-separate characterization of committed versus staged store state. EC remains
+separate characterization of committed versus staged store state. The pinned
+native clients send MAPEXT alone (`librados/IoCtxImpl.cc:1408-1437` through
+`Objecter::mapext`, and the `rados mapext` CLI); neorados has no MAPEXT
+builder. The [SPARSE_READ/READ compound subset](SPARSE_READ_CONTRACT.md#bounded-sparse_readread-compounds)
+therefore does not admit MAPEXT. EC remains
 unsupported. Allocation granularity and physical disk usage are outside this
 wire contract.
 
