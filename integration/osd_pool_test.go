@@ -48,10 +48,13 @@ type poolReceipt struct {
 	MetadataReady        bool              `json:"ready"`
 	MetadataModuleOwned  bool              `json:"module_enabled_by_test"`
 	MetadataRestored     bool              `json:"restored"`
-	Epochs               map[string]uint64 `json:"epochs"`
-	PoolType             int               `json:"pool_type"`
-	CrushRule            json.RawMessage   `json:"crush_rule"`
-	ECOptimized          bool              `json:"ec_optimized"`
+
+	ServiceComparison *mgrServiceComparison `json:"comparison"`
+
+	Epochs      map[string]uint64 `json:"epochs"`
+	PoolType    int               `json:"pool_type"`
+	CrushRule   json.RawMessage   `json:"crush_rule"`
+	ECOptimized bool              `json:"ec_optimized"`
 	// fullratios mode.
 	NearfullRatio     float64           `json:"nearfull_ratio"`
 	BackfillfullRatio float64           `json:"backfillfull_ratio"`

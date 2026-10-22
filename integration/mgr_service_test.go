@@ -183,6 +183,9 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 		t.Fatal("a closed registration accepted a report")
 	}
 	t.Logf("native observation confirmed open, report, metadata replacement/key removal and close of %s/%s", service, daemon)
+	t.Run("native_registration_comparison", func(t *testing.T) {
+		testMgrServiceNativeComparison(t, ctx, c)
+	})
 	t.Run("renewal_and_active_manager_change", func(t *testing.T) {
 		testMgrServiceRecovery(t, ctx, c, service, daemon+"-recovery")
 	})

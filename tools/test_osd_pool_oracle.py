@@ -26,7 +26,10 @@ class FakeServiceRados:
     def mgr(self, cluster, command):
         assert command == {"prefix": "service status", "format": "json"}
         # The pinned formatter prints the named top-level section without its name.
-        return 0, json.dumps({"svc": {"d1": {"status": self.current()["status"]}}}).encode()
+        entry = {"status": self.current()["status"]}
+        if "beacon" in self.current():
+            entry["last_beacon"] = self.current()["beacon"]
+        return 0, json.dumps({"svc": {"d1": entry}}).encode()
 
 
 def watch(states, **request):
@@ -48,6 +51,24 @@ class ServiceWatchTest(unittest.TestCase):
             result = watch([self.present], **request)
             self.assertFalse(result["matched"], request)
             self.assertEqual(result["entry"]["gid"], 5)
+
+    def test_exact_status_requires_old_keys_to_disappear_and_can_require_empty(self):
+        self.assertTrue(watch([self.present], status={}, exact_status=False)["matched"])
+        self.assertFalse(watch([self.present], status={}, exact_status=True)["matched"])
+        cleared = dict(self.present, status={})
+        self.assertTrue(watch([cleared], status={}, exact_status=True)["matched"])
+        self.assertFalse(watch([dict(self.present, status={"state": "up", "old": "x"})],
+                               status={"state": "up"}, exact_status=True)["matched"])
+        with self.assertRaises(ValueError):
+            watch([self.present], exact_status=1)
+
+    def test_unchanged_or_missing_beacon_cannot_prove_receipt(self):
+        for state in (self.present, dict(self.present, beacon="2026-01-01T00:00:01.000000+0000")):
+            self.assertFalse(watch([state], after_beacon="2026-01-01T00:00:01.000000+0000")["matched"])
+        self.assertTrue(watch([dict(self.present, beacon="2026-01-01T00:00:02.000000+0000")],
+                              after_beacon="2026-01-01T00:00:01.000000+0000")["matched"])
+        with self.assertRaises(ValueError):
+            watch([self.present], after_beacon=1)
 
     def test_absent_and_present_expectations(self):
         self.assertTrue(watch([None], expect="absent")["matched"])
@@ -92,6 +113,70 @@ class ServiceWatchTest(unittest.TestCase):
             request = fixtures[name]
             self.assertNotIn(None, request.values())
             self.assertTrue(oracle.mode_servicewatch(FakeServiceRados([state]), None, request, None)["matched"], name)
+
+
+class ServiceComparisonTest(unittest.TestCase):
+    request = {"service": "svc", "daemon": "native", "metadata": {"zone": "rack-λ"},
+               "statuses": {"initial": {"state": "up", "old": "x"}, "replacement": {"state": "busy"}, "empty": {}}}
+
+    def observations(self):
+        result = []
+        for phase in ("initial", "replacement", "empty"):
+            result.append({"matched": True, "entry": {"gid": 8, "start_epoch": 3,
+                "metadata": {"zone": "rack-λ", "hostname": "synthetic-host", "system_extra": "omit"}},
+                "dump_epoch": 4, "status_entry": {"status": self.request["statuses"][phase]}})
+        return result + [{"matched": True, "matched_for_seconds": 3}]
+
+    def test_independent_handle_status_phases_redaction_and_cleanup(self):
+        rados = Mock()
+        rados.connect.return_value = "registration-handle"
+        with patch.object(oracle, "mode_servicewatch", side_effect=self.observations()) as observe:
+            result = oracle.mode_servicecompare(rados, "observer-handle", self.request, None)["comparison"]
+        self.assertEqual(result["metadata"], self.request["metadata"])
+        self.assertEqual(result["statuses"], self.request["statuses"])
+        self.assertTrue(result["removed"])
+        self.assertEqual(result["gid"], 8)
+        self.assertEqual(rados.lib.rados_service_register.call_count, 1)
+        self.assertEqual(rados.lib.rados_service_update_status.call_count, 3)
+        self.assertEqual(rados.lib.rados_service_update_status.call_args.args, ("registration-handle", b"\0"))
+        rados.lib.rados_shutdown.assert_called_once_with("registration-handle")
+        self.assertTrue(all(call.args[1] == "observer-handle" for call in observe.call_args_list))
+        self.assertTrue(all(call.args[2]["exact_status"] for call in observe.call_args_list[:3]))
+
+    def test_failed_phase_and_identity_change_never_retry_mutations(self):
+        for fault in ("refusal", "mismatch", "identity"):
+            rados = Mock()
+            rados.connect.return_value = "registration-handle"
+            observed = self.observations()
+            if fault == "refusal":
+                rados.native.check.side_effect = [None, RuntimeError("refused")]
+            elif fault == "mismatch":
+                observed[0]["matched"] = False
+            else:
+                observed[1]["entry"]["gid"] = 9
+            with patch.object(oracle, "mode_servicewatch", side_effect=observed):
+                with self.assertRaises(RuntimeError):
+                    oracle.mode_servicecompare(rados, "observer-handle", self.request, None)
+            rados.lib.rados_service_register.assert_called_once()
+            self.assertLessEqual(rados.lib.rados_service_update_status.call_count, 2)
+            rados.lib.rados_shutdown.assert_called_once_with("registration-handle")
+
+    def test_invalid_c_dictionaries_are_rejected_before_native_connection(self):
+        for bad in ({"": "x"}, {"x\0y": "v"}, {"x": "v\0z"}, {"x": 1}):
+            rados = Mock()
+            with self.assertRaises(ValueError):
+                oracle.mode_servicecompare(rados, None, dict(self.request, metadata=bad), None)
+            rados.connect.assert_not_called()
+        self.assertEqual(oracle.service_dictionary({"z": "", "a": "λ"}, "status"), b"a\0\xce\xbb\0z\0\0\0")
+
+    def test_shutdown_return_without_observed_removal_is_failure(self):
+        rados = Mock()
+        observed = self.observations()
+        observed[-1]["matched"] = False
+        with patch.object(oracle, "mode_servicewatch", side_effect=observed):
+            with self.assertRaises(RuntimeError):
+                oracle.mode_servicecompare(rados, None, self.request, None)
+        rados.lib.rados_shutdown.assert_called_once()
 
 
 class ServiceMetadataTest(unittest.TestCase):
