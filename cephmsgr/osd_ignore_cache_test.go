@@ -328,3 +328,47 @@ func TestOSDCacheOperationPreflight(t *testing.T) {
 		t.Fatal("IgnoreOverlay admitted outside a cache operation")
 	}
 }
+
+func TestOSDCacheOperationRefusesBeforeSlotMonitorAndIdentity(t *testing.T) {
+	edits := map[string]func(*OSDConnection, *OSDRequest){
+		"default-deny":    func(o *OSDConnection, r *OSDRequest) { o.client.options.EnableOSDCachePools = false },
+		"missing-feature": func(o *OSDConnection, r *OSDRequest) { o.features &^= osd.FeatureCachePool },
+		"no-overlay":      func(o *OSDConnection, r *OSDRequest) { r.IgnoreOverlay = false },
+		"skip-locks":      func(o *OSDConnection, r *OSDRequest) { r.SkipRWLocks = true },
+		"compound": func(o *OSDConnection, r *OSDRequest) {
+			r.Operations = append(r.Operations, OSDOperation{Code: OSDStat})
+		},
+		"resubmit":        func(o *OSDConnection, r *OSDRequest) { r.Resubmit = &OSDSubmission{Transaction: 1} },
+		"retry":           func(o *OSDConnection, r *OSDRequest) { r.RetryAttempt = 1 },
+		"snapshot":        func(o *OSDConnection, r *OSDRequest) { r.ReadSnapshot = 1 },
+		"opflags":         func(o *OSDConnection, r *OSDRequest) { r.Operations[0].Flags = OSDFailOK },
+		"extent":          func(o *OSDConnection, r *OSDRequest) { r.Operations[0].Length = 1 },
+		"input":           func(o *OSDConnection, r *OSDRequest) { r.Operations[0].Data = []byte{1} },
+		"xattr":           func(o *OSDConnection, r *OSDRequest) { r.Operations[0].Xattr.Name = "k" },
+		"overlay-on-read": func(o *OSDConnection, r *OSDRequest) { r.Operations[0] = OSDOperation{Code: OSDRead, Length: 1} },
+	}
+	for _, profile := range []OSDProfile{OSDProfileObjectHash, OSDProfileReplicatedPG, OSDProfileReplicatedPGReplyV8, OSDProfileReplicatedPGRequestV9ReplyV8} {
+		for name, edit := range edits {
+			t.Run(profileNameForCacheTest(profile)+"/"+name, func(t *testing.T) {
+				o := backoffUnitConnection()
+				o.client.options.OSDProfile = profile
+				o.client.options.EnableOSDCachePools = true
+				o.features |= osd.FeatureCachePool
+				// A foreign owner occupies the sole slot; MON and writer are unstarted.
+				o.client.calls = make(chan struct{}, 1)
+				o.client.calls <- struct{}{}
+				r := OSDRequest{IgnoreCache: true, IgnoreOverlay: true, MapEpoch: 17, Object: OSDObject{Pool: 7, Name: "object"}, Operations: []OSDOperation{{Code: OSDCacheFlush}}}
+				if profile.replicatedPG() {
+					r.Placement = &OSDPlacement{PG: OSDPG{Pool: 7, Seed: 3}, Primary: o.target.ID}
+				}
+				edit(o, &r)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				result, err := o.Request(ctx, r)
+				if err == nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || result.Submission.Transaction != 0 || o.client.osdNext.Load() != 0 || len(o.client.calls) != 1 {
+					t.Fatal("invalid cache operation passed local preflight", err, result.Submission.Transaction, o.client.osdNext.Load(), len(o.client.calls))
+				}
+			})
+		}
+	}
+}

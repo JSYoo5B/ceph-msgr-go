@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/osd"
@@ -453,6 +454,11 @@ func (o *OSDConnection) validateCacheOperation(request OSDRequest) error {
 		OrderReadsWrites: request.OrderReadsWrites, SkipRWLocks: request.SkipRWLocks, IgnoreCache: request.IgnoreCache,
 		IgnoreOverlay: request.IgnoreOverlay, RetryAttempt: request.RetryAttempt}
 	for _, op := range request.Operations {
+		// A cache operation is inputless and flagless: every other field
+		// must be zero, refused here rather than after slot admission.
+		if osd.IsCacheOperation(uint16(op.Code)) && !reflect.DeepEqual(op, OSDOperation{Code: op.Code}) {
+			return fmt.Errorf("%w: cache-tier operations carry no flags or input", osd.ErrOperation)
+		}
 		input.Operations = append(input.Operations, osd.Operation{Code: uint16(op.Code)})
 	}
 	if err := osd.ValidateCacheRequest(input, o.features); err != nil {
