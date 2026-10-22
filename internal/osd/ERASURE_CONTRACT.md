@@ -41,8 +41,10 @@ addresses PG listing the same way (replicated-PG profiles; the v6 object-hash
 listing has no shard and the OSD derives it). With one shard's OSD down the
 primary reconstructs reads; after the primary dies the new primary holds a
 different shard and only requests naming it are answered, so the caller must
-re-derive the shard from the new map along with the primary. Other opcodes,
-recovery traffic and EC profiles other than k=2,m=1 are
+re-derive the shard from the new map along with the primary. The same
+object cases passed on a non-optimized isa k=2,m=2 pool (size 4, min_size 3)
+over four OSDs in one replicated-PG profile, without faults. Other opcodes,
+recovery traffic, other EC profiles and the fault cases at k=2,m=2 are
 unverified.
 
 ## Optimized EC pools (`allow_ec_optimizations`)
