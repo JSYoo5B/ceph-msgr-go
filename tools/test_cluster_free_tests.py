@@ -25,22 +25,26 @@ class ClusterFreeTestsTests(unittest.TestCase):
         self.assertEqual(tests.check(ROOT), [])
         pattern = re.compile(tests.selector(ROOT))
         for name in tests.declared(ROOT):
-            self.assertEqual(bool(pattern.fullmatch(name)), not name.startswith("TestCeph"), name)
+            self.assertEqual(bool(pattern.fullmatch(name)), not tests.NATIVE.fullmatch(name), name)
 
     def test_unlisted_stale_native_unsorted_and_duplicate_entries_fail(self):
-        source = "func TestCephNative(t *testing.T) {}\nfunc TestHelper(t *testing.T) {}\n"
-        self.assertEqual(tests.check(self.fixture([source], ["TestHelper"])), [])
-        cases = {
-            "unclassified": ([source + "func TestNew(t *testing.T) {}\n"], ["TestHelper"]),
-            "no top-level test": ([source], ["TestGone", "TestHelper"]),
-            "native fixture test": ([source], ["TestCephNative", "TestHelper"]),
-            "not sorted": ([source + "func TestA(t *testing.T) {}\n"], ["TestHelper", "TestA"]),
-            "duplicate inventory": ([source], ["TestHelper", "TestHelper"]),
-            "duplicate top-level": ([source, "func TestHelper(t *testing.T) {}\n"], ["TestHelper"]),
-            "empty": (["func TestCephOnly(t *testing.T) {}\n"], []),
-        }
-        for want, (sources, listed) in cases.items():
-            problems = tests.check(self.fixture(sources, listed))
+        source = ("func TestCephNativeIntegration(t *testing.T) {}\nfunc TestCephFSHelper(t *testing.T) {}\n"
+                  "func TestHelper(t *testing.T) {}\n")
+        listed = ["TestCephFSHelper", "TestHelper"]
+        self.assertEqual(tests.check(self.fixture([source], listed)), [])
+        cases = [
+            ("unclassified", [source + "func TestNew(t *testing.T) {}\n"], listed),
+            # A TestCeph-prefixed helper without the Integration suffix is not native.
+            ("unclassified", [source], ["TestHelper"]),
+            ("no top-level test", [source], ["TestCephFSHelper", "TestGone", "TestHelper"]),
+            ("native fixture test", [source], ["TestCephFSHelper", "TestCephNativeIntegration", "TestHelper"]),
+            ("not sorted", [source], ["TestHelper", "TestCephFSHelper"]),
+            ("duplicate inventory", [source], listed + ["TestHelper"]),
+            ("duplicate top-level", [source, "func TestHelper(t *testing.T) {}\n"], listed),
+            ("empty", ["func TestCephOnlyIntegration(t *testing.T) {}\n"], []),
+        ]
+        for want, sources, names in cases:
+            problems = tests.check(self.fixture(sources, names))
             self.assertTrue(any(want in problem for problem in problems), (want, problems))
 
     def test_selector_is_anchored_to_listed_names(self):
@@ -59,7 +63,7 @@ class ClusterFreeTestsTests(unittest.TestCase):
                      passing.replace("--- PASS: TestB", "    --- PASS: TestB"),
                      passing.replace("--- PASS: TestB (0.01s)", "--- PASS: TestB ("),
                      passing + "--- PASS: TestA (0.00s)\n",
-                     passing + "--- PASS: TestCephNative (0.00s)\n"):
+                     passing + "--- PASS: TestCephNativeIntegration (0.00s)\n"):
             self.assertNotEqual(tests.verify(root, text), [], text)
 
     def test_command_line_exit_status(self):

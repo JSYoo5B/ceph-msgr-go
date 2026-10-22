@@ -59,8 +59,9 @@ jobs:
           go test -mod=readonly -race $packages
       - name: Cluster-free integration tests with race detector
         # Exactly the tests listed in integration/cluster_free_tests.txt; the
-        # TestCeph* native fixture tests are never selected here. Each listed
-        # test must report PASS, independently of the go test exit status.
+        # TestCeph...Integration native fixture tests are never selected here.
+        # Each listed test must report PASS, independently of the go test exit
+        # status.
         env:
           CGO_ENABLED: '1'
         run: |

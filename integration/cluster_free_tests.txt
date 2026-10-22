@@ -2,11 +2,37 @@
 #
 # Basic CI runs exactly these tests, without a Ceph fixture, and requires each
 # one to report PASS (tools/cluster_free_tests.py). Every other top-level test
-# in integration/*_test.go must be a TestCeph* native fixture test; those stay
-# opt-in and run only through the native scenario workflow. Keep one name per
-# line, sorted.
+# in integration/*_test.go must be a native fixture test named
+# TestCeph...Integration; those stay opt-in and run only through the native
+# scenario workflow. TestCephFS... helper tests without that suffix belong here.
+# Keep one name per line, sorted.
 TestAuthenticationRejectionOracle
 TestAwaitMDSUnsafeWindowSettlesThenWaitsTheGap
+TestCephFSArgsLayout
+TestCephFSCapAgentHelpers
+TestCephFSCapSendUpdateBranchClassification
+TestCephFSCapSnapACKIdentityAndOldest
+TestCephFSCapSnapCapturesOldRealmContext
+TestCephFSCapSnapDrainKeepsInterleavedFailureBarrier
+TestCephFSCapSnapFailedWritebackStopsFlushes
+TestCephFSCapSnapFirstSendUsesCurrentEnvelope
+TestCephFSCapSnapGenerations
+TestCephFSCapSnapMixedResubmissionAndFirstSend
+TestCephFSCapSnapPrepareRetainsOriginalIdentity
+TestCephFSCapSnapPreparedFirstSendAndFailureBarrier
+TestCephFSCapSnapReconnectCarriesStateBeforeACK
+TestCephFSCapSnapReconnectUsesLatestRealmAndOldestFollows
+TestCephFSCapSnapRecoveryAcceptsACKBeforeAdmissionReturn
+TestCephFSCapSnapRecoveryRejectsInvalidACKAndIdentity
+TestCephFSCapSnapResubmissionFailureBlocksAutomaticReplay
+TestCephFSCapSnapResubmissionPrevalidatesWholeChoice
+TestCephFSCapSnapUncertainSendBlocksNewerGenerations
+TestCephFSCapSnapUnpreparedWritebackSurvivesHandoff
+TestCephFSHeadFlushPrepareRetainsIdentity
+TestCephFSHeadFlushRecoveryClassifiesAndKeepsIdentity
+TestCephFSHeadFlushRecoveryFailureStopsLaterFlushes
+TestCephFSHeadFlushRefusedSendIsKnownUnsentAndAdmittedIsUncertain
+TestCephFSStriperRestatement
 TestChainedForwardFailureRetainsPartialNativeEvidence
 TestErasureFactsFollowTheNativeWidth
 TestErasurePlacementControlUsesThePoolSize

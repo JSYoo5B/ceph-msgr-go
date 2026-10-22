@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Select and gate the cluster-free tests of the integration package.
 
-The integration package mixes TestCeph* native fixture tests, which stay opt-in,
-with helper/decoder tests that need no cluster. integration/cluster_free_tests.txt
-lists the latter. `check` requires every top-level test to be either TestCeph* or
-listed, and every listed name to exist. `selector` prints the anchored -run
+The integration package mixes TestCeph...Integration native fixture tests, which
+stay opt-in, with helper/decoder tests that need no cluster (including
+TestCephFS... consumer-helper tests). integration/cluster_free_tests.txt lists
+the latter. `check` requires every top-level test to be either a native fixture
+test or listed, and every listed name to exist. `selector` prints the anchored -run
 pattern for exactly the listed tests. `verify` requires every listed test to
 report an unindented top-level PASS line; a skip, a missing result, a failure
 or an unlisted test fails the gate even when the process exited zero.
@@ -15,7 +16,7 @@ import re
 import sys
 
 INVENTORY = Path("integration") / "cluster_free_tests.txt"
-NATIVE_PREFIX = "TestCeph"
+NATIVE = re.compile(r"TestCeph\w*Integration")
 
 
 def declared(root):
@@ -42,13 +43,13 @@ def check(root):
     for name in listed:
         if not re.fullmatch(r"Test\w+", name):
             problems.append("invalid inventory entry: %r" % name)
-        elif name.startswith(NATIVE_PREFIX):
+        elif NATIVE.fullmatch(name):
             problems.append("native fixture test listed as cluster-free: %s" % name)
         elif name not in names:
             problems.append("inventory entry has no top-level test: %s" % name)
     for name in sorted(set(names) - set(listed)):
-        if not name.startswith(NATIVE_PREFIX):
-            problems.append("unclassified top-level test (list it or rename it TestCeph*): %s" % name)
+        if not NATIVE.fullmatch(name):
+            problems.append("unclassified top-level test (list it, or name a native test TestCeph...Integration): %s" % name)
     if not listed:
         problems.append("inventory is empty")
     return problems
