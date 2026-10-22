@@ -41,6 +41,7 @@ func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 		RouteEpoch     uint32         `json:"route_epoch"`
 		ReplyEpoch     uint32         `json:"reply_epoch"`
 		CopyTID        uint64         `json:"copy_tid"`
+		UserVersion    uint64         `json:"reply_user_version"`
 		NextTID        uint64         `json:"next_tid"`
 		PerOpResults   []int32        `json:"per_op_results"`
 		Before         omapWriteState `json:"before"`
@@ -157,6 +158,10 @@ func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 				t.Fatal("copy source union differs")
 			}
 			after := observe(dst)
+			receipt.Cases = append(receipt.Cases, caseReceipt{Name: tc.name, Opcode: uint16(tc.code), Populated: tc.populated,
+				Pool: base.Pool, Primary: route.ID, PG: route.PG, RouteEpoch: route.Epoch, ReplyEpoch: reply.MapEpoch,
+				CopyTID: reply.Transaction, UserVersion: reply.UserVersion, PerOpResults: results, Before: before, After: after})
+			entry := &receipt.Cases[len(receipt.Cases)-1]
 			nativeAttrs := xattrInventory(after.nativeXattrSnapshot)
 			if after.Code != 0 || !bytes.Equal(after.Data, data) || len(nativeAttrs) != 2 || nativeAttrs["keep"] != "k" || nativeAttrs["added"] != string([]byte{0, 'a'}) ||
 				!equalOmapModel(omapWriteInventory(t, after), model) || after.Header == nil || !bytes.Equal(*after.Header, header) ||
@@ -188,10 +193,7 @@ func TestCephOSDCopyFromCompoundIntegration(t *testing.T) {
 				binary.LittleEndian.Uint32(stat.Operations[0].Data[8:]) != uint32(after.Seconds) || binary.LittleEndian.Uint32(stat.Operations[0].Data[12:]) != uint32(after.Nanos) {
 				t.Fatal("refused vectors allocated a TID or damaged connection", err, stat)
 			}
-			receipt.Cases = append(receipt.Cases, caseReceipt{Name: tc.name, Opcode: uint16(tc.code), Populated: tc.populated,
-				Pool: base.Pool, Primary: route.ID, PG: route.PG, RouteEpoch: route.Epoch, ReplyEpoch: reply.MapEpoch,
-				CopyTID: reply.Transaction, NextTID: stat.Transaction, PerOpResults: results,
-				Before: before, After: after, AfterRefusals: afterRefusals, SourceAfter: sourceAfter, RefusedVectors: len(refused)})
+			entry.NextTID, entry.AfterRefusals, entry.SourceAfter, entry.RefusedVectors = stat.Transaction, afterRefusals, sourceAfter, len(refused)
 		})
 	}
 }
