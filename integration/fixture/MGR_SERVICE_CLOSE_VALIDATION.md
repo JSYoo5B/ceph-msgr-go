@@ -100,7 +100,8 @@ helper tests, `-race -count=5`, shared request serialization, integration vet,
 fixture unit/vet, all 546 Python tool tests and the 65-entry scenario catalog.
 
 The separate [metadata checkpoint](MGR_SERVICE_METADATA_VALIDATION.md) observes
-applied updates inside the native MGR daemon-state index. Same-field native
-service registration comparison and other profiles remain requirements in #6.
+applied updates inside the native MGR daemon-state index. The later
+[native field comparison](MGR_SERVICE_COMPARISON_VALIDATION.md) is separate;
+initial no-active-MGR registration and other profiles remain unverified in #6.
 These injected transport faults do not prove every possible connection failure
 or server shutdown behavior.

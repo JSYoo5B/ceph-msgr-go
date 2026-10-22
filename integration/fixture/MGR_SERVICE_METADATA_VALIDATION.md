@@ -108,6 +108,7 @@ the native profiles above.
 The existing `/ci run group:mgr-service` selection includes this requirement;
 the runs recorded here are direct native executions, not comment-triggered CI.
 Older lifecycle, codec, recovery and close records retain their original scopes.
-Same-field native librados service-registration comparison, additional profiles
-and other failure configurations remain open in #6. No automatic registration,
-metadata-update replay or higher-level daemon policy is introduced.
+The later [native field comparison](MGR_SERVICE_COMPARISON_VALIDATION.md) is a
+separate checkpoint. Initial registration without an active MGR, additional
+profiles and other failure configurations remain unverified in #6. No automatic
+registration, metadata-update replay or higher-level daemon policy is introduced.

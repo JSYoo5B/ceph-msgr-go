@@ -125,12 +125,20 @@ beacon grace removes it. Both preserve cancellation, terminal state and the
 repeated Close result. The [close record](../integration/fixture/MGR_SERVICE_CLOSE_VALIDATION.md)
 keeps local write/dial counts separate from native receipt and sampled absence.
 
+The required `native_registration_comparison` child compares caller metadata
+and exact initial/replacement/empty status maps with a separate native librados
+registration under a distinct daemon name and GID. An omitted Go report must
+preserve status after a newer native beacon, with automatic reports disabled.
+Both registrations require sampled stable removal. The
+[comparison record](../integration/fixture/MGR_SERVICE_COMPARISON_VALIDATION.md)
+separates C API observations, shutdown uncertainty, caller-field projection and
+the first failed removal boundary from later corrected runs.
+
 ## Not verified
 
 - Native vectors for nonempty daemon extensions and older configure versions
   (only the current v4 empty-extension service profile has a fresh vector).
 - Profiles beyond the two key/mode/address/runtime combinations recorded above.
-- Comparison with a native librados registration of the same fields.
 - Failure configurations beyond the selected receive-withholding and write-
   discarding faults. A terminal handle after MGR replacement is a separate
   failure boundary.
