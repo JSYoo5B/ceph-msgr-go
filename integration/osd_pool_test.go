@@ -50,6 +50,7 @@ type poolReceipt struct {
 	MetadataRestored     bool              `json:"restored"`
 
 	ServiceComparison *mgrServiceComparison `json:"comparison"`
+	ManagerMap        *mgrServiceNativeMap  `json:"manager_map"`
 
 	Epochs      map[string]uint64 `json:"epochs"`
 	PoolType    int               `json:"pool_type"`

@@ -115,6 +115,36 @@ class ServiceWatchTest(unittest.TestCase):
             self.assertTrue(oracle.mode_servicewatch(FakeServiceRados([state]), None, request, None)["matched"], name)
 
 
+class ManagerStateTest(unittest.TestCase):
+    state = {"epoch": 9, "flags": 1, "available": False, "active_name": "", "active_gid": 0}
+
+    def test_down_and_active_projections_use_only_mon(self):
+        for state in (self.state, dict(self.state, flags=0, available=True, active_name="a", active_gid=8)):
+            rados = Mock()
+            rados.mon.return_value = (0, json.dumps(dict(state, unrelated="omit")).encode())
+            self.assertEqual(oracle.mode_mgrstate(rados, None, {}, None)["manager_map"], state)
+            rados.mon.assert_called_once_with(None, {"prefix": "mgr dump", "format": "json"})
+            rados.mgr.assert_not_called()
+
+    def test_refusal_or_missing_fields_cannot_look_like_absence(self):
+        rados = Mock()
+        rados.mon.return_value = (-13, b'')
+        with self.assertRaises(RuntimeError):
+            oracle.mode_mgrstate(rados, None, {}, None)
+        rados.mon.return_value = (0, b'{}')
+        with self.assertRaises(KeyError):
+            oracle.mode_mgrstate(rados, None, {}, None)
+
+    def test_invalid_identity_types_and_bounds_fail(self):
+        for fields in ({"epoch": 0}, {"epoch": True}, {"flags": -1}, {"flags": 1 << 64},
+                       {"available": 0}, {"available": True}, {"active_gid": 5},
+                       {"active_name": "a"}, {"active_name": "a\0"}, {"active_gid": True}):
+            rados = Mock()
+            rados.mon.return_value = (0, json.dumps(dict(self.state, **fields)).encode())
+            with self.assertRaises(ValueError, msg=str(fields)):
+                oracle.mode_mgrstate(rados, None, {}, None)
+
+
 class ServiceComparisonTest(unittest.TestCase):
     request = {"service": "svc", "daemon": "native", "metadata": {"zone": "rack-λ"},
                "statuses": {"initial": {"state": "up", "old": "x"}, "replacement": {"state": "busy"}, "empty": {}}}

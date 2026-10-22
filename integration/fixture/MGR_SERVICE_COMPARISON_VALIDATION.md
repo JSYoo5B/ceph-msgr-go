@@ -166,6 +166,8 @@ without independently observed removal. Synthetic checks and direct native
 results remain separate from final-head Basic CI.
 
 Earlier records retain their original source identities and verification
-boundaries. Initial registration without an active MGR, additional profiles and
-other failure configurations remain unverified in #6. A selected-profile field
-comparison is not a complete RADOS client or release-wide compatibility claim.
+boundaries. The later [unavailable-MGR checkpoint](MGR_SERVICE_UNAVAILABLE_VALIDATION.md)
+tests initial setup during controlled activation absence. Zero-daemon cold
+bootstrap, additional profiles and other failure schedules remain environment
+acceptance limits in #14. A selected-profile field comparison is not a complete
+RADOS client or release-wide compatibility claim.

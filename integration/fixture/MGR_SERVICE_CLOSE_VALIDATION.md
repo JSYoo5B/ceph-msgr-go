@@ -102,6 +102,7 @@ fixture unit/vet, all 546 Python tool tests and the 65-entry scenario catalog.
 The separate [metadata checkpoint](MGR_SERVICE_METADATA_VALIDATION.md) observes
 applied updates inside the native MGR daemon-state index. The later
 [native field comparison](MGR_SERVICE_COMPARISON_VALIDATION.md) is separate;
-initial no-active-MGR registration and other profiles remain unverified in #6.
+[initial unavailable-MGR setup](MGR_SERVICE_UNAVAILABLE_VALIDATION.md) is also
+separate. Additional profiles and cold bootstrap remain environment limits in #14.
 These injected transport faults do not prove every possible connection failure
 or server shutdown behavior.

@@ -192,6 +192,9 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 	t.Run("unconfirmed_close", func(t *testing.T) {
 		testMgrServiceUnconfirmedClose(t, ctx)
 	})
+	t.Run("initially_unavailable", func(t *testing.T) {
+		testMgrServiceInitiallyUnavailable(t, ctx, c)
+	})
 }
 
 // Preserve only public identities and oracle outcomes, never session error text

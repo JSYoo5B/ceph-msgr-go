@@ -10,6 +10,7 @@ servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
 servicecompare independently registers a native service with the Go caller's
 fields, observes exact status replacements and confirms removal after shutdown.
+mgrstate projects native MON MgrMap identity and flags without contacting a MGR.
 servicewatch polls the native MON `service dump` and MGR `service status` until a
 named service daemon matches the expected metadata/status/task status, or is
 absent, and reports the last native observation; it registers nothing.
@@ -36,7 +37,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
+MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -367,6 +368,24 @@ def mode_versions(rados, cluster, request, out):
     return {"epochs": result}
 
 
+def mode_mgrstate(rados, cluster, request, out):
+    # MON-only observation remains usable while MGR activation is disabled.
+    code, text = rados.mon(cluster, {"prefix": "mgr dump", "format": "json"})
+    if code != 0:
+        raise RuntimeError("native MGR state observation failed: %d" % code)
+    raw = json.loads(text)
+    state = {key: raw[key] for key in ("epoch", "flags", "available", "active_name", "active_gid")}
+    integer(state["epoch"], 1, (1 << 32) - 1, "MGR epoch")
+    integer(state["flags"], 0, (1 << 64) - 1, "MGR flags")
+    integer(state["active_gid"], 0, (1 << 64) - 1, "MGR GID")
+    if (type(state["available"]) is not bool or type(state["active_name"]) is not str
+            or len(state["active_name"]) > 255 or "\0" in state["active_name"]
+            or bool(state["active_gid"]) != bool(state["active_name"])
+            or state["available"] and not state["active_gid"]):
+        raise ValueError("inconsistent native MGR identity")
+    return {"manager_map": state}
+
+
 def mode_service(rados, cluster, request, out):
     # Register a service daemon as a native client does (an RGW or mirror
     # daemon uses the same call), keep the connection long enough for the MGR
@@ -694,7 +713,7 @@ def mode_cleanup(rados, cluster, request, out):
 
 
 HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
-            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "service": mode_service, "servicewatch": mode_servicewatch, "servicecompare": mode_servicecompare, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
+            "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "mgrstate": mode_mgrstate, "service": mode_service, "servicewatch": mode_servicewatch, "servicecompare": mode_servicecompare, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 
 def main(argv):

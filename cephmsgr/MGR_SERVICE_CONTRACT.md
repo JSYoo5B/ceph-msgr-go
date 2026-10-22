@@ -49,6 +49,9 @@ value), a non-nil map replaces it.
    first, so it proves dispatch, not ServiceMap visibility; use a ServiceMap
    stream for visibility. A cancellation, timeout or connection loss after the
    open was queued returns `ErrMgrServiceOutcomeUnknown`.
+   Before an active MGR exists, setup waits without dialing it. Deadline,
+   cancellation and client close at that stage remain known local failures and
+   release the reserved identity; no later map implicitly resubmits them.
 3. While open, the client sends an empty report at the period the MGR configured
    (the pinned `mgr_service_beacon_grace` drops a silent service daemon; period 0
    means no reports), unless `DisableBeacon` leaves liveness to `Report`.
@@ -134,6 +137,14 @@ Both registrations require sampled stable removal. The
 separates C API observations, shutdown uncertainty, caller-field projection and
 the first failed removal boundary from later corrected runs.
 
+The required `initially_unavailable` child uses the disposable MON MGR-down flag
+and independent native map observations. It checks known pre-send deadline,
+cancellation and client-close results, zero MGR dials while unavailable, pending
+initial setup completing after activation, absence of canceled identities and
+explicit reuse of a released identity. The
+[unavailable-MGR record](../integration/fixture/MGR_SERVICE_UNAVAILABLE_VALIDATION.md)
+separates that controlled map state from zero-daemon cold bootstrap.
+
 ## Not verified
 
 - Native vectors for nonempty daemon extensions and older configure versions
@@ -142,7 +153,8 @@ the first failed removal boundary from later corrected runs.
 - Failure configurations beyond the selected receive-withholding and write-
   discarding faults. A terminal handle after MGR replacement is a separate
   failure boundary.
-- A registration made while the MGR is not yet active waits for the map; no live
-  test covers that.
+- Zero-daemon cold bootstrap (the unavailable test uses the MON activation flag
+  while owned daemon processes remain running).
 
-These remain open in #6.
+These limits do not broaden the selected service profile. Further environment
+and topology acceptance is tracked separately in #14.
