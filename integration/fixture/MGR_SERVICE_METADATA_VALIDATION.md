@@ -109,6 +109,7 @@ The existing `/ci run group:mgr-service` selection includes this requirement;
 the runs recorded here are direct native executions, not comment-triggered CI.
 Older lifecycle, codec, recovery and close records retain their original scopes.
 The later [native field comparison](MGR_SERVICE_COMPARISON_VALIDATION.md) is a
-separate checkpoint. Initial registration without an active MGR, additional
-profiles and other failure configurations remain unverified in #6. No automatic
-registration, metadata-update replay or higher-level daemon policy is introduced.
+separate checkpoint, as is [initial unavailable-MGR setup](MGR_SERVICE_UNAVAILABLE_VALIDATION.md).
+Additional profiles, cold bootstrap and other failure schedules remain separate
+environment requirements in #14. No automatic registration, metadata-update
+replay or higher-level daemon policy is introduced.

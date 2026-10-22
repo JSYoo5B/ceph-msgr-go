@@ -92,5 +92,7 @@ unconfirmed Close, native removal and grace expiry. A later
 [metadata checkpoint](MGR_SERVICE_METADATA_VALIDATION.md) independently reads
 the MGR daemon-state index; it does not extend this earlier run. The later
 [native field comparison](MGR_SERVICE_COMPARISON_VALIDATION.md) independently
-checks native caller fields. Keep #6 open for the remaining acceptance limits;
-this checkpoint covers selected open/report/close observations only.
+checks native caller fields. A subsequent
+[unavailable-MGR checkpoint](MGR_SERVICE_UNAVAILABLE_VALIDATION.md) covers initial
+setup during controlled activation absence. This earlier checkpoint alone
+covers selected open/report/close observations only.
