@@ -161,9 +161,9 @@ The Go recovery client never dialed an OSD. This proves selected sparse
 metadata delivery, not retransmission of a previously sent flush or native
 early-kick selection policy. The separate dirty cap-snap recovery below
 tests first transmission after reconnect. A later explicit resubmission
-case below also verifies an old successful admission with no accepted ACK;
-completed-flush deduplication and recovery after a cap-send error remain
-unverified.
+case below also verifies an old successful admission with no accepted ACK.
+Completed-flush deduplication and recovery after an uncertain or refused
+head UPDATE send have the separate acceptances under Evidence.
 
 ## Shared client address instance (fencing)
 
@@ -459,8 +459,19 @@ then proves the same original TID's completed-flush branch after restart.
 Both profiles retain exact ACKs, native A/B/C postconditions and unchanged
 object-request counts. All runtime overrides are restored or discarded
 only after the owned incarnation's baseline proof.
-Recovery after SendCaps itself errors, interrupted OSD writeback and
-eviction with buffered data remain unverified.
+The [cap-send recovery acceptance](../integration/fixture/MDS_CEPHFS_CAPSEND_RECOVERY_VALIDATION.md)
+admits a head UPDATE while the owned MDS drops incoming client messages
+after Messenger receipt, proven by the native drop line for its exact tuple
+and peer nonce, and first attempts a second UPDATE on the Lost session,
+which `SendCaps` refuses with the session's terminal cause. After reconnect
+the test consumer resubmits the first with its original TID and first-sends
+the second. In both Linux profiles the new incarnation applied both as new
+flushes (no completed-flush branch), both FLUSH_ACKs correlated, native
+LibCephFS observed the final size, mtime and bytes, and no object request
+was repeated. This covers head UPDATE only; a FLUSHSNAP refused by a Lost
+session uses the same product path but was not exercised live.
+Interrupted OSD writeback and eviction with buffered data remain
+unverified.
 
 Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and
@@ -495,8 +506,9 @@ Evidence, and completed-record answers, denial and a missed window by the
 completion acceptance there. Not exercised live: split reconnect messages,
 realm topologies beyond the root/directory data recipe, the GETATTR conversion,
 completed-record answers for other operations, a lost reply of an OPEN with
-O_CREAT, completed-flush deduplication after an ACK loss, recovery after a
-cap-send error and interrupted OSD writeback. Ordinary
+O_CREAT, completed-flush deduplication after an ACK loss and interrupted
+OSD writeback; cap-send error recovery has its own acceptance under
+Evidence. Ordinary
 dirty-metadata UPDATE/FLUSH_ACK and the two-snapshot recovery recipe have
 the separate evidence above.
 
