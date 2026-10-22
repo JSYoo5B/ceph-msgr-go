@@ -3,6 +3,9 @@
 Later codec checkpoint: [fresh native request vectors](../../internal/osd/testdata/copy-from-native-README.md)
 provide independent native encodings and retain the flagless COPY_FROM2
 12-byte difference. They are separate from the historical live results below.
+A later [both-opcode compound checkpoint](OSD_COPY_FROM_COMPOUND_VALIDATION.md)
+adds independent native copy baseline/OMAP/header/mtime and known-unsent
+refusal evidence, including the pinned server's empty-OMAP-key omission.
 
 Run 2026-10-17 against Ceph 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`, image

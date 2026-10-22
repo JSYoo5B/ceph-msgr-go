@@ -86,10 +86,11 @@ clarifies operation receipt names; keep that provenance separate from the first
 pass. Final owned-container cleanup is checked independently of codec success.
 
 This closes only the native request-vector and admission-regression checkpoint
-of issue #7. Independent live COPY_FROM compound execution, further read-only
-combinations and destination loss after source-read completion/staging remain
-separate work. Constructed reply vectors and native execution are not established
-by this request-only checkpoint.
+of issue #7. A later [selected live compound record](../../../integration/fixture/OSD_COPY_FROM_COMPOUND_VALIDATION.md)
+separately covers both copy opcodes, independent native baseline and the
+empty-OMAP-key boundary. Further read-only combinations and destination loss
+after source-read completion/staging remain separate work. Constructed reply
+vectors and native execution are not established by this request-only checkpoint.
 
 The wrapper translates inputs and calls unchanged LGPL-2.1 Ceph headers/library;
 it copies no native implementation into the product. The offline header follows

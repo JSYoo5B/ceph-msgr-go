@@ -77,8 +77,11 @@ snapshot ids were verified against a real clone; cross-pool and cross-namespace 
 ([record](../../integration/fixture/OSD_POOL_VALIDATION.md)). Later sections of
 the copy validation record cover COPY_FROM2 with xattr edits, source-primary
 change while its source is frozen, and destination loss while that source
-read is blocked. COPY_FROM compound execution and destination loss after
-source-read completion/staging remain unverified. A committed copy
+read is blocked. A later [compound checkpoint](../../integration/fixture/OSD_COPY_FROM_COMPOUND_VALIDATION.md)
+verifies both copy opcodes with xattr suffixes on absent/populated destinations,
+using an independent native copy baseline, object bytes/xattrs/OMAP/header,
+source mtime, user versions and known-unsent refusal/connection checks.
+Destination loss after source-read completion/staging remains unverified. A committed copy
 survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.
 
@@ -93,3 +96,14 @@ destination gets the source's bytes and attributes as edited by the later
 operations. Any other operation, an operation before the copy, a second copy
 or SET_REDIRECT in a vector is refused before submission. Live:
 [OSD_COPY_FROM_VALIDATION.md](../../integration/fixture/OSD_COPY_FROM_VALIDATION.md).
+
+## Native OMAP copy boundary
+
+On the pinned selected profiles, a source's empty OMAP key is omitted by
+COPY_FROM/COPY_FROM2 even when the native OSD reports success. Independent
+`rados cp` reproduces the same result. `PrimaryLogPG::fill_in_copy_get` starts
+its OMAP walk with UPPER_BOUND at the empty cursor; nonempty keys and the
+header are copied in these tests. This is server-copy behavior, not a Go
+encoder correction or a promise of complete OMAP preservation. The product
+returns the raw result without inspecting source OMAP or emulating lost keys.
+See the [first failures, independent baseline and bounded acceptance](../../integration/fixture/OSD_COPY_FROM_COMPOUND_VALIDATION.md).
