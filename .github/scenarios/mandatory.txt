@@ -5,6 +5,7 @@ mon-ping.aes256k.ip6.container.t-monping
 osd-cache-pools.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdignorecache
 osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdignorecache
 osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcachetierops
+osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcacheopgo
 mon-mgr.aes256k.ip6
 mon-mgr.aes-svc-aes256k.ip4
 mon-mgr.aes256k-svc-aes.ip4

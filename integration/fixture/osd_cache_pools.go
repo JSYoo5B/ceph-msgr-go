@@ -348,6 +348,14 @@ func (c *fixtureCluster) osdCachePoolsControl(ctx context.Context, out string, f
 		return errors.New("stale cache-pool control identity")
 	}
 	action, which := fields[2], ""
+	if action == cacheOpGoAction {
+		phase, label, ok := cacheOpGoControl(fields)
+		if !ok {
+			return errors.New("unsupported Go cache-op observer control")
+		}
+		x.LastID = id
+		return c.cacheOpGoNative(ctx, phase, label)
+	}
 	if action == "finish" || action == cacheTierOpsAction {
 		if len(fields) != 3 {
 			return errors.New(action + " takes no case")
