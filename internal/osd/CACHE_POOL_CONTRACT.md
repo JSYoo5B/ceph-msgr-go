@@ -48,14 +48,62 @@ validation; their combination with IgnoreCache has no live validation here.
 The flag bypasses the selected tier's promotion/proxy path. It neither chooses
 the base pool nor changes the caller's target. Dirty tracking remains active.
 DELETE must not be advertised as always physically removing the object:
-snapshot clones can require a whiteout. Cache flush/evict operations,
-overlay discovery, autonomous routing, promotion policy and cache management
-workflows are outside this capability.
+snapshot clones can require a whiteout. Overlay discovery, autonomous routing,
+promotion policy and cache management workflows are outside this capability;
+the explicit cache-tier operations below are a separate contract.
 
 The existing request identity, cancellation and unknown-outcome contract
 continues to apply. A sent mutation with a lost response remains uncertain;
 there is no automatic replay. Explicit resubmission with this flag is refused
 in this initial scope.
+
+## Cache-tier operations
+
+`CACHE_FLUSH` (`0x821f`), `CACHE_TRY_FLUSH` (`0x8221`), `CACHE_EVICT`
+(`0x8220`), `CACHE_PIN` (`0x2224`) and `CACHE_UNPIN` (`0x2225`) are admitted
+as one standalone, inputless, flagless operation on a head object, with
+`EnableOSDCachePools` and the negotiated bit 35, on replicated placement. Each
+takes exactly the request flags its native caller sends
+([rados.cc](https://github.com/ceph/ceph/blob/7f793731f1b39eb4f465e960113d2363c311b964/src/tools/rados/rados.cc)
+`do_cache_flush`/`do_cache_try_flush`/`do_cache_evict`, `librados_util.cc`
+`translate_flags`, `Objecter` `get_read_flags`/`prepare_mutate_op`):
+
+| Opcode | Request mode | Required request inputs | Refused |
+| --- | --- | --- | --- |
+| CACHE_FLUSH | READ | IgnoreCache, IgnoreOverlay | SkipRWLocks |
+| CACHE_TRY_FLUSH | READ | IgnoreCache, IgnoreOverlay, SkipRWLocks | |
+| CACHE_EVICT | READ | IgnoreCache, IgnoreOverlay, SkipRWLocks | |
+| CACHE_PIN, CACHE_UNPIN | WRITE | optional IgnoreCache | IgnoreOverlay, SkipRWLocks |
+
+`IgnoreOverlay` (`CEPH_OSD_FLAG_IGNORE_OVERLAY`, `0x20000`) is refused on every
+other request. The native Objecter reads it when it chooses a target; the
+pinned OSD request path does not consult it. Because the caller already
+supplies the tier pool, PG and primary, the flag is sent only so the request
+matches the native one; it does not route anything. SKIPRWLOCKS selects the
+lock mode that the flush handlers check (`PrimaryLogPG.cc`: try-flush without
+it and flush with it return EINVAL), so a wrong combination is refused
+locally rather than sent. Snapshot reads or context, ORDERSNAP, replica-read,
+redirect, ordering, FULL_TRY/FULL_FORCE, nonzero retry, explicit
+resubmission, erasure-coded placement, compound vectors, per-op flags and any
+extent, version or input field are refused before a request slot, monitor
+readiness or TID is used.
+
+Every handler changes the tier object: flush writes the head to the base pool
+and clears dirty, try-flush may return EAGAIN when it races an update, evict
+deletes a clean unpinned head (EBUSY when dirty or watched, EPERM when
+pinned), and pin/unpin change the pin flag (ENOENT on an absent head). The
+signed aggregate and per-op results are returned unchanged. A lost reply after
+transmission is an unknown outcome and is never replayed; there is no retry
+loop for EAGAIN. Choosing which objects to flush or evict, promotion, the tier
+agent, hit sets, overlays and SET_CHUNK manifests remain caller or later work.
+
+The [fresh native vectors](testdata/cache-op-native-README.md) cover all seven
+request shapes on v6, v8 and untraced v9, and the Go encoder matches each
+header, front, middle and data byte. The
+[native-only checkpoint](../../integration/fixture/OSD_CACHE_TIER_OPS_NATIVE_VALIDATION.md)
+records the server results of the same operations from librados on one
+fixture profile; it is not Go interoperability. No Go-originated cache
+operation has run against a daemon yet.
 
 ## Evidence boundaries
 

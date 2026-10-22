@@ -70,7 +70,7 @@ map, EOF behavior or execution outcome.
 independently construct twenty-one requests: CACHE_FLUSH, CACHE_TRY_FLUSH,
 CACHE_EVICT, and CACHE_PIN/CACHE_UNPIN with and without IGNORE_CACHE, with
 native-caller request flags, across v6, v8 and v9. They are offline request
-codec proof only; the Go encoder still refuses these opcodes.
+codec proof only, and the Go encoder matches each of them.
 
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They

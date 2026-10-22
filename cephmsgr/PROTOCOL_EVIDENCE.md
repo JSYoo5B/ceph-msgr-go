@@ -140,9 +140,9 @@ selected MON/active-MGR Tell only; MDS and OSD command acceptance remains in #5.
 
 Every `implemented` entry in [opcodes-tentacle.csv](../internal/osd/opcodes-tentacle.csv)
 has its exact wire value, bounded contract and unit/vector selector below.
-The remaining 33 entries are exhaustively classified in
+The remaining 28 entries are exhaustively classified in
 [UNSUPPORTED_OPCODES.md](../internal/osd/UNSUPPORTED_OPCODES.md), checked against
-the same catalog by `TestUnsupportedOpcodesAreClassified`. These 47/33 counts
+the same catalog by `TestUnsupportedOpcodesAreClassified`. These 52/28 counts
 are an enum inventory, not a completion percentage or a complete RADOS API.
 Public `OSDOperation`/`OSDRequest` and result fields retain raw bytes, identities,
 per-op codes and unknown outcomes. Contracts define valid combinations, target/
@@ -193,6 +193,11 @@ request profile. No other opcode inherits that native result.
 | SETALLOCHINT | `0x2223` [ALLOC_HINT_CONTRACT.md](../internal/osd/ALLOC_HINT_CONTRACT.md); advisory size/flags, no allocation guarantee | [TestAllocHintRequestMatchesFreshNativeEncoder](../internal/osd/allochint_native_test.go) | U |
 | WRITESAME | `0x2226` [WRITESAME_CONTRACT.md](../internal/osd/WRITESAME_CONTRACT.md); bounded pattern/extent; explicit snapshot and compound restrictions | [TestWriteSameMatchesFreshNativeVectors](../internal/osd/writesame_native_test.go) | U |
 | CMPEXT | `0x1220` [CONTRACT.md](../internal/osd/CONTRACT.md); bounded vectors, signed per-op results and completion/uncertainty | [TestMutationVectorWireAndOwnership](../internal/osd/mutations_test.go) | U |
+| CACHE_FLUSH | `0x821f` [CACHE_POOL_CONTRACT.md](../internal/osd/CACHE_POOL_CONTRACT.md); standalone inputless cache-tier operation with the native request flags; caller targets the tier; no promotion or flush policy | [TestCacheOperationsRetain21FreshNativeRequests](../internal/osd/cache_op_native_test.go) and [TestCacheOperationRefusalsBeforeEncoding](../internal/osd/cache_op_test.go) | U |
+| CACHE_EVICT | `0x8220` [CACHE_POOL_CONTRACT.md](../internal/osd/CACHE_POOL_CONTRACT.md); standalone inputless cache-tier operation with the native request flags; caller targets the tier; no promotion or flush policy | [TestCacheOperationsRetain21FreshNativeRequests](../internal/osd/cache_op_native_test.go) and [TestCacheOperationRefusalsBeforeEncoding](../internal/osd/cache_op_test.go) | U |
+| CACHE_TRY_FLUSH | `0x8221` [CACHE_POOL_CONTRACT.md](../internal/osd/CACHE_POOL_CONTRACT.md); standalone inputless cache-tier operation with the native request flags; caller targets the tier; no promotion or flush policy | [TestCacheOperationsRetain21FreshNativeRequests](../internal/osd/cache_op_native_test.go) and [TestCacheOperationRefusalsBeforeEncoding](../internal/osd/cache_op_test.go) | U |
+| CACHE_PIN | `0x2224` [CACHE_POOL_CONTRACT.md](../internal/osd/CACHE_POOL_CONTRACT.md); standalone inputless cache-tier operation with the native request flags; caller targets the tier; no promotion or flush policy | [TestCacheOperationsRetain21FreshNativeRequests](../internal/osd/cache_op_native_test.go) and [TestCacheOperationRefusalsBeforeEncoding](../internal/osd/cache_op_test.go) | U |
+| CACHE_UNPIN | `0x2225` [CACHE_POOL_CONTRACT.md](../internal/osd/CACHE_POOL_CONTRACT.md); standalone inputless cache-tier operation with the native request flags; caller targets the tier; no promotion or flush policy | [TestCacheOperationsRetain21FreshNativeRequests](../internal/osd/cache_op_native_test.go) and [TestCacheOperationRefusalsBeforeEncoding](../internal/osd/cache_op_test.go) | U |
 | SET_REDIRECT | `0x2227` [MANIFEST_CONTRACT.md](../internal/osd/MANIFEST_CONTRACT.md); standalone flagless manifest operations; no reference-counted chunk/tier workflow | [TestInactiveCopyFromRejectedBeforeStandaloneBranches](../internal/osd/inactive_copyfrom_test.go) | U |
 | UNSET_MANIFEST | `0x222a` [MANIFEST_CONTRACT.md](../internal/osd/MANIFEST_CONTRACT.md); standalone flagless manifest operations; no reference-counted chunk/tier workflow | [TestInactiveCopyFromRejectedBeforeStandaloneBranches](../internal/osd/inactive_copyfrom_test.go) | U |
 | GETXATTR | `0x1301` [METADATA_CONTRACT.md](../internal/osd/METADATA_CONTRACT.md); bounded binary key/value/comparison contracts; no bulk xattr variants | [TestXattrRequestPackedUnionAndBinaryOwnership](../internal/osd/xattr_test.go) | U |
