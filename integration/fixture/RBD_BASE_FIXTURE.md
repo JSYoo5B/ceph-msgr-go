@@ -409,6 +409,9 @@ asks for it. Its fixed plan is part of the journal from preparation on
 | setup events | writes 0 to 8 KiB, 72 to 80 KiB, 136 to 140 KiB, 196 to 204 KiB, then a discard of 192 to 256 KiB (object 3 whole) |
 | write events | writes 16 to 24 KiB, 80 to 84 KiB, then a discard of 128 to 192 KiB (object 2 whole) |
 | Go writes | 40 to 44 KiB and 100 to 104 KiB, appended by the test as journal entries only |
+| concurrent owner events | writes 24 to 28 KiB and 152 to 156 KiB, synchronous, by the native owner that opens the concurrent session |
+| Go concurrent writes | 48 to 56 KiB, 112 to 116 KiB and 176 to 180 KiB, appended (one entry per splay offset 0 to 2), applied to the data objects and committed by the test while it owns the lock |
+| concurrent events | aio writes 52 to 56 KiB (overlapping the second half of Go's first extent), 200 to 204 KiB and 232 to 236 KiB, issued while the test owns the lock |
 
 Every write is at most 8 KiB (one AioWrite event below librbd's 16 KiB
 journal payload limit) and every discard covers a whole object (librbd's
@@ -418,7 +421,7 @@ The suite sends `rbd-journal` requests `<id> <token> <action>` through the
 control channel (`rbd-journal-completed.<id>` acknowledgement). The actions
 form a closed sequence, each admitted once and only after its predecessor:
 `setup`, `observe-registered`, `write`, `observe-committed`, `inspect`,
-`replay`. Each is journaled in `rbd-base-owned.json` as
+`replay`, `concurrent`. Each is journaled in `rbd-base-owned.json` as
 `native-journal-<action>` before the native process starts; the two
 observations carry `read_only: true`. `inspect` is journaled as a mutation
 because `rbd journal inspect` registers and unregisters its own `INSPECT`
@@ -436,6 +439,21 @@ the feature set 69.
 - `replay` opens the image read-write and calls `lock_acquire(exclusive)`,
   which opens the journal and replays every entry after the image client's
   commit position, records `is_exclusive_lock_owner()` and closes the image.
+- `concurrent` keeps one read-write image instance open for a bounded
+  session and publishes `rbd-journal-state.json` after each phase. It
+  applies the concurrent owner events synchronously (the first write takes
+  the exclusive lock, opens the journal and allocates a local tag) and
+  publishes `owner` with `is_exclusive_lock_owner()`, `lock_get_owners()`,
+  the header watchers and the applied events. librbd answers the test's
+  RequestLock and releases the lock on its own. After the proceed signal
+  `rbd-journal-proceed-1` it issues every concurrent event with
+  `aio_write` and publishes `issued` (issue times). It waits at most 60 s
+  for every completion, records the aio return values and completion times
+  and publishes `completed`. After `rbd-journal-proceed-2` it closes the
+  image and publishes `closed`. After `rbd-journal-proceed-3` it runs the
+  observation. Each proceed signal must contain `<token> <request id>
+  <n>` and is awaited at most 30 s. The driver never requests a flush (a
+  user flush would journal an AioFlush event).
 - Every action ends with a read-only observation: librbd views (stat,
   features, flags, lockers, watchers) and a librbd read of the whole image;
   a native librados `exec` list with raw inputs and outputs on
@@ -446,15 +464,18 @@ the feature set 69.
   `stat`/`read` of the journal data objects
   `journal_data.<pool id>.<image id>.<n>` for n 0 to 7 (object sets 0 and
   1); `rbd journal info --format json` and `rbd journal status --format json`
-  on `<pool>/<image id>`; and for `setup`, `inspect` and `replay`
-  `rbd journal inspect --verbose`, whose entries (tag, commit tid, the
+  on `<pool>/<image id>`; and for `setup`, `inspect`, `replay` and
+  `concurrent` `rbd journal inspect --verbose`, whose entries (tag, commit tid, the
   EventEntry dump) and summary the driver parses. The binary views are
   published as `rbd-journal-<action>-image-head.bin` and
   `-journal-objects.bin`.
 
 The fixture checks the structure of each output (identity, names, the plan,
 image layout and features, the exec list, object and blob consistency, the
-command lines and parsed outputs, the events); which clients, positions,
+command lines and parsed outputs, the events, and for `concurrent` the
+phase order, ownership in `owner` and `completed`, no watcher or owner in
+`closed`, the aio return value count and the last proceed wait); which
+clients, positions,
 tags, entries and image bytes each step must show is judged by the test.
 Each receipt is `rbd-journal-<action>.json` (request ID, plan, journaled
 action, decoded native output, bounded process result). Each action is
@@ -483,10 +504,13 @@ intended identity whose creation outcome is unknown is reported as an error.
 the six `rbd-write-<action>.json` receipts, `rbd-write-watch-state.json`, the
 three `rbd-lock-<action>.json` receipts, `rbd-lock-state.json`, the six
 `rbd-clone-<action>.json` receipts, the six `rbd-journal-<action>.json`
-receipts and the suites' own `rbd-base-results.json`,
+receipts of the actions before `concurrent` and the suites' own `rbd-base-results.json`,
 `rbd-write-results.json`, `rbd-lock-results.json`, `rbd-clone-results.json`
 and `rbd-journal-results.json` are on the diagnostics allowlist.
-The binary views and the keys are not archived.
+`rbd-journal-concurrent.json` and `rbd-journal-state.json` are not on the
+allowlist. The journal test copies the published concurrent state, its
+notifications and the outcome of every Go request into
+`rbd-journal-results.json`. The binary views and the keys are not archived.
 
 ## Unit coverage
 
