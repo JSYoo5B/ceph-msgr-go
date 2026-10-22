@@ -72,6 +72,23 @@ FLUSH_ACK), `_do_cap_update`, `file_update_finish`; Client.cc
 
 ## Native results (2026-10-22)
 
+### After rebase onto main and the symmetric runtime guard
+
+Tested PR head `c2d6cd3da9517a8024dc294918149b3b46c0e39b`: the branch rebased
+onto `3de2098eb6c9eec5a1e1228208f0714d9ace8cb3`, with `log-pause` refused
+while `client-drop-on` is active. The workflow ran from that main commit:
+[run 39823750027](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39823750027).
+Basic PR CI also passed at this head.
+
+| Selector | Configuration | Entire test | Restart leaf | Result |
+| --- | --- | --- | --- | --- |
+| cap-send | IPv4 host, CRC, AES, BlueStore | 184.42 s | 60.97 s | PASS |
+| cap-send | IPv6 container, secure, AES256K, MemStore | 184.90 s | 59.92 s | PASS |
+| data (regression) | IPv4 host, CRC, AES, BlueStore | 240.91 s | 105.42 s | PASS |
+| data (regression) | IPv6 container, secure, AES256K, MemStore | 289.68 s | 123.80 s | PASS |
+
+### Before the rebase
+
 GitHub-hosted Ubuntu 24.04 amd64 runners, Go 1.27.3, CGO disabled. Image:
 `quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`.
 Tested PR head `6043f5464148168c6f1d39d7738442504afce482` through the trusted
