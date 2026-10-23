@@ -38,8 +38,14 @@ type MDSReconnectCapFlush struct {
 // realms they belong to. The caller owns these values; native clients reset
 // cap sequence numbers before reconnecting.
 type MDSReconnectState struct {
-	Caps   []MDSCapReconnect
-	Realms []MDSRealmReconnect
+	// MaxMessageSize optionally bounds each MClientReconnect, including its
+	// message header, independently of bootstrap/receive MaxFrameSize. Zero
+	// uses MaxFrameSize; a nonzero value must be between 1 KiB and that
+	// limit. It does not change the bounds of Resubmit or PendingCapFlushes.
+	// The complete state is validated before any reconnect work is admitted.
+	MaxMessageSize uint32
+	Caps           []MDSCapReconnect
+	Realms         []MDSRealmReconnect
 	// PendingCapFlushes is sent in caller order after Resubmit and before
 	// the first MClientReconnect. Entries must be dirty UPDATE or FLUSHSNAP,
 	// name a nonzero inode, have distinct nonzero original flush TIDs, and
@@ -281,8 +287,21 @@ func resubmissions(previous *MDSSession, chosen []*MDSRequestCall) ([]resubmissi
 // messages: caps in inode order, all realms in the last message, "more" set
 // on every message but the last. Sizes follow the v5 data layout.
 func reconnectMessages(state MDSReconnectState, limit uint32) ([]msgr.MessageData, error) {
+	if state.MaxMessageSize != 0 {
+		if state.MaxMessageSize < 1024 || state.MaxMessageSize > limit {
+			return nil, fmt.Errorf("ceph: MDS reconnect message limit must be between 1 KiB and MaxFrameSize: %w", ErrLimitExceeded)
+		}
+		limit = state.MaxMessageSize
+	}
 	caps := slices.Clone(state.Caps)
 	slices.SortFunc(caps, func(a, b MDSCapReconnect) int { return cmp.Compare(a.Ino, b.Ino) })
+	// Native caps are one map keyed by inode across the entire exchange.
+	// Per-message codec checks cannot catch duplicates split across chunks.
+	for i := 1; i < len(caps); i++ {
+		if caps[i-1].Ino == caps[i].Ino {
+			return nil, fmt.Errorf("ceph: duplicate MDS reconnect inode: %w", errors.Join(ErrLimitExceeded, mds.ErrRequest))
+		}
+	}
 	const envelope = 4 + 4 + 1 + 41 // cap count, realm count, more flag, message header
 	capSize := func(c MDSCapReconnect) uint64 { return 8 + 6 + 4 + uint64(len(c.Path)) + 36 + uint64(len(c.Flock)) + 8 }
 	realms := uint64(len(state.Realms)) * (6 + 24)

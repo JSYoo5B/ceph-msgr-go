@@ -60,7 +60,7 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 		return cephmsgr.MDSTarget{FilesystemID: fresh.FSCID, Rank: 0, Address: fmt.Sprintf("v2:%s/%d", d.Endpoint, d.Nonce)}
 	}
 	dials := newRecoveryDials(false, current.MDS.Endpoint)
-	client := recoveryClient(t, ctx, identity, key, dials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS = true, true; o.MaxFrameSize = frameLimit })
+	client := recoveryClient(t, ctx, identity, key, dials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS = true, true })
 	snap := client.Snapshot()
 	control.goGIDs[snap.GlobalID] = true
 	metadata := map[string]string{"entity_id": strings.TrimPrefix(identity, "client."), "hostname": "ceph-msgr-go-" + oracle.Token[:8] + "-split", "root": "/"}
@@ -72,7 +72,7 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 	var dirIno uint64
 	inodes := map[string]uint64{}
 	realms := map[uint64]cephmsgr.MDSSnapRealm{}
-	facts := map[string]any{"frame_limit": frameLimit, "files": names, "global_id": snap.GlobalID, "shared_nonce": snap.CephFSNonce, "request_resubmissions": 0, "pending_cap_flushes": 0}
+	facts := map[string]any{"reconnect_message_limit": frameLimit, "frame_limit": 1 << 20, "files": names, "global_id": snap.GlobalID, "shared_nonce": snap.CephFSNonce, "request_resubmissions": 0, "pending_cap_flushes": 0}
 	var requests []completionReply
 	var nativeLines []string
 	caseTimes := map[string]int64{}
@@ -260,7 +260,7 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		opening, cancel := context.WithTimeout(ctx, 30*time.Second)
-		reopened, calls, err := connection.ReconnectSession(opening, lost, cephmsgr.MDSReconnectState{Caps: caps, Realms: rs}, options)
+		reopened, calls, err := connection.ReconnectSession(opening, lost, cephmsgr.MDSReconnectState{MaxMessageSize: frameLimit, Caps: caps, Realms: rs}, options)
 		cancel()
 		if err != nil || len(calls) != 0 || reopened == nil || reopened.Status().State != cephmsgr.MDSSessionOpen || reopened.Status().ReconnectedFrom != lost.Status().Generation || reopened.Status().GlobalID != snap.GlobalID {
 			t.Fatal("split reconnect did not OPEN without replay", err)

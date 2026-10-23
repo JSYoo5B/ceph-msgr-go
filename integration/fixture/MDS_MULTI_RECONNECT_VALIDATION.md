@@ -3,16 +3,18 @@
 Reference: Ceph Tentacle v20.2.4, source
 `7f793731f1b39eb4f465e960113d2363c311b964`. Product code remains native
 Go with CGO disabled. This checkpoint declares CephFS client bit 12 only in
-the CephFS profile; the session-only profile keeps it withheld. No additional
-wire layout, filesystem cache, inode allocator or automatic replay is added.
+the CephFS profile; the session-only profile keeps it withheld. A reconnect-only
+fragment budget is added without changing wire layout. The transport adds
+no filesystem cache, inode allocator or automatic replay.
 
 ## Recipe and independent oracle
 
 `TestCephMDSCephFSMultiReconnectIntegration` uses the closed
 [completion fixture](MDS_CEPHFS_COMPLETION_FIXTURE.md) in isolation. It opens
 256 real files with legal 225-byte names in the owned directory and retains
-their actual capabilities and paths. The client's recorded `MaxFrameSize` is
-64 KiB. Authentication and ordinary replies use that same bound. The test
+their actual capabilities and paths. The recorded reconnect-only `MDSReconnectState.MaxMessageSize` is
+64 KiB; bootstrap, incoming frames and other messages retain the client's
+1 MiB `MaxFrameSize` bound. The test
 encodes the collected cap/realm state to require that one message would
 exceed the frame bound; no fake inode, path or lock data inflates state.
 

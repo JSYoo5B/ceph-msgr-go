@@ -103,17 +103,30 @@ func TestCephFSReconnectSessionAfterMDSRestart(t *testing.T) {
 }
 
 func TestCephFSReconnectDeniedAndSplit(t *testing.T) {
-	c, lost, peers, ctx := lostCephFSSession(t, 1024)
+	c, lost, peers, ctx := lostCephFSSession(t, 4096)
 	m, err := c.OpenMDS(ctx, MDSTarget{FilesystemID: 7, Rank: 0, Address: "v2:192.0.2.1:6805/0"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	peer := <-peers
-	var state MDSReconnectState
+	state := MDSReconnectState{MaxMessageSize: 1024}
 	for i := range 6 {
 		state.Caps = append(state.Caps, MDSCapReconnect{Ino: uint64(0x10000000000 + i), CapID: uint64(i + 1), Path: strings.Repeat("p", 300)})
 	}
 	state.Realms = []MDSRealmReconnect{{Ino: 1, Seq: 1}}
+	for _, limit := range []uint32{1023, 4097} {
+		invalid := state
+		invalid.MaxMessageSize = limit
+		if opened, calls, err := m.ReconnectSession(ctx, lost, invalid, MDSSessionOptions{RenewInterval: time.Hour}); !errors.Is(err, ErrLimitExceeded) || opened != nil || len(calls) != 0 {
+			t.Fatal("invalid fragment limit admitted", limit, err)
+		}
+		c.mu.Lock()
+		admitted := m.cephfs != nil
+		c.mu.Unlock()
+		if admitted || len(c.calls) != 0 {
+			t.Fatal("invalid fragment limit consumed session or request admission")
+		}
+	}
 	pending := make(chan mdsSessionOpenResult, 1)
 	go func() {
 		s, _, err := m.ReconnectSession(ctx, lost, state, MDSSessionOptions{RenewInterval: time.Hour})
@@ -145,7 +158,7 @@ func TestCephFSReconnectDeniedAndSplit(t *testing.T) {
 	if got.session != nil || !errors.Is(got.err, ErrMDSSessionReconnectDenied) || !errors.Is(got.err, ErrMDSSessionClosed) {
 		t.Fatal("denied reconnect", got.err)
 	}
-	var huge MDSReconnectState
+	huge := MDSReconnectState{MaxMessageSize: 1024}
 	huge.Caps = []MDSCapReconnect{{Ino: 1, Path: strings.Repeat("x", 2048)}}
 	if _, _, err := m.ReconnectSession(ctx, lost, huge, MDSSessionOptions{RenewInterval: time.Hour}); !errors.Is(err, ErrLimitExceeded) {
 		t.Fatal("oversized capability admitted", err)
@@ -289,5 +302,12 @@ func TestCephFSReconnectResubmitsChosenCallsFirst(t *testing.T) {
 	}
 	if len(c.calls) != 0 {
 		t.Fatal("slots leaked", len(c.calls))
+	}
+}
+
+func TestCephFSReconnectRejectsDuplicateInodesAcrossFragments(t *testing.T) {
+	state := MDSReconnectState{MaxMessageSize: 1024, Caps: []MDSCapReconnect{{Ino: 1, CapID: 1, Path: strings.Repeat("a", 600)}, {Ino: 1, CapID: 2, Path: strings.Repeat("b", 600)}}}
+	if _, err := reconnectMessages(state, 4096); !errors.Is(err, ErrLimitExceeded) {
+		t.Fatal("duplicate inode across fragment boundary admitted", err)
 	}
 }

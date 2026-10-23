@@ -35,7 +35,7 @@ const mdsSessionsMaxGlobalIDs = 8
 // mdsSessionsRequirement is one owned required_client_features toggle. The
 // key is the cephfs_dump_features name in the MDSMap dump. reply_encoding is
 // withheld by the session profile (a REJECT); reclaim_client is declared by
-// both profiles (an admission).
+// both profiles (an admission); multi_reconnect is CephFS-only.
 type mdsSessionsRequirement struct {
 	feature, key, kind string
 }

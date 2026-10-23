@@ -75,8 +75,22 @@ opaque file-lock blob) and snap realms (inode, sequence, parent). It is sent
 as MClientReconnect v5/compat4 in the data segment (`cap_reconnect_t` v2,
 `snaprealm_reconnect_t` v1, caps ordered by inode), the current format
 native clients use when the MDS advertises MULTI_RECONNECT; that MDS feature
-is required. State larger than a frame is split into several messages with
-the `more` flag, all realms in the last one. The previous session must be
+is required. State larger than a message budget is split into several messages with
+`more` on every nonfinal message and all realms in the last one.
+`MDSReconnectState.MaxMessageSize` optionally selects that budget, including
+the 41-byte message header. Zero uses `Options.MaxFrameSize`; a positive
+budget must be at least 1 KiB and no greater than MaxFrameSize. This affects
+only outgoing MClientReconnect fragments; bootstrap, incoming frames,
+resubmitted requests and pending cap flushes retain MaxFrameSize. A cap that
+cannot fit with its 50-byte reconnect envelope, all realms that cannot fit
+in a final message, or duplicate cap inodes anywhere in the exchange are
+refused before any request/flush/reconnect admission. A canceled context
+before admission sends nothing. Once a fragment enters the writer, failure
+or cancellation can return `OutcomeUnknownError` and a still-opening
+session; native recovery may have received a prefix. Local cancellation
+neither rolls it back nor automatically retries a new exchange. The caller
+can keep waiting with WaitOpen or terminate that session. This checkpoint
+has no live interruption-between-fragments acceptance. The previous session must be
 Lost, belong to the same Client and GlobalID and name the same filesystem
 label and rank at a different exact address.
 
