@@ -17,7 +17,8 @@ import (
 const (
 	copyHistoryLimit    = 8 << 20
 	copyHistoryMaxOps   = 64
-	copyHistoryMaxAll   = 1024
+	copyHistoryCapacity = 1024
+	copyHistoryMaxAll   = copyHistoryCapacity
 	copyHistoryMaxText  = 4096
 	copyStagingMax      = 4096
 	copyStagingLimit    = 4 << 20

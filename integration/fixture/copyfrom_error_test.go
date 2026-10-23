@@ -250,6 +250,18 @@ func TestCopyFromErrorObservationsRequireMultiChunkSelector(t *testing.T) {
 	}
 }
 
+func TestCopyFromMultiChunkBootstrapRetainsShortOpHistory(t *testing.T) {
+	multi := profile{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", testRun: copyFromMultiChunkSelector}
+	if sections := bootstrapSections(t, fixtureBootstrapConfig(multi)); sections["osd"]["osd_op_history_size"] != "1024" {
+		t.Fatal("multi-chunk cell lacks its enlarged op history", sections)
+	}
+	single := multi
+	single.testRun = copyFromLateErrorSelector
+	if strings.Contains(fixtureBootstrapConfig(single), "osd_op_history_size") {
+		t.Fatal("op history enlargement leaked to another cell")
+	}
+}
+
 func TestCopyStagingListSeparatesTemporaryEntries(t *testing.T) {
 	raw := "#2:0e1c3ad4:::src:head#\n#-4:0e1c3ad4:::temp_2.0_0_4201_1:head#\n\n"
 	receipt, err := decodeCopyStaging([]byte(raw))

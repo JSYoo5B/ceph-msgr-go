@@ -32,9 +32,10 @@ type copyHistoryOp struct {
 	InitiatedAt string `json:"initiated_at"`
 }
 
+// The fixture retains every description; this receipt keeps only copy-gets.
 type copyGetHistory struct {
+	Size     int             `json:"history_size"`
 	Ops      int             `json:"ops"`
-	All      []copyHistoryOp `json:"all_ops"`
 	CopyGets []copyHistoryOp `json:"copy_gets"`
 }
 
@@ -211,8 +212,10 @@ func TestCephOSDCopyFromMultiChunkLateErrorIntegration(t *testing.T) {
 		if err == nil {
 			err = json.Unmarshal(raw, &h)
 		}
-		if err != nil {
-			t.Fatal("native op history receipt", err)
+		// OpHistory trims its shortest ops first only when full. A history
+		// below its enlarged capacity has not discarded fast copy-gets.
+		if err != nil || h.Size != 1024 || h.Ops >= h.Size {
+			t.Fatal("native op history receipt is not complete", err, h.Size, h.Ops)
 		}
 		return h
 	}
