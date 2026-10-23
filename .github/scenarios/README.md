@@ -25,7 +25,12 @@ Two `mds-cephfs-capsend` rows select only
 `TestCephMDSCephFSCapSendRecoveryIntegration` in the two selected MDS
 profiles. They reuse the already-forwarded `mds_cephfs_data` input; the
 data fixture accepts only that selector or `TestCephMDSCephFSDataIntegration`.
-The catalog has 70 native rows in total.
+One further `osd` row selects only `TestCephOSDSetChunkNativeIntegration`, the
+native-only SET_CHUNK manifest checkpoint, on the single-BlueStore legacy-v6
+fixture. It needs no opt-in parameter: the checkpoint uses the ordinary OSD
+fixture's owned plain pools, so the test also belongs to the broad legacy OSD
+selection.
+The catalog has 71 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

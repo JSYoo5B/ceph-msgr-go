@@ -12,6 +12,7 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+SET_CHUNK_SELECTOR = "^TestCephOSDSetChunkNativeIntegration$"
 
 
 def ceph_rows():
@@ -43,11 +44,15 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        # 63 original rows, 2 mgr-service, 1 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go and 2 mds-cephfs-capsend.
-        self.assertEqual(len(self.rows), 70)
+        # 63 original rows, 2 mgr-service, 1 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go,
+        # 2 mds-cephfs-capsend and 1 native SET_CHUNK checkpoint.
+        self.assertEqual(len(self.rows), 71)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
+        # Dedicated legacy-v6 rows select one native-only test explicitly; the
+        # original broad legacy rows keep their suite selection.
+        dedicated = {SET_CHUNK_SELECTOR}
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
-                  and not row.get("osd_soak")
+                  and not row.get("osd_soak") and row.get("test_run") not in dedicated
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
         self.assertEqual(len(legacy), 30)
         for row in self.rows:
@@ -61,7 +66,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertIn(row.get("mds_cephfs_ranks_replay", "0"), {"0", "1"})
             if row.get("mds_cephfs_ranks_replay", "0") == "1":
                 self.assertEqual(row.get("mds_cephfs_ranks"), "1")
-            if profile == "legacy-v6" and all(row.get(field, "0") == "0" for field in opt_ins):
+            if profile == "legacy-v6" and all(row.get(field, "0") == "0" for field in opt_ins) and row.get("test_run") not in dedicated:
                 self.assertNotIn("test_run", row, "existing rows must retain their original suite selection")
                 self.assertNotIn("mds_fresh", row)
                 for field in opt_ins:
@@ -270,6 +275,21 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         expected = "TestCephOSDErasureK2M2Integration"
         self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
         for other in ("TestCephOSDErasureIntegration", "TestCephOSDErasureOptimizedIntegration", expected + "Extended", "Prefix" + expected):
+            self.assertIsNone(selector.search(other))
+
+    def test_set_chunk_row_selects_only_the_native_checkpoint(self):
+        # The native-only SET_CHUNK checkpoint needs only the ordinary OSD
+        # fixture and the owned-pool oracle; it has no opt-in parameter.
+        rows = [row for row in self.rows if row.get("test_run") == SET_CHUNK_SELECTOR]
+        self.assertEqual(rows, [{
+            "key": "aes256k", "service": "aes256k", "family": "6", "stress": "", "runtime": "container",
+            "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
+            "test_run": SET_CHUNK_SELECTOR,
+        }])
+        selector = re.compile(SET_CHUNK_SELECTOR)
+        expected = "TestCephOSDSetChunkNativeIntegration"
+        self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
+        for other in (expected + "Extended", "Prefix" + expected, "TestCephOSDRedirectIntegration", "TestCephOSDCacheTierOpsIntegration"):
             self.assertIsNone(selector.search(other))
 
     def test_fresh_mds_rows_require_explicit_opt_in_and_only_their_declared_test(self):

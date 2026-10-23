@@ -721,6 +721,22 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		}
 	}
 
+	fields, err = c.request(out, "verify-osd-set-chunk")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 || c.profile.osd != "1" || fields[1] != setChunkNativeAction {
+			return errors.New("invalid native SET_CHUNK checkpoint request")
+		}
+		if err = c.setChunkNative(ctx, out); err != nil {
+			return err
+		}
+		if err = publishAck(out, "osd-set-chunk-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+
 	fields, err = c.request(out, "verify-osd-pool")
 	if err != nil {
 		return err

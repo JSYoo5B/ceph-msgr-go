@@ -32,3 +32,100 @@ must not target itself (-EINVAL), and UNSET_MANIFEST on a plain object is
 -EOPNOTSUPP. A redirect inside a cache-tier pool would be -EINVAL.
 
 Verification: [OSD_REDIRECT_VALIDATION.md](../../integration/fixture/OSD_REDIRECT_VALIDATION.md).
+
+## SET_CHUNK and manifest tier operations (not implemented)
+
+Source audit of the pinned commit for issue #8. This repository emits none of
+these opcodes; the section records their current semantics and the native-only
+evidence that precedes any wire primitive. Line numbers refer to
+`src/osd/PrimaryLogPG.cc` unless another file is named.
+
+### SET_CHUNK (0x8228)
+
+Native construction: `ObjectReadOperation::set_chunk` (`librados_cxx.cc`) calls
+Objecter `set_chunk` (`osdc/Objecter.h:1603-1613`). The indata is u64
+src_offset, u64 src_length, `object_locator_t` of the target I/O context,
+`object_t` target name and u64 tgt_offset; the caller's flag becomes the
+operation's packed per-op flags. `rados set-chunk` always passes
+CEPH_OSD_OP_FLAG_WITH_REFERENCE (0x80) and no request flag, and submits through
+the read path, so the request carries no mtime.
+
+Classification: the opcode's mode is CACHE, not modify. `OpInfo` therefore sets
+only the cache flag (`osd/osd_op_util.cc`), so the client's capability check
+asks for neither read nor write access; the operation is write-ordered, and
+`maybe_handle_manifest` never proxies it (2588-2598). SET_CHUNK is not a
+user-visible modification (6066-6081): the source's user version stays, and
+the mtime changes only when the request carries one (9084).
+
+Handler (7280-7400), in order: a tier pool -EINVAL; an absent source -ENOENT; a
+redirect manifest -EINVAL; undecodable indata -EINVAL; zero length -EINVAL;
+src_offset + src_length beyond the object size -ERANGE; no WITH_REFERENCE flag
+-EOPNOTSUPP; an erasure-coded pool -EOPNOTSUPP; an interval overlapping an
+existing chunk -EOPNOTSUPP; an unresolvable target locator returns the
+placement error. A later existing-reference check at the same offset (-EINVAL)
+cannot be reached by a non-empty existing chunk, because the overlap check
+refuses it first. Then `inc_refcount_by_set` (3653) blocks the source object
+and has the OSD's own Objecter call `cas.chunk_get_ref` on the target with
+IGNORE_CACHE, IGNORE_OVERLAY and RWORDERED (`refcount_manifest`, 3790). The
+target must exist: `chunk_get_ref` reads the target's `chunk_refs` attribute
+and fails with -ENOENT for an absent object (`cls/cas/cls_cas.cc`). A failed
+increment is returned to the client.
+
+`finish_set_manifest_refcount` (10866) records a failure under both the chunk
+offset and key 0. With a non-zero src_offset, a failed increment therefore
+leaves two results for one chunk, and the request never completes while the
+source object stays blocked. This is a source-derived hazard, not an observed
+result; the native checkpoint uses offset 0 for its absent-target control.
+
+On success the source gains a chunked manifest entry at src_offset (target
+hobject, tgt_offset, src_length, FLAG_HAS_REFERENCE) and FLAG_MANIFEST. Its data
+stays local and no chunk is marked missing, so ordinary reads still return the
+source's own bytes. The target's `chunk_refs` attribute holds a `chunk_refs_t`;
+`chunk_set_refcount` uses the precise by_object form, a multiset of the
+source head's hobject. Deleting the source or UNSET_MANIFEST drops its
+references after commit (`dec_all_refcount_manifest`, 3755);
+`cas.chunk_put_ref` removes the target when its last reference goes.
+Snapshot clones change the reference arithmetic (`calc_refs_to_inc_on_set`
+with adjacent clones); that path is not exercised here.
+
+Required pool configuration: none. The source pool must be a replicated pool
+that is not a tier; the target may be any pool its locator resolves. The
+`dedup_tier`, `fingerprint_algorithm` and chunk options are consulted only by
+the TIER_FLUSH dedup path, and cache-mode configuration is unrelated.
+
+The reply has no per-operation output; the result is the single signed code.
+The native client may resend an uncertain request.
+
+### TIER_PROMOTE, TIER_FLUSH and TIER_EVICT
+
+All three are inputless client primitives on a non-tier pool, and each refuses
+an absent object with -ENOENT.
+
+- TIER_PROMOTE (0x2229, `ObjectWriteOperation::tier_promote`, `rados
+  tier-promote`, 7402): a plain object is a no-op success. A chunked manifest
+  copies its missing chunks back from itself; a redirect copies its target into
+  the object.
+- TIER_FLUSH (0x822b, `ObjectReadOperation::tier_flush`, `rados tier-flush`
+  with IGNORE_CACHE and IGNORE_OVERLAY, 7460): a dirty or non-manifest object
+  starts a blocking dedup flush, and its in-progress result is returned as
+  -EAGAIN; a clean manifest returns 0. The dedup path refuses a pool without
+  `fingerprint_algorithm` or `dedup_tier` with -EINVAL (`start_dedup`), so this
+  operation needs a dedup pool configuration that SET_CHUNK does not.
+- TIER_EVICT (0x822c, `ObjectReadOperation::tier_evict`, `rados tier-evict`
+  with the same flags, 7488): a non-manifest object is refused with -EINVAL;
+  otherwise every chunk is marked missing and its local range is punched.
+
+COPY_GET stays daemon-originated: its only caller is the OSD's own copy and
+promote path (see [UNSUPPORTED_OPCODES.md](UNSUPPORTED_OPCODES.md)). The cache
+and dedup tier agents are daemon-internal work, not client primitives.
+
+### Native-only evidence and remaining stages
+
+[OSD_SET_CHUNK_NATIVE_VALIDATION.md](../../integration/fixture/OSD_SET_CHUNK_NATIVE_VALIDATION.md)
+records `TestCephOSDSetChunkNativeIntegration`: a closed native librados oracle
+issues the refusals above and two disjoint chunks, and observes bytes,
+versions, the target's `chunk_refs` and the source's own reference count before
+and after, including the reference release on source deletion. No Go request
+was sent. Native request vectors, the Go wire primitive and its bounded
+admission, scoped-identity refusals, snapshot reference accounting, the TIER_*
+operations and dedup pools remain separate follow-up stages.

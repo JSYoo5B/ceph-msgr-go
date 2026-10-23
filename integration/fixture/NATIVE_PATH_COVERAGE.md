@@ -139,7 +139,8 @@ a particular test in it ran. The Visibility column states which applies:
 | OSD-16 | IGNORE_CACHE over native cache-tier pools | `released` | Opt-in owned writeback tier attached to an owned base pool on the legacy fixture, without an overlay | Native tier state and object reads | Flag isolation; heads removed and the tier detached | `group:osd-cache-pools`, `TestCephOSDIgnoreCacheIntegration`, [OSD_IGNORE_CACHE_VALIDATION.md](OSD_IGNORE_CACHE_VALIDATION.md), [OSD_IGNORE_CACHE_NATIVE_PROBE_VALIDATION.md](OSD_IGNORE_CACHE_NATIVE_PROBE_VALIDATION.md) | dedicated rows; selected bypass operations only; overlay routing is not exercised |
 | OSD-17 | Native cache flush, try-flush, evict, pin and unpin on a writeback tier | `released` | Existing owned writeback tier without overlay; once-issued native librados operations with explicit request flags | Native oracle: signed librados results, direct tier and base reads, `is_dirty` | Pinned, dirty, absent-head and wrong-lock-mode refusals; owned heads, tier, pools, rule and identities removed | `osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcachetierops`, `TestCephOSDCacheTierOpsIntegration`, [OSD_CACHE_TIER_OPS_NATIVE_VALIDATION.md](OSD_CACHE_TIER_OPS_NATIVE_VALIDATION.md) | dedicated row; merged in #41 (`0784e93`); native-only recipe; Go-originated acceptance is OSD-23; one profile; try-flush EAGAIN and overlays unverified |
 | OSD-23 | Go-originated cache flush, try-flush, evict, pin and unpin on a writeback tier | `released` | Existing owned writeback tier without overlay; closed observer seeds two heads and an absent control | Native oracle: IGNORE_CACHE STAT+READ of base and tier and C++ `is_dirty` after every Go step | Dirty, pinned and absent-head refusals; owned heads removed by the observer, pools by the fixture | `osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcacheopgo`, `TestCephOSDCacheOpGoIntegration`, [OSD_CACHE_OP_GO_VALIDATION.md](OSD_CACHE_OP_GO_VALIDATION.md) | dedicated row; one profile; live EAGAIN, live lost reply (synthetic only) and scoped Go refusals unverified |
-| OSD-24 | SET_CHUNK dedup manifest and tier-agent paths | `proposed` | Not defined | Not defined | Not defined | issue #8 | no native recipe or Go encoding |
+| OSD-24 | Native SET_CHUNK chunk manifest with reference counting | `released` | Two owned plain replicated pools (source and chunk target) on the legacy fixture; closed once-issued librados C++ `set_chunk` sequence with WITH_REFERENCE | Native oracle: source and target bytes, versions and mtimes, the target's cls_cas `chunk_refs` attribute and `cas.references_chunk` on the source, before and after | Absent source and target, zero-length, out-of-range, missing-reference and overlap refusals; source deletion releases both references and removes the target; owned objects and pools removed | `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdsetchunknative`, `TestCephOSDSetChunkNativeIntegration`, [OSD_SET_CHUNK_NATIVE_VALIDATION.md](OSD_SET_CHUNK_NATIVE_VALIDATION.md) | dedicated row, also in the broad legacy selection; native-only recipe: no native request vectors, Go encoding, scoped identities or snapshot clones |
+| OSD-25 | TIER_PROMOTE, TIER_FLUSH and TIER_EVICT on manifests, dedup pools and the tier agent | `proposed` | Not defined | Not defined | Not defined | issue #8 | source audit only ([MANIFEST_CONTRACT.md](../../internal/osd/MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations-not-implemented)); TIER_FLUSH needs a dedup pool configuration |
 | OSD-18 | Replica reads with balance and localize flags | `released` | Three BlueStore replicas; reads sent to each acting member | Native bytes, attributes and versions | Primary failover and bounce | `TestCephOSDReplicaReadIntegration`, `TestCephOSDReplicaReadBounceIntegration`, `TestCephOSDReplicaReadPrimaryFailoverIntegration`, [OSD_REPLICA_READ_VALIDATION.md](OSD_REPLICA_READ_VALIDATION.md) | broad three-replica rows |
 | OSD-19 | Caller-routed placement change through upmap | `released` | Owned pool with upmap item and full transitions | Native epoch, PG, up and acting sets and readback | Membership and primary change; exact baseline restored | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap`, `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap`, `TestCephOSDUpmapIntegration`, [OSD_UPMAP_VALIDATION.md](OSD_UPMAP_VALIDATION.md) | dedicated rows |
 | OSD-20 | Bounded OSD soak with OSD kills | `released` | Four workers on three BlueStore replicas; one OSD killed every 15 s | Native bytes and xattrs after PGs are clean | SIGKILL and restart; owned objects removed | `osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m`, `TestCephOSDSoakIntegration`, `TestCephOSDSoakFailoverIntegration`, [OSD_SOAK_VALIDATION.md](OSD_SOAK_VALIDATION.md) | four-minute bound; the record's capacity failure is retained |
@@ -209,7 +210,7 @@ a particular test in it ran. The Visibility column states which applies:
 
 | Class | Rows |
 | --- | --- |
-| `released` | 65 |
+| `released` | 66 |
 | `main-only` | 3 |
 | `primitive` | 9 |
 | `proposed` | 10 |
@@ -261,8 +262,9 @@ environment.
 
 - Secure-mode compression and zlib are deferred
   ([compression plan](../../internal/msgr/COMPRESSION_PLAN.md)).
-- The SET_CHUNK dedup-manifest and tier-agent opcodes are not implemented
-  ([unsupported opcodes](../../internal/osd/UNSUPPORTED_OPCODES.md), issue #8).
+- The SET_CHUNK manifest and TIER_PROMOTE/TIER_FLUSH/TIER_EVICT opcodes are
+  not implemented ([unsupported opcodes](../../internal/osd/UNSUPPORTED_OPCODES.md),
+  issue #8); SET_CHUNK has a native-only recipe (OSD-24).
   Cache flush, try-flush, evict, pin and unpin are implemented and accepted
   live on one profile (OSD-23).
 - Withheld CephFS client features are decided in

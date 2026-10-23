@@ -49,10 +49,10 @@ Classes:
 | PGLS_FILTER | Current server path, deferred legacy format | As PGLS; PGNLS_FILTER is implemented. | none |
 | PG_HITSET_LS | Current client primitive, cache-tier dependent | Handled in the PG-op path from the PG's hit-set history; `Objecter.h` and `librados` expose it. Meaningful only with a hit-set configured. | #8 |
 | PG_HITSET_GET | Current client primitive, cache-tier dependent | As PG_HITSET_LS; `librados` exposes it. | #8 |
-| SET_CHUNK | Current client primitive, manifest dependent | Handled in `do_osd_ops`; used by `rados` and the dedup tools. | #8 |
-| TIER_PROMOTE | Current client primitive, manifest dependent | Handled in `do_osd_ops`; exposed by `librados` and the `rados` tool. | #8 |
-| TIER_FLUSH | Current client primitive, manifest dependent | As TIER_PROMOTE. | #8 |
-| TIER_EVICT | Current client primitive, manifest dependent | As TIER_PROMOTE. | #8 |
+| SET_CHUNK | Current client primitive, manifest dependent | Handled in `do_osd_ops`; `ObjectReadOperation::set_chunk`, `rados set-chunk` and the dedup tool. Needs two plain pools and an existing target object, no pool option; audit and native-only checkpoint in [MANIFEST_CONTRACT.md](MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations-not-implemented). | #8 (Go wire primitive) |
+| TIER_PROMOTE | Current client primitive, manifest dependent | Inputless; `ObjectWriteOperation::tier_promote`, `rados tier-promote`. Copies a redirect target or missing chunks back into a manifest object; a plain object is a no-op success. | #8 |
+| TIER_FLUSH | Current client primitive, manifest and dedup-pool dependent | Inputless; `ObjectReadOperation::tier_flush`, `rados tier-flush` with IGNORE_CACHE and IGNORE_OVERLAY. Chunks the object into the pool's dedup tier; needs the pool's `fingerprint_algorithm` and `dedup_tier` options. | #8 |
+| TIER_EVICT | Current client primitive, manifest dependent | Inputless; `ObjectReadOperation::tier_evict`, `rados tier-evict` with IGNORE_CACHE and IGNORE_OVERLAY. Marks every chunk missing and punches the local data; a non-manifest object is refused. | #8 |
 
 `TestUnsupportedOpcodesAreClassified` fails if this table and the catalog's
 `unsupported` entries differ.
