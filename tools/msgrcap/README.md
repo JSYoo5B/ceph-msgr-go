@@ -13,7 +13,8 @@ Findings and the recommendation are in [CAPTURE_ANALYSIS.md](CAPTURE_ANALYSIS.md
 | File | Purpose |
 | --- | --- |
 | `pcap.go` | Classic pcap reader (Ethernet, raw IP, Linux SLL/SLL2; IPv4/IPv6). pcapng is rejected explicitly. |
-| `tcp.go` | Connection tracking (SYN-defined instances, four-tuple reuse) and per-direction reassembly with retransmission, conflict, gap, snaplen and "acknowledged but not captured" accounting. |
+| `cleanup.sh` | Owned-resource cleanup sourced by `live-poc.sh`; a failed or unverifiable cleanup fails the job. |
+| `tcp.go` | Connection tracking (SYN-defined instances, four-tuple reuse) and per-direction reassembly with retransmission, conflict, gap, snaplen, "acknowledged but not captured" and separate analysis-limit accounting. |
 | `msgr2.go` | A small msgr2.1 rev1 frame walker, written separately from `internal/msgr`: banner, CRC frames, opt-in secure frame decryption, and identity metadata only. |
 | `analysis.go` | Per-connection TCP and Messenger outcome, opt-in passive CephX derivation for MON connections, and trace correlation. |
 | `crosscheck.go` | Comparison with the native MON's ProtocolV2 log (`debug_ms = 10`). |

@@ -25,27 +25,8 @@ mon="msgrcap-mon-$mode-$$"
 tcpdump_pid=""
 substitution="runner-host tcpdump on the fixture bridge (development substitute for the planned ceph-testcontainers capture helper)"
 
-stop_capture() {
-    if test -n "$tcpdump_pid"; then
-        sudo kill -INT "$tcpdump_pid" 2>/dev/null || true
-        wait "$tcpdump_pid" 2>/dev/null || true
-        tcpdump_pid=""
-    fi
-}
-cleanup() {
-    code=$?
-    stop_capture
-    docker logs "$mon" > "$out/mon.log" 2>&1 || true
-    result=ok
-    docker rm -f "$mon" >/dev/null 2>&1 || result="container removal failed"
-    docker network rm "$net" >/dev/null 2>&1 || result="$result; network removal failed"
-    if docker ps -a --format '{{.Names}}' | grep -qx "$mon"; then result="container still present"; fi
-    if docker network ls --format '{{.Name}}' | grep -qx "$net"; then result="$result; network still present"; fi
-    rm -rf "$work"
-    test -e "$work" && result="$result; key work directory still present"
-    printf '{"exit_code":%d,"cleanup":"%s"}\n' "$code" "$result" > "$out/cleanup.json"
-    if test -f "$out/capture.pcap"; then sudo chown "$(id -u):$(id -g)" "$out/capture.pcap"; fi
-}
+# shellcheck source=cleanup.sh
+. "$here/cleanup.sh"
 trap cleanup EXIT
 
 echo "== build the development tool"

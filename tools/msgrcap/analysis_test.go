@@ -433,3 +433,36 @@ func TestMonLogCrossCheck(t *testing.T) {
 		t.Fatal("peer IP boundary")
 	}
 }
+
+// Bytes beyond the per-direction analysis bound were captured; they must be
+// reported as analysis-limit truncation, never as peer-acknowledged capture
+// loss, and the prefix within the bound stays reassembled.
+func TestAnalysisLimitIsNotCaptureLoss(t *testing.T) {
+	const ci, si = 1000, 5000
+	b := newPcap(65535)
+	b.tcp(cliAddr, monAddr, ci, 0, tcpSYN, nil)
+	b.tcp(monAddr, cliAddr, si, ci+1, tcpSYN|tcpACK, nil)
+	b.tcp(cliAddr, monAddr, ci+1, si+1, tcpACK, []byte("abc"))
+	b.tcp(monAddr, cliAddr, si+1, ci+4, tcpACK, nil)
+	rep, err := analyze("synthetic", &b.buf, analysisOptions{ServerPorts: []uint16{3300}, MaxBytes: 2, FrameLimit: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := rep.Connections[0].C2S
+	if d.AckedNotCaptured != 0 || d.LimitExcluded != 1 || d.Limit != 2 || d.Reassembled != 2 || len(d.Gaps) != 0 {
+		t.Fatalf("limit truncation misattributed: %+v", d)
+	}
+	// A real capture loss before the bound is still reported as such.
+	b = newPcap(65535)
+	b.tcp(cliAddr, monAddr, ci, 0, tcpSYN, nil)
+	b.tcp(monAddr, cliAddr, si, ci+1, tcpSYN|tcpACK, nil)
+	b.tcp(cliAddr, monAddr, ci+1, si+1, tcpACK, []byte("a"))
+	b.tcp(monAddr, cliAddr, si+1, ci+4, tcpACK, nil) // acknowledges 3 bytes; 2 not captured
+	rep, err = analyze("synthetic", &b.buf, analysisOptions{ServerPorts: []uint16{3300}, MaxBytes: 1 << 20, FrameLimit: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := rep.Connections[0].C2S; d.AckedNotCaptured != 2 || d.LimitExcluded != 0 {
+		t.Fatalf("capture loss not reported: %+v", d)
+	}
+}

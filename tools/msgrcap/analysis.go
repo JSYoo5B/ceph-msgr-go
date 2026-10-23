@@ -43,17 +43,21 @@ type inputInfo struct {
 }
 
 type dirReport struct {
-	Packets          int           `json:"packets"`
-	Reassembled      int64         `json:"reassembled_bytes"`
-	Retransmitted    int           `json:"retransmitted_segments"`
-	Conflicts        int           `json:"conflicting_overlaps"`
-	Gaps             []gap         `json:"gaps,omitempty"`
-	BytesAfterGap    int64         `json:"bytes_after_first_gap,omitempty"`
-	SnaplenMissing   int           `json:"snaplen_missing_bytes,omitempty"`
-	AckedNotCaptured int64         `json:"peer_acked_bytes_missing_from_capture,omitempty"`
-	BeforeBase       int           `json:"segments_before_stream_base,omitempty"`
-	SHA256           string        `json:"reassembled_sha256"`
-	Msgr             *streamResult `json:"msgr2,omitempty"`
+	Packets          int   `json:"packets"`
+	Reassembled      int64 `json:"reassembled_bytes"`
+	Retransmitted    int   `json:"retransmitted_segments"`
+	Conflicts        int   `json:"conflicting_overlaps"`
+	Gaps             []gap `json:"gaps,omitempty"`
+	BytesAfterGap    int64 `json:"bytes_after_first_gap,omitempty"`
+	SnaplenMissing   int   `json:"snaplen_missing_bytes,omitempty"`
+	AckedNotCaptured int64 `json:"peer_acked_bytes_missing_from_capture,omitempty"`
+	BeforeBase       int   `json:"segments_before_stream_base,omitempty"`
+	// Analysis-limit truncation: captured bytes beyond the per-direction bound
+	// that were excluded from reassembly. Distinct from capture loss.
+	LimitExcluded int64         `json:"analysis_limit_excluded_bytes,omitempty"`
+	Limit         int64         `json:"analysis_limit_bytes,omitempty"`
+	SHA256        string        `json:"reassembled_sha256"`
+	Msgr          *streamResult `json:"msgr2,omitempty"`
 }
 
 type connReport struct {
@@ -171,6 +175,7 @@ func dirSummary(d *direction, peer *direction) dirReport {
 		Packets: d.packets, Reassembled: int64(len(d.stream)), Retransmitted: d.retransmitted,
 		Conflicts: d.conflicts, Gaps: d.gaps, BytesAfterGap: d.afterGap, SnaplenMissing: d.missing,
 		AckedNotCaptured: d.ackedMissing(peer.maxAck, peer.haveAck), BeforeBase: d.beforeBase,
+		LimitExcluded: d.limitExcluded, Limit: d.limit,
 		SHA256: hex.EncodeToString(sum[:]),
 	}
 }

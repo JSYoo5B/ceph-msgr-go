@@ -193,6 +193,9 @@ func printSummary(w io.Writer, rep *report) {
 		}{{"c->s", c.C2S}, {"s->c", c.S2C}} {
 			fmt.Fprintf(w, "  %s: packets=%d bytes=%d retrans=%d conflicts=%d gaps=%d acked-not-captured=%d snaplen-missing=%d\n",
 				d.name, d.r.Packets, d.r.Reassembled, d.r.Retransmitted, d.r.Conflicts, len(d.r.Gaps), d.r.AckedNotCaptured, d.r.SnaplenMissing)
+			if d.r.LimitExcluded > 0 {
+				fmt.Fprintf(w, "    analysis limit %d bytes reached: %d captured bytes excluded (not capture loss)\n", d.r.Limit, d.r.LimitExcluded)
+			}
 			if m := d.r.Msgr; m != nil {
 				fmt.Fprintf(w, "    frames=%d %s\n", len(m.Frames), tagList(m.Frames))
 				if m.OpaqueBytes > 0 || m.Stop != "" {

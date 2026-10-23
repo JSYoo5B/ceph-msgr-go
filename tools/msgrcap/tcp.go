@@ -42,6 +42,11 @@ type direction struct {
 	haveAck    bool
 	fin        bool
 	finOffset  int64
+	// Captured payload bytes at or beyond the analyzer's per-direction bound.
+	// They were present in the input, so they are never counted as capture
+	// loss; limit records the bound that excluded them.
+	limitExcluded int64
+	limit         int64
 
 	// Reassembly results.
 	stream        []byte
@@ -162,8 +167,17 @@ func (t *tracker) add(p packet) {
 	if len(p.Payload) > 0 {
 		if off < 0 {
 			d.beforeBase++
-		} else if off+int64(len(p.Payload)) <= t.maxBytes {
-			d.segs = append(d.segs, segment{off, append([]byte(nil), p.Payload...), p.Time, p.Index})
+		} else {
+			data := p.Payload
+			if end := off + int64(len(data)); end > t.maxBytes {
+				keep := max(t.maxBytes-off, 0)
+				d.limitExcluded += int64(len(data)) - keep
+				d.limit = t.maxBytes
+				data = data[:keep]
+			}
+			if len(data) > 0 {
+				d.segs = append(d.segs, segment{off, append([]byte(nil), data...), p.Time, p.Index})
+			}
 		}
 	}
 	if p.Flags&tcpFIN != 0 {
@@ -235,10 +249,15 @@ func (d *direction) timeAt(end int64) time.Time {
 
 // ackedMissing reports peer-acknowledged bytes absent from the capture. They
 // were delivered on the network, so their absence is a capture loss
-// (drop/snaplen), not a TCP loss.
+// (drop/snaplen), not a TCP loss. Offsets at or beyond an exhausted analysis
+// bound are excluded: their absence from the stream is the analyzer's limit,
+// reported separately, not evidence about the capture.
 func (d *direction) ackedMissing(peerAck int64, havePeerAck bool) int64 {
 	if !havePeerAck {
 		return 0
+	}
+	if d.limit > 0 && peerAck > d.limit {
+		peerAck = d.limit
 	}
 	end := int64(len(d.stream))
 	if d.fin && int64(len(d.stream)) >= d.finOffset {

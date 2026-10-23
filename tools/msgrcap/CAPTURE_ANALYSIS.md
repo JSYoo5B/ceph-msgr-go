@@ -94,7 +94,11 @@ across segments. msgrcap decodes frames only from the contiguous prefix of each
 direction. It reports retransmitted and conflicting overlaps, gaps (data after
 the first gap is counted, not decoded), snaplen-truncated bytes and bytes the
 peer acknowledged that are absent from the capture. The last one separates
-capture loss from network loss, because the peer received those bytes. A file
+capture loss from network loss, because the peer received those bytes.
+Captured bytes beyond the per-direction analysis bound (`-max-stream-bytes`)
+are reported as analysis-limit truncation (`analysis_limit_excluded_bytes`)
+and are never counted as capture loss; acknowledged offsets past an exhausted
+bound are not attributed to the capture. A file
 that ends inside a record is reported as a partial capture. A capture started
 after the handshake is reported as midstream and not decoded. A new SYN with a
 different ISN on the same four-tuple starts a new connection instance.
@@ -169,8 +173,11 @@ read-only `mon dump` commands. Capture readiness is established before any
 client traffic (tcpdump "listening on" line), native readiness checks stay
 inside the container and do not cross the captured bridge, and the capture is
 bound to the configured mode, MON address and client identity in
-`provenance.json`. Cleanup removes the container, network and key directory
-and records the result in `cleanup.json`. The live job fails unless every
+`provenance.json`. Cleanup (`cleanup.sh`) removes the container, network and
+key directory and records the result in `cleanup.json`. A failed removal, or an
+owned resource whose absence cannot be verified, fails the job while an
+earlier nonzero status is preserved; `TestLivePoCCleanupFailsTheJob` replays
+the cleanup with injected Docker failures. The live job fails unless every
 established session pairs with one MON log connection and matches its mode,
 received tags and sent message sequences, and unless the refused phase, the
 command session and an authenticated reconnect are present.
