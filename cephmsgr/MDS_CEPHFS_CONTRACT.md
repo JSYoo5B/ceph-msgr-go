@@ -25,13 +25,15 @@ every MDS connection of the client before Dial:
   flags, directory counts, fscrypt fields), quota delivery, inline data and
   pool namespaces, the created inode in create replies and caller pool IDs in
   open arguments.
-- CephFS client features: bits 0–9, RECLAIM_CLIENT (10), ALTERNATE_NAME
+- CephFS client features: bits 0–9, RECLAIM_CLIENT (10), MULTI_RECONNECT (12), ALTERNATE_NAME
   (15), 32BITS_RETRY_FWD (18), NEW_SNAPREALM_INFO (19) and HAS_OWNER_UIDGID
-  (20), `0x1c87ff` in native `session ls`. REPLY_ENCODING selects the
+  (20), `0x1c97ff` in native `session ls`. REPLY_ENCODING selects the
   versioned InodeStat (v8), DirStat (v1) and LeaseStat (v2);
   NEW_SNAPREALM_INFO selects SnapRealmInfoNew traces. RECLAIM_CLIENT changes
   no MDS behavior and only satisfies a `reclaim_client` filesystem
-  requirement. Lazy wanted caps, multi-reconnect, delegated inodes, metrics,
+  requirement. MULTI_RECONNECT is declared only by this profile; it satisfies
+  the filesystem requirement and uses the existing bounded reconnect codec.
+  Lazy wanted caps, delegated inodes, metrics,
   notify-session-state, getvxattr, client-side auth-cap checks, charmap and
   blockdiff stay withheld; see `internal/mds/CLIENT_EXTENSION_DECISIONS.md`.
 
@@ -73,8 +75,32 @@ opaque file-lock blob) and snap realms (inode, sequence, parent). It is sent
 as MClientReconnect v5/compat4 in the data segment (`cap_reconnect_t` v2,
 `snaprealm_reconnect_t` v1, caps ordered by inode), the current format
 native clients use when the MDS advertises MULTI_RECONNECT; that MDS feature
-is required. State larger than a frame is split into several messages with
-the `more` flag, all realms in the last one. The previous session must be
+is required. State larger than a message budget is split into several
+messages with
+`more` on every nonfinal message and all realms in the last one.
+`MDSReconnectState.MaxMessageSize` optionally selects that budget, including
+the 41-byte message header. Zero uses `Options.MaxFrameSize`; a positive
+budget must be at least 1 KiB and no greater than MaxFrameSize. This affects
+only outgoing MClientReconnect fragments; bootstrap, incoming frames,
+resubmitted requests and pending cap flushes retain MaxFrameSize. A cap that
+cannot fit with its 50-byte reconnect envelope, all realms that cannot fit
+in a final message, or duplicate cap inodes anywhere in the exchange are
+refused before any request/flush/reconnect admission. The whole exchange is
+limited to 1,048,576 caps and 65,536 realms, checked before cloning or encoding;
+chunking does not reset those collection counts. All cap/realm sizes are
+preflighted before fragment encoding. The implementation materializes the
+whole message sequence before admission (at most one message per cap plus a
+final realm-only message); MaxMessageSize bounds each message, not the total
+caller state or cumulative allocation. Callers must budget the state and
+fragment count for their own memory constraints. A canceled context
+before admission sends nothing. Once a fragment enters the writer, failure
+or cancellation can return `OutcomeUnknownError` and a still-opening
+session; native recovery may have received a prefix. Local cancellation
+neither rolls it back nor automatically retries a new exchange. The caller
+can keep waiting with WaitOpen or terminate that session. This checkpoint
+has no live interruption-between-fragments acceptance.
+
+The previous session must be
 Lost, belong to the same Client and GlobalID and name the same filesystem
 label and rank at a different exact address.
 
@@ -344,10 +370,13 @@ release of all six caps to native `num_caps` 0; confirmed close; and
 Messenger resume of an idle and of an in-flight session (same native
 session and address, not blocklisted). See
 [the validation record](../integration/fixture/MDS_CEPHFS_VALIDATION.md).
-That record predates RECLAIM_CLIENT; since PR #55 the same check requires
+That record predates RECLAIM_CLIENT; the PR #55 checkpoint required
 `0x1c87ff`, observed in every `mds-cephfs*` row and in the CephFS-profile
 session of the `admit_required_reclaim_client` leaf
 ([MDS_SESSIONS_VALIDATION.md](../integration/fixture/MDS_SESSIONS_VALIDATION.md)).
+The MULTI_RECONNECT checkpoint declares `0x1c97ff`; its separate native split
+and required-feature admission boundaries are in
+[MDS_MULTI_RECONNECT_VALIDATION.md](../integration/fixture/MDS_MULTI_RECONNECT_VALIDATION.md).
 A separate live push acceptance (product `source-2`, both profiles, seven
 leaves) received and answered a dentry-lease REVOKE (the native rename
 completed only after the Go RELEASE), snapshot UPDATE/SPLIT/DESTROY pushes
@@ -520,7 +549,10 @@ A consumer that installs caps only from reply traces can see a cap GRANT for
 a replayed inode before that request's reply; `Arrival` orders them. Standby
 takeover and multiple ranks are covered by the ranks acceptance under
 Evidence, and completed-record answers, denial and a missed window by the
-completion acceptance there. Not exercised live: split reconnect messages,
+completion acceptance there. The selected native split reconnect profiles
+with the explicit message budget are recorded in
+[MDS_MULTI_RECONNECT_VALIDATION.md](../integration/fixture/MDS_MULTI_RECONNECT_VALIDATION.md).
+Not exercised live: connection loss between reconnect fragments,
 realm topologies beyond the root/directory data recipe, the GETATTR conversion,
 completed-record answers for other operations, a lost reply of an OPEN with
 O_CREAT and completed-flush deduplication after an ACK loss; cap-send error

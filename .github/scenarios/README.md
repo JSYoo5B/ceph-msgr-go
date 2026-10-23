@@ -47,6 +47,10 @@ fixture's owned plain pools, so the test also belongs to the broad legacy OSD
 selection. A second such row selects only `TestCephOSDSetChunkGoIntegration`,
 the Go-originated SET_CHUNK acceptance with native observation, on the same
 fixture and likewise without an opt-in parameter.
+Two `mds-cephfs-multi-reconnect` rows select only
+`TestCephMDSCephFSMultiReconnectIntegration`, reusing the completion opt-in
+for a fresh, isolated fixture in each selected MDS profile. Existing
+completion rows keep their original selector.
 One further `osd` row selects only `TestCephOSDCopyFromLateErrorIntegration`
 on the CRC/AES IPv4 host single-BlueStore legacy-v6 fixture. This owned daemon
 fault requires its exact exclusive selector; broad suites do not execute it.
@@ -61,7 +65,7 @@ in periodic main verification. The required-test gate binds it to
 cannot pass. The [selected native receipt](../../integration/fixture/MSGR_COMPRESSION_VALIDATION.md)
 records no negotiated compression and successful MON/OSD commands; it does
 not prove that negotiation frames were exchanged or compressed frames worked.
-The catalog has 79 native rows in total.
+The catalog has 81 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

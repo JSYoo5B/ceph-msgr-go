@@ -72,7 +72,7 @@ const (
 func MDSSessionClientFeatures() []byte { return slices.Clone(mds.ClientFeatures) }
 
 // MDSCephFSClientFeatures is the bitset an EnableCephFS session declares:
-// bits 0-10, 15 and 18-20 (see MDS_CEPHFS_CONTRACT.md).
+// bits 0-10, 12, 15 and 18-20 (see MDS_CEPHFS_CONTRACT.md).
 func MDSCephFSClientFeatures() []byte { return slices.Clone(mds.CephFSClientFeatures) }
 
 // MDSClientFeatures is the exact bitset this client declares in REQUEST_OPEN.

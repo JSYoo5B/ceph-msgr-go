@@ -38,8 +38,14 @@ type MDSReconnectCapFlush struct {
 // realms they belong to. The caller owns these values; native clients reset
 // cap sequence numbers before reconnecting.
 type MDSReconnectState struct {
-	Caps   []MDSCapReconnect
-	Realms []MDSRealmReconnect
+	// MaxMessageSize optionally bounds each MClientReconnect, including its
+	// message header, independently of bootstrap/receive MaxFrameSize. Zero
+	// uses MaxFrameSize; a nonzero value must be between 1 KiB and that
+	// limit. It does not change the bounds of Resubmit or PendingCapFlushes.
+	// The complete state is validated before any reconnect work is admitted.
+	MaxMessageSize uint32
+	Caps           []MDSCapReconnect
+	Realms         []MDSRealmReconnect
 	// PendingCapFlushes is sent in caller order after Resubmit and before
 	// the first MClientReconnect. Entries must be dirty UPDATE or FLUSHSNAP,
 	// name a nonzero inode, have distinct nonzero original flush TIDs, and
@@ -277,17 +283,40 @@ func resubmissions(previous *MDSSession, chosen []*MDSRequestCall) ([]resubmissi
 	return out, nil
 }
 
-// reconnectMessages splits the state into frame-sized MClientReconnect
-// messages: caps in inode order, all realms in the last message, "more" set
+// reconnectMessages splits the state into MClientReconnect messages within
+// the selected logical message budget: caps in inode order, all realms in the last message, "more" set
 // on every message but the last. Sizes follow the v5 data layout.
 func reconnectMessages(state MDSReconnectState, limit uint32) ([]msgr.MessageData, error) {
-	caps := slices.Clone(state.Caps)
-	slices.SortFunc(caps, func(a, b MDSCapReconnect) int { return cmp.Compare(a.Ino, b.Ino) })
+	// These are exchange-wide collection bounds, not per-fragment allowances.
+	// Refuse before cloning, sorting or materializing any encoded message.
+	if len(state.Caps) > mds.MaxReconnectCaps || len(state.Realms) > mds.MaxReconnectRealms {
+		return nil, fmt.Errorf("ceph: MDS reconnect state exceeds collection limits: %w", ErrLimitExceeded)
+	}
+	if state.MaxMessageSize != 0 {
+		if state.MaxMessageSize < 1024 || state.MaxMessageSize > limit {
+			return nil, fmt.Errorf("ceph: MDS reconnect message limit must be between 1 KiB and MaxFrameSize: %w", ErrLimitExceeded)
+		}
+		limit = state.MaxMessageSize
+	}
 	const envelope = 4 + 4 + 1 + 41 // cap count, realm count, more flag, message header
 	capSize := func(c MDSCapReconnect) uint64 { return 8 + 6 + 4 + uint64(len(c.Path)) + 36 + uint64(len(c.Flock)) + 8 }
 	realms := uint64(len(state.Realms)) * (6 + 24)
 	if envelope+realms > uint64(limit) {
-		return nil, fmt.Errorf("ceph: MDS reconnect realms exceed the frame limit: %w", ErrLimitExceeded)
+		return nil, fmt.Errorf("ceph: MDS reconnect realms exceed the message limit: %w", ErrLimitExceeded)
+	}
+	for _, c := range state.Caps {
+		if envelope+capSize(c) > uint64(limit) {
+			return nil, fmt.Errorf("ceph: MDS reconnect capability exceeds the message limit: %w", ErrLimitExceeded)
+		}
+	}
+	caps := slices.Clone(state.Caps)
+	slices.SortFunc(caps, func(a, b MDSCapReconnect) int { return cmp.Compare(a.Ino, b.Ino) })
+	// Native caps are one map keyed by inode across the entire exchange.
+	// Per-message codec checks cannot catch duplicates split across chunks.
+	for i := 1; i < len(caps); i++ {
+		if caps[i-1].Ino == caps[i].Ino {
+			return nil, fmt.Errorf("ceph: duplicate MDS reconnect inode: %w", errors.Join(ErrLimitExceeded, mds.ErrRequest))
+		}
 	}
 	var messages []msgr.MessageData
 	emit := func(chunk []MDSCapReconnect, realms []MDSRealmReconnect, more bool) error {
@@ -301,9 +330,6 @@ func reconnectMessages(state MDSReconnectState, limit uint32) ([]msgr.MessageDat
 	start, used := 0, uint64(envelope)
 	for i, c := range caps {
 		size := capSize(c)
-		if envelope+size > uint64(limit) {
-			return nil, fmt.Errorf("ceph: MDS reconnect capability exceeds the frame limit: %w", ErrLimitExceeded)
-		}
 		if used+size > uint64(limit) {
 			if err := emit(caps[start:i], nil, true); err != nil {
 				return nil, err

@@ -93,6 +93,8 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"10", token, "require-off"}, "require-off", nil},
 		{[]string{"10", token, "require-reclaim-on"}, "require-reclaim-on", nil},
 		{[]string{"10", token, "require-reclaim-off"}, "require-reclaim-off", nil},
+		{[]string{"10", token, "require-multi-on"}, "require-multi-on", nil},
+		{[]string{"10", token, "require-multi-off"}, "require-multi-off", nil},
 		{[]string{"10", token, "stale-on"}, "stale-on", nil},
 		{[]string{"10", token, "stale-off"}, "stale-off", nil},
 	} {
@@ -108,7 +110,7 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{"10", token, "observe", "042"}, {"10", token, "observe", "18446744073709551616"},
 		{"10", token, "evict"}, {"10", token, "evict", "42", "43"}, {"10", token, "refuse-on", "42"},
 		{"10", token, "fs", "set"}, {"10", token, "osd", "blocklist", "rm"}, {"10", token, "stale-on", "60"},
-		{"10", token, "require-reclaim-on", "reply_encoding"}, {"10", token, "require-charmap-on"}, {"10", token, "require-reclaim"},
+		{"10", token, "require-reclaim-on", "reply_encoding"}, {"10", token, "require-multi-on", "charmap"}, {"10", token, "require-charmap-on"}, {"10", token, "require-reclaim"},
 		{"0", token, "observe", "42"}, {"010", token, "observe", "42"}, {"-1", token, "observe", "42"},
 	} {
 		if _, _, err := parseMDSSessionsRequest(fields, token, 0); err == nil {
@@ -124,6 +126,8 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		"require-on": {"reply_encoding", "feature_9", "required_client_features"}, "require-off": {"reply_encoding", "feature_9", "required_client_features"},
 		"require-reclaim-on":  {"reclaim_client", "feature_10", "required_client_features_reclaim_client"},
 		"require-reclaim-off": {"reclaim_client", "feature_10", "required_client_features_reclaim_client"},
+		"require-multi-on":    {"multi_reconnect", "feature_12", "required_client_features_multi_reconnect"},
+		"require-multi-off":   {"multi_reconnect", "feature_12", "required_client_features_multi_reconnect"},
 	} {
 		if got, ok := mdsSessionsRequirementFor(action); !ok || got != want {
 			t.Fatal("required-feature toggle changed", action, got, ok)

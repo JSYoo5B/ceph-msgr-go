@@ -105,6 +105,7 @@ type mdsCephFSCompletionPlan struct {
 	Snapshot         string   `json:"snapshot"`
 	FencedPayloadHex string   `json:"fenced_payload_hex"`
 	ReconnectTimeout string   `json:"reconnect_timeout"`
+	SplitFiles       []string `json:"split_files"`
 }
 
 func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
@@ -115,12 +116,23 @@ func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
 		block = sha256.Sum256(block[:])
 	}
 	return mdsCephFSCompletionPlan{Directory: "ceph-msgr-completion-" + token, Children: slices.Clone(mdsCephFSCompletionChildren), Grandchildren: slices.Clone(mdsCephFSCompletionGrandchildren),
-		Snapshot: "completion-" + token[:8], FencedPayloadHex: hex.EncodeToString(payload[:mdsCephFSCompletionFencedBytes]), ReconnectTimeout: mdsCephFSCompletionWindow}
+		Snapshot: "completion-" + token[:8], FencedPayloadHex: hex.EncodeToString(payload[:mdsCephFSCompletionFencedBytes]), ReconnectTimeout: mdsCephFSCompletionWindow, SplitFiles: mdsCephFSMultiReconnectNames()}
+}
+
+// mdsCephFSMultiReconnectNames are actual owned files whose retained cap state
+// exceeds an 8 KiB fragment budget. Long legal names exercise real short paths; no fake
+// inode, cap or lock data is submitted to inflate reconnect state.
+func mdsCephFSMultiReconnectNames() []string {
+	names := make([]string, 32)
+	for i := range names {
+		names[i] = fmt.Sprintf("split-%03d-%s", i, strings.Repeat("s", 215))
+	}
+	return names
 }
 
 // targets lists every closed stat target.
 func (p mdsCephFSCompletionPlan) targets() []string {
-	return append(append(append([]string{"dir"}, p.Children...), p.Grandchildren...), "snapshot")
+	return append(append(append(append([]string{"dir"}, p.Children...), p.SplitFiles...), p.Grandchildren...), "snapshot")
 }
 
 // path maps a closed target to its absolute path in the owned filesystem.
@@ -134,7 +146,7 @@ func (p mdsCephFSCompletionPlan) path(target string) (string, error) {
 		return root, nil
 	case target == "snapshot":
 		return root + "/snap/.snap/" + p.Snapshot, nil
-	case slices.Contains(p.Children, target), slices.Contains(p.Grandchildren, target):
+	case slices.Contains(p.Children, target), slices.Contains(p.SplitFiles, target), slices.Contains(p.Grandchildren, target):
 		return root + "/" + target, nil
 	}
 	return "", errors.New("MDS CephFS completion target is not admitted")
@@ -230,10 +242,10 @@ func decodeMDSCephFSCompletionNative(action, path string, plan mdsCephFSCompleti
 	case "stat":
 		ok = result.Stat != nil && validMDSCephFSStat(*result.Stat) && result.Entries == nil && result.Written == 0
 	case "list":
-		ok = len(result.Entries) <= len(plan.Children) && result.Stat == nil
+		ok = len(result.Entries) <= len(plan.Children)+len(plan.SplitFiles) && result.Stat == nil
 		seen := map[string]bool{}
 		for _, entry := range result.Entries {
-			ok = ok && slices.Contains(plan.Children, entry.Name) && !seen[entry.Name] && entry.DIno != 0 && validMDSCephFSStat(entry.Stat) && entry.Stat.Exists
+			ok = ok && (slices.Contains(plan.Children, entry.Name) || slices.Contains(plan.SplitFiles, entry.Name)) && !seen[entry.Name] && entry.DIno != 0 && validMDSCephFSStat(entry.Stat) && entry.Stat.Exists
 			seen[entry.Name] = true
 		}
 	case "create-write":
@@ -396,7 +408,7 @@ var mdsCephFSCompletionLogMarkers = []string{
 func filterMDSCephFSCompletionLog(lines []string, gid uint64, nonce uint32) ([]string, int) {
 	client := "client." + strconv.FormatUint(gid, 10)
 	address := ":0/" + strconv.FormatUint(uint64(nonce), 10) + " "
-	messages := []string{"client_reply(", "client_caps(", "client_lease(", "client_session(", "client_snap(", "client_request("}
+	messages := []string{"client_reply(", "client_caps(", "client_lease(", "client_session(", "client_snap(", "client_request(", "client_reconnect("}
 	kept, dropped := []string{}, 0
 	for _, line := range lines {
 		match := false
@@ -420,6 +432,24 @@ func filterMDSCephFSCompletionLog(lines []string, gid uint64, nonce uint32) ([]s
 		kept = append(kept, line)
 	}
 	return kept, dropped
+}
+
+// filterMDSCephFSReconnectHandlers preserves source order and exact client
+// attribution. Handler lines directly record native MClientReconnect.more.
+func filterMDSCephFSReconnectHandlers(lines []string, gid uint64) []string {
+	prefix := "handle_client_reconnect client." + strconv.FormatUint(gid, 10)
+	var result []string
+	for _, line := range lines {
+		at := strings.Index(line, prefix)
+		if at < 0 {
+			continue
+		}
+		tail := strings.TrimSpace(line[at+len(prefix):])
+		if tail == "" || tail == "(more)" {
+			result = append(result, line)
+		}
+	}
+	return result
 }
 
 type mdsCephFSCompletionLog struct {
@@ -516,7 +546,7 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 		if action.gid, err = gid(args[0]); err != nil {
 			return 0, mdsCephFSCompletionAction{}, err
 		}
-	case "mds-log":
+	case "mds-log", "reconnect-log":
 		if len(args) != 2 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion log action takes a GlobalID and an address nonce")
 		}
@@ -1082,13 +1112,20 @@ func (c *fixtureCluster) mdsCephFSCompletionDaemonAct(ctx context.Context, id in
 		x.logMark = len(lines)
 		result.Log = &mdsCephFSCompletionLog{Mark: x.logMark, Total: len(lines), Lines: []string{}}
 		return nil
-	case "mds-log":
+	case "mds-log", "reconnect-log":
 		lines, err := c.mdsCephFSCompletionLogLines(ctx)
 		if err != nil {
 			return err
 		}
 		mark := min(x.logMark, len(lines))
-		kept, dropped := filterMDSCephFSCompletionLog(lines[mark:], action.gid, action.nonce)
+		selected := lines[mark:]
+		if action.name == "reconnect-log" {
+			// This read-only oracle keeps only this client's fragment handler
+			// lines before the general bounded filter. Large retained cap sets
+			// otherwise fill that filter with unrelated cap recovery details.
+			selected = filterMDSCephFSReconnectHandlers(selected, action.gid)
+		}
+		kept, dropped := filterMDSCephFSCompletionLog(selected, action.gid, action.nonce)
 		result.Log = &mdsCephFSCompletionLog{Mark: mark, Total: len(lines), Lines: kept, Dropped: dropped, GlobalID: action.gid, Nonce: action.nonce}
 		return nil
 	}

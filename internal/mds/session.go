@@ -57,13 +57,14 @@ var ClientFeatures = []byte{0xff, 0x05, 0, 0, 0, 0, 0, 0}
 
 // CephFSClientFeatures is declared by the CephFS metadata profile: bits 0-8,
 // REPLY_ENCODING (9: versioned InodeStat/DirStat/LeaseStat replies),
-// RECLAIM_CLIENT (10: as in ClientFeatures), ALTERNATE_NAME (15: alternate
+// RECLAIM_CLIENT (10: as in ClientFeatures), MULTI_RECONNECT (12: bounded
+// caller-supplied reconnect state split across v5 messages), ALTERNATE_NAME (15: alternate
 // names in requests and leases), 32BITS_RETRY_FWD (18: 32-bit retry/forward
 // request fields), NEW_SNAPREALM_INFO (19: SnapRealmInfoNew snap traces) and
 // HAS_OWNER_UIDGID (20: owner UID/GID in the v3 request head). Lazy wanted
-// caps, multi-reconnect, delegated inodes, metrics, notify-session-state,
+// caps, delegated inodes, metrics, notify-session-state,
 // getvxattr, client auth-cap checks, charmap and blockdiff stay withheld.
-var CephFSClientFeatures = []byte{0xff, 0x87, 0x1c, 0, 0, 0, 0, 0}
+var CephFSClientFeatures = []byte{0xff, 0x97, 0x1c, 0, 0, 0, 0, 0}
 
 // NoOldestClientTID is the native MClientSession default. The MDS ignores it
 // for completed-request trimming; no metadata request exists in this stage.

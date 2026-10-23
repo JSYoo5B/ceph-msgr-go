@@ -68,7 +68,7 @@ var metadataFiles = []string{
 	"mds-cephfs-target.json", "mds-cephfs-recovery-results.json", "mds-cephfs-push-results.json",
 	"mds-cephfs-ranks-oracle.json", "mds-cephfs-ranks-owned.json", "mds-cephfs-ranks-result.json", "mds-cephfs-ranks-results.json", "mds-cephfs-ranks-replay-results.json", "mds-cephfs-ranks-cleanup.json",
 	"mds-cephfs-completion-oracle.json", "mds-cephfs-completion-owned.json", "mds-cephfs-completion-result.json", "mds-cephfs-completion-target.json",
-	"mds-cephfs-completion-results.json", "mds-cephfs-completion-cleanup.json",
+	"mds-cephfs-completion-results.json", "mds-cephfs-multi-reconnect-results.json", "mds-cephfs-completion-cleanup.json",
 	"mds-cephfs-data-target.json", "mds-cephfs-data-oracle.json", "mds-cephfs-data-owned.json", "mds-cephfs-data-result.json", "mds-cephfs-data-results.json", "mds-cephfs-data-cleanup.json",
 	"osd-split-input.json", "osd-split-result.json", "osd-split-status.json", "osd-split-command.json", "osd-split-worker.log", "osd-split-results.json",
 	"osd-split-stale-input.json", "osd-split-stale-receipt.json",

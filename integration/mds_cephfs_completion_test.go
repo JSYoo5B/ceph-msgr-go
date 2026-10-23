@@ -38,6 +38,7 @@ type nativeMDSCephFSCompletionPlan struct {
 	Snapshot         string   `json:"snapshot"`
 	FencedPayloadHex string   `json:"fenced_payload_hex"`
 	ReconnectTimeout string   `json:"reconnect_timeout"`
+	SplitFiles       []string `json:"split_files"`
 }
 
 type nativeMDSCephFSCompletionOracle struct {

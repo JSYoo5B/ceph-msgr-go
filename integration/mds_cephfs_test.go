@@ -231,7 +231,7 @@ func (x *mdsCephFSControl) stat(ctx context.Context, target string) (nativeMDSCe
 func checkNativeCephFSSession(n *nativeMDSSession, identity string, metadata map[string]string) error {
 	declared := nativeFeatureBits(mds.CephFSClientFeatures)
 	if n == nil || n.State != "open" || n.AuthType != "client" || n.AuthID != strings.TrimPrefix(identity, "client.") || n.EntityType != "client" || n.Address == "" ||
-		n.ClientFeatures != declared || n.ClientFeatures != "0x00000000001c87ff" || n.MetricFlags != "0x0" || !maps.Equal(n.Metadata, metadata) {
+		n.ClientFeatures != declared || n.ClientFeatures != "0x00000000001c97ff" || n.MetricFlags != "0x0" || !maps.Equal(n.Metadata, metadata) {
 		return fmt.Errorf("native CephFS session differs from the declared client: %+v", n)
 	}
 	return nil
