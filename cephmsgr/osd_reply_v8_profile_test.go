@@ -43,7 +43,10 @@ func replicatedReplyV8ProfileOpenWithCache(t *testing.T, profile OSDProfile, cac
 		client, server := net.Pipe()
 		if endpoint != "192.0.2.1:6804" {
 			go mockDaemon(server, peerConfig{role: 1, release: 20, fsid: [16]byte{1}, services: cephx.ServiceAuth | cephx.ServiceMgr | cephx.ServiceOSD, payload: func(tag msgr.Tag, p []byte) []byte {
-				features := uint64(1 << 30)
+				features := uint64(0)
+				if profile.replicatedPG() {
+					features |= 1 << 30
+				}
 				if cachePools {
 					features |= osd.FeatureCachePool
 				}
