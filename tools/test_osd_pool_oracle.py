@@ -308,11 +308,12 @@ class FakeErasureRados:
     MON reports them, so the oracle's independent read-backs see real shapes.
     """
 
-    def __init__(self, existing_profiles=(), min_size=None, overwrites=True, rule_op="choose_indep", profile_override=None):
+    def __init__(self, existing_profiles=(), min_size=None, overwrites=True, rule_op="choose_indep", profile_override=None,
+                 nonprimary_override=None):
         self.profiles = {name: {"k": "2", "m": "1", "plugin": "isa", "crush-failure-domain": "osd"} for name in existing_profiles}
         self.pools, self.commands, self.last_status = [], [], ""
         self.min_size, self.overwrites, self.rule_op, self.profile_override = min_size, overwrites, rule_op, profile_override
-        self.removable = True
+        self.removable, self.optimized, self.nonprimary_override = True, False, nonprimary_override
         self.native = Mock()
         self.lib = Mock()
 
@@ -351,11 +352,16 @@ class FakeErasureRados:
         if prefix == "osd pool set":
             if command["var"] == "allow_ec_overwrites" and self.overwrites:
                 self.pools[0]["flags_names"] += ",ec_overwrites"
+            if command["var"] == "allow_ec_optimizations":
+                # Pinned enable_pool_ec_optimizations: data raw shards 1..k-1.
+                k = int(self.profiles[self.pools[0]["erasure_code_profile"]]["k"])
+                self.optimized = True
+                self.pools[0]["nonprimary_shards"] = self.nonprimary_override or "{" + ",".join(map(str, range(1, k))) + "}"
             return 0, b""
         if prefix == "osd pool get":
             if command["var"] == "allow_ec_overwrites":
                 return 0, json.dumps({"allow_ec_overwrites": self.overwrites}).encode()
-            return 0, json.dumps({"allow_ec_optimizations": False}).encode()
+            return 0, json.dumps({"allow_ec_optimizations": self.optimized}).encode()
         if prefix == "osd crush rule dump":
             return 0, json.dumps([{"rule_id": 2, "type": 3, "steps": [{"op": "take", "item_name": "default"},
                                                                         {"op": self.rule_op, "num": 0, "type": "osd"}, {"op": "emit"}]}]).encode()
@@ -396,7 +402,8 @@ class ErasureWidthTest(unittest.TestCase):
         self.assertFalse(any(c["prefix"] in ("osd erasure-code-profile set", "osd pool create") for c in rados.commands))
 
     def test_k2m2_inputs_are_closed(self):
-        for request in (dict(width="k2m2"), dict(width="k2m2", plugin="jerasure"), dict(width="k2m2", plugin="isa", optimized=True),
+        for request in (dict(width="k2m2"), dict(width="k2m2", plugin="jerasure"), dict(width="k2m2", plugin="jerasure", optimized=True),
+                        dict(width="k2m2", plugin="isa", optimized="yes"),
                         dict(width="k4m2", plugin="isa"), dict(width="", plugin="isa"), dict(width="k2m2", plugin="isa", erasure=False, size=3, min_size=2)):
             with self.subTest(request=request), self.assertRaises(ValueError):
                 create(FakeErasureRados(), **request)
@@ -416,6 +423,25 @@ class ErasureWidthTest(unittest.TestCase):
                 create(rados, width="k2m2", plugin="isa")
             # No step is retried after a failed check.
             self.assertLessEqual(sum(c["prefix"] == "osd erasure-code-profile set" for c in rados.commands), 1)
+
+    def test_optimized_k2m2_reads_back_the_pinned_nonprimary_shards(self):
+        rados = FakeErasureRados()
+        result = create(rados, width="k2m2", plugin="isa", optimized=True)
+        self.assertTrue(result["ec_optimized"])
+        self.assertEqual((result["size"], result["min_size"], result["nonprimary_shards"]), (4, 3, "{1}"))
+        steps = [c.get("var") for c in rados.commands if c["prefix"] == "osd pool set"]
+        self.assertEqual(steps, ["allow_ec_overwrites", "allow_ec_optimizations"])
+        self.assertEqual(oracle.ec_nonprimary_shards(2, True), {1})
+        self.assertEqual(oracle.ec_nonprimary_shards(4, True), {1, 2, 3})
+        self.assertEqual(oracle.ec_nonprimary_shards(2, False), set())
+
+    def test_optimized_k2m2_nonprimary_differences_fail(self):
+        for value in ("{}", "{2}", "{1,2}"):
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                create(FakeErasureRados(nonprimary_override=value), width="k2m2", plugin="isa", optimized=True)
+        # A nonoptimized pool must report no nonprimary shards either.
+        rados = FakeErasureRados()
+        self.assertEqual(create(rados, width="k2m2", plugin="isa")["nonprimary_shards"], "{}")
 
     def test_k2m1_keeps_its_profile_and_force_set(self):
         rados = FakeErasureRados()

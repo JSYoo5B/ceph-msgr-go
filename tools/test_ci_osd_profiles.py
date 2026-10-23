@@ -44,9 +44,9 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        # 63 original rows, 2 mgr-service, 1 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go,
+        # 63 original rows, 2 mgr-service, 2 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go,
         # 2 mds-cephfs-capsend and 1 native SET_CHUNK checkpoint.
-        self.assertEqual(len(self.rows), 71)
+        self.assertEqual(len(self.rows), 72)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one native-only test explicitly; the
         # original broad legacy rows keep their suite selection.
@@ -259,23 +259,33 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                 self.assertEqual(counts[name], 2)
                 self.assertEqual(observed[name], {("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")})
 
-    def test_four_osd_topology_selects_only_the_k2m2_erasure_baseline(self):
+    def test_four_osd_topology_selects_only_the_k2m2_erasure_scenarios(self):
         # The topology travels in the already-forwarded osd_replicas input, so
         # the trusted default-branch workflow needs no new parameter.
         self.assertIn("CEPH_MSGR_TEST_OSD_REPLICAS: ${{ matrix.osd_replicas || '1' }}", self.workflow)
         for row in self.rows:
             self.assertIn(row.get("osd_replicas", "1"), {"1", "3", "4"})
         rows = [row for row in self.rows if row.get("osd_replicas") == "4"]
-        self.assertEqual(rows, [{
-            "key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
-            "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8",
-            "test_run": "^TestCephOSDErasureK2M2Integration$",
-        }])
-        selector = re.compile(rows[0]["test_run"])
-        expected = "TestCephOSDErasureK2M2Integration"
-        self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
-        for other in ("TestCephOSDErasureIntegration", "TestCephOSDErasureOptimizedIntegration", expected + "Extended", "Prefix" + expected):
-            self.assertIsNone(selector.search(other))
+        base = {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
+                "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8"}
+        self.assertEqual(rows, [
+            dict(base, test_run="^TestCephOSDErasureK2M2Integration$"),
+            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$"),
+        ])
+        # Each row's selector must match the fixture's closed four-OSD list.
+        fixture = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
+        for row, expected in zip(rows, ({"TestCephOSDErasureK2M2Integration"},
+                                        {"TestCephOSDErasureOptimizedK2M2Integration", "TestCephOSDErasureOptimizedK2M2FailoverIntegration"})):
+            with self.subTest(test_run=row["test_run"]):
+                self.assertIn('"%s",' % row["test_run"], fixture)
+                selector = re.compile(row["test_run"])
+                self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
+                for name in expected:
+                    self.assertIsNone(selector.search(name + "Extended"))
+                    self.assertIsNone(selector.search("Prefix" + name))
+                for other in ("TestCephOSDErasureIntegration", "TestCephOSDErasureOptimizedIntegration",
+                              "TestCephOSDErasureOptimizedFailoverIntegration", "TestCephOSDErasureFailoverIntegration"):
+                    self.assertIsNone(selector.search(other))
 
     def test_set_chunk_row_selects_only_the_native_checkpoint(self):
         # The native-only SET_CHUNK checkpoint needs only the ordinary OSD

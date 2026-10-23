@@ -339,14 +339,14 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}
 	if p.osdTopology().erasureCapacity {
 		// The four-daemon topology exists only for the bounded k=2,m=2
-		// erasure-width baseline. The fixture's ordinary pools keep the
+		// erasure-width scenarios. The fixture's ordinary pools keep the
 		// three-replica policy; broad OSD selections stay on topology "3".
-		selected = osdErasureWidthSelector
+		selected = osdErasureWidthSelectors[0]
 		if p.osd != "1" || (p.osdProfile != "legacy-v6" && p.osdProfile != "replicated-pg-v8") || p.osdSoak != "" || p.monFreeze != "" ||
 			p.osdCachePools != "0" || p.mgrService != "0" || p.mdsFresh != "0" || p.rbdBase != "0" ||
 			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.u64XattrOracle != "" || p.writeSameOracle != "" ||
-			p.testRun != "" && p.testRun != selected {
-			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires its exclusive selector %s, BlueStore and the legacy-v6 or replicated-pg-v8 profile", selected)
+			p.testRun != "" && !slices.Contains(osdErasureWidthSelectors, p.testRun) {
+			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires one of its exclusive selectors %v, BlueStore and the legacy-v6 or replicated-pg-v8 profile", osdErasureWidthSelectors)
 		}
 	}
 	if p.testRun == "" {
@@ -355,8 +355,13 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	return p, nil
 }
 
-// osdErasureWidthSelector is the only test the four-OSD topology admits.
-const osdErasureWidthSelector = "^TestCephOSDErasureK2M2Integration$"
+// osdErasureWidthSelectors are the only selections the four-OSD topology
+// admits: the nonoptimized k=2,m=2 baseline (the default), and the optimized
+// k=2,m=2 baseline with its failover phases.
+var osdErasureWidthSelectors = []string{
+	"^TestCephOSDErasureK2M2Integration$",
+	"^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$",
+}
 
 // osdTopology is one closed OSD fixture shape. Daemon capacity and the
 // replication policy of the fixture's own replicated pools are separate

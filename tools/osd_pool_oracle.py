@@ -7,7 +7,8 @@ and creates at most two pools named ceph-msgr-owned-pool-1/-2 so that tests can
 observe cross-pool, namespace and pool-snapshot behavior independently of the
 Go client. create also makes an erasure-coded pool of a closed width: k2m1
 (profile ceph-msgr-owned-ec) or k2m2 (its own ceph-msgr-owned-ec-k2m2 profile,
-isa, never overwritten, no optimizations); cleanup removes both profiles.
+isa, never overwritten, optionally optimized with its nonprimary shards read
+back); cleanup removes both profiles.
 Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
@@ -166,15 +167,27 @@ EC_PROFILE = "ceph-msgr-owned-ec"
 # Closed erasure-code widths. k2m1 keeps its original profile name, plugin
 # choices and force-set behaviour. A wider width owns a distinct profile that
 # is never force-overwritten, so it cannot change the profile another owned
-# pool still uses; it starts without optimizations and names its plugin.
+# pool still uses; it names its plugin and, when optimized, its
+# nonprimary_shards are read back against the pinned derivation.
 EC_WIDTHS = {
     "k2m1": {"profile": EC_PROFILE, "k": 2, "m": 1, "plugins": ("", "jerasure", "isa"), "optimized": True, "force": True},
-    "k2m2": {"profile": "ceph-msgr-owned-ec-k2m2", "k": 2, "m": 2, "plugins": ("isa",), "optimized": False, "force": False},
+    "k2m2": {"profile": "ceph-msgr-owned-ec-k2m2", "k": 2, "m": 2, "plugins": ("isa",), "optimized": True, "force": False},
 }
 EC_PROFILES = tuple(width["profile"] for width in EC_WIDTHS.values())
 # Pinned OSDMonitor::prepare_pool_size: an EC pool's MON-derived min_size.
 def ec_min_size(k, m):
     return k + min(1, m - 1)
+
+
+# Pinned OSDMonitor::enable_pool_ec_optimizations: the data raw shards other
+# than the first may not be primary. isa defines no chunk mapping, so raw shard
+# and shard are equal; parity shards and shard 0 stay primary-eligible.
+def ec_nonprimary_shards(k, optimized):
+    return set(range(1, k)) if optimized else set()
+
+
+def parse_nonprimary(value):
+    return {int(n) for n in re.findall(r"[0-9]+", str(value or ""))}
 
 
 def ec_profile_get(rados, cluster, name):
@@ -284,6 +297,9 @@ def mode_create(rados, cluster, request, out):
         if not width["force"] and (overwrites is not True or pool.get("erasure_code_profile") != width["profile"]
                                    or "ec_overwrites" not in pool.get("flags_names", "").split(",")):
             raise RuntimeError("native pool overwrite flag or profile differs: %r %r" % (overwrites, pool.get("erasure_code_profile")))
+        if not width["force"] and parse_nonprimary(pool.get("nonprimary_shards")) != ec_nonprimary_shards(width["k"], optimized):
+            raise RuntimeError("native pool nonprimary_shards %r differ from the pinned derivation for optimized=%r"
+                               % (pool.get("nonprimary_shards"), optimized))
     rule = None
     code, text = rados.mon(cluster, {"prefix": "osd crush rule dump", "format": "json"})
     if code == 0:
