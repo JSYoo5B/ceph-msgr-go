@@ -45,9 +45,39 @@ re-derive the shard from the new map along with the primary. The same
 object cases passed on a non-optimized isa k=2,m=2 pool (size 4, min_size 3)
 over four OSDs in one replicated-PG profile, without faults, and on an
 optimized isa k=2,m=2 pool in the same profile, together with PG listing, a
-degraded read and primary failover. Other opcodes, recovery traffic, other EC
-profiles, degraded writes and snapshots at k=2,m=2 and any epoch change
-around an in-flight EC mutation are unverified.
+degraded read and primary failover. On the optimized k=2,m=2 pool a
+self-managed snapshot and a write while one shard's OSD was down (recovered
+after its restart) were also verified. Other opcodes, recovery traffic and
+other EC profiles are unverified.
+
+## In-flight EC mutations across an epoch change
+
+An EC mutation's outcome follows the same rule as any OSD request: a reply
+is a known result, and a request whose frame was handed to the connection
+but that got no reply ends with `OutcomeUnknownError`. The returned
+`OSDReply.Submission` keeps the transaction ID, global ID, incarnation,
+map epoch and placement (actual shard, primary-first facts) of that one
+send. The client neither resends nor reconnects; it does not learn the new
+primary, shard or pg_temp. The caller decides from its own observation
+whether the first attempt applied. If it resends, it routes by its new map
+and may pass `Resubmit` with the original submission so the replacement
+primary can answer from the PG log. Duplicate detection covers only
+requests still in that log and is not an exactly-once guarantee.
+
+Observed live on the optimized isa k=2,m=2 pool (one replicated-PG
+profile). An APPEND+SETXATTR was in flight when the shard-0 primary was
+SIGKILLed and a parity shard's OSD took over under a primary-first pg_temp.
+Two cases were checked. In one, the reply was withheld after the mutation
+was applied. In the other, the request never left the client. Both ended
+with `OutcomeUnknownError` and the original identity, and no further OSD
+connection was opened. The native observer saw exactly one application in
+the first case and none in the second. Only in the second case did the
+caller resubmit the same operations under the original transaction to the
+new primary (wire shard 1 for actual parity shard 2). The mutation was
+then applied once. `OSDSubmission.Attempt` stays 0 on that resubmission;
+the reply's `RetryAttempt` echoes the attempt. Not verified: a request held
+at the primary when it dies, a resubmission after an applied mutation on an
+EC pool, and a signed refusal across the epoch change.
 
 ## Optimized EC pools (`allow_ec_optimizations`)
 
@@ -87,6 +117,7 @@ primary-eligible shards first; the fixture oracle does the same.
 The writer-side backoff gate cannot undo the renumbering from the encoded
 request, so a BLOCK on an EC PG gates requests for its object range on every
 shard of that PG on the connection (over-refusal, never a bypass). Self-managed snapshots, watch/notify and a write during one
-shard's absence (later recovered) were verified.
+shard's absence (later recovered) were verified on optimized k=2,m=1 and
+k=2,m=2 pools.
 
 Verification: [OSD_ERASURE_VALIDATION.md](../../integration/fixture/OSD_ERASURE_VALIDATION.md).
