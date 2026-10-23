@@ -220,6 +220,15 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	if err != nil || afterState == nil || !afterState.Running || afterState.StartedAt == beforeState.StartedAt {
 		t.Fatal("gateway process generation did not change", err)
 	}
+	// Docker can assign a new ephemeral published port to the same container
+	// after Stop/Start. Resolve the owned gateway's current listener before
+	// the single post-restart GET instead of retaining the stale endpoint.
+	restartedEndpoint, err := gateway.S3Endpoint(ctx)
+	if err != nil {
+		t.Fatal("resolve restarted owned gateway endpoint:", err)
+	}
+	endpointChanged := restartedEndpoint != s3.endpoint
+	s3.endpoint = restartedEndpoint
 	// Restart is followed by read-only observations, not a replayed PUT.
 	if read := request(http.MethodGet, path, nil, http.StatusOK); !bytes.Equal(read, payload) {
 		t.Fatal("S3 object bytes changed across gateway restart")
@@ -258,7 +267,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	if err := gateway.RemoveUser(ctx, user); err != nil {
 		t.Fatal("remove owned user:", err)
 	}
-	t.Logf("RGW_NATIVE_CHECKPOINT image=%s source=7f793731f1b39eb4f465e960113d2363c311b964 mode=secure key=aes256k bytes=%d sha256=%s native_index_shard=%s before=%+v after=%+v put_reception=%+v delete_reception=%+v object_index_user_cleanup=confirmed", rgwNativeImage, len(payload), rgwNativeHash(payload), before, generation, afterGeneration, received, deleted)
+	t.Logf("RGW_NATIVE_CHECKPOINT image=%s source=7f793731f1b39eb4f465e960113d2363c311b964 mode=secure key=aes256k bytes=%d sha256=%s native_index_shard=%s mapped_endpoint_changed=%t before=%+v after=%+v put_reception=%+v delete_reception=%+v object_index_user_cleanup=confirmed", rgwNativeImage, len(payload), rgwNativeHash(payload), before, endpointChanged, generation, afterGeneration, received, deleted)
 }
 
 func rgwNativeExec(t *testing.T, parent context.Context, container testcontainers.Container, argv ...string) []byte {
