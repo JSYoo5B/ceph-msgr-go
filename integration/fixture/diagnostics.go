@@ -28,7 +28,7 @@ var metadataFiles = []string{
 	"mapped-oracle-status.json", "mapped-oracle-mon.json", "mapped-oracle-mgr.json", "mapped-oracle-pg.json", "mapped-oracle-summary.json",
 	"tell-oracle-mon.json", "tell-oracle-mgr.json", "tell-oracle-mgr-map.json", "named-mon-b.json",
 	"mon-ping-native-a.json", "mon-ping-native-b.json", "mon-ping-native-c.json", "mon-ping-results.json",
-	"named-mgr-oracle-before.json", "named-mgr-oracle-after.json", "named-mgr-results.json", "mgr-service-recovery.json", "mgr-service-close.json", "mgr-service-metadata.json", "mgr-service-comparison.json", "mgr-service-unavailable.json",
+	"named-mgr-oracle-before.json", "named-mgr-oracle-after.json", "named-mgr-results.json", "mgr-service-recovery.json", "mgr-service-close.json", "mgr-service-metadata.json", "mgr-service-comparison.json", "mgr-service-unavailable.json", "mgr-service-config-native.json", "mgr-service-configuration.json",
 	"log-oracle.json", "log-oracle-sentinel.txt", "config-oracle.json", "config-oracle-history.jsonl", "hostname-config-oracle.json",
 	"command-oracle-mon.json", "command-oracle-mgr.json", "command-oracle-summary.json",
 	"mon-command-outcome-native.jsonl", "mon-command-outcome-identity.json",
