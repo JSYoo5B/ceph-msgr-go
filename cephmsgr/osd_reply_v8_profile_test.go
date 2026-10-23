@@ -59,6 +59,9 @@ func replicatedReplyV8ProfileOpenWithCache(t *testing.T, profile OSDProfile, cac
 			defer server.Close()
 			r, w, err := mockAuthenticate(server, peerConfig{role: 4, payload: func(tag msgr.Tag, p []byte) []byte {
 				features := uint64(1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<57 | 1<<58)
+				if !profile.replicatedPG() {
+					features = 0
+				}
 				if cachePools {
 					features |= osd.FeatureCachePool
 				}
