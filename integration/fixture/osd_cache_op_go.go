@@ -17,7 +17,7 @@ const (
 	cacheOpGoAction   = "go-ops"
 )
 
-var cacheOpGoLabels = map[string]bool{"after-evict-dirty": true, "pinned": true, "unpinned": true, "flushed": true, "try-flushed": true, "evicted": true, "absent-final": true}
+var cacheOpGoLabels = map[string]bool{"after-evict-dirty": true, "pinned": true, "unpinned": true, "flushed": true, "try-flushed": true, "evicted": true, "absent-final": true, "clean-flush": true, "clean-try-flush": true, "absent-flush": true, "absent-try-flush": true, "absent-evict": true}
 
 func cacheOpGoControl(fields []string) (phase, label string, ok bool) {
 	switch {

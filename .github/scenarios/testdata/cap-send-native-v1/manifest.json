@@ -1,0 +1,88 @@
+{
+  "attempt": 1,
+  "configured_image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "controller_sha": "b537120efe464d9f21f76fe3fd9f5152cd91e4fc",
+  "execution_source": "linux-runner",
+  "files": [
+    {
+      "name": "cap-send.json",
+      "sha256": "3b676f8eed435e654119159f5fc265b49c007cbb38b74669f8baf7d63b925fc9",
+      "size": 1935
+    },
+    {
+      "name": "cleanup.json",
+      "sha256": "a088dc18786c5241957353b9c2a199950216d2592e4d177745878c0ed2c16db7",
+      "size": 579
+    },
+    {
+      "name": "runtime.json",
+      "sha256": "8bed16e65c5093913d27788a4e1781abcab64c663b6d61dafd1d7ecdd60b430f",
+      "size": 495
+    },
+    {
+      "name": "tests.json",
+      "sha256": "0a4c57d5a75645733b0c8651f57463a86ca51ed609f934433ff749a1e8989759",
+      "size": 339
+    }
+  ],
+  "kind": "native-success",
+  "observed": {
+    "architecture": "amd64",
+    "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+    "fixture_reported_profile": {
+      "family": "4",
+      "key": "aes",
+      "mode": "crc",
+      "osd": "1",
+      "osd_profile": "legacy-v6",
+      "osd_replicas": "1",
+      "osd_store": "bluestore",
+      "runtime": "host",
+      "service": "aes"
+    },
+    "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+    "provider_version": "v0.3.0"
+  },
+  "profile": {
+    "auth_epoch": "0",
+    "expiry": "0",
+    "family": "4",
+    "idle": "0",
+    "key": "aes",
+    "managers": "2",
+    "mapped": "0",
+    "mds_cephfs": "0",
+    "mds_cephfs_completion": "0",
+    "mds_cephfs_data": "1",
+    "mds_cephfs_ranks": "0",
+    "mds_cephfs_ranks_replay": "0",
+    "mds_commands": "0",
+    "mds_fresh": "1",
+    "mds_sessions": "0",
+    "mgr_service": "0",
+    "mode": "crc",
+    "mode_rejection": "",
+    "mon_ping": "0",
+    "native_mgr_preparation": "0",
+    "osd": "1",
+    "osd_cache_pools": "0",
+    "osd_profile": "legacy-v6",
+    "osd_replicas": "1",
+    "osd_soak": "",
+    "osd_store": "bluestore",
+    "race": "0",
+    "rbd": "0",
+    "release": "20.2.4",
+    "runtime": "host",
+    "service": "aes",
+    "short_tickets": "0",
+    "stress": "",
+    "test_run": "^TestCephMDSCephFSCapSendRecoveryIntegration$"
+  },
+  "run_id": 2026102301,
+  "scenario": "mds-cephfs-capsend.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscapsendrecovery",
+  "schema_version": 1,
+  "selector": "^TestCephMDSCephFSCapSendRecoveryIntegration$",
+  "tested_sha": "b537120efe464d9f21f76fe3fd9f5152cd91e4fc",
+  "total_bytes": 3348
+}
