@@ -1135,21 +1135,23 @@ func (a *cephfsCapAgent) markDirtyLocked(ino, size uint64, mtime cephmsgr.MDSTim
 	if c == nil || c.CapID == 0 || c.Released || c.Issued&cephCapFileWR == 0 || buffered && (c.Issued&cephCapFileBuffer == 0 || writeBack == nil) {
 		return fmt.Errorf("inode %d does not hold the caps for this write", ino)
 	}
+	// Admission comes before any cap or inode state changes: a rejected write
+	// publishes no size, time or change attribute.
+	d := a.dirty[ino]
+	if d != nil && d.Latch != nil {
+		return fmt.Errorf("inode %d has latched buffered data awaiting an explicit decision", ino)
+	}
+	if d != nil && (d.Buffered || d.writing) {
+		return fmt.Errorf("inode %d still has buffered data", ino)
+	}
 	if size > c.Size {
 		c.Size = size
 	}
 	c.MTime, c.CTime = mtime, mtime
 	c.ChangeAttr++
-	d := a.dirty[ino]
 	if d == nil {
 		d = &cephfsDirtyFile{Ino: ino}
 		a.dirty[ino] = d
-	}
-	if d.Latch != nil {
-		return fmt.Errorf("inode %d has latched buffered data awaiting an explicit decision", ino)
-	}
-	if d.Buffered || d.writing {
-		return fmt.Errorf("inode %d still has buffered data", ino)
 	}
 	d.Dirty |= cephCapFileWR
 	d.Follows, d.Buffered, d.Hold, d.WriteBack = follows, buffered, hold, writeBack
