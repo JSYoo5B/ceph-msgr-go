@@ -55,6 +55,12 @@ value), a non-nil map replaces it.
 3. While open, the client sends an empty report at the period the MGR configured
    (the pinned `mgr_service_beacon_grace` drops a silent service daemon; period 0
    means no reports), unless `DisableBeacon` leaves liveness to `Report`.
+   Every subsequent MMgrConfigure replaces the snapshot and resets the timer
+   to the latest period, including a threshold-only change. A report already
+   admitted before a push can still be sent; Configure is not a transport
+   barrier. A zero period suppresses further automatic reports after that
+   transition settles. Reconfiguration never enables a disabled beacon loop;
+   explicit Report remains available.
    `UpdateMetadata` and `Report` return when the message is queued: the MGR sends
    no reply, so applied-versus-lost stays unknown if the session later fails.
 4. The handle fails, and never reconnects by itself, when the connection ends,
@@ -75,7 +81,10 @@ defined for registration itself.
 Source-derived byte vectors for every message (`internal/msgr/mgr_service_test.go`),
 and unit and race tests against a synthetic MGR that shares the Go frame codec
 (`cephmsgr/mgr_service_test.go`): open/update/report/close bytes, configure
-handling, duplicate and bound refusals, unconfirmed open and close, concurrent
+handling, repeated 1 -> 0 -> 2 periods, threshold-only and rapid consecutive
+pushes, timer suppression/resumption, disabled automatic beacons and shutdown
+(`cephmsgr/mgr_service_reconfigure_test.go`); duplicate and bound refusals,
+unconfirmed open and close, concurrent
 `Close` callers, connection loss, failover, a service beside ordinary MGR
 commands, and client close. These source-derived and synthetic checks are
 **not** native encoder vectors and **not** live daemon evidence. Separately,
