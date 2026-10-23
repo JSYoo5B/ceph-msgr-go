@@ -175,7 +175,7 @@ for path in sorted(set(paths))[:8]:
                 continue
             value=query(path,name)['messenger']
             identity=value['my_name']
-            if identity['type']=='client' and isinstance(identity['num'],int) and identity['num']>0 and isinstance(value['nonce'],int) and value['nonce']>0:
+            if identity['type']=='client' and isinstance(identity['num'],int) and 0<identity['num']<2**63 and isinstance(value['nonce'],int) and value['nonce']>0:
                 client='client.'+str(identity['num'])
                 found[client]=dict(client=client,nonce=value['nonce'])
     except (ValueError,KeyError,TypeError):

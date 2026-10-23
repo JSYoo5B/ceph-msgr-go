@@ -151,7 +151,6 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	}
 	request(http.MethodPut, "/"+bucket, nil, http.StatusOK)
 	bucketInfo := rgwNativeBucket(t, ctx, gateway, bucket)
-	generation := rgwNativeGeneration(t, ctx, gateway)
 	payload := make([]byte, 1031)
 	for i := range payload {
 		payload[i] = byte(i*13 + 7)
@@ -160,6 +159,10 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	// snapshot. RGW uses client.admin too; the gateway's authenticated numeric
 	// identity, not the CephX entity name, attributes these received requests.
 	request(http.MethodPut, path, payload, http.StatusOK)
+	// RGW connects additional librados handles lazily. Sample the same
+	// process after PUT so its newly authenticated client IDs are included.
+	// This local socket query does not submit an OSD oracle operation.
+	generation := rgwNativeGeneration(t, ctx, gateway)
 	history := rgwNativeExec(t, ctx, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
 	pools, err := cluster.Pools(ctx)
 	if err != nil {
@@ -217,6 +220,10 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	if err != nil || afterState == nil || !afterState.Running || afterState.StartedAt == beforeState.StartedAt {
 		t.Fatal("gateway process generation did not change", err)
 	}
+	// Restart is followed by read-only observations, not a replayed PUT.
+	if read := request(http.MethodGet, path, nil, http.StatusOK); !bytes.Equal(read, payload) {
+		t.Fatal("S3 object bytes changed across gateway restart")
+	}
 	afterGeneration := rgwNativeGeneration(t, ctx, gateway)
 	for _, beforeClient := range generation {
 		for _, afterClient := range afterGeneration {
@@ -225,16 +232,12 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 			}
 		}
 	}
-	// Restart is followed by read-only observations, not a replayed PUT.
-	if read := request(http.MethodGet, path, nil, http.StatusOK); !bytes.Equal(read, payload) {
-		t.Fatal("S3 object bytes changed across gateway restart")
-	}
 	after := rgwNativeOracle(t, ctx, control, dataPool, indexPool, head, indexObjects, key, payload)
 	if before != after {
 		t.Fatal("native object/index postconditions changed across gateway restart")
 	}
 	request(http.MethodDelete, path, nil, http.StatusNoContent)
-	deleted := rgwNativeReceipt(t, ctx, cluster, afterGeneration, objects)
+	deleted := rgwNativeReceipt(t, ctx, cluster, rgwNativeGeneration(t, ctx, gateway), objects)
 	remove := false
 	for _, op := range deleted {
 		remove = remove || strings.Contains(op.Description, ":"+head+":") && strings.Contains(op.Description, "delete")
