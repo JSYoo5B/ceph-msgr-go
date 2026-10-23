@@ -33,7 +33,9 @@ OBJECTS = (FLUSH, TRY, ABSENT)
 # Closed observation labels and the head each one reads. try-flushed also
 # polls is_dirty within a bounded budget, as the native-only checkpoint does.
 LABELS = {"after-evict-dirty": FLUSH, "pinned": FLUSH, "unpinned": FLUSH, "flushed": FLUSH,
-          "try-flushed": TRY, "evicted": FLUSH, "absent-final": ABSENT}
+          "try-flushed": TRY, "evicted": FLUSH, "absent-final": ABSENT,
+          "clean-flush": FLUSH, "clean-try-flush": FLUSH,
+          "absent-flush": ABSENT, "absent-try-flush": ABSENT, "absent-evict": ABSENT}
 TRY_POLLS, TRY_INTERVAL = ops.TRY_POLLS, ops.TRY_INTERVAL
 PHASES = ("prepare", "observe", "finish")
 
