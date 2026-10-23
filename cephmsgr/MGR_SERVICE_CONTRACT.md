@@ -160,6 +160,15 @@ explicit reuse of a released identity. The
 [unavailable-MGR record](../integration/fixture/MGR_SERVICE_UNAVAILABLE_VALIDATION.md)
 separates that controlled map state from zero-daemon cold bootstrap.
 
+The required `configuration_changes` child checks the pinned CLIENT broadcast
+boundary under runtime period/threshold changes: the existing registration
+retains its initial Configure, while distinct explicit registrations receive
+current values. Native beacon samples retain caller status/task status and
+service identity; runtime override presence/effective values are restored.
+The [configuration record](../integration/fixture/MGR_SERVICE_CONFIGURATION_VALIDATION.md)
+separates synthetic repeated pushes, the first failed native expectation and
+corrected native observations.
+
 ## Not verified
 
 - Native vectors for nonempty daemon extensions and older configure versions

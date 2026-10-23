@@ -1,0 +1,620 @@
+{
+  "schema_version": 1,
+  "source_commit": "98b0b27b305d45cdaba8193b9b66e83057958b1f",
+  "ceph_source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "platform": "Linux/amd64",
+  "evidence_class": "direct native selected profiles",
+  "first_failed_expectation": {
+    "source_commit": "cc3204f92ce1e6b8e347b1cbfeff4d5240fce175",
+    "profile": "CRC/AES/IPv4/host",
+    "runner_seconds": 343.561,
+    "parent_seconds": 280.05,
+    "configuration_child_seconds": 25.51,
+    "parent_result": "FAIL",
+    "expected_period_seconds": 2,
+    "observed_existing_period_seconds": 1,
+    "observed_existing_threshold": 5,
+    "runtime_restored": true,
+    "cleanup": {
+      "fixture_container_count": 8,
+      "fixture_containers_absent": true,
+      "reaper_count": 1,
+      "reapers_absent": true,
+      "network_absent": true
+    }
+  },
+  "profiles": [
+    {
+      "profile": "crc",
+      "runtime": {
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "architecture": "amd64",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "runtime": "host",
+        "key_type": "aes",
+        "service_cipher": "aes",
+        "connection_mode": "crc",
+        "ip_family": "4",
+        "osd_store": "memstore",
+        "osd_replicas": "1",
+        "osd_profile": "legacy-v6"
+      },
+      "runner_seconds": 341.438,
+      "parent_seconds": 286.59,
+      "configuration_child_seconds": 38.73,
+      "parent_result": "PASS",
+      "required_children_result": "PASS, none skipped",
+      "configuration": {
+        "manager": "a",
+        "manager_gid": 14525,
+        "client_gid": 4665,
+        "start_epoch": 2,
+        "baseline": {
+          "mgr_stats_period": {
+            "effective": "1",
+            "override_present": false
+          },
+          "mgr_stats_period_autotune": {
+            "effective": "true",
+            "override_present": false
+          },
+          "mgr_stats_threshold": {
+            "effective": "5",
+            "override_present": false
+          }
+        },
+        "phases": [
+          {
+            "name": "initial-one-second",
+            "period_seconds": 1,
+            "threshold": 5,
+            "native": {
+              "mgr_stats_period": {
+                "effective": "1",
+                "override": "1",
+                "override_present": true
+              },
+              "mgr_stats_period_autotune": {
+                "effective": "false",
+                "override": "false",
+                "override_present": true
+              },
+              "mgr_stats_threshold": {
+                "effective": "5",
+                "override_present": false
+              }
+            },
+            "samples": [
+              {
+                "last_beacon": "2026-10-23T08:41:29.441876+0000",
+                "elapsed_seconds": 0.201737679,
+                "dump_epoch": 3
+              },
+              {
+                "last_beacon": "2026-10-23T08:41:30.442733+0000",
+                "elapsed_seconds": 0.403170301,
+                "dump_epoch": 3
+              },
+              {
+                "last_beacon": "2026-10-23T08:41:31.443799+0000",
+                "elapsed_seconds": 1.604555665,
+                "dump_epoch": 3
+              }
+            ],
+            "existing_period_seconds": 1,
+            "existing_threshold": 5
+          },
+          {
+            "name": "two-seconds",
+            "period_seconds": 2,
+            "threshold": 5,
+            "native": {
+              "mgr_stats_period": {
+                "effective": "2",
+                "override": "2",
+                "override_present": true
+              },
+              "mgr_stats_period_autotune": {
+                "effective": "false",
+                "override": "false",
+                "override_present": true
+              },
+              "mgr_stats_threshold": {
+                "effective": "5",
+                "override_present": false
+              }
+            },
+            "samples": [
+              {
+                "last_beacon": "2026-10-23T08:41:34.445974+0000",
+                "elapsed_seconds": 4.506537144,
+                "dump_epoch": 3
+              },
+              {
+                "last_beacon": "2026-10-23T08:41:35.447012+0000",
+                "elapsed_seconds": 5.708000377,
+                "dump_epoch": 3
+              },
+              {
+                "last_beacon": "2026-10-23T08:41:36.447982+0000",
+                "elapsed_seconds": 6.909351395,
+                "dump_epoch": 3
+              }
+            ],
+            "existing_period_seconds": 1,
+            "existing_threshold": 5,
+            "new_session": {
+              "period_seconds": 2,
+              "threshold": 5,
+              "removed": true,
+              "gid": 4665,
+              "start_epoch": 4
+            }
+          },
+          {
+            "name": "threshold-only",
+            "period_seconds": 2,
+            "threshold": 6,
+            "native": {
+              "mgr_stats_period": {
+                "effective": "2",
+                "override": "2",
+                "override_present": true
+              },
+              "mgr_stats_period_autotune": {
+                "effective": "false",
+                "override": "false",
+                "override_present": true
+              },
+              "mgr_stats_threshold": {
+                "effective": "6",
+                "override": "6",
+                "override_present": true
+              }
+            },
+            "samples": [
+              {
+                "last_beacon": "2026-10-23T08:41:43.452731+0000",
+                "elapsed_seconds": 14.215725208,
+                "dump_epoch": 5
+              },
+              {
+                "last_beacon": "2026-10-23T08:41:44.453700+0000",
+                "elapsed_seconds": 14.417037712,
+                "dump_epoch": 5
+              },
+              {
+                "last_beacon": "2026-10-23T08:41:45.454676+0000",
+                "elapsed_seconds": 15.618381447,
+                "dump_epoch": 5
+              }
+            ],
+            "existing_period_seconds": 1,
+            "existing_threshold": 5,
+            "new_session": {
+              "period_seconds": 2,
+              "threshold": 6,
+              "removed": true,
+              "gid": 4665,
+              "start_epoch": 6
+            }
+          },
+          {
+            "name": "one-second-again",
+            "period_seconds": 1,
+            "threshold": 6,
+            "native": {
+              "mgr_stats_period": {
+                "effective": "1",
+                "override": "1",
+                "override_present": true
+              },
+              "mgr_stats_period_autotune": {
+                "effective": "false",
+                "override": "false",
+                "override_present": true
+              },
+              "mgr_stats_threshold": {
+                "effective": "6",
+                "override": "6",
+                "override_present": true
+              }
+            },
+            "samples": [
+              {
+                "last_beacon": "2026-10-23T08:41:51.459170+0000",
+                "elapsed_seconds": 21.924507457,
+                "dump_epoch": 7
+              },
+              {
+                "last_beacon": "2026-10-23T08:41:52.460218+0000",
+                "elapsed_seconds": 23.126117518,
+                "dump_epoch": 7
+              },
+              {
+                "last_beacon": "2026-10-23T08:41:53.460978+0000",
+                "elapsed_seconds": 24.32701293,
+                "dump_epoch": 7
+              }
+            ],
+            "existing_period_seconds": 1,
+            "existing_threshold": 5,
+            "new_session": {
+              "period_seconds": 1,
+              "threshold": 6,
+              "removed": true,
+              "gid": 4665,
+              "start_epoch": 8
+            }
+          }
+        ],
+        "restored": true
+      },
+      "restored_native_configuration": {
+        "mgr_stats_period": {
+          "effective": "1",
+          "override_present": false
+        },
+        "mgr_stats_period_autotune": {
+          "effective": "true",
+          "override_present": false
+        },
+        "mgr_stats_threshold": {
+          "effective": "5",
+          "override_present": false
+        }
+      },
+      "mutation_and_restoration_journal": [
+        {
+          "action": "autotune-off",
+          "name": "mgr_stats_period_autotune",
+          "value": "false",
+          "state": "applied"
+        },
+        {
+          "action": "one-second",
+          "name": "mgr_stats_period",
+          "value": "1",
+          "state": "applied"
+        },
+        {
+          "action": "two-seconds",
+          "name": "mgr_stats_period",
+          "value": "2",
+          "state": "applied"
+        },
+        {
+          "action": "threshold-only",
+          "name": "mgr_stats_threshold",
+          "value": "6",
+          "state": "applied"
+        },
+        {
+          "action": "one-second-again",
+          "name": "mgr_stats_period",
+          "value": "1",
+          "state": "applied"
+        },
+        {
+          "action": "unset",
+          "name": "mgr_stats_threshold",
+          "state": "restore-applied"
+        },
+        {
+          "action": "unset",
+          "name": "mgr_stats_period",
+          "state": "restore-applied"
+        },
+        {
+          "action": "unset",
+          "name": "mgr_stats_period_autotune",
+          "state": "restore-applied"
+        }
+      ],
+      "cleanup": {
+        "fixture_container_count": 8,
+        "fixture_containers_absent": true,
+        "reaper_count": 1,
+        "reapers_absent": true,
+        "network_absent": true
+      }
+    },
+    {
+      "profile": "secure",
+      "runtime": {
+        "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+        "architecture": "amd64",
+        "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+        "runtime": "container",
+        "key_type": "aes256k",
+        "service_cipher": "aes256k",
+        "connection_mode": "secure",
+        "ip_family": "6",
+        "osd_store": "memstore",
+        "osd_replicas": "1",
+        "osd_profile": "legacy-v6"
+      },
+      "runner_seconds": 347.627,
+      "parent_seconds": 296.36,
+      "configuration_child_seconds": 41.64,
+      "parent_result": "PASS",
+      "required_children_result": "PASS, none skipped",
+      "configuration": {
+        "manager": "a",
+        "manager_gid": 4659,
+        "client_gid": 4680,
+        "start_epoch": 2,
+        "baseline": {
+          "mgr_stats_period": {
+            "effective": "1",
+            "override_present": false
+          },
+          "mgr_stats_period_autotune": {
+            "effective": "true",
+            "override_present": false
+          },
+          "mgr_stats_threshold": {
+            "effective": "5",
+            "override_present": false
+          }
+        },
+        "phases": [
+          {
+            "name": "initial-one-second",
+            "period_seconds": 1,
+            "threshold": 5,
+            "native": {
+              "mgr_stats_period": {
+                "effective": "1",
+                "override": "1",
+                "override_present": true
+              },
+              "mgr_stats_period_autotune": {
+                "effective": "false",
+                "override": "false",
+                "override_present": true
+              },
+              "mgr_stats_threshold": {
+                "effective": "5",
+                "override_present": false
+              }
+            },
+            "samples": [
+              {
+                "last_beacon": "2026-10-23T08:47:07.379150+0000",
+                "elapsed_seconds": 0.201772553,
+                "dump_epoch": 3
+              },
+              {
+                "last_beacon": "2026-10-23T08:47:08.380095+0000",
+                "elapsed_seconds": 1.4028851549999999,
+                "dump_epoch": 3
+              },
+              {
+                "last_beacon": "2026-10-23T08:47:09.380968+0000",
+                "elapsed_seconds": 2.604565534,
+                "dump_epoch": 3
+              }
+            ],
+            "existing_period_seconds": 1,
+            "existing_threshold": 5
+          },
+          {
+            "name": "two-seconds",
+            "period_seconds": 2,
+            "threshold": 5,
+            "native": {
+              "mgr_stats_period": {
+                "effective": "2",
+                "override": "2",
+                "override_present": true
+              },
+              "mgr_stats_period_autotune": {
+                "effective": "false",
+                "override": "false",
+                "override_present": true
+              },
+              "mgr_stats_threshold": {
+                "effective": "5",
+                "override_present": false
+              }
+            },
+            "samples": [
+              {
+                "last_beacon": "2026-10-23T08:47:12.383921+0000",
+                "elapsed_seconds": 5.507243698,
+                "dump_epoch": 3
+              },
+              {
+                "last_beacon": "2026-10-23T08:47:13.384952+0000",
+                "elapsed_seconds": 5.708845266,
+                "dump_epoch": 3
+              },
+              {
+                "last_beacon": "2026-10-23T08:47:14.385859+0000",
+                "elapsed_seconds": 6.910026006,
+                "dump_epoch": 3
+              }
+            ],
+            "existing_period_seconds": 1,
+            "existing_threshold": 5,
+            "new_session": {
+              "period_seconds": 2,
+              "threshold": 5,
+              "removed": true,
+              "gid": 4680,
+              "start_epoch": 4
+            }
+          },
+          {
+            "name": "threshold-only",
+            "period_seconds": 2,
+            "threshold": 6,
+            "native": {
+              "mgr_stats_period": {
+                "effective": "2",
+                "override": "2",
+                "override_present": true
+              },
+              "mgr_stats_period_autotune": {
+                "effective": "false",
+                "override": "false",
+                "override_present": true
+              },
+              "mgr_stats_threshold": {
+                "effective": "6",
+                "override": "6",
+                "override_present": true
+              }
+            },
+            "samples": [
+              {
+                "last_beacon": "2026-10-23T08:47:22.390869+0000",
+                "elapsed_seconds": 15.116206561,
+                "dump_epoch": 5
+              },
+              {
+                "last_beacon": "2026-10-23T08:47:23.390884+0000",
+                "elapsed_seconds": 16.317720228,
+                "dump_epoch": 5
+              },
+              {
+                "last_beacon": "2026-10-23T08:47:24.391034+0000",
+                "elapsed_seconds": 17.518678472,
+                "dump_epoch": 5
+              }
+            ],
+            "existing_period_seconds": 1,
+            "existing_threshold": 5,
+            "new_session": {
+              "period_seconds": 2,
+              "threshold": 6,
+              "removed": true,
+              "gid": 4680,
+              "start_epoch": 6
+            }
+          },
+          {
+            "name": "one-second-again",
+            "period_seconds": 1,
+            "threshold": 6,
+            "native": {
+              "mgr_stats_period": {
+                "effective": "1",
+                "override": "1",
+                "override_present": true
+              },
+              "mgr_stats_period_autotune": {
+                "effective": "false",
+                "override": "false",
+                "override_present": true
+              },
+              "mgr_stats_threshold": {
+                "effective": "6",
+                "override": "6",
+                "override_present": true
+              }
+            },
+            "samples": [
+              {
+                "last_beacon": "2026-10-23T08:47:32.396675+0000",
+                "elapsed_seconds": 24.824738768,
+                "dump_epoch": 7
+              },
+              {
+                "last_beacon": "2026-10-23T08:47:33.397011+0000",
+                "elapsed_seconds": 26.026627982,
+                "dump_epoch": 7
+              },
+              {
+                "last_beacon": "2026-10-23T08:47:34.398045+0000",
+                "elapsed_seconds": 27.227767153,
+                "dump_epoch": 7
+              }
+            ],
+            "existing_period_seconds": 1,
+            "existing_threshold": 5,
+            "new_session": {
+              "period_seconds": 1,
+              "threshold": 6,
+              "removed": true,
+              "gid": 4680,
+              "start_epoch": 8
+            }
+          }
+        ],
+        "restored": true
+      },
+      "restored_native_configuration": {
+        "mgr_stats_period": {
+          "effective": "1",
+          "override_present": false
+        },
+        "mgr_stats_period_autotune": {
+          "effective": "true",
+          "override_present": false
+        },
+        "mgr_stats_threshold": {
+          "effective": "5",
+          "override_present": false
+        }
+      },
+      "mutation_and_restoration_journal": [
+        {
+          "action": "autotune-off",
+          "name": "mgr_stats_period_autotune",
+          "value": "false",
+          "state": "applied"
+        },
+        {
+          "action": "one-second",
+          "name": "mgr_stats_period",
+          "value": "1",
+          "state": "applied"
+        },
+        {
+          "action": "two-seconds",
+          "name": "mgr_stats_period",
+          "value": "2",
+          "state": "applied"
+        },
+        {
+          "action": "threshold-only",
+          "name": "mgr_stats_threshold",
+          "value": "6",
+          "state": "applied"
+        },
+        {
+          "action": "one-second-again",
+          "name": "mgr_stats_period",
+          "value": "1",
+          "state": "applied"
+        },
+        {
+          "action": "unset",
+          "name": "mgr_stats_threshold",
+          "state": "restore-applied"
+        },
+        {
+          "action": "unset",
+          "name": "mgr_stats_period",
+          "state": "restore-applied"
+        },
+        {
+          "action": "unset",
+          "name": "mgr_stats_period_autotune",
+          "state": "restore-applied"
+        }
+      ],
+      "cleanup": {
+        "fixture_container_count": 8,
+        "fixture_containers_absent": true,
+        "reaper_count": 1,
+        "reapers_absent": true,
+        "network_absent": true
+      }
+    }
+  ]
+}
