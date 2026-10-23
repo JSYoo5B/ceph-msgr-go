@@ -96,6 +96,34 @@ func cacheOpGoSame(a, b tierOpsState, mtime bool) bool {
 	return a.Code == b.Code && string(a.Data) == string(b.Data) && a.Size == b.Size && a.Version == b.Version && (!mtime || a.MTime == b.MTime)
 }
 
+// cacheOpGoTryFlushOutcome checks the independent native observation of the
+// separate try-flush head against the single Go result. Success requires B in
+// both pools, a valid final is_dirty read of false and a last bounded poll of
+// false. EAGAIN and EBUSY stay distinct outcomes: the flush may still be in
+// progress, so only unchanged tier bytes and a base holding A or B are required.
+func cacheOpGoTryFlushOutcome(code int32, o cacheOpGoObservation) error {
+	var last *bool
+	if n := len(o.DirtyPolls); n > 0 {
+		last = o.DirtyPolls[n-1]
+	}
+	switch code {
+	case 0:
+		if !tierOpsHolds(o.Snapshot.Base, cachePoolChanged) || !tierOpsHolds(o.Snapshot.Tier, cachePoolChanged) {
+			return errors.New("successful try-flush did not leave the tier bytes in both pools")
+		}
+		if o.Dirty == nil || o.Dirty.DirtyResult == nil || *o.Dirty.DirtyResult != 0 || o.Dirty.Dirty == nil || *o.Dirty.Dirty || last == nil || *last {
+			return errors.New("successful try-flush left the head dirty or unobserved")
+		}
+	case -11, -16:
+		if !tierOpsHolds(o.Snapshot.Tier, cachePoolChanged) || !(tierOpsHolds(o.Snapshot.Base, cachePoolOriginal) || tierOpsHolds(o.Snapshot.Base, cachePoolChanged)) {
+			return fmt.Errorf("try-flush %d changed the tier bytes or left a foreign base", code)
+		}
+	default:
+		return fmt.Errorf("unclassified try-flush result %d", code)
+	}
+	return nil
+}
+
 func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_CACHE_POOLS") != "1" {
 		t.Skip("requires isolated cache-pool fixture")
@@ -278,6 +306,9 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 			reply := send(t, "try-flush", cacheOpGoTry, cephmsgr.OSDCacheTryFlush, 0, -11, -16)
 			o := observe(t, "try-flushed")
 			receipt["try_flush"] = map[string]any{"code": reply.Code, "dirty_polls": o.DirtyPolls, "reissued": false, "base": o.Snapshot.Base}
+			if err := cacheOpGoTryFlushOutcome(reply.Code, o); err != nil {
+				t.Fatal(err, o)
+			}
 		}},
 		{"clean_eviction_keeps_the_base", func(t *testing.T) {
 			flushed, _ := receipt["flushed"].(cacheOpGoObservation)
@@ -310,4 +341,56 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 		t.Logf("go %s tid=%d epoch=%d code=%d op=%d", r.Label, r.Reply.Submission.Transaction, r.Reply.MapEpoch, r.Reply.Code, r.Reply.Operations[0].Result)
 	}
 	receipt["result_codes"] = summary
+}
+
+func TestCacheOpGoTryFlushOutcome(t *testing.T) {
+	state := func(data []byte) tierOpsState {
+		return tierOpsState{Data: data, Size: uint64(len(data)), Version: 3}
+	}
+	flag := func(v bool) *bool { return &v }
+	zero := int32(0)
+	observation := func(base []byte, dirty bool, polls ...bool) cacheOpGoObservation {
+		var o cacheOpGoObservation
+		o.Snapshot.Base, o.Snapshot.Tier = state(base), state(cachePoolChanged)
+		o.Dirty = &tierOpsState{Dirty: flag(dirty), DirtyResult: &zero}
+		for _, p := range polls {
+			o.DirtyPolls = append(o.DirtyPolls, flag(p))
+		}
+		return o
+	}
+	if err := cacheOpGoTryFlushOutcome(0, observation(cachePoolChanged, false, true, false)); err != nil {
+		t.Fatal("clean written-back try-flush refused", err)
+	}
+	for _, code := range []int32{-11, -16} {
+		for _, base := range [][]byte{cachePoolOriginal, cachePoolChanged} {
+			if err := cacheOpGoTryFlushOutcome(code, observation(base, true, true, true)); err != nil {
+				t.Fatal("in-progress try-flush outcome refused", code, err)
+			}
+		}
+	}
+	unread := observation(cachePoolChanged, false, false)
+	unread.Dirty.DirtyResult = new(int32)
+	*unread.Dirty.DirtyResult = -5
+	badRead := observation(cachePoolChanged, false, false)
+	badRead.Snapshot.Base.ReadResult = -5
+	noPolls := observation(cachePoolChanged, false)
+	tierChanged := observation(cachePoolOriginal, true, true)
+	tierChanged.Snapshot.Tier = state(cachePoolOriginal)
+	for name, c := range map[string]struct {
+		code int32
+		o    cacheOpGoObservation
+	}{
+		"success with the base still A and clean": {0, observation(cachePoolOriginal, false, false)},
+		"success with every poll dirty":           {0, observation(cachePoolChanged, true, true, true)},
+		"success with a dirty final read":         {0, observation(cachePoolChanged, true, false)},
+		"success with a failed is_dirty read":     {0, unread},
+		"success with a failed base read":         {0, badRead},
+		"success without a poll":                  {0, noPolls},
+		"EBUSY with changed tier bytes":           {-16, tierChanged},
+		"unclassified result":                     {-5, observation(cachePoolChanged, false, false)},
+	} {
+		if cacheOpGoTryFlushOutcome(c.code, c.o) == nil {
+			t.Error("contradictory try-flush observation accepted:", name)
+		}
+	}
 }

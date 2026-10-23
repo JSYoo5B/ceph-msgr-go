@@ -48,7 +48,12 @@ an `OutcomeUnknownError` stops the test without resending.
    Unpin; evict again: EBUSY, state unchanged.
 3. Flush: 0. The base and the tier hold B, and dirty=false.
 4. Try-flush a separate dirty head once: accepted results 0, EAGAIN or EBUSY;
-   the observer then polls dirty within a bounded budget. No reissue.
+   the observer then polls dirty within a bounded budget. No reissue. A 0
+   result requires B in both pools, a valid final is_dirty read of false and a
+   last poll of false. EAGAIN and EBUSY remain their own recorded outcomes (the
+   flush may still be in progress): the tier must still hold B and the base A
+   or B. `TestCacheOpGoTryFlushOutcome` rejects contradictory observations,
+   such as a 0 result with the base still A or with the head still dirty.
 5. Evict the clean, unpinned flushed head: 0. A bypass read finds the tier head
    absent and the base bytes, size, version and mtime equal the flushed base.
 6. Absent head: flush, try-flush and evict return 0 or ENOENT; pin and unpin

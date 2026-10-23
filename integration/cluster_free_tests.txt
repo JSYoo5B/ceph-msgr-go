@@ -8,6 +8,7 @@
 # Keep one name per line, sorted.
 TestAuthenticationRejectionOracle
 TestAwaitMDSUnsafeWindowSettlesThenWaitsTheGap
+TestCacheOpGoTryFlushOutcome
 TestCephFSArgsLayout
 TestCephFSCapAgentHelpers
 TestCephFSCapSendUpdateBranchClassification
