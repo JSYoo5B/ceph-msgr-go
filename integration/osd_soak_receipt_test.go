@@ -23,6 +23,7 @@ type soakReceipts struct {
 	dir, label, test string
 	duration         time.Duration
 	setupStarted     time.Time
+	owned            []string
 	started          time.Time
 	workloadNS       int64
 	mu               sync.Mutex
@@ -105,7 +106,7 @@ func newSoakReceipts(t *testing.T, label string, duration time.Duration) *soakRe
 }
 
 func (r *soakReceipts) beginWorkload(t *testing.T) {
-	r.write(t, "setup", map[string]any{"elapsed_ns": time.Since(r.setupStarted).Nanoseconds()})
+	r.write(t, "setup", map[string]any{"elapsed_ns": time.Since(r.setupStarted).Nanoseconds(), "owned_objects": r.owned})
 	if t.Failed() {
 		t.Fatal("soak setup evidence could not be preserved")
 	}

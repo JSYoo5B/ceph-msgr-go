@@ -60,6 +60,7 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 	})
 	owned := nativeOmapWrite(t, ctx, base, "prepare", omapWriteInput{Seed: &omapWriteSeed{Baseline: []byte("soak")}, Reserve: workers})
 	prepared = true
+	receipts.owned = append([]string{}, owned.Objects...)
 	if len(owned.Objects) != workers+1 {
 		t.Fatal("native soak objects differ", owned.Objects)
 	}

@@ -49,7 +49,7 @@ def verify(directory, revision, image, duration_ns):
     require(re.fullmatch(r"[0-9a-f]{40}", revision) is not None, "expected revision must be a full SHA")
     require(duration_ns >= 30_000_000_000, "expected duration below admitted workload minimum")
     files = {}
-    for path in sorted(directory.glob("osd-soak-v1-*.json")):
+    for path in sorted(directory.glob("osd-soak-v1-*")):
         require(NAME.fullmatch(path.name) is not None and not path.is_symlink() and path.is_file(), "invalid workload receipt entry")
         require(len(files) < 256, "too many workload receipts")
         files[path.name] = path
@@ -58,7 +58,8 @@ def verify(directory, revision, image, duration_ns):
     def read(name, label=None, kind=None):
         path = directory / name
         require(path.is_file() and not path.is_symlink(), "missing receipt: " + name)
-        raw = path.read_bytes()
+        with path.open("rb") as stream:
+            raw = stream.read((512 << 10) + 1)
         require(len(raw) <= 512 << 10, "oversized receipt: " + name)
         value = json.loads(raw, object_pairs_hook=unique_object)
         hashes[name] = hashlib.sha256(raw).hexdigest()
@@ -70,9 +71,8 @@ def verify(directory, revision, image, duration_ns):
             require(value.get("kind") == kind, "wrong stage identity: " + name)
         return value
 
-    manifest_path = directory / "fixture-manifest.json"
     manifest = read("fixture-manifest.json")
-    manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    manifest_hash = hashes["fixture-manifest.json"]
     end = read("osd-soak-v1-fixture-termination.json", kind="fixture_termination")
     require(end.get("configured_source_sha") == revision, "wrong tested revision")
     require(end.get("configured_image") == image and manifest.get("image") == image, "wrong image reference")
@@ -90,7 +90,11 @@ def verify(directory, revision, image, duration_ns):
         require(started.get("configured_source_sha") == revision, "wrong started revision: " + label)
         require(started.get("configured_duration_ns") == duration_ns, "wrong started duration: " + label)
         require(started.get("fixture_manifest_sha256") == manifest_hash, "started manifest mismatch: " + label)
-        require(read(prefix + "setup.json", label, "setup").get("elapsed_ns", 0) > 0, "missing setup interval: " + label)
+        setup = read(prefix + "setup.json", label, "setup")
+        require(setup.get("elapsed_ns", 0) > 0, "missing setup interval: " + label)
+        owned = setup.get("owned_objects")
+        require(isinstance(owned, list) and len(owned) == 5 and all(isinstance(n, str) and n for n in owned), "missing complete owned set: " + label)
+        require(len(set(owned)) == len(owned), "duplicate setup ownership: " + label)
         run = read(prefix + "workload.json", label, "workload")
         require(run.get("status") == "passed" and not run.get("first_error"), "workload failed: " + label)
         require(run.get("configured_duration_ns") == duration_ns, "workload duration configuration mismatch: " + label)
@@ -108,7 +112,16 @@ def verify(directory, revision, image, duration_ns):
             require(counters.get("churns", 0) >= 10, "missing connection churn")
         cleanup = read(prefix + "cleanup.json", label, "cleanup")
         require(cleanup.get("removed") is True and cleanup.get("elapsed_ns", 0) > 0, "missing owned-object cleanup: " + label)
-        removed = {entry["object"]: entry["code"] for entry in cleanup.get("objects", [])}
+        entries = cleanup.get("objects")
+        require(isinstance(entries, list), "missing native cleanup entries: " + label)
+        removed = {}
+        for entry in entries:
+            require(isinstance(entry, dict) and entry.get("object") in owned, "unknown cleanup object: " + label)
+            name, code = entry["object"], entry.get("code")
+            require(name not in removed, "duplicate cleanup object: " + label)
+            require(type(code) is int and code in {0, -2}, "native cleanup failed: " + label)
+            removed[name] = code
+        require(set(removed) == set(owned), "incomplete native cleanup coverage: " + label)
         objects = set()
         for worker in range(4):
             name = prefix + f"worker-{worker}.json"
@@ -116,6 +129,7 @@ def verify(directory, revision, image, duration_ns):
             require(observation.get("worker") == worker, "duplicate or wrong worker identity: " + name)
             require(observation.get("native_observation_elapsed_ns", 0) > 0, "missing native observation interval: " + name)
             require(observation.get("object") and observation["object"] not in objects, "duplicate object within workload: " + name)
+            require(observation["object"] == owned[worker + 1], "wrong worker object binding: " + name)
             objects.add(observation["object"])
             require(observation["object"] in removed and removed[observation["object"]] in {0, -2}, "worker object lacks native cleanup verdict: " + name)
             require(observation.get("matched") is True and observation.get("independent_native_c_api") is True, "missing native match: " + name)

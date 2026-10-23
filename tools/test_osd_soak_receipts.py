@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import osd_soak_receipts as receipts
 
@@ -21,9 +22,10 @@ class SoakReceiptsTests(unittest.TestCase):
         self.put("osd-soak-v1-fixture-termination.json", {"schema_version": 1, "kind": "fixture_termination", "status": "passed", "configured_source_sha": self.sha, "configured_image": self.image, "observed_image_id": "sha256:" + "c" * 64, "architecture": "amd64", "fixture_manifest_sha256": manifest, "configured_duration_ns": self.duration, "suite_exit_success": True, "termination_succeeded": True, "termination_elapsed_ns": 1000})
         for label, test in receipts.TESTS.items():
             self.put_stage(label, "started", {"configured_source_sha": self.sha, "configured_duration_ns": self.duration, "fixture_manifest_sha256": manifest})
-            self.put_stage(label, "setup", {"elapsed_ns": 1000})
+            owned = ["owned-seed"] + [f"owned-{w}" for w in range(4)]
+            self.put_stage(label, "setup", {"elapsed_ns": 1000, "owned_objects": owned})
             self.put_stage(label, "workload", {"configured_duration_ns": self.duration, "actual_workload_ns": self.duration + 1000, "test_elapsed_ns": self.duration + 5000, "status": "passed", "first_error": "", "unresolved_outcomes": [], "counters": {"appends": 1000, "reads": 100, "churns": 100, "unknowns": 10, "resubmissions": 10, "faults": 1, "xattrs": 100, "truncations": 10, "unsent": 0, "replacements": 10, "resent": 0}})
-            self.put_stage(label, "cleanup", {"removed": True, "elapsed_ns": 1000, "objects": [{"object": f"owned-{w}", "code": 0} for w in range(4)]})
+            self.put_stage(label, "cleanup", {"removed": True, "elapsed_ns": 1000, "objects": [{"object": name, "code": 0} for name in owned]})
             for worker in range(4):
                 data = bytes([worker, 255, 0])
                 encoded = base64.b64encode(data).decode()
@@ -134,6 +136,50 @@ class SoakReceiptsTests(unittest.TestCase):
         self.put("osd-soak-v1-steady-worker-4.json", {})
         with self.assertRaisesRegex(ValueError, "invalid workload receipt"):
             self.verify()
+
+    def test_seed_cleanup_failure_is_not_hidden(self):
+        self.change("osd-soak-v1-steady-cleanup.json", lambda x: x["objects"][0].update(code=-5))
+        with self.assertRaisesRegex(ValueError, "native cleanup failed"):
+            self.verify()
+
+    def test_duplicate_failed_entry_is_not_overwritten_by_success(self):
+        self.change("osd-soak-v1-steady-cleanup.json", lambda x: x["objects"].insert(0, {"object": "owned-0", "code": -5}))
+        with self.assertRaisesRegex(ValueError, "native cleanup failed"):
+            self.verify()
+
+    def test_duplicate_successful_cleanup_entry_is_rejected(self):
+        self.change("osd-soak-v1-steady-cleanup.json", lambda x: x["objects"].append({"object": "owned-0", "code": 0}))
+        with self.assertRaisesRegex(ValueError, "duplicate cleanup object"):
+            self.verify()
+
+    def test_missing_seed_cleanup_is_rejected(self):
+        self.change("osd-soak-v1-steady-cleanup.json", lambda x: x["objects"].pop(0))
+        with self.assertRaisesRegex(ValueError, "cleanup coverage"):
+            self.verify()
+
+    def test_unknown_cleanup_object_is_rejected(self):
+        self.change("osd-soak-v1-steady-cleanup.json", lambda x: x["objects"].append({"object": "unowned", "code": 0}))
+        with self.assertRaisesRegex(ValueError, "unknown cleanup object"):
+            self.verify()
+
+    def test_seed_cannot_replace_worker_observation(self):
+        self.change("osd-soak-v1-steady-worker-0.json", lambda x: x.update(object="owned-seed"))
+        with self.assertRaisesRegex(ValueError, "worker object binding"):
+            self.verify()
+
+    def test_non_json_prefixed_receipt_is_not_ignored(self):
+        self.put("osd-soak-v1-steady-worker-4.txt", {})
+        with self.assertRaisesRegex(ValueError, "invalid workload receipt"):
+            self.verify()
+
+    def test_oversized_receipt_is_rejected_before_decoding(self):
+        (self.root / "osd-soak-v1-steady-worker-0.json").write_bytes(b" " * ((512 << 10) + 1000))
+        with self.assertRaisesRegex(ValueError, "oversized receipt"):
+            self.verify()
+
+    def test_validation_never_uses_unbounded_read_bytes(self):
+        with mock.patch.object(Path, "read_bytes", side_effect=AssertionError("unbounded read")):
+            self.assertEqual(self.verify()["observations"], 8)
 
 
 if __name__ == "__main__":

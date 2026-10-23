@@ -26,7 +26,8 @@ For each of `steady` (`TestCephOSDSoakIntegration`) and `failover`
 (`TestCephOSDSoakFailoverIntegration`):
 
 - `started.json` records configured duration, the controller's source SHA
-  assertion and the fixture manifest hash; `setup.json` records setup time.
+  assertion and the fixture manifest hash; `setup.json` records setup time
+  and all five native-owned object names (four workers and the seed).
 - Four distinct `worker-0.json` through `worker-3.json` records retain the
   expected synthetic bytes/xattr, native bytes/xattrs/version/mtime/code,
   lengths and SHA-256 digests, native source/version and independent-C-API
@@ -42,8 +43,10 @@ For each of `steady` (`TestCephOSDSoakIntegration`) and `failover`
   the unresolved ledger only by a successful reply with its original
   GlobalID/incarnation/TID; a different client's reply cannot resolve it.
 - `cleanup.json` records the independent native removal verdict and object
-  codes, separately timed. The workload verdict runs after this cleanup,
-  so matched bytes do not imply successful cleanup.
+  codes, separately timed. Every owned name must occur exactly once, no
+  unknown name is admitted, and every result must be success or native
+  absence. The workload verdict runs after this cleanup, so matched bytes
+  do not imply successful cleanup.
 
 All filenames have the `osd-soak-v1-<test>-` prefix. The failover test also
 retains a distinct `fault-NNN-kill.json`, `-restart.json` and `-clean.json`

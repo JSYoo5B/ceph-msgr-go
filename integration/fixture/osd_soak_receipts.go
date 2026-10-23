@@ -63,8 +63,13 @@ func saveSoakReceipt(source io.Reader, path string) error {
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if errors.Is(err, os.ErrExist) {
-		previous, readErr := os.ReadFile(path)
-		if readErr != nil || !bytes.Equal(previous, data) {
+		old, readErr := os.Open(path)
+		if readErr != nil {
+			return readErr
+		}
+		previous, readErr := io.ReadAll(io.LimitReader(old, (512<<10)+1))
+		readErr = errors.Join(readErr, old.Close())
+		if readErr != nil || len(previous) > 512<<10 || !bytes.Equal(previous, data) {
 			return errors.New("refusing to overwrite a different soak receipt")
 		}
 		return nil
