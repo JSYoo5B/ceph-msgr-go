@@ -77,9 +77,18 @@ the first case and none in the second. Only in the second case did the
 caller resubmit the same operations under the original transaction to the
 new primary (wire shard 1 for actual parity shard 2). The mutation was
 then applied once. `OSDSubmission.Attempt` stays 0 on that resubmission;
-the reply's `RetryAttempt` echoes the attempt. Not verified: a request held
-at the primary when it dies, a resubmission after an applied mutation on an
-EC pool, and a signed refusal across the epoch change.
+the reply's `RetryAttempt` echoes the attempt.
+
+A separate [applied-resubmission experiment](../../integration/fixture/OSD_EC_APPLIED_RESUBMIT_VALIDATION.md)
+used one deliberate caller resubmission of an independently observed applied
+APPEND+SETXATTR after primary replacement on that same EC profile. Its retained
+TID/incarnation returned ONDISK with the original user version, and native bytes,
+xattr and mtime did not change. A fresh-TID control appended again and advanced
+the native version. The original caller's unknown outcome was preserved. This
+is bounded PG-log duplicate handling, not an automatic replay policy or a
+universal exactly-once guarantee. Not verified: a request held at the primary
+when it dies, retention/trim boundaries, other profiles and a signed refusal
+across the epoch change.
 
 ## Optimized EC pools (`allow_ec_optimizations`)
 

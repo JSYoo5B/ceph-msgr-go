@@ -348,8 +348,8 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 		var unknown *cephmsgr.OutcomeUnknownError
 		var server *cephmsgr.OSDError
 		sub := lost.reply.Submission
-		t.Logf("first attempt ended by %s: %v; submission tid %d incarnation %d epoch %d attempt %d placement %+v",
-			ended, lost.err, sub.Transaction, sub.ClientIncarnation, sub.MapEpoch, sub.Attempt, sub.Placement)
+		t.Logf("first attempt ended by %s: %v; submission tid %d global id %d incarnation %d epoch %d attempt %d placement %+v",
+			ended, lost.err, sub.Transaction, sub.GlobalID, sub.ClientIncarnation, sub.MapEpoch, sub.Attempt, sub.Placement)
 		if !errors.As(lost.err, &unknown) || errors.As(lost.err, &server) {
 			t.Fatal("expected an unknown outcome without a server result", lost.err)
 		}
@@ -415,7 +415,7 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 			if elapsed := time.Since(submittedAt); elapsed >= observationWindow {
 				t.Fatalf("resubmission completed outside the observation window: %s", elapsed)
 			}
-			t.Logf("resubmission: tid %d code %d flags %#x user version %d attempt %d epoch %d", reply.Transaction, reply.Code, reply.Flags, reply.UserVersion, reply.RetryAttempt, reply.MapEpoch)
+			t.Logf("resubmission: tid %d code %d flags %#x user version %d replay %+v attempt %d epoch %d operations %+v", reply.Transaction, reply.Code, reply.Flags, reply.UserVersion, reply.ReplayVersion, reply.RetryAttempt, reply.MapEpoch, reply.Operations)
 			if reply.Transaction != sub.Transaction || reply.Code != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.RetryAttempt != 1 ||
 				reply.Submission.Transaction != sub.Transaction || reply.Submission.MapEpoch != fresh.Epoch ||
 				reply.Submission.GlobalID != sub.GlobalID || reply.Submission.ClientIncarnation != sub.ClientIncarnation || reply.Submission.Attempt != sub.Attempt {
