@@ -364,6 +364,25 @@ func TestRefusedAndGapAndTruncation(t *testing.T) {
 	}
 }
 
+// A SYN retransmitted with the same ISN is one connection attempt (observed
+// live while the MON restarted); a new ISN on the same four-tuple is a new one.
+func TestSYNRetransmissionAndTupleReuse(t *testing.T) {
+	b := newPcap(65535)
+	b.tcp(cliAddr, monAddr, 100, 0, tcpSYN, nil)
+	b.tcp(cliAddr, monAddr, 100, 0, tcpSYN, nil)
+	b.tcp(monAddr, cliAddr, 900, 101, tcpSYN|tcpACK, nil)
+	b.tcp(cliAddr, monAddr, 101, 901, tcpRST, nil)
+	b.tcp(cliAddr, monAddr, 5000, 0, tcpSYN, nil)
+	rep, err := analyze("synthetic", &b.buf, analysisOptions{ServerPorts: []uint16{3300}, MaxBytes: 1 << 20, FrameLimit: 1 << 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Connections) != 2 || rep.Connections[0].SYNs != 2 || rep.Connections[0].TCPOutcome != "client RST first" ||
+		rep.Connections[1].TCPOutcome != "unanswered SYN" {
+		t.Fatalf("connections %+v", rep.Connections)
+	}
+}
+
 func TestRejectsPcapng(t *testing.T) {
 	_, err := analyze("x", bytes.NewReader([]byte{0x0a, 0x0d, 0x0d, 0x0a, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}), analysisOptions{})
 	if err != errPcapng {

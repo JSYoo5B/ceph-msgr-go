@@ -16,9 +16,11 @@ import (
 // both CRC and secure modes, on the daemon side of the same TCP connection.
 
 var (
-	logConn    = regexp.MustCompile(`--2- .* >> (\S+) conn\((0x[0-9a-f]+) 0x[0-9a-f]+ (\S+) :`)
+	// The peer address is empty before CLIENT_IDENT (">>  conn(").
+	logConn    = regexp.MustCompile(`--2- \S+ >> (\S*) conn\((0x[0-9a-f]+) 0x[0-9a-f]+ (\S+) :`)
+	logAccept  = regexp.MustCompile(`conn\((0x[0-9a-f]+) msgr2=0x[0-9a-f]+ .*\.accept sd=\d+ listen_addr \S+ peer_addr (\S+)`)
 	logTag     = regexp.MustCompile(`handle_read_frame_dispatch tag=(\d+)`)
-	logSent    = regexp.MustCompile(`write_message sending message m=0x[0-9a-f]+ seq=(\d+) (\S+?)\(`)
+	logSent    = regexp.MustCompile(`write_message sending message m=0x[0-9a-f]+ seq=(\d+) ([A-Za-z0-9_]+)`)
 	logRecvMsg = regexp.MustCompile(`handle_message received message m=0x[0-9a-f]+ seq=(\d+) from=(\S+) type=(\d+)`)
 )
 
@@ -41,6 +43,15 @@ func parseMonLog(r io.Reader) ([]*logConnRecord, error) {
 	s.Buffer(make([]byte, 1<<20), 1<<20)
 	for s.Scan() {
 		line := s.Text()
+		if a := logAccept.FindStringSubmatch(line); a != nil {
+			// The accept line carries the TCP source port; the connection
+			// pointer is the same one used by the ProtocolV2 lines below.
+			// A reused pointer starts a new record.
+			rec := &logConnRecord{Pointer: a[1], Peers: []string{a[2]}, order: len(all)}
+			byPtr[a[1]] = rec
+			all = append(all, rec)
+			continue
+		}
 		m := logConn.FindStringSubmatch(line)
 		if m == nil {
 			continue
@@ -87,6 +98,7 @@ type crossResult struct {
 	CaptureTags  []uint8        `json:"capture_client_tags"`
 	CaptureSeqs  []uint64       `json:"capture_server_message_seqs"`
 	TagsEqual    bool           `json:"client_tags_equal"`
+	PrefixEqual  bool           `json:"client_tags_prefix_equal"`
 	SeqsEqual    bool           `json:"server_message_seqs_equal"`
 	ModeEqual    bool           `json:"mode_equal"`
 	TagsCompared int            `json:"tags_compared"`
@@ -147,7 +159,8 @@ func crosscheck(rep *report, logs []*logConnRecord, monPort uint16) []crossResul
 		// the decoded prefix and report whether it covers the whole log.
 		n := min(len(res.CaptureTags), len(match.RxTags))
 		res.TagsCompared = n
-		res.TagsEqual = n > 0 && equalU8(res.CaptureTags[:n], match.RxTags[:n]) && len(res.CaptureTags) == len(match.RxTags)
+		res.PrefixEqual = n > 0 && equalU8(res.CaptureTags[:n], match.RxTags[:n])
+		res.TagsEqual = res.PrefixEqual && len(res.CaptureTags) == len(match.RxTags)
 		res.SeqsEqual = equalU64(res.CaptureSeqs, match.TxMsgSeqs)
 		if len(res.CaptureTags) != len(match.RxTags) {
 			res.Note = "capture decoded " + strconv.Itoa(len(res.CaptureTags)) + " client frames; MON logged " + strconv.Itoa(len(match.RxTags))

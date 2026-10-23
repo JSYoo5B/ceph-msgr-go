@@ -125,8 +125,11 @@ echo "== evaluate the pinned tshark"
 } > "$out/tshark-version.txt"
 tshark -r "$out/capture.pcap" -q -z conv,tcp > "$out/tshark-conv.txt" 2>&1 || true
 tshark -r "$out/capture.pcap" -n -o tcp.desegment_tcp_streams:TRUE > "$out/tshark-default.txt" 2>&1 || true
-tshark -r "$out/capture.pcap" -n -d tcp.port==3300,ceph -Y ceph -V > "$out/tshark-ceph-decode-as.txt" 2>&1 || true
-tshark -r "$out/capture.pcap" -n -d tcp.port==3300,ceph -q -z expert > "$out/tshark-expert.txt" 2>&1 || true
+# The Ceph dissector registers only a heuristic (ceph_tcp), enabled by default;
+# it cannot be selected with decode-as on tcp.port.
+tshark -r "$out/capture.pcap" -n -Y ceph -V > "$out/tshark-ceph-detail.txt" 2>&1 || true
+tshark -r "$out/capture.pcap" -n --disable-heuristic ceph_tcp > "$out/tshark-no-ceph-heuristic.txt" 2>&1 || true
+tshark -r "$out/capture.pcap" -n -q -z expert > "$out/tshark-expert.txt" 2>&1 || true
 streams=$(tshark -r "$out/capture.pcap" -T fields -e tcp.stream 2>/dev/null | sort -n -u)
 : > "$out/tshark-follow.txt"
 for s in $streams; do
@@ -171,4 +174,32 @@ json.dump({
 }, open(sys.argv[1], "w"), indent=2)
 PY
 cat "$out/provenance.json"
+
+echo "== check the PoC expectations"
+# Every established MON session must pair with one native MON log connection
+# and match its mode, received client tags and sent message sequences. CRC
+# needs no key; secure needs the opt-in derived report.
+python3 - "$mode" "$out" <<'PY' | tee "$out/expectations.txt"
+import json, sys
+mode, out = sys.argv[1], sys.argv[2]
+problems = []
+for name in (["crosscheck.json"] if mode == "crc" else []) + ["crosscheck-derived.json"]:
+    rows = json.load(open(out + "/" + name))
+    if len(rows) < 2:
+        problems.append("%s: expected the command and after-restart sessions, got %d" % (name, len(rows)))
+    for r in rows:
+        if not (r["mode_equal"] and r["client_tags_equal"] and r["server_message_seqs_equal"]):
+            problems.append("%s: connection %d differs from the MON log" % (name, r["capture_connection"]))
+rep = json.load(open(out + "/analysis.json"))
+phases = {c.get("trace_phase", "") for c in rep["connections"]}
+for want in ("refused (failed dial)", "command", "after-restart"):
+    if want not in phases:
+        problems.append("analysis: no connection correlated to phase %r" % want)
+if mode == "secure" and any(c.get("con_mode") == "secure" and
+                            c["client_to_server"]["msgr2"].get("opaque_secure_bytes", 0) == 0
+                            for c in rep["connections"] if c.get("con_mode")):
+    problems.append("analysis without a key decoded secure frames")
+print("\n".join(problems) or "all PoC expectations met")
+sys.exit(1 if problems else 0)
+PY
 exit "$probe_rc"

@@ -101,9 +101,10 @@ func (t *tracker) add(p packet) {
 		fromClient = false
 	}
 	syn := p.Flags&tcpSYN != 0 && p.Flags&tcpACK == 0
-	if syn && c != nil && fromClient && c.c2s.sawSYN && c.c2s.base != p.Seq {
+	if syn && c != nil && fromClient && c.c2s.sawSYN && c.c2s.base != p.Seq+1 {
 		c = nil // a new connection reused the same four-tuple
 	}
+	// A SYN with the same ISN is a kernel SYN retransmission of one attempt.
 	if c == nil {
 		c = &tcpConn{ID: len(t.conns) + 1, First: p.Time}
 		switch {

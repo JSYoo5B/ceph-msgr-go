@@ -220,8 +220,8 @@ func printCross(w io.Writer, cross []crossResult) {
 		if c.Log != nil {
 			logMode, logTags, logSeqs = c.Log.Mode, len(c.Log.RxTags), len(c.Log.TxMsgSeqs)
 		}
-		fmt.Fprintf(w, "  conn %d phase=%q match=%q mode capture=%s log=%s equal=%v; client tags capture=%d log=%d equal=%v; server msg seqs capture=%d log=%d equal=%v %s\n",
-			c.Connection, c.Phase, c.Match, c.CaptureMode, logMode, c.ModeEqual, len(c.CaptureTags), logTags, c.TagsEqual,
+		fmt.Fprintf(w, "  conn %d phase=%q match=%q mode capture=%s log=%s equal=%v; client tags capture=%d log=%d equal=%v prefix-equal=%v; server msg seqs capture=%d log=%d equal=%v %s\n",
+			c.Connection, c.Phase, c.Match, c.CaptureMode, logMode, c.ModeEqual, len(c.CaptureTags), logTags, c.TagsEqual, c.PrefixEqual,
 			len(c.CaptureSeqs), logSeqs, c.SeqsEqual, c.Note)
 	}
 }
