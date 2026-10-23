@@ -142,6 +142,59 @@ func rgwNativeHistory(raw []byte, client string, objects map[string]bool) ([]rgw
 	return result, nil
 }
 
+// Completed operation history is published by OpHistoryServiceThread after
+// the S3 response can arrive. Poll this read-only observation with a deadline;
+// never repeat the S3 mutation to make its reception appear in history.
+func rgwNativePollHistory(parent context.Context, fetch func(context.Context) []byte, ready func([]byte) (bool, error)) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(parent, 10*time.Second)
+	defer cancel()
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("native operation history was not published within its observation bound: %w", err)
+		}
+		output := fetch(ctx)
+		matched, err := ready(output)
+		if err != nil || matched {
+			return output, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("native operation history was not published within its observation bound: %w", ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func rgwNativePutKinds(operation rgwNativeOperation, head string) (write, prepare, complete bool) {
+	isHead := strings.Contains(operation.Description, ":"+head+":")
+	return isHead && (strings.Contains(operation.Description, "write ") || strings.Contains(operation.Description, "writefull ")),
+		strings.Contains(operation.Description, "call rgw.bucket_prepare_op"),
+		strings.Contains(operation.Description, "call rgw.bucket_complete_op")
+}
+
+func rgwNativePutPublished(output []byte, clients []rgwNativeClientGeneration, head, bucketID string) (bool, error) {
+	// The later oracle must independently confirm these exact observed shard
+	// names. This extraction only lets the receiver observation precede every
+	// native data/index readback, without assuming the bucket's shard count.
+	objects := map[string]bool{head: true}
+	pattern := regexp.MustCompile(`:::(\.dir\.` + regexp.QuoteMeta(bucketID) + `(?:\.[0-9]+)?):head`)
+	for _, match := range pattern.FindAllSubmatch(output, -1) {
+		objects[string(match[1])] = true
+	}
+	write, prepare, complete := false, false, false
+	for _, client := range clients {
+		operations, err := rgwNativeHistory(output, client.Client, objects)
+		if err != nil {
+			return false, err
+		}
+		for _, operation := range operations {
+			w, p, c := rgwNativePutKinds(operation, head)
+			write, prepare, complete = write || w, prepare || p, complete || c
+		}
+	}
+	return write && prepare && complete, nil
+}
+
 // Names are discovered from the process-owned socket's catalog. Pinned
 // AsyncMessenger appends the nonce to additional radosclient names in RGW.
 // A shared CephX entity name or a generic shared-volume socket is insufficient.

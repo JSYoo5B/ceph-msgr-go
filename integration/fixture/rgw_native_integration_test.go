@@ -163,7 +163,15 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	// process after PUT so its newly authenticated client IDs are included.
 	// This local socket query does not submit an OSD oracle operation.
 	generation := rgwNativeGeneration(t, ctx, gateway)
-	history := rgwNativeExec(t, ctx, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
+	head := bucketInfo.Marker + "_" + key
+	history, err := rgwNativePollHistory(ctx, func(read context.Context) []byte {
+		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
+	}, func(output []byte) (bool, error) {
+		return rgwNativePutPublished(output, generation, head, bucketInfo.ID)
+	})
+	if err != nil {
+		t.Fatal("observe complete gateway PUT reception before oracle traffic:", err)
+	}
 	pools, err := cluster.Pools(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -180,7 +188,6 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	if dataPool == "" || indexPool == "" {
 		t.Fatal("missing actual RGW data/index pools")
 	}
-	head := bucketInfo.Marker + "_" + key
 	indexObjects := rgwNativeIndexObjects(t, ctx, control, indexPool, bucketInfo.ID)
 	objects := map[string]bool{head: true}
 	for _, object := range indexObjects {
@@ -190,10 +197,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	write, prepare, complete := false, false, false
 	var putReceipt []rgwNativeOperation
 	for _, op := range received {
-		isHead := strings.Contains(op.Description, ":"+head+":")
-		isWrite := isHead && (strings.Contains(op.Description, "write ") || strings.Contains(op.Description, "writefull "))
-		isPrepare := strings.Contains(op.Description, "call rgw.bucket_prepare_op")
-		isComplete := strings.Contains(op.Description, "call rgw.bucket_complete_op")
+		isWrite, isPrepare, isComplete := rgwNativePutKinds(op, head)
 		write, prepare, complete = write || isWrite, prepare || isPrepare, complete || isComplete
 		if isWrite || isPrepare || isComplete {
 			putReceipt = append(putReceipt, op)
@@ -252,7 +256,21 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 		t.Fatal("native object/index postconditions changed across gateway restart")
 	}
 	request(http.MethodDelete, path, nil, http.StatusNoContent)
-	deleted := rgwNativeReceipt(t, ctx, cluster, rgwNativeGeneration(t, ctx, gateway), objects)
+	deleteGeneration := rgwNativeGeneration(t, ctx, gateway)
+	deleteHistory, err := rgwNativePollHistory(ctx, func(read context.Context) []byte {
+		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
+	}, func(output []byte) (bool, error) {
+		for _, op := range rgwNativeAttributedHistory(t, output, deleteGeneration, objects) {
+			if strings.Contains(op.Description, ":"+head+":") && strings.Contains(op.Description, "call rgw.obj_remove") {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatal("observe complete gateway DELETE reception before oracle traffic:", err)
+	}
+	deleted := rgwNativeAttributedHistory(t, deleteHistory, deleteGeneration, objects)
 	remove := false
 	var deleteReceipt []rgwNativeOperation
 	for _, op := range deleted {
@@ -355,12 +373,6 @@ func rgwNativeGeneration(t *testing.T, ctx context.Context, gateway *rgw.Gateway
 		t.Fatalf("missing bounded process-owned gateway Messenger identities/nonces: decode=%v candidates=%d messengers=%d", err, dump.Candidates, len(dump.Messengers))
 	}
 	return dump.Messengers
-}
-
-func rgwNativeReceipt(t *testing.T, ctx context.Context, cluster *rgw.Container, clients []rgwNativeClientGeneration, objects map[string]bool) []rgwNativeOperation {
-	t.Helper()
-	output := rgwNativeExec(t, ctx, cluster.Container.Container, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
-	return rgwNativeAttributedHistory(t, output, clients, objects)
 }
 
 func rgwNativeAttributedHistory(t *testing.T, output []byte, clients []rgwNativeClientGeneration, objects map[string]bool) []rgwNativeOperation {

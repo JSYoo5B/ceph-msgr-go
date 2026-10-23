@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -98,5 +99,25 @@ subprocess.run=native
 	}
 	if err := json.Unmarshal(output, &result); err != nil || result.Candidates != 1 || len(result.Messengers) != 1 || result.Messengers[0].Client != "client.42" || result.Messengers[0].Nonce != 12345 {
 		t.Fatalf("incorrect owned named messenger result: %s %v", output, err)
+	}
+}
+
+func TestRGWNativeHistoryPollWaitsForPublicationWithoutReplayingInput(t *testing.T) {
+	fetches := 0
+	result, err := rgwNativePollHistory(context.Background(), func(context.Context) []byte {
+		fetches++
+		if fetches == 1 {
+			return []byte("partial native observation")
+		}
+		return []byte("complete native observation")
+	}, func(output []byte) (bool, error) { return string(output) == "complete native observation", nil })
+	if err != nil || fetches != 2 || string(result) != "complete native observation" {
+		t.Fatalf("delayed receiver observation: fetches=%d error=%v", fetches, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = rgwNativePollHistory(ctx, func(context.Context) []byte { t.Fatal("cancelled observation executed"); return nil }, func([]byte) (bool, error) { return true, nil })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled history observation did not preserve cancellation", err)
 	}
 }
