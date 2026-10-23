@@ -143,7 +143,7 @@ func TestMDSCephFSDataRequestIsClosedAndScoped(t *testing.T) {
 	for _, fields := range [][]string{
 		{"1", token, "observe"}, {"1", token, "observe", "0"}, {"1", token, "observe", "042"}, {"1", token, "stat", "/etc/passwd"}, {"1", token, "stat"},
 		{"1", token, "read", "dir"}, {"1", token, "read", "snapshot"}, {"1", token, "objects", "snapshot-file"}, {"1", token, "list", "dir"}, {"1", token, "truncate", "1"},
-		{"1", token, "write", "go-file"}, {"1", token, "evict", "4210"}, {"1", strings.Repeat("b2", 16), "list"}, {"0", token, "list"}, {"01", token, "list"}, {"1", token},
+		{"1", token, "write", "go-file"}, {"1", token, "evict", "04210"}, {"1", strings.Repeat("b2", 16), "list"}, {"0", token, "list"}, {"01", token, "list"}, {"1", token},
 		{"1", token, "stat", "dir", "x"},
 		{"1", token, "capsnap-create-c"}, {"1", token, "capsnap-create-a", "/etc/passwd"},
 		{"1", token, "read", "capsnap-a"}, {"1", token, "objects", "capsnap-a-file"},

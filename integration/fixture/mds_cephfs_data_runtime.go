@@ -58,8 +58,8 @@ func (x *mdsCephFSDataScope) activeRuntime(kind string, gid uint64) *mdsCephFSDa
 }
 func (x *mdsCephFSDataScope) nativeReady() error {
 	if x.restart.pending() || x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil ||
-		x.activeRuntime("client-drop-on", x.current.GID) != nil {
-		return errors.New("MDS CephFS data native action refused while restart, journal pause or client blackhole is in effect")
+		x.activeRuntime("client-drop-on", x.current.GID) != nil || x.osdDrop.active() {
+		return errors.New("MDS CephFS data native action refused while restart, journal pause or an MDS or OSD client blackhole is in effect")
 	}
 	return nil
 }
@@ -149,6 +149,12 @@ func (c *fixtureCluster) mdsCephFSDataApplyRuntime(ctx context.Context, d mdsFre
 func (x *mdsCephFSDataScope) newRuntime(id int64, kind string) (*mdsCephFSDataRuntime, error) {
 	if x.restart.pending() || len(x.runtime) >= 4 || slices.ContainsFunc(x.runtime, func(r *mdsCephFSDataRuntime) bool { return r.Kind == kind && r.IncarnationGID == x.current.GID }) {
 		return nil, errors.New("DATA runtime change was already issued or restart is pending")
+	}
+	// An MDS fault never starts beside the writeback-fence OSD drop, in any
+	// active or uncertain state (the inverse of newOSDDrop's admission).
+	// Restoration does not pass through here and stays available.
+	if kind != "debug-on" && x.osdDrop.active() {
+		return nil, errors.New("DATA MDS fault refused while the OSD client drop is active")
 	}
 	settings := map[string]string{}
 	switch kind {
