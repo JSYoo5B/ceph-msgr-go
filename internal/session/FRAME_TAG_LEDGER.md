@@ -53,9 +53,10 @@ Boundaries:
 
 - **Missing wire code:** server-side tags are not implemented; this repository
   has no listening Messenger.
-- **Upstream constraint:** compression is declined by pinned daemons toward
-  client peers, so live compressed frames are unreachable (see
-  [COMPRESSION_PLAN.md](../msgr/COMPRESSION_PLAN.md)).
+- **Native observation:** pinned MON/OSD client sessions report no negotiated
+  compression and working commands. No peer banner/request/response frames
+  were captured, so this does not prove a declined request or live compressed
+  frames (see [COMPRESSION_PLAN.md](../msgr/COMPRESSION_PLAN.md)).
 - **Consumer responsibility:** reconnect policy above an established session.
   A terminal fault preserves whether transmission began; the library does not
   re-execute uncertain mutations.
