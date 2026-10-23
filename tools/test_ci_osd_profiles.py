@@ -45,9 +45,9 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        # 63 original rows, 2 mgr-service, 2 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go,
+        # 63 original rows, 2 mgr-service, 3 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go,
         # 2 mds-cephfs-capsend, 1 native SET_CHUNK checkpoint and 1 Go SET_CHUNK acceptance.
-        self.assertEqual(len(self.rows), 73)
+        self.assertEqual(len(self.rows), 74)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one native-only test explicitly; the
         # original broad legacy rows keep their suite selection.
@@ -272,11 +272,14 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertEqual(rows, [
             dict(base, test_run="^TestCephOSDErasureK2M2Integration$"),
             dict(base, test_run="^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$"),
+            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$"),
         ])
         # Each row's selector must match the fixture's closed four-OSD list.
         fixture = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
         for row, expected in zip(rows, ({"TestCephOSDErasureK2M2Integration"},
-                                        {"TestCephOSDErasureOptimizedK2M2Integration", "TestCephOSDErasureOptimizedK2M2FailoverIntegration"})):
+                                        {"TestCephOSDErasureOptimizedK2M2Integration", "TestCephOSDErasureOptimizedK2M2FailoverIntegration"},
+                                        {"TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration",
+                                         "TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration"})):
             with self.subTest(test_run=row["test_run"]):
                 self.assertIn('"%s",' % row["test_run"], fixture)
                 selector = re.compile(row["test_run"])
@@ -285,7 +288,9 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                     self.assertIsNone(selector.search(name + "Extended"))
                     self.assertIsNone(selector.search("Prefix" + name))
                 for other in ("TestCephOSDErasureIntegration", "TestCephOSDErasureOptimizedIntegration",
-                              "TestCephOSDErasureOptimizedFailoverIntegration", "TestCephOSDErasureFailoverIntegration"):
+                              "TestCephOSDErasureOptimizedFailoverIntegration", "TestCephOSDErasureFailoverIntegration",
+                              "TestCephOSDErasureSnapshotAndDegradedWriteIntegration",
+                              "TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration"):
                     self.assertIsNone(selector.search(other))
 
     def test_set_chunk_row_selects_only_the_native_checkpoint(self):

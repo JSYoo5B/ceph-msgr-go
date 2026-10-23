@@ -3,17 +3,13 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
-	"strconv"
 	"testing"
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
-	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
 // On a k=2,m=1 pool: PG listing addresses the primary shard; a read through a
@@ -51,7 +47,6 @@ func erasureFailoverScenario(t *testing.T, width erasureWidth, optimized bool, p
 	c, _, base, _ := fixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 420*time.Second)
 	defer cancel()
-	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
@@ -167,32 +162,7 @@ func erasureFailoverScenario(t *testing.T, width erasureWidth, optimized bool, p
 		t.Logf("PG %s listed %d objects, end=%v; %d single-entry pages agree", route.PGID, len(reply.Entries), reply.End, len(paged))
 	})
 
-	kill := func(t *testing.T, id int32) func() {
-		t.Helper()
-		name := strconv.FormatInt(int64(id), 10)
-		if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
-			t.Fatal("kill", id, err)
-		}
-		var state struct {
-			ExitCode *int `json:"exit_code"`
-		}
-		if data, err := os.ReadFile(filepath.Join(dir, "osd-crash-state.json")); err != nil || json.Unmarshal(data, &state) != nil || state.ExitCode == nil || *state.ExitCode != 137 {
-			t.Fatal("expected SIGKILL evidence", err)
-		}
-		// The fixture object was not changed, so restart, wait for clean PGs and
-		// republish its routing without the legacy-only object restoration.
-		return func() {
-			recover, stop := context.WithTimeout(context.Background(), 120*time.Second)
-			defer stop()
-			if err := testcluster.ControlDaemon(recover, dir, "start", "osd", name); err != nil {
-				t.Error("restart killed OSD", err)
-				return
-			}
-			waitOSDFixtureClean(t, recover, base)
-			fresh := nativeMutation(t, recover, map[string]any{"compare": false, "placement": true}).Placement
-			publishReplicaOSDRouting(t, dir, adoptMutationPlacement(t, base, fresh))
-		}
-	}
+	kill := func(t *testing.T, id int32) func() { return erasureKillOSD(t, ctx, base, id) }
 	read := func(t *testing.T, r osdFixtureOracle, edit func(*cephmsgr.OSDRequest), timeout time.Duration) ([]byte, error) {
 		t.Helper()
 		o := mutationConnection(t, c, ctx, r)
@@ -248,26 +218,7 @@ func erasureFailoverScenario(t *testing.T, width erasureWidth, optimized bool, p
 		old := poolPlace(t, ctx, 1, subject, "")
 		restore := kill(t, old.ID)
 		defer restore()
-		var fresh osdFixtureOracle
-		deadline := time.Now().Add(120 * time.Second)
-		for {
-			fresh = poolPlace(t, ctx, 1, subject, "")
-			// An optimized pool's first map after the loss may still name the
-			// nonprimary shard's OSD (pure CRUSH order); that OSD then has the
-			// MON set a primary-first pg_temp, and the next map names a parity
-			// shard. Wait for that settled placement.
-			nonprimary := slices.Contains(facts.nonprimary, int(fresh.Shard))
-			if fresh.ID != old.ID && fresh.ID >= 0 && !nonprimary {
-				break
-			}
-			if fresh.ID >= 0 && nonprimary {
-				t.Logf("transient: epoch %d names osd.%d on nonprimary shard %d (acting %v)", fresh.Epoch, fresh.ID, fresh.Shard, fresh.Acting)
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("no new primary was chosen")
-			}
-			time.Sleep(2 * time.Second)
-		}
+		fresh := erasureSettledPrimary(t, ctx, subject, old, facts)
 		t.Logf("primary osd.%d shard %d -> osd.%d shard %d at epoch %d pg_temp %v primary-first %+v (acting %v -> %v)", old.ID, old.Shard, fresh.ID, fresh.Shard, fresh.Epoch, fresh.PGTemp, routePrimaryFirst(fresh), old.Acting, fresh.Acting)
 		if slices.Contains(facts.nonprimary, int(old.Shard)) {
 			t.Fatal("an optimized EC pool started with a nonprimary shard as primary", old.Shard, facts.nonprimary)

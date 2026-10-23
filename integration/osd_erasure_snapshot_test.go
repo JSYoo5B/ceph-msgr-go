@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"slices"
 	"strconv"
 	"testing"
 	"time"
@@ -16,18 +17,26 @@ import (
 // a write SnapContext; a write accepted while one shard's OSD is down is
 // recovered onto that shard after it returns.
 func TestCephOSDErasureSnapshotAndDegradedWriteIntegration(t *testing.T) {
-	erasureSnapshotScenario(t, false)
+	erasureSnapshotScenario(t, erasureK2M1, false, "")
 }
 
 // The same on an optimized pool, whose partial-stripe write path and recovery
 // differ inside the OSDs; nothing differs on this client's wire.
 func TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration(t *testing.T) {
-	erasureSnapshotScenario(t, true)
+	erasureSnapshotScenario(t, erasureK2M1, true, "")
 }
 
-func erasureSnapshotScenario(t *testing.T, optimized bool) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
-		t.Skip("k=2,m=1 with overwrites needs three BlueStore OSDs")
+// The same on the optimized isa k=2,m=2 pool over four OSDs: one killed OSD
+// leaves exactly min_size 3 shards, so the PG stays active and accepts the
+// degraded write; after recovery a different shard's OSD is killed and the
+// native read needs the recovered shard.
+func TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration(t *testing.T) {
+	erasureSnapshotScenario(t, erasureK2M2, true, "isa")
+}
+
+func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, plugin string) {
+	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
+		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
 	}
 	fixture, request, hash := osdFixture, osdObjectRequest, false
 	if isReplicatedPGFixtureProfile() {
@@ -40,18 +49,24 @@ func erasureSnapshotScenario(t *testing.T, optimized bool) {
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
-		if r := nativePool(t, cleanup, "cleanup", nil); !r.PoolsRemoved {
+		r := nativePool(t, cleanup, "cleanup", nil)
+		if !r.PoolsRemoved {
 			t.Error("owned erasure-coded pool was not removed")
+		}
+		if slices.Contains(r.ECProfilesRemaining, width.profile) {
+			t.Error("owned erasure-code profile was not removed", width.profile)
 		}
 	})
 	pg := 1
 	if hash {
 		pg = 8
 	}
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "optimized": optimized})
-	if created.ECOptimized != optimized {
-		t.Fatal("native pool optimization state differs", created.ECOptimized)
+	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": optimized, "plugin": plugin})
+	if created.PoolType != 3 || created.ECOptimized != optimized || created.Width != width.name || created.ErasureCodeProfile != width.profile {
+		t.Fatal("native pool is not the requested erasure-coded shape", width, created.PoolType, created.ECOptimized, created.Width, created.ErasureCodeProfile)
 	}
+	facts := erasurePoolMapFacts(t, ctx, c, created, width, optimized)
+	t.Logf("EC pool %d %s optimized=%v size=%d min_size=%d nonprimary shards %v", created.PoolID, width, optimized, facts.size, facts.minSize, facts.nonprimary)
 	write := func(t *testing.T, object string, data []byte, snap uint64) cephmsgr.OSDReply {
 		t.Helper()
 		route := poolPlace(t, ctx, 1, object, "")
@@ -103,6 +118,7 @@ func erasureSnapshotScenario(t *testing.T, optimized bool) {
 		object := "ec-degraded-write"
 		write(t, object, []byte("before"), 0)
 		route := poolPlace(t, ctx, 1, object, "")
+		facts.checkPlacement(t, route)
 		var victim int32 = -1
 		for _, id := range route.Acting {
 			if id != route.ID {
@@ -110,6 +126,8 @@ func erasureSnapshotScenario(t *testing.T, optimized bool) {
 				break
 			}
 		}
+		t.Logf("placement epoch %d pg %s acting %v primary osd.%d shard %d; killing osd.%d on shard %d",
+			route.Epoch, route.PGID, route.Acting, route.ID, route.Shard, victim, slices.Index(route.Acting, victim))
 		name := strconv.FormatInt(int64(victim), 10)
 		if err := testcluster.ControlDaemon(ctx, dir, "kill", "osd", name); err != nil {
 			t.Fatal(err)
@@ -135,6 +153,11 @@ func erasureSnapshotScenario(t *testing.T, optimized bool) {
 		if reply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
 			t.Fatal("degraded write lacks ONDISK")
 		}
+		degraded := poolPlace(t, ctx, 1, object, "")
+		if n := poolObserve(t, ctx, 1, object, "", ""); !bytes.Equal(n.Data, payload) || n.Version != reply.UserVersion {
+			t.Fatal("native state while degraded differs", n.Version, reply.UserVersion)
+		}
+		t.Logf("degraded write at epoch %d acting %v primary osd.%d shard %d: user version %d", degraded.Epoch, degraded.Acting, degraded.ID, degraded.Shard, reply.UserVersion)
 		if err := testcluster.ControlDaemon(ctx, dir, "start", "osd", name); err != nil {
 			t.Fatal(err)
 		}
