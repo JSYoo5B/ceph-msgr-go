@@ -518,6 +518,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.copyFromLateErrorSelected() {
 		copyErrorMarker = "1"
 	}
+	multiChunkMarker := ""
+	if p.copyFromMultiChunkSelected() {
+		multiChunkMarker = "1"
+	}
 	marker := ""
 	mapMarker := ""
 	if p.sparseReadOracle != "" {
@@ -545,6 +549,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":         p.mdsCephFSData,
 		"CEPH_MSGR_TEST_RBD":                     p.rbdBase,
 		copyFromLateErrorMarker:                  copyErrorMarker,
+		copyFromMultiChunkMarker:                 multiChunkMarker,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    marker,
 		"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         mapMarker,
 		"CEPH_MSGR_NATIVE_U64_XATTR_ORACLE":      u64Marker,
