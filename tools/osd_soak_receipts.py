@@ -45,9 +45,11 @@ def binary(value, label):
     return decoded
 
 
-def verify(directory, revision, image, duration_ns):
+def verify(directory, revision, image, duration_ns, labels=("steady", "failover")):
     require(re.fullmatch(r"[0-9a-f]{40}", revision) is not None, "expected revision must be a full SHA")
     require(duration_ns >= 30_000_000_000, "expected duration below admitted workload minimum")
+    require(labels and len(set(labels)) == len(labels) and all(label in TESTS for label in labels), "invalid expected workload selection")
+    labels = list(labels)
     files = {}
     for path in sorted(directory.glob("osd-soak-v1-*")):
         require(NAME.fullmatch(path.name) is not None and not path.is_symlink() and path.is_file(), "invalid workload receipt entry")
@@ -83,8 +85,9 @@ def verify(directory, revision, image, duration_ns):
     require(end.get("status") == "passed" and end.get("suite_exit_success") is True, "native suite did not succeed")
     require(end.get("termination_succeeded") is True, "missing successful fixture termination")
     require(end.get("termination_elapsed_ns", 0) > 0, "missing fixture termination interval")
+    require(end.get("expected_tests") == labels, "wrong expected workload selection")
     seen = set()
-    for label in TESTS:
+    for label in labels:
         prefix = "osd-soak-v1-" + label + "-"
         started = read(prefix + "started.json", label, "started")
         require(started.get("configured_source_sha") == revision, "wrong started revision: " + label)
@@ -99,7 +102,9 @@ def verify(directory, revision, image, duration_ns):
         require(run.get("status") == "passed" and not run.get("first_error"), "workload failed: " + label)
         require(run.get("configured_duration_ns") == duration_ns, "workload duration configuration mismatch: " + label)
         require(type(run.get("actual_workload_ns")) is int and run["actual_workload_ns"] >= duration_ns, "shortened or missing monotonic workload: " + label)
-        require(run.get("test_elapsed_ns", 0) >= run["actual_workload_ns"], "missing total test interval: " + label)
+        require(type(run.get("test_elapsed_ns")) is int and run["test_elapsed_ns"] >= run["actual_workload_ns"], "missing total test interval: " + label)
+        interval = run.get("after_workload_start_ns")
+        require(type(interval) is int and run["actual_workload_ns"] <= interval <= run["test_elapsed_ns"], "invalid workload-relative test interval: " + label)
         require(run.get("unresolved_outcomes") == [], "unresolved mutation outcomes: " + label)
         counters = run.get("counters", {})
         # Every successful run has complete counters, even when some are zero.
@@ -141,6 +146,8 @@ def verify(directory, revision, image, duration_ns):
             for field, data in [("expected", expected), ("native", actual)]:
                 require(observation.get(field + "_length") == len(data) and observation.get(field + "_sha256") == hashlib.sha256(data).hexdigest(), "truncated or corrupt observation: " + name)
             require(native.get("code") == 0 and native.get("version", 0) > 0 and expected == actual, "native bytes/version mismatch: " + name)
+            require(type(native.get("seconds")) is int and 0 <= native["seconds"] <= 0xFFFFFFFF, "missing or invalid native mtime seconds: " + name)
+            require(type(native.get("nanos")) is int and 0 <= native["nanos"] < 1_000_000_000, "missing or invalid native mtime nanos: " + name)
             attrs = {binary(a["name"], name): binary(a["value"], name) for a in native.get("attributes", [])}
             require(isinstance(observation.get("expected_xattr"), str) and attrs.get(b"soak") == observation["expected_xattr"].encode(), "native xattr mismatch: " + name)
             seen.add((label, worker))
@@ -155,12 +162,15 @@ def verify(directory, revision, image, duration_ns):
                     kind = f"fault-{fault:03d}-{phase}"
                     record = read(prefix + kind + ".json", label, kind)
                     require(record.get("passed") is True and record.get("elapsed_ns", 0) > 0, "failed or missing fault phase: " + kind)
-                    when = record.get("after_workload_start_ns", 0)
+                    when = record.get("after_workload_start_ns")
+                    require(type(when) is int and 0 <= when <= interval, "fault outside recorded test interval: " + kind)
+                    require(phase != "kill" or when <= run["actual_workload_ns"], "fault kill outside active workload: " + kind)
+                    require(type(record.get("elapsed_ns")) is int and 0 < record["elapsed_ns"] <= when, "invalid fault phase interval: " + kind)
                     require(when >= previous, "fault phase order differs: " + kind)
                     previous = when
                     victims.add(record.get("victim"))
                 require(len(victims) == 1 and next(iter(victims)) in {"0", "1", "2"}, "fault victim changed within cycle")
-    require(len(seen) == 8, "missing final observations")
+    require(len(seen) == 4 * len(labels), "missing final observations")
     require(set(files) == {name for name in hashes if name.startswith("osd-soak-v1-")}, "unexpected or duplicate workload receipt")
     return {"schema_version": 1, "status": "passed", "observations": len(seen), "configured_duration_ns": duration_ns, "tested_revision": revision, "receipt_sha256": hashes}
 
@@ -172,9 +182,10 @@ def main():
     parser.add_argument("--revision", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--duration-ns", type=int, required=True)
+    parser.add_argument("--test", dest="tests", choices=TESTS, action="append", help="externally expected admitted workload; defaults to the pair")
     args = parser.parse_args()
     try:
-        print(json.dumps(verify(args.directory, args.revision, args.image, args.duration_ns), sort_keys=True))
+        print(json.dumps(verify(args.directory, args.revision, args.image, args.duration_ns, args.tests or tuple(TESTS)), sort_keys=True))
     except OSError as error:
         print("soak evidence missing or unreadable: errno=" + str(error.errno))
         return 1

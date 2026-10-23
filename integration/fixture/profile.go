@@ -40,7 +40,7 @@ type profile struct {
 	nativeMgrPreparation, monPing, osdCachePools, mgrService              string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
 	stressDuration, testRun, testTimeout, diagnostics                     string
-	// osdSoak is the opt-in OSD soak duration; it selects only the soak test.
+	// osdSoak is the opt-in OSD soak duration; it selects admitted soak parents.
 	osdSoak string
 	// sourceSHA is the controller's tested revision for workload receipts.
 	sourceSHA string
@@ -354,6 +354,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}
 	if p.testRun == "" {
 		p.testRun = selected
+	}
+	if _, err := soakExpectedTests(p); err != nil {
+		return profile{}, err
 	}
 	return p, nil
 }

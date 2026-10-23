@@ -81,11 +81,39 @@ func saveSoakReceipt(source io.Reader, path string) error {
 	return errors.Join(err, file.Close())
 }
 
+// Derive required parent receipts before starting the fixture. The failover
+// parent deliberately skips outside three BlueStore replicas; a steady-only
+// selection therefore needs four observations rather than the pair's eight.
+func soakExpectedTests(p profile) ([]string, error) {
+	if p.osdSoak == "" {
+		return nil, nil
+	}
+	selection, err := regexp.Compile(p.testRun)
+	if err != nil {
+		return nil, errors.New("invalid OSD soak test selection")
+	}
+	var labels []string
+	if selection.MatchString("TestCephOSDSoakIntegration") {
+		labels = append(labels, "steady")
+	}
+	if selection.MatchString("TestCephOSDSoakFailoverIntegration") && p.osdReplicas == "3" && p.osdStore == "bluestore" {
+		labels = append(labels, "failover")
+	}
+	if len(labels) == 0 {
+		return nil, errors.New("OSD soak selection contains no workload admitted by this fixture")
+	}
+	return labels, nil
+}
+
 // This workload verdict runs after owned fixture termination. It is not the
 // common successful-artifact manifest; shared bundle integration stays in #1.
 func finishSoakReceipts(project, out string, p profile, suiteErr, terminateErr error, terminationElapsed time.Duration) error {
 	if p.osdSoak == "" {
 		return nil
+	}
+	labels, err := soakExpectedTests(p)
+	if err != nil {
+		return err
 	}
 	duration, err := time.ParseDuration(p.osdSoak)
 	if err != nil {
@@ -107,7 +135,7 @@ func finishSoakReceipts(project, out string, p profile, suiteErr, terminateErr e
 	verdict := map[string]any{"schema_version": 1, "kind": "fixture_termination", "status": status,
 		"configured_source_sha": p.sourceSHA, "configured_image": p.image, "observed_image_id": metadata["image_id"], "architecture": metadata["architecture"],
 		"fixture_manifest_sha256": hex.EncodeToString(sum[:]), "configured_duration_ns": int64(duration),
-		"suite_exit_success": suiteErr == nil, "termination_succeeded": terminateErr == nil, "termination_elapsed_ns": int64(terminationElapsed)}
+		"expected_tests": labels, "suite_exit_success": suiteErr == nil, "termination_succeeded": terminateErr == nil, "termination_elapsed_ns": int64(terminationElapsed)}
 	data, err := json.Marshal(verdict)
 	if err != nil {
 		return err
@@ -120,8 +148,12 @@ func finishSoakReceipts(project, out string, p profile, suiteErr, terminateErr e
 	if err = errors.Join(err, file.Close()); err != nil {
 		return err
 	}
-	command := exec.Command("python3", filepath.Join(project, "tools", "osd_soak_receipts.py"), "verify", "--directory", out,
-		"--revision", p.sourceSHA, "--image", p.image, "--duration-ns", fmt.Sprint(int64(duration)))
+	args := []string{filepath.Join(project, "tools", "osd_soak_receipts.py"), "verify", "--directory", out,
+		"--revision", p.sourceSHA, "--image", p.image, "--duration-ns", fmt.Sprint(int64(duration))}
+	for _, label := range labels {
+		args = append(args, "--test", label)
+	}
+	command := exec.Command("python3", args...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("soak immutable receipts incomplete: %s", bytes.TrimSpace(output))

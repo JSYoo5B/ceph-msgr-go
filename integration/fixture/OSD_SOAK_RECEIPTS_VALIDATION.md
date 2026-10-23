@@ -22,8 +22,18 @@ per receipt. Repeated diagnostic copying is idempotent only for identical
 bytes; a different receipt at the same destination is refused. Credentials,
 configuration and the whole fixture directory are not selected.
 
-For each of `steady` (`TestCephOSDSoakIntegration`) and `failover`
-(`TestCephOSDSoakFailoverIntegration`):
+Before fixture startup, the selected parent names and fixture configuration
+determine the required receipt set. A selected `steady` parent
+(`TestCephOSDSoakIntegration`) needs four observations on its admitted OSD
+fixture. A selected `failover` parent (`TestCephOSDSoakFailoverIntegration`)
+is included only with three BlueStore replicas. A default selection on one
+OSD or MemStore therefore requires steady receipts; the existing three-OSD
+BlueStore pair requires eight observations. A selection with no runnable
+soak parent is rejected before fixture startup. The termination record and
+external verifier both receive this expected set; receipts cannot choose a
+smaller set for themselves.
+
+For each admitted parent:
 
 - `started.json` records configured duration, the controller's source SHA
   assertion and the fixture manifest hash; `setup.json` records setup time
@@ -31,7 +41,9 @@ For each of `steady` (`TestCephOSDSoakIntegration`) and `failover`
 - Four distinct `worker-0.json` through `worker-3.json` records retain the
   expected synthetic bytes/xattr, native bytes/xattrs/version/mtime/code,
   lengths and SHA-256 digests, native source/version and independent-C-API
-  attribution, the comparison result and native observation duration.
+  attribution, the comparison result and native observation duration. Native
+  mtime requires integer unsigned-32-bit seconds and integer nanoseconds in
+  `[0, 1_000_000_000)`; missing or mistyped fields are refused.
   Each is written immediately after that worker's native comparison and
   before assertions or cleanup can replace the reusable oracle output.
 - `workload.json` records configured duration, actual monotonic interval,
@@ -51,7 +63,10 @@ For each of `steady` (`TestCephOSDSoakIntegration`) and `failover`
 All filenames have the `osd-soak-v1-<test>-` prefix. The failover test also
 retains a distinct `fault-NNN-kill.json`, `-restart.json` and `-clean.json`
 after each completed phase, including victim identity, order and elapsed
-time, followed by `recovery-clean.json`. Existing faults still run one OSD
+time, followed by `recovery-clean.json`. Every offset is an integer within
+the recorded monotonic test interval after workload start. Kills must also
+precede the last worker exit; restart/clean recovery may drain beyond that
+point within the test. Existing faults still run one OSD
 at a time. If a test fails, already-written observations remain unchanged;
 missing stages and the original test failure remain visible. There is no
 new mutation retry or uncertain-outcome policy.
@@ -64,7 +79,8 @@ Archive-based runs must supply `CEPH_MSGR_TEST_SOURCE_SHA`; that value is
 explicitly a controller assertion, not a native observation of Go source.
 
 `tools/osd_soak_receipts.py verify` requires externally expected revision,
-image and duration. It independently checks all eight worker identities,
+image, duration and admitted parent set (the pair by default). It independently
+checks all required worker identities,
 full expected/native bytes and xattrs, lengths/digests, versions, both
 workload durations/counters, unresolved outcomes, every fault/recovery
 stage, owned-object cleanup and fixture termination. It emits receipt
@@ -101,6 +117,10 @@ runs do not prove this checkpoint. The first Linux static check found that
 an empty new source env key altered the strict non-soak environment
 contract; source propagation was restricted to soak tests, preserving other
 profiles. That static failure is separate from native acceptance.
+
+Admission/finalization tests cover steady-only, failover-only and pair
+selections, including one-OSD/MemStore steady fixtures. These synthetic
+contract tests do not establish native acceptance of an additional profile.
 
 This checkpoint does not establish longer soaks, continuous capacity or
 resource monitoring, ticket renewal, network attribution, all native paths

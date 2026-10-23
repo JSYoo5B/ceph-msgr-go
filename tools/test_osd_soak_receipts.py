@@ -19,22 +19,22 @@ class SoakReceiptsTests(unittest.TestCase):
         self.duration = 240_000_000_000
         self.put("fixture-manifest.json", {"image": self.image, "image_id": "sha256:" + "c" * 64, "architecture": "amd64"})
         manifest = hashlib.sha256((self.root / "fixture-manifest.json").read_bytes()).hexdigest()
-        self.put("osd-soak-v1-fixture-termination.json", {"schema_version": 1, "kind": "fixture_termination", "status": "passed", "configured_source_sha": self.sha, "configured_image": self.image, "observed_image_id": "sha256:" + "c" * 64, "architecture": "amd64", "fixture_manifest_sha256": manifest, "configured_duration_ns": self.duration, "suite_exit_success": True, "termination_succeeded": True, "termination_elapsed_ns": 1000})
+        self.put("osd-soak-v1-fixture-termination.json", {"schema_version": 1, "kind": "fixture_termination", "status": "passed", "configured_source_sha": self.sha, "configured_image": self.image, "observed_image_id": "sha256:" + "c" * 64, "architecture": "amd64", "fixture_manifest_sha256": manifest, "configured_duration_ns": self.duration, "suite_exit_success": True, "termination_succeeded": True, "termination_elapsed_ns": 1000, "expected_tests": list(receipts.TESTS)})
         for label, test in receipts.TESTS.items():
             self.put_stage(label, "started", {"configured_source_sha": self.sha, "configured_duration_ns": self.duration, "fixture_manifest_sha256": manifest})
             owned = ["owned-seed"] + [f"owned-{w}" for w in range(4)]
             self.put_stage(label, "setup", {"elapsed_ns": 1000, "owned_objects": owned})
-            self.put_stage(label, "workload", {"configured_duration_ns": self.duration, "actual_workload_ns": self.duration + 1000, "test_elapsed_ns": self.duration + 5000, "status": "passed", "first_error": "", "unresolved_outcomes": [], "counters": {"appends": 1000, "reads": 100, "churns": 100, "unknowns": 10, "resubmissions": 10, "faults": 1, "xattrs": 100, "truncations": 10, "unsent": 0, "replacements": 10, "resent": 0}})
+            self.put_stage(label, "workload", {"configured_duration_ns": self.duration, "actual_workload_ns": self.duration + 1000, "after_workload_start_ns": self.duration + 2000, "test_elapsed_ns": self.duration + 5000, "status": "passed", "first_error": "", "unresolved_outcomes": [], "counters": {"appends": 1000, "reads": 100, "churns": 100, "unknowns": 10, "resubmissions": 10, "faults": 1, "xattrs": 100, "truncations": 10, "unsent": 0, "replacements": 10, "resent": 0}})
             self.put_stage(label, "cleanup", {"removed": True, "elapsed_ns": 1000, "objects": [{"object": name, "code": 0} for name in owned]})
             for worker in range(4):
                 data = bytes([worker, 255, 0])
                 encoded = base64.b64encode(data).decode()
                 digest = hashlib.sha256(data).hexdigest()
-                self.put_stage(label, f"worker-{worker}", {"worker": worker, "native_observation_elapsed_ns": 1000, "object": f"owned-{worker}", "expected_data": encoded, "expected_xattr": "123", "expected_length": len(data), "expected_sha256": digest, "native_length": len(data), "native_sha256": digest, "matched": True, "native_source_commit": receipts.SOURCE, "native_daemon_version": "20.2.4 " + receipts.SOURCE, "independent_native_c_api": True, "native": {"code": 0, "version": 12, "data": encoded, "attributes": [{"name": "c29haw==", "value": "MTIz"}]}})
+                self.put_stage(label, f"worker-{worker}", {"worker": worker, "native_observation_elapsed_ns": 1000, "object": f"owned-{worker}", "expected_data": encoded, "expected_xattr": "123", "expected_length": len(data), "expected_sha256": digest, "native_length": len(data), "native_sha256": digest, "matched": True, "native_source_commit": receipts.SOURCE, "native_daemon_version": "20.2.4 " + receipts.SOURCE, "independent_native_c_api": True, "native": {"code": 0, "version": 12, "seconds": 1750000000, "nanos": 123, "data": encoded, "attributes": [{"name": "c29haw==", "value": "MTIz"}]}})
             if label == "failover":
                 self.put_stage(label, "recovery-clean", {"passed": True})
                 for when, phase in enumerate(["kill", "restart", "clean"], 1):
-                    self.put_stage(label, "fault-001-" + phase, {"passed": True, "elapsed_ns": 1000, "after_workload_start_ns": when, "victim": "1"})
+                    self.put_stage(label, "fault-001-" + phase, {"passed": True, "elapsed_ns": 1000, "after_workload_start_ns": when * 1000, "victim": "1"})
 
     def put(self, name, value):
         (self.root / name).write_text(json.dumps(value, sort_keys=True))
@@ -55,6 +55,78 @@ class SoakReceiptsTests(unittest.TestCase):
         result = self.verify()
         self.assertEqual(result["observations"], 8)
         self.assertTrue(all(len(v) == 64 for v in result["receipt_sha256"].values()))
+
+    def test_selected_steady_parent_requires_four_observations(self):
+        for path in self.root.glob("osd-soak-v1-failover-*"):
+            path.unlink()
+        self.change("osd-soak-v1-fixture-termination.json", lambda x: x.update(expected_tests=["steady"]))
+        self.assertEqual(receipts.verify(self.root, self.sha, self.image, self.duration, ["steady"])["observations"], 4)
+        with self.assertRaisesRegex(ValueError, "expected workload selection"):
+            self.verify()
+
+    def test_selected_failover_parent_requires_its_four_observations(self):
+        for path in self.root.glob("osd-soak-v1-steady-*"):
+            path.unlink()
+        self.change("osd-soak-v1-fixture-termination.json", lambda x: x.update(expected_tests=["failover"]))
+        self.assertEqual(receipts.verify(self.root, self.sha, self.image, self.duration, ["failover"])["observations"], 4)
+
+    def test_unselected_workload_cannot_be_smuggled_into_receipts(self):
+        self.change("osd-soak-v1-fixture-termination.json", lambda x: x.update(expected_tests=["steady"]))
+        with self.assertRaisesRegex(ValueError, "unexpected or duplicate workload"):
+            receipts.verify(self.root, self.sha, self.image, self.duration, ["steady"])
+
+    def test_missing_native_mtime_seconds(self):
+        self.change("osd-soak-v1-steady-worker-0.json", lambda x: x["native"].pop("seconds"))
+        with self.assertRaisesRegex(ValueError, "native mtime seconds"):
+            self.verify()
+
+    def test_missing_native_mtime_nanos(self):
+        self.change("osd-soak-v1-steady-worker-0.json", lambda x: x["native"].pop("nanos"))
+        with self.assertRaisesRegex(ValueError, "native mtime nanos"):
+            self.verify()
+
+    def test_invalid_native_mtime_types_and_ranges(self):
+        for field, values in [("seconds", [None, True, "1", 1.0, -1, 1 << 32]),
+                              ("nanos", [None, True, "1", 1.0, -1, 1_000_000_000])]:
+            original = 1750000000 if field == "seconds" else 123
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    self.change("osd-soak-v1-steady-worker-0.json", lambda x: x["native"].update({field: value}))
+                    with self.assertRaisesRegex(ValueError, "native mtime " + field):
+                        self.verify()
+            self.change("osd-soak-v1-steady-worker-0.json", lambda x: x["native"].update({field: original}))
+
+    def test_native_mtime_wire_bounds_are_admitted(self):
+        for seconds, nanos in [(0, 0), (0xFFFFFFFF, 999_999_999)]:
+            self.change("osd-soak-v1-steady-worker-0.json", lambda x: x["native"].update(seconds=seconds, nanos=nanos))
+            self.assertEqual(self.verify()["observations"], 8)
+
+    def test_fault_times_must_be_strict_nonnegative_integers(self):
+        for value in [None, True, "1", 1.0, -1]:
+            with self.subTest(value=value):
+                self.change("osd-soak-v1-failover-fault-001-kill.json", lambda x: x.update(after_workload_start_ns=value))
+                with self.assertRaisesRegex(ValueError, "fault outside recorded test interval"):
+                    self.verify()
+
+    def test_ordered_fault_times_after_entire_test_are_rejected(self):
+        for index, phase in enumerate(["kill", "restart", "clean"]):
+            self.change("osd-soak-v1-failover-fault-001-" + phase + ".json", lambda x: x.update(after_workload_start_ns=10**18 + index))
+        with self.assertRaisesRegex(ValueError, "fault outside recorded test interval"):
+            self.verify()
+
+    def test_kill_must_occur_before_workers_finish(self):
+        self.change("osd-soak-v1-failover-fault-001-kill.json", lambda x: x.update(after_workload_start_ns=self.duration + 1500))
+        with self.assertRaisesRegex(ValueError, "fault kill outside active workload"):
+            self.verify()
+
+    def test_recovery_phase_may_finish_after_workers_within_test(self):
+        self.change("osd-soak-v1-failover-fault-001-clean.json", lambda x: x.update(after_workload_start_ns=self.duration + 1500))
+        self.assertEqual(self.verify()["observations"], 8)
+
+    def test_missing_workload_relative_interval(self):
+        self.change("osd-soak-v1-failover-workload.json", lambda x: x.pop("after_workload_start_ns"))
+        with self.assertRaisesRegex(ValueError, "workload-relative test interval"):
+            self.verify()
 
     def test_missing_worker_is_not_a_pass(self):
         (self.root / "osd-soak-v1-steady-worker-3.json").unlink()
