@@ -1,0 +1,17 @@
+{
+  "architecture": "amd64",
+  "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+  "fixture_reported_profile": {
+    "family": "4",
+    "key": "aes",
+    "mode": "crc",
+    "osd": "1",
+    "osd_profile": "legacy-v6",
+    "osd_replicas": "1",
+    "osd_store": "bluestore",
+    "runtime": "host",
+    "service": "aes"
+  },
+  "image_id": "sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "provider_version": "v0.3.0"
+}

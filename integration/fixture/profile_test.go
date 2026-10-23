@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -50,6 +53,62 @@ func TestProfileDefaults(t *testing.T) {
 	}
 	if p != want {
 		t.Fatalf("profile = %#v, want %#v", p, want)
+	}
+}
+
+// Exercise the real parser with the row forwarded by the trusted workflow.
+// This binds selection to an admitted runtime and pool, rather than accepting
+// a syntactically valid planner row whose parent would skip.
+func TestCompressionOfferCatalogProfile(t *testing.T) {
+	const id = "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer"
+	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "scenarios", "catalog.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var catalog struct {
+		Scenarios []struct {
+			ID     string            `json:"id"`
+			Params map[string]string `json:"params"`
+		} `json:"scenarios"`
+	}
+	if err := json.Unmarshal(data, &catalog); err != nil {
+		t.Fatal(err)
+	}
+	var params map[string]string
+	for _, row := range catalog.Scenarios {
+		if row.ID == id {
+			if params != nil {
+				t.Fatal("duplicate compression-offer scenario")
+			}
+			params = row.Params
+		}
+	}
+	if params == nil {
+		t.Fatal("compression-offer scenario missing")
+	}
+	forwarded := map[string]string{
+		"CEPH_MSGR_TEST_KEY_TYPE": "key", "CEPH_MSGR_TEST_SERVICE_CIPHER": "service",
+		"CEPH_MSGR_TEST_CONNECTION_MODE": "mode", "CEPH_MSGR_TEST_IP_FAMILY": "family",
+		"CEPH_MSGR_STRESS_DURATION": "stress", "CEPH_MSGR_TEST_RUNTIME": "runtime",
+		"CEPH_MSGR_TEST_OSD": "osd", "CEPH_MSGR_TEST_OSD_STORE": "osd_store",
+		"CEPH_MSGR_TEST_OSD_REPLICAS": "osd_replicas", "CEPH_MSGR_TEST_OSD_PROFILE": "osd_profile",
+		"CEPH_MSGR_TEST_RUN": "test_run", "CEPH_MSGR_TEST_IMAGE": "image",
+	}
+	p, err := loadProfile(func(name string) string { return params[forwarded[name]] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.testRun != "^TestCephMsgrCompressionOfferIntegration$" ||
+		p.connectionMode != "crc" || p.osd != "1" || p.keyType != "aes" || p.serviceCipher != "aes" ||
+		p.ipFamily != "4" || p.runtime != "host" || p.osdStore != "bluestore" ||
+		p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.image != profileDefaultImage {
+		t.Fatalf("compression-offer profile = %#v", p)
+	}
+	if got := p.osdTopology(); got != (osdTopology{daemons: 1, poolSize: 1, poolMinSize: 1}) {
+		t.Fatalf("compression-offer topology = %#v", got)
+	}
+	if !regexp.MustCompile(p.testRun).MatchString("TestCephMsgrCompressionOfferIntegration") {
+		t.Fatal("compression-offer parent is not selected")
 	}
 }
 

@@ -745,6 +745,22 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 		}
 	}
 
+	fields, err = c.request(out, "verify-mgr-service-config")
+	if err != nil {
+		return err
+	}
+	if fields != nil {
+		if len(fields) != 2 {
+			return errors.New("invalid MGR service configuration request")
+		}
+		if err = c.mgrServiceConfigControl(ctx, out, fields[1]); err != nil {
+			return err
+		}
+		if err = publishAck(out, "mgr-service-config-verify."+fields[0]); err != nil {
+			return err
+		}
+	}
+
 	fields, err = c.request(out, "verify-osd-pool")
 	if err != nil {
 		return err

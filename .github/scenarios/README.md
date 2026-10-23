@@ -44,7 +44,18 @@ fixture and likewise without an opt-in parameter.
 One further `osd` row selects only `TestCephOSDCopyFromLateErrorIntegration`
 on the CRC/AES IPv4 host single-BlueStore legacy-v6 fixture. This owned daemon
 fault requires its exact exclusive selector; broad suites do not execute it.
-The catalog has 77 native rows in total.
+One dedicated `osd` row selects only `TestCephMsgrCompressionOfferIntegration`
+on CRC/AES client and service cipher, IPv4 host runtime, one BlueStore OSD,
+replica/min-size one and legacy-v6. Its ID is
+`osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer`.
+The existing `test_run` input overrides the broad OSD selector without
+changing any other profile. Request that ID with `/ci run`; `all` includes it
+in periodic main verification. The required-test gate binds it to
+`api/TestCephMsgrCompressionOfferIntegration`, so a missing or skipped parent
+cannot pass. The [selected native receipt](../../integration/fixture/MSGR_COMPRESSION_VALIDATION.md)
+records no negotiated compression and successful MON/OSD commands; it does
+not prove that negotiation frames were exchanged or compressed frames worked.
+The catalog has 78 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
@@ -174,9 +185,21 @@ Artifact retention follows the purpose of each upload:
 
 | Artifact category | Retention | Current uploads |
 | --- | --- | --- |
-| General results | 7 days | Scenario result JSON for requested and periodic runs; successful Windows interoperability evidence |
+| General results | 7 days | Scenario result/test JSON for requested and periodic runs; reviewed explicit cap-send success bundles; successful Windows interoperability evidence |
 | Failure diagnostics | 14 days | Failed native, race and unit-test logs/metadata; Windows evidence when the job fails |
 | Deployment evidence | 30 days | Policy for future deployment workflows; no deployment workflow currently uploads evidence |
+
+Successful explicit cap-send rows additionally request the closed
+[schema-v1 native evidence bundle](NATIVE_EVIDENCE.md). Its manifest joins
+tested/controller SHA, execution source, run ID/attempt, scenario/selector,
+normalized requested profile, configured image, observed runtime facts and
+included-file hashes. Only reviewed numeric/outcome/cleanup projections are
+uploaded for seven days; raw metadata, logs, configuration and credentials
+remain excluded. `result.json` distinguishes a native test PASS from incomplete
+required evidence, and the pilot's final gate requires both collection and
+upload. Other rows keep their previous retention boundary. This new trusted
+collector becomes available to PR-comment execution after its workflow lands
+on the default branch; pre-merge native requests keep the older runner.
 
 Diagnostic and Windows evidence uploads use compression level 9. Periodic runs
 use the same retention policy as requested runs. These settings affect new
