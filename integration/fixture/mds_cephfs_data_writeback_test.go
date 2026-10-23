@@ -180,3 +180,62 @@ func TestMDSCephFSDataOSDDropLogAttribution(t *testing.T) {
 		t.Fatal("overlong line not counted as dropped", kept, dropped)
 	}
 }
+
+var dataActiveStates = []string{"intended", "applied", "uncertain", "restore-intended", "restore-uncertain"}
+
+func TestMDSCephFSDataOSDDropAndMDSFaultsExcludeEachOther(t *testing.T) {
+	baseline := map[string]string{"debug_ms": "0/5", "ms_blackhole_client": "false"}
+	// OSD drop first: no MDS fault starts while it is active or uncertain.
+	for _, state := range dataActiveStates {
+		for _, kind := range []string{"log-pause", "client-drop-on"} {
+			x := dataRuntimeDebugApplied(t)
+			d, err := x.newOSDDrop(10, "osd.0", baseline)
+			if err != nil {
+				t.Fatal(err)
+			}
+			x.osdDrop, d.State = d, state
+			if r, err := x.newRuntime(11, kind); err == nil || r != nil || len(x.runtime) != 1 {
+				t.Fatal("MDS fault admitted beside an active OSD drop", state, kind, err)
+			}
+		}
+		// The journal-pause recipe's later blackhole is refused as well.
+		x := dataRuntimePausedAndBlackholed(t)
+		x.runtime = x.runtime[:2]
+		x.osdDrop = &mdsCephFSDataOSDDrop{State: state}
+		if _, err := x.newRuntime(11, "blackhole-on"); err == nil || len(x.runtime) != 2 {
+			t.Fatal("MDS blackhole admitted beside an active OSD drop", state, err)
+		}
+	}
+	// The debug change and owned MDS restoration stay available beside an
+	// OSD drop.
+	x := &mdsCephFSDataScope{current: dataRestartDaemon(), baselineConfig: dataRuntimeBaseline(), osdDrop: &mdsCephFSDataOSDDrop{State: "uncertain"}}
+	if _, err := x.newRuntime(1, "debug-on"); err != nil {
+		t.Fatal("debug change refused beside an OSD drop", err)
+	}
+	paused := dataRuntimePausedAndBlackholed(t)
+	paused.osdDrop = &mdsCephFSDataOSDDrop{State: "restore-uncertain"}
+	if err := paused.canResumeLog(); err != nil {
+		t.Fatal("owned journal resume blocked by an OSD drop", err)
+	}
+	// MDS fault first: the OSD drop is refused while either fault kind is in
+	// any active or uncertain state.
+	for _, state := range dataActiveStates {
+		for _, kind := range []string{"log-pause", "client-drop-on"} {
+			x := dataRuntimeDebugApplied(t)
+			fault, err := x.newRuntime(2, kind)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fault.State = state
+			if d, err := x.newOSDDrop(3, "osd.0", baseline); err == nil || d != nil {
+				t.Fatal("OSD drop admitted beside an active MDS fault", state, kind)
+			}
+		}
+	}
+	// Once the OSD drop is restored an MDS fault is admitted again.
+	x = dataRuntimeDebugApplied(t)
+	x.osdDrop = &mdsCephFSDataOSDDrop{State: "restored"}
+	if _, err := x.newRuntime(2, "client-drop-on"); err != nil {
+		t.Fatal("MDS client drop refused after the OSD drop was restored", err)
+	}
+}

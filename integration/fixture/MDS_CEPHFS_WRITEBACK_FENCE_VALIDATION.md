@@ -97,8 +97,11 @@ undecoded op prints `osd_op()`); osd/PrimaryLogPG.cc `do_op`
 
 `osd-drop-on`, `osd-drop-off`, `osd-log` and `evict` are refused unless the
 profile's selector is the writeback-fence selector. The OSD drop is issued at
-most once per run, never during a restart or beside an MDS client blackhole,
-and native LibCephFS work is refused while it is active (including intended
+most once per run, never during a restart or beside an MDS journal pause or
+client blackhole. Symmetrically, `log-pause`, `blackhole-on` and
+`client-drop-on` are refused while the OSD drop is in any active or uncertain
+state; the debug change and owned restorations stay available. Native
+LibCephFS work is refused while it is active (including intended
 and uncertain states). Its baseline must report `ms_blackhole_client=false`.
 Cleanup restores an override that is still active and reads it back, before
 any native namespace check. The eviction is issued once, only for a session

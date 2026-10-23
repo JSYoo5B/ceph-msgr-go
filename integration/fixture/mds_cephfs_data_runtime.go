@@ -150,6 +150,12 @@ func (x *mdsCephFSDataScope) newRuntime(id int64, kind string) (*mdsCephFSDataRu
 	if x.restart.pending() || len(x.runtime) >= 4 || slices.ContainsFunc(x.runtime, func(r *mdsCephFSDataRuntime) bool { return r.Kind == kind && r.IncarnationGID == x.current.GID }) {
 		return nil, errors.New("DATA runtime change was already issued or restart is pending")
 	}
+	// An MDS fault never starts beside the writeback-fence OSD drop, in any
+	// active or uncertain state (the inverse of newOSDDrop's admission).
+	// Restoration does not pass through here and stays available.
+	if kind != "debug-on" && x.osdDrop.active() {
+		return nil, errors.New("DATA MDS fault refused while the OSD client drop is active")
+	}
 	settings := map[string]string{}
 	switch kind {
 	case "log-pause":
