@@ -61,14 +61,18 @@ an `OutcomeUnknownError` stops the test without resending.
 
 ## Observed run
 
-[CI command run 39870831158](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39870831158)
-tested exact commit `0bf08b077c100ba4932d0d6f1657479fc7709245`: secure mode,
+[CI command run 39878019051](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39878019051)
+tested exact commit `9077d5e0beb70a3409149342cc3fa7e204747e30`, which carries
+the try-flush outcome gate: secure mode,
 aes256k service and client keys, IPv6, container runtime, two MGRs, one
 BlueStore OSD, legacy-v6 request profile, pinned image
 `quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`.
-`TestCephOSDCacheOpGoIntegration` and all six subtests passed in 2.03 s, and
+`TestCephOSDCacheOpGoIntegration` and all six subtests passed in 2.43 s; the try-flush returned 0 and its
+postcondition gate held, and
 the fixture's finish and pool cleanup completed (the job succeeded and the
 test's cleanup assertion requires a finished observer with complete cleanup).
+The earlier run 39870831158 at `0bf08b077c100ba4932d0d6f1657479fc7709245` also
+passed, but without the try-flush postcondition gate.
 
 | Go request | Transaction | Aggregate | Per-op |
 | --- | --- | --- | --- |
