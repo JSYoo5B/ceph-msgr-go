@@ -448,6 +448,7 @@ type nativeMDSCephFSDataReceipt struct {
 	} `json:"flush_journal,omitempty"`
 	OSDDrop       *nativeMDSCephFSDataOSDDrop    `json:"osd_drop,omitempty"`
 	OSDLog        *nativeMDSCephFSDataOSDDropLog `json:"osd_log,omitempty"`
+	Reader        *nativeMDSCephFSDataReader     `json:"reader,omitempty"`
 	Complete      bool                           `json:"complete"`
 	Error         string                         `json:"error"`
 	ElapsedMillis int64                          `json:"elapsed_ms"`
@@ -466,6 +467,17 @@ type nativeMDSCephFSDataOSDDrop struct {
 	LogMark         int               `json:"log_mark"`
 	RestoreReadback map[string]string `json:"restore_readback"`
 	Error           string            `json:"error"`
+}
+
+// nativeMDSCephFSDataReader is the fixture's background native reader of
+// shared-file (writeback-fence recipe only).
+type nativeMDSCephFSDataReader struct {
+	RequestID     int64  `json:"request_id"`
+	State         string `json:"state"`
+	StartedUTC    string `json:"started_utc"`
+	ElapsedMillis int64  `json:"elapsed_ms"`
+	WaitRequestID int64  `json:"wait_request_id"`
+	Error         string `json:"error"`
 }
 
 // nativeMDSCephFSDataOSDDropLog is attributed OSD drop evidence: pairs of a
@@ -632,6 +644,15 @@ func (x *mdsCephFSDataControl) request(ctx context.Context, action string, argum
 		if len(arguments) != 1 || m == nil || m.Kind != "eviction" || m.State != "evicted" || m.Until == "" || m.Address == "" ||
 			strconv.FormatUint(m.GlobalID, 10) != arguments[0] || result.session(m.GlobalID) != nil {
 			return result, errors.New("native data eviction receipt differs")
+		}
+	case "reader-start", "reader-status":
+		if r := result.Reader; r == nil || r.RequestID == 0 || r.Error != "" || r.State != "running" && (action == "reader-start" || r.State != "completed") {
+			return result, errors.New("native data background reader receipt differs")
+		}
+	case "reader-wait":
+		if r := result.Reader; r == nil || r.State != "completed" || r.WaitRequestID != result.RequestID || result.Native == nil || result.Native.Read == nil ||
+			result.Native.NativeGlobalID == 0 || result.Native.NativeGlobalID == x.goGID {
+			return result, errors.New("native data background reader result differs")
 		}
 	case "cap-log":
 		if len(arguments) != 2 || arguments[0] != strconv.FormatUint(x.goGID, 10) || result.CapLog == nil ||
@@ -2248,6 +2269,218 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 	}) {
 		return
 	}
+	// revoke carries the revoke-time writeback into the fence leaf, which
+	// evicts the same client instance.
+	var revoke *cephfsRevokeWriteback
+	if recipe == cephfsDataWritebackFenceRestart && !leaf("revoke_time_writeback_interrupted_latched_and_evicted", func(t *testing.T) {
+		shared := files["shared-file"]
+		if shared == nil || shared.Ino == 0 {
+			t.Fatal("the shared file of the revoke-time writeback is missing")
+		}
+		f := &cephfsDataFileEvidence{Name: shared.Name, Ino: shared.Ino}
+		rw := map[string]any{"file": f}
+		facts["revoke_writeback"] = rw
+		st := open(t, f.Ino, cephFileModeRDWR, f.Name)
+		f.ReplyCap, f.ReplyCaps, f.ReplyMaxSize = st.Cap, cephCapString(st.Cap.Caps), st.MaxSize
+		checkLayout(t, f, st)
+		waitCap(t, f.Ino, "Fwb for the buffered write", 15*time.Second, func(c cephfsCap) bool {
+			return c.Issued&(cephCapFileWR|cephCapFileBuffer) == cephCapFileWR|cephCapFileBuffer
+		})
+		ensureMaxSize(t, f, plan.SharedSize)
+		trunc := truncOf(f.Ino)
+		context := snapc(t, f.Ino)
+		f.Truncate, f.SnapContext = &trunc, context
+		// A overwrites file range [0, 64 KiB), the first extent of object 0;
+		// B overwrites [64 KiB, 128 KiB), the first extent of object 1. Both
+		// stay inside the file, so the size does not tell the branches apart;
+		// their bytes do.
+		su := plan.StripeUnit
+		extA, extB := layout.fileToExtents(0, su), layout.fileToExtents(su, su)
+		if len(extA) != 1 || len(extB) != 1 || extA[0].ObjectNo == extB[0].ObjectNo || su*2 > plan.SharedSize {
+			t.Fatal("A and B must each be one extent of a distinct object", extA, extB)
+		}
+		dataA := cephfsDataStream("ceph-msgr-cephfs-data-revoke-a:"+oracle.Token, su)
+		dataB := cephfsDataStream("ceph-msgr-cephfs-data-revoke-b:"+oracle.Token, su)
+		imageA := slices.Clone(sharedPayload)
+		copy(imageA[:su], dataA)
+		imageAB := slices.Clone(imageA)
+		copy(imageAB[su:2*su], dataB)
+		ledger := &cephfsWritebackLedger{}
+		rw["ledger"], rw["context"], rw["extents"] = ledger, context, map[string]any{"a": extA[0], "b": extB[0]}
+		identity := client.Snapshot()
+		gidArg, nonceArg := strconv.FormatUint(identity.GlobalID, 10), strconv.FormatUint(uint64(identity.CephFSNonce), 10)
+		leafWrites := func() []cephfsDataObjectIO {
+			osdIO.mu.Lock()
+			defer osdIO.mu.Unlock()
+			var writes []cephfsDataObjectIO
+			for _, op := range osdIO.log {
+				if op.Leaf == osdIO.leaf && op.Op == "write" {
+					writes = append(writes, op)
+				}
+			}
+			return writes
+		}
+
+		// 1. A completes (ONDISK) and its metadata flush is acknowledged.
+		timeA := newMTime(f.Ino)
+		if out := ledger.writeback(osdIO, "revoke-a", f.Ino, layout, 0, dataA, context, timeA, trunc, 30*time.Second); !slices.Equal(out, []string{cephfsWriteCompleted}) {
+			t.Fatal("A did not complete", out, ledger.Writes)
+		}
+		if err := agent.markDirty(f.Ino, plan.SharedSize, timeA, context.Sequence, false, 0, nil); err != nil {
+			t.Fatal(err)
+		}
+		f.MTime = timeA
+		flush(t, f)
+		rw["accepted_flush"] = map[string]any{"tid": f.FlushTID, "message": f.FlushMessage, "ack": f.FlushAck}
+
+		// 2. B is buffered; only the revoke callback writes it back, while the
+		// owned OSD drops client messages after Messenger receipt.
+		_, n := observe(t)
+		if n == nil || !strings.HasSuffix(n.Address, ":0/"+nonceArg) {
+			t.Fatal("native session address does not carry the shared nonce", n)
+		}
+		rw["osd_drop"] = req(t, "osd-drop-on", "").OSDDrop
+		timeB := newMTime(f.Ino)
+		buffered := time.Now()
+		if err := agent.markDirty(f.Ino, plan.SharedSize, timeB, context.Sequence, true, 0,
+			ledger.bufferedWriteback(osdIO, "revoke-b", f.Ino, layout, su, dataB, context, timeB, trunc, 5*time.Second)); err != nil {
+			t.Fatal(err)
+		}
+
+		// 3. A native reader starts behind the drop. Its open makes the MDS
+		// revoke FILE_BUFFER, and the callback's writeback of B is dropped.
+		rw["reader_started"] = req(t, "reader-start", "").Reader
+		var latched cephfsDirtyFile
+		deadline := time.Now().Add(45 * time.Second)
+		for latched.Latch == nil {
+			latched, _ = agent.dirtyState(f.Ino)
+			if latched.Latch == nil && time.Now().After(deadline) {
+				t.Fatalf("the revoke-time writeback did not latch: %+v", latched)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		rw["latch"] = latched.Latch
+		if l := latched.Latch; l.Source != "revoke-callback" || l.Outcome != cephfsWriteUncertain || !slices.Equal(l.Extents, []string{cephfsWriteUncertain}) ||
+			!latched.Buffered || l.Began.Before(buffered) {
+			t.Fatalf("the interrupted revoke-time writeback is not an uncertain latch: %+v", l)
+		}
+		if len(ledger.Writes) != 2 || ledger.Writes[1].Phase != "revoke-b" || ledger.Writes[1].Outcome != cephfsWriteUncertain {
+			t.Fatal("B's writeback ledger differs", ledger.Writes)
+		}
+		uncertain := ledger.Writes[1].IO
+		if uncertain.Submission == nil || uncertain.Submission.GlobalID != identity.GlobalID || uncertain.Submission.MapEpoch == 0 || uncertain.ObjectNo != extB[0].ObjectNo ||
+			uncertain.Offset != extB[0].Offset || uncertain.Length != extB[0].Length || uncertain.RequestSHA256 == "" {
+			t.Fatalf("uncertain write identity differs: %+v", uncertain)
+		}
+		rw["uncertain_write"] = uncertain
+		var dropLog *nativeMDSCephFSDataOSDDropLog
+		deadline = time.Now().Add(15 * time.Second)
+		for {
+			r, err := control.request(ctx, "osd-log", gidArg, nonceArg)
+			if err != nil {
+				t.Fatal("OSD drop log", err)
+			}
+			dropLog = r.OSDLog
+			if len(dropLog.Lines) != 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("owned OSD did not record the attributed drop of the revoke-time write")
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		rw["osd_drop_log"] = dropLog
+		if len(dropLog.Lines) != 2 || !strings.Contains(dropLog.Lines[0], " from=client."+gidArg+" type=42 ") {
+			t.Fatal("the OSD did not drop exactly one object request of this client", dropLog.Lines)
+		}
+		pending := req(t, "reader-status", "").Reader
+		rw["reader_pending_during_drop"] = pending
+		if pending.State != "running" {
+			t.Fatal("the native reader ended while FILE_BUFFER was held", pending)
+		}
+		rw["osd_drop_restored"] = req(t, "osd-drop-off", "").OSDDrop
+		restored := time.Now()
+
+		// 4. The obligation outlives the drop: the reader still waits, B is not
+		// resubmitted and FILE_BUFFER is still implemented.
+		const held = 3 * time.Second
+		time.Sleep(held)
+		still := req(t, "reader-status", "").Reader
+		rw["reader_pending_after_restore"] = still
+		if still.State != "running" {
+			t.Fatal("the native reader ended before the explicit decision", still)
+		}
+		if d, _ := agent.dirtyState(f.Ino); d.Latch == nil || !d.Buffered || len(ledger.Writes) != 2 || len(leafWrites()) != 2 {
+			t.Fatal("the latched writeback was resubmitted or resolved without a decision", d.Latch, len(ledger.Writes))
+		}
+		if c, _ := agent.cap(f.Ino); c.Implemented&cephCapFileBuffer == 0 {
+			t.Fatal("FILE_BUFFER was released before the decision", cephCapString(c.Implemented))
+		}
+
+		// 5. The consumer's explicit decision evicts the uncertain buffered
+		// data; the revoke completes and the reader reaches a terminal result.
+		evictedAt := time.Now()
+		msg, sent, err := agent.evictBuffered(f.Ino)
+		if err != nil || !sent || msg.Caps&cephCapFileBuffer != 0 {
+			t.Fatal("eviction did not release FILE_BUFFER", msg, sent, err)
+		}
+		rw["eviction_update"] = msg
+		result := req(t, "reader-wait", "")
+		rw["reader_result"], rw["reader_timings_ns"] = result.Reader, result.Native.TimingsNS
+		got, want := *result.Native.Read, cephfsDataDigest(imageA)
+		if got.Length != want.Length || got.SHA256 != want.SHA256 || !slices.Equal(got.Chunks, want.Chunks) || result.Native.Stat == nil || result.Native.Stat.Size != plan.SharedSize {
+			branch := "neither"
+			if got.SHA256 == cephfsDataDigest(imageAB).SHA256 {
+				branch = "the A+B"
+			}
+			t.Fatalf("the native reader did not see the A branch (it saw %s branch): length %d", branch, got.Length)
+		}
+		f.NativeRead, f.NativeStat = &got, result.Native.Stat
+		if read := time.Duration(result.Native.TimingsNS["read"]); read < evictedAt.Sub(restored) {
+			t.Fatalf("the native read completed %v after its start, before the %v the obligation was held after the drop", read, evictedAt.Sub(restored))
+		}
+
+		// 6. Independent observation: native object sizes and Go head bytes
+		// show A landed and B did not.
+		checkObjects(t, f, cephfsObjectSizes(layout, [][2]uint64{{0, plan.SharedSize}}))
+		head, holes, err := osdIO.read(f.Ino, layout, 0, plan.SharedSize, cephmsgr.OSDHeadSnapshot, trunc)
+		if err != nil || len(holes) != 0 || !bytes.Equal(head, imageA) {
+			t.Fatal("Go head bytes differ from the A branch", err, holes)
+		}
+		d, _ := agent.dirtyState(f.Ino)
+		rw["dirty_events"] = d.Events
+		if d.Latch != nil || d.Buffered || len(d.Resolved) != 1 || d.Resolved[0].Decision != "evicted" || d.Resolved[0].Outcome != cephfsWriteUncertain {
+			t.Fatalf("the eviction lost the uncertain outcome: %+v", d)
+		}
+		writebacks, release := 0, -1
+		for i, ev := range d.Events {
+			if ev.At.Before(buffered) {
+				continue
+			}
+			switch {
+			case ev.Kind == "data-writeback":
+				writebacks++
+				if ev.Error == "" {
+					t.Fatal("a revoke-time writeback was reported complete", ev)
+				}
+			case ev.Kind == "cap-update" && ev.At.Before(evictedAt) && !strings.Contains(ev.Caps, "b"):
+				t.Fatalf("FILE_BUFFER was released before the decision: %+v", ev)
+			case ev.Kind == "cap-update" && !ev.At.Before(evictedAt) && release < 0:
+				release = i
+			}
+		}
+		if writebacks != 1 || release < 0 || strings.Contains(d.Events[release].Caps, "b") {
+			t.Fatalf("writeback attempts or the release after the decision differ: %d %+v", writebacks, d.Events)
+		}
+		if ledger.mayResend(1) == nil || len(leafWrites()) != 2 {
+			t.Fatal("the uncertain B became resendable or was resubmitted")
+		}
+		rw["object_writes"] = leafWrites()
+		closeFile(t, f, cephFileModeRDWR)
+		revoke = &cephfsRevokeWriteback{Ino: f.Ino, Offset: su, Length: su, Context: context, Trunc: trunc, ImageA: imageA, Ledger: ledger}
+	}) {
+		return
+	}
 	if recipe == cephfsDataWritebackFenceRestart && !leaf("interrupted_writeback_fenced_across_mds_restart_and_eviction", func(t *testing.T) {
 		f := &cephfsDataFileEvidence{Name: "capsnap-file"}
 		files[f.Name] = f
@@ -2429,6 +2662,20 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 				t.Fatal("recovery rule differs", i, w.Outcome, err)
 			}
 		}
+		wantWrites := 4
+		if revoke != nil {
+			// The same fenced instance probes the revoke-time writeback's B
+			// extent with new bytes (never B's uncertain write again): the
+			// OSD refuses it with -EBLOCKLISTED, so it is known not applied.
+			probe := cephfsDataStream("ceph-msgr-cephfs-data-revoke-fence:"+oracle.Token, revoke.Length)
+			out := revoke.Ledger.writeback(osdIO, "revoke-fence", revoke.Ino, layout, revoke.Offset, probe, revoke.Context, timeC, revoke.Trunc, 30*time.Second)
+			fenced := revoke.Ledger.Writes[len(revoke.Ledger.Writes)-1]
+			if !slices.Equal(out, []string{cephfsWriteFenced}) || fenced.IO.OSDError != cephEBLOCKLISTED {
+				t.Fatal("the evicted client's probe of the revoke-time extent was not fenced", out, fenced)
+			}
+			wb["revoke_fence_probe"] = fenced
+			wantWrites++
+		}
 
 		// 6. Recovery through a new client instance: it repeats no write,
 		// resends nothing uncertain and finds only generation A's data.
@@ -2476,6 +2723,14 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 			t.Fatal("native metadata after recovery differs", stat)
 		}
 		f.NativeStat = stat
+		if revoke != nil {
+			// Neither the evicted B nor the fenced probe reached shared-file.
+			wb["revoke_native_after_recovery"] = nativeRead(t, nil, "shared-file", revoke.ImageA).Native.Read
+			head, holes, err := osdIO.read(revoke.Ino, layout, 0, uint64(len(revoke.ImageA)), cephmsgr.OSDHeadSnapshot, revoke.Trunc)
+			if err != nil || len(holes) != 0 || !bytes.Equal(head, revoke.ImageA) {
+				t.Fatal("Go head bytes of the revoke-time file differ after recovery", err, holes)
+			}
+		}
 		osdIO.mu.Lock()
 		var writes []cephfsDataObjectIO
 		for _, op := range osdIO.log {
@@ -2485,7 +2740,7 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		}
 		osdIO.mu.Unlock()
 		wb["object_writes"] = writes
-		if len(writes) != 4 || len(ledger.Writes) != 4 || ledger.count(cephfsWriteCompleted, "a") != 2 || ledger.count(cephfsWriteUncertain, "b") != 1 ||
+		if len(writes) != wantWrites || len(ledger.Writes) != 4 || ledger.count(cephfsWriteCompleted, "a") != 2 || ledger.count(cephfsWriteUncertain, "b") != 1 ||
 			ledger.count(cephfsWriteFenced, "c") != 1 {
 			t.Fatal("object writes were repeated or misclassified", len(writes), ledger.Writes)
 		}

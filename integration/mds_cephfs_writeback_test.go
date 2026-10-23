@@ -333,6 +333,18 @@ func (l *cephfsWritebackLedger) bufferedWriteback(d *cephfsDataIO, phase string,
 	}
 }
 
+// cephfsRevokeWriteback is what the revoke-time writeback leaf hands to the
+// writeback-fence leaf, which evicts and fences the same client instance:
+// the file, B's extent and the A-branch image every later reader must see.
+type cephfsRevokeWriteback struct {
+	Ino            uint64
+	Offset, Length uint64
+	Context        cephmsgr.OSDSnapContext
+	Trunc          cephfsTrunc
+	ImageA         []byte
+	Ledger         *cephfsWritebackLedger
+}
+
 // restartAcrossInterruptedWriteback fails the owned rank-0 MDS while the
 // consumer still holds an uncertain object write, then reconnects the same
 // client to the new incarnation. Nothing is resent: the completed writes are
