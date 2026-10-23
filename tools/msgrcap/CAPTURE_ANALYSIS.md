@@ -11,7 +11,7 @@ changes product behavior, product dependencies or supported configurations.
 | Item | Value |
 | --- | --- |
 | Reference | Ceph `v20.2.4` (`7f793731f1b39eb4f465e960113d2363c311b964`), image `quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`; `ceph-mon --version` reported the same commit |
-| Accepted live run | Messenger capture PoC run RUN_ID (attempt 1), both `crc` and `secure` jobs passed their expectation gate; artifacts `msgrcap-crc` and `msgrcap-secure` are retained for 30 days |
+| Accepted live run | Messenger capture PoC run 39887173761 (attempt 1) on tool source `bb52fff` (pull-request merge ref `7aadffc`); both `crc` and `secure` jobs passed their expectation gate. Artifacts `msgrcap-crc` (capture SHA-256 `29488ce2...a6cb30`, 15935 bytes) and `msgrcap-secure` (`b4f64894...0ffba8`, 17155 bytes) are retained for 30 days. Later commits change only this report. |
 | Earlier live runs | 39886145519 (first complete capture set, includes the unanswered-SYN observation below) and 39886602524 (secure expectation gate rejected a phase label; see "Unclassified and limits") |
 | Platform | GitHub-hosted `ubuntu-24.04` runner, Linux x86_64, Go 1.24.0 |
 | Capture tools | tcpdump 4.99.4, libpcap 1.10.4, TShark 4.2.2 (Ubuntu package 4.2.2-1.1build3) |
@@ -30,7 +30,7 @@ TCP reassembly compared with msgrcap's.
 | Layer | msgrcap (this PoC) | TShark 4.2.2 | Independent reference used |
 | --- | --- | --- | --- |
 | pcap open | Classic pcap (Ethernet, raw IP, Linux SLL/SLL2); pcapng rejected explicitly | Opens the file | |
-| TCP reassembly | Per-direction streams, retransmission, conflict, gap, snaplen and peer-ACK accounting | `follow,tcp,raw` | Per-direction SHA-256 equal for every stream in both modes (`tshark-compare.txt`) |
+| TCP reassembly | Per-direction streams, retransmission, conflict, gap, snaplen and peer-ACK accounting | `follow,tcp,raw` | Per-direction SHA-256 equal for all 8 streams in each mode (`tshark-compare.txt`); runs before `63bbf68` skipped tshark stream 0 in this comparison |
 | msgr2.1 banner | Decoded (features) | Misread as msgr1 | |
 | Pre-auth frames (both modes) | HELLO, AUTH_REQUEST(_MORE), AUTH_REPLY_MORE, AUTH_DONE with CRC checks, con_mode, global_id | Misread: "Connect", "Connect Reply", "UNKNOWN xN" | MON log tag sequence |
 | CRC post-auth frames | AUTH_SIGNATURE, COMPRESSION_REQUEST/DONE, CLIENT/SERVER_IDENT, MESSAGE header (type, seq, tid, ack_seq), ACK | Misread: invented "KEEPALIVE", "ACK, Seq: ...", "Unknown tag" expert errors | Client-to-server tags and server message seqs equal to the MON log for every session |
@@ -57,11 +57,12 @@ Raw capture alone established, in the accepted run:
   public `Dial` call therefore appears as four TCP attempts, and the capture
   shows the client's own retry schedule.
 - **Peer close**: during the command session the MON sent FIN first
-  (`server FIN first`) when the workflow restarted it, about 40 ms after the
+  (`server FIN first`) when the workflow restarted it, about 45 to 50 ms after the
   command reply.
 - **Reconnect timing**: refused SYNs while the MON was down, then an
-  authenticated session (CRC and secure) roughly 0.25 to 0.75 s after the
-  close. In run 39886145519 (secure) one reconnect SYN went unanswered and was
+  authenticated session about 0.75 s after the close in both modes (refused
+  SYNs at +0 and +0.25 s). Run 39886602524 reconnected after 0.25 s, so the
+  recovery time is a per-run observation, not a constant. In run 39886145519 (secure) one reconnect SYN went unanswered and was
   completed by the kernel's SYN retransmission about 1.06 s later. msgrcap
   treats a same-ISN SYN as one attempt (`syn_count = 2`), so "unanswered" and
   "refused" stay distinct.
