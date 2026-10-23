@@ -39,6 +39,7 @@ def main():
         report = json.load(f)
     by_pair = {(c["client"], c["server"]): c for c in report["connections"]}
     compared = mismatched = 0
+    seen = set()
     for s in streams:
         if len(s["nodes"]) != 2:
             continue
@@ -60,8 +61,12 @@ def main():
         print("conn %d %s -> %s: c->s %d bytes, s->c %d bytes, digests %s" % (
             conn["id"], conn["client"], conn["server"], len(s["data"][order[0]]),
             len(s["data"][order[1]]), "equal" if ok else "DIFFERENT"))
-    print("tshark reassembly comparison: %d streams compared, %d mismatched or unmatched" % (compared, mismatched))
+        seen.add(conn["id"])
+    missing = sorted(c["id"] for c in report["connections"] if c["id"] not in seen)
+    print("tshark reassembly comparison: %d streams compared, %d mismatched or unmatched, "
+          "msgrcap connections without a tshark stream: %s" % (compared, mismatched, missing or "none"))
+    return 1 if mismatched or missing else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

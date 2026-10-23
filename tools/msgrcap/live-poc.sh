@@ -130,7 +130,7 @@ tshark -r "$out/capture.pcap" -n -o tcp.desegment_tcp_streams:TRUE > "$out/tshar
 tshark -r "$out/capture.pcap" -n -Y ceph -V > "$out/tshark-ceph-detail.txt" 2>&1 || true
 tshark -r "$out/capture.pcap" -n --disable-heuristic ceph_tcp > "$out/tshark-no-ceph-heuristic.txt" 2>&1 || true
 tshark -r "$out/capture.pcap" -n -q -z expert > "$out/tshark-expert.txt" 2>&1 || true
-streams=$(tshark -r "$out/capture.pcap" -T fields -e tcp.stream 2>/dev/null | sort -n -u)
+streams=$(tshark -r "$out/capture.pcap" -Y tcp -T fields -e tcp.stream 2>/dev/null | sort -n | uniq)
 : > "$out/tshark-follow.txt"
 for s in $streams; do
     tshark -r "$out/capture.pcap" -q -z "follow,tcp,raw,$s" >> "$out/tshark-follow.txt" 2>&1 || true
