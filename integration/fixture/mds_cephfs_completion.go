@@ -120,10 +120,10 @@ func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
 }
 
 // mdsCephFSMultiReconnectNames are actual owned files whose retained cap state
-// exceeds a 64 KiB frame. Long legal names exercise real short paths; no fake
+// exceeds an 8 KiB fragment budget. Long legal names exercise real short paths; no fake
 // inode, cap or lock data is submitted to inflate reconnect state.
 func mdsCephFSMultiReconnectNames() []string {
-	names := make([]string, 256)
+	names := make([]string, 32)
 	for i := range names {
 		names[i] = fmt.Sprintf("split-%03d-%s", i, strings.Repeat("s", 215))
 	}

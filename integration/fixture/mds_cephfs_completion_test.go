@@ -372,7 +372,7 @@ func TestMDSCephFSCompletionCleanupWithoutBaselineMutatesNothing(t *testing.T) {
 func TestMDSCephFSMultiReconnectOwnedPaths(t *testing.T) {
 	token := strings.Repeat("a1", 16)
 	plan := mdsCephFSCompletionPlanFor(token)
-	if len(plan.SplitFiles) != 256 {
+	if len(plan.SplitFiles) != 32 {
 		t.Fatal("split file bound changed", len(plan.SplitFiles))
 	}
 	seen := map[string]bool{}
@@ -387,7 +387,7 @@ func TestMDSCephFSMultiReconnectOwnedPaths(t *testing.T) {
 			t.Fatal("split stat target refused", name, err)
 		}
 	}
-	for _, name := range []string{"split-256-" + strings.Repeat("s", 215), "../split-00", "split-00/foreign"} {
+	for _, name := range []string{"split-032-" + strings.Repeat("s", 215), "../split-00", "split-00/foreign"} {
 		if _, err := plan.path(name); err == nil {
 			t.Fatal("unplanned split target admitted", name)
 		}

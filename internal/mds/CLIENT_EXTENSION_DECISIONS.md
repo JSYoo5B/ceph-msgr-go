@@ -191,7 +191,7 @@ rows are `baseline`; the evidence that changed the decision stays here.
   [TestCephFSReconnectDeniedAndSplit](../../cephmsgr/mds_reconnect_test.go).
 - Declaration: CephFS only; the session-only profile cannot reconnect and
   keeps bit 12 withheld. The split acceptance uses actual retained caps on
-  256 owned files, a 64 KiB frame budget and native nonfinal/final handler
+  32 owned files, an 8 KiB reconnect message budget and native nonfinal/final handler
   logs, then compares namespace/inodes independently. Admission requires
   `multi_reconnect` and checks CephFS OPEN plus session-only REJECT.
   See [MDS_MULTI_RECONNECT_VALIDATION.md](../../integration/fixture/MDS_MULTI_RECONNECT_VALIDATION.md)
