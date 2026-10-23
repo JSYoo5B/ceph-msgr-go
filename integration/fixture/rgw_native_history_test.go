@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -67,5 +68,35 @@ func TestRGWNativeS3DoesNotReplayOrDiscloseErrorBodies(t *testing.T) {
 	}
 	if _, err := client.request(context.Background(), http.MethodPut, "/test-bucket/key:unsupported", nil, http.StatusOK); err == nil || calls != 1 {
 		t.Fatal("checkpoint accepted an unsupported path")
+	}
+}
+
+func TestRGWNativeGatewayInspectorDiscoversNonceNamedOwnedMessengers(t *testing.T) {
+	const setup = `
+import glob,os,io,builtins,subprocess,json,types
+glob.glob=lambda _: ['/proc/1/fd/3']
+os.readlink=lambda _: 'socket:[42]'
+builtins.open=lambda _: io.StringIO('0: 2 0 10000 1 1 42 /var/run/ceph/owned.asok\n0: 2 0 10000 1 1 43 /var/run/ceph/unowned.asok\n')
+def native(argv,**kwargs):
+    assert argv[:5]==['ceph','--admin-daemon','/var/run/ceph/owned.asok','messenger','dump']
+    if len(argv)==5:
+        value={'messengers':['radosclient-12345','unrelated']}
+    else:
+        assert argv[5:] == ['radosclient-12345'], 'must discover names rather than hardcode radosclient'
+        value={'status':{'messenger':{'my_name':{'type':'client','num':42},'nonce':12345}}}
+    return types.SimpleNamespace(returncode=0,stdout=json.dumps(value).encode())
+subprocess.run=native
+`
+	command := exec.Command("python3", "-c", setup+rgwNativeGatewayInspector)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("process-owned messenger inspector: %v: %s", err, output)
+	}
+	var result struct {
+		Candidates int                         `json:"socket_candidates"`
+		Messengers []rgwNativeClientGeneration `json:"messengers"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil || result.Candidates != 1 || len(result.Messengers) != 1 || result.Messengers[0].Client != "client.42" || result.Messengers[0].Nonce != 12345 {
+		t.Fatalf("incorrect owned named messenger result: %s %v", output, err)
 	}
 }

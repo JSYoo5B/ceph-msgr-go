@@ -141,3 +141,44 @@ func rgwNativeHistory(raw []byte, client string, objects map[string]bool) ([]rgw
 	}
 	return result, nil
 }
+
+// Names are discovered from the process-owned socket's catalog. Pinned
+// AsyncMessenger appends the nonce to additional radosclient names in RGW.
+// A shared CephX entity name or a generic shared-volume socket is insufficient.
+const rgwNativeGatewayInspector = `
+import glob,json,os,subprocess
+held=set()
+for fd in glob.glob('/proc/1/fd/*'):
+    try:
+        held.add(os.readlink(fd))
+    except FileNotFoundError:
+        pass
+paths=[]
+for line in open('/proc/net/unix'):
+    fields=line.split()
+    if len(fields)==8 and 'socket:['+fields[6]+']' in held and fields[7].startswith('/var/run/ceph/') and fields[7].endswith('.asok'):
+        paths.append(fields[7])
+def query(path,*args):
+    result=subprocess.run(['ceph','--admin-daemon',path,'messenger','dump',*args],capture_output=True,timeout=3)
+    if result.returncode or len(result.stdout)>4*1024*1024:
+        raise ValueError('invalid local messenger response')
+    value=json.loads(result.stdout)
+    return value.get('status',value)
+found={}
+for path in sorted(set(paths))[:8]:
+    try:
+        names=query(path)['messengers']
+        if not isinstance(names,list) or len(names)>32:
+            continue
+        for name in names:
+            if not isinstance(name,str) or not (name=='radosclient' or name.startswith('radosclient-')):
+                continue
+            value=query(path,name)['messenger']
+            identity=value['my_name']
+            if identity['type']=='client' and isinstance(identity['num'],int) and identity['num']>0 and isinstance(value['nonce'],int) and value['nonce']>0:
+                client='client.'+str(identity['num'])
+                found[client]=dict(client=client,nonce=value['nonce'])
+    except (ValueError,KeyError,TypeError):
+        pass
+print(json.dumps(dict(socket_candidates=len(paths),messengers=[found[key] for key in sorted(found)])))
+`

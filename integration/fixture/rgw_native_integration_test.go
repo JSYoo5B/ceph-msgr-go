@@ -183,10 +183,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	for _, object := range indexObjects {
 		objects[object] = true
 	}
-	received, err := rgwNativeHistory(history, generation.Client, objects)
-	if err != nil {
-		t.Fatal("parse gateway-attributed PUT receipt:", err)
-	}
+	received := rgwNativeAttributedHistory(t, history, generation, objects)
 	write, prepare, complete := false, false, false
 	for _, op := range received {
 		isHead := strings.Contains(op.Description, ":"+head+":")
@@ -221,8 +218,12 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 		t.Fatal("gateway process generation did not change", err)
 	}
 	afterGeneration := rgwNativeGeneration(t, ctx, gateway)
-	if afterGeneration.Client == generation.Client || afterGeneration.Nonce == generation.Nonce {
-		t.Fatal("restarted gateway retained its old client identity or nonce")
+	for _, beforeClient := range generation {
+		for _, afterClient := range afterGeneration {
+			if beforeClient.Client == afterClient.Client || beforeClient.Nonce == afterClient.Nonce {
+				t.Fatal("restarted gateway retained an old client identity or nonce")
+			}
+		}
 	}
 	// Restart is followed by read-only observations, not a replayed PUT.
 	if read := request(http.MethodGet, path, nil, http.StatusOK); !bytes.Equal(read, payload) {
@@ -233,7 +234,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 		t.Fatal("native object/index postconditions changed across gateway restart")
 	}
 	request(http.MethodDelete, path, nil, http.StatusNoContent)
-	deleted := rgwNativeReceipt(t, ctx, cluster, afterGeneration.Client, objects)
+	deleted := rgwNativeReceipt(t, ctx, cluster, afterGeneration, objects)
 	remove := false
 	for _, op := range deleted {
 		remove = remove || strings.Contains(op.Description, ":"+head+":") && strings.Contains(op.Description, "delete")
@@ -312,56 +313,39 @@ type rgwNativeClientGeneration struct {
 	Nonce  uint64 `json:"nonce"`
 }
 
-func rgwNativeGeneration(t *testing.T, ctx context.Context, gateway *rgw.Gateway) rgwNativeClientGeneration {
+func rgwNativeGeneration(t *testing.T, ctx context.Context, gateway *rgw.Gateway) []rgwNativeClientGeneration {
 	t.Helper()
 	// The run volume also contains MON/MGR/OSD sockets. A zero ceph CLI exit
 	// status is insufficient: an unsupported messenger can print a text error.
 	// Select UNIX sockets held by the gateway's PID 1, then require decoded
 	// authenticated radosclient metadata. Neither addresses nor CLI text errors
 	// are emitted by this process-local inspector.
-	output := rgwNativeExec(t, ctx, gateway, "python3", "-c", `
-import glob,json,os,subprocess
-held=set()
-for fd in glob.glob('/proc/1/fd/*'):
-    try:
-        held.add(os.readlink(fd))
-    except FileNotFoundError:
-        pass
-paths=[]
-for line in open('/proc/net/unix'):
-    fields=line.split()
-    if len(fields)==8 and 'socket:['+fields[6]+']' in held and fields[7].startswith('/var/run/ceph/') and fields[7].endswith('.asok'):
-        paths.append(fields[7])
-found=[]
-for path in sorted(set(paths))[:8]:
-    result=subprocess.run(['ceph','--admin-daemon',path,'messenger','dump','radosclient'],capture_output=True,timeout=5)
-    if result.returncode:
-        continue
-    try:
-        value=json.loads(result.stdout)['messenger']
-        name=value['my_name']
-        if name['type']=='client' and isinstance(name['num'],int) and name['num']>0 and isinstance(value['nonce'],int) and value['nonce']>0:
-            found.append(dict(client='client.'+str(name['num']),nonce=value['nonce']))
-    except (ValueError,KeyError,TypeError):
-        pass
-print(json.dumps(dict(socket_candidates=len(paths),messengers=found)))
-`)
+	output := rgwNativeExec(t, ctx, gateway, "python3", "-c", rgwNativeGatewayInspector)
 	var dump struct {
 		Candidates int                         `json:"socket_candidates"`
 		Messengers []rgwNativeClientGeneration `json:"messengers"`
 	}
-	if err := json.Unmarshal(output, &dump); err != nil || dump.Candidates == 0 || dump.Candidates > 8 || len(dump.Messengers) != 1 {
-		t.Fatalf("missing unique process-owned gateway Messenger identity/nonce: decode=%v candidates=%d messengers=%d", err, dump.Candidates, len(dump.Messengers))
+	if err := json.Unmarshal(output, &dump); err != nil || dump.Candidates == 0 || dump.Candidates > 8 || len(dump.Messengers) == 0 || len(dump.Messengers) > 32 {
+		t.Fatalf("missing bounded process-owned gateway Messenger identities/nonces: decode=%v candidates=%d messengers=%d", err, dump.Candidates, len(dump.Messengers))
 	}
-	return dump.Messengers[0]
+	return dump.Messengers
 }
 
-func rgwNativeReceipt(t *testing.T, ctx context.Context, cluster *rgw.Container, client string, objects map[string]bool) []rgwNativeOperation {
+func rgwNativeReceipt(t *testing.T, ctx context.Context, cluster *rgw.Container, clients []rgwNativeClientGeneration, objects map[string]bool) []rgwNativeOperation {
 	t.Helper()
 	output := rgwNativeExec(t, ctx, cluster.Container.Container, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
-	received, err := rgwNativeHistory(output, client, objects)
-	if err != nil {
-		t.Fatal("parse gateway-attributed native receipt:", err)
+	return rgwNativeAttributedHistory(t, output, clients, objects)
+}
+
+func rgwNativeAttributedHistory(t *testing.T, output []byte, clients []rgwNativeClientGeneration, objects map[string]bool) []rgwNativeOperation {
+	t.Helper()
+	var received []rgwNativeOperation
+	for _, client := range clients {
+		operations, err := rgwNativeHistory(output, client.Client, objects)
+		if err != nil {
+			t.Fatal("parse gateway-attributed native receipt:", err)
+		}
+		received = append(received, operations...)
 	}
 	return received
 }
