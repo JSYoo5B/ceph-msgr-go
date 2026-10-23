@@ -175,3 +175,74 @@ func TestOSDSetChunkPublicTransportAndUnknownOutcome(t *testing.T) {
 		})
 	}
 }
+
+// TestOSDSetChunkSuccessRequiresOnDisk keeps the native READ request mode but
+// requires OSD ONDISK before a successful SET_CHUNK completes: it changes the
+// source manifest and the target's references. ACK-only and ONNVRAM-only
+// successes leave the outcome unknown (CONTRACT.md) on v6, v8/v8 and v9/v8.
+func TestOSDSetChunkSuccessRequiresOnDisk(t *testing.T) {
+	type result struct {
+		r OSDReply
+		e error
+	}
+	for _, profile := range []OSDProfile{OSDProfileObjectHash, OSDProfileReplicatedPGReplyV8, OSDProfileReplicatedPGRequestV9ReplyV8} {
+		for _, tc := range []struct {
+			name  string
+			flags uint64
+			ok    bool
+		}{{"ack-only", OSDReplyAck, false}, {"onnvram-only", OSDReplyOnNVRAM, false}, {"ack-onnvram", OSDReplyAck | OSDReplyOnNVRAM, false}, {"ondisk", OSDReplyOnDisk, true}, {"ack-ondisk", OSDReplyAck | OSDReplyOnDisk, true}} {
+			t.Run(profileNameForCacheTest(profile)+"/"+tc.name, func(t *testing.T) {
+				var o *OSDConnection
+				var peer *osdTestPeer
+				ctx := context.Background()
+				input := osdValidationRequest()
+				input.Operations = []OSDOperation{setChunkTestOperation()}
+				if profile == OSDProfileObjectHash {
+					c, peers, _ := osdTestClient(t)
+					var err error
+					if o, err = c.OpenOSD(ctx, OSDTarget{Address: "192.0.2.1:6804"}); err != nil {
+						t.Fatal(err)
+					}
+					peer = <-peers
+				} else {
+					_, o, peer, ctx, _ = replicatedReplyV8ProfileOpen(t, profile)
+					input.Placement = &OSDPlacement{PG: OSDPG{Pool: 7, Seed: 3}, Primary: o.target.ID}
+				}
+				done := make(chan result, 1)
+				go func() { r, e := o.Request(ctx, input); done <- result{r, e} }()
+				sent := peer.next(t)
+				var reply msgr.MessageData
+				if profile == OSDProfileObjectHash {
+					reply = osdXattrSyntheticReply(t, input.Operations, make([][]byte, 1), []int32{0}, 0, tc.flags)
+				} else {
+					reply = replyV8ProfileMessage(input, make([][]byte, 1), []int32{0}, 0, tc.flags, false)
+				}
+				reply.Transaction = sent.Transaction
+				if err := osdMapsWrite(peer, reply); err != nil {
+					t.Fatal(err)
+				}
+				var got result
+				select {
+				case got = <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatal("SET_CHUNK reply did not complete locally")
+				}
+				var unknown *OutcomeUnknownError
+				if tc.ok {
+					if got.e != nil || got.r.Code != 0 || got.r.Flags&OSDReplyOnDisk == 0 {
+						t.Fatal("ONDISK SET_CHUNK success refused", got.r.Flags, got.e)
+					}
+					return
+				}
+				if !errors.As(got.e, &unknown) || got.r.Submission.Transaction != sent.Transaction {
+					t.Fatal("SET_CHUNK success without ONDISK was accepted", got.r.Flags, got.e)
+				}
+				select {
+				case extra := <-peer.requests:
+					t.Fatal("SET_CHUNK was resent", extra.Transaction)
+				default:
+				}
+			})
+		}
+	}
+}

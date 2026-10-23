@@ -161,3 +161,14 @@ func TestSetChunkAcceptsDistinctTargets(t *testing.T) {
 		t.Fatal("unbounded SET_CHUNK target encoded")
 	}
 }
+
+func TestSetChunkRequiresOnDiskDespiteReadMode(t *testing.T) {
+	r := setChunkUnitRequest()
+	mode, _, err := ValidateOperations(r.Operations, wire.DefaultLimit)
+	if err != nil || mode != FlagRead || !RequiresOnDisk(r.Operations, mode) {
+		t.Fatal("SET_CHUNK must keep READ mode and require ONDISK", mode, err)
+	}
+	if RequiresOnDisk([]Operation{{Code: Read, Length: 1}}, FlagRead) || !RequiresOnDisk([]Operation{{Code: Delete}}, FlagWrite) {
+		t.Fatal("completion rule changed for ordinary reads or writes")
+	}
+}

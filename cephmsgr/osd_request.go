@@ -819,7 +819,7 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 	if err != nil {
 		return err
 	}
-	if !redirect && reply.Result >= 0 && flags&osd.FlagWrite != 0 && !reply.OnDisk() {
+	if !redirect && reply.Result >= 0 && osd.RequiresOnDisk(input.Operations, flags) && !reply.OnDisk() {
 		return errors.New("mutation reply lacks requested ONDISK completion")
 	}
 	if !redirect && osd.ChecksumCompound(input.Operations) {

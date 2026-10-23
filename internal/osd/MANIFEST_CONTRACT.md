@@ -155,7 +155,10 @@ an overlapping chunk). A failed reference increment is answered by
 code (ENOENT for an absent target), while the per-op result keeps the
 `-EINPROGRESS` (-115) the handler stored before it blocked the source. That
 pair was observed live and is returned as received. The reply carries no
-output. A lost reply after
+output. Although the request mode is READ, a successful reply must carry OSD
+ONDISK, as for any mutation ([CONTRACT.md](CONTRACT.md)): an ACK-only or
+ONNVRAM-only success fails the session and is returned as
+`OutcomeUnknownError`. The live successes carried ONDISK (`0x4000015`). A lost reply after
 transmission is an unknown outcome and is never replayed: on success the OSD
 has already taken the target reference, and the native client's own resend is
 not reproduced. Choosing chunk boundaries, fingerprints, dedup pools, the
