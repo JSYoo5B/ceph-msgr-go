@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,6 +17,8 @@ import (
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
 	"github.com/JSYoo5B/ceph-testcontainers-go/rgw"
+	"github.com/containerd/errdefs"
+	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
@@ -30,6 +33,9 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	}
 	if os.Getenv("CEPH_MSGR_TEST_RGW_NATIVE") != "1" {
 		t.Fatal("CEPH_MSGR_TEST_RGW_NATIVE must be 1")
+	}
+	if runtime.GOOS != "linux" {
+		t.Fatal("RGW native checkpoint requires an authorized Linux Docker runner")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
@@ -47,10 +53,58 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 		t.Cleanup(func() {
 			cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 			defer stop()
+			var owned []testcontainers.Container
+			for _, monitor := range cluster.Monitors() {
+				owned = append(owned, monitor.Container)
+			}
+			for _, manager := range cluster.Managers() {
+				owned = append(owned, manager.Container)
+			}
+			for _, osd := range cluster.OSDs() {
+				owned = append(owned, osd.Container)
+			}
+			owned = append(owned, cluster.ServiceContainers()...)
+			volumes := map[string]bool{}
+			for _, container := range owned {
+				inspected, err := container.Inspect(cleanup)
+				if err != nil {
+					t.Errorf("inspect owned resources before cleanup: %v", err)
+					continue
+				}
+				for _, mount := range inspected.Mounts {
+					if mount.Type == "volume" && mount.Name != "" {
+						volumes[mount.Name] = true
+					}
+				}
+			}
+			network := cluster.NetworkName()
 			if err := cluster.Terminate(cleanup); err != nil {
 				t.Errorf("terminate owned RGW fixture: %v", err)
-			} else {
-				t.Log("RGW_NATIVE_CLEANUP owned gateway, MON, MGR, OSD, network and volume removed")
+				return
+			}
+			docker, err := testcontainers.NewDockerClientWithOpts(cleanup)
+			if err != nil {
+				t.Error("open independent cleanup inspector:", err)
+				return
+			}
+			defer func() { _ = docker.Close() }()
+			for _, container := range owned {
+				if _, err := docker.ContainerInspect(cleanup, container.GetContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+					t.Errorf("owned container removal not independently confirmed: %v", err)
+				}
+			}
+			for volume := range volumes {
+				if _, err := docker.VolumeInspect(cleanup, volume, client.VolumeInspectOptions{}); !errdefs.IsNotFound(err) {
+					t.Errorf("owned volume removal not independently confirmed: %v", err)
+				}
+			}
+			if network != "" {
+				if _, err := docker.NetworkInspect(cleanup, network, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+					t.Errorf("owned network removal not independently confirmed: %v", err)
+				}
+			}
+			if !t.Failed() {
+				t.Logf("RGW_NATIVE_CLEANUP independent inspection confirms containers=%d volumes=%d network=removed", len(owned), len(volumes))
 			}
 		})
 	}
@@ -260,27 +314,46 @@ type rgwNativeClientGeneration struct {
 
 func rgwNativeGeneration(t *testing.T, ctx context.Context, gateway *rgw.Gateway) rgwNativeClientGeneration {
 	t.Helper()
-	output := rgwNativeExec(t, ctx, gateway, "/bin/sh", "-c", `for socket in /var/run/ceph/*.asok; do ceph --admin-daemon "$socket" messenger dump radosclient 2>/dev/null && exit 0; done; exit 1`)
+	// The run volume also contains MON/MGR/OSD sockets. A zero ceph CLI exit
+	// status is insufficient: an unsupported messenger can print a text error.
+	// Select UNIX sockets held by the gateway's PID 1, then require decoded
+	// authenticated radosclient metadata. Neither addresses nor CLI text errors
+	// are emitted by this process-local inspector.
+	output := rgwNativeExec(t, ctx, gateway, "python3", "-c", `
+import glob,json,os,subprocess
+held=set()
+for fd in glob.glob('/proc/1/fd/*'):
+    try:
+        held.add(os.readlink(fd))
+    except FileNotFoundError:
+        pass
+paths=[]
+for line in open('/proc/net/unix'):
+    fields=line.split()
+    if len(fields)==8 and 'socket:['+fields[6]+']' in held and fields[7].startswith('/var/run/ceph/') and fields[7].endswith('.asok'):
+        paths.append(fields[7])
+found=[]
+for path in sorted(set(paths))[:8]:
+    result=subprocess.run(['ceph','--admin-daemon',path,'messenger','dump','radosclient'],capture_output=True,timeout=5)
+    if result.returncode:
+        continue
+    try:
+        value=json.loads(result.stdout)['messenger']
+        name=value['my_name']
+        if name['type']=='client' and isinstance(name['num'],int) and name['num']>0 and isinstance(value['nonce'],int) and value['nonce']>0:
+            found.append(dict(client='client.'+str(name['num']),nonce=value['nonce']))
+    except (ValueError,KeyError,TypeError):
+        pass
+print(json.dumps(dict(socket_candidates=len(paths),messengers=found)))
+`)
 	var dump struct {
-		Messenger struct {
-			Nonce uint64 `json:"nonce"`
-			Name  struct {
-				Type string `json:"type"`
-				Num  uint64 `json:"num"`
-			} `json:"my_name"`
-		} `json:"messenger"`
+		Candidates int                         `json:"socket_candidates"`
+		Messengers []rgwNativeClientGeneration `json:"messengers"`
 	}
-	if err := json.Unmarshal(output, &dump); err != nil || dump.Messenger.Name.Type != "client" || dump.Messenger.Name.Num == 0 || dump.Messenger.Nonce == 0 {
-		var shape map[string]json.RawMessage
-		_ = json.Unmarshal(output, &shape)
-		var fields []string
-		for field := range shape {
-			fields = append(fields, field)
-		}
-		slices.Sort(fields)
-		t.Fatalf("missing native gateway Messenger identity/nonce: decode=%v fields=%v type=%q num=%d nonce=%d", err, fields, dump.Messenger.Name.Type, dump.Messenger.Name.Num, dump.Messenger.Nonce)
+	if err := json.Unmarshal(output, &dump); err != nil || dump.Candidates == 0 || dump.Candidates > 8 || len(dump.Messengers) != 1 {
+		t.Fatalf("missing unique process-owned gateway Messenger identity/nonce: decode=%v candidates=%d messengers=%d", err, dump.Candidates, len(dump.Messengers))
 	}
-	return rgwNativeClientGeneration{Client: "client." + strconv.FormatUint(dump.Messenger.Name.Num, 10), Nonce: dump.Messenger.Nonce}
+	return dump.Messengers[0]
 }
 
 func rgwNativeReceipt(t *testing.T, ctx context.Context, cluster *rgw.Container, client string, objects map[string]bool) []rgwNativeOperation {
