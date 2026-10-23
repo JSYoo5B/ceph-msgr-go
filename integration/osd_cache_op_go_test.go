@@ -99,8 +99,9 @@ func cacheOpGoSame(a, b tierOpsState, mtime bool) bool {
 // cacheOpGoTryFlushOutcome checks the independent native observation of the
 // separate try-flush head against the single Go result. Success requires B in
 // both pools, a valid final is_dirty read of false and a last bounded poll of
-// false. EAGAIN and EBUSY stay distinct outcomes: the flush may still be in
-// progress, so only unchanged tier bytes and a base holding A or B are required.
+// false. EBUSY stays a signed refusal with unchanged tier bytes and a base
+// holding A or B. Internal EAGAIN from the pinned flush handler is consumed by
+// execute_ctx without a terminal reply; it is not a Go-visible retry result.
 func cacheOpGoTryFlushOutcome(code int32, o cacheOpGoObservation) error {
 	var last *bool
 	if n := len(o.DirtyPolls); n > 0 {
@@ -114,7 +115,7 @@ func cacheOpGoTryFlushOutcome(code int32, o cacheOpGoObservation) error {
 		if o.Dirty == nil || o.Dirty.DirtyResult == nil || *o.Dirty.DirtyResult != 0 || o.Dirty.Dirty == nil || *o.Dirty.Dirty || last == nil || *last {
 			return errors.New("successful try-flush left the head dirty or unobserved")
 		}
-	case -11, -16:
+	case -16:
 		if !tierOpsHolds(o.Snapshot.Tier, cachePoolChanged) || !(tierOpsHolds(o.Snapshot.Base, cachePoolOriginal) || tierOpsHolds(o.Snapshot.Base, cachePoolChanged)) {
 			return fmt.Errorf("try-flush %d changed the tier bytes or left a foreign base", code)
 		}
@@ -239,6 +240,12 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 		} else if err != nil {
 			t.Fatal("successful reply returned error", label, err)
 		}
+		// The pinned read/no-op/error and transaction-commit paths both add
+		// ACK+ONDISK. Retain these raw terminal flags independently of state:
+		// identical flags do not show whether an object mutation occurred.
+		if reply.Flags&(cephmsgr.OSDReplyAck|cephmsgr.OSDReplyOnDisk) != cephmsgr.OSDReplyAck|cephmsgr.OSDReplyOnDisk {
+			t.Fatal("selected native cache terminal reply lacks ACK+ONDISK", label, reply.Flags)
+		}
 		if op := reply.Operations[0].Result; op != 0 && op != reply.Code {
 			t.Fatal("per-op result disagrees with the aggregate", label, op, reply.Code)
 		}
@@ -302,8 +309,27 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 			}
 			receipt["flushed"] = o
 		}},
+		{"clean_flushes_are_noops", func(t *testing.T) {
+			flushed, _ := receipt["flushed"].(cacheOpGoObservation)
+			noops := map[string]cacheOpGoObservation{}
+			for _, tc := range []struct {
+				label, observe string
+				code           cephmsgr.OSDOpcode
+			}{
+				{"flush-clean", "clean-flush", cephmsgr.OSDCacheFlush},
+				{"try-flush-clean", "clean-try-flush", cephmsgr.OSDCacheTryFlush},
+			} {
+				send(t, tc.label, cacheOpGoFlush, tc.code, 0)
+				o := observe(t, tc.observe)
+				noops[tc.label] = o
+				receipt["clean_noops"] = noops
+				if !cacheOpGoSame(o.Snapshot.Base, flushed.Snapshot.Base, true) || !cacheOpGoSame(o.Snapshot.Tier, flushed.Snapshot.Tier, true) || dirty(o) == nil || *dirty(o) {
+					t.Fatal("clean cache flush changed native bytes/version/mtime/dirty state", tc.label, o)
+				}
+			}
+		}},
 		{"try_flush_is_issued_once", func(t *testing.T) {
-			reply := send(t, "try-flush", cacheOpGoTry, cephmsgr.OSDCacheTryFlush, 0, -11, -16)
+			reply := send(t, "try-flush", cacheOpGoTry, cephmsgr.OSDCacheTryFlush, 0, -16)
 			o := observe(t, "try-flushed")
 			receipt["try_flush"] = map[string]any{"code": reply.Code, "dirty_polls": o.DirtyPolls, "reissued": false, "base": o.Snapshot.Base}
 			if err := cacheOpGoTryFlushOutcome(reply.Code, o); err != nil {
@@ -319,9 +345,21 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 			}
 		}},
 		{"absent_head_controls", func(t *testing.T) {
-			send(t, "absent-flush", cacheOpGoAbsent, cephmsgr.OSDCacheFlush, 0, -2)
-			send(t, "absent-try-flush", cacheOpGoAbsent, cephmsgr.OSDCacheTryFlush, 0, -2)
-			send(t, "absent-evict", cacheOpGoAbsent, cephmsgr.OSDCacheEvict, 0, -2)
+			absent := map[string]cacheOpGoObservation{}
+			for _, tc := range []struct {
+				label string
+				code  cephmsgr.OSDOpcode
+			}{
+				{"absent-flush", cephmsgr.OSDCacheFlush}, {"absent-try-flush", cephmsgr.OSDCacheTryFlush}, {"absent-evict", cephmsgr.OSDCacheEvict},
+			} {
+				send(t, tc.label, cacheOpGoAbsent, tc.code, 0, -2)
+				o := observe(t, tc.label)
+				absent[tc.label] = o
+				receipt["absent_controls"] = absent
+				if o.Snapshot.Base.Code != -2 || o.Snapshot.Tier.Code != -2 {
+					t.Fatal("absent cache control created a head", tc.label, o)
+				}
+			}
 			send(t, "absent-pin", cacheOpGoAbsent, cephmsgr.OSDCachePin, -2)
 			send(t, "absent-unpin", cacheOpGoAbsent, cephmsgr.OSDCacheUnpin, -2)
 			o := observe(t, "absent-final")
@@ -338,7 +376,7 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 	summary := map[string]int32{}
 	for _, r := range records {
 		summary[r.Label] = r.Reply.Code
-		t.Logf("go %s tid=%d epoch=%d code=%d op=%d", r.Label, r.Reply.Submission.Transaction, r.Reply.MapEpoch, r.Reply.Code, r.Reply.Operations[0].Result)
+		t.Logf("go %s tid=%d epoch=%d code=%d op=%d reply_flags=%#x", r.Label, r.Reply.Submission.Transaction, r.Reply.MapEpoch, r.Reply.Code, r.Reply.Operations[0].Result, r.Reply.Flags)
 	}
 	receipt["result_codes"] = summary
 }
@@ -361,7 +399,7 @@ func TestCacheOpGoTryFlushOutcome(t *testing.T) {
 	if err := cacheOpGoTryFlushOutcome(0, observation(cachePoolChanged, false, true, false)); err != nil {
 		t.Fatal("clean written-back try-flush refused", err)
 	}
-	for _, code := range []int32{-11, -16} {
+	for _, code := range []int32{-16} {
 		for _, base := range [][]byte{cachePoolOriginal, cachePoolChanged} {
 			if err := cacheOpGoTryFlushOutcome(code, observation(base, true, true, true)); err != nil {
 				t.Fatal("in-progress try-flush outcome refused", code, err)
@@ -380,6 +418,7 @@ func TestCacheOpGoTryFlushOutcome(t *testing.T) {
 		code int32
 		o    cacheOpGoObservation
 	}{
+		"internal EAGAIN is not a terminal reply": {-11, observation(cachePoolChanged, false, false)},
 		"success with the base still A and clean": {0, observation(cachePoolOriginal, false, false)},
 		"success with every poll dirty":           {0, observation(cachePoolChanged, true, true, true)},
 		"success with a dirty final read":         {0, observation(cachePoolChanged, true, false)},
