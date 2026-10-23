@@ -150,6 +150,189 @@ func (l *cephfsWritebackLedger) writeback(d *cephfsDataIO, phase string, ino uin
 	return outcomes
 }
 
+// cephfsLatchKnownUnapplied is the latch outcome when every extent of the
+// stopped writeback that did not complete is known not applied (refused or
+// fenced). Any uncertain extent, or a failure without per-extent outcomes,
+// makes the latch cephfsWriteUncertain.
+const cephfsLatchKnownUnapplied = "known-unapplied"
+
+// cephfsWritebackStopped is the error a ledger-backed buffered writeback
+// returns when it stops before completing: the outcome of every extent it
+// issued, in order.
+type cephfsWritebackStopped struct {
+	Phase    string
+	Outcomes []string
+}
+
+func (e *cephfsWritebackStopped) Error() string {
+	return fmt.Sprintf("buffered writeback %s stopped after extent outcomes %v", e.Phase, e.Outcomes)
+}
+
+// cephfsWritebackLatch is the consumer's record of one buffered-data
+// writeback that ended without completion. While it is set the data stays
+// buffered (FILE_BUFFER in use), no push starts the writeback again and only
+// an explicit decision resolves it: evictBuffered discards the data, and
+// recoverBuffered writes it again only when nothing is uncertain.
+type cephfsWritebackLatch struct {
+	// Source is "revoke-callback" or "explicit-recovery".
+	Source       string
+	Began, Ended time.Time
+	Outcome      string
+	// Extents are the per-extent outcomes, when the writeback reported them.
+	Extents []string `json:",omitempty"`
+	Error   string
+	// Ignored counts later FILE_BUFFER revokes that did not restart it.
+	Ignored  int       `json:",omitempty"`
+	Decision string    `json:",omitempty"`
+	Decided  time.Time `json:",omitempty"`
+}
+
+// cephfsLatchOutcome classifies a failed buffered writeback.
+func cephfsLatchOutcome(err error) (string, []string) {
+	var stopped *cephfsWritebackStopped
+	if !errors.As(err, &stopped) {
+		return cephfsWriteUncertain, nil
+	}
+	extents := slices.Clone(stopped.Outcomes)
+	unfinished := false
+	for _, o := range extents {
+		switch o {
+		case cephfsWriteCompleted:
+		case cephfsWriteRefused, cephfsWriteFenced:
+			unfinished = true
+		default:
+			return cephfsWriteUncertain, extents
+		}
+	}
+	if !unfinished {
+		// A stop without a known unapplied extent is not explained.
+		return cephfsWriteUncertain, extents
+	}
+	return cephfsLatchKnownUnapplied, extents
+}
+
+func cloneCephFSWritebackLatch(l *cephfsWritebackLatch) *cephfsWritebackLatch {
+	if l == nil {
+		return nil
+	}
+	copied := *l
+	copied.Extents = slices.Clone(l.Extents)
+	return &copied
+}
+
+func cloneCephFSWritebackLatches(ls []cephfsWritebackLatch) []cephfsWritebackLatch {
+	if ls == nil {
+		return nil
+	}
+	out := make([]cephfsWritebackLatch, len(ls))
+	for i := range ls {
+		out[i] = *cloneCephFSWritebackLatch(&ls[i])
+	}
+	return out
+}
+
+// finishBufferedWritebackLocked ends one buffered-data writeback. Success
+// releases the buffer and runs check_caps (_flushed -> put_cap_ref). Failure
+// treats nothing as completed: the data stays buffered, FILE_BUFFER stays in
+// use and the latch records the outcome. No agent diagnostic error is added,
+// because the latch is the consumer's explicit failure state.
+func (a *cephfsCapAgent) finishBufferedWritebackLocked(ino uint64, d *cephfsDirtyFile, source string, began time.Time, err error, completed string) {
+	ended := time.Now()
+	ev := cephfsDirtyEvent{At: ended, Kind: "data-writeback", Note: fmt.Sprintf("%s began %s", source, began.Format(time.RFC3339Nano))}
+	d.writing = false
+	if err != nil {
+		outcome, extents := cephfsLatchOutcome(err)
+		d.Latch = &cephfsWritebackLatch{Source: source, Began: began, Ended: ended, Outcome: outcome, Extents: extents, Error: err.Error()}
+		ev.Error, ev.Note = err.Error(), ev.Note+" latched "+outcome
+		d.Events = append(d.Events, ev)
+		return
+	}
+	d.Events = append(d.Events, ev)
+	d.Buffered = false
+	if c := a.caps[ino]; c != nil && c.CapID != 0 && !c.Released {
+		a.checkCapsLocked(c, completed)
+	}
+}
+
+// evictBuffered is the consumer's explicit decision to discard latched
+// buffered data. The latch keeps its outcome in Resolved; FILE_BUFFER stops
+// being used and check_caps runs, which releases a revoked Fb. The data is
+// not written and an uncertain extent stays uncertain.
+func (a *cephfsCapAgent) evictBuffered(ino uint64) (cephmsgr.MDSCaps, bool, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	d := a.dirty[ino]
+	if d == nil || d.Latch == nil || d.writing {
+		return cephmsgr.MDSCaps{}, false, fmt.Errorf("inode %d has no latched buffered data to evict", ino)
+	}
+	l := *cloneCephFSWritebackLatch(d.Latch)
+	l.Decision, l.Decided = "evicted", time.Now()
+	d.Resolved, d.Latch = append(d.Resolved, l), nil
+	d.Buffered, d.WriteBack = false, nil
+	d.Events = append(d.Events, cephfsDirtyEvent{At: l.Decided, Kind: "buffer-evicted", Note: fmt.Sprintf("explicit eviction of %s buffered data %v", l.Outcome, l.Extents)})
+	c := a.caps[ino]
+	if c == nil || c.CapID == 0 || c.Released {
+		return cephmsgr.MDSCaps{}, false, nil
+	}
+	return a.checkCapsLocked(c, "latched buffered data evicted by explicit decision")
+}
+
+// recoverBuffered is the consumer's explicit decision to write latched data
+// again through writeBack, which the consumer chooses (for example only the
+// extents known not applied). It is refused for an uncertain latch: such data
+// is never resent. A failure latches again; nothing re-runs automatically.
+func (a *cephfsCapAgent) recoverBuffered(ino uint64, writeBack func() error) error {
+	a.mu.Lock()
+	d := a.dirty[ino]
+	switch {
+	case d == nil || d.Latch == nil || d.writing || writeBack == nil:
+		a.mu.Unlock()
+		return fmt.Errorf("inode %d has no latched buffered data to recover", ino)
+	case d.Latch.Outcome != cephfsLatchKnownUnapplied:
+		a.mu.Unlock()
+		return fmt.Errorf("inode %d buffered writeback is %s; it is never resent", ino, d.Latch.Outcome)
+	}
+	l := *cloneCephFSWritebackLatch(d.Latch)
+	l.Decision, l.Decided = "recovered", time.Now()
+	d.Resolved, d.Latch = append(d.Resolved, l), nil
+	d.writing, d.WriteBack = true, writeBack
+	a.mu.Unlock()
+	began := time.Now()
+	err := writeBack()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.finishBufferedWritebackLocked(ino, d, "explicit-recovery", began, err, "latched buffered data recovered by explicit decision")
+	return err
+}
+
+// latchedFiles returns the inodes whose buffered writeback awaits an explicit
+// decision.
+func (a *cephfsCapAgent) latchedFiles() []uint64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var inos []uint64
+	for ino, d := range a.dirty {
+		if d.Latch != nil {
+			inos = append(inos, ino)
+		}
+	}
+	slices.Sort(inos)
+	return inos
+}
+
+// bufferedWriteback returns a markDirty WriteBack that issues one file range
+// through the ledger and reports its per-extent outcomes when it stops.
+func (l *cephfsWritebackLedger) bufferedWriteback(d *cephfsDataIO, phase string, ino uint64, layout cephfsStriping, offset uint64, data []byte,
+	snapc cephmsgr.OSDSnapContext, mtime cephmsgr.MDSTime, trunc cephfsTrunc, wait time.Duration) func() error {
+	return func() error {
+		out := l.writeback(d, phase, ino, layout, offset, data, snapc, mtime, trunc, wait)
+		if len(out) == 0 || slices.ContainsFunc(out, func(o string) bool { return o != cephfsWriteCompleted }) {
+			return &cephfsWritebackStopped{Phase: phase, Outcomes: out}
+		}
+		return nil
+	}
+}
+
 // restartAcrossInterruptedWriteback fails the owned rank-0 MDS while the
 // consumer still holds an uncertain object write, then reconnects the same
 // client to the new incarnation. Nothing is resent: the completed writes are

@@ -38,7 +38,9 @@ import (
 // buffered data is unwritten), handle_cap_grant's buffered-data flush on a
 // revoke of Fb, handle_cap_flush_ack, handle_cap_trunc, and
 // update_inode_file_size/update_inode_file_time, so a reply or push never
-// overwrites the writer's newer size or times.
+// overwrites the writer's newer size or times. A buffered writeback that does
+// not complete is latched (cephfsWritebackLatch): the consumer, not the
+// agent, decides whether the data is evicted or explicitly recovered.
 
 const (
 	cephCapLinkExcl     = 2 << 4
@@ -325,6 +327,8 @@ type cephfsFlushHold struct {
 // being flushed (Flushing, as flushing_caps) and, while Buffered, data held
 // as the native ObjectCacher holds it (FILE_BUFFER in use). WriteBack writes
 // the buffered data to the OSDs; it runs without the agent lock after Hold.
+// A writeback that does not complete sets Latch (mds_cephfs_writeback_test.go):
+// the data stays buffered and only an explicit decision resolves it.
 type cephfsDirtyFile struct {
 	Ino             uint64
 	Dirty, Flushing uint32
@@ -333,6 +337,8 @@ type cephfsDirtyFile struct {
 	Hold            time.Duration
 	WriteBack       func() error `json:"-"`
 	writing         bool
+	Latch           *cephfsWritebackLatch  `json:",omitempty"`
+	Resolved        []cephfsWritebackLatch `json:",omitempty"`
 	Events          []cephfsDirtyEvent
 }
 
@@ -447,6 +453,8 @@ type cephfsCapAgent struct {
 	flushAcks []cephfsFlushAck
 	truncs    []cephfsTruncEvent
 	maxSizes  []cephfsMaxSizeEvent
+	// capSend replaces the session's SendCaps in cluster-free tests.
+	capSend func(context.Context, cephmsgr.MDSCaps, uint64) error
 }
 
 func newCephFSCapAgent(ctx context.Context, s *cephmsgr.MDSSession) *cephfsCapAgent {
@@ -478,7 +486,9 @@ func (a *cephfsCapAgent) run() {
 
 func (a *cephfsCapAgent) recordLocked(r cephfsCapRecord) {
 	r.Order, r.At = len(a.records), time.Now()
-	r.PushSequence = a.s.Status().PushSequence
+	if a.s != nil {
+		r.PushSequence = a.s.Status().PushSequence
+	}
 	a.records = append(a.records, r)
 }
 
@@ -950,7 +960,15 @@ func (a *cephfsCapAgent) grantLocked(c *cephfsCap, e cephmsgr.MDSSessionEvent, r
 		d.Events = append(d.Events, cephfsDirtyEvent{At: time.Now(), Arrival: e.Arrival, Kind: "revoke", Seq: m.Seq, Caps: cephCapString(newCaps), Revoked: cephCapString(revoked),
 			Dirty: cephCapString(d.Dirty | d.Flushing), Note: fmt.Sprintf("op %d buffered %v", m.Op, d.Buffered)})
 	}
-	if d != nil && d.Buffered && !d.writing && revoked&cephCapFileBuffer != 0 {
+	if d != nil && d.Buffered && revoked&cephCapFileBuffer != 0 && d.Latch != nil {
+		// A latched writeback is never started again by a push: the data
+		// stays buffered and FILE_BUFFER stays in use until the consumer's
+		// explicit decision (evictBuffered or recoverBuffered).
+		d.Latch.Ignored++
+		d.Events = append(d.Events, cephfsDirtyEvent{At: time.Now(), Arrival: e.Arrival, Kind: "latched-revoke", Seq: m.Seq, Revoked: cephCapString(revoked),
+			Note: fmt.Sprintf("writeback latched %s; not re-run", d.Latch.Outcome)})
+	}
+	if d != nil && d.Buffered && !d.writing && d.Latch == nil && revoked&cephCapFileBuffer != 0 {
 		// handle_cap_grant: FILE_BUFFER in use is revoked, so the buffered
 		// data is flushed (_flush) and the revocation completes only when
 		// that flush is done (_flushed -> put_cap_ref -> check_caps). A
@@ -962,21 +980,13 @@ func (a *cephfsCapAgent) grantLocked(c *cephfsCap, e cephmsgr.MDSSessionEvent, r
 			a.checkCapsLocked(c, "revoke with buffered data: dirty metadata flush")
 		}
 		ino := c.Ino
+		writeBack := d.WriteBack
 		time.AfterFunc(d.Hold, func() {
 			began := time.Now()
-			err := d.WriteBack()
+			err := writeBack()
 			a.mu.Lock()
 			defer a.mu.Unlock()
-			ev := cephfsDirtyEvent{At: time.Now(), Kind: "data-writeback", Note: fmt.Sprintf("began %s", began.Format(time.RFC3339Nano))}
-			if err != nil {
-				ev.Error = err.Error()
-				a.failLocked("buffered data writeback of %d: %v", ino, err)
-			}
-			d.Events = append(d.Events, ev)
-			d.Buffered, d.writing = false, false
-			if c := a.caps[ino]; c != nil && c.CapID != 0 && !c.Released {
-				a.checkCapsLocked(c, "buffered data written back")
-			}
+			a.finishBufferedWritebackLocked(ino, d, "revoke-callback", began, err, "buffered data written back")
 		})
 		return
 	}
@@ -1084,7 +1094,11 @@ func (a *cephfsCapAgent) checkCapsFlagsLocked(c *cephfsCap, reason string, flags
 		d.Dirty = 0
 	}
 	msg.OldestFlushTID = a.oldestFlushTIDLocked()
-	err := a.send(func(ctx context.Context) error { return a.s.SendCaps(ctx, msg, tid) })
+	sendCaps := a.capSend
+	if sendCaps == nil {
+		sendCaps = a.s.SendCaps
+	}
+	err := a.send(func(ctx context.Context) error { return sendCaps(ctx, msg, tid) })
 	r := cephfsCapRecord{Kind: "update", Ino: c.Ino, CapID: c.CapID, Op: msg.Op, Seq: msg.Seq, IssueSeq: msg.IssueSeq, MSeq: msg.MigrateSeq, Caps: cephCapString(msg.Caps), Wanted: cephCapString(wanted),
 		Before: cephCapString(before), After: cephCapString(c.Issued), Note: reason}
 	if tid != 0 || maxSize != 0 {
@@ -1130,6 +1144,9 @@ func (a *cephfsCapAgent) markDirtyLocked(ino, size uint64, mtime cephmsgr.MDSTim
 	if d == nil {
 		d = &cephfsDirtyFile{Ino: ino}
 		a.dirty[ino] = d
+	}
+	if d.Latch != nil {
+		return fmt.Errorf("inode %d has latched buffered data awaiting an explicit decision", ino)
 	}
 	if d.Buffered || d.writing {
 		return fmt.Errorf("inode %d still has buffered data", ino)
@@ -1190,6 +1207,7 @@ func (a *cephfsCapAgent) dirtyState(ino uint64) (cephfsDirtyFile, bool) {
 	}
 	copied := *d
 	copied.WriteBack, copied.Events = nil, slices.Clone(d.Events)
+	copied.Latch, copied.Resolved = cloneCephFSWritebackLatch(d.Latch), cloneCephFSWritebackLatches(d.Resolved)
 	return copied, true
 }
 
@@ -1472,6 +1490,7 @@ func newCephFSCapAgentFrom(ctx context.Context, s *cephmsgr.MDSSession, previous
 	for ino, d := range previous.dirty {
 		copied := *d
 		copied.Events = slices.Clone(d.Events)
+		copied.Latch, copied.Resolved = cloneCephFSWritebackLatch(d.Latch), cloneCephFSWritebackLatches(d.Resolved)
 		a.dirty[ino] = &copied
 	}
 	for ino, c := range previous.caps {
@@ -1727,6 +1746,7 @@ func (a *cephfsCapAgent) snapshot() cephfsAgentSnapshot {
 	for _, d := range a.dirty {
 		copied := *d
 		copied.WriteBack, copied.Events = nil, slices.Clone(d.Events)
+		copied.Latch, copied.Resolved = cloneCephFSWritebackLatch(d.Latch), cloneCephFSWritebackLatches(d.Resolved)
 		s.Dirty = append(s.Dirty, copied)
 	}
 	slices.SortFunc(s.Dirty, func(x, y cephfsDirtyFile) int { return cmp.Compare(x.Ino, y.Ino) })

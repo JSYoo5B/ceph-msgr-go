@@ -1108,6 +1108,12 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 				t.Errorf("capability agent errors after %s: %v", name, s.Errors)
 				return false
 			}
+			// A latched writeback must be resolved by an explicit decision
+			// inside the leaf that caused it.
+			if latched := agent.latchedFiles(); len(latched) != 0 {
+				t.Errorf("buffered writeback still latched after %s: %v", name, latched)
+				return false
+			}
 		}
 		return ok
 	}
