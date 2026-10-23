@@ -364,11 +364,13 @@ func loadProfile(getenv func(string) string) (profile, error) {
 // osdErasureWidthSelectors are the only selections the four-OSD topology
 // admits: the nonoptimized k=2,m=2 baseline (the default), the optimized
 // k=2,m=2 baseline with its failover reads, and the optimized k=2,m=2
-// in-flight mutation epoch change with the snapshot and degraded-write case.
+// in-flight mutation epoch change with the snapshot and degraded-write case,
+// and deliberate resubmission of an independently observed applied mutation.
 var osdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureK2M2Integration$",
 	"^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$",
 	"^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$",
+	"^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$",
 }
 
 // osdTopology is one closed OSD fixture shape. Daemon capacity and the

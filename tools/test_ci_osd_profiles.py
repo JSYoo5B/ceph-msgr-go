@@ -50,8 +50,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 63 original rows, 2 mgr-service, 3 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go,
         # 2 mds-cephfs-capsend, 1 native SET_CHUNK checkpoint, 1 Go SET_CHUNK acceptance,
         # 2 mds-cephfs-writeback, 1 exclusive COPY_FROM2 late-error cell,
-        # and 1 CRC compression-offer row.
-        self.assertEqual(len(self.rows), 78)
+        # 1 applied EC resubmission and 1 CRC compression-offer row.
+        self.assertEqual(len(self.rows), 79)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
@@ -290,13 +290,15 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             dict(base, test_run="^TestCephOSDErasureK2M2Integration$"),
             dict(base, test_run="^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$"),
             dict(base, test_run="^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$"),
+            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$"),
         ])
         # Each row's selector must match the fixture's closed four-OSD list.
         fixture = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
         for row, expected in zip(rows, ({"TestCephOSDErasureK2M2Integration"},
                                         {"TestCephOSDErasureOptimizedK2M2Integration", "TestCephOSDErasureOptimizedK2M2FailoverIntegration"},
                                         {"TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration",
-                                         "TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration"})):
+                                         "TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration"},
+                                        {"TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration"})):
             with self.subTest(test_run=row["test_run"]):
                 self.assertIn('"%s",' % row["test_run"], fixture)
                 selector = re.compile(row["test_run"])
