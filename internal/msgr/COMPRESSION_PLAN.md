@@ -138,30 +138,34 @@ Steps 1-4 above are implemented and unit-tested:
   before CRC/encrypt and sets the flag; both read paths decompress after
   decrypt/CRC and bound the decompressed total to the frame limit.
 - `internal/session/handshake.go`: advertises `SupportedCompressionMethods` in
-  CompressionRequest on CRC-mode connections, enables the codec both directions
+  CompressionRequest on CRC-mode connections only when the peer banner offers
+  compression, enables the codec both directions
   when the server selects one, records it on `Transport.Compression`.
 - Tests: `compression_test.go`, `frame_compression_test.go` (round-trip,
   format, below-min, multi-segment, mixed, unexpected-flag). Full unit suite
   green.
 
-## Live finding (2026-10-20): daemons don't compress toward clients
+## Live observations and their boundary
 
-Investigated and resolved. Ceph 20.2.4 exposes onwire-compression config
-**only for the OSD peer type**: `ms_osd_compress_mode` (enum none/force, default
-none), `ms_osd_compress_min_size`, `ms_osd_compression_algorithm`, plus
-`ms_compress_secure` (default false). There is no `ms_mon_*`/`ms_mds_*`/
-`ms_client_*` option. The policy is **peer-indexed**, so a daemon compresses
-only toward OSD peers; a client peer gets none and the daemon **declines**.
-Confirmed: with `ms_osd_compress_mode=force`/`algorithm=zstd` and the OSD
-restarted (running value = force/zstd), a CRC client's OSD connection still
-negotiated no compression. So **live compressed-frame interop is unreachable
-from a client** — the codec/frame paths stand on the `internal/msgr` unit tests.
+The historical 2026-10-20 record reported OSD-peer compression configuration
+(`ms_osd_compress_mode`, min size and algorithm, plus `ms_compress_secure`)
+and no MON/MDS/client equivalent. After a force/zstd configuration and an OSD
+restart, a CRC client's OSD connection still had no negotiated compression.
+This supports a policy explanation; it is not a negotiation-frame capture.
 
-- `Transport.Compression` is exposed via `cephmsgr` `Snapshot().Monitor.Compression`
-  and `OSDConnection.Compression()`.
-- Live test `TestCephMsgrCompressionOfferIntegration` (CRC): the offer is
-  declined by MON and OSD and traffic is unaffected — the handshake change is
-  production-safe. See `integration/fixture/MSGR_COMPRESSION_VALIDATION.md`.
+`Transport.Compression` is exposed through the MON snapshot and
+`OSDConnection.Compression()`. `TestCephMsgrCompressionOfferIntegration` checks
+those values are empty and MON/OSD commands succeed. It does not observe the
+peer banner compression bit, an enabled request or a disabled response, so
+it cannot distinguish a declined offer from skipped negotiation. The dedicated
+CRC/AES IPv4 host, single-BlueStore legacy-v6 CI row requires this parent to
+PASS. The selected 2026-10-23 native run and its source are recorded separately
+from the historical run in
+[MSGR_COMPRESSION_VALIDATION.md](../../integration/fixture/MSGR_COMPRESSION_VALIDATION.md).
+
+Live compressed-frame interoperability remains unverified. Codec/frame tests
+provide synthetic evidence; the selected client's no-compression result does
+not establish daemon-peer compression or every future native configuration.
 
 ## Remaining (optional, lower priority)
 

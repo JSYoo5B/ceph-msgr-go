@@ -41,7 +41,18 @@ fixture's owned plain pools, so the test also belongs to the broad legacy OSD
 selection. A second such row selects only `TestCephOSDSetChunkGoIntegration`,
 the Go-originated SET_CHUNK acceptance with native observation, on the same
 fixture and likewise without an opt-in parameter.
-The catalog has 76 native rows in total.
+One dedicated `osd` row selects only `TestCephMsgrCompressionOfferIntegration`
+on CRC/AES client and service cipher, IPv4 host runtime, one BlueStore OSD,
+replica/min-size one and legacy-v6. Its ID is
+`osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer`.
+The existing `test_run` input overrides the broad OSD selector without
+changing any other profile. Request that ID with `/ci run`; `all` includes it
+in periodic main verification. The required-test gate binds it to
+`api/TestCephMsgrCompressionOfferIntegration`, so a missing or skipped parent
+cannot pass. The [selected native receipt](../../integration/fixture/MSGR_COMPRESSION_VALIDATION.md)
+records no negotiated compression and successful MON/OSD commands; it does
+not prove that negotiation frames were exchanged or compressed frames worked.
+The catalog has 77 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
