@@ -155,7 +155,7 @@ def validate_context(value):
 
 def tests_projection(value):
     keys(value, {"selector", "expected", "observed", "problems", "passed"})
-    need(value == {"selector": SELECTOR, "expected": [["api", TEST]],
+    need(value["passed"] is True and value == {"selector": SELECTOR, "expected": [["api", TEST]],
                    "observed": [{"suite": "api", "test": TEST, "result": "PASS"}],
                    "problems": [], "passed": True}, "required-test-not-passed")
     return value
@@ -190,8 +190,11 @@ def validate_runtime(value, ctx):
 def cap_send_projection(raw):
     need(raw["source_commit"] == SOURCE and raw["facts"]["restart_recipe"] == "cap-send", "receipt-source-or-recipe")
     facts = raw["facts"]["cap_send_recovery"]
+    need(isinstance(facts["flushes"], list) and len(facts["flushes"]) == 2 and
+         isinstance(facts["acks"], list) and len(facts["acks"]) == 2, "flush-count")
     flushes = []
     for flush in facts["flushes"]:
+        need(isinstance(flush["Attempts"], list) and len(flush["Attempts"]) == 2, "attempt-count")
         attempts = []
         for item in flush["Attempts"]:
             attempts.append({key: item[field] for key, field in (
@@ -347,14 +350,18 @@ def main(argv=None):
     for command in (capture, check):
         command.add_argument("--request", help="run request JSON; omitted reads trusted workflow environment")
     args = parser.parse_args(argv)
-    status = {"test_result": "passed", "evidence_result": "incomplete"}
+    status = {"test_result": "unknown", "evidence_result": "incomplete"}
     result = 1
     try:
+        if args.command == "collect":
+            tests_projection(document(args.tests, FILE_LIMIT))
+            status["test_result"] = "passed"
         request = document(args.request, FILE_LIMIT) if args.request else environment_request()
         if args.command == "collect":
             collect(request, args.receipts, args.tests, args.output)
         else:
             verify(args.bundle, context(request))
+        status["test_result"] = "passed"
         status["evidence_result"] = "complete"
         result = 0
     except EvidenceError as error:

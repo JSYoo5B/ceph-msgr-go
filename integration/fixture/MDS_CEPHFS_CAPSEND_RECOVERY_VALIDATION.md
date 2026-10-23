@@ -118,8 +118,13 @@ The result gate required a complete PASS of the selected top-level test in
 both jobs. Every assertion listed in the recipe executed and passed. The
 per-run public evidence file (`mds-cephfs-data-results.json`, including
 TIDs, GIDs, cap logs and native receipts) is written inside the fixture
-control directory. Successful CI runs do not archive it, so exact TIDs,
-GIDs and log lines are not reproduced here.
+control directory. Those successful CI runs did not archive it, so their exact TIDs,
+GIDs and log lines are not reproduced here. The later
+[schema-v1 success-bundle pilot](../../.github/scenarios/NATIVE_EVIDENCE.md)
+retains only reviewed numeric/outcome/cleanup projections after its trusted
+workflow reaches the default branch. Its
+[separate native record](../../.github/scenarios/NATIVE_EVIDENCE_VALIDATION.md)
+is attributed to its own source and execution; raw daemon lines remain omitted.
 
 The same PR run also used `^TestCephMDSCephFSDataIntegration$` at
 `41060ddd8c975386e0d773f22835b641b6c97962` as a regression after the shared-leaf

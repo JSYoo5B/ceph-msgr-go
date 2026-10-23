@@ -1,0 +1,94 @@
+{
+  "acks": [
+    {
+      "arrival": 11,
+      "cap_id": 1,
+      "inode": 1099511627780,
+      "tid": 6
+    },
+    {
+      "arrival": 12,
+      "cap_id": 1,
+      "inode": 1099511627780,
+      "tid": 7
+    }
+  ],
+  "cephfs_nonce": 996282043,
+  "flushes": [
+    {
+      "attempts": [
+        {
+          "admitted": true,
+          "barrier": 27,
+          "cap_id": 1,
+          "generation": 1,
+          "issue_seq": 1,
+          "kind": "first-send",
+          "migrate_seq": 0,
+          "reconnected_from": 0,
+          "seq": 3
+        },
+        {
+          "admitted": true,
+          "barrier": 27,
+          "cap_id": 1,
+          "generation": 2,
+          "issue_seq": 0,
+          "kind": "resubmit",
+          "migrate_seq": 0,
+          "reconnected_from": 1,
+          "seq": 0
+        }
+      ],
+      "inode": 1099511627780,
+      "size": 200000,
+      "tid": 6
+    },
+    {
+      "attempts": [
+        {
+          "admitted": false,
+          "barrier": 27,
+          "cap_id": 1,
+          "generation": 1,
+          "issue_seq": 1,
+          "kind": "first-send",
+          "migrate_seq": 0,
+          "reconnected_from": 0,
+          "seq": 3
+        },
+        {
+          "admitted": true,
+          "barrier": 27,
+          "cap_id": 1,
+          "generation": 2,
+          "issue_seq": 0,
+          "kind": "first-send",
+          "migrate_seq": 0,
+          "reconnected_from": 1,
+          "seq": 0
+        }
+      ],
+      "inode": 1099511627780,
+      "size": 220000,
+      "tid": 7
+    }
+  ],
+  "global_id": 4974,
+  "native_branches": {
+    "refused": "applied",
+    "uncertain": "applied"
+  },
+  "native_stat": {
+    "exists": true,
+    "ino": 1099511627780,
+    "mtime": 1792745393,
+    "size": 220000,
+    "version": 2
+  },
+  "new_mds_gid": 16913,
+  "object_requests_after": 177,
+  "object_requests_before": 177,
+  "old_mds_gid": 4698,
+  "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964"
+}

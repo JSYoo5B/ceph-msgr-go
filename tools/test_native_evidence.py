@@ -106,7 +106,7 @@ class NativeEvidenceTests(unittest.TestCase):
             self.collect()
 
     def test_skipped_missing_or_failed_required_parent_is_incomplete(self):
-        for change in ({"passed": False}, {"expected": []}, {"observed": []},
+        for change in ({"passed": False}, {"passed": 1}, {"expected": []}, {"observed": []},
                        {"observed": [{"suite": "api", "test": evidence.TEST, "result": "SKIP"}]},
                        {"observed": [{"suite": "client", "test": evidence.TEST, "result": "PASS"}]}):
             with self.subTest(change=change):
@@ -205,6 +205,25 @@ class NativeEvidenceTests(unittest.TestCase):
         for text in ("v2:192.0.2.1:3300/77", "/Users/example/private", "keyring secret"):
             with self.subTest(text=text), self.assertRaisesRegex(evidence.EvidenceError, "private-or-unbounded-field"):
                 evidence.privacy({"field": text})
+
+    def test_invalid_test_result_never_publishes_a_passed_test(self):
+        self.write(self.tests, {"selector": evidence.SELECTOR, "expected": [], "observed": [], "problems": [], "passed": True})
+        request, status = self.root / "request.json", self.root / "status.json"
+        self.write(request, self.request)
+        self.assertEqual(evidence.main(["collect", "--request", str(request), "--receipts", str(self.receipts),
+                                        "--tests", str(self.tests), "--output", str(self.output), "--status", str(status)]), 1)
+        self.assertEqual(json.loads(status.read_text())["test_result"], "unknown")
+
+    def test_retained_native_bundle_matches_the_independently_recorded_run(self):
+        request = {"execution_source": "linux-runner", "tested_sha": "b537120efe464d9f21f76fe3fd9f5152cd91e4fc",
+                   "controller_sha": "b537120efe464d9f21f76fe3fd9f5152cd91e4fc", "run_id": 2026102301, "attempt": 1,
+                   "matrix": dict(evidence.PROFILES[0], scenario=evidence.scenario_id(evidence.PROFILES[0]))}
+        path = scenario_plan.ROOT / ".github/scenarios/testdata/cap-send-native-v1"
+        manifest = evidence.verify(path, evidence.context(request))
+        self.assertEqual(manifest["total_bytes"], 3348)
+        caps = json.loads((path / "cap-send.json").read_text())
+        self.assertEqual([flush["tid"] for flush in caps["flushes"]], [6, 7])
+        self.assertEqual((caps["object_requests_before"], caps["object_requests_after"]), (177, 177))
 
     def test_workflow_keeps_the_collector_trusted_and_the_output_scope_closed(self):
         text = scenario_plan.NATIVE_WORKFLOW.read_text(encoding="utf-8")

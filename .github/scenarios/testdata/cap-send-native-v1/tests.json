@@ -1,0 +1,18 @@
+{
+  "expected": [
+    [
+      "api",
+      "TestCephMDSCephFSCapSendRecoveryIntegration"
+    ]
+  ],
+  "observed": [
+    {
+      "result": "PASS",
+      "suite": "api",
+      "test": "TestCephMDSCephFSCapSendRecoveryIntegration"
+    }
+  ],
+  "passed": true,
+  "problems": [],
+  "selector": "^TestCephMDSCephFSCapSendRecoveryIntegration$"
+}
