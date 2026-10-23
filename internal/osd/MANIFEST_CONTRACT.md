@@ -172,10 +172,13 @@ Evidence:
 - Synthetic public transport tests send SET_CHUNK on three request/reply
   profiles, keep a signed refusal, and keep a sent request whose connection is
   lost unknown with its transaction, without redial or resend.
-- `TestCephOSDSetChunkGoIntegration` sends Go-originated SET_CHUNK and source
-  deletions to two owned plain pools and judges each step by native
-  observations of bytes, versions, mtimes and the target's `chunk_refs`; no
-  live run is recorded yet.
+- [OSD_SET_CHUNK_GO_VALIDATION.md](../../integration/fixture/OSD_SET_CHUNK_GO_VALIDATION.md)
+  records `TestCephOSDSetChunkGoIntegration`: Go-originated SET_CHUNK and
+  source deletions against two owned plain pools on one secure/aes256k IPv6
+  container legacy-v6 single-BlueStore profile, judged by native observations
+  of bytes, versions, mtimes and the target's `chunk_refs`. Other profiles
+  and a live lost reply remain unverified (the lost-reply boundary is
+  synthetic).
 
 ### Native-only evidence and remaining stages
 
