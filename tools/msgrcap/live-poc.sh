@@ -192,9 +192,17 @@ for name in (["crosscheck.json"] if mode == "crc" else []) + ["crosscheck-derive
             problems.append("%s: connection %d differs from the MON log" % (name, r["capture_connection"]))
 rep = json.load(open(out + "/analysis.json"))
 phases = {c.get("trace_phase", "") for c in rep["connections"]}
-for want in ("refused (failed dial)", "command", "after-restart"):
+for want in ("refused (failed dial)", "command"):
     if want not in phases:
         problems.append("analysis: no connection correlated to phase %r" % want)
+# The client's own recovery may dial before the workflow reports that the
+# restart finished, so the reconnect is identified by the trace connection
+# order, not by its phase label.
+if not any(c.get("trace_phase") and c["trace_phase"] != "command" and "failed dial" not in c["trace_phase"]
+           and c.get("con_mode") == mode for c in rep["connections"]):
+    problems.append("analysis: no authenticated reconnect after the MON restart")
+if not any(c["phase"] == "after-restart" and not c.get("error") for c in rep.get("trace_commands", [])):
+    problems.append("trace: no successful command after the MON restart")
 if mode == "secure" and any(c.get("con_mode") == "secure" and
                             c["client_to_server"]["msgr2"].get("opaque_secure_bytes", 0) == 0
                             for c in rep["connections"] if c.get("con_mode")):
