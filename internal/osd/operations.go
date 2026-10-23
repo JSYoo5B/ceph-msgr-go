@@ -35,7 +35,7 @@ func fadviseFlags(code uint16) uint32 {
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, SetRedirect, UnsetManifest, Isdirty, Undirty, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, PGNLSFilter, ScrubList, Watch, Notify, NotifyAck:
+	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, SetRedirect, UnsetManifest, Isdirty, Undirty, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, PGNLSFilter, ScrubList, Watch, Notify, NotifyAck, CacheFlush, CacheEvict, CacheTryFlush, CachePin, CacheUnpin:
 		return true
 	}
 	return false
@@ -174,6 +174,16 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 				return 0, 0, ErrOperation
 			}
 			flags |= FlagWrite
+			continue
+		}
+		if IsCacheOperation(op.Code) {
+			// Standalone inputless cache-tier operation; its request flags
+			// are checked by ValidateCacheRequest.
+			mode, err := validateCacheOperation(op, len(ops))
+			if err != nil {
+				return 0, 0, err
+			}
+			flags |= mode
 			continue
 		}
 		if op.Code == Isdirty || op.Code == Undirty {
@@ -412,7 +422,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 
 func writeOperation(code uint16) bool {
 	switch code {
-	case Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, SetRedirect, UnsetManifest, Undirty, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint, Rollback:
+	case Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, SetRedirect, UnsetManifest, Undirty, Truncate, Zero, Delete, Append, Create, SetXattr, RemoveXattr, SetAllocHint, Rollback, CachePin, CacheUnpin:
 		return true
 	}
 	return isOmapMutation(code)

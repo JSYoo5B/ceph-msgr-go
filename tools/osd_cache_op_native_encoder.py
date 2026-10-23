@@ -22,7 +22,9 @@ import osd_ignore_cache_native_encoder as helpers
 from osd_ignore_cache_native_encoder import CaptureProof, check_binding, digest, original_sources
 
 TARGET = "osd_cache_op_native_encoder"
-FEATURES = {6: 3026423347916342070, 8: 3386711319181820726, 9: 3387274269135242038}
+# Default features plus the OSD_CACHEPOOL capability (bit 35) that a client
+# sending cache operations negotiates; MOSDOp encodes features in the front.
+FEATURES = {v: f | 1 << 35 for v, f in {6: 3026423347916342070, 8: 3386711319181820726, 9: 3387274269135242038}.items()}
 HEADER = struct.Struct("<QQHHHIHQBHH")
 SHAPES = ("flush", "try-flush", "evict", "pin", "pin-ignore-cache", "unpin", "unpin-ignore-cache")
 ONDISK, WRITE, READ, RETURNVEC = 0x4, 0x20, 0x10, 0x4000000
@@ -66,9 +68,8 @@ def collect(output):
         raise RuntimeError("native output must be exactly 21 requests x 5 files; no replies")
     fixtures = {}
     for version, features in FEATURES.items():
-        if features & (1 << 35):
-            # Cache-pool bit 35 is a session capability, not request encoding input.
-            raise RuntimeError("cache-pool session capability must not alter request encoding inputs")
+        if not features & (1 << 35):
+            raise RuntimeError("cache operations require the negotiated cache-pool capability")
         for shape in SHAPES:
             name = f"cache-op-native-v{version}-{shape}"
             for suffix in (".header.bin", ".front.bin", ".middle.bin", ".data.bin", ".decoded.json"):

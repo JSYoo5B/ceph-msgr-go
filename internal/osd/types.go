@@ -144,6 +144,9 @@ type Request struct {
 	// IgnoreCache bypasses the selected pool's cache handling. It does not
 	// bypass manifest redirects or change the caller-selected pool or target.
 	IgnoreCache bool
+	// IgnoreOverlay sets CEPH_OSD_FLAG_IGNORE_OVERLAY, which native cache
+	// flush/try-flush/evict callers send; admitted only on those requests.
+	IgnoreOverlay bool
 	// RetryAttempt is the wire retry count. Nonzero sets CEPH_OSD_FLAG_RETRY
 	// and marks a protocol resubmission under the original transaction ID.
 	RetryAttempt int32

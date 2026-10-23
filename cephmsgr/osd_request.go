@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/osd"
@@ -41,6 +42,20 @@ const (
 	OSDDelete        OSDOpcode = OSDOpcode(osd.Delete)
 	OSDAssertVersion OSDOpcode = OSDOpcode(osd.AssertVersion)
 	OSDCompareExtent OSDOpcode = OSDOpcode(osd.CompareExtent)
+	// OSDCacheFlush, OSDCacheTryFlush and OSDCacheEvict write back or evict
+	// the targeted cache-tier head; OSDCachePin and OSDCacheUnpin set or clear
+	// its pin flag. Each is inputless, standalone and flagless, requires
+	// EnableOSDCachePools, and takes exactly the native request flags:
+	// flush IgnoreCache and IgnoreOverlay; try-flush and evict also
+	// SkipRWLocks; pin and unpin optionally IgnoreCache only. The caller
+	// targets the tier pool itself. Results are the OSD's signed codes (for
+	// example EBUSY for a dirty evict, EPERM for a pinned object), and a lost
+	// reply after transmission remains an unknown outcome.
+	OSDCacheFlush    OSDOpcode = OSDOpcode(osd.CacheFlush)
+	OSDCacheTryFlush OSDOpcode = OSDOpcode(osd.CacheTryFlush)
+	OSDCacheEvict    OSDOpcode = OSDOpcode(osd.CacheEvict)
+	OSDCachePin      OSDOpcode = OSDOpcode(osd.CachePin)
+	OSDCacheUnpin    OSDOpcode = OSDOpcode(osd.CacheUnpin)
 )
 
 // OSD reply completion flags are native OSD flags, not Messenger ACKs.
@@ -240,6 +255,11 @@ type OSDRequest struct {
 	// Cache promotion/proxy is bypassed; dirty tracking remains. This neither
 	// selects the base pool nor guarantees absence of snapshot whiteouts.
 	IgnoreCache bool
+	// IgnoreOverlay sends CEPH_OSD_FLAG_IGNORE_OVERLAY. Native clients read it
+	// when they choose a target; here the caller supplies the target, so it
+	// is sent only with OSDCacheFlush, OSDCacheTryFlush and OSDCacheEvict,
+	// which native callers submit with it. Every other request refuses it.
+	IgnoreOverlay bool
 	// Resubmit explicitly repeats an earlier request of this client under its
 	// original identity (transaction ID and incarnation) so the OSD can answer
 	// from its PG log instead of executing it again: pass the Submission an
@@ -384,6 +404,10 @@ func (o *OSDConnection) validateIgnoreCache(request OSDRequest) error {
 	if !request.IgnoreCache {
 		return nil
 	}
+	// A cache-tier operation has its own contract (validateCacheOperation).
+	if len(request.Operations) == 1 && osd.IsCacheOperation(uint16(request.Operations[0].Code)) {
+		return nil
+	}
 	if !o.client.options.EnableOSDCachePools {
 		return fmt.Errorf("%w: IgnoreCache requires EnableOSDCachePools", ErrUnsupportedFeatures)
 	}
@@ -399,6 +423,45 @@ func (o *OSDConnection) validateIgnoreCache(request OSDRequest) error {
 		input.Operations = []osd.Operation{{Code: uint16(op.Code), Flags: uint32(op.Flags), TruncateSize: op.TruncateSize, TruncateSequence: op.TruncateSequence}}
 	}
 	if err := osd.ValidateIgnoreCache(input, o.features); err != nil {
+		if errors.Is(err, osd.ErrFeatures) {
+			return fmt.Errorf("%w: %w", ErrUnsupportedFeatures, err)
+		}
+		return err
+	}
+	return nil
+}
+
+// validateCacheOperation applies the cache-operation contract before
+// shared-slot admission, monitor readiness or TID allocation. Requests without
+// a cache opcode only refuse IgnoreOverlay.
+func (o *OSDConnection) validateCacheOperation(request OSDRequest) error {
+	cache := false
+	for _, op := range request.Operations {
+		cache = cache || osd.IsCacheOperation(uint16(op.Code))
+	}
+	if !cache && !request.IgnoreOverlay {
+		return nil
+	}
+	if cache && !o.client.options.EnableOSDCachePools {
+		return fmt.Errorf("%w: cache-tier operations require EnableOSDCachePools", ErrUnsupportedFeatures)
+	}
+	if cache && (request.Resubmit != nil || request.Placement != nil && request.Placement.Erasure) {
+		return fmt.Errorf("%w: cache-tier operations refuse resubmission and erasure-coded placement", osd.ErrRequest)
+	}
+	input := osd.Request{ReadSnap: request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots,
+		OrderSnap: request.OrderSnapshots, EnforceSnapContext: request.EnforceSnapContext, FullTry: request.FullTry, FullForce: request.FullForce,
+		BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, IgnoreRedirect: request.IgnoreRedirect,
+		OrderReadsWrites: request.OrderReadsWrites, SkipRWLocks: request.SkipRWLocks, IgnoreCache: request.IgnoreCache,
+		IgnoreOverlay: request.IgnoreOverlay, RetryAttempt: request.RetryAttempt}
+	for _, op := range request.Operations {
+		// A cache operation is inputless and flagless: every other field
+		// must be zero, refused here rather than after slot admission.
+		if osd.IsCacheOperation(uint16(op.Code)) && !reflect.DeepEqual(op, OSDOperation{Code: op.Code}) {
+			return fmt.Errorf("%w: cache-tier operations carry no flags or input", osd.ErrOperation)
+		}
+		input.Operations = append(input.Operations, osd.Operation{Code: uint16(op.Code)})
+	}
+	if err := osd.ValidateCacheRequest(input, o.features); err != nil {
 		if errors.Is(err, osd.ErrFeatures) {
 			return fmt.Errorf("%w: %w", ErrUnsupportedFeatures, err)
 		}
@@ -479,6 +542,9 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	if err := o.validateIgnoreCache(request); err != nil {
 		return result, err
 	}
+	if err := o.validateCacheOperation(request); err != nil {
+		return result, err
+	}
 	if err := o.validateEnforceSnapContext(request); err != nil {
 		return result, err
 	}
@@ -540,7 +606,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 		MapEpoch:         request.MapEpoch, Object: request.Object.Name, Hash: request.Object.Hash,
 		Locator:    osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
 		Operations: make([]osd.Operation, len(request.Operations)),
-		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, EnforceSnapContext: request.EnforceSnapContext, FullTry: request.FullTry, FullForce: request.FullForce, BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, IgnoreRedirect: request.IgnoreRedirect, OrderReadsWrites: request.OrderReadsWrites, SkipRWLocks: request.SkipRWLocks, IgnoreCache: request.IgnoreCache, RetryAttempt: request.RetryAttempt}
+		ReadSnap:   request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots, OrderSnap: request.OrderSnapshots, EnforceSnapContext: request.EnforceSnapContext, FullTry: request.FullTry, FullForce: request.FullForce, BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, IgnoreRedirect: request.IgnoreRedirect, OrderReadsWrites: request.OrderReadsWrites, SkipRWLocks: request.SkipRWLocks, IgnoreCache: request.IgnoreCache, IgnoreOverlay: request.IgnoreOverlay, RetryAttempt: request.RetryAttempt}
 	for i, op := range request.Operations {
 		if (op.Code == OSDSetRedirect) != (op.Redirect != OSDRedirectInput{}) || op.Code == OSDSetRedirect && op.CopyFrom != (OSDCopyFromInput{}) {
 			return result, fmt.Errorf("%w: a redirect target belongs to OSDSetRedirect alone", osd.ErrRequest)

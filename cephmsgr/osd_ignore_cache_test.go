@@ -171,13 +171,14 @@ func TestOSDCachePoolPublicTransportAndUnknownMutation(t *testing.T) {
 					}
 					return client, nil
 				}
-				osdDials.Add(1)
+				// Each OSD session identifies as the ID the test opened it with.
+				osdID := osdDials.Add(1) - 1
 				peer := &osdTestPeer{conn: server, requests: make(chan msgr.MessageData, 8), done: make(chan struct{})}
 				peers <- peer
 				go func() {
 					defer close(peer.done)
 					defer server.Close()
-					r, w, err := mockAuthenticate(server, peerConfig{role: 4, payload: func(tag msgr.Tag, p []byte) []byte {
+					r, w, err := mockAuthenticate(server, peerConfig{role: 4, id: uint64(osdID), payload: func(tag msgr.Tag, p []byte) []byte {
 						mask := osd.FeatureCachePool
 						if profile.replicatedPG() {
 							mask |= 1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<57
@@ -278,6 +279,130 @@ func TestOSDCachePoolPublicTransportAndUnknownMutation(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal(ctx.Err())
 			}
+			// A sent cache flush whose connection is lost stays unknown with
+			// its identity and is neither redialed nor resent.
+			// A distinct OSD ID opens a fresh session; the lost one is not reused.
+			o, err = c.OpenOSD(ctx, OSDTarget{ID: 1, Address: "192.0.2.1:6804"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer = <-peers
+			flush := request
+			flush.IgnoreOverlay, flush.Operations = true, []OSDOperation{{Code: OSDCacheFlush}}
+			if profile.replicatedPG() {
+				flush.Placement = &OSDPlacement{PG: OSDPG{Pool: 1}, Primary: 1}
+			}
+			go func() { r, err := o.Request(ctx, flush); done <- result{r, err} }()
+			cached := peer.next(t)
+			if flags := uint64(binary.LittleEndian.Uint32(cached.Front[offset:])); flags&(osd.FlagIgnoreCache|osd.FlagIgnoreOverlay|osd.FlagRead) != osd.FlagIgnoreCache|osd.FlagIgnoreOverlay|osd.FlagRead || flags&(osd.FlagWrite|osd.FlagSkipRWLocks) != 0 {
+				t.Fatalf("cache flush request flags %#x", flags)
+			}
+			peer.conn.Close()
+			select {
+			case got := <-done:
+				var unknown *OutcomeUnknownError
+				if !errors.As(got.err, &unknown) || got.reply.Submission.Transaction != cached.Transaction || cached.Transaction == mutation.Transaction || osdDials.Load() != 2 {
+					t.Fatal("uncertain cache flush lost identity or retried", got.reply.Submission, got.err, osdDials.Load())
+				}
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			select {
+			case extra := <-peer.requests:
+				t.Fatal("cache flush was resent", extra.Transaction)
+			default:
+			}
 		})
+	}
+}
+
+func TestOSDCacheOperationPreflight(t *testing.T) {
+	native := map[OSDOpcode]OSDRequest{
+		OSDCacheFlush:    {IgnoreCache: true, IgnoreOverlay: true},
+		OSDCacheTryFlush: {IgnoreCache: true, IgnoreOverlay: true, SkipRWLocks: true},
+		OSDCacheEvict:    {IgnoreCache: true, IgnoreOverlay: true, SkipRWLocks: true},
+		OSDCachePin:      {},
+		OSDCacheUnpin:    {IgnoreCache: true},
+	}
+	for code, r := range native {
+		o := backoffUnitConnection()
+		o.client.options.EnableOSDCachePools = true
+		o.features |= osd.FeatureCachePool
+		r.Operations = []OSDOperation{{Code: code}}
+		if err := o.validateIgnoreCache(r); err != nil {
+			t.Fatal("IgnoreCache preflight refused a cache operation", code, err)
+		}
+		if err := o.validateCacheOperation(r); err != nil {
+			t.Fatal("native cache flag set refused", code, err)
+		}
+		for name, edit := range map[string]func(*OSDConnection, *OSDRequest){
+			"default-deny":    func(o *OSDConnection, r *OSDRequest) { o.client.options.EnableOSDCachePools = false },
+			"missing-feature": func(o *OSDConnection, r *OSDRequest) { o.features &^= osd.FeatureCachePool },
+			"resubmit":        func(o *OSDConnection, r *OSDRequest) { r.Resubmit = &OSDSubmission{Transaction: 1} },
+			"erasure":         func(o *OSDConnection, r *OSDRequest) { r.Placement = &OSDPlacement{Erasure: true} },
+			"compound": func(o *OSDConnection, r *OSDRequest) {
+				r.Operations = append(r.Operations, OSDOperation{Code: OSDStat})
+			},
+			"wrong-locks": func(o *OSDConnection, r *OSDRequest) { r.SkipRWLocks = !r.SkipRWLocks },
+		} {
+			o, r := backoffUnitConnection(), r
+			o.client.options.EnableOSDCachePools = true
+			o.features |= osd.FeatureCachePool
+			edit(o, &r)
+			if err := o.validateCacheOperation(r); err == nil {
+				t.Fatal("invalid cache request passed preflight", code, name)
+			}
+		}
+	}
+	o := backoffUnitConnection()
+	if err := o.validateCacheOperation(OSDRequest{Operations: []OSDOperation{{Code: OSDRead}}}); err != nil {
+		t.Fatal("ordinary request policy changed", err)
+	}
+	if err := o.validateCacheOperation(OSDRequest{Operations: []OSDOperation{{Code: OSDRead}}, IgnoreOverlay: true}); err == nil {
+		t.Fatal("IgnoreOverlay admitted outside a cache operation")
+	}
+}
+
+func TestOSDCacheOperationRefusesBeforeSlotMonitorAndIdentity(t *testing.T) {
+	edits := map[string]func(*OSDConnection, *OSDRequest){
+		"default-deny":    func(o *OSDConnection, r *OSDRequest) { o.client.options.EnableOSDCachePools = false },
+		"missing-feature": func(o *OSDConnection, r *OSDRequest) { o.features &^= osd.FeatureCachePool },
+		"no-overlay":      func(o *OSDConnection, r *OSDRequest) { r.IgnoreOverlay = false },
+		"skip-locks":      func(o *OSDConnection, r *OSDRequest) { r.SkipRWLocks = true },
+		"compound": func(o *OSDConnection, r *OSDRequest) {
+			r.Operations = append(r.Operations, OSDOperation{Code: OSDStat})
+		},
+		"resubmit":        func(o *OSDConnection, r *OSDRequest) { r.Resubmit = &OSDSubmission{Transaction: 1} },
+		"retry":           func(o *OSDConnection, r *OSDRequest) { r.RetryAttempt = 1 },
+		"snapshot":        func(o *OSDConnection, r *OSDRequest) { r.ReadSnapshot = 1 },
+		"opflags":         func(o *OSDConnection, r *OSDRequest) { r.Operations[0].Flags = OSDFailOK },
+		"extent":          func(o *OSDConnection, r *OSDRequest) { r.Operations[0].Length = 1 },
+		"input":           func(o *OSDConnection, r *OSDRequest) { r.Operations[0].Data = []byte{1} },
+		"xattr":           func(o *OSDConnection, r *OSDRequest) { r.Operations[0].Xattr.Name = "k" },
+		"overlay-on-read": func(o *OSDConnection, r *OSDRequest) { r.Operations[0] = OSDOperation{Code: OSDRead, Length: 1} },
+	}
+	for _, profile := range []OSDProfile{OSDProfileObjectHash, OSDProfileReplicatedPG, OSDProfileReplicatedPGReplyV8, OSDProfileReplicatedPGRequestV9ReplyV8} {
+		for name, edit := range edits {
+			t.Run(profileNameForCacheTest(profile)+"/"+name, func(t *testing.T) {
+				o := backoffUnitConnection()
+				o.client.options.OSDProfile = profile
+				o.client.options.EnableOSDCachePools = true
+				o.features |= osd.FeatureCachePool
+				// A foreign owner occupies the sole slot; MON and writer are unstarted.
+				o.client.calls = make(chan struct{}, 1)
+				o.client.calls <- struct{}{}
+				r := OSDRequest{IgnoreCache: true, IgnoreOverlay: true, MapEpoch: 17, Object: OSDObject{Pool: 7, Name: "object"}, Operations: []OSDOperation{{Code: OSDCacheFlush}}}
+				if profile.replicatedPG() {
+					r.Placement = &OSDPlacement{PG: OSDPG{Pool: 7, Seed: 3}, Primary: o.target.ID}
+				}
+				edit(o, &r)
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				result, err := o.Request(ctx, r)
+				if err == nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || result.Submission.Transaction != 0 || o.client.osdNext.Load() != 0 || len(o.client.calls) != 1 {
+					t.Fatal("invalid cache operation passed local preflight", err, result.Submission.Transaction, o.client.osdNext.Load(), len(o.client.calls))
+				}
+			})
+		}
 	}
 }

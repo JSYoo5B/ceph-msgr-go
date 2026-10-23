@@ -22,6 +22,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	if err := ValidateIgnoreCache(r, features); err != nil {
 		return msgr.MessageData{}, err
 	}
+	if err := ValidateCacheRequest(r, features); err != nil {
+		return msgr.MessageData{}, err
+	}
 	if err := ValidateChecksumCompoundRequest(r); err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -71,6 +74,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	flags |= ordering
 	if r.IgnoreCache {
 		flags |= FlagIgnoreCache
+	}
+	if r.IgnoreOverlay {
+		flags |= FlagIgnoreOverlay
 	}
 	if r.RetryAttempt < 0 || r.RetryAttempt > MaxRetryAttempt {
 		return msgr.MessageData{}, ErrRequest

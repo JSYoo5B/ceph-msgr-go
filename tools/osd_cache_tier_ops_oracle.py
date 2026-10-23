@@ -206,13 +206,16 @@ def loaded_library(maps_path="/proc/self/maps"):
 
 
 class Native(original.Native):
+    # The closed head inventory; a subclass for another checkpoint narrows it.
+    objects = OBJECTS
+
     def __init__(self, root, out, plan):
         super().__init__(root, out, plan)
         self.cxx = Cxx(self.lib, loaded_library())
 
     def execute(self, role, pool, name, action, flags, data=CHANGED):
         if (role not in ("observer", "rw", "ro", "base") or pool not in (self.plan["base"], self.plan["tier"])
-                or name not in OBJECTS or action not in ACTIONS or data not in (BASE, CHANGED)
+                or name not in self.objects or action not in ACTIONS or data not in (BASE, CHANGED)
                 or flags & ~(IGNORE_CACHE | SKIPRWLOCKS | IGNORE_OVERLAY)):
             raise ValueError("operation outside closed tier-ops checkpoint")
         if role == "observer" and action in CACHE_ACTIONS:

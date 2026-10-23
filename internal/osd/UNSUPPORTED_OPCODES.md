@@ -6,7 +6,7 @@ Reference: Ceph 20.2.4, commit `7f793731f1b39eb4f465e960113d2363c311b964`
 files. This is a source classification, not an interoperability result, and
 the entries are not implementation tasks by name alone.
 
-[opcodes-tentacle.csv](opcodes-tentacle.csv) marks 33 of 80 entries
+[opcodes-tentacle.csv](opcodes-tentacle.csv) marks 28 of 80 entries
 `unsupported`. That count mixes client operations, daemon-only suboperations
 and entries without a server handler; it is not a completion percentage.
 `unsupported` means this repository emits no such operation. It does not claim
@@ -49,11 +49,6 @@ Classes:
 | PGLS_FILTER | Current server path, deferred legacy format | As PGLS; PGNLS_FILTER is implemented. | none |
 | PG_HITSET_LS | Current client primitive, cache-tier dependent | Handled in the PG-op path from the PG's hit-set history; `Objecter.h` and `librados` expose it. Meaningful only with a hit-set configured. | #8 |
 | PG_HITSET_GET | Current client primitive, cache-tier dependent | As PG_HITSET_LS; `librados` exposes it. | #8 |
-| CACHE_FLUSH | Current client primitive, cache-tier dependent | Handled in `do_osd_ops`; builder in `Objecter.h` and `librados`. Native-only fixture behavior and [fresh native request vectors](testdata/cache-op-native-README.md) exist; Go admission is pending. | #8 |
-| CACHE_TRY_FLUSH | Current client primitive, cache-tier dependent | As CACHE_FLUSH. | #8 |
-| CACHE_EVICT | Current client primitive, cache-tier dependent | As CACHE_FLUSH. | #8 |
-| CACHE_PIN | Current client primitive, cache-tier dependent | Handled in `do_osd_ops`; exposed by `librados` (`cache_pin`). Native-only fixture behavior and [fresh native request vectors](testdata/cache-op-native-README.md) exist; Go admission is pending. | #8 |
-| CACHE_UNPIN | Current client primitive, cache-tier dependent | As CACHE_PIN. | #8 |
 | SET_CHUNK | Current client primitive, manifest dependent | Handled in `do_osd_ops`; used by `rados` and the dedup tools. | #8 |
 | TIER_PROMOTE | Current client primitive, manifest dependent | Handled in `do_osd_ops`; exposed by `librados` and the `rados` tool. | #8 |
 | TIER_FLUSH | Current client primitive, manifest dependent | As TIER_PROMOTE. | #8 |
@@ -61,3 +56,7 @@ Classes:
 
 `TestUnsupportedOpcodesAreClassified` fails if this table and the catalog's
 `unsupported` entries differ.
+
+CACHE_FLUSH, CACHE_TRY_FLUSH, CACHE_EVICT, CACHE_PIN and CACHE_UNPIN are
+implemented as standalone cache-tier operations; see
+[CACHE_POOL_CONTRACT.md](CACHE_POOL_CONTRACT.md#cache-tier-operations).
