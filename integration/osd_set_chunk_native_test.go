@@ -250,7 +250,7 @@ func TestCephOSDSetChunkNativeIntegration(t *testing.T) {
 	// SET_CHUNK leaves the source's bytes and user version alone (it is not a
 	// user-visible modification); the reference increment is a cls write on
 	// the target, which advances the target's user version only.
-	if !bytes.Equal(first.Source.Data, setChunkSourceData) || first.Source.Version != seeded.Source.Version ||
+	if !setChunkSourceKept(seeded.Source, first.Source) ||
 		!bytes.Equal(first.Target.Data, setChunkTargetData) || first.Target.Version <= seeded.Target.Version ||
 		first.Refs.Code != len(one) || !bytes.Equal(first.Refs.Raw, one) || first.References.Code != 1 {
 		t.Fatalf("first chunk native state differs: source v%d->v%d target v%d->v%d refs=%d %x references=%d",
@@ -259,7 +259,7 @@ func TestCephOSDSetChunkNativeIntegration(t *testing.T) {
 	if !unchanged(overlapped.Source, first.Source) || !unchanged(overlapped.Target, first.Target) || !bytes.Equal(overlapped.Refs.Raw, one) || overlapped.References.Code != 1 {
 		t.Fatal("overlapping SET_CHUNK changed native state")
 	}
-	if !bytes.Equal(second.Source.Data, setChunkSourceData) || second.Source.Version != seeded.Source.Version ||
+	if !setChunkSourceKept(seeded.Source, second.Source) ||
 		!bytes.Equal(second.Target.Data, setChunkTargetData) || second.Target.Version <= first.Target.Version ||
 		!bytes.Equal(second.Refs.Raw, two) || second.References.Code != 2 {
 		t.Fatalf("second chunk native state differs: target v%d refs %x references=%d", second.Target.Version, second.Refs.Raw, second.References.Code)
@@ -276,4 +276,32 @@ func TestCephOSDSetChunkNativeIntegration(t *testing.T) {
 	t.Logf("native SET_CHUNK: codes %v; source v%d mtime %d.%09d -> %d.%09d; target v%d -> v%d -> v%d; refs 1 then 2 by_object from pool %d hash %#x; target removed after %d release polls",
 		codes, seeded.Source.Version, seeded.Source.Seconds, seeded.Source.Nanos, second.Source.Seconds, second.Source.Nanos,
 		seeded.Target.Version, first.Target.Version, second.Target.Version, pools.ids[1], route.Hash, len(r.Release.Polls))
+}
+
+// setChunkSourceKept reports whether a successful SET_CHUNK left the seeded
+// source unchanged: bytes, user version and mtime. SET_CHUNK is not a
+// user-visible modification of the source.
+func setChunkSourceKept(seeded, got nativeXattrSnapshot) bool {
+	return got.Code == 0 && bytes.Equal(got.Data, setChunkSourceData) && bytes.Equal(got.Data, seeded.Data) &&
+		got.Version == seeded.Version && got.Seconds == seeded.Seconds && got.Nanos == seeded.Nanos
+}
+
+func TestSetChunkSourceKeptRequiresMTime(t *testing.T) {
+	seeded := nativeXattrSnapshot{Data: setChunkSourceData, Version: 3, Seconds: 1700000000, Nanos: 5}
+	if !setChunkSourceKept(seeded, seeded) {
+		t.Fatal("unchanged source refused")
+	}
+	for name, mutate := range map[string]func(*nativeXattrSnapshot){
+		"seconds": func(s *nativeXattrSnapshot) { s.Seconds++ },
+		"nanos":   func(s *nativeXattrSnapshot) { s.Nanos++ },
+		"version": func(s *nativeXattrSnapshot) { s.Version++ },
+		"bytes":   func(s *nativeXattrSnapshot) { s.Data = []byte("other") },
+		"code":    func(s *nativeXattrSnapshot) { s.Code = -2 },
+	} {
+		got := seeded
+		mutate(&got)
+		if setChunkSourceKept(seeded, got) {
+			t.Error("changed source accepted:", name)
+		}
+	}
 }
