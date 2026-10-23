@@ -397,4 +397,20 @@ func TestMonLogCrossCheck(t *testing.T) {
 	if len(cross) != 1 || !cross[0].TagsEqual || !cross[0].ModeEqual || !cross[0].SeqsEqual {
 		t.Fatalf("cross-check %+v", cross)
 	}
+	// Native clients advertise IP:0/nonce. A same-host native client (the
+	// MON's own readiness check) must not be paired with the capture client.
+	native := strings.ReplaceAll(log.String(), "v2:10.0.0.1:40000/0", "10.0.0.2:0/111")
+	native = strings.ReplaceAll(native, "0xabc", "0x111")
+	own := strings.ReplaceAll(log.String(), "v2:10.0.0.1:40000/0", "10.0.0.1:0/222")
+	logs, err = parseMonLog(strings.NewReader(native + own))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cross = crosscheck(rep, logs, 3300)
+	if len(cross) != 1 || cross[0].Log == nil || cross[0].Log.Pointer != "0xabc" || !cross[0].TagsEqual {
+		t.Fatalf("IP-only cross-check %+v", cross)
+	}
+	if peerHasIP([]string{"110.0.0.1:0/1"}, "10.0.0.1:5") || !peerHasIP([]string{"[v2:10.0.0.1:0/1]"}, "10.0.0.1:5") {
+		t.Fatal("peer IP boundary")
+	}
 }

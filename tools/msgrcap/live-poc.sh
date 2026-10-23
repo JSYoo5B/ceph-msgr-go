@@ -58,7 +58,7 @@ docker run -d --name "$mon" --network "$net" --ip "$mon_ip" \
     --entrypoint /bin/bash "$image" /msgrcap-bootstrap.sh >/dev/null
 ready() {
     for _ in $(seq 1 60); do
-        if docker exec "$mon" timeout 5 ceph -n client.capture -k /etc/ceph/ceph.client.capture.keyring mon_status >/dev/null 2>&1; then
+        if docker exec "$mon" timeout 5 ceph -n client.capture -k /etc/ceph/ceph.client.capture.keyring mon dump >/dev/null 2>&1; then
             return 0
         fi
         sleep 1

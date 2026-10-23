@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"io"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strconv"
@@ -94,7 +95,8 @@ type crossResult struct {
 
 // crosscheck pairs each established capture connection to the MON with one
 // MON-log connection: by exact client ip:port when the log shows it, else by
-// accept order among log connections that received a HELLO.
+// accept order among log connections from the same client IP that received
+// a HELLO. Ceph clients usually advertise IP:0/nonce, not their TCP port.
 func crosscheck(rep *report, logs []*logConnRecord, monPort uint16) []crossResult {
 	var candidates []*logConnRecord
 	for _, l := range logs {
@@ -107,7 +109,6 @@ func crosscheck(rep *report, logs []*logConnRecord, monPort uint16) []crossResul
 	var out []crossResult
 	conns := append([]connReport(nil), rep.Connections...)
 	sort.SliceStable(conns, func(i, j int) bool { return conns[i].First.Before(conns[j].First) })
-	next := 0
 	for _, c := range conns {
 		if c.C2S.Msgr == nil || c.C2S.Msgr.Banner == nil || !strings.HasSuffix(c.Server, ":"+strconv.Itoa(int(monPort))) {
 			continue
@@ -129,11 +130,10 @@ func crosscheck(rep *report, logs []*logConnRecord, monPort uint16) []crossResul
 				}
 			}
 		}
-		for match == nil && next < len(candidates) {
-			if l := candidates[next]; !used[l] {
-				match, res.Match = l, "accept order (MON log shows no client port)"
+		for _, l := range candidates {
+			if match == nil && !used[l] && peerHasIP(l.Peers, c.Client) {
+				match, res.Match = l, "accept order among MON log connections from the client IP (log shows no client port)"
 			}
-			next++
 		}
 		if match == nil {
 			res.Match = "none"
@@ -155,6 +155,35 @@ func crosscheck(rep *report, logs []*logConnRecord, monPort uint16) []crossResul
 		out = append(out, res)
 	}
 	return out
+}
+
+// peerHasIP reports whether a logged peer address carries the client's IP.
+func peerHasIP(peers []string, client string) bool {
+	ap, err := netip.ParseAddrPort(client)
+	if err != nil {
+		return false
+	}
+	ip := ap.Addr().Unmap().String()
+	if ap.Addr().Unmap().Is6() {
+		ip = "[" + ip + "]"
+	}
+	for _, p := range peers {
+		rest, prev := p, byte(':')
+		for {
+			i := strings.Index(rest, ip+":")
+			if i < 0 {
+				break
+			}
+			if i > 0 {
+				prev = rest[i-1]
+			}
+			if strings.IndexByte(":[,", prev) >= 0 {
+				return true
+			}
+			prev, rest = rest[i], rest[i+1:]
+		}
+	}
+	return false
 }
 
 func equalU8(a, b []uint8) bool {

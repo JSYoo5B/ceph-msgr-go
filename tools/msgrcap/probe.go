@@ -16,7 +16,7 @@ import (
 
 // probe drives one disposable MON through bounded phases while recording the
 // client-side identities needed to correlate a packet capture. It uses only
-// the public cephmsgr API and read-only MON commands.
+// the public cephmsgr API and read-only MON commands (mon dump).
 
 type probeOptions struct {
 	Monitor       string
@@ -158,7 +158,7 @@ func runProbe(o probeOptions) error {
 	}
 	defer client.Close()
 	ctx, cancel = context.WithTimeout(context.Background(), 15*time.Second)
-	err = rec.command(ctx, client, "command", "mon_status", 1)
+	err = rec.command(ctx, client, "command", "mon dump", 1)
 	cancel()
 	rec.end("command", start, resultText(err))
 	if err != nil {
@@ -189,7 +189,7 @@ func runProbe(o probeOptions) error {
 		var last error
 		for attempt := 1; attempt <= 20; attempt++ {
 			ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-			last = rec.command(ctx, client, "after-restart", "mon_status", attempt)
+			last = rec.command(ctx, client, "after-restart", "mon dump", attempt)
 			cancel()
 			if last == nil {
 				break

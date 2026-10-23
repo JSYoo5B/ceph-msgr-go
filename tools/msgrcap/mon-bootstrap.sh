@@ -26,7 +26,7 @@ mon_cluster_log_to_stderr = false
 debug_ms = 10
 EOF
     ceph-authtool --create-keyring /tmp/mon.keyring --gen-key -n mon. --cap mon 'allow *' >/dev/null
-    # A read-only identity: the PoC issues only mon_status.
+    # A read-only identity: the PoC issues only "mon dump".
     ceph-authtool --create-keyring /etc/ceph/ceph.client.capture.keyring --gen-key -n client.capture --cap mon 'allow r' >/dev/null
     ceph-authtool /tmp/mon.keyring --import-keyring /etc/ceph/ceph.client.capture.keyring >/dev/null
     monmaptool --create --addv a "[v2:$ip:3300]" --fsid "$fsid" /tmp/monmap >/dev/null
