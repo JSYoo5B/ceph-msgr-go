@@ -20,7 +20,7 @@ class ProtocolEvidenceTests(unittest.TestCase):
         self.assertEqual(len(evidence.frame_rows(evidence.ROOT)), 22)
         catalog = evidence.opcode_rows(evidence.ROOT)
         self.assertEqual(len(catalog), 80)
-        self.assertEqual(sum(row["status"] == "implemented" for row in catalog.values()), 52)
+        self.assertEqual(sum(row["status"] == "implemented" for row in catalog.values()), 53)
 
     def test_every_implemented_opcode_needs_its_own_join(self):
         row = next(line for line in self.text.splitlines() if line.startswith("| READ |"))

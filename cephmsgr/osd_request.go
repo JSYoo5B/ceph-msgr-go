@@ -56,6 +56,19 @@ const (
 	OSDCacheEvict    OSDOpcode = OSDOpcode(osd.CacheEvict)
 	OSDCachePin      OSDOpcode = OSDOpcode(osd.CachePin)
 	OSDCacheUnpin    OSDOpcode = OSDOpcode(osd.CacheUnpin)
+	// OSDSetChunk records Chunk's source extent in the targeted object's
+	// chunked manifest after the OSD has its own client take a cls_cas
+	// reference on the chunk target (librados set_chunk, as `rados
+	// set-chunk` sends it). It is standalone, requires exactly the
+	// OSDWithReference flag and Chunk, and takes no request flag, mtime,
+	// snapshot context, resubmission or erasure-coded placement. Only
+	// SourceOffset zero and a target other than the object itself are
+	// admitted (see OSDChunkInput). The source keeps its bytes, user version
+	// and mtime. Results are the OSD's signed codes (for example ENOENT for an
+	// absent source or target, ERANGE beyond the source size, EOPNOTSUPP for
+	// an overlapping chunk), and a lost reply after transmission remains an
+	// unknown outcome that is never resent.
+	OSDSetChunk OSDOpcode = OSDOpcode(osd.SetChunk)
 )
 
 // OSD reply completion flags are native OSD flags, not Messenger ACKs.
@@ -84,6 +97,9 @@ const (
 	// OSDFailOK continues a compound vector after this operation's error. Its
 	// negative per-op result is retained even if later mutations commit.
 	OSDFailOK OSDOperationFlags = OSDOperationFlags(osd.OpFailOK)
+	// OSDWithReference is CEPH_OSD_OP_FLAG_WITH_REFERENCE, a per-operation
+	// flag that OSDSetChunk requires and every other opcode refuses.
+	OSDWithReference OSDOperationFlags = OSDOperationFlags(osd.OpWithReference)
 	// OSDFadvise* are cache hints (rados.h CEPH_OSD_OP_FLAG_FADVISE_*) that
 	// READ, SPARSE_READ, CHECKSUM, CMPEXT, WRITE, WRITEFULL, WRITESAME and
 	// APPEND pass to the OSD's object store; other opcodes refuse them before
@@ -153,6 +169,7 @@ type OSDOperation struct {
 	ListSnapshots  OSDListSnapshotsInput
 	CopyFrom       OSDCopyFromInput
 	Redirect       OSDRedirectInput
+	Chunk          OSDChunkInput
 
 	TruncateSize     uint64
 	TruncateSequence uint32
@@ -193,6 +210,26 @@ type OSDRedirectInput struct {
 	TargetName                 string
 	TargetKey, TargetNamespace string
 	TargetVersion              uint64
+}
+
+// OSDChunkInput is the active input for OSDSetChunk: the source extent of the
+// targeted object and the chunk target named by pool, name, key and namespace
+// (the OSD computes its PG) at TargetOffset. The target must exist; the OSD
+// takes a reference on it before recording the chunk.
+//
+// SourceOffset must be zero and SourceLength positive. The pinned OSD records
+// a failed reference increment under both the chunk offset and offset zero,
+// so a failure at a non-zero source offset leaves the request unanswered and
+// the source object blocked on the OSD (source-derived, not observed); such
+// requests are refused before transmission. A target equal to the targeted
+// object is refused because the OSD's own reference request would wait on the
+// object it has blocked.
+type OSDChunkInput struct {
+	SourceOffset, SourceLength uint64
+	TargetPool                 int64
+	TargetName                 string
+	TargetKey, TargetNamespace string
+	TargetOffset               uint64
 }
 
 // OSDTime is Tentacle's raw utime_t. Zero preserves the server's zero-mtime
@@ -431,6 +468,55 @@ func (o *OSDConnection) validateIgnoreCache(request OSDRequest) error {
 	return nil
 }
 
+// validateSetChunk applies the SET_CHUNK contract before shared-slot
+// admission, monitor readiness or TID allocation. Requests without
+// OSDSetChunk only refuse a Chunk input.
+func (o *OSDConnection) validateSetChunk(request OSDRequest) error {
+	chunk := false
+	for _, op := range request.Operations {
+		if op.Code != OSDSetChunk && op.Chunk != (OSDChunkInput{}) {
+			return fmt.Errorf("%w: a chunk input belongs to OSDSetChunk alone", osd.ErrRequest)
+		}
+		chunk = chunk || op.Code == OSDSetChunk
+	}
+	if !chunk {
+		return nil
+	}
+	if request.Resubmit != nil || request.Placement != nil && request.Placement.Erasure {
+		return fmt.Errorf("%w: OSDSetChunk refuses resubmission and erasure-coded placement", osd.ErrRequest)
+	}
+	input := osd.Request{MTimeSeconds: request.ModificationTime.Seconds, MTimeNanoseconds: request.ModificationTime.Nanoseconds,
+		Object: request.Object.Name, Locator: osd.Locator{Pool: request.Object.Pool, Key: request.Object.Key, Namespace: request.Object.Namespace, Hash: -1},
+		ReadSnap: request.ReadSnapshot, SnapSeq: request.SnapContext.Sequence, Snaps: request.SnapContext.Snapshots,
+		OrderSnap: request.OrderSnapshots, EnforceSnapContext: request.EnforceSnapContext, FullTry: request.FullTry, FullForce: request.FullForce,
+		BalanceReads: request.BalanceReads, LocalizeReads: request.LocalizeReads, IgnoreRedirect: request.IgnoreRedirect,
+		OrderReadsWrites: request.OrderReadsWrites, SkipRWLocks: request.SkipRWLocks, IgnoreCache: request.IgnoreCache,
+		IgnoreOverlay: request.IgnoreOverlay, RetryAttempt: request.RetryAttempt}
+	for _, op := range request.Operations {
+		// SET_CHUNK carries only its flag and chunk input: every other field
+		// must be zero, refused here rather than after slot admission.
+		if op.Code == OSDSetChunk && !reflect.DeepEqual(op, OSDOperation{Code: op.Code, Flags: op.Flags, Chunk: op.Chunk}) {
+			return fmt.Errorf("%w: OSDSetChunk carries only its flag and chunk input", osd.ErrRequest)
+		}
+		input.Operations = append(input.Operations, osd.Operation{Code: uint16(op.Code), Flags: uint32(op.Flags), SetChunk: setChunkWireInput(op)})
+	}
+	if err := osd.ValidateSetChunkRequest(input); err != nil {
+		return err
+	}
+	// The frame bound is enforced again by the encoder.
+	_, _, err := osd.ValidateOperations(input.Operations, ^uint32(0))
+	return err
+}
+
+func setChunkWireInput(op OSDOperation) osd.SetChunkInput {
+	c := op.Chunk
+	if c == (OSDChunkInput{}) {
+		return osd.SetChunkInput{}
+	}
+	return osd.SetChunkInput{SourceOffset: c.SourceOffset, SourceLength: c.SourceLength, TargetObject: c.TargetName, TargetOffset: c.TargetOffset,
+		Target: osd.Locator{Pool: c.TargetPool, Key: c.TargetKey, Namespace: c.TargetNamespace, Hash: -1}}
+}
+
 // validateCacheOperation applies the cache-operation contract before
 // shared-slot admission, monitor readiness or TID allocation. Requests without
 // a cache opcode only refuse IgnoreOverlay.
@@ -539,6 +625,9 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 	if err := o.validateChecksumCompound(request); err != nil {
 		return result, err
 	}
+	if err := o.validateSetChunk(request); err != nil {
+		return result, err
+	}
 	if err := o.validateIgnoreCache(request); err != nil {
 		return result, err
 	}
@@ -619,6 +708,7 @@ func (o *OSDConnection) request(ctx context.Context, request OSDRequest, owner *
 			Checksum:     osd.ChecksumInput{ChunkSize: op.Checksum.ChunkSize, Type: op.Checksum.Type, Seed: op.Checksum.Seed},
 			ListWatchers: osd.ListWatchersInput{MaxOutputBytes: op.ListWatchers.MaxOutputBytes},
 			CopyFrom:     copyFromWireInput(op),
+			SetChunk:     setChunkWireInput(op),
 			Snap:         op.Snapshot, ListSnaps: osd.ListSnapsInput{MaxOutputBytes: op.ListSnapshots.MaxOutputBytes}}
 	}
 	var m msgr.MessageData
@@ -729,7 +819,7 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 	if err != nil {
 		return err
 	}
-	if !redirect && reply.Result >= 0 && flags&osd.FlagWrite != 0 && !reply.OnDisk() {
+	if !redirect && reply.Result >= 0 && osd.RequiresOnDisk(input.Operations, flags) && !reply.OnDisk() {
 		return errors.New("mutation reply lacks requested ONDISK completion")
 	}
 	if !redirect && osd.ChecksumCompound(input.Operations) {

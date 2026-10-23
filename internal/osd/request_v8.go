@@ -58,6 +58,9 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	if err := ValidateCacheRequest(r.Request, features); err != nil {
 		return msgr.MessageData{}, err
 	}
+	if err := ValidateSetChunkRequest(r.Request); err != nil {
+		return msgr.MessageData{}, err
+	}
 	if err := ValidateChecksumCompoundRequest(r.Request); err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -67,7 +70,7 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	if (ChecksumCompound(r.Operations) || SparseReadCompound(r.Operations)) && r.Shard != -1 {
 		return msgr.MessageData{}, ErrRequest
 	}
-	if r.IgnoreCache && r.Shard != -1 {
+	if (r.IgnoreCache || IsSetChunk(r.Operations)) && r.Shard != -1 {
 		return msgr.MessageData{}, ErrRequest
 	}
 	if r.PG.Pool > math.MaxInt64 || r.PG.Pool != uint64(r.Locator.Pool) || r.Shard < -1 || r.MapEpoch == 0 || r.Locator.Pool < 0 || r.Object == "" || r.Locator.Hash != -1 || len(r.Operations) == 0 || len(r.Operations) > MaxOperations {
@@ -204,6 +207,10 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 		if IsOmapOperation(op.Code) {
 			payloadBytes, _ = omapInputBytes(op, limit)
 		}
+		if op.Code == SetChunk {
+			// The union stays zero; the indata carries the chunk.
+			payloadBytes = setChunkDataBytes(op.SetChunk)
+		}
 		if IsWatchOperation(op.Code) {
 			EncodeWatchUnion(&e, op)
 		} else if IsXattrOperation(op.Code) {
@@ -257,6 +264,10 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 		}
 		if IsOmapOperation(op.Code) {
 			data = appendOmapInput(data, op)
+			continue
+		}
+		if op.Code == SetChunk {
+			data = appendSetChunkData(data, op.SetChunk)
 			continue
 		}
 		if IsXattrOperation(op.Code) {

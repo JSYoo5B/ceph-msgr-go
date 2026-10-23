@@ -156,7 +156,9 @@ behavior or atomicity across different requests/objects. Reply normalization
 must correspond to the submitted operation; unrelated opcode/offset/length
 or payload changes fail the session as an unknown outcome.
 
-A successful mutation must carry OSD ONDISK. ACK-only or ONNVRAM-only success
+A successful mutation must carry OSD ONDISK. That includes SET_CHUNK, whose
+native request mode is READ but which changes the source manifest and the
+target's references (`RequiresOnDisk`). ACK-only or ONNVRAM-only success
 cannot complete this API; unexpected completion fails the session and returns
 OutcomeUnknownError. A negative server refusal is a known result and does not
 need an ONDISK flag. Messenger ACK proves neither object execution nor object

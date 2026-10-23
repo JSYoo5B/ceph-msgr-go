@@ -51,9 +51,9 @@ ONDISK like any mutation; the existing identity, cancellation and
 unknown-outcome rules apply unchanged — a sent UNDIRTY with a lost reply stays
 uncertain and is never replayed.
 
-## Not implemented (unreachable on a plain pool)
+## Excluded from this contract
 
-The cache-tier and manifest opcodes are deliberately excluded: the cache-tier
+The cache-tier and manifest opcodes are deliberately excluded here: the cache-tier
 opcodes cannot be driven from a client against a plain replicated pool, and
 SET_CHUNK changes another object's references:
 
@@ -67,15 +67,14 @@ SET_CHUNK changes another object's references:
   fails with **-EOPNOTSUPP/-EINVAL/-ERANGE/-ENOENT** otherwise (`:7280`). It
   needs no dedup pool option and does work on two plain replicated pools, but it
   mutates the target's reference attribute, so it is not a simple probe either.
-  Its audit and native-only checkpoint are in
-  [MANIFEST_CONTRACT.md](MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations-not-implemented).
+  Its audit, native-only checkpoint and bounded Go contract are in
+  [MANIFEST_CONTRACT.md](MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations).
 
-These remain unimplemented client operations. The development fixture can now
-prepare an owned cache tier for the bounded IGNORE_CACHE capability; see
-[CACHE_POOL_CONTRACT.md](CACHE_POOL_CONTRACT.md) and its separate native
-validation records. That setup does not implement or verify flush/evict/pin
-messages. The SET_CHUNK manifest recipe and its independent native oracle are a
-separate native-only checkpoint for #8. Plain-pool refusal is not absence of a daemon handler.
+The cache-tier operations and SET_CHUNK are implemented separately
+([cache_op.go](cache_op.go) with
+[CACHE_POOL_CONTRACT.md](CACHE_POOL_CONTRACT.md#cache-tier-operations), and
+[set_chunk.go](set_chunk.go)); none of them is part of the dirty-flag
+contract. Plain-pool refusal is not absence of a daemon handler.
 
 ## Verification
 

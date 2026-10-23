@@ -25,6 +25,9 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	if err := ValidateCacheRequest(r, features); err != nil {
 		return msgr.MessageData{}, err
 	}
+	if err := ValidateSetChunkRequest(r); err != nil {
+		return msgr.MessageData{}, err
+	}
 	if err := ValidateChecksumCompoundRequest(r); err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -150,6 +153,10 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		if IsOmapOperation(op.Code) {
 			payloadBytes, _ = omapInputBytes(op, limit)
 		}
+		if op.Code == SetChunk {
+			// The union stays zero; the indata carries the chunk.
+			payloadBytes = setChunkDataBytes(op.SetChunk)
+		}
 		if IsWatchOperation(op.Code) {
 			EncodeWatchUnion(&e, op)
 		} else if IsXattrOperation(op.Code) {
@@ -209,6 +216,10 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 		}
 		if IsOmapOperation(op.Code) {
 			data = appendOmapInput(data, op)
+			continue
+		}
+		if op.Code == SetChunk {
+			data = appendSetChunkData(data, op.SetChunk)
 			continue
 		}
 		if IsXattrOperation(op.Code) {

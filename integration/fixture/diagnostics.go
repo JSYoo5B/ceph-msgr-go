@@ -21,7 +21,7 @@ var metadataFiles = []string{
 	"osd-enforce-snap-context-input.json", "osd-enforce-snap-context-result.json", "osd-enforce-snap-context-command.json", "osd-enforce-snap-context-results.json", "osd-enforce-snap-context-native-write.json",
 	"osd-cache-pools-fixture.json", "osd-cache-pools-native.json", "osd-cache-pools-command.json", "osd-cache-pools-results.json",
 	"osd-cache-tier-ops-native.json", "osd-cache-tier-ops-command.json", "osd-cache-tier-ops-results.json",
-	"osd-set-chunk-input.json", "osd-set-chunk-result.json", "osd-set-chunk-command.json", "osd-set-chunk-results.json",
+	"osd-set-chunk-input.json", "osd-set-chunk-result.json", "osd-set-chunk-command.json", "osd-set-chunk-results.json", "osd-set-chunk-go-results.json",
 	"osd-cache-op-go-native.json", "osd-cache-op-go-command.json", "osd-cache-op-go-results.json",
 	"osd-ignore-cache-probe.json", "osd-ignore-cache-plan.json", "osd-ignore-cache-attached.json", "osd-ignore-cache-detached.json", "osd-ignore-cache-native.json", "osd-ignore-cache-command.json",
 	"fixture-manifest.json", "fixture-ownership.json", "daemon-version", "relay.log", "native-oracles.log", "native-oracles.error", "osd-map-control.log", "peers.json", "pool-policy.json", "provider.error", "provider.cleanup.error",

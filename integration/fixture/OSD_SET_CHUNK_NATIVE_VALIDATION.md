@@ -2,10 +2,10 @@
 
 This is the native-only SET_CHUNK checkpoint for issue #8 (staged work item 3):
 SET_CHUNK issued through native librados against Ceph Tentacle 20.2.4 source
-`7f793731f1b39eb4f465e960113d2363c311b964`. It adds no Go product opcode,
-operation union, feature bit or admission rule, and it makes no Go SET_CHUNK
-support claim. The source audit is in
-[MANIFEST_CONTRACT.md](../../internal/osd/MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations-not-implemented).
+`7f793731f1b39eb4f465e960113d2363c311b964`. It uses no Go request; the later
+bounded Go primitive and its live acceptance are recorded in
+[OSD_SET_CHUNK_GO_VALIDATION.md](OSD_SET_CHUNK_GO_VALIDATION.md). The source audit is in
+[MANIFEST_CONTRACT.md](../../internal/osd/MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations).
 
 ## Fixture and selection
 
@@ -103,8 +103,11 @@ non-skipped test as PASS with no gate problem.
 
 ## Not verified
 
-Only the profile above ran. Not verified: native request vectors and any Go
-request; other authentication, address, runtime, store, replica and request
+Only the profile above ran. Native request vectors and the Go-originated
+acceptance are recorded separately
+([set-chunk-native-README.md](../../internal/osd/testdata/set-chunk-native-README.md),
+[OSD_SET_CHUNK_GO_VALIDATION.md](OSD_SET_CHUNK_GO_VALIDATION.md)). Not
+verified here: other authentication, address, runtime, store, replica and request
 profiles; scoped identities (the source audit finds that the cache-mode opcode
 asks for neither read nor write capability); erasure-coded and tier source
 pools and redirect-manifest sources (source-derived refusals only); a failed

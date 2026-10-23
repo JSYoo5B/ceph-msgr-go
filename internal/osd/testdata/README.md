@@ -72,6 +72,12 @@ CACHE_EVICT, and CACHE_PIN/CACHE_UNPIN with and without IGNORE_CACHE, with
 native-caller request flags, across v6, v8 and v9. They are offline request
 codec proof only, and the Go encoder matches each of them.
 
+[Fresh SET_CHUNK request fixtures](set-chunk-native-README.md) independently
+construct twelve requests: two admitted offset-zero chunks and two shapes the
+Go client refuses (a non-zero source offset and a missing WITH_REFERENCE),
+across v6, v8 and v9. They are offline request codec proof only; the Go
+encoder matches each admitted request and refuses the other two.
+
 These independently constructed bytes were accepted by `ceph-dencoder` from
 the pinned Ceph 20.2.4 development image recorded in `provenance.json`. They
 are native decoder fixtures, not native payload encoder output, captures from
