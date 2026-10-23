@@ -87,7 +87,13 @@ returns aggregate EIO with per-op [-EINPROGRESS, 0], leaves the populated
 destination and source unchanged, and restores/read-checks the owned daemon
 option. An untouched zero suffix result does not prove execution. This selected
 single-BlueStore CRC/v6 error is distinct from a destination-loss or staging
-barrier. Destination loss after source-read completion/staging remains unverified. A committed copy
+barrier. A separate [multi-chunk late-error checkpoint](../../integration/fixture/OSD_COPY_FROM_MULTICHUNK_ERROR_VALIDATION.md)
+lowers the owned daemon's chunk limit to 32 KiB for a 64 KiB source. Native
+op history shows three versioned copy-gets with that maximum, the reply keeps
+the same signed EIO representation, and a bounded poll of a complete native
+PG enumeration finds no temporary object. That temporary object was not
+itself observed, and its absence does not establish removal timing.
+Destination loss after source-read completion/staging remains unverified. A committed copy
 survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.
 
