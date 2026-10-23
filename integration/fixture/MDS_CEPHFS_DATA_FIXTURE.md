@@ -18,8 +18,9 @@ feature exception is added. The closed control temporarily changes only
 `debug_mds`, `debug_ms`, `mds_log_pause` and `ms_blackhole_client` on the owned MDS incarnation,
 with baseline readback and restoration/discard verification. The
 writeback-fence selector alone may also change `debug_ms` and
-`ms_blackhole_client` once on the single owned OSD and evict one registered
-owned Go session. The closed control also permits one explicitly armed restart of its owned rank-0 MDS,
+`ms_blackhole_client` on the single owned OSD up to twice, one change at a
+time, run one background native reader and evict one registered owned Go
+session. The closed control also permits one explicitly armed restart of its owned rank-0 MDS,
 with adoption of the same daemon's new GID, nonce and incarnation. The fixture
 termination budget is two minutes.
 
@@ -143,11 +144,15 @@ time; the controller holds the shared MDS fresh scope lock and is bounded to
 | `flush-journal` | none | one journaled admin-socket barrier after confirmed resume/blackhole; require return code zero; an uncertain result is not retried |
 | `cap-log-mark` | none | mark the bounded owned daemon log after debug-on |
 | `cap-log` | Go GlobalID and nonce | two-argument action: both canonical and previously registered by observe; preserve paired incoming/handler/snapshot-or-dedupe evidence and attributed outgoing ACK blackholes after the mark |
-| `osd-drop-on` | none | writeback-fence selector only, once per run, never during a restart or beside an MDS client blackhole: read the single owned OSD's `debug_ms` and `ms_blackhole_client` (which must be `false`), mark its log, journal intent, then set and read back `debug_ms=10/10` and `ms_blackhole_client=true`; incoming client messages to the OSD are then dropped after Messenger receipt and before dispatch |
+| `osd-drop-on` | none | writeback-fence selector only, at most twice per run and only after the previous drop is restored, never during a restart, while the background reader runs or beside an MDS client blackhole: read the single owned OSD's `debug_ms` and `ms_blackhole_client` (which must be `false`), mark its log, journal intent, then set and read back `debug_ms=10/10` and `ms_blackhole_client=true`; incoming client messages to the OSD are then dropped after Messenger receipt and before dispatch |
 | (exclusion) | | while `osd-drop-on` is intended, applied, uncertain, restore-intended or restore-uncertain, `log-pause`, `blackhole-on` and `client-drop-on` are refused; `debug-on`/`debug-off`, `log-resume` and cleanup restoration stay available |
 | `osd-drop-off` | none | writeback-fence selector only, after a confirmed `osd-drop-on`: restore and read back `ms_blackhole_client` and then `debug_ms` |
 | `osd-log` | Go GlobalID and nonce | writeback-fence selector only, two-argument action after a confirmed drop: return same-thread pairs of the OSD's `received message ... from=client.<gid> type=42 osd_op()` line and its `handle_message blackhole` line after the mark, both on a connection from the registered peer nonce |
-| `evict` | GlobalID | writeback-fence selector only, once per run, while no restart is pending and no client blackhole is active: require `mds_session_blocklist_on_evict=true`, a session of the owned Go identity at an address registered by observe and no existing blocklist entry for it; journal intent, run `session evict id=<gid>` on the owned admin socket and wait until the session is gone and its exact address is blocklisted |
+| `reader-start` | none | writeback-fence selector only, once per run, only while an `osd-drop-on` is applied and no restart or MDS fault is in effect: start the `read-shared` driver action on `shared-file` in the background (75-second process bound) and return at once; LibCephFS reaches the OSD only after the Go writer releases its capabilities |
+| `reader-status` | none | writeback-fence selector only, after `reader-start`: report whether the background reader is still running, without blocking |
+| `reader-wait` | none | writeback-fence selector only, once, after the OSD drop is restored: wait within the request bound for the background reader and return its `read-shared` output and process receipt |
+| (exclusion) | | while the background reader runs, other native work, eviction, MDS faults, restart arm and a new OSD drop are refused; status, `osd-log`, `osd-drop-off` and observation stay available, and cleanup waits for the reader before its native readback |
+| `evict` | GlobalID | writeback-fence selector only, once per run, while no restart is pending, no client blackhole is active and the background reader is not running: require `mds_session_blocklist_on_evict=true`, a session of the owned Go identity at an address registered by observe and no existing blocklist entry for it; journal intent, run `session evict id=<gid>` on the owned admin socket and wait until the session is gone and its exact address is blocklisted |
 
 Every action proves the owned rank-0 incarnation before and after it runs
 (FSID, FSCID, daemon name, GID, rank 0, endpoint, nonce, incarnation, pools)
@@ -193,7 +198,9 @@ filesystem is removed, with its own 45-second bound. It writes an
    still owned by the same proven incarnation. A respawn discards overrides
    only after proving the old GID absent and every new value equal to its
    recorded baseline. An OSD drop override that is still active is then
-   restored and read back (`osd_config_restored`). Runtime/configuration
+   restored and read back (`osd_config_restored`), earlier restored drops
+   are reported in `osd_drop_history`, and a background reader that is
+   still running is awaited within the cleanup bound (`reader`). Runtime/configuration
    results are part of cleanup.
 2. Unless a Go session is still present, stats the owned directory natively:
    `namespace_restored` records whether it is gone, and `layout_restored`

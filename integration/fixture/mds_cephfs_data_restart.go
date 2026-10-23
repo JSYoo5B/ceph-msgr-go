@@ -75,6 +75,9 @@ func (c *fixtureCluster) mdsCephFSDataRestartAct(ctx context.Context, id int64, 
 		if x.restart != nil {
 			return errors.New("MDS CephFS data restart was already armed")
 		}
+		if x.reader.running() {
+			return errors.New("MDS CephFS data restart refused while the background reader runs")
+		}
 		r, err := newMDSCephFSDataRestart(id, x.current)
 		if err != nil {
 			return err

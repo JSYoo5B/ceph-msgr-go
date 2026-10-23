@@ -103,15 +103,129 @@ func TestMDSCephFSDataOSDDropAdmission(t *testing.T) {
 	if x.nativeReady() != nil {
 		t.Fatal("restored OSD drop still blocks native clients")
 	}
-	if _, err := x.newOSDDrop(2, "osd.0", d.Baseline); err == nil {
-		t.Fatal("OSD drop repeated after restoration")
+	// One further drop is admitted after restoration, never a third.
+	second, err := x.newOSDDrop(2, "osd.0", d.Baseline)
+	if err != nil || second.State != "intended" || second.RequestID != 2 {
+		t.Fatal("second OSD drop refused after restoration", second, err)
+	}
+	x.osdDropHistory, x.osdDrop = append(x.osdDropHistory, d), second
+	for _, state := range dataActiveStates {
+		second.State = state
+		if _, err := x.newOSDDrop(3, "osd.0", d.Baseline); err == nil {
+			t.Fatal("OSD drop admitted beside an unrestored drop", state)
+		}
+	}
+	second.State = "restored"
+	if _, err := x.newOSDDrop(3, "osd.0", d.Baseline); err == nil {
+		t.Fatal("third OSD drop admitted")
+	}
+}
+
+func TestMDSCephFSDataBackgroundReaderAdmission(t *testing.T) {
+	baseline := map[string]string{"debug_ms": "0/5", "ms_blackhole_client": "false"}
+	token := strings.Repeat("b2", 16)
+	for _, name := range []string{"reader-start", "reader-status", "reader-wait"} {
+		if _, a, err := parseMDSCephFSDataRequest([]string{"1", token, name}, token, 0); err != nil || a.name != name {
+			t.Fatal(name, a, err)
+		}
+		if _, _, err := parseMDSCephFSDataRequest([]string{"1", token, name, "shared-file"}, token, 0); err == nil {
+			t.Fatal("reader action admitted a caller argument", name)
+		}
+	}
+	x := &mdsCephFSDataScope{current: dataRestartDaemon(), baselineConfig: dataRuntimeBaseline()}
+	if x.readerReady() == nil {
+		t.Fatal("reader admitted without an OSD drop")
+	}
+	for _, state := range []string{"intended", "uncertain", "restore-intended", "restore-uncertain", "restored"} {
+		x.osdDrop = &mdsCephFSDataOSDDrop{State: state}
+		if x.readerReady() == nil {
+			t.Fatal("reader admitted without an applied OSD drop", state)
+		}
+	}
+	x.osdDrop = &mdsCephFSDataOSDDrop{State: "applied"}
+	armed := &mdsCephFSDataScope{current: dataRestartDaemon(), baselineConfig: dataRuntimeBaseline(), restart: &mdsCephFSRestart{State: "applied"}, osdDrop: x.osdDrop}
+	if armed.readerReady() == nil {
+		t.Fatal("reader admitted during a restart")
+	}
+	faulted := dataRuntimeDebugApplied(t)
+	if _, err := faulted.newRuntime(2, "client-drop-on"); err != nil {
+		t.Fatal(err)
+	}
+	faulted.osdDrop = x.osdDrop
+	if faulted.readerReady() == nil {
+		t.Fatal("reader admitted beside an MDS client drop")
+	}
+	if err := x.readerReady(); err != nil {
+		t.Fatal("reader refused behind an applied OSD drop", err)
+	}
+	// While it runs: no other native work, MDS fault, restart arm, eviction
+	// or new OSD drop; status works; wait requires the restored drop.
+	x.reader = newMDSCephFSDataReaderRun(5)
+	if x.readerReady() == nil {
+		t.Fatal("a second reader was admitted")
+	}
+	x.osdDrop.State = "restored"
+	if x.nativeReady() == nil {
+		t.Fatal("native work admitted while the reader runs")
+	}
+	if _, err := x.newRuntime(6, "log-pause"); err == nil {
+		t.Fatal("MDS fault admitted while the reader runs")
+	}
+	if _, err := x.newOSDDrop(6, "osd.0", baseline); err == nil {
+		t.Fatal("OSD drop admitted while the reader runs")
+	}
+	c := &fixtureCluster{mdsCephFSData: x}
+	c.profile.testRun = mdsCephFSWritebackSelector
+	x.owned = map[string]uint64{}
+	if err := c.mdsCephFSDataEvict(context.Background(), 6, 4100, &mdsCephFSDataResult{}); err == nil || len(x.mutations) != 0 {
+		t.Fatal("eviction admitted while the reader runs", err)
+	}
+	result := &mdsCephFSDataResult{}
+	if err := c.mdsCephFSDataWritebackAct(context.Background(), 6, mdsCephFSDataAction{name: "reader-status"}, result); err != nil ||
+		result.Reader == nil || result.Reader.State != "running" || result.Reader.RequestID != 5 {
+		t.Fatal("reader status differs", result.Reader, err)
+	}
+	x.osdDrop.State = "applied"
+	if err := x.reader.wait(context.Background(), 7, x.osdDrop.active(), &mdsCephFSDataResult{}); err == nil {
+		t.Fatal("reader wait admitted while the OSD drops client messages")
+	}
+	x.osdDrop.State = "restored"
+	expired, stop := context.WithCancel(context.Background())
+	stop()
+	if err := x.reader.wait(expired, 7, false, &mdsCephFSDataResult{}); err == nil {
+		t.Fatal("reader wait did not stay bounded by its request")
+	}
+	x.reader.finish(nil, mdsCephFSDataNative{Read: &mdsCephFSDataDigest{Length: 1}}, nil)
+	if x.nativeReady() != nil {
+		t.Fatal("an ended reader still blocks native work")
+	}
+	result = &mdsCephFSDataResult{}
+	if err := x.reader.wait(context.Background(), 8, false, result); err != nil || result.Native == nil || result.Native.Read.Length != 1 ||
+		result.Reader.State != "completed" || result.Reader.WaitRequestID != 8 {
+		t.Fatal("reader wait result differs", result, err)
+	}
+	if err := x.reader.wait(context.Background(), 9, false, &mdsCephFSDataResult{}); err == nil {
+		t.Fatal("reader result collected twice")
+	}
+	if err := x.reader.awaitCleanup(context.Background(), &mdsCephFSDataCleanup{}); err != nil {
+		t.Fatal(err)
+	}
+	// A failed reader reports its error; nothing is retried.
+	failed := newMDSCephFSDataReaderRun(10)
+	failed.finish(nil, mdsCephFSDataNative{}, fmt.Errorf("native exit 1"))
+	if err := failed.wait(context.Background(), 11, false, &mdsCephFSDataResult{}); err == nil || failed.snapshot().State != "failed" {
+		t.Fatal("failed reader not reported", err)
+	}
+	var none *mdsCephFSDataReaderRun
+	if none.running() || none.wait(context.Background(), 1, false, &mdsCephFSDataResult{}) == nil || none.awaitCleanup(context.Background(), &mdsCephFSDataCleanup{}) != nil {
+		t.Fatal("absent reader handling differs")
 	}
 }
 
 func TestMDSCephFSDataWritebackControlsRequireTheirSelector(t *testing.T) {
 	x := &mdsCephFSDataScope{current: dataRestartDaemon(), baselineConfig: dataRuntimeBaseline(), owned: map[string]uint64{}}
 	c := &fixtureCluster{mdsCephFSData: x}
-	for _, name := range []string{"osd-drop-on", "osd-drop-off", "osd-log", "evict"} {
+	for _, name := range []string{"osd-drop-on", "osd-drop-off", "osd-log", "evict", "reader-start", "reader-status", "reader-wait"} {
 		result := &mdsCephFSDataResult{}
 		if err := c.mdsCephFSDataWritebackAct(context.Background(), 1, mdsCephFSDataAction{name: name, gid: 4100, nonce: 77}, result); err == nil ||
 			!strings.Contains(err.Error(), "writeback-fence selector") || x.osdDrop != nil || len(x.mutations) != 0 {
