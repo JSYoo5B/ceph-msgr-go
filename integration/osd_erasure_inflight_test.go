@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"net"
@@ -23,7 +24,7 @@ import (
 
 // An EC mutation is in flight on the optimized isa k=2,m=2 pool when its PG's
 // primary is killed and the acting set and primary change. In one phase the
-// request reached the primary and was applied on every shard, but its reply
+// request reached the primary and became natively visible, but its reply
 // is withheld; in the other the request bytes never left the client. Both
 // end with an OutcomeUnknownError that keeps the original transaction, and
 // the client neither resends nor reconnects. The native observer then reads
@@ -32,7 +33,14 @@ import (
 // applied does the test, as the caller, resubmit the same operations under
 // the original identity to the replacement primary.
 func TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration(t *testing.T) {
-	erasureInFlightScenario(t, erasureK2M2, true, "isa")
+	erasureInFlightScenario(t, erasureK2M2, true, "isa", false)
+}
+
+// The caller deliberately repeats an independently observed applied mutation
+// after an epoch change. PG-log duplicate detection in this bounded experiment
+// is separate from automatic replay policy and an exactly-once guarantee.
+func TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration(t *testing.T) {
+	erasureInFlightScenario(t, erasureK2M2, true, "isa", true)
 }
 
 // erasureFaultClient wraps the connections of one Go client to a single OSD
@@ -182,7 +190,7 @@ func erasureSettledPrimary(t *testing.T, ctx context.Context, object string, old
 	}
 }
 
-func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, plugin string) {
+func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, plugin string, resubmitApplied bool) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
 	}
@@ -222,7 +230,7 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 		seeded      = 1700005000
 		mutated     = 1700005001
 	)
-	phase := func(t *testing.T, object string, dropRequest bool) {
+	phase := func(t *testing.T, object string, dropRequest, retryApplied bool) {
 		seed := bytes.Repeat([]byte{0x3c, 0, 0xff, byte(len(object))}, 1500)
 		route := poolPlace(t, ctx, 1, object, "")
 		facts.checkPlacement(t, route)
@@ -253,6 +261,17 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 		first := request(route, ops...)
 		first.ClientIncarnation = incarnation
 		first.ModificationTime = cephmsgr.OSDTime{Seconds: mutated}
+		// This fingerprints semantic input, excluding the explicitly changed
+		// routing and retry envelope. It is not a hash of captured wire bytes.
+		fingerprint := func(r cephmsgr.OSDRequest) [32]byte {
+			r.MapEpoch, r.Placement, r.Resubmit, r.RetryAttempt = 0, nil, nil, 0
+			data, err := json.Marshal(r)
+			if err != nil {
+				t.Fatal("request fingerprint", err)
+			}
+			return sha256.Sum256(data)
+		}
+		originalFingerprint := fingerprint(first)
 		want := append(bytes.Clone(seed), tail...)
 
 		type result struct {
@@ -260,6 +279,7 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 			err   error
 		}
 		finished := make(chan result, 1)
+		submittedAt := time.Now()
 		callCtx, cancelCall := context.WithCancel(ctx)
 		defer cancelCall()
 		signal := fc.blocked
@@ -288,8 +308,8 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 			default:
 			}
 		} else {
-			// The withheld reply belongs to a mutation the primary applied on
-			// the shards; wait for the native observer to see it.
+			// Wait for independently observed application; native object
+			// visibility does not attribute participation to each shard.
 			deadline := time.Now().Add(60 * time.Second)
 			for {
 				n := poolObserve(t, ctx, 1, object, "", "")
@@ -363,14 +383,24 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 			if n.Version != pre.Version || !bytes.Equal(n.Data, seed) || n.Seconds != seeded || xattrInventory(n)[attr] != "" {
 				t.Fatal("native state changed although the request never reached the primary", n.Version, n.Seconds)
 			}
+		}
+		if !applied || retryApplied {
 			// The caller's explicit decision: resubmit the same operations
 			// under the original identity, routed by the new map.
+			// Never retry a failed resubmission to manufacture a success.
+			const observationWindow = 3 * time.Minute
+			if elapsed := time.Since(submittedAt); elapsed >= observationWindow {
+				t.Fatalf("resubmission outside the bounded PG-log observation window: %s", elapsed)
+			}
 			ro := mutationConnection(t, fc.Client, ctx, fresh)
 			defer ro.Close()
 			retry := request(fresh, ops...)
 			retry.ClientIncarnation = incarnation
 			retry.ModificationTime = cephmsgr.OSDTime{Seconds: mutated}
 			retry.Resubmit, retry.RetryAttempt = &sub, 1
+			if fingerprint(retry) != originalFingerprint {
+				t.Fatal("explicit retry changed the semantic request fingerprint")
+			}
 			retryCtx, stop := context.WithTimeout(ctx, 30*time.Second)
 			reply, err := ro.Request(retryCtx, retry)
 			stop()
@@ -380,13 +410,41 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 			}
 			t.Logf("resubmission: tid %d code %d flags %#x user version %d attempt %d epoch %d", reply.Transaction, reply.Code, reply.Flags, reply.UserVersion, reply.RetryAttempt, reply.MapEpoch)
 			if reply.Transaction != sub.Transaction || reply.Code != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.RetryAttempt != 1 ||
-				reply.Submission.Transaction != sub.Transaction || reply.Submission.MapEpoch != fresh.Epoch {
+				reply.Submission.Transaction != sub.Transaction || reply.Submission.MapEpoch != fresh.Epoch ||
+				reply.Submission.GlobalID != sub.GlobalID || reply.Submission.ClientIncarnation != sub.ClientIncarnation || reply.Submission.Attempt != sub.Attempt {
 				t.Fatal("resubmission receipt differs", reply.Transaction, reply.Code, reply.Flags, reply.RetryAttempt, reply.Submission.MapEpoch)
 			}
 			time.Sleep(300 * time.Millisecond)
 			final = poolObserve(t, ctx, 1, object, "", "")
 			if !bytes.Equal(final.Data, want) || final.Version != reply.UserVersion || final.Seconds != mutated || xattrInventory(final)[attr] != string(value) {
 				t.Fatal("native state after the resubmission differs", len(final.Data), final.Version, reply.UserVersion, final.Seconds)
+			}
+			if retryApplied {
+				if final.Version != n.Version || reply.UserVersion != n.Version {
+					t.Fatal("duplicate execution advanced the observed native version", n.Version, final.Version, reply.UserVersion)
+				}
+				t.Logf("applied resubmission: one explicit retry after %s, original unknown=%v; native version unchanged %d -> %d, tail count %d, semantic input sha256 %x",
+					time.Since(submittedAt), lost.err, n.Version, final.Version, bytes.Count(final.Data, tail), originalFingerprint)
+				if !errors.As(lost.err, &unknown) || bytes.Count(final.Data, tail) != 1 {
+					t.Fatal("resubmission changed original uncertainty or appended twice")
+				}
+				// A fresh transaction is the positive control for both byte and
+				// version oracles: the identical append must execute once more.
+				control := request(fresh, ops...)
+				control.ClientIncarnation = incarnation
+				control.ModificationTime = cephmsgr.OSDTime{Seconds: mutated + 1}
+				controlReply, err := ro.Request(ctx, control)
+				if err != nil || controlReply.Transaction == sub.Transaction || controlReply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
+					t.Fatal("fresh-transaction append control", err, controlReply.Transaction, controlReply.Flags)
+				}
+				controlState := poolObserve(t, ctx, 1, object, "", "")
+				if controlState.Code != 0 || !bytes.Equal(controlState.Data, append(bytes.Clone(want), tail...)) ||
+					controlState.Version <= final.Version || controlState.Version != controlReply.UserVersion ||
+					controlState.Seconds != mutated+1 || xattrInventory(controlState)[attr] != string(value) || bytes.Count(controlState.Data, tail) != 2 {
+					t.Fatal("fresh transaction did not advance native bytes/version/mtime", final.Version, controlState.Version, controlReply.UserVersion)
+				}
+				t.Logf("fresh-transaction control: tid %d (original %d), version %d -> %d, tail count %d", controlReply.Transaction, sub.Transaction, final.Version, controlState.Version, bytes.Count(controlState.Data, tail))
+				final = controlState
 			}
 		}
 
@@ -401,6 +459,10 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 		t.Logf("after recovery: epoch %d primary osd.%d shard %d acting %v version %d", back.Epoch, back.ID, back.Shard, back.Acting, recovered.Version)
 	}
 
-	t.Run("reply withheld after the mutation applied", func(t *testing.T) { phase(t, "ec-inflight-applied", false) })
-	t.Run("request lost before the primary", func(t *testing.T) { phase(t, "ec-inflight-lost", true) })
+	if resubmitApplied {
+		t.Run("applied mutation resubmitted once with fresh transaction control", func(t *testing.T) { phase(t, "ec-applied-resubmit", false, true) })
+		return
+	}
+	t.Run("reply withheld after the mutation applied", func(t *testing.T) { phase(t, "ec-inflight-applied", false, false) })
+	t.Run("request lost before the primary", func(t *testing.T) { phase(t, "ec-inflight-lost", true, false) })
 }
