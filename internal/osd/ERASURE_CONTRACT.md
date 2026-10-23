@@ -43,15 +43,17 @@ primary reconstructs reads; after the primary dies the new primary holds a
 different shard and only requests naming it are answered, so the caller must
 re-derive the shard from the new map along with the primary. The same
 object cases passed on a non-optimized isa k=2,m=2 pool (size 4, min_size 3)
-over four OSDs in one replicated-PG profile, without faults. Other opcodes,
-recovery traffic, other EC profiles and the fault cases at k=2,m=2 are
-unverified.
+over four OSDs in one replicated-PG profile, without faults, and on an
+optimized isa k=2,m=2 pool in the same profile, together with PG listing, a
+degraded read and primary failover. Other opcodes, recovery traffic, other EC
+profiles, degraded writes and snapshots at k=2,m=2 and any epoch change
+around an in-flight EC mutation are unverified.
 
 ## Optimized EC pools (`allow_ec_optimizations`)
 
 Tentacle's optimized EC (`OSDMonitor::enable_pool_ec_optimizations`, Ceph
 20.2.4) marks the data shards other than the first as `nonprimary_shards`
-(`{1}` for k=2, m=1) and stores such a PG's pg_temp primary-first. The OSD
+(`{1}` for k=2, m=1 and for k=2, m=2) and stores such a PG's pg_temp primary-first. The OSD
 reads an EC request's spg_t shard from a client lacking SERVER_TENTACLE
 (bit 50, incarnation 2) in that pre-Tentacle primary-first numbering whenever
 the pool is optimized and the PG has a pg_temp, and converts it back
@@ -66,7 +68,9 @@ actual shard. Set it exactly when the caller's map shows an optimized pool
 and a pg_temp for the PG; shard 0 is never renumbered. Observed live: after
 the shard-0 primary died, the new primary held parity shard 2 under a
 primary-first pg_temp and answered only the renumbered request (wire shard
-1); the actual shard 2 on the wire went unanswered. The legacy-v6 object-hash
+1); the actual shard 2 on the wire went unanswered. The same was observed on
+an optimized k=2,m=2 pool (`PrimaryFirst{PoolSize: 4, NonprimaryShards: 1}`,
+parity shard 2 sent as wire shard 1). The legacy-v6 object-hash
 profile sends no shard and the OSD maps the PG itself.
 
 Primary selection also changes. A nonprimary shard never becomes primary for
