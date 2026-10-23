@@ -119,9 +119,11 @@ container legacy-v6 single-BlueStore profile and matched a closed native
 observer at every step; other profiles and a live EAGAIN try-flush remain
 unverified. Its lost-reply CACHE_FLUSH cell separates two claims: bounded
 native observation of the applied flush (base and tier B, dirty=false) while
-the local wait is blocked, and a Go-side local count (one submission, one
-transport, the next transaction on a fresh connection) for no replay. Stable
-post-state cannot prove the latter, since a replayed clean flush is a no-op.
+the local wait is blocked, and Go-side caller and connection accounting (one
+caller invocation, no observed redial, the next transaction on a fresh
+connection). Stable post-state cannot replace the latter, since a replayed
+clean flush is a no-op. The accounting does not count outbound messages: a
+same-TID rewrite on the same transport is excluded only by source inference.
 Neither claim establishes ONDISK receipt, crash durability or daemon-side
 request accounting.
 

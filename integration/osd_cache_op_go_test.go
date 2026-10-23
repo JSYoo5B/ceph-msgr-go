@@ -163,11 +163,15 @@ func cacheOpGoLostFlushApplied(o cacheOpGoObservation) error {
 	return nil
 }
 
-// cacheOpGoLostFlushAccount is the Go-side local count behind the no-replay
-// claim. It shows what left this client, not what the OSD executed.
+// cacheOpGoLostFlushAccount is caller and connection accounting. It records
+// how often the test invoked Request, which transports were dialed and which
+// OSD transactions were allocated. It does not count outbound messages: a
+// second write of the original TID on the same transport would change none of
+// these values. The selected profile encrypts msgr2 frames, so a test wrapper
+// cannot identify MOSDOp frames in the written bytes.
 type cacheOpGoLostFlushAccount struct {
-	// Request calls the test made for the flush.
-	Submissions int `json:"go_flush_submissions"`
+	// Request invocations the test made for the flush.
+	CallerInvocations int `json:"go_flush_caller_invocations"`
 	// Transport dials to the target OSD before and after the blocked
 	// connection closed, and dials to any other OSD.
 	DialsWhileBlocked int `json:"target_dials_while_blocked"`
@@ -179,16 +183,18 @@ type cacheOpGoLostFlushAccount struct {
 	ProbeTID uint64 `json:"probe_tid"`
 }
 
-// cacheOpGoNoReplay is the no-replay claim, separate from application:
-// exactly one Go flush submission, one transport to the target while the
-// reply was withheld, no redial before the explicit probe, and no OSD
-// transaction allocated between the flush and the probe. Go OSD sessions are
-// lossy (no msgr2 session resume), and same-TID resubmission requires an
-// explicit Resubmit input this cell never supplies.
-func cacheOpGoNoReplay(a cacheOpGoLostFlushAccount) error {
+// cacheOpGoCallerAccounting checks the observations behind the accounting
+// claim, separate from application: one caller invocation, one transport to
+// the target while the reply was withheld, no observed redial before the
+// explicit probe, no dial to another OSD, and no OSD transaction allocated
+// between the flush and the probe. That no message was written twice is a
+// source inference, not this measurement: Go OSD sessions do not use msgr2
+// session resume, and same-TID resubmission needs an explicit Resubmit input
+// this cell never supplies.
+func cacheOpGoCallerAccounting(a cacheOpGoLostFlushAccount) error {
 	switch {
-	case a.Submissions != 1:
-		return fmt.Errorf("%d Go flush submissions, want exactly one", a.Submissions)
+	case a.CallerInvocations != 1:
+		return fmt.Errorf("%d flush caller invocations, want exactly one", a.CallerInvocations)
 	case a.DialsWhileBlocked != 1:
 		return fmt.Errorf("%d target transports while the reply was withheld, want one", a.DialsWhileBlocked)
 	case a.DialsAfterClose != 1:
@@ -461,7 +467,7 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 				t.Fatal("absent controls created a head", o)
 			}
 		}},
-		{"lost_reply_flush_applies_once", func(t *testing.T) {
+		{"lost_reply_flush_applied_without_caller_replay", func(t *testing.T) {
 			// A separate client and head isolate the withheld reply. Its dial
 			// wrapper counts OSD transports; the OSD transaction allocator is
 			// client-wide, so its next TID follows this flush directly.
@@ -521,7 +527,7 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 			}
 			finished := make(chan result, 1)
 			request := cacheOpGoRequest(r, cephmsgr.OSDCacheFlush)
-			account.Submissions++
+			account.CallerInvocations++
 			go func() {
 				reply, err := o.Request(callCtx, request)
 				finished <- result{reply, err}
@@ -559,7 +565,7 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 			if err := o.Close(); err != nil {
 				t.Fatal(err)
 			}
-			// Settle: a hidden replay would need another transport.
+			// Settle: a redial would show up as another target transport.
 			time.Sleep(2 * time.Second)
 			account.DialsWhileBlocked = int(targetDials.Load())
 			armed.Store(false)
@@ -576,8 +582,8 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 			if err != nil || len(readback.Operations) != 1 || string(readback.Operations[0].Data) != string(cachePoolChanged) {
 				t.Fatal("read-only probe on a fresh connection", err)
 			}
-			// No-replay claim: local accounting, separate from application.
-			if err := cacheOpGoNoReplay(account); err != nil {
+			// Caller and connection accounting, separate from application.
+			if err := cacheOpGoCallerAccounting(account); err != nil {
 				t.Fatal(err)
 			}
 			settled := observe(t, "lost-flush-settled")
@@ -655,7 +661,7 @@ func TestCacheOpGoTryFlushOutcome(t *testing.T) {
 	}
 }
 
-// TestCacheOpGoLostFlushClaims keeps the application and no-replay claims of
+// TestCacheOpGoLostFlushClaims keeps the application and accounting claims of
 // the lost-reply flush cell independent: each rejects evidence that would
 // satisfy the other.
 func TestCacheOpGoLostFlushClaims(t *testing.T) {
@@ -704,12 +710,12 @@ func TestCacheOpGoLostFlushClaims(t *testing.T) {
 		}
 	}
 
-	one := cacheOpGoLostFlushAccount{Submissions: 1, DialsWhileBlocked: 1, DialsAfterClose: 1, FlushTID: 7, ProbeTID: 8}
-	if err := cacheOpGoNoReplay(one); err != nil {
-		t.Fatal("single submission refused", err)
+	one := cacheOpGoLostFlushAccount{CallerInvocations: 1, DialsWhileBlocked: 1, DialsAfterClose: 1, FlushTID: 7, ProbeTID: 8}
+	if err := cacheOpGoCallerAccounting(one); err != nil {
+		t.Fatal("single caller invocation refused", err)
 	}
 	for name, mutate := range map[string]func(*cacheOpGoLostFlushAccount){
-		"second Go submission":            func(a *cacheOpGoLostFlushAccount) { a.Submissions = 2 },
+		"second caller invocation":        func(a *cacheOpGoLostFlushAccount) { a.CallerInvocations = 2 },
 		"redial while blocked":            func(a *cacheOpGoLostFlushAccount) { a.DialsWhileBlocked = 2 },
 		"extra dial after close":          func(a *cacheOpGoLostFlushAccount) { a.DialsAfterClose = 2 },
 		"dial to another OSD":             func(a *cacheOpGoLostFlushAccount) { a.OtherOSDDials = 1 },
@@ -719,9 +725,9 @@ func TestCacheOpGoLostFlushClaims(t *testing.T) {
 		a := one
 		mutate(&a)
 		// Stable applied post-state holds in every case and must not
-		// substitute for the local count.
-		if cacheOpGoLostFlushApplied(applied(done)) != nil || cacheOpGoNoReplay(a) == nil {
-			t.Error("replay evidence accepted:", name)
+		// substitute for the accounting.
+		if cacheOpGoLostFlushApplied(applied(done)) != nil || cacheOpGoCallerAccounting(a) == nil {
+			t.Error("contradictory accounting accepted:", name)
 		}
 	}
 
