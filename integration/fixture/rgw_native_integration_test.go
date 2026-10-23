@@ -188,11 +188,16 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	}
 	received := rgwNativeAttributedHistory(t, history, generation, objects)
 	write, prepare, complete := false, false, false
+	var putReceipt []rgwNativeOperation
 	for _, op := range received {
 		isHead := strings.Contains(op.Description, ":"+head+":")
-		write = write || isHead && (strings.Contains(op.Description, "write ") || strings.Contains(op.Description, "writefull "))
-		prepare = prepare || strings.Contains(op.Description, "call rgw.bucket_prepare_op")
-		complete = complete || strings.Contains(op.Description, "call rgw.bucket_complete_op")
+		isWrite := isHead && (strings.Contains(op.Description, "write ") || strings.Contains(op.Description, "writefull "))
+		isPrepare := strings.Contains(op.Description, "call rgw.bucket_prepare_op")
+		isComplete := strings.Contains(op.Description, "call rgw.bucket_complete_op")
+		write, prepare, complete = write || isWrite, prepare || isPrepare, complete || isComplete
+		if isWrite || isPrepare || isComplete {
+			putReceipt = append(putReceipt, op)
+		}
 	}
 	if !write || !prepare || !complete {
 		t.Fatalf("incomplete gateway-attributed OSD reception: write=%t prepare=%t complete=%t operations=%+v", write, prepare, complete, received)
@@ -234,6 +239,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 		t.Fatal("S3 object bytes changed across gateway restart")
 	}
 	afterGeneration := rgwNativeGeneration(t, ctx, gateway)
+	t.Logf("RGW_NATIVE_RESTART mapped_endpoint_changed=%t previous_process_stopped=true new_process_started=true", endpointChanged)
 	for _, beforeClient := range generation {
 		for _, afterClient := range afterGeneration {
 			if beforeClient.Client == afterClient.Client || beforeClient.Nonce == afterClient.Nonce {
@@ -248,11 +254,19 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	request(http.MethodDelete, path, nil, http.StatusNoContent)
 	deleted := rgwNativeReceipt(t, ctx, cluster, rgwNativeGeneration(t, ctx, gateway), objects)
 	remove := false
+	var deleteReceipt []rgwNativeOperation
 	for _, op := range deleted {
-		remove = remove || strings.Contains(op.Description, ":"+head+":") && strings.Contains(op.Description, "delete")
+		// Tentacle's RGW removes the head through the native rgw.obj_remove
+		// class method, not a client DELETE opcode. Do not conflate S3 DELETE
+		// input with its RADOS wire operation.
+		isRemove := strings.Contains(op.Description, ":"+head+":") && strings.Contains(op.Description, "call rgw.obj_remove")
+		remove = remove || isRemove
+		if isRemove {
+			deleteReceipt = append(deleteReceipt, op)
+		}
 	}
 	if !remove {
-		t.Fatal("missing gateway-attributed native head deletion")
+		t.Fatalf("missing gateway-attributed native rgw.obj_remove head operation: %+v", deleted)
 	}
 	request(http.MethodGet, path, nil, http.StatusNotFound)
 	if slices.Contains(rgwNativeLines(rgwNativeExec(t, ctx, control, "rados", "-p", dataPool, "ls")), head) {
@@ -267,7 +281,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	if err := gateway.RemoveUser(ctx, user); err != nil {
 		t.Fatal("remove owned user:", err)
 	}
-	t.Logf("RGW_NATIVE_CHECKPOINT image=%s source=7f793731f1b39eb4f465e960113d2363c311b964 mode=secure key=aes256k bytes=%d sha256=%s native_index_shard=%s mapped_endpoint_changed=%t before=%+v after=%+v put_reception=%+v delete_reception=%+v object_index_user_cleanup=confirmed", rgwNativeImage, len(payload), rgwNativeHash(payload), before, endpointChanged, generation, afterGeneration, received, deleted)
+	t.Logf("RGW_NATIVE_CHECKPOINT image=%s source=7f793731f1b39eb4f465e960113d2363c311b964 mode=secure key=aes256k bytes=%d sha256=%s native_index_shard=%s mapped_endpoint_changed=%t before=%+v after=%+v put_reception=%+v delete_reception=%+v object_index_user_cleanup=confirmed", rgwNativeImage, len(payload), rgwNativeHash(payload), before, endpointChanged, generation, afterGeneration, putReceipt, deleteReceipt)
 }
 
 func rgwNativeExec(t *testing.T, parent context.Context, container testcontainers.Container, argv ...string) []byte {
