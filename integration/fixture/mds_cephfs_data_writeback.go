@@ -39,12 +39,14 @@ import (
 //     session is gone and its exact address is blocklisted. The entry is
 //     removed by cleanup as an owned-session entry.
 //   - reader-start/reader-status/reader-wait: one background native reader
-//     of shared-file (the read-shared driver action), started only behind an
-//     applied OSD drop so that the revoke-time writeback it causes is
-//     interrupted. LibCephFS reaches the OSD only after the Go writer
-//     releases FILE_BUFFER, which the test does after osd-drop-off. Status
-//     never blocks; wait returns the reader's terminal result. Control
-//     requests stay one at a time while the reader runs.
+//     of shared-file (the read-shared driver action), started while no OSD
+//     drop is active. LibCephFS checks pool permission with its own OSD
+//     operations before it waits for capabilities (Client::check_pool_perm),
+//     so those must not meet a drop; its data reads wait for the Go writer to
+//     release FILE_BUFFER. An OSD drop may follow while the reader waits, and
+//     the reader's result is collected only after that drop is restored.
+//     Status never blocks; wait returns the reader's terminal result.
+//     Control requests stay one at a time while the reader runs.
 //
 // References at mdsFreshSource (LGPL-2.1, no code copied): msg/Connection.cc
 // is_blackhole, msg/async/ProtocolV2.cc handle_message and _conn_prefix,
@@ -176,9 +178,9 @@ func (x *mdsCephFSDataScope) newOSDDrop(id int64, daemon string, baseline map[st
 	if x.osdDrop != nil && (x.osdDrop.State != "restored" || len(x.osdDropHistory)+1 >= mdsCephFSDataOSDDropLimit) {
 		return nil, errors.New("DATA OSD drop is unrestored or the run's drops are used")
 	}
-	if x.restart.pending() || x.reader.running() || x.activeRuntime("client-drop-on", x.current.GID) != nil ||
+	if x.restart.pending() || x.activeRuntime("client-drop-on", x.current.GID) != nil ||
 		x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil {
-		return nil, errors.New("DATA OSD drop refused while a restart, the background reader or an MDS client blackhole is in effect")
+		return nil, errors.New("DATA OSD drop refused while a restart or MDS client blackhole is in effect")
 	}
 	if baseline["ms_blackhole_client"] != "false" || baseline["debug_ms"] == "" {
 		return nil, errors.New("DATA OSD client transport must be running from a false baseline")
@@ -350,8 +352,8 @@ func (r *mdsCephFSDataReaderRun) snapshot() mdsCephFSDataReader {
 	return s
 }
 
-// readerReady admits the single background reader: only behind an applied
-// OSD drop, with no restart pending and no MDS fault in effect.
+// readerReady admits the single background reader while no OSD drop is
+// active, no restart is pending and no MDS fault is in effect.
 func (x *mdsCephFSDataScope) readerReady() error {
 	if x.reader != nil {
 		return errors.New("DATA background reader was already started")
@@ -360,8 +362,8 @@ func (x *mdsCephFSDataScope) readerReady() error {
 		x.activeRuntime("client-drop-on", x.current.GID) != nil {
 		return errors.New("DATA background reader refused while a restart or MDS fault is in effect")
 	}
-	if x.osdDrop == nil || x.osdDrop.State != "applied" {
-		return errors.New("DATA background reader requires an applied OSD drop")
+	if x.osdDrop.active() {
+		return errors.New("DATA background reader refused while the OSD drops client messages")
 	}
 	return nil
 }

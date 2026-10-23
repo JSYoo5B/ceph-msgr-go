@@ -2333,25 +2333,46 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		flush(t, f)
 		rw["accepted_flush"] = map[string]any{"tid": f.FlushTID, "message": f.FlushMessage, "ack": f.FlushAck}
 
-		// 2. B is buffered; only the revoke callback writes it back, while the
-		// owned OSD drops client messages after Messenger receipt.
+		// 2. B is buffered; only the revoke callback writes it back, holding
+		// it as the native client may before _flush.
 		_, n := observe(t)
 		if n == nil || !strings.HasSuffix(n.Address, ":0/"+nonceArg) {
 			t.Fatal("native session address does not carry the shared nonce", n)
 		}
-		rw["osd_drop"] = req(t, "osd-drop-on", "").OSDDrop
+		const callbackHold = 15 * time.Second
 		timeB := newMTime(f.Ino)
 		buffered := time.Now()
-		if err := agent.markDirty(f.Ino, plan.SharedSize, timeB, context.Sequence, true, 0,
+		if err := agent.markDirty(f.Ino, plan.SharedSize, timeB, context.Sequence, true, callbackHold,
 			ledger.bufferedWriteback(osdIO, "revoke-b", f.Ino, layout, su, dataB, context, timeB, trunc, 5*time.Second)); err != nil {
 			t.Fatal(err)
 		}
 
-		// 3. A native reader starts behind the drop. Its open makes the MDS
-		// revoke FILE_BUFFER, and the callback's writeback of B is dropped.
+		// 3. A native reader starts while no drop is active: LibCephFS checks
+		// pool permission with its own OSD operations before it waits for
+		// capabilities. Its open makes the MDS revoke FILE_BUFFER; inside the
+		// callback's hold the owned OSD starts dropping client messages after
+		// Messenger receipt, so the callback's writeback of B is dropped.
 		rw["reader_started"] = req(t, "reader-start", "").Reader
+		var revokedAt time.Time
+		deadline := time.Now().Add(callbackHold / 2)
+		for revokedAt.IsZero() {
+			d, _ := agent.dirtyState(f.Ino)
+			for _, ev := range d.Events {
+				if ev.Kind == "revoke" && !ev.At.Before(buffered) && strings.Contains(ev.Revoked, "b") {
+					revokedAt = ev.At
+					break
+				}
+			}
+			if revokedAt.IsZero() && time.Now().After(deadline) {
+				t.Fatalf("the native reader did not make the MDS revoke FILE_BUFFER: %+v", d.Events)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		rw["osd_drop"] = req(t, "osd-drop-on", "").OSDDrop
+		dropApplied := time.Now()
+		rw["revoke_to_drop_ms"] = dropApplied.Sub(revokedAt).Milliseconds()
 		var latched cephfsDirtyFile
-		deadline := time.Now().Add(45 * time.Second)
+		deadline = revokedAt.Add(callbackHold + 30*time.Second)
 		for latched.Latch == nil {
 			latched, _ = agent.dirtyState(f.Ino)
 			if latched.Latch == nil && time.Now().After(deadline) {
@@ -2361,8 +2382,8 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		}
 		rw["latch"] = latched.Latch
 		if l := latched.Latch; l.Source != "revoke-callback" || l.Outcome != cephfsWriteUncertain || !slices.Equal(l.Extents, []string{cephfsWriteUncertain}) ||
-			!latched.Buffered || l.Began.Before(buffered) {
-			t.Fatalf("the interrupted revoke-time writeback is not an uncertain latch: %+v", l)
+			!latched.Buffered || !l.Began.After(dropApplied) {
+			t.Fatalf("the interrupted revoke-time writeback is not an uncertain latch that began after the drop: %+v", l)
 		}
 		if len(ledger.Writes) != 2 || ledger.Writes[1].Phase != "revoke-b" || ledger.Writes[1].Outcome != cephfsWriteUncertain {
 			t.Fatal("B's writeback ledger differs", ledger.Writes)

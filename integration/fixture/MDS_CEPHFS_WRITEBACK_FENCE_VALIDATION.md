@@ -114,14 +114,19 @@ branches; their bytes do.
    with a 30 s wait and must be `completed` (result 0, ONDISK). The consumer
    marks the file dirty and sends an UPDATE with `FLAG_SYNC`; its FLUSH_ACK
    must match the TID, inode, dirty Fw and cap ID.
-2. `observe` must show the session address carrying the shared nonce.
-   `osd-drop-on` then sets and reads back the OSD drop (the run's first).
-   B is registered as buffered data whose only writeback is the revoke
-   callback, through the ledger with a 5 s wait.
+2. `observe` must show the session address carrying the shared nonce. B is
+   registered as buffered data whose only writeback is the revoke callback,
+   which holds it for 15 s before writing it through the ledger with a 5 s
+   wait.
 3. `reader-start` starts the native `read-shared` reader in the background
-   behind the applied drop. Its open makes the MDS revoke FILE_BUFFER; the
-   REVOKE first flushes the dirty metadata with Fb still implemented, then
-   the callback writes B. The write must end `uncertain` with its
+   while no drop is active. LibCephFS checks pool permission with its own
+   OSD operations (`Client::check_pool_perm`) before it waits for
+   capabilities, so those operations must not meet the drop. Its open makes
+   the MDS revoke FILE_BUFFER; the REVOKE first flushes the dirty metadata
+   with Fb still implemented. Once that revoke is recorded, `osd-drop-on`
+   sets and reads back the OSD drop (the run's first), inside the
+   callback's hold. The callback then writes B, and its writeback must have
+   begun after the drop was applied. The write must end `uncertain` with its
    submission identity (GlobalID, map epoch), object, offset, length and
    request digest kept, and the latch must be `uncertain` from the
    `revoke-callback` with B's single extent outcome. `osd-log` must return
@@ -163,12 +168,11 @@ undecoded op prints `osd_op()`); osd/PrimaryLogPG.cc `do_op`
 `osd-drop-on`, `osd-drop-off`, `osd-log`, `reader-start`, `reader-status`,
 `reader-wait` and `evict` are refused unless the profile's selector is the
 writeback-fence selector. The OSD drop is issued at most twice per run, the
-second only after the first is restored, never during a restart, while the
-background reader runs or beside an MDS journal pause or client blackhole.
-The background reader starts once, only behind an applied OSD drop; while
-it runs, other native work, eviction, MDS faults, restart arm and a new OSD
-drop are refused, and its result is collected once after the drop is
-restored. Cleanup waits for a running reader before its native readback. Symmetrically, `log-pause`, `blackhole-on` and
+second only after the first is restored, never during a restart or beside an
+MDS journal pause or client blackhole. The background reader starts once,
+only while no OSD drop is active; while it runs, other native work,
+eviction, MDS faults and restart arm are refused, an OSD drop may follow,
+and its result is collected once after that drop is restored. Cleanup waits for a running reader before its native readback. Symmetrically, `log-pause`, `blackhole-on` and
 `client-drop-on` are refused while the OSD drop is in any active or uncertain
 state; the debug change and owned restorations stay available. Native
 LibCephFS work is refused while it is active (including intended

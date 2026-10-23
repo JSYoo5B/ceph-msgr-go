@@ -132,18 +132,21 @@ func TestMDSCephFSDataBackgroundReaderAdmission(t *testing.T) {
 			t.Fatal("reader action admitted a caller argument", name)
 		}
 	}
+	// The reader's own pool-permission OSD operations must not meet a drop:
+	// it starts only while no OSD drop is active.
 	x := &mdsCephFSDataScope{current: dataRestartDaemon(), baselineConfig: dataRuntimeBaseline()}
-	if x.readerReady() == nil {
-		t.Fatal("reader admitted without an OSD drop")
-	}
-	for _, state := range []string{"intended", "uncertain", "restore-intended", "restore-uncertain", "restored"} {
+	for _, state := range dataActiveStates {
 		x.osdDrop = &mdsCephFSDataOSDDrop{State: state}
 		if x.readerReady() == nil {
-			t.Fatal("reader admitted without an applied OSD drop", state)
+			t.Fatal("reader admitted while the OSD drops client messages", state)
 		}
 	}
-	x.osdDrop = &mdsCephFSDataOSDDrop{State: "applied"}
-	armed := &mdsCephFSDataScope{current: dataRestartDaemon(), baselineConfig: dataRuntimeBaseline(), restart: &mdsCephFSRestart{State: "applied"}, osdDrop: x.osdDrop}
+	x.osdDrop = &mdsCephFSDataOSDDrop{State: "restored"}
+	if err := x.readerReady(); err != nil {
+		t.Fatal("reader refused after the OSD drop was restored", err)
+	}
+	x.osdDrop = nil
+	armed := &mdsCephFSDataScope{current: dataRestartDaemon(), baselineConfig: dataRuntimeBaseline(), restart: &mdsCephFSRestart{State: "applied"}}
 	if armed.readerReady() == nil {
 		t.Fatal("reader admitted during a restart")
 	}
@@ -151,29 +154,31 @@ func TestMDSCephFSDataBackgroundReaderAdmission(t *testing.T) {
 	if _, err := faulted.newRuntime(2, "client-drop-on"); err != nil {
 		t.Fatal(err)
 	}
-	faulted.osdDrop = x.osdDrop
 	if faulted.readerReady() == nil {
 		t.Fatal("reader admitted beside an MDS client drop")
 	}
 	if err := x.readerReady(); err != nil {
-		t.Fatal("reader refused behind an applied OSD drop", err)
+		t.Fatal("reader refused without an OSD drop", err)
 	}
-	// While it runs: no other native work, MDS fault, restart arm, eviction
-	// or new OSD drop; status works; wait requires the restored drop.
+	// While it runs: no other native work, MDS fault, restart arm or
+	// eviction; an OSD drop may follow, status works and wait requires the
+	// drop to be restored.
 	x.reader = newMDSCephFSDataReaderRun(5)
 	if x.readerReady() == nil {
 		t.Fatal("a second reader was admitted")
 	}
-	x.osdDrop.State = "restored"
 	if x.nativeReady() == nil {
 		t.Fatal("native work admitted while the reader runs")
 	}
 	if _, err := x.newRuntime(6, "log-pause"); err == nil {
 		t.Fatal("MDS fault admitted while the reader runs")
 	}
-	if _, err := x.newOSDDrop(6, "osd.0", baseline); err == nil {
-		t.Fatal("OSD drop admitted while the reader runs")
+	drop, err := x.newOSDDrop(6, "osd.0", baseline)
+	if err != nil {
+		t.Fatal("OSD drop refused while the reader waits", err)
 	}
+	x.osdDrop = drop
+	drop.State = "restored"
 	c := &fixtureCluster{mdsCephFSData: x}
 	c.profile.testRun = mdsCephFSWritebackSelector
 	x.owned = map[string]uint64{}
