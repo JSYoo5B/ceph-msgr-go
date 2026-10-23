@@ -283,7 +283,7 @@ func TestCopyStagingListSeparatesTemporaryEntries(t *testing.T) {
 }
 
 func TestCopyGetHistoryRetainsOnlyCopyGets(t *testing.T) {
-	raw := `{"size":20,"duration":600,"ops":[{"description":"osd_op(osd.0.0:3 2.0 2:0e1c3ad4:::src:head [copy-get max 32768] snapc 0=[] ondisk+read e13)","initiated_at":"t1"},{"description":"osd_op(client.4:3 2.0 2:1:::dst:head [copy-from2 ver 3] e13)","initiated_at":"t2"}]}`
+	raw := `{"size":20,"duration":600,"ops":[{"description":"osd_op(osd.0.0:3 2.0 2:0e1c3ad4:::src:head [assert-version v3,copy-get max 32768] snapc 0=[] ondisk+read e13)","initiated_at":"t1"},{"description":"osd_op(client.4:3 2.0 2:1:::dst:head [copy-from2 ver 3] e13)","initiated_at":"t2"}]}`
 	receipt, err := decodeCopyGetHistory([]byte(raw))
 	if err != nil || receipt.Ops != 2 || len(receipt.CopyGets) != 1 || receipt.CopyGets[0].InitiatedAt != "t1" || string(receipt.Size) != "20" {
 		t.Fatal("copy-get history differs", err, receipt)

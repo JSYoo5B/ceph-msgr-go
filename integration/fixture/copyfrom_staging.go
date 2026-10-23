@@ -87,7 +87,8 @@ func decodeCopyGetHistory(raw []byte) (copyGetHistoryReceipt, error) {
 		if len(op.Description) > copyHistoryMaxText {
 			return receipt, errors.New("native op description exceeds bound")
 		}
-		if strings.Contains(op.Description, "[copy-get ") {
+		// A versioned source prefixes assert-version: [assert-version vN,copy-get max M].
+		if strings.Contains(op.Description, "copy-get max ") {
 			receipt.CopyGets = append(receipt.CopyGets, op)
 		}
 	}

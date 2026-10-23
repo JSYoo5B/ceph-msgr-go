@@ -266,8 +266,10 @@ func TestCephOSDCopyFromMultiChunkLateErrorIntegration(t *testing.T) {
 		time.Sleep(250 * time.Millisecond)
 	}
 	for _, description := range receipt.SourceCopyGets {
-		if !strings.Contains(description, "[copy-get max "+strconv.Itoa(multiChunkLimit)+"]") {
-			t.Fatal("source copy-get did not use the lowered chunk limit", description)
+		// The pinned _copy_some asserts the requested source version before
+		// each copy-get chunk.
+		if !strings.Contains(description, " [assert-version v"+strconv.FormatUint(source.Version, 10)+",copy-get max "+strconv.Itoa(multiChunkLimit)+"] ") {
+			t.Fatal("source copy-get did not use the lowered chunk limit and source version", description)
 		}
 	}
 	if len(receipt.SourceCopyGets) < 2 {
