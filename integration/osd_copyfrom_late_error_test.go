@@ -19,6 +19,9 @@ import (
 // fill_in_final_tx. This verifies a late server error, not daemon loss, temporary
 // copy staging, rollback of arbitrary vectors, or automatic mutation replay.
 func TestCephOSDCopyFromLateErrorIntegration(t *testing.T) {
+	if os.Getenv("CEPH_MSGR_NATIVE_COPYFROM_LATE_ERROR") != "1" {
+		t.Skip("requires the fixture-selected exclusive late-copy fault marker")
+	}
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
 		t.Skip("late copy error requires its exclusive single-BlueStore fixture")
 	}
@@ -199,5 +202,23 @@ func TestCephOSDCopyFromLateErrorIntegration(t *testing.T) {
 	receipt.Readback = read
 	if err != nil || read.Transaction != reply.Transaction+1 || read.UserVersion != before.Version || len(read.Operations) != 1 || !bytes.Equal(read.Operations[0].Data, before.Data) {
 		t.Fatal("same connection read-only request after restored injector differs", err, read)
+	}
+}
+
+// A broad native suite must skip this fault before reading any fixture input.
+// The empty private directory deliberately cannot satisfy osdFixture.
+func TestCopyFromLateErrorRequiresExclusiveMarker(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CEPH_MSGR_NATIVE_COPYFROM_LATE_ERROR", "")
+	t.Setenv("CEPH_MSGR_TEST_OSD", "1")
+	t.Setenv("CEPH_MSGR_TEST_OSD_STORE", "bluestore")
+	t.Setenv("CEPH_MSGR_TEST_OSD_REPLICAS", "1")
+	t.Setenv("CEPH_MSGR_CONTROL_DIR", dir)
+	if !t.Run("unselected", TestCephOSDCopyFromLateErrorIntegration) {
+		t.Fatal("unselected fault accessed the fixture")
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Fatal("unselected fault published a fixture control", err)
 	}
 }

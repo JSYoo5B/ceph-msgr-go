@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -98,6 +99,50 @@ func TestCopyFromErrorControlRequiresExclusiveSelector(t *testing.T) {
 		c := &fixtureCluster{profile: p}
 		if err := c.copyFromErrorControl(context.Background(), t.TempDir(), []string{"1", "apply"}); err == nil {
 			t.Fatal("nonexclusive fault injection admitted")
+		}
+	}
+}
+
+func TestCopyFromErrorMarkerOnlyReachesExclusiveTestEnvironment(t *testing.T) {
+	// Caller-supplied markers cannot enable a broad suite or another row.
+	t.Setenv(copyFromLateErrorMarker, "1")
+	for _, runtime := range []string{"host", "container"} {
+		for _, selector := range []string{copyFromLateErrorSelector, "", "^TestCeph.*Integration$", "^TestCeph(OSD|MonOSDMaps).*Integration$", "^TestCephOSDSetChunkGoIntegration$"} {
+			t.Run(runtime+"/"+selector, func(t *testing.T) {
+				p, err := loadProfile(func(key string) string {
+					return map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_RUNTIME": runtime, "CEPH_MSGR_TEST_RUN": selector, copyFromLateErrorMarker: "1"}[key]
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := ""
+				if selector == copyFromLateErrorSelector {
+					want = "1"
+				}
+				inputs := p.testEnvironment("/out", "")
+				if inputs[copyFromLateErrorMarker] != want {
+					t.Fatal("fault marker did not match exclusive selection", selector)
+				}
+				env := envList(inputs)
+				if runtime == "host" {
+					env = environment(inputs, true)
+				}
+				count := 0
+				for _, field := range env {
+					if strings.HasPrefix(field, copyFromLateErrorMarker+"=") {
+						count++
+						if field != copyFromLateErrorMarker+"="+want {
+							t.Fatal("inherited marker enabled an unrelated suite", field)
+						}
+					}
+				}
+				if count != 1 {
+					t.Fatal("test marker was absent or duplicated", count)
+				}
+				if _, leaked := p.containerEnvironment()[copyFromLateErrorMarker]; leaked {
+					t.Fatal("fault marker leaked to daemon environment")
+				}
+			})
 		}
 	}
 }

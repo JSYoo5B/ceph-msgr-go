@@ -13,6 +13,11 @@ import (
 
 const copyFromErrorOption = "osd_debug_inject_copyfrom_error"
 const copyFromLateErrorSelector = "^TestCephOSDCopyFromLateErrorIntegration$"
+const copyFromLateErrorMarker = "CEPH_MSGR_NATIVE_COPYFROM_LATE_ERROR"
+
+func (p profile) copyFromLateErrorSelected() bool {
+	return p.testRun == copyFromLateErrorSelector && p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "1" && p.osdProfile == "legacy-v6"
+}
 
 type copyFromErrorReceipt struct {
 	Schema           int    `json:"schema_version"`
@@ -146,7 +151,7 @@ func (s *copyFromErrorScope) save(out string) error {
 }
 
 func (c *fixtureCluster) copyFromErrorControl(ctx context.Context, out string, fields []string) error {
-	if len(fields) != 2 || c.profile.osd != "1" || c.profile.osdStore != "bluestore" || c.profile.osdReplicas != "1" || c.profile.testRun != copyFromLateErrorSelector {
+	if len(fields) != 2 || !c.profile.copyFromLateErrorSelected() {
 		return errors.New("copy-error injection requires its exclusive single-BlueStore selector")
 	}
 	var err error

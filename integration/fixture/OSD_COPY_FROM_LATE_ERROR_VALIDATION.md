@@ -24,7 +24,11 @@ claim a retained internal cursor trace or request-specific staging barrier.
 No Ceph source is incorporated into the product.
 
 `TestCephOSDCopyFromLateErrorIntegration` is an isolated selector, accepted
-by the fault controller only with one owned BlueStore OSD. It does not run
+by the fault controller only with one owned BlueStore OSD. The fixture's
+actual test environment (host and container) receives an internal marker only
+for that exact selector/profile; the test skips before accessing fixture state
+when the marker is absent. Broad suites and other dedicated rows receive an
+empty marker even if the invoking environment supplies one. It does not run
 alongside other copy tests. The disposable fixture also owns three MONs,
 two MGRs, its control/native-client containers and network. The authorized
 Linux runner's run lock excludes other Docker runs during this test.
@@ -93,8 +97,12 @@ confirmed all eight recorded containers and their network were absent.
 The partial result is written even if cleanup itself fails. The diagnostic
 allowlist includes `osd-copyfrom-error-option.json` and
 `osd-copyfrom-late-error-results.json`; private ownership files are used
-only for teardown verification. No first native failure occurred in this
-checkpoint; the initial selected native run passed.
+only for teardown verification. The initial selected native run passed. Independent review later found that
+the initial parent test could enter broad single-BlueStore suites while its
+controller correctly refused a broad selector. Dedicated-row success did not
+exercise that selection boundary. The fixture-derived marker and cluster-free
+skip/environment regressions correct that test-selection bug; they do not
+change the observed daemon error or weaken the controller's exclusivity.
 
 ## Reproduction and limits
 
