@@ -77,3 +77,4 @@ mgr-service.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-
 mds-cephfs-multi-reconnect.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmultireconnect
 mds-cephfs-multi-reconnect.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmultireconnect
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer
+osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror

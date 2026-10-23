@@ -42,6 +42,7 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 	_, _, base, _ := fixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), duration+3*time.Minute)
 	defer cancel()
+	receipts := newSoakReceipts(t, "steady", duration)
 	const workers = 4
 	prepared := false
 	t.Cleanup(func() {
@@ -50,12 +51,16 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 		}
 		cleanup, stop := context.WithTimeout(context.Background(), 180*time.Second)
 		defer stop()
-		if result := nativeOmapWrite(t, cleanup, base, "cleanup", omapWriteInput{}); !result.Cleanup.Removed {
+		started := time.Now()
+		result := nativeOmapWrite(t, cleanup, base, "cleanup", omapWriteInput{})
+		receipts.write(t, "cleanup", map[string]any{"removed": result.Cleanup.Removed, "objects": result.Cleanup.Objects, "elapsed_ns": time.Since(started).Nanoseconds()})
+		if !result.Cleanup.Removed {
 			t.Error("owned soak objects were not removed", result.Cleanup)
 		}
 	})
 	owned := nativeOmapWrite(t, ctx, base, "prepare", omapWriteInput{Seed: &omapWriteSeed{Baseline: []byte("soak")}, Reserve: workers})
 	prepared = true
+	receipts.owned = append([]string{}, owned.Objects...)
 	if len(owned.Objects) != workers+1 {
 		t.Fatal("native soak objects differ", owned.Objects)
 	}
@@ -70,20 +75,34 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 	}
 	baseline := runtime.NumGoroutine()
 	var appends, reads, attrs, churns, unknowns, resubmissions, unsent, truncations atomic.Int64
+	receipts.counters = func() map[string]int64 {
+		return map[string]int64{"appends": appends.Load(), "reads": reads.Load(), "xattrs": attrs.Load(), "churns": churns.Load(), "unknowns": unknowns.Load(), "resubmissions": resubmissions.Load(), "unsent": unsent.Load(), "truncations": truncations.Load()}
+	}
 	type outcome struct {
 		data []byte
 		attr string
 	}
 	results := make([]outcome, workers)
+	receipts.beginWorkload(t)
 	work, stop := context.WithTimeout(ctx, duration)
 	defer stop()
 	var wg sync.WaitGroup
+	defer func() {
+		stop()
+		if t.Failed() {
+			cancel()
+		}
+		wg.Wait()
+		receipts.finishWorkload()
+	}()
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
+			defer receipts.workerDone()
 			route := routes[w]
 			fail := func(format string, args ...any) {
+				receipts.failure(fmt.Sprintf("worker %d: "+format, append([]any{w}, args...)...))
 				t.Errorf("worker %d: "+format, append([]any{w}, args...)...)
 				stop()
 			}
@@ -158,7 +177,9 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 					reads.Add(1)
 				case 7:
 					value := strconv.Itoa(i)
-					if _, err := o.Request(ctx, build(cephmsgr.OSDOperation{Code: cephmsgr.OSDSetXattr, Xattr: cephmsgr.OSDXattrInput{Name: "soak"}, Data: []byte(value)})); err != nil {
+					reply, err := o.Request(ctx, build(cephmsgr.OSDOperation{Code: cephmsgr.OSDSetXattr, Xattr: cephmsgr.OSDXattrInput{Name: "soak"}, Data: []byte(value)}))
+					receipts.mutation(reply, err)
+					if err != nil {
 						fail("setxattr: %v", err)
 						return
 					}
@@ -169,6 +190,7 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 					r := build(appendOp(b))
 					short, cancelShort := context.WithTimeout(ctx, time.Duration(1+random.Intn(15))*time.Millisecond)
 					reply, err := o.Request(short, r)
+					receipts.mutation(reply, err)
 					cancelShort()
 					var unknown *cephmsgr.OutcomeUnknownError
 					switch {
@@ -187,6 +209,7 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 						for attempt := int32(1); ; attempt++ {
 							again.RetryAttempt = attempt
 							resolved, err := o.Request(ctx, again)
+							receipts.mutation(resolved, err)
 							resubmissions.Add(1)
 							if err == nil && resolved.Transaction == reply.Submission.Transaction {
 								expected = append(expected, b...)
@@ -217,7 +240,9 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 					if len(expected) < 64<<10 {
 						continue
 					}
-					if _, err := o.Request(ctx, build(cephmsgr.OSDOperation{Code: cephmsgr.OSDTruncate, Offset: 0})); err != nil {
+					reply, err := o.Request(ctx, build(cephmsgr.OSDOperation{Code: cephmsgr.OSDTruncate, Offset: 0}))
+					receipts.mutation(reply, err)
+					if err != nil {
 						fail("truncate: %v", err)
 						return
 					}
@@ -231,7 +256,9 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 					churns.Add(1)
 				default:
 					b := chunk(i)
-					if _, err := o.Request(ctx, build(appendOp(b))); err != nil {
+					reply, err := o.Request(ctx, build(appendOp(b)))
+					receipts.mutation(reply, err)
+					if err != nil {
 						fail("append: %v", err)
 						return
 					}
@@ -254,13 +281,17 @@ func TestCephOSDSoakIntegration(t *testing.T) {
 	}
 	ticker.Stop()
 	wg.Wait()
+	receipts.finishWorkload()
 	if t.Failed() {
 		return
 	}
 	for w, r := range results {
-		state := nativeOmapWrite(t, ctx, base, "observe", omapWriteInput{Object: routes[w].Name}).State
+		observed := time.Now()
+		observation := nativeOmapWrite(t, ctx, base, "observe", omapWriteInput{Object: routes[w].Name})
+		state := observation.State
 		got := xattrInventory(state.nativeXattrSnapshot)["soak"]
-		if !bytes.Equal(state.Data, r.data) || got != r.attr {
+		if !receipts.observe(t, w, r.data, r.attr, observation, time.Since(observed)) {
+			receipts.failure(fmt.Sprintf("worker %d final native bytes/xattr/version differs", w))
 			t.Fatalf("worker %d: native object differs: %d bytes vs %d expected, xattr %q vs %q", w, len(state.Data), len(r.data), got, r.attr)
 		}
 	}

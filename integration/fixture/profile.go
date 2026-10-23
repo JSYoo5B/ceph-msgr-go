@@ -40,8 +40,10 @@ type profile struct {
 	nativeMgrPreparation, monPing, osdCachePools, mgrService              string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
 	stressDuration, testRun, testTimeout, diagnostics                     string
-	// osdSoak is the opt-in OSD soak duration; it selects only the soak test.
+	// osdSoak is the opt-in OSD soak duration; it selects admitted soak parents.
 	osdSoak string
+	// sourceSHA is the controller's tested revision for workload receipts.
+	sourceSHA string
 	// monFreeze opts in to the connected-MON freeze tests, which can leave the
 	// OSD on an old OSDMap (integration/fixture/MON_FREEZE_FIXTURE_ISSUE.md).
 	monFreeze string
@@ -92,6 +94,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		osdReplicas:          value("CEPH_MSGR_TEST_OSD_REPLICAS", "1"),
 		stressDuration:       getenv("CEPH_MSGR_STRESS_DURATION"),
 		osdSoak:              getenv("CEPH_MSGR_TEST_OSD_SOAK"),
+		sourceSHA:            getenv("CEPH_MSGR_TEST_SOURCE_SHA"),
 		monFreeze:            getenv("CEPH_MSGR_TEST_MON_FREEZE"),
 		testRun:              getenv("CEPH_MSGR_TEST_RUN"),
 		testTimeout:          value("CEPH_MSGR_TEST_TIMEOUT", "10m"),
@@ -355,6 +358,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	if p.testRun == "" {
 		p.testRun = selected
 	}
+	if _, err := soakExpectedTests(p); err != nil {
+		return profile{}, err
+	}
 	return p, nil
 }
 
@@ -506,6 +512,10 @@ func (p profile) containerEnvironment() map[string]string {
 }
 
 func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
+	copyErrorMarker := ""
+	if p.copyFromLateErrorSelected() {
+		copyErrorMarker = "1"
+	}
 	marker := ""
 	mapMarker := ""
 	if p.sparseReadOracle != "" {
@@ -532,6 +542,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION":   p.mdsCephFSCompletion,
 		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":         p.mdsCephFSData,
 		"CEPH_MSGR_TEST_RBD":                     p.rbdBase,
+		copyFromLateErrorMarker:                  copyErrorMarker,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    marker,
 		"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         mapMarker,
 		"CEPH_MSGR_NATIVE_U64_XATTR_ORACLE":      u64Marker,
@@ -565,6 +576,9 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_OSD_SOAK":                p.osdSoak,
 		"CEPH_MSGR_TEST_MON_FREEZE":              p.monFreeze,
 		"CEPH_MSGR_TEST_PROXY":                   proxy,
+	}
+	if p.osdSoak != "" {
+		result["CEPH_MSGR_TEST_SOURCE_SHA"] = p.sourceSHA
 	}
 	if p.mdsFresh == "1" {
 		result["CEPH_MSGR_MDS_FRESH_IDENTITY"] = p.mdsFreshIdentity

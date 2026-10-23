@@ -100,6 +100,14 @@ func (c *fixtureCluster) request(out, name string) ([]string, error) {
 	return fields, nil
 }
 func (c *fixtureCluster) controls(ctx context.Context, out string) error {
+	if fields, err := c.request(out, "limit-osd-copyfrom-error"); err != nil {
+		return err
+	} else if fields != nil {
+		if err := c.copyFromErrorControl(ctx, out, fields); err != nil {
+			return err
+		}
+	}
+
 	if fields, err := c.request(out, "osd-cache-pools"); err != nil {
 		return err
 	} else if fields != nil {

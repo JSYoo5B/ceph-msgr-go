@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
@@ -31,6 +32,7 @@ var metadataFiles = []string{
 	"named-mgr-oracle-before.json", "named-mgr-oracle-after.json", "named-mgr-results.json", "mgr-service-recovery.json", "mgr-service-close.json", "mgr-service-metadata.json", "mgr-service-comparison.json", "mgr-service-unavailable.json", "mgr-service-config-native.json", "mgr-service-configuration.json",
 	"log-oracle.json", "log-oracle-sentinel.txt", "config-oracle.json", "config-oracle-history.jsonl", "hostname-config-oracle.json",
 	"command-oracle-mon.json", "command-oracle-mgr.json", "command-oracle-summary.json",
+	"mon-command-outcome-native.jsonl", "mon-command-outcome-identity.json",
 	"tell-command-oracle-mon-a.json", "tell-command-oracle-mon-b.json", "tell-command-oracle-mon-c.json", "tell-command-oracle-mgr.json", "tell-command-oracle-summary.json",
 	"manager-oracle.json", "digest-oracle.json", "monitor-oracle.json", "osd-oracle.json", "osd-map-native-oracle.json", "osd-map-manifest.json",
 	"monitor-election-history.jsonl", "monitor-election-settled.json",
@@ -49,6 +51,7 @@ var metadataFiles = []string{
 	"osd-omap-write-command.json", "osd-omap-write-result.json", "osd-omap-write-owned.json",
 	"osd-omap-write-results.json", "osd-omap-compare-results.json",
 	"osd-copyfrom-compound-results.json",
+	"osd-copyfrom-error-option.json", "osd-copyfrom-late-error-results.json",
 	"osd-command-command.json", "osd-command-result.json", "osd-command-results.json",
 	"osd-omap-range-results.json", "osd-call-results.json", "osd-call-compound-results.json", "osd-alloc-hint-results.json",
 	"osd-watch-notify-status.json", "osd-watch-notify-worker.log", "osd-watch-notify-input.json", "osd-watch-notify-result.json", "osd-watch-notify-command.json", "osd-watch-notify-results.json",
@@ -97,7 +100,11 @@ func saveMetadata(out, diagnostics string) error {
 	if err := os.MkdirAll(diagnostics, 0o700); err != nil {
 		return err
 	}
-	for _, name := range metadataFiles {
+	soakNames, err := soakReceiptNames(out)
+	if err != nil {
+		return err
+	}
+	for _, name := range append(append([]string{}, metadataFiles...), soakNames...) {
 		file, err := os.Open(filepath.Join(out, name))
 		if os.IsNotExist(err) {
 			continue
@@ -105,7 +112,11 @@ func saveMetadata(out, diagnostics string) error {
 		if err != nil {
 			return err
 		}
-		err = saveBounded(file, filepath.Join(diagnostics, name))
+		if strings.HasPrefix(name, "osd-soak-v1-") {
+			err = saveSoakReceipt(file, filepath.Join(diagnostics, name))
+		} else {
+			err = saveBounded(file, filepath.Join(diagnostics, name))
+		}
 		file.Close()
 		if err != nil {
 			return err

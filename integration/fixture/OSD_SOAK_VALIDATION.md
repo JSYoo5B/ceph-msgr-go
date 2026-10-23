@@ -1,5 +1,10 @@
 # OSD soak
 
+The later [immutable workload receipts](OSD_SOAK_RECEIPTS_VALIDATION.md)
+checkpoint preserves separate final observations for every test/worker and
+records workload timing, fault phases and cleanup independently. Its source
+and acceptance are separate from the historical runs below.
+
 Run 2026-10-17, Ceph 20.2.4 commit `7f793731f1b39eb4f465e960113d2363c311b964`,
 image `quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`,
 testcontainers fixture. Tests: `TestCephOSDSoakIntegration` and

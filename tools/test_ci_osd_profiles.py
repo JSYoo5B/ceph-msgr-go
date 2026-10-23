@@ -14,6 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SET_CHUNK_SELECTOR = "^TestCephOSDSetChunkNativeIntegration$"
 SET_CHUNK_GO_SELECTOR = "^TestCephOSDSetChunkGoIntegration$"
+COPY_FROM_LATE_ERROR_SELECTOR = "^TestCephOSDCopyFromLateErrorIntegration$"
 COMPRESSION_SELECTOR = "^TestCephMsgrCompressionOfferIntegration$"
 
 
@@ -48,12 +49,13 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
         # 63 original rows, 2 mgr-service, 3 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go,
         # 2 mds-cephfs-capsend, 1 native SET_CHUNK checkpoint, 1 Go SET_CHUNK acceptance,
-        # 2 mds-cephfs-writeback, 2 mds-cephfs-multi-reconnect and 1 CRC compression-offer row.
-        self.assertEqual(len(self.rows), 79)
+        # 2 mds-cephfs-writeback, 2 mds-cephfs-multi-reconnect,
+        # 1 exclusive COPY_FROM2 late-error cell and 1 CRC compression-offer row.
+        self.assertEqual(len(self.rows), 80)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
-        dedicated = {SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COMPRESSION_SELECTOR}
+        dedicated = {SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COMPRESSION_SELECTOR}
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak") and row.get("test_run") not in dedicated
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
@@ -92,6 +94,19 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"), ("family", ""), ("runtime", "container"))))
         self.assertEqual(observed, {("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")})
+
+    def test_copyfrom_late_error_row_is_exclusive_single_bluestore(self):
+        rows = [row for row in self.rows if row.get("test_run") == COPY_FROM_LATE_ERROR_SELECTOR]
+        self.assertEqual(rows, [{
+            "key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
+            "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
+            "test_run": COPY_FROM_LATE_ERROR_SELECTOR,
+        }])
+        expected = "TestCephOSDCopyFromLateErrorIntegration"
+        selector = re.compile(COPY_FROM_LATE_ERROR_SELECTOR)
+        self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
+        for unrelated in (expected + "Extended", "Prefix" + expected, "TestCephOSDCopyFromCompoundIntegration", "TestCephOSDCopyFromIntegration"):
+            self.assertIsNone(selector.search(unrelated))
 
     def test_cache_pool_rows_require_explicit_opt_in_and_only_the_declared_test(self):
         self.assertIn("CEPH_MSGR_TEST_OSD_CACHE_POOLS: ${{ matrix.osd_cache_pools || '0' }}", self.workflow)

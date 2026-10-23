@@ -15,9 +15,13 @@ func TestCommandChannelMatrixSelectorsExist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := filepath.Glob("../integration/*_test.go")
-	if err != nil || len(files) == 0 {
-		t.Fatal("integration tests not found", err)
+	var files []string
+	for _, pattern := range []string{"../integration/*_test.go", "integration*_test.go"} {
+		matches, err := filepath.Glob(pattern)
+		if err != nil || len(matches) == 0 {
+			t.Fatal("integration tests not found", pattern, err)
+		}
+		files = append(files, matches...)
 	}
 	var source strings.Builder
 	for _, name := range files {
@@ -33,7 +37,7 @@ func TestCommandChannelMatrixSelectorsExist(t *testing.T) {
 	}
 	for _, m := range names {
 		if !strings.Contains(source.String(), "func "+m[1]+"(") {
-			t.Errorf("selector %s does not exist in integration/", m[1])
+			t.Errorf("selector %s does not exist in integration/ or cephmsgr/", m[1])
 		}
 	}
 }
