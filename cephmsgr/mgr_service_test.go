@@ -25,6 +25,8 @@ type serviceMGR struct {
 	ack       bool   // echoes MMgrClose
 	closeConn bool   // drops the connection after the open
 	connects  int
+	// Test-only report payloads request pushes on this exact service connection.
+	reconfigure map[string][]msgr.MessageData
 }
 
 func (m *serviceMGR) messages(typ uint16) []msgr.MessageData {
@@ -48,20 +50,30 @@ func (m *serviceMGR) handle(got msgr.MessageData, send func(msgr.MessageData) er
 	m.mu.Lock()
 	m.received = append(m.received, got)
 	period, silent, ack, drop := m.period, m.silent, m.ack, m.closeConn
+	pushes := m.reconfigure[string(got.Front)]
 	m.mu.Unlock()
 	switch {
 	case got.Type == msgr.MgrOpenMessage && drop:
 		return true, errors.New("synthetic MGR drops the connection")
 	case got.Type == msgr.MgrOpenMessage && !silent:
-		front := binary.LittleEndian.AppendUint32(nil, period)
-		front = binary.LittleEndian.AppendUint32(front, 3)
-		front = binary.LittleEndian.AppendUint32(front, 0)
-		front = append(front, 0)
-		return true, send(msgr.MessageData{Type: msgr.MgrConfigureMessage, Version: 4, CompatVersion: 1, Front: front})
+		return true, send(serviceConfigure(period, 3))
 	case got.Type == msgr.MgrCloseMessage && ack:
 		return true, send(msgr.MessageData{Type: msgr.MgrCloseMessage, Version: 1, CompatVersion: 1, Front: got.Front})
 	}
+	for _, push := range pushes {
+		if err := send(push); err != nil {
+			return true, err
+		}
+	}
 	return true, nil
+}
+
+func serviceConfigure(period, threshold uint32) msgr.MessageData {
+	front := binary.LittleEndian.AppendUint32(nil, period)
+	front = binary.LittleEndian.AppendUint32(front, threshold)
+	front = binary.LittleEndian.AppendUint32(front, 0)
+	front = append(front, 0)
+	return msgr.MessageData{Type: msgr.MgrConfigureMessage, Version: 4, CompatVersion: 1, Front: front}
 }
 
 func serviceOptions(t *testing.T, mgr *serviceMGR) Options {
