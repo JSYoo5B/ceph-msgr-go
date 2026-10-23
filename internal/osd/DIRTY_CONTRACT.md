@@ -53,24 +53,29 @@ uncertain and is never replayed.
 
 ## Not implemented (unreachable on a plain pool)
 
-The cache-tier and dedup-manifest opcodes are deliberately excluded because they
-cannot be driven from a client against a plain replicated pool:
+The cache-tier and manifest opcodes are deliberately excluded: the cache-tier
+opcodes cannot be driven from a client against a plain replicated pool, and
+SET_CHUNK changes another object's references:
 
 - **CACHE_FLUSH (0x821f), CACHE_TRY_FLUSH (0x8221), CACHE_EVICT (0x8220)** guard
   on `cache_mode == CACHEMODE_NONE || has_manifest()` and return **-EINVAL**
   before any work on a non-tier pool (`PrimaryLogPG.cc:6307,6340,6382`).
 - **CACHE_PIN (0x2224), CACHE_UNPIN (0x2225)** guard on `!is_tier() ||
   cache_mode == NONE` and return **-EINVAL** on a plain pool (`:7113,:7138`).
-- **SET_CHUNK (0x8228)** is a manifest/dedup op (not cache-tier); it carries
-  encoded indata and requires the WITH_REFERENCE flag plus dedup setup, failing
-  with **-EOPNOTSUPP/-EINVAL/-ERANGE** otherwise (`:7280`). Not a simple probe.
+- **SET_CHUNK (0x8228)** is a manifest op (not cache-tier); it carries encoded
+  indata, requires the WITH_REFERENCE flag and an existing chunk target, and
+  fails with **-EOPNOTSUPP/-EINVAL/-ERANGE/-ENOENT** otherwise (`:7280`). It
+  needs no dedup pool option and does work on two plain replicated pools, but it
+  mutates the target's reference attribute, so it is not a simple probe either.
+  Its audit and native-only checkpoint are in
+  [MANIFEST_CONTRACT.md](MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations-not-implemented).
 
 These remain unimplemented client operations. The development fixture can now
 prepare an owned cache tier for the bounded IGNORE_CACHE capability; see
 [CACHE_POOL_CONTRACT.md](CACHE_POOL_CONTRACT.md) and its separate native
 validation records. That setup does not implement or verify flush/evict/pin
-messages. Manifest/chunk preparation and its independent oracle remain separate
-requirements in #8. Plain-pool refusal is not absence of a daemon handler.
+messages. The SET_CHUNK manifest recipe and its independent native oracle are a
+separate native-only checkpoint for #8. Plain-pool refusal is not absence of a daemon handler.
 
 ## Verification
 
