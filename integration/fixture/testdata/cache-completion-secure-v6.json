@@ -1,0 +1,1351 @@
+{
+  "schema_version": 1,
+  "reference_source": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "profile": {
+    "architecture": "amd64",
+    "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+    "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+    "connection_mode": "secure",
+    "key_type": "aes256k",
+    "service_cipher": "aes256k",
+    "ip_family": "6",
+    "runtime": "container",
+    "osd_profile": "legacy-v6",
+    "osd_store": "bluestore",
+    "osd_replicas": "1"
+  },
+  "first_native_failure": {
+    "tested_source": "c10b7079b761ee1127432bcf5950f6cc08b91651",
+    "failed_expectation": "The test incorrectly required ACK as well as ONDISK on an early ENOENT reply.",
+    "case": {
+      "label": "absent-flush",
+      "route": {
+        "pool_id": 4,
+        "osd_id": 0,
+        "epoch": 27,
+        "hash": 813913594,
+        "pg_seed": 0,
+        "object": "go-cache-absent",
+        "namespace": "cache-probe"
+      },
+      "request": {
+        "MapEpoch": 27,
+        "IgnoreCache": true,
+        "IgnoreOverlay": true,
+        "SkipRWLocks": false,
+        "Operations": [
+          {
+            "Code": 33311,
+            "Flags": 0
+          }
+        ]
+      },
+      "reply": {
+        "Submission": {
+          "Transaction": 13,
+          "GlobalID": 4845,
+          "ClientIncarnation": 0,
+          "MapEpoch": 27,
+          "Attempt": 0,
+          "Placement": null
+        },
+        "Transaction": 13,
+        "GlobalID": 4845,
+        "Code": -2,
+        "Flags": 67272724,
+        "MapEpoch": 27,
+        "RetryAttempt": 0,
+        "UserVersion": 0,
+        "RawFront": "DwAAAGdvLWNhY2hlLWFic2VudAEEAAAAAAAAAPpVgzD/////FIACBAAAAAD+////AAAAAAAAAAAAAAAAGwAAAAEAAAAfggAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABASoAAAAGAxwAAAD///////////////8AAAAAAAAAAP//////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "RawData": null
+      },
+      "per_op": [
+        {
+          "Code": 33311,
+          "Flags": 0,
+          "Result": 0,
+          "PayloadLength": 0,
+          "Data": null
+        }
+      ],
+      "unknown_outcome": false
+    },
+    "head_cleanup": {
+      "cleanup": {
+        "attempted": true,
+        "complete": true
+      },
+      "phase": "finished",
+      "steps": 49
+    },
+    "owned_containers_removed": 8,
+    "owned_network_removed": true
+  },
+  "corrected_native_pass": {
+    "tested_source": "2700127d24df7d6ff693f2eb34ad680b2a3b2346",
+    "selector": "^TestCephOSDCacheOpGoIntegration$",
+    "parent_result": "PASS",
+    "required_children_passed": 7,
+    "requests": [
+      {
+        "label": "evict-dirty",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": true,
+          "Operations": [
+            {
+              "Code": 33312,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 1,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 1,
+          "GlobalID": 4815,
+          "Code": -16,
+          "Flags": 67338261,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 0,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8VgAMEAAAAAPD///8AAAAAAAAAAAAAAAAbAAAAAQAAACCCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPD///8AAAAAAAAAAAAAAAAAAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33312,
+            "Flags": 0,
+            "Result": -16,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "pin",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": false,
+          "SkipRWLocks": false,
+          "Operations": [
+            {
+              "Code": 8740,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 2,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 2,
+          "GlobalID": 4815,
+          "Code": 0,
+          "Flags": 67141669,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 5,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8lgAAEAAAAAAAAAAAFAAAAAAAAABsAAAAbAAAAAQAAACQiAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHAAAAAAAAABsAAAAFAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 8740,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "pinned-flush",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": false,
+          "Operations": [
+            {
+              "Code": 33311,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 3,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 3,
+          "GlobalID": 4815,
+          "Code": -1,
+          "Flags": 67272725,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 0,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8VgAIEAAAAAP////8AAAAAAAAAAAAAAAAbAAAAAQAAAB+CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8AAAAAAAAAAAAAAAAAAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33311,
+            "Flags": 0,
+            "Result": -1,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "pinned-try-flush",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": true,
+          "Operations": [
+            {
+              "Code": 33313,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 4,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 4,
+          "GlobalID": 4815,
+          "Code": -1,
+          "Flags": 67338261,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 0,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8VgAMEAAAAAP////8AAAAAAAAAAAAAAAAbAAAAAQAAACGCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8AAAAAAAAAAAAAAAAAAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33313,
+            "Flags": 0,
+            "Result": -1,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "pinned-evict",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": true,
+          "Operations": [
+            {
+              "Code": 33312,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 5,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 5,
+          "GlobalID": 4815,
+          "Code": -1,
+          "Flags": 67338261,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 0,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8VgAMEAAAAAP////8AAAAAAAAAAAAAAAAbAAAAAQAAACCCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP////8AAAAAAAAAAAAAAAAAAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33312,
+            "Flags": 0,
+            "Result": -1,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "unpin",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": false,
+          "SkipRWLocks": false,
+          "Operations": [
+            {
+              "Code": 8741,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 6,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 6,
+          "GlobalID": 4815,
+          "Code": 0,
+          "Flags": 67141669,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 5,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8lgAAEAAAAAAAAAAAFAAAAAAAAABsAAAAbAAAAAQAAACUiAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAAAAAAABsAAAAFAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 8741,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "evict-dirty-unpinned",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": true,
+          "Operations": [
+            {
+              "Code": 33312,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 7,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 7,
+          "GlobalID": 4815,
+          "Code": -16,
+          "Flags": 67338261,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 0,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8VgAMEAAAAAPD///8AAAAAAAAAAAAAAAAbAAAAAQAAACCCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAPD///8AAAAAAAAAAAAAAAAAAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33312,
+            "Flags": 0,
+            "Result": -16,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "flush",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": false,
+          "Operations": [
+            {
+              "Code": 33311,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 8,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 8,
+          "GlobalID": 4815,
+          "Code": 0,
+          "Flags": 67272725,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 5,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8VgAIEAAAAAAAAAAAFAAAAAAAAAAAAAAAbAAAAAQAAAB+CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33311,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "flush-clean",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": false,
+          "Operations": [
+            {
+              "Code": 33311,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 9,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 9,
+          "GlobalID": 4815,
+          "Code": 0,
+          "Flags": 67272725,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 5,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8VgAIEAAAAAAAAAAAFAAAAAAAAAAAAAAAbAAAAAQAAAB+CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33311,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "try-flush-clean",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": true,
+          "Operations": [
+            {
+              "Code": 33313,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 10,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 10,
+          "GlobalID": 4815,
+          "Code": 0,
+          "Flags": 67338261,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 5,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8VgAMEAAAAAAAAAAAFAAAAAAAAAAAAAAAbAAAAAQAAACGCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33313,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "try-flush",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 2210373795,
+          "pg_seed": 0,
+          "object": "go-cache-try",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": true,
+          "Operations": [
+            {
+              "Code": 33313,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 11,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 11,
+          "GlobalID": 4815,
+          "Code": 0,
+          "Flags": 67338261,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 6,
+          "RawFront": "DAAAAGdvLWNhY2hlLXRyeQEEAAAAAAAAAKOgv4P/////FYADBAAAAAAAAAAABgAAAAAAAAAAAAAAGwAAAAEAAAAhggAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABgAAAAAAAAABASoAAAAGAxwAAAD///////////////8AAAAAAAAAAP//////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33313,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "evict-clean",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 1874366654,
+          "pg_seed": 0,
+          "object": "go-cache-flush",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": true,
+          "Operations": [
+            {
+              "Code": 33312,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 12,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 12,
+          "GlobalID": 4815,
+          "Code": 0,
+          "Flags": 67338261,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 5,
+          "RawFront": "DgAAAGdvLWNhY2hlLWZsdXNoAQQAAAAAAAAAvpC4b/////8VgAMEAAAAAAAAAAAFAAAAAAAAABsAAAAbAAAAAQAAACCCAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAALAAAAAAAAABsAAAAFAAAAAAAAAAEBKgAAAAYDHAAAAP///////////////wAAAAAAAAAA//////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33312,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "absent-flush",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 813913594,
+          "pg_seed": 0,
+          "object": "go-cache-absent",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": false,
+          "Operations": [
+            {
+              "Code": 33311,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 13,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 13,
+          "GlobalID": 4815,
+          "Code": -2,
+          "Flags": 67272724,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 0,
+          "RawFront": "DwAAAGdvLWNhY2hlLWFic2VudAEEAAAAAAAAAPpVgzD/////FIACBAAAAAD+////AAAAAAAAAAAAAAAAGwAAAAEAAAAfggAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABASoAAAAGAxwAAAD///////////////8AAAAAAAAAAP//////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33311,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "absent-try-flush",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 813913594,
+          "pg_seed": 0,
+          "object": "go-cache-absent",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": true,
+          "Operations": [
+            {
+              "Code": 33313,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 14,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 14,
+          "GlobalID": 4815,
+          "Code": -2,
+          "Flags": 67338260,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 0,
+          "RawFront": "DwAAAGdvLWNhY2hlLWFic2VudAEEAAAAAAAAAPpVgzD/////FIADBAAAAAD+////AAAAAAAAAAAAAAAAGwAAAAEAAAAhggAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABASoAAAAGAxwAAAD///////////////8AAAAAAAAAAP//////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33313,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "absent-evict",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 813913594,
+          "pg_seed": 0,
+          "object": "go-cache-absent",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": true,
+          "SkipRWLocks": true,
+          "Operations": [
+            {
+              "Code": 33312,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 15,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 15,
+          "GlobalID": 4815,
+          "Code": -2,
+          "Flags": 67338260,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 0,
+          "RawFront": "DwAAAGdvLWNhY2hlLWFic2VudAEEAAAAAAAAAPpVgzD/////FIADBAAAAAD+////AAAAAAAAAAAAAAAAGwAAAAEAAAAgggAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABASoAAAAGAxwAAAD///////////////8AAAAAAAAAAP//////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 33312,
+            "Flags": 0,
+            "Result": 0,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "absent-pin",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 813913594,
+          "pg_seed": 0,
+          "object": "go-cache-absent",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": false,
+          "SkipRWLocks": false,
+          "Operations": [
+            {
+              "Code": 8740,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 16,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 16,
+          "GlobalID": 4815,
+          "Code": -2,
+          "Flags": 67141669,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 6,
+          "RawFront": "DwAAAGdvLWNhY2hlLWFic2VudAEEAAAAAAAAAPpVgzD/////JYAABAAAAAD+////CwAAAAAAAAAbAAAAGwAAAAEAAAAkIgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+////DAAAAAAAAAAbAAAABgAAAAAAAAABASoAAAAGAxwAAAD///////////////8AAAAAAAAAAP//////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 8740,
+            "Flags": 0,
+            "Result": -2,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      },
+      {
+        "label": "absent-unpin",
+        "route": {
+          "pool_id": 4,
+          "osd_id": 0,
+          "epoch": 27,
+          "hash": 813913594,
+          "pg_seed": 0,
+          "object": "go-cache-absent",
+          "namespace": "cache-probe"
+        },
+        "request": {
+          "MapEpoch": 27,
+          "IgnoreCache": true,
+          "IgnoreOverlay": false,
+          "SkipRWLocks": false,
+          "Operations": [
+            {
+              "Code": 8741,
+              "Flags": 0
+            }
+          ]
+        },
+        "reply": {
+          "Submission": {
+            "Transaction": 17,
+            "GlobalID": 4815,
+            "ClientIncarnation": 0,
+            "MapEpoch": 27,
+            "Attempt": 0,
+            "Placement": null
+          },
+          "Transaction": 17,
+          "GlobalID": 4815,
+          "Code": -2,
+          "Flags": 67141669,
+          "MapEpoch": 27,
+          "RetryAttempt": 0,
+          "UserVersion": 6,
+          "RawFront": "DwAAAGdvLWNhY2hlLWFic2VudAEEAAAAAAAAAPpVgzD/////JYAABAAAAAD+////DAAAAAAAAAAbAAAAGwAAAAEAAAAlIgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD+////DQAAAAAAAAAbAAAABgAAAAAAAAABASoAAAAGAxwAAAD///////////////8AAAAAAAAAAP//////////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+          "RawData": null
+        },
+        "per_op": [
+          {
+            "Code": 8741,
+            "Flags": 0,
+            "Result": -2,
+            "PayloadLength": 0,
+            "Data": null
+          }
+        ],
+        "unknown_outcome": false
+      }
+    ],
+    "native_seeded": {
+      "go-cache-flush": {
+        "dirty": {
+          "code": 0,
+          "dirty": true,
+          "isdirty_prval": 0,
+          "version": 5
+        },
+        "snapshot": {
+          "base": {
+            "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+            "code": 0,
+            "mtime": 1700000800,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 17
+          },
+          "tier": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000800,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          }
+        }
+      },
+      "go-cache-try": {
+        "dirty": {
+          "code": 0,
+          "dirty": true,
+          "isdirty_prval": 0,
+          "version": 6
+        },
+        "snapshot": {
+          "base": {
+            "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+            "code": 0,
+            "mtime": 1700000800,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 18
+          },
+          "tier": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000800,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 6
+          }
+        }
+      }
+    },
+    "native_labels": {
+      "absent-evict": {
+        "snapshot": {
+          "base": {
+            "code": -2,
+            "read_prval": 0,
+            "stat_prval": -5,
+            "version": 0
+          },
+          "tier": {
+            "code": -2,
+            "read_prval": 0,
+            "stat_prval": -5,
+            "version": 0
+          }
+        }
+      },
+      "absent-final": {
+        "snapshot": {
+          "base": {
+            "code": -2,
+            "read_prval": 0,
+            "stat_prval": -5,
+            "version": 0
+          },
+          "tier": {
+            "code": -2,
+            "read_prval": 0,
+            "stat_prval": -5,
+            "version": 0
+          }
+        }
+      },
+      "absent-flush": {
+        "snapshot": {
+          "base": {
+            "code": -2,
+            "read_prval": 0,
+            "stat_prval": -5,
+            "version": 0
+          },
+          "tier": {
+            "code": -2,
+            "read_prval": 0,
+            "stat_prval": -5,
+            "version": 0
+          }
+        }
+      },
+      "absent-try-flush": {
+        "snapshot": {
+          "base": {
+            "code": -2,
+            "read_prval": 0,
+            "stat_prval": -5,
+            "version": 0
+          },
+          "tier": {
+            "code": -2,
+            "read_prval": 0,
+            "stat_prval": -5,
+            "version": 0
+          }
+        }
+      },
+      "after-evict-dirty": {
+        "dirty": {
+          "code": 0,
+          "dirty": true,
+          "isdirty_prval": 0,
+          "version": 5
+        },
+        "snapshot": {
+          "base": {
+            "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+            "code": 0,
+            "mtime": 1700000800,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 17
+          },
+          "tier": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000800,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          }
+        }
+      },
+      "clean-flush": {
+        "dirty": {
+          "code": 0,
+          "dirty": false,
+          "isdirty_prval": 0,
+          "version": 5
+        },
+        "snapshot": {
+          "base": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000900,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          },
+          "tier": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1792745591,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          }
+        }
+      },
+      "clean-try-flush": {
+        "dirty": {
+          "code": 0,
+          "dirty": false,
+          "isdirty_prval": 0,
+          "version": 5
+        },
+        "snapshot": {
+          "base": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000900,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          },
+          "tier": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1792745591,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          }
+        }
+      },
+      "evicted": {
+        "dirty": {
+          "code": -2,
+          "isdirty_prval": -5,
+          "version": 0
+        },
+        "snapshot": {
+          "base": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000900,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          },
+          "tier": {
+            "code": -2,
+            "read_prval": 0,
+            "stat_prval": -5,
+            "version": 0
+          }
+        }
+      },
+      "flushed": {
+        "dirty": {
+          "code": 0,
+          "dirty": false,
+          "isdirty_prval": 0,
+          "version": 5
+        },
+        "snapshot": {
+          "base": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000900,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          },
+          "tier": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1792745591,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          }
+        }
+      },
+      "pinned": {
+        "dirty": {
+          "code": 0,
+          "dirty": true,
+          "isdirty_prval": 0,
+          "version": 5
+        },
+        "snapshot": {
+          "base": {
+            "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+            "code": 0,
+            "mtime": 1700000800,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 17
+          },
+          "tier": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000900,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          }
+        }
+      },
+      "try-flushed": {
+        "dirty": {
+          "code": 0,
+          "dirty": false,
+          "isdirty_prval": 0,
+          "version": 6
+        },
+        "dirty_polls": [
+          false
+        ],
+        "poll_budget": [
+          10,
+          1.0
+        ],
+        "snapshot": {
+          "base": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000800,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 6
+          },
+          "tier": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1792745592,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 6
+          }
+        }
+      },
+      "unpinned": {
+        "dirty": {
+          "code": 0,
+          "dirty": true,
+          "isdirty_prval": 0,
+          "version": 5
+        },
+        "snapshot": {
+          "base": {
+            "bytes_b64": "YmFzZQD/gApjYWNoZS1wcm9vZg==",
+            "code": 0,
+            "mtime": 1700000800,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 17
+          },
+          "tier": {
+            "bytes_b64": "dGllcgCA/wpyZXBsYWNlbWVudA==",
+            "code": 0,
+            "mtime": 1700000900,
+            "read_prval": 0,
+            "size": 19,
+            "stat_prval": 0,
+            "version": 5
+          }
+        }
+      }
+    },
+    "native_head_cleanup": {
+      "attempted": true,
+      "complete": true
+    },
+    "fixture_exit": 0,
+    "owned_containers_removed": 8,
+    "owned_network_removed": true
+  }
+}
