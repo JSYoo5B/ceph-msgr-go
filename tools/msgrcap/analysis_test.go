@@ -349,7 +349,8 @@ func TestRefusedAndGapAndTruncation(t *testing.T) {
 		t.Fatalf("refused outcome %q", got)
 	}
 	g := rep.Connections[1].S2C
-	if len(g.Gaps) != 1 || g.Gaps[0] != (gap{40, 20}) || g.AckedNotCaptured != 40 {
+	// Only bytes 40..60 are missing; the captured tail 60..80 is not loss.
+	if len(g.Gaps) != 1 || g.Gaps[0] != (gap{40, 20}) || g.AckedNotCaptured != 20 {
 		t.Fatalf("gap report %+v", g)
 	}
 	// Snaplen truncation is reported per record and as missing bytes.
@@ -464,5 +465,39 @@ func TestAnalysisLimitIsNotCaptureLoss(t *testing.T) {
 	}
 	if d := rep.Connections[0].C2S; d.AckedNotCaptured != 2 || d.LimitExcluded != 0 {
 		t.Fatalf("capture loss not reported: %+v", d)
+	}
+}
+
+// Payload captured after a gap is counted, not decoded; it must not be
+// reported as acknowledged capture loss. Only the hole itself is missing, and
+// retransmitted overlaps and the FIN sequence number are not payload.
+func TestAckedMissingCountsOnlyUncapturedRanges(t *testing.T) {
+	const ci, si = 1000, 5000
+	run := func(extra func(b *pcapBuilder)) dirReport {
+		b := newPcap(65535)
+		b.tcp(cliAddr, monAddr, ci, 0, tcpSYN, nil)
+		b.tcp(monAddr, cliAddr, si, ci+1, tcpSYN|tcpACK, nil)
+		b.tcp(cliAddr, monAddr, ci+1, si+1, tcpACK, []byte("a")) // [0,1)
+		b.tcp(cliAddr, monAddr, ci+3, si+1, tcpACK, []byte("c")) // [2,3), [1,2) lost
+		extra(b)
+		rep, err := analyze("synthetic", &b.buf, analysisOptions{ServerPorts: []uint16{3300}, MaxBytes: 1 << 20, FrameLimit: 1 << 20})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rep.Connections[0].C2S
+	}
+	d := run(func(b *pcapBuilder) { b.tcp(monAddr, cliAddr, si+1, ci+4, tcpACK, nil) })
+	if d.Reassembled != 1 || d.BytesAfterGap != 1 || len(d.Gaps) != 1 || d.Gaps[0] != (gap{1, 1}) || d.AckedNotCaptured != 1 {
+		t.Fatalf("gap with captured tail: %+v", d)
+	}
+	// A retransmission of the captured tail and a FIN acknowledged by the peer
+	// add no missing payload.
+	d = run(func(b *pcapBuilder) {
+		b.tcp(cliAddr, monAddr, ci+3, si+1, tcpACK, []byte("c"))
+		b.tcp(cliAddr, monAddr, ci+4, si+1, tcpACK|tcpFIN, nil)
+		b.tcp(monAddr, cliAddr, si+1, ci+5, tcpACK, nil)
+	})
+	if d.AckedNotCaptured != 1 {
+		t.Fatalf("retransmission or FIN counted as lost: %+v", d)
 	}
 }

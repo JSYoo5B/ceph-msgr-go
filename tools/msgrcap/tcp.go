@@ -247,24 +247,41 @@ func (d *direction) timeAt(end int64) time.Time {
 	return time.Time{}
 }
 
-// ackedMissing reports peer-acknowledged bytes absent from the capture. They
-// were delivered on the network, so their absence is a capture loss
-// (drop/snaplen), not a TCP loss. Offsets at or beyond an exhausted analysis
-// bound are excluded: their absence from the stream is the analyzer's limit,
-// reported separately, not evidence about the capture.
+// ackedMissing reports peer-acknowledged payload bytes absent from the
+// capture. They were delivered on the network, so their absence is a capture
+// loss (drop/snaplen), not a TCP loss. The count is the acknowledged data range
+// minus the union of every captured range, so payload captured after a gap
+// (counted, not decoded) and retransmitted overlaps are never counted as lost.
+// The FIN's sequence number is not payload. Offsets at or beyond an exhausted
+// analysis bound are excluded: their absence is the analyzer's limit, reported
+// separately, not evidence about the capture.
 func (d *direction) ackedMissing(peerAck int64, havePeerAck bool) int64 {
 	if !havePeerAck {
 		return 0
 	}
+	if d.fin && peerAck > d.finOffset {
+		peerAck = d.finOffset
+	}
 	if d.limit > 0 && peerAck > d.limit {
 		peerAck = d.limit
 	}
-	end := int64(len(d.stream))
-	if d.fin && int64(len(d.stream)) >= d.finOffset {
-		end++ // FIN consumes one sequence number
+	if peerAck <= 0 {
+		return 0
 	}
-	if peerAck > end {
-		return peerAck - end
+	ranges := make([][2]int64, 0, len(d.segs))
+	for _, s := range d.segs {
+		if s.off < peerAck {
+			ranges = append(ranges, [2]int64{s.off, min(s.off+int64(len(s.data)), peerAck)})
+		}
 	}
-	return 0
+	sort.Slice(ranges, func(i, j int) bool { return ranges[i][0] < ranges[j][0] })
+	var covered, cursor int64
+	for _, r := range ranges {
+		start := max(r[0], cursor)
+		if r[1] > start {
+			covered += r[1] - start
+			cursor = r[1]
+		}
+	}
+	return peerAck - covered
 }

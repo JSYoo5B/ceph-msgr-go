@@ -94,7 +94,10 @@ across segments. msgrcap decodes frames only from the contiguous prefix of each
 direction. It reports retransmitted and conflicting overlaps, gaps (data after
 the first gap is counted, not decoded), snaplen-truncated bytes and bytes the
 peer acknowledged that are absent from the capture. The last one separates
-capture loss from network loss, because the peer received those bytes.
+capture loss from network loss, because the peer received those bytes. It is
+the acknowledged payload range minus the union of every captured range, so
+payload captured after a gap, retransmitted overlaps and the FIN sequence
+number are not counted as lost.
 Captured bytes beyond the per-direction analysis bound (`-max-stream-bytes`)
 are reported as analysis-limit truncation (`analysis_limit_excluded_bytes`)
 and are never counted as capture loss; acknowledged offsets past an exhausted
