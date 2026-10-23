@@ -1,0 +1,89 @@
+name: Messenger capture PoC
+
+# Development-only research workflow for issue #48. It never gates the
+# product: tcpdump, libpcap and tshark run only on the runner, and the
+# analyzer is a separate Go module under tools/msgrcap.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tools/msgrcap/**'
+      - '.github/workflows/msgr-capture-poc.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: msgr-capture-poc-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GOPROXY: 'https://proxy.golang.org|direct'
+  CGO_ENABLED: '0'
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+  CEPH_IMAGE: 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9'
+
+jobs:
+  unit:
+    name: Capture analyzer unit tests (synthetic)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: tools/msgrcap/go.sum
+      - name: Vet and test the development tool module
+        run: |
+          go -C tools/msgrcap vet -mod=readonly ./...
+          go -C tools/msgrcap test -mod=readonly -count=1 -v ./...
+      - name: Product graph stays independent of the tool
+        run: python3 tools/product_dependencies.py
+
+  live:
+    name: Live MON capture (${{ matrix.mode }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [crc, secure]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.24.0'
+          cache-dependency-path: tools/msgrcap/go.sum
+      - name: Install development capture tools
+        run: |
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends tcpdump tshark
+          dpkg-query -W tcpdump tshark 'libpcap0.8*' 'libwireshark*'
+      - name: Pull the pinned Ceph image
+        timeout-minutes: 5
+        run: |
+          for attempt in 1 2 3; do
+            docker pull "$CEPH_IMAGE" && exit 0
+            sleep $((attempt * 10))
+          done
+          exit 1
+      - name: Capture and analyze one MON session
+        run: bash tools/msgrcap/live-poc.sh "${{ matrix.mode }}" "$RUNNER_TEMP/msgrcap-${{ matrix.mode }}" "$CEPH_IMAGE"
+      - name: Retain the capture and reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: msgrcap-${{ matrix.mode }}
+          path: ${{ runner.temp }}/msgrcap-${{ matrix.mode }}/
+          retention-days: 30
+          if-no-files-found: error
