@@ -61,6 +61,12 @@ value), a non-nil map replaces it.
    barrier. A zero period suppresses further automatic reports after that
    transition settles. Reconfiguration never enables a disabled beacon loop;
    explicit Report remains available.
+   Pinned Tentacle `handle_open` excludes CLIENT service registrations from
+   `daemon_connections`, the set used by `handle_conf_change` broadcasts.
+   Existing service sessions therefore retain their initial configuration when
+   daemon runtime options change; an explicit new registration receives current
+   values. Synthetic repeated-push tests do not establish a reachable native
+   CLIENT reconfiguration broadcast.
    `UpdateMetadata` and `Report` return when the message is queued: the MGR sends
    no reply, so applied-versus-lost stays unknown if the session later fails.
 4. The handle fails, and never reconnects by itself, when the connection ends,

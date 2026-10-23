@@ -34,12 +34,23 @@ type mgrServiceConfigSample struct {
 	DumpEpoch  uint32  `json:"dump_epoch"`
 }
 
+type mgrServiceConfigProbe struct {
+	Period     int    `json:"period_seconds"`
+	Threshold  uint32 `json:"threshold"`
+	Removed    bool   `json:"removed"`
+	GID        uint64 `json:"gid"`
+	StartEpoch uint32 `json:"start_epoch"`
+}
+
 type mgrServiceConfigPhase struct {
-	Name      string                           `json:"name"`
-	Period    int                              `json:"period_seconds"`
-	Threshold uint32                           `json:"threshold"`
-	Native    map[string]mgrServiceConfigValue `json:"native"`
-	Samples   []mgrServiceConfigSample         `json:"samples"`
+	Name              string                           `json:"name"`
+	Period            int                              `json:"period_seconds"`
+	Threshold         uint32                           `json:"threshold"`
+	Native            map[string]mgrServiceConfigValue `json:"native"`
+	Samples           []mgrServiceConfigSample         `json:"samples"`
+	ExistingPeriod    int                              `json:"existing_period_seconds"`
+	ExistingThreshold uint32                           `json:"existing_threshold"`
+	NewSession        *mgrServiceConfigProbe           `json:"new_session,omitempty"`
 }
 
 func mgrServiceNativeConfiguration(t *testing.T, ctx context.Context, action string) mgrServiceConfigNative {
@@ -162,14 +173,56 @@ func testMgrServiceConfiguration(t *testing.T, ctx context.Context, c *cephmsgr.
 		if native.Manager != receipt.Manager || native.GID != receipt.ManagerGID || native.Current["mgr_stats_period_autotune"].Effective != "false" {
 			t.Fatal("native configuration phase lost its manager identity or disabled autotuning")
 		}
-		waitMgrServiceConfigure(t, ctx, svc, spec.period, spec.threshold)
-		phase := mgrServiceConfigPhase{Name: spec.action, Period: spec.period, Threshold: spec.threshold, Native: native.Current, Samples: []mgrServiceConfigSample{}}
+		// Pinned handle_open excludes TYPE_CLIENT service sessions from
+		// daemon_connections. handle_conf_change broadcasts only to that set,
+		// so this existing registration retains its original configuration.
+		// This native boundary is distinct from synthetic receive-path tests.
+		phase := mgrServiceConfigPhase{Name: spec.action, Period: spec.period, Threshold: spec.threshold, Native: native.Current, Samples: []mgrServiceConfigSample{},
+			ExistingPeriod: int(initial.StatsPeriod / time.Second), ExistingThreshold: initial.StatsThreshold}
 		// These are strictly progressing sampled native last_beacon values.
 		// They are not transmission counts or exact scheduler timing bounds.
 		for range 3 {
 			observe(&phase)
+			if got := svc.Configure(); got.StatsPeriod != initial.StatsPeriod || got.StatsThreshold != initial.StatsThreshold || len(got.Extension) != 0 {
+				t.Fatal("existing CLIENT service configuration changed despite the pinned broadcast boundary", got)
+			}
+		}
+		if spec.action != "initial-one-second" {
+			// A distinct explicit registration proves that the same native MGR
+			// now sends the changed values in its initial configure push. The
+			// original handle is retained and never re-registered implicitly.
+			probeName := daemon + "-" + spec.action
+			probe, err := c.OpenMgrService(ctx, cephmsgr.MgrServiceOptions{Service: service, Daemon: probeName,
+				Metadata: map[string]string{"probe": spec.action}, Status: map[string]string{"state": "configure-probe"}, DisableBeacon: true})
+			if err != nil {
+				t.Fatal("open distinct configuration probe", err)
+			}
+			func() {
+				defer func() {
+					stop, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					probe.Close(stop)
+				}()
+				waitMgrServiceConfigure(t, ctx, probe, spec.period, spec.threshold)
+				visible := serviceWatch(t, ctx, service, probeName, "present", map[string]string{"probe": spec.action}, map[string]string{"state": "configure-probe"}, nil)
+				var entry struct {
+					GID        uint64 `json:"gid"`
+					StartEpoch uint32 `json:"start_epoch"`
+				}
+				if !visible.ServiceMatched || json.Unmarshal(visible.ServiceEntry, &entry) != nil || entry.GID != receipt.ClientGID || entry.StartEpoch == 0 || entry.StartEpoch > visible.ServiceDumpEpoch {
+					t.Fatal("distinct configuration probe was not observed natively with the expected identity")
+				}
+				if err := probe.Close(ctx); err != nil {
+					t.Fatal("acknowledged configuration probe close", err)
+				}
+				removed := serviceWatch(t, ctx, service, probeName, "absent", nil, nil, nil).ServiceMatched
+				if !removed {
+					t.Fatal("configuration probe removal not observed natively")
+				}
+				phase.NewSession = &mgrServiceConfigProbe{spec.period, spec.threshold, removed, entry.GID, entry.StartEpoch}
+			}()
 		}
 		receipt.Phases = append(receipt.Phases, phase)
 	}
-	t.Logf("same-session MGR configuration: manager %s/%d, client %d, service start epoch %d, four phases with three native beacon samples each", receipt.Manager, receipt.ManagerGID, receipt.ClientGID, receipt.StartEpoch)
+	t.Logf("CLIENT MGR configuration boundary: manager %s/%d, client %d, service start epoch %d, four phases with three native beacon samples each", receipt.Manager, receipt.ManagerGID, receipt.ClientGID, receipt.StartEpoch)
 }
