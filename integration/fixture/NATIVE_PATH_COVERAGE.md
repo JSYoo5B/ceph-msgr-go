@@ -96,8 +96,8 @@ a particular test in it ran. The Visibility column states which applies:
 | MSG-9 | Lossless Messenger resume meeting a restarted MDS | `released` | Owned MDS restart in the CephFS metadata fixture | Native session listing and the new MDS incarnation | MDS restart; owned restart adopted and cleaned up | `group:mds-cephfs`, `TestCephMDSCephFSRecoveryIntegration`, [MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md), [MDS_CEPHFS_FIXTURE.md](MDS_CEPHFS_FIXTURE.md) | dedicated rows; MON, MGR and OSD sessions do not implement cookie resume by design |
 | MSG-10 | Partial sends, late and lost replies | `released` | Counted relays and withheld replies; seed-path dial faults | Native oracle readback for OSD and pool lost replies; Go observer for the MON config-key lost reply | Lost reply, late dial; owned objects removed | `TestCephLostMutationReplyIntegration`, `TestCephOSDMutationLostReplyIntegration`, `TestCephMonPoolOpLostReplyIntegration`, `TestCephOSDCopyFromLostReplyIntegration`, `TestSeedPathFaultBlocksLateDialAndClosesLatestOutsideLock`, [OSD_MUTATIONS_VALIDATION.md](OSD_MUTATIONS_VALIDATION.md) | broad rows |
 | MSG-11 | Cancellation, Close and shutdown races | `released` | Concurrent operations with local cancellation, Close during handshakes and repeated shutdown under traffic | Go observer and local worker accounting; native postconditions only for OSD mutation Close | Race instrumentation on the host runtime | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.race-1`, `suite:race`, `TestCephStreamCancellationIntegration`, `TestCephRepeatedShutdownUnderTrafficIntegration`, `TestCephCloseDuringManagerHandshakeIntegration`, `TestCephContextAdmissionIntegration`, `TestCephContextRecoveryIntegration`, `TestCephOSDMutationCloseIntegration` | broad rows |
-| MSG-12 | Compression offer toward MON and OSD | `released` | CRC client offers snappy and zstd | Go reports no negotiated compression and commands still succeed; the record read the daemons' compression options natively | None beyond the declined offer | `TestCephMsgrCompressionOfferIntegration`, [MSGR_COMPRESSION_VALIDATION.md](MSGR_COMPRESSION_VALIDATION.md) | not selected by any catalog row (broad CRC MON/MGR rows skip it without an OSD; `osd` rows do not select it); historical record |
-| MSG-13 | Compressed frames sent by a daemon to a client | `absent` | Not reachable on the pinned release: daemons apply compression policy only toward OSD peers | None | None | [MSGR_COMPRESSION_VALIDATION.md](MSGR_COMPRESSION_VALIDATION.md) | unreachable natively; the daemon-peer case is D2D-17 |
+| MSG-12 | CRC compression-capable client toward MON and OSD | `released` | CRC/AES IPv4 host client, one BlueStore OSD, legacy-v6; snappy/zstd offered only when the peer banner enables negotiation | MON/OSD report no negotiated compression; MON status and OSD version return code 0 with nonempty data; no negotiation-frame capture | None beyond ordinary connection setup and teardown | `TestCephMsgrCompressionOfferIntegration`, [MSGR_COMPRESSION_VALIDATION.md](MSGR_COMPRESSION_VALIDATION.md) | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer`: dedicated row and required parent PASS; selected native attempt at `41cfa9f2f3f8ff8d797197047b7b1e0ea2524673`, separate from historical receipt |
+| MSG-13 | Compressed frames sent by a daemon to a client | `absent` | No selected client-peer compression recipe on the pinned release; the historical policy investigation found OSD-peer options only | None | None | [MSGR_COMPRESSION_VALIDATION.md](MSGR_COMPRESSION_VALIDATION.md) | no live client compressed-frame receipt; the daemon-peer case is D2D-17 |
 | MSG-14 | Windows clients against OSD and MDS | `proposed` | Windows binaries reach MON and MGR through the WSL relay only | None for OSD and MDS | None | `suite:windows-ceph` | the suite covers MON/MGR, aes256k, secure, IPv4 relay; OSD/MDS expansion is issue #14 work item 4 |
 
 ### CLIENT to MON/MGR
@@ -246,9 +246,10 @@ independent native observation is still missing.
 - **Endurance is bounded to minutes.** The longest runs are the four-minute
   OSD soak and the three-minute MON/MGR stress (OSD-20, MM-12); hour-long
   campaigns are planned work (OSD-21).
-- **Some recipes never run in CI.** The MON freeze recipe (MM-7), the
-  compression offer test (MSG-12) and the staged native oracles (OSD-2,
-  OSD-4) are not selected by any catalog row.
+- **Some recipes never run in CI.** The MON freeze recipe (MM-7) and the
+  staged native oracles (OSD-2, OSD-4) are not selected by any catalog row.
+  MSG-12 now has its dedicated CRC/single-OSD row and required parent gate;
+  its live observation remains no negotiated compression and working commands.
 
 ## Open pull requests
 
