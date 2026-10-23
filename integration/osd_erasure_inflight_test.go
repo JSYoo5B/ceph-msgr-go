@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net"
 	"net/netip"
 	"os"
@@ -261,6 +262,9 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 		first := request(route, ops...)
 		first.ClientIncarnation = incarnation
 		first.ModificationTime = cephmsgr.OSDTime{Seconds: mutated}
+		if retryApplied {
+			first.ModificationTime.Nanoseconds = 123456789
+		}
 		// This fingerprints semantic input, excluding the explicitly changed
 		// routing and retry envelope. It is not a hash of captured wire bytes.
 		fingerprint := func(r cephmsgr.OSDRequest) [32]byte {
@@ -374,8 +378,8 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 		}
 		final := n
 		if applied {
-			// The native observer shows exactly one execution; the caller
-			// keeps the unknown outcome and does not resubmit.
+			// Native bytes distinguish one append from two. The original
+			// caller result remains unknown, independently of later readback.
 			if n.Version <= pre.Version || n.Seconds != mutated || xattrInventory(n)[attr] != string(value) {
 				t.Fatal("applied mutation lacks its version, mtime or xattr", n.Version, n.Seconds)
 			}
@@ -396,7 +400,7 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 			defer ro.Close()
 			retry := request(fresh, ops...)
 			retry.ClientIncarnation = incarnation
-			retry.ModificationTime = cephmsgr.OSDTime{Seconds: mutated}
+			retry.ModificationTime = first.ModificationTime
 			retry.Resubmit, retry.RetryAttempt = &sub, 1
 			if fingerprint(retry) != originalFingerprint {
 				t.Fatal("explicit retry changed the semantic request fingerprint")
@@ -407,6 +411,9 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 			if err != nil {
 				n := poolObserve(t, ctx, 1, object, "", "")
 				t.Fatalf("explicit resubmission through the new primary: %v (native version %d applied=%v)", err, n.Version, bytes.Equal(n.Data, want))
+			}
+			if elapsed := time.Since(submittedAt); elapsed >= observationWindow {
+				t.Fatalf("resubmission completed outside the observation window: %s", elapsed)
 			}
 			t.Logf("resubmission: tid %d code %d flags %#x user version %d attempt %d epoch %d", reply.Transaction, reply.Code, reply.Flags, reply.UserVersion, reply.RetryAttempt, reply.MapEpoch)
 			if reply.Transaction != sub.Transaction || reply.Code != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.RetryAttempt != 1 ||
@@ -420,8 +427,9 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 				t.Fatal("native state after the resubmission differs", len(final.Data), final.Version, reply.UserVersion, final.Seconds)
 			}
 			if retryApplied {
-				if final.Version != n.Version || reply.UserVersion != n.Version {
-					t.Fatal("duplicate execution advanced the observed native version", n.Version, final.Version, reply.UserVersion)
+				if final.Code != 0 || final.Version != n.Version || reply.UserVersion != n.Version ||
+					final.Nanos != int64(first.ModificationTime.Nanoseconds) || final.Nanos != n.Nanos || !maps.Equal(xattrInventory(final), xattrInventory(n)) {
+					t.Fatal("resubmission changed native version/mtime/xattrs", n.Version, final.Version, reply.UserVersion, n.Nanos, final.Nanos)
 				}
 				t.Logf("applied resubmission: one explicit retry after %s, original unknown=%v; native version unchanged %d -> %d, tail count %d, semantic input sha256 %x",
 					time.Since(submittedAt), lost.err, n.Version, final.Version, bytes.Count(final.Data, tail), originalFingerprint)
@@ -432,7 +440,8 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 				// version oracles: the identical append must execute once more.
 				control := request(fresh, ops...)
 				control.ClientIncarnation = incarnation
-				control.ModificationTime = cephmsgr.OSDTime{Seconds: mutated + 1}
+				control.ModificationTime = first.ModificationTime
+				control.ModificationTime.Seconds++
 				controlReply, err := ro.Request(ctx, control)
 				if err != nil || controlReply.Transaction == sub.Transaction || controlReply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
 					t.Fatal("fresh-transaction append control", err, controlReply.Transaction, controlReply.Flags)
@@ -440,7 +449,8 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 				controlState := poolObserve(t, ctx, 1, object, "", "")
 				if controlState.Code != 0 || !bytes.Equal(controlState.Data, append(bytes.Clone(want), tail...)) ||
 					controlState.Version <= final.Version || controlState.Version != controlReply.UserVersion ||
-					controlState.Seconds != mutated+1 || xattrInventory(controlState)[attr] != string(value) || bytes.Count(controlState.Data, tail) != 2 {
+					controlState.Seconds != mutated+1 || controlState.Nanos != int64(control.ModificationTime.Nanoseconds) ||
+					!maps.Equal(xattrInventory(controlState), xattrInventory(final)) || bytes.Count(controlState.Data, tail) != 2 {
 					t.Fatal("fresh transaction did not advance native bytes/version/mtime", final.Version, controlState.Version, controlReply.UserVersion)
 				}
 				t.Logf("fresh-transaction control: tid %d (original %d), version %d -> %d, tail count %d", controlReply.Transaction, sub.Transaction, final.Version, controlState.Version, bytes.Count(controlState.Data, tail))
@@ -452,7 +462,7 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 		// must not change what the native observer reads.
 		restore()
 		recovered := poolObserve(t, ctx, 1, object, "", "")
-		if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || recovered.Seconds != final.Seconds || xattrInventory(recovered)[attr] != xattrInventory(final)[attr] {
+		if !bytes.Equal(recovered.Data, final.Data) || recovered.Version != final.Version || recovered.Seconds != final.Seconds || recovered.Nanos != final.Nanos || !maps.Equal(xattrInventory(recovered), xattrInventory(final)) {
 			t.Fatal("native state after recovery differs", recovered.Version, final.Version)
 		}
 		back := poolPlace(t, ctx, 1, object, "")
