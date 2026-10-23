@@ -164,7 +164,8 @@ rows are `baseline`; the evidence that changed the decision stays here.
   `TestCephMDSSessionsIntegration` opens a session in each profile while the
   owned filesystem requires `reclaim_client`, and the reclaim leaf
   `reclaim_evicts_the_target_session` runs in the same suite on the same
-  source ([MDS_SESSIONS_VALIDATION.md](../../integration/fixture/MDS_SESSIONS_VALIDATION.md),
+  source, GitHub Actions run 39885092766 on both `mds-sessions` rows
+  ([MDS_SESSIONS_VALIDATION.md](../../integration/fixture/MDS_SESSIONS_VALIDATION.md),
   [MDS_RECLAIM_VALIDATION.md](../../integration/fixture/MDS_RECLAIM_VALIDATION.md)).
   The REQUEST_OPEN layout is covered by the fresh native vector; the encoder
   copies the bitset image unchanged, and the native `session ls` of both live

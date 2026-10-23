@@ -186,3 +186,31 @@ true). When traffic resumes, the session ends locally as Lost with the
 transport error (`write pipe: i/o timeout`), never as a confirmed close, and
 it is not resurrected. Passed in CRC/AES BlueStore IPv4 and secure AES256K
 MemStore IPv6; the dial-count check now expects nine session clients.
+
+## Required reclaim_client admission (2026-10-23)
+
+Leaf `admit_required_reclaim_client`, added when both client profiles began
+declaring RECLAIM_CLIENT (bit 10; decision record
+`internal/mds/CLIENT_EXTENSION_DECISIONS.md`). The fixture gained the closed
+`require-reclaim-on` / `require-reclaim-off` actions
+(`fs required_client_features <fs> add/rm reclaim_client`, journal kind
+`required_client_features_reclaim_client`). With only `feature_10:
+reclaim_client` required, client I (session profile) and client J
+(`EnableCephFS`) each open a session with the read-only fresh identity. Both
+OPENs advertise RECLAIM_CLIENT. Native `session ls` shows I `open` with
+`client_features` `0x00000000000005ff` and J `open` with
+`0x00000000001c87ff`, each with exactly the metadata sent. Both close
+confirmed and are absent natively, and the requirement is removed back to the
+empty baseline. The dial-count check now expects eleven session clients.
+
+Tested source `3bfcf53687e04afb56f1e27acccbc124268dbdb5` (PR #55), GitHub
+Actions run 39885092766. Both `mds-sessions` rows passed (CRC/AES host IPv4
+BlueStore and secure AES256K container IPv6 MemStore). In the same suite and
+run, `reclaim_evicts_the_target_session` passed with the new declaration.
+The same run passed both rows of every `mds-cephfs*` group (`mds-cephfs`,
+`-ranks`, `-ranks-replay`, `-completion`, `-data`, `-capsend`), whose shared
+native-session check now requires `0x00000000001c87ff`.
+
+Not verified: an open session declaring bit 10 surviving a newly added
+`reclaim_client` requirement (the fixture refuses the mutation while sessions
+exist), and requirements that combine several bits.

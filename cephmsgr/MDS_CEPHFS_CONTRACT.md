@@ -344,6 +344,10 @@ release of all six caps to native `num_caps` 0; confirmed close; and
 Messenger resume of an idle and of an in-flight session (same native
 session and address, not blocklisted). See
 [the validation record](../integration/fixture/MDS_CEPHFS_VALIDATION.md).
+That record predates RECLAIM_CLIENT; since PR #55 the same check requires
+`0x1c87ff`, observed in every `mds-cephfs*` row and in the CephFS-profile
+session of the `admit_required_reclaim_client` leaf
+([MDS_SESSIONS_VALIDATION.md](../integration/fixture/MDS_SESSIONS_VALIDATION.md)).
 A separate live push acceptance (product `source-2`, both profiles, seven
 leaves) received and answered a dentry-lease REVOKE (the native rename
 completed only after the Go RELEASE), snapshot UPDATE/SPLIT/DESTROY pushes
