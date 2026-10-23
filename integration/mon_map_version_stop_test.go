@@ -79,7 +79,7 @@ func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("map-version reply barrier", ctx.Err())
 	}
-	if !strings.Contains(before.Monitor.Endpoint, held.Request.Endpoint) || held.Request.TID == 0 || held.Request.Handle == 0 || !held.Held || held.Newest == 0 || held.Oldest > held.Newest {
+	if !strings.Contains(before.Monitor.Endpoint, held.Request.Endpoint) || held.Request.TID == 0 || held.Request.Handle == 0 || !held.Held || held.Newest == 0 || held.Oldest == 0 || held.Oldest > held.Newest {
 		t.Fatal("barrier does not identify the actual admitted MON request", before.Monitor.Endpoint, held)
 	}
 	select {
@@ -138,7 +138,7 @@ func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 	t.Logf("connected MON %s stopped after server reply: GID=%d connection=%d TID=%d sequence=%d handle=%d epoch=%d oldest=%d terminal=%v",
 		peon, before.GlobalID, held.Request.Connection, held.Request.TID, held.Request.Sequence, held.Request.Handle, held.Newest, held.Oldest, lost.err)
 	fresh, err := client.MapVersion(ctx, cephmsgr.OSDMapKind)
-	if err != nil || fresh.Newest == 0 || fresh.Oldest > fresh.Newest {
+	if err != nil || fresh.Newest == 0 || fresh.Oldest == 0 || fresh.Oldest > fresh.Newest {
 		t.Fatal("fresh explicit map-version request after connected stop", fresh, err)
 	}
 	after := client.Snapshot()
@@ -147,8 +147,12 @@ func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 		t.Fatal("lost or duplicated request/reply identity", requests, replies)
 	}
 	next := replies[1]
-	if next.Held || next.Request.Connection == held.Request.Connection || next.Request.TID == held.Request.TID || next.Request.Handle != held.Request.Handle+1 || fresh.Newest != next.Newest || fresh.Oldest != next.Oldest || after.Monitor.Endpoint == before.Monitor.Endpoint || after.GlobalID != before.GlobalID || after.FSID != before.FSID || !strings.Contains(after.Monitor.Endpoint, next.Request.Endpoint) {
-		t.Fatal("fresh query did not use a distinct admitted session and matching reply", before, after, held, next)
+	// TIDs belong to one session and may be reused after reconnect. The
+	// relay connection and monotonically increasing MapVersion handle must
+	// change; require the native reply to match that connection/TID/handle.
+	if next.Held || next.Request.Connection == held.Request.Connection || next.Request.Handle != held.Request.Handle+1 || fresh.Newest != next.Newest || fresh.Oldest != next.Oldest || after.Monitor.Endpoint == before.Monitor.Endpoint || after.GlobalID != before.GlobalID || after.FSID != before.FSID || !strings.Contains(after.Monitor.Endpoint, next.Request.Endpoint) {
+		t.Fatalf("fresh query identity differs: GID=%d->%d FSID-kept=%t endpoint=%s->%s held=%+v fresh=%+v result=%+v",
+			before.GlobalID, after.GlobalID, before.FSID == after.FSID, before.Monitor.Endpoint, after.Monitor.Endpoint, held, next, fresh)
 	}
 	native := nativePool(t, ctx, "versions", map[string]any{}).Epochs["osdmap"]
 	if fresh.Newest != native {
