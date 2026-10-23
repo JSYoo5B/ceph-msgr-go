@@ -1,11 +1,11 @@
-# Cluster-free top-level tests of the integration package.
 #
 # Basic CI runs exactly these tests, without a Ceph fixture, and requires each
-# one to report PASS (tools/cluster_free_tests.py). Every other top-level test
-# in integration/*_test.go must be a native fixture test named
-# TestCeph...Integration; those stay opt-in and run only through the native
-# scenario workflow. TestCephFS... helper tests without that suffix belong here.
+# Cluster-free top-level tests of the integration package.
 # Keep one name per line, sorted.
+# TestCeph...Integration; those stay opt-in and run only through the native
+# in integration/*_test.go must be a native fixture test named
+# one to report PASS (tools/cluster_free_tests.py). Every other top-level test
+# scenario workflow. TestCephFS... helper tests without that suffix belong here.
 TestAuthenticationRejectionOracle
 TestAwaitMDSUnsafeWindowSettlesThenWaitsTheGap
 TestCacheOpGoTryFlushOutcome
@@ -36,6 +36,7 @@ TestCephFSHeadFlushRefusedSendIsKnownUnsentAndAdmittedIsUncertain
 TestCephFSStriperRestatement
 TestCephFSWritebackLedgerClassifiesAndBoundsMetadata
 TestChainedForwardFailureRetainsPartialNativeEvidence
+TestCopyFromLateErrorRequiresExclusiveMarker
 TestErasureFactsFollowTheNativeWidth
 TestErasurePlacementControlUsesThePoolSize
 TestFixtureCommandArguments
@@ -52,6 +53,7 @@ TestOSDMapWaitContextBoundaryRetainsCompletedFailures
 TestOSDMapWaitPreservesAncientRPCErrorWithMapFailure
 TestOSDMapWaitReportsRPCFailureWithoutWaitingForMapDeadline
 TestOSDMapWaitRetainsBothAlreadyBufferedFailures
+TestOSDSoakImmutableReceipts
 TestRBDBaseTestOnlyLayoutAndDecoders
 TestRBDCloneTestOnlyEncodings
 TestRBDJournalTestOnlyEncodings
