@@ -29,8 +29,8 @@ class GoCacheOpOracleTests(unittest.TestCase):
     def test_complete_sequence_observes_without_cache_operations(self):
         receipt = self.run_phase("prepare")
         self.assertEqual(receipt["phase"], "prepared")
-        self.assertEqual(len(receipt["placements"]), 6)
-        for name in (oracle.FLUSH, oracle.TRY):
+        self.assertEqual(len(receipt["placements"]), 8)
+        for name in oracle.SEEDED:
             self.assertIs(receipt["seeded"][name]["dirty"]["dirty"], True)
         tier = plan()["tier"]
         self.run_phase("observe", "after-evict-dirty")
@@ -54,12 +54,36 @@ class GoCacheOpOracleTests(unittest.TestCase):
         for label in ("absent-flush", "absent-try-flush", "absent-evict"):
             state = self.run_phase("observe", label)["labels"][label]
             self.assertEqual(state, absent)
+        # Simulate the Go lost-reply flush on its own head.
+        self.native.dirty.discard(oracle.LOST)
+        data, version, mtime = self.native.heads[(tier, oracle.LOST)]
+        self.native.heads[(plan()["base"], oracle.LOST)] = (data, version + 1, mtime)
+        lost = self.run_phase("observe", "lost-flushed")["labels"]["lost-flushed"]
+        self.assertIs(lost["applied"], True)
+        self.assertEqual(lost["lost_polls"], [{"base_b": True, "tier_b": True, "dirty": False}])
+        self.assertEqual(lost["poll_budget"], [oracle.LOST_POLLS, oracle.LOST_INTERVAL])
+        settled = self.run_phase("observe", "lost-flush-settled")["labels"]["lost-flush-settled"]
+        self.assertEqual(settled["snapshot"], lost["snapshot"])
         final = self.run_phase("finish")
         self.assertEqual(final["phase"], "finished")
         self.assertTrue(final["cleanup"]["complete"])
         self.assertTrue(all(step["state"] == "completed" for step in final["steps"]))
         self.assertFalse(any(call[3].startswith("cache-") for call in self.native.calls))
         self.assertEqual({call[0] for call in self.native.calls}, {"observer"})
+
+    def test_unapplied_lost_flush_exhausts_the_closed_budget(self):
+        self.run_phase("prepare")
+        sleeps = []
+        oracle.main(["oracle", "/root", str(self.out), "observe", "lost-flushed"],
+                    native_factory=lambda *_: self.native, sleep=sleeps.append)
+        lost = json.loads((self.out / oracle.RECEIPT).read_text())["labels"]["lost-flushed"]
+        self.assertIs(lost["applied"], False)
+        self.assertEqual(len(lost["lost_polls"]), oracle.LOST_POLLS)
+        self.assertEqual(sleeps, [oracle.LOST_INTERVAL] * (oracle.LOST_POLLS - 1))
+        self.assertTrue(all(poll == {"base_b": False, "tier_b": True, "dirty": True} for poll in lost["lost_polls"]))
+        self.assertFalse(any(call[3].startswith("cache-") for call in self.native.calls))
+        with self.assertRaises(oracle.ops.Stop):
+            self.run_phase("observe", "lost-flushed")
 
     def test_labels_phases_and_repeats_are_closed(self):
         with self.assertRaises(ValueError):

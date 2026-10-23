@@ -23,9 +23,10 @@ once, to the native placement's primary.
 a cache operation (its native wrapper refuses them). In three fixture controls
 on the existing `osd-cache-pools` channel (`go-ops prepare`,
 `go-ops observe LABEL`, `go-ops finish`) it records placements, seeds base
-bytes A and tier bytes B for two heads with IGNORE_CACHE writes, observes both
-pools with IGNORE_CACHE STAT+READ and the tier's dirty flag with the native C++
-`is_dirty` read, and finally removes all three owned heads. Every observer
+bytes A and tier bytes B for three heads with IGNORE_CACHE writes, observes
+both pools with IGNORE_CACHE STAT+READ and the tier's dirty flag with the
+native C++ `is_dirty` read, and finally removes all four owned heads (the
+three seeded heads and the absent control). Every observer
 call publishes its intent first; an uncertain call refuses every later phase
 and nothing is reissued.
 
@@ -58,6 +59,66 @@ an `OutcomeUnknownError` stops the test without resending.
    absent and the base bytes, size, version and mtime equal the flushed base.
 6. Absent head: flush, try-flush and evict return 0 or ENOENT; pin and unpin
    return ENOENT; neither pool gains a head.
+7. Lost-reply flush (`lost_reply_flush_applied_without_caller_replay`), on its
+   own dirty head `go-cache-lost-flush` and a separate Go client. See below.
+
+## Lost-reply CACHE_FLUSH cell
+
+The cell keeps application and request accounting apart. The clean flush in
+step 3 of the sequence leaves bytes, version and mtime unchanged, so a
+replayed flush against the already clean head would leave exactly the applied
+state. Stable post-state alone therefore cannot show that no replay happened.
+
+Setup: a second Go client authenticates as the same tier identity. Its dial
+wrapper wraps the target OSD transport in `testcluster.LostReplyConn` and
+counts OSD dials (identified by the fixture peer map). It opens the explicit
+OSD target, and only then arms the receive fault and sends one CACHE_FLUSH
+with the native READ-mode flags (IgnoreCache, IgnoreOverlay). Its keepalive
+silence bound is raised to five minutes so that the withheld wait ends by
+cancellation, not by a keepalive failure. The wrapper withholds every inbound
+byte after arming without classifying a complete MOSDOpReply.
+
+Application claim (native oracle, `cacheOpGoLostFlushApplied`): while the
+local wait is still blocked, the observer label `lost-flushed` polls the head
+at most 20 times, 0.5 s apart, reading base, tier and `is_dirty` together, and
+stops at the first poll with base B, tier B and dirty=false. Every poll and
+the budget are retained. The Go side requires an applied verdict within that
+budget, plus B in both pools and a valid clean `is_dirty` read. It does not
+reissue the flush. This establishes application, not ONDISK receipt, crash
+durability or replay absence.
+
+Local outcome (`cacheOpGoLostFlushUnknown`): after the application claim, the
+test cancels the local wait. The result must be the actual
+`OutcomeUnknownError` caused by cancellation, with the original submission
+(transaction, GID, client incarnation 0, request map epoch, attempt 0) and no
+fabricated terminal reply (zero reply transaction, GID, code, flags and epoch,
+no raw front and no operations). The blocked connection is then closed.
+
+Caller and connection accounting (local count, `cacheOpGoCallerAccounting`):
+the test invokes `Request` once for the flush; exactly one transport to the
+target OSD is dialed while the reply is withheld and through a two-second
+settle after close; no other OSD is dialed; and one explicit fresh
+connection's read-only IGNORE_CACHE READ probe returns B and carries
+transaction flush+1. Because the OSD transaction allocator is client-wide, no
+other transaction was allocated between the flush and the probe. These are
+the only measured facts: one caller invocation, no observed redial and no
+intervening TID allocation.
+
+They do not count outbound messages. A second write of the original
+transaction on the same transport would change none of them, and the selected
+secure profile encrypts msgr2 frames, so the test wrapper cannot identify
+MOSDOp frames in the written bytes. That the client wrote the flush only once
+is a separately attributed source inference, not a measurement: Go OSD
+sessions do not use msgr2 session resume, and same-TID resubmission needs an
+explicit `Resubmit` input this cell never supplies. The OSD's own requeue of a
+retained flush request is daemon-internal and outside both. A final
+`lost-flush-settled` observation requires the head unchanged since the
+applied poll; it supports the application claim only.
+
+`TestCacheOpGoLostFlushClaims` (cluster-free) keeps the claims independent:
+application evidence never satisfies the accounting check and vice versa, and
+contradictory polls, extra dials, an extra transaction, a keepalive cause or
+a fabricated reply are rejected.
 
 ## Observed run
 
@@ -100,10 +161,12 @@ earlier native-only librados checkpoint
 including ENOENT with a zero per-op result for the absent flush/evict family,
 which the pinned `do_op` object lookup returns before those handlers.
 
-The lost-reply boundary is synthetic:
-`TestOSDCachePoolPublicTransportAndUnknownMutation` drops the connection after
+The run above predates the lost-reply cell. Its synthetic counterpart,
+`TestOSDCachePoolPublicTransportAndUnknownMutation`, drops the connection after
 an `OSDCacheFlush` is written and requires `OutcomeUnknownError` with the
 original transaction, no redial and no resent request, on all four profiles.
+Runs of the live cell are recorded on its pull request; this record claims
+no run of it.
 
 ## Not verified
 
@@ -111,4 +174,6 @@ Other security modes, address families, runtimes, request profiles and
 stores; multiple OSDs, EC tiers, overlays, hit sets, the tier agent,
 snapshots, clones and watchers; a live EAGAIN or EBUSY try-flush; scoped
 identity refusals of Go cache operations; raw object_info pin or dirty flags
-(pin evidence is behavioral, through EPERM); a live lost reply; and SET_CHUNK.
+(pin evidence is behavioral, through EPERM); a lost reply of any operation
+other than CACHE_FLUSH, an outbound MOSDOp count or daemon-side request
+accounting of the lost flush, and crash durability; and SET_CHUNK.

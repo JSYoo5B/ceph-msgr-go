@@ -9,6 +9,8 @@ func TestCacheOpGoControlIsClosed(t *testing.T) {
 	for _, fields := range [][]string{
 		{"1", "token", "go-ops", "prepare"},
 		{"2", "token", "go-ops", "observe", "flushed"},
+		{"2", "token", "go-ops", "observe", "lost-flushed"},
+		{"2", "token", "go-ops", "observe", "lost-flush-settled"},
 		{"3", "token", "go-ops", "finish"},
 	} {
 		if _, _, ok := cacheOpGoControl(fields); !ok {
@@ -21,6 +23,8 @@ func TestCacheOpGoControlIsClosed(t *testing.T) {
 		{"1", "token", "go-ops", "observe", "foreign"},
 		{"1", "token", "go-ops", "prepare", "flushed"},
 		{"1", "token", "go-ops", "cache-flush"},
+		{"1", "token", "go-ops", "observe", "lost-flush"},
+		{"1", "token", "go-ops", "lost-flushed"},
 		{"1", "token", "go-ops", "finish", "extra"},
 	} {
 		if _, _, ok := cacheOpGoControl(fields); ok {

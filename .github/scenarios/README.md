@@ -26,7 +26,9 @@ the fixture refuses it with any other selector.
 Two further `osd-cache-pools` rows: one selects only
 `TestCephOSDCacheTierOpsIntegration`, the native-only cache-tier operation
 checkpoint, and another selects only `TestCephOSDCacheOpGoIntegration`, the
-Go-originated cache-tier operations with a native observer. Both reuse the
+Go-originated cache-tier operations with a native observer, including its
+lost-reply CACHE_FLUSH subtest
+(`lost_reply_flush_applied_without_caller_replay`). Both reuse the
 already-forwarded `osd_cache_pools` input; the cache-pool fixture accepts only
 those selectors or `TestCephOSDIgnoreCacheIntegration`.
 Two `mds-cephfs-capsend` rows select only

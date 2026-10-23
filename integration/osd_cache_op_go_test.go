@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,6 +31,16 @@ type cacheOpGoObservation struct {
 	} `json:"snapshot"`
 	Dirty      *tierOpsState `json:"dirty"`
 	DirtyPolls []*bool       `json:"dirty_polls"`
+	// The lost-reply flush observation: every bounded poll and its verdict.
+	LostPolls  []cacheOpGoLostPoll `json:"lost_polls"`
+	PollBudget []float64           `json:"poll_budget"`
+	Applied    *bool               `json:"applied"`
+}
+
+type cacheOpGoLostPoll struct {
+	BaseB bool  `json:"base_b"`
+	TierB bool  `json:"tier_b"`
+	Dirty *bool `json:"dirty"`
 }
 
 type cacheOpGoNative struct {
@@ -61,6 +73,9 @@ const (
 	cacheOpGoFlush  = "go-cache-flush"
 	cacheOpGoTry    = "go-cache-try"
 	cacheOpGoAbsent = "go-cache-absent"
+	cacheOpGoLost   = "go-cache-lost-flush"
+	// cacheOpGoLostPolls matches LOST_POLLS in tools/osd_cache_op_go_oracle.py.
+	cacheOpGoLostPolls = 20
 )
 
 func cacheOpGoReadNative(directory string) (cacheOpGoNative, []byte, error) {
@@ -125,6 +140,91 @@ func cacheOpGoTryFlushOutcome(code int32, o cacheOpGoObservation) error {
 	return nil
 }
 
+// cacheOpGoLostFlushApplied is the application claim of the lost-reply flush
+// cell: within the closed poll budget, one independent native poll observed
+// base B, tier B and a valid is_dirty read of false together. It says nothing
+// about how many flush requests reached the OSD: a replayed flush against the
+// now-clean head would leave exactly this state.
+func cacheOpGoLostFlushApplied(o cacheOpGoObservation) error {
+	n := len(o.LostPolls)
+	if n == 0 || n > cacheOpGoLostPolls || len(o.PollBudget) != 2 || o.PollBudget[0] != cacheOpGoLostPolls {
+		return fmt.Errorf("lost-flush observation outside the closed budget (%d polls, budget %v)", n, o.PollBudget)
+	}
+	last := o.LostPolls[n-1]
+	if o.Applied == nil || !*o.Applied || !last.BaseB || !last.TierB || last.Dirty == nil || *last.Dirty {
+		return errors.New("lost flush was not observed as applied within the budget")
+	}
+	if !tierOpsHolds(o.Snapshot.Base, cachePoolChanged) || !tierOpsHolds(o.Snapshot.Tier, cachePoolChanged) {
+		return errors.New("applied lost flush does not hold the tier bytes in both pools")
+	}
+	if o.Dirty == nil || o.Dirty.DirtyResult == nil || *o.Dirty.DirtyResult != 0 || o.Dirty.Dirty == nil || *o.Dirty.Dirty {
+		return errors.New("applied lost flush left the head dirty or unobserved")
+	}
+	return nil
+}
+
+// cacheOpGoLostFlushAccount is caller and connection accounting. It records
+// how often the test invoked Request, which transports were dialed and which
+// OSD transactions were allocated. It does not count outbound messages: a
+// second write of the original TID on the same transport would change none of
+// these values. The selected profile encrypts msgr2 frames, so a test wrapper
+// cannot identify MOSDOp frames in the written bytes.
+type cacheOpGoLostFlushAccount struct {
+	// Request invocations the test made for the flush.
+	CallerInvocations int `json:"go_flush_caller_invocations"`
+	// Transport dials to the target OSD before and after the blocked
+	// connection closed, and dials to any other OSD.
+	DialsWhileBlocked int `json:"target_dials_while_blocked"`
+	DialsAfterClose   int `json:"target_dials_after_close"`
+	OtherOSDDials     int `json:"other_osd_dials"`
+	// The client-wide OSD transaction allocator: the flush and the next
+	// submission, a read-only probe on a fresh connection.
+	FlushTID uint64 `json:"flush_tid"`
+	ProbeTID uint64 `json:"probe_tid"`
+}
+
+// cacheOpGoCallerAccounting checks the observations behind the accounting
+// claim, separate from application: one caller invocation, one transport to
+// the target while the reply was withheld, no observed redial before the
+// explicit probe, no dial to another OSD, and no OSD transaction allocated
+// between the flush and the probe. That no message was written twice is a
+// source inference, not this measurement: Go OSD sessions do not use msgr2
+// session resume, and same-TID resubmission needs an explicit Resubmit input
+// this cell never supplies.
+func cacheOpGoCallerAccounting(a cacheOpGoLostFlushAccount) error {
+	switch {
+	case a.CallerInvocations != 1:
+		return fmt.Errorf("%d flush caller invocations, want exactly one", a.CallerInvocations)
+	case a.DialsWhileBlocked != 1:
+		return fmt.Errorf("%d target transports while the reply was withheld, want one", a.DialsWhileBlocked)
+	case a.DialsAfterClose != 1:
+		return fmt.Errorf("%d target dials after close, want only the probe", a.DialsAfterClose)
+	case a.OtherOSDDials != 0:
+		return fmt.Errorf("%d dials to another OSD", a.OtherOSDDials)
+	case a.FlushTID == 0 || a.ProbeTID != a.FlushTID+1:
+		return fmt.Errorf("OSD transaction %d after flush %d: another submission was allocated", a.ProbeTID, a.FlushTID)
+	}
+	return nil
+}
+
+// cacheOpGoLostFlushUnknown requires the actual local outcome of the withheld
+// flush: an OutcomeUnknownError caused by cancellation, the original
+// submission identity, and no fabricated terminal reply.
+func cacheOpGoLostFlushUnknown(reply cephmsgr.OSDReply, err error, globalID uint64, epoch uint32) error {
+	var unknown *cephmsgr.OutcomeUnknownError
+	if !errors.As(err, &unknown) || !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("withheld flush ended with %v, want OutcomeUnknownError from cancellation", err)
+	}
+	s := reply.Submission
+	if s.Transaction == 0 || s.GlobalID != globalID || s.ClientIncarnation != 0 || s.MapEpoch != epoch || s.Attempt != 0 {
+		return fmt.Errorf("withheld flush lost its submission identity: %+v", s)
+	}
+	if reply.Transaction != 0 || reply.GlobalID != 0 || reply.Code != 0 || reply.Flags != 0 || reply.MapEpoch != 0 || len(reply.RawFront) != 0 || len(reply.Operations) != 0 {
+		return errors.New("withheld flush carries a fabricated terminal reply")
+	}
+	return nil
+}
+
 func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_CACHE_POOLS") != "1" {
 		t.Skip("requires isolated cache-pool fixture")
@@ -177,11 +277,11 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 	})
 	n, err := control(ctx, "prepare")
 	prepared = err == nil || n.Phase != ""
-	if err != nil || n.Phase != "prepared" || len(n.Placements) != 6 || len(n.Seeded) != 2 {
+	if err != nil || n.Phase != "prepared" || len(n.Placements) != 8 || len(n.Seeded) != 3 {
 		t.Fatal("native Go cache-op preparation", n.Phase, n.Error, err)
 	}
 	seeded := n.Seeded[cacheOpGoFlush]
-	for _, name := range []string{cacheOpGoFlush, cacheOpGoTry} {
+	for _, name := range []string{cacheOpGoFlush, cacheOpGoTry, cacheOpGoLost} {
 		s := n.Seeded[name]
 		if !tierOpsHolds(s.Snapshot.Base, cachePoolOriginal) || !tierOpsHolds(s.Snapshot.Tier, cachePoolChanged) || s.Dirty == nil || s.Dirty.Dirty == nil || !*s.Dirty.Dirty {
 			t.Fatal("native seeds differ", name, s)
@@ -367,6 +467,133 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 				t.Fatal("absent controls created a head", o)
 			}
 		}},
+		{"lost_reply_flush_applied_without_caller_replay", func(t *testing.T) {
+			// A separate client and head isolate the withheld reply. Its dial
+			// wrapper counts OSD transports; the OSD transaction allocator is
+			// client-wide, so its next TID follows this flush directly.
+			r := route(cacheOpGoLost)
+			target := fmt.Sprintf("osd.%d", r.ID)
+			account := cacheOpGoLostFlushAccount{}
+			var armed, closed atomic.Bool
+			var targetDials, otherDials atomic.Int32
+			blocked := make(chan struct{}, 1)
+			lostOptions := options
+			// The native observation runs while inbound bytes are withheld;
+			// a longer silence bound keeps the local outcome a cancellation
+			// rather than a keepalive failure.
+			lostOptions.KeepaliveTimeout = 5 * time.Minute
+			dial := options.DialContext
+			lostOptions.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+				_, kind, _ := testcluster.SplitPeer(endpoint)
+				if strings.HasPrefix(kind, "osd.") && kind != target {
+					otherDials.Add(1)
+				}
+				conn, err := dial(ctx, network, endpoint)
+				if err != nil || kind != target {
+					return conn, err
+				}
+				targetDials.Add(1)
+				if closed.Load() {
+					return conn, nil
+				}
+				return &testcluster.LostReplyConn{Conn: conn, Armed: &armed, Closed: make(chan struct{}), SignalBlocked: func() {
+					select {
+					case blocked <- struct{}{}:
+					default:
+					}
+				}}, nil
+			}
+			lost, err := cephmsgr.Dial(ctx, lostOptions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clients = append(clients, lost)
+			globalID := lost.Snapshot().GlobalID
+			o, err := lost.OpenOSD(ctx, cephmsgr.OSDTarget{ID: r.ID, Address: r.Address})
+			if err != nil {
+				t.Fatal("explicit OSD", err)
+			}
+			if targetDials.Load() != 1 {
+				t.Fatal("the target OSD transport was not identified", targetDials.Load())
+			}
+			// Arm only after authentication, then send one correctly flagged
+			// READ-mode flush. It is never reissued.
+			armed.Store(true)
+			callCtx, cancelCall := context.WithCancel(ctx)
+			defer cancelCall()
+			type result struct {
+				reply cephmsgr.OSDReply
+				err   error
+			}
+			finished := make(chan result, 1)
+			request := cacheOpGoRequest(r, cephmsgr.OSDCacheFlush)
+			account.CallerInvocations++
+			go func() {
+				reply, err := o.Request(callCtx, request)
+				finished <- result{reply, err}
+			}()
+			lostReceipt := map[string]any{"native_route": r, "request": request}
+			receipt["lost_flush"] = lostReceipt
+			select {
+			case <-blocked:
+			case got := <-finished:
+				t.Fatal("flush completed before the receive fault took effect", got.reply.Code, got.err)
+			case <-ctx.Done():
+				t.Fatal("receive fault not activated", ctx.Err())
+			}
+			// Application claim: bounded independent native observation while
+			// the local wait is still blocked.
+			applied := observe(t, "lost-flushed")
+			lostReceipt["applied"] = applied
+			if err := cacheOpGoLostFlushApplied(applied); err != nil {
+				t.Fatal(err, applied)
+			}
+			select {
+			case got := <-finished:
+				t.Fatal("withheld flush completed before cancellation", got.reply.Code, got.err)
+			default:
+			}
+			cancelCall()
+			got := <-finished
+			var unknown *cephmsgr.OutcomeUnknownError
+			lostReceipt["submission"], lostReceipt["error"], lostReceipt["unknown_outcome"] = got.reply.Submission, fmt.Sprint(got.err), errors.As(got.err, &unknown)
+			if err := cacheOpGoLostFlushUnknown(got.reply, got.err, globalID, r.Epoch); err != nil {
+				t.Fatal(err)
+			}
+			account.FlushTID = got.reply.Submission.Transaction
+			closed.Store(true)
+			if err := o.Close(); err != nil {
+				t.Fatal(err)
+			}
+			// Settle: a redial would show up as another target transport.
+			time.Sleep(2 * time.Second)
+			account.DialsWhileBlocked = int(targetDials.Load())
+			armed.Store(false)
+			probe, err := lost.OpenOSD(ctx, cephmsgr.OSDTarget{ID: r.ID, Address: r.Address})
+			if err != nil {
+				t.Fatal("fresh explicit OSD", err)
+			}
+			read := cephmsgr.OSDRequest{MapEpoch: r.Epoch, Object: request.Object, IgnoreCache: true, Operations: []cephmsgr.OSDOperation{{Code: cephmsgr.OSDRead, Length: uint64(len(cachePoolChanged) + 32)}}}
+			readback, err := probe.Request(ctx, read)
+			account.ProbeTID = readback.Submission.Transaction
+			account.DialsAfterClose = int(targetDials.Load()) - account.DialsWhileBlocked
+			account.OtherOSDDials = int(otherDials.Load())
+			lostReceipt["account"] = account
+			if err != nil || len(readback.Operations) != 1 || string(readback.Operations[0].Data) != string(cachePoolChanged) {
+				t.Fatal("read-only probe on a fresh connection", err)
+			}
+			// Caller and connection accounting, separate from application.
+			if err := cacheOpGoCallerAccounting(account); err != nil {
+				t.Fatal(err)
+			}
+			settled := observe(t, "lost-flush-settled")
+			lostReceipt["settled"] = settled
+			if !cacheOpGoSame(settled.Snapshot.Base, applied.Snapshot.Base, true) || !cacheOpGoSame(settled.Snapshot.Tier, applied.Snapshot.Tier, true) || dirty(settled) == nil || *dirty(settled) {
+				t.Fatal("lost-flush head changed after the blocked connection closed", settled)
+			}
+			t.Logf("go lost-flush tid=%d gid=%d epoch=%d unknown=%v polls=%d target_dials=%d+%d other_osd_dials=%d probe_tid=%d",
+				account.FlushTID, globalID, r.Epoch, lostReceipt["unknown_outcome"], len(applied.LostPolls), account.DialsWhileBlocked, account.DialsAfterClose, account.OtherOSDDials, account.ProbeTID)
+		}},
 	}
 	for _, step := range steps {
 		if !t.Run(step.name, step.run) {
@@ -431,5 +658,103 @@ func TestCacheOpGoTryFlushOutcome(t *testing.T) {
 		if cacheOpGoTryFlushOutcome(c.code, c.o) == nil {
 			t.Error("contradictory try-flush observation accepted:", name)
 		}
+	}
+}
+
+// TestCacheOpGoLostFlushClaims keeps the application and accounting claims of
+// the lost-reply flush cell independent: each rejects evidence that would
+// satisfy the other.
+func TestCacheOpGoLostFlushClaims(t *testing.T) {
+	flag := func(v bool) *bool { return &v }
+	zero := int32(0)
+	state := func(data []byte) tierOpsState {
+		return tierOpsState{Data: data, Size: uint64(len(data)), Version: 4}
+	}
+	applied := func(polls ...cacheOpGoLostPoll) cacheOpGoObservation {
+		var o cacheOpGoObservation
+		o.Snapshot.Base, o.Snapshot.Tier = state(cachePoolChanged), state(cachePoolChanged)
+		o.Dirty = &tierOpsState{Dirty: flag(false), DirtyResult: &zero}
+		o.LostPolls, o.PollBudget, o.Applied = polls, []float64{cacheOpGoLostPolls, 0.5}, flag(true)
+		return o
+	}
+	done := cacheOpGoLostPoll{BaseB: true, TierB: true, Dirty: flag(false)}
+	pending := cacheOpGoLostPoll{TierB: true, Dirty: flag(true)}
+	if err := cacheOpGoLostFlushApplied(applied(pending, done)); err != nil {
+		t.Fatal("applied lost flush refused", err)
+	}
+	over := make([]cacheOpGoLostPoll, cacheOpGoLostPolls+1)
+	over[len(over)-1] = done
+	notApplied := applied(done)
+	notApplied.Applied = flag(false)
+	baseA := applied(done)
+	baseA.Snapshot.Base = state(cachePoolOriginal)
+	stillDirty := applied(done)
+	stillDirty.Dirty.Dirty = flag(true)
+	unread := applied(done)
+	unread.Dirty.DirtyResult = new(int32)
+	*unread.Dirty.DirtyResult = -5
+	foreignBudget := applied(done)
+	foreignBudget.PollBudget = []float64{100, 0.5}
+	for name, o := range map[string]cacheOpGoObservation{
+		"no poll":                applied(),
+		"over budget":            applied(over...),
+		"observer verdict false": notApplied,
+		"last poll pending":      applied(done, pending),
+		"base still A":           baseA,
+		"dirty final read":       stillDirty,
+		"failed is_dirty read":   unread,
+		"foreign polling budget": foreignBudget,
+	} {
+		if cacheOpGoLostFlushApplied(o) == nil {
+			t.Error("unapplied lost flush accepted:", name)
+		}
+	}
+
+	one := cacheOpGoLostFlushAccount{CallerInvocations: 1, DialsWhileBlocked: 1, DialsAfterClose: 1, FlushTID: 7, ProbeTID: 8}
+	if err := cacheOpGoCallerAccounting(one); err != nil {
+		t.Fatal("single caller invocation refused", err)
+	}
+	for name, mutate := range map[string]func(*cacheOpGoLostFlushAccount){
+		"second caller invocation":        func(a *cacheOpGoLostFlushAccount) { a.CallerInvocations = 2 },
+		"redial while blocked":            func(a *cacheOpGoLostFlushAccount) { a.DialsWhileBlocked = 2 },
+		"extra dial after close":          func(a *cacheOpGoLostFlushAccount) { a.DialsAfterClose = 2 },
+		"dial to another OSD":             func(a *cacheOpGoLostFlushAccount) { a.OtherOSDDials = 1 },
+		"transaction between flush/probe": func(a *cacheOpGoLostFlushAccount) { a.ProbeTID = 9 },
+		"missing flush transaction":       func(a *cacheOpGoLostFlushAccount) { a.FlushTID, a.ProbeTID = 0, 1 },
+	} {
+		a := one
+		mutate(&a)
+		// Stable applied post-state holds in every case and must not
+		// substitute for the accounting.
+		if cacheOpGoLostFlushApplied(applied(done)) != nil || cacheOpGoCallerAccounting(a) == nil {
+			t.Error("contradictory accounting accepted:", name)
+		}
+	}
+
+	identity := cephmsgr.OSDReply{Submission: cephmsgr.OSDSubmission{Transaction: 7, GlobalID: 42, MapEpoch: 28}}
+	canceled := &cephmsgr.OutcomeUnknownError{Cause: context.Canceled}
+	if err := cacheOpGoLostFlushUnknown(identity, canceled, 42, 28); err != nil {
+		t.Fatal("withheld flush outcome refused", err)
+	}
+	fabricated := identity
+	fabricated.Transaction, fabricated.Flags = 7, cephmsgr.OSDReplyOnDisk
+	lostTID := identity
+	lostTID.Submission.Transaction = 0
+	for name, c := range map[string]struct {
+		reply cephmsgr.OSDReply
+		err   error
+	}{
+		"plain cancellation":        {identity, context.Canceled},
+		"keepalive cause":           {identity, &cephmsgr.OutcomeUnknownError{Cause: cephmsgr.ErrKeepaliveTimeout}},
+		"nil error":                 {identity, nil},
+		"fabricated terminal reply": {fabricated, canceled},
+		"lost transaction":          {lostTID, canceled},
+	} {
+		if cacheOpGoLostFlushUnknown(c.reply, c.err, 42, 28) == nil {
+			t.Error("invalid withheld outcome accepted:", name)
+		}
+	}
+	if cacheOpGoLostFlushUnknown(identity, canceled, 43, 28) == nil || cacheOpGoLostFlushUnknown(identity, canceled, 42, 27) == nil {
+		t.Error("foreign identity or epoch accepted")
 	}
 }
