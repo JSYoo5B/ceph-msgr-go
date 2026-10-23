@@ -164,9 +164,10 @@ func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 			Chunk: cephmsgr.OSDChunkInput{SourceLength: length, TargetPool: pools.ids[2], TargetName: target, TargetOffset: targetOffset}}
 	}
 	// send issues one Go request exactly once and checks its signed result,
-	// identity and placement echo. An unknown outcome stops the test; it is
-	// never resent.
-	send := func(t *testing.T, label, source string, op cephmsgr.OSDOperation, want int32) cephmsgr.OSDReply {
+	// identity and placement echo. The per-op result must be zero or the
+	// aggregate unless perOp names the expected value. An unknown outcome
+	// stops the test; it is never resent.
+	send := func(t *testing.T, label, source string, op cephmsgr.OSDOperation, want int32, perOp ...int32) cephmsgr.OSDReply {
 		t.Helper()
 		route := routes[source]
 		if connections[route.ID] == nil {
@@ -199,8 +200,12 @@ func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 		} else if err != nil {
 			t.Fatal("successful reply returned error", label, err)
 		}
-		if result := reply.Operations[0].Result; result != 0 && result != reply.Code || reply.Operations[0].PayloadLength != 0 {
-			t.Fatal("per-op result or output disagrees with the aggregate", label, result, reply.Code)
+		allowed := []int32{0, reply.Code}
+		if len(perOp) != 0 {
+			allowed = perOp
+		}
+		if result := reply.Operations[0].Result; !slices.Contains(allowed, result) || reply.Operations[0].PayloadLength != 0 {
+			t.Fatal("per-op result or output differs", label, result, reply.Code, allowed)
 		}
 		if reply.Code != want {
 			t.Fatalf("%s returned %d, want %d", label, reply.Code, want)
@@ -238,7 +243,10 @@ func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 			send(t, "absent-source", setChunkGoAbsentSource, chunk(8, setChunkGoTarget, 0), -2)
 			send(t, "out-of-range", setChunkGoSourceA, chunk(uint64(len(setChunkGoSourceData))+8, setChunkGoTarget, 0), -34)
 			// Offset zero keeps the absent-target failure on the documented path.
-			send(t, "absent-target", setChunkGoSourceA, chunk(8, setChunkGoAbsentTarget, 0), -2)
+			// The failed reference increment is answered by RefCountCallback's
+			// reply_op_error: the aggregate is the increment's ENOENT while the
+			// per-op result keeps the handler's -EINPROGRESS (observed live).
+			send(t, "absent-target", setChunkGoSourceA, chunk(8, setChunkGoAbsentTarget, 0), -2, -115)
 			source, target := poolObserve(t, ctx, 1, setChunkGoSourceA, "", ""), poolObserve(t, ctx, 2, setChunkGoTarget, "", "")
 			if !setChunkGoSame(source, seededA) || !setChunkGoSame(target, seededTarget) ||
 				poolObserve(t, ctx, 1, setChunkGoAbsentSource, "", "").Code != -2 || poolObserve(t, ctx, 2, setChunkGoAbsentTarget, "", "").Code != -2 {

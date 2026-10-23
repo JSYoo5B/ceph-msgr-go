@@ -150,7 +150,12 @@ Refused before a request slot, monitor readiness or TID is used:
 
 Signed aggregate and per-op results pass through unchanged (for example ENOENT
 for an absent source or target, ERANGE beyond the source size, EOPNOTSUPP for
-an overlapping chunk). The reply carries no output. A lost reply after
+an overlapping chunk). A failed reference increment is answered by
+`RefCountCallback` through `reply_op_error`: the aggregate is the increment's
+code (ENOENT for an absent target), while the per-op result keeps the
+`-EINPROGRESS` (-115) the handler stored before it blocked the source. That
+pair was observed live and is returned as received. The reply carries no
+output. A lost reply after
 transmission is an unknown outcome and is never replayed: on success the OSD
 has already taken the target reference, and the native client's own resend is
 not reproduced. Choosing chunk boundaries, fingerprints, dedup pools, the

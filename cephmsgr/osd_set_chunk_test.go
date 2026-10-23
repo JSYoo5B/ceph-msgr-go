@@ -136,11 +136,14 @@ func TestOSDSetChunkPublicTransportAndUnknownOutcome(t *testing.T) {
 			if !bytes.Contains(sent.Front, append(packed, make([]byte, 28)...)) || !bytes.Contains(sent.Data, []byte("chunk-target")) || binary.LittleEndian.Uint64(sent.Data[8:]) != 8 {
 				t.Fatal("SET_CHUNK operation or indata not transmitted", sent.Data)
 			}
+			// A failed target reference is answered with the increment's code as
+			// the aggregate while the per-op result keeps -EINPROGRESS (observed
+			// live); both pass through unchanged.
 			var reply msgr.MessageData
 			if profile == OSDProfileObjectHash {
-				reply = osdXattrSyntheticReply(t, input.Operations, make([][]byte, 1), []int32{-2}, -2, OSDReplyOnDisk)
+				reply = osdXattrSyntheticReply(t, input.Operations, make([][]byte, 1), []int32{-115}, -2, OSDReplyOnDisk)
 			} else {
-				reply = replyV8ProfileMessage(input, make([][]byte, 1), []int32{-2}, -2, OSDReplyOnDisk, false)
+				reply = replyV8ProfileMessage(input, make([][]byte, 1), []int32{-115}, -2, OSDReplyOnDisk, false)
 			}
 			reply.Transaction = sent.Transaction
 			if err := osdMapsWrite(peer, reply); err != nil {
@@ -149,7 +152,7 @@ func TestOSDSetChunkPublicTransportAndUnknownOutcome(t *testing.T) {
 			got := <-done
 			var server *OSDError
 			var unknown *OutcomeUnknownError
-			if !errors.As(got.e, &server) || server.Code != -2 || errors.As(got.e, &unknown) || got.r.Operations[0].Result != -2 || got.r.Submission.Transaction != sent.Transaction {
+			if !errors.As(got.e, &server) || server.Code != -2 || errors.As(got.e, &unknown) || got.r.Operations[0].Result != -115 || got.r.Submission.Transaction != sent.Transaction {
 				t.Fatal("signed SET_CHUNK refusal lost", got.r, got.e)
 			}
 			// A sent SET_CHUNK whose connection is lost stays unknown.
