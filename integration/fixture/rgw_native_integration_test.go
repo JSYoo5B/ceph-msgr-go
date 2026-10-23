@@ -270,8 +270,15 @@ func rgwNativeGeneration(t *testing.T, ctx context.Context, gateway *rgw.Gateway
 			} `json:"my_name"`
 		} `json:"messenger"`
 	}
-	if json.Unmarshal(output, &dump) != nil || dump.Messenger.Name.Type != "client" || dump.Messenger.Name.Num == 0 || dump.Messenger.Nonce == 0 {
-		t.Fatal("missing native gateway Messenger identity/nonce")
+	if err := json.Unmarshal(output, &dump); err != nil || dump.Messenger.Name.Type != "client" || dump.Messenger.Name.Num == 0 || dump.Messenger.Nonce == 0 {
+		var shape map[string]json.RawMessage
+		_ = json.Unmarshal(output, &shape)
+		var fields []string
+		for field := range shape {
+			fields = append(fields, field)
+		}
+		slices.Sort(fields)
+		t.Fatalf("missing native gateway Messenger identity/nonce: decode=%v fields=%v type=%q num=%d nonce=%d", err, fields, dump.Messenger.Name.Type, dump.Messenger.Name.Num, dump.Messenger.Nonce)
 	}
 	return rgwNativeClientGeneration{Client: "client." + strconv.FormatUint(dump.Messenger.Name.Num, 10), Nonce: dump.Messenger.Nonce}
 }
