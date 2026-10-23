@@ -51,6 +51,25 @@ class NativeResultTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     results.snapshot(root, selector)
 
+    def test_compression_catalog_selection_requires_its_actual_api_parent_pass(self):
+        selector = "^TestCephMsgrCompressionOfferIntegration$"
+        rows = [row for row in plan.load_catalog() if row["params"].get("test_run") == selector]
+        self.assertEqual(len(rows), 1)
+        self.assertIn(rows[0]["id"], plan.load_mandatory())
+        request = results.snapshot(plan.ROOT, rows[0]["params"]["test_run"])
+        name = "TestCephMsgrCompressionOfferIntegration"
+        self.assertEqual(request["expected"], [["api", name]])
+        self.assertTrue(results.verify(request, "Running Ceph test suite: api\n--- PASS: %s (1.00s)\n" % name)["passed"])
+        for text in (
+            "PASS\n",
+            "Running Ceph test suite: api\n--- SKIP: %s (0.00s)\nPASS\n" % name,
+            "Running Ceph test suite: api\n--- PASS: TestCephOSDIOIntegration (1.00s)\n",
+            "Running Ceph test suite: client\n--- PASS: %s (1.00s)\n" % name,
+            "Running Ceph test suite: api\n    --- PASS: %s/child (1.00s)\n" % name,
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(results.verify(request, text)["passed"])
+
     def test_trusted_workflow_captures_expectation_then_gates_process_success(self):
         text = plan.NATIVE_WORKFLOW.read_text(encoding="utf-8")
         self.assertLess(text.index("ref: ${{ github.workflow_sha }}"), text.index("ref: ${{ inputs.ref }}"))
