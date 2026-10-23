@@ -299,6 +299,14 @@ func TestCephOSDCopyFromMultiChunkLateErrorIntegration(t *testing.T) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+	// Successful selected runs keep only the job log, so record the bounded
+	// public observations there. Object names are synthetic fixture names.
+	t.Logf("multi-chunk copy: setting max_chunk=%d applied=%d; reply code=%d per-op=[%d %d] tid=%d global_id=%d epoch=%d version_union=%d; pool=%d pg=%s primary=%d hash=%d",
+		setting.MaxChunk, setting.ChunkApplied, reply.Code, copyResult.Result, suffix.Result, reply.Transaction, reply.GlobalID, reply.MapEpoch,
+		copyResult.CopyFromVersion, base.Pool, target.PGID, target.ID, target.Hash)
+	t.Logf("multi-chunk copy: %d source copy-gets in a %d/%d-entry history: %q", len(receipt.SourceCopyGets), receipt.HistoryAfter.Ops, receipt.HistoryAfter.Size, receipt.SourceCopyGets)
+	t.Logf("multi-chunk copy: %d complete staging enumerations (baseline %d objects); temporary observed=%q; no temporary object at %d ms after reply",
+		len(receipt.StagingPolls), receipt.StagingBefore.Objects, receipt.TemporaryObserved, receipt.CleanupObservedMillis)
 	receipt.DestinationAfter, receipt.SourceAfter = observe(dst), observe(src)
 	// A zero untouched suffix result does not establish suffix execution.
 	if !reflect.DeepEqual(receipt.DestinationAfter, before) || !reflect.DeepEqual(receipt.SourceAfter, source) {
