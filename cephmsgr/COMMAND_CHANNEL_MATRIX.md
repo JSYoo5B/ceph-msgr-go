@@ -64,9 +64,12 @@ records. Absence of independent native acceptance does not establish a defect.
 - **Unavailable target versus protocol refusal** has no per-channel acceptance
   statement in this audit; the named MGR Tell and PG command subtests exercise
   refusals only.
-- **Subscription dependencies of operations** (ServiceMap MON failover, removal
-  timing, large maps; map-version requests across a connected MON death) remain
-  unverified, as stated in the ServiceMap and map-version contracts.
+- **Subscription dependencies of operations:** ServiceMap MON failover, removal
+  timing and large maps remain unverified. A request-specific CRC
+  [map-version connected-Stop test](../integration/fixture/MON_MAP_VERSION_STOP_VALIDATION.md)
+  now preserves actual EOF after a withheld native reply, then checks a new
+  explicit request on another admitted MON. Forced death, a request still
+  unprocessed in the MON and secure-profile observation remain unverified.
 
 Boundaries: wildcard expansion, local admin sockets and HTTP module endpoints
 are not missing Messenger codecs. The active-only MGR rule has a pinned-source

@@ -33,5 +33,21 @@ restarts and the election settles, the version equals the native epoch.
 A frozen connected MON (`docker pause`) ends an in-flight request as an
 unknown outcome at the keepalive timeout; the client moves to another member
 of its map and answers fresh requests there (2026-10-18, two profiles; see
-`integration/fixture/MON_POOL_OP_VALIDATION.md`). A MON that dies outright
-during a request is unverified.
+`integration/fixture/MON_POOL_OP_VALIDATION.md`).
+
+A request-specific CRC lost-reply barrier now verifies connected-MON Stop
+in Linux/amd64 CRC/AES IPv4 host and CRC/aes256k IPv6 container profiles
+(`TestCephMonMapVersionConnectedStopIntegration`, 2026-10-23). The relay
+observes the exact request and matching native reply, discards only that
+reply, then preserves real peer EOF when its connected MON stops. The pending
+call ends unknown/EOF; one new explicit call uses another admitted MON,
+matches its native epoch and has the next client-wide handle. TIDs are
+session-local and may be reused on the new connection. The original query
+is not retransmitted. The MON restarts and the native full quorum settles.
+[The receipt](../integration/fixture/MON_MAP_VERSION_STOP_VALIDATION.md)
+separates the first failed TID assumption from the corrected result.
+
+This is a server-answered, locally pending query under orderly provider Stop.
+Forced SIGKILL, a request still unprocessed in the MON and secure-profile
+request-specific observation remain unverified; Stop is not substituted for
+those acceptance boundaries.
