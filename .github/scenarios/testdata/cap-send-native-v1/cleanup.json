@@ -1,0 +1,23 @@
+{
+  "data": {
+    "attempted": true,
+    "blocklist_restored": true,
+    "client_identity_removed": true,
+    "completed": true,
+    "config_restored": true,
+    "layout_restored": true,
+    "namespace_checked": true,
+    "namespace_restored": true,
+    "native_identity_removed": true,
+    "osd_config_restored": true
+  },
+  "filesystem": {
+    "attempted": true,
+    "cephfs_data_verified": true,
+    "completed": true,
+    "filesystem_removed": true,
+    "identity_removed": true,
+    "pools_removed": true
+  },
+  "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964"
+}
