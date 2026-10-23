@@ -88,14 +88,25 @@ resubmission, erasure-coded placement, compound vectors, per-op flags and any
 extent, version or input field are refused before a request slot, monitor
 readiness or TID is used.
 
-Every handler changes the tier object: flush writes the head to the base pool
-and clears dirty, try-flush may return EAGAIN when it races an update, evict
-deletes a clean unpinned head (EBUSY when dirty or watched, EPERM when
-pinned), and pin/unpin change the pin flag (ENOENT on an absent head). The
-signed aggregate and per-op results are returned unchanged. A lost reply after
-transmission is an unknown outcome and is never replayed; there is no retry
-loop for EAGAIN. Choosing which objects to flush or evict, promotion, the tier
-agent, hit sets, overlays and SET_CHUNK manifests remain caller or later work.
+Dirty flush writes the head to the base pool and clears dirty; clean flush
+or try-flush can be a no-op. Evict deletes a clean unpinned head, refuses dirty
+or watched heads with EBUSY and pinned heads with EPERM. An absent object may
+return ENOENT before a handler. Pin/unpin change the pin flag and return
+ENOENT on an absent head. Internal EAGAIN from the pinned flush path is consumed
+by execute_ctx without a terminal reply; the OSD requeues its retained request.
+This is distinct from caller resubmission. The product never automatically
+resubmits a cache request or reinterprets an actual signed server errno.
+
+All successful cache operations require ONDISK while preserving native READ
+or WRITE encoding. ACK-only and ONNVRAM-only success leave the sent outcome
+unknown, with original submission and raw reply retained. A signed negative
+aggregate remains an OSDError even without ONDISK; untouched zero per-op fields
+do not establish operation execution. The pinned no-op/read and transaction
+commit paths can both return ACK+ONDISK, so those bits do not identify a state
+transition or establish crash durability. Operation-specific independent
+observations are required; see the [completion table and native evidence](../../integration/fixture/OSD_CACHE_COMPLETION_VALIDATION.md).
+Choosing which objects to flush or evict, promotion, the tier agent, hit sets,
+overlays and SET_CHUNK manifests remain caller or later work.
 
 The [fresh native vectors](testdata/cache-op-native-README.md) cover all seven
 request shapes on v6, v8 and untraced v9, and the Go encoder matches each
