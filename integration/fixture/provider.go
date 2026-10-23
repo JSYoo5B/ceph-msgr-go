@@ -47,6 +47,9 @@ type fixtureCluster struct {
 	// rbdBase is the RBD base acceptance scope (owned pool and image).
 	rbdBase    *rbdBaseScope
 	cachePools *osdCachePoolScope
+	// setChunkSelected records that the native-only SET_CHUNK checkpoint
+	// was requested; it is never selected twice per fixture.
+	setChunkSelected bool
 }
 
 func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
