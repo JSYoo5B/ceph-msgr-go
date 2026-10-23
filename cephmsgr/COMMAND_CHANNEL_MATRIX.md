@@ -17,7 +17,7 @@ that works does not prove another channel: each row stands alone.
 | Channel | Public API | Wire message | Target rule | Contract / validation | Integration tests |
 | --- | --- | --- | --- | --- | --- |
 | MON command | `Client.MonCommand` | MonCommand (50) / reply (51) | Connected MON session | [SPEC.md](../SPEC.md), [native applied mutation](../integration/fixture/MON_COMMAND_OUTCOME_VALIDATION.md) | `TestCephConfigCommandsIntegration`, `TestCephCommandErrorsAndBinaryOutputIntegration`, `TestCephBinaryBulkInputIntegration`, `TestCephReadOnlyPermissionsIntegration`, `TestCephCommandDescriptionsIntegration`, `TestCephLargeMonitorReplyIntegration`, `TestCephLostMutationReplyIntegration`, `TestCephAppliedMonitorMutationIsNotReplayedIntegration`, `TestCephMonitorWriteStallIntegration` |
-| MGR command | `Client.MgrCommand` | MgrCommand (0x709) / reply (0x70a) | Active MGR from MgrMap | [SPEC.md](../SPEC.md) | `TestCephMgrModulesIntegration`, `TestCephCommandDescriptionsIntegration`, `TestCephAppliedManagerMutationIsNotReplayedIntegration`, `TestCephManagerSetupFailoverIntegration`, `TestCephNaturalManagerFailoverIntegration`, `TestCephManagerReceiveStallIntegration`, `TestCephCloseDuringManagerHandshakeIntegration` |
+| MGR command | `Client.MgrCommand` | MgrCommand (0x709) / reply (0x70a) | Active MGR from MgrMap | [SPEC.md](../SPEC.md), [native applied mutation](../integration/fixture/MGR_COMMAND_OUTCOME_VALIDATION.md) | `TestCephMgrModulesIntegration`, `TestCephCommandDescriptionsIntegration`, `TestCephAppliedManagerMutationIsNotReplayedIntegration`, `TestCephManagerSetupFailoverIntegration`, `TestCephNaturalManagerFailoverIntegration`, `TestCephManagerReceiveStallIntegration`, `TestCephCloseDuringManagerHandshakeIntegration` |
 | Current MON/MGR Tell | `Client.MonTell`, `Client.MgrTell` | Tell command (97) / reply (98) | Currently connected MON / active MGR | [SPEC.md](../SPEC.md) | `TestCephTellRecoveryIntegration`, `TestCephTellDescriptionsIntegration` |
 | Exact MON Tell | `Client.MonTellTo` | Tell command (97) / reply (98) | Caller names one MON; no fallback | [SPEC.md](../SPEC.md) | `TestCephNamedMonitorTellIntegration` |
 | Exact MGR Tell | `Client.MgrTellTo` | Tell command (97) / reply (98) | Caller names the active MGR; standbys refused locally (pinned source constraint, never rerouted) | [MGR_TELL_CONTRACT.md](MGR_TELL_CONTRACT.md), [validation](../integration/fixture/MGR_NAMED_TELL_VALIDATION.md) | `TestCephNamedManagerTellIntegration` (subtests: exact active, standby refusal, signed unknown command and read-only denial, mixed shared session, ticket renewal keeps the daemon, failover needs a new name, cancel before send and close) |
@@ -36,7 +36,7 @@ context admission and recovery (`TestCephContextAdmissionIntegration`,
 | Channel / selector | Profile and opt-in | Independent observer and outcome | Remaining boundary |
 | --- | --- | --- | --- |
 | MON / `TestCephAppliedMonitorMutationIsNotReplayedIntegration` | Ordinary disposable three-MON/two-MGR fixture; actual first receipt uses existing broad `mon-mgr.aes.ip4.crc.host`. Local focused reproduction may set `CEPH_MSGR_TEST_RUN=^TestCephAppliedMonitorMutationIsNotReplayedIntegration$` | Closed Python librados config-key get on an initially absent owned key; raw signed code, binary bytes and status retained for absence, A, distinct B, recovered B and fresh native cleanup absence. Caller remains `OutcomeUnknownError`; CRC test instrumentation binds the original and recovery command TID/sequence to distinct authenticated connections | [Run 39926008773](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39926008773) passed this exact test on `fa71fb23a132297a07209d1f8e6564bdec24c492`; see the validation record. Local complete writes are not server execution counts. Secure-mode frames have no decoded TID receipt; no universal exactly-once claim |
-| MGR / `TestCephAppliedManagerMutationIsNotReplayedIntegration` | Ordinary disposable MON/MGR fixture | Existing Go observer confirms applied balancer mode A, a distinct overwrite B and B after replacement; padded local writes remain one; unknown caller outcome retained | Not independently native-observed, and the size probe does not parse TID/session identity; native restoration/absence still needs implementation |
+| MGR / `TestCephAppliedManagerMutationIsNotReplayedIntegration` | Ordinary disposable three-MON/two-MGR fixture; first target is existing broad `mon-mgr.aes.ip4.crc.host`. Local focused reproduction may set `CEPH_MSGR_TEST_RUN=^TestCephAppliedManagerMutationIsNotReplayedIntegration$` | Closed Python librados views per observation: `balancer status` (MGR effective mode), `config get` who=mgr key=mgr/balancer/mode (MON effective value) and `config dump` entries for that option (explicit presence), bracketed by unchanged active MGR name/GID. Baseline captured before A; A while its reply is withheld, distinct B before replacement, B after replacement under a different GID; caller remains `OutcomeUnknownError`. CRC test instrumentation binds the original and recovery MGR command TID/sequence to distinct connections. One native restoration (`config rm` or `config set` of the original entry) followed by fresh views | No exact-head native receipt is recorded in this file; see the validation record and PR. Local complete writes are not server execution counts. Secure-mode frames have no decoded TID receipt; the running MGR's module cache after a native `config rm` is source-inferred, not observed; no universal exactly-once claim |
 | Current/exact MON and MGR Tell | Existing Tell selectors above and named-MGR profile prerequisites | Existing native read-only version/catalog comparisons, target changes/refusals, cancellation and Close | No applied mutating command with independent state, original TID and owned native restoration established here; audit a suitable pinned daemon-local operation before adding a case |
 | OSD / PG / MDS command | Existing exact-target selectors and opt-ins above | Existing native command output/error comparison and sent cancellation/Close uncertainty | Those scenarios do not establish applied-mutation/reply-loss no-replay; a suitable operation and native owned-state/restoration cell remain #63 work |
 
@@ -52,21 +52,24 @@ These #63 cells remain separate from the implemented wire paths and historical
 records. Absence of independent native acceptance does not establish a defect.
 
 - **Lost reply after remote execution** already has applied MON and MGR
-  scenarios. The MON scenario now has a closed independent native observer;
-  MGR still uses this Go product as its observer. Current/exact Tell and PG
+  scenarios. Both now have closed independent native observers. Current/exact
+  Tell and PG
   have no independently observed applied-mutation case here. OSD and MDS cover
   cancellation/Close with an unknown outcome, not a reply lost after execution.
 - **Native pre/postcondition cross-check and owned cleanup per mutating
-  channel** remain for MGR command, Tell, OSD, PG and MDS command.
+  channel** remain for Tell, OSD, PG and MDS command.
 - **Cancellation, shutdown and bounded large replies per channel:** large
   replies are tested for the MON channel only; named MGR Tell covers
   cancel-before-send and Close.
 - **Unavailable target versus protocol refusal** has no per-channel acceptance
   statement in this audit; the named MGR Tell and PG command subtests exercise
   refusals only.
-- **Subscription dependencies of operations** (ServiceMap MON failover, removal
-  timing, large maps; map-version requests across a connected MON death) remain
-  unverified, as stated in the ServiceMap and map-version contracts.
+- **Subscription dependencies of operations:** ServiceMap MON failover, removal
+  timing and large maps remain unverified. A request-specific CRC
+  [map-version connected-Stop test](../integration/fixture/MON_MAP_VERSION_STOP_VALIDATION.md)
+  now preserves actual EOF after a withheld native reply, then checks a new
+  explicit request on another admitted MON. Forced death, a request still
+  unprocessed in the MON and secure-profile observation remain unverified.
 
 Boundaries: wildcard expansion, local admin sockets and HTTP module endpoints
 are not missing Messenger codecs. The active-only MGR rule has a pinned-source

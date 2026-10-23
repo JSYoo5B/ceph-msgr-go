@@ -157,6 +157,19 @@ runs with `err_to_stderr` only, so the receipt's stderr holds exactly those
 error lines. The receipt `rbd-base-result.json` keeps the request ID, the
 journaled mutation, the native output and the bounded process result.
 
+The Go acceptance deliberately acknowledges the first HeaderUpdate and omits
+the second acknowledgement. After receiving the second notification, it
+checks the native action and cumulative state before and after raw
+`rbd.get_size` calls for the head and the unchanged snapshot. Both state
+snapshots must still end at `resized-acknowledged`, and the control action
+must remain outstanding. A published second completion or a completed
+control action makes the intermediate-state assertion fail. The new head
+size is already visible through the OSD while native resize completion has
+not been published; final native librados class outputs independently match
+both intermediate reads. This does not reinterpret a RequestLock timeout
+or a journal append's unknown outcome as success. See
+[RBD_NOTIFY_PENDING_VALIDATION.md](RBD_NOTIFY_PENDING_VALIDATION.md).
+
 ### Why proceed signals stay files
 
 ceph-testcontainers-go v0.3.0 can feed phased records to a running worker

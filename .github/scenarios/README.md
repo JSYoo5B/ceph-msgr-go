@@ -11,12 +11,16 @@ commit cancels its previous basic checks. Push events do not repeat PR CI.
 
 `catalog.json` preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
-Three further `osd` rows use the four-OSD erasure-capacity topology
+Four further `osd` rows use the four-OSD erasure-capacity topology
 (`osd_replicas` value `4`): one selects only `TestCephOSDErasureK2M2Integration`,
 another only `TestCephOSDErasureOptimizedK2M2Integration` and
 `TestCephOSDErasureOptimizedK2M2FailoverIntegration`, and the third only
 `TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration` and
-`TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration`. That value travels in the
+`TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration`. The fourth
+selects only `TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration`: one
+explicit caller resubmission of an independently observed applied APPEND after
+primary replacement, with a fresh-transaction append as the byte/version control.
+That value travels in the
 already-forwarded `osd_replicas` input, so it needs no new workflow parameter;
 the fixture refuses it with any other selector.
 Two further `osd-cache-pools` rows: one selects only
@@ -59,7 +63,7 @@ in periodic main verification. The required-test gate binds it to
 cannot pass. The [selected native receipt](../../integration/fixture/MSGR_COMPRESSION_VALIDATION.md)
 records no negotiated compression and successful MON/OSD commands; it does
 not prove that negotiation frames were exchanged or compressed frames worked.
-The catalog has 80 native rows in total.
+The catalog has 81 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

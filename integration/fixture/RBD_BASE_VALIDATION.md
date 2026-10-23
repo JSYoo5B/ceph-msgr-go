@@ -45,6 +45,11 @@ otherwise) in `rbd-base-results.json`.
 
 ## Results
 
+The later [pending-notification checkpoint](RBD_NOTIFY_PENDING_VALIDATION.md)
+adds raw head/snapshot size observations before the unacknowledged native
+resize publishes completion. The historical runs below did not contain
+that checkpoint and are not evidence for its intermediate-state assertion.
+
 Both selected configurations passed on 2026-10-16 (KST), all five subtests,
 no skips, no retries. The tested source is HEAD
 `source-1` plus only this change set,

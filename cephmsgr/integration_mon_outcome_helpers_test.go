@@ -82,9 +82,11 @@ func requireNativeMonValue(t *testing.T, ctx context.Context, control, token, ph
 }
 
 // This probe decodes complete uncompressed CRC frames supplied to net.Conn.Write,
-// not TCP packet boundaries. It records local writes, never server executions.
-// Secure frames cannot yield this receipt and retain the separate size probe.
+// not TCP packet boundaries. It records local MON and MGR command writes, never
+// server executions. Secure frames cannot yield this receipt and retain the
+// separate size probe.
 type monOutcomeWrite struct {
+	Type        uint16
 	Connection  uint64
 	Peer        string
 	Transaction uint64
@@ -145,12 +147,12 @@ func (c *monOutcomeConn) Write(p []byte) (int, error) {
 	c.record.mu.Lock()
 	defer c.record.mu.Unlock()
 	if parseErr != nil || reader.Len() != 0 || len(c.record.writes) >= 64 {
-		c.record.err = errors.New("CRC MON write did not decode as one bounded frame")
+		c.record.err = errors.New("CRC command write did not decode as one bounded frame")
 		return n, err
 	}
-	if message.Type == msgr.MonCommandMessage {
+	if message.Type == msgr.MonCommandMessage || message.Type == msgr.MgrCommandMessage {
 		c.record.writes = append(c.record.writes, monOutcomeWrite{
-			Connection: c.connection, Peer: c.peer, Transaction: message.Transaction,
+			Type: message.Type, Connection: c.connection, Peer: c.peer, Transaction: message.Transaction,
 			Sequence: message.Sequence, FrontSHA256: sha256.Sum256(message.Front),
 			DataSHA256: sha256.Sum256(message.Data), DataBytes: len(message.Data),
 			Written: n, Complete: n == len(p) && err == nil,
@@ -175,7 +177,7 @@ func requireMonOutcomeWrite(t *testing.T, probe *monOutcomeWrites, front, data [
 	t.Helper()
 	writes, err := probe.matching(front, data)
 	if err != nil || len(writes) != 1 || !writes[0].Complete || writes[0].Transaction == 0 || writes[0].Sequence == 0 {
-		t.Fatal("expected exactly one complete identified CRC MON command write", writes, err)
+		t.Fatal("expected exactly one complete identified CRC command write", writes, err)
 	}
 	return writes[0]
 }

@@ -242,22 +242,41 @@ type rbdWatchEventEvidence struct {
 	RawFrontHex       string
 	RawDataHex        string
 	Acknowledged      bool
+	ReceivedAfterNS   int64
+	AckDisposition    string
+	AckCompletedNS    int64  `json:",omitempty"`
+	AckError          string `json:",omitempty"`
+}
+
+// rbdResizePendingEvidence separates metadata visibility from the native
+// action's completion. The before/after snapshots must still end at the
+// first resize: no completed second resize may race ahead of either read.
+type rbdResizePendingEvidence struct {
+	NotifyID                   uint64
+	Before, After              nativeRBDWatchState
+	NativeControlPendingBefore bool
+	NativeControlPendingAfter  bool
+	ReadStartedAfterNS         int64
+	ReadCompletedAfterNS       int64
+	HeadSize                   uint64
+	SnapshotSize               uint64
 }
 
 type rbdBaseEvidence struct {
-	Token        string
-	Pool         string
-	PoolID       int64
-	GoIdentity   string
-	GoGlobalID   uint64
-	ImageID      string
-	SnapshotID   uint64
-	Requests     []rbdRequestEvidence
-	ClassOutputs map[string]string
-	Events       []rbdWatchEventEvidence
-	WatchState   *nativeRBDWatchState
-	WatchResult  *nativeRBDWatchResult
-	Timings      map[string]string
+	Token         string
+	Pool          string
+	PoolID        int64
+	GoIdentity    string
+	GoGlobalID    uint64
+	ImageID       string
+	SnapshotID    uint64
+	Requests      []rbdRequestEvidence
+	ClassOutputs  map[string]string
+	Events        []rbdWatchEventEvidence
+	ResizePending *rbdResizePendingEvidence
+	WatchState    *nativeRBDWatchState
+	WatchResult   *nativeRBDWatchResult
+	Timings       map[string]string
 }
 
 // Test-only RBD class encodings.
@@ -978,6 +997,7 @@ func TestCephRBDBaseIntegration(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+		received := map[uint64]time.Time{}
 		next := func(t *testing.T, label string) cephmsgr.OSDWatchEvent {
 			t.Helper()
 			wait, stop := context.WithTimeout(ctx, 20*time.Second)
@@ -986,16 +1006,25 @@ func TestCephRBDBaseIntegration(t *testing.T) {
 			if err != nil {
 				t.Fatal(label, err)
 			}
+			received[event.NotifyID] = time.Now()
 			if event.Opcode != cephmsgr.OSDWatchNotification || event.Cookie != w.Cookie() || event.NotifyID == 0 || event.NotifierGlobalID != opened.NativeGlobalID ||
 				event.GlobalID != gid || event.Source.ID != r.Primary || !bytes.Equal(event.Payload, rbdHeaderUpdateNotify) {
 				t.Fatalf("%s: librbd header update notify differs: opcode=%d cookie=%d notifier=%d payload=%x", label, event.Opcode, event.Cookie, event.NotifierGlobalID, event.Payload)
 			}
 			return event
 		}
-		addEvent := func(event cephmsgr.OSDWatchEvent, acknowledged bool) {
-			evidence.Events = append(evidence.Events, rbdWatchEventEvidence{Opcode: event.Opcode, Cookie: event.Cookie, NotifyID: event.NotifyID, NotifierGlobalID: event.NotifierGlobalID,
+		addEvent := func(event cephmsgr.OSDWatchEvent, disposition string, ackErr error) {
+			n := rbdWatchEventEvidence{Opcode: event.Opcode, Cookie: event.Cookie, NotifyID: event.NotifyID, NotifierGlobalID: event.NotifierGlobalID,
 				ReturnCode: event.ReturnCode, GlobalID: event.GlobalID, SessionGeneration: event.SessionGeneration, PayloadHex: hex.EncodeToString(event.Payload),
-				RawFrontHex: hex.EncodeToString(event.RawFront), RawDataHex: hex.EncodeToString(event.RawData), Acknowledged: acknowledged})
+				RawFrontHex: hex.EncodeToString(event.RawFront), RawDataHex: hex.EncodeToString(event.RawData), ReceivedAfterNS: received[event.NotifyID].Sub(started).Nanoseconds(),
+				AckDisposition: disposition, Acknowledged: disposition == "submitted" && ackErr == nil}
+			if disposition == "submitted" {
+				n.AckCompletedNS = time.Since(started).Nanoseconds()
+				if ackErr != nil {
+					n.AckDisposition, n.AckError = "failed", ackErr.Error()
+				}
+			}
+			evidence.Events = append(evidence.Events, n)
 		}
 		ping, err := w.Ping(ctx, r.Epoch)
 		record("watch_ping_1", r, watchRequest, ping, err)
@@ -1005,7 +1034,7 @@ func TestCephRBDBaseIntegration(t *testing.T) {
 		proceed(1)
 		first := next(t, "acknowledged resize")
 		ack, err := w.Acknowledge(ctx, r.Epoch, first, rbdResponseAck)
-		addEvent(first, err == nil)
+		addEvent(first, "submitted", err)
 		record("notify_ack", r, watchRequest, ack, err)
 		if err != nil {
 			t.Fatal("Go acknowledgement of the librbd notify", err)
@@ -1026,10 +1055,46 @@ func TestCephRBDBaseIntegration(t *testing.T) {
 		}
 		proceed(2)
 		second := next(t, "unacknowledged resize")
-		addEvent(second, false)
+		addEvent(second, "intentionally_omitted", nil)
 		if second.NotifyID == first.NotifyID {
 			t.Fatal("second librbd notify reused the first notify ID")
 		}
+		pending := &rbdResizePendingEvidence{NotifyID: second.NotifyID}
+		evidence.ResizePending = pending
+		checkPending := func(label string, state *nativeRBDWatchState, controlPending *bool) {
+			t.Helper()
+			if err := readMDSFreshJSON(statePath, state); err != nil {
+				t.Fatal(label, err)
+			}
+			select {
+			case <-controlDone:
+				t.Fatalf("%s: native resize control already completed: %v", label, controlErr)
+			default:
+				*controlPending = true
+			}
+			if state.Token != token || state.RequestID != opened.RequestID || state.NativeGlobalID != opened.NativeGlobalID ||
+				state.Phase != "resized-acknowledged" || len(state.Phases) != 2 || state.Phases[1].Size != plan.ResizeAck {
+				t.Fatal(label, "native resize completion raced ahead of the pending-metadata observation", *state)
+			}
+		}
+		checkPending("before pending metadata reads", &pending.Before, &pending.NativeControlPendingBefore)
+		pending.ReadStartedAfterNS = time.Since(started).Nanoseconds()
+		pendingHead, _ := call(t, "get_size_head_notify_pending", header, "get_size", rbdLE64(rbdNoSnap))
+		d := &rbdDecoder{data: pendingHead}
+		pendingOrder := d.u8()
+		pending.HeadSize = d.u64()
+		if d.done() != nil || pendingOrder != uint8(order) || pending.HeadSize != plan.ResizeNoAck {
+			t.Fatal("new head size is not visible while the native resize notifier is pending", pending.HeadSize)
+		}
+		pendingSnap, _ := call(t, "get_size_snapshot_notify_pending", header, "get_size", rbdLE64(snapID))
+		d = &rbdDecoder{data: pendingSnap}
+		pendingOrder = d.u8()
+		pending.SnapshotSize = d.u64()
+		if d.done() != nil || pendingOrder != uint8(order) || pending.SnapshotSize != snapshot.Size {
+			t.Fatal("snapshot size changed while the native resize notifier is pending", pending.SnapshotSize)
+		}
+		pending.ReadCompletedAfterNS = time.Since(started).Nanoseconds()
+		checkPending("after pending metadata reads", &pending.After, &pending.NativeControlPendingAfter)
 		unacknowledged, err := waitRBDWatchState(ctx, statePath, "resized-unacknowledged", controlDone, &controlErr)
 		if err != nil {
 			t.Fatal(err)
@@ -1068,6 +1133,8 @@ func TestCephRBDBaseIntegration(t *testing.T) {
 		if timedOut := strings.Count(string(result.Process.Stderr), "update notification timed-out"); timedOut != 1 {
 			t.Fatalf("native librbd reported %d timed-out header notifies, want 1: %q", timedOut, result.Process.Stderr)
 		}
+		sameAsNative(t, final.ClassCalls, 1, header, "get_size", rbdLE64(rbdNoSnap), pendingHead)
+		sameAsNative(t, final.ClassCalls, 2, header, "get_size", rbdLE64(snapID), pendingSnap)
 		if watchers := listWatchers(t, "list_watchers_librbd_closed"); len(watchers) != 1 || watchers[0].Cookie != w.Cookie() || uint64(watchers[0].NameNumber) != gid {
 			t.Fatal("librbd close left header watchers other than Go", watchers)
 		}
@@ -1091,5 +1158,6 @@ func TestCephRBDBaseIntegration(t *testing.T) {
 			t.Fatal("Go unwatch left header watchers", watchers)
 		}
 		t.Logf("librbd watch cookie %d (global ID %d) listed with Go cookie %d; acknowledged resize %v, unacknowledged resize %v; notify IDs %d and %d", librbdCookie, opened.NativeGlobalID, w.Cookie(), acknowledgedResize, unacknowledgedResize, first.NotifyID, second.NotifyID)
+		t.Logf("notify %d intentionally unacknowledged: pending get_size head=%d snapshot=%d in %s; native control pending before/after, final native class outputs match", second.NotifyID, pending.HeadSize, pending.SnapshotSize, time.Duration(pending.ReadCompletedAfterNS-pending.ReadStartedAfterNS))
 	})
 }
