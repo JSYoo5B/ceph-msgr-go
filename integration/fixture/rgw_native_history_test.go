@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -15,17 +16,20 @@ import (
 func TestRGWNativeHistoryRequiresAttributedDecodedObjectReception(t *testing.T) {
 	const client = "client.42"
 	good := `{"ops":[{"description":"osd_op(client.42.0:9 3.0 3:abcd:::marker_small-binary:head [writefull 0~1031] snapc 0=[] ondisk+write e7)","type_data":{"client_info":{"client":"client.42","tid":9},"events":[{"event":"reached_pg"},{"event":"done"}]}}]}`
-	objects := map[string]bool{"marker_small-binary": true}
+	objects := map[string]int64{"marker_small-binary": 3}
 	operations, err := rgwNativeHistory([]byte(good), client, objects)
 	if err != nil || len(operations) != 1 || operations[0].TID != 9 {
 		t.Fatalf("native received operation: %+v %v", operations, err)
 	}
 	for name, raw := range map[string]string{
-		"independent oracle": strings.ReplaceAll(good, "client.42", "client.43"),
-		"mismatched TID":     strings.Replace(good, `"tid":9`, `"tid":8`, 1),
-		"partial object":     strings.ReplaceAll(good, "marker_small-binary", "prefix_marker_small-binary"),
-		"no PG receipt":      strings.ReplaceAll(good, "reached_pg", "queued_for_pg"),
-		"undecoded":          strings.ReplaceAll(good, "osd_op(client.42.0:9", "osd_op(undecoded client.42.0:9"),
+		"independent oracle":  strings.ReplaceAll(good, "client.42", "client.43"),
+		"mismatched TID":      strings.Replace(good, `"tid":9`, `"tid":8`, 1),
+		"partial object":      strings.ReplaceAll(good, "marker_small-binary", "prefix_marker_small-binary"),
+		"no PG receipt":       strings.ReplaceAll(good, "reached_pg", "queued_for_pg"),
+		"undecoded":           strings.ReplaceAll(good, "osd_op(client.42.0:9", "osd_op(undecoded client.42.0:9"),
+		"same OID wrong pool": strings.ReplaceAll(good, "3.0 3:", "4.0 4:"),
+		"wrong PG pool":       strings.ReplaceAll(good, "3.0 3:", "4.0 3:"),
+		"wrong hobject pool":  strings.ReplaceAll(good, "3.0 3:", "3.0 4:"),
 	} {
 		t.Run(name, func(t *testing.T) {
 			operations, err := rgwNativeHistory([]byte(raw), client, objects)
@@ -45,6 +49,31 @@ func TestRGWNativeHistoryRequiresAttributedDecodedObjectReception(t *testing.T) 
 	}
 	if _, err := rgwNativeHistory(tooMany, client, objects); err == nil {
 		t.Fatal("oversized native history admitted")
+	}
+}
+
+func TestRGWNativePutReceptionBindsIndexClassesToIndexPoolAndShard(t *testing.T) {
+	makeOp := func(tid uint64, pg, object, vector string) map[string]any {
+		return map[string]any{"description": "osd_op(client.42.0:" + strconv.FormatUint(tid, 10) + " " + pg + ".0 " + pg + ":abcd:::" + object + ":head [" + vector + "] snapc 0=[] ondisk+write e7)",
+			"type_data": map[string]any{"client_info": map[string]any{"client": "client.42", "tid": tid}, "events": []map[string]string{{"event": "reached_pg"}}}}
+	}
+	write := makeOp(1, "7", "marker_small-binary", "writefull 0~1031")
+	for name, ops := range map[string][]map[string]any{
+		"correct index":       {write, makeOp(2, "6", ".dir.bucket.9", "call rgw.bucket_prepare_op"), makeOp(3, "6", ".dir.bucket.9", "call rgw.bucket_complete_op")},
+		"class on head":       {write, makeOp(2, "7", "marker_small-binary", "call rgw.bucket_prepare_op"), makeOp(3, "7", "marker_small-binary", "call rgw.bucket_complete_op")},
+		"wrong index pool":    {write, makeOp(2, "8", ".dir.bucket.9", "call rgw.bucket_prepare_op"), makeOp(3, "8", ".dir.bucket.9", "call rgw.bucket_complete_op")},
+		"wrong method suffix": {write, makeOp(2, "6", ".dir.bucket.9", "call rgw.bucket_prepare_op_suffix"), makeOp(3, "6", ".dir.bucket.9", "call rgw.bucket_complete_op_suffix")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, err := json.Marshal(map[string]any{"ops": ops})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ready, err := rgwNativePutPublished(raw, []rgwNativeClientGeneration{{Client: "client.42"}}, "marker_small-binary", "bucket", 7, 6)
+			if err != nil || ready != (name == "correct index") {
+				t.Fatalf("bound native index reception: ready=%t error=%v", ready, err)
+			}
+		})
 	}
 }
 

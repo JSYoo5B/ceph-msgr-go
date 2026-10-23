@@ -163,41 +163,46 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	// process after PUT so its newly authenticated client IDs are included.
 	// This local socket query does not submit an OSD oracle operation.
 	generation := rgwNativeGeneration(t, ctx, gateway)
-	head := bucketInfo.Marker + "_" + key
-	history, err := rgwNativePollHistory(ctx, func(read context.Context) []byte {
-		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
-	}, func(output []byte) (bool, error) {
-		return rgwNativePutPublished(output, generation, head, bucketInfo.ID)
-	})
-	if err != nil {
-		t.Fatal("observe complete gateway PUT reception before oracle traffic:", err)
-	}
+	// Pool discovery is MON metadata traffic, not an OSD data/index oracle.
+	// Bind both PG and hobject pool IDs before accepting request reception.
 	pools, err := cluster.Pools(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	dataPool, indexPool := "", ""
+	var dataPoolID, indexPoolID int64
 	for _, pool := range pools {
 		if strings.HasSuffix(pool.Name, ".rgw.buckets.data") {
 			dataPool = pool.Name
+			dataPoolID = pool.ID
 		}
 		if strings.HasSuffix(pool.Name, ".rgw.buckets.index") {
 			indexPool = pool.Name
+			indexPoolID = pool.ID
 		}
 	}
-	if dataPool == "" || indexPool == "" {
+	if dataPool == "" || indexPool == "" || dataPoolID <= 0 || indexPoolID <= 0 || dataPoolID == indexPoolID {
 		t.Fatal("missing actual RGW data/index pools")
 	}
+	head := bucketInfo.Marker + "_" + key
+	history, err := rgwNativePollHistory(ctx, func(read context.Context) []byte {
+		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
+	}, func(output []byte) (bool, error) {
+		return rgwNativePutPublished(output, generation, head, bucketInfo.ID, dataPoolID, indexPoolID)
+	})
+	if err != nil {
+		t.Fatal("observe complete gateway PUT reception before oracle traffic:", err)
+	}
 	indexObjects := rgwNativeIndexObjects(t, ctx, control, indexPool, bucketInfo.ID)
-	objects := map[string]bool{head: true}
+	objects := map[string]int64{head: dataPoolID}
 	for _, object := range indexObjects {
-		objects[object] = true
+		objects[object] = indexPoolID
 	}
 	received := rgwNativeAttributedHistory(t, history, generation, objects)
 	write, prepare, complete := false, false, false
 	var putReceipt []rgwNativeOperation
 	for _, op := range received {
-		isWrite, isPrepare, isComplete := rgwNativePutKinds(op, head)
+		isWrite, isPrepare, isComplete := rgwNativePutKinds(op, head, bucketInfo.ID, dataPoolID, indexPoolID)
 		write, prepare, complete = write || isWrite, prepare || isPrepare, complete || isComplete
 		if isWrite || isPrepare || isComplete {
 			putReceipt = append(putReceipt, op)
@@ -261,7 +266,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
 	}, func(output []byte) (bool, error) {
 		for _, op := range rgwNativeAttributedHistory(t, output, deleteGeneration, objects) {
-			if strings.Contains(op.Description, ":"+head+":") && strings.Contains(op.Description, "call rgw.obj_remove") {
+			if op.Object == head && op.PoolID == dataPoolID && rgwNativeCall(op, "obj_remove") {
 				return true, nil
 			}
 		}
@@ -277,7 +282,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 		// Tentacle's RGW removes the head through the native rgw.obj_remove
 		// class method, not a client DELETE opcode. Do not conflate S3 DELETE
 		// input with its RADOS wire operation.
-		isRemove := strings.Contains(op.Description, ":"+head+":") && strings.Contains(op.Description, "call rgw.obj_remove")
+		isRemove := op.Object == head && op.PoolID == dataPoolID && rgwNativeCall(op, "obj_remove")
 		remove = remove || isRemove
 		if isRemove {
 			deleteReceipt = append(deleteReceipt, op)
@@ -375,7 +380,7 @@ func rgwNativeGeneration(t *testing.T, ctx context.Context, gateway *rgw.Gateway
 	return dump.Messengers
 }
 
-func rgwNativeAttributedHistory(t *testing.T, output []byte, clients []rgwNativeClientGeneration, objects map[string]bool) []rgwNativeOperation {
+func rgwNativeAttributedHistory(t *testing.T, output []byte, clients []rgwNativeClientGeneration, objects map[string]int64) []rgwNativeOperation {
 	t.Helper()
 	var received []rgwNativeOperation
 	for _, client := range clients {

@@ -80,6 +80,10 @@ func (s rgwNativeS3) request(ctx context.Context, method, path string, payload [
 type rgwNativeOperation struct {
 	Client      string   `json:"client"`
 	TID         uint64   `json:"tid"`
+	PoolID      int64    `json:"pool_id"`
+	Object      string   `json:"object"`
+	PGID        string   `json:"pgid"`
+	MapEpoch    uint64   `json:"map_epoch"`
 	Description string   `json:"description"`
 	Events      []string `json:"events"`
 }
@@ -87,7 +91,7 @@ type rgwNativeOperation struct {
 // Match native MOSDOp descriptions only when the client identity, request TID,
 // complete object name and reached_pg event agree. The observation is server
 // reception, not an independent proof of the operation's result or durability.
-func rgwNativeHistory(raw []byte, client string, objects map[string]bool) ([]rgwNativeOperation, error) {
+func rgwNativeHistory(raw []byte, client string, objects map[string]int64) ([]rgwNativeOperation, error) {
 	if len(raw) > 32<<20 || !regexp.MustCompile(`^client\.[1-9][0-9]*$`).MatchString(client) {
 		return nil, errors.New("invalid RGW native history bound or identity")
 	}
@@ -109,6 +113,9 @@ func rgwNativeHistory(raw []byte, client string, objects map[string]bool) ([]rgw
 		return nil, errors.New("invalid RGW native history schema or count")
 	}
 	var result []rgwNativeOperation
+	targetPattern := regexp.MustCompile(`^([0-9]+):[0-9a-f]+:::([^:]+):head$`)
+	pgPattern := regexp.MustCompile(`^([0-9]+)\.[0-9a-f]+$`)
+	epochPattern := regexp.MustCompile(` e([0-9]+)\)$`)
 	for _, op := range history.Ops {
 		if op.Data.Client.Client != client || op.Data.Client.TID == 0 || len(op.Description) > 16384 || len(op.Data.Events) > 128 ||
 			!strings.HasPrefix(op.Description, "osd_op("+client+".") {
@@ -118,16 +125,22 @@ func rgwNativeHistory(raw []byte, client string, objects map[string]bool) ([]rgw
 		if !strings.HasPrefix(op.Description, "osd_op("+identity) {
 			continue
 		}
-		matched := false
-		for object := range objects {
-			if strings.Contains(op.Description, ":"+object+":") {
-				matched = true
-			}
-		}
-		if !matched {
+		parts := strings.SplitN(op.Description, " ", 4)
+		if len(parts) != 4 {
 			continue
 		}
-		entry := rgwNativeOperation{Client: client, TID: op.Data.Client.TID, Description: op.Description}
+		target, pg, epoch := targetPattern.FindStringSubmatch(parts[2]), pgPattern.FindStringSubmatch(parts[1]), epochPattern.FindStringSubmatch(op.Description)
+		if target == nil || pg == nil || epoch == nil {
+			continue
+		}
+		pool, poolErr := strconv.ParseInt(target[1], 10, 64)
+		pgPool, pgErr := strconv.ParseInt(pg[1], 10, 64)
+		mapEpoch, epochErr := strconv.ParseUint(epoch[1], 10, 64)
+		wantedPool, owned := objects[target[2]]
+		if poolErr != nil || pgErr != nil || epochErr != nil || !owned || pool != wantedPool || pgPool != wantedPool {
+			continue
+		}
+		entry := rgwNativeOperation{Client: client, TID: op.Data.Client.TID, PoolID: pool, Object: target[2], PGID: parts[1], MapEpoch: mapEpoch, Description: op.Description}
 		reached := false
 		for _, event := range op.Data.Events {
 			if event.Event == "reached_pg" {
@@ -165,21 +178,26 @@ func rgwNativePollHistory(parent context.Context, fetch func(context.Context) []
 	}
 }
 
-func rgwNativePutKinds(operation rgwNativeOperation, head string) (write, prepare, complete bool) {
-	isHead := strings.Contains(operation.Description, ":"+head+":")
+func rgwNativePutKinds(operation rgwNativeOperation, head, bucketID string, dataPoolID, indexPoolID int64) (write, prepare, complete bool) {
+	isHead := operation.Object == head && operation.PoolID == dataPoolID
+	isIndex := operation.PoolID == indexPoolID && (operation.Object == ".dir."+bucketID || strings.HasPrefix(operation.Object, ".dir."+bucketID+"."))
 	return isHead && (strings.Contains(operation.Description, "write ") || strings.Contains(operation.Description, "writefull ")),
-		strings.Contains(operation.Description, "call rgw.bucket_prepare_op"),
-		strings.Contains(operation.Description, "call rgw.bucket_complete_op")
+		isIndex && rgwNativeCall(operation, "bucket_prepare_op"),
+		isIndex && rgwNativeCall(operation, "bucket_complete_op")
 }
 
-func rgwNativePutPublished(output []byte, clients []rgwNativeClientGeneration, head, bucketID string) (bool, error) {
+func rgwNativeCall(operation rgwNativeOperation, method string) bool {
+	return regexp.MustCompile(`(?:\[|,)call rgw\.` + regexp.QuoteMeta(method) + `(?:[ ,\]]|$)`).MatchString(operation.Description)
+}
+
+func rgwNativePutPublished(output []byte, clients []rgwNativeClientGeneration, head, bucketID string, dataPoolID, indexPoolID int64) (bool, error) {
 	// The later oracle must independently confirm these exact observed shard
 	// names. This extraction only lets the receiver observation precede every
 	// native data/index readback, without assuming the bucket's shard count.
-	objects := map[string]bool{head: true}
+	objects := map[string]int64{head: dataPoolID}
 	pattern := regexp.MustCompile(`:::(\.dir\.` + regexp.QuoteMeta(bucketID) + `(?:\.[0-9]+)?):head`)
-	for _, match := range pattern.FindAllSubmatch(output, -1) {
-		objects[string(match[1])] = true
+	for _, match := range pattern.FindAllSubmatch(output, 4096) {
+		objects[string(match[1])] = indexPoolID
 	}
 	write, prepare, complete := false, false, false
 	for _, client := range clients {
@@ -188,7 +206,7 @@ func rgwNativePutPublished(output []byte, clients []rgwNativeClientGeneration, h
 			return false, err
 		}
 		for _, operation := range operations {
-			w, p, c := rgwNativePutKinds(operation, head)
+			w, p, c := rgwNativePutKinds(operation, head, bucketID, dataPoolID, indexPoolID)
 			write, prepare, complete = write || w, prepare || p, complete || c
 		}
 	}
