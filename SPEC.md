@@ -66,11 +66,11 @@ constitute complete RADOS, RBD or CephFS clients.
 | --- | --- | --- |
 | Messenger/CephX | `internal/msgr/`, `internal/cephx/`, `internal/session/`; native role/key/mode profiles | A wire feature does not prove a release family or every security/platform combination; declared masks are in [FEATURE_LEDGER.md](internal/session/FEATURE_LEDGER.md), nested auth exchanges and source-attributed evidence in [EXCHANGE_LEDGER.md](internal/cephx/EXCHANGE_LEDGER.md) |
 | MON/MGR commands | `cephmsgr/api.go`, `cephmsgr/named_mon.go`, [MGR Tell](cephmsgr/MGR_TELL_CONTRACT.md) | No typed management layer, standby command routing or automatic mutation replay |
-| MGR service registration | [opt-in lifecycle](cephmsgr/MGR_SERVICE_CONTRACT.md), [native codec vectors](internal/msgr/testdata/mgr-service-native-README.md) and selected live open/report/close profiles | Selected [recovery](integration/fixture/MGR_SERVICE_RECOVERY_VALIDATION.md), [unconfirmed close](integration/fixture/MGR_SERVICE_CLOSE_VALIDATION.md), [applied metadata](integration/fixture/MGR_SERVICE_METADATA_VALIDATION.md), [native field comparison](integration/fixture/MGR_SERVICE_COMPARISON_VALIDATION.md) and [initial unavailable-MGR setup](integration/fixture/MGR_SERVICE_UNAVAILABLE_VALIDATION.md); zero-daemon cold bootstrap and additional profiles remain unverified; no implicit re-registration |
+| MGR service registration | [opt-in lifecycle](cephmsgr/MGR_SERVICE_CONTRACT.md), [native codec vectors](internal/msgr/testdata/mgr-service-native-README.md) and selected live open/report/close profiles | Selected [recovery](integration/fixture/MGR_SERVICE_RECOVERY_VALIDATION.md), [unconfirmed close](integration/fixture/MGR_SERVICE_CLOSE_VALIDATION.md), [applied metadata](integration/fixture/MGR_SERVICE_METADATA_VALIDATION.md), [native field comparison](integration/fixture/MGR_SERVICE_COMPARISON_VALIDATION.md) and [initial unavailable-MGR setup](integration/fixture/MGR_SERVICE_UNAVAILABLE_VALIDATION.md) and [CLIENT configuration boundaries](integration/fixture/MGR_SERVICE_CONFIGURATION_VALIDATION.md); zero-daemon cold bootstrap and additional profiles remain unverified; no implicit re-registration |
 | MON subscriptions | Log/config/digest and raw map APIs in `cephmsgr/` | No authorization ACK, complete event history or autonomous map application |
 | OSD operations | [core](internal/osd/CONTRACT.md), [completion](internal/osd/O4_CONTRACT.md), [EC](internal/osd/ERASURE_CONTRACT.md) | Explicit target/profile/version/feature requirements; no automatic placement or universal durability claim |
 | MDS/CephFS transport | [MDS wire](internal/mds/CONTRACT.md), [CephFS](cephmsgr/MDS_CEPHFS_CONTRACT.md) | Consumer-owned state, selected recovery profiles and incomplete high-level filesystem semantics |
-| Compression | [compression contract and plan](internal/msgr/COMPRESSION_PLAN.md) | Snappy/zstd codec/frame unit coverage; live CRC declined-offer test only (pinned daemons decline compression toward clients, so live compressed frames are unreachable from a client); zlib and secure compression deferred |
+| Compression | [compression contract and plan](internal/msgr/COMPRESSION_PLAN.md) | Snappy/zstd codec/frame unit coverage; selected live CRC MON/OSD sessions report no negotiated compression and working commands, without capturing negotiation frames; live compressed frames, zlib and secure compression remain unverified or deferred |
 | Native development tools | `integration/fixture/`, `tools/`, native-vector provenance | Product interoperability, fixture capability and higher-level consumer behaviour are separate results |
 
 A later passing retry does not explain an earlier failure. Long-duration failures
@@ -276,8 +276,9 @@ session, partial credential state or tickets before AUTH_DONE and transcript che
 CRC connections can negotiate implemented snappy/zstd compression. Secure-mode
 compression and zlib are deferred. Bound decompression and each logical segment;
 small uncompressed frames can coexist with compressed frames. Native codec/frame
-round trips are not live compression interoperability, and the declined-offer
-live test shows only that the offer does not break MON/OSD connections. See
+round trips are not live compression interoperability. The live CRC test
+observes no negotiated compression and working MON/OSD commands; it does not
+capture negotiation frames or prove that an enabled request was declined. See
 [compression details](internal/msgr/COMPRESSION_PLAN.md).
 
 Preserve feature negotiation, addresses, nonces, request/session identity,

@@ -1179,6 +1179,23 @@
     "mds_cephfs_completion": "1",
     "test_run": "^TestCephMDSCephFSMultiReconnectIntegration$"
    }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephMsgrCompressionOfferIntegration$"
+   }
   }
  ],
  "fixed_jobs": [

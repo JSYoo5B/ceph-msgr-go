@@ -171,6 +171,10 @@ func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 		t.Fatalf("native observation lacks the report: entry=%s status=%s", native.ServiceEntry, native.ServiceStatusEntry)
 	}
 
+	t.Run("configuration_changes", func(t *testing.T) {
+		testMgrServiceConfiguration(t, ctx, c, svc, service, daemon, metadata, busy, task)
+	})
+
 	// Acknowledged close removes the daemon natively.
 	if err := svc.Close(ctx); err != nil {
 		t.Fatal("close:", err)
