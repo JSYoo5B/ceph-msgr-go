@@ -175,9 +175,21 @@ Artifact retention follows the purpose of each upload:
 
 | Artifact category | Retention | Current uploads |
 | --- | --- | --- |
-| General results | 7 days | Scenario result JSON for requested and periodic runs; successful Windows interoperability evidence |
+| General results | 7 days | Scenario result/test JSON for requested and periodic runs; reviewed explicit cap-send success bundles; successful Windows interoperability evidence |
 | Failure diagnostics | 14 days | Failed native, race and unit-test logs/metadata; Windows evidence when the job fails |
 | Deployment evidence | 30 days | Policy for future deployment workflows; no deployment workflow currently uploads evidence |
+
+Successful explicit cap-send rows additionally request the closed
+[schema-v1 native evidence bundle](NATIVE_EVIDENCE.md). Its manifest joins
+tested/controller SHA, execution source, run ID/attempt, scenario/selector,
+normalized requested profile, configured image, observed runtime facts and
+included-file hashes. Only reviewed numeric/outcome/cleanup projections are
+uploaded for seven days; raw metadata, logs, configuration and credentials
+remain excluded. `result.json` distinguishes a native test PASS from incomplete
+required evidence, and the pilot's final gate requires both collection and
+upload. Other rows keep their previous retention boundary. This new trusted
+collector becomes available to PR-comment execution after its workflow lands
+on the default branch; pre-merge native requests keep the older runner.
 
 Diagnostic and Windows evidence uploads use compression level 9. Periodic runs
 use the same retention policy as requested runs. These settings affect new

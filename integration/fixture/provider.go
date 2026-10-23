@@ -50,6 +50,8 @@ type fixtureCluster struct {
 	// setChunkSelected records that the native-only SET_CHUNK checkpoint
 	// was requested; it is never selected twice per fixture.
 	setChunkSelected bool
+	// mgrServiceConfig owns only the selected active daemon runtime overrides.
+	mgrServiceConfig *mgrServiceConfigScope
 }
 
 func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
@@ -59,6 +61,7 @@ func (c *fixtureCluster) Terminate(ctx context.Context, opts ...testcontainers.T
 		<-c.done
 	}
 	var errs []error
+	errs = append(errs, c.restoreMgrServiceConfig(ctx))
 	errs = append(errs, c.finishMDSFresh(ctx), c.finishRBDBase(ctx), c.finishOSDCachePools(ctx))
 	// Restore paused containers before requesting their orderly cleanup.
 	for _, pause := range c.pauses {
