@@ -35,6 +35,18 @@ func (w erasureWidth) size() int { return w.k + w.m }
 // (k + min(1, m-1)). The tests read the actual value and never lower it.
 func (w erasureWidth) minSize() int { return w.k + min(1, w.m-1) }
 
+// nonprimaryShards is the pinned OSDMonitor::enable_pool_ec_optimizations
+// derivation for a plugin without a chunk mapping (isa, jerasure): the data
+// shards 1..k-1 may not be primary. A pool without optimizations has none.
+// The scenarios compare it with the native map; they never substitute it.
+func (w erasureWidth) nonprimaryShards(optimized bool) []int {
+	var shards []int
+	for shard := 1; optimized && shard < w.k; shard++ {
+		shards = append(shards, shard)
+	}
+	return shards
+}
+
 // erasureFacts are the authenticated native pool and map facts a scenario
 // derives its expectations from.
 type erasureFacts struct {
@@ -150,8 +162,8 @@ func erasureFactsFrom(dump, profile []byte, created poolReceipt, width erasureWi
 		facts.nonprimary = append(facts.nonprimary, shard)
 	}
 	slices.Sort(facts.nonprimary)
-	if optimized != (len(facts.nonprimary) > 0) {
-		return erasureFacts{}, fmt.Errorf("nonprimary_shards %s disagree with optimized=%v", pool.Nonprimary, optimized)
+	if !slices.Equal(facts.nonprimary, width.nonprimaryShards(optimized)) {
+		return erasureFacts{}, fmt.Errorf("nonprimary_shards %s disagree with optimized=%v %s", pool.Nonprimary, optimized, width)
 	}
 	for _, osd := range osdMap.OSDs {
 		if osd.Up == 1 && osd.In == 1 {

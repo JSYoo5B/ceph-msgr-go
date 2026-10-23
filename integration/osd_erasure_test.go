@@ -39,6 +39,13 @@ func TestCephOSDErasureJerasureIntegration(t *testing.T) {
 // and control shard all come from the native pool and map, not from k=2,m=1.
 func TestCephOSDErasureK2M2Integration(t *testing.T) { erasureScenario(t, erasureK2M2, false, "isa") }
 
+// The optimized isa k=2,m=2 pool on the four-OSD topology, without faults:
+// the native map must report nonprimary shard {1} for size 4, and the native
+// primary must hold a primary-eligible shard before any Go I/O.
+func TestCephOSDErasureOptimizedK2M2Integration(t *testing.T) {
+	erasureScenario(t, erasureK2M2, true, "isa")
+}
+
 func erasureScenario(t *testing.T, width erasureWidth, optimized bool, plugin string) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)

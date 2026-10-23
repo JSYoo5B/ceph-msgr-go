@@ -205,16 +205,72 @@ test. The three k=2,m=1 pools of the shared scenario (default isa,
 optimized, jerasure) logged size 3 and min_size 2 under the new fact
 checks; the failover and snapshot tests do not use those checks. The k=2,m=2 test was skipped there as intended.
 
+## Optimized k=2,m=2 on four OSDs (2026-10-23)
+
+The four-OSD topology admits a second closed selector,
+`^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$`, on legacy-v6 or
+replicated-pg-v8; its first selector stays the default. The pool oracle's
+`k2m2` width now accepts `optimized` (isa only). After enabling
+`allow_ec_optimizations` it reads the pool's `nonprimary_shards` back and
+requires the set the pinned `OSDMonitor::enable_pool_ec_optimizations`
+derives for a plugin without a chunk mapping: the data shards `1..k-1`, so
+`{1}` for k=2,m=2. A different set fails the creation; nothing is repaired.
+The Go fact check compares the authenticated map with the same derivation,
+for k=2,m=1 as well. Neither replaces native placement: every shard, epoch
+and primary still comes from the native `osd map`/`osd dump` oracle.
+
+`TestCephOSDErasureOptimizedK2M2Integration` runs the baseline cases of the
+k=2,m=2 test on the optimized pool. `TestCephOSDErasureOptimizedK2M2FailoverIntegration`
+runs the existing failover phases, now parametrized by width: it checks the
+pool facts and the subject's native placement first, and it takes the
+nonprimary set from the map instead of assuming shard 1.
+
+Observed in replicated-pg-v8, four BlueStore OSDs, secure AES256K, IPv4,
+container runtime, at `3fbdfd3435444b62dce81db4a531724079e78b52`
+([run 39884774385](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39884774385)):
+
+- Both pools: type 3, plugin `isa` (cluster default `isa`), k=2, m=2, size 4,
+  min_size 3, `ec_overwrites` set, `nonprimary_shards` `{1}`, the same
+  `choose_indep 0 type osd` rule as the nonoptimized pool.
+- Baseline: placement at epoch 50, PG `4.0`, acting and up `[3 1 0 2]`,
+  primary osd.3 on shard 0 (control shard 1). MON admission of a fresh
+  client, WRITEFULL (ONDISK), partial READ, partial WRITE, APPEND,
+  SETXATTR/GETXATTR, STAT, TRUNCATE and DELETE matched the native readback.
+  OMAP SETVALS was refused with `-95`. NO_SHARD and the control shard got no
+  reply within five seconds (unknown outcome), and a cross-client
+  watch/notify completed with one ACK reply.
+- Failover pool (eight PGs): the subject's PG `3.5` listed 4 objects, and
+  4 single-entry pages agreed with the single page. With nonprimary osd.3
+  (shard 1) killed, the acting set was `[2 NONE 0 1]` and the shard-0 primary
+  osd.2 reconstructed the read. After osd.3's restart and clean PGs, osd.2
+  (shard 0) was killed. Epoch 36 transiently named osd.3 on nonprimary
+  shard 1 (acting `[NONE 3 0 1]`, pure CRUSH order). At epoch 38 the PG had a
+  pg_temp and osd.0 led on parity shard 2. The first read with
+  `PrimaryFirst{PoolSize: 4, NonprimaryShards: 1}` (wire shard 1) returned
+  the seeded bytes. The same request without primary-first numbering, and a
+  request naming the old shard 0, got no reply within five seconds.
+- Every killed OSD was restarted and the fixture waited for clean PGs;
+  owned pool and profile removal was confirmed by each test's cleanup.
+
+With four OSDs and size 4, every OSD holds a shard of every PG, so a lost
+OSD leaves an empty position instead of a remap. One loss leaves three
+shards, which is min_size. The new primary therefore always held parity
+shard 2 (wire shard 1, the same wire value as k=2,m=1). Parity shard 3
+(wire shard 2) can lead only after shards 0 and 2 are both lost, which
+leaves the PG below min_size, so that permutation entry is not observed.
+
 Not verified for k=2,m=2: legacy-v6, other security, address or runtime
-profiles, jerasure, `allow_ec_optimizations` and primary-first numbering,
-degraded reads or writes, failover, listing, snapshots and any in-flight
-mutation or epoch-change case. The unit-level numeric-domain test of
-`OSDPrimaryFirst` (PoolSize 2..128) is synthetic and does not accept those
-combinations as EC configurations.
+profiles, jerasure, wire shard 2 of the size-4 primary-first permutation,
+degraded writes, snapshots and any in-flight mutation or epoch-change case
+(the failover phases are reads only and resend only the idempotent read
+after a newer map). The unit-level numeric-domain test of `OSDPrimaryFirst`
+(PoolSize 2..128) is synthetic and does not accept those combinations as EC
+configurations.
 
 Not claimed: other EC profiles or plugins (beyond k=2,m=1 with isa and
 jerasure, with and without `allow_ec_optimizations` for isa, and the
-non-optimized isa k=2,m=2 baseline above), EC partial-read or direct shard reads of optimized pools, MSR rules, writes while
+isa k=2,m=2 baseline with and without `allow_ec_optimizations` and the
+optimized k=2,m=2 failover reads above), EC partial-read or direct shard reads of optimized pools, MSR rules, writes while
 degraded beyond the WRITEFULL case above,
 backfill progress, compound vectors
 beyond the cases above, and replica (shard) reads: a balanced read routed to

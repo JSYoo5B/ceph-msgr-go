@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"os"
 	"strings"
@@ -32,14 +33,15 @@ func TestOSDTopologyVocabularySeparatesDaemonsFromReplication(t *testing.T) {
 func TestOSDTopologyErasureCapacityProfile(t *testing.T) {
 	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "4"}
 	for _, osdProfile := range []string{"legacy-v6", "replicated-pg-v8"} {
-		for _, selector := range []string{"", osdErasureWidthSelector} {
+		for _, selector := range append([]string{""}, osdErasureWidthSelectors...) {
 			env := copyProfileEnv(base)
 			env["CEPH_MSGR_TEST_OSD_PROFILE"], env["CEPH_MSGR_TEST_RUN"] = osdProfile, selector
 			p, err := loadProfile(func(name string) string { return env[name] })
 			if err != nil {
 				t.Fatal(osdProfile, selector, err)
 			}
-			if p.testRun != osdErasureWidthSelector || p.testTimeout != "30m" || p.containerEnvironment()["CEPH_MSGR_TEST_OSD_REPLICAS"] != "4" ||
+			want := cmp.Or(selector, "^TestCephOSDErasureK2M2Integration$")
+			if p.testRun != want || p.testTimeout != "30m" || p.containerEnvironment()["CEPH_MSGR_TEST_OSD_REPLICAS"] != "4" ||
 				p.testEnvironment("/out", "")["CEPH_MSGR_TEST_OSD_REPLICAS"] != "4" {
 				t.Fatalf("four-OSD profile %+v", p)
 			}
@@ -52,6 +54,8 @@ func TestOSDTopologyErasureCapacityProfile(t *testing.T) {
 		"request-v9":        {"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-request-v9-reply-v8"},
 		"broad selector":    {"CEPH_MSGR_TEST_RUN": "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
 		"legacy EC test":    {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureIntegration$"},
+		"k2m1 failover":     {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedFailoverIntegration$"},
+		"joined selectors":  {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasure(K2M2|OptimizedK2M2(Failover)?)Integration$"},
 		"soak":              {"CEPH_MSGR_TEST_OSD_SOAK": "4m"},
 		"MON freeze":        {"CEPH_MSGR_TEST_MON_FREEZE": "1"},
 		"cache pools":       {"CEPH_MSGR_TEST_OSD_CACHE_POOLS": "1"},

@@ -20,18 +20,29 @@ import (
 // degraded PG (one non-primary shard's OSD killed) reconstructs the bytes; after
 // the primary is killed the new primary holds a different shard, and only a
 // request carrying that new shard is answered.
-func TestCephOSDErasureFailoverIntegration(t *testing.T) { erasureFailoverScenario(t, false) }
+func TestCephOSDErasureFailoverIntegration(t *testing.T) {
+	erasureFailoverScenario(t, erasureK2M1, false, "")
+}
 
 // With allow_ec_optimizations, raw shard 1 (the second data shard) may never be
 // primary: when the primary is lost the MON picks a parity shard instead, and
 // the caller's placement must carry that shard.
 func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
-	erasureFailoverScenario(t, true)
+	erasureFailoverScenario(t, erasureK2M1, true, "")
 }
 
-func erasureFailoverScenario(t *testing.T, optimized bool) {
-	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
-		t.Skip("k=2,m=1 with overwrites needs three BlueStore OSDs")
+// The same phases on an optimized isa k=2,m=2 pool over the four-OSD
+// topology: size 4, min_size 3 and nonprimary shard {1}, all read back from
+// the native map. One killed OSD leaves three shards (min_size), so the PG
+// stays active; after the primary's loss a parity shard's OSD must lead and
+// the request carries that shard in primary-first numbering for pool size 4.
+func TestCephOSDErasureOptimizedK2M2FailoverIntegration(t *testing.T) {
+	erasureFailoverScenario(t, erasureK2M2, true, "isa")
+}
+
+func erasureFailoverScenario(t *testing.T, width erasureWidth, optimized bool, plugin string) {
+	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
+		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
 	}
 	fixture, request, hash := osdFixture, osdObjectRequest, false
 	if isReplicatedPGFixtureProfile() {
@@ -44,18 +55,25 @@ func erasureFailoverScenario(t *testing.T, optimized bool) {
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
-		if r := nativePool(t, cleanup, "cleanup", nil); !r.PoolsRemoved {
+		r := nativePool(t, cleanup, "cleanup", nil)
+		if !r.PoolsRemoved {
 			t.Error("owned erasure-coded pool was not removed")
+		}
+		if slices.Contains(r.ECProfilesRemaining, width.profile) {
+			t.Error("owned erasure-code profile was not removed", width.profile)
 		}
 	})
 	pg := 1
 	if hash {
 		pg = 8
 	}
-	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "optimized": optimized})
-	if created.PoolType != 3 || created.ECOptimized != optimized {
-		t.Fatal("pool is not erasure-coded")
+	created := nativePool(t, ctx, "create", map[string]any{"slot": 1, "pg_num": pg, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": optimized, "plugin": plugin})
+	if created.PoolType != 3 || created.ECOptimized != optimized || created.Width != width.name || created.ErasureCodeProfile != width.profile {
+		t.Fatal("pool is not the requested erasure-coded shape", width, created.PoolType, created.ECOptimized, created.Width, created.ErasureCodeProfile)
 	}
+	facts := erasurePoolMapFacts(t, ctx, c, created, width, optimized)
+	t.Logf("EC pool %d %s optimized=%v size=%d min_size=%d nonprimary shards %v owned OSDs %v",
+		created.PoolID, width, optimized, facts.size, facts.minSize, facts.nonprimary, facts.owned)
 	payloads := map[string][]byte{}
 	var routes = map[string]osdFixtureOracle{}
 	for i := 0; i < 6; i++ {
@@ -73,6 +91,7 @@ func erasureFailoverScenario(t *testing.T, optimized bool) {
 	}
 	subject := "ec-object-0"
 	route := routes[subject]
+	facts.checkPlacement(t, route)
 	// With eight PGs the subject's PG may hold no other seeded object; add
 	// objects that share it so the PG listing spans several pages.
 	for i, mates := 0, 0; hash && mates < 3; i++ {
@@ -237,20 +256,24 @@ func erasureFailoverScenario(t *testing.T, optimized bool) {
 			// nonprimary shard's OSD (pure CRUSH order); that OSD then has the
 			// MON set a primary-first pg_temp, and the next map names a parity
 			// shard. Wait for that settled placement.
-			if fresh.ID != old.ID && fresh.ID >= 0 && (!optimized || fresh.Shard != 1) {
+			nonprimary := slices.Contains(facts.nonprimary, int(fresh.Shard))
+			if fresh.ID != old.ID && fresh.ID >= 0 && !nonprimary {
 				break
 			}
-			if optimized && fresh.ID >= 0 && fresh.Shard == 1 {
-				t.Logf("transient: epoch %d names osd.%d on nonprimary shard 1 (acting %v)", fresh.Epoch, fresh.ID, fresh.Acting)
+			if fresh.ID >= 0 && nonprimary {
+				t.Logf("transient: epoch %d names osd.%d on nonprimary shard %d (acting %v)", fresh.Epoch, fresh.ID, fresh.Shard, fresh.Acting)
 			}
 			if time.Now().After(deadline) {
 				t.Fatal("no new primary was chosen")
 			}
 			time.Sleep(2 * time.Second)
 		}
-		t.Logf("primary osd.%d shard %d -> osd.%d shard %d at epoch %d pg_temp %v (acting %v -> %v)", old.ID, old.Shard, fresh.ID, fresh.Shard, fresh.Epoch, fresh.PGTemp, old.Acting, fresh.Acting)
-		if optimized && old.Shard == 1 {
-			t.Fatal("an optimized EC pool started with its nonprimary shard 1 as primary")
+		t.Logf("primary osd.%d shard %d -> osd.%d shard %d at epoch %d pg_temp %v primary-first %+v (acting %v -> %v)", old.ID, old.Shard, fresh.ID, fresh.Shard, fresh.Epoch, fresh.PGTemp, routePrimaryFirst(fresh), old.Acting, fresh.Acting)
+		if slices.Contains(facts.nonprimary, int(old.Shard)) {
+			t.Fatal("an optimized EC pool started with a nonprimary shard as primary", old.Shard, facts.nonprimary)
+		}
+		if fresh.Replicas != facts.size || fresh.Nonprimary != len(facts.nonprimary) {
+			t.Fatal("placement after failover changed the pool facts", fresh.Replicas, fresh.Nonprimary)
 		}
 		// The OSD silently discards a request older than its PG's current
 		// interval, and the map may still move while peering settles. Like

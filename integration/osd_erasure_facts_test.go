@@ -86,7 +86,10 @@ func TestErasureFactsFollowTheNativeWidth(t *testing.T) {
 	if f, err := erasureFactsFrom(dump, codes, receipt, erasureK2M2, true); err != nil || !slices.Equal(f.nonprimary, []int{1}) {
 		t.Fatal("optimized facts", f, err)
 	}
-	for _, shards := range []string{"{}", "{0}", "{4}", "{1,1}"} {
+	if !slices.Equal(erasureK2M1.nonprimaryShards(true), []int{1}) || len(erasureK2M2.nonprimaryShards(false)) != 0 {
+		t.Fatal("pinned nonprimary derivation")
+	}
+	for _, shards := range []string{"{}", "{0}", "{2}", "{1,2}", "{4}", "{1,1}"} {
 		dump, codes, receipt = buildErasureFacts(func(p factsPool, _ map[string]string, _ *poolReceipt, _ *[]map[string]any) {
 			p["nonprimary_shards"] = shards
 		})
