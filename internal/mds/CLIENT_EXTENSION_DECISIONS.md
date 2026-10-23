@@ -173,7 +173,6 @@ rows are `baseline`; the evidence that changed the decision stays here.
 - Not claimed: reclaim by a native libcephfs twin, multi-rank or failover
   reclaim, and a requirement that combines `reclaim_client` with another bit.
 
-
 ### Bit 12: multi_reconnect (CephFS profile declared)
 
 - Wire: MClientReconnect v5/compat4 in the data segment with the `more` flag,
@@ -216,7 +215,6 @@ rows are `baseline`; the evidence that changed the decision stays here.
   Decision: consumer-owned. A future explicit opt-in would require the caller
   to state that it implements the re-announce policy, plus a live stale/resume
   acceptance. No higher-layer operation is blocked.
-
 
 ### Bit 13: deleg_ino
 

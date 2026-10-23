@@ -1040,7 +1040,7 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 				t.Fatal("session client dialed an OSD or redialed the MDS", r.name, r.dials.MDS.Load(), r.dials.OSD.Load())
 			}
 		}
-		if len(dialRecords) != 11 {
+		if len(dialRecords) != 13 {
 			t.Fatal("unexpected number of session clients", len(dialRecords))
 		}
 	})
@@ -1071,7 +1071,7 @@ func TestMDSSessionNativeOpenImages(t *testing.T) {
 		t.Fatal("declared client features do not print as bits 0-8 and 10", got)
 	}
 	if got := nativeFeatureBits(cephmsgr.MDSCephFSClientFeatures()); got != "0x00000000001c97ff" {
-		t.Fatal("declared CephFS client features do not print as bits 0-10, 15 and 18-20", got)
+		t.Fatal("declared CephFS client features do not print as bits 0-10, 12, 15 and 18-20", got)
 	}
 	for raw, want := range map[string]string{"": "0x0", "ff01": "0x00000000000001ff", "000000000000000001": "0x00000000000000010000000000000000"} {
 		data, _ := hex.DecodeString(raw)

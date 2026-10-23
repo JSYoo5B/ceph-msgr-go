@@ -311,3 +311,23 @@ func TestCephFSReconnectRejectsDuplicateInodesAcrossFragments(t *testing.T) {
 		t.Fatal("duplicate inode across fragment boundary admitted", err)
 	}
 }
+
+// The total state remains bounded even when every individual fragment would
+// satisfy its codec count and byte limits.
+func TestCephFSReconnectCollectionLimitsApplyAcrossFragments(t *testing.T) {
+	t.Run("caps", func(t *testing.T) {
+		state := MDSReconnectState{MaxMessageSize: 1024, Caps: make([]MDSCapReconnect, mds.MaxReconnectCaps+1)}
+		for i := range state.Caps {
+			state.Caps[i].Ino = uint64(i + 1)
+		}
+		if messages, err := reconnectMessages(state, 4096); !errors.Is(err, ErrLimitExceeded) || len(messages) != 0 {
+			t.Fatal("oversized total cap collection admitted", len(messages), err)
+		}
+	})
+	t.Run("realms", func(t *testing.T) {
+		state := MDSReconnectState{MaxMessageSize: 1024, Realms: make([]MDSRealmReconnect, mds.MaxReconnectRealms+1)}
+		if messages, err := reconnectMessages(state, 4<<20); !errors.Is(err, ErrLimitExceeded) || len(messages) != 0 {
+			t.Fatal("oversized total realm collection admitted", len(messages), err)
+		}
+	})
+}
