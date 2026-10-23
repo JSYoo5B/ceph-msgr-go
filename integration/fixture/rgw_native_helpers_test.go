@@ -181,7 +181,7 @@ func rgwNativePollHistory(parent context.Context, fetch func(context.Context) []
 func rgwNativePutKinds(operation rgwNativeOperation, head, bucketID string, dataPoolID, indexPoolID int64) (write, prepare, complete bool) {
 	isHead := operation.Object == head && operation.PoolID == dataPoolID
 	isIndex := operation.PoolID == indexPoolID && (operation.Object == ".dir."+bucketID || strings.HasPrefix(operation.Object, ".dir."+bucketID+"."))
-	return isHead && (strings.Contains(operation.Description, "write ") || strings.Contains(operation.Description, "writefull ")),
+	return isHead && regexp.MustCompile(`(?:\[|,)(?:write|writefull)(?:[ ,\]]|$)`).MatchString(operation.Description),
 		isIndex && rgwNativeCall(operation, "bucket_prepare_op"),
 		isIndex && rgwNativeCall(operation, "bucket_complete_op")
 }

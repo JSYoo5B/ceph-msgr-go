@@ -6,12 +6,15 @@ native runtime dependency, fixture profile, or comment-selected CI command.
 Issue [#13](https://github.com/JSYoo5B/ceph-msgr-go/issues/13) remains open for
 the remaining service-induced paths and failure campaigns.
 
-The selected Linux/amd64 run at source
+The retained historical Linux/amd64 run at source
 `bdbd655e9f3c1373ed7a08ab98641f08d80a129a` actually passed in 38.02 seconds.
 [The sanitized native receipt](RGW_NATIVE_LINUX_20261023.json) retains the
 gateway generations, request identities, PG/pool IDs, map epochs, object
 names, byte hash and independent cleanup checks. This is native fixture
-evidence; the normal cluster-free CI checks are a separate result.
+evidence; the normal cluster-free CI checks are a separate result. The receipt
+does not establish native acceptance for later code changes. Review follow-up
+results for the exact final code-and-contract commit are recorded in the PR
+body, after that commit is fixed, without a subsequent documentation commit.
 
 ## Reproduction and mandatory gate
 
@@ -70,8 +73,12 @@ private runner paths from its checkpoint receipt.
    corresponding head/index object names must match exactly. Both the PG
    pool ID and hobject pool ID must equal the discovered pool's numeric ID;
    prepare/complete CALLs count only on an owned index shard, not on the
-   head or a same-named object in another pool. Complete method tokens are
-   required, so a method with an extra suffix cannot satisfy the gate.
+   head or a same-named object in another pool. Complete WRITE/WRITEFULL
+   operation tokens and class-method tokens are required. A head class call
+   such as `call rgw.not_write in=4b` or an xattr operation such as
+   `setxattr user.not_write (1)` cannot substitute for a WRITE opcode;
+   regression checks pair each with valid index prepare/complete calls.
+   A class method with an extra suffix cannot satisfy the gate either.
 5. Compare every S3 GET byte with the input, independently read the native
    head bytes with `rados get`, and locate the exact key in exactly one
    actual bucket-index OMAP. These oracle requests happen after the retained

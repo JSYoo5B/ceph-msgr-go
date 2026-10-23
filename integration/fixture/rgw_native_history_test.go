@@ -63,6 +63,8 @@ func TestRGWNativePutReceptionBindsIndexClassesToIndexPoolAndShard(t *testing.T)
 		"class on head":       {write, makeOp(2, "7", "marker_small-binary", "call rgw.bucket_prepare_op"), makeOp(3, "7", "marker_small-binary", "call rgw.bucket_complete_op")},
 		"wrong index pool":    {write, makeOp(2, "8", ".dir.bucket.9", "call rgw.bucket_prepare_op"), makeOp(3, "8", ".dir.bucket.9", "call rgw.bucket_complete_op")},
 		"wrong method suffix": {write, makeOp(2, "6", ".dir.bucket.9", "call rgw.bucket_prepare_op_suffix"), makeOp(3, "6", ".dir.bucket.9", "call rgw.bucket_complete_op_suffix")},
+		"write method suffix": {makeOp(1, "7", "marker_small-binary", "call rgw.not_write in=4b"), makeOp(2, "6", ".dir.bucket.9", "call rgw.bucket_prepare_op"), makeOp(3, "6", ".dir.bucket.9", "call rgw.bucket_complete_op")},
+		"write xattr suffix":  {makeOp(1, "7", "marker_small-binary", "setxattr user.not_write (1)"), makeOp(2, "6", ".dir.bucket.9", "call rgw.bucket_prepare_op"), makeOp(3, "6", ".dir.bucket.9", "call rgw.bucket_complete_op")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			raw, err := json.Marshal(map[string]any{"ops": ops})
