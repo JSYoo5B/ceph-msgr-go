@@ -212,7 +212,7 @@ a particular test in it ran. The Visibility column states which applies:
 
 | Class | Rows |
 | --- | --- |
-| `released` | 67 |
+| `released` | 68 |
 | `main-only` | 3 |
 | `primitive` | 9 |
 | `proposed` | 10 |
