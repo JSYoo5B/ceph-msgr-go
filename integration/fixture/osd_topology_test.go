@@ -56,6 +56,8 @@ func TestOSDTopologyErasureCapacityProfile(t *testing.T) {
 		"legacy EC test":    {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureIntegration$"},
 		"k2m1 failover":     {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedFailoverIntegration$"},
 		"joined selectors":  {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasure(K2M2|OptimizedK2M2(Failover)?)Integration$"},
+		"joined in-flight":  {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK2M2(Failover|InFlightMutation)Integration$"},
+		"k2m1 snapshot":     {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration$"},
 		"soak":              {"CEPH_MSGR_TEST_OSD_SOAK": "4m"},
 		"MON freeze":        {"CEPH_MSGR_TEST_MON_FREEZE": "1"},
 		"cache pools":       {"CEPH_MSGR_TEST_OSD_CACHE_POOLS": "1"},

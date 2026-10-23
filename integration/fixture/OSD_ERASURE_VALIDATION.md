@@ -259,19 +259,121 @@ shard 2 (wire shard 1, the same wire value as k=2,m=1). Parity shard 3
 (wire shard 2) can lead only after shards 0 and 2 are both lost, which
 leaves the PG below min_size, so that permutation entry is not observed.
 
+The failover phases are reads only and resend only the idempotent read
+after a newer map. The in-flight mutation case is recorded separately below.
+
+## In-flight mutation epoch change and degraded write, optimized k=2,m=2 (2026-10-23)
+
+The four-OSD topology admits a third closed selector,
+`^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$`,
+and one catalog row selects it on replicated-pg-v8. Both tests create the
+optimized isa k=2,m=2 pool through the same oracle path and fact checks as
+the preceding section.
+
+`TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration` has two
+isolated phases, each on its own object. A Go client with a development
+connection wrapper (`internal/testcluster.LostReplyConn`) sends one
+APPEND+SETXATTR with a fixed incarnation and mtime to the native primary.
+Then the primary is SIGKILLed:
+
+1. Reply withheld. Receive bytes from the primary are held, and the
+   native observer polls until the appended bytes are visible. The primary
+   is killed and the caller ends its local wait.
+2. Request lost. The wrapper discards the client's outgoing bytes after
+   authentication, so the primary never receives the request. The primary
+   is killed and the session sees the closed connection.
+
+Each phase requires `OutcomeUnknownError` without an `OSDError`, and a
+`Submission` with the original transaction, global ID, incarnation, map
+epoch, primary and actual shard. The wrapper counts OSD dials: exactly one
+to the killed primary and none to the replacement. The native map must then
+show a later epoch without the killed OSD and a primary on a
+primary-eligible shard. The native observer reads bytes, the xattr, user
+version and mtime, and these must match the injected fault. In phase 1 the
+caller does not resubmit. In phase 2 the native state equals the
+pre-state, so the caller resubmits the same operations to the new primary.
+The request carries `Resubmit` with the original submission,
+`RetryAttempt` 1 and the new placement with primary-first numbering. After
+each phase the killed OSD is restarted, the fixture waits for clean PGs and
+the native state is compared again.
+
+`TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration` runs the
+k=2,m=1 snapshot and degraded-write cases, now parametrized by width, on
+the optimized k=2,m=2 pool. It checks the subject's placement against the
+pool facts before the kill and reads the degraded write back natively
+before the restart.
+
+Observed in replicated-pg-v8, four BlueStore OSDs, secure AES256K, IPv4,
+container runtime, at `0dfedcaceb813e95e9582f82b499b2d08966fca5`
+([run 39901553620](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39901553620)):
+
+- Pools: size 4, min_size 3, `nonprimary_shards` `{1}`, owned OSDs 0-3.
+- Phase 1: PG `3.4` at epoch 27, acting `[1 2 3 0]`, primary osd.1 on
+  shard 0, native version 1. The reply was withheld after the native
+  observer saw the append. After osd.1 was killed, the local wait was ended:
+  `OutcomeUnknownError` (context canceled) with transaction 1, incarnation
+  7, epoch 27, shard 0. Epoch 28 transiently named osd.2 on nonprimary
+  shard 1. At epoch 30 osd.3 led on parity shard 2 under a pg_temp
+  (`PrimaryFirst{PoolSize: 4, NonprimaryShards: 1}`), acting
+  `[NONE 2 3 0]`. The native observer read the appended bytes, version 2,
+  mtime 1700005001 and the new xattr. That is one application, so there
+  was no resubmission. After restart and clean PGs (epoch 34, osd.1 again
+  primary on shard 0) the native state was unchanged.
+- Phase 2: PG `3.7` at epoch 34, acting `[3 2 1 0]`, primary osd.3 on
+  shard 0, native version 1. The request bytes were discarded. After osd.3
+  was killed the session reported `OutcomeUnknownError` (EOF) with
+  transaction 1, incarnation 7, epoch 34, shard 0. At epoch 37 osd.1 led on
+  parity shard 2 under a pg_temp, acting `[NONE 2 1 0]`. The native state
+  was the pre-state (version 1, mtime 1700005000, no xattr). The explicit
+  resubmission (transaction 1, `RetryAttempt` 1, wire shard 1) returned
+  code 0 with ONDISK, `RetryAttempt` 1 echoed, reply epoch 37 and user
+  version 2. The native observer then read one append, version 2, the new
+  mtime and xattr. After restart and clean PGs (epoch 41) the state was
+  unchanged.
+- Degraded write: PG `4.5` at epoch 50, acting `[3 1 2 0]`, primary osd.3
+  on shard 0. osd.1 (nonprimary shard 1) was killed; at epoch 53, acting
+  `[3 NONE 2 0]`, the WRITEFULL returned ONDISK with user version 2 and the
+  native readback matched. After osd.1's restart and clean PGs the native
+  bytes and version matched. With osd.0 then killed, the native object
+  bytes still matched. Three shards remained and k=2 of them suffice to
+  decode, so this read does not show that the bytes recovered onto osd.1's
+  shard are correct. The self-managed snapshot case
+  passed on the same pool (clone and head read back natively).
+- Every killed OSD was restarted to clean PGs, and owned pool and profile
+  removal was confirmed by each test's cleanup.
+
+Run [39901146526](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39901146526)
+at `c25990a` showed the same placements and outcomes. Its phase 2 failed
+only on a test assertion that expected `OSDSubmission.Attempt` 1 after the
+resubmission. That field is local metadata which the client leaves at 0;
+the server's echoed `RetryAttempt` was 1. The next commit asserts the echo
+instead.
+
+What these phases establish: the client keeps the uncertain outcome and
+its identity across an EC primary change, and opens no new connection. The
+native observer, not the client, tells applied from not applied. A caller
+resubmission of a mutation that had not applied ran exactly once on the
+replacement primary. They do not establish exactly-once delivery or
+deduplication of an applied EC mutation on resubmission. They also do not
+cover a request held at the primary (for example while the PG is not
+active) when it dies, or a signed refusal across the epoch change.
+
 Not verified for k=2,m=2: legacy-v6, other security, address or runtime
 profiles, jerasure, wire shard 2 of the size-4 primary-first permutation,
-degraded writes, snapshots and any in-flight mutation or epoch-change case
-(the failover phases are reads only and resend only the idempotent read
-after a newer map). The unit-level numeric-domain test of `OSDPrimaryFirst`
-(PoolSize 2..128) is synthetic and does not accept those combinations as EC
-configurations.
+snapshots or degraded writes on the nonoptimized pool, the chunk recovered
+onto the returned shard after the degraded write (min_size stays 3 and no
+direct shard read is made, so no native oracle checks that chunk), an in-flight
+mutation held inside the OSD when the primary dies, and EC resubmission
+after an applied mutation. The unit-level numeric-domain test of
+`OSDPrimaryFirst` (PoolSize 2..128) is synthetic and does not accept those
+combinations as EC configurations.
 
 Not claimed: other EC profiles or plugins (beyond k=2,m=1 with isa and
 jerasure, with and without `allow_ec_optimizations` for isa, and the
 isa k=2,m=2 baseline with and without `allow_ec_optimizations` and the
-optimized k=2,m=2 failover reads above), EC partial-read or direct shard reads of optimized pools, MSR rules, writes while
-degraded beyond the WRITEFULL case above,
+optimized k=2,m=2 failover reads, degraded write, snapshot and in-flight
+mutation cases above), EC partial-read or direct shard reads of optimized pools, MSR rules, writes while
+degraded beyond the WRITEFULL cases above,
 backfill progress, compound vectors
 beyond the cases above, and replica (shard) reads: a balanced read routed to
 a non-primary shard crashes the OSD in the EC read pipeline (observed
