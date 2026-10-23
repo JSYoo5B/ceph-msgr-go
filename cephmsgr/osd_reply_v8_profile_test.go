@@ -23,9 +23,14 @@ func replyV8ProfileOpen(t *testing.T) (*Client, *OSDConnection, *osdTestPeer, co
 }
 
 func replicatedReplyV8ProfileOpen(t *testing.T, profile OSDProfile) (*Client, *OSDConnection, *osdTestPeer, context.Context, *atomic.Uint32) {
+	return replicatedReplyV8ProfileOpenWithCache(t, profile, false)
+}
+
+func replicatedReplyV8ProfileOpenWithCache(t *testing.T, profile OSDProfile, cachePools bool) (*Client, *OSDConnection, *osdTestPeer, context.Context, *atomic.Uint32) {
 	t.Helper()
 	options := mockOptions(t, 20, [16]byte{1})
 	options.EnableOSD = true
+	options.EnableOSDCachePools = cachePools
 	options.OSDProfile = profile
 	options.MaxOSDConnections = 1
 	peers := make(chan *osdTestPeer, 1)
@@ -37,7 +42,16 @@ func replicatedReplyV8ProfileOpen(t *testing.T, profile OSDProfile) (*Client, *O
 		}
 		client, server := net.Pipe()
 		if endpoint != "192.0.2.1:6804" {
-			go mockDaemon(server, peerConfig{role: 1, release: 20, fsid: [16]byte{1}, services: cephx.ServiceAuth | cephx.ServiceMgr | cephx.ServiceOSD, payload: func(tag msgr.Tag, p []byte) []byte { return backoffTransportFeatures(tag, p, 1<<30) }})
+			go mockDaemon(server, peerConfig{role: 1, release: 20, fsid: [16]byte{1}, services: cephx.ServiceAuth | cephx.ServiceMgr | cephx.ServiceOSD, payload: func(tag msgr.Tag, p []byte) []byte {
+				features := uint64(0)
+				if profile.replicatedPG() {
+					features |= 1 << 30
+				}
+				if cachePools {
+					features |= osd.FeatureCachePool
+				}
+				return backoffTransportFeatures(tag, p, features)
+			}})
 			return client, nil
 		}
 		dials.Add(1)
@@ -48,6 +62,12 @@ func replicatedReplyV8ProfileOpen(t *testing.T, profile OSDProfile) (*Client, *O
 			defer server.Close()
 			r, w, err := mockAuthenticate(server, peerConfig{role: 4, payload: func(tag msgr.Tag, p []byte) []byte {
 				features := uint64(1<<8 | 1<<9 | 1<<21 | 1<<30 | 1<<56 | 1<<57 | 1<<58)
+				if !profile.replicatedPG() {
+					features = 0
+				}
+				if cachePools {
+					features |= osd.FeatureCachePool
+				}
 				if profile.requestV9() {
 					features |= 1 << 49
 				}

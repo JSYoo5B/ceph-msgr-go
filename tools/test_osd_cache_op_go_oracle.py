@@ -40,6 +40,9 @@ class GoCacheOpOracleTests(unittest.TestCase):
         self.native.heads[(plan()["base"], oracle.FLUSH)] = (data, version + 1, mtime)
         flushed = self.run_phase("observe", "flushed")["labels"]["flushed"]
         self.assertIs(flushed["dirty"]["dirty"], False)
+        for label in ("clean-flush", "clean-try-flush"):
+            clean = self.run_phase("observe", label)["labels"][label]
+            self.assertEqual(clean, flushed)
         self.native.dirty.discard(oracle.TRY)
         tried = self.run_phase("observe", "try-flushed")["labels"]["try-flushed"]
         self.assertEqual(tried["dirty_polls"], [False])
@@ -48,6 +51,9 @@ class GoCacheOpOracleTests(unittest.TestCase):
         self.assertEqual(evicted["tier"]["code"], -2)
         absent = self.run_phase("observe", "absent-final")["labels"]["absent-final"]
         self.assertNotIn("dirty", absent)
+        for label in ("absent-flush", "absent-try-flush", "absent-evict"):
+            state = self.run_phase("observe", label)["labels"][label]
+            self.assertEqual(state, absent)
         final = self.run_phase("finish")
         self.assertEqual(final["phase"], "finished")
         self.assertTrue(final["cleanup"]["complete"])
