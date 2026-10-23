@@ -112,6 +112,20 @@ while true; do
         sh /out/publish-ack.sh "/out/mon-command-observed.$request_id"
         fixture_phase=control-idle
     fi
+    if test -f /out/observe-mgr-command; then
+        fixture_phase=observe-mgr-command
+        test "$config_fixture" = 1 || exit 2
+        read -r request_id token phase extra < /out/observe-mgr-command
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 && test -z "$extra" || exit 2
+        case "$phase" in initial|applied|overwritten|recovered|restore|restored) ;; *) exit 2 ;; esac
+        rm /out/observe-mgr-command
+        # Python mon_command/mgr_command ignore their timeout arguments. The
+        # outer process timeout also bounds the one native restoration.
+        timeout 30 python3 /out/mgr_command_outcome_oracle.py "$root" /out "$request_id" "$token" "$phase"
+        sh /out/publish-ack.sh "/out/mgr-command-observed.$request_id"
+        fixture_phase=control-idle
+    fi
     if test -f /out/verify-osd-maps; then
         fixture_phase=verify-osd-maps
         # Native blob validation also serves MON-only map acquisition; no OSD
