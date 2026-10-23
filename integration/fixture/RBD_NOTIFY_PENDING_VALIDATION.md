@@ -78,8 +78,51 @@ from live native acceptance.
 
 ## Verification status
 
-Implementation is present. New native runs and their exact source receipts
-are pending; the historical base acceptance does not prove this checkpoint.
+Both selected Linux/amd64 profiles passed on 2026-10-23 from exact source
+`794847b5d53a3f6a840b1919f20545af759ddccc`, Go 1.26.9 and fixture provider
+`ceph-testcontainers-go` v0.3.0. All 1824 tracked source files in the native
+checkout matched the committed source manifest. The SHA-256 of
+`integration/rbd_base_test.go` is
+`ef6fdeca268414425b907f95a6df24c75a44c901c4461998c16a6d5d45bcc4ba`.
+Only documentation/evidence references were added after these executions;
+final-head Basic CI is a separate result.
+
+| Observation | CRC/AES, IPv4 host, BlueStore | Secure/AES256K, IPv6 container, MemStore |
+| --- | --- | --- |
+| Run interval, UTC | 08:29:44 to 08:31:23 | 08:31:23 to 08:32:54 |
+| Selected native suites / leaves | 5 / 27 passed, no failure or skip | 5 / 27 passed, no failure or skip |
+| Go / native GlobalID; Go cookie | 4794 / 4800; 38 | 4767 / 4773; 38 |
+| Acknowledged / intentionally omitted NotifyID | 107374182403 / 107374182404 | 98784247811 / 98784247812 |
+| Pending read TIDs, head / snapshot | 45 / 46, submission identity matched | 45 / 46, submission identity matched |
+| Pending read reply OSDMap epoch | 25 | 23 |
+| Before / after native phase | `resized-acknowledged` / same, two phases | same |
+| Before / after control still outstanding | true / true | true / true |
+| Head / snapshot bytes | `1000000c0000000000` / `100000080000000000` | same |
+| Decoded order; head / snapshot size | 16; 786432 / 524288 | same |
+| Two raw reads' interval | 1.270752 ms | 0.987375 ms |
+| Native acknowledged resize | 6.446053 ms | 0.864632 ms |
+| Native unacknowledged resize | 5.002396189 s | 5.002142048 s |
+| Native timed-out HeaderUpdate log count | 1 | 1 |
+| Final native class output comparison | head and snapshot byte-identical | same |
+
+The full selector also passed the existing clone, journal, exclusive-lock
+and write acceptances. Their success is regression evidence; it does not
+add lost-journal-reply or RequestLock ACK-loss coverage to this new leaf.
+The first attempts of both profiles passed; no retry replaced a failed
+result. Linux checks passed before native execution: the four RBD
+test-only tests with `-race`, integration `go vet`, `CGO_ENABLED=0 go build
+./...`, and 635 Python tool tests (76-scenario catalog valid). Unit results
+are distinct from the two live native runs.
+
+Both cleanup receipts report all 26 journaled native fixture actions
+`applied`, removal of the owned pool with native absence by name/ID,
+deletion of both identities, `completed: true` and no error. Direct
+post-run inspection of each ownership receipt found none of its eight
+containers and no owned network. The transient runtime reaper was also
+absent on the later check. No host configuration or unowned resource was
+changed. Public records retain only the notification/request identity and
+relevant metadata; incidental native log timestamps/thread IDs and fixture
+addresses are not reproduced here.
 
 ## Remaining scope
 
