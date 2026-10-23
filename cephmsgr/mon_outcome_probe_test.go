@@ -2,8 +2,11 @@ package cephmsgr
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
@@ -63,3 +66,20 @@ func TestMonOutcomeProbeRejectsCRCFrameCorruption(t *testing.T) {
 
 // The embedded net.Conn only supplies unused methods; no socket is opened.
 var _ net.Conn = monOutcomeSink{}
+
+func TestMonOutcomeIdentityReceiptReadableAcrossFixtureUIDs(t *testing.T) {
+	control := t.TempDir()
+	identity := monOutcomeIdentity{OriginalGlobalID: 51, Submitted: monOutcomeWrite{
+		Connection: 1, Peer: "mon.a", Transaction: 3, Sequence: 5, Complete: true}, OutcomeUnknown: true}
+	writeMonOutcomeIdentity(t, control, identity)
+	path := filepath.Join(control, "mon-command-outcome-identity.json")
+	info, err := os.Stat(path)
+	if err != nil || info.Mode().Perm()&0044 != 0044 {
+		t.Fatal("non-secret identity metadata is unreadable across host/container UIDs", info, err)
+	}
+	data, err := os.ReadFile(path)
+	var observed monOutcomeIdentity
+	if err != nil || json.Unmarshal(data, &observed) != nil || observed.OriginalGlobalID != 51 || observed.Submitted.Transaction != 3 || !observed.OutcomeUnknown {
+		t.Fatal("identity receipt lost original submission or unknown outcome", err)
+	}
+}

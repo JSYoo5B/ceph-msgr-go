@@ -117,7 +117,9 @@ func writeMonOutcomeIdentity(t *testing.T, control string, value monOutcomeIdent
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(control, "mon-command-outcome-identity.json"), append(data, '\n'), 0600); err != nil {
+	// Non-secret metadata must also be readable by the non-root controller
+	// when the Go suite runs as root inside the private fixture directory.
+	if err := os.WriteFile(filepath.Join(control, "mon-command-outcome-identity.json"), append(data, '\n'), 0644); err != nil {
 		t.Fatal(err)
 	}
 }

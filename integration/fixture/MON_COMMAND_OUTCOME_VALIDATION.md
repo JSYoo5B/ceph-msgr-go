@@ -67,7 +67,44 @@ original observations, partial identity progress and cleanup uncertainty.
 
 ## Execution evidence
 
-Native execution and final-source attribution are pending until the receipt
-below is populated. Unit/script checks are separate from a native run. This
-initial implementation does not claim a replay defect, exactly-once server
-execution, secure-frame transaction capture, other profiles, or completion of #63.
+Initial native receipt: source
+`fa71fb23a132297a07209d1f8e6564bdec24c492`,
+[CI command run 39926008773, attempt 1](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39926008773),
+existing `mon-mgr.aes.ip4.crc.host` row, Linux/amd64. The scenario's
+`result.json` names that exact source, the image above and `success`;
+`tests.json` reports this client test as actual `PASS`, not skipped. The broad
+row has 56 top-level passes and 161 optional skips, with no result-gate problems;
+those skips do not establish their dedicated-profile acceptance.
+
+The applied MON test passed in 2.72 seconds:
+
+| Observation | Retained result |
+| --- | --- |
+| Initial fresh native get | Signed `-2`, empty data/status; ownership claimed only after this result |
+| Independently applied binary A | Code `0`, 49,152 bytes, SHA-256 `94e28ae25574044f433b5c0f0b09b531ae5bf6c22ccb083c9cbfc494082820a5`, empty status |
+| Original CRC submission | `mon.a`, local connection 1, authenticated global ID 24318, TID 1, sequence 2; complete local write and blocked receive |
+| Distinct binary B before MON replacement | Code `0`, 48 bytes, SHA-256 `982143c94c39e7fd7847e5d58c6e06389b0ca7f7b7116add0acccf91e61d1112`, empty status |
+| Original caller after MON replacement | `OutcomeUnknownError`, no acknowledged server result; no caller reinvocation of A |
+| Recovery read and fresh native B | `mon.b`, local connection 2, global ID 24318, TID 1, sequence 2; native code `0`, same 48 bytes/hash/status as B, original mutation local writes still 1 |
+| Native cleanup | One removal, signed `0`, empty data and status `key deleted`; another fresh native handle returns signed `-2`, empty data/status |
+
+TIDs are scoped to their sessions: the two TID values both being 1 is expected
+and is not a replay identity by itself. The distinct authenticated connections,
+MON roles and exact request front/data digests preserve the original binding.
+The CI log reports termination of all seven fixture-owned containers. This
+record does not assert an independently queried final Docker/network inventory.
+
+[Basic CI run 39925955623, attempt 1](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/39925955623)
+passed on the same source: both jobs, 640 Python tool tests, scenario validation,
+product build/vet/dependency checks, unit/race checks, the cluster-free integration
+gate and fixture build/vet/unit checks. This is separate from native execution.
+The first local Linux check had a new regression incorrectly corrupt an unused
+CRC epilogue slot; changing the injection to an actual protected front byte
+made that regression meaningful. It was a test error, not a native replay defect.
+
+The later non-secret identity receipt permission is 0644 inside the private
+fixture directory, with a focused regression for host/container UID readability.
+That source change is not retroactively attributed to the initial receipt.
+Final PR-head checks and any later native run are recorded on the PR itself.
+No exactly-once server execution, secure-frame transaction capture, other profile,
+independently native-observed MGR mutation, or completion of #63 is claimed.
