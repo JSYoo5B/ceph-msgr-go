@@ -5,7 +5,7 @@ SET_CHUNK issued through native librados against Ceph Tentacle 20.2.4 source
 `7f793731f1b39eb4f465e960113d2363c311b964`. It adds no Go product opcode,
 operation union, feature bit or admission rule, and it makes no Go SET_CHUNK
 support claim. The source audit is in
-[MANIFEST_CONTRACT.md](../../internal/osd/MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations-not-implemented).
+[MANIFEST_CONTRACT.md](../../internal/osd/MANIFEST_CONTRACT.md#set_chunk-and-manifest-tier-operations).
 
 ## Fixture and selection
 

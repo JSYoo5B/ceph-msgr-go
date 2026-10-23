@@ -13,8 +13,8 @@ sets its user version to the given target version and from then on serves
 its reads from the target (in any pool); a WRITEFULL to it was observed to be
 proxied to the target as well. `OSDUnsetManifest` has no input and
 clears the manifest; the object stays, now plain and empty. Both are
-standalone and flagless here; reference-counted redirects, SET_CHUNK and the
-tier operations are not implemented.
+standalone and flagless here; reference-counted redirects and the tier
+operations are not implemented. SET_CHUNK has its own bounded contract below.
 
 `OSDRequest.IgnoreRedirect` sets CEPH_OSD_FLAG_IGNORE_REDIRECT so the OSD
 serves the manifest object itself (maybe_handle_manifest returns early);
@@ -33,12 +33,13 @@ must not target itself (-EINVAL), and UNSET_MANIFEST on a plain object is
 
 Verification: [OSD_REDIRECT_VALIDATION.md](../../integration/fixture/OSD_REDIRECT_VALIDATION.md).
 
-## SET_CHUNK and manifest tier operations (not implemented)
+## SET_CHUNK and manifest tier operations
 
-Source audit of the pinned commit for issue #8. This repository emits none of
-these opcodes; the section records their current semantics and the native-only
-evidence that precedes any wire primitive. Line numbers refer to
-`src/osd/PrimaryLogPG.cc` unless another file is named.
+Source audit of the pinned commit for issue #8. This repository emits
+SET_CHUNK under the bounded contract in
+[Go SET_CHUNK contract](#go-set_chunk-contract) and none of the TIER_*
+opcodes. Line numbers refer to `src/osd/PrimaryLogPG.cc` unless another file
+is named.
 
 ### SET_CHUNK (0x8228)
 
@@ -119,13 +120,64 @@ COPY_GET stays daemon-originated: its only caller is the OSD's own copy and
 promote path (see [UNSUPPORTED_OPCODES.md](UNSUPPORTED_OPCODES.md)). The cache
 and dedup tier agents are daemon-internal work, not client primitives.
 
+### Go SET_CHUNK contract
+
+`OSDSetChunk` (`internal/osd/set_chunk.go`) is admitted as one standalone head
+operation on replicated placement:
+
+- the packed union is zero and the indata is exactly the Objecter layout above,
+  with the target named by `OSDChunkInput` (pool, name, key and namespace; no
+  locator hash) and its TargetOffset;
+- the per-operation flags are exactly `OSDWithReference` (`0x80`); every other
+  opcode refuses that flag, and every other operation refuses a chunk input;
+- the request flags are READ alone, as the native read submission sends them
+  (`Objecter::get_read_flags`; `rados set-chunk` passes no request flag), with
+  no mtime;
+- no feature bit or opt-in is required: the OSD checks OSD_CACHEPOOL only for
+  pools in a tier relation (`PrimaryLogPG.cc:1942`), which SET_CHUNK refuses
+  anyway.
+
+Refused before a request slot, monitor readiness or TID is used:
+
+| Shape | Reason |
+| --- | --- |
+| SourceOffset other than zero | The non-zero-offset failed-increment hazard above: one chunk yields two results, the request never completes and the source stays blocked. A client cannot rule out a failed increment (an absent or concurrently removed target), so this shape is never sent. |
+| Target equal to the targeted object (pool, namespace, name and effective key) | `inc_refcount_by_set` blocks the source and the OSD's own `chunk_get_ref` then targets that same blocked object (source-derived, not observed). |
+| SourceLength zero, empty or NUL-containing target name, negative target pool | Malformed input (the OSD refuses a zero length with EINVAL). |
+| Missing WITH_REFERENCE or any other per-operation flag | Native callers always send exactly WITH_REFERENCE; the OSD refuses its absence with EOPNOTSUPP. |
+| Extent, data, version or other union inputs; compound vectors | Not part of the native operation. |
+| mtime, snapshot read or context, ORDERSNAP, ENFORCE_SNAPC, replica-read, IGNORE_REDIRECT, RWORDERED, SKIPRWLOCKS, IGNORE_CACHE, IGNORE_OVERLAY, FULL_TRY/FULL_FORCE, nonzero retry, explicit resubmission, erasure-coded placement | Not sent by the native caller; an erasure-coded source is refused by the OSD. |
+
+Signed aggregate and per-op results pass through unchanged (for example ENOENT
+for an absent source or target, ERANGE beyond the source size, EOPNOTSUPP for
+an overlapping chunk). The reply carries no output. A lost reply after
+transmission is an unknown outcome and is never replayed: on success the OSD
+has already taken the target reference, and the native client's own resend is
+not reproduced. Choosing chunk boundaries, fingerprints, dedup pools, the
+source's snapshot clones and the reference arithmetic they change remain
+caller or later work.
+
+Evidence:
+
+- The [fresh native vectors](testdata/set-chunk-native-README.md) cover two
+  admitted shapes and the two refused native shapes (non-zero source offset,
+  missing WITH_REFERENCE) on v6, v8 and untraced v9. The Go encoder matches
+  each admitted request's header, front, middle and data byte for byte and
+  refuses the other two.
+- Synthetic public transport tests send SET_CHUNK on three request/reply
+  profiles, keep a signed refusal, and keep a sent request whose connection is
+  lost unknown with its transaction, without redial or resend.
+- `TestCephOSDSetChunkGoIntegration` sends Go-originated SET_CHUNK and source
+  deletions to two owned plain pools and judges each step by native
+  observations of bytes, versions, mtimes and the target's `chunk_refs`; no
+  live run is recorded yet.
+
 ### Native-only evidence and remaining stages
 
 [OSD_SET_CHUNK_NATIVE_VALIDATION.md](../../integration/fixture/OSD_SET_CHUNK_NATIVE_VALIDATION.md)
 records `TestCephOSDSetChunkNativeIntegration`: a closed native librados oracle
 issues the refusals above and two disjoint chunks, and observes bytes,
 versions, the target's `chunk_refs` and the source's own reference count before
-and after, including the reference release on source deletion. No Go request
-was sent. Native request vectors, the Go wire primitive and its bounded
-admission, scoped-identity refusals, snapshot reference accounting, the TIER_*
-operations and dedup pools remain separate follow-up stages.
+and after, including the reference release on source deletion. Scoped-identity
+refusals, snapshot reference accounting, a non-zero source offset from the Go
+client, the TIER_* operations and dedup pools remain separate follow-up stages.

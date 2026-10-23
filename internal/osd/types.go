@@ -98,6 +98,7 @@ type Operation struct {
 	ListWatchers   ListWatchersInput
 	ListSnaps      ListSnapsInput
 	CopyFrom       CopyFromInput
+	SetChunk       SetChunkInput
 	Data           []byte
 	Version        uint64
 	Snap           uint64 // ROLLBACK target snap id.

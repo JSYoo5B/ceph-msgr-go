@@ -23,6 +23,15 @@ func copyFromVectorAllowed(ops []Operation) bool {
 	return true
 }
 
+// referenceFlag is WITH_REFERENCE for SET_CHUNK, which requires it, and zero
+// for every other opcode.
+func referenceFlag(code uint16) uint32 {
+	if code == SetChunk {
+		return OpWithReference
+	}
+	return 0
+}
+
 // fadviseFlags is the cache-hint mask an opcode accepts: the extent reads and
 // writes whose PrimaryLogPG paths pass op.flags to the object store.
 func fadviseFlags(code uint16) uint32 {
@@ -35,7 +44,7 @@ func fadviseFlags(code uint16) uint32 {
 
 func SupportedOperation(code uint16) bool {
 	switch code {
-	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, SetRedirect, UnsetManifest, Isdirty, Undirty, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, PGNLSFilter, ScrubList, Watch, Notify, NotifyAck, CacheFlush, CacheEvict, CacheTryFlush, CachePin, CacheUnpin:
+	case Read, Stat, Write, WriteFull, WriteSame, CopyFrom, CopyFrom2, SetRedirect, UnsetManifest, Isdirty, Undirty, Append, Truncate, Zero, Create, Delete, AssertVersion, CompareExtent, GetXattr, GetXattrs, CompareXattr, SetXattr, RemoveXattr, OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys, OmapCompare, OmapSetValues, OmapSetHeader, OmapClear, OmapRemoveKeys, OmapRemoveKeyRange, Call, SetAllocHint, Rollback, ListSnaps, ListWatchers, MapExt, Checksum, SparseRead, PGNLS, PGNLSFilter, ScrubList, Watch, Notify, NotifyAck, CacheFlush, CacheEvict, CacheTryFlush, CachePin, CacheUnpin, SetChunk:
 		return true
 	}
 	return false
@@ -60,7 +69,7 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 	// write except a read-mode CALL and a non-FAILOK CREATE.
 	var stagedXattr, stagedOmap, stagedAny, afterCall bool
 	for _, op := range ops {
-		if !SupportedOperation(op.Code) || op.Code == PGNLS || op.Code == PGNLSFilter || op.Code == ScrubList || op.Flags&^(OpExclusive|OpFailOK|fadviseFlags(op.Code)) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
+		if !SupportedOperation(op.Code) || op.Code == PGNLS || op.Code == PGNLSFilter || op.Code == ScrubList || op.Flags&^(OpExclusive|OpFailOK|fadviseFlags(op.Code)|referenceFlag(op.Code)) != 0 || op.Flags&OpExclusive != 0 && op.Code != Create {
 			return 0, 0, ErrOperation
 		}
 		if len(op.Data) > math.MaxUint32 {
@@ -75,6 +84,9 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		// Check inactive input before standalone operations can return early.
 		// Only these opcodes encode the COPY_FROM union and source payload.
 		if !usesCopyFromUnion(op.Code) && op.CopyFrom != (CopyFromInput{}) {
+			return 0, 0, ErrRequest
+		}
+		if op.Code != SetChunk && op.SetChunk != (SetChunkInput{}) {
 			return 0, 0, ErrRequest
 		}
 		if !IsWatchOperation(op.Code) && op.Watch != (WatchInput{}) {
@@ -167,6 +179,17 @@ func ValidateOperations(ops []Operation, limit uint32) (uint64, uint64, error) {
 		}
 		if op.Snap != 0 || op.ListSnaps != (ListSnapsInput{}) {
 			return 0, 0, ErrRequest
+		}
+		if op.Code == SetChunk {
+			// Standalone, offset-zero SET_CHUNK with WITH_REFERENCE; its
+			// request flags are checked by ValidateSetChunkRequest.
+			mode, inputBytes, err := validateSetChunkOperation(op, len(ops), limit)
+			if err != nil {
+				return 0, 0, err
+			}
+			flags |= mode
+			total += inputBytes
+			continue
 		}
 		if op.Code == UnsetManifest {
 			// Characterized only as a standalone, inputless operation.
