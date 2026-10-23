@@ -388,8 +388,9 @@ type OSDSubmission struct {
 // OSDReply preserves the server's completion metadata and operation outputs.
 // Flags are raw Ceph OSD flags, independent of Messenger ACKs. A read-only
 // success does not establish any write durability guarantee. A mutation
-// success requires the server ONDISK flag; durability is storage/profile
-// dependent (in particular, MemStore contents do not survive OSD restart).
+// success, SET_CHUNK and successful cache operations require the server ONDISK
+// flag. Cache no-op completion does not prove a state change; durability is
+// storage/profile dependent (MemStore contents do not survive OSD restart).
 type OSDReply struct {
 	Submission                   OSDSubmission
 	Transaction, GlobalID        uint64
@@ -820,7 +821,7 @@ func validateOSDReply(input osd.Request, reply osd.Reply, redirect bool) error {
 		return err
 	}
 	if !redirect && reply.Result >= 0 && osd.RequiresOnDisk(input.Operations, flags) && !reply.OnDisk() {
-		return errors.New("mutation reply lacks requested ONDISK completion")
+		return errors.New("OSD reply lacks requested ONDISK completion")
 	}
 	if !redirect && osd.ChecksumCompound(input.Operations) {
 		return osd.ValidateChecksumCompoundReply(input.Operations, reply)

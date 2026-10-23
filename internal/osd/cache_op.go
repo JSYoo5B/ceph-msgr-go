@@ -15,9 +15,12 @@ package osd
 // CACHE_PIN and CACHE_UNPIN are write-mode opcodes (WRITE). IGNORE_OVERLAY is
 // read by the native Objecter when it chooses a target; the caller here
 // already supplies the target, and the flag is sent only to match the native
-// request. Every handler mutates the tier object (flush clears dirty after a
-// write to the base pool, evict deletes the cached head, pin sets a flag), so
-// a lost reply leaves an unknown outcome that is never replayed.
+// request. Dirty flush clears dirty after a base-pool write; clean flush can
+// be a no-op. Clean eviction deletes the cached head, while absent lookups
+// can fail before the handler. Pin changes a flag. Successful cache requests
+// require ONDISK without changing their READ/WRITE wire mode; that bit alone
+// does not identify a state transition. A lost reply leaves an unknown outcome
+// that is never replayed.
 const (
 	CacheFlush    uint16 = 0x821f
 	CacheEvict    uint16 = 0x8220

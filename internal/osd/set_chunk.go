@@ -103,15 +103,6 @@ func IsSetChunk(ops []Operation) bool {
 	return false
 }
 
-// RequiresOnDisk reports whether a successful reply to the vector must carry
-// ONDISK before it completes: every vector with a write-mode operation, and
-// SET_CHUNK, which the native caller submits as READ but which changes the
-// source manifest and the target's references. Its READ wire encoding is
-// unchanged; only the completion rule follows the state change.
-func RequiresOnDisk(ops []Operation, mode uint64) bool {
-	return mode&FlagWrite != 0 || IsSetChunk(ops)
-}
-
 // ValidateSetChunkRequest enforces the request-level contract of SET_CHUNK:
 // a standalone head operation with exactly the native request (no snapshot
 // context, replica-read, ordering, lock, redirect, cache, overlay, full or
