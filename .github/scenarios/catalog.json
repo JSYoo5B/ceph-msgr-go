@@ -1037,6 +1037,43 @@
    }
   },
   {
+   "id": "mds-cephfs-writeback.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfswritebackfence",
+   "group": "mds-cephfs-writeback",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "mds_fresh": "1",
+    "mds_cephfs_data": "1",
+    "test_run": "^TestCephMDSCephFSWritebackFenceIntegration$"
+   }
+  },
+  {
+   "id": "mds-cephfs-writeback.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfswritebackfence",
+   "group": "mds-cephfs-writeback",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "memstore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "mds_fresh": "1",
+    "mds_cephfs_data": "1",
+    "test_run": "^TestCephMDSCephFSWritebackFenceIntegration$"
+   }
+  },
+  {
    "id": "rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-37bcdb",
    "group": "rbd",
    "params": {

@@ -58,8 +58,8 @@ func (x *mdsCephFSDataScope) activeRuntime(kind string, gid uint64) *mdsCephFSDa
 }
 func (x *mdsCephFSDataScope) nativeReady() error {
 	if x.restart.pending() || x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil ||
-		x.activeRuntime("client-drop-on", x.current.GID) != nil {
-		return errors.New("MDS CephFS data native action refused while restart, journal pause or client blackhole is in effect")
+		x.activeRuntime("client-drop-on", x.current.GID) != nil || x.osdDrop.active() {
+		return errors.New("MDS CephFS data native action refused while restart, journal pause or an MDS or OSD client blackhole is in effect")
 	}
 	return nil
 }

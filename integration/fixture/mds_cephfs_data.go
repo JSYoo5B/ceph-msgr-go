@@ -500,11 +500,14 @@ type mdsCephFSDataScope struct {
 	baselineConfig         map[string]string
 	runtime                []*mdsCephFSDataRuntime
 	flushJournal           *mdsCephFSDataFlushJournal
-	logMark                int
-	logMarkGID             uint64
-	haveLogMark            bool
-	dataPool               int64
-	dataPoolName           string
+	// osdDrop is the single OSD client-drop override of the writeback-fence
+	// recipe (mds_cephfs_data_writeback.go).
+	osdDrop      *mdsCephFSDataOSDDrop
+	logMark      int
+	logMarkGID   uint64
+	haveLogMark  bool
+	dataPool     int64
+	dataPoolName string
 	// owned maps session addresses of the owned Go identity, observed
 	// through observe, to their GlobalID.
 	owned map[string]uint64
@@ -547,17 +550,17 @@ func parseMDSCephFSDataRequest(fields []string, token string, previousID int64) 
 		return 0, action, errors.New("invalid MDS CephFS data request identity")
 	}
 	action.name = fields[2]
-	if len(fields) == 5 && action.name != "cap-log" {
-		return 0, action, errors.New("only DATA cap-log admits two identity arguments")
+	if len(fields) == 5 && action.name != "cap-log" && action.name != "osd-log" {
+		return 0, action, errors.New("only DATA cap-log and osd-log admit two identity arguments")
 	}
 	arg, hasArg := "", len(fields) == 4
 	if hasArg {
 		arg = fields[3]
 	}
 	switch action.name {
-	case "cap-log":
+	case "cap-log", "osd-log":
 		if len(fields) != 5 {
-			return 0, action, errors.New("DATA cap-log requires GlobalID and nonce")
+			return 0, action, errors.New("DATA cap-log and osd-log require GlobalID and nonce")
 		}
 		gid, e1 := strconv.ParseUint(fields[3], 10, 64)
 		nonce, e2 := strconv.ParseUint(fields[4], 10, 32)
@@ -565,14 +568,14 @@ func parseMDSCephFSDataRequest(fields []string, token string, previousID int64) 
 			return 0, action, errors.New("DATA cap-log identity must be canonical nonzero decimals")
 		}
 		action.gid, action.nonce = gid, uint32(nonce)
-	case "debug-on", "debug-off", "log-pause", "blackhole-on", "client-drop-on", "log-resume", "flush-journal", "cap-log-mark":
+	case "debug-on", "debug-off", "log-pause", "blackhole-on", "client-drop-on", "log-resume", "flush-journal", "cap-log-mark", "osd-drop-on", "osd-drop-off":
 		if len(fields) != 3 {
 			return 0, action, errors.New("DATA runtime action takes no caller argument")
 		}
-	case "observe":
+	case "observe", "evict":
 		gid, err := strconv.ParseUint(arg, 10, 64)
 		if !hasArg || err != nil || gid == 0 || strconv.FormatUint(gid, 10) != arg {
-			return 0, mdsCephFSDataAction{}, errors.New("MDS CephFS data observation requires one canonical GlobalID")
+			return 0, mdsCephFSDataAction{}, errors.New("MDS CephFS data observation and eviction require one canonical GlobalID")
 		}
 		action.gid = gid
 	case "stat":
@@ -649,6 +652,8 @@ type mdsCephFSDataResult struct {
 	Config          map[string]string         `json:"config,omitempty"`
 	CapLog          *mdsCephFSCompletionLog   `json:"cap_log,omitempty"`
 	FlushJournal    *mdsCephFSCompletionFlush `json:"flush_journal,omitempty"`
+	OSDDrop         *mdsCephFSDataOSDDrop     `json:"osd_drop,omitempty"`
+	OSDLog          *mdsCephFSDataOSDDropLog  `json:"osd_log,omitempty"`
 	Complete        bool                      `json:"complete"`
 	Error           string                    `json:"error,omitempty"`
 	ElapsedMillis   int64                     `json:"elapsed_ms"`
@@ -668,6 +673,7 @@ func (c *fixtureCluster) mdsCephFSDataJournal() error {
 		"source_commit": mdsFreshSource, "token": s.token, "fsid": c.profile.fsid, "fs_name": s.name, "fscid": s.oracle.FSCID,
 		"client_identity": identity, "native_identity": native, "plan": x.plan, "baseline_blocklist": x.baselineBlocklist, "mutations": x.mutations,
 		"current_mds": x.current, "owned_session_addresses": x.owned, "restart": x.restart, "runtime": x.runtime, "baseline_config": x.baselineConfig, "flush_journal": x.flushJournal,
+		"osd_drop": x.osdDrop,
 	})
 }
 
@@ -914,6 +920,8 @@ func (c *fixtureCluster) mdsCephFSDataAct(ctx context.Context, id int64, action 
 	switch action.name {
 	case "debug-on", "debug-off", "log-pause", "blackhole-on", "client-drop-on", "log-resume", "flush-journal", "cap-log-mark", "cap-log":
 		return c.mdsCephFSDataRuntimeAct(ctx, id, action, result)
+	case "osd-drop-on", "osd-drop-off", "osd-log", "evict":
+		return c.mdsCephFSDataWritebackAct(ctx, id, action, result)
 	}
 	if action.name == "restart-arm" {
 		return c.mdsCephFSDataRestartAct(ctx, id, action, result)
@@ -991,6 +999,8 @@ type mdsCephFSDataCleanup struct {
 	FlushJournal          *mdsCephFSDataFlushJournal `json:"flush_journal,omitempty"`
 	Config                map[string]string          `json:"config,omitempty"`
 	ConfigRestored        bool                       `json:"config_restored"`
+	OSDDrop               *mdsCephFSDataOSDDrop      `json:"osd_drop,omitempty"`
+	OSDConfigRestored     bool                       `json:"osd_config_restored"`
 	ResidualSessions      []mdsSessionsNative        `json:"residual_owned_sessions"`
 	NamespaceChecked      bool                       `json:"namespace_checked"`
 	NamespaceRestored     bool                       `json:"namespace_restored"`
@@ -1013,8 +1023,9 @@ type mdsCephFSDataCleanup struct {
 // sessions, reads the namespace back natively (the test removes the
 // snapshot, the files, the directory layout and the directory itself),
 // removes new blocklist entries attributable to an observed owned Go session
-// address or the exact armed MDS incarnation after it leaves the map, and
-// deletes both identities. It never evicts; residual namespace
+// address (including the writeback-fence recipe's own eviction) or the exact
+// armed MDS incarnation after it leaves the map, and deletes both identities.
+// It never evicts during cleanup; residual namespace
 // entries are discarded by the verified filesystem removal.
 func (c *fixtureCluster) finishMDSCephFSData(ctx context.Context) error {
 	s, x := c.mdsFresh, c.mdsCephFSData
@@ -1037,6 +1048,8 @@ func (c *fixtureCluster) finishMDSCephFSData(ctx context.Context) error {
 	goName, nativeName := "mds-cephfs-data-"+s.token, "mds-cephfs-data-native-"+s.token
 	if x.baselineReady {
 		fail(c.mdsCephFSDataRestoreRuntime(ctx, &receipt))
+		// The OSD override is restored before any native namespace readback.
+		fail(c.mdsCephFSDataRestoreOSDDrop(ctx, &receipt))
 		sessions, _, err := c.mdsCephFSDataSessions(ctx)
 		fail(err)
 		goPresent := false
@@ -1115,7 +1128,7 @@ func (c *fixtureCluster) finishMDSCephFSData(ctx context.Context) error {
 			}
 		}
 	} else {
-		receipt.NamespaceChecked, receipt.NamespaceRestored, receipt.LayoutRestored, receipt.BlocklistRestored, receipt.ConfigRestored = true, true, true, true, true
+		receipt.NamespaceChecked, receipt.NamespaceRestored, receipt.LayoutRestored, receipt.BlocklistRestored, receipt.ConfigRestored, receipt.OSDConfigRestored = true, true, true, true, true, true
 		receipt.NamespaceNote = "preparation ended before any owned namespace mutation was possible"
 	}
 	remove := func(config *ceph.ClientConfig, intent bool, label string) bool {
@@ -1135,7 +1148,7 @@ func (c *fixtureCluster) finishMDSCephFSData(ctx context.Context) error {
 	for _, err := range errs {
 		receipt.Errors = append(receipt.Errors, err.Error())
 	}
-	receipt.Completed = len(errs) == 0 && receipt.ConfigRestored && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved
+	receipt.Completed = len(errs) == 0 && receipt.ConfigRestored && receipt.OSDConfigRestored && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved
 	if !receipt.Completed && len(errs) == 0 {
 		errs = append(errs, errors.New("MDS CephFS data cleanup did not verify every check"))
 	}

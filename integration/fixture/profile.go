@@ -286,9 +286,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		if p.mdsCephFSData == "1" {
 			selected = "^TestCephMDSCephFSDataIntegration$"
-			// The cap-send recovery variant shares the owned data fixture and
-			// is admitted only when explicitly selected.
-			if p.testRun == "^TestCephMDSCephFSCapSendRecoveryIntegration$" {
+			// The cap-send recovery and writeback-fence variants share the
+			// owned data fixture and are admitted only when explicitly selected.
+			if p.testRun == "^TestCephMDSCephFSCapSendRecoveryIntegration$" || p.testRun == mdsCephFSWritebackSelector {
 				selected = p.testRun
 			}
 		}
