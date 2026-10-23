@@ -28,7 +28,12 @@ those selectors or `TestCephOSDIgnoreCacheIntegration`.
 Two `mds-cephfs-capsend` rows select only
 `TestCephMDSCephFSCapSendRecoveryIntegration` in the two selected MDS
 profiles. They reuse the already-forwarded `mds_cephfs_data` input; the
-data fixture accepts only that selector or `TestCephMDSCephFSDataIntegration`.
+data fixture accepts only that selector, the writeback-fence selector below or
+`TestCephMDSCephFSDataIntegration`.
+Two `mds-cephfs-writeback` rows select only
+`TestCephMDSCephFSWritebackFenceIntegration` in the same two MDS profiles and
+reuse the same input; the data fixture admits its OSD drop and eviction
+controls only for that selector.
 One further `osd` row selects only `TestCephOSDSetChunkNativeIntegration`, the
 native-only SET_CHUNK manifest checkpoint, on the single-BlueStore legacy-v6
 fixture. It needs no opt-in parameter: the checkpoint uses the ordinary OSD

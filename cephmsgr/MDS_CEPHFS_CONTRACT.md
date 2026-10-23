@@ -476,8 +476,19 @@ flushes (no completed-flush branch), both FLUSH_ACKs correlated, native
 LibCephFS observed the final size, mtime and bytes, and no object request
 was repeated. This covers head UPDATE only; a FLUSHSNAP refused by a Lost
 session uses the same product path but was not exercised live.
-Interrupted OSD writeback and eviction with buffered data remain
-unverified.
+The [writeback-fence acceptance](../integration/fixture/MDS_CEPHFS_WRITEBACK_FENCE_VALIDATION.md)
+completes generation A's object writes and accepts its metadata flush, then
+interrupts the test consumer's next object write while the single owned OSD
+drops client messages after Messenger receipt. The bounded wait ended with
+`OutcomeUnknownError`, and the OSD's own receipt and drop lines attributed
+exactly one dropped op to the client. The consumer flushed no size beyond
+its completed writes. Across an owned MDS restart, a native reader's
+capability revoke and an admin-socket eviction, both Linux profiles kept
+the accepted size and mtime and A's bytes natively. The evicted address
+instance's next object write on its existing OSD connection returned -108,
+and a new client instance found neither the uncertain nor the fenced write
+in the objects. No object request was repeated. Buffered data written back
+during the revoke itself and partially applied ranges remain unverified.
 
 Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and
@@ -512,8 +523,8 @@ Evidence, and completed-record answers, denial and a missed window by the
 completion acceptance there. Not exercised live: split reconnect messages,
 realm topologies beyond the root/directory data recipe, the GETATTR conversion,
 completed-record answers for other operations, a lost reply of an OPEN with
-O_CREAT, completed-flush deduplication after an ACK loss and interrupted
-OSD writeback; cap-send error recovery has its own acceptance under
+O_CREAT and completed-flush deduplication after an ACK loss; cap-send error
+recovery and interrupted OSD writeback have their own acceptances under
 Evidence. Ordinary
 dirty-metadata UPDATE/FLUSH_ACK and the two-snapshot recovery recipe have
 the separate evidence above.
