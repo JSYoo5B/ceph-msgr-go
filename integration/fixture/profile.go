@@ -503,6 +503,10 @@ func (p profile) containerEnvironment() map[string]string {
 }
 
 func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
+	copyErrorMarker := ""
+	if p.copyFromLateErrorSelected() {
+		copyErrorMarker = "1"
+	}
 	marker := ""
 	mapMarker := ""
 	if p.sparseReadOracle != "" {
@@ -529,6 +533,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION":   p.mdsCephFSCompletion,
 		"CEPH_MSGR_TEST_MDS_CEPHFS_DATA":         p.mdsCephFSData,
 		"CEPH_MSGR_TEST_RBD":                     p.rbdBase,
+		copyFromLateErrorMarker:                  copyErrorMarker,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    marker,
 		"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         mapMarker,
 		"CEPH_MSGR_NATIVE_U64_XATTR_ORACLE":      u64Marker,
