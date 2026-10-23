@@ -85,7 +85,10 @@ non-skipped test as PASS with no gate problem.
 - The refusals left all four objects and both reference views unchanged.
 - The source kept its bytes, user version (3) and seeded mtime
   (1700001100.000000000) through both chunks, so the manifest change was
-  visible only through `references_chunk` (1, then 2).
+  visible only through `references_chunk` (1, then 2). That run recorded the
+  mtime; the test now also enforces it for both successful chunks
+  (`setChunkSourceKept`, with the synthetic regression
+  `TestSetChunkSourceKeptRequiresMTime`).
 - The target kept its bytes. Its user version went from 3 to 5 after chunk A
   and to 6 after chunk B. The test asserts only that it advanced: user
   versions follow the PG's last user version, which the failed absent-target

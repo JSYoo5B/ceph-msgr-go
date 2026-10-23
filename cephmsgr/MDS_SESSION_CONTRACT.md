@@ -237,8 +237,9 @@ a session whose reclaim wait ended without its reply refuses further reclaims
 (`ErrMDSReclaimUncertain`; open a new session) and ignores the late reply. `FinishReclaim` sends
 the FLAG_FINISH message the native client sends after a successful reclaim; the
 MDS sends no answer and a RESET reclaim leaves nothing to finish. The library
-does not wait for the blocklist to reach OSDs. The MDS checks only its own
-advertised RECLAIM_CLIENT before handling a reclaim; the client declaration of
-bit 10 is for filesystem admission only.
+does not wait for the blocklist to reach OSDs. The client checks the MDS's
+advertised RECLAIM_CLIENT before sending a reclaim (as the native client
+does); the MDS does not check its own advertisement when it handles one. The
+client's own bit 10 declaration is for filesystem admission only.
 
 Verification: [MDS_RECLAIM_VALIDATION.md](../integration/fixture/MDS_RECLAIM_VALIDATION.md).
