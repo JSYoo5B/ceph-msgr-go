@@ -27,12 +27,15 @@ type copyStagingObservation struct {
 	Temp       []string `json:"temp"`
 }
 
+type copyHistoryOp struct {
+	Description string `json:"description"`
+	InitiatedAt string `json:"initiated_at"`
+}
+
 type copyGetHistory struct {
-	Ops      int `json:"ops"`
-	CopyGets []struct {
-		Description string `json:"description"`
-		InitiatedAt string `json:"initiated_at"`
-	} `json:"copy_gets"`
+	Ops      int             `json:"ops"`
+	All      []copyHistoryOp `json:"all_ops"`
+	CopyGets []copyHistoryOp `json:"copy_gets"`
 }
 
 // The pinned process_copy_chunk creates a temporary object while the cursor
@@ -250,8 +253,15 @@ func TestCephOSDCopyFromMultiChunkLateErrorIntegration(t *testing.T) {
 	}
 	// One copy-get per chunk names the source; at least two with the lowered
 	// max is independent native evidence that the incomplete-cursor branch ran.
-	receipt.HistoryAfter = history()
-	receipt.SourceCopyGets = sourceGets(receipt.HistoryAfter)
+	// Completed ops reach the history asynchronously, so poll briefly.
+	for attempt := 0; ; attempt++ {
+		receipt.HistoryAfter = history()
+		receipt.SourceCopyGets = sourceGets(receipt.HistoryAfter)
+		if len(receipt.SourceCopyGets) >= 2 || attempt >= 20 {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
 	for _, description := range receipt.SourceCopyGets {
 		if !strings.Contains(description, "[copy-get max "+strconv.Itoa(multiChunkLimit)+"]") {
 			t.Fatal("source copy-get did not use the lowered chunk limit", description)

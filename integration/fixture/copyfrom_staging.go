@@ -17,6 +17,8 @@ import (
 const (
 	copyHistoryLimit    = 8 << 20
 	copyHistoryMaxOps   = 64
+	copyHistoryMaxAll   = 1024
+	copyHistoryMaxText  = 4096
 	copyStagingMax      = 4096
 	copyStagingLimit    = 4 << 20
 	copyStagingMaxTemp  = 64
@@ -37,6 +39,7 @@ type copyGetHistoryReceipt struct {
 	Size     json.RawMessage `json:"history_size,omitempty"`
 	Duration json.RawMessage `json:"history_duration,omitempty"`
 	Ops      int             `json:"ops"`
+	All      []copyGetOp     `json:"all_ops"`
 	CopyGets []copyGetOp     `json:"copy_gets"`
 }
 
@@ -73,7 +76,16 @@ func decodeCopyGetHistory(raw []byte) (copyGetHistoryReceipt, error) {
 		return receipt, errors.New("invalid native op history shape")
 	}
 	receipt.Size, receipt.Duration, receipt.Ops = dump.Size, dump.Duration, len(*dump.Ops)
+	if len(*dump.Ops) > copyHistoryMaxAll {
+		return receipt, errors.New("native op history exceeds entry bound")
+	}
+	// Retain every bounded description so an absent copy-get remains
+	// diagnosable against what the daemon actually recorded.
+	receipt.All = *dump.Ops
 	for _, op := range *dump.Ops {
+		if len(op.Description) > copyHistoryMaxText {
+			return receipt, errors.New("native op description exceeds bound")
+		}
 		if strings.Contains(op.Description, "[copy-get ") {
 			receipt.CopyGets = append(receipt.CopyGets, op)
 		}
