@@ -25,17 +25,19 @@ every MDS connection of the client before Dial:
   flags, directory counts, fscrypt fields), quota delivery, inline data and
   pool namespaces, the created inode in create replies and caller pool IDs in
   open arguments.
-- CephFS client features: bits 0–9, ALTERNATE_NAME (15), 32BITS_RETRY_FWD
-  (18), NEW_SNAPREALM_INFO (19) and HAS_OWNER_UIDGID (20). REPLY_ENCODING
-  selects the versioned InodeStat (v8), DirStat (v1) and LeaseStat (v2);
-  NEW_SNAPREALM_INFO selects SnapRealmInfoNew traces. Reclaim, lazy wanted
-  caps, multi-reconnect, delegated inodes, metrics, notify-session-state,
-  getvxattr, client-side auth-cap checks, charmap and blockdiff stay
-  withheld.
+- CephFS client features: bits 0–9, RECLAIM_CLIENT (10), ALTERNATE_NAME
+  (15), 32BITS_RETRY_FWD (18), NEW_SNAPREALM_INFO (19) and HAS_OWNER_UIDGID
+  (20), `0x1c87ff` in native `session ls`. REPLY_ENCODING selects the
+  versioned InodeStat (v8), DirStat (v1) and LeaseStat (v2);
+  NEW_SNAPREALM_INFO selects SnapRealmInfoNew traces. RECLAIM_CLIENT changes
+  no MDS behavior and only satisfies a `reclaim_client` filesystem
+  requirement. Lazy wanted caps, multi-reconnect, delegated inodes, metrics,
+  notify-session-state, getvxattr, client-side auth-cap checks, charmap and
+  blockdiff stay withheld; see `internal/mds/CLIENT_EXTENSION_DECISIONS.md`.
 
 Without EnableCephFS the command-only and session-only contracts are
-unchanged: sessions declare bits 0–8 and any request, reply or push fails
-the transport.
+unchanged: sessions declare bits 0–8 and 10, and any request, reply or push
+fails the transport.
 
 ## Lossless Messenger resume
 

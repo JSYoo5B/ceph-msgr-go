@@ -59,14 +59,16 @@ func TestEncodeRequestOpenNativeLayout(t *testing.T) {
 	want := "00000000" + "0000000000000000" + "0000000000000000" + "00000000" + "00000000" +
 		"02000000" + "09000000" + hex.EncodeToString([]byte("entity_id")) + "05000000" + hex.EncodeToString([]byte("admin")) +
 		"04000000" + hex.EncodeToString([]byte("root")) + "01000000" + "2f" +
-		"08000000" + "ff01000000000000" +
+		"08000000" + "ff05000000000000" +
 		"0101" + "04000000" + "00000000" +
 		"00000000" + "00000000" + "ffffffffffffffff"
 	if got := hex.EncodeToString(m.Front); got != want {
 		t.Fatalf("front\n got %s\nwant %s", got, want)
 	}
-	if !FeatureBitsetHas(ClientFeatures, 8) || FeatureBitsetHas(ClientFeatures, 9) || FeatureBitsetHas(ClientFeatures, 16) {
-		t.Fatal("declared feature set is not exactly bits 0-8")
+	for bit := uint(0); bit < 64; bit++ {
+		if want := bit <= 8 || bit == FeatureReclaimClient; FeatureBitsetHas(ClientFeatures, bit) != want {
+			t.Fatal("declared feature set is not exactly bits 0-8 and 10", bit)
+		}
 	}
 }
 
