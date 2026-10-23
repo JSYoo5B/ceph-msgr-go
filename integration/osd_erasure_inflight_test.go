@@ -379,8 +379,9 @@ func erasureInFlightScenario(t *testing.T, width erasureWidth, optimized bool, p
 				t.Fatalf("explicit resubmission through the new primary: %v (native version %d applied=%v)", err, n.Version, bytes.Equal(n.Data, want))
 			}
 			t.Logf("resubmission: tid %d code %d flags %#x user version %d attempt %d epoch %d", reply.Transaction, reply.Code, reply.Flags, reply.UserVersion, reply.RetryAttempt, reply.MapEpoch)
-			if reply.Transaction != sub.Transaction || reply.Code != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.Submission.Attempt != 1 {
-				t.Fatal("resubmission receipt differs", reply.Transaction, reply.Code, reply.Flags)
+			if reply.Transaction != sub.Transaction || reply.Code != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.RetryAttempt != 1 ||
+				reply.Submission.Transaction != sub.Transaction || reply.Submission.MapEpoch != fresh.Epoch {
+				t.Fatal("resubmission receipt differs", reply.Transaction, reply.Code, reply.Flags, reply.RetryAttempt, reply.Submission.MapEpoch)
 			}
 			time.Sleep(300 * time.Millisecond)
 			final = poolObserve(t, ctx, 1, object, "", "")
