@@ -254,30 +254,10 @@ func TestCephOSDCopyFromMultiChunkLateErrorIntegration(t *testing.T) {
 		suffix.Code != cephmsgr.OSDSetXattr || suffix.Result != 0 || copyResult.PayloadLength != 0 || suffix.PayloadLength != 0 || len(copyResult.Data)+len(suffix.Data) != 0 {
 		t.Fatal("multi-chunk original union/per-op representation differs", copyResult, suffix)
 	}
-	// One copy-get per chunk names the source; at least two with the lowered
-	// max is independent native evidence that the incomplete-cursor branch ran.
-	// Completed ops reach the history asynchronously, so poll briefly.
-	for attempt := 0; ; attempt++ {
-		receipt.HistoryAfter = history()
-		receipt.SourceCopyGets = sourceGets(receipt.HistoryAfter)
-		if len(receipt.SourceCopyGets) >= 2 || attempt >= 20 {
-			break
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	for _, description := range receipt.SourceCopyGets {
-		// The pinned _copy_some asserts the requested source version before
-		// each copy-get chunk.
-		if !strings.Contains(description, " [assert-version v"+strconv.FormatUint(source.Version, 10)+",copy-get max "+strconv.Itoa(multiChunkLimit)+"] ") {
-			t.Fatal("source copy-get did not use the lowered chunk limit and source version", description)
-		}
-	}
-	if len(receipt.SourceCopyGets) < 2 {
-		t.Fatal("native history lacks multi-chunk copy-get evidence", receipt.HistoryAfter)
-	}
 	// Temporary removal is submitted after the error callback. Poll a
-	// complete enumeration; an observed partial object must carry the
-	// pinned generate_temp_object identity for this PG and primary role.
+	// complete enumeration first, as soon as possible after the reply; an
+	// observed partial object must carry the pinned generate_temp_object
+	// identity for this PG and primary role.
 	deadline := time.Now().Add(30 * time.Second)
 	for {
 		list := staging()
@@ -298,6 +278,27 @@ func TestCephOSDCopyFromMultiChunkLateErrorIntegration(t *testing.T) {
 			t.Fatal("temporary copy object remained after bounded poll", receipt.TemporaryObserved)
 		}
 		time.Sleep(250 * time.Millisecond)
+	}
+	// One copy-get per chunk names the source; at least two with the lowered
+	// max is independent native evidence that the incomplete-cursor branch ran.
+	// Completed ops reach the history asynchronously, so poll briefly.
+	for attempt := 0; ; attempt++ {
+		receipt.HistoryAfter = history()
+		receipt.SourceCopyGets = sourceGets(receipt.HistoryAfter)
+		if len(receipt.SourceCopyGets) >= 2 || attempt >= 20 {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	for _, description := range receipt.SourceCopyGets {
+		// The pinned _copy_some asserts the requested source version before
+		// each copy-get chunk.
+		if !strings.Contains(description, " [assert-version v"+strconv.FormatUint(source.Version, 10)+",copy-get max "+strconv.Itoa(multiChunkLimit)+"] ") {
+			t.Fatal("source copy-get did not use the lowered chunk limit and source version", description)
+		}
+	}
+	if len(receipt.SourceCopyGets) < 2 {
+		t.Fatal("native history lacks multi-chunk copy-get evidence", receipt.HistoryAfter)
 	}
 	// Successful selected runs keep only the job log, so record the bounded
 	// public observations there. Object names are synthetic fixture names.
