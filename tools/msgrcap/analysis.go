@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"path/filepath"
 	"sort"
 	"time"
 
@@ -99,7 +100,7 @@ func analyze(name string, r io.Reader, opts analysisOptions) (*report, error) {
 	_, _ = io.Copy(io.Discard, counter)
 	rep := &report{
 		Tool:  "msgrcap analyze (development-only)",
-		Input: inputInfo{Name: name, Bytes: counter.n, SHA256: hex.EncodeToString(h.Sum(nil))},
+		Input: inputInfo{Name: filepath.Base(name), Bytes: counter.n, SHA256: hex.EncodeToString(h.Sum(nil))},
 		Pcap:  pr.info,
 		Limits: []string{
 			"Frames are decoded only from the contiguous reassembled prefix of each direction; data after the first gap is counted, not decoded.",
