@@ -14,8 +14,9 @@ import (
 )
 
 // Self-managed snapshots on an EC pool use an id allocated through MPoolOp and
-// a write SnapContext; a write accepted while one shard's OSD is down is
-// recovered onto that shard after it returns.
+// a write SnapContext. A write accepted while one shard's OSD is down still
+// reads back natively after that OSD returns, the PGs are clean and another
+// OSD is down.
 func TestCephOSDErasureSnapshotAndDegradedWriteIntegration(t *testing.T) {
 	erasureSnapshotScenario(t, erasureK2M1, false, "")
 }
@@ -28,8 +29,10 @@ func TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration(t *testing.T
 
 // The same on the optimized isa k=2,m=2 pool over four OSDs: one killed OSD
 // leaves exactly min_size 3 shards, so the PG stays active and accepts the
-// degraded write; after recovery a different shard's OSD is killed and the
-// native read needs the recovered shard.
+// degraded write. After clean recovery a different OSD is killed and the
+// native object bytes must still match. Three shards then remain, and k=2
+// of them suffice to decode, so this read does not show which bytes the
+// returned shard holds.
 func TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration(t *testing.T) {
 	erasureSnapshotScenario(t, erasureK2M2, true, "isa")
 }
@@ -167,8 +170,10 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 		if !bytes.Equal(after.Data, payload) || after.Version != reply.UserVersion {
 			t.Fatal("native state after recovery differs", after.Version, reply.UserVersion)
 		}
-		// With the PG clean again, kill a different shard's OSD: the read now
-		// needs the recovered shard written while its OSD was down.
+		// With the PG clean again, kill a different shard's OSD and read
+		// natively. Whether the decode uses the returned shard depends on
+		// the width (k of the remaining shards suffice), so this checks only
+		// the object bytes, not the returned shard's chunk.
 		fresh := poolPlace(t, ctx, 1, object, "")
 		var other int32 = -1
 		for _, id := range fresh.Acting {
@@ -194,9 +199,9 @@ func erasureSnapshotScenario(t *testing.T, width erasureWidth, optimized bool, p
 				time.Sleep(2 * time.Second)
 			}
 			if n := poolObserve(t, ctx, 1, object, "", ""); !bytes.Equal(n.Data, payload) {
-				t.Fatal("bytes written while degraded were not recovered onto the returned shard")
+				t.Fatal("native object bytes after clean recovery and a second single-OSD outage differ")
 			}
-			t.Logf("read with osd.%d down after recovery of osd.%d matched", other, victim)
+			t.Logf("native object bytes matched with osd.%d down after clean recovery of osd.%d", other, victim)
 		}
 	})
 }

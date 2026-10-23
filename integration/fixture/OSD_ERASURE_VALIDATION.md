@@ -334,8 +334,10 @@ container runtime, at `0dfedcaceb813e95e9582f82b499b2d08966fca5`
   on shard 0. osd.1 (nonprimary shard 1) was killed; at epoch 53, acting
   `[3 NONE 2 0]`, the WRITEFULL returned ONDISK with user version 2 and the
   native readback matched. After osd.1's restart and clean PGs the native
-  bytes and version matched. With osd.0 then killed, the native read,
-  which needs the recovered shard, matched. The self-managed snapshot case
+  bytes and version matched. With osd.0 then killed, the native object
+  bytes still matched. Three shards remained and k=2 of them suffice to
+  decode, so this read does not show that the bytes recovered onto osd.1's
+  shard are correct. The self-managed snapshot case
   passed on the same pool (clone and head read back natively).
 - Every killed OSD was restarted to clean PGs, and owned pool and profile
   removal was confirmed by each test's cleanup.
@@ -358,7 +360,9 @@ active) when it dies, or a signed refusal across the epoch change.
 
 Not verified for k=2,m=2: legacy-v6, other security, address or runtime
 profiles, jerasure, wire shard 2 of the size-4 primary-first permutation,
-snapshots or degraded writes on the nonoptimized pool, an in-flight
+snapshots or degraded writes on the nonoptimized pool, the chunk recovered
+onto the returned shard after the degraded write (min_size stays 3 and no
+direct shard read is made, so no native oracle checks that chunk), an in-flight
 mutation held inside the OSD when the primary dies, and EC resubmission
 after an applied mutation. The unit-level numeric-domain test of
 `OSDPrimaryFirst` (PoolSize 2..128) is synthetic and does not accept those

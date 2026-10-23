@@ -46,8 +46,10 @@ object cases passed on a non-optimized isa k=2,m=2 pool (size 4, min_size 3)
 over four OSDs in one replicated-PG profile, without faults, and on an
 optimized isa k=2,m=2 pool in the same profile, together with PG listing, a
 degraded read and primary failover. On the optimized k=2,m=2 pool a
-self-managed snapshot and a write while one shard's OSD was down (recovered
-after its restart) were also verified. Other opcodes, recovery traffic and
+self-managed snapshot and a write while one shard's OSD was down were also
+verified. After that OSD's restart, clean PGs and another single-OSD
+outage the native object bytes still matched; the chunk recovered onto the
+returned shard is not checked. Other opcodes, recovery traffic and
 other EC profiles are unverified.
 
 ## In-flight EC mutations across an epoch change
@@ -117,7 +119,9 @@ primary-eligible shards first; the fixture oracle does the same.
 The writer-side backoff gate cannot undo the renumbering from the encoded
 request, so a BLOCK on an EC PG gates requests for its object range on every
 shard of that PG on the connection (over-refusal, never a bypass). Self-managed snapshots, watch/notify and a write during one
-shard's absence (later recovered) were verified on optimized k=2,m=1 and
-k=2,m=2 pools.
+shard's absence were verified on optimized k=2,m=1 and k=2,m=2 pools. On
+k=2,m=1 the read after recovery with another OSD down decodes from the
+returned shard and the primary only. On k=2,m=2 three shards remain, so
+that read shows only that the object bytes match.
 
 Verification: [OSD_ERASURE_VALIDATION.md](../../integration/fixture/OSD_ERASURE_VALIDATION.md).
