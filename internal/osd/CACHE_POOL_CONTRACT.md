@@ -116,8 +116,14 @@ records the server results of the same operations from librados on one
 fixture profile. The [Go acceptance](../../integration/fixture/OSD_CACHE_OP_GO_VALIDATION.md)
 sent all five operations from the Go client on one secure/aes256k IPv6
 container legacy-v6 single-BlueStore profile and matched a closed native
-observer at every step; other profiles, a live EAGAIN try-flush and a live
-lost reply remain unverified (the lost-reply boundary is synthetic).
+observer at every step; other profiles and a live EAGAIN try-flush remain
+unverified. Its lost-reply CACHE_FLUSH cell separates two claims: bounded
+native observation of the applied flush (base and tier B, dirty=false) while
+the local wait is blocked, and a Go-side local count (one submission, one
+transport, the next transaction on a fresh connection) for no replay. Stable
+post-state cannot prove the latter, since a replayed clean flush is a no-op.
+Neither claim establishes ONDISK receipt, crash durability or daemon-side
+request accounting.
 
 ## Evidence boundaries
 

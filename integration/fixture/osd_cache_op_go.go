@@ -9,7 +9,7 @@ import (
 // The Go-originated cache-tier operation test reuses the live cache-pool
 // fixture (owned base and writeback tier, no overlay) and its scoped
 // identities. The product client sends the cache operations; this closed
-// native observer only seeds, observes and removes its own three heads and
+// native observer only seeds, observes and removes its own four heads and
 // never issues a cache operation. Each phase is one control; an uncertain
 // observer call is retained and nothing is reissued.
 const (
@@ -17,7 +17,7 @@ const (
 	cacheOpGoAction   = "go-ops"
 )
 
-var cacheOpGoLabels = map[string]bool{"after-evict-dirty": true, "pinned": true, "unpinned": true, "flushed": true, "try-flushed": true, "evicted": true, "absent-final": true, "clean-flush": true, "clean-try-flush": true, "absent-flush": true, "absent-try-flush": true, "absent-evict": true}
+var cacheOpGoLabels = map[string]bool{"after-evict-dirty": true, "pinned": true, "unpinned": true, "flushed": true, "try-flushed": true, "evicted": true, "absent-final": true, "clean-flush": true, "clean-try-flush": true, "absent-flush": true, "absent-try-flush": true, "absent-evict": true, "lost-flushed": true, "lost-flush-settled": true}
 
 func cacheOpGoControl(fields []string) (phase, label string, ok bool) {
 	switch {

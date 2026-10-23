@@ -8,13 +8,21 @@ heads, observes them independently (IGNORE_CACHE STAT+READ in both pools and
 the C++ is_dirty read used by the native-only checkpoint) and removes them. It
 issues no cache operation. Each phase is a separate fixture control:
 
-  prepare        record placements, seed base A and tier B for two heads and
-                 observe them; observe an absent control head
+  prepare        record placements, seed base A and tier B for three heads
+                 and observe them; observe an absent control head
   observe LABEL  observe the head that a closed label names
   finish         remove every owned head and confirm absence
 
 Every call publishes its intent first; an uncertain call stops the phase and
 nothing is reissued, including by a later phase.
+
+The lost-reply head serves the live lost-reply CACHE_FLUSH cell. While the Go
+client's local wait is still blocked, `lost-flushed` polls that head within a
+closed budget until base B, tier B and dirty=false are observed together, and
+records every poll. It observes application only: a replayed flush against the
+now-clean head would leave the same state, so this oracle makes no claim about
+how many flush requests were sent. `lost-flush-settled` observes the same head
+once after the Go side has closed its blocked connection.
 """
 import json
 import os
@@ -29,14 +37,19 @@ IGNORE_CACHE = ops.IGNORE_CACHE
 RECEIPT = "osd-cache-op-go-native.json"
 CHECKPOINT = "cache-op-go-observer-v1"
 FLUSH, TRY, ABSENT = "go-cache-flush", "go-cache-try", "go-cache-absent"
-OBJECTS = (FLUSH, TRY, ABSENT)
+LOST = "go-cache-lost-flush"
+OBJECTS = (FLUSH, TRY, ABSENT, LOST)
+SEEDED = (FLUSH, TRY, LOST)
 # Closed observation labels and the head each one reads. try-flushed also
 # polls is_dirty within a bounded budget, as the native-only checkpoint does.
 LABELS = {"after-evict-dirty": FLUSH, "pinned": FLUSH, "unpinned": FLUSH, "flushed": FLUSH,
           "try-flushed": TRY, "evicted": FLUSH, "absent-final": ABSENT,
           "clean-flush": FLUSH, "clean-try-flush": FLUSH,
-          "absent-flush": ABSENT, "absent-try-flush": ABSENT, "absent-evict": ABSENT}
+          "absent-flush": ABSENT, "absent-try-flush": ABSENT, "absent-evict": ABSENT,
+          "lost-flushed": LOST, "lost-flush-settled": LOST}
 TRY_POLLS, TRY_INTERVAL = ops.TRY_POLLS, ops.TRY_INTERVAL
+# Application budget for the lost-reply flush: at most 20 polls, 0.5 s apart.
+LOST_POLLS, LOST_INTERVAL = 20, 0.5
 PHASES = ("prepare", "observe", "finish")
 
 
@@ -67,7 +80,7 @@ class Controller(ops.Controller):
                 placed.update(pool_name=pool, object=name)
                 self.receipt["placements"].append(placed)
                 self.persist()
-        for name in (FLUSH, TRY):
+        for name in SEEDED:
             self.call("seed-base-" + name, "observer", base, name, "writefull", IGNORE_CACHE, gate=(0,), data=BASE)
             self.call("seed-tier-" + name, "observer", tier, name, "writefull", IGNORE_CACHE, gate=(0,), data=CHANGED)
             seeded = self.observe_head("seeded-" + name, name)
@@ -87,6 +100,11 @@ class Controller(ops.Controller):
             raise ops.Stop("observation outside the prepared sequence or repeated: " + label)
         name = LABELS[label]
         entry = {}
+        if label == "lost-flushed":
+            self.receipt["labels"][label] = self.lost_flushed(name)
+            self.receipt["phase"] = "observed"
+            self.persist()
+            return
         if label == "try-flushed":
             polls = []
             for index in range(TRY_POLLS):
@@ -101,6 +119,25 @@ class Controller(ops.Controller):
         self.receipt["labels"][label] = entry
         self.receipt["phase"] = "observed"
         self.persist()
+
+    def lost_flushed(self, name):
+        """Poll base, tier and dirty together until B, B and clean, within budget."""
+        polls, entry = [], {}
+        for index in range(LOST_POLLS):
+            entry = self.observe_head("lost-flushed-poll-%d" % index, name)
+            state = entry["dirty"]
+            applied = (self.holds(entry["snapshot"]["base"], CHANGED) and self.holds(entry["snapshot"]["tier"], CHANGED)
+                       and state["code"] == 0 and state.get("dirty") is False)
+            polls.append({"base_b": self.holds(entry["snapshot"]["base"], CHANGED),
+                          "tier_b": self.holds(entry["snapshot"]["tier"], CHANGED), "dirty": state.get("dirty")})
+            if applied:
+                break
+            if index + 1 < LOST_POLLS:
+                self.sleep(LOST_INTERVAL)
+        entry["lost_polls"] = polls
+        entry["poll_budget"] = [LOST_POLLS, LOST_INTERVAL]
+        entry["applied"] = bool(polls) and polls[-1] == {"base_b": True, "tier_b": True, "dirty": False}
+        return entry
 
     def finish(self):
         if self.receipt["phase"] == "finished":
