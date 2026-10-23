@@ -135,8 +135,8 @@ func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 	if len(requests) != 1 {
 		t.Fatal("the lost query was retransmitted before an explicit new call", requests)
 	}
-	t.Logf("connected MON %s stopped after server reply: GID=%d connection=%d TID=%d sequence=%d handle=%d epoch=%d oldest=%d terminal=%v",
-		peon, before.GlobalID, held.Request.Connection, held.Request.TID, held.Request.Sequence, held.Request.Handle, held.Newest, held.Oldest, lost.err)
+	t.Logf("connected MON %s stopped after server reply: peer=%s GID=%d connection=%d TID=%d sequence=%d handle=%d epoch=%d oldest=%d terminal=%v",
+		peon, held.Request.Endpoint, before.GlobalID, held.Request.Connection, held.Request.TID, held.Request.Sequence, held.Request.Handle, held.Newest, held.Oldest, lost.err)
 	fresh, err := client.MapVersion(ctx, cephmsgr.OSDMapKind)
 	if err != nil || fresh.Newest == 0 || fresh.Oldest == 0 || fresh.Oldest > fresh.Newest {
 		t.Fatal("fresh explicit map-version request after connected stop", fresh, err)
@@ -158,8 +158,8 @@ func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 	if fresh.Newest != native {
 		t.Fatal("recovered map-version does not match the independent native epoch", fresh, native)
 	}
-	t.Logf("explicit recovery: GID=%d connection=%d TID=%d sequence=%d handle=%d epoch=%d oldest=%d native=%d; original query not replayed",
-		after.GlobalID, next.Request.Connection, next.Request.TID, next.Request.Sequence, next.Request.Handle, fresh.Newest, fresh.Oldest, native)
+	t.Logf("explicit recovery: peer=%s GID=%d connection=%d TID=%d sequence=%d handle=%d epoch=%d oldest=%d native=%d; original query not replayed",
+		next.Request.Endpoint, after.GlobalID, next.Request.Connection, next.Request.TID, next.Request.Sequence, next.Request.Handle, fresh.Newest, fresh.Oldest, native)
 	if err := testcluster.ControlDaemon(ctx, control, "start", "mon", peon); err != nil {
 		t.Fatal("restart stopped MON", err)
 	}

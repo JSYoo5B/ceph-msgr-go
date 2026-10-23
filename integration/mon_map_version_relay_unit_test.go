@@ -132,11 +132,11 @@ func TestMonMapVersionRelayFragmentationCorrelationAndEOF(t *testing.T) {
 
 func TestMonMapVersionRelayFreshConnectionPassesNewIdentity(t *testing.T) {
 	relay := newMapVersionRelay()
+	// MON TIDs are session-local: a new admitted session may reuse 9.
+	// The connection plus TID and client-wide handle identify its query.
 	for _, tc := range []struct {
 		tid, handle uint64
 		hold        bool
-		// MON TIDs are session-local: a new admitted session may reuse 9.
-		// The connection plus TID and client-wide handle identify its query.
 	}{{9, 11, true}, {9, 12, false}} {
 		local, peer := net.Pipe()
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
