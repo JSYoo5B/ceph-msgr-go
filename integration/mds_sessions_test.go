@@ -202,7 +202,7 @@ func (x *mdsSessionsControl) request(ctx context.Context, action string, gids ..
 func checkNativeOpenSession(n *nativeMDSSession, identity string, metadata map[string]string) error {
 	declared := nativeFeatureBits(cephmsgr.MDSSessionClientFeatures())
 	if n == nil || n.State != "open" || n.AuthType != "client" || n.AuthID != strings.TrimPrefix(identity, "client.") || n.EntityType != "client" || n.Address == "" || n.Caps != 0 || n.Leases != 0 ||
-		n.ClientFeatures != declared || n.ClientFeatures != "0x00000000000001ff" || n.MetricFlags != "0x0" || !maps.Equal(n.Metadata, metadata) {
+		n.ClientFeatures != declared || n.ClientFeatures != "0x00000000000005ff" || n.MetricFlags != "0x0" || !maps.Equal(n.Metadata, metadata) {
 		return fmt.Errorf("native open session differs from the declared client: %+v", n)
 	}
 	return nil
@@ -344,9 +344,9 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 			t.Error("preserve MDS sessions public evidence", err)
 		}
 	})
-	newClient := func(t *testing.T, name, id, key string) (*cephmsgr.Client, *cephmsgr.MDSConnection, *mdsCommandDials) {
+	newClient := func(t *testing.T, name, id, key string, configure ...func(*cephmsgr.Options)) (*cephmsgr.Client, *cephmsgr.MDSConnection, *mdsCommandDials) {
 		t.Helper()
-		client, dials := mdsCommandClient(t, ctx, id, key, fresh.MDS.Endpoint, true)
+		client, dials := mdsCommandClient(t, ctx, id, key, fresh.MDS.Endpoint, true, configure...)
 		dialRecords = append(dialRecords, dialRecord{name, dials})
 		conn, err := client.OpenMDS(ctx, target)
 		if err != nil {
@@ -661,6 +661,73 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 		return
 	}
 
+	// RECLAIM_CLIENT (bit 10) is declared by both profiles. The pinned MDS
+	// reads it only for admission (Server::handle_client_session), so the
+	// acceptance is an open in each profile while the owned filesystem
+	// requires it, with the native session list as the independent observer.
+	if !leaf("admit_required_reclaim_client", func(t *testing.T) {
+		on, err := control.request(ctx, "require-reclaim-on")
+		if err != nil || on.Map.Required["feature_10"] != "reclaim_client" || len(on.Map.Required) != 1 || on.Mutation == nil || on.Mutation.State != "applied" {
+			t.Fatal("reclaim_client requirement was not applied", err)
+		}
+		sessionClient, sessionConn, _ := newClient(t, "I", identity, freshKey)
+		cephfsClient, cephfsConn, _ := newClient(t, "J", identity, freshKey, func(o *cephmsgr.Options) { o.EnableCephFS = true })
+		if !cephmsgr.MDSFeatureBitsetHas(sessionClient.MDSClientFeatures(), mds.FeatureReclaimClient) || !cephmsgr.MDSFeatureBitsetHas(cephfsClient.MDSClientFeatures(), mds.FeatureReclaimClient) {
+			t.Fatal("a profile does not declare RECLAIM_CLIENT")
+		}
+		sessionGID, cephfsGID := sessionClient.Snapshot().GlobalID, cephfsClient.Snapshot().GlobalID
+		sessionMeta, cephfsMeta := metadata("-i"), metadata("-j")
+		admitted := map[string]*cephmsgr.MDSSession{}
+		for _, c := range []struct {
+			name string
+			conn *cephmsgr.MDSConnection
+			meta map[string]string
+		}{{"I-session-profile", sessionConn, sessionMeta}, {"J-cephfs-profile", cephfsConn, cephfsMeta}} {
+			s, err := c.conn.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: c.meta, RenewInterval: 2 * time.Second})
+			if err != nil {
+				e := mdsSessionEvidence{Name: c.name, Identity: identity, Metadata: c.meta, Err: err.Error()}
+				sessions = append(sessions, e)
+				t.Fatal("open with reclaim_client required", c.name, err)
+			}
+			closeLater(t, s)
+			open, err := s.WaitOpen(ctx)
+			if err != nil || !cephmsgr.MDSFeatureBitsetHas(open.SupportedFeatures, mds.FeatureReclaimClient) {
+				t.Fatal("MDS OPEN does not advertise RECLAIM_CLIENT", c.name, err)
+			}
+			admitted[c.name] = s
+		}
+		native, err := control.request(ctx, "observe", sessionGID, cephfsGID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := checkNativeOpenSession(native.session(sessionGID), identity, sessionMeta); err != nil {
+			t.Fatal(err)
+		}
+		if err := checkNativeCephFSSession(native.session(cephfsGID), identity, cephfsMeta); err != nil {
+			t.Fatal(err)
+		}
+		for name, s := range admitted {
+			closing, stop := context.WithTimeout(ctx, 15*time.Second)
+			err := s.Close(closing)
+			stop()
+			e := describeMDSSession(name, identity, s)
+			sessions = append(sessions, e)
+			if err != nil || !errors.Is(s.Err(), cephmsgr.ErrMDSSessionClosed) {
+				t.Fatal("session admitted under reclaim_client did not close confirmed", name, err)
+			}
+		}
+		closed, err := control.request(ctx, "observe", sessionGID, cephfsGID)
+		if err != nil || closed.session(sessionGID) != nil || closed.session(cephfsGID) != nil {
+			t.Fatal("admitted sessions remained after close", err)
+		}
+		off, err := control.request(ctx, "require-reclaim-off")
+		if err != nil || !maps.Equal(off.Map.Required, base.Map.Required) || off.Mutation == nil || off.Mutation.State != "restored" {
+			t.Fatal("reclaim_client requirement was not restored", err)
+		}
+	}) {
+		return
+	}
+
 	if !leaf("reject_foreign_filesystem_caps", func(t *testing.T) {
 		client, conn, _ := newClient(t, "E", foreign, foreignKey)
 		meta := map[string]string{"entity_id": strings.TrimPrefix(foreign, "client."), "hostname": "ceph-msgr-go-" + prefix + "-e", "root": "/"}
@@ -918,7 +985,7 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 				t.Fatal("session client dialed an OSD or redialed the MDS", r.name, r.dials.MDS.Load(), r.dials.OSD.Load())
 			}
 		}
-		if len(dialRecords) != 9 {
+		if len(dialRecords) != 11 {
 			t.Fatal("unexpected number of session clients", len(dialRecords))
 		}
 	})
@@ -945,8 +1012,11 @@ func TestMDSSessionNativeOpenImages(t *testing.T) {
 	if err != nil || open.Op != mds.SessionOpen || hex.EncodeToString(open.SupportedFeatures) != mdsSessionNativeSupportedHex || hex.EncodeToString(open.MetricFlags) != mdsSessionNativeMetricHex {
 		t.Fatal("native OPEN vector feature images differ from the acceptance constants", open, err)
 	}
-	if got := nativeFeatureBits(cephmsgr.MDSSessionClientFeatures()); got != "0x00000000000001ff" {
-		t.Fatal("declared client features do not print as bits 0-8", got)
+	if got := nativeFeatureBits(cephmsgr.MDSSessionClientFeatures()); got != "0x00000000000005ff" {
+		t.Fatal("declared client features do not print as bits 0-8 and 10", got)
+	}
+	if got := nativeFeatureBits(cephmsgr.MDSCephFSClientFeatures()); got != "0x00000000001c87ff" {
+		t.Fatal("declared CephFS client features do not print as bits 0-10, 15 and 18-20", got)
 	}
 	for raw, want := range map[string]string{"": "0x0", "ff01": "0x00000000000001ff", "000000000000000001": "0x00000000000000010000000000000000"} {
 		data, _ := hex.DecodeString(raw)

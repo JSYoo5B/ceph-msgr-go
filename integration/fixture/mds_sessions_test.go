@@ -91,6 +91,8 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"10", token, "refuse-off"}, "refuse-off", nil},
 		{[]string{"10", token, "require-on"}, "require-on", nil},
 		{[]string{"10", token, "require-off"}, "require-off", nil},
+		{[]string{"10", token, "require-reclaim-on"}, "require-reclaim-on", nil},
+		{[]string{"10", token, "require-reclaim-off"}, "require-reclaim-off", nil},
 		{[]string{"10", token, "stale-on"}, "stale-on", nil},
 		{[]string{"10", token, "stale-off"}, "stale-off", nil},
 	} {
@@ -106,6 +108,7 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{"10", token, "observe", "042"}, {"10", token, "observe", "18446744073709551616"},
 		{"10", token, "evict"}, {"10", token, "evict", "42", "43"}, {"10", token, "refuse-on", "42"},
 		{"10", token, "fs", "set"}, {"10", token, "osd", "blocklist", "rm"}, {"10", token, "stale-on", "60"},
+		{"10", token, "require-reclaim-on", "reply_encoding"}, {"10", token, "require-charmap-on"}, {"10", token, "require-reclaim"},
 		{"0", token, "observe", "42"}, {"010", token, "observe", "42"}, {"-1", token, "observe", "42"},
 	} {
 		if _, _, err := parseMDSSessionsRequest(fields, token, 0); err == nil {
@@ -114,6 +117,22 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 	}
 	if _, _, err := parseMDSSessionsRequest([]string{"10", token, "observe", "42"}, token, 10); err == nil {
 		t.Fatal("replayed MDS sessions request admitted")
+	}
+	// Each requirement toggle names one fixed feature, its MDSMap dump key
+	// and a distinct journal kind; caller input never selects the feature.
+	for action, want := range map[string]mdsSessionsRequirement{
+		"require-on": {"reply_encoding", "feature_9", "required_client_features"}, "require-off": {"reply_encoding", "feature_9", "required_client_features"},
+		"require-reclaim-on":  {"reclaim_client", "feature_10", "required_client_features_reclaim_client"},
+		"require-reclaim-off": {"reclaim_client", "feature_10", "required_client_features_reclaim_client"},
+	} {
+		if got, ok := mdsSessionsRequirementFor(action); !ok || got != want {
+			t.Fatal("required-feature toggle changed", action, got, ok)
+		}
+	}
+	for _, action := range []string{"require", "require-reclaim", "refuse-on", "stale-on", "require-charmap-on", "-on"} {
+		if _, ok := mdsSessionsRequirementFor(action); ok {
+			t.Fatal("non-requirement action mapped to a required feature", action)
+		}
 	}
 }
 

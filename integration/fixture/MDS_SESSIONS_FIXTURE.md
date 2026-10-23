@@ -66,14 +66,20 @@ positive canonical decimals. Only these actions exist:
 | `observe` | 1 to 8 GlobalIDs | read only |
 | `refuse-on` / `refuse-off` | none | `fs set <fs> refuse_client_session true/false` |
 | `require-on` / `require-off` | none | `fs required_client_features <fs> add/rm reply_encoding` |
+| `require-reclaim-on` / `require-reclaim-off` | none | `fs required_client_features <fs> add/rm reclaim_client` |
 | `stale-on` / `stale-off` | none | `session_timeout` 30 s and `session_autoclose` 120 s through the provider's `TemporarySessionTimeouts`, plus central `mds mds_defer_session_stale=false` through `TemporaryConfig`; restore through both handles |
 | `evict` | one GlobalID | `tell mds.<fs>:0 session evict id=<gid>` |
 
 Each toggle is applied at most once and restored at most once. `refuse-on`
-and `require-on` require the map at its baseline. `require-on` additionally
-requires an empty native session list, because
+and both `require-*-on` actions require the map at its baseline, so at most one
+requirement is applied at a time. Each requirement has its own journal kind
+(`required_client_features` for `reply_encoding`,
+`required_client_features_reclaim_client` for `reclaim_client`); the feature
+is fixed by the action, never by caller input. Both `require-*-on` actions
+additionally require an empty native session list, because
 `update_required_client_features` evicts and blocklists every open session
-lacking the new feature. `evict` requires the GlobalID to be natively `open`
+lacking the new feature. Cleanup removes each requirement whose journal kind
+was touched and that native state still shows. `evict` requires the GlobalID to be natively `open`
 and its exact address absent from the baseline and current blocklist.
 
 `mds_defer_session_stale=false` is part of the stale window because, with the
@@ -119,9 +125,9 @@ filesystem is removed, with its own 45-second bound. It first writes an
 
 1. Restores the defer-stale configuration and session timeouts through their
    provider handles (no-ops after a confirmed restore; outside edits refused).
-2. Reads `fs get` independently. A refusal flag or `reply_encoding`
-   requirement that differs from the baseline is reverted only if the journal
-   records an owned mutation of that kind. It then waits for the map and the
+2. Reads `fs get` independently. A refusal flag or a `reply_encoding` or
+   `reclaim_client` requirement that differs from the baseline is reverted only
+   if the journal records an owned mutation of that kind. It then waits for the map and the
    daemon epoch to match the baseline.
 3. Verifies that no central `mds_defer_session_stale` entry remains and that
    the daemon's runtime value is back to the baseline.

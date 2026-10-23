@@ -44,23 +44,26 @@ const (
 	SessionFlagBlocklisted uint32 = 1
 )
 
-// ClientFeatures is the exact CephFS client feature bitset this stage
-// declares: bits 0-8 (the reserved release bits through MIMIC). MIMIC means
-// v7 session replies (error_string metadata, MDS supported features) are
-// decoded. REPLY_ENCODING(9) and every later protocol feature are withheld
-// until their message formats are implemented. The value is one little-endian
-// 64-bit block, as feature_bitset_t::encode emits it.
-var ClientFeatures = []byte{0xff, 0x01, 0, 0, 0, 0, 0, 0}
+// ClientFeatures is the exact CephFS client feature bitset the session
+// profile declares: bits 0-8 (the reserved release bits through MIMIC) and
+// RECLAIM_CLIENT (10). MIMIC means v7 session replies (error_string metadata,
+// MDS supported features) are decoded. RECLAIM_CLIENT is never read by the
+// pinned MDS for behavior; it only satisfies a filesystem requirement, and the
+// MClientReclaim exchange it names is implemented (reclaim.go).
+// REPLY_ENCODING(9) and every other later protocol feature are withheld until
+// their message formats are implemented. The value is one little-endian 64-bit
+// block, as feature_bitset_t::encode emits it.
+var ClientFeatures = []byte{0xff, 0x05, 0, 0, 0, 0, 0, 0}
 
 // CephFSClientFeatures is declared by the CephFS metadata profile: bits 0-8,
 // REPLY_ENCODING (9: versioned InodeStat/DirStat/LeaseStat replies),
-// ALTERNATE_NAME (15: alternate names in requests and leases),
-// 32BITS_RETRY_FWD (18: 32-bit retry/forward request fields),
-// NEW_SNAPREALM_INFO (19: SnapRealmInfoNew snap traces) and HAS_OWNER_UIDGID
-// (20: owner UID/GID in the v3 request head). Reclaim, lazy wanted caps,
-// multi-reconnect, delegated inodes, metrics, notify-session-state,
+// RECLAIM_CLIENT (10: as in ClientFeatures), ALTERNATE_NAME (15: alternate
+// names in requests and leases), 32BITS_RETRY_FWD (18: 32-bit retry/forward
+// request fields), NEW_SNAPREALM_INFO (19: SnapRealmInfoNew snap traces) and
+// HAS_OWNER_UIDGID (20: owner UID/GID in the v3 request head). Lazy wanted
+// caps, multi-reconnect, delegated inodes, metrics, notify-session-state,
 // getvxattr, client auth-cap checks, charmap and blockdiff stay withheld.
-var CephFSClientFeatures = []byte{0xff, 0x83, 0x1c, 0, 0, 0, 0, 0}
+var CephFSClientFeatures = []byte{0xff, 0x87, 0x1c, 0, 0, 0, 0, 0}
 
 // NoOldestClientTID is the native MClientSession default. The MDS ignores it
 // for completed-request trimming; no metadata request exists in this stage.

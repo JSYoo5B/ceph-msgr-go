@@ -31,8 +31,30 @@ import (
 
 const mdsSessionsJSONLimit = 512 << 10
 const mdsSessionsMaxGlobalIDs = 8
-const mdsSessionsRequiredFeature = "reply_encoding"
-const mdsSessionsRequiredFeatureKey = "feature_9"
+
+// mdsSessionsRequirement is one owned required_client_features toggle. The
+// key is the cephfs_dump_features name in the MDSMap dump. reply_encoding is
+// withheld by the session profile (a REJECT); reclaim_client is declared by
+// both profiles (an admission).
+type mdsSessionsRequirement struct {
+	feature, key, kind string
+}
+
+var mdsSessionsRequirements = map[string]mdsSessionsRequirement{
+	"require":         {"reply_encoding", "feature_9", "required_client_features"},
+	"require-reclaim": {"reclaim_client", "feature_10", "required_client_features_reclaim_client"},
+}
+
+// mdsSessionsRequirementFor maps a require-*-on/off action to its toggle.
+func mdsSessionsRequirementFor(action string) (mdsSessionsRequirement, bool) {
+	base, ok := strings.CutSuffix(action, "-on")
+	if !ok {
+		base, ok = strings.CutSuffix(action, "-off")
+	}
+	r, found := mdsSessionsRequirements[base]
+	return r, ok && found
+}
+
 const mdsSessionsDeferOption = "mds_defer_session_stale"
 
 // The stale window shortens session_timeout to the native minimum and keeps
@@ -92,7 +114,8 @@ type mdsSessionsScope struct {
 	lastRequestID        int64
 	baseline             mdsSessionsBaseline
 	mutations            []*mdsSessionsMutation
-	refuse, required     string
+	refuse               string
+	required             map[string]string
 	stale                string
 	windowKind           string
 	timeouts             *cephfs.SessionTimeoutsOverride
@@ -308,7 +331,7 @@ func parseMDSSessionsRequest(fields []string, token string, previousID int64) (i
 		if len(args) != 1 {
 			return 0, mdsSessionsAction{}, errors.New("MDS sessions eviction requires exactly one GlobalID")
 		}
-	case "refuse-on", "refuse-off", "require-on", "require-off", "stale-on", "stale-off", "autoclose-on":
+	case "refuse-on", "refuse-off", "require-on", "require-off", "require-reclaim-on", "require-reclaim-off", "stale-on", "stale-off", "autoclose-on":
 		if len(args) != 0 {
 			return 0, mdsSessionsAction{}, errors.New("MDS sessions mutation takes no caller arguments")
 		}
@@ -478,7 +501,7 @@ func (c *fixtureCluster) prepareMDSSessions(ctx context.Context, out string) err
 		return errors.New("invalid MDS sessions preparation scope")
 	}
 	s := c.mdsFresh
-	x := &mdsSessionsScope{out: out, foreignFS: "ceph-msgr-foreign-" + s.token, owned: map[string]uint64{}}
+	x := &mdsSessionsScope{out: out, foreignFS: "ceph-msgr-foreign-" + s.token, owned: map[string]uint64{}, required: map[string]string{}}
 	c.mdsSessions = x
 	ctx, stop := context.WithTimeout(ctx, fixtureStartupTimeout)
 	defer stop()
@@ -673,25 +696,33 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 	switch action.name {
 	case "observe":
 		return nil
-	case "refuse-on", "require-on":
-		kind, state := "refuse_client_session", &x.refuse
+	case "refuse-on", "require-on", "require-reclaim-on":
+		kind, state := "refuse_client_session", x.refuse
 		args := []string{"fs", "set", s.name, "refuse_client_session", "true"}
 		check := func(m mdsSessionsMap) bool { return m.Refuse }
-		if action.name == "require-on" {
-			kind, state = "required_client_features", &x.required
-			args = []string{"fs", "required_client_features", s.name, "add", mdsSessionsRequiredFeature}
+		requirement, requires := mdsSessionsRequirementFor(action.name)
+		if requires {
+			kind, state = requirement.kind, x.required[requirement.kind]
+			args = []string{"fs", "required_client_features", s.name, "add", requirement.feature}
 			check = func(m mdsSessionsMap) bool {
-				return m.Required[mdsSessionsRequiredFeatureKey] == mdsSessionsRequiredFeature
+				return m.Required[requirement.key] == requirement.feature
+			}
+		}
+		setState := func(value string) {
+			if requires {
+				x.required[kind] = value
+			} else {
+				x.refuse = value
 			}
 		}
 		current, err := c.mdsSessionsReadMap(ctx)
 		if err != nil {
 			return err
 		}
-		if *state != "" || current.Refuse != x.baseline.Map.Refuse || !maps.Equal(current.Required, x.baseline.Map.Required) {
+		if state != "" || current.Refuse != x.baseline.Map.Refuse || !maps.Equal(current.Required, x.baseline.Map.Required) {
 			return fmt.Errorf("MDS sessions %s is not at its owned baseline", kind)
 		}
-		if action.name == "require-on" {
+		if requires {
 			// update_required_client_features evicts and blocklists every open
 			// session lacking the feature. Refuse rather than cause evictions.
 			sessions, _, err := c.mdsSessionsList(ctx)
@@ -709,24 +740,32 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 		output, err := c.cluster.Ceph(ctx, args...)
 		if err != nil {
 			// Never replayed: cleanup reconciles from native state.
-			*state = "uncertain"
+			setState("uncertain")
 			return errors.Join(err, c.mdsSessionsRecord(m, "uncertain", output, err))
 		}
-		*state = "applied"
+		setState("applied")
 		if err := c.mdsSessionsRecord(m, "applied", output, nil); err != nil {
 			return err
 		}
 		_, _, err = c.mdsSessionsSettle(ctx, check)
 		return err
-	case "refuse-off", "require-off":
-		kind, state := "refuse_client_session", &x.refuse
+	case "refuse-off", "require-off", "require-reclaim-off":
+		kind, state := "refuse_client_session", x.refuse
 		args := []string{"fs", "set", s.name, "refuse_client_session", "false"}
-		if action.name == "require-off" {
-			kind, state = "required_client_features", &x.required
-			args = []string{"fs", "required_client_features", s.name, "rm", mdsSessionsRequiredFeature}
+		requirement, requires := mdsSessionsRequirementFor(action.name)
+		if requires {
+			kind, state = requirement.kind, x.required[requirement.kind]
+			args = []string{"fs", "required_client_features", s.name, "rm", requirement.feature}
+		}
+		setState := func(value string) {
+			if requires {
+				x.required[kind] = value
+			} else {
+				x.refuse = value
+			}
 		}
 		m := findMutation(kind)
-		if *state != "applied" || m == nil || m.State != "applied" {
+		if state != "applied" || m == nil || m.State != "applied" {
 			return fmt.Errorf("MDS sessions %s restore requested without an applied owned mutation", kind)
 		}
 		m.State = "restore-intended"
@@ -735,10 +774,10 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 		}
 		output, err := c.cluster.Ceph(ctx, args...)
 		if err != nil {
-			*state = "restore-uncertain"
+			setState("restore-uncertain")
 			return errors.Join(err, c.mdsSessionsRecord(m, "restore-uncertain", output, err))
 		}
-		*state = "restored"
+		setState("restored")
 		if err := c.mdsSessionsRecord(m, "restored", output, nil); err != nil {
 			return err
 		}
@@ -968,11 +1007,16 @@ func (c *fixtureCluster) mdsSessionsReconcile(ctx context.Context, receipt *mdsS
 			fail(err)
 			receipt.RefuseReconciled = err == nil
 		}
-		if !maps.Equal(current.Required, baseline.Required) && touched("required_client_features") && current.Required[mdsSessionsRequiredFeatureKey] != "" && baseline.Required[mdsSessionsRequiredFeatureKey] == "" {
-			_, err := c.cluster.Ceph(ctx, "fs", "required_client_features", s.name, "rm", mdsSessionsRequiredFeature)
-			fail(err)
-			receipt.RequiredReconciled = err == nil
+		removed, removeFailed := false, false
+		for _, name := range slices.Sorted(maps.Keys(mdsSessionsRequirements)) {
+			r := mdsSessionsRequirements[name]
+			if touched(r.kind) && current.Required[r.key] != "" && baseline.Required[r.key] == "" {
+				_, err := c.cluster.Ceph(ctx, "fs", "required_client_features", s.name, "rm", r.feature)
+				fail(err)
+				removed, removeFailed = true, removeFailed || err != nil
+			}
 		}
+		receipt.RequiredReconciled = removed && !removeFailed
 		final, _, err := c.mdsSessionsSettle(ctx, func(m mdsSessionsMap) bool {
 			return m.Refuse == baseline.Refuse && maps.Equal(m.Required, baseline.Required) && m.Timeout == baseline.Timeout && m.Autoclose == baseline.Autoclose
 		})

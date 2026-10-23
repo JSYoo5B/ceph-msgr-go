@@ -34,12 +34,16 @@ inputs. See `internal/mds/testdata/mds-session-native-provenance.json`.
 
 ## Declared CephFS client features
 
-REQUEST_OPEN declares exactly bits 0–8: the reserved release bits through
-MIMIC. MIMIC selects v7 replies (REJECT `error_string`, MDS supported features
-in OPEN), which are implemented. REPLY_ENCODING (9) and every later protocol
-feature (reclaim, multi-reconnect, delegated inodes, metrics, notify session
-state, 32-bit retry/forward, new snaprealm info, owner UID/GID, client-side
-auth-cap checks, charmap, blockdiff) are withheld until their formats exist.
+REQUEST_OPEN declares exactly bits 0–8 and RECLAIM_CLIENT (10): the reserved
+release bits through MIMIC, plus the reclaim exchange below. MIMIC selects v7
+replies (REJECT `error_string`, MDS supported features in OPEN), which are
+implemented. The pinned MDS never reads RECLAIM_CLIENT from the client for
+behavior; the declaration only satisfies a `reclaim_client` filesystem
+requirement (see `internal/mds/CLIENT_EXTENSION_DECISIONS.md`). REPLY_ENCODING
+(9) and every other later protocol feature (multi-reconnect, delegated
+inodes, metrics, notify session state, 32-bit retry/forward, new snaprealm
+info, owner UID/GID, client-side auth-cap checks, charmap, blockdiff) are
+withheld until their formats exist.
 Callers cannot widen the set. A filesystem whose `required_client_features`
 or `min_compat_client` requires a withheld bit makes the MDS REJECT the open
 with `missing required features`, which is returned explicitly.
@@ -233,7 +237,8 @@ a session whose reclaim wait ended without its reply refuses further reclaims
 (`ErrMDSReclaimUncertain`; open a new session) and ignores the late reply. `FinishReclaim` sends
 the FLAG_FINISH message the native client sends after a successful reclaim; the
 MDS sends no answer and a RESET reclaim leaves nothing to finish. The library
-does not wait for the blocklist to reach OSDs and does not change its own
-declared client features (RECLAIM_CLIENT is checked on the MDS side only).
+does not wait for the blocklist to reach OSDs. The MDS checks only its own
+advertised RECLAIM_CLIENT before handling a reclaim; the client declaration of
+bit 10 is for filesystem admission only.
 
 Verification: [MDS_RECLAIM_VALIDATION.md](../integration/fixture/MDS_RECLAIM_VALIDATION.md).

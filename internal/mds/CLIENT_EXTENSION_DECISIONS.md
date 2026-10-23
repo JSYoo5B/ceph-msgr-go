@@ -10,9 +10,10 @@ This document decides, for every CephFS client feature bit in the pinned
 `mds/cephfs_features.h` (`CEPHFS_FEATURE_MAX` 23, names from
 `mds/cephfs_features.cc:11-38`), whether this repository declares it, and for
 each withheld bit what the wire, lifecycle, server and consumer obligations are.
-It is a source audit plus a drift check. It enables no feature bit, adds no
-product behavior and is not native interoperability evidence. The declared
-sets themselves are specified in
+It is a source audit plus a drift check. The audit itself enabled no feature
+bit and is not native interoperability evidence; each later declaration lists
+its own evidence under "Declared extensions". The declared sets themselves
+are specified in
 [MDS_SESSION_CONTRACT.md](../../cephmsgr/MDS_SESSION_CONTRACT.md) and
 [MDS_CEPHFS_CONTRACT.md](../../cephmsgr/MDS_CEPHFS_CONTRACT.md); the codes are
 `ClientFeatures` and `CephFSClientFeatures` in [session.go](session.go).
@@ -67,7 +68,7 @@ no declared bit beyond the pinned list.
 | 7 | `luminous` | declared | declared | - | baseline |
 | 8 | `mimic` | declared | declared | - | baseline |
 | 9 | `reply_encoding` | withheld | declared | - | baseline |
-| 10 | `reclaim_client` | withheld | withheld | evidence | implement |
+| 10 | `reclaim_client` | declared | declared | - | baseline |
 | 11 | `lazy_caps_wanted` | withheld | withheld | policy, optional | consumer-owned |
 | 12 | `multi_reconnect` | withheld | withheld | evidence | implement |
 | 13 | `deleg_ino` | withheld | withheld | codec, lifecycle, policy | implement |
@@ -82,12 +83,18 @@ no declared bit beyond the pinned list.
 | 22 | `charmap` | withheld | withheld | codec, policy | implement |
 | 23 | `blockdiff` | withheld | withheld | optional | consumer-owned |
 
-Decision counts for the ten bits withheld by both profiles: implement 4,
+Decision counts for the nine bits withheld by both profiles: implement 3,
 defer 2, consumer-owned 4.
 
 ## How the MDS uses a client bit
 
-The pinned MDS reads the client's declared bitset in only these places:
+The pinned MDS reads the client's declared bitset for the bits withheld at
+audit time (10 to 14, 16, 17 and 21 to 23) only in the places below. Baseline
+bits have further behavior branches that their profile contracts already
+cover: MIMIC (8) selects v7 session messages and REPLY_ENCODING (9) the
+versioned reply encodings (for example `mds/Server.cc:660`, `mds/CInode.cc:4217`),
+and NEW_SNAPREALM_INFO (19) selects the snap trace format
+(`mds/Server.cc:12034`).
 
 - Admission. `Server::handle_client_session` REJECTs a REQUEST_OPEN whose
   bitset lacks any bit of the filesystem's `required_client_features`, with
@@ -101,7 +108,7 @@ The pinned MDS reads the client's declared bitset in only these places:
   `MDSMap::set_min_compat_client` maps to a single release-alias bit: Nautilus
   requires bit 12, Octopus and every later release require bit 13
   (`mds/MDSMap.cc:1314-1328`). There is no CephFS release bit after Octopus.
-- Behavior. Bit 11 (`mds/Locker.cc:2821-2830`), bit 13
+- Behavior of withheld bits. Bit 11 (`mds/Locker.cc:2821-2830`), bit 13
   (`mds/Server.cc:2558-2582`), bit 16 (`mds/Server.cc:650-670`, read from the
   REQUEST_OPEN message itself), bit 21 (`mds/Server.cc:757-760` and
   `1646-1649`) and bit 22 (`mds/Server.cc:4785-4801`).
@@ -123,32 +130,50 @@ live session-profile REJECT for a `reply_encoding` requirement is recorded in
 [MDS_SESSIONS_VALIDATION.md](../../integration/fixture/MDS_SESSIONS_VALIDATION.md);
 no live CephFS-profile refusal has been recorded.
 
-## Withheld features
+## Declared extensions
 
-### Bit 10: reclaim_client
+These bits were staged as `implement` by the audit and are now declared. Their
+rows are `baseline`; the evidence that changed the decision stays here.
+
+### Bit 10: reclaim_client (declared)
 
 - Wire: MClientReclaim (type 27, v1/compat1: uuid, flags with
   `CEPH_RECLAIM_RESET` or `FLAG_FINISH` alone) and MClientReclaimReply
   (type 28: result, OSD map epoch, address vector). No request/reply field or
   push changes with the client bit.
-- Server use: none beyond admission. The native client checks only the MDS's
-  advertisement before reclaiming (`client/Client.cc:17459`). Keeping
-  a session for reclaim during reconnect is driven by the `timeout` session
-  metadata, not by this bit (`mds/Server.cc:1878-1888`).
+- Server use: none beyond admission. The pinned source reads
+  `CEPHFS_FEATURE_RECLAIM_CLIENT` only in the native client, and there against
+  the MDS's advertisement (`client/Client.cc:17459`). Keeping a session for
+  reclaim during reconnect is driven by the `timeout` session metadata, not by
+  this bit (`mds/Server.cc:1878-1888`). Declaring it therefore changes no MDS
+  behavior; it satisfies `fs required_client_features add reclaim_client`.
+  By source, an open session declaring it is also not evicted when that
+  requirement is added (`mds/Server.cc:1778-1802`); that path is not exercised
+  live.
 - Ack/recovery: the RESET reply is the only answer; FINISH has none. A lost
   reply is an unknown outcome because the reply carries no request identity.
 - Server prerequisites: the MDS advertises RECLAIM_CLIENT and is at least in
   clientreplay; the target session has the same CephX identity and a `uuid`.
 - Consumer-owned: the uuid and timeout metadata, and the decision to reclaim.
-- Current code: [reclaim.go](reclaim.go), `MDSSession.Reclaim` and
+- Code: `ClientFeatures` and `CephFSClientFeatures` in [session.go](session.go)
+  set bit 10; [reclaim.go](reclaim.go), `MDSSession.Reclaim` and
   `FinishReclaim` in [mds_session.go](../../cephmsgr/mds_session.go); tests
   [TestEncodeReclaimMatchesTheNativeLayout](reclaim_test.go),
-  [TestMDSReclaimRefusalsAndUnknownOutcomes](../../cephmsgr/mds_reclaim_test.go);
-  live record [MDS_RECLAIM_VALIDATION.md](../../integration/fixture/MDS_RECLAIM_VALIDATION.md).
-- Gap: evidence only. Decision: implement as a declaration in both profiles.
-  Dependency: a live admission acceptance with
-  `fs required_client_features add reclaim_client` on the selected profiles,
-  plus the existing reclaim acceptance on the same source.
+  [TestMDSReclaimRefusalsAndUnknownOutcomes](../../cephmsgr/mds_reclaim_test.go).
+- Evidence: the live leaf `admit_required_reclaim_client` of
+  `TestCephMDSSessionsIntegration` opens a session in each profile while the
+  owned filesystem requires `reclaim_client`, and the reclaim leaf
+  `reclaim_evicts_the_target_session` runs in the same suite on the same
+  source, GitHub Actions run 39885092766 on both `mds-sessions` rows
+  ([MDS_SESSIONS_VALIDATION.md](../../integration/fixture/MDS_SESSIONS_VALIDATION.md),
+  [MDS_RECLAIM_VALIDATION.md](../../integration/fixture/MDS_RECLAIM_VALIDATION.md)).
+  The REQUEST_OPEN layout is covered by the fresh native vector; the encoder
+  copies the bitset image unchanged, and the native `session ls` of both live
+  profiles prints the declared images.
+- Not claimed: reclaim by a native libcephfs twin, multi-rank or failover
+  reclaim, and a requirement that combines `reclaim_client` with another bit.
+
+## Withheld features
 
 ### Bit 11: lazy_caps_wanted
 
@@ -355,7 +380,8 @@ no live CephFS-profile refusal has been recorded.
 - Opening (or keeping, or reconnecting) a session on a filesystem that
   requires any withheld bit, including the deprecated `min_compat_client` at
   Nautilus (bit 12) or Octopus and later (bit 13). This is refused explicitly;
-  bits 10 and 12 need only evidence, bit 13 needs the decode-only stage.
+  bit 12 needs only evidence, bit 13 needs the decode-only stage. A
+  `reclaim_client` requirement is admitted (bit 10 is declared).
 - Creating, linking or renaming entries into a directory with a charmap
   (bit 22): -EPERM.
 - Root-squash identities are reported as broken clients (bit 21). That is an
@@ -368,8 +394,9 @@ BLOCKDIFF (bits 17, 23) are not blocked by absent wire data.
 ## Order and dependencies
 
 Recovering already supported paths and the general coverage ledger take
-precedence (issue #11). Within this table the order is bits 10 and 12
-(evidence only), then bit 13 decode-only, then the bit 22 opt-in. Each
+precedence (issue #11). Within this table the order was bits 10 and 12
+(evidence only), then bit 13 decode-only, then the bit 22 opt-in. Bit 10 is
+declared; bit 12 is next. Each
 declaration change must update `ClientFeatures` or `CephFSClientFeatures`,
 this table, the profile contract and the native `session ls` feature
 assertions of the live tests together. The drift test fails on any one of

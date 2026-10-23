@@ -93,6 +93,13 @@ func nativeBitsetImage(raw []byte) []byte {
 	return append(binary.LittleEndian.AppendUint32(nil, uint32(len(raw))), raw...)
 }
 
+// nativeRequestOpenFeatures is the bitset the native REQUEST_OPEN vector was
+// built with (bits 0-8, tools/mds_session_native_encoder.cc). The encoder
+// copies any feature_bitset_t image unchanged, so the vector fixes the layout;
+// the declared profile bitsets are checked natively by the live session ls
+// assertions instead.
+var nativeRequestOpenFeatures = []byte{0xff, 0x01, 0, 0, 0, 0, 0, 0}
+
 func TestEncodeClientSessionMatchesFreshNative(t *testing.T) {
 	proof := readNativeSessionProof(t)
 	for _, tc := range []struct {
@@ -101,7 +108,7 @@ func TestEncodeClientSessionMatchesFreshNative(t *testing.T) {
 		encode  func() (msgr.MessageData, error)
 	}{
 		{"request-open", 7, func() (msgr.MessageData, error) {
-			return EncodeRequestOpen(map[string]string{"entity_id": "admin", "root": "/"}, ClientFeatures), nil
+			return EncodeRequestOpen(map[string]string{"entity_id": "admin", "root": "/"}, nativeRequestOpenFeatures), nil
 		}},
 		{"request-renewcaps", 1, func() (msgr.MessageData, error) { return EncodeSessionControl(SessionRequestRenewCaps, 5) }},
 		{"request-close", 1, func() (msgr.MessageData, error) { return EncodeSessionControl(SessionRequestClose, 0) }},
@@ -138,7 +145,7 @@ func TestEncodeClientSessionMatchesFreshNative(t *testing.T) {
 				t.Fatal("renewcaps source oldest_client_tid input lost")
 			}
 			if tc.version == 7 {
-				if !bytes.Equal(decoded.SupportedFeatures, ClientFeatures) || !reflect.DeepEqual(decoded.Metadata, receipt.Metadata) ||
+				if !bytes.Equal(decoded.SupportedFeatures, nativeRequestOpenFeatures) || !reflect.DeepEqual(decoded.Metadata, receipt.Metadata) ||
 					hex.EncodeToString(nativeBitsetImage(decoded.SupportedFeatures)) != receipt.SupportedFeatures {
 					t.Fatalf("request-open extension = %+v, native receipt %+v", decoded, receipt)
 				}
