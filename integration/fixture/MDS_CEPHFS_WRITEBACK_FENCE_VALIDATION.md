@@ -185,10 +185,34 @@ only while no restart is pending and no client blackhole is active. See
 
 ## Native results
 
-### Revoke-time writeback leaf
+### Revoke-time writeback leaf (2026-10-24)
 
-Pending: no native run of the revoke-time leaf has been recorded in this
-document yet. The run identifiers belong to the pull request that adds it.
+Tested PR head `0f81810287d6a60bac1471296322cfb3d50b5f4c` (#80) through the
+trusted default-branch `/ci run` workflow:
+[run 40033958831](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/40033958831).
+GitHub-hosted Ubuntu runners, image `quay.io/ceph/ceph:v20.2.4`. Every
+scenario job checked out that head; Basic PR CI passed at it
+([run 40033946708](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/40033946708)).
+
+| Configuration | Entire test | Revoke-time leaf | Restart leaf | Cleanup leaf | Result |
+| --- | --- | --- | --- | --- | --- |
+| IPv4 host, CRC, AES client/service keys, single BlueStore | 232.76 s | 48.00 s | 65.09 s | 22.06 s | 13/13 leaves PASS |
+| IPv6 container, secure, AES256K client/service keys, single MemStore | 292.37 s | 55.41 s | 82.99 s | 28.42 s | 13/13 leaves PASS |
+
+The same run passed both `mds-cephfs-data` and both `mds-cephfs-capsend`
+rows at that head (12/12 leaves each), so the shared leaves and the other
+restart recipes are unaffected.
+
+An earlier head, `eb38ad2dda7b70950127df4b4fd68f783ab869db`, started the
+reader behind the applied drop
+([run 40032171886](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/40032171886)).
+In both profiles the leaf latched B as uncertain, the reader stayed pending
+through the drop and its restoration, and the eviction UPDATE released Fb,
+but the reader then timed out after 75 s and the MDS sent the writer no
+further cap message. Reading `Client::check_pool_perm` suggests that the
+reader's pool-permission OSD operations met the drop; the native logs that
+would confirm it were not retained. The later pass does not prove that
+explanation. It shows only that the reordered recipe works.
 
 ### Restart leaf (2026-10-23)
 
