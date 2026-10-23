@@ -26,18 +26,20 @@ import (
 // oracle/test client and the IPC directory. No daemon entrypoint is replaced.
 type fixtureCluster struct {
 	testcontainers.Container
-	cluster     *ceph.Container
-	profile     profile
-	cancel      context.CancelFunc
-	done        chan struct{}
-	mu          sync.Mutex
-	controlErr  error
-	pauses      map[string]*ceph.ContainerPause
-	xattrLimits *xattrLimitsScope
-	mdsFresh    *mdsFreshScope
-	mdsCommands *mdsCommandsScope
-	mdsSessions *mdsSessionsScope
-	mdsCephFS   *mdsCephFSScope
+	cluster          *ceph.Container
+	profile          profile
+	cancel           context.CancelFunc
+	done             chan struct{}
+	mu               sync.Mutex
+	controlErr       error
+	pauses           map[string]*ceph.ContainerPause
+	xattrLimits      *xattrLimitsScope
+	copyFromError    *copyFromErrorScope
+	copyFromErrorOut string
+	mdsFresh         *mdsFreshScope
+	mdsCommands      *mdsCommandsScope
+	mdsSessions      *mdsSessionsScope
+	mdsCephFS        *mdsCephFSScope
 	// mdsCephFSRanks is the multi-rank CephFS acceptance scope.
 	mdsCephFSRanks *mdsCephFSRanksScope
 	// mdsCephFSCompletion is the CephFS request-completion acceptance scope.
@@ -63,6 +65,9 @@ func (c *fixtureCluster) Terminate(ctx context.Context, opts ...testcontainers.T
 	// Restore paused containers before requesting their orderly cleanup.
 	for _, pause := range c.pauses {
 		errs = append(errs, pause.Resume(ctx))
+	}
+	if c.copyFromError != nil {
+		errs = append(errs, c.copyFromError.Restore(ctx), c.copyFromError.save(c.copyFromErrorOut))
 	}
 	if c.xattrLimits != nil {
 		errs = append(errs, c.xattrLimits.Restore(ctx))
