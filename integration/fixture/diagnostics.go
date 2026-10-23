@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
@@ -98,7 +99,11 @@ func saveMetadata(out, diagnostics string) error {
 	if err := os.MkdirAll(diagnostics, 0o700); err != nil {
 		return err
 	}
-	for _, name := range metadataFiles {
+	soakNames, err := soakReceiptNames(out)
+	if err != nil {
+		return err
+	}
+	for _, name := range append(append([]string{}, metadataFiles...), soakNames...) {
 		file, err := os.Open(filepath.Join(out, name))
 		if os.IsNotExist(err) {
 			continue
@@ -106,7 +111,11 @@ func saveMetadata(out, diagnostics string) error {
 		if err != nil {
 			return err
 		}
-		err = saveBounded(file, filepath.Join(diagnostics, name))
+		if strings.HasPrefix(name, "osd-soak-v1-") {
+			err = saveSoakReceipt(file, filepath.Join(diagnostics, name))
+		} else {
+			err = saveBounded(file, filepath.Join(diagnostics, name))
+		}
 		file.Close()
 		if err != nil {
 			return err

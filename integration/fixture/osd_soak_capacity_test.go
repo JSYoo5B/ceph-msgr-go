@@ -17,6 +17,14 @@ func TestOSDSoakCapacityOverrideIsClosedAndFinite(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, err := loadProfile(func(key string) string { return tc.env[key] })
+			if tc.name == "other selector" {
+				// No admitted soak parent must be refused before allocating
+				// any devices, rather than fail the receipt gate after a run.
+				if err == nil {
+					t.Fatal("non-soak selection reached fixture startup")
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
