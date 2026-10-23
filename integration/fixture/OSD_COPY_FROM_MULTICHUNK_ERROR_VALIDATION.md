@@ -123,9 +123,11 @@ result receipts.
 
 ## Development iterations
 
-The selected runs before the checkpoint are retained as development evidence:
+The selected runs before the checkpoint are retained as development evidence.
+Their heads predate a rebase onto main and remain visible only in the pull
+request history:
 
-| Run | Head | Outcome |
+| Run | Pre-rebase head | Outcome |
 | --- | --- | --- |
 | 40031201803 | `93bf54b` | Signed reply checks passed; the default 20-entry history held no copy-get |
 | 40031670921 | `442800e` | Retained descriptions: the full history held only slower writes |
