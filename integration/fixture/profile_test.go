@@ -146,6 +146,14 @@ func TestProfileSelection(t *testing.T) {
 				env := copyProfileEnv(tc.env)
 				env["CEPH_MSGR_TEST_RUN"] = override
 				p, err := loadProfile(func(name string) string { return env[name] })
+				if env["CEPH_MSGR_TEST_OSD_SOAK"] != "" && override != "" {
+					// Soak receipt admission resolves the selected parents before
+					// fixture startup, including invalid caller regex refusal.
+					if err == nil {
+						t.Fatal("invalid soak selection reached fixture startup")
+					}
+					continue
+				}
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -412,6 +420,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_NATIVE_WRITESAME_ORACLE":      "",
 				"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    "",
 				"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         "",
+				copyFromLateErrorMarker:                  "",
 				"CEPH_MSGR_KEY_FILE":                     filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
 				"CEPH_MSGR_TEST_PEERS": p.peers, "CEPH_MSGR_IDENTITY": "client.test", "CEPH_MSGR_FSID": p.fsid,
 				"CEPH_MSGR_TEST_KEY_TYPE":       "aes",

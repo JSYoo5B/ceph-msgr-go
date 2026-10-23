@@ -79,6 +79,7 @@ func TestCephOSDSoakFailoverIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	ctx, cancel := context.WithTimeout(context.Background(), duration+5*time.Minute)
 	defer cancel()
+	receipts := newSoakReceipts(t, "failover", duration)
 	const workers = 4
 	prepared := false
 	t.Cleanup(func() {
@@ -87,30 +88,49 @@ func TestCephOSDSoakFailoverIntegration(t *testing.T) {
 		}
 		cleanup, stop := context.WithTimeout(context.Background(), 180*time.Second)
 		defer stop()
-		if result := nativeOmapWrite(t, cleanup, base, "cleanup", omapWriteInput{}); !result.Cleanup.Removed {
+		started := time.Now()
+		result := nativeOmapWrite(t, cleanup, base, "cleanup", omapWriteInput{})
+		receipts.write(t, "cleanup", map[string]any{"removed": result.Cleanup.Removed, "objects": result.Cleanup.Objects, "elapsed_ns": time.Since(started).Nanoseconds()})
+		if !result.Cleanup.Removed {
 			t.Error("owned soak objects were not removed", result.Cleanup)
 		}
 	})
 	owned := nativeOmapWrite(t, ctx, base, "prepare", omapWriteInput{Seed: &omapWriteSeed{Baseline: []byte("soak")}, Reserve: workers})
 	prepared = true
+	receipts.owned = append([]string{}, owned.Objects...)
 	if len(owned.Objects) != workers+1 {
 		t.Fatal("native soak objects differ", owned.Objects)
 	}
 	names := owned.Objects[1:]
-	var appends, reads, unknowns, resubmissions, resent, replacements atomic.Int64
+	var appends, reads, unknowns, resubmissions, resent, replacements, attrs, truncations atomic.Int64
+	faults := 0
+	receipts.counters = func() map[string]int64 {
+		return map[string]int64{"appends": appends.Load(), "reads": reads.Load(), "unknowns": unknowns.Load(), "resubmissions": resubmissions.Load(), "resent": resent.Load(), "replacements": replacements.Load(), "xattrs": attrs.Load(), "truncations": truncations.Load(), "faults": int64(faults)}
+	}
 	type outcome struct {
 		data []byte
 		attr string
 	}
 	results := make([]outcome, workers)
+	receipts.beginWorkload(t)
 	work, stop := context.WithTimeout(ctx, duration)
 	defer stop()
 	var wg sync.WaitGroup
+	defer func() {
+		stop()
+		if t.Failed() {
+			cancel()
+		}
+		wg.Wait()
+		receipts.finishWorkload()
+	}()
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
+			defer receipts.workerDone()
 			fail := func(format string, args ...any) {
+				receipts.failure(fmt.Sprintf("worker %d: "+format, append([]any{w}, args...)...))
 				t.Errorf("worker %d: "+format, append([]any{w}, args...)...)
 				stop()
 			}
@@ -178,6 +198,7 @@ func TestCephOSDSoakFailoverIntegration(t *testing.T) {
 					}
 					call, done := context.WithTimeout(ctx, 6*time.Second)
 					reply, err := o.Request(call, r)
+					receipts.mutation(reply, err)
 					done()
 					var unknown *cephmsgr.OutcomeUnknownError
 					var server *cephmsgr.OSDError
@@ -234,11 +255,13 @@ func TestCephOSDSoakFailoverIntegration(t *testing.T) {
 						return
 					}
 					attr = value
+					attrs.Add(1)
 				case len(expected) > 32<<10:
 					if !write(cephmsgr.OSDOperation{Code: cephmsgr.OSDTruncate, Offset: 0}) {
 						return
 					}
 					expected = expected[:0]
+					truncations.Add(1)
 				default:
 					b := make([]byte, 1+random.Intn(256))
 					random.Read(b)
@@ -257,7 +280,6 @@ func TestCephOSDSoakFailoverIntegration(t *testing.T) {
 	// current primary of a worker's object and another acting member,
 	// restarted and clean before the next.
 	started := time.Now()
-	faults := 0
 	for work.Err() == nil {
 		select {
 		case <-work.Done():
@@ -277,33 +299,46 @@ func TestCephOSDSoakFailoverIntegration(t *testing.T) {
 			victim = strconv.Itoa(int(r.ID))
 		}
 		soakOracle.Lock()
+		phaseStarted := time.Now()
 		err = testcluster.ControlDaemon(ctx, dir, "kill", "osd", victim)
 		soakOracle.Unlock()
+		receipts.write(t, fmt.Sprintf("fault-%03d-kill", faults+1), map[string]any{"victim": victim, "primary": r.ID, "acting": r.Acting, "elapsed_ns": time.Since(phaseStarted).Nanoseconds(), "passed": err == nil})
 		if err != nil {
+			receipts.failure("kill osd." + victim + ": " + err.Error())
 			t.Fatal("kill", victim, err)
 		}
 		time.Sleep(12 * time.Second)
 		soakOracle.Lock()
+		phaseStarted = time.Now()
 		err = testcluster.ControlDaemon(ctx, dir, "start", "osd", victim)
+		receipts.write(t, fmt.Sprintf("fault-%03d-restart", faults+1), map[string]any{"victim": victim, "elapsed_ns": time.Since(phaseStarted).Nanoseconds(), "passed": err == nil})
 		if err == nil {
+			phaseStarted = time.Now()
 			err = testcluster.ControlDaemon(ctx, dir, "verify", "osd-ready", "clean")
+			receipts.write(t, fmt.Sprintf("fault-%03d-clean", faults+1), map[string]any{"victim": victim, "elapsed_ns": time.Since(phaseStarted).Nanoseconds(), "passed": err == nil})
 		}
 		soakOracle.Unlock()
 		if err != nil {
+			receipts.failure("restart/clean osd." + victim + ": " + err.Error())
 			t.Fatal("restart", victim, err)
 		}
 		faults++
 		t.Logf("elapsed=%s fault %d: osd.%s killed and back clean; appends=%d reads=%d unknown=%d resubmissions=%d resent=%d replacements=%d", time.Since(started).Round(time.Second), faults, victim, appends.Load(), reads.Load(), unknowns.Load(), resubmissions.Load(), resent.Load(), replacements.Load())
 	}
 	wg.Wait()
+	receipts.finishWorkload()
 	if t.Failed() {
 		return
 	}
 	waitOSDFixtureClean(t, ctx, base)
+	receipts.write(t, "recovery-clean", map[string]any{"passed": true})
 	for w, r := range results {
-		state := nativeOmapWrite(t, ctx, base, "observe", omapWriteInput{Object: names[w]}).State
+		observed := time.Now()
+		observation := nativeOmapWrite(t, ctx, base, "observe", omapWriteInput{Object: names[w]})
+		state := observation.State
 		got := xattrInventory(state.nativeXattrSnapshot)["soak"]
-		if !bytes.Equal(state.Data, r.data) || got != r.attr {
+		if !receipts.observe(t, w, r.data, r.attr, observation, time.Since(observed)) {
+			receipts.failure(fmt.Sprintf("worker %d final native bytes/xattr/version differs", w))
 			t.Fatalf("worker %d: native object differs: %d bytes vs %d expected, xattr %q vs %q", w, len(state.Data), len(r.data), got, r.attr)
 		}
 	}

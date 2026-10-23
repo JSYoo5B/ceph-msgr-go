@@ -98,6 +98,20 @@ if test "$osd_fixture" = 1; then
 fi
 touch /out/ready
 while true; do
+    if test -f /out/observe-mon-command; then
+        fixture_phase=observe-mon-command
+        test "$config_fixture" = 1 || exit 2
+        read -r request_id token phase extra < /out/observe-mon-command
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 && test -z "$extra" || exit 2
+        case "$phase" in initial|applied|overwritten|recovered|cleanup) ;; *) exit 2 ;; esac
+        rm /out/observe-mon-command
+        # librados' Python timeout is ineffective for mon_command. The outer
+        # process timeout bounds even a native mutation with no returned reply.
+        timeout 25 python3 /out/mon_command_outcome_oracle.py "$root" /out "$request_id" "$token" "$phase"
+        sh /out/publish-ack.sh "/out/mon-command-observed.$request_id"
+        fixture_phase=control-idle
+    fi
     if test -f /out/verify-osd-maps; then
         fixture_phase=verify-osd-maps
         # Native blob validation also serves MON-only map acquisition; no OSD

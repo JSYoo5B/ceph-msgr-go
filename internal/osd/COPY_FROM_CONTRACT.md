@@ -81,7 +81,13 @@ read is blocked. A later [compound checkpoint](../../integration/fixture/OSD_COP
 verifies both copy opcodes with xattr suffixes on absent/populated destinations,
 using an independent native copy baseline, object bytes/xattrs/OMAP/header,
 source mtime, user versions and known-unsent refusal/connection checks.
-Destination loss after source-read completion/staging remains unverified. A committed copy
+A separate [late-error checkpoint](../../integration/fixture/OSD_COPY_FROM_LATE_ERROR_VALIDATION.md)
+uses the pinned copy-completion injector: Go COPY_FROM2 plus one xattr suffix
+returns aggregate EIO with per-op [-EINPROGRESS, 0], leaves the populated
+destination and source unchanged, and restores/read-checks the owned daemon
+option. An untouched zero suffix result does not prove execution. This selected
+single-BlueStore CRC/v6 error is distinct from a destination-loss or staging
+barrier. Destination loss after source-read completion/staging remains unverified. A committed copy
 survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.
 

@@ -147,6 +147,11 @@ func command(ctx context.Context, args []string) (result error) {
 	if _, err := os.Stat(filepath.Join(root, "SPEC.md")); err != nil {
 		return fmt.Errorf("product checkout: %w", err)
 	}
+	if p.osdSoak != "" {
+		if p.sourceSHA, err = soakSourceSHA(root, p.sourceSHA); err != nil {
+			return err
+		}
+	}
 	if args[0] == "serve" && *output == "" {
 		return errors.New("serve requires an existing private -output directory")
 	}
@@ -197,9 +202,13 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 			}
 			cleanup, cancel := context.WithTimeout(context.Background(), p.cleanupBudget())
 			defer cancel()
-			if err := c.Terminate(cleanup); err != nil {
+			suiteErr := result
+			terminationStarted := time.Now()
+			terminationErr := c.Terminate(cleanup)
+			if err := terminationErr; err != nil {
 				result = errors.Join(result, &cleanupFailure{cause: err})
 			}
+			result = errors.Join(result, finishSoakReceipts(project, out, p, suiteErr, terminationErr, time.Since(terminationStarted)))
 			if p.osd == "1" || p.mdsFresh == "1" || p.rbdBase == "1" || p.osdCachePools == "1" {
 				result = errors.Join(result, saveMetadata(out, p.diagnostics))
 			}

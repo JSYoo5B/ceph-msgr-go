@@ -1,0 +1,548 @@
+{
+  "schema_version": 1,
+  "tested_source": "17471623b68ef98175f4c2f9eccf0a21df2d49a2",
+  "selector": "^TestCephOSDCopyFromLateErrorIntegration$",
+  "profile": {
+    "architecture": "amd64",
+    "daemon_version": "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)",
+    "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+    "connection_mode": "crc",
+    "key_type": "aes",
+    "service_cipher": "aes",
+    "ip_family": "4",
+    "runtime": "host",
+    "osd_profile": "legacy-v6",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "provider_effective_module": {
+      "path": "github.com/JSYoo5B/ceph-testcontainers-go",
+      "version": "v0.3.0",
+      "sum": "h1:LRXc5mVpqw+/xDRWsv+m8ouLzkVDtB385RoQZ/7ygOY="
+    }
+  },
+  "result": {
+    "SourceBefore": {
+      "code": 0,
+      "version": 3,
+      "seconds": 1700011000,
+      "nanos": 123456789,
+      "data": "Ym91bmRlZCBjb3B5IHNvdXJjZQD/",
+      "attributes": [
+        {
+          "name": "c291cmNlLWF0dHI=",
+          "value": "AP8="
+        }
+      ],
+      "gets": [],
+      "omap": {
+        "aggregate": 0,
+        "raw_wire_payload_available": false,
+        "operations": [
+          {
+            "index": 0,
+            "op": "vals",
+            "opcode": 4626,
+            "prval": 0,
+            "more": false,
+            "entries": [
+              {
+                "key": "YQ==",
+                "value": "c291cmNlLW1hcA=="
+              },
+              {
+                "key": "eg==",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "op": "bykeys",
+            "opcode": 4628,
+            "prval": 0,
+            "more": null,
+            "entries": [
+              {
+                "key": "YQ==",
+                "value": "c291cmNlLW1hcA=="
+              },
+              {
+                "key": "eg==",
+                "value": ""
+              }
+            ]
+          }
+        ]
+      },
+      "header": "AHP/"
+    },
+    "SourceAfter": {
+      "code": 0,
+      "version": 3,
+      "seconds": 1700011000,
+      "nanos": 123456789,
+      "data": "Ym91bmRlZCBjb3B5IHNvdXJjZQD/",
+      "attributes": [
+        {
+          "name": "c291cmNlLWF0dHI=",
+          "value": "AP8="
+        }
+      ],
+      "gets": [],
+      "omap": {
+        "aggregate": 0,
+        "raw_wire_payload_available": false,
+        "operations": [
+          {
+            "index": 0,
+            "op": "vals",
+            "opcode": 4626,
+            "prval": 0,
+            "more": false,
+            "entries": [
+              {
+                "key": "YQ==",
+                "value": "c291cmNlLW1hcA=="
+              },
+              {
+                "key": "eg==",
+                "value": ""
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "op": "bykeys",
+            "opcode": 4628,
+            "prval": 0,
+            "more": null,
+            "entries": [
+              {
+                "key": "YQ==",
+                "value": "c291cmNlLW1hcA=="
+              },
+              {
+                "key": "eg==",
+                "value": ""
+              }
+            ]
+          }
+        ]
+      },
+      "header": "AHP/"
+    },
+    "DestinationBefore": {
+      "code": 0,
+      "version": 4,
+      "seconds": 1700011001,
+      "nanos": 987654321,
+      "data": "c3RhbGU=",
+      "attributes": [
+        {
+          "name": "c3RhbGU=",
+          "value": "b2xk"
+        }
+      ],
+      "gets": [],
+      "omap": {
+        "aggregate": 0,
+        "raw_wire_payload_available": false,
+        "operations": [
+          {
+            "index": 0,
+            "op": "vals",
+            "opcode": 4626,
+            "prval": 0,
+            "more": false,
+            "entries": [
+              {
+                "key": "c3RhbGU=",
+                "value": "b2xk"
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "op": "bykeys",
+            "opcode": 4628,
+            "prval": 0,
+            "more": null,
+            "entries": [
+              {
+                "key": "c3RhbGU=",
+                "value": "b2xk"
+              }
+            ]
+          }
+        ]
+      },
+      "header": "b2xk"
+    },
+    "DestinationAfter": {
+      "code": 0,
+      "version": 4,
+      "seconds": 1700011001,
+      "nanos": 987654321,
+      "data": "c3RhbGU=",
+      "attributes": [
+        {
+          "name": "c3RhbGU=",
+          "value": "b2xk"
+        }
+      ],
+      "gets": [],
+      "omap": {
+        "aggregate": 0,
+        "raw_wire_payload_available": false,
+        "operations": [
+          {
+            "index": 0,
+            "op": "vals",
+            "opcode": 4626,
+            "prval": 0,
+            "more": false,
+            "entries": [
+              {
+                "key": "c3RhbGU=",
+                "value": "b2xk"
+              }
+            ]
+          },
+          {
+            "index": 1,
+            "op": "bykeys",
+            "opcode": 4628,
+            "prval": 0,
+            "more": null,
+            "entries": [
+              {
+                "key": "c3RhbGU=",
+                "value": "b2xk"
+              }
+            ]
+          }
+        ]
+      },
+      "header": "b2xk"
+    },
+    "native_cli_exit": 1,
+    "NativeBefore": {
+      "code": -2,
+      "version": 0,
+      "seconds": 0,
+      "nanos": 0,
+      "data": "",
+      "attributes": null,
+      "gets": [],
+      "omap": null,
+      "header": null
+    },
+    "NativeAfter": {
+      "code": -2,
+      "version": 0,
+      "seconds": 0,
+      "nanos": 0,
+      "data": "",
+      "attributes": null,
+      "gets": [],
+      "omap": null,
+      "header": null
+    },
+    "option": {
+      "schema_version": 1,
+      "source_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+      "osd": 0,
+      "max_chunk": 8388608,
+      "effective_before": "false",
+      "effective_applied": "true",
+      "effective_restored": "false",
+      "apply_attempted": true,
+      "apply_returned_success": true,
+      "restore_attempted": true,
+      "restore_returned_success": true
+    },
+    "pool": 2,
+    "primary": 0,
+    "PG": 0,
+    "Hash": 2270748240,
+    "RouteEpoch": 13,
+    "go_reply": {
+      "Submission": {
+        "Transaction": 3,
+        "GlobalID": 4638,
+        "ClientIncarnation": 0,
+        "MapEpoch": 13,
+        "Attempt": 0,
+        "Placement": null
+      },
+      "Transaction": 3,
+      "GlobalID": 4638,
+      "Object": "ceph-msgr-native-object-native-omapw-absent-8a9200c93bcd4ab39e94f37e81cc014d",
+      "PG": {
+        "Pool": 2,
+        "Seed": 2270748240
+      },
+      "Flags": 67108900,
+      "Code": -5,
+      "MapEpoch": 13,
+      "RetryAttempt": 0,
+      "LegacyVersion": {
+        "Epoch": 0,
+        "Version": 0
+      },
+      "ReplayVersion": {
+        "Epoch": 0,
+        "Version": 0
+      },
+      "UserVersion": 0,
+      "Operations": [
+        {
+          "WriteSamePatternLength": 0,
+          "Code": 8749,
+          "Flags": 0,
+          "Offset": 0,
+          "Length": 0,
+          "TruncateSize": 0,
+          "TruncateSequence": 0,
+          "PayloadLength": 0,
+          "Result": -115,
+          "Data": null,
+          "Xattr": {
+            "NameLength": 0,
+            "ValueLength": 0,
+            "ComparisonOp": 0,
+            "ComparisonMode": 0
+          },
+          "Class": {
+            "ClassLength": 0,
+            "MethodLength": 0,
+            "Argc": 0,
+            "InputLength": 0,
+            "OutputLength": 0
+          },
+          "AllocHint": {
+            "ExpectedObjectSize": 0,
+            "ExpectedWriteSize": 0,
+            "Flags": 0
+          },
+          "CopyFromVersion": 3,
+          "CopyFromSnapshot": 18446744073709551614,
+          "Snapshot": 0,
+          "Snapshots": {
+            "Sequence": 0,
+            "Clones": null
+          },
+          "Watchers": null,
+          "Extents": null,
+          "SparseRead": {
+            "Extents": null,
+            "Data": null
+          },
+          "Watch": {
+            "Cookie": 0,
+            "Version": 0,
+            "NotifyID": 0,
+            "Generation": 0,
+            "TimeoutSeconds": 0,
+            "ProtocolVersion": 0,
+            "Action": 0
+          },
+          "Checksum": {
+            "ChunkSize": 0,
+            "Type": 0,
+            "Values": null
+          },
+          "Dirty": false
+        },
+        {
+          "WriteSamePatternLength": 0,
+          "Code": 8961,
+          "Flags": 0,
+          "Offset": 0,
+          "Length": 0,
+          "TruncateSize": 0,
+          "TruncateSequence": 0,
+          "PayloadLength": 0,
+          "Result": 0,
+          "Data": null,
+          "Xattr": {
+            "NameLength": 16,
+            "ValueLength": 15,
+            "ComparisonOp": 0,
+            "ComparisonMode": 0
+          },
+          "Class": {
+            "ClassLength": 0,
+            "MethodLength": 0,
+            "Argc": 0,
+            "InputLength": 0,
+            "OutputLength": 0
+          },
+          "AllocHint": {
+            "ExpectedObjectSize": 0,
+            "ExpectedWriteSize": 0,
+            "Flags": 0
+          },
+          "CopyFromVersion": 0,
+          "CopyFromSnapshot": 0,
+          "Snapshot": 0,
+          "Snapshots": {
+            "Sequence": 0,
+            "Clones": null
+          },
+          "Watchers": null,
+          "Extents": null,
+          "SparseRead": {
+            "Extents": null,
+            "Data": null
+          },
+          "Watch": {
+            "Cookie": 0,
+            "Version": 0,
+            "NotifyID": 0,
+            "Generation": 0,
+            "TimeoutSeconds": 0,
+            "ProtocolVersion": 0,
+            "Action": 0
+          },
+          "Checksum": {
+            "ChunkSize": 0,
+            "Type": 0,
+            "Values": null
+          },
+          "Dirty": false
+        }
+      ],
+      "Redirect": {
+        "Pool": -1,
+        "Key": "",
+        "Namespace": "",
+        "Hash": -1,
+        "Object": "",
+        "LegacyInstructions": ""
+      },
+      "Trace": [
+        0,
+        0,
+        0
+      ],
+      "RawFront": "TAAAAGNlcGgtbXNnci1uYXRpdmUtb2JqZWN0LW5hdGl2ZS1vbWFwdy1hYnNlbnQtOGE5MjAwYzkzYmNkNGFiMzllOTRmMzdlODFjYzAxNGQBAgAAAAAAAABQ3liH/////yQAAAQAAAAA+////wAAAAAAAAAAAAAAAA0AAAACAAAALSIAAAAA/v////////8DAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABIwAAAAAQAAAADwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACN////AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQEqAAAABgMcAAAA////////////////AAAAAAAAAAD//////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "RawData": null
+    },
+    "read_only_reply": {
+      "Submission": {
+        "Transaction": 4,
+        "GlobalID": 4638,
+        "ClientIncarnation": 0,
+        "MapEpoch": 13,
+        "Attempt": 0,
+        "Placement": null
+      },
+      "Transaction": 4,
+      "GlobalID": 4638,
+      "Object": "ceph-msgr-native-object-native-omapw-absent-8a9200c93bcd4ab39e94f37e81cc014d",
+      "PG": {
+        "Pool": 2,
+        "Seed": 2270748240
+      },
+      "Flags": 67108885,
+      "Code": 0,
+      "MapEpoch": 13,
+      "RetryAttempt": 0,
+      "LegacyVersion": {
+        "Epoch": 0,
+        "Version": 4
+      },
+      "ReplayVersion": {
+        "Epoch": 0,
+        "Version": 0
+      },
+      "UserVersion": 4,
+      "Operations": [
+        {
+          "WriteSamePatternLength": 0,
+          "Code": 4609,
+          "Flags": 0,
+          "Offset": 0,
+          "Length": 5,
+          "TruncateSize": 0,
+          "TruncateSequence": 0,
+          "PayloadLength": 5,
+          "Result": 0,
+          "Data": "c3RhbGU=",
+          "Xattr": {
+            "NameLength": 0,
+            "ValueLength": 0,
+            "ComparisonOp": 0,
+            "ComparisonMode": 0
+          },
+          "Class": {
+            "ClassLength": 0,
+            "MethodLength": 0,
+            "Argc": 0,
+            "InputLength": 0,
+            "OutputLength": 0
+          },
+          "AllocHint": {
+            "ExpectedObjectSize": 0,
+            "ExpectedWriteSize": 0,
+            "Flags": 0
+          },
+          "CopyFromVersion": 0,
+          "CopyFromSnapshot": 0,
+          "Snapshot": 0,
+          "Snapshots": {
+            "Sequence": 0,
+            "Clones": null
+          },
+          "Watchers": null,
+          "Extents": null,
+          "SparseRead": {
+            "Extents": null,
+            "Data": null
+          },
+          "Watch": {
+            "Cookie": 0,
+            "Version": 0,
+            "NotifyID": 0,
+            "Generation": 0,
+            "TimeoutSeconds": 0,
+            "ProtocolVersion": 0,
+            "Action": 0
+          },
+          "Checksum": {
+            "ChunkSize": 0,
+            "Type": 0,
+            "Values": null
+          },
+          "Dirty": false
+        }
+      ],
+      "Redirect": {
+        "Pool": -1,
+        "Key": "",
+        "Namespace": "",
+        "Hash": -1,
+        "Object": "",
+        "LegacyInstructions": ""
+      },
+      "Trace": [
+        0,
+        0,
+        0
+      ],
+      "RawFront": "TAAAAGNlcGgtbXNnci1uYXRpdmUtb2JqZWN0LW5hdGl2ZS1vbWFwdy1hYnNlbnQtOGE5MjAwYzkzYmNkNGFiMzllOTRmMzdlODFjYzAxNGQBAgAAAAAAAABQ3liH/////xUAAAQAAAAAAAAAAAQAAAAAAAAAAAAAAA0AAAABAAAAARIAAAAAAAAAAAAAAAAFAAAAAAAAAAAAAAAAAAAAAAAAAAUAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAQEqAAAABgMcAAAA////////////////AAAAAAAAAAD//////////wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "RawData": "c3RhbGU="
+    },
+    "signed_server_eio": true,
+    "option_restored": true,
+    "objects_removed": true
+  },
+  "teardown": {
+    "owned_container_count": 8,
+    "remaining_owned_containers": 0,
+    "owned_network_removed": true,
+    "owned_object_count": 3,
+    "objects_removed": true
+  }
+}
