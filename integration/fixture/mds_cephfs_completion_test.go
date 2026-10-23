@@ -372,7 +372,7 @@ func TestMDSCephFSCompletionCleanupWithoutBaselineMutatesNothing(t *testing.T) {
 func TestMDSCephFSMultiReconnectOwnedPaths(t *testing.T) {
 	token := strings.Repeat("a1", 16)
 	plan := mdsCephFSCompletionPlanFor(token)
-	if len(plan.SplitFiles) != 32 {
+	if len(plan.SplitFiles) != 256 {
 		t.Fatal("split file bound changed", len(plan.SplitFiles))
 	}
 	seen := map[string]bool{}
@@ -387,7 +387,7 @@ func TestMDSCephFSMultiReconnectOwnedPaths(t *testing.T) {
 			t.Fatal("split stat target refused", name, err)
 		}
 	}
-	for _, name := range []string{"split-32-" + strings.Repeat("s", 216), "../split-00", "split-00/foreign"} {
+	for _, name := range []string{"split-256-" + strings.Repeat("s", 215), "../split-00", "split-00/foreign"} {
 		if _, err := plan.path(name); err == nil {
 			t.Fatal("unplanned split target admitted", name)
 		}
@@ -406,5 +406,13 @@ func TestMDSCephFSMultiReconnectSelectorIsExclusive(t *testing.T) {
 		if _, err := loadProfile(func(n string) string { return env[n] }); err == nil {
 			t.Fatal("broad or foreign split selector admitted", selector)
 		}
+	}
+}
+
+func TestMDSCephFSReconnectHandlerLogKeepsExactClientAndOrder(t *testing.T) {
+	lines := []string{"x handle_client_reconnect client.42 (more)", "x handle_client_reconnect client.420 (more)", "x client.42 client_caps(update)", "x handle_client_reconnect client.42", "x handle_client_reconnect client.42 foreign"}
+	want := []string{lines[0], lines[3]}
+	if got := filterMDSCephFSReconnectHandlers(lines, 42); !slices.Equal(got, want) {
+		t.Fatal("reconnect handlers changed client or order", got)
 	}
 }

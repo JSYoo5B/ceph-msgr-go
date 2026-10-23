@@ -44,9 +44,9 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 		}
 	}
 	identity, key := os.Getenv("CEPH_MSGR_MDS_CEPHFS_COMPLETION_IDENTITY"), os.Getenv("CEPH_MSGR_MDS_CEPHFS_COMPLETION_KEY_FILE")
-	names := make([]string, 32)
+	names := make([]string, 256)
 	for i := range names {
-		names[i] = fmt.Sprintf("split-%02d-%s", i, strings.Repeat("s", 216))
+		names[i] = fmt.Sprintf("split-%03d-%s", i, strings.Repeat("s", 215))
 	}
 	if oracle.Source != mdsFreshSource || oracle.Token != fresh.Token || len(oracle.Token) != 32 || oracle.FSID != fresh.FSID || oracle.FSID != os.Getenv("CEPH_MSGR_FSID") ||
 		oracle.FSCID != fresh.FSCID || oracle.FSName != fresh.FSName || identity != "client.mds-cephfs-completion-"+oracle.Token || oracle.ClientIdentity != identity ||
@@ -54,7 +54,7 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 		current.Source != mdsFreshSource || current.Token != oracle.Token || current.Adopted != 0 || current.MDS.GID != fresh.MDS.GID || current.MDS.Nonce != fresh.MDS.Nonce {
 		t.Fatal("split reconnect oracle or closed file plan differs")
 	}
-	const frameLimit = 8 << 10
+	const frameLimit = 64 << 10
 	control := &mdsCephFSCompletionControl{dir: dir, token: oracle.Token, fresh: fresh, mds: current.MDS, goGIDs: map[uint64]bool{}}
 	target := func(d nativeMDSCephFSDaemon) cephmsgr.MDSTarget {
 		return cephmsgr.MDSTarget{FilesystemID: fresh.FSCID, Rank: 0, Address: fmt.Sprintf("v2:%s/%d", d.Endpoint, d.Nonce)}
@@ -280,7 +280,7 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		req(t, "restart-adopt")
-		log := req(t, "mds-log", strconv.FormatUint(snap.GlobalID, 10), strconv.FormatUint(uint64(snap.CephFSNonce), 10)).Log
+		log := req(t, "reconnect-log", strconv.FormatUint(snap.GlobalID, 10), strconv.FormatUint(uint64(snap.CephFSNonce), 10)).Log
 		if log == nil || log.Dropped != 0 {
 			t.Fatal("native split reconnect log missing or truncated", log)
 		}

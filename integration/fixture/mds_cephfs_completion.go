@@ -120,12 +120,12 @@ func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
 }
 
 // mdsCephFSMultiReconnectNames are actual owned files whose retained cap state
-// exceeds an 8 KiB frame. Long legal names exercise real short paths; no fake
+// exceeds a 64 KiB frame. Long legal names exercise real short paths; no fake
 // inode, cap or lock data is submitted to inflate reconnect state.
 func mdsCephFSMultiReconnectNames() []string {
-	names := make([]string, 32)
+	names := make([]string, 256)
 	for i := range names {
-		names[i] = fmt.Sprintf("split-%02d-%s", i, strings.Repeat("s", 216))
+		names[i] = fmt.Sprintf("split-%03d-%s", i, strings.Repeat("s", 215))
 	}
 	return names
 }
@@ -434,6 +434,24 @@ func filterMDSCephFSCompletionLog(lines []string, gid uint64, nonce uint32) ([]s
 	return kept, dropped
 }
 
+// filterMDSCephFSReconnectHandlers preserves source order and exact client
+// attribution. Handler lines directly record native MClientReconnect.more.
+func filterMDSCephFSReconnectHandlers(lines []string, gid uint64) []string {
+	prefix := "handle_client_reconnect client." + strconv.FormatUint(gid, 10)
+	var result []string
+	for _, line := range lines {
+		at := strings.Index(line, prefix)
+		if at < 0 {
+			continue
+		}
+		tail := strings.TrimSpace(line[at+len(prefix):])
+		if tail == "" || tail == "(more)" {
+			result = append(result, line)
+		}
+	}
+	return result
+}
+
 type mdsCephFSCompletionLog struct {
 	Mark     int      `json:"mark"`
 	Total    int      `json:"total_lines"`
@@ -528,7 +546,7 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 		if action.gid, err = gid(args[0]); err != nil {
 			return 0, mdsCephFSCompletionAction{}, err
 		}
-	case "mds-log":
+	case "mds-log", "reconnect-log":
 		if len(args) != 2 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion log action takes a GlobalID and an address nonce")
 		}
@@ -1094,13 +1112,20 @@ func (c *fixtureCluster) mdsCephFSCompletionDaemonAct(ctx context.Context, id in
 		x.logMark = len(lines)
 		result.Log = &mdsCephFSCompletionLog{Mark: x.logMark, Total: len(lines), Lines: []string{}}
 		return nil
-	case "mds-log":
+	case "mds-log", "reconnect-log":
 		lines, err := c.mdsCephFSCompletionLogLines(ctx)
 		if err != nil {
 			return err
 		}
 		mark := min(x.logMark, len(lines))
-		kept, dropped := filterMDSCephFSCompletionLog(lines[mark:], action.gid, action.nonce)
+		selected := lines[mark:]
+		if action.name == "reconnect-log" {
+			// This read-only oracle keeps only this client's fragment handler
+			// lines before the general bounded filter. Large retained cap sets
+			// otherwise fill that filter with unrelated cap recovery details.
+			selected = filterMDSCephFSReconnectHandlers(selected, action.gid)
+		}
+		kept, dropped := filterMDSCephFSCompletionLog(selected, action.gid, action.nonce)
 		result.Log = &mdsCephFSCompletionLog{Mark: mark, Total: len(lines), Lines: kept, Dropped: dropped, GlobalID: action.gid, Nonce: action.nonce}
 		return nil
 	}

@@ -173,6 +173,30 @@ rows are `baseline`; the evidence that changed the decision stays here.
 - Not claimed: reclaim by a native libcephfs twin, multi-rank or failover
   reclaim, and a requirement that combines `reclaim_client` with another bit.
 
+
+### Bit 12: multi_reconnect (CephFS profile declared)
+
+- Wire: MClientReconnect v5/compat4 in the data segment with the `more` flag,
+  split when the state exceeds a frame.
+- Server use: none beyond admission (and `min_compat_client` Nautilus). The
+  native client splits only when the MDS advertises the bit
+  (`client/Client.cc:3317`).
+- Ack/recovery: OPEN after the final message; CLOSE when denied.
+- Server prerequisites: the MDS advertises MULTI_RECONNECT (already required
+  by `ReconnectSession`) and is in its reconnect phase.
+- Consumer-owned: the reconnect capability and realm state.
+- Current code: [reconnect.go](reconnect.go), `ReconnectSession` in
+  [mds_reconnect.go](../../cephmsgr/mds_reconnect.go); tests
+  [TestEncodeReconnectMatchesFreshNative](native_reconnect_test.go),
+  [TestCephFSReconnectDeniedAndSplit](../../cephmsgr/mds_reconnect_test.go).
+- Declaration: CephFS only; the session-only profile cannot reconnect and
+  keeps bit 12 withheld. The split acceptance uses actual retained caps on
+  256 owned files, a 64 KiB frame budget and native nonfinal/final handler
+  logs, then compares namespace/inodes independently. Admission requires
+  `multi_reconnect` and checks CephFS OPEN plus session-only REJECT.
+  See [MDS_MULTI_RECONNECT_VALIDATION.md](../../integration/fixture/MDS_MULTI_RECONNECT_VALIDATION.md)
+  for the exact tested source, profiles and remaining failure boundaries.
+
 ## Withheld features
 
 ### Bit 11: lazy_caps_wanted
@@ -193,28 +217,6 @@ rows are `baseline`; the evidence that changed the decision stays here.
   to state that it implements the re-announce policy, plus a live stale/resume
   acceptance. No higher-layer operation is blocked.
 
-### Bit 12: multi_reconnect (CephFS profile declared)
-
-- Wire: MClientReconnect v5/compat4 in the data segment with the `more` flag,
-  split when the state exceeds a frame.
-- Server use: none beyond admission (and `min_compat_client` Nautilus). The
-  native client splits only when the MDS advertises the bit
-  (`client/Client.cc:3317`).
-- Ack/recovery: OPEN after the final message; CLOSE when denied.
-- Server prerequisites: the MDS advertises MULTI_RECONNECT (already required
-  by `ReconnectSession`) and is in its reconnect phase.
-- Consumer-owned: the reconnect capability and realm state.
-- Current code: [reconnect.go](reconnect.go), `ReconnectSession` in
-  [mds_reconnect.go](../../cephmsgr/mds_reconnect.go); tests
-  [TestEncodeReconnectMatchesFreshNative](native_reconnect_test.go),
-  [TestCephFSReconnectDeniedAndSplit](../../cephmsgr/mds_reconnect_test.go).
-- Declaration: CephFS only; the session-only profile cannot reconnect and
-  keeps bit 12 withheld. The split acceptance uses actual retained caps on
-  32 owned files, an 8 KiB frame budget and native nonfinal/final handler
-  logs, then compares namespace/inodes independently. Admission requires
-  `multi_reconnect` and checks CephFS OPEN plus session-only REJECT.
-  See [MDS_MULTI_RECONNECT_VALIDATION.md](../../integration/fixture/MDS_MULTI_RECONNECT_VALIDATION.md)
-  for the exact tested source, profiles and remaining failure boundaries.
 
 ### Bit 13: deleg_ino
 
@@ -378,11 +380,12 @@ rows are `baseline`; the evidence that changed the decision stays here.
 
 ## Blocked higher-layer operations
 
-- Opening (or keeping, or reconnecting) a session on a filesystem that
-  requires any withheld bit, including the deprecated `min_compat_client` at
-  Nautilus (bit 12) or Octopus and later (bit 13). This is refused explicitly;
-  bit 12 is admitted only by the CephFS profile; bit 13 needs the decode-only stage. A
-  `reclaim_client` requirement is admitted (bit 10 is declared).
+- Opening, keeping or reconnecting on a filesystem with a required bit
+  outside the selected profile. A `multi_reconnect` requirement (including
+  deprecated Nautilus `min_compat_client`) is admitted only by CephFS; the
+  session-only profile refuses it. Both profiles refuse `deleg_ino`
+  (deprecated Octopus-or-later `min_compat_client`) until its decode-only
+  stage. Both profiles admit `reclaim_client`.
 - Creating, linking or renaming entries into a directory with a charmap
   (bit 22): -EPERM.
 - Root-squash identities are reported as broken clients (bit 21). That is an

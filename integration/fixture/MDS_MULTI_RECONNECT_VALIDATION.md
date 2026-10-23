@@ -10,9 +10,9 @@ wire layout, filesystem cache, inode allocator or automatic replay is added.
 
 `TestCephMDSCephFSMultiReconnectIntegration` uses the closed
 [completion fixture](MDS_CEPHFS_COMPLETION_FIXTURE.md) in isolation. It opens
-32 real files with legal 225-byte names in the owned directory and retains
+256 real files with legal 225-byte names in the owned directory and retains
 their actual capabilities and paths. The client's recorded `MaxFrameSize` is
-8 KiB. Authentication and ordinary replies use that same bound. The test
+64 KiB. Authentication and ordinary replies use that same bound. The test
 encodes the collected cap/realm state to require that one message would
 exceed the frame bound; no fake inode, path or lock data inflates state.
 
@@ -29,7 +29,7 @@ After OPEN, the replacement must become active and be explicitly adopted.
 Native libcephfs listings before and after the restart compare each inode,
 empty-file size and name; subsequent Go LOOKUPs must recover every same
 inode. No OSD dial, object write, request replay or metadata flush is allowed.
-Cleanup unlinks all 32 files, removes the directory, releases caps and
+Cleanup unlinks all 256 files, removes the directory, releases caps and
 requires a confirmed CLOSE and absence from native `session ls`. The fixture
 separately restores debug state, owned blocklist entries and credentials,
 then removes its filesystem and resources.
