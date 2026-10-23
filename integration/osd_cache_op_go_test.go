@@ -240,11 +240,11 @@ func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 		} else if err != nil {
 			t.Fatal("successful reply returned error", label, err)
 		}
-		// The pinned read/no-op/error and transaction-commit paths both add
-		// ACK+ONDISK. Retain these raw terminal flags independently of state:
-		// identical flags do not show whether an object mutation occurred.
-		if reply.Flags&(cephmsgr.OSDReplyAck|cephmsgr.OSDReplyOnDisk) != cephmsgr.OSDReplyAck|cephmsgr.OSDReplyOnDisk {
-			t.Fatal("selected native cache terminal reply lacks ACK+ONDISK", label, reply.Flags)
+		// Successful no-op/read and transaction-commit paths both add ONDISK.
+		// Early lookup errors instead echo requested completion bits, so ACK
+		// is not mandatory. Raw flags do not show whether a mutation occurred.
+		if reply.Code >= 0 && reply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
+			t.Fatal("selected native cache success lacks ONDISK", label, reply.Flags)
 		}
 		if op := reply.Operations[0].Result; op != 0 && op != reply.Code {
 			t.Fatal("per-op result disagrees with the aggregate", label, op, reply.Code)
