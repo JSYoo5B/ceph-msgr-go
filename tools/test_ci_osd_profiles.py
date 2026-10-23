@@ -14,6 +14,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 SET_CHUNK_SELECTOR = "^TestCephOSDSetChunkNativeIntegration$"
 SET_CHUNK_GO_SELECTOR = "^TestCephOSDSetChunkGoIntegration$"
+COMPRESSION_SELECTOR = "^TestCephMsgrCompressionOfferIntegration$"
 
 
 def ceph_rows():
@@ -46,13 +47,13 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
         # 63 original rows, 2 mgr-service, 3 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go,
-        # 2 mds-cephfs-capsend, 1 native SET_CHUNK checkpoint, 1 Go SET_CHUNK acceptance
-        # and 2 mds-cephfs-writeback.
-        self.assertEqual(len(self.rows), 76)
+        # 2 mds-cephfs-capsend, 1 native SET_CHUNK checkpoint, 1 Go SET_CHUNK acceptance,
+        # 2 mds-cephfs-writeback and 1 CRC compression-offer row.
+        self.assertEqual(len(self.rows), 77)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
-        # Dedicated legacy-v6 rows select one native-only test explicitly; the
+        # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
-        dedicated = {SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR}
+        dedicated = {SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COMPRESSION_SELECTOR}
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak") and row.get("test_run") not in dedicated
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
@@ -293,6 +294,20 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                               "TestCephOSDErasureSnapshotAndDegradedWriteIntegration",
                               "TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration"):
                     self.assertIsNone(selector.search(other))
+
+    def test_compression_row_selects_only_the_crc_single_osd_test(self):
+        rows = [row for row in self.rows if row.get("test_run") == COMPRESSION_SELECTOR]
+        self.assertEqual(rows, [{
+            "key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
+            "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
+            "test_run": COMPRESSION_SELECTOR,
+        }])
+        selector = re.compile(COMPRESSION_SELECTOR)
+        expected = "TestCephMsgrCompressionOfferIntegration"
+        self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
+        for other in (expected + "Extended", "Prefix" + expected, "TestCephOSDIOIntegration",
+                      "TestCephIntegration", "TestCephMgrServiceRegistrationIntegration"):
+            self.assertIsNone(selector.search(other))
 
     def test_set_chunk_row_selects_only_the_native_checkpoint(self):
         # The native-only SET_CHUNK checkpoint needs only the ordinary OSD
