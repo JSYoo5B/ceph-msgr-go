@@ -116,9 +116,11 @@ go -C integration/fixture run . run -project ../..
 ```
 
 The operation context is 240 seconds. The controller rejects a broad test
-selector, another topology or a pre-enabled injector. This new selector
-has no scenario catalog row yet; ordinary CI builds/unit-checks the fixture
-but does not execute this daemon test. The client-package suite has no
+selector, another topology or a pre-enabled injector. Its dedicated scenario ID is
+`osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror`.
+Request that one row through the implemented CI comment command; basic PR CI
+builds/unit-checks the fixture but does not execute this daemon test. The
+local checkpoint above and a later exact-head CI run remain distinct evidence. The client-package suite has no
 matching selector and contributes no daemon evidence.
 
 This is one late server-error checkpoint. It does not establish destination
