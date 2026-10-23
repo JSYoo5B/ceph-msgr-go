@@ -89,7 +89,7 @@ func TestMDSCephFSCompletionIdentityCapsAndPlan(t *testing.T) {
 	if _, err := bad.path("dir"); err == nil {
 		t.Fatal("a directory outside the completion prefix was admitted")
 	}
-	if len(plan.targets()) != 1+len(plan.Children)+len(plan.Grandchildren)+1 {
+	if len(plan.targets()) != 1+len(plan.Children)+len(plan.SplitFiles)+len(plan.Grandchildren)+1 {
 		t.Fatal("completion targets differ", plan.targets())
 	}
 }
@@ -366,5 +366,45 @@ func TestMDSCephFSCompletionCleanupWithoutBaselineMutatesNothing(t *testing.T) {
 	}
 	if (&fixtureCluster{}).finishMDSCephFSCompletion(context.Background()) != nil {
 		t.Fatal("cleanup without a completion scope must be a no-op")
+	}
+}
+
+func TestMDSCephFSMultiReconnectOwnedPaths(t *testing.T) {
+	token := strings.Repeat("a1", 16)
+	plan := mdsCephFSCompletionPlanFor(token)
+	if len(plan.SplitFiles) != 32 {
+		t.Fatal("split file bound changed", len(plan.SplitFiles))
+	}
+	seen := map[string]bool{}
+	for _, name := range plan.SplitFiles {
+		path, err := plan.path(name)
+		if err != nil || path != "/"+plan.Directory+"/"+name || len(name) > 255 || seen[name] {
+			t.Fatal("split path is not a unique legal owned file", name, err)
+		}
+		seen[name] = true
+		_, action, err := parseMDSCephFSCompletionRequest([]string{"1", token, "stat", name}, token, plan, 0)
+		if err != nil || action.target != name {
+			t.Fatal("split stat target refused", name, err)
+		}
+	}
+	for _, name := range []string{"split-32-" + strings.Repeat("s", 216), "../split-00", "split-00/foreign"} {
+		if _, err := plan.path(name); err == nil {
+			t.Fatal("unplanned split target admitted", name)
+		}
+	}
+}
+
+func TestMDSCephFSMultiReconnectSelectorIsExclusive(t *testing.T) {
+	env := mdsCephFSCompletionProfileEnv()
+	env["CEPH_MSGR_TEST_RUN"] = "^TestCephMDSCephFSMultiReconnectIntegration$"
+	p, err := loadProfile(func(n string) string { return env[n] })
+	if err != nil || p.testRun != env["CEPH_MSGR_TEST_RUN"] {
+		t.Fatal("exclusive split reconnect selector refused", p.testRun, err)
+	}
+	for _, selector := range []string{"^TestCephMDSCephFS(Completion|MultiReconnect)Integration$", "TestCephMDSCephFSMultiReconnectIntegration", "^TestCephMDSCephFSMultiReconnectIntegrationExtended$"} {
+		env["CEPH_MSGR_TEST_RUN"] = selector
+		if _, err := loadProfile(func(n string) string { return env[n] }); err == nil {
+			t.Fatal("broad or foreign split selector admitted", selector)
+		}
 	}
 }

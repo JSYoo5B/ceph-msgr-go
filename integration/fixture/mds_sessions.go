@@ -43,6 +43,7 @@ type mdsSessionsRequirement struct {
 var mdsSessionsRequirements = map[string]mdsSessionsRequirement{
 	"require":         {"reply_encoding", "feature_9", "required_client_features"},
 	"require-reclaim": {"reclaim_client", "feature_10", "required_client_features_reclaim_client"},
+	"require-multi":   {"multi_reconnect", "feature_12", "required_client_features_multi_reconnect"},
 }
 
 // mdsSessionsRequirementFor maps a require-*-on/off action to its toggle.
@@ -331,7 +332,7 @@ func parseMDSSessionsRequest(fields []string, token string, previousID int64) (i
 		if len(args) != 1 {
 			return 0, mdsSessionsAction{}, errors.New("MDS sessions eviction requires exactly one GlobalID")
 		}
-	case "refuse-on", "refuse-off", "require-on", "require-off", "require-reclaim-on", "require-reclaim-off", "stale-on", "stale-off", "autoclose-on":
+	case "refuse-on", "refuse-off", "require-on", "require-off", "require-reclaim-on", "require-multi-on", "require-reclaim-off", "require-multi-off", "stale-on", "stale-off", "autoclose-on":
 		if len(args) != 0 {
 			return 0, mdsSessionsAction{}, errors.New("MDS sessions mutation takes no caller arguments")
 		}
@@ -696,7 +697,7 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 	switch action.name {
 	case "observe":
 		return nil
-	case "refuse-on", "require-on", "require-reclaim-on":
+	case "refuse-on", "require-on", "require-reclaim-on", "require-multi-on":
 		kind, state := "refuse_client_session", x.refuse
 		args := []string{"fs", "set", s.name, "refuse_client_session", "true"}
 		check := func(m mdsSessionsMap) bool { return m.Refuse }
@@ -749,7 +750,7 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 		}
 		_, _, err = c.mdsSessionsSettle(ctx, check)
 		return err
-	case "refuse-off", "require-off", "require-reclaim-off":
+	case "refuse-off", "require-off", "require-reclaim-off", "require-multi-off":
 		kind, state := "refuse_client_session", x.refuse
 		args := []string{"fs", "set", s.name, "refuse_client_session", "false"}
 		requirement, requires := mdsSessionsRequirementFor(action.name)

@@ -70,7 +70,7 @@ no declared bit beyond the pinned list.
 | 9 | `reply_encoding` | withheld | declared | - | baseline |
 | 10 | `reclaim_client` | declared | declared | - | baseline |
 | 11 | `lazy_caps_wanted` | withheld | withheld | policy, optional | consumer-owned |
-| 12 | `multi_reconnect` | withheld | withheld | evidence | implement |
+| 12 | `multi_reconnect` | withheld | declared | - | baseline |
 | 13 | `deleg_ino` | withheld | withheld | codec, lifecycle, policy | implement |
 | 14 | `metric_collect` | withheld | withheld | codec, optional | defer |
 | 15 | `alternate_name` | withheld | declared | - | baseline |
@@ -83,7 +83,7 @@ no declared bit beyond the pinned list.
 | 22 | `charmap` | withheld | withheld | codec, policy | implement |
 | 23 | `blockdiff` | withheld | withheld | optional | consumer-owned |
 
-Decision counts for the nine bits withheld by both profiles: implement 3,
+Decision counts for the eight bits withheld by both profiles: implement 2,
 defer 2, consumer-owned 4.
 
 ## How the MDS uses a client bit
@@ -193,7 +193,7 @@ rows are `baseline`; the evidence that changed the decision stays here.
   to state that it implements the re-announce policy, plus a live stale/resume
   acceptance. No higher-layer operation is blocked.
 
-### Bit 12: multi_reconnect
+### Bit 12: multi_reconnect (CephFS profile declared)
 
 - Wire: MClientReconnect v5/compat4 in the data segment with the `more` flag,
   split when the state exceeds a frame.
@@ -208,12 +208,13 @@ rows are `baseline`; the evidence that changed the decision stays here.
   [mds_reconnect.go](../../cephmsgr/mds_reconnect.go); tests
   [TestEncodeReconnectMatchesFreshNative](native_reconnect_test.go),
   [TestCephFSReconnectDeniedAndSplit](../../cephmsgr/mds_reconnect_test.go).
-- Gap: evidence. Split reconnect messages are not exercised live
-  ([MDS_CEPHFS_CONTRACT.md](../../cephmsgr/MDS_CEPHFS_CONTRACT.md), "Limits").
-  Decision: implement as a CephFS-profile declaration only, since the
-  session-only profile has no reconnect. Dependency: a live split reconnect
-  and an admission acceptance with `required_client_features` containing
-  `multi_reconnect`.
+- Declaration: CephFS only; the session-only profile cannot reconnect and
+  keeps bit 12 withheld. The split acceptance uses actual retained caps on
+  32 owned files, an 8 KiB frame budget and native nonfinal/final handler
+  logs, then compares namespace/inodes independently. Admission requires
+  `multi_reconnect` and checks CephFS OPEN plus session-only REJECT.
+  See [MDS_MULTI_RECONNECT_VALIDATION.md](../../integration/fixture/MDS_MULTI_RECONNECT_VALIDATION.md)
+  for the exact tested source, profiles and remaining failure boundaries.
 
 ### Bit 13: deleg_ino
 
@@ -380,7 +381,7 @@ rows are `baseline`; the evidence that changed the decision stays here.
 - Opening (or keeping, or reconnecting) a session on a filesystem that
   requires any withheld bit, including the deprecated `min_compat_client` at
   Nautilus (bit 12) or Octopus and later (bit 13). This is refused explicitly;
-  bit 12 needs only evidence, bit 13 needs the decode-only stage. A
+  bit 12 is admitted only by the CephFS profile; bit 13 needs the decode-only stage. A
   `reclaim_client` requirement is admitted (bit 10 is declared).
 - Creating, linking or renaming entries into a directory with a charmap
   (bit 22): -EPERM.
@@ -396,7 +397,7 @@ BLOCKDIFF (bits 17, 23) are not blocked by absent wire data.
 Recovering already supported paths and the general coverage ledger take
 precedence (issue #11). Within this table the order was bits 10 and 12
 (evidence only), then bit 13 decode-only, then the bit 22 opt-in. Bit 10 is
-declared; bit 12 is next. Each
+declared, as is bit 12 for CephFS; bit 13 decode-only is next. Each
 declaration change must update `ClientFeatures` or `CephFSClientFeatures`,
 this table, the profile contract and the native `session ls` feature
 assertions of the live tests together. The drift test fails on any one of

@@ -105,6 +105,7 @@ type mdsCephFSCompletionPlan struct {
 	Snapshot         string   `json:"snapshot"`
 	FencedPayloadHex string   `json:"fenced_payload_hex"`
 	ReconnectTimeout string   `json:"reconnect_timeout"`
+	SplitFiles       []string `json:"split_files"`
 }
 
 func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
@@ -115,12 +116,23 @@ func mdsCephFSCompletionPlanFor(token string) mdsCephFSCompletionPlan {
 		block = sha256.Sum256(block[:])
 	}
 	return mdsCephFSCompletionPlan{Directory: "ceph-msgr-completion-" + token, Children: slices.Clone(mdsCephFSCompletionChildren), Grandchildren: slices.Clone(mdsCephFSCompletionGrandchildren),
-		Snapshot: "completion-" + token[:8], FencedPayloadHex: hex.EncodeToString(payload[:mdsCephFSCompletionFencedBytes]), ReconnectTimeout: mdsCephFSCompletionWindow}
+		Snapshot: "completion-" + token[:8], FencedPayloadHex: hex.EncodeToString(payload[:mdsCephFSCompletionFencedBytes]), ReconnectTimeout: mdsCephFSCompletionWindow, SplitFiles: mdsCephFSMultiReconnectNames()}
+}
+
+// mdsCephFSMultiReconnectNames are actual owned files whose retained cap state
+// exceeds an 8 KiB frame. Long legal names exercise real short paths; no fake
+// inode, cap or lock data is submitted to inflate reconnect state.
+func mdsCephFSMultiReconnectNames() []string {
+	names := make([]string, 32)
+	for i := range names {
+		names[i] = fmt.Sprintf("split-%02d-%s", i, strings.Repeat("s", 216))
+	}
+	return names
 }
 
 // targets lists every closed stat target.
 func (p mdsCephFSCompletionPlan) targets() []string {
-	return append(append(append([]string{"dir"}, p.Children...), p.Grandchildren...), "snapshot")
+	return append(append(append(append([]string{"dir"}, p.Children...), p.SplitFiles...), p.Grandchildren...), "snapshot")
 }
 
 // path maps a closed target to its absolute path in the owned filesystem.
@@ -134,7 +146,7 @@ func (p mdsCephFSCompletionPlan) path(target string) (string, error) {
 		return root, nil
 	case target == "snapshot":
 		return root + "/snap/.snap/" + p.Snapshot, nil
-	case slices.Contains(p.Children, target), slices.Contains(p.Grandchildren, target):
+	case slices.Contains(p.Children, target), slices.Contains(p.SplitFiles, target), slices.Contains(p.Grandchildren, target):
 		return root + "/" + target, nil
 	}
 	return "", errors.New("MDS CephFS completion target is not admitted")
@@ -230,10 +242,10 @@ func decodeMDSCephFSCompletionNative(action, path string, plan mdsCephFSCompleti
 	case "stat":
 		ok = result.Stat != nil && validMDSCephFSStat(*result.Stat) && result.Entries == nil && result.Written == 0
 	case "list":
-		ok = len(result.Entries) <= len(plan.Children) && result.Stat == nil
+		ok = len(result.Entries) <= len(plan.Children)+len(plan.SplitFiles) && result.Stat == nil
 		seen := map[string]bool{}
 		for _, entry := range result.Entries {
-			ok = ok && slices.Contains(plan.Children, entry.Name) && !seen[entry.Name] && entry.DIno != 0 && validMDSCephFSStat(entry.Stat) && entry.Stat.Exists
+			ok = ok && (slices.Contains(plan.Children, entry.Name) || slices.Contains(plan.SplitFiles, entry.Name)) && !seen[entry.Name] && entry.DIno != 0 && validMDSCephFSStat(entry.Stat) && entry.Stat.Exists
 			seen[entry.Name] = true
 		}
 	case "create-write":
@@ -396,7 +408,7 @@ var mdsCephFSCompletionLogMarkers = []string{
 func filterMDSCephFSCompletionLog(lines []string, gid uint64, nonce uint32) ([]string, int) {
 	client := "client." + strconv.FormatUint(gid, 10)
 	address := ":0/" + strconv.FormatUint(uint64(nonce), 10) + " "
-	messages := []string{"client_reply(", "client_caps(", "client_lease(", "client_session(", "client_snap(", "client_request("}
+	messages := []string{"client_reply(", "client_caps(", "client_lease(", "client_session(", "client_snap(", "client_request(", "client_reconnect("}
 	kept, dropped := []string{}, 0
 	for _, line := range lines {
 		match := false

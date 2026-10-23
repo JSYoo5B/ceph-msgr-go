@@ -41,7 +41,11 @@ fixture's owned plain pools, so the test also belongs to the broad legacy OSD
 selection. A second such row selects only `TestCephOSDSetChunkGoIntegration`,
 the Go-originated SET_CHUNK acceptance with native observation, on the same
 fixture and likewise without an opt-in parameter.
-The catalog has 76 native rows in total.
+Two `mds-cephfs-multi-reconnect` rows select only
+`TestCephMDSCephFSMultiReconnectIntegration`, reusing the completion opt-in
+for a fresh, isolated fixture in each selected MDS profile. Existing
+completion rows keep their original selector.
+The catalog has 78 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

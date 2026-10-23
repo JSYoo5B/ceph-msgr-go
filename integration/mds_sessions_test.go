@@ -728,6 +728,61 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 		return
 	}
 
+	// MULTI_RECONNECT is declared only by CephFS: the session-only profile
+	// cannot submit reconnect state and must retain its explicit REJECT.
+	if !leaf("admit_required_multi_reconnect_only_for_cephfs", func(t *testing.T) {
+		on, err := control.request(ctx, "require-multi-on")
+		if err != nil || on.Map.Required["feature_12"] != "multi_reconnect" || len(on.Map.Required) != 1 || on.Mutation == nil || on.Mutation.State != "applied" {
+			t.Fatal("multi_reconnect requirement was not applied", err)
+		}
+		plain, plainConn, _ := newClient(t, "K", identity, freshKey)
+		if cephmsgr.MDSFeatureBitsetHas(plain.MDSClientFeatures(), mds.FeatureMultiReconnect) {
+			t.Fatal("session-only profile declares MULTI_RECONNECT")
+		}
+		rejected := reject(t, "K-multi-required", identity, plainConn, plain.Snapshot().GlobalID, metadata("-k"))
+		if !strings.Contains(rejected.Reason, "missing required features") {
+			t.Fatal("session-only MULTI_RECONNECT refusal lost the native reason", rejected.Reason)
+		}
+		c, conn, _ := newClient(t, "L", identity, freshKey, func(o *cephmsgr.Options) { o.EnableCephFS = true })
+		if !cephmsgr.MDSFeatureBitsetHas(c.MDSClientFeatures(), mds.FeatureMultiReconnect) {
+			t.Fatal("CephFS profile does not declare MULTI_RECONNECT")
+		}
+		meta, gid := metadata("-l"), c.Snapshot().GlobalID
+		s, err := conn.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: meta, RenewInterval: 2 * time.Second})
+		if err != nil {
+			t.Fatal("open CephFS with multi_reconnect required", err)
+		}
+		closeLater(t, s)
+		open, err := s.WaitOpen(ctx)
+		if err != nil || !cephmsgr.MDSFeatureBitsetHas(open.SupportedFeatures, mds.FeatureMultiReconnect) {
+			t.Fatal("MDS OPEN does not advertise MULTI_RECONNECT", err)
+		}
+		native, err := control.request(ctx, "observe", gid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := checkNativeCephFSSession(native.session(gid), identity, meta); err != nil {
+			t.Fatal(err)
+		}
+		closing, stop := context.WithTimeout(ctx, 15*time.Second)
+		err = s.Close(closing)
+		stop()
+		sessions = append(sessions, describeMDSSession("L-multi-required", identity, s))
+		if err != nil || !errors.Is(s.Err(), cephmsgr.ErrMDSSessionClosed) {
+			t.Fatal("admitted MULTI_RECONNECT session close was not confirmed", err)
+		}
+		closed, err := control.request(ctx, "observe", gid)
+		if err != nil || closed.session(gid) != nil {
+			t.Fatal("admitted MULTI_RECONNECT session remained after close", err)
+		}
+		off, err := control.request(ctx, "require-multi-off")
+		if err != nil || !maps.Equal(off.Map.Required, base.Map.Required) || off.Mutation == nil || off.Mutation.State != "restored" {
+			t.Fatal("multi_reconnect requirement was not restored", err)
+		}
+	}) {
+		return
+	}
+
 	if !leaf("reject_foreign_filesystem_caps", func(t *testing.T) {
 		client, conn, _ := newClient(t, "E", foreign, foreignKey)
 		meta := map[string]string{"entity_id": strings.TrimPrefix(foreign, "client."), "hostname": "ceph-msgr-go-" + prefix + "-e", "root": "/"}
@@ -1015,7 +1070,7 @@ func TestMDSSessionNativeOpenImages(t *testing.T) {
 	if got := nativeFeatureBits(cephmsgr.MDSSessionClientFeatures()); got != "0x00000000000005ff" {
 		t.Fatal("declared client features do not print as bits 0-8 and 10", got)
 	}
-	if got := nativeFeatureBits(cephmsgr.MDSCephFSClientFeatures()); got != "0x00000000001c87ff" {
+	if got := nativeFeatureBits(cephmsgr.MDSCephFSClientFeatures()); got != "0x00000000001c97ff" {
 		t.Fatal("declared CephFS client features do not print as bits 0-10, 15 and 18-20", got)
 	}
 	for raw, want := range map[string]string{"": "0x0", "ff01": "0x00000000000001ff", "000000000000000001": "0x00000000000000010000000000000000"} {

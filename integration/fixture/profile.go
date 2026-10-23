@@ -283,6 +283,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		if p.mdsCephFSCompletion == "1" {
 			selected = "^TestCephMDSCephFSCompletionIntegration$"
+			if p.testRun == "^TestCephMDSCephFSMultiReconnectIntegration$" {
+				selected = p.testRun
+			}
 		}
 		if p.mdsCephFSData == "1" {
 			selected = "^TestCephMDSCephFSDataIntegration$"
