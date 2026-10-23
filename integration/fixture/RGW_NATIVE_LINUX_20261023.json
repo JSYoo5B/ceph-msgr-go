@@ -1,0 +1,192 @@
+{
+  "schema_version": 1,
+  "test": "TestRGWNativeCheckpointIntegration",
+  "tested_source_sha": "bdbd655e9f3c1373ed7a08ab98641f08d80a129a",
+  "run_kind": "manual authorized Linux Docker fixture run; not GitHub Actions",
+  "native_attempt": 8,
+  "result": "PASS",
+  "elapsed_seconds": 38.02,
+  "reference": {
+    "release": "20.2.4",
+    "source": "7f793731f1b39eb4f465e960113d2363c311b964",
+    "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+    "platform": "linux/amd64",
+    "go": "1.26.9",
+    "configured_messenger_mode": "v2 secure-only",
+    "cephx_key_and_service_cipher": "aes256k",
+    "provider": "ceph-testcontainers-go v0.3.0"
+  },
+  "fixture": {
+    "monitors": 1,
+    "managers": 1,
+    "bluestore_osds": 1,
+    "gateways": 1,
+    "pool_replicas": 1,
+    "pool_min_size": 1
+  },
+  "object": {
+    "bytes": 1031,
+    "sha256": "f5ae8589d38de5ff5e7d3214338b062b60e477067a16e3efdf26ae28cbfa3eab",
+    "head_oid": "cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1_small-binary",
+    "index_oid": ".dir.cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1.9"
+  },
+  "gateway_process_clients": {
+    "before_restart": [
+      {
+        "client": "client.4158",
+        "nonce_decimal": "6925069579268512375"
+      },
+      {
+        "client": "client.4162",
+        "nonce_decimal": "9752247302924801154"
+      },
+      {
+        "client": "client.4164",
+        "nonce_decimal": "18057931776513791249"
+      }
+    ],
+    "after_restart": [
+      {
+        "client": "client.4230",
+        "nonce_decimal": "7669797726624265027"
+      },
+      {
+        "client": "client.4231",
+        "nonce_decimal": "16328995779056101957"
+      },
+      {
+        "client": "client.4233",
+        "nonce_decimal": "12283808397112223479"
+      }
+    ]
+  },
+  "native_requests": [
+    {
+      "phase": "put",
+      "client": "client.4164",
+      "tid": 799,
+      "pool_id": 6,
+      "oid": ".dir.cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1.9",
+      "pgid": "6.0",
+      "map_epoch": 20,
+      "description": "osd_op(client.4164.0:799 6.0 6:3d16779c:::.dir.cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1.9:head [stat,call rgw.guard_bucket_resharding in=26b,call rgw.bucket_prepare_op in=20b] snapc 0=[] ondisk+write+known_if_redirected+full_try+supports_pool_eio e20)",
+      "events": [
+        "initiated",
+        "header_read",
+        "throttled",
+        "all_read",
+        "dispatched",
+        "queued_for_pg",
+        "reached_pg",
+        "started",
+        "op_commit",
+        "commit_sent",
+        "done"
+      ],
+      "evidence": "native completed OSD history; reception is separate from the oracle result"
+    },
+    {
+      "phase": "put",
+      "client": "client.4164",
+      "tid": 800,
+      "pool_id": 7,
+      "oid": "cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1_small-binary",
+      "pgid": "7.0",
+      "map_epoch": 20,
+      "description": "osd_op(client.4164.0:800 7.0 7:de83f0c9:::cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1_small-binary:head [create,setxattr user.rgw.idtag (63) in=14b,setxattr user.rgw.tail_tag (63) in=17b,writefull 0~1031,setxattr user.rgw.manifest (381) in=17b,setxattr user.rgw.acl (223) in=12b,setxattr user.rgw.etag (32) in=13b,call rgw.obj_store_pg_ver in=19b,setxattr user.rgw.source_zone (4) in=20b] snapc 0=[] ondisk+write+known_if_redirected+full_try+supports_pool_eio e20)",
+      "events": [
+        "initiated",
+        "header_read",
+        "throttled",
+        "all_read",
+        "dispatched",
+        "queued_for_pg",
+        "reached_pg",
+        "started",
+        "op_commit",
+        "commit_sent",
+        "done"
+      ],
+      "evidence": "native completed OSD history; reception is separate from the oracle result"
+    },
+    {
+      "phase": "put",
+      "client": "client.4164",
+      "tid": 801,
+      "pool_id": 6,
+      "oid": ".dir.cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1.9",
+      "pgid": "6.0",
+      "map_epoch": 20,
+      "description": "osd_op(client.4164.0:801 6.0 6:3d16779c:::.dir.cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1.9:head [stat,call rgw.guard_bucket_resharding in=26b,call rgw.bucket_complete_op in=21b] snapc 0=[] ondisk+write+known_if_redirected+full_try+supports_pool_eio e20)",
+      "events": [
+        "initiated",
+        "header_read",
+        "throttled",
+        "all_read",
+        "dispatched",
+        "queued_for_pg",
+        "reached_pg",
+        "started",
+        "op_commit",
+        "commit_sent",
+        "done"
+      ],
+      "evidence": "native completed OSD history; reception is separate from the oracle result"
+    },
+    {
+      "phase": "delete",
+      "client": "client.4233",
+      "tid": 774,
+      "pool_id": 7,
+      "oid": "cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1_small-binary",
+      "pgid": "7.0",
+      "map_epoch": 21,
+      "description": "osd_op(client.4233.0:774 7.0 7:de83f0c9:::cc67e33f-bc2a-44a7-a87c-719cf9940aae.4164.1_small-binary:head [call rgw.obj_remove in=13b] snapc 0=[] ondisk+write+known_if_redirected+full_try+supports_pool_eio e21)",
+      "events": [
+        "initiated",
+        "header_read",
+        "throttled",
+        "all_read",
+        "dispatched",
+        "queued_for_pg",
+        "reached_pg",
+        "started",
+        "op_commit",
+        "commit_sent",
+        "done"
+      ],
+      "evidence": "native completed OSD history; reception is separate from the oracle result"
+    }
+  ],
+  "restart": {
+    "stopped_state_observed": true,
+    "start_time_changed": true,
+    "published_endpoint_changed": true,
+    "put_not_replayed": true
+  },
+  "independent_oracles": {
+    "s3_get_matches_input_before_and_after_restart": true,
+    "rados_head_bytes_match_input_before_and_after_restart": true,
+    "index_key_in_exactly_one_actual_shard_before_and_after_restart": true,
+    "after_delete_s3_404": true,
+    "after_delete_native_head_absent": true,
+    "after_delete_index_key_absent": true,
+    "owned_empty_bucket_and_user_removed": true
+  },
+  "cleanup": {
+    "independent_docker_not_found": {
+      "containers": 4,
+      "named_volumes": 1,
+      "networks": 1
+    }
+  },
+  "checkpoint_hash_definition": "SHA-256 of UTF-8 text from RGW_NATIVE_CHECKPOINT through its final field, stripped of surrounding whitespace/newline after concatenating test2json Output events; excludes the testing filename/line prefix",
+  "checkpoint_payload_sha256": "088231add392ff848a0b822801bd6b192a7ba9df9c0c8a27888088f535894ef6",
+  "limitations": [
+    "no direct Go RGW client or S3 product API",
+    "received request descriptions do not prove complete payload codec equivalence or stronger durability",
+    "native index OMAP is not RGW-originated OMAPSETVALS evidence",
+    "large-object/tail/GC/multipart/multisite and backend OSD/MGR faults are not covered",
+    "no comment-selected CI profile"
+  ]
+}
