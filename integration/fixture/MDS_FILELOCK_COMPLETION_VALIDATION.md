@@ -111,8 +111,9 @@ snapshot. These checks do not establish complete CI at that commit.
 ## Limits
 
 These are bounded, head-file, whole-file FLOCK observations. FCNTL byte-range
-locks, direct native waiting-lock observation, held-lock reconnect, restart
-survival, permission denial, interrupt-after-grant behavior and typed lock
-workflows are not established. No remote cancellation follows from a local
+locks, direct native waiting-lock observation, permission denial, interrupt-after-grant behavior and typed lock
+workflows are not established. Held-lock reconnect across an owned MDS restart is the
+separate [held-lock restart checkpoint](MDS_FILELOCK_RESTART_VALIDATION.md).
+No remote cancellation follows from a local
 context expiry. Exact source inventories and the independent cleanup audit
 are part of the receipt; local validation is distinct from complete CI.

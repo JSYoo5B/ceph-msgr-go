@@ -29,6 +29,10 @@ restarts the owned MDS daemon; `TestCephMDSCephFSIntegration` targets the
 incarnation the fixture adopted (see
 [current target](#current-target-and-the-owned-restart)). The push and
 metadata tests read the current target, so they also run after a restart.
+The recovery test creates the metadata test's plan directory and `go-file`
+before the restart, because the closed native FLOCK probe admits only that
+path ([held-lock restart](MDS_FILELOCK_RESTART_VALIDATION.md)), and removes
+them again before it ends so the metadata test still creates them.
 
 Reference: Tentacle Ceph 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`. Relied-upon behavior is read from

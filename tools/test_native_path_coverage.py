@@ -80,15 +80,15 @@ class NativePathCoverageTests(unittest.TestCase):
     def test_unmerged_pull_requests_are_not_capabilities(self):
         # Self-contained: list a synthetic open PR and cite it from a row, so the
         # check does not depend on which pull requests are open today.
-        row = self.row("MDS-11")
+        row = self.row("MDS-10")
         heading = "## Open pull requests\n"
         text = self.text.replace(heading, heading + "\n| Pull request | Scope | Status |\n"
                                  "| --- | --- | --- |\n| #999 | synthetic | open PR, unmerged |\n")
-        cited = text.replace(row, row.replace("issue #10", "issue #10; open PR #999"))
+        cited_row = row.replace("issue #11;", "issue #11; open PR #999;", 1)
+        cited = text.replace(row, cited_row)
         self.assertEqual(self.check(cited), [])
-        cited = cited.replace("`proposed` | Not defined | Not defined | Not defined | issue #10; open PR #999",
-                              "`released` | Not defined | Not defined | Not defined | issue #10; open PR #999")
-        self.assertIn("row MDS-11: unmerged PR #999 cited as released", self.check(cited))
+        cited = cited.replace(cited_row, cited_row.replace("`proposed`", "`released`", 1))
+        self.assertIn("row MDS-10: unmerged PR #999 cited as released", self.check(cited))
 
 
 if __name__ == "__main__":

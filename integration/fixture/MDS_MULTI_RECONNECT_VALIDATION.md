@@ -74,7 +74,8 @@ current successful-run workflow; the hashes and bounded summary here do not
 replace the separate evidence-retention work under issue #1.
 
 Connection loss between fragments, arbitrary gigabytes of state, held-lock
-reconnect, dirty metadata ordering, multi-rank split reconnect, delegated
+reconnect inside split reconnect state (a single held lock across the ordinary
+restart is in [MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md)), dirty metadata ordering, multi-rank split reconnect, delegated
 inodes and Unicode name policy remain unverified or withheld. This recipe
 establishes no complete filesystem client or remote rollback behavior.
 

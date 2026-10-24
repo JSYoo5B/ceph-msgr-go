@@ -34,7 +34,9 @@ import (
 // the shared CephFS address nonce, and CephFS reconnect with request
 // resubmission after a restart of the owned rank-0 MDS daemon, against live
 // Tentacle daemons with native oracles. See integration/fixture/
-// MDS_CEPHFS_FIXTURE.md and MDS_CEPHFS_RECOVERY_VALIDATION.md.
+// MDS_CEPHFS_FIXTURE.md and MDS_CEPHFS_RECOVERY_VALIDATION.md. One whole-file
+// FLOCK held by the restart session crosses the same restart; see
+// MDS_FILELOCK_RESTART_VALIDATION.md.
 
 type nativeMDSCephFSRecoveryPlan struct {
 	Directory        string   `json:"directory"`

@@ -271,5 +271,6 @@ here.
   recovery after an eviction that leaves a partially applied range, multiple
   writers and persistence across an OSD restart (MemStore) remain outside
   this recipe.
-- Large reconnect state and held-lock recovery (checkpoint 3 of #10) are
-  separate.
+- Large reconnect state ([MDS_MULTI_RECONNECT_VALIDATION.md](MDS_MULTI_RECONNECT_VALIDATION.md))
+  and held-lock recovery ([MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md))
+  are separate checkpoints.
