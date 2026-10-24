@@ -679,6 +679,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertIsNone(selector.search("TestCephOSDIOIntegration"))
             self.assertIsNone(selector.search("TestRBDWriteTestOnlyEncodings"))
             self.assertIsNone(selector.search("TestRBDLockTestOnlyEncodings"))
+            self.assertIsNone(selector.search("TestRBDLockAckDispositionClassification"))
             self.assertIsNone(selector.search("TestCephRBDExclusiveLockIntegrationExtended"))
             self.assertIsNone(selector.search("TestCephRBDLockIntegration"))
             self.assertIsNone(selector.search("TestCephRBDCloneIntegrationExtended"))

@@ -341,6 +341,53 @@ func decodeRBDResponseMessage(data []byte) (int32, error) {
 	return result, d.done()
 }
 
+// rbdNotifyLockOwnerResult restates NotifyLockOwner::handle_notify (pinned
+// librbd/image_watcher/NotifyLockOwner.cc): an aggregate notify code other
+// than 0 or -ETIMEDOUT is the result; otherwise the single non-empty
+// acknowledgement is the lock owner's ResponseMessage, none gives
+// -ETIMEDOUT (an empty submitted acknowledgement counts as none), two give
+// -EINVAL and an undecodable one -EINVAL. A missed watcher alone, with one
+// valid owner response, therefore still yields the owner's result.
+func rbdNotifyLockOwnerResult(notifyResult int32, acks [][]byte) int32 {
+	const etimedout, einval = -110, -22
+	if notifyResult < 0 && notifyResult != etimedout {
+		return notifyResult
+	}
+	var response []byte
+	responded := false
+	for _, a := range acks {
+		if len(a) == 0 {
+			continue
+		}
+		if responded {
+			return einval
+		}
+		responded, response = true, a
+	}
+	if !responded {
+		return etimedout
+	}
+	result, err := decodeRBDResponseMessage(response)
+	if err != nil {
+		return einval
+	}
+	return result
+}
+
+// rbdRequestLockNextStep restates ImageWatcher::handle_request_lock (pinned
+// librbd/ImageWatcher.cc) for the requester's logical result.
+func rbdRequestLockNextStep(result int32) string {
+	switch {
+	case result == -110:
+		return "reattempt-acquire-now"
+	case result == -30:
+		return "peer-refused"
+	case result < 0:
+		return "schedule-request-lock"
+	}
+	return "retry-after-client-notify-timeout"
+}
+
 // Test-only lock and object-map class encodings.
 
 // rbdLockLockInputFor is cls_lock_lock_op for the exclusive rbd_lock with
@@ -594,6 +641,60 @@ func TestRBDLockTestOnlyEncodings(t *testing.T) {
 	}
 }
 
+// TestRBDLockAckDispositionClassification checks the test-only restatements
+// of NotifyLockOwner::handle_notify and ImageWatcher::handle_request_lock and
+// the responder's acknowledgement dispositions with synthetic inputs. It is
+// a source restatement, not live lock-fault evidence.
+func TestRBDLockAckDispositionClassification(t *testing.T) {
+	ok, refuse := rbdResponseMessage(0), rbdResponseMessage(-30)
+	for _, tc := range []struct {
+		name   string
+		notify int32
+		acks   [][]byte
+		want   int32
+		step   string
+	}{
+		{"owner ACK omitted, others answered empty, notify timed out", -110, [][]byte{{}}, -110, "reattempt-acquire-now"},
+		{"owner ACK submitted empty, notify completed", 0, [][]byte{{}, {}}, -110, "reattempt-acquire-now"},
+		{"owner response with a missed non-owner watch", -110, [][]byte{ok, {}}, 0, "retry-after-client-notify-timeout"},
+		{"owner response, all watches answered", 0, [][]byte{ok, {}}, 0, "retry-after-client-notify-timeout"},
+		{"owner refuses", 0, [][]byte{refuse, {}}, -30, "peer-refused"},
+		{"two non-empty responses", 0, [][]byte{ok, ok}, -22, "schedule-request-lock"},
+		{"undecodable owner response", 0, [][]byte{{1, 2}, {}}, -22, "schedule-request-lock"},
+		{"notify failure other than timeout beats a response", -5, [][]byte{ok}, -5, "schedule-request-lock"},
+	} {
+		got := rbdNotifyLockOwnerResult(tc.notify, tc.acks)
+		if got != tc.want || rbdRequestLockNextStep(got) != tc.step {
+			t.Errorf("%s: result %d next %q, want %d %q", tc.name, got, rbdRequestLockNextStep(got), tc.want, tc.step)
+		}
+	}
+	failed := errors.New("submission failed")
+	for _, tc := range []struct {
+		omitted bool
+		ack     []byte
+		err     error
+		want    string
+	}{
+		{true, nil, nil, rbdAckOmitted}, {true, ok, nil, rbdAckOmitted},
+		{false, nil, nil, rbdAckSubmittedEmpty}, {false, ok, nil, rbdAckSubmittedResponse},
+		{false, ok, failed, rbdAckSubmissionFailed}, {false, nil, failed, rbdAckSubmissionFailed},
+	} {
+		if got := rbdAckDispositionOf(tc.omitted, tc.ack, tc.err); got != tc.want {
+			t.Errorf("disposition of omitted=%v ack=%x err=%v is %q, want %q", tc.omitted, tc.ack, tc.err, got, tc.want)
+		}
+	}
+	r := &rbdLockResponder{}
+	r.inject("owner-request", "omit", "empty")
+	r.inject("own-request", "omit")
+	var got []string
+	for i := 0; i < 4; i++ {
+		got = append(got, r.nextPolicy("owner-request"))
+	}
+	if !slices.Equal(got, []string{"omit", "empty", "default", "default"}) || r.nextPolicy("own-request") != "omit" || r.scriptRemaining("own-request") != 0 || r.nextPolicy("other") != "default" {
+		t.Fatal("responder script order differs", got)
+	}
+}
+
 type rbdLockNotification struct {
 	Index            int
 	AfterMS          float64
@@ -608,11 +709,21 @@ type rbdLockNotification struct {
 	Own              bool
 	AnsweredAsOwner  bool
 	Unexpected       bool
-	AckHex           string
-	AckError         string `json:",omitempty"`
-	DecodeError      string `json:",omitempty"`
-	RawFrontHex      string
-	RawDataHex       string
+	// Role is the Go watch's lock role when the notification was handled:
+	// "owner" while Go holds the lock, otherwise "non-owner".
+	Role string
+	// Injected names the scripted ACK policy applied ("omit" or "empty"),
+	// empty for the default librbd-form answer.
+	Injected string `json:",omitempty"`
+	// AckDisposition distinguishes an omitted acknowledgement from a
+	// submitted empty one (AckHex is empty for both), a submitted
+	// ResponseMessage, and a failed submission.
+	AckDisposition string
+	AckHex         string
+	AckError       string `json:",omitempty"`
+	DecodeError    string `json:",omitempty"`
+	RawFrontHex    string
+	RawDataHex     string
 }
 
 // rbdLockResponder answers the Go header watch's notifications as librbd's
@@ -621,6 +732,12 @@ type rbdLockNotification struct {
 // the lock (its automatic-policy answer, after which Go releases) and an
 // empty acknowledgement otherwise or for its own request; HeaderUpdate with
 // ResponseMessage(0). It pings the watch while idle.
+//
+// A script injects deviations for the next notifications of one kind:
+// "owner-request" is a RequestLock from another client while Go owns the
+// lock, "own-request" is Go's own RequestLock reaching its watch. A policy is
+// "omit" (no acknowledgement is submitted), "empty" (an empty one is) or
+// "default".
 type rbdLockResponder struct {
 	mu         sync.Mutex
 	events     []rbdLockNotification
@@ -629,6 +746,52 @@ type rbdLockResponder struct {
 	failure    error
 	pings      int
 	pingErrors []string
+	script     map[string][]string
+}
+
+const (
+	rbdAckOmitted           = "omitted"
+	rbdAckSubmittedEmpty    = "submitted-empty"
+	rbdAckSubmittedResponse = "submitted-response"
+	rbdAckSubmissionFailed  = "submission-failed"
+)
+
+// rbdAckDispositionOf classifies one acknowledgement decision.
+func rbdAckDispositionOf(omitted bool, ack []byte, submitErr error) string {
+	switch {
+	case omitted:
+		return rbdAckOmitted
+	case submitErr != nil:
+		return rbdAckSubmissionFailed
+	case len(ack) == 0:
+		return rbdAckSubmittedEmpty
+	}
+	return rbdAckSubmittedResponse
+}
+
+func (r *rbdLockResponder) inject(kind string, policies ...string) {
+	r.mu.Lock()
+	if r.script == nil {
+		r.script = map[string][]string{}
+	}
+	r.script[kind] = append(r.script[kind], policies...)
+	r.mu.Unlock()
+}
+
+func (r *rbdLockResponder) nextPolicy(kind string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if q := r.script[kind]; len(q) > 0 {
+		r.script[kind] = q[1:]
+		return q[0]
+	}
+	return "default"
+}
+
+func (r *rbdLockResponder) scriptRemaining(kind string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.script[kind])
 }
 
 func (r *rbdLockResponder) setOwning(owning bool) {
@@ -679,7 +842,12 @@ func (r *rbdLockResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epo
 	r.mu.Lock()
 	owning := r.owning
 	r.mu.Unlock()
+	n.Role = "non-owner"
+	if owning {
+		n.Role = "owner"
+	}
 	var ack []byte
+	kind := ""
 	switch {
 	case !m.Known:
 		n.Unexpected = true
@@ -687,18 +855,42 @@ func (r *rbdLockResponder) handle(ctx context.Context, w *cephmsgr.OSDWatch, epo
 			ack = rbdResponseMessage(-95) // UnknownPayload: -EOPNOTSUPP from a lock owner
 		}
 	case m.Op == rbdNotifyRequestLock && !n.Own && owning:
-		ack, n.AnsweredAsOwner = rbdResponseMessage(0), true
+		ack, kind = rbdResponseMessage(0), "owner-request"
+	case m.Op == rbdNotifyRequestLock && n.Own:
+		kind = "own-request"
 	case m.Op == rbdNotifyHeaderUpdate:
 		ack, n.Unexpected = rbdResponseMessage(0), true
 	}
+	omitted := false
+	if kind != "" {
+		switch policy := r.nextPolicy(kind); policy {
+		case "omit":
+			omitted, ack, n.Injected = true, nil, policy
+		case "empty":
+			ack, n.Injected = nil, policy
+		}
+	}
+	n.AnsweredAsOwner = kind == "owner-request" && !omitted && len(ack) != 0
 	n.AckHex = hex.EncodeToString(ack)
-	if _, err := w.Acknowledge(ctx, epoch, event, ack); err != nil {
-		n.AckError = err.Error()
-		r.fail(fmt.Errorf("acknowledge header notification %d: %w", event.NotifyID, err))
+	var submitErr error
+	if !omitted {
+		_, submitErr = w.Acknowledge(ctx, epoch, event, ack)
+	}
+	n.AckDisposition = rbdAckDispositionOf(omitted, ack, submitErr)
+	if submitErr != nil {
+		n.AckError = submitErr.Error()
+		r.fail(fmt.Errorf("acknowledge header notification %d: %w", event.NotifyID, submitErr))
 	}
 	if n.Unexpected {
 		r.fail(fmt.Errorf("unexpected header notification op %d from client.%d", m.Op, event.NotifierGlobalID))
 	}
+}
+
+// rbdBlocklistView is the MON's OSDMap blocklist (osd dump) at one epoch.
+type rbdBlocklistView struct {
+	Label   string
+	Epoch   uint32
+	Entries []string
 }
 
 type rbdLockGoNotify struct {
@@ -1096,6 +1288,32 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 		}
 		return data
 	}
+	// blocklist reads the OSDMap blocklist through the MON (raw osd dump): an
+	// ownership break would add the owner's address.
+	blocklist := func(t *testing.T, label string) rbdBlocklistView {
+		t.Helper()
+		result, err := c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"osd dump","format":"json"}`)})
+		if err != nil {
+			t.Fatal("MON osd dump", label, err)
+		}
+		var dump struct {
+			Epoch     uint32                     `json:"epoch"`
+			Blocklist map[string]json.RawMessage `json:"blocklist"`
+			Range     map[string]json.RawMessage `json:"range_blocklist"`
+		}
+		if err := json.Unmarshal(result.Data, &dump); err != nil || dump.Epoch == 0 {
+			t.Fatal("MON osd dump decoding", label, err)
+		}
+		view := rbdBlocklistView{Label: label, Epoch: dump.Epoch, Entries: []string{}}
+		for addr := range dump.Blocklist {
+			view.Entries = append(view.Entries, addr)
+		}
+		for addr := range dump.Range {
+			view.Entries = append(view.Entries, "range:"+addr)
+		}
+		slices.Sort(view.Entries)
+		return view
+	}
 	legacy := func(a rbdLockAddress) string { return fmt.Sprintf("%s/%d", a.Endpoint, a.Nonce) }
 	watcherLegacy := func(w cephmsgr.OSDWatcher) string { return fmt.Sprintf("%s/%d", w.Address.Endpoint, w.Address.Nonce) }
 	lockInfo := func(t *testing.T, label, object string) ([]byte, rbdLockInfo) {
@@ -1472,8 +1690,10 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 	}
 	// goNotify sends one librbd notification from Go with librbd's 5 s
 	// notify timeout and returns its completion: the native watch and Go's
-	// own watch must both acknowledge.
-	goNotify := func(t *testing.T, label string, payload []byte) *rbdLockGoNotify {
+	// own watch must both acknowledge. With strict false the completion is
+	// recorded and its basic identity checked, and the caller judges the
+	// return code, replies and missed watchers.
+	goNotifyWith := func(t *testing.T, label string, payload []byte, strict bool) *rbdLockGoNotify {
 		t.Helper()
 		req := request(hr)
 		req.Operations = nil
@@ -1499,14 +1719,18 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 			e.Replies = append(e.Replies, rbdNotifyReplyEvidence{GlobalID: reply.GlobalID, Cookie: reply.Cookie, DataHex: hex.EncodeToString(reply.Data)})
 		}
 		evidence.GoNotifies = append(evidence.GoNotifies, e)
-		if completion.Opcode != cephmsgr.OSDWatchCompletion || completion.NotifyID != notifyID || completion.Cookie != n.Cookie() || completion.ReturnCode != 0 || len(completion.Missed) != 0 ||
-			len(completion.Replies) != 2 || time.Since(notifyStarted) >= rbdNotifyTimeout {
+		if completion.Opcode != cephmsgr.OSDWatchCompletion || completion.NotifyID != notifyID || completion.Cookie != n.Cookie() ||
+			strict && (completion.ReturnCode != 0 || len(completion.Missed) != 0 || len(completion.Replies) != 2 || time.Since(notifyStarted) >= rbdNotifyTimeout) {
 			t.Fatalf("%s completion differs: %+v", label, e)
 		}
 		if _, err := n.Next(ctx); !errors.Is(err, cephmsgr.ErrOSDNotifyComplete) {
 			t.Fatal("notify stream did not end after its completion", label, err)
 		}
 		return e
+	}
+	goNotify := func(t *testing.T, label string, payload []byte) *rbdLockGoNotify {
+		t.Helper()
+		return goNotifyWith(t, label, payload, true)
 	}
 	replyFrom := func(t *testing.T, e *rbdLockGoNotify, id rbdClientID) []byte {
 		t.Helper()
@@ -1522,7 +1746,7 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 	ownNotification := func(t *testing.T, from int, label string, op uint32) {
 		t.Helper()
 		n := waitNotification(t, from, label, func(n rbdLockNotification) bool { return n.Op == op && n.Own && n.NotifierGlobalID == gid })
-		if n.Client != goID || n.AckHex != "" || n.AckError != "" {
+		if n.Client != goID || n.AckHex != "" || n.AckError != "" || n.AckDisposition != rbdAckSubmittedEmpty || n.Injected != "" {
 			t.Fatal(label, "own notification acknowledgement differs", n)
 		}
 	}
@@ -1536,28 +1760,53 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 			}) {
 			t.Fatal("header watchers lack the native owner or the Go watch", watchers)
 		}
+		// Non-owner ACK disposition: Go's own watch (a non-owner) omits its
+		// acknowledgement of Go's RequestLock while the native owner answers
+		// ResponseMessage(0). The notify completes at librbd's 5 s timeout
+		// with the Go watch missed; NotifyLockOwner tolerates the aggregate
+		// -ETIMEDOUT when exactly one owner response is present.
+		blocklistBefore := blocklist(t, "before_request_lock")
+		responder.inject("own-request", "omit")
 		mark := notifications()
 		requested := time.Now()
-		e := goNotify(t, "notify_request_lock", rbdRequestLockNotify(goID, false))
+		e := goNotifyWith(t, "notify_request_lock", rbdRequestLockNotify(goID, false), false)
+		if e.ReturnCode != -110 || !slices.Equal(e.Missed, []cephmsgr.OSDNotifyIdentity{{GlobalID: gid, Cookie: w.Cookie()}}) || len(e.Replies) != 1 ||
+			e.Replies[0].GlobalID != nativeOwner.GID || e.Replies[0].Cookie != nativeOwner.Handle || e.CompletedAfterMS < float64(rbdNotifyTimeout.Milliseconds())-100 {
+			t.Fatalf("RequestLock completion with the non-owner acknowledgement omitted differs: %+v", e)
+		}
 		// NotifyLockOwner takes the single non-empty acknowledgement as the
 		// lock owner's answer.
 		answer := replyFrom(t, e, nativeOwner)
 		result, err := decodeRBDResponseMessage(answer)
-		if err != nil || len(replyFrom(t, e, goID)) != 0 {
-			t.Fatal("RequestLock acknowledgements differ", e.Replies, err)
+		if err != nil {
+			t.Fatal("native lock owner acknowledgement does not decode", e.Replies, err)
 		}
+		logical := rbdNotifyLockOwnerResult(e.ReturnCode, [][]byte{answer})
 		step("native_lock_policy_answer", map[string]any{"response_hex": hex.EncodeToString(answer), "result": result})
-		if result != 0 {
-			t.Fatalf("native librbd answered RequestLock with %d, not the automatic policy's release (0)", result)
+		if result != 0 || logical != 0 {
+			t.Fatalf("native librbd answered RequestLock with %d (logical %d), not the automatic policy's release (0)", result, logical)
 		}
-		ownNotification(t, mark, "own RequestLock", rbdNotifyRequestLock)
+		own := waitNotification(t, mark, "own RequestLock", func(n rbdLockNotification) bool {
+			return n.Op == rbdNotifyRequestLock && n.Own && n.NotifierGlobalID == gid
+		})
+		if own.Client != goID || own.Role != "non-owner" || own.Injected != "omit" || own.AckDisposition != rbdAckOmitted || own.AckHex != "" || own.AckError != "" || own.NotifyID != e.NotifyID ||
+			own.Cookie != w.Cookie() || own.PayloadHex != e.PayloadHex {
+			t.Fatal("own RequestLock acknowledgement was not omitted as scripted", own, e.NotifyID)
+		}
 		released := waitNotification(t, mark, "native ReleasedLock", func(n rbdLockNotification) bool {
 			return n.Op == rbdNotifyReleasedLock && n.NotifierGlobalID == nativeGID
 		})
 		evidence.Timings["request_to_released"] = time.Duration(released.AfterMS*float64(time.Millisecond) - float64(requested.Sub(responderStarted))).String()
-		if released.Client != nativeOwner || released.Version != 7 || released.AckHex != "" || released.AckError != "" {
+		if released.Client != nativeOwner || released.Version != 7 || released.AckHex != "" || released.AckError != "" || released.AckDisposition != rbdAckSubmittedEmpty {
 			t.Fatal("native ReleasedLock differs from the owner's ClientId", released)
 		}
+		blocklistAfter := blocklist(t, "after_request_lock")
+		if !slices.Equal(blocklistBefore.Entries, blocklistAfter.Entries) {
+			t.Fatal("the omitted non-owner acknowledgement changed the OSDMap blocklist", blocklistBefore, blocklistAfter)
+		}
+		step("non_owner_ack_omitted", map[string]any{"notify": e, "own_notification": own, "native_response": result, "logical_result": logical,
+			"next_step": rbdRequestLockNextStep(logical), "blocklist_before": blocklistBefore, "blocklist_after": blocklistAfter,
+			"native_released_after_ms": released.AfterMS, "completed_after_ms": e.CompletedAfterMS})
 		// librbd closed the object map (its unlock) and unlocked the header
 		// before announcing the release.
 		out, info := lockInfo(t, "lock_get_info_native_released", header)
@@ -1748,17 +1997,88 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 	}
 
 	t.Run("native_requests_lock_back", func(t *testing.T) {
+		// Owner ACK disposition. Go owns the lock and keeps its header watch
+		// pinging while native librbd, blocked in its write, asks for the lock:
+		// Go omits the first acknowledgement, submits an empty one to the
+		// second request and answers the third with ResponseMessage(0), then
+		// releases. NotifyLockOwner gives -ETIMEDOUT for both of the first two
+		// (no non-empty acknowledgement), which librbd treats as a possibly
+		// dead owner and re-tests (BreakRequest refuses while the watch is
+		// alive). Go's lock, the native write and the blocklist are checked
+		// after each deviation.
+		blocklistBefore := blocklist(t, "before_native_request")
+		responder.inject("owner-request", "omit", "empty")
 		mark := notifications()
 		proceed(t, 3)
+		isNativeRequest := func(n rbdLockNotification) bool {
+			return n.Op == rbdNotifyRequestLock && n.NotifierGlobalID == nativeGID
+		}
+		nativePhases := func() []string {
+			var published nativeRBDLockState
+			data, err := os.ReadFile(statePath)
+			if err != nil || json.Unmarshal(data, &published) != nil {
+				t.Fatal("native RBD lock state unreadable", err)
+			}
+			var names []string
+			for _, p := range published.Phases {
+				names = append(names, p.Phase)
+			}
+			return names
+		}
+		goStillOwns := func(label string) {
+			t.Helper()
+			_, info := lockInfo(t, "lock_get_info_"+label, header)
+			if len(info.Lockers) != 1 || uint64(info.Lockers[0].NameNumber) != gid || info.Lockers[0].Cookie != cookie {
+				t.Fatal(label, "Go no longer holds the header lock", info)
+			}
+			if !slices.ContainsFunc(listWatchers(t, "list_watchers_"+label, header), func(x cephmsgr.OSDWatcher) bool { return uint64(x.NameNumber) == gid && x.Cookie == w.Cookie() }) {
+				t.Fatal(label, "Go header watch is gone")
+			}
+			if phases := nativePhases(); slices.Contains(phases, "reacquired") || slices.Contains(phases, "closed") {
+				t.Fatal(label, "the native write completed without the lock handoff", phases)
+			}
+		}
+		checkAttempt := func(label string, n rbdLockNotification, injected, disposition, ackHex string) {
+			t.Helper()
+			if n.Client != nativeOwner || n.Force || n.Version != 7 || n.Role != "owner" || n.Injected != injected || n.AckDisposition != disposition || n.AckHex != ackHex || n.AckError != "" ||
+				n.Cookie != w.Cookie() || n.Own || n.AnsweredAsOwner != (disposition == rbdAckSubmittedResponse) {
+				t.Fatal(label, "native RequestLock or the Go owner's acknowledgement differs", n)
+			}
+		}
 		// librbd's write finds the lock held by a live owner (BreakRequest:
 		// -EAGAIN), waits for it and asks for it.
-		requested := waitNotification(t, mark, "native RequestLock", func(n rbdLockNotification) bool {
-			return n.Op == rbdNotifyRequestLock && n.NotifierGlobalID == nativeGID
-		})
-		answeredAt := time.Now()
-		if requested.Client != nativeOwner || requested.Force || requested.Version != 7 || !requested.AnsweredAsOwner || requested.AckHex != hex.EncodeToString(rbdResponseMessage(0)) || requested.AckError != "" {
-			t.Fatal("native RequestLock or the Go owner's answer differs", requested)
+		first := waitNotification(t, mark, "native RequestLock (owner ACK omitted)", isNativeRequest)
+		checkAttempt("first", first, "omit", rbdAckOmitted, "")
+		goStillOwns("after_omitted_owner_ack")
+		second := waitNotification(t, first.Index+1, "native RequestLock (owner ACK empty)", isNativeRequest)
+		checkAttempt("second", second, "empty", rbdAckSubmittedEmpty, "")
+		if second.NotifyID == first.NotifyID {
+			t.Fatal("native librbd did not issue a new notification after the omitted acknowledgement", first.NotifyID)
 		}
+		goStillOwns("after_empty_owner_ack")
+		requested := waitNotification(t, second.Index+1, "native RequestLock (owner ACK ResponseMessage)", isNativeRequest)
+		answeredAt := time.Now()
+		answeredAtMS := float64(time.Since(responderStarted).Microseconds()) / 1000
+		checkAttempt("third", requested, "", rbdAckSubmittedResponse, hex.EncodeToString(rbdResponseMessage(0)))
+		if requested.NotifyID == second.NotifyID || requested.NotifyID == first.NotifyID {
+			t.Fatal("native librbd reused a notification identity", requested.NotifyID)
+		}
+		if responder.scriptRemaining("owner-request") != 0 {
+			t.Fatal("scripted owner acknowledgements left unconsumed")
+		}
+		blocklistAfter := blocklist(t, "after_native_request")
+		if !slices.Equal(blocklistBefore.Entries, blocklistAfter.Entries) {
+			t.Fatal("the owner acknowledgement deviations changed the OSDMap blocklist", blocklistBefore, blocklistAfter)
+		}
+		logicalMissing, logicalEmpty, logicalAnswer := rbdNotifyLockOwnerResult(-110, [][]byte{nil}), rbdNotifyLockOwnerResult(0, [][]byte{nil, nil}), rbdNotifyLockOwnerResult(0, [][]byte{rbdResponseMessage(0), nil})
+		if logicalMissing != -110 || logicalEmpty != -110 || logicalAnswer != 0 {
+			t.Fatal("test-only NotifyLockOwner restatement differs", logicalMissing, logicalEmpty, logicalAnswer)
+		}
+		step("owner_ack_dispositions", map[string]any{"attempts": []rbdLockNotification{first, second, requested},
+			"first_to_second_ms": second.AfterMS - first.AfterMS, "second_to_third_ms": requested.AfterMS - second.AfterMS,
+			"expected_logical": []int32{logicalMissing, logicalEmpty, logicalAnswer},
+			"expected_next":    []string{rbdRequestLockNextStep(logicalMissing), rbdRequestLockNextStep(logicalEmpty), rbdRequestLockNextStep(logicalAnswer)},
+			"blocklist_before": blocklistBefore, "blocklist_after": blocklistAfter})
 		// Release as librbd's PreReleaseRequest and ReleaseRequest do: close
 		// the object map (unlock), unlock the header, announce ReleasedLock.
 		responder.setOwning(false)
@@ -1781,17 +2101,20 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 		p := waitPhase(t, "reacquired")
 		checkWrites(t, "reacquire", p.Writes, "reacquire", plan.ReacquireWrites)
 		apply("reacquire", plan.ReacquireWrites)
-		// The write waited for Go's release, not for librbd's
-		// client_notify_timeout retry.
+		// The write could not complete before Go's release, which followed the
+		// omitted acknowledgement's notify timeout; once Go released, librbd
+		// reacquired without waiting for its client_notify_timeout retry. The
+		// intervals are bounds, not measurements of librbd's retry timers.
 		evidence.Timings["native_reacquire_write"] = time.Duration(p.WriteNS).String()
-		if time.Duration(p.WriteNS) >= rbdNotifyTimeout || time.Duration(p.WriteNS) >= rbdRequestLockRetry {
-			t.Fatal("native write did not complete promptly after the Go release", time.Duration(p.WriteNS))
+		evidence.Timings["go_release_to_native_acquired"] = (time.Duration((acquired.AfterMS - answeredAtMS) * float64(time.Millisecond))).String()
+		if time.Duration(p.WriteNS) < rbdNotifyTimeout-100*time.Millisecond || acquired.AfterMS-answeredAtMS >= float64(rbdRequestLockRetry.Milliseconds()) {
+			t.Fatal("native write timing differs from the omitted acknowledgement and the prompt handoff", time.Duration(p.WriteNS), acquired.AfterMS-answeredAtMS)
 		}
 		events, _ := responder.snapshot()
 		if n := len(slices.DeleteFunc(slices.Clone(events[mark:]), func(n rbdLockNotification) bool {
 			return n.Op != rbdNotifyRequestLock || n.NotifierGlobalID != nativeGID
-		})); n != 1 {
-			t.Fatal("native librbd asked for the lock more than once", n)
+		})); n != 3 {
+			t.Fatal("native librbd asked for the lock other than three times", n)
 		}
 		out, info := lockInfo(t, "lock_get_info_native_reacquired", header)
 		sameHex(t, "reacquired", p.HeaderLock, header, "lock", "get_info", rbdLockGetInfoInput(), out)
@@ -1820,7 +2143,7 @@ func TestCephRBDExclusiveLockIntegration(t *testing.T) {
 				t.Fatal("native lock owner reads the Go extent differently (stale object map?)")
 			}
 		}
-		step("native_reacquired", map[string]any{"request_lock": requested, "acquired_lock": acquired, "write_ns": p.WriteNS})
+		step("native_reacquired", map[string]any{"request_lock": requested, "first_request": first, "second_request": second, "acquired_lock": acquired, "write_ns": p.WriteNS})
 		t.Logf("librbd asked with %s, Go released, librbd reacquired with %s; its write took %v", requested.PayloadHex, acquired.PayloadHex, time.Duration(p.WriteNS))
 	})
 	if t.Failed() {
