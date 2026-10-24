@@ -61,6 +61,9 @@ jobs:
         run: |
           cp .trusted-native/tools/native_test_results.py "$RUNNER_TEMP/native_test_results.py"
           cp .trusted-native/tools/native_evidence.py "$RUNNER_TEMP/native_evidence.py"
+          # The soak collector imports this validator from its own directory;
+          # the tested checkout's copy is never used for retained evidence.
+          cp .trusted-native/tools/osd_soak_receipts.py "$RUNNER_TEMP/osd_soak_receipts.py"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.ref }}
@@ -212,7 +215,7 @@ jobs:
           compression-level: 9
       - name: Collect reviewed successful-native evidence
         id: evidence
-        if: steps.ceph.outcome == 'success' && matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$'
+        if: steps.ceph.outcome == 'success' && (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || (matrix.osd_soak || '') != '')
         continue-on-error: true
         env:
           TESTED_SHA: ${{ inputs.ref || github.sha }}
@@ -236,8 +239,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 9
-      - name: Require complete evidence for the successful pilot
-        if: always() && steps.ceph.outcome == 'success' && matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$'
+      - name: Require complete evidence for the admitted successful rows
+        if: always() && steps.ceph.outcome == 'success' && (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || (matrix.osd_soak || '') != '')
         env:
           COLLECTION: ${{ steps.evidence.outcome }}
           UPLOAD: ${{ steps.evidence_upload.outcome }}
@@ -252,7 +255,7 @@ jobs:
           SCENARIO: ${{ matrix.scenario }}
           RESULT: ${{ job.status }}
           TEST_OUTCOME: ${{ steps.ceph.outcome }}
-          EVIDENCE_PILOT: ${{ matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' }}
+          EVIDENCE_PILOT: ${{ (matrix.test_run == '^TestCephMDSCephFSCapSendRecoveryIntegration$' || (matrix.osd_soak || '') != '') }}
           EVIDENCE_COLLECTION: ${{ steps.evidence.outcome }}
           EVIDENCE_UPLOAD: ${{ steps.evidence_upload.outcome }}
           TESTED_SHA: ${{ inputs.ref || github.sha }}

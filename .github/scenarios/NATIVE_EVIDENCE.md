@@ -6,11 +6,12 @@ planner, authorization path, scheduling queue or fixture capability.
 
 ## Admitted pilot
 
-Only the two explicit `mds-cephfs-capsend` rows, selecting
-`^TestCephMDSCephFSCapSendRecoveryIntegration$`, request a successful bundle.
-Their existing CRC/AES IPv4 host BlueStore and secure/aes256k IPv6 container
-MemStore profiles remain unchanged. Other successful native scenarios still
-retain their ordinary result/test artifacts without this pilot bundle.
+Two closed families request a successful bundle. The first is the two explicit
+`mds-cephfs-capsend` rows, selecting
+`^TestCephMDSCephFSCapSendRecoveryIntegration$`. Their existing CRC/AES IPv4 host BlueStore and secure/aes256k IPv6 container
+MemStore profiles remain unchanged. The second is the single four-minute OSD soak row
+(see [below](#four-minute-osd-soak-family)). Other successful native scenarios still
+retain their ordinary result/test artifacts without a bundle.
 
 The collector is copied from the calling workflow's trusted checkout before
 checking out tested code. It uses only Python's standard library. The job
@@ -114,6 +115,73 @@ while preserving the actual test PASS. Missing/invalid required-test evidence
 is `unknown`, never an invented PASS. Canceled or skipped native jobs do not
 become accepted evidence. No automatic retry replaces the first attempt.
 
+## Four-minute OSD soak family
+
+This is a second closed family of the same manifest contract (`schema_version`
+1), identified by `kind` **`native-soak-success`**. It admits exactly one
+profile: `osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m` (aes256k
+client key and service cipher, secure mode, IPv4, container runtime, three
+BlueStore replicas, `osd_soak=4m`, the pinned image and provider above). The
+manifest `selector` is the fixture's own selection
+`^TestCephOSDSoak(Failover)?Integration$`, since the scenario row carries no
+`test_run`. Any other row with an `osd_soak` value still requests evidence in
+the workflow and is refused by the collector as an unsupported profile, so it
+fails as `incomplete` rather than skipping retention.
+
+**Expected inventory comes from outside the receipts.** The collector fixes
+the workload pair (`steady`, `failover`), the 240 s duration, the tested
+revision and the image. The broad test gate lists no expected tests for this
+row, so the collector additionally requires its `native-tests.json` to show
+exactly `api/TestCephOSDSoakIntegration` and
+`api/TestCephOSDSoakFailoverIntegration` as PASS with no other result, problem
+or skip. A receipt's own `expected_tests` is checked against this fixed pair,
+never used to define it.
+
+**Trusted validator.** `native-scenarios.yml` copies `osd_soak_receipts.py`
+from the calling workflow's trusted checkout next to `native_evidence.py`,
+before the tested checkout. The collector imports it from its own directory and
+refuses a module found anywhere else. The tested checkout's copy (which the
+fixture runs after termination for the job log) is not used for retained
+evidence. The validator checks selected labels, worker identity and object
+binding, native bytes/xattrs/version, native mtime (unsigned 32-bit seconds,
+nanoseconds below 1e9), fault intervals, owned-object cleanup and fixture
+termination.
+
+**Retention decision: fixed projection, not raw receipts.** Soak receipts may be
+512 KiB each (the fixture's diagnostic-copy bound) and carry base64 expected
+and native bytes, so eight maximum-sized worker receipts alone exceed the 1 MiB
+bundle limit. Raising the budget would only move the ceiling. The bundle
+therefore retains a closed projection plus hashes, with the same 256 KiB per
+file and 1 MiB total limits as cap-send:
+
+| File | Retained boundary |
+| --- | --- |
+| `manifest.json` | Same context, configured/observed distinction and size/hash inventory as cap-send, with the soak `kind` |
+| `tests.json` | The two required API parent PASS results and both selectors |
+| `soak.json` | Tested revision, configured duration, observation count (8); per workload setup time, owned-object count, actual workload/test intervals, closed counter set, four worker observations (version, native mtime seconds/nanos, byte lengths, SHA-256 of the data and of the xattr value, observation time) and for failover each fault phase (cycle, phase, time since workload start, duration, victim OSD index) and the final clean-PG verdict |
+| `cleanup.json` | Per workload the native removal verdict, duration and the five object result codes (success or native absence) in ownership order, plus fixture termination success and duration |
+| `receipts.json` | Fixture manifest hash and, for each of the 22 raw files (two workloads, termination, fault receipts and the fixture manifest at one fault cycle), exact byte size and SHA-256 |
+| `runtime.json` | Same observed image ID, architecture, daemon version, provider and fixture-reported profile as cap-send |
+
+**What the projection cannot do.** The raw expected/native bytes, xattr values,
+object names, setup names, error strings and unresolved-outcome ledgers are
+omitted. A reader can check the retained hashes against a raw receipt if it is
+obtained elsewhere, but cannot recompute the native comparison, the
+xattr equality or the byte-level match from the bundle. Retained times and
+identities are the validator's accepted values, not independently re-measured.
+The 22-entry inventory is for a single fault cycle; each additional cycle adds
+three receipts, with at most 64 cycles. Cleanup flags describe the owned native
+objects and the fixture's orderly termination, not an independent Docker or
+network inventory.
+
+**Verdicts.** A native PASS with failed collection or upload remains
+`test_result=passed`, `evidence_result=incomplete`; the final step fails the job
+and the status file carries a fixed public code (for example
+`soak-receipts-invalid`) without echoing receipt contents. Retention is
+seven days, in the same `native-success-<run>-<attempt>-<job>-<scenario>`
+artifact name family as cap-send. Failed or canceled runs keep only their
+existing diagnostic behaviour, and cancellation evidence remains unverified.
+
 ## Local interface and verification limits
 
 With a separately prepared run request and retained private metadata:
@@ -133,16 +201,15 @@ The verifier consumes data and never executes a receipt, native command or
 embedded path. Hashes provide file integrity, not a signature or proof that
 an otherwise fabricated record came from native execution.
 
-Daemon-free rejection tests validate the contract; a native run and hosted
+Daemon-free rejection tests (`tools/test_native_evidence.py` and
+`tools/test_native_soak_evidence.py`) validate the contract; a native run and hosted
 artifact upload are separate evidence. Before this workflow change reaches
 the default branch, PR-comment runs still use the previous trusted workflow
 and do not run this new collector. An older successful request must not be
 reported as a hosted successful-bundle upload.
 
-Soak-specific immutable observations and their failure/cleanup acceptance
-remain in issue #14. They may consume the common manifest/verification
-contract through a separately reviewed schema extension; v1 does not accept
-soak files or broaden its admitted selectors.
+The soak family below is the only extension of the admitted rows; the
+cap-send inventory, schema, limits and verdicts above are unchanged.
 
 The [pilot validation record](NATIVE_EVIDENCE_VALIDATION.md) separates its actual
 Linux native run, retained projection and pre-merge hosted-workflow boundary.

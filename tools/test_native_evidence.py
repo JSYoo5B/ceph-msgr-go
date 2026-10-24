@@ -231,7 +231,7 @@ class NativeEvidenceTests(unittest.TestCase):
         self.assertLess(capture, text.index('ref: ${{ inputs.ref }}'))
         self.assertIn('test "$(git rev-parse HEAD)" = "$TESTED_SHA"', text)
         self.assertLess(text.index('sh integration/run.sh'), text.index('native_evidence.py" collect'))
-        self.assertIn("if: steps.ceph.outcome == 'success' && matrix.test_run == '^" + evidence.TEST + "$'", text)
+        self.assertIn("if: steps.ceph.outcome == 'success' && (matrix.test_run == '^" + evidence.TEST + "$' || (matrix.osd_soak || '') != '')", text)
         artifact = text[text.index('      - name: Preserve reviewed successful-native evidence'):text.index('      - name: Require complete evidence')]
         self.assertIn('path: ${{ runner.temp }}/success-evidence/', artifact)
         self.assertIn('retention-days: 7', artifact)

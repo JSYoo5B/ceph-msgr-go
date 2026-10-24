@@ -199,7 +199,7 @@ Artifact retention follows the purpose of each upload:
 
 | Artifact category | Retention | Current uploads |
 | --- | --- | --- |
-| General results | 7 days | Scenario result/test JSON for requested and periodic runs; reviewed explicit cap-send success bundles; successful Windows interoperability evidence |
+| General results | 7 days | Scenario result/test JSON for requested and periodic runs; reviewed explicit cap-send and four-minute soak success bundles; successful Windows interoperability evidence |
 | Failure diagnostics | 14 days | Failed native, race and unit-test logs/metadata; Windows evidence when the job fails |
 | Deployment evidence | 30 days | Policy for future deployment workflows; no deployment workflow currently uploads evidence |
 
@@ -211,7 +211,10 @@ included-file hashes. Only reviewed numeric/outcome/cleanup projections are
 uploaded for seven days; raw metadata, logs, configuration and credentials
 remain excluded. `result.json` distinguishes a native test PASS from incomplete
 required evidence, and the pilot's final gate requires both collection and
-upload. Other rows keep their previous retention boundary. This new trusted
+upload. The single four-minute OSD soak row requests a second closed
+family (`native-soak-success`, a fixed projection of its raw receipts with
+hashes; see [the soak section](NATIVE_EVIDENCE.md#four-minute-osd-soak-family)).
+Other rows keep their previous retention boundary. This new trusted
 collector becomes available to PR-comment execution after its workflow lands
 on the default branch; pre-merge native requests keep the older runner.
 

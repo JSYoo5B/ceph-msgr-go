@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Collect/verify bounded successful-native receipts; never archive fixture IPC.
 
-Version 1 admits only the two explicit cap-send rows. It projects numeric
-identity/outcome fields and cleanup booleans, not raw logs, endpoints, commands,
-configuration, credentials or full capability objects. Hashes bind the projected
-files, not the omitted inputs or the truth of a native assertion.
+Version 1 admits two closed families: the explicit cap-send rows and the single
+four-minute OSD soak pair. Each projects numeric identity/time/outcome fields,
+cleanup results and hashes, not raw logs, endpoints, commands, configuration,
+credentials, full capability objects or raw workload bytes. Hashes bind the
+projected files and name the omitted raw receipts; they do not let a reader
+recompute omitted native bytes or xattrs, nor establish the truth of a native
+assertion. The soak family validates its raw receipts with the validator copied
+from the trusted controller, never with the tested checkout's copy.
 """
 import argparse
 import hashlib
@@ -35,6 +39,17 @@ DEFAULTS = {
     "mds_cephfs_ranks": "0", "mds_cephfs_ranks_replay": "0", "mds_cephfs_completion": "0",
     "mds_cephfs_data": "0", "rbd": "0", "test_run": "",
 }
+SOAK_SCENARIO = "osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m"
+SOAK_SELECTOR = "^TestCephOSDSoak(Failover)?Integration$"
+SOAK_DURATION_NS = 240_000_000_000
+SOAK_LABELS = ("steady", "failover")
+SOAK_TESTS = {"steady": "TestCephOSDSoakIntegration", "failover": "TestCephOSDSoakFailoverIntegration"}
+SOAK_FILES = {"tests.json", "soak.json", "cleanup.json", "receipts.json", "runtime.json"}
+SOAK_RECEIPT_LIMIT = 512 << 10
+SOAK_COUNTERS = {"steady": {"appends", "reads", "unknowns", "resubmissions", "xattrs", "truncations", "churns", "unsent"},
+                 "failover": {"appends", "reads", "unknowns", "resubmissions", "xattrs", "truncations", "faults", "replacements", "resent"}}
+SOAK_PROFILE = dict(DEFAULTS, key="aes256k", service="aes256k", family="4", osd="1", osd_store="bluestore",
+                    osd_replicas="3", osd_soak="4m")
 COMMON = dict(DEFAULTS, osd="1", mds_fresh="1", mds_cephfs_data="1", test_run=SELECTOR)
 PROFILES = [dict(COMMON, key="aes", service="aes", mode="crc", family="4", runtime="host", osd_store="bluestore"),
             dict(COMMON, family="6")]
@@ -43,6 +58,10 @@ CLEAN_FLAGS = ("attempted", "completed", "config_restored", "osd_config_restored
                "namespace_restored", "layout_restored", "blocklist_restored", "client_identity_removed", "native_identity_removed")
 FRESH_FLAGS = ("attempted", "completed", "filesystem_removed", "pools_removed", "identity_removed", "cephfs_data_verified")
 PRIVATE = re.compile(r"(?:[\\/]Users[\\/]|[\\/]home[\\/]|\b(?:\d{1,3}\.){3}\d{1,3}\b|\b(?:ssh|keyring)\b)", re.I)
+
+
+KIND_CAPSEND = "native-success"
+KIND_SOAK = "native-soak-success"
 
 
 class EvidenceError(ValueError):
@@ -123,7 +142,13 @@ def encoded(value):
     return (json.dumps(value, sort_keys=True, indent=2) + "\n").encode()
 
 
+def is_soak(profile):
+    return profile == SOAK_PROFILE
+
+
 def scenario_id(profile):
+    if is_soak(profile):
+        return SOAK_SCENARIO
     mode = ".crc" if profile["mode"] == "crc" else ""
     return ("mds-cephfs-capsend.%s.ip%s%s.%s.osd-store-%s.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfscapsendrecovery"
             % (profile["key"], profile["family"], mode, profile["runtime"], profile["osd_store"]))
@@ -136,12 +161,12 @@ def context(request):
     need(isinstance(matrix, dict) and set(matrix) <= set(DEFAULTS) | {"scenario", "image"}, "unsupported-matrix-field")
     need(all(isinstance(value, str) for value in matrix.values()), "matrix-value")
     profile = dict(DEFAULTS, **{key: value for key, value in matrix.items() if key in DEFAULTS})
-    need(profile in PROFILES and matrix.get("scenario") == scenario_id(profile), "unsupported-profile")
+    need((profile in PROFILES or is_soak(profile)) and matrix.get("scenario") == scenario_id(profile), "unsupported-profile")
     image = matrix.get("image", IMAGE)
     need(image == IMAGE, "unsupported-image")
     value = {"execution_source": request["execution_source"], "tested_sha": sha(request["tested_sha"]), "controller_sha": sha(request["controller_sha"]),
              "run_id": integer(request["run_id"], 1), "attempt": integer(request["attempt"], 1),
-             "scenario": matrix["scenario"], "selector": SELECTOR, "profile": profile, "configured_image": image}
+             "scenario": matrix["scenario"], "selector": SOAK_SELECTOR if is_soak(profile) else SELECTOR, "profile": profile, "configured_image": image}
     privacy(value)
     return value
 
@@ -167,7 +192,11 @@ def runtime_projection(raw, ctx):
                "osd_replicas": "osd_replicas"}
     reported = {key: raw[field] for key, field in mapping.items()}
     need(reported == {key: ctx["profile"][key] for key in mapping}, "fixture-profile-mismatch")
-    need(raw["mds_fresh"] is True and raw["mds_cephfs_data"] is True and raw["image"] == ctx["configured_image"], "fixture-profile-mismatch")
+    if is_soak(ctx["profile"]):
+        need(raw.get("mds_fresh") is False and raw.get("mds_cephfs_data") is False and raw.get("rbd_base") is False
+             and raw.get("image") == ctx["configured_image"], "fixture-profile-mismatch")
+    else:
+        need(raw["mds_fresh"] is True and raw["mds_cephfs_data"] is True and raw["image"] == ctx["configured_image"], "fixture-profile-mismatch")
     need(raw["provider"] == "github.com/JSYoo5B/ceph-testcontainers-go" and raw["provider_version"] == "v0.3.0", "provider-mismatch")
     value = {"image_id": raw["image_id"], "architecture": raw["architecture"], "daemon_version": raw["daemon_version"],
              "fixture_reported_profile": reported, "provider_version": raw["provider_version"]}
@@ -249,6 +278,181 @@ def validate_caps(value):
         integer(st[key], 1)
 
 
+def soak_tests_projection(value):
+    """The broad gate lists no expected tests for this row, so require both parents here."""
+    keys(value, {"selector", "expected", "observed", "problems", "passed"})
+    need(value["passed"] is True and value["selector"] == "" and value["expected"] == [] and value["problems"] == [], "required-test-not-passed")
+    observed = value["observed"]
+    need(isinstance(observed, list) and len(observed) == 2, "required-test-not-passed")
+    for item in observed:
+        keys(item, {"suite", "test", "result"})
+    need(sorted((i["suite"], i["test"], i["result"]) for i in observed) ==
+         sorted(("api", test, "PASS") for test in SOAK_TESTS.values()), "required-test-not-passed")
+    return {"selector": "", "fixture_selector": SOAK_SELECTOR,
+            "required": [{"suite": "api", "test": SOAK_TESTS[label], "result": "PASS"} for label in SOAK_LABELS], "passed": True}
+
+
+def validate_soak_tests(value):
+    keys(value, {"selector", "fixture_selector", "required", "passed"})
+    need(value == {"selector": "", "fixture_selector": SOAK_SELECTOR, "passed": True,
+                   "required": [{"suite": "api", "test": SOAK_TESTS[label], "result": "PASS"} for label in SOAK_LABELS]},
+         "required-test-not-passed")
+
+
+def receipt_names(faults):
+    names = {"osd-soak-v1-fixture-termination.json"}
+    for label in SOAK_LABELS:
+        prefix = "osd-soak-v1-%s-" % label
+        names |= {prefix + stage + ".json" for stage in ("started", "setup", "workload", "cleanup")}
+        names |= {prefix + "worker-%d.json" % worker for worker in range(4)}
+    prefix = "osd-soak-v1-failover-"
+    names.add(prefix + "recovery-clean.json")
+    names |= {prefix + "fault-%03d-%s.json" % (cycle, phase) for cycle in range(1, faults + 1) for phase in ("kill", "restart", "clean")}
+    return names
+
+
+def trusted_soak_validator():
+    try:
+        import osd_soak_receipts as module
+    except ImportError as error:
+        raise EvidenceError("trusted-soak-validator-missing") from error
+    # The workflow copies this module beside the collector before the tested
+    # checkout exists; any other location would not be the trusted controller.
+    need(Path(module.__file__).resolve().parent == Path(__file__).resolve().parent, "trusted-soak-validator-location")
+    return module
+
+
+def soak_projection(directory, ctx):
+    directory = Path(directory)
+    need(not directory.is_symlink() and directory.is_dir(), "unsafe-receipt-directory")
+    validator = trusted_soak_validator()
+    try:
+        result = validator.verify(directory, ctx["tested_sha"], ctx["configured_image"], SOAK_DURATION_NS, SOAK_LABELS)
+    except (ValueError, TypeError, KeyError, OSError, RecursionError):
+        raise EvidenceError("soak-receipts-invalid") from None
+    hashes = result["receipt_sha256"]
+    raw, files = {}, {}
+    for name, expected in sorted(hashes.items()):
+        data = read(directory / name, SOAK_RECEIPT_LIMIT)
+        need(hashlib.sha256(data).hexdigest() == expected, "receipt-hash-mismatch")
+        files[name] = {"size": len(data), "sha256": expected}
+        raw[name] = decode(data)
+    workloads, cleanups = {}, {}
+    for label in SOAK_LABELS:
+        prefix = "osd-soak-v1-%s-" % label
+        setup, run, clean = raw[prefix + "setup.json"], raw[prefix + "workload.json"], raw[prefix + "cleanup.json"]
+        owned = setup["owned_objects"]
+        codes = {entry["object"]: entry["code"] for entry in clean["objects"]}
+        workers = []
+        for worker in range(4):
+            item = raw[prefix + "worker-%d.json" % worker]
+            native = item["native"]
+            xattr = item["expected_xattr"].encode()
+            workers.append({"worker": worker, "native_observation_elapsed_ns": item["native_observation_elapsed_ns"],
+                            "version": native["version"], "mtime_seconds": native["seconds"], "mtime_nanos": native["nanos"],
+                            "expected_length": item["expected_length"], "native_length": item["native_length"],
+                            "data_sha256": item["native_sha256"], "xattr_length": len(xattr), "xattr_sha256": hashlib.sha256(xattr).hexdigest()})
+        value = {"setup_elapsed_ns": setup["elapsed_ns"], "owned_object_count": len(owned),
+                 "workload": {key: run[key] for key in ("actual_workload_ns", "after_workload_start_ns", "test_elapsed_ns")}
+                 | {"counters": {key: run["counters"][key] for key in sorted(SOAK_COUNTERS[label])}},
+                 "workers": workers}
+        if label == "failover":
+            faults = []
+            for cycle in range(1, run["counters"]["faults"] + 1):
+                for phase in ("kill", "restart", "clean"):
+                    item = raw[prefix + "fault-%03d-%s.json" % (cycle, phase)]
+                    faults.append({"cycle": cycle, "phase": phase, "after_workload_start_ns": item["after_workload_start_ns"],
+                                   "elapsed_ns": item["elapsed_ns"], "victim": int(item["victim"])})
+            value["faults"] = faults
+            value["recovery_clean"] = True
+        workloads[label] = value
+        cleanups[label] = {"removed": True, "elapsed_ns": clean["elapsed_ns"], "codes": [codes[name] for name in owned]}
+    end = raw["osd-soak-v1-fixture-termination.json"]
+    soak = {"tested_revision": ctx["tested_sha"], "configured_duration_ns": SOAK_DURATION_NS, "observations": result["observations"], "workloads": workloads}
+    cleanup = {"fixture_termination": {"succeeded": True, "suite_exit_success": True, "elapsed_ns": end["termination_elapsed_ns"]}, "workloads": cleanups}
+    receipts = {"fixture_manifest_sha256": hashes["fixture-manifest.json"], "files": files}
+    validate_soak(soak, ctx)
+    validate_soak_cleanup(cleanup)
+    validate_receipts(receipts, soak)
+    return soak, cleanup, receipts
+
+
+def validate_soak(value, ctx):
+    keys(value, {"tested_revision", "configured_duration_ns", "observations", "workloads"})
+    need(value["tested_revision"] == ctx["tested_sha"] and value["configured_duration_ns"] == SOAK_DURATION_NS and value["observations"] == 8, "soak-context")
+    keys(value["workloads"], set(SOAK_LABELS))
+    for label in SOAK_LABELS:
+        item = value["workloads"][label]
+        keys(item, {"setup_elapsed_ns", "owned_object_count", "workload", "workers"} | ({"faults", "recovery_clean"} if label == "failover" else set()))
+        integer(item["setup_elapsed_ns"], 1)
+        need(item["owned_object_count"] == 5, "owned-object-count")
+        run = item["workload"]
+        keys(run, {"actual_workload_ns", "after_workload_start_ns", "test_elapsed_ns", "counters"})
+        for key in ("actual_workload_ns", "after_workload_start_ns", "test_elapsed_ns"):
+            integer(run[key], 1)
+        need(SOAK_DURATION_NS <= run["actual_workload_ns"] <= run["after_workload_start_ns"] <= run["test_elapsed_ns"], "workload-interval")
+        keys(run["counters"], SOAK_COUNTERS[label])
+        for counter in run["counters"].values():
+            integer(counter)
+        need(run["counters"]["appends"] >= 100 and run["counters"]["reads"] >= 10 and (label != "steady" or run["counters"]["churns"] >= 10), "workload-counters")
+        need(isinstance(item["workers"], list) and len(item["workers"]) == 4, "worker-count")
+        for index, worker in enumerate(item["workers"]):
+            keys(worker, {"worker", "native_observation_elapsed_ns", "version", "mtime_seconds", "mtime_nanos", "expected_length", "native_length",
+                          "data_sha256", "xattr_length", "xattr_sha256"})
+            need(worker["worker"] == index, "worker-identity")
+            integer(worker["native_observation_elapsed_ns"], 1)
+            integer(worker["version"], 1)
+            need(type(worker["mtime_seconds"]) is int and 0 <= worker["mtime_seconds"] <= 0xFFFFFFFF, "native-mtime")
+            need(type(worker["mtime_nanos"]) is int and 0 <= worker["mtime_nanos"] < 1_000_000_000, "native-mtime")
+            integer(worker["xattr_length"])
+            integer(worker["expected_length"])
+            need(worker["expected_length"] == worker["native_length"] and worker["native_length"] <= 128 << 10, "worker-length")
+            digest(worker["data_sha256"])
+            digest(worker["xattr_sha256"])
+        if label == "failover":
+            faults = run["counters"]["faults"]
+            need(1 <= faults <= 64 and item["recovery_clean"] is True and isinstance(item["faults"], list) and len(item["faults"]) == 3 * faults, "fault-cycles")
+            previous, victims = 0, {}
+            for index, fault in enumerate(item["faults"]):
+                keys(fault, {"cycle", "phase", "after_workload_start_ns", "elapsed_ns", "victim"})
+                cycle, phase = divmod(index, 3)
+                need(fault["cycle"] == cycle + 1 and fault["phase"] == ("kill", "restart", "clean")[phase], "fault-order")
+                when = fault["after_workload_start_ns"]
+                need(type(when) is int and 0 <= when <= run["after_workload_start_ns"], "fault-outside-interval")
+                need(phase != 0 or when <= run["actual_workload_ns"], "fault-outside-workload")
+                need(type(fault["elapsed_ns"]) is int and 0 < fault["elapsed_ns"] <= when and when >= previous, "fault-interval")
+                previous = when
+                need(type(fault["victim"]) is int and fault["victim"] in (0, 1, 2), "fault-victim")
+                need(victims.setdefault(fault["cycle"], fault["victim"]) == fault["victim"], "fault-victim")
+
+
+def validate_soak_cleanup(value):
+    keys(value, {"fixture_termination", "workloads"})
+    keys(value["fixture_termination"], {"succeeded", "suite_exit_success", "elapsed_ns"})
+    need(value["fixture_termination"]["succeeded"] is True and value["fixture_termination"]["suite_exit_success"] is True, "cleanup-incomplete")
+    integer(value["fixture_termination"]["elapsed_ns"], 1)
+    keys(value["workloads"], set(SOAK_LABELS))
+    for item in value["workloads"].values():
+        keys(item, {"removed", "elapsed_ns", "codes"})
+        integer(item["elapsed_ns"], 1)
+        need(item["removed"] is True and isinstance(item["codes"], list) and len(item["codes"]) == 5 and
+             all(type(code) is int and code in (0, -2) for code in item["codes"]), "cleanup-incomplete")
+
+
+def validate_receipts(value, soak):
+    keys(value, {"fixture_manifest_sha256", "files"})
+    digest(value["fixture_manifest_sha256"])
+    files = value["files"]
+    need(isinstance(files, dict), "receipt-inventory")
+    faults = soak["workloads"]["failover"]["workload"]["counters"]["faults"]
+    need(1 <= faults <= 64 and set(files) == receipt_names(faults) | {"fixture-manifest.json"}, "receipt-inventory")
+    for record in files.values():
+        keys(record, {"size", "sha256"})
+        need(type(record["size"]) is int and 0 < record["size"] <= SOAK_RECEIPT_LIMIT, "receipt-size")
+        digest(record["sha256"])
+    need(files["fixture-manifest.json"]["sha256"] == value["fixture_manifest_sha256"], "receipt-inventory")
+
+
 def cleanup_projection(data, fresh):
     need(data["source_commit"] == fresh["source_commit"] == SOURCE, "cleanup-source")
     need(not data.get("errors") and not fresh.get("error") and not data["residual_owned_sessions"] and not data["kept_new_blocklist"], "cleanup-incomplete")
@@ -269,29 +473,37 @@ def validate_cleanup(value):
 def verify(bundle, expected):
     bundle = Path(bundle)
     need(not bundle.is_symlink() and bundle.is_dir(), "unsafe-bundle")
-    need({item.name for item in bundle.iterdir()} == FILES | {"manifest.json"}, "bundle-inventory")
+    soak = isinstance(expected, dict) and isinstance(expected.get("profile"), dict) and is_soak(expected["profile"])
+    files, kind = (SOAK_FILES, KIND_SOAK) if soak else (FILES, KIND_CAPSEND)
+    need({item.name for item in bundle.iterdir()} == files | {"manifest.json"}, "bundle-inventory")
     manifest = document(bundle / "manifest.json", FILE_LIMIT)
     keys(manifest, CONTEXT_KEYS | {"schema_version", "kind", "files", "total_bytes", "observed"})
-    need(type(manifest["schema_version"]) is int and manifest["schema_version"] == SCHEMA_VERSION and manifest["kind"] == "native-success", "schema-version")
+    need(type(manifest["schema_version"]) is int and manifest["schema_version"] == SCHEMA_VERSION and manifest["kind"] == kind, "schema-version")
     ctx = {key: manifest[key] for key in CONTEXT_KEYS}
     validate_context(ctx)
     need(ctx == expected, "manifest-context-mismatch")
-    need(isinstance(manifest["files"], list) and len(manifest["files"]) == len(FILES), "bundle-inventory")
+    need(isinstance(manifest["files"], list) and len(manifest["files"]) == len(files), "bundle-inventory")
     total, payloads = 0, {}
     for record in manifest["files"]:
         keys(record, {"name", "size", "sha256"})
         name = record["name"]
-        need(name in FILES and name not in payloads, "bundle-inventory")
+        need(name in files and name not in payloads, "bundle-inventory")
         data = read(bundle / name, FILE_LIMIT)
         need(integer(record["size"]) == len(data) and digest(record["sha256"]) == hashlib.sha256(data).hexdigest(), "file-hash-or-size")
         total += len(data)
         payloads[name] = decode(data)
     need(manifest["total_bytes"] == total and total + len(read(bundle / "manifest.json", FILE_LIMIT)) <= TOTAL_LIMIT, "total-limit")
-    tests_projection(payloads["tests.json"])
     validate_runtime(payloads["runtime.json"], ctx)
     need(manifest["observed"] == payloads["runtime.json"], "observed-mismatch")
-    validate_caps(payloads["cap-send.json"])
-    validate_cleanup(payloads["cleanup.json"])
+    if soak:
+        validate_soak_tests(payloads["tests.json"])
+        validate_soak(payloads["soak.json"], ctx)
+        validate_soak_cleanup(payloads["cleanup.json"])
+        validate_receipts(payloads["receipts.json"], payloads["soak.json"])
+    else:
+        tests_projection(payloads["tests.json"])
+        validate_caps(payloads["cap-send.json"])
+        validate_cleanup(payloads["cleanup.json"])
     privacy(manifest)
     for value in payloads.values():
         privacy(value)
@@ -303,10 +515,17 @@ def collect(request, receipts, tests, output):
     receipts, output = Path(receipts), Path(output)
     need(not output.exists() and not output.is_symlink(), "attempt-collision")
     need(not receipts.is_symlink() and receipts.is_dir(), "unsafe-receipt-directory")
-    payloads = {"tests.json": tests_projection(document(tests, FILE_LIMIT)),
-                "cap-send.json": cap_send_projection(document(receipts / "mds-cephfs-data-results.json")),
-                "cleanup.json": cleanup_projection(document(receipts / "mds-cephfs-data-cleanup.json"), document(receipts / "mds-fresh-cleanup.json")),
-                "runtime.json": runtime_projection(document(receipts / "fixture-manifest.json"), ctx)}
+    if is_soak(ctx["profile"]):
+        soak, cleanup, inventory = soak_projection(receipts, ctx)
+        payloads = {"tests.json": soak_tests_projection(document(tests, FILE_LIMIT)), "soak.json": soak, "cleanup.json": cleanup,
+                    "receipts.json": inventory, "runtime.json": runtime_projection(document(receipts / "fixture-manifest.json"), ctx)}
+        kind = KIND_SOAK
+    else:
+        payloads = {"tests.json": tests_projection(document(tests, FILE_LIMIT)),
+                    "cap-send.json": cap_send_projection(document(receipts / "mds-cephfs-data-results.json")),
+                    "cleanup.json": cleanup_projection(document(receipts / "mds-cephfs-data-cleanup.json"), document(receipts / "mds-fresh-cleanup.json")),
+                    "runtime.json": runtime_projection(document(receipts / "fixture-manifest.json"), ctx)}
+        kind = KIND_CAPSEND
     files, total, content = [], 0, {}
     for name in sorted(payloads):
         data = encoded(payloads[name])
@@ -314,7 +533,7 @@ def collect(request, receipts, tests, output):
         total += len(data)
         content[name] = data
         files.append({"name": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
-    manifest = dict(ctx, schema_version=SCHEMA_VERSION, kind="native-success", files=files, total_bytes=total, observed=payloads["runtime.json"])
+    manifest = dict(ctx, schema_version=SCHEMA_VERSION, kind=kind, files=files, total_bytes=total, observed=payloads["runtime.json"])
     data = encoded(manifest)
     need(len(data) <= FILE_LIMIT and total + len(data) <= TOTAL_LIMIT, "total-limit")
     output.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -353,10 +572,20 @@ def main(argv=None):
     status = {"test_result": "unknown", "evidence_result": "incomplete"}
     result = 1
     try:
+        request, failure = None, None
+        try:
+            request = document(args.request, FILE_LIMIT) if args.request else environment_request()
+        except EvidenceError as error:
+            failure = error
         if args.command == "collect":
-            tests_projection(document(args.tests, FILE_LIMIT))
+            # An unreadable request leaves the cap-send gate in force; the
+            # request error is reported after the test result is classified.
+            matrix = request.get("matrix") if isinstance(request, dict) else None
+            requested_soak = isinstance(matrix, dict) and bool(matrix.get("osd_soak"))
+            (soak_tests_projection if requested_soak else tests_projection)(document(args.tests, FILE_LIMIT))
             status["test_result"] = "passed"
-        request = document(args.request, FILE_LIMIT) if args.request else environment_request()
+        if failure:
+            raise failure
         if args.command == "collect":
             collect(request, args.receipts, args.tests, args.output)
         else:
