@@ -32,11 +32,13 @@ disposable native image.
   sets in-memory crash-log retention, so the cell only raises it, by one or two
   slots, and never shrinks it.
 
-The daemon-local reply shapes used by the oracle (`config get` returning an
-object keyed by the option name, `config diff get` returning a `diff` object
-keyed by option name with `override` and `final` members) are read from the
-raw replies and are first confirmed by a native run on the pull request; the
-oracle refuses to record a baseline whose replies do not parse as expected.
+Observed reply shapes (native run on the target image): `config get` returns an
+object keyed by the option name with the value as a string; `config diff get`
+returns a `diff` object keyed by option name, and its reply carried the fixture's
+full diff (35 entries before and 36 with the override) rather than the single
+requested option. The oracle therefore selects the owned entry in worker memory
+and persists only that entry plus the reply's top-level key names and entry
+count. The baseline was the default `log_max_recent` of 10000 with no override.
 
 ## Executable boundary
 
@@ -142,8 +144,31 @@ original observations, partial identity progress and restoration uncertainty.
 
 ## Execution evidence
 
-No native execution is recorded in this file yet. Exact-head CI receipts are
-recorded on the pull request that introduces this cell. No exactly-once server
-execution, secure-frame transaction capture, other profile, restart of the
-target MON, current `MonTell`/`MgrTell`, exact `MgrTellTo` or targeted
-OSD/PG/MDS applied mutation, or completion of #63 is claimed.
+[CI command run 40051643277, attempt 1](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/40051643277),
+existing `mon-mgr.aes.ip4.crc.host` row, Linux/amd64, on PR head
+`08d45dac1ee50f34a5a99b812722e9b83b07d72b`: the scenario's `result.json` names
+that exact commit, the image above and `success`; `tests.json` reports
+`TestCephAppliedMonitorTellIsNotReplayedIntegration` as actual `PASS`, with
+223 observed top-level tests, no problems and an empty expected list. The test
+passed in 0.93 seconds:
+
+| Observation | Retained result |
+| --- | --- |
+| Baseline | `mon.b` rank 1, effective 10000, no override; diff reply of 35 entries |
+| Original CRC submission of A=10001 | `mon.b`, local connection 2, global ID 34137, TID 1, sequence 2; complete local write and blocked receive |
+| Native A while the reply was withheld | effective 10001, override 10001 |
+| Independent B=10002 | native effective 10002, override 10002, same rank |
+| Original caller after the subject connection ended | `OutcomeUnknownError`, no acknowledged server result; local writes still 1 |
+| Fresh Go and native reads | B (10002) on the same `mon.b`; the fresh Go read used local connection 3, TID 1, sequence 2 |
+| Native restoration | One `config unset`, signed `0`, status `log_max_recent = ''`; fresh views show effective 10000 and no override |
+
+Earlier heads of the same PR failed in the native worker: the first masked its
+exception, and the second refused the wider diff reply described above. Both
+were worker defects fixed before the passing run, not replay defects. A failed
+worker stops the fixture controller, so later tests of that run fail as
+cascading failures. Final-head execution, Basic CI and run identifiers are
+recorded on the pull request, which supersedes this note for the final SHA.
+No exactly-once server execution, secure-frame transaction capture, other
+profile, restart of the target MON, current `MonTell`/`MgrTell`, exact
+`MgrTellTo` or targeted OSD/PG/MDS applied mutation, or completion of #63 is
+claimed.
