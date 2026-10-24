@@ -143,10 +143,11 @@ def project(code, payload, daemon):
     if type(epoch) is not int or not 0 <= epoch < 1 << 32 or not isinstance(services, dict):
         return invalid()
     view["epoch"] = epoch
-    service = services.get(SERVICE)
-    if service is None:
+    if SERVICE not in services:
         view["service_daemons"] = 0
         return view
+    # A present service value must be an object; an explicit null is malformed.
+    service = services[SERVICE]
     daemons = service.get("daemons") if isinstance(service, dict) else None
     if not isinstance(daemons, dict):
         return invalid()
@@ -165,26 +166,6 @@ def project(code, payload, daemon):
             "role": metadata.get("ceph_msgr_role") if isinstance(metadata.get("ceph_msgr_role"), str) else None,
             "daemon": metadata.get("ceph_msgr_daemon") if isinstance(metadata.get("ceph_msgr_daemon"), str) else None,
         }
-    return view
-    epoch = document.get("epoch")
-    view["epoch"] = epoch if type(epoch) is int and 0 <= epoch < 1 << 32 else None
-    services = document.get("services")
-    service = services.get(SERVICE) if isinstance(services, dict) else None
-    daemons = service.get("daemons") if isinstance(service, dict) else None
-    if isinstance(daemons, dict):
-        # The map may also hold a "summary" key; count daemon objects only.
-        view["service_daemons"] = sum(1 for value in daemons.values() if isinstance(value, dict))
-        entry = daemons.get(daemon)
-        if isinstance(entry, dict):
-            metadata = entry.get("metadata")
-            metadata = metadata if isinstance(metadata, dict) else {}
-            view["present"] = True
-            view["entry"] = {
-                "gid": entry.get("gid") if type(entry.get("gid")) is int else None,
-                "start_epoch": entry.get("start_epoch") if type(entry.get("start_epoch")) is int else None,
-                "role": metadata.get("ceph_msgr_role") if isinstance(metadata.get("ceph_msgr_role"), str) else None,
-                "daemon": metadata.get("ceph_msgr_daemon") if isinstance(metadata.get("ceph_msgr_daemon"), str) else None,
-            }
     return view
 
 

@@ -20,8 +20,8 @@ def dump(daemon_entry=None, epoch=7, others=2):
                                                     "rgw": {"daemons": {"x": {"gid": 1}}}}}).encode()
 
 
-def bad_dump():
-    return json.dumps({"epoch": 7, "services": {"ceph-msgr": []}}).encode()
+def bad_dump(service=[]):
+    return json.dumps({"epoch": 7, "services": {"ceph-msgr": service}}).encode()
 
 
 def entry(gid=4242):
@@ -128,6 +128,8 @@ class Project(unittest.TestCase):
             "services missing": {"epoch": 7},
             "service not a dict": {"epoch": 7, "services": {"ceph-msgr": []}},
             "service a string": {"epoch": 7, "services": {"ceph-msgr": "x"}},
+            "service null": {"epoch": 7, "services": {"ceph-msgr": None}},
+            "daemons null": {"epoch": 7, "services": {"ceph-msgr": {"daemons": None}}},
             "daemons wrong type": {"epoch": 7, "services": {"ceph-msgr": {"daemons": []}}},
             "daemons missing": {"epoch": 7, "services": {"ceph-msgr": {}}},
             "entry wrong type": {"epoch": 7, "services": {"ceph-msgr": {"daemons": {DAEMON: "x"}}}},
@@ -154,20 +156,22 @@ class Project(unittest.TestCase):
             self.assertEqual(view["service_daemons"], 0)
 
     def test_invalid_dump_neither_starts_nor_restores(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = pathlib.Path(tmp)
-            native = FakeNative(out, [bad_dump()])
-            with self.assertRaises(ValueError):
-                oracle.collect(out, out, "1", TOKEN, "start", native)
-            self.assertEqual(native.spawned, 0)
-        with tempfile.TemporaryDirectory() as tmp:
-            out = pathlib.Path(tmp)
-            native = FakeNative(out, [dump(), bad_dump()])
-            oracle.collect(out, out, "1", TOKEN, "start", native)
-            oracle.collect(out, out, "2", TOKEN, "cleanup", native)
-            receipt = json.loads(oracle.state_path(out, TOKEN, "cleanup.json").read_text())
-            self.assertIsNone(receipt["view"]["code"])
-            self.assertFalse(receipt["restored"])
+        for service in ([], None, "x"):
+            with self.subTest(service=service):
+                with tempfile.TemporaryDirectory() as tmp:
+                    out = pathlib.Path(tmp)
+                    native = FakeNative(out, [bad_dump(service)])
+                    with self.assertRaises(ValueError):
+                        oracle.collect(out, out, "1", TOKEN, "start", native)
+                    self.assertEqual(native.spawned, 0)
+                with tempfile.TemporaryDirectory() as tmp:
+                    out = pathlib.Path(tmp)
+                    native = FakeNative(out, [dump(), bad_dump(service)])
+                    oracle.collect(out, out, "1", TOKEN, "start", native)
+                    oracle.collect(out, out, "2", TOKEN, "cleanup", native)
+                    receipt = json.loads(oracle.state_path(out, TOKEN, "cleanup.json").read_text())
+                    self.assertIsNone(receipt["view"]["code"])
+                    self.assertFalse(receipt["restored"])
 
 
 class Lifecycle(unittest.TestCase):
