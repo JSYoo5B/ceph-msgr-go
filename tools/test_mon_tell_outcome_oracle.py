@@ -107,6 +107,13 @@ class OwnedMonTellOutcomeTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 oracle.restoration_command(baseline)
 
+    def test_failure_diagnostic_is_bounded_and_masks_paths(self):
+        text = oracle.diagnostic(OSError("cannot read /private/place/keyring now " + "x" * 400))
+        self.assertTrue(text.startswith("OSError: cannot read <path> now"))
+        self.assertNotIn("/private", text)
+        self.assertLessEqual(len(text), 300)
+        self.assertEqual(oracle.diagnostic(KeyError()), "KeyError")
+
     def run_collect(self, output, phase, client, target="b"):
         with patch.object(oracle, "native_handle") as handle:
             handle.return_value.__enter__.return_value = client

@@ -216,10 +216,17 @@ def main():
     collect(pathlib.Path(root), pathlib.Path(output), raw_id, token, phase, target)
 
 
+def diagnostic(error):
+    # A bounded class name and message with every path-like token masked, so a
+    # failed owned observation is attributable without private locations.
+    text = re.sub(r"\S*/\S*", "<path>", str(error))
+    text = re.sub(r"[^\x20-\x7e]", "?", text)[:200]
+    return type(error).__name__ + (": " + text if text else "")
+
+
 if __name__ == "__main__":
     try:
         main()
-    except Exception:
-        # Do not expose arbitrary native exception text or private paths. The
-        # started/mutation receipts distinguish uncertain and returned restore.
-        raise SystemExit("Owned native MON Tell observation failed") from None
+    except Exception as error:
+        # The started/mutation receipts distinguish uncertain and returned restore.
+        raise SystemExit("Owned native MON Tell observation failed: " + diagnostic(error)) from None
