@@ -87,10 +87,16 @@ stage, owned-object cleanup and fixture termination. It emits receipt
 hashes only after all checks pass. Missing, duplicate, truncated, wrong
 revision/image, shortened or incompletely cleaned results cannot pass.
 
-These are workload-specific receipts. Issue #1 owns the common successful
-artifact collection/manifest contract; its schema-v1 cap-send projection
-does not yet consume this raw soak schema. This change does not duplicate
-that bundle or claim successful raw artifact publication on GitHub.
+These are workload-specific raw receipts. The trusted collector in
+`tools/native_evidence.py` re-validates them with the controller's copy of
+`tools/osd_soak_receipts.py` and publishes a fixed projection with receipt
+hashes as the `native-soak-success` bundle; see
+[the soak family](../../.github/scenarios/NATIVE_EVIDENCE.md#four-minute-osd-soak-family).
+The raw receipts themselves are not published, because eight maximum-sized
+receipts exceed the shared bundle budget, and the projection cannot recompute
+omitted native bytes or xattrs. Daemon-free tests cover this collector; a
+hosted successful upload requires the workflow to be on the default branch and
+is recorded separately from the receipt contract above.
 
 ## Reproduction and verification
 
