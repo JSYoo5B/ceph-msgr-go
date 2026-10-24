@@ -34,7 +34,9 @@ import (
 // the shared CephFS address nonce, and CephFS reconnect with request
 // resubmission after a restart of the owned rank-0 MDS daemon, against live
 // Tentacle daemons with native oracles. See integration/fixture/
-// MDS_CEPHFS_FIXTURE.md and MDS_CEPHFS_RECOVERY_VALIDATION.md.
+// MDS_CEPHFS_FIXTURE.md and MDS_CEPHFS_RECOVERY_VALIDATION.md. One whole-file
+// FLOCK held by the restart session crosses the same restart; see
+// MDS_FILELOCK_RESTART_VALIDATION.md.
 
 type nativeMDSCephFSRecoveryPlan struct {
 	Directory        string   `json:"directory"`
@@ -214,7 +216,7 @@ func (x *mdsCephFSRecoveryControl) request(ctx context.Context, action, arg stri
 		if strconv.FormatUint(result.GlobalID, 10) != arg {
 			return result, errors.New("native MDS historic ops scope differs")
 		}
-	case "recovery-stat", "recovery-list", "recovery-write":
+	case "recovery-stat", "recovery-list", "recovery-write", "flock-ex-nb":
 		if result.Native == nil || result.Native.NativeGlobalID == 0 || x.goGIDs[result.Native.NativeGlobalID] {
 			return result, errors.New("native CephFS recovery oracle output missing or bound to a Go client")
 		}
@@ -784,6 +786,14 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 	var addressR string
 	var dirIno uint64
 	inos := map[string]uint64{}
+	// The held-FLOCK composition uses the plan directory and go-file of the
+	// ordinary metadata acceptance: the closed native probe admits only that
+	// path. They are removed again before the cleanup leaf ends, so the
+	// ordinary acceptance that follows in this fixture still creates them.
+	var hf heldFlockEvidence
+	var heldNativeBaseline *nativeMDSCephFSFlockState
+	var heldDirIno uint64
+	facts["held_flock"] = &hf
 
 	// The restart client outlives every leaf: its cleanup belongs to the test.
 	dialsR = newRecoveryDials(false, current.MDS.Endpoint)
@@ -1023,6 +1033,75 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		return
 	}
 
+	if !leaf("held_flock_acquired_before_restart", func(t *testing.T) {
+		hf.Directory, hf.File, hf.GlobalID, hf.CephFSNonce, hf.NativeAddress = oracle.Plan.Directory, oracle.Plan.GoFile, gidR, nonceR, addressR
+		hf.MDSBefore = control.mds
+		call, first, trace, e := submitFirst(t, sessionR, agentR, "restart", "mkdir flock directory", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpMkdir, Flags: cephmsgr.MDSRequestFlagWantDentry,
+			Args: cephfsMkdirArgs(0o40755), Path: cephmsgr.MDSFilePath{Ino: 1, Path: oracle.Plan.Directory}})
+		waitSafe(t, sessionR, call, first, e, true)
+		if first.Result != 0 || trace.Target == nil || trace.DentryName != oracle.Plan.Directory {
+			t.Fatalf("flock directory mkdir reply differs: %+v", e)
+		}
+		heldDirIno = trace.Target.Ino
+		call, first, trace, e = submitFirst(t, sessionR, agentR, "restart", "create flock file", create(heldDirIno, oracle.Plan.GoFile))
+		hf.Ino = createdIno(t, oracle.Plan.GoFile, first, trace)
+		if safe := waitSafe(t, sessionR, call, first, e, true); safe.Result != 0 {
+			t.Fatalf("flock file create safe result %d", safe.Result)
+		}
+		// As in the ordinary metadata acceptance, close the create's handle and
+		// give the file a nonzero change_attr with one xattr (the closed native
+		// probe requires a nonzero version), observe it natively, then reopen
+		// it. The new handle stays open for the whole lock lifetime and is
+		// closed only after the explicit unlock.
+		agentR.open(hf.Ino, cephFileModeRDWR)
+		if _, _, err := agentR.close(hf.Ino, cephFileModeRDWR); err != nil {
+			t.Fatal("close the created flock file", err)
+		}
+		xattrValue, err := hex.DecodeString(oracle.Plan.XattrValueHex)
+		if err != nil || len(xattrValue) == 0 {
+			t.Fatal("plan xattr value is not usable", err)
+		}
+		call, first, _, e = submitFirst(t, sessionR, agentR, "restart", "flock-file-setxattr", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetxattr, Args: cephfsSetxattrArgs(0, 0),
+			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Path2: cephmsgr.MDSFilePath{Path: oracle.Plan.XattrName}, Data: xattrValue})
+		if safe := waitSafe(t, sessionR, call, first, e, true); first.Result != 0 || safe.Result != 0 {
+			t.Fatalf("flock file setxattr failed: %d %d", first.Result, safe.Result)
+		}
+		nativeXattr, err := control.request(ctx, "getxattr", "go-file")
+		if err != nil || nativeXattr.Native == nil || nativeXattr.Native.ValueHex != oracle.Plan.XattrValueHex || control.goGIDs[nativeXattr.Native.NativeGlobalID] {
+			t.Fatal("native getxattr does not return the xattr just set by Go", err)
+		}
+		agentR.open(hf.Ino, cephFileModeRDWR)
+		_, opened, _, oe := submitFirst(t, sessionR, agentR, "restart", "flock-open", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpOpen, Args: cephfsOpenArgs(cephOpenReadWrite, 0, 0),
+			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}})
+		if opened.Result != 0 || !opened.Safe {
+			t.Fatalf("flock file open differs: %+v", oe)
+		}
+		want := cephfsFilelock{Client: gidR, Owner: cephFlockGoOwner, Type: cephFlockExclusive}
+		hf.Lock = want
+		call, first, _, e = submitFirst(t, sessionR, agentR, "restart", "flock-exclusive-acquire", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
+			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner)})
+		hf.AcquireTID, hf.SetFileLockSubmissions = call.Transaction(), 1
+		safe := waitSafe(t, sessionR, call, first, e, false)
+		if first.Result != 0 || safe.Result != 0 {
+			t.Fatalf("Go exclusive flock acquire failed: %d %d", first.Result, safe.Result)
+		}
+		p, err := heldFlockProbeNative(ctx, control, hf.Ino, 11, &heldNativeBaseline)
+		hf.ProbeBefore = append(hf.ProbeBefore, p)
+		hf.NativeBefore = heldNativeBaseline
+		if err != nil || control.goGIDs[p.NativeGlobalID] {
+			t.Fatal("native nonblocking probe does not see the Go lock", err)
+		}
+		getCall, getFirst, _, _ := submitFirst(t, sessionR, agentR, "restart", "flock-get-before-restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock,
+			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
+		lock, err := cephfsDecodeFilelock(getFirst.Extra)
+		if getFirst.Result != 0 || err != nil || lock != want {
+			t.Fatalf("GETFILELOCK before restart does not identify the owned Go lock: %+v %v (tid %d)", lock, err, getCall.Transaction())
+		}
+		hf.GetBefore = &lock
+	}) {
+		return
+	}
+
 	if !leaf("mds_restart_reconnect_replay", func(t *testing.T) {
 		armed, err := control.request(ctx, "restart-arm", "")
 		if err != nil {
@@ -1174,6 +1253,14 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// The held lock is carried only by this explicit, caller-selected
+		// reconnect record. SETFILELOCK is not submitted again.
+		heldBlob := cephfsFilelockBlob(nil, []cephfsFilelock{hf.Lock})
+		heldCap := slices.IndexFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == hf.Ino })
+		if heldCap < 0 || len(caps[heldCap].Flock) != 0 {
+			t.Fatal("the held-lock inode has no capability to reconnect, or already carries a lock blob")
+		}
+		caps[heldCap].Flock, hf.ReconnectBlobHex = heldBlob, hex.EncodeToString(heldBlob)
 		// Stage an explicit pending UPDATE while the old session is Lost.
 		// Its first send precedes MClientReconnect; it is not a retry.
 		agentR.mu.Lock()
@@ -1349,6 +1436,12 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			}
 			return nil
 		}
+		hf.MDSAfter = *ad
+		replayedLock := find(hf.AcquireTID) != nil
+		hf.AcquireReplayedByMDS = &replayedLock
+		if replayedLock {
+			t.Fatal("the new incarnation tracked a client request for the original SETFILELOCK TID", hf.AcquireTID)
+		}
 		restart.ReplayedHistoricOp = find(callA.Transaction())
 		restart.ReplayExecutedByNewIncarnation = restart.ReplayedHistoricOp != nil
 		if callB != nil {
@@ -1402,6 +1495,40 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 				t.Fatalf("native listing entry %s differs: %d vs %d", name, names[name], ino)
 			}
 		}
+		// The restored lock: a native nonblocking probe conflicts with it and
+		// the Go GETFILELOCK names the original owner and GlobalID, with the
+		// same client identity and a different MDS incarnation.
+		if hf.MDSAfter.GID == hf.MDSBefore.GID || hf.MDSAfter.Nonce == hf.MDSBefore.Nonce || hf.MDSAfter.Rank != hf.MDSBefore.Rank || hf.MDSAfter.Rank != 0 {
+			t.Fatal("held-lock recovery did not cross to a new rank-0 MDS incarnation", hf.MDSBefore, hf.MDSAfter)
+		}
+		if p, err := heldFlockProbeNative(ctx, control, hf.Ino, 11, &heldNativeBaseline); err != nil || control.goGIDs[p.NativeGlobalID] {
+			hf.ProbeAfter = append(hf.ProbeAfter, p)
+			t.Fatal("native nonblocking probe does not see the restored lock", err)
+		} else {
+			hf.ProbeAfter = append(hf.ProbeAfter, p)
+		}
+		_, getAfter, _, _ := submitFirst(t, sessionR2, agentR2, "reconnected", "flock-get-after-restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock,
+			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
+		restored, err := cephfsDecodeFilelock(getAfter.Extra)
+		if getAfter.Result != 0 || err != nil || restored != hf.Lock {
+			t.Fatalf("GETFILELOCK after restart does not identify the original Go lock: %+v %v", restored, err)
+		}
+		hf.GetAfter = &restored
+		unlockCall, unlockFirst, _, unlockE := submitFirst(t, sessionR2, agentR2, "reconnected", "flock-unlock-after-restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
+			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockUnlock, cephFlockGoOwner)})
+		hf.UnlockTID, hf.SetFileLockSubmissions = unlockCall.Transaction(), hf.SetFileLockSubmissions+1
+		if unlockSafe := waitSafe(t, sessionR2, unlockCall, unlockFirst, unlockE, false); unlockFirst.Result != 0 || unlockSafe.Result != 0 {
+			t.Fatalf("explicit unlock after restart failed: %d %d", unlockFirst.Result, unlockSafe.Result)
+		}
+		if p, err := heldFlockProbeNative(ctx, control, hf.Ino, 0, &heldNativeBaseline); err != nil {
+			hf.ProbeAfter = append(hf.ProbeAfter, p)
+			t.Fatal("native probe could not acquire the file after the explicit unlock", err)
+		} else {
+			hf.ProbeAfter = append(hf.ProbeAfter, p)
+		}
+		if _, _, err := agentR2.close(hf.Ino, cephFileModeRDWR); err != nil {
+			t.Fatal("close held-lock handle", err)
+		}
 		if _, _, err := agentR2.close(heldIno, cephFileModeRD); err != nil {
 			t.Fatal("close held handle", err)
 		}
@@ -1415,13 +1542,21 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 	t.Run("cleanup_unlink_release_close", func(t *testing.T) {
 		begin := time.Now()
 		defer func() { caseTimes["cleanup_unlink_release_close"] = time.Since(begin).Milliseconds() }()
+		call, first, _, e := submitFirst(t, active, agentR2, "reconnected", "unlink "+hf.File, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpUnlink, Path: cephmsgr.MDSFilePath{Ino: heldDirIno, Path: hf.File}})
+		if safe := waitSafe(t, active, call, first, e, true); safe.Result != 0 || first.Result != 0 {
+			t.Fatalf("flock file unlink differs: %+v", e)
+		}
+		call, first, _, e = submitFirst(t, active, agentR2, "reconnected", "rmdir "+hf.Directory, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpRmdir, Path: cephmsgr.MDSFilePath{Ino: 1, Path: hf.Directory}})
+		if safe := waitSafe(t, active, call, first, e, true); safe.Result != 0 || first.Result != 0 {
+			t.Fatalf("flock directory rmdir differs: %+v", e)
+		}
 		for _, name := range slices.Sorted(maps.Keys(inos)) {
 			call, first, _, e := submitFirst(t, active, agentR2, "reconnected", "unlink "+name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpUnlink, Path: cephmsgr.MDSFilePath{Ino: dirIno, Path: name}})
 			if safe := waitSafe(t, active, call, first, e, true); safe.Result != 0 || first.Result != 0 {
 				t.Fatalf("unlink differs: %+v", e)
 			}
 		}
-		call, first, _, e := submitFirst(t, active, agentR2, "reconnected", "rmdir", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpRmdir, Path: cephmsgr.MDSFilePath{Ino: 1, Path: plan.Directory}})
+		call, first, _, e = submitFirst(t, active, agentR2, "reconnected", "rmdir", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpRmdir, Path: cephmsgr.MDSFilePath{Ino: 1, Path: plan.Directory}})
 		if safe := waitSafe(t, active, call, first, e, true); safe.Result != 0 || first.Result != 0 {
 			t.Fatalf("rmdir differs: %+v", e)
 		}

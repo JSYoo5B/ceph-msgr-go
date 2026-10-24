@@ -246,7 +246,17 @@ follow-up in `integration/fixture/MDS_FILELOCK_COMPLETION_VALIDATION.md`
 covers local Wait expiry followed by a grant on the original call, and an
 explicit interrupt whose own safe result 0 is paired with the original
 call's safe -EINTR. It does not establish FCNTL, direct native wait-queue
-observation, interrupt after a grant, held-lock reconnect or durable lock state.
+observation, interrupt after a grant or durable lock state.
+The [held-lock restart acceptance](../integration/fixture/MDS_FILELOCK_RESTART_VALIDATION.md)
+adds one exclusive whole-file FLOCK held by the Go session across the owned MDS
+restart. The test consumer attaches a `Client::_encode_filelocks`-layout blob
+to that inode's `MDSCapReconnect.Flock`, without a second SETFILELOCK. After
+adoption a native nonblocking probe and a Go GETFILELOCK still see the original
+owner and GlobalID, the new incarnation tracks no request for the original
+SETFILELOCK TID, and one explicit unlock lets a native probe acquire. Both
+Linux profiles passed. It has no restart-without-blob control and does not
+cover waiting locks, FCNTL ranges, several owners, dirty-state interactions or
+crash durability.
 Wire inode Version can advance for capability max-size negotiation; user
 change_attr and timestamps are independently preserved in the live evidence.
 

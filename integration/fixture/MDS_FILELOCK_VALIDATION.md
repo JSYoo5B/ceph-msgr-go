@@ -92,10 +92,11 @@ connection, address/runtime and OSD store variables from the table above.
 The selector remains the existing closed CephFS family, not a new fixture.
 
 Not established here: FCNTL byte-range locks, blocking lock waits, interrupts,
-waiting-lock oldest cursor on a native daemon, held-lock reconnect state,
-restart survival, permission denial, arbitrary filenames/content, or typed
+waiting-lock oldest cursor on a native daemon, permission denial, arbitrary filenames/content, or typed
 lock workflows. In-memory FLOCK state is not a journal durability promise.
 No automatic lock acquire replay or local-wait remote cancellation is added.
+A held whole-file lock across an owned MDS restart is recorded in
+[MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md).
 
 The later bounded [wait and interrupt completion checkpoint](MDS_FILELOCK_COMPLETION_VALIDATION.md)
 separately verifies the original call's grant after local Wait expiry and an
