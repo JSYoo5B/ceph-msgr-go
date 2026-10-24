@@ -277,6 +277,19 @@ func rgwNativeCallMethods(operation rgwNativeOperation) []string {
 	return methods
 }
 
+// rgwNativeGCEnqueue reports whether a request carries a complete GC chain
+// enqueue method token. Pinned Tentacle enqueues through the queue class
+// (`rgw_gc.rgw_gc_queue_enqueue`) or, before a shard is transitioned, the
+// legacy `rgw.gc_set_entry`; initialisation, lock and list calls do not count.
+func rgwNativeGCEnqueue(operation rgwNativeOperation) bool {
+	for _, method := range rgwNativeCallMethods(operation) {
+		if method == "rgw_gc.rgw_gc_queue_enqueue" || method == "rgw.gc_set_entry" {
+			return true
+		}
+	}
+	return false
+}
+
 // rgwNativeGCObjectName selects the pinned GC shard objects (`gc.<N>`) without
 // assuming the namespace RGW prints for them.
 var rgwNativeGCObjectName = regexp.MustCompile(`^gc\.[0-9]+$`)

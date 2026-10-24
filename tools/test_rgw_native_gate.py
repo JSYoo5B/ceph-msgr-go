@@ -20,7 +20,9 @@ def receipt(**changes):
     value = {"image": IMAGE, "source": gate.SOURCE, "bytes": gate.MULTISTRIPE_SIZE,
              "sha256": hashlib.sha256(gate.large_payload(gate.MULTISTRIPE_SIZE)).hexdigest(),
              "stripes": stripes, "head_sentinel": None, "gc_chains": 1, "gc_removed_tails": 1,
-             "put_reception": [{}], "delete_head_remove": [{}], "delete_gc_enqueue": [{}]}
+             "put_reception": [{"tid": 10}],
+             "delete_head_remove": [{"tid": 20, "description": "osd_op(x [call rgw.obj_remove in=13b])"}],
+             "delete_gc_enqueue": [{"tid": 21, "description": "osd_op(x [call rgw_gc.rgw_gc_queue_enqueue in=9b])"}]}
     value.update(changes)
     return value
 
@@ -80,6 +82,9 @@ class RGWNativeGateTest(unittest.TestCase):
             "image": receipt(image="quay.io/ceph/ceph:v20.2.4"), "no delete": receipt(delete_head_remove=[]),
             "no gc enqueue": receipt(delete_gc_enqueue=[]), "no chain": receipt(gc_chains=0),
             "tails": receipt(gc_removed_tails=2),
+            "startup gc init": receipt(delete_gc_enqueue=[{"tid": 5, "description": "osd_op(x [call rgw_gc.rgw_gc_queue_init in=23b])"}]),
+            "gc enqueue before PUT": receipt(delete_gc_enqueue=[{"tid": 9, "description": "[call rgw_gc.rgw_gc_queue_enqueue]"}]),
+            "wrong delete method": receipt(delete_head_remove=[{"tid": 20, "description": "[call rgw.bucket_complete_op]"}]),
         }.items():
             line = "RGW_NATIVE_MULTISTRIPE " + json.dumps(bad)
             self.assertFalse(gate.verify(stream(MULTI, line=line), MULTI)["passed"], name)

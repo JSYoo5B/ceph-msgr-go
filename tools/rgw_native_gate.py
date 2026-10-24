@@ -80,6 +80,14 @@ def check_multistripe(receipt):
     for field in ("put_reception", "delete_head_remove", "delete_gc_enqueue"):
         if not isinstance(receipt.get(field), list) or not receipt[field]:
             problems.append("receipt has no %s" % field)
+    put = [op.get("tid") for op in receipt.get("put_reception", []) if isinstance(op, dict) and isinstance(op.get("tid"), int)]
+    for field, tokens in (("delete_head_remove", ("call rgw.obj_remove",)),
+                          ("delete_gc_enqueue", ("rgw_gc.rgw_gc_queue_enqueue", "call rgw.gc_set_entry"))):
+        for op in receipt.get(field, []):
+            description = op.get("description", "") if isinstance(op, dict) else ""
+            tid = op.get("tid") if isinstance(op, dict) else None
+            if not put or not isinstance(tid, int) or tid <= max(put) or not any(token in description for token in tokens):
+                problems.append("%s entry is not a DELETE-phase request with its expected method" % field)
     tails = len(stripes) - (0 if receipt.get("head_sentinel") else 1)
     if tails < 1 or receipt.get("gc_removed_tails") != tails:
         problems.append("receipt does not account for every removed GC tail")

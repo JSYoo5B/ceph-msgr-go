@@ -202,6 +202,22 @@ func TestRGWNativeHistoryMatchBindsNamespaceLocatorAndPool(t *testing.T) {
 	}
 }
 
+func TestRGWNativeGCEnqueueRequiresTheEnqueueMethodToken(t *testing.T) {
+	for description, want := range map[string]bool{
+		"[create,call version.check_conds in=18b,call rgw_gc.rgw_gc_queue_enqueue in=99b]": true,
+		"[call rgw.gc_set_entry in=9b]":                   true,
+		"[call rgw_gc.rgw_gc_queue_init in=23b]":          false,
+		"[call lock.lock]":                                false,
+		"[call rgw.gc_list]":                              false,
+		"[call rgw_gc.rgw_gc_queue_enqueue_extra in=1b]":  false,
+		"[setxattr user.rgw_gc.rgw_gc_queue_enqueue (1)]": false,
+	} {
+		if got := rgwNativeGCEnqueue(rgwNativeOperation{Description: description}); got != want {
+			t.Fatalf("%s: got %t, want %t", description, got, want)
+		}
+	}
+}
+
 func TestRGWNativeMultiPutRequiresHeadTailAndBothIndexCalls(t *testing.T) {
 	tail := testMarker + "__shadow_.abc_1"
 	op := func(tid int, pool int, object, vector string) map[string]any {

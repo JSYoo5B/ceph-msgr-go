@@ -129,7 +129,9 @@ jobs:
           docker volume ls --format '{{.Name}}' > "$out/volumes-after.txt"
           docker network ls --format '{{.Name}}' > "$out/networks-after.txt"
           git status --porcelain > "$out/tree-status-after.txt"
-          test ! -s "$out/containers-after.txt"
+          # The Testcontainers reaper is the only container the runner keeps.
+          leftover=$(docker ps -a --format '{{.Image}}' | { grep -v '^testcontainers/ryuk:' || true; })
+          test -z "$leftover"
           test ! -s "$out/tree-status-after.txt"
       - name: Preserve the retained evidence
         if: always()

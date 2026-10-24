@@ -171,6 +171,10 @@ func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 		t.Fatal("owned objects were already in the GC queue before DELETE")
 	}
 
+	var lastPutTID uint64
+	for _, op := range putReceipt {
+		lastPutTID = max(lastPutTID, op.TID)
+	}
 	request(http.MethodDelete, path, nil, http.StatusNoContent, rgwNativeDefaultResponseLimit)
 	deleteGeneration := rgwNativeGeneration(t, ctx, gateway)
 	removeAndEnqueue := func(output []byte) (remove, enqueue []rgwNativeOperation, err error) {
@@ -186,7 +190,10 @@ func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 				switch {
 				case op.PoolID == dataPoolID && rgwNativeCall(op, "obj_remove"):
 					remove = append(remove, op)
-				case op.PoolID == logPoolID && len(rgwNativeCallMethods(op)) > 0:
+				// The log pool also carries GC shard initialisation, locks and
+				// list scans from before this DELETE. Only a request made after
+				// the PUT phase with the enqueue method is the DELETE's chain.
+				case op.PoolID == logPoolID && op.TID > lastPutTID && rgwNativeGCEnqueue(op):
 					enqueue = append(enqueue, op)
 				}
 			}
