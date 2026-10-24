@@ -25,12 +25,27 @@ type rgwNativeS3 struct {
 	http                             *http.Client
 }
 
+// rgwNativeDefaultResponseLimit is the small-response bound of the original
+// checkpoint. A larger-object case must request its own explicit allowance
+// through requestBounded; the default is never raised globally.
+const rgwNativeDefaultResponseLimit = 1 << 20
+
+// rgwNativeMaxResponseLimit caps every explicit allowance.
+const rgwNativeMaxResponseLimit = 16 << 20
+
 func rgwNativeHash(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:])
 }
 
 func (s rgwNativeS3) request(ctx context.Context, method, path string, payload []byte, status int) ([]byte, error) {
+	return s.requestBounded(ctx, method, path, payload, status, rgwNativeDefaultResponseLimit)
+}
+
+func (s rgwNativeS3) requestBounded(ctx context.Context, method, path string, payload []byte, status int, limit int64) ([]byte, error) {
+	if limit <= 0 || limit > rgwNativeMaxResponseLimit {
+		return nil, errors.New("RGW checkpoint response allowance outside its fixed bound")
+	}
 	if !regexp.MustCompile(`^/[a-z0-9-]+(?:/[a-z0-9-]+)?$`).MatchString(path) {
 		return nil, errors.New("RGW checkpoint accepts only fixed ASCII bucket/key paths")
 	}
@@ -67,8 +82,14 @@ func (s rgwNativeS3) request(ctx context.Context, method, path string, payload [
 		return nil, fmt.Errorf("RGW %s request failed (server outcome may be unknown)", method)
 	}
 	defer func() { _ = response.Body.Close() }()
-	body, err := io.ReadAll(io.LimitReader(response.Body, (1<<20)+1))
-	if err != nil || len(body) > 1<<20 {
+	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("RGW %s response read was cancelled (server outcome may be unknown): %w", method, ctx.Err())
+		}
+		return nil, errors.New("RGW checkpoint response could not be read")
+	}
+	if int64(len(body)) > limit {
 		return nil, errors.New("RGW checkpoint response exceeded its read bound")
 	}
 	if response.StatusCode != status {
@@ -81,6 +102,7 @@ type rgwNativeOperation struct {
 	Client      string   `json:"client"`
 	TID         uint64   `json:"tid"`
 	PoolID      int64    `json:"pool_id"`
+	Namespace   string   `json:"namespace,omitempty"`
 	Object      string   `json:"object"`
 	PGID        string   `json:"pgid"`
 	MapEpoch    uint64   `json:"map_epoch"`
@@ -92,6 +114,16 @@ type rgwNativeOperation struct {
 // complete object name and reached_pg event agree. The observation is server
 // reception, not an independent proof of the operation's result or durability.
 func rgwNativeHistory(raw []byte, client string, objects map[string]int64) ([]rgwNativeOperation, error) {
+	return rgwNativeHistoryMatch(raw, client, func(pool int64, namespace, locator, name string) bool {
+		wanted, owned := objects[name]
+		return owned && namespace == "" && locator == "" && pool == wanted
+	})
+}
+
+// rgwNativeHistoryMatch applies the same client/TID/PG/reached_pg joins to any
+// object selected by accept. The selector receives the PG pool-checked hobject
+// pool, namespace, locator key and name exactly as the native request printed.
+func rgwNativeHistoryMatch(raw []byte, client string, accept func(pool int64, namespace, locator, name string) bool) ([]rgwNativeOperation, error) {
 	if len(raw) > 32<<20 || !regexp.MustCompile(`^client\.[1-9][0-9]*$`).MatchString(client) {
 		return nil, errors.New("invalid RGW native history bound or identity")
 	}
@@ -113,7 +145,7 @@ func rgwNativeHistory(raw []byte, client string, objects map[string]int64) ([]rg
 		return nil, errors.New("invalid RGW native history schema or count")
 	}
 	var result []rgwNativeOperation
-	targetPattern := regexp.MustCompile(`^([0-9]+):[0-9a-f]+:::([^:]+):head$`)
+	targetPattern := regexp.MustCompile(`^([0-9]+):[0-9a-f]+:([^:]*):([^:]*):([^:]+):head$`)
 	pgPattern := regexp.MustCompile(`^([0-9]+)\.[0-9a-f]+$`)
 	epochPattern := regexp.MustCompile(` e([0-9]+)\)$`)
 	for _, op := range history.Ops {
@@ -136,11 +168,10 @@ func rgwNativeHistory(raw []byte, client string, objects map[string]int64) ([]rg
 		pool, poolErr := strconv.ParseInt(target[1], 10, 64)
 		pgPool, pgErr := strconv.ParseInt(pg[1], 10, 64)
 		mapEpoch, epochErr := strconv.ParseUint(epoch[1], 10, 64)
-		wantedPool, owned := objects[target[2]]
-		if poolErr != nil || pgErr != nil || epochErr != nil || !owned || pool != wantedPool || pgPool != wantedPool {
+		if poolErr != nil || pgErr != nil || epochErr != nil || pgPool != pool || !accept(pool, target[2], target[3], target[4]) {
 			continue
 		}
-		entry := rgwNativeOperation{Client: client, TID: op.Data.Client.TID, PoolID: pool, Object: target[2], PGID: parts[1], MapEpoch: mapEpoch, Description: op.Description}
+		entry := rgwNativeOperation{Client: client, TID: op.Data.Client.TID, PoolID: pool, Namespace: target[2], Object: target[4], PGID: parts[1], MapEpoch: mapEpoch, Description: op.Description}
 		reached := false
 		for _, event := range op.Data.Events {
 			if event.Event == "reached_pg" {
@@ -181,9 +212,17 @@ func rgwNativePollHistory(parent context.Context, fetch func(context.Context) []
 func rgwNativePutKinds(operation rgwNativeOperation, head, bucketID string, dataPoolID, indexPoolID int64) (write, prepare, complete bool) {
 	isHead := operation.Object == head && operation.PoolID == dataPoolID
 	isIndex := operation.PoolID == indexPoolID && (operation.Object == ".dir."+bucketID || strings.HasPrefix(operation.Object, ".dir."+bucketID+"."))
-	return isHead && regexp.MustCompile(`(?:\[|,)(?:write|writefull)(?:[ ,\]]|$)`).MatchString(operation.Description),
+	return isHead && rgwNativeWrites(operation),
 		isIndex && rgwNativeCall(operation, "bucket_prepare_op"),
 		isIndex && rgwNativeCall(operation, "bucket_complete_op")
+}
+
+var rgwNativeWritePattern = regexp.MustCompile(`(?:\[|,)(?:write|writefull)(?:[ ,\]]|$)`)
+
+// rgwNativeWrites matches complete WRITE/WRITEFULL opcode tokens, never a
+// class-method or xattr name that merely ends with the same letters.
+func rgwNativeWrites(operation rgwNativeOperation) bool {
+	return rgwNativeWritePattern.MatchString(operation.Description)
 }
 
 func rgwNativeCall(operation rgwNativeOperation, method string) bool {
