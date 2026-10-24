@@ -1,0 +1,141 @@
+name: RGW native fixture run
+
+# Development-only runner for the dedicated native RGW fixture checkpoints in
+# integration/fixture (see RGW_NATIVE_VALIDATION.md). It is not the trusted
+# `/ci run` catalog and does not gate the product. It executes the pull
+# request's own fixture code with read-only permissions, so it runs only for
+# changes that touch the RGW fixture files or this workflow, or on explicit
+# manual dispatch. A passing run is evidence for the exact tested commit only.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'integration/fixture/rgw_native_*'
+      - 'integration/fixture/RGW_NATIVE_*'
+      - 'tools/rgw_native_gate.py'
+      - '.github/workflows/rgw-native.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rgw-native-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  GOPROXY: 'https://proxy.golang.org|direct'
+  CGO_ENABLED: '0'
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+  CEPH_IMAGE: 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9'
+
+jobs:
+  native:
+    name: ${{ matrix.test }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - TestRGWNativeCheckpointIntegration
+          - TestRGWNativeMultiStripeIntegration
+    steps:
+      # Copy the result gate from the workflow's own revision before the
+      # tested checkout and its test code exist. This is a development run of
+      # the pull request's own code, not a trusted default-branch control.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .trusted-gate
+          persist-credentials: false
+      - name: Preserve the trusted result gate
+        run: cp .trusted-gate/tools/rgw_native_gate.py "$RUNNER_TEMP/rgw_native_gate.py"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
+      - name: Record the tested source and prove it equals the immutable archive
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/evidence"
+          mkdir -p "$out" "$RUNNER_TEMP/source-archive"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          echo "$EXPECTED_SHA" > "$out/tested-sha.txt"
+          test -z "$(git status --porcelain)"
+          git archive --format=tar HEAD | tar -x -C "$RUNNER_TEMP/source-archive"
+          git ls-files -z | xargs -0 sha256sum | sort -k2 > "$out/source-manifest-checkout.txt"
+          (cd "$RUNNER_TEMP/source-archive" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sed 's# \./# #' | sort -k2) > "$out/source-manifest-archive.txt"
+          diff "$out/source-manifest-checkout.txt" "$out/source-manifest-archive.txt"
+          wc -l < "$out/source-manifest-checkout.txt" > "$out/source-file-count.txt"
+      - name: Preflight the fixture module
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/evidence"
+          # Every Go file the fixture module compiles must be tracked source.
+          find integration/fixture -name '*.go' | sort > "$out/go-files-on-disk.txt"
+          git ls-files 'integration/fixture/*.go' | sort > "$out/go-files-tracked.txt"
+          diff "$out/go-files-on-disk.txt" "$out/go-files-tracked.txt"
+          go -C integration/fixture vet -mod=readonly .
+          go -C integration/fixture test -mod=readonly -count=1 -run 'RGWNative' .
+          python3 -m unittest discover -s tools -p 'test_rgw_native_gate.py'
+      - name: Pull the pinned images
+        timeout-minutes: 10
+        run: |
+          for image in "$CEPH_IMAGE" testcontainers/ryuk:0.14.0; do
+            for attempt in 1 2 3; do
+              docker pull "$image" && break
+              test "$attempt" -lt 3 || exit 1
+              sleep $((attempt * 10))
+            done
+          done
+      - name: Run the selected native test under an exclusive lock
+        id: native
+        env:
+          TEST: ${{ matrix.test }}
+        run: |
+          set -uo pipefail
+          out="$RUNNER_TEMP/evidence"
+          result=0
+          CEPH_MSGR_TEST_RGW_NATIVE=1 flock -n "$RUNNER_TEMP/rgw-native.lock" \
+            go -C integration/fixture test -json -run "^${TEST}\$" -count=1 -timeout=20m . \
+            > "$out/rgw-native.jsonl" || result=$?
+          echo "go test exit status: $result" | tee "$out/exit-status.txt"
+          exit "$result"
+      - name: Require an actual PASS, cleanup and receipt
+        if: always() && steps.native.outcome != 'skipped'
+        env:
+          TEST: ${{ matrix.test }}
+        run: |
+          out="$RUNNER_TEMP/evidence"
+          python3 "$RUNNER_TEMP/rgw_native_gate.py" --jsonl "$out/rgw-native.jsonl" --test "$TEST" --output "$out/gate.json"
+          cat "$out/gate.json"
+      - name: Confirm that no container remains and the tested tree is unchanged
+        if: always()
+        run: |
+          out="$RUNNER_TEMP/evidence"
+          mkdir -p "$out"
+          docker ps -a --format '{{.ID}} {{.Image}} {{.Status}}' > "$out/containers-after.txt"
+          docker volume ls --format '{{.Name}}' > "$out/volumes-after.txt"
+          docker network ls --format '{{.Name}}' > "$out/networks-after.txt"
+          git status --porcelain > "$out/tree-status-after.txt"
+          test ! -s "$out/containers-after.txt"
+          test ! -s "$out/tree-status-after.txt"
+      - name: Preserve the retained evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rgw-native-${{ matrix.test }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence/
+          retention-days: 30
+          if-no-files-found: error
