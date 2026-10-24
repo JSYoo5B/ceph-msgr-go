@@ -1276,7 +1276,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		agentR.flushTID++
 		flushTID := agentR.flushTID
 		agentR.flushing[flushTID] = heldIno
-		pendingFlush := cephmsgr.MDSCaps{Op: cephmsgr.MDSCapOpUpdate, Ino: hf.Ino, CapID: held.CapID,
+		pendingFlush := cephmsgr.MDSCaps{Op: cephmsgr.MDSCapOpUpdate, Ino: held.Ino, CapID: held.CapID,
 			Caps: held.Implemented, Wanted: held.fileWanted() | held.Wanted, Dirty: cephCapFileWR,
 			UID: held.UID, GID: held.GID, Mode: held.Mode, NLink: held.NLink,
 			Size: held.Size, MaxSize: held.MaxSize, TruncateSize: held.TruncateSize, TruncateSeq: held.TruncateSeq,
