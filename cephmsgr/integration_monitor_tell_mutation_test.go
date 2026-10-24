@@ -139,7 +139,7 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 	c.mu.Lock()
 	fsid := c.fsid
 	c.mu.Unlock()
-	identity := monTellOutcomeIdentity{ClientGlobalID: c.snapshotAuth().GlobalID, Target: role, Baseline: original}
+	identity := monTellOutcomeIdentity{PrimaryGlobalID: c.snapshotAuth().GlobalID, Target: role, Baseline: original}
 	commandA := monTellSetCommand(a, 40<<10)
 	frontA := msgr.TellCommand(fsid, []string{string(commandA.JSON)}, nil).Front
 	var originalResult Result
@@ -169,8 +169,8 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 			t.Fatal("original CRC command is not the exact-target Tell frame", submitted.Type, submitted.Peer)
 		}
 		identity.Submitted = &submitted
-		t.Logf("original CRC Tell submission: peer=%s connection=%d client_global_id=%d tid=%d sequence=%d complete_local_write=true blocked_receive=true",
-			submitted.Peer, submitted.Connection, identity.ClientGlobalID, submitted.Transaction, submitted.Sequence)
+		t.Logf("original CRC Tell submission: peer=%s connection=%d primary_client_global_id=%d (Tell session global ID unobserved) tid=%d sequence=%d complete_local_write=true blocked_receive=true",
+			submitted.Peer, submitted.Connection, identity.PrimaryGlobalID, submitted.Transaction, submitted.Sequence)
 	}
 	identity.PaddedWrites = writes.Load()
 	writeMonTellOutcomeIdentity(t, control, identity)
@@ -228,7 +228,7 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 		if observed.Type != msgr.TellCommandMessage || observed.Connection == submitted.Connection || observed.Peer != role {
 			t.Fatal("fresh read did not use another exact-target Tell connection", observed.Type, observed.Connection, observed.Peer)
 		}
-		identity.Recovery, identity.RecoveryGlobalID = &observed, c.snapshotAuth().GlobalID
+		identity.Recovery, identity.RecoveryPrimaryGlobalID = &observed, c.snapshotAuth().GlobalID
 		t.Logf("fresh CRC Tell read: peer=%s connection=%d tid=%d sequence=%d; original local mutation writes=1", observed.Peer, observed.Connection, observed.Transaction, observed.Sequence)
 	} else {
 		t.Log("secure mode: native state and padded local write count checked; CRC transaction receipt is unavailable")

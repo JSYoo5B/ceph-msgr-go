@@ -155,7 +155,7 @@ passed in 0.93 seconds:
 | Observation | Retained result |
 | --- | --- |
 | Baseline | `mon.b` rank 1, effective 10000, no override; diff reply of 35 entries |
-| Original CRC submission of A=10001 | `mon.b`, local connection 2, global ID 34137, TID 1, sequence 2; complete local write and blocked receive |
+| Original CRC submission of A=10001 | `mon.b`, local connection 2, TID 1, sequence 2; complete local write and blocked receive. The primary MON session had global ID 34137; the directed Tell connection authenticates with its own CephX client, so its global ID is unobserved and not claimed |
 | Native A while the reply was withheld | effective 10001, override 10001 |
 | Independent B=10002 | native effective 10002, override 10002, same rank |
 | Original caller after the subject connection ended | `OutcomeUnknownError`, no acknowledged server result; local writes still 1 |

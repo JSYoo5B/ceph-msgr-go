@@ -229,14 +229,18 @@ func requireNativeMonTellState(t *testing.T, ctx context.Context, control, token
 // Test-only local submission metadata. Write counts are local net.Conn facts,
 // never server execution counts.
 type monTellOutcomeIdentity struct {
-	ClientGlobalID   uint64           `json:"client_global_id"`
-	Target           string           `json:"target"`
-	Baseline         int64            `json:"baseline"`
-	Submitted        *monOutcomeWrite `json:"submitted,omitempty"`
-	PaddedWrites     int32            `json:"padded_local_writes"`
-	OutcomeUnknown   bool             `json:"outcome_unknown"`
-	Recovery         *monOutcomeWrite `json:"recovery,omitempty"`
-	RecoveryGlobalID uint64           `json:"recovery_client_global_id,omitempty"`
+	// The primary MON session's authenticated global ID. The directed Tell
+	// connection authenticates separately with its own CephX client; its global
+	// ID is not observed here.
+	PrimaryGlobalID             uint64           `json:"primary_client_global_id"`
+	Target                      string           `json:"target"`
+	Baseline                    int64            `json:"baseline"`
+	Submitted                   *monOutcomeWrite `json:"submitted,omitempty"`
+	PaddedWrites                int32            `json:"padded_local_writes"`
+	OutcomeUnknown              bool             `json:"outcome_unknown"`
+	Recovery                    *monOutcomeWrite `json:"recovery,omitempty"`
+	RecoveryPrimaryGlobalID     uint64           `json:"recovery_primary_client_global_id,omitempty"`
+	TellSessionGlobalIDObserved bool             `json:"tell_session_global_id_observed"`
 }
 
 func writeMonTellOutcomeIdentity(t *testing.T, control string, value monTellOutcomeIdentity) {

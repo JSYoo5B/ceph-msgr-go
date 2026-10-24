@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -184,5 +185,27 @@ func TestMonOutcomeGateArmsOnlyTheExactTargetAndMessageType(t *testing.T) {
 		if armed != tc.armed {
 			t.Fatal("fallback armed", tc, armed)
 		}
+	}
+}
+
+func TestMonTellIdentityReceiptDoesNotLabelPrimaryIdentityAsTellIdentity(t *testing.T) {
+	control := t.TempDir()
+	writeMonTellOutcomeIdentity(t, control, monTellOutcomeIdentity{PrimaryGlobalID: 77, Target: "mon.b",
+		Submitted: &monOutcomeWrite{Connection: 2, Peer: "mon.b", Type: msgr.TellCommandMessage, Transaction: 1, Sequence: 2, Complete: true}})
+	data, err := os.ReadFile(filepath.Join(control, "mon-tell-outcome-identity.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"client_global_id", "recovery_client_global_id"} {
+		if _, ok := fields[forbidden]; ok {
+			t.Fatal("receipt labels a primary session identity as the Tell submission identity", forbidden)
+		}
+	}
+	if string(fields["primary_client_global_id"]) != "77" || string(fields["tell_session_global_id_observed"]) != "false" {
+		t.Fatal("receipt lost its primary label or the unobserved Tell identity statement", string(data))
 	}
 }
