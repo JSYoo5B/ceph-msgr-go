@@ -82,7 +82,7 @@ func requireNativeMonValue(t *testing.T, ctx context.Context, control, token, ph
 }
 
 // This probe decodes complete uncompressed CRC frames supplied to net.Conn.Write,
-// not TCP packet boundaries. It records local MON and MGR command writes, never
+// not TCP packet boundaries. It records local MON, MGR and Tell (type 97) command writes, never
 // server executions. Secure frames cannot yield this receipt and retain the
 // separate size probe.
 type monOutcomeWrite struct {
@@ -126,31 +126,56 @@ func writeMonOutcomeIdentity(t *testing.T, control string, value monOutcomeIdent
 	}
 }
 
+// monOutcomeGate withholds replies on exactly one connection. It arms only for
+// an outgoing frame written to the named fixture role: a complete CRC frame of
+// the named message type, or, when frames cannot be decoded (secure modes), a
+// write of at least fallbackBytes. It never inspects traffic to any other role.
+type monOutcomeGate struct {
+	Peer          string
+	Type          uint16
+	FallbackBytes int
+	Arm           func()
+}
+
 type monOutcomeConn struct {
 	net.Conn
 	record     *monOutcomeWrites
 	connection uint64
 	peer       string
+	gate       *monOutcomeGate
 }
 
 func (c *monOutcomeConn) Write(p []byte) (int, error) {
-	n, err := c.Conn.Write(p)
-	if !c.record.enabled.Load() || len(p) < 32 || p[0] != byte(msgr.Message) || msgr.CRC(0, p[:28]) != binary.LittleEndian.Uint32(p[28:32]) {
-		return n, err
-	}
-	reader := bytes.NewReader(p)
-	frame, parseErr := msgr.NewReader(reader, 128<<10).Read()
+	framed := len(p) >= 32 && p[0] == byte(msgr.Message) && msgr.CRC(0, p[:28]) == binary.LittleEndian.Uint32(p[28:32])
 	var message msgr.MessageData
-	if parseErr == nil {
-		message, parseErr = msgr.DecodeMessage(frame)
+	var parseErr error
+	var remaining int
+	if framed {
+		reader := bytes.NewReader(p)
+		var frame msgr.Frame
+		if frame, parseErr = msgr.NewReader(reader, 128<<10).Read(); parseErr == nil {
+			message, parseErr = msgr.DecodeMessage(frame)
+		}
+		remaining = reader.Len()
+	}
+	if g := c.gate; g != nil && c.peer == g.Peer && g.Arm != nil {
+		// Arm before the write so a reply cannot be delivered between the
+		// local write and the gate.
+		if (framed && parseErr == nil && remaining == 0 && message.Type == g.Type) || (!framed && g.FallbackBytes > 0 && len(p) >= g.FallbackBytes) {
+			g.Arm()
+		}
+	}
+	n, err := c.Conn.Write(p)
+	if !c.record.enabled.Load() || !framed {
+		return n, err
 	}
 	c.record.mu.Lock()
 	defer c.record.mu.Unlock()
-	if parseErr != nil || reader.Len() != 0 || len(c.record.writes) >= 64 {
+	if parseErr != nil || remaining != 0 || len(c.record.writes) >= 64 {
 		c.record.err = errors.New("CRC command write did not decode as one bounded frame")
 		return n, err
 	}
-	if message.Type == msgr.MonCommandMessage || message.Type == msgr.MgrCommandMessage {
+	if message.Type == msgr.MonCommandMessage || message.Type == msgr.MgrCommandMessage || message.Type == msgr.TellCommandMessage {
 		c.record.writes = append(c.record.writes, monOutcomeWrite{
 			Type: message.Type, Connection: c.connection, Peer: c.peer, Transaction: message.Transaction,
 			Sequence: message.Sequence, FrontSHA256: sha256.Sum256(message.Front),

@@ -32,7 +32,7 @@ var metadataFiles = []string{
 	"named-mgr-oracle-before.json", "named-mgr-oracle-after.json", "named-mgr-results.json", "mgr-service-recovery.json", "mgr-service-close.json", "mgr-service-metadata.json", "mgr-service-comparison.json", "mgr-service-unavailable.json", "mgr-service-config-native.json", "mgr-service-configuration.json",
 	"log-oracle.json", "log-oracle-sentinel.txt", "config-oracle.json", "config-oracle-history.jsonl", "hostname-config-oracle.json",
 	"command-oracle-mon.json", "command-oracle-mgr.json", "command-oracle-summary.json",
-	"mon-command-outcome-native.jsonl", "mon-command-outcome-identity.json", "mgr-command-outcome-native.jsonl", "mgr-command-outcome-identity.json",
+	"mon-command-outcome-native.jsonl", "mon-command-outcome-identity.json", "mgr-command-outcome-native.jsonl", "mgr-command-outcome-identity.json", "mon-tell-outcome-native.jsonl", "mon-tell-outcome-identity.json",
 	"tell-command-oracle-mon-a.json", "tell-command-oracle-mon-b.json", "tell-command-oracle-mon-c.json", "tell-command-oracle-mgr.json", "tell-command-oracle-summary.json",
 	"manager-oracle.json", "digest-oracle.json", "monitor-oracle.json", "osd-oracle.json", "osd-map-native-oracle.json", "osd-map-manifest.json",
 	"monitor-election-history.jsonl", "monitor-election-settled.json",
