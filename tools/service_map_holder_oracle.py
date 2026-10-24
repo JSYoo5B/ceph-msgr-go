@@ -126,9 +126,46 @@ def project(code, payload, daemon):
     except (ValueError, UnicodeError):
         view["code"] = None
         return view
-    if not isinstance(document, dict):
+    # A dump with an unexpected structure is unreadable, never an absence: only
+    # a missing owned service or daemon key inside a well-formed map is absent.
+    def invalid():
         view["code"] = None
+        view["epoch"] = None
+        view["present"] = False
+        view["entry"] = None
+        view["service_daemons"] = None
         return view
+
+    if not isinstance(document, dict):
+        return invalid()
+    epoch = document.get("epoch")
+    services = document.get("services")
+    if type(epoch) is not int or not 0 <= epoch < 1 << 32 or not isinstance(services, dict):
+        return invalid()
+    view["epoch"] = epoch
+    service = services.get(SERVICE)
+    if service is None:
+        view["service_daemons"] = 0
+        return view
+    daemons = service.get("daemons") if isinstance(service, dict) else None
+    if not isinstance(daemons, dict):
+        return invalid()
+    # The map may also hold a "summary" key; count daemon objects only.
+    view["service_daemons"] = sum(1 for value in daemons.values() if isinstance(value, dict))
+    if daemon in daemons:
+        entry = daemons[daemon]
+        if not isinstance(entry, dict):
+            return invalid()
+        metadata = entry.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        view["present"] = True
+        view["entry"] = {
+            "gid": entry.get("gid") if type(entry.get("gid")) is int else None,
+            "start_epoch": entry.get("start_epoch") if type(entry.get("start_epoch")) is int else None,
+            "role": metadata.get("ceph_msgr_role") if isinstance(metadata.get("ceph_msgr_role"), str) else None,
+            "daemon": metadata.get("ceph_msgr_daemon") if isinstance(metadata.get("ceph_msgr_daemon"), str) else None,
+        }
+    return view
     epoch = document.get("epoch")
     view["epoch"] = epoch if type(epoch) is int and 0 <= epoch < 1 << 32 else None
     services = document.get("services")

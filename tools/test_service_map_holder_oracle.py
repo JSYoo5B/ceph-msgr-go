@@ -20,6 +20,10 @@ def dump(daemon_entry=None, epoch=7, others=2):
                                                     "rgw": {"daemons": {"x": {"gid": 1}}}}}).encode()
 
 
+def bad_dump():
+    return json.dumps({"epoch": 7, "services": {"ceph-msgr": []}}).encode()
+
+
 def entry(gid=4242):
     return {"gid": gid, "start_epoch": 3, "metadata": {"ceph_msgr_role": "holder", "ceph_msgr_daemon": DAEMON,
                                                        "hostname": "must-not-persist"}}
@@ -116,8 +120,54 @@ class Project(unittest.TestCase):
         self.assertIsNone(oracle.project(0, b"[1]", DAEMON)["code"])
         self.assertIsNone(oracle.project(0, b"{", DAEMON)["code"])
         self.assertIsNone(oracle.project(0, b"x" * ((4 << 20) + 1), DAEMON)["epoch"])
-        self.assertIsNone(oracle.project(0, b'{"epoch": true}', DAEMON)["epoch"])
-        self.assertIsNone(oracle.project(0, b'{"epoch":1,"services":{"ceph-msgr":[]}}', DAEMON)["service_daemons"])
+        self.assertIsNone(oracle.project(0, b'{"epoch": true, "services": {}}', DAEMON)["code"])
+
+    def test_structurally_invalid_dumps_are_never_absence(self):
+        cases = {
+            "services not a dict": {"epoch": 7, "services": []},
+            "services missing": {"epoch": 7},
+            "service not a dict": {"epoch": 7, "services": {"ceph-msgr": []}},
+            "service a string": {"epoch": 7, "services": {"ceph-msgr": "x"}},
+            "daemons wrong type": {"epoch": 7, "services": {"ceph-msgr": {"daemons": []}}},
+            "daemons missing": {"epoch": 7, "services": {"ceph-msgr": {}}},
+            "entry wrong type": {"epoch": 7, "services": {"ceph-msgr": {"daemons": {DAEMON: "x"}}}},
+            "entry null": {"epoch": 7, "services": {"ceph-msgr": {"daemons": {DAEMON: None}}}},
+            "epoch missing": {"services": {}},
+            "epoch string": {"epoch": "7", "services": {}},
+            "epoch bool": {"epoch": True, "services": {}},
+            "epoch float": {"epoch": 7.0, "services": {}},
+            "epoch negative": {"epoch": -1, "services": {}},
+            "epoch too large": {"epoch": 1 << 32, "services": {}},
+        }
+        for name, document in cases.items():
+            with self.subTest(name):
+                view = oracle.project(0, json.dumps(document).encode(), DAEMON)
+                self.assertIsNone(view["code"])
+                self.assertIsNone(view["epoch"])
+                self.assertFalse(view["present"])
+
+    def test_missing_owned_keys_in_a_valid_map_are_absence(self):
+        for document in ({"epoch": 7, "services": {}}, {"epoch": 7, "services": {"rgw": {}}},
+                         {"epoch": 7, "services": {"ceph-msgr": {"daemons": {}}}}):
+            view = oracle.project(0, json.dumps(document).encode(), DAEMON)
+            self.assertEqual((view["code"], view["epoch"], view["present"]), (0, 7, False))
+            self.assertEqual(view["service_daemons"], 0)
+
+    def test_invalid_dump_neither_starts_nor_restores(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            native = FakeNative(out, [bad_dump()])
+            with self.assertRaises(ValueError):
+                oracle.collect(out, out, "1", TOKEN, "start", native)
+            self.assertEqual(native.spawned, 0)
+        with tempfile.TemporaryDirectory() as tmp:
+            out = pathlib.Path(tmp)
+            native = FakeNative(out, [dump(), bad_dump()])
+            oracle.collect(out, out, "1", TOKEN, "start", native)
+            oracle.collect(out, out, "2", TOKEN, "cleanup", native)
+            receipt = json.loads(oracle.state_path(out, TOKEN, "cleanup.json").read_text())
+            self.assertIsNone(receipt["view"]["code"])
+            self.assertFalse(receipt["restored"])
 
 
 class Lifecycle(unittest.TestCase):

@@ -71,6 +71,12 @@ with the `expired` reason. A fixture teardown destroys it in any case.
   `observe` that finds a readable dump without the daemon. A killed holder
   sends no close, so its entry may remain until the MGR times it out; `cleanup`
   reports that as `restored: false` instead of waiting.
+- A dump is readable only when it is a JSON object with an integer epoch in
+  range and a `services` object, and the owned service (when present) holds a
+  `daemons` object and the owned entry (when present) is an object. Any other
+  shape yields no code or epoch. Only a missing owned service or daemon key in a
+  well-formed map is absence; the Go acceptance side separately requires a
+  success code, epoch and service count for both absence and restoration.
 - Only the owned entry is persisted: the dump epoch, the owned daemon's GID,
   start epoch and the two synthetic metadata values, and the count of daemons
   in the `ceph-msgr` service. Other entries and the host inventory that

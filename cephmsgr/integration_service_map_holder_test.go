@@ -48,7 +48,7 @@ func TestCephServiceMapNativeHolderIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("holder %s registered: pid=%d gid=%d lifetime cap=%ds baseline epoch=%v", started.Daemon, ready.PID, ready.GID, ready.LifetimeSeconds, started.Baseline.Epoch)
+	t.Logf("holder %s registered: pid=%d gid=%d lifetime cap=%ds baseline epoch=%d", started.Daemon, ready.PID, ready.GID, ready.LifetimeSeconds, *started.Baseline.Epoch)
 
 	// The start request returned while the holder stays registered, so these
 	// later requests prove the fixture control loop is not blocked by it.
@@ -60,7 +60,7 @@ func TestCephServiceMapNativeHolderIntegration(t *testing.T) {
 	if present.Holder == nil || !present.Holder.Alive || present.Holder.Exited != nil {
 		t.Fatalf("holder is not alive while its daemon is registered: %+v", present.Holder)
 	}
-	t.Logf("fresh native view: service map epoch %d, gid %d, start epoch %v", *present.View.Epoch, *present.View.Entry.GID, present.View.Entry.StartEpoch)
+	t.Logf("fresh native view: service map epoch %d, gid %d, start epoch %s", *present.View.Epoch, *present.View.Entry.GID, optionalEpoch(present.View.Entry.StartEpoch))
 	time.Sleep(3 * time.Second)
 	again, err := observeNativeServiceHolder(ctx, control, token, "observe")
 	if err != nil {
@@ -97,7 +97,14 @@ func TestCephServiceMapNativeHolderIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if final.Killed || final.Restored == nil || !*final.Restored || final.Holder == nil || final.Holder.Alive {
+	if !serviceHolderRestored(final) || final.Holder == nil || final.Holder.Alive {
 		t.Fatalf("released holder was not restored to its own baseline without a kill: %+v", final)
 	}
+}
+
+func optionalEpoch(value *uint32) string {
+	if value == nil {
+		return "unreported"
+	}
+	return fmt.Sprint(*value)
 }

@@ -188,10 +188,65 @@ func TestServiceHolderAbsenceNeedsAReadableDump(t *testing.T) {
 		"undecoded":  func(v map[string]any) { absent(v); v["view"].(map[string]any)["code"] = nil },
 		"no epoch":   func(v map[string]any) { absent(v); v["view"].(map[string]any)["epoch"] = nil },
 		"no view":    func(v map[string]any) { v["view"] = nil },
+		"no service": func(v map[string]any) { absent(v); v["view"].(map[string]any)["service_daemons"] = nil },
+		"entry kept": func(v map[string]any) { absent(v); v["view"].(map[string]any)["entry"] = map[string]any{"gid": 1} },
 		"wrong step": func(v map[string]any) { absent(v); v["phase"] = "start" },
 	} {
 		if serviceHolderAbsent(decodeServiceHolder(t, nativeServiceHolderObserveSample, edit)) {
 			t.Fatal(name, "was accepted as native absence")
+		}
+	}
+}
+
+// invalidDumpView is what the producer emits for a structurally invalid dump
+// (see tools/test_service_map_holder_oracle.py): no code, epoch or counts.
+const invalidDumpView = `{"code":null,"entry":null,"epoch":null,"present":false,"service_daemons":null}`
+
+func TestServiceHolderInvalidDumpIsNeitherAbsenceNorRestoration(t *testing.T) {
+	invalid := func(v map[string]any) {
+		var view map[string]any
+		_ = json.Unmarshal([]byte(invalidDumpView), &view)
+		v["view"] = view
+	}
+	if serviceHolderAbsent(decodeServiceHolder(t, nativeServiceHolderObserveSample, invalid)) {
+		t.Fatal("an invalid dump certified absence")
+	}
+	// Even if a producer mislabelled such a view as success, missing epoch or
+	// counts keep the acceptance side from certifying it.
+	partial := func(v map[string]any) {
+		v["view"] = map[string]any{"code": 0, "epoch": 7, "present": false, "entry": nil, "service_daemons": nil}
+	}
+	if serviceHolderAbsent(decodeServiceHolder(t, nativeServiceHolderObserveSample, partial)) {
+		t.Fatal("a view without service counts certified absence")
+	}
+	restoredSample := func(view func(map[string]any)) func(map[string]any) {
+		return func(v map[string]any) {
+			v["phase"], v["restored"], v["killed"] = "cleanup", true, false
+			view(v)
+		}
+	}
+	good := func(v map[string]any) {
+		v["view"] = map[string]any{"code": 0, "epoch": 7, "present": false, "entry": nil, "service_daemons": 0}
+	}
+	if !serviceHolderRestored(decodeServiceHolder(t, nativeServiceHolderObserveSample, restoredSample(good))) {
+		t.Fatal("a readable absent cleanup view was not accepted")
+	}
+	for name, view := range map[string]func(map[string]any){"invalid": invalid, "partial": partial} {
+		if serviceHolderRestored(decodeServiceHolder(t, nativeServiceHolderObserveSample, restoredSample(view))) {
+			t.Fatal(name, "dump certified restoration")
+		}
+	}
+	for name, edit := range map[string]func(map[string]any){
+		"not restored": func(v map[string]any) { good(v); v["restored"] = false },
+		"killed":       func(v map[string]any) { good(v); v["killed"] = true },
+		"no flag":      func(v map[string]any) { good(v); delete(v, "restored") },
+		"wrong phase":  func(v map[string]any) { good(v); v["phase"] = "observe" },
+	} {
+		if serviceHolderRestored(decodeServiceHolder(t, nativeServiceHolderObserveSample, func(v map[string]any) {
+			restoredSample(good)(v)
+			edit(v)
+		})) {
+			t.Fatal(name, "was accepted as restoration")
 		}
 	}
 }

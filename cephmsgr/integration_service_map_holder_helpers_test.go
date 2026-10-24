@@ -119,7 +119,7 @@ func observeNativeServiceHolder(ctx context.Context, control, token, phase strin
 func serviceHolderReady(receipt nativeServiceHolderReceipt) (nativeServiceHolderReady, error) {
 	var ready nativeServiceHolderReady
 	if receipt.Phase != "start" || receipt.State != "ready" || receipt.Baseline == nil ||
-		receipt.Baseline.OwnedPresent || receipt.Baseline.Code == nil || *receipt.Baseline.Code != 0 {
+		receipt.Baseline.OwnedPresent || receipt.Baseline.Code == nil || *receipt.Baseline.Code != 0 || receipt.Baseline.Epoch == nil {
 		return ready, errors.New("start receipt is not a ready holder over an absent baseline")
 	}
 	if err := json.Unmarshal(receipt.Ready, &ready); err != nil || ready.PID <= 0 || ready.GID == 0 || ready.LifetimeSeconds <= 0 {
@@ -144,7 +144,21 @@ func serviceHolderPresent(receipt nativeServiceHolderReceipt, ready nativeServic
 // daemon. An unreadable dump is never an absence.
 func serviceHolderAbsent(receipt nativeServiceHolderReceipt) bool {
 	view := receipt.View
-	return receipt.Phase == "observe" && view != nil && view.Code != nil && *view.Code == 0 && view.Epoch != nil && !view.Present
+	return receipt.Phase == "observe" && serviceHolderAbsentView(view)
+}
+
+// serviceHolderAbsentView is a readable, well-formed dump (success code, epoch
+// and a counted owned service) without the owned daemon or entry.
+func serviceHolderAbsentView(view *nativeServiceHolderView) bool {
+	return view != nil && view.Code != nil && *view.Code == 0 && view.Epoch != nil && view.ServiceDaemon != nil &&
+		!view.Present && view.Entry == nil
+}
+
+// serviceHolderRestored accepts a cleanup receipt only when the worker reports
+// restoration and its fresh view is itself a readable absence.
+func serviceHolderRestored(receipt nativeServiceHolderReceipt) bool {
+	return receipt.Phase == "cleanup" && receipt.Restored != nil && *receipt.Restored && !receipt.Killed &&
+		serviceHolderAbsentView(receipt.View)
 }
 
 // waitServiceHolder repeats only the read-only observe phase until accept holds.
