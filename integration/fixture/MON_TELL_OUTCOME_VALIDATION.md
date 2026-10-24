@@ -64,7 +64,9 @@ signed code, original bytes (base64) and status. `mon_status` and the diff keep
 their signed code, status, byte count and SHA-256; only the daemon name, rank
 and state and the owned option's diff entry (source names, override presence
 and value, final value) are persisted. No full configuration dump is requested
-or persisted, and a diff reply naming any other option is refused.
+or persisted. If the daemon answers `config diff get` with more than the owned
+option, the unrelated entries stay in worker memory only; the receipt keeps the
+reply's top-level key names and entry count.
 
 1. Generate a 128-bit random token. The initial observation captures the
    baseline effective value and runtime override presence before any mutation.
@@ -130,7 +132,7 @@ original observations, partial identity progress and restoration uncertainty.
 ## Daemon-free checks
 
 - `tools/test_mon_tell_outcome_oracle.py`: closed inputs, exact-target
-  addressing, option-only persistence, refusal of a wider diff reply, override
+  addressing, option-only persistence even for a wider diff reply, override
   presence separate from the effective value, the `1..19998` bound, baseline
   ownership by token and target, and a single restoration.
 - `cephmsgr/mon_tell_outcome_receipt_test.go`: the candidate bound, the closed

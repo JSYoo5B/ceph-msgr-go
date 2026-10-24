@@ -83,15 +83,20 @@ def daemon_identity(code, payload, status):
 
 
 def option_diff(code, payload, status):
-    """Keep only the owned option's diff entry; refuse a wider reply."""
+    """Keep only the owned option's diff entry; unrelated entries stay in memory."""
     observed = summary(code, payload, status)
     value = bounded_json(code, payload)
     observed["valid"] = False
     observed["entry"] = None
-    if isinstance(value, dict) and isinstance(value.get("diff"), dict):
-        diff = value["diff"]
-        if set(diff) - {OPTION}:
-            raise ValueError("Native diff reply exceeds the owned option")
+    # Only structural facts about the reply are kept, never other options.
+    observed["top_level_keys"] = sorted(str(key)[:32] for key in value)[:8] if isinstance(value, dict) else None
+    diff = None
+    if isinstance(value, dict):
+        # The pinned reply nests entries under "diff"; accept the option object
+        # directly only when it names the owned option.
+        diff = value["diff"] if isinstance(value.get("diff"), dict) else (value if OPTION in value else None)
+    if diff is not None:
+        observed["diff_entries"] = len(diff)
         observed["valid"] = True
         entry = diff.get(OPTION)
         if isinstance(entry, dict):

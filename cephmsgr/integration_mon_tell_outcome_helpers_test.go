@@ -94,6 +94,9 @@ type nativeMonTellDiff struct {
 	DataBytes int                 `json:"data_bytes"`
 	Valid     bool                `json:"valid"`
 	Entry     *nativeMonTellEntry `json:"entry"`
+	// Structural facts about the reply; never other options.
+	TopLevelKeys []string `json:"top_level_keys"`
+	DiffEntries  int      `json:"diff_entries"`
 }
 
 type nativeMonTellViews struct {
@@ -192,9 +195,9 @@ func nativeMonTellSummary(receipt nativeMonTellReceipt) string {
 			override += "=" + *entry.Override
 		}
 	}
-	return fmt.Sprintf("phase=%s request=%d target=mon.%s rank=%d bracketed=%t get_code=%d get=%q effective=%d diff_code=%d diff_valid=%t override=%s",
+	return fmt.Sprintf("phase=%s request=%d target=mon.%s rank=%d bracketed=%t get_code=%d get=%q effective=%d diff_code=%d diff_valid=%t diff_keys=%v diff_entries=%d override=%s",
 		receipt.Phase, receipt.RequestID, receipt.Target, rank, stable, views.ConfigGet.Code, views.ConfigGet.Data, effective,
-		views.ConfigDiff.Code, views.ConfigDiff.Valid, override)
+		views.ConfigDiff.Code, views.ConfigDiff.Valid, views.ConfigDiff.TopLevelKeys, views.ConfigDiff.DiffEntries, override)
 }
 
 // requireNativeMonTellState repeats only read observations until one bracketed

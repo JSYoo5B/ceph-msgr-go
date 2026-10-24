@@ -72,9 +72,14 @@ class OwnedMonTellOutcomeTest(unittest.TestCase):
         self.assertEqual((observed["daemon_before"]["name"], observed["daemon_after"]["rank"]), ("b", 1))
         self.assertEqual(oracle.restorable(observed, "b"), {"present": False, "effective": "500"})
 
-    def test_wider_diff_reply_is_refused(self):
-        with self.assertRaises(ValueError):
-            oracle.views(FakeClient(extra_diff=True), "b")
+    def test_unrelated_diff_entries_are_never_persisted(self):
+        observed = oracle.views(FakeClient("501", "501", extra_diff=True), "b")
+        encoded = json.dumps(observed)
+        self.assertNotIn("debug_mon", encoded)
+        self.assertNotIn("5/5", encoded)
+        self.assertEqual(observed["config_diff"]["diff_entries"], 2)
+        self.assertEqual(observed["config_diff"]["top_level_keys"], ["diff"])
+        self.assertEqual(observed["config_diff"]["entry"]["override"], "501")
 
     def test_override_presence_is_separate_from_the_effective_value(self):
         absent = oracle.views(FakeClient("501"), "b")
