@@ -141,6 +141,22 @@ while true; do
         sh /out/publish-ack.sh "/out/mon-tell-observed.$request_id"
         fixture_phase=control-idle
     fi
+    if test -f /out/observe-service-holder; then
+        fixture_phase=observe-service-holder
+        test "$config_fixture" = 1 || exit 2
+        read -r request_id token phase extra < /out/observe-service-holder
+        case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
+        test "$request_id" -gt 0 && test -z "$extra" || exit 2
+        case "$phase" in start) holder_timeout=60 ;; observe|cleanup) holder_timeout=30 ;; release) holder_timeout=45 ;; *) exit 2 ;; esac
+        rm /out/observe-service-holder
+        # The detached holder outlives this request, so the loop stays free for
+        # daemon controls. Python mon_command ignores its timeout argument; the
+        # outer process timeout bounds each phase (the holder has its own
+        # capped lifetime and is killed by the cleanup phase).
+        timeout "$holder_timeout" python3 /out/service_map_holder_oracle.py "$root" /out "$request_id" "$token" "$phase"
+        sh /out/publish-ack.sh "/out/service-holder-observed.$request_id"
+        fixture_phase=control-idle
+    fi
     if test -f /out/verify-osd-maps; then
         fixture_phase=verify-osd-maps
         # Native blob validation also serves MON-only map acquisition; no OSD

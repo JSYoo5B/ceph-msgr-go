@@ -29,3 +29,9 @@ gone; that was a test-ordering problem, not a decoding one. The first live run
 also found that such daemons carry an AF_UNSPEC address, which the shared
 address decoder now accepts as "no endpoint". Daemon removal timing, MON
 failover during the watch and large maps are unverified.
+
+A native holder keeps a synthetic registration alive under independent control
+and is observed by a fresh native view
+([native holder](../integration/fixture/SERVICE_MAP_HOLDER_VALIDATION.md)). It
+is a fixture prerequisite for a later lifecycle cell and verifies no Go watch
+behavior.
