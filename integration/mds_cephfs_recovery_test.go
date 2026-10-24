@@ -1046,9 +1046,34 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if safe := waitSafe(t, sessionR, call, first, e, true); safe.Result != 0 {
 			t.Fatalf("flock file create safe result %d", safe.Result)
 		}
-		// The create opened the file read-write. The handle stays open for the
-		// whole lock lifetime and is closed only after the explicit unlock.
+		// As in the ordinary metadata acceptance, close the create's handle and
+		// give the file a nonzero change_attr with one xattr (the closed native
+		// probe requires a nonzero version), observe it natively, then reopen
+		// it. The new handle stays open for the whole lock lifetime and is
+		// closed only after the explicit unlock.
 		agentR.open(hf.Ino, cephFileModeRDWR)
+		if _, _, err := agentR.close(hf.Ino, cephFileModeRDWR); err != nil {
+			t.Fatal("close the created flock file", err)
+		}
+		xattrValue, err := hex.DecodeString(oracle.Plan.XattrValueHex)
+		if err != nil || len(xattrValue) == 0 {
+			t.Fatal("plan xattr value is not usable", err)
+		}
+		call, first, _, e = submitFirst(t, sessionR, agentR, "restart", "flock-file-setxattr", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetxattr, Args: cephfsSetxattrArgs(0, 0),
+			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Path2: cephmsgr.MDSFilePath{Path: oracle.Plan.XattrName}, Data: xattrValue})
+		if safe := waitSafe(t, sessionR, call, first, e, true); first.Result != 0 || safe.Result != 0 {
+			t.Fatalf("flock file setxattr failed: %d %d", first.Result, safe.Result)
+		}
+		nativeXattr, err := control.request(ctx, "getxattr", "go-file")
+		if err != nil || nativeXattr.Native == nil || nativeXattr.Native.ValueHex != oracle.Plan.XattrValueHex || control.goGIDs[nativeXattr.Native.NativeGlobalID] {
+			t.Fatal("native getxattr does not return the xattr just set by Go", err)
+		}
+		agentR.open(hf.Ino, cephFileModeRDWR)
+		_, opened, _, oe := submitFirst(t, sessionR, agentR, "restart", "flock-open", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpOpen, Args: cephfsOpenArgs(cephOpenReadWrite, 0, 0),
+			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}})
+		if opened.Result != 0 || !opened.Safe {
+			t.Fatalf("flock file open differs: %+v", oe)
+		}
 		want := cephfsFilelock{Client: gidR, Owner: cephFlockGoOwner, Type: cephFlockExclusive}
 		hf.Lock = want
 		call, first, _, e = submitFirst(t, sessionR, agentR, "restart", "flock-exclusive-acquire", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
