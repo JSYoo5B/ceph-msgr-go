@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -15,10 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
 	"github.com/JSYoo5B/ceph-testcontainers-go/rgw"
-	"github.com/containerd/errdefs"
-	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
 	tcexec "github.com/testcontainers/testcontainers-go/exec"
 )
@@ -39,83 +35,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Minute)
 	defer cancel()
-	config := filepath.Join(t.TempDir(), "rgw-checkpoint.conf")
-	if err := os.WriteFile(config, []byte("[global]\nosd_pool_default_pg_num = 1\n[osd]\nosd_op_history_size = 4096\nosd_op_history_duration = 600\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	cluster, err := rgw.Run(ctx, rgwNativeImage,
-		ceph.WithMonitorCount(1), ceph.WithManagerCount(1), ceph.WithOSDCount(1),
-		ceph.WithPoolDefaults(1, 1), ceph.WithOSDObjectStore(ceph.OSDBlueStore),
-		ceph.WithMessengerMode(ceph.MessengerV2Secure),
-		ceph.WithAuth(ceph.AuthConfig{KeyType: ceph.CipherAES256K, ServiceCipher: ceph.CipherAES256K}),
-		ceph.WithConfigFile(config), rgw.WithGateways(rgw.Config{SkipUserCreation: true}))
-	if cluster != nil {
-		t.Cleanup(func() {
-			cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
-			defer stop()
-			var owned []testcontainers.Container
-			for _, monitor := range cluster.Monitors() {
-				owned = append(owned, monitor.Container)
-			}
-			for _, manager := range cluster.Managers() {
-				owned = append(owned, manager.Container)
-			}
-			for _, osd := range cluster.OSDs() {
-				owned = append(owned, osd.Container)
-			}
-			owned = append(owned, cluster.ServiceContainers()...)
-			volumes := map[string]bool{}
-			for _, container := range owned {
-				inspected, err := container.Inspect(cleanup)
-				if err != nil {
-					t.Errorf("inspect owned resources before cleanup: %v", err)
-					continue
-				}
-				for _, mount := range inspected.Mounts {
-					if mount.Type == "volume" && mount.Name != "" {
-						volumes[mount.Name] = true
-					}
-				}
-			}
-			network := cluster.NetworkName()
-			if err := cluster.Terminate(cleanup); err != nil {
-				t.Errorf("terminate owned RGW fixture: %v", err)
-				return
-			}
-			docker, err := testcontainers.NewDockerClientWithOpts(cleanup)
-			if err != nil {
-				t.Error("open independent cleanup inspector:", err)
-				return
-			}
-			defer func() { _ = docker.Close() }()
-			for _, container := range owned {
-				if _, err := docker.ContainerInspect(cleanup, container.GetContainerID(), client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
-					t.Errorf("owned container removal not independently confirmed: %v", err)
-				}
-			}
-			for volume := range volumes {
-				if _, err := docker.VolumeInspect(cleanup, volume, client.VolumeInspectOptions{}); !errdefs.IsNotFound(err) {
-					t.Errorf("owned volume removal not independently confirmed: %v", err)
-				}
-			}
-			if network != "" {
-				if _, err := docker.NetworkInspect(cleanup, network, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
-					t.Errorf("owned network removal not independently confirmed: %v", err)
-				}
-			}
-			if !t.Failed() {
-				t.Logf("RGW_NATIVE_CLEANUP independent inspection confirms containers=%d volumes=%d network=removed", len(owned), len(volumes))
-			}
-		})
-	}
-	if err != nil {
-		t.Fatal("start RGW fixture:", err)
-	}
-	gateways := cluster.Gateways()
-	if len(gateways) != 1 || len(cluster.OSDs()) != 1 {
-		t.Fatal("checkpoint requires exactly one gateway and OSD")
-	}
-	gateway := gateways[0]
+	cluster, gateway := rgwNativeStartFixture(t, ctx)
 	control := cluster.Container.Container
 	version := string(rgwNativeExec(t, ctx, control, "ceph", "version"))
 	if !strings.Contains(version, "ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964)") {
@@ -165,25 +85,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	generation := rgwNativeGeneration(t, ctx, gateway)
 	// Pool discovery is MON metadata traffic, not an OSD data/index oracle.
 	// Bind both PG and hobject pool IDs before accepting request reception.
-	pools, err := cluster.Pools(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dataPool, indexPool := "", ""
-	var dataPoolID, indexPoolID int64
-	for _, pool := range pools {
-		if strings.HasSuffix(pool.Name, ".rgw.buckets.data") {
-			dataPool = pool.Name
-			dataPoolID = pool.ID
-		}
-		if strings.HasSuffix(pool.Name, ".rgw.buckets.index") {
-			indexPool = pool.Name
-			indexPoolID = pool.ID
-		}
-	}
-	if dataPool == "" || indexPool == "" || dataPoolID <= 0 || indexPoolID <= 0 || dataPoolID == indexPoolID {
-		t.Fatal("missing actual RGW data/index pools")
-	}
+	dataPool, indexPool, dataPoolID, indexPoolID := rgwNativePools(t, ctx, cluster)
 	head := bucketInfo.Marker + "_" + key
 	history, err := rgwNativePollHistory(ctx, func(read context.Context) []byte {
 		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
@@ -413,4 +315,25 @@ func rgwNativeOracle(t *testing.T, ctx context.Context, control testcontainers.C
 		t.Fatal("object key is absent from actual native index shards")
 	}
 	return found
+}
+
+// Pool discovery is MON metadata traffic, not an OSD data/index oracle.
+func rgwNativePools(t *testing.T, ctx context.Context, cluster *rgw.Container) (dataPool, indexPool string, dataPoolID, indexPoolID int64) {
+	t.Helper()
+	pools, err := cluster.Pools(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pool := range pools {
+		if strings.HasSuffix(pool.Name, ".rgw.buckets.data") {
+			dataPool, dataPoolID = pool.Name, pool.ID
+		}
+		if strings.HasSuffix(pool.Name, ".rgw.buckets.index") {
+			indexPool, indexPoolID = pool.Name, pool.ID
+		}
+	}
+	if dataPool == "" || indexPool == "" || dataPoolID <= 0 || indexPoolID <= 0 || dataPoolID == indexPoolID {
+		t.Fatal("missing actual RGW data/index pools")
+	}
+	return
 }

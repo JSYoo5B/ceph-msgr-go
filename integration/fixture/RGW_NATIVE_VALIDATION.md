@@ -1,8 +1,11 @@
-# Bounded native RGW Messenger checkpoint
+# Bounded native RGW Messenger checkpoints
 
-`TestRGWNativeCheckpointIntegration` is a dedicated development-fixture test
-using released ceph-testcontainers-go v0.3.0. It adds no product API, S3 SDK,
-native runtime dependency, fixture profile, or comment-selected CI command.
+`TestRGWNativeCheckpointIntegration` (small object) and
+`TestRGWNativeMultiStripeIntegration` (multi-stripe object, manifest and
+garbage collection, described [below](#multi-stripe-manifest-and-gc-checkpoint))
+are dedicated development-fixture tests using released
+ceph-testcontainers-go v0.3.0. They add no product API, S3 SDK, native runtime
+dependency, fixture profile, or comment-selected CI command.
 Issue [#13](https://github.com/JSYoo5B/ceph-msgr-go/issues/13) remains open for
 the remaining service-induced paths and failure campaigns.
 
@@ -119,12 +122,97 @@ the independent oracle's `listomapkeys` is its own OMAP traffic. Existing raw
 Go OSD call/write primitives remain separate from this native-only checkpoint;
 no direct Go RGW operation or server-role implementation is introduced.
 
-This checkpoint does not cover large objects, manifest-ordered tail-byte
-reconstruction, deferred GC, multipart, multisite, service-registration
-messages, MGR/OSD faults, compression or arbitrary security/address profiles.
-It does not add catalog/workflow propagation or a trusted comment selector.
-Those require their own actual-PASS gates and native evidence before SVC-1
-or issue #13 can be described as complete.
+This small-object checkpoint does not cover large objects, multipart,
+multisite, service-registration messages, MGR/OSD faults, compression or
+arbitrary security/address profiles. Manifest-ordered tail reconstruction and
+deferred GC belong to the multi-stripe checkpoint below. Neither adds
+catalog/workflow propagation or a trusted comment selector. Those require
+their own actual-PASS gates and native evidence before SVC-1 or issue #13 can
+be described as complete.
+
+## Multi-stripe manifest and GC checkpoint
+
+`TestRGWNativeMultiStripeIntegration` starts its own fresh one-MON, one-MGR,
+one-BlueStore-OSD, one-gateway fixture with the same secure-only aes256k
+configuration and the same release/source identity check, and reuses the
+small checkpoint's gateway Messenger identity discovery, bounded read-only
+history polling, one-shot S3 input and cleanup gate. It is selected only by
+its exact name; it needs `CEPH_MSGR_TEST_RGW_NATIVE=1` and otherwise skips.
+
+1. Issue exactly one PUT of a deterministic 6 MiB (6,291,456 byte) object whose
+   every 32-byte block differs (`rgwNativeLargePayload`). The size is an input,
+   not an assumption about the layout.
+2. Before any manifest or backend oracle, poll the OSD operation history until
+   gateway-GlobalID-attributed, TID/PG/pool-consistent `reached_pg` requests
+   show a head WRITE/WRITEFULL, at least one tail
+   (`<bucket marker>__shadow_...`) WRITE/WRITEFULL and the index
+   `bucket_prepare_op` / `bucket_complete_op` calls on an owned index shard.
+   The retained snapshot is evaluated again after the manifest is known.
+3. Read the pinned `radosgw-admin object manifest` output before DELETE and
+   retain logical offsets, stripe sizes and full raw identities. The parser
+   requires a bounded, nonoverlapping layout that covers exactly the input
+   size with at least two byte-bearing RADOS objects, sequential indexes, the
+   head first (or a metadata-only head sentinel with index -1 and size 0,
+   retained for cleanup and never used for bytes) and every other object a
+   tail of this bucket marker. Any pool other than the discovered data pool,
+   namespace, locator, repeated identity, gap, overlap or truncation is
+   rejected rather than inferred.
+4. Each byte-bearing manifest object must have gateway-attributed WRITE
+   reception whose summed extents equal its manifest stripe size. S3 GET
+   uses an explicit 8 MiB response allowance for this case only; the default
+   1 MiB bound and an overflow/cancellation check remain. Independent
+   `rados get` reads of each raw object, concatenated in manifest order, must
+   equal the input in bytes and SHA-256, and the key must be in exactly one
+   actual index shard. A size sum alone is not accepted.
+5. Before DELETE every manifest object is present and no GC chain carries any
+   of them. Delete the object once through S3. Require gateway-attributed
+   head `CALL rgw.obj_remove` and a gateway-attributed `call` on a `gc.<N>`
+   shard object in the discovered log pool (class and method are recorded,
+   not assumed), then HTTP 404, head absence and index-key absence while
+   every tail still exists.
+6. Require each tail to be carried by exactly one chain of `gc list
+   --include-all`, with the data pool and no locator or instance, and no chain
+   object of this bucket outside the manifest. Run `gc process --include-all`
+   exactly once (it processes the whole store queue, which is acceptable only
+   because the fixture is wholly disposable), then, with read-only polling for
+   30 seconds and no second process action, require those exact raw objects
+   absent from the pool and absent from the queue.
+7. Remove the empty bucket and owned user, terminate the cluster and require
+   independent NotFound results for every owned container, volume and network.
+
+The observer's own `rados` and `radosgw-admin` requests come from different
+client instances and are not counted as gateway reception. `radosgw-admin gc
+process` removes the tails as its own client, so tail removal is established by
+independent absence, not by gateway attribution. A `reached_pg` entry
+establishes reception only, not a result code or durability. No restart is
+repeated in this checkpoint, and MGR/OSD faults, multipart and the trusted
+selector remain open.
+
+### Running and retaining the evidence
+
+The `RGW native fixture run` workflow (`.github/workflows/rgw-native.yml`) is a
+development runner, not the trusted `/ci run` catalog. It runs on manual
+dispatch and for pull requests that touch the RGW fixture files, the gate tool
+or the workflow. It records the tested commit, proves that the checkout's file
+hash manifest equals the immutable `git archive` of the same commit, checks
+that every Go file of the fixture module is tracked, runs the selected test
+under an `flock` and `go test -json`, applies `tools/rgw_native_gate.py` to the
+test2json stream and checks that no container or tree change remains. The gate
+requires exactly one PASS of the selected test, a package PASS, no failed or
+skipped test, the independent cleanup record and the test's own receipt, and it
+recomputes the deterministic payload hash and the layout arithmetic. The same
+command shape works on an authorized Linux runner:
+
+```sh
+CEPH_MSGR_TEST_RGW_NATIVE=1 go -C integration/fixture test -json \
+  -run '^TestRGWNativeMultiStripeIntegration$' -count=1 -timeout=20m . \
+  > rgw-multistripe.jsonl
+python3 tools/rgw_native_gate.py --jsonl rgw-multistripe.jsonl \
+  --test TestRGWNativeMultiStripeIntegration --output gate.json
+```
+
+Native results for a specific commit are recorded in the pull request, not in
+this file, so the recorded commit is the tested one.
 
 ## Selected run and first failures
 

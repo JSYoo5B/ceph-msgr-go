@@ -205,7 +205,7 @@ a particular test in it ran. The Visibility column states which applies:
 
 | ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| SVC-1 | RGW-induced RADOS objects, bucket index OMAP and garbage collection | `primitive` | v0.3.0 `rgw.Run`; separate [small-object checkpoint](RGW_NATIVE_VALIDATION.md), with S3 as input only | Gateway GlobalID/TID-attributed OSD history, native head bytes and actual index shard locally; GC queue in the upstream receipt | Owned gateway restart and small-object deletion locally; GC processing upstream | `TestRGWNativeCheckpointIntegration`; `ctg@main:TestRGWRadosReceipt` | Selected local native checkpoint; no catalog/comment selector, large-object/GC or backend-fault acceptance; issue #13 remains open |
+| SVC-1 | RGW-induced RADOS objects, bucket index OMAP and garbage collection | `primitive` | v0.3.0 `rgw.Run`; separate [small-object checkpoint](RGW_NATIVE_VALIDATION.md), with S3 as input only | Gateway GlobalID/TID-attributed OSD history, native head bytes and actual index shard locally; manifest-ordered stripe reconstruction and GC queue locally for the multi-stripe checkpoint | Owned gateway restart and small-object deletion locally; multi-stripe deletion with one explicit GC process locally | `TestRGWNativeCheckpointIntegration`; `TestRGWNativeMultiStripeIntegration`; `ctg@main:TestRGWRadosReceipt` | Selected local native checkpoints, run by the development workflow with pull-request-recorded results; no catalog/comment selector or backend-fault acceptance; issue #13 remains open |
 | SVC-2 | rbd-mirror and cephfs-mirror daemons in steady state | `primitive` | v0.3.0 `RunMirror` in the `rbd` and `cephfs` packages | None locally | None locally | none locally | no local or upstream steady-state receipt is cited here |
 | SVC-3 | Source OSD to mirror daemon with one path cut | `main-only` | Needs `ApplyNetworkProfile` with `Peer` | Mirror snapshot progress and netem counters in the upstream receipts | One-direction loss and restore | `ctg@main:TestRBDMirrorPeerPathCut`, `ctg@main:TestCephFSMirrorPeerPathCut` | upstream receipt only |
 
@@ -240,8 +240,9 @@ independent native observation is still missing.
   [MON_FREEZE_FIXTURE_ISSUE.md](MON_FREEZE_FIXTURE_ISSUE.md) records an OSD
   that stopped following the OSDMap after a MON freeze, with its cause open.
 - **Service-induced paths remain outside the catalog.** RGW has a separate
-  [small-object/native-CALL and gateway-restart checkpoint](RGW_NATIVE_VALIDATION.md)
-  (SVC-1); large-object/GC and backend faults remain open. Mirror paths
+  [small-object/native-CALL and gateway-restart checkpoint and multi-stripe
+  manifest/GC checkpoint](RGW_NATIVE_VALIDATION.md) (SVC-1); backend faults and
+  a trusted selector remain open. Mirror paths
   (SVC-2 and SVC-3) still have no local acceptance recipe.
 - **Native Messenger state is unobserved.** No recipe reports native
   keepalive, ACK or reset state (MSG-8), and no recipe captures daemon frames
