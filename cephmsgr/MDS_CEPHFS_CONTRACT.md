@@ -516,8 +516,12 @@ capability revoke and an admin-socket eviction, both Linux profiles kept
 the accepted size and mtime and A's bytes natively. The evicted address
 instance's next object write on its existing OSD connection returned -108,
 and a new client instance found neither the uncertain nor the fenced write
-in the objects. No object request was repeated. Buffered data written back
-during the revoke itself and partially applied ranges remain unverified.
+in the objects. No object request was repeated. A further leaf of the same
+selector interrupts buffered data inside the test consumer's revoke callback
+behind a background native reader, latches it, holds FILE_BUFFER until an
+explicit eviction and fences the extent afterwards. Both Linux profiles
+returned the A-branch bytes natively with no resubmission of the uncertain
+write. Partially applied ranges remain unverified.
 
 Synthetic peers cover
 the profile handshake refusal, feature gates, request correlation, unsafe and

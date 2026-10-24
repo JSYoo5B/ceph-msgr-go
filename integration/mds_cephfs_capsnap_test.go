@@ -110,7 +110,7 @@ func (a *cephfsCapAgent) queueChangedCapSnapsLocked(old map[uint64]cephmsgr.OSDS
 
 func (a *cephfsCapAgent) queueCapSnapLocked(c *cephfsCap, d *cephfsDirtyFile, old cephmsgr.OSDSnapContext) error {
 	key := cephfsFlushSnapKey{c.Ino, old.Sequence}
-	if _, exists := a.capSnaps[key]; exists || d.writing || d.Dirty == 0 || d.Buffered && d.WriteBack == nil {
+	if _, exists := a.capSnaps[key]; exists || d.writing || d.Latch != nil || d.Dirty == 0 || d.Buffered && d.WriteBack == nil {
 		return fmt.Errorf("invalid or duplicate dirty cap snap %d/%d", c.Ino, old.Sequence)
 	}
 	old.Snapshots = slices.Clone(old.Snapshots)

@@ -10,18 +10,21 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
 )
 
 // The interrupted-writeback/fencing recipe (issue #10 checkpoint 2) shares the
-// DATA scope and adds three closed controls, admitted only for its explicit
+// DATA scope and adds closed controls, admitted only for its explicit
 // selector:
 //
-//   - osd-drop-on/osd-drop-off: one daemon-local override of the single owned
+//   - osd-drop-on/osd-drop-off: a daemon-local override of the single owned
 //     OSD, debug_ms=10/10 then ms_blackhole_client=true, read back from its
-//     admin socket and restored (blackhole first) with readback. Native
+//     admin socket and restored (blackhole first) with readback. At most two
+//     drops are issued per run, one at a time: the second only after the
+//     first is restored. Native
 //     Connection::is_blackhole applies ms_blackhole_client to client peers
 //     only, and ProtocolV2::handle_message drops such a message after
 //     Messenger receipt and before dispatch, logging it at debug_ms 10. MDS,
@@ -35,6 +38,15 @@ import (
 //     session with mds_session_blocklist_on_evict=true, waiting until the
 //     session is gone and its exact address is blocklisted. The entry is
 //     removed by cleanup as an owned-session entry.
+//   - reader-start/reader-status/reader-wait: one background native reader
+//     of shared-file (the read-shared driver action), started while no OSD
+//     drop is active. LibCephFS checks pool permission with its own OSD
+//     operations before it waits for capabilities (Client::check_pool_perm),
+//     so those must not meet a drop; its data reads wait for the Go writer to
+//     release FILE_BUFFER. An OSD drop may follow while the reader waits, and
+//     the reader's result is collected only after that drop is restored.
+//     Status never blocks; wait returns the reader's terminal result.
+//     Control requests stay one at a time while the reader runs.
 //
 // References at mdsFreshSource (LGPL-2.1, no code copied): msg/Connection.cc
 // is_blackhole, msg/async/ProtocolV2.cc handle_message and _conn_prefix,
@@ -43,6 +55,12 @@ import (
 const mdsCephFSWritebackSelector = "^TestCephMDSCephFSWritebackFenceIntegration$"
 
 var mdsCephFSDataOSDConfigNames = []string{"debug_ms", "ms_blackhole_client"}
+
+// mdsCephFSDataOSDDropLimit bounds the OSD drops of one run.
+const mdsCephFSDataOSDDropLimit = 2
+
+// mdsCephFSDataReaderTimeout bounds the background reader's native process.
+const mdsCephFSDataReaderTimeout = 75 * time.Second
 
 type mdsCephFSDataOSDDrop struct {
 	OSD              string            `json:"osd"`
@@ -154,11 +172,15 @@ func (c *fixtureCluster) mdsCephFSDataOSDLogLines(ctx context.Context) ([]string
 	return strings.Split(strings.TrimRight(string(data), "\r\n"), "\n"), nil
 }
 
-// newOSDDrop admits the single OSD drop of a run before any native change.
+// newOSDDrop admits one OSD drop of a run before any native change: never
+// beside another drop that is not restored, never beyond the run's limit.
 func (x *mdsCephFSDataScope) newOSDDrop(id int64, daemon string, baseline map[string]string) (*mdsCephFSDataOSDDrop, error) {
-	if x.osdDrop != nil || x.restart.pending() || x.activeRuntime("client-drop-on", x.current.GID) != nil ||
+	if x.osdDrop != nil && (x.osdDrop.State != "restored" || len(x.osdDropHistory)+1 >= mdsCephFSDataOSDDropLimit) {
+		return nil, errors.New("DATA OSD drop is unrestored or the run's drops are used")
+	}
+	if x.restart.pending() || x.activeRuntime("client-drop-on", x.current.GID) != nil ||
 		x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil {
-		return nil, errors.New("DATA OSD drop was already issued, or a restart or MDS client blackhole is in effect")
+		return nil, errors.New("DATA OSD drop refused while a restart or MDS client blackhole is in effect")
 	}
 	if baseline["ms_blackhole_client"] != "false" || baseline["debug_ms"] == "" {
 		return nil, errors.New("DATA OSD client transport must be running from a false baseline")
@@ -191,6 +213,9 @@ func (c *fixtureCluster) mdsCephFSDataWritebackAct(ctx context.Context, id int64
 			return err
 		}
 		d.LogMark = len(lines)
+		if x.osdDrop != nil {
+			x.osdDropHistory = append(x.osdDropHistory, x.osdDrop)
+		}
 		x.osdDrop, result.OSDDrop = d, d
 		if err := c.mdsCephFSDataJournal(); err != nil {
 			return err
@@ -236,8 +261,160 @@ func (c *fixtureCluster) mdsCephFSDataWritebackAct(ctx context.Context, id int64
 		return nil
 	case "evict":
 		return c.mdsCephFSDataEvict(ctx, id, a.gid, result)
+	case "reader-start":
+		if err := x.readerReady(); err != nil {
+			return err
+		}
+		r := newMDSCephFSDataReaderRun(id)
+		x.reader = r
+		go func() {
+			// The reader outlives this control request, bounded by its own
+			// process timeout.
+			ctx, stop := context.WithTimeout(context.Background(), mdsCephFSDataReaderTimeout+15*time.Second)
+			defer stop()
+			process, native, err := c.mdsCephFSDataRunNativeAdmitted(ctx, "read-shared", "shared-file")
+			r.finish(process, native, err)
+		}()
+		snapshot := r.snapshot()
+		result.Reader = &snapshot
+		return nil
+	case "reader-status":
+		if x.reader == nil {
+			return errors.New("DATA background reader was not started")
+		}
+		snapshot := x.reader.snapshot()
+		result.Reader = &snapshot
+		return nil
+	case "reader-wait":
+		return x.reader.wait(ctx, id, x.osdDrop.active(), result)
 	}
 	return errors.New("DATA writeback action is not admitted")
+}
+
+// mdsCephFSDataReader is the receipt of the background native reader.
+type mdsCephFSDataReader struct {
+	RequestID     int64  `json:"request_id"`
+	State         string `json:"state"`
+	StartedUTC    string `json:"started_utc"`
+	ElapsedMillis int64  `json:"elapsed_ms"`
+	WaitRequestID int64  `json:"wait_request_id,omitempty"`
+	Error         string `json:"error,omitempty"`
+}
+
+// mdsCephFSDataReaderRun tracks the reader goroutine. done closes after the
+// native process ended and its output was decoded.
+type mdsCephFSDataReaderRun struct {
+	mu      sync.Mutex
+	receipt mdsCephFSDataReader
+	started time.Time
+	done    chan struct{}
+	process *ceph.NativeCommandResult
+	native  mdsCephFSDataNative
+	err     error
+}
+
+func newMDSCephFSDataReaderRun(id int64) *mdsCephFSDataReaderRun {
+	now := time.Now()
+	return &mdsCephFSDataReaderRun{receipt: mdsCephFSDataReader{RequestID: id, State: "running", StartedUTC: now.UTC().Format(time.RFC3339Nano)}, started: now, done: make(chan struct{})}
+}
+
+func (r *mdsCephFSDataReaderRun) running() bool {
+	if r == nil {
+		return false
+	}
+	select {
+	case <-r.done:
+		return false
+	default:
+		return true
+	}
+}
+
+func (r *mdsCephFSDataReaderRun) finish(process *ceph.NativeCommandResult, native mdsCephFSDataNative, err error) {
+	r.mu.Lock()
+	r.process, r.native, r.err = process, native, err
+	r.receipt.ElapsedMillis = time.Since(r.started).Milliseconds()
+	r.receipt.State = "completed"
+	if err != nil {
+		r.receipt.State, r.receipt.Error = "failed", err.Error()
+	}
+	r.mu.Unlock()
+	close(r.done)
+}
+
+func (r *mdsCephFSDataReaderRun) snapshot() mdsCephFSDataReader {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.receipt
+	if s.State == "running" {
+		s.ElapsedMillis = time.Since(r.started).Milliseconds()
+	}
+	return s
+}
+
+// readerReady admits the single background reader while no OSD drop is
+// active, no restart is pending and no MDS fault is in effect.
+func (x *mdsCephFSDataScope) readerReady() error {
+	if x.reader != nil {
+		return errors.New("DATA background reader was already started")
+	}
+	if x.restart.pending() || x.activeRuntime("log-pause", x.current.GID) != nil || x.activeRuntime("blackhole-on", x.current.GID) != nil ||
+		x.activeRuntime("client-drop-on", x.current.GID) != nil {
+		return errors.New("DATA background reader refused while a restart or MDS fault is in effect")
+	}
+	if x.osdDrop.active() {
+		return errors.New("DATA background reader refused while the OSD drops client messages")
+	}
+	return nil
+}
+
+// wait returns the reader's terminal result once, after the OSD drop is
+// restored, bounded by the control request.
+func (r *mdsCephFSDataReaderRun) wait(ctx context.Context, id int64, dropActive bool, result *mdsCephFSDataResult) error {
+	if r == nil {
+		return errors.New("DATA background reader was not started")
+	}
+	if dropActive {
+		return errors.New("DATA background reader wait requires the restored OSD drop")
+	}
+	r.mu.Lock()
+	collected := r.receipt.WaitRequestID != 0
+	r.mu.Unlock()
+	if collected {
+		return errors.New("DATA background reader result was already collected")
+	}
+	select {
+	case <-r.done:
+	case <-ctx.Done():
+		return fmt.Errorf("DATA background reader did not end: %w", ctx.Err())
+	}
+	r.mu.Lock()
+	r.receipt.WaitRequestID = id
+	result.Process = r.process
+	err := r.err
+	if err == nil {
+		native := r.native
+		result.Native = &native
+	}
+	r.mu.Unlock()
+	snapshot := r.snapshot()
+	result.Reader = &snapshot
+	return err
+}
+
+// awaitCleanup lets a running reader end before cleanup's native work.
+func (r *mdsCephFSDataReaderRun) awaitCleanup(ctx context.Context, receipt *mdsCephFSDataCleanup) error {
+	if r == nil {
+		return nil
+	}
+	select {
+	case <-r.done:
+	case <-ctx.Done():
+		return errors.New("DATA background reader did not end before cleanup")
+	}
+	snapshot := r.snapshot()
+	receipt.Reader = &snapshot
+	return nil
 }
 
 var dataOSDLogReceived = regexp.MustCompile(`\.handle_message received message m=0x[0-9a-fA-F]+ seq=[0-9]+ from=client\.([0-9]+) type=42 osd_op\(`)
