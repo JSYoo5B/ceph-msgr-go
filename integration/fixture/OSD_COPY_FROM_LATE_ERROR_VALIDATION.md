@@ -137,4 +137,6 @@ mid-vector termination, arbitrary compound rollback, all chunk sizes,
 COPY_FROM Go fault execution, snapshots, EC, modern wire versions,
 secure/aes256k/IPv6 or other topologies. The source-based phase explanation
 is separate from actual native object-state and Go wire observations.
+The separate [multi-chunk cell](OSD_COPY_FROM_MULTICHUNK_ERROR_VALIDATION.md)
+covers the incomplete-cursor branch with its own selector and limits.
 Keep #7 open for its remaining fault and compound requirements.

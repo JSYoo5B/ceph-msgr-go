@@ -113,6 +113,12 @@ func fixtureBootstrapConfig(p profile) string {
 			// history observation alongside the fixture's preparation work.
 			config += "[osd]\nosd_op_history_size = 1024\n"
 		}
+		if p.copyFromMultiChunkSelected() {
+			// OpHistory::cleanup trims the shortest ops first once the
+			// history is full, which discards fast copy-get reads. Only this
+			// exclusive disposable cell starts with a larger history.
+			config += fmt.Sprintf("[osd]\nosd_op_history_size = %d\n", copyHistoryCapacity)
+		}
 	}
 	return config
 }

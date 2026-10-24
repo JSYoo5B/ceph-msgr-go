@@ -52,6 +52,7 @@ var metadataFiles = []string{
 	"osd-omap-write-results.json", "osd-omap-compare-results.json",
 	"osd-copyfrom-compound-results.json",
 	"osd-copyfrom-error-option.json", "osd-copyfrom-late-error-results.json",
+	"osd-copyfrom-staging-history.json", "osd-copyfrom-staging-list.json", "osd-copyfrom-multichunk-results.json",
 	"osd-command-command.json", "osd-command-result.json", "osd-command-results.json",
 	"osd-omap-range-results.json", "osd-call-results.json", "osd-call-compound-results.json", "osd-alloc-hint-results.json",
 	"osd-watch-notify-status.json", "osd-watch-notify-worker.log", "osd-watch-notify-input.json", "osd-watch-notify-result.json", "osd-watch-notify-command.json", "osd-watch-notify-results.json",
