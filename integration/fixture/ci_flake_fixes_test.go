@@ -124,7 +124,7 @@ func TestForcedOSDKillSendsSIGKILLOnceAndRequiresExit137(t *testing.T) {
 }
 
 func TestForcedOSDKillNoLongerUsesDockerStop(t *testing.T) {
-	source, err := os.ReadFile("control.go")
+	source, err := os.ReadFile("control_daemon.go")
 	if err != nil {
 		t.Fatal(err)
 	}
