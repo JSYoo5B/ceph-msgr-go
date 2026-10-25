@@ -193,7 +193,8 @@ func (p rbdClonePlan) owned(token string) bool {
 // watch. Sources: pybind/rbd/rbd.pyx and pybind/rados/rados.pyx at
 // rbdBaseSource; independent driver, no code copied.
 const rbdCloneNativePython = `
-import hashlib, json, os, struct, sys, time
+import faulthandler, hashlib, json, os, struct, sys, time
+faulthandler.enable(file=sys.stderr, all_threads=True)
 import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
@@ -214,6 +215,18 @@ BASE = {'key': NATIVE_KEY, 'rbd_cache': 'false', 'log_to_stderr': 'false', 'err_
 pool, parent, clone = plan['pool'], plan['parent'], plan['clone']
 psnap, csnap = plan['parent_snapshot'], plan['clone_snapshot']
 PREFIX = 'rbd-clone-%s-' % action
+
+def phase(name):
+    # The controller can read this record even if a native signal kills Python.
+    # Diagnostics must not suppress cleanup or replace the action's exception.
+    try:
+        path = OUT + '/rbd-clone-' + action + '-phase.json'
+        with open(path + '.tmp', 'w') as f:
+            json.dump({'token': token, 'action': action, 'request_id': int(request_id), 'phase': name}, f)
+            f.flush()
+        os.replace(path + '.tmp', path)
+    except OSError:
+        pass
 
 def text(value):
     return value.decode('utf-8') if isinstance(value, bytes) else value
@@ -382,16 +395,22 @@ def traced(label, run):
     path = '/tmp/ceph-msgr-rbd-clone-%s-%s.log' % (token, label)
     if os.path.exists(path):
         os.remove(path)
+    phase('traced-client-create')
     traced_cluster = rados.Rados(conffile=CONF, rados_id=identity[len('client.'):], conf=dict(BASE, log_file=path, log_to_file='true', debug_ms='1', debug_rbd='20'))
+    phase('traced-client-connect')
     traced_cluster.connect(timeout=30)
     try:
+        phase('traced-ioctx-open')
         traced_ioctx = traced_cluster.open_ioctx(pool)
         try:
             result = run(traced_ioctx)
         finally:
+            phase('traced-ioctx-close')
             traced_ioctx.close()
     finally:
+        phase('traced-client-shutdown')
         traced_cluster.shutdown()
+    phase('trace-extract')
     lines, copyups = [], []
     with open(path, errors='replace') as f:
         for line in f:
@@ -420,7 +439,9 @@ def traced(label, run):
     os.remove(path)
     return result, lines, copyups
 
+phase('client-create')
 cluster = rados.Rados(conffile=CONF, rados_id=identity[len('client.'):], conf=BASE)
+phase('client-connect')
 cluster.connect(timeout=30)
 out = {'action': action, 'token': token, 'request_id': int(request_id), 'pool': pool, 'parent': parent, 'clone': clone, 'native_global_id': cluster.get_instance_id()}
 try:
@@ -455,15 +476,23 @@ try:
         elif action == 'flatten':
             def run(traced_ioctx):
                 started = time.monotonic_ns()
+                phase('flatten-image-open')
                 with rbd.Image(traced_ioctx, clone) as image:
+                    phase('flatten-call')
                     image.flatten()
+                    phase('flatten-returned')
+                phase('flatten-image-closed')
                 return time.monotonic_ns() - started
             out['flatten_ns'], out['trace'], out['copyup_trace'] = traced('flatten', run)
+        phase('observe')
         observe(ioctx, out)
     finally:
+        phase('ioctx-close')
         ioctx.close()
 finally:
+    phase('client-shutdown')
     cluster.shutdown()
+phase('complete')
 print(json.dumps(out, sort_keys=True))
 `
 
@@ -833,6 +862,14 @@ func (c *fixtureCluster) rbdCloneControl(ctx context.Context, out string, fields
 	}
 	process, native, err := c.rbdCloneRunNative(ctx, action, id)
 	result["native_process"] = process
+	result["phase_diagnostic"] = readRBDClonePhase(out, x.token, action, id)
+	if err != nil && rbdCloneTraced(action) {
+		// A separate read-only process survives a fatal signal in the driver.
+		// Its failure must never replace the original process/mutation outcome.
+		captureCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		result["partial_trace"] = c.captureRBDCloneTrace(captureCtx, x.token, action)
+		cancel()
+	}
 	if err == nil && native.PoolID != x.poolID {
 		err = errors.New("native RBD clone action used another pool")
 	}

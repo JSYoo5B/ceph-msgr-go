@@ -27,6 +27,26 @@ librbd, librados and the native client's own Messenger requests are the
 independent oracles. It does not establish RBD functional equivalence of a
 consumer implementation.
 
+## Native crash diagnostics
+
+Each native clone action publishes a best-effort, token/action/request-bound
+phase receipt. The action receipt includes its last validated phase; a missing
+or invalid phase is reported independently of the mutation result. Flatten
+entry, return, image close, traced Ioctx close and client shutdown have separate
+boundaries. Python faulthandler writes to the native process's bounded stderr.
+Its stack identifies an active binding call, not the native crash instruction.
+
+When a traced native action fails, the surviving Go controller launches one
+bounded, read-only Python process before fixture cleanup. It reads only that
+scope's fixed trace file, keeping at most the last 4 MiB of input and projecting
+at most 96 data-object Messenger lines and 16 copy-up extent-map lines, each at
+most 600 bytes. Symlinks and non-regular files are rejected. Partial lines,
+input clipping and record clipping are reported as truncation; raw trace
+prefixes, auth/configuration lines and filesystem errors are not exported.
+Capture failure is separate from the original native exit and uncertain
+mutation outcome. The failed action is never replayed. A later passing fresh
+fixture does not explain an earlier crash.
+
 ## Test shape
 
 `TestCephRBDCloneIntegration` runs only with `CEPH_MSGR_TEST_RBD=1` and
