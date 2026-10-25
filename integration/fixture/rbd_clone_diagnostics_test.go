@@ -39,6 +39,9 @@ func TestRBDClonePhaseReceiptScope(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.Symlink(path+".target", path); err != nil {
+					if runtime.GOOS == "windows" {
+						t.Skip("symlink creation is unavailable without Windows developer privileges")
+					}
 					t.Fatal(err)
 				}
 			}
@@ -90,6 +93,9 @@ finally:
 }
 
 func TestRBDClonePartialTraceProjection(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the trace reader runs in POSIX fixture containers")
+	}
 	python, err := exec.LookPath("python3")
 	if err != nil {
 		t.Skip("python3 unavailable")
