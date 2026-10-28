@@ -35,3 +35,14 @@ and is observed by a fresh native view
 ([native holder](../integration/fixture/SERVICE_MAP_HOLDER_VALIDATION.md)). It
 is a fixture prerequisite for a later lifecycle cell and verifies no Go watch
 behavior.
+
+`TestCephMonServiceMapLifecycleIntegration` adds a distinct lifecycle recipe:
+independently held native registration A, orderly Stop of the watch's actual
+MON, the same watch registering on another admitted MON, and a new native
+registration B that forces a post-fault map. Explicit release is followed by
+fresh native absence and a newer Go map without either identity. Native cleanup
+and full quorum restoration are checked separately. See the
+[lifecycle recipe and evidence limits](../integration/fixture/SERVICE_MAP_LIFECYCLE_VALIDATION.md)
+for selectors, phase bounds and the distinction from the holder-only test.
+Execution acceptance is tied to the tested SHA/profile recorded on the pull
+request; adding this recipe alone is not a native pass or large-map acceptance.
