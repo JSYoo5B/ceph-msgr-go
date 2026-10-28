@@ -94,6 +94,7 @@ func TestCephMgrServiceColdBootstrapIntegration(t *testing.T) {
 		Initial, Active                                                          mgrServiceNativeMap
 		Before, After                                                            coldBootstrapDialCounts
 		Renewed, KnownDeadline, KnownCancel, KnownClose, CanceledAbsent, Removed bool
+		TicketBefore, TicketAfter                                                time.Time
 		GlobalID                                                                 uint64
 	}{}
 	t.Cleanup(func() {
@@ -178,11 +179,15 @@ func TestCephMgrServiceColdBootstrapIntegration(t *testing.T) {
 	}
 	receipt.KnownClose = known(closed, cephmsgr.ErrClosed)
 	waiting := start(client, ctx, "waiting")
+	receipt.TicketBefore = client.Snapshot().AuthTicket.Expires
+	if receipt.TicketBefore.IsZero() {
+		t.Fatal("pending setup has no initial MON auth ticket")
+	}
 	// A genuine MON renewal must complete while the service setup waits and
 	// without using the shared MGR setup gate for a preparation probe.
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	for !client.Snapshot().AuthTicket.Expires.After(initial.AuthTicket.Expires) {
+	for !client.Snapshot().AuthTicket.Expires.After(receipt.TicketBefore) {
 		if err := client.WaitMonReady(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -198,7 +203,8 @@ func TestCephMgrServiceColdBootstrapIntegration(t *testing.T) {
 		case <-ticker.C:
 		}
 	}
-	receipt.Renewed = true
+	receipt.TicketAfter = client.Snapshot().AuthTicket.Expires
+	receipt.Renewed = receipt.TicketAfter.After(receipt.TicketBefore)
 	before := nativePool(t, ctx, "mgrstate", map[string]any{}).ManagerMap
 	if before == nil || before.Available || before.GID != 0 || before.Name != "" {
 		t.Fatal("manager appeared before activation", before)
