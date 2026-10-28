@@ -805,27 +805,11 @@ func (c *Client) manager(ctx context.Context) (*session.Session, error) {
 }
 
 func (c *Client) managerForBinding(ctx context.Context, binding *managerBinding) (*session.Session, error) {
-	select {
-	case c.mgrGate <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	case <-c.ctx.Done():
-		return nil, ErrClosed
+	release, err := c.beginManagerSetup(ctx)
+	if err != nil {
+		return nil, err
 	}
-	// A MGR connection belongs to the client before its session is attached.
-	// Close must also wait for a canceled handshake to finish cleaning it up.
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		<-c.mgrGate
-		return nil, ErrClosed
-	}
-	c.wg.Add(1)
-	c.mu.Unlock()
-	defer func() {
-		<-c.mgrGate
-		c.wg.Done()
-	}()
+	defer release()
 retryManager:
 	for {
 		if err := ctx.Err(); err != nil {
