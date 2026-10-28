@@ -89,7 +89,7 @@ func TestManagerOwnershipSkipsDescriptorsWithoutContainers(t *testing.T) {
 	}
 	creationErr := errors.New("failed before container creation")
 	err := createManagersWithOwnership(context.Background(), func(_ context.Context, name string) (*ceph.ManagerContainer, error) {
-		return &ceph.ManagerContainer{DaemonName: name}, creationErr
+		return &ceph.ManagerContainer{Container: noContainer, DaemonName: name}, creationErr
 	}, func(created *ceph.ManagerContainer) error { addManagerOwnership(owned, created); return nil })
 	if !errors.Is(err, creationErr) || len(owned) != 1 {
 		t.Fatal("nil container descriptor lost creation failure or corrupted inventory", err, owned)
