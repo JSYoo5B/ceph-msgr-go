@@ -162,12 +162,18 @@ passed in 0.93 seconds:
 | Fresh Go and native reads | B (10002) on the same `mon.b`; the fresh Go read used local connection 3, TID 1, sequence 2 |
 | Native restoration | One `config unset`, signed `0`, status `log_max_recent = ''`; fresh views show effective 10000 and no override |
 
-Earlier heads of the same PR failed in the native worker: the first masked its
-exception, and the second refused the wider diff reply described above. Both
-were worker defects fixed before the passing run, not replay defects. A failed
-worker stops the fixture controller, so later tests of that run fail as
-cascading failures. Final-head execution, Basic CI and run identifiers are
-recorded on the pull request, which supersedes this note for the final SHA.
+Earlier heads of the same PR failed in the native worker. Run
+[40050296724](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/40050296724)
+at `ae5123547d3a9c3d74f75873d8b380144fc68dbd` masked the baseline-worker
+exception; its underlying cause remains unconfirmed. Separately, run
+[40050998601](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/40050998601)
+at `c5b8f2aae6078dd0a8e06954c7cb815e3e1bcf64` retained the wider-diff refusal
+addressed by the filtering change in `08d45dac1ee50f34a5a99b812722e9b83b07d72b`.
+That correction and the later passing run do not explain the first failure;
+neither establishes a product replay defect. A failed worker stops the fixture
+controller, so later tests of that run fail as cascading failures. Final-head
+execution, Basic CI and run identifiers are recorded on the pull request,
+which supersedes this note for the final SHA.
 No exactly-once server execution, secure-frame transaction capture, other
 profile, restart of the target MON, current `MonTell`/`MgrTell`, exact
 `MgrTellTo` or targeted OSD/PG/MDS applied mutation, or completion of #63 is

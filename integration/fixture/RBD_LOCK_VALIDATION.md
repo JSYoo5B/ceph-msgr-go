@@ -406,9 +406,9 @@ Not verified here:
   EXISTS_CLEAN, fast-diff between snapshots), object-map resize or invalidation
   and `rebuild_object_map`, discard and other writes with post-write map
   updates, clones/parents/copy-up, larger orders and fancy striping;
-- the Go watch's periodic ping (no ping was due), watch reconnect, notify
-  timeouts, cancellation, uncertain outcomes and daemon failures during the
-  lock exchange;
+- the Go watch's periodic ping (no ping was due), watch reconnect and additional
+  notify-timeout/cancellation/uncertain-outcome/daemon-fault combinations beyond
+  the selected RequestLock acknowledgement-disposition cells above;
 - the replicated-PG profiles, three replicas, EC pools, combinations other than
   the two recorded, the CI rows on GitHub runners (selector changed, not
   executed), Windows and long-running operation.
