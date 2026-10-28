@@ -1246,6 +1246,19 @@
     "osd_profile": "legacy-v6",
     "test_run": "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"
    }
+  },
+  {
+   "id": "mgr-service.aes256k.ip4.container.managers-0.t-mgrservicecoldbootstrap",
+   "group": "mgr-service",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "runtime": "container",
+    "managers": "0",
+    "mgr_service": "1",
+    "test_run": "^TestCephMgrServiceColdBootstrapIntegration$"
+   }
   }
  ],
  "fixed_jobs": [

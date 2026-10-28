@@ -52,8 +52,9 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 2 mds-cephfs-capsend, 1 native SET_CHUNK checkpoint, 1 Go SET_CHUNK acceptance,
         # 2 mds-cephfs-writeback, 2 mds-cephfs-multi-reconnect,
         # 1 exclusive COPY_FROM2 late-error cell, 1 applied EC resubmission,
-        # 1 exclusive multi-chunk COPY_FROM2 late-error cell and 1 CRC compression-offer row.
-        self.assertEqual(len(self.rows), 82)
+        # 1 exclusive multi-chunk COPY_FROM2 late-error cell, 1 CRC compression-offer row,
+        # and 1 zero-initial-MGR service bootstrap row.
+        self.assertEqual(len(self.rows), 83)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
@@ -170,10 +171,13 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertEqual(rows, [
             dict(common, key="aes", service="aes", mode="crc", family="4", runtime="host"),
             dict(common, key="aes256k", service="aes256k", family="6", runtime="container"),
+            dict(key="aes256k", service="aes256k", family="4", runtime="container", managers="0",
+                 mgr_service="1", test_run="^TestCephMgrServiceColdBootstrapIntegration$"),
         ])
-        expected = "TestCephMgrServiceRegistrationIntegration"
-        self.assertIn(expected, self.declared)
         for row in rows:
+            expected = ("TestCephMgrServiceColdBootstrapIntegration" if row.get("managers") == "0"
+                        else "TestCephMgrServiceRegistrationIntegration")
+            self.assertIn(expected, self.declared)
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
             for unrelated in (expected + "Extended", "Prefix" + expected, "TestCephMonServiceMapIntegration"):
