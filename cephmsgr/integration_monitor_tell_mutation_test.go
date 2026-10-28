@@ -31,6 +31,17 @@ func goMonTellValue(t *testing.T, ctx context.Context, c *Client, target string)
 // reads the later value through fresh sessions. A restart would clear the
 // override, so the surviving distinct override also shows the same incarnation.
 func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
+	testAppliedMonitorTell(t, false)
+}
+
+// The current-MON API shares the admitted primary connection. Losing its reply
+// ends that primary session, unlike MonTellTo's operation-private connection.
+func TestCephAppliedCurrentMonitorTellIsNotReplayedIntegration(t *testing.T) {
+	testAppliedMonitorTell(t, true)
+}
+
+func testAppliedMonitorTell(t *testing.T, current bool) {
+	t.Helper()
 	observer, ctx := fixtureClient(t, 3*time.Minute)
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	const target = "b"
@@ -98,6 +109,12 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 	}
 
 	options := integrationOptions(t)
+	if current {
+		options, err = currentMonTellBootstrap(options, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	dial := options.DialContext
 	var writes atomic.Int32
 	var connectionID atomic.Uint64
@@ -135,18 +152,38 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
+	c.mu.Lock()
+	primary := c.mon
+	c.mu.Unlock()
+	if current {
+		_, peer, err := testcluster.SplitPeer(primary.RemoteAddr().String())
+		if err != nil || peer != role {
+			t.Fatal("current-MON bootstrap did not admit the owned target", peer, err)
+		}
+	}
 	probe.enabled.Store(options.ConnectionMode == CRCMode)
 	c.mu.Lock()
 	fsid := c.fsid
 	c.mu.Unlock()
 	identity := monTellOutcomeIdentity{PrimaryGlobalID: c.snapshotAuth().GlobalID, Target: role, Baseline: original}
+	writeIdentity := func() {
+		if current {
+			writeCurrentMonTellOutcomeIdentity(t, control, identity)
+		} else {
+			writeMonTellOutcomeIdentity(t, control, identity)
+		}
+	}
 	commandA := monTellSetCommand(a, 40<<10)
 	frontA := msgr.TellCommand(fsid, []string{string(commandA.JSON)}, nil).Front
 	var originalResult Result
 	finished := make(chan error, 1)
 	go func() {
 		var err error
-		originalResult, err = c.MonTellTo(ctx, target, commandA)
+		if current {
+			originalResult, err = c.MonTell(ctx, commandA)
+		} else {
+			originalResult, err = c.MonTellTo(ctx, target, commandA)
+		}
 		finished <- err
 	}()
 	// A is established natively while its reply is still withheld.
@@ -173,7 +210,7 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 			submitted.Peer, submitted.Connection, identity.PrimaryGlobalID, submitted.Transaction, submitted.Sequence)
 	}
 	identity.PaddedWrites = writes.Load()
-	writeMonTellOutcomeIdentity(t, control, identity)
+	writeIdentity()
 	// An independent client explicitly establishes distinct B on the same
 	// daemon. A replay of A would overwrite it.
 	if _, err := observer.MonTellTo(ctx, target, monTellSetCommand(b, 0)); err != nil {
@@ -192,6 +229,14 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 		t.Fatal("the exact-target gate never recorded its withheld connection")
 	}
 	withheld.Close()
+	if current {
+		select {
+		case <-primary.Done():
+			t.Log("the withheld current-MON Tell connection was the admitted primary session")
+		case <-ctx.Done():
+			t.Fatal("subject loss did not terminate the original primary MON session", ctx.Err())
+		}
+	}
 	select {
 	case err := <-finished:
 		var unknown *OutcomeUnknownError
@@ -202,10 +247,26 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 			t.Fatal("unanswered Tell unexpectedly gained an acknowledged server result", originalResult)
 		}
 		identity.OutcomeUnknown = true
-		writeMonTellOutcomeIdentity(t, control, identity)
+		writeIdentity()
 		t.Log("original caller retained OutcomeUnknownError; later native observations do not acknowledge it")
 	case <-ctx.Done():
 		t.Fatal("ending the subject connection did not release the pending Tell", ctx.Err())
+	}
+	if current {
+		if err := c.WaitMonReady(ctx); err != nil {
+			t.Fatal("current-MON client did not recover after its unanswered Tell", err)
+		}
+		c.mu.Lock()
+		recoveredPrimary := c.mon
+		c.mu.Unlock()
+		if recoveredPrimary == primary || recoveredPrimary == nil || recoveredPrimary.Err() != nil {
+			t.Fatal("recovery reused the terminated primary MON session")
+		}
+		_, recoveryPeer, peerErr := testcluster.SplitPeer(recoveredPrimary.RemoteAddr().String())
+		if peerErr != nil || recoveryPeer == "" {
+			t.Fatal("recovered primary has no owned MON identity", peerErr)
+		}
+		t.Logf("current-MON recovery established another admitted primary: %s", recoveryPeer)
 	}
 	// Fresh exact-target Go sessions and a fresh native handle read B.
 	if got := goMonTellValue(t, ctx, c, target); got != b || writes.Load() != 1 {
@@ -234,7 +295,7 @@ func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 		t.Log("secure mode: native state and padded local write count checked; CRC transaction receipt is unavailable")
 	}
 	identity.PaddedWrites = writes.Load()
-	writeMonTellOutcomeIdentity(t, control, identity)
+	writeIdentity()
 	t.Logf("%s (rank %d) applied %d; independent overwrite %d confirmed natively on the same daemon; fresh Go and native sessions kept %d; padded local writes=%d (not a server execution count)",
 		role, rank, a, b, b, writes.Load())
 }
