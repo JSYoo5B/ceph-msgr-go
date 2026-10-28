@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
 	containerexec "github.com/testcontainers/testcontainers-go/exec"
 )
 
@@ -348,7 +349,7 @@ func serve(ctx context.Context, project, out string, p profile) (result error) {
 	}
 }
 
-func recordOwnership(c *fixtureCluster, out string) error {
+func recordOwnership(c *fixtureCluster, out string, created ...*ceph.ManagerContainer) error {
 	if c == nil {
 		return nil
 	}
@@ -366,9 +367,9 @@ func recordOwnership(c *fixtureCluster, out string) error {
 	for _, mon := range c.cluster.Monitors() {
 		owned["mon."+mon.DaemonName] = mon.GetContainerID()
 	}
-	for _, mgr := range c.cluster.Managers() {
-		owned["mgr."+mgr.DaemonName] = mgr.GetContainerID()
-	}
+	addManagerOwnership(owned, c.cluster.Managers()...)
+	// Preserve even a returned partial descriptor absent from a later snapshot.
+	addManagerOwnership(owned, created...)
 	for _, osd := range c.cluster.OSDs() {
 		owned[fmt.Sprintf("osd.%d", osd.ID)] = osd.GetContainerID()
 	}
@@ -378,7 +379,11 @@ func recordOwnership(c *fixtureCluster, out string) error {
 	if control := c.cluster.ControlContainer(); control != nil {
 		owned["control"] = control.GetContainerID()
 	}
-	data, err := json.MarshalIndent(map[string]any{"container_id": containerID, "network": c.NetworkName(), "containers": owned}, "", "  ")
+	return writeFixtureOwnership(out, containerID, c.NetworkName(), owned)
+}
+
+func writeFixtureOwnership(out, containerID, network string, owned map[string]string) error {
+	data, err := json.MarshalIndent(map[string]any{"container_id": containerID, "network": network, "containers": owned}, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -489,4 +494,17 @@ func envList(values map[string]string) []string {
 		env = append(env, key+"="+values[key])
 	}
 	return env
+}
+
+// A descriptor can own authentication state before any container exists. Only
+// inspectable container IDs belong in the Docker cleanup inventory.
+func addManagerOwnership(owned map[string]string, managers ...*ceph.ManagerContainer) {
+	for _, mgr := range managers {
+		if mgr == nil || mgr.Container == nil {
+			continue
+		}
+		if id := mgr.Container.GetContainerID(); id != "" {
+			owned["mgr."+mgr.DaemonName] = id
+		}
+	}
 }

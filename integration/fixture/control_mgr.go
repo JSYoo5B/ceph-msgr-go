@@ -134,15 +134,10 @@ func (c *fixtureCluster) controlManagerServiceConfigRequest(ctx context.Context,
 func (c *fixtureCluster) controlManagerStartRequest(ctx context.Context, out string) error {
 	var err error
 	if fileExists(filepath.Join(out, "start-mgrs")) && !fileExists(filepath.Join(out, "mgrs-started")) {
-		for _, name := range []string{"a", "b"} {
-			if _, err = c.cluster.AddManager(ctx, name); err != nil {
-				return err
-			}
-			// Include each newly created daemon even if the next activation
-			// fails; final independent cleanup must not use startup topology.
-			if err = recordOwnership(c, out); err != nil {
-				return err
-			}
+		if err = createManagersWithOwnership(ctx, c.cluster.AddManager, func(created *ceph.ManagerContainer) error {
+			return recordOwnership(c, out, created)
+		}); err != nil {
+			return err
 		}
 		if err = c.waitReady(ctx, true); err != nil {
 			return err
@@ -178,6 +173,20 @@ func (c *fixtureCluster) controlManagerSecurityRequest(ctx context.Context, out 
 			return err
 		}
 		if err = publishAck(out, "mgr-secure."+fields[0]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// AddManager may return an owned descriptor and an error after creating its
+// container. Persist that attempt before returning, including partial failure.
+// Neither manager creation nor an uncertain creation error is retried here.
+func createManagersWithOwnership(ctx context.Context, add func(context.Context, string) (*ceph.ManagerContainer, error), persist func(*ceph.ManagerContainer) error) error {
+	for _, name := range []string{"a", "b"} {
+		created, creationErr := add(ctx, name)
+		inventoryErr := persist(created)
+		if err := errors.Join(creationErr, inventoryErr); err != nil {
 			return err
 		}
 	}
