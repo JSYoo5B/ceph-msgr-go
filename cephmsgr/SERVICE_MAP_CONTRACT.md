@@ -27,11 +27,22 @@ and once in request-v9 IPv6 AES256K. Earlier attempts read the stream only
 after the native client had exited and so sometimes saw the daemon already
 gone; that was a test-ordering problem, not a decoding one. The first live run
 also found that such daemons carry an AF_UNSPEC address, which the shared
-address decoder now accepts as "no endpoint". Daemon removal timing, MON
-failover during the watch and large maps are unverified.
+address decoder now accepts as "no endpoint". At that checkpoint, daemon
+removal timing, MON failover during the watch and large maps were unverified.
 
 A native holder keeps a synthetic registration alive under independent control
 and is observed by a fresh native view
 ([native holder](../integration/fixture/SERVICE_MAP_HOLDER_VALIDATION.md)). It
 is a fixture prerequisite for a later lifecycle cell and verifies no Go watch
 behavior.
+
+`TestCephMonServiceMapLifecycleIntegration` adds a distinct lifecycle recipe:
+independently held native registration A, orderly Stop of the watch's actual
+MON, the same watch registering on another admitted MON, and a new native
+registration B that forces a post-fault map. Explicit release is followed by
+fresh native absence and a newer Go map without either identity. Native cleanup
+and full quorum restoration are checked separately. See the
+[lifecycle recipe and evidence limits](../integration/fixture/SERVICE_MAP_LIFECYCLE_VALIDATION.md)
+for selectors, phase bounds and the distinction from the holder-only test.
+Execution acceptance is tied to the tested SHA/profile recorded on the pull
+request; adding this recipe alone is not a native pass or large-map acceptance.
