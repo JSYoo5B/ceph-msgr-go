@@ -80,7 +80,10 @@ func TestManagerCreationPreservesCreationAndInventoryErrors(t *testing.T) {
 
 func TestManagerOwnershipSkipsDescriptorsWithoutContainers(t *testing.T) {
 	owned := map[string]string{"mon.a": "monitor"}
-	addManagerOwnership(owned, nil, &ceph.ManagerContainer{DaemonName: "a"}, &ceph.ManagerContainer{Container: managerOwnershipContainer{}, DaemonName: "b"})
+	var noContainer *testcontainers.DockerContainer
+	addManagerOwnership(owned, nil, &ceph.ManagerContainer{DaemonName: "a"},
+		&ceph.ManagerContainer{Container: noContainer, DaemonName: "typed-nil"},
+		&ceph.ManagerContainer{Container: managerOwnershipContainer{}, DaemonName: "b"})
 	if len(owned) != 1 || owned["mon.a"] != "monitor" {
 		t.Fatal("nil/empty container descriptor entered inventory", owned)
 	}

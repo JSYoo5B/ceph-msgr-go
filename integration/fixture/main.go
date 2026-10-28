@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"syscall"
@@ -501,6 +502,11 @@ func envList(values map[string]string) []string {
 func addManagerOwnership(owned map[string]string, managers ...*ceph.ManagerContainer) {
 	for _, mgr := range managers {
 		if mgr == nil || mgr.Container == nil {
+			continue
+		}
+		// testcontainers.Run returns *DockerContainer. A nil result assigned
+		// to the embedded interface is not itself a nil interface.
+		if value := reflect.ValueOf(mgr.Container); value.Kind() == reflect.Pointer && value.IsNil() {
 			continue
 		}
 		if id := mgr.Container.GetContainerID(); id != "" {
