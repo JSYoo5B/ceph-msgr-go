@@ -165,25 +165,11 @@ func (c *Client) releaseMgrService(svc *MgrService) {
 // dialMgrService opens a connection to the current active MGR for svc, bound
 // to that MGR's name, GID, addresses and the client's authenticated identity.
 func (c *Client) dialMgrService(ctx context.Context, svc *MgrService) error {
-	select {
-	case c.mgrGate <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-c.ctx.Done():
-		return ErrClosed
+	release, err := c.beginManagerSetup(ctx)
+	if err != nil {
+		return err
 	}
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		<-c.mgrGate
-		return ErrClosed
-	}
-	c.wg.Add(1)
-	c.mu.Unlock()
-	defer func() {
-		<-c.mgrGate
-		c.wg.Done()
-	}()
+	defer release()
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
