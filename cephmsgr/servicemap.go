@@ -175,32 +175,14 @@ func (s *ServiceMapStream) Close() error {
 // context drains accepted data before returning the stable terminal cause.
 // Cancellation affects only this call; an already canceled context consumes nothing.
 func (s *ServiceMapStream) Next(ctx context.Context) (ServiceMap, error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return ServiceMap{}, err
-		}
-		s.client.mu.Lock()
+	return nextStreamItem(ctx, s.client, s.ctx, func() (ServiceMap, bool, error, <-chan struct{}) {
 		if s.pending != nil {
 			next := *s.pending
 			s.pending = nil
-			s.client.mu.Unlock()
-			return next, nil
+			return next, true, nil, nil
 		}
-		err, changed := s.terminal, s.changed
-		s.client.mu.Unlock()
-		if err != nil {
-			return ServiceMap{}, err
-		}
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return ServiceMap{}, ctx.Err()
-		case <-s.ctx.Done():
-			s.stop(s.ctx.Err())
-		case <-s.client.ctx.Done():
-			s.stop(ErrClosed)
-		}
-	}
+		return ServiceMap{}, false, s.terminal, s.changed
+	}, s.stop)
 }
 
 // Error inspection and cancellation may invoke custom code; neither runs
