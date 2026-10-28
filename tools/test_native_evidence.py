@@ -3,6 +3,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -219,7 +220,23 @@ class NativeEvidenceTests(unittest.TestCase):
                    "controller_sha": "b537120efe464d9f21f76fe3fd9f5152cd91e4fc", "run_id": 2026102301, "attempt": 1,
                    "matrix": dict(evidence.PROFILES[0], scenario=evidence.scenario_id(evidence.PROFILES[0]))}
         path = scenario_plan.ROOT / ".github/scenarios/testdata/cap-send-native-v1"
-        manifest = evidence.verify(path, evidence.context(request))
+        try:
+            manifest = evidence.verify(path, evidence.context(request))
+        except evidence.EvidenceError as error:
+            # Preserve checkout-byte diagnostics without normalizing evidence or
+            # changing the independently recorded manifest's hashes.
+            records = json.loads((path / "manifest.json").read_bytes())["files"]
+            diagnostic = []
+            for record in records:
+                data = (path / record["name"]).read_bytes()
+                diagnostic.append({"name": record["name"], "recorded_size": record["size"], "size": len(data),
+                                   "recorded_sha256": record["sha256"], "sha256": hashlib.sha256(data).hexdigest(),
+                                   "crlf": data.count(b"\r\n"), "lf": data.count(b"\n")})
+            relative = [str((path / record["name"]).relative_to(scenario_plan.ROOT)).replace("\\", "/") for record in records]
+            attributes = subprocess.run(["git", "check-attr", "text", "eol", "--", *relative], cwd=scenario_plan.ROOT,
+                                        capture_output=True, text=True, check=False)
+            self.fail("retained bundle failed %s; checkout bytes=%s; attributes=%s" %
+                      (error, json.dumps(diagnostic, sort_keys=True), attributes.stdout.strip()))
         self.assertEqual(manifest["total_bytes"], 3348)
         caps = json.loads((path / "cap-send.json").read_text())
         self.assertEqual([flush["tid"] for flush in caps["flushes"]], [6, 7])

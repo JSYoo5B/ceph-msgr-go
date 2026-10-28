@@ -127,7 +127,7 @@ func TestLegacyCRUSHForInventoryExtendsOnlyDevicesAndRoot(t *testing.T) {
 	four, err := legacyCRUSHForInventory(string(template), []int{0, 1, 2, 3})
 	if err != nil || !strings.Contains(four, "device 3 osd.3\ntype 0 osd") || !strings.Contains(four, "    item osd.3 weight 1.00000\n}") ||
 		strings.Count(four, "device ") != 4 || strings.Count(four, "item osd.") != 4 {
-		t.Fatalf("four-OSD map:\n%s %v", four, err)
+		t.Fatalf("four-OSD map (template bytes=%d, CRLF=%d):\n%q %v", len(template), strings.Count(string(template), "\r\n"), four, err)
 	}
 	for name, bad := range map[string]string{
 		"already extended": three,

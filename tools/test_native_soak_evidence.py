@@ -377,9 +377,17 @@ class NativeSoakEvidenceTests(unittest.TestCase):
 
     # Unsafe names, inputs and outputs --------------------------------------
 
-    def test_unsafe_receipt_names_are_refused(self):
+    def test_unsafe_receipt_names_are_refused_without_filesystem_setup(self):
+        # Trailing spaces, case aliases and control characters are not portable
+        # filesystem inputs. Exercise the verifier's name boundary directly.
         for name in ("osd-soak-v1-steady-worker-0.json.bak", "osd-soak-v1-steady-worker-0.json ", "osd-soak-v1-fixture-termination.JSON",
-                     "osd-soak-v1-steady-worker-00.json", "osd-soak-v1-extra", "osd-soak-v1-.._x.json", "osd-soak-v1-steady-started.json\n"):
+                     "osd-soak-v1-steady-worker-00.json", "osd-soak-v1-extra", "osd-soak-v1-.._x.json", "osd-soak-v1-steady-started.json\n",
+                     "osd-soak-v1-steady-started.json\r", "osd-soak-v1-steady-started.json\x00"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "invalid workload receipt entry"):
+                receipts.validate_receipt_names([name])
+
+    def test_portable_unsafe_receipt_entries_are_refused_by_collector(self):
+        for name in ("osd-soak-v1-steady-worker-0.json.bak", "osd-soak-v1-steady-worker-00.json", "osd-soak-v1-extra", "osd-soak-v1-.._x.json"):
             path = self.receipts / name
             path.write_text("{}")
             with self.subTest(name=name):
