@@ -25,6 +25,8 @@ TESTS = (CHECKPOINT, MULTISTRIPE)
 MULTISTRIPE_SIZE = 6 << 20
 SOURCE = "7f793731f1b39eb4f465e960113d2363c311b964"
 IMAGE_DIGEST = "6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+# Match rgwNativeCallMethods in integration/fixture, including its eight-call bound.
+CALL_METHOD = re.compile(r"(?:\[|,)call ([a-z_]+\.[a-z_]+)(?:[ ,\]]|$)")
 CLEANUP = re.compile(r"RGW_NATIVE_CLEANUP independent inspection confirms containers=([1-9][0-9]*) volumes=([1-9][0-9]*) network=removed")
 
 
@@ -81,12 +83,13 @@ def check_multistripe(receipt):
         if not isinstance(receipt.get(field), list) or not receipt[field]:
             problems.append("receipt has no %s" % field)
     put = [op.get("tid") for op in receipt.get("put_reception", []) if isinstance(op, dict) and isinstance(op.get("tid"), int)]
-    for field, tokens in (("delete_head_remove", ("call rgw.obj_remove",)),
-                          ("delete_gc_enqueue", ("rgw_gc.rgw_gc_queue_enqueue", "call rgw.gc_set_entry"))):
+    for field, methods in (("delete_head_remove", ("rgw.obj_remove",)),
+                           ("delete_gc_enqueue", ("rgw_gc.rgw_gc_queue_enqueue", "rgw.gc_set_entry"))):
         for op in receipt.get(field, []):
             description = op.get("description", "") if isinstance(op, dict) else ""
             tid = op.get("tid") if isinstance(op, dict) else None
-            if not put or not isinstance(tid, int) or tid <= max(put) or not any(token in description for token in tokens):
+            observed_methods = CALL_METHOD.findall(description)[:8]
+            if not put or not isinstance(tid, int) or tid <= max(put) or not any(method in observed_methods for method in methods):
                 problems.append("%s entry is not a DELETE-phase request with its expected method" % field)
     tails = len(stripes) - (0 if receipt.get("head_sentinel") else 1)
     if tails < 1 or receipt.get("gc_removed_tails") != tails:

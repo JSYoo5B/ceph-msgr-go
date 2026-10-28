@@ -89,6 +89,37 @@ class RGWNativeGateTest(unittest.TestCase):
             line = "RGW_NATIVE_MULTISTRIPE " + json.dumps(bad)
             self.assertFalse(gate.verify(stream(MULTI, line=line), MULTI)["passed"], name)
 
+    def test_delete_methods_require_complete_call_tokens(self):
+        cases = (
+            ("delete_head_remove", "rgw.obj_remove"),
+            ("delete_gc_enqueue", "rgw_gc.rgw_gc_queue_enqueue"),
+            ("delete_gc_enqueue", "rgw.gc_set_entry"),
+        )
+        for field, method in cases:
+            for description in (
+                "osd_op(x [call %s in=9b])" % method,
+                "[create,call version.check_conds in=18b,call %s in=9b]" % method,
+            ):
+                with self.subTest(field=field, description=description):
+                    value = receipt(**{field: [{"tid": 21, "description": description}]})
+                    result = gate.verify(stream(MULTI, line="RGW_NATIVE_MULTISTRIPE " + json.dumps(value)), MULTI)
+                    self.assertTrue(result["passed"], result["problems"])
+            for description in (
+                "[call %s_extra in=9b]" % method,
+                "[call prefix_%s in=9b]" % method,
+                "[setxattr user.%s (1)]" % method,
+                "[read %s in=9b]" % method,
+                "[not_call %s in=9b]" % method,
+                "[call %s.extra in=9b]" % method,
+                "[call %s9 in=9b]" % method,
+                "[" + ",".join(["call other.method in=1b"] * 8 + ["call %s in=9b" % method]) + "]",
+            ):
+                with self.subTest(field=field, description=description):
+                    value = receipt(**{field: [{"tid": 21, "description": description}]})
+                    result = gate.verify(stream(MULTI, line="RGW_NATIVE_MULTISTRIPE " + json.dumps(value)), MULTI)
+                    self.assertFalse(result["passed"])
+                    self.assertTrue(any(field + " entry" in problem for problem in result["problems"]), result)
+
     def test_head_sentinel_counts_every_stripe_as_a_tail(self):
         bad = receipt(head_sentinel="m_head", gc_removed_tails=2)
         result = gate.verify(stream(MULTI, line="RGW_NATIVE_MULTISTRIPE " + json.dumps(bad)), MULTI)
