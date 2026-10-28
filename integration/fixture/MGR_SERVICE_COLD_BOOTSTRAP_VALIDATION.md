@@ -25,7 +25,9 @@ metadata-update or configuration control is granted by this profile.
    Go client. Require MON readiness and the corresponding unavailable Go map.
 2. Service setup deadlines, cancellation and client Close must return known
    pre-send failures. Keep one further setup pending while a new MON auth
-   ticket expiry is observed and raw MON status commands continue working.
+   ticket expiry is observed. While waiting, the test issues raw MON status
+   probes conditionally; renewal itself, not a required probe count, establishes
+   MON progress for this cell.
 3. Record every subject/closed-client dial attempt in a bounded ledger. Before
    activation all attempts must match authenticated MON endpoints, with no
    MGR, unclassified or omitted-overflow attempts. The initial peer inventory
