@@ -6,3 +6,7 @@
 tools/*_native_encoder.cc text eol=lf
 # Optional native client oracle provenance also hashes source bytes.
 tools/*_oracle.cc text eol=lf
+# Retained native evidence must keep its recorded bytes, including on Windows.
+.github/scenarios/testdata/cap-send-native-v1/*.json -text
+# This Linux fixture template is expanded with literal LF boundaries.
+integration/fixture/legacy.crush.txt text eol=lf

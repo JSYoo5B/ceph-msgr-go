@@ -23,6 +23,17 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def validate_receipt_names(names):
+    """Check the closed filename vocabulary before touching receipt contents.
+
+    Keep this boundary independent of filesystem filename restrictions so a
+    platform cannot silently narrow which malformed names are rejected.
+    """
+    for index, name in enumerate(names):
+        require(NAME.fullmatch(name) is not None, "invalid workload receipt entry")
+        require(index < 256, "too many workload receipts")
+
+
 def unique_object(pairs):
     out = {}
     for key, value in pairs:
@@ -51,9 +62,10 @@ def verify(directory, revision, image, duration_ns, labels=("steady", "failover"
     require(labels and len(set(labels)) == len(labels) and all(label in TESTS for label in labels), "invalid expected workload selection")
     labels = list(labels)
     files = {}
-    for path in sorted(directory.glob("osd-soak-v1-*")):
-        require(NAME.fullmatch(path.name) is not None and not path.is_symlink() and path.is_file(), "invalid workload receipt entry")
-        require(len(files) < 256, "too many workload receipts")
+    paths = sorted(directory.glob("osd-soak-v1-*"))
+    validate_receipt_names(path.name for path in paths)
+    for path in paths:
+        require(not path.is_symlink() and path.is_file(), "invalid workload receipt entry")
         files[path.name] = path
     hashes = {}
 
