@@ -228,6 +228,19 @@ func testAppliedMonitorTell(t *testing.T, current bool) {
 	if withheld == nil {
 		t.Fatal("the exact-target gate never recorded its withheld connection")
 	}
+	if current {
+		c.mu.Lock()
+		stillPrimary := c.mon == primary && c.monReady
+		c.mu.Unlock()
+		if !stillPrimary || primary.Err() != nil {
+			t.Fatal("the original primary changed before the controlled current-Tell loss")
+		}
+		select {
+		case <-primary.Done():
+			t.Fatal("the original primary ended before its controlled connection loss")
+		default:
+		}
+	}
 	withheld.Close()
 	if current {
 		select {
