@@ -49,7 +49,7 @@ func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string
 		return err
 	}
 	if fields != nil {
-		if len(fields) != 2 || c.profile.osd != "1" || !nativeOwnedPoolModes[fields[1]] {
+		if len(fields) != 2 || !nativePoolModeAllowed(c.profile, fields[1]) {
 			return errors.New("invalid native owned-pool oracle request")
 		}
 		if (fields[1] == "servicemetadata" || fields[1] == "servicecompare" || fields[1] == "mgrstate") && c.profile.mgrService != "1" {
@@ -73,4 +73,10 @@ func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string
 		}
 	}
 	return nil
+}
+
+// Cold bootstrap admits only MON MgrMap observation and the bounded service
+// identity watch. It does not grant object/pool control to a MON-only fixture.
+func nativePoolModeAllowed(p profile, mode string) bool {
+	return nativeOwnedPoolModes[mode] && (p.osd == "1" || p.mgrServiceColdBootstrap() && (mode == "mgrstate" || mode == "servicewatch"))
 }

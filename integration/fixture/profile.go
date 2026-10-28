@@ -333,14 +333,19 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 	}
 	if p.mgrService == "1" {
-		// Go service registration changes the cluster's service map, observed by
-		// the native owned-pool oracle; it needs the single-OSD legacy-v6 fixture.
+		// Ordinary service acceptance uses the one-OSD oracle fixture. Cold
+		// bootstrap instead admits only a closed MON-only observation recipe.
 		selected = "^TestCephMgrServiceRegistrationIntegration$"
-		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mgrCount != "2" || p.mdsFresh != "0" || p.rbdBase != "0" ||
+		topologyAllowed := p.osd == "1" && p.mgrCount == "2"
+		if p.mgrCount == "0" {
+			selected = mgrServiceColdBootstrapSelector
+			topologyAllowed = p.osd == "0" && p.runtime == "container"
+		}
+		if !topologyAllowed || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || p.rbdBase != "0" ||
 			p.monPing != "0" || p.osdCachePools != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" ||
 			p.nativeMgrPreparation != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.stressDuration != "" || p.osdSoak != "" || p.monFreeze != "" ||
 			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.testRun != "" && p.testRun != selected {
-			return profile{}, fmt.Errorf("MGR service registration acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture and two MGRs", selected)
+			return profile{}, fmt.Errorf("MGR service acceptance requires its exclusive selector %s and either two MGRs with one legacy-v6 OSD or zero initial MGRs without OSDs", selected)
 		}
 	}
 	if p.osdTopology().erasureCapacity {
@@ -622,4 +627,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		result["CEPH_MSGR_RBD_BASE_KEY_FILE"] = filepath.Join(controlDir, "rbd-base.key")
 	}
 	return result
+}
+
+const mgrServiceColdBootstrapSelector = "^TestCephMgrServiceColdBootstrapIntegration$"
+
+func (p profile) mgrServiceColdBootstrap() bool {
+	return p.mgrService == "1" && p.mgrCount == "0" && p.osd == "0" && p.testRun == mgrServiceColdBootstrapSelector
 }

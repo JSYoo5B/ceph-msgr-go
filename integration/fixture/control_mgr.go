@@ -138,6 +138,11 @@ func (c *fixtureCluster) controlManagerStartRequest(ctx context.Context, out str
 			if _, err = c.cluster.AddManager(ctx, name); err != nil {
 				return err
 			}
+			// Include each newly created daemon even if the next activation
+			// fails; final independent cleanup must not use startup topology.
+			if err = recordOwnership(c, out); err != nil {
+				return err
+			}
 		}
 		if err = c.waitReady(ctx, true); err != nil {
 			return err

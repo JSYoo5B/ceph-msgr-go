@@ -169,6 +169,16 @@ The [configuration record](../integration/fixture/MGR_SERVICE_CONFIGURATION_VALI
 separates synthetic repeated pushes, the first failed native expectation and
 corrected native observations.
 
+The separate `TestCephMgrServiceColdBootstrapIntegration` parent starts with
+zero MGR daemons and no OSDs, then explicitly creates the owned MGRs once.
+It requires native MON map absence, MON readiness and ticket renewal, known
+pre-send cancellation/deadline/Close results, complete dial attribution against
+authenticated map endpoints, one pending open completing after activation,
+native registration identity, acknowledged close and stable removal. The
+[cold-bootstrap recipe](../integration/fixture/MGR_SERVICE_COLD_BOOTSTRAP_VALIDATION.md)
+defines its closed container profile and evidence gate; test presence alone
+is not a successful native execution claim.
+
 ## Not verified
 
 - Native vectors for nonempty daemon extensions and older configure versions
