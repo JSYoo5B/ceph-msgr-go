@@ -86,7 +86,19 @@ func TestClientExtensionDecisionsCoverEveryPinnedFeature(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	text := string(raw)
+	text := strings.ReplaceAll(string(raw), "\r\n", "\n")
+	for name, document := range map[string]string{
+		"LF":   text,
+		"CRLF": strings.ReplaceAll(text, "\n", "\r\n"),
+	} {
+		t.Run(name, func(t *testing.T) { checkClientExtensionDecisions(t, document) })
+	}
+}
+
+func checkClientExtensionDecisions(t *testing.T, document string) {
+	t.Helper()
+	// This Markdown is interpreted text, unlike byte-exact native evidence.
+	text := strings.ReplaceAll(document, "\r\n", "\n")
 	rows := decisionTable(t, text)
 	if len(rows) != len(tentacleCephFSFeatureNames) {
 		t.Fatalf("decision table has %d rows, pinned source has %d features", len(rows), len(tentacleCephFSFeatureNames))
