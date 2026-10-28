@@ -148,32 +148,14 @@ func (s *DigestStream) Close() error {
 // Cancellation affects only this call; an already canceled context consumes
 // nothing. A pair of empty buffers is a valid full digest.
 func (s *DigestStream) Next(ctx context.Context) (ClusterDigest, error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return ClusterDigest{}, err
-		}
-		s.client.mu.Lock()
+	return nextStreamItem(ctx, s.client, s.ctx, func() (ClusterDigest, bool, error, <-chan struct{}) {
 		if s.pending != nil {
 			next := *s.pending
 			s.pending = nil
-			s.client.mu.Unlock()
-			return next, nil
+			return next, true, nil, nil
 		}
-		err, changed := s.terminal, s.changed
-		s.client.mu.Unlock()
-		if err != nil {
-			return ClusterDigest{}, err
-		}
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return ClusterDigest{}, ctx.Err()
-		case <-s.ctx.Done():
-			s.stop(s.ctx.Err())
-		case <-s.client.ctx.Done():
-			s.stop(ErrClosed)
-		}
-	}
+		return ClusterDigest{}, false, s.terminal, s.changed
+	}, s.stop)
 }
 
 // Error inspection and cancellation may invoke custom code; neither runs

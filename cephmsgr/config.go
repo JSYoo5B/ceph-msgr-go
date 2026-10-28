@@ -144,32 +144,14 @@ func (s *ConfigStream) Close() error {
 // Cancellation affects only this call; an already canceled context consumes
 // nothing. An empty non-nil map is a valid full replacement.
 func (s *ConfigStream) Next(ctx context.Context) (map[string]string, error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		s.client.mu.Lock()
+	return nextStreamItem(ctx, s.client, s.ctx, func() (map[string]string, bool, error, <-chan struct{}) {
 		if s.pending != nil {
 			next := s.pending
 			s.pending = nil
-			s.client.mu.Unlock()
-			return next, nil
+			return next, true, nil, nil
 		}
-		err, changed := s.terminal, s.changed
-		s.client.mu.Unlock()
-		if err != nil {
-			return nil, err
-		}
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-s.ctx.Done():
-			s.stop(s.ctx.Err())
-		case <-s.client.ctx.Done():
-			s.stop(ErrClosed)
-		}
-	}
+		return nil, false, s.terminal, s.changed
+	}, s.stop)
 }
 
 // Error inspection and cancellation may invoke custom code; neither runs

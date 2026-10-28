@@ -149,34 +149,16 @@ func (s *OSDMapStream) Close() error {
 // leaves the watch active. An already canceled ctx consumes no queued batch.
 // With a live ctx, accepted batches drain before the stable terminal error.
 func (s *OSDMapStream) Next(ctx context.Context) (OSDMapBatch, error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return OSDMapBatch{}, err
-		}
-		s.client.mu.Lock()
+	return nextStreamItem(ctx, s.client, s.ctx, func() (OSDMapBatch, bool, error, <-chan struct{}) {
 		if len(s.queue) != 0 {
 			next := s.queue[0]
 			s.queue[0] = queuedOSDMap{}
 			s.queue = s.queue[1:]
 			s.bufferedBytes -= next.bytes
-			s.client.mu.Unlock()
-			return next.batch, nil
+			return next.batch, true, nil, nil
 		}
-		err, changed := s.terminal, s.changed
-		s.client.mu.Unlock()
-		if err != nil {
-			return OSDMapBatch{}, err
-		}
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return OSDMapBatch{}, ctx.Err()
-		case <-s.ctx.Done():
-			s.stop(s.ctx.Err())
-		case <-s.client.ctx.Done():
-			s.stop(ErrClosed)
-		}
-	}
+		return OSDMapBatch{}, false, s.terminal, s.changed
+	}, s.stop)
 }
 
 // Preserve a registered source's terminal protocol error before a replacement
