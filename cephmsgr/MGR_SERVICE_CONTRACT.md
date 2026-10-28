@@ -187,8 +187,9 @@ is not a successful native execution claim.
 - Failure configurations beyond the selected receive-withholding and write-
   discarding faults. A terminal handle after MGR replacement is a separate
   failure boundary.
-- Zero-daemon cold bootstrap (the unavailable test uses the MON activation flag
-  while owned daemon processes remain running).
+- Cold-bootstrap configurations beyond the closed container recipe above.
+  The older unavailable test uses the MON activation flag while owned daemon
+  processes remain running; it is not substituted for the zero-daemon cell.
 
 These limits do not broaden the selected service profile. Further environment
 and topology acceptance is tracked separately in #14.

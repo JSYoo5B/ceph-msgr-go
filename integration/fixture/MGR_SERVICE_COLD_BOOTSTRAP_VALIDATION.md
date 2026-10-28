@@ -68,6 +68,32 @@ restored owned-resource absence and the final Basic CI result on the PR.
 Local selected execution and hosted `/ci` execution remain separate evidence.
 No successful execution is implied merely by adding this recipe.
 
+## Execution attribution
+
+Initial native run [40688440287](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/40688440287),
+attempt 1, tested `1e055e98ad670af2a6d66654f47335dd834dab8d` under controller
+`334c818544b006a6c345cec110256993f634a271`. The named API parent PASSed in
+27.27 s without skips: native map epochs 1 to 4, before-activation dial counts
+MON=3/MGR=0/unclassified=0, after-activation MON=4/MGR=1/unclassified=0, and
+native service removal assertions passed. Seven container terminations were
+logged, but this run did not independently inspect final resource absence.
+It predates the separate read-only cleanup confirmation below.
+
+Basic run 40688413951 at that same source failed two existing static catalog
+expectations (82 versus 83 rows and two versus three service profiles). Its
+fixture unit job passed; later product checks were skipped, not passed. Those
+expectations are corrected without weakening the existing two profile checks.
+Final-source Basic/native results are recorded separately on the PR.
+
+The cold profile now requires `MGR_COLD_BOOTSTRAP_CLEANUP`: after the sole
+termination attempt, a fresh Docker client must receive explicit not-found
+results for every container in the refreshed ownership inventory and for its
+network. A present resource, unreadable inventory or failed inspector cannot
+certify cleanup. This performs no removal or retry itself. The compact
+`MGR_COLD_BOOTSTRAP` log receipt records ticket expiry before/after the pending
+setup, map identities, dial counts and local/native assertions. Raw successful
+oracle transcripts are not retained by the current generic success artifact.
+
 ## Limits
 
 This does not prove cold setup under every platform, security mode, topology or

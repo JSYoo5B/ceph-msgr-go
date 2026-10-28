@@ -205,6 +205,13 @@ func run(ctx context.Context, project, out string, p profile) (result error) {
 			suiteErr := result
 			terminationStarted := time.Now()
 			terminationErr := c.Terminate(cleanup)
+			if p.mgrServiceColdBootstrap() {
+				// Independent inspection is read-only and never repeats teardown.
+				proof, stopProof := context.WithTimeout(context.Background(), 30*time.Second)
+				proofErr := confirmColdBootstrapCleanup(proof, out)
+				stopProof()
+				terminationErr = errors.Join(terminationErr, proofErr)
+			}
 			if err := terminationErr; err != nil {
 				result = errors.Join(result, &cleanupFailure{cause: err})
 			}

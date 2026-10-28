@@ -280,5 +280,10 @@ func TestCephMgrServiceColdBootstrapIntegration(t *testing.T) {
 	if !receipt.Removed {
 		t.Fatal("registration remained after close")
 	}
+	data, err := json.Marshal(receipt)
+	if err != nil {
+		t.Fatal("marshal cold-bootstrap receipt", err)
+	}
+	t.Logf("MGR_COLD_BOOTSTRAP %s", data)
 	t.Logf("cold bootstrap native map epochs=%d->%d; MON renewal before activation; known deadline/cancel/Close; attributed dials before=%+v after=%+v; client GID=%d, MGR=%s/%d; native registration absent after close", receipt.Initial.Epoch, receipt.Active.Epoch, receipt.Before, receipt.After, initial.GlobalID, active.Manager.Name, active.Manager.GlobalID)
 }
