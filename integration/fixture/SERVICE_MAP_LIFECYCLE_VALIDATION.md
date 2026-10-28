@@ -73,6 +73,32 @@ absence, partial removal, missing raw bytes, unreadable native views, mismatched
 GIDs and same-epoch start-epoch disagreement. They preserve the different-epoch
 comparison rule. These tests are not live lifecycle evidence.
 
+## Hosted selected-profile observation
+
+[Native CI 40685364579](https://github.com/JSYoo5B/ceph-msgr-go/actions/runs/40685364579),
+attempt 1, tested `e0b0173e862de596765a4cdcd8a500b91e7159bb` under controller
+`99f7584cf082e5050d56d32fb3c0c65156ea07fb` on the existing
+`mon-mgr.aes.ip4.crc.host` row and the pinned image above. Retained artifact
+`12815371552` binds that source, controller, image and attempt. The broad
+result gate has an empty expected-test list, so acceptance here comes from
+inspection of the actual client-suite lifecycle parent: PASS in 94.91 seconds,
+without a target skip.
+
+The log identifies orderly Stop of the watched `mon.a`, the same watch's Go
+epoch transition 9 to 10 with native holder epochs 9/10, then Go/native removal
+epoch 14 after release. Removal and quorum restoration took 71.78 seconds;
+both holder cleanup records report restored baseline without a kill, and the
+original full native quorum is restored. Seven container terminations are
+recorded. The success artifact retains compact result/test summaries, not the
+raw native observations or an independent final network inventory; those
+limits are not supplied by an aggregate green run. Unrelated optional skips
+in the broad scenario are not additional acceptance.
+
+This receipt belongs to the tested source above. Later documentation-only
+inventory reconciliation does not rename it as execution of a newer commit.
+The separately reported direct single-target run on that same source remains
+separate evidence.
+
 ## Remaining limits
 
 The fault is orderly Stop of the connected MON, not SIGKILL or a request-specific

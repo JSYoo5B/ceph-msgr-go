@@ -65,8 +65,12 @@ records. Absence of independent native acceptance does not establish a defect.
 - **Unavailable target versus protocol refusal** has no per-channel acceptance
   statement in this audit; the named MGR Tell and PG command subtests exercise
   refusals only.
-- **Subscription dependencies of operations:** ServiceMap MON failover, removal
-  timing and large maps remain unverified. A request-specific CRC
+- **Subscription dependencies of operations:** the selected AES/CRC IPv4 host
+  [ServiceMap lifecycle cell](../integration/fixture/SERVICE_MAP_LIFECYCLE_VALIDATION.md)
+  keeps one Go watch through orderly Stop of its actual MON, requires a native
+  registration created after recovery in a newer Go map, and bounds native/Go
+  removal after explicit holder release. Large maps, over-budget isolation,
+  stronger faults and other profiles remain unverified. A request-specific CRC
   [map-version connected-Stop test](../integration/fixture/MON_MAP_VERSION_STOP_VALIDATION.md)
   now preserves actual EOF after a withheld native reply, then checks a new
   explicit request on another admitted MON. Forced death, a request still
