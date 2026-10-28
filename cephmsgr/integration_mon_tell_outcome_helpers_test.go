@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -133,16 +132,7 @@ func observeNativeMonTell(ctx context.Context, control, token, phase, target str
 	if err := testcluster.RequestControl(ctx, control, "observe-mon-tell", "mon-tell-observed", token, phase, target); err != nil {
 		return receipt, err
 	}
-	file, err := os.Open(filepath.Join(control, "native-mon-tell-no-replay-"+token+"."+phase+".json"))
-	if err != nil {
-		return receipt, err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, (256<<10)+1))
-	if err != nil || len(data) > 256<<10 {
-		return receipt, errors.New("native MON Tell observation exceeds its receipt bound")
-	}
-	if err = json.Unmarshal(data, &receipt); err != nil {
+	if err := readNativeReceiptFile(filepath.Join(control, "native-mon-tell-no-replay-"+token+"."+phase+".json"), 256<<10, errors.New("native MON Tell observation exceeds its receipt bound"), &receipt); err != nil {
 		return receipt, err
 	}
 	if receipt.RequestID <= 0 || receipt.Token != token || receipt.Phase != phase || receipt.Target != target {
