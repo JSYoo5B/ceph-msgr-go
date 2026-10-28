@@ -75,16 +75,21 @@ func TestCephMonServiceMapLifecycleIntegration(t *testing.T) {
 	if err != nil || !slices.Contains([]string{"a", "b", "c"}, name) {
 		t.Fatal("watch source is not an owned MON", role, err)
 	}
-	stopped := false
+	stopped, restartAttempted := false, false
 	defer func() {
 		if !stopped {
 			return
 		}
 		restore, stop := context.WithTimeout(context.Background(), 180*time.Second)
 		defer stop()
-		if err := testcluster.ControlDaemon(restore, control, "start", "mon", name); err != nil {
-			t.Error("restore stopped watch MON", err)
-			return
+		if !restartAttempted {
+			// Consume ownership before sending: an uncertain start must not be
+			// retried, nor may a later quorum-read failure replay it.
+			restartAttempted = true
+			if err := testcluster.ControlDaemon(restore, control, "start", "mon", name); err != nil {
+				t.Error("restore stopped watch MON", err)
+				return
+			}
 		}
 		if err := serviceLifecycleQuorum(restore, control, initial); err != nil {
 			t.Error("restore full native quorum", err)
@@ -152,6 +157,7 @@ func TestCephMonServiceMapLifecycleIntegration(t *testing.T) {
 			t.Fatal("released holder baseline was not restored without a kill", err)
 		}
 	}
+	restartAttempted = true
 	if err := testcluster.ControlDaemon(ctx, control, "start", "mon", name); err != nil {
 		t.Fatal("restart watch MON", err)
 	}

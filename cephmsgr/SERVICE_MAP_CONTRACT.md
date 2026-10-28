@@ -27,8 +27,8 @@ and once in request-v9 IPv6 AES256K. Earlier attempts read the stream only
 after the native client had exited and so sometimes saw the daemon already
 gone; that was a test-ordering problem, not a decoding one. The first live run
 also found that such daemons carry an AF_UNSPEC address, which the shared
-address decoder now accepts as "no endpoint". Daemon removal timing, MON
-failover during the watch and large maps are unverified.
+address decoder now accepts as "no endpoint". At that checkpoint, daemon
+removal timing, MON failover during the watch and large maps were unverified.
 
 A native holder keeps a synthetic registration alive under independent control
 and is observed by a fresh native view

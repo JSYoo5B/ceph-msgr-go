@@ -39,7 +39,9 @@ The test has a six-minute context. Holder lifetimes remain capped at 120 seconds
 A must remain alive through the actual fault/recovery before B is created. Each
 native phase retains its existing external command bound. Failure cleanup uses
 fresh contexts and restores a possibly stopped MON even when the Stop request
-had an uncertain result. It never retries registration or release mutations.
+had an uncertain result. Registration, release and MON Start each consume their
+mutation attempt before sending; a failed acknowledgement or a later quorum-read
+failure cannot replay them. Read-only native restoration observations may repeat.
 
 The native and Go snapshots need not have identical map epochs. The daemon start
 epoch is compared only at the same map epoch because native re-registration can
