@@ -57,6 +57,17 @@ or upload it.
 5. Stop the capture, collect the MON log, analyze with and without the key,
    run the tshark evaluation and write `provenance.json` and `cleanup.json`.
 
-The capture is a labelled development substitute for the planned
-ceph-testcontainers capture helper. It does not validate that helper or its
-delivery contract.
+The capture is a labelled development substitute for a provider capture
+helper. It does not validate such a helper or its delivery contract. The
+recipe's `provenance.json` keeps the label it was recorded with.
+
+ceph-testcontainers-go v0.4.0, which `integration/fixture` pins, adds
+`capture.Start`. This recipe does not use it:
+
+- `capture.Start` runs a caller-named helper image that meets packet-capture
+  contract 1 of ceph-testcontainers-images, and no such image is published.
+- A `capture.Start` session is bound to one container instance and does not
+  follow a restart. This recipe keeps one runner-host capture on the bridge
+  across the workflow-driven MON restart (`peer-restart`).
+- The recipe bootstraps its own single MON outside the fixture module and
+  needs no Go provider at all.

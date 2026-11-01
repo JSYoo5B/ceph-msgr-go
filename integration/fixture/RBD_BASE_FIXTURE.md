@@ -56,9 +56,10 @@ and `AttachChildRequest.cc` (clone format 2), `librbd/image/RefreshRequest.cc`
 `journal/Journaler.cc`, `librbd/Journal.cc`,
 `librbd/journal/CreateRequest.cc`, `librbd/journal/Types.cc` and
 `tools/rbd/action/Journal.cc` (LGPL-2.1 references; no code is copied). The
-provider is `github.com/JSYoo5B/ceph-testcontainers-go` v0.2.0
-(`CreatePool`, `rbd.InitPool`, `WaitForClean`, `CreateClient`,
-`RunNativeCommand`, `RemovePool`, `DeleteClient`).
+provider is `github.com/JSYoo5B/ceph-testcontainers-go`, the release that
+`go.mod` pins (`CreatePool`, `rbd.InitPool`, `WaitForClean`, `CreateClient`,
+`RunNativeCommand`, `Pool.Remove`, `ClientConfig.Delete`); the recipe was
+written against v0.2.0.
 
 ## Ownership and preparation
 
@@ -502,7 +503,8 @@ never trusted partially, the mutation stays `uncertain` and the control loop
 stops (as for the other fixture controls). Cleanup runs once (in the runner
 after the suites, and again from `Terminate`, which returns the cached
 result) and writes `rbd-base-cleanup.json`: it removes the owned pool with
-the provider's `RemovePool` (temporarily allowing pool deletion in the MON
+the provider's `Pool.Remove` on the handle that `CreatePool` returned
+(temporarily allowing pool deletion in the MON
 configuration database and removing the pool's CRUSH rule; the six images, their
 snapshots, the clone's parent link, image metadata, lock attributes, the lock
 image's object map, the journaling image's journal header and data objects

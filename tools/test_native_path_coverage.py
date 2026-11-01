@@ -57,8 +57,8 @@ class NativePathCoverageTests(unittest.TestCase):
         self.assertEqual(self.check(self.text + "\n`^TestCephMonPing.*$`\n"), [])
 
     def test_upstream_receipts_need_a_known_revision(self):
-        text = self.text.replace("ctg@main:TestOSDHeartbeatFailure", "ctg@v0.4.0:TestOSDHeartbeatFailure")
-        self.assertIn("malformed upstream receipt ctg@v0.4.0:TestOSDHeartbeatFailure", self.check(text))
+        text = self.text.replace("ctg@v0.4.0:TestOSDHeartbeatFailure", "ctg@v0.5.0:TestOSDHeartbeatFailure")
+        self.assertIn("malformed upstream receipt ctg@v0.5.0:TestOSDHeartbeatFailure", self.check(text))
 
     def test_record_links_must_exist(self):
         text = self.text.replace("(OSD_SOAK_VALIDATION.md)", "(OSD_SOAK_MISSING.md)")

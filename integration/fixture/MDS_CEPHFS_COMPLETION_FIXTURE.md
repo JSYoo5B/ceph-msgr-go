@@ -169,7 +169,7 @@ pending restart, on the respawned daemon.
 
 `deny-on` sets `mds_deny_all_reconnect true` and `window-on` sets
 `mds_reconnect_timeout 5` in the section `mds.<owned daemon>` through the
-provider's `TemporaryConfig`; they take effect in the next incarnation (the
+provider's `override.SetConfig`; they take effect in the next incarnation (the
 first is also a runtime option and must be reported by the running daemon).
 Each kind is applied once, only one is unrestored at a time, and `-off`
 restores it through its handle, then requires the daemon to report the

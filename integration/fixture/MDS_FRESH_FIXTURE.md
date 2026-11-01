@@ -14,7 +14,7 @@ Unknown boolean/profile values and combinations with authentication/stress/
 mapped-address fixtures are rejected before cluster startup.
 
 The existing OSD preparation installs the disposable CRUSH hierarchy first.
-Then public `cephfs.Start` from installed `ceph-testcontainers-go@v0.2.0` creates
+Then public `cephfs.Start` from the pinned provider (see `go.mod`) creates
 a new `ceph-msgr-fresh-<128-bit token>` filesystem, dedicated `-meta` and `-data`
 pools (16 and one PG, replication/min_size 1/1), one active MDS and no standby.
 `WaitReady` and `MDSStatus` must report one provider-owned active rank 0. No
@@ -22,7 +22,11 @@ existing filesystem is adopted. `ScaleMDS` and filesystem mounts are not used.
 The parent provider owns partial resources even when startup fails.
 
 Only this closed fixture sets bootstrap `mon_allow_pool_delete=true`, allowing
-public `cephfs.Remove` to remove its owned pools at teardown. The provider's
+public `Filesystem.Remove` (of the owned descriptor that `cephfs.Filesystems`
+lists, also after a partial `cephfs.Start`) to remove its owned pools at
+teardown. Since provider v0.4.0 that removal first stops the ranks gracefully
+(`fs set <name> down true`) instead of failing them, and returns an error
+without forcing the MDS to fail when the ranks do not stop in time. The provider's
 `MessengerV2Only` policy removes v1 listeners while leaving MDS service modes at
 the native defaults. The current `MessengerPolicy` selects MON/MGR/OSD modes,
 without an MDS-specific field. The Go test offers exactly its configured CRC or
@@ -141,7 +145,7 @@ After transports close, the harness calls `finishMDSFresh` before archiving
 metadata. `Terminate` provides a fallback and always continues parent cluster
 termination even when explicit removal fails. Cleanup and observation serialize
 on the same scope lock. Cleanup has a 45-second context including lock wait.
-Before its single `cephfs.Remove` attempt, it records attempted/pending state;
+Before its single `Filesystem.Remove` attempt, it records attempted/pending state;
 the result is cached, so fallback never retries an uncertain mutation. On
 confirmed success it independently checks absence of the filesystem and its
 two UUID pools, then revokes the dedicated identity once.
