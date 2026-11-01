@@ -1061,7 +1061,7 @@ func (c *fixtureCluster) prepareMDSCephFSRanks(ctx context.Context, out string) 
 	if x.goClient, err = c.cluster.CreateClient(ctx, "mds-cephfs-ranks-"+s.token, mdsCephFSRanksGoCaps(s.name)); err != nil {
 		return fmt.Errorf("create dedicated MDS CephFS ranks identity: %w", err)
 	}
-	_, keyring, err := x.goClient.ConnectionConfig()
+	keyring, err := connectionKeyring(x.goClient.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -1079,7 +1079,7 @@ func (c *fixtureCluster) prepareMDSCephFSRanks(ctx context.Context, out string) 
 	if x.native, err = c.cluster.CreateClient(ctx, "mds-cephfs-ranks-native-"+s.token, mdsCephFSRanksNativeCaps(s.name)); err != nil {
 		return fmt.Errorf("create dedicated native CephFS ranks oracle identity: %w", err)
 	}
-	_, nativeKeyring, err := x.native.ConnectionConfig()
+	nativeKeyring, err := connectionKeyring(x.native.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -1965,7 +1965,7 @@ func (c *fixtureCluster) finishMDSCephFSRanks(ctx context.Context) error {
 			}
 			return true
 		}
-		err := c.cluster.DeleteClient(ctx, config)
+		err := config.Delete(ctx)
 		fail(err)
 		return err == nil
 	}

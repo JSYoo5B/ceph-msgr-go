@@ -316,7 +316,7 @@ func (c *fixtureCluster) transitionBackend() transitionBackend {
 			call, cancel := context.WithTimeout(ctx, transitionQueryBound)
 			defer cancel()
 			instance := transitionInstance{Name: name, Status: queryComplete}
-			daemon, err := c.daemon("mgr", name)
+			daemon, err := c.daemon(ctx, "mgr", name)
 			if err == nil {
 				instance.ContainerID = daemon.GetContainerID()
 				state, stateErr := daemon.State(call)
@@ -343,10 +343,18 @@ func (c *fixtureCluster) transitionBackend() transitionBackend {
 func (c *fixtureCluster) restartManagersWithReceipt(ctx context.Context, out, id string) error {
 	backend := c.transitionBackend()
 	receipt := transitionReceipt{Schema: transitionReceiptSchema, RequestID: id}
-	for _, manager := range c.cluster.Managers() {
+	managers, err := c.cluster.Managers(ctx)
+	if err != nil {
+		return err
+	}
+	for _, manager := range managers {
 		receipt.Managers = append(receipt.Managers, manager.DaemonName)
 	}
-	for _, monitor := range c.cluster.Monitors() {
+	monitors, err := c.cluster.Monitors(ctx)
+	if err != nil {
+		return err
+	}
+	for _, monitor := range monitors {
 		receipt.Monitors = append(receipt.Monitors, monitor.DaemonName)
 	}
 	slices.Sort(receipt.Managers)
@@ -364,7 +372,7 @@ func (c *fixtureCluster) restartManagersWithReceipt(ctx context.Context, out, id
 		receipt.Result = err.Error()
 		return write(err)
 	}
-	for _, d := range c.cluster.Managers() {
+	for _, d := range managers {
 		if err := d.Stop(ctx, nil); err != nil {
 			receipt.Result = "stop mgr." + d.DaemonName + ": " + err.Error()
 			return write(err)

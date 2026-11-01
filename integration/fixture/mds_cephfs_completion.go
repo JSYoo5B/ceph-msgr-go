@@ -21,6 +21,7 @@ import (
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
 	"github.com/JSYoo5B/ceph-testcontainers-go/cephfs"
+	"github.com/JSYoo5B/ceph-testcontainers-go/override"
 )
 
 // The CephFS completion acceptance drives the request-completion and
@@ -295,7 +296,7 @@ type mdsCephFSCompletionCentral struct {
 	RestoreRequestID int64  `json:"restore_request_id,omitempty"`
 	RestoredDaemon   string `json:"restored_daemon_value,omitempty"`
 	Error            string `json:"error,omitempty"`
-	handle           *ceph.ConfigOverride
+	handle           *override.ConfigHandle
 }
 
 var mdsCephFSCompletionCentralKinds = map[string]struct{ kind, name, value string }{
@@ -811,7 +812,7 @@ func (c *fixtureCluster) prepareMDSCephFSCompletion(ctx context.Context, out str
 		b["mds_session_blocklist_on_timeout"] != "true" || b["mds_session_blocklist_on_evict"] != "true" || mdsCephFSCompletionSeconds(b["mds_reconnect_timeout"]) <= mdsCephFSCompletionSeconds(mdsCephFSCompletionWindow) {
 		return errors.New("MDS CephFS completion acceptance refuses to adopt non-default daemon settings")
 	}
-	entries, err := c.cluster.Configuration(ctx)
+	entries, err := observe(c.cluster).Configuration(ctx)
 	if err != nil {
 		return err
 	}
@@ -835,7 +836,7 @@ func (c *fixtureCluster) prepareMDSCephFSCompletion(ctx context.Context, out str
 	if x.goClient, err = c.cluster.CreateClient(ctx, "mds-cephfs-completion-"+s.token, mdsCephFSCompletionGoCaps(s.name)); err != nil {
 		return fmt.Errorf("create dedicated MDS CephFS completion identity: %w", err)
 	}
-	_, keyring, err := x.goClient.ConnectionConfig()
+	keyring, err := connectionKeyring(x.goClient.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -853,7 +854,7 @@ func (c *fixtureCluster) prepareMDSCephFSCompletion(ctx context.Context, out str
 	if x.native, err = c.cluster.CreateClient(ctx, "mds-cephfs-completion-native-"+s.token, mdsCephFSCompletionNativeCaps(s.name)); err != nil {
 		return fmt.Errorf("create dedicated native CephFS completion identity: %w", err)
 	}
-	_, nativeKeyring, err := x.native.ConnectionConfig()
+	nativeKeyring, err := connectionKeyring(x.native.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -1219,7 +1220,7 @@ func (c *fixtureCluster) mdsCephFSCompletionCentralAct(ctx context.Context, id i
 			return err
 		}
 		var err error
-		o.handle, err = c.cluster.TemporaryConfig(ctx, ceph.ConfigSetting{Section: o.Section, Name: o.Name, Value: o.Value})
+		o.handle, err = override.SetConfig(ctx, c.cluster, ceph.ConfigSetting{Section: o.Section, Name: o.Name, Value: o.Value})
 		if err != nil {
 			o.State, o.Error = "uncertain", err.Error()
 			return errors.Join(err, c.mdsCephFSCompletionJournal())
@@ -1295,7 +1296,7 @@ func (c *fixtureCluster) mdsCephFSCompletionWaitConfig(ctx context.Context, name
 // mdsCephFSCompletionNoCentral requires that no central entry of an owned
 // setting remains in any section.
 func (c *fixtureCluster) mdsCephFSCompletionNoCentral(ctx context.Context) error {
-	entries, err := c.cluster.Configuration(ctx)
+	entries, err := observe(c.cluster).Configuration(ctx)
 	if err != nil {
 		return err
 	}
@@ -1735,7 +1736,7 @@ func (c *fixtureCluster) finishMDSCephFSCompletion(ctx context.Context) error {
 			}
 			return true
 		}
-		err := c.cluster.DeleteClient(ctx, config)
+		err := config.Delete(ctx)
 		fail(err)
 		return err == nil
 	}

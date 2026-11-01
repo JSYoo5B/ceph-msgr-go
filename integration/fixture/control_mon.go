@@ -36,7 +36,7 @@ func (c *fixtureCluster) controlMonitorRestartRequest(ctx context.Context, out s
 		if len(fields) != 2 {
 			return errors.New("invalid restart request")
 		}
-		d, err := c.daemon("mon", fields[1])
+		d, err := c.daemon(ctx, "mon", fields[1])
 		if err != nil {
 			return err
 		}
@@ -72,7 +72,7 @@ func (c *fixtureCluster) controlMonitorQuorumRequests(ctx context.Context, out s
 		}
 		// MON a's Start waits for CLI readiness: restore a quorum with b/c first.
 		for _, name := range []string{"b", "c", "a"} {
-			d, e := c.daemon("mon", name)
+			d, e := c.daemon(ctx, "mon", name)
 			if e != nil {
 				return e
 			}
@@ -100,7 +100,7 @@ func (c *fixtureCluster) controlMonitorQuorumRequests(ctx context.Context, out s
 
 func (c *fixtureCluster) controlLegacyMonitorStopRequest(ctx context.Context, out string) error {
 	if fileExists(filepath.Join(out, "stop-mon-a")) && !fileExists(filepath.Join(out, "mon-a-stopped")) {
-		d, e := c.daemon("mon", "a")
+		d, e := c.daemon(ctx, "mon", "a")
 		if e != nil {
 			return e
 		}

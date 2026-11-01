@@ -299,7 +299,7 @@ func (c *fixtureCluster) prepareMDSFresh(ctx context.Context, out string) error 
 	}
 	s := &mdsFreshScope{out: out, token: hex.EncodeToString(token[:])}
 	s.name = "ceph-msgr-fresh-" + s.token
-	s.removeFilesystem = func(call context.Context) error { return cephfs.Remove(call, c.cluster, s.name) }
+	s.removeFilesystem = func(call context.Context) error { return removeOwnedFilesystem(call, c.cluster, s.name) }
 	c.mdsFresh = s
 	// Record names before the first mutation, including partial Start errors.
 	if err := writeMDSFreshJSON(out, "mds-fresh-owned.json", map[string]any{"source_commit": mdsFreshSource, "token": s.token, "fsid": c.profile.fsid, "fs_name": s.name}); err != nil {
@@ -327,7 +327,7 @@ func (c *fixtureCluster) prepareMDSFresh(ctx context.Context, out string) error 
 	if err != nil {
 		return fmt.Errorf("create dedicated MDS fresh identity: %w", err)
 	}
-	_, keyring, err := s.client.ConnectionConfig()
+	keyring, err := connectionKeyring(s.client.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -650,11 +650,11 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 		}
 	}
 	if removeErr == nil && c.mdsCommands != nil && c.mdsCommands.client != nil {
-		removeErr = c.cluster.DeleteClient(ctx, c.mdsCommands.client)
+		removeErr = c.mdsCommands.client.Delete(ctx)
 		receipt.CommandIdentityRemoved = removeErr == nil
 	}
 	if removeErr == nil && s.client != nil {
-		removeErr = c.cluster.DeleteClient(ctx, s.client)
+		removeErr = s.client.Delete(ctx)
 		receipt.IdentityRemoved = removeErr == nil
 	}
 	removeErr = errors.Join(sessionsErr, removeErr)
@@ -664,4 +664,15 @@ func (c *fixtureCluster) finishMDSFresh(ctx context.Context) error {
 	}
 	s.cleanupErr = errors.Join(removeErr, writeMDSFreshJSON(s.out, "mds-fresh-cleanup.json", receipt))
 	return s.cleanupErr
+}
+
+// removeOwnedFilesystem removes the owned filesystem of the given name through
+// its descriptor, including one whose Start partially failed.
+func removeOwnedFilesystem(ctx context.Context, cluster *ceph.Container, name string) error {
+	for _, fs := range cephfs.Filesystems(cluster) {
+		if fs.FilesystemName == name {
+			return fs.Remove(ctx)
+		}
+	}
+	return fmt.Errorf("no owned filesystem %q", name)
 }

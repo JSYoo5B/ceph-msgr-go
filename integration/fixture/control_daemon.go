@@ -8,27 +8,40 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/JSYoo5B/ceph-testcontainers-go/fault"
 	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 )
 
-func (c *fixtureCluster) daemon(kind, name string) (testcontainers.Container, error) {
+func (c *fixtureCluster) daemon(ctx context.Context, kind, name string) (testcontainers.Container, error) {
 	if kind == "mon" {
-		for _, d := range c.cluster.Monitors() {
+		monitors, err := c.cluster.Monitors(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range monitors {
 			if d.DaemonName == name {
 				return d.Container, nil
 			}
 		}
 	}
 	if kind == "osd" {
-		for _, d := range c.cluster.OSDs() {
+		osds, err := c.cluster.OSDs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range osds {
 			if strconv.Itoa(d.ID) == name {
 				return d.Container, nil
 			}
 		}
 	}
 	if kind == "mgr" {
-		for _, d := range c.cluster.Managers() {
+		managers, err := c.cluster.Managers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, d := range managers {
 			if d.DaemonName == name {
 				return d.Container, nil
 			}
@@ -51,7 +64,7 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 				return errors.New("invalid daemon control request")
 			}
 			name := fields[1]
-			daemon, err := c.daemon(kind, name)
+			daemon, err := c.daemon(ctx, kind, name)
 			if err != nil {
 				return err
 			}
@@ -61,7 +74,7 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 				if c.pauses[key] != nil {
 					return errors.New("daemon already paused")
 				}
-				c.pauses[key], err = c.cluster.PauseContainer(ctx, daemon)
+				c.pauses[key], err = fault.Pause(ctx, c.cluster, daemon)
 			case "resume":
 				if c.pauses[key] == nil {
 					return errors.New("daemon is not paused")

@@ -258,9 +258,13 @@ func (c *fixtureCluster) waitOSDReady(ctx context.Context, out, mode string) err
 	budget := osdCleanBudget
 	status := c.osdCleanStatus
 	intervals := map[string]json.RawMessage{}
+	osds, err := c.cluster.OSDs(ctx)
+	if err != nil {
+		return err
+	}
 	if mode == "recovery" {
 		budget = osdRecoveryBudget
-		for _, daemon := range c.cluster.OSDs() {
+		for _, daemon := range osds {
 			name := fmt.Sprintf("osd.%d", daemon.ID)
 			poll, cancel := context.WithTimeout(ctx, osdCleanPollTimeout)
 			data, err := c.cluster.Ceph(poll, "config", "show", name, "osd_recovery_retry_interval", "--format", "json")
@@ -290,7 +294,7 @@ func (c *fixtureCluster) waitOSDReady(ctx context.Context, out, mode string) err
 		}
 	}
 	started := time.Now()
-	tl, waitErr := waitOSDClean(ctx, budget, osdCleanPollTimeout, osdCleanPollInterval, len(c.cluster.OSDs()), status)
+	tl, waitErr := waitOSDClean(ctx, budget, osdCleanPollTimeout, osdCleanPollInterval, len(osds), status)
 	receipt := struct {
 		Mode           string                     `json:"mode"`
 		Started        time.Time                  `json:"started_at"`

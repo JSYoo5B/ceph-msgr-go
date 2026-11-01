@@ -16,7 +16,11 @@ import (
 func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
 	topology := c.profile.osdTopology()
 	var started []int
-	for _, daemon := range c.cluster.OSDs() {
+	osds, err := c.cluster.OSDs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, daemon := range osds {
 		started = append(started, daemon.ID)
 	}
 	// The CRUSH root lists exactly the daemons this fixture owns, never a
@@ -41,7 +45,11 @@ func (c *fixtureCluster) prepareOSD(ctx context.Context, out string) error {
 		return err
 	}
 	// Input blobs for the control container travel through the public copy API.
-	if err := c.cluster.ControlContainer().CopyFileToContainer(ctx, filepath.Join(out, "legacy.crush"), "/tmp/legacy.crush", 0600); err != nil {
+	control, err := c.cluster.ControlContainer(ctx)
+	if err != nil {
+		return err
+	}
+	if err := control.CopyFileToContainer(ctx, filepath.Join(out, "legacy.crush"), "/tmp/legacy.crush", 0600); err != nil {
 		return err
 	}
 	if _, err := c.cluster.Ceph(ctx, "osd", "setcrushmap", "-i", "/tmp/legacy.crush"); err != nil {
@@ -234,11 +242,15 @@ func decodeLegacyPoolPolicy(raw []byte, expectedFSID string) (poolPolicy, error)
 func (c *fixtureCluster) poolPolicy(ctx context.Context) (poolPolicy, error) {
 	// The public supervisor bounds the command and its raw output before the
 	// host JSON decoder allocates. An incomplete observation is never admitted.
-	observation, err := c.cluster.RunNativeCommand(ctx, c.cluster.ControlContainer(), ceph.NativeCommand{
+	var result poolPolicy
+	control, err := c.cluster.ControlContainer(ctx)
+	if err != nil {
+		return result, err
+	}
+	observation, err := c.cluster.RunNativeCommand(ctx, control, ceph.NativeCommand{
 		Argv:    []string{"ceph", "--connect-timeout", "5", "osd", "dump", "--format", "json"},
 		Timeout: 20 * time.Second, MaxStdout: 1 << 20, MaxStderr: 16 << 10, Label: "legacy pool policy observation",
 	})
-	var result poolPolicy
 	if err != nil {
 		return result, err
 	}

@@ -24,9 +24,9 @@ func rgwNativeStartFixture(t *testing.T, ctx context.Context) (*rgw.Container, *
 		t.Fatal(err)
 	}
 	cluster, err := rgw.Run(ctx, rgwNativeImage,
-		ceph.WithMonitorCount(1), ceph.WithManagerCount(1), ceph.WithOSDCount(1),
-		ceph.WithPoolDefaults(1, 1), ceph.WithOSDObjectStore(ceph.OSDBlueStore),
-		ceph.WithMessengerMode(ceph.MessengerV2Secure),
+		ceph.WithClusterConfig(ceph.ClusterConfig{}.WithMonitorCount(1).WithManagerCount(1).WithOSDCount(1).WithPoolDefaults(1, 1)),
+		ceph.WithOSDStorage(ceph.OSDStorage{}.WithObjectStore(ceph.OSDBlueStore)),
+		ceph.WithNetworkConfig(ceph.NetworkConfig{}.WithMessengerMode(ceph.MessengerV2Secure)),
 		ceph.WithAuth(ceph.AuthConfig{KeyType: ceph.CipherAES256K, ServiceCipher: ceph.CipherAES256K}),
 		ceph.WithConfigFile(config), rgw.WithGateways(rgw.Config{SkipUserCreation: true}))
 	if cluster != nil {
@@ -34,13 +34,25 @@ func rgwNativeStartFixture(t *testing.T, ctx context.Context) (*rgw.Container, *
 			cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 			defer stop()
 			var owned []testcontainers.Container
-			for _, monitor := range cluster.Monitors() {
+			monitors, err := cluster.Monitors(cleanup)
+			if err != nil {
+				t.Errorf("list owned monitors before cleanup: %v", err)
+			}
+			for _, monitor := range monitors {
 				owned = append(owned, monitor.Container)
 			}
-			for _, manager := range cluster.Managers() {
+			managers, err := cluster.Managers(cleanup)
+			if err != nil {
+				t.Errorf("list owned managers before cleanup: %v", err)
+			}
+			for _, manager := range managers {
 				owned = append(owned, manager.Container)
 			}
-			for _, osd := range cluster.OSDs() {
+			osds, err := cluster.OSDs(cleanup)
+			if err != nil {
+				t.Errorf("list owned OSDs before cleanup: %v", err)
+			}
+			for _, osd := range osds {
 				owned = append(owned, osd.Container)
 			}
 			owned = append(owned, cluster.ServiceContainers()...)
@@ -57,7 +69,7 @@ func rgwNativeStartFixture(t *testing.T, ctx context.Context) (*rgw.Container, *
 					}
 				}
 			}
-			network := cluster.NetworkName()
+			network := clusterNetworkName(cluster.Container)
 			if err := cluster.Terminate(cleanup); err != nil {
 				t.Errorf("terminate owned RGW fixture: %v", err)
 				return
@@ -91,9 +103,43 @@ func rgwNativeStartFixture(t *testing.T, ctx context.Context) (*rgw.Container, *
 	if err != nil {
 		t.Fatal("start RGW fixture:", err)
 	}
-	gateways := cluster.Gateways()
-	if len(gateways) != 1 || len(cluster.OSDs()) != 1 {
+	gateways, err := rgw.Gateways(ctx, cluster.Container)
+	if err != nil {
+		t.Fatal("list owned gateways:", err)
+	}
+	if len(gateways) != 1 || len(rgwNativeOSDs(t, ctx, cluster)) != 1 {
 		t.Fatal("checkpoint requires exactly one gateway and OSD")
 	}
 	return cluster, gateways[0]
+}
+
+// rgwNativeOSDs lists the fixture's owned OSD descriptors.
+func rgwNativeOSDs(t *testing.T, ctx context.Context, cluster *rgw.Container) []*ceph.OSDContainer {
+	t.Helper()
+	osds, err := cluster.OSDs(ctx)
+	if err != nil {
+		t.Fatal("list owned OSDs:", err)
+	}
+	if len(osds) == 0 {
+		t.Fatal("RGW fixture has no owned OSD")
+	}
+	return osds
+}
+
+// rgwNativePoolStates reads the native state, including the pool ID, of every
+// pool the cluster has. Pool discovery is MON metadata traffic.
+func rgwNativePoolStates(ctx context.Context, cluster *rgw.Container) ([]ceph.PoolState, error) {
+	pools, err := observe(cluster.Container).Pools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	states := make([]ceph.PoolState, 0, len(pools))
+	for _, pool := range pools {
+		state, err := pool.Status(ctx)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, state)
+	}
+	return states, nil
 }

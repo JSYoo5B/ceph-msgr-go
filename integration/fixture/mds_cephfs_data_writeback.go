@@ -90,9 +90,13 @@ type mdsCephFSDataOSDDropLog struct {
 }
 
 // The single owned OSD of the legacy-v6 DATA fixture, by its exact name.
-func (c *fixtureCluster) mdsCephFSDataOSD() (*ceph.OSDContainer, string, error) {
+func (c *fixtureCluster) mdsCephFSDataOSD(ctx context.Context) (*ceph.OSDContainer, string, error) {
 	var owned []*ceph.OSDContainer
-	for _, d := range c.cluster.OSDs() {
+	osds, err := c.cluster.OSDs(ctx)
+	if err != nil {
+		return nil, "", err
+	}
+	for _, d := range osds {
 		if d != nil && d.Container != nil && d.GetContainerID() != "" {
 			owned = append(owned, d)
 		}
@@ -107,7 +111,7 @@ func (c *fixtureCluster) mdsCephFSDataOSDConfig(ctx context.Context, daemon stri
 	values := map[string]string{}
 	for _, name := range mdsCephFSDataOSDConfigNames {
 		call, stop := context.WithTimeout(ctx, 15*time.Second)
-		data, err := c.cluster.AdminSocket(call, daemon, "config", "get", name)
+		data, err := adminSocket(call, c.cluster, daemon, "config", "get", name)
 		stop()
 		if err != nil {
 			return nil, err
@@ -129,13 +133,13 @@ func (c *fixtureCluster) mdsCephFSDataOSDApply(ctx context.Context, daemon strin
 			return errors.New("DATA OSD setting is outside closed scope")
 		}
 		call, stop := context.WithTimeout(ctx, 15*time.Second)
-		_, err := c.cluster.AdminSocket(call, daemon, "config", "set", name, values[name])
+		_, err := adminSocket(call, c.cluster, daemon, "config", "set", name, values[name])
 		stop()
 		if err != nil {
 			return err
 		}
 		call, stop = context.WithTimeout(ctx, 15*time.Second)
-		data, err := c.cluster.AdminSocket(call, daemon, "config", "get", name)
+		data, err := adminSocket(call, c.cluster, daemon, "config", "get", name)
 		stop()
 		if err != nil {
 			return err
@@ -153,7 +157,7 @@ func (c *fixtureCluster) mdsCephFSDataOSDApply(ctx context.Context, daemon strin
 }
 
 func (c *fixtureCluster) mdsCephFSDataOSDLogLines(ctx context.Context) ([]string, error) {
-	d, _, err := c.mdsCephFSDataOSD()
+	d, _, err := c.mdsCephFSDataOSD(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -196,7 +200,7 @@ func (c *fixtureCluster) mdsCephFSDataWritebackAct(ctx context.Context, id int64
 	}
 	switch a.name {
 	case "osd-drop-on":
-		_, daemon, err := c.mdsCephFSDataOSD()
+		_, daemon, err := c.mdsCephFSDataOSD(ctx)
 		if err != nil {
 			return err
 		}
@@ -568,7 +572,7 @@ func (c *fixtureCluster) mdsCephFSDataRestoreOSDDrop(ctx context.Context, receip
 		receipt.OSDConfigRestored = true
 		return nil
 	}
-	_, daemon, err := c.mdsCephFSDataOSD()
+	_, daemon, err := c.mdsCephFSDataOSD(ctx)
 	if err == nil && daemon != d.OSD {
 		err = errors.New("DATA OSD drop cleanup cannot prove its owned OSD")
 	}

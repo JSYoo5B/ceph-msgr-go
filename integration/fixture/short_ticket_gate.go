@@ -143,7 +143,7 @@ func evaluateShortTicketGate(label string, state managerPreparationMap, owned []
 const shortTicketGateQueryBound = 10 * time.Second
 
 func (c *fixtureCluster) verifyShortTicketGate(ctx context.Context, out, label string) error {
-	daemons, names, err := c.ownedManagers()
+	daemons, names, err := c.ownedManagers(ctx)
 	if err != nil {
 		return err
 	}

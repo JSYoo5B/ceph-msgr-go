@@ -729,7 +729,7 @@ func (c *fixtureCluster) prepareMDSCephFSData(ctx context.Context, out string) e
 	if x.goClient, err = c.cluster.CreateClient(ctx, "mds-cephfs-data-"+s.token, mdsCephFSDataGoCaps(s.name)); err != nil {
 		return fmt.Errorf("create dedicated MDS CephFS data identity: %w", err)
 	}
-	_, keyring, err := x.goClient.ConnectionConfig()
+	keyring, err := connectionKeyring(x.goClient.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -747,7 +747,7 @@ func (c *fixtureCluster) prepareMDSCephFSData(ctx context.Context, out string) e
 	if x.native, err = c.cluster.CreateClient(ctx, "mds-cephfs-data-native-"+s.token, mdsCephFSDataNativeCaps(s.name)); err != nil {
 		return fmt.Errorf("create dedicated native CephFS data identity: %w", err)
 	}
-	_, nativeKeyring, err := x.native.ConnectionConfig()
+	nativeKeyring, err := connectionKeyring(x.native.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -1156,7 +1156,7 @@ func (c *fixtureCluster) finishMDSCephFSData(ctx context.Context) error {
 			}
 			return true
 		}
-		err := c.cluster.DeleteClient(ctx, config)
+		err := config.Delete(ctx)
 		fail(err)
 		return err == nil
 	}

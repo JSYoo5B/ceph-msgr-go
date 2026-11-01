@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/JSYoo5B/ceph-testcontainers-go/override"
 	"github.com/testcontainers/testcontainers-go"
 )
 
@@ -37,10 +38,14 @@ func (c *fixtureCluster) observeManagerMap(ctx context.Context) (managerPreparat
 	return state, err
 }
 
-func (c *fixtureCluster) ownedManagers() (map[string]testcontainers.Container, []string, error) {
+func (c *fixtureCluster) ownedManagers(ctx context.Context) (map[string]testcontainers.Container, []string, error) {
 	daemons := make(map[string]testcontainers.Container)
 	var names []string
-	for _, d := range c.cluster.Managers() {
+	managers, err := c.cluster.Managers(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, d := range managers {
 		if _, duplicate := daemons[d.DaemonName]; duplicate {
 			return nil, nil, errors.New("duplicate owned MGR preparation identity")
 		}
@@ -51,7 +56,7 @@ func (c *fixtureCluster) ownedManagers() (map[string]testcontainers.Container, [
 }
 
 func (c *fixtureCluster) prepareManagerFailover(ctx context.Context, out string) error {
-	daemons, names, err := c.ownedManagers()
+	daemons, names, err := c.ownedManagers(ctx)
 	if err != nil {
 		return err
 	}
@@ -134,7 +139,9 @@ func (c *fixtureCluster) controlManagerServiceConfigRequest(ctx context.Context,
 func (c *fixtureCluster) controlManagerStartRequest(ctx context.Context, out string) error {
 	var err error
 	if fileExists(filepath.Join(out, "start-mgrs")) && !fileExists(filepath.Join(out, "mgrs-started")) {
-		if err = createManagersWithOwnership(ctx, c.cluster.AddManager, func(created *ceph.ManagerContainer) error {
+		if err = createManagersWithOwnership(ctx, func(ctx context.Context, name string) (*ceph.ManagerContainer, error) {
+			return c.cluster.AddManager(ctx, name)
+		}, func(created *ceph.ManagerContainer) error {
 			return recordOwnership(c, out, created)
 		}); err != nil {
 			return err
@@ -160,7 +167,7 @@ func (c *fixtureCluster) controlManagerSecurityRequest(ctx context.Context, out 
 		if len(fields) != 2 || c.profile.modeRejection != "mgr" {
 			return errors.New("invalid policy request")
 		}
-		if _, err = c.cluster.TemporaryMessengerPolicy(ctx, ceph.MessengerPolicy{Managers: []ceph.MessengerConnectionMode{ceph.MessengerSecure}}); err != nil {
+		if _, err = override.SetMessengerPolicy(ctx, c.cluster, ceph.MessengerPolicy{Managers: []ceph.MessengerConnectionMode{ceph.MessengerSecure}}); err != nil {
 			return err
 		}
 		// Start waits only for the admin socket, and a pre-stop registration

@@ -18,6 +18,7 @@ import (
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
 	"github.com/JSYoo5B/ceph-testcontainers-go/cephfs"
+	"github.com/JSYoo5B/ceph-testcontainers-go/override"
 )
 
 // The CephFS session acceptance drives an owned, closed set of native
@@ -119,8 +120,8 @@ type mdsSessionsScope struct {
 	required             map[string]string
 	stale                string
 	windowKind           string
-	timeouts             *cephfs.SessionTimeoutsOverride
-	deferStale           *ceph.ConfigOverride
+	timeouts             *cephfs.SessionTimeoutsOverrideHandle
+	deferStale           *override.ConfigHandle
 	owned                map[string]uint64
 	baselineReady        bool
 	identityCreateIntent bool
@@ -413,7 +414,7 @@ func (c *fixtureCluster) mdsSessionsReadMap(ctx context.Context) (mdsSessionsMap
 }
 
 func (c *fixtureCluster) mdsSessionsBlocklist(ctx context.Context) ([]mdsSessionsBlock, error) {
-	entries, err := c.cluster.BlocklistEntries(ctx)
+	entries, err := observe(c.cluster).BlocklistEntries(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -517,7 +518,7 @@ func (c *fixtureCluster) prepareMDSSessions(ctx context.Context, out string) err
 	if x.baseline.Map.Refuse || len(x.baseline.Map.Required) != 0 || time.Duration(x.baseline.Map.Timeout)*time.Second != timeouts.Timeout || time.Duration(x.baseline.Map.Autoclose)*time.Second != timeouts.Autoclose || timeouts == mdsSessionsStaleWindow {
 		return errors.New("MDS sessions acceptance requires an independently observed baseline without refusal, required features or the stale window")
 	}
-	entries, err := c.cluster.Configuration(ctx)
+	entries, err := observe(c.cluster).Configuration(ctx)
 	if err != nil {
 		return err
 	}
@@ -552,7 +553,7 @@ func (c *fixtureCluster) prepareMDSSessions(ctx context.Context, out string) err
 	if err != nil {
 		return fmt.Errorf("create dedicated MDS sessions foreign identity: %w", err)
 	}
-	_, keyring, err := x.foreign.ConnectionConfig()
+	keyring, err := connectionKeyring(x.foreign.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -804,9 +805,9 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 		}
 		var err error
 		// Both providers retain a handle on uncertain replies for Restore.
-		x.timeouts, err = s.fs.TemporarySessionTimeouts(ctx, window)
+		x.timeouts, err = s.fs.OverrideSessionTimeouts(ctx, window)
 		if err == nil {
-			x.deferStale, err = c.cluster.TemporaryConfig(ctx, ceph.ConfigSetting{Section: "mds", Name: mdsSessionsDeferOption, Value: "false"})
+			x.deferStale, err = override.SetConfig(ctx, c.cluster, ceph.ConfigSetting{Section: "mds", Name: mdsSessionsDeferOption, Value: "false"})
 		}
 		if err != nil {
 			x.stale = "uncertain"
@@ -975,7 +976,7 @@ func (c *fixtureCluster) finishMDSSessions(ctx context.Context) error {
 		receipt.RefuseRestored, receipt.RequiredRestored, receipt.StaleRestored, receipt.BlocklistRestored = true, true, true, true
 	}
 	if x.foreign != nil {
-		err := c.cluster.DeleteClient(ctx, x.foreign)
+		err := x.foreign.Delete(ctx)
 		fail(err)
 		receipt.IdentityRemoved = err == nil
 	} else {
@@ -1027,7 +1028,7 @@ func (c *fixtureCluster) mdsSessionsReconcile(ctx context.Context, receipt *mdsS
 		receipt.RequiredRestored = err == nil && maps.Equal(final.Required, baseline.Required)
 		receipt.StaleRestored = err == nil && final.Timeout == baseline.Timeout && final.Autoclose == baseline.Autoclose
 	}
-	entries, err := c.cluster.Configuration(ctx)
+	entries, err := observe(c.cluster).Configuration(ctx)
 	fail(err)
 	receipt.CentralDeferAbsent = err == nil && !slices.ContainsFunc(entries, func(e ceph.ConfigEntry) bool { return e.Name == mdsSessionsDeferOption })
 	if err == nil && !receipt.CentralDeferAbsent {

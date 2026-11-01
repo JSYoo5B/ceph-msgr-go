@@ -264,7 +264,11 @@ func (c *fixtureCluster) settleMonitorElection(ctx context.Context, out, id, inp
 		return errors.New("invalid fixture election IPC identity")
 	}
 	var owned []string
-	for _, daemon := range c.cluster.Monitors() {
+	monitors, err := c.cluster.Monitors(ctx)
+	if err != nil {
+		return err
+	}
+	for _, daemon := range monitors {
 		owned = append(owned, daemon.DaemonName)
 	}
 	quorum := slices.Clone(expected.Quorum)
@@ -275,7 +279,11 @@ func (c *fixtureCluster) settleMonitorElection(ctx context.Context, out, id, inp
 	}
 	backend := electionBackend{
 		query: func(call context.Context) ([]byte, error) {
-			result, err := c.cluster.RunNativeCommand(call, c.cluster.ControlContainer(), ceph.NativeCommand{
+			control, err := c.cluster.ControlContainer(call)
+			if err != nil {
+				return nil, err
+			}
+			result, err := c.cluster.RunNativeCommand(call, control, ceph.NativeCommand{
 				Argv:    []string{"ceph", "--connect-timeout", "5", "quorum_status", "--format", "json"},
 				Timeout: 5 * time.Second, MaxStdout: 1 << 20, MaxStderr: 16 << 10, Label: "native settled election read",
 			})

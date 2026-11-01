@@ -73,7 +73,7 @@ func prepareIgnoreCacheResources(ctx context.Context, c *fixtureCluster, out str
 				return e
 			}
 			resources.Clients[role] = client
-			_, keyring, e := client.ConnectionConfig()
+			keyring, e := connectionKeyring(client.ConnectionConfig())
 			if e != nil {
 				return e
 			}
@@ -168,7 +168,7 @@ func finishIgnoreCacheResources(ctx context.Context, c *fixtureCluster, out stri
 	}
 	for _, role := range []string{"rw", "ro", "base"} {
 		role := role
-		if err = mutate("remove-client-"+role, func() error { return c.cluster.DeleteClient(ctx, resources.Clients[role]) }); err != nil {
+		if err = mutate("remove-client-"+role, func() error { return resources.Clients[role].Delete(ctx) }); err != nil {
 			return err
 		}
 		_, e := c.cluster.Ceph(ctx, "auth", "get", plan.Clients[role])
@@ -288,7 +288,7 @@ func (c *fixtureCluster) prepareOSDCachePools(ctx context.Context, out string) e
 	}
 	// Text keys are fixture-private consumer inputs, never public diagnostics.
 	for _, role := range []string{"rw", "ro", "base"} {
-		_, keyring, err := resources.Clients[role].ConnectionConfig()
+		keyring, err := connectionKeyring(resources.Clients[role].ConnectionConfig())
 		if err != nil {
 			return err
 		}

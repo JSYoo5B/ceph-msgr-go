@@ -160,9 +160,12 @@ func moduleGlobalIDs(monitors []monitorManagerSessions, name string) []uint64 {
 // admin socket, each within bound. A failed read stays recorded as such.
 func (c *fixtureCluster) observeManagerSessions(ctx context.Context, bound time.Duration) []monitorManagerSessions {
 	var observed []monitorManagerSessions
-	for _, mon := range c.cluster.Monitors() {
+	// The owned roster is a local snapshot: the listing only waits for a
+	// concurrent topology change, and each read below has its own bound.
+	monitors, _ := c.cluster.Monitors(context.Background())
+	for _, mon := range monitors {
 		call, cancel := context.WithTimeout(ctx, bound)
-		data, err := c.cluster.AdminSocket(call, "mon."+mon.DaemonName, "sessions")
+		data, err := adminSocket(call, c.cluster, "mon."+mon.DaemonName, "sessions")
 		expired := call.Err() != nil
 		cancel()
 		entry := monitorManagerSessions{Monitor: mon.DaemonName}
