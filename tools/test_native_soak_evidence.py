@@ -58,7 +58,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
                     "mds_fresh": False, "mds_cephfs_data": False, "rbd_base": False, "image": evidence.IMAGE,
                     "image_id": "sha256:" + "c" * 64, "architecture": "amd64",
                     "daemon_version": "ceph version 20.2.4 (%s) tentacle (stable)" % evidence.SOURCE,
-                    "provider": "github.com/JSYoo5B/ceph-testcontainers-go", "provider_version": "v0.3.0"}
+                    "provider": evidence.PROVIDER, "provider_version": evidence.PROVIDER_VERSION}
         self.put(self.receipts / "fixture-manifest.json", manifest)
         digest = hashlib.sha256((self.receipts / "fixture-manifest.json").read_bytes()).hexdigest()
         self.put(self.receipts / "osd-soak-v1-fixture-termination.json", {

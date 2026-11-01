@@ -181,6 +181,19 @@ def finish_provider(provider, output, stop_fixture, timeout=30):
     return code
 
 
+def fixture_provider(manifest):
+    """Name the provider module that the fixture reports it links.
+
+    The fixture manifest records the linked module from Go build information,
+    so the report follows the module the fixture was built with rather than a
+    label that can lag behind integration/fixture/go.mod.
+    """
+    provider, version = manifest.get("provider"), manifest.get("provider_version")
+    if not isinstance(provider, str) or not provider or not isinstance(version, str):
+        raise RuntimeError("fixture manifest does not identify its provider module")
+    return provider + "@" + version if version else provider
+
+
 def check_relay(proxy, endpoint):
     host, port = proxy_endpoint(proxy).rsplit(":", 1)
     with socket.create_connection((host, int(port)), timeout=5) as connection:
@@ -255,11 +268,11 @@ def run(distro, diagnostics):
                                     cwd=project, env=env, stdout=provider_output, stderr=subprocess.STDOUT)
         attempted = True
         daemon_version, proxy = wait_for_provider(provider, out)
-        report["fixture_provider"] = "github.com/JSYoo5B/ceph-testcontainers-go@v0.2.0"
-        report["daemon_version"] = daemon_version
-        report["fixture_image"] = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
         peers = json.loads((out / "peers.json").read_text())
         manifest = json.loads((out / "fixture-manifest.json").read_text())
+        report["fixture_provider"] = fixture_provider(manifest)
+        report["daemon_version"] = daemon_version
+        report["fixture_image"] = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
         check_relay(proxy, peers["mon.a"])
         require_provider_running(provider)
         report["windows_relay_admission"] = True
