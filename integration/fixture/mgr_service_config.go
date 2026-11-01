@@ -104,7 +104,7 @@ func (c *fixtureCluster) mgrServiceConfigSocket(ctx context.Context, action, nam
 	}
 	call, stop := context.WithTimeout(ctx, 15*time.Second)
 	defer stop()
-	return c.cluster.AdminSocket(call, "mgr."+c.mgrServiceConfig.Manager, args...)
+	return adminSocket(call, c.cluster, "mgr."+c.mgrServiceConfig.Manager, args...)
 }
 
 func (c *fixtureCluster) observeMgrServiceConfig(ctx context.Context) error {
@@ -218,7 +218,7 @@ func (c *fixtureCluster) mgrServiceConfigControl(ctx context.Context, out, actio
 			return errors.New("MGR configuration scope was already selected")
 		}
 		state, err := c.observeManagerMap(ctx)
-		owned, _, ownErr := c.ownedManagers()
+		owned, _, ownErr := c.ownedManagers(ctx)
 		if err != nil || ownErr != nil || !state.Available || state.ActiveGID == 0 || owned[state.ActiveName] == nil {
 			return errors.Join(err, ownErr, errors.New("MGR configuration requires a ready owned active daemon"))
 		}

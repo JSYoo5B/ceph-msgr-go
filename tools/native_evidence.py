@@ -23,6 +23,12 @@ import sys
 SCHEMA_VERSION = 1
 SOURCE = "7f793731f1b39eb4f465e960113d2363c311b964"
 IMAGE = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
+# Collection admits only the fixture provider release that integration/fixture
+# pins now. Verification of a retained bundle also admits the earlier release
+# named by bundles recorded before the move; a bundle never changes release.
+PROVIDER = "github.com/JSYoo5B/ceph-testcontainers-go"
+PROVIDER_VERSION = "v0.4.0"
+RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", PROVIDER_VERSION})
 TEST = "TestCephMDSCephFSCapSendRecoveryIntegration"
 SELECTOR = "^" + TEST + "$"
 INPUT_LIMIT = 16 << 20
@@ -197,7 +203,7 @@ def runtime_projection(raw, ctx):
              and raw.get("image") == ctx["configured_image"], "fixture-profile-mismatch")
     else:
         need(raw["mds_fresh"] is True and raw["mds_cephfs_data"] is True and raw["image"] == ctx["configured_image"], "fixture-profile-mismatch")
-    need(raw["provider"] == "github.com/JSYoo5B/ceph-testcontainers-go" and raw["provider_version"] == "v0.3.0", "provider-mismatch")
+    need(raw["provider"] == PROVIDER and raw["provider_version"] == PROVIDER_VERSION, "provider-mismatch")
     value = {"image_id": raw["image_id"], "architecture": raw["architecture"], "daemon_version": raw["daemon_version"],
              "fixture_reported_profile": reported, "provider_version": raw["provider_version"]}
     validate_runtime(value, ctx)
@@ -210,7 +216,7 @@ def validate_runtime(value, ctx):
     digest(value["image_id"][7:])
     need(value["architecture"] in {"amd64", "arm64"}, "observed-architecture")
     need(value["daemon_version"] == "ceph version 20.2.4 (%s) tentacle (stable)" % SOURCE, "observed-version")
-    need(value["provider_version"] == "v0.3.0", "provider-mismatch")
+    need(value["provider_version"] in RETAINED_PROVIDER_VERSIONS, "provider-mismatch")
     names = {"key", "service", "mode", "family", "runtime", "osd", "osd_profile", "osd_store", "osd_replicas"}
     keys(value["fixture_reported_profile"], names)
     need(value["fixture_reported_profile"] == {key: ctx["profile"][key] for key in names}, "fixture-profile-mismatch")

@@ -365,19 +365,35 @@ func recordOwnership(c *fixtureCluster, out string, created ...*ceph.ManagerCont
 	if c.Container != nil {
 		owned["messenger-oracles"] = c.GetContainerID()
 	}
-	for _, mon := range c.cluster.Monitors() {
+	// Ownership is also recorded after the run context ended. The listings
+	// only wait for a concurrent topology change, as before.
+	ctx, cancel := context.WithTimeout(context.Background(), fixtureStartupTimeout)
+	defer cancel()
+	monitors, err := c.cluster.Monitors(ctx)
+	if err != nil {
+		return err
+	}
+	for _, mon := range monitors {
 		owned["mon."+mon.DaemonName] = mon.GetContainerID()
 	}
-	addManagerOwnership(owned, c.cluster.Managers()...)
+	managers, err := c.cluster.Managers(ctx)
+	if err != nil {
+		return err
+	}
+	addManagerOwnership(owned, managers...)
 	// Preserve even a returned partial descriptor absent from a later snapshot.
 	addManagerOwnership(owned, created...)
-	for _, osd := range c.cluster.OSDs() {
+	osds, err := c.cluster.OSDs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, osd := range osds {
 		owned[fmt.Sprintf("osd.%d", osd.ID)] = osd.GetContainerID()
 	}
 	for name, id := range c.mdsFreshOwnership() {
 		owned[name] = id
 	}
-	if control := c.cluster.ControlContainer(); control != nil {
+	if control, err := c.cluster.ControlContainer(ctx); err == nil && control != nil {
 		owned["control"] = control.GetContainerID()
 	}
 	return writeFixtureOwnership(out, containerID, c.NetworkName(), owned)

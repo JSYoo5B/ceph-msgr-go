@@ -44,7 +44,7 @@ func (c *fixtureCluster) prepareMDSCommands(ctx context.Context, out string) err
 	if err != nil {
 		return fmt.Errorf("create dedicated MDS command identity: %w", err)
 	}
-	_, keyring, err := x.client.ConnectionConfig()
+	keyring, err := connectionKeyring(x.client.ConnectionConfig())
 	if err != nil {
 		return err
 	}

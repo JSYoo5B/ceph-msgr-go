@@ -33,6 +33,18 @@ def successful_transcript():
             event("pass", REQUIRED[1]), event("pass")]
 
 
+class FixtureProviderTest(unittest.TestCase):
+    def test_report_names_the_module_the_fixture_reports(self):
+        module = "github.com/JSYoo5B/ceph-testcontainers-go"
+        self.assertEqual(verifier.fixture_provider({"provider": module, "provider_version": "v0.4.0"}), module + "@v0.4.0")
+        # A development build records no release version; none is invented.
+        self.assertEqual(verifier.fixture_provider({"provider": module, "provider_version": ""}), module)
+        for manifest in ({}, {"provider": module}, {"provider": "", "provider_version": "v0.4.0"},
+                         {"provider": module, "provider_version": None}):
+            with self.subTest(manifest=manifest), self.assertRaises(RuntimeError):
+                verifier.fixture_provider(manifest)
+
+
 class RequiredPassesTest(unittest.TestCase):
     def test_complete_run_accepts_passed_subtests_and_returns_required_tests(self):
         lines = successful_transcript()

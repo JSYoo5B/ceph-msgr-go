@@ -140,7 +140,7 @@ func (c *fixtureCluster) runKeyedNative(ctx context.Context, target testcontaine
 	if identity == nil {
 		return ceph.NativeCommandResult{}, errors.New("keyed native command lacks its identity")
 	}
-	_, keyring, err := identity.ConnectionConfig()
+	keyring, err := connectionKeyring(identity.ConnectionConfig())
 	if err != nil {
 		return ceph.NativeCommandResult{}, err
 	}

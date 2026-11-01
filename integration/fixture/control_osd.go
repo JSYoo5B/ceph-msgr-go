@@ -91,7 +91,7 @@ func (c *fixtureCluster) controlOSDEpochRequest(ctx context.Context, out string)
 		if err != nil || selected < 0 {
 			return errors.New("invalid OSD epoch target")
 		}
-		if _, err = c.daemon("osd", fields[2]); err != nil {
+		if _, err = c.daemon(ctx, "osd", fields[2]); err != nil {
 			return err
 		}
 		dump, err := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
@@ -113,7 +113,7 @@ func (c *fixtureCluster) controlOSDEpochRequest(ctx context.Context, out string)
 		}
 		deadline := time.Now().Add(30 * time.Second)
 		for {
-			data, e := c.cluster.AdminSocket(ctx, "osd."+fields[2], "status")
+			data, e := adminSocket(ctx, c.cluster, "osd."+fields[2], "status")
 			if e != nil {
 				return e
 			}

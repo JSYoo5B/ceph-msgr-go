@@ -627,24 +627,27 @@ type fixtureAuthBundleSources struct {
 }
 
 func (s fixtureAuthBundleSources) AdminSocket(ctx context.Context, daemon string, args ...string) ([]byte, error) {
-	return s.c.cluster.AdminSocket(ctx, daemon, args...)
+	return adminSocket(ctx, s.c.cluster, daemon, args...)
 }
 func (s fixtureAuthBundleSources) ManagerMap(ctx context.Context) (managerPreparationMap, error) {
 	return s.c.observeManagerMap(ctx)
 }
 func (s fixtureAuthBundleSources) QuorumStatus(ctx context.Context) (ceph.QuorumStatus, error) {
-	return s.c.cluster.QuorumStatus(ctx)
+	return observe(s.c.cluster).QuorumStatus(ctx)
 }
 func (s fixtureAuthBundleSources) OwnedManagers() []string {
 	var names []string
-	for _, manager := range s.c.cluster.Managers() {
+	// The owned roster is a local snapshot; the provider only waits for a
+	// concurrent topology change, as the uncancellable listing did before.
+	managers, _ := s.c.cluster.Managers(context.Background())
+	for _, manager := range managers {
 		names = append(names, manager.DaemonName)
 	}
 	slices.Sort(names)
 	return names
 }
 func (s fixtureAuthBundleSources) ContainerInstance(ctx context.Context, kind, name string) (string, string, error) {
-	daemon, err := s.c.daemon(kind, name)
+	daemon, err := s.c.daemon(ctx, kind, name)
 	if err != nil {
 		return "", "", err
 	}
@@ -658,7 +661,11 @@ func (s fixtureAuthBundleSources) ContainerInstance(ctx context.Context, kind, n
 	return daemon.GetContainerID(), state.StartedAt, nil
 }
 func (s fixtureAuthBundleSources) TellVersion(ctx context.Context, target string, timeout time.Duration, output int) (ceph.NativeCommandResult, error) {
-	return s.c.cluster.RunNativeCommand(ctx, s.c.cluster.ControlContainer(), ceph.NativeCommand{
+	control, err := s.c.cluster.ControlContainer(ctx)
+	if err != nil {
+		return ceph.NativeCommandResult{}, err
+	}
+	return s.c.cluster.RunNativeCommand(ctx, control, ceph.NativeCommand{
 		Argv: authBundleControlArgv(target), Timeout: timeout, MaxStdout: output, MaxStderr: 16 << 10, Label: "auth bundle tell " + target + " version",
 	})
 }
@@ -682,7 +689,11 @@ func (c *fixtureCluster) collectAuthBundleControl(ctx context.Context, out, id, 
 		return err
 	}
 	var monitors []string
-	for _, mon := range c.cluster.Monitors() {
+	owned, err := c.cluster.Monitors(ctx)
+	if err != nil {
+		return err
+	}
+	for _, mon := range owned {
 		monitors = append(monitors, mon.DaemonName)
 	}
 	sources := fixtureAuthBundleSources{c: c, secrets: fixtureSecrets(out)}

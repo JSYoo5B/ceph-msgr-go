@@ -3,7 +3,7 @@
 
 This validates references, not the truth of a native observation. It runs no
 tests, starts no fixture and makes no network requests. Upstream fixture
-receipts (``ctg@v0.3.0:`` and ``ctg@main:`` tokens) are cited by name only and
+receipts (``ctg@v0.3.0:``, ``ctg@v0.4.0:`` and ``ctg@main:`` tokens) are cited by name only and
 are not resolved, because the provider repository is not part of this tree.
 """
 import json
@@ -23,7 +23,7 @@ LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 CODE = re.compile(r"`([^`]+)`")
 TEST = re.compile(r"(?m)^func (Test\w+)\(t \*testing\.T\)")
 PR = re.compile(r"#(\d+)\b")
-UPSTREAM = re.compile(r"^ctg@(v0\.3\.0|main):(Test\w+(?:/[\w./-]+)?)$")
+UPSTREAM = re.compile(r"^ctg@(v0\.3\.0|v0\.4\.0|main):(Test\w+(?:/[\w./-]+)?)$")
 SCENARIO = re.compile(r"^[a-z][a-z0-9-]*\.(?:aes|aes256k)\b[a-z0-9.-]*$")
 
 
@@ -107,7 +107,7 @@ def open_pull_requests(text):
 
 def placeholder(token):
     """True for prose that names a reference form rather than a reference."""
-    prefix = re.match(r"^(?:ctg@(?:v0\.3\.0|main)?:?|group:|suite:)", token)
+    prefix = re.match(r"^(?:ctg@(?:v0\.3\.0|v0\.4\.0|main)?:?|group:|suite:)", token)
     return "<" in token or (prefix is not None and prefix.end() == len(token))
 
 

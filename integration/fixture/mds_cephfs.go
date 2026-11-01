@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/JSYoo5B/ceph-testcontainers-go/override"
 )
 
 // The CephFS metadata acceptance drives a closed set of native LibCephFS
@@ -111,7 +112,7 @@ type mdsCephFSScope struct {
 	// pushBaseline is the recall configuration and snapshot flag observed
 	// before any push mutation; pushMin/pushMax are the owned overrides.
 	pushBaseline      *mdsCephFSPushBaseline
-	pushMin, pushMax  *ceph.ConfigOverride
+	pushMin, pushMax  *override.ConfigHandle
 	baselineReady     bool
 	baselineBlocklist []mdsSessionsBlock
 	lastRequestID     int64
@@ -575,7 +576,7 @@ func (c *fixtureCluster) prepareMDSCephFS(ctx context.Context, out string) error
 	if err != nil {
 		return fmt.Errorf("create dedicated MDS CephFS identity: %w", err)
 	}
-	_, keyring, err := x.goClient.ConnectionConfig()
+	keyring, err := connectionKeyring(x.goClient.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -597,7 +598,7 @@ func (c *fixtureCluster) prepareMDSCephFS(ctx context.Context, out string) error
 	if err != nil {
 		return fmt.Errorf("create dedicated native CephFS oracle identity: %w", err)
 	}
-	_, nativeKeyring, err := x.native.ConnectionConfig()
+	nativeKeyring, err := connectionKeyring(x.native.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -615,7 +616,7 @@ func (c *fixtureCluster) prepareMDSCephFS(ctx context.Context, out string) error
 	if err != nil {
 		return fmt.Errorf("create dedicated CephFS recovery identity: %w", err)
 	}
-	_, recoveryKeyring, err := x.recClient.ConnectionConfig()
+	recoveryKeyring, err := connectionKeyring(x.recClient.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -990,7 +991,7 @@ func (c *fixtureCluster) finishMDSCephFS(ctx context.Context) error {
 			}
 			return true
 		}
-		err := c.cluster.DeleteClient(ctx, config)
+		err := config.Delete(ctx)
 		fail(err)
 		return err == nil
 	}

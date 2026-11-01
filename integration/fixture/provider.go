@@ -10,11 +10,13 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/JSYoo5B/ceph-testcontainers-go/fault"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
@@ -32,7 +34,7 @@ type fixtureCluster struct {
 	done             chan struct{}
 	mu               sync.Mutex
 	controlErr       error
-	pauses           map[string]*ceph.ContainerPause
+	pauses           map[string]*fault.PauseLease
 	xattrLimits      *xattrLimitsScope
 	copyFromError    *copyFromErrorScope
 	copyFromErrorOut string
@@ -56,7 +58,85 @@ type fixtureCluster struct {
 	mgrServiceConfig *mgrServiceConfigScope
 }
 
-func (c *fixtureCluster) NetworkName() string { return c.cluster.NetworkName() }
+func (c *fixtureCluster) NetworkName() string { return clusterNetworkName(c.cluster) }
+
+// clusterNetworkName returns the cluster's public bridge from its recorded
+// static facts, or "" when the cluster has no facts yet.
+func clusterNetworkName(cluster *ceph.Container) string {
+	facts, err := ceph.FactsOf(cluster)
+	if err != nil {
+		return ""
+	}
+	return facts.NetworkName
+}
+
+// observe returns the read-only observation group of cluster. A nil cluster
+// yields a nil Observer, whose queries return an error.
+func observe(cluster *ceph.Container) *ceph.Observer {
+	observer, _ := ceph.Observe(cluster)
+	return observer
+}
+
+// connectionKeyring keeps only the keyring of a client's connection files.
+func connectionKeyring(config ceph.ConnectionConfig, err error) ([]byte, error) {
+	if err != nil {
+		return nil, err
+	}
+	return config.Keyring, nil
+}
+
+// adminSocket runs one admin socket command on an owned daemon of the
+// fixture's cluster; see the package-level adminSocket.
+func (c *fixtureCluster) adminSocket(ctx context.Context, daemon string, args ...string) ([]byte, error) {
+	return adminSocket(ctx, c.cluster, daemon, args...)
+}
+
+// adminSocket runs one admin socket command on the owned MON, MGR or OSD
+// named like "mon.a", "mgr.b" or "osd.0", through that daemon's handle.
+func adminSocket(ctx context.Context, cluster *ceph.Container, daemon string, args ...string) ([]byte, error) {
+	if cluster == nil {
+		return nil, errors.New("admin socket: no cluster")
+	}
+	kind, id, ok := strings.Cut(daemon, ".")
+	if !ok || id == "" {
+		return nil, fmt.Errorf("admin socket: invalid daemon name %q", daemon)
+	}
+	switch kind {
+	case "mon":
+		monitors, err := cluster.Monitors(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, mon := range monitors {
+			if mon.DaemonName == id {
+				return mon.AdminSocket(ctx, args...)
+			}
+		}
+	case "mgr":
+		managers, err := cluster.Managers(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, mgr := range managers {
+			if mgr.DaemonName == id {
+				return mgr.AdminSocket(ctx, args...)
+			}
+		}
+	case "osd":
+		osds, err := cluster.OSDs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, osd := range osds {
+			if strconv.Itoa(osd.ID) == id {
+				return osd.AdminSocket(ctx, args...)
+			}
+		}
+	default:
+		return nil, fmt.Errorf("admin socket: unsupported daemon %q", daemon)
+	}
+	return nil, fmt.Errorf("admin socket: daemon %s is not owned by this cluster", daemon)
+}
 func (c *fixtureCluster) Terminate(ctx context.Context, opts ...testcontainers.TerminateOption) error {
 	if c.cancel != nil {
 		c.cancel()
@@ -208,16 +288,18 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		mgrMode = ceph.MessengerCRC
 	}
 	policy := ceph.MessengerPolicy{Monitors: []ceph.MessengerConnectionMode{monMode}, Managers: []ceph.MessengerConnectionMode{mgrMode}, OSDs: []ceph.MessengerConnectionMode{mode}}
-	opts := []testcontainers.ContainerCustomizer{ceph.WithMonitorCount(3), ceph.WithStartupTimeout(fixtureStartupTimeout), ceph.WithMessengerMode(ceph.MessengerV2Only), ceph.WithMessengerPolicy(policy), ceph.WithAuth(ceph.AuthConfig{KeyType: ceph.CephxCipher(p.keyType), ServiceCipher: ceph.CephxCipher(p.serviceCipher), MonTicketTTL: authTTL, ServiceTicketTTL: ttl}), ceph.WithConfigFile(cfgPath)}
+	clusterConfig := ceph.ClusterConfig{}.WithMonitorCount(3)
+	networkConfig := ceph.NetworkConfig{}.WithMessengerMode(ceph.MessengerV2Only).WithMessengerPolicy(policy)
+	opts := []testcontainers.ContainerCustomizer{ceph.WithStartupTimeout(fixtureStartupTimeout), ceph.WithAuth(ceph.AuthConfig{KeyType: ceph.CephxCipher(p.keyType), ServiceCipher: ceph.CephxCipher(p.serviceCipher), MonTicketTTL: authTTL, ServiceTicketTTL: ttl}), ceph.WithConfigFile(cfgPath)}
 	if p.mgrCount == "0" {
-		opts = append(opts, ceph.WithNoInitialManagers())
+		clusterConfig = clusterConfig.WithNoInitialManagers()
 	} else {
-		opts = append(opts, ceph.WithManagerCount(2))
+		clusterConfig = clusterConfig.WithManagerCount(2)
 	}
 	if p.mappedIPv6 == "1" {
-		opts = append(opts, ceph.WithAddressFamily(ceph.AddressIPv4MappedIPv6))
+		networkConfig = networkConfig.WithAddressFamily(ceph.AddressIPv4MappedIPv6)
 	} else if p.ipFamily == "6" {
-		opts = append(opts, ceph.WithAddressFamily(ceph.AddressIPv6))
+		networkConfig = networkConfig.WithAddressFamily(ceph.AddressIPv6)
 	}
 	if p.osd == "1" {
 		// Daemon capacity and replicated pool defaults come from separate
@@ -226,29 +308,32 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		if topology.daemons == 0 {
 			return nil, fmt.Errorf("unvalidated OSD topology %q", p.osdReplicas)
 		}
-		opts = append(opts, ceph.WithOSDCount(topology.daemons), ceph.WithOSDObjectStore(ceph.OSDObjectStore(p.osdStore)), ceph.WithPoolDefaults(topology.poolSize, topology.poolMinSize))
+		clusterConfig = clusterConfig.WithOSDCount(topology.daemons).WithPoolDefaults(topology.poolSize, topology.poolMinSize)
+		storage := ceph.OSDStorage{}.WithObjectStore(ceph.OSDObjectStore(p.osdStore))
 		if size := fixtureOSDBlockSize(p); size != 0 {
-			opts = append(opts, ceph.WithOSDBlockSize(size))
+			storage = storage.WithBlockSize(size)
 		}
+		opts = append(opts, ceph.WithOSDStorage(storage))
 	} else {
-		opts = append(opts, ceph.WithNoInitialOSDs())
+		clusterConfig = clusterConfig.WithNoInitialOSDs()
 	}
+	opts = append(opts, ceph.WithClusterConfig(clusterConfig), ceph.WithNetworkConfig(networkConfig))
 	cluster, err := ceph.Run(ctx, p.image, opts...)
 	if cluster == nil {
 		return nil, err
 	}
-	c := &fixtureCluster{cluster: cluster, profile: p, pauses: make(map[string]*ceph.ContainerPause)}
+	c := &fixtureCluster{cluster: cluster, profile: p, pauses: make(map[string]*fault.PauseLease)}
 	if err != nil {
 		return c, err
 	}
 	if err = c.waitReady(ctx, p.mgrCount == "2"); err != nil {
 		return c, err
 	}
-	addresses, err := cluster.DaemonAddresses(ctx)
+	addresses, err := observe(cluster).DaemonAddresses(ctx)
 	if err != nil {
 		return c, err
 	}
-	status, err := cluster.Status(ctx)
+	status, err := observe(cluster).Status(ctx)
 	if err != nil {
 		return c, err
 	}
@@ -263,17 +348,21 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 			}
 		}
 	}
-	for _, mgr := range cluster.Managers() {
+	managers, err := cluster.Managers(ctx)
+	if err != nil {
+		return c, err
+	}
+	for _, mgr := range managers {
 		ip, e := mgr.ContainerIP(ctx)
 		if p.ipFamily == "6" && p.mappedIPv6 != "1" {
 			inspected, inspectErr := mgr.Inspect(ctx)
 			if inspectErr != nil {
 				return c, inspectErr
 			}
-			if inspected.NetworkSettings == nil || inspected.NetworkSettings.Networks[cluster.NetworkName()] == nil {
+			if inspected.NetworkSettings == nil || inspected.NetworkSettings.Networks[clusterNetworkName(cluster)] == nil {
 				return c, errors.New("MGR has no fixture network endpoint")
 			}
-			ip = inspected.NetworkSettings.Networks[cluster.NetworkName()].GlobalIPv6Address.String()
+			ip = inspected.NetworkSettings.Networks[clusterNetworkName(cluster)].GlobalIPv6Address.String()
 		}
 		if e != nil || ip == "" {
 			return c, errors.New("MGR has no selected native IP address")
@@ -307,7 +396,7 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	if err = os.WriteFile(filepath.Join(out, "peers.json"), encoded, 0600); err != nil {
 		return c, err
 	}
-	nativeMonitors, err := cluster.MonitorBootstrapAddresses(ctx)
+	nativeMonitors, err := observe(cluster).MonitorBootstrapAddresses(ctx)
 	if err != nil {
 		return c, err
 	}
@@ -327,10 +416,11 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 		if e != nil {
 			return c, e
 		}
-		_, keyring, e := client.ConnectionConfig()
+		connection, e := client.ConnectionConfig()
 		if e != nil {
 			return c, e
 		}
+		keyring := connection.Keyring
 		if e = os.WriteFile(filepath.Join(out, entry.file+".keyring"), keyring, 0600); e != nil {
 			return c, e
 		}
@@ -355,7 +445,7 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 	}
 	env := p.containerEnvironment()
 	env["CEPH_MSGR_NATIVE_MONITORS"] = nativeMonitors
-	clientOpts := []testcontainers.ContainerCustomizer{cluster.WithClient(ceph.WithClientMessengerPolicy(ceph.ClientMessengerPolicy{MonitorsAndManagers: []ceph.MessengerConnectionMode{ceph.MessengerSecure, ceph.MessengerCRC}, OtherDaemons: []ceph.MessengerConnectionMode{ceph.MessengerSecure, ceph.MessengerCRC}})), ceph.WithIdleEntrypoint(), testcontainers.WithEnv(env), testcontainers.WithLabels(map[string]string{"ceph-msgr-go.integration": "true"}), testcontainers.WithHostConfigModifier(func(host *container.HostConfig) {
+	clientOpts := []testcontainers.ContainerCustomizer{cluster.WithClient(ceph.ClientContainerOptions{}.WithMessengerPolicy(ceph.ClientMessengerPolicy{MonitorsAndManagers: []ceph.MessengerConnectionMode{ceph.MessengerSecure, ceph.MessengerCRC}, OtherDaemons: []ceph.MessengerConnectionMode{ceph.MessengerSecure, ceph.MessengerCRC}})), ceph.WithIdleEntrypoint(), testcontainers.WithEnv(env), testcontainers.WithLabels(map[string]string{"ceph-msgr-go.integration": "true"}), testcontainers.WithHostConfigModifier(func(host *container.HostConfig) {
 		monHost, _, _ := net.SplitHostPort(peers["mon.a"])
 		ip, _ := netip.ParseAddr(monHost)
 		host.ExtraHosts = append(host.ExtraHosts, "fixture-mon-a:"+ip.Unmap().String())
@@ -465,10 +555,10 @@ func (c *fixtureCluster) waitReady(ctx context.Context, managers bool) error {
 	deadline, cancel := context.WithTimeout(ctx, fixtureStartupTimeout)
 	defer cancel()
 	for {
-		q, err := c.cluster.QuorumStatus(deadline)
+		q, err := observe(c.cluster).QuorumStatus(deadline)
 		ready := err == nil && len(q.QuorumNames) == 3
 		if managers {
-			m, e := c.cluster.ManagerStatus(deadline)
+			m, e := observe(c.cluster).ManagerStatus(deadline)
 			ready = ready && e == nil && m.Available && len(m.Standbys) == 1
 		}
 		if ready {

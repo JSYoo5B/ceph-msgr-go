@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/JSYoo5B/ceph-testcontainers-go/override"
 )
 
 // The CephFS push acceptance extends the CephFS profile with a third owned
@@ -257,7 +258,7 @@ func (c *fixtureCluster) mdsCephFSPushReadConfig(ctx context.Context) (mdsCephFS
 	if state.DaemonMaxCaps, err = c.mdsCephFSDaemonUint(ctx, mdsCephFSPushMaxName); err != nil {
 		return state, err
 	}
-	entries, err := c.cluster.Configuration(ctx)
+	entries, err := observe(c.cluster).Configuration(ctx)
 	if err != nil {
 		return state, err
 	}
@@ -326,7 +327,7 @@ func (c *fixtureCluster) prepareMDSCephFSPush(ctx context.Context, out string) e
 	if err != nil {
 		return fmt.Errorf("create dedicated native CephFS push identity: %w", err)
 	}
-	_, keyring, err := x.pushNative.ConnectionConfig()
+	keyring, err := connectionKeyring(x.pushNative.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -612,7 +613,7 @@ func (c *fixtureCluster) mdsCephFSPushRecallOn(ctx context.Context, id int64, re
 	for _, step := range []struct {
 		kind, name string
 		value      uint64
-		handle     **ceph.ConfigOverride
+		handle     **override.ConfigHandle
 	}{{"push-config-min", mdsCephFSPushMinName, x.push.MinCaps, &x.pushMin}, {"push-config-max", mdsCephFSPushMaxName, x.push.MaxCaps, &x.pushMax}} {
 		m := &mdsCephFSMutation{Kind: step.kind, RequestID: id, Target: section + " " + step.name + "=" + strconv.FormatUint(step.value, 10), State: "intended"}
 		x.mutations = append(x.mutations, m)
@@ -621,7 +622,7 @@ func (c *fixtureCluster) mdsCephFSPushRecallOn(ctx context.Context, id int64, re
 			return err
 		}
 		// The provider keeps a handle for Restore even after an uncertain reply.
-		*step.handle, err = c.cluster.TemporaryConfig(ctx, ceph.ConfigSetting{Section: section, Name: step.name, Value: strconv.FormatUint(step.value, 10)})
+		*step.handle, err = override.SetConfig(ctx, c.cluster, ceph.ConfigSetting{Section: section, Name: step.name, Value: strconv.FormatUint(step.value, 10)})
 		if err != nil {
 			m.State, m.Error = "uncertain", err.Error()
 			return errors.Join(err, c.mdsCephFSJournal())
@@ -640,7 +641,7 @@ func (c *fixtureCluster) mdsCephFSPushRecallOn(ctx context.Context, id int64, re
 // set, mds_min_caps_per_client, then waits for the daemon's baseline values.
 func (c *fixtureCluster) mdsCephFSPushRecallOff(ctx context.Context, all bool, result *mdsCephFSResult) error {
 	x := c.mdsCephFS
-	restore := func(kind string, handle *ceph.ConfigOverride) error {
+	restore := func(kind string, handle *override.ConfigHandle) error {
 		m := x.pushMutation(kind)
 		if m == nil || handle == nil {
 			return fmt.Errorf("MDS CephFS push %s restore requested without an owned override", kind)
@@ -704,7 +705,7 @@ func (c *fixtureCluster) finishMDSCephFSPushConfig(ctx context.Context, receipt 
 	var restoreErr error
 	for _, step := range []struct {
 		kind   string
-		handle *ceph.ConfigOverride
+		handle *override.ConfigHandle
 	}{{"push-config-max", x.pushMax}, {"push-config-min", x.pushMin}} {
 		if step.handle == nil {
 			continue

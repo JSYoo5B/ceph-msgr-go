@@ -67,7 +67,7 @@ positive canonical decimals. Only these actions exist:
 | `refuse-on` / `refuse-off` | none | `fs set <fs> refuse_client_session true/false` |
 | `require-on` / `require-off` | none | `fs required_client_features <fs> add/rm reply_encoding` |
 | `require-reclaim-on` / `require-reclaim-off` | none | `fs required_client_features <fs> add/rm reclaim_client` |
-| `stale-on` / `stale-off` | none | `session_timeout` 30 s and `session_autoclose` 120 s through the provider's `TemporarySessionTimeouts`, plus central `mds mds_defer_session_stale=false` through `TemporaryConfig`; restore through both handles |
+| `stale-on` / `stale-off` | none | `session_timeout` 30 s and `session_autoclose` 120 s through the provider's `Filesystem.OverrideSessionTimeouts`, plus central `mds mds_defer_session_stale=false` through `override.SetConfig`; restore through both handles |
 | `evict` | one GlobalID | `tell mds.<fs>:0 session evict id=<gid>` |
 
 Each toggle is applied at most once and restored at most once. `refuse-on`

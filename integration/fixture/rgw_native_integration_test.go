@@ -88,7 +88,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	dataPool, indexPool, dataPoolID, indexPoolID := rgwNativePools(t, ctx, cluster)
 	head := bucketInfo.Marker + "_" + key
 	history, err := rgwNativePollHistory(ctx, func(read context.Context) []byte {
-		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
+		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(rgwNativeOSDs(t, ctx, cluster)[0].ID), "dump_historic_ops")
 	}, func(output []byte) (bool, error) {
 		return rgwNativePutPublished(output, generation, head, bucketInfo.ID, dataPoolID, indexPoolID)
 	})
@@ -165,7 +165,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	request(http.MethodDelete, path, nil, http.StatusNoContent)
 	deleteGeneration := rgwNativeGeneration(t, ctx, gateway)
 	deleteHistory, err := rgwNativePollHistory(ctx, func(read context.Context) []byte {
-		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(cluster.OSDs()[0].ID), "dump_historic_ops")
+		return rgwNativeExec(t, read, control, "ceph", "tell", "osd."+strconv.Itoa(rgwNativeOSDs(t, ctx, cluster)[0].ID), "dump_historic_ops")
 	}, func(output []byte) (bool, error) {
 		for _, op := range rgwNativeAttributedHistory(t, output, deleteGeneration, objects) {
 			if op.Object == head && op.PoolID == dataPoolID && rgwNativeCall(op, "obj_remove") {
@@ -203,7 +203,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 		}
 	}
 	request(http.MethodDelete, "/"+bucket, nil, http.StatusNoContent)
-	if err := gateway.RemoveUser(ctx, user); err != nil {
+	if err := user.Remove(ctx); err != nil {
 		t.Fatal("remove owned user:", err)
 	}
 	t.Logf("RGW_NATIVE_CHECKPOINT image=%s source=7f793731f1b39eb4f465e960113d2363c311b964 mode=secure key=aes256k bytes=%d sha256=%s native_index_shard=%s mapped_endpoint_changed=%t before=%+v after=%+v put_reception=%+v delete_reception=%+v object_index_user_cleanup=confirmed", rgwNativeImage, len(payload), rgwNativeHash(payload), before, endpointChanged, generation, afterGeneration, putReceipt, deleteReceipt)
@@ -320,7 +320,7 @@ func rgwNativeOracle(t *testing.T, ctx context.Context, control testcontainers.C
 // Pool discovery is MON metadata traffic, not an OSD data/index oracle.
 func rgwNativePools(t *testing.T, ctx context.Context, cluster *rgw.Container) (dataPool, indexPool string, dataPoolID, indexPoolID int64) {
 	t.Helper()
-	pools, err := cluster.Pools(ctx)
+	pools, err := rgwNativePoolStates(ctx, cluster)
 	if err != nil {
 		t.Fatal(err)
 	}

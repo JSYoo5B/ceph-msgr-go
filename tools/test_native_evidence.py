@@ -53,7 +53,7 @@ class NativeEvidenceTests(unittest.TestCase):
                    "osd": "1", "osd_profile": "legacy-v6", "osd_store": "bluestore", "osd_replicas": "1",
                    "mds_fresh": True, "mds_cephfs_data": True, "image": evidence.IMAGE, "image_id": "sha256:" + "c" * 64,
                    "architecture": "amd64", "daemon_version": "ceph version 20.2.4 (%s) tentacle (stable)" % evidence.SOURCE,
-                   "provider": "github.com/JSYoo5B/ceph-testcontainers-go", "provider_version": "v0.3.0"}
+                   "provider": evidence.PROVIDER, "provider_version": evidence.PROVIDER_VERSION}
         return {"fixture-manifest.json": runtime,
                 "mds-cephfs-data-results.json": {"source_commit": evidence.SOURCE, "global_id": 10, "cephfs_nonce": 17,
                                                 "facts": {"restart_recipe": "cap-send", "cap_send_recovery": facts},
@@ -133,6 +133,27 @@ class NativeEvidenceTests(unittest.TestCase):
             with self.subTest(name=name, field=field), self.assertRaises(evidence.EvidenceError):
                 self.collect()
             self.write(self.receipts / name, self.raw[name])
+
+    def test_collection_admits_only_the_pinned_provider_release(self):
+        self.assertEqual(evidence.PROVIDER_VERSION, "v0.4.0")
+        for field, value in (("provider_version", "v0.3.0"), ("provider_version", "v0.5.0"), ("provider_version", ""),
+                             ("provider", "example.org/other-provider")):
+            data = dict(self.raw["fixture-manifest.json"], **{field: value})
+            self.write(self.receipts / "fixture-manifest.json", data)
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(evidence.EvidenceError, "provider-mismatch"):
+                self.collect()
+        self.write(self.receipts / "fixture-manifest.json", self.raw["fixture-manifest.json"])
+        self.assertEqual(self.collect()["observed"]["provider_version"], "v0.4.0")
+
+    def test_verification_admits_only_the_named_retained_provider_releases(self):
+        ctx = evidence.context(self.request)
+        observed = self.collect()["observed"]
+        self.assertEqual(evidence.RETAINED_PROVIDER_VERSIONS, {"v0.3.0", "v0.4.0"})
+        for version in ("v0.3.0", "v0.4.0"):
+            evidence.validate_runtime(dict(observed, provider_version=version), ctx)
+        for version in ("v0.2.0", "v0.5.0", "", "main"):
+            with self.subTest(version=version), self.assertRaisesRegex(evidence.EvidenceError, "provider-mismatch"):
+                evidence.validate_runtime(dict(observed, provider_version=version), ctx)
 
     def test_file_hash_unknown_missing_and_duplicate_entries_are_rejected(self):
         original = self.collect()

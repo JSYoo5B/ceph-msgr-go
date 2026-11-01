@@ -187,7 +187,7 @@ as absent). The output shape is checked as for the other drivers; the quota
 readback is recorded for the test to judge rather than required.
 
 The recall settings are owned provider overrides
-(`TemporaryConfig`/`Restore`) on the owned daemon's section.
+(`override.SetConfig`/`Restore`) on the owned daemon's section.
 `push-recall-on` journals and applies the minimum, then the maximum, and
 returns once the daemon reports both; the upkeep thread then recalls any
 session above the maximum down to the minimum

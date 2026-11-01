@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/JSYoo5B/ceph-testcontainers-go/override"
 )
 
 var xattrLimitNames = []string{"osd_max_attr_size", "osd_max_attr_name_len"}
@@ -32,7 +33,7 @@ type xattrLimitsReceipt struct {
 	Restored map[string]map[string]string `json:"effective_restored"`
 }
 
-// Only selected non-secret keys are retained. Public TemporaryConfig owns the
+// Only selected non-secret keys are retained. Public override.SetConfig owns the
 // exact entry/absence restoration and refuses conflicting outside edits.
 type xattrLimitsScope struct {
 	backend  xattrLimitsBackend
@@ -42,20 +43,24 @@ type xattrLimitsScope struct {
 }
 
 func beginXattrLimits(ctx context.Context, cluster *ceph.Container) (*xattrLimitsScope, error) {
-	backend := xattrLimitsBackend{configuration: cluster.Configuration, owned: make(map[string]string)}
-	for _, osd := range cluster.OSDs() {
+	backend := xattrLimitsBackend{configuration: observe(cluster).Configuration, owned: make(map[string]string)}
+	osds, err := cluster.OSDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, osd := range osds {
 		backend.ids = append(backend.ids, osd.ID)
 		backend.owned["osd."+strconv.Itoa(osd.ID)] = osd.Container.GetContainerID()
 	}
 	backend.temporary = func(ctx context.Context, setting ceph.ConfigSetting) (xattrLimitRestorer, error) {
-		handle, err := cluster.TemporaryConfig(ctx, setting)
+		handle, err := override.SetConfig(ctx, cluster, setting)
 		if handle == nil {
 			return nil, err
 		}
 		return handle, err
 	}
 	backend.get = func(ctx context.Context, daemon, name string) ([]byte, error) {
-		return cluster.AdminSocket(ctx, daemon, "config", "get", name)
+		return adminSocket(ctx, cluster, daemon, "config", "get", name)
 	}
 	return beginXattrLimitsWith(ctx, backend)
 }
@@ -205,7 +210,7 @@ func decodeXattrLimit(data []byte, name string) (string, error) {
 	}
 	// CephContext opens config_get as the first object section (ceph_context.cc
 	// 574,613); JSONFormatter::print_name (Formatter.cc 210) omits the root
-	// section name. AdminSocket v0.2.0 returns raw stdout unchanged.
+	// section name. The daemon handles' AdminSocket returns raw stdout unchanged.
 	var result map[string]json.RawMessage
 	if err := json.Unmarshal(data, &result); err != nil || len(result) != 1 || result[name] == nil {
 		return "", errors.New("selected config get has invalid shape")

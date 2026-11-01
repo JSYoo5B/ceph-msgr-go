@@ -254,11 +254,13 @@ func (c *fixtureCluster) copyFromErrorControl(ctx context.Context, out string, f
 	if (fields[1] == "staging") != (len(fields) == 3) || len(fields) > 3 {
 		return errors.New("invalid copy-error control arguments")
 	}
-	osds := c.cluster.OSDs()
+	osds, err := c.cluster.OSDs(ctx)
+	if err != nil {
+		return err
+	}
 	if len(osds) != 1 {
 		return errors.New("copy-error injection requires exactly one owned OSD")
 	}
-	var err error
 	switch fields[1] {
 	case "apply":
 		if c.copyFromError != nil {
@@ -268,7 +270,7 @@ func (c *fixtureCluster) copyFromErrorControl(ctx context.Context, out string, f
 		if multi {
 			chunk = copyFromMultiChunkLimit
 		}
-		c.copyFromError, err = beginCopyFromError(ctx, osds[0].ID, chunk, c.cluster.AdminSocket)
+		c.copyFromError, err = beginCopyFromError(ctx, osds[0].ID, chunk, c.adminSocket)
 		c.copyFromErrorOut = out
 	case "restore":
 		if c.copyFromError == nil {
@@ -276,9 +278,9 @@ func (c *fixtureCluster) copyFromErrorControl(ctx context.Context, out string, f
 		}
 		err = c.copyFromError.Restore(ctx)
 	case "history":
-		err = observeCopyGetHistory(ctx, out, osds[0].ID, c.cluster.AdminSocket)
+		err = observeCopyGetHistory(ctx, out, osds[0].ID, c.adminSocket)
 	case "staging":
-		err = observeCopyStaging(ctx, out, osds[0].ID, fields[2], c.cluster.AdminSocket)
+		err = observeCopyStaging(ctx, out, osds[0].ID, fields[2], c.adminSocket)
 	default:
 		return errors.New("invalid copy-error scope action")
 	}

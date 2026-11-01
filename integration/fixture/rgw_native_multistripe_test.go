@@ -84,7 +84,7 @@ func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 	generation := rgwNativeGeneration(t, ctx, gateway)
 	dataPool, indexPool, dataPoolID, indexPoolID := rgwNativePools(t, ctx, cluster)
 	logPoolID := rgwNativeLogPoolID(t, ctx, cluster)
-	osdName := "osd." + strconv.Itoa(cluster.OSDs()[0].ID)
+	osdName := "osd." + strconv.Itoa(rgwNativeOSDs(t, ctx, cluster)[0].ID)
 	history, err := rgwNativePollHistory(ctx, func(read context.Context) []byte {
 		return rgwNativeExec(t, read, control, "ceph", "tell", osdName, "dump_historic_ops")
 	}, func(output []byte) (bool, error) {
@@ -260,7 +260,7 @@ func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 		}
 	}
 	request(http.MethodDelete, "/"+bucket, nil, http.StatusNoContent, rgwNativeDefaultResponseLimit)
-	if err := gateway.RemoveUser(ctx, user); err != nil {
+	if err := user.Remove(ctx); err != nil {
 		t.Fatal("remove owned user:", err)
 	}
 	tags := map[string]bool{}
@@ -289,7 +289,7 @@ func TestRGWNativeMultiStripeIntegration(t *testing.T) {
 
 func rgwNativeLogPoolID(t *testing.T, ctx context.Context, cluster *rgw.Container) int64 {
 	t.Helper()
-	pools, err := cluster.Pools(ctx)
+	pools, err := rgwNativePoolStates(ctx, cluster)
 	if err != nil {
 		t.Fatal(err)
 	}

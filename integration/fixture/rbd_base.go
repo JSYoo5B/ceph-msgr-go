@@ -128,6 +128,8 @@ type rbdBaseScope struct {
 	goIntent         bool
 	nativeIntent     bool
 	poolIntent       bool
+	// pool is the CreatePool handle, also one returned with an error.
+	pool             *ceph.Pool
 	poolID           int64
 	lastRequestID    int64
 	mutations        []*rbdBaseMutation
@@ -642,7 +644,9 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	}
 	// Eight PGs, no HASHPSPOOL: the legacy-v6 client sends the raw object
 	// hash and the OSD folds it with the legacy additive seed.
-	_, err = c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: x.plan.Pool, PGNum: 8, Replicas: 1, MinSize: 1, Application: "rbd", NoHashPSPool: true})
+	// A Pool returned with an error still identifies the attempted resources
+	// for cleanup.
+	x.pool, err = c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: x.plan.Pool, PGNum: 8, Replicas: 1, MinSize: 1, Application: "rbd", NoHashPSPool: true})
 	if err := c.rbdBaseFinish(m, err); err != nil {
 		return fmt.Errorf("create owned RBD pool: %w", err)
 	}
@@ -682,7 +686,7 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if err != nil {
 		return fmt.Errorf("create dedicated RBD base identity: %w", err)
 	}
-	_, keyring, err := x.goClient.ConnectionConfig()
+	keyring, err := connectionKeyring(x.goClient.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -701,7 +705,7 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if err != nil {
 		return fmt.Errorf("create dedicated native RBD oracle identity: %w", err)
 	}
-	_, nativeKeyring, err := x.native.ConnectionConfig()
+	nativeKeyring, err := connectionKeyring(x.native.ConnectionConfig())
 	if err != nil {
 		return err
 	}
@@ -855,7 +859,7 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 		}
 	}
 	if x.poolIntent {
-		err := c.cluster.RemovePool(ctx, x.plan.Pool)
+		err := x.removePool(ctx, c.cluster)
 		receipt.PoolRemoved = err == nil
 		fail(err)
 		data, err := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
@@ -892,7 +896,7 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 			}
 			return true
 		}
-		err := c.cluster.DeleteClient(ctx, config)
+		err := config.Delete(ctx)
 		fail(err)
 		return err == nil
 	}
@@ -907,4 +911,18 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 	}
 	x.cleanupErr = errors.Join(errors.Join(errs...), writeMDSFreshJSON(x.out, "rbd-base-cleanup.json", receipt))
 	return x.cleanupErr
+}
+
+// removePool removes the owned pool, its CRUSH rule and profile through the
+// CreatePool handle. Without one (creation was never reached) it binds the
+// pool of the planned name, which then must exist.
+func (x *rbdBaseScope) removePool(ctx context.Context, cluster *ceph.Container) error {
+	pool := x.pool
+	if pool == nil {
+		var err error
+		if pool, err = cluster.Pool(ctx, x.plan.Pool); err != nil {
+			return err
+		}
+	}
+	return pool.Remove(ctx)
 }

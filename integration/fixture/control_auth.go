@@ -184,7 +184,11 @@ func (c *fixtureCluster) nativeManagerRefusal(ctx context.Context, name string, 
 		return managerRefusal{}, fmt.Errorf("native mgr.%s process start %q: %w", name, start, err)
 	}
 	var monitors []monitorLogSource
-	for _, mon := range c.cluster.Monitors() {
+	owned, err := c.cluster.Monitors(ctx)
+	if err != nil {
+		return managerRefusal{}, err
+	}
+	for _, mon := range owned {
 		monitors = append(monitors, monitorLogSource{name: mon.DaemonName, logs: mon.Logs})
 	}
 	refused, err := monitorReclaimRefusals(ctx, monitors, name, started)
@@ -205,11 +209,11 @@ func (c *fixtureCluster) controlManagerAuthRequest(ctx context.Context, out stri
 		if len(fields) != 2 || c.profile.nativeMgrPreparation != "1" {
 			return errors.New("native MGR rejection observation is restricted to its opt-in acceptance fixture")
 		}
-		daemon, err := c.daemon("mgr", fields[1])
+		daemon, err := c.daemon(ctx, "mgr", fields[1])
 		if err != nil {
 			return err
 		}
-		status, err := c.cluster.ManagerStatus(ctx)
+		status, err := observe(c.cluster).ManagerStatus(ctx)
 		if err != nil {
 			return err
 		}
