@@ -88,6 +88,20 @@ baseline `false`. Each retained absence audit reported eight owned
 containers and its network absent; the offline auditor issued no Docker
 queries.
 
+The runs above predate the following change to the deletion window. The
+fixture now changes the central `mon_allow_pool_delete` entry (section `mon`)
+through provider `override.SetConfig` instead of hand-written `config set`
+and `config rm`. The handle records the prior absence, restores it with a
+readback, and refuses to restore over an outside edit. The fixture still
+checks independently through the provider CLI that the effective value is
+`false` and that `config dump` has no `mon_allow_pool_delete` entry in any
+section, both before the change and after the restore, and checks the dump
+again after the final inventories. The step names in
+`osd-cache-pools-fixture.json` and the `cleanup` fields are unchanged. A
+refused, failed or uncertain change ends cleanup without removing anything
+and is not retried. A failed removal leaves the entry to the disposable
+cluster, whose termination discards the configuration database.
+
 Shared lifecycle regression passed both native-only profiles: each had
 66 calls, ten placements, eight containers/network absent. The separate
 auditor checked all 132 calls; that probe makes no Go support claim.
