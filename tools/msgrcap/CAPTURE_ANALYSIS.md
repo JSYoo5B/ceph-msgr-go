@@ -239,13 +239,17 @@ and non-TCP records are not compared.
 | Run | Source | crc | secure |
 | --- | --- | --- | --- |
 | 41952977929 (attempt 1), reference primary | `5a2f8d4` | full parity with and without the key: 10 connections, 2 cross-check rows, 0 drops in either capture, gap 815 ms, no reference connection in the gap, no provider connection marked | same: 10 connections, 2 rows, 0 drops, gap 815 ms |
+| 41953557979 (attempt 1), provider primary with `-require-full` | `fe4cc70` | full parity with and without the key: 10 connections, 2 rows, 0 drops, gap 894 ms; expectation gate met on the provider analyses | same: 10 connections, 2 rows, 0 drops, gap 885 ms; gate met |
 
-In both modes one reconnect dial was held for about 0.7 s and then refused
-inside segment 2, so the hold engaged in the gap it guards. The provider tshark
-comparison covered all 10 connections in both modes. The only record the
-reference had and the provider lacked, in each mode, was the restarted
-container's first gratuitous ARP announcement, sent inside the gap before
-segment 2 was ready; ARP is outside the comparison.
+In both modes of both runs one reconnect dial was held (about 0.7 s in the
+first run, 0.85 s in the second) and then refused inside segment 2, so the
+hold engaged in the gap it guards. The provider tshark
+comparison covered all 10 connections in every job. In run 41952977929 the
+only record the reference had and the provider lacked, in each mode, was the
+restarted container's first gratuitous ARP announcement, sent inside the gap
+before segment 2 was ready; ARP is outside the comparison. Artifacts of both
+runs (`msgrcap-crc`, `msgrcap-secure`) are retained for 30 days; later commits
+change only this report.
 
 Because parity held in both modes, the provider capture is now the primary
 evidence of the live job: the top-level analyses and the expectation gate use
