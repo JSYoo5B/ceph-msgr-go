@@ -171,7 +171,13 @@ is armed, intended, applied or uncertain, until adoption succeeds.
 While the journal is paused or client messages are blackholed by the MDS or the OSD, LibCephFS work and planned native mutations are
 also refused; administrative observation, cap logs and restart arm remain
 available. Runtime changes use only the owned daemon's admin socket. Their
-receipts preserve settings, baselines, incarnation GID and readbacks.
+receipts preserve settings, baselines, incarnation GID and readbacks. The
+fixture's runtime config adapter (`runtime_config.go`) orders the steps and
+checks each readback: MDS steps keep the native admin socket path, because
+provider v0.4.0 has no public MDS runtime config primitive
+(JSYoo5B/ceph-testcontainers-go#538); the writeback-fence OSD drop sets
+`debug_ms` through `override.SetDebugLevel` and `ms_blackhole_client` through
+the OSD handle's `AdminSocket`.
 
 Cap-log input is bounded to 16 MiB, output to 64 groups and 2 KiB per line.
 An incoming caps message must name the exact registered client GlobalID and

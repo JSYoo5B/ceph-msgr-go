@@ -120,31 +120,18 @@ func (c *fixtureCluster) mdsCephFSDataConfig(ctx context.Context, d mdsFreshDaem
 	return values, c.mdsCephFSDataCheckDaemon(ctx, d)
 }
 func (c *fixtureCluster) mdsCephFSDataApplyRuntime(ctx context.Context, d mdsFreshDaemon, settings map[string]string, readback *map[string]string) error {
-	*readback = map[string]string{}
-	for _, name := range slices.Sorted(maps.Keys(settings)) {
-		if !slices.Contains(mdsCephFSDataRuntimeConfigNames, name) {
-			return errors.New("DATA runtime setting is outside closed scope")
-		}
-		if err := c.mdsCephFSDataCheckDaemon(ctx, d); err != nil {
-			return err
-		}
-		if _, err := c.mdsCephFSDataAsok(ctx, "config", "set", name, settings[name]); err != nil {
-			return err
-		}
-		data, err := c.mdsCephFSDataAsok(ctx, "config", "get", name)
-		if err != nil {
-			return err
-		}
-		value, err := parseMDSCephFSCompletionConfig(data, name)
-		if err != nil {
-			return err
-		}
-		(*readback)[name] = value
-		if value != settings[name] {
-			return fmt.Errorf("DATA daemon reports %s=%s after setting %s", name, value, settings[name])
-		}
-	}
-	return c.mdsCephFSDataCheckDaemon(ctx, d)
+	return c.mdsCephFSDataRuntimeConfig(d).apply(ctx, slices.Sorted(maps.Keys(settings)), settings, readback)
+}
+
+// mdsCephFSDataRuntimeConfig is the runtime config adapter of the proven
+// incarnation d: each step and the end check that the admin socket still
+// names it. MDS runtime config keeps the native admin socket path
+// (JSYoo5B/ceph-testcontainers-go#538).
+func (c *fixtureCluster) mdsCephFSDataRuntimeConfig(d mdsFreshDaemon) *runtimeConfig {
+	r := mdsAdminSocketRuntimeConfig("DATA daemon", c.mdsCephFSDataAsok)
+	r.scope, r.scopeErr = mdsCephFSDataRuntimeConfigNames, errors.New("DATA runtime setting is outside closed scope")
+	r.guard = func(ctx context.Context) error { return c.mdsCephFSDataCheckDaemon(ctx, d) }
+	return r
 }
 func (x *mdsCephFSDataScope) newRuntime(id int64, kind string) (*mdsCephFSDataRuntime, error) {
 	if x.restart.pending() || len(x.runtime) >= 4 || slices.ContainsFunc(x.runtime, func(r *mdsCephFSDataRuntime) bool { return r.Kind == kind && r.IncarnationGID == x.current.GID }) {

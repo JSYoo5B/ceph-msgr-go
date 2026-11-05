@@ -505,6 +505,9 @@ type mdsCephFSDataScope struct {
 	// restored drops of the same run.
 	osdDrop        *mdsCephFSDataOSDDrop
 	osdDropHistory []*mdsCephFSDataOSDDrop
+	// osdRuntime is the owned OSD's runtime config adapter, which keeps the
+	// drop's debug_ms window until its restore (runtime_config.go).
+	osdRuntime *runtimeConfig
 	// reader is the writeback-fence recipe's background native reader.
 	reader       *mdsCephFSDataReaderRun
 	logMark      int

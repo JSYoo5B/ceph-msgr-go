@@ -57,7 +57,10 @@ tail (bytes 220000..240000) each fall into one extent of object 1.
    sends an UPDATE with `FLAG_SYNC`. Its FLUSH_ACK must match the TID, inode,
    dirty Fw and cap ID: this is the accepted metadata flush.
 2. `osd-drop-on` sets `debug_ms=10/10` and then `ms_blackhole_client=true`
-   on the single owned OSD, each read back. The consumer writes B's tail with
+   on the single owned OSD, each read back. `debug_ms` is one provider
+   `override.SetDebugLevel` window, which `osd-drop-off` closes through its
+   own `Restore`; `ms_blackhole_client` is one `config set` and `config get`
+   through the OSD handle's `AdminSocket` (`runtime_config.go`). The consumer writes B's tail with
    a 5 s local wait. The write must end `uncertain`, with its submission
    identity (GlobalID, map epoch) kept. `osd-log` must return exactly one
    attributed pair: the OSD's ProtocolV2 `received message ... from=client.<gid>

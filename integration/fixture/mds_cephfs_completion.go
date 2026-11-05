@@ -1179,27 +1179,14 @@ func (c *fixtureCluster) mdsCephFSCompletionDaemonAct(ctx context.Context, id in
 }
 
 // mdsCephFSCompletionApplyRuntime sets each value through the admin socket
-// and requires the daemon to report it.
+// and requires the daemon to report it. MDS runtime config keeps the native
+// admin socket path inside the runtime config adapter
+// (JSYoo5B/ceph-testcontainers-go#538).
 func (c *fixtureCluster) mdsCephFSCompletionApplyRuntime(ctx context.Context, settings map[string]string, readback *map[string]string) error {
-	*readback = map[string]string{}
-	for _, name := range slices.Sorted(maps.Keys(settings)) {
-		if _, err := c.mdsCephFSCompletionAsok(ctx, 15*time.Second, "config", "set", name, settings[name]); err != nil {
-			return err
-		}
-		data, err := c.mdsCephFSCompletionAsok(ctx, 15*time.Second, "config", "get", name)
-		if err != nil {
-			return err
-		}
-		value, err := parseMDSCephFSCompletionConfig(data, name)
-		if err != nil {
-			return err
-		}
-		(*readback)[name] = value
-		if value != settings[name] {
-			return fmt.Errorf("MDS daemon reports %s=%s after setting %s", name, value, settings[name])
-		}
-	}
-	return nil
+	r := mdsAdminSocketRuntimeConfig("MDS daemon", func(ctx context.Context, args ...string) ([]byte, error) {
+		return c.mdsCephFSCompletionAsok(ctx, 15*time.Second, args...)
+	})
+	return r.apply(ctx, slices.Sorted(maps.Keys(settings)), settings, readback)
 }
 
 // mdsCephFSCompletionCentralAct applies or restores one owned central
