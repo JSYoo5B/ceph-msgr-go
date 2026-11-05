@@ -22,7 +22,9 @@ import (
 //
 //   - osd-drop-on/osd-drop-off: a daemon-local override of the single owned
 //     OSD, debug_ms=10/10 then ms_blackhole_client=true, read back from its
-//     admin socket and restored (blackhole first) with readback. At most two
+//     admin socket and restored (blackhole first) with readback. debug_ms is
+//     one override.SetDebugLevel window and ms_blackhole_client one config
+//     set/get through the OSD handle's AdminSocket (runtime_config.go). At most two
 //     drops are issued per run, one at a time: the second only after the
 //     first is restored. Native
 //     Connection::is_blackhole applies ms_blackhole_client to client peers
@@ -107,16 +109,28 @@ func (c *fixtureCluster) mdsCephFSDataOSD(ctx context.Context) (*ceph.OSDContain
 	return owned[0], "osd." + strconv.Itoa(owned[0].ID), nil
 }
 
+// mdsCephFSDataOSDRuntime returns the run's runtime config adapter of the
+// owned OSD. It keeps the debug_ms window of an OSD drop between its apply
+// and its restore, so it stays bound to the daemon it was created for.
+func (c *fixtureCluster) mdsCephFSDataOSDRuntime(daemon string) (*runtimeConfig, error) {
+	x := c.mdsCephFSData
+	if x.osdRuntime == nil {
+		x.osdRuntime = osdRuntimeConfig(c.cluster, daemon, "DATA OSD", mdsCephFSDataOSDConfigNames, errors.New("DATA OSD setting is outside closed scope"))
+	}
+	if x.osdRuntime.daemon != daemon {
+		return nil, errors.New("DATA OSD runtime config is bound to another OSD")
+	}
+	return x.osdRuntime, nil
+}
+
 func (c *fixtureCluster) mdsCephFSDataOSDConfig(ctx context.Context, daemon string) (map[string]string, error) {
+	r, err := c.mdsCephFSDataOSDRuntime(daemon)
+	if err != nil {
+		return nil, err
+	}
 	values := map[string]string{}
 	for _, name := range mdsCephFSDataOSDConfigNames {
-		call, stop := context.WithTimeout(ctx, 15*time.Second)
-		data, err := adminSocket(call, c.cluster, daemon, "config", "get", name)
-		stop()
-		if err != nil {
-			return nil, err
-		}
-		value, err := parseMDSCephFSCompletionConfig(data, name)
+		value, err := r.get(ctx, name)
 		if err != nil {
 			return nil, err
 		}
@@ -125,35 +139,27 @@ func (c *fixtureCluster) mdsCephFSDataOSDConfig(ctx context.Context, daemon stri
 	return values, nil
 }
 
-// mdsCephFSDataOSDApply sets values in the given order, each read back.
+// mdsCephFSDataOSDApply sets values in the given order, each read back:
+// debug_ms through override.SetDebugLevel, ms_blackhole_client through the
+// OSD handle's AdminSocket (runtime_config.go).
 func (c *fixtureCluster) mdsCephFSDataOSDApply(ctx context.Context, daemon string, order []string, values map[string]string, readback *map[string]string) error {
-	*readback = map[string]string{}
-	for _, name := range order {
-		if !slices.Contains(mdsCephFSDataOSDConfigNames, name) || values[name] == "" {
-			return errors.New("DATA OSD setting is outside closed scope")
-		}
-		call, stop := context.WithTimeout(ctx, 15*time.Second)
-		_, err := adminSocket(call, c.cluster, daemon, "config", "set", name, values[name])
-		stop()
-		if err != nil {
-			return err
-		}
-		call, stop = context.WithTimeout(ctx, 15*time.Second)
-		data, err := adminSocket(call, c.cluster, daemon, "config", "get", name)
-		stop()
-		if err != nil {
-			return err
-		}
-		value, err := parseMDSCephFSCompletionConfig(data, name)
-		if err != nil {
-			return err
-		}
-		(*readback)[name] = value
-		if value != values[name] {
-			return fmt.Errorf("DATA OSD reports %s=%s after setting %s", name, value, values[name])
-		}
+	r, err := c.mdsCephFSDataOSDRuntime(daemon)
+	if err != nil {
+		*readback = map[string]string{}
+		return err
 	}
-	return nil
+	return r.apply(ctx, order, values, readback)
+}
+
+// mdsCephFSDataOSDRestore returns values in the given order, each read back;
+// debug_ms closes its SetDebugLevel window.
+func (c *fixtureCluster) mdsCephFSDataOSDRestore(ctx context.Context, daemon string, order []string, values map[string]string, readback *map[string]string) error {
+	r, err := c.mdsCephFSDataOSDRuntime(daemon)
+	if err != nil {
+		*readback = map[string]string{}
+		return err
+	}
+	return r.restore(ctx, order, values, readback)
 }
 
 func (c *fixtureCluster) mdsCephFSDataOSDLogLines(ctx context.Context) ([]string, error) {
@@ -241,7 +247,7 @@ func (c *fixtureCluster) mdsCephFSDataWritebackAct(ctx context.Context, id int64
 		if err := c.mdsCephFSDataJournal(); err != nil {
 			return err
 		}
-		err := c.mdsCephFSDataOSDApply(ctx, d.OSD, []string{"ms_blackhole_client", "debug_ms"}, d.Baseline, &d.RestoreReadback)
+		err := c.mdsCephFSDataOSDRestore(ctx, d.OSD, []string{"ms_blackhole_client", "debug_ms"}, d.Baseline, &d.RestoreReadback)
 		d.State = "restored"
 		if err != nil {
 			d.State, d.Error = "restore-uncertain", err.Error()
@@ -583,7 +589,7 @@ func (c *fixtureCluster) mdsCephFSDataRestoreOSDDrop(ctx context.Context, receip
 	if err := c.mdsCephFSDataJournal(); err != nil {
 		return err
 	}
-	err = c.mdsCephFSDataOSDApply(ctx, daemon, []string{"ms_blackhole_client", "debug_ms"}, d.Baseline, &d.RestoreReadback)
+	err = c.mdsCephFSDataOSDRestore(ctx, daemon, []string{"ms_blackhole_client", "debug_ms"}, d.Baseline, &d.RestoreReadback)
 	d.State = "restored"
 	if err != nil {
 		d.State, d.Error = "restore-uncertain", err.Error()
