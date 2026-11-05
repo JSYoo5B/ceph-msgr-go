@@ -328,6 +328,17 @@
    }
   },
   {
+   "id": "mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "test_run": "^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$"
+   }
+  },
+  {
    "id": "osd.aes256k.ip4.host",
    "group": "osd",
    "params": {

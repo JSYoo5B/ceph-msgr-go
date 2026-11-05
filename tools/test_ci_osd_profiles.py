@@ -17,6 +17,7 @@ SET_CHUNK_GO_SELECTOR = "^TestCephOSDSetChunkGoIntegration$"
 COPY_FROM_LATE_ERROR_SELECTOR = "^TestCephOSDCopyFromLateErrorIntegration$"
 COPY_FROM_MULTI_CHUNK_SELECTOR = "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"
 COMPRESSION_SELECTOR = "^TestCephMsgrCompressionOfferIntegration$"
+SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR = "^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$"
 
 
 def ceph_rows():
@@ -53,13 +54,14 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 2 mds-cephfs-writeback, 2 mds-cephfs-multi-reconnect,
         # 1 exclusive COPY_FROM2 late-error cell, 1 applied EC resubmission,
         # 1 exclusive multi-chunk COPY_FROM2 late-error cell, 1 CRC compression-offer row,
-        # and 1 zero-initial-MGR service bootstrap row.
-        self.assertEqual(len(self.rows), 83)
+        # 1 zero-initial-MGR service bootstrap row,
+        # and 1 held stopped-MON dial ServiceMap lifecycle row.
+        self.assertEqual(len(self.rows), 84)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
         dedicated = {SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR,
-                     COMPRESSION_SELECTOR}
+                     COMPRESSION_SELECTOR, SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR}
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak") and row.get("test_run") not in dedicated
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
@@ -80,6 +82,17 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                 self.assertNotIn("mds_fresh", row)
                 for field in opt_ins:
                     self.assertNotIn(field, row)
+
+    def test_service_map_lifecycle_hold_row_is_exclusive(self):
+        rows = [row for row in self.rows if row.get("test_run") == SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR]
+        self.assertEqual(rows, [{"key": "aes256k", "service": "aes256k", "family": "4", "stress": "",
+                                 "test_run": SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR}])
+        client = set()
+        for source in (ROOT / "cephmsgr").glob("*_test.go"):
+            client.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))
+        selector = re.compile(SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR)
+        self.assertEqual({name for name in client | self.declared if selector.search(name)},
+                         {"TestCephMonServiceMapLifecycleFailedMonHoldIntegration"})
 
     def test_mon_ping_rows_are_exclusive_and_reach_the_native_fixture(self):
         self.assertIn("CEPH_MSGR_TEST_MON_PING: ${{ matrix.mon_ping || '0' }}", self.workflow)

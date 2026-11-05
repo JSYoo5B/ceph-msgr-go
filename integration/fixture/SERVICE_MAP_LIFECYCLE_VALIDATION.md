@@ -61,12 +61,48 @@ sh integration/run.sh
 ```
 
 The selector is also discovered by the existing broad MON/MGR rows. It needs no
-new catalog row or opt-in. Require the actual client-suite parent to PASS without
+new catalog row or opt-in; the held-dial variant below has its own row. Require the actual client-suite parent to PASS without
 a skip, independently of the runner exit code. The API suite has no matching
 parent and its empty selection is not a second acceptance result. Exact tested
 SHA, attempt, image/profile, native/Go epochs, target result and owned-resource
 cleanup are recorded on the pull request. The recipe itself is not evidence that
 any particular revision or configuration has passed.
+
+### Held stopped-MON dial variant
+
+`TestCephMonServiceMapLifecycleFailedMonHoldIntegration` runs the same sequence
+and assertions with the ordinary 12-second AUTH/service ticket validity. It
+adds one test-only network condition. After the same watch has registered on
+another MON, any dial to the stopped MON that has already failed is held until
+its dial context ends before the failure is returned. That context is the
+normal 10-second setup timeout. The log reports how many dials were held. The
+variant makes the failed-dial duration deterministic. It does not change the
+product, the fixture or the ticket validity.
+
+The variant skips unless its exact selector is the test binary's `-test.run`
+value, so broad rows report it as skipped and keep the unmodified lifecycle as
+their lifecycle cell. Its dedicated catalog row is
+`mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold` (container
+runtime, secure, aes256k client and service keys, IPv4). The result gate
+requires `client/TestCephMonServiceMapLifecycleFailedMonHoldIntegration` to
+PASS. To reproduce locally on an authorized Linux runner:
+
+```sh
+CEPH_MSGR_TEST_KEY_TYPE=aes256k CEPH_MSGR_TEST_SERVICE_CIPHER=aes256k \
+CEPH_MSGR_TEST_IP_FAMILY=4 \
+CEPH_MSGR_TEST_RUN='^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$' \
+sh integration/run.sh
+```
+
+Issue #64 records the earlier failure this condition reproduces. Before
+ticket renewal started with the admitted MON, every later renewal dialed the
+stopped seed first. A 10-second failed dial before each renewal let the
+rotating AUTH secret behind the reclaim proof expire, and both surviving MONs
+refused the reclaim with -13, which terminated the watch. The cluster-free
+regression is `TestRoutineRenewalPrefersAdmittedMonitor`; see the
+[CephX ledger](../../internal/cephx/EXCHANGE_LEDGER.md). Native results for
+this variant are recorded on the pull request with their tested SHA. This
+recipe is not evidence that any revision has passed.
 
 Daemon-free tests in `cephmsgr/service_map_lifecycle_receipt_test.go` reject stale
 absence, partial removal, missing raw bytes, unreadable native views, mismatched
