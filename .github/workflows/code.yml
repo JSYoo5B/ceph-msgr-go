@@ -1,0 +1,137 @@
+name: Code quality
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 5 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CGO_ENABLED: '0'
+  GOTOOLCHAIN: local
+  GOWORK: 'off'
+  GOPROXY: 'https://proxy.golang.org|direct'
+
+jobs:
+  lint:
+    if: github.event_name != 'schedule'
+    name: Static analysis advisory (${{ matrix.module }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        module: ['.', 'integration/fixture', 'tools/quality']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: |
+            go.sum
+            integration/fixture/go.sum
+      - name: Collect static analysis diagnostics
+        id: lint
+        continue-on-error: true
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          working-directory: ${{ matrix.module }}
+          args: --timeout=10m --output.json.path=${{ runner.temp }}/lint.json
+      - name: Record advisory outcome
+        if: always()
+        env:
+          OUTCOME: ${{ steps.lint.outcome }}
+          MODULE: ${{ matrix.module }}
+        run: |
+          echo "Static analysis for $MODULE: $OUTCOME (advisory). A failed or skipped scan is not a clean result." >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve lint diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lint-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/lint.json
+          retention-days: 7
+          if-no-files-found: warn
+
+  tooling:
+    if: github.event_name != 'schedule'
+    name: Quality tooling tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.24.x'
+      - name: Install linter for analyzer regression controls
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          install-only: true
+      - run: go -C tools/quality test -mod=readonly ./...
+      - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
+  vulnerabilities:
+    name: Vulnerabilities (${{ matrix.module }}, Go ${{ matrix.go }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - module: '.'
+            id: product-minimum
+            go: '1.24.x'
+          - module: '.'
+            id: product-current
+            go: '1.27.x'
+          - module: integration/fixture
+            id: fixture-minimum
+            go: '1.26.x'
+          - module: integration/fixture
+            id: fixture-current
+            go: '1.27.x'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Build the scanner with its supported toolchain, then scan with the
+      # module's selected toolchain. Neither installation changes go.mod.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache: false
+      - name: Install pinned scanner
+        run: GOBIN="$RUNNER_TEMP/quality-bin" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+          cache-dependency-path: |
+            go.sum
+            integration/fixture/go.sum
+      - name: Scan module and apply reachability policy
+        working-directory: ${{ matrix.module }}
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/quality-bin/govulncheck" -test -format json ./... > "$RUNNER_TEMP/vulnerabilities.json"
+          python3 "$GITHUB_WORKSPACE/.github/scripts/check_vulns.py" "$RUNNER_TEMP/vulnerabilities.json" | tee "$RUNNER_TEMP/vulnerabilities.txt"
+      - name: Preserve scan evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vulnerabilities-${{ matrix.id }}
+          path: ${{ runner.temp }}/vulnerabilities.*
+          retention-days: 7

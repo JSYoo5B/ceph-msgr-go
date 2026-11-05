@@ -320,3 +320,15 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ```
+
+## CI quality tools from ceph-testcontainers-go
+
+The Go analyzers in `tools/quality/{structmetrics,lintcalibration}`, the structural
+collector/publisher and vulnerability evaluator in `.github/scripts` (including
+associated tests and vulnerability fixtures), and the structural workflows are
+adapted from [ceph-testcontainers-go](https://github.com/JSYoo5B/ceph-testcontainers-go)
+commit `2d4243d1e04167ff570f582a899b91a58871b61f`.
+Copyright (c) 2026 JaeSang Yoo. These portions remain under the MIT license,
+reproduced in `tools/quality/LICENSE`. Adaptations isolate the analyzers in a
+separate development module and use this repository's product/fixture scope.
+They are development tools, not product dependencies.
