@@ -55,13 +55,23 @@ jobs:
       - name: Unit tests without integration tests
         run: |
           packages=$(go list -mod=readonly ./... | sed '\|/integration$|d; \|/integration/|d')
-          go test -mod=readonly $packages
+          result=0
+          go test -mod=readonly -json -fullpath $packages > "$RUNNER_TEMP/unit-tests.jsonl" 2>&1 || result=$?
+          if test "$result" -ne 0; then
+            python3 tools/go_test_annotations.py "$RUNNER_TEMP/unit-tests.jsonl" "$result" || true
+          fi
+          exit "$result"
       - name: Race detector on unit tests without integration tests
         env:
           CGO_ENABLED: '1'
         run: |
           packages=$(go list -mod=readonly ./... | sed '\|/integration$|d; \|/integration/|d')
-          go test -mod=readonly -race $packages
+          result=0
+          go test -mod=readonly -race -json -fullpath $packages > "$RUNNER_TEMP/race-tests.jsonl" 2>&1 || result=$?
+          if test "$result" -ne 0; then
+            python3 tools/go_test_annotations.py "$RUNNER_TEMP/race-tests.jsonl" "$result" || true
+          fi
+          exit "$result"
       - name: Cluster-free integration tests with race detector
         # Exactly the tests listed in integration/cluster_free_tests.txt; the
         # TestCeph...Integration native fixture tests are never selected here.
@@ -77,6 +87,17 @@ jobs:
         run: python3 tools/fuzz_targets.py verify
       - name: Validate workflow syntax
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= -pyflakes=
+      - name: Preserve basic test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: basic-test-evidence
+          path: |
+            ${{ runner.temp }}/unit-tests.jsonl
+            ${{ runner.temp }}/race-tests.jsonl
+            ${{ runner.temp }}/cluster-free.log
+          retention-days: ${{ job.status == 'failure' && 14 || 7 }}
+          if-no-files-found: warn
 
   fixture-static:
     needs: changes
@@ -99,7 +120,21 @@ jobs:
       - name: Unit test fixture tools without a cluster
         env:
           CEPH_MSGR_CI_SELECTION_REPORT: ${{ runner.temp }}/native-test-selection.json
-        run: go -C integration/fixture test -mod=readonly ./...
+        run: |
+          result=0
+          go -C integration/fixture test -mod=readonly -json -fullpath ./... > "$RUNNER_TEMP/fixture-tests.jsonl" 2>&1 || result=$?
+          if test "$result" -ne 0; then
+            python3 tools/go_test_annotations.py "$RUNNER_TEMP/fixture-tests.jsonl" "$result" || true
+          fi
+          exit "$result"
+      - name: Preserve fixture test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fixture-test-evidence
+          path: ${{ runner.temp }}/fixture-tests.jsonl
+          retention-days: ${{ job.status == 'failure' && 14 || 7 }}
+          if-no-files-found: warn
       - name: Preserve native selection inventory
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

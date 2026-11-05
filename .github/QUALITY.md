@@ -41,6 +41,25 @@ days. A tool failure is not a clean scan. A later gate should follow reviewed
 findings and a separate policy change. Vulnerability JSON/text also lasts seven
 days. No linter dependency is added to the product or fixture module.
 
+## Basic test diagnostics
+
+Basic CI retains separate `go test -json -fullpath` streams for product unit,
+product race, and fixture-module tests. On a nonzero Go exit, the existing bounded
+annotation parser reports failed tests and repository-local assertion locations,
+including helpers in the nested fixture module. Parser failure cannot replace
+the original Go exit code. Build failures or interrupted streams without a
+completed failed test receive a generic diagnostic; absence of an assertion
+annotation is not evidence of a clean result.
+
+`basic-test-evidence` contains available unit/race JSON streams and the existing
+cluster-free integration text log; `fixture-test-evidence` contains the fixture
+JSON stream. Uploads run even after failure, retaining evidence for 14 days on
+failure and seven days otherwise. Missing files mean that the corresponding step
+may not have run. A cancelled or timed-out step can leave partial evidence. Logs
+can contain cached results; this change does not force test re-execution or
+change test selectors. Cluster-free tests retain their independent per-test PASS
+gate, and the native selection inventory remains a separate artifact.
+
 ## Documentation-only policy
 
 The shared [change planner](scenarios/README.md#change-based-advice-and-documentation-only-checks)
