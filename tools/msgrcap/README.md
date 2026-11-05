@@ -64,8 +64,10 @@ recipe's `provenance.json` keeps the label it was recorded with.
 ceph-testcontainers-go v0.4.0, which `integration/fixture` pins, adds
 `capture.Start`. This recipe does not use it:
 
-- `capture.Start` runs a caller-named helper image that meets packet-capture
-  contract 1 of ceph-testcontainers-images, and no such image is published.
+- `capture.Start` runs a caller-named helper image. ceph-testcontainers-images
+  publishes one, `ghcr.io/jsyoo5b/ceph-testcontainers-images:extension-capture-v1`
+  (amd64 and arm64), so a missing image is not a reason to keep this recipe.
+  The two reasons below are.
 - A `capture.Start` session is bound to one container instance and does not
   follow a restart. This recipe keeps one runner-host capture on the bridge
   across the workflow-driven MON restart (`peer-restart`).
