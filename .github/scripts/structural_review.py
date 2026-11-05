@@ -145,8 +145,8 @@ METRIC_VALUE = {"cyclop": re.compile(r"complexity for function \S+ is (\d+)"),
                 "gocognit": re.compile(r"cognitive complexity (\d+)"),
                 "funlen": re.compile(r"\((\d+) > \d+\)")}
 # lintcalibration's states and reasons, as a reader of the table needs them.
-STATE_TEXT = {"new_above_threshold": "newly above threshold", "reported_both": "changed",
-              "not_reported_above_threshold": "no longer above threshold"}
+STATE_TEXT = {"new_above_threshold": "newly reported", "reported_both": "changed",
+              "not_reported_above_threshold": "not reported in head"}
 REASON_TEXT = {"declaration_absent_in_base": "new or moved function", "declaration_absent_in_head": "removed or moved function"}
 METRIC_NAME = {"cyclop": "cyclomatic complexity", "gocognit": "cognitive complexity", "dupl": "duplicate block"}
 
@@ -266,9 +266,9 @@ def signal_table(lint, packages):
     if not rows:
         return [], 0
     out = ["#### Changed complexity, length and duplication findings", "",
-           "Only findings above the linters' default thresholds exist; a function below them has no value, which is not zero. "
+           "Missing diagnostics mean not reported, not a measured value below threshold or zero. "
            "Unmatched findings, duplication included, keep their own locations.", "",
-           "| Function | Signal | Base → head | State | Head location |", "| --- | --- | --- | --- | --- |"]
+           "| Function | Signal | Base → head | State | Location (head, otherwise base) |", "| --- | --- | --- | --- | --- |"]
     for entry in rows[:ROW_LIMIT]:
         name = ".".join(part for part in (entry.get("package_dir"), entry.get("receiver"), entry.get("function")) if part)
         site = entry.get("head") or entry.get("base")
@@ -279,9 +279,21 @@ def signal_table(lint, packages):
         if entry["linter"] == "dupl" or (base is None and head is None):
             values = "see location"
         else:
-            values = arrow(base, head)
-            values = values.replace("absent", "below threshold")
+            if base is not None and head is not None:
+                values = arrow(base, head)
+            else:
+                absent = {"declaration_absent_in_base": "base", "declaration_absent_in_head": "head"}.get(entry.get("reason"))
+                def value(side, number):
+                    if number is not None:
+                        return str(number)
+                    if side == absent:
+                        return "declaration absent"
+                    return "unmatched" if entry["state"] == "moved_or_unmatched" else "not reported"
+                values = value("base", base) + " → " + value("head", head)
         state = STATE_TEXT.get(entry["state"]) or REASON_TEXT.get(entry.get("reason", ""), "unmatched: %s" % entry.get("reason", ""))
+        caveats = entry.get("caveats", [])
+        if caveats:
+            state += "; caveats: " + ", ".join(caveats)
         out.append("| %s | %s | %s | %s | %s |" % (cell(name or "unidentified"), cell(signal), values, cell(state),
                                                    cell("%s:%d" % (site["file"], site["line"]))))
     if len(rows) > ROW_LIMIT:

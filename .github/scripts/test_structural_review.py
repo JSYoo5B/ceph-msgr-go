@@ -151,6 +151,30 @@ class RenderTests(unittest.TestCase):
         self.assertIn("raw SHA-256", details)
         self.assertNotIn("SHA-256", visible)
 
+    def test_missing_measurements_and_caveats_are_not_threshold_values(self):
+        site = {"file": "ceph/a.go", "line": 3, "test_file": False,
+                "message": "calculated cyclomatic complexity for function Run is 15, max is 10"}
+        cases = [
+            ("moved_or_unmatched", "declaration_absent_in_base", None, site, "declaration absent → 15"),
+            ("moved_or_unmatched", "declaration_absent_in_head", site, None, "15 → declaration absent"),
+            ("moved_or_unmatched", "ambiguous_identity", None, site, "unmatched → 15"),
+            ("new_above_threshold", "", None, site, "not reported → 15"),
+            ("not_reported_above_threshold", "", site, None, "15 → not reported"),
+        ]
+        for state, reason, base, head, expected in cases:
+            for caveats in ([], ["nolint_in_declaration", "file_has_build_constraint"]):
+                with self.subTest(state=state, reason=reason, caveats=caveats):
+                    entry = {"state": state, "reason": reason, "linter": "cyclop", "package_dir": "ceph",
+                             "function": "Run", "base": base, "head": head, "caveats": caveats}
+                    lines, count = review.signal_table({"entries": [entry]}, {"ceph"})
+                    row = next(line for line in lines if line.startswith("| ceph.Run |"))
+                    self.assertEqual(count, 1)
+                    self.assertIn(expected, row)
+                    for misleading in ("below threshold", "(new)", "(removed)", "above threshold"):
+                        self.assertNotIn(misleading, row)
+                    for caveat in caveats:
+                        self.assertIn(caveat, row)
+
     def test_no_change_is_one_line_and_rows_are_bounded(self):
         same = {"packages": [{"package": "ceph", "lines": 1, "exported_declarations": 1}]}
         visible, _ = review.render(same, same, {"changed_owners": []}, self.LINT, {}, {"ceph"})

@@ -31,13 +31,13 @@ def stream(*objects):
 
 
 class CheckVulnsTests(unittest.TestCase):
-    def run_main(self, text):
+    def run_main(self, text, *args):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "scan.json"
             path.write_text(text)
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                code = check_vulns.main([str(path)])
+                code = check_vulns.main([str(path), *args])
         return code, out.getvalue(), err.getvalue()
 
     def test_fixture_is_the_recorded_extract(self):
@@ -69,6 +69,35 @@ class CheckVulnsTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("info GO-2", out)
         self.assertEqual(self.run_main(stream(CONFIG, finding("GO-3", package="example.com/m/p")))[0], 1)
+
+    def test_compatibility_policy_retains_stdlib_findings_but_gates_dependencies(self):
+        config = {"config": dict(CONFIG["config"], go_version="go1.24.13")}
+        stdlib = finding("GO-stdlib", module="stdlib", package="crypto/example", function="F")
+        code, output, _ = self.run_main(stream(config, stdlib), "--go124-stdlib-advisory")
+        self.assertEqual(code, 0)
+        self.assertIn("ADVISORY GO-stdlib", output)
+        self.assertIn("not a security pass", output)
+        self.assertIn("crypto/example F", output)
+        self.assertNotIn("no vulnerabilities", output)
+        self.assertEqual(self.run_main(stream(config, stdlib))[0], 1)
+        for function in (None, "F"):
+            external = finding("GO-dependency", package="example.com/m/p", function=function)
+            code, output, error = self.run_main(stream(config, stdlib, external), "--go124-stdlib-advisory")
+            self.assertEqual(code, 1)
+            self.assertIn("FAIL GO-dependency", output)
+            self.assertIn("GO-dependency", error)
+        self.assertEqual(self.run_main(stream(CONFIG, stdlib), "--go124-stdlib-advisory")[0], 2)
+        self.assertEqual(self.run_main("", "--go124-stdlib-advisory")[0], 2)
+
+    def test_workflow_limits_compatibility_policy_to_product_minimum(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/code.yml").read_text()
+        self.assertEqual(workflow.count("policy: compatibility"), 1)
+        self.assertIn("id: product-minimum\n            go: '1.24.x'\n            policy: compatibility", workflow)
+        self.assertIn("matrix.policy || 'security'", workflow)
+        scan = workflow.split("      - name: Scan module and apply reachability policy", 1)[1]
+        self.assertNotIn("continue-on-error", scan)
+        self.assertIn('exit "$result"', scan)
+        self.assertIn('cat "$RUNNER_TEMP/vulnerabilities.txt" >> "$GITHUB_STEP_SUMMARY"', scan)
 
     def test_a_clean_scan_passes(self):
         code, out, _ = self.run_main(stream(CONFIG, {"progress": {"message": "Scanning..."}}))

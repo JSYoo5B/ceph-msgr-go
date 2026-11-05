@@ -8,7 +8,7 @@ the scenario selection policy, or raise the product's minimum Go version.
 | --- | --- | --- |
 | Code quality: static analysis | PR, manual | Advisory diagnostics from errcheck, govet, ineffassign and staticcheck, separately for product/root, fixture and quality-tool modules; existing findings are not suppressed or mechanically rewritten |
 | Code quality: tooling | PR, manual | Required successful Go analyzer tests and Python collector/publisher/vulnerability-policy tests |
-| Code quality: vulnerabilities | PR, manual, weekly Monday 05:17 UTC | govulncheck v1.9.0 on Linux amd64 with tests; product Go 1.24.x/1.27.x and fixture Go 1.26.x/1.27.x; package/symbol findings fail, module-only findings are informational |
+| Code quality: vulnerabilities | PR, manual, weekly Monday 05:17 UTC | govulncheck v1.9.0 on Linux amd64 with tests; product Go 1.24.x/1.27.x and fixture Go 1.26.x/1.27.x; package/symbol findings fail except for explicitly advisory Go 1.24 stdlib compatibility findings; module-only findings are informational |
 | Structural review evidence | PR | Advisory comparison of merge base and exact PR head; no metric threshold is a merge gate |
 | Structural review comment | Evidence completion | Trusted default-branch publisher updates one bot-owned comment for the current head |
 
@@ -19,6 +19,18 @@ in each selected series. The scanner is built using Go 1.27 before switching to
 the scan's toolchain. A failed scanner process or invalid result fails the job;
 its JSON exit status alone is not the vulnerability verdict. The weekly run
 executes only vulnerability checks. It does not repeat Basic CI or native runs.
+
+Go 1.24 is a compilation/API compatibility target, not a security-qualified
+release toolchain. The Go 1.24 product scan retains every stdlib finding and
+trace in its log, summary and artifact, labeled ADVISORY; it does not certify
+that toolchain as safe. External dependency package/symbol findings still fail
+that scan, as do scanner/policy errors. The product Go 1.27 and both fixture
+scans retain the strict security policy. No advisory IDs are suppressed and no
+product minimum-version requirement changes. Release builds should use a
+patched toolchain covered by the strict current-toolchain scan. The original
+Go 1.24.13 scan failed the strict policy; this is an explicit policy distinction,
+not a claim that a rerun fixed its findings.
+
 These scans do not cover other operating systems, architectures or optional build
 tags, and do not claim that the dependency graph is free of all vulnerabilities.
 
@@ -36,7 +48,9 @@ changed-line share), concrete owners (public/private methods and direct fields),
 and changed complexity/length/duplication findings. Full inventories and paired
 findings remain in seven-day artifacts. Metrics are navigation aids, not a design
 score. Moves and unmatched identities are not automatic improvements; missing or
-below-threshold measurements are not zero.
+unreported measurements are not zero. The visible table distinguishes absent
+declarations, unmatched identities and unreported diagnostics, and retains
+suppression/build-constraint caveats without inferring a threshold crossing.
 
 The collector measures production, non-generated Go in the root library module.
 It excludes tests, `testdata`, `integration`, `internal/testcluster`, `tools`,

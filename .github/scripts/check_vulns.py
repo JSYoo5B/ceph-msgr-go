@@ -8,10 +8,13 @@ reached at symbol level (the code calls a vulnerable function) or package
 level (the code imports a vulnerable package). A vulnerability found only
 in a required module is listed but does not fail. A stream without the
 scanner's config, with malformed JSON or with unknown finding shapes fails,
-so that a broken scan cannot pass as a clean one.
+so that a broken scan cannot pass as a clean one. The explicit Go 1.24
+compatibility policy retains stdlib findings as advisories; external dependency
+findings and scan errors still fail. The default remains strict.
 """
 import argparse
 import json
+import re
 from pathlib import Path
 import sys
 
@@ -82,14 +85,25 @@ def evaluate(text):
     return config, sorted(results.values(), key=lambda r: (-LEVELS.index(r["level"]), r["osv"]))
 
 
-def report(config, results):
+def verdict(result, compatibility_stdlib=False):
+    if result["level"] not in FAILING:
+        return "info"
+    if compatibility_stdlib and result["module"] == "stdlib":
+        return "ADVISORY"
+    return "FAIL"
+
+
+def report(config, results, compatibility_stdlib=False):
     lines = ["govulncheck %s, %s, database %s, scan level %s" % (
         config.get("scanner_version"), config.get("go_version"), config.get("db_last_modified"), config.get("scan_level"))]
+    if compatibility_stdlib:
+        lines.append("Go 1.24 compatibility scan: stdlib findings are advisory, not a security pass; "
+                     "external dependency findings remain blocking. Use the current-toolchain security scan for release builds.")
     for result in results:
-        verdict = "FAIL" if result["level"] in FAILING else "info"
+        decision = verdict(result, compatibility_stdlib)
         fixed = result["fixed"] or "no fix"
         lines.append("%s %s (%s level) in %s@%s, fixed in %s: %s" % (
-            verdict, result["osv"], result["level"], result["module"], result["version"], fixed, result["summary"]))
+            decision, result["osv"], result["level"], result["module"], result["version"], fixed, result["summary"]))
         if result["level"] == "symbol":
             lines.append("    called through " + " <- ".join(result["trace"][:4]))
     if not results:
@@ -100,14 +114,18 @@ def report(config, results):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stream", type=Path, help="govulncheck -format json output")
+    parser.add_argument("--go124-stdlib-advisory", action="store_true",
+                        help="retain Go 1.24 stdlib findings as compatibility advisories; dependencies still gate")
     args = parser.parse_args(argv)
     try:
         config, results = evaluate(args.stream.read_text())
+        if args.go124_stdlib_advisory and not re.fullmatch(r"go1\.24\.\d+", config.get("go_version", "")):
+            raise ScanError("Go 1.24 stdlib advisory policy requires a Go 1.24 scan")
     except (OSError, ScanError) as error:
         print("vulnerability check failed: %s" % error, file=sys.stderr)
         return 2
-    print(report(config, results))
-    failing = [result["osv"] for result in results if result["level"] in FAILING]
+    print(report(config, results, args.go124_stdlib_advisory))
+    failing = [result["osv"] for result in results if verdict(result, args.go124_stdlib_advisory) == "FAIL"]
     if failing:
         print("reachable vulnerabilities: " + ", ".join(failing), file=sys.stderr)
         return 1

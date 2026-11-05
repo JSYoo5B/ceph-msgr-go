@@ -84,7 +84,7 @@ jobs:
       - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 
   vulnerabilities:
-    name: Vulnerabilities (${{ matrix.module }}, Go ${{ matrix.go }})
+    name: Vulnerabilities (${{ matrix.module }}, Go ${{ matrix.go }}, ${{ matrix.policy || 'security' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -94,6 +94,7 @@ jobs:
           - module: '.'
             id: product-minimum
             go: '1.24.x'
+            policy: compatibility
           - module: '.'
             id: product-current
             go: '1.27.x'
@@ -125,9 +126,18 @@ jobs:
       - name: Scan module and apply reachability policy
         working-directory: ${{ matrix.module }}
         shell: bash
+        env:
+          SCAN_POLICY: ${{ matrix.policy || 'security' }}
         run: |
           "$RUNNER_TEMP/quality-bin/govulncheck" -test -format json ./... > "$RUNNER_TEMP/vulnerabilities.json"
-          python3 "$GITHUB_WORKSPACE/.github/scripts/check_vulns.py" "$RUNNER_TEMP/vulnerabilities.json" | tee "$RUNNER_TEMP/vulnerabilities.txt"
+          policy_args=()
+          if [ "$SCAN_POLICY" = compatibility ]; then
+            policy_args+=(--go124-stdlib-advisory)
+          fi
+          result=0
+          python3 "$GITHUB_WORKSPACE/.github/scripts/check_vulns.py" "$RUNNER_TEMP/vulnerabilities.json" "${policy_args[@]}" 2>&1 | tee "$RUNNER_TEMP/vulnerabilities.txt" || result=$?
+          cat "$RUNNER_TEMP/vulnerabilities.txt" >> "$GITHUB_STEP_SUMMARY"
+          exit "$result"
       - name: Preserve scan evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
