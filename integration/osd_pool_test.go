@@ -52,6 +52,9 @@ type poolReceipt struct {
 	ServiceComparison *mgrServiceComparison `json:"comparison"`
 	ManagerMap        *mgrServiceNativeMap  `json:"manager_map"`
 
+	// pghistory mode: one bracketed primary PG-history snapshot.
+	History pgHistorySnapshot `json:"history"`
+
 	Epochs      map[string]uint64 `json:"epochs"`
 	PoolType    int               `json:"pool_type"`
 	CrushRule   json.RawMessage   `json:"crush_rule"`

@@ -39,7 +39,7 @@ func (c *fixtureCluster) runOracleCommandWithTimeout(ctx context.Context, out st
 }
 
 // nativeOwnedPoolModes are the requests the native owned-pool oracle accepts.
-var nativeOwnedPoolModes = map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "snapshot": true, "selfmanaged": true, "quota": true, "poolinfo": true, "clusterstat": true, "versions": true, "mgrstate": true, "service": true, "servicewatch": true, "servicecompare": true, "servicemetadata": true, "fullratios": true, "osdflags": true, "inconsistent": true, "cleanup": true}
+var nativeOwnedPoolModes = map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "pghistory": true, "snapshot": true, "selfmanaged": true, "quota": true, "poolinfo": true, "clusterstat": true, "versions": true, "mgrstate": true, "service": true, "servicewatch": true, "servicecompare": true, "servicemetadata": true, "fullratios": true, "osdflags": true, "inconsistent": true, "cleanup": true}
 
 func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string) error {
 	var fields []string

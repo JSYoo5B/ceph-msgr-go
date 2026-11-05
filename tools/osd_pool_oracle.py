@@ -9,7 +9,11 @@ Go client. create also makes an erasure-coded pool of a closed width: k2m1
 (profile ceph-msgr-owned-ec) or k2m2 (its own ceph-msgr-owned-ec-k2m2 profile,
 isa, never overwritten, optionally optimized with its nonprimary shards read
 back); cleanup removes both profiles.
-Modes: create, seed, observe, place, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
+Modes: create, seed, observe, place, pghistory, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
+pghistory takes one bounded primary PG-history snapshot for an owned object:
+placement before, the PG `log` command to that primary OSD, placement after,
+then the fail-closed parse in osd_pg_history_oracle.py. It reports where exact
+request identities occur on that primary; it never establishes absence.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
 servicecompare independently registers a native service with the Go caller's
@@ -37,11 +41,12 @@ import subprocess
 import sys
 
 import osd_mutation_oracle as mutation
+import osd_pg_history_oracle as history
 import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
+MODES = ("create", "seed", "observe", "place", "pghistory", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -91,6 +96,7 @@ class Rados:
             "mon_command": ([p, C.POINTER(char), s, char, s, C.POINTER(p), C.POINTER(s), C.POINTER(p), C.POINTER(s)], i),
             "buffer_free": ([p], None),
             "mgr_command": ([p, C.POINTER(char), s, char, s, C.POINTER(p), C.POINTER(s), C.POINTER(p), C.POINTER(s)], i),
+            "osd_command": ([p, i, C.POINTER(char), s, char, s, C.POINTER(p), C.POINTER(s), C.POINTER(p), C.POINTER(s)], i),
             "ioctx_snap_create": ([p, char], i),
             "ioctx_snap_remove": ([p, char], i),
             "ioctx_snap_lookup": ([p, char, C.POINTER(u64)], i),
@@ -137,6 +143,32 @@ class Rados:
             # The daemon's status text explains refusals; it holds no credentials.
             self.last_status = C.string_at(diagnostic, diagnostic_length.value).decode(errors="replace")[:512] if diagnostic.value else ""
             return code, text
+        finally:
+            if output.value:
+                self.lib.rados_buffer_free(output)
+            if diagnostic.value:
+                self.lib.rados_buffer_free(diagnostic)
+
+    def osd(self, cluster, osd, command, limit):
+        """One raw command to one explicit OSD; never resent by this oracle.
+
+        Returns (code, output, status, oversized_length). Output above limit
+        is not copied; its native length is reported instead.
+        """
+        encoded = json.dumps(command, ensure_ascii=False).encode("utf-8")
+        commands = (C.c_char_p * 1)(encoded)
+        output, diagnostic = C.c_void_p(), C.c_void_p()
+        output_length, diagnostic_length = C.c_size_t(), C.c_size_t()
+        try:
+            code = self.lib.rados_osd_command(cluster, osd, commands, 1, None, 0, C.byref(output), C.byref(output_length),
+                                              C.byref(diagnostic), C.byref(diagnostic_length))
+            if diagnostic_length.value > 64 << 10:
+                raise ValueError("native OSD command status exceeds bound")
+            status = C.string_at(diagnostic, diagnostic_length.value).decode(errors="replace")[:512] if diagnostic.value else ""
+            if output_length.value > limit:
+                return code, b"", status, output_length.value
+            text = C.string_at(output, output_length.value) if output.value and output_length.value else b""
+            return code, text, status, None
         finally:
             if output.value:
                 self.lib.rados_buffer_free(output)
@@ -392,6 +424,44 @@ def mode_place(rados, cluster, request, out):
 
     target = request.get("osd")
     return {"placement": mutation.collect_placement(command, pool, request["object"], descriptor["pool"], namespace=namespace, target_osd=target)}
+
+
+def mode_pghistory(rados, cluster, request, out):
+    """Bracketed primary PG-history snapshot; presence calibration only.
+
+    The PG `log` command (pinned OSD.cc:2775-2825) is answered only by the
+    PG's primary, so the snapshot says nothing about replica or shard-local
+    history. Both brackets must be identical or the receipt is incomplete.
+    """
+    if set(request) - {"slot", "object", "namespace", "targets"}:
+        raise ValueError("unknown pghistory fields")
+    pool = pool_name(request["slot"])
+    _, namespace = object_request(request)
+    targets = request.get("targets")
+    if not isinstance(targets, list) or not 1 <= len(targets) <= history.MAX_TARGETS:
+        raise ValueError("pghistory needs 1 to %d targets" % history.MAX_TARGETS)
+    for target in targets:
+        history.target_identity(target)
+    descriptor = find_pool(rados.dump(cluster), pool)
+    if descriptor is None:
+        raise RuntimeError("owned pool is missing")
+
+    def command(*arguments, timeout):
+        return mutation.native_mon_query(rados.lib, cluster, *arguments, timeout=timeout)
+
+    def place():
+        return mutation.collect_placement(command, pool, request["object"], descriptor["pool"], namespace=namespace)
+
+    before = place()
+    # Pinned OSD.cc:4458-4463 registers the `pg <pgid> log` form with a pgid.
+    code, raw, status, oversized = rados.osd(cluster, before["primary_id"],
+                                             {"prefix": "pg", "pgid": before["pgid"], "cmd": "log", "format": "json"},
+                                             history.MAX_LOG_BYTES)
+    after = place()
+    receipt = history.snapshot(before, after, code, raw, status, targets, oversized)
+    receipt["osd"] = before["primary_id"]
+    receipt["pgid"] = before["pgid"]
+    return {"history": receipt}
 
 
 def mode_snapshot(rados, cluster, request, out):
@@ -803,7 +873,7 @@ def mode_cleanup(rados, cluster, request, out):
     return {"removed": removed, "pools_removed": gone, "ec_profiles_remaining": remaining}
 
 
-HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place,
+HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory,
             "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "mgrstate": mode_mgrstate, "service": mode_service, "servicewatch": mode_servicewatch, "servicecompare": mode_servicecompare, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 

@@ -11,7 +11,7 @@ commit cancels its previous basic checks. Push events do not repeat PR CI.
 
 `catalog.json` preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
-Four further `osd` rows use the four-OSD erasure-capacity topology
+Five further `osd` rows use the four-OSD erasure-capacity topology
 (`osd_replicas` value `4`): one selects only `TestCephOSDErasureK2M2Integration`,
 another only `TestCephOSDErasureOptimizedK2M2Integration` and
 `TestCephOSDErasureOptimizedK2M2FailoverIntegration`, and the third only
@@ -20,6 +20,11 @@ another only `TestCephOSDErasureOptimizedK2M2Integration` and
 selects only `TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration`: one
 explicit caller resubmission of an independently observed applied APPEND after
 primary replacement, with a fresh-transaction append as the byte/version control.
+The fifth selects only
+`TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration`: one
+bracketed snapshot of the primary's native PG log that must contain two known
+Go requests by their full request identity. It calibrates presence detection
+only ([validation](../../integration/fixture/OSD_PG_HISTORY_CALIBRATION_VALIDATION.md)).
 That value travels in the
 already-forwarded `osd_replicas` input, so it needs no new workflow parameter;
 the fixture refuses it with any other selector.
@@ -69,7 +74,7 @@ in periodic main verification. The required-test gate binds it to
 cannot pass. The [selected native receipt](../../integration/fixture/MSGR_COMPRESSION_VALIDATION.md)
 records no negotiated compression and successful MON/OSD commands; it does
 not prove that negotiation frames were exchanged or compressed frames worked.
-The catalog has 82 native rows in total.
+The catalog has 84 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
