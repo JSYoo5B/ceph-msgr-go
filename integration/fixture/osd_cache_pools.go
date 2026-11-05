@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/JSYoo5B/ceph-testcontainers-go/override"
 )
 
 type cachePoolMutate func(string, func() error) error
@@ -124,47 +125,19 @@ func finishIgnoreCacheResources(ctx context.Context, c *fixtureCluster, out stri
 	if err = os.WriteFile(filepath.Join(out, "osd-ignore-cache-detached.json"), dump, 0644); err != nil {
 		return err
 	}
-	// The disposable fixture has no central deletion override. Preserve that
-	// baseline; do not change daemon files or unrelated configuration sections.
-	setting, err := c.cluster.Ceph(ctx, "config", "get", "mon", "mon_allow_pool_delete")
+	baseline, err := withOwnedPoolRemoval(ctx, clusterPoolRemovalConfig(c.cluster), mutate, func() error {
+		for _, pool := range resources.Pools {
+			if err := cli("remove-pool-"+pool.Name, "osd", "pool", "rm", pool.Name, pool.Name, "--yes-i-really-really-mean-it"); err != nil {
+				return err
+			}
+			if err := cli("remove-rule-"+pool.CRUSHRule, "osd", "crush", "rule", "rm", pool.CRUSHRule); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return err
-	}
-	if strings.TrimSpace(string(setting)) != "false" {
-		return errors.New("unexpected pool deletion baseline")
-	}
-	config, err := c.cluster.Ceph(ctx, "config", "dump", "--format", "json")
-	if err != nil {
-		return err
-	}
-	var entries []struct {
-		Name string `json:"name"`
-	}
-	if json.Unmarshal(config, &entries) != nil {
-		return errors.New("invalid native config inventory")
-	}
-	for _, entry := range entries {
-		if entry.Name == "mon_allow_pool_delete" {
-			return errors.New("unexpected central pool deletion override")
-		}
-	}
-	if err = cli("enable-owned-pool-removal", "config", "set", "mon", "mon_allow_pool_delete", "true"); err != nil {
-		return err
-	}
-	for _, pool := range resources.Pools {
-		if err = cli("remove-pool-"+pool.Name, "osd", "pool", "rm", pool.Name, pool.Name, "--yes-i-really-really-mean-it"); err != nil {
-			return err
-		}
-		if err = cli("remove-rule-"+pool.CRUSHRule, "osd", "crush", "rule", "rm", pool.CRUSHRule); err != nil {
-			return err
-		}
-	}
-	if err = cli("restore-pool-removal-baseline", "config", "rm", "mon", "mon_allow_pool_delete"); err != nil {
-		return err
-	}
-	setting, err = c.cluster.Ceph(ctx, "config", "get", "mon", "mon_allow_pool_delete")
-	if err != nil || strings.TrimSpace(string(setting)) != "false" {
-		return errors.Join(err, errors.New("pool deletion baseline not restored"))
 	}
 	for _, role := range []string{"rw", "ro", "base"} {
 		role := role
@@ -204,21 +177,119 @@ func finishIgnoreCacheResources(ctx context.Context, c *fixtureCluster, out stri
 			}
 		}
 	}
-	config, err = c.cluster.Ceph(ctx, "config", "dump", "--format", "json")
+	config, err := c.cluster.Ceph(ctx, "config", "dump", "--format", "json")
 	if err != nil {
 		return err
 	}
-	entries = nil
+	if err = poolDeleteOverrideAbsent(config, "invalid restored config inventory", "pool deletion override remains"); err != nil {
+		return err
+	}
+	resources.Cleanup = map[string]any{"owned_pools_absent": true, "owned_rules_absent": true, "owned_clients_absent": true, "pool_delete_override_absent": true, "pool_delete_baseline": baseline, "remaining_pool_names": names, "remaining_rule_names": rules}
+	return nil
+}
+
+// centralConfigRestorer is the restorable handle of one central
+// configuration entry (override.ConfigHandle in production).
+type centralConfigRestorer interface{ Restore(context.Context) error }
+
+// poolRemovalConfig is the central configuration access of the owned
+// pool-removal window. observe runs the independent read-only CLI checks;
+// allow changes, preserves and later restores the central entry.
+type poolRemovalConfig struct {
+	observe func(context.Context, ...string) ([]byte, error)
+	allow   func(context.Context, ceph.ConfigSetting) (centralConfigRestorer, error)
+}
+
+// poolDeleteSetting is the only central entry the pool-removal window owns.
+var poolDeleteSetting = ceph.ConfigSetting{Section: "mon", Name: "mon_allow_pool_delete", Value: "true"}
+
+// clusterPoolRemovalConfig delegates the change/preserve/restore mechanics of
+// the central entry to override.SetConfig. Its handle records the prior
+// absence, refuses to restore over an outside edit and confirms the restored
+// entry by readback. The pre and post checks stay independent CLI reads.
+func clusterPoolRemovalConfig(cluster *ceph.Container) poolRemovalConfig {
+	return poolRemovalConfig{
+		observe: cluster.Ceph,
+		allow: func(ctx context.Context, setting ceph.ConfigSetting) (centralConfigRestorer, error) {
+			handle, err := override.SetConfig(ctx, cluster, setting)
+			if handle == nil {
+				return nil, err
+			}
+			return handle, err
+		},
+	}
+}
+
+// poolDeleteOverrideAbsent checks one native `config dump` for any
+// mon_allow_pool_delete entry, in every section and mask.
+func poolDeleteOverrideAbsent(config []byte, invalid, present string) error {
+	var entries []struct {
+		Name string `json:"name"`
+	}
 	if json.Unmarshal(config, &entries) != nil {
-		return errors.New("invalid restored config inventory")
+		return errors.New(invalid)
 	}
 	for _, entry := range entries {
-		if entry.Name == "mon_allow_pool_delete" {
-			return errors.New("pool deletion override remains")
+		if entry.Name == poolDeleteSetting.Name {
+			return errors.New(present)
 		}
 	}
-	resources.Cleanup = map[string]any{"owned_pools_absent": true, "owned_rules_absent": true, "owned_clients_absent": true, "pool_delete_override_absent": true, "pool_delete_baseline": strings.TrimSpace(string(setting)), "remaining_pool_names": names, "remaining_rule_names": rules}
 	return nil
+}
+
+// withOwnedPoolRemoval allows pool deletion only around remove. The
+// disposable fixture has no central deletion override: that baseline is
+// checked independently before the change, preserved by the handle, and
+// checked independently again after the restore. Daemon files and unrelated
+// configuration sections are never changed.
+//
+// Each step runs once through mutate. A refused, failed or uncertain change
+// ends the window without removing anything and without retrying the change;
+// an uncertain entry is retained with the disposable cluster, whose
+// termination discards the configuration database. A failed or uncertain
+// removal leaves the entry for the same reason, and a failed restore is
+// returned without trusting any later readback.
+func withOwnedPoolRemoval(ctx context.Context, central poolRemovalConfig, mutate cachePoolMutate, remove func() error) (string, error) {
+	get := func() (string, error) {
+		setting, err := central.observe(ctx, "config", "get", "mon", poolDeleteSetting.Name)
+		return strings.TrimSpace(string(setting)), err
+	}
+	setting, err := get()
+	if err != nil {
+		return "", err
+	}
+	if setting != "false" {
+		return "", errors.New("unexpected pool deletion baseline")
+	}
+	config, err := central.observe(ctx, "config", "dump", "--format", "json")
+	if err != nil {
+		return "", err
+	}
+	if err = poolDeleteOverrideAbsent(config, "invalid native config inventory", "unexpected central pool deletion override"); err != nil {
+		return "", err
+	}
+	var handle centralConfigRestorer
+	if err = mutate("enable-owned-pool-removal", func() error {
+		var e error
+		handle, e = central.allow(ctx, poolDeleteSetting)
+		if e == nil && handle == nil {
+			e = errors.New("pool deletion override returned no handle")
+		}
+		return e
+	}); err != nil {
+		return "", err
+	}
+	if err = remove(); err != nil {
+		return "", err
+	}
+	if err = mutate("restore-pool-removal-baseline", func() error { return handle.Restore(ctx) }); err != nil {
+		return "", err
+	}
+	setting, err = get()
+	if err != nil || setting != "false" {
+		return "", errors.Join(err, errors.New("pool deletion baseline not restored"))
+	}
+	return setting, nil
 }
 
 type osdCachePoolScope struct {

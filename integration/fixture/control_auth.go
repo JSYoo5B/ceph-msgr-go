@@ -40,18 +40,22 @@ func managerAuthRejection(log string) (rejection, start string) {
 	return rejection, lines[0]
 }
 
+// managerRejectionLogLimit bounds the complete MGR container log.
+const managerRejectionLogLimit = 8 << 20
+
 func nativeManagerRejection(ctx context.Context, daemon testcontainers.Container) (rejection, start string, err error) {
-	logs, err := daemon.Logs(ctx)
+	return managerRejectionFromLog(ctx, daemon.Logs)
+}
+
+// managerRejectionFromLog interprets one complete MGR log. An oversized log
+// is an error, never a shorter log without a refusal.
+func managerRejectionFromLog(ctx context.Context, open containerLogOpener) (rejection, start string, err error) {
+	data, err := readCompleteContainerLog(ctx, open, managerRejectionLogLimit)
+	if errors.Is(err, errContainerLogExceedsBound) {
+		return "", "", errors.New("native MGR preparation log exceeds bound")
+	}
 	if err != nil {
 		return "", "", err
-	}
-	data, readErr := io.ReadAll(io.LimitReader(logs, (8<<20)+1))
-	closeErr := logs.Close()
-	if readErr != nil || closeErr != nil {
-		return "", "", errors.Join(readErr, closeErr)
-	}
-	if len(data) > 8<<20 {
-		return "", "", errors.New("native MGR preparation log exceeds bound")
 	}
 	rejection, start = managerAuthRejection(string(data))
 	return rejection, start, nil
@@ -143,7 +147,7 @@ func scanMonitorReclaimRefusals(r io.Reader, name string, since time.Time, limit
 
 type monitorLogSource struct {
 	name string
-	logs func(context.Context) (io.ReadCloser, error)
+	logs containerLogOpener
 }
 
 // monitorReclaimRefusals unions every owned MON's attribution. A missing MON
@@ -154,14 +158,21 @@ func monitorReclaimRefusals(ctx context.Context, monitors []monitorLogSource, na
 	}
 	found := make(map[uint64]bool)
 	for _, mon := range monitors {
-		logs, err := mon.logs(ctx)
-		if err != nil {
+		var ids []uint64
+		opened := false
+		err := withContainerLog(ctx, func(ctx context.Context) (io.ReadCloser, error) {
+			logs, err := mon.logs(ctx)
+			opened = err == nil
+			return logs, err
+		}, func(logs io.Reader) error {
+			var scanErr error
+			ids, scanErr = scanMonitorReclaimRefusals(newMonitorReclaimLogReader(ctx, logs, name), name, since, monitorReclaimLogLimit)
+			return scanErr
+		})
+		if err != nil && !opened {
 			return nil, fmt.Errorf("read mon.%s log for native MGR refusal attribution: %w", mon.name, err)
 		}
-		stopClose := context.AfterFunc(ctx, func() { _ = logs.Close() })
-		ids, scanErr := scanMonitorReclaimRefusals(newMonitorReclaimLogReader(ctx, logs, name), name, since, monitorReclaimLogLimit)
-		stopClose()
-		if err := errors.Join(scanErr, logs.Close()); err != nil {
+		if err != nil {
 			return nil, fmt.Errorf("mon.%s native MGR refusal attribution: %w", mon.name, err)
 		}
 		for _, id := range ids {
