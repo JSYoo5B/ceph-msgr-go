@@ -90,6 +90,13 @@ universal exactly-once guarantee. Not verified: a request held at the primary
 when it dies, retention/trim boundaries, other profiles and a signed refusal
 across the epoch change.
 
+A test-only [primary PG-history snapshot](../../integration/fixture/OSD_PG_HISTORY_CALIBRATION_VALIDATION.md)
+on the same profile finds known Go request identities in the primary's native
+PG log by entity, incarnation and TID. It calibrates presence on the primary
+only. It does not establish that an identity is absent from replica or
+shard-local history, so it is not a precondition for resubmitting after
+history loss.
+
 ## Optimized EC pools (`allow_ec_optimizations`)
 
 Tentacle's optimized EC (`OSDMonitor::enable_pool_ec_optimizations`, Ceph
