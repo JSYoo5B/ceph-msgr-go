@@ -25,6 +25,10 @@ func managerFailoverReady(status ceph.ManagerStatus, names map[string]bool) bool
 // preparation budget silently.
 const nativeManagerMapTimeout = 15 * time.Second
 
+// observeManagerMap reads the MgrMap with its epoch. Observer.ManagerStatus
+// runs the same native `mgr dump` through the same CLI path and decodes the
+// same ceph.ManagerStatus, but drops the epoch that the MGR receipts record and
+// compare, so the read stays here (JSYoo5B/ceph-testcontainers-go#540).
 func (c *fixtureCluster) observeManagerMap(ctx context.Context) (managerPreparationMap, error) {
 	call, cancel := context.WithTimeout(ctx, nativeManagerMapTimeout)
 	defer cancel()
