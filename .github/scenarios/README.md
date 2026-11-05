@@ -130,6 +130,58 @@ duplicate identifiers, unsupported releases, missing parameters, bad or empty
 test selectors, selectors matching no test, missing mandatory native rows and
 missing suite definitions.
 
+## Test inventory and selection evidence
+
+Basic CI verifies two explicit inventories without starting a cluster:
+
+- `native-tests.txt` registers every top-level `TestCeph...Integration` in
+  `integration` and `cephmsgr`. Fixture tests parse Go declarations, reject
+  missing/stale/duplicate registrations, and compare the source list with the
+  compiled `go test -json -list` result. The current check requires these tests
+  in the default build; adding platform-constrained tests needs an explicit
+  inventory-policy change.
+- `fuzz-targets.json` registers each package/target pair. The product job compares
+  it with the root module's compiled fuzz list. Adding, renaming or removing a
+  fuzz function without updating the inventory fails CI. This checks the current
+  runner's default build, not every GOOS or optional tag combination.
+
+`TestCICatalogInventory` reads the native workflow's actual matrix-to-environment
+bindings (including fallback values) and passes each catalog row through the
+fixture's real `loadProfile`. Unsupported expressions, unforwarded parameters,
+invalid fixture combinations, empty effective selections and native tests outside
+all selections fail the check. It uses Go regular expressions, matching the
+native runner's selector semantics. This complements `scenario_plan.py validate`;
+it does not replace catalog/mandatory-row checks.
+
+The `native-test-selection` artifact lists the source location, candidate scenarios
+and explicit-selector required scenarios for every native test. `required_scenarios`
+means that the existing native result gate requires that top-level test to PASS
+when the scenario runs. It is not evidence of an actual PASS. Broad candidates
+can still skip because of per-test environment requirements. The initial inventory
+has 229 native tests: 59 have an explicit required scenario and 170 have only
+broad candidates. These counts describe selection, not verified interoperability.
+Adding a test requires registering it and reviewing its intended fixture/selector;
+registration alone cannot prove that all of its skip conditions are satisfied.
+
+Requested/periodic `fuzz` now runs all 26 registered targets, including wire,
+MDS and additional CephX/OSD decoders omitted from the former ten-command list.
+Every target gets a 20-second fuzz budget, two workers, a 90-second Go timeout
+and a 120-second process bound. The job has a 20-minute bound. It verifies the
+compiled inventory before executing anchored target names and requires target
+RUN/PASS plus package PASS, without FAIL/SKIP events. JSON logs and a result
+manifest are retained for seven days. A failed target does not hide later results;
+the final verdict fails if any target failed, timed out or did not complete.
+Basic PR CI only lists/validates fuzz targets; it does not run this fuzz campaign.
+
+For a bounded Linux smoke check:
+
+```sh
+python3 tools/fuzz_targets.py run --fuzztime 1s --output OUTPUT_DIRECTORY
+```
+
+The output directory must not already exist. A one-second smoke run is not the scheduled 20-second
+campaign. `python3 tools/fuzz_targets.py verify` only validates selection.
+
 ## Comment selection
 
 ```

@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "targets": [
+    {
+      "package": "internal/cephx",
+      "test": "FuzzAuthenticationPlaintextPublication"
+    },
+    {
+      "package": "internal/cephx",
+      "test": "FuzzAuthenticationPublication"
+    },
+    {
+      "package": "internal/cephx",
+      "test": "FuzzDecrypt"
+    },
+    {
+      "package": "internal/maps",
+      "test": "FuzzMaps"
+    },
+    {
+      "package": "internal/maps",
+      "test": "FuzzOSDMessage"
+    },
+    {
+      "package": "internal/mds",
+      "test": "FuzzDecodeCaps"
+    },
+    {
+      "package": "internal/mds",
+      "test": "FuzzDecodeClientSession"
+    },
+    {
+      "package": "internal/mds",
+      "test": "FuzzDecodeCurrentMaps"
+    },
+    {
+      "package": "internal/mds",
+      "test": "FuzzDecodeReclaimReply"
+    },
+    {
+      "package": "internal/mds",
+      "test": "FuzzDecodeTrace"
+    },
+    {
+      "package": "internal/msgr",
+      "test": "FuzzDecodeConfig"
+    },
+    {
+      "package": "internal/msgr",
+      "test": "FuzzDecodeLog"
+    },
+    {
+      "package": "internal/msgr",
+      "test": "FuzzDecodePoolOpReply"
+    },
+    {
+      "package": "internal/msgr",
+      "test": "FuzzDecodeServiceMap"
+    },
+    {
+      "package": "internal/msgr",
+      "test": "FuzzDecodeStatfsReply"
+    },
+    {
+      "package": "internal/msgr",
+      "test": "FuzzFrameReader"
+    },
+    {
+      "package": "internal/msgr",
+      "test": "FuzzPingReply"
+    },
+    {
+      "package": "internal/msgr",
+      "test": "FuzzSecureFrameReader"
+    },
+    {
+      "package": "internal/osd",
+      "test": "FuzzDecodeReplyV8"
+    },
+    {
+      "package": "internal/osd",
+      "test": "FuzzDecodeWatchEvent"
+    },
+    {
+      "package": "internal/osd",
+      "test": "FuzzDecodeWatchers"
+    },
+    {
+      "package": "internal/osd",
+      "test": "FuzzOmapReplyBounds"
+    },
+    {
+      "package": "internal/osd",
+      "test": "FuzzReplyDecode"
+    },
+    {
+      "package": "internal/osd",
+      "test": "FuzzSparseReadDecodeAndReply"
+    },
+    {
+      "package": "internal/osd",
+      "test": "FuzzXattrReplyDecode"
+    },
+    {
+      "package": "internal/wire",
+      "test": "FuzzDecoder"
+    }
+  ]
+}
