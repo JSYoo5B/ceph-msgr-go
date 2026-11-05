@@ -18,7 +18,9 @@ import (
 // follow the ceph-testcontainers-go v0.3.0 recipe (MIT,
 // internal/integration/manager_transition_integration_helpers_test.go
 // decodeMgrSessions/beaconSources and docs/guides/messenger-client-fixtures.md
-// "MGR MonClients"); the code here is written for this fixture.
+// "MGR MonClients"); the code here is written for this fixture. The reads go
+// through the public ceph-testcontainers-go v0.4.0 MonitorContainer.AdminSocket
+// of each handle that Container.Monitors returns.
 
 // Statuses of one bounded native query. Only a complete query is an
 // observation; an absence is observed only in a complete one.

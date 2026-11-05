@@ -25,6 +25,16 @@ import (
 // both MGRs are registered (one active, one standby) with new GIDs, the same
 // containers with new start times, and a beacon session (con type "mgr",
 // MgrMap GID as global ID) on some owned MON.
+//
+// Every step composes public ceph-testcontainers-go v0.4.0 primitives: the
+// rosters come from Container.Managers and Container.Monitors, the stop and
+// start from the ManagerContainer handles, the container instances from those
+// handles' State and container ID, and the beacon sessions from each
+// MonitorContainer.AdminSocket "sessions" (observeManagerSessions). The
+// bracketing MgrMap reads compare epochs, which Observer.ManagerStatus drops,
+// so they stay a native `mgr dump` through Container.Ceph (observeManagerMap;
+// JSYoo5B/ceph-testcontainers-go#540). The sample classification and the
+// receipt schema are this consumer's own judgment.
 const (
 	transitionReceiptSchema = "ceph-msgr-go/mgr-transition-receipt/v1"
 	transitionReceiptFile   = "mgr-transition-receipt.json"
