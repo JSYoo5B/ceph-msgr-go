@@ -20,8 +20,12 @@ env:
   GOPROXY: 'https://proxy.golang.org|direct'
 
 jobs:
+  changes:
+    uses: ./.github/workflows/change-plan.yml
+
   lint:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' }}
     name: Static analysis advisory (${{ matrix.module }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -31,15 +35,18 @@ jobs:
         module: ['.', 'integration/fixture', 'tools/quality']
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           go-version: '1.27.x'
           cache-dependency-path: |
             go.sum
             integration/fixture/go.sum
       - name: Collect static analysis diagnostics
+        if: needs.changes.outputs.docs_only != 'true'
         id: lint
         continue-on-error: true
         uses: golangci/golangci-lint-action@v9
@@ -48,14 +55,14 @@ jobs:
           working-directory: ${{ matrix.module }}
           args: --timeout=10m --output.json.path=${{ runner.temp }}/lint.json
       - name: Record advisory outcome
-        if: always()
+        if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
         env:
           OUTCOME: ${{ steps.lint.outcome }}
           MODULE: ${{ matrix.module }}
         run: |
           echo "Static analysis for $MODULE: $OUTCOME (advisory). A failed or skipped scan is not a clean result." >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve lint diagnostics
-        if: always()
+        if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: lint-${{ strategy.job-index }}
@@ -63,8 +70,13 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+      - name: Documentation-only policy
+        if: needs.changes.outputs.docs_only == 'true'
+        run: echo "Not executed by the documentation-only policy; this is not a scan pass." >> "$GITHUB_STEP_SUMMARY"
+
   tooling:
-    if: github.event_name != 'schedule'
+    needs: changes
+    if: ${{ !cancelled() && github.event_name != 'schedule' && needs.changes.outputs.docs_only != 'true' }}
     name: Quality tooling tests
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -84,6 +96,8 @@ jobs:
       - run: python3 -m unittest discover -s .github/scripts -p 'test_*.py'
 
   vulnerabilities:
+    needs: changes
+    if: ${{ !cancelled() }}
     name: Vulnerabilities (${{ matrix.module }}, Go ${{ matrix.go }}, ${{ matrix.policy || 'security' }})
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -106,17 +120,21 @@ jobs:
             go: '1.27.x'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           persist-credentials: false
       # Build the scanner with its supported toolchain, then scan with the
       # module's selected toolchain. Neither installation changes go.mod.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           go-version: '1.27.x'
           cache: false
       - name: Install pinned scanner
+        if: needs.changes.outputs.docs_only != 'true'
         run: GOBIN="$RUNNER_TEMP/quality-bin" go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        if: needs.changes.outputs.docs_only != 'true'
         with:
           go-version: ${{ matrix.go }}
           check-latest: true
@@ -124,6 +142,7 @@ jobs:
             go.sum
             integration/fixture/go.sum
       - name: Scan module and apply reachability policy
+        if: needs.changes.outputs.docs_only != 'true'
         working-directory: ${{ matrix.module }}
         shell: bash
         env:
@@ -139,9 +158,12 @@ jobs:
           cat "$RUNNER_TEMP/vulnerabilities.txt" >> "$GITHUB_STEP_SUMMARY"
           exit "$result"
       - name: Preserve scan evidence
-        if: always()
+        if: ${{ always() && needs.changes.outputs.docs_only != 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vulnerabilities-${{ matrix.id }}
           path: ${{ runner.temp }}/vulnerabilities.*
           retention-days: 7
+      - name: Documentation-only policy
+        if: needs.changes.outputs.docs_only == 'true'
+        run: echo "Not executed by the documentation-only policy; this is not a scan pass." >> "$GITHUB_STEP_SUMMARY"

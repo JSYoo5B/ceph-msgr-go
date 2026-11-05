@@ -1,0 +1,42 @@
+name: Change plan
+
+on:
+  workflow_call:
+    outputs:
+      docs_only:
+        description: Explicit true only for audited documentation modifications
+        value: ${{ jobs.plan.outputs.docs_only }}
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    name: Classify changes and recommend tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      docs_only: ${{ steps.plan.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Plan against the event identities
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          FORK: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository }}
+        run: >-
+          python3 tools/ci_change_plan.py --event "$EVENT" --base "$BASE"
+          --head "$HEAD" --fork "$FORK" --output "$RUNNER_TEMP/change-plan.json"
+      - name: Preserve the selection explanation
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: change-plan-${{ github.workflow }}
+          path: ${{ runner.temp }}/change-plan.json
+          retention-days: 7
+          if-no-files-found: warn

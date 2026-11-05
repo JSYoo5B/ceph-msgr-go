@@ -41,6 +41,14 @@ days. A tool failure is not a clean scan. A later gate should follow reviewed
 findings and a separate policy change. Vulnerability JSON/text also lasts seven
 days. No linter dependency is added to the product or fixture module.
 
+## Documentation-only policy
+
+The shared [change planner](scenarios/README.md#change-based-advice-and-documentation-only-checks)
+can skip basic/quality work only for audited ordinary documentation modifications
+on same-repository PRs. Quality matrix jobs keep their check names and explicitly
+report non-execution. Fork, manual, scheduled and uncertain comparisons run the
+checks. Structural collection keeps its independent eligibility policy.
+
 ## Structural report
 
 Three bounded tables show changed packages (lines, exported declarations and

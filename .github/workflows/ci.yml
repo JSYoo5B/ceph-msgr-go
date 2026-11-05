@@ -23,7 +23,12 @@ env:
   GOWORK: 'off'
 
 jobs:
+  changes:
+    uses: ./.github/workflows/change-plan.yml
+
   basic:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     name: Build, lint and unit tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -74,6 +79,8 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= -pyflakes=
 
   fixture-static:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.docs_only != 'true' }}
     name: Fixture build and unit checks without a cluster
     runs-on: ubuntu-latest
     timeout-minutes: 15

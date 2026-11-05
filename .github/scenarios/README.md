@@ -10,6 +10,46 @@ commit cancels its previous basic checks. Push events do not repeat PR CI.
 See [Code quality](../QUALITY.md) for separate static analysis, vulnerability
 checks and advisory structural PR reports. These do not select native scenarios.
 
+## Change-based advice and documentation-only checks
+
+Basic CI and Code quality each call `change-plan.yml`. Its read-only planner
+records the event base, requested PR head, checked-out commit, changed paths and
+file modes. The summary contains a native-group recommendation table; the JSON
+artifact is retained for seven days. It does not dispatch native jobs, change
+`/ci run`, or filter periodic/platform/native matrices.
+
+The initial recommendations use directory-level heuristics: `internal/mds`
+changes recommend all MDS groups; `internal/osd` changes also include coupled
+MDS and RBD groups. Shared transport/auth/session/maps, public API, fixture,
+CI/tooling, contracts and unknown paths recommend every native group. Multiple
+changes union the recommendations. A group outside a heuristic is not proven
+unaffected. Declaration/call-graph analysis and automatic native-test reduction
+remain separate future work.
+
+Only same-repository PRs that modify ordinary non-executable files in the narrow
+allowlist (`README.md`, `THIRD_PARTY_NOTICES.md`) may skip basic and
+quality work. The planner additionally scans tracked Go/Python/shell/workflow
+source for literal references to those documents and root Go embed directives;
+a referenced document is treated as an input. This conservative regression guard
+can reject harmless references and does not prove absence of dynamically
+constructed paths. Expanding the allowlist requires source review. `SPEC.md`,
+contracts, ledgers, package READMEs, fixture records and every other path run
+checks even when they are Markdown.
+
+Deletion, addition, rename, executable-mode change, symlink/submodule change,
+empty diffs, forks, manual/scheduled runs and unproven Git comparisons never
+qualify for a skip. Renames are compared as deletion plus addition. A checkout
+must be the requested head containing the event base, or its two-parent test
+merge with the requested head as the second parent and the event base in the
+first parent's ancestry. A newer target's changes remain in the compared tree.
+Missing history or planner failure runs downstream checks; only an explicit
+`docs_only=true` output skips them.
+
+Workflows still trigger on every PR. Basic/fixture/tooling jobs may be skipped;
+quality matrix jobs retain their expanded check names and report that work was
+not executed by policy. A policy skip is not test/scan success evidence. Weekly
+vulnerability scans still execute. Branch protection settings are not modified.
+
 ## Catalog and planner
 
 `catalog.json` preserves the original 63 native interoperability matrix rows and adds
