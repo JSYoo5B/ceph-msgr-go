@@ -1307,7 +1307,7 @@
   {
    "id": "fuzz",
    "job": "fuzz",
-   "description": "Bounded fuzz runs of the frame, log, config, ping, map, CephX and OSD reply decoders"
+   "description": "Bounded fuzz runs of every registered compiled root-module fuzz target"
   },
   {
    "id": "windows-ceph",

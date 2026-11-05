@@ -155,7 +155,7 @@ jobs:
   fuzz:
     if: contains(fromJSON(inputs.matrix).fixed, 'fuzz')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       CGO_ENABLED: '0'
       GOTOOLCHAIN: local
@@ -170,16 +170,16 @@ jobs:
           go-version: '1.27.x'
       - name: Test development crash metadata selection
         run: python3 -m unittest discover -s tools -p 'test_*.py'
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzFrameReader$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzSecureFrameReader$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzDecodeLog$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzDecodeConfig$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/msgr -run '^$' -fuzz '^FuzzPingReply$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/maps -run '^$' -fuzz '^FuzzMaps$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/maps -run '^$' -fuzz '^FuzzOSDMessage$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPublication$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/cephx -run '^$' -fuzz '^FuzzAuthenticationPlaintextPublication$' -fuzztime=20s -parallel=2
-      - run: go test ./internal/osd -run '^$' -fuzz '^FuzzReplyDecode$' -fuzztime=20s -parallel=2
+      - name: Run every registered compiled fuzz target
+        run: python3 tools/fuzz_targets.py run --output "$RUNNER_TEMP/fuzz-results"
+      - name: Preserve fuzz execution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-results
+          path: ${{ runner.temp }}/fuzz-results/
+          retention-days: 7
+          if-no-files-found: warn
 
   windows-ceph:
     if: contains(fromJSON(inputs.matrix).fixed, 'windows-ceph')
