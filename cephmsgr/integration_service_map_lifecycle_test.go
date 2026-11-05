@@ -5,12 +5,15 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,13 +25,53 @@ import (
 // created only after the first watch's actual MON has stopped, so receiving it
 // on that same watch cannot be satisfied by a buffered pre-fault snapshot.
 func TestCephMonServiceMapLifecycleIntegration(t *testing.T) {
+	runServiceMapLifecycle(t, false)
+}
+
+// serviceMapLifecycleHoldSelector exclusively selects the held-dial variant.
+const serviceMapLifecycleHoldSelector = "^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$"
+
+// The variant runs the same lifecycle and assertions with one test-only
+// network condition: after the same watch has recovered, a dial to the stopped
+// MON that has already failed is held until its dial context ends (the normal
+// setup timeout) before the failure is returned. This makes the failed-seed
+// delay deterministic. It runs only when exclusively selected, so broad rows
+// keep the unmodified lifecycle as their only lifecycle cell.
+func TestCephMonServiceMapLifecycleFailedMonHoldIntegration(t *testing.T) {
+	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != serviceMapLifecycleHoldSelector {
+		t.Skip("held stopped-MON dial variant requires its exclusive selector " + serviceMapLifecycleHoldSelector)
+	}
+	runServiceMapLifecycle(t, true)
+}
+
+func runServiceMapLifecycle(t *testing.T, holdStoppedMONDials bool) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if control == "" {
 		t.Skip("ServiceMap lifecycle requires the disposable fixture")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
-	c, err := Dial(ctx, integrationOptions(t))
+	options := integrationOptions(t)
+	var heldRole atomic.Pointer[string]
+	var held atomic.Int64
+	if holdStoppedMONDials {
+		dial := options.DialContext
+		options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+			conn, err := dial(ctx, network, endpoint)
+			if err == nil {
+				return conn, nil
+			}
+			if role := heldRole.Load(); role != nil {
+				if _, peer, _ := testcluster.SplitPeer(endpoint); peer == *role {
+					held.Add(1)
+					<-ctx.Done()
+					return nil, errors.Join(err, ctx.Err())
+				}
+			}
+			return nil, err
+		}
+	}
+	c, err := Dial(ctx, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +150,10 @@ func TestCephMonServiceMapLifecycleIntegration(t *testing.T) {
 	}
 	if err := waitServiceLifecycleSource(ctx, watch, old); err != nil {
 		t.Fatal(err)
+	}
+	if holdStoppedMONDials {
+		heldRole.Store(&role)
+		defer func() { t.Logf("held failed dials to stopped %s: %d", role, held.Load()) }()
 	}
 	// The native holder must remain alive through the real stop/recovery.
 	heldA, err := observeNativeServiceHolder(ctx, control, tokenA, "observe")

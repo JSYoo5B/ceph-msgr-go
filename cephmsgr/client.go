@@ -39,6 +39,7 @@ type Client struct {
 	mgrMap        maps.Mgr
 	mon, mgr      *session.Session
 	monReady      bool
+	monTarget     monTarget                 // dial target that admitted c.mon
 	monComp       msgr.CompressionAlgorithm // negotiated onwire compression on the MON connection
 	authErr       error                     // Explicit MON reauthentication rejection, until recovery.
 	// authBarrier is the highest auth epoch learned as an increase over a
@@ -358,33 +359,54 @@ func (c *Client) sessionConfig() session.Config {
 	return session.Config{WriteTimeout: c.options.ConnectTimeout, KeepaliveInterval: c.options.KeepaliveInterval, KeepaliveTimeout: c.options.KeepaliveTimeout}
 }
 
-func (c *Client) connectMonitor(ctx context.Context) error {
-	type target struct {
-		endpoint string
-		address  msgr.Address
-	}
-	c.mu.Lock()
-	seeds := append([]string(nil), c.options.Monitors...)
-	learned := append([]msgr.Address(nil), c.monMap.Addresses...)
-	old, wasReady := c.mon, c.monReady
-	c.mu.Unlock()
+// monTarget is one MON dial candidate: the dial string and the full address
+// SERVER_IDENT must match.
+type monTarget struct {
+	endpoint string
+	address  msgr.Address
+}
+
+// monTargets returns the seeds, then the learned MonMap addresses. When the
+// current MON session is admitted and healthy and its exact target is still
+// listed, that target moves to the front: routine renewal re-authenticates to
+// the MON that already admitted this GlobalID, instead of first spending the
+// setup timeout on an unreachable earlier seed while the rotating keys behind
+// the reclaim proof age. The other targets keep their order as fallbacks.
+func monTargets(seeds []string, learned []msgr.Address, admitted monTarget, healthy bool) ([]monTarget, []error) {
 	var failures []error
-	targets := make([]target, 0, len(seeds)+len(learned))
+	targets := make([]monTarget, 0, len(seeds)+len(learned))
 	for _, seed := range seeds {
 		endpoint, address, err := seedAddress(seed)
 		if err != nil {
 			failures = append(failures, err)
 			continue
 		}
-		targets = append(targets, target{endpoint: endpoint, address: address})
+		targets = append(targets, monTarget{endpoint: endpoint, address: address})
 	}
 	for _, address := range learned {
 		// A dial string cannot retain all authenticated address fields.
 		// SERVER_IDENT compares the full target, including IPv6 scope/flow.
-		targets = append(targets, target{endpoint: dialAddress(address), address: address})
+		targets = append(targets, monTarget{endpoint: dialAddress(address), address: address})
 	}
-	seen := make(map[target]bool)
-	barrierRetried := make(map[target]bool)
+	if healthy {
+		if i := slices.Index(targets, admitted); i > 0 {
+			targets = slices.Insert(slices.Delete(targets, i, i+1), 0, admitted)
+		}
+	}
+	return targets, failures
+}
+
+func (c *Client) connectMonitor(ctx context.Context) error {
+	c.mu.Lock()
+	seeds := append([]string(nil), c.options.Monitors...)
+	learned := append([]msgr.Address(nil), c.monMap.Addresses...)
+	old, wasReady := c.mon, c.monReady
+	admitted := c.monTarget
+	c.mu.Unlock()
+	healthy := old != nil && wasReady && old.Err() == nil && admitted.endpoint != ""
+	targets, failures := monTargets(seeds, learned, admitted, healthy)
+	seen := make(map[monTarget]bool)
+	barrierRetried := make(map[monTarget]bool)
 	for i := 0; i < len(targets); i++ {
 		candidateTarget := targets[i]
 		if seen[candidateTarget] {
@@ -628,6 +650,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				c.auth = candidate
 				c.authErr = nil
 				c.monReady = true
+				c.monTarget = candidateTarget
 				if c.authTrace != nil && c.authTrace.installed != nil {
 					c.authTraceNext++
 					installedObservation = &authIssuerObservation{session: s, endpoint: candidateTarget.endpoint, monMap: candidateMonMap, sequence: c.authTraceNext}

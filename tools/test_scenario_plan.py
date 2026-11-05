@@ -78,6 +78,11 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(problems), 1)
         self.assertIn("a: selector", problems[0])
 
+    def test_selectors_resolve_against_both_native_suites(self):
+        tests = plan.integration_tests()
+        self.assertIn("TestCephMonPingIntegration", tests)  # API suite
+        self.assertIn("TestCephMonServiceMapLifecycleFailedMonHoldIntegration", tests)  # client suite
+
     def test_pr_catalog_cannot_silently_add_a_trusted_runner_parameter(self):
         from unittest.mock import patch
         future = entry("future", mgr_service="1")

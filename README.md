@@ -275,6 +275,10 @@ intermediate epochs nor subsequent command success.
   data and a recorded first cause survive later cancellation or Close.
 - `Close` stops owned sessions/workers and releases pending callers. It does not
   convert uncertain execution into confirmed failure or rollback.
+- Ticket renewal first re-authenticates to the MON that currently admits the
+  client, keeping the GlobalID. Other seeds and learned MonMap addresses are
+  fallbacks. Initial setup and recovery after a lost MON session try seeds
+  first. See the [CephX ledger](internal/cephx/EXCHANGE_LEDGER.md).
 - MON/MGR/OSD have no cookie-based resume here. The opt-in MDS profile has an
   explicit resume/reconnect contract.
 

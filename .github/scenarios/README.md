@@ -74,7 +74,14 @@ in periodic main verification. The required-test gate binds it to
 cannot pass. The [selected native receipt](../../integration/fixture/MSGR_COMPRESSION_VALIDATION.md)
 records no negotiated compression and successful MON/OSD commands; it does
 not prove that negotiation frames were exchanged or compressed frames worked.
-The catalog has 84 native rows in total.
+One dedicated `mon-mgr` row,
+`mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold`, selects only the
+client-suite `TestCephMonServiceMapLifecycleFailedMonHoldIntegration`. It
+holds failed dials to a stopped MON for the setup timeout; see the
+[lifecycle recipe](../../integration/fixture/SERVICE_MAP_LIFECYCLE_VALIDATION.md).
+The planner checks `test_run` selectors against both the API (`integration`)
+and client (`cephmsgr`) suites.
+The catalog has 85 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
