@@ -7,6 +7,9 @@ of these basic checks; `integration/` tests are excluded. Fixture-tool unit
 checks run in their separate Go module without starting a cluster. A new PR
 commit cancels its previous basic checks. Push events do not repeat PR CI.
 
+See [Code quality](../QUALITY.md) for separate static analysis, vulnerability
+checks and advisory structural PR reports. These do not select native scenarios.
+
 ## Catalog and planner
 
 `catalog.json` preserves the original 63 native interoperability matrix rows and adds
