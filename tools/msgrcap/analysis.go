@@ -28,11 +28,13 @@ type analysisOptions struct {
 type report struct {
 	Tool        string         `json:"tool"`
 	Input       inputInfo      `json:"input"`
+	Inputs      []inputInfo    `json:"inputs,omitempty"`
 	Pcap        pcapInfo       `json:"pcap"`
 	Decryption  string         `json:"secure_decryption"`
 	Connections []connReport   `json:"connections"`
 	Unmatched   []traceConn    `json:"unmatched_trace_connections,omitempty"`
 	Commands    []traceCommand `json:"trace_commands,omitempty"`
+	Capture     *coverage      `json:"capture_coverage,omitempty"`
 	Limits      []string       `json:"limits"`
 }
 
@@ -40,6 +42,11 @@ type inputInfo struct {
 	Name   string `json:"name"`
 	Bytes  int64  `json:"bytes"`
 	SHA256 string `json:"sha256"`
+	// Records is the file's own pcap record count; packet numbers in
+	// tcp_events continue across consecutive segment files.
+	Records int `json:"records"`
+	// ReadError says the file ended inside a record (a partial capture).
+	ReadError string `json:"read_error,omitempty"`
 }
 
 type dirReport struct {
@@ -61,15 +68,18 @@ type dirReport struct {
 }
 
 type connReport struct {
-	ID          int        `json:"id"`
-	Client      string     `json:"client"`
-	Server      string     `json:"server"`
-	Phase       string     `json:"trace_phase,omitempty"`
-	First       time.Time  `json:"first_packet"`
-	Last        time.Time  `json:"last_packet"`
-	SYNs        int        `json:"syn_count"`
-	Midstream   bool       `json:"capture_started_midstream,omitempty"`
-	TCPOutcome  string     `json:"tcp_outcome"`
+	ID         int       `json:"id"`
+	Client     string    `json:"client"`
+	Server     string    `json:"server"`
+	Phase      string    `json:"trace_phase,omitempty"`
+	First      time.Time `json:"first_packet"`
+	Last       time.Time `json:"last_packet"`
+	SYNs       int       `json:"syn_count"`
+	Midstream  bool      `json:"capture_started_midstream,omitempty"`
+	TCPOutcome string    `json:"tcp_outcome"`
+	// CaptureGaps lists the declared capture gaps (by preceding segment)
+	// that may have interrupted this connection.
+	CaptureGaps []int      `json:"capture_gaps,omitempty"`
 	Events      []tcpEvent `json:"tcp_events"`
 	ConMode     string     `json:"con_mode,omitempty"`
 	PeerEntity  string     `json:"server_entity,omitempty"`
@@ -82,44 +92,80 @@ type connReport struct {
 var entityNames = map[uint8]string{1: "mon", 2: "mds", 4: "osd", 8: "client", 16: "mgr"}
 
 func analyze(name string, r io.Reader, opts analysisOptions) (*report, error) {
-	h := sha256.New()
-	counter := &countingReader{r: io.TeeReader(r, h)}
-	pr, err := newPcapReader(counter)
-	if err != nil {
-		return nil, err
+	return analyzeInputs([]pcapInput{{Name: name, R: r}}, opts)
+}
+
+// pcapInput is one capture file. Several inputs are consecutive segments of
+// one capture: they are read in order into one connection tracker, and only
+// a capture manifest (coverage.go) may state the intervals between them.
+type pcapInput struct {
+	Name string
+	R    io.Reader
+}
+
+func analyzeInputs(inputs []pcapInput, opts analysisOptions) (*report, error) {
+	if len(inputs) == 0 {
+		return nil, errors.New("no capture input")
 	}
 	t := newTracker(opts.ServerPorts, opts.MaxBytes)
-	var readErr error
-	for {
-		p, err := pr.next()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			readErr = err // keep what was read; report the partial file
-			break
-		}
-		t.add(p)
-	}
-	_, _ = io.Copy(io.Discard, counter)
 	rep := &report{
-		Tool:  "msgrcap analyze (development-only)",
-		Input: inputInfo{Name: filepath.Base(name), Bytes: counter.n, SHA256: hex.EncodeToString(h.Sum(nil))},
-		Pcap:  pr.info,
+		Tool: "msgrcap analyze (development-only)",
 		Limits: []string{
 			"Frames are decoded only from the contiguous reassembled prefix of each direction; data after the first gap is counted, not decoded.",
 			"Segment payloads, keys, tickets and connection secrets are never written to this report.",
 			"A capture does not show local client state, cancellations or unsent requests; use the client trace for those.",
 		},
 	}
-	if readErr != nil {
-		rep.Limits = append(rep.Limits, "Capture file ended early: "+readErr.Error())
+	offset := 0
+	for i, in := range inputs {
+		h := sha256.New()
+		counter := &countingReader{r: io.TeeReader(in.R, h)}
+		pr, err := newPcapReader(counter)
+		if err != nil {
+			return nil, err
+		}
+		if i > 0 && pr.info.LinkType != rep.Pcap.LinkType {
+			return nil, fmt.Errorf("%s: link type %d differs from the first segment's %d", in.Name, pr.info.LinkType, rep.Pcap.LinkType)
+		}
+		var readErr error
+		for {
+			p, err := pr.next()
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if err != nil {
+				readErr = err // keep what was read; report the partial file
+				break
+			}
+			p.Index += offset
+			t.add(p)
+		}
+		_, _ = io.Copy(io.Discard, counter)
+		info := inputInfo{Name: filepath.Base(in.Name), Bytes: counter.n, SHA256: hex.EncodeToString(h.Sum(nil)), Records: pr.info.Records}
+		if readErr != nil {
+			info.ReadError = readErr.Error()
+		}
+		if i == 0 {
+			rep.Input, rep.Pcap = info, pr.info
+		} else {
+			rep.Pcap.Records += pr.info.Records
+			rep.Pcap.Truncated += pr.info.Truncated
+			rep.Pcap.Skipped += pr.info.Skipped
+		}
+		if len(inputs) > 1 {
+			rep.Inputs = append(rep.Inputs, info)
+		}
+		offset += pr.info.Records
+		if readErr != nil {
+			rep.Limits = append(rep.Limits, "Capture file "+info.Name+" ended early: "+readErr.Error())
+		}
 	}
 	var auth *cephx.Client
 	switch {
 	case opts.Key == nil:
 		rep.Decryption = "disabled: secure frames after AUTH_DONE are reported as opaque bytes"
 	default:
+		var err error
 		auth, err = cephx.NewClient(opts.Entity, *opts.Key, 0)
 		if err != nil {
 			return nil, err

@@ -1,8 +1,10 @@
 name: Messenger capture PoC
 
 # Development-only research workflow for issue #48. It never gates the
-# product: tcpdump, libpcap and tshark run only on the runner, and the
-# analyzer is a separate Go module under tools/msgrcap.
+# product: tcpdump, libpcap and tshark run only on the runner, the analyzer is
+# a separate Go module under tools/msgrcap, and the provider capture driver
+# (ceph-testcontainers-go capture.Start) is another under
+# tools/msgrcap/providercap.
 on:
   workflow_dispatch:
   pull_request:
@@ -27,6 +29,9 @@ env:
   GOTOOLCHAIN: local
   GOWORK: 'off'
   CEPH_IMAGE: 'quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9'
+  # Packet-capture contract 1 helper (ceph-testcontainers-images), pinned by
+  # its image index digest; verify-image.sh checks the digest at the registry.
+  CAPTURE_IMAGE: 'ghcr.io/jsyoo5b/ceph-testcontainers-images:extension-capture-v1@sha256:183162a5642757f031b84a5db8c75a8bba29d5d91556206ee6e38f8f1008d21a'
 
 jobs:
   unit:
@@ -47,6 +52,14 @@ jobs:
           go -C tools/msgrcap test -mod=readonly -count=1 -v ./...
       - name: Product graph stays independent of the tool
         run: python3 tools/product_dependencies.py
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: tools/msgrcap/providercap/go.sum
+      - name: Vet and build the provider capture driver module
+        run: |
+          go -C tools/msgrcap/providercap vet -mod=readonly ./...
+          go -C tools/msgrcap/providercap build -mod=readonly -o /dev/null .
 
   live:
     name: Live MON capture (${{ matrix.mode }})
@@ -62,8 +75,12 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.24.0'
-          cache-dependency-path: tools/msgrcap/go.sum
+          # The provider capture driver needs the toolchain of
+          # ceph-testcontainers-go v0.4.0 (go 1.26); the analyzer builds with it.
+          go-version: '1.27.x'
+          cache-dependency-path: |
+            tools/msgrcap/go.sum
+            tools/msgrcap/providercap/go.sum
       - name: Install development capture tools
         run: |
           sudo apt-get update -qq
@@ -77,8 +94,13 @@ jobs:
             sleep $((attempt * 10))
           done
           exit 1
-      - name: Capture and analyze one MON session
-        run: bash tools/msgrcap/live-poc.sh "${{ matrix.mode }}" "$RUNNER_TEMP/msgrcap-${{ matrix.mode }}" "$CEPH_IMAGE"
+      - name: Verify and pull the pinned capture helper image
+        timeout-minutes: 5
+        run: |
+          mkdir -p "$RUNNER_TEMP/msgrcap-${{ matrix.mode }}"
+          bash tools/msgrcap/verify-image.sh "$CAPTURE_IMAGE" "$RUNNER_TEMP/msgrcap-${{ matrix.mode }}/capture-image.json"
+      - name: Capture and analyze one MON session (reference and provider capture)
+        run: bash tools/msgrcap/live-poc.sh "${{ matrix.mode }}" "$RUNNER_TEMP/msgrcap-${{ matrix.mode }}" "$CEPH_IMAGE" "$CAPTURE_IMAGE"
       - name: Retain the capture and reports
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
