@@ -49,8 +49,26 @@ that a native profile ran. `auth.go` supplies CephX state; the session's
 
 U1 source: [auth.go](auth.go), [key.go](key.go), authentication/connection-secret/
 service tests in this directory. U2 source:
-[renewal_deadline_test.go](../../cephmsgr/renewal_deadline_test.go) and the
-coordinator in `cephmsgr/`. These tests exercise deliberate synthetic replies;
+[renewal_deadline_test.go](../../cephmsgr/renewal_deadline_test.go),
+[renewal_target_test.go](../../cephmsgr/renewal_target_test.go) and the
+coordinator in `cephmsgr/`.
+
+The coordinator chooses the MON for each exchange. While the current MON
+session is admitted and healthy, and its exact dial target (dial string and
+full address, including nonce, IPv6 scope and flow) is still a seed or a
+learned MonMap address, renewal tries that target first. The remaining seeds
+and learned addresses follow in their usual order, and they are tried only if
+that exchange fails. Without a healthy admitted session (initial setup, or
+recovery after that session ended) the order is seeds, then learned addresses.
+Every attempt presents the same GlobalID and the current AUTH ticket as the
+reclaim proof. The explicit refusal handling and the no-replay rule above
+still apply. Starting with the admitted MON keeps an unreachable earlier seed
+from spending the setup timeout before each renewal. During that time the
+rotating AUTH secret that decodes the proof could expire. Native Tentacle then
+refuses the reclaim with -13. `TestRoutineRenewalPrefersAdmittedMonitor`
+covers the stopped-seed sequence on synthetic MONs: recovery, renewal at the
+admitted MON, and fallback when that MON refuses new connections.
+`TestMonitorTargetsPreferHealthyAdmittedTarget` covers the ordering rule. These tests exercise deliberate synthetic replies;
 they do not replace an independent native implementation or daemon oracle.
 [MDS_SERVICE_CONTRACT.md](MDS_SERVICE_CONTRACT.md) adds the MDS-specific key and
 service-mask boundaries. Malformed lengths, plaintext/version errors and

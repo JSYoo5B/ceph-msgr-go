@@ -187,6 +187,9 @@ type peerConfig struct {
 	// treated as commands. It is how a synthetic MGR answers service
 	// registration.
 	service func(m msgr.MessageData, send func(msgr.MessageData) error) (handled bool, err error)
+	// authProof observes a MON request's previous GlobalID and the AUTH
+	// ticket (secret ID and blob) it presents as the reclaim proof.
+	authProof func(previousGlobalID, oldSecretID uint64, oldTicket []byte)
 }
 
 // The synthetic peer exercises actual CephX state transitions and client
@@ -252,7 +255,7 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		if initial.U8() != 10 || initial.U32() != 8 || initial.String() != "test" {
 			return nil, nil, errors.New("identity")
 		}
-		initial.U64()
+		previousGlobalID := initial.U64()
 		if err := initial.Done(); err != nil {
 			return nil, nil, err
 		}
@@ -275,14 +278,16 @@ func mockAuthenticate(conn net.Conn, cfg peerConfig) (*msgr.Reader, *msgr.Writer
 		}
 		nonce, got := proof.U64(), proof.U64()
 		proof.U8()
-		proof.U64()
-		proof.Bytes()
+		oldSecretID, oldTicket := proof.U64(), proof.Bytes()
 		services := cfg.services
 		if services == 0 {
 			services = cephx.ServiceAuth | cephx.ServiceMgr
 		}
 		if proof.U32() != services || proof.Done() != nil {
 			return nil, nil, errors.New("ticket request")
+		}
+		if cfg.authProof != nil {
+			cfg.authProof(previousGlobalID, oldSecretID, oldTicket)
 		}
 		challengeBlob := wire.Encoder{}
 		challengeBlob.U64(0x1234)

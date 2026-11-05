@@ -25,6 +25,7 @@ mon-mgr.aes256k.ip6.mapped-1
 mon-mgr.aes256k.ip4.crc.host
 mon-mgr.aes.ip4.crc.host
 mon-mgr.aes256k.ip6.crc
+mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold
 osd.aes256k.ip4.host
 osd.aes.ip4
 osd.aes256k.ip4.crc.host

@@ -138,11 +138,15 @@ def fixed_job_problems(document, workflow_text):
     return problems
 
 
-def integration_tests(directory=ROOT / "integration"):
-    """Names of the top-level Go tests the integration package defines."""
+def integration_tests(directories=(ROOT / "integration", ROOT / "cephmsgr")):
+    """Names of the top-level Go tests of both native suites.
+
+    The native runner applies one selector to the API suite (integration) and
+    the client suite (cephmsgr), as the result gate does."""
     names = set()
-    for path in sorted(Path(directory).glob("*_test.go")):
-        names.update(re.findall(r"(?m)^func (Test[A-Za-z0-9_]*)\(", path.read_text(encoding="utf-8")))
+    for directory in directories:
+        for path in sorted(Path(directory).glob("*_test.go")):
+            names.update(re.findall(r"(?m)^func (Test[A-Za-z0-9_]*)\(", path.read_text(encoding="utf-8")))
     return names
 
 
