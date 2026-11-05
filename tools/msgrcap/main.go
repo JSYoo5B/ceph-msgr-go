@@ -2,8 +2,10 @@
 // project's msgr2.1 traffic. It is a separate module: the product module never
 // imports it, and it uses no libpcap, CGO, tshark or subprocess.
 //
-//	msgrcap analyze -pcap capture.pcap [-trace probe.json] [-json report.json]
-//	        [-entity client.x -key-file key] [-mon-log mon.log -cross cross.json]
+//	msgrcap analyze -pcap capture.pcap | -segments manifest.json [-trace probe.json]
+//	        [-json report.json] [-entity client.x -key-file key] [-mon-log mon.log -cross cross.json]
+//	msgrcap parity -reference ref.json -candidate cand.json [-reference-cross a.json
+//	        -candidate-cross b.json] [-json parity.json] [-require-full]
 //	msgrcap probe -mon v2:IP:3300 -entity client.x -key-file key -mode crc|secure -trace probe.json
 package main
 
@@ -13,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +25,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: msgrcap analyze|probe [flags]")
+		fmt.Fprintln(os.Stderr, "usage: msgrcap analyze|probe|parity [flags]")
 		os.Exit(2)
 	}
 	var err error
@@ -31,6 +34,8 @@ func main() {
 		err = analyzeMain(os.Args[2:], os.Stdout)
 	case "probe":
 		err = probeMain(os.Args[2:])
+	case "parity":
+		err = parityMain(os.Args[2:], os.Stdout)
 	default:
 		err = fmt.Errorf("unknown subcommand %q", os.Args[1])
 	}
@@ -52,6 +57,7 @@ func probeMain(args []string) error {
 	fs.StringVar(&o.RestartSignal, "restart-request", "", "file created when the MON may be restarted")
 	fs.StringVar(&o.RestartDone, "restart-done", "", "file the workflow creates after the restart")
 	fs.StringVar(&o.Substitute, "substitution", "", "label for the development capture substitution")
+	fs.StringVar(&o.DialHold, "dial-hold", "", "while this file exists, new dials wait for its removal")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -64,6 +70,7 @@ func probeMain(args []string) error {
 func analyzeMain(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	pcapPath := fs.String("pcap", "", "classic pcap capture")
+	manifestPath := fs.String("segments", "", "capture manifest of consecutive segment files (instead of -pcap)")
 	tracePath := fs.String("trace", "", "optional probe correlation trace")
 	jsonPath := fs.String("json", "", "optional JSON report output")
 	ports := fs.String("server-port", "3300", "comma-separated Messenger server ports for midstream orientation")
@@ -75,8 +82,8 @@ func analyzeMain(args []string, out io.Writer) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *pcapPath == "" {
-		return fmt.Errorf("-pcap is required")
+	if (*pcapPath == "") == (*manifestPath == "") {
+		return fmt.Errorf("exactly one of -pcap and -segments is required")
 	}
 	opts := analysisOptions{MaxBytes: *maxBytes, FrameLimit: 64 << 20}
 	for _, p := range strings.Split(*ports, ",") {
@@ -111,12 +118,7 @@ func analyzeMain(args []string, out io.Writer) error {
 		}
 		opts.Trace = &tr
 	}
-	f, err := os.Open(*pcapPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	rep, err := analyze(*pcapPath, f, opts)
+	rep, err := analyzePaths(*pcapPath, *manifestPath, opts)
 	if err != nil {
 		return err
 	}
@@ -143,6 +145,66 @@ func analyzeMain(args []string, out io.Writer) error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+// analyzePaths analyzes one pcap file, or the segments of a capture manifest
+// with their coverage checked; a coverage error fails the analysis.
+func analyzePaths(pcapPath, manifestPath string, opts analysisOptions) (*report, error) {
+	if manifestPath == "" {
+		f, err := os.Open(pcapPath)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		return analyze(pcapPath, f, opts)
+	}
+	m, reports, err := readManifest(manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	var inputs []pcapInput
+	for _, s := range m.Segments {
+		f, err := os.Open(filepath.Join(filepath.Dir(manifestPath), s.File))
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		inputs = append(inputs, pcapInput{Name: s.File, R: f})
+	}
+	if len(inputs) == 0 {
+		return nil, fmt.Errorf("capture manifest lists no segment")
+	}
+	rep, err := analyzeInputs(inputs, opts)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyCoverage(rep, m, reports, opts.Trace); err != nil {
+		return nil, err
+	}
+	return rep, nil
+}
+
+// applyCoverage checks the manifest against the files the report read and
+// marks the connections that a declared gap may have interrupted.
+func applyCoverage(rep *report, m *captureManifest, reports []segmentReport, tr *traceFile) error {
+	files := rep.Inputs
+	if len(files) == 0 {
+		files = []inputInfo{rep.Input}
+	}
+	var seen []segmentInput
+	for _, f := range files {
+		seen = append(seen, segmentInput{SHA256: f.SHA256, Records: f.Records, ReadError: f.ReadError})
+	}
+	cov, err := checkCoverage(m, reports, seen, tr)
+	if err != nil {
+		return fmt.Errorf("capture coverage: %w", err)
+	}
+	rep.Capture = cov
+	markGaps(rep, cov.Gaps)
+	if len(cov.Gaps) > 0 {
+		rep.Limits = append(rep.Limits, "The capture has declared gaps (capture_coverage.gaps): traffic inside them is not observed, and connections listed with capture_gaps are not shown as continuous.")
 	}
 	return nil
 }
@@ -175,6 +237,21 @@ func printSummary(w io.Writer, rep *report) {
 	fmt.Fprintf(w, "pcap: link=%d snaplen=%d records=%d truncated=%d non-tcp=%d\n",
 		rep.Pcap.LinkType, rep.Pcap.Snaplen, rep.Pcap.Records, rep.Pcap.Truncated, rep.Pcap.Skipped)
 	fmt.Fprintf(w, "secure decryption: %s\n", rep.Decryption)
+	if cov := rep.Capture; cov != nil {
+		fmt.Fprintf(w, "capture coverage: %s; %d segment(s), %d declared gap(s), %d packets dropped\n", cov.Source, len(cov.Segments), len(cov.Gaps), cov.Lost)
+		for _, s := range cov.Segments {
+			fmt.Fprintf(w, "  segment %d %s: ready %s stop %s end=%s target=%s captured=%d dropped-by-kernel=%d\n", s.Index, s.File,
+				s.ReadyAt.Format(time.RFC3339Nano), s.StopRequestedAt.Format(time.RFC3339Nano), s.End, s.Target, s.Captured, s.DroppedKernel)
+		}
+		for _, g := range cov.Gaps {
+			fmt.Fprintf(w, "  gap after segment %d: %s (%s) %s\n", g.AfterSegment, g.From.Format(time.RFC3339Nano), g.To.Sub(g.From).Round(time.Millisecond), g.Reason)
+		}
+		if cov.Trace != nil {
+			for _, a := range cov.Trace.InGaps {
+				fmt.Fprintf(w, "  trace activity in a gap: %s\n", a)
+			}
+		}
+	}
 	var origin time.Time
 	if len(rep.Connections) > 0 {
 		origin = rep.Connections[0].First
@@ -183,6 +260,9 @@ func printSummary(w io.Writer, rep *report) {
 		fmt.Fprintf(w, "\nconn %d %s -> %s phase=%q t=+%s..+%s\n", c.ID, c.Client, c.Server, c.Phase,
 			c.First.Sub(origin).Round(time.Millisecond), c.Last.Sub(origin).Round(time.Millisecond))
 		fmt.Fprintf(w, "  tcp: %s; syn=%d", c.TCPOutcome, c.SYNs)
+		if len(c.CaptureGaps) > 0 {
+			fmt.Fprintf(w, " capture-gaps=%v", c.CaptureGaps)
+		}
 		for _, e := range c.Events {
 			fmt.Fprintf(w, " %s:%s@+%s", e.From, e.Kind, e.Time.Sub(origin).Round(time.Millisecond))
 		}

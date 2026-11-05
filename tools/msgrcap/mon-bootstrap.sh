@@ -1,8 +1,17 @@
 #!/bin/bash
 # Development-only single-MON bootstrap for the capture PoC. Runs inside the
 # pinned Ceph image as the container command. A restart reuses the store.
+#
+# The workflow controls each container generation through /msgrcap-ctl:
+# - the MON daemon starts only once "gate" exists, so that a capture of a
+#   restarted generation is ready before the MON can accept a connection;
+# - SIGTERM to the container stops the daemon; after it exits, "daemon-exited"
+#   holds its status and the container (and its network namespace) stays up
+#   until the next SIGTERM, so that the peer close is captured before the
+#   capture session of this generation is stopped.
 set -euo pipefail
 ip=$MSGRCAP_MON_IP
+ctl=/msgrcap-ctl
 data=/var/lib/ceph/mon/ceph-a
 if test ! -f "$data/msgrcap-ready"; then
     fsid=$(uuidgen)
@@ -34,4 +43,17 @@ EOF
     ceph-mon --mkfs -i a --monmap /tmp/monmap --keyring /tmp/mon.keyring
     touch "$data/msgrcap-ready"
 fi
-exec ceph-mon -f -i a --public-addrv "[v2:$ip:3300]"
+trap 'exit 0' TERM
+while test ! -f "$ctl/gate"; do sleep 0.1; done
+ceph-mon -f -i a --public-addrv "[v2:$ip:3300]" &
+pid=$!
+trap 'kill -TERM "$pid" 2>/dev/null || true' TERM
+status=0
+# wait returns early when the trap runs; wait again until the daemon is gone.
+while kill -0 "$pid" 2>/dev/null; do
+    status=0
+    wait "$pid" || status=$?
+done
+echo "$status" > "$ctl/daemon-exited"
+trap 'exit 0' TERM
+while true; do sleep 0.2; done

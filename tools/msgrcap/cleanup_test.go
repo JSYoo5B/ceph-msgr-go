@@ -27,6 +27,8 @@ case "$1 $2" in
 "rm -f") case "$FAULT" in *rm*) exit 1 ;; esac ;;
 "network rm") case "$FAULT" in *rm*) exit 1 ;; esac ;;
 "ps -a") case "$FAULT" in *ps*) exit 1 ;; *present*) echo m ;; esac ;;
+"ps -aq") case "$FAULT" in *ps*) exit 1 ;; *helper*) echo h1; echo other ;; esac ;;
+"inspect -f") case "$3 $4" in *" h1") echo container:MONID ;; *) echo container:elsewhere ;; esac ;;
 "network ls") case "$FAULT" in *ps*) exit 1 ;; esac ;;
 esac
 exit 0
@@ -38,9 +40,13 @@ exit 0
 	}{
 		{"clean", "", 0, 0, "ok"},
 		{"removal failure", "rm", 0, 1, "container removal failed; network removal failed"},
-		{"unverifiable absence", "ps", 0, 1, "container absence unverifiable; network absence unverifiable"},
+		{"unverifiable absence", "ps", 0, 1, "capture helper absence unverifiable; container absence unverifiable; network absence unverifiable"},
 		{"container still present", "present", 0, 1, "container still present"},
 		{"earlier failure preserved", "rm", 7, 7, "container removal failed; network removal failed"},
+		// The stub keeps listing h1 after its removal: an owned capture
+		// helper that survives fails the job; another container's is ignored.
+		{"capture helper still present", "helper", 0, 1, "capture helper still present"},
+		{"capture helper removal failure", "helper rm", 0, 1, "capture helper removal failed; capture helper still present; container removal failed; network removal failed"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -53,8 +59,12 @@ exit 0
 			if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o700); err != nil {
 				t.Fatal(err)
 			}
-			driver := `set -euo pipefail; mon=m; net=n; work="$1"; out="$2"; tcpdump_pid=""; . "$3"; trap cleanup EXIT; exit "$4"`
-			cmd := exec.Command(bash, "-c", driver, "driver", work, out, script, string(rune('0'+c.prior)))
+			ctl := filepath.Join(dir, "ctl")
+			if err := os.Mkdir(ctl, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			driver := `set -euo pipefail; mon=m; mon_id=MONID; net=n; work="$1"; out="$2"; ctl="$5"; tcpdump_pid=""; provider_pid=""; . "$3"; trap cleanup EXIT; exit "$4"`
+			cmd := exec.Command(bash, "-c", driver, "driver", work, out, script, string(rune('0'+c.prior)), ctl)
 			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAULT="+c.fault)
 			err := cmd.Run()
 			code := 0
@@ -84,6 +94,9 @@ exit 0
 			}
 			if _, err := os.Stat(work); !os.IsNotExist(err) {
 				t.Fatal("key work directory remains")
+			}
+			if _, err := os.Stat(ctl); !os.IsNotExist(err) {
+				t.Fatal("control directory remains")
 			}
 		})
 	}

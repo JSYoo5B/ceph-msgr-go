@@ -26,11 +26,15 @@ type tracePhase struct {
 }
 
 type traceConn struct {
-	Phase     string    `json:"phase"`
-	Network   string    `json:"network"`
-	Target    string    `json:"target"`
-	Local     string    `json:"local,omitempty"`
-	Remote    string    `json:"remote,omitempty"`
+	Phase   string `json:"phase"`
+	Network string `json:"network"`
+	Target  string `json:"target"`
+	Local   string `json:"local,omitempty"`
+	Remote  string `json:"remote,omitempty"`
+	// HeldFrom and HeldUntil bound a local wait before the dial (see
+	// probeOptions.DialHold); no packet is sent while a dial is held.
+	HeldFrom  time.Time `json:"dial_held_from,omitzero"`
+	HeldUntil time.Time `json:"dial_held_until,omitzero"`
 	DialStart time.Time `json:"dial_started"`
 	DialEnd   time.Time `json:"dial_ended"`
 	DialError string    `json:"dial_error,omitempty"`

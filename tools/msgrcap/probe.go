@@ -28,6 +28,11 @@ type probeOptions struct {
 	RestartSignal string
 	RestartDone   string
 	Substitute    string
+	// DialHold names a file that the workflow creates while no capture
+	// segment is ready (between two segments). While it exists, a new dial
+	// waits locally for its removal before any packet is sent; the wait is
+	// recorded in the trace.
+	DialHold string
 }
 
 type recorder struct {
@@ -52,14 +57,39 @@ func (c *tracedConn) Close() error {
 	return c.Conn.Close()
 }
 
-func (r *recorder) dialer() func(context.Context, string, string) (net.Conn, error) {
+func (r *recorder) dialer(hold string) func(context.Context, string, string) (net.Conn, error) {
 	d := &net.Dialer{}
 	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		var heldFrom, heldUntil time.Time
+		if hold != "" {
+			for {
+				if _, err := os.Stat(hold); err != nil {
+					break
+				}
+				if heldFrom.IsZero() {
+					heldFrom = time.Now().UTC()
+				}
+				select {
+				case <-ctx.Done():
+				case <-time.After(20 * time.Millisecond):
+					continue
+				}
+				break
+			}
+			if !heldFrom.IsZero() {
+				heldUntil = time.Now().UTC()
+			}
+		}
 		start := time.Now().UTC()
-		conn, err := d.DialContext(ctx, network, address)
+		var conn net.Conn
+		err := ctx.Err()
+		if err == nil {
+			conn, err = d.DialContext(ctx, network, address)
+		}
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		tc := traceConn{Phase: r.phase, Network: network, Target: address, DialStart: start, DialEnd: time.Now().UTC()}
+		tc := traceConn{Phase: r.phase, Network: network, Target: address, HeldFrom: heldFrom, HeldUntil: heldUntil,
+			DialStart: start, DialEnd: time.Now().UTC()}
 		if err != nil {
 			tc.DialError = err.Error()
 			r.trace.Connections = append(r.trace.Connections, tc)
@@ -118,7 +148,7 @@ func runProbe(o probeOptions) error {
 		Mode: o.Mode, Entity: o.Entity, Monitor: o.Monitor, Started: time.Now().UTC()}}
 	options := func(monitor string, timeout time.Duration) cephmsgr.Options {
 		return cephmsgr.Options{Monitors: []string{monitor}, Identity: o.Entity, Key: key, ConnectionMode: mode,
-			ConnectTimeout: timeout, DialContext: rec.dialer()}
+			ConnectTimeout: timeout, DialContext: rec.dialer(o.DialHold)}
 	}
 	write := func() error {
 		rec.mu.Lock()
