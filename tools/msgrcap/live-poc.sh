@@ -20,9 +20,11 @@ image=$3
 capture_image=$4
 case "$mode" in crc) octet=10 ;; secure) octet=11 ;; *) echo "mode must be crc or secure" >&2; exit 2 ;; esac
 case "$capture_image" in *@sha256:*) ;; *) echo "the capture helper image must be pinned by digest" >&2; exit 2 ;; esac
-# The primary evidence stays the runner-host reference until provider parity
-# is shown for both modes; see CAPTURE_ANALYSIS.md, "Provider capture parity".
-primary=reference
+# The provider capture is the primary evidence: its analyses had full parity
+# with the runner-host reference in both modes (CAPTURE_ANALYSIS.md, "Provider
+# capture parity"). Every run must show full parity again (-require-full);
+# the reference stays as the checked comparison.
+primary=provider
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 mkdir -p "$out/reference" "$out/provider"

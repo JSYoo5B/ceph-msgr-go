@@ -17,7 +17,8 @@ changes product behavior, product dependencies or supported configurations.
 | Capture tools | tcpdump 4.99.4, libpcap 1.10.4, TShark 4.2.2 (Ubuntu package 4.2.2-1.1build3) |
 | Capture settings | Runner-host `tcpdump -i <fixture bridge> -s 0 -U -w`, filter `host <MON>`; snaplen 262144; tcpdump reported 0 packets dropped by kernel in every run |
 | Topology | One MON on a private Docker bridge, `ms_bind_msgr1 = false`, MON service modes `crc secure`, `debug_ms = 10`; host-native Go probe as `client.capture` (`mon 'allow r'`, aes256k key, type 2) |
-| Substitution | The capture is runner-host tcpdump, a labelled development substitute for the planned ceph-testcontainers capture helper. It does not validate that helper, its image checks or the Go provider's cleanup and delivery contract. |
+| Substitution (accepted run above) | That capture is runner-host tcpdump, a labelled development substitute for a provider capture helper. It does not validate the helper, its image checks or the Go provider's cleanup and delivery contract. |
+| Provider capture | From run 41952977929 on, every run also records the traffic with ceph-testcontainers-go v0.4.0 `capture.Start` and `ghcr.io/jsyoo5b/ceph-testcontainers-images:extension-capture-v1@sha256:183162a5642757f031b84a5db8c75a8bba29d5d91556206ee6e38f8f1008d21a` (helper image ID `sha256:e8a6d56f...b2c0`, linux/amd64, tcpdump 4.99.3, libpcap 1.10.3), as two segments around the MON restart. See "Provider capture parity" for the results and for when it became the primary evidence. |
 
 Evidence types are kept separate. Unit tests in `analysis_test.go` use
 synthetic captures whose frames come from the product's own `internal/msgr`
@@ -176,8 +177,10 @@ read-only `mon dump` commands. Capture readiness is established before any
 client traffic (tcpdump "listening on" line), native readiness checks stay
 inside the container and do not cross the captured bridge, and the capture is
 bound to the configured mode, MON address and client identity in
-`provenance.json`. Cleanup (`cleanup.sh`) removes the container, network and
-key directory and records the result in `cleanup.json`. A failed removal, or an
+`provenance.json`. Provider segment 1 is also ready (`capture.Start` has
+returned) before the probe starts. Cleanup (`cleanup.sh`) removes any capture
+helper left in the MON's namespace, the container, network, key directory and
+control directory, and records the result in `cleanup.json`. A failed removal, or an
 owned resource whose absence cannot be verified, fails the job while an
 earlier nonzero status is preserved; `TestLivePoCCleanupFailsTheJob` replays
 the cleanup with injected Docker failures. The live job fails unless every
@@ -199,6 +202,58 @@ Debugging conclusions supported by retained evidence:
 The first live attempt also showed a non-transport fact: Tentacle answers
 `mon_status` sent as a MON command with `-22 unrecognized command`. The MON log
 recorded it; the probe now uses `mon dump`.
+
+## Provider capture parity
+
+The live recipe records each run twice: the runner-host reference above, and
+`capture.Start` sessions in the MON's network namespace (`eth0`, filter
+`host <MON>`, snaplen 262144). A session is bound to one container generation
+and never follows a restart, so the provider capture is two segments with one
+declared gap, not one file. The recipe composes public v0.4.0 API and caller
+coordination only:
+
+- The MON daemon is stopped with SIGTERM while its container stays up, so the
+  peer close (server FIN) and the client's refused redials are inside segment
+  1. Segment 1 is stopped one and a half seconds after the daemon exited.
+- From half a second before segment 1 stops until segment 2 is ready, the
+  probe holds new dials locally (`dial_held_from`/`dial_held_until` in the
+  trace), so no client packet is sent in the gap.
+- The restarted container starts the MON daemon only after segment 2 is
+  ready, so the reconnect handshake cannot precede the capture.
+- `msgrcap analyze -segments` fails on any undeclared gap, overlap, unstopped
+  or retargeted segment, digest or count mismatch, partial file or unknown
+  drop counter (README.md, "Capture manifests"). The unit tests cover each of
+  these, and a mutation check of the new conditions (23 single-condition
+  mutations of coverage, parity, dial hold, packet numbering and helper
+  cleanup) failed the tests every time.
+
+`msgrcap parity` then compares the provider analyses with the reference
+analyses of the same run, with and without the key: per connection the TCP
+outcome and events, byte counts, digests, retransmissions, gaps and
+acknowledged-but-missing bytes, every decoded frame (tag, lengths, message
+type/seq/tid/ack_seq), connection mode, MON identity, Messenger outcome and
+secret derivation, trace phase, unmatched trace connections, the MON log
+cross-check rows, and both captures' drop counters. Timestamps, record numbers
+and non-TCP records are not compared.
+
+| Run | Source | crc | secure |
+| --- | --- | --- | --- |
+| 41952977929 (attempt 1), reference primary | `5a2f8d4` | full parity with and without the key: 10 connections, 2 cross-check rows, 0 drops in either capture, gap 815 ms, no reference connection in the gap, no provider connection marked | same: 10 connections, 2 rows, 0 drops, gap 815 ms |
+
+In both modes one reconnect dial was held for about 0.7 s and then refused
+inside segment 2, so the hold engaged in the gap it guards. The provider tshark
+comparison covered all 10 connections in both modes. The only record the
+reference had and the provider lacked, in each mode, was the restarted
+container's first gratuitous ARP announcement, sent inside the gap before
+segment 2 was ready; ARP is outside the comparison.
+
+Because parity held in both modes, the provider capture is now the primary
+evidence of the live job: the top-level analyses and the expectation gate use
+it, and every run must show full parity again (`-require-full`). The runner-host
+reference stays in every run as the checked comparison and for the tshark
+evaluation. This shows the composition for one MON restart with one client on
+GitHub-hosted amd64 runners; it does not show continuity of a single session
+across a restart, arm64 helper behavior or other daemons.
 
 ## 5. What belongs here and what belongs to the capture providers
 
@@ -228,6 +283,15 @@ testcontainers-go #52) concern collection and delivery only:
 They should not be asked to decode messages, decrypt traffic or handle client
 keys.
 
+Capture continuity across a daemon restart is tracked in
+[JSYoo5B/ceph-testcontainers-go#537](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/537).
+The provider capture above answers part of it from the consumer side:
+existing `capture.Start` sessions plus caller coordination (a daemon gate, a
+held container namespace and a client dial hold) preserved the pre- and
+post-restart handshake evidence with an explicitly declared gap. What the
+library does not provide is a segment or gap record across generations; this
+repository's manifest format and its fail-closed checks fill that role here.
+
 ## Recommendation
 
 Reuse tshark only for TCP-level work (conversations, reassembly cross-checks,
@@ -250,8 +314,11 @@ recommended at this point.
 - Only one MON, one client, IPv4, aes256k and short sessions were exercised.
   Multi-MON, MGR, OSD, IPv6, aes keys, compression, renewal and long runs are
   unverified for capture analysis.
-- Capture on the runner bridge sees host-to-container traffic. It is not the
-  container-namespace view the planned helper may provide.
+- Capture on the runner bridge sees host-to-container traffic. The provider
+  capture adds the MON's own namespace view. Neither shows traffic inside the
+  declared provider gap; the dial hold and daemon gate keep the PoC's TCP
+  traffic out of it, but non-TCP frames (the gratuitous ARP above) can fall in
+  it.
 - No capture fixture is committed. Live captures exist only as workflow
   artifacts and contain disposable fixture addresses, FSIDs and CRC-mode
   plaintext `mon dump` output from a throwaway cluster.
@@ -260,6 +327,9 @@ recommended at this point.
 
 No external code or capture was incorporated. msgrcap is original code under
 this repository's license and uses only the Go standard library and this
-module's packages. Wireshark (GPL) and tcpdump/libpcap (BSD) were executed on
+module's packages. The separate `providercap` module depends on
+ceph-testcontainers-go v0.4.0 and testcontainers-go v0.44.0 at the versions
+`integration/fixture` already pins; the capture helper image is used at run
+time only and is not redistributed. Wireshark (GPL) and tcpdump/libpcap (BSD) were executed on
 the CI runner only and are not linked or redistributed. The pinned Ceph
 ProtocolV2 source was read to identify its log format; no Ceph code was copied.
