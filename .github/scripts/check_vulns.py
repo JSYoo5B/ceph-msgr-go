@@ -8,8 +8,8 @@ reached at symbol level (the code calls a vulnerable function) or package
 level (the code imports a vulnerable package). A vulnerability found only
 in a required module is listed but does not fail. A stream without the
 scanner's config, with malformed JSON or with unknown finding shapes fails,
-so that a broken scan cannot pass as a clean one. The explicit Go 1.24
-compatibility policy retains stdlib findings as advisories; external dependency
+so that a broken scan cannot pass as a clean one. The explicit product-minimum
+Go 1.25 compatibility policy retains stdlib findings as advisories; external dependency
 findings and scan errors still fail. The default remains strict.
 """
 import argparse
@@ -97,7 +97,7 @@ def report(config, results, compatibility_stdlib=False):
     lines = ["govulncheck %s, %s, database %s, scan level %s" % (
         config.get("scanner_version"), config.get("go_version"), config.get("db_last_modified"), config.get("scan_level"))]
     if compatibility_stdlib:
-        lines.append("Go 1.24 compatibility scan: stdlib findings are advisory, not a security pass; "
+        lines.append("Go 1.25 compatibility scan: stdlib findings are advisory, not a security pass; "
                      "external dependency findings remain blocking. Use the current-toolchain security scan for release builds.")
     for result in results:
         decision = verdict(result, compatibility_stdlib)
@@ -114,18 +114,18 @@ def report(config, results, compatibility_stdlib=False):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stream", type=Path, help="govulncheck -format json output")
-    parser.add_argument("--go124-stdlib-advisory", action="store_true",
-                        help="retain Go 1.24 stdlib findings as compatibility advisories; dependencies still gate")
+    parser.add_argument("--minimum-stdlib-advisory", action="store_true",
+                        help="retain product-minimum Go 1.25 stdlib findings as compatibility advisories; dependencies still gate")
     args = parser.parse_args(argv)
     try:
         config, results = evaluate(args.stream.read_text())
-        if args.go124_stdlib_advisory and not re.fullmatch(r"go1\.24\.\d+", config.get("go_version", "")):
-            raise ScanError("Go 1.24 stdlib advisory policy requires a Go 1.24 scan")
+        if args.minimum_stdlib_advisory and not re.fullmatch(r"go1\.25\.\d+", config.get("go_version", "")):
+            raise ScanError("Go 1.25 stdlib advisory policy requires a Go 1.25 scan")
     except (OSError, ScanError) as error:
         print("vulnerability check failed: %s" % error, file=sys.stderr)
         return 2
-    print(report(config, results, args.go124_stdlib_advisory))
-    failing = [result["osv"] for result in results if verdict(result, args.go124_stdlib_advisory) == "FAIL"]
+    print(report(config, results, args.minimum_stdlib_advisory))
+    failing = [result["osv"] for result in results if verdict(result, args.minimum_stdlib_advisory) == "FAIL"]
     if failing:
         print("reachable vulnerabilities: " + ", ".join(failing), file=sys.stderr)
         return 1

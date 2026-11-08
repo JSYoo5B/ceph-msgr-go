@@ -8,28 +8,34 @@ the scenario selection policy, or raise the product's minimum Go version.
 | --- | --- | --- |
 | Code quality: static analysis | PR, manual | Advisory diagnostics from errcheck, govet, ineffassign and staticcheck, separately for product/root, fixture and quality-tool modules; existing findings are not suppressed or mechanically rewritten |
 | Code quality: tooling | PR, manual | Required successful Go analyzer tests and Python collector/publisher/vulnerability-policy tests |
-| Code quality: vulnerabilities | PR, manual, weekly Monday 05:17 UTC | govulncheck v1.9.0 on Linux amd64 with tests; product Go 1.24.x/1.27.x and fixture Go 1.26.x/1.27.x; package/symbol findings fail except for explicitly advisory Go 1.24 stdlib compatibility findings; module-only findings are informational |
+| Code quality: vulnerabilities | PR, manual, weekly Monday 05:17 UTC | govulncheck v1.9.0 on Linux amd64 with tests; product Go 1.25.x/1.27.x and fixture Go 1.26.x/1.27.x; package/symbol findings fail except for explicitly advisory Go 1.25 stdlib compatibility findings; module-only findings are informational |
 | Structural review evidence | PR | Advisory comparison of merge base and exact PR head; no metric threshold is a merge gate |
 | Structural review comment | Evidence completion | Trusted default-branch publisher updates one bot-owned comment for the current head |
 
 Workflow failure policy is distinct from repository branch-protection settings;
 this change does not configure required status checks. Basic CI still validates
-product builds on Go 1.24.0. Vulnerability scans use the latest patch available
+product builds on Go 1.25.0. Vulnerability scans use the latest patch available
 in each selected series. The scanner is built using Go 1.27 before switching to
 the scan's toolchain. A failed scanner process or invalid result fails the job;
 its JSON exit status alone is not the vulnerability verdict. The weekly run
 executes only vulnerability checks. It does not repeat Basic CI or native runs.
 
-Go 1.24 is a compilation/API compatibility target, not a security-qualified
-release toolchain. The Go 1.24 product scan retains every stdlib finding and
+Go 1.25, the product's minimum, is a compilation/API compatibility target, not
+a security-qualified release toolchain. The Go 1.25 product scan retains every stdlib finding and
 trace in its log, summary and artifact, labeled ADVISORY; it does not certify
 that toolchain as safe. External dependency package/symbol findings still fail
 that scan, as do scanner/policy errors. The product Go 1.27 and both fixture
-scans retain the strict security policy. No advisory IDs are suppressed and no
-product minimum-version requirement changes. Release builds should use a
+scans retain the strict security policy. No advisory IDs are suppressed, and the
+advisory policy itself never changes the product minimum. Release builds should use a
 patched toolchain covered by the strict current-toolchain scan. The original
 Go 1.24.13 scan failed the strict policy; this is an explicit policy distinction,
 not a claim that a rerun fixed its findings.
+
+The product minimum moved from Go 1.24 to Go 1.25 on 2026-11-08. GO-2026-6865
+is reachable at symbol level from the product's zstd encoder through
+github.com/klauspost/compress v1.18.7, and the first fixed release, v1.20.2,
+requires Go 1.25. The product now requires v1.20.3. This is a dependency fix,
+not a suppression; the advisory ID is not listed anywhere as an exception.
 
 These scans do not cover other operating systems, architectures or optional build
 tags, and do not claim that the dependency graph is free of all vulnerabilities.

@@ -1292,7 +1292,7 @@
   {
    "id": "unit",
    "job": "unit",
-   "description": "Go unit tests on Linux, macOS and Windows with Go 1.24 and 1.27, vet and the pure-Go dependency policy"
+   "description": "Go unit tests on Linux, macOS and Windows with Go 1.25 and 1.27, vet and the pure-Go dependency policy"
   },
   {
    "id": "fixture-tools",

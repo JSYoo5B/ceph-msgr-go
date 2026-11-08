@@ -71,9 +71,9 @@ class CheckVulnsTests(unittest.TestCase):
         self.assertEqual(self.run_main(stream(CONFIG, finding("GO-3", package="example.com/m/p")))[0], 1)
 
     def test_compatibility_policy_retains_stdlib_findings_but_gates_dependencies(self):
-        config = {"config": dict(CONFIG["config"], go_version="go1.24.13")}
+        config = {"config": dict(CONFIG["config"], go_version="go1.25.9")}
         stdlib = finding("GO-stdlib", module="stdlib", package="crypto/example", function="F")
-        code, output, _ = self.run_main(stream(config, stdlib), "--go124-stdlib-advisory")
+        code, output, _ = self.run_main(stream(config, stdlib), "--minimum-stdlib-advisory")
         self.assertEqual(code, 0)
         self.assertIn("ADVISORY GO-stdlib", output)
         self.assertIn("not a security pass", output)
@@ -82,17 +82,17 @@ class CheckVulnsTests(unittest.TestCase):
         self.assertEqual(self.run_main(stream(config, stdlib))[0], 1)
         for function in (None, "F"):
             external = finding("GO-dependency", package="example.com/m/p", function=function)
-            code, output, error = self.run_main(stream(config, stdlib, external), "--go124-stdlib-advisory")
+            code, output, error = self.run_main(stream(config, stdlib, external), "--minimum-stdlib-advisory")
             self.assertEqual(code, 1)
             self.assertIn("FAIL GO-dependency", output)
             self.assertIn("GO-dependency", error)
-        self.assertEqual(self.run_main(stream(CONFIG, stdlib), "--go124-stdlib-advisory")[0], 2)
-        self.assertEqual(self.run_main("", "--go124-stdlib-advisory")[0], 2)
+        self.assertEqual(self.run_main(stream(CONFIG, stdlib), "--minimum-stdlib-advisory")[0], 2)
+        self.assertEqual(self.run_main("", "--minimum-stdlib-advisory")[0], 2)
 
     def test_workflow_limits_compatibility_policy_to_product_minimum(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/code.yml").read_text()
         self.assertEqual(workflow.count("policy: compatibility"), 1)
-        self.assertIn("id: product-minimum\n            go: '1.24.x'\n            policy: compatibility", workflow)
+        self.assertIn("id: product-minimum\n            go: '1.25.x'\n            policy: compatibility", workflow)
         self.assertIn("matrix.policy || 'security'", workflow)
         scan = workflow.split("      - name: Scan module and apply reachability policy", 1)[1]
         self.assertNotIn("continue-on-error", scan)

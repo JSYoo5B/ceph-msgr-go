@@ -107,7 +107,7 @@ jobs:
         include:
           - module: '.'
             id: product-minimum
-            go: '1.24.x'
+            go: '1.25.x'
             policy: compatibility
           - module: '.'
             id: product-current
@@ -151,7 +151,7 @@ jobs:
           "$RUNNER_TEMP/quality-bin/govulncheck" -test -format json ./... > "$RUNNER_TEMP/vulnerabilities.json"
           policy_args=()
           if [ "$SCAN_POLICY" = compatibility ]; then
-            policy_args+=(--go124-stdlib-advisory)
+            policy_args+=(--minimum-stdlib-advisory)
           fi
           result=0
           python3 "$GITHUB_WORKSPACE/.github/scripts/check_vulns.py" "$RUNNER_TEMP/vulnerabilities.json" "${policy_args[@]}" 2>&1 | tee "$RUNNER_TEMP/vulnerabilities.txt" || result=$?

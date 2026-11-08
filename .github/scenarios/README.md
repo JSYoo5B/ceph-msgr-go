@@ -148,7 +148,7 @@ The catalog also names five selectable check suites:
 
 | Selector | Work |
 | --- | --- |
-| `unit` | Product unit checks on Linux, macOS and Windows, Go 1.24/1.27 |
+| `unit` | Product unit checks on Linux, macOS and Windows, Go 1.25/1.27 |
 | `fixture-tools` | Fixture-tool unit checks on those three operating systems |
 | `race` | Race detection against actual Tentacle MON/MGR sessions |
 | `fuzz` | Bounded fuzz runs of protocol decoders |

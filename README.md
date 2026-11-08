@@ -4,7 +4,7 @@ A native Go communication layer for Ceph Tentacle: msgr2.1, CephX, raw
 MON/MGR commands and subscriptions, explicitly targeted OSD requests, and
 bounded MDS/CephFS wire primitives.
 
-The product requires Go 1.24 or later and no CGO, go-ceph, librados, Ceph CLI,
+The product requires Go 1.25 or later and no CGO, go-ceph, librados, Ceph CLI,
 or operating-system Ceph installation. Snappy and zstd codecs use the pure Go
 `github.com/klauspost/compress` dependency. Native development tools belong to
 the separate `integration/fixture` module.
