@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
-	"github.com/JSYoo5B/ceph-testcontainers-go/cephfs"
+	cephfssession "github.com/JSYoo5B/ceph-testcontainers-go/cephfs/session"
 	"github.com/JSYoo5B/ceph-testcontainers-go/override"
 )
 
@@ -63,12 +63,12 @@ const mdsSessionsDeferOption = "mds_defer_session_stale"
 // autoclose well beyond the observation. mds_defer_session_stale=false is
 // required because Server::find_idle_sessions otherwise never marks a session
 // without capabilities stale; it evicts it at autoclose instead.
-var mdsSessionsStaleWindow = cephfs.SessionTimeouts{Timeout: 30 * time.Second, Autoclose: 120 * time.Second}
+var mdsSessionsStaleWindow = cephfssession.Limits{Timeout: 30 * time.Second, Autoclose: 120 * time.Second}
 
 // The autoclose window keeps the native minimum timeout and shortens autoclose
 // (also at least 30 s in mon/FSCommands.cc) so a silent session is evicted
 // within the observation; it is applied after the stale window is restored.
-var mdsSessionsAutocloseWindow = cephfs.SessionTimeouts{Timeout: 30 * time.Second, Autoclose: 40 * time.Second}
+var mdsSessionsAutocloseWindow = cephfssession.Limits{Timeout: 30 * time.Second, Autoclose: 40 * time.Second}
 
 type mdsSessionsMap struct {
 	Epoch     uint32            `json:"mdsmap_epoch"`
@@ -120,7 +120,7 @@ type mdsSessionsScope struct {
 	required             map[string]string
 	stale                string
 	windowKind           string
-	timeouts             *cephfs.SessionTimeoutsOverrideHandle
+	timeouts             *cephfssession.TimeoutsOverrideHandle
 	deferStale           *override.ConfigHandle
 	owned                map[string]uint64
 	baselineReady        bool
@@ -511,7 +511,7 @@ func (c *fixtureCluster) prepareMDSSessions(ctx context.Context, out string) err
 	if x.baseline.Map, err = c.mdsSessionsReadMap(ctx); err != nil {
 		return err
 	}
-	timeouts, err := s.fs.SessionTimeouts(ctx)
+	timeouts, err := cephfssession.Timeouts(ctx, s.fs)
 	if err != nil {
 		return err
 	}
@@ -805,7 +805,7 @@ func (c *fixtureCluster) mdsSessionsAct(ctx context.Context, id int64, action md
 		}
 		var err error
 		// Both providers retain a handle on uncertain replies for Restore.
-		x.timeouts, err = s.fs.OverrideSessionTimeouts(ctx, window)
+		x.timeouts, err = cephfssession.OverrideTimeouts(ctx, s.fs, window)
 		if err == nil {
 			x.deferStale, err = override.SetConfig(ctx, c.cluster, ceph.ConfigSetting{Section: "mds", Name: mdsSessionsDeferOption, Value: "false"})
 		}

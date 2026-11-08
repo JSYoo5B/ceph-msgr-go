@@ -209,7 +209,7 @@ The live recipe records each run twice: the runner-host reference above, and
 `capture.Start` sessions in the MON's network namespace (`eth0`, filter
 `host <MON>`, snaplen 262144). A session is bound to one container generation
 and never follows a restart, so the provider capture is two segments with one
-declared gap, not one file. The recipe composes public v0.4.0 API and caller
+declared gap, not one file. The recipe composes public v0.5.0 API and caller
 coordination only:
 
 - The MON daemon is stopped with SIGTERM while its container stays up, so the
@@ -287,9 +287,12 @@ testcontainers-go #52) concern collection and delivery only:
 They should not be asked to decode messages, decrypt traffic or handle client
 keys.
 
-Capture continuity across a daemon restart is tracked in
-[JSYoo5B/ceph-testcontainers-go#537](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/537).
-The provider capture above answers part of it from the consumer side:
+Capture continuity across a daemon restart was reviewed in
+[JSYoo5B/ceph-testcontainers-go#537](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/537),
+closed for v0.5.0: existing `capture.Start` sessions and caller coordination
+are enough, a session still never follows a new generation, and no lifecycle
+primitive was added. The provider capture above is that composition on the
+consumer side:
 existing `capture.Start` sessions plus caller coordination (a daemon gate, a
 held container namespace and a client dial hold) preserved the pre- and
 post-restart handshake evidence with an explicitly declared gap. What the
@@ -332,7 +335,7 @@ recommended at this point.
 No external code or capture was incorporated. msgrcap is original code under
 this repository's license and uses only the Go standard library and this
 module's packages. The separate `providercap` module depends on
-ceph-testcontainers-go v0.4.0 and testcontainers-go v0.44.0 at the versions
+ceph-testcontainers-go v0.5.0 and testcontainers-go v0.44.0 at the versions
 `integration/fixture` already pins; the capture helper image is used at run
 time only and is not redistributed. Wireshark (GPL) and tcpdump/libpcap (BSD) were executed on
 the CI runner only and are not linked or redistributed. The pinned Ceph

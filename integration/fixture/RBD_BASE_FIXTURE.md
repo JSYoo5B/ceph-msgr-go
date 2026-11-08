@@ -57,7 +57,7 @@ and `AttachChildRequest.cc` (clone format 2), `librbd/image/RefreshRequest.cc`
 `librbd/journal/CreateRequest.cc`, `librbd/journal/Types.cc` and
 `tools/rbd/action/Journal.cc` (LGPL-2.1 references; no code is copied). The
 provider is `github.com/JSYoo5B/ceph-testcontainers-go`, the release that
-`go.mod` pins (`CreatePool`, `rbd.InitPool`, `WaitForClean`, `CreateClient`,
+`go.mod` pins (`CreatePool`, `rbd.InitPool`, `Observer.WaitForClean`, `CreateClient`,
 `RunNativeCommand`, `Pool.Remove`, `ClientConfig.Delete`); the recipe was
 written against v0.2.0.
 

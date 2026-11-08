@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	ctdiagnostics "github.com/JSYoo5B/ceph-testcontainers-go/ceph/diagnostics"
 	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
 )
@@ -54,10 +54,10 @@ func gateState(active string, activeGID uint64, standby string, standbyGID uint6
 }
 
 func TestNativeCrashClassifiesManagerAuthServerSegfault(t *testing.T) {
-	report := &ceph.CrashMetadataReport{Containers: []ceph.CrashMetadataContainer{
-		{Role: "client", Name: "messenger-oracles", Records: []ceph.CrashRecord{{Entity: "client.test", CrashID: "ignored"}}},
+	report := &ctdiagnostics.CrashMetadataReport{Containers: []ctdiagnostics.CrashMetadataContainer{
+		{Role: "client", Name: "messenger-oracles", Records: []ctdiagnostics.CrashRecord{{Entity: "client.test", CrashID: "ignored"}}},
 		{Role: "mgr", Name: "a"},
-		{Role: "mgr", Name: "b", Records: []ceph.CrashRecord{{
+		{Role: "mgr", Name: "b", Records: []ctdiagnostics.CrashRecord{{
 			Entity: "mgr.b", Process: "ceph-mgr", CrashID: "2026-10-15T12:10:28.962525Z_abc", Timestamp: "2026-10-15T12:10:28.962525Z",
 			Fields: map[string]any{"backtrace": []string{
 				"/lib64/libc.so.6(+0x3fb30) [0x7efd6d347b30]",
@@ -65,7 +65,7 @@ func TestNativeCrashClassifiesManagerAuthServerSegfault(t *testing.T) {
 				"(ProtocolV2::run_continuation(Ct<ProtocolV2>&)+0x39) [0x7efd6e1cc9e9]",
 			}},
 		}}},
-		{Role: "osd", Name: "0", Records: []ceph.CrashRecord{{CrashID: "osd-crash", Fields: map[string]any{"backtrace": []any{"(OSD::shutdown()+0x1) [0x1]"}}}}},
+		{Role: "osd", Name: "0", Records: []ctdiagnostics.CrashRecord{{CrashID: "osd-crash", Fields: map[string]any{"backtrace": []any{"(OSD::shutdown()+0x1) [0x1]"}}}}},
 	}}
 	crashes := nativeCrashes(report)
 	if len(crashes) != 2 || crashes[0].Daemon != "mgr.b" || crashes[0].Known == "" || !strings.Contains(crashes[0].Frame, nativeMgrAuthServerFrame) {

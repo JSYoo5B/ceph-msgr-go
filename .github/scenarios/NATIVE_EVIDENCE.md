@@ -77,9 +77,10 @@ The manifest's `schema_version` is integer **1** and its `kind` is
 The observed daemon version must name Ceph Tentacle 20.2.4 at
 `7f793731f1b39eb4f465e960113d2363c311b964`. The configured image is
 `quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`;
-`collect` requires provider version v0.4.0, the release that
-`integration/fixture/go.mod` pins. `verify` also admits v0.3.0, the release
-named by bundles retained before the fixture moved to v0.4.0, such as
+`collect` requires provider version v0.5.0, the release that
+`integration/fixture/go.mod` pins. `verify` also admits v0.3.0 and v0.4.0, the
+releases named by bundles retained before the fixture moved to v0.4.0 and to
+v0.5.0, such as
 [cap-send-native-v1](testdata/cap-send-native-v1/manifest.json); a bundle's
 recorded release is never rewritten. A new image/provider/profile is an
 explicit contract change, not an automatic fallback.

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	ctdiagnostics "github.com/JSYoo5B/ceph-testcontainers-go/ceph/diagnostics"
 )
 
 // Deliberately select public native metadata rather than archiving /out, the
@@ -139,14 +139,14 @@ func collectDiagnostics(c *fixtureCluster, out, diagnostics string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var additional []ceph.DiagnosticsContainer
+	var additional []ctdiagnostics.Target
 	if c.Container != nil {
-		additional = append(additional, ceph.DiagnosticsContainer{Name: "messenger-oracles", Role: "client", Container: c.Container})
+		additional = append(additional, ctdiagnostics.Target{Name: "messenger-oracles", Role: "client", Container: c.Container})
 	}
-	report, diagnosticErr := c.cluster.CollectDiagnostics(ctx, ceph.DiagnosticsConfig{AdditionalContainers: additional})
+	report, diagnosticErr := ctdiagnostics.Collect(ctx, c.cluster, ctdiagnostics.Config{AdditionalContainers: additional})
 	crashCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
 	defer stop()
-	crashes, crashErr := c.cluster.CollectCrashMetadata(crashCtx, ceph.CrashMetadataConfig{AdditionalContainers: additional})
+	crashes, crashErr := ctdiagnostics.CollectCrashMetadata(crashCtx, c.cluster, ctdiagnostics.CrashMetadataConfig{AdditionalContainers: additional})
 	var writeErrs []error
 	for _, entry := range []struct {
 		name  string

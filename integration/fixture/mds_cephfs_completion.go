@@ -276,6 +276,9 @@ type mdsCephFSCompletionRuntime struct {
 	RestoreRequestID int64             `json:"restore_request_id,omitempty"`
 	RestoreReadback  map[string]string `json:"restore_readback,omitempty"`
 	Error            string            `json:"error,omitempty"`
+	// config is the adapter that applied the change; its debug windows are
+	// restored through it.
+	config *runtimeConfig
 }
 
 func (r *mdsCephFSCompletionRuntime) active() bool {
@@ -1154,7 +1157,7 @@ func (c *fixtureCluster) mdsCephFSCompletionDaemonAct(ctx context.Context, id in
 		if err := c.mdsCephFSCompletionJournal(); err != nil {
 			return err
 		}
-		err := c.mdsCephFSCompletionApplyRuntime(ctx, r.Settings, &r.Readback)
+		err := c.mdsCephFSCompletionApplyRuntime(ctx, r, false)
 		r.State = "applied"
 		if err != nil {
 			r.State, r.Error = "uncertain", err.Error()
@@ -1170,7 +1173,7 @@ func (c *fixtureCluster) mdsCephFSCompletionDaemonAct(ctx context.Context, id in
 	if err := c.mdsCephFSCompletionJournal(); err != nil {
 		return err
 	}
-	err := c.mdsCephFSCompletionApplyRuntime(ctx, r.Baseline, &r.RestoreReadback)
+	err := c.mdsCephFSCompletionApplyRuntime(ctx, r, true)
 	r.State = "restored"
 	if err != nil {
 		r.State, r.Error = "restore-uncertain", err.Error()
@@ -1178,15 +1181,42 @@ func (c *fixtureCluster) mdsCephFSCompletionDaemonAct(ctx context.Context, id in
 	return errors.Join(err, c.mdsCephFSCompletionJournal())
 }
 
-// mdsCephFSCompletionApplyRuntime sets each value through the admin socket
-// and requires the daemon to report it. MDS runtime config keeps the native
-// admin socket path inside the runtime config adapter
-// (JSYoo5B/ceph-testcontainers-go#538).
-func (c *fixtureCluster) mdsCephFSCompletionApplyRuntime(ctx context.Context, settings map[string]string, readback *map[string]string) error {
-	r := mdsAdminSocketRuntimeConfig("MDS daemon", func(ctx context.Context, args ...string) ([]byte, error) {
-		return c.mdsCephFSCompletionAsok(ctx, 15*time.Second, args...)
-	})
-	return r.apply(ctx, slices.Sorted(maps.Keys(settings)), settings, readback)
+// mdsCephFSCompletionApplyRuntime applies r's settings, or restores its
+// baseline, each read back from the daemon. debug_mds and debug_ms are
+// override.SetDebugLevel windows of the owned MDS; the other options keep the
+// native admin socket path (runtime_config.go). A restore goes through the
+// adapter that applied r, so its windows are restored by their own handles.
+func (c *fixtureCluster) mdsCephFSCompletionApplyRuntime(ctx context.Context, r *mdsCephFSCompletionRuntime, restore bool) error {
+	if r.config == nil {
+		r.config = mdsRuntimeConfig(c.cluster, func() (string, error) {
+			daemon, err := c.mdsCephFSCompletionDaemon()
+			if err != nil {
+				return "", err
+			}
+			return daemon.ID, nil
+		}, "MDS daemon", mdsDebugNames, func(ctx context.Context, args ...string) ([]byte, error) {
+			return c.mdsCephFSCompletionAsok(ctx, 15*time.Second, args...)
+		})
+	}
+	if restore {
+		return r.config.restore(ctx, slices.Sorted(maps.Keys(r.Baseline)), r.Baseline, &r.RestoreReadback)
+	}
+	if err := c.mdsCephFSCompletionReleaseDiscarded(ctx); err != nil {
+		return err
+	}
+	return r.config.apply(ctx, slices.Sorted(maps.Keys(r.Settings)), r.Settings, &r.Readback)
+}
+
+// mdsCephFSCompletionReleaseDiscarded ends the debug windows of changes that a
+// restart discarded, so the provider admits a window on the new incarnation.
+func (c *fixtureCluster) mdsCephFSCompletionReleaseDiscarded(ctx context.Context) error {
+	var errs []error
+	for _, r := range c.mdsCephFSCompletion.runtime {
+		if r.State == "discarded-by-restart" {
+			errs = append(errs, r.config.discard(ctx))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // mdsCephFSCompletionCentralAct applies or restores one owned central
@@ -1643,13 +1673,14 @@ func (c *fixtureCluster) finishMDSCephFSCompletion(ctx context.Context) error {
 				r.State = "discarded-by-restart"
 				continue
 			}
-			err := c.mdsCephFSCompletionApplyRuntime(ctx, r.Baseline, &r.RestoreReadback)
+			err := c.mdsCephFSCompletionApplyRuntime(ctx, r, true)
 			r.State = "restored"
 			if err != nil {
 				r.State, r.Error = "restore-uncertain", err.Error()
 			}
 			fail(err)
 		}
+		fail(c.mdsCephFSCompletionReleaseDiscarded(ctx))
 		for _, o := range x.central {
 			if o.handle == nil || o.State == "restored" {
 				continue

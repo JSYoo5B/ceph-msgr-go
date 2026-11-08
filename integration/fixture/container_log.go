@@ -15,14 +15,15 @@ type containerLogOpener func(context.Context) (io.ReadCloser, error)
 var errContainerLogExceedsBound = errors.New("container log exceeds its bound")
 
 // withContainerLog is the only collection path for daemon logs that consumer
-// attribution needs from process start. Upstream gap
-// (JSYoo5B/ceph-testcontainers-go#540): v0.4.0 has no public primitive that
-// returns a daemon's complete log since its process started together with an
-// explicit truncation signal. Container.CollectDiagnostics keeps a bounded tail
-// of at most LogTail lines, and Finalization.Verify evaluates only classified
-// events (assertions, fatal signals, cluster log levels) after its own
-// activation. So collection stays here: one full Docker log stream, closed when
-// ctx ends, with interpretation and bounds owned by read.
+// attribution needs from process start. ceph-testcontainers-go v0.5.0 has no
+// primitive that returns a daemon's complete log since its process started
+// together with an explicit truncation signal: diagnostics.Collect keeps a
+// bounded tail of at most LogTail lines, and Finalization.Verify evaluates only
+// classified events (assertions, fatal signals, cluster log levels) after its
+// own activation. The provider's review of these recipes
+// (JSYoo5B/ceph-testcontainers-go#540) also reads the handles' container Logs
+// and proposed no new API. So collection stays here: one full Docker log
+// stream, closed when ctx ends, with interpretation and bounds owned by read.
 func withContainerLog(ctx context.Context, open containerLogOpener, read func(io.Reader) error) (err error) {
 	logs, err := open(ctx)
 	if err != nil {

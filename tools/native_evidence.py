@@ -24,11 +24,11 @@ SCHEMA_VERSION = 1
 SOURCE = "7f793731f1b39eb4f465e960113d2363c311b964"
 IMAGE = "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
 # Collection admits only the fixture provider release that integration/fixture
-# pins now. Verification of a retained bundle also admits the earlier release
-# named by bundles recorded before the move; a bundle never changes release.
+# pins now. Verification of a retained bundle also admits the earlier releases
+# named by bundles recorded before each move; a bundle never changes release.
 PROVIDER = "github.com/JSYoo5B/ceph-testcontainers-go"
-PROVIDER_VERSION = "v0.4.0"
-RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", PROVIDER_VERSION})
+PROVIDER_VERSION = "v0.5.0"
+RETAINED_PROVIDER_VERSIONS = frozenset({"v0.3.0", "v0.4.0", PROVIDER_VERSION})
 TEST = "TestCephMDSCephFSCapSendRecoveryIntegration"
 SELECTOR = "^" + TEST + "$"
 INPUT_LIMIT = 16 << 20

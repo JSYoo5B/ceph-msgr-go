@@ -17,7 +17,7 @@ import (
 // client activity outside the covered time fails the analysis.
 //
 // Segment reports use the JSON field names of the ceph-testcontainers-go
-// v0.4.0 capture.Report. A runner-host tcpdump segment carries the same
+// v0.5.0 capture.Report. A runner-host tcpdump segment carries the same
 // fields, written by live-poc.sh, with target "not-bound": it is not bound to
 // a container generation.
 

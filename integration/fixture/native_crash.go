@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	ctdiagnostics "github.com/JSYoo5B/ceph-testcontainers-go/ceph/diagnostics"
 )
 
 // nativeCrashTimeout bounds the crash metadata read on a control failure.
@@ -34,7 +34,7 @@ type nativeCrash struct {
 // nativeCrashes selects owned Ceph daemon crash records. The messenger-oracles
 // client container is excluded: its native CLI processes are oracles, not
 // fixture daemons.
-func nativeCrashes(report *ceph.CrashMetadataReport) []nativeCrash {
+func nativeCrashes(report *ctdiagnostics.CrashMetadataReport) []nativeCrash {
 	if report == nil {
 		return nil
 	}
@@ -109,7 +109,7 @@ func (c *fixtureCluster) classifyControlFailure(out string, cause error) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), nativeCrashTimeout)
 	defer cancel()
-	report, err := c.cluster.CollectCrashMetadata(ctx, ceph.CrashMetadataConfig{Timeout: nativeCrashTimeout})
+	report, err := ctdiagnostics.CollectCrashMetadata(ctx, c.cluster, ctdiagnostics.CrashMetadataConfig{Timeout: nativeCrashTimeout})
 	crashes := nativeCrashes(report)
 	if err != nil && len(crashes) == 0 {
 		return cause

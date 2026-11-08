@@ -55,7 +55,11 @@ func rgwNativeStartFixture(t *testing.T, ctx context.Context) (*rgw.Container, *
 			for _, osd := range osds {
 				owned = append(owned, osd.Container)
 			}
-			owned = append(owned, cluster.ServiceContainers()...)
+			services, err := observe(cluster.Container).ServiceContainers(cleanup)
+			if err != nil {
+				t.Errorf("list owned services before cleanup: %v", err)
+			}
+			owned = append(owned, services...)
 			volumes := map[string]bool{}
 			for _, container := range owned {
 				inspected, err := container.Inspect(cleanup)

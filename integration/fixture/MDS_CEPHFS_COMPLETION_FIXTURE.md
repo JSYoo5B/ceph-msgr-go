@@ -48,10 +48,13 @@ configuration) keep using the control container. The same reason makes the
 blackhole drop the Go client's REQUEST_FLUSH_MDLOG, so the journal is flushed
 with the admin socket's `flush journal`.
 
-Runtime `config set` and `config get` steps of the owned MDS go through the
-fixture's runtime config adapter (`runtime_config.go`), which keeps this
-admin socket path: provider v0.4.0 has no public MDS daemon handle or MDS
-debug window (JSYoo5B/ceph-testcontainers-go#538).
+Runtime steps of the owned MDS go through the fixture's runtime config
+adapter (`runtime_config.go`). `debug_mds` and `debug_ms` are provider
+`override.SetDebugLevel` windows (v0.5.0, JSYoo5B/ceph-testcontainers-go#538),
+bound to the MDS container and the GID its admin socket reports, and restored
+through their own handles; a window of an incarnation that a restart
+discarded is ended before the next debug change. The other options keep this
+admin socket path as one `config set` and one `config get`.
 
 A delivered request whose reply is lost cannot be produced with the blackhole
 alone: the messenger acknowledges and drops the request itself. The fixture

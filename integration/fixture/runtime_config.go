@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"time"
 
@@ -14,24 +15,28 @@ import (
 // runtimeConfig is the fixture's consumer-side adapter for ordered
 // daemon-local runtime configuration changes. It keeps the recipe's order,
 // one effective readback per step and the caller's receipt fields, and
-// delegates each step to the public ceph-testcontainers-go v0.4.0 primitive
+// delegates each step to the public ceph-testcontainers-go v0.5.0 primitive
 // that performs it:
 //
-//   - An OSD debug level (debug_ms, debug_osd) is one override.SetDebugLevel
-//     window, opened by apply and closed by restore through its own
-//     Restore. The window reads the prior level, verifies the normalized
-//     readback, is bound to the OSD container generation and leaves an
-//     outside edit unrestored.
+//   - A debug level of an owned OSD (debug_ms, debug_osd) or MDS (debug_ms,
+//     debug_mds) is one override.SetDebugLevel window, opened by apply and
+//     closed by restore through its own Restore. The window reads the prior
+//     level, verifies the normalized readback, is bound to the daemon's
+//     incarnation (the OSD container generation, or the MDS container and
+//     the GID its admin socket reports) and leaves an outside edit
+//     unrestored.
 //   - Any other OSD option goes through the OSD daemon handle's AdminSocket
 //     as one config set followed by one config get.
-//   - MDS options have no public daemon handle or debug window in v0.4.0
-//     (JSYoo5B/ceph-testcontainers-go#538), so the caller's existing
-//     native admin socket path performs the same set and get.
+//   - Any other MDS option, such as mds_log_pause or ms_blackhole_client, goes
+//     through the caller's native MDS admin socket path as the same set and
+//     get. SetDebugLevel admits only debug levels, and the provider decided
+//     against a generic fault-setting primitive
+//     (JSYoo5B/ceph-testcontainers-go#539).
 //
 // A step that fails ends the call: no step is retried and no later step is
 // issued, so an uncertain outcome stays with the caller's receipt. Restoring
-// an OSD debug option that has no open window observes it and sets nothing.
-// A second window for an option that already has one is refused without a
+// a debug option that has no open window observes it and sets nothing. A
+// second window for an option that already has one is refused without a
 // native call.
 type runtimeConfig struct {
 	// daemon is the daemon the adapter reaches, when it is bound to one.
@@ -57,7 +62,7 @@ type runtimeConfig struct {
 // runtimeDebugWindow is the part of *override.DebugLevelHandle that the
 // adapter uses.
 type runtimeDebugWindow interface {
-	Receipt() ceph.DebugLevelReceipt
+	Receipt() override.DebugLevelReceipt
 	Restore(context.Context) error
 }
 
@@ -82,7 +87,7 @@ func osdRuntimeConfig(cluster *ceph.Container, daemon, report string, scope []st
 			return parseMDSCephFSCompletionConfig(data, name)
 		},
 		debug: func(ctx context.Context, name, level string) (runtimeDebugWindow, error) {
-			handle, err := override.SetDebugLevel(ctx, cluster, ceph.DebugLevelSetting{Daemon: daemon, Name: name, Level: level})
+			handle, err := override.SetDebugLevel(ctx, cluster, override.DebugLevelSetting{Daemon: daemon, Name: name, Level: level})
 			if handle == nil {
 				return nil, err
 			}
@@ -92,12 +97,16 @@ func osdRuntimeConfig(cluster *ceph.Container, daemon, report string, scope []st
 	}
 }
 
-// mdsAdminSocketRuntimeConfig keeps the existing native MDS admin socket path
-// (asok runs one command and returns its trimmed stdout). v0.4.0 has no
-// public MDS runtime config or debug window primitive:
-// JSYoo5B/ceph-testcontainers-go#538.
-func mdsAdminSocketRuntimeConfig(report string, asok func(ctx context.Context, args ...string) ([]byte, error)) *runtimeConfig {
-	return &runtimeConfig{report: report,
+// mdsRuntimeConfig reaches one owned MDS of cluster. daemon resolves its
+// current ID ("a" for mds.a) when a window opens. Options in windowed are
+// debug levels set through override.SetDebugLevel; every other option goes
+// through asok, which runs one admin socket command and returns its trimmed
+// stdout. A caller leaves out a debug option that an outer window of the same
+// daemon already holds: the provider admits one window per daemon and option,
+// so a nested change is a direct set that the caller restores before the
+// outer window.
+func mdsRuntimeConfig(cluster *ceph.Container, daemon func() (string, error), report string, windowed []string, asok func(ctx context.Context, args ...string) ([]byte, error)) *runtimeConfig {
+	r := &runtimeConfig{report: report,
 		set: func(ctx context.Context, name, value string) error {
 			_, err := asok(ctx, "config", "set", name, value)
 			return err
@@ -110,7 +119,25 @@ func mdsAdminSocketRuntimeConfig(report string, asok func(ctx context.Context, a
 			return parseMDSCephFSCompletionConfig(data, name)
 		},
 	}
+	if len(windowed) != 0 {
+		r.debugNames = windowed
+		r.debug = func(ctx context.Context, name, level string) (runtimeDebugWindow, error) {
+			id, err := daemon()
+			if err != nil {
+				return nil, err
+			}
+			handle, err := override.SetDebugLevel(ctx, cluster, override.DebugLevelSetting{Daemon: "mds." + id, Name: name, Level: level})
+			if handle == nil {
+				return nil, err
+			}
+			return handle, err
+		}
+	}
+	return r
 }
+
+// mdsDebugNames are the MDS debug levels that override.SetDebugLevel admits.
+var mdsDebugNames = []string{"debug_mds", "debug_ms"}
 
 // apply sets values in order, each read back, and requires every readback to
 // equal its value. Readback receives each value read.
@@ -174,6 +201,30 @@ func (r *runtimeConfig) direct(ctx context.Context, name, value string) (string,
 	return r.get(ctx, name)
 }
 
+// discard ends the open debug windows of an incarnation that the caller has
+// already given up, such as an MDS that a restart replaced. Restore sets
+// nothing on a replaced process (target-changed) and restores a process that
+// is still the same one, and either releases the provider's admission, so a
+// later window of the same daemon and option can open. Any other outcome is
+// returned and its window kept.
+func (r *runtimeConfig) discard(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	var errs []error
+	for _, name := range slices.Sorted(maps.Keys(r.windows)) {
+		window := r.windows[name]
+		err := window.Restore(ctx)
+		switch state := window.Receipt().State; state {
+		case override.DebugLevelTargetChanged, override.DebugLevelRestored:
+			delete(r.windows, name)
+		default:
+			errs = append(errs, errors.Join(err, fmt.Errorf("%s %s window of a discarded change ended %s", r.report, name, state)))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // openWindow opens one debug window. A window that may have been applied is
 // kept for restore whatever the error.
 func (r *runtimeConfig) openWindow(ctx context.Context, name, level string) (string, error) {
@@ -185,7 +236,7 @@ func (r *runtimeConfig) openWindow(ctx context.Context, name, level string) (str
 		return "", errors.Join(err, fmt.Errorf("%s %s window is unavailable", r.report, name))
 	}
 	receipt := window.Receipt()
-	if receipt.State != ceph.DebugLevelNotApplied {
+	if receipt.State != override.DebugLevelNotApplied {
 		if r.windows == nil {
 			r.windows = map[string]runtimeDebugWindow{}
 		}
@@ -203,7 +254,7 @@ func (r *runtimeConfig) closeWindow(ctx context.Context, name string) (string, e
 	}
 	err := window.Restore(ctx)
 	receipt := window.Receipt()
-	if receipt.State == ceph.DebugLevelRestored {
+	if receipt.State == override.DebugLevelRestored {
 		delete(r.windows, name)
 	}
 	if receipt.Restored != "" || len(receipt.Transitions) == 0 {

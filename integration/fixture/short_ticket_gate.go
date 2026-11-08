@@ -30,16 +30,17 @@ import (
 // or not, leaves a registered slot with a live beacon session healthy, so a Go
 // MGR -13 is never excused by an unrelated MonClient -13 line.
 //
-// The gate composes public ceph-testcontainers-go v0.4.0 primitives: the
+// The gate composes public ceph-testcontainers-go v0.5.0 primitives: the
 // rosters come from Container.Managers and Container.Monitors, the sessions
 // from each MonitorContainer.AdminSocket, and the refusal evidence from the
-// handles' container logs. Two steps keep consumer code because v0.4.0 has no
-// provider observation for them (JSYoo5B/ceph-testcontainers-go#540): the
+// handles' container logs. Two steps keep consumer code because v0.5.0 has no
+// provider observation for them, and the provider's review of this gate
+// proposed none (JSYoo5B/ceph-testcontainers-go#540): the
 // epoch-bearing MgrMap read (observeManagerMap, a native `mgr dump` through
 // Container.Ceph; Observer.ManagerStatus drops the epoch), and the
 // latest-process MonClient refusal attribution (nativeManagerRefusal), which
 // scans the MGR container log for its latest process and every MON log since
-// that process started. CollectDiagnostics keeps only a bounded tail of those
+// that process started. diagnostics.Collect keeps only a bounded tail of those
 // logs, so it cannot replace the scan.
 var shortTicketGateLabels = map[string]bool{"pre-dial": true, "post-failure": true}
 

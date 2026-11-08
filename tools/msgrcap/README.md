@@ -57,7 +57,7 @@ with the report of the session that recorded it, and the gaps between them:
  "gaps": [{"after_segment": 1, "reason": "..."}]}
 ```
 
-Segment reports use the JSON fields of the ceph-testcontainers-go v0.4.0
+Segment reports use the JSON fields of the ceph-testcontainers-go v0.5.0
 `capture.Report`. A runner-host tcpdump file carries the same fields, written
 by `live-poc.sh`, with `target` set to `not-bound`. The covered interval of a
 segment runs from `ready_at` to `stop_requested_at`; a gap runs from one
@@ -147,9 +147,10 @@ the reconnect after the restart.
 `capture.Start` binds a session to one container generation and never follows
 a restart, so the recipe records the restart as two segments with an explicit
 gap instead of one continuous provider file. Continuity across a restart and
-gap/loss verification are tracked upstream in
+gap/loss verification were reviewed upstream in
 [JSYoo5B/ceph-testcontainers-go#537](https://github.com/JSYoo5B/ceph-testcontainers-go/issues/537);
-this recipe is a consumer-side composition of the public v0.4.0 API for that
-question. The helper image is
+this recipe is a consumer-side composition of the public v0.5.0 API for that
+question. The provider's answer to #537 uses the same per-generation segments
+with a declared gap and adds no lifecycle primitive. The helper image is
 `ghcr.io/jsyoo5b/ceph-testcontainers-images:extension-capture-v1` (amd64 and
 arm64), pinned by index digest in the workflow.
