@@ -135,23 +135,24 @@ class NativeEvidenceTests(unittest.TestCase):
             self.write(self.receipts / name, self.raw[name])
 
     def test_collection_admits_only_the_pinned_provider_release(self):
-        self.assertEqual(evidence.PROVIDER_VERSION, "v0.4.0")
-        for field, value in (("provider_version", "v0.3.0"), ("provider_version", "v0.5.0"), ("provider_version", ""),
+        self.assertEqual(evidence.PROVIDER_VERSION, "v0.5.0")
+        for field, value in (("provider_version", "v0.3.0"), ("provider_version", "v0.4.0"), ("provider_version", "v0.6.0"),
+                             ("provider_version", ""),
                              ("provider", "example.org/other-provider")):
             data = dict(self.raw["fixture-manifest.json"], **{field: value})
             self.write(self.receipts / "fixture-manifest.json", data)
             with self.subTest(field=field, value=value), self.assertRaisesRegex(evidence.EvidenceError, "provider-mismatch"):
                 self.collect()
         self.write(self.receipts / "fixture-manifest.json", self.raw["fixture-manifest.json"])
-        self.assertEqual(self.collect()["observed"]["provider_version"], "v0.4.0")
+        self.assertEqual(self.collect()["observed"]["provider_version"], "v0.5.0")
 
     def test_verification_admits_only_the_named_retained_provider_releases(self):
         ctx = evidence.context(self.request)
         observed = self.collect()["observed"]
-        self.assertEqual(evidence.RETAINED_PROVIDER_VERSIONS, {"v0.3.0", "v0.4.0"})
-        for version in ("v0.3.0", "v0.4.0"):
+        self.assertEqual(evidence.RETAINED_PROVIDER_VERSIONS, {"v0.3.0", "v0.4.0", "v0.5.0"})
+        for version in ("v0.3.0", "v0.4.0", "v0.5.0"):
             evidence.validate_runtime(dict(observed, provider_version=version), ctx)
-        for version in ("v0.2.0", "v0.5.0", "", "main"):
+        for version in ("v0.2.0", "v0.6.0", "", "main"):
             with self.subTest(version=version), self.assertRaisesRegex(evidence.EvidenceError, "provider-mismatch"):
                 evidence.validate_runtime(dict(observed, provider_version=version), ctx)
 

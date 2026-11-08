@@ -45,7 +45,7 @@ func TestRGWNativeCheckpointIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("create owned S3 user:", err)
 	}
-	access, secret, err := user.Credentials()
+	access, secret, err := user.CreationKey().Credentials()
 	if err != nil {
 		t.Fatal(err)
 	}

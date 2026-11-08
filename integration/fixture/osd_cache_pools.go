@@ -56,7 +56,7 @@ func prepareIgnoreCacheResources(ctx context.Context, c *fixtureCluster, out str
 			return resources, err
 		}
 	}
-	if err = c.cluster.WaitForClean(ctx); err != nil {
+	if err = observe(c.cluster).WaitForClean(ctx); err != nil {
 		return resources, err
 	}
 	for _, role := range []string{"rw", "ro", "base"} {

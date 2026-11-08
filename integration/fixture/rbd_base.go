@@ -657,7 +657,7 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if err := c.rbdBaseFinish(m, rbd.InitPool(ctx, c.cluster, x.plan.Pool)); err != nil {
 		return fmt.Errorf("initialize owned RBD pool: %w", err)
 	}
-	if err := c.cluster.WaitForClean(ctx); err != nil {
+	if err := observe(c.cluster).WaitForClean(ctx); err != nil {
 		return fmt.Errorf("owned RBD pool readiness: %w", err)
 	}
 	policy, err := c.poolPolicy(ctx)

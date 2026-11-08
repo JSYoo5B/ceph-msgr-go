@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	"github.com/JSYoo5B/ceph-testcontainers-go/override"
 )
 
 // fakeRuntimeDaemon records every native step of a runtimeConfig in order.
@@ -26,11 +27,11 @@ type fakeRuntimeDaemon struct {
 
 type fakeDebugWindow struct {
 	daemon  *fakeRuntimeDaemon
-	receipt ceph.DebugLevelReceipt
+	receipt override.DebugLevelReceipt
 	restore func(w *fakeDebugWindow) error
 }
 
-func (w *fakeDebugWindow) Receipt() ceph.DebugLevelReceipt { return w.receipt }
+func (w *fakeDebugWindow) Receipt() override.DebugLevelReceipt { return w.receipt }
 
 func (w *fakeDebugWindow) Restore(context.Context) error {
 	w.daemon.calls = append(w.daemon.calls, "restore-window "+w.receipt.Name)
@@ -38,7 +39,7 @@ func (w *fakeDebugWindow) Restore(context.Context) error {
 		return w.restore(w)
 	}
 	w.daemon.values[w.receipt.Name] = w.receipt.Prior
-	w.receipt.State, w.receipt.Restored = ceph.DebugLevelRestored, w.receipt.Prior
+	w.receipt.State, w.receipt.Restored = override.DebugLevelRestored, w.receipt.Prior
 	return nil
 }
 
@@ -69,12 +70,12 @@ func (f *fakeRuntimeDaemon) config(guard bool) *runtimeConfig {
 		},
 		debug: func(_ context.Context, name, level string) (runtimeDebugWindow, error) {
 			f.calls = append(f.calls, "open-window "+name+"="+level)
-			w := &fakeDebugWindow{daemon: f, receipt: ceph.DebugLevelReceipt{Daemon: "osd.0", Name: name, Requested: level, Prior: f.values[name], State: ceph.DebugLevelApplied, Applied: level}}
+			w := &fakeDebugWindow{daemon: f, receipt: override.DebugLevelReceipt{Daemon: "osd.0", Name: name, Requested: level, Prior: f.values[name], State: override.DebugLevelApplied, Applied: level}}
 			var err error
 			if f.window != nil {
 				err = f.window(w)
 			}
-			if w.receipt.State != ceph.DebugLevelNotApplied {
+			if w.receipt.State != override.DebugLevelNotApplied {
 				f.values[name] = w.receipt.Applied
 			}
 			f.windows = append(f.windows, w)
@@ -216,7 +217,7 @@ func TestRuntimeConfigFailedStepIsNotRetried(t *testing.T) {
 func TestRuntimeConfigKeepsUncertainWindow(t *testing.T) {
 	f := newFakeRuntimeDaemon()
 	f.window = func(w *fakeDebugWindow) error {
-		w.receipt.State, w.receipt.Applied = ceph.DebugLevelApplyUncertain, ""
+		w.receipt.State, w.receipt.Applied = override.DebugLevelApplyUncertain, ""
 		return errors.New("set debug_ms of osd.0: context deadline exceeded")
 	}
 	r := f.config(false)
@@ -228,8 +229,8 @@ func TestRuntimeConfigKeepsUncertainWindow(t *testing.T) {
 	// An unconfirmed restoration keeps the window for a later attempt, which
 	// reconciles through the same window.
 	f.windows[0].restore = func(w *fakeDebugWindow) error {
-		w.receipt.State = ceph.DebugLevelUnconfirmed
-		w.receipt.Transitions = append(w.receipt.Transitions, ceph.DebugLevelTransition{State: ceph.DebugLevelUnconfirmed, Readback: "10/10"})
+		w.receipt.State = override.DebugLevelUnconfirmed
+		w.receipt.Transitions = append(w.receipt.Transitions, override.DebugLevelTransition{State: override.DebugLevelUnconfirmed, Readback: "10/10"})
 		return errors.New("debug_ms of osd.0 still reads back the window's \"10/10\"")
 	}
 	err = r.restore(context.Background(), runtimeRestoreOrder, runtimeDropBaseline, &readback)
@@ -245,7 +246,7 @@ func TestRuntimeConfigKeepsUncertainWindow(t *testing.T) {
 func TestRuntimeConfigRestoreWithoutWindowOnlyObserves(t *testing.T) {
 	f := newFakeRuntimeDaemon()
 	f.window = func(w *fakeDebugWindow) error {
-		w.receipt.State, w.receipt.Applied = ceph.DebugLevelNotApplied, ""
+		w.receipt.State, w.receipt.Applied = override.DebugLevelNotApplied, ""
 		return errors.New("a window for this daemon and option is open")
 	}
 	r := f.config(false)
@@ -276,10 +277,10 @@ func TestOSDRuntimeConfigRefusesWithoutCluster(t *testing.T) {
 	}
 }
 
-func TestMDSAdminSocketRuntimeConfigKeepsNativePath(t *testing.T) {
+func TestMDSRuntimeConfigKeepsNativePathForOtherOptions(t *testing.T) {
 	var calls []string
 	values := map[string]string{"mds_log_pause": "false"}
-	r := mdsAdminSocketRuntimeConfig("DATA daemon", func(_ context.Context, args ...string) ([]byte, error) {
+	r := mdsRuntimeConfig(nil, nil, "DATA daemon", mdsDebugNames, func(_ context.Context, args ...string) ([]byte, error) {
 		calls = append(calls, strings.Join(args, " "))
 		if args[1] == "set" {
 			values[args[2]] = args[3]
@@ -297,6 +298,82 @@ func TestMDSAdminSocketRuntimeConfigKeepsNativePath(t *testing.T) {
 	want := []string{"config set mds_log_pause true", "config get mds_log_pause", "config set mds_log_pause false", "config get mds_log_pause"}
 	if !slices.Equal(calls, want) {
 		t.Fatalf("calls %q, want %q", calls, want)
+	}
+}
+
+func TestMDSRuntimeConfigOpensDebugWindowsOnTheOwnedMDS(t *testing.T) {
+	asok := func(context.Context, ...string) ([]byte, error) {
+		t.Fatal("a windowed debug option reached the admin socket")
+		return nil, nil
+	}
+	var resolved int
+	r := mdsRuntimeConfig(nil, func() (string, error) { resolved++; return "a", nil }, "DATA daemon", mdsDebugNames, asok)
+	var readback map[string]string
+	err := r.apply(context.Background(), []string{"debug_mds"}, map[string]string{"debug_mds": "10/10"}, &readback)
+	// override.SetDebugLevel refuses a nil cluster as not applied, so nothing
+	// is owned for restoration and the admin socket is never used.
+	if !errors.Is(err, ceph.ErrInvalidRequest) || resolved != 1 || len(r.windows) != 0 || len(readback) != 0 {
+		t.Fatalf("apply: %v, resolved %d, windows %d, readback %v", err, resolved, len(r.windows), readback)
+	}
+	missing := errors.New("no owned MDS")
+	r = mdsRuntimeConfig(nil, func() (string, error) { return "", missing }, "DATA daemon", mdsDebugNames, asok)
+	if err := r.apply(context.Background(), []string{"debug_ms"}, map[string]string{"debug_ms": "1/5"}, &readback); !errors.Is(err, missing) {
+		t.Fatalf("unresolved daemon: %v", err)
+	}
+}
+
+func TestMDSRuntimeConfigNestedDebugChangeStaysDirect(t *testing.T) {
+	var calls []string
+	r := mdsRuntimeConfig(nil, nil, "DATA daemon", nil, func(_ context.Context, args ...string) ([]byte, error) {
+		calls = append(calls, strings.Join(args, " "))
+		if args[1] == "set" {
+			return []byte("{}"), nil
+		}
+		return []byte(`{"debug_ms":"10/10"}`), nil
+	})
+	var readback map[string]string
+	if err := r.apply(context.Background(), []string{"debug_ms"}, map[string]string{"debug_ms": "10/10"}, &readback); err != nil || readback["debug_ms"] != "10/10" {
+		t.Fatalf("apply: %v, readback %v", err, readback)
+	}
+	if want := []string{"config set debug_ms 10/10", "config get debug_ms"}; !slices.Equal(calls, want) {
+		t.Fatalf("calls %q, want %q", calls, want)
+	}
+}
+
+func TestRuntimeConfigDiscardReleasesReplacedWindows(t *testing.T) {
+	f := newFakeRuntimeDaemon()
+	f.window = func(w *fakeDebugWindow) error {
+		w.restore = func(w *fakeDebugWindow) error {
+			w.receipt.State = override.DebugLevelTargetChanged
+			return errors.New("target changed")
+		}
+		return nil
+	}
+	r := f.config(false)
+	var readback map[string]string
+	if err := r.apply(context.Background(), []string{"debug_ms"}, runtimeDropSettings, &readback); err != nil || len(r.windows) != 1 {
+		t.Fatalf("apply: %v, windows %d", err, len(r.windows))
+	}
+	if err := r.discard(context.Background()); err != nil || len(r.windows) != 0 {
+		t.Fatalf("discard: %v, windows %d", err, len(r.windows))
+	}
+	if err := (*runtimeConfig)(nil).discard(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	f = newFakeRuntimeDaemon()
+	f.window = func(w *fakeDebugWindow) error {
+		w.restore = func(w *fakeDebugWindow) error {
+			w.receipt.State = override.DebugLevelUnconfirmed
+			return errors.New("socket unavailable")
+		}
+		return nil
+	}
+	r = f.config(false)
+	if err := r.apply(context.Background(), []string{"debug_ms"}, runtimeDropSettings, &readback); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.discard(context.Background()); err == nil || !strings.Contains(err.Error(), "unconfirmed") || len(r.windows) != 1 {
+		t.Fatalf("unconfirmed discard: %v, windows %d", err, len(r.windows))
 	}
 }
 

@@ -173,9 +173,13 @@ also refused; administrative observation, cap logs and restart arm remain
 available. Runtime changes use only the owned daemon's admin socket. Their
 receipts preserve settings, baselines, incarnation GID and readbacks. The
 fixture's runtime config adapter (`runtime_config.go`) orders the steps and
-checks each readback: MDS steps keep the native admin socket path, because
-provider v0.4.0 has no public MDS runtime config primitive
-(JSYoo5B/ceph-testcontainers-go#538); the writeback-fence OSD drop sets
+checks each readback. The `debug-on` change sets `debug_mds` and `debug_ms`
+through provider `override.SetDebugLevel` windows (v0.5.0,
+JSYoo5B/ceph-testcontainers-go#538) and `debug-off` restores them through the
+same handles. The cap-send client drop raises `debug_ms` inside that window,
+so it sets `debug_ms` directly, `debug-off` is refused while the drop is
+active, and cleanup restores the latest change first. The other MDS options
+keep the native admin socket path; the writeback-fence OSD drop sets
 `debug_ms` through `override.SetDebugLevel` and `ms_blackhole_client` through
 the OSD handle's `AdminSocket`.
 

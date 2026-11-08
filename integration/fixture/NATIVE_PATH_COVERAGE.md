@@ -33,6 +33,19 @@ handles' `AdminSocket` for the cluster's `AdminSocket`, and
 keep the name the review used. No local recipe, record or `released` row
 changed.
 
+Updated on 2026-11-08, when `go.mod` in this directory moved to
+`github.com/JSYoo5B/ceph-testcontainers-go v0.5.0` (tag commit
+`649fc9a75ee78c385d33fa5de9c2254098f5eec0`). No class changed. Every
+upstream receipt cited as `ctg@v0.4.0:` still exists under the same test name
+in v0.5.0 and keeps the revision it was reviewed at. v0.5.0 moves several
+v0.4.0 APIs: CephFS sessions and session timeouts to package
+`cephfs/session`, diagnostics, crash metadata and redaction to
+`ceph/diagnostics`, the debug-level types to `override`, and `WaitForClean`
+and `ServiceContainers` to `ceph.Observer`. It also extends
+`override.SetDebugLevel` to MGR and MDS daemons, which the MDS completion and
+data fixtures now use for `debug_mds` and `debug_ms`; that changes how a
+local recipe sets a runtime level, not what any row observes.
+
 ## Classes
 
 Each row has exactly one class. The order below is also the precedence: a row
@@ -249,7 +262,7 @@ independent native observation is still missing.
   separates the cluster network and has no network fault control, so OSD
   heartbeat failure (D2D-4), held replication (D2D-7), quorum partitions
   (D2D-2) and every directional fault (D2D-5, D2D-15, SVC-3) have only
-  upstream receipts. The pinned v0.4.0 `fault.ApplyNetworkProfile` expresses
+  upstream receipts. The pinned v0.5.0 `fault.ApplyNetworkProfile` expresses
   peer-specific faults, but no local recipe uses it.
 - **Map distribution is unobserved locally and has an open anomaly.** No
   local recipe reads each daemon's own map epoch (D2D-3), and

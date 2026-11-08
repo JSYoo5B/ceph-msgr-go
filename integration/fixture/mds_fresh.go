@@ -21,6 +21,7 @@ import (
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
 	"github.com/JSYoo5B/ceph-testcontainers-go/cephfs"
+	cephfssession "github.com/JSYoo5B/ceph-testcontainers-go/cephfs/session"
 )
 
 const mdsFreshSource = "7f793731f1b39eb4f465e960113d2363c311b964"
@@ -42,20 +43,20 @@ type mdsFreshDaemon struct {
 	Nonce       uint32            `json:"nonce"`
 }
 type mdsFreshOracle struct {
-	Source         string           `json:"source_commit"`
-	Token          string           `json:"token"`
-	FSID           string           `json:"fsid"`
-	FSCID          int64            `json:"fscid"`
-	FSName         string           `json:"fs_name"`
-	FSMapEpoch     uint32           `json:"fsmap_epoch"`
-	MDSMapEpoch    uint32           `json:"mdsmap_epoch"`
-	MetadataPool   int64            `json:"metadata_pool"`
-	DataPools      []int64          `json:"data_pools"`
-	ClientIdentity string           `json:"client_identity"`
-	MDS            mdsFreshDaemon   `json:"mds"`
-	BeforeSessions []cephfs.Session `json:"before_sessions"`
-	Filesystem     json.RawMessage  `json:"filesystem"`
-	FSDump         json.RawMessage  `json:"fs_dump"`
+	Source         string                  `json:"source_commit"`
+	Token          string                  `json:"token"`
+	FSID           string                  `json:"fsid"`
+	FSCID          int64                   `json:"fscid"`
+	FSName         string                  `json:"fs_name"`
+	FSMapEpoch     uint32                  `json:"fsmap_epoch"`
+	MDSMapEpoch    uint32                  `json:"mdsmap_epoch"`
+	MetadataPool   int64                   `json:"metadata_pool"`
+	DataPools      []int64                 `json:"data_pools"`
+	ClientIdentity string                  `json:"client_identity"`
+	MDS            mdsFreshDaemon          `json:"mds"`
+	BeforeSessions []cephfssession.Session `json:"before_sessions"`
+	Filesystem     json.RawMessage         `json:"filesystem"`
+	FSDump         json.RawMessage         `json:"fs_dump"`
 }
 type mdsFreshScope struct {
 	mu               sync.Mutex
@@ -350,7 +351,7 @@ func (c *fixtureCluster) prepareMDSFresh(ctx context.Context, out string) error 
 	if err := os.WriteFile(filepath.Join(out, "mds-fresh.keyring"), keyring, 0600); err != nil {
 		return err
 	}
-	s.oracle.BeforeSessions, err = s.fs.Sessions(ctx)
+	s.oracle.BeforeSessions, err = cephfssession.List(ctx, s.fs)
 	if err != nil || len(s.oracle.BeforeSessions) > 4096 {
 		return errors.Join(err, errors.New("native MDS fresh baseline sessions unavailable within bound"))
 	}
@@ -479,7 +480,7 @@ func (c *fixtureCluster) observeMDSFresh(ctx context.Context, out string, fields
 	if current.FSID != s.oracle.FSID || current.FSCID != s.oracle.FSCID || current.MDS.GID != s.oracle.MDS.GID || current.MDS.Endpoint != s.oracle.MDS.Endpoint || current.MDS.Nonce != s.oracle.MDS.Nonce || current.MDS.Incarnation != s.oracle.MDS.Incarnation || current.MetadataPool != s.oracle.MetadataPool || !reflect.DeepEqual(current.DataPools, s.oracle.DataPools) {
 		return errors.New("MDS fresh native target changed during the owned observation")
 	}
-	sessions, err := s.fs.Sessions(ctx)
+	sessions, err := cephfssession.List(ctx, s.fs)
 	if err != nil || len(sessions) > 4096 {
 		return errors.Join(err, errors.New("MDS fresh native sessions unavailable within bound"))
 	}
@@ -497,21 +498,21 @@ func (c *fixtureCluster) observeMDSFresh(ctx context.Context, out string, fields
 		}
 	}
 	result := struct {
-		Source     string           `json:"source_commit"`
-		Token      string           `json:"token"`
-		RequestID  int64            `json:"request_id"`
-		FSID       string           `json:"fsid"`
-		FSCID      int64            `json:"fscid"`
-		FSName     string           `json:"fs_name"`
-		MDSGID     uint64           `json:"mds_gid"`
-		Rank       int32            `json:"rank"`
-		GlobalID   uint64           `json:"expected_global_id"`
-		GlobalIDs  []uint64         `json:"expected_global_ids,omitempty"`
-		PresentIDs []uint64         `json:"present_global_ids,omitempty"`
-		Present    bool             `json:"expected_global_id_present"`
-		Sessions   []cephfs.Session `json:"sessions"`
-		Filesystem json.RawMessage  `json:"filesystem"`
-		FSDump     json.RawMessage  `json:"fs_dump"`
+		Source     string                  `json:"source_commit"`
+		Token      string                  `json:"token"`
+		RequestID  int64                   `json:"request_id"`
+		FSID       string                  `json:"fsid"`
+		FSCID      int64                   `json:"fscid"`
+		FSName     string                  `json:"fs_name"`
+		MDSGID     uint64                  `json:"mds_gid"`
+		Rank       int32                   `json:"rank"`
+		GlobalID   uint64                  `json:"expected_global_id"`
+		GlobalIDs  []uint64                `json:"expected_global_ids,omitempty"`
+		PresentIDs []uint64                `json:"present_global_ids,omitempty"`
+		Present    bool                    `json:"expected_global_id_present"`
+		Sessions   []cephfssession.Session `json:"sessions"`
+		Filesystem json.RawMessage         `json:"filesystem"`
+		FSDump     json.RawMessage         `json:"fs_dump"`
 	}{mdsFreshSource, s.token, id, current.FSID, current.FSCID, current.FSName, current.MDS.GID, 0, gid, gids, presentIDs, present, sessions, current.Filesystem, current.FSDump}
 	if err := writeMDSFreshJSON(out, "mds-fresh-session-result.json", result); err != nil {
 		return err

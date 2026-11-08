@@ -43,6 +43,9 @@ type mdsCephFSDataRuntime struct {
 	RestoreRequestID int64             `json:"restore_request_id,omitempty"`
 	RestoreReadback  map[string]string `json:"restore_readback,omitempty"`
 	Error            string            `json:"error,omitempty"`
+	// config is the adapter that applied the change; its debug windows are
+	// restored through it.
+	config *runtimeConfig
 }
 
 func (r *mdsCephFSDataRuntime) active() bool {
@@ -119,16 +122,54 @@ func (c *fixtureCluster) mdsCephFSDataConfig(ctx context.Context, d mdsFreshDaem
 	}
 	return values, c.mdsCephFSDataCheckDaemon(ctx, d)
 }
-func (c *fixtureCluster) mdsCephFSDataApplyRuntime(ctx context.Context, d mdsFreshDaemon, settings map[string]string, readback *map[string]string) error {
-	return c.mdsCephFSDataRuntimeConfig(d).apply(ctx, slices.Sorted(maps.Keys(settings)), settings, readback)
+
+// mdsCephFSDataApplyRuntime applies r's settings, or restores its baseline,
+// on the proven incarnation d. A restore goes through the adapter that applied
+// r, so its debug windows are restored by their own handles.
+func (c *fixtureCluster) mdsCephFSDataApplyRuntime(ctx context.Context, d mdsFreshDaemon, r *mdsCephFSDataRuntime, restore bool) error {
+	if r.config == nil {
+		r.config = c.mdsCephFSDataRuntimeConfig(d, r.Kind)
+	}
+	if restore {
+		return r.config.restore(ctx, slices.Sorted(maps.Keys(r.Baseline)), r.Baseline, &r.RestoreReadback)
+	}
+	if err := c.mdsCephFSDataReleaseDiscarded(ctx); err != nil {
+		return err
+	}
+	return r.config.apply(ctx, slices.Sorted(maps.Keys(r.Settings)), r.Settings, &r.Readback)
+}
+
+// mdsCephFSDataReleaseDiscarded ends the debug windows of changes that a
+// restart discarded, so the provider admits a window on the new incarnation.
+func (c *fixtureCluster) mdsCephFSDataReleaseDiscarded(ctx context.Context) error {
+	var errs []error
+	for _, r := range c.mdsCephFSData.runtime {
+		if r.State == "discarded-by-restart" {
+			errs = append(errs, r.config.discard(ctx))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // mdsCephFSDataRuntimeConfig is the runtime config adapter of the proven
 // incarnation d: each step and the end check that the admin socket still
-// names it. MDS runtime config keeps the native admin socket path
-// (JSYoo5B/ceph-testcontainers-go#538).
-func (c *fixtureCluster) mdsCephFSDataRuntimeConfig(d mdsFreshDaemon) *runtimeConfig {
-	r := mdsAdminSocketRuntimeConfig("DATA daemon", c.mdsCephFSDataAsok)
+// names it. The debug-on change opens override.SetDebugLevel windows for
+// debug_mds and debug_ms. The cap-send client drop raises debug_ms while
+// debug-on's window holds it, so that change sets debug_ms directly and its
+// restore returns it to debug-on's level before debug-off closes the window.
+// The other options keep the native admin socket path (runtime_config.go).
+func (c *fixtureCluster) mdsCephFSDataRuntimeConfig(d mdsFreshDaemon, kind string) *runtimeConfig {
+	var windowed []string
+	if kind == "debug-on" {
+		windowed = mdsDebugNames
+	}
+	r := mdsRuntimeConfig(c.cluster, func() (string, error) {
+		daemon, err := c.mdsCephFSDataDaemon()
+		if err != nil {
+			return "", err
+		}
+		return daemon.ID, nil
+	}, "DATA daemon", windowed, c.mdsCephFSDataAsok)
 	r.scope, r.scopeErr = mdsCephFSDataRuntimeConfigNames, errors.New("DATA runtime setting is outside closed scope")
 	r.guard = func(ctx context.Context) error { return c.mdsCephFSDataCheckDaemon(ctx, d) }
 	return r
@@ -202,7 +243,7 @@ func (c *fixtureCluster) mdsCephFSDataRuntimeAct(ctx context.Context, id int64, 
 		if err := c.mdsCephFSDataJournal(); err != nil {
 			return err
 		}
-		err = c.mdsCephFSDataApplyRuntime(ctx, x.current, r.Settings, &r.Readback)
+		err = c.mdsCephFSDataApplyRuntime(ctx, x.current, r, false)
 		r.State = "applied"
 		if err != nil {
 			r.State, r.Error = "uncertain", err.Error()
@@ -222,12 +263,16 @@ func (c *fixtureCluster) mdsCephFSDataRuntimeAct(ctx context.Context, id int64, 
 		if r == nil {
 			return errors.New("DATA has no owned runtime change on this incarnation")
 		}
+		if kind == "debug-on" && x.activeRuntime("client-drop-on", x.current.GID) != nil {
+			// The drop's direct debug_ms change sits inside debug-on's window.
+			return errors.New("DATA debug restore refused while the cap-send client drop holds debug_ms")
+		}
 		r.State, r.RestoreRequestID = "restore-intended", id
 		result.Runtime = r
 		if err := c.mdsCephFSDataJournal(); err != nil {
 			return err
 		}
-		err := c.mdsCephFSDataApplyRuntime(ctx, x.current, r.Baseline, &r.RestoreReadback)
+		err := c.mdsCephFSDataApplyRuntime(ctx, x.current, r, true)
 		r.State = "restored"
 		if err != nil {
 			r.State, r.Error = "restore-uncertain", err.Error()
@@ -660,8 +705,11 @@ func (c *fixtureCluster) mdsCephFSDataRestoreRuntime(ctx context.Context, receip
 	d := x.current
 	d.GID = status.Rank0.GID
 	d.Incarnation = status.Rank0.Incarnation
+	// Restore the latest change first: a nested change, such as the cap-send
+	// drop's debug_ms inside debug-on's window, returns its option before the
+	// outer window closes.
 	var errs []error
-	for _, r := range x.runtime {
+	for _, r := range slices.Backward(x.runtime) {
 		if !r.active() || r.IncarnationGID != d.GID {
 			continue
 		}
@@ -670,7 +718,7 @@ func (c *fixtureCluster) mdsCephFSDataRestoreRuntime(ctx context.Context, receip
 			errs = append(errs, err)
 			continue
 		}
-		err := c.mdsCephFSDataApplyRuntime(ctx, d, r.Baseline, &r.RestoreReadback)
+		err := c.mdsCephFSDataApplyRuntime(ctx, d, r, true)
 		r.State = "restored"
 		if err != nil {
 			r.State, r.Error = "restore-uncertain", err.Error()
@@ -692,6 +740,9 @@ func (c *fixtureCluster) mdsCephFSDataRestoreRuntime(ctx context.Context, receip
 				if r.active() && r.IncarnationGID != d.GID {
 					r.State = "discarded-by-restart"
 				}
+			}
+			if err := c.mdsCephFSDataReleaseDiscarded(ctx); err != nil {
+				errs = append(errs, err)
 			}
 		}
 	}

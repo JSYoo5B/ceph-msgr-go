@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
+	ctdiagnostics "github.com/JSYoo5B/ceph-testcontainers-go/ceph/diagnostics"
 )
 
 // The authentication first-failure bundle is a diagnostic control: right after
@@ -25,16 +26,17 @@ import (
 // docs/guides/messenger-client-fixtures.md "Authentication first-failure
 // bundle"); the code here is written for this fixture.
 //
-// Every step composes public ceph-testcontainers-go v0.4.0 primitives:
+// Every step composes public ceph-testcontainers-go v0.5.0 primitives:
 // mon_status and sessions run through MonitorContainer.AdminSocket (looked up
 // by Container.Monitors), quorum_names through Observer.QuorumStatus, MGR and
 // MON container instances through the Managers/Monitors handles' State and
 // container ID, the behavioural controls through ControlContainer and
-// RunNativeCommand, and redaction through RedactSecrets. One step has no typed
-// equivalent: the MgrMap read keeps its epoch (mgr_map_epoch and
+// RunNativeCommand, and redaction through diagnostics.Redact. One step has no
+// typed equivalent: the MgrMap read keeps its epoch (mgr_map_epoch and
 // mgr_map_epoch_after), which Observer.ManagerStatus drops, so it stays a
-// native `mgr dump` through Container.Ceph (observeManagerMap;
-// JSYoo5B/ceph-testcontainers-go#540). The request/bundle schema, the
+// native `mgr dump` through Container.Ceph (observeManagerMap). The provider
+// reviewed this recipe and kept that native read rather than adding the epoch
+// to ManagerStatus (JSYoo5B/ceph-testcontainers-go#540). The request/bundle schema, the
 // classifier and the secrecy check are this consumer's own judgment.
 //
 // The collection never repeats the tested authentication, never submits a
@@ -619,7 +621,7 @@ func checkAuthBundleSecrecy(data []byte, secrets ...string) error {
 
 // fixtureSecrets returns the consumer keys the fixture wrote, for the secrecy
 // check. Missing files are skipped; the cluster's own secrets are redacted by
-// RedactSecrets.
+// diagnostics.Redact.
 func fixtureSecrets(out string) []string {
 	var secrets []string
 	for _, name := range []string{"key", "readonly.key", "revocable.key", "configwatch.key"} {
@@ -682,7 +684,7 @@ func (s fixtureAuthBundleSources) TellVersion(ctx context.Context, target string
 	})
 }
 func (s fixtureAuthBundleSources) Redact(ctx context.Context, data []byte) ([]byte, error) {
-	return s.c.cluster.RedactSecrets(ctx, data, s.secrets...)
+	return ctdiagnostics.Redact(ctx, s.c.cluster, data, s.secrets...)
 }
 
 // authBundleControlArgv is the only native command a collection runs. It

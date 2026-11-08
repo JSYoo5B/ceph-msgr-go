@@ -123,7 +123,7 @@ refused. Successful processing atomically publishes
 and `fs_dump`.
 
 Observation revalidates the same owned target and obtains native sessions
-through public `fs.Sessions(ctx)`. Session records retain the public native
+through public `session.List(ctx, fs)` (package `cephfs/session`). Session records retain the public native
 helper's exported JSON field names, including `ID`, `Rank`, `EntityID` and
 `Address`. A matching GlobalID is recorded as present and fails the fixture.
 Other native probe identities may be present; they do not establish that the
