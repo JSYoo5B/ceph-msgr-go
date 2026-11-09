@@ -865,32 +865,28 @@ func (c *fixtureCluster) mdsCephFSAct(ctx context.Context, id int64, action mdsC
 }
 
 type mdsCephFSCleanup struct {
-	Source                  string                  `json:"source_commit"`
-	Token                   string                  `json:"token"`
-	FSName                  string                  `json:"fs_name"`
-	Attempted               bool                    `json:"attempted"`
-	Mutations               []*mdsCephFSMutation    `json:"mutations"`
-	Restart                 *mdsCephFSRestart       `json:"restart,omitempty"`
-	ResidualSessions        []mdsSessionsNative     `json:"residual_owned_sessions"`
-	NamespaceChecked        bool                    `json:"namespace_checked"`
-	NamespaceRestored       bool                    `json:"namespace_restored"`
-	NamespaceNote           string                  `json:"namespace_note,omitempty"`
-	Namespace               *mdsCephFSNative        `json:"namespace,omitempty"`
-	RecoveryNamespace       *mdsCephFSNative        `json:"recovery_namespace,omitempty"`
-	PushNamespace           *mdsCephFSNative        `json:"push_namespace,omitempty"`
-	PushConfig              *mdsCephFSPushConfig    `json:"push_config,omitempty"`
-	PushConfigRestored      bool                    `json:"push_config_restored"`
-	NewBlocklist            []mdsSessionsBlock      `json:"new_blocklist"`
-	RemovedBlocklist        []mdsCephFSRemovedBlock `json:"removed_blocklist"`
-	KeptBlocklist           []mdsSessionsBlock      `json:"kept_new_blocklist"`
-	FinalBlocklist          []mdsSessionsBlock      `json:"final_blocklist,omitempty"`
-	BlocklistRestored       bool                    `json:"blocklist_restored"`
-	ClientIdentityRemoved   bool                    `json:"client_identity_removed"`
-	NativeIdentityRemoved   bool                    `json:"native_identity_removed"`
-	RecoveryIdentityRemoved bool                    `json:"recovery_identity_removed"`
-	PushIdentityRemoved     bool                    `json:"push_identity_removed"`
-	Completed               bool                    `json:"completed"`
-	Errors                  []string                `json:"errors,omitempty"`
+	Source             string               `json:"source_commit"`
+	Token              string               `json:"token"`
+	FSName             string               `json:"fs_name"`
+	Attempted          bool                 `json:"attempted"`
+	Mutations          []*mdsCephFSMutation `json:"mutations"`
+	Restart            *mdsCephFSRestart    `json:"restart,omitempty"`
+	ResidualSessions   []mdsSessionsNative  `json:"residual_owned_sessions"`
+	NamespaceChecked   bool                 `json:"namespace_checked"`
+	NamespaceRestored  bool                 `json:"namespace_restored"`
+	NamespaceNote      string               `json:"namespace_note,omitempty"`
+	Namespace          *mdsCephFSNative     `json:"namespace,omitempty"`
+	RecoveryNamespace  *mdsCephFSNative     `json:"recovery_namespace,omitempty"`
+	PushNamespace      *mdsCephFSNative     `json:"push_namespace,omitempty"`
+	PushConfig         *mdsCephFSPushConfig `json:"push_config,omitempty"`
+	PushConfigRestored bool                 `json:"push_config_restored"`
+	mdsCephFSBlocklistReceipt
+	ClientIdentityRemoved   bool     `json:"client_identity_removed"`
+	NativeIdentityRemoved   bool     `json:"native_identity_removed"`
+	RecoveryIdentityRemoved bool     `json:"recovery_identity_removed"`
+	PushIdentityRemoved     bool     `json:"push_identity_removed"`
+	Completed               bool     `json:"completed"`
+	Errors                  []string `json:"errors,omitempty"`
 }
 
 // finishMDSCephFS runs once, inside the cached MDS fresh cleanup and before
@@ -908,7 +904,7 @@ func (c *fixtureCluster) finishMDSCephFS(ctx context.Context) error {
 	ctx, stop := context.WithTimeout(ctx, 45*time.Second)
 	defer stop()
 	receipt := mdsCephFSCleanup{Source: mdsFreshSource, Token: s.token, FSName: s.name, Attempted: true, Mutations: x.mutations, Restart: x.restart, ResidualSessions: []mdsSessionsNative{},
-		NewBlocklist: []mdsSessionsBlock{}, RemovedBlocklist: []mdsCephFSRemovedBlock{}, KeptBlocklist: []mdsSessionsBlock{}}
+		mdsCephFSBlocklistReceipt: newMDSCephFSBlocklistReceipt()}
 	if err := writeMDSFreshJSON(x.out, "mds-cephfs-cleanup.json", receipt); err != nil {
 		return err
 	}
