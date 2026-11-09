@@ -521,9 +521,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			return nil
 		}, func(err error) {
 			c.stopLogForFailedSession(s, err)
-			c.stopConfigForFailedSession(s, err)
-			c.stopDigestForFailedSession(s, err)
-			c.stopServiceMapForFailedSession(s, err)
+			c.stopMonSnapshotsForFailedSession(s, err)
 			c.stopOSDMapForFailedSession(s, err)
 			c.stopMDSMapsForFailedSession(s, err)
 			c.mu.Lock()
@@ -536,15 +534,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 				if c.logWatch != nil {
 					c.logWatch.source = nil
 				}
-				if c.configWatch != nil {
-					c.configWatch.source = nil
-				}
-				if c.digestWatch != nil {
-					c.digestWatch.source = nil
-				}
-				if c.serviceMapWatch != nil {
-					c.serviceMapWatch.source = nil
-				}
+				c.resetMonSnapshotSourcesLocked()
 				if c.osdMapWatch != nil {
 					c.osdMapWatch.source = nil
 				}
@@ -560,9 +550,7 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			// still delays onClose. Record its registered watch's cause before
 			// making that callback stale by adopting this candidate.
 			c.stopLogForFailedSession(old, old.Err())
-			c.stopConfigForFailedSession(old, old.Err())
-			c.stopDigestForFailedSession(old, old.Err())
-			c.stopServiceMapForFailedSession(old, old.Err())
+			c.stopMonSnapshotsForFailedSession(old, old.Err())
 			c.stopOSDMapForFailedSession(old, old.Err())
 			c.stopMDSMapsForFailedSession(old, old.Err())
 		}
@@ -575,19 +563,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			// when it observes only the final restored MON.
 			c.logWatch.source = nil
 		}
-		if c.configWatch != nil {
-			// Request a full map even if the worker misses a failed candidate
-			// and observes only restoration of the same old MON session.
-			c.configWatch.source = nil
-		}
-		if c.digestWatch != nil {
-			// Resubscribe even if the worker misses a failed candidate and
-			// observes only restoration of the same admitted MON session.
-			c.digestWatch.source = nil
-		}
-		if c.serviceMapWatch != nil {
-			c.serviceMapWatch.source = nil
-		}
+		// Request a full snapshot even if a worker misses a failed candidate
+		// and observes only restoration of the same old MON session.
+		c.resetMonSnapshotSourcesLocked()
 		if c.osdMapWatch != nil {
 			c.osdMapWatch.source = nil
 		}
@@ -966,9 +944,7 @@ func (c *Client) Close() error {
 	if source != nil {
 		err := source.Err()
 		c.stopLogForFailedSession(source, err)
-		c.stopConfigForFailedSession(source, err)
-		c.stopDigestForFailedSession(source, err)
-		c.stopServiceMapForFailedSession(source, err)
+		c.stopMonSnapshotsForFailedSession(source, err)
 		c.stopOSDMapForFailedSession(source, err)
 		c.stopMDSMapsForFailedSession(source, err)
 	}
@@ -980,21 +956,10 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 	mdsMapWatches := c.stopMDSMapWatchesLocked(ErrClosed)
-	configWatch, logWatch := c.configWatch, c.logWatch
-	digestWatch := c.digestWatch
-	serviceMapWatch := c.serviceMapWatch
-	osdMapWatch := c.osdMapWatch
-	if configWatch != nil {
-		configWatch.stopLocked(ErrClosed)
-	}
-	if serviceMapWatch != nil {
-		serviceMapWatch.stopLocked(ErrClosed)
-	}
+	snapshotWatches := c.stopMonSnapshotsLocked(ErrClosed)
+	logWatch, osdMapWatch := c.logWatch, c.osdMapWatch
 	if logWatch != nil {
 		logWatch.stopLocked(ErrClosed)
-	}
-	if digestWatch != nil {
-		digestWatch.stopLocked(ErrClosed)
 	}
 	if osdMapWatch != nil {
 		osdMapWatch.stopLocked(ErrClosed)
@@ -1009,17 +974,11 @@ func (c *Client) Close() error {
 	for _, watch := range mdsMapWatches {
 		watch.cancel()
 	}
-	if configWatch != nil {
-		configWatch.cancel()
+	for _, watch := range snapshotWatches {
+		watch.cancelWatch()
 	}
 	if logWatch != nil {
 		logWatch.cancel()
-	}
-	if digestWatch != nil {
-		digestWatch.cancel()
-	}
-	if serviceMapWatch != nil {
-		serviceMapWatch.cancel()
 	}
 	if osdMapWatch != nil {
 		osdMapWatch.cancel()

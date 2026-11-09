@@ -175,7 +175,7 @@ func TestConfigWatchLifetimeCancellationAndClientCloseJoin(t *testing.T) {
 				}
 			}
 			select {
-			case <-stream.done:
+			case <-stream.watch.done:
 			case <-ctx.Done():
 				t.Fatal("terminal did not join config worker", ctx.Err())
 			}

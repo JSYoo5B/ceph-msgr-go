@@ -214,7 +214,7 @@ func TestDigestWatchLifetimeAndClientClosePreserveAcceptedPair(t *testing.T) {
 				cause = ErrClosed
 				c.Close()
 			}
-			awaitCleanup(t, ctx, stream.done)
+			awaitCleanup(t, ctx, stream.watch.done)
 			stream.Close()
 			digestTestNext(t, ctx, stream, "accepted", "before terminal")
 			digestTestTerminal(t, ctx, stream, cause)

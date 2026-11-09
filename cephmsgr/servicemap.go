@@ -75,18 +75,22 @@ func publicServiceMap(m msgr.ServiceMap) ServiceMap {
 // skips or repeats. Close ends only this watch, without a remote unsubscribe.
 // Accepted data drains before the stable first terminal error.
 type ServiceMapStream struct {
-	client *Client
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	limit  uint64
+	watch monSnapshotWatch[ServiceMapStream]
 
-	// All fields below are protected by client.mu.
-	source   *session.Session
-	observed *session.Session
-	pending  *ServiceMap // nil means no unread map.
-	terminal error
-	changed  chan struct{}
+	// Protected by client.mu.
+	pending *ServiceMap // nil means no unread map.
+}
+
+func newServiceMapStream(c *Client, ctx context.Context, cancel context.CancelFunc, limit uint64) *ServiceMapStream {
+	s := &ServiceMapStream{}
+	s.watch = newMonSnapshotWatch(c, ctx, cancel, limit, &c.serviceMapWatch, s, s.registerSource)
+	return s
+}
+
+// registerSource subscribes from epoch 0 so an admitted MON session sends its
+// current full service map, then each later epoch.
+func (s *ServiceMapStream) registerSource(ctx context.Context, mon *session.Session, _ string) error {
+	return mon.Send(ctx, msgr.ServiceMapSubscribe(0, s.watch.client.options.Hostname))
 }
 
 // WatchServiceMap registers the client's single active service map watch.
@@ -110,7 +114,7 @@ func (c *Client) WatchServiceMap(ctx context.Context, options ServiceMapOptions)
 		return nil, errors.New("ceph: invalid service map buffer limit")
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
-	s := &ServiceMapStream{client: c, ctx: watchCtx, cancel: cancel, done: make(chan struct{}), limit: uint64(limit), changed: make(chan struct{})}
+	s := newServiceMapStream(c, watchCtx, cancel, uint64(limit))
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -125,49 +129,15 @@ func (c *Client) WatchServiceMap(ctx context.Context, options ServiceMapOptions)
 	c.serviceMapWatch = s
 	c.wg.Add(1)
 	c.mu.Unlock()
-	go s.run()
+	go s.watch.run()
 	return s, nil
-}
-
-func (s *ServiceMapStream) signalLocked() {
-	close(s.changed)
-	s.changed = make(chan struct{})
-}
-
-func (s *ServiceMapStream) stopLocked(err error) bool {
-	if s.terminal != nil {
-		return false
-	}
-	s.terminal, s.source, s.observed = err, nil, nil
-	if s.client.serviceMapWatch == s {
-		s.client.serviceMapWatch = nil
-	}
-	s.signalLocked()
-	return true
-}
-
-func (s *ServiceMapStream) stop(err error) {
-	s.client.mu.Lock()
-	s.stopLocked(err)
-	s.client.mu.Unlock()
-	s.cancel()
 }
 
 // Close releases the watch slot and joins its registration worker. The unread
 // map remains readable. ErrServiceMapStreamClosed becomes the terminal cause only
 // when no earlier cause was recorded.
 func (s *ServiceMapStream) Close() error {
-	s.client.mu.Lock()
-	source := s.observed
-	s.client.mu.Unlock()
-	if source != nil {
-		err := source.Err()
-		if fatalLogSessionError(err) {
-			s.failCurrent(source, err)
-		}
-	}
-	s.stop(ErrServiceMapStreamClosed)
-	<-s.done
+	s.watch.closeWatch(ErrServiceMapStreamClosed)
 	return nil
 }
 
@@ -175,137 +145,20 @@ func (s *ServiceMapStream) Close() error {
 // context drains accepted data before returning the stable terminal cause.
 // Cancellation affects only this call; an already canceled context consumes nothing.
 func (s *ServiceMapStream) Next(ctx context.Context) (ServiceMap, error) {
-	return nextStreamItem(ctx, s.client, s.ctx, func() (ServiceMap, bool, error, <-chan struct{}) {
+	return nextStreamItem(ctx, s.watch.client, s.watch.ctx, func() (ServiceMap, bool, error, <-chan struct{}) {
 		if s.pending != nil {
 			next := *s.pending
 			s.pending = nil
 			return next, true, nil, nil
 		}
-		return ServiceMap{}, false, s.terminal, s.changed
-	}, s.stop)
-}
-
-// Error inspection and cancellation may invoke custom code; neither runs
-// under the client lock. Record a registered source's fatal cause before a
-// replacement can make its delayed onClose callback stale.
-func (c *Client) stopServiceMapForFailedSession(source *session.Session, err error) {
-	if !fatalLogSessionError(err) {
-		return
-	}
-	c.mu.Lock()
-	watch := c.serviceMapWatch
-	if c.mon == source && watch != nil && watch.observed == source {
-		if !watch.stopLocked(err) {
-			watch = nil
-		}
-	} else {
-		watch = nil
-	}
-	c.mu.Unlock()
-	if watch != nil {
-		watch.cancel()
-	}
-}
-
-func (s *ServiceMapStream) failCurrent(source *session.Session, err error) bool {
-	c := s.client
-	c.mu.Lock()
-	current := s.terminal == nil && c.serviceMapWatch == s && c.mon == source && s.observed == source && !c.closed && c.authErr == nil
-	if current {
-		s.stopLocked(err)
-	}
-	c.mu.Unlock()
-	if current {
-		s.cancel()
-	}
-	return current
-}
-
-func (s *ServiceMapStream) run() {
-	defer s.client.wg.Done()
-	defer close(s.done)
-	for {
-		if err := s.ctx.Err(); err != nil {
-			s.stop(err)
-			return
-		}
-		c := s.client
-		c.mu.Lock()
-		terminal, closed, authErr := s.terminal, c.closed, c.authErr
-		mon, ready, changed := c.mon, c.monReady, c.changed
-		previous := s.observed
-		if mon != previous || !ready {
-			s.source = nil
-		}
-		c.mu.Unlock()
-		if terminal != nil {
-			return
-		}
-		if closed {
-			s.stop(ErrClosed)
-			return
-		}
-		if authErr != nil {
-			s.stop(authErr)
-			return
-		}
-		if previous != nil && previous == mon && fatalLogSessionError(previous.Err()) {
-			if s.failCurrent(previous, previous.Err()) {
-				return
-			}
-			continue
-		}
-		if mon != nil && ready && mon.Err() == nil {
-			c.mu.Lock()
-			register := s.terminal == nil && c.mon == mon && c.monReady && !c.closed && c.authErr == nil && s.source != mon
-			if register {
-				s.source, s.observed = mon, mon
-			}
-			c.mu.Unlock()
-			if register {
-				err := mon.Send(s.ctx, msgr.ServiceMapSubscribe(0, c.options.Hostname))
-				if err != nil {
-					if watchErr := s.ctx.Err(); watchErr != nil {
-						s.stop(watchErr)
-						return
-					}
-					if fatalLogSessionError(err) {
-						if s.failCurrent(mon, err) {
-							return
-						}
-						continue
-					}
-					c.wakeMonitor()
-				}
-			}
-		}
-		var monDone <-chan struct{}
-		if mon != nil {
-			monDone = mon.Done()
-		}
-		select {
-		case <-changed:
-		case <-monDone:
-			if (ready || previous == mon) && fatalLogSessionError(mon.Err()) {
-				if s.failCurrent(mon, mon.Err()) {
-					return
-				}
-			}
-			select {
-			case <-changed:
-			case <-s.ctx.Done():
-			case <-c.ctx.Done():
-			}
-		case <-s.ctx.Done():
-		case <-c.ctx.Done():
-		}
-	}
+		return ServiceMap{}, false, s.watch.terminal, s.watch.changed
+	}, s.watch.stop)
 }
 
 func (c *Client) handleServiceMap(source *session.Session, m msgr.MessageData) error {
 	c.mu.Lock()
 	s := c.serviceMapWatch
-	accept := s != nil && s.terminal == nil && s.source == source && c.mon == source && c.monReady && !c.closed && c.authErr == nil
+	accept := s != nil && s.watch.acceptsLocked(source)
 	c.mu.Unlock()
 	if !accept {
 		return nil
@@ -313,25 +166,25 @@ func (c *Client) handleServiceMap(source *session.Session, m msgr.MessageData) e
 	decoded, err := msgr.DecodeServiceMap(m, c.options.MaxFrameSize)
 	bytes := uint64(512) + uint64(len(decoded.Raw))
 	c.mu.Lock()
-	if c.serviceMapWatch != s || s.terminal != nil || s.source != source || c.mon != source || !c.monReady || c.closed || c.authErr != nil {
+	if !s.watch.acceptsLocked(source) {
 		c.mu.Unlock()
 		return nil
 	}
 	if err != nil {
-		s.stopLocked(err)
+		s.watch.stopLocked(err)
 		c.mu.Unlock()
-		s.cancel()
+		s.watch.cancel()
 		return err
 	}
-	if bytes > s.limit {
-		s.stopLocked(ErrServiceMapOverflow)
+	if bytes > s.watch.limit {
+		s.watch.stopLocked(ErrServiceMapOverflow)
 		c.mu.Unlock()
-		s.cancel()
+		s.watch.cancel()
 		return nil
 	}
 	published := publicServiceMap(decoded)
 	s.pending = &published
-	s.signalLocked()
+	s.watch.signalLocked()
 	c.mu.Unlock()
 	return nil
 }

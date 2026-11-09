@@ -50,7 +50,7 @@ func newStreamCloseFixture(t *testing.T) *streamCloseFixture {
 	var source *session.Session
 	source = session.New(&session.Transport{Conn: held}, session.Config{}, nil, func(err error) {
 		c.stopLogForFailedSession(source, err)
-		c.stopConfigForFailedSession(source, err)
+		c.stopMonSnapshotsForFailedSession(source, err)
 	})
 	c.mon = source
 	// Reproduce attach's cleanup ownership without a reader/writer: any
@@ -71,11 +71,12 @@ func newStreamCloseFixture(t *testing.T) *streamCloseFixture {
 	logGate := &logTestLoopGate{Context: logBase, entered: make(chan struct{}), release: make(chan struct{})}
 	configGate.armed.Store(true)
 	logGate.armed.Store(true)
-	config := &ConfigStream{client: c, ctx: configGate, cancel: func() { c.Snapshot(); configCancel() }, done: make(chan struct{}), source: source, observed: source, pending: map[string]string{"accepted": "before source failure"}, changed: make(chan struct{}), limit: 1024}
+	config := newConfigStream(c, configGate, func() { c.Snapshot(); configCancel() }, 1024)
+	config.watch.source, config.watch.observed, config.pending = source, source, map[string]string{"accepted": "before source failure"}
 	logs := &LogStream{client: c, ctx: logGate, cancel: func() { c.Snapshot(); logCancel() }, done: make(chan struct{}), source: source, observed: source, queue: []queuedLogBatch{{batch: LogBatch{Version: 7}, bytes: 512}}, bufferedBytes: 512, changed: make(chan struct{}), limit: 1024}
 	c.configWatch, c.logWatch = config, logs
 	c.wg.Add(2)
-	go config.run()
+	go config.watch.run()
 	go logs.run()
 	awaitCleanup(t, ctx, configGate.entered)
 	awaitCleanup(t, ctx, logGate.entered)
@@ -106,7 +107,7 @@ func (f *streamCloseFixture) drainCauses(t *testing.T, configCause, logCause err
 		}
 	}
 	select {
-	case <-f.config.done:
+	case <-f.config.watch.done:
 	default:
 		t.Error("config worker was not joined")
 	}
@@ -125,7 +126,7 @@ func (f *streamCloseFixture) replaceSource(t *testing.T, updateObserved bool) {
 	f.client.mu.Lock()
 	f.client.mon = replacement
 	if updateObserved {
-		f.config.source, f.config.observed = replacement, replacement
+		f.config.watch.source, f.config.watch.observed = replacement, replacement
 		f.logs.source, f.logs.observed = replacement, replacement
 	}
 	f.client.sessions[replacement] = struct{}{}
@@ -173,7 +174,7 @@ func TestClientClosePreservesRegisteredStreamSourceCause(t *testing.T) {
 			// otherwise its fatal-source guard can hide the Close race.
 			f.configGate.unblock()
 			f.logGate.unblock()
-			awaitCleanup(t, f.ctx, f.config.done)
+			awaitCleanup(t, f.ctx, f.config.watch.done)
 			awaitCleanup(t, f.ctx, f.logs.done)
 			f.finish()
 			for _, result := range []<-chan error{first, second} {
@@ -205,7 +206,7 @@ func TestClientCloseIgnoresAlreadyReplacedStreamSourceCause(t *testing.T) {
 	awaitCleanup(t, f.ctx, f.client.ctx.Done())
 	f.configGate.unblock()
 	f.logGate.unblock()
-	awaitCleanup(t, f.ctx, f.config.done)
+	awaitCleanup(t, f.ctx, f.config.watch.done)
 	awaitCleanup(t, f.ctx, f.logs.done)
 	f.finish()
 	select {
