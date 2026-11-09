@@ -56,6 +56,9 @@ type fixtureCluster struct {
 	setChunkSelected bool
 	// mgrServiceConfig owns only the selected active daemon runtime overrides.
 	mgrServiceConfig *mgrServiceConfigScope
+	// rbdMirror owns the RBD mirror checkpoint's destination cluster, mirror
+	// daemon and directed source OSD fault.
+	rbdMirror *rbdMirrorScope
 }
 
 func (c *fixtureCluster) NetworkName() string { return clusterNetworkName(c.cluster) }
@@ -154,6 +157,10 @@ func (c *fixtureCluster) Terminate(ctx context.Context, opts ...testcontainers.T
 	}
 	if c.xattrLimits != nil {
 		errs = append(errs, c.xattrLimits.Restore(ctx))
+	}
+	if c.rbdMirror != nil && !c.rbdMirror.finished {
+		// The mirror and destination go before the source cluster they read.
+		errs = append(errs, c.rbdMirror.finish(ctx), c.rbdMirror.save())
 	}
 	if c.Container != nil {
 		errs = append(errs, c.Container.Terminate(ctx, opts...))
