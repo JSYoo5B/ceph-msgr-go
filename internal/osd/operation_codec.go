@@ -2,11 +2,12 @@ package osd
 
 import "github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 
-// The ceph_osd_op vector and its per-operation input data have one layout in
-// every admitted MOSDOp version (v6, v8, v9). These helpers own that shared
-// layout only. Envelope fields, identity, negotiated version/feature selection
-// and admission stay at the version-specific entry points, which call these
-// helpers at the position their own envelope defines.
+// The ceph_osd_op vector, its per-operation input data and the per-operation
+// reply metadata have one layout in every admitted MOSDOp version (v6, v8, v9)
+// and MOSDOpReply version (v6, v8). These helpers own that shared layout only.
+// Envelope fields, identity, negotiated version/feature selection, admission
+// and redirect rules stay at the version-specific entry points, which call
+// these helpers at the position their own envelope defines.
 
 // encodeOperations writes the u16 operation count followed by each
 // ceph_osd_op: code, flags, the opcode-selected union and the input payload
@@ -141,4 +142,63 @@ func operationReplyBudget(limit uint32, budget uint64, ops []Operation) (uint64,
 		}
 	}
 	return budget, nil
+}
+
+// decodeOperations reads the reply's u32 operation count and each
+// ceph_osd_op header and union. An empty vector or an unsupported opcode
+// fails the decoder; the returned slice keeps every field decoded so far.
+func decodeOperations(d *wire.Decoder) []OperationResult {
+	n := d.Count(opWireSize+4, MaxOperations)
+	if n == 0 && d.Err() == nil {
+		d.Fail(ErrOperation)
+	}
+	ops := make([]OperationResult, n)
+	for i := range ops {
+		op := &ops[i]
+		op.Code = d.U16()
+		op.Flags = d.U32()
+		if IsWatchOperation(op.Code) {
+			op.Watch = DecodeWatchUnion(d, op.Code)
+		} else if IsXattrOperation(op.Code) {
+			op.Xattr = decodeXattrUnion(d, op.Code)
+		} else if op.Code == Call {
+			op.Class = decodeClassUnion(d)
+		} else if op.Code == SetAllocHint {
+			op.AllocHint = decodeAllocHintUnion(d)
+		} else if op.Code == Checksum {
+			op.Offset, op.Length, op.Checksum = decodeChecksumUnion(d)
+		} else if usesCopyFromUnion(op.Code) {
+			op.CopyFrom = decodeCopyFromUnion(d)
+		} else if op.Code == WriteSame {
+			op.Offset, op.Length, op.WriteSamePatternLength = decodeWriteSameUnion(d)
+		} else if op.Code == Rollback {
+			op.Snap = decodeRollbackUnion(d)
+		} else {
+			op.Offset, op.Length = d.U64(), d.U64()
+			op.TruncateSize, op.TruncateSequence = d.U64(), d.U32()
+		}
+		op.PayloadLength = d.U32()
+		if !SupportedOperation(op.Code) {
+			d.Fail(ErrOperation)
+		}
+	}
+	return ops
+}
+
+// decodeOperationResults reads one signed return code per decoded operation.
+func decodeOperationResults(d *wire.Decoder, ops []OperationResult) {
+	for i := range ops {
+		ops[i].Result = int32(d.U32())
+	}
+}
+
+// splitOperationData assigns the reply data segment to operations by their
+// declared payload lengths and rejects short or unassigned trailing data.
+// The caller wraps the error with its version-specific context.
+func splitOperationData(raw []byte, limit uint32, ops []OperationResult) error {
+	data := wire.NewDecoderLimit(raw, limit)
+	for i := range ops {
+		ops[i].Data = data.Raw(ops[i].PayloadLength)
+	}
+	return data.Done()
 }
