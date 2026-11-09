@@ -75,6 +75,7 @@ mds-cephfs-writeback.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-pro
 mds-cephfs-writeback.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfswritebackfence
 rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-37bcdb
 rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-suite-37bcdb
+rbd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdmirrorpathrecovery
 mgr-service.aes.ip4.crc.host.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration
 mgr-service.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration
 mds-cephfs-multi-reconnect.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmultireconnect
