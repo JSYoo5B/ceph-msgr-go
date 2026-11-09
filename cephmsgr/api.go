@@ -6,9 +6,10 @@
 // current verification status.
 //
 // Dial returns a Client that lives until Close. Every other context bounds
-// the call, or for a Watch method the watch, that receives it. A call that fails after its command or request
-// started transmission returns an OutcomeUnknownError: the daemon may have
-// executed it, and the client never sends it again on its own.
+// the call, or for a Watch method the watch, that receives it. A call that
+// fails after its command or request started transmission returns an
+// OutcomeUnknownError: the daemon may have executed it, and the client never
+// sends it again on its own.
 package cephmsgr
 
 import (
@@ -86,6 +87,9 @@ type AuthenticationError = cephx.AuthenticationError
 // Key is an opaque CephX credential. Formatting redacts its key material.
 type Key struct{ value cephx.Key }
 
+// ParseKey decodes one base64 CephX secret, the value after "key =" in a
+// keyring, and accepts only AES and Tentacle aes256k keys. The caller selects
+// the identity and loads any keyring or configuration text.
 func ParseKey(base64Key string) (Key, error) {
 	k, err := cephx.ParseKey(base64Key)
 	return Key{value: k}, err
@@ -121,8 +125,11 @@ type Options struct {
 	// Monitors are host:port endpoints, optionally prefixed with v2: and
 	// suffixed with /nonce. IPv6 addresses must be bracketed; %zone is unsupported.
 	Monitors []string
+	// Identity is the CephX client entity name, client.<id>. Every MON, MGR,
+	// OSD and MDS session of the client authenticates as this identity.
 	Identity string
-	Key      Key
+	// Key is the Identity's secret from ParseKey.
+	Key Key
 	// ConnectionMode defaults to SecureMode. Only this mode is offered to
 	// every peer; an unsupported or different selection fails without fallback.
 	ConnectionMode ConnectionMode
@@ -260,10 +267,10 @@ const (
 
 // MonCommand sends a raw command to the currently admitted MON. ctx governs
 // the full local wait, including the MaxInFlight slot. A command not yet
-// admitted when its MON session is retired is sent on the recovered session;
-// once transmission starts, cancellation, session loss or Close returns an OutcomeUnknownError
-// and the command is never sent again. A negative server code returns
-// *CommandError with the preserved Result.
+// admitted when its MON session is retired is sent on the recovered session.
+// Once transmission starts, cancellation, session loss or Close returns an
+// OutcomeUnknownError and the command is never sent again. A negative server
+// code returns *CommandError with the preserved Result.
 func (c *Client) MonCommand(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, monitorCommand, "")
 }

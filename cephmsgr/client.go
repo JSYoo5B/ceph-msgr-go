@@ -30,10 +30,9 @@ import (
 // are safe for concurrent use.
 //
 // A method's context bounds that call, or for a Watch method that watch,
-// never the client. Recovery never
-// re-executes a command or request whose transmission started; see
-// OutcomeUnknownError. The client lives until Close, which the caller must
-// call to release its connections and workers.
+// never the client. Recovery never re-executes a command or request whose
+// transmission started; see OutcomeUnknownError. The client lives until
+// Close, which the caller must call to release its connections and workers.
 type Client struct {
 	options       Options
 	ctx           context.Context
