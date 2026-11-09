@@ -65,6 +65,13 @@ data segment. All inputs are copied before submission. The caller must not
 mutate slices until Request returns. Returned outputs and raw bytes are owned
 by the reply. Aggregate front/data and possible read/stat output are bounded by
 MaxFrameSize; vectors have 1–64 operations. Extents cannot overflow uint64.
+This vector layout, the per-operation input data order, the per-operation
+reply output budget and the reply's per-operation metadata, return codes and
+data split are identical in request v6/v8/v9 and reply v6/v8, so one internal
+codec (`operation_codec.go`) owns them. Envelope fields, identity, the
+negotiated version/feature checks and the reply redirect rules (v6 structure,
+v8 presence flag plus conditional structure) remain in each version's entry
+point.
 
 | Public code | Wire code | Union/input contract | Output |
 | --- | --- | --- | --- |
