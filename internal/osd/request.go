@@ -94,39 +94,8 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	if err != nil {
 		return msgr.MessageData{}, err
 	}
-	for _, op := range r.Operations {
-		var outputBytes uint64
-		switch op.Code {
-		case Read:
-			outputBytes = op.Length
-		case Stat:
-			outputBytes = 16
-		case GetXattr, GetXattrs:
-			outputBytes = uint64(op.Xattr.MaxOutputBytes)
-		case OmapGetKeys, OmapGetValues, OmapGetHeader, OmapGetValuesByKeys:
-			outputBytes = uint64(op.Omap.MaxOutputBytes)
-		case Call:
-			outputBytes = uint64(op.Class.MaxOutputBytes)
-		case Notify:
-			outputBytes = 8
-		case Isdirty:
-			// ISDIRTY returns one encoded bool (dirty state) as output.
-			outputBytes = 1
-		case SparseRead:
-			outputBytes = uint64(op.SparseRead.MaxOutputBytes)
-		case MapExt:
-			outputBytes = uint64(op.MapExt.MaxOutputBytes)
-		case Checksum:
-			outputBytes = checksumReplyBytes(op)
-		case ListWatchers:
-			outputBytes = uint64(op.ListWatchers.MaxOutputBytes)
-		case ListSnaps:
-			outputBytes = uint64(op.ListSnaps.MaxOutputBytes)
-		}
-		replyBudget, err = boundedBytes(limit, replyBudget, outputBytes)
-		if err != nil {
-			return msgr.MessageData{}, err
-		}
+	if _, err := operationReplyBudget(limit, replyBudget, r.Operations); err != nil {
+		return msgr.MessageData{}, err
 	}
 	e := wire.Encoder{}
 	e.U32(r.ClientInc)
@@ -139,57 +108,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	encodeLocator(&e, r.Locator)
 	encodePG(&e, PG{Pool: uint64(r.Locator.Pool), Seed: r.Hash})
 	e.String(r.Object)
-	e.U16(uint16(len(r.Operations)))
-	for _, op := range r.Operations {
-		e.U16(op.Code)
-		e.U32(op.Flags)
-		payloadBytes := uint64(len(op.Data))
-		if op.Code == Checksum {
-			payloadBytes = checksumWidth(op.Checksum.Type)
-		}
-		if IsWatchOperation(op.Code) {
-			payloadBytes = WatchDataBytes(op)
-		}
-		if IsOmapOperation(op.Code) {
-			payloadBytes, _ = omapInputBytes(op, limit)
-		}
-		if op.Code == SetChunk {
-			// The union stays zero; the indata carries the chunk.
-			payloadBytes = setChunkDataBytes(op.SetChunk)
-		}
-		if IsWatchOperation(op.Code) {
-			EncodeWatchUnion(&e, op)
-		} else if IsXattrOperation(op.Code) {
-			encodeXattrUnion(&e, op)
-			payloadBytes += uint64(len(op.Xattr.Name))
-		} else if op.Code == Call {
-			encodeClassUnion(&e, op)
-			payloadBytes += uint64(len(op.Class.Class)) + uint64(len(op.Class.Method))
-		} else if op.Code == SetAllocHint {
-			encodeAllocHintUnion(&e, op.AllocHint)
-		} else if op.Code == Checksum {
-			encodeChecksumUnion(&e, op)
-		} else if op.Code == WriteSame {
-			encodeWriteSameUnion(&e, op)
-		} else if usesCopyFromUnion(op.Code) {
-			encodeCopyFromUnion(&e, op)
-			payloadBytes += copyFromDataBytes(op)
-		} else if op.Code == Rollback {
-			encodeRollbackUnion(&e, op)
-		} else {
-			e.U64(op.Offset)
-			if IsOmapOperation(op.Code) {
-				e.U64(payloadBytes)
-			} else if op.Code == AssertVersion {
-				e.U64(op.Version)
-			} else {
-				e.U64(op.Length)
-			}
-			e.U64(op.TruncateSize)
-			e.U32(op.TruncateSequence)
-		}
-		e.U32(uint32(payloadBytes))
-	}
+	encodeOperations(&e, r.Operations, limit)
 	e.U64(snap)
 	e.U64(r.SnapSeq)
 	e.U32(uint32(len(r.Snaps)))
@@ -204,35 +123,7 @@ func EncodeRequest(r Request, features uint64, limit uint32) (msgr.MessageData, 
 	identity.U64(0) // derive TID from header, set by Session.Call.
 	identity.U32(0) // server restores client_inc for this default reqid.
 	e.Struct(2, 2, identity.Data)
-	data := make([]byte, 0, int(dataBytes))
-	for _, op := range r.Operations {
-		if IsWatchOperation(op.Code) {
-			data = AppendWatchData(data, op)
-			continue
-		}
-		if op.Code == Checksum {
-			data = append(data, encodeChecksumData(op.Checksum)...)
-			continue
-		}
-		if IsOmapOperation(op.Code) {
-			data = appendOmapInput(data, op)
-			continue
-		}
-		if op.Code == SetChunk {
-			data = appendSetChunkData(data, op.SetChunk)
-			continue
-		}
-		if IsXattrOperation(op.Code) {
-			data = append(data, op.Xattr.Name...)
-		}
-		if op.Code == Call {
-			data = append(append(data, op.Class.Class...), op.Class.Method...)
-		}
-		if usesCopyFromUnion(op.Code) {
-			data = appendCopyFromData(data, op)
-		}
-		data = append(data, op.Data...)
-	}
+	data := appendOperationData(make([]byte, 0, int(dataBytes)), r.Operations)
 	return msgr.MessageData{Data: data, Type: RequestMessage, Version: 6, CompatVersion: 3, Priority: 127, Front: e.Data}, nil
 }
 
