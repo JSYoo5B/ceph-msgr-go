@@ -358,6 +358,11 @@ const (
 	freshCephFSHandshake
 )
 
+// handshake is the single owner of conn during setup. It alone installs and
+// removes the cancellation hook, sets and clears the socket deadline, closes
+// the socket on failure and labels the failing stage. The phases below see only
+// an io.ReadWriter and return no transport: a Transport is constructed once,
+// here, after the final phase has succeeded and setup ownership has ended.
 func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, mode ConnectionMode, limit uint32, timeout time.Duration, policy handshakePolicy, resume *ResumeState, nonce uint32) (_ *Transport, err error) {
 	if target.Endpoint.IsValid() {
 		// Retain the target's wire family, including mapped IPv6. IPv6 scope
@@ -402,45 +407,134 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	if err = conn.SetDeadline(deadline); err != nil {
 		return nil, err
 	}
+	channel, err := authenticateChannel(conn, &stage, target, role, auth, mode, limit)
+	if err != nil {
+		return nil, err
+	}
+	var admitted admission
+	if resume != nil {
+		admitted, err = channel.resume(&stage, *resume)
+	} else {
+		admitted, err = channel.identify(&stage, target, role, expectedID, auth, policy, nonce)
+	}
+	if err != nil {
+		return nil, err
+	}
+	// Publication: end cancellation ownership, then clear the setup deadline.
+	// Either failure still closes conn through the deferred cleanup above.
+	stopped = stop()
+	if !stopped || ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err = conn.SetDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	return &Transport{
+		Conn: conn, Reader: channel.r, Writer: channel.w, GlobalID: channel.globalID,
+		Features: admitted.features, Resume: admitted.resume, PeerSequence: admitted.peerSequence,
+		Compression: channel.compression,
+	}, nil
+}
+
+// authenticatedChannel is the success boundary of the authenticated-channel
+// phase: CephX completed with AUTH_DONE in the requested mode, both transcript
+// signatures verified, the selected frame mode installed and compression
+// negotiated. It holds no socket ownership; its owner is handshake.
+type authenticatedChannel struct {
+	r *msgr.Reader
+	w *msgr.Writer
+	// globalID is the CephX identity from AUTH_DONE. localAddr is this client's
+	// address as reported by the peer's HELLO.
+	globalID    uint64
+	localAddr   msgr.Address
+	compression msgr.CompressionAlgorithm
+}
+
+func (c *authenticatedChannel) write(tag msgr.Tag, p []byte) error {
+	return c.w.Write(msgr.Frame{Tag: tag, Segments: [][]byte{p}})
+}
+
+// admission is what identification or resume adds to an authenticated
+// channel. It is not a transport; only handshake publishes one.
+type admission struct {
+	features     uint64
+	resume       ResumeState
+	peerSequence uint64
+}
+
+// authenticateChannel runs banner, HELLO, the CephX exchange, transcript
+// authentication, frame-mode transition and compression negotiation. Every
+// frame from the banner through AUTH_DONE is recorded, within 1 MiB per
+// direction, for the AUTH_SIGNATURE exchange. On failure the channel is
+// discarded and its owner closes the socket.
+func authenticateChannel(conn io.ReadWriter, stage *string, target msgr.Address, role uint8, auth Authenticator, mode ConnectionMode, limit uint32) (*authenticatedChannel, error) {
 	rx := &recordingReader{Reader: conn, active: true}
 	tx := &recordingWriter{Writer: conn, active: true}
-	r, w := msgr.NewReader(rx, limit), msgr.NewWriter(tx, limit)
+	c := &authenticatedChannel{r: msgr.NewReader(rx, limit), w: msgr.NewWriter(tx, limit)}
 	local := msgr.Banner{Supported: msgr.Revision1 | msgr.Compression, Required: msgr.Revision1}
-	if err = msgr.WriteFull(tx, local.Encode()); err != nil {
+	if err := msgr.WriteFull(tx, local.Encode()); err != nil {
 		return nil, err
 	}
 	peer, err := msgr.ReadBanner(rx, local)
 	if err != nil {
 		return nil, err
 	}
-	write := func(tag msgr.Tag, p []byte) error { return w.Write(msgr.Frame{Tag: tag, Segments: [][]byte{p}}) }
-	stage = "hello"
-	hello := wire.Encoder{}
-	hello.U8(8)
-	target.Encode(&hello)
-	if err = write(msgr.Hello, hello.Data); err != nil {
+	*stage = "hello"
+	if c.localAddr, err = c.exchangeHello(target, role); err != nil {
 		return nil, err
 	}
-	f, err := r.Read()
+	*stage = "authentication"
+	sessionKey, secret, err := c.exchangeAuth(tx, auth, mode)
 	if err != nil {
 		return nil, err
 	}
+	*stage = "signature"
+	if err := c.verifyTranscripts(rx, tx, sessionKey, secret, mode); err != nil {
+		return nil, err
+	}
+	if peer.Supported&msgr.Compression != 0 {
+		*stage = "compression negotiation"
+		if c.compression, err = c.negotiateCompression(mode); err != nil {
+			return nil, err
+		}
+	}
+	return c, nil
+}
+
+// exchangeHello returns this client's address as reported by the peer.
+func (c *authenticatedChannel) exchangeHello(target msgr.Address, role uint8) (msgr.Address, error) {
+	hello := wire.Encoder{}
+	hello.U8(8)
+	target.Encode(&hello)
+	if err := c.write(msgr.Hello, hello.Data); err != nil {
+		return msgr.Address{}, err
+	}
+	f, err := c.r.Read()
+	if err != nil {
+		return msgr.Address{}, err
+	}
 	if f.Tag != msgr.Hello || len(f.Segments) != 1 {
-		return nil, msgr.ErrFrame
+		return msgr.Address{}, msgr.ErrFrame
 	}
 	hd := wire.NewDecoder(f.Segments[0])
 	peerRole := hd.U8()
 	myAddr := msgr.DecodeAddress(hd)
 	if err = hd.Done(); err != nil {
-		return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+		return msgr.Address{}, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 	}
 	if peerRole != role {
-		return nil, errors.New("ceph messenger: unexpected daemon role")
+		return msgr.Address{}, errors.New("ceph messenger: unexpected daemon role")
 	}
-	stage = "authentication"
+	return myAddr, nil
+}
+
+// exchangeAuth offers exactly one CephX method and connection mode, follows at
+// most eight server replies and completes only on AUTH_DONE selecting that
+// mode. Secure mode additionally requires a 40-byte connection secret.
+func (c *authenticatedChannel) exchangeAuth(tx *recordingWriter, auth Authenticator, mode ConnectionMode) (cephx.Key, []byte, error) {
 	payload, err := auth.Initial()
 	if err != nil {
-		return nil, err
+		return cephx.Key{}, nil, err
 	}
 	authReq := wire.Encoder{}
 	authReq.U32(2)
@@ -449,43 +543,38 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	authReq.Bytes(payload)
 	writeAuth := func(tag msgr.Tag, payload []byte) error {
 		before := tx.data.Len()
-		err := write(tag, payload)
+		err := c.write(tag, payload)
 		if observer, ok := auth.(authWriteObserver); ok {
 			observer.AuthWriteObserved(tag, tx.data.Len()-before, err == nil)
 		}
 		return err
 	}
 	if err = writeAuth(msgr.AuthRequest, authReq.Data); err != nil {
-		return nil, err
+		return cephx.Key{}, nil, err
 	}
-	var sessionKey cephx.Key
-	var secret []byte
-	var globalID uint64
-	var negotiatedComp msgr.CompressionAlgorithm
-	authenticated := false
 	for round := 0; round < 8; round++ {
-		f, err = r.Read()
+		f, err := c.r.Read()
 		if err != nil {
-			return nil, err
+			return cephx.Key{}, nil, err
 		}
 		if len(f.Segments) != 1 {
-			return nil, msgr.ErrFrame
+			return cephx.Key{}, nil, msgr.ErrFrame
 		}
 		d := wire.NewDecoder(f.Segments[0])
 		switch f.Tag {
 		case msgr.AuthReplyMore:
 			payload = d.Bytes()
 			if err = d.Done(); err != nil {
-				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+				return cephx.Key{}, nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 			}
 			reply, err := auth.More(payload)
 			if err != nil {
-				return nil, authPayloadError(err)
+				return cephx.Key{}, nil, authPayloadError(err)
 			}
 			e := wire.Encoder{}
 			e.Bytes(reply)
 			if err = writeAuth(msgr.AuthRequestMore, e.Data); err != nil {
-				return nil, err
+				return cephx.Key{}, nil, err
 			}
 		case msgr.AuthBadMethod:
 			method, code := d.U32(), int32(d.U32())
@@ -496,129 +585,136 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 				}
 			}
 			if err := d.Done(); err != nil {
-				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+				return cephx.Key{}, nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 			}
-			return nil, &cephx.AuthenticationError{Method: method, Code: code}
+			return cephx.Key{}, nil, &cephx.AuthenticationError{Method: method, Code: code}
 		case msgr.AuthDone:
-			globalID = d.U64()
+			globalID := d.U64()
 			selectedMode := d.U32()
 			payload = d.Bytes()
 			if err = d.Done(); err != nil {
-				return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+				return cephx.Key{}, nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 			}
 			if selectedMode != uint32(mode) {
-				return nil, fmt.Errorf("ceph messenger: server selected connection mode %d, requested %d", selectedMode, mode)
+				return cephx.Key{}, nil, fmt.Errorf("ceph messenger: server selected connection mode %d, requested %d", selectedMode, mode)
 			}
-			sessionKey, secret, err = auth.Done(globalID, payload, mode == SecureMode)
+			sessionKey, secret, err := auth.Done(globalID, payload, mode == SecureMode)
 			if err != nil {
-				return nil, authPayloadError(err)
+				return cephx.Key{}, nil, authPayloadError(err)
 			}
-			authenticated = true
+			if mode == SecureMode && len(secret) < 40 {
+				return cephx.Key{}, nil, errors.New("ceph messenger: incomplete authentication")
+			}
+			c.globalID = globalID
+			return sessionKey, secret, nil
 		default:
-			return nil, fmt.Errorf("%w: tag %d during authentication", msgr.ErrFrame, f.Tag)
-		}
-		if f.Tag == msgr.AuthDone {
-			break
+			return cephx.Key{}, nil, fmt.Errorf("%w: tag %d during authentication", msgr.ErrFrame, f.Tag)
 		}
 	}
-	if !authenticated || (mode == SecureMode && len(secret) < 40) {
-		return nil, errors.New("ceph messenger: incomplete authentication")
-	}
-	stage = "signature"
+	return cephx.Key{}, nil, errors.New("ceph messenger: incomplete authentication")
+}
+
+// verifyTranscripts installs the selected frame mode, then exchanges and
+// checks AUTH_SIGNATURE over the exact recorded transcripts. CRC keeps the
+// plaintext frame codec, but still authenticates both transcripts using the
+// CephX session key before admitting a session.
+func (c *authenticatedChannel) verifyTranscripts(rx *recordingReader, tx *recordingWriter, sessionKey cephx.Key, secret []byte, mode ConnectionMode) error {
 	if mode == SecureMode {
-		if err = r.EnableSecure(secret[:16], secret[16:28]); err != nil {
-			return nil, err
+		if err := c.r.EnableSecure(secret[:16], secret[16:28]); err != nil {
+			return err
 		}
-		if err = w.EnableSecure(secret[:16], secret[28:40]); err != nil {
-			return nil, err
+		if err := c.w.EnableSecure(secret[:16], secret[28:40]); err != nil {
+			return err
 		}
 	}
-	// CRC keeps the plaintext frame codec, but still authenticates both
-	// transcripts using the CephX session key before admitting a session.
 	sig := sessionKey.Signature(rx.data.Bytes())
 	expectedSig := sessionKey.Signature(tx.data.Bytes())
 	rx.active, tx.active = false, false
-	if err = write(msgr.AuthSignature, sig); err != nil {
-		return nil, err
+	if err := c.write(msgr.AuthSignature, sig); err != nil {
+		return err
 	}
-	f, err = r.Read()
+	f, err := c.r.Read()
 	if err != nil {
-		return nil, err
+		return err
 	}
 	if f.Tag != msgr.AuthSignature || len(f.Segments) != 1 || !hmac.Equal(expectedSig, f.Segments[0]) {
-		return nil, msgr.ErrAuthentication
+		return msgr.ErrAuthentication
 	}
 	rx.data.Reset()
 	tx.data.Reset()
-	if peer.Supported&msgr.Compression != 0 {
-		stage = "compression negotiation"
-		// Compression is offered only on CRC-mode connections for now; the
-		// secure frame path is not yet wired for it. CompressionRequest carries
-		// is_compress (1 byte) then a u32 count and u32 method ids.
-		offer := mode == CRCMode && len(msgr.SupportedCompressionMethods) > 0
-		e := wire.Encoder{}
-		if offer {
-			e.U8(1)
-			e.U32(uint32(len(msgr.SupportedCompressionMethods)))
-			for _, method := range msgr.SupportedCompressionMethods {
-				e.U32(uint32(method))
-			}
-		} else {
-			e.U8(0)
-			e.U32(0)
+	return nil
+}
+
+// negotiateCompression offers compression only on CRC-mode connections for
+// now; the secure frame path is not yet wired for it. CompressionRequest
+// carries is_compress (1 byte) then a u32 count and u32 method ids.
+func (c *authenticatedChannel) negotiateCompression(mode ConnectionMode) (msgr.CompressionAlgorithm, error) {
+	offer := mode == CRCMode && len(msgr.SupportedCompressionMethods) > 0
+	e := wire.Encoder{}
+	if offer {
+		e.U8(1)
+		e.U32(uint32(len(msgr.SupportedCompressionMethods)))
+		for _, method := range msgr.SupportedCompressionMethods {
+			e.U32(uint32(method))
 		}
-		if err = write(msgr.CompressionRequest, e.Data); err != nil {
-			return nil, err
-		}
-		f, err = r.Read()
-		if err != nil {
-			return nil, err
-		}
-		if f.Tag != msgr.CompressionDone || len(f.Segments) != 1 {
-			return nil, msgr.ErrFrame
-		}
-		d := wire.NewDecoder(f.Segments[0])
-		enabled := d.Bool()
-		method := msgr.CompressionAlgorithm(d.U32())
-		if err = d.Done(); err != nil {
-			return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
-		}
-		if enabled {
-			if !offer || !msgr.CompressionSupported(method) {
-				return nil, fmt.Errorf("ceph messenger: server selected unsupported compression method %d", method)
-			}
-			if err = r.EnableCompression(method); err != nil {
-				return nil, err
-			}
-			if err = w.EnableCompression(method, 0); err != nil {
-				return nil, err
-			}
-			negotiatedComp = method
-		}
+	} else {
+		e.U8(0)
+		e.U32(0)
 	}
-	if resume != nil {
-		stage = "session reconnect"
-		if globalID != resume.GlobalID {
-			return nil, fmt.Errorf("%w: resumed MDS authenticated a different client identity", msgr.ErrAuthentication)
-		}
-		state, peerSequence, err := reconnect(r, write, *resume)
-		if err != nil {
-			return nil, err
-		}
-		stopped = stop()
-		if !stopped || ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if err = conn.SetDeadline(time.Time{}); err != nil {
-			return nil, err
-		}
-		return &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID, Features: resume.Features, Resume: state, PeerSequence: peerSequence, Compression: negotiatedComp}, nil
+	if err := c.write(msgr.CompressionRequest, e.Data); err != nil {
+		return msgr.CompAlgNone, err
 	}
+	f, err := c.r.Read()
+	if err != nil {
+		return msgr.CompAlgNone, err
+	}
+	if f.Tag != msgr.CompressionDone || len(f.Segments) != 1 {
+		return msgr.CompAlgNone, msgr.ErrFrame
+	}
+	d := wire.NewDecoder(f.Segments[0])
+	enabled := d.Bool()
+	method := msgr.CompressionAlgorithm(d.U32())
+	if err = d.Done(); err != nil {
+		return msgr.CompAlgNone, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+	}
+	if !enabled {
+		return msgr.CompAlgNone, nil
+	}
+	if !offer || !msgr.CompressionSupported(method) {
+		return msgr.CompAlgNone, fmt.Errorf("ceph messenger: server selected unsupported compression method %d", method)
+	}
+	if err = c.r.EnableCompression(method); err != nil {
+		return msgr.CompAlgNone, err
+	}
+	if err = c.w.EnableCompression(method, 0); err != nil {
+		return msgr.CompAlgNone, err
+	}
+	return method, nil
+}
+
+// resume presents the original stateful identity with SESSION_RECONNECT. The
+// authenticated CephX identity must be the original session's.
+func (c *authenticatedChannel) resume(stage *string, state ResumeState) (admission, error) {
+	*stage = "session reconnect"
+	if c.globalID != state.GlobalID {
+		return admission{}, fmt.Errorf("%w: resumed MDS authenticated a different client identity", msgr.ErrAuthentication)
+	}
+	resumed, peerSequence, err := reconnect(c.r, c.write, state)
+	if err != nil {
+		return admission{}, err
+	}
+	return admission{features: state.Features, resume: resumed, peerSequence: peerSequence}, nil
+}
+
+// identify performs fresh ClientIdent/ServerIdent identification with the
+// role-specific feature policy and session flags.
+func (c *authenticatedChannel) identify(stage *string, target msgr.Address, role uint8, expectedID uint64, auth Authenticator, policy handshakePolicy, nonce uint32) (admission, error) {
 	var random [8]byte
-	stage = "session identification"
-	if _, err = rand.Read(random[:]); err != nil {
-		return nil, err
+	*stage = "session identification"
+	if _, err := rand.Read(random[:]); err != nil {
+		return admission{}, err
 	}
+	myAddr := c.localAddr
 	myAddr.Type, myAddr.Nonce = 2, binary.LittleEndian.Uint32(random[:4])
 	if nonce != 0 {
 		// A caller-fixed client instance nonce (shared by a CephFS client's
@@ -631,7 +727,7 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	ident := wire.Encoder{}
 	msgr.EncodeAddresses(&ident, []msgr.Address{myAddr})
 	target.Encode(&ident)
-	ident.U64(globalID)
+	ident.U64(c.globalID)
 	globalSeq := binary.LittleEndian.Uint64(random[:]) >> 1 // room to increase on resume
 	ident.U64(globalSeq)
 	supportedFeatures, requiredFeatures := handshakeFeatures(role, auth)
@@ -645,8 +741,8 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 			supportedFeatures, requiredFeatures = CephFSFeatures, CephFSFeatures&^Features|RequiredFeatures
 		}
 		var cookieRandom [8]byte
-		if _, err = rand.Read(cookieRandom[:]); err != nil {
-			return nil, err
+		if _, err := rand.Read(cookieRandom[:]); err != nil {
+			return admission{}, err
 		}
 		cookie = binary.LittleEndian.Uint64(cookieRandom[:])
 		if cookie == 0 {
@@ -658,26 +754,26 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	ident.U64(requiredFeatures)
 	ident.U64(flags)
 	ident.U64(cookie)
-	if err = write(msgr.ClientIdent, ident.Data); err != nil {
-		return nil, err
+	if err := c.write(msgr.ClientIdent, ident.Data); err != nil {
+		return admission{}, err
 	}
-	f, err = r.Read()
+	f, err := c.r.Read()
 	if err != nil {
-		return nil, err
+		return admission{}, err
 	}
 	if len(f.Segments) != 1 {
-		return nil, msgr.ErrFrame
+		return admission{}, msgr.ErrFrame
 	}
 	if f.Tag == msgr.IdentMissingFeatures {
 		d := wire.NewDecoder(f.Segments[0])
 		missing := d.U64()
 		if err := d.Done(); err != nil {
-			return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+			return admission{}, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 		}
-		return nil, fmt.Errorf("%w: peer requires 0x%016x", msgr.ErrFeatures, missing)
+		return admission{}, fmt.Errorf("%w: peer requires 0x%016x", msgr.ErrFeatures, missing)
 	}
 	if f.Tag != msgr.ServerIdent {
-		return nil, fmt.Errorf("%w: expected server ident, got %d", msgr.ErrFrame, f.Tag)
+		return admission{}, fmt.Errorf("%w: expected server ident, got %d", msgr.ErrFrame, f.Tag)
 	}
 	id := wire.NewDecoder(f.Segments[0])
 	serverAddresses := msgr.DecodeAddresses(id)
@@ -687,39 +783,32 @@ func handshake(ctx context.Context, conn net.Conn, target msgr.Address, role uin
 	serverFlags := id.U64()
 	serverCookie := id.U64()
 	if err = id.Done(); err != nil {
-		return nil, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
+		return admission{}, fmt.Errorf("%w: %w", msgr.ErrFrame, err)
 	}
 	if !slices.Contains(serverAddresses, target) {
-		return nil, fmt.Errorf("%w: server identification does not include target address", msgr.ErrAuthentication)
+		return admission{}, fmt.Errorf("%w: server identification does not include target address", msgr.ErrAuthentication)
 	}
 	if (role == 4 || policy != lossyHandshake || expectedID != 0) && serverID != expectedID {
-		return nil, errors.New("ceph messenger: unexpected daemon ID")
+		return admission{}, errors.New("ceph messenger: unexpected daemon ID")
 	}
 	if requiredFeatures&^supported != 0 || required&^supportedFeatures != 0 {
-		return nil, msgr.ErrFeatures
+		return admission{}, msgr.ErrFeatures
 	}
 	// SERVER_IDENT is authoritative. The ordinary policy remains lossy.
 	// Fresh MDS admits a single stateful transport, without retaining cookies
 	// for recovery. Any loss is terminal; it cannot become a resumed session.
 	if policy != lossyHandshake {
 		if serverFlags != 0 || serverCookie == 0 {
-			return nil, fmt.Errorf("%w: fresh MDS requires stateful flags 0 and a nonzero server cookie", msgr.ErrFeatures)
+			return admission{}, fmt.Errorf("%w: fresh MDS requires stateful flags 0 and a nonzero server cookie", msgr.ErrFeatures)
 		}
 	} else if serverFlags != sessionFlagLossy {
-		return nil, fmt.Errorf("%w: unsupported session flags %#x", msgr.ErrFeatures, serverFlags)
+		return admission{}, fmt.Errorf("%w: unsupported session flags %#x", msgr.ErrFeatures, serverFlags)
 	}
-	stopped = stop()
-	if !stopped || ctx.Err() != nil {
-		return nil, ctx.Err()
-	}
-	if err = conn.SetDeadline(time.Time{}); err != nil {
-		return nil, err
-	}
-	transport := &Transport{Conn: conn, Reader: r, Writer: w, GlobalID: globalID, Features: supported & supportedFeatures, Compression: negotiatedComp}
+	admitted := admission{features: supported & supportedFeatures}
 	if policy != lossyHandshake {
-		transport.Resume = ResumeState{Addresses: []msgr.Address{myAddr}, ClientCookie: cookie, ServerCookie: serverCookie, GlobalSeq: globalSeq, Features: transport.Features, GlobalID: globalID}
+		admitted.resume = ResumeState{Addresses: []msgr.Address{myAddr}, ClientCookie: cookie, ServerCookie: serverCookie, GlobalSeq: globalSeq, Features: admitted.features, GlobalID: c.globalID}
 	}
-	return transport, nil
+	return admitted, nil
 }
 
 // reconnect sends SESSION_RECONNECT with the next global and connect
