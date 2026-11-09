@@ -15,9 +15,10 @@ import (
 
 type configTestPeer struct {
 	*logTestPeer
-	configs             chan msgr.MessageData
-	configSubscriptions chan logTestSubscription
-	digestSubscriptions chan logTestSubscription
+	configs                 chan msgr.MessageData
+	configSubscriptions     chan logTestSubscription
+	digestSubscriptions     chan logTestSubscription
+	serviceMapSubscriptions chan logTestSubscription
 }
 
 func (p *configTestPeer) serveConfig(early bool) {
@@ -91,7 +92,7 @@ func (p *configTestPeer) serveConfig(early bool) {
 					return
 				}
 				all := make(map[string]uint64)
-				var logSub, configSub, digestSub logTestSubscription
+				var logSub, configSub, digestSub, serviceMapSub logTestSubscription
 				for range count {
 					name, start, flags := d.String(), d.U64(), d.U8()
 					all[name] = start
@@ -103,6 +104,9 @@ func (p *configTestPeer) serveConfig(early bool) {
 					}
 					if name == "mgrdigest" {
 						digestSub = logTestSubscription{name: name, start: start, flags: flags}
+					}
+					if name == "servicemap" {
+						serviceMapSub = logTestSubscription{name: name, start: start, flags: flags}
 					}
 				}
 				if d.String() != "" || d.Done() != nil {
@@ -119,6 +123,10 @@ func (p *configTestPeer) serveConfig(early bool) {
 				if digestSub.name != "" {
 					digestSub.all = all
 					p.digestSubscriptions <- digestSub
+				}
+				if serviceMapSub.name != "" {
+					serviceMapSub.all = all
+					p.serviceMapSubscriptions <- serviceMapSub
 				}
 			case msgr.GetConfigMessage:
 				p.configs <- m
@@ -161,7 +169,7 @@ func configTestFixture(t *testing.T, configure ...func(int, *configTestPeer)) (*
 		mu.Lock()
 		index := len(all)
 		mu.Unlock()
-		p := &configTestPeer{logTestPeer: &logTestPeer{sends: make(chan logTestSend), subscriptions: make(chan logTestSubscription, 8), commands: make(chan msgr.MessageData, 128), done: make(chan struct{}), release: 20}, configs: make(chan msgr.MessageData, 8), configSubscriptions: make(chan logTestSubscription, 8), digestSubscriptions: make(chan logTestSubscription, 8)}
+		p := &configTestPeer{logTestPeer: &logTestPeer{sends: make(chan logTestSend), subscriptions: make(chan logTestSubscription, 8), commands: make(chan msgr.MessageData, 128), done: make(chan struct{}), release: 20}, configs: make(chan msgr.MessageData, 8), configSubscriptions: make(chan logTestSubscription, 8), digestSubscriptions: make(chan logTestSubscription, 8), serviceMapSubscriptions: make(chan logTestSubscription, 8)}
 		for _, configurePeer := range configure {
 			configurePeer(index, p)
 		}
