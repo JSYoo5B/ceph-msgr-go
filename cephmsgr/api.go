@@ -4,6 +4,11 @@
 // Callers own command construction, result interpretation and management policy.
 // No Ceph installation is required on the client host. See README.md for the
 // current verification status.
+//
+// Dial returns a Client that lives until Close. Every other context bounds
+// the call, or for a Watch method the watch, that receives it. A call that fails after its command or request
+// started transmission returns an OutcomeUnknownError: the daemon may have
+// executed it, and the client never sends it again on its own.
 package cephmsgr
 
 import (
@@ -22,6 +27,9 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// ErrClosed reports that Client.Close, or Close of the OSD or MDS connection
+// in use, ended the operation. A command or request whose transmission had
+// already started reports it as the Cause of an OutcomeUnknownError instead.
 var ErrClosed = session.ErrClosed
 var ErrManagerChanged = errors.New("ceph: active manager changed")
 
@@ -46,6 +54,28 @@ var ErrLimitExceeded = wire.ErrLimit
 // Messenger frame within KeepaliveTimeout. Started commands remain uncertain.
 var ErrKeepaliveTimeout = session.ErrKeepaliveTimeout
 
+// OutcomeUnknownError reports that a command or request was being written to
+// the daemon, or had been written, when its call failed. The daemon may have
+// received and executed it, may still execute it, or may never see it; the
+// client cannot tell which. Cause holds the local failure, for example
+// context.Canceled or context.DeadlineExceeded from the call's context,
+// ErrClosed, ErrKeepaliveTimeout, ErrManagerChanged, a connection error, or an
+// ErrMalformedMessage reply that arrived but could not be decoded. errors.Is
+// sees through it to that cause, so check for it with errors.As first:
+//
+//	var unknown *cephmsgr.OutcomeUnknownError
+//	if errors.As(err, &unknown) {
+//		// The mutation may have been applied. Do not resend it blindly.
+//	}
+//
+// A local timeout or cancellation after transmission ends only the local
+// wait; it neither cancels nor rolls back remote execution, so it is no
+// evidence that a mutation failed and no justification for sending it again.
+// The client never re-executes such a command or request, including after MON
+// or MGR failover, ticket renewal or reconnection. Before acting again, read
+// the resulting cluster state independently, or rely on an operation whose
+// repetition is harmless by its own definition. Failures that occur before
+// transmission starts return their cause without this wrapper.
 type OutcomeUnknownError = session.OutcomeUnknownError
 
 // AuthenticationError is an explicit server rejection of authentication or
@@ -174,16 +204,26 @@ type Options struct {
 	DialContext func(context.Context, string, string) (net.Conn, error)
 }
 
+// Command is one raw Ceph command. The caller owns its construction and the
+// interpretation of the result.
 type Command struct {
 	// JSON is one Ceph command object with a non-empty string prefix.
 	JSON  json.RawMessage
 	Input []byte
 }
+
+// Result is a received command reply: the binary-capable output, the status
+// string and the original server code, which is not translated to a host
+// errno. A Result returned with an OutcomeUnknownError is not a decoded reply;
+// at most it retains the raw output of a reply that could not be decoded.
 type Result struct {
 	Data    []byte
 	Message string
 	Code    int32
 }
+
+// CommandError is returned with a Result whose server code is negative. The
+// daemon replied, so the outcome is known: the command reported failure.
 type CommandError struct {
 	Code    int32
 	Message string
@@ -218,9 +258,21 @@ const (
 	managerTell
 )
 
+// MonCommand sends a raw command to the currently admitted MON. ctx governs
+// the full local wait, including the MaxInFlight slot. A command not yet
+// admitted when its MON session is retired is sent on the recovered session;
+// once transmission starts, cancellation, session loss or Close returns an OutcomeUnknownError
+// and the command is never sent again. A negative server code returns
+// *CommandError with the preserved Result.
 func (c *Client) MonCommand(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, monitorCommand, "")
 }
+
+// MgrCommand sends a raw MGR module command to the active MGR, waiting under
+// ctx for an available MGR in the MgrMap and opening its session on demand.
+// Uncertainty, replay and server-code handling follow MonCommand; an active
+// MGR change after transmission starts reports ErrManagerChanged as the Cause
+// of an OutcomeUnknownError.
 func (c *Client) MgrCommand(ctx context.Context, command Command) (Result, error) {
 	return c.command(ctx, command, managerCommand, "")
 }

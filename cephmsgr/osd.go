@@ -26,10 +26,6 @@ type OSDTarget struct {
 	Address string
 }
 
-// OSDConnection is a client-owned, explicitly targeted lossy session. OpenOSD
-// shares one handle for the same OSD ID and wire address. Close releases its
-// connection slot and waits for cleanup; Client.Close also owns its lifetime.
-// A failed handle is not automatically reconnected and requests are not replayed.
 // Compression reports the negotiated msgr2.1 onwire method on this OSD
 // connection: "" (none), "snappy" or "zstd".
 func (o *OSDConnection) Compression() string {
@@ -38,6 +34,21 @@ func (o *OSDConnection) Compression() string {
 	return compressionName(o.compression)
 }
 
+// OSDConnection is a client-owned, explicitly targeted lossy Messenger session
+// to one OSD. Client.OpenOSD creates it and requires Options.EnableOSD before
+// Dial, plus an OSDTarget that the caller selected from its own cluster map.
+// The client calculates no placement, follows no redirect and resubmits no
+// request automatically; replies carry the wire placement and epoch fields
+// for the caller's routing layer.
+//
+// OpenOSD returns one shared handle for the same OSD ID and wire address, so
+// Close by any holder ends it for all of them. A different address for an
+// open OSD ID fails with ErrOSDTargetChanged until the old handle is closed.
+// Close releases the MaxOSDConnections slot and waits for cleanup; a request
+// whose transmission had started then returns an OutcomeUnknownError.
+// Client.Close also ends the handle. A failed handle stays failed and is never
+// reconnected, and its requests are never replayed: Close it and call OpenOSD
+// again for a fresh connection.
 type OSDConnection struct {
 	client       *Client
 	target       OSDTarget
@@ -245,6 +256,9 @@ func (c *Client) nextOSDTransaction() (uint64, error) {
 	}
 }
 
+// Close ends this shared handle for every holder, fails its session with
+// ErrClosed and waits for setup and transport cleanup. It is idempotent and
+// always returns nil.
 func (o *OSDConnection) Close() error {
 	o.closeOnce.Do(func() {
 		c := o.client

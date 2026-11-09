@@ -23,6 +23,17 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// Client is one authenticated client identity's connection to a Ceph cluster.
+// It holds the MON session admitted by Dial, which it keeps current across
+// MON failover and ticket renewal, the active MGR session opened on demand,
+// and every OSD, MDS, MGR service and watch handle opened from it. Its methods
+// are safe for concurrent use.
+//
+// A method's context bounds that call, or for a Watch method that watch,
+// never the client. Recovery never
+// re-executes a command or request whose transmission started; see
+// OutcomeUnknownError. The client lives until Close, which the caller must
+// call to release its connections and workers.
 type Client struct {
 	options       Options
 	ctx           context.Context
@@ -86,7 +97,10 @@ type Client struct {
 
 // Dial establishes and authenticates a MON connection and verifies a MonMap
 // whose configured minimum monitor release is Tentacle or later. ctx governs
-// setup only; Close owns the returned client's lifetime.
+// setup only: canceling it after Dial returns does not affect the client.
+// Close owns the returned client's lifetime. Until then the client recovers
+// MON sessions and renews tickets in the background. On error no connection
+// or worker remains.
 func Dial(ctx context.Context, options Options) (*Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -881,7 +895,12 @@ retryManager:
 	}
 }
 
-// Close is idempotent and waits for all connection workers to exit.
+// Close is idempotent and waits for all connection workers to exit. It fails
+// every MON, MGR, OSD and MDS session with ErrClosed, so a call whose
+// transmission had started returns an OutcomeUnknownError; Close does not
+// wait for or cancel remote execution. Active watches end with ErrClosed after
+// their accepted data drains, and owned handles become unusable. Later calls
+// return ErrClosed.
 func (c *Client) Close() error {
 	// A session can already have a fatal cause while custom connection cleanup
 	// delays onClose and a watch worker has not observed Done. Preserve that
