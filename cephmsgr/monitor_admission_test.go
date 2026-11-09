@@ -278,7 +278,7 @@ func TestMonitorAdmissionPublishesLatestBufferedManagerMap(t *testing.T) {
 		t.Fatal("admitted MGR change lost uncertainty or replayed a mutation", err, mutations.Load())
 	}
 	for _, front := range [][]byte{mockMgrMap(100, 4000, 6810), {0}} {
-		if accepted, err := c.handleMap(oldMonitor, msgr.MessageData{Type: msgr.MgrMapMessage, Front: front}); accepted || err != nil {
+		if accepted, err := c.handleMap(oldMonitor, msgr.MessageData{Type: msgr.MgrMapMessage, Front: front}); accepted != nil || err != nil {
 			t.Fatal("retired monitor's manager update was processed", accepted, err)
 		}
 	}
