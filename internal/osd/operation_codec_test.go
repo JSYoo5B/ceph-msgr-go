@@ -2,8 +2,10 @@ package osd
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -222,5 +224,50 @@ func TestOperationDecodingMatchesAcrossReplyVersions(t *testing.T) {
 	}
 	if checked < 40 {
 		t.Fatal("too few native v6 replies exercised", checked)
+	}
+}
+
+// Malformed operation metadata must fail identically through both reply
+// entry points and keep the same partially decoded operations.
+func TestMalformedOperationMetadataMatchesAcrossReplyVersions(t *testing.T) {
+	native := oracleReply(t, "reply-v6-success")
+	decoded, err := DecodeReply(native, wire.DefaultLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Operations) < 2 {
+		t.Fatal("native success reply needs a compound operation vector", len(decoded.Operations))
+	}
+	const count = 58 // u32 operation count in this native reply front.
+	second := count + 4 + opWireSize
+	for _, tc := range []struct {
+		name    string
+		edit    func([]byte)
+		want    error
+		partial int
+	}{
+		{"empty vector", func(f []byte) { binary.LittleEndian.PutUint32(f[count:], 0) }, ErrOperation, 0},
+		{"vector above cap", func(f []byte) { binary.LittleEndian.PutUint32(f[count:], MaxOperations+1) }, wire.ErrLimit, 0},
+		{"first opcode unsupported", func(f []byte) { binary.LittleEndian.PutUint16(f[count+4:], 0x2302) }, ErrOperation, len(decoded.Operations)},
+		{"second opcode unsupported", func(f []byte) { binary.LittleEndian.PutUint16(f[second:], 0x2302) }, ErrOperation, len(decoded.Operations)},
+		{"payload length beyond limit", func(f []byte) { binary.LittleEndian.PutUint32(f[second-4:], math.MaxUint32) }, wire.ErrLimit, len(decoded.Operations)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v6 := native
+			v6.Front = bytes.Clone(native.Front)
+			tc.edit(v6.Front)
+			v8 := v6ReplyAsV8(t, native, decoded)
+			v8.Front = bytes.Clone(v8.Front)
+			tc.edit(v8.Front)
+			a6, err6 := DecodeReply(v6, wire.DefaultLimit)
+			a8, err8 := DecodeReplyV8(v8, wire.DefaultLimit)
+			// Only the data-split error carries a version-specific context.
+			if !errors.Is(err6, tc.want) || !errors.Is(err8, tc.want) || err6.Error() != strings.Replace(err8.Error(), "ceph osd v8 reply", "ceph osd reply", 1) {
+				t.Fatal("malformed metadata error differs by version", err6, err8)
+			}
+			if len(a6.Operations) != tc.partial || !reflect.DeepEqual(a6.Operations, a8.Operations) {
+				t.Fatal("partially decoded operations differ by version", a6.Operations, a8.Operations)
+			}
+		})
 	}
 }
