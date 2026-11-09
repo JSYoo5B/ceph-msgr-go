@@ -13,6 +13,7 @@ import (
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/cephx"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
 // Synthetic phase-boundary checks through the existing handshake entry points.
@@ -136,6 +137,45 @@ func TestHandshakeIdentificationAndResumePhasesFollowAuthenticatedChannel(t *tes
 				requireUnpublishedFailure(t, client, tr, err, "signature", msgr.ErrAuthentication, "")
 				if err := <-done; err != nil {
 					t.Fatal("bad signature led to further client traffic", err)
+				}
+			})
+			t.Run(name+"/resume", func(t *testing.T) {
+				auth, fixture, err := freshMDSAuthorizer(kind, mode)
+				if err != nil {
+					t.Fatal(err)
+				}
+				client, peer := net.Pipe()
+				t.Cleanup(func() { client.Close(); peer.Close() })
+				cfg := freshMDSPeerDefaults()
+				cfg.reconnect = func(f msgr.Frame, r *msgr.Reader, w *msgr.Writer) error {
+					got, err := decodeReconnect(f)
+					if err != nil {
+						return err
+					}
+					if got.global != 101 || got.connect != 1 || got.message != 9 {
+						return fmt.Errorf("reconnect sequences %+v", got)
+					}
+					e := wire.Encoder{}
+					e.U64(4)
+					if err := w.Write(msgr.Frame{Tag: msgr.SessionReconnectOK, Segments: [][]byte{e.Data}}); err != nil {
+						return err
+					}
+					r.Read()
+					return nil
+				}
+				state := ResumeState{Addresses: []msgr.Address{{Type: 2, Nonce: 77}}, ClientCookie: 5, ServerCookie: 17, GlobalSeq: 100, InSeq: 9, Features: Features, GlobalID: 42}
+				done := make(chan error, 1)
+				go func() { done <- freshMDSPeer(peer, fixture, mode, cfg) }()
+				tr, err := HandshakeResumeCephFS(context.Background(), client, msgr.Address{Type: 2}, 0, auth, mode, 4096, time.Second, state)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tr.Conn != client || tr.GlobalID != 42 || tr.Features != Features || tr.PeerSequence != 4 || tr.Resume.GlobalSeq != 101 || tr.Resume.ConnectSeq != 1 || tr.Resume.ServerCookie != 17 {
+					t.Fatal("resume published inconsistent state", tr)
+				}
+				tr.Conn.Close()
+				if err := <-done; err != nil {
+					t.Fatal(err)
 				}
 			})
 			for _, test := range []struct {
