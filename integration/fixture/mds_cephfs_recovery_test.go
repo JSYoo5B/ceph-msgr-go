@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -184,5 +187,176 @@ func TestMDSCephFSHistoricOpsKeepOneClient(t *testing.T) {
 	var result mdsCephFSResult
 	if err := c.mdsCephFSHistoricOps(context.Background(), 4951, &result); err == nil {
 		t.Fatal("historic ops admitted for an unobserved GlobalID")
+	}
+}
+
+// mdsCephFSBlocklistRun drives the shared blocklist restoration with fake
+// cluster operations: remove fails for failAddress, and the final read returns
+// final or readErr. It returns the receipt, every reported error in order and
+// every address removal that was attempted.
+func mdsCephFSBlocklistRun(entries []mdsSessionsBlock, owner func(mdsSessionsBlock) (string, error), failAddress string, final []mdsSessionsBlock, readErr error) (mdsCephFSBlocklistReceipt, []string, []string) {
+	receipt := newMDSCephFSBlocklistReceipt()
+	receipt.NewBlocklist = append(receipt.NewBlocklist, entries...)
+	var errs, removals []string
+	reads := 0
+	ops := mdsCephFSBlocklistOps{
+		remove: func(_ context.Context, address string) error {
+			if reads != 0 {
+				return errors.New("removal after the final read")
+			}
+			removals = append(removals, address)
+			if address == failAddress {
+				return errors.New("injected removal failure")
+			}
+			return nil
+		},
+		read: func(context.Context) ([]mdsSessionsBlock, error) {
+			reads++
+			return final, readErr
+		},
+	}
+	receipt.restore(context.Background(), "MDS CephFS test", owner, ops, func(err error) {
+		if err != nil {
+			errs = append(errs, err.Error())
+		}
+	})
+	if reads != 1 {
+		errs = append(errs, "final blocklist was not read exactly once")
+	}
+	return receipt, errs, removals
+}
+
+// TestMDSCephFSBlocklistRestoreKeepsScenarioOwnership runs the shared removal
+// and final verification under each scenario's own ownership policy: removal
+// is attempted only for attributed entries, unknown entries and the fencing
+// entry of a still-mapped incarnation are kept, and a failed removal, a final
+// read failure and a removed entry still present are reported in order.
+func TestMDSCephFSBlocklistRestoreKeepsScenarioOwnership(t *testing.T) {
+	const (
+		evicted  = "172.19.0.9:0/55"
+		goneMDS  = "172.19.0.10:6800/66"
+		liveMDS  = "172.19.0.10:6800/67"
+		session  = "172.19.0.9:0/77"
+		unknown  = "172.19.0.9:0/78"
+		foreign  = "172.19.0.11:0/90"
+		kept     = "MDS CephFS test acceptance kept new blocklist entries it cannot attribute to an owned mutation"
+		remained = "owned blocklist entry remained after removal"
+		fencing  = "armed MDS incarnation is still mapped; its fencing entry is kept"
+	)
+	until := "2026-10-17T00:00:00Z"
+	rangeEntry := mdsSessionsBlock{Address: "172.19.0.0/24", Range: true}
+	completion := &mdsCephFSCompletionScope{owned: map[string]uint64{session: 4200},
+		restarts:  []*mdsCephFSRestart{{Armed: mdsFreshDaemon{GID: 10}, ArmedAddresses: []string{goneMDS}}, {Armed: mdsFreshDaemon{GID: 11}, ArmedAddresses: []string{liveMDS}}},
+		mutations: []*mdsCephFSMutation{{Kind: "eviction", Address: evicted, Until: until}}}
+	completionOwner := func(entry mdsSessionsBlock) (string, error) {
+		return completion.blockOwner(entry, func(gid uint64) bool { return gid == 10 })
+	}
+	ranks := &mdsCephFSRanksScope{owned: map[string]uint64{session: 4200}, takeover: &mdsCephFSRanksTakeover{ArmedAddresses: []string{goneMDS}}}
+	ranksOwner := func(armedGone bool) func(mdsSessionsBlock) (string, error) {
+		return func(entry mdsSessionsBlock) (string, error) { return ranks.blockOwner(entry, armedGone) }
+	}
+	recovery := &mdsCephFSScope{owned: map[string]uint64{session: 4200}, restart: &mdsCephFSRestart{ArmedAddresses: []string{goneMDS}},
+		mutations: []*mdsCephFSMutation{{Kind: "eviction", Address: evicted, Until: until}}}
+	recoveryOwner := func(entry mdsSessionsBlock) (string, error) { return recovery.blockOwner(entry, true) }
+	block := func(address string) mdsSessionsBlock { return mdsSessionsBlock{Address: address} }
+	removed := func(kind, address string) mdsCephFSRemovedBlock {
+		return mdsCephFSRemovedBlock{Kind: kind, Entry: block(address)}
+	}
+	readFailure := errors.New("injected final read failure")
+	for _, tc := range []struct {
+		name        string
+		owner       func(mdsSessionsBlock) (string, error)
+		entries     []mdsSessionsBlock
+		failAddress string
+		final       []mdsSessionsBlock
+		readErr     error
+		removals    []string
+		removed     []mdsCephFSRemovedBlock
+		kept        []mdsSessionsBlock
+		errs        []string
+		restored    bool
+	}{
+		{name: "completion owned entries", owner: completionOwner,
+			entries:  []mdsSessionsBlock{{Address: evicted, Until: until}, block(goneMDS), block(session)},
+			final:    []mdsSessionsBlock{block(foreign)},
+			removals: []string{evicted, goneMDS, session},
+			removed:  []mdsCephFSRemovedBlock{{Kind: "eviction", Entry: mdsSessionsBlock{Address: evicted, Until: until}}, removed("mds-restart", goneMDS), removed("owned-session", session)},
+			kept:     []mdsSessionsBlock{}, restored: true},
+		{name: "completion keeps unknown and live fencing", owner: completionOwner,
+			entries:     []mdsSessionsBlock{block(liveMDS), block(unknown), rangeEntry, block(goneMDS), block(session)},
+			failAddress: session, final: []mdsSessionsBlock{block(liveMDS), block(unknown), rangeEntry, block(goneMDS), block(session)},
+			removals: []string{goneMDS, session},
+			removed:  []mdsCephFSRemovedBlock{removed("mds-restart", goneMDS)},
+			kept:     []mdsSessionsBlock{block(liveMDS), block(unknown), rangeEntry},
+			errs:     []string{"an " + fencing, "injected removal failure", kept, remained}},
+		{name: "completion changed eviction expiry", owner: completionOwner,
+			entries: []mdsSessionsBlock{{Address: evicted, Until: "2026-10-18T00:00:00Z"}},
+			kept:    []mdsSessionsBlock{{Address: evicted, Until: "2026-10-18T00:00:00Z"}}, removed: []mdsCephFSRemovedBlock{},
+			errs: []string{"owned eviction blocklist entry changed outside the fixture; refusing removal", kept}},
+		{name: "ranks takeover after the incarnation left", owner: ranksOwner(true),
+			entries:  []mdsSessionsBlock{block(goneMDS), block(session)},
+			removals: []string{goneMDS, session},
+			removed:  []mdsCephFSRemovedBlock{removed("mds-takeover", goneMDS), removed("owned-session", session)},
+			kept:     []mdsSessionsBlock{}, restored: true},
+		{name: "ranks keeps mapped incarnation and unknown entries", owner: ranksOwner(false),
+			entries:  []mdsSessionsBlock{block(goneMDS), block(unknown), block(evicted), rangeEntry, block(session)},
+			final:    []mdsSessionsBlock{block(goneMDS), block(unknown), block(evicted), rangeEntry, block(session)},
+			removals: []string{session},
+			removed:  []mdsCephFSRemovedBlock{removed("owned-session", session)},
+			kept:     []mdsSessionsBlock{block(goneMDS), block(unknown), block(evicted), rangeEntry},
+			errs:     []string{fencing, kept, remained}},
+		{name: "ranks failed removal and final read failure", owner: ranksOwner(true),
+			entries: []mdsSessionsBlock{block(goneMDS), block(session)}, failAddress: goneMDS, readErr: readFailure,
+			removals: []string{goneMDS, session},
+			removed:  []mdsCephFSRemovedBlock{removed("owned-session", session)},
+			kept:     []mdsSessionsBlock{},
+			errs:     []string{"injected removal failure", readFailure.Error()}},
+		{name: "ranks final read failure alone", owner: ranksOwner(true),
+			entries: []mdsSessionsBlock{block(session)}, readErr: readFailure,
+			removals: []string{session},
+			removed:  []mdsCephFSRemovedBlock{removed("owned-session", session)},
+			kept:     []mdsSessionsBlock{},
+			errs:     []string{readFailure.Error()}},
+		{name: "recovery keeps unknown and verifies removal", owner: recoveryOwner,
+			entries:  []mdsSessionsBlock{{Address: evicted, Until: until}, block(goneMDS), block(unknown)},
+			final:    []mdsSessionsBlock{block(goneMDS), block(unknown)},
+			removals: []string{evicted, goneMDS},
+			removed:  []mdsCephFSRemovedBlock{{Kind: "eviction", Entry: mdsSessionsBlock{Address: evicted, Until: until}}, removed("mds-restart", goneMDS)},
+			kept:     []mdsSessionsBlock{block(unknown)},
+			errs:     []string{kept, remained}},
+	} {
+		receipt, errs, removals := mdsCephFSBlocklistRun(tc.entries, tc.owner, tc.failAddress, tc.final, tc.readErr)
+		if !slices.Equal(removals, tc.removals) {
+			t.Fatal(tc.name, "removal authority differs", removals)
+		}
+		if !reflect.DeepEqual(receipt.RemovedBlocklist, tc.removed) || !reflect.DeepEqual(receipt.KeptBlocklist, tc.kept) {
+			t.Fatal(tc.name, "removed or kept entries differ", receipt.RemovedBlocklist, receipt.KeptBlocklist)
+		}
+		if !slices.Equal(errs, tc.errs) || receipt.BlocklistRestored != tc.restored {
+			t.Fatal(tc.name, "reported errors or restoration differ", errs, receipt.BlocklistRestored)
+		}
+		if !reflect.DeepEqual(receipt.FinalBlocklist, tc.final) || !reflect.DeepEqual(receipt.NewBlocklist, append([]mdsSessionsBlock{}, tc.entries...)) {
+			t.Fatal(tc.name, "final or new blocklist differs", receipt.FinalBlocklist, receipt.NewBlocklist)
+		}
+	}
+}
+
+// TestMDSCephFSBlocklistReceiptFieldsKeepOrder pins the shared receipt JSON
+// shape every embedding cleanup receipt writes.
+func TestMDSCephFSBlocklistReceiptFieldsKeepOrder(t *testing.T) {
+	want := `"new_blocklist":[],"removed_blocklist":[],"kept_new_blocklist":[],"blocklist_restored":false,`
+	for name, receipt := range map[string]any{
+		"recovery":   mdsCephFSCleanup{mdsCephFSBlocklistReceipt: newMDSCephFSBlocklistReceipt()},
+		"completion": mdsCephFSCompletionCleanup{mdsCephFSBlocklistReceipt: newMDSCephFSBlocklistReceipt()},
+		"ranks":      mdsCephFSRanksCleanup{mdsCephFSBlocklistReceipt: newMDSCephFSBlocklistReceipt()},
+	} {
+		data, err := json.Marshal(receipt)
+		if err != nil || !strings.Contains(string(data), want) {
+			t.Fatal(name, "blocklist receipt fields changed", string(data), err)
+		}
+	}
+	data, _ := json.Marshal(mdsCephFSBlocklistReceipt{FinalBlocklist: []mdsSessionsBlock{{Address: "a"}}})
+	if !strings.Contains(string(data), `"kept_new_blocklist":null,"final_blocklist":[{"address":"a","range":false,"until":""}],"blocklist_restored":false}`) {
+		t.Fatal("final blocklist field moved", string(data))
 	}
 }
