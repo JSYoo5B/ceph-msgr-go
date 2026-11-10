@@ -42,7 +42,14 @@ Read at the reference tag for this change.
   `scrub-abort`, `schedule-scrub`, `schedule-deep-scrub` (and their old
   `pg <pgid> <cmd>` forms) and `scrubdebug`.
 - [`src/osd/PrimaryLogPG.cc`](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc)
-  `PrimaryLogPG::do_command` executes them on the primary.
+  `PrimaryLogPG::do_command` executes them. Routing differs by command
+  ([`OSD::asok_command`](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/OSD.cc#L2828-L2833)):
+  `query` and the other PG commands are routed only to a PG whose primary is
+  this OSD and are refused elsewhere, while `scrubdebug` is routed with
+  `only_primary` false, so an OSD that holds a non-primary copy of the PG also
+  processes it. In this record the primary is therefore selected by the
+  fixture and by the primary-only `query` used as the observation, not by the
+  `scrubdebug` dispatch.
 - [`src/osd/scrubber/pg_scrubber.cc`](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/scrubber/pg_scrubber.cc)
   `PgScrubber::asok_debug`: `scrubdebug <pgid> set|unset sessions` sets or
   clears one boolean of the PG's scrubber. `PgScrubber::dump_scrubber`: while
@@ -135,9 +142,12 @@ observer's admin socket to the daemon incarnation the command is sent to.
 The fixture control `observe-daemon-command` (`daemon_command_outcome.go`)
 accepts a request ID, a 32-hex token, a closed phase and a closed target:
 `osd <id>`, `pg <osd id> <pgid>` or `mds <name>`, each of which must be owned
-by the fixture. It accepts no command, option, value or path. Every call goes
-through that daemon's admin socket, a local Unix socket that does not use the
-Messenger or CephX, with a 10-second bound per call. One observation is:
+by the fixture. It accepts no command, option, value or path. Every read and
+the OSD and PG mutations go through that daemon's admin socket, a local Unix
+socket that does not use the Messenger or CephX, with a 10-second bound per
+call. The two MDS mutations are sent by the fixture's native client as
+`tell mds.<GID>` with the GID recorded with the baseline, on that client's own
+connection. One observation is:
 
 1. a fresh native map read of the daemon: for an OSD its `osd dump` entry (up,
    `up_from` epoch, public v2 address and nonce), for an MDS its `fs dump`
@@ -176,10 +186,21 @@ two map reads after the call are compared with the recorded incarnation and repo
 `same_incarnation_after`; the Go cells count a mutation only when it was not
 refused, returned successfully and that report is true.
 
-The admin socket is addressed by daemon name and reports neither value, so identity is
-not proven atomically with the command. A daemon replaced between the map read
-and the admin-socket call (two consecutive calls of the control) is not
-prevented; it is reported by the reads after the call.
+The admin socket is addressed by daemon name and reports neither value, so
+for the OSD and PG cells identity is not proven atomically with the command.
+An OSD replaced between the map read and the admin-socket call (two
+consecutive calls of the control) is not prevented; it is reported by the
+reads after the call.
+
+An MDS mutation cannot reach a replacement. A decimal `mds.<GID>` target that
+is not a rank of the filesystem
+([`FSMap::parse_role`](https://github.com/ceph/ceph/blob/v20.2.4/src/mds/FSMap.cc))
+resolves only while that GID is in the FSMap, the command is sent to that
+incarnation's own addresses, and a GID is never reused. If the daemon is
+replaced after the preflight read, the command fails, the receipt records the
+failure and `same_incarnation_after` is false, and the replacement keeps its
+own override. The reads on the admin socket remain addressed by name and are
+bracketed by the map reads as before.
 
 ### Reply gate and sequence
 
@@ -196,7 +217,10 @@ is taken once, and no assertion depends on a wall-clock margin.
 2. On the subject client, with the gate armed: a read-only command (`config
    get`, or the PG `query`) passes the gate on the daemon connection with its
    own transaction.
-3. Submit A once. Wait for the hold. Require one complete local write of A,
+3. Submit A once. Wait for the hold, and then for the writer to publish its
+   completed local write: the receipt and the padded-write count are recorded
+   after the local write returns, which the held reply does not order.
+   Require one complete local write of A,
    on the same connection as the read-only command, to the target daemon's
    endpoint, with the bound transaction, and the held frame to be type 98 with
    that transaction.
@@ -240,7 +264,13 @@ is taken once, and no assertion depends on a wall-clock margin.
   without an incarnation, the receipt is `refused`, no claim file exists and
   the replacement receives no mutating call; a replacement after the check is
   reported by `same_incarnation_after`.
-- `cephmsgr/tell_reply_gate_test.go`: the gate (see the MGR Tell record).
+- `TestMDSCommandMutationsReachOnlyTheBaselineGID` (fixture): the MDS
+  mutations are built as `tell mds.<GID>` and a zero GID is rejected; with a
+  replacement that comes up after the preflight read, with its own override,
+  the one call addressed to the baseline GID fails, no mutating admin-socket
+  call is made and the replacement keeps its override, for both mutations.
+- `cephmsgr/tell_reply_gate_test.go`: the gate (see the MGR Tell record),
+  including `TestHeldReplyDoesNotOrderTheLocalWriteReceipt`.
 
 These checks establish no native result.
 
@@ -358,9 +388,15 @@ seconds. Not established:
 - a production PG administration operation: the PG cell's state is an
   upstream test-only flag, and its overwrite equals its baseline, so the final
   restoration is not separately observable;
-- atomic identity of a native mutation's target: the incarnation is checked by
-  a map read immediately before the admin-socket call and again after it, not
-  by the admin socket itself;
+- atomic identity of a native OSD or PG mutation's target: the incarnation is
+  checked by a map read immediately before the admin-socket call and again
+  after it, not by the admin socket itself (the MDS mutations are addressed to
+  the baseline GID);
+- a native run in which an MDS is replaced between the preflight read and the
+  mutation: that interval is exercised by the fixture's daemon-free test with
+  a fake backend only;
+- `scrubdebug` on a non-primary OSD: the cell has one OSD, which is the
+  primary;
 - a server execution count. One complete local write and a surviving native
   overwrite show that the client did not transmit A again and that A was not
   applied after B. They do not prove exactly-once execution in general.
