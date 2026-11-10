@@ -1,14 +1,14 @@
 # Disposable explicit MDS command fixture
 
 `CEPH_MSGR_TEST_MDS_COMMANDS=1` is a closed development-only extension of
-`CEPH_MSGR_TEST_MDS_FRESH=1`. It selects
-`^TestCephMDSCommandsIntegration$` by default and admits one further exact
+`CEPH_MSGR_TEST_MDS_FRESH=1`. With an empty `CEPH_MSGR_TEST_RUN` it selects
+`^TestCephMDSCommandsIntegration$` and admits one further exact
 selector, `^TestCephAppliedMDSCommandIsNotReplayedIntegration$`, only when
 `CEPH_MSGR_TEST_RUN` is exactly that value; that cell and its closed
 `observe-daemon-command` control are described in
 [DAEMON_COMMAND_OUTCOME_VALIDATION.md](DAEMON_COMMAND_OUTCOME_VALIDATION.md).
-Every other selector is replaced by the default. The fixture requires one OSD
-with `legacy-v6`.
+Any other nonempty selector is rejected when the profile is loaded, before
+the fixture starts. The fixture requires one OSD with `legacy-v6`.
 The metadata/data pools explicitly disable hashpspool, with 16/1 PGs and
 replication/min_size 1/1. This lets the public Go client enable MDS without
 enabling OSD or advertising the modern OSD profile's extra MON admission bits.
