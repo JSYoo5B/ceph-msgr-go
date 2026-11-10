@@ -245,6 +245,15 @@ func fixtureTicketTTLs(p profile) (auth, service time.Duration) {
 		auth = 120 * time.Second
 		service = 120 * time.Second
 	}
+	if p.monForcedKillSelected() {
+		// The unprocessed-request cell keeps every MON out of quorum for
+		// tens of seconds. Routine 12 s renewal would replace the subject
+		// session during that window and move the pending request onto a
+		// retired connection, and native daemons would present reclaim
+		// proofs older than their validity once the MONs return.
+		auth = 120 * time.Second
+		service = 120 * time.Second
+	}
 	if p.shortTickets == "1" {
 		auth = shortTicketAuthTTL
 	}

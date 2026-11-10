@@ -422,6 +422,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         "",
 				copyFromLateErrorMarker:                  "",
 				copyFromMultiChunkMarker:                 "",
+				monForcedKillMarker:                      "",
 				rbdMirrorMarker:                          "",
 				"CEPH_MSGR_KEY_FILE":                     filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
 				"CEPH_MSGR_TEST_PEERS": p.peers, "CEPH_MSGR_IDENTITY": "client.test", "CEPH_MSGR_FSID": p.fsid,

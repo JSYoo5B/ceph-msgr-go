@@ -11,7 +11,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 )
 
-// forcedKillTimeout bounds the wait for Docker to report the killed OSD exited.
+// forcedKillTimeout bounds the wait for Docker to report the killed daemon exited.
 const forcedKillTimeout = 30 * time.Second
 
 // dockerKill sends SIGKILL to one owned container through the fixture's own
@@ -33,12 +33,12 @@ func dockerKill(id string) func(context.Context) error {
 // its state only for a non-OOM exit 137 receipt. The kill is never repeated.
 func forceKill(parent context.Context, kill func(context.Context) error, state func(context.Context) (*container.State, error), timeout time.Duration) (*container.State, error) {
 	if timeout <= 0 {
-		return nil, errors.New("forced OSD kill requires a bounded wait")
+		return nil, errors.New("forced daemon kill requires a bounded wait")
 	}
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	if err := kill(ctx); err != nil {
-		return nil, fmt.Errorf("SIGKILL owned OSD: %w", err)
+		return nil, fmt.Errorf("SIGKILL owned daemon: %w", err)
 	}
 	for {
 		current, err := state(ctx)
@@ -47,14 +47,33 @@ func forceKill(parent context.Context, kill func(context.Context) error, state f
 		}
 		if current != nil && !current.Running && !current.Restarting {
 			if current.ExitCode != 137 || current.OOMKilled {
-				return nil, fmt.Errorf("OSD forced crash did not produce a non-OOM SIGKILL receipt (exit %d, oom %t)", current.ExitCode, current.OOMKilled)
+				return nil, fmt.Errorf("forced crash did not produce a non-OOM SIGKILL receipt (exit %d, oom %t)", current.ExitCode, current.OOMKilled)
 			}
 			return current, nil
 		}
 		select {
 		case <-ctx.Done():
-			return nil, fmt.Errorf("OSD forced crash did not stop after SIGKILL: %w", ctx.Err())
+			return nil, fmt.Errorf("forced crash did not stop after SIGKILL: %w", ctx.Err())
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
+}
+
+// monForcedKillSelector is the only selection that admits SIGKILL of a MON.
+// Its two cells kill the MON that an in-flight MMonGetVersion is connected
+// to; every other profile keeps forced crashes restricted to OSDs.
+const monForcedKillSelector = "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
+
+// monForcedKillMarker tells the selected tests that the fixture admits the
+// MON kill control. Without it they skip instead of failing the controller.
+const monForcedKillMarker = "CEPH_MSGR_NATIVE_MON_FORCED_KILL"
+
+func (p profile) monForcedKillSelected() bool {
+	return p.testRun == monForcedKillSelector && p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "1" && p.osdProfile == "legacy-v6"
+}
+
+// forcedKillAdmitted is the closed admission of the kill control: any owned
+// OSD, and an owned MON only in the selected forced-kill profile.
+func (p profile) forcedKillAdmitted(kind string) bool {
+	return kind == "osd" || kind == "mon" && p.monForcedKillSelected()
 }
