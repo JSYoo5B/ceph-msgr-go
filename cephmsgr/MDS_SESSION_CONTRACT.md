@@ -4,8 +4,12 @@ Reference: Ceph Tentacle v20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`. Product code stays native Go with
 CGO disabled. This stage adds the CephFS client session (MClientSession,
 type 22) on an explicitly targeted `MDSConnection`. It adds no metadata
-request, capability, lease, snapshot realm, quota, reconnect, reclaim or file
-I/O. Typed filesystem workflows remain in the consumer layer.
+request, capability, lease, snapshot realm, quota, reconnect or file I/O;
+those belong to the CephFS profile in
+[MDS_CEPHFS_CONTRACT.md](MDS_CEPHFS_CONTRACT.md). The reclaim exchange was
+added to this profile later and is specified
+[below](#session-reclaim-mclientreclaim). Typed filesystem workflows remain
+in the consumer layer.
 
 ## Wire
 
@@ -43,7 +47,10 @@ requirement (see `internal/mds/CLIENT_EXTENSION_DECISIONS.md`). REPLY_ENCODING
 (9) and every other later protocol feature (multi-reconnect, delegated
 inodes, metrics, notify session state, 32-bit retry/forward, new snaprealm
 info, owner UID/GID, client-side auth-cap checks, charmap, blockdiff) are
-withheld until their formats exist.
+withheld by this session-only profile. Six of them (REPLY_ENCODING,
+MULTI_RECONNECT, alternate name, 32-bit retry/forward, new snaprealm info,
+owner UID/GID) are declared by the CephFS profile instead; the per-bit table for both profiles
+is in [CLIENT_EXTENSION_DECISIONS.md](../internal/mds/CLIENT_EXTENSION_DECISIONS.md#feature-table).
 Callers cannot widen the set. A filesystem whose `required_client_features`
 or `min_compat_client` requires a withheld bit makes the MDS REJECT the open
 with `missing required features`, which is returned explicitly.
@@ -211,8 +218,10 @@ the address guard engaged. See
 RECALL_STATE, FLUSHMSG, FORCE_RO, nonzero push sequences, root-claim and
 duplicate-uuid rejects, canceled opens, autoclose eviction, failover and
 multiple ranks were not exercised live. Multi-rank, standby/failover,
-reconnect/reclaim, eviction recovery, metrics, capabilities and data I/O are
-not implemented.
+reconnect, eviction recovery, metrics, capabilities and data I/O are
+not implemented by this session-only profile; reclaim is the later stage
+below, and the CephFS profile's reconnect, capabilities and data paths are
+in [MDS_CEPHFS_CONTRACT.md](MDS_CEPHFS_CONTRACT.md).
 
 ## Session reclaim (MClientReclaim)
 

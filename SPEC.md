@@ -4,6 +4,9 @@ This document defines the communication-layer contract, implementation prioritie
 and acceptance requirements. [README.md](README.md) describes usage; contracts
 beside the implementation define individual wire/API boundaries. A requirement
 or test fixture is not a claim that the corresponding product feature is complete.
+[DOCUMENTATION.md](DOCUMENTATION.md) names the authoritative document for each
+kind of information and the path from a public contract to its observed native
+result.
 
 ## Product policy
 

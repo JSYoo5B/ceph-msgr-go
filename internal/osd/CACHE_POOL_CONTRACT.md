@@ -105,8 +105,10 @@ do not establish operation execution. The pinned no-op/read and transaction
 commit paths can both return ACK+ONDISK, so those bits do not identify a state
 transition or establish crash durability. Operation-specific independent
 observations are required; see the [completion table and native evidence](../../integration/fixture/OSD_CACHE_COMPLETION_VALIDATION.md).
-Choosing which objects to flush or evict, promotion, the tier agent, hit sets,
-overlays and SET_CHUNK manifests remain caller or later work.
+Choosing which objects to flush or evict, promotion, the tier agent, hit sets
+and overlays remain caller or later work. SET_CHUNK is not a cache-tier
+operation; its bounded contract is in
+[MANIFEST_CONTRACT.md](MANIFEST_CONTRACT.md#go-set_chunk-contract).
 
 The [fresh native vectors](testdata/cache-op-native-README.md) cover all seven
 request shapes on v6, v8 and untraced v9, and the Go encoder matches each

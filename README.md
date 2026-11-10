@@ -14,6 +14,49 @@ The protocol reference is Ceph `v20.2.4`, commit
 release family. A successful connection does not certify every patch,
 configuration, platform or higher-level storage operation.
 
+## Where to start
+
+| Reader | Start here |
+| --- | --- |
+| Package user | [Which side Go implements](#which-side-of-the-connection-go-implements), [Installation](#installation), [Quick start](#quick-start), [Representative operations](#representative-operations) and [Limitations](#limitations) |
+| Protocol implementer | [Tracing one feature](DOCUMENTATION.md#tracing-one-feature): public contract, pinned wire reference, implementation status, scenario, observed native result and remaining limits |
+| Fixture or CI contributor | [Fixture and CI entry points](DOCUMENTATION.md#fixture-and-ci-contributors), the [scenario catalog guide](.github/scenarios/README.md) and the [native path coverage map](integration/fixture/NATIVE_PATH_COVERAGE.md) |
+
+[DOCUMENTATION.md](DOCUMENTATION.md) names the authoritative document for each
+kind of information. This README summarizes usage and feature boundaries; when
+a summary here and an owning contract differ, the contract is correct.
+
+## Which side of the connection Go implements
+
+The product is always the connecting CLIENT entity (`client.<id>`, CephX
+entity type CLIENT). It opens outbound msgr2.1 connections to MON, MGR, OSD
+and MDS daemons that already exist. It has no listening Messenger, accepts no
+connection, and implements no daemon role: it cannot act as a MON, MGR, OSD or
+MDS, and it sends none of the daemon-to-daemon messages (quorum, heartbeat,
+peering, replication, recovery, metadata migration).
+
+| Peer | What the Go client does | What it never does |
+| --- | --- | --- |
+| MON | Authenticates, runs raw commands and Tell, receives maps and subscriptions | Join quorum or serve maps |
+| MGR | Runs raw commands and Tell on the active MGR; optionally [registers a service daemon](#mgr-service-registration) as a CLIENT | Become an MGR or a module |
+| OSD | Sends object requests and raw commands to a target the caller names | Peer, replicate, recover, store objects or choose placement |
+| MDS | Runs raw commands and the opt-in CephFS session, metadata and capability messages | Hold a rank, journal or migrate metadata |
+
+MGR service registration is the one place where the client presents a service
+name to a daemon. It is still a CLIENT session: the registration announces
+caller-supplied metadata and status to the active MGR and makes nothing in
+this repository a Ceph daemon.
+
+The native test environment supplies every daemon. Tests start disposable
+clusters from the pinned official Ceph image: MON, MGR, OSD and MDS daemons,
+and in selected recipes an RGW gateway or an `rbd-mirror` daemon, together
+with native clients (librados, librbd, libcephfs) that act as independent
+oracles. Daemon-to-daemon paths are therefore exercised between real Ceph
+daemons, never by Go; see the daemon-to-daemon rows of the
+[coverage map](integration/fixture/NATIVE_PATH_COVERAGE.md#daemon-to-daemon).
+The fixture and its dependencies live in the separate `integration/fixture`
+module and are not product dependencies.
+
 ## Repository scope
 
 | Communication layer | Application responsibility |
@@ -29,10 +72,22 @@ those underlying paths to verify communication. Requirements and completion
 criteria are in [SPEC.md](SPEC.md). APIs follow the current specification
 without compatibility wrappers for superseded APIs.
 
-## Quick start
+## Installation
+
+```sh
+go get github.com/JSYoo5B/ceph-msgr-go/cephmsgr
+```
 
 The import path is `github.com/JSYoo5B/ceph-msgr-go/cephmsgr`; the package name
-is `cephmsgr`. There are no published module version tags.
+is `cephmsgr`. There are no published module version tags, so Go resolves a
+pseudo-version of the default branch; record the commit you verified. The
+module needs Go 1.25 or later and builds with `CGO_ENABLED=0`.
+
+## Quick start
+
+The first connection needs MON addresses, an exact CephX identity and its
+key. `Dial` authenticates to a MON and returns a client that can already run
+MON and MGR commands.
 
 ```go
 key, err := cephmsgr.ParseKey(encodedKey)
@@ -70,6 +125,69 @@ independent of the bootstrap context passed to `Dial`.
 for CRC framing after authentication. Both modes use CephX and verify the
 authentication transcript. CRC does not encrypt subsequent traffic; CRC32C
 detects corruption. Connections offer only the selected mode, without fallback.
+
+## Representative operations
+
+Every operation below is a communication primitive with raw input and output.
+The Opt-in column names the `Options` fields each row needs. A row marked
+`none` works on any client returned by `Dial`; the OSD, MDS, MDS map and MGR
+service rows are refused unless their option was set at `Dial`.
+
+| Task | Entry point | Opt-in | Section |
+| --- | --- | --- | --- |
+| Run a MON or MGR command | `MonCommand`, `MgrCommand`, `MonTell`, `MgrTell`, `MonTellTo`, `MgrTellTo` | none | [Raw commands](#raw-commands-and-targeted-tell) |
+| Follow cluster state | `Snapshot`, `WaitMonMap`, `WaitMgrMap`, `WatchLogs`, `WatchConfig`, `WatchDigest` | none | [State snapshots](#state-snapshots-and-map-waits), [logs](#mon-logs), [configuration](#mon-configuration), [digest](#mon-health-and-digest) |
+| Receive raw OSDMaps from MON | `RequestOSDMaps`, `WatchOSDMaps` | none | [MON OSDMap requests](#mon-osdmap-requests-and-subscriptions) |
+| Send an object request to one OSD | `OpenOSD`, then `OSDConnection.Request` | `EnableOSD`, optionally `OSDProfile` and `EnableOSDCachePools` | [OSD object requests](#osd-object-requests) |
+| Send a raw OSD or PG command | `OpenOSD`, then `OSDConnection.Command` or `OSDConnection.PGCommand` | `EnableOSD` | [OSD and PG commands](#osd-and-pg-commands) |
+| Receive MDS maps | `WatchFSMapUser`, `WatchMDSMaps` | `EnableMDSMaps` | [MDS maps](#mon-fsmapuser-and-mdsmap-subscriptions) |
+| Send a raw MDS command | `OpenMDS`, then `MDSConnection.Command` | `EnableMDS` | [MDS commands](#mds-commands) |
+| Open a CephFS session and send metadata requests | `MDSConnection.OpenSession`, `MDSSession.Submit` | `EnableMDS`, `EnableCephFS` for metadata and capabilities | [CephFS sessions](#cephfs-sessions), [metadata](#cephfs-metadata-and-push-messages) |
+| Register a service daemon with the active MGR | `OpenMgrService` | `EnableMgrService` | [MGR service registration](#mgr-service-registration) |
+
+The Go documentation of each name states its exact inputs, bounds and
+outcomes. The contracts linked from each section define the wire subset.
+
+## Limitations
+
+- The client never becomes a daemon and never accepts connections; see
+  [Which side of the connection Go implements](#which-side-of-the-connection-go-implements).
+- It is not a RADOS, RBD or CephFS client. Callers supply OSD targets,
+  placement and map epochs; there is no CRUSH computation, automatic routing,
+  redirect following or automatic resend of an object request.
+- Commands are raw. The product builds no command JSON, parses no command
+  output and loads no keyring or configuration file.
+- Outcome rules differ by API; the package documentation in
+  [api.go](cephmsgr/api.go) owns them.
+  - A daemon command or an OSD request that fails after its transmission
+    started returns an `OutcomeUnknownError`: the daemon may have executed it,
+    and the client never sends it again on its own.
+  - A CephFS request is different. `MDSSession.Submit` returns once the
+    request is queued. A `Wait` or `WaitSafe` context that expires returns the
+    bare context error while the call stays pending, so the caller can wait on
+    the same call again instead of discarding it. On a resumable MDS
+    connection, Messenger resume retransmits unacknowledged frames with their
+    original sequence and transaction ID; that is delivery of the same
+    request, not a new one. Only a session that ends before the reply resolves
+    the call with an `OutcomeUnknownError`. Sending a request again
+    (`MDSSession.ResubmitForwarded`) is always an explicit caller action.
+  - Methods with other outcome rules, such as `MDSSession.SendCaps` and
+    `OpenMgrService`, document them.
+  - Canceling a local wait never establishes remote rollback.
+- Admission requires an authenticated MonMap with `min_mon_release >= 20`
+  (Tentacle, 20.2). A cluster that retains an older minimum, including one
+  that is being upgraded, is rejected, and earlier release families have no
+  compatibility path.
+- Only implemented features are advertised. OSD opcodes outside the supported
+  set are refused; see [unsupported opcodes](internal/osd/UNSUPPORTED_OPCODES.md).
+  Withheld CephFS client feature bits are listed in the
+  [client extension decisions](internal/mds/CLIENT_EXTENSION_DECISIONS.md).
+- Live compressed frames, secure-mode compression and zlib are unverified or
+  deferred; see [compression](internal/msgr/COMPRESSION_PLAN.md).
+- Native verification covers selected profiles only. Each contract and
+  validation record names the profile and source revision it observed; a
+  result on one profile is not a claim about another. Completion criteria are
+  in [SPEC.md](SPEC.md#verification-and-completion).
 
 ## Raw commands and targeted Tell
 
@@ -213,11 +331,18 @@ registration (MMgrOpen/Update/Report/Close) on a dedicated connection to the
 active MGR, with caller-supplied raw service/daemon names, metadata and status.
 It changes no ordinary MON/MGR command behavior or feature mask. The handle
 fails on connection loss or active-MGR change and never re-registers by itself;
-`Close` reports an unconfirmed acknowledgement explicitly. Source-derived vectors
-and synthetic unit/race tests are supplemented by native registration, status,
-task-status and close observation on two selected Tentacle profiles. Native
-encoder vectors, applied metadata updates and live failover remain unverified. See
-[the contract](cephmsgr/MGR_SERVICE_CONTRACT.md).
+`Close` reports an unconfirmed acknowledgement explicitly. The registration is
+a CLIENT session and does not make the caller a Ceph daemon.
+
+Evidence is owned by [the contract](cephmsgr/MGR_SERVICE_CONTRACT.md#evidence):
+source-derived vectors and synthetic unit/race tests, retained fresh native
+codec vectors for the five messages, and native observation on selected
+profiles of registration, status, task status, applied metadata, close,
+ticket renewal and an active-MGR change. Each linked validation record names
+its own tested source and profile. Nonempty daemon extensions, older
+configure versions, further profiles, further failure configurations and
+further cold-bootstrap configurations are
+[not verified](cephmsgr/MGR_SERVICE_CONTRACT.md#not-verified).
 
 ## Command descriptions
 
