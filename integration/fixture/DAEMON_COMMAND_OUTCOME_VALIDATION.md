@@ -237,7 +237,9 @@ is taken once, and no assertion depends on a wall-clock margin.
    natively under the same daemon incarnation.
 8. Across all subject connections: still exactly one write of A with its
    original identity, exactly two read-only writes (the control and the
-   recovery read), and the gate held only that one frame.
+   recovery read), and the gate held only that one frame. The recovery read
+   has the control's content and its reply does not order its own local write
+   either, so the test first waits for the second record to be published.
 9. Cleanup with a fresh 60-second context: `restore` once, then `restored`
    must show the baseline. A failed or unreturned restoration is reported and
    never repeated.
@@ -270,7 +272,8 @@ is taken once, and no assertion depends on a wall-clock margin.
   the one call addressed to the baseline GID fails, no mutating admin-socket
   call is made and the replacement keeps its override, for both mutations.
 - `cephmsgr/tell_reply_gate_test.go`: the gate (see the MGR Tell record),
-  including `TestHeldReplyDoesNotOrderTheLocalWriteReceipt`.
+  including `TestHeldReplyDoesNotOrderTheLocalWriteReceipt` and
+  `TestRepeatedReadReceiptWaitsForItsOwnWrite`.
 
 These checks establish no native result.
 

@@ -92,9 +92,13 @@ records. Absence of independent native acceptance does not establish a defect.
 - **Identity of the natively mutated daemon:** the MGR Tell, OSD, PG and MDS
   observers send their one overwrite and one restoration only after a fresh
   map read shows the daemon incarnation that supplied the baseline, and
-  report whether the reads after the call still show it. The admin socket
-  itself does not report that incarnation, so a daemon replaced between that
-  read and the call is reported afterwards, not prevented.
+  report whether the reads after the call still show it. The MGR Tell, OSD
+  and PG mutations use the daemon's admin socket, which is addressed by name
+  and does not report that incarnation, so for those three a daemon replaced
+  between that read and the call is reported afterwards, not prevented. The
+  MDS mutations are sent by the native client as `tell mds.<GID>` with the
+  baseline GID: a replacement MDS cannot receive them, the call fails and the
+  receipt records it. MDS reads still use the admin socket.
 - **Daemon replacement while a reply is withheld** is covered for MON and MGR
   commands only. The Tell and daemon command cells change process-local
   state, which a restart clears, so they keep the daemon and end only the

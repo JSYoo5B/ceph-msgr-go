@@ -188,7 +188,9 @@ agrees. No assertion depends on a wall-clock margin.
    that daemon.
 9. Across all subject connections: still exactly one write of A with its
    original identity, exactly two read-only writes (the control and the
-   recovery read), and the gate held only that one frame.
+   recovery read), and the gate held only that one frame. The recovery read
+   has the control's content and its reply does not order its own local write
+   either, so the test first waits for the second record to be published.
    `bystander-final` equals `bystander-initial`.
 10. Cleanup with a fresh 60-second context: `restore` once, then `restored`
     must show the baseline value and provenance. A failed or unreturned
@@ -232,6 +234,10 @@ agrees. No assertion depends on a wall-clock margin.
   and no padded-write count exist at that point; the waits the cells use
   return only after the write returns, and a wait with an ended context
   fails.
+- `TestRepeatedReadReceiptWaitsForItsOwnWrite`: the same read is consumed in
+  full on two connections while the second local write has not returned. One
+  record exists; a wait by content alone is satisfied by the first, and the
+  wait for the second record returns only after that write returns.
 - `TestMgrTellMutationsAreBoundToTheBaselineIncarnation` (fixture): for both
   mutations and for a manager replaced under the same name, failed over,
   unreadable or recorded without a GID, the receipt is `refused`, no claim
