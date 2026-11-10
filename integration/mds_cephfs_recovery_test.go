@@ -44,6 +44,7 @@ type nativeMDSCephFSRecoveryPlan struct {
 	FlushRequested   []string `json:"flush_requested"`
 	Fenced           string   `json:"fenced"`
 	Held             string   `json:"held"`
+	Boundary         string   `json:"boundary"`
 	Replayed         string   `json:"replayed"`
 	Unanswered       string   `json:"unanswered"`
 	FencedPayloadHex string   `json:"fenced_payload_hex"`
@@ -111,6 +112,38 @@ type nativeMDSCephFSRestart struct {
 	Adopted        *nativeMDSCephFSDaemon   `json:"adopted"`
 	AdoptedUTC     string                   `json:"adopted_utc"`
 	OldFencing     []nativeMDSSessionsBlock `json:"old_incarnation_blocklist"`
+	Pause          *nativeMDSCephFSPause    `json:"journal_pause"`
+	Boundary       *nativeMDSCephFSBoundary `json:"boundary_op"`
+}
+
+// nativeMDSCephFSPause is the fixture's record of the runtime mds_log_pause on
+// the armed incarnation (see mds_cephfs_recovery.go in the fixture).
+type nativeMDSCephFSPause struct {
+	State           string `json:"state"`
+	RequestID       int64  `json:"request_id"`
+	ScrubBefore     string `json:"scrub_status_before"`
+	SetOutput       string `json:"set_output"`
+	BarrierOutput   string `json:"barrier_output"`
+	Readback        string `json:"readback"`
+	AppliedUTC      string `json:"applied_utc"`
+	ResumeRequestID int64  `json:"resume_request_id"`
+	ResumeReadback  string `json:"resume_readback"`
+	ResumedUTC      string `json:"resumed_utc"`
+	ResumedBy       string `json:"resumed_by"`
+	DiscardedUTC    string `json:"discarded_utc"`
+	AdoptedReadback string `json:"adopted_readback"`
+	Error           string `json:"error"`
+}
+
+// nativeMDSCephFSBoundary is one op-tracker read of the request the pause holds.
+type nativeMDSCephFSBoundary struct {
+	RequestID  int64                      `json:"request_id"`
+	GlobalID   uint64                     `json:"global_id"`
+	TID        uint64                     `json:"tid"`
+	CheckedUTC string                     `json:"checked_utc"`
+	InFlight   bool                       `json:"in_flight"`
+	Held       bool                       `json:"held"`
+	Op         *nativeMDSCephFSHistoricOp `json:"op"`
 }
 
 type nativeMDSCephFSHistoricOp struct {
@@ -176,7 +209,7 @@ func (x *mdsCephFSRecoveryControl) request(ctx context.Context, action, arg stri
 	expected := x.mds
 	if action == "restart-adopt" {
 		r := result.Restart
-		if r == nil || r.State != "adopted" || r.Adopted == nil || r.Armed.GID != x.mds.GID {
+		if r == nil || r.State != "adopted" || r.Adopted == nil || r.Armed.GID != x.mds.GID || r.Pause != nil && (r.Pause.State != "discarded" && r.Pause.State != "resumed" || r.Pause.AdoptedReadback != "false") {
 			return result, errors.New("native MDS restart adoption receipt differs")
 		}
 		a := *r.Adopted
@@ -211,6 +244,22 @@ func (x *mdsCephFSRecoveryControl) request(ctx context.Context, action, arg stri
 	case "restart-arm":
 		if result.Restart == nil || result.Restart.State != "armed" || result.Restart.Armed.GID != x.mds.GID || result.Restart.Armed.Nonce != x.mds.Nonce || len(result.Restart.ArmedAddresses) == 0 {
 			return result, errors.New("native MDS restart arm receipt differs")
+		}
+	case "restart-pause":
+		r := result.Restart
+		if r == nil || r.State != "armed" || r.Armed.GID != x.mds.GID || r.Pause == nil || r.Pause.State != "applied" || r.Pause.Readback != "true" || r.Pause.ScrubBefore != "no active scrubs running" {
+			return result, errors.New("native MDS journal pause receipt differs")
+		}
+	case "restart-inflight":
+		r := result.Restart
+		if r == nil || r.State != "armed" || r.Armed.GID != x.mds.GID || r.Pause == nil || r.Pause.State != "applied" || r.Boundary == nil ||
+			arg != fmt.Sprintf("%d:%d", r.Boundary.GlobalID, r.Boundary.TID) || r.Boundary.InFlight != (r.Boundary.Op != nil) {
+			return result, errors.New("native MDS in-flight receipt differs")
+		}
+	case "restart-resume":
+		r := result.Restart
+		if r == nil || r.State != "armed" || r.Armed.GID != x.mds.GID || r.Pause == nil || r.Pause.State != "resumed" || r.Pause.ResumeReadback != "false" {
+			return result, errors.New("native MDS journal resume receipt differs")
 		}
 	case "recovery-ops":
 		if strconv.FormatUint(result.GlobalID, 10) != arg {
@@ -291,21 +340,33 @@ func (d *recoveryDials) attempts() []recoveryDial {
 
 // recoveryClient dials one client of the owned recovery identity. MDS
 // endpoints pass through counted, closable relays; OSD dials are admitted only
-// when the client is meant to reach an OSD.
+// when the client is meant to reach an OSD. A setup failure ends the test.
 func recoveryClient(t *testing.T, ctx context.Context, identity, keyPath string, dials *recoveryDials, configure func(*cephmsgr.Options)) *cephmsgr.Client {
 	t.Helper()
-	options := integrationOptions(t)
+	c, release, err := dialRecoveryClient(ctx, integrationOptions(t), identity, keyPath, dials, configure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(release)
+	return c
+}
+
+// dialRecoveryClient is recoveryClient for callers that must keep running
+// after a setup failure (the reconciliation of a failed restart leaf): a
+// credential or MON authentication error is returned, never raised through
+// the test. release closes the client and its MDS relays.
+func dialRecoveryClient(ctx context.Context, options cephmsgr.Options, identity, keyPath string, dials *recoveryDials, configure func(*cephmsgr.Options)) (*cephmsgr.Client, func(), error) {
 	encoded, err := os.ReadFile(keyPath)
 	if err != nil {
-		t.Fatal("read recovery credential", err)
+		return nil, nil, fmt.Errorf("read recovery credential: %w", err)
 	}
 	private, err := cephx.ParseKey(strings.TrimSpace(string(encoded)))
 	want, profileErr := mdsFreshExpectedKeyType(os.Getenv("CEPH_MSGR_TEST_KEY_TYPE"))
 	if err != nil || profileErr != nil || private.Type() != want {
-		t.Fatal("recovery credential does not match selected key profile")
+		return nil, nil, errors.New("recovery credential does not match selected key profile")
 	}
 	if options.Key, err = cephmsgr.ParseKey(strings.TrimSpace(string(encoded))); err != nil {
-		t.Fatal(err)
+		return nil, nil, fmt.Errorf("parse recovery credential: %w", err)
 	}
 	options.Identity, options.MaxMDSConnections = identity, 1
 	options.EnableMDSMaps = false
@@ -359,9 +420,9 @@ func recoveryClient(t *testing.T, ctx context.Context, identity, keyPath string,
 	}
 	c, err := cephmsgr.Dial(ctx, options)
 	if err != nil {
-		t.Fatal("authenticate recovery client", err)
+		return nil, nil, fmt.Errorf("authenticate recovery client: %w", err)
 	}
-	t.Cleanup(func() {
+	return c, func() {
 		c.Close()
 		dials.mu.Lock()
 		defer dials.mu.Unlock()
@@ -369,8 +430,7 @@ func recoveryClient(t *testing.T, ctx context.Context, identity, keyPath string,
 			relay.Close()
 			relay.Wait()
 		}
-	})
-	return c
+	}, nil
 }
 
 // recoveryPlacement is the caller-side placement of one data object, read
@@ -463,6 +523,7 @@ type recoveryRestartEvidence struct {
 	HeldCreateUnsafeToSafeMicros         int64
 	ReplayedUnsafeAfterTickMicros        int64
 	FireStarted, FireAcked               time.Time
+	FireState, FireError                 string
 	FireAckMicros                        int64
 	RedialHeldAt                         time.Time
 	RedialAfterFireMicros                int64
@@ -495,10 +556,134 @@ type recoveryRestartEvidence struct {
 	ReplayedHistoricOp                   *nativeMDSCephFSHistoricOp
 	UnansweredHistoricOp                 *nativeMDSCephFSHistoricOp
 	HistoricOps                          []nativeMDSCephFSHistoricOp
+	ReplayObservation                    *recoveryReplayObservation `json:",omitempty"`
 	ReplayExecutedByNewIncarnation       bool
 	NativeSessionAfter                   *nativeMDSSession
 	ReplayedIno, UnansweredIno           uint64
 	ReplayedNativeIno, UnansweredNative  uint64
+	// Phase is the last milestone the restart leaf reached.
+	Phase string
+	// The fault boundary: the replayed create's fresh parent, the journal
+	// pause of the armed incarnation, the create's TID and the incarnation
+	// that answered it unsafe, the forced journal flush sent after that reply
+	// and the op-tracker read that found the create still held.
+	BoundaryDirIno                   uint64
+	Pause                            *nativeMDSCephFSPause
+	ReplayedTID                      uint64
+	ReplayedUnsafeMDS                nativeMDSCephFSDaemon
+	ForcedFlushAfterUnsafeMicros     int64
+	BoundaryOp                       *nativeMDSCephFSBoundary
+	BoundaryCheckedAfterUnsafeMicros int64
+	Reconcile                        *recoveryReconcileEvidence `json:",omitempty"`
+}
+
+// recoveryReconcileEvidence records the bounded reconciliation after the
+// restart leaf failed. FailedAfterPhase names where the original failure
+// happened; that failure stays the test result.
+type recoveryReconcileEvidence struct {
+	FailedAfterPhase  string
+	Started           time.Time
+	Millis            int64
+	FireOutcome       string
+	Resumed           *nativeMDSCephFSPause  `json:",omitempty"`
+	StatusTimeline    []recoveryStatusSample `json:",omitempty"`
+	Adopted           *nativeMDSCephFSDaemon `json:",omitempty"`
+	CleanupSession    string                 `json:",omitempty"`
+	FreshGlobalID     uint64                 `json:",omitempty"`
+	Removals          []recoveryRemoval      `json:",omitempty"`
+	SessionClosed     bool
+	RecoveryDirAbsent bool
+	PlanDirAbsent     bool
+	// OwnedSessionsChecked reports that the native session listing was read;
+	// OwnedSessionsLeft is meaningful only then.
+	OwnedSessionsChecked bool
+	OwnedSessionsLeft    []uint64                 `json:",omitempty"`
+	Blocklist            []nativeMDSSessionsBlock `json:",omitempty"`
+	Errors               []string                 `json:",omitempty"`
+	// Completed is a positive statement: every terminal check ran and held
+	// and no step failed. See finish.
+	Completed bool
+}
+
+// failf records one reconciliation error and reports it. report adds to the
+// test result (t.Errorf); it never replaces the failure of the restart leaf.
+func (r *recoveryReconcileEvidence) failf(report func(string), format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	r.Errors = append(r.Errors, message)
+	report(message)
+}
+
+// finish closes the receipt and must be deferred. Completed requires the
+// terminal verification itself: the cleanup session closed, both owned
+// directories natively absent and the native session listing read without an
+// owned session. The absence of recorded errors is not enough, because a
+// reconciliation can stop without recording one (a helper that ends the
+// goroutine through t.Fatal runs the deferred finish with no error). Such a
+// stop is recorded here as an error.
+func (r *recoveryReconcileEvidence) finish(report func(string)) {
+	r.Millis = time.Since(r.Started).Milliseconds()
+	verified := r.SessionClosed && r.RecoveryDirAbsent && r.PlanDirAbsent && r.OwnedSessionsChecked && len(r.OwnedSessionsLeft) == 0
+	if !verified && len(r.Errors) == 0 {
+		r.failf(report, "reconciliation stopped before its terminal verification (session closed %t, recovery directory absent %t, plan directory absent %t, owned sessions checked %t)",
+			r.SessionClosed, r.RecoveryDirAbsent, r.PlanDirAbsent, r.OwnedSessionsChecked)
+	}
+	r.Completed = verified && len(r.Errors) == 0
+}
+
+// recoveryReplayObservation is what one op tracker read of the adopted
+// incarnation shows about the replayed create. It is an observation of that
+// read only: the tracker keeps a bounded history, so a request that is absent
+// or carries no REPLAY flag says nothing about which incarnation journaled it.
+type recoveryReplayObservation struct {
+	GlobalID, TID uint64
+	// SessionOpsReturned counts the client requests of this session in the
+	// read, after the fixture's reduction to that session.
+	SessionOpsReturned int
+	Tracked            bool
+	ReplayFlag         bool
+	Op                 *nativeMDSCephFSHistoricOp `json:",omitempty"`
+}
+
+func observeRecoveryReplay(ops []nativeMDSCephFSHistoricOp, gid, tid uint64) recoveryReplayObservation {
+	o := recoveryReplayObservation{GlobalID: gid, TID: tid, SessionOpsReturned: len(ops)}
+	prefix := fmt.Sprintf("client_request(client.%d:%d ", gid, tid)
+	for i := range ops {
+		if strings.HasPrefix(ops[i].Description, prefix) {
+			o.Tracked, o.Op = true, &ops[i]
+			o.ReplayFlag = strings.Contains(ops[i].Description, " REPLAY")
+			break
+		}
+	}
+	return o
+}
+
+// failure is empty when the read shows the REPLAY execution. Otherwise it
+// states what was read and the bounds of that read. It names no cause: the
+// read cannot tell an execution that left the history from a request answered
+// without one.
+func (o recoveryReplayObservation) failure() string {
+	if o.Tracked && o.ReplayFlag {
+		return ""
+	}
+	seen := fmt.Sprintf("none of the %d client requests of session %d it returned has TID %d", o.SessionOpsReturned, o.GlobalID, o.TID)
+	if o.Tracked {
+		seen = fmt.Sprintf("it returned the request without the REPLAY flag: %q", o.Op.Description)
+	}
+	return "no REPLAY execution of the replayed create was observed on the adopted incarnation: one dump_historic_ops read right after adoption was made and " + seen +
+		". The read is bounded by the daemon's op history (mds_op_history_size and mds_op_history_duration; 20 completed operations and 600 s by default at " + mdsFreshSource +
+		") and by the fixture's reduction to at most 64 client requests of this session. It does not show how the request was answered, nor whether any incarnation had journaled it before the restart"
+}
+
+// recoveryRemoval is one unlink or rmdir of the reconciliation; ENOENT means
+// the entry was never created or already gone.
+type recoveryRemoval struct {
+	Op          string
+	Parent      uint64
+	Name        string
+	Transaction uint64 `json:",omitempty"`
+	Result      int32
+	Absent      bool
+	Error       string `json:",omitempty"`
 }
 
 type recoveryStatusSample struct {
@@ -610,7 +795,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		oracle.RecoveryCaps["mon"] != "allow r" || oracle.RecoveryCaps["mds"] != "allow rw fsname="+fsName || oracle.RecoveryCaps["osd"] != "allow r tag cephfs data="+fsName ||
 		plan.Directory != "ceph-msgr-cephfs-"+oracle.Token+"-recovery" || !slices.Equal(plan.FlushPlain, []string{"flush-plain-0", "flush-plain-1", "flush-plain-2"}) ||
 		!slices.Equal(plan.FlushRequested, []string{"flush-requested-0", "flush-requested-1", "flush-requested-2"}) || plan.Fenced != "fenced" || plan.Held != "held" ||
-		plan.Replayed != "replayed" || plan.Unanswered != "unanswered" || payloadErr != nil || len(payload) != 5000 || oracle.DataPoolName != fsName+"-data" || oracle.DataPool < 0 {
+		plan.Boundary != "boundary" || plan.Replayed != "replayed" || plan.Unanswered != "unanswered" || payloadErr != nil || len(payload) != 5000 || oracle.DataPoolName != fsName+"-data" || oracle.DataPool < 0 {
 		t.Fatal("owned CephFS recovery oracle, plan or identity differ")
 	}
 	mdsTarget := cephmsgr.MDSTarget{FilesystemID: fresh.FSCID, Rank: 0, Address: fmt.Sprintf("v2:%s/%d", current.MDS.Endpoint, current.MDS.Nonce)}
@@ -784,7 +969,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 	var gidR uint64
 	var nonceR uint32
 	var addressR string
-	var dirIno uint64
+	var dirIno, boundaryIno uint64
 	inos := map[string]uint64{}
 	// The held-FLOCK composition uses the plan directory and go-file of the
 	// ordinary metadata acceptance: the closed native probe admits only that
@@ -797,6 +982,9 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 
 	// The restart client outlives every leaf: its cleanup belongs to the test.
 	dialsR = newRecoveryDials(false, current.MDS.Endpoint)
+	// The reconciliation of a failed restart leaf dials its own client from
+	// these options and reports a setup failure in its receipt.
+	baseOptions := integrationOptions(t)
 	clientR = recoveryClient(t, ctx, identity, keyFile, dialsR, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS, o.EnableOSD = true, true, false })
 
 	if !leaf("open_recovery_session", func(t *testing.T) {
@@ -1102,6 +1290,216 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		return
 	}
 
+	// reconcileRestart runs once, after the restart leaf failed, under its own
+	// bounded context (the test context may be spent). It lifts the journal
+	// pause of a restart that was never fired, or waits until the issued
+	// restart's new incarnation is up:active and adopts it; it then removes
+	// the owned namespace through a session of that current incarnation and
+	// checks natively that the namespace and every owned session are gone.
+	// It never removes a blocklist entry: the fencing of a still-mapped
+	// incarnation stays, and the fixture cleanup removes only entries it can
+	// attribute. The leaf's own failure stays the result; reconciliation
+	// errors are added to it, never substituted for it.
+	reconcileRestart := func(t *testing.T, fireDone <-chan struct{}) {
+		rc, stop := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer stop()
+		r := &recoveryReconcileEvidence{FailedAfterPhase: restart.Phase, Started: time.Now()}
+		restart.Reconcile = r
+		report := func(message string) {
+			t.Errorf("reconcile after the restart leaf failed in phase %q: %s", r.FailedAfterPhase, message)
+		}
+		failf := func(format string, args ...any) { r.failf(report, format, args...) }
+		defer r.finish(report)
+		if fireDone != nil {
+			select {
+			case <-fireDone:
+			case <-rc.Done():
+				failf("the issued restart-fire request did not return")
+				return
+			}
+		}
+		r.FireOutcome = restart.FireState
+		switch {
+		case fireDone == nil || restart.FireState == "armed":
+			// Never fired: the armed incarnation still serves, so only a
+			// journal pause has to be lifted before the namespace removal.
+			if p := restart.Pause; p != nil && p.State == "applied" {
+				resumed, err := control.request(rc, "restart-resume", "")
+				if err != nil {
+					failf("lift the journal pause: %v", err)
+					return
+				}
+				r.Resumed = resumed.Restart.Pause
+			}
+		case restart.AdoptedGID != 0:
+			// Already adopted: only the namespace and sessions remain.
+		case restart.FireState == "applied" || restart.FireState == "uncertain":
+			// Stop resuming toward the failed incarnation, then confirm the
+			// active new incarnation before any other action.
+			connR.Close()
+			for {
+				status, err := control.request(rc, "restart-status", "")
+				if err != nil {
+					failf("read the restart status: %v", err)
+					return
+				}
+				s := status.RankStatus
+				r.StatusTimeline = append(r.StatusTimeline, recoveryStatusSample{AfterFireMillis: time.Since(restart.FireStarted).Milliseconds(), FSMapEpoch: s.FSMapEpoch, Rank0: s.Rank0,
+					Failed: s.Failed, ArmedPresent: s.ArmedPresent, ArmedBlocklist: s.ArmedBlocklist})
+				if s.Rank0 != nil && s.Rank0.GID != restart.ArmedGID && s.Rank0.Name == current.MDS.Name && s.Rank0.State == "up:active" && !s.ArmedPresent {
+					break
+				}
+				select {
+				case <-rc.Done():
+					failf("the new incarnation did not become active; the armed incarnation's fencing is kept")
+					return
+				case <-time.After(time.Second):
+				}
+			}
+			adopted, err := control.request(rc, "restart-adopt", "")
+			if err != nil {
+				failf("adopt the new incarnation: %v", err)
+				return
+			}
+			r.Adopted = adopted.Restart.Adopted
+			restart.Pause = adopted.Restart.Pause
+		default:
+			failf("the restart fire outcome is unknown (%q: %s); the fixture refuses every other action", restart.FireState, restart.FireError)
+			return
+		}
+		// A session of the current incarnation removes the owned entries.
+		session, agent := active, agentR
+		if active != nil && active != sessionR {
+			agent = agentR2
+		}
+		if session == nil || session.Status().State != cephmsgr.MDSSessionOpen {
+			r.CleanupSession = "fresh"
+			dials := newRecoveryDials(false, control.mds.Endpoint)
+			// A setup failure is an error of this receipt, not a t.Fatal: the
+			// remaining terminal checks are then not run and finish records
+			// the reconciliation as incomplete.
+			client, release, err := dialRecoveryClient(rc, baseOptions, identity, keyFile, dials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS, o.EnableOSD = true, true, false })
+			if err != nil {
+				failf("set up a fresh cleanup client: %v", err)
+				return
+			}
+			defer release()
+			r.FreshGlobalID = client.Snapshot().GlobalID
+			control.goGIDs[r.FreshGlobalID] = true
+			conn, err := client.OpenMDS(rc, cephmsgr.MDSTarget{FilesystemID: fresh.FSCID, Rank: 0, Address: fmt.Sprintf("v2:%s/%d", control.mds.Endpoint, control.mds.Nonce)})
+			if err != nil {
+				failf("open the current incarnation: %v", err)
+				return
+			}
+			if session, err = conn.OpenSession(rc, cephmsgr.MDSSessionOptions{Metadata: metadata("reconcile"), RenewInterval: 2 * time.Second, MaxEvents: 1024}); err != nil {
+				failf("open a cleanup session: %v", err)
+				return
+			}
+			agent = startCephFSCapAgent(rc, session)
+		} else {
+			r.CleanupSession = "active"
+		}
+		remove := func(op uint32, parent uint64, name string) {
+			removal := recoveryRemoval{Op: "unlink", Parent: parent, Name: name}
+			if op == cephmsgr.MDSOpRmdir {
+				removal.Op = "rmdir"
+			}
+			defer func() { r.Removals = append(r.Removals, removal) }()
+			if parent == 0 {
+				// The parent directory was never created.
+				removal.Absent = true
+				return
+			}
+			call, err := session.Submit(rc, cephmsgr.MDSRequest{Op: op, Path: cephmsgr.MDSFilePath{Ino: parent, Path: name}})
+			if err != nil {
+				removal.Error = err.Error()
+				failf("%s %s: %v", removal.Op, name, err)
+				return
+			}
+			removal.Transaction = call.Transaction()
+			wait, stopWait := context.WithTimeout(rc, 30*time.Second)
+			defer stopWait()
+			first, err := call.Wait(wait)
+			if err == nil {
+				_, _, err = agent.applyReply(name, first)
+			}
+			if err != nil {
+				removal.Error = err.Error()
+				failf("%s %s: %v", removal.Op, name, err)
+				return
+			}
+			removal.Result = first.Result
+			switch {
+			case first.Result == -int32(syscall.ENOENT):
+				removal.Absent = true
+				return
+			case first.Result != 0:
+				failf("%s %s returned %d", removal.Op, name, first.Result)
+				return
+			}
+			if !first.Safe {
+				if err := session.FlushJournal(wait); err != nil {
+					removal.Error = err.Error()
+					failf("flush the journal after %s %s: %v", removal.Op, name, err)
+					return
+				}
+				if safe, err := call.WaitSafe(wait); err != nil || safe.Result != 0 {
+					removal.Error = fmt.Sprint(err)
+					failf("%s %s was not made safe: %v", removal.Op, name, err)
+					return
+				}
+			}
+			removal.Absent = true
+		}
+		remove(cephmsgr.MDSOpUnlink, boundaryIno, plan.Replayed)
+		remove(cephmsgr.MDSOpRmdir, dirIno, plan.Boundary)
+		for _, name := range slices.Concat(plan.FlushPlain, plan.FlushRequested, []string{plan.Fenced, plan.Held, plan.Unanswered}) {
+			remove(cephmsgr.MDSOpUnlink, dirIno, name)
+		}
+		if dirIno != 0 {
+			remove(cephmsgr.MDSOpRmdir, 1, plan.Directory)
+		}
+		if heldDirIno != 0 {
+			remove(cephmsgr.MDSOpUnlink, heldDirIno, hf.File)
+			remove(cephmsgr.MDSOpRmdir, 1, hf.Directory)
+		}
+		items, barrier := agent.releaseAll()
+		if err := session.ReleaseCaps(rc, items, barrier); err != nil {
+			failf("release caps: %v", err)
+		}
+		closing, stopClose := context.WithTimeout(rc, 15*time.Second)
+		err := session.Close(closing)
+		stopClose()
+		if r.SessionClosed = err == nil && session.Status().State == cephmsgr.MDSSessionClosed; !r.SessionClosed {
+			failf("close the cleanup session: %v", err)
+		}
+		// Native readback of the namespace and of every owned session.
+		if st, err := control.stat(rc, "dir"); err != nil {
+			failf("native stat of the recovery directory: %v", err)
+		} else if r.RecoveryDirAbsent = !st.Exists && st.Errno == 2; !r.RecoveryDirAbsent {
+			failf("the recovery directory remains natively: %+v", st)
+		}
+		if st, err := control.request(rc, "stat", "dir"); err != nil || st.Native == nil || st.Native.Stat == nil {
+			failf("native stat of the metadata plan directory: %v", err)
+		} else if r.PlanDirAbsent = !st.Native.Stat.Exists && st.Native.Stat.Errno == 2; !r.PlanDirAbsent {
+			failf("the metadata plan directory remains natively: %+v", st.Native.Stat)
+		}
+		observed, err := control.request(rc, "observe", strconv.FormatUint(gidR, 10))
+		if err != nil {
+			failf("native session listing: %v", err)
+			return
+		}
+		r.Blocklist, r.OwnedSessionsChecked = observed.Blocklist, true
+		for _, gid := range []uint64{gidR, r.FreshGlobalID} {
+			if gid != 0 && observed.session(gid) != nil {
+				r.OwnedSessionsLeft = append(r.OwnedSessionsLeft, gid)
+			}
+		}
+		if len(r.OwnedSessionsLeft) != 0 {
+			failf("owned sessions remain natively: %v", r.OwnedSessionsLeft)
+		}
+	}
+
 	if !leaf("mds_restart_reconnect_replay", func(t *testing.T) {
 		armed, err := control.request(ctx, "restart-arm", "")
 		if err != nil {
@@ -1109,6 +1507,15 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		}
 		a := armed.Restart.Armed
 		restart.ArmedGID, restart.ArmedNonce, restart.ArmedIncarnation, restart.ArmedEndpoint = a.GID, a.Nonce, a.Incarnation, a.Endpoint
+		restart.Phase = "armed"
+		// From here a failure can leave a journal pause, an issued restart or
+		// owned namespace entries behind; reconcile them after this leaf.
+		var fireDone chan struct{}
+		t.Cleanup(func() {
+			if t.Failed() {
+				reconcileRestart(t, fireDone)
+			}
+		})
 		// The held file: create it and wait for the safe reply without asking
 		// for a journal flush, so the safe reply marks a journal tick.
 		call, first, trace, e := submitFirst(t, sessionR, agentR, "restart", plan.Held, create(dirIno, plan.Held))
@@ -1129,13 +1536,62 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if c, _ := agentR.cap(heldIno); c.Issued&cephCapFileRD == 0 {
 			t.Fatal("held file was not issued Fr", cephCapString(c.Issued))
 		}
-		// The mutation to replay: its unsafe reply arrives right after a tick.
-		callA, firstA, traceA, eA := submitFirst(t, sessionR, agentR, "restart", plan.Replayed, create(dirIno, plan.Replayed))
+		restart.Phase = "held"
+		// The replayed create gets a fresh parent. A create wrlocks its parent's
+		// filelock and nestlock; the recovery directory's are dirtied by every
+		// create above and nudged by Locker::scatter_tick, whose writebehind is
+		// journaled and keeps the lock unstable until that entry commits. A
+		// fresh directory carries no aged dirty scatter state, so no writebehind
+		// can hold its locks while the journal is paused.
+		call, first, trace, e = submitFirst(t, sessionR, agentR, "restart", "mkdir "+plan.Boundary, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpMkdir, Flags: cephmsgr.MDSRequestFlagWantDentry,
+			Args: cephfsMkdirArgs(0o40755), Path: cephmsgr.MDSFilePath{Ino: dirIno, Path: plan.Boundary}})
+		waitSafe(t, sessionR, call, first, e, true)
+		if first.Result != 0 || trace.Target == nil || trace.DentryName != plan.Boundary {
+			t.Fatalf("boundary directory mkdir reply differs: %+v", e)
+		}
+		boundaryIno = trace.Target.Ino
+		inos[plan.Boundary], restart.BoundaryDirIno = boundaryIno, boundaryIno
+		restart.Phase = "boundary-directory"
+		// The fault boundary: the armed incarnation's journal submitter stops
+		// appending entries. The fixture confirms that the daemon applied it.
+		paused, err := control.request(ctx, "restart-pause", "")
+		if err != nil {
+			t.Fatal("pause the armed incarnation's journal", err)
+		}
+		restart.Pause = paused.Restart.Pause
+		restart.Phase = "paused"
+		// The mutation to replay, qualified by a positive unsafe reply from the
+		// armed incarnation.
+		callA, firstA, traceA, eA := submitFirst(t, sessionR, agentR, "restart", plan.Replayed, create(boundaryIno, plan.Replayed))
 		restart.ReplayedIno = createdIno(t, plan.Replayed, firstA, traceA)
+		restart.ReplayedTID, restart.ReplayedUnsafeMDS = callA.Transaction(), control.mds
 		restart.ReplayedUnsafeAfterTickMicros = firstA.Received.Sub(tick).Microseconds()
 		if firstA.Safe {
 			t.Fatalf("the replayed create was answered safe at once: %+v", eA)
 		}
+		restart.Phase = "replayed-unsafe"
+		// Force the window the race used to lose: ask for a journal flush now.
+		// On a running submitter this makes a create safe within milliseconds
+		// (journal_flush_unsafe_to_safe); while paused it only queues a flush
+		// marker behind the held entry.
+		if err := sessionR.FlushJournal(ctx); err != nil {
+			t.Fatal("request a journal flush inside the boundary", err)
+		}
+		restart.ForcedFlushAfterUnsafeMicros = time.Since(firstA.Received).Microseconds()
+		inflight, err := control.request(ctx, "restart-inflight", fmt.Sprintf("%d:%d", gidR, callA.Transaction()))
+		if err != nil {
+			t.Fatal("read the armed incarnation's op tracker", err)
+		}
+		restart.BoundaryOp, restart.BoundaryCheckedAfterUnsafeMicros = inflight.Restart.Boundary, time.Since(firstA.Received).Microseconds()
+		if b := restart.BoundaryOp; !b.Held || b.Op == nil || !strings.Contains(b.Op.Description, " create ") {
+			t.Fatal("the replayed create is not held uncommitted on the armed incarnation after a forced journal flush", restart.BoundaryOp)
+		}
+		probe, stopProbe := context.WithCancel(ctx)
+		stopProbe()
+		if _, err := callA.WaitSafe(probe); err == nil {
+			t.Fatal("the replayed create became safe on the paused incarnation")
+		}
+		restart.Phase = "boundary-held"
 		holding, release := dialsR.armHold()
 		defer release()
 		lostSeen := make(chan time.Time, 1)
@@ -1143,13 +1599,20 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			<-s.Done()
 			lostSeen <- time.Now()
 		}(sessionR)
-		fireDone := make(chan struct{})
+		fireDone = make(chan struct{})
 		var fireErr error
-		restart.FireStarted = time.Now()
+		restart.FireStarted, restart.Phase = time.Now(), "fired"
 		go func() {
 			defer close(fireDone)
-			_, fireErr = control.request(ctx, "restart-fire", "")
+			var fired nativeMDSCephFSReceipt
+			fired, fireErr = control.request(ctx, "restart-fire", "")
 			restart.FireAcked = time.Now()
+			if fired.Restart != nil {
+				restart.FireState = fired.Restart.State
+			}
+			if fireErr != nil {
+				restart.FireError = fireErr.Error()
+			}
 		}()
 		afterFire := func(at time.Time) int64 { return at.Sub(restart.FireStarted).Microseconds() }
 		// The first redial after the transport fault is held while a request
@@ -1162,7 +1625,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			probe, stop := context.WithCancel(ctx)
 			stop()
 			if _, err := callA.WaitSafe(probe); err == nil {
-				t.Fatal("the replayed create became safe before the MDS failed; the journal tick won the race")
+				t.Fatal("the replayed create became safe before the MDS failed although the armed incarnation's journal was paused")
 			}
 			eB := &recoveryRequestEvidence{Name: plan.Unanswered, Session: "restart", Op: cephmsgr.MDSOpCreate, MDSMapEpoch: epoch, submitted: time.Now()}
 			requests = append(requests, eB)
@@ -1191,6 +1654,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		case <-time.After(45 * time.Second):
 			t.Fatal("the session did not end after the MDS restart")
 		}
+		restart.Phase = "lost"
 		lost := sessionR
 		lostStatus := lost.Status()
 		restart.LostAfterFireMicros, restart.LostAfterRedialMicros = afterFire(restart.LostAt), restart.LostAt.Sub(restart.RedialHeldAt).Microseconds()
@@ -1240,7 +1704,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		restart.ReconnectStateSeen = newRank.State
+		restart.ReconnectStateSeen, restart.Phase = newRank.State, "reconnect-phase"
 		if newRank.Nonce == restart.ArmedNonce || newRank.State != "up:reconnect" {
 			t.Fatal("the restarted MDS is not a new incarnation waiting in up:reconnect", newRank)
 		}
@@ -1310,7 +1774,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal("CephFS reconnect to the new incarnation", err)
 		}
-		active = sessionR2
+		active, restart.Phase = sessionR2, "reconnected"
 		agentR2 = startCephFSCapAgentFrom(ctx, sessionR2, agentR)
 		reopened := describeMDSSession("reconnected", identity, sessionR2)
 		restart.Reopened = &reopened
@@ -1359,8 +1823,8 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 				}
 			} else {
 				restart.UnansweredIno = ino
+				inos[name] = ino
 			}
-			inos[name] = ino
 		}
 		facts["resubmitted_replies"] = requests[len(requests)-len(calls):]
 		// The new incarnation becomes active once reconnect, rejoin and client
@@ -1375,7 +1839,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			restart.StatusTimeline = append(restart.StatusTimeline, recoveryStatusSample{AfterFireMillis: time.Since(restart.FireStarted).Milliseconds(), FSMapEpoch: s.FSMapEpoch, Rank0: s.Rank0,
 				Failed: s.Failed, ArmedPresent: s.ArmedPresent, ArmedBlocklist: s.ArmedBlocklist})
 			if s.Rank0 != nil && s.Rank0.GID == newRank.GID && s.Rank0.State == "up:active" {
-				restart.ActiveAfterFireMicros = afterFire(time.Now())
+				restart.ActiveAfterFireMicros, restart.Phase = afterFire(time.Now()), "active"
 				break
 			}
 			if time.Now().After(deadline) {
@@ -1389,9 +1853,27 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		}
 		ad := adopted.Restart.Adopted
 		restart.AdoptedGID, restart.AdoptedNonce, restart.AdoptedIncarnation, restart.AdoptedEndpoint = ad.GID, ad.Nonce, ad.Incarnation, ad.Endpoint
-		restart.OldIncarnationFencing = adopted.Restart.OldFencing
+		restart.OldIncarnationFencing, restart.Pause, restart.Phase = adopted.Restart.OldFencing, adopted.Restart.Pause, "adopted"
 		if ad.GID != newRank.GID || ad.Nonce != newRank.Nonce || ad.Endpoint != newRank.Endpoint {
 			t.Fatal("adopted incarnation differs from the one reconnected", ad, newRank)
+		}
+		// The new incarnation's op tracker shows whether it executed the
+		// replayed create (an MDRequest with REPLAY) or answered it from the
+		// session's completed-request record (no MDRequest at all). It is read
+		// first, before native oracles add their own requests to the history.
+		ops, err := control.request(ctx, "recovery-ops", strconv.FormatUint(gidR, 10))
+		if err != nil {
+			t.Fatal(err)
+		}
+		restart.HistoricOps = ops.HistoricOps
+		find := func(tid uint64) *nativeMDSCephFSHistoricOp {
+			prefix := fmt.Sprintf("client_request(client.%d:%d ", gidR, tid)
+			for i := range ops.HistoricOps {
+				if strings.HasPrefix(ops.HistoricOps[i].Description, prefix) {
+					return &ops.HistoricOps[i]
+				}
+			}
+			return nil
 		}
 		ackDeadline := time.Now().Add(30 * time.Second)
 		for {
@@ -1419,39 +1901,27 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 				t.Fatal("the failed incarnation's address is not blocklisted", address, adopted.Restart.OldFencing)
 			}
 		}
-		// The new incarnation's op tracker shows whether it executed the
-		// replayed create (an MDRequest with REPLAY) or answered it from the
-		// session's completed-request record (no MDRequest at all).
-		ops, err := control.request(ctx, "recovery-ops", strconv.FormatUint(gidR, 10))
-		if err != nil {
-			t.Fatal(err)
-		}
-		restart.HistoricOps = ops.HistoricOps
-		find := func(tid uint64) *nativeMDSCephFSHistoricOp {
-			prefix := fmt.Sprintf("client_request(client.%d:%d ", gidR, tid)
-			for i := range ops.HistoricOps {
-				if strings.HasPrefix(ops.HistoricOps[i].Description, prefix) {
-					return &ops.HistoricOps[i]
-				}
-			}
-			return nil
-		}
 		hf.MDSAfter = *ad
 		replayedLock := find(hf.AcquireTID) != nil
 		hf.AcquireReplayedByMDS = &replayedLock
 		if replayedLock {
 			t.Fatal("the new incarnation tracked a client request for the original SETFILELOCK TID", hf.AcquireTID)
 		}
-		restart.ReplayedHistoricOp = find(callA.Transaction())
-		restart.ReplayExecutedByNewIncarnation = restart.ReplayedHistoricOp != nil
+		replay := observeRecoveryReplay(ops.HistoricOps, gidR, callA.Transaction())
+		restart.ReplayObservation, restart.ReplayedHistoricOp = &replay, replay.Op
+		restart.ReplayExecutedByNewIncarnation = replay.Tracked && replay.ReplayFlag
 		if callB != nil {
 			restart.UnansweredHistoricOp = find(callB.Transaction())
 			if restart.UnansweredHistoricOp == nil {
 				t.Fatal("the new incarnation's op tracker lacks the resubmitted unanswered create", ops.HistoricOps)
 			}
 		}
-		if op := restart.ReplayedHistoricOp; op != nil && !strings.Contains(op.Description, " REPLAY") {
-			t.Fatal("the tracked replayed create lacks the REPLAY flag", op.Description)
+		// The acceptance requires the positive observation that the adopted
+		// incarnation executed the replayed create with REPLAY. Its absence
+		// fails the test as an unobserved execution within the bounds of this
+		// one read; it is not evidence of what an earlier incarnation did.
+		if message := replay.failure(); message != "" {
+			t.Fatal(message)
 		}
 		_, n := observe(t, gidR)
 		if err := checkNativeCephFSSession(n, identity, metadata("recovery")); err != nil {
@@ -1535,6 +2005,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if _, _, err := agentR2.close(heldIno, cephFileModeRDWR); err != nil {
 			t.Fatal("close held write handle", err)
 		}
+		restart.Phase = "verified"
 	}) {
 		return
 	}
@@ -1550,7 +2021,18 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if safe := waitSafe(t, active, call, first, e, true); safe.Result != 0 || first.Result != 0 {
 			t.Fatalf("flock directory rmdir differs: %+v", e)
 		}
+		call, first, _, e = submitFirst(t, active, agentR2, "reconnected", "unlink "+plan.Replayed, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpUnlink, Path: cephmsgr.MDSFilePath{Ino: boundaryIno, Path: plan.Replayed}})
+		if safe := waitSafe(t, active, call, first, e, true); safe.Result != 0 || first.Result != 0 {
+			t.Fatalf("unlink differs: %+v", e)
+		}
+		call, first, _, e = submitFirst(t, active, agentR2, "reconnected", "rmdir "+plan.Boundary, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpRmdir, Path: cephmsgr.MDSFilePath{Ino: dirIno, Path: plan.Boundary}})
+		if safe := waitSafe(t, active, call, first, e, true); safe.Result != 0 || first.Result != 0 {
+			t.Fatalf("boundary directory rmdir differs: %+v", e)
+		}
 		for _, name := range slices.Sorted(maps.Keys(inos)) {
+			if name == plan.Boundary {
+				continue
+			}
 			call, first, _, e := submitFirst(t, active, agentR2, "reconnected", "unlink "+name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpUnlink, Path: cephmsgr.MDSFilePath{Ino: dirIno, Path: name}})
 			if safe := waitSafe(t, active, call, first, e, true); safe.Result != 0 || first.Result != 0 {
 				t.Fatalf("unlink differs: %+v", e)

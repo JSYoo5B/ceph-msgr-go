@@ -95,16 +95,17 @@ func TestMDSCephFSIdentityCapsAndPlan(t *testing.T) {
 	}
 	recovery := mdsCephFSRecoveryPlanFor(token)
 	fenced, _ := hex.DecodeString(recovery.FencedPayloadHex)
-	if recovery.Directory != "ceph-msgr-cephfs-"+token+"-recovery" || len(fenced) != mdsCephFSFencedBytes || recovery.Held != "held" || recovery.Replayed != "replayed" || recovery.Unanswered != "unanswered" ||
+	if recovery.Directory != "ceph-msgr-cephfs-"+token+"-recovery" || len(fenced) != mdsCephFSFencedBytes || recovery.Held != "held" || recovery.Boundary != "boundary" || recovery.Replayed != "replayed" || recovery.Unanswered != "unanswered" ||
 		!reflect.DeepEqual(recovery, mdsCephFSRecoveryPlanFor(token)) || reflect.DeepEqual(recovery, mdsCephFSRecoveryPlanFor(strings.Repeat("b2", 16))) {
 		t.Fatal("owned recovery plan changed or is not token-bound", recovery.Directory, len(fenced))
 	}
-	for target, want := range map[string]string{"dir": "/" + recovery.Directory, "fenced": "/" + recovery.Directory + "/fenced", "flush-requested-2": "/" + recovery.Directory + "/flush-requested-2"} {
+	for target, want := range map[string]string{"dir": "/" + recovery.Directory, "fenced": "/" + recovery.Directory + "/fenced", "flush-requested-2": "/" + recovery.Directory + "/flush-requested-2",
+		"boundary": "/" + recovery.Directory + "/boundary", "replayed": "/" + recovery.Directory + "/boundary/replayed"} {
 		if got, err := recovery.path(target); err != nil || got != want {
 			t.Fatal("owned recovery path changed", target, got, err)
 		}
 	}
-	for _, target := range []string{"", "go-file", "native-0", "flush-plain-3", "held/x", ".."} {
+	for _, target := range []string{"", "go-file", "native-0", "flush-plain-3", "held/x", "..", "boundary/replayed", "boundary/held"} {
 		if _, err := recovery.path(target); err == nil {
 			t.Fatal("unowned recovery target admitted", target)
 		}
@@ -142,9 +143,13 @@ func TestMDSCephFSRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"10", token, "restart-fire"}, "restart-fire", "", 0},
 		{[]string{"10", token, "restart-status"}, "restart-status", "", 0},
 		{[]string{"10", token, "restart-adopt"}, "restart-adopt", "", 0},
+		{[]string{"10", token, "restart-pause"}, "restart-pause", "", 0},
+		{[]string{"10", token, "restart-resume"}, "restart-resume", "", 0},
+		{[]string{"10", token, "restart-inflight", "42:7"}, "restart-inflight", "", 42},
+		{[]string{"10", token, "recovery-stat", "boundary"}, "recovery-stat", "boundary", 0},
 	} {
 		id, action, err := parseMDSCephFSRequest(tc.fields, token, 9)
-		if err != nil || id != 10 || action.name != tc.name || action.target != tc.target || action.gid != tc.gid {
+		if err != nil || id != 10 || action.name != tc.name || action.target != tc.target || action.gid != tc.gid || action.name == "restart-inflight" && action.tid != 7 {
 			t.Fatal("closed MDS CephFS action changed", tc.fields, id, action, err)
 		}
 	}
@@ -156,6 +161,9 @@ func TestMDSCephFSRequestIsClosedAndScoped(t *testing.T) {
 		{"10", token, "evict"}, {"10", token, "evict", "0"}, {"10", token, "evict", "42", "43"}, {"10", token, "recovery-stat", "go-file"}, {"10", token, "recovery-stat", "/etc"},
 		{"10", token, "recovery-list", "dir"}, {"10", token, "recovery-write", "fenced"}, {"10", token, "restart-fire", "4242"}, {"10", token, "restart-arm", "x"},
 		{"10", token, "restart"}, {"10", token, "mds-fail"}, {"10", token, "recovery-ops"}, {"10", token, "recovery-ops", "x"},
+		{"10", token, "restart-pause", "true"}, {"10", token, "restart-resume", "x"}, {"10", token, "restart-inflight"}, {"10", token, "restart-inflight", "42"},
+		{"10", token, "restart-inflight", "42:0"}, {"10", token, "restart-inflight", "0:7"}, {"10", token, "restart-inflight", "42:07"}, {"10", token, "restart-inflight", "42:7:8"},
+		{"10", token, "recovery-stat", "boundary/replayed"},
 	} {
 		if _, _, err := parseMDSCephFSRequest(fields, token, 0); err == nil {
 			t.Fatal("unowned or caller-selected CephFS action admitted", fields)
