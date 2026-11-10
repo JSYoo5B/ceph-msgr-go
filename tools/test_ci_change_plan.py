@@ -76,9 +76,15 @@ class ChangePlanTests(unittest.TestCase):
         self.assertFalse(self.result()['docs_only'])
 
     def test_executable_mode_and_root_embed_do_not_skip(self):
+        # A filesystem chmod is not a mode change where Git ignores the
+        # executable bit (core.filemode=false, the Windows default), so the
+        # bit is staged in the index and the committed tree mode is checked.
+        self.git('config', 'core.filemode', 'false')
         self.write('README.md', 'after\n')
-        (self.root / 'README.md').chmod(0o755)
+        self.git('add', '--chmod=+x', 'README.md')
         self.commit()
+        self.assertEqual(self.git('ls-tree', 'HEAD', 'README.md').split()[0], '100755')
+        self.assertEqual(self.git('ls-tree', self.base, 'README.md').split()[0], '100644')
         self.assertFalse(self.result()['docs_only'])
         self.git('reset', '--hard', self.base)
         self.write('main.go', 'package sample\nimport _ "embed"\n//go:embed *.md\nvar docs string\n')
