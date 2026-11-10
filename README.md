@@ -152,15 +152,30 @@ outcomes. The contracts linked from each section define the wire subset.
   [Which side of the connection Go implements](#which-side-of-the-connection-go-implements).
 - It is not a RADOS, RBD or CephFS client. Callers supply OSD targets,
   placement and map epochs; there is no CRUSH computation, automatic routing,
-  redirect following or automatic retry.
+  redirect following or automatic resend of an object request.
 - Commands are raw. The product builds no command JSON, parses no command
   output and loads no keyring or configuration file.
-- A request that fails after transmission started has an unknown outcome and
-  is never sent again automatically. Local cancellation is not remote
-  rollback.
-- Only Tentacle (20.2) and later clusters are admitted
-  (`min_mon_release >= 20`). Earlier release families have no compatibility
-  path.
+- Outcome rules differ by API; the package documentation in
+  [api.go](cephmsgr/api.go) owns them.
+  - A daemon command or an OSD request that fails after its transmission
+    started returns an `OutcomeUnknownError`: the daemon may have executed it,
+    and the client never sends it again on its own.
+  - A CephFS request is different. `MDSSession.Submit` returns once the
+    request is queued. A `Wait` or `WaitSafe` context that expires returns the
+    bare context error while the call stays pending, so the caller can wait on
+    the same call again instead of discarding it. On a resumable MDS
+    connection, Messenger resume retransmits unacknowledged frames with their
+    original sequence and transaction ID; that is delivery of the same
+    request, not a new one. Only a session that ends before the reply resolves
+    the call with an `OutcomeUnknownError`. Sending a request again
+    (`MDSSession.ResubmitForwarded`) is always an explicit caller action.
+  - Methods with other outcome rules, such as `MDSSession.SendCaps` and
+    `OpenMgrService`, document them.
+  - Canceling a local wait never establishes remote rollback.
+- Admission requires an authenticated MonMap with `min_mon_release >= 20`
+  (Tentacle, 20.2). A cluster that retains an older minimum, including one
+  that is being upgraded, is rejected, and earlier release families have no
+  compatibility path.
 - Only implemented features are advertised. OSD opcodes outside the supported
   set are refused; see [unsupported opcodes](internal/osd/UNSUPPORTED_OPCODES.md).
   Withheld CephFS client feature bits are listed in the
