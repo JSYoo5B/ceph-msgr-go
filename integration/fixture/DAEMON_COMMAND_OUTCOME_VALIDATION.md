@@ -165,6 +165,22 @@ of the same phase is refused, and a call that fails or does not return leaves
 its outcome uncertain for the caller. Receipts are published atomically before
 the acknowledgement and appended to `daemon-command-outcome-native.jsonl`.
 
+The baseline belongs to one daemon process, so its owner record also keeps
+its incarnation (the OSD's `up_from` epoch or the MDS GID) and its public address with nonce. Immediately before `overwrite` and `restore` the control reads
+the map again and sends the command only if it shows that same up
+incarnation and address. Otherwise the receipt says `refused`: nothing
+is claimed and nothing is sent, so a daemon restarted or replaced under the
+same name never receives a value derived from another process's baseline. An
+owner record without an incarnation and a failed map read are refused the same way. The
+two map reads after the call are compared with the recorded incarnation and reported as
+`same_incarnation_after`; the Go cells count a mutation only when it was not
+refused, returned successfully and that report is true.
+
+The admin socket is addressed by daemon name and reports neither value, so identity is
+not proven atomically with the command. A daemon replaced between the map read
+and the admin-socket call (two consecutive calls of the control) is not
+prevented; it is reported by the reads after the call.
+
 ### Reply gate and sequence
 
 The reply gate is the transaction-specific gate of the
@@ -218,6 +234,12 @@ is taken once, and no assertion depends on a wall-clock margin.
   failed mutation kept uncertain with path-like text masked; projection of
   only the owned diff entry and of only the PG flag; the `osd dump` and
   `fs dump` identity projections; admission of the one further MDS selector.
+- `TestDaemonCommandMutationsAreBoundToTheBaselineIncarnation` (fixture): for
+  the OSD, PG and MDS targets, both mutations and a daemon with a new map
+  incarnation, a new address nonce, an unreadable map or an owner record
+  without an incarnation, the receipt is `refused`, no claim file exists and
+  the replacement receives no mutating call; a replacement after the check is
+  reported by `same_incarnation_after`.
 - `cephmsgr/tell_reply_gate_test.go`: the gate (see the MGR Tell record).
 
 These checks establish no native result.
@@ -292,6 +314,26 @@ assertion in the table. The earlier passing runs do not explain this failure
 and are not used as evidence here; every result above is from the commit that
 contains the fix.
 
+### After review of the pull request
+
+A review finding on the MGR Tell observer applied to this control as well: the
+native `overwrite` and `restore` were not bound to the daemon process that
+supplied the baseline. With a fake fixture backend, an OSD baseline with
+override 12000 followed by a new incarnation with override 15000 made
+`restore` return success and set the replacement to 12000. The control now
+refuses in that case, as described under the native observer.
+
+Both rows were run again on source commit
+`def4650d68d8486e1a3e52a1026e309e318e0803`, which contains the change, on the
+same host, image and gate. Each gate expected exactly its selected client
+tests and observed them as `PASS` with no problems and no skip: the OSD and PG
+row (5.62 s and 5.02 s, run 61 s) and the MDS row (6.22 s, run 112 s). Every
+native overwrite and restoration receipt in these runs reports
+`refused=false`, `ok=true` and `same_incarnation_after=true`. The refusal
+itself was exercised with the fake backend only: no native run replaced a
+daemon between phases. The temporary changes above were not repeated on that
+commit.
+
 No hosted CI run of these rows is recorded here. Final-head hosted execution,
 if requested, is recorded on the pull request, which supersedes this note for
 the final SHA.
@@ -316,6 +358,9 @@ seconds. Not established:
 - a production PG administration operation: the PG cell's state is an
   upstream test-only flag, and its overwrite equals its baseline, so the final
   restoration is not separately observable;
+- atomic identity of a native mutation's target: the incarnation is checked by
+  a map read immediately before the admin-socket call and again after it, not
+  by the admin socket itself;
 - a server execution count. One complete local write and a surviving native
   overwrite show that the client did not transmit A again and that A was not
   applied after B. They do not prove exactly-once execution in general.

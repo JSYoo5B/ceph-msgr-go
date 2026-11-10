@@ -89,6 +89,12 @@ records. Absence of independent native acceptance does not establish a defect.
   limits, and the OSD, PG and MDS cells skip in secure mode. No secure cell
   identifies a transaction or a reply frame; that needs frame-level
   instrumentation inside the session, which no test has.
+- **Identity of the natively mutated daemon:** the MGR Tell, OSD, PG and MDS
+  observers send their one overwrite and one restoration only after a fresh
+  map read shows the daemon incarnation that supplied the baseline, and
+  report whether the reads after the call still show it. The admin socket
+  itself does not report that incarnation, so a daemon replaced between that
+  read and the call is reported afterwards, not prevented.
 - **Daemon replacement while a reply is withheld** is covered for MON and MGR
   commands only. The Tell and daemon command cells change process-local
   state, which a restart clears, so they keep the daemon and end only the

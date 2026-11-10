@@ -118,6 +118,22 @@ its outcome uncertain for the caller. Receipts are published atomically before
 the acknowledgement and appended to `mgr-tell-outcome-native.jsonl`, which the
 diagnostics allowlist retains together with `mgr-tell-outcome-identity.json`.
 
+The baseline belongs to one manager process, so its owner record also keeps
+the active GID. Immediately before `overwrite` and `restore` the control reads
+the MgrMap again and sends the command only if it shows that same name and GID
+as the available active manager. Otherwise the receipt says `refused`: nothing
+is claimed and nothing is sent, so a manager restarted or replaced under the
+same name never receives a value derived from another process's baseline. An
+owner record without a GID and a failed map read are refused the same way. The
+two map reads after the call are compared with the recorded GID and reported as
+`same_incarnation_after`; the Go cells count a mutation only when it was not
+refused, returned successfully and that report is true.
+
+The admin socket is addressed by daemon name and reports no GID, so identity is
+not proven atomically with the command. A manager replaced between the map read
+and the admin-socket call (two consecutive calls of the control) is not
+prevented; it is reported by the reads after the call.
+
 ### Reply gate
 
 A test-only connection wrapper (`cephmsgr/integration_tell_reply_gate_test.go`)
@@ -128,9 +144,13 @@ binds to that connection and to the transaction ID in the frame, before the
 bytes leave. On the read side it decodes the stream from the banner on and
 releases only complete frames. The frame that is a type 98 message with the
 bound transaction ID on the bound connection is held: no byte of it is
-returned to the Go session, and a channel reports the hold. Every other frame
-on every connection passes unchanged. A stream the wrapper cannot decode is
-forwarded unchanged and recorded as an error that fails the test.
+returned to the Go session, and a channel reports the hold. Every complete
+frame before it is delivered first, also when it arrived in the same read as
+the reply and when the caller reads with a short buffer. Frames after the held
+reply on that connection stay withheld with it, because the stream is ordered.
+Every frame on every other connection passes unchanged. A stream the wrapper
+cannot decode is forwarded unchanged and recorded as an error that fails the
+test.
 
 The hold is the barrier of the test. It shows that the daemon replied to A,
 so the following native read is taken once and is not repeated until it
@@ -199,6 +219,18 @@ agrees. No assertion depends on a wall-clock margin.
   for both gates: the held connection is closed from the test and from a
   session-like reader over a connection that fails a second Close, with the
   banner in the same read as the reply.
+- `TestTellReplyGateDeliversTheWholePrefixBeforeParking`: a peer writing
+  three-byte fragments and a peer writing the banner, three passing frames,
+  the bound reply and a later frame in one write, each read with a 1-byte, a
+  7-byte and a 64 KiB buffer. The reader receives exactly the bytes before the
+  bound reply and then the close error.
+- `TestMgrTellMutationsAreBoundToTheBaselineIncarnation` (fixture): for both
+  mutations and for a manager replaced under the same name, failed over,
+  unreadable or recorded without a GID, the receipt is `refused`, no claim
+  file exists and the replacement receives no mutating call; a replacement
+  after the check is reported by `same_incarnation_after`.
+  `TestNativeMutationCountsOnlyWhenSentToTheBaselineIncarnation` covers the
+  Go side.
 - `cephmsgr/mgr_tell_outcome_receipt_test.go` also covers the secure mode's
   wait: only a value and an override that each belong to the previous or to
   the wanted state are read again; a third value, a third override, an
@@ -416,6 +448,34 @@ keeps that first failure.
 
 No hosted CI run of these rows is recorded here.
 
+### After review of the pull request
+
+Two review findings on this cell were addressed after the evidence above.
+
+- The reply gate parked without delivering frames that arrived before the
+  bound reply in the same read. The read loop had been corrected with the
+  close order; the reported shape is now pinned by
+  `TestTellReplyGateDeliversTheWholePrefixBeforeParking`, which delivers 0 of
+  612 bytes with the earlier read loop.
+- The native `overwrite` and `restore` were not bound to the manager process
+  that supplied the baseline. With a fake fixture backend, a baseline of
+  `mgr.a` GID 4167 with override 12000 followed by GID 4999 with override
+  15000 made `restore` return success and set the replacement to 12000. The
+  control now refuses in that case, as described under the native observer.
+
+The three MGR Tell rows were run again on source commit
+`def4650d68d8486e1a3e52a1026e309e318e0803`, which contains both changes, on
+the same host, image and gate. Each gate expected exactly its selected client
+tests and observed them as `PASS` with no problems and no skip:
+`mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell` (8.22 s, run 46 s),
+`mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell` (8.12 s, run 43 s) and
+`mon-mgr.aes256k.ip4.host.t-suite-e9be0b` (8.53 s and 8.42 s, run 53 s). Every
+native overwrite and restoration receipt in these runs reports
+`refused=false`, `ok=true` and `same_incarnation_after=true`. The refusal
+itself was exercised with the fake backend only: no native run replaced a
+manager between phases. The temporary changes above were not repeated on that
+commit.
+
 
 ## Limits
 
@@ -431,6 +491,9 @@ established:
   required rows for other key types, IPv6 or the container runtime;
 - what `MgrTell` does when the active manager changes while a reply is
   withheld: the cell keeps one manager active;
+- atomic identity of a native mutation's target: the incarnation is checked by
+  a map read immediately before the admin-socket call and again after it, not
+  by the admin socket itself;
 - manager replacement or restart while the reply is withheld, which would
   clear the process-local override and is covered for module commands by the
   [MGR command cell](MGR_COMMAND_OUTCOME_VALIDATION.md);
