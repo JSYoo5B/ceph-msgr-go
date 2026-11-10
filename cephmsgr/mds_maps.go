@@ -190,13 +190,15 @@ func (s *MDSMapStream) Next(ctx context.Context) (MDSMapUpdate, error) {
 }
 
 // Close ends the watch and waits for its registration worker. Accepted
-// observations remain readable before ErrFSMapUserStreamClosed. It always
-// returns nil.
+// observations remain readable. ErrFSMapUserStreamClosed then becomes the
+// terminal cause only when no earlier cause, such as ErrMDSMapWatchOverflow
+// or a source failure, was recorded. It always returns nil.
 func (s *FSMapUserStream) Close() error { return s.watch.close(ErrFSMapUserStreamClosed) }
 
 // Close ends the watch and waits for its registration worker. Accepted
-// observations remain readable before ErrMDSMapStreamClosed. It always
-// returns nil.
+// observations remain readable. ErrMDSMapStreamClosed then becomes the
+// terminal cause only when no earlier cause, such as ErrMDSMapWatchOverflow
+// or a source failure, was recorded. It always returns nil.
 func (s *MDSMapStream) Close() error { return s.watch.close(ErrMDSMapStreamClosed) }
 
 func (s *monMDSMapWatch) signalLocked() { close(s.changed); s.changed = make(chan struct{}) }

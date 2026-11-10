@@ -897,9 +897,9 @@ retryManager:
 // Close is idempotent and waits for all connection workers to exit. It fails
 // every MON, MGR, OSD and MDS session with ErrClosed, so a call whose
 // transmission had started returns an OutcomeUnknownError; Close does not
-// wait for or cancel remote execution. Active watches end with ErrClosed after
-// their accepted data drains, and owned handles become unusable. Later calls
-// return ErrClosed.
+// wait for or cancel remote execution. Active watches drain their accepted
+// data and then report ErrClosed, unless an earlier terminal cause already
+// ended them, and owned handles become unusable. Later calls return ErrClosed.
 func (c *Client) Close() error {
 	// A session can already have a fatal cause while custom connection cleanup
 	// delays onClose and a watch worker has not observed Done. Preserve that
