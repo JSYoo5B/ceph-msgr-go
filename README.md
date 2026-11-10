@@ -129,7 +129,9 @@ detects corruption. Connections offer only the selected mode, without fallback.
 ## Representative operations
 
 Every operation below is a communication primitive with raw input and output.
-Paths beyond MON and MGR commands are opt-in through `Options`.
+The Opt-in column names the `Options` fields each row needs. A row marked
+`none` works on any client returned by `Dial`; the OSD, MDS, MDS map and MGR
+service rows are refused unless their option was set at `Dial`.
 
 | Task | Entry point | Opt-in | Section |
 | --- | --- | --- | --- |
@@ -137,7 +139,7 @@ Paths beyond MON and MGR commands are opt-in through `Options`.
 | Follow cluster state | `Snapshot`, `WaitMonMap`, `WaitMgrMap`, `WatchLogs`, `WatchConfig`, `WatchDigest` | none | [State snapshots](#state-snapshots-and-map-waits), [logs](#mon-logs), [configuration](#mon-configuration), [digest](#mon-health-and-digest) |
 | Receive raw OSDMaps from MON | `RequestOSDMaps`, `WatchOSDMaps` | none | [MON OSDMap requests](#mon-osdmap-requests-and-subscriptions) |
 | Send an object request to one OSD | `OpenOSD`, then `OSDConnection.Request` | `EnableOSD`, optionally `OSDProfile` and `EnableOSDCachePools` | [OSD object requests](#osd-object-requests) |
-| Send a raw OSD or PG command | `OSDConnection.Command`, `PGCommand` | `EnableOSD` | [OSD and PG commands](#osd-and-pg-commands) |
+| Send a raw OSD or PG command | `OpenOSD`, then `OSDConnection.Command` or `OSDConnection.PGCommand` | `EnableOSD` | [OSD and PG commands](#osd-and-pg-commands) |
 | Receive MDS maps | `WatchFSMapUser`, `WatchMDSMaps` | `EnableMDSMaps` | [MDS maps](#mon-fsmapuser-and-mdsmap-subscriptions) |
 | Send a raw MDS command | `OpenMDS`, then `MDSConnection.Command` | `EnableMDS` | [MDS commands](#mds-commands) |
 | Open a CephFS session and send metadata requests | `MDSConnection.OpenSession`, `MDSSession.Submit` | `EnableMDS`, `EnableCephFS` for metadata and capabilities | [CephFS sessions](#cephfs-sessions), [metadata](#cephfs-metadata-and-push-messages) |
