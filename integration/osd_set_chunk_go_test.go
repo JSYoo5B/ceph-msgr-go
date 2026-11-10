@@ -22,7 +22,9 @@ import (
 // client sends every SET_CHUNK and the source deletions; the native owned-pool
 // oracle seeds, places and observes the objects independently (STAT2, READ and
 // the GETXATTRS inventory, which includes the target's cls_cas chunk_refs
-// attribute). These consumer helpers are test-only and nothing is exported.
+// attribute). A second sequence on fresh objects releases one reference with
+// a standalone UNSET_MANIFEST while its source stays alive. These consumer
+// helpers are test-only and nothing is exported.
 
 const (
 	setChunkGoSourceA      = "go-set-chunk-source-a"
@@ -30,7 +32,12 @@ const (
 	setChunkGoAbsentSource = "go-set-chunk-absent-source"
 	setChunkGoTarget       = "go-set-chunk-target"
 	setChunkGoAbsentTarget = "go-set-chunk-absent-target"
+	// The UNSET_MANIFEST sequence: a kept source, its peer and their target.
+	setChunkGoKeptSource   = "go-set-chunk-kept-source"
+	setChunkGoPeerSource   = "go-set-chunk-peer-source"
+	setChunkGoSharedTarget = "go-set-chunk-shared-target"
 	setChunkGoReleasePolls = 20
+	setChunkGoUnsetSeconds = 1700001400
 )
 
 var (
@@ -102,6 +109,15 @@ func setChunkGoTargetHolds(s nativeXattrSnapshot, refs []byte, floor uint64) boo
 	return s.Code == 0 && bytes.Equal(s.Data, setChunkGoTargetData) && s.Version > floor && ok == (refs != nil) && bytes.Equal(got, refs)
 }
 
+// setChunkGoSourceKept reports a source head that survived UNSET_MANIFEST
+// with its seeded bytes and xattr inventory. The handler marks the source
+// modified, so the user version and mtime may move; the version must not go
+// back. A deleted or emptied source fails.
+func setChunkGoSourceKept(seeded, after nativeXattrSnapshot) bool {
+	return seeded.Code == 0 && after.Code == 0 && len(seeded.Data) != 0 && bytes.Equal(after.Data, seeded.Data) && after.Version >= seeded.Version &&
+		fmt.Sprint(xattrInventory(after)) == fmt.Sprint(xattrInventory(seeded))
+}
+
 type setChunkGoRecord struct {
 	Label   string              `json:"label"`
 	Request cephmsgr.OSDRequest `json:"request"`
@@ -136,14 +152,20 @@ func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 	seededA := poolSeed(t, ctx, 1, setChunkGoSourceA, "", setChunkGoSourceData, nil)
 	seededB := poolSeed(t, ctx, 1, setChunkGoSourceB, "", setChunkGoOtherData, nil)
 	seededTarget := poolSeed(t, ctx, 2, setChunkGoTarget, "", setChunkGoTargetData, nil)
+	seededKept := poolSeed(t, ctx, 1, setChunkGoKeptSource, "", setChunkGoSourceData, nil)
+	seededPeer := poolSeed(t, ctx, 1, setChunkGoPeerSource, "", setChunkGoOtherData, nil)
+	seededShared := poolSeed(t, ctx, 2, setChunkGoSharedTarget, "", setChunkGoTargetData, nil)
 	routes := map[string]osdFixtureOracle{}
-	for _, name := range []string{setChunkGoSourceA, setChunkGoSourceB, setChunkGoAbsentSource} {
+	for _, name := range []string{setChunkGoSourceA, setChunkGoSourceB, setChunkGoAbsentSource, setChunkGoKeptSource, setChunkGoPeerSource} {
 		routes[name] = poolPlace(t, ctx, 1, name, "")
 		if routes[name].Pool != pools.ids[1] {
 			t.Fatal("native placement pool differs", name, routes[name].Pool)
 		}
 	}
 	receipt["routes"] = routes
+	if _, ok := setChunkGoRefsAttr(seededShared); ok {
+		t.Fatal("seeded shared target already referenced")
+	}
 	if _, ok := setChunkGoRefsAttr(seededTarget); ok || poolObserve(t, ctx, 1, setChunkGoAbsentSource, "", "").Code != -2 || poolObserve(t, ctx, 2, setChunkGoAbsentTarget, "", "").Code != -2 {
 		t.Fatal("seeded target already referenced or absent controls exist")
 	}
@@ -174,8 +196,11 @@ func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 			connections[route.ID] = mutationConnection(t, client, ctx, route)
 		}
 		request := pools.request(route, op)
-		if op.Code == cephmsgr.OSDDelete {
+		switch op.Code {
+		case cephmsgr.OSDDelete:
 			request.ModificationTime = cephmsgr.OSDTime{Seconds: 1700001300}
+		case cephmsgr.OSDUnsetManifest:
+			request.ModificationTime = cephmsgr.OSDTime{Seconds: setChunkGoUnsetSeconds}
 		}
 		reply, err := connections[route.ID].Request(ctx, request)
 		entry := setChunkGoRecord{Label: label, Request: request, Reply: reply}
@@ -186,7 +211,7 @@ func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 		}
 		records = append(records, entry)
 		if entry.Unknown {
-			t.Fatal("Go SET_CHUNK outcome unknown; not resent", label, err)
+			t.Fatal("Go request outcome unknown; not resent", label, err)
 		}
 		if reply.Submission.Transaction == 0 || reply.Submission.GlobalID != client.Snapshot().GlobalID || reply.Object != source || reply.PG.Pool != uint64(route.Pool) ||
 			reply.PG.Seed != seed(route) || reply.MapEpoch < route.Epoch || reply.RetryAttempt != 0 || len(reply.RawFront) == 0 || len(reply.Operations) != 1 {
@@ -213,7 +238,29 @@ func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 		return reply
 	}
 
+	// poll reads only the target, natively, until done or the bound. lost
+	// (optional) names an observation that can no longer become done. Either
+	// way the last observation is kept in the receipt before the test stops.
+	poll := func(t *testing.T, label, target string, done, lost func(nativeXattrSnapshot) bool) (nativeXattrSnapshot, int) {
+		t.Helper()
+		var s nativeXattrSnapshot
+		for i := 1; i <= setChunkGoReleasePolls; i++ {
+			if s = poolObserve(t, ctx, 2, target, "", ""); done(s) {
+				return s, i
+			}
+			if lost != nil && lost(s) {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+		refs, _ := setChunkGoRefsAttr(s)
+		receipt["last_target_observation"] = map[string]any{"label": label, "target": target, "code": s.Code, "version": s.Version, "data": s.Data, "chunk_refs": refs}
+		t.Fatalf("%s: target %s never reached the expected state within %d polls: code %d version %d refs %x", label, target, setChunkGoReleasePolls, s.Code, s.Version, refs)
+		return s, 0
+	}
+
 	var chunked, overlapped, both nativeXattrSnapshot
+	var shared, kept nativeXattrSnapshot
 	steps := []struct {
 		name string
 		run  func(t *testing.T)
@@ -287,29 +334,73 @@ func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 		{"deleting_sources_releases_references", func(t *testing.T) {
 			// Deletion drops the source's references after commit; cls_cas
 			// removes the target with its last reference. Polls are native reads.
-			poll := func(label string, done func(nativeXattrSnapshot) bool) (nativeXattrSnapshot, int) {
-				var s nativeXattrSnapshot
-				for i := 1; i <= setChunkGoReleasePolls; i++ {
-					if s = poolObserve(t, ctx, 2, setChunkGoTarget, "", ""); done(s) {
-						return s, i
-					}
-					time.Sleep(500 * time.Millisecond)
-				}
-				t.Fatalf("%s: target state after %d polls: code %d version %d", label, setChunkGoReleasePolls, s.Code, s.Version)
-				return s, 0
-			}
 			send(t, "delete-source-a", setChunkGoSourceA, cephmsgr.OSDOperation{Code: cephmsgr.OSDDelete}, 0)
 			one := setChunkGoRefs(pools.ids[1], setChunkGoRef{setChunkGoSourceB, routes[setChunkGoSourceB].Hash})
-			_, first := poll("release-a", func(s nativeXattrSnapshot) bool { return setChunkGoTargetHolds(s, one, both.Version) })
+			_, first := poll(t, "release-a", setChunkGoTarget, func(s nativeXattrSnapshot) bool { return setChunkGoTargetHolds(s, one, both.Version) }, nil)
 			if poolObserve(t, ctx, 1, setChunkGoSourceA, "", "").Code != -2 {
 				t.Fatal("deleted Go source remains")
 			}
 			send(t, "delete-source-b", setChunkGoSourceB, cephmsgr.OSDOperation{Code: cephmsgr.OSDDelete}, 0)
-			_, second := poll("release-b", func(s nativeXattrSnapshot) bool { return s.Code == -2 })
+			_, second := poll(t, "release-b", setChunkGoTarget, func(s nativeXattrSnapshot) bool { return s.Code == -2 }, nil)
 			if poolObserve(t, ctx, 1, setChunkGoSourceB, "", "").Code != -2 {
 				t.Fatal("deleted Go source remains")
 			}
 			receipt["release_polls"] = []int{first, second}
+		}},
+		{"two_fresh_sources_share_a_target", func(t *testing.T) {
+			send(t, "chunk-kept", setChunkGoKeptSource, chunk(8, setChunkGoSharedTarget, 0), 0)
+			send(t, "chunk-peer", setChunkGoPeerSource, chunk(16, setChunkGoSharedTarget, 8), 0)
+			two := setChunkGoRefs(pools.ids[1], setChunkGoRef{setChunkGoKeptSource, routes[setChunkGoKeptSource].Hash}, setChunkGoRef{setChunkGoPeerSource, routes[setChunkGoPeerSource].Hash})
+			shared = poolObserve(t, ctx, 2, setChunkGoSharedTarget, "", "")
+			if !setChunkGoTargetHolds(shared, two, seededShared.Version) || !setChunkGoSame(poolObserve(t, ctx, 1, setChunkGoKeptSource, "", ""), seededKept) ||
+				!setChunkGoSame(poolObserve(t, ctx, 1, setChunkGoPeerSource, "", ""), seededPeer) {
+				got, _ := setChunkGoRefsAttr(shared)
+				t.Fatalf("two-source native state differs before UNSET_MANIFEST: target v%d refs %x want %x", shared.Version, got, two)
+			}
+		}},
+		{"unset_manifest_keeps_the_source_and_releases_its_reference", func(t *testing.T) {
+			// Sent once. The source reply does not wait for the target: the
+			// OSD drops the reference after the source commit, without a
+			// completion back to this caller.
+			reply := send(t, "unset-manifest-kept", setChunkGoKeptSource, cephmsgr.OSDOperation{Code: cephmsgr.OSDUnsetManifest}, 0)
+			kept = poolObserve(t, ctx, 1, setChunkGoKeptSource, "", "")
+			peer := poolObserve(t, ctx, 1, setChunkGoPeerSource, "", "")
+			// Both heads keep their seeded bytes. The kept source's version and
+			// mtime are recorded as observed; SET_CHUNK's unchanged-version
+			// expectation does not apply to UNSET_MANIFEST.
+			if !setChunkGoSourceKept(seededKept, kept) || !setChunkGoSame(peer, seededPeer) {
+				t.Fatalf("sources after UNSET_MANIFEST: kept code %d %q v%d (seeded v%d), peer code %d %q v%d (seeded v%d)",
+					kept.Code, kept.Data, kept.Version, seededKept.Version, peer.Code, peer.Data, peer.Version, seededPeer.Version)
+			}
+			receipt["kept_source"] = map[string]any{"seeded_version": seededKept.Version, "seeded_seconds": seededKept.Seconds, "seeded_nanos": seededKept.Nanos,
+				"version": kept.Version, "seconds": kept.Seconds, "nanos": kept.Nanos, "reply_user_version": reply.UserVersion}
+			// A surviving source alone would also pass a no-op, so the target
+			// must lose exactly that reference: unchanged bytes, a newer
+			// version and the by_object encoding of the peer alone. An absent
+			// target would mean the peer's reference was lost; it ends the poll.
+			one := setChunkGoRefs(pools.ids[1], setChunkGoRef{setChunkGoPeerSource, routes[setChunkGoPeerSource].Hash})
+			released, polls := poll(t, "unset-release-kept", setChunkGoSharedTarget,
+				func(s nativeXattrSnapshot) bool { return setChunkGoTargetHolds(s, one, shared.Version) },
+				func(s nativeXattrSnapshot) bool { return s.Code == -2 })
+			receipt["unset_release_polls"] = polls
+			// The source is plain again: the pinned handler refuses a second
+			// UNSET_MANIFEST on an object without a manifest, and that refusal
+			// changes neither the source nor the target.
+			send(t, "unset-manifest-again", setChunkGoKeptSource, cephmsgr.OSDOperation{Code: cephmsgr.OSDUnsetManifest}, -95)
+			if !setChunkGoSame(poolObserve(t, ctx, 1, setChunkGoKeptSource, "", ""), kept) || !setChunkGoSame(poolObserve(t, ctx, 2, setChunkGoSharedTarget, "", ""), released) {
+				t.Fatal("refused second UNSET_MANIFEST changed native state")
+			}
+			t.Logf("UNSET_MANIFEST kept source: v%d mtime %d.%09d -> v%d mtime %d.%09d (reply user version %d); shared target v%d -> v%d after %d poll(s)",
+				seededKept.Version, seededKept.Seconds, seededKept.Nanos, kept.Version, kept.Seconds, kept.Nanos, reply.UserVersion, shared.Version, released.Version, polls)
+			shared = released
+		}},
+		{"deleting_the_peer_removes_the_target_and_keeps_the_source", func(t *testing.T) {
+			send(t, "delete-peer-source", setChunkGoPeerSource, cephmsgr.OSDOperation{Code: cephmsgr.OSDDelete}, 0)
+			_, polls := poll(t, "release-peer", setChunkGoSharedTarget, func(s nativeXattrSnapshot) bool { return s.Code == -2 }, nil)
+			receipt["peer_release_polls"] = polls
+			if poolObserve(t, ctx, 1, setChunkGoPeerSource, "", "").Code != -2 || !setChunkGoSame(poolObserve(t, ctx, 1, setChunkGoKeptSource, "", ""), kept) {
+				t.Fatal("peer deletion left the peer or changed the kept source")
+			}
 		}},
 	}
 	for _, step := range steps {
@@ -324,6 +415,7 @@ func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 	}
 	receipt["result_codes"] = summary
 	receipt["target_versions"] = []uint64{seededTarget.Version, chunked.Version, both.Version}
+	receipt["shared_target_versions"] = []uint64{seededShared.Version, shared.Version}
 	t.Logf("Go SET_CHUNK: source A v%d mtime %d.%09d kept; target v%d -> v%d -> v%d; release polls %v",
 		seededA.Version, seededA.Seconds, seededA.Nanos, seededTarget.Version, chunked.Version, both.Version, receipt["release_polls"])
 }
@@ -364,6 +456,28 @@ func TestSetChunkGoRefsOrderAndTargetGate(t *testing.T) {
 		}
 	}
 	seeded := nativeXattrSnapshot{Data: setChunkGoSourceData, Version: 3, Seconds: 1700000000, Nanos: 5}
+	// After UNSET_MANIFEST the version and mtime may move; deletion, emptied
+	// or changed bytes, a version going back and a changed inventory may not.
+	modified := seeded
+	modified.Version, modified.Seconds, modified.Nanos = 4, setChunkGoUnsetSeconds, 0
+	if !setChunkGoSourceKept(seeded, seeded) || !setChunkGoSourceKept(seeded, modified) {
+		t.Fatal("kept source refused")
+	}
+	for name, after := range map[string]nativeXattrSnapshot{
+		"deleted":        {Code: -2},
+		"emptied":        {Version: 4},
+		"changed bytes":  {Data: setChunkGoOtherData, Version: 4},
+		"older version":  {Data: setChunkGoSourceData, Version: 2},
+		"new xattr":      {Data: setChunkGoSourceData, Version: 4, Attributes: []nativeXattrEntry{{Name: []byte("k")}}},
+		"failed observe": {Code: -5, Data: setChunkGoSourceData, Version: 4},
+	} {
+		if setChunkGoSourceKept(seeded, after) {
+			t.Error("lost or changed source accepted after UNSET_MANIFEST:", name)
+		}
+	}
+	if setChunkGoSourceKept(nativeXattrSnapshot{Code: -2}, nativeXattrSnapshot{Code: -2}) || setChunkGoSourceKept(nativeXattrSnapshot{}, nativeXattrSnapshot{}) {
+		t.Error("absent or empty seed accepted as a kept source")
+	}
 	for name, mutate := range map[string]func(*nativeXattrSnapshot){
 		"seconds": func(s *nativeXattrSnapshot) { s.Seconds++ },
 		"nanos":   func(s *nativeXattrSnapshot) { s.Nanos++ },
