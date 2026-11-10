@@ -41,44 +41,9 @@ func DecodeReplyV8(m msgr.MessageData, limit uint32) (Reply, error) {
 	r.Result = int32(d.U32())
 	r.LegacyVersion = decodeVersion(d)
 	r.MapEpoch = d.U32()
-	n := d.Count(opWireSize+4, MaxOperations)
-	if n == 0 && d.Err() == nil {
-		d.Fail(ErrOperation)
-	}
-	r.Operations = make([]OperationResult, n)
-	for i := range r.Operations {
-		op := &r.Operations[i]
-		op.Code = d.U16()
-		op.Flags = d.U32()
-		if IsWatchOperation(op.Code) {
-			op.Watch = DecodeWatchUnion(d, op.Code)
-		} else if IsXattrOperation(op.Code) {
-			op.Xattr = decodeXattrUnion(d, op.Code)
-		} else if op.Code == Call {
-			op.Class = decodeClassUnion(d)
-		} else if op.Code == SetAllocHint {
-			op.AllocHint = decodeAllocHintUnion(d)
-		} else if op.Code == Checksum {
-			op.Offset, op.Length, op.Checksum = decodeChecksumUnion(d)
-		} else if usesCopyFromUnion(op.Code) {
-			op.CopyFrom = decodeCopyFromUnion(d)
-		} else if op.Code == WriteSame {
-			op.Offset, op.Length, op.WriteSamePatternLength = decodeWriteSameUnion(d)
-		} else if op.Code == Rollback {
-			op.Snap = decodeRollbackUnion(d)
-		} else {
-			op.Offset, op.Length = d.U64(), d.U64()
-			op.TruncateSize, op.TruncateSequence = d.U64(), d.U32()
-		}
-		op.PayloadLength = d.U32()
-		if !SupportedOperation(op.Code) {
-			d.Fail(ErrOperation)
-		}
-	}
+	r.Operations = decodeOperations(d)
 	r.RetryAttempt = int32(d.U32())
-	for i := range r.Operations {
-		r.Operations[i].Result = int32(d.U32())
-	}
+	decodeOperationResults(d, r.Operations)
 	r.ReplayVersion = decodeVersion(d)
 	r.UserVersion = d.U64()
 	// v8 alone replaces v6's always-present redirect structure with a bool
@@ -98,11 +63,7 @@ func DecodeReplyV8(m msgr.MessageData, limit uint32) (Reply, error) {
 	if err := d.Done(); err != nil {
 		return r, err
 	}
-	data := wire.NewDecoderLimit(r.RawData, limit)
-	for i := range r.Operations {
-		r.Operations[i].Data = data.Raw(r.Operations[i].PayloadLength)
-	}
-	if err := data.Done(); err != nil {
+	if err := splitOperationData(r.RawData, limit, r.Operations); err != nil {
 		return r, fmt.Errorf("ceph osd v8 reply operation data: %w", err)
 	}
 	if redirect {
