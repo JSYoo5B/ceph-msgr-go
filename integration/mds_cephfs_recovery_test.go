@@ -556,6 +556,7 @@ type recoveryRestartEvidence struct {
 	ReplayedHistoricOp                   *nativeMDSCephFSHistoricOp
 	UnansweredHistoricOp                 *nativeMDSCephFSHistoricOp
 	HistoricOps                          []nativeMDSCephFSHistoricOp
+	ReplayObservation                    *recoveryReplayObservation `json:",omitempty"`
 	ReplayExecutedByNewIncarnation       bool
 	NativeSessionAfter                   *nativeMDSSession
 	ReplayedIno, UnansweredIno           uint64
@@ -627,6 +628,50 @@ func (r *recoveryReconcileEvidence) finish(report func(string)) {
 			r.SessionClosed, r.RecoveryDirAbsent, r.PlanDirAbsent, r.OwnedSessionsChecked)
 	}
 	r.Completed = verified && len(r.Errors) == 0
+}
+
+// recoveryReplayObservation is what one op tracker read of the adopted
+// incarnation shows about the replayed create. It is an observation of that
+// read only: the tracker keeps a bounded history, so a request that is absent
+// or carries no REPLAY flag says nothing about which incarnation journaled it.
+type recoveryReplayObservation struct {
+	GlobalID, TID uint64
+	// SessionOpsReturned counts the client requests of this session in the
+	// read, after the fixture's reduction to that session.
+	SessionOpsReturned int
+	Tracked            bool
+	ReplayFlag         bool
+	Op                 *nativeMDSCephFSHistoricOp `json:",omitempty"`
+}
+
+func observeRecoveryReplay(ops []nativeMDSCephFSHistoricOp, gid, tid uint64) recoveryReplayObservation {
+	o := recoveryReplayObservation{GlobalID: gid, TID: tid, SessionOpsReturned: len(ops)}
+	prefix := fmt.Sprintf("client_request(client.%d:%d ", gid, tid)
+	for i := range ops {
+		if strings.HasPrefix(ops[i].Description, prefix) {
+			o.Tracked, o.Op = true, &ops[i]
+			o.ReplayFlag = strings.Contains(ops[i].Description, " REPLAY")
+			break
+		}
+	}
+	return o
+}
+
+// failure is empty when the read shows the REPLAY execution. Otherwise it
+// states what was read and the bounds of that read. It names no cause: the
+// read cannot tell an execution that left the history from a request answered
+// without one.
+func (o recoveryReplayObservation) failure() string {
+	if o.Tracked && o.ReplayFlag {
+		return ""
+	}
+	seen := fmt.Sprintf("none of the %d client requests of session %d it returned has TID %d", o.SessionOpsReturned, o.GlobalID, o.TID)
+	if o.Tracked {
+		seen = fmt.Sprintf("it returned the request without the REPLAY flag: %q", o.Op.Description)
+	}
+	return "no REPLAY execution of the replayed create was observed on the adopted incarnation: one dump_historic_ops read right after adoption was made and " + seen +
+		". The read is bounded by the daemon's op history (mds_op_history_size and mds_op_history_duration; 20 completed operations and 600 s by default at " + mdsFreshSource +
+		") and by the fixture's reduction to at most 64 client requests of this session. It does not show how the request was answered, nor whether any incarnation had journaled it before the restart"
 }
 
 // recoveryRemoval is one unlink or rmdir of the reconciliation; ENOENT means
@@ -1862,18 +1907,21 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if replayedLock {
 			t.Fatal("the new incarnation tracked a client request for the original SETFILELOCK TID", hf.AcquireTID)
 		}
-		restart.ReplayedHistoricOp = find(callA.Transaction())
-		restart.ReplayExecutedByNewIncarnation = restart.ReplayedHistoricOp != nil
+		replay := observeRecoveryReplay(ops.HistoricOps, gidR, callA.Transaction())
+		restart.ReplayObservation, restart.ReplayedHistoricOp = &replay, replay.Op
+		restart.ReplayExecutedByNewIncarnation = replay.Tracked && replay.ReplayFlag
 		if callB != nil {
 			restart.UnansweredHistoricOp = find(callB.Transaction())
 			if restart.UnansweredHistoricOp == nil {
 				t.Fatal("the new incarnation's op tracker lacks the resubmitted unanswered create", ops.HistoricOps)
 			}
 		}
-		// The old incarnation never journaled the create, so the new one must
-		// have executed the replay itself.
-		if op := restart.ReplayedHistoricOp; op == nil || !strings.Contains(op.Description, " REPLAY") {
-			t.Fatal("the new incarnation did not execute the replayed create with REPLAY; the old incarnation journaled it before the restart", op)
+		// The acceptance requires the positive observation that the adopted
+		// incarnation executed the replayed create with REPLAY. Its absence
+		// fails the test as an unobserved execution within the bounds of this
+		// one read; it is not evidence of what an earlier incarnation did.
+		if message := replay.failure(); message != "" {
+			t.Fatal(message)
 		}
 		_, n := observe(t, gidR)
 		if err := checkNativeCephFSSession(n, identity, metadata("recovery")); err != nil {

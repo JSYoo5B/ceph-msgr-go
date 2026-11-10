@@ -118,3 +118,46 @@ func TestCephFSRecoveryReconcileKeepsSetupFailure(t *testing.T) {
 		}
 	}
 }
+
+// A missing REPLAY observation is a strict failure that reports what the one
+// op tracker read returned and its bounds. It assigns no journal commit to
+// any incarnation.
+func TestCephFSRecoveryReplayObservation(t *testing.T) {
+	ops := []nativeMDSCephFSHistoricOp{
+		{Description: "client_request(client.4200:17 create owner_uid=0 #0x10000000002/replayed 2026-11-10T00:00:00.000000+0000 RETRY=1 REPLAY QUEUED_FOR_REPLAY caller_uid=0)"},
+		{Description: "client_request(client.4200:18 create owner_uid=0 #0x10000000001/unanswered 2026-11-10T00:00:00.000000+0000 RETRY=1 caller_uid=0)"},
+		{Description: "client_request(client.4200:170 getattr REPLAY)"},
+	}
+	seen := observeRecoveryReplay(ops, 4200, 17)
+	if !seen.Tracked || !seen.ReplayFlag || seen.Op != &ops[0] || seen.SessionOpsReturned != 3 || seen.failure() != "" {
+		t.Fatal("an observed REPLAY execution is not accepted", seen, seen.failure())
+	}
+	unflagged, absent, empty := observeRecoveryReplay(ops, 4200, 18), observeRecoveryReplay(ops, 4200, 19), observeRecoveryReplay(nil, 4200, 17)
+	if !unflagged.Tracked || unflagged.ReplayFlag || absent.Tracked || absent.Op != nil || empty.Tracked || empty.SessionOpsReturned != 0 {
+		t.Fatal("op tracker observation differs", unflagged, absent, empty)
+	}
+	for name, tc := range map[string]struct {
+		o    recoveryReplayObservation
+		want string
+	}{
+		"without the flag": {unflagged, "it returned the request without the REPLAY flag: \"client_request(client.4200:18 create"},
+		"absent":           {absent, "none of the 3 client requests of session 4200 it returned has TID 19"},
+		"empty read":       {empty, "none of the 0 client requests of session 4200 it returned has TID 17"},
+	} {
+		message := tc.o.failure()
+		if message == "" {
+			t.Fatal("a missing REPLAY observation is not a failure", name)
+		}
+		for _, part := range []string{"no REPLAY execution of the replayed create was observed", tc.want, "one dump_historic_ops read", "mds_op_history_size", "mds_op_history_duration", "at most 64 client requests"} {
+			if !strings.Contains(message, part) {
+				t.Fatal("the failure does not report the observation and its bounds", name, part, message)
+			}
+		}
+		// No commit is attributed to an incarnation.
+		for _, cause := range []string{"old incarnation", "armed incarnation journaled", "journaled it before the restart;", "was journaled"} {
+			if strings.Contains(message, cause) {
+				t.Fatal("the failure assigns a cause the read cannot support", name, cause, message)
+			}
+		}
+	}
+}
