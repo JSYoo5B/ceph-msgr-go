@@ -82,6 +82,7 @@ type rbdMirrorReceipt struct {
 	} `json:"initial"`
 	Cut struct {
 		Peer              string             `json:"peer"`
+		HelperContainers  int                `json:"helper_containers"`
 		Applied           bool               `json:"applied"`
 		Loss              float64            `json:"loss"`
 		Drops             uint64             `json:"drops"`
@@ -257,7 +258,7 @@ func TestCephRBDMirrorPathRecoveryIntegration(t *testing.T) {
 	summary["go_global_id_nonzero"] = goID != 0
 
 	step("cut", 4*time.Minute)
-	if !r.Cut.Applied || r.Cut.Loss != 100 || r.Cut.Drops == 0 || r.Cut.Peer != r.Mirror.DaemonAddress || r.Cut.PatchOffset != 2<<20 || r.Cut.PatchBytes != len(patch) {
+	if !r.Cut.Applied || r.Cut.Loss != 100 || r.Cut.Drops == 0 || r.Cut.HelperContainers == 0 || r.Cut.Peer != r.Mirror.DaemonAddress || r.Cut.PatchOffset != 2<<20 || r.Cut.PatchBytes != len(patch) {
 		t.Fatalf("directed fault: %+v", r.Cut)
 	}
 	if r.Cut.Samples < 4 || r.Cut.SampleSeconds < 30 || r.Cut.Progress.State != "up+replaying" || r.Cut.Progress.Remote != r.Initial.Progress.Remote || r.Cut.Progress.Local != r.Initial.Progress.Local {

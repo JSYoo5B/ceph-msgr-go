@@ -20,6 +20,7 @@ import (
 	"github.com/JSYoo5B/ceph-testcontainers-go/rbd"
 	rbdmirror "github.com/JSYoo5B/ceph-testcontainers-go/rbd/mirror"
 	"github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
 )
@@ -159,6 +160,7 @@ type rbdMirrorFixtureReceipt struct {
 	Cut struct {
 		Peer              string             `json:"peer"`
 		Interface         string             `json:"interface"`
+		HelperContainers  int                `json:"helper_containers"`
 		Applied           bool               `json:"applied"`
 		Loss              float64            `json:"loss"`
 		Packets           uint64             `json:"packets"`
@@ -471,6 +473,17 @@ func (c *fixtureCluster) rbdMirrorCut(ctx context.Context, s *rbdMirrorScope) er
 	if err != nil {
 		return fmt.Errorf("apply directed source OSD fault: %w", err)
 	}
+	// The held lease keeps its helper in the source OSD's namespace: the
+	// same scoped count must reach zero after the restore.
+	if s.lease.ContainerID != s.osd.GetContainerID() {
+		return fmt.Errorf("netem lease targets %s, not the source OSD container", s.lease.ContainerID)
+	}
+	if r.Cut.HelperContainers, err = rbdMirrorHelperContainers(ctx, s.lease.HelperImageID, s.lease.ContainerID); err != nil {
+		return err
+	}
+	if r.Cut.HelperContainers == 0 {
+		return errors.New("no netem helper shares the source OSD's network namespace while the fault holds")
+	}
 	patch := rbdMirrorPayload(rbdMirrorPatchSize, rbdMirrorSeedPatch)
 	after := rbdMirrorPayload(rbdMirrorImageSize, rbdMirrorSeedBefore)
 	copy(after[rbdMirrorPatchAt:], patch)
@@ -554,7 +567,7 @@ func (c *fixtureCluster) rbdMirrorRestore(ctx context.Context, s *rbdMirrorScope
 	} else {
 		r.Restore.StatusAfter = statusErr.Error()
 	}
-	if r.Restore.HelperContainers, err = rbdMirrorHelperContainers(ctx, s.lease.HelperImageID); err != nil {
+	if r.Restore.HelperContainers, err = rbdMirrorHelperContainers(ctx, s.lease.HelperImageID, s.lease.ContainerID); err != nil {
 		return err
 	}
 	if r.Restore.HelperContainers != 0 {
@@ -979,11 +992,12 @@ func parseRBDMirrorMonSessions(monitor string, raw []byte, peer netip.Addr) ([]r
 	return found, nil
 }
 
-// rbdMirrorHelperContainers counts every container of the netem helper image
-// that still exists.
-func rbdMirrorHelperContainers(ctx context.Context, imageID string) (int, error) {
-	if imageID == "" {
-		return 0, errors.New("netem helper image ID is unknown")
+// rbdMirrorHelperContainers counts the netem helper containers, running or
+// not, that share the network namespace of target: the lease's own helpers.
+// Helpers of the same image for other targets are not this lease's.
+func rbdMirrorHelperContainers(ctx context.Context, imageID, target string) (int, error) {
+	if imageID == "" || target == "" {
+		return 0, errors.New("netem helper image or target is unknown")
 	}
 	docker, err := testcontainers.NewDockerClientWithOpts(ctx)
 	if err != nil {
@@ -994,7 +1008,19 @@ func rbdMirrorHelperContainers(ctx context.Context, imageID string) (int, error)
 	if err != nil {
 		return 0, err
 	}
-	return len(listed.Items), nil
+	return rbdMirrorScopedHelpers(listed.Items, imageID, target), nil
+}
+
+// rbdMirrorScopedHelpers counts the listed containers of imageID that run in
+// the network namespace of the target container ID.
+func rbdMirrorScopedHelpers(items []container.Summary, imageID, target string) int {
+	count := 0
+	for _, item := range items {
+		if item.ImageID == imageID && item.HostConfig.NetworkMode == "container:"+target {
+			count++
+		}
+	}
+	return count
 }
 
 // osdPublicAddress returns the OSD's v2 public address from the native map.

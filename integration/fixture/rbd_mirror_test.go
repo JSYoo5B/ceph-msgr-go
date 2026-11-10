@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/moby/moby/api/types/container"
 )
 
 func TestRBDMirrorMarkerOnlyReachesExclusiveTestEnvironment(t *testing.T) {
@@ -240,5 +242,30 @@ func TestRBDMirrorTeardownIssuesOwnedPhasesWithoutInventory(t *testing.T) {
 	if err := s.teardown(context.Background(), phases(), nil, broken); !errors.Is(err, unavailable) || !s.finished ||
 		strings.Join(calls, ",") != "RBD mirror termination,destination cluster termination" {
 		t.Fatal("fallback did not issue exactly the unreached phases", err, s.finished, calls)
+	}
+}
+
+func TestRBDMirrorHelperCountIsScopedToTheLeaseTarget(t *testing.T) {
+	helper := func(image, mode string, state container.ContainerState) container.Summary {
+		s := container.Summary{ImageID: image, State: state}
+		s.HostConfig.NetworkMode = mode
+		return s
+	}
+	const image, osd = "sha256:netem", "osd-container"
+	unrelated := []container.Summary{
+		// A stopped helper of the same image that another test left for an
+		// unrelated target, and a running one for another target.
+		helper(image, "container:other-osd", container.StateExited),
+		helper(image, "container:other-test", container.StateRunning),
+		// Another image in the OSD's namespace, and the bridge mode.
+		helper("sha256:other", "container:"+osd, container.StateRunning),
+		helper(image, "bridge", container.StateCreated),
+	}
+	if n := rbdMirrorScopedHelpers(unrelated, image, osd); n != 0 {
+		t.Fatal("unrelated helpers counted for the lease", n)
+	}
+	owned := append(unrelated, helper(image, "container:"+osd, container.StateExited), helper(image, "container:"+osd, container.StateRunning))
+	if n := rbdMirrorScopedHelpers(owned, image, osd); n != 2 {
+		t.Fatal("the lease's own helpers, running or not, were not counted", n)
 	}
 }
