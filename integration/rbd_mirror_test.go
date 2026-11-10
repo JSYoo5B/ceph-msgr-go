@@ -41,6 +41,11 @@ type rbdMirrorSession struct {
 	Connected bool   `json:"connected"`
 }
 
+type rbdMirrorMonSession struct {
+	Entity   string `json:"entity_name"`
+	GlobalID uint64 `json:"global_id"`
+}
+
 type rbdMirrorReceipt struct {
 	Schema       int    `json:"schema_version"`
 	Selector     string `json:"selector"`
@@ -66,19 +71,18 @@ type rbdMirrorReceipt struct {
 		SourceImageID      string `json:"source_image_id"`
 		DestinationImageID string `json:"destination_image_id"`
 		Daemon             string `json:"daemon"`
+		DaemonClient       string `json:"daemon_client"`
+		SourcePeerClient   string `json:"source_peer_client"`
 		InstanceID         string `json:"instance_id"`
 		DaemonAddress      string `json:"daemon_source_address"`
 	} `json:"mirror"`
 	Initial struct {
-		Bytes             int                `json:"bytes"`
-		SourceSHA256      string             `json:"source_sha256"`
-		DestinationSHA256 string             `json:"destination_sha256"`
-		Progress          rbdMirrorProgress  `json:"progress"`
-		Sessions          []rbdMirrorSession `json:"source_osd_sessions"`
-		MonSessions       []struct {
-			Entity   string `json:"entity_name"`
-			GlobalID uint64 `json:"global_id"`
-		} `json:"source_mon_sessions"`
+		Bytes             int                   `json:"bytes"`
+		SourceSHA256      string                `json:"source_sha256"`
+		DestinationSHA256 string                `json:"destination_sha256"`
+		Progress          rbdMirrorProgress     `json:"progress"`
+		Sessions          []rbdMirrorSession    `json:"source_osd_sessions"`
+		MonSessions       []rbdMirrorMonSession `json:"source_mon_sessions"`
 	} `json:"initial"`
 	Cut struct {
 		Peer              string             `json:"peer"`
@@ -115,6 +119,12 @@ type rbdMirrorReceipt struct {
 
 const rbdMirrorTestSelector = "^TestCephRBDMirrorPathRecoveryIntegration$"
 
+// rbdMirrorSourcePeer is the CephX user that "rbd mirror pool peer bootstrap
+// create" makes on the source and that the daemon uses to reach it
+// (src/librbd/api/Mirror.cc at v20.2.4). The daemon's own client name is a
+// destination-side identity.
+const rbdMirrorSourcePeer = "client.rbd-mirror-peer"
+
 // rbdMirrorSessionFor returns the source OSD sessions from address, and
 // those with globalID.
 func rbdMirrorSessionFor(sessions []rbdMirrorSession, address string, globalID uint64) (fromAddress, withID []rbdMirrorSession) {
@@ -130,6 +140,30 @@ func rbdMirrorSessionFor(sessions []rbdMirrorSession, address string, globalID u
 		}
 	}
 	return fromAddress, withID
+}
+
+// rbdMirrorPeerWitness returns the source OSD sessions from the daemon's
+// address whose nonzero GlobalID a source MON session of the source peer
+// identity carries: the address alone, or a MON session of another entity
+// from that address, does not attribute a session to the daemon.
+func rbdMirrorPeerWitness(osd []rbdMirrorSession, mons []rbdMirrorMonSession, address string) []rbdMirrorSession {
+	if address == "" {
+		return nil
+	}
+	peerIDs := map[uint64]bool{}
+	for _, session := range mons {
+		if session.Entity == rbdMirrorSourcePeer && session.GlobalID != 0 {
+			peerIDs[session.GlobalID] = true
+		}
+	}
+	var witness []rbdMirrorSession
+	fromAddress, _ := rbdMirrorSessionFor(osd, address, 0)
+	for _, session := range fromAddress {
+		if session.GlobalID != 0 && peerIDs[session.GlobalID] {
+			witness = append(witness, session)
+		}
+	}
+	return witness
 }
 
 // TestCephRBDMirrorPathRecoveryIntegration is the local RBD snapshot-mirror
@@ -218,20 +252,11 @@ func TestCephRBDMirrorPathRecoveryIntegration(t *testing.T) {
 		r.Initial.Progress.Remote == 0 || r.Initial.Progress.Local != r.Initial.Progress.Remote {
 		t.Fatalf("initial data at the destination: %+v", r.Initial)
 	}
-	daemonSessions, _ := rbdMirrorSessionFor(r.Initial.Sessions, r.Mirror.DaemonAddress, 0)
-	if len(daemonSessions) == 0 || len(r.Initial.MonSessions) == 0 {
-		t.Fatalf("the daemon's source path is not attributed: OSD %+v MON %+v", r.Initial.Sessions, r.Initial.MonSessions)
+	if r.Mirror.SourcePeerClient != rbdMirrorSourcePeer || r.Mirror.DaemonClient == "" || r.Mirror.DaemonClient == rbdMirrorSourcePeer {
+		t.Fatalf("mirror CephX identities: source peer %q, daemon %q", r.Mirror.SourcePeerClient, r.Mirror.DaemonClient)
 	}
-	peerIDs := map[uint64]bool{}
-	for _, session := range r.Initial.MonSessions {
-		peerIDs[session.GlobalID] = true
-	}
-	attributed := false
-	for _, session := range daemonSessions {
-		attributed = attributed || peerIDs[session.GlobalID]
-	}
-	if !attributed {
-		t.Fatalf("no source OSD session from %s has a GlobalID of the daemon's MON sessions: %+v %+v", r.Mirror.DaemonAddress, daemonSessions, r.Initial.MonSessions)
+	if witness := rbdMirrorPeerWitness(r.Initial.Sessions, r.Initial.MonSessions, r.Mirror.DaemonAddress); len(witness) == 0 {
+		t.Fatalf("no source OSD session from %s has the GlobalID of a %s MON session: OSD %+v MON %+v", r.Mirror.DaemonAddress, rbdMirrorSourcePeer, r.Initial.Sessions, r.Initial.MonSessions)
 	}
 
 	// The Go session to the same source OSD exists before the fault.
@@ -305,6 +330,37 @@ func TestCephRBDMirrorPathRecoveryIntegration(t *testing.T) {
 	t.Logf("RBD_MIRROR_PATH_RECOVERY source=%s destination=%s osd.%d dropped %d packets to rbd-mirror %s at %s; for %d samples over %.0fs the daemon stayed %s at snapshot %d while the source changed and this Go session read osd.%d; %.0fs after the restore snapshot %d arrived with %d bytes; %d owned containers and the destination network removed",
 		r.Source.FSID, r.Destination.FSID, r.Source.OSD, r.Restore.DropsBeforeRestore, r.Mirror.Daemon, r.Cut.Peer, r.Cut.Samples, r.Cut.SampleSeconds, r.Cut.Progress.State, r.Initial.Progress.Remote,
 		oracle.ID, r.Restore.CatchUpSeconds, r.Restore.Progress.Remote, r.Restore.Progress.LastSnapshotBytes, r.Cleanup.Containers)
+}
+
+func TestRBDMirrorPeerWitnessRequiresSourceIdentity(t *testing.T) {
+	const daemon = "172.18.0.9"
+	osd := []rbdMirrorSession{
+		{PeerType: "client", GlobalID: 4410, Address: daemon, State: "READY", Connected: true},
+		{PeerType: "client", GlobalID: 4207, Address: "172.18.0.4", State: "READY", Connected: true},
+	}
+	peer := []rbdMirrorMonSession{{Entity: rbdMirrorSourcePeer, GlobalID: 4410}}
+	if witness := rbdMirrorPeerWitness(osd, peer, daemon); len(witness) != 1 || witness[0].GlobalID != 4410 {
+		t.Fatal("source peer session not attributed", witness)
+	}
+	for name, tc := range map[string]struct {
+		osd     []rbdMirrorSession
+		mons    []rbdMirrorMonSession
+		address string
+	}{
+		// The correct address and GlobalID under another CephX identity.
+		"other entity":       {osd, []rbdMirrorMonSession{{Entity: "client.admin", GlobalID: 4410}}, daemon},
+		"destination entity": {osd, []rbdMirrorMonSession{{Entity: "client.rbd-mirror.a", GlobalID: 4410}}, daemon},
+		"zero GlobalID":      {[]rbdMirrorSession{{PeerType: "client", Address: daemon}}, []rbdMirrorMonSession{{Entity: rbdMirrorSourcePeer}}, daemon},
+		"other GlobalID":     {osd, []rbdMirrorMonSession{{Entity: rbdMirrorSourcePeer, GlobalID: 4207}}, daemon},
+		"other address":      {osd, peer, "172.18.0.5"},
+		"no address":         {osd, peer, ""},
+		"no MON session":     {osd, nil, daemon},
+		"not a client":       {[]rbdMirrorSession{{PeerType: "osd", GlobalID: 4410, Address: daemon}}, peer, daemon},
+	} {
+		if witness := rbdMirrorPeerWitness(tc.osd, tc.mons, tc.address); len(witness) != 0 {
+			t.Fatal(name, "attributed a session to the source peer", witness)
+		}
+	}
 }
 
 // A broad native suite must skip this checkpoint before reading any fixture

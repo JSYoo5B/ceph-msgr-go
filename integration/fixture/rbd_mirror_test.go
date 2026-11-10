@@ -269,3 +269,22 @@ func TestRBDMirrorHelperCountIsScopedToTheLeaseTarget(t *testing.T) {
 		t.Fatal("the lease's own helpers, running or not, were not counted", n)
 	}
 }
+
+func TestRBDMirrorSourcePeerClient(t *testing.T) {
+	raw := []byte(`{"mode":"image","site_name":"destination","peers":[{"uuid":"5f1a0f3c-2c39-4b36-9b54-1f0c6c0d6a11","direction":"rx-only","site_name":"source","mirror_uuid":"","client_name":"client.rbd-mirror-peer"}]}`)
+	if client, err := parseRBDMirrorPeerClient(raw); err != nil || client != "client.rbd-mirror-peer" {
+		t.Fatal("receiving peer client", err, client)
+	}
+	for _, bad := range []string{
+		`{"peers":[]}`,
+		`{"peers":[{"direction":"tx-only","client_name":"client.rbd-mirror-peer"}]}`,
+		`{"peers":[{"direction":"rx-only","client_name":""}]}`,
+		`{"peers":[{"direction":"rx-only","client_name":"client."}]}`,
+		`{"peers":[{"direction":"rx-only","client_name":"client.a"},{"direction":"rx-tx","client_name":"client.b"}]}`,
+		`[]`,
+	} {
+		if client, err := parseRBDMirrorPeerClient([]byte(bad)); err == nil {
+			t.Fatal("ambiguous or absent receiving peer admitted", bad, client)
+		}
+	}
+}

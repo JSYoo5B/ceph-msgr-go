@@ -142,6 +142,7 @@ type rbdMirrorFixtureReceipt struct {
 		DestinationImageID string `json:"destination_image_id"`
 		Daemon             string `json:"daemon"`
 		DaemonClient       string `json:"daemon_client"`
+		SourcePeerClient   string `json:"source_peer_client"`
 		InstanceID         string `json:"instance_id"`
 		DaemonAddress      string `json:"daemon_source_address"`
 		SourceNetworks     int    `json:"daemon_networks"`
@@ -451,6 +452,15 @@ func (c *fixtureCluster) rbdMirrorStart(ctx context.Context, s *rbdMirrorScope) 
 		return fmt.Errorf("mirror image identities incomplete: %+v", image)
 	}
 	r.Mirror.GlobalID, r.Mirror.SourceImageID, r.Mirror.DestinationImageID, r.Mirror.InstanceID = image.GlobalID, image.SourceImageID, image.DestinationImageID, image.InstanceID
+	// The daemon reaches the source as the CephX user of the destination
+	// pool's receiving peer, not as its own destination-side client.
+	info, err := s.mirror.DestinationRBD(ctx, "mirror", "pool", "info", rbdMirrorPool, "--format", "json")
+	if err != nil {
+		return fmt.Errorf("destination mirror pool info: %w", err)
+	}
+	if r.Mirror.SourcePeerClient, err = parseRBDMirrorPeerClient(info); err != nil {
+		return err
+	}
 	if r.Initial.Sessions, err = c.rbdMirrorSessions(ctx, s); err != nil {
 		return err
 	}
@@ -929,6 +939,30 @@ func parseRBDMirrorSessions(raw []byte) ([]rbdMirrorSession, error) {
 		return a.GlobalID < b.GlobalID
 	})
 	return sessions, nil
+}
+
+// parseRBDMirrorPeerClient returns the source-side CephX user of the one
+// receiving peer in the destination's "rbd mirror pool info" JSON.
+func parseRBDMirrorPeerClient(raw []byte) (string, error) {
+	var info struct {
+		Peers []struct {
+			Direction  string `json:"direction"`
+			ClientName string `json:"client_name"`
+		} `json:"peers"`
+	}
+	if err := json.Unmarshal(raw, &info); err != nil {
+		return "", fmt.Errorf("decode destination mirror pool info: %w", err)
+	}
+	var clients []string
+	for _, peer := range info.Peers {
+		if peer.Direction == "rx-only" || peer.Direction == "rx-tx" {
+			clients = append(clients, peer.ClientName)
+		}
+	}
+	if len(clients) != 1 || !strings.HasPrefix(clients[0], "client.") || len(clients[0]) == len("client.") {
+		return "", fmt.Errorf("destination mirror pool has receiving peer clients %q, want one", clients)
+	}
+	return clients[0], nil
 }
 
 // rbdMirrorMonSessions names the source MON sessions that come from the
