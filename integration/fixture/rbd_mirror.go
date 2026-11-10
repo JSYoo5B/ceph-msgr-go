@@ -33,8 +33,14 @@ const rbdMirrorSelector = "^TestCephRBDMirrorPathRecoveryIntegration$"
 const rbdMirrorMarker = "CEPH_MSGR_NATIVE_RBD_MIRROR"
 
 // rbdMirrorNetemImage is the provider's netem helper image
-// (fault.NetemHelperImage) pinned to the digest of its extension-netem-v1 tag.
-const rbdMirrorNetemImage = "ghcr.io/jsyoo5b/ceph-testcontainers-images:extension-netem-v1@sha256:63d17894d30de34fbf6c956b38e2576002aed58748b779b04c5e4632fc9dfdc3"
+// (fault.NetemHelperImage) pinned to the registry digest of the manifest list
+// that its extension-netem-v1 tag resolves to (linux/amd64 and linux/arm64).
+// The tag is mutable and the registry drops superseded manifest lists, so a
+// digest copied from a local image store can name a list the registry no
+// longer serves while a cached pull hides that. Read a new pin from the
+// registry (Docker-Content-Digest of the tag's manifest) and check it with an
+// uncached pull.
+const rbdMirrorNetemImage = "ghcr.io/jsyoo5b/ceph-testcontainers-images:extension-netem-v1@sha256:bb7ea0d86f0d2c4cb5720998eac27ce9c6f8d89bc431540c1d2cc71ac51c1c9a"
 
 const (
 	rbdMirrorPool       = "msgr-mirror"
