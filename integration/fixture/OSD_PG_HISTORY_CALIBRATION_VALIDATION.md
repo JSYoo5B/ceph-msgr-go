@@ -31,8 +31,8 @@ as a read-only operation, so it is not classified as a read-only oracle here.
 
 ## Oracle contract
 
-`tools/osd_pool_oracle.py` mode `pghistory` takes an owned-pool object and one
-to eight full identities (`type`, `num`, `inc`, `tid`). It runs these steps
+`tools/osd_pool_oracle.py` mode `pghistory` takes an object of either owned
+pool slot and one to eight full identities (`type`, `num`, `inc`, `tid`). It runs these steps
 once, without retrying any of them:
 
 1. Collect the native placement of the object (`osd map` plus `osd dump` at
@@ -124,13 +124,15 @@ evidence for a later revision.
   separate, safe, complete shard-local observation recipe for every acting
   shard. That oracle remains open.
 - The native calibration exercises only the ordinary `log` tier. Positions in
-  `extra_reqids` and `dups` are pinned only by the synthetic cluster-free
-  tests. No native request was moved into `dups` (by trimming) or recorded as
-  an extra request ID.
+  `dups` are pinned only by the synthetic cluster-free tests: no native
+  request was moved into `dups` (by trimming). One native `extra_reqids`
+  position is observed separately, on a replicated pool, by the
+  [COPY_FROM2 destination control](OSD_COPY_FROM_HISTORY_VALIDATION.md).
 - No PG-log retention bound, trim boundary, timed window or exactly-once
   behaviour is established. No replay safety follows from a match.
 - Placement and epochs are bracketed only around the command. A placement
   change between the Go requests and the snapshot is checked only for the
   primary, acting/up sets, PG, shard and pg_temp; the epoch may be newer.
-- One profile and one EC width were selected. Replicated pools and other EC
-  profiles are not part of this calibration.
+- One profile and one EC width were selected. Other EC profiles are not part
+  of this calibration; the only replicated-pool use of the snapshot is the
+  COPY_FROM2 destination control named above.
