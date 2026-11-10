@@ -25,7 +25,7 @@ import (
 // is not a product service-registration API.
 var (
 	serviceHolderTokenPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	serviceHolderPhases       = map[string]bool{"start": true, "start-large": true, "observe": true, "release": true, "cleanup": true}
+	serviceHolderPhases       = map[string]bool{"start": true, "start-large": true, "start-wide": true, "observe": true, "release": true, "cleanup": true}
 )
 
 type nativeServiceHolderBaseline struct {
@@ -53,20 +53,22 @@ type serviceHolderPadSummary struct {
 	SHA256 string `json:"pad_sha256"`
 }
 
-const (
-	serviceHolderPadPrefix = "ceph_msgr_pad_"
-	serviceHolderPadKeys   = 4096
-	serviceHolderPadValue  = 360
-)
+const serviceHolderPadPrefix = "ceph_msgr_pad_"
+
+// serviceHolderPadShapes is the padding of each start step: key count, value
+// bytes and key index width. start-large is about 1.55 MiB of metadata;
+// start-wide is one entry more than the decoder admits in one collection.
+var serviceHolderPadShapes = map[string][3]int{"start": {0, 0, 4}, "start-large": {4096, 360, 4}, "start-wide": {65537, 8, 5}}
 
 // serviceHolderPadding recomputes, independently of the Python holder, the
-// fixed metadata that a large registration of this token carries.
-func serviceHolderPadding(token string) map[string]string {
-	padding := make(map[string]string, serviceHolderPadKeys)
-	for i := range serviceHolderPadKeys {
+// fixed metadata that a start step of this token registers.
+func serviceHolderPadding(token, phase string) map[string]string {
+	shape := serviceHolderPadShapes[phase]
+	padding := make(map[string]string, shape[0])
+	for i := range shape[0] {
 		digest := sha256.Sum256(fmt.Appendf(nil, "%s:%d", token, i))
 		text := hex.EncodeToString(digest[:])
-		padding[fmt.Sprintf("%s%04d", serviceHolderPadPrefix, i)] = strings.Repeat(text, serviceHolderPadValue/len(text)+1)[:serviceHolderPadValue]
+		padding[fmt.Sprintf("%s%0*d", serviceHolderPadPrefix, shape[2], i)] = strings.Repeat(text, shape[1]/len(text)+1)[:shape[1]]
 	}
 	return padding
 }
@@ -138,7 +140,7 @@ type nativeServiceHolderReady struct {
 	GID             uint64 `json:"gid"`
 	LifetimeSeconds int    `json:"lifetime_seconds"`
 	// The padding the holder registered: empty for start, the token's fixed
-	// padding for start-large.
+	// padding for start-large and start-wide.
 	serviceHolderPadSummary
 }
 
@@ -175,18 +177,14 @@ func observeNativeServiceHolder(ctx context.Context, control, token, phase strin
 // serviceHolderReady decodes the readiness report of a start receipt.
 func serviceHolderReady(receipt nativeServiceHolderReceipt) (nativeServiceHolderReady, error) {
 	var ready nativeServiceHolderReady
-	if receipt.Phase != "start" && receipt.Phase != "start-large" || receipt.State != "ready" || receipt.Baseline == nil ||
+	if _, start := serviceHolderPadShapes[receipt.Phase]; !start || receipt.State != "ready" || receipt.Baseline == nil ||
 		receipt.Baseline.OwnedPresent || receipt.Baseline.Code == nil || *receipt.Baseline.Code != 0 || receipt.Baseline.Epoch == nil {
 		return ready, errors.New("start receipt is not a ready holder over an absent baseline")
 	}
 	if err := json.Unmarshal(receipt.Ready, &ready); err != nil || ready.PID <= 0 || ready.GID == 0 || ready.LifetimeSeconds <= 0 {
 		return ready, errors.New("start receipt has no usable holder readiness")
 	}
-	wanted := summarizeServiceHolderPadding(nil)
-	if receipt.Phase == "start-large" {
-		wanted = summarizeServiceHolderPadding(serviceHolderPadding(receipt.Token))
-	}
-	if ready.serviceHolderPadSummary != wanted {
+	if ready.serviceHolderPadSummary != summarizeServiceHolderPadding(serviceHolderPadding(receipt.Token, receipt.Phase)) {
 		return ready, errors.New("start receipt reports a different registration size")
 	}
 	return ready, nil

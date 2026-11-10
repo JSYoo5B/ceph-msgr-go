@@ -148,7 +148,7 @@ while true; do
         read -r request_id token phase extra < /out/observe-service-holder
         case "$request_id" in ''|*[!0-9]*) exit 2 ;; esac
         test "$request_id" -gt 0 && test -z "$extra" || exit 2
-        case "$phase" in start|start-large) holder_timeout=60 ;; observe|cleanup) holder_timeout=30 ;; release) holder_timeout=45 ;; *) exit 2 ;; esac
+        case "$phase" in start|start-large|start-wide) holder_timeout=60 ;; observe|cleanup) holder_timeout=30 ;; release) holder_timeout=45 ;; *) exit 2 ;; esac
         rm /out/observe-service-holder
         # The detached holder outlives this request, so the loop stays free for
         # daemon controls. Python mon_command ignores its timeout argument; the

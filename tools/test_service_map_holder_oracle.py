@@ -10,6 +10,7 @@ import service_map_holder_oracle as oracle
 
 TOKEN = "ab" * 16
 DAEMON = "holder-" + TOKEN[:16]
+PINNED_WIDE_SHA256 = "9d72c5a97078ad6ca3ed4c3f19abf97a2ffe13ac2009d99094f983b7437c5ff2"
 PINNED_PAD_SHA256 = "bcb31ca7d81a4ea3bce4a8b313d143a6892ac110fff87cb14117db468ac6c2ec"
 
 
@@ -38,7 +39,7 @@ class FakeNative:
         self.ready, self.process, self.spawned, self.killed, self.exits = ready, False, 0, 0, True
         self.clock, self.survives = 0.0, False
         self.ready_override = None
-        self.modes, self.wrong_size = [], False
+        self.modes, self.wrong_size = [], None
 
     def view(self, root, daemon):
         payload = self.views.pop(0) if len(self.views) > 1 else self.views[0]
@@ -49,7 +50,7 @@ class FakeNative:
         self.modes.append(mode)
         self.process = True
         if self.ready:
-            registered = oracle.padding(token) if (mode == "hold-large") != self.wrong_size else []
+            registered = oracle.padding(token, self.wrong_size or mode)
             body = {"token": token, "pid": self.pid, "daemon": DAEMON, "service": "ceph-msgr", "gid": self.gid,
                     "registered": True, "lifetime_seconds": oracle.LIFETIME, **oracle.pad_summary(dict(registered))}
             oracle.atomic_write(oracle.state_path(output, token, "ready.json"), self.ready_override or body)
@@ -111,20 +112,24 @@ class RequestRejections(unittest.TestCase):
 
 
 class Padding(unittest.TestCase):
-    def test_padding_is_fixed_by_the_token(self):
-        pairs = oracle.padding(TOKEN)
-        self.assertEqual(len(pairs), oracle.PAD_KEYS)
-        self.assertEqual(pairs, sorted(pairs))
-        self.assertEqual(len(set(key for key, _ in pairs)), oracle.PAD_KEYS)
-        self.assertTrue(all(key.startswith(oracle.PAD_PREFIX) and len(value) == oracle.PAD_VALUE for key, value in pairs))
-        self.assertNotEqual(pairs, oracle.padding("cd" * 16))
-        with self.assertRaises(ValueError):
-            oracle.padding("not-a-token")
+    def test_padding_is_fixed_by_the_token_and_mode(self):
+        self.assertEqual(oracle.padding(TOKEN, "hold"), [])
         # The Go side recomputes this padding independently; both test suites
-        # pin the same summary of the same token.
-        self.assertEqual(oracle.pad_summary(dict(pairs)), {
-            "pad_keys": 4096, "pad_bytes": 4096 * (18 + 360),
-            "pad_sha256": PINNED_PAD_SHA256})
+        # pin the same summaries of the same token.
+        for mode, keys, size, width, pinned in (("hold-large", 4096, 360, 4, PINNED_PAD_SHA256),
+                                                ("hold-wide", 65537, 8, 5, PINNED_WIDE_SHA256)):
+            pairs = oracle.padding(TOKEN, mode)
+            self.assertEqual(len(pairs), keys)
+            self.assertEqual(pairs, sorted(pairs))
+            self.assertEqual(len(set(key for key, _ in pairs)), keys)
+            self.assertTrue(all(key.startswith(oracle.PAD_PREFIX) and len(key) == 14 + width and len(value) == size
+                                for key, value in pairs))
+            self.assertNotEqual(pairs, oracle.padding("cd" * 16, mode))
+            self.assertEqual(oracle.pad_summary(dict(pairs)), {
+                "pad_keys": keys, "pad_bytes": keys * (14 + width + size), "pad_sha256": pinned})
+        for token, mode in (("not-a-token", "hold-large"), (TOKEN, "hold-huge"), (TOKEN, "start-large")):
+            with self.assertRaises(ValueError):
+                oracle.padding(token, mode)
 
     def test_summary_counts_only_string_padding_keys(self):
         summary = oracle.pad_summary({"ceph_msgr_pad_0000": "ab", "ceph_msgr_pad_0001": 7, "hostname": "h", 3: "x"})
@@ -230,33 +235,36 @@ class Lifecycle(unittest.TestCase):
         self.assertIn("holder-spawn-outcome-unknown", states)
         self.assertIn("release-claimed-outcome-unknown", states)
 
-    def test_large_start_registers_and_observes_the_token_padding(self):
-        padded = entry()
-        padded["metadata"].update(oracle.padding(TOKEN))
-        native = FakeNative(self.out, [dump(), dump(padded), dump(entry())])
-        started = self.run_phase(native, "start-large")
-        wanted = oracle.pad_summary(dict(oracle.padding(TOKEN)))
-        self.assertEqual(native.modes, ["hold-large"])
-        self.assertEqual((started["state"], started["phase"], started["ready"]["gid"]), ("ready", "start-large", 4242))
-        self.assertEqual({key: started["ready"][key] for key in wanted}, wanted)
-        present = self.run_phase(native, "observe")
-        self.assertEqual({key: present["view"]["entry"][key] for key in wanted}, wanted)
-        # Neither receipt persists a padding value, only its summary.
-        self.assertNotIn(oracle.padding(TOKEN)[0][1], json.dumps([started, present]))
-        # A later view without the padding is visibly different.
-        self.assertEqual(self.run_phase(native, "observe")["view"]["entry"]["pad_keys"], 0)
+    def test_padded_starts_register_and_observe_the_token_padding(self):
+        for phase, mode in (("start-large", "hold-large"), ("start-wide", "hold-wide")):
+            with tempfile.TemporaryDirectory() as tmp:
+                self.out = pathlib.Path(tmp)
+                padded = entry()
+                padded["metadata"].update(oracle.padding(TOKEN, mode))
+                native = FakeNative(self.out, [dump(), dump(padded), dump(entry())])
+                started = self.run_phase(native, phase)
+                wanted = oracle.pad_summary(dict(oracle.padding(TOKEN, mode)))
+                self.assertEqual(native.modes, [mode])
+                self.assertEqual((started["state"], started["phase"], started["ready"]["gid"]), ("ready", phase, 4242))
+                self.assertEqual({key: started["ready"][key] for key in wanted}, wanted)
+                present = self.run_phase(native, "observe")
+                self.assertEqual({key: present["view"]["entry"][key] for key in wanted}, wanted)
+                # Neither receipt persists a padding value, only its summary.
+                self.assertNotIn(oracle.padding(TOKEN, mode)[0][1], json.dumps([started, present]))
+                # A later view without the padding is visibly different.
+                self.assertEqual(self.run_phase(native, "observe")["view"]["entry"]["pad_keys"], 0)
 
     def test_start_requires_the_readiness_of_its_own_registration_size(self):
-        for phase, wrong in (("start-large", "small registration"), ("start", "large registration")):
+        for phase, wrong in (("start-large", "hold"), ("start", "hold-large"), ("start-wide", "hold-large"), ("start-large", "hold-wide")):
             with tempfile.TemporaryDirectory() as tmp:
                 out = pathlib.Path(tmp)
                 native = FakeNative(out, [dump()])
-                native.wrong_size = True
+                native.wrong_size = wrong
                 with self.assertRaisesRegex(ValueError, "different registration size", msg=wrong):
                     oracle.collect(out, out, "1", TOKEN, phase, native)
 
     def test_a_token_is_started_once_with_either_step(self):
-        for first, second in (("start", "start-large"), ("start-large", "start")):
+        for first, second in (("start", "start-large"), ("start-large", "start"), ("start-wide", "start-large"), ("start", "start-wide")):
             with tempfile.TemporaryDirectory() as tmp:
                 out = pathlib.Path(tmp)
                 native = FakeNative(out, [dump()])
@@ -439,12 +447,12 @@ class Holder(unittest.TestCase):
 
         def sleep(seconds):
             oracle.state_path(self.out, TOKEN, "go.release").write_text("release\n")
-        oracle.hold(self.out, self.out, TOKEN, lib=Lib(), sleep=sleep, large=True)
+        oracle.hold(self.out, self.out, TOKEN, lib=Lib(), sleep=sleep, mode="hold-large")
         fields = registered[0].split(b"\0")
         # key\0value\0 pairs, closed by one further NUL.
         self.assertEqual(fields[-2:], [b"", b""])
         pairs = dict(zip((f.decode() for f in fields[:-2:2]), (f.decode() for f in fields[1:-2:2])))
-        self.assertEqual(len(pairs), oracle.PAD_KEYS + 2)
+        self.assertEqual(len(pairs), 4096 + 2)
         self.assertEqual((pairs["ceph_msgr_role"], pairs["ceph_msgr_daemon"]), ("holder", DAEMON))
         ready = json.loads(oracle.state_path(self.out, TOKEN, "ready.json").read_text())
         self.assertEqual(oracle.pad_summary(pairs), {key: ready[key] for key in ("pad_keys", "pad_bytes", "pad_sha256")})

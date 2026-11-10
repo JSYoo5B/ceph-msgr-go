@@ -135,7 +135,7 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	padding := serviceHolderPadding(token)
+	padding := serviceHolderPadding(token, "start-large")
 	registered := summarizeServiceHolderPadding(padding)
 	native := waitServiceHolder(t, ctx, control, token, "large registration", func(r nativeServiceHolderReceipt) bool {
 		return serviceHolderPresent(r, ready) && r.Holder != nil && r.Holder.Alive

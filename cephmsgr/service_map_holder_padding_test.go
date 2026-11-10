@@ -10,11 +10,18 @@ import (
 // token (tools/test_service_map_holder_oracle.py PINNED_PAD_SHA256).
 func TestServiceHolderPaddingMatchesTheHoldersPinnedSummary(t *testing.T) {
 	token := strings.Repeat("ab", 16)
-	padding := serviceHolderPadding(token)
+	padding := serviceHolderPadding(token, "start-large")
 	got := summarizeServiceHolderPadding(padding)
 	want := serviceHolderPadSummary{Keys: 4096, Bytes: 4096 * (18 + 360), SHA256: "bcb31ca7d81a4ea3bce4a8b313d143a6892ac110fff87cb14117db468ac6c2ec"}
 	if got != want {
 		t.Fatal("padding differs from the holder's", got)
+	}
+	wide := serviceHolderPadSummary{Keys: 65537, Bytes: 65537 * (19 + 8), SHA256: "9d72c5a97078ad6ca3ed4c3f19abf97a2ffe13ac2009d99094f983b7437c5ff2"}
+	if got := summarizeServiceHolderPadding(serviceHolderPadding(token, "start-wide")); got != wide {
+		t.Fatal("wide padding differs from the holder's", got)
+	}
+	if len(serviceHolderPadding(token, "start")) != 0 || len(serviceHolderPadding(token, "observe")) != 0 {
+		t.Fatal("an unpadded step has padding")
 	}
 	// Unrelated metadata, such as the native host inventory, is not padding.
 	padding["hostname"], padding["ceph_msgr_role"] = "h", "holder"
@@ -25,7 +32,7 @@ func TestServiceHolderPaddingMatchesTheHoldersPinnedSummary(t *testing.T) {
 	if changed := summarizeServiceHolderPadding(padding); changed.SHA256 == want.SHA256 || changed.Bytes != want.Bytes+1 {
 		t.Fatal("a changed padding value kept its summary", changed)
 	}
-	if summarizeServiceHolderPadding(serviceHolderPadding(strings.Repeat("cd", 16))).SHA256 == want.SHA256 {
+	if summarizeServiceHolderPadding(serviceHolderPadding(strings.Repeat("cd", 16), "start-large")).SHA256 == want.SHA256 {
 		t.Fatal("another token has the same padding")
 	}
 }
@@ -34,7 +41,8 @@ func TestServiceHolderPaddingMatchesTheHoldersPinnedSummary(t *testing.T) {
 // view is the holder's only with exactly the padding the holder registered.
 func TestServiceHolderReceiptsBindTheRegistrationSize(t *testing.T) {
 	token := strings.Repeat("b", 32)
-	large := summarizeServiceHolderPadding(serviceHolderPadding(token))
+	large := summarizeServiceHolderPadding(serviceHolderPadding(token, "start-large"))
+	wide := summarizeServiceHolderPadding(serviceHolderPadding(token, "start-wide"))
 	pad := func(target map[string]any, summary serviceHolderPadSummary) {
 		target["pad_keys"], target["pad_bytes"], target["pad_sha256"] = summary.Keys, summary.Bytes, summary.SHA256
 	}
@@ -51,13 +59,22 @@ func TestServiceHolderReceiptsBindTheRegistrationSize(t *testing.T) {
 		"small step, large registration": func(v map[string]any) { pad(v["ready"].(map[string]any), large) },
 		"another token's padding": func(v map[string]any) {
 			asLarge(v)
-			pad(v["ready"].(map[string]any), summarizeServiceHolderPadding(serviceHolderPadding(strings.Repeat("c", 32))))
+			pad(v["ready"].(map[string]any), summarizeServiceHolderPadding(serviceHolderPadding(strings.Repeat("c", 32), "start-large")))
 		},
-		"one key short": func(v map[string]any) { asLarge(v); v["ready"].(map[string]any)["pad_keys"] = large.Keys - 1 },
+		"wide step, large registration": func(v map[string]any) { asLarge(v); v["phase"] = "start-wide" },
+		"large step, wide registration": func(v map[string]any) { asLarge(v); pad(v["ready"].(map[string]any), wide) },
+		"one key short":                 func(v map[string]any) { asLarge(v); v["ready"].(map[string]any)["pad_keys"] = large.Keys - 1 },
 	} {
 		if _, err := serviceHolderReady(decodeServiceHolder(t, nativeServiceHolderStartSample, edit)); err == nil || !strings.Contains(err.Error(), "registration size") {
 			t.Fatal(name, "start receipt was accepted", err)
 		}
+	}
+	asWide := func(v map[string]any) {
+		v["phase"] = "start-wide"
+		pad(v["ready"].(map[string]any), wide)
+	}
+	if got, err := serviceHolderReady(decodeServiceHolder(t, nativeServiceHolderStartSample, asWide)); err != nil || got.serviceHolderPadSummary != wide {
+		t.Fatal("wide start receipt was not decoded", got, err)
 	}
 	padded := func(v map[string]any) { pad(v["view"].(map[string]any)["entry"].(map[string]any), large) }
 	if !serviceHolderPresent(decodeServiceHolder(t, nativeServiceHolderObserveSample, padded), ready) {

@@ -10,10 +10,12 @@ that hold into closed phases:
   start    claim the request, record a fresh baseline (the owned daemon must be
            absent), start one detached holder process and return once it
            reports that rados_service_register returned and the instance GID.
-  start-large
-           the same step with a fixed large registration: PAD_KEYS further
-           metadata keys of PAD_VALUE bytes each, all derived from the token.
-           A token is started once, with either step.
+  start-large, start-wide
+           the same step with a fixed padded registration (SHAPES): further
+           metadata keys derived from the token. ``start-large`` adds 4096
+           keys of 360 bytes (about 1.55 MiB); ``start-wide`` adds 65537
+           keys of 8 bytes, one more than a Go decoder admits in one
+           collection. A token is started once, with one of the three steps.
   observe  open a fresh librados handle and report whether the MON's
            ``service dump`` lists the owned daemon. Repeatable read.
   release  ask the holder to shut its native handle down and wait for its exit
@@ -33,7 +35,7 @@ after a lost acknowledgement is refused instead of replayed; the marker proves
 the first attempt began even when its outcome is unknown. No arbitrary service,
 daemon, command, signal, process or path is accepted. The service name and the
 daemon name derive from the 128-bit token; the registration carries only two
-synthetic metadata keys, plus the token-derived padding of ``start-large``. A
+synthetic metadata keys, plus the token-derived padding of a padded step. A
 view reports that padding as a key count, byte total and SHA-256 only. The
 native host inventory that librados adds is never persisted.
 """
@@ -51,8 +53,14 @@ import time
 from mon_command_outcome_oracle import atomic_write
 
 
-PHASES = ("start", "start-large", "observe", "release", "cleanup")
-STARTS = {"start": "hold", "start-large": "hold-large"}
+PHASES = ("start", "start-large", "start-wide", "observe", "release", "cleanup")
+STARTS = {"start": "hold", "start-large": "hold-large", "start-wide": "hold-wide"}
+# Padding of each holder mode: key count, value bytes and key index width.
+# Large is about 1.55 MiB of raw metadata, above a 1 MiB client frame limit
+# and far below the 16 MiB default. Wide is one entry more than the 65536
+# that the Go ServiceMap decoder admits in one collection.
+PAD_PREFIX = "ceph_msgr_pad_"
+SHAPES = {"hold": (0, 0, 4), "hold-large": (4096, 360, 4), "hold-wide": (65537, 8, 5)}
 SERVICE = "ceph-msgr"
 PREFIX = "native-service-holder-"
 SCRIPT = "service_map_holder_oracle.py"
@@ -61,11 +69,6 @@ READY_WAIT = 40
 EXIT_WAIT = 30
 KILL_WAIT = 5
 METADATA_LIMIT = 4 << 20
-# Padding of the large registration: about 1.55 MiB of raw metadata, above a
-# 1 MiB client frame limit and far below the 16 MiB default.
-PAD_PREFIX = "ceph_msgr_pad_"
-PAD_KEYS = 4096
-PAD_VALUE = 360
 CLUSTER_ROLE = "holder"
 RADOS_CONNECT_TIMEOUT = b"30"
 TOKEN = re.compile(r"[0-9a-f]{32}")
@@ -125,14 +128,15 @@ def positive(value, label):
     return value
 
 
-def padding(token):
-    """The fixed large-registration metadata of one token, in key order."""
-    if not TOKEN.fullmatch(token):
-        raise ValueError("Invalid owned ServiceMap holder token")
+def padding(token, mode):
+    """The fixed padding metadata of one token and holder mode, in key order."""
+    if not TOKEN.fullmatch(token) or mode not in SHAPES:
+        raise ValueError("Invalid owned ServiceMap holder padding")
+    keys, size, width = SHAPES[mode]
     pairs = []
-    for index in range(PAD_KEYS):
+    for index in range(keys):
         digest = hashlib.sha256(("%s:%d" % (token, index)).encode()).hexdigest()
-        pairs.append(("%s%04d" % (PAD_PREFIX, index), (digest * (PAD_VALUE // len(digest) + 1))[:PAD_VALUE]))
+        pairs.append(("%s%0*d" % (PAD_PREFIX, width, index), (digest * (size // len(digest) + 1))[:size]))
     return pairs
 
 
@@ -267,13 +271,13 @@ def load_librados():
     return lib
 
 
-def hold(fixture_root, output, token, lib=None, clock=time.monotonic, sleep=time.sleep, large=False):
+def hold(fixture_root, output, token, lib=None, clock=time.monotonic, sleep=time.sleep, mode="hold"):
     """Register the owned daemon, publish readiness and wait for the release marker."""
     import ctypes as C
 
     daemon = daemon_name(token)
     lib = lib if lib is not None else load_librados()
-    pairs = [("ceph_msgr_role", CLUSTER_ROLE), ("ceph_msgr_daemon", daemon)] + (padding(token) if large else [])
+    pairs = [("ceph_msgr_role", CLUSTER_ROLE), ("ceph_msgr_daemon", daemon)] + padding(token, mode)
     metadata = ("".join(key + "\0" + value + "\0" for key, value in pairs) + "\0").encode()
     registered = pad_summary(dict(pairs))
     cluster = C.c_void_p()
@@ -384,7 +388,7 @@ def collect(fixture_root, output, raw_id, token, phase, native=None):
             raise ValueError("holder readiness belongs to a different registration")
         positive(report["gid"], "GID")
         positive(report["pid"], "holder pid")
-        wanted = pad_summary(dict(padding(token) if phase == "start-large" else []))
+        wanted = pad_summary(dict(padding(token, STARTS[phase])))
         if any(report.get(key) != value for key, value in wanted.items()):
             raise ValueError("holder readiness reports a different registration size")
         receipt.update(baseline=baseline, ready=dict(wanted, pid=report["pid"], gid=report["gid"],
@@ -446,7 +450,7 @@ def collect(fixture_root, output, raw_id, token, phase, native=None):
 def main():
     if len(sys.argv) == 5 and sys.argv[1] in STARTS.values():
         root, output, token = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), sys.argv[4]
-        hold(root, output, token, large=sys.argv[1] == "hold-large")
+        hold(root, output, token, mode=sys.argv[1])
         return
     if len(sys.argv) != 6:
         raise ValueError("Expected fixture root, output, request ID, token and phase")
