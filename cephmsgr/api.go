@@ -5,11 +5,31 @@
 // No Ceph installation is required on the client host. See README.md for the
 // current verification status.
 //
-// Dial returns a Client that lives until Close. Every other context bounds
-// the call, or for a Watch method the watch, that receives it. A call that
-// fails after its command or request started transmission returns an
-// OutcomeUnknownError: the daemon may have executed it, and the client never
-// sends it again on its own.
+// Dial returns a Client that lives until Close. The context that opens an OSD,
+// MDS, MDS session or MGR service handle bounds only that setup; the handle
+// lives until its own Close, Client.Close or a terminal failure it reports.
+// Any other context bounds only the call that receives it, with one exception:
+// the context of a Client Watch method (WatchConfig, WatchDigest, WatchLogs,
+// WatchServiceMap, WatchOSDMaps, WatchFSMapUser, WatchMDSMaps) also bounds the
+// returned MON subscription stream. OSDConnection.WatchObject and NotifyObject
+// use their context for registration only. Canceling it afterwards leaves the
+// handle and the remote registration in place. Closing the stream or the OSD
+// connection releases local delivery only; the client removes a registration
+// only through an explicit OSDWatch.Unwatch.
+//
+// A daemon command or an OSD request that fails after its transmission started
+// returns an OutcomeUnknownError: the daemon may have executed it, and the
+// client never sends it again on its own. CephFS MDS requests separate three
+// cases. MDSSession.Submit returns once the request is queued, and the context
+// of MDSRequestCall.Wait or WaitSafe bounds only that wait: it returns the bare
+// context error while the call stays pending and can be waited on again. On a
+// resumable MDS connection, Messenger resume retransmits unacknowledged frames
+// of the same session with their original sequence and transaction ID; that is
+// delivery of the same request, not a new one. Sending a request again
+// (MDSSession.ResubmitForwarded after a forward) is always an explicit caller
+// action. Only loss of the pending call, when the session ends before its
+// reply, resolves it with an OutcomeUnknownError. Methods with other outcome
+// rules, such as MDSSession.SendCaps and OpenMgrService, document them.
 package cephmsgr
 
 import (

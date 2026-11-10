@@ -30,9 +30,11 @@ func mutationOutcome(result cephmsgr.Result, err error) string {
 	}
 }
 
-// The call context bounds only the local wait. A deadline that expires after
-// transmission started reports an OutcomeUnknownError: the daemon may still
-// have applied the mutation, so the caller verifies before acting again.
+// A daemon command's context bounds only the local wait. A deadline that
+// expires after transmission started reports an OutcomeUnknownError: the
+// daemon may still have applied the mutation, so the caller verifies before
+// acting again. (An MDS request wait instead returns the bare context error
+// while its call stays pending; see the package overview.)
 func ExampleOutcomeUnknownError() {
 	timedOut := &cephmsgr.OutcomeUnknownError{Cause: context.DeadlineExceeded}
 	fmt.Println(mutationOutcome(cephmsgr.Result{}, timedOut))
