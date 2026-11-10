@@ -150,9 +150,9 @@ selected MON/active-MGR Tell only; MDS and OSD command acceptance remains in #5.
 
 Every `implemented` entry in [opcodes-tentacle.csv](../internal/osd/opcodes-tentacle.csv)
 has its exact wire value, bounded contract and unit/vector selector below.
-The remaining 28 entries are exhaustively classified in
+The remaining 27 entries are exhaustively classified in
 [UNSUPPORTED_OPCODES.md](../internal/osd/UNSUPPORTED_OPCODES.md), checked against
-the same catalog by `TestUnsupportedOpcodesAreClassified`. These 52/28 counts
+the same catalog by `TestUnsupportedOpcodesAreClassified`. These 53/27 counts
 are an enum inventory, not a completion percentage or a complete RADOS API.
 Public `OSDOperation`/`OSDRequest` and result fields retain raw bytes, identities,
 per-op codes and unknown outcomes. Contracts define valid combinations, target/
@@ -317,6 +317,8 @@ The MDS map contract's event list is explicitly an earlier map-codec stage,
 with current session/request/capability/recovery paths linked separately.
 The OSD core/dirty contracts now distinguish base-v6 scope, implemented
 watch/backoff/FADVISE and available IGNORE_CACHE fixtures from unimplemented
-tier/manifest operations. This is implementation/evidence accounting, not a
+tier/manifest operations. Since that reconciliation the standalone cache-tier
+operations (R26) and the bounded SET_CHUNK (R27) have their own opcode rows
+above; TIER_PROMOTE, TIER_FLUSH and TIER_EVICT remain unimplemented. This is implementation/evidence accounting, not a
 request to erase historical failures or require every future native profile
 before classifying the current wire support.
