@@ -113,5 +113,12 @@ written locally once, and the option is restored natively. The option and
 its command schema are test-only. See the
 [outcome record](../integration/fixture/MGR_TELL_OUTCOME_VALIDATION.md) for
 the procedure, tested commit and limits. It is one unchanged manager
-incarnation: manager replacement, restart and secure-mode attribution are not
-part of that cell.
+incarnation: manager replacement and restart are not part of that cell.
+
+`TestCephAppliedCurrentManagerTellIsNotReplayedIntegration` runs the same cell
+through `MgrTell`, with the native observer bound to the manager whose
+connection carried the command. Both tests also run in secure mode, where no
+frame is decoded: every byte received on the connection of the one padded
+write is withheld and the applied state is awaited natively. That mode shows
+the unknown outcome, the applied state and a single padded local write, but no
+transaction or reply attribution. The same record describes both.

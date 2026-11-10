@@ -1,13 +1,15 @@
-# Independently observed exact-name MGR Tell mutation and no replay
+# Independently observed MGR Tell mutations and no replay
 
 This is a bounded implementation checkpoint of #63, after the
 [MON](MON_COMMAND_OUTCOME_VALIDATION.md), [MGR](MGR_COMMAND_OUTCOME_VALIDATION.md),
 [exact MON Tell](MON_TELL_OUTCOME_VALIDATION.md) and
 [current MON Tell](MON_CURRENT_TELL_OUTCOME_VALIDATION.md) cells. It covers
-`Client.MgrTellTo` only. It is not complete command-channel acceptance: current
-`MgrTell` and targeted OSD/PG/MDS applied-mutation cells remain open in
-[the channel matrix](../../cephmsgr/COMMAND_CHANNEL_MATRIX.md). The product API
-and replay behavior are unchanged; see
+`Client.MgrTellTo` and, in the [current-manager cell](#current-manager-cell)
+added afterwards, `Client.MgrTell`, each in CRC mode and in a
+[secure mode](#secure-mode) without decoded frames. The targeted OSD, PG and
+MDS cells are recorded [separately](DAEMON_COMMAND_OUTCOME_VALIDATION.md), and
+[the channel matrix](../../cephmsgr/COMMAND_CHANNEL_MATRIX.md) lists what
+remains. The product API and replay behavior are unchanged; see
 [the contract](../../cephmsgr/MGR_TELL_CONTRACT.md).
 
 Reference: Tentacle v20.2.4,
@@ -67,8 +69,10 @@ Test: `TestCephAppliedNamedManagerTellIsNotReplayedIntegration` in the
 needs no opt-in parameter. Required row:
 `mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell` (Linux/amd64, CRC, AES
 client and service, IPv4, host test process). The test is also a candidate of
-broad CRC rows and skips in secure rows, because its reply gate decodes CRC
-frames. Reproduce with:
+the broad ordinary `mon-mgr` rows in both connection modes. The sections up to
+the execution evidence describe the CRC mode of the exact-name cell; the
+[current-manager cell](#current-manager-cell) and the
+[secure mode](#secure-mode) are described after them. Reproduce with:
 
 ```sh
 CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes \
@@ -188,7 +192,83 @@ agrees. No assertion depends on a wall-clock margin.
   an absent and a pre-existing override; a failed mutation kept uncertain with
   path-like text masked; projection of only the owned diff entry.
 
+- `cephmsgr/tell_reply_gate_test.go` also covers the padded-write gate of the
+  secure mode (only the first write of the threshold size to a selected role
+  binds, bytes received before it pass, every byte received after it on that
+  connection is withheld, other connections keep delivering) and a regression
+  for both gates: the held connection is closed from the test and from a
+  session-like reader over a connection that fails a second Close, with the
+  banner in the same read as the reply.
+- `cephmsgr/mgr_tell_outcome_receipt_test.go` also covers the secure mode's
+  wait: only a value and an override that each belong to the previous or to
+  the wanted state are read again; a third value, a third override, an
+  unreadable, unbracketed or foreign observation is refused.
+
 These checks establish no native result.
+
+## Current-manager cell
+
+Test: `TestCephAppliedCurrentManagerTellIsNotReplayedIntegration`, the same
+body with `MgrTell` as the API under test. `MgrTell` takes no name: it uses
+the active manager of the client's authenticated MgrMap. Required row:
+`mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell`, the profile of the
+exact-name row with selector
+`^TestCephAppliedCurrentManagerTellIsNotReplayedIntegration$`. Differences
+from the sequence above:
+
+- The baseline is taken on the natively observed active manager, and both Go
+  clients wait for a MgrMap with that name and GID, as before. The test does
+  not pass that name to the API under test.
+- The read-only control before A and the recovery read after the loss go
+  through `MgrTell`. The independent Go reader keeps using the exact name.
+- The standby-name refusal is a property of `MgrTellTo` and is not repeated.
+  The standby manager is still read before and after as an unchanged
+  bystander.
+- **Observer binding.** After the hold, the manager that received A is taken
+  from the written frame: the fixture role of the endpoint that the bound
+  connection was dialed to. The cell fails unless that role is the manager the
+  baseline belongs to, and every later native state is requested for that
+  manager and must be bracketed by its name and GID. The fixture refuses a
+  request for any other manager under this baseline.
+- The caller must end with `OutcomeUnknownError` and without a target-change
+  cause, and the subject client's MgrMap must still name the same manager.
+
+## Secure mode
+
+Secure frames cannot be decoded by a connection wrapper, so neither the
+written command nor a reply frame can be identified. The cells keep the same
+native observer and sequence with these substitutions, using only the
+connection wrapper that earlier lost-reply tests already use
+(`testcluster.LostReplyConn`):
+
+- **Gate.** A is padded to more than 40 KiB. On the first write of at least
+  4096 bytes to a manager, the gate binds to that connection before the bytes
+  leave and from then on withholds every byte received on it. No reply to that
+  write can reach the session. Before A, the test requires that no write of
+  that size has happened, so the padded write is A.
+- **Barrier.** The binding shows that the padded write was issued, not that
+  the daemon replied. The applied state is therefore awaited: the `applied`
+  observation is repeated until it shows A. An observation is two admin-socket
+  calls, so only a value and an override that each belong to the baseline or
+  to A are read again. Any other state, an unreadable or unbracketed read, or
+  the end of the original caller fails at once. The wait ends on the state
+  itself, bounded by the test context; no assertion depends on a wall-clock
+  margin. After the native overwrite the caller is checked to be still
+  pending.
+- **Transmission count.** Exactly one write of at least 4096 bytes across
+  every subject connection, before and after the recovery read. The recovery
+  read must have used a later connection to the same manager.
+
+What the secure mode does not establish: the transaction and sequence of A,
+that the withheld bytes contain a reply to A (they can be an acknowledgement
+or any other frame), or the identity of any frame. The applied native state
+shows that the daemon executed A; the withheld stream shows that the caller
+could not have been told. Frame-level attribution in secure mode would need
+instrumentation inside the session, after decryption, which no test has.
+
+Required row: `mon-mgr.aes256k.ip4.host.t-suite-e9be0b` (secure, AES256K
+client and service, IPv4, host test process), selector
+`^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$`.
 
 ## Execution evidence
 
@@ -253,20 +333,107 @@ No hosted CI run of this row is recorded here. Final-head hosted execution, if
 requested, is recorded on the pull request, which supersedes this note for the
 final SHA.
 
+### Current-manager cell and secure mode
+
+Direct native execution, not hosted CI: Linux amd64 host, Docker 29.9.1, the
+image above, three MONs and two MGRs without OSDs, on source commit
+`ce61db517ae4b73f923d0da1d97ceff7f47ac3f9`. That commit holds the tests,
+the gates, the fixture control and the catalog rows; the commit after it in
+the same pull request changes documentation only. Each run used the
+environment that the native workflow passes for its catalog row and the same
+result gate. One `go test` process ran on the engine at a time.
+
+| Row | Selector | Gate | Tests | Fixture run |
+| --- | --- | --- | --- | --- |
+| `mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell` | `^TestCephAppliedCurrentManagerTellIsNotReplayedIntegration$` | expected the one client test, observed `PASS`, no problems | 7.82 s | 44 s |
+| `mon-mgr.aes256k.ip4.host.t-suite-e9be0b` | `^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$` | expected both client tests, observed both `PASS`, no problems | named 7.52 s, current 7.92 s | 51 s |
+| `mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell` (unchanged row, re-run on that commit) | `^TestCephAppliedNamedManagerTellIsNotReplayedIntegration$` | expected the one client test, observed `PASS`, no problems | 7.82 s | 45 s |
+
+Current-manager cell, CRC row:
+
+| Observation | Retained result |
+| --- | --- |
+| Baseline | `mgr.a`, active GID 4167, MgrMap epoch 4 before and after; effective 10000, no override; bystander `mgr.b` effective 10000, no override |
+| Control before A | Read-only `MgrTell`: local connection 2, TID 1, sequence 1, passed the armed gate |
+| Original CRC submission of A=10001 through `MgrTell` | written to the endpoint of `mgr.a`, local connection 2, client global ID 4497, TID 2, sequence 2, complete local write |
+| Withheld frame | type 98, TID 2, sequence 2, 132 bytes, on connection 2 |
+| Native A on the receiving manager while the reply was withheld | effective 10001, override 10001, `a`/4167, epoch 4 |
+| Native overwrite B=10002 | `config set log_max_recent 10002` exited successfully once; effective 10002, override 10002 |
+| Original caller after connection 2 was closed | `OutcomeUnknownError` (cause: use of closed network connection), empty result, no target-change cause |
+| Fresh reads | Subject client through `MgrTell`: B over local connection 3, TID 1, sequence 1. Independent Go client: B. Native: effective 10002, override 10002, `a`/4167 |
+| Local transmissions of A | exactly one, unchanged identity; padded writes 1 |
+| Bystander at the end | `mgr.b` effective 10000, no override |
+| Native restoration | One `config unset log_max_recent`, exited successfully; a separate fresh read shows effective 10000 and no override |
+
+Secure row, both cells (the same values in each; the client global ID was
+4497 for the exact-name and 4605 for the current-manager cell):
+
+| Observation | Retained result |
+| --- | --- |
+| Baseline | `mgr.a`, active GID 4167, epoch 4; effective 10000, no override; bystander `mgr.b` unchanged |
+| Controls before A | Exact-name cell: `MgrTellTo` of A to `b` refused locally with no write. Both: a read-only Tell returned the baseline and no write had reached 4096 bytes |
+| Padded write of A=10001 | to the endpoint of `mgr.a` on local connection 2; from before it left, every byte received on connection 2 was withheld |
+| Native A, awaited with the caller pending | effective 10001, override 10001, `a`/4167, epoch 4 |
+| Native overwrite B=10002 | exited successfully once; effective 10002, override 10002; the caller was still pending |
+| Original caller after connection 2 was closed | `OutcomeUnknownError` (cause: use of closed network connection), empty result, no target-change cause |
+| Fresh reads | Subject client: B over later local connection 3 to `mgr.a`. Independent Go client: B. Native: effective 10002, override 10002, `a`/4167 |
+| Local transmissions | padded writes 1 across every subject connection; no transaction or reply receipt exists in this mode |
+| Native restoration | One `config unset log_max_recent`, exited successfully; a separate fresh read shows effective 10000 and no override |
+
+After each run only the provider's reaper container remained on the host for
+its usual grace period; no independent final network inventory was taken.
+
+Both cells were also run once on that commit, with the secure row's selector,
+on three other profiles of the catalog whose broad selection now includes
+them: `mon-mgr.aes256k.ip6` (secure, IPv6, container test process),
+`mon-mgr.aes256k.ip6.crc` (CRC, IPv6, container test process) and
+`mon-mgr.aes.ip4.release-20.2.3` (secure, AES, the catalog's pinned 20.2.3
+image). All six tests passed their gate, each in 7.0 to 7.4 seconds. These
+are selector overrides of broad rows, so they show that the cells run on
+those profiles, not required-row acceptance.
+
+#### Checks that the assertions fail on wrong behavior
+
+Three temporary changes were each run on both new rows and then discarded;
+`git status` was clean afterwards. Every run failed the result gate. In the
+first two rows the native restoration still returned the baseline.
+
+| Temporary change | Current-manager CRC row | Secure row (both cells) |
+| --- | --- | --- |
+| Product: `Client.command` sends an uncertain MGR Tell once more on a new session | The original caller returned no error: "applied Tell mutation lost its unknown outcome when its connection ended" | The same assertion in both cells |
+| Test: the submitted command sets the baseline value instead of A | `applied`: effective 10000 with override 10000 is not the wanted state on the receiving daemon | `applied`: "a state outside the change from the previous to the wanted one", at the first observation |
+| Fixture: the observer reads the other manager's admin socket | `applied`: effective 10000 with no override is not the wanted state. The restoration also went to the other manager | The awaited state never appears, and the cell fails when the caller's session ends by its keepalive timeout: "original caller ended before the native state was observed", after 64 seconds. The restoration also went to the other manager, so these runs say nothing about the receiving daemon's final state |
+
+The last row shows the cost of the secure mode: without a reply barrier, a
+change that is never observed is refused only when the caller ends or the
+test context expires, not at once.
+
+A fault of the test gates themselves was found during these runs and fixed
+before the evidence above: closing the held connection could report "use of
+closed network connection" when the session closed it first. The
+[daemon command record](DAEMON_COMMAND_OUTCOME_VALIDATION.md#first-failure)
+keeps that first failure.
+
+No hosted CI run of these rows is recorded here.
+
+
 ## Limits
 
-One exact active name on one unchanged manager incarnation, one originally
-absent override, CRC with AES client and service keys, IPv4, host runtime and
-a recovery window of a few seconds. Not established:
+One active manager on one unchanged incarnation, addressed by its exact name
+or as the current manager, one originally absent override, a recovery window
+of a few seconds, and two required profiles: CRC with AES client and service
+keys and secure with AES256K keys, both IPv4 with a host test process. Not
+established:
 
 - the pre-existing-override restoration branch against a daemon (daemon-free
   fixture tests only);
-- secure-mode frame attribution, other key types, IPv6 or the container
-  runtime;
+- secure-mode frame attribution (see [secure mode](#secure-mode)), and
+  required rows for other key types, IPv6 or the container runtime;
+- what `MgrTell` does when the active manager changes while a reply is
+  withheld: the cell keeps one manager active;
 - manager replacement or restart while the reply is withheld, which would
   clear the process-local override and is covered for module commands by the
   [MGR command cell](MGR_COMMAND_OUTCOME_VALIDATION.md);
-- current `MgrTell`, and targeted OSD/PG/MDS applied mutations;
 - a server execution count. One complete local write and a surviving native
   overwrite show that the client did not transmit A again and that A was not
   applied after B. They do not prove exactly-once execution in general.
