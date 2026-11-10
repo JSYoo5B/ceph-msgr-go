@@ -106,6 +106,8 @@ type OSDWatch struct{ *OSDWatchStream }
 // OSDNotify retains asynchronous completion separately from its MOSDOpReply.
 type OSDNotify struct{ *OSDWatchStream }
 
+// Cookie returns the locally allocated watch cookie carried by this stream's
+// operations and events.
 func (w *OSDWatchStream) Cookie() uint64 { return w.cookie }
 
 func (o *OSDConnection) newWatchStream(request OSDRequest, options OSDWatchOptions, notifier bool) (*OSDWatchStream, error) {
@@ -273,6 +275,10 @@ func (w *OSDWatchStream) finish(err error) {
 	w.finishLocked(err)
 	w.connection.client.mu.Unlock()
 }
+
+// Close ends local delivery for this cookie; accepted events still drain
+// before ErrClosed. It sends no remote UNWATCH or ACK: only a successful
+// OSDWatch.Unwatch removes a watch registration. It always returns nil.
 func (w *OSDWatchStream) Close() error { w.finish(ErrClosed); return nil }
 
 // Next consumes one event at most once, including with concurrent waiters.
