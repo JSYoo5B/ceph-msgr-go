@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
@@ -25,8 +26,19 @@ type mapVersionRelay struct {
 	target   *mapVersionRequest
 	requests []mapVersionRequest
 	replies  []mapVersionReply
+	tells    []mapVersionTell
 	held     chan mapVersionReply
+	sent     chan mapVersionRequest
 	ended    chan mapVersionRelayEnd
+}
+
+// mapVersionTell is one daemon-local command observed on a relayed
+// connection. Answered is set by the MCommandReply with the same connection
+// and TID. A tell answered on the target's connection with a later Messenger
+// sequence shows that the peer read past the target request.
+type mapVersionTell struct {
+	Connection, TID, Sequence uint64
+	Answered                  bool
 }
 
 type mapVersionRequest struct {
@@ -44,10 +56,11 @@ type mapVersionReply struct {
 type mapVersionRelayEnd struct {
 	Connection uint64
 	Err        error
+	At         time.Time
 }
 
 func newMapVersionRelay() *mapVersionRelay {
-	return &mapVersionRelay{held: make(chan mapVersionReply, 1), ended: make(chan mapVersionRelayEnd, 16)}
+	return &mapVersionRelay{held: make(chan mapVersionReply, 1), sent: make(chan mapVersionRequest, 1), ended: make(chan mapVersionRelayEnd, 16)}
 }
 
 func (r *mapVersionRelay) wrap(conn net.Conn, endpoint string) net.Conn {
@@ -66,6 +79,20 @@ func (r *mapVersionRelay) arm() {
 	r.armed = true
 }
 
+// connections returns how many connections the relay has wrapped.
+func (r *mapVersionRelay) connections() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.nextConn
+}
+
+// tellExchanges returns the daemon-local command receipts in wire order.
+func (r *mapVersionRelay) tellExchanges() []mapVersionTell {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]mapVersionTell(nil), r.tells...)
+}
+
 func (r *mapVersionRelay) snapshot() ([]mapVersionRequest, []mapVersionReply) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -75,6 +102,13 @@ func (r *mapVersionRelay) snapshot() ([]mapVersionRequest, []mapVersionReply) {
 // requestLocked runs only after every byte of this frame was written to the
 // underlying connection. Peer receipt is established separately by the reply.
 func (r *mapVersionRelay) requestLocked(c *mapVersionRelayConn, m msgr.MessageData) error {
+	if m.Type == msgr.TellCommandMessage {
+		if len(r.tells) >= 1024 {
+			return errors.New("map-version relay tell receipt bound")
+		}
+		r.tells = append(r.tells, mapVersionTell{Connection: c.id, TID: m.Transaction, Sequence: m.Sequence})
+		return nil
+	}
 	if m.Type != msgr.MonGetVersionMessage {
 		return nil
 	}
@@ -90,11 +124,22 @@ func (r *mapVersionRelay) requestLocked(c *mapVersionRelayConn, m msgr.MessageDa
 	r.requests = append(r.requests, request)
 	if r.armed && r.target == nil && kind == "osdmap" {
 		r.target = &request
+		r.sent <- request
 	}
 	return nil
 }
 
 func (r *mapVersionRelay) reply(c *mapVersionRelayConn, m msgr.MessageData) (bool, error) {
+	if m.Type == msgr.TellCommandReplyMessage {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		for i := range r.tells {
+			if r.tells[i].Connection == c.id && r.tells[i].TID == m.Transaction {
+				r.tells[i].Answered = true
+			}
+		}
+		return false, nil
+	}
 	if m.Type != msgr.MonGetVersionReplyMessage {
 		return false, nil
 	}
@@ -190,7 +235,7 @@ func (c *mapVersionRelayConn) Read(p []byte) (int, error) {
 func (c *mapVersionRelayConn) ended(err error) error {
 	c.endOnce.Do(func() {
 		select {
-		case c.relay.ended <- mapVersionRelayEnd{c.id, err}:
+		case c.relay.ended <- mapVersionRelayEnd{c.id, err, time.Now()}:
 		default:
 		}
 	})

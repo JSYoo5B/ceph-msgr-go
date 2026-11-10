@@ -198,3 +198,117 @@ func TestMonMapVersionRelayFreshConnectionPassesNewIdentity(t *testing.T) {
 		t.Fatal("recovery reused the old relay identity or held the fresh reply", requests, replies)
 	}
 }
+
+// An armed request that the peer never answers is still reported as sent,
+// and a daemon-local command answered on the same connection with a later
+// Messenger sequence is the receipt that the peer read past that request.
+// Tells on another TID or connection, and ones sent earlier, do not qualify.
+func TestMonMapVersionRelayOrdersAnsweredTellAfterUnansweredRequest(t *testing.T) {
+	relay := newMapVersionRelay()
+	banner := msgr.Banner{Supported: msgr.Revision1, Required: msgr.Revision1}
+	tell := func(tid, sequence uint64) msgr.MessageData {
+		m := msgr.TellCommand([16]byte{1}, []string{`{"prefix":"mon_status"}`}, nil)
+		m.Transaction, m.Sequence = tid, sequence
+		return m
+	}
+	exchange := func(arm bool, outgoing []msgr.MessageData, answered []uint64) uint64 {
+		t.Helper()
+		local, peer := net.Pipe()
+		defer local.Close()
+		defer peer.Close()
+		deadline := time.Now().Add(5 * time.Second)
+		local.SetDeadline(deadline)
+		peer.SetDeadline(deadline)
+		conn := relay.wrap(local, "synthetic-mon:3300")
+		if arm {
+			relay.arm()
+		}
+		server := make(chan error, 1)
+		go func() {
+			if _, err := msgr.ReadBanner(peer, banner); err != nil {
+				server <- err
+				return
+			}
+			if err := msgr.WriteFull(peer, banner.Encode()); err != nil {
+				server <- err
+				return
+			}
+			reader := msgr.NewReader(peer, mapVersionRelayLimit)
+			for range outgoing {
+				if _, err := reader.Read(); err != nil {
+					server <- err
+					return
+				}
+			}
+			for _, tid := range answered {
+				reply := msgr.MessageData{Type: msgr.TellCommandReplyMessage, Transaction: tid, Sequence: tid, Version: 1, Front: make([]byte, 8)}
+				if err := msgr.NewWriter(peer, mapVersionRelayLimit).Write(reply.Frame()); err != nil {
+					server <- err
+					return
+				}
+			}
+			server <- nil
+		}()
+		if err := msgr.WriteFull(conn, banner.Encode()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := msgr.ReadBanner(conn, banner); err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range outgoing {
+			if err := msgr.NewWriter(conn, mapVersionRelayLimit).Write(m.Frame()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		reader := msgr.NewReader(conn, mapVersionRelayLimit)
+		for _, tid := range answered {
+			frame, err := reader.Read()
+			if err != nil {
+				t.Fatal("tell reply was withheld", err)
+			}
+			if m, err := msgr.DecodeMessage(frame); err != nil || m.Type != msgr.TellCommandReplyMessage || m.Transaction != tid {
+				t.Fatal("tell reply changed in transit", m, err)
+			}
+		}
+		if err := <-server; err != nil {
+			t.Fatal(err)
+		}
+		return relay.connections()
+	}
+	request := msgr.MonGetVersion(7, "osdmap")
+	request.Transaction, request.Sequence = 3, 3
+	first := exchange(true, []msgr.MessageData{tell(1, 1), tell(2, 2), request, tell(4, 4), tell(5, 5)}, []uint64{1, 5, 9})
+	var sent mapVersionRequest
+	select {
+	case sent = <-relay.sent:
+	default:
+		t.Fatal("transmitted armed request was not reported")
+	}
+	if sent.Connection != first || sent.TID != 3 || sent.Sequence != 3 || sent.Handle != 7 {
+		t.Fatal("sent receipt identity", sent)
+	}
+	second := exchange(false, []msgr.MessageData{tell(4, 6)}, []uint64{4})
+	qualifies := func(x mapVersionTell) bool {
+		return x.Connection == sent.Connection && x.Sequence > sent.Sequence && x.Answered
+	}
+	var after []mapVersionTell
+	for _, x := range relay.tellExchanges() {
+		if qualifies(x) {
+			after = append(after, x)
+		}
+	}
+	// TID 1 was answered but precedes the request; TID 4 follows it but its
+	// only answer arrived on the second connection; TID 2 was never answered.
+	if len(relay.tellExchanges()) != 5 || len(after) != 1 || after[0].TID != 5 || second == first {
+		t.Fatal("tell ordering receipt", relay.tellExchanges(), after)
+	}
+	requests, replies := relay.snapshot()
+	if len(requests) != 1 || len(replies) != 0 {
+		t.Fatal("unanswered request gained a reply receipt", requests, replies)
+	}
+	select {
+	case held := <-relay.held:
+		t.Fatal("a reply barrier fired without a version reply", held)
+	default:
+	}
+}
