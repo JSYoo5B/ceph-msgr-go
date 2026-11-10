@@ -9,6 +9,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -37,12 +38,14 @@ type ciBinding struct{ Parameter, Fallback string }
 
 // Admit only the workflow's simple matrix references. A new expression shape
 // must be taught to this validator rather than silently interpreted as empty.
+// A Windows checkout may deliver the workflow with CRLF line endings, so one
+// trailing carriage return per line is a line terminator, not expression text.
 func ciBindings(text string) (map[string]ciBinding, error) {
 	linePattern := regexp.MustCompile(`^\s+(CEPH_[A-Z0-9_]+): (.+)$`)
 	valuePattern := regexp.MustCompile(`^\$\{\{ matrix\.([a-z_]+)(?: \|\| '([^']*)')? \}\}$`)
 	result := map[string]ciBinding{}
 	for _, line := range strings.Split(text, "\n") {
-		fields := linePattern.FindStringSubmatch(line)
+		fields := linePattern.FindStringSubmatch(strings.TrimSuffix(line, "\r"))
 		if fields == nil || !strings.Contains(fields[2], "matrix.") {
 			continue
 		}
@@ -261,6 +264,60 @@ func TestCIInventoryRefusesMissingStaleAndDuplicateEntries(t *testing.T) {
 	for _, listed := range [][]string{{}, {"integration/TestCephGoneIntegration"}, {"integration/TestCephAIntegration", "integration/TestCephAIntegration"}} {
 		if len(ciInventoryProblems(declared, listed)) == 0 {
 			t.Fatalf("accepted %v", listed)
+		}
+	}
+}
+
+func TestCIBindingsParseCRLFLikeLF(t *testing.T) {
+	root := filepath.Join("..", "..")
+	workflow, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "native-scenarios.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	synthetic := "env:\n  CEPH_MSGR_TEST_IMAGE: ${{ matrix.image }}\n  CEPH_MSGR_TEST_MDS_COMMANDS: ${{ matrix.mds_commands || '0' }}\n  CEPH_MSGR_TEST_EMPTY: ${{ matrix.empty || '' }}\n  CEPH_MSGR_TEST_FIXED: literal\n"
+	want := map[string]ciBinding{
+		"CEPH_MSGR_TEST_IMAGE":        {"image", ""},
+		"CEPH_MSGR_TEST_MDS_COMMANDS": {"mds_commands", "0"},
+		"CEPH_MSGR_TEST_EMPTY":        {"empty", ""},
+	}
+	// The checked-out workflow may already be CRLF; normalize it first so both
+	// encodings are exercised on every platform.
+	for name, text := range map[string]string{"synthetic": synthetic, "workflow": strings.ReplaceAll(string(workflow), "\r\n", "\n")} {
+		lf, err := ciBindings(text)
+		if err != nil {
+			t.Fatalf("%s LF: %v", name, err)
+		}
+		crlf, err := ciBindings(strings.ReplaceAll(text, "\n", "\r\n"))
+		if err != nil {
+			t.Fatalf("%s CRLF: %v", name, err)
+		}
+		if !maps.Equal(lf, crlf) {
+			t.Fatalf("%s bindings differ: LF %v CRLF %v", name, lf, crlf)
+		}
+		if name == "synthetic" && !maps.Equal(lf, want) {
+			t.Fatalf("synthetic bindings = %v, want %v", lf, want)
+		}
+		fallbacks := 0
+		for _, binding := range lf {
+			if binding.Fallback != "" {
+				fallbacks++
+			}
+		}
+		if fallbacks == 0 {
+			t.Fatalf("%s has no fallback binding to compare", name)
+		}
+	}
+	// Line-ending tolerance must not admit other expression shapes, duplicates
+	// or carriage returns that are not a line terminator.
+	for _, text := range []string{
+		"  CEPH_MSGR_TEST_OSD: ${{ matrix.osd && '1' }}\r\n",
+		"  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}\r\n  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}\r\n",
+		"  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}\r\r\n",
+		"  CEPH_MSGR_TEST_OSD: ${{ matrix.osd }}\r trailing\n",
+		"  CEPH_MSGR_TEST_FIXED: literal\r\n",
+	} {
+		if bindings, err := ciBindings(text); err == nil {
+			t.Fatalf("accepted %q as %v", text, bindings)
 		}
 	}
 }
