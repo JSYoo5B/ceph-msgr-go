@@ -53,6 +53,33 @@ the local catalog recipe of [RBD_MIRROR_VALIDATION.md](RBD_MIRROR_VALIDATION.md)
 SVC-4 and SVC-5 keep the cephfs-mirror paths `primitive`. No other row
 changed.
 
+Updated on 2026-11-10 for issue #116. Two summary lines under "Product wire
+gaps" and the MDS-10 visibility note were reconciled with their owning
+contracts: the SET_CHUNK line now names both the native-only recipe (OSD-24)
+and the Go-originated acceptance (OSD-26), and the CephFS client feature line
+now states the two bits declared after the audit. No row's class, recipe,
+record or evidence changed, and no native test ran for this update.
+
+## How to use this map
+
+This map owns the classification of native recipes and where each retained
+record is. It does not own wire contracts, implementation status or the
+attribution of a native result:
+
+- the public and wire contract of a path is the contract linked from its row
+  or from [PROTOCOL_EVIDENCE.md](../../cephmsgr/PROTOCOL_EVIDENCE.md);
+- the tested source, profile and observed result are in the linked validation
+  record, summarized with their attribution in
+  [PROTOCOL_EVIDENCE.md](../../cephmsgr/PROTOCOL_EVIDENCE.md#native-receipts);
+- how a scenario ID is selected and gated is in
+  [the scenario README](../../.github/scenarios/README.md).
+
+A native-only recipe and a Go-originated recipe for the same operation are
+separate rows (for example OSD-24 and OSD-26 for SET_CHUNK, OSD-17 and
+OSD-23 for the cache-tier operations). Only the Go-originated row is evidence
+for the Go wire path. The full reader path is in
+[Tracing one feature](../../DOCUMENTATION.md#tracing-one-feature).
+
 ## Classes
 
 Each row has exactly one class. The order below is also the precedence: a row
@@ -199,7 +226,7 @@ a particular test in it ran. The Visibility column states which applies:
 | MDS-12 | Interrupted OSD writeback, MDS restart, capability revoke and eviction fencing | `released` | Owned data fixture; closed `osd-drop-on` drops one admitted object write at the single OSD, then an owned MDS restart, a native reader and a closed `evict` of the Go session | Native oracle: OSD ProtocolV2 receipt and drop lines for the client, native object sizes, LibCephFS size, mtime and bytes, MDS session list and blocklist | Unknown write outcome, MDS restart, `-EBLOCKLISTED` after eviction; OSD override restored, eviction entry removed | `group:mds-cephfs-writeback`, `TestCephMDSCephFSWritebackFenceIntegration`, [MDS_CEPHFS_WRITEBACK_FENCE_VALIDATION.md](MDS_CEPHFS_WRITEBACK_FENCE_VALIDATION.md) | dedicated rows; one writer, one interrupted object extent and a drop after OSD receipt; the revoke-time buffered-writeback leaf (latched, held, explicitly evicted, then fenced) passed both profiles in #80; explicit recovery of a known-unapplied latch and partially applied ranges not run live |
 | MDS-13 | Bounded split reconnect of 34 caps and one realm after an owned MDS restart | `released` | Owned completion fixture; 32 real files with 225-byte names are opened, the rank-0 MDS is restarted, and the same client GlobalID and shared nonce restore caller-supplied caps and realms with a reconnect-only 8 KiB message budget | Native oracle: MDS `Server::handle_client_reconnect` debug lines for this GlobalID (a nonfinal `(more)` fragment followed by the final one), native libcephfs namespace, inode, size and name readback before and after, and native `session ls` | Owned directory and files unlinked, caps released, CLOSE confirmed and absence from `session ls`, debug state, owned blocklist entries and credentials restored | `group:mds-cephfs-multi-reconnect`, `TestCephMDSCephFSMultiReconnectIntegration`, [MDS_MULTI_RECONNECT_VALIDATION.md](MDS_MULTI_RECONNECT_VALIDATION.md) | two dedicated rows (CRC/AES IPv4 host BlueStore and secure/aes256k IPv6 container MemStore) from #75; exactly two fragments for 34 caps and one realm; the large-state capacity beyond these 34 caps, held locks inside split reconnect state (a single held lock is MDS-11), connection loss between fragments, dirty-state ordering, multi-rank split reconnect, delegated inodes and the successful-run IPC receipts (issue #1) remain unverified |
 | MDS-11 | One held whole-file FLOCK carried across an owned MDS restart | `released` | Owned CephFS metadata fixture; the Go recovery session holds one exclusive FLOCK, then the owned rank-0 MDS is restarted and the test consumer attaches a native-layout lock blob to that inode's reconnect record, without a second SETFILELOCK | Native oracle: closed nonblocking `flock-ex-nb` probe (EAGAIN before and after the restart, acquire after the explicit unlock) with unchanged native inode state; MDS historic ops show no request for the original SETFILELOCK TID; Go GETFILELOCK names the original owner and GlobalID | Owned MDS restart; the lock is unlocked once by Go, the file and plan directory are unlinked, caps released and CLOSE confirmed | `group:mds-cephfs`, `TestCephMDSCephFSRecoveryIntegration`, `TestCephFSHeldFlockBlobMatchesNativeLayout`, [MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md) | dedicated rows (the `mds-cephfs` selector names the test); one exclusive whole-file lock of one owner and no restart-without-blob control; waiting locks, FCNTL ranges, several owners, dirty-state interactions and crash durability not run; the detailed successful ledger is not retained (issue #1) |
-| MDS-10 | POSIX record locks across MDS failover and client metrics messages | `proposed` | No local recipe; the provider has only an opt-in FUSE contention recipe (v0.4.0) | None | None | issue #11; [CLIENT_EXTENSION_DECISIONS.md](../../internal/mds/CLIENT_EXTENSION_DECISIONS.md); provider issue JSYoo5B/ceph-testcontainers-go#5 | the merged decision record (#46, `3de2098`) is a source audit, not a capability: `metric_collect` is deferred and no bit is enabled; upstream receipt only for FUSE locks |
+| MDS-10 | POSIX record locks across MDS failover and client metrics messages | `proposed` | No local recipe; the provider has only an opt-in FUSE contention recipe (v0.4.0) | None | None | issue #11; [CLIENT_EXTENSION_DECISIONS.md](../../internal/mds/CLIENT_EXTENSION_DECISIONS.md); provider issue JSYoo5B/ceph-testcontainers-go#5 | the merged decision record (#46, `3de2098`) is a source audit, not a capability: `metric_collect` is deferred and that audit enabled no bit (bits 10 and 12 were declared later with their own evidence, MDS-3 and MDS-13); upstream receipt only for FUSE locks |
 
 ### RBD underlying I/O
 
@@ -313,12 +340,17 @@ environment.
   SET_CHUNK is implemented for an offset-zero source extent only
   ([manifest contract](../../internal/osd/MANIFEST_CONTRACT.md#go-set_chunk-contract));
   a non-zero source offset stays refused because of a source-derived hang
-  hazard, and SET_CHUNK has a native-only recipe (OSD-24).
+  hazard. SET_CHUNK has two recipes: the native-only checkpoint (OSD-24),
+  which no Go client takes part in, and the Go-originated acceptance on one
+  profile (OSD-26), which is the live evidence for the Go request.
   Cache flush, try-flush, evict, pin and unpin are implemented and accepted
   live on one profile (OSD-23).
 - Withheld CephFS client features are decided in
   [CLIENT_EXTENSION_DECISIONS.md](../../internal/mds/CLIENT_EXTENSION_DECISIONS.md)
-  (`implement`, `defer` or `consumer-owned` per bit); none is enabled yet.
+  (`implement`, `defer` or `consumer-owned` per bit). The audit itself
+  enabled no bit. Since then `reclaim_client` (bit 10) is declared by both
+  profiles and `multi_reconnect` (bit 12) by the CephFS profile only (MDS-3,
+  MDS-13); the eight bits withheld by both profiles are not enabled.
 - MON, MGR and OSD sessions do not implement cookie resume; this is a
   documented contract boundary, not a gap.
 - Daemon-to-daemon paths need no Go server implementation; their rows above
