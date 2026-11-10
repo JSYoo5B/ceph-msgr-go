@@ -111,15 +111,27 @@ func (p *monOutcomeWrites) publish() {
 // returned, on the writer's goroutine; a reply to that write can be read
 // before then, so a reply barrier alone does not order the record.
 func (p *monOutcomeWrites) await(ctx context.Context, front, data []byte) error {
+	return p.awaitCount(ctx, front, data, 1)
+}
+
+// awaitCount is await for the count-th write with this content. A later write
+// of content that was already written once (the same read on another
+// connection) is not distinguished by content, so its waiter names how many
+// records it expects; it never returns on the earlier ones alone.
+func (p *monOutcomeWrites) awaitCount(ctx context.Context, front, data []byte, count int) error {
 	want := [2][32]byte{sha256.Sum256(front), sha256.Sum256(data)}
 	for {
 		p.mu.Lock()
 		err := p.err
+		found := 0
 		for _, observed := range p.writes {
-			if err == nil && observed.FrontSHA256 == want[0] && observed.DataSHA256 == want[1] {
-				p.mu.Unlock()
-				return nil
+			if observed.FrontSHA256 == want[0] && observed.DataSHA256 == want[1] {
+				found++
 			}
+		}
+		if err == nil && found >= count {
+			p.mu.Unlock()
+			return nil
 		}
 		if p.published == nil {
 			p.published = make(chan struct{})
@@ -250,6 +262,21 @@ func awaitMonOutcomeWrite(t *testing.T, ctx context.Context, probe *monOutcomeWr
 		t.Fatal("expected one complete identified CRC command write:", err)
 	}
 	return requireMonOutcomeWrite(t, probe, front, data)
+}
+
+// awaitMonOutcomeWrites waits, within ctx, for the count-th write with this
+// content to be published and returns every record with it. The caller keeps
+// its own exact-count and per-connection requirements.
+func awaitMonOutcomeWrites(t *testing.T, ctx context.Context, probe *monOutcomeWrites, front, data []byte, count int) []monOutcomeWrite {
+	t.Helper()
+	if err := probe.awaitCount(ctx, front, data, count); err != nil {
+		t.Fatal("expected", count, "published CRC command writes:", err)
+	}
+	writes, err := probe.matching(front, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writes
 }
 
 // awaitPaddedWrites waits, within ctx, until the padded-write counter shows at

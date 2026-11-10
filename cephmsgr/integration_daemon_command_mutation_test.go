@@ -306,9 +306,12 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 	if again := requireMonOutcomeWrite(t, probe, frontA, nil); again != submitted || writes.Load() != 1 {
 		t.Fatal("original command identity changed or A was written again", again, submitted, writes.Load())
 	}
-	reads, err := probe.matching(readFront, nil)
-	if err != nil || len(reads) != 2 || reads[0] != nearMiss {
-		t.Fatal("expected the near-miss read and one recovery read from the subject client", reads, err)
+	// The recovery read has the near-miss's content, and its reply does not
+	// order its own local write completion either: wait for the second
+	// record, then require exactly two.
+	reads := awaitMonOutcomeWrites(t, ctx, probe, readFront, nil, 2)
+	if len(reads) != 2 || reads[0] != nearMiss {
+		t.Fatal("expected the near-miss read and one recovery read from the subject client", reads)
 	}
 	observed := reads[1]
 	if observed.Type != msgr.TellCommandMessage || observed.Peer != role || observed.Connection == submitted.Connection || !observed.Complete {

@@ -506,3 +506,74 @@ func TestHeldReplyDoesNotOrderTheLocalWriteReceipt(t *testing.T) {
 		t.Fatal("held reply", held, err)
 	}
 }
+
+// The recovery read repeats the near-miss's content on another connection.
+// Both requests are consumed by the peer while the second local Write has not
+// returned: a wait by content alone would be satisfied by the near-miss, so
+// the cells wait for the second record.
+func TestRepeatedReadReceiptWaitsForItsOwnWrite(t *testing.T) {
+	probe := &monOutcomeWrites{}
+	probe.enabled.Store(true)
+	read := msgr.TellCommand([16]byte{1}, []string{`{"prefix":"config get","key":"x"}`}, nil)
+	late := make(chan struct{})
+	written := make(chan error, 2)
+	for connection := uint64(1); connection <= 2; connection++ {
+		local, peer := net.Pipe()
+		defer local.Close()
+		defer peer.Close()
+		var conn net.Conn = local
+		if connection == 2 {
+			conn = &lateReturnConn{Conn: local, release: late}
+		}
+		conn = &monOutcomeConn{Conn: conn, record: probe, connection: connection, peer: "mgr.x"}
+		read.Transaction, read.Sequence = connection, 1
+		frame := tellFrame(t, read)
+		go func() {
+			n, err := conn.Write(frame)
+			if err == nil && n != len(frame) {
+				err = io.ErrShortWrite
+			}
+			written <- err
+		}()
+		if _, err := io.ReadFull(peer, make([]byte, len(frame))); err != nil {
+			t.Fatal(err)
+		}
+		if connection == 1 {
+			if err := <-written; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	// The peer has both requests in full; only the first record exists.
+	if reads, err := probe.matching(read.Front, read.Data); err != nil || len(reads) != 1 || reads[0].Connection != 1 {
+		t.Fatal("records before the second write returned", reads, err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := probe.await(ctx, read.Front, read.Data); err != nil {
+		t.Fatal("the near-miss record does not satisfy a wait by content", err)
+	}
+	expired, stop := context.WithCancel(context.Background())
+	stop()
+	if err := probe.awaitCount(expired, read.Front, read.Data, 2); !errors.Is(err, context.Canceled) {
+		t.Fatal("waiting for the second record outlived its context", err)
+	}
+	awaited := make(chan error, 1)
+	go func() { awaited <- probe.awaitCount(ctx, read.Front, read.Data, 2) }()
+	select {
+	case err := <-awaited:
+		t.Fatal("the second record was reported before its write returned", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(late)
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-awaited; err != nil {
+		t.Fatal(err)
+	}
+	reads := awaitMonOutcomeWrites(t, ctx, probe, read.Front, read.Data, 2)
+	if len(reads) != 2 || reads[0].Connection != 1 || reads[1].Connection != 2 || !reads[1].Complete || reads[1].Transaction != 2 {
+		t.Fatal("records after the second write returned", reads)
+	}
+}
