@@ -68,8 +68,8 @@ test-only.
 After adoption the restart leaf also requires: `mds_log_pause` false on the
 new incarnation; the new incarnation's op tracker (`dump_historic_ops`,
 read right after adoption) holding the replayed create with ` REPLAY` in its
-description, so the new incarnation executed it and the old one never
-journaled it, and the resubmitted `unanswered` create; the old
+description, which shows that the new incarnation executed it, and the
+resubmitted `unanswered` create; the old
 incarnation's address blocklisted by the MON; native `session ls` showing
 the Go session `open` at the same `ip:0/nonce` with `num_caps` above 0;
 native `statx` of `boundary/replayed` and `unanswered` equal to the inos the
@@ -415,11 +415,21 @@ The boundary is now held on the server, on the armed incarnation only
   before the create.
 - `mds/MDSDaemon.cc`: a daemon removed from the map respawns; the runtime
   option does not survive the re-exec.
+- `client/Client.cc` and `mds/FSMap.cc`: `ceph tell mds.<target>` resolves
+  its target in `Client::resolve_mds` from the FSMap fetched for that
+  command (`Client::mds_command`). A role (`<fs>:<rank>`, or a bare rank
+  of the legacy filesystem, `FSMap::parse_role`) resolves to the daemon
+  holding that rank at that moment. A decimal that is no such rank is a GID:
+  it is used only if `gid_exists`, otherwise the command fails with ENOENT.
+  The pause is therefore addressed to the armed GID. A command sent to the
+  rank could reach a daemon that replaced the armed incarnation after the
+  identity proof; that daemon would stay paused while cleanup, seeing the
+  armed GID gone, recorded the pause as discarded.
 
 The leaf creates the fresh directory `boundary` (safe) and the fixture
 applies the pause (`restart-pause`: idle `scrub status`, `config set`,
-`scrub abort`, `config get` = `true`, bracketed by the identity proof of
-the armed GID). The client then creates `boundary/replayed` and requires an
+`scrub abort`, `config get` = `true`, each sent to `mds.<armed GID>` and
+bracketed by the identity proof of the armed GID). The client then creates `boundary/replayed` and requires an
 unsafe reply. That reply records the TID, the inode and the incarnation
 (GID, nonce, incarnation) that answered. The test then forces the window
 that used to be lost: it sends `FlushJournal` (on a running submitter this
@@ -429,10 +439,16 @@ makes a create safe within milliseconds, see
 in flight with `early_replied` and no `journal_committed` event. Only then
 does `restart-fire` run (the fixture refuses it otherwise). After the
 restart, the new incarnation's op tracker must hold the replayed create as
-an MDRequest with ` REPLAY`: a create that the old incarnation had
-journaled would have been answered from the session's completed-request
-record without an MDRequest. That check is the post-hoc proof that the
-boundary held.
+an MDRequest with ` REPLAY`. That positive observation shows that the new
+incarnation executed the create. The check reads `dump_historic_ops` once,
+right after adoption, and the history is bounded (`mds_op_history_size`
+and `mds_op_history_duration`, 20 completed operations and 600 s by
+default; the fixture keeps at most 64 client requests of the session). A
+missing request, or one without the flag, therefore fails the test as an
+unobserved REPLAY execution and reports what the read returned and these
+bounds. It is not evidence that an earlier incarnation journaled the
+create: the proof that the armed incarnation did not is the in-flight
+record taken before the fire.
 
 The replayed create has its own fresh parent because a create wrlocks its
 parent's filelock and nestlock. A scatter nudge on a dirty lock submits a
@@ -461,6 +477,15 @@ reached):
   `go-file` and directory, accepting ENOENT for entries never created. It
   releases its caps and closes. Native `statx` must report both
   directories absent and `session ls` no owned session.
+
+The receipt (`Reconcile`) is completed only by that terminal verification:
+the cleanup session closed, both directories natively absent and the
+session listing read without an owned session, with no recorded error. A
+failure to set up the fresh client (credential, MON authentication) is
+returned to the reconciliation and recorded; the remaining steps are then
+not run and the receipt stays incomplete. A reconciliation that stops
+without recording an error is recorded as stopped before its terminal
+verification.
 
 No blocklist entry is removed here. The fixture cleanup keeps the fencing
 entries of an armed incarnation that is still mapped and removes only
@@ -531,6 +556,52 @@ before the tested commit.
   session that missed its reconnect window) entries removed, none kept.
   The recovery test kept the injected failure as its result.
 
+### Results on the integrated head (2026-11-10)
+
+After the review of this change the pause was bound to the armed GID, the
+reconciliation receipt was made to require its terminal verification, and
+the missing-REPLAY failure was reworded (sections above). The branch also
+merged main. Tested source: commit
+`f5e47be0f9c6d5fa31d2f92c22a36dc5d505e06d` (only documentation changed
+afterwards), same host class, Docker and Go versions, image, job
+environment and result gate as above, one fixture at a time.
+
+| Scenario | Push / recovery / metadata | Gate |
+| --- | --- | --- |
+| `mds-cephfs.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7` | 74.48 / 89.31 / 109.29 s, 29 leaves and tests passed | passed |
+| `mds-cephfs.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7` | 73.17 / 89.28 / 104.99 s, 29 leaves and tests passed | passed |
+
+Both rows ran every pause command as `tell mds.<armed GID>`: the idle
+check, `config set` (`"success"`), `scrub abort` (`return_code` 0), the
+readback `true`, and the in-flight read. CRC row: armed GID 14584
+(incarnation 6) answered the create (TID 17) unsafe, `FlushJournal`
+followed 29 µs later, and 2.60 s later the armed incarnation's op tracker
+still held it. The adopted GID 18293 (incarnation 10) read back
+`mds_log_pause` false and its op tracker returned two client requests of
+the session, one of them TID 17 with `RETRY=1 REPLAY QUEUED_FOR_REPLAY`.
+Secure row: armed GID 14549 (incarnation 6), flush 36 µs after the unsafe
+reply, still held 2.80 s later, adopted GID 8394 (incarnation 10), TID 17
+with REPLAY among two returned requests. Both cleanup receipts completed
+with the pause `discarded` and the `mds-restart` and `eviction` entries
+removed, none kept.
+
+Forced mutation on the same head (CRC row, temporary edit of the test,
+run once and discarded): a `t.Fatal` right after `restart-fire` returned,
+and a missing credential path for the fresh cleanup client. The leaf kept
+"injected failure right after restart-fire" as its first failure. The
+reconciliation waited for the new incarnation (GID 18313, incarnation 10,
+`up:active` after 36 status reads), adopted it, and then recorded "set up a
+fresh cleanup client: read recovery credential: ... no such file or
+directory". Its receipt has `Completed` false with `SessionClosed`,
+`RecoveryDirAbsent`, `PlanDirAbsent` and `OwnedSessionsChecked` all false
+and that one error. The namespace was therefore not removed by the test,
+and the following metadata test failed at its first `mkdir` with EEXIST,
+which is the consequence the incomplete receipt announces. The fixture
+cleanup still completed (pause `discarded`; `mds-restart`, `eviction` and
+`owned-session` entries removed, none kept) and the result gate failed the
+run. Before this change the same setup failure ended the reconciliation
+through `t.Fatal` and left a receipt with `Completed` true.
+
 ### Limits
 
 - arm64 hosts and CI were not run for this change.
@@ -539,6 +610,14 @@ before the tested commit.
   reference tag. Another release would need the same reading.
 - The reconciliation was exercised for a failure before the fire and right
   after it, not for failures during reconnect or after adoption.
+- A daemon replacing the armed incarnation between the identity proof and
+  a pause command was exercised against the fixture's model of the native
+  target resolution (unit test), not natively. That a `tell` to a GID
+  outside the FSMap fails with ENOENT is read from `Client::resolve_mds`
+  at the reference tag; the native runs show only that the commands reach
+  the armed and the adopted GID.
+- The missing-REPLAY failure message was exercised by its unit test; no
+  native run produced it.
 - A fixture control failure stops the control loop, so the test cannot
   reconcile after one; the fixture cleanup then lifts a held pause and
   keeps the fencing of a still-mapped incarnation.

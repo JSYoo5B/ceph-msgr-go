@@ -47,7 +47,9 @@ Reference: Tentacle Ceph 20.2.4 commit
 create, readdir, reply extra, `kill_session`, reconnect and replay dispatch),
 `mds/Locker.cc` (cap issue, revoke, update and release), `mds/CInode.cc`
 (`encode_inodestat`), `mds/SessionMap.cc` (`Session::dump`),
-`mds/MDSRank.cc` (`evict_client`, `dump_historic_ops`), `mds/MDSDaemon.cc`
+`mds/MDSRank.cc` (`evict_client`, `dump_historic_ops`), `client/Client.cc`
+(`resolve_mds`, `mds_command`) and `mds/FSMap.cc` (`parse_role`) for the
+target of a `tell mds.<GID>`, `mds/MDSDaemon.cc`
 (respawn after removal from the map), `mon/MDSMonitor.cc` (`fail_mds_gid`),
 `mon/OSDMonitor.cc` (blocklist of an address vector) and
 `osd/PrimaryLogPG.cc` (`do_op` blocklist check), and for the push extension
@@ -146,9 +148,20 @@ journaled as one record that is never reissued:
    already blocklisted. Only one restart can ever be armed.
 2. `restart-pause` (identity-checked, once): the bounded journal fault
    boundary on the armed incarnation. It requires an idle scrub stack
-   (`scrub status`), journals `intended`, then runs `tell mds.<fs>:0 config
-   set mds_log_pause true`, `tell mds.<fs>:0 scrub abort` and a `config get`
-   readback, and records `applied` or `uncertain`. While the option is set,
+   (`scrub status`), journals `intended`, then runs `tell mds.<armed GID>
+   config set mds_log_pause true`, `tell mds.<armed GID> scrub abort` and a
+   `config get` readback, and records `applied` or `uncertain`. Every one of
+   these commands, the idle check included, is addressed to the armed GID
+   and not to the rank. The CLI resolves a role such as `mds.<fs>:0` to
+   whichever daemon holds the rank when the command runs, so a command sent
+   that way would follow a replacement. A decimal target that is not a rank
+   of the filesystem (`max_mds` is 1, so only 0 is a rank) is a daemon GID:
+   `Client::resolve_mds` uses it only while that GID is in the FSMap it just
+   fetched and returns ENOENT otherwise, and the command goes to that
+   incarnation's own addresses. If the armed incarnation leaves the map at
+   any point of the sequence, the remaining commands fail, the pause is
+   recorded `uncertain`, and the daemon that took over rank 0 has received
+   none of them. While the option is set,
    `MDLog::_submit_thread` appends no journal entry, so a request journaled
    afterwards cannot become safe on that incarnation; a journal flush
    (`MDLog::flush`, from a client `REQUEST_FLUSH_MDLOG`, a scatter
@@ -159,10 +172,11 @@ journaled as one record that is never reissued:
    (`handle_asok_command`, `ScrubStack::scrub_abort`), so its answer shows
    that the pause was applied before the test sends the request it must
    hold. The setting is runtime-only: the respawned incarnation starts
-   without it. The identity proof before and after brackets every command
-   to the armed GID in rank 0.
+   without it. The identity proof before and after additionally requires
+   the armed GID in rank 0 around the whole step.
 3. `restart-inflight <GlobalID>:<TID>` (identity-checked, once, read only):
-   reads `dump_ops_in_flight` and records whether that client request of an
+   reads `dump_ops_in_flight` of the armed GID (same addressing as the
+   pause) and records whether that client request of an
    observed owned session is in flight, early-replied (unsafe) and without
    a `journal_committed` event (`held`). A request that is not held is
    reported, not refused, so the test fails with the control still usable.
@@ -182,13 +196,13 @@ journaled as one record that is never reissued:
 6. `restart-adopt`: requires the same daemon name in rank 0 `up:active` with
    a different GID, nonce and incarnation, the same FSCID and pools, the
    armed GID absent from the map and, after a pause, `mds_log_pause` false
-   on the new incarnation (the pause is then recorded `discarded` with the
-   removed incarnation). It records the old incarnation's blocklist
+   on the new incarnation, read from the adopted GID (the pause is then
+   recorded `discarded` with the removed incarnation). It records the old incarnation's blocklist
    entries, makes the new incarnation current, rewrites the target file and
    then runs the ordinary post-action proof against it.
 7. `restart-resume` (identity-checked, once): only for a restart that was
-   never fired; sets `mds_log_pause` false with the same barrier and
-   readback and records `resumed` (or `resume-uncertain`). The test uses it
+   never fired; sets `mds_log_pause` false on the armed GID with the same
+   barrier and readback and records `resumed` (or `resume-uncertain`). The test uses it
    to reconcile a failure between the pause and the fire.
 
 Between `restart-fire` and `restart-adopt` every other action is refused
@@ -260,7 +274,7 @@ One request is outstanding at a time.
 | `evict` | one GlobalID | mutation, once per GlobalID: the target must be an open session of the recovery identity whose address is not yet blocklisted; journals intent, runs `tell mds.<fs>:0 session evict id=<gid>`, then waits until the session is gone and its exact address is blocklisted, recording the entry's expiry |
 | `recovery-ops` | one GlobalID | read only: `tell mds.<fs>:0 dump_historic_ops`, reduced to client requests of that GlobalID (description, result, flag point, event names); admitted only for an observed owned session |
 | `restart-arm`, `restart-pause`, `restart-fire`, `restart-status`, `restart-adopt`, `restart-resume` | none | the owned restart and journal pause above |
-| `restart-inflight` | `<GlobalID>:<TID>` of an observed owned session | read only: `tell mds.<fs>:0 dump_ops_in_flight`, reduced to that request; requires the applied pause of an unfired restart |
+| `restart-inflight` | `<GlobalID>:<TID>` of an observed owned session | read only: `tell mds.<armed GID> dump_ops_in_flight`, reduced to that request; requires the applied pause of an unfired restart |
 | `push-stat` | `dir`, `lease`, `victim`, `renamed`, `snap`, `snap-file`, `snapshot`, `quota`, `quota-file`, `recall` | read only: `statx` through the push driver |
 | `push-rename` | none | mutation, once: rename `lease/victim` to `lease/renamed` |
 | `push-snapshot-create`, `push-snapshot-remove` | none | mutation, once each: `mkdir`/`rmdir` of the planned snapshot; removal requires an applied creation |
@@ -308,9 +322,11 @@ receipt to `mds-cephfs-cleanup.json`, then:
 
 0. Lifts a journal pause that may still hold the armed incarnation (any
    state but `resumed` or `discarded`): if the armed GID is gone from the
-   FSMap the pause is recorded `discarded`; if it still holds rank 0 the
-   fixture sets `mds_log_pause` false with the barrier and readback,
-   bracketed by two rank status reads naming the armed GID. This restore of
+   FSMap the pause is recorded `discarded` (every pause command was
+   addressed to that GID, so no other daemon carries the pause); if it still
+   holds rank 0 the fixture sets `mds_log_pause` false on the armed GID with
+   the barrier and readback, bracketed by two rank status reads naming the
+   armed GID. This restore of
    runtime state is applied even after an uncertain step; a mapped armed
    GID outside rank 0 keeps the pause and fails cleanup
    (`journal_pause_restored`).
