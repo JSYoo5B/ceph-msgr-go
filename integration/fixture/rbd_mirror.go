@@ -205,7 +205,14 @@ type rbdMirrorScope struct {
 	peer        netip.Addr
 	baseline    rbdMirrorProgress
 	receipt     rbdMirrorFixtureReceipt
-	finished    bool
+	// issued names the teardown phases already issued, owned the Docker
+	// containers the teardown must remove, and inventoried whether the
+	// destination network's members are among them.
+	issued      map[string]bool
+	owned       map[string]bool
+	inventoried bool
+	// finished is set once every owned teardown phase has been issued.
+	finished bool
 }
 
 func (s *rbdMirrorScope) save() error {
@@ -574,59 +581,118 @@ func (c *fixtureCluster) rbdMirrorRestore(ctx context.Context, s *rbdMirrorScope
 	return nil
 }
 
-// finish terminates the mirror first and then the destination cluster, and
-// confirms their removal independently through the Docker engine. The source
-// pool, its mirroring policy and peer user stay in the disposable source
-// cluster, which the fixture removes as a whole.
+// rbdMirrorEngine is the Docker inventory through which the cleanup confirms
+// removal independently of the owned handles.
+type rbdMirrorEngine interface {
+	NetworkInspect(context.Context, string, client.NetworkInspectOptions) (client.NetworkInspectResult, error)
+	ContainerInspect(context.Context, string, client.ContainerInspectOptions) (client.ContainerInspectResult, error)
+	Close() error
+}
+
+func rbdMirrorDockerEngine(ctx context.Context) (rbdMirrorEngine, error) {
+	return testcontainers.NewDockerClientWithOpts(ctx)
+}
+
+// rbdMirrorPhase is one owned teardown call.
+type rbdMirrorPhase struct {
+	name string
+	run  func(context.Context) error
+}
+
+// finish restores a held fault, terminates the mirror and then the
+// destination cluster, and confirms their removal independently through the
+// Docker engine. The source pool, its mirroring policy and peer user stay in
+// the disposable source cluster, which the fixture removes as a whole.
 func (s *rbdMirrorScope) finish(ctx context.Context) error {
-	if s.finished {
-		return nil
+	var phases []rbdMirrorPhase
+	if s.lease != nil && !s.receipt.Restore.Restored {
+		phases = append(phases, rbdMirrorPhase{"directed fault restore", s.lease.Restore})
 	}
-	s.finished = true
-	r := &s.receipt
-	r.Cleanup.Attempted = true
-	var errs []error
-	if s.lease != nil && !r.Restore.Restored {
-		errs = append(errs, s.lease.Restore(ctx))
-	}
-	docker, err := testcontainers.NewDockerClientWithOpts(ctx)
-	if err != nil {
-		return errors.Join(append(errs, err)...)
-	}
-	defer func() { _ = docker.Close() }()
-	owned := map[string]bool{}
-	network := r.Destination.Network
-	if network != "" {
-		inspected, err := docker.NetworkInspect(ctx, network, client.NetworkInspectOptions{})
-		if err != nil {
-			errs = append(errs, fmt.Errorf("inspect destination network before cleanup: %w", err))
-		}
-		for id := range inspected.Network.Containers {
-			owned[id] = true
-		}
-	}
+	var daemons []string
 	if s.mirror != nil {
 		for _, daemon := range s.mirror.Daemons() {
 			if daemon != nil && daemon.Container != nil && daemon.GetContainerID() != "" {
-				owned[daemon.GetContainerID()] = true
+				daemons = append(daemons, daemon.GetContainerID())
 			}
 		}
-		errs = append(errs, s.mirror.Terminate(ctx))
+		phases = append(phases, rbdMirrorPhase{"RBD mirror termination", func(ctx context.Context) error { return s.mirror.Terminate(ctx) }})
 	}
 	if s.destination != nil {
-		errs = append(errs, s.destination.Terminate(ctx))
+		phases = append(phases, rbdMirrorPhase{"destination cluster termination", func(ctx context.Context) error { return s.destination.Terminate(ctx) }})
+	}
+	return s.teardown(ctx, phases, daemons, rbdMirrorDockerEngine)
+}
+
+// teardown issues every owned phase once, in order, whether or not the
+// Docker inventory is available: an inventory failure only withholds the
+// independent confirmation. A phase not reached before ctx ends stays for the
+// fixture's fallback cleanup, and the scope is finished only once every phase
+// has been issued.
+func (s *rbdMirrorScope) teardown(ctx context.Context, phases []rbdMirrorPhase, daemons []string, open func(context.Context) (rbdMirrorEngine, error)) error {
+	if s.finished {
+		return nil
+	}
+	r := &s.receipt
+	r.Cleanup.Attempted = true
+	if s.issued == nil {
+		s.issued = map[string]bool{}
+	}
+	if s.owned == nil {
+		s.owned = map[string]bool{}
+	}
+	var errs []error
+	engine, err := open(ctx)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("open the Docker inventory: %w", err))
+		engine = nil
+	} else {
+		defer func() { _ = engine.Close() }()
+	}
+	network := r.Destination.Network
+	if engine != nil && network != "" && !s.inventoried {
+		inspected, err := engine.NetworkInspect(ctx, network, client.NetworkInspectOptions{})
+		if err != nil {
+			errs = append(errs, fmt.Errorf("inspect destination network before cleanup: %w", err))
+		} else {
+			s.inventoried = true
+			for id := range inspected.Network.Containers {
+				s.owned[id] = true
+			}
+		}
+	}
+	for _, id := range daemons {
+		s.owned[id] = true
+	}
+	pending := 0
+	for _, phase := range phases {
+		if s.issued[phase.name] {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			pending++
+			errs = append(errs, fmt.Errorf("%s not reached: %w", phase.name, err))
+			continue
+		}
+		s.issued[phase.name] = true
+		if err := phase.run(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", phase.name, err))
+		}
+	}
+	s.finished = pending == 0
+	if engine == nil {
+		return errors.Join(append(errs, errors.New("owned container removal cannot be independently confirmed"))...)
 	}
 	if err := errors.Join(errs...); err != nil {
 		return err
 	}
-	r.Cleanup.Containers = len(owned)
-	for id := range owned {
-		if _, err := docker.ContainerInspect(ctx, id, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
+	r.Cleanup.Containers = len(s.owned)
+	for id := range s.owned {
+		if _, err := engine.ContainerInspect(ctx, id, client.ContainerInspectOptions{}); !errdefs.IsNotFound(err) {
 			errs = append(errs, fmt.Errorf("owned container removal not independently confirmed: %v", err))
 		}
 	}
 	if network != "" {
-		if _, err := docker.NetworkInspect(ctx, network, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
+		if _, err := engine.NetworkInspect(ctx, network, client.NetworkInspectOptions{}); !errdefs.IsNotFound(err) {
 			errs = append(errs, fmt.Errorf("destination network removal not independently confirmed: %v", err))
 		} else {
 			r.Cleanup.Network = true
@@ -635,7 +701,7 @@ func (s *rbdMirrorScope) finish(ctx context.Context) error {
 	if err := errors.Join(errs...); err != nil {
 		return err
 	}
-	r.Cleanup.Confirmed = len(owned) != 0 && r.Cleanup.Network
+	r.Cleanup.Confirmed = len(s.owned) != 0 && r.Cleanup.Network
 	if !r.Cleanup.Confirmed {
 		return errors.New("RBD mirror cleanup inventory is empty")
 	}

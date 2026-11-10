@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -193,5 +194,51 @@ func TestRBDMirrorProgressAndDiff(t *testing.T) {
 	before := rbdMirrorPayload(16, rbdMirrorSeedBefore)
 	if before[0] != byte(rbdMirrorSeedBefore%251+1) || before[1] != byte((37+rbdMirrorSeedBefore)%251+1) {
 		t.Fatal("payload formula differs", before)
+	}
+}
+
+func TestRBDMirrorTeardownIssuesOwnedPhasesWithoutInventory(t *testing.T) {
+	var calls []string
+	phases := func() []rbdMirrorPhase {
+		var list []rbdMirrorPhase
+		for _, name := range []string{"directed fault restore", "RBD mirror termination", "destination cluster termination"} {
+			list = append(list, rbdMirrorPhase{name, func(context.Context) error { calls = append(calls, name); return nil }})
+		}
+		return list
+	}
+	unavailable := errors.New("Docker engine unavailable")
+	broken := func(context.Context) (rbdMirrorEngine, error) { return nil, unavailable }
+
+	// Both owned handles are terminated even though removal cannot be
+	// confirmed independently, and the failure is reported.
+	s := &rbdMirrorScope{}
+	s.receipt.Destination.Network = "destination"
+	err := s.teardown(context.Background(), phases(), []string{"daemon"}, broken)
+	if !errors.Is(err, unavailable) || !strings.Contains(err.Error(), "cannot be independently confirmed") {
+		t.Fatal("inventory failure not reported", err)
+	}
+	if strings.Join(calls, ",") != "directed fault restore,RBD mirror termination,destination cluster termination" {
+		t.Fatal("owned teardown skipped without the inventory", calls)
+	}
+	if !s.finished || !s.receipt.Cleanup.Attempted || s.receipt.Cleanup.Confirmed {
+		t.Fatalf("teardown state after issuing every phase: finished=%t cleanup=%+v", s.finished, s.receipt.Cleanup)
+	}
+	// Every phase was issued once; the fallback issues nothing again.
+	if err := s.teardown(context.Background(), phases(), nil, broken); err != nil || len(calls) != 3 {
+		t.Fatal("finished teardown reissued a phase", err, calls)
+	}
+
+	// Phases not reached before the bound ends stay for the fallback, which
+	// issues only those.
+	calls = nil
+	s = &rbdMirrorScope{issued: map[string]bool{"directed fault restore": true}}
+	ended, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := s.teardown(ended, phases(), nil, broken); !errors.Is(err, context.Canceled) || s.finished || len(calls) != 0 {
+		t.Fatal("unreached phases", err, s.finished, calls)
+	}
+	if err := s.teardown(context.Background(), phases(), nil, broken); !errors.Is(err, unavailable) || !s.finished ||
+		strings.Join(calls, ",") != "RBD mirror termination,destination cluster termination" {
+		t.Fatal("fallback did not issue exactly the unreached phases", err, s.finished, calls)
 	}
 }
