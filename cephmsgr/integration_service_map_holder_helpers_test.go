@@ -2,12 +2,17 @@ package cephmsgr
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +25,7 @@ import (
 // is not a product service-registration API.
 var (
 	serviceHolderTokenPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
-	serviceHolderPhases       = map[string]bool{"start": true, "observe": true, "release": true, "cleanup": true}
+	serviceHolderPhases       = map[string]bool{"start": true, "start-large": true, "observe": true, "release": true, "cleanup": true}
 )
 
 type nativeServiceHolderBaseline struct {
@@ -35,6 +40,55 @@ type nativeServiceHolderEntry struct {
 	StartEpoch *uint32 `json:"start_epoch"`
 	Role       *string `json:"role"`
 	Daemon     *string `json:"daemon"`
+	// The padding of a large registration as the native dump shows it: key
+	// count, key and value bytes, and the SHA-256 of its sorted pairs.
+	serviceHolderPadSummary
+}
+
+// serviceHolderPadSummary summarizes the "ceph_msgr_pad_" metadata keys of one
+// daemon. The receipts carry only this summary, never the values.
+type serviceHolderPadSummary struct {
+	Keys   int    `json:"pad_keys"`
+	Bytes  int    `json:"pad_bytes"`
+	SHA256 string `json:"pad_sha256"`
+}
+
+const (
+	serviceHolderPadPrefix = "ceph_msgr_pad_"
+	serviceHolderPadKeys   = 4096
+	serviceHolderPadValue  = 360
+)
+
+// serviceHolderPadding recomputes, independently of the Python holder, the
+// fixed metadata that a large registration of this token carries.
+func serviceHolderPadding(token string) map[string]string {
+	padding := make(map[string]string, serviceHolderPadKeys)
+	for i := range serviceHolderPadKeys {
+		digest := sha256.Sum256(fmt.Appendf(nil, "%s:%d", token, i))
+		text := hex.EncodeToString(digest[:])
+		padding[fmt.Sprintf("%s%04d", serviceHolderPadPrefix, i)] = strings.Repeat(text, serviceHolderPadValue/len(text)+1)[:serviceHolderPadValue]
+	}
+	return padding
+}
+
+// summarizeServiceHolderPadding applies the holder's summary to any metadata
+// map: a Go-decoded daemon's, or the recomputed expectation.
+func summarizeServiceHolderPadding(metadata map[string]string) serviceHolderPadSummary {
+	var keys []string
+	for key := range metadata {
+		if strings.HasPrefix(key, serviceHolderPadPrefix) {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	digest := sha256.New()
+	summary := serviceHolderPadSummary{Keys: len(keys)}
+	for _, key := range keys {
+		summary.Bytes += len(key) + len(metadata[key])
+		digest.Write([]byte(key + "\x00" + metadata[key] + "\x00"))
+	}
+	summary.SHA256 = hex.EncodeToString(digest.Sum(nil))
+	return summary
 }
 
 type nativeServiceHolderView struct {
@@ -83,6 +137,9 @@ type nativeServiceHolderReady struct {
 	PID             int64  `json:"pid"`
 	GID             uint64 `json:"gid"`
 	LifetimeSeconds int    `json:"lifetime_seconds"`
+	// The padding the holder registered: empty for start, the token's fixed
+	// padding for start-large.
+	serviceHolderPadSummary
 }
 
 // observeNativeServiceHolder requests one closed phase. The token and phase are
@@ -118,18 +175,26 @@ func observeNativeServiceHolder(ctx context.Context, control, token, phase strin
 // serviceHolderReady decodes the readiness report of a start receipt.
 func serviceHolderReady(receipt nativeServiceHolderReceipt) (nativeServiceHolderReady, error) {
 	var ready nativeServiceHolderReady
-	if receipt.Phase != "start" || receipt.State != "ready" || receipt.Baseline == nil ||
+	if receipt.Phase != "start" && receipt.Phase != "start-large" || receipt.State != "ready" || receipt.Baseline == nil ||
 		receipt.Baseline.OwnedPresent || receipt.Baseline.Code == nil || *receipt.Baseline.Code != 0 || receipt.Baseline.Epoch == nil {
 		return ready, errors.New("start receipt is not a ready holder over an absent baseline")
 	}
 	if err := json.Unmarshal(receipt.Ready, &ready); err != nil || ready.PID <= 0 || ready.GID == 0 || ready.LifetimeSeconds <= 0 {
 		return ready, errors.New("start receipt has no usable holder readiness")
 	}
+	wanted := summarizeServiceHolderPadding(nil)
+	if receipt.Phase == "start-large" {
+		wanted = summarizeServiceHolderPadding(serviceHolderPadding(receipt.Token))
+	}
+	if ready.serviceHolderPadSummary != wanted {
+		return ready, errors.New("start receipt reports a different registration size")
+	}
 	return ready, nil
 }
 
 // serviceHolderPresent reports whether a fresh native view shows the owned
-// daemon with the holder's own GID and synthetic identity metadata.
+// daemon with the holder's own GID, synthetic identity metadata and exactly
+// the padding that the holder registered.
 func serviceHolderPresent(receipt nativeServiceHolderReceipt, ready nativeServiceHolderReady) bool {
 	view := receipt.View
 	if receipt.Phase != "observe" || view == nil || view.Code == nil || *view.Code != 0 || view.Epoch == nil || !view.Present || view.Entry == nil {
@@ -137,7 +202,8 @@ func serviceHolderPresent(receipt nativeServiceHolderReceipt, ready nativeServic
 	}
 	entry := view.Entry
 	return entry.GID != nil && *entry.GID == ready.GID && receipt.GIDMatchesHolder &&
-		entry.Role != nil && *entry.Role == "holder" && entry.Daemon != nil && *entry.Daemon == receipt.Daemon
+		entry.Role != nil && *entry.Role == "holder" && entry.Daemon != nil && *entry.Daemon == receipt.Daemon &&
+		entry.serviceHolderPadSummary == ready.serviceHolderPadSummary
 }
 
 // serviceHolderAbsent reports a readable fresh native view without the owned

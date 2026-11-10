@@ -10,6 +10,10 @@ that hold into closed phases:
   start    claim the request, record a fresh baseline (the owned daemon must be
            absent), start one detached holder process and return once it
            reports that rados_service_register returned and the instance GID.
+  start-large
+           the same step with a fixed large registration: PAD_KEYS further
+           metadata keys of PAD_VALUE bytes each, all derived from the token.
+           A token is started once, with either step.
   observe  open a fresh librados handle and report whether the MON's
            ``service dump`` lists the owned daemon. Repeatable read.
   release  ask the holder to shut its native handle down and wait for its exit
@@ -29,10 +33,12 @@ after a lost acknowledgement is refused instead of replayed; the marker proves
 the first attempt began even when its outcome is unknown. No arbitrary service,
 daemon, command, signal, process or path is accepted. The service name and the
 daemon name derive from the 128-bit token; the registration carries only two
-synthetic metadata keys. The native host inventory that librados adds is never
-persisted.
+synthetic metadata keys, plus the token-derived padding of ``start-large``. A
+view reports that padding as a key count, byte total and SHA-256 only. The
+native host inventory that librados adds is never persisted.
 """
 
+import hashlib
 import json
 import os
 import pathlib
@@ -45,7 +51,8 @@ import time
 from mon_command_outcome_oracle import atomic_write
 
 
-PHASES = ("start", "observe", "release", "cleanup")
+PHASES = ("start", "start-large", "observe", "release", "cleanup")
+STARTS = {"start": "hold", "start-large": "hold-large"}
 SERVICE = "ceph-msgr"
 PREFIX = "native-service-holder-"
 SCRIPT = "service_map_holder_oracle.py"
@@ -54,6 +61,11 @@ READY_WAIT = 40
 EXIT_WAIT = 30
 KILL_WAIT = 5
 METADATA_LIMIT = 4 << 20
+# Padding of the large registration: about 1.55 MiB of raw metadata, above a
+# 1 MiB client frame limit and far below the 16 MiB default.
+PAD_PREFIX = "ceph_msgr_pad_"
+PAD_KEYS = 4096
+PAD_VALUE = 360
 CLUSTER_ROLE = "holder"
 RADOS_CONNECT_TIMEOUT = b"30"
 TOKEN = re.compile(r"[0-9a-f]{32}")
@@ -113,6 +125,28 @@ def positive(value, label):
     return value
 
 
+def padding(token):
+    """The fixed large-registration metadata of one token, in key order."""
+    if not TOKEN.fullmatch(token):
+        raise ValueError("Invalid owned ServiceMap holder token")
+    pairs = []
+    for index in range(PAD_KEYS):
+        digest = hashlib.sha256(("%s:%d" % (token, index)).encode()).hexdigest()
+        pairs.append(("%s%04d" % (PAD_PREFIX, index), (digest * (PAD_VALUE // len(digest) + 1))[:PAD_VALUE]))
+    return pairs
+
+
+def pad_summary(metadata):
+    """Count, byte total and SHA-256 of the padding keys of a metadata map."""
+    pairs = sorted((key, value) for key, value in metadata.items()
+                   if isinstance(key, str) and key.startswith(PAD_PREFIX) and isinstance(value, str))
+    digest = hashlib.sha256()
+    for key, value in pairs:
+        digest.update(key.encode() + b"\0" + value.encode() + b"\0")
+    return {"pad_keys": len(pairs), "pad_bytes": sum(len(key) + len(value) for key, value in pairs),
+            "pad_sha256": digest.hexdigest()}
+
+
 # ---- native view -----------------------------------------------------------
 
 def project(code, payload, daemon):
@@ -166,6 +200,7 @@ def project(code, payload, daemon):
             "role": metadata.get("ceph_msgr_role") if isinstance(metadata.get("ceph_msgr_role"), str) else None,
             "daemon": metadata.get("ceph_msgr_daemon") if isinstance(metadata.get("ceph_msgr_daemon"), str) else None,
         }
+        view["entry"].update(pad_summary(metadata))
     return view
 
 
@@ -181,11 +216,13 @@ class Native:
             code, payload, _ = client.mon_command(json.dumps({"prefix": "service dump", "format": "json"}), b"")
         return project(code, payload, daemon)
 
-    def spawn(self, fixture_root, output, token):
+    def spawn(self, fixture_root, output, token, mode="hold"):
+        if mode not in STARTS.values():
+            raise ValueError("Invalid owned ServiceMap holder mode")
         log = state_path(output, token, "hold.log")
         with log.open("ab") as sink:
             process = subprocess.Popen(
-                [sys.executable, str(pathlib.Path(__file__).resolve()), "hold", str(fixture_root), str(output), token],
+                [sys.executable, str(pathlib.Path(__file__).resolve()), mode, str(fixture_root), str(output), token],
                 stdin=subprocess.DEVNULL, stdout=sink, stderr=sink, start_new_session=True, close_fds=True)
         return process.pid
 
@@ -230,13 +267,15 @@ def load_librados():
     return lib
 
 
-def hold(fixture_root, output, token, lib=None, clock=time.monotonic, sleep=time.sleep):
+def hold(fixture_root, output, token, lib=None, clock=time.monotonic, sleep=time.sleep, large=False):
     """Register the owned daemon, publish readiness and wait for the release marker."""
     import ctypes as C
 
     daemon = daemon_name(token)
     lib = lib if lib is not None else load_librados()
-    metadata = ("ceph_msgr_role\0" + CLUSTER_ROLE + "\0ceph_msgr_daemon\0" + daemon + "\0\0").encode()
+    pairs = [("ceph_msgr_role", CLUSTER_ROLE), ("ceph_msgr_daemon", daemon)] + (padding(token) if large else [])
+    metadata = ("".join(key + "\0" + value + "\0" for key, value in pairs) + "\0").encode()
+    registered = pad_summary(dict(pairs))
     cluster = C.c_void_p()
 
     def check(code, step):
@@ -256,7 +295,7 @@ def hold(fixture_root, output, token, lib=None, clock=time.monotonic, sleep=time
         gid = lib.rados_get_instance_id(cluster)
         atomic_write(state_path(output, token, "ready.json"),
                      {"token": token, "pid": os.getpid(), "daemon": daemon, "service": SERVICE,
-                      "gid": int(gid), "registered": True, "lifetime_seconds": LIFETIME})
+                      "gid": int(gid), "registered": True, "lifetime_seconds": LIFETIME, **registered})
         release = state_path(output, token, "go.release")
         reason = "expired"
         while clock() < deadline:
@@ -315,7 +354,7 @@ def collect(fixture_root, output, raw_id, token, phase, native=None):
     receipt = {"request_id": request_id, "token": token, "phase": phase, "daemon": daemon, "service": SERVICE}
     baseline_path = state_path(output, token, "baseline.json")
 
-    if phase == "start":
+    if phase in STARTS:
         claim(state_path(output, token, "start-started.json"), receipt)
         journal(output, dict(receipt, state="start-claimed"))
         view = native.view(fixture_root, daemon)
@@ -327,7 +366,7 @@ def collect(fixture_root, output, raw_id, token, phase, native=None):
         with baseline_path.open("x", encoding="utf-8") as handle:
             json.dump({"token": token, "baseline": baseline}, handle, sort_keys=True)
         journal(output, dict(receipt, state="holder-spawn-outcome-unknown", baseline=baseline))
-        pid = positive(native.spawn(fixture_root, output, token), "pid")
+        pid = positive(native.spawn(fixture_root, output, token, STARTS[phase]), "pid")
         # The spawned pid lets cleanup reach a holder that never became ready.
         atomic_write(state_path(output, token, "spawned.json"), {"token": token, "pid": pid})
 
@@ -345,8 +384,11 @@ def collect(fixture_root, output, raw_id, token, phase, native=None):
             raise ValueError("holder readiness belongs to a different registration")
         positive(report["gid"], "GID")
         positive(report["pid"], "holder pid")
-        receipt.update(baseline=baseline, ready={"pid": report["pid"], "gid": report["gid"],
-                                                "lifetime_seconds": report["lifetime_seconds"]})
+        wanted = pad_summary(dict(padding(token) if phase == "start-large" else []))
+        if any(report.get(key) != value for key, value in wanted.items()):
+            raise ValueError("holder readiness reports a different registration size")
+        receipt.update(baseline=baseline, ready=dict(wanted, pid=report["pid"], gid=report["gid"],
+                                                     lifetime_seconds=report["lifetime_seconds"]))
         receipt["state"] = "ready"
         journal(output, receipt)
     else:
@@ -402,9 +444,9 @@ def collect(fixture_root, output, raw_id, token, phase, native=None):
 
 
 def main():
-    if len(sys.argv) == 5 and sys.argv[1] == "hold":
+    if len(sys.argv) == 5 and sys.argv[1] in STARTS.values():
         root, output, token = pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), sys.argv[4]
-        hold(root, output, token)
+        hold(root, output, token, large=sys.argv[1] == "hold-large")
         return
     if len(sys.argv) != 6:
         raise ValueError("Expected fixture root, output, request ID, token and phase")

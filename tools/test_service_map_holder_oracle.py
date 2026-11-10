@@ -10,6 +10,7 @@ import service_map_holder_oracle as oracle
 
 TOKEN = "ab" * 16
 DAEMON = "holder-" + TOKEN[:16]
+PINNED_PAD_SHA256 = "bcb31ca7d81a4ea3bce4a8b313d143a6892ac110fff87cb14117db468ac6c2ec"
 
 
 def dump(daemon_entry=None, epoch=7, others=2):
@@ -37,17 +38,20 @@ class FakeNative:
         self.ready, self.process, self.spawned, self.killed, self.exits = ready, False, 0, 0, True
         self.clock, self.survives = 0.0, False
         self.ready_override = None
+        self.modes, self.wrong_size = [], False
 
     def view(self, root, daemon):
         payload = self.views.pop(0) if len(self.views) > 1 else self.views[0]
         return oracle.project(0, payload, daemon)
 
-    def spawn(self, root, output, token):
+    def spawn(self, root, output, token, mode="hold"):
         self.spawned += 1
+        self.modes.append(mode)
         self.process = True
         if self.ready:
+            registered = oracle.padding(token) if (mode == "hold-large") != self.wrong_size else []
             body = {"token": token, "pid": self.pid, "daemon": DAEMON, "service": "ceph-msgr", "gid": self.gid,
-                    "registered": True, "lifetime_seconds": oracle.LIFETIME}
+                    "registered": True, "lifetime_seconds": oracle.LIFETIME, **oracle.pad_summary(dict(registered))}
             oracle.atomic_write(oracle.state_path(output, token, "ready.json"), self.ready_override or body)
         return self.pid
 
@@ -106,10 +110,33 @@ class RequestRejections(unittest.TestCase):
             self.assertEqual(list(out.iterdir()), [])
 
 
+class Padding(unittest.TestCase):
+    def test_padding_is_fixed_by_the_token(self):
+        pairs = oracle.padding(TOKEN)
+        self.assertEqual(len(pairs), oracle.PAD_KEYS)
+        self.assertEqual(pairs, sorted(pairs))
+        self.assertEqual(len(set(key for key, _ in pairs)), oracle.PAD_KEYS)
+        self.assertTrue(all(key.startswith(oracle.PAD_PREFIX) and len(value) == oracle.PAD_VALUE for key, value in pairs))
+        self.assertNotEqual(pairs, oracle.padding("cd" * 16))
+        with self.assertRaises(ValueError):
+            oracle.padding("not-a-token")
+        # The Go side recomputes this padding independently; both test suites
+        # pin the same summary of the same token.
+        self.assertEqual(oracle.pad_summary(dict(pairs)), {
+            "pad_keys": 4096, "pad_bytes": 4096 * (18 + 360),
+            "pad_sha256": PINNED_PAD_SHA256})
+
+    def test_summary_counts_only_string_padding_keys(self):
+        summary = oracle.pad_summary({"ceph_msgr_pad_0000": "ab", "ceph_msgr_pad_0001": 7, "hostname": "h", 3: "x"})
+        self.assertEqual((summary["pad_keys"], summary["pad_bytes"]), (1, 20))
+        self.assertNotEqual(summary["pad_sha256"], oracle.pad_summary({"ceph_msgr_pad_0000": "ac"})["pad_sha256"])
+
+
 class Project(unittest.TestCase):
     def test_keeps_only_the_owned_entry_and_synthetic_metadata(self):
         view = oracle.project(0, dump(entry()), DAEMON)
-        self.assertEqual(view["entry"], {"gid": 4242, "start_epoch": 3, "role": "holder", "daemon": DAEMON})
+        self.assertEqual(view["entry"], {"gid": 4242, "start_epoch": 3, "role": "holder", "daemon": DAEMON,
+                                         **oracle.pad_summary({})})
         self.assertEqual((view["epoch"], view["service_daemons"], view["present"]), (7, 3, True))
         self.assertNotIn("must-not-persist", json.dumps(view))
         self.assertNotIn("unrelated", json.dumps(view))
@@ -203,6 +230,41 @@ class Lifecycle(unittest.TestCase):
         self.assertIn("holder-spawn-outcome-unknown", states)
         self.assertIn("release-claimed-outcome-unknown", states)
 
+    def test_large_start_registers_and_observes_the_token_padding(self):
+        padded = entry()
+        padded["metadata"].update(oracle.padding(TOKEN))
+        native = FakeNative(self.out, [dump(), dump(padded), dump(entry())])
+        started = self.run_phase(native, "start-large")
+        wanted = oracle.pad_summary(dict(oracle.padding(TOKEN)))
+        self.assertEqual(native.modes, ["hold-large"])
+        self.assertEqual((started["state"], started["phase"], started["ready"]["gid"]), ("ready", "start-large", 4242))
+        self.assertEqual({key: started["ready"][key] for key in wanted}, wanted)
+        present = self.run_phase(native, "observe")
+        self.assertEqual({key: present["view"]["entry"][key] for key in wanted}, wanted)
+        # Neither receipt persists a padding value, only its summary.
+        self.assertNotIn(oracle.padding(TOKEN)[0][1], json.dumps([started, present]))
+        # A later view without the padding is visibly different.
+        self.assertEqual(self.run_phase(native, "observe")["view"]["entry"]["pad_keys"], 0)
+
+    def test_start_requires_the_readiness_of_its_own_registration_size(self):
+        for phase, wrong in (("start-large", "small registration"), ("start", "large registration")):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = pathlib.Path(tmp)
+                native = FakeNative(out, [dump()])
+                native.wrong_size = True
+                with self.assertRaisesRegex(ValueError, "different registration size", msg=wrong):
+                    oracle.collect(out, out, "1", TOKEN, phase, native)
+
+    def test_a_token_is_started_once_with_either_step(self):
+        for first, second in (("start", "start-large"), ("start-large", "start")):
+            with tempfile.TemporaryDirectory() as tmp:
+                out = pathlib.Path(tmp)
+                native = FakeNative(out, [dump()])
+                oracle.collect(out, out, "1", TOKEN, first, native)
+                with self.assertRaisesRegex(ValueError, "never replayed"):
+                    oracle.collect(out, out, "2", TOKEN, second, native)
+                self.assertEqual(native.spawned, 1)
+
     def test_start_is_never_replayed(self):
         native = FakeNative(self.out, [dump()])
         self.run_phase(native, "start")
@@ -227,7 +289,7 @@ class Lifecycle(unittest.TestCase):
         failed = FakeNative(self.out, [dump()], ready=False)
         original = failed.spawn
 
-        def spawn_failure(root, output, token):
+        def spawn_failure(root, output, token, mode="hold"):
             oracle.atomic_write(oracle.state_path(output, token, "failed.json"), {"token": token, "error": "RuntimeError: connect"})
             return original(root, output, token)
         failed.spawn = spawn_failure
@@ -360,6 +422,33 @@ class Holder(unittest.TestCase):
         self.assertEqual((ready["gid"], ready["daemon"], ready["registered"]), (4242, DAEMON, True))
         exited = json.loads(oracle.state_path(self.out, TOKEN, "exited.json").read_text())
         self.assertEqual((exited["reason"], exited["shutdown_returned"]), ("released", True))
+
+    def test_large_hold_registers_the_padding_as_native_metadata(self):
+        registered = []
+
+        class Lib(FakeLib):
+            def __getattr__(self, name):
+                call = super().__getattr__(name)
+                if name != "rados_service_register":
+                    return call
+
+                def register(cluster, service, daemon, metadata):
+                    registered.append(metadata)
+                    return call(cluster, service, daemon, metadata)
+                return register
+
+        def sleep(seconds):
+            oracle.state_path(self.out, TOKEN, "go.release").write_text("release\n")
+        oracle.hold(self.out, self.out, TOKEN, lib=Lib(), sleep=sleep, large=True)
+        fields = registered[0].split(b"\0")
+        # key\0value\0 pairs, closed by one further NUL.
+        self.assertEqual(fields[-2:], [b"", b""])
+        pairs = dict(zip((f.decode() for f in fields[:-2:2]), (f.decode() for f in fields[1:-2:2])))
+        self.assertEqual(len(pairs), oracle.PAD_KEYS + 2)
+        self.assertEqual((pairs["ceph_msgr_role"], pairs["ceph_msgr_daemon"]), ("holder", DAEMON))
+        ready = json.loads(oracle.state_path(self.out, TOKEN, "ready.json").read_text())
+        self.assertEqual(oracle.pad_summary(pairs), {key: ready[key] for key in ("pad_keys", "pad_bytes", "pad_sha256")})
+        self.assertEqual(ready["pad_sha256"], PINNED_PAD_SHA256)
 
     def test_lifetime_cap_expires_without_a_release(self):
         now = [0.0]
