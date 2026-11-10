@@ -177,9 +177,11 @@ func TestOperationDecodingMatchesAcrossReplyVersions(t *testing.T) {
 	}
 	checked := 0
 	for _, path := range fronts {
-		name := strings.TrimSuffix(strings.TrimPrefix(path, "testdata/"), ".front.hex")
+		// Glob returns paths with the host separator, so the vector name is
+		// taken from the base name, not by trimming a slash-separated prefix.
+		name := strings.TrimSuffix(filepath.Base(path), ".front.hex")
 		m := msgr.MessageData{Type: ReplyMessage, Version: 6, CompatVersion: 2, Front: oracleBytes(t, name+".front")}
-		if _, err := os.Stat("testdata/" + name + ".data.hex"); err == nil {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(path), name+".data.hex")); err == nil {
 			m.Data = oracleBytes(t, name+".data")
 		}
 		v6, err := DecodeReply(m, wire.DefaultLimit)
