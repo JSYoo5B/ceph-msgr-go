@@ -27,6 +27,8 @@ type pgHistoryLocation struct {
 	Op         string `json:"op"`
 	Object     string `json:"object"`
 	ReturnCode *int   `json:"return_code"`
+	// UserVersion is reported only for an extra_reqids position.
+	UserVersion *uint64 `json:"user_version"`
 }
 
 // pgHistorySnapshot is the fail-closed receipt of one bracketed primary
@@ -70,12 +72,12 @@ func (r pgHistoryTarget) String() string {
 	return fmt.Sprintf("%s.%d.%d:%d", r.Type, r.Num, r.Inc, r.TID)
 }
 
-// primaryPGHistory takes one bracketed primary snapshot for an owned object
-// and requires it to be complete. It establishes presence on that primary at
-// that epoch only, never absence.
-func primaryPGHistory(t *testing.T, ctx context.Context, object string, targets []pgHistoryTarget) pgHistorySnapshot {
+// primaryPGHistory takes one bracketed primary snapshot for an object of the
+// owned pool in slot and requires it to be complete. It establishes presence
+// on that primary at that epoch only, never absence.
+func primaryPGHistory(t *testing.T, ctx context.Context, slot int, object string, targets []pgHistoryTarget) pgHistorySnapshot {
 	t.Helper()
-	s := nativePool(t, ctx, "pghistory", map[string]any{"slot": 1, "object": object, "targets": targets}).History
+	s := nativePool(t, ctx, "pghistory", map[string]any{"slot": slot, "object": object, "targets": targets}).History
 	if !s.Complete || len(s.Failures) != 0 {
 		t.Fatalf("primary PG-history snapshot is incomplete: %q (code %d, %d bytes)", s.Failures, s.Code, s.Bytes)
 	}
@@ -107,6 +109,16 @@ func primaryPGHistory(t *testing.T, ctx context.Context, object string, targets 
 		t.Logf("complete native pg log reply: %s", raw)
 	}
 	return s
+}
+
+// requirePGHistoryOnRoute requires the snapshot's primary, sets, PG, shard
+// and pg_temp to equal the placement the requests used; the epoch may be newer.
+func requirePGHistoryOnRoute(t *testing.T, s pgHistorySnapshot, route osdFixtureOracle) {
+	t.Helper()
+	if s.Before.ID != route.ID || s.Before.PrimaryID != route.PrimaryID || !slices.Equal(s.Before.Acting, route.Acting) || !slices.Equal(s.Before.Up, route.Up) ||
+		s.Before.PGID != route.PGID || s.Before.Shard != route.Shard || s.Before.PGTemp != route.PGTemp || s.Before.Epoch < route.Epoch {
+		t.Fatalf("snapshot primary differs from the placement the requests used: %+v vs %+v", s.Before, route)
+	}
 }
 
 // hobjectHead is the pinned hobject_t print form (src/common/hobject.cc:247-270)
@@ -204,11 +216,8 @@ func TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration(t *test
 		{Type: "osd", Num: gid, Inc: incarnation, TID: appended.Transaction},
 		{Type: "client", Num: gid, Inc: incarnation, TID: appended.Transaction + 1<<20},
 	}
-	s := primaryPGHistory(t, ctx, object, append([]pgHistoryTarget{known, seedID}, misses...))
-	if s.Before.ID != route.ID || s.Before.PrimaryID != route.PrimaryID || !slices.Equal(s.Before.Acting, route.Acting) || !slices.Equal(s.Before.Up, route.Up) ||
-		s.Before.PGID != route.PGID || s.Before.Shard != route.Shard || s.Before.PGTemp != route.PGTemp || s.Before.Epoch < route.Epoch {
-		t.Fatalf("snapshot primary differs from the placement the requests used: %+v vs %+v", s.Before, route)
-	}
+	s := primaryPGHistory(t, ctx, 1, object, append([]pgHistoryTarget{known, seedID}, misses...))
+	requirePGHistoryOnRoute(t, s, route)
 	want := hobjectHead(route)
 	for i, reply := range []cephmsgr.OSDReply{appended, seeded} {
 		identity, locations := s.Targets[i].Reqid, s.Targets[i].Locations
