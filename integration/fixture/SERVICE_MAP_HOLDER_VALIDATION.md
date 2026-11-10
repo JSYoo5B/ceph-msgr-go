@@ -40,14 +40,16 @@ handled by `integration/cluster.sh` and
 [service_map_holder_oracle.py](../../tools/service_map_holder_oracle.py). The
 token is 128 random bits; the service is `ceph-msgr` and the daemon is
 `holder-` plus the first 16 hex digits of the token. The registration carries
-only `ceph_msgr_role=holder` and `ceph_msgr_daemon=<daemon>`. The phases are
+only `ceph_msgr_role=holder` and `ceph_msgr_daemon=<daemon>`, plus the fixed
+token-derived padding of the two padded start steps. The phases are
 closed, and each runs under an external `timeout` because pinned Python
 `mon_command` ignores its timeout argument:
 
 | Phase | Bound | Effect |
 | --- | --- | --- |
 | `start` | 60 s | Claims `start-started`, reads a fresh `service dump` baseline (owned daemon must be absent in a readable dump), records it exclusively, starts one detached holder process and returns once the holder reports that `rados_service_register` returned, with its pid and `rados_get_instance_id` GID. |
-| `observe` | 30 s | Opens a fresh librados handle and reports whether the dump lists the owned daemon, with its GID, start epoch and the two synthetic metadata values, the dump epoch, and the holder process state. Repeatable read. |
+| `start-large`, `start-wide` | 60 s | The `start` step with a fixed padded registration: 4096 further metadata keys of 360 bytes, or 65537 keys of 8 bytes, all derived from the token. They share the `start-started` claim, so a token is started once with one of the three steps. Readiness must report the padding summary of its own step. Used only by the [limits cell](SERVICE_MAP_LIMITS_VALIDATION.md). |
+| `observe` | 30 s | Opens a fresh librados handle and reports whether the dump lists the owned daemon, with its GID, start epoch and the two synthetic metadata values, the dump epoch, and the holder process state. For the owned entry it also reports the padding keys as a count, byte total and SHA-256, never their values. Repeatable read. |
 | `release` | 45 s | Claims `release-started`, creates the release marker and waits for the holder's exit marker (native handle shut down). |
 | `cleanup` | 30 s | Reports the holder state. If the holder process is still alive it is killed once after claiming `cleanup-started`; the process must be this token's holder. A fresh view is compared with the worker's own baseline. |
 
@@ -78,8 +80,8 @@ with the `expired` reason. A fixture teardown destroys it in any case.
   well-formed map is absence; the Go acceptance side separately requires a
   success code, epoch and service count for both absence and restoration.
 - Only the owned entry is persisted: the dump epoch, the owned daemon's GID,
-  start epoch and the two synthetic metadata values, and the count of daemons
-  in the `ceph-msgr` service. Other entries and the host inventory that
+  start epoch, the two synthetic metadata values and the summary of its
+  padding keys, and the count of daemons in the `ceph-msgr` service. Other entries and the host inventory that
   librados adds to the registration never reach a receipt. Request IDs, tokens,
   phases and state file names are validated, and there is no arbitrary service,
   daemon, command, signal or path input. The Go helper rejects an invalid token

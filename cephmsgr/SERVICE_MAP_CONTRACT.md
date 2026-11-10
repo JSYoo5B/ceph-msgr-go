@@ -46,3 +46,30 @@ and full quorum restoration are checked separately. See the
 for selectors, phase bounds and the distinction from the holder-only test.
 Execution acceptance is tied to the tested SHA/profile recorded on the pull
 request; adding this recipe alone is not a native pass or large-map acceptance.
+
+Limits. Three bounds apply to a received map, and they fail at different
+scopes:
+
+- The watch byte budget (`MaxBufferedBytes`, default `MaxFrameSize`) counts
+  the raw map plus 512 bytes. A decodable map above it ends only that watch
+  with `ErrServiceMapOverflow`; the MON session stays admitted.
+- `MaxFrameSize` bounds the frame (front plus 41 header bytes). A larger
+  frame fails the MON session with `ErrLimitExceeded`.
+- A map holds at most 65536 services, 65536 daemons per service, and 65536
+  metadata and 65536 task-status entries per daemon. These caps are fixed.
+  Native encoding has no such cap; a native map above one fails the MON
+  session with `ErrLimitExceeded` and `ErrMalformedMessage`.
+
+After a session failure the watch reports that session's error and the
+client reconnects without resubscribing the ended watch. In every case an
+accepted unread map is delivered before the stable cause, and the watch slot
+is free again. Each delivered map and its raw bytes belong to the caller.
+
+`TestCephMonServiceMapLargeMapIntegration` checks these against native maps:
+a registration of about 1.55 MiB admitted with its GID and all 4096 raw
+metadata values equal to the native registration and dump, the same map
+against a 256 KiB watch budget and against a 1 MiB frame limit, and a
+registration with 65537 metadata entries against the collection cap. The
+daemon and service count caps and the task-status cap have daemon-free
+evidence only. See the
+[limits record](../integration/fixture/SERVICE_MAP_LIMITS_VALIDATION.md).
