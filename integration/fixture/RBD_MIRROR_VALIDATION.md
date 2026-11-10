@@ -54,13 +54,18 @@ mutation is retried automatically.
    snapshot mirroring and wait (at most 4 minutes) until the destination's
    native export digest equals the seed's, then until the destination's native
    status reports the first snapshot in sync. It records both FSIDs, networks
-   and versions, the global image ID, both image IDs, the daemon name, Cephx
-   user, instance ID and its IPv4 address on the source network.
+   and versions, the global image ID, both image IDs, the daemon name, its own
+   destination-side Cephx user, instance ID and its IPv4 address on the source
+   network, and the source-side Cephx user of the destination pool's one
+   receiving peer (`rbd mirror pool info`).
 2. The test opens its own Go session to the same source OSD and reads the
    fixture's native oracle object (stat and read), comparing the native bytes.
 3. **cut**: `fault.ApplyNetworkProfile` on the source OSD's public endpoint with
    the daemon's source-network address as `Peer` and 100% loss: the OSD drops
-   every packet it sends to the daemon and only those. The source client then
+   every packet it sends to the daemon and only those. The lease must target
+   the source OSD container, and the held lease's own netem helper (a
+   container of the helper image in the network namespace of that OSD
+   container) must exist. The source client then
    writes a distinguishable 1 MiB patch at offset 2 MiB (seed 99, through
    `rbd import-diff`) and takes a mirror snapshot. For 30 seconds, sampled
    every 5 seconds, the daemon must stay `up+replaying` at the baseline remote
@@ -71,14 +76,21 @@ mutation is retried automatically.
    OSD while the fault holds. It must succeed with the native bytes.
 5. **restore**: re-read the netem status (still applied, drops not lower),
    restore the lease, record that the restored lease refuses a further status
-   read, confirm that no container of the helper image remains, then wait (at most 4 minutes) for the
+   read, confirm that no container of the helper image remains in the source
+   OSD container's network namespace (helpers of the same image for other
+   targets are not counted), then wait (at most 4 minutes) for the
    destination export to equal the patched image and for the native status to
    report a newer snapshot in sync whose `last_snapshot_bytes` is exactly the
    1 MiB patch.
 6. **finish**: inventory the containers attached to the destination network and
-   the mirror's daemons, terminate the mirror and then the destination, and
-   confirm through the Docker engine that each inventoried container and the
-   destination network no longer exist. The source pool, its mirroring policy
+   the mirror's daemons, restore a lease that is still held, terminate the
+   mirror and then the destination, and confirm through the Docker engine that
+   each inventoried container and the destination network no longer exist.
+   Each teardown call is issued at most once and whether or not the Docker
+   inventory is available; an unavailable inventory only withholds the
+   independent confirmation and fails the step. A call not reached before the
+   step's bound ends is left to the fixture's termination, which issues only
+   the calls not yet issued. The source pool, its mirroring policy
    and the peer user stay in the disposable source cluster, which the fixture
    removes as a whole. If the test ends earlier, the fixture's own termination
    runs the same cleanup before the source cluster, and the source cluster's
@@ -92,9 +104,12 @@ not only by its effect on mirror progress:
 - before the fault, the source OSD's `messenger dump client` (admin socket,
   unaffected by the network fault) has a client session from the daemon's
   source-network address, and the source MONs' `sessions` list the same
-  address under the daemon's source-side peer identity; the test requires
-  that one OSD session from that address has a GlobalID of those MON
-  sessions;
+  address under the daemon's source-side peer identity. The test requires that
+  identity to be `client.rbd-mirror-peer`, the user that peer bootstrap
+  creates (`src/librbd/api/Mirror.cc` at v20.2.4), and distinct from the
+  daemon's destination-side user, and requires that one OSD session from that
+  address has the nonzero GlobalID of a MON session of that entity; a MON
+  session of another entity from the same address does not count;
 - during the cut the OSD dump still has the daemon's session and also the Go
   session (matched by its own GlobalID) from a different address, READY and
   connected, and that Go session keeps reading from the same OSD;
@@ -116,31 +131,37 @@ architecture amd64, daemons `ceph version 20.2.4
 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)`. No other test
 ran on that Docker engine during the runs.
 
-The accepted run passed `TestCephRBDMirrorPathRecoveryIntegration` in 204 s
-(258 s for the whole fixture run); the gate verdict was pass with no problems.
-Its receipt records:
+The accepted run is of `d19effd` (the review fixes for teardown, helper
+scope and peer identity; later commits change only documentation). It passed
+`TestCephRBDMirrorPathRecoveryIntegration` in 203 s (260 s for the whole
+fixture run); the gate verdict was pass with no problems. Its receipt records:
 
 - source: the fixture's cluster, 3 MON and 2 MGR, `osd.0`, pool size 1 with
   one PG; destination: 1 MON, 1 MGR and 1 OSD, a different FSID and network;
   both report `20.2.4`;
 - the global image ID, distinct source and destination image IDs, daemon `a`
-  with its own Cephx user, attached to two networks;
-- initial data at the destination about 2 s after enabling mirroring, with the
-  first snapshot in sync and 4 MiB copied;
+  with its own destination-side Cephx user `client.rbd-mirror.<id>`, attached
+  to two networks, and `client.rbd-mirror-peer` as the destination pool's
+  receiving peer user;
 - before the fault, one READY source OSD session from the daemon's address,
-  whose GlobalID equals that of the source MON session named
-  `client.rbd-mirror-peer` from the same address;
-- during the cut, 20 netem drops and 5 samples over 33 s, all `up+replaying`
-  at the unchanged snapshot timestamps; destination digest of the seed, source
+  whose nonzero GlobalID equals that of the one source MON session from the
+  same address, whose entity is `client.rbd-mirror-peer`;
+- during the cut, one netem helper in the source OSD container's network
+  namespace, 20 netem drops and 5 samples over 33 s, all `up+replaying` at
+  the unchanged snapshot timestamps; destination digest of the seed, source
   digest of the patched image; the Go session's stat and read of the native
   oracle object on the same OSD succeeded;
 - after the restore, the lease refused further status reads ("the network
-  delay was restored"), no helper container remained, the destination reached
-  the patched digest 46 s later and the native status reported a newer
-  snapshot in sync with `last_snapshot_bytes` 1048576;
+  delay was restored"), no helper remained in the source OSD container's
+  namespace, the destination reached the patched digest 44 s later and the
+  native status reported a newer snapshot in sync with `last_snapshot_bytes`
+  1048576;
 - cleanup: 6 owned containers and the destination network independently
   confirmed absent. After the run, no Testcontainers container or extra
   network remained on the engine.
+
+An earlier run of `c1cf75f`, before these fixes, also passed (204 s, catch-up
+after 46 s); that revision did not check the peer entity or the helper scope.
 
 Three earlier runs of intermediate revisions of this branch failed on the same
 row, each in the test's own expectations, not in the native path; they are
