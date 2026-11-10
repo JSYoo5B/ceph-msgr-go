@@ -15,8 +15,23 @@ Reference: Ceph Tentacle v20.2.4 source
 for every daemon, the rbd-mirror daemon and the setup clients. Provider:
 `github.com/JSYoo5B/ceph-testcontainers-go v0.5.0` (`go.mod` in this
 directory). Netem helper:
-`ghcr.io/jsyoo5b/ceph-testcontainers-images:extension-netem-v1@sha256:63d17894d30de34fbf6c956b38e2576002aed58748b779b04c5e4632fc9dfdc3`,
-the provider's `fault.NetemHelperImage` pinned to its digest.
+`ghcr.io/jsyoo5b/ceph-testcontainers-images:extension-netem-v1@sha256:bb7ea0d86f0d2c4cb5720998eac27ce9c6f8d89bc431540c1d2cc71ac51c1c9a`,
+the provider's `fault.NetemHelperImage` pinned to the registry digest of the
+manifest list its tag resolves to (linux/amd64 manifest
+`sha256:d4eb0514dba959843ce88f32bd0a14d69cf3c7608a2e356bd7520a8fed42fd2d`,
+linux/arm64 manifest
+`sha256:7d58ef4cc609258af4b85932b542665000b013eaa21942c262e0fac6ac642ec7`).
+
+The tag is mutable. Take a new pin from the registry, as the
+`Docker-Content-Digest` of the tag's manifest, and confirm it with a pull that
+no local image satisfies. The first pin of this branch,
+`sha256:63d17894d30de34fbf6c956b38e2576002aed58748b779b04c5e4632fc9dfdc3`,
+was copied from a Docker engine whose containerd image store had pulled the tag
+on 2026-10-18. The tag was republished on 2026-10-25 and the registry no longer
+serves that older manifest list. The engine that produced the local native runs
+still held it, so those runs resolved the pin locally and passed, while a fresh
+GitHub Actions runner failed in the `start` phase of `cut` because the helper
+reference was not found.
 
 ## Selection and profile
 
@@ -131,10 +146,24 @@ architecture amd64, daemons `ceph version 20.2.4
 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)`. No other test
 ran on that Docker engine during the runs.
 
-The accepted run is of `d19effd` (the review fixes for teardown, helper
-scope and peer identity; later commits change only documentation). It passed
-`TestCephRBDMirrorPathRecoveryIntegration` in 203 s (260 s for the whole
-fixture run); the gate verdict was pass with no problems. Its receipt records:
+The accepted run is of `2040d8a`, which pins the helper to its registry
+digest; later commits change only documentation. Before the run the engine had
+no image for that digest, so the helper was pulled from the registry during the
+run; afterwards the engine reported it with image ID and RepoDigest
+`sha256:bb7ea0d86f0d2c4cb5720998eac27ce9c6f8d89bc431540c1d2cc71ac51c1c9a` and
+linux/amd64 manifest
+`sha256:d4eb0514dba959843ce88f32bd0a14d69cf3c7608a2e356bd7520a8fed42fd2d`, and
+the receipt recorded the same helper image ID. It passed
+`TestCephRBDMirrorPathRecoveryIntegration` in 234 s (292 s for the whole
+fixture run); the gate verdict was pass with no problems. The cut dropped 20
+packets over 5 samples and 33 s, the destination caught up 46 s after the
+restore, and 6 owned containers and the destination network were removed; no
+Testcontainers container or extra network remained on the engine.
+
+The earlier accepted run of `d19effd` (the review fixes for teardown, helper
+scope and peer identity) resolved the first pin from that engine's cached
+image, not from the registry. It passed in 203 s (260 s for the whole fixture
+run) with gate verdict pass. Its receipt records:
 
 - source: the fixture's cluster, 3 MON and 2 MGR, `osd.0`, pool size 1 with
   one PG; destination: 1 MON, 1 MGR and 1 OSD, a different FSID and network;
