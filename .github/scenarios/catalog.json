@@ -352,6 +352,31 @@
    }
   },
   {
+   "id": "mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephAppliedCurrentManagerTellIsNotReplayedIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.host.t-suite-e9be0b",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$"
+   }
+  },
+  {
    "id": "osd.aes256k.ip4.host",
    "group": "osd",
    "params": {
@@ -848,6 +873,25 @@
    }
   },
   {
+   "id": "mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand",
+   "group": "mds-commands",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "mds_fresh": "1",
+    "mds_commands": "1",
+    "test_run": "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
+   }
+  },
+  {
    "id": "mds-sessions.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdssessions",
    "group": "mds-sessions",
    "params": {
@@ -1283,6 +1327,23 @@
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "test_run": "^TestCephMsgrCompressionOfferIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$"
    }
   },
   {

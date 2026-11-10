@@ -27,6 +27,8 @@ mon-mgr.aes.ip4.crc.host
 mon-mgr.aes256k.ip6.crc
 mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold
 mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell
+mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell
+mon-mgr.aes256k.ip4.host.t-suite-e9be0b
 osd.aes256k.ip4.host
 osd.aes.ip4
 osd.aes256k.ip4.crc.host
@@ -59,6 +61,7 @@ mds-fresh.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replic
 mds-fresh.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-mdsfresh
 mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscommands
 mds-commands.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscommands
+mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand
 mds-sessions.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdssessions
 mds-sessions.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdssessions
 mds-cephfs.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7
@@ -85,4 +88,5 @@ mds-cephfs-multi-reconnect.aes256k.ip6.container.osd-store-memstore.osd-replicas
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfrommultichunklateerror
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer
+osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16
 mgr-service.aes256k.ip4.container.managers-0.t-mgrservicecoldbootstrap
