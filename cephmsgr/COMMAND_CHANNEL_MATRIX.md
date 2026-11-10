@@ -117,12 +117,25 @@ records. Absence of independent native acceptance does not establish a defect.
   [ServiceMap lifecycle cell](../integration/fixture/SERVICE_MAP_LIFECYCLE_VALIDATION.md)
   keeps one Go watch through orderly Stop of its actual MON, requires a native
   registration created after recovery in a newer Go map, and bounds native/Go
-  removal after explicit holder release. Large maps, over-budget isolation,
-  stronger faults and other profiles remain unverified. A request-specific CRC
+  removal after explicit holder release. The
+  [ServiceMap limits cell](../integration/fixture/SERVICE_MAP_LIMITS_VALIDATION.md)
+  (`TestCephMonServiceMapLargeMapIntegration`, secure AES256K IPv4 container
+  and CRC AES IPv4 host) admits a native map of about 1.58 MiB with its raw
+  metadata, ends only the watch at a 256 KiB watch budget, and fails only the
+  carrying MON session at a 1 MiB frame limit and at the fixed collection
+  cap, with the client recovering each time. ServiceMap lifecycle across
+  SIGKILL of the watch's MON, a killed holder and other profiles remain
+  unverified. A request-specific CRC
   [map-version connected-Stop test](../integration/fixture/MON_MAP_VERSION_STOP_VALIDATION.md)
-  now preserves actual EOF after a withheld native reply, then checks a new
-  explicit request on another admitted MON. Forced death, a request still
-  unprocessed in the MON and secure-profile observation remain unverified.
+  preserves actual EOF after a withheld native reply, then checks a new
+  explicit request on another admitted MON. Two
+  [map-version kill cells](../integration/fixture/MON_MAP_VERSION_KILL_VALIDATION.md)
+  (`TestCephMonMapVersionConnectedKillIntegration`,
+  `TestCephMonMapVersionUnprocessedKillIntegration`; CRC, AES IPv4 host and
+  AES256K IPv6 container) kill the connected MON with SIGKILL, once after a
+  withheld reply and once while the out-of-quorum MON has read the request
+  without answering. Secure-profile request-specific observation remains
+  unverified.
 
 Boundaries: wildcard expansion, local admin sockets and HTTP module endpoints
 are not missing Messenger codecs. The active-only MGR rule has a pinned-source
