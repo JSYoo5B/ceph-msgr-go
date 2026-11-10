@@ -112,6 +112,14 @@ A separate `osd` row on the same fixture selects only
 `TestCephOSDCopyFromMultiChunkLateErrorIntegration`. It lowers the owned
 daemon's copy chunk limit to force multi-chunk staging before the same
 injected error, with its own exclusive selector and marker.
+One further `osd` row,
+`osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromdestinationhistory`,
+selects only `TestCephOSDCopyFromDestinationHistoryIntegration`: one Go source
+write and one version-pinned COPY_FROM2 between two owned pools, with bracketed
+primary PG-log snapshots that must show the source write's request identity
+among the destination entry's extra request IDs. It injects no fault and needs
+no opt-in parameter, so the test also belongs to the broad legacy OSD
+selection ([validation](../../integration/fixture/OSD_COPY_FROM_HISTORY_VALIDATION.md)).
 One dedicated `osd` row selects only `TestCephMsgrCompressionOfferIntegration`
 on CRC/AES client and service cipher, IPv4 host runtime, one BlueStore OSD,
 replica/min-size one and legacy-v6. Its ID is
@@ -146,7 +154,7 @@ IPv4 fixture. It needs no opt-in parameter and does not use the RBD base
 opt-in: the fixture derives its owned destination cluster, rbd-mirror daemon
 and directed source OSD fault from this exact selector. See the
 [mirror recipe](../../integration/fixture/RBD_MIRROR_VALIDATION.md).
-The catalog has 87 native rows in total.
+The catalog has 88 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

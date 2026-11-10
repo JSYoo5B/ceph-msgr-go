@@ -16,6 +16,7 @@ SET_CHUNK_SELECTOR = "^TestCephOSDSetChunkNativeIntegration$"
 SET_CHUNK_GO_SELECTOR = "^TestCephOSDSetChunkGoIntegration$"
 COPY_FROM_LATE_ERROR_SELECTOR = "^TestCephOSDCopyFromLateErrorIntegration$"
 COPY_FROM_MULTI_CHUNK_SELECTOR = "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"
+COPY_FROM_HISTORY_SELECTOR = "^TestCephOSDCopyFromDestinationHistoryIntegration$"
 COMPRESSION_SELECTOR = "^TestCephMsgrCompressionOfferIntegration$"
 SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR = "^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$"
 APPLIED_NAMED_MGR_TELL_SELECTOR = "^TestCephAppliedNamedManagerTellIsNotReplayedIntegration$"
@@ -57,14 +58,15 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 1 exclusive COPY_FROM2 late-error cell, 1 applied EC resubmission,
         # 1 exclusive multi-chunk COPY_FROM2 late-error cell, 1 CRC compression-offer row,
         # 1 zero-initial-MGR service bootstrap row, 1 primary PG-history calibration row,
-        # 1 held stopped-MON dial ServiceMap lifecycle row and 1 RBD mirror path-recovery row.
+        # 1 held stopped-MON dial ServiceMap lifecycle row, 1 RBD mirror path-recovery row,
+        # 1 COPY_FROM2 destination PG-history control row and
         # 1 applied exact-name MGR Tell row with a withheld reply.
-        self.assertEqual(len(self.rows), 87)
+        self.assertEqual(len(self.rows), 88)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
         dedicated = {SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR,
-                     COMPRESSION_SELECTOR, SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR, RBD_MIRROR_SELECTOR,
+                     COPY_FROM_HISTORY_SELECTOR, COMPRESSION_SELECTOR, SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR, RBD_MIRROR_SELECTOR,
                      APPLIED_NAMED_MGR_TELL_SELECTOR}
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak") and row.get("test_run") not in dedicated
@@ -175,6 +177,25 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         for unrelated in (expected + "Extended", "Prefix" + expected, "TestCephOSDCopyFromLateErrorIntegration",
                           "TestCopyFromMultiChunkLateErrorRequiresExclusiveMarker"):
             self.assertIsNone(selector.search(unrelated))
+
+    def test_copyfrom_destination_history_row_selects_only_its_control(self):
+        # The successful-copy PG-history control uses the ordinary OSD fixture
+        # and the owned-pool oracle. It needs no opt-in parameter, injects no
+        # fault and does not replace either late-error row.
+        rows = [row for row in self.rows if row.get("test_run") == COPY_FROM_HISTORY_SELECTOR]
+        self.assertEqual(rows, [{
+            "key": "aes256k", "service": "aes256k", "family": "6", "stress": "", "runtime": "container",
+            "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
+            "test_run": COPY_FROM_HISTORY_SELECTOR,
+        }])
+        expected = "TestCephOSDCopyFromDestinationHistoryIntegration"
+        selector = re.compile(COPY_FROM_HISTORY_SELECTOR)
+        self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
+        for unrelated in (expected + "Extended", "Prefix" + expected, "TestCephOSDCopyFromDestinationCrashIntegration",
+                          "TestCopyFromDestinationHistoryBinding", "TestCephOSDCopyFromMultiChunkLateErrorIntegration"):
+            self.assertIsNone(selector.search(unrelated))
+        for selector in (COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR):
+            self.assertEqual(len([row for row in self.rows if row.get("test_run") == selector]), 1)
 
     def test_cache_pool_rows_require_explicit_opt_in_and_only_the_declared_test(self):
         self.assertIn("CEPH_MSGR_TEST_OSD_CACHE_POOLS: ${{ matrix.osd_cache_pools || '0' }}", self.workflow)

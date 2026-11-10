@@ -6,6 +6,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -130,9 +131,298 @@ func TestMDSCephFSRestartStepsAreOrderedAndOneShot(t *testing.T) {
 		}
 	}
 	x.restart.State = "adopted"
-	for _, name := range []string{"restart-fire", "restart-status", "restart-adopt"} {
-		if err := c.mdsCephFSRestartAct(context.Background(), 8, mdsCephFSAction{name: name}, &result); err == nil || x.restart.pending() {
+	for _, name := range []string{"restart-fire", "restart-status", "restart-adopt", "restart-pause", "restart-inflight", "restart-resume"} {
+		if err := c.mdsCephFSRestartAct(context.Background(), 8, mdsCephFSAction{name: name, gid: 42, tid: 7}, &result); err == nil || x.restart.pending() {
 			t.Fatal("an adopted restart admitted another step", name)
+		}
+	}
+}
+
+// The journal fault boundary is refused before any native command unless the
+// restart is armed and unfired, and the restart fires only behind an applied
+// pause with a held in-flight proof.
+func TestMDSCephFSJournalBoundaryIsOrderedAndOneShot(t *testing.T) {
+	token := strings.Repeat("a1", 16)
+	out := t.TempDir()
+	armed := mdsFreshDaemon{Name: "owned-0", GID: 100}
+	c := &fixtureCluster{mdsFresh: &mdsFreshScope{out: out, token: token, name: "owned"},
+		mdsCephFS: &mdsCephFSScope{out: out, plan: mdsCephFSPlanFor(token), recovery: mdsCephFSRecoveryPlanFor(token), owned: map[string]uint64{"10.0.0.1:0/5": 42}, current: armed}}
+	x := c.mdsCephFS
+	var result mdsCephFSResult
+	refused := func(name string, why string) {
+		t.Helper()
+		if err := c.mdsCephFSRestartAct(context.Background(), 9, mdsCephFSAction{name: name, gid: 42, tid: 7}, &result); err == nil {
+			t.Fatal("journal boundary step admitted", name, why)
+		}
+	}
+	for _, name := range []string{"restart-pause", "restart-inflight", "restart-resume"} {
+		refused(name, "without an armed restart")
+	}
+	x.restart = &mdsCephFSRestart{State: "armed", Armed: armed}
+	refused("restart-inflight", "without a pause")
+	refused("restart-resume", "without a pause")
+	refused("restart-fire", "without a pause")
+	x.current.GID = 101
+	refused("restart-pause", "on another incarnation")
+	x.current.GID = armed.GID
+	x.restart.Pause = &mdsCephFSJournalPause{State: "applied"}
+	refused("restart-pause", "twice")
+	refused("restart-fire", "without an in-flight proof")
+	if err := c.mdsCephFSRestartAct(context.Background(), 9, mdsCephFSAction{name: "restart-inflight", gid: 43, tid: 7}, &result); err == nil {
+		t.Fatal("in-flight check admitted for an unobserved session")
+	}
+	x.restart.Boundary = &mdsCephFSBoundaryOp{GlobalID: 42, TID: 7, InFlight: true}
+	refused("restart-fire", "with a request that is not held")
+	refused("restart-inflight", "twice")
+	for _, state := range []string{"resumed", "resume-intended", "resume-uncertain", "discarded"} {
+		x.restart.Pause.State = state
+		refused("restart-resume", "after "+state)
+		refused("restart-fire", "after "+state)
+	}
+	x.restart.Pause.State = "applied"
+	x.restart.State = "applied"
+	refused("restart-resume", "after the fire")
+}
+
+// mdsCephFSFakeRank models how the native CLI resolves an MDS target
+// (Client::resolve_mds at mdsFreshSource): a role names whichever daemon
+// holds the rank when the command is resolved, a GID names one incarnation and
+// is refused once that incarnation left the map. Each daemon keeps its own
+// runtime mds_log_pause.
+type mdsCephFSFakeRank struct {
+	fs       string
+	rank0    uint64
+	mapped   map[uint64]bool
+	pause    map[uint64]string
+	reached  []uint64
+	commands []string
+	// before runs ahead of the resolution of each command.
+	before func(command string)
+}
+
+func (f *mdsCephFSFakeRank) replace(gid uint64) {
+	delete(f.mapped, f.rank0)
+	f.rank0, f.mapped[gid] = gid, true
+}
+
+func (f *mdsCephFSFakeRank) run(_ context.Context, args ...string) ([]byte, error) {
+	if len(args) < 3 || args[0] != "tell" || !strings.HasPrefix(args[1], "mds.") {
+		return nil, errors.New("fake rank admits only MDS tell commands")
+	}
+	spec, command := strings.TrimPrefix(args[1], "mds."), strings.Join(args[2:], " ")
+	f.commands = append(f.commands, args[1]+" "+command)
+	if f.before != nil {
+		f.before(command)
+	}
+	gid := f.rank0
+	if spec != f.fs+":0" && spec != "0" {
+		n, err := strconv.ParseUint(spec, 10, 64)
+		if err != nil {
+			return nil, errors.New("fake rank knows no daemon name " + spec)
+		}
+		if !f.mapped[n] {
+			return nil, errors.New("gid " + spec + " not in MDS map (ENOENT)")
+		}
+		gid = n
+	}
+	f.reached = append(f.reached, gid)
+	switch command {
+	case "scrub status --format json":
+		return []byte(`{"status":"no active scrubs running","scrubs":{}}`), nil
+	case "config set mds_log_pause true", "config set mds_log_pause false":
+		f.pause[gid] = args[len(args)-1]
+		return []byte(`{"success":"mds_log_pause = '' "}`), nil
+	case "scrub abort":
+		return []byte(`{"return_code":0}`), nil
+	case "config get mds_log_pause --format json":
+		value := f.pause[gid]
+		if value == "" {
+			value = "false"
+		}
+		return []byte(`{"mds_log_pause":"` + value + `"}`), nil
+	case "dump_ops_in_flight --format json":
+		if f.pause[gid] != "true" {
+			return []byte(`{"ops":[],"num_ops":0}`), nil
+		}
+		return []byte(`{"ops":[{"description":"client_request(client.42:7 create #0x10000000001/replayed)","initiated_at":"t","duration":0.5,"type_data":{"flag_point":"submit entry: journal_and_reply","op_type":"client_request","events":[{"event":"early_replied"}]}}],"num_ops":1}`), nil
+	}
+	return nil, errors.New("fake rank does not admit " + command)
+}
+
+// Every command of the journal pause is addressed to the armed daemon GID. A
+// daemon that replaces the armed incarnation in rank 0 after the identity
+// proof, at any point of the sequence, receives none of them.
+func TestMDSCephFSJournalPauseIsBoundToTheArmedGID(t *testing.T) {
+	const armedGID, replacement = 100, 200
+	token := strings.Repeat("a1", 16)
+	setup := func(t *testing.T) (*fixtureCluster, *mdsCephFSFakeRank) {
+		out := t.TempDir()
+		armed := mdsFreshDaemon{Name: "owned-0", GID: armedGID}
+		fake := &mdsCephFSFakeRank{fs: "owned", rank0: armedGID, mapped: map[uint64]bool{armedGID: true}, pause: map[uint64]string{}}
+		c := &fixtureCluster{mdsFresh: &mdsFreshScope{out: out, token: token, name: "owned"},
+			mdsCephFS: &mdsCephFSScope{out: out, plan: mdsCephFSPlanFor(token), recovery: mdsCephFSRecoveryPlanFor(token), owned: map[string]uint64{"10.0.0.1:0/5": 42}, current: armed,
+				restart: &mdsCephFSRestart{State: "armed", Armed: armed}, ceph: fake.run}}
+		return c, fake
+	}
+	act := func(c *fixtureCluster, name string) error {
+		var result mdsCephFSResult
+		return c.mdsCephFSRestartAct(context.Background(), 9, mdsCephFSAction{name: name, gid: 42, tid: 7}, &result)
+	}
+	onlyArmed := func(t *testing.T, fake *mdsCephFSFakeRank) {
+		t.Helper()
+		for _, command := range fake.commands {
+			if !strings.HasPrefix(command, "mds.100 ") {
+				t.Fatal("a pause command was not addressed to the armed GID:", command)
+			}
+		}
+		if slices.Contains(fake.reached, replacement) || fake.pause[replacement] != "" {
+			t.Fatal("the replacement daemon received a pause command", fake.reached, fake.pause)
+		}
+	}
+	// The model itself follows the rank for a role target: that is the
+	// addressing the pause must not use.
+	c, fake := setup(t)
+	fake.replace(replacement)
+	if _, err := fake.run(context.Background(), "tell", "mds.owned:0", "config", "get", "mds_log_pause", "--format", "json"); err != nil || !slices.Equal(fake.reached, []uint64{replacement}) {
+		t.Fatal("the fake rank does not resolve a role to the current holder", fake.reached, err)
+	}
+	if _, err := c.mdsCephFSTellGID(context.Background(), 0, "status"); err == nil {
+		t.Fatal("a zero GID, which the CLI reads as rank 0, was admitted as a daemon target")
+	}
+
+	t.Run("no replacement", func(t *testing.T) {
+		c, fake := setup(t)
+		if err := act(c, "restart-pause"); err != nil {
+			t.Fatal(err)
+		}
+		p := c.mdsCephFS.restart.Pause
+		if p.State != "applied" || p.Readback != "true" || fake.pause[armedGID] != "true" || len(fake.commands) != 4 {
+			t.Fatal("pause was not applied on the armed incarnation", p, fake.commands)
+		}
+		if err := act(c, "restart-inflight"); err != nil || !c.mdsCephFS.restart.Boundary.Held {
+			t.Fatal("held request not read from the armed incarnation", err, c.mdsCephFS.restart.Boundary)
+		}
+		c.mdsCephFS.restart.Boundary = nil
+		if err := act(c, "restart-resume"); err != nil || p.State != "resumed" || fake.pause[armedGID] != "false" {
+			t.Fatal("pause was not lifted on the armed incarnation", err, p)
+		}
+		onlyArmed(t, fake)
+	})
+	// The rank is replaced after the identity proof and the idle check,
+	// before the set, the barrier or the readback is resolved.
+	for _, at := range []string{"config set mds_log_pause true", "scrub abort", "config get mds_log_pause --format json"} {
+		t.Run("replaced before "+at, func(t *testing.T) {
+			c, fake := setup(t)
+			fake.before = func(command string) {
+				if command == at && fake.rank0 == armedGID {
+					fake.replace(replacement)
+				}
+			}
+			if err := act(c, "restart-pause"); err == nil {
+				t.Fatal("the pause step succeeded although the armed incarnation left the map")
+			}
+			if p := c.mdsCephFS.restart.Pause; p == nil || p.State != "uncertain" || p.Error == "" {
+				t.Fatal("the interrupted pause is not recorded as uncertain", p)
+			}
+			onlyArmed(t, fake)
+			if err := act(c, "restart-fire"); err == nil {
+				t.Fatal("a restart was fired behind an uncertain pause")
+			}
+		})
+	}
+	t.Run("replaced before the in-flight read", func(t *testing.T) {
+		c, fake := setup(t)
+		if err := act(c, "restart-pause"); err != nil {
+			t.Fatal(err)
+		}
+		fake.replace(replacement)
+		if err := act(c, "restart-inflight"); err == nil || c.mdsCephFS.restart.Boundary != nil {
+			t.Fatal("the replacement's op tracker answered for the armed incarnation", err)
+		}
+		onlyArmed(t, fake)
+	})
+	t.Run("replaced before the resume", func(t *testing.T) {
+		c, fake := setup(t)
+		if err := act(c, "restart-pause"); err != nil {
+			t.Fatal(err)
+		}
+		fake.replace(replacement)
+		if err := act(c, "restart-resume"); err == nil || c.mdsCephFS.restart.Pause.State != "resume-uncertain" {
+			t.Fatal("the resume of a removed incarnation is not uncertain", err, c.mdsCephFS.restart.Pause)
+		}
+		onlyArmed(t, fake)
+	})
+}
+
+func TestMDSCephFSBoundaryOpIsHeldOnlyBeforeCommit(t *testing.T) {
+	dump := func(ops ...map[string]any) []byte {
+		data, err := json.Marshal(map[string]any{"ops": ops, "num_ops": len(ops)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	op := func(description string, events ...string) map[string]any {
+		list := []any{}
+		for _, e := range events {
+			list = append(list, map[string]any{"time": "t", "event": e})
+		}
+		return map[string]any{"description": description, "initiated_at": "t", "age": 0.5, "duration": 0.5,
+			"type_data": map[string]any{"flag_point": "submit entry: journal_and_reply", "op_type": "client_request", "events": list}}
+	}
+	held := op("client_request(client.42:7 create #0x10000000001/replayed 2026-11-10 caller_uid=0)", "initiated", "early_replied", "submit entry: journal_and_reply")
+	other := op("client_request(client.42:70 create #0x10000000001/x)", "early_replied")
+	found, ok, err := mdsCephFSFindBoundaryOp(dump(other, held), 42, 7)
+	if err != nil || !ok || found == nil || !strings.HasPrefix(found.Description, "client_request(client.42:7 ") {
+		t.Fatal("held boundary request not found", found, ok, err)
+	}
+	for name, data := range map[string][]byte{
+		"absent":    dump(other),
+		"committed": dump(op("client_request(client.42:7 create)", "early_replied", "journal_committed: ")),
+		"not early": dump(op("client_request(client.42:7 create)", "submit entry: journal_and_reply")),
+		"foreign":   dump(op("client_request(client.43:7 create)", "early_replied")),
+	} {
+		if _, ok, err := mdsCephFSFindBoundaryOp(data, 42, 7); err != nil || ok {
+			t.Fatal("boundary request reported held", name, err)
+		}
+	}
+	if _, _, err := mdsCephFSFindBoundaryOp(dump(held, held), 42, 7); err == nil {
+		t.Fatal("duplicate boundary request accepted")
+	}
+	if _, _, err := mdsCephFSFindBoundaryOp([]byte("{}"), 42, 7); err == nil {
+		t.Fatal("op dump without ops accepted")
+	}
+}
+
+func TestMDSCephFSScrubStatusShape(t *testing.T) {
+	if status, err := parseMDSCephFSScrubStatus([]byte(`{"status":"no active scrubs running","scrubs":{}}`)); err != nil || status != "no active scrubs running" {
+		t.Fatal("idle scrub status rejected", status, err)
+	}
+	for _, bad := range []string{``, `{}`, `{"status":""}`, `{"status":"x"}`, `not json`} {
+		if _, err := parseMDSCephFSScrubStatus([]byte(bad)); err == nil {
+			t.Fatal("malformed scrub status accepted", bad)
+		}
+	}
+}
+
+// Without a held pause the cleanup step needs no native command.
+func TestMDSCephFSJournalPauseCleanupWithoutHeldPause(t *testing.T) {
+	for _, restart := range []*mdsCephFSRestart{nil, {State: "armed"}, {State: "armed", Pause: &mdsCephFSJournalPause{State: "resumed"}},
+		{State: "adopted", Pause: &mdsCephFSJournalPause{State: "discarded"}}} {
+		c := &fixtureCluster{mdsCephFS: &mdsCephFSScope{restart: restart}}
+		var receipt mdsCephFSCleanup
+		c.finishMDSCephFSJournalPause(context.Background(), &receipt, func(err error) {
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+		if !receipt.JournalPauseRestored {
+			t.Fatal("a pause that is not held was not reported restored", restart)
+		}
+	}
+	for _, state := range []string{"intended", "applied", "uncertain", "resume-intended", "resume-uncertain"} {
+		if !(&mdsCephFSJournalPause{State: state}).held() {
+			t.Fatal("a pause that may still hold the journal is not held", state)
 		}
 	}
 }

@@ -12,7 +12,11 @@ makes the targeted object a manifest of type redirect, truncates its data,
 sets its user version to the given target version and from then on serves
 its reads from the target (in any pool); a WRITEFULL to it was observed to be
 proxied to the target as well. `OSDUnsetManifest` has no input and
-clears the manifest; the object stays, now plain and empty. Both are
+clears the manifest; a redirected object stays, now plain and empty. A
+chunked object that still holds its own bytes keeps them, and the OSD drops
+that object's chunk references after the source commit, without a completion
+back to the caller (observed live on one profile; see the SET_CHUNK record
+below). Both are
 standalone and flagless here; reference-counted redirects and the tier
 operations are not implemented. SET_CHUNK has its own bounded contract below.
 
@@ -179,9 +183,12 @@ Evidence:
   records `TestCephOSDSetChunkGoIntegration`: Go-originated SET_CHUNK and
   source deletions against two owned plain pools on one secure/aes256k IPv6
   container legacy-v6 single-BlueStore profile, judged by native observations
-  of bytes, versions, mtimes and the target's `chunk_refs`. Other profiles
-  and a live lost reply remain unverified (the lost-reply boundary is
-  synthetic).
+  of bytes, versions, mtimes and the target's `chunk_refs`. The same record
+  covers one standalone UNSET_MANIFEST on a chunked, locally populated
+  source whose target another source still references: the source keeps its
+  bytes, the target loses exactly that reference, and a second
+  UNSET_MANIFEST is refused. Other profiles and a live lost reply remain
+  unverified (the lost-reply boundary is synthetic).
 
 ### Native-only evidence and remaining stages
 

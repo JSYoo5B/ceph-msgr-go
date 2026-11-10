@@ -93,6 +93,12 @@ op history shows three versioned copy-gets with that maximum, the reply keeps
 the same signed EIO representation, and a bounded poll of a complete native
 PG enumeration finds no temporary object. That temporary object was not
 itself observed, and its absence does not establish removal timing.
+A [destination PG-log control](../../integration/fixture/OSD_COPY_FROM_HISTORY_VALIDATION.md)
+covers the successful path on one profile: after one Go source write and one
+version-pinned COPY_FROM2, the destination primary's native PG log holds the
+copy's own request identity on the destination entry and the source write's
+identity with its user version among that entry's extra request IDs. It is a
+positive control past the destination commit, not a crash barrier.
 Destination loss after source-read completion/staging remains unverified. A committed copy
 survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.
