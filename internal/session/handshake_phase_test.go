@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,9 +21,27 @@ import (
 // publishes a transport or leaves the caller's socket open. They are not
 // native interoperability evidence.
 
-// requireUnpublishedFailure checks a failed handshake's published result.
-func requireUnpublishedFailure(t *testing.T, client net.Conn, transport *Transport, err error, stage string, cause error, text string) {
+// closeRecordingConn records whether the handshake closed the caller's end.
+// The synthetic peers close their own end when they return, which makes a
+// write on the caller's end fail even if the handshake leaked it, so socket
+// ownership is observed on the caller's Close itself.
+type closeRecordingConn struct {
+	net.Conn
+	closed atomic.Bool
+}
+
+func (c *closeRecordingConn) Close() error {
+	c.closed.Store(true)
+	return c.Conn.Close()
+}
+
+// requireUnpublishedFailure checks a failed handshake's published result. It
+// must run as soon as the handshake returns, before test cleanup closes conn.
+func requireUnpublishedFailure(t *testing.T, conn *closeRecordingConn, transport *Transport, err error, stage string, cause error, text string) {
 	t.Helper()
+	if !conn.closed.Load() {
+		t.Error("failed setup left the caller's socket open")
+	}
 	if transport != nil {
 		transport.Conn.Close()
 		t.Fatal("failed setup phase published a transport")
@@ -39,9 +57,6 @@ func requireUnpublishedFailure(t *testing.T, client net.Conn, transport *Transpo
 	}
 	if text != "" && !strings.Contains(err.Error(), text) {
 		t.Fatalf("failure lost %q: %v", text, err)
-	}
-	if _, werr := client.Write([]byte{0}); !errors.Is(werr, io.ErrClosedPipe) {
-		t.Fatalf("failed setup left the caller's socket open: %v", werr)
 	}
 }
 
@@ -84,10 +99,11 @@ func TestHandshakeAuthenticatedChannelPhaseFailuresPublishNothing(t *testing.T) 
 			cfg.offeredMode, cfg.serverFlags = test.requested, 1
 			done := make(chan error, 1)
 			go func() { done <- handshakePeer(peer, fixture, cfg) }()
-			transport, err := Handshake(context.Background(), client,
+			conn := &closeRecordingConn{Conn: client}
+			transport, err := Handshake(context.Background(), conn,
 				msgr.Address{Type: 2, Endpoint: netip.MustParseAddrPort("192.0.2.1:3300")},
 				1, 0, auth, test.requested, 4096, time.Second)
-			requireUnpublishedFailure(t, client, transport, err, test.stage, test.cause, test.text)
+			requireUnpublishedFailure(t, conn, transport, err, test.stage, test.cause, test.text)
 			var rejected *cephx.AuthenticationError
 			if test.cfg.mode == 0 && !errors.As(err, &rejected) {
 				t.Fatal("AUTH_BAD_METHOD lost its rejection", err)
@@ -133,8 +149,9 @@ func TestHandshakeIdentificationAndResumePhasesFollowAuthenticatedChannel(t *tes
 				cfg.badSignature = true
 				done := make(chan error, 1)
 				go func() { done <- freshMDSPeer(peer, fixture, mode, cfg) }()
-				tr, err := HandshakeFreshMDS(context.Background(), client, msgr.Address{Type: 2}, 0, auth, mode, 4096, time.Second)
-				requireUnpublishedFailure(t, client, tr, err, "signature", msgr.ErrAuthentication, "")
+				conn := &closeRecordingConn{Conn: client}
+				tr, err := HandshakeFreshMDS(context.Background(), conn, msgr.Address{Type: 2}, 0, auth, mode, 4096, time.Second)
+				requireUnpublishedFailure(t, conn, tr, err, "signature", msgr.ErrAuthentication, "")
 				if err := <-done; err != nil {
 					t.Fatal("bad signature led to further client traffic", err)
 				}
@@ -215,8 +232,9 @@ func TestHandshakeIdentificationAndResumePhasesFollowAuthenticatedChannel(t *tes
 					state := ResumeState{Addresses: []msgr.Address{{Type: 2, Nonce: 77}}, ClientCookie: 5, ServerCookie: 17, GlobalSeq: 100, Features: Features, GlobalID: test.globalID}
 					done := make(chan error, 1)
 					go func() { done <- freshMDSPeer(peer, fixture, mode, cfg) }()
-					tr, err := HandshakeResumeCephFS(context.Background(), client, msgr.Address{Type: 2}, 0, auth, mode, 4096, time.Second, state)
-					requireUnpublishedFailure(t, client, tr, err, "session reconnect", test.cause, test.text)
+					conn := &closeRecordingConn{Conn: client}
+					tr, err := HandshakeResumeCephFS(context.Background(), conn, msgr.Address{Type: 2}, 0, auth, mode, 4096, time.Second, state)
+					requireUnpublishedFailure(t, conn, tr, err, "session reconnect", test.cause, test.text)
 					peerErr := <-done
 					if test.answer == 0 {
 						// The identity check precedes SESSION_RECONNECT, so the
