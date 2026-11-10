@@ -32,7 +32,13 @@ metadata tests read the current target, so they also run after a restart.
 The recovery test creates the metadata test's plan directory and `go-file`
 before the restart, because the closed native FLOCK probe admits only that
 path ([held-lock restart](MDS_FILELOCK_RESTART_VALIDATION.md)), and removes
-them again before it ends so the metadata test still creates them.
+them again before it ends so the metadata test still creates them. If its
+restart leaf fails, the recovery test reconciles under a fresh bounded
+context before the metadata test runs: it lifts the journal pause of an
+unfired restart, or waits for the issued restart's new incarnation to be
+`up:active` and adopts it, then removes its namespace and closes its
+sessions (see
+[MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md#journal-fault-boundary-and-early-failure-reconciliation)).
 
 Reference: Tentacle Ceph 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`. Relied-upon behavior is read from
@@ -99,8 +105,9 @@ three fixed plans. The metadata plan:
 The recovery plan:
 
 - directory `ceph-msgr-cephfs-<token>-recovery` under the filesystem root;
-- Go-created files `flush-plain-0..2`, `flush-requested-0..2`, `held`,
-  `replayed` and `unanswered`, and the natively created `fenced`;
+- Go-created files `flush-plain-0..2`, `flush-requested-0..2`, `held` and
+  `unanswered`, the Go-created subdirectory `boundary` holding only the
+  Go-created file `replayed`, and the natively created `fenced`;
 - a 5000-byte binary payload for `fenced` (a SHA-256 chain starting from
   `ceph-msgr-cephfs-fenced:<token>`).
 
@@ -131,31 +138,58 @@ through the owned restart below. `mds-cephfs-target.json` publishes it with
 `adopted_restarts` (0 or 1); both tests read it instead of the startup oracle
 when they build their MDS target and check receipts.
 
-The restart is four closed steps, journaled as one record that is never
-reissued:
+The restart is a set of closed steps, in the order the test uses them,
+journaled as one record that is never reissued:
 
 1. `restart-arm` (identity-checked): records the current incarnation as the
    armed daemon and its `ip:port/nonce` addresses, and refuses if one is
    already blocklisted. Only one restart can ever be armed.
-2. `restart-fire`: journals `intended`, then runs `ceph mds fail <armed GID>`
-   once and records `applied` or `uncertain` with the bounded CLI output.
-   It skips the identity proof because the test calls it right after an
-   unsafe reply, before the next journal tick; the armed GID names exactly
-   the proven incarnation, so a different daemon cannot be failed. The MON
-   removes that GID from the map and blocklists its address vector; the
-   daemon process respawns in its own container and registers again with a
-   new GID and nonce.
-3. `restart-status` (read only, repeatable): reads one native `fs dump` and
+2. `restart-pause` (identity-checked, once): the bounded journal fault
+   boundary on the armed incarnation. It requires an idle scrub stack
+   (`scrub status`), journals `intended`, then runs `tell mds.<fs>:0 config
+   set mds_log_pause true`, `tell mds.<fs>:0 scrub abort` and a `config get`
+   readback, and records `applied` or `uncertain`. While the option is set,
+   `MDLog::_submit_thread` appends no journal entry, so a request journaled
+   afterwards cannot become safe on that incarnation; a journal flush
+   (`MDLog::flush`, from a client `REQUEST_FLUSH_MDLOG`, a scatter
+   writebehind or the tick) only queues a flush marker behind the held
+   entries. `MDSRankDispatcher::handle_conf_change` applies the option on
+   the MDSRank finisher thread, after `config set` has returned; `scrub
+   abort` on an idle rank 0 is answered from that same single finisher
+   (`handle_asok_command`, `ScrubStack::scrub_abort`), so its answer shows
+   that the pause was applied before the test sends the request it must
+   hold. The setting is runtime-only: the respawned incarnation starts
+   without it. The identity proof before and after brackets every command
+   to the armed GID in rank 0.
+3. `restart-inflight <GlobalID>:<TID>` (identity-checked, once, read only):
+   reads `dump_ops_in_flight` and records whether that client request of an
+   observed owned session is in flight, early-replied (unsafe) and without
+   a `journal_committed` event (`held`). A request that is not held is
+   reported, not refused, so the test fails with the control still usable.
+4. `restart-fire`: requires an applied pause and a held in-flight record.
+   It journals `intended`, then runs `ceph mds fail <armed GID>` once and
+   records `applied` or `uncertain` with the bounded CLI output. It skips
+   the identity proof; the armed GID names exactly the proven incarnation,
+   so a different daemon cannot be failed. The MON removes that GID from
+   the map and blocklists its address vector; the daemon process respawns
+   in its own container and registers again with a new GID and nonce.
+5. `restart-status` (read only, repeatable): reads one native `fs dump` and
    reports rank 0 (name, GID, state, incarnation, endpoint, nonce), failed
    ranks, owned standbys, whether the armed GID is still mapped and the
    blocklist entries of the armed addresses. Only the filesystem identity
    (FSCID, name, pools, `max_mds` 1) must be unchanged; any rank state is
    reported as observed.
-4. `restart-adopt`: requires the same daemon name in rank 0 `up:active` with
-   a different GID, nonce and incarnation, the same FSCID and pools, and the
-   armed GID absent from the map. It records the old incarnation's
-   blocklist entries, makes the new incarnation current, rewrites the target
-   file and then runs the ordinary post-action proof against it.
+6. `restart-adopt`: requires the same daemon name in rank 0 `up:active` with
+   a different GID, nonce and incarnation, the same FSCID and pools, the
+   armed GID absent from the map and, after a pause, `mds_log_pause` false
+   on the new incarnation (the pause is then recorded `discarded` with the
+   removed incarnation). It records the old incarnation's blocklist
+   entries, makes the new incarnation current, rewrites the target file and
+   then runs the ordinary post-action proof against it.
+7. `restart-resume` (identity-checked, once): only for a restart that was
+   never fired; sets `mds_log_pause` false with the same barrier and
+   readback and records `resumed` (or `resume-uncertain`). The test uses it
+   to reconcile a failure between the pause and the fire.
 
 Between `restart-fire` and `restart-adopt` every other action is refused
 before native work, since no identity proof is possible.
@@ -225,7 +259,8 @@ One request is outstanding at a time.
 | `recovery-write` | none | mutation, once: create `fenced` (`O_CREAT\|O_EXCL\|O_WRONLY`, 0644), write the 5000-byte payload, `fsync`, close, `statx` |
 | `evict` | one GlobalID | mutation, once per GlobalID: the target must be an open session of the recovery identity whose address is not yet blocklisted; journals intent, runs `tell mds.<fs>:0 session evict id=<gid>`, then waits until the session is gone and its exact address is blocklisted, recording the entry's expiry |
 | `recovery-ops` | one GlobalID | read only: `tell mds.<fs>:0 dump_historic_ops`, reduced to client requests of that GlobalID (description, result, flag point, event names); admitted only for an observed owned session |
-| `restart-arm`, `restart-fire`, `restart-status`, `restart-adopt` | none | the owned restart above |
+| `restart-arm`, `restart-pause`, `restart-fire`, `restart-status`, `restart-adopt`, `restart-resume` | none | the owned restart and journal pause above |
+| `restart-inflight` | `<GlobalID>:<TID>` of an observed owned session | read only: `tell mds.<fs>:0 dump_ops_in_flight`, reduced to that request; requires the applied pause of an unfired restart |
 | `push-stat` | `dir`, `lease`, `victim`, `renamed`, `snap`, `snap-file`, `snapshot`, `quota`, `quota-file`, `recall` | read only: `statx` through the push driver |
 | `push-rename` | none | mutation, once: rename `lease/victim` to `lease/renamed` |
 | `push-snapshot-create`, `push-snapshot-remove` | none | mutation, once each: `mkdir`/`rmdir` of the planned snapshot; removal requires an applied creation |
@@ -237,8 +272,8 @@ Each native file action runs one fixed Python driver through the provider's
 `RunNativeCommand` in the fixture container (30 s bound, 45 s for `write`
 and `recovery-write`; bounded stdout/stderr). The driver mounts the owned
 filesystem by name, re-checks that every path is one of the two owned
-directories (both carry the `ceph-msgr-cephfs-` prefix) or a direct child of
-it, prints one JSON object and always calls `shutdown`, which unmounts and
+directories (both carry the `ceph-msgr-cephfs-` prefix), a direct child of
+it or the recovery directory's `boundary/replayed`, prints one JSON object and always calls `shutdown`, which unmounts and
 closes its own CephFS session. Output is decoded with unknown fields refused
 and the exact per-action shape required; only ENOENT is accepted as a stat
 failure. A failed, killed or truncated process is an error, never partially
@@ -271,6 +306,14 @@ Cleanup runs once, inside the cached MDS fresh cleanup and before the owned
 filesystem is removed, with its own 45-second bound. It writes an `attempted`
 receipt to `mds-cephfs-cleanup.json`, then:
 
+0. Lifts a journal pause that may still hold the armed incarnation (any
+   state but `resumed` or `discarded`): if the armed GID is gone from the
+   FSMap the pause is recorded `discarded`; if it still holds rank 0 the
+   fixture sets `mds_log_pause` false with the barrier and readback,
+   bracketed by two rank status reads naming the armed GID. This restore of
+   runtime state is applied even after an uncertain step; a mapped armed
+   GID outside rank 0 keeps the pause and fails cleanup
+   (`journal_pause_restored`).
 1. Restores both recall overrides through their provider handles (a
    confirmed restore is a no-op; the provider refuses an outside edit) and
    waits up to 15 s for the daemon's baseline values with no central entry
@@ -295,7 +338,8 @@ receipt to `mds-cephfs-cleanup.json`, then:
 
 `completed` is true only when the namespace check ran, every new entry was
 attributed, removed and verified absent, the recall settings were back at
-their baseline, and all four identities were removed. The MDS fresh cleanup receipt adds `cephfs_verified`; filesystem,
+their baseline, no journal pause remained and all four identities were
+removed. The MDS fresh cleanup receipt adds `cephfs_verified`; filesystem,
 pool and identity removal proceed even if this verification failed, and both
 errors are reported.
 
@@ -313,7 +357,10 @@ credential environment (including the recovery identity), identity caps, the
 deterministic plans and their path admission, closed actions and replay
 protection, native output shapes for both directories, transitional rank
 status parsing (failed rank, replay state, owned standby, address family),
-the ordering and one-shot rules of the restart steps, blocklist attribution,
+the ordering and one-shot rules of the restart steps and of the journal
+boundary (pause, in-flight check, fire, resume; refused before native work),
+the held-request rule on op-tracker output, the scrub status shape, the
+journal pause cleanup without a held pause, blocklist attribution,
 op-tracker filtering by GlobalID, scope rejection before native work,
 one-shot mutations and cleanup without a baseline; for the push extension the
 token-bound plan and its path admission, the closed push actions, the push

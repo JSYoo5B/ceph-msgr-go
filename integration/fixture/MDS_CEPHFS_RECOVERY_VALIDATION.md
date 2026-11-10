@@ -12,7 +12,8 @@ and the CephFS reconnect to a new MDS incarnation with explicit request
 resubmission. The owned recipe, its restart steps and its cleanup are
 described in [MDS_CEPHFS_FIXTURE.md](MDS_CEPHFS_FIXTURE.md).
 The original results below describe the 2026-10-16 recipe. The later
-pending-flush extension has its own source and result record at the end.
+pending-flush extension and the journal fault boundary have their own
+sections at the end; the leaf table describes the current recipe.
 
 ## Test shape
 
@@ -61,17 +62,19 @@ test-only.
 | `open_recovery_session` | Restart client session Open; the MDS OPEN advertises LUMINOUS (7), REPLY_ENCODING (9), MULTI_RECONNECT (12) and bits 18 to 20. Native `session ls`: `open`, the recovery identity, `client_features` `0x00000000001c83ff`, the metadata sent, 0 caps, address `<ip>:0/<State().CephFSNonce>` |
 | `journal_flush_unsafe_to_safe` | MKDIR of the recovery directory, then three rounds of two CREATEs (`O_CREAT\|O_EXCL\|O_RDWR`): `flush-plain-i` waits for its safe reply untouched, `flush-requested-i` calls `FlushJournal` as soon as its unsafe reply arrives. Every safe reply arrives with result 0; the created ino in each first reply's extra equals the trace target; the native listing has the six names with the same inos. Latencies are recorded, not asserted |
 | `eviction_fences_shared_nonce` | Native one-shot create and write of `fenced` (5000 bytes, `fsync`). The fenced client opens its CephFS session (native address `<ip>:0/<nonce>`), reads `<ino hex>.00000000` from the data pool through the explicit OSD API (stat and read; bytes equal the native payload). The fixture evicts that session; the new blocklist entries are exactly `<ip>:0/<CephFSNonce>`. The Go session ends Lost; the same OSD read on the same OSD connection, naming the OSDMap epoch after the eviction, fails with OSD result -108 or a connection-level refusal; the reader reads the same bytes. The restart client's session is unchanged |
-| `mds_restart_reconnect_replay` | The fixture arms the restart. The restart client creates `held` and waits for its safe reply without a flush (aligning with a journal tick), closes the write handle, opens `held` for read and keeps that handle open. It creates `replayed`; as soon as the unsafe reply arrives the fixture fires `ceph mds fail <armed GID>` and the next MDS redial is held while `unanswered` is submitted, then released. The replayed create must not have become safe. The session must end Lost with both calls reporting an unknown outcome. Once native `fs dump` shows the same daemon name in rank 0 with a new GID and nonce in `up:reconnect`, the test closes the old connection, opens the new address and calls `ReconnectSession` with the agent's caps and realms and `Resubmit` of both calls. OPEN must arrive (`ReconnectedFrom` names the Lost session); both calls keep their TIDs and complete with result 0, the replayed create reporting the ino of its unsafe reply. After the MDS is `up:active` the fixture adopts the incarnation; native checks follow (below) |
-| `cleanup_unlink_release_close` | UNLINK of the ten files and RMDIR through the reconnected session (safe result 0), native ENOENT for the directory, `ReleaseCaps` of every held cap and native `num_caps` 0, confirmed `Close` and the session absent natively. The restart client never dialed an OSD |
+| `mds_restart_reconnect_replay` | The fixture arms the restart. The restart client creates `held` and waits for its safe reply without a flush (aligning with a journal tick), keeps its handles open and opens `held` for read. It creates the directory `boundary` (safe), the fixture pauses the armed incarnation's journal submitter, and the client creates `boundary/replayed`, which must answer unsafe. The client then asks for a journal flush; the armed incarnation's op tracker must still hold that create in flight, early-replied and uncommitted, and the call must not be safe. Then the fixture fires `ceph mds fail <armed GID>` and the next MDS redial is held while `unanswered` is submitted, then released. The replayed create must not have become safe. The session must end Lost with both calls reporting an unknown outcome. Once native `fs dump` shows the same daemon name in rank 0 with a new GID and nonce in `up:reconnect`, the test closes the old connection, opens the new address and calls `ReconnectSession` with the agent's caps and realms and `Resubmit` of both calls. OPEN must arrive (`ReconnectedFrom` names the Lost session); both calls keep their TIDs and complete with result 0, the replayed create reporting the ino of its unsafe reply. After the MDS is `up:active` the fixture adopts the incarnation; native checks follow (below) |
+| `cleanup_unlink_release_close` | UNLINK of the ten files and RMDIR of `boundary` and the recovery directory through the reconnected session (safe result 0), native ENOENT for the directory, `ReleaseCaps` of every held cap and native `num_caps` 0, confirmed `Close` and the session absent natively. The restart client never dialed an OSD |
 
-After adoption the restart leaf also requires: the old incarnation's address
-blocklisted by the MON; the new incarnation's op tracker
-(`dump_historic_ops`) holding the resubmitted `unanswered` create; when it
-holds the replayed create, its description carries ` REPLAY`; native
-`session ls` showing the Go session `open` at the same `ip:0/nonce` with
-`num_caps` above 0; native `statx` of `replayed` and `unanswered` equal to
-the inos the Go replies reported; and the native listing of the recovery
-directory equal to the ten names with their inos.
+After adoption the restart leaf also requires: `mds_log_pause` false on the
+new incarnation; the new incarnation's op tracker (`dump_historic_ops`,
+read right after adoption) holding the replayed create with ` REPLAY` in its
+description, so the new incarnation executed it and the old one never
+journaled it, and the resubmitted `unanswered` create; the old
+incarnation's address blocklisted by the MON; native `session ls` showing
+the Go session `open` at the same `ip:0/nonce` with `num_caps` above 0;
+native `statx` of `boundary/replayed` and `unanswered` equal to the inos the
+Go replies reported; and the native listing of the recovery directory equal
+to its ten names (nine files and `boundary`) with their inos.
 
 ## Results
 
@@ -370,3 +373,172 @@ the source snapshot. Full root and fixture Go tests, root and fixture vet,
 race checks for `cephmsgr` and `internal/mds`, and 422 Python tool tests
 passed on the same snapshot. These are local selected-configuration
 results, separate from CI at the final commit.
+
+## Journal fault boundary and early-failure reconciliation
+
+The restart leaf used to depend on timing: it created `replayed` right
+after a journal tick and fired `ceph mds fail` as soon as the unsafe reply
+arrived, expecting the old incarnation to be removed before its next
+journal flush. On the IPv4 host CRC row the create sometimes became safe
+first and the leaf failed with "the journal tick won the race". The MDS
+recent-event dump of one such run showed the create journaled 0.6 ms after
+a tick's `EUpdate scatter_writebehind` and a second writebehind about 10 ms
+later, before the map removed the daemon. `Locker::scatter_writebehind`
+submits an `EUpdate` and calls `mdlog->flush()`; `Locker::scatter_tick`
+nudges every scatterlock that has been dirty for
+`mds_scatter_nudge_interval` (5 s), and the creates of this leaf dirty the
+recovery directory's locks. A safe reply before the restart shows that the
+flush happened; no client-side observation gives an interval in which no
+flush can happen. The leaf then returned with the restart issued but never
+adopted, and the metadata test that follows met the failed incarnation.
+
+### Fault boundary
+
+The boundary is now held on the server, on the armed incarnation only
+(source paths at the reference tag):
+
+- `mds/MDLog.cc`: `_submit_thread` appends nothing while `pause`
+  (`mds_log_pause`) is set; `submit_entry` only queues the event, and
+  `flush` with queued events only queues a flush marker. A request whose
+  event is queued after the pause takes effect cannot become safe on that
+  incarnation, whichever flush is requested: a client
+  `REQUEST_FLUSH_MDLOG`, a scatter writebehind or the tick.
+- `mds/Server.cc`: `journal_and_reply` sends the early (unsafe) reply and
+  submits the event in the same step, so an unsafe reply shows that the
+  request reached journal submission. The `journal_committed` op event is
+  marked only by the commit completion (`ServerLogContext::pre_finish`).
+- `mds/MDSRank.cc`: `MDSRankDispatcher::handle_conf_change` applies MDLog
+  options on the MDSRank finisher, after `config set` has returned; the
+  `scrub abort` command is queued to the same finisher and answered from
+  it (`ScrubStack::scrub_abort` on an idle single rank aborts nothing).
+  `common/Finisher.h` runs one thread, so that answer orders the pause
+  before the create.
+- `mds/MDSDaemon.cc`: a daemon removed from the map respawns; the runtime
+  option does not survive the re-exec.
+
+The leaf creates the fresh directory `boundary` (safe) and the fixture
+applies the pause (`restart-pause`: idle `scrub status`, `config set`,
+`scrub abort`, `config get` = `true`, bracketed by the identity proof of
+the armed GID). The client then creates `boundary/replayed` and requires an
+unsafe reply. That reply records the TID, the inode and the incarnation
+(GID, nonce, incarnation) that answered. The test then forces the window
+that used to be lost: it sends `FlushJournal` (on a running submitter this
+makes a create safe within milliseconds, see
+[Journal flush](#journal-flush)). Then `restart-inflight` reads
+`dump_ops_in_flight` on the armed incarnation, and the create must still be
+in flight with `early_replied` and no `journal_committed` event. Only then
+does `restart-fire` run (the fixture refuses it otherwise). After the
+restart, the new incarnation's op tracker must hold the replayed create as
+an MDRequest with ` REPLAY`: a create that the old incarnation had
+journaled would have been answered from the session's completed-request
+record without an MDRequest. That check is the post-hoc proof that the
+boundary held.
+
+The replayed create has its own fresh parent because a create wrlocks its
+parent's filelock and nestlock. A scatter nudge on a dirty lock submits a
+writebehind and leaves the lock unstable until that entry commits, which
+never happens while the journal is paused. `boundary` carries no aged dirty
+scatter state, so its locks cannot be held by a writebehind during the
+window; propagation to the recovery directory uses `wrlock_try` and does
+not block.
+
+### Reconciliation after an early failure
+
+If the restart leaf fails, its cleanup reconciles under a fresh 4-minute
+context, and its errors are added to the original failure, never
+substituted for it (`Reconcile.FailedAfterPhase` names the last milestone
+reached):
+
+- a restart that was never fired: `restart-resume` lifts an applied pause;
+- a fired restart: the old connection is closed, `restart-status` is read
+  until the same daemon name holds rank 0 `up:active` with a new GID and
+  the armed GID is gone from the map (a client that never reconnects keeps
+  the new incarnation in `up:reconnect` until the MDS reconnect timeout),
+  then `restart-adopt` proves and adopts it;
+- then a session of the current incarnation (the open one, or a fresh
+  client of the recovery identity) unlinks `boundary/replayed`, removes
+  `boundary`, the recovery files and directory, and the metadata plan's
+  `go-file` and directory, accepting ENOENT for entries never created. It
+  releases its caps and closes. Native `statx` must report both
+  directories absent and `session ls` no owned session.
+
+No blocklist entry is removed here. The fixture cleanup keeps the fencing
+entries of an armed incarnation that is still mapped and removes only
+entries it can attribute, after this reconciliation. Its step 0 also lifts
+a pause that the test could not lift, for example after a control failure.
+
+### Results (2026-11-10)
+
+Tested source: commit `884f5944e0ca3307030b2896df7cc92e5df1daa3` (only
+documentation changed afterwards). Linux amd64 host, Docker 29.9.1, Go
+1.26.9 for the fixture and test binaries with CGO disabled, image
+`quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`
+(`ceph version 20.2.4 (7f793731f1b39eb4f465e960113d2363c311b964) tentacle (stable)`),
+the environment of the native scenario job for each catalog row, and the
+native result gate (`tools/native_test_results.py`) around `integration/run.sh`.
+One fixture ran at a time on the engine.
+
+| Scenario | Push / recovery / metadata | Gate |
+| --- | --- | --- |
+| `mds-cephfs.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7` | 74.20 / 88.02 / 109.85 s, 29 leaves and tests passed | passed |
+| `mds-cephfs.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7` | 73.47 / 89.44 / 104.53 s, 29 leaves and tests passed | passed |
+
+CRC row boundary evidence: the replayed create (TID 17, ino
+`0x10000000029`) was answered unsafe by the armed incarnation (GID 14572,
+incarnation 6). `FlushJournal` followed 43 µs after that reply. In the
+same run a `FlushJournal` after an unsafe reply made the other creates safe
+in 6.2 to 11.2 ms. 2.60 s after the unsafe reply the armed incarnation's op
+tracker still held the create with `early_replied` and
+`submit entry: journal_and_reply` and no `journal_committed` event. The
+adopted incarnation (GID 8412, incarnation 10, `mds_log_pause` false)
+executed it as `RETRY=1 REPLAY QUEUED_FOR_REPLAY`. The cleanup receipt
+completed with the pause `discarded` and the `mds-restart` and `eviction`
+entries removed.
+
+The secure row showed the same: create TID 17 unsafe from GID 14543
+(incarnation 6), `FlushJournal` 32 µs later (0.39 to 0.44 ms to safe for
+the other creates in that run), still held 2.70 s later, then executed with
+REPLAY by GID 18259 (incarnation 9); the cleanup receipt completed.
+
+### Forced mutations (2026-11-10, CRC row, same host and image)
+
+Both mutations were temporary local edits, run once each and reverted
+before the tested commit.
+
+- Pause not applied (the fixture recorded `applied` without the
+  `config set`): the forced `FlushJournal` made the create safe before the
+  op-tracker read 2.70 s later (`in_flight` false, `held` false). The leaf
+  failed with "the replayed create is not held uncommitted on the armed
+  incarnation after a forced journal flush", the fixture refused nothing
+  and the restart was never fired. Reconciliation (phase
+  `replayed-unsafe`) lifted the pause record through `restart-resume`,
+  removed the namespace through the open session, and found both
+  directories and every owned session gone natively. The metadata test then
+  passed 13/13 and the cleanup receipt completed. This is the failure the
+  old leaf met by timing: without the boundary a flush in the window makes
+  the create safe; with it the same flush does not.
+- Injected `t.Fatal` right after `restart-fire` returned (phase `fired`,
+  fire `applied`): reconciliation closed the old connection and read the
+  rank status. The new incarnation stayed `up:reconnect` for about 50 s
+  (the client never reconnected) and then became `up:active`; the
+  reconciliation adopted it (incarnation 10). A fresh client of the
+  recovery identity removed the namespace; the unlink of
+  `boundary/replayed` returned ENOENT, as the paused create had never been
+  journaled. Both directories and every owned session were absent
+  natively, after 65 s in all. The metadata test passed 13/13 against the
+  adopted incarnation. The cleanup receipt completed: pause `discarded`,
+  `mds-restart`, `eviction` and `owned-session` (the address of the
+  session that missed its reconnect window) entries removed, none kept.
+  The recovery test kept the injected failure as its result.
+
+### Limits
+
+- arm64 hosts and CI were not run for this change.
+- The barrier relies on the MDSRank finisher being a single FIFO thread and
+  on `scrub abort` being answered from it on an idle rank 0, as read at the
+  reference tag. Another release would need the same reading.
+- The reconciliation was exercised for a failure before the fire and right
+  after it, not for failures during reconnect or after adoption.
+- A fixture control failure stops the control loop, so the test cannot
+  reconcile after one; the fixture cleanup then lifts a held pause and
+  keeps the fencing of a still-mapped incarnation.
