@@ -465,6 +465,11 @@ func (p profile) cleanupBudget() time.Duration {
 		// after up to four owned restarts.
 		return 3 * time.Minute
 	}
+	if p.rbdMirrorSelected() {
+		// A checkpoint that failed before its own finish still terminates
+		// the mirror, the destination cluster and the netem helper here.
+		return 3 * time.Minute
+	}
 	if p.mdsSessions == "1" || p.mdsCephFS == "1" || p.mdsCephFSData == "1" || p.rbdBase == "1" {
 		// The CephFS data cleanup reads the namespace back natively before
 		// removing two identities. The RBD cleanup removes its owned pool (with the temporary
@@ -529,6 +534,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.copyFromMultiChunkSelected() {
 		multiChunkMarker = "1"
 	}
+	mirrorMarker := ""
+	if p.rbdMirrorSelected() {
+		mirrorMarker = "1"
+	}
 	marker := ""
 	mapMarker := ""
 	if p.sparseReadOracle != "" {
@@ -557,6 +566,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		"CEPH_MSGR_TEST_RBD":                     p.rbdBase,
 		copyFromLateErrorMarker:                  copyErrorMarker,
 		copyFromMultiChunkMarker:                 multiChunkMarker,
+		rbdMirrorMarker:                          mirrorMarker,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    marker,
 		"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         mapMarker,
 		"CEPH_MSGR_NATIVE_U64_XATTR_ORACLE":      u64Marker,

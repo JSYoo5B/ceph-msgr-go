@@ -46,6 +46,13 @@ and `ServiceContainers` to `ceph.Observer`. It also extends
 data fixtures now use for `debug_mds` and `debug_ms`; that changes how a
 local recipe sets a runtime level, not what any row observes.
 
+Updated on 2026-11-10 for issue #124. The former SVC-2 and SVC-3 rows named
+the rbd-mirror and cephfs-mirror daemons together. They are now split by
+daemon: SVC-2 and SVC-3 name the rbd-mirror daemon and are `released` with
+the local catalog recipe of [RBD_MIRROR_VALIDATION.md](RBD_MIRROR_VALIDATION.md);
+SVC-4 and SVC-5 keep the cephfs-mirror paths `primitive`. No other row
+changed.
+
 ## Classes
 
 Each row has exactly one class. The order below is also the precedence: a row
@@ -234,14 +241,16 @@ a particular test in it ran. The Visibility column states which applies:
 | ID | Path | Class | Setup and control | Independent observation | Fault and cleanup | Evidence | Visibility |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | SVC-1 | RGW-induced RADOS objects, bucket index OMAP and garbage collection | `primitive` | v0.3.0 `rgw.Run`; separate [small-object checkpoint](RGW_NATIVE_VALIDATION.md), with S3 as input only | Gateway GlobalID/TID-attributed OSD history, native head bytes and actual index shard locally; manifest-ordered stripe reconstruction and GC queue locally for the multi-stripe checkpoint | Owned gateway restart and small-object deletion locally; multi-stripe deletion with one explicit GC process locally | `TestRGWNativeCheckpointIntegration`; `TestRGWNativeMultiStripeIntegration`; `ctg@v0.4.0:TestRGWRadosReceipt` | Selected local native checkpoints, run by the development workflow with pull-request-recorded results; no catalog/comment selector or backend-fault acceptance; issue #13 remains open |
-| SVC-2 | rbd-mirror and cephfs-mirror daemons in steady state | `primitive` | v0.3.0 `RunMirror` in the `rbd` and `cephfs` packages | None locally | None locally | none locally | no local or upstream steady-state receipt is cited here |
-| SVC-3 | Source OSD to mirror daemon with one path cut | `primitive` | v0.4.0 `fault.ApplyNetworkProfile` with `Peer` expresses it | Mirror snapshot progress and netem counters in the upstream receipts | One-direction loss and restore | `ctg@v0.4.0:TestRBDMirrorPeerPathCut`, `ctg@v0.4.0:TestCephFSMirrorPeerPathCut` | upstream receipt only |
+| SVC-2 | rbd-mirror daemon in steady state | `released` | v0.5.0 `rbd/mirror.Run` between the fixture's single-BlueStore cluster (source) and an owned one-OSD destination cluster, snapshot mode, image scope, one daemon | Native oracle: destination export digest of the seeded image, the destination's snapshot progress and both clusters' FSIDs and image identities | Owned destination, daemon and setup clients terminated and independently confirmed absent | `rbd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdmirrorpathrecovery`, `TestCephRBDMirrorPathRecoveryIntegration`, [RBD_MIRROR_VALIDATION.md](RBD_MIRROR_VALIDATION.md) | one selected aes256k/secure/IPv4 container profile |
+| SVC-3 | Source OSD to rbd-mirror daemon with one path cut | `released` | v0.5.0 `fault.ApplyNetworkProfile` on the source OSD with the daemon's source-network address as `Peer` and 100% loss | Native oracle: unchanged snapshot progress and destination digest during the cut, netem drop counters, the source OSD's `messenger dump` session from the daemon's address whose GlobalID a source MON session of the source peer user `client.rbd-mirror-peer` from that address carries; the Go session to the same OSD keeps reading the native oracle object | One-direction loss and restore; catch-up of a distinguishable 1 MiB patch with its native byte count | `rbd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdmirrorpathrecovery`, `TestCephRBDMirrorPathRecoveryIntegration`, [RBD_MIRROR_VALIDATION.md](RBD_MIRROR_VALIDATION.md); `ctg@v0.4.0:TestRBDMirrorPeerPathCut` | one selected aes256k/secure/IPv4 container profile |
+| SVC-4 | cephfs-mirror daemon in steady state | `primitive` | v0.3.0 `RunMirror` in the `cephfs` package | None locally | None locally | none locally | no local or upstream steady-state receipt is cited here; CephFS mirroring needs its own setup and oracle |
+| SVC-5 | Source OSD to cephfs-mirror daemon with one path cut | `primitive` | v0.4.0 `fault.ApplyNetworkProfile` with `Peer` expresses it | Mirror snapshot progress and netem counters in the upstream receipt | One-direction loss and restore | `ctg@v0.4.0:TestCephFSMirrorPeerPathCut` | upstream receipt only |
 
 ## Classification summary
 
 | Class | Rows |
 | --- | --- |
-| `released` | 70 |
+| `released` | 72 |
 | `main-only` | 0 |
 | `primitive` | 13 |
 | `proposed` | 8 |
@@ -258,21 +267,22 @@ independent native observation is still missing.
 
 ## Most significant absences and gaps
 
-- **No local daemon-to-daemon network faults.** The local fixture never
-  separates the cluster network and has no network fault control, so OSD
-  heartbeat failure (D2D-4), held replication (D2D-7), quorum partitions
-  (D2D-2) and every directional fault (D2D-5, D2D-15, SVC-3) have only
-  upstream receipts. The pinned v0.5.0 `fault.ApplyNetworkProfile` expresses
-  peer-specific faults, but no local recipe uses it.
+- **Almost no local daemon-to-daemon network faults.** The local fixture
+  never separates the cluster network, so OSD heartbeat failure (D2D-4), held
+  replication (D2D-7), quorum partitions (D2D-2) and the directional faults
+  D2D-5, D2D-15 and SVC-5 have only upstream receipts. The only local recipe
+  that uses the pinned v0.5.0 `fault.ApplyNetworkProfile` is the RBD mirror
+  path cut (SVC-3), on one profile and between two clusters.
 - **Map distribution is unobserved locally and has an open anomaly.** No
   local recipe reads each daemon's own map epoch (D2D-3), and
   [MON_FREEZE_FIXTURE_ISSUE.md](MON_FREEZE_FIXTURE_ISSUE.md) records an OSD
   that stopped following the OSDMap after a MON freeze, with its cause open.
-- **Service-induced paths remain outside the catalog.** RGW has a separate
+- **Service-induced paths are mostly outside the catalog.** RGW has a separate
   [small-object/native-CALL and gateway-restart checkpoint and multi-stripe
   manifest/GC checkpoint](RGW_NATIVE_VALIDATION.md) (SVC-1); backend faults and
-  a trusted selector remain open. Mirror paths
-  (SVC-2 and SVC-3) still have no local acceptance recipe.
+  a trusted selector remain open. The rbd-mirror paths
+  (SVC-2 and SVC-3) have one catalog recipe on one profile; the cephfs-mirror
+  paths (SVC-4 and SVC-5) still have no local acceptance recipe.
 - **Native Messenger state is unobserved.** No recipe reports native
   keepalive, ACK or reset state (MSG-8), and no recipe captures daemon frames
   (D2D-19).

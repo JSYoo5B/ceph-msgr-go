@@ -18,6 +18,7 @@ COPY_FROM_LATE_ERROR_SELECTOR = "^TestCephOSDCopyFromLateErrorIntegration$"
 COPY_FROM_MULTI_CHUNK_SELECTOR = "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"
 COMPRESSION_SELECTOR = "^TestCephMsgrCompressionOfferIntegration$"
 SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR = "^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$"
+RBD_MIRROR_SELECTOR = "^TestCephRBDMirrorPathRecoveryIntegration$"
 
 
 def ceph_rows():
@@ -55,13 +56,13 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 1 exclusive COPY_FROM2 late-error cell, 1 applied EC resubmission,
         # 1 exclusive multi-chunk COPY_FROM2 late-error cell, 1 CRC compression-offer row,
         # 1 zero-initial-MGR service bootstrap row, 1 primary PG-history calibration row,
-        # and 1 held stopped-MON dial ServiceMap lifecycle row.
-        self.assertEqual(len(self.rows), 85)
+        # 1 held stopped-MON dial ServiceMap lifecycle row and 1 RBD mirror path-recovery row.
+        self.assertEqual(len(self.rows), 86)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
         dedicated = {SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR,
-                     COMPRESSION_SELECTOR, SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR}
+                     COMPRESSION_SELECTOR, SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR, RBD_MIRROR_SELECTOR}
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak") and row.get("test_run") not in dedicated
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
@@ -123,6 +124,22 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         selector = re.compile(COPY_FROM_LATE_ERROR_SELECTOR)
         self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
         for unrelated in (expected + "Extended", "Prefix" + expected, "TestCephOSDCopyFromCompoundIntegration", "TestCephOSDCopyFromIntegration"):
+            self.assertIsNone(selector.search(unrelated))
+
+    def test_rbd_mirror_row_is_exclusive_single_bluestore_ipv4(self):
+        # The fixture derives its destination cluster and mirror daemon from
+        # this exact selector on the single-BlueStore IPv4 fixture; it needs no
+        # workflow opt-in and does not use the RBD base opt-in.
+        rows = [row for row in self.rows if row.get("test_run") == RBD_MIRROR_SELECTOR]
+        self.assertEqual(rows, [{
+            "key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
+            "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
+            "test_run": RBD_MIRROR_SELECTOR,
+        }])
+        expected = "TestCephRBDMirrorPathRecoveryIntegration"
+        selector = re.compile(RBD_MIRROR_SELECTOR)
+        self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
+        for unrelated in (expected + "Extended", "Prefix" + expected, "TestRBDMirrorRequiresExclusiveMarker", "TestCephRBDBaseIntegration"):
             self.assertIsNone(selector.search(unrelated))
 
     def test_copyfrom_multi_chunk_row_is_separate_and_exclusive(self):

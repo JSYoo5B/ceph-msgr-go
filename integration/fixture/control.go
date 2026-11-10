@@ -88,6 +88,9 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 	if err := c.controlRBDRequests(ctx, out); err != nil {
 		return err
 	}
+	if err := c.controlRBDMirrorRequest(ctx, out); err != nil {
+		return err
+	}
 	if err := c.controlMDSFreshRequest(ctx, out); err != nil {
 		return err
 	}
