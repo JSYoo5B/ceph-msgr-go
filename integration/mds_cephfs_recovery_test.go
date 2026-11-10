@@ -512,6 +512,7 @@ type recoveryRestartEvidence struct {
 	HeldCreateUnsafeToSafeMicros         int64
 	ReplayedUnsafeAfterTickMicros        int64
 	FireStarted, FireAcked               time.Time
+	FireState, FireError                 string
 	FireAckMicros                        int64
 	RedialHeldAt                         time.Time
 	RedialAfterFireMicros                int64
@@ -1200,6 +1201,209 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		return
 	}
 
+	// reconcileRestart runs once, after the restart leaf failed, under its own
+	// bounded context (the test context may be spent). It lifts the journal
+	// pause of a restart that was never fired, or waits until the issued
+	// restart's new incarnation is up:active and adopts it; it then removes
+	// the owned namespace through a session of that current incarnation and
+	// checks natively that the namespace and every owned session are gone.
+	// It never removes a blocklist entry: the fencing of a still-mapped
+	// incarnation stays, and the fixture cleanup removes only entries it can
+	// attribute. The leaf's own failure stays the result; reconciliation
+	// errors are added to it, never substituted for it.
+	reconcileRestart := func(t *testing.T, fireDone <-chan struct{}) {
+		rc, stop := context.WithTimeout(context.Background(), 4*time.Minute)
+		defer stop()
+		r := &recoveryReconcileEvidence{FailedAfterPhase: restart.Phase, Started: time.Now()}
+		restart.Reconcile = r
+		failf := func(format string, args ...any) {
+			message := fmt.Sprintf(format, args...)
+			r.Errors = append(r.Errors, message)
+			t.Errorf("reconcile after the restart leaf failed in phase %q: %s", r.FailedAfterPhase, message)
+		}
+		defer func() { r.Millis, r.Completed = time.Since(r.Started).Milliseconds(), len(r.Errors) == 0 }()
+		if fireDone != nil {
+			select {
+			case <-fireDone:
+			case <-rc.Done():
+				failf("the issued restart-fire request did not return")
+				return
+			}
+		}
+		r.FireOutcome = restart.FireState
+		switch {
+		case fireDone == nil || restart.FireState == "armed":
+			// Never fired: the armed incarnation still serves, so only a
+			// journal pause has to be lifted before the namespace removal.
+			if p := restart.Pause; p != nil && p.State == "applied" {
+				resumed, err := control.request(rc, "restart-resume", "")
+				if err != nil {
+					failf("lift the journal pause: %v", err)
+					return
+				}
+				r.Resumed = resumed.Restart.Pause
+			}
+		case restart.AdoptedGID != 0:
+			// Already adopted: only the namespace and sessions remain.
+		case restart.FireState == "applied" || restart.FireState == "uncertain":
+			// Stop resuming toward the failed incarnation, then confirm the
+			// active new incarnation before any other action.
+			connR.Close()
+			for {
+				status, err := control.request(rc, "restart-status", "")
+				if err != nil {
+					failf("read the restart status: %v", err)
+					return
+				}
+				s := status.RankStatus
+				r.StatusTimeline = append(r.StatusTimeline, recoveryStatusSample{AfterFireMillis: time.Since(restart.FireStarted).Milliseconds(), FSMapEpoch: s.FSMapEpoch, Rank0: s.Rank0,
+					Failed: s.Failed, ArmedPresent: s.ArmedPresent, ArmedBlocklist: s.ArmedBlocklist})
+				if s.Rank0 != nil && s.Rank0.GID != restart.ArmedGID && s.Rank0.Name == current.MDS.Name && s.Rank0.State == "up:active" && !s.ArmedPresent {
+					break
+				}
+				select {
+				case <-rc.Done():
+					failf("the new incarnation did not become active; the armed incarnation's fencing is kept")
+					return
+				case <-time.After(time.Second):
+				}
+			}
+			adopted, err := control.request(rc, "restart-adopt", "")
+			if err != nil {
+				failf("adopt the new incarnation: %v", err)
+				return
+			}
+			r.Adopted = adopted.Restart.Adopted
+			restart.Pause = adopted.Restart.Pause
+		default:
+			failf("the restart fire outcome is unknown (%q: %s); the fixture refuses every other action", restart.FireState, restart.FireError)
+			return
+		}
+		// A session of the current incarnation removes the owned entries.
+		session, agent := active, agentR
+		if active != nil && active != sessionR {
+			agent = agentR2
+		}
+		if session == nil || session.Status().State != cephmsgr.MDSSessionOpen {
+			r.CleanupSession = "fresh"
+			dials := newRecoveryDials(false, control.mds.Endpoint)
+			client := recoveryClient(t, rc, identity, keyFile, dials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS, o.EnableOSD = true, true, false })
+			r.FreshGlobalID = client.Snapshot().GlobalID
+			control.goGIDs[r.FreshGlobalID] = true
+			conn, err := client.OpenMDS(rc, cephmsgr.MDSTarget{FilesystemID: fresh.FSCID, Rank: 0, Address: fmt.Sprintf("v2:%s/%d", control.mds.Endpoint, control.mds.Nonce)})
+			if err != nil {
+				failf("open the current incarnation: %v", err)
+				return
+			}
+			if session, err = conn.OpenSession(rc, cephmsgr.MDSSessionOptions{Metadata: metadata("reconcile"), RenewInterval: 2 * time.Second, MaxEvents: 1024}); err != nil {
+				failf("open a cleanup session: %v", err)
+				return
+			}
+			agent = startCephFSCapAgent(rc, session)
+		} else {
+			r.CleanupSession = "active"
+		}
+		remove := func(op uint32, parent uint64, name string) {
+			removal := recoveryRemoval{Op: "unlink", Parent: parent, Name: name}
+			if op == cephmsgr.MDSOpRmdir {
+				removal.Op = "rmdir"
+			}
+			defer func() { r.Removals = append(r.Removals, removal) }()
+			if parent == 0 {
+				// The parent directory was never created.
+				removal.Absent = true
+				return
+			}
+			call, err := session.Submit(rc, cephmsgr.MDSRequest{Op: op, Path: cephmsgr.MDSFilePath{Ino: parent, Path: name}})
+			if err != nil {
+				removal.Error = err.Error()
+				failf("%s %s: %v", removal.Op, name, err)
+				return
+			}
+			removal.Transaction = call.Transaction()
+			wait, stopWait := context.WithTimeout(rc, 30*time.Second)
+			defer stopWait()
+			first, err := call.Wait(wait)
+			if err == nil {
+				_, _, err = agent.applyReply(name, first)
+			}
+			if err != nil {
+				removal.Error = err.Error()
+				failf("%s %s: %v", removal.Op, name, err)
+				return
+			}
+			removal.Result = first.Result
+			switch {
+			case first.Result == -int32(syscall.ENOENT):
+				removal.Absent = true
+				return
+			case first.Result != 0:
+				failf("%s %s returned %d", removal.Op, name, first.Result)
+				return
+			}
+			if !first.Safe {
+				if err := session.FlushJournal(wait); err != nil {
+					removal.Error = err.Error()
+					failf("flush the journal after %s %s: %v", removal.Op, name, err)
+					return
+				}
+				if safe, err := call.WaitSafe(wait); err != nil || safe.Result != 0 {
+					removal.Error = fmt.Sprint(err)
+					failf("%s %s was not made safe: %v", removal.Op, name, err)
+					return
+				}
+			}
+			removal.Absent = true
+		}
+		remove(cephmsgr.MDSOpUnlink, boundaryIno, plan.Replayed)
+		remove(cephmsgr.MDSOpRmdir, dirIno, plan.Boundary)
+		for _, name := range slices.Concat(plan.FlushPlain, plan.FlushRequested, []string{plan.Fenced, plan.Held, plan.Unanswered}) {
+			remove(cephmsgr.MDSOpUnlink, dirIno, name)
+		}
+		if dirIno != 0 {
+			remove(cephmsgr.MDSOpRmdir, 1, plan.Directory)
+		}
+		if heldDirIno != 0 {
+			remove(cephmsgr.MDSOpUnlink, heldDirIno, hf.File)
+			remove(cephmsgr.MDSOpRmdir, 1, hf.Directory)
+		}
+		items, barrier := agent.releaseAll()
+		if err := session.ReleaseCaps(rc, items, barrier); err != nil {
+			failf("release caps: %v", err)
+		}
+		closing, stopClose := context.WithTimeout(rc, 15*time.Second)
+		err := session.Close(closing)
+		stopClose()
+		if r.SessionClosed = err == nil && session.Status().State == cephmsgr.MDSSessionClosed; !r.SessionClosed {
+			failf("close the cleanup session: %v", err)
+		}
+		// Native readback of the namespace and of every owned session.
+		if st, err := control.stat(rc, "dir"); err != nil {
+			failf("native stat of the recovery directory: %v", err)
+		} else if r.RecoveryDirAbsent = !st.Exists && st.Errno == 2; !r.RecoveryDirAbsent {
+			failf("the recovery directory remains natively: %+v", st)
+		}
+		if st, err := control.request(rc, "stat", "dir"); err != nil || st.Native == nil || st.Native.Stat == nil {
+			failf("native stat of the metadata plan directory: %v", err)
+		} else if r.PlanDirAbsent = !st.Native.Stat.Exists && st.Native.Stat.Errno == 2; !r.PlanDirAbsent {
+			failf("the metadata plan directory remains natively: %+v", st.Native.Stat)
+		}
+		observed, err := control.request(rc, "observe", strconv.FormatUint(gidR, 10))
+		if err != nil {
+			failf("native session listing: %v", err)
+			return
+		}
+		r.Blocklist = observed.Blocklist
+		for _, gid := range []uint64{gidR, r.FreshGlobalID} {
+			if gid != 0 && observed.session(gid) != nil {
+				r.OwnedSessionsLeft = append(r.OwnedSessionsLeft, gid)
+			}
+		}
+		if len(r.OwnedSessionsLeft) != 0 {
+			failf("owned sessions remain natively: %v", r.OwnedSessionsLeft)
+		}
+	}
+
 	if !leaf("mds_restart_reconnect_replay", func(t *testing.T) {
 		armed, err := control.request(ctx, "restart-arm", "")
 		if err != nil {
@@ -1207,6 +1411,15 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		}
 		a := armed.Restart.Armed
 		restart.ArmedGID, restart.ArmedNonce, restart.ArmedIncarnation, restart.ArmedEndpoint = a.GID, a.Nonce, a.Incarnation, a.Endpoint
+		restart.Phase = "armed"
+		// From here a failure can leave a journal pause, an issued restart or
+		// owned namespace entries behind; reconcile them after this leaf.
+		var fireDone chan struct{}
+		t.Cleanup(func() {
+			if t.Failed() {
+				reconcileRestart(t, fireDone)
+			}
+		})
 		// The held file: create it and wait for the safe reply without asking
 		// for a journal flush, so the safe reply marks a journal tick.
 		call, first, trace, e := submitFirst(t, sessionR, agentR, "restart", plan.Held, create(dirIno, plan.Held))
@@ -1290,13 +1503,20 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			<-s.Done()
 			lostSeen <- time.Now()
 		}(sessionR)
-		fireDone := make(chan struct{})
+		fireDone = make(chan struct{})
 		var fireErr error
-		restart.FireStarted = time.Now()
+		restart.FireStarted, restart.Phase = time.Now(), "fired"
 		go func() {
 			defer close(fireDone)
-			_, fireErr = control.request(ctx, "restart-fire", "")
+			var fired nativeMDSCephFSReceipt
+			fired, fireErr = control.request(ctx, "restart-fire", "")
 			restart.FireAcked = time.Now()
+			if fired.Restart != nil {
+				restart.FireState = fired.Restart.State
+			}
+			if fireErr != nil {
+				restart.FireError = fireErr.Error()
+			}
 		}()
 		afterFire := func(at time.Time) int64 { return at.Sub(restart.FireStarted).Microseconds() }
 		// The first redial after the transport fault is held while a request
