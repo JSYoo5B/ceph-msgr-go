@@ -24,6 +24,8 @@ import (
 // journal pause and one owned restart of the rank-0 MDS daemon. The pause
 // (mds_log_pause on the armed incarnation) keeps the replayed create from being
 // journaled before the restart; it is lifted again if the restart is not fired.
+// Every command of the pause is addressed to the armed daemon GID, never to
+// the rank, so a daemon that replaces it in rank 0 cannot receive it.
 // The restart fails exactly the armed daemon
 // GID (`ceph mds fail <gid>`); the daemon respawns in its own container, takes
 // rank 0 again with a new GID and address nonce, and the fixture adopts that
@@ -34,7 +36,8 @@ import (
 // mds/MDSDaemon.cc (respawn after removal from the map), mds/MDSRank.cc
 // (evict_client, handle_conf_change, the scrub abort command), mds/MDLog.cc
 // (_submit_thread, flush), mds/ScrubStack.cc (scrub_abort),
-// mds/Server.cc (journal_and_reply, kill_session, reconnect) and
+// mds/Server.cc (journal_and_reply, kill_session, reconnect),
+// client/Client.cc (resolve_mds, mds_command), mds/FSMap.cc (parse_role) and
 // osd/PrimaryLogPG.cc (do_op blocklist check) at mdsFreshSource (LGPL-2.1
 // references; no code copied).
 
@@ -362,8 +365,9 @@ func (c *fixtureCluster) mdsCephFSRestartAct(ctx context.Context, id int64, acti
 		if r == nil || r.State != "armed" || r.Pause != nil || x.current.GID != r.Armed.GID {
 			return errors.New("MDS CephFS journal pause requires one armed, unfired restart and no earlier pause")
 		}
-		// The barrier below must abort nothing: rank 0 has to be idle.
-		data, err := c.mdsSessionsDaemon(ctx, "scrub", "status", "--format", "json")
+		// The barrier below must abort nothing: the armed incarnation has
+		// to be idle.
+		data, err := c.mdsCephFSTellGID(ctx, r.Armed.GID, "scrub", "status", "--format", "json")
 		if err != nil {
 			return err
 		}
@@ -380,7 +384,7 @@ func (c *fixtureCluster) mdsCephFSRestartAct(ctx context.Context, id int64, acti
 		if err := c.mdsCephFSJournal(); err != nil {
 			return err
 		}
-		if err := c.mdsCephFSSetJournalPause(ctx, p, true); err != nil {
+		if err := c.mdsCephFSSetJournalPause(ctx, r.Armed.GID, p, true); err != nil {
 			p.State, p.Error = "uncertain", err.Error()
 			return errors.Join(err, c.mdsCephFSJournal())
 		}
@@ -394,7 +398,9 @@ func (c *fixtureCluster) mdsCephFSRestartAct(ctx context.Context, id int64, acti
 		if !slices.Contains(slices.Collect(maps.Values(x.owned)), action.gid) {
 			return errors.New("MDS CephFS in-flight check is admitted only for an observed owned Go session")
 		}
-		data, err := c.mdsSessionsDaemon(ctx, "dump_ops_in_flight", "--format", "json")
+		// The op tracker read is the armed incarnation's own: a replacement
+		// in rank 0 has no such request and must not answer for it.
+		data, err := c.mdsCephFSTellGID(ctx, r.Armed.GID, "dump_ops_in_flight", "--format", "json")
 		if err != nil {
 			return err
 		}
@@ -418,7 +424,7 @@ func (c *fixtureCluster) mdsCephFSRestartAct(ctx context.Context, id int64, acti
 		if err := c.mdsCephFSJournal(); err != nil {
 			return err
 		}
-		if err := c.mdsCephFSSetJournalPause(ctx, p, false); err != nil {
+		if err := c.mdsCephFSSetJournalPause(ctx, r.Armed.GID, p, false); err != nil {
 			p.State, p.Error = "resume-uncertain", err.Error()
 			return errors.Join(err, c.mdsCephFSJournal())
 		}
@@ -491,7 +497,7 @@ func (c *fixtureCluster) mdsCephFSRestartAct(ctx context.Context, id int64, acti
 		if p := r.Pause; p != nil {
 			// The pause was runtime-only state of the removed incarnation;
 			// the adopted one must journal again.
-			value, err := c.mdsSessionsDaemonConfig(ctx, "mds_log_pause")
+			value, err := c.mdsCephFSGIDConfig(ctx, n.GID, "mds_log_pause")
 			if err != nil {
 				return err
 			}
@@ -513,29 +519,61 @@ func (c *fixtureCluster) mdsCephFSRestartAct(ctx context.Context, id int64, acti
 	return errors.New("MDS CephFS restart action is not admitted")
 }
 
-// mdsCephFSSetJournalPause sets mds_log_pause on the current rank 0 (which the
-// caller proves is the armed incarnation) and confirms that the MDSRank
-// finisher applied it: `scrub abort` on an idle rank 0 is answered from that
-// single finisher thread after the change queued before it
-// (MDSRankDispatcher::handle_conf_change, handle_asok_command and
-// ScrubStack::scrub_abort at mdsFreshSource). The readback reports the
-// daemon's configuration value.
-func (c *fixtureCluster) mdsCephFSSetJournalPause(ctx context.Context, p *mdsCephFSJournalPause, pause bool) error {
+// mdsCephFSTellGID sends one command to exactly the MDS incarnation gid:
+// `ceph tell mds.<gid>`. The CLI resolves the target in Client::resolve_mds
+// from the FSMap it has just fetched (Client::mds_command). A role such as
+// `<fs>:0` resolves to whichever daemon holds the rank at that moment, so a
+// command addressed that way follows a replacement. A decimal integer that is
+// not a rank of the legacy filesystem (FSMap::parse_role; the owned
+// filesystem has max_mds 1, so only 0 is a rank) is a daemon GID: it is used
+// only while that GID is in the FSMap and fails with ENOENT otherwise, and the
+// command is then sent to that incarnation's own addresses. A GID is never
+// reused, so no later incarnation can receive the command.
+func (c *fixtureCluster) mdsCephFSTellGID(ctx context.Context, gid uint64, args ...string) ([]byte, error) {
+	if gid == 0 {
+		// 0 would be read as rank 0 of the filesystem, not as a daemon.
+		return nil, errors.New("MDS CephFS daemon command requires a daemon GID")
+	}
+	run := c.mdsCephFS.ceph
+	if run == nil {
+		run = c.cluster.Ceph
+	}
+	return run(ctx, append([]string{"tell", "mds." + strconv.FormatUint(gid, 10)}, args...)...)
+}
+
+func (c *fixtureCluster) mdsCephFSGIDConfig(ctx context.Context, gid uint64, name string) (string, error) {
+	data, err := c.mdsCephFSTellGID(ctx, gid, "config", "get", name, "--format", "json")
+	if err != nil {
+		return "", err
+	}
+	return parseMDSSessionsDaemonConfig(data, name)
+}
+
+// mdsCephFSSetJournalPause sets mds_log_pause on the MDS incarnation gid (the
+// armed one) and confirms that its MDSRank finisher applied it: `scrub abort`
+// on an idle rank is answered from that single finisher thread after the
+// change queued before it (MDSRankDispatcher::handle_conf_change,
+// handle_asok_command and ScrubStack::scrub_abort at mdsFreshSource). The
+// readback reports the daemon's configuration value. The set, the barrier
+// and the readback are all addressed to gid (mdsCephFSTellGID): if that
+// incarnation leaves the map at any point, the remaining commands fail and
+// the daemon that took over its rank receives none of them.
+func (c *fixtureCluster) mdsCephFSSetJournalPause(ctx context.Context, gid uint64, p *mdsCephFSJournalPause, pause bool) error {
 	value := strconv.FormatBool(pause)
-	output, err := c.mdsSessionsDaemon(ctx, "config", "set", "mds_log_pause", value)
+	output, err := c.mdsCephFSTellGID(ctx, gid, "config", "set", "mds_log_pause", value)
 	if pause {
 		p.SetOutput = mdsCephFSBoundedOutput(output)
 	}
 	if err != nil {
 		return err
 	}
-	if output, err = c.mdsSessionsDaemon(ctx, "scrub", "abort"); pause {
+	if output, err = c.mdsCephFSTellGID(ctx, gid, "scrub", "abort"); pause {
 		p.BarrierOutput = mdsCephFSBoundedOutput(output)
 	}
 	if err != nil {
 		return err
 	}
-	readback, err := c.mdsSessionsDaemonConfig(ctx, "mds_log_pause")
+	readback, err := c.mdsCephFSGIDConfig(ctx, gid, "mds_log_pause")
 	if pause {
 		p.Readback = readback
 	} else {
@@ -592,9 +630,11 @@ func mdsCephFSFindBoundaryOp(data []byte, gid, tid uint64) (*mdsCephFSHistoricOp
 
 // finishMDSCephFSJournalPause lifts a journal pause that may still hold the
 // armed incarnation. A pause whose incarnation left the map was discarded
-// with it. Lifting is a restore of runtime state (`config set` false), so it
-// is applied even after an uncertain step; it is bracketed by rank status
-// reads that must both name the armed GID in rank 0.
+// with it: every pause command was addressed to the armed GID, so no other
+// daemon can carry it. Lifting is a restore of runtime state (`config set`
+// false) addressed to the armed GID as well, so it is applied even after an
+// uncertain step; it is bracketed by rank status reads that must both name
+// the armed GID in rank 0.
 func (c *fixtureCluster) finishMDSCephFSJournalPause(ctx context.Context, receipt *mdsCephFSCleanup, fail func(error)) {
 	x := c.mdsCephFS
 	if x.restart == nil || !x.restart.Pause.held() {
@@ -619,7 +659,7 @@ func (c *fixtureCluster) finishMDSCephFSJournalPause(ctx context.Context, receip
 	}
 	p.State = "resume-intended"
 	fail(c.mdsCephFSJournal())
-	err = c.mdsCephFSSetJournalPause(ctx, p, false)
+	err = c.mdsCephFSSetJournalPause(ctx, r.Armed.GID, p, false)
 	after, statusErr := c.mdsCephFSRankStatus(ctx)
 	if err == nil && (statusErr != nil || after.Rank0 == nil || after.Rank0.GID != r.Armed.GID) {
 		err = errors.Join(statusErr, errors.New("MDS CephFS rank 0 changed while the journal pause was lifted"))

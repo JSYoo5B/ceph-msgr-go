@@ -124,6 +124,10 @@ type mdsCephFSScope struct {
 	// owned maps session addresses of owned Go identities, observed through
 	// observe or eviction, to their GlobalID.
 	owned map[string]uint64
+	// ceph runs the native commands that are bound to one MDS incarnation
+	// (mdsCephFSTellGID). Nil selects the fixture cluster; unit tests install
+	// a model of the native target resolution.
+	ceph func(ctx context.Context, args ...string) ([]byte, error)
 }
 
 func (x *mdsCephFSScope) mutated(kind string) bool {
