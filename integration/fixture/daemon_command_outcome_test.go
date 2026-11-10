@@ -479,3 +479,86 @@ func TestDaemonCommandMutationsAreBoundToTheBaselineIncarnation(t *testing.T) {
 		}
 	}
 }
+
+// An MDS mutation is addressed to the GID that supplied the baseline. A
+// process that takes over the name after the preflight map read keeps its own
+// override.
+func TestMDSCommandMutationsReachOnlyTheBaselineGID(t *testing.T) {
+	if argv, err := daemonCommandMDSTell(4711, "config", "unset", "log_max_recent"); err != nil ||
+		!slices.Equal(argv, []string{"tell", "mds.4711", "config", "unset", "log_max_recent"}) {
+		t.Fatal("exact MDS target", argv, err)
+	}
+	if argv, err := daemonCommandMDSTell(0, "config", "unset", "log_max_recent"); err == nil {
+		t.Fatal("a rank was admitted as a daemon GID", argv)
+	}
+	token, target := strings.Repeat("f", 32), daemonCommandTarget{Kind: "mds", ID: "fs-a"}
+	for _, replaced := range []bool{false, true} {
+		for _, phase := range []string{"overwrite", "restore"} {
+			f := newFakeDaemonCommand(target.daemon())
+			baseline := "12000"
+			f.override = &baseline
+			var addressed []uint64
+			reads, phaseStart := 0, -1
+			backend := f.backend()
+			identity, socket := backend.identity, backend.adminSocket
+			backend.identity = func(ctx context.Context) daemonCommandIdentity {
+				read := identity(ctx)
+				reads++
+				if replaced && phaseStart >= 0 && reads == phaseStart+1 {
+					// The preflight read saw the baseline process. Its
+					// replacement comes up before the mutation is dispatched.
+					own := "15000"
+					f.incarnation, f.address, f.override = 6, "192.0.2.7:6800/2", &own
+				}
+				return read
+			}
+			backend.exact = func(ctx context.Context, gid uint64, args ...string) ([]byte, error) {
+				addressed = append(addressed, gid)
+				if gid != f.incarnation {
+					return nil, errors.New("Error ENOENT: problem getting command descriptions")
+				}
+				return socket(ctx, args...)
+			}
+			out := t.TempDir()
+			request := func(id int64, phase string) daemonCommandReceipt {
+				t.Helper()
+				if err := daemonCommandOutcome(context.Background(), out, id, token, phase, target, backend); err != nil {
+					t.Fatal(phase, err)
+				}
+				var receipt daemonCommandReceipt
+				data, err := os.ReadFile(filepath.Join(out, daemonCommandPrefix+token+"."+phase+".json"))
+				if err != nil || json.Unmarshal(data, &receipt) != nil {
+					t.Fatal(phase, err)
+				}
+				return receipt
+			}
+			if receipt := request(1, "initial"); !receipt.Restorable {
+				t.Fatal("baseline", receipt)
+			}
+			socketMutations := func() (sent []string) {
+				for _, call := range f.calls {
+					if strings.HasPrefix(call, "config set") || strings.HasPrefix(call, "config unset") {
+						sent = append(sent, call)
+					}
+				}
+				return sent
+			}
+			phaseStart = reads
+			receipt := request(2, phase)
+			m := receipt.Mutation
+			if m == nil || m.Refused || !slices.Equal(addressed, []uint64{5}) {
+				t.Fatal("the mutation was not addressed to the baseline GID once:", replaced, phase, m, addressed)
+			}
+			if replaced {
+				if m.OK || m.SameIncarnationAfter || len(socketMutations()) != 0 || *f.override != "15000" || daemonCommandState(receipt) != "15000/override=15000" {
+					t.Fatal("the replacement did not keep its own override:", phase, m, f.calls, daemonCommandState(receipt))
+				}
+				continue
+			}
+			want := map[string]string{"overwrite": "12002/override=12002", "restore": "12000/override=12000"}[phase]
+			if !m.OK || !m.SameIncarnationAfter || len(socketMutations()) != 1 || daemonCommandState(receipt) != want {
+				t.Fatal("the baseline incarnation did not receive its mutation:", phase, m, f.calls, daemonCommandState(receipt))
+			}
+		}
+	}
+}

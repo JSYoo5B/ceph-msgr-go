@@ -18,10 +18,13 @@ import (
 // Closed, test-only native observations for one applied OSD, PG or MDS command.
 //
 // A request names one owned daemon and, for the PG cell, one placement group
-// of that OSD. Every read and both mutations go through that daemon's own
-// admin socket, a local Unix socket independent of every Messenger connection
-// of the Go client under test. Each observation is bracketed by two fresh
-// native map reads of the daemon's identity:
+// of that OSD. Every read goes through that daemon's own admin socket, a
+// local Unix socket independent of every Messenger connection of the Go client
+// under test. The osd and pg mutations use the same socket. The two mds
+// mutations are sent by the native client as "tell mds.<GID>" with the GID
+// that supplied the baseline, on that client's own connection. Each
+// observation is bracketed by two fresh native map reads of the daemon's
+// identity:
 //
 //   - osd and pg: the OSD's entry in "osd dump" (up, up_from epoch and public
 //     v2 address with nonce);
@@ -50,9 +53,14 @@ import (
 // same up incarnation; otherwise the mutation is refused, nothing is sent and
 // nothing is claimed. The reads after the call are compared with the recorded
 // incarnation again. The admin socket is addressed by daemon name and does
-// not report that incarnation, so identity is not proven atomically with the
-// command: a daemon replaced between the map read and the admin-socket call
-// is not prevented, only reported by the reads after the call.
+// not report that incarnation, so for the osd and pg cells identity is not
+// proven atomically with the command: a daemon replaced between the map read
+// and the admin-socket call is not prevented, only reported by the reads
+// after the call. A decimal "mds.<GID>" target that is not a rank resolves
+// only while that GID is in the FSMap and is sent to that incarnation's own
+// addresses (FSMap::parse_role, src/mds/FSMap.cc, and the note at
+// mdsCephFSTellGID), and a GID is never reused, so a replacement MDS cannot
+// receive an mds mutation.
 //
 // Native behavior relied upon (Tentacle v20.2.4): OSD and MDS queue MCommand to
 // the common admin-socket handlers (src/osd/OSD.cc, src/mds/MDSDaemon.cc,
@@ -179,6 +187,21 @@ func (o daemonCommandOwner) incarnation(read daemonCommandIdentity) bool {
 type daemonCommandBackend struct {
 	identity    func(context.Context) daemonCommandIdentity
 	adminSocket func(ctx context.Context, args ...string) ([]byte, error)
+	// exact, when set, sends one mutation to the daemon incarnation alone, so
+	// that no later process under the same name can receive it. Without it a
+	// mutation uses adminSocket.
+	exact func(ctx context.Context, incarnation uint64, args ...string) ([]byte, error)
+}
+
+// mutate sends one claimed mutation for the incarnation that supplied the
+// baseline.
+func (b daemonCommandBackend) mutate(ctx context.Context, incarnation uint64, args ...string) ([]byte, error) {
+	if b.exact == nil {
+		return b.call(ctx, args...)
+	}
+	call, cancel := context.WithTimeout(ctx, mgrTellCallTimeout)
+	defer cancel()
+	return b.exact(call, incarnation, args...)
 }
 
 func (b daemonCommandBackend) call(ctx context.Context, args ...string) ([]byte, error) {
@@ -336,7 +359,7 @@ func daemonCommandOutcome(ctx context.Context, out string, requestID int64, toke
 				if err := daemonCommandJournal(out, started); err != nil {
 					return err
 				}
-				output, callErr := backend.call(ctx, args...)
+				output, callErr := backend.mutate(ctx, owner.Incarnation, args...)
 				receipt.Mutation.OK, receipt.Mutation.Error, receipt.Mutation.OutputBytes = callErr == nil, mgrTellDiagnostic(callErr), len(output)
 			}
 		}
@@ -433,6 +456,16 @@ func daemonCommandMDSIdentity(name string, data []byte, err error) daemonCommand
 	return observed
 }
 
+// daemonCommandMDSTell is the native client command for one mutation of one
+// MDS incarnation.
+func daemonCommandMDSTell(gid uint64, args ...string) ([]string, error) {
+	if gid == 0 {
+		// 0 would be read as rank 0 of the filesystem, not as a daemon.
+		return nil, errors.New("owned MDS mutation requires a daemon GID")
+	}
+	return append([]string{"tell", "mds." + strconv.FormatUint(gid, 10)}, args...), nil
+}
+
 func (c *fixtureCluster) daemonCommandBackend(ctx context.Context, target daemonCommandTarget) (daemonCommandBackend, error) {
 	mapRead := func(call context.Context, args ...string) ([]byte, error) {
 		bounded, cancel := context.WithTimeout(call, daemonCommandMapTimeout)
@@ -460,6 +493,13 @@ func (c *fixtureCluster) daemonCommandBackend(ctx context.Context, target daemon
 						return nil, errors.Join(err, fmt.Errorf("owned MDS admin socket %s did not complete (exit %d, timed out %v)", args[0], process.ExitCode, process.TimedOut))
 					}
 					return bytes.TrimSpace(process.Stdout), nil
+				},
+				exact: func(call context.Context, gid uint64, args ...string) ([]byte, error) {
+					argv, err := daemonCommandMDSTell(gid, args...)
+					if err != nil {
+						return nil, err
+					}
+					return c.cluster.Ceph(call, argv...)
 				},
 			}, nil
 		}
