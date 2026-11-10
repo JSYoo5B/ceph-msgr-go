@@ -33,12 +33,13 @@ import (
 // osd/PrimaryLogPG.cc (do_op blocklist check) at mdsFreshSource (LGPL-2.1
 // references; no code copied).
 
-// mdsCephFSRecoveryNames is the closed set of file names in the recovery
-// directory. Directory and payload are token-bound.
+// mdsCephFSRecoveryNames is the closed set of recovery targets. All are
+// entries of the recovery directory except "replayed", which is the only entry
+// of the "boundary" subdirectory. Directory and payload are token-bound.
 var mdsCephFSRecoveryNames = []string{
 	"flush-plain-0", "flush-plain-1", "flush-plain-2",
 	"flush-requested-0", "flush-requested-1", "flush-requested-2",
-	"fenced", "held", "replayed", "unanswered",
+	"fenced", "held", "boundary", "replayed", "unanswered",
 }
 
 const mdsCephFSFencedBytes = 5000
@@ -49,6 +50,7 @@ type mdsCephFSRecoveryPlan struct {
 	FlushRequested   []string `json:"flush_requested"`
 	Fenced           string   `json:"fenced"`
 	Held             string   `json:"held"`
+	Boundary         string   `json:"boundary"`
 	Replayed         string   `json:"replayed"`
 	Unanswered       string   `json:"unanswered"`
 	FencedPayloadHex string   `json:"fenced_payload_hex"`
@@ -64,7 +66,7 @@ func mdsCephFSRecoveryPlanFor(token string) mdsCephFSRecoveryPlan {
 	}
 	return mdsCephFSRecoveryPlan{Directory: "ceph-msgr-cephfs-" + token + "-recovery",
 		FlushPlain: []string{"flush-plain-0", "flush-plain-1", "flush-plain-2"}, FlushRequested: []string{"flush-requested-0", "flush-requested-1", "flush-requested-2"},
-		Fenced: "fenced", Held: "held", Replayed: "replayed", Unanswered: "unanswered", FencedPayloadHex: hex.EncodeToString(payload[:mdsCephFSFencedBytes])}
+		Fenced: "fenced", Held: "held", Boundary: "boundary", Replayed: "replayed", Unanswered: "unanswered", FencedPayloadHex: hex.EncodeToString(payload[:mdsCephFSFencedBytes])}
 }
 
 // path maps a closed recovery target to its absolute path. The directory
@@ -77,6 +79,10 @@ func (p mdsCephFSRecoveryPlan) path(target string) (string, error) {
 	switch {
 	case target == "dir":
 		return root, nil
+	case target == "replayed":
+		// The replayed create has a fresh parent whose scatter locks carry
+		// no aged dirty state (see MDS_CEPHFS_RECOVERY_VALIDATION.md).
+		return root + "/boundary/" + target, nil
 	case slices.Contains(mdsCephFSRecoveryNames, target):
 		return root + "/" + target, nil
 	}

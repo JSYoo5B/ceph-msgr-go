@@ -95,16 +95,17 @@ func TestMDSCephFSIdentityCapsAndPlan(t *testing.T) {
 	}
 	recovery := mdsCephFSRecoveryPlanFor(token)
 	fenced, _ := hex.DecodeString(recovery.FencedPayloadHex)
-	if recovery.Directory != "ceph-msgr-cephfs-"+token+"-recovery" || len(fenced) != mdsCephFSFencedBytes || recovery.Held != "held" || recovery.Replayed != "replayed" || recovery.Unanswered != "unanswered" ||
+	if recovery.Directory != "ceph-msgr-cephfs-"+token+"-recovery" || len(fenced) != mdsCephFSFencedBytes || recovery.Held != "held" || recovery.Boundary != "boundary" || recovery.Replayed != "replayed" || recovery.Unanswered != "unanswered" ||
 		!reflect.DeepEqual(recovery, mdsCephFSRecoveryPlanFor(token)) || reflect.DeepEqual(recovery, mdsCephFSRecoveryPlanFor(strings.Repeat("b2", 16))) {
 		t.Fatal("owned recovery plan changed or is not token-bound", recovery.Directory, len(fenced))
 	}
-	for target, want := range map[string]string{"dir": "/" + recovery.Directory, "fenced": "/" + recovery.Directory + "/fenced", "flush-requested-2": "/" + recovery.Directory + "/flush-requested-2"} {
+	for target, want := range map[string]string{"dir": "/" + recovery.Directory, "fenced": "/" + recovery.Directory + "/fenced", "flush-requested-2": "/" + recovery.Directory + "/flush-requested-2",
+		"boundary": "/" + recovery.Directory + "/boundary", "replayed": "/" + recovery.Directory + "/boundary/replayed"} {
 		if got, err := recovery.path(target); err != nil || got != want {
 			t.Fatal("owned recovery path changed", target, got, err)
 		}
 	}
-	for _, target := range []string{"", "go-file", "native-0", "flush-plain-3", "held/x", ".."} {
+	for _, target := range []string{"", "go-file", "native-0", "flush-plain-3", "held/x", "..", "boundary/replayed", "boundary/held"} {
 		if _, err := recovery.path(target); err == nil {
 			t.Fatal("unowned recovery target admitted", target)
 		}

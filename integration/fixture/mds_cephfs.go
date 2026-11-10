@@ -223,7 +223,7 @@ import cephfs, fcntl, json, os, sys, time
 identity, fsname, directory, action, path = sys.argv[1:6]
 extra = sys.argv[6:]
 prefix = '/' + directory
-if not directory.startswith('ceph-msgr-cephfs-') or '/' in directory or not (path == prefix or (path.startswith(prefix + '/') and path.count('/') == 2)):
+if not directory.startswith('ceph-msgr-cephfs-') or '/' in directory or not (path == prefix or (path.startswith(prefix + '/') and (path.count('/') == 2 or path == prefix + '/boundary/replayed'))):
     raise ValueError('path outside the owned directory')
 MASK = 0x30f
 fs = cephfs.LibCephFS(conffile='/tmp/ceph-msgr-test/ceph.conf', auth_id=identity.removeprefix('client.'), conf={'key': NATIVE_KEY})
