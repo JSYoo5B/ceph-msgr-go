@@ -44,6 +44,16 @@ import (
 // call and submitted at most once per token; one that did not return
 // successfully is recorded as it returned and is never repeated.
 //
+// The baseline belongs to one daemon incarnation, recorded with it: the OSD's
+// up_from epoch or the MDS GID, and the public address with its nonce.
+// Immediately before either mutation a fresh native map read must show that
+// same up incarnation; otherwise the mutation is refused, nothing is sent and
+// nothing is claimed. The reads after the call are compared with the recorded
+// incarnation again. The admin socket is addressed by daemon name and does
+// not report that incarnation, so identity is not proven atomically with the
+// command: a daemon replaced between the map read and the admin-socket call
+// is not prevented, only reported by the reads after the call.
+//
 // Native behavior relied upon (Tentacle v20.2.4): OSD and MDS queue MCommand to
 // the common admin-socket handlers (src/osd/OSD.cc, src/mds/MDSDaemon.cc,
 // src/common/admin_socket.cc), PG-routed commands reach PrimaryLogPG::do_command
@@ -150,9 +160,19 @@ type daemonCommandReceipt struct {
 }
 
 type daemonCommandOwner struct {
-	Token    string              `json:"token"`
-	Target   daemonCommandTarget `json:"target"`
-	Baseline *mgrTellBaseline    `json:"baseline,omitempty"`
+	Token  string              `json:"token"`
+	Target daemonCommandTarget `json:"target"`
+	// Incarnation and Address are the daemon process that supplied the
+	// baseline.
+	Incarnation uint64           `json:"incarnation"`
+	Address     string           `json:"address"`
+	Baseline    *mgrTellBaseline `json:"baseline,omitempty"`
+}
+
+// incarnation reports whether one map read shows the baseline's daemon.
+func (o daemonCommandOwner) incarnation(read daemonCommandIdentity) bool {
+	return o.Incarnation != 0 && o.Address != "" && read.OK && read.Up && read.Daemon == o.Target.daemon() &&
+		read.Incarnation == o.Incarnation && read.Address == o.Address
 }
 
 // daemonCommandBackend is the native surface of one request for one target.
@@ -282,7 +302,8 @@ func daemonCommandOutcome(ctx context.Context, out string, requestID int64, toke
 		receipt.Restorable, receipt.Baseline = daemonCommandRestorable(receipt.Views, target)
 		if receipt.Restorable {
 			// A repeated initial request cannot replace the first baseline.
-			if err := mgrTellWriteExclusive(ownerPath, daemonCommandOwner{token, target, receipt.Baseline}); err != nil {
+			before := receipt.Views.DaemonBefore
+			if err := mgrTellWriteExclusive(ownerPath, daemonCommandOwner{token, target, before.Incarnation, before.Address, receipt.Baseline}); err != nil {
 				return fmt.Errorf("record the daemon command baseline: %w", err)
 			}
 		}
@@ -298,21 +319,31 @@ func daemonCommandOutcome(ctx context.Context, out string, requestID int64, toke
 			if err != nil {
 				return err
 			}
-			// Claim the one allowed mutation before crossing the native call.
-			// A call that does not return leaves this marker uncertain; no
-			// retry may repeat it.
-			started := receipt
-			started.State = phase + "-started-outcome-unknown"
-			if err := mgrTellWriteExclusive(filepath.Join(out, daemonCommandPrefix+token+"."+phase+"-started.json"), started); err != nil {
-				return fmt.Errorf("daemon command %s was already claimed: %w", phase, err)
+			receipt.Mutation = &mgrTellMutation{Action: phase, Args: args}
+			// The values come from one process's baseline. A stale or
+			// unverifiable owner is refused before anything is claimed or sent.
+			if !owner.incarnation(backend.identity(ctx)) {
+				receipt.Mutation.Refused, receipt.Mutation.Error = true, mgrTellRefusal
+			} else {
+				// Claim the one allowed mutation before crossing the native
+				// call. A call that does not return leaves this marker
+				// uncertain; no retry may repeat it.
+				started := receipt
+				started.State = phase + "-started-outcome-unknown"
+				if err := mgrTellWriteExclusive(filepath.Join(out, daemonCommandPrefix+token+"."+phase+"-started.json"), started); err != nil {
+					return fmt.Errorf("daemon command %s was already claimed: %w", phase, err)
+				}
+				if err := daemonCommandJournal(out, started); err != nil {
+					return err
+				}
+				output, callErr := backend.call(ctx, args...)
+				receipt.Mutation.OK, receipt.Mutation.Error, receipt.Mutation.OutputBytes = callErr == nil, mgrTellDiagnostic(callErr), len(output)
 			}
-			if err := daemonCommandJournal(out, started); err != nil {
-				return err
-			}
-			output, callErr := backend.call(ctx, args...)
-			receipt.Mutation = &mgrTellMutation{Action: phase, Args: args, OK: callErr == nil, Error: mgrTellDiagnostic(callErr), OutputBytes: len(output)}
 		}
 		receipt.Views = backend.views(ctx, target)
+		if m := receipt.Mutation; m != nil && !m.Refused {
+			m.SameIncarnationAfter = owner.incarnation(receipt.Views.DaemonBefore) && owner.incarnation(receipt.Views.DaemonAfter)
+		}
 	}
 	if err := mgrTellPublish(out, daemonCommandPrefix+token+"."+phase+".json", receipt); err != nil {
 		return err

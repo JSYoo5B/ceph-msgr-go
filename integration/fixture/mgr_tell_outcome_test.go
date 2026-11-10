@@ -24,7 +24,9 @@ type fakeMgrTell struct {
 	mapErr    error
 	// swap replaces the active manager after this many MgrMap reads.
 	swapAfter int
-	mapReads  int
+	// restartAfter gives the same name a new GID after this many MgrMap reads.
+	restartAfter int
+	mapReads     int
 }
 
 func (f *fakeMgrTell) backend() mgrTellBackend {
@@ -35,6 +37,9 @@ func (f *fakeMgrTell) backend() mgrTellBackend {
 				return managerPreparationMap{}, f.mapErr
 			}
 			name, gid := f.active, f.gid
+			if f.restartAfter != 0 && f.mapReads > f.restartAfter {
+				gid += 832
+			}
 			if f.swapAfter != 0 && f.mapReads > f.swapAfter {
 				name, gid = map[string]string{"a": "b", "b": "a"}[name], gid+1
 			}
@@ -295,5 +300,76 @@ func TestMgrTellOptionDiffProjectsOnlyTheOwnedOption(t *testing.T) {
 	}
 	if diff := mgrTellOptionDiff([]byte(`{"diff":{}}`), errors.New("exit 22")); diff.OK || diff.Valid {
 		t.Fatal("a failed diff call established override absence")
+	}
+}
+
+func mgrTellMutatingCalls(calls []string) (mutating []string) {
+	for _, call := range calls {
+		if strings.Contains(call, ":config set ") || strings.Contains(call, ":config unset ") {
+			mutating = append(mutating, call)
+		}
+	}
+	return mutating
+}
+
+// The overwrite and restoration values come from one manager process. When
+// that process is replaced under the same name, fails over, or cannot be
+// verified, neither mutation is sent: the replacement keeps its own override.
+func TestMgrTellMutationsAreBoundToTheBaselineIncarnation(t *testing.T) {
+	token := strings.Repeat("e", 32)
+	for name, change := range map[string]func(f *fakeMgrTell, out string){
+		"replaced under the same name": func(f *fakeMgrTell, _ string) { f.gid = 4999 },
+		"failed over to the standby":   func(f *fakeMgrTell, _ string) { f.active = "b" },
+		"map read failed":              func(f *fakeMgrTell, _ string) { f.mapErr = errors.New("timeout") },
+		"owner record without a GID": func(_ *fakeMgrTell, out string) {
+			path := filepath.Join(out, mgrTellPrefix+token+".baseline.json")
+			var owner mgrTellOwner
+			data, err := os.ReadFile(path)
+			if err != nil || json.Unmarshal(data, &owner) != nil || owner.GID != 4167 {
+				t.Fatal("the baseline did not record its incarnation", owner, err)
+			}
+			owner.GID = 0
+			data, _ = json.Marshal(owner)
+			if err := os.WriteFile(path, data, 0644); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		for _, phase := range []string{"overwrite", "restore"} {
+			f := &fakeMgrTell{active: "a", gid: 4167, overrides: map[string]string{"a": "12000"}}
+			out := t.TempDir()
+			if _, err := mgrTellRequest(t, f, out, "1", token, "initial", "a"); err != nil {
+				t.Fatal(err)
+			}
+			// The replacement process has its own override.
+			f.overrides["a"] = "15000"
+			change(f, out)
+			receipt, err := mgrTellRequest(t, f, out, "2", token, phase, "a")
+			if err != nil || receipt.Mutation == nil || !receipt.Mutation.Refused || receipt.Mutation.OK || receipt.Mutation.SameIncarnationAfter ||
+				receipt.Mutation.Error != mgrTellRefusal || receipt.Mutation.Action != phase {
+				t.Fatal("a mutation for a stale or unverifiable owner was not refused:", name, phase, receipt.Mutation, err)
+			}
+			if sent := mgrTellMutatingCalls(f.calls); len(sent) != 0 || f.overrides["a"] != "15000" {
+				t.Fatal("the replacement received a mutating call:", name, phase, sent, f.overrides["a"])
+			}
+			// A refusal claims nothing: it is not an uncertain mutation.
+			if _, err := os.Stat(filepath.Join(out, mgrTellPrefix+token+"."+phase+"-started.json")); err == nil {
+				t.Fatal("a refused mutation was claimed:", name, phase)
+			}
+		}
+	}
+	// The same incarnation passes the check, and a replacement that happens
+	// after the check is reported by the reads after the call.
+	for _, restartAfter := range []int{0, 3} {
+		f := &fakeMgrTell{active: "a", gid: 4167, overrides: map[string]string{"a": "12000"}, restartAfter: restartAfter}
+		out := t.TempDir()
+		if _, err := mgrTellRequest(t, f, out, "1", token, "initial", "a"); err != nil {
+			t.Fatal(err)
+		}
+		receipt, err := mgrTellRequest(t, f, out, "2", token, "restore", "a")
+		if err != nil || receipt.Mutation == nil || receipt.Mutation.Refused || !receipt.Mutation.OK || receipt.Mutation.SameIncarnationAfter != (restartAfter == 0) ||
+			len(mgrTellMutatingCalls(f.calls)) != 1 {
+			t.Fatal("the incarnation checks around a sent mutation", restartAfter, receipt.Mutation, err, f.calls)
+		}
 	}
 }

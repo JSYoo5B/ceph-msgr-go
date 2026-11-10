@@ -406,3 +406,76 @@ func TestMDSCommandsProfileAdmitsOnlyTheExplicitAppliedCommandSelector(t *testin
 		}
 	}
 }
+
+// The overwrite and restoration values come from one daemon process. When
+// that process is replaced, down, or cannot be verified, neither mutation is
+// sent: the replacement keeps its own state.
+func TestDaemonCommandMutationsAreBoundToTheBaselineIncarnation(t *testing.T) {
+	token := strings.Repeat("e", 32)
+	mutating := func(calls []string) (sent []string) {
+		for _, call := range calls {
+			if strings.HasPrefix(call, "config set") || strings.HasPrefix(call, "config unset") || strings.HasPrefix(call, "scrubdebug") {
+				sent = append(sent, call)
+			}
+		}
+		return sent
+	}
+	for _, target := range []daemonCommandTarget{{Kind: "osd", ID: "0"}, {Kind: "pg", ID: "0", PGID: "2.0"}, {Kind: "mds", ID: "fs-a"}} {
+		for name, change := range map[string]func(f *fakeDaemonCommand, out string){
+			"new map incarnation": func(f *fakeDaemonCommand, _ string) { f.incarnation = 9 },
+			"new address nonce":   func(f *fakeDaemonCommand, _ string) { f.address = "192.0.2.7:6800/77" },
+			"map read failed":     func(f *fakeDaemonCommand, _ string) { f.mapErr = errors.New("timeout") },
+			"owner record without an incarnation": func(_ *fakeDaemonCommand, out string) {
+				path := filepath.Join(out, daemonCommandPrefix+token+".baseline.json")
+				var owner daemonCommandOwner
+				data, err := os.ReadFile(path)
+				if err != nil || json.Unmarshal(data, &owner) != nil || owner.Incarnation != 5 || owner.Address != "192.0.2.7:6800/1" {
+					t.Fatal("the baseline did not record its incarnation", owner, err)
+				}
+				owner.Incarnation, owner.Address = 0, ""
+				data, _ = json.Marshal(owner)
+				if err := os.WriteFile(path, data, 0644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		} {
+			for _, phase := range []string{"overwrite", "restore"} {
+				f := newFakeDaemonCommand(target.daemon())
+				out := t.TempDir()
+				if receipt, err := daemonCommandRequest(t, f, out, 1, token, "initial", target); err != nil || !receipt.Restorable {
+					t.Fatal("baseline", target, receipt, err)
+				}
+				// The replacement process has its own state.
+				own := "15000"
+				f.override, f.flag = &own, true
+				change(f, out)
+				receipt, err := daemonCommandRequest(t, f, out, 2, token, phase, target)
+				if err != nil || receipt.Mutation == nil || !receipt.Mutation.Refused || receipt.Mutation.OK || receipt.Mutation.SameIncarnationAfter ||
+					receipt.Mutation.Error != mgrTellRefusal || receipt.Mutation.Action != phase {
+					t.Fatal("a mutation for a stale or unverifiable owner was not refused:", target, name, phase, receipt.Mutation, err)
+				}
+				if sent := mutating(f.calls); len(sent) != 0 || *f.override != "15000" || !f.flag {
+					t.Fatal("the replacement received a mutating call:", target, name, phase, sent)
+				}
+				if _, err := os.Stat(filepath.Join(out, daemonCommandPrefix+token+"."+phase+"-started.json")); err == nil {
+					t.Fatal("a refused mutation was claimed:", target, name, phase)
+				}
+			}
+		}
+		// The same incarnation passes the check, and a replacement that
+		// happens after the check is reported by the reads after the call.
+		for _, restartAfter := range []int{0, 3} {
+			f := newFakeDaemonCommand(target.daemon())
+			f.restartAfter = restartAfter
+			out := t.TempDir()
+			if _, err := daemonCommandRequest(t, f, out, 1, token, "initial", target); err != nil {
+				t.Fatal(err)
+			}
+			receipt, err := daemonCommandRequest(t, f, out, 2, token, "restore", target)
+			if err != nil || receipt.Mutation == nil || receipt.Mutation.Refused || !receipt.Mutation.OK || receipt.Mutation.SameIncarnationAfter != (restartAfter == 0) ||
+				len(mutating(f.calls)) != 1 {
+				t.Fatal("the incarnation checks around a sent mutation", target, restartAfter, receipt.Mutation, err, f.calls)
+			}
+		}
+	}
+}

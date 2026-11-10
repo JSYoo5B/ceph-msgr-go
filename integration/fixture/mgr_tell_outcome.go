@@ -35,6 +35,17 @@ import (
 // A mutation whose CLI did not exit successfully is recorded as it returned
 // and is never repeated: its outcome stays uncertain for the caller.
 //
+// The baseline belongs to one daemon incarnation: the active manager's GID is
+// recorded with it. Immediately before either mutation a fresh native MgrMap
+// read must show that same name and GID as the available active manager;
+// otherwise the mutation is refused, nothing is sent and nothing is claimed,
+// so a replacement process never receives a value derived from another
+// process's baseline. The reads after the call are compared with the recorded
+// GID again. The admin socket is addressed by daemon name and reports no GID,
+// so identity is not proven atomically with the command: a manager replaced
+// between the map read and the admin-socket call is not prevented, only
+// reported by the reads after the call.
+//
 // Native behavior relied upon (Tentacle v20.2.4): the common admin-socket
 // "config set/get/unset" and "config diff get" handlers registered in every
 // daemon process (src/common/ceph_context.cc), and the runtime override layer
@@ -111,12 +122,20 @@ type mgrTellBaseline struct {
 }
 
 type mgrTellMutation struct {
-	Action      string   `json:"action"`
-	Args        []string `json:"args"`
-	OK          bool     `json:"ok"`
-	Error       string   `json:"error"`
-	OutputBytes int      `json:"output_bytes"`
+	Action string   `json:"action"`
+	Args   []string `json:"args"`
+	// Refused reports that the baseline's daemon incarnation was not verified
+	// immediately before the call, so no native command was sent or claimed.
+	Refused     bool   `json:"refused"`
+	OK          bool   `json:"ok"`
+	Error       string `json:"error"`
+	OutputBytes int    `json:"output_bytes"`
+	// SameIncarnationAfter reports that both map reads after the call still
+	// showed the baseline's incarnation.
+	SameIncarnationAfter bool `json:"same_incarnation_after"`
 }
+
+const mgrTellRefusal = "refused before the native call: the baseline's daemon incarnation is not verified"
 
 type mgrTellReceipt struct {
 	RequestID int64            `json:"request_id"`
@@ -130,9 +149,16 @@ type mgrTellReceipt struct {
 }
 
 type mgrTellOwner struct {
-	Token    string          `json:"token"`
-	Target   string          `json:"target"`
+	Token  string `json:"token"`
+	Target string `json:"target"`
+	// GID is the active manager incarnation that supplied the baseline.
+	GID      uint64          `json:"gid"`
 	Baseline mgrTellBaseline `json:"baseline"`
+}
+
+// incarnation reports whether one map read shows the baseline's manager.
+func (o mgrTellOwner) incarnation(read mgrTellManager) bool {
+	return o.GID != 0 && read.OK && read.Available && read.ActiveName == o.Target && read.ActiveGID == o.GID
 }
 
 // mgrTellBackend is the native surface of one request: a fresh MgrMap read and
@@ -422,7 +448,7 @@ func mgrTellOutcome(ctx context.Context, out string, fields []string, backend mg
 		receipt.Baseline = mgrTellRestorable(receipt.Views, target)
 		if receipt.Baseline != nil {
 			// A repeated initial request cannot replace the first baseline.
-			if err := mgrTellWriteExclusive(ownerPath, mgrTellOwner{token, target, *receipt.Baseline}); err != nil {
+			if err := mgrTellWriteExclusive(ownerPath, mgrTellOwner{token, target, receipt.Views.ManagerBefore.ActiveGID, *receipt.Baseline}); err != nil {
 				return fmt.Errorf("record the MGR Tell baseline: %w", err)
 			}
 		}
@@ -444,21 +470,31 @@ func mgrTellOutcome(ctx context.Context, out string, fields []string, backend mg
 			if err != nil {
 				return err
 			}
-			// Claim the one allowed mutation before crossing the native call.
-			// A call that does not return leaves this marker uncertain; no
-			// retry may repeat it.
-			started := receipt
-			started.State = phase + "-started-outcome-unknown"
-			if err := mgrTellWriteExclusive(filepath.Join(out, mgrTellPrefix+token+"."+phase+"-started.json"), started); err != nil {
-				return fmt.Errorf("MGR Tell %s was already claimed: %w", phase, err)
+			receipt.Mutation = &mgrTellMutation{Action: phase, Args: args}
+			// The values come from one process's baseline. A stale or
+			// unverifiable owner is refused before anything is claimed or sent.
+			if !owner.incarnation(backend.manager(ctx)) {
+				receipt.Mutation.Refused, receipt.Mutation.Error = true, mgrTellRefusal
+			} else {
+				// Claim the one allowed mutation before crossing the native
+				// call. A call that does not return leaves this marker
+				// uncertain; no retry may repeat it.
+				started := receipt
+				started.State = phase + "-started-outcome-unknown"
+				if err := mgrTellWriteExclusive(filepath.Join(out, mgrTellPrefix+token+"."+phase+"-started.json"), started); err != nil {
+					return fmt.Errorf("MGR Tell %s was already claimed: %w", phase, err)
+				}
+				if err := mgrTellJournal(out, started); err != nil {
+					return err
+				}
+				output, callErr := backend.call(ctx, target, args...)
+				receipt.Mutation.OK, receipt.Mutation.Error, receipt.Mutation.OutputBytes = callErr == nil, mgrTellDiagnostic(callErr), len(output)
 			}
-			if err := mgrTellJournal(out, started); err != nil {
-				return err
-			}
-			output, callErr := backend.call(ctx, target, args...)
-			receipt.Mutation = &mgrTellMutation{Action: phase, Args: args, OK: callErr == nil, Error: mgrTellDiagnostic(callErr), OutputBytes: len(output)}
 		}
 		receipt.Views = backend.views(ctx, target)
+		if m := receipt.Mutation; m != nil && !m.Refused {
+			m.SameIncarnationAfter = owner.incarnation(receipt.Views.ManagerBefore) && owner.incarnation(receipt.Views.ManagerAfter)
+		}
 	}
 	if err := mgrTellPublish(out, mgrTellPrefix+token+"."+phase+".json", receipt); err != nil {
 		return err
