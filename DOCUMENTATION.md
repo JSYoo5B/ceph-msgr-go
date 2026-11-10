@@ -103,8 +103,11 @@ answer.
 5. **Observed native result.** Open the validation record linked from the
    coverage row. The receipt row in
    [PROTOCOL_EVIDENCE.md](cephmsgr/PROTOCOL_EVIDENCE.md#native-receipts)
-   states its attribution category, tested commit, profile and outcome in one
-   line. A receipt belongs to the commit and profile it names and to no other.
+   states its attribution category (exact commit, file hashes or historical
+   source), the profile and the actual boundary of the observation in one
+   line. Receipts are not all live Go exchanges: some are offline native
+   encoder vectors, and the entry says so. A receipt belongs to the source
+   and profile it names and to no other.
 6. **Remaining limits.** Read the "Not verified" section of the validation
    record and the limits of the wire contract. Product gaps across areas are
    listed under

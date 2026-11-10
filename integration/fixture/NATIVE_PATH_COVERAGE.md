@@ -69,7 +69,8 @@ attribution of a native result:
 - the public and wire contract of a path is the contract linked from its row
   or from [PROTOCOL_EVIDENCE.md](../../cephmsgr/PROTOCOL_EVIDENCE.md);
 - the tested source, profile and observed result are in the linked validation
-  record, summarized with their attribution in
+  record. Where a receipt joins that record to a product wire row, its
+  attribution is summarized in
   [PROTOCOL_EVIDENCE.md](../../cephmsgr/PROTOCOL_EVIDENCE.md#native-receipts);
 - how a scenario ID is selected and gated is in
   [the scenario README](../../.github/scenarios/README.md).

@@ -21,12 +21,20 @@ A unit selector is one concrete check of the row, not exhaustive failure coverag
 This document owns one step of a longer trace. To follow a feature from its
 public contract and pinned wire reference through implementation status and
 catalog scenario to the observed native result and its remaining limits, see
-[Tracing one feature](../DOCUMENTATION.md#tracing-one-feature). A row here
-names the Go-originated receipts only; a native-only fixture recipe for the
-same operation (for example the SET_CHUNK checkpoint OSD-24 beside the
-Go-originated OSD-26, receipt R27) is listed in
+[Tracing one feature](../DOCUMENTATION.md#tracing-one-feature).
+
+A receipt ID in a row does not by itself say who sent the bytes. Each entry
+under [Native receipts](#native-receipts) states its own boundary, and the
+kinds differ: some record a live exchange in which the Go client took part,
+others record offline native encoder vectors compared by a unit test (R18,
+for example, is eight native MGR service vectors and R24 is five native
+COPY_FROM/COPY_FROM2 request encodings; neither is a Go-sent message).
+Read the receipt entry before attributing a row to a Go sender. For the
+SET_CHUNK opcode row specifically, R27 is the Go-originated acceptance
+(coverage row OSD-26); the native-only SET_CHUNK checkpoint (OSD-24), in
+which no Go client takes part, is listed only in
 [NATIVE_PATH_COVERAGE.md](../integration/fixture/NATIVE_PATH_COVERAGE.md) and
-is not a receipt for the Go path.
+is not a receipt for that row.
 
 Public names below are communication primitives; option dependencies and the
 contract's bounds/refusals still apply. Command schemas, placement, inode/cache
