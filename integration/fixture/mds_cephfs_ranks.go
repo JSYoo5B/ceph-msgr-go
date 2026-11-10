@@ -1757,35 +1757,31 @@ type mdsCephFSRanksPinCleanup struct {
 }
 
 type mdsCephFSRanksCleanup struct {
-	Source                string                      `json:"source_commit"`
-	Token                 string                      `json:"token"`
-	FSName                string                      `json:"fs_name"`
-	Attempted             bool                        `json:"attempted"`
-	Pins                  []*mdsCephFSRanksPin        `json:"pins"`
-	PinCleanup            []mdsCephFSRanksPinCleanup  `json:"pin_cleanup"`
-	PinsRestored          bool                        `json:"pins_restored"`
-	Takeover              *mdsCephFSRanksTakeover     `json:"takeover,omitempty"`
-	Shape                 mdsCephFSRanksShape         `json:"shape"`
-	ReplayEnable          *mdsCephFSRanksReplayEnable `json:"replay_enable,omitempty"`
-	Runtime               []*mdsCephFSRanksRuntime    `json:"runtime"`
-	RuntimeRestored       bool                        `json:"runtime_restored"`
-	Topology              *mdsCephFSRanksTopology     `json:"topology,omitempty"`
-	TopologyRestored      bool                        `json:"topology_restored"`
-	TopologyNote          string                      `json:"topology_note,omitempty"`
-	ResidualSessions      []mdsSessionsNative         `json:"residual_owned_sessions"`
-	NamespaceChecked      bool                        `json:"namespace_checked"`
-	NamespaceRestored     bool                        `json:"namespace_restored"`
-	NamespaceNote         string                      `json:"namespace_note,omitempty"`
-	Namespace             *mdsCephFSRanksNative       `json:"namespace,omitempty"`
-	NewBlocklist          []mdsSessionsBlock          `json:"new_blocklist"`
-	RemovedBlocklist      []mdsCephFSRemovedBlock     `json:"removed_blocklist"`
-	KeptBlocklist         []mdsSessionsBlock          `json:"kept_new_blocklist"`
-	FinalBlocklist        []mdsSessionsBlock          `json:"final_blocklist,omitempty"`
-	BlocklistRestored     bool                        `json:"blocklist_restored"`
-	ClientIdentityRemoved bool                        `json:"client_identity_removed"`
-	NativeIdentityRemoved bool                        `json:"native_identity_removed"`
-	Completed             bool                        `json:"completed"`
-	Errors                []string                    `json:"errors,omitempty"`
+	Source            string                      `json:"source_commit"`
+	Token             string                      `json:"token"`
+	FSName            string                      `json:"fs_name"`
+	Attempted         bool                        `json:"attempted"`
+	Pins              []*mdsCephFSRanksPin        `json:"pins"`
+	PinCleanup        []mdsCephFSRanksPinCleanup  `json:"pin_cleanup"`
+	PinsRestored      bool                        `json:"pins_restored"`
+	Takeover          *mdsCephFSRanksTakeover     `json:"takeover,omitempty"`
+	Shape             mdsCephFSRanksShape         `json:"shape"`
+	ReplayEnable      *mdsCephFSRanksReplayEnable `json:"replay_enable,omitempty"`
+	Runtime           []*mdsCephFSRanksRuntime    `json:"runtime"`
+	RuntimeRestored   bool                        `json:"runtime_restored"`
+	Topology          *mdsCephFSRanksTopology     `json:"topology,omitempty"`
+	TopologyRestored  bool                        `json:"topology_restored"`
+	TopologyNote      string                      `json:"topology_note,omitempty"`
+	ResidualSessions  []mdsSessionsNative         `json:"residual_owned_sessions"`
+	NamespaceChecked  bool                        `json:"namespace_checked"`
+	NamespaceRestored bool                        `json:"namespace_restored"`
+	NamespaceNote     string                      `json:"namespace_note,omitempty"`
+	Namespace         *mdsCephFSRanksNative       `json:"namespace,omitempty"`
+	mdsCephFSBlocklistReceipt
+	ClientIdentityRemoved bool     `json:"client_identity_removed"`
+	NativeIdentityRemoved bool     `json:"native_identity_removed"`
+	Completed             bool     `json:"completed"`
+	Errors                []string `json:"errors,omitempty"`
 }
 
 // finishMDSCephFSRanks runs once, inside the cached MDS fresh cleanup and
@@ -1806,8 +1802,8 @@ func (c *fixtureCluster) finishMDSCephFSRanks(ctx context.Context) error {
 	ctx, stop := context.WithTimeout(ctx, 100*time.Second)
 	defer stop()
 	receipt := mdsCephFSRanksCleanup{Source: mdsFreshSource, Token: s.token, FSName: s.name, Attempted: true, Pins: x.pins, Takeover: x.takeover, PinCleanup: []mdsCephFSRanksPinCleanup{},
-		Shape: x.shape, ReplayEnable: x.replayEnable, Runtime: x.runtime, ResidualSessions: []mdsSessionsNative{}, NewBlocklist: []mdsSessionsBlock{}, RemovedBlocklist: []mdsCephFSRemovedBlock{},
-		KeptBlocklist: []mdsSessionsBlock{}}
+		Shape: x.shape, ReplayEnable: x.replayEnable, Runtime: x.runtime, ResidualSessions: []mdsSessionsNative{},
+		mdsCephFSBlocklistReceipt: newMDSCephFSBlocklistReceipt()}
 	if receipt.Runtime == nil {
 		receipt.Runtime = []*mdsCephFSRanksRuntime{}
 	}
@@ -2045,52 +2041,30 @@ func (c *fixtureCluster) mdsCephFSRanksRestorePin(ctx context.Context, target, b
 // left the FSMap) and addresses of owned Go sessions observed by the test.
 func (c *fixtureCluster) mdsCephFSRanksRestoreBlocklist(ctx context.Context, receipt *mdsCephFSRanksCleanup, fail func(error)) {
 	x := c.mdsCephFSRanks
-	receipt.BlocklistRestored = true
 	armedGone := false
 	if x.takeover != nil {
 		status, err := c.mdsCephFSRanksStatus(ctx)
 		fail(err)
 		armedGone = err == nil && !status.ArmedPresent
 	}
-	for _, entry := range receipt.NewBlocklist {
-		kind := ""
-		switch {
-		case entry.Range:
-		case x.takeover != nil && slices.Contains(x.takeover.ArmedAddresses, entry.Address):
-			if armedGone {
-				kind = "mds-takeover"
-			} else {
-				fail(errors.New("armed MDS incarnation is still mapped; its fencing entry is kept"))
-			}
-		case x.owned[entry.Address] != 0:
-			kind = "owned-session"
+	owner := func(entry mdsSessionsBlock) (string, error) { return x.blockOwner(entry, armedGone) }
+	receipt.restore(ctx, "MDS CephFS ranks", owner, c.mdsCephFSBlocklistOps(), fail)
+}
+
+// blockOwner attributes one new blocklist entry to an owned mutation, or
+// returns "" when it is not attributable (or attribution is unsafe): the armed
+// takeover incarnation's fencing entry stays while that incarnation is mapped.
+func (x *mdsCephFSRanksScope) blockOwner(entry mdsSessionsBlock, armedGone bool) (string, error) {
+	switch {
+	case entry.Range:
+		return "", nil
+	case x.takeover != nil && slices.Contains(x.takeover.ArmedAddresses, entry.Address):
+		if !armedGone {
+			return "", errors.New("armed MDS incarnation is still mapped; its fencing entry is kept")
 		}
-		if kind == "" {
-			receipt.KeptBlocklist = append(receipt.KeptBlocklist, entry)
-			receipt.BlocklistRestored = false
-			continue
-		}
-		if _, err := c.cluster.Ceph(ctx, "osd", "blocklist", "rm", entry.Address); err != nil {
-			receipt.BlocklistRestored = false
-			fail(err)
-			continue
-		}
-		receipt.RemovedBlocklist = append(receipt.RemovedBlocklist, mdsCephFSRemovedBlock{Kind: kind, Entry: entry})
+		return "mds-takeover", nil
+	case x.owned[entry.Address] != 0:
+		return "owned-session", nil
 	}
-	if len(receipt.KeptBlocklist) != 0 {
-		fail(errors.New("MDS CephFS ranks acceptance kept new blocklist entries it cannot attribute to an owned mutation"))
-	}
-	final, err := c.mdsSessionsBlocklist(ctx)
-	fail(err)
-	receipt.FinalBlocklist = final
-	if err != nil {
-		receipt.BlocklistRestored = false
-		return
-	}
-	for _, removed := range receipt.RemovedBlocklist {
-		if mdsSessionsFindBlock(final, removed.Entry.Address) != nil {
-			receipt.BlocklistRestored = false
-			fail(errors.New("owned blocklist entry remained after removal"))
-		}
-	}
+	return "", nil
 }

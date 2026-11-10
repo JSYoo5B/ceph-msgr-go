@@ -515,44 +515,14 @@ func decodeMDSCephFSRecoveryNative(action, path string, plan mdsCephFSRecoveryPl
 // is reported and left untouched.
 func (c *fixtureCluster) mdsCephFSRestoreBlocklist(ctx context.Context, receipt *mdsCephFSCleanup, fail func(error)) {
 	x := c.mdsCephFS
-	receipt.BlocklistRestored = true
 	armedGone := false
 	if x.restart != nil {
 		status, err := c.mdsCephFSRankStatus(ctx)
 		fail(err)
 		armedGone = err == nil && !status.ArmedPresent
 	}
-	for _, entry := range receipt.NewBlocklist {
-		kind, err := x.blockOwner(entry, armedGone)
-		fail(err)
-		if kind == "" {
-			receipt.KeptBlocklist = append(receipt.KeptBlocklist, entry)
-			receipt.BlocklistRestored = false
-			continue
-		}
-		if _, err := c.cluster.Ceph(ctx, "osd", "blocklist", "rm", entry.Address); err != nil {
-			receipt.BlocklistRestored = false
-			fail(err)
-			continue
-		}
-		receipt.RemovedBlocklist = append(receipt.RemovedBlocklist, mdsCephFSRemovedBlock{Kind: kind, Entry: entry})
-	}
-	if len(receipt.KeptBlocklist) != 0 {
-		fail(errors.New("MDS CephFS acceptance kept new blocklist entries it cannot attribute to an owned mutation"))
-	}
-	final, err := c.mdsSessionsBlocklist(ctx)
-	fail(err)
-	receipt.FinalBlocklist = final
-	if err != nil {
-		receipt.BlocklistRestored = false
-		return
-	}
-	for _, removed := range receipt.RemovedBlocklist {
-		if mdsSessionsFindBlock(final, removed.Entry.Address) != nil {
-			receipt.BlocklistRestored = false
-			fail(errors.New("owned blocklist entry remained after removal"))
-		}
-	}
+	owner := func(entry mdsSessionsBlock) (string, error) { return x.blockOwner(entry, armedGone) }
+	receipt.restore(ctx, "MDS CephFS", owner, c.mdsCephFSBlocklistOps(), fail)
 }
 
 // blockOwner attributes one new blocklist entry to an owned mutation, or
@@ -582,6 +552,80 @@ func (x *mdsCephFSScope) blockOwner(entry mdsSessionsBlock, armedGone bool) (str
 type mdsCephFSRemovedBlock struct {
 	Kind  string           `json:"kind"`
 	Entry mdsSessionsBlock `json:"entry"`
+}
+
+// mdsCephFSBlocklistReceipt is the blocklist part of an MDS CephFS scenario
+// cleanup receipt. Each scenario embeds it, so the JSON fields and their order
+// are shared.
+type mdsCephFSBlocklistReceipt struct {
+	NewBlocklist      []mdsSessionsBlock      `json:"new_blocklist"`
+	RemovedBlocklist  []mdsCephFSRemovedBlock `json:"removed_blocklist"`
+	KeptBlocklist     []mdsSessionsBlock      `json:"kept_new_blocklist"`
+	FinalBlocklist    []mdsSessionsBlock      `json:"final_blocklist,omitempty"`
+	BlocklistRestored bool                    `json:"blocklist_restored"`
+}
+
+func newMDSCephFSBlocklistReceipt() mdsCephFSBlocklistReceipt {
+	return mdsCephFSBlocklistReceipt{NewBlocklist: []mdsSessionsBlock{}, RemovedBlocklist: []mdsCephFSRemovedBlock{}, KeptBlocklist: []mdsSessionsBlock{}}
+}
+
+// mdsCephFSBlocklistOps are the two cluster operations of a blocklist
+// restoration: removing one exact address and reading the whole blocklist.
+type mdsCephFSBlocklistOps struct {
+	remove func(context.Context, string) error
+	read   func(context.Context) ([]mdsSessionsBlock, error)
+}
+
+func (c *fixtureCluster) mdsCephFSBlocklistOps() mdsCephFSBlocklistOps {
+	return mdsCephFSBlocklistOps{
+		remove: func(ctx context.Context, address string) error {
+			_, err := c.cluster.Ceph(ctx, "osd", "blocklist", "rm", address)
+			return err
+		},
+		read: c.mdsSessionsBlocklist,
+	}
+}
+
+// restore removes the new entries that owner attributes to an owned mutation
+// and verifies them absent on a final read. The scenario keeps the ownership
+// decision: owner returns the removal kind, or "" (with an optional reason)
+// for an entry that is not attributable or whose removal is unsafe, such as
+// the fencing entry of a still-mapped incarnation. Such entries are kept and
+// never removed. Every error goes to fail in the order it occurs; scenario
+// names the acceptance in the kept-entry failure.
+func (r *mdsCephFSBlocklistReceipt) restore(ctx context.Context, scenario string, owner func(mdsSessionsBlock) (string, error), ops mdsCephFSBlocklistOps, fail func(error)) {
+	r.BlocklistRestored = true
+	for _, entry := range r.NewBlocklist {
+		kind, err := owner(entry)
+		fail(err)
+		if kind == "" {
+			r.KeptBlocklist = append(r.KeptBlocklist, entry)
+			r.BlocklistRestored = false
+			continue
+		}
+		if err := ops.remove(ctx, entry.Address); err != nil {
+			r.BlocklistRestored = false
+			fail(err)
+			continue
+		}
+		r.RemovedBlocklist = append(r.RemovedBlocklist, mdsCephFSRemovedBlock{Kind: kind, Entry: entry})
+	}
+	if len(r.KeptBlocklist) != 0 {
+		fail(errors.New(scenario + " acceptance kept new blocklist entries it cannot attribute to an owned mutation"))
+	}
+	final, err := ops.read(ctx)
+	fail(err)
+	r.FinalBlocklist = final
+	if err != nil {
+		r.BlocklistRestored = false
+		return
+	}
+	for _, removed := range r.RemovedBlocklist {
+		if mdsSessionsFindBlock(final, removed.Entry.Address) != nil {
+			r.BlocklistRestored = false
+			fail(errors.New("owned blocklist entry remained after removal"))
+		}
+	}
 }
 
 // mdsCephFSHistoricOp is one completed MDS request of an owned Go session

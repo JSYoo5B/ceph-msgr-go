@@ -1586,31 +1586,27 @@ func (x *mdsCephFSCompletionScope) blockOwner(entry mdsSessionsBlock, gone func(
 }
 
 type mdsCephFSCompletionCleanup struct {
-	Source                string                        `json:"source_commit"`
-	Token                 string                        `json:"token"`
-	FSName                string                        `json:"fs_name"`
-	Attempted             bool                          `json:"attempted"`
-	Mutations             []*mdsCephFSMutation          `json:"mutations"`
-	Runtime               []*mdsCephFSCompletionRuntime `json:"runtime"`
-	Central               []*mdsCephFSCompletionCentral `json:"central"`
-	Restarts              []*mdsCephFSRestart           `json:"restarts"`
-	PendingRestartActive  bool                          `json:"pending_restart_active,omitempty"`
-	Config                map[string]string             `json:"config,omitempty"`
-	ConfigRestored        bool                          `json:"config_restored"`
-	ResidualSessions      []mdsSessionsNative           `json:"residual_owned_sessions"`
-	NamespaceChecked      bool                          `json:"namespace_checked"`
-	NamespaceRestored     bool                          `json:"namespace_restored"`
-	NamespaceNote         string                        `json:"namespace_note,omitempty"`
-	Namespace             *mdsCephFSNative              `json:"namespace,omitempty"`
-	NewBlocklist          []mdsSessionsBlock            `json:"new_blocklist"`
-	RemovedBlocklist      []mdsCephFSRemovedBlock       `json:"removed_blocklist"`
-	KeptBlocklist         []mdsSessionsBlock            `json:"kept_new_blocklist"`
-	FinalBlocklist        []mdsSessionsBlock            `json:"final_blocklist,omitempty"`
-	BlocklistRestored     bool                          `json:"blocklist_restored"`
-	ClientIdentityRemoved bool                          `json:"client_identity_removed"`
-	NativeIdentityRemoved bool                          `json:"native_identity_removed"`
-	Completed             bool                          `json:"completed"`
-	Errors                []string                      `json:"errors,omitempty"`
+	Source               string                        `json:"source_commit"`
+	Token                string                        `json:"token"`
+	FSName               string                        `json:"fs_name"`
+	Attempted            bool                          `json:"attempted"`
+	Mutations            []*mdsCephFSMutation          `json:"mutations"`
+	Runtime              []*mdsCephFSCompletionRuntime `json:"runtime"`
+	Central              []*mdsCephFSCompletionCentral `json:"central"`
+	Restarts             []*mdsCephFSRestart           `json:"restarts"`
+	PendingRestartActive bool                          `json:"pending_restart_active,omitempty"`
+	Config               map[string]string             `json:"config,omitempty"`
+	ConfigRestored       bool                          `json:"config_restored"`
+	ResidualSessions     []mdsSessionsNative           `json:"residual_owned_sessions"`
+	NamespaceChecked     bool                          `json:"namespace_checked"`
+	NamespaceRestored    bool                          `json:"namespace_restored"`
+	NamespaceNote        string                        `json:"namespace_note,omitempty"`
+	Namespace            *mdsCephFSNative              `json:"namespace,omitempty"`
+	mdsCephFSBlocklistReceipt
+	ClientIdentityRemoved bool     `json:"client_identity_removed"`
+	NativeIdentityRemoved bool     `json:"native_identity_removed"`
+	Completed             bool     `json:"completed"`
+	Errors                []string `json:"errors,omitempty"`
 }
 
 // finishMDSCephFSCompletion runs once, inside the cached MDS fresh cleanup and
@@ -1627,7 +1623,7 @@ func (c *fixtureCluster) finishMDSCephFSCompletion(ctx context.Context) error {
 	ctx, stop := context.WithTimeout(ctx, 100*time.Second)
 	defer stop()
 	receipt := mdsCephFSCompletionCleanup{Source: mdsFreshSource, Token: s.token, FSName: s.name, Attempted: true, Mutations: x.mutations, Runtime: x.runtime, Central: x.central,
-		Restarts: x.restarts, ResidualSessions: []mdsSessionsNative{}, NewBlocklist: []mdsSessionsBlock{}, RemovedBlocklist: []mdsCephFSRemovedBlock{}, KeptBlocklist: []mdsSessionsBlock{}}
+		Restarts: x.restarts, ResidualSessions: []mdsSessionsNative{}, mdsCephFSBlocklistReceipt: newMDSCephFSBlocklistReceipt()}
 	if err := writeMDSFreshJSON(x.out, "mds-cephfs-completion-cleanup.json", receipt); err != nil {
 		return err
 	}
@@ -1771,10 +1767,10 @@ func (c *fixtureCluster) finishMDSCephFSCompletion(ctx context.Context) error {
 }
 
 // mdsCephFSCompletionRestoreBlocklist removes only new entries attributable to
-// owned mutations and verifies them absent.
+// owned mutations and verifies them absent. A restart's armed addresses are
+// attributable only after that armed GID left the rank status.
 func (c *fixtureCluster) mdsCephFSCompletionRestoreBlocklist(ctx context.Context, receipt *mdsCephFSCompletionCleanup, fail func(error)) {
 	x := c.mdsCephFSCompletion
-	receipt.BlocklistRestored = true
 	present := map[uint64]bool{}
 	statusErr := error(nil)
 	if len(x.restarts) != 0 {
@@ -1786,35 +1782,6 @@ func (c *fixtureCluster) mdsCephFSCompletionRestoreBlocklist(ctx context.Context
 		}
 	}
 	gone := func(gid uint64) bool { return statusErr == nil && !present[gid] }
-	for _, entry := range receipt.NewBlocklist {
-		kind, err := x.blockOwner(entry, gone)
-		fail(err)
-		if kind == "" {
-			receipt.KeptBlocklist = append(receipt.KeptBlocklist, entry)
-			receipt.BlocklistRestored = false
-			continue
-		}
-		if _, err := c.cluster.Ceph(ctx, "osd", "blocklist", "rm", entry.Address); err != nil {
-			receipt.BlocklistRestored = false
-			fail(err)
-			continue
-		}
-		receipt.RemovedBlocklist = append(receipt.RemovedBlocklist, mdsCephFSRemovedBlock{Kind: kind, Entry: entry})
-	}
-	if len(receipt.KeptBlocklist) != 0 {
-		fail(errors.New("MDS CephFS completion acceptance kept new blocklist entries it cannot attribute to an owned mutation"))
-	}
-	final, err := c.mdsSessionsBlocklist(ctx)
-	fail(err)
-	receipt.FinalBlocklist = final
-	if err != nil {
-		receipt.BlocklistRestored = false
-		return
-	}
-	for _, removed := range receipt.RemovedBlocklist {
-		if mdsSessionsFindBlock(final, removed.Entry.Address) != nil {
-			receipt.BlocklistRestored = false
-			fail(errors.New("owned blocklist entry remained after removal"))
-		}
-	}
+	owner := func(entry mdsSessionsBlock) (string, error) { return x.blockOwner(entry, gone) }
+	receipt.restore(ctx, "MDS CephFS completion", owner, c.mdsCephFSBlocklistOps(), fail)
 }
