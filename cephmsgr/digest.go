@@ -47,18 +47,21 @@ type ClusterDigest struct {
 // ends only this watch, without a remote unsubscribe. Accepted data drains
 // before the stable first terminal error recorded by this watch.
 type DigestStream struct {
-	client *Client
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	limit  uint64
+	watch monSnapshotWatch[DigestStream]
 
-	// All fields below are protected by client.mu.
-	source   *session.Session
-	observed *session.Session
-	pending  *ClusterDigest // nil means no unread digest; two empty buffers are valid.
-	terminal error
-	changed  chan struct{}
+	// Protected by client.mu.
+	pending *ClusterDigest // nil means no unread digest; two empty buffers are valid.
+}
+
+func newDigestStream(c *Client, ctx context.Context, cancel context.CancelFunc, limit uint64) *DigestStream {
+	s := &DigestStream{}
+	s.watch = newMonSnapshotWatch(c, ctx, cancel, limit, &c.digestWatch, s, s.registerSource)
+	return s
+}
+
+// registerSource subscribes to periodic full digests on an admitted MON session.
+func (s *DigestStream) registerSource(ctx context.Context, mon *session.Session, _ string) error {
+	return mon.Send(ctx, msgr.DigestSubscribe(s.watch.client.options.Hostname))
 }
 
 // WatchDigest registers the client's single active cluster-digest watch.
@@ -82,7 +85,7 @@ func (c *Client) WatchDigest(ctx context.Context, options DigestOptions) (*Diges
 		return nil, errors.New("ceph: invalid digest buffer limit")
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
-	s := &DigestStream{client: c, ctx: watchCtx, cancel: cancel, done: make(chan struct{}), limit: uint64(limit), changed: make(chan struct{})}
+	s := newDigestStream(c, watchCtx, cancel, uint64(limit))
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -97,49 +100,15 @@ func (c *Client) WatchDigest(ctx context.Context, options DigestOptions) (*Diges
 	c.digestWatch = s
 	c.wg.Add(1)
 	c.mu.Unlock()
-	go s.run()
+	go s.watch.run()
 	return s, nil
-}
-
-func (s *DigestStream) signalLocked() {
-	close(s.changed)
-	s.changed = make(chan struct{})
-}
-
-func (s *DigestStream) stopLocked(err error) bool {
-	if s.terminal != nil {
-		return false
-	}
-	s.terminal, s.source, s.observed = err, nil, nil
-	if s.client.digestWatch == s {
-		s.client.digestWatch = nil
-	}
-	s.signalLocked()
-	return true
-}
-
-func (s *DigestStream) stop(err error) {
-	s.client.mu.Lock()
-	s.stopLocked(err)
-	s.client.mu.Unlock()
-	s.cancel()
 }
 
 // Close releases the watch slot and joins its registration worker. The unread
 // digest remains readable. ErrDigestStreamClosed becomes the terminal cause only
 // when no earlier cause was recorded.
 func (s *DigestStream) Close() error {
-	s.client.mu.Lock()
-	source := s.observed
-	s.client.mu.Unlock()
-	if source != nil {
-		err := source.Err()
-		if fatalLogSessionError(err) {
-			s.failCurrent(source, err)
-		}
-	}
-	s.stop(ErrDigestStreamClosed)
-	<-s.done
+	s.watch.closeWatch(ErrDigestStreamClosed)
 	return nil
 }
 
@@ -148,137 +117,20 @@ func (s *DigestStream) Close() error {
 // Cancellation affects only this call; an already canceled context consumes
 // nothing. A pair of empty buffers is a valid full digest.
 func (s *DigestStream) Next(ctx context.Context) (ClusterDigest, error) {
-	return nextStreamItem(ctx, s.client, s.ctx, func() (ClusterDigest, bool, error, <-chan struct{}) {
+	return nextStreamItem(ctx, s.watch.client, s.watch.ctx, func() (ClusterDigest, bool, error, <-chan struct{}) {
 		if s.pending != nil {
 			next := *s.pending
 			s.pending = nil
 			return next, true, nil, nil
 		}
-		return ClusterDigest{}, false, s.terminal, s.changed
-	}, s.stop)
-}
-
-// Error inspection and cancellation may invoke custom code; neither runs
-// under the client lock. Record a registered source's fatal cause before a
-// replacement can make its delayed onClose callback stale.
-func (c *Client) stopDigestForFailedSession(source *session.Session, err error) {
-	if !fatalLogSessionError(err) {
-		return
-	}
-	c.mu.Lock()
-	watch := c.digestWatch
-	if c.mon == source && watch != nil && watch.observed == source {
-		if !watch.stopLocked(err) {
-			watch = nil
-		}
-	} else {
-		watch = nil
-	}
-	c.mu.Unlock()
-	if watch != nil {
-		watch.cancel()
-	}
-}
-
-func (s *DigestStream) failCurrent(source *session.Session, err error) bool {
-	c := s.client
-	c.mu.Lock()
-	current := s.terminal == nil && c.digestWatch == s && c.mon == source && s.observed == source && !c.closed && c.authErr == nil
-	if current {
-		s.stopLocked(err)
-	}
-	c.mu.Unlock()
-	if current {
-		s.cancel()
-	}
-	return current
-}
-
-func (s *DigestStream) run() {
-	defer s.client.wg.Done()
-	defer close(s.done)
-	for {
-		if err := s.ctx.Err(); err != nil {
-			s.stop(err)
-			return
-		}
-		c := s.client
-		c.mu.Lock()
-		terminal, closed, authErr := s.terminal, c.closed, c.authErr
-		mon, ready, changed := c.mon, c.monReady, c.changed
-		previous := s.observed
-		if mon != previous || !ready {
-			s.source = nil
-		}
-		c.mu.Unlock()
-		if terminal != nil {
-			return
-		}
-		if closed {
-			s.stop(ErrClosed)
-			return
-		}
-		if authErr != nil {
-			s.stop(authErr)
-			return
-		}
-		if previous != nil && previous == mon && fatalLogSessionError(previous.Err()) {
-			if s.failCurrent(previous, previous.Err()) {
-				return
-			}
-			continue
-		}
-		if mon != nil && ready && mon.Err() == nil {
-			c.mu.Lock()
-			register := s.terminal == nil && c.mon == mon && c.monReady && !c.closed && c.authErr == nil && s.source != mon
-			if register {
-				s.source, s.observed = mon, mon
-			}
-			c.mu.Unlock()
-			if register {
-				err := mon.Send(s.ctx, msgr.DigestSubscribe(c.options.Hostname))
-				if err != nil {
-					if watchErr := s.ctx.Err(); watchErr != nil {
-						s.stop(watchErr)
-						return
-					}
-					if fatalLogSessionError(err) {
-						if s.failCurrent(mon, err) {
-							return
-						}
-						continue
-					}
-					c.wakeMonitor()
-				}
-			}
-		}
-		var monDone <-chan struct{}
-		if mon != nil {
-			monDone = mon.Done()
-		}
-		select {
-		case <-changed:
-		case <-monDone:
-			if (ready || previous == mon) && fatalLogSessionError(mon.Err()) {
-				if s.failCurrent(mon, mon.Err()) {
-					return
-				}
-			}
-			select {
-			case <-changed:
-			case <-s.ctx.Done():
-			case <-c.ctx.Done():
-			}
-		case <-s.ctx.Done():
-		case <-c.ctx.Done():
-		}
-	}
+		return ClusterDigest{}, false, s.watch.terminal, s.watch.changed
+	}, s.watch.stop)
 }
 
 func (c *Client) handleDigest(source *session.Session, m msgr.MessageData) error {
 	c.mu.Lock()
 	s := c.digestWatch
-	accept := s != nil && s.terminal == nil && s.source == source && c.mon == source && c.monReady && !c.closed && c.authErr == nil
+	accept := s != nil && s.watch.acceptsLocked(source)
 	c.mu.Unlock()
 	if !accept {
 		return nil
@@ -286,24 +138,24 @@ func (c *Client) handleDigest(source *session.Session, m msgr.MessageData) error
 	decoded, err := msgr.DecodeDigest(m, c.options.MaxFrameSize)
 	bytes := uint64(512) + uint64(len(decoded.MonStatus)) + uint64(len(decoded.Health))
 	c.mu.Lock()
-	if c.digestWatch != s || s.terminal != nil || s.source != source || c.mon != source || !c.monReady || c.closed || c.authErr != nil {
+	if !s.watch.acceptsLocked(source) {
 		c.mu.Unlock()
 		return nil
 	}
 	if err != nil {
-		s.stopLocked(err)
+		s.watch.stopLocked(err)
 		c.mu.Unlock()
-		s.cancel()
+		s.watch.cancel()
 		return err
 	}
-	if bytes > s.limit {
-		s.stopLocked(ErrDigestOverflow)
+	if bytes > s.watch.limit {
+		s.watch.stopLocked(ErrDigestOverflow)
 		c.mu.Unlock()
-		s.cancel()
+		s.watch.cancel()
 		return nil
 	}
 	s.pending = &ClusterDigest{MonStatus: decoded.MonStatus, Health: decoded.Health}
-	s.signalLocked()
+	s.watch.signalLocked()
 	c.mu.Unlock()
 	return nil
 }

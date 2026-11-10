@@ -108,7 +108,7 @@ func runServiceMapLifecycle(t *testing.T, holdStoppedMONDials bool) {
 		return serviceLifecyclePresent(m, nativeA, readyA)
 	})
 	c.mu.Lock()
-	old := watch.source
+	old := watch.watch.source
 	c.mu.Unlock()
 	if old == nil || old.Err() != nil {
 		t.Fatal("watch has no live registered MON source")
@@ -273,10 +273,10 @@ func waitServiceLifecycleMap(t *testing.T, ctx context.Context, watch *ServiceMa
 }
 
 func waitServiceLifecycleSource(ctx context.Context, watch *ServiceMapStream, old *session.Session) error {
-	c := watch.client
+	c := watch.watch.client
 	for {
 		c.mu.Lock()
-		current := c.serviceMapWatch == watch && watch.source != nil && watch.source != old && c.mon == watch.source && c.monReady && watch.terminal == nil
+		current := c.serviceMapWatch == watch && watch.watch.source != nil && watch.watch.source != old && c.mon == watch.watch.source && c.monReady && watch.watch.terminal == nil
 		changed := c.changed
 		c.mu.Unlock()
 		if current {

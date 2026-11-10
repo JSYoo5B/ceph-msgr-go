@@ -37,12 +37,13 @@ func TestConfigWatchRecoveryRequestsFullMapAndIgnoresUnadmittedSources(t *testin
 	current := c.mon
 	c.mu.Unlock()
 	unadmitted := &Client{mon: current, options: c.options}
-	unadmitted.configWatch = &ConfigStream{client: unadmitted, source: current, changed: make(chan struct{}), cancel: func() {}}
+	unadmitted.configWatch = newConfigStream(unadmitted, ctx, func() {}, uint64(c.options.MaxFrameSize))
+	unadmitted.configWatch.watch.source = current
 	if err := unadmitted.handleConfig(current, bad); err != nil {
 		t.Fatal("unadmitted candidate was decoded", err)
 	}
 	unadmitted.monReady = true
-	unadmitted.configWatch.source = new(session.Session)
+	unadmitted.configWatch.watch.source = new(session.Session)
 	if err := unadmitted.handleConfig(current, bad); err != nil {
 		t.Fatal("watch belonging to another source decoded this message", err)
 	}
@@ -142,13 +143,13 @@ func TestConfigWatchRestoredMonitorRequestsFullMapWhenWorkerMissedCandidate(t *t
 	p := configTestNextPeer(t, ctx, peers)
 	base, cancel := context.WithCancel(ctx)
 	gate := &logTestLoopGate{Context: base, entered: make(chan struct{}), release: make(chan struct{})}
-	stream := &ConfigStream{client: c, ctx: gate, cancel: cancel, done: make(chan struct{}), limit: uint64(c.options.MaxFrameSize), changed: make(chan struct{})}
+	stream := newConfigStream(c, gate, cancel, uint64(c.options.MaxFrameSize))
 	c.mu.Lock()
 	c.configWatch = stream
 	c.wg.Add(1)
 	old := c.mon
 	c.mu.Unlock()
-	go stream.run()
+	go stream.watch.run()
 	t.Cleanup(func() { gate.unblock(); stream.Close() })
 	p.registration(t, ctx, c.options.Identity)
 	p.send(t, ctx, configTestMessage("before rejected candidate", "old full value"))
@@ -211,7 +212,7 @@ func TestConfigWatchConcurrentNextTransfersMapOnceAndCloseReleasesWaiters(t *tes
 		t.Fatal(err)
 	}
 	select {
-	case <-stream.done:
+	case <-stream.watch.done:
 	default:
 		t.Fatal("Client.Close returned before worker joined")
 	}

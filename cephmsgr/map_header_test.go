@@ -52,12 +52,12 @@ func TestMapMessageHeaderCompatibility(t *testing.T) {
 				beforeMon, beforeMgr := c.monMap, c.mgrMap
 				accepted, err := c.handleMap(c.mon, message)
 				if header.unsupported {
-					if accepted || !errors.Is(err, msgr.ErrFrame) || !errors.Is(err, wire.ErrVersion) || retryableSetup(err) || !reflect.DeepEqual(c.monMap, beforeMon) || !reflect.DeepEqual(c.mgrMap, beforeMgr) {
+					if accepted != nil || !errors.Is(err, msgr.ErrFrame) || !errors.Is(err, wire.ErrVersion) || retryableSetup(err) || !reflect.DeepEqual(c.monMap, beforeMon) || !reflect.DeepEqual(c.mgrMap, beforeMgr) {
 						t.Fatal("unsupported header updated maps or lost protocol/version provenance", accepted, err, c.monMap, c.mgrMap)
 					}
 					return
 				}
-				if err != nil || accepted != (typ == msgr.MonMapMessage) {
+				if err != nil || (accepted != nil) != (typ == msgr.MonMapMessage) {
 					t.Fatal("compatible map header was rejected", accepted, err)
 				}
 				if typ == msgr.MonMapMessage && (c.fsid != [16]byte{1} || c.monMap.Epoch != 1) || typ == msgr.MgrMapMessage && (c.mgrMap.Epoch != 9 || c.mgrMap.GlobalID != 9999) {
@@ -71,7 +71,7 @@ func TestMapMessageHeaderCompatibility(t *testing.T) {
 func TestMapHeaderValidationPreservesStaleSourceAndReleasePolicy(t *testing.T) {
 	c := &Client{changed: make(chan struct{}), mon: new(session.Session)}
 	for _, typ := range []uint16{msgr.MonMapMessage, msgr.MgrMapMessage} {
-		if accepted, err := c.handleMap(new(session.Session), msgr.MessageData{Type: typ, Version: 2, CompatVersion: 2}); accepted || err != nil {
+		if accepted, err := c.handleMap(new(session.Session), msgr.MessageData{Type: typ, Version: 2, CompatVersion: 2}); accepted != nil || err != nil {
 			t.Fatal("retired monitor's incompatible message was processed", accepted, err)
 		}
 	}

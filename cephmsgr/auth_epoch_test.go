@@ -124,7 +124,7 @@ func TestAuthEpochInvalidatesNewAuthorizersAndPreservesEstablishedManager(t *tes
 			c.mu.Lock()
 			mon, mgr := c.mon, c.mgr
 			c.mu.Unlock()
-			if accepted, err := c.handleMap(mon, msgr.MessageData{Type: msgr.MonMapMessage, Version: 1, Front: epochMonMap(2, 7)}); !accepted || err != nil {
+			if accepted, err := c.handleMap(mon, msgr.MessageData{Type: msgr.MonMapMessage, Version: 1, Front: epochMonMap(2, 7)}); accepted == nil || err != nil {
 				t.Fatal("valid auth-epoch notification was rejected", accepted, err)
 			}
 			invalidated := c.snapshotAuth()
@@ -268,7 +268,7 @@ func TestAuthEpochCandidateCannotRestoreInvalidTickets(t *testing.T) {
 			c.mu.Lock()
 			auth := c.auth
 			c.mu.Unlock()
-			if accepted, err := c.handleMap(firstMonitor, msgr.MessageData{Type: msgr.MonMapMessage, Version: 1, Front: epochMonMap(99, 99)}); accepted || err != nil {
+			if accepted, err := c.handleMap(firstMonitor, msgr.MessageData{Type: msgr.MonMapMessage, Version: 1, Front: epochMonMap(99, 99)}); accepted != nil || err != nil {
 				t.Fatal("superseded MON could invalidate current tickets", accepted, err)
 			}
 			c.mu.Lock()

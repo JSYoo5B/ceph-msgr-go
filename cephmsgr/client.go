@@ -18,12 +18,21 @@ import (
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/cephx"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/maps"
-	"github.com/JSYoo5B/ceph-msgr-go/internal/mds"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/session"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+// Client is one authenticated client identity's connection to a Ceph cluster.
+// It holds the MON session admitted by Dial, which it keeps current across
+// MON failover and ticket renewal, the active MGR session opened on demand,
+// and every OSD, MDS, MGR service and watch handle opened from it. Its methods
+// are safe for concurrent use.
+//
+// A method's context bounds that call, or for a Watch method that watch,
+// never the client. Recovery never re-executes a command or request whose
+// transmission started; see OutcomeUnknownError. The client lives until
+// Close, which the caller must call to release its connections and workers.
 type Client struct {
 	options       Options
 	ctx           context.Context
@@ -87,7 +96,10 @@ type Client struct {
 
 // Dial establishes and authenticates a MON connection and verifies a MonMap
 // whose configured minimum monitor release is Tentacle or later. ctx governs
-// setup only; Close owns the returned client's lifetime.
+// setup only: canceling it after Dial returns does not affect the client.
+// Close owns the returned client's lifetime. Until then the client recovers
+// MON sessions and renews tickets in the background. On error no connection
+// or worker remains.
 func Dial(ctx context.Context, options Options) (*Client, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -415,11 +427,9 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		seen[candidateTarget] = true
 		linked, release := c.linkedContext(ctx)
 		c.mu.Lock()
-		candidate := copyAuth(c.auth)
-		attemptEpoch, knownEpoch := c.monMap.AuthEpoch, c.monMap.Epoch != 0
-		refreshedBefore := c.authRefreshed[candidateTarget.endpoint]
+		attempt := monAttempt{target: candidateTarget, auth: copyAuth(c.auth), authEpoch: c.monMap.AuthEpoch, knownEpoch: c.monMap.Epoch != 0, refreshedBefore: c.authRefreshed[candidateTarget.endpoint], barrierRetried: barrierRetried[candidateTarget]}
 		c.mu.Unlock()
-		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: candidate, MDSMaps: c.options.EnableMDSMaps, OSDCachePools: c.options.EnableOSDCachePools, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile.replicatedPG()})
+		transport, err := c.open(linked, candidateTarget.endpoint, candidateTarget.address, 1, 0, session.MonAuth{Client: attempt.auth, MDSMaps: c.options.EnableMDSMaps, OSDCachePools: c.options.EnableOSDCachePools, ReplicatedPGV8: c.options.EnableOSD && c.options.OSDProfile.replicatedPG()})
 		if err != nil {
 			release()
 			failures = append(failures, err)
@@ -428,169 +438,25 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			}
 			continue
 		}
-		ready := make(chan struct{})
-		var readyOnce sync.Once
-		var verifiedMon bool
-		var bufferedMgr *msgr.MessageData
-		var bufferedEpoch uint32
-		var candidateEpoch uint32
-		var candidateMonMap maps.Mon
+		admission := newMonAdmission(c)
 		var s *session.Session
-		s = session.New(transport, c.sessionConfig(), func(m msgr.MessageData) error {
-			if m.Type == mds.FSMapUserMessage || m.Type == mds.MDSMapMessageType {
-				if !verifiedMon {
-					return nil
-				}
-				return c.handleMonMDSMap(s, m)
-			}
-			if m.Type == msgr.OSDMapMessage {
-				if !verifiedMon {
-					return nil
-				}
-				return c.handleMonOSDMap(s, m)
-			}
-			if m.Type == msgr.MgrDigestMessage {
-				if !verifiedMon {
-					return nil
-				}
-				return c.handleDigest(s, m)
-			}
-			if m.Type == msgr.ServiceMapMessage {
-				if !verifiedMon {
-					return nil
-				}
-				return c.handleServiceMap(s, m)
-			}
-			if m.Type == msgr.ConfigMessage {
-				if !verifiedMon {
-					return nil
-				}
-				return c.handleConfig(s, m)
-			}
-			if m.Type == msgr.LogMessage {
-				if !verifiedMon {
-					return nil
-				}
-				return c.handleLog(s, m)
-			}
-			// MON can send mgrmap before monmap. Keep at most one frame until
-			// this candidate's MonMap establishes cluster and release identity.
-			if m.Type == msgr.MgrMapMessage && !verifiedMon {
-				c.mu.Lock()
-				current := c.mon == s
-				c.mu.Unlock()
-				if !current {
-					return nil
-				}
-				if err := validateMapMessageHeader(m); err != nil {
-					bufferedMgr = nil
-					return err
-				}
-				mgr, err := maps.DecodeMgr(m.Front)
-				if err != nil {
-					bufferedMgr = nil
-					return fmt.Errorf("%w: invalid MGR map: %w", msgr.ErrFrame, err)
-				}
-				if bufferedMgr == nil || mgr.Epoch >= bufferedEpoch {
-					bufferedMgr = &msgr.MessageData{Type: m.Type, Front: m.Front}
-					bufferedEpoch = mgr.Epoch
-				}
-				return nil
-			}
-			accepted, err := c.handleMap(s, m)
-			if err != nil {
-				bufferedMgr = nil
-				return err
-			}
-			if accepted {
-				if !verifiedMon {
-					mon, _ := maps.DecodeMon(m.Front) // Already validated by handleMap.
-					candidateEpoch = mon.AuthEpoch
-					candidateMonMap = mon
-				}
-				verifiedMon = true
-				if bufferedMgr != nil {
-					_, err = c.handleMap(s, *bufferedMgr)
-					bufferedMgr = nil
-					if err != nil {
-						return err
-					}
-				}
-				readyOnce.Do(func() { close(ready) })
-			}
-			return nil
-		}, func(err error) {
-			c.stopLogForFailedSession(s, err)
-			c.stopConfigForFailedSession(s, err)
-			c.stopDigestForFailedSession(s, err)
-			c.stopServiceMapForFailedSession(s, err)
-			c.stopOSDMapForFailedSession(s, err)
-			c.stopMDSMapsForFailedSession(s, err)
-			c.mu.Lock()
-			delete(c.mdsMapBindings, s)
-			delete(c.mdsMapSourceGenerations, s)
-			if c.mon == s {
-				c.resetMDSMapSourcesLocked()
-				wasReady := c.monReady
-				c.monReady = false
-				if c.logWatch != nil {
-					c.logWatch.source = nil
-				}
-				if c.configWatch != nil {
-					c.configWatch.source = nil
-				}
-				if c.digestWatch != nil {
-					c.digestWatch.source = nil
-				}
-				if c.serviceMapWatch != nil {
-					c.serviceMapWatch.source = nil
-				}
-				if c.osdMapWatch != nil {
-					c.osdMapWatch.source = nil
-				}
-				c.signal()
-				if wasReady {
-					c.wakeMonitor()
-				}
-			}
-			c.mu.Unlock()
-		})
+		s = session.New(transport, c.sessionConfig(), admission.handle, func(err error) { c.monitorSessionClosed(s, err) })
+		admission.session = s // before attach starts the reader
 		if old != nil {
 			// The old session may already be terminal while its custom Conn.Close
 			// still delays onClose. Record its registered watch's cause before
 			// making that callback stale by adopting this candidate.
 			c.stopLogForFailedSession(old, old.Err())
-			c.stopConfigForFailedSession(old, old.Err())
-			c.stopDigestForFailedSession(old, old.Err())
-			c.stopServiceMapForFailedSession(old, old.Err())
+			c.stopMonSnapshotsForFailedSession(old, old.Err())
 			c.stopOSDMapForFailedSession(old, old.Err())
 			c.stopMDSMapsForFailedSession(old, old.Err())
 		}
 		c.mu.Lock()
 		c.mon, c.monReady, c.monComp = s, false, transport.Compression
-		c.resetMDSMapSourcesLocked()
-		if c.logWatch != nil {
-			// The log worker may miss a fast candidate failure and restoration
-			// of the same old session. Force a cursor-based registration even
-			// when it observes only the final restored MON.
-			c.logWatch.source = nil
-		}
-		if c.configWatch != nil {
-			// Request a full map even if the worker misses a failed candidate
-			// and observes only restoration of the same old MON session.
-			c.configWatch.source = nil
-		}
-		if c.digestWatch != nil {
-			// Resubscribe even if the worker misses a failed candidate and
-			// observes only restoration of the same admitted MON session.
-			c.digestWatch.source = nil
-		}
-		if c.serviceMapWatch != nil {
-			c.serviceMapWatch.source = nil
-		}
-		if c.osdMapWatch != nil {
-			c.osdMapWatch.source = nil
-		}
+		// A watch worker may miss a fast candidate failure and observe only
+		// restoration of the same old session. Force every watch to register
+		// again: logs from their cursor, snapshots with a fresh full request.
+		c.resetMonWatchSourcesLocked()
 		attached := c.attach(s)
 		c.signal()
 		c.mu.Unlock()
@@ -601,78 +467,13 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 		err = s.Send(c.ctx, msgr.Subscribe(0, 0, c.options.Hostname))
 		if err == nil {
-			err = waitMonitorAdmission(linked, s, ready)
+			err = waitMonitorAdmission(linked, s, admission.ready)
 		}
 		release()
-		var oldManager *session.Session
-		var installedObservation *authIssuerObservation
-		var oldOSDs []*session.Session
-		var oldMDSs []*session.Session
-		barrierRetry := false
 		if err == nil {
-			c.mu.Lock()
-			if c.authRefreshed == nil {
-				c.authRefreshed = make(map[string]uint32)
-			}
-			c.authRefreshed[candidateTarget.endpoint] = max(c.authRefreshed[candidateTarget.endpoint], candidateEpoch)
-			if c.closed {
-				err = ErrClosed
-			} else if candidateEpoch >= c.authBarrier && refreshedBefore < c.authBarrier && !barrierRetried[candidateTarget] {
-				// A key wipe commits the MonMap auth epoch and the new keys
-				// together, but the MON pushes the MonMap before AuthMonitor
-				// applies the keys and handshakes mint tickets outside the
-				// MON's lock. This handshake may have used pre-wipe service
-				// keys; its MonMap reply now proves the refresh, so discard
-				// the tickets and authenticate to the same MON once more.
-				err = errAuthRefreshBarrier
-				barrierRetry = true
-			} else {
-				if (knownEpoch && c.monMap.AuthEpoch > attemptEpoch) || candidateEpoch < c.monMap.AuthEpoch {
-					// Authentication may precede a key wipe learned from MonMap.
-					// Never overwrite its invalidation with an older candidate.
-					candidate = invalidateAuthTickets(candidate)
-				}
-				if c.auth.GlobalID != candidate.GlobalID {
-					oldManager, c.mgr = c.mgr, nil
-					for _, mds := range c.mdss {
-						if mds.session != nil {
-							mds.session.Retire()
-							oldMDSs = append(oldMDSs, mds.session)
-						}
-					}
-					for _, osd := range c.osds {
-						if osd.session != nil {
-							osd.session.Retire()
-							oldOSDs = append(oldOSDs, osd.session)
-						}
-					}
-				}
-				c.auth = candidate
-				c.authErr = nil
-				c.monReady = true
-				c.monTarget = candidateTarget
-				if c.authTrace != nil && c.authTrace.installed != nil {
-					c.authTraceNext++
-					installedObservation = &authIssuerObservation{session: s, endpoint: candidateTarget.endpoint, monMap: candidateMonMap, sequence: c.authTraceNext}
-					if c.authTrace.cycle != nil {
-						installedObservation.cycle = int(c.authTrace.cycle.Load())
-					}
-				}
-				c.signal()
-			}
-			c.mu.Unlock()
-		}
-		if installedObservation != nil {
-			c.authTrace.installed(*installedObservation, candidate)
-		}
-		if oldManager != nil {
-			oldManager.Fail(errors.New("ceph: authenticated client identity changed"))
-		}
-		for _, mds := range oldMDSs {
-			mds.Fail(ErrMDSIdentityChanged)
-		}
-		for _, osd := range oldOSDs {
-			osd.Fail(errors.New("ceph: authenticated client identity changed"))
+			var published monPublication
+			published, err = c.publishMonitorAdmission(s, attempt, admission.result())
+			published.finish(c)
 		}
 		if err == nil {
 			if old != nil && old != s {
@@ -680,14 +481,8 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 			}
 			return nil
 		}
-		s.Fail(err)
-		c.mu.Lock()
-		if c.mon == s {
-			c.mon, c.monReady = old, wasReady && old != nil && old.Err() == nil
-			c.signal()
-		}
-		c.mu.Unlock()
-		if barrierRetry {
+		c.restoreMonitor(s, old, wasReady, err)
+		if err == errAuthRefreshBarrier {
 			barrierRetried[candidateTarget] = true
 			seen[candidateTarget] = false
 			targets = slices.Insert(targets, i+1, candidateTarget)
@@ -699,6 +494,153 @@ func (c *Client) connectMonitor(ctx context.Context) error {
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// monAttempt is the state connectMonitor captured before one candidate's
+// handshake: its target, the credentials it authenticated with, and the auth
+// epochs needed to decide whether those tickets can be published.
+type monAttempt struct {
+	target          monTarget
+	auth            *cephx.Client
+	authEpoch       uint32 // published MonMap auth epoch before the handshake
+	knownEpoch      bool   // a MonMap had been published before the handshake
+	refreshedBefore uint32 // auth epoch already proven refreshed on target
+	barrierRetried  bool
+}
+
+// monPublication holds the effects of publishing an admitted candidate that
+// must run outside mu.
+type monPublication struct {
+	auth        *cephx.Client
+	observation *authIssuerObservation
+	oldManager  *session.Session
+	oldOSDs     []*session.Session
+	oldMDSs     []*session.Session
+}
+
+// publishMonitorAdmission publishes an admitted candidate's tickets and
+// readiness under mu, using the MonMap that admitted it. It returns
+// errAuthRefreshBarrier when the tickets may predate that map's auth-epoch key
+// refresh on this MON, and ErrClosed after Client.Close; neither publishes.
+func (c *Client) publishMonitorAdmission(s *session.Session, attempt monAttempt, admitted maps.Mon) (monPublication, error) {
+	published := monPublication{auth: attempt.auth}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	endpoint := attempt.target.endpoint
+	if c.authRefreshed == nil {
+		c.authRefreshed = make(map[string]uint32)
+	}
+	c.authRefreshed[endpoint] = max(c.authRefreshed[endpoint], admitted.AuthEpoch)
+	if c.closed {
+		return monPublication{}, ErrClosed
+	}
+	if admitted.AuthEpoch >= c.authBarrier && attempt.refreshedBefore < c.authBarrier && !attempt.barrierRetried {
+		// A key wipe commits the MonMap auth epoch and the new keys
+		// together, but the MON pushes the MonMap before AuthMonitor
+		// applies the keys and handshakes mint tickets outside the
+		// MON's lock. This handshake may have used pre-wipe service
+		// keys; its MonMap reply now proves the refresh, so discard
+		// the tickets and authenticate to the same MON once more.
+		return monPublication{}, errAuthRefreshBarrier
+	}
+	if (attempt.knownEpoch && c.monMap.AuthEpoch > attempt.authEpoch) || admitted.AuthEpoch < c.monMap.AuthEpoch {
+		// Authentication may precede a key wipe learned from MonMap.
+		// Never overwrite its invalidation with an older candidate.
+		published.auth = invalidateAuthTickets(published.auth)
+	}
+	if c.auth.GlobalID != published.auth.GlobalID {
+		published.oldManager, c.mgr = c.mgr, nil
+		for _, mds := range c.mdss {
+			if mds.session != nil {
+				mds.session.Retire()
+				published.oldMDSs = append(published.oldMDSs, mds.session)
+			}
+		}
+		for _, osd := range c.osds {
+			if osd.session != nil {
+				osd.session.Retire()
+				published.oldOSDs = append(published.oldOSDs, osd.session)
+			}
+		}
+	}
+	c.auth = published.auth
+	c.authErr = nil
+	c.monReady = true
+	c.monTarget = attempt.target
+	if c.authTrace != nil && c.authTrace.installed != nil {
+		c.authTraceNext++
+		published.observation = &authIssuerObservation{session: s, endpoint: endpoint, monMap: admitted, sequence: c.authTraceNext}
+		if c.authTrace.cycle != nil {
+			published.observation.cycle = int(c.authTrace.cycle.Load())
+		}
+	}
+	c.signal()
+	return published, nil
+}
+
+// finish reports the published identity to the test observer and fails the
+// sessions an identity change retired. mu must not be held.
+func (p monPublication) finish(c *Client) {
+	if p.observation != nil {
+		c.authTrace.installed(*p.observation, p.auth)
+	}
+	if p.oldManager != nil {
+		p.oldManager.Fail(errors.New("ceph: authenticated client identity changed"))
+	}
+	for _, mds := range p.oldMDSs {
+		mds.Fail(ErrMDSIdentityChanged)
+	}
+	for _, osd := range p.oldOSDs {
+		osd.Fail(errors.New("ceph: authenticated client identity changed"))
+	}
+}
+
+// monitorSessionClosed is a MON session's onClose callback. Watches registered
+// on it first record a fatal cause; a session that is still current then
+// drops readiness and asks every watch to register again.
+func (c *Client) monitorSessionClosed(s *session.Session, err error) {
+	c.stopLogForFailedSession(s, err)
+	c.stopMonSnapshotsForFailedSession(s, err)
+	c.stopOSDMapForFailedSession(s, err)
+	c.stopMDSMapsForFailedSession(s, err)
+	c.mu.Lock()
+	delete(c.mdsMapBindings, s)
+	delete(c.mdsMapSourceGenerations, s)
+	if c.mon == s {
+		wasReady := c.monReady
+		c.monReady = false
+		c.resetMonWatchSourcesLocked()
+		c.signal()
+		if wasReady {
+			c.wakeMonitor()
+		}
+	}
+	c.mu.Unlock()
+}
+
+// resetMonWatchSourcesLocked makes every MON-backed watch register on the next
+// admitted session. mu held.
+func (c *Client) resetMonWatchSourcesLocked() {
+	c.resetMDSMapSourcesLocked()
+	if c.logWatch != nil {
+		c.logWatch.source = nil
+	}
+	c.resetMonSnapshotSourcesLocked()
+	if c.osdMapWatch != nil {
+		c.osdMapWatch.source = nil
+	}
+}
+
+// restoreMonitor fails a rejected candidate and, if it is still the current
+// MON session, reinstates the previous session and its readiness.
+func (c *Client) restoreMonitor(candidate, old *session.Session, wasReady bool, cause error) {
+	candidate.Fail(cause)
+	c.mu.Lock()
+	if c.mon == candidate {
+		c.mon, c.monReady = old, wasReady && old != nil && old.Err() == nil
+		c.signal()
+	}
+	c.mu.Unlock()
 }
 
 // errAuthRefreshBarrier discards a MON session whose tickets may predate the
@@ -729,32 +671,35 @@ func validateMapMessageHeader(m msgr.MessageData) error {
 	return nil
 }
 
-func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (bool, error) {
+// handleMap applies a MonMap or MgrMap from the current MON session. For an
+// accepted MonMap it returns the validated map, including one older than the
+// published map, which is still accepted as this session's identity proof.
+func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (*maps.Mon, error) {
 	c.mu.Lock()
 	current := c.mon == source
 	c.mu.Unlock()
 	if !current {
-		return false, nil
+		return nil, nil
 	}
 	if err := validateMapMessageHeader(m); err != nil {
-		return false, err
+		return nil, err
 	}
 	switch m.Type {
 	case msgr.MonMapMessage:
 		mon, err := maps.DecodeMon(m.Front)
 		if err != nil {
 			if errors.Is(err, maps.ErrRelease) {
-				return false, err
+				return nil, err
 			}
-			return false, fmt.Errorf("%w: invalid MON map: %w", msgr.ErrFrame, err)
+			return nil, fmt.Errorf("%w: invalid MON map: %w", msgr.ErrFrame, err)
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		if c.mon != source {
-			return false, nil
+			return nil, nil
 		}
 		if c.fsid != [16]byte{} && c.fsid != mon.FSID {
-			return false, errors.New("ceph: monitor FSID mismatch")
+			return nil, errors.New("ceph: monitor FSID mismatch")
 		}
 		c.fsid = mon.FSID
 		if mon.Epoch >= c.monMap.Epoch {
@@ -768,16 +713,16 @@ func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (bool, e
 			c.monMap = mon
 		}
 		c.signal()
-		return true, nil
+		return &mon, nil
 	case msgr.MgrMapMessage:
 		mgr, err := maps.DecodeMgr(m.Front)
 		if err != nil {
-			return false, fmt.Errorf("%w: invalid MGR map: %w", msgr.ErrFrame, err)
+			return nil, fmt.Errorf("%w: invalid MGR map: %w", msgr.ErrFrame, err)
 		}
 		c.mu.Lock()
 		if c.mon != source || mgr.Epoch < c.mgrMap.Epoch {
 			c.mu.Unlock()
-			return false, nil
+			return nil, nil
 		}
 		changed := mgr.Name != c.mgrMap.Name || mgr.GlobalID != c.mgrMap.GlobalID || mgr.Available != c.mgrMap.Available || !reflect.DeepEqual(mgr.Addresses, c.mgrMap.Addresses)
 		old := c.mgr
@@ -791,7 +736,7 @@ func (c *Client) handleMap(source *session.Session, m msgr.MessageData) (bool, e
 			old.Fail(ErrManagerChanged)
 		}
 	}
-	return false, nil
+	return nil, nil
 }
 
 func (c *Client) monitor(ctx context.Context) (*session.Session, error) {
@@ -949,7 +894,12 @@ retryManager:
 	}
 }
 
-// Close is idempotent and waits for all connection workers to exit.
+// Close is idempotent and waits for all connection workers to exit. It fails
+// every MON, MGR, OSD and MDS session with ErrClosed, so a call whose
+// transmission had started returns an OutcomeUnknownError; Close does not
+// wait for or cancel remote execution. Active watches drain their accepted
+// data and then report ErrClosed, unless an earlier terminal cause already
+// ended them, and owned handles become unusable. Later calls return ErrClosed.
 func (c *Client) Close() error {
 	// A session can already have a fatal cause while custom connection cleanup
 	// delays onClose and a watch worker has not observed Done. Preserve that
@@ -966,9 +916,7 @@ func (c *Client) Close() error {
 	if source != nil {
 		err := source.Err()
 		c.stopLogForFailedSession(source, err)
-		c.stopConfigForFailedSession(source, err)
-		c.stopDigestForFailedSession(source, err)
-		c.stopServiceMapForFailedSession(source, err)
+		c.stopMonSnapshotsForFailedSession(source, err)
 		c.stopOSDMapForFailedSession(source, err)
 		c.stopMDSMapsForFailedSession(source, err)
 	}
@@ -980,21 +928,10 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 	mdsMapWatches := c.stopMDSMapWatchesLocked(ErrClosed)
-	configWatch, logWatch := c.configWatch, c.logWatch
-	digestWatch := c.digestWatch
-	serviceMapWatch := c.serviceMapWatch
-	osdMapWatch := c.osdMapWatch
-	if configWatch != nil {
-		configWatch.stopLocked(ErrClosed)
-	}
-	if serviceMapWatch != nil {
-		serviceMapWatch.stopLocked(ErrClosed)
-	}
+	snapshotWatches := c.stopMonSnapshotsLocked(ErrClosed)
+	logWatch, osdMapWatch := c.logWatch, c.osdMapWatch
 	if logWatch != nil {
 		logWatch.stopLocked(ErrClosed)
-	}
-	if digestWatch != nil {
-		digestWatch.stopLocked(ErrClosed)
 	}
 	if osdMapWatch != nil {
 		osdMapWatch.stopLocked(ErrClosed)
@@ -1009,17 +946,11 @@ func (c *Client) Close() error {
 	for _, watch := range mdsMapWatches {
 		watch.cancel()
 	}
-	if configWatch != nil {
-		configWatch.cancel()
+	for _, watch := range snapshotWatches {
+		watch.cancelWatch()
 	}
 	if logWatch != nil {
 		logWatch.cancel()
-	}
-	if digestWatch != nil {
-		digestWatch.cancel()
-	}
-	if serviceMapWatch != nil {
-		serviceMapWatch.cancel()
 	}
 	if osdMapWatch != nil {
 		osdMapWatch.cancel()

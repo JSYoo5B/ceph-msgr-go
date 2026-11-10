@@ -256,6 +256,9 @@ func (c *Client) nextMDSTransaction() (uint64, error) {
 // OpenMDS publishes exactly one transport; there is no replacement or recovery.
 func (m *MDSConnection) Done() <-chan struct{} { return m.session.Done() }
 
+// Close ends this handle, fails its session with ErrClosed and waits for setup
+// and transport cleanup. A request whose transmission had started returns an
+// OutcomeUnknownError. It is idempotent and always returns nil.
 func (m *MDSConnection) Close() error {
 	m.closeOnce.Do(func() {
 		c := m.client

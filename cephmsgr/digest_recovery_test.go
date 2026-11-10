@@ -71,13 +71,13 @@ func TestDigestWatchRestoredMONReregistersAfterMissedCandidate(t *testing.T) {
 	p := configTestNextPeer(t, ctx, peers)
 	base, cancel := context.WithCancel(ctx)
 	gate := &logTestLoopGate{Context: base, entered: make(chan struct{}), release: make(chan struct{})}
-	stream := &DigestStream{client: c, ctx: gate, cancel: cancel, done: make(chan struct{}), limit: uint64(c.options.MaxFrameSize), changed: make(chan struct{})}
+	stream := newDigestStream(c, gate, cancel, uint64(c.options.MaxFrameSize))
 	c.mu.Lock()
 	c.digestWatch = stream
 	c.wg.Add(1)
 	old := c.mon
 	c.mu.Unlock()
-	go stream.run()
+	go stream.watch.run()
 	t.Cleanup(func() { gate.unblock(); stream.Close() })
 	digestTestRegistration(t, ctx, p)
 	gate.armed.Store(true)

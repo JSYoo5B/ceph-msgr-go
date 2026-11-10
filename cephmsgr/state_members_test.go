@@ -93,15 +93,15 @@ func TestSnapshotMonitorMembersIgnoreRejectedAndStaleMaps(t *testing.T) {
 	} {
 		t.Run(invalid.name, func(t *testing.T) {
 			accepted, err := f.c.handleMap(current, invalid.message)
-			if accepted || err == nil || !reflect.DeepEqual(f.c.Snapshot().Monitor, before.Monitor) {
+			if accepted != nil || err == nil || !reflect.DeepEqual(f.c.Snapshot().Monitor, before.Monitor) {
 				t.Fatal("rejected map published member discovery", accepted, err, f.c.Snapshot().Monitor)
 			}
 		})
 	}
-	if accepted, err := f.c.handleMap(new(session.Session), memberStateMap(9, members)); accepted || err != nil {
+	if accepted, err := f.c.handleMap(new(session.Session), memberStateMap(9, members)); accepted != nil || err != nil {
 		t.Fatal("stale session published a newer map", accepted, err)
 	}
-	if accepted, err := f.c.handleMap(current, memberStateMap(0, members)); !accepted || err != nil {
+	if accepted, err := f.c.handleMap(current, memberStateMap(0, members)); accepted == nil || err != nil {
 		t.Fatal("valid older map was not handled", accepted, err)
 	}
 	if got := f.c.Snapshot().Monitor; !reflect.DeepEqual(got, before.Monitor) {

@@ -111,7 +111,7 @@ func TestConfigWatchFatalSourceGuardInspectsErrorsOutsideLock(t *testing.T) {
 	c.mu.Unlock()
 	cause := &configTestReentrantError{client: c}
 	finished := make(chan struct{})
-	go func() { c.stopConfigForFailedSession(source, cause); close(finished) }()
+	go func() { c.stopMonSnapshotsForFailedSession(source, cause); close(finished) }()
 	select {
 	case <-finished:
 	case <-ctx.Done():
@@ -139,7 +139,7 @@ func TestConfigWatchFatalSourceGuardInspectsErrorsOutsideLock(t *testing.T) {
 	}
 	defer replacement.Close()
 	p.registration(t, ctx, c.options.Identity)
-	c.stopConfigForFailedSession(new(session.Session), cause)
+	c.stopMonSnapshotsForFailedSession(new(session.Session), cause)
 	p.send(t, ctx, configTestMessage("current source", "still active"))
 	if config, err := replacement.Next(ctx); err != nil || config["current source"] != "still active" {
 		t.Fatal("stale source stopped current watch", config, err)
