@@ -38,8 +38,14 @@ const (
 //     the limit error, which becomes the watch's cause; the client recovers
 //     and, once the large registration is gone, a new watch works again.
 //
-// It runs only when exclusively selected: the oversized map would otherwise
-// reach every ServiceMap watch of a broad suite.
+// A second native holder then registers 65537 metadata keys, one more than
+// the decoder admits in a collection. The native map is valid and smaller
+// than the default frame limit, yet the default-limit watch ends with the
+// limit error of its failed session; the client recovers and, once that
+// registration is gone, a new watch works again.
+//
+// It runs only when exclusively selected: these maps would otherwise reach
+// every ServiceMap watch of a broad suite.
 func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != serviceMapLargeSelector {
 		t.Skip("large ServiceMap cell requires its exclusive selector " + serviceMapLargeSelector)
@@ -48,7 +54,7 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	if control == "" {
 		t.Skip("large ServiceMap cell requires the disposable fixture")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	dial := func(configure func(*Options)) *Client {
 		t.Helper()
@@ -114,19 +120,22 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 		t.Fatal("limited watches have no registered MON source")
 	}
 
-	t.Cleanup(func() {
-		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
-		defer stop()
-		r, err := observeNativeServiceHolder(cleanup, control, token, "cleanup")
-		if err != nil {
-			t.Error("native holder cleanup", err)
-			return
-		}
-		if r.Holder != nil && r.Holder.Alive && !r.Killed {
-			t.Error("native holder survived cleanup")
-		}
-		t.Logf("holder cleanup state=%s killed=%t restored=%v", r.State, r.Killed, r.Restored != nil && *r.Restored)
-	})
+	wideToken := serviceLifecycleToken(t)
+	for _, owned := range []string{token, wideToken} {
+		t.Cleanup(func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
+			defer stop()
+			r, err := observeNativeServiceHolder(cleanup, control, owned, "cleanup")
+			if err != nil {
+				t.Error("native holder cleanup", err)
+				return
+			}
+			if r.Holder != nil && r.Holder.Alive && !r.Killed {
+				t.Error("native holder survived cleanup")
+			}
+			t.Logf("holder cleanup state=%s killed=%t restored=%v", r.State, r.Killed, r.Restored != nil && *r.Restored)
+		})
+	}
 	start, err := observeNativeServiceHolder(ctx, control, token, "start-large")
 	if err != nil {
 		t.Fatal("start large native holder", err)
@@ -176,8 +185,10 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 		t.Fatal("watch budget overflow failed the shared MON session", err)
 	}
 	requireServiceMapLargeClient(t, ctx, budgeted, identities[budgeted], "after the watch budget overflow")
-	again := waitServiceLifecycleMap(t, ctx, open(budgeted, ServiceMapOptions{}), holds)
+	budgetedAgain := open(budgeted, ServiceMapOptions{})
+	again := waitServiceLifecycleMap(t, ctx, budgetedAgain, holds)
 	requireServiceMapLargeDaemon(t, again, daemon, ready, padding)
+	budgetedAgain.Close()
 	t.Logf("watch budget %d: drained %d accepted map(s), then %v; client GID=%d kept, new default-budget watch read epoch=%d raw=%d",
 		serviceMapLargeBudget, drained, overflow, identities[budgeted].GlobalID, again.Epoch, len(again.Raw))
 
@@ -222,9 +233,11 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	removed := waitServiceLifecycleMap(t, absenceCtx, admittedWatch, func(m ServiceMap) bool {
 		return serviceLifecycleAbsent(m, large.Epoch, daemon)
 	})
-	small := waitServiceLifecycleMap(t, absenceCtx, open(framed, ServiceMapOptions{}), func(m ServiceMap) bool {
+	framedAgain := open(framed, ServiceMapOptions{})
+	small := waitServiceLifecycleMap(t, absenceCtx, framedAgain, func(m ServiceMap) bool {
 		return serviceLifecycleAbsent(m, large.Epoch, daemon)
 	})
+	framedAgain.Close()
 	if r, err := observeNativeServiceHolder(ctx, control, token, "cleanup"); err != nil || !serviceHolderRestored(r) || r.Holder == nil || r.Holder.Alive {
 		t.Fatal("released holder baseline was not restored without a kill", err)
 	}
@@ -233,6 +246,89 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	}
 	t.Logf("removal: Go epoch=%d raw=%d native epoch=%d; frame-limited client's new watch read epoch=%d raw=%d",
 		removed.Epoch, len(removed.Raw), *gone.View.Epoch, small.Epoch, len(small.Raw))
+
+	// Collection cap: a valid native map with 65537 metadata entries in one
+	// daemon. Only the admitted client still watches, with default limits.
+	wideDaemon := "holder-" + wideToken[:16]
+	wideStart, err := observeNativeServiceHolder(ctx, control, wideToken, "start-wide")
+	if err != nil {
+		t.Fatal("start wide native holder", err)
+	}
+	wideReady, err := serviceHolderReady(wideStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wideNative := waitServiceHolder(t, ctx, control, wideToken, "wide registration", func(r nativeServiceHolderReceipt) bool {
+		return serviceHolderPresent(r, wideReady) && r.Holder != nil && r.Holder.Alive
+	})
+	if wideReady.Keys != 1<<16+1 || wideNative.View.Entry.Keys != wideReady.Keys {
+		t.Fatal("native registration is not one entry above the collection cap", wideReady.Keys, wideNative.View.Entry.Keys)
+	}
+	var capped error
+	for capped == nil {
+		m, err := admittedWatch.Next(ctx)
+		if err != nil {
+			capped = err
+			break
+		}
+		if _, found := m.Services["ceph-msgr"].Daemons[wideDaemon]; found {
+			t.Fatal("watch delivered a map above the collection cap", m.Epoch, len(m.Raw))
+		}
+	}
+	if _, err := admittedWatch.Next(ctx); !errors.Is(capped, ErrLimitExceeded) || !errors.Is(capped, ErrMalformedMessage) || errors.Is(capped, ErrServiceMapOverflow) || err != capped {
+		t.Fatal("collection cap was not the stable session cause", capped, err)
+	}
+	settleServiceMapLargeSession(admitted)
+	requireServiceMapLargeClient(t, ctx, admitted, identities[admitted], "after the collection cap")
+	t.Logf("collection cap: native epoch=%d GID=%d metadata keys=%d bytes=%d (valid native map); default-limit watch ended with %v; client GID=%d recovered",
+		*wideNative.View.Epoch, wideReady.GID, wideNative.View.Entry.Keys, wideNative.View.Entry.Bytes, capped, identities[admitted].GlobalID)
+	wideReleased, err := observeNativeServiceHolder(ctx, control, wideToken, "release")
+	if err != nil || wideReleased.State != "released" || wideReleased.Exited == nil || wideReleased.Exited.Reason != "released" || !wideReleased.Exited.ShutdownReturned {
+		t.Fatal("wide native holder release did not return a released shutdown", err)
+	}
+	wideCtx, stopWide := context.WithTimeout(ctx, 120*time.Second)
+	defer stopWide()
+	since = time.Time{}
+	wideGone := waitServiceHolder(t, wideCtx, control, wideToken, "stable native removal of the wide registration", func(r nativeServiceHolderReceipt) bool {
+		if !serviceHolderAbsent(r) {
+			since = time.Time{}
+			return false
+		}
+		if since.IsZero() {
+			since = time.Now()
+		}
+		return time.Since(since) >= 2*time.Second
+	})
+	// The watch opens only after native removal, so the MON's current map
+	// is already below the cap.
+	final := waitServiceLifecycleMap(t, wideCtx, open(admitted, ServiceMapOptions{}), func(m ServiceMap) bool {
+		return serviceLifecycleAbsent(m, removed.Epoch, daemon, wideDaemon)
+	})
+	if r, err := observeNativeServiceHolder(ctx, control, wideToken, "cleanup"); err != nil || !serviceHolderRestored(r) || r.Holder == nil || r.Holder.Alive {
+		t.Fatal("released wide holder baseline was not restored without a kill", err)
+	}
+	for c, before := range identities {
+		requireServiceMapLargeClient(t, ctx, c, before, "after the wide removal")
+	}
+	t.Logf("wide removal: native epoch=%d; new default-limit watch read epoch=%d raw=%d", *wideGone.View.Epoch, final.Epoch, len(final.Raw))
+}
+
+// settleServiceMapLargeSession waits for the MON session that carried an
+// undecodable map to fail. The decoder's refusal ends the watch first and
+// fails that session immediately afterwards; a command issued in between
+// would be admitted to the failing session and end as an unknown outcome.
+// The bound only covers a session that was already replaced.
+func settleServiceMapLargeSession(c *Client) {
+	c.mu.Lock()
+	current := c.mon
+	c.mu.Unlock()
+	if current == nil {
+		return
+	}
+	select {
+	case <-current.Done():
+	case <-time.After(2 * time.Second):
+	}
 }
 
 // requireServiceMapLargeDaemon checks the owned daemon of a delivered map
