@@ -169,7 +169,10 @@ agrees. No assertion depends on a wall-clock margin.
    of A to the standby's exact name returns `ErrManagerNotActive` and writes
    nothing; a read-only `config get` Tell to the active name passes the gate on
    the shared MGR session with its own transaction.
-4. Submit A once. Wait for the hold. Require one complete local write of A, on
+4. Submit A once. Wait for the hold, and then for the writer to publish its
+   completed local write: the receipt and the padded-write count are recorded
+   after the local write returns, which the held reply does not order.
+   Require one complete local write of A, on
    the same connection as the read-only Tell, to the peer that the fixture
    topology identifies as the named manager, with the bound transaction, and
    the held frame to be type 98 with that transaction.
@@ -224,6 +227,11 @@ agrees. No assertion depends on a wall-clock margin.
   the bound reply and a later frame in one write, each read with a 1-byte, a
   7-byte and a 64 KiB buffer. The reader receives exactly the bytes before the
   bound reply and then the close error.
+- `TestHeldReplyDoesNotOrderTheLocalWriteReceipt`: the peer reads all of A
+  and its reply is held while the local write has not returned. No receipt
+  and no padded-write count exist at that point; the waits the cells use
+  return only after the write returns, and a wait with an ended context
+  fails.
 - `TestMgrTellMutationsAreBoundToTheBaselineIncarnation` (fixture): for both
   mutations and for a manager replaced under the same name, failed over,
   unreadable or recorded without a GID, the receipt is `refused`, no claim

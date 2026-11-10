@@ -248,7 +248,7 @@ func appliedManagerTellIsNotReplayed(t *testing.T, current bool) {
 	}
 	var nearMiss monOutcomeWrite
 	if decoded {
-		nearMiss = requireMonOutcomeWrite(t, probe, readFront, nil)
+		nearMiss = awaitMonOutcomeWrite(t, ctx, probe, readFront, nil)
 		if _, _, _, bound := gate.binding(); bound || nearMiss.Type != msgr.TellCommandMessage || nearMiss.Peer != role {
 			t.Fatal("the read-only Tell bound the gate or missed the active manager", bound, nearMiss.Type, nearMiss.Peer)
 		}
@@ -282,7 +282,9 @@ func appliedManagerTellIsNotReplayed(t *testing.T, current bool) {
 		if held, err = gate.heldReply(); err != nil {
 			t.Fatal("the reply gate could not decode a subject stream", err)
 		}
-		submitted = requireMonOutcomeWrite(t, probe, frontA, nil)
+		// The held reply does not order A's local write completion: its
+		// record is published by the writer after the write returned.
+		submitted = awaitMonOutcomeWrite(t, ctx, probe, frontA, nil)
 		connection, transaction, sequence, _ := gate.binding()
 		if submitted.Type != msgr.TellCommandMessage || submitted.Connection != connection ||
 			submitted.Transaction != transaction || submitted.Sequence != sequence {
@@ -324,8 +326,8 @@ func appliedManagerTellIsNotReplayed(t *testing.T, current bool) {
 	} else {
 		applied = awaitNativeMgrTell(t, ctx, control, token, "applied", receiving, nativeMonTellState{a, &a}, baseline, finished)
 	}
-	if writes.Load() != 1 {
-		t.Fatal("initial Tell mutation was not written exactly once", writes.Load())
+	if count := awaitPaddedWrites(t, ctx, &writes, 1); count != 1 {
+		t.Fatal("initial Tell mutation was not written exactly once", count)
 	}
 	identity.PaddedWrites = writes.Load()
 	writeIdentity()

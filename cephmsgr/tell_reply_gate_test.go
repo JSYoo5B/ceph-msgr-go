@@ -2,6 +2,7 @@ package cephmsgr
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -410,5 +411,98 @@ func TestTellReplyGateDeliversTheWholePrefixBeforeParking(t *testing.T) {
 			}
 			peer.Close()
 		}
+	}
+}
+
+// lateReturnConn completes a write on the wire and returns from it only when
+// released.
+type lateReturnConn struct {
+	net.Conn
+	release chan struct{}
+}
+
+func (c *lateReturnConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	<-c.release
+	return n, err
+}
+
+// The peer has read the whole command and its reply is held before the local
+// Write returns. The receipt and the padded-write count are published only
+// then, and the cells wait for them instead of reading them at the barrier.
+func TestHeldReplyDoesNotOrderTheLocalWriteReceipt(t *testing.T) {
+	gate := newTellReplyGate()
+	local, peer := net.Pipe()
+	defer peer.Close()
+	gated := newTellReplyGateConn(local, gate, 7)
+	defer gated.Close()
+	probe := &monOutcomeWrites{}
+	probe.enabled.Store(true)
+	var writes atomic.Int32
+	late := &lateReturnConn{Conn: gated, release: make(chan struct{})}
+	conn := &commandWriteProbe{Conn: &monOutcomeConn{Conn: late, record: probe, connection: 7, peer: "mgr.x"}, writes: &writes}
+	command := msgr.TellCommand([16]byte{1}, []string{`{"prefix":"config set","val":"` + string(bytes.Repeat([]byte("a"), 8<<10)) + `"}`}, nil)
+	gate.arm(command.Front, command.Data)
+	command.Transaction, command.Sequence = 5, 3
+	frame := tellFrame(t, command)
+	written := make(chan error, 1)
+	go func() {
+		n, err := conn.Write(frame)
+		if err == nil && n != len(frame) {
+			err = io.ErrShortWrite
+		}
+		written <- err
+	}()
+	// The peer reads all of A and replies to its transaction.
+	if _, err := io.ReadFull(peer, make([]byte, len(frame))); err != nil {
+		t.Fatal(err)
+	}
+	reply := append(msgr.Banner{Supported: msgr.Revision1, Required: msgr.Revision1}.Encode(), gateTellReply(t, msgr.TellCommandReplyMessage, 5, 1)...)
+	go func() { _, _ = peer.Write(reply) }()
+	go func() {
+		// A session-like reader: it keeps reading until the connection ends.
+		for buffer := make([]byte, 64<<10); ; {
+			if _, err := gated.Read(buffer); err != nil {
+				return
+			}
+		}
+	}()
+	select {
+	case <-gate.held:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reply was never held")
+	}
+	// The barrier is reached and nothing is published yet.
+	if matching, err := probe.matching(command.Front, command.Data); err != nil || len(matching) != 0 || writes.Load() != 0 {
+		t.Fatal("the local write was published before it returned", matching, writes.Load(), err)
+	}
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := probe.await(expired, command.Front, command.Data); !errors.Is(err, context.Canceled) {
+		t.Fatal("waiting for an unpublished receipt outlived its context", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	awaited := make(chan error, 1)
+	go func() { awaited <- probe.await(ctx, command.Front, command.Data) }()
+	select {
+	case err := <-awaited:
+		t.Fatal("the wait returned before the local write completed", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(late.release)
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-awaited; err != nil {
+		t.Fatal("the completed write was never published", err)
+	}
+	submitted := awaitMonOutcomeWrite(t, ctx, probe, command.Front, command.Data)
+	if !submitted.Complete || submitted.Connection != 7 || submitted.Peer != "mgr.x" || submitted.Transaction != 5 || submitted.Sequence != 3 ||
+		submitted.Written != len(frame) || awaitPaddedWrites(t, ctx, &writes, 1) != 1 {
+		t.Fatal("receipt of the completed write", submitted, writes.Load())
+	}
+	if held, err := gate.heldReply(); err != nil || held.Connection != 7 || held.Transaction != 5 {
+		t.Fatal("held reply", held, err)
 	}
 }

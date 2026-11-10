@@ -192,7 +192,7 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 	if got := goDaemonCommandValue(t, ctx, cell, handle); got != baseline.value {
 		t.Fatal("the subject client read another baseline", got, baseline.value)
 	}
-	nearMiss := requireMonOutcomeWrite(t, probe, readFront, nil)
+	nearMiss := awaitMonOutcomeWrite(t, ctx, probe, readFront, nil)
 	if _, _, _, bound := gate.binding(); bound || nearMiss.Type != msgr.TellCommandMessage || nearMiss.Peer != role || writes.Load() != 0 {
 		t.Fatal("the read-only command bound the gate, missed the target daemon or reached the padded size", bound, nearMiss.Type, nearMiss.Peer, writes.Load())
 	}
@@ -220,7 +220,9 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 	if err != nil {
 		t.Fatal("the reply gate could not decode a subject stream", err)
 	}
-	submitted := requireMonOutcomeWrite(t, probe, frontA, nil)
+	// The held reply does not order A's local write completion: its record
+	// is published by the writer after the write returned.
+	submitted := awaitMonOutcomeWrite(t, ctx, probe, frontA, nil)
 	connection, transaction, sequence, _ := gate.binding()
 	if submitted.Type != msgr.TellCommandMessage || submitted.Peer != role || submitted.Connection != connection ||
 		submitted.Transaction != transaction || submitted.Sequence != sequence {
@@ -232,8 +234,8 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 	if held.Type != msgr.TellCommandReplyMessage || held.Connection != submitted.Connection || held.Transaction != submitted.Transaction {
 		t.Fatal("the withheld frame is not the command reply to A's transaction", held, submitted)
 	}
-	if writes.Load() != 1 {
-		t.Fatal("initial mutation was not written exactly once", writes.Load())
+	if count := awaitPaddedWrites(t, ctx, &writes, 1); count != 1 {
+		t.Fatal("initial mutation was not written exactly once", count)
 	}
 	identity.Submitted, identity.WithheldReply, identity.MatchingWrites, identity.PaddedWrites = &submitted, &held, 1, writes.Load()
 	writeDaemonCommandOutcomeIdentity(t, control, identity)
