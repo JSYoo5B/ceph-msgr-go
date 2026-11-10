@@ -25,11 +25,7 @@ func newOSDEncoderReceipt(t *testing.T, spec nativeEncoderSpec, prefix, buildDri
 		t.Fatal(err)
 	}
 	for field, file := range map[string]string{"wrapper_sha256": spec.wrapper, "build_driver_sha256": buildDriver, "launcher_sha256": spec.driver} {
-		data, err := os.ReadFile("../../tools/" + file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if proof[field] != fmt.Sprintf("%x", sha256.Sum256(data)) {
+		if proof[field] != receiptToolDigest(t, prefix+"-native-provenance.json", file) {
 			t.Fatalf("%s %s provenance differs from %s", prefix, field, file)
 		}
 	}

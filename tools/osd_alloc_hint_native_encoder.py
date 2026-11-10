@@ -215,7 +215,10 @@ def build(root, wrapper, build_target="osd_alloc_hint_native_encoder", output_na
               "loader_audit": loader,
               "status": status or "five freshly constructed native SETALLOCHINT messages directly encoded and separately decoded; decoded objects never re-encoded",
               "fixtures": fixtures}
+    # The final stdout line remains the CLI receipt. In-process callers use the
+    # returned object, so diagnostics never form part of their data contract.
     print(json.dumps(result), flush=True)
+    return result
 
 
 if __name__ == "__main__":

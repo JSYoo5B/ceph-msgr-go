@@ -58,11 +58,7 @@ func allocHintEncoderReceipt(t *testing.T) (map[string]any, string) {
 	if receipt["wrapper_sha256"] != hash {
 		t.Fatal("stored native SETALLOCHINT receipt does not match its actual compiled wrapper source")
 	}
-	driver, err := os.ReadFile("../../tools/" + allocHintEncoderSpec.driver)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if receipt["build_driver_sha256"] != fmt.Sprintf("%x", sha256.Sum256(driver)) {
+	if receipt["build_driver_sha256"] != receiptToolDigest(t, "alloc-hint-native-provenance.json", allocHintEncoderSpec.driver) {
 		t.Fatal("stored native SETALLOCHINT receipt does not match its actual build driver")
 	}
 	return receipt, hash

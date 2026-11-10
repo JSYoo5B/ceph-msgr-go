@@ -12,13 +12,17 @@ import (
 )
 
 func TestReadMetadataNativeProofsMatchStoredSegments(t *testing.T) {
-	for _, spec := range []nativeEncoderSpec{mapextEncoderSpec, checksumEncoderSpec} {
-		t.Run(spec.command, func(t *testing.T) {
-			prefix := "mapext"
-			if spec.command == checksumEncoderSpec.command {
-				prefix = "checksum"
-			}
-			raw, err := os.ReadFile("../../internal/osd/testdata/" + prefix + "-native-provenance.json")
+	for _, tc := range []struct {
+		spec    nativeEncoderSpec
+		receipt string
+	}{
+		{mapextEncoderSpec, "mapext-native-provenance.json"},
+		{checksumEncoderSpec, "checksum-native-provenance.json"},
+		{checksumEncoderSpec, freshChecksumReceipt},
+	} {
+		spec := tc.spec
+		t.Run(tc.receipt, func(t *testing.T) {
+			raw, err := os.ReadFile("../../internal/osd/testdata/" + tc.receipt)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -27,12 +31,20 @@ func TestReadMetadataNativeProofsMatchStoredSegments(t *testing.T) {
 				t.Fatal(err)
 			}
 			for field, file := range map[string]string{"wrapper_sha256": spec.wrapper, "build_driver_sha256": allocHintEncoderSpec.driver, "launcher_sha256": spec.driver} {
-				data, err := os.ReadFile("../../tools/" + file)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if proof[field] != fmt.Sprintf("%x", sha256.Sum256(data)) {
+				if proof[field] != receiptToolDigest(t, tc.receipt, file) {
 					t.Fatal("native generator provenance mismatch", field)
+				}
+			}
+			if spec.command == checksumEncoderSpec.command {
+				builds, ok := proof["algorithm_builds"].(map[string]any)
+				if !ok || len(builds) != 3 {
+					t.Fatal("native CHECKSUM receipt lacks its three algorithm builds")
+				}
+				for _, algorithm := range []string{"crc32c", "xxhash32", "xxhash64"} {
+					build, ok := builds[algorithm].(map[string]any)
+					if !ok || build["build_driver_sha256"] != proof["build_driver_sha256"] || build["wrapper_sha256"] != proof["wrapper_sha256"] {
+						t.Fatal("native CHECKSUM algorithm build differs from its receipt", algorithm)
+					}
 				}
 			}
 			for _, name := range spec.names {
