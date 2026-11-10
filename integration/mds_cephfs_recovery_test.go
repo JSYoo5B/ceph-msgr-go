@@ -340,21 +340,33 @@ func (d *recoveryDials) attempts() []recoveryDial {
 
 // recoveryClient dials one client of the owned recovery identity. MDS
 // endpoints pass through counted, closable relays; OSD dials are admitted only
-// when the client is meant to reach an OSD.
+// when the client is meant to reach an OSD. A setup failure ends the test.
 func recoveryClient(t *testing.T, ctx context.Context, identity, keyPath string, dials *recoveryDials, configure func(*cephmsgr.Options)) *cephmsgr.Client {
 	t.Helper()
-	options := integrationOptions(t)
+	c, release, err := dialRecoveryClient(ctx, integrationOptions(t), identity, keyPath, dials, configure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(release)
+	return c
+}
+
+// dialRecoveryClient is recoveryClient for callers that must keep running
+// after a setup failure (the reconciliation of a failed restart leaf): a
+// credential or MON authentication error is returned, never raised through
+// the test. release closes the client and its MDS relays.
+func dialRecoveryClient(ctx context.Context, options cephmsgr.Options, identity, keyPath string, dials *recoveryDials, configure func(*cephmsgr.Options)) (*cephmsgr.Client, func(), error) {
 	encoded, err := os.ReadFile(keyPath)
 	if err != nil {
-		t.Fatal("read recovery credential", err)
+		return nil, nil, fmt.Errorf("read recovery credential: %w", err)
 	}
 	private, err := cephx.ParseKey(strings.TrimSpace(string(encoded)))
 	want, profileErr := mdsFreshExpectedKeyType(os.Getenv("CEPH_MSGR_TEST_KEY_TYPE"))
 	if err != nil || profileErr != nil || private.Type() != want {
-		t.Fatal("recovery credential does not match selected key profile")
+		return nil, nil, errors.New("recovery credential does not match selected key profile")
 	}
 	if options.Key, err = cephmsgr.ParseKey(strings.TrimSpace(string(encoded))); err != nil {
-		t.Fatal(err)
+		return nil, nil, fmt.Errorf("parse recovery credential: %w", err)
 	}
 	options.Identity, options.MaxMDSConnections = identity, 1
 	options.EnableMDSMaps = false
@@ -408,9 +420,9 @@ func recoveryClient(t *testing.T, ctx context.Context, identity, keyPath string,
 	}
 	c, err := cephmsgr.Dial(ctx, options)
 	if err != nil {
-		t.Fatal("authenticate recovery client", err)
+		return nil, nil, fmt.Errorf("authenticate recovery client: %w", err)
 	}
-	t.Cleanup(func() {
+	return c, func() {
 		c.Close()
 		dials.mu.Lock()
 		defer dials.mu.Unlock()
@@ -418,8 +430,7 @@ func recoveryClient(t *testing.T, ctx context.Context, identity, keyPath string,
 			relay.Close()
 			relay.Wait()
 		}
-	})
-	return c
+	}, nil
 }
 
 // recoveryPlacement is the caller-side placement of one data object, read
@@ -582,10 +593,40 @@ type recoveryReconcileEvidence struct {
 	SessionClosed     bool
 	RecoveryDirAbsent bool
 	PlanDirAbsent     bool
-	OwnedSessionsLeft []uint64                 `json:",omitempty"`
-	Blocklist         []nativeMDSSessionsBlock `json:",omitempty"`
-	Errors            []string                 `json:",omitempty"`
-	Completed         bool
+	// OwnedSessionsChecked reports that the native session listing was read;
+	// OwnedSessionsLeft is meaningful only then.
+	OwnedSessionsChecked bool
+	OwnedSessionsLeft    []uint64                 `json:",omitempty"`
+	Blocklist            []nativeMDSSessionsBlock `json:",omitempty"`
+	Errors               []string                 `json:",omitempty"`
+	// Completed is a positive statement: every terminal check ran and held
+	// and no step failed. See finish.
+	Completed bool
+}
+
+// failf records one reconciliation error and reports it. report adds to the
+// test result (t.Errorf); it never replaces the failure of the restart leaf.
+func (r *recoveryReconcileEvidence) failf(report func(string), format string, args ...any) {
+	message := fmt.Sprintf(format, args...)
+	r.Errors = append(r.Errors, message)
+	report(message)
+}
+
+// finish closes the receipt and must be deferred. Completed requires the
+// terminal verification itself: the cleanup session closed, both owned
+// directories natively absent and the native session listing read without an
+// owned session. The absence of recorded errors is not enough, because a
+// reconciliation can stop without recording one (a helper that ends the
+// goroutine through t.Fatal runs the deferred finish with no error). Such a
+// stop is recorded here as an error.
+func (r *recoveryReconcileEvidence) finish(report func(string)) {
+	r.Millis = time.Since(r.Started).Milliseconds()
+	verified := r.SessionClosed && r.RecoveryDirAbsent && r.PlanDirAbsent && r.OwnedSessionsChecked && len(r.OwnedSessionsLeft) == 0
+	if !verified && len(r.Errors) == 0 {
+		r.failf(report, "reconciliation stopped before its terminal verification (session closed %t, recovery directory absent %t, plan directory absent %t, owned sessions checked %t)",
+			r.SessionClosed, r.RecoveryDirAbsent, r.PlanDirAbsent, r.OwnedSessionsChecked)
+	}
+	r.Completed = verified && len(r.Errors) == 0
 }
 
 // recoveryRemoval is one unlink or rmdir of the reconciliation; ENOENT means
@@ -896,6 +937,9 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 
 	// The restart client outlives every leaf: its cleanup belongs to the test.
 	dialsR = newRecoveryDials(false, current.MDS.Endpoint)
+	// The reconciliation of a failed restart leaf dials its own client from
+	// these options and reports a setup failure in its receipt.
+	baseOptions := integrationOptions(t)
 	clientR = recoveryClient(t, ctx, identity, keyFile, dialsR, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS, o.EnableOSD = true, true, false })
 
 	if !leaf("open_recovery_session", func(t *testing.T) {
@@ -1216,12 +1260,11 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		defer stop()
 		r := &recoveryReconcileEvidence{FailedAfterPhase: restart.Phase, Started: time.Now()}
 		restart.Reconcile = r
-		failf := func(format string, args ...any) {
-			message := fmt.Sprintf(format, args...)
-			r.Errors = append(r.Errors, message)
+		report := func(message string) {
 			t.Errorf("reconcile after the restart leaf failed in phase %q: %s", r.FailedAfterPhase, message)
 		}
-		defer func() { r.Millis, r.Completed = time.Since(r.Started).Milliseconds(), len(r.Errors) == 0 }()
+		failf := func(format string, args ...any) { r.failf(report, format, args...) }
+		defer r.finish(report)
 		if fireDone != nil {
 			select {
 			case <-fireDone:
@@ -1287,7 +1330,15 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if session == nil || session.Status().State != cephmsgr.MDSSessionOpen {
 			r.CleanupSession = "fresh"
 			dials := newRecoveryDials(false, control.mds.Endpoint)
-			client := recoveryClient(t, rc, identity, keyFile, dials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS, o.EnableOSD = true, true, false })
+			// A setup failure is an error of this receipt, not a t.Fatal: the
+			// remaining terminal checks are then not run and finish records
+			// the reconciliation as incomplete.
+			client, release, err := dialRecoveryClient(rc, baseOptions, identity, keyFile, dials, func(o *cephmsgr.Options) { o.EnableMDS, o.EnableCephFS, o.EnableOSD = true, true, false })
+			if err != nil {
+				failf("set up a fresh cleanup client: %v", err)
+				return
+			}
+			defer release()
 			r.FreshGlobalID = client.Snapshot().GlobalID
 			control.goGIDs[r.FreshGlobalID] = true
 			conn, err := client.OpenMDS(rc, cephmsgr.MDSTarget{FilesystemID: fresh.FSCID, Rank: 0, Address: fmt.Sprintf("v2:%s/%d", control.mds.Endpoint, control.mds.Nonce)})
@@ -1393,7 +1444,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			failf("native session listing: %v", err)
 			return
 		}
-		r.Blocklist = observed.Blocklist
+		r.Blocklist, r.OwnedSessionsChecked = observed.Blocklist, true
 		for _, gid := range []uint64{gidR, r.FreshGlobalID} {
 			if gid != 0 && observed.session(gid) != nil {
 				r.OwnedSessionsLeft = append(r.OwnedSessionsLeft, gid)
