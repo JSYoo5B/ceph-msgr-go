@@ -152,9 +152,11 @@ do not execute native acceptance. CI and native executions on the exact final
 PR head are reported separately on the PR; this record identifies its own
 tested commit rather than claiming that a documentation update was executed.
 
-Issue #64 remains open for forced connected-MON death and other fault phases,
-secure-profile request correlation, ServiceMap owned registration/removal and
-same-stream MON recovery, bounded removal visibility, admitted large maps and
-the separate session/watch collection-budget boundaries. No native encoder
-parity, daemon execution count, lossless subscription history or large-map
-claim follows from this checkpoint.
+At this checkpoint issue #64 remained open for forced connected-MON death
+and other fault phases, secure-profile request correlation, ServiceMap owned
+registration/removal and same-stream MON recovery, bounded removal
+visibility, admitted large maps and the separate session/watch
+collection-budget boundaries. No native encoder parity, daemon execution
+count, lossless subscription history or large-map claim follows from this
+checkpoint. Forced death of the connected MON is recorded separately in
+[MON_MAP_VERSION_KILL_VALIDATION.md](MON_MAP_VERSION_KILL_VALIDATION.md).

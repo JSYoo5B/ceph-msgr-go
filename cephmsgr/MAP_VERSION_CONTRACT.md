@@ -47,7 +47,21 @@ is not retransmitted. The MON restarts and the native full quorum settles.
 [The receipt](../integration/fixture/MON_MAP_VERSION_STOP_VALIDATION.md)
 separates the first failed TID assumption from the corrected result.
 
-This is a server-answered, locally pending query under orderly provider Stop.
-Forced SIGKILL, a request still unprocessed in the MON and secure-profile
-request-specific observation remain unverified; Stop is not substituted for
-those acceptance boundaries.
+That checkpoint is a server-answered, locally pending query under orderly
+provider Stop. Two further cells kill the connected MON with SIGKILL instead
+(`TestCephMonMapVersionConnectedKillIntegration`,
+`TestCephMonMapVersionUnprocessedKillIntegration`; CRC, AES IPv4 host and
+AES256K IPv6 container). The first withholds the exact server reply as
+before. The second withholds nothing: the connected MON is out of quorum, so
+it reads the request and does not answer, and a later tell answered on the
+same connection is the barrier. In both, the pending call ends as an
+`OutcomeUnknownError` wrapping the peer loss with an empty result and is not
+retransmitted; one new explicit call uses another admitted MON, the next
+handle and the same client GID, and matches the native epoch; every MON is
+restarted and the native full quorum settles.
+[The receipt](../integration/fixture/MON_MAP_VERSION_KILL_VALIDATION.md)
+states the barrier, its bounds and the fixture's 120 s tickets.
+
+Secure-profile request-specific observation remains unverified: the relay
+decodes CRC frames only. A request delayed inside a MON that is in quorum is
+a different state from the out-of-quorum wait and is also unverified.
