@@ -12,10 +12,14 @@
 // the context of a Client Watch method (WatchConfig, WatchDigest, WatchLogs,
 // WatchServiceMap, WatchOSDMaps, WatchFSMapUser, WatchMDSMaps) also bounds the
 // returned MON subscription stream. OSDConnection.WatchObject and NotifyObject
-// use their context for registration only. Canceling it afterwards leaves the
-// handle and the remote registration in place. Closing the stream or the OSD
-// connection releases local delivery only; the client removes a registration
-// only through an explicit OSDWatch.Unwatch.
+// use their context for registration only; canceling it afterwards changes
+// neither the handle nor the remote registration. Closing the stream or the
+// OSD connection ends local delivery only and sends no UNWATCH. Only a
+// successful OSDWatch.Unwatch confirms that the OSD removed a watch: one that
+// returns an OutcomeUnknownError may have removed it, and a watch whose
+// connection ends without Unwatch can still expire on the OSD after its
+// timeout. A closed stream keeps an earlier terminal cause, such as an
+// overflow or a source failure, instead of its closed error.
 //
 // A daemon command or an OSD request that fails after its transmission started
 // returns an OutcomeUnknownError: the daemon may have executed it, and the

@@ -240,7 +240,9 @@ func (w *OSDWatch) Ping(ctx context.Context, epoch uint32) (OSDReply, error) {
 }
 
 // Unwatch explicitly submits remote removal. Local delivery ends only after a
-// successful server reply; an uncertain result remains visible to the caller.
+// successful server reply, which confirms the removal. An OutcomeUnknownError
+// means the OSD may already have removed the watch, so the caller cannot
+// conclude that it persists; ReconnectWatch then refuses this registration.
 func (w *OSDWatch) Unwatch(ctx context.Context, epoch uint32) (OSDReply, error) {
 	r, err := w.perform(ctx, epoch, OSDOperation{Code: OSDWatchOperation, Watch: OSDWatchInput{Cookie: w.cookie, Action: OSDWatchUnwatch}})
 	if err == nil {
@@ -276,9 +278,11 @@ func (w *OSDWatchStream) finish(err error) {
 	w.connection.client.mu.Unlock()
 }
 
-// Close ends local delivery for this cookie; accepted events still drain
-// before ErrClosed. It sends no remote UNWATCH or ACK: only a successful
-// OSDWatch.Unwatch removes a watch registration. It always returns nil.
+// Close ends local delivery for this cookie. Accepted events still drain;
+// ErrClosed then becomes the terminal cause only when no earlier cause, such
+// as ErrOSDWatchOverflow or a session failure, was recorded. Close sends no
+// remote UNWATCH or ACK and says nothing about the watch on the OSD: only a
+// successful OSDWatch.Unwatch confirms its removal. It always returns nil.
 func (w *OSDWatchStream) Close() error { w.finish(ErrClosed); return nil }
 
 // Next consumes one event at most once, including with concurrent waiters.
