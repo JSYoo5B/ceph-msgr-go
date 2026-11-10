@@ -32,7 +32,7 @@ Bit names (pinned header): 1 NOSRCADDR, 2 SERVER_NAUTILUS (incarnation 3),
 | OSD request-v9 profile (opt-in) | adds `0x0702000040200300` | adds `0x0702000040200300` | reply-v8 profile + SERVER_SQUID (49, incarnation 2 with 57); CRUSH_MSR (38) is not enabled | [OSD CONTRACT](../osd/CONTRACT.md) |
 | Fresh MDS session | `0x2a00040010808036` | `0x0800000000000000` | Base only; MON/OSD policy extensions are never offered | [MDS_FRESH_CONTRACT.md](MDS_FRESH_CONTRACT.md) |
 | Fresh CephFS session | `0x2e0085201c8080be` | `0x0c0081200c000088` | Base + FLOCK (3), DIRLAYOUTHASH (7), CREATEPOOLID (26), REPLY_CREATE_INODE (27), EXPORT_PEER (37), MDS_INLINE_DATA (40), MDS_QUOTA (47), FS_FILE_LAYOUT_V2 (58). Every added CephFS bit is required together with the base required mask; a missing required bit is refused before any CephFS message. | [MDS_CEPHFS_CONTRACT.md](../../cephmsgr/MDS_CEPHFS_CONTRACT.md) |
-| MON MDSENC opt-in | adds `0x0000000020000000` | adds `0x0000000020000000` | Current MON MDS map encoding only; EnableMDS | [MDS_MAPS_CONTRACT.md](../../cephmsgr/MDS_MAPS_CONTRACT.md) |
+| MON MDSENC opt-in | adds `0x0000000020000000` | adds `0x0000000020000000` | Current MON MDS map encoding only; EnableMDSMaps | [MDS_MAPS_CONTRACT.md](../../cephmsgr/MDS_MAPS_CONTRACT.md) |
 | MON HASHPSPOOL opt-in | adds `0x0000000040000000` | adds `0x0000000040000000` | Modern OSD profile's MON admission only | [OSD CONTRACT](../osd/CONTRACT.md) |
 | MON/OSD CACHEPOOL opt-in | adds `0x0000000800000000` | adds `0x0000000800000000` | EnableOSDCachePools on MON/OSD, independent of the selected OSD wire profile | [CACHE_POOL_CONTRACT.md](../osd/CACHE_POOL_CONTRACT.md) |
 

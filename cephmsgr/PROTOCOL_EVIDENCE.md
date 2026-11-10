@@ -107,7 +107,7 @@ selected MON/active-MGR Tell only; MDS and OSD command acceptance remains in #5.
 | 18 | Not exposed: CephX uses Messenger auth frames | none | none |
 | 19 | MapVersion; bounded name/query and per-operation context | [TestMapVersionRoundTripAndRefusals](map_version_test.go) | R5, R33 |
 | 20 | MapVersion result; preserve server handle/version, wrong envelope refused | [TestMapVersionCodec](map_version_test.go) | R5, R33 |
-| 21 | WatchMDSMaps; EnableMDS opt-in, filesystem/rank binding remains explicit | [TestMonMDSMapsStreamsBindExplicitIDAndPreserveRaw](mon_mds_maps_test.go) | R6 |
+| 21 | WatchMDSMaps; EnableMDSMaps opt-in, filesystem/rank binding remains explicit | [TestMonMDSMapsStreamsBindExplicitIDAndPreserveRaw](mon_mds_maps_test.go) | R6 |
 | 22 | OpenSession/Renew/Close and Next; session rejection is explicit | [TestMDSSessionOpenRenewCloseWire](mds_session_test.go) | R7 |
 | 23 | Reconnect with consumer-supplied caps/realms; no automatic state reconstruction | [TestCephFSReconnectDeniedAndSplit](mds_reconnect_test.go) | R9, R34 |
 | 24 | Submit CephFS metadata request; consumer inode/path/cache state | [TestCephFSRequestReplyForwardAndSafety](mds_cephfs_test.go) | R8 |
@@ -129,7 +129,7 @@ selected MON/active-MGR Tell only; MDS and OSD command acceptance remains in #5.
 | 63 | WatchConfig requests; consumer-selected identity, no text config loading | [TestConfigRequestsIndependentVectors](../internal/msgr/config_test.go) | U |
 | 97 | MonTell/MonTellTo/MgrTell/MDS Command/OSD Command; exact role/target | [TestTellCommandPinnedVector](../internal/msgr/tell_test.go) | R3 |
 | 98 | Tell Result; raw bytes/code, malformed or lost reply preserves uncertainty | [TestTellReplyRejectsMalformedBoundedFront](../internal/msgr/tell_test.go) | R3 |
-| 103 | WatchFSMapUser; native filesystem directory, EnableMDS required | [TestPublicFSMapUserPreservesNativeDirectory](mds_map_types_test.go) | R6 |
+| 103 | WatchFSMapUser; native filesystem directory, EnableMDSMaps required | [TestPublicFSMapUserPreservesNativeDirectory](mds_map_types_test.go) | R6 |
 | 784 | Next Cap event/SendCaps; consumer owns capabilities, flush and inode state | [TestEncodeClientCapsUpdateMatchesFreshNative](../internal/mds/native_caps_test.go) | R8 |
 | 785 | Next Lease event/SendLease; explicit consumer lease ACK | [TestLeaseMatchesFreshNative](../internal/mds/native_caps_test.go) | R8 |
 | 786 | Next Snap event; consumer applies snapshot realm state | [TestDecodeFreshNativeSnapSplit](../internal/mds/native_caps_test.go) | R8 |
@@ -239,7 +239,7 @@ product of key/mode/address/role dimensions from separate observations.
 | OSD request-v9 profile (opt-in) | OSDProfileReplicatedPGRequestV9ReplyV8; untraced v9, no CRUSH_MSR | [TestReplicatedPGRequestV9HandshakeRequiresEveryFixedCapability](../internal/session/osd_request_v9_handshake_test.go) | R12 |
 | Fresh MDS session | EnableMDS/OpenMDS; base only, refuse lossy/recovery admission | [TestFreshMDSHandshakeRejectsUnimplementedAdmission](../internal/session/fresh_mds_handshake_test.go) | R13 |
 | Fresh CephFS session | EnableCephFS; fixed required features and consumer-owned state | [TestCephFSProtocolViolationsAndFeatureGates](mds_cephfs_test.go) | R8, R34 |
-| MON MDSENC opt-in | EnableMDS; MON-only current MDS map encoding | [TestMDSMapHandshakeRequiresMDSENCBeforeApplicationTraffic](../internal/session/mds_map_features_test.go) | R6 |
+| MON MDSENC opt-in | EnableMDSMaps; MON-only current MDS map encoding | [TestMDSMapHandshakeRequiresMDSENCBeforeApplicationTraffic](../internal/session/mds_map_features_test.go) | R6 |
 | MON HASHPSPOOL opt-in | Modern OSD profile; MON-only addition, independent of CRUSH exception | [TestReplicatedPGV8MONProfileAddsOnlyOptInHashPSPool](../internal/session/mon_v8_profile_handshake_test.go) | R10, R11, R12 |
 | MON/OSD CACHEPOOL opt-in | EnableOSDCachePools; missing capability refused without fallback | [TestOSDCachePoolHandshakeRequiresCapabilityWithoutFallback](../internal/session/osd_cache_pool_features_test.go) | R14 |
 
