@@ -47,9 +47,9 @@ requirement (see `internal/mds/CLIENT_EXTENSION_DECISIONS.md`). REPLY_ENCODING
 (9) and every other later protocol feature (multi-reconnect, delegated
 inodes, metrics, notify session state, 32-bit retry/forward, new snaprealm
 info, owner UID/GID, client-side auth-cap checks, charmap, blockdiff) are
-withheld by this session-only profile. Several of them (REPLY_ENCODING,
-MULTI_RECONNECT, 32-bit retry/forward, new snaprealm info, owner UID/GID) are
-declared by the CephFS profile instead; the per-bit table for both profiles
+withheld by this session-only profile. Six of them (REPLY_ENCODING,
+MULTI_RECONNECT, alternate name, 32-bit retry/forward, new snaprealm info,
+owner UID/GID) are declared by the CephFS profile instead; the per-bit table for both profiles
 is in [CLIENT_EXTENSION_DECISIONS.md](../internal/mds/CLIENT_EXTENSION_DECISIONS.md#feature-table).
 Callers cannot widen the set. A filesystem whose `required_client_features`
 or `min_compat_client` requires a withheld bit makes the MDS REJECT the open

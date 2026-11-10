@@ -340,7 +340,8 @@ codec vectors for the five messages, and native observation on selected
 profiles of registration, status, task status, applied metadata, close,
 ticket renewal and an active-MGR change. Each linked validation record names
 its own tested source and profile. Nonempty daemon extensions, older
-configure versions, further profiles and further failure configurations are
+configure versions, further profiles, further failure configurations and
+further cold-bootstrap configurations are
 [not verified](cephmsgr/MGR_SERVICE_CONTRACT.md#not-verified).
 
 ## Command descriptions
