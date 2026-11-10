@@ -8,8 +8,10 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
 // tellReplyGate withholds exactly one incoming Tell reply (type 98) on an
@@ -253,4 +255,78 @@ func (c *tellReplyGateConn) abandon(err error) {
 func (c *tellReplyGateConn) Close() error {
 	c.closeOnce.Do(func() { close(c.closed) })
 	return c.Conn.Close()
+}
+
+// paddedReplyGate is the gate for streams that cannot be decoded (secure
+// modes). It binds to the first write of at least threshold bytes to a selected
+// peer and, from before that write leaves, withholds every byte received on
+// that one connection, so no reply to the padded command can reach its reader.
+// Later large writes, on any connection, never rebind it.
+//
+// It identifies no frame: it cannot show which message a write carried, that a
+// reply arrived, or a transaction ID. The padded command must be the only
+// write of that size to a selected peer; the test checks that separately.
+type paddedReplyGate struct {
+	mu         sync.Mutex
+	threshold  int
+	selects    func(peer string) bool
+	bound      bool
+	connection uint64
+	peer       string
+	holder     *testcluster.LostReplyConn
+	// armed is closed when the gate binds.
+	armed chan struct{}
+	// received is closed when bytes arrived on the bound connection after the
+	// binding and were withheld. They are not attributable to any message.
+	received     chan struct{}
+	receivedOnce sync.Once
+}
+
+func newPaddedReplyGate(threshold int, selects func(peer string) bool) *paddedReplyGate {
+	return &paddedReplyGate{threshold: threshold, selects: selects, armed: make(chan struct{}), received: make(chan struct{})}
+}
+
+type paddedReplyGateConn struct {
+	*testcluster.LostReplyConn
+	gate       *paddedReplyGate
+	connection uint64
+	peer       string
+}
+
+func (g *paddedReplyGate) wrap(conn net.Conn, connection uint64, peer string) *paddedReplyGateConn {
+	lost := &testcluster.LostReplyConn{Conn: conn, Armed: &atomic.Bool{}, Closed: make(chan struct{}),
+		SignalBlocked: func() { g.receivedOnce.Do(func() { close(g.received) }) }}
+	return &paddedReplyGateConn{LostReplyConn: lost, gate: g, connection: connection, peer: peer}
+}
+
+func (c *paddedReplyGateConn) Write(p []byte) (int, error) {
+	if g := c.gate; len(p) >= g.threshold && g.selects(c.peer) {
+		g.mu.Lock()
+		if !g.bound {
+			// Arm before the bytes leave, so a reply cannot pass first.
+			g.bound, g.connection, g.peer, g.holder = true, c.connection, c.peer, c.LostReplyConn
+			c.Armed.Store(true)
+			close(g.armed)
+		}
+		g.mu.Unlock()
+	}
+	return c.LostReplyConn.Write(p)
+}
+
+// binding returns the connection and peer whose received bytes are withheld.
+func (g *paddedReplyGate) binding() (connection uint64, peer string, bound bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.connection, g.peer, g.bound
+}
+
+// closeHeld ends only the connection whose received bytes are withheld.
+func (g *paddedReplyGate) closeHeld() error {
+	g.mu.Lock()
+	holder := g.holder
+	g.mu.Unlock()
+	if holder == nil {
+		return errors.New("the padded reply gate holds no connection")
+	}
+	return holder.Close()
 }

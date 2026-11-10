@@ -90,3 +90,47 @@ func TestNativeMgrTellReceiptBindsStateToTheNamedActiveDaemon(t *testing.T) {
 		t.Fatal("an epoch-only MgrMap change broke the daemon bracket")
 	}
 }
+
+func TestNativeMgrTellBetweenAdmitsOnlyTheChangeFromPreviousToWanted(t *testing.T) {
+	var receipt nativeMgrTellReceipt
+	if err := json.Unmarshal([]byte(nativeMgrTellReceiptSample), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	daemon := nativeMgrTellDaemon{"a", 4167}
+	a := int64(501)
+	previous, want := nativeMonTellState{value: 500}, nativeMonTellState{501, &a}
+	state := func(value string, override *string) nativeMgrTellReceipt {
+		changed := receipt
+		changed.Views.ConfigGet.Data = []byte(`{"log_max_recent":"` + value + `"}`)
+		changed.Views.ConfigDiff.Entry = nil
+		if override != nil {
+			changed.Views.ConfigDiff.Entry = &nativeMonTellEntry{OverridePresent: true, Override: override}
+		}
+		return changed
+	}
+	wanted, baseline, other := "501", "500", "502"
+	// The previous state, the wanted state and both torn two-call reads.
+	for _, admitted := range []nativeMgrTellReceipt{state("500", nil), state("501", &wanted), state("500", &wanted), state("501", nil)} {
+		if !nativeMgrTellBetween(admitted, daemon, previous, want) {
+			t.Fatal("a state of the change from previous to wanted was refused", nativeMgrTellSummary(admitted))
+		}
+	}
+	// A lost application that only adds an override of the baseline value, a
+	// third value and a third override are not part of that change.
+	for _, refused := range []nativeMgrTellReceipt{state("500", &baseline), state("502", &other), state("502", nil), state("501", &other)} {
+		if nativeMgrTellBetween(refused, daemon, previous, want) {
+			t.Fatal("a state outside the change from previous to wanted was admitted", nativeMgrTellSummary(refused))
+		}
+	}
+	moved := state("500", nil)
+	moved.Views.ManagerAfter.ActiveGID = 4168
+	unread := state("500", nil)
+	unread.Views.ConfigGet.OK = false
+	elsewhere := state("500", nil)
+	elsewhere.Target = "b"
+	for _, refused := range []nativeMgrTellReceipt{moved, unread, elsewhere} {
+		if nativeMgrTellBetween(refused, daemon, previous, want) || nativeMgrTellBetween(state("500", nil), nativeMgrTellDaemon{"b", 4167}, previous, want) {
+			t.Fatal("an unbracketed, unreadable or foreign observation was admitted")
+		}
+	}
+}

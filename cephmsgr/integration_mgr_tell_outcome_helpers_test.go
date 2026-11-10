@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
@@ -194,32 +195,90 @@ func requireNativeMgrTell(t *testing.T, ctx context.Context, control, token, pha
 	return receipt
 }
 
+// awaitNativeMgrTell repeats one read-only observation until the bracketed
+// daemon shows the wanted state. It is for the mode without a decoded reply
+// barrier: the wait ends on the state itself. One observation is two separate
+// admin-socket calls, so while the daemon applies the change it can show the
+// previous value with the wanted override or the reverse; only such a state is
+// read again. Any other value or override, an unreadable or unbracketed read,
+// or the end of the original caller fails immediately.
+func awaitNativeMgrTell(t *testing.T, ctx context.Context, control, token, phase string, daemon nativeMgrTellDaemon, want, previous nativeMonTellState, finished <-chan error) nativeMgrTellReceipt {
+	t.Helper()
+	for {
+		receipt, err := observeNativeMgrTell(ctx, control, token, phase, daemon.name)
+		if err != nil {
+			t.Fatal("native MGR Tell observation", phase, err)
+		}
+		if nativeMgrTellMatches(receipt, daemon, want) {
+			return receipt
+		}
+		if !nativeMgrTellBetween(receipt, daemon, previous, want) {
+			t.Fatalf("native MGR Tell %s shows a state outside the change from the previous to the wanted one on the receiving daemon; %s", phase, nativeMgrTellSummary(receipt))
+		}
+		select {
+		case err := <-finished:
+			t.Fatal("original caller ended before the native state was observed", phase, err)
+		case <-ctx.Done():
+			t.Fatalf("native MGR Tell %s did not reach the wanted state: %v; %s", phase, ctx.Err(), nativeMgrTellSummary(receipt))
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// nativeMgrTellBetween reports whether a bracketed, readable receipt of the
+// named daemon shows a value and an override that each belong to the previous
+// or to the wanted state.
+func nativeMgrTellBetween(receipt nativeMgrTellReceipt, daemon nativeMgrTellDaemon, previous, want nativeMonTellState) bool {
+	bracket, stable := nativeMgrTellBracket(receipt.Views)
+	state, ok := nativeMgrTellState(receipt.Views)
+	if !stable || !ok || receipt.Target != daemon.name || bracket != daemon {
+		return false
+	}
+	override := func(of nativeMonTellState) bool {
+		return sameMonTellState(nativeMonTellState{override: state.override}, nativeMonTellState{override: of.override})
+	}
+	return (state.value == previous.value || state.value == want.value) && (override(previous) || override(want))
+}
+
 // Test-only local submission metadata. Write counts are local net.Conn facts,
 // never server execution counts.
 type mgrTellOutcomeIdentity struct {
-	ClientGlobalID   uint64           `json:"client_global_id"`
-	Manager          string           `json:"manager"`
-	ManagerGID       uint64           `json:"manager_gid"`
-	Baseline         int64            `json:"baseline"`
-	OverridePresent  bool             `json:"baseline_override_present"`
-	NearMiss         *monOutcomeWrite `json:"near_miss_passed,omitempty"`
-	Submitted        *monOutcomeWrite `json:"submitted,omitempty"`
-	WithheldReply    *tellHeldReply   `json:"withheld_reply,omitempty"`
-	MatchingWrites   int              `json:"matching_local_writes"`
-	PaddedWrites     int32            `json:"padded_local_writes"`
-	OutcomeUnknown   bool             `json:"outcome_unknown"`
-	Recovery         *monOutcomeWrite `json:"recovery,omitempty"`
-	RecoveryGlobalID uint64           `json:"recovery_client_global_id,omitempty"`
+	// API is the public method under test. FramesDecoded is false in secure
+	// modes, where no write, transaction or reply is identified.
+	API            string `json:"api"`
+	FramesDecoded  bool   `json:"crc_frames_decoded"`
+	ClientGlobalID uint64 `json:"client_global_id"`
+	Manager        string `json:"manager"`
+	ManagerGID     uint64 `json:"manager_gid"`
+	// Receiver is the fixture role of the endpoint whose connection carried the
+	// mutation; HeldConnection is that connection.
+	Receiver           string           `json:"receiver,omitempty"`
+	HeldConnection     uint64           `json:"held_connection,omitempty"`
+	RecoveryConnection uint64           `json:"recovery_connection,omitempty"`
+	Baseline           int64            `json:"baseline"`
+	OverridePresent    bool             `json:"baseline_override_present"`
+	NearMiss           *monOutcomeWrite `json:"near_miss_passed,omitempty"`
+	Submitted          *monOutcomeWrite `json:"submitted,omitempty"`
+	WithheldReply      *tellHeldReply   `json:"withheld_reply,omitempty"`
+	MatchingWrites     int              `json:"matching_local_writes"`
+	PaddedWrites       int32            `json:"padded_local_writes"`
+	OutcomeUnknown     bool             `json:"outcome_unknown"`
+	Recovery           *monOutcomeWrite `json:"recovery,omitempty"`
+	RecoveryGlobalID   uint64           `json:"recovery_client_global_id,omitempty"`
 }
 
-func writeMgrTellOutcomeIdentity(t *testing.T, control string, value mgrTellOutcomeIdentity) {
+func writeMgrTellOutcomeIdentity(t *testing.T, control string, current bool, value mgrTellOutcomeIdentity) {
 	t.Helper()
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Non-secret metadata must also be readable by the non-root controller.
-	if err := os.WriteFile(filepath.Join(control, "mgr-tell-outcome-identity.json"), append(data, '\n'), 0644); err != nil {
+	name := "mgr-tell-outcome-identity.json"
+	if current {
+		name = "mgr-current-tell-outcome-identity.json"
+	}
+	if err := os.WriteFile(filepath.Join(control, name), append(data, '\n'), 0644); err != nil {
 		t.Fatal(err)
 	}
 }

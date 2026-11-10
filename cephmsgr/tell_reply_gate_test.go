@@ -194,3 +194,94 @@ func TestTellReplyGateRecordsAnUndecodableStreamAndForwardsIt(t *testing.T) {
 		t.Fatal("a stream that ended inside a frame lost bytes", len(got), err)
 	}
 }
+
+func paddedPipe(t *testing.T, gate *paddedReplyGate, connection uint64, role string) (*paddedReplyGateConn, net.Conn) {
+	t.Helper()
+	local, peer := net.Pipe()
+	conn := gate.wrap(local, connection, role)
+	t.Cleanup(func() { conn.Close(); peer.Close() })
+	return conn, peer
+}
+
+func paddedWrite(t *testing.T, conn net.Conn, peer net.Conn, size int) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { _, err := io.ReadFull(peer, make([]byte, size)); done <- err }()
+	if n, err := conn.Write(make([]byte, size)); err != nil || n != size {
+		t.Fatal("padded gate write", n, err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal("the padded gate did not forward a write", err)
+	}
+}
+
+func TestPaddedReplyGateWithholdsEveryByteAfterTheFirstPaddedWrite(t *testing.T) {
+	gate := newPaddedReplyGate(4096, func(role string) bool { return role == "mgr.a" || role == "mgr.b" })
+	other, otherPeer := paddedPipe(t, gate, 1, "mon.a")
+	subject, subjectPeer := paddedPipe(t, gate, 2, "mgr.a")
+	later, laterPeer := paddedPipe(t, gate, 3, "mgr.a")
+	// A padded write to an unselected role and a small write to a selected
+	// role never bind, and both connections keep delivering received bytes.
+	paddedWrite(t, other, otherPeer, 8192)
+	paddedWrite(t, subject, subjectPeer, 4095)
+	if _, _, bound := gate.binding(); bound {
+		t.Fatal("an unselected role or a small write bound the gate")
+	}
+	go func() { _, _ = subjectPeer.Write([]byte("before")) }()
+	if got := readExactly(t, subject, 6); string(got) != "before" {
+		t.Fatal("bytes received before the padded write were changed", got)
+	}
+	paddedWrite(t, subject, subjectPeer, 4096)
+	if connection, role, bound := gate.binding(); !bound || connection != 2 || role != "mgr.a" {
+		t.Fatal("the gate is not bound to the padded write's connection", connection, role, bound)
+	}
+	// A later padded write, also on another selected connection, never rebinds.
+	paddedWrite(t, subject, subjectPeer, 8192)
+	paddedWrite(t, later, laterPeer, 8192)
+	if connection, _, _ := gate.binding(); connection != 2 {
+		t.Fatal("a later padded write rebound the gate", connection)
+	}
+	blocked := make(chan struct {
+		n   int
+		err error
+	}, 1)
+	go func() {
+		n, err := subject.Read(make([]byte, 16))
+		blocked <- struct {
+			n   int
+			err error
+		}{n, err}
+	}()
+	go func() { _, _ = subjectPeer.Write([]byte("reply")) }()
+	select {
+	case <-gate.received:
+	case result := <-blocked:
+		t.Fatal("bytes received after the padded write reached the reader", result.n, result.err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("the gate never saw the bytes it must withhold")
+	}
+	// Another selected connection still delivers what it receives.
+	go func() { _, _ = laterPeer.Write([]byte("other")) }()
+	if got := readExactly(t, later, 5); string(got) != "other" {
+		t.Fatal("another connection's bytes were withheld or changed", got)
+	}
+	select {
+	case result := <-blocked:
+		t.Fatal("a withheld byte reached the reader", result.n, result.err)
+	default:
+	}
+	if err := gate.closeHeld(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-blocked:
+		if result.n != 0 || !errors.Is(result.err, net.ErrClosed) {
+			t.Fatal("closing the held connection released bytes or lost its cause", result.n, result.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not release the withheld read")
+	}
+	if err := newPaddedReplyGate(4096, func(string) bool { return true }).closeHeld(); err == nil {
+		t.Fatal("an unbound gate closed a connection")
+	}
+}
