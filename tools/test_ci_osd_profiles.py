@@ -19,6 +19,11 @@ COPY_FROM_MULTI_CHUNK_SELECTOR = "^TestCephOSDCopyFromMultiChunkLateErrorIntegra
 COPY_FROM_HISTORY_SELECTOR = "^TestCephOSDCopyFromDestinationHistoryIntegration$"
 COMPRESSION_SELECTOR = "^TestCephMsgrCompressionOfferIntegration$"
 SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR = "^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$"
+APPLIED_NAMED_MGR_TELL_SELECTOR = "^TestCephAppliedNamedManagerTellIsNotReplayedIntegration$"
+APPLIED_CURRENT_MGR_TELL_SELECTOR = "^TestCephAppliedCurrentManagerTellIsNotReplayedIntegration$"
+APPLIED_MGR_TELL_SECURE_SELECTOR = "^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$"
+APPLIED_OSD_PG_COMMAND_SELECTOR = "^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$"
+APPLIED_MDS_COMMAND_SELECTOR = "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
 RBD_MIRROR_SELECTOR = "^TestCephRBDMirrorPathRecoveryIntegration$"
 
 
@@ -57,14 +62,19 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 1 exclusive COPY_FROM2 late-error cell, 1 applied EC resubmission,
         # 1 exclusive multi-chunk COPY_FROM2 late-error cell, 1 CRC compression-offer row,
         # 1 zero-initial-MGR service bootstrap row, 1 primary PG-history calibration row,
-        # 1 held stopped-MON dial ServiceMap lifecycle row, 1 RBD mirror path-recovery row
-        # and 1 COPY_FROM2 destination PG-history control row.
-        self.assertEqual(len(self.rows), 87)
+        # 1 held stopped-MON dial ServiceMap lifecycle row, 1 RBD mirror path-recovery row,
+        # 1 COPY_FROM2 destination PG-history control row,
+        # 1 applied exact-name MGR Tell row with a withheld reply,
+        # 1 applied current-manager MGR Tell row, 1 secure row for both MGR Tell cells,
+        # 1 applied OSD and PG command row and 1 applied MDS command row.
+        self.assertEqual(len(self.rows), 92)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
         dedicated = {SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR,
-                     COPY_FROM_HISTORY_SELECTOR, COMPRESSION_SELECTOR, SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR, RBD_MIRROR_SELECTOR}
+                     COPY_FROM_HISTORY_SELECTOR, COMPRESSION_SELECTOR, SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR, RBD_MIRROR_SELECTOR,
+                     APPLIED_NAMED_MGR_TELL_SELECTOR, APPLIED_CURRENT_MGR_TELL_SELECTOR, APPLIED_MGR_TELL_SECURE_SELECTOR,
+                     APPLIED_OSD_PG_COMMAND_SELECTOR}
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak") and row.get("test_run") not in dedicated
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
@@ -96,6 +106,76 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         selector = re.compile(SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR)
         self.assertEqual({name for name in client | self.declared if selector.search(name)},
                          {"TestCephMonServiceMapLifecycleFailedMonHoldIntegration"})
+
+    def test_applied_named_mgr_tell_row_requires_its_client_test(self):
+        # The row is the broad AES/CRC IPv4 host mon-mgr profile narrowed to one
+        # client-suite test, so the result gate requires that parent to PASS. The
+        # test needs no opt-in parameter and also runs in broad CRC rows.
+        rows = [row for row in self.rows if row.get("test_run") == APPLIED_NAMED_MGR_TELL_SELECTOR]
+        self.assertEqual(rows, [{"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "",
+                                 "runtime": "host", "test_run": APPLIED_NAMED_MGR_TELL_SELECTOR}])
+        client = set()
+        for source in (ROOT / "cephmsgr").glob("*_test.go"):
+            client.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))
+        selector = re.compile(APPLIED_NAMED_MGR_TELL_SELECTOR)
+        self.assertEqual({name for name in client | self.declared if selector.search(name)},
+                         {"TestCephAppliedNamedManagerTellIsNotReplayedIntegration"})
+        self.assertNotIn("TestCephAppliedNamedManagerTellIsNotReplayedIntegration", self.declared)
+
+    def client_tests(self):
+        client = set()
+        for source in (ROOT / "cephmsgr").glob("*_test.go"):
+            client.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))
+        return client
+
+    def assert_client_row(self, selector, params, tests):
+        # One row with exactly these parameters, whose selector matches exactly
+        # these client-suite tests and no API-suite test, so the result gate
+        # requires each of them to PASS.
+        rows = [row for row in self.rows if row.get("test_run") == selector]
+        self.assertEqual(rows, [dict(params, test_run=selector)])
+        compiled = re.compile(selector)
+        self.assertEqual({name for name in self.client_tests() | self.declared if compiled.search(name)}, tests)
+        self.assertFalse(tests & self.declared)
+
+    def test_applied_current_mgr_tell_row_requires_its_client_test(self):
+        # The same AES/CRC IPv4 host mon-mgr profile as the exact-name row,
+        # narrowed to the current-manager cell.
+        self.assert_client_row(APPLIED_CURRENT_MGR_TELL_SELECTOR,
+                               {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host"},
+                               {"TestCephAppliedCurrentManagerTellIsNotReplayedIntegration"})
+
+    def test_applied_mgr_tell_secure_row_requires_both_client_tests(self):
+        # One secure AES256K IPv4 host mon-mgr fixture runs both MGR Tell cells
+        # through their mode without decoded frames.
+        self.assert_client_row(APPLIED_MGR_TELL_SECURE_SELECTOR,
+                               {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "host"},
+                               {"TestCephAppliedNamedManagerTellIsNotReplayedIntegration",
+                                "TestCephAppliedCurrentManagerTellIsNotReplayedIntegration"})
+
+    def test_applied_osd_and_pg_command_row_requires_both_client_tests(self):
+        # The broad legacy OSD selection never matches these names, so one
+        # CRC single-BlueStore legacy-v6 row selects both cells explicitly.
+        self.assert_client_row(APPLIED_OSD_PG_COMMAND_SELECTOR,
+                               {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
+                                "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6"},
+                               {"TestCephAppliedOSDCommandIsNotReplayedIntegration",
+                                "TestCephAppliedPGCommandIsNotReplayedIntegration"})
+        broad = re.compile("^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$")
+        self.assertIsNone(broad.search("TestCephAppliedOSDCommandIsNotReplayedIntegration"))
+        self.assertIsNone(broad.search("TestCephAppliedPGCommandIsNotReplayedIntegration"))
+
+    def test_applied_mds_command_row_reuses_the_command_fixture_with_its_own_test(self):
+        # The owned MDS command fixture admits this one further exact selector.
+        self.assert_client_row(APPLIED_MDS_COMMAND_SELECTOR,
+                               {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
+                                "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
+                                "mds_fresh": "1", "mds_commands": "1"},
+                               {"TestCephAppliedMDSCommandIsNotReplayedIntegration"})
+        profile = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
+        outcome = (ROOT / "integration" / "fixture" / "daemon_command_outcome.go").read_text(encoding="utf-8")
+        self.assertIn("if p.testRun == daemonCommandMDSSelector {", profile)
+        self.assertIn('daemonCommandMDSSelector = "%s"' % APPLIED_MDS_COMMAND_SELECTOR, " ".join(outcome.split()))
 
     def test_mon_ping_rows_are_exclusive_and_reach_the_native_fixture(self):
         self.assertIn("CEPH_MSGR_TEST_MON_PING: ${{ matrix.mon_ping || '0' }}", self.workflow)
@@ -459,8 +539,11 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         })
 
     def test_mds_command_rows_select_only_the_declared_public_command_test(self):
-        rows = [row for row in self.rows if row.get("mds_commands") == "1"]
-        self.assertEqual(len(rows), 2)
+        # The applied-command row shares this fixture with its own selector and
+        # is pinned by its own test.
+        opted = [row for row in self.rows if row.get("mds_commands") == "1"]
+        rows = [row for row in opted if row.get("test_run") != APPLIED_MDS_COMMAND_SELECTOR]
+        self.assertEqual((len(opted), len(rows)), (3, 2))
         expected = {"TestCephMDSCommandsIntegration"}
         self.assertTrue(expected <= self.declared)
         observed = set()

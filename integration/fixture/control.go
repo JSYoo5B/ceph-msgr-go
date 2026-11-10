@@ -214,5 +214,11 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 	if err := c.controlOSDEpochRequest(ctx, out); err != nil {
 		return err
 	}
+	if err := c.controlManagerTellRequest(ctx, out); err != nil {
+		return err
+	}
+	if err := c.controlDaemonCommandRequest(ctx, out); err != nil {
+		return err
+	}
 	return nil
 }

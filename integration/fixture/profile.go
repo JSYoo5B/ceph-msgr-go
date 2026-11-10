@@ -271,6 +271,11 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		selected = "^TestCephMDSFreshIntegration$"
 		if p.mdsCommands == "1" {
 			selected = "^TestCephMDSCommandsIntegration$"
+			// The applied-command outcome cell shares the owned command
+			// fixture and is admitted only when explicitly selected.
+			if p.testRun == daemonCommandMDSSelector {
+				selected = p.testRun
+			}
 		}
 		if p.mdsSessions == "1" {
 			selected = "^TestCephMDSSessionsIntegration$"

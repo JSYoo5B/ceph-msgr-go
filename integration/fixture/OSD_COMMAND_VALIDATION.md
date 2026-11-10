@@ -85,6 +85,11 @@ sh integration/run.sh
 Counting server-side executions through admin-socket debug logs, broader
 profiles and remote CI for this subset need separate evidence.
 
+An applied OSD command and an applied PG command whose reply is withheld,
+each observed on the OSD's own admin socket, are recorded in
+[DAEMON_COMMAND_OUTCOME_VALIDATION.md](DAEMON_COMMAND_OUTCOME_VALIDATION.md)
+(2026-11-10). They do not count executions either.
+
 ## OSD outside the acting set (2026-10-18)
 
 `TestCephOSDCommandOutsideActingSetIntegration` creates a single-replica

@@ -93,6 +93,60 @@ type monOutcomeWrites struct {
 	mu      sync.Mutex
 	writes  []monOutcomeWrite
 	err     error
+	// published is closed and replaced whenever a record or an error is
+	// published, so that a waiter observes it without polling.
+	published chan struct{}
+}
+
+// publish wakes every waiter. The caller holds mu.
+func (p *monOutcomeWrites) publish() {
+	if p.published != nil {
+		close(p.published)
+		p.published = nil
+	}
+}
+
+// await returns once a write with this content has returned locally and its
+// record is published. A record is published only after the underlying Write
+// returned, on the writer's goroutine; a reply to that write can be read
+// before then, so a reply barrier alone does not order the record.
+func (p *monOutcomeWrites) await(ctx context.Context, front, data []byte) error {
+	return p.awaitCount(ctx, front, data, 1)
+}
+
+// awaitCount is await for the count-th write with this content. A later write
+// of content that was already written once (the same read on another
+// connection) is not distinguished by content, so its waiter names how many
+// records it expects; it never returns on the earlier ones alone.
+func (p *monOutcomeWrites) awaitCount(ctx context.Context, front, data []byte, count int) error {
+	want := [2][32]byte{sha256.Sum256(front), sha256.Sum256(data)}
+	for {
+		p.mu.Lock()
+		err := p.err
+		found := 0
+		for _, observed := range p.writes {
+			if observed.FrontSHA256 == want[0] && observed.DataSHA256 == want[1] {
+				found++
+			}
+		}
+		if err == nil && found >= count {
+			p.mu.Unlock()
+			return nil
+		}
+		if p.published == nil {
+			p.published = make(chan struct{})
+		}
+		published := p.published
+		p.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		select {
+		case <-published:
+		case <-ctx.Done():
+			return fmt.Errorf("no completed local write of the command was published: %w", ctx.Err())
+		}
+	}
 }
 
 type monOutcomeIdentity struct {
@@ -163,6 +217,7 @@ func (c *monOutcomeConn) Write(p []byte) (int, error) {
 	defer c.record.mu.Unlock()
 	if parseErr != nil || remaining != 0 || len(c.record.writes) >= 64 {
 		c.record.err = errors.New("CRC command write did not decode as one bounded frame")
+		c.record.publish()
 		return n, err
 	}
 	if message.Type == msgr.MonCommandMessage || message.Type == msgr.MgrCommandMessage || message.Type == msgr.TellCommandMessage {
@@ -172,6 +227,7 @@ func (c *monOutcomeConn) Write(p []byte) (int, error) {
 			DataSHA256: sha256.Sum256(message.Data), DataBytes: len(message.Data),
 			Written: n, Complete: n == len(p) && err == nil,
 		})
+		c.record.publish()
 	}
 	return n, err
 }
@@ -195,6 +251,48 @@ func requireMonOutcomeWrite(t *testing.T, probe *monOutcomeWrites, front, data [
 		t.Fatal("expected exactly one complete identified CRC command write", writes, err)
 	}
 	return writes[0]
+}
+
+// awaitMonOutcomeWrite is requireMonOutcomeWrite for a write whose completion
+// is not ordered before the caller: it first waits, within ctx, for the
+// writer's goroutine to publish the record.
+func awaitMonOutcomeWrite(t *testing.T, ctx context.Context, probe *monOutcomeWrites, front, data []byte) monOutcomeWrite {
+	t.Helper()
+	if err := probe.await(ctx, front, data); err != nil {
+		t.Fatal("expected one complete identified CRC command write:", err)
+	}
+	return requireMonOutcomeWrite(t, probe, front, data)
+}
+
+// awaitMonOutcomeWrites waits, within ctx, for the count-th write with this
+// content to be published and returns every record with it. The caller keeps
+// its own exact-count and per-connection requirements.
+func awaitMonOutcomeWrites(t *testing.T, ctx context.Context, probe *monOutcomeWrites, front, data []byte, count int) []monOutcomeWrite {
+	t.Helper()
+	if err := probe.awaitCount(ctx, front, data, count); err != nil {
+		t.Fatal("expected", count, "published CRC command writes:", err)
+	}
+	writes, err := probe.matching(front, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writes
+}
+
+// awaitPaddedWrites waits, within ctx, until the padded-write counter shows at
+// least want writes. commandWriteProbe counts a write after it returned on the
+// writer's goroutine, which no reply or native observation orders before the
+// caller.
+func awaitPaddedWrites(t *testing.T, ctx context.Context, writes *atomic.Int32, want int32) int32 {
+	t.Helper()
+	for writes.Load() < want {
+		select {
+		case <-ctx.Done():
+			t.Fatal("the padded local write was never counted", writes.Load(), want, ctx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	return writes.Load()
 }
 
 func monOutcomeResultSummary(receipt nativeMonOutcomeReceipt) string {

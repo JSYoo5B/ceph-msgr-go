@@ -138,6 +138,37 @@ holds failed dials to a stopped MON for the setup timeout; see the
 [lifecycle recipe](../../integration/fixture/SERVICE_MAP_LIFECYCLE_VALIDATION.md).
 The planner checks `test_run` selectors against both the API (`integration`)
 and client (`cephmsgr`) suites.
+One further `mon-mgr` row,
+`mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell`, narrows the broad AES/CRC
+IPv4 host profile to the client-suite
+`TestCephAppliedNamedManagerTellIsNotReplayedIntegration`: one applied
+exact-name MGR Tell whose reply is withheld, observed on the named manager's
+own admin socket. It needs no opt-in parameter, so the test also belongs to
+the broad selection of ordinary `mon-mgr` rows; this row makes the result gate
+require its PASS with decoded CRC frames. See the
+[recipe](../../integration/fixture/MGR_TELL_OUTCOME_VALIDATION.md).
+Four further rows require the remaining applied-command cells with a withheld
+reply, all client-suite tests without an opt-in parameter of their own:
+
+- `mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell` narrows the same
+  AES/CRC IPv4 host profile to
+  `TestCephAppliedCurrentManagerTellIsNotReplayedIntegration`, the cell for
+  `MgrTell`, whose target comes from the client's MgrMap.
+- `mon-mgr.aes256k.ip4.host.t-suite-e9be0b` runs both MGR Tell cells on one
+  secure AES256K IPv4 host fixture. Secure frames are not decoded there; the
+  cells use their padded-write mode
+  ([recipe](../../integration/fixture/MGR_TELL_OUTCOME_VALIDATION.md)).
+- `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16`
+  selects `TestCephAppliedOSDCommandIsNotReplayedIntegration` and
+  `TestCephAppliedPGCommandIsNotReplayedIntegration` on one CRC
+  single-BlueStore legacy-v6 fixture. The broad OSD selection does not match
+  these names, so no other row runs them.
+- `mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand`
+  selects `TestCephAppliedMDSCommandIsNotReplayedIntegration` on the owned MDS
+  command fixture, which admits this one further exact selector.
+
+The OSD, PG and MDS cells are described in the
+[daemon command recipe](../../integration/fixture/DAEMON_COMMAND_OUTCOME_VALIDATION.md).
 One further `rbd` row,
 `rbd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdmirrorpathrecovery`,
 selects only `TestCephRBDMirrorPathRecoveryIntegration` on the single-BlueStore
@@ -145,7 +176,7 @@ IPv4 fixture. It needs no opt-in parameter and does not use the RBD base
 opt-in: the fixture derives its owned destination cluster, rbd-mirror daemon
 and directed source OSD fault from this exact selector. See the
 [mirror recipe](../../integration/fixture/RBD_MIRROR_VALIDATION.md).
-The catalog has 87 native rows in total.
+The catalog has 92 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

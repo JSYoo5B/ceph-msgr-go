@@ -165,5 +165,16 @@ compatibility. CephFS OPEN/CLOSE/RECONNECT, requests/replies, capabilities,
 leases, snapshots, file I/O, rank recovery and typed filesystem workflows remain
 unsupported.
 
+One applied command with a withheld reply is recorded for this channel:
+`TestCephAppliedMDSCommandIsNotReplayedIntegration` changes a daemon-local
+runtime option of the active MDS through `MDSConnection.Command`, holds the
+reply to that command's own transaction, reads the changed state on the MDS's
+own admin socket while the caller is still pending, and after only the
+connection ends requires `OutcomeUnknownError`, the retained submission
+transaction, a surviving native overwrite and a single local write. See the
+[outcome record](../integration/fixture/DAEMON_COMMAND_OUTCOME_VALIDATION.md).
+It is one CRC cell on one active rank-0 daemon; the option and its command
+schema are test-only.
+
 Ceph source files cited here carry LGPL-2.1 notices. The implementation independently
 translates protocol facts; it incorporates no upstream native implementation.
