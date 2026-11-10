@@ -183,6 +183,7 @@ type MDSRequestCall struct {
 	resolved    bool
 }
 
+// Transaction returns the client transaction ID (TID) assigned at Submit.
 func (call *MDSRequestCall) Transaction() uint64 { return call.transaction }
 
 // Wait returns the first reply (unsafe or safe). A forward returns

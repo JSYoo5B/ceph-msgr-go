@@ -248,6 +248,8 @@ func (s *MDSSession) Done() <-chan struct{} { return s.done }
 // confirmed Close leaves ErrMDSSessionClosed.
 func (s *MDSSession) Err() error { s.mu.Lock(); defer s.mu.Unlock(); return s.err }
 
+// Status returns a snapshot of the session state, sequences, open reply and
+// terminal cause.
 func (s *MDSSession) Status() MDSSessionStatus {
 	m := s.conn
 	s.mu.Lock()

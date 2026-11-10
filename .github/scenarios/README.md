@@ -124,7 +124,14 @@ holds failed dials to a stopped MON for the setup timeout; see the
 [lifecycle recipe](../../integration/fixture/SERVICE_MAP_LIFECYCLE_VALIDATION.md).
 The planner checks `test_run` selectors against both the API (`integration`)
 and client (`cephmsgr`) suites.
-The catalog has 85 native rows in total.
+One further `rbd` row,
+`rbd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdmirrorpathrecovery`,
+selects only `TestCephRBDMirrorPathRecoveryIntegration` on the single-BlueStore
+IPv4 fixture. It needs no opt-in parameter and does not use the RBD base
+opt-in: the fixture derives its owned destination cluster, rbd-mirror daemon
+and directed source OSD fault from this exact selector. See the
+[mirror recipe](../../integration/fixture/RBD_MIRROR_VALIDATION.md).
+The catalog has 86 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

@@ -41,18 +41,26 @@ type ConfigOptions struct {
 // without a remote unsubscribe. Already accepted data drains before the stable
 // first terminal error.
 type ConfigStream struct {
-	client *Client
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	limit  uint64
+	watch monSnapshotWatch[ConfigStream]
 
-	// All fields below are protected by client.mu.
-	source   *session.Session
-	observed *session.Session
-	pending  map[string]string // nil means no unread map; an empty map is valid.
-	terminal error
-	changed  chan struct{}
+	// Protected by client.mu.
+	pending map[string]string // nil means no unread map; an empty map is valid.
+}
+
+func newConfigStream(c *Client, ctx context.Context, cancel context.CancelFunc, limit uint64) *ConfigStream {
+	s := &ConfigStream{}
+	s.watch = newMonSnapshotWatch(c, ctx, cancel, limit, &c.configWatch, s, s.registerSource)
+	return s
+}
+
+// registerSource requests config updates and an immediate full map for the
+// authenticated identity on an admitted MON session.
+func (s *ConfigStream) registerSource(ctx context.Context, mon *session.Session, identity string) error {
+	hostname := s.watch.client.options.Hostname
+	if err := mon.Send(ctx, msgr.ConfigSubscribe(hostname)); err != nil {
+		return err
+	}
+	return mon.Send(ctx, msgr.GetConfig(identity, hostname))
 }
 
 // WatchConfig registers the client's single active effective-config watch.
@@ -78,7 +86,7 @@ func (c *Client) WatchConfig(ctx context.Context, options ConfigOptions) (*Confi
 		return nil, errors.New("ceph: invalid config buffer limit")
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
-	s := &ConfigStream{client: c, ctx: watchCtx, cancel: cancel, done: make(chan struct{}), limit: uint64(limit), changed: make(chan struct{})}
+	s := newConfigStream(c, watchCtx, cancel, uint64(limit))
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -93,49 +101,15 @@ func (c *Client) WatchConfig(ctx context.Context, options ConfigOptions) (*Confi
 	c.configWatch = s
 	c.wg.Add(1)
 	c.mu.Unlock()
-	go s.run()
+	go s.watch.run()
 	return s, nil
-}
-
-func (s *ConfigStream) signalLocked() {
-	close(s.changed)
-	s.changed = make(chan struct{})
-}
-
-func (s *ConfigStream) stopLocked(err error) bool {
-	if s.terminal != nil {
-		return false
-	}
-	s.terminal, s.source, s.observed = err, nil, nil
-	if s.client.configWatch == s {
-		s.client.configWatch = nil
-	}
-	s.signalLocked()
-	return true
-}
-
-func (s *ConfigStream) stop(err error) {
-	s.client.mu.Lock()
-	s.stopLocked(err)
-	s.client.mu.Unlock()
-	s.cancel()
 }
 
 // Close releases the watch slot and joins its registration worker. The unread
 // map remains readable. ErrConfigStreamClosed becomes the terminal cause only
 // when no earlier cause was recorded.
 func (s *ConfigStream) Close() error {
-	s.client.mu.Lock()
-	source := s.observed
-	s.client.mu.Unlock()
-	if source != nil {
-		err := source.Err()
-		if fatalLogSessionError(err) {
-			s.failCurrent(source, err)
-		}
-	}
-	s.stop(ErrConfigStreamClosed)
-	<-s.done
+	s.watch.closeWatch(ErrConfigStreamClosed)
 	return nil
 }
 
@@ -144,142 +118,20 @@ func (s *ConfigStream) Close() error {
 // Cancellation affects only this call; an already canceled context consumes
 // nothing. An empty non-nil map is a valid full replacement.
 func (s *ConfigStream) Next(ctx context.Context) (map[string]string, error) {
-	return nextStreamItem(ctx, s.client, s.ctx, func() (map[string]string, bool, error, <-chan struct{}) {
+	return nextStreamItem(ctx, s.watch.client, s.watch.ctx, func() (map[string]string, bool, error, <-chan struct{}) {
 		if s.pending != nil {
 			next := s.pending
 			s.pending = nil
 			return next, true, nil, nil
 		}
-		return nil, false, s.terminal, s.changed
-	}, s.stop)
-}
-
-// Error inspection and cancellation may invoke custom code; neither runs
-// under the client lock. Record a registered source's fatal cause before a
-// replacement can make its delayed onClose callback stale.
-func (c *Client) stopConfigForFailedSession(source *session.Session, err error) {
-	if !fatalLogSessionError(err) {
-		return
-	}
-	c.mu.Lock()
-	watch := c.configWatch
-	if c.mon == source && watch != nil && watch.observed == source {
-		if !watch.stopLocked(err) {
-			watch = nil
-		}
-	} else {
-		watch = nil
-	}
-	c.mu.Unlock()
-	if watch != nil {
-		watch.cancel()
-	}
-}
-
-func (s *ConfigStream) failCurrent(source *session.Session, err error) bool {
-	c := s.client
-	c.mu.Lock()
-	current := s.terminal == nil && c.configWatch == s && c.mon == source && s.observed == source && !c.closed && c.authErr == nil
-	if current {
-		s.stopLocked(err)
-	}
-	c.mu.Unlock()
-	if current {
-		s.cancel()
-	}
-	return current
-}
-
-func (s *ConfigStream) run() {
-	defer s.client.wg.Done()
-	defer close(s.done)
-	for {
-		if err := s.ctx.Err(); err != nil {
-			s.stop(err)
-			return
-		}
-		c := s.client
-		c.mu.Lock()
-		terminal, closed, authErr := s.terminal, c.closed, c.authErr
-		mon, ready, changed := c.mon, c.monReady, c.changed
-		previous := s.observed
-		if mon != previous || !ready {
-			s.source = nil
-		}
-		c.mu.Unlock()
-		if terminal != nil {
-			return
-		}
-		if closed {
-			s.stop(ErrClosed)
-			return
-		}
-		if authErr != nil {
-			s.stop(authErr)
-			return
-		}
-		if previous != nil && previous == mon && fatalLogSessionError(previous.Err()) {
-			if s.failCurrent(previous, previous.Err()) {
-				return
-			}
-			continue
-		}
-		if mon != nil && ready && mon.Err() == nil {
-			c.mu.Lock()
-			register := s.terminal == nil && c.mon == mon && c.monReady && !c.closed && c.authErr == nil && s.source != mon
-			identity := ""
-			if register {
-				s.source, s.observed = mon, mon
-				identity = c.auth.Name
-			}
-			c.mu.Unlock()
-			if register {
-				err := mon.Send(s.ctx, msgr.ConfigSubscribe(c.options.Hostname))
-				if err == nil {
-					err = mon.Send(s.ctx, msgr.GetConfig(identity, c.options.Hostname))
-				}
-				if err != nil {
-					if watchErr := s.ctx.Err(); watchErr != nil {
-						s.stop(watchErr)
-						return
-					}
-					if fatalLogSessionError(err) {
-						if s.failCurrent(mon, err) {
-							return
-						}
-						continue
-					}
-					c.wakeMonitor()
-				}
-			}
-		}
-		var monDone <-chan struct{}
-		if mon != nil {
-			monDone = mon.Done()
-		}
-		select {
-		case <-changed:
-		case <-monDone:
-			if (ready || previous == mon) && fatalLogSessionError(mon.Err()) {
-				if s.failCurrent(mon, mon.Err()) {
-					return
-				}
-			}
-			select {
-			case <-changed:
-			case <-s.ctx.Done():
-			case <-c.ctx.Done():
-			}
-		case <-s.ctx.Done():
-		case <-c.ctx.Done():
-		}
-	}
+		return nil, false, s.watch.terminal, s.watch.changed
+	}, s.watch.stop)
 }
 
 func (c *Client) handleConfig(source *session.Session, m msgr.MessageData) error {
 	c.mu.Lock()
 	s := c.configWatch
-	accept := s != nil && s.terminal == nil && s.source == source && c.mon == source && c.monReady && !c.closed && c.authErr == nil
+	accept := s != nil && s.watch.acceptsLocked(source)
 	c.mu.Unlock()
 	if !accept {
 		return nil
@@ -292,24 +144,24 @@ func (c *Client) handleConfig(source *session.Session, m msgr.MessageData) error
 		}
 	}
 	c.mu.Lock()
-	if c.configWatch != s || s.terminal != nil || s.source != source || c.mon != source || !c.monReady || c.closed || c.authErr != nil {
+	if !s.watch.acceptsLocked(source) {
 		c.mu.Unlock()
 		return nil
 	}
 	if err != nil {
-		s.stopLocked(err)
+		s.watch.stopLocked(err)
 		c.mu.Unlock()
-		s.cancel()
+		s.watch.cancel()
 		return err
 	}
-	if bytes > s.limit {
-		s.stopLocked(ErrConfigOverflow)
+	if bytes > s.watch.limit {
+		s.watch.stopLocked(ErrConfigOverflow)
 		c.mu.Unlock()
-		s.cancel()
+		s.watch.cancel()
 		return nil
 	}
 	s.pending = decoded
-	s.signalLocked()
+	s.watch.signalLocked()
 	c.mu.Unlock()
 	return nil
 }

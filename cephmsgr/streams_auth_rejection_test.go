@@ -15,7 +15,7 @@ func TestPublishedAuthenticationRejectionPreservesRegisteredStreams(t *testing.T
 	// boundary must expose the rejection and terminate both registered watches.
 	f.client.mu.Lock()
 	published := f.client.authErr == cause
-	configCause, logCause := f.config.terminal, f.logs.terminal
+	configCause, logCause := f.config.watch.terminal, f.logs.terminal
 	configActive, logActive := f.client.configWatch != nil, f.client.logWatch != nil
 	f.client.mu.Unlock()
 	if !published || configCause != cause || logCause != cause || configActive || logActive {
@@ -67,11 +67,11 @@ func TestPublishedAuthenticationRejectionPreservesEarlierStreamTerminals(t *test
 			switch mode {
 			case "overflow":
 				configCause, logCause = ErrConfigOverflow, ErrLogOverflow
-				f.config.stop(configCause)
+				f.config.watch.stop(configCause)
 				f.logs.stop(logCause)
 			case "lifetime cancellation":
 				configCause, logCause = context.Canceled, context.Canceled
-				f.config.cancel()
+				f.config.watch.cancel()
 				f.logs.cancel()
 			case "stream close":
 				go f.config.Close()
@@ -86,7 +86,7 @@ func TestPublishedAuthenticationRejectionPreservesEarlierStreamTerminals(t *test
 			awaitCleanup(t, f.ctx, f.logGate.Context.Done())
 			f.configGate.unblock()
 			f.logGate.unblock()
-			awaitCleanup(t, f.ctx, f.config.done)
+			awaitCleanup(t, f.ctx, f.config.watch.done)
 			awaitCleanup(t, f.ctx, f.logs.done)
 			// The terminal watch slots have already been released. A later
 			// auth rejection must not replace either watch's earlier cause.

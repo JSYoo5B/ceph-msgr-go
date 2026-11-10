@@ -126,21 +126,10 @@ func (c *Client) rejectAuthentication(err error) {
 	c.authErr = err
 	c.monReady = false
 	c.mgr = nil
-	configWatch, logWatch := c.configWatch, c.logWatch
-	digestWatch := c.digestWatch
-	serviceMapWatch := c.serviceMapWatch
-	osdMapWatch := c.osdMapWatch
-	if serviceMapWatch != nil && !serviceMapWatch.stopLocked(err) {
-		serviceMapWatch = nil
-	}
-	if configWatch != nil && !configWatch.stopLocked(err) {
-		configWatch = nil
-	}
+	snapshotWatches := c.stopMonSnapshotsLocked(err)
+	logWatch, osdMapWatch := c.logWatch, c.osdMapWatch
 	if logWatch != nil && !logWatch.stopLocked(err) {
 		logWatch = nil
-	}
-	if digestWatch != nil && !digestWatch.stopLocked(err) {
-		digestWatch = nil
 	}
 	if osdMapWatch != nil && !osdMapWatch.stopLocked(err) {
 		osdMapWatch = nil
@@ -157,17 +146,11 @@ func (c *Client) rejectAuthentication(err error) {
 	for _, watch := range mdsMapWatches {
 		watch.cancel()
 	}
-	if configWatch != nil {
-		configWatch.cancel()
+	for _, watch := range snapshotWatches {
+		watch.cancelWatch()
 	}
 	if logWatch != nil {
 		logWatch.cancel()
-	}
-	if digestWatch != nil {
-		digestWatch.cancel()
-	}
-	if serviceMapWatch != nil {
-		serviceMapWatch.cancel()
 	}
 	if osdMapWatch != nil {
 		osdMapWatch.cancel()

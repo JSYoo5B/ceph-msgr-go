@@ -20,24 +20,24 @@ type nextStreamFixture struct {
 // stop method. Empty maps, digests and batches must not become "no item".
 var nextStreamFixtures = map[string]func(*Client, context.Context, context.CancelFunc) nextStreamFixture{
 	"config": func(c *Client, ctx context.Context, cancel context.CancelFunc) nextStreamFixture {
-		s := &ConfigStream{client: c, ctx: ctx, cancel: cancel, changed: make(chan struct{})}
+		s := newConfigStream(c, ctx, cancel, 0)
 		return nextStreamFixture{
 			next:   func(ctx context.Context) error { _, err := s.Next(ctx); return err },
-			accept: func() { s.pending = map[string]string{} }, stop: s.stop,
+			accept: func() { s.pending = map[string]string{} }, stop: s.watch.stop,
 		}
 	},
 	"digest": func(c *Client, ctx context.Context, cancel context.CancelFunc) nextStreamFixture {
-		s := &DigestStream{client: c, ctx: ctx, cancel: cancel, changed: make(chan struct{})}
+		s := newDigestStream(c, ctx, cancel, 0)
 		return nextStreamFixture{
 			next:   func(ctx context.Context) error { _, err := s.Next(ctx); return err },
-			accept: func() { s.pending = &ClusterDigest{} }, stop: s.stop,
+			accept: func() { s.pending = &ClusterDigest{} }, stop: s.watch.stop,
 		}
 	},
 	"service map": func(c *Client, ctx context.Context, cancel context.CancelFunc) nextStreamFixture {
-		s := &ServiceMapStream{client: c, ctx: ctx, cancel: cancel, changed: make(chan struct{})}
+		s := newServiceMapStream(c, ctx, cancel, 0)
 		return nextStreamFixture{
 			next:   func(ctx context.Context) error { _, err := s.Next(ctx); return err },
-			accept: func() { s.pending = &ServiceMap{} }, stop: s.stop,
+			accept: func() { s.pending = &ServiceMap{} }, stop: s.watch.stop,
 		}
 	},
 	"log": func(c *Client, ctx context.Context, cancel context.CancelFunc) nextStreamFixture {

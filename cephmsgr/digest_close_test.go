@@ -12,12 +12,13 @@ func TestDigestWatchClosePreservesSourceAndAuthenticationCauses(t *testing.T) {
 			base, cancel := context.WithCancel(context.Background())
 			gate := &logTestLoopGate{Context: base, entered: make(chan struct{}), release: make(chan struct{})}
 			gate.armed.Store(true)
-			stream := &DigestStream{client: f.client, ctx: gate, cancel: func() { f.client.Snapshot(); cancel() }, done: make(chan struct{}), source: f.source, observed: f.source, pending: &ClusterDigest{MonStatus: []byte("accepted"), Health: []byte("before failure")}, changed: make(chan struct{}), limit: 1024}
+			stream := newDigestStream(f.client, gate, func() { f.client.Snapshot(); cancel() }, 1024)
+			stream.watch.source, stream.watch.observed, stream.pending = f.source, f.source, &ClusterDigest{MonStatus: []byte("accepted"), Health: []byte("before failure")}
 			f.client.mu.Lock()
 			f.client.digestWatch = stream
 			f.client.wg.Add(1)
 			f.client.mu.Unlock()
-			go stream.run()
+			go stream.watch.run()
 			t.Cleanup(func() { gate.unblock(); stream.Close() })
 			awaitCleanup(t, f.ctx, gate.entered)
 			var cause error = &streamCloseCause{client: f.client, cause: ErrMalformedMessage}
@@ -39,7 +40,7 @@ func TestDigestWatchClosePreservesSourceAndAuthenticationCauses(t *testing.T) {
 			}
 			awaitCleanup(t, f.ctx, base.Done())
 			f.client.mu.Lock()
-			terminal, active := stream.terminal, f.client.digestWatch != nil
+			terminal, active := stream.watch.terminal, f.client.digestWatch != nil
 			f.client.mu.Unlock()
 			if terminal != cause || active {
 				t.Fatal("Close replaced the source/auth cause or retained the watch slot", terminal, active)
@@ -60,7 +61,7 @@ func TestDigestWatchClosePreservesSourceAndAuthenticationCauses(t *testing.T) {
 			case <-f.ctx.Done():
 				t.Fatal("Close did not join cleanup", f.ctx.Err())
 			}
-			awaitCleanup(t, f.ctx, stream.done)
+			awaitCleanup(t, f.ctx, stream.watch.done)
 			digestTestNext(t, f.ctx, stream, "accepted", "before failure")
 			digestTestTerminal(t, f.ctx, stream, cause)
 			if wrapped, ok := cause.(*streamCloseCause); ok && wrapped.inspected.Load() == 0 {
@@ -98,7 +99,7 @@ func TestDigestWatchConcurrentNextTransfersPairOnceAndCloseReleasesWaiters(t *te
 		t.Fatal("concurrent Next did not get the accepted pair", ctx.Err())
 	}
 	c.Close()
-	awaitCleanup(t, ctx, stream.done)
+	awaitCleanup(t, ctx, stream.watch.done)
 	for range 3 {
 		select {
 		case got := <-results:

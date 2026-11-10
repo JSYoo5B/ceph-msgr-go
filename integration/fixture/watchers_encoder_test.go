@@ -22,11 +22,7 @@ func TestWatchersEncoderPinnedProofAndCorruption(t *testing.T) {
 			t.Fatal(err)
 		}
 		for field, name := range map[string]string{"build_driver_sha256": allocHintEncoderSpec.driver, "launcher_sha256": watchersEncoderSpec.driver} {
-			data, err := os.ReadFile("../../tools/" + name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if receipt[field] != fmt.Sprintf("%x", sha256.Sum256(data)) {
+			if receipt[field] != receiptToolDigest(t, "watchers-native-provenance.json", name) {
 				t.Fatal("native driver differs from receipt", field)
 			}
 		}

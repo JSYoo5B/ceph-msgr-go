@@ -44,7 +44,9 @@ func fixtureAuthData() fixtureAuth {
 // This peer simulates handshake faults, not independent Ceph interoperability.
 type handshakePeerConfig struct {
 	badSignature bool
-	mode         uint32
+	// shortSignature sends a complete AUTH_SIGNATURE frame one byte short.
+	shortSignature bool
+	mode           uint32
 	// offeredMode checks the client's single mode offer independently of the
 	// deliberately selected mode used by mismatch tests. Zero means secure.
 	offeredMode     ConnectionMode
@@ -184,10 +186,13 @@ func handshakePeer(conn net.Conn, a fixtureAuth, cfg handshakePeerConfig) error 
 	if cfg.badSignature {
 		signature[0] ^= 1
 	}
+	if cfg.shortSignature {
+		signature = signature[:len(signature)-1]
+	}
 	if err := w.Write(msgr.Frame{Tag: msgr.AuthSignature, Segments: [][]byte{signature}}); err != nil {
 		return err
 	}
-	if cfg.badSignature {
+	if cfg.badSignature || cfg.shortSignature {
 		return nil
 	}
 	f, err = r.Read()
