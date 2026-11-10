@@ -42,6 +42,10 @@ four logical native reply shapes for each algorithm (normal, trimmed, EOF, unali
 encodes native MOSDOp/MOSDOpReply and an offline MessageFrame header, and
 separately decodes each message. This proves encoding compatibility only;
 the explicit logical digest values in those vectors are not live execution.
+The [current receipt](testdata/checksum-native-provenance-20261110.json)
+comes from the driver that merges the shared builder's returned proofs; the
+earlier receipt stays bound to the tool digests that produced it (see the
+[testdata notes](testdata/README.md)).
 `tools/osd_checksum_oracle.py` independently calls the pinned C
 `rados_checksum` against owned disposable objects and records bytes, values,
 and unchanged native state. `TestCephOSDChecksumIntegration` compares those

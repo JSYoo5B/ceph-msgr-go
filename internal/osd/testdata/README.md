@@ -166,6 +166,30 @@ These encoded logical replies prove wire format, not native hash execution;
 see [the algorithm acceptance](../../../integration/fixture/OSD_CHECKSUM_ALGORITHMS_VALIDATION.md)
 for separate live evidence.
 
+## CHECKSUM structured proof merge (2026-11-10)
+
+The CHECKSUM driver used to capture each algorithm's builder stdout and parse
+its last line as the proof. The shared builder now also returns its proof
+object, and the driver merges those objects. Builder diagnostics stream to
+stdout unchanged and are never parsed. The merged receipt is still the final
+stdout line and now records `launcher_sha256` itself.
+
+Both tool files changed, so their digests changed. Receipts produced earlier
+are not rehashed. `checksum-native-provenance.json` and the receipts of the
+other shared-builder launchers (SETALLOCHINT, MAPEXT, PGNLS, SPARSE_READ, U64
+CMPXATTR, LIST_WATCHERS, WRITESAME and the COPY_FROM bootstrap) stay bound to
+the digests of the files that actually produced them. The fixture keeps those
+digests in `retained_tool_digest_test.go` and rejects any other receipt that
+names them.
+
+`checksum-native-provenance-20261110.json` is a fresh receipt from the
+current driver and builder, with the same pinned source and image. All 15
+fresh header/front/data segments are byte-identical to the stored
+`checksum-native-*` hex files, and their native header and decoded operation
+records equal the earlier receipt. This build ran on Linux amd64, so its
+binary, library, generated configuration and loader records differ from the
+earlier arm64 receipt.
+
 ## U64 CMPXATTR fresh native vectors (2026-10-16)
 
 `u64-xattr-native-*` is a separate five-vector suite: two fresh native
