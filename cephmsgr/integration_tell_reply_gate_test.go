@@ -164,8 +164,10 @@ func (c *tellReplyGateConn) Read(p []byte) (int, error) {
 		if !c.passthrough {
 			progressed, withheld := c.parse()
 			if len(c.ready) > 0 {
-				// Frames received together with the withheld reply are
-				// still delivered first.
+				// Complete frames that precede the withheld reply, also in
+				// the same underlying read, are delivered first; a short
+				// caller read drains them over several calls. The reply
+				// and whatever follows it stay in pending.
 				continue
 			}
 			if withheld {

@@ -339,3 +339,76 @@ func TestReplyGateConnectionsCloseOnceForEveryCaller(t *testing.T) {
 		peer.Close()
 	}
 }
+
+// Every complete frame that precedes the bound reply is delivered before the
+// gate parks on the reply, whether the peer's bytes arrive in three-byte
+// fragments or in one write that also carries the reply and a later frame, and
+// whether the caller reads one byte at a time or with a large buffer. The reply
+// and everything after it on that connection stay withheld.
+func TestTellReplyGateDeliversTheWholePrefixBeforeParking(t *testing.T) {
+	for _, fragment := range []int{3, 1 << 20} {
+		for _, readSize := range []int{1, 7, 64 << 10} {
+			gate := newTellReplyGate()
+			local, peer := net.Pipe()
+			conn := newTellReplyGateConn(&strictCloseConn{Conn: local}, gate, 2)
+			command := msgr.TellCommand([16]byte{1}, []string{`{"prefix":"config set"}`}, nil)
+			gate.arm(command.Front, command.Data)
+			bindGate(t, conn, peer, command, 2, 2)
+			passed := bytes.Join([][]byte{
+				msgr.Banner{Supported: msgr.Revision1, Required: msgr.Revision1}.Encode(),
+				tellFrame(t, msgr.MessageData{Type: msgr.MgrMapMessage, Version: 1, Sequence: 1, Front: bytes.Repeat([]byte("m"), 300)}),
+				gateTellReply(t, msgr.TellCommandReplyMessage, 1, 2),
+				gateTellReply(t, msgr.MgrCommandReplyMessage, 2, 3),
+			}, nil)
+			withheld := gateTellReply(t, msgr.TellCommandReplyMessage, 2, 4)
+			later := gateTellReply(t, msgr.TellCommandReplyMessage, 3, 5)
+			stream := bytes.Join([][]byte{passed, withheld, later}, nil)
+			go func() {
+				for len(stream) > 0 {
+					n := min(fragment, len(stream))
+					if _, err := peer.Write(stream[:n]); err != nil {
+						return
+					}
+					stream = stream[n:]
+				}
+			}()
+			type result struct {
+				data []byte
+				err  error
+			}
+			reads := make(chan result, 1)
+			go func() {
+				// A session-like reader with a fixed buffer: it keeps reading
+				// until the connection ends.
+				var got []byte
+				for {
+					buffer := make([]byte, readSize)
+					n, err := conn.Read(buffer)
+					got = append(got, buffer[:n]...)
+					if err != nil {
+						reads <- result{got, err}
+						return
+					}
+				}
+			}()
+			select {
+			case <-gate.held:
+			case got := <-reads:
+				t.Fatal("the reader ended before the bound reply was held", fragment, readSize, len(got.data), got.err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("the gate never held the bound reply", fragment, readSize)
+			}
+			if err := gate.closeHeld(); err != nil {
+				t.Fatal(err)
+			}
+			got := <-reads
+			if !bytes.Equal(got.data, passed) || !errors.Is(got.err, net.ErrClosed) {
+				t.Fatalf("fragment=%d read=%d: delivered %d bytes, want exactly the %d bytes before the bound reply; error %v", fragment, readSize, len(got.data), len(passed), got.err)
+			}
+			if held, err := gate.heldReply(); err != nil || held.Transaction != 2 || held.Sequence != 4 || held.FrameBytes != len(withheld) {
+				t.Fatal("withheld reply identity", held, err)
+			}
+			peer.Close()
+		}
+	}
+}
