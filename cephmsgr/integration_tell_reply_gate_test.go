@@ -120,6 +120,7 @@ type tellReplyGateConn struct {
 	connection uint64
 	closed     chan struct{}
 	closeOnce  sync.Once
+	closeErr   error
 
 	readMu      sync.Mutex
 	bannerDone  bool
@@ -162,6 +163,11 @@ func (c *tellReplyGateConn) Read(p []byte) (int, error) {
 		}
 		if !c.passthrough {
 			progressed, withheld := c.parse()
+			if len(c.ready) > 0 {
+				// Frames received together with the withheld reply are
+				// still delivered first.
+				continue
+			}
 			if withheld {
 				c.gate.heldOnce.Do(func() { close(c.gate.held) })
 				<-c.closed
@@ -252,9 +258,16 @@ func (c *tellReplyGateConn) abandon(err error) {
 	c.ready, c.pending, c.passthrough = append(c.ready, c.pending...), nil, true
 }
 
+// Close closes the underlying connection once and gives every caller that
+// result. The session also closes its connection as soon as its withheld read
+// is released, so a second underlying Close must not turn the test's own
+// close of the held connection into an error.
 func (c *tellReplyGateConn) Close() error {
-	c.closeOnce.Do(func() { close(c.closed) })
-	return c.Conn.Close()
+	c.closeOnce.Do(func() {
+		c.closeErr = c.Conn.Close()
+		close(c.closed)
+	})
+	return c.closeErr
 }
 
 // paddedReplyGate is the gate for streams that cannot be decoded (secure
@@ -273,7 +286,7 @@ type paddedReplyGate struct {
 	bound      bool
 	connection uint64
 	peer       string
-	holder     *testcluster.LostReplyConn
+	holder     *paddedReplyGateConn
 	// armed is closed when the gate binds.
 	armed chan struct{}
 	// received is closed when bytes arrived on the bound connection after the
@@ -291,6 +304,15 @@ type paddedReplyGateConn struct {
 	gate       *paddedReplyGate
 	connection uint64
 	peer       string
+	closeOnce  sync.Once
+	closeErr   error
+}
+
+// Close closes the wrapped connection once and gives every caller that
+// result, for the reason given at tellReplyGateConn.Close.
+func (c *paddedReplyGateConn) Close() error {
+	c.closeOnce.Do(func() { c.closeErr = c.LostReplyConn.Close() })
+	return c.closeErr
 }
 
 func (g *paddedReplyGate) wrap(conn net.Conn, connection uint64, peer string) *paddedReplyGateConn {
@@ -304,7 +326,7 @@ func (c *paddedReplyGateConn) Write(p []byte) (int, error) {
 		g.mu.Lock()
 		if !g.bound {
 			// Arm before the bytes leave, so a reply cannot pass first.
-			g.bound, g.connection, g.peer, g.holder = true, c.connection, c.peer, c.LostReplyConn
+			g.bound, g.connection, g.peer, g.holder = true, c.connection, c.peer, c
 			c.Armed.Store(true)
 			close(g.armed)
 		}

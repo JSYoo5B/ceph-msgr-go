@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,10 +196,23 @@ func TestTellReplyGateRecordsAnUndecodableStreamAndForwardsIt(t *testing.T) {
 	}
 }
 
+// strictCloseConn fails a second Close, as a TCP connection does.
+type strictCloseConn struct {
+	net.Conn
+	closed atomic.Bool
+}
+
+func (c *strictCloseConn) Close() error {
+	if c.closed.Swap(true) {
+		return net.ErrClosed
+	}
+	return c.Conn.Close()
+}
+
 func paddedPipe(t *testing.T, gate *paddedReplyGate, connection uint64, role string) (*paddedReplyGateConn, net.Conn) {
 	t.Helper()
 	local, peer := net.Pipe()
-	conn := gate.wrap(local, connection, role)
+	conn := gate.wrap(&strictCloseConn{Conn: local}, connection, role)
 	t.Cleanup(func() { conn.Close(); peer.Close() })
 	return conn, peer
 }
@@ -283,5 +297,45 @@ func TestPaddedReplyGateWithholdsEveryByteAfterTheFirstPaddedWrite(t *testing.T)
 	}
 	if err := newPaddedReplyGate(4096, func(string) bool { return true }).closeHeld(); err == nil {
 		t.Fatal("an unbound gate closed a connection")
+	}
+	// The session closes its connection once its withheld read is released.
+	// That second close reports the first close's result, not a new error.
+	if err := subject.Close(); err != nil {
+		t.Fatal("a second close of the held connection failed", err)
+	}
+}
+
+// The reader that a hold blocks belongs to a session, which closes its
+// connection as soon as that read is released. Whichever close comes first,
+// both must succeed, so closing the held connection never fails a test.
+func TestReplyGateConnectionsCloseOnceForEveryCaller(t *testing.T) {
+	for range 200 {
+		gate := newTellReplyGate()
+		local, peer := net.Pipe()
+		conn := newTellReplyGateConn(&strictCloseConn{Conn: local}, gate, 1)
+		command := msgr.TellCommand([16]byte{1}, []string{`{"prefix":"config set"}`}, nil)
+		gate.arm(command.Front, command.Data)
+		bindGate(t, conn, peer, command, 2, 2)
+		stream := append(msgr.Banner{Supported: msgr.Revision1, Required: msgr.Revision1}.Encode(), gateTellReply(t, msgr.TellCommandReplyMessage, 2, 1)...)
+		// The banner arrives in the same read as the reply and still passes.
+		go func() { _, _ = peer.Write(stream) }()
+		banner := len(stream) - len(gateTellReply(t, msgr.TellCommandReplyMessage, 2, 1))
+		if got := readExactly(t, conn, banner); !bytes.Equal(got, stream[:banner]) {
+			t.Fatal("bytes received together with the withheld reply were changed")
+		}
+		session := make(chan error, 1)
+		go func() {
+			// A session reader: when its read ends it closes its connection.
+			_, _ = conn.Read(make([]byte, 1))
+			session <- conn.Close()
+		}()
+		<-gate.held
+		if err := gate.closeHeld(); err != nil {
+			t.Fatal("closing the held connection failed", err)
+		}
+		if err := <-session; err != nil {
+			t.Fatal("the session's own close failed", err)
+		}
+		peer.Close()
 	}
 }
