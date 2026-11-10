@@ -339,6 +339,30 @@
    }
   },
   {
+   "id": "mon-mgr.aes256k.ip4.t-monservicemaplargemap",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "test_run": "^TestCephMonServiceMapLargeMapIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.crc.host.t-monservicemaplargemap",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephMonServiceMapLargeMapIntegration$"
+   }
+  },
+  {
    "id": "mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell",
    "group": "mon-mgr",
    "params": {

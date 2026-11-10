@@ -26,6 +26,8 @@ mon-mgr.aes256k.ip4.crc.host
 mon-mgr.aes.ip4.crc.host
 mon-mgr.aes256k.ip6.crc
 mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold
+mon-mgr.aes256k.ip4.t-monservicemaplargemap
+mon-mgr.aes.ip4.crc.host.t-monservicemaplargemap
 mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell
 mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell
 mon-mgr.aes256k.ip4.host.t-suite-e9be0b
