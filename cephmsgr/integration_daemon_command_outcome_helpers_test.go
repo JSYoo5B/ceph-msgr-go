@@ -182,10 +182,7 @@ func nativeDaemonCommandSummary(receipt nativeDaemonCommandReceipt) string {
 		detail = fmt.Sprintf(" get_ok=%t get=%q diff_ok=%t diff_valid=%t diff_keys=%v diff_entries=%d", views.ConfigGet.OK, views.ConfigGet.Data,
 			views.ConfigDiff.OK, views.ConfigDiff.Valid, views.ConfigDiff.TopLevelKeys, views.ConfigDiff.DiffEntries)
 	}
-	mutation := "none"
-	if m := receipt.Mutation; m != nil {
-		mutation = fmt.Sprintf("%s args=%v ok=%t output_bytes=%d error=%q", m.Action, m.Args, m.OK, m.OutputBytes, m.Error)
-	}
+	mutation := receipt.Mutation.summary()
 	return fmt.Sprintf("phase=%s request=%d target=%s pgid=%q daemon=%s incarnation=%d address=%s bracketed=%t restorable=%t %s%s mutation=%s",
 		receipt.Phase, receipt.RequestID, receipt.Target.daemon(), receipt.Target.PGID, bracket.daemon, bracket.incarnation, bracket.address, stable,
 		receipt.Restorable, state, detail, mutation)

@@ -110,8 +110,12 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 			t.Error("native restoration did not return; its outcome remains uncertain and is not retried", err)
 			return
 		}
-		if receipt.Mutation == nil || receipt.Mutation.Action != "restore" || !receipt.Mutation.OK {
-			t.Error("native restoration failed or is uncertain; it is not retried", nativeDaemonCommandSummary(receipt))
+		if receipt.Mutation != nil && receipt.Mutation.Refused {
+			t.Error("native restoration was refused and not sent: the daemon incarnation that supplied the baseline is gone or unverifiable", nativeDaemonCommandSummary(receipt))
+			return
+		}
+		if !receipt.Mutation.applied("restore") {
+			t.Error("native restoration failed, is uncertain or reached another daemon incarnation; it is not retried", nativeDaemonCommandSummary(receipt))
 			return
 		}
 		t.Log("native restoration submitted once:", nativeDaemonCommandSummary(receipt))
@@ -242,8 +246,8 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 	// One native overwrite establishes distinct B. A replay of A would
 	// overwrite it.
 	overwritten := requireNativeDaemonCommand(t, ctx, control, token, "overwrite", cell.target, daemon, b)
-	if m := overwritten.Mutation; m == nil || m.Action != "overwrite" || !m.OK {
-		t.Fatal("the native overwrite did not return successfully", nativeDaemonCommandSummary(overwritten))
+	if !overwritten.Mutation.applied("overwrite") {
+		t.Fatal("the native overwrite was refused, did not return successfully or reached another daemon incarnation", nativeDaemonCommandSummary(overwritten))
 	}
 	t.Log(nativeDaemonCommandSummary(overwritten))
 	select {

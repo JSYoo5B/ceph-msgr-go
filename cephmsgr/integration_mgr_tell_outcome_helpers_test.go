@@ -68,11 +68,31 @@ type nativeMgrTellViews struct {
 // nativeMgrTellMutation is the one native overwrite or restoration. Its
 // arguments are derived by the fixture from its own recorded baseline.
 type nativeMgrTellMutation struct {
-	Action      string   `json:"action"`
-	Args        []string `json:"args"`
-	OK          bool     `json:"ok"`
-	Error       string   `json:"error"`
-	OutputBytes int      `json:"output_bytes"`
+	Action string   `json:"action"`
+	Args   []string `json:"args"`
+	// Refused: the fixture could not verify, immediately before the call, the
+	// daemon incarnation that supplied the baseline, and sent nothing.
+	Refused     bool   `json:"refused"`
+	OK          bool   `json:"ok"`
+	Error       string `json:"error"`
+	OutputBytes int    `json:"output_bytes"`
+	// SameIncarnationAfter: the map reads after the call still showed the
+	// baseline's incarnation.
+	SameIncarnationAfter bool `json:"same_incarnation_after"`
+}
+
+// applied reports that this is the named mutation, that it was sent to the
+// baseline's daemon incarnation and returned successfully, and that the same
+// incarnation was still there afterwards.
+func (m *nativeMgrTellMutation) applied(action string) bool {
+	return m != nil && m.Action == action && !m.Refused && m.OK && m.SameIncarnationAfter
+}
+
+func (m *nativeMgrTellMutation) summary() string {
+	if m == nil {
+		return "none"
+	}
+	return fmt.Sprintf("%s args=%v refused=%t ok=%t same_incarnation_after=%t output_bytes=%d error=%q", m.Action, m.Args, m.Refused, m.OK, m.SameIncarnationAfter, m.OutputBytes, m.Error)
 }
 
 type nativeMgrTellReceipt struct {
@@ -170,10 +190,7 @@ func nativeMgrTellSummary(receipt nativeMgrTellReceipt) string {
 			override += "=" + *entry.Override
 		}
 	}
-	mutation := "none"
-	if m := receipt.Mutation; m != nil {
-		mutation = fmt.Sprintf("%s args=%v ok=%t output_bytes=%d error=%q", m.Action, m.Args, m.OK, m.OutputBytes, m.Error)
-	}
+	mutation := receipt.Mutation.summary()
 	return fmt.Sprintf("phase=%s request=%d target=mgr.%s active=%s gid=%d epochs=%d..%d bracketed=%t get_ok=%t get=%q effective=%d diff_ok=%t diff_valid=%t diff_keys=%v diff_entries=%d override=%s mutation=%s",
 		receipt.Phase, receipt.RequestID, receipt.Target, bracket.name, bracket.gid, views.ManagerBefore.Epoch, views.ManagerAfter.Epoch, stable,
 		views.ConfigGet.OK, views.ConfigGet.Data, effective, views.ConfigDiff.OK, views.ConfigDiff.Valid, views.ConfigDiff.TopLevelKeys,

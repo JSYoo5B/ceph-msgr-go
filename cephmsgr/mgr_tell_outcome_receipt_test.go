@@ -134,3 +134,31 @@ func TestNativeMgrTellBetweenAdmitsOnlyTheChangeFromPreviousToWanted(t *testing.
 		}
 	}
 }
+
+func TestNativeMutationCountsOnlyWhenSentToTheBaselineIncarnation(t *testing.T) {
+	sent := `{"action":"restore","args":["config","unset","log_max_recent"],"refused":false,"ok":true,"error":"","output_bytes":3,"same_incarnation_after":true}`
+	for name, tc := range map[string]struct {
+		data   string
+		action string
+		want   bool
+	}{
+		"sent and confirmed":         {sent, "restore", true},
+		"another action":             {sent, "overwrite", false},
+		"refused, nothing sent":      {strings.Replace(strings.Replace(sent, `"refused":false`, `"refused":true`, 1), `"ok":true`, `"ok":false`, 1), "restore", false},
+		"failed call":                {strings.Replace(sent, `"ok":true`, `"ok":false`, 1), "restore", false},
+		"replaced after the call":    {strings.Replace(sent, `"same_incarnation_after":true`, `"same_incarnation_after":false`, 1), "restore", false},
+		"receipt of an older schema": {`{"action":"restore","args":[],"ok":true,"error":"","output_bytes":3}`, "restore", false},
+	} {
+		var mutation nativeMgrTellMutation
+		if err := json.Unmarshal([]byte(tc.data), &mutation); err != nil {
+			t.Fatal(err)
+		}
+		if mutation.applied(tc.action) != tc.want {
+			t.Fatal("mutation receipt acceptance:", name, mutation.summary())
+		}
+	}
+	var absent *nativeMgrTellMutation
+	if absent.applied("restore") || absent.summary() != "none" {
+		t.Fatal("a missing mutation counted as applied")
+	}
+}
