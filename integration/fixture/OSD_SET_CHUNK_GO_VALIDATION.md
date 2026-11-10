@@ -20,6 +20,12 @@ fixture's admin identity) sends every SET_CHUNK and both source deletions
 itself, once each, to the native placement's primary. No native SET_CHUNK is
 issued and no new oracle is added.
 
+A second sequence in the same test uses a fresh triple in the same pools: a
+kept source and a peer source in slot 1 and their shared target in slot 2. It
+adds one standalone Go UNSET_MANIFEST to the kept source, a second one that
+must be refused, and one deletion of the peer. It uses no snapshot, no cache
+tier and no new product opcode.
+
 Catalog row
 `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdsetchunkgo`
 selects only this test and uses no opt-in parameter, so the test also belongs
@@ -40,12 +46,39 @@ negative aggregate must surface as `OSDError` with the same code. An
 | Overlaps | source A 0..8 again; 0..4 to target offset 16 | -95 / -95 each | source A and target unchanged |
 | Second source | source B 0..16 to target offset 8 | 0 / 0 | sources unchanged; target version advanced and `chunk_refs` naming both heads in hobject order |
 | Release | DELETE source A, then DELETE source B | 0 / 0 each | polls (20 x 0.5 s): `chunk_refs` naming only source B with a newer target version, then the target absent; both sources absent |
+| Shared target | kept source 0..8 to the shared target at offset 0; peer source 0..16 to offset 8 | 0 / 0 each | both sources unchanged; shared target bytes unchanged, version advanced, `chunk_refs` equal to the exact two-head encoding |
+| Unset | UNSET_MANIFEST to the kept source, once | 0 / 0 | both heads exist with their seeded bytes; the peer is unchanged; the kept source keeps its xattr inventory, and its new version and mtime are recorded, not predicted. Target-only polls (20 x 0.5 s): bytes unchanged, a newer version and `chunk_refs` naming the peer alone; an absent target ends the poll as a failure |
+| Second unset | UNSET_MANIFEST to the kept source again | -95 / -95 or 0 | kept source and shared target unchanged |
+| Peer release | DELETE the peer source | 0 / 0 | polls: the shared target absent; the peer absent; the kept source unchanged since the unset |
 
 The expected `chunk_refs` bytes are built independently in the test from the
 native placement hashes and the owned pool ID, ordered as `hobject_t`
 compares within one pool (bit-reversed hash, then name). The absent-target
 step uses source offset 0, so it stays off the documented non-zero-offset
 hazard path.
+
+### UNSET_MANIFEST on a chunked source
+
+The pinned handler
+([PrimaryLogPG.cc:7528-7558](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc#L7528-L7558))
+checks the tier, existence, manifest and release guards, calculates the
+reference drops, clears the manifest and marks the source modified. It does
+not truncate or remove the source. For a chunked object the decrement is
+scheduled on the source commit
+([3755-3780](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc#L3755-L3780))
+and submitted to the target without a completion back to the caller
+([3607-3618](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/PrimaryLogPG.cc#L3607-L3618)).
+A successful source reply therefore says nothing about when the target
+reached its new state, so the target is polled.
+
+The sequence separates three outcomes. A no-op leaves the kept source alive
+but keeps both references, so the poll expires. An accidental deletion or an
+emptied source fails the source check (`setChunkGoSourceKept`). A lost peer
+reference shows as an absent target. The SET_CHUNK expectation of an
+unchanged source version does not carry over: UNSET_MANIFEST is a
+modification, and the kept source's version and mtime are recorded as
+observed. If a poll expires, the receipt keeps the last target observation.
+An unknown outcome stops the test and nothing is resent.
 
 ## Results
 
@@ -96,6 +129,39 @@ owned pools were removed. The test and the synthetic transport test were then
 updated to require and pass through that pair. The later pass does not depend
 on any other change.
 
+## UNSET_MANIFEST calibration
+
+This local run preceded the pull request that added the sequence and is not
+an exact-SHA CI receipt. It used this catalog row's environment and the
+pinned image on a Linux amd64 host with Docker 29.9.1 and Go 1.26.9, at test
+commit `525e6cd` (later commits of the same pull request change documents
+only). The result gate recorded `TestCephOSDSetChunkGoIntegration` as PASS
+with no problem: 16.91 s, all nine subtests, owned pools removed. The first
+nine requests repeated the table above at map epoch 20.
+
+| Go request | Transaction | Map epoch | Reply flags | Aggregate | Per-op |
+| --- | --- | --- | --- | --- | --- |
+| chunk kept source | 10 | 20 | `0x4000015` | 0 | 0 |
+| chunk peer source | 11 | 20 | `0x4000015` | 0 | 0 |
+| unset manifest | 12 | 20 | `0x4000025` | 0 | 0 |
+| unset manifest again | 13 | 20 | `0x4000025` | -95 | -95 |
+| delete peer source | 14 | 20 | `0x4000025` | 0 | 0 |
+
+- The kept source went from user version 8 with the seeded mtime
+  (1700000500.123456789) to user version 17 with the request's mtime
+  (1700001400.000000000); the reply's user version was 17. Its bytes and
+  xattr inventory were unchanged.
+- The shared target went from user version 13 (two references) to 14 with
+  the peer's reference alone. The first poll already showed it.
+- The first poll after the peer's deletion found the shared target absent.
+
+Two mutation checks ran against the same fixture and were then discarded.
+With the UNSET_MANIFEST not sent, the kept source passed its check and the
+target poll expired after 20 polls with both references still encoded. With
+a DELETE sent in its place, the source check failed on the absent head. The
+cluster-free `TestSetChunkGoRefsOrderAndTargetGate` also refuses a deleted,
+emptied or changed source, an older version and a changed xattr inventory.
+
 ## Lost reply
 
 The lost-reply boundary is synthetic:
@@ -112,5 +178,10 @@ the Go client (refused locally because of the source-derived hang hazard);
 scoped identities (the source audit finds that the cache-mode opcode asks for
 neither read nor write capability); erasure-coded and tier source pools
 (server refusals only); snapshot clones and their reference accounting;
-UNSET_MANIFEST or overwrites of a chunked manifest; a live lost reply; the
-TIER_* operations and dedup pools.
+overwrites of a chunked manifest; a live lost reply; the TIER_* operations
+and dedup pools. For UNSET_MANIFEST, one chunked source with one offset-zero
+extent and local bytes ran on this profile. Not verified: a source with
+several chunks or without local bytes, the delay between the source reply
+and the target's release (the first poll already showed it), replay after a
+lost UNSET_MANIFEST reply, crash persistence, and an exact-SHA CI receipt
+for this sequence.
