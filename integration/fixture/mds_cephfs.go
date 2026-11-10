@@ -132,7 +132,7 @@ func (x *mdsCephFSScope) mutated(kind string) bool {
 
 type mdsCephFSAction struct {
 	name, target string
-	gid          uint64
+	gid, tid     uint64
 }
 
 // The request is <id> <ownership token> <action> [argument]. Only fixed
@@ -167,7 +167,16 @@ func parseMDSCephFSRequest(fields []string, token string, previousID int64) (int
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS recovery stat target is not admitted")
 		}
 		action.target = arg
-	case "recovery-list", "recovery-write", "restart-arm", "restart-fire", "restart-status", "restart-adopt":
+	case "restart-inflight":
+		// <GlobalID>:<TID> of one request of an observed owned session.
+		gidText, tidText, ok := strings.Cut(arg, ":")
+		gid, gidErr := strconv.ParseUint(gidText, 10, 64)
+		tid, tidErr := strconv.ParseUint(tidText, 10, 64)
+		if !ok || gidErr != nil || tidErr != nil || gid == 0 || tid == 0 || strconv.FormatUint(gid, 10) != gidText || strconv.FormatUint(tid, 10) != tidText {
+			return 0, mdsCephFSAction{}, errors.New("MDS CephFS in-flight check requires one canonical GlobalID:TID")
+		}
+		action.gid, action.tid = gid, tid
+	case "recovery-list", "recovery-write", "restart-arm", "restart-pause", "restart-fire", "restart-status", "restart-adopt", "restart-resume":
 		if arg != "" {
 			return 0, mdsCephFSAction{}, errors.New("MDS CephFS recovery and restart actions take no caller argument")
 		}
@@ -800,7 +809,7 @@ func (c *fixtureCluster) mdsCephFSAct(ctx context.Context, id int64, action mdsC
 		}
 		result.Blocklist, err = c.mdsSessionsBlocklist(ctx)
 		return err
-	case "restart-arm":
+	case "restart-arm", "restart-pause", "restart-inflight", "restart-resume":
 		return c.mdsCephFSRestartAct(ctx, id, action, result)
 	case "recovery-ops":
 		return c.mdsCephFSHistoricOps(ctx, action.gid, result)
@@ -880,6 +889,9 @@ type mdsCephFSCleanup struct {
 	PushNamespace      *mdsCephFSNative     `json:"push_namespace,omitempty"`
 	PushConfig         *mdsCephFSPushConfig `json:"push_config,omitempty"`
 	PushConfigRestored bool                 `json:"push_config_restored"`
+	// JournalPauseRestored reports that no owned journal pause outlives the
+	// acceptance: never applied, resumed, or discarded with its incarnation.
+	JournalPauseRestored bool `json:"journal_pause_restored"`
 	mdsCephFSBlocklistReceipt
 	ClientIdentityRemoved   bool     `json:"client_identity_removed"`
 	NativeIdentityRemoved   bool     `json:"native_identity_removed"`
@@ -915,7 +927,11 @@ func (c *fixtureCluster) finishMDSCephFS(ctx context.Context) error {
 		}
 	}
 	nativeName, pushName := "mds-cephfs-native-"+s.token, "mds-cephfs-push-native-"+s.token
-	// The recall overrides are restored first: they are independent of any
+	// A journal pause left on a still-mapped armed incarnation is lifted
+	// first: until then every journaled operation, including the session
+	// open of a native readback mount, would wait on it.
+	c.finishMDSCephFSJournalPause(ctx, &receipt, fail)
+	// The recall overrides are restored next: they are independent of any
 	// session and must not outlive the acceptance.
 	c.finishMDSCephFSPushConfig(ctx, &receipt, fail)
 	if x.baselineReady {
@@ -999,7 +1015,7 @@ func (c *fixtureCluster) finishMDSCephFS(ctx context.Context) error {
 		receipt.Errors = append(receipt.Errors, err.Error())
 	}
 	receipt.Completed = len(errs) == 0 && receipt.NamespaceChecked && receipt.BlocklistRestored && receipt.ClientIdentityRemoved && receipt.NativeIdentityRemoved && receipt.RecoveryIdentityRemoved &&
-		receipt.PushIdentityRemoved && receipt.PushConfigRestored
+		receipt.PushIdentityRemoved && receipt.PushConfigRestored && receipt.JournalPauseRestored
 	if !receipt.Completed && len(errs) == 0 {
 		errs = append(errs, errors.New("MDS CephFS cleanup did not verify every check"))
 	}

@@ -20,8 +20,11 @@ import (
 
 // The CephFS recovery acceptance extends the CephFS profile with a second
 // owned directory, a third identity holding an OSD read grant on the owned
-// data pool, one native create+write, one owned client eviction and one owned
-// restart of the rank-0 MDS daemon. The restart fails exactly the armed daemon
+// data pool, one native create+write, one owned client eviction, one bounded
+// journal pause and one owned restart of the rank-0 MDS daemon. The pause
+// (mds_log_pause on the armed incarnation) keeps the replayed create from being
+// journaled before the restart; it is lifted again if the restart is not fired.
+// The restart fails exactly the armed daemon
 // GID (`ceph mds fail <gid>`); the daemon respawns in its own container, takes
 // rank 0 again with a new GID and address nonce, and the fixture adopts that
 // incarnation only after proving it natively. Every mutation is journaled
@@ -29,7 +32,9 @@ import (
 // entries it can attribute to those owned mutations. Native behavior relied
 // upon: mon/MDSMonitor.cc (fail_mds_gid), mon/OSDMonitor.cc (blocklist),
 // mds/MDSDaemon.cc (respawn after removal from the map), mds/MDSRank.cc
-// (evict_client), mds/Server.cc (kill_session, reconnect) and
+// (evict_client, handle_conf_change, the scrub abort command), mds/MDLog.cc
+// (_submit_thread, flush), mds/ScrubStack.cc (scrub_abort),
+// mds/Server.cc (journal_and_reply, kill_session, reconnect) and
 // osd/PrimaryLogPG.cc (do_op blocklist check) at mdsFreshSource (LGPL-2.1
 // references; no code copied).
 
@@ -110,6 +115,55 @@ type mdsCephFSRestart struct {
 	Adopted        *mdsFreshDaemon    `json:"adopted,omitempty"`
 	AdoptedUTC     string             `json:"adopted_utc,omitempty"`
 	OldFencing     []mdsSessionsBlock `json:"old_incarnation_blocklist,omitempty"`
+	// Pause is the bounded journal fault boundary on the armed incarnation;
+	// Boundary is the in-flight proof of the request it holds back.
+	Pause    *mdsCephFSJournalPause `json:"journal_pause,omitempty"`
+	Boundary *mdsCephFSBoundaryOp   `json:"boundary_op,omitempty"`
+}
+
+// mdsCephFSJournalPause records the runtime mds_log_pause of the armed
+// incarnation. MDLog::_submit_thread appends no journal entry while it is set,
+// so a request journaled after it takes effect can never become safe on that
+// incarnation; a journal flush (MDLog::flush) then only queues a flush marker
+// behind the held entries. The setting is runtime-only (`tell ... config
+// set`): the respawned incarnation starts without it. MDSRank applies the
+// change on its finisher thread, so the pause is confirmed by a later
+// `scrub abort` on an idle rank 0, which the same single finisher answers
+// only after the configuration change ran.
+type mdsCephFSJournalPause struct {
+	// State: intended, applied, uncertain, resume-intended, resumed,
+	// resume-uncertain or discarded (the paused incarnation left the map).
+	State           string `json:"state"`
+	RequestID       int64  `json:"request_id"`
+	ScrubBefore     string `json:"scrub_status_before"`
+	SetOutput       string `json:"set_output,omitempty"`
+	BarrierOutput   string `json:"barrier_output,omitempty"`
+	Readback        string `json:"readback,omitempty"`
+	AppliedUTC      string `json:"applied_utc,omitempty"`
+	ResumeRequestID int64  `json:"resume_request_id,omitempty"`
+	ResumeReadback  string `json:"resume_readback,omitempty"`
+	ResumedUTC      string `json:"resumed_utc,omitempty"`
+	ResumedBy       string `json:"resumed_by,omitempty"`
+	DiscardedUTC    string `json:"discarded_utc,omitempty"`
+	AdoptedReadback string `json:"adopted_readback,omitempty"`
+	Error           string `json:"error,omitempty"`
+}
+
+func (p *mdsCephFSJournalPause) held() bool {
+	return p != nil && p.State != "resumed" && p.State != "discarded"
+}
+
+// mdsCephFSBoundaryOp is one read of the armed incarnation's op tracker for
+// the request the pause should hold back. Held means it is still in flight,
+// was answered early (unsafe) and carries no journal commit event.
+type mdsCephFSBoundaryOp struct {
+	RequestID  int64                `json:"request_id"`
+	GlobalID   uint64               `json:"global_id"`
+	TID        uint64               `json:"tid"`
+	CheckedUTC string               `json:"checked_utc"`
+	InFlight   bool                 `json:"in_flight"`
+	Held       bool                 `json:"held"`
+	Op         *mdsCephFSHistoricOp `json:"op,omitempty"`
 }
 
 func (r *mdsCephFSRestart) pending() bool {
@@ -303,10 +357,82 @@ func (c *fixtureCluster) mdsCephFSRestartAct(ctx context.Context, id int64, acti
 		x.restart = r
 		result.Restart = r
 		return c.mdsCephFSJournal()
+	case "restart-pause":
+		r := x.restart
+		if r == nil || r.State != "armed" || r.Pause != nil || x.current.GID != r.Armed.GID {
+			return errors.New("MDS CephFS journal pause requires one armed, unfired restart and no earlier pause")
+		}
+		// The barrier below must abort nothing: rank 0 has to be idle.
+		data, err := c.mdsSessionsDaemon(ctx, "scrub", "status", "--format", "json")
+		if err != nil {
+			return err
+		}
+		scrub, err := parseMDSCephFSScrubStatus(data)
+		if err != nil {
+			return err
+		}
+		if scrub != "no active scrubs running" {
+			return errors.New("MDS CephFS journal pause requires an idle scrub stack on the armed incarnation")
+		}
+		p := &mdsCephFSJournalPause{State: "intended", RequestID: id, ScrubBefore: scrub}
+		r.Pause = p
+		result.Restart = r
+		if err := c.mdsCephFSJournal(); err != nil {
+			return err
+		}
+		if err := c.mdsCephFSSetJournalPause(ctx, p, true); err != nil {
+			p.State, p.Error = "uncertain", err.Error()
+			return errors.Join(err, c.mdsCephFSJournal())
+		}
+		p.State, p.AppliedUTC = "applied", time.Now().UTC().Format(time.RFC3339Nano)
+		return c.mdsCephFSJournal()
+	case "restart-inflight":
+		r := x.restart
+		if r == nil || r.State != "armed" || r.Pause == nil || r.Pause.State != "applied" || r.Boundary != nil {
+			return errors.New("MDS CephFS in-flight check requires the applied journal pause of an unfired restart")
+		}
+		if !slices.Contains(slices.Collect(maps.Values(x.owned)), action.gid) {
+			return errors.New("MDS CephFS in-flight check is admitted only for an observed owned Go session")
+		}
+		data, err := c.mdsSessionsDaemon(ctx, "dump_ops_in_flight", "--format", "json")
+		if err != nil {
+			return err
+		}
+		op, held, err := mdsCephFSFindBoundaryOp(data, action.gid, action.tid)
+		if err != nil {
+			return err
+		}
+		// A request that is not held is an observation, not a control
+		// failure: the test decides, and fire stays refused.
+		r.Boundary = &mdsCephFSBoundaryOp{RequestID: id, GlobalID: action.gid, TID: action.tid, CheckedUTC: time.Now().UTC().Format(time.RFC3339Nano), InFlight: op != nil, Held: held, Op: op}
+		result.Restart = r
+		return c.mdsCephFSJournal()
+	case "restart-resume":
+		r := x.restart
+		if r == nil || r.State != "armed" || r.Pause == nil || (r.Pause.State != "intended" && r.Pause.State != "applied" && r.Pause.State != "uncertain") || x.current.GID != r.Armed.GID {
+			return errors.New("MDS CephFS journal resume requires a held pause of an unfired restart")
+		}
+		p := r.Pause
+		p.State, p.ResumeRequestID = "resume-intended", id
+		result.Restart = r
+		if err := c.mdsCephFSJournal(); err != nil {
+			return err
+		}
+		if err := c.mdsCephFSSetJournalPause(ctx, p, false); err != nil {
+			p.State, p.Error = "resume-uncertain", err.Error()
+			return errors.Join(err, c.mdsCephFSJournal())
+		}
+		p.State, p.ResumedUTC, p.ResumedBy = "resumed", time.Now().UTC().Format(time.RFC3339Nano), "control"
+		return c.mdsCephFSJournal()
 	case "restart-fire":
 		r := x.restart
 		if r == nil || r.State != "armed" {
 			return errors.New("MDS CephFS restart fire requires one armed, unfired restart")
+		}
+		// The restart is fired only behind the qualified fault boundary: an
+		// applied pause and the in-flight proof of the request it holds.
+		if r.Pause == nil || r.Pause.State != "applied" || r.Boundary == nil || !r.Boundary.Held {
+			return errors.New("MDS CephFS restart fire requires the applied journal pause and its in-flight proof")
 		}
 		// Journal the intent first; the outcome is recorded once and the
 		// command is never reissued, whatever it returns.
@@ -362,6 +488,20 @@ func (c *fixtureCluster) mdsCephFSRestartAct(ctx context.Context, id int64, acti
 		if status.ArmedPresent || status.Rank0 == nil || status.Rank0.GID != n.GID {
 			return errors.New("MDS CephFS restart adoption found the armed daemon still mapped")
 		}
+		if p := r.Pause; p != nil {
+			// The pause was runtime-only state of the removed incarnation;
+			// the adopted one must journal again.
+			value, err := c.mdsSessionsDaemonConfig(ctx, "mds_log_pause")
+			if err != nil {
+				return err
+			}
+			if p.AdoptedReadback = value; value != "false" {
+				return errors.New("MDS CephFS adopted incarnation still has its journal paused")
+			}
+			if p.held() {
+				p.State, p.DiscardedUTC = "discarded", time.Now().UTC().Format(time.RFC3339Nano)
+			}
+		}
 		r.OldFencing = status.ArmedBlocklist
 		adopted := n
 		r.Adopted, r.AdoptRequestID, r.AdoptedUTC, r.State = &adopted, id, time.Now().UTC().Format(time.RFC3339Nano), "adopted"
@@ -371,6 +511,127 @@ func (c *fixtureCluster) mdsCephFSRestartAct(ctx context.Context, id int64, acti
 		return errors.Join(c.mdsCephFSJournal(), c.mdsCephFSWriteTarget())
 	}
 	return errors.New("MDS CephFS restart action is not admitted")
+}
+
+// mdsCephFSSetJournalPause sets mds_log_pause on the current rank 0 (which the
+// caller proves is the armed incarnation) and confirms that the MDSRank
+// finisher applied it: `scrub abort` on an idle rank 0 is answered from that
+// single finisher thread after the change queued before it
+// (MDSRankDispatcher::handle_conf_change, handle_asok_command and
+// ScrubStack::scrub_abort at mdsFreshSource). The readback reports the
+// daemon's configuration value.
+func (c *fixtureCluster) mdsCephFSSetJournalPause(ctx context.Context, p *mdsCephFSJournalPause, pause bool) error {
+	value := strconv.FormatBool(pause)
+	output, err := c.mdsSessionsDaemon(ctx, "config", "set", "mds_log_pause", value)
+	if pause {
+		p.SetOutput = mdsCephFSBoundedOutput(output)
+	}
+	if err != nil {
+		return err
+	}
+	if output, err = c.mdsSessionsDaemon(ctx, "scrub", "abort"); pause {
+		p.BarrierOutput = mdsCephFSBoundedOutput(output)
+	}
+	if err != nil {
+		return err
+	}
+	readback, err := c.mdsSessionsDaemonConfig(ctx, "mds_log_pause")
+	if pause {
+		p.Readback = readback
+	} else {
+		p.ResumeReadback = readback
+	}
+	if err != nil {
+		return err
+	}
+	if readback != value {
+		return errors.New("MDS CephFS journal pause readback differs")
+	}
+	return nil
+}
+
+func mdsCephFSBoundedOutput(output []byte) string {
+	return strings.TrimSpace(string(output[:min(len(output), 4096)]))
+}
+
+// parseMDSCephFSScrubStatus reads the status line of `scrub status`.
+func parseMDSCephFSScrubStatus(data []byte) (string, error) {
+	var status struct {
+		Status string         `json:"status"`
+		Scrubs map[string]any `json:"scrubs"`
+	}
+	if len(data) == 0 || len(data) > 4096 || json.Unmarshal(data, &status) != nil || status.Status == "" || status.Scrubs == nil {
+		return "", errors.New("MDS scrub status shape differs")
+	}
+	return status.Status, nil
+}
+
+// mdsCephFSFindBoundaryOp finds the in-flight client request of gid with tid
+// in a dump_ops_in_flight output (nil when absent). It is held when it was
+// answered early (unsafe) and carries no journal commit event, which the
+// completion of Server::journal_and_reply marks. A duplicate is an error.
+func mdsCephFSFindBoundaryOp(data []byte, gid, tid uint64) (*mdsCephFSHistoricOp, bool, error) {
+	ops, err := parseMDSCephFSHistoricOps(data, gid)
+	if err != nil {
+		return nil, false, err
+	}
+	prefix := "client_request(client." + strconv.FormatUint(gid, 10) + ":" + strconv.FormatUint(tid, 10) + " "
+	var found *mdsCephFSHistoricOp
+	for i := range ops {
+		if strings.HasPrefix(ops[i].Description, prefix) {
+			if found != nil {
+				return nil, false, errors.New("MDS CephFS boundary request is tracked twice")
+			}
+			found = &ops[i]
+		}
+	}
+	held := found != nil && slices.Contains(found.Events, "early_replied") &&
+		!slices.ContainsFunc(found.Events, func(e string) bool { return strings.HasPrefix(e, "journal_committed") })
+	return found, held, nil
+}
+
+// finishMDSCephFSJournalPause lifts a journal pause that may still hold the
+// armed incarnation. A pause whose incarnation left the map was discarded
+// with it. Lifting is a restore of runtime state (`config set` false), so it
+// is applied even after an uncertain step; it is bracketed by rank status
+// reads that must both name the armed GID in rank 0.
+func (c *fixtureCluster) finishMDSCephFSJournalPause(ctx context.Context, receipt *mdsCephFSCleanup, fail func(error)) {
+	x := c.mdsCephFS
+	if x.restart == nil || !x.restart.Pause.held() {
+		receipt.JournalPauseRestored = true
+		return
+	}
+	r, p := x.restart, x.restart.Pause
+	before, err := c.mdsCephFSRankStatus(ctx)
+	if err != nil {
+		fail(err)
+		return
+	}
+	if !before.ArmedPresent {
+		p.State, p.DiscardedUTC = "discarded", time.Now().UTC().Format(time.RFC3339Nano)
+		receipt.JournalPauseRestored = true
+		fail(c.mdsCephFSJournal())
+		return
+	}
+	if before.Rank0 == nil || before.Rank0.GID != r.Armed.GID {
+		fail(errors.New("MDS CephFS paused incarnation is mapped but does not hold rank 0; its pause is kept"))
+		return
+	}
+	p.State = "resume-intended"
+	fail(c.mdsCephFSJournal())
+	err = c.mdsCephFSSetJournalPause(ctx, p, false)
+	after, statusErr := c.mdsCephFSRankStatus(ctx)
+	if err == nil && (statusErr != nil || after.Rank0 == nil || after.Rank0.GID != r.Armed.GID) {
+		err = errors.Join(statusErr, errors.New("MDS CephFS rank 0 changed while the journal pause was lifted"))
+	}
+	if err != nil {
+		p.State, p.Error = "resume-uncertain", err.Error()
+		fail(err)
+	} else {
+		p.State, p.ResumedUTC, p.ResumedBy = "resumed", time.Now().UTC().Format(time.RFC3339Nano), "cleanup"
+		receipt.JournalPauseRestored = true
+	}
+	fail(c.mdsCephFSJournal())
 }
 
 // mdsCephFSEvict evicts one open session of the owned recovery identity and

@@ -130,9 +130,128 @@ func TestMDSCephFSRestartStepsAreOrderedAndOneShot(t *testing.T) {
 		}
 	}
 	x.restart.State = "adopted"
-	for _, name := range []string{"restart-fire", "restart-status", "restart-adopt"} {
-		if err := c.mdsCephFSRestartAct(context.Background(), 8, mdsCephFSAction{name: name}, &result); err == nil || x.restart.pending() {
+	for _, name := range []string{"restart-fire", "restart-status", "restart-adopt", "restart-pause", "restart-inflight", "restart-resume"} {
+		if err := c.mdsCephFSRestartAct(context.Background(), 8, mdsCephFSAction{name: name, gid: 42, tid: 7}, &result); err == nil || x.restart.pending() {
 			t.Fatal("an adopted restart admitted another step", name)
+		}
+	}
+}
+
+// The journal fault boundary is refused before any native command unless the
+// restart is armed and unfired, and the restart fires only behind an applied
+// pause with a held in-flight proof.
+func TestMDSCephFSJournalBoundaryIsOrderedAndOneShot(t *testing.T) {
+	token := strings.Repeat("a1", 16)
+	out := t.TempDir()
+	armed := mdsFreshDaemon{Name: "owned-0", GID: 100}
+	c := &fixtureCluster{mdsFresh: &mdsFreshScope{out: out, token: token, name: "owned"},
+		mdsCephFS: &mdsCephFSScope{out: out, plan: mdsCephFSPlanFor(token), recovery: mdsCephFSRecoveryPlanFor(token), owned: map[string]uint64{"10.0.0.1:0/5": 42}, current: armed}}
+	x := c.mdsCephFS
+	var result mdsCephFSResult
+	refused := func(name string, why string) {
+		t.Helper()
+		if err := c.mdsCephFSRestartAct(context.Background(), 9, mdsCephFSAction{name: name, gid: 42, tid: 7}, &result); err == nil {
+			t.Fatal("journal boundary step admitted", name, why)
+		}
+	}
+	for _, name := range []string{"restart-pause", "restart-inflight", "restart-resume"} {
+		refused(name, "without an armed restart")
+	}
+	x.restart = &mdsCephFSRestart{State: "armed", Armed: armed}
+	refused("restart-inflight", "without a pause")
+	refused("restart-resume", "without a pause")
+	refused("restart-fire", "without a pause")
+	x.current.GID = 101
+	refused("restart-pause", "on another incarnation")
+	x.current.GID = armed.GID
+	x.restart.Pause = &mdsCephFSJournalPause{State: "applied"}
+	refused("restart-pause", "twice")
+	refused("restart-fire", "without an in-flight proof")
+	if err := c.mdsCephFSRestartAct(context.Background(), 9, mdsCephFSAction{name: "restart-inflight", gid: 43, tid: 7}, &result); err == nil {
+		t.Fatal("in-flight check admitted for an unobserved session")
+	}
+	x.restart.Boundary = &mdsCephFSBoundaryOp{GlobalID: 42, TID: 7, InFlight: true}
+	refused("restart-fire", "with a request that is not held")
+	refused("restart-inflight", "twice")
+	for _, state := range []string{"resumed", "resume-intended", "resume-uncertain", "discarded"} {
+		x.restart.Pause.State = state
+		refused("restart-resume", "after "+state)
+		refused("restart-fire", "after "+state)
+	}
+	x.restart.Pause.State = "applied"
+	x.restart.State = "applied"
+	refused("restart-resume", "after the fire")
+}
+
+func TestMDSCephFSBoundaryOpIsHeldOnlyBeforeCommit(t *testing.T) {
+	dump := func(ops ...map[string]any) []byte {
+		data, err := json.Marshal(map[string]any{"ops": ops, "num_ops": len(ops)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	op := func(description string, events ...string) map[string]any {
+		list := []any{}
+		for _, e := range events {
+			list = append(list, map[string]any{"time": "t", "event": e})
+		}
+		return map[string]any{"description": description, "initiated_at": "t", "age": 0.5, "duration": 0.5,
+			"type_data": map[string]any{"flag_point": "submit entry: journal_and_reply", "op_type": "client_request", "events": list}}
+	}
+	held := op("client_request(client.42:7 create #0x10000000001/replayed 2026-11-10 caller_uid=0)", "initiated", "early_replied", "submit entry: journal_and_reply")
+	other := op("client_request(client.42:70 create #0x10000000001/x)", "early_replied")
+	found, ok, err := mdsCephFSFindBoundaryOp(dump(other, held), 42, 7)
+	if err != nil || !ok || found == nil || !strings.HasPrefix(found.Description, "client_request(client.42:7 ") {
+		t.Fatal("held boundary request not found", found, ok, err)
+	}
+	for name, data := range map[string][]byte{
+		"absent":    dump(other),
+		"committed": dump(op("client_request(client.42:7 create)", "early_replied", "journal_committed: ")),
+		"not early": dump(op("client_request(client.42:7 create)", "submit entry: journal_and_reply")),
+		"foreign":   dump(op("client_request(client.43:7 create)", "early_replied")),
+	} {
+		if _, ok, err := mdsCephFSFindBoundaryOp(data, 42, 7); err != nil || ok {
+			t.Fatal("boundary request reported held", name, err)
+		}
+	}
+	if _, _, err := mdsCephFSFindBoundaryOp(dump(held, held), 42, 7); err == nil {
+		t.Fatal("duplicate boundary request accepted")
+	}
+	if _, _, err := mdsCephFSFindBoundaryOp([]byte("{}"), 42, 7); err == nil {
+		t.Fatal("op dump without ops accepted")
+	}
+}
+
+func TestMDSCephFSScrubStatusShape(t *testing.T) {
+	if status, err := parseMDSCephFSScrubStatus([]byte(`{"status":"no active scrubs running","scrubs":{}}`)); err != nil || status != "no active scrubs running" {
+		t.Fatal("idle scrub status rejected", status, err)
+	}
+	for _, bad := range []string{``, `{}`, `{"status":""}`, `{"status":"x"}`, `not json`} {
+		if _, err := parseMDSCephFSScrubStatus([]byte(bad)); err == nil {
+			t.Fatal("malformed scrub status accepted", bad)
+		}
+	}
+}
+
+// Without a held pause the cleanup step needs no native command.
+func TestMDSCephFSJournalPauseCleanupWithoutHeldPause(t *testing.T) {
+	for _, restart := range []*mdsCephFSRestart{nil, {State: "armed"}, {State: "armed", Pause: &mdsCephFSJournalPause{State: "resumed"}},
+		{State: "adopted", Pause: &mdsCephFSJournalPause{State: "discarded"}}} {
+		c := &fixtureCluster{mdsCephFS: &mdsCephFSScope{restart: restart}}
+		var receipt mdsCephFSCleanup
+		c.finishMDSCephFSJournalPause(context.Background(), &receipt, func(err error) {
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+		if !receipt.JournalPauseRestored {
+			t.Fatal("a pause that is not held was not reported restored", restart)
+		}
+	}
+	for _, state := range []string{"intended", "applied", "uncertain", "resume-intended", "resume-uncertain"} {
+		if !(&mdsCephFSJournalPause{State: state}).held() {
+			t.Fatal("a pause that may still hold the journal is not held", state)
 		}
 	}
 }
