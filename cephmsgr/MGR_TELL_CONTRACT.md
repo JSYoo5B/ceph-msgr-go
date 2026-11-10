@@ -49,6 +49,13 @@ loss, cancellation or Close. Neither named nor ordinary commands automatically
 re-execute uncertain input. A new invocation may explicitly select the newly
 active name. Client Close owns setup, sessions and their cleanup.
 
+Loss of the shared MGR connection while the selected daemon stays the
+available active manager is not a target change: a started command returns
+`OutcomeUnknownError` whose cause is the connection error, without
+`ErrManagerTargetChanged`. A later invocation sets up a new session to the
+same daemon. A command whose transmission started on the lost session is not
+sent on the new one.
+
 ## Wire and source
 
 This API reuses TellCommand: MCommand type 97, authenticated nonzero cluster
@@ -95,3 +102,16 @@ for source hashes, raw command results, identities and owned cleanup. These
 focused runs do not establish full CI coverage. No
 standby command service, arbitrary named-daemon address discovery or typed
 manager operations are claimed.
+
+`TestCephAppliedNamedManagerTellIsNotReplayedIntegration` adds one applied
+mutation on CRC/AES IPv4 host: a daemon-local runtime option changed through
+`MgrTellTo`, the reply to that command's own transaction withheld, and the
+changed state read on the named manager's own admin socket while the caller
+is still pending. After only the subject connection ends the caller keeps
+`OutcomeUnknownError`, a later native overwrite survives, the command was
+written locally once, and the option is restored natively. The option and
+its command schema are test-only. See the
+[outcome record](../integration/fixture/MGR_TELL_OUTCOME_VALIDATION.md) for
+the procedure, tested commit and limits. It is one unchanged manager
+incarnation: manager replacement, restart and secure-mode attribution are not
+part of that cell.
