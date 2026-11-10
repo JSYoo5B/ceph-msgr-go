@@ -24,11 +24,7 @@ func TestU64XattrFreshNativeProofMatchesStoredSegments(t *testing.T) {
 		t.Fatal("native builder cleanup not recorded")
 	}
 	for field, file := range map[string]string{"wrapper_sha256": u64XattrEncoderSpec.wrapper, "launcher_sha256": u64XattrEncoderSpec.driver, "build_driver_sha256": allocHintEncoderSpec.driver} {
-		source, err := os.ReadFile("../../tools/" + file)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if proof[field] != fmt.Sprintf("%x", sha256.Sum256(source)) {
+		if proof[field] != receiptToolDigest(t, "u64-xattr-native-provenance.json", file) {
 			t.Fatal("native U64 generator differs from retained proof", field)
 		}
 	}
