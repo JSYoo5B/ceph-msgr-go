@@ -339,6 +339,19 @@
    }
   },
   {
+   "id": "mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephAppliedNamedManagerTellIsNotReplayedIntegration$"
+   }
+  },
+  {
    "id": "osd.aes256k.ip4.host",
    "group": "osd",
    "params": {
