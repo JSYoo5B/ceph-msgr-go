@@ -22,6 +22,7 @@ import (
 type mapVersionRelay struct {
 	mu       sync.Mutex
 	nextConn uint64
+	dialed   []string
 	armed    bool
 	target   *mapVersionRequest
 	requests []mapVersionRequest
@@ -67,6 +68,9 @@ func (r *mapVersionRelay) wrap(conn net.Conn, endpoint string) net.Conn {
 	r.mu.Lock()
 	r.nextConn++
 	id := r.nextConn
+	if len(r.dialed) < 64 {
+		r.dialed = append(r.dialed, endpoint)
+	}
 	r.mu.Unlock()
 	c := &mapVersionRelayConn{Conn: conn, relay: r, id: id, endpoint: endpoint}
 	c.reader = msgr.NewReader(io.TeeReader(conn, &c.raw), mapVersionRelayLimit)
@@ -84,6 +88,13 @@ func (r *mapVersionRelay) connections() uint64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.nextConn
+}
+
+// endpoints returns the dialed endpoint of each wrapped connection, in order.
+func (r *mapVersionRelay) endpoints() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.dialed...)
 }
 
 // tellExchanges returns the daemon-local command receipts in wire order.

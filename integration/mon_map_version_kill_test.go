@@ -235,8 +235,8 @@ func TestCephMonMapVersionUnprocessedKillIntegration(t *testing.T) {
 		t.Fatal("the out-of-quorum MON answered the request", held)
 	default:
 	}
-	t.Logf("unanswered request barrier: mon.%s state=%s election_epoch=%d quorum=%v; peer=%s connection=%d TID=%d sequence=%d handle=%d; later tell answered on that connection; version replies=0",
-		subject, parked.State, parked.ElectionEpoch, parked.Quorum, sent.Endpoint, sent.Connection, sent.TID, sent.Sequence, sent.Handle)
+	t.Logf("unanswered request barrier: mon.%s state=%s election_epoch=%d quorum=%v; peer=%s connection=%d TID=%d sequence=%d handle=%d; later tell answered on that connection; version replies=0; dialed=%v",
+		subject, parked.State, parked.ElectionEpoch, parked.Quorum, sent.Endpoint, sent.Connection, sent.TID, sent.Sequence, sent.Handle, relay.endpoints())
 
 	down = append(down, subject)
 	killRequested := time.Now()
