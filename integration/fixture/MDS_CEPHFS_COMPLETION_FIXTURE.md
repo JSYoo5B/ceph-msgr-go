@@ -144,6 +144,10 @@ seconds.
 | `evict` | GlobalID | mutation, once per GlobalID: admin socket `session evict id=<gid>` of an open or stale session of the Go identity whose address is not blocklisted; waits until the session is gone and the address blocklisted |
 | `mds-log-mark` | none | read only: records the current line count of the owned daemon's container log |
 | `mds-log` | GlobalID, address nonce | read only: log lines after the mark (below) |
+| `reconnect-log` | GlobalID, address nonce | read only: that client's `handle_client_reconnect` lines after the mark, in order |
+| `split-flock-ex-nb` | none | held-lock split selector only; transient mutation, repeatable: one nonblocking exclusive LibCephFS `flock` on the first split file with a fixed native owner, released if acquired, with the file's `statx` and bytes before and after (below) |
+| `debug-caps-on`, `debug-caps-off` | none | held-lock split selector only; the `debug-on` runtime change at `debug_mds 15/15`, and its restore |
+| `reconnect-cap-log` | GlobalID, address nonce | held-lock split selector only; read only: that client's `handle_client_reconnect` lines and the per-capability lines each handler wrote (below) |
 | `restart-arm`, `restart-fire`, `restart-status`, `restart-adopt` | none | an owned restart (below) |
 
 Every action outside a pending restart proves the current owned incarnation
@@ -166,12 +170,15 @@ restart marks the armed incarnation's changes `discarded-by-restart`, and the
 test reads the new incarnation's values back. `log-pause` sets
 `mds_log_pause true`, `early-reply-off` sets `mds_early_reply false`,
 `blackhole-on` sets `ms_blackhole_client true`, and `debug-on` sets
-`debug_mds 10/10` and `debug_ms 1/5`. A change of one kind is in effect at
+`debug_mds 10/10` and `debug_ms 1/5`. `debug-caps-on` sets `debug_mds 15/15`
+and `debug_ms 1/5`; it changes the same options as `debug-on`, so only one of
+the two is in effect on an incarnation. A change of one kind is in effect at
 most once per incarnation; a restore requires it and sets the recorded
 baseline. Native driver actions and evictions are refused while the
 blackhole or the journal pause is in effect (a native mount and a session
-close would wait forever). Only `debug-on`/`debug-off` are admitted during a
-pending restart, on the respawned daemon.
+close would wait forever). Only `debug-on`/`debug-off` and
+`debug-caps-on`/`debug-caps-off` are admitted during a pending restart, on the
+respawned daemon.
 
 ### Central overrides
 
@@ -203,7 +210,8 @@ as one record and never reissued:
    incarnation current and rewrites the target file.
 
 Between fire and adopt only `restart-status`, `restart-adopt`, `config-read`,
-`debug-on`, `debug-off`, `mds-log-mark` and `mds-log` are admitted. The
+`debug-on`, `debug-off`, `debug-caps-on`, `debug-caps-off`, `mds-log-mark` and
+`mds-log` are admitted. The
 daemon-local ones first require that the admin socket's `status` names the GID
 the FSMap holds in rank 0 for the owned daemon name, whoami 0, and not the
 armed GID; everything else is refused before native work.
@@ -220,6 +228,32 @@ set of markers (the completed-request conversion and replay queue, read-only,
 `flushsnap`, reconnect denial, timeout and eviction, and closed-session
 reconnect lines). At most 600 lines of at most 2048 bytes are returned with
 the count of dropped ones.
+
+`reconnect-cap-log` uses its own filter with the same bounds. It keeps the
+`handle_client_reconnect client.<gid>` lines (with or without `(more)`) and,
+after each of them, the `open cap realm` lines up to the next reconnect handler
+line of any client. At `debug_mds` 15 `Server::handle_client_reconnect` writes
+one such line per capability it reconnects on a cached auth inode, in the
+branch that also calls `recover_filelocks` for that capability, and the MDS
+handles one message at a time. A capability line names an inode, not a client,
+so lines after another client's handler line are not returned.
+
+### Split-file lock probe
+
+`split-flock-ex-nb` takes no argument. The fixture binds it to the first
+split file of the plan and the native driver independently requires that exact
+path. The driver records `statx` (inode, size, version, mtime) and the bytes of
+the file, opens it read-write, tries `flock(LOCK_EX|LOCK_NB)` with the fixed
+native owner `0x8000000063657068`, unlocks if it acquired, closes and records
+the state again. Only errno 0 (acquired and released) or EAGAIN (neither) is a
+result; the file must be empty and unchanged. The version of a file that was
+never written is compared and recorded, not required to be nonzero. Each
+request is journaled as a `native-split-flock-ex-nb` mutation before it runs
+and an uncertain native process is not replayed. The probe, `debug-caps-on`,
+`debug-caps-off` and `reconnect-cap-log` are refused unless the fixture runs
+under the exclusive selector
+`^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$`
+([MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md)).
 
 ## Cleanup
 
