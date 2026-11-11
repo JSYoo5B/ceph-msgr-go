@@ -39,7 +39,11 @@ window.
    not the Go GlobalID, on the same inode, with the native inode, size 0,
    version, mtime and empty content unchanged. A Go GETFILELOCK with a
    different owner must return the Go owner, the session GlobalID and type
-   exclusive.
+   exclusive. The record takes the acquire's TID and counts the submission as
+   soon as `Submit` accepted it, before the reply is awaited, and keeps the
+   outcome of that wait separately; an acquire that reached the MDS and lost
+   its reply is therefore still recorded. The unlock in step 4 is recorded the
+   same way.
 3. `split_reconnect_to_new_incarnation`: after the owned restart the test
    consumer sets `MDSCapReconnect.Flock` of exactly that inode to the
    `Client::_encode_filelocks`-layout blob of the unsplit case (fcntl count 0,
@@ -52,14 +56,19 @@ window.
    per-capability log (below) must place the locked inode's capability in a
    nonfinal fragment.
 4. `held_flock_restored_then_released`, directly after OPEN, `up:active` and
-   adoption: the MDS GID and nonce differ and rank stays 0; the new
-   incarnation's historic ops hold no `client_request` for the original
-   SETFILELOCK TID; the native probe must again return EAGAIN on the same
+   adoption: the MDS GID and nonce differ and rank stays 0; the one
+   `dump_historic_ops` snapshot read right after adoption holds no
+   `client_request` for the original SETFILELOCK TID (recorded as
+   `AcquireTIDInHistoricOps`; the snapshot is bounded, so an aged-out entry
+   would look the same and this is not proof that the new incarnation never
+   received such a request); the native probe must again return EAGAIN on the same
    inode with the same native file state; GETFILELOCK on the reconnected
    session must return the original owner and GlobalID; Go unlocks once; the
    native probe must then acquire and release (errno 0). No second Go lock
    acquisition is made anywhere in the test: SETFILELOCK is submitted exactly
-   twice, the acquire and the unlock.
+   twice, the acquire and the unlock. That claim rests on the caller's own
+   submissions, the empty reconnect resubmissions and the no-blob control
+   below, not on the historic-ops snapshot.
 5. `native_namespace_and_go_lookups_after_split` and
    `cleanup_unlink_release_close` are unchanged: native listing and 32 Go
    LOOKUPs, no OSD dial, then unlink, rmdir, cap release, confirmed CLOSE and
@@ -98,7 +107,11 @@ across the exchange, and the locked inode exactly once, in a fragment marked
 `(more)`. The cluster-free `TestCephFSHeldFlockSplitFragmentAttribution`
 covers the parser and the refusals (a lock in the final fragment, a missing
 or repeated inode, an inode that was not sent, a wrong fragment count or
-marker, and wrong probe receipts).
+marker, and wrong probe receipts). The cluster-free
+`TestCephFSHeldFlockSplitRecordsAcceptedSetFileLock` requires that an
+accepted acquire whose wait fails, and an accepted unlock refused with a
+signed result, are in the record with their TIDs and the submission count
+before their replies are awaited.
 
 What this does and does not show: the log identifies the message whose handler
 reconnected the locked inode's capability record, and that record is where the
