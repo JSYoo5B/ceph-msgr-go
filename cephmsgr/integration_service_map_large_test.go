@@ -38,8 +38,10 @@ const (
 //     the limit error, which becomes the watch's cause; the client recovers
 //     and, once the large registration is gone, a new watch works again.
 //
-// A second native holder then registers 65537 metadata keys, one more than
-// the decoder admits in a collection. The native map is valid and smaller
+// A second native holder then registers 65537 padding keys beside its own
+// identity keys, which is above the 65536 entries the decoder admits in a
+// collection; the exact boundary is established by the decoder tests, not
+// here. The native map is valid and smaller
 // than the default frame limit, yet the default-limit watch ends with the
 // limit error of its failed session; the client recovers and, once that
 // registration is gone, a new watch works again.
@@ -247,8 +249,8 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	t.Logf("removal: Go epoch=%d raw=%d native epoch=%d; frame-limited client's new watch read epoch=%d raw=%d",
 		removed.Epoch, len(removed.Raw), *gone.View.Epoch, small.Epoch, len(small.Raw))
 
-	// Collection cap: a valid native map with 65537 metadata entries in one
-	// daemon. Only the admitted client still watches, with default limits.
+	// Collection cap: a valid native map with 65537 padding entries, and the
+	// holder's own identity keys, in one daemon. Only the admitted client still watches, with default limits.
 	wideDaemon := "holder-" + wideToken[:16]
 	wideStart, err := observeNativeServiceHolder(ctx, control, wideToken, "start-wide")
 	if err != nil {
@@ -261,8 +263,10 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	wideNative := waitServiceHolder(t, ctx, control, wideToken, "wide registration", func(r nativeServiceHolderReceipt) bool {
 		return serviceHolderPresent(r, wideReady) && r.Holder != nil && r.Holder.Alive
 	})
+	// Keys counts padding entries only. The holder adds its own identity
+	// keys, so the daemon's metadata is above the cap by more than one.
 	if wideReady.Keys != 1<<16+1 || wideNative.View.Entry.Keys != wideReady.Keys {
-		t.Fatal("native registration is not one entry above the collection cap", wideReady.Keys, wideNative.View.Entry.Keys)
+		t.Fatal("native registration does not carry 65537 padding entries, above the collection cap", wideReady.Keys, wideNative.View.Entry.Keys)
 	}
 	var capped error
 	for capped == nil {
@@ -280,7 +284,7 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	}
 	settleServiceMapLargeSession(admitted)
 	requireServiceMapLargeClient(t, ctx, admitted, identities[admitted], "after the collection cap")
-	t.Logf("collection cap: native epoch=%d GID=%d metadata keys=%d bytes=%d (valid native map); default-limit watch ended with %v; client GID=%d recovered",
+	t.Logf("collection cap: native epoch=%d GID=%d padding keys=%d bytes=%d beside the holder's identity keys (valid native map); default-limit watch ended with %v; client GID=%d recovered",
 		*wideNative.View.Epoch, wideReady.GID, wideNative.View.Entry.Keys, wideNative.View.Entry.Bytes, capped, identities[admitted].GlobalID)
 	wideReleased, err := observeNativeServiceHolder(ctx, control, wideToken, "release")
 	if err != nil || wideReleased.State != "released" || wideReleased.Exited == nil || wideReleased.Exited.Reason != "released" || !wideReleased.Exited.ShutdownReturned {
@@ -299,10 +303,16 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 		}
 		return time.Since(since) >= 2*time.Second
 	})
+	// The removal is a later native map than the wide registration. An
+	// absence observed at an epoch up to that registration would also be
+	// true of a stale map from before it.
+	if *wideGone.View.Epoch <= *wideNative.View.Epoch {
+		t.Fatal("native absence is not newer than the wide registration", *wideGone.View.Epoch, *wideNative.View.Epoch)
+	}
 	// The watch opens only after native removal, so the MON's current map
 	// is already below the cap.
 	final := waitServiceLifecycleMap(t, wideCtx, open(admitted, ServiceMapOptions{}), func(m ServiceMap) bool {
-		return serviceLifecycleAbsent(m, removed.Epoch, daemon, wideDaemon)
+		return serviceLifecycleAbsent(m, *wideNative.View.Epoch, daemon, wideDaemon)
 	})
 	if r, err := observeNativeServiceHolder(ctx, control, wideToken, "cleanup"); err != nil || !serviceHolderRestored(r) || r.Holder == nil || r.Holder.Alive {
 		t.Fatal("released wide holder baseline was not restored without a kill", err)
@@ -310,7 +320,7 @@ func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	for c, before := range identities {
 		requireServiceMapLargeClient(t, ctx, c, before, "after the wide removal")
 	}
-	t.Logf("wide removal: native epoch=%d; new default-limit watch read epoch=%d raw=%d", *wideGone.View.Epoch, final.Epoch, len(final.Raw))
+	t.Logf("wide removal: registered at native epoch=%d, absent at native epoch=%d; new default-limit watch read epoch=%d raw=%d", *wideNative.View.Epoch, *wideGone.View.Epoch, final.Epoch, len(final.Raw))
 }
 
 // settleServiceMapLargeSession waits for the MON session that carried an
