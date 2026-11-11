@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -59,14 +60,49 @@ type monElectionStatus struct {
 	Quorum        []int  `json:"quorum"`
 }
 
-// monSessionTrimGrace is how long after its last in-quorum status the cell
-// may still kill the MON. The MON starts dropping client sessions two lease
-// intervals (2 x mon_lease = 10 s) after it left the quorum; the difference
-// covers the kill control's own latency.
+// monSessionTrimGrace bounds the interval, from the start of the last status
+// request that the MON answered as a quorum member, in which a loss of the
+// connection is attributed to the kill. The MON starts dropping client
+// sessions two lease intervals (2 x mon_lease = 10 s) after it left the
+// quorum, which is not earlier than that request; the difference is margin.
 const monSessionTrimGrace = 7 * time.Second
 
 func (s monElectionStatus) outOfQuorum() bool {
 	return s.State != "" && s.State != "leader" && s.State != "peon" && len(s.Quorum) == 0
+}
+
+func (s monElectionStatus) inQuorum() bool {
+	return (s.State == "leader" || s.State == "peon") && len(s.Quorum) != 0
+}
+
+// monTrimWindow keeps the conservative origin of the interval in which the
+// out-of-quorum MON cannot yet have dropped its client sessions: the start
+// of the latest status request that it answered as leader or peon. The MON
+// was in quorum at some instant after that start, so it left no earlier.
+// Nothing else moves the origin; in particular not the stops of its peers
+// and not a status that already shows it out of quorum.
+type monTrimWindow struct {
+	origin time.Time
+}
+
+// observe records one answered status and the time its request started.
+func (w *monTrimWindow) observe(asked time.Time, status monElectionStatus) {
+	if status.inQuorum() && asked.After(w.origin) {
+		w.origin = asked
+	}
+}
+
+// admits reports whether an event at this time is inside the window. It is
+// applied to the kill request and to the observed loss of the connection:
+// a request inside the window does not bound a control that then stalls.
+func (w monTrimWindow) admits(what string, at time.Time) error {
+	if w.origin.IsZero() {
+		return errors.New(what + ": the MON was never observed in quorum, so its session trim is not bounded")
+	}
+	if out := at.Sub(w.origin); out < 0 || out > monSessionTrimGrace {
+		return fmt.Errorf("%s %s after the MON was last seen in quorum (limit %s): its own session trim could precede the kill", what, out, monSessionTrimGrace)
+	}
+	return nil
 }
 
 // A request that the MON has read but not answered. The connected MON is
@@ -148,43 +184,73 @@ func TestCephMonMapVersionUnprocessedKillIntegration(t *testing.T) {
 			t.Error(err)
 		}
 	}()
+	// A MON that has been out of quorum for two lease intervals (10 s) drops
+	// its client sessions on every tick (pinned Monitor.cc tick, "out of
+	// quorum too long"). The kill and the observed loss of the connection
+	// must therefore fall inside an interval measured from the start of the
+	// last status the MON answered as a quorum member, so such a drop cannot
+	// be mistaken for the kill.
+	var window monTrimWindow
 	status := func(label string) monElectionStatus {
 		t.Helper()
+		asked := time.Now()
 		result, err := client.MonTell(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"mon_status","format":"json"}`)})
 		var decoded monElectionStatus
 		if err != nil || json.Unmarshal(result.Data, &decoded) != nil || decoded.Name != subject {
 			t.Fatal("connected MON status", label, decoded, err)
 		}
+		window.observe(asked, decoded)
 		return decoded
 	}
 	if initial := status("before the quorum loss"); initial.State != "peon" {
 		t.Fatal("subject MON is not a peon of the full quorum", initial)
 	}
 	settled = false
-	for _, name := range others {
-		down = append(down, name)
-		if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", name); err != nil {
-			t.Fatal("stop MON", name, err)
+	// With one peer stopped the subject and the other peer still form a
+	// quorum.
+	down = append(down, others[0])
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", others[0]); err != nil {
+		t.Fatal("stop MON", others[0], err)
+	}
+	// That stop starts an election. The remaining pair must have formed its
+	// quorum again before the last peer goes, or a status taken during that
+	// election would be read as the final quorum loss.
+	for {
+		if pair := status("after the first peer stopped"); pair.inQuorum() {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the remaining two MONs did not form a quorum", ctx.Err())
+		case <-time.After(250 * time.Millisecond):
 		}
 	}
-	// A MON that has been out of quorum for two lease intervals (10 s) drops
-	// its client sessions on every tick (pinned Monitor.cc tick, "out of
-	// quorum too long"). The whole cell therefore runs inside that interval,
-	// measured from the last status that still showed the MON in quorum, so
-	// such a drop cannot be mistaken for the kill.
-	inQuorum := time.Now()
+	// The last peer is stopped while the subject is polled, so the latest
+	// in-quorum status is taken as close to the quorum loss as the polling
+	// allows and does not depend on how long the stop takes.
+	down = append(down, others[1])
+	stopped := make(chan error, 1)
+	go func() { stopped <- testcluster.ControlDaemon(ctx, control, "stop", "mon", others[1]) }()
 	var electing monElectionStatus
 	for {
-		asked := time.Now()
 		if electing = status("waiting to leave the quorum"); electing.outOfQuorum() {
 			break
 		}
-		inQuorum = asked
 		select {
 		case <-ctx.Done():
 			t.Fatal("connected MON stayed in quorum without its peers", electing, ctx.Err())
 		case <-time.After(250 * time.Millisecond):
 		}
+	}
+	// The control loop is serial: the stop is acknowledged before the kill
+	// can be requested.
+	select {
+	case err := <-stopped:
+		if err != nil {
+			t.Fatal("stop MON", others[1], err)
+		}
+	case <-ctx.Done():
+		t.Fatal("stop of the last peer was not acknowledged", ctx.Err())
 	}
 
 	relay.arm()
@@ -240,8 +306,8 @@ func TestCephMonMapVersionUnprocessedKillIntegration(t *testing.T) {
 
 	down = append(down, subject)
 	killRequested := time.Now()
-	if out := killRequested.Sub(inQuorum); out > monSessionTrimGrace {
-		t.Fatalf("barrier reached %s after the MON was last seen in quorum; its own session trim could precede the kill", out)
+	if err := window.admits("kill requested", killRequested); err != nil {
+		t.Fatal(err)
 	}
 	if err := testcluster.ControlDaemon(ctx, control, "kill", "mon", subject); err != nil {
 		t.Fatal("kill the request's connected MON", err)
@@ -269,8 +335,13 @@ func TestCephMonMapVersionUnprocessedKillIntegration(t *testing.T) {
 	if !mapVersionPeerLoss("kill", ended.Err) || ended.At.Before(killRequested) || len(requests) != 1 || len(replies) != 0 {
 		t.Fatal("request was answered or retransmitted, or its connection ended before the kill", ended.Err, ended.At.Sub(killRequested), requests, replies)
 	}
-	t.Logf("connected MON %s killed with the request unanswered: GID=%d connection=%d TID=%d handle=%d terminal=%v transport=%v %s after the kill request",
-		subject, before.GlobalID, sent.Connection, sent.TID, sent.Handle, lost.err, ended.Err, ended.At.Sub(killRequested).Round(time.Millisecond))
+	// The kill request being in time does not bound the controller: the
+	// connection itself must have ended before the MON could trim it.
+	if err := window.admits("connection lost", ended.At); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("connected MON %s killed with the request unanswered: GID=%d connection=%d TID=%d handle=%d terminal=%v transport=%v %s after the kill request, %s after the last in-quorum status request",
+		subject, before.GlobalID, sent.Connection, sent.TID, sent.Handle, lost.err, ended.Err, ended.At.Sub(killRequested).Round(time.Millisecond), ended.At.Sub(window.origin).Round(time.Millisecond))
 
 	// No MON runs now. Bring back the two stopped MONs; they form a quorum
 	// without the killed one, and the client reaches them through the MonMap
