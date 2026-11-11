@@ -75,8 +75,11 @@ request and did not answer it, and only then kills that MON.
    and the test waits until the subject reports `leader` or `peon` with a
    nonempty quorum again. The last peer is then stopped while the test polls
    the subject MON's `mon_status` until its state is neither `leader` nor
-   `peon` and its quorum is empty. The stop is acknowledged before the cell
-   continues.
+   `peon` and its quorum is empty. The stop's acknowledgement and the quorum
+   loss are awaited independently: a failed stop ends the cell at once with
+   the control error, also while the subject still answers in quorum, and
+   the cell continues only after both. On every exit the test waits for
+   that control call to return before it restarts a MON.
 3. Pinned `handle_get_version` answers only when `is_leader() || is_peon()`.
    Otherwise it queues the operation on `waitfor_quorum` and sends nothing.
    `dispatch_op` passes `MSG_COMMAND` to `handle_tell_command` without a
@@ -234,6 +237,11 @@ sh integration/run.sh
   poll that is already out of quorum leaves the origin at the earlier
   in-quorum status, so slow stops are counted; a kill requested in time
   followed by a connection lost 8 s later is refused.
+- `TestMonQuorumLossWaitReportsTheStopResult` (cluster-free inventory): a
+  stop that fails at once, or while the subject is polled in quorum, is
+  returned as the control error; a quorum loss does not end the wait for the
+  stop; an acknowledged stop does not end the wait for the quorum loss; an
+  expired context names the missing one.
 - `TestMonForcedKillIsAdmittedOnlyForItsExclusiveSelection` and
   `TestMonForcedKillMarkerAndTicketValidityFollowSelection` (fixture module):
   the MON kill, its marker and the 120 s tickets exist only for the exact

@@ -105,6 +105,49 @@ func (w monTrimWindow) admits(what string, at time.Time) error {
 	return nil
 }
 
+// awaitMonQuorumLossDuringStop polls the subject MON while the stop of its
+// last peer runs elsewhere, and returns once that stop succeeded and a status
+// showed the subject out of quorum. The two are tracked independently: a
+// failed stop is returned at once, also while the subject still answers in
+// quorum, and an out-of-quorum status ends the polling without ending the
+// wait for the stop.
+func awaitMonQuorumLossDuringStop(ctx context.Context, stopped <-chan error, interval time.Duration, poll func() monElectionStatus) (monElectionStatus, error) {
+	var last monElectionStatus
+	out, acknowledged := false, false
+	for {
+		// A stop result that is already there is taken before another poll.
+		select {
+		case err := <-stopped:
+			if err != nil {
+				return last, fmt.Errorf("stop control failed: %w", err)
+			}
+			acknowledged, stopped = true, nil
+		default:
+		}
+		if !out {
+			last = poll()
+			out = last.outOfQuorum()
+		}
+		if out && acknowledged {
+			return last, nil
+		}
+		var tick <-chan time.Time
+		if !out {
+			tick = time.After(interval)
+		}
+		select {
+		case err := <-stopped:
+			if err != nil {
+				return last, fmt.Errorf("stop control failed: %w", err)
+			}
+			acknowledged, stopped = true, nil
+		case <-tick:
+		case <-ctx.Done():
+			return last, fmt.Errorf("stop acknowledged=%t, subject out of quorum=%t: %w", acknowledged, out, ctx.Err())
+		}
+	}
+}
+
 // A request that the MON has read but not answered. The connected MON is
 // first taken out of quorum by stopping the other two; pinned Monitor.cc
 // handle_get_version then parks MMonGetVersion on waitfor_quorum without a
@@ -229,28 +272,23 @@ func TestCephMonMapVersionUnprocessedKillIntegration(t *testing.T) {
 	// in-quorum status is taken as close to the quorum loss as the polling
 	// allows and does not depend on how long the stop takes.
 	down = append(down, others[1])
-	stopped := make(chan error, 1)
-	go func() { stopped <- testcluster.ControlDaemon(ctx, control, "stop", "mon", others[1]) }()
-	var electing monElectionStatus
-	for {
-		if electing = status("waiting to leave the quorum"); electing.outOfQuorum() {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			t.Fatal("connected MON stayed in quorum without its peers", electing, ctx.Err())
-		case <-time.After(250 * time.Millisecond):
-		}
-	}
+	stopped, joined := make(chan error, 1), make(chan struct{})
+	go func() {
+		defer close(joined)
+		stopped <- testcluster.ControlDaemon(ctx, control, "stop", "mon", others[1])
+	}()
+	// Registered after the restoration above, so it runs first on every
+	// exit, including a fatal status read: no MON is restarted while the
+	// stop request is still being published or acknowledged. The control
+	// call is bounded by ctx.
+	defer func() { <-joined }()
 	// The control loop is serial: the stop is acknowledged before the kill
 	// can be requested.
-	select {
-	case err := <-stopped:
-		if err != nil {
-			t.Fatal("stop MON", others[1], err)
-		}
-	case <-ctx.Done():
-		t.Fatal("stop of the last peer was not acknowledged", ctx.Err())
+	electing, err := awaitMonQuorumLossDuringStop(ctx, stopped, 250*time.Millisecond, func() monElectionStatus {
+		return status("waiting to leave the quorum")
+	})
+	if err != nil {
+		t.Fatal("stop MON ", others[1], ": ", err, " (last status ", electing, ")")
 	}
 
 	relay.arm()
