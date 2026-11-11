@@ -132,7 +132,35 @@ instead of requiring a nonzero one. The unsplit record's first rejected probe
 fixture) remains unexplained there; this observation does not establish its
 cause.
 
-No run of this acceptance failed other than the intended control run.
+### At `8c43ef2579144af091b33062a47cbf1c730ef6fc`
+
+Source `8c43ef2579144af091b33062a47cbf1c730ef6fc` holds the fixture, test and
+catalog of this change; later commits of the change touch documentation only.
+Each row ran once, in sequence, and passed its gate with no failed, skipped or
+missing selected test.
+
+| Row | Parent | Lock leaf | Reconnect leaf | Restored-lock leaf |
+| --- | --- | --- | --- | --- |
+| `mds-cephfs-heldflock-split-reconnect`, CRC/AES IPv4 host BlueStore | 52.55 s | 2.70 s | 26.46 s | 8.00 s |
+| `mds-cephfs-heldflock-split-reconnect`, secure/aes256k IPv6 container MemStore | 52.49 s | 2.70 s | 26.64 s | 8.00 s |
+
+Both profiles observed the same shape: 34 capabilities and one realm, 9,490
+bytes unsplit, two fragments with 29 and 5 native capability lines, the locked
+inode `0x10000000001` in fragment 0 (`(more)`), native EAGAIN before the
+restart and after it on a new MDS GID, the original owner
+`0x80000000474f0001` and GlobalID from GETFILELOCK, then native errno 0 after
+the one unlock. The native version of the lock file was 0 throughout.
+
+The rows that share the touched test and fixture code passed at the same
+source: both `mds-cephfs-multi-reconnect` rows (lock-free split recipe through
+the shared runner, 38.22 s and 37.56 s), both `mds-cephfs-completion` rows
+(227.49 s and 224.22 s) and both `mds-cephfs` rows (three selected tests each;
+the unsplit held-lock leaves `held_flock_acquired_before_restart` and
+`mds_restart_reconnect_replay` took 5.42 s and 41.88 s, and 5.41 s and
+41.23 s).
+
+No run of this acceptance failed other than the intended control run. Exact-head
+CI is separate from these runs.
 
 ## Limits
 
