@@ -71,9 +71,12 @@ request and did not answer it, and only then kills that MON.
 
 1. The subject client is seeded with one peon. Its own `mon_status` (a
    daemon-local tell on the subject session) must report `peon`.
-2. The other two MONs are stopped with the provider's orderly Stop. The test
-   polls the subject MON's `mon_status` until its state is neither `leader`
-   nor `peon` and its quorum is empty.
+2. One of the other two MONs is stopped with the provider's orderly Stop,
+   and the test waits until the subject reports `leader` or `peon` with a
+   nonempty quorum again. The last peer is then stopped while the test polls
+   the subject MON's `mon_status` until its state is neither `leader` nor
+   `peon` and its quorum is empty. The stop is acknowledged before the cell
+   continues.
 3. Pinned `handle_get_version` answers only when `is_leader() || is_peon()`.
    Otherwise it queues the operation on `waitfor_quorum` and sends nothing.
    `dispatch_op` passes `MSG_COMMAND` to `handle_tell_command` without a
@@ -93,10 +96,17 @@ request and did not answer it, and only then kills that MON.
 Two rules keep the kill from being confused with the MON's own behavior. A
 MON that has been out of quorum for two lease intervals (10 s) drops every
 client session on each tick (pinned `tick`, "out of quorum too long"). The
-test therefore requires that the kill was requested at most 7 s after the
-last status that still showed the MON in quorum, and that the relay saw the
-request's connection end after the kill was requested. A run that misses
-either bound fails. It does not pass with a different cause.
+test therefore keeps one origin: the start of the latest `mon_status`
+request that the MON answered as `leader` or `peon` with a nonempty quorum,
+beginning with the check in step 1. The MON was in quorum after that request
+started, so it cannot drop sessions earlier than 10 s after it. Stopping the
+peers and a status that already shows the MON out of quorum do not move the
+origin. Three bounds are required: the kill is requested at most 7 s after
+the origin, the relay saw the request's connection end after the kill was
+requested, and that observed end is itself at most 7 s after the origin. The
+last bound covers a controller that accepts the request in time and then
+stalls. A run that misses a bound fails. It does not pass with a different
+cause.
 
 Required outcome:
 
@@ -219,6 +229,11 @@ sh integration/run.sh
   reported as sent; of five tells, only the one on the same connection, with
   a later sequence and an answer, qualifies; no reply receipt and no reply
   barrier appear.
+- `TestMonSessionTrimWindowIsAnchoredToAnInQuorumStatus` (cluster-free
+  inventory): a window with no in-quorum observation admits nothing; a first
+  poll that is already out of quorum leaves the origin at the earlier
+  in-quorum status, so slow stops are counted; a kill requested in time
+  followed by a connection lost 8 s later is refused.
 - `TestMonForcedKillIsAdmittedOnlyForItsExclusiveSelection` and
   `TestMonForcedKillMarkerAndTicketValidityFollowSelection` (fixture module):
   the MON kill, its marker and the 120 s tickets exist only for the exact

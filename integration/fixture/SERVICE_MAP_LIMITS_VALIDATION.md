@@ -104,11 +104,18 @@ Sequence:
    without it; the frame-limited client opens a new watch and reads that
    small map. Holder cleanup reports the baseline restored without a kill.
 7. `start-wide` with a second token. The native view must show 65537
-   padding keys. The default-limit watch ends with an error that is both
+   padding keys. The holder adds its own identity keys to them, so the
+   daemon's metadata is above the 65536-entry cap by more than one entry;
+   this step is a native over-limit case, and the exact boundary is
+   established only by the decoder test below. The default-limit watch ends with an error that is both
    `ErrLimitExceeded` and `ErrMalformedMessage`, twice, without delivering
    that daemon. The client keeps its GID and completes a `mon dump`.
-8. Release, stable native absence, a new default-limit watch reading a map
-   without either daemon, and restored cleanup as in step 6.
+8. Release, stable native absence at a native epoch above the wide
+   registration's, a new default-limit watch reading a map without either
+   daemon at an epoch above that registration's, and restored cleanup as in
+   step 6. The comparison is against the wide registration, not the earlier
+   removal in step 6: a map from between the two would also lack both
+   daemons.
 
 The usability command is `mon dump`, not `status`: the `status` reply embeds
 the whole ServiceMap, so with the large registration present it is itself
@@ -149,7 +156,7 @@ problems). Each row used a fresh fixture: three MONs, two MGRs, no OSD.
 | After release: Go epoch / native epoch / raw | 6 / 6 / 22 bytes | 3 / 3 / 494 bytes |
 | Frame-limited client's new watch | epoch 6, 22 bytes | epoch 3, 494 bytes |
 | Wide registration: holder GID / native epoch | 14713 / 7 | 4539 / 4 |
-| Native metadata keys / bytes | 65537 / 1,769,499 | 65537 / 1,769,499 |
+| Native padding keys / bytes (identity keys not counted) | 65537 / 1,769,499 | 65537 / 1,769,499 |
 | Default-limit watch cause | malformed frame, invalid service map, length limit exceeded | malformed frame, invalid service map, length limit exceeded |
 | Default client GID kept, `mon dump` after recovery | 4464, yes | 4461, yes |
 | After wide release: native epoch / new watch | 9 / epoch 9, 22 bytes | 8 / epoch 8, 22 bytes |

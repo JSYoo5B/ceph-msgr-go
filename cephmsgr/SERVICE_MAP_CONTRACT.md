@@ -69,7 +69,9 @@ is free again. Each delivered map and its raw bytes belong to the caller.
 a registration of about 1.55 MiB admitted with its GID and all 4096 raw
 metadata values equal to the native registration and dump, the same map
 against a 256 KiB watch budget and against a 1 MiB frame limit, and a
-registration with 65537 metadata entries against the collection cap. The
+registration with 65537 padding entries beside the holder's identity keys
+against the collection cap (an over-limit case; the exact boundary has
+daemon-free evidence). The
 daemon and service count caps and the task-status cap have daemon-free
 evidence only. See the
 [limits record](../integration/fixture/SERVICE_MAP_LIMITS_VALIDATION.md).
