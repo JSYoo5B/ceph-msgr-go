@@ -84,12 +84,13 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 					delete(c.pauses, key)
 				}
 			case "kill":
-				if kind != "osd" {
-					return errors.New("forced crash is restricted to disposable OSDs")
+				if !c.profile.forcedKillAdmitted(kind) {
+					return errors.New("forced crash is restricted to disposable OSDs and the selected MON forced-kill cells")
 				}
 				// Docker stop sends SIGTERM first even with a zero timeout,
 				// and an OSD with osd_fast_shutdown may then exit 0 before the
-				// SIGKILL. Send SIGKILL itself so the 137 receipt holds.
+				// SIGKILL; a MON would shut down in order. Send SIGKILL itself
+				// so the 137 receipt holds.
 				var state *container.State
 				state, err = forceKill(ctx, dockerKill(daemon.GetContainerID()), daemon.State, forcedKillTimeout)
 				if err == nil {
@@ -97,7 +98,7 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 					if encodeErr != nil {
 						return encodeErr
 					}
-					if err = os.WriteFile(filepath.Join(out, "osd-crash-state.json"), data, 0644); err != nil {
+					if err = os.WriteFile(filepath.Join(out, kind+"-crash-state.json"), data, 0644); err != nil {
 						return err
 					}
 				}

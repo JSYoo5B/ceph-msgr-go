@@ -1,0 +1,449 @@
+package integration_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
+)
+
+// requireMonForcedKill skips unless the fixture selected the MON forced-kill
+// cells. Broad OSD selections match these test names too, but their fixture
+// refuses SIGKILL of a MON and keeps the ordinary ticket validity.
+func requireMonForcedKill(t *testing.T) {
+	t.Helper()
+	if os.Getenv("CEPH_MSGR_NATIVE_MON_FORCED_KILL") != "1" {
+		t.Skip("SIGKILL of a MON requires the exclusive selector ^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$")
+	}
+}
+
+// requireMonKillReceipt checks the fixture's SIGKILL receipt for one MON: the
+// container stopped with exit 137 and was not killed by the OOM handler.
+func requireMonKillReceipt(t *testing.T, control, name string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(control, "mon-crash-state.json"))
+	var crash struct {
+		Daemon    string `json:"daemon"`
+		ExitCode  *int   `json:"exit_code"`
+		OOMKilled *bool  `json:"oom_killed"`
+	}
+	if err != nil || json.Unmarshal(data, &crash) != nil || crash.Daemon != "mon."+name || crash.ExitCode == nil || *crash.ExitCode != 137 || crash.OOMKilled == nil || *crash.OOMKilled {
+		t.Fatalf("MON %s has no SIGKILL receipt (not an orderly shutdown or OOM): %+v %v", name, crash, err)
+	}
+}
+
+// The relay withholds the exact server reply, then the connected MON is
+// killed with SIGKILL instead of stopped in order. This is the forced-death
+// counterpart of TestCephMonMapVersionConnectedStopIntegration: the MON has
+// answered, the caller is still waiting, and the peer dies without shutdown.
+func TestCephMonMapVersionConnectedKillIntegration(t *testing.T) {
+	requireMonForcedKill(t)
+	runMapVersionConnectedLoss(t, "kill")
+}
+
+// monElectionStatus is the part of a MON's own mon_status that tells whether
+// it can answer MMonGetVersion: only a leader or peon does.
+type monElectionStatus struct {
+	Name          string `json:"name"`
+	State         string `json:"state"`
+	ElectionEpoch uint64 `json:"election_epoch"`
+	Quorum        []int  `json:"quorum"`
+}
+
+// monSessionTrimGrace bounds the interval, from the start of the last status
+// request that the MON answered as a quorum member, in which a loss of the
+// connection is attributed to the kill. The MON starts dropping client
+// sessions two lease intervals (2 x mon_lease = 10 s) after it left the
+// quorum, which is not earlier than that request; the difference is margin.
+const monSessionTrimGrace = 7 * time.Second
+
+func (s monElectionStatus) outOfQuorum() bool {
+	return s.State != "" && s.State != "leader" && s.State != "peon" && len(s.Quorum) == 0
+}
+
+func (s monElectionStatus) inQuorum() bool {
+	return (s.State == "leader" || s.State == "peon") && len(s.Quorum) != 0
+}
+
+// monTrimWindow keeps the conservative origin of the interval in which the
+// out-of-quorum MON cannot yet have dropped its client sessions: the start
+// of the latest status request that it answered as leader or peon. The MON
+// was in quorum at some instant after that start, so it left no earlier.
+// Nothing else moves the origin; in particular not the stops of its peers
+// and not a status that already shows it out of quorum.
+type monTrimWindow struct {
+	origin time.Time
+}
+
+// observe records one answered status and the time its request started.
+func (w *monTrimWindow) observe(asked time.Time, status monElectionStatus) {
+	if status.inQuorum() && asked.After(w.origin) {
+		w.origin = asked
+	}
+}
+
+// admits reports whether an event at this time is inside the window. It is
+// applied to the kill request and to the observed loss of the connection:
+// a request inside the window does not bound a control that then stalls.
+func (w monTrimWindow) admits(what string, at time.Time) error {
+	if w.origin.IsZero() {
+		return errors.New(what + ": the MON was never observed in quorum, so its session trim is not bounded")
+	}
+	if out := at.Sub(w.origin); out < 0 || out > monSessionTrimGrace {
+		return fmt.Errorf("%s %s after the MON was last seen in quorum (limit %s): its own session trim could precede the kill", what, out, monSessionTrimGrace)
+	}
+	return nil
+}
+
+// awaitMonQuorumLossDuringStop polls the subject MON while the stop of its
+// last peer runs elsewhere, and returns once that stop succeeded and a status
+// showed the subject out of quorum. The two are tracked independently: a
+// failed stop is returned at once, also while the subject still answers in
+// quorum, and an out-of-quorum status ends the polling without ending the
+// wait for the stop.
+func awaitMonQuorumLossDuringStop(ctx context.Context, stopped <-chan error, interval time.Duration, poll func() monElectionStatus) (monElectionStatus, error) {
+	var last monElectionStatus
+	out, acknowledged := false, false
+	for {
+		// A stop result that is already there is taken before another poll.
+		select {
+		case err := <-stopped:
+			if err != nil {
+				return last, fmt.Errorf("stop control failed: %w", err)
+			}
+			acknowledged, stopped = true, nil
+		default:
+		}
+		if !out {
+			last = poll()
+			out = last.outOfQuorum()
+		}
+		if out && acknowledged {
+			return last, nil
+		}
+		var tick <-chan time.Time
+		if !out {
+			tick = time.After(interval)
+		}
+		select {
+		case err := <-stopped:
+			if err != nil {
+				return last, fmt.Errorf("stop control failed: %w", err)
+			}
+			acknowledged, stopped = true, nil
+		case <-tick:
+		case <-ctx.Done():
+			return last, fmt.Errorf("stop acknowledged=%t, subject out of quorum=%t: %w", acknowledged, out, ctx.Err())
+		}
+	}
+}
+
+// A request that the MON has read but not answered. The connected MON is
+// first taken out of quorum by stopping the other two; pinned Monitor.cc
+// handle_get_version then parks MMonGetVersion on waitfor_quorum without a
+// reply. The barrier is on the wire: the relay sees the complete request,
+// then a daemon-local command sent after it on the same connection is
+// answered by the same MON, which is still out of quorum, and no version
+// reply exists. Only then is that MON killed with SIGKILL. No reply is
+// withheld by the test and no elapsed-time guess sets the fault phase.
+func TestCephMonMapVersionUnprocessedKillIntegration(t *testing.T) {
+	requireMonForcedKill(t)
+	options := integrationOptions(t)
+	if options.ConnectionMode != cephmsgr.CRCMode {
+		t.Skip("the request-specific map-version relay requires the CRC fixture")
+	}
+	admin, _, _, _ := osdFixture(t)
+	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	requireUsableFixture(t, control)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
+	defer cancel()
+	_, subject, seed := quorumPeonSeed(t, ctx, admin)
+	monState := admin.Snapshot().Monitor
+	var others []string
+	for _, member := range monState.Members {
+		if member.Name != subject {
+			others = append(others, member.Name)
+		}
+	}
+	slices.Sort(others)
+	if len(others) != 2 {
+		t.Fatal("the cell needs exactly two other MONs to remove the quorum", monState.Members)
+	}
+	relay := newMapVersionRelay()
+	dial := options.DialContext
+	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+		conn, err := dial(ctx, network, endpoint)
+		if err != nil {
+			return nil, err
+		}
+		return relay.wrap(conn, endpoint), nil
+	}
+	options.Monitors = []string{seed}
+	options.MaxFrameSize = mapVersionRelayLimit
+	// The loss must come from the killed peer, not the keepalive timeout.
+	options.KeepaliveInterval, options.KeepaliveTimeout = 30*time.Second, 60*time.Second
+	client, err := cephmsgr.Dial(ctx, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	before := client.Snapshot()
+
+	// down names every MON this test may have ended and has not yet tried
+	// to restart. Ownership is recorded before each stop or kill: a
+	// controller error cannot prove the daemon still runs, so restoration
+	// stays mandatory. A name leaves the list before its start is requested,
+	// so no start is repeated; the settled quorum is still required.
+	var down []string
+	settled := true
+	defer func() {
+		if settled {
+			return
+		}
+		restore, stop := context.WithTimeout(context.Background(), 240*time.Second)
+		defer stop()
+		// The provider's readiness check of the bootstrap MON "a" needs a
+		// quorum, so it restarts after the others.
+		slices.Sort(down)
+		for _, name := range slices.Backward(down) {
+			if err := testcluster.ControlDaemon(restore, control, "start", "mon", name); err != nil {
+				markFixtureUnusable(t, control, "map-version kill cell could not restart MON "+name)
+				t.Error("restore MON", name, err)
+				return
+			}
+		}
+		if _, err := settleNativeMonitorElection(restore, admin, control, "restarted", monState, monState.Members); err != nil {
+			markFixtureUnusable(t, control, "map-version kill cell full quorum did not settle")
+			t.Error(err)
+		}
+	}()
+	// A MON that has been out of quorum for two lease intervals (10 s) drops
+	// its client sessions on every tick (pinned Monitor.cc tick, "out of
+	// quorum too long"). The kill and the observed loss of the connection
+	// must therefore fall inside an interval measured from the start of the
+	// last status the MON answered as a quorum member, so such a drop cannot
+	// be mistaken for the kill.
+	var window monTrimWindow
+	status := func(label string) monElectionStatus {
+		t.Helper()
+		asked := time.Now()
+		result, err := client.MonTell(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"mon_status","format":"json"}`)})
+		var decoded monElectionStatus
+		if err != nil || json.Unmarshal(result.Data, &decoded) != nil || decoded.Name != subject {
+			t.Fatal("connected MON status", label, decoded, err)
+		}
+		window.observe(asked, decoded)
+		return decoded
+	}
+	if initial := status("before the quorum loss"); initial.State != "peon" {
+		t.Fatal("subject MON is not a peon of the full quorum", initial)
+	}
+	settled = false
+	// With one peer stopped the subject and the other peer still form a
+	// quorum.
+	down = append(down, others[0])
+	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", others[0]); err != nil {
+		t.Fatal("stop MON", others[0], err)
+	}
+	// That stop starts an election. The remaining pair must have formed its
+	// quorum again before the last peer goes, or a status taken during that
+	// election would be read as the final quorum loss.
+	for {
+		if pair := status("after the first peer stopped"); pair.inQuorum() {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("the remaining two MONs did not form a quorum", ctx.Err())
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	// The last peer is stopped while the subject is polled, so the latest
+	// in-quorum status is taken as close to the quorum loss as the polling
+	// allows and does not depend on how long the stop takes.
+	down = append(down, others[1])
+	stopped, joined := make(chan error, 1), make(chan struct{})
+	go func() {
+		defer close(joined)
+		stopped <- testcluster.ControlDaemon(ctx, control, "stop", "mon", others[1])
+	}()
+	// Registered after the restoration above, so it runs first on every
+	// exit, including a fatal status read: no MON is restarted while the
+	// stop request is still being published or acknowledged. The control
+	// call is bounded by ctx.
+	defer func() { <-joined }()
+	// The control loop is serial: the stop is acknowledged before the kill
+	// can be requested.
+	electing, err := awaitMonQuorumLossDuringStop(ctx, stopped, 250*time.Millisecond, func() monElectionStatus {
+		return status("waiting to leave the quorum")
+	})
+	if err != nil {
+		t.Fatal("stop MON ", others[1], ": ", err, " (last status ", electing, ")")
+	}
+
+	relay.arm()
+	type outcome struct {
+		version cephmsgr.MapVersionResult
+		err     error
+	}
+	result := make(chan outcome, 1)
+	callDone := make(chan struct{})
+	go func() {
+		defer close(callDone)
+		version, err := client.MapVersion(ctx, cephmsgr.OSDMapKind)
+		result <- outcome{version, err}
+	}()
+	defer func() {
+		client.Close()
+		select {
+		case <-callDone:
+		case <-time.After(5 * time.Second):
+			t.Error("original map-version worker did not join after client Close")
+		}
+	}()
+	var sent mapVersionRequest
+	select {
+	case sent = <-relay.sent:
+	case got := <-result:
+		t.Fatal("map-version completed before its request was observed", got)
+	case <-ctx.Done():
+		t.Fatal("map-version request was not transmitted", ctx.Err())
+	}
+	if !strings.Contains(before.Monitor.Endpoint, sent.Endpoint) || sent.TID == 0 || sent.Handle == 0 || sent.Kind != "osdmap" {
+		t.Fatal("observed request is not the admitted MON's query", before.Monitor.Endpoint, sent)
+	}
+	// This tell follows the request on the same connection. Its answer shows
+	// that the MON read past the request, and reports the MON's state then.
+	parked := status("after the request")
+	i := slices.IndexFunc(relay.tellExchanges(), func(tell mapVersionTell) bool {
+		return tell.Connection == sent.Connection && tell.Sequence > sent.Sequence && tell.Answered
+	})
+	requests, replies := relay.snapshot()
+	if !parked.outOfQuorum() || i < 0 || len(requests) != 1 || len(replies) != 0 || client.Snapshot().Monitor.Endpoint != before.Monitor.Endpoint {
+		t.Fatalf("no unanswered-request barrier: status=%+v later-tell=%t requests=%v replies=%v", parked, i >= 0, requests, replies)
+	}
+	select {
+	case got := <-result:
+		t.Fatal("map-version ended before the connected MON was killed", got)
+	case held := <-relay.held:
+		t.Fatal("the out-of-quorum MON answered the request", held)
+	default:
+	}
+	t.Logf("unanswered request barrier: mon.%s state=%s election_epoch=%d quorum=%v; peer=%s connection=%d TID=%d sequence=%d handle=%d; later tell answered on that connection; version replies=0; dialed=%v",
+		subject, parked.State, parked.ElectionEpoch, parked.Quorum, sent.Endpoint, sent.Connection, sent.TID, sent.Sequence, sent.Handle, relay.endpoints())
+
+	down = append(down, subject)
+	killRequested := time.Now()
+	if err := window.admits("kill requested", killRequested); err != nil {
+		t.Fatal(err)
+	}
+	if err := testcluster.ControlDaemon(ctx, control, "kill", "mon", subject); err != nil {
+		t.Fatal("kill the request's connected MON", err)
+	}
+	requireMonKillReceipt(t, control, subject)
+	var lost outcome
+	select {
+	case lost = <-result:
+	case <-ctx.Done():
+		t.Fatal("pending request did not end after the MON was killed", ctx.Err())
+	}
+	var unknown *cephmsgr.OutcomeUnknownError
+	if !errors.As(lost.err, &unknown) || !mapVersionPeerLoss("kill", lost.err) || ctx.Err() != nil || lost.version != (cephmsgr.MapVersionResult{}) {
+		t.Fatal("killed MON did not end the request as an uncertain peer loss with an empty result", lost)
+	}
+	var ended mapVersionRelayEnd
+	for ended.Connection != sent.Connection {
+		select {
+		case ended = <-relay.ended:
+		case <-ctx.Done():
+			t.Fatal("missing actual peer loss receipt", ctx.Err())
+		}
+	}
+	requests, replies = relay.snapshot()
+	if !mapVersionPeerLoss("kill", ended.Err) || ended.At.Before(killRequested) || len(requests) != 1 || len(replies) != 0 {
+		t.Fatal("request was answered or retransmitted, or its connection ended before the kill", ended.Err, ended.At.Sub(killRequested), requests, replies)
+	}
+	// The kill request being in time does not bound the controller: the
+	// connection itself must have ended before the MON could trim it.
+	if err := window.admits("connection lost", ended.At); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("connected MON %s killed with the request unanswered: GID=%d connection=%d TID=%d handle=%d terminal=%v transport=%v %s after the kill request, %s after the last in-quorum status request",
+		subject, before.GlobalID, sent.Connection, sent.TID, sent.Handle, lost.err, ended.Err, ended.At.Sub(killRequested).Round(time.Millisecond), ended.At.Sub(window.origin).Round(time.Millisecond))
+
+	// No MON runs now. Bring back the two stopped MONs; they form a quorum
+	// without the killed one, and the client reaches them through the MonMap
+	// it learned before the fault. They restart in descending name order: the
+	// provider's readiness check of the bootstrap MON "a" needs a quorum, so
+	// it restarts once another MON runs.
+	for _, name := range slices.Backward(others) {
+		down = slices.DeleteFunc(down, func(owned string) bool { return owned == name })
+		if err := testcluster.ControlDaemon(ctx, control, "start", "mon", name); err != nil {
+			t.Fatal("restart stopped MON", name, err)
+		}
+	}
+	fresh, err := client.MapVersion(ctx, cephmsgr.OSDMapKind)
+	if err != nil || fresh.Newest == 0 || fresh.Oldest == 0 || fresh.Oldest > fresh.Newest {
+		t.Fatal("fresh explicit map-version request after the kill", fresh, err)
+	}
+	after := client.Snapshot()
+	requests, replies = relay.snapshot()
+	if len(requests) != 2 || len(replies) != 1 {
+		t.Fatal("lost or duplicated request/reply identity", requests, replies)
+	}
+	next := replies[0]
+	if next.Held || next.Request != requests[1] || next.Request.Connection == sent.Connection || next.Request.Handle != sent.Handle+1 || fresh.Newest != next.Newest || fresh.Oldest != next.Oldest ||
+		after.Monitor.Endpoint == before.Monitor.Endpoint || after.GlobalID != before.GlobalID || after.FSID != before.FSID || !strings.Contains(after.Monitor.Endpoint, next.Request.Endpoint) {
+		t.Fatalf("fresh query identity differs: GID=%d->%d FSID-kept=%t endpoint=%s->%s sent=%+v fresh=%+v result=%+v",
+			before.GlobalID, after.GlobalID, before.FSID == after.FSID, before.Monitor.Endpoint, after.Monitor.Endpoint, sent, next, fresh)
+	}
+	t.Logf("explicit recovery: peer=%s GID=%d connection=%d TID=%d sequence=%d handle=%d epoch=%d oldest=%d; original query not replayed",
+		next.Request.Endpoint, after.GlobalID, next.Request.Connection, next.Request.TID, next.Request.Sequence, next.Request.Handle, fresh.Newest, fresh.Oldest)
+
+	down = nil
+	if err := testcluster.ControlDaemon(ctx, control, "start", "mon", subject); err != nil {
+		t.Fatal("restart killed MON", err)
+	}
+	summary, err := settleNativeMonitorElection(ctx, admin, control, "restarted", monState, monState.Members)
+	if err != nil {
+		markFixtureUnusable(t, control, "map-version kill cell full quorum did not settle after restart")
+		t.Fatal(err)
+	}
+	settled = true
+	t.Log(summary)
+	// Daemons re-register after the outage and can still move the OSDMap, so
+	// the native comparison brackets one native read between two Go reads.
+	for attempt := 1; ; attempt++ {
+		first, err := client.MapVersion(ctx, cephmsgr.OSDMapKind)
+		if err != nil {
+			t.Fatal("map-version after the full quorum returned", err)
+		}
+		native := nativePool(t, ctx, "versions", map[string]any{}).Epochs["osdmap"]
+		second, err := client.MapVersion(ctx, cephmsgr.OSDMapKind)
+		if err != nil {
+			t.Fatal("map-version after the native read", err)
+		}
+		if first.Newest == native && second.Newest == native && native >= fresh.Newest {
+			t.Logf("restored quorum: Go newest=%d oldest=%d native=%d (bracketed, attempt %d)", second.Newest, second.Oldest, native, attempt)
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("Go and native OSDMap epochs never agreed after recovery", first, native, second, ctx.Err())
+		case <-time.After(time.Second):
+		}
+	}
+	if final := client.Snapshot(); final.GlobalID != before.GlobalID || final.FSID != before.FSID {
+		t.Fatal("client identity changed across the recovery", before.GlobalID, final.GlobalID)
+	}
+}

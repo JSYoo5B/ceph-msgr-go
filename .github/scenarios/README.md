@@ -176,7 +176,24 @@ IPv4 fixture. It needs no opt-in parameter and does not use the RBD base
 opt-in: the fixture derives its owned destination cluster, rbd-mirror daemon
 and directed source OSD fault from this exact selector. See the
 [mirror recipe](../../integration/fixture/RBD_MIRROR_VALIDATION.md).
-The catalog has 92 native rows in total.
+Two `osd` rows select only `TestCephMonMapVersionConnectedKillIntegration`
+and `TestCephMonMapVersionUnprocessedKillIntegration`, both on CRC with one
+BlueStore OSD and legacy-v6:
+`osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill`
+and
+`osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill`.
+They need no opt-in parameter. The fixture admits SIGKILL of a MON and uses
+120 s tickets only for this exact selector; broad OSD rows match the two
+names and report them as skipped. See the
+[kill record](../../integration/fixture/MON_MAP_VERSION_KILL_VALIDATION.md).
+Two `mon-mgr` rows, `mon-mgr.aes256k.ip4.t-monservicemaplargemap` and
+`mon-mgr.aes.ip4.crc.host.t-monservicemaplargemap`, select only the
+client-suite `TestCephMonServiceMapLargeMapIntegration`. It holds native
+registrations above a watch budget, a frame limit and the collection cap and
+runs only under its exact selector, so broad rows report it as skipped. See
+the
+[limits record](../../integration/fixture/SERVICE_MAP_LIMITS_VALIDATION.md).
+The catalog has 96 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

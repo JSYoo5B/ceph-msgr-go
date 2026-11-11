@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -20,6 +21,13 @@ import (
 // server-answered/lost-reply coverage, not an unprocessed server request or a
 // forced SIGKILL. No elapsed-time guess establishes the request fault phase.
 func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
+	runMapVersionConnectedLoss(t, "stop")
+}
+
+// runMapVersionConnectedLoss withholds the exact server reply and then ends
+// the connected MON with the given daemon control: "stop" is the provider's
+// orderly Stop, "kill" is SIGKILL with a non-OOM exit 137 receipt.
+func runMapVersionConnectedLoss(t *testing.T, action string) {
 	options := integrationOptions(t)
 	if options.ConnectionMode != cephmsgr.CRCMode {
 		t.Skip("the request-specific map-version relay requires the CRC fixture")
@@ -107,8 +115,11 @@ func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 	// Set ownership before the control call: a controller error cannot prove
 	// that the daemon is still running, so restoration remains mandatory.
 	stopped = true
-	if err := testcluster.ControlDaemon(ctx, control, "stop", "mon", peon); err != nil {
-		t.Fatal("stop the reply's connected MON", err)
+	if err := testcluster.ControlDaemon(ctx, control, action, "mon", peon); err != nil {
+		t.Fatal(action+" the reply's connected MON", err)
+	}
+	if action == "kill" {
+		requireMonKillReceipt(t, control, peon)
 	}
 	var lost outcome
 	select {
@@ -117,8 +128,8 @@ func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 		t.Fatal("pending request did not end after MON stop", ctx.Err())
 	}
 	var unknown *cephmsgr.OutcomeUnknownError
-	if !errors.As(lost.err, &unknown) || !errors.Is(lost.err, io.EOF) || ctx.Err() != nil || lost.version != (cephmsgr.MapVersionResult{}) {
-		t.Fatal("connected stop did not preserve uncertain EOF and empty result", lost)
+	if !errors.As(lost.err, &unknown) || !mapVersionPeerLoss(action, lost.err) || ctx.Err() != nil || lost.version != (cephmsgr.MapVersionResult{}) {
+		t.Fatal("connected "+action+" did not preserve an uncertain peer loss and empty result", lost)
 	}
 	var ended mapVersionRelayEnd
 	for ended.Connection != held.Request.Connection {
@@ -128,15 +139,15 @@ func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 			t.Fatal("missing actual peer EOF receipt", ctx.Err())
 		}
 	}
-	if !errors.Is(ended.Err, io.EOF) {
-		t.Fatal("relay invented an EOF cause", ended.Err)
+	if !mapVersionPeerLoss(action, ended.Err) {
+		t.Fatal("relay did not observe the actual peer loss", ended.Err)
 	}
 	requests, _ := relay.snapshot()
 	if len(requests) != 1 {
 		t.Fatal("the lost query was retransmitted before an explicit new call", requests)
 	}
-	t.Logf("connected MON %s stopped after server reply: peer=%s GID=%d connection=%d TID=%d sequence=%d handle=%d epoch=%d oldest=%d terminal=%v",
-		peon, held.Request.Endpoint, before.GlobalID, held.Request.Connection, held.Request.TID, held.Request.Sequence, held.Request.Handle, held.Newest, held.Oldest, lost.err)
+	t.Logf("connected MON %s ended by %s after server reply: peer=%s GID=%d connection=%d TID=%d sequence=%d handle=%d epoch=%d oldest=%d terminal=%v transport=%v",
+		peon, action, held.Request.Endpoint, before.GlobalID, held.Request.Connection, held.Request.TID, held.Request.Sequence, held.Request.Handle, held.Newest, held.Oldest, lost.err, ended.Err)
 	fresh, err := client.MapVersion(ctx, cephmsgr.OSDMapKind)
 	if err != nil || fresh.Newest == 0 || fresh.Oldest == 0 || fresh.Oldest > fresh.Newest {
 		t.Fatal("fresh explicit map-version request after connected stop", fresh, err)
@@ -170,4 +181,11 @@ func TestCephMonMapVersionConnectedStopIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log(summary)
+}
+
+// mapVersionPeerLoss reports whether err is the transport loss that the fault
+// can produce. An orderly Stop must end as EOF. A killed peer's kernel closes
+// the socket with FIN or, with unread bytes, RST, so SIGKILL admits both.
+func mapVersionPeerLoss(action string, err error) bool {
+	return errors.Is(err, io.EOF) || action == "kill" && errors.Is(err, syscall.ECONNRESET)
 }

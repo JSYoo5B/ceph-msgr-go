@@ -543,6 +543,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.rbdMirrorSelected() {
 		mirrorMarker = "1"
 	}
+	monKillMarker := ""
+	if p.monForcedKillSelected() {
+		monKillMarker = "1"
+	}
 	marker := ""
 	mapMarker := ""
 	if p.sparseReadOracle != "" {
@@ -572,6 +576,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		copyFromLateErrorMarker:                  copyErrorMarker,
 		copyFromMultiChunkMarker:                 multiChunkMarker,
 		rbdMirrorMarker:                          mirrorMarker,
+		monForcedKillMarker:                      monKillMarker,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    marker,
 		"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         mapMarker,
 		"CEPH_MSGR_NATIVE_U64_XATTR_ORACLE":      u64Marker,

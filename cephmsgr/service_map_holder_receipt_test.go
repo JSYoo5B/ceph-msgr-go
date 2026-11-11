@@ -98,9 +98,9 @@ func TestObserveNativeServiceHolderBoundsReceipt(t *testing.T) {
 	}
 }
 
-const nativeServiceHolderStartSample = `{"baseline":{"code":0,"epoch":7,"owned_present":false,"service_daemons":0},"daemon":"holder-bbbbbbbbbbbbbbbb","phase":"start","ready":{"pid":901,"gid":4242,"lifetime_seconds":120},"request_id":3,"service":"ceph-msgr","state":"ready","token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`
+const nativeServiceHolderStartSample = `{"baseline":{"code":0,"epoch":7,"owned_present":false,"service_daemons":0},"daemon":"holder-bbbbbbbbbbbbbbbb","phase":"start","ready":{"pid":901,"gid":4242,"lifetime_seconds":120,"pad_bytes":0,"pad_keys":0,"pad_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},"request_id":3,"service":"ceph-msgr","state":"ready","token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}`
 
-const nativeServiceHolderObserveSample = `{"baseline":{"code":0,"epoch":7,"owned_present":false,"service_daemons":0},"daemon":"holder-bbbbbbbbbbbbbbbb","gid_matches_holder":true,"holder":{"alive":true,"exited":null,"failed":false,"ready":true,"started":true},"phase":"observe","request_id":4,"service":"ceph-msgr","token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","view":{"code":0,"entry":{"daemon":"holder-bbbbbbbbbbbbbbbb","gid":4242,"role":"holder","start_epoch":5},"epoch":9,"present":true,"service_daemons":1}}`
+const nativeServiceHolderObserveSample = `{"baseline":{"code":0,"epoch":7,"owned_present":false,"service_daemons":0},"daemon":"holder-bbbbbbbbbbbbbbbb","gid_matches_holder":true,"holder":{"alive":true,"exited":null,"failed":false,"ready":true,"started":true},"phase":"observe","request_id":4,"service":"ceph-msgr","token":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","view":{"code":0,"entry":{"daemon":"holder-bbbbbbbbbbbbbbbb","gid":4242,"pad_bytes":0,"pad_keys":0,"pad_sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","role":"holder","start_epoch":5},"epoch":9,"present":true,"service_daemons":1}}`
 
 func decodeServiceHolder(t *testing.T, text string, edit func(map[string]any)) nativeServiceHolderReceipt {
 	t.Helper()
@@ -147,7 +147,7 @@ func TestServiceHolderReadyAcceptsOnlyAnAbsentBaselineReadyHolder(t *testing.T) 
 }
 
 func TestServiceHolderViewsRequireTheHoldersOwnIdentity(t *testing.T) {
-	ready := nativeServiceHolderReady{PID: 901, GID: 4242, LifetimeSeconds: 120}
+	ready := nativeServiceHolderReady{PID: 901, GID: 4242, LifetimeSeconds: 120, serviceHolderPadSummary: summarizeServiceHolderPadding(nil)}
 	if !serviceHolderPresent(decodeServiceHolder(t, nativeServiceHolderObserveSample, nil), ready) {
 		t.Fatal("matching holder view was not recognized")
 	}

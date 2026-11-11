@@ -19,6 +19,8 @@ COPY_FROM_MULTI_CHUNK_SELECTOR = "^TestCephOSDCopyFromMultiChunkLateErrorIntegra
 COPY_FROM_HISTORY_SELECTOR = "^TestCephOSDCopyFromDestinationHistoryIntegration$"
 COMPRESSION_SELECTOR = "^TestCephMsgrCompressionOfferIntegration$"
 SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR = "^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$"
+SERVICE_MAP_LARGE_SELECTOR = "^TestCephMonServiceMapLargeMapIntegration$"
+MON_MAP_VERSION_KILL_SELECTOR = "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
 APPLIED_NAMED_MGR_TELL_SELECTOR = "^TestCephAppliedNamedManagerTellIsNotReplayedIntegration$"
 APPLIED_CURRENT_MGR_TELL_SELECTOR = "^TestCephAppliedCurrentManagerTellIsNotReplayedIntegration$"
 APPLIED_MGR_TELL_SECURE_SELECTOR = "^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$"
@@ -66,15 +68,16 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 1 COPY_FROM2 destination PG-history control row,
         # 1 applied exact-name MGR Tell row with a withheld reply,
         # 1 applied current-manager MGR Tell row, 1 secure row for both MGR Tell cells,
-        # 1 applied OSD and PG command row and 1 applied MDS command row.
-        self.assertEqual(len(self.rows), 92)
+        # 1 applied OSD and PG command row and 1 applied MDS command row,
+        # 2 MapVersion connected-MON SIGKILL rows and 2 large ServiceMap rows.
+        self.assertEqual(len(self.rows), 96)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
         dedicated = {SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR,
                      COPY_FROM_HISTORY_SELECTOR, COMPRESSION_SELECTOR, SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR, RBD_MIRROR_SELECTOR,
                      APPLIED_NAMED_MGR_TELL_SELECTOR, APPLIED_CURRENT_MGR_TELL_SELECTOR, APPLIED_MGR_TELL_SECURE_SELECTOR,
-                     APPLIED_OSD_PG_COMMAND_SELECTOR}
+                     APPLIED_OSD_PG_COMMAND_SELECTOR, SERVICE_MAP_LARGE_SELECTOR, MON_MAP_VERSION_KILL_SELECTOR}
         legacy = [row for row in self.rows if row.get("osd_profile", "legacy-v6") == "legacy-v6"
                   and not row.get("osd_soak") and row.get("test_run") not in dedicated
                   and all(row.get(field, "0") == "0" for field in opt_ins)]
@@ -95,6 +98,21 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                 self.assertNotIn("mds_fresh", row)
                 for field in opt_ins:
                     self.assertNotIn(field, row)
+
+    def test_mon_kill_and_large_service_map_rows_are_exclusive(self):
+        # The MON SIGKILL cells run on CRC only (the relay decodes CRC frames)
+        # with one BlueStore OSD; the large ServiceMap cell needs no OSD.
+        rows = [row for row in self.rows if row.get("test_run") == MON_MAP_VERSION_KILL_SELECTOR]
+        self.assertEqual(rows, [
+            {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host", "osd": "1",
+             "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6", "test_run": MON_MAP_VERSION_KILL_SELECTOR},
+            {"key": "aes256k", "service": "aes256k", "mode": "crc", "family": "6", "stress": "", "runtime": "container", "osd": "1",
+             "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6", "test_run": MON_MAP_VERSION_KILL_SELECTOR}])
+        rows = [row for row in self.rows if row.get("test_run") == SERVICE_MAP_LARGE_SELECTOR]
+        self.assertEqual(rows, [
+            {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "test_run": SERVICE_MAP_LARGE_SELECTOR},
+            {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
+             "test_run": SERVICE_MAP_LARGE_SELECTOR}])
 
     def test_service_map_lifecycle_hold_row_is_exclusive(self):
         rows = [row for row in self.rows if row.get("test_run") == SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR]

@@ -140,6 +140,10 @@ separate evidence.
 The fault is orderly Stop of the connected MON, not SIGKILL or a request-specific
 unprocessed-request barrier. This does not require a lossless event history,
 acknowledge subscription authorization, change service registration policy, or
-prove a high-level service-discovery consumer. Large-but-admitted maps,
-over-budget isolation, killed-holder grace timing, broader profiles and all
-remaining MapVersion fault variants remain separate acceptance work.
+prove a high-level service-discovery consumer. Killed-holder grace timing and
+broader profiles remain separate acceptance work. Large-but-admitted maps and
+over-budget isolation are recorded in
+[SERVICE_MAP_LIMITS_VALIDATION.md](SERVICE_MAP_LIMITS_VALIDATION.md), and the
+MapVersion SIGKILL variants in
+[MON_MAP_VERSION_KILL_VALIDATION.md](MON_MAP_VERSION_KILL_VALIDATION.md);
+neither changes this cell.
