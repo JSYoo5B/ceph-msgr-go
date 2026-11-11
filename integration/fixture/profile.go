@@ -291,7 +291,9 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		if p.mdsCephFSCompletion == "1" {
 			selected = "^TestCephMDSCephFSCompletionIntegration$"
-			if p.testRun == "^TestCephMDSCephFSMultiReconnectIntegration$" {
+			// The split reconnect and its held-lock variant each own a fresh
+			// completion fixture and are admitted only when explicitly selected.
+			if p.testRun == "^TestCephMDSCephFSMultiReconnectIntegration$" || p.testRun == mdsCephFSHeldFlockSplitSelector {
 				selected = p.testRun
 			}
 		}

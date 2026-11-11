@@ -105,6 +105,11 @@ Two `mds-cephfs-multi-reconnect` rows select only
 `TestCephMDSCephFSMultiReconnectIntegration`, reusing the completion opt-in
 for a fresh, isolated fixture in each selected MDS profile. Existing
 completion rows keep their original selector.
+Two `mds-cephfs-heldflock-split-reconnect` rows select only
+`TestCephMDSCephFSHeldFlockSplitReconnectIntegration` in the same two MDS
+profiles, again on a fresh completion fixture. The fixture admits its closed
+split-file lock probe, level-15 debug window and per-capability reconnect log
+read only for that selector.
 One further `osd` row selects only `TestCephOSDCopyFromLateErrorIntegration`
 on the CRC/AES IPv4 host single-BlueStore legacy-v6 fixture. This owned daemon
 fault requires its exact exclusive selector; broad suites do not execute it.
@@ -193,7 +198,7 @@ registrations above a watch budget, a frame limit and the collection cap and
 runs only under its exact selector, so broad rows report it as skipped. See
 the
 [limits record](../../integration/fixture/SERVICE_MAP_LIMITS_VALIDATION.md).
-The catalog has 96 native rows in total.
+The catalog has 98 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

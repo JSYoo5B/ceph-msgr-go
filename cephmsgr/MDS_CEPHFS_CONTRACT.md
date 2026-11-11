@@ -257,6 +257,13 @@ SETFILELOCK TID, and one explicit unlock lets a native probe acquire. Both
 Linux profiles passed. It has no restart-without-blob control and does not
 cover waiting locks, FCNTL ranges, several owners, dirty-state interactions or
 crash durability.
+The [held-lock split reconnect acceptance](../integration/fixture/MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md)
+holds the same kind of lock on one of the 32 files of the split reconnect
+recipe. The blob travels inside that inode's capability record; the
+replacement MDS's own per-capability log lines show that a nonfinal `(more)`
+message carried the record. The same native and Go checks then pass in both
+Linux profiles. It adds a closed fixture probe and no product source, and it
+has the same limits as the unsplit case.
 Wire inode Version can advance for capability max-size negotiation; user
 change_attr and timestamps are independently preserved in the live evidence.
 

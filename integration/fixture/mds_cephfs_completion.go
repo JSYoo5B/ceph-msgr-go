@@ -78,7 +78,28 @@ var mdsCephFSCompletionRuntimeKinds = map[string]struct {
 	"early-reply-off": {map[string]string{"mds_early_reply": "false"}, "early-reply-on"},
 	"blackhole-on":    {map[string]string{"ms_blackhole_client": "true"}, "blackhole-off"},
 	"debug-on":        {map[string]string{"debug_mds": "10/10", "debug_ms": "1/5"}, "debug-off"},
+	// Level 15 adds the per-capability line of Server::handle_client_reconnect.
+	"debug-caps-on": {map[string]string{"debug_mds": "15/15", "debug_ms": "1/5"}, "debug-caps-off"},
 }
+
+// mdsCephFSHeldFlockSplitSelector selects the held-FLOCK split reconnect
+// acceptance. Its lock probe, level-15 debug window and per-capability log
+// read are admitted only under this exclusive selector.
+const mdsCephFSHeldFlockSplitSelector = "^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$"
+
+var mdsCephFSHeldFlockSplitActions = []string{"split-flock-ex-nb", "debug-caps-on", "debug-caps-off", "reconnect-cap-log"}
+
+func admitMDSCephFSHeldFlockSplit(action, testRun string) error {
+	if slices.Contains(mdsCephFSHeldFlockSplitActions, action) && testRun != mdsCephFSHeldFlockSplitSelector {
+		return errors.New("MDS CephFS completion held-lock split action requires its exclusive selector")
+	}
+	return nil
+}
+
+// mdsCephFSCompletionDebugKinds change the same daemon options, so at most
+// one of them is in effect on an incarnation and both are admitted on the
+// respawned daemon of a pending restart.
+var mdsCephFSCompletionDebugKinds = []string{"debug-on", "debug-caps-on"}
 
 // mdsCephFSCompletionSeconds reads a float option value ("45.000000"); an
 // unreadable value is 0.
@@ -131,6 +152,16 @@ func mdsCephFSMultiReconnectNames() []string {
 	return names
 }
 
+// splitLockFile is the one predetermined split file the closed native lock
+// probe admits. It is the first one created, so its capability sorts into a
+// nonfinal fragment of the split reconnect.
+func (p mdsCephFSCompletionPlan) splitLockFile() string {
+	if len(p.SplitFiles) == 0 {
+		return ""
+	}
+	return p.SplitFiles[0]
+}
+
 // targets lists every closed stat target.
 func (p mdsCephFSCompletionPlan) targets() []string {
 	return append(append(append(append([]string{"dir"}, p.Children...), p.SplitFiles...), p.Grandchildren...), "snapshot")
@@ -166,10 +197,11 @@ func mdsCephFSCompletionNativeCaps(fsName string) ceph.ClientCaps {
 }
 
 // One fixed native LibCephFS driver. It admits the owned directory, its
-// children and grandchildren, and the one planned snapshot of `snap`.
+// children and grandchildren, and the one planned snapshot of `snap`. The
+// nonblocking exclusive FLOCK probe names its one split file itself.
 // Source: pybind/cephfs/cephfs.pyx at mdsFreshSource; independent driver.
 const mdsCephFSCompletionNativePython = `
-import cephfs, json, os, sys
+import cephfs, fcntl, json, os, sys, time
 identity, fsname, directory, snapshot, action, path = sys.argv[1:7]
 extra = sys.argv[7:]
 def owned(p):
@@ -192,12 +224,49 @@ def stat(p):
     except cephfs.ObjectNotFound as e:
         return {'exists': False, 'errno': abs(e.errno), 'ino': 0, 'mode': 0, 'uid': 0, 'gid': 0, 'nlink': 0, 'size': 0}
     return {'exists': True, 'errno': 0, 'ino': s['ino'], 'mode': s['mode'], 'uid': s['uid'], 'gid': s['gid'], 'nlink': s['nlink'], 'size': s['size']}
+def flock_state():
+    s = fs.statx(path, 0x13cf, 0)
+    if s['size'] != 0:
+        raise ValueError('flock probe file is not empty')
+    fd = fs.open(path, os.O_RDONLY, 0)
+    try:
+        data = fs.read(fd, 0, 1)
+    finally:
+        fs.close(fd)
+    if len(data) != 0:
+        raise ValueError('flock probe file changed while reading')
+    return {'ino': s['ino'], 'size': s['size'], 'version': s['version'],
+            'mtime': int(s['mtime'].timestamp()), 'data_hex': data.hex()}
 out = {'action': action, 'path': path}
 try:
     fs.mount(filesystem_name=fsname)
     out['native_global_id'] = fs.get_instance_id()
     if action == 'stat' and not extra:
         out['stat'] = stat(path)
+    elif action == 'flock-ex-nb' and path == '/' + directory + '/split-000-' + 's' * 215 and not extra:
+        owner = 0x8000000063657068
+        probe = {'owner': owner, 'errno': 0, 'acquired': False, 'unlocked': False,
+                 'before': flock_state()}
+        fd = fs.open(path, os.O_RDWR, 0)
+        started = time.monotonic_ns()
+        try:
+            try:
+                fs.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB, owner)
+                probe['acquired'] = True
+            except cephfs.Error as e:
+                if abs(e.errno) != 11:
+                    raise
+                probe['errno'] = abs(e.errno)
+        finally:
+            try:
+                if probe['acquired']:
+                    fs.flock(fd, fcntl.LOCK_UN, owner)
+                    probe['unlocked'] = True
+            finally:
+                fs.close(fd)
+        probe['elapsed_ns'] = time.monotonic_ns() - started
+        probe['after'] = flock_state()
+        out['flock'] = probe
     elif action == 'list' and path == '/' + directory and not extra:
         out['entries'] = []
         handle = fs.opendir(path)
@@ -255,6 +324,17 @@ func decodeMDSCephFSCompletionNative(action, path string, plan mdsCephFSCompleti
 		ok = result.Stat != nil && result.Stat.Exists && validMDSCephFSStat(*result.Stat)
 	case "rmsnap":
 		ok = result.Stat != nil && !result.Stat.Exists && validMDSCephFSStat(*result.Stat)
+	case "flock-ex-nb":
+		// The probed file is an empty split file that nothing writes. Its
+		// native version is recorded and compared, not required to be nonzero.
+		lock, err := plan.path(plan.splitLockFile())
+		if probe := result.Flock; probe != nil && err == nil {
+			ok = path == lock && probe.Owner == mdsCephFSFlockOwner && probe.ElapsedNS > 0 &&
+				(probe.Errno == 0 && probe.Acquired && probe.Unlocked || probe.Errno == 11 && !probe.Acquired && !probe.Unlocked) &&
+				probe.Before == probe.After && probe.Before.Ino != 0 && probe.Before.Size == 0 && probe.Before.DataHex == "" &&
+				result.Stat == nil && result.SourceStat == nil && result.Statfs == nil && result.TimingsNS == nil &&
+				!result.QuotaAbsent && result.ValueHex == "" && result.DataHex == "" && result.Written == 0 && len(result.Created) == 0 && len(result.Entries) == 0
+		}
 	}
 	if !ok {
 		return mdsCephFSNative{}, fmt.Errorf("native CephFS completion %s output shape differs", action)
@@ -456,6 +536,42 @@ func filterMDSCephFSReconnectHandlers(lines []string, gid uint64) []string {
 	return result
 }
 
+// filterMDSCephFSReconnectCaps keeps, in source order, this client's reconnect
+// handler lines and the "open cap realm" lines that follow each of them. At
+// debug_mds 15 Server::handle_client_reconnect writes that line once per
+// capability it reconnects on a cached auth inode, in the branch that also
+// recovers the capability's file locks, and it handles one message at a time.
+// Lines after another client's handler line are not attributed. The result is
+// bounded and its lines are truncated.
+func filterMDSCephFSReconnectCaps(lines []string, gid uint64) ([]string, int) {
+	const handler = "handle_client_reconnect client."
+	own := handler + strconv.FormatUint(gid, 10)
+	kept, dropped, inside := []string{}, 0, false
+	for _, line := range lines {
+		if at := strings.Index(line, handler); at >= 0 {
+			inside = false
+			if strings.HasPrefix(line[at:], own) {
+				tail := strings.TrimSpace(line[at+len(own):])
+				inside = tail == "" || tail == "(more)"
+			}
+			if !inside {
+				continue
+			}
+		} else if !inside || !strings.Contains(line, " open cap realm ") {
+			continue
+		}
+		if len(kept) == mdsCephFSCompletionLogLines {
+			dropped++
+			continue
+		}
+		if len(line) > mdsCephFSCompletionLogLineBytes {
+			line = line[:mdsCephFSCompletionLogLineBytes]
+		}
+		kept = append(kept, line)
+	}
+	return kept, dropped
+}
+
 type mdsCephFSCompletionLog struct {
 	Mark     int      `json:"mark"`
 	Total    int      `json:"total_lines"`
@@ -550,7 +666,7 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 		if action.gid, err = gid(args[0]); err != nil {
 			return 0, mdsCephFSCompletionAction{}, err
 		}
-	case "mds-log", "reconnect-log":
+	case "mds-log", "reconnect-log", "reconnect-cap-log":
 		if len(args) != 2 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion log action takes a GlobalID and an address nonce")
 		}
@@ -569,7 +685,8 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 		action.target = args[0]
 	case "list", "write-fenced", "snapshot-create", "snapshot-remove", "mds-log-mark", "config-read", "flush-journal", "force-readonly",
 		"log-pause", "log-resume", "early-reply-off", "early-reply-on", "blackhole-on", "blackhole-off", "debug-on", "debug-off",
-		"deny-on", "deny-off", "window-on", "window-off", "restart-arm", "restart-fire", "restart-status", "restart-adopt":
+		"deny-on", "deny-off", "window-on", "window-off", "restart-arm", "restart-fire", "restart-status", "restart-adopt",
+		"debug-caps-on", "debug-caps-off", "split-flock-ex-nb":
 		if len(args) != 0 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion action takes no caller argument")
 		}
@@ -580,6 +697,9 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 			action.target = "fenced"
 		case "snapshot-create", "snapshot-remove":
 			action.target = "snapshot"
+		case "split-flock-ex-nb":
+			// The lock target is fixed by the plan, never chosen by the caller.
+			action.target = plan.splitLockFile()
 		}
 	default:
 		return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion action is not admitted")
@@ -914,6 +1034,9 @@ func (c *fixtureCluster) mdsCephFSCompletionControl(ctx context.Context, out str
 	if err != nil {
 		return err
 	}
+	if err := admitMDSCephFSHeldFlockSplit(action.name, c.profile.testRun); err != nil {
+		return err
+	}
 	x.lastRequestID = id
 	started := time.Now()
 	result := mdsCephFSCompletionResult{Source: mdsFreshSource, Token: s.token, RequestID: id, Action: action.name, Target: action.target, GlobalID: action.gid, FSID: s.oracle.FSID,
@@ -943,7 +1066,7 @@ func (c *fixtureCluster) mdsCephFSCompletionControl(ctx context.Context, out str
 		// diagnostics of the respawned owned daemon are admitted.
 		switch action.name {
 		case "restart-fire", "restart-status", "restart-adopt":
-		case "config-read", "debug-on", "debug-off", "mds-log-mark", "mds-log":
+		case "config-read", "debug-on", "debug-off", "debug-caps-on", "debug-caps-off", "mds-log-mark", "mds-log":
 			status, err := c.mdsCephFSCompletionRankStatus(ctx, r.Armed.GID)
 			if err != nil {
 				return err
@@ -1051,7 +1174,7 @@ func (c *fixtureCluster) mdsCephFSCompletionAct(ctx context.Context, id int64, a
 		}
 		result.Ops, err = parseMDSCephFSHistoricOps(data, action.gid)
 		return err
-	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove":
+	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove", "split-flock-ex-nb":
 		return c.mdsCephFSCompletionNative(ctx, id, action, result)
 	case "flush-journal":
 		data, err := c.mdsCephFSCompletionAsok(ctx, 60*time.Second, "flush", "journal")
@@ -1116,13 +1239,20 @@ func (c *fixtureCluster) mdsCephFSCompletionDaemonAct(ctx context.Context, id in
 		x.logMark = len(lines)
 		result.Log = &mdsCephFSCompletionLog{Mark: x.logMark, Total: len(lines), Lines: []string{}}
 		return nil
-	case "mds-log", "reconnect-log":
+	case "mds-log", "reconnect-log", "reconnect-cap-log":
 		lines, err := c.mdsCephFSCompletionLogLines(ctx)
 		if err != nil {
 			return err
 		}
 		mark := min(x.logMark, len(lines))
 		selected := lines[mark:]
+		if action.name == "reconnect-cap-log" {
+			// Its own closed filter: the per-capability lines name an inode,
+			// not the client, so the general client filter would drop them.
+			kept, dropped := filterMDSCephFSReconnectCaps(selected, action.gid)
+			result.Log = &mdsCephFSCompletionLog{Mark: mark, Total: len(lines), Lines: kept, Dropped: dropped, GlobalID: action.gid, Nonce: action.nonce}
+			return nil
+		}
 		if action.name == "reconnect-log" {
 			// This read-only oracle keeps only this client's fragment handler
 			// lines before the general bounded filter. Large retained cap sets
@@ -1145,7 +1275,11 @@ func (c *fixtureCluster) mdsCephFSCompletionDaemonAct(ctx context.Context, id in
 		if x.activeRuntime(kind, gid) != nil {
 			return fmt.Errorf("MDS CephFS completion %s is already in effect", kind)
 		}
-		if kind != "debug-on" && x.pending() != nil {
+		debug := slices.Contains(mdsCephFSCompletionDebugKinds, kind)
+		if debug && slices.ContainsFunc(mdsCephFSCompletionDebugKinds, func(k string) bool { return x.activeRuntime(k, gid) != nil }) {
+			return errors.New("MDS CephFS completion debug levels are already changed on this incarnation")
+		}
+		if !debug && x.pending() != nil {
 			return errors.New("MDS CephFS completion runtime change refused during a restart")
 		}
 		r := &mdsCephFSCompletionRuntime{Kind: kind, Settings: maps.Clone(spec.settings), Baseline: map[string]string{}, IncarnationGID: gid, RequestID: id, State: "intended"}
@@ -1338,8 +1472,12 @@ func (c *fixtureCluster) mdsCephFSCompletionNative(ctx context.Context, id int64
 	if err != nil {
 		return err
 	}
-	native, extra, kind := action.name, []string(nil), ""
+	native, extra, kind, once := action.name, []string(nil), "", true
 	switch action.name {
+	case "split-flock-ex-nb":
+		// A probe may take a transient lock. Each request is journaled before
+		// it runs and an uncertain native process is never replayed.
+		native, kind, once = "flock-ex-nb", "native-split-flock-ex-nb", false
 	case "write-fenced":
 		native, extra, kind = "create-write", []string{x.plan.FencedPayloadHex}, "native-create-write"
 	case "snapshot-create":
@@ -1352,7 +1490,7 @@ func (c *fixtureCluster) mdsCephFSCompletionNative(ctx context.Context, id int64
 	}
 	var mutation *mdsCephFSMutation
 	if kind != "" {
-		if x.mutated(kind) {
+		if once && x.mutated(kind) {
 			return fmt.Errorf("MDS CephFS completion %s was already issued", kind)
 		}
 		mutation = &mdsCephFSMutation{Kind: kind, RequestID: id, Target: action.target, State: "intended"}

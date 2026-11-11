@@ -73,10 +73,14 @@ Successful detailed IPC receipts are not committed or uploaded by the
 current successful-run workflow; the hashes and bounded summary here do not
 replace the separate evidence-retention work under issue #1.
 
-Connection loss between fragments, arbitrary gigabytes of state, held-lock
-reconnect inside split reconnect state (a single held lock across the ordinary
-restart is in [MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md)), dirty metadata ordering, multi-rank split reconnect, delegated
-inodes and Unicode name policy remain unverified or withheld. This recipe
+Connection loss between fragments, arbitrary gigabytes of state, dirty
+metadata ordering, multi-rank split reconnect, delegated inodes and Unicode
+name policy remain unverified or withheld. This recipe itself carries no lock
+state. One held whole-file FLOCK on an inode of the same split reconnect is the
+separate acceptance in
+[MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md);
+a single held lock across the ordinary restart is in
+[MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md). This recipe
 establishes no complete filesystem client or remote rollback behavior.
 
 ## Earlier failures and their boundaries
