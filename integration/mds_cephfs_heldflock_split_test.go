@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
 // Held whole-file FLOCK on one inode of a split client reconnect (issue #10).
@@ -33,24 +35,83 @@ type splitHeldFlock struct {
 	Directory, File string
 	Ino             uint64
 	Lock            cephfsFilelock
-	AcquireTID      uint64
-	UnlockTID       uint64
-	// SetFileLockSubmissions counts application Submit calls of SETFILELOCK.
+	// AcquireTID, UnlockTID and SetFileLockSubmissions are recorded as soon
+	// as Submit accepted the call, before its reply is awaited, so a call
+	// whose reply is lost or refused is still counted with its TID.
+	AcquireTID uint64
+	UnlockTID  uint64
+	// SetFileLockSubmissions counts application Submit calls of SETFILELOCK
+	// that Submit accepted.
 	SetFileLockSubmissions int
-	ReconnectBlobHex       string
+	// AcquireOutcome and UnlockOutcome are the outcome of the wait for each
+	// call's first reply: empty while it was not awaited to the end, else
+	// the reply result or the wait error.
+	AcquireOutcome, UnlockOutcome string
+	ReconnectBlobHex              string
 	// SentInodes are the inodes of every capability in the reconnect state.
 	SentInodes []uint64
 	// CapLines are the replacement MDS's handler and per-capability lines;
 	// Fragments is their parsed form and LockFragment the index of the
 	// fragment whose handler reconnected the locked inode's capability.
-	CapLines             []string
-	Fragments            []splitReconnectFragment
-	LockFragment         int
-	ProbeBefore          []heldFlockProbe
-	ProbeAfter           []heldFlockProbe
-	GetBefore, GetAfter  *cephfsFilelock
-	MDSBefore, MDSAfter  nativeMDSCephFSDaemon
-	AcquireReplayedByMDS *bool
+	CapLines            []string
+	Fragments           []splitReconnectFragment
+	LockFragment        int
+	ProbeBefore         []heldFlockProbe
+	ProbeAfter          []heldFlockProbe
+	GetBefore, GetAfter *cephfsFilelock
+	MDSBefore, MDSAfter nativeMDSCephFSDaemon
+	// AcquireTIDInHistoricOps is whether the original acquire TID appears in
+	// the one bounded dump_historic_ops snapshot read right after adoption.
+	// False does not show that the MDS never received such a request: an
+	// entry can age out of that snapshot. The no-second-acquisition claim
+	// rests on SetFileLockSubmissions, the empty reconnect resubmissions and
+	// the documented no-blob control.
+	AcquireTIDInHistoricOps *bool
+}
+
+// mdsFirstReplyCall is the part of an accepted MDS request call that
+// awaitAcceptedMDSCall uses.
+type mdsFirstReplyCall interface {
+	Transaction() uint64
+	Wait(context.Context) (cephmsgr.MDSReply, error)
+}
+
+// awaitAcceptedMDSCall reports a call that Submit accepted to accepted
+// before it waits for the first reply, and the outcome of that wait to
+// settled before it returns. A caller that then fails on the outcome has
+// already recorded both.
+func awaitAcceptedMDSCall(ctx context.Context, call mdsFirstReplyCall, accepted func(uint64), settled func(cephmsgr.MDSReply, error)) (cephmsgr.MDSReply, error) {
+	if accepted != nil {
+		accepted(call.Transaction())
+	}
+	reply, err := call.Wait(ctx)
+	if settled != nil {
+		settled(reply, err)
+	}
+	return reply, err
+}
+
+// acceptFlock records one SETFILELOCK call that Submit accepted.
+func (h *splitHeldFlock) acceptFlock(unlock bool, tid uint64) {
+	if unlock {
+		h.UnlockTID = tid
+	} else {
+		h.AcquireTID = tid
+	}
+	h.SetFileLockSubmissions++
+}
+
+// settleFlock records the outcome of the wait for that call's first reply.
+func (h *splitHeldFlock) settleFlock(unlock bool, reply cephmsgr.MDSReply, err error) {
+	outcome := "reply result " + strconv.FormatInt(int64(reply.Result), 10)
+	if err != nil {
+		outcome = "wait error: " + err.Error()
+	}
+	if unlock {
+		h.UnlockOutcome = outcome
+	} else {
+		h.AcquireOutcome = outcome
+	}
 }
 
 // splitFlockProbeNative runs the closed nonblocking exclusive FLOCK probe of
@@ -268,5 +329,55 @@ func TestCephFSHeldFlockSplitFragmentAttribution(t *testing.T) {
 		if err := checkSplitFlockProbe(receipt(tc.got, tc.edit), held, tc.want, &baseline); err == nil {
 			t.Fatal("wrong split lock probe accepted:", name)
 		}
+	}
+}
+
+// acceptedFlockCall is an accepted SETFILELOCK call whose wait checks what
+// the record already holds when it starts.
+type acceptedFlockCall struct {
+	tid   uint64
+	reply cephmsgr.MDSReply
+	err   error
+	check func()
+}
+
+func (c acceptedFlockCall) Transaction() uint64 { return c.tid }
+
+func (c acceptedFlockCall) Wait(context.Context) (cephmsgr.MDSReply, error) {
+	c.check()
+	return c.reply, c.err
+}
+
+// An accepted SETFILELOCK is in the record with its TID before its reply is
+// awaited, whatever the wait then returns.
+func TestCephFSHeldFlockSplitRecordsAcceptedSetFileLock(t *testing.T) {
+	held := &splitHeldFlock{}
+	accepted := func(unlock bool) func(uint64) { return func(tid uint64) { held.acceptFlock(unlock, tid) } }
+	settled := func(unlock bool) func(cephmsgr.MDSReply, error) {
+		return func(r cephmsgr.MDSReply, err error) { held.settleFlock(unlock, r, err) }
+	}
+	// The acquire reached the MDS and its reply is lost.
+	lost := errors.New("mds session ended")
+	reply, err := awaitAcceptedMDSCall(context.Background(), acceptedFlockCall{tid: 41, err: lost, check: func() {
+		if held.AcquireTID != 41 || held.SetFileLockSubmissions != 1 || held.AcquireOutcome != "" {
+			t.Fatal("the accepted acquire was not recorded before its reply was awaited", *held)
+		}
+	}}, accepted(false), settled(false))
+	if !errors.Is(err, lost) || reply.Result != 0 || held.AcquireTID != 41 || held.SetFileLockSubmissions != 1 || held.AcquireOutcome != "wait error: mds session ended" {
+		t.Fatal("record after a failed wait for the acquire", err, *held)
+	}
+	// The unlock is accepted and refused with a signed result.
+	reply, err = awaitAcceptedMDSCall(context.Background(), acceptedFlockCall{tid: 57, reply: cephmsgr.MDSReply{Result: -11}, check: func() {
+		if held.UnlockTID != 57 || held.SetFileLockSubmissions != 2 || held.UnlockOutcome != "" || held.AcquireTID != 41 {
+			t.Fatal("the accepted unlock was not recorded before its reply was awaited", *held)
+		}
+	}}, accepted(true), settled(true))
+	if err != nil || reply.Result != -11 || held.UnlockOutcome != "reply result -11" || held.AcquireOutcome != "wait error: mds session ended" || held.SetFileLockSubmissions != 2 {
+		t.Fatal("record after a refused unlock", err, *held)
+	}
+	// Calls that are not SETFILELOCK carry no hooks.
+	if _, err := awaitAcceptedMDSCall(context.Background(), acceptedFlockCall{tid: 60, check: func() {}}, nil, nil); err != nil ||
+		held.AcquireTID != 41 || held.UnlockTID != 57 || held.SetFileLockSubmissions != 2 || held.AcquireOutcome != "wait error: mds session ended" || held.UnlockOutcome != "reply result -11" {
+		t.Fatal("a call without hooks changed the record", err, *held)
 	}
 }
