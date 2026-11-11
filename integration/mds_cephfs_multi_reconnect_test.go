@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,13 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION=1 for owned split reconnect acceptance")
 	}
+	runCephFSSplitReconnect(t, nil)
+}
+
+// runCephFSSplitReconnect is the split reconnect recipe. With held set it
+// also holds one exclusive whole-file FLOCK on the plan's predetermined split
+// file across the restart (mds_cephfs_heldflock_split_test.go).
+func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if dir == "" || os.Getenv("CEPH_MSGR_TEST_MDS_FRESH") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "legacy-v6" {
 		t.Fatal("split reconnect requires the owned completion fixture")
@@ -72,6 +80,12 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 	var dirIno uint64
 	inodes := map[string]uint64{}
 	realms := map[uint64]cephmsgr.MDSSnapRealm{}
+	results, debugOn, debugOff := "mds-cephfs-multi-reconnect-results.json", "debug-on", "debug-off"
+	var heldBaseline *nativeMDSCephFSFlockState
+	if held != nil {
+		// Level 15 adds the native per-capability reconnect lines.
+		results, debugOn, debugOff = "mds-cephfs-heldflock-split-reconnect-results.json", "debug-caps-on", "debug-caps-off"
+	}
 	facts := map[string]any{"reconnect_message_limit": frameLimit, "frame_limit": 1 << 20, "files": names, "global_id": snap.GlobalID, "shared_nonce": snap.CephFSNonce, "request_resubmissions": 0, "pending_cap_flushes": 0}
 	var requests []completionReply
 	var nativeLines []string
@@ -86,7 +100,7 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 			err = errors.New("split reconnect evidence exceeds bound")
 		}
 		if err == nil {
-			err = testcluster.WritePublicEvidence(filepath.Join(dir, "mds-cephfs-multi-reconnect-results.json"), data)
+			err = testcluster.WritePublicEvidence(filepath.Join(dir, results), data)
 		}
 		if err != nil {
 			t.Error("preserve split reconnect evidence", err)
@@ -106,6 +120,7 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 		epoch = r.Map.Epoch
 		return r.session(snap.GlobalID)
 	}
+	var lastTID uint64
 	submit := func(t *testing.T, name string, r cephmsgr.MDSRequest) (cephmsgr.MDSReply, cephmsgr.MDSTrace) {
 		t.Helper()
 		r.MDSMapEpoch = epoch
@@ -114,6 +129,7 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal("submit", name, err)
 		}
+		lastTID = call.Transaction()
 		wait, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		first, err := call.Wait(wait)
@@ -196,6 +212,30 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 	}) {
 		return
 	}
+	if held != nil {
+		facts["held_flock"] = held
+		if !leaf("hold_flock_on_split_member", func(t *testing.T) {
+			// The create handle of this file is still open read-write.
+			held.Directory, held.File, held.Ino, held.MDSBefore = oracle.Plan.Directory, oracle.Plan.SplitFiles[0], inodes[oracle.Plan.SplitFiles[0]], control.mds
+			held.Lock = cephfsFilelock{Client: snap.GlobalID, Owner: cephFlockGoOwner, Type: cephFlockExclusive}
+			submit(t, "split flock acquire", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock, Path: cephmsgr.MDSFilePath{Ino: held.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner)})
+			held.AcquireTID, held.SetFileLockSubmissions = lastTID, 1
+			p, err := splitFlockProbeNative(ctx, control, held, 11, &heldBaseline)
+			held.ProbeBefore = append(held.ProbeBefore, p)
+			if err != nil {
+				t.Fatal("native nonblocking probe does not see the Go lock on the split file: ", err)
+			}
+			first, _ := submit(t, "split flock get before restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock, Path: cephmsgr.MDSFilePath{Ino: held.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
+			lock, err := cephfsDecodeFilelock(first.Extra)
+			if err != nil || lock != held.Lock {
+				t.Fatalf("GETFILELOCK before restart does not identify the owned Go lock: %+v %v", lock, err)
+			}
+			held.GetBefore = &lock
+			t.Logf("held-lock split: inode %#x locked by Go TID %d; native probe errno %d, native version %d", held.Ino, held.AcquireTID, p.Probe.Errno, p.Probe.Before.Version)
+		}) {
+			return
+		}
+	}
 	if !leaf("split_reconnect_to_new_incarnation", func(t *testing.T) {
 		armed := req(t, "restart-arm").Restart
 		facts["armed"] = armed
@@ -221,6 +261,19 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 		for name, ino := range inodes {
 			if !slices.ContainsFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == ino && c.PathBase == dirIno && c.Path == name }) {
 				t.Fatal("reconnect omitted a real held cap", name, ino)
+			}
+		}
+		if held != nil {
+			// The caller-built native-layout blob goes on exactly the locked
+			// inode's capability; SETFILELOCK is not submitted again.
+			at := slices.IndexFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == held.Ino })
+			if at < 0 || slices.ContainsFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return len(c.Flock) != 0 }) {
+				t.Fatal("collected reconnect state lacks the locked inode or already carries a lock blob")
+			}
+			blob := cephfsFilelockBlob(nil, []cephfsFilelock{held.Lock})
+			caps[at].Flock, held.ReconnectBlobHex = blob, hex.EncodeToString(blob)
+			for _, c := range caps {
+				held.SentInodes = append(held.SentInodes, c.Ino)
 			}
 		}
 		full, err := mds.EncodeReconnect(caps, rs, false)
@@ -249,7 +302,7 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 			t.Fatal("split replacement incarnation differs", next)
 		}
 		facts["replacement"] = next
-		req(t, "debug-on")
+		req(t, debugOn)
 		req(t, "mds-log-mark")
 		if err := connection.Close(); err != nil {
 			t.Fatal(err)
@@ -299,7 +352,28 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 			}
 		}
 		facts["fragment_count"] = len(nativeLines)
-		req(t, "debug-off")
+		if held != nil {
+			// Which fragment carried the locked inode's capability, from the
+			// replacement MDS's own per-capability lines.
+			capLog := req(t, "reconnect-cap-log", strconv.FormatUint(snap.GlobalID, 10), strconv.FormatUint(uint64(snap.CephFSNonce), 10)).Log
+			if capLog == nil || capLog.Dropped != 0 {
+				t.Fatal("native per-capability reconnect log missing or truncated", capLog)
+			}
+			held.CapLines = capLog.Lines
+			if held.Fragments, err = splitReconnectCapFragments(capLog.Lines, snap.GlobalID); err != nil {
+				t.Fatal(err)
+			}
+			if held.LockFragment, err = splitHeldFlockFragment(held.Fragments, len(nativeLines), held.SentInodes, held.Ino); err != nil {
+				t.Fatal(err)
+			}
+			var perFragment []int
+			for _, f := range held.Fragments {
+				perFragment = append(perFragment, len(f.Inodes))
+			}
+			t.Logf("held-lock split: %d caps and %d unsplit bytes in %d fragments; native capability lines per fragment %v; locked inode %#x in nonfinal fragment %d",
+				len(caps), fullBytes, len(held.Fragments), perFragment, held.Ino, held.LockFragment)
+		}
+		req(t, debugOff)
 		native := observe(t)
 		if err := checkNativeCephFSSession(native, identity, metadata); err != nil {
 			t.Fatal(err)
@@ -307,6 +381,41 @@ func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 		if !strings.HasSuffix(native.Address, ":0/"+strconv.FormatUint(uint64(snap.CephFSNonce), 10)) || native.Caps < int64(len(names)) {
 			t.Fatal("split reconnect changed native identity or lost held caps", native)
 		}
+	}) {
+		return
+	}
+	if held != nil && !leaf("held_flock_restored_then_released", func(t *testing.T) {
+		held.MDSAfter = control.mds
+		if held.MDSAfter.GID == held.MDSBefore.GID || held.MDSAfter.Nonce == held.MDSBefore.Nonce || held.MDSAfter.Rank != 0 || held.MDSBefore.Rank != 0 {
+			t.Fatal("held-lock split recovery did not cross to a new rank-0 MDS incarnation", held.MDSBefore, held.MDSAfter)
+		}
+		// The new incarnation never saw the original lock request again.
+		prefix := fmt.Sprintf("client_request(client.%d:%d ", snap.GlobalID, held.AcquireTID)
+		replayed := slices.ContainsFunc(req(t, "historic-ops", strconv.FormatUint(snap.GlobalID, 10)).Ops, func(op nativeMDSCephFSHistoricOp) bool { return strings.HasPrefix(op.Description, prefix) })
+		held.AcquireReplayedByMDS = &replayed
+		if replayed {
+			t.Fatal("the new incarnation tracked a client request for the original SETFILELOCK TID", held.AcquireTID)
+		}
+		p, err := splitFlockProbeNative(ctx, control, held, 11, &heldBaseline)
+		held.ProbeAfter = append(held.ProbeAfter, p)
+		if err != nil {
+			t.Fatal("native nonblocking probe does not see the restored lock on the split file: ", err)
+		}
+		first, _ := submit(t, "split flock get after restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock, Path: cephmsgr.MDSFilePath{Ino: held.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
+		restored, err := cephfsDecodeFilelock(first.Extra)
+		if err != nil || restored != held.Lock {
+			t.Fatalf("GETFILELOCK after restart does not identify the original Go lock: %+v %v", restored, err)
+		}
+		held.GetAfter = &restored
+		submit(t, "split flock unlock after restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock, Path: cephmsgr.MDSFilePath{Ino: held.Ino}, Args: cephfsFlockArgs(cephFlockUnlock, cephFlockGoOwner)})
+		held.UnlockTID, held.SetFileLockSubmissions = lastTID, held.SetFileLockSubmissions+1
+		p, err = splitFlockProbeNative(ctx, control, held, 0, &heldBaseline)
+		held.ProbeAfter = append(held.ProbeAfter, p)
+		if err != nil {
+			t.Fatal("native probe could not acquire the split file after the explicit unlock: ", err)
+		}
+		t.Logf("held-lock split: MDS GID %d to %d; restored owner %#x client %d; unlock TID %d; native probe errnos after restart %d then %d",
+			held.MDSBefore.GID, held.MDSAfter.GID, restored.Owner, restored.Client, held.UnlockTID, held.ProbeAfter[0].Probe.Errno, p.Probe.Errno)
 	}) {
 		return
 	}
