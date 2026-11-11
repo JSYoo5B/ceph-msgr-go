@@ -83,6 +83,10 @@ not retained. The failed run's diagnostics retain only the pre-restart part.
   races, interaction with dirty cap state, standby takeover and crash
   durability of lock state are not exercised. In-memory lock state is not a
   journal durability promise.
+- The lock here travels in an unsplit reconnect message. The same lock on an
+  inode of a split reconnect, with the fragment that carried it identified
+  from the MDS log, is recorded in
+  [MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md).
 - The blob is an explicit caller choice. The product does not infer held locks
   from capabilities and does not populate reconnect state with locks.
 - A passing leaf does not establish POSIX lock semantics or a typed lock API.
