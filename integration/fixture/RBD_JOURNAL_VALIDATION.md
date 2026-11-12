@@ -246,3 +246,6 @@ client would, and the `inspect` observation requires no header watcher.
   [RBD_JOURNAL_CONCURRENT_VALIDATION.md](RBD_JOURNAL_CONCURRENT_VALIDATION.md)
   with its own limits (single OSD, `legacy-v6`, one handoff cycle, no
   faults).
+- A Go append whose reply is lost. One such append on a fresh image is
+  recorded in
+  [RBD_JOURNAL_LOST_APPEND_VALIDATION.md](RBD_JOURNAL_LOST_APPEND_VALIDATION.md).

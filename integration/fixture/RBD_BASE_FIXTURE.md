@@ -3,7 +3,10 @@
 `CEPH_MSGR_TEST_RBD=1` is a closed development-only extension of the opt-in
 OSD fixture (`CEPH_MSGR_TEST_OSD=1`). It selects only
 `^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$` (an
-explicit `CEPH_MSGR_TEST_RUN` must be that selector; `go test` runs them in
+explicit `CEPH_MSGR_TEST_RUN` must be that selector, or the exact selector of
+the lost-append-reply acceptance described under
+"[Lost-append-reply sequence](#lost-append-reply-sequence)", which then runs
+alone; `go test` runs them in
 file order: `TestCephRBDBaseIntegration`, then `TestCephRBDCloneIntegration`,
 then `TestCephRBDJournalIntegration`, then
 `TestCephRBDExclusiveLockIntegration`, then `TestCephRBDWriteIntegration`) and
@@ -495,6 +498,31 @@ Each receipt is `rbd-journal-<action>.json` (request ID, plan, journaled
 action, decoded native output, bounded process result). Each action is
 bounded to 240 s. The lock and write drivers' setup actions admit the
 journaling image in the pool.
+
+### Lost-append-reply sequence
+
+Under the exact selector `^TestCephRBDJournalLostAppendReplyIntegration$`
+(see
+[RBD_JOURNAL_LOST_APPEND_VALIDATION.md](RBD_JOURNAL_LOST_APPEND_VALIDATION.md))
+the same control serves a different closed sequence on the same plan, on a
+fixture where no other RBD test has run: `setup`, `observe-locked`,
+`checkpoint`, `observe-recorded`, `replay`. Each sequence refuses the other's
+actions at every position. The driver does nothing new:
+
+- `setup` and `replay` are the actions described above.
+- `observe-locked` and `observe-recorded` are observations only
+  (`read_only: true`): the read-only image open with its locker and watcher
+  lists and whole-image read, the journal header `exec` list, the librados
+  reads of journal objects 0 to 7 and `rbd journal info` and `status`.
+- `checkpoint` is the same observation with `rbd journal inspect --verbose`.
+  It is journaled as a mutation for the reason given for `inspect`.
+
+The driver receives no entry, offset, transaction or timing from the test.
+When each action runs relative to the Go client's lock, append and release is
+the test's decision. Receipts are `rbd-journal-<action>.json` as above. The
+test's own records, `rbd-journal-lost-append-outcome.json` (written when the
+caller learns its outcome) and `rbd-journal-lost-append-results.json`, are on
+the diagnostics allowlist with them.
 
 ## Uncertain outcomes and cleanup
 
