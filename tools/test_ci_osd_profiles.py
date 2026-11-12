@@ -70,9 +70,10 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 1 applied current-manager MGR Tell row, 1 secure row for both MGR Tell cells,
         # 1 applied OSD and PG command row and 1 applied MDS command row,
         # 2 MapVersion connected-MON SIGKILL rows, 2 large ServiceMap rows,
-        # 2 mds-cephfs-heldflock-split-reconnect rows and
-        # 2 mds-cephfs-sharedflock-recovery rows.
-        self.assertEqual(len(self.rows), 100)
+        # 2 mds-cephfs-heldflock-split-reconnect rows,
+        # 2 mds-cephfs-sharedflock-recovery rows and
+        # 2 mds-cephfs-heldflock-split-fragments rows.
+        self.assertEqual(len(self.rows), 102)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
@@ -750,6 +751,15 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.check_exclusive_completion_rows("TestCephMDSCephFSHeldFlockSplitReconnectIntegration", "mds-cephfs-heldflock-split-reconnect")
         # Neither split selector reaches the other acceptance.
         self.assertIsNone(re.compile("^TestCephMDSCephFSMultiReconnectIntegration$").search("TestCephMDSCephFSHeldFlockSplitReconnectIntegration"))
+
+    def test_mds_heldflock_split_fragments_rows_select_only_the_dedicated_acceptance(self):
+        test = "TestCephMDSCephFSHeldFlockSplitFragmentsIntegration"
+        self.check_exclusive_completion_rows(test, "mds-cephfs-heldflock-split-fragments")
+        # None of the three split selectors reaches another acceptance.
+        tests = ("TestCephMDSCephFSMultiReconnectIntegration", "TestCephMDSCephFSHeldFlockSplitReconnectIntegration", test)
+        for selected in tests:
+            selector = re.compile("^" + selected + "$")
+            self.assertEqual([name for name in tests if selector.search(name)], [selected])
 
     def check_exclusive_completion_rows(self, test, group):
         selector_text = "^" + test + "$"
