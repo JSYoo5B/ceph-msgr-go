@@ -84,7 +84,8 @@ var mdsCephFSCompletionRuntimeKinds = map[string]struct {
 
 // mdsCephFSHeldFlockSplitSelector selects the held-FLOCK split reconnect
 // acceptance. Its lock probe, level-15 debug window and per-capability log
-// read are admitted only under this exclusive selector.
+// read are admitted only under this exclusive selector and under the
+// two-fragment selector below.
 const mdsCephFSHeldFlockSplitSelector = "^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$"
 
 // mdsCephFSHeldFlockSplitFragmentsSelector selects the acceptance that holds
