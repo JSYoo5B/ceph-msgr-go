@@ -99,6 +99,8 @@ A held whole-file lock across an owned MDS restart is recorded in
 [MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md), and
 the same lock inside a split reconnect in
 [MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md),
+two locks in a nonfinal and the final fragment of a split reconnect in
+[MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md](MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md),
 and two shared locks of two owners across the restart in
 [MDS_FILELOCK_SHARED_RESTART_VALIDATION.md](MDS_FILELOCK_SHARED_RESTART_VALIDATION.md).
 
