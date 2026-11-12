@@ -69,9 +69,10 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 1 applied exact-name MGR Tell row with a withheld reply,
         # 1 applied current-manager MGR Tell row, 1 secure row for both MGR Tell cells,
         # 1 applied OSD and PG command row and 1 applied MDS command row,
-        # 2 MapVersion connected-MON SIGKILL rows, 2 large ServiceMap rows and
-        # 2 mds-cephfs-heldflock-split-reconnect rows.
-        self.assertEqual(len(self.rows), 98)
+        # 2 MapVersion connected-MON SIGKILL rows, 2 large ServiceMap rows,
+        # 2 mds-cephfs-heldflock-split-reconnect rows and
+        # 2 mds-cephfs-sharedflock-recovery rows.
+        self.assertEqual(len(self.rows), 100)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
@@ -608,7 +609,11 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         })
 
     def test_mds_cephfs_rows_select_only_the_declared_cephfs_tests(self):
-        rows = [row for row in self.rows if row.get("mds_cephfs") == "1"]
+        cephfs = [row for row in self.rows if row.get("mds_cephfs") == "1"]
+        self.assertEqual(len(cephfs), 4)
+        # The shared held-lock recovery rows reuse the metadata fixture opt-in
+        # with their own selector; they are checked separately below.
+        rows = [row for row in cephfs if row["test_run"] != "^TestCephMDSCephFSSharedFlockRecoveryIntegration$"]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSCephFSIntegration", "TestCephMDSCephFSPushIntegration", "TestCephMDSCephFSRecoveryIntegration"}
         self.assertTrue(expected <= self.declared)
@@ -715,6 +720,28 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             ("aes", "aes", "crc", "4", "host", "bluestore"),
             ("aes256k", "aes256k", "secure", "6", "container", "memstore"),
         })
+
+    def test_mds_sharedflock_recovery_rows_select_only_the_dedicated_acceptance(self):
+        test = "TestCephMDSCephFSSharedFlockRecoveryIntegration"
+        selector_text = "^" + test + "$"
+        rows = [row for row in self.rows if row.get("test_run") == selector_text]
+        self.assertEqual(len(rows), 2)
+        catalog = json.loads((ROOT / ".github/scenarios/catalog.json").read_text(encoding="utf-8"))["scenarios"]
+        self.assertEqual({entry["group"] for entry in catalog if entry["params"].get("test_run") == selector_text}, {"mds-cephfs-sharedflock-recovery"})
+        self.assertIn(test, self.declared)
+        observed = set()
+        for row in rows:
+            self.assertEqual((row["mds_cephfs"], row["mds_fresh"], row["osd_profile"], row["osd"], row["osd_replicas"], row["stress"]), ("1", "1", "legacy-v6", "1", "1", ""))
+            selector = re.compile(row["test_run"])
+            self.assertEqual({name for name in self.declared if selector.search(name)}, {test})
+            self.assertIsNone(selector.search(test + "Extended"))
+            self.assertIsNone(selector.search("Prefix" + test))
+            for field in ("mds_commands", "mds_sessions", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "race", "image"):
+                self.assertNotIn(field, row)
+            observed.add(tuple(row.get(field, fallback) for field, fallback in (("key", ""), ("service", ""), ("mode", "secure"), ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
+        self.assertEqual(observed, {("aes", "aes", "crc", "4", "host", "bluestore"), ("aes256k", "aes256k", "secure", "6", "container", "memstore")})
+        # The broad metadata selector does not reach the shared variant.
+        self.assertIsNone(re.compile("^TestCephMDSCephFS(Push|Recovery)?Integration$").search(test))
 
     def test_mds_multi_reconnect_rows_select_only_the_dedicated_acceptance(self):
         self.check_exclusive_completion_rows("TestCephMDSCephFSMultiReconnectIntegration", "mds-cephfs-multi-reconnect")
