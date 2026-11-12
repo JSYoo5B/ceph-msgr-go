@@ -133,6 +133,34 @@ until one owner unlocks. The second shows that the exact GETFILELOCK check
 catches a restored set that kept a different owner, which the native probes
 alone do not distinguish. Each is one run in one profile.
 
+### At `c628a9a0`
+
+Source `c628a9a0` holds the test, fixture, catalog and documentation of this
+change except this section. Each row ran once, in sequence per profile, and
+passed its gate with no failed, skipped or missing selected test.
+
+| Row | Parent | Lock leaf | Restart leaf |
+| --- | --- | --- | --- |
+| `mds-cephfs-sharedflock-recovery`, CRC/AES IPv4 host BlueStore | 98.49 s | 8.24 s | 48.94 s |
+| `mds-cephfs-sharedflock-recovery`, secure/aes256k IPv6 container MemStore | 97.69 s | 8.11 s | 47.94 s |
+
+Both profiles observed the shape of the first runs: four SETFILELOCK
+submissions (two shared acquires, two unlocks) with result 0, the 90-byte
+two-record blob, native errno 0 and EAGAIN before and after the restart on a
+new MDS GID, EAGAIN after the first unlock and errno 0 after the second,
+GETFILELOCK naming the first owner before and after the restart and the
+second owner after the first unlock, neither acquire TID in the historic-ops
+snapshot, and native version 1 throughout.
+
+The rows that share the touched recipe and helpers passed at the same source:
+both `mds-cephfs` rows (three selected tests each; the exclusive held-lock
+leaves `held_flock_acquired_before_restart` and `mds_restart_reconnect_replay`
+took 5.53 s and 40.49 s, and 5.31 s and 40.65 s) and both
+`mds-cephfs-heldflock-split-reconnect` rows (51.22 s and 50.61 s).
+
+No run of this acceptance failed other than the two intended control runs.
+Exact-head CI is separate from these runs.
+
 ## Limits
 
 - Two shared whole-file FLOCK locks of two owners of one client session on
