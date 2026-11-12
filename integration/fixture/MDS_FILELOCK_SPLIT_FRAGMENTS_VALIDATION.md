@@ -234,6 +234,55 @@ and 226.53 s).
 
 No run of this acceptance failed other than the two intended controls.
 
+### At `747b2c1ac1a7a80ceab9ed3ea2580af8daa73b44`
+
+Source `747b2c1ac1a7a80ceab9ed3ea2580af8daa73b44` changes how the test records
+a probe attempt and a fragment index (see "Record of probe attempts and
+fragment indexes" below). The fixture, the catalog and the passing path of the
+checks are unchanged. The four rows of the two held-lock split groups ran once
+each from a `git archive` of that commit on Linux amd64 hosts with Docker
+29.9.1 and passed their gates with no failed, skipped or missing selected
+test.
+
+| Row | Gate | Parent | Lock leaf | Reconnect leaf | Restored-lock leaf |
+| --- | --- | --- | --- | --- | --- |
+| `mds-cephfs-heldflock-split-fragments`, CRC/AES IPv4 host BlueStore | passed | 64.65 s | 5.30 s | 25.83 s | 18.81 s |
+| `mds-cephfs-heldflock-split-fragments`, secure/aes256k IPv6 container MemStore | passed | 64.91 s | 5.30 s | 26.15 s | 19.11 s |
+| `mds-cephfs-heldflock-split-reconnect`, CRC/AES IPv4 host BlueStore | passed | 51.81 s | 2.70 s | 26.42 s | 8.10 s |
+| `mds-cephfs-heldflock-split-reconnect`, secure/aes256k IPv6 container MemStore | passed | 51.50 s | 2.70 s | 26.75 s | 8.10 s |
+
+The `mds-cephfs-multi-reconnect` and `mds-cephfs-completion` rows were not
+rerun at this source: the commit touches only the held-lock record and its
+two log lines in the shared runner. The absent-receipt and failed-attribution
+paths have daemon-free coverage only. No live run produced them.
+`TestCephFSHeldFlockSplitFragmentsChecks` covers a failed control request, a
+receipt without its FLOCK payload, a refused receipt that keeps its errno, and
+a failed attribution of the final lock after the nonfinal one was assigned.
+
+## Record of probe attempts and fragment indexes
+
+- Each entry of `ProbeBefore` and `ProbeAfter` is one probe attempt with an
+  optional `Receipt` and an `Error` string. A control request that failed, or
+  a receipt without its FLOCK payload, is recorded with `Receipt: null` and is
+  reported as `absent` in the errno list of a failure message. It is not
+  errno 0. A receipt that disagrees with the expected lock state keeps the
+  errno it reported, with the disagreement in `Error`.
+- The errno pairs of the two control runs at the first-run source were
+  printed by code that rendered an attempt without a receipt as 0 as well.
+  Both controls were therefore repeated at this source, with the same
+  uncommitted insertion applied to the uploaded tree. Clearing the blob of
+  the last file (CRC/AES IPv4 host BlueStore) failed the gate in
+  `held_flock_restored_then_released` with errnos `[11 0]` and a real receipt
+  for the final lock file (`Errno:0 Acquired:true Unlocked:true` on inode
+  `0x10000000020`). Clearing the blob of the first file (secure/aes256k IPv6
+  container MemStore) failed in the same leaf with errnos `[0 11]` and a real
+  receipt for the nonfinal lock file (`Errno:0 Acquired:true Unlocked:true`
+  on inode `0x10000000001`). Neither failure reported an absent result. Each
+  control is again one run in one profile.
+- `Fragment` of a lock is `null` until that lock's attribution succeeded. A
+  record written after a failed attribution therefore does not name fragment
+  0 for a lock that was never assigned a fragment.
+
 ## Changes to the merged single-lock cell
 
 `TestCephMDSCephFSHeldFlockSplitReconnectIntegration` keeps its selector,
