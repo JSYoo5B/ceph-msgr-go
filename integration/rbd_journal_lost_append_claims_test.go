@@ -59,7 +59,7 @@ func rbdJournalLostAppendSample(mode string) *rbdJournalLostAppendRecord {
 		r.Gate.Held = &testcluster.OSDHeldReply{Connection: 1, Type: msgr.OSDOpReplyMessage, Transaction: 9, Sequence: 11, FrameBytes: 180}
 		r.Barrier = "held reply"
 	} else {
-		r.Gate.WithheldBytesSeen, r.Barrier, r.BarrierPolls = flag(true), "polled object size", n(2)
+		r.Gate.WithheldBytesSeen, r.WithheldBeforeCancel, r.Barrier, r.BarrierPolls = flag(true), flag(true), "polled object size", n(2)
 	}
 	return r
 }
@@ -198,6 +198,7 @@ func TestRBDJournalLostAppendClaims(t *testing.T) {
 		"held frame is not an OSD reply":    func(r *rbdJournalLostAppendRecord) { r.Gate.Held.Type = msgr.OSDOpMessage },
 		"bound to another transaction":      func(r *rbdJournalLostAppendRecord) { r.Gate.Transaction = u(8) },
 		"barrier was a poll":                func(r *rbdJournalLostAppendRecord) { r.Barrier, r.BarrierPolls = "polled object size", n(1) },
+		"claims an undecoded withheld flag": func(r *rbdJournalLostAppendRecord) { r.WithheldBeforeCancel = flag(true) },
 	}
 	undecoded := map[string]change{
 		"claims a transaction": func(r *rbdJournalLostAppendRecord) { r.Gate.Transaction = u(9) },
@@ -207,6 +208,16 @@ func TestRBDJournalLostAppendClaims(t *testing.T) {
 		"claims a marked-request count": func(r *rbdJournalLostAppendRecord) { r.Gate.MarkedRequests = n(1) },
 		"no barrier poll":               func(r *rbdJournalLostAppendRecord) { r.BarrierPolls = nil },
 		"claims the held-reply barrier": func(r *rbdJournalLostAppendRecord) { r.Barrier = "held reply" },
+		// The gate bound to the write but intercepted no received byte: the
+		// flag is present and false, before the cancellation and finally.
+		"nothing withheld": func(r *rbdJournalLostAppendRecord) {
+			r.Gate.WithheldBytesSeen, r.WithheldBeforeCancel = flag(false), flag(false)
+		},
+		// Bytes were first intercepted after the wait was canceled.
+		"withheld only after the cancellation":           func(r *rbdJournalLostAppendRecord) { r.WithheldBeforeCancel = flag(false) },
+		"withheld flag not read before the cancellation": func(r *rbdJournalLostAppendRecord) { r.WithheldBeforeCancel = nil },
+		"final gate state lost the withheld flag":        func(r *rbdJournalLostAppendRecord) { r.Gate.WithheldBytesSeen = flag(false) },
+		"final gate state has no withheld flag":          func(r *rbdJournalLostAppendRecord) { r.Gate.WithheldBytesSeen = nil },
 	}
 	for mode, specific := range map[string]map[string]change{"crc": decoded, "secure": undecoded} {
 		for _, set := range []map[string]change{both, specific} {

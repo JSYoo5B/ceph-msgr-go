@@ -55,6 +55,11 @@ const rbdJournalLostAppendThreshold = 4096
 // timeout in seconds, librbd's default.
 const rbdJournalLostAppendWatchTimeout = 30
 
+// rbdJournalLostAppendWithheldWait bounds the wait, after the append is seen
+// applied, for the undecoded gate to intercept received bytes on the bound
+// connection. It stays well inside the watch gap the test allows.
+const rbdJournalLostAppendWithheldWait = 10 * time.Second
+
 // rbdJournalLostAppendOrder is the order in which the steps must complete.
 var rbdJournalLostAppendOrder = []string{"setup", "lock", "tag_create", "observe-locked", "append_submitted", "barrier", "checkpoint", "outcome_recorded",
 	"observe-recorded", "blocked_connection_closed", "watch_reconnected", "unlock", "unwatch", "replay"}
@@ -150,13 +155,20 @@ type rbdJournalLostAppendRecord struct {
 	Barrier                string
 	BarrierPolls           *int
 	PendingAfterCheckpoint *bool
-	Order                  []string
-	Views                  map[string]*rbdJournalLostAppendView
-	ExpectedHeadBefore     string
-	ExpectedHeadAfter      string
-	ExpectedCommitAfter    []rbdJournalPosition
-	NativeActions          []rbdNativeActionEvidence
-	InspectShutdownLines   int
+	// WithheldBeforeCancel is the undecoded gate's withheld-bytes flag as it
+	// was read while the append was still pending, directly before the wait
+	// was canceled. It is absent in decoded mode, where the held frame is the
+	// evidence. The final gate state cannot stand in for it: bytes that the
+	// gate first intercepts during the handoff do not show that anything was
+	// withheld from the pending call.
+	WithheldBeforeCancel *bool
+	Order                []string
+	Views                map[string]*rbdJournalLostAppendView
+	ExpectedHeadBefore   string
+	ExpectedHeadAfter    string
+	ExpectedCommitAfter  []rbdJournalPosition
+	NativeActions        []rbdNativeActionEvidence
+	InspectShutdownLines int
 	// ClaimsStage is the last stage at which the claims were judged (empty
 	// when the run ended before the checkpoint); Problems are that stage's.
 	ClaimsStage string
@@ -294,14 +306,20 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	case g.Decoded:
 		if g.MarkedRequests == nil || *g.MarkedRequests != 1 || !slices.Equal(g.MarkedConnections, []int{1}) || g.Transaction == nil || *g.Transaction != o.Submission.Transaction ||
 			g.Held == nil || g.Held.Connection != 1 || g.Held.Type != msgr.OSDOpReplyMessage || g.Held.Transaction != o.Submission.Transaction || g.Held.Sequence == 0 || g.Held.FrameBytes <= 0 ||
-			g.WithheldBytesSeen != nil || r.Barrier != "held reply" || r.BarrierPolls != nil {
+			g.WithheldBytesSeen != nil || r.WithheldBeforeCancel != nil || r.Barrier != "held reply" || r.BarrierPolls != nil {
 			fail("transmission: the decoded gate did not see one marked request and hold the reply of its transaction %d: gate %s", o.Submission.Transaction, text(g))
 		}
 	default:
 		// An undecoded gate cannot name a frame; a record that does is wrong.
-		if g.MarkedRequests != nil || g.MarkedConnections != nil || g.Transaction != nil || g.Sequence != nil || g.Held != nil || g.WithheldBytesSeen == nil ||
+		if g.MarkedRequests != nil || g.MarkedConnections != nil || g.Transaction != nil || g.Sequence != nil || g.Held != nil ||
 			r.Barrier != "polled object size" || r.BarrierPolls == nil || *r.BarrierPolls < 1 {
 			fail("transmission: the undecoded gate record attributes a frame, or its barrier is missing: gate %s, barrier %q", text(g), r.Barrier)
+		}
+		// The injected loss itself: received bytes were intercepted on the
+		// bound connection while the call was pending. A flag that is
+		// present but false means no post-bind read was intercepted.
+		if g.WithheldBytesSeen == nil || !*g.WithheldBytesSeen || r.WithheldBeforeCancel == nil || !*r.WithheldBeforeCancel {
+			fail("transmission: the undecoded gate did not withhold received bytes before the wait was canceled: at cancellation %s, finally %s", text(r.WithheldBeforeCancel), text(g.WithheldBytesSeen))
 		}
 	}
 
@@ -884,6 +902,22 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 			}
 		}
 		record.Barrier = "polled object size"
+		// The size shows the application, not the injection. Wait, while
+		// the call is still pending, until the gate has intercepted received
+		// bytes on the bound connection. Which frame they belong to stays
+		// unknown.
+		withheld := time.NewTimer(rbdJournalLostAppendWithheldWait)
+		defer withheld.Stop()
+		select {
+		case <-gate.Held():
+		case got := <-finished:
+			keep("journal_append", targetRoute, appendRequest, got.reply, got.err)
+			t.Fatal("the append completed although its reply must be withheld", got.reply.Code, got.err)
+		case <-withheld.C:
+			t.Fatal("the append was applied but the gate intercepted no received byte on its connection within ", rbdJournalLostAppendWithheldWait)
+		case <-ctx.Done():
+			t.Fatal("the gate intercepted no received byte on the append's connection", ctx.Err())
+		}
 	}
 	done("barrier")
 
@@ -900,6 +934,17 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 	}
 	record.PendingAfterCheckpoint = &pending
 	judge(t, "checkpoint")
+
+	// The undecoded gate's flag is read while the call is still pending: a
+	// read intercepted later, during the handoff, would not establish the
+	// injection.
+	if mode != "crc" {
+		atCancel := gate.State().WithheldBytesSeen
+		if atCancel == nil || !*atCancel {
+			t.Fatal("the undecoded gate withheld no received byte before the wait was canceled")
+		}
+		record.WithheldBeforeCancel = atCancel
+	}
 
 	// Outcome: cancel only the local wait and record what the caller was
 	// told, before anything else is done.
