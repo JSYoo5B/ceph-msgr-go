@@ -87,11 +87,24 @@ var mdsCephFSCompletionRuntimeKinds = map[string]struct {
 // read are admitted only under this exclusive selector.
 const mdsCephFSHeldFlockSplitSelector = "^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$"
 
+// mdsCephFSHeldFlockSplitFragmentsSelector selects the acceptance that holds
+// one lock in a nonfinal and one in the final fragment of the split
+// reconnect. It admits the actions of the single-lock selector and, alone,
+// the lock probe of the last split file.
+const mdsCephFSHeldFlockSplitFragmentsSelector = "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$"
+
 var mdsCephFSHeldFlockSplitActions = []string{"split-flock-ex-nb", "debug-caps-on", "debug-caps-off", "reconnect-cap-log"}
 
+// mdsCephFSHeldFlockSplitFragmentsActions are admitted under the
+// two-fragment selector only.
+var mdsCephFSHeldFlockSplitFragmentsActions = []string{"split-final-flock-ex-nb"}
+
 func admitMDSCephFSHeldFlockSplit(action, testRun string) error {
-	if slices.Contains(mdsCephFSHeldFlockSplitActions, action) && testRun != mdsCephFSHeldFlockSplitSelector {
+	if slices.Contains(mdsCephFSHeldFlockSplitActions, action) && testRun != mdsCephFSHeldFlockSplitSelector && testRun != mdsCephFSHeldFlockSplitFragmentsSelector {
 		return errors.New("MDS CephFS completion held-lock split action requires its exclusive selector")
+	}
+	if slices.Contains(mdsCephFSHeldFlockSplitFragmentsActions, action) && testRun != mdsCephFSHeldFlockSplitFragmentsSelector {
+		return errors.New("MDS CephFS completion final-fragment lock probe requires its exclusive selector")
 	}
 	return nil
 }
@@ -152,14 +165,29 @@ func mdsCephFSMultiReconnectNames() []string {
 	return names
 }
 
-// splitLockFile is the one predetermined split file the closed native lock
-// probe admits. It is the first one created, so its capability sorts into a
-// nonfinal fragment of the split reconnect.
+// splitLockFile is the predetermined split file the closed native lock probe
+// split-flock-ex-nb admits. It is the first one created, so its capability
+// sorts into a nonfinal fragment of the split reconnect.
 func (p mdsCephFSCompletionPlan) splitLockFile() string {
 	if len(p.SplitFiles) == 0 {
 		return ""
 	}
 	return p.SplitFiles[0]
+}
+
+// splitFinalLockFile is the predetermined split file the closed native lock
+// probe split-final-flock-ex-nb admits. It is the last one created, so its
+// capability sorts into the final fragment of the split reconnect.
+func (p mdsCephFSCompletionPlan) splitFinalLockFile() string {
+	if len(p.SplitFiles) < 2 {
+		return ""
+	}
+	return p.SplitFiles[len(p.SplitFiles)-1]
+}
+
+// splitLockTargets maps each closed lock probe action to its one file.
+func (p mdsCephFSCompletionPlan) splitLockTargets() map[string]string {
+	return map[string]string{"split-flock-ex-nb": p.splitLockFile(), "split-final-flock-ex-nb": p.splitFinalLockFile()}
 }
 
 // targets lists every closed stat target.
@@ -198,7 +226,7 @@ func mdsCephFSCompletionNativeCaps(fsName string) ceph.ClientCaps {
 
 // One fixed native LibCephFS driver. It admits the owned directory, its
 // children and grandchildren, and the one planned snapshot of `snap`. The
-// nonblocking exclusive FLOCK probe names its one split file itself.
+// nonblocking exclusive FLOCK probe names its two split files itself.
 // Source: pybind/cephfs/cephfs.pyx at mdsFreshSource; independent driver.
 const mdsCephFSCompletionNativePython = `
 import cephfs, fcntl, json, os, sys, time
@@ -243,7 +271,7 @@ try:
     out['native_global_id'] = fs.get_instance_id()
     if action == 'stat' and not extra:
         out['stat'] = stat(path)
-    elif action == 'flock-ex-nb' and path == '/' + directory + '/split-000-' + 's' * 215 and not extra:
+    elif action == 'flock-ex-nb' and path in ('/' + directory + '/split-000-' + 's' * 215, '/' + directory + '/split-031-' + 's' * 215) and not extra:
         owner = 0x8000000063657068
         probe = {'owner': owner, 'errno': 0, 'acquired': False, 'unlocked': False,
                  'before': flock_state()}
@@ -327,9 +355,15 @@ func decodeMDSCephFSCompletionNative(action, path string, plan mdsCephFSCompleti
 	case "flock-ex-nb":
 		// The probed file is an empty split file that nothing writes. Its
 		// native version is recorded and compared, not required to be nonzero.
-		lock, err := plan.path(plan.splitLockFile())
-		if probe := result.Flock; probe != nil && err == nil {
-			ok = path == lock && probe.Owner == mdsCephFSFlockOwner && probe.ElapsedNS > 0 &&
+		// The caller passes the path of the action's own file; here it must
+		// be one of the two predetermined lock files.
+		admitted := false
+		for _, file := range plan.splitLockTargets() {
+			lock, err := plan.path(file)
+			admitted = admitted || err == nil && file != "" && path == lock
+		}
+		if probe := result.Flock; probe != nil && admitted {
+			ok = probe.Owner == mdsCephFSFlockOwner && probe.ElapsedNS > 0 &&
 				(probe.Errno == 0 && probe.Acquired && probe.Unlocked || probe.Errno == 11 && !probe.Acquired && !probe.Unlocked) &&
 				probe.Before == probe.After && probe.Before.Ino != 0 && probe.Before.Size == 0 && probe.Before.DataHex == "" &&
 				result.Stat == nil && result.SourceStat == nil && result.Statfs == nil && result.TimingsNS == nil &&
@@ -686,7 +720,7 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 	case "list", "write-fenced", "snapshot-create", "snapshot-remove", "mds-log-mark", "config-read", "flush-journal", "force-readonly",
 		"log-pause", "log-resume", "early-reply-off", "early-reply-on", "blackhole-on", "blackhole-off", "debug-on", "debug-off",
 		"deny-on", "deny-off", "window-on", "window-off", "restart-arm", "restart-fire", "restart-status", "restart-adopt",
-		"debug-caps-on", "debug-caps-off", "split-flock-ex-nb":
+		"debug-caps-on", "debug-caps-off", "split-flock-ex-nb", "split-final-flock-ex-nb":
 		if len(args) != 0 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion action takes no caller argument")
 		}
@@ -697,9 +731,11 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 			action.target = "fenced"
 		case "snapshot-create", "snapshot-remove":
 			action.target = "snapshot"
-		case "split-flock-ex-nb":
+		case "split-flock-ex-nb", "split-final-flock-ex-nb":
 			// The lock target is fixed by the plan, never chosen by the caller.
-			action.target = plan.splitLockFile()
+			if action.target = plan.splitLockTargets()[action.name]; action.target == "" {
+				return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion plan has no lock file for this probe")
+			}
 		}
 	default:
 		return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion action is not admitted")
@@ -1174,7 +1210,7 @@ func (c *fixtureCluster) mdsCephFSCompletionAct(ctx context.Context, id int64, a
 		}
 		result.Ops, err = parseMDSCephFSHistoricOps(data, action.gid)
 		return err
-	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove", "split-flock-ex-nb":
+	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove", "split-flock-ex-nb", "split-final-flock-ex-nb":
 		return c.mdsCephFSCompletionNative(ctx, id, action, result)
 	case "flush-journal":
 		data, err := c.mdsCephFSCompletionAsok(ctx, 60*time.Second, "flush", "journal")
@@ -1468,16 +1504,20 @@ func (c *fixtureCluster) mdsCephFSCompletionNative(ctx context.Context, id int64
 	if err := x.quiesced(x.current.GID); err != nil {
 		return err
 	}
+	// The target of a lock probe, and so its path, is the action's own file.
+	if file, probe := x.plan.splitLockTargets()[action.name]; probe && (file == "" || action.target != file) {
+		return errors.New("MDS CephFS completion lock probe target is not the action's file")
+	}
 	path, err := x.plan.path(action.target)
 	if err != nil {
 		return err
 	}
 	native, extra, kind, once := action.name, []string(nil), "", true
 	switch action.name {
-	case "split-flock-ex-nb":
+	case "split-flock-ex-nb", "split-final-flock-ex-nb":
 		// A probe may take a transient lock. Each request is journaled before
 		// it runs and an uncertain native process is never replayed.
-		native, kind, once = "flock-ex-nb", "native-split-flock-ex-nb", false
+		native, kind, once = "flock-ex-nb", "native-"+action.name, false
 	case "write-fenced":
 		native, extra, kind = "create-write", []string{x.plan.FencedPayloadHex}, "native-create-write"
 	case "snapshot-create":
