@@ -352,6 +352,38 @@ func TestCephFSSharedFlockRecipeBlobAndChecks(t *testing.T) {
 			t.Fatal("wrong SETFILELOCK submissions accepted:", name)
 		}
 	}
+	// The common request ledger: the four hooked calls among other requests,
+	// and a SETFILELOCK that was refused by Submit (no TID).
+	ledger := []*recoveryRequestEvidence{{Op: cephmsgr.MDSOpCreate, Transaction: 3}}
+	for _, c := range h.Calls {
+		ledger = append(ledger, &recoveryRequestEvidence{Op: cephmsgr.MDSOpSetFileLock, Transaction: c.TID}, &recoveryRequestEvidence{Op: cephmsgr.MDSOpGetFileLock, Transaction: c.TID + 100})
+	}
+	ledger = append(ledger, &recoveryRequestEvidence{Op: cephmsgr.MDSOpSetFileLock}, &recoveryRequestEvidence{Op: cephmsgr.MDSOpCreate, Transaction: 3, ResubmittedFrom: 3})
+	if err := heldFlockLedgerMatches(ledger, h.Calls); err != nil {
+		t.Fatal(err)
+	}
+	for name, edited := range map[string][]*recoveryRequestEvidence{
+		// An extra accepted lock request outside the hooked call sites, as
+		// a plain submitFirst would record it.
+		"extra submission": slices.Insert(slices.Clone(ledger), 4, &recoveryRequestEvidence{Op: cephmsgr.MDSOpSetFileLock, Transaction: 77}),
+		"missing call": slices.DeleteFunc(slices.Clone(ledger), func(r *recoveryRequestEvidence) bool {
+			return r.Op == cephmsgr.MDSOpSetFileLock && r.Transaction == h.Calls[1].TID
+		}),
+		"other TID": func() []*recoveryRequestEvidence {
+			c := slices.Clone(ledger)
+			c[1] = &recoveryRequestEvidence{Op: cephmsgr.MDSOpSetFileLock, Transaction: 78}
+			return c
+		}(),
+		"reordered": func() []*recoveryRequestEvidence {
+			c := slices.Clone(ledger)
+			c[1], c[3] = c[3], c[1]
+			return c
+		}(),
+	} {
+		if heldFlockLedgerMatches(edited, h.Calls) == nil {
+			t.Fatal("request ledger with wrong SETFILELOCK submissions accepted:", name)
+		}
+	}
 	var failed heldFlockEvidence
 	failed.acceptFlock("flock-shared-acquire-owner-0", locks[0].Owner, cephFlockShared)(7)
 	failed.settleFlock(cephmsgr.MDSReply{}, errors.New("lost"))
@@ -401,7 +433,10 @@ type heldFlockEvidence struct {
 	// the one bounded dump_historic_ops snapshot read right after adoption.
 	// False does not show that the MDS never received such a request: an
 	// entry can age out of that snapshot. The no-second-acquisition claim
-	// rests on Calls and the empty reconnect resubmissions.
+	// rests on Calls, on the common request ledger holding no other accepted
+	// SETFILELOCK (heldFlockLedgerMatches), and on the reconnect
+	// resubmissions being only the recipe's replayed and unanswered creates,
+	// none of them a lock request.
 	AcquireTIDInHistoricOps *bool
 }
 
@@ -430,6 +465,28 @@ func heldFlockCallsExact(calls []heldFlockCall, locks []cephfsFilelock) error {
 		if c.Owner != l.Owner || c.Type != want || c.TID == 0 || c.Outcome != "reply result 0" {
 			return fmt.Errorf("SETFILELOCK submission %d differs: %+v", i, c)
 		}
+	}
+	return nil
+}
+
+// heldFlockLedgerMatches checks the common request ledger of the recovery
+// recipe, which records every request the recipe submits, against the
+// held-lock calls. Every accepted SETFILELOCK in it (a nonzero TID) must be
+// one of calls, with the same TID and in the same order, so a lock request
+// submitted outside the two hooked call sites is refused.
+func heldFlockLedgerMatches(requests []*recoveryRequestEvidence, calls []heldFlockCall) error {
+	var tids []uint64
+	for _, r := range requests {
+		if r.Op == cephmsgr.MDSOpSetFileLock && r.Transaction != 0 {
+			tids = append(tids, r.Transaction)
+		}
+	}
+	want := make([]uint64, len(calls))
+	for i, c := range calls {
+		want[i] = c.TID
+	}
+	if !slices.Equal(tids, want) {
+		return fmt.Errorf("accepted SETFILELOCK TIDs in the request ledger %v differ from the held-lock calls %v", tids, want)
 	}
 	return nil
 }

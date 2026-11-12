@@ -2027,6 +2027,11 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		if err := heldFlockCallsExact(hf.Calls, hf.Locks); err != nil || hf.SetFileLockSubmissions != len(hf.Calls) {
 			t.Fatal("application SETFILELOCK submissions differ from one acquire before and one unlock after the restart per owner", err, hf.Calls)
 		}
+		// The hooks record only the expected call sites; the common ledger
+		// holds every request the recipe submitted.
+		if err := heldFlockLedgerMatches(requests, hf.Calls); err != nil {
+			t.Fatal("a SETFILELOCK was submitted outside the held-lock calls:", err)
+		}
 		if _, _, err := agentR2.close(hf.Ino, cephFileModeRDWR); err != nil {
 			t.Fatal("close held-lock handle", err)
 		}
