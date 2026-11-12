@@ -156,7 +156,7 @@ out the append on the secure row.
 | `observe-locked` (native) | Read-only observation | The lock is the subject's with its cookie and watch; the new tag exists with that predecessor; every journal object equals `setup`; image and image client commit position unchanged |
 | Control read | The subject reads journal object 0 (STAT and READ) on the gated connection | The bytes equal the native read; the reply passed the gate; the subject has written nothing of 4096 bytes or more |
 | Append | The gate is armed. `[journal.append(2^24, entry)]` is submitted once from a goroutine | The gate binds to a write on the subject's first connection |
-| Barrier | CRC: the gate holds the reply frame of the bound transaction. Secure: the observer reads the object's size until it is the earlier size plus the entry; any other size, or the end of the caller, fails at once | The caller is still pending |
+| Barrier | CRC: the gate holds the reply frame of the bound transaction. Secure: the observer reads the object's size until it is the earlier size plus the entry; any other size, or the end of the caller, fails at once. Then the test waits, for at most 10 s, until the gate has intercepted received bytes on the bound connection | The caller is still pending |
 | `checkpoint` (native) | Observation with `rbd journal inspect` | Application claim, below |
 | Cancel and record | The local wait is canceled. The result and the entry's identity are written to `rbd-journal-lost-append-outcome.json` | `OutcomeUnknownError` with cause `context.Canceled`, the submission's transaction and GlobalID, no reply fields |
 | `observe-recorded` (native) | Read-only observation | Order claim, below |
@@ -207,7 +207,12 @@ subject built.
   CRC only: one written frame carries the marker, on the first connection;
   its transaction equals the submission's; the held frame is a MOSDOpReply
   with that transaction on that connection. Secure only: the record must
-  carry no transaction, no held frame and no marked-request count.
+  carry no transaction, no held frame and no marked-request count, and the
+  gate's withheld-bytes flag must be true both as it was read directly before
+  the wait was canceled (`WithheldBeforeCancel`) and in the final gate state.
+  A flag that is present but false means that no read after the binding was
+  intercepted, so the injection was not observed. A CRC record must not carry
+  `WithheldBeforeCancel`.
 - **Replay** (`replay`). Native librbd acquired the lock. Every journal
   object still has the size and SHA-256 of the checkpoint, so the replay
   appended nothing and the entry was not written twice. `rbd journal inspect`
@@ -244,15 +249,16 @@ These establish no native result.
   before it pass, every byte after it on that connection is withheld, other
   connections keep delivering, and the state never names a frame.
 - `TestRBDJournalLostAppendClaims` (cluster-free, in the Basic CI list): a
-  consistent record passes in both modes and at each stage. 58 contradictory
-  records in CRC mode and 55 in secure mode are refused, each with every other part of the record
+  consistent record passes in both modes and at each stage. 59 contradictory
+  records in CRC mode and 60 in secure mode are refused, each with every other part of the record
   intact: for example an entry that is absent, different or followed by more
   bytes; a changed prefix or neighbour object; an inspection that did not run
   or shows the entry twice; an image, commit position, tag or lock that moved
   before the record; a delivered reply; a cancellation before sending; a
   second caller invocation; a second marked request or large write; a redial
   while silent; a held reply of another transaction; a secure record that
-  names a transaction or frame; a replay that appended, did not apply or did
+  names a transaction or frame; a secure record whose withheld-bytes flag is
+  false or absent before the cancellation or finally; a replay that appended, did not apply or did
   not commit the entry.
 - `integration/fixture/rbd_journal_test.go`: both action sequences are closed
   and ordered and each refuses the other's actions at every position; the
@@ -288,6 +294,23 @@ The two existing RBD rows were run because the journal control's request
 parser, action list and profile admission changed. Each of the four runs
 passed at its first attempt on that commit. Earlier commits of the same
 change were run before it (below).
+
+Source commit `304f0cbd4bc2df493f62b5a52a22e642d44cea5e`, 2026-11-12 (UTC). It
+adds the bounded wait for intercepted bytes on the secure row, the flag read
+before the cancellation and the stricter claims. Both new rows ran once each
+on that commit and passed at the first attempt. The existing RBD rows were not
+rerun: the commit touches only the new test and its claims.
+
+| Scenario ID | Gate | Test duration | Row wall time |
+| --- | --- | --- | --- |
+| `rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply` | pass, 1 expected test, no problem | 1.85 s | 86 s |
+| `rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply` | pass, 1 expected test, no problem | 1.55 s | 84 s |
+
+The secure run therefore passed the new requirement: the test fails before
+the cancellation when the flag is not true at that point. No live run
+produced a secure exchange in which nothing was intercepted; that case has
+daemon-free coverage only. The controls below were not repeated on this
+commit.
 
 ### Observed values
 
