@@ -68,7 +68,11 @@ steps below differ.
    second owner, and the native exclusive probe must acquire and release
    (errno 0). The record must hold exactly two acquires before the restart
    and two unlocks after it, one per owner and in that order, each answered
-   with result 0. No second Go acquisition happens anywhere.
+   with result 0. The accepted SETFILELOCK TIDs in the recipe's common
+   request ledger, which records every request the recipe submits, must be
+   exactly those calls in that order. No second Go acquisition happens
+   anywhere: the reconnect resubmits only the recipe's replayed and
+   unanswered creates, neither of them a lock request.
 5. The cleanup leaf is unchanged: it unlinks the lock file and removes the
    plan directory through Go.
 
@@ -89,7 +93,9 @@ the counts followed by the two single-record layouts, decodes it the way
 `Server::recover_filelocks` reads it, refuses malformed blobs, pins the probe
 sequence of both recipes and refuses wrong GETFILELOCK holders and wrong
 submission records (a second acquisition, a missing or reordered unlock, a
-refused or unawaited reply). `TestCephFSHeldFlockProbeReceiptChecks` refuses
+refused or unawaited reply), and refuses a common request ledger with an
+extra, missing, different or reordered accepted SETFILELOCK, including one
+submitted outside the two hooked call sites. `TestCephFSHeldFlockProbeReceiptChecks` refuses
 wrong probe receipts (wrong action or errno, another mutation record, an
 uncertain native process, the Go client itself, another owner or inode, and a
 file that changed during or between probes).
@@ -133,30 +139,39 @@ until one owner unlocks. The second shows that the exact GETFILELOCK check
 catches a restored set that kept a different owner, which the native probes
 alone do not distinguish. Each is one run in one profile.
 
-### At `c628a9a0`
+### At `eedbdfe`
 
-Source `c628a9a0` holds the test, fixture, catalog and documentation of this
-change except this section. Each row ran once, in sequence per profile, and
-passed its gate with no failed, skipped or missing selected test.
+These runs used source `eedbdfec7455bee5a2a62c0fe17cac6f01c28038`, which adds
+the request-ledger check to the earlier tree; the upload to each host was a
+`git archive` of that commit, and the commit ID was recorded on the host
+before the run. Each row ran once and passed its gate with no failed, skipped
+or missing selected test. Only this section changed after it.
 
 | Row | Parent | Lock leaf | Restart leaf |
 | --- | --- | --- | --- |
-| `mds-cephfs-sharedflock-recovery`, CRC/AES IPv4 host BlueStore | 98.49 s | 8.24 s | 48.94 s |
-| `mds-cephfs-sharedflock-recovery`, secure/aes256k IPv6 container MemStore | 97.69 s | 8.11 s | 47.94 s |
-
-Both profiles observed the shape of the first runs: four SETFILELOCK
-submissions (two shared acquires, two unlocks) with result 0, the 90-byte
-two-record blob, native errno 0 and EAGAIN before and after the restart on a
-new MDS GID, EAGAIN after the first unlock and errno 0 after the second,
-GETFILELOCK naming the first owner before and after the restart and the
-second owner after the first unlock, neither acquire TID in the historic-ops
-snapshot, and native version 1 throughout.
+| `mds-cephfs-sharedflock-recovery`, CRC/AES IPv4 host BlueStore | 99.33 s | 8.24 s | 49.14 s |
+| `mds-cephfs-sharedflock-recovery`, secure/aes256k IPv6 container MemStore | 99.11 s | 8.11 s | 48.87 s |
 
 The rows that share the touched recipe and helpers passed at the same source:
 both `mds-cephfs` rows (three selected tests each; the exclusive held-lock
 leaves `held_flock_acquired_before_restart` and `mds_restart_reconnect_replay`
-took 5.53 s and 40.49 s, and 5.31 s and 40.65 s) and both
-`mds-cephfs-heldflock-split-reconnect` rows (51.22 s and 50.61 s).
+took 5.43 s and 41.46 s, and 5.51 s and 41.59 s) and both
+`mds-cephfs-heldflock-split-reconnect` rows (50.55 s and 53.50 s).
+
+### Earlier author runs
+
+An earlier set of the same six rows was reported passing on the tree of
+`c628a9ace874a4310d46dbb3383bc1afc95a69a0` (the shared rows in 98.49 s and
+97.69 s, the split rows in 51.22 s and 50.61 s). That tree was uploaded as a
+working copy and its run receipts were not retained, so the exact source of
+those runs cannot be re-established. They are superseded by the runs above
+and are not counted as evidence for any commit. The first observed shape
+(four SETFILELOCK submissions with result 0, the 90-byte two-record blob,
+native errno 0 and EAGAIN before and after the restart on a new MDS GID,
+EAGAIN after the first unlock and errno 0 after the second, GETFILELOCK naming
+the first owner before and after the restart and the second owner after the
+first unlock, neither acquire TID in the historic-ops snapshot, native version
+1 throughout) is what the test requires, so the runs above repeat it.
 
 No run of this acceptance failed other than the two intended control runs.
 Exact-head CI is separate from these runs.
