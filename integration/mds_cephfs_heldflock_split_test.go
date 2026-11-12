@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -84,10 +85,14 @@ type splitHeldLock struct {
 	AcquireOutcome, UnlockOutcome string
 	ReconnectBlobHex              string
 	// Fragment is the index of the fragment whose handler reconnected this
-	// inode's capability.
-	Fragment            int
-	ProbeBefore         []heldFlockProbe
-	ProbeAfter          []heldFlockProbe
+	// inode's capability. It is nil until the attribution of this lock
+	// succeeded, so a record written after a failed attribution does not
+	// name the first fragment for a lock that was never assigned one.
+	Fragment *int
+	// ProbeBefore and ProbeAfter hold one entry per probe attempt, also for
+	// an attempt that produced no receipt or a receipt that was refused.
+	ProbeBefore         []splitFlockAttempt
+	ProbeAfter          []splitFlockAttempt
 	GetBefore, GetAfter *cephfsFilelock
 	// AcquireTIDInHistoricOps is whether the original acquire TID appears in
 	// the one bounded dump_historic_ops snapshot read right after adoption.
@@ -243,21 +248,47 @@ func splitHeldFlockAttach(caps []cephmsgr.MDSCapReconnect, h *splitHeldFlock) ([
 	return sent, nil
 }
 
-// splitFlockProbeNative runs the lock's closed nonblocking exclusive FLOCK
-// probe of the completion control, which admits only that one predetermined
-// split file, and checks the receipt. The file is empty and must not change:
-// the baseline is fixed by the lock's first probe.
-func splitFlockProbeNative(ctx context.Context, control *mdsCephFSCompletionControl, held *splitHeldFlock, lock *splitHeldLock, wantErrno int) (heldFlockProbe, error) {
-	r, err := control.request(ctx, lock.Probe)
-	if err != nil {
-		return heldFlockProbe{}, fmt.Errorf("native split flock probe %s: %w", lock.Probe, err)
+// splitFlockAttempt is one attempt of a lock's closed native probe.
+type splitFlockAttempt struct {
+	// Receipt is the native receipt with its FLOCK payload. It is nil when
+	// the control request failed or its receipt carried no payload: that
+	// attempt observed no errno, which is not errno 0.
+	Receipt *heldFlockProbe
+	// Error is the control error, the missing payload or the way the receipt
+	// differs from the expected lock state. It is empty for an accepted
+	// receipt. A refused receipt keeps the errno it reported in Receipt.
+	Error string
+}
+
+// errno renders the observed errno of the attempt, or "absent" when the
+// attempt has no receipt.
+func (a splitFlockAttempt) errno() string {
+	if a.Receipt == nil {
+		return "absent"
+	}
+	return strconv.Itoa(a.Receipt.Probe.Errno)
+}
+
+// splitFlockAttemptOf turns the outcome of one request of the lock's closed
+// nonblocking exclusive FLOCK probe into its attempt record and checks the
+// receipt. The completion control admits only that one predetermined split
+// file. The file is empty and must not change: the baseline is fixed by the
+// lock's first accepted probe.
+func splitFlockAttemptOf(r nativeMDSCephFSCompletionReceipt, requestErr error, held *splitHeldFlock, lock *splitHeldLock, wantErrno int) (splitFlockAttempt, error) {
+	if requestErr != nil {
+		err := fmt.Errorf("native split flock probe %s: %w", lock.Probe, requestErr)
+		return splitFlockAttempt{Error: err.Error()}, err
 	}
 	if r.Native == nil || r.Native.Flock == nil {
-		return heldFlockProbe{}, errors.New("native split flock receipt lacks its probe")
+		err := errors.New("native split flock receipt lacks its probe")
+		return splitFlockAttempt{Error: err.Error()}, err
 	}
-	p := *r.Native.Flock
-	out := heldFlockProbe{Action: r.Action, NativeGlobalID: r.Native.NativeGlobalID, RequestID: r.RequestID, MDSGID: r.MDSGID, MDSNonce: r.MDSNonce, MDSIncarnation: r.MDSIncarnation, Probe: p}
-	return out, checkSplitFlockProbe(r, held, lock, wantErrno)
+	out := splitFlockAttempt{Receipt: &heldFlockProbe{Action: r.Action, NativeGlobalID: r.Native.NativeGlobalID, RequestID: r.RequestID, MDSGID: r.MDSGID, MDSNonce: r.MDSNonce, MDSIncarnation: r.MDSIncarnation, Probe: *r.Native.Flock}}
+	err := checkSplitFlockProbe(r, held, lock, wantErrno)
+	if err != nil {
+		out.Error = err.Error()
+	}
+	return out, err
 }
 
 func checkSplitFlockProbe(r nativeMDSCephFSCompletionReceipt, held *splitHeldFlock, lock *splitHeldLock, wantErrno int) error {
@@ -280,25 +311,33 @@ func checkSplitFlockProbe(r nativeMDSCephFSCompletionReceipt, held *splitHeldFlo
 }
 
 // splitFlockProbeAll probes every lock file once, in order, appends each
-// receipt to that lock's before or after record and returns the errnos and
-// the joined check failures. Every file is probed even when an earlier one
-// differs, so a failure shows the state of all of them.
-func splitFlockProbeAll(ctx context.Context, control *mdsCephFSCompletionControl, held *splitHeldFlock, after bool, want func(*splitHeldLock) int) ([]int, error) {
-	var errnos []int
+// attempt to that lock's before or after record and returns the observed
+// errnos and the joined failures. A file whose attempt has no receipt is
+// reported as "absent", not as an errno. Every file is probed even when an
+// earlier one differs, so a failure shows the state of all of them.
+func splitFlockProbeAll(ctx context.Context, control *mdsCephFSCompletionControl, held *splitHeldFlock, after bool, want func(*splitHeldLock) int) ([]string, error) {
+	var errnos []string
 	var failed error
 	for _, lock := range held.Locks {
-		p, err := splitFlockProbeNative(ctx, control, held, lock, want(lock))
-		if after {
-			lock.ProbeAfter = append(lock.ProbeAfter, p)
-		} else {
-			lock.ProbeBefore = append(lock.ProbeBefore, p)
-		}
-		errnos = append(errnos, p.Probe.Errno)
+		r, requestErr := control.request(ctx, lock.Probe)
+		attempt, err := splitFlockAttemptOf(r, requestErr, held, lock, want(lock))
+		errnos = append(errnos, lock.recordProbe(after, attempt))
 		if err != nil {
 			failed = errors.Join(failed, fmt.Errorf("%s lock file: %w", lock.Name, err))
 		}
 	}
 	return errnos, failed
+}
+
+// recordProbe appends the attempt to the lock's before or after record and
+// returns its rendered errno.
+func (l *splitHeldLock) recordProbe(after bool, attempt splitFlockAttempt) string {
+	if after {
+		l.ProbeAfter = append(l.ProbeAfter, attempt)
+	} else {
+		l.ProbeBefore = append(l.ProbeBefore, attempt)
+	}
+	return attempt.errno()
 }
 
 // splitReconnectFragment is one MClientReconnect as the MDS handled it: its
@@ -391,9 +430,14 @@ func splitHeldFlockFragment(fragments []splitReconnectFragment, handlers int, se
 }
 
 // splitHeldFlockFragments attributes every held lock to its fragment and
-// requires that no two locks share an inode. With a final and a nonfinal
+// requires that no two locks share an inode. A lock's Fragment is set only
+// by its own successful attribution: after a failure the failed lock and
+// every later one stay unassigned. With a final and a nonfinal
 // lock the lock blobs therefore travelled in different messages.
 func splitHeldFlockFragments(h *splitHeldFlock, handlers int) error {
+	for _, l := range h.Locks {
+		l.Fragment = nil
+	}
 	seen := map[uint64]bool{}
 	for _, l := range h.Locks {
 		if seen[l.Ino] {
@@ -404,7 +448,7 @@ func splitHeldFlockFragments(h *splitHeldFlock, handlers int) error {
 		if err != nil {
 			return fmt.Errorf("%s lock: %w", l.Name, err)
 		}
-		l.Fragment = at
+		l.Fragment = &at
 	}
 	return nil
 }
@@ -633,14 +677,31 @@ func TestCephFSHeldFlockSplitFragmentsChecks(t *testing.T) {
 		return f
 	}
 	h.SentInodes, h.Fragments = sent, layout(nil)
-	if err := splitHeldFlockFragments(h, 2); err != nil || h.Locks[0].Fragment != 0 || h.Locks[1].Fragment != 1 ||
-		!h.Fragments[h.Locks[0].Fragment].More || h.Fragments[h.Locks[1].Fragment].More {
+	if h.Locks[0].Fragment != nil || h.Locks[1].Fragment != nil {
+		t.Fatal("a lock names a fragment before its attribution")
+	}
+	fragmentIs := func(l *splitHeldLock, want int) bool { return l.Fragment != nil && *l.Fragment == want }
+	if err := splitHeldFlockFragments(h, 2); err != nil || !fragmentIs(h.Locks[0], 0) || !fragmentIs(h.Locks[1], 1) ||
+		!h.Fragments[*h.Locks[0].Fragment].More || h.Fragments[*h.Locks[1].Fragment].More {
 		t.Fatal("the two locked inodes were not attributed to a nonfinal and the final fragment", err)
 	}
 	three := []splitReconnectFragment{{More: true, Inodes: append([]uint64{1, dir}, inodes(first, first+9)...)}, {More: true, Inodes: inodes(first+10, cut)}, {Inodes: inodes(cut+1, last)}}
 	h.Fragments = three
-	if err := splitHeldFlockFragments(h, 3); err != nil || h.Locks[0].Fragment != 0 || h.Locks[1].Fragment != 2 {
+	if err := splitHeldFlockFragments(h, 3); err != nil || !fragmentIs(h.Locks[0], 0) || !fragmentIs(h.Locks[1], 2) {
 		t.Fatal("attribution over three fragments differs", err)
+	}
+	// A failed attribution of the final lock leaves it unassigned in the
+	// persisted record, distinct from the nonfinal lock's valid fragment 0,
+	// and a later failure of the first lock clears the earlier assignment.
+	h.Fragments = layout(func(f []splitReconnectFragment) { f[1].Inodes = f[1].Inodes[:len(f[1].Inodes)-1] })
+	if err := splitHeldFlockFragments(h, 2); err == nil || !fragmentIs(h.Locks[0], 0) || h.Locks[1].Fragment != nil {
+		t.Fatal("a failed attribution of the final lock assigned it a fragment or lost the nonfinal one", err)
+	}
+	if raw, err := json.Marshal(h.Locks); err != nil || strings.Count(string(raw), `"Fragment":0`) != 1 || strings.Count(string(raw), `"Fragment":null`) != 1 {
+		t.Fatal("the persisted record does not keep the unattributed lock apart from fragment 0", err, string(raw))
+	}
+	if err := splitHeldFlockFragments(h, 3); err == nil || h.Locks[0].Fragment != nil || h.Locks[1].Fragment != nil {
+		t.Fatal("a refused exchange kept an earlier fragment assignment", err)
 	}
 	for name, tc := range map[string]struct {
 		fragments []splitReconnectFragment
@@ -690,6 +751,34 @@ func TestCephFSHeldFlockSplitFragmentsChecks(t *testing.T) {
 	}
 	if cross.Locks[0].baseline != nil || cross.Locks[1].baseline != nil {
 		t.Fatal("a refused receipt fixed a baseline")
+	}
+
+	// Probe attempts: a lost control request and a receipt without a FLOCK
+	// payload are recorded as absent, a refused receipt keeps its errno.
+	attempts := fresh()
+	nonfinal, final := attempts.Locks[0], attempts.Locks[1]
+	ok, err := splitFlockAttemptOf(splitFlockTestReceipt(attempts, nonfinal, 11, nil), nil, attempts, nonfinal, 11)
+	if err != nil || ok.Receipt == nil || ok.Error != "" || nonfinal.recordProbe(true, ok) != "11" {
+		t.Fatal("an accepted receipt was not recorded with its errno", err, ok)
+	}
+	lost, err := splitFlockAttemptOf(nativeMDSCephFSCompletionReceipt{}, errors.New("controller gone"), attempts, final, 11)
+	if err == nil || lost.Receipt != nil || !strings.Contains(lost.Error, "controller gone") || final.recordProbe(true, lost) != "absent" {
+		t.Fatal("a failed control request was recorded as a probe result", err, lost)
+	}
+	bare := splitFlockTestReceipt(attempts, final, 11, nil)
+	bare.Native.Flock = nil
+	empty, err := splitFlockAttemptOf(bare, nil, attempts, final, 11)
+	if err == nil || empty.Receipt != nil || empty.Error == "" || final.recordProbe(true, empty) != "absent" {
+		t.Fatal("a receipt without its FLOCK payload was recorded as a probe result", err, empty)
+	}
+	// The dropped-final-blob outcome: a real receipt that acquired the file.
+	dropped, err := splitFlockAttemptOf(splitFlockTestReceipt(attempts, final, 0, nil), nil, attempts, final, 11)
+	if err == nil || dropped.Receipt == nil || dropped.Receipt.Probe.Errno != 0 || dropped.Error == "" || final.recordProbe(true, dropped) != "0" {
+		t.Fatal("a receipt that disagrees with the expected lock state lost its errno", err, dropped)
+	}
+	raw, err := json.Marshal(final.ProbeAfter)
+	if err != nil || len(final.ProbeAfter) != 3 || len(nonfinal.ProbeAfter) != 1 || strings.Count(string(raw), `"Receipt":null`) != 2 || strings.Count(string(raw), `"errno":0`) != 1 {
+		t.Fatal("the persisted attempts do not keep the absent results apart from errno 0", err, string(raw))
 	}
 
 	// Submission ledger: acquire, acquire, unlock, unlock among the other

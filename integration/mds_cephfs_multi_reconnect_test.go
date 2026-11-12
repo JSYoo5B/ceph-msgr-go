@@ -254,7 +254,7 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 				lock := getFlock(t, "split flock get "+l.Name+" before restart", l)
 				l.GetBefore = &lock
 				t.Logf("held-lock split: %s lock, inode %#x locked by Go owner %#x TID %d; native probe errno %d, native version %d",
-					l.Name, l.Ino, l.Owner, l.AcquireTID, l.ProbeBefore[0].Probe.Errno, l.ProbeBefore[0].Probe.Before.Version)
+					l.Name, l.Ino, l.Owner, l.AcquireTID, l.ProbeBefore[0].Receipt.Probe.Errno, l.ProbeBefore[0].Receipt.Probe.Before.Version)
 			}
 		}) {
 			return
@@ -390,7 +390,7 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 			}
 			t.Logf("held-lock split: %d caps and %d unsplit bytes in %d fragments; native capability lines per fragment %v", len(caps), fullBytes, len(held.Fragments), perFragment)
 			for _, l := range held.Locks {
-				t.Logf("held-lock split: %s lock, inode %#x with a %d-byte blob in fragment %d of %d (more=%v)", l.Name, l.Ino, len(l.ReconnectBlobHex)/2, l.Fragment, len(held.Fragments), held.Fragments[l.Fragment].More)
+				t.Logf("held-lock split: %s lock, inode %#x with a %d-byte blob in fragment %d of %d (more=%v)", l.Name, l.Ino, len(l.ReconnectBlobHex)/2, *l.Fragment, len(held.Fragments), held.Fragments[*l.Fragment].More)
 			}
 		}
 		req(t, debugOff)
