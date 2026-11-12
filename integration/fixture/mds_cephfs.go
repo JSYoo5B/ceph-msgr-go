@@ -36,6 +36,12 @@ const mdsCephFSJSONLimit = 64 << 10
 const mdsCephFSXattrName = "user.ceph-msgr"
 const mdsCephFSFlockOwner uint64 = 0x8000000063657068
 
+// mdsCephFSSharedFlockSelector selects the shared held-FLOCK variant of the
+// recovery acceptance. It owns a fresh metadata fixture of its own, because the
+// recovery recipe performs the fixture's only owned MDS restart, and it uses
+// only actions the metadata fixture already admits.
+const mdsCephFSSharedFlockSelector = "^TestCephMDSCephFSSharedFlockRecoveryIntegration$"
+
 // mdsCephFSPlan is the fixed namespace of one run. Every native path is
 // derived from it; callers select only a closed target name.
 type mdsCephFSPlan struct {
