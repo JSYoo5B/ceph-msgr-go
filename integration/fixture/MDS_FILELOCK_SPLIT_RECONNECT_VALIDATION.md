@@ -178,10 +178,17 @@ CI is separate from these runs.
 ## Limits
 
 - One exclusive whole-file FLOCK of one owner on one predetermined inode, one
-  client session, two fragments, the lock in the first one. A lock carried by
-  the final fragment, locks on several inodes or in several fragments, shared
-  locks, waiting locks, FCNTL byte ranges, several owners or clients and
-  interrupt races are not exercised.
+  client session, two fragments, the lock in the first one. Shared locks,
+  waiting locks, FCNTL byte ranges, several clients and interrupt races are
+  not exercised here. Two locks of two owners on two inodes, one carried by a
+  nonfinal and one by the final fragment, are the separate acceptance in
+  [MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md](MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md).
+  That change generalized this cell's code to a list of locks: its lock,
+  probe, fragment requirement and leaves are unchanged, its record fields
+  moved under `facts.held_flock.Locks[0]`, and it gained a check of the
+  recipe's common submission ledger, which requires the accepted SETFILELOCK
+  requests of the whole recipe to be exactly this cell's acquire and unlock.
+  The runs recorded above predate that change.
 - No dirty cap state, request replay or pending cap flush accompanies the
   reconnect. Connection loss between fragments, standby takeover, multi-rank
   split reconnect and crash durability of lock state are not exercised.

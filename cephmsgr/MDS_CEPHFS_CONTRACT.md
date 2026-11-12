@@ -264,6 +264,16 @@ replacement MDS's own per-capability log lines show that a nonfinal `(more)`
 message carried the record. The same native and Go checks then pass in both
 Linux profiles. It adds a closed fixture probe and no product source, and it
 has the same limits as the unsplit case.
+The [two-fragment held-lock acceptance](../integration/fixture/MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md)
+holds two such locks of two owners on two of those files: one whose
+capability record a nonfinal `(more)` message carries and one whose record the
+final message carries, each record with its own blob. After adoption a native
+probe is refused on both inodes; after each explicit unlock it acquires that
+inode while the other stays refused. Both Linux profiles passed, and dropping
+either blob in a temporary control run let the native probe acquire exactly
+that inode. It adds one closed fixture probe and no product source. More than
+one lock per fragment, more than two fragments, shared or byte-range locks in
+a split reconnect and connection loss between fragments remain unverified.
 The [shared held-lock restart acceptance](../integration/fixture/MDS_FILELOCK_SHARED_RESTART_VALIDATION.md)
 runs the unsplit recipe with two shared whole-file FLOCK locks of two Go
 owners on one inode. The blob carries both records; after adoption a native

@@ -109,7 +109,12 @@ Two `mds-cephfs-heldflock-split-reconnect` rows select only
 `TestCephMDSCephFSHeldFlockSplitReconnectIntegration` in the same two MDS
 profiles, again on a fresh completion fixture. The fixture admits its closed
 split-file lock probe, level-15 debug window and per-capability reconnect log
-read only for that selector.
+read only for that selector and the next one.
+Two `mds-cephfs-heldflock-split-fragments` rows select only
+`TestCephMDSCephFSHeldFlockSplitFragmentsIntegration` in the same two MDS
+profiles, each on a fresh completion fixture. It holds one lock in a nonfinal
+and one in the final fragment of the split reconnect. The fixture admits the
+closed lock probe of the last split file only for that selector.
 Two `mds-cephfs-sharedflock-recovery` rows select only
 `TestCephMDSCephFSSharedFlockRecoveryIntegration` in the same two MDS
 profiles, each on a fresh metadata fixture (`mds_cephfs`). It runs the
@@ -203,7 +208,7 @@ registrations above a watch budget, a frame limit and the collection cap and
 runs only under its exact selector, so broad rows report it as skipped. See
 the
 [limits record](../../integration/fixture/SERVICE_MAP_LIMITS_VALIDATION.md).
-The catalog has 100 native rows in total.
+The catalog has 102 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

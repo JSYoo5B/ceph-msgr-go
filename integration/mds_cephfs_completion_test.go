@@ -299,7 +299,7 @@ func (x *mdsCephFSCompletionControl) request(ctx context.Context, action string,
 		if result.GlobalID == 0 || result.Sessions == nil || result.Completed == nil {
 			return result, errors.New("native MDS completion observation scope differs")
 		}
-	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove", "split-flock-ex-nb":
+	case "stat", "list", "write-fenced", "snapshot-create", "snapshot-remove", "split-flock-ex-nb", "split-final-flock-ex-nb":
 		if result.Native == nil || result.Native.NativeGlobalID == 0 || x.goGIDs[result.Native.NativeGlobalID] {
 			return result, errors.New("native CephFS completion oracle output missing or bound to a Go client")
 		}

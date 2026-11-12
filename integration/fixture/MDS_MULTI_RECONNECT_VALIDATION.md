@@ -79,6 +79,8 @@ name policy remain unverified or withheld. This recipe itself carries no lock
 state. One held whole-file FLOCK on an inode of the same split reconnect is the
 separate acceptance in
 [MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md);
+two held locks, one in a nonfinal and one in the final fragment, are in
+[MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md](MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md);
 a single held lock across the ordinary restart is in
 [MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md). This recipe
 establishes no complete filesystem client or remote rollback behavior.

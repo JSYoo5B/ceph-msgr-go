@@ -91,6 +91,8 @@ mds-cephfs-multi-reconnect.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.o
 mds-cephfs-multi-reconnect.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmultireconnect
 mds-cephfs-heldflock-split-reconnect.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitreconnect
 mds-cephfs-heldflock-split-reconnect.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitreconnect
+mds-cephfs-heldflock-split-fragments.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitfragments
+mds-cephfs-heldflock-split-fragments.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsheldflocksplitfragments
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfrommultichunklateerror
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer

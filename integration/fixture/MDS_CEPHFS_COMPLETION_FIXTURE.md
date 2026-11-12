@@ -145,6 +145,7 @@ seconds.
 | `mds-log-mark` | none | read only: records the current line count of the owned daemon's container log |
 | `mds-log` | GlobalID, address nonce | read only: log lines after the mark (below) |
 | `reconnect-log` | GlobalID, address nonce | read only: that client's `handle_client_reconnect` lines after the mark, in order |
+| `split-final-flock-ex-nb` | none | two-fragment held-lock selector only; the same probe on the last split file (below) |
 | `split-flock-ex-nb` | none | held-lock split selector only; transient mutation, repeatable: one nonblocking exclusive LibCephFS `flock` on the first split file with a fixed native owner, released if acquired, with the file's `statx` and bytes before and after (below) |
 | `debug-caps-on`, `debug-caps-off` | none | held-lock split selector only; the `debug-on` runtime change at `debug_mds 15/15`, and its restore |
 | `reconnect-cap-log` | GlobalID, address nonce | held-lock split selector only; read only: that client's `handle_client_reconnect` lines and the per-capability lines each handler wrote (below) |
@@ -241,8 +242,9 @@ so lines after another client's handler line are not returned.
 ### Split-file lock probe
 
 `split-flock-ex-nb` takes no argument. The fixture binds it to the first
-split file of the plan and the native driver independently requires that exact
-path. The driver records `statx` (inode, size, version, mtime) and the bytes of
+split file of the plan, and the native driver independently admits a lock only
+on its two fixed lock paths: this file and the last split file (below). The
+driver records `statx` (inode, size, version, mtime) and the bytes of
 the file, opens it read-write, tries `flock(LOCK_EX|LOCK_NB)` with the fixed
 native owner `0x8000000063657068`, unlocks if it acquired, closes and records
 the state again. Only errno 0 (acquired and released) or EAGAIN (neither) is a
@@ -253,7 +255,19 @@ and an uncertain native process is not replayed. The probe, `debug-caps-on`,
 `debug-caps-off` and `reconnect-cap-log` are refused unless the fixture runs
 under the exclusive selector
 `^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$`
-([MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md)).
+([MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md))
+or under the exclusive selector of the two-fragment acceptance below. In the
+action table "held-lock split selector only" means these two selectors.
+
+`split-final-flock-ex-nb` is the same probe with the same native owner, bound
+to the last split file of the plan. It takes no argument, is journaled as a
+`native-split-final-flock-ex-nb` mutation and is admitted only under
+`^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$`
+([MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md](MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md));
+the single-lock selector refuses it. The native driver names exactly these two
+lock paths and refuses a lock on any other one. The fixture accepts a lock
+receipt only for the path it started the driver with, and refuses a probe
+whose target is not the action's own file before it journals anything.
 
 ## Cleanup
 

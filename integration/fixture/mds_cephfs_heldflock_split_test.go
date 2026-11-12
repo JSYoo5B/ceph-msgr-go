@@ -24,10 +24,13 @@ func TestMDSCephFSHeldFlockSplitSelectorIsExclusive(t *testing.T) {
 		}
 	}
 	// The probe, the level-15 window and the per-capability log read belong to
-	// that selector only; every other completion selector refuses them.
+	// the two held-lock split selectors only; every other completion selector
+	// refuses them.
 	for _, action := range mdsCephFSHeldFlockSplitActions {
-		if err := admitMDSCephFSHeldFlockSplit(action, mdsCephFSHeldFlockSplitSelector); err != nil {
-			t.Fatal("held-lock split action refused under its selector", action, err)
+		for _, selector := range []string{mdsCephFSHeldFlockSplitSelector, mdsCephFSHeldFlockSplitFragmentsSelector} {
+			if err := admitMDSCephFSHeldFlockSplit(action, selector); err != nil {
+				t.Fatal("held-lock split action refused under its selector", action, selector, err)
+			}
 		}
 		for _, selector := range []string{"", "^TestCephMDSCephFSCompletionIntegration$", "^TestCephMDSCephFSMultiReconnectIntegration$"} {
 			if err := admitMDSCephFSHeldFlockSplit(action, selector); err == nil {
@@ -38,6 +41,81 @@ func TestMDSCephFSHeldFlockSplitSelectorIsExclusive(t *testing.T) {
 	for _, action := range []string{"list", "debug-on", "reconnect-log", "restart-arm"} {
 		if err := admitMDSCephFSHeldFlockSplit(action, "^TestCephMDSCephFSMultiReconnectIntegration$"); err != nil {
 			t.Fatal("an existing completion action was bound to the held-lock selector", action, err)
+		}
+	}
+}
+
+// The two-fragment acceptance has its own exact selector, and the lock probe
+// of the last split file is admitted under that selector alone.
+func TestMDSCephFSHeldFlockSplitFragmentsSelectorIsExclusive(t *testing.T) {
+	env := mdsCephFSCompletionProfileEnv()
+	env["CEPH_MSGR_TEST_RUN"] = mdsCephFSHeldFlockSplitFragmentsSelector
+	p, err := loadProfile(func(n string) string { return env[n] })
+	if err != nil || p.testRun != mdsCephFSHeldFlockSplitFragmentsSelector || mdsCephFSHeldFlockSplitFragmentsSelector == mdsCephFSHeldFlockSplitSelector {
+		t.Fatal("exclusive two-fragment held-lock selector refused", p.testRun, err)
+	}
+	for _, selector := range []string{"^TestCephMDSCephFSHeldFlockSplit(Fragments)?ReconnectIntegration$", "TestCephMDSCephFSHeldFlockSplitFragmentsIntegration",
+		"^TestCephMDSCephFSHeldFlockSplitFragmentsIntegrationExtended$", "^TestCephMDSCephFSHeldFlockSplitFragments"} {
+		env["CEPH_MSGR_TEST_RUN"] = selector
+		if _, err := loadProfile(func(n string) string { return env[n] }); err == nil {
+			t.Fatal("broad or foreign two-fragment held-lock selector admitted", selector)
+		}
+	}
+	if !slices.Equal(mdsCephFSHeldFlockSplitFragmentsActions, []string{"split-final-flock-ex-nb"}) || slices.Contains(mdsCephFSHeldFlockSplitActions, "split-final-flock-ex-nb") {
+		t.Fatal("the final-fragment probe is not the one action of its selector", mdsCephFSHeldFlockSplitFragmentsActions)
+	}
+	if err := admitMDSCephFSHeldFlockSplit("split-final-flock-ex-nb", mdsCephFSHeldFlockSplitFragmentsSelector); err != nil {
+		t.Fatal("final-fragment lock probe refused under its selector", err)
+	}
+	// The merged single-lock selector does not gain the second probe.
+	for _, selector := range []string{"", "^TestCephMDSCephFSCompletionIntegration$", "^TestCephMDSCephFSMultiReconnectIntegration$", mdsCephFSHeldFlockSplitSelector} {
+		if err := admitMDSCephFSHeldFlockSplit("split-final-flock-ex-nb", selector); err == nil {
+			t.Fatal("final-fragment lock probe admitted under another selector", selector)
+		}
+	}
+}
+
+func TestMDSCephFSHeldFlockSplitFinalProbeIsClosed(t *testing.T) {
+	token := strings.Repeat("a1", 16)
+	plan := mdsCephFSCompletionPlanFor(token)
+	first, last := plan.splitLockFile(), plan.splitFinalLockFile()
+	if last != plan.SplitFiles[31] || last != "split-031-"+strings.Repeat("s", 215) || first == last || len(plan.SplitFiles) != 32 ||
+		(mdsCephFSCompletionPlan{}).splitFinalLockFile() != "" || (mdsCephFSCompletionPlan{SplitFiles: []string{"only"}}).splitFinalLockFile() != "" {
+		t.Fatal("the predetermined final lock file is not the last of the 32 split files", last)
+	}
+	if targets := plan.splitLockTargets(); len(targets) != 2 || targets["split-flock-ex-nb"] != first || targets["split-final-flock-ex-nb"] != last {
+		t.Fatal("the closed lock probes do not map to their two files", targets)
+	}
+	id, action, err := parseMDSCephFSCompletionRequest([]string{"4", token, "split-final-flock-ex-nb"}, token, plan, 3)
+	if err != nil || id != 4 || action != (mdsCephFSCompletionAction{name: "split-final-flock-ex-nb", target: last}) {
+		t.Fatal("closed final-fragment lock probe refused", action, err)
+	}
+	for _, args := range [][]string{{last}, {first}, {plan.SplitFiles[30]}, {"dir"}, {"31"}, {"owner", "1"}} {
+		if _, _, err := parseMDSCephFSCompletionRequest(append([]string{"4", token, "split-final-flock-ex-nb"}, args...), token, plan, 3); err == nil {
+			t.Fatal("caller-selected lock target or argument accepted", args)
+		}
+	}
+	for _, name := range []string{"split-final-flock-sh-nb", "split-final-flock-ex", "split-last-flock-ex-nb", "split-flock-ex-nb-31", "split-001-flock-ex-nb"} {
+		if _, _, err := parseMDSCephFSCompletionRequest([]string{"4", token, name}, token, plan, 3); err == nil {
+			t.Fatal("unimplemented native lock action admitted", name)
+		}
+	}
+	// A plan without a distinct last file has no final probe.
+	short := plan
+	short.SplitFiles = plan.SplitFiles[:1]
+	if _, _, err := parseMDSCephFSCompletionRequest([]string{"4", token, "split-final-flock-ex-nb"}, token, short, 3); err == nil {
+		t.Fatal("final-fragment probe admitted on a plan with one split file")
+	}
+	// The native step refuses a target that is not the action's own file,
+	// before it journals or runs anything.
+	c := &fixtureCluster{mdsFresh: &mdsFreshScope{out: t.TempDir(), token: token, name: "owned"}}
+	for _, wrong := range []mdsCephFSCompletionAction{{name: "split-final-flock-ex-nb", target: first}, {name: "split-flock-ex-nb", target: last},
+		{name: "split-final-flock-ex-nb", target: plan.SplitFiles[30]}, {name: "split-final-flock-ex-nb"}} {
+		c.mdsCephFSCompletion = &mdsCephFSCompletionScope{out: c.mdsFresh.out, plan: plan, owned: map[string]uint64{}, current: mdsFreshDaemon{Name: "owned-0", GID: 40}}
+		var result mdsCephFSCompletionResult
+		if err := c.mdsCephFSCompletionNative(context.Background(), 5, wrong, &result); err == nil || !strings.Contains(err.Error(), "not the action's file") ||
+			len(c.mdsCephFSCompletion.mutations) != 0 || result.Mutation != nil {
+			t.Fatal("a lock probe ran against a file other than its own", wrong, err)
 		}
 	}
 }
@@ -99,7 +177,44 @@ func TestMDSCephFSHeldFlockSplitActionsAreClosed(t *testing.T) {
 
 func TestMDSCephFSHeldFlockSplitReceiptRejectsUnreleasedOrChangedState(t *testing.T) {
 	plan := mdsCephFSCompletionPlanFor(strings.Repeat("a1", 16))
-	path, _ := plan.path(plan.splitLockFile())
+	for _, file := range []string{plan.splitLockFile(), plan.splitFinalLockFile()} {
+		checkMDSCephFSHeldFlockSplitReceipts(t, plan, file)
+	}
+	// Only the two predetermined files are lock files, and a receipt is
+	// bound to the path the driver was started with.
+	first, _ := plan.path(plan.splitLockFile())
+	last, _ := plan.path(plan.splitFinalLockFile())
+	state := mdsCephFSFlockState{Ino: 7, MTime: 10}
+	receipt := func(path string) []byte {
+		data, err := json.Marshal(mdsCephFSNative{Action: "flock-ex-nb", Path: path, NativeGlobalID: 9,
+			Flock: &mdsCephFSFlockProbe{Owner: mdsCephFSFlockOwner, Errno: 11, ElapsedNS: 1, Before: state, After: state}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	for _, name := range plan.SplitFiles[1:31] {
+		path, _ := plan.path(name)
+		if _, err := decodeMDSCephFSCompletionNative("flock-ex-nb", path, plan, receipt(path)); err == nil {
+			t.Fatal("a lock receipt of a split file that is no lock file was accepted", name)
+		}
+	}
+	if _, err := decodeMDSCephFSCompletionNative("flock-ex-nb", last, plan, receipt(first)); err == nil {
+		t.Fatal("a receipt of the first lock file was accepted for the probe of the last one")
+	}
+	if _, err := decodeMDSCephFSCompletionNative("flock-ex-nb", first, plan, receipt(last)); err == nil {
+		t.Fatal("a receipt of the last lock file was accepted for the probe of the first one")
+	}
+	single := plan
+	single.SplitFiles = plan.SplitFiles[:1]
+	if _, err := decodeMDSCephFSCompletionNative("flock-ex-nb", last, single, receipt(last)); err == nil {
+		t.Fatal("a final-fragment lock receipt was accepted on a plan without that file")
+	}
+}
+
+func checkMDSCephFSHeldFlockSplitReceipts(t *testing.T, plan mdsCephFSCompletionPlan, file string) {
+	t.Helper()
+	path, _ := plan.path(file)
 	other, _ := plan.path(plan.SplitFiles[1])
 	// A never-written file may report native version 0; it is compared, not required.
 	for _, state := range []mdsCephFSFlockState{{Ino: 7, MTime: 10}, {Ino: 7, Version: 3, MTime: 10}} {
@@ -188,9 +303,11 @@ func TestMDSCephFSReconnectCapLogAttributesLinesToOneClientFragment(t *testing.T
 // lock path are checked with the local interpreter.
 func TestMDSCephFSCompletionNativeDriverCompilesAndNamesTheLockFile(t *testing.T) {
 	plan := mdsCephFSCompletionPlanFor(strings.Repeat("a1", 16))
-	if !strings.Contains(mdsCephFSCompletionNativePython, "path == '/' + directory + '/split-000-' + 's' * 215 and not extra") ||
-		strings.Count(mdsCephFSCompletionNativePython, "fs.flock(") != 2 || strings.Contains(mdsCephFSCompletionNativePython, "LOCK_SH") {
-		t.Fatal("the native driver no longer fixes one exclusive nonblocking lock on the planned file", plan.splitLockFile())
+	if !strings.Contains(mdsCephFSCompletionNativePython, "path in ('/' + directory + '/split-000-' + 's' * 215, '/' + directory + '/split-031-' + 's' * 215) and not extra") ||
+		strings.Count(mdsCephFSCompletionNativePython, "fs.flock(") != 2 || strings.Contains(mdsCephFSCompletionNativePython, "LOCK_SH") ||
+		strings.Count(mdsCephFSCompletionNativePython, "/split-") != 2 ||
+		plan.splitLockFile() != "split-000-"+strings.Repeat("s", 215) || plan.splitFinalLockFile() != "split-031-"+strings.Repeat("s", 215) {
+		t.Fatal("the native driver no longer fixes one exclusive nonblocking lock on the two planned files", plan.splitLockFile(), plan.splitFinalLockFile())
 	}
 	python, err := exec.LookPath("python3")
 	if err != nil {
