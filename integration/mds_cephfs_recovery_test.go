@@ -36,7 +36,10 @@ import (
 // Tentacle daemons with native oracles. See integration/fixture/
 // MDS_CEPHFS_FIXTURE.md and MDS_CEPHFS_RECOVERY_VALIDATION.md. One whole-file
 // FLOCK held by the restart session crosses the same restart; see
-// MDS_FILELOCK_RESTART_VALIDATION.md.
+// MDS_FILELOCK_RESTART_VALIDATION.md. runCephFSRecovery is the recipe; the
+// held lock set is its parameter (heldFlockRecipe), and
+// TestCephMDSCephFSSharedFlockRecoveryIntegration runs it with two shared
+// locks of two owners; see MDS_FILELOCK_SHARED_RESTART_VALIDATION.md.
 
 type nativeMDSCephFSRecoveryPlan struct {
 	Directory        string   `json:"directory"`
@@ -265,7 +268,7 @@ func (x *mdsCephFSRecoveryControl) request(ctx context.Context, action, arg stri
 		if strconv.FormatUint(result.GlobalID, 10) != arg {
 			return result, errors.New("native MDS historic ops scope differs")
 		}
-	case "recovery-stat", "recovery-list", "recovery-write", "flock-ex-nb":
+	case "recovery-stat", "recovery-list", "recovery-write", "flock-ex-nb", "flock-sh-nb":
 		if result.Native == nil || result.Native.NativeGlobalID == 0 || x.goGIDs[result.Native.NativeGlobalID] {
 			return result, errors.New("native CephFS recovery oracle output missing or bound to a Go client")
 		}
@@ -760,6 +763,10 @@ func recoveryOSDRead(ctx context.Context, o *cephmsgr.OSDConnection, request cep
 }
 
 func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
+	runCephFSRecovery(t, exclusiveHeldFlock)
+}
+
+func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS=1 for owned native CephFS recovery acceptance")
 	}
@@ -857,7 +864,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			err = errors.New("MDS CephFS recovery evidence exceeds bound")
 		}
 		if err == nil {
-			err = testcluster.WritePublicEvidence(filepath.Join(dir, "mds-cephfs-recovery-results.json"), data)
+			err = testcluster.WritePublicEvidence(filepath.Join(dir, recipe.Results), data)
 		}
 		if err != nil {
 			t.Error("preserve MDS CephFS recovery public evidence", err)
@@ -887,8 +894,11 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		epoch = r.Map.Epoch
 		return r, r.session(gid)
 	}
-	// submitFirst sends one request and applies its first reply to the agent.
-	submitFirst := func(t *testing.T, s *cephmsgr.MDSSession, a *cephfsCapAgent, label, name string, request cephmsgr.MDSRequest) (*cephmsgr.MDSRequestCall, cephmsgr.MDSReply, cephmsgr.MDSTrace, *recoveryRequestEvidence) {
+	// submitFirstHooked sends one request and applies its first reply to the
+	// agent. accepted receives the TID as soon as Submit accepted the call,
+	// before the reply is awaited; settled receives the outcome of that wait.
+	submitFirstHooked := func(t *testing.T, s *cephmsgr.MDSSession, a *cephfsCapAgent, label, name string, request cephmsgr.MDSRequest,
+		accepted func(uint64), settled func(cephmsgr.MDSReply, error)) (*cephmsgr.MDSRequestCall, cephmsgr.MDSReply, cephmsgr.MDSTrace, *recoveryRequestEvidence) {
 		t.Helper()
 		request.MDSMapEpoch = epoch
 		e := &recoveryRequestEvidence{Name: name, Session: label, Op: request.Op, MDSMapEpoch: epoch, submitted: time.Now()}
@@ -901,7 +911,7 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		e.Transaction = call.Transaction()
 		waitCtx, stop := context.WithTimeout(ctx, 60*time.Second)
 		defer stop()
-		first, err := call.Wait(waitCtx)
+		first, err := awaitAcceptedMDSCall(waitCtx, call, accepted, settled)
 		if err != nil {
 			e.Error = err.Error()
 			t.Fatal("first reply", name, err)
@@ -926,6 +936,10 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			realms[r.Ino] = r
 		}
 		return call, first, trace, e
+	}
+	submitFirst := func(t *testing.T, s *cephmsgr.MDSSession, a *cephfsCapAgent, label, name string, request cephmsgr.MDSRequest) (*cephmsgr.MDSRequestCall, cephmsgr.MDSReply, cephmsgr.MDSTrace, *recoveryRequestEvidence) {
+		t.Helper()
+		return submitFirstHooked(t, s, a, label, name, request, nil, nil)
 	}
 	// waitSafe waits for the safe reply; flush sends REQUEST_FLUSH_MDLOG right
 	// after an unsafe first reply.
@@ -972,10 +986,10 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 	var dirIno, boundaryIno uint64
 	inos := map[string]uint64{}
 	// The held-FLOCK composition uses the plan directory and go-file of the
-	// ordinary metadata acceptance: the closed native probe admits only that
+	// ordinary metadata acceptance: the closed native probes admit only that
 	// path. They are removed again before the cleanup leaf ends, so the
 	// ordinary acceptance that follows in this fixture still creates them.
-	var hf heldFlockEvidence
+	hf := heldFlockEvidence{Recipe: recipe.Name}
 	var heldNativeBaseline *nativeMDSCephFSFlockState
 	var heldDirIno uint64
 	facts["held_flock"] = &hf
@@ -1264,26 +1278,28 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if opened.Result != 0 || !opened.Safe {
 			t.Fatalf("flock file open differs: %+v", oe)
 		}
-		want := cephfsFilelock{Client: gidR, Owner: cephFlockGoOwner, Type: cephFlockExclusive}
-		hf.Lock = want
-		call, first, _, e = submitFirst(t, sessionR, agentR, "restart", "flock-exclusive-acquire", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
-			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner)})
-		hf.AcquireTID, hf.SetFileLockSubmissions = call.Transaction(), 1
-		safe := waitSafe(t, sessionR, call, first, e, false)
-		if first.Result != 0 || safe.Result != 0 {
-			t.Fatalf("Go exclusive flock acquire failed: %d %d", first.Result, safe.Result)
+		// Each lock is recorded once SETFILELOCK granted it; the reconnect blob
+		// carries exactly these locks, in this order.
+		for i, want := range recipe.locks(gidR) {
+			name := recipe.callName("acquire", i)
+			call, first, _, e := submitFirstHooked(t, sessionR, agentR, "restart", name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
+				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(want.Type, want.Owner)}, hf.acceptFlock(name, want.Owner, want.Type), hf.settleFlock)
+			safe := waitSafe(t, sessionR, call, first, e, false)
+			if first.Result != 0 || safe.Result != 0 {
+				t.Fatalf("Go %s acquire failed: %d %d", name, first.Result, safe.Result)
+			}
+			hf.Locks = append(hf.Locks, want)
 		}
-		p, err := heldFlockProbeNative(ctx, control, hf.Ino, 11, &heldNativeBaseline)
-		hf.ProbeBefore = append(hf.ProbeBefore, p)
+		err = heldFlockObserve(ctx, control, recipe.probes(len(hf.Locks)), hf.Ino, &heldNativeBaseline, &hf.ProbeBefore)
 		hf.NativeBefore = heldNativeBaseline
-		if err != nil || control.goGIDs[p.NativeGlobalID] {
-			t.Fatal("native nonblocking probe does not see the Go lock", err)
+		if err != nil {
+			t.Fatal("native nonblocking probes do not see the Go locks", err)
 		}
 		getCall, getFirst, _, _ := submitFirst(t, sessionR, agentR, "restart", "flock-get-before-restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock,
 			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
 		lock, err := cephfsDecodeFilelock(getFirst.Extra)
-		if getFirst.Result != 0 || err != nil || lock != want {
-			t.Fatalf("GETFILELOCK before restart does not identify the owned Go lock: %+v %v (tid %d)", lock, err, getCall.Transaction())
+		if getFirst.Result != 0 || err != nil || heldFlockHolder(lock, hf.Locks) != nil {
+			t.Fatalf("GETFILELOCK before restart does not identify the first held Go lock: %+v %v (tid %d)", lock, err, getCall.Transaction())
 		}
 		hf.GetBefore = &lock
 	}) {
@@ -1717,9 +1733,9 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The held lock is carried only by this explicit, caller-selected
+		// The held locks are carried only by this explicit, caller-selected
 		// reconnect record. SETFILELOCK is not submitted again.
-		heldBlob := cephfsFilelockBlob(nil, []cephfsFilelock{hf.Lock})
+		heldBlob := cephfsFilelockBlob(nil, hf.Locks)
 		heldCap := slices.IndexFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == hf.Ino })
 		if heldCap < 0 || len(caps[heldCap].Flock) != 0 {
 			t.Fatal("the held-lock inode has no capability to reconnect, or already carries a lock blob")
@@ -1902,10 +1918,11 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 			}
 		}
 		hf.MDSAfter = *ad
-		replayedLock := find(hf.AcquireTID) != nil
-		hf.AcquireReplayedByMDS = &replayedLock
-		if replayedLock {
-			t.Fatal("the new incarnation tracked a client request for the original SETFILELOCK TID", hf.AcquireTID)
+		// One bounded snapshot: an absent TID may also have aged out of it.
+		acquireInOps := slices.ContainsFunc(hf.Calls, func(c heldFlockCall) bool { return c.Type != cephFlockUnlock && find(c.TID) != nil })
+		hf.AcquireTIDInHistoricOps = &acquireInOps
+		if acquireInOps {
+			t.Fatal("the new incarnation's historic-ops snapshot holds a client request for an original SETFILELOCK TID", hf.Calls)
 		}
 		replay := observeRecoveryReplay(ops.HistoricOps, gidR, callA.Transaction())
 		restart.ReplayObservation, restart.ReplayedHistoricOp = &replay, replay.Op
@@ -1971,30 +1988,49 @@ func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 		if hf.MDSAfter.GID == hf.MDSBefore.GID || hf.MDSAfter.Nonce == hf.MDSBefore.Nonce || hf.MDSAfter.Rank != hf.MDSBefore.Rank || hf.MDSAfter.Rank != 0 {
 			t.Fatal("held-lock recovery did not cross to a new rank-0 MDS incarnation", hf.MDSBefore, hf.MDSAfter)
 		}
-		if p, err := heldFlockProbeNative(ctx, control, hf.Ino, 11, &heldNativeBaseline); err != nil || control.goGIDs[p.NativeGlobalID] {
-			hf.ProbeAfter = append(hf.ProbeAfter, p)
-			t.Fatal("native nonblocking probe does not see the restored lock", err)
-		} else {
-			hf.ProbeAfter = append(hf.ProbeAfter, p)
+		if err := heldFlockObserve(ctx, control, recipe.probes(len(hf.Locks)), hf.Ino, &heldNativeBaseline, &hf.ProbeAfter); err != nil {
+			t.Fatal("native nonblocking probes do not see the restored locks", err)
 		}
 		_, getAfter, _, _ := submitFirst(t, sessionR2, agentR2, "reconnected", "flock-get-after-restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock,
 			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
 		restored, err := cephfsDecodeFilelock(getAfter.Extra)
-		if getAfter.Result != 0 || err != nil || restored != hf.Lock {
-			t.Fatalf("GETFILELOCK after restart does not identify the original Go lock: %+v %v", restored, err)
+		if getAfter.Result != 0 || err != nil || heldFlockHolder(restored, hf.Locks) != nil {
+			t.Fatalf("GETFILELOCK after restart does not identify the first original Go lock: %+v %v", restored, err)
 		}
 		hf.GetAfter = &restored
-		unlockCall, unlockFirst, _, unlockE := submitFirst(t, sessionR2, agentR2, "reconnected", "flock-unlock-after-restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
-			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockUnlock, cephFlockGoOwner)})
-		hf.UnlockTID, hf.SetFileLockSubmissions = unlockCall.Transaction(), hf.SetFileLockSubmissions+1
-		if unlockSafe := waitSafe(t, sessionR2, unlockCall, unlockFirst, unlockE, false); unlockFirst.Result != 0 || unlockSafe.Result != 0 {
-			t.Fatalf("explicit unlock after restart failed: %d %d", unlockFirst.Result, unlockSafe.Result)
+		// One explicit unlock per owner, in acquisition order. After each one
+		// the locks of the other owners must still refuse a native exclusive
+		// acquire and GETFILELOCK must name the first of them; after the last one
+		// the native exclusive acquire succeeds.
+		for i, l := range hf.Locks {
+			name := recipe.callName("unlock", i)
+			unlockCall, unlockFirst, _, unlockE := submitFirstHooked(t, sessionR2, agentR2, "reconnected", name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
+				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockUnlock, l.Owner)}, hf.acceptFlock(name, l.Owner, cephFlockUnlock), hf.settleFlock)
+			if unlockSafe := waitSafe(t, sessionR2, unlockCall, unlockFirst, unlockE, false); unlockFirst.Result != 0 || unlockSafe.Result != 0 {
+				t.Fatalf("explicit %s after restart failed: %d %d", name, unlockFirst.Result, unlockSafe.Result)
+			}
+			remaining := hf.Locks[i+1:]
+			if err := heldFlockObserve(ctx, control, recipe.probes(len(remaining)), hf.Ino, &heldNativeBaseline, &hf.ProbeAfter); err != nil {
+				t.Fatalf("native probes after %s with %d Go locks still held differ: %v", name, len(remaining), err)
+			}
+			if len(remaining) == 0 {
+				break
+			}
+			_, between, _, _ := submitFirst(t, sessionR2, agentR2, "reconnected", "flock-get-after-"+name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock,
+				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
+			holder, err := cephfsDecodeFilelock(between.Extra)
+			if between.Result != 0 || err != nil || heldFlockHolder(holder, remaining) != nil {
+				t.Fatalf("GETFILELOCK after %s does not identify the first still-held Go lock: %+v %v", name, holder, err)
+			}
+			hf.GetBetween = append(hf.GetBetween, holder)
 		}
-		if p, err := heldFlockProbeNative(ctx, control, hf.Ino, 0, &heldNativeBaseline); err != nil {
-			hf.ProbeAfter = append(hf.ProbeAfter, p)
-			t.Fatal("native probe could not acquire the file after the explicit unlock", err)
-		} else {
-			hf.ProbeAfter = append(hf.ProbeAfter, p)
+		if err := heldFlockCallsExact(hf.Calls, hf.Locks); err != nil || hf.SetFileLockSubmissions != len(hf.Calls) {
+			t.Fatal("application SETFILELOCK submissions differ from one acquire before and one unlock after the restart per owner", err, hf.Calls)
+		}
+		// The hooks record only the expected call sites; the common ledger
+		// holds every request the recipe submitted.
+		if err := heldFlockLedgerMatches(requests, hf.Calls); err != nil {
+			t.Fatal("a SETFILELOCK was submitted outside the held-lock calls:", err)
 		}
 		if _, _, err := agentR2.close(hf.Ino, cephFileModeRDWR); err != nil {
 			t.Fatal("close held-lock handle", err)

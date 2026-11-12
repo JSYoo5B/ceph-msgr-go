@@ -2,7 +2,10 @@
 
 `CEPH_MSGR_TEST_MDS_CEPHFS=1` is a closed development-only extension of
 `CEPH_MSGR_TEST_MDS_FRESH=1`. It selects only
-`^TestCephMDSCephFS(Push|Recovery)?Integration$` and excludes both
+`^TestCephMDSCephFS(Push|Recovery)?Integration$`, or, when that exact
+selector is given, only `^TestCephMDSCephFSSharedFlockRecoveryIntegration$`
+(the recovery recipe with two shared locks; see
+[shared held-lock restart](MDS_FILELOCK_SHARED_RESTART_VALIDATION.md)), and excludes both
 `CEPH_MSGR_TEST_MDS_COMMANDS=1` and `CEPH_MSGR_TEST_MDS_SESSIONS=1`. Like
 those profiles it requires one OSD with `legacy-v6`: the owned metadata/data
 pools disable HASHPSPOOL (16/1 PGs, replication/min_size 1/1), so the public
@@ -39,6 +42,15 @@ unfired restart, or waits for the issued restart's new incarnation to be
 `up:active` and adopts it, then removes its namespace and closes its
 sessions (see
 [MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md#journal-fault-boundary-and-early-failure-reconciliation)).
+
+`TestCephMDSCephFSSharedFlockRecoveryIntegration` runs the same recovery
+recipe with two shared locks in place of the one exclusive lock. Because the
+recipe performs the fixture's only owned restart, it has its own fresh
+fixture: the two `mds-cephfs-sharedflock-recovery` rows select it alone, and
+the broad selector above does not match it. It uses only actions this fixture
+already admits (the closed `flock-sh-nb` and `flock-ex-nb` probes on
+`go-file`), so no action is added for it. Its results are written to
+`mds-cephfs-sharedflock-recovery-results.json`.
 
 Reference: Tentacle Ceph 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`. Relied-upon behavior is read from

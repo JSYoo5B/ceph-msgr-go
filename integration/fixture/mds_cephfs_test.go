@@ -38,7 +38,17 @@ func TestMDSCephFSClosedProfileAndCredentials(t *testing.T) {
 			}
 		}
 	}
+	// The shared held-lock recovery variant is admitted only by its exact
+	// selector, on the same metadata fixture.
+	env := mdsCephFSProfileEnv()
+	env["CEPH_MSGR_TEST_RUN"] = mdsCephFSSharedFlockSelector
+	if p, err := loadProfile(func(k string) string { return env[k] }); err != nil || p.testRun != "^TestCephMDSCephFSSharedFlockRecoveryIntegration$" || p.mdsCephFS != "1" ||
+		p.osdPGV8() || !p.mdsFreshOSDAllowed() || p.cleanupBudget() != 2*time.Minute {
+		t.Fatal("MDS CephFS did not admit the shared held-lock recovery selector", p, err)
+	}
 	for _, change := range []map[string]string{
+		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSSharedFlockRecoveryIntegration"}, {"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFS(SharedFlock)?RecoveryIntegration$"},
+		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSSharedFlockRecoveryIntegration$", "CEPH_MSGR_TEST_MDS_CEPHFS": "0"},
 		{"CEPH_MSGR_TEST_MDS_FRESH": "0"}, {"CEPH_MSGR_TEST_MDS_CEPHFS": "true"}, {"CEPH_MSGR_TEST_MDS_COMMANDS": "1"}, {"CEPH_MSGR_TEST_MDS_SESSIONS": "1"},
 		{"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"}, {"CEPH_MSGR_TEST_RUN": "^TestCephMDSSessionsIntegration$"},
 		{"CEPH_MSGR_TEST_RUN": "^TestCeph(MDSFresh|MDSCephFS)Integration$"}, {"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSIntegration$"},

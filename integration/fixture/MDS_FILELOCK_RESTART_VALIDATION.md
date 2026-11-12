@@ -26,7 +26,10 @@ rows).
    `0x80000000474f0001`. The closed native `flock-ex-nb` probe must return
    EAGAIN with unchanged native inode, size, version, mtime and bytes, and a Go
    GETFILELOCK with a different owner must return the Go owner, the session
-   GlobalID and type exclusive.
+   GlobalID and type exclusive. The record takes the acquire's TID and counts
+   the submission as soon as `Submit` accepted it, before the reply is
+   awaited, and keeps the outcome of that wait separately; the unlock in
+   step 4 is recorded the same way.
 3. The existing restart recipe runs unchanged. When its reconnect state is
    built, the test consumer sets `MDSCapReconnect.Flock` of that one inode to a
    `Client::_encode_filelocks`-layout blob: fcntl count 0, flock count 1 and one
@@ -34,12 +37,16 @@ rows).
    pid 0, type exclusive). No other cap carries a blob. SETFILELOCK is not
    submitted again and the lock call is not among the resubmitted calls.
 4. After the new incarnation is adopted: the MDS GID and nonce differ from the
-   armed daemon and rank stays 0; the new incarnation's historic-ops list holds
-   no `client_request` for the original SETFILELOCK TID; the native probe must
+   armed daemon and rank stays 0; the one `dump_historic_ops` snapshot read
+   right after adoption holds no `client_request` for the original
+   SETFILELOCK TID (an entry can also age out of that bounded snapshot, so
+   this is not proof that the MDS never received one; the no-second-acquire
+   claim rests on the recorded submissions); the native probe must
    again return EAGAIN with the same native file state; GETFILELOCK on the
    reconnected session must return the original owner and GlobalID; one
    explicit Go unlock follows; the native probe must then acquire and release
-   (errno 0). The session keeps its GlobalID and the shared CephFS nonce, which
+   (errno 0). The record must then hold exactly the one acquire and the one
+   unlock, both answered with result 0. The session keeps its GlobalID and the shared CephFS nonce, which
    the existing native session-address check covers.
 5. The cleanup leaf unlinks the lock file and removes the plan directory
    through Go, so the ordinary metadata acceptance that follows in the same
@@ -68,7 +75,8 @@ container MemStore); the restart leaf 42.79 s and 35.07 s; the recovery parent
 identity, absence of a tracked request for the original SETFILELOCK TID, unlock
 and native acquire are assertions of those leaves; their pass is the
 evidence. The detailed ledger (`facts.held_flock` in the recovery results:
-TIDs, GlobalID, nonce, MDS identities, blob hex, probe receipts) is written
+submission records with TIDs, GlobalID, nonce, MDS identities, blob hex,
+probe receipts) is written
 inside the job and is not uploaded for a successful run, so exact values are
 not retained. The failed run's diagnostics retain only the pre-restart part.
 
@@ -83,6 +91,13 @@ not retained. The failed run's diagnostics retain only the pre-restart part.
   races, interaction with dirty cap state, standby takeover and crash
   durability of lock state are not exercised. In-memory lock state is not a
   journal durability promise.
+- Two shared whole-file locks of two owners across the same restart, on a
+  fresh fixture of their own, are recorded in
+  [MDS_FILELOCK_SHARED_RESTART_VALIDATION.md](MDS_FILELOCK_SHARED_RESTART_VALIDATION.md).
+  That change made the recovery recipe a runner parameterized by the held
+  lock set (`runCephFSRecovery`); this cell runs it with the one exclusive
+  lock and its leaves and checks are unchanged apart from the submission
+  record above and the bounded-snapshot reading of historic ops.
 - The lock here travels in an unsplit reconnect message. The same lock on an
   inode of a split reconnect, with the fragment that carried it identified
   from the MDS log, is recorded in

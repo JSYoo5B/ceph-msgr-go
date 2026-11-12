@@ -68,6 +68,8 @@ mds-sessions.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-leg
 mds-sessions.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdssessions
 mds-cephfs.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7
 mds-cephfs.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-suite-1c00e7
+mds-cephfs-sharedflock-recovery.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfssharedflockrecovery
+mds-cephfs-sharedflock-recovery.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfssharedflockrecovery
 mds-cephfs-ranks.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsranks
 mds-cephfs-ranks.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsranks
 mds-cephfs-ranks-replay.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsranksreplay

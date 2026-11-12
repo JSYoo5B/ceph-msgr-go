@@ -282,6 +282,11 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		}
 		if p.mdsCephFS == "1" {
 			selected = "^TestCephMDSCephFS(Push|Recovery)?Integration$"
+			// The shared held-lock variant of the recovery acceptance owns a
+			// fresh metadata fixture and is admitted only when explicitly selected.
+			if p.testRun == mdsCephFSSharedFlockSelector {
+				selected = p.testRun
+			}
 		}
 		if p.mdsCephFSRanks == "1" {
 			selected = "^TestCephMDSCephFSRanksIntegration$"

@@ -98,7 +98,9 @@ No automatic lock acquire replay or local-wait remote cancellation is added.
 A held whole-file lock across an owned MDS restart is recorded in
 [MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md), and
 the same lock inside a split reconnect in
-[MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md).
+[MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md),
+and two shared locks of two owners across the restart in
+[MDS_FILELOCK_SHARED_RESTART_VALIDATION.md](MDS_FILELOCK_SHARED_RESTART_VALIDATION.md).
 
 The later bounded [wait and interrupt completion checkpoint](MDS_FILELOCK_COMPLETION_VALIDATION.md)
 separately verifies the original call's grant after local Wait expiry and an

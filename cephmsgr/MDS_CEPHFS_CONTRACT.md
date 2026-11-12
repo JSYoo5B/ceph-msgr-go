@@ -264,6 +264,14 @@ replacement MDS's own per-capability log lines show that a nonfinal `(more)`
 message carried the record. The same native and Go checks then pass in both
 Linux profiles. It adds a closed fixture probe and no product source, and it
 has the same limits as the unsplit case.
+The [shared held-lock restart acceptance](../integration/fixture/MDS_FILELOCK_SHARED_RESTART_VALIDATION.md)
+runs the unsplit recipe with two shared whole-file FLOCK locks of two Go
+owners on one inode. The blob carries both records; after adoption a native
+shared acquire succeeds beside them and a native exclusive acquire fails,
+it still fails after the first owner's unlock and succeeds after the second.
+GETFILELOCK names the first lock still held. Both Linux profiles passed. It
+adds no product source and no fixture action. FCNTL ranges, waiting locks,
+mixed lock types, several clients and crash durability remain unverified.
 Wire inode Version can advance for capability max-size negotiation; user
 change_attr and timestamps are independently preserved in the live evidence.
 
