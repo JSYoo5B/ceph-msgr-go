@@ -82,27 +82,88 @@ func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 
 func TestRBDJournalRequestIsClosedAndOrdered(t *testing.T) {
 	token := strings.Repeat("a1", 16)
-	for next := range rbdJournalActions {
-		for i, action := range rbdJournalActions {
-			id, got, err := parseRBDJournalRequest([]string{"7", token, action}, token, 6, next)
-			if (err == nil) != (i == next) || err == nil && (id != 7 || got != action) {
-				t.Fatal("RBD journal action order differs", next, action, err)
+	for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions} {
+		for next := range actions {
+			for i, action := range actions {
+				id, got, err := parseRBDJournalRequest(actions, []string{"7", token, action}, token, 6, next)
+				if (err == nil) != (i == next) || err == nil && (id != 7 || got != action) {
+					t.Fatal("RBD journal action order differs", next, action, err)
+				}
 			}
 		}
-	}
-	if _, _, err := parseRBDJournalRequest([]string{"99", token, "replay"}, token, 1, len(rbdJournalActions)); err == nil {
-		t.Fatal("action after the closed sequence admitted")
+		if _, _, err := parseRBDJournalRequest(actions, []string{"99", token, "replay"}, token, 1, len(actions)); err == nil {
+			t.Fatal("action after the closed sequence admitted")
+		}
 	}
 	for _, fields := range [][]string{
 		{"7", token, "reset"}, {"7", token, "client-disconnect"}, {"7", token}, {"7", token, "setup", "extra"},
 		{"6", token, "setup"}, {"0", token, "setup"}, {"07", token, "setup"}, {"7", strings.Repeat("b2", 16), "setup"}, {"7", token, "write"},
 	} {
-		if _, _, err := parseRBDJournalRequest(fields, token, 6, 0); err == nil {
+		if _, _, err := parseRBDJournalRequest(rbdJournalActions, fields, token, 6, 0); err == nil {
 			t.Fatal("unscoped RBD journal request admitted", fields)
 		}
 	}
-	if !rbdJournalReadOnly("observe-registered") || !rbdJournalReadOnly("observe-committed") || rbdJournalReadOnly("inspect") || rbdJournalReadOnly("replay") {
+	// Each sequence refuses the other's actions at every position.
+	for next := range 8 {
+		for _, action := range []string{"observe-locked", "checkpoint", "observe-recorded"} {
+			if _, _, err := parseRBDJournalRequest(rbdJournalActions, []string{"7", token, action}, token, 6, next); err == nil {
+				t.Fatal("lost-append action admitted in the ordinary sequence", action, next)
+			}
+		}
+		for _, action := range []string{"observe-registered", "write", "observe-committed", "inspect", "concurrent"} {
+			if _, _, err := parseRBDJournalRequest(rbdJournalLostAppendActions, []string{"7", token, action}, token, 6, next); err == nil {
+				t.Fatal("ordinary action admitted in the lost-append sequence", action, next)
+			}
+		}
+	}
+	if !rbdJournalReadOnly("observe-registered") || !rbdJournalReadOnly("observe-committed") || rbdJournalReadOnly("inspect") || rbdJournalReadOnly("replay") ||
+		!rbdJournalReadOnly("observe-locked") || !rbdJournalReadOnly("observe-recorded") || rbdJournalReadOnly("checkpoint") ||
+		!rbdJournalInspected("checkpoint") || rbdJournalInspected("observe-locked") || rbdJournalInspected("observe-recorded") {
 		t.Fatal("journal action classification differs")
+	}
+}
+
+// The lost-append-reply sequence is admitted only under its exact selector,
+// which the RBD fixture accepts as its one further exclusive selection.
+func TestRBDJournalLostAppendSelectorIsExclusive(t *testing.T) {
+	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
+	load := func(selector string) (profile, error) {
+		return loadProfile(func(key string) string {
+			if key == "CEPH_MSGR_TEST_RUN" {
+				return selector
+			}
+			return base[key]
+		})
+	}
+	broad := "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
+	for selector, want := range map[string]string{"": broad, broad: broad, rbdJournalLostAppendSelector: rbdJournalLostAppendSelector} {
+		p, err := load(selector)
+		if err != nil || p.testRun != want {
+			t.Fatal("RBD selector admission differs", selector, p.testRun, err)
+		}
+		actions := rbdJournalActionsFor(p.testRun)
+		if (selector == rbdJournalLostAppendSelector) != slices.Equal(actions, rbdJournalLostAppendActions) || selector != rbdJournalLostAppendSelector && !slices.Equal(actions, rbdJournalActions) {
+			t.Fatal("journal action sequence differs for", selector, actions)
+		}
+	}
+	for _, selector := range []string{"^TestCephRBDJournalLostAppendReplyIntegration", "TestCephRBDJournalLostAppendReplyIntegration", "^TestCephRBD.*Integration$",
+		"^TestCephRBD(Journal|JournalLostAppendReply)Integration$"} {
+		if _, err := load(selector); err == nil {
+			t.Fatal("unanchored or widened lost-append selector admitted", selector)
+		}
+	}
+	// Without the RBD opt-in the selector matches a test no fixture serves.
+	delete(base, "CEPH_MSGR_TEST_RBD")
+	if p, err := load(rbdJournalLostAppendSelector); err == nil && p.rbdBase == "1" {
+		t.Fatal("lost-append selector enabled the RBD fixture by itself")
+	}
+	for _, action := range rbdJournalLostAppendActions {
+		if !strings.Contains(rbdJournalNativePython, "'"+action+"'") {
+			t.Fatal("native journal driver does not admit", action)
+		}
+	}
+	if rbdJournalTarget(rbdJournalPlan{Image: "i"}, "checkpoint") != "i:journal-inspect" || rbdJournalTarget(rbdJournalPlan{Image: "i"}, "observe-locked") != "i" {
+		t.Fatal("lost-append action targets differ")
 	}
 }
 
@@ -193,9 +254,28 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 		}
 		return data
 	}
-	for _, action := range rbdJournalActions {
+	for _, action := range slices.Concat(rbdJournalActions, rbdJournalLostAppendActions) {
 		if _, err := decodeRBDJournalNative(action, token, 9, plan, encode(rbdJournalOutput(token, plan, action))); err != nil {
 			t.Fatal("well-formed journal output refused", action, err)
+		}
+	}
+	// A checkpoint must carry its inspection; the lost-append observations
+	// must not carry one, native events or a lock acquisition.
+	checkpoint := rbdJournalOutput(token, plan, "checkpoint")
+	delete(checkpoint, "inspect")
+	if _, err := decodeRBDJournalNative("checkpoint", token, 9, plan, encode(checkpoint)); err == nil {
+		t.Fatal("checkpoint without rbd journal inspect admitted")
+	}
+	for name, change := range map[string]func(map[string]any){
+		"inspect":      func(v map[string]any) { v["inspect"] = rbdJournalOutput(token, plan, "checkpoint")["inspect"] },
+		"events":       func(v map[string]any) { v["events"] = rbdJournalOutput(token, plan, "write")["events"] },
+		"acquisition":  func(v map[string]any) { v["acquire_ns"], v["owner"] = 7, true },
+		"other action": func(v map[string]any) { v["action"] = "observe-recorded" },
+	} {
+		value := rbdJournalOutput(token, plan, "observe-locked")
+		change(value)
+		if _, err := decodeRBDJournalNative("observe-locked", token, 9, plan, encode(value)); err == nil {
+			t.Fatal("malformed lost-append observation admitted", name)
 		}
 	}
 	for name, change := range map[string]func(map[string]any){
