@@ -208,7 +208,19 @@ registrations above a watch budget, a frame limit and the collection cap and
 runs only under its exact selector, so broad rows report it as skipped. See
 the
 [limits record](../../integration/fixture/SERVICE_MAP_LIMITS_VALIDATION.md).
-The catalog has 102 native rows in total.
+Two further `rbd` rows,
+`rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply`
+and
+`rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply`,
+select only `TestCephRBDJournalLostAppendReplyIntegration` on the two RBD
+profiles, each on a fresh fixture. They reuse the already-forwarded `rbd`
+input; the RBD fixture admits this one further exact selector and then serves
+a different closed journal action sequence. The broad RBD selector does not
+match the test, so no other row runs it. The CRC row attributes the withheld
+reply by transaction ID; the secure row cannot and says so in its record. See
+the
+[lost-append record](../../integration/fixture/RBD_JOURNAL_LOST_APPEND_VALIDATION.md).
+The catalog has 104 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
