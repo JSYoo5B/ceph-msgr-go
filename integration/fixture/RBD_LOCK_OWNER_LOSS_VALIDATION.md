@@ -173,10 +173,10 @@ one.
 | New connection | The zombie closes that connection, opens a new one and sends one `lock.get_info` | Raw outcome kept |
 | Fresh read | The breaker is dialed and reads the header lock, the object map and the five data objects | Byte-equal to the native reads of the next step |
 | `takeover` ends (native) | After the proceed signal the driver observes once more, prints its output and ends itself with SIGKILL while it owns the lock | Stage `takeover`, below |
-| Dead owner listed | The breaker watches the header, reads the locker and tries `lock.lock` | `-EBUSY`; the killed owner's watch is listed |
-| Dead owner unlisted | The breaker reads the watcher list once a second until no watcher has the locker's address and handle, for at most 90 s, then reads the locker again | Unchanged locker |
+| Dead owner listed | The breaker watches the header, reads the locker and tries `lock.lock` | The locker is the killed owner's record, checked before the attempt; `-EBUSY` as a known OSD answer; the killed owner's watch is listed |
+| Dead owner unlisted | The breaker reads the watcher list once a second until no watcher has the locker's address and handle, for at most 90 s, then reads the locker again | The refreshed locker equals the first read and the killed owner's record. Otherwise the run stops here, before the MON command |
 | Blocklist | The breaker sends `{"prefix":"osd blocklist","blocklistop":"add","addr":"<locker address>"}` to the MON and reads the OSDMap epoch that holds the entry. Every later request names at least that epoch | The run stops here when the entry is missing |
-| Break and lock | `lock.break_lock(rbd_lock, client.<gid>, auto <handle>)`, `lock.lock`; on the object map `lock.lock` (`-EBUSY`), `lock.get_info`, one write with `break_lock` for each locker, `lock.lock` | Raw codes kept; judged at stage `go-break` |
+| Break and lock | `lock.break_lock(rbd_lock, client.<gid>, auto <handle>)`, `lock.lock`; on the object map `lock.lock` (`-EBUSY`), `lock.get_info`, `break_lock` of the one locker, `lock.lock` | Each call must be answered with its one expected code as a known OSD answer carrying the reply identity of its submission; an unknown outcome or another code stops the run before the next mutation. The object-map `break_lock` is built only when the sole locker is the killed owner's record. Codes kept; judged again at stage `go-break` |
 | Go write | `rbd.object_map_load`, AcquiredLock notification, `[lock.assert_locked, rbd.object_map_update]` for object 2, `[SETALLOCHINT, WRITE]` on object 2 | Each answered 0 with the breaker's identity |
 | `observe-go-broke` (native) | Read-only observation with `osd blocklist ls` | Stage `go-break`, below |
 | Go release | `lock.unlock` on the object map and the header, ReleasedLock notification, UNWATCH | |
@@ -303,6 +303,13 @@ These establish no native result.
   blocklist entry, without a new map epoch or at an older epoch; a free
   object-map lock; a missing notification or one from the killed owner; a
   failed object-map check.
+- `TestRBDLockOwnerLossBreakTargets` (cluster-free): the two checks the
+  breaker runs before its mutations. The header check refuses a locker that
+  changed to another single owner during the polling, another owner from the
+  start, a new cookie, a new connection address, another client at the same
+  address, a missing record and an incomplete killed-owner identity. The
+  object-map check refuses a replacement owner, a second locker, no locker
+  and a record with a header cookie.
 - `TestRBDLockOwnerLossTestOnlyEncodings` (cluster-free): the
   `cls_lock_break_op` bytes for a managed-lock cookie and for the empty
   object-map cookie, refused locker entities, the blocklist expiry forms,
@@ -350,6 +357,30 @@ differs only in the failure path of the takeover driver. Earlier runs of this
 change are listed below.
 
 Almost all of the test's time is two waits for a watch to expire.
+
+Source commit `4e0d7549f6e6cbbf99fb4f2ea6bdd9a90947d003`, 2026-11-13 (UTC),
+the review follow-up: the breaker checks its target before the MON command
+and before each `break_lock`, and requires every break and acquire call to be
+a known OSD answer with its expected code. Same environment and gate.
+
+| Scenario ID | Gate | Test duration | Row wall time |
+| --- | --- | --- | --- |
+| `rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss` | pass, 1 expected test, no problem | 58.05 s | 146 s |
+| `rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss` | pass, 1 expected test, no problem | 61.98 s | 148 s |
+
+Both passed at their first attempt. The two broad RBD rows and the four
+controls of the earlier commit were not repeated on this one; the commit
+changes only this test, its daemon-free tests and the cluster-free list.
+
+One control on this commit (temporary edit on the uploaded copy, never
+committed, one run, CRC row): the locker read again after the watch expired
+was replaced in the test by another single owner with the same address. Gate
+fail: `before the MON blocklist command: the locker read again is not the
+killed owner`. The record ends at `dead_owner_unlisted` with an empty
+blocklist command, and the cleanup removed one blocklist entry, the
+zombie's; the killed owner's address was never blocklisted and no
+`break_lock` was sent. The replacement owner is simulated in the test's own
+value: no second live owner took the lock.
 
 ### Observed values
 
