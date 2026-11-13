@@ -28,6 +28,9 @@ APPLIED_OSD_PG_COMMAND_SELECTOR = "^TestCephApplied(OSD|PG)CommandIsNotReplayedI
 APPLIED_MDS_COMMAND_SELECTOR = "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
 RBD_MIRROR_SELECTOR = "^TestCephRBDMirrorPathRecoveryIntegration$"
 RBD_JOURNAL_LOST_APPEND_SELECTOR = "^TestCephRBDJournalLostAppendReplyIntegration$"
+RBD_LOCK_OWNER_LOSS_SELECTOR = "^TestCephRBDLockOwnerLossIntegration$"
+# RBD rows that select one test alone on a fresh fixture.
+RBD_EXCLUSIVE_SELECTORS = (RBD_JOURNAL_LOST_APPEND_SELECTOR, RBD_LOCK_OWNER_LOSS_SELECTOR)
 
 
 def ceph_rows():
@@ -73,9 +76,10 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 2 MapVersion connected-MON SIGKILL rows, 2 large ServiceMap rows,
         # 2 mds-cephfs-heldflock-split-reconnect rows,
         # 2 mds-cephfs-sharedflock-recovery rows,
-        # 2 mds-cephfs-heldflock-split-fragments rows and
-        # 2 RBD journal lost-append-reply rows.
-        self.assertEqual(len(self.rows), 104)
+        # 2 mds-cephfs-heldflock-split-fragments rows,
+        # 2 RBD journal lost-append-reply rows and
+        # 2 RBD lock-owner-loss rows.
+        self.assertEqual(len(self.rows), 106)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
@@ -871,7 +875,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # its rows reuse the RBD opt-in and both RBD profiles, select only its
         # test, and the broad RBD rows never match it.
         rows = [row for row in self.rows if row.get("test_run") == RBD_JOURNAL_LOST_APPEND_SELECTOR]
-        broad = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") != RBD_JOURNAL_LOST_APPEND_SELECTOR]
+        broad = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") not in RBD_EXCLUSIVE_SELECTORS]
         self.assertEqual(len(rows), 2)
         self.assertEqual(len(broad), 2)
         expected = "TestCephRBDJournalLostAppendReplyIntegration"
@@ -888,8 +892,33 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         modes = {row.get("mode", "secure") for row in rows}
         self.assertEqual(modes, {"crc", "secure"})
 
+    def test_rbd_lock_owner_loss_rows_are_exclusive(self):
+        # The lock-owner-loss cell blocklists two client addresses and kills a
+        # native lock owner: its rows reuse the RBD opt-in and both RBD
+        # profiles, select only its test, and no other RBD row matches it.
+        rows = [row for row in self.rows if row.get("test_run") == RBD_LOCK_OWNER_LOSS_SELECTOR]
+        others = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") != RBD_LOCK_OWNER_LOSS_SELECTOR]
+        broad = [row for row in others if row.get("test_run") not in RBD_EXCLUSIVE_SELECTORS]
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(others), 4)
+        self.assertEqual(len(broad), 2)
+        expected = "TestCephRBDLockOwnerLossIntegration"
+        selector = re.compile(RBD_LOCK_OWNER_LOSS_SELECTOR)
+        self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
+        for unrelated in (expected + "Extended", "Prefix" + expected, "TestCephRBDExclusiveLockIntegration", "TestRBDLockOwnerLossClaims",
+                          "TestRBDLockOwnerLossTestOnlyEncodings", "TestCephRBDJournalLostAppendReplyIntegration"):
+            self.assertIsNone(selector.search(unrelated))
+        for row in others:
+            self.assertIsNone(re.compile(row["test_run"]).search(expected))
+        profile = lambda row: {key: value for key, value in row.items() if key != "test_run"}
+        self.assertEqual(sorted(map(repr, map(profile, rows))), sorted(map(repr, map(profile, broad))))
+        for row in rows:
+            self.assertEqual(row["rbd"], "1")
+        self.assertEqual({row.get("mode", "secure") for row in rows}, {"crc", "secure"})
+        self.assertEqual({row["osd_store"] for row in rows}, {"bluestore", "memstore"})
+
     def test_rbd_rows_select_only_the_declared_rbd_tests(self):
-        rows = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") != RBD_JOURNAL_LOST_APPEND_SELECTOR]
+        rows = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") not in RBD_EXCLUSIVE_SELECTORS]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephRBDBaseIntegration", "TestCephRBDWriteIntegration", "TestCephRBDExclusiveLockIntegration", "TestCephRBDCloneIntegration",
                     "TestCephRBDJournalIntegration"}
@@ -920,6 +949,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             self.assertIsNone(selector.search("TestRBDJournalTestOnlyEncodings"))
             self.assertIsNone(selector.search("TestCephRBDJournalReplayIntegration"))
             self.assertIsNone(selector.search("TestCephRBDJournalLostAppendReplyIntegration"))
+            self.assertIsNone(selector.search("TestCephRBDLockOwnerLossIntegration"))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"),
                 ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
