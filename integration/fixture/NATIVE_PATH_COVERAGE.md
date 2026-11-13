@@ -357,7 +357,7 @@ a particular test in it ran. The Visibility column states which applies:
 
 | Class | Rows |
 | --- | --- |
-| `released` | 77 |
+| `released` | 79 |
 | `main-only` | 0 |
 | `primitive` | 13 |
 | `proposed` | 8 |
