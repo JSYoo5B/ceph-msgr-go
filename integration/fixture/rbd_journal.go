@@ -67,13 +67,256 @@ const rbdJournalLostAppendSelector = "^TestCephRBDJournalLostAppendReplyIntegrat
 // in the ordinary sequence; only the order and the receipt names differ.
 var rbdJournalLostAppendActions = []string{"setup", "observe-locked", "checkpoint", "observe-recorded", "replay"}
 
+// rbdJournalPrimaryChangeSelector selects the lost-append-reply sequence on
+// three replicated BlueStore OSDs, with a change of the acting primary before
+// the Go test resolves its unknown outcome. It runs alone on a fresh RBD
+// fixture of that topology, whose owned pool has a single PG, so that the
+// image header, the journal header and every journal object share one acting
+// set and one primary.
+const rbdJournalPrimaryChangeSelector = "^TestCephRBDJournalPrimaryChangeIntegration$"
+
+// rbdJournalPrimaryChangeActions is the lost-append-reply sequence with two
+// more actions before the replay. `change-primary` first lets the fixture
+// mark the OSD that leads the owned pool's PG out, which removes it from the
+// PG's up set and makes one of the two other members the acting primary
+// (osd/OSDMap.cc _pg_to_raw_osds and _raw_to_up_osds at rbdBaseSource), and
+// then runs the ordinary observation. The OSD keeps running and stays in the
+// acting set as its last member. `observe-resubmitted` is the observation after the Go test
+// resubmitted its append to the new primary.
+//
+// The primary is not moved with `osd primary-affinity`: an OSDMap with a
+// non-default primary affinity requires CEPH_FEATURE_OSD_PRIMARY_AFFINITY of
+// every client (osd/OSDMap.cc get_features), which the legacy-v6 Go client
+// does not advertise, so every OSD would refuse its next connection.
+var rbdJournalPrimaryChangeActions = []string{"setup", "observe-locked", "checkpoint", "observe-recorded", "change-primary", "observe-resubmitted", "replay"}
+
 // rbdJournalActionsFor returns the action sequence the selected test run
 // admits.
 func rbdJournalActionsFor(testRun string) []string {
-	if testRun == rbdJournalLostAppendSelector {
+	switch testRun {
+	case rbdJournalLostAppendSelector:
 		return rbdJournalLostAppendActions
+	case rbdJournalPrimaryChangeSelector:
+		return rbdJournalPrimaryChangeActions
 	}
 	return rbdJournalActions
+}
+
+// rbdJournalPlacement is the MON's placement of one object as `ceph osd map`
+// prints it.
+type rbdJournalPlacement struct {
+	Epoch         uint32 `json:"epoch"`
+	Pool          string `json:"pool"`
+	PoolID        int64  `json:"pool_id"`
+	Object        string `json:"objname"`
+	RawPGID       string `json:"raw_pgid"`
+	PGID          string `json:"pgid"`
+	Up            []int  `json:"up"`
+	UpPrimary     int    `json:"up_primary"`
+	Acting        []int  `json:"acting"`
+	ActingPrimary int    `json:"acting_primary"`
+}
+
+// settled says that p names one object of the pool on three distinct OSDs,
+// with equal up and acting sets led by their first member.
+func (p rbdJournalPlacement) settled(pool, object string) bool {
+	members := slices.Clone(p.Acting)
+	slices.Sort(members)
+	return p.Epoch != 0 && p.Pool == pool && p.Object == object && p.PGID != "" && len(p.Acting) == 3 && len(slices.Compact(members)) == 3 &&
+		slices.Equal(p.Up, p.Acting) && p.ActingPrimary == p.Acting[0] && p.UpPrimary == p.ActingPrimary
+}
+
+// movedFrom says that p is the placement the PG of before settles on once
+// the OSD out was marked out: a newer epoch, the same PG, the two other
+// members as the up set, and an acting set that is the up set followed by
+// the OSD that was marked out. That OSD is still running and holds the
+// data, so the new primary keeps it in the acting set with a pg_temp
+// mapping (osd/PeeringState.cc choose_acting at rbdBaseSource) instead of
+// leaving the PG with two copies.
+func (p rbdJournalPlacement) movedFrom(before rbdJournalPlacement, out int) bool {
+	rest := slices.DeleteFunc(slices.Clone(before.Acting), func(member int) bool { return member == out })
+	up := slices.Clone(p.Up)
+	slices.Sort(rest)
+	slices.Sort(up)
+	return p.Epoch > before.Epoch && p.Pool == before.Pool && p.Object == before.Object && p.PGID == before.PGID && len(rest) == 2 && slices.Equal(up, rest) &&
+		slices.Equal(p.Acting, append(slices.Clone(p.Up), out)) && p.UpPrimary == p.Up[0] && p.ActingPrimary == p.Up[0]
+}
+
+// rbdJournalPrimaryMove is one object's placement before and after the
+// primary was marked out.
+type rbdJournalPrimaryMove struct {
+	Object string              `json:"object"`
+	Moved  bool                `json:"moved"`
+	Before rbdJournalPlacement `json:"before"`
+	After  rbdJournalPlacement `json:"after"`
+}
+
+// rbdJournalPrimaryChange is the administrative part of the `change-primary`
+// receipt. Out is -1 until the OSD to mark out is known.
+type rbdJournalPrimaryChange struct {
+	Objects   []rbdJournalPrimaryMove `json:"objects"`
+	Out       int                     `json:"osd_out"`
+	Commands  []string                `json:"commands"`
+	Polls     int                     `json:"polls"`
+	ElapsedMS int64                   `json:"elapsed_ms"`
+}
+
+// rbdJournalPrimaryOps reads one object's placement and marks one OSD out.
+// marking is called before that command with the OSD it is about to change,
+// so that the cleanup marks it in again whatever the command's outcome.
+type rbdJournalPrimaryOps struct {
+	place   func(ctx context.Context, object string) (rbdJournalPlacement, error)
+	out     func(ctx context.Context, osd int) error
+	marking func(osd int) error
+	bound   time.Duration
+	pause   time.Duration
+}
+
+// rbdJournalChangePrimary moves the acting primary of the objects' PG by
+// marking their one common primary out. Every object must start on a
+// settled three-member placement led by that OSD. It succeeds once each
+// object, in a newer epoch and in the same PG, has the two other members
+// as its up set, led by one of them, with the old primary as the last member
+// of the acting set.
+func rbdJournalChangePrimary(ctx context.Context, pool string, objects []string, ops rbdJournalPrimaryOps) (r rbdJournalPrimaryChange, err error) {
+	started := time.Now()
+	r = rbdJournalPrimaryChange{Objects: []rbdJournalPrimaryMove{}, Out: -1, Commands: []string{}}
+	defer func() { r.ElapsedMS = time.Since(started).Milliseconds() }()
+	if len(objects) == 0 {
+		return r, errors.New("invalid primary-change scope")
+	}
+	for _, object := range objects {
+		before, err := ops.place(ctx, object)
+		if err != nil {
+			return r, err
+		}
+		if !before.settled(pool, object) {
+			return r, fmt.Errorf("object %s is not on a settled three-member placement", object)
+		}
+		if len(r.Objects) != 0 && before.ActingPrimary != r.Objects[0].Before.ActingPrimary {
+			return r, errors.New("the objects are led by different OSDs")
+		}
+		r.Objects = append(r.Objects, rbdJournalPrimaryMove{Object: object, Before: before, After: before})
+	}
+	osd := r.Objects[0].Before.ActingPrimary
+	if err := ops.marking(osd); err != nil {
+		return r, err
+	}
+	r.Out = osd
+	r.Commands = append(r.Commands, fmt.Sprintf("osd out %d", osd))
+	if err := ops.out(ctx, osd); err != nil {
+		return r, err
+	}
+	for deadline := time.Now().Add(ops.bound); ; {
+		r.Polls++
+		moved := true
+		for i := range r.Objects {
+			m := &r.Objects[i]
+			after, err := ops.place(ctx, m.Object)
+			if err != nil {
+				return r, err
+			}
+			m.After, m.Moved = after, after.movedFrom(m.Before, osd)
+			moved = moved && m.Moved
+		}
+		if moved {
+			return r, nil
+		}
+		if !time.Now().Before(deadline) {
+			return r, errors.New("the acting primary did not move")
+		}
+		select {
+		case <-ctx.Done():
+			return r, ctx.Err()
+		case <-time.After(ops.pause):
+		}
+	}
+}
+
+// rbdJournalPrimaryObjects names the objects whose placement the
+// `change-primary` action follows: the image header, journal object 0 and
+// the journal header.
+func rbdJournalPrimaryObjects(poolID int64, imageID string) []string {
+	return []string{"rbd_header." + imageID, fmt.Sprintf("journal_data.%d.%s.0", poolID, imageID), "journal." + imageID}
+}
+
+func (c *fixtureCluster) rbdJournalPrimaryOps() rbdJournalPrimaryOps {
+	x := c.rbdBase
+	return rbdJournalPrimaryOps{
+		place: func(ctx context.Context, object string) (rbdJournalPlacement, error) {
+			var p rbdJournalPlacement
+			data, err := c.cluster.Ceph(ctx, "osd", "map", x.plan.Pool, object, "--format", "json")
+			if err == nil && (len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &p) != nil) {
+				err = errors.New("native object placement unavailable")
+			}
+			return p, err
+		},
+		out: func(ctx context.Context, osd int) error {
+			_, err := c.cluster.Ceph(ctx, "osd", "out", strconv.Itoa(osd))
+			return err
+		},
+		marking: func(osd int) error {
+			if !slices.Contains(x.osdsMarkedOut, osd) {
+				x.osdsMarkedOut = append(x.osdsMarkedOut, osd)
+			}
+			return c.rbdBaseJournal()
+		},
+		bound: 30 * time.Second, pause: 200 * time.Millisecond,
+	}
+}
+
+// rbdJournalMarkIn marks every OSD the `change-primary` action marked out in
+// again and returns the OSDs the following OSDMap read shows in.
+func rbdJournalMarkIn(ctx context.Context, out []int, in func(context.Context, int) error, read func(context.Context) (map[int]bool, error)) ([]int, error) {
+	if len(out) == 0 {
+		return nil, nil
+	}
+	var errs []error
+	for _, osd := range out {
+		errs = append(errs, in(ctx, osd))
+	}
+	state, err := read(ctx)
+	if err != nil {
+		return nil, errors.Join(append(errs, err)...)
+	}
+	var restored []int
+	for _, osd := range out {
+		if state[osd] {
+			restored = append(restored, osd)
+		} else {
+			errs = append(errs, fmt.Errorf("osd.%d was not marked in again", osd))
+		}
+	}
+	return restored, errors.Join(errs...)
+}
+
+func (c *fixtureCluster) rbdJournalMarkInOps() (in func(context.Context, int) error, read func(context.Context) (map[int]bool, error)) {
+	in = func(ctx context.Context, osd int) error {
+		_, err := c.cluster.Ceph(ctx, "osd", "in", strconv.Itoa(osd))
+		return err
+	}
+	read = func(ctx context.Context) (map[int]bool, error) {
+		data, err := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
+		var dump struct {
+			FSID string `json:"fsid"`
+			OSDs []struct {
+				ID int `json:"osd"`
+				In int `json:"in"`
+			} `json:"osds"`
+		}
+		if err == nil && (len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &dump) != nil || dump.FSID != c.profile.fsid) {
+			err = errors.New("native OSDMap unavailable")
+		}
+		if err != nil {
+			return nil, err
+		}
+		state := map[int]bool{}
+		for _, o := range dump.OSDs {
+			state[o.ID] = o.In == 1
+		}
+		return state, nil
+	}
+	return in, read
 }
 
 // rbdJournalInspected names the actions that run `rbd journal inspect`.
@@ -198,7 +441,7 @@ import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
 ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent',
-           'observe-locked', 'checkpoint', 'observe-recorded')
+           'observe-locked', 'checkpoint', 'observe-recorded', 'change-primary', 'observe-resubmitted')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
@@ -807,6 +1050,8 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 		return plan.Image + ":exclusive-lock,journal-replay"
 	case "concurrent":
 		return plan.Image + ":exclusive-lock-handoff,native-write,journal-replay"
+	case "change-primary":
+		return plan.Image + ":osd-out,acting-primary"
 	}
 	return plan.Image
 }
@@ -850,6 +1095,17 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	if err != nil {
 		return err
 	}
+	if action == "change-primary" {
+		// The fixture's own administrative commands, then the observation.
+		if x.journalImageID == "" || x.poolID < 0 {
+			return c.rbdBaseFinish(m, errors.New("the journaling image is unknown"))
+		}
+		change, err := rbdJournalChangePrimary(ctx, x.plan.Pool, rbdJournalPrimaryObjects(x.poolID, x.journalImageID), c.rbdJournalPrimaryOps())
+		result["primary_change"] = change
+		if err != nil {
+			return c.rbdBaseFinish(m, err)
+		}
+	}
 	process, native, err := c.rbdJournalRunNative(ctx, action, id)
 	result["native_process"] = process
 	if err == nil && native.PoolID != x.poolID {
@@ -862,5 +1118,8 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 		return c.rbdBaseFinish(m, err)
 	}
 	result["native"] = native
+	if action == "setup" {
+		x.journalImageID = native.ImageID
+	}
 	return c.rbdBaseFinish(m, nil)
 }
