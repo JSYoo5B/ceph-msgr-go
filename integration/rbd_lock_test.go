@@ -134,6 +134,16 @@ type nativeRBDLockPhase struct {
 	} `json:"go_extents"`
 	CloseNS  int64                  `json:"close_ns"`
 	Negative *nativeRBDLockCompound `json:"negative_compound"`
+	// The lock-owner-loss takeover only: the native `osd blocklist ls` before
+	// the image was opened and after the write returned.
+	BlocklistBefore *[]nativeRBDLockBlock `json:"blocklist_before"`
+	Blocklist       *[]nativeRBDLockBlock `json:"blocklist"`
+}
+
+// nativeRBDLockBlock is one entry of the native `osd blocklist ls`.
+type nativeRBDLockBlock struct {
+	Address string `json:"addr"`
+	Until   string `json:"until"`
 }
 
 // nativeRBDLockCompound is the native owner's object-map update vector with
@@ -218,6 +228,13 @@ type nativeRBDLock struct {
 	Check   *nativeRBDLockCheck      `json:"check"`
 	SetID   *nativeRBDLockSetID      `json:"set_id"`
 	SetIDGo *nativeRBDLockSetIDGo    `json:"set_id_go"`
+	// The lock-owner-loss sequence only.
+	Blocklist *[]nativeRBDLockBlock `json:"blocklist"`
+	GoExtents []struct {
+		Offset uint64 `json:"offset"`
+		Length uint64 `json:"length"`
+		SHA256 string `json:"sha256"`
+	} `json:"go_extents"`
 }
 
 type nativeRBDLockResult struct {

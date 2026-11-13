@@ -87,6 +87,8 @@ rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v
 rbd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdmirrorpathrecovery
 rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply
 rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply
+rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss
+rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss
 mgr-service.aes.ip4.crc.host.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration
 mgr-service.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-mgrserviceregistration
 mds-cephfs-multi-reconnect.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-mdscephfsmultireconnect

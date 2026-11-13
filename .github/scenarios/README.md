@@ -220,7 +220,19 @@ match the test, so no other row runs it. The CRC row attributes the withheld
 reply by transaction ID; the secure row cannot and says so in its record. See
 the
 [lost-append record](../../integration/fixture/RBD_JOURNAL_LOST_APPEND_VALIDATION.md).
-The catalog has 104 native rows in total.
+Two further `rbd` rows,
+`rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss`
+and
+`rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss`,
+select only `TestCephRBDLockOwnerLossIntegration` on the same two profiles,
+each on a fresh fixture. They reuse the `rbd` input too; the RBD fixture
+admits this exact selector and then serves a different closed lock action
+sequence, in which one native driver process ends by SIGKILL and two client
+addresses are blocklisted until the fixture's cleanup. No other RBD row
+matches the test. Each row waits twice for a 30 s watch to expire, so its test
+runs for about a minute. See the
+[lock-owner-loss record](../../integration/fixture/RBD_LOCK_OWNER_LOSS_VALIDATION.md).
+The catalog has 106 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
