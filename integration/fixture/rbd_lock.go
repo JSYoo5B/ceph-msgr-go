@@ -531,17 +531,23 @@ try:
             state = {'token': token, 'request_id': int(request_id), 'native_global_id': out['native_global_id'], 'phases': []}
             before = blocklist()
             image = rbd.Image(ioctx, name)
-            image_id = text(image.id())
-            started = time.monotonic_ns()
-            owner = [write(image, 'owner', e) for e in plan['owner_writes']]
-            image.flush()
-            publish_phase(state, image, image_id, 'acquired', writes=owner, write_ns=time.monotonic_ns() - started,
-                          blocklist_before=before, blocklist=blocklist())
-            waited = wait_proceed(1)
-            state['phases'][0]['wait_ns'] = waited
-            out['phases'] = state['phases']
-            out['blocklist'] = blocklist()
-            observe(ioctx, out)
+            try:
+                image_id = text(image.id())
+                started = time.monotonic_ns()
+                owner = [write(image, 'owner', e) for e in plan['owner_writes']]
+                image.flush()
+                publish_phase(state, image, image_id, 'acquired', writes=owner, write_ns=time.monotonic_ns() - started,
+                              blocklist_before=before, blocklist=blocklist())
+                waited = wait_proceed(1)
+                state['phases'][0]['wait_ns'] = waited
+                out['phases'] = state['phases']
+                out['blocklist'] = blocklist()
+                observe(ioctx, out)
+            except BaseException:
+                # A failed takeover is not a dead owner: it closes the image,
+                # which releases whatever it holds, and fails.
+                image.close()
+                raise
             # The owner dies here: no close, no unlock, no unwatch. The output
             # is complete before the signal.
             sys.stdout.write(json.dumps(out, sort_keys=True) + '\n')
