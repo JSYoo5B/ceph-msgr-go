@@ -27,7 +27,8 @@ def receipt(**changes):
     return value
 
 
-def stream(test, *, passes=1, package=True, extra=(), cleanup=True, line=None):
+def stream(test, *, passes=1, package=True, extra=(), cleanup=True, line=None, owner=gate.PACKAGE, terminal=gate.PACKAGE):
+    """Build a test2json stream; owner names the package of every test event, terminal that of the package PASS."""
     rows = []
     if line is None:
         line = ("RGW_NATIVE_MULTISTRIPE " + json.dumps(receipt())) if test == MULTI else \
@@ -38,8 +39,9 @@ def stream(test, *, passes=1, package=True, extra=(), cleanup=True, line=None):
         rows.append({"Action": "output", "Test": test, "Output": "    file_test.go:2: " + CLEANUP + "\n"})
     rows += [{"Action": "pass", "Test": test}] * passes
     rows += list(extra)
+    rows = [dict(row) if "Package" in row else dict(row, Package=owner) for row in rows]
     if package:
-        rows.append({"Action": "pass", "Package": "p"})
+        rows.append({"Action": "pass", "Package": terminal})
     return "\n".join(json.dumps(row) for row in rows) + "\n"
 
 
@@ -66,6 +68,34 @@ class RGWNativeGateTest(unittest.TestCase):
         self.assertFalse(gate.verify(stream(MULTI, extra=[{"Action": "fail", "Test": MULTI + "/sub"}]), MULTI)["passed"])
         self.assertFalse(gate.verify(stream(MULTI, cleanup=False), MULTI)["passed"])
         self.assertFalse(gate.verify(stream(MULTI, extra=[{"Action": "fail"}]), MULTI)["passed"])
+
+    def test_binds_every_result_to_the_fixture_package(self):
+        other = "example.org/unrelated"
+        for test in (SMALL, MULTI):
+            with self.subTest(test=test, case="foreign terminal package PASS"):
+                result = gate.verify(stream(test, terminal=other), test)
+                self.assertFalse(result["passed"])
+                self.assertIn("event outside the fixture package: " + other, result["problems"])
+                self.assertIn("no PASS of package " + gate.PACKAGE, result["problems"])
+            with self.subTest(test=test, case="foreign test events"):
+                result = gate.verify(stream(test, owner=other), test)
+                self.assertFalse(result["passed"])
+                self.assertTrue(any("must PASS exactly once, saw 0" in problem for problem in result["problems"]), result)
+                self.assertTrue(any("receipt, saw 0" in problem for problem in result["problems"]), result)
+                self.assertIsNone(result["cleanup"])
+            with self.subTest(test=test, case="foreign package PASS beside the fixture's own"):
+                result = gate.verify(stream(test, extra=[{"Action": "pass", "Package": other}]), test)
+                self.assertEqual(result["problems"], ["event outside the fixture package: " + other])
+            with self.subTest(test=test, case="event without a package"):
+                text = stream(test) + json.dumps({"Action": "pass"}) + "\n"
+                self.assertEqual(gate.verify(text, test)["problems"], ["event outside the fixture package: <none>"])
+            with self.subTest(test=test, case="selected test PASS without a package"):
+                text = stream(test, passes=0) + json.dumps({"Action": "pass", "Test": test}) + "\n"
+                self.assertFalse(gate.verify(text, test)["passed"])
+            with self.subTest(test=test, case="foreign failure"):
+                result = gate.verify(stream(test, extra=[{"Action": "fail", "Package": other}]), test)
+                self.assertFalse(result["passed"])
+            self.assertEqual(gate.verify(stream(test), test)["package"], gate.PACKAGE)
 
     def test_rejects_receipts_that_contradict_the_layout_arithmetic(self):
         short = receipt()
