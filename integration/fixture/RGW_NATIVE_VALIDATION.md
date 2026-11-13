@@ -199,7 +199,11 @@ that every Go file of the fixture module is tracked, runs the selected test
 under an `flock` and `go test -json`, applies `tools/rgw_native_gate.py` to the
 test2json stream and checks that no container or tree change remains. The gate
 requires exactly one PASS of the selected test, a package PASS, no failed or
-skipped test, the independent cleanup record and the test's own receipt, and it
+skipped test, the independent cleanup record and the test's own receipt. It
+binds all of them to the fixture module's package
+(`github.com/JSYoo5B/ceph-msgr-go/integration/fixture`): an event that names
+another package, or none, is reported and never counted, so a PASS of an
+unrelated package cannot complete the selected fixture run. The gate also
 recomputes the deterministic payload hash and the layout arithmetic. The same
 command shape works on an authorized Linux runner:
 
