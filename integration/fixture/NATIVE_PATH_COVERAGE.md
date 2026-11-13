@@ -97,6 +97,13 @@ by the final fragment, with two dedicated catalog rows and the record
 [MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md](MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md).
 The visibility columns of MDS-13 and MDS-14 now point to it. No class changed.
 
+Updated on 2026-11-13 for issue #12. RBD-7 is new: one Go journal append
+whose reply is lost while the appender holds the image's exclusive lock, with
+two dedicated catalog rows and the record
+[RBD_JOURNAL_LOST_APPEND_VALIDATION.md](RBD_JOURNAL_LOST_APPEND_VALIDATION.md).
+The visibility columns of RBD-5 and RBD-6 now point to it. RBD-6 stays
+`proposed` for the remaining fault combinations. No class changed.
+
 ## How to use this map
 
 This map owns the classification of native recipes and where each retained
@@ -277,8 +284,9 @@ a particular test in it ran. The Visibility column states which applies:
 | RBD-2 | Writes and object map updates | `released` | Write image with closed write control | librbd reads and native object map | Closed control; image removed | `TestCephRBDWriteIntegration`, [RBD_WRITE_VALIDATION.md](RBD_WRITE_VALIDATION.md) | dedicated rows |
 | RBD-3 | Exclusive lock handoff, notifications and selected RequestLock acknowledgement dispositions | `released` | Lock image with a native owner and a scripted Go owner/non-owner responder | Native lock ownership, Go raw notification/completion receipts and before/after MON blocklist samples; the native notifier's completion/logical result is not directly observed in owner-response cells | Non-owner omission and owner omission/empty/response cells; bounded handoff and watcher removal | `TestCephRBDExclusiveLockIntegration`, `TestRBDLockAckDispositionClassification`, [RBD_LOCK_VALIDATION.md](RBD_LOCK_VALIDATION.md) | dedicated rows; acknowledgement submission failure is synthetic only; additional timeout/cancellation/daemon-fault combinations remain |
 | RBD-4 | Clone, parent metadata and copy-up | `released` | Native parent snapshot and clone images | librbd parent spec and native clone objects | Closed clone control; clones removed | `TestCephRBDCloneIntegration`, [RBD_CLONE_VALIDATION.md](RBD_CLONE_VALIDATION.md) | dedicated rows |
-| RBD-5 | Journal entries, replay observation and a native/Go appender lock handoff | `released` | Journaling image with closed journal control; a native librbd writer and a Go appender hand the exclusive lock over through librbd notifications | Native journal objects, `rbd journal inspect`, tags, commit positions and librbd replay and image reads | Closed control; journal and image removed | `TestCephRBDJournalIntegration`, [RBD_JOURNAL_VALIDATION.md](RBD_JOURNAL_VALIDATION.md), [RBD_JOURNAL_CONCURRENT_VALIDATION.md](RBD_JOURNAL_CONCURRENT_VALIDATION.md) | dedicated rows; appender handoff merged in #45 (`e1f01d3`); one handoff cycle on one OSD; simultaneous Go appends on the wire and live uncertain outcomes unverified |
-| RBD-6 | Concurrent journal, lock and notification paths under backend faults | `proposed` | Not defined | Not defined | Not defined | issue #12 | the fault-free appender handoff is RBD-5 and selected RequestLock omission/empty/response cells are RBD-3; combined backend faults, dead-owner/forced-break, journal uncertainty and replicated-primary changes remain |
+| RBD-5 | Journal entries, replay observation and a native/Go appender lock handoff | `released` | Journaling image with closed journal control; a native librbd writer and a Go appender hand the exclusive lock over through librbd notifications | Native journal objects, `rbd journal inspect`, tags, commit positions and librbd replay and image reads | Closed control; journal and image removed | `TestCephRBDJournalIntegration`, [RBD_JOURNAL_VALIDATION.md](RBD_JOURNAL_VALIDATION.md), [RBD_JOURNAL_CONCURRENT_VALIDATION.md](RBD_JOURNAL_CONCURRENT_VALIDATION.md) | dedicated rows; appender handoff merged in #45 (`e1f01d3`); one handoff cycle on one OSD; simultaneous Go appends on the wire unverified; the one live uncertain outcome is RBD-7 |
+| RBD-6 | Concurrent journal, lock and notification paths under backend faults | `proposed` | Not defined | Not defined | Not defined | issue #12 | the fault-free appender handoff is RBD-5, selected RequestLock omission/empty/response cells are RBD-3 and one lost journal append reply under a live lock holder is RBD-7; combined backend faults, dead-owner/forced-break, journal uncertainty beyond that one cell and replicated-primary changes remain |
+| RBD-7 | One Go journal append whose reply is lost while the appender holds the image's exclusive lock | `released` | Fresh journaling image with the closed lost-append action sequence; a test-only gate on the Go appender's OSD connection withholds the reply to that one request (bound to its transaction ID in CRC mode, to the one write of its size in secure mode) | Native oracle: librados reads of the journal objects, `rbd journal status` and `inspect` and a librbd image read while the call is pending, again after the caller recorded its unknown outcome and before it releases the lock, and after native librbd acquired the lock and replayed | Unknown append outcome, never resent; the silent connection is closed, the watch reattached on a new one, the lock released by its holder; image, journal and pool removed | `group:rbd`, `TestCephRBDJournalLostAppendReplyIntegration`, `TestRBDJournalLostAppendClaims`, [RBD_JOURNAL_LOST_APPEND_VALIDATION.md](RBD_JOURNAL_LOST_APPEND_VALIDATION.md) | two dedicated rows (CRC/AES IPv4 host BlueStore and secure/aes256k IPv6 container MemStore); one entry, one OSD, a live lock holder; the secure row names no frame or transaction; transmissions are counted on the client's connections, not by the daemon; a resent append and an early lock release are shown only by temporary mutation runs; primary change, explicit resubmission, owner loss and blocklisting, other lost replies and hosted runs not run |
 
 ### Daemon-to-daemon
 
@@ -318,7 +326,7 @@ a particular test in it ran. The Visibility column states which applies:
 
 | Class | Rows |
 | --- | --- |
-| `released` | 75 |
+| `released` | 76 |
 | `main-only` | 0 |
 | `primitive` | 13 |
 | `proposed` | 8 |

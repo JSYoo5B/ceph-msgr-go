@@ -53,9 +53,32 @@ import (
 // control. Each action runs at most once and only after its predecessors.
 var rbdJournalActions = []string{"setup", "observe-registered", "write", "observe-committed", "inspect", "replay", "concurrent"}
 
+// rbdJournalLostAppendSelector selects the lost-append-reply acceptance. It
+// runs alone on a fresh RBD fixture and replaces the ordinary sequence with
+// rbdJournalLostAppendActions.
+const rbdJournalLostAppendSelector = "^TestCephRBDJournalLostAppendReplyIntegration$"
+
+// rbdJournalLostAppendActions is the closed, ordered action sequence of the
+// lost-append-reply acceptance: the setup, an observation once the Go test
+// holds the image's exclusive lock and its journal tag, a checkpoint (with
+// `rbd journal inspect`) while the reply to the Go append is withheld, an
+// observation after the Go test recorded its unknown outcome and before it
+// releases the lock, and the native replay. The driver does the same work as
+// in the ordinary sequence; only the order and the receipt names differ.
+var rbdJournalLostAppendActions = []string{"setup", "observe-locked", "checkpoint", "observe-recorded", "replay"}
+
+// rbdJournalActionsFor returns the action sequence the selected test run
+// admits.
+func rbdJournalActionsFor(testRun string) []string {
+	if testRun == rbdJournalLostAppendSelector {
+		return rbdJournalLostAppendActions
+	}
+	return rbdJournalActions
+}
+
 // rbdJournalInspected names the actions that run `rbd journal inspect`.
 func rbdJournalInspected(action string) bool {
-	return action == "setup" || action == "inspect" || action == "replay" || action == "concurrent"
+	return action == "setup" || action == "inspect" || action == "replay" || action == "concurrent" || action == "checkpoint"
 }
 
 // rbdJournalPhases is the ordered phase list the concurrent action publishes
@@ -64,7 +87,7 @@ var rbdJournalPhases = []string{"owner", "issued", "completed", "closed"}
 
 // rbdJournalReadOnly names the observations that change no owned state.
 // `rbd journal inspect` registers and unregisters its own journal client, so
-// the inspect action is journaled as a mutation.
+// the inspect and checkpoint actions are journaled as mutations.
 func rbdJournalReadOnly(action string) bool { return strings.HasPrefix(action, "observe-") }
 
 // rbdJournalBlobViews names the binary views every native journal action
@@ -174,7 +197,8 @@ import hashlib, json, os, struct, subprocess, sys, time
 import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
-ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent')
+ACTIONS = ('setup', 'observe-registered', 'write', 'observe-committed', 'inspect', 'replay', 'concurrent',
+           'observe-locked', 'checkpoint', 'observe-recorded')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('image') != 'ceph-msgr-journal-' + token or plan.get('features') != 69
@@ -322,7 +346,7 @@ def observe(ioctx, out):
     spec = pool + '/' + image_id
     out['info'] = cli(['journal', 'info', '--format', 'json', spec], json.loads)
     out['status'] = cli(['journal', 'status', '--format', 'json', spec], json.loads)
-    if action in ('setup', 'inspect', 'replay', 'concurrent'):
+    if action in ('setup', 'inspect', 'replay', 'concurrent', 'checkpoint'):
         out['inspect'] = cli(['journal', 'inspect', '--verbose', spec], parse_inspect)
     out['blobs'] = {'image_head': publish(PREFIX + 'image-head.bin', head), 'journal_objects': publish(PREFIX + 'journal-objects.bin', view)}
 
@@ -749,8 +773,8 @@ func (c *fixtureCluster) rbdJournalRunNative(ctx context.Context, action string,
 }
 
 // parseRBDJournalRequest admits <id> <ownership token> <action> where the
-// action is the next one of rbdJournalActions (next is its index).
-func parseRBDJournalRequest(fields []string, token string, previousID int64, next int) (int64, string, error) {
+// action is the next one of the selected sequence (next is its index).
+func parseRBDJournalRequest(actions, fields []string, token string, previousID int64, next int) (int64, string, error) {
 	if len(fields) != 3 || len(token) != 32 || fields[1] != token {
 		return 0, "", errors.New("invalid owned RBD journal request scope")
 	}
@@ -761,10 +785,10 @@ func parseRBDJournalRequest(fields []string, token string, previousID int64, nex
 	if err != nil || id <= 0 || id <= previousID || strconv.FormatInt(id, 10) != fields[0] {
 		return 0, "", errors.New("invalid RBD journal request identity")
 	}
-	if !slices.Contains(rbdJournalActions, fields[2]) {
+	if !slices.Contains(actions, fields[2]) {
 		return 0, "", errors.New("RBD journal action is not admitted")
 	}
-	if next >= len(rbdJournalActions) || fields[2] != rbdJournalActions[next] {
+	if next >= len(actions) || fields[2] != actions[next] {
 		return 0, "", errors.New("RBD journal action is out of order or was already issued")
 	}
 	return id, fields[2], nil
@@ -777,7 +801,7 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 		return plan.Image + ",journal-client:" + plan.OracleClient
 	case "write":
 		return plan.Image + ":native-write"
-	case "inspect":
+	case "inspect", "checkpoint":
 		return plan.Image + ":journal-inspect"
 	case "replay":
 		return plan.Image + ":exclusive-lock,journal-replay"
@@ -788,8 +812,8 @@ func rbdJournalTarget(plan rbdJournalPlan, action string) string {
 }
 
 // rbdJournalControl runs one native action of the closed journal sequence.
-// The setup, write, inspect and replay actions are journaled as mutations,
-// the two observations as read-only actions.
+// The setup, write, inspect, checkpoint and replay actions are journaled as
+// mutations, the observations as read-only actions.
 func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fields []string) (resultErr error) {
 	x := c.rbdBase
 	if c.profile.rbdBase != "1" || x == nil || x.out != out || x.setup == nil || x.native == nil || !x.plan.owned(x.token) || !x.journalPlan.owned(x.token) {
@@ -804,7 +828,7 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	if x.cleanupAttempted {
 		return errors.New("RBD journal control requested after cleanup began")
 	}
-	id, action, err := parseRBDJournalRequest(fields, x.token, x.journalLastRequestID, x.journalNext)
+	id, action, err := parseRBDJournalRequest(rbdJournalActionsFor(c.profile.testRun), fields, x.token, x.journalLastRequestID, x.journalNext)
 	if err != nil {
 		return err
 	}

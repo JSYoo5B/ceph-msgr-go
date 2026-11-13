@@ -168,8 +168,11 @@ cascading fixture error. The fixed test sends librbd's unguarded form.
 - That the OSD accepted two Go appends that were simultaneously on the wire:
   the goroutine submissions are not observed to overlap.
 - Lost notifications or acknowledgements, lock-owner loss, blocklisting
-  during handoff, a reply lost after an append (an `uncertain` outcome was
-  never observed live and is unit-tested only) and primary changes. These are issue #12 items 3 and 4.
+  during handoff, a reply lost after an append in this session (its
+  `uncertain` outcome is unit-tested only here) and primary changes. These
+  are issue #12 items 3 and 4. One lost append reply on a fresh image with a
+  live lock holder is recorded separately in
+  [RBD_JOURNAL_LOST_APPEND_VALIDATION.md](RBD_JOURNAL_LOST_APPEND_VALIDATION.md).
 - Go replaying uncommitted entries left by another owner: the test requires
   a fully committed journal at acquisition.
 - Native librbd replaying a Go entry during a live reacquisition. Go
