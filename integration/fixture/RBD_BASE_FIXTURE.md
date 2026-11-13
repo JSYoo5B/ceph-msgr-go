@@ -5,10 +5,14 @@ OSD fixture (`CEPH_MSGR_TEST_OSD=1`). It selects only
 `^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$` (an
 explicit `CEPH_MSGR_TEST_RUN` must be that selector, or the exact selector of
 the lost-append-reply acceptance described under
-"[Lost-append-reply sequence](#lost-append-reply-sequence)" or of the
+"[Lost-append-reply sequence](#lost-append-reply-sequence)", of the
+primary-change acceptance described under
+"[Primary-change sequence](#primary-change-sequence)", of the
 lock-owner-loss acceptance described under
-"[Lock-owner-loss sequence](#lock-owner-loss-sequence)", each of which then
-runs alone; `go test` runs them in
+"[Lock-owner-loss sequence](#lock-owner-loss-sequence)" or of its pending
+variant described under
+"[Pending lock-owner-loss sequence](#pending-lock-owner-loss-sequence)", each
+of which then runs alone; `go test` runs them in
 file order: `TestCephRBDBaseIntegration`, then `TestCephRBDCloneIntegration`,
 then `TestCephRBDJournalIntegration`, then
 `TestCephRBDExclusiveLockIntegration`, then `TestCephRBDWriteIntegration`) and
@@ -23,6 +27,13 @@ runtimes are admitted. The replicated-PG profiles (`replicated-pg-v8`,
 `replicated-pg-reply-v8`) are refused: their explicit-PG requests and
 HASHPSPOOL pools are not verified with RBD here. The fixture termination
 budget is two minutes.
+
+One selection runs on another topology. The primary-change acceptance
+requires three BlueStore OSDs (`CEPH_MSGR_TEST_OSD_REPLICAS=3`,
+`CEPH_MSGR_TEST_OSD_STORE=bluestore`) with the same `legacy-v6` profile, and
+that topology admits no other RBD selection, not even the default one. The
+owned pool then has three replicas, `min_size` 2 and one PG instead of eight,
+so that every owned object has the same acting set and primary.
 
 Reference: Tentacle Ceph 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`. Relied-upon behavior is read from
@@ -378,6 +389,40 @@ addresses that `observe-go-owner` and the `acquired` phase list (librbd's
 `list_lockers`) for the cleanup. Receipts are `rbd-lock-<action>.json` as
 above. The test's own record is `rbd-lock-owner-loss-results.json`.
 
+### Pending lock-owner-loss sequence
+
+Under the exact selector `^TestCephRBDLockOwnerLossPendingIntegration$` (see
+[RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md](RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md))
+the control serves the lock-owner-loss sequence with two more actions before
+the final one: `setup`, `observe-go-owner`, `takeover`, `observe-go-broke`,
+`advance-map`, `observe-answered`, `final`. Neither other sequence admits the
+two new actions at any position.
+
+- `advance-map` runs no native driver. The test has arranged that the OSD
+  holds two requests which name an OSDMap epoch the cluster has not reached
+  (`osd/OSD.cc` `dispatch_session_waiting`). The fixture reads the epoch and
+  the owned pool's flags from `ceph osd dump`, refuses to start when the
+  pool's `nodeep-scrub` flag is already set, and then runs `ceph osd pool set
+  <owned pool> nodeep-scrub true` and `false` in turn, reading the map after
+  each command, until the epoch is at least eight above the first read and
+  the flag is clear again. It issues at most 32 commands. The flag suppresses
+  deep scrubs of the owned pool while it is set and starts no new PG
+  interval. Before the first command and after the last one the fixture reads
+  `ceph tell osd.<id> dump_ops_in_flight` of every OSD and keeps the client
+  operations (description, client, transaction, receipt time, age and flag
+  point; at most 32). After the last command it repeats that read every
+  200 ms until none of the operations seen at the start is left, for at most
+  20 s; what remains then is reported, not judged. The receipt
+  `rbd-lock-advance-map.json` has no `native` or `native_process` part; its
+  `advance` part holds the pool, the flag, the epochs, the commands and both
+  operation lists. The action is journaled as the mutation
+  `native-lock-advance-map` with the target
+  `<owned pool>:pool-flag-nodeep-scrub,osdmap-epoch`.
+- `observe-answered` is one more read-only observation with the blocklist,
+  as `observe-go-broke`.
+
+The test's own record is `rbd-lock-owner-loss-pending-results.json`.
+
 ## Clone images and closed clone control
 
 `TestCephRBDCloneIntegration` (see
@@ -569,6 +614,42 @@ test's own records, `rbd-journal-lost-append-outcome.json` (written when the
 caller learns its outcome) and `rbd-journal-lost-append-results.json`, are on
 the diagnostics allowlist with them.
 
+### Primary-change sequence
+
+Under the exact selector `^TestCephRBDJournalPrimaryChangeIntegration$` (see
+[RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md](RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md)),
+and only on the three-OSD topology described at the top, the control serves
+the lost-append-reply sequence with two more actions before the replay:
+`setup`, `observe-locked`, `checkpoint`, `observe-recorded`, `change-primary`,
+`observe-resubmitted`, `replay`. Neither other sequence admits the two new
+actions at any position.
+
+- `change-primary` has an administrative part and then the ordinary
+  observation. The fixture reads `ceph osd map <owned pool> <object>` for the
+  image header, journal object 0 and the journal header. Each must be on
+  three distinct OSDs, with equal up and acting sets led by the same OSD. It
+  records that OSD in `rbd-base-owned.json` (`osds_marked_out`) and runs `ceph
+  osd out <id>` once. It then reads the three placements every 200 ms, for at
+  most 30 s, until each object is in the same PG, in a newer epoch, on the two
+  other OSDs alone. The OSD that was marked out keeps running. The receipt
+  `rbd-journal-change-primary.json` carries the part `primary_change`: both
+  placements of every object, the OSD, the command, the number of reads and
+  the elapsed time. The native observation follows as in every action. The
+  action is journaled as a mutation with the target
+  `<image>:osd-out,acting-primary`.
+- `observe-resubmitted` is a read-only observation like `observe-recorded`.
+
+`osd primary-affinity` is not used to move the primary. An OSDMap in which an
+OSD has a non-default primary affinity requires
+`CEPH_FEATURE_OSD_PRIMARY_AFFINITY` of every client (`osd/OSDMap.cc`
+`get_features`). The `legacy-v6` Go client does not advertise it, and the
+first run of this sequence, which used that command, ended with every OSD
+refusing the client's next connection (`peer requires 0x0000020000000000`).
+
+The driver receives nothing new. The test's own records are
+`rbd-journal-primary-change-outcome.json` and
+`rbd-journal-primary-change-results.json`.
+
 ## Uncertain outcomes and cleanup
 
 A failed, killed or truncated native process is an error: its output is
@@ -592,6 +673,12 @@ entries of the lock-owner addresses it kept (`ceph osd blocklist rm` for
 each exact entry, never a range or another address), reads the blocklist
 again and reports an entry that remains; the receipt lists the addresses and
 the removed entries (`lock_owner_addresses`, `lock_blocklist_removed`).
+After the primary-change sequence the cleanup first runs `ceph osd in <id>`
+for the OSD it recorded before `osd out`, reads `ceph osd dump` and reports
+an OSD that is not in; the receipt lists both (`osds_marked_out`,
+`osds_marked_in`). The pending lock-owner-loss sequence leaves nothing for
+the cleanup beyond the two blocklist entries: `advance-map` ends with the
+pool flag clear, and the pool is removed.
 
 ## Published receipts
 
@@ -605,7 +692,11 @@ receipts of the actions before `concurrent` and the suites' own `rbd-base-result
 and `rbd-journal-results.json` are on the diagnostics allowlist.
 The four further `rbd-lock-<action>.json` receipts of the lock-owner-loss
 sequence and its `rbd-lock-owner-loss-results.json` are on the allowlist as
-well. `rbd-journal-concurrent.json` and `rbd-journal-state.json` are not on
+well, as are `rbd-lock-advance-map.json`, `rbd-lock-observe-answered.json`
+and `rbd-lock-owner-loss-pending-results.json` of the pending variant and
+`rbd-journal-change-primary.json`, `rbd-journal-observe-resubmitted.json`,
+`rbd-journal-primary-change-outcome.json` and
+`rbd-journal-primary-change-results.json` of the primary-change sequence. `rbd-journal-concurrent.json` and `rbd-journal-state.json` are not on
 the allowlist. The journal test copies the published concurrent state, its
 notifications and the outcome of every Go request into
 `rbd-journal-results.json`. The binary views and the keys are not archived.
@@ -643,6 +734,16 @@ the closed-shape decoding of the four new actions (none admitted as another,
 none of their fields on an ordinary action), and that the cleanup removes
 only the exact blocklist entries of the kept lock-owner addresses and
 reports a failed removal or a remaining entry.
+For the pending variant it checks that its sequence is the lock-owner-loss
+sequence with `advance-map` and `observe-answered` before the final action,
+admitted only under its exact selector and refused by both other sequences;
+that `advance-map` runs no driver and is a mutation of the owned pool; that
+the epoch is raised by toggling the flag until it is far enough and the flag
+is clear, within a bound, and that a set flag, an unread map, a refused
+command, a flag that did not change, an epoch that never moves and unread
+operations are errors; that operations still in flight at the bound are
+reported; and the decoding of `dump_ops_in_flight` (client operations only,
+within a bound).
 `TestRBDLockTestOnlyEncodings` in `integration/rbd_lock_test.go` checks the
 watch-notify `ClientId`, `NotifyMessage` and `ResponseMessage` encodings and
 decoders (every truncation, a trailing byte, compat 2, version 1 payloads,
@@ -669,7 +770,17 @@ admit the journaling image, the closed and ordered journal request sequence
 and its read-only marking, the closed-shape decoding of every journal action
 (the exec list, the eight journal objects, the command lines, the events only
 for `setup` and `write`, the replay fields only for `replay`) and that the
-journal driver parses as Python. `TestRBDJournalTestOnlyEncodings` in
+journal driver parses as Python. For the primary-change sequence it checks
+that the selector is admitted only in its exact form on three BlueStore OSDs
+with the `legacy-v6` profile, and that this topology admits no other RBD
+selection; that the sequence is the lost-append sequence with
+`change-primary` and `observe-resubmitted` before the replay and that both
+other sequences refuse those actions; that the primary is marked out once,
+only after the intent is recorded, and that the action fails when the
+objects have different primaries, a placement is not three distinct OSDs,
+the primary does not move, another acting set appears, a command is refused
+or the map is unread; and that the cleanup marks the OSD in and reports only
+what the OSDMap confirms. `TestRBDJournalTestOnlyEncodings` in
 `integration/rbd_journal_test.go` checks the seed-0 CRC-32C against Ceph's
 own test vectors, the Entry framing, padding walk and CRC refusal, the
 AioWrite and AioDiscard EventEntry encodings, `ObjectSetPosition`,

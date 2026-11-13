@@ -534,12 +534,16 @@ for a different result.
 
 - A write by a fenced Go owner on a second connection of the same client.
   The read above shows that such a connection is served.
-- A primary change or any multi-OSD acting set. Both rows have one OSD. That
-  part of issue #12 requirement 3 stays open, with a three-OSD replicated
-  recipe as its precondition.
+- A primary change or any multi-OSD acting set. Both rows have one OSD. A
+  live lock owner across a primary change on three replicated BlueStore
+  OSDs is part of
+  [RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md](RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md);
+  the loss of a lock owner on more than one OSD is not run.
 - A mutation of the old owner that is pending or uncertain when the lock is
   broken. The zombie has nothing in flight when it goes silent, and every
-  fenced attempt got a reply.
+  fenced attempt got a reply. Two requests that the OSD holds unanswered
+  through both handoffs are the subject of
+  [RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md](RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md).
 - The removal or expiry of a blocklist entry and what the fenced connection
   may do afterwards. The fixture removes both entries only at cleanup.
 - A forced break (`RequestLock` with force, `rbd lock break`), a break of a

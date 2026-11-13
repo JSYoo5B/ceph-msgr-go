@@ -408,17 +408,21 @@ accepted it.
 
 - A primary change or any multi-OSD acting set: both rows have one OSD, so
   the lost reply is not combined with a new primary, a PG log dedup of a
-  resent request, or peering. That part of issue #12 requirement 3 stays
-  open, with a three-OSD replicated recipe as its precondition.
+  resent request, or peering. The same sequence on three replicated
+  BlueStore OSDs, with a change of the acting primary, is recorded in
+  [RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md](RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md).
 - An explicit resubmission of the uncertain append with its original
   transaction (`OSDRequest.Resubmit`). The caller here does nothing with the
   uncertain request. What the OSD answers to such a resubmission of a
-  `journal.append` is not observed.
+  `journal.append` is observed in the primary-change record, on the new
+  primary only; on these single-OSD rows it is not.
 - Lock-owner loss, blocklisting and a forced lock break while the outcome is
   uncertain. The subject stays alive and releases the lock itself. Owner
-  loss without a pending request, on an image without journaling, is
-  recorded in
-  [RBD_LOCK_OWNER_LOSS_VALIDATION.md](RBD_LOCK_OWNER_LOSS_VALIDATION.md).
+  loss on an image without journaling is recorded in
+  [RBD_LOCK_OWNER_LOSS_VALIDATION.md](RBD_LOCK_OWNER_LOSS_VALIDATION.md)
+  without a pending request and in
+  [RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md](RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md)
+  with two requests that the OSD holds unanswered.
 - A reply lost on the `tag_create`, on `lock.lock` or `lock.unlock`, on the
   compat append form (`guard_append` then APPEND), on a data write or on a
   `client_commit`; more than one pending append; an append that the OSD did
