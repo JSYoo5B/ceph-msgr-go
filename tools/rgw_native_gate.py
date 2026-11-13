@@ -5,7 +5,9 @@ The RGW checkpoints in integration/fixture skip unless an explicit environment
 variable is set, so a zero exit status is not acceptance. This gate reads the
 test2json stream and requires exactly one PASS of the selected top-level test,
 a package PASS, no failed or skipped test, the independent owned-resource
-cleanup record and the selected test's own receipt. For the multi-stripe
+cleanup record and the selected test's own receipt. Every event must name the
+fixture module's package: a result, receipt or package PASS attributed to any
+other package, or to none, is a problem and is never counted. For the multi-stripe
 checkpoint it also recomputes the deterministic payload hash and checks the
 retained layout arithmetic, so a receipt cannot pass on its own claims alone.
 
@@ -22,6 +24,8 @@ from pathlib import Path
 CHECKPOINT = "TestRGWNativeCheckpointIntegration"
 MULTISTRIPE = "TestRGWNativeMultiStripeIntegration"
 TESTS = (CHECKPOINT, MULTISTRIPE)
+# The module path in integration/fixture/go.mod; both tests live in its root package.
+PACKAGE = "github.com/JSYoo5B/ceph-msgr-go/integration/fixture"
 MULTISTRIPE_SIZE = 6 << 20
 SOURCE = "7f793731f1b39eb4f465e960113d2363c311b964"
 IMAGE_DIGEST = "6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9"
@@ -103,9 +107,16 @@ def verify(text, test):
     if test not in TESTS:
         raise ValueError("unsupported test selector")
     rows = parse_stream(text)
-    problems, passes, package_pass, output = [], 0, False, []
+    problems, passes, package_pass, output, foreign = [], 0, False, [], []
     for row in rows:
         action, name = row.get("Action"), row.get("Test")
+        if row.get("Package") != PACKAGE:
+            package = row.get("Package")
+            label = package if isinstance(package, str) and package else "<none>"
+            if label not in foreign:
+                foreign.append(label)
+                problems.append("event outside the fixture package: %s" % label)
+            continue
         if name and name != test and not name.startswith(test + "/"):
             problems.append("unexpected test in the stream: %s" % name)
             continue
@@ -126,7 +137,7 @@ def verify(text, test):
     if passes != 1:
         problems.append("the selected test must PASS exactly once, saw %d" % passes)
     if not package_pass:
-        problems.append("no package PASS")
+        problems.append("no PASS of package %s" % PACKAGE)
     text_output = "".join(output)
     cleanup = CLEANUP.search(text_output)
     if not cleanup:
@@ -147,7 +158,7 @@ def verify(text, test):
         receipt = {"line_sha256": hashlib.sha256(receipts[0].encode()).hexdigest()}
         if "object_index_user_cleanup=confirmed" not in receipts[0] or SOURCE not in receipts[0]:
             problems.append("checkpoint receipt lacks its confirmed cleanup or pinned source")
-    summary = {"test": test, "passed": not problems, "problems": problems,
+    summary = {"test": test, "package": PACKAGE, "passed": not problems, "problems": problems,
                "cleanup": {"containers": int(cleanup[1]), "volumes": int(cleanup[2])} if cleanup else None,
                "receipt_sha256": hashlib.sha256(receipts[0].encode()).hexdigest() if len(receipts) == 1 else None,
                "stripes": len(receipt.get("stripes", [])) if isinstance(receipt, dict) and test == MULTISTRIPE else None}
