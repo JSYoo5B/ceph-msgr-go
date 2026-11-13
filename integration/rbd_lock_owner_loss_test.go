@@ -183,6 +183,39 @@ type rbdLockOwnerLossBreak struct {
 	MapLockCode             int32
 }
 
+// rbdLockOwnerLossBreakTarget says why the breaker must not go on to the MON
+// blocklist command and break_lock: the locker it read first, or the one it
+// read again once the watch was gone, is not the killed owner's record. It is
+// checked before either mutation, so a lock that changed hands during the
+// polling stops the sequence instead of fencing or breaking the new owner.
+func rbdLockOwnerLossBreakTarget(owner rbdLockOwnerLossParty, first, refreshed rbdLockOwnerLossLocker) error {
+	dead := rbdLockOwnerLossLocker{fmt.Sprintf("client.%d", owner.GlobalID), owner.LockCookie, owner.Address}
+	if owner.GlobalID == 0 || owner.LockCookie == "" || owner.Address == "" {
+		return fmt.Errorf("the killed owner's identity is incomplete: %+v", owner)
+	}
+	if first != dead {
+		return fmt.Errorf("the locker read first is not the killed owner: %+v, want %+v", first, dead)
+	}
+	if refreshed != dead {
+		return fmt.Errorf("the locker read again is not the killed owner: %+v, want %+v", refreshed, dead)
+	}
+	return nil
+}
+
+// rbdLockOwnerLossMapBreakTarget is the same check for the object map, whose
+// lock librbd takes with an empty cookie: break_lock is built only from the
+// killed owner's sole record.
+func rbdLockOwnerLossMapBreakTarget(owner rbdLockOwnerLossParty, lockers []rbdLockOwnerLossLocker) error {
+	dead := rbdLockOwnerLossLocker{fmt.Sprintf("client.%d", owner.GlobalID), "", owner.Address}
+	if owner.GlobalID == 0 || owner.Address == "" {
+		return fmt.Errorf("the killed owner's identity is incomplete: %+v", owner)
+	}
+	if len(lockers) != 1 || lockers[0] != dead {
+		return fmt.Errorf("the object map is not locked by exactly the killed owner: %+v, want %+v", lockers, dead)
+	}
+	return nil
+}
+
 type rbdLockOwnerLossRecord struct {
 	Token, Pool                            string
 	PoolID                                 int64
@@ -1049,9 +1082,11 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 		return r, reply, err
 	}
 	// send requires the given result code and the party's reply identity.
-	send := func(t *testing.T, p *party, label, object string, code int32, ops ...cephmsgr.OSDOperation) cephmsgr.OSDReply {
+	// known requires the one expected outcome of a request: the given code as
+	// a received OSD answer with the reply identity of this submission. An
+	// unknown outcome carries a zero reply code and is never a success.
+	known := func(t *testing.T, p *party, label string, r rbdRoute, reply cephmsgr.OSDReply, err error, code int32, ops []cephmsgr.OSDOperation) {
 		t.Helper()
-		r, reply, err := submit(t, p, label, object, ops...)
 		var server *cephmsgr.OSDError
 		if code == 0 && err != nil || code != 0 && (!errors.As(err, &server) || server.Code != code) {
 			t.Fatalf("Go %s %s: result differs from %d: %v", p.role, label, code, err)
@@ -1061,6 +1096,16 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 			mutating(ops) && code == 0 && (reply.Flags&cephmsgr.OSDReplyOnDisk == 0 || reply.UserVersion == 0) {
 			t.Fatalf("Go %s %s: OSD reply identity differs: code=%d tid=%d gid=%d epoch=%d flags=%#x", p.role, label, reply.Code, reply.Transaction, reply.GlobalID, reply.MapEpoch, reply.Flags)
 		}
+	}
+	sendOn := func(t *testing.T, p *party, label, object string, code int32, ops ...cephmsgr.OSDOperation) (rbdRoute, cephmsgr.OSDReply) {
+		t.Helper()
+		r, reply, err := submit(t, p, label, object, ops...)
+		known(t, p, label, r, reply, err, code, ops)
+		return r, reply
+	}
+	send := func(t *testing.T, p *party, label, object string, code int32, ops ...cephmsgr.OSDOperation) cephmsgr.OSDReply {
+		t.Helper()
+		_, reply := sendOn(t, p, label, object, code, ops...)
 		return reply
 	}
 	// attempt keeps the raw outcome of one request without requiring it.
@@ -1559,16 +1604,24 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 		t.Fatal("the killed owner's lock record is gone", lockers)
 	}
 	brk.Locker = lockers[0]
+	if err := rbdLockOwnerLossBreakTarget(record.NativeOwner, brk.Locker, brk.Locker); err != nil {
+		t.Fatal("before the first lock attempt:", err)
+	}
 	deadHandle, ok := rbdLockHandle(brk.Locker.Cookie)
 	if !ok {
 		t.Fatal("the locker's cookie is not a managed-lock cookie", brk.Locker.Cookie)
 	}
-	_, reply, _ = submit(t, breaker, "break_first_lock", header, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInput(record.Breaker.LockCookie)))
-	brk.FirstLockCode = reply.Code
-	if reply.Code == 0 {
+	// Every break and acquire call below must be answered with its one
+	// expected code as a known OSD answer; anything else, an unknown
+	// outcome included, stops the sequence before the next mutation.
+	firstOps := []cephmsgr.OSDOperation{classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInput(record.Breaker.LockCookie))}
+	firstRoute, firstReply, firstErr := submit(t, breaker, "break_first_lock", header, firstOps...)
+	brk.FirstLockCode = firstReply.Code
+	if firstErr == nil && firstReply.Code == 0 {
 		breakerLocked = true
 		t.Fatal("the breaker took a lock that the killed owner still held")
 	}
+	known(t, breaker, "break_first_lock", firstRoute, firstReply, firstErr, rbdLockBusy, firstOps)
 	// BreakRequest: an owner whose watch is listed with the locker's address
 	// and handle is alive, and its lock is not broken.
 	alive := func(watchers []rbdLockOwnerLossWatcher) bool {
@@ -1598,6 +1651,12 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 	brk.RefreshedLocker = lockers[0]
 	goView(t, "dead-owner-unlisted")
 	done("dead_owner_unlisted")
+	// The blocklist command and break_lock name the locker read at the start.
+	// Both are sent only while the refreshed record is still that locker and
+	// the killed native owner; a lock that changed hands stops here.
+	if err := rbdLockOwnerLossBreakTarget(record.NativeOwner, brk.Locker, brk.RefreshedLocker); err != nil {
+		t.Fatal("before the MON blocklist command:", err)
+	}
 	// librados blocklist_add: the same MON command, without an expiry. The
 	// identity's `profile rbd` grants exactly this form.
 	command, _ := json.Marshal(map[string]string{"prefix": "osd blocklist", "blocklistop": "add", "addr": brk.Locker.Address})
@@ -1632,34 +1691,31 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 		}
 		return input
 	}
-	r, reply, _ := submit(t, breaker, "break_lock", header, classOp("lock", "break_lock", cephmsgr.OSDCallWrite, breakInput(brk.Locker)))
+	r, reply := sendOn(t, breaker, "break_lock", header, 0, classOp("lock", "break_lock", cephmsgr.OSDCallWrite, breakInput(brk.Locker)))
 	brk.BreakRequestEpoch, brk.BreakReplyEpoch, brk.BreakCode = r.Epoch, reply.MapEpoch, reply.Code
 	done("break_lock")
-	_, reply, _ = submit(t, breaker, "lock_lock", header, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInput(record.Breaker.LockCookie)))
+	// The header lock may be held from the moment this request is sent, so
+	// the cleanup releases it whatever the outcome; ownership is announced
+	// only after the known answer.
+	breakerLocked = true
+	reply = send(t, breaker, "lock_lock", header, 0, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInput(record.Breaker.LockCookie)))
 	brk.LockCode = reply.Code
-	breakerLocked = reply.Code == 0
-	breakerResponder.setOwning(breakerLocked)
+	breakerResponder.setOwning(true)
 	done("go_lock")
 	// object_map::LockRequest: lock, and on -EBUSY read the lockers, break
 	// each of them in one write and lock again.
-	_, reply, _ = submit(t, breaker, "map_first_lock", mapObject, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInputFor("", "")))
+	reply = send(t, breaker, "map_first_lock", mapObject, rbdLockBusy, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInputFor("", "")))
 	brk.MapFirstLockCode = reply.Code
 	_, brk.MapLockers = lockInfo(t, breaker, "map_get_lockers", mapObject, "")
-	var breaks []cephmsgr.OSDOperation
-	for _, l := range brk.MapLockers {
-		breaks = append(breaks, classOp("lock", "break_lock", cephmsgr.OSDCallWrite, breakInput(l)))
+	// break_lock is built only from the killed owner's sole record.
+	if err := rbdLockOwnerLossMapBreakTarget(record.NativeOwner, brk.MapLockers); err != nil {
+		t.Fatal("before the object-map break_lock:", err)
 	}
-	if len(breaks) != 1 {
-		t.Fatal("the object map does not have exactly the killed owner's lock", brk.MapLockers)
-	}
-	_, reply, _ = submit(t, breaker, "map_break_lock", mapObject, breaks...)
+	reply = send(t, breaker, "map_break_lock", mapObject, 0, classOp("lock", "break_lock", cephmsgr.OSDCallWrite, breakInput(brk.MapLockers[0])))
 	brk.MapBreakCode = reply.Code
-	_, reply, _ = submit(t, breaker, "map_lock_lock", mapObject, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInputFor("", "")))
+	reply = send(t, breaker, "map_lock_lock", mapObject, 0, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInputFor("", "")))
 	brk.MapLockCode = reply.Code
 	done("map_break_lock")
-	if brk.BreakCode != 0 || brk.LockCode != 0 || brk.MapBreakCode != 0 || brk.MapLockCode != 0 {
-		t.Fatalf("the breaker did not break and take both locks: %+v", brk)
-	}
 	// The owner's work: load the object map, announce the lock, mark the
 	// object and write it, as in the exclusive-lock acceptance.
 	if m, err := decodeRBDObjectMap(send(t, breaker, "object_map_load", mapObject, 0, classOp("rbd", "object_map_load", cephmsgr.OSDCallRead, nil)).Operations[0].Data); err != nil || !slices.Equal(m.States, []uint8{1, 1, 0, 0, 0}) {

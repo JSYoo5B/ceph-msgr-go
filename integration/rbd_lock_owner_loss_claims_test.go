@@ -368,6 +368,58 @@ func TestRBDLockOwnerLossClaims(t *testing.T) {
 // and the projections of native and Go observations against fixed bytes. The
 // lock.get_info vector is the output a live OSD returned for librbd's managed
 // lock held by client.4809.
+// The breaker checks its target before the MON blocklist command and before
+// each break_lock. A lock that changed to another single owner during the
+// polling keeps every length check satisfied, so these guards are what stops
+// the sequence before either mutation.
+func TestRBDLockOwnerLossBreakTargets(t *testing.T) {
+	owner := rbdLockOwnerLossParty{GlobalID: 4809, WatchCookie: 7000, LockCookie: "auto 7000", Address: "192.0.2.1:0/11"}
+	dead := rbdLockOwnerLossLocker{"client.4809", "auto 7000", "192.0.2.1:0/11"}
+	replacement := rbdLockOwnerLossLocker{"client.4900", "auto 7100", "192.0.2.1:0/12"}
+	if err := rbdLockOwnerLossBreakTarget(owner, dead, dead); err != nil {
+		t.Fatal("the killed owner's unchanged record is refused:", err)
+	}
+	for name, c := range map[string]struct {
+		owner            rbdLockOwnerLossParty
+		first, refreshed rbdLockOwnerLossLocker
+	}{
+		"owner changed during the polling":   {owner, dead, replacement},
+		"another owner from the start":       {owner, replacement, replacement},
+		"first read is another owner":        {owner, replacement, dead},
+		"same client, new cookie":            {owner, dead, rbdLockOwnerLossLocker{dead.Entity, "auto 7001", dead.Address}},
+		"same client, new connection":        {owner, dead, rbdLockOwnerLossLocker{dead.Entity, dead.Cookie, "192.0.2.1:0/13"}},
+		"same address, another client":       {owner, dead, rbdLockOwnerLossLocker{"client.4900", dead.Cookie, dead.Address}},
+		"lock record gone":                   {owner, dead, rbdLockOwnerLossLocker{}},
+		"killed owner unknown":               {rbdLockOwnerLossParty{}, rbdLockOwnerLossLocker{Entity: "client.0"}, rbdLockOwnerLossLocker{Entity: "client.0"}},
+		"killed owner without an address":    {rbdLockOwnerLossParty{GlobalID: 4809, LockCookie: "auto 7000"}, rbdLockOwnerLossLocker{"client.4809", "auto 7000", ""}, rbdLockOwnerLossLocker{"client.4809", "auto 7000", ""}},
+		"killed owner without a lock cookie": {rbdLockOwnerLossParty{GlobalID: 4809, Address: dead.Address}, rbdLockOwnerLossLocker{"client.4809", "", dead.Address}, rbdLockOwnerLossLocker{"client.4809", "", dead.Address}},
+	} {
+		if err := rbdLockOwnerLossBreakTarget(c.owner, c.first, c.refreshed); err == nil {
+			t.Errorf("%s: the breaker would blocklist and break", name)
+		}
+	}
+	deadMap := rbdLockOwnerLossLocker{"client.4809", "", "192.0.2.1:0/11"}
+	if err := rbdLockOwnerLossMapBreakTarget(owner, []rbdLockOwnerLossLocker{deadMap}); err != nil {
+		t.Fatal("the killed owner's object-map record is refused:", err)
+	}
+	for name, lockers := range map[string][]rbdLockOwnerLossLocker{
+		"replacement owner":            {{"client.4900", "", "192.0.2.1:0/12"}},
+		"same client, new connection":  {{"client.4809", "", "192.0.2.1:0/13"}},
+		"same address, another client": {{"client.4900", "", deadMap.Address}},
+		"header cookie on the map":     {{"client.4809", "auto 7000", deadMap.Address}},
+		"no locker":                    {},
+		"dead owner and a replacement": {deadMap, {"client.4900", "", "192.0.2.1:0/12"}},
+		"dead owner twice":             {deadMap, deadMap},
+	} {
+		if err := rbdLockOwnerLossMapBreakTarget(owner, lockers); err == nil {
+			t.Errorf("%s: the breaker would break the object-map lock", name)
+		}
+	}
+	if err := rbdLockOwnerLossMapBreakTarget(rbdLockOwnerLossParty{}, []rbdLockOwnerLossLocker{{Entity: "client.0"}}); err == nil {
+		t.Error("an unknown killed owner: the breaker would break the object-map lock")
+	}
+}
+
 func TestRBDLockOwnerLossTestOnlyEncodings(t *testing.T) {
 	input, err := rbdLockBreakInput(rbdLockOwnerLossLocker{Entity: "client.4809", Cookie: "auto 7000"})
 	want := "0101" + "22000000" + "08000000" + hex.EncodeToString([]byte("rbd_lock")) + "08" + "c912000000000000" + "09000000" + hex.EncodeToString([]byte("auto 7000"))
