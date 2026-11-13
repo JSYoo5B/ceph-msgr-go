@@ -415,7 +415,10 @@ accepted it.
   uncertain request. What the OSD answers to such a resubmission of a
   `journal.append` is not observed.
 - Lock-owner loss, blocklisting and a forced lock break while the outcome is
-  uncertain. The subject stays alive and releases the lock itself.
+  uncertain. The subject stays alive and releases the lock itself. Owner
+  loss without a pending request, on an image without journaling, is
+  recorded in
+  [RBD_LOCK_OWNER_LOSS_VALIDATION.md](RBD_LOCK_OWNER_LOSS_VALIDATION.md).
 - A reply lost on the `tag_create`, on `lock.lock` or `lock.unlock`, on the
   compat append form (`guard_append` then APPEND), on a data write or on a
   `client_commit`; more than one pending append; an append that the OSD did

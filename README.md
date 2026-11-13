@@ -288,8 +288,9 @@ replay against librbd. The product transports bytes; image layout, striping,
 parent/copy-up, lock policy, groups, mirroring and migration belong to the consumer.
 See [base primitives](integration/fixture/RBD_BASE_VALIDATION.md),
 [writes](integration/fixture/RBD_WRITE_VALIDATION.md), [locks](integration/fixture/RBD_LOCK_VALIDATION.md),
-[clones](integration/fixture/RBD_CLONE_VALIDATION.md), [journaling](integration/fixture/RBD_JOURNAL_VALIDATION.md) and
-[a journal append with a lost reply](integration/fixture/RBD_JOURNAL_LOST_APPEND_VALIDATION.md).
+[clones](integration/fixture/RBD_CLONE_VALIDATION.md), [journaling](integration/fixture/RBD_JOURNAL_VALIDATION.md),
+[a journal append with a lost reply](integration/fixture/RBD_JOURNAL_LOST_APPEND_VALIDATION.md) and
+[the loss of a lock owner](integration/fixture/RBD_LOCK_OWNER_LOSS_VALIDATION.md).
 
 ## OSD object requests
 
