@@ -190,7 +190,7 @@ func TestRBDJournalPrimaryChangeSelectorIsExclusive(t *testing.T) {
 	}
 	// Three OSDs admit no other RBD selection, not even the default one.
 	for _, selector := range []string{"", "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$", rbdJournalLostAppendSelector, rbdLockOwnerLossSelector,
-		"^TestCephRBDJournalPrimaryChangeIntegration", "^TestCephRBDJournal(LostAppendReply|PrimaryChange)Integration$"} {
+		rbdLockOwnerLossPendingSelector, "^TestCephRBDJournalPrimaryChangeIntegration", "^TestCephRBDJournal(LostAppendReply|PrimaryChange)Integration$"} {
 		if _, err := load(selector); err == nil {
 			t.Fatal("another RBD selection admitted on three OSDs:", selector)
 		}

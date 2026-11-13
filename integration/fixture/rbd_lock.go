@@ -75,12 +75,235 @@ const rbdLockOwnerLossSelector = "^TestCephRBDLockOwnerLossIntegration$"
 // address) at rbdBaseSource.
 var rbdLockOwnerLossActions = []string{"setup", "observe-go-owner", "takeover", "observe-go-broke", "final"}
 
+// rbdLockOwnerLossPendingSelector selects the variant of the lock-owner-loss
+// acceptance in which the Go owner has two requests unanswered when it loses
+// the lock. It runs alone on a fresh RBD fixture and replaces the ordinary
+// sequence with rbdLockOwnerLossPendingActions.
+const rbdLockOwnerLossPendingSelector = "^TestCephRBDLockOwnerLossPendingIntegration$"
+
+// rbdLockOwnerLossPendingActions is the lock-owner-loss sequence with two
+// more actions before the final one. The Go owner's pending requests name an
+// OSDMap epoch the cluster has not reached, so the OSD holds them
+// (osd/OSD.cc dispatch_session_waiting at rbdBaseSource). `advance-map` runs
+// no native driver: the fixture raises the OSDMap epoch by toggling one flag
+// of the owned pool until the epoch is rbdLockPendingEpochs higher, which
+// lets the OSD answer those requests. `observe-answered` is the read-only
+// observation that follows.
+var rbdLockOwnerLossPendingActions = []string{"setup", "observe-go-owner", "takeover", "observe-go-broke", "advance-map", "observe-answered", "final"}
+
+// rbdLockPendingEpochs is how far `advance-map` raises the OSDMap epoch. The
+// test names an epoch that many above the one it read before sending, which
+// is never above the one the fixture starts from.
+const rbdLockPendingEpochs = 8
+
+// rbdLockAdvanceFlag is the pool flag `advance-map` toggles. It suppresses
+// deep scrubs of the owned pool while set, is unset when the action ends and
+// starts no new PG interval.
+const rbdLockAdvanceFlag = "nodeep-scrub"
+
 // rbdLockActionsFor returns the action sequence the selected test run admits.
 func rbdLockActionsFor(testRun string) []string {
-	if testRun == rbdLockOwnerLossSelector {
+	switch testRun {
+	case rbdLockOwnerLossSelector:
 		return rbdLockOwnerLossActions
+	case rbdLockOwnerLossPendingSelector:
+		return rbdLockOwnerLossPendingActions
 	}
 	return rbdLockActions
+}
+
+// rbdLockOwnerLossAction names the observations and actions that read the
+// OSDMap blocklist: every native action of the two lock-owner-loss sequences
+// after the setup.
+func rbdLockOwnerLossAction(action string) bool {
+	return slices.Contains(rbdLockOwnerLossActions[1:], action) || action == "observe-answered"
+}
+
+// rbdLockOp is one client operation an OSD reports in flight
+// (`dump_ops_in_flight`): its description, the client and transaction the OSD
+// attributes it to, when the OSD received it and where it waits.
+type rbdLockOp struct {
+	OSD         int     `json:"osd"`
+	Description string  `json:"description"`
+	Client      string  `json:"client"`
+	Transaction uint64  `json:"tid"`
+	InitiatedAt string  `json:"initiated_at"`
+	Age         float64 `json:"age"`
+	FlagPoint   string  `json:"flag_point"`
+}
+
+// rbdLockOpsLimit bounds the operations one advance-map receipt keeps.
+const rbdLockOpsLimit = 32
+
+// rbdLockAdvance is the receipt of the `advance-map` action: the OSDMap
+// epoch before and after, the epoch after each command, the commands, and
+// the client operations the OSDs held in flight before the first command and
+// once none of those was left (or the wait for that ended).
+type rbdLockAdvance struct {
+	Pool        string      `json:"pool"`
+	Flag        string      `json:"pool_flag"`
+	EpochBefore uint32      `json:"epoch_before"`
+	EpochTarget uint32      `json:"epoch_target"`
+	EpochAfter  uint32      `json:"epoch_after"`
+	Epochs      []uint32    `json:"epochs"`
+	Commands    []string    `json:"commands"`
+	FlagFinally bool        `json:"flag_finally"`
+	OpsBefore   []rbdLockOp `json:"ops_before"`
+	OpsAfter    []rbdLockOp `json:"ops_after"`
+}
+
+// rbdLockAdvanceOps reads the OSDMap epoch with the pool flag, sets or
+// clears the flag, and lists the client operations in flight on every OSD.
+type rbdLockAdvanceOps struct {
+	read     func(context.Context) (epoch uint32, flag bool, err error)
+	set      func(ctx context.Context, value bool) error
+	inFlight func(context.Context) ([]rbdLockOp, error)
+	// settle is how long the action waits for the operations it first saw
+	// to leave the OSDs, and pause the time between two looks.
+	settle, pause time.Duration
+}
+
+// rbdLockAdvanceMap toggles the owned pool's flag until the OSDMap epoch is
+// rbdLockPendingEpochs above the one it started from and the flag is clear
+// again. It refuses a flag that is already set, checks the flag after every
+// command and issues at most four commands per epoch it must gain.
+func rbdLockAdvanceMap(ctx context.Context, pool string, ops rbdLockAdvanceOps) (rbdLockAdvance, error) {
+	r := rbdLockAdvance{Pool: pool, Flag: rbdLockAdvanceFlag, Epochs: []uint32{}, Commands: []string{}, OpsBefore: []rbdLockOp{}, OpsAfter: []rbdLockOp{}}
+	epoch, flag, err := ops.read(ctx)
+	if err != nil {
+		return r, err
+	}
+	if r.OpsBefore, err = ops.inFlight(ctx); err != nil {
+		return r, err
+	}
+	if flag || epoch == 0 {
+		return r, errors.New("the owned pool's flag is already set, or the OSDMap epoch is unknown")
+	}
+	r.EpochBefore, r.EpochAfter, r.EpochTarget = epoch, epoch, epoch+rbdLockPendingEpochs
+	for value, i := true, 0; i < 4*rbdLockPendingEpochs; value, i = !value, i+1 {
+		r.Commands = append(r.Commands, fmt.Sprintf("osd pool set %s %s %t", pool, rbdLockAdvanceFlag, value))
+		if err := ops.set(ctx, value); err != nil {
+			return r, err
+		}
+		if epoch, flag, err = ops.read(ctx); err != nil {
+			return r, err
+		}
+		if flag != value || epoch < r.EpochAfter {
+			return r, errors.New("the owned pool's flag or the OSDMap epoch differs after the command")
+		}
+		r.Epochs, r.EpochAfter, r.FlagFinally = append(r.Epochs, epoch), epoch, flag
+		if !value && epoch >= r.EpochTarget {
+			// The OSDs answer what they held once they have the map. Look
+			// until none of the operations seen at the start is left; what
+			// remains at the bound is reported, not judged.
+			for deadline := time.Now().Add(ops.settle); ; {
+				if r.OpsAfter, err = ops.inFlight(ctx); err != nil {
+					return r, err
+				}
+				left := slices.ContainsFunc(r.OpsAfter, func(after rbdLockOp) bool {
+					return slices.ContainsFunc(r.OpsBefore, func(before rbdLockOp) bool {
+						return before.OSD == after.OSD && before.Client == after.Client && before.Transaction == after.Transaction
+					})
+				})
+				if !left || !time.Now().Before(deadline) {
+					return r, nil
+				}
+				select {
+				case <-ctx.Done():
+					return r, ctx.Err()
+				case <-time.After(ops.pause):
+				}
+			}
+		}
+	}
+	return r, errors.New("the OSDMap epoch did not reach its target")
+}
+
+// decodeRBDLockOps projects one OSD's `dump_ops_in_flight` output. Only
+// client operations are kept; the OSD's own work has no client.
+func decodeRBDLockOps(osd int, data []byte) ([]rbdLockOp, error) {
+	var dump struct {
+		Ops []struct {
+			Description string  `json:"description"`
+			InitiatedAt string  `json:"initiated_at"`
+			Age         float64 `json:"age"`
+			TypeData    struct {
+				FlagPoint  string `json:"flag_point"`
+				ClientInfo *struct {
+					Client string `json:"client"`
+					TID    uint64 `json:"tid"`
+				} `json:"client_info"`
+			} `json:"type_data"`
+		} `json:"ops"`
+		Count *int `json:"num_ops"`
+	}
+	if len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &dump) != nil || dump.Count == nil || *dump.Count != len(dump.Ops) {
+		return nil, errors.New("native OSD operations in flight unavailable")
+	}
+	ops := []rbdLockOp{}
+	for _, o := range dump.Ops {
+		if o.TypeData.ClientInfo == nil {
+			continue
+		}
+		if len(ops) == rbdLockOpsLimit || len(o.Description) > 1024 {
+			return nil, errors.New("native OSD operations in flight exceed their bound")
+		}
+		ops = append(ops, rbdLockOp{OSD: osd, Description: o.Description, Client: o.TypeData.ClientInfo.Client, Transaction: o.TypeData.ClientInfo.TID,
+			InitiatedAt: o.InitiatedAt, Age: o.Age, FlagPoint: o.TypeData.FlagPoint})
+	}
+	return ops, nil
+}
+
+func (c *fixtureCluster) rbdLockAdvanceOps(pool string) rbdLockAdvanceOps {
+	return rbdLockAdvanceOps{
+		read: func(ctx context.Context) (uint32, bool, error) {
+			data, err := c.cluster.Ceph(ctx, "osd", "dump", "--format", "json")
+			var dump struct {
+				FSID  string `json:"fsid"`
+				Epoch uint32 `json:"epoch"`
+				Pools []struct {
+					Name      string `json:"pool_name"`
+					FlagNames string `json:"flags_names"`
+				} `json:"pools"`
+			}
+			if err == nil && (len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &dump) != nil || dump.FSID != c.profile.fsid) {
+				err = errors.New("native OSDMap unavailable")
+			}
+			if err != nil {
+				return 0, false, err
+			}
+			for _, p := range dump.Pools {
+				if p.Name == pool {
+					return dump.Epoch, slices.Contains(strings.Split(p.FlagNames, ","), rbdLockAdvanceFlag), nil
+				}
+			}
+			return 0, false, errors.New("owned RBD pool missing from the native OSDMap")
+		},
+		set: func(ctx context.Context, value bool) error {
+			_, err := c.cluster.Ceph(ctx, "osd", "pool", "set", pool, rbdLockAdvanceFlag, strconv.FormatBool(value))
+			return err
+		},
+		inFlight: func(ctx context.Context) ([]rbdLockOp, error) {
+			osds, err := c.cluster.OSDs(ctx)
+			if err != nil {
+				return nil, err
+			}
+			all := []rbdLockOp{}
+			for _, d := range osds {
+				data, err := c.cluster.Ceph(ctx, "tell", "osd."+strconv.Itoa(d.ID), "dump_ops_in_flight")
+				if err != nil {
+					return nil, err
+				}
+				ops, err := decodeRBDLockOps(d.ID, data)
+				if err != nil {
+					return nil, err
+				}
+				all = append(all, ops...)
+			}
+			return all, nil
+		},
+		settle: 20 * time.Second, pause: 200 * time.Millisecond,
+	}
 }
 
 // rbdLockKilledExit is the exit status the supervisor reports for the
@@ -193,7 +416,7 @@ import hashlib, json, os, signal, struct, subprocess, sys, time
 import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
-ACTIONS = ('setup', 'lock', 'observe-released', 'observe-go-owner', 'takeover', 'observe-go-broke', 'final')
+ACTIONS = ('setup', 'lock', 'observe-released', 'observe-go-owner', 'takeover', 'observe-go-broke', 'observe-answered', 'final')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('write_image') != 'ceph-msgr-write-' + token or plan.get('image') != 'ceph-msgr-lock-' + token
@@ -520,7 +743,7 @@ try:
         elif action == 'observe-released':
             oid = SET_ID['go'][0]
             out['set_id_go'] = {'object': oid, 'view': versioned(ioctx, oid), 'get_id': call(ioctx, oid, 'rbd', 'get_id', b'')}
-        elif action in ('observe-go-owner', 'observe-go-broke'):
+        elif action in ('observe-go-owner', 'observe-go-broke', 'observe-answered'):
             out['blocklist'] = blocklist()
         elif action == 'takeover':
             # The header lock names an owner whose watch is no longer renewed.
@@ -873,7 +1096,7 @@ func decodeRBDLockNative(action, token string, request int64, plan rbdLockPlan, 
 	}
 	// Only the lock-owner-loss observations carry a blocklist, and only its
 	// final action the owner's read of the Go extents.
-	lossAction := slices.Contains(rbdLockOwnerLossActions[1:], action)
+	lossAction := rbdLockOwnerLossAction(action)
 	ok = ok && lossAction == (result.Blocklist != nil) && (!lossAction || rbdLockBlocklistValid(result.Blocklist)) && (action == "final") == (result.GoExtents != nil)
 	switch action {
 	case "setup":
@@ -881,7 +1104,7 @@ func decodeRBDLockNative(action, token string, request int64, plan rbdLockPlan, 
 			rbdLockSetIDValid(result.SetID, token) && result.SetIDGo == nil
 	case "observe-released":
 		ok = ok && result.Writes == nil && result.Phases == nil && result.Check == nil && result.SetID == nil && rbdLockSetIDGoValid(result.SetIDGo, token)
-	case "observe-go-owner", "observe-go-broke":
+	case "observe-go-owner", "observe-go-broke", "observe-answered":
 		ok = ok && result.Writes == nil && result.Phases == nil && result.Check == nil && result.SetID == nil && result.SetIDGo == nil
 	case "final":
 		ok = ok && rbdLockWritesValid(result.Writes, "reacquire", plan.ReacquireWrites) && result.Phases == nil && checked(result.Check) && result.SetID == nil && result.SetIDGo == nil &&
@@ -1028,6 +1251,8 @@ func rbdLockTarget(plan rbdLockPlan, action string) string {
 		return plan.Image + ":header-watch,exclusive-lock,object-map-check"
 	case "takeover":
 		return plan.Image + ":header-watch,exclusive-lock-break,osd-blocklist,killed-owner"
+	case "advance-map":
+		return plan.Pool + ":pool-flag-" + rbdLockAdvanceFlag + ",osdmap-epoch"
 	}
 	return plan.Image
 }
@@ -1074,6 +1299,12 @@ func (c *fixtureCluster) rbdLockControl(ctx context.Context, out string, fields 
 	result["mutation"] = m
 	if err != nil {
 		return err
+	}
+	if action == "advance-map" {
+		// No native driver: the fixture's own administrative commands.
+		advance, err := rbdLockAdvanceMap(ctx, x.lockPlan.Pool, c.rbdLockAdvanceOps(x.lockPlan.Pool))
+		result["advance"] = advance
+		return c.rbdBaseFinish(m, err)
 	}
 	process, native, err := c.rbdLockRunNative(ctx, action, id)
 	result["native_process"] = process

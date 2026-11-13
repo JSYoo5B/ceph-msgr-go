@@ -445,7 +445,10 @@ func prepareEvidence(ctx context.Context, c *fixtureCluster, out string, p profi
 			manifest["topology"] = "3 MON, 2 MGR and three BlueStore OSDs with an owned three-replica RBD pool of one PG (min_size 2) plus a native oracle client"
 			manifest["rbd_journal_primary_change_mutations"] = "for the primary-change selector only, in place of the other RBD tests' images: the journaling image and its native oracle journal client, one Go journal append sent twice under one transaction, and the OSD that led the owned pool's PG marked out, which moves the acting primary to another member; the OSD keeps running and is marked in again and read back during cleanup"
 		}
-		if p.testRun == rbdLockOwnerLossSelector {
+		if p.testRun == rbdLockOwnerLossPendingSelector {
+			manifest["rbd_lock_owner_loss_pending_mutations"] = "for the pending lock-owner-loss selector only: the lock-owner-loss mutations below, and the owned pool's " + rbdLockAdvanceFlag + " flag set and cleared until the OSDMap epoch is " + fmt.Sprint(rbdLockPendingEpochs) + " higher, left clear"
+		}
+		if p.testRun == rbdLockOwnerLossSelector || p.testRun == rbdLockOwnerLossPendingSelector {
 			manifest["rbd_lock_owner_loss_mutations"] = "for the lock-owner-loss selector only, in place of the other RBD tests' images: the exclusive-lock image written by native librbd and the Go client, its managed lock broken twice without a release (by native librbd against a Go owner whose watch expired, and by the Go client against a native owner killed with SIGKILL inside the oracle container), one OSDMap blocklist entry per broken owner (the Go owner's by native librbd, the native owner's by the Go client's MON command), both removed and verified absent during cleanup"
 		}
 	}

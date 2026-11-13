@@ -329,7 +329,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		// The lock-owner-loss acceptance blocklists two client addresses and
 		// kills a native lock owner; it is admitted only when explicitly
 		// selected, on a fixture no other RBD test shares.
-		if p.testRun == rbdLockOwnerLossSelector {
+		if p.testRun == rbdLockOwnerLossSelector || p.testRun == rbdLockOwnerLossPendingSelector {
 			selected = p.testRun
 		}
 		// The primary-change acceptance is the lost-append-reply sequence on

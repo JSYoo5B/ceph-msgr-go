@@ -78,7 +78,7 @@ func TestRBDLockPlanIsTokenBound(t *testing.T) {
 
 func TestRBDLockRequestIsClosedAndOrdered(t *testing.T) {
 	token := strings.Repeat("a1", 16)
-	for _, actions := range [][]string{rbdLockActions, rbdLockOwnerLossActions} {
+	for _, actions := range [][]string{rbdLockActions, rbdLockOwnerLossActions, rbdLockOwnerLossPendingActions} {
 		for next := range actions {
 			for i, action := range actions {
 				id, got, err := parseRBDLockRequest(actions, []string{"7", token, action}, token, 6, next)
@@ -180,6 +180,183 @@ func TestRBDLockOwnerLossSelectorIsExclusive(t *testing.T) {
 	}
 	if !strings.Contains(rbdLockNativePython, "os.kill(os.getpid(), signal.SIGKILL)") || strings.Count(rbdLockNativePython, "signal.SIGKILL") != 1 {
 		t.Fatal("the takeover driver does not end itself by SIGKILL exactly once")
+	}
+}
+
+// The pending variant is the lock-owner-loss sequence with advance-map and
+// observe-answered before the final action, admitted only under its own
+// exact selector.
+func TestRBDLockOwnerLossPendingSequenceIsExclusive(t *testing.T) {
+	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
+	load := func(selector string) (profile, error) {
+		return loadProfile(func(key string) string {
+			if key == "CEPH_MSGR_TEST_RUN" {
+				return selector
+			}
+			return base[key]
+		})
+	}
+	p, err := load(rbdLockOwnerLossPendingSelector)
+	if err != nil || p.testRun != rbdLockOwnerLossPendingSelector || !slices.Equal(rbdLockActionsFor(p.testRun), rbdLockOwnerLossPendingActions) {
+		t.Fatal("pending lock-owner-loss selector admission differs", p.testRun, err)
+	}
+	if !slices.Equal(rbdLockActionsFor(rbdLockOwnerLossSelector), rbdLockOwnerLossActions) || !slices.Equal(rbdJournalActionsFor(rbdLockOwnerLossPendingSelector), rbdJournalActions) {
+		t.Fatal("the pending selector changed another sequence")
+	}
+	for _, selector := range []string{"^TestCephRBDLockOwnerLossPendingIntegration", "TestCephRBDLockOwnerLossPendingIntegration$", "^TestCephRBDLockOwnerLoss(Pending)?Integration$",
+		"^TestCephRBDLockOwnerLoss.*Integration$"} {
+		if _, err := load(selector); err == nil {
+			t.Fatal("unanchored or widened pending selector admitted", selector)
+		}
+	}
+	// The same actions in the same order, with the two new ones before the
+	// final action.
+	want := slices.Insert(slices.Clone(rbdLockOwnerLossActions), len(rbdLockOwnerLossActions)-1, "advance-map", "observe-answered")
+	if !slices.Equal(rbdLockOwnerLossPendingActions, want) {
+		t.Fatal("pending sequence differs", rbdLockOwnerLossPendingActions)
+	}
+	token := strings.Repeat("a1", 16)
+	for next := 0; next <= len(rbdLockOwnerLossActions); next++ {
+		for _, action := range []string{"advance-map", "observe-answered"} {
+			if _, _, err := parseRBDLockRequest(rbdLockOwnerLossActions, []string{"7", token, action}, token, 6, next); err == nil {
+				t.Fatal("pending action admitted in the lock-owner-loss sequence", action, next)
+			}
+			if _, _, err := parseRBDLockRequest(rbdLockActions, []string{"7", token, action}, token, 6, min(next, len(rbdLockActions))); err == nil {
+				t.Fatal("pending action admitted in the ordinary sequence", action, next)
+			}
+		}
+	}
+	plan := rbdLockPlan{Pool: "p", Image: "i"}
+	// advance-map runs no native driver, is a mutation of the owned pool and
+	// ends with 0; observe-answered is a read-only driver observation.
+	if strings.Contains(rbdLockNativePython, "'advance-map'") || !strings.Contains(rbdLockNativePython, "'observe-answered'") ||
+		rbdLockReadOnly("advance-map") || !rbdLockReadOnly("observe-answered") || rbdLockExit("advance-map") != 0 || rbdLockExit("observe-answered") != 0 ||
+		rbdLockTarget(plan, "advance-map") != "p:pool-flag-nodeep-scrub,osdmap-epoch" || rbdLockTarget(plan, "observe-answered") != "i" ||
+		!rbdLockOwnerLossAction("observe-answered") || rbdLockOwnerLossAction("advance-map") || rbdLockOwnerLossAction("setup") || rbdLockOwnerLossAction("lock") ||
+		rbdLockNativeTimeout("observe-answered") != time.Minute {
+		t.Fatal("pending actions' driver, mode, exit, target or budget differs")
+	}
+	// The closed control budget covers the commands of advance-map.
+	if rbdLockPendingEpochs < 4 || rbdLockPendingEpochs > 16 {
+		t.Fatal("advance-map epoch distance differs", rbdLockPendingEpochs)
+	}
+}
+
+// advance-map toggles one flag of the owned pool until the epoch is far
+// enough and the flag is clear again, and reports what the OSDs held.
+func TestRBDLockAdvanceMap(t *testing.T) {
+	type state struct {
+		epoch         uint32
+		flag          bool
+		sets          []bool
+		step          uint32
+		held          []rbdLockOp
+		answerAt      uint32
+		looks         int
+		readErr       error
+		setErr        error
+		ignoreSet     bool
+		inFlightErrAt int
+	}
+	ops := func(s *state) rbdLockAdvanceOps {
+		return rbdLockAdvanceOps{
+			read: func(context.Context) (uint32, bool, error) { return s.epoch, s.flag, s.readErr },
+			set: func(_ context.Context, value bool) error {
+				s.sets = append(s.sets, value)
+				if s.setErr != nil {
+					return s.setErr
+				}
+				if !s.ignoreSet {
+					s.flag = value
+				}
+				s.epoch += s.step
+				return nil
+			},
+			inFlight: func(context.Context) ([]rbdLockOp, error) {
+				s.looks++
+				if s.inFlightErrAt == s.looks {
+					return nil, fmt.Errorf("tell failed")
+				}
+				if s.answerAt != 0 && s.epoch >= s.answerAt {
+					return []rbdLockOp{}, nil
+				}
+				return slices.Clone(s.held), nil
+			},
+			settle: 50 * time.Millisecond, pause: time.Millisecond,
+		}
+	}
+	held := []rbdLockOp{{OSD: 0, Client: "client.4791", Transaction: 10, Description: "osd_op(client.4791.0:10 ...)"}, {OSD: 0, Client: "client.4791", Transaction: 11}}
+	// One epoch per command: eight commands, the last one clears the flag.
+	s := &state{epoch: 27, step: 1, held: held, answerAt: 32}
+	r, err := rbdLockAdvanceMap(t.Context(), "p", ops(s))
+	if err != nil || r.EpochBefore != 27 || r.EpochTarget != 27+rbdLockPendingEpochs || r.EpochAfter != 35 || r.FlagFinally || s.flag || len(r.Commands) != 8 || len(s.sets) != 8 ||
+		!slices.Equal(r.Epochs, []uint32{28, 29, 30, 31, 32, 33, 34, 35}) || r.Commands[0] != "osd pool set p nodeep-scrub true" || r.Commands[7] != "osd pool set p nodeep-scrub false" ||
+		len(r.OpsBefore) != 2 || len(r.OpsAfter) != 0 || r.Pool != "p" || r.Flag != rbdLockAdvanceFlag {
+		t.Fatal("advance-map receipt differs", r, err)
+	}
+	// Two epochs per command: the target is reached while the flag is set,
+	// so one more command clears it.
+	s = &state{epoch: 10, step: 2}
+	if r, err = rbdLockAdvanceMap(t.Context(), "p", ops(s)); err != nil || r.EpochAfter < r.EpochTarget || r.FlagFinally || s.flag || len(s.sets)%2 != 0 {
+		t.Fatal("advance-map left the flag set or stopped early", r, err)
+	}
+	// Operations that stay in flight are reported at the bound, not hidden.
+	s = &state{epoch: 27, step: 1, held: held}
+	if r, err = rbdLockAdvanceMap(t.Context(), "p", ops(s)); err != nil || len(r.OpsAfter) != 2 || s.looks < 3 {
+		t.Fatal("operations left in flight were not reported", r, err)
+	}
+	for name, s := range map[string]*state{
+		"flag already set":             {epoch: 27, step: 1, flag: true},
+		"epoch unknown":                {epoch: 0, step: 1},
+		"OSDMap unavailable":           {epoch: 27, step: 1, readErr: fmt.Errorf("no map")},
+		"command refused":              {epoch: 27, step: 1, setErr: fmt.Errorf("EPERM")},
+		"flag did not change":          {epoch: 27, step: 1, ignoreSet: true},
+		"epoch never moves":            {epoch: 27, step: 0},
+		"operations unavailable":       {epoch: 27, step: 1, inFlightErrAt: 1},
+		"operations unavailable after": {epoch: 27, step: 1, inFlightErrAt: 2},
+	} {
+		r, err := rbdLockAdvanceMap(t.Context(), "p", ops(s))
+		if err == nil {
+			t.Error("advance-map hid a failure:", name, r)
+		}
+		if len(s.sets) > 4*rbdLockPendingEpochs {
+			t.Error("advance-map is not bounded:", name, len(s.sets))
+		}
+	}
+}
+
+// Only client operations of dump_ops_in_flight are kept, within a bound.
+func TestRBDLockOpsInFlightDecoding(t *testing.T) {
+	op := func(client string, tid int) string {
+		info := ""
+		if client != "" {
+			info = fmt.Sprintf(`,"client_info":{"client":%q,"client_addr":"v1:192.0.2.1:0/7","tid":%d}`, client, tid)
+		}
+		return fmt.Sprintf(`{"description":"osd_op(%s.0:%d 2.5 2:a head [call lock.assert_locked] e32)","initiated_at":"2026-11-13T01:00:00.000000+0000","age":31.5,"duration":31.5,"type_data":{"flag_point":"delayed"%s,"events":[]}}`,
+			client, tid, info)
+	}
+	dump := func(count int, ops ...string) []byte {
+		return []byte(fmt.Sprintf(`{"ops":[%s],"complaint_time":30,"num_ops":%d}`, strings.Join(ops, ","), count))
+	}
+	got, err := decodeRBDLockOps(2, dump(3, op("client.4791", 10), op("", 0), op("client.4791", 11)))
+	if err != nil || len(got) != 2 || got[0] != (rbdLockOp{OSD: 2, Description: "osd_op(client.4791.0:10 2.5 2:a head [call lock.assert_locked] e32)", Client: "client.4791", Transaction: 10,
+		InitiatedAt: "2026-11-13T01:00:00.000000+0000", Age: 31.5, FlagPoint: "delayed"}) || got[1].Transaction != 11 {
+		t.Fatal("operations in flight decode differently", got, err)
+	}
+	if got, err := decodeRBDLockOps(0, dump(0)); err != nil || got == nil || len(got) != 0 {
+		t.Fatal("an idle OSD is not an empty list", got, err)
+	}
+	many := slices.Repeat([]string{op("client.1", 1)}, rbdLockOpsLimit+1)
+	for name, data := range map[string][]byte{
+		"count differs":  dump(2, op("client.1", 1)),
+		"count missing":  []byte(`{"ops":[]}`),
+		"not JSON":       []byte("error"),
+		"over the bound": dump(len(many), many...),
+		"oversized":      append(dump(0), bytes.Repeat([]byte(" "), mdsFreshJSONLimit)...),
+	} {
+		if _, err := decodeRBDLockOps(0, data); err == nil {
+			t.Error("malformed operations in flight admitted:", name)
+		}
 	}
 }
 
@@ -294,7 +471,7 @@ func rbdLockOutput(token string, plan rbdLockPlan, action string) map[string]any
 	switch action {
 	case "observe-go-owner":
 		value["blocklist"] = []map[string]any{}
-	case "observe-go-broke":
+	case "observe-go-broke", "observe-answered":
 		value["blocklist"] = blocks
 	case "final":
 		value["writes"], value["go_extents"], value["check"], value["blocklist"] = writes("reacquire", plan.ReacquireWrites), sums, check, blocks
@@ -353,7 +530,7 @@ func TestRBDLockNativeOutputShapeIsClosed(t *testing.T) {
 		}
 		return data
 	}
-	for _, action := range slices.Concat(rbdLockActions, rbdLockOwnerLossActions[1:]) {
+	for _, action := range slices.Concat(rbdLockActions, rbdLockOwnerLossActions[1:], []string{"observe-answered"}) {
 		got, err := decodeRBDLockNative(action, token, 9, plan, encode(rbdLockOutput(token, plan, action)))
 		if err != nil || got.Stat.Size != plan.Size || got.Blobs["image_head"].Name != rbdLockBlobName(action, "image_head") {
 			t.Fatal("valid RBD lock output refused", action, err)
@@ -487,15 +664,17 @@ func TestRBDLockNativeOutputShapeIsClosed(t *testing.T) {
 	}
 	// The lock-owner-loss actions: no output of one is admitted as another,
 	// and each carries exactly its own fields.
-	for _, action := range rbdLockOwnerLossActions[1:] {
-		for _, other := range slices.Concat(rbdLockActions, rbdLockOwnerLossActions[1:]) {
+	lossActions := slices.Concat(rbdLockOwnerLossActions[1:], []string{"observe-answered"})
+	for _, action := range lossActions {
+		for _, other := range slices.Concat(rbdLockActions, lossActions) {
 			value := rbdLockOutput(token, plan, other)
 			value["action"] = action
 			for _, blob := range value["blobs"].(map[string]any) {
 				blob.(map[string]any)["name"] = strings.Replace(blob.(map[string]any)["name"].(string), "rbd-lock-"+other+"-", "rbd-lock-"+action+"-", 1)
 			}
 			// Both read-only observations have the same shape.
-			same := action == other || strings.HasPrefix(action, "observe-go-") && strings.HasPrefix(other, "observe-go-")
+			observation := func(a string) bool { return strings.HasPrefix(a, "observe-go-") || a == "observe-answered" }
+			same := action == other || observation(action) && observation(other)
 			if _, err := decodeRBDLockNative(action, token, 9, plan, encode(value)); (err == nil) != same {
 				t.Fatal("lock-owner-loss output shape is not closed:", other, "as", action, err)
 			}
