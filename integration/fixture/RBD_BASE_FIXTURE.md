@@ -5,8 +5,10 @@ OSD fixture (`CEPH_MSGR_TEST_OSD=1`). It selects only
 `^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$` (an
 explicit `CEPH_MSGR_TEST_RUN` must be that selector, or the exact selector of
 the lost-append-reply acceptance described under
-"[Lost-append-reply sequence](#lost-append-reply-sequence)", which then runs
-alone; `go test` runs them in
+"[Lost-append-reply sequence](#lost-append-reply-sequence)" or of the
+lock-owner-loss acceptance described under
+"[Lock-owner-loss sequence](#lock-owner-loss-sequence)", each of which then
+runs alone; `go test` runs them in
 file order: `TestCephRBDBaseIntegration`, then `TestCephRBDCloneIntegration`,
 then `TestCephRBDJournalIntegration`, then
 `TestCephRBDExclusiveLockIntegration`, then `TestCephRBDWriteIntegration`) and
@@ -333,6 +335,49 @@ must show is judged by the test. Each receipt is `rbd-lock-<action>.json`
 result). The lock action is bounded to 220 s (four Go steps of at most 30 s,
 the check and the observation).
 
+### Lock-owner-loss sequence
+
+Under the exact selector `^TestCephRBDLockOwnerLossIntegration$` (see
+[RBD_LOCK_OWNER_LOSS_VALIDATION.md](RBD_LOCK_OWNER_LOSS_VALIDATION.md)) the
+same control serves a different closed sequence on the same plan, on a
+fixture where no other RBD test has run: `setup`, `observe-go-owner`,
+`takeover`, `observe-go-broke`, `final`. Each sequence refuses the other's
+actions at every position. The plan's writes keep their objects: the
+takeover writes the owner extent (object 1), the test the Go extent
+(object 2) and `final` the reacquire extent (object 3).
+
+- `setup` is the action described above.
+- `observe-go-owner` and `observe-go-broke` are observations only
+  (`read_only: true`): the read-only observation that ends every lock
+  action, and the OSDMap blocklist as the native identity reads it (the MON
+  command `osd blocklist ls`, which `profile rbd` admits; exact entries and
+  ranges, at most 64).
+- `takeover` reads the blocklist, opens the image read-write and writes the
+  owner extent. The test has arranged that the header and object-map locks
+  name an owner whose watch is no longer renewed, so the write returns only
+  after librbd broke those locks. The driver then publishes the phase
+  `acquired` in `rbd-lock-state.json`: `is_exclusive_lock_owner()`,
+  `lock_get_owners()`, `watchers_list()`, the fresh read-only view, both
+  `lock.get_info` outputs and the raw object map as in the lock action, the
+  write and its duration, and the blocklist before the open and after the
+  write. It waits for the proceed signal `rbd-lock-proceed-1` (30 s), runs
+  the read-only observation with the blocklist, prints its output and sends
+  SIGKILL to itself. Nothing is closed, unlocked or unwatched. The
+  supervisor reports the status -9; the fixture admits that status for this
+  action only, and the output must still pass the shape check. The action is
+  bounded to 150 s and journaled with the target
+  `<image>:header-watch,exclusive-lock-break,osd-blocklist,killed-owner`.
+- `final` opens the image read-write, writes the reacquire extent, reads the
+  Go extent through the owner's object map, closes the image and runs the
+  same `rbd object-map check` as the lock action, then the observation with
+  the blocklist. It is bounded to 120 s.
+
+The driver receives no owner, address or timing from the test. Whose lock it
+finds, and when, is the test's arrangement. The fixture keeps the lock-owner
+addresses that `observe-go-owner` and the `acquired` phase list (librbd's
+`list_lockers`) for the cleanup. Receipts are `rbd-lock-<action>.json` as
+above. The test's own record is `rbd-lock-owner-loss-results.json`.
+
 ## Clone images and closed clone control
 
 `TestCephRBDCloneIntegration` (see
@@ -528,7 +573,10 @@ the diagnostics allowlist with them.
 
 A failed, killed or truncated native process is an error: its output is
 never trusted partially, the mutation stays `uncertain` and the control loop
-stops (as for the other fixture controls). Cleanup runs once (in the runner
+stops (as for the other fixture controls). The one exception is the
+`takeover` action of the lock-owner-loss sequence, whose driver must end by
+its own SIGKILL after a complete output; any other status of that action is
+an error too. Cleanup runs once (in the runner
 after the suites, and again from `Terminate`, which returns the cached
 result) and writes `rbd-base-cleanup.json`: it removes the owned pool with
 the provider's `Pool.Remove` on the handle that `CreatePool` returned
@@ -539,6 +587,11 @@ image's object map, the journaling image's journal header and data objects
 and any lingering watch go with the pool), proves the pool's absence
 by name and ID in a fresh native OSDMap, and deletes both identities. An
 intended identity whose creation outcome is unknown is reported as an error.
+After the lock-owner-loss sequence the cleanup first removes the blocklist
+entries of the lock-owner addresses it kept (`ceph osd blocklist rm` for
+each exact entry, never a range or another address), reads the blocklist
+again and reports an entry that remains; the receipt lists the addresses and
+the removed entries (`lock_owner_addresses`, `lock_blocklist_removed`).
 
 ## Published receipts
 
@@ -550,8 +603,10 @@ three `rbd-lock-<action>.json` receipts, `rbd-lock-state.json`, the six
 receipts of the actions before `concurrent` and the suites' own `rbd-base-results.json`,
 `rbd-write-results.json`, `rbd-lock-results.json`, `rbd-clone-results.json`
 and `rbd-journal-results.json` are on the diagnostics allowlist.
-`rbd-journal-concurrent.json` and `rbd-journal-state.json` are not on the
-allowlist. The journal test copies the published concurrent state, its
+The four further `rbd-lock-<action>.json` receipts of the lock-owner-loss
+sequence and its `rbd-lock-owner-loss-results.json` are on the allowlist as
+well. `rbd-journal-concurrent.json` and `rbd-journal-state.json` are not on
+the allowlist. The journal test copies the published concurrent state, its
 notifications and the outcome of every Go request into
 `rbd-journal-results.json`. The binary views and the keys are not archived.
 
@@ -580,6 +635,14 @@ object per writer, object 4 absent), the closed and ordered lock request
 sequence, the closed-shape decoding of every lock action (phase order and
 fields, the check), the per-action binary views, the journal of the lock plan
 and of an uncertain lock action, and that the lock driver parses as Python.
+For the lock-owner-loss sequence it also checks that both sequences are
+closed, ordered and refuse each other's actions, that the selector is
+admitted only in its exact form and with the RBD opt-in, that only the
+takeover may end with the killed status and only observations are read-only,
+the closed-shape decoding of the four new actions (none admitted as another,
+none of their fields on an ordinary action), and that the cleanup removes
+only the exact blocklist entries of the kept lock-owner addresses and
+reports a failed removal or a remaining entry.
 `TestRBDLockTestOnlyEncodings` in `integration/rbd_lock_test.go` checks the
 watch-notify `ClientId`, `NotifyMessage` and `ResponseMessage` encodings and
 decoders (every truncation, a trailing byte, compat 2, version 1 payloads,

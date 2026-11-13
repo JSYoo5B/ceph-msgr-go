@@ -242,8 +242,9 @@ fixture and add no native driver phase:
 
 Exact-head native results for these cells are recorded on the pull request that
 introduced them; the numbers in "Results" above are those of the earlier
-unmodified flow. Duplicate-owner and error responses, a dead owner, a forced
-break and replicated-primary changes are not exercised here.
+unmodified flow. Duplicate-owner and error responses, a forced break and
+replicated-primary changes are not exercised here. A dead owner is the
+subject of [RBD_LOCK_OWNER_LOSS_VALIDATION.md](RBD_LOCK_OWNER_LOSS_VALIDATION.md).
 
 ### Lock info before and after (CRC run)
 
@@ -396,9 +397,11 @@ as a live managed-lock owner. Observations:
 
 Not verified here:
 
-- the manual-lock `StandardPolicy` (-EROFS answers), forced RequestLock,
-  `lock_break`, blocklisting, a dead owner (an unresponsive acknowledgement
-  from a live owner is exercised, see "RequestLock ACK disposition"),
+- the manual-lock `StandardPolicy` (-EROFS answers), forced RequestLock and a
+  forced `lock_break` of a live owner (an unresponsive acknowledgement from a
+  live owner is exercised, see "RequestLock ACK disposition"; a dead owner,
+  the break of its lock and blocklisting are recorded separately in
+  [RBD_LOCK_OWNER_LOSS_VALIDATION.md](RBD_LOCK_OWNER_LOSS_VALIDATION.md)),
   duplicate-owner and error responses, lock contention
   between more than two clients, shared locks and lock cookie updates
   (`set_cookie` after a rewatch);

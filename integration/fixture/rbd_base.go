@@ -148,6 +148,11 @@ type rbdBaseScope struct {
 	lockPlan          rbdLockPlan
 	lockLastRequestID int64
 	lockNext          int
+	// lockOwnerAddresses are the exact lock-owner addresses the
+	// lock-owner-loss sequence observed natively. Each owner loses its lock
+	// to a break that blocklists that address; the cleanup removes those
+	// entries.
+	lockOwnerAddresses []string
 	// The RBD clone acceptance's parent and clone images in the same owned
 	// pool (rbd_clone.go): their plan, the last control request and the
 	// index of the next admitted action.
@@ -824,8 +829,47 @@ type rbdBaseCleanup struct {
 	PoolAbsentNatively    bool               `json:"pool_absent_natively"`
 	ClientIdentityRemoved bool               `json:"client_identity_removed"`
 	NativeIdentityRemoved bool               `json:"native_identity_removed"`
-	Completed             bool               `json:"completed"`
-	Errors                []string           `json:"errors,omitempty"`
+	// The lock-owner-loss sequence only: the lock-owner addresses it
+	// observed and their blocklist entries, removed and verified absent.
+	LockOwnerAddresses   []string           `json:"lock_owner_addresses,omitempty"`
+	LockBlocklistRemoved []mdsSessionsBlock `json:"lock_blocklist_removed,omitempty"`
+	Completed            bool               `json:"completed"`
+	Errors               []string           `json:"errors,omitempty"`
+}
+
+// rbdLockRemoveBlocklist removes the exact blocklist entries of the given
+// lock-owner addresses and verifies them absent on a second read. It touches
+// no other entry and no range.
+func rbdLockRemoveBlocklist(ctx context.Context, addresses []string, ops mdsCephFSBlocklistOps) ([]mdsSessionsBlock, error) {
+	if len(addresses) == 0 {
+		return nil, nil
+	}
+	entries, err := ops.read(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var removed []mdsSessionsBlock
+	var errs []error
+	for _, entry := range entries {
+		if entry.Range || !slices.Contains(addresses, entry.Address) {
+			continue
+		}
+		if err := ops.remove(ctx, entry.Address); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		removed = append(removed, entry)
+	}
+	final, err := ops.read(ctx)
+	if err != nil {
+		return removed, errors.Join(append(errs, err)...)
+	}
+	for _, address := range addresses {
+		if mdsSessionsFindBlock(final, address) != nil {
+			errs = append(errs, errors.New("blocklist entry of an owned RBD lock owner remained after removal"))
+		}
+	}
+	return removed, errors.Join(errs...)
 }
 
 // finishRBDBase runs once. It removes only owned state: the pool (its images,
@@ -857,6 +901,11 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 		if err != nil {
 			errs = append(errs, err)
 		}
+	}
+	if len(x.lockOwnerAddresses) != 0 {
+		removed, err := rbdLockRemoveBlocklist(ctx, x.lockOwnerAddresses, c.mdsCephFSBlocklistOps())
+		receipt.LockOwnerAddresses, receipt.LockBlocklistRemoved = x.lockOwnerAddresses, removed
+		fail(err)
 	}
 	if x.poolIntent {
 		err := x.removePool(ctx, c.cluster)

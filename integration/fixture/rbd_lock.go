@@ -52,6 +52,52 @@ import (
 // Each action runs at most once and only after its predecessors.
 var rbdLockActions = []string{"setup", "lock", "observe-released"}
 
+// rbdLockOwnerLossSelector selects the lock-owner-loss acceptance. It runs
+// alone on a fresh RBD fixture and replaces the ordinary sequence with
+// rbdLockOwnerLossActions.
+const rbdLockOwnerLossSelector = "^TestCephRBDLockOwnerLossIntegration$"
+
+// rbdLockOwnerLossActions is the closed, ordered action sequence of the
+// lock-owner-loss acceptance on the same image plan. After the setup, the Go
+// test takes the managed lock and stops renewing its header watch without
+// releasing anything. The observation of that owner is read-only. In the
+// takeover a native librbd write must break the dead owner's lock (librbd
+// blocklists the owner's address through the MON first), stays the owner
+// until the test's proceed signal and is then killed with SIGKILL while it
+// still holds the header and object-map locks. After the Go test broke that
+// lock in turn, a second read-only observation follows, and the final action
+// writes through a fresh native open, closes it and runs `rbd object-map
+// check`. Every observation of this sequence also reads the OSDMap blocklist
+// as the native identity may (`osd blocklist ls`). Native behavior relied
+// upon in addition to the list above: librados/RadosClient.cc
+// (blocklist_add), osd/Watch.cc (a watch is kept for its timeout after the
+// last ping) and osd/PrimaryLogPG.cc (do_op refuses a blocklisted source
+// address) at rbdBaseSource.
+var rbdLockOwnerLossActions = []string{"setup", "observe-go-owner", "takeover", "observe-go-broke", "final"}
+
+// rbdLockActionsFor returns the action sequence the selected test run admits.
+func rbdLockActionsFor(testRun string) []string {
+	if testRun == rbdLockOwnerLossSelector {
+		return rbdLockOwnerLossActions
+	}
+	return rbdLockActions
+}
+
+// rbdLockKilledExit is the exit status the supervisor reports for the
+// takeover driver, which ends itself with SIGKILL while it owns the lock.
+const rbdLockKilledExit = -9
+
+// rbdLockExit is the exit status one action's driver must end with.
+func rbdLockExit(action string) int {
+	if action == "takeover" {
+		return rbdLockKilledExit
+	}
+	return 0
+}
+
+// rbdLockReadOnly names the observations that change no owned state.
+func rbdLockReadOnly(action string) bool { return strings.HasPrefix(action, "observe-") }
+
 // rbdLockPhases is the fixed phase sequence of the lock action.
 var rbdLockPhases = []string{"owner", "released", "go-owner", "reacquired", "closed"}
 
@@ -143,11 +189,11 @@ func (p rbdLockPlan) owned(token string) bool {
 // pybind/rados/rados.pyx at rbdBaseSource; independent driver, no code
 // copied.
 const rbdLockNativePython = `
-import hashlib, json, os, struct, subprocess, sys, time
+import hashlib, json, os, signal, struct, subprocess, sys, time
 import rados, rbd
 identity, action, token, request_id, plan_json = sys.argv[1:6]
 plan = json.loads(plan_json)
-ACTIONS = ('setup', 'lock', 'observe-released')
+ACTIONS = ('setup', 'lock', 'observe-released', 'observe-go-owner', 'takeover', 'observe-go-broke', 'final')
 if (len(token) != 32 or any(c not in '0123456789abcdef' for c in token) or identity != 'client.rbd-base-native-' + token
         or plan.get('pool') != 'ceph-msgr-rbd-' + token or plan.get('base_image') != 'ceph-msgr-image-' + token
         or plan.get('write_image') != 'ceph-msgr-write-' + token or plan.get('image') != 'ceph-msgr-lock-' + token
@@ -362,6 +408,34 @@ def read_go(image):
     # extents whoever holds the lock.
     return [{'offset': e['offset'], 'length': e['length'], 'sha256': hashlib.sha256(image.read(e['offset'], e['length'])).hexdigest()} for e in plan['go_writes']]
 
+def blocklist():
+    # The OSDMap blocklist as the MON reports it to this identity (profile
+    # rbd grants osd r). librbd adds a dead lock owner's address here before
+    # it breaks the lock.
+    code, output, status = cluster.mon_command(json.dumps({'prefix': 'osd blocklist ls', 'format': 'json'}), b'', timeout=30)
+    if code != 0:
+        raise ValueError('native osd blocklist ls failed: %d' % code)
+    # The MON flushes two JSON arrays one after the other: exact entries,
+    # then ranges.
+    document, decoder, sections = text(output).strip(), json.JSONDecoder(), []
+    while document:
+        section, consumed = decoder.raw_decode(document)
+        sections.append(section)
+        document = document[consumed:].lstrip()
+    if len(sections) > 2 or any(not isinstance(s, list) for s in sections) or sum(len(s) for s in sections) > 64:
+        raise ValueError('native osd blocklist ls output differs or exceeds its bound')
+    entries = [{'addr': ('range:' if index else '') + e['addr'], 'until': e['until']} for index, s in enumerate(sections) for e in s]
+    return sorted(entries, key=lambda e: e['addr'])
+
+def publish_phase(state, image, image_id, label, **extra):
+    owners = [{'mode': o['mode'], 'owner': text(o['owner'])} for o in image.lock_get_owners()]
+    entry = dict(phase=label, is_owner=image.is_exclusive_lock_owner(), owners=owners, watchers=watchers(image), **extra)
+    entry.update(fresh(ioctx))
+    entry.update(lock_view(ioctx, image_id))
+    state['phases'].append(entry)
+    state['phase'] = label
+    publish('rbd-lock-state.json', json.dumps(state, sort_keys=True).encode())
+
 def wait_proceed(step):
     path, expected = os.path.join(OUT, 'rbd-lock-proceed-%d' % step), '%s %s %d' % (token, request_id, step)
     started, deadline = time.monotonic_ns(), time.monotonic() + 30
@@ -418,13 +492,7 @@ try:
             try:
                 image_id = text(image.id())
                 def phase(label, **extra):
-                    owners = [{'mode': o['mode'], 'owner': text(o['owner'])} for o in image.lock_get_owners()]
-                    entry = dict(phase=label, is_owner=image.is_exclusive_lock_owner(), owners=owners, watchers=watchers(image), **extra)
-                    entry.update(fresh(ioctx))
-                    entry.update(lock_view(ioctx, image_id))
-                    state['phases'].append(entry)
-                    state['phase'] = label
-                    publish('rbd-lock-state.json', json.dumps(state, sort_keys=True).encode())
+                    publish_phase(state, image, image_id, label, **extra)
                 # The first write takes the exclusive lock (automatic policy).
                 owner = [write(image, 'owner', e) for e in plan['owner_writes']]
                 image.flush()
@@ -452,6 +520,47 @@ try:
         elif action == 'observe-released':
             oid = SET_ID['go'][0]
             out['set_id_go'] = {'object': oid, 'view': versioned(ioctx, oid), 'get_id': call(ioctx, oid, 'rbd', 'get_id', b'')}
+        elif action in ('observe-go-owner', 'observe-go-broke'):
+            out['blocklist'] = blocklist()
+        elif action == 'takeover':
+            # The header lock names an owner whose watch is no longer renewed.
+            # librbd's write asks that owner for the lock while its watch is
+            # still listed and breaks the lock once it is gone
+            # (managed_lock::BreakRequest: blocklist, then break_lock). The
+            # write returns only then.
+            state = {'token': token, 'request_id': int(request_id), 'native_global_id': out['native_global_id'], 'phases': []}
+            before = blocklist()
+            image = rbd.Image(ioctx, name)
+            try:
+                image_id = text(image.id())
+                started = time.monotonic_ns()
+                owner = [write(image, 'owner', e) for e in plan['owner_writes']]
+                image.flush()
+                publish_phase(state, image, image_id, 'acquired', writes=owner, write_ns=time.monotonic_ns() - started,
+                              blocklist_before=before, blocklist=blocklist())
+                waited = wait_proceed(1)
+                state['phases'][0]['wait_ns'] = waited
+                out['phases'] = state['phases']
+                out['blocklist'] = blocklist()
+                observe(ioctx, out)
+            except BaseException:
+                # A failed takeover is not a dead owner: it closes the image,
+                # which releases whatever it holds, and fails.
+                image.close()
+                raise
+            # The owner dies here: no close, no unlock, no unwatch. The output
+            # is complete before the signal.
+            sys.stdout.write(json.dumps(out, sort_keys=True) + '\n')
+            sys.stdout.flush()
+            os.kill(os.getpid(), signal.SIGKILL)
+        elif action == 'final':
+            with rbd.Image(ioctx, name) as image:
+                out['writes'] = [write(image, 'reacquire', e) for e in plan['reacquire_writes']]
+                image.flush()
+                # The owner reads through its loaded object map.
+                out['go_extents'] = read_go(image)
+            out['check'] = object_map_check()
+            out['blocklist'] = blocklist()
         observe(ioctx, out)
     finally:
         ioctx.close()
@@ -518,6 +627,28 @@ type rbdLockPhase struct {
 	GoExtents  []rbdLockExtentSum  `json:"go_extents,omitempty"`
 	CloseNS    int64               `json:"close_ns,omitempty"`
 	Negative   *rbdLockCompound    `json:"negative_compound,omitempty"`
+	// The takeover's acquired phase: the OSDMap blocklist before the native
+	// image was opened and after its write returned.
+	BlocklistBefore *[]rbdLockBlocklistEntry `json:"blocklist_before,omitempty"`
+	Blocklist       *[]rbdLockBlocklistEntry `json:"blocklist,omitempty"`
+}
+
+// rbdLockBlocklistEntry is one entry of the native `osd blocklist ls`.
+type rbdLockBlocklistEntry struct {
+	Address string `json:"addr"`
+	Until   string `json:"until"`
+}
+
+func rbdLockBlocklistValid(entries *[]rbdLockBlocklistEntry) bool {
+	if entries == nil || len(*entries) > 64 {
+		return false
+	}
+	for _, e := range *entries {
+		if e.Address == "" || len(e.Address) > 128 || e.Until == "" || len(e.Until) > 64 {
+			return false
+		}
+	}
+	return true
 }
 
 // rbdLockVersioned is a raw object read with the object's user version.
@@ -600,6 +731,10 @@ type rbdLockNative struct {
 	Check          *rbdLockCheck          `json:"check,omitempty"`
 	SetID          *rbdLockSetID          `json:"set_id,omitempty"`
 	SetIDGo        *rbdLockSetIDGo        `json:"set_id_go,omitempty"`
+	// The lock-owner-loss sequence only: the OSDMap blocklist of every
+	// observation, and the final owner's read of the Go extents.
+	Blocklist *[]rbdLockBlocklistEntry `json:"blocklist,omitempty"`
+	GoExtents []rbdLockExtentSum       `json:"go_extents,omitempty"`
 }
 
 func rbdLockCallValid(call *rbdWriteClassCall, object, class, method string) bool {
@@ -732,23 +867,45 @@ func decodeRBDLockNative(action, token string, request int64, plan rbdLockPlan, 
 		ok = ok && present && blob.Name == rbdLockBlobName(action, key) && blob.Length <= rbdBaseBlobLimit && len(blob.SHA256) == 64
 	}
 	ok = ok && result.Blobs["image_head"].Length == s.Size && result.Blobs["objects_head"].Length == offset
+	checked := func(c *rbdLockCheck) bool {
+		return c != nil && c.ElapsedNS > 0 && len(c.Stdout) <= 4096 && len(c.Stderr) <= 4096 &&
+			slices.Equal(c.Argv, []string{"--rbd_cache=false", "--log_to_stderr=false", "--err_to_stderr=true", "object-map", "check", "--no-progress", plan.Pool + "/" + plan.Image})
+	}
+	// Only the lock-owner-loss observations carry a blocklist, and only its
+	// final action the owner's read of the Go extents.
+	lossAction := slices.Contains(rbdLockOwnerLossActions[1:], action)
+	ok = ok && lossAction == (result.Blocklist != nil) && (!lossAction || rbdLockBlocklistValid(result.Blocklist)) && (action == "final") == (result.GoExtents != nil)
 	switch action {
 	case "setup":
 		ok = ok && rbdLockWritesValid(result.Writes, "setup", plan.SetupWrites) && result.Phases == nil && result.Check == nil && len(result.Watchers) == 0 &&
 			rbdLockSetIDValid(result.SetID, token) && result.SetIDGo == nil
 	case "observe-released":
 		ok = ok && result.Writes == nil && result.Phases == nil && result.Check == nil && result.SetID == nil && rbdLockSetIDGoValid(result.SetIDGo, token)
+	case "observe-go-owner", "observe-go-broke":
+		ok = ok && result.Writes == nil && result.Phases == nil && result.Check == nil && result.SetID == nil && result.SetIDGo == nil
+	case "final":
+		ok = ok && rbdLockWritesValid(result.Writes, "reacquire", plan.ReacquireWrites) && result.Phases == nil && checked(result.Check) && result.SetID == nil && result.SetIDGo == nil &&
+			rbdLockExtentSumsValid(result.GoExtents, plan.GoWrites)
+	case "takeover":
+		ok = ok && result.Writes == nil && result.Check == nil && result.SetID == nil && result.SetIDGo == nil && len(result.Phases) == 1
+		if len(result.Phases) == 1 {
+			p := result.Phases[0]
+			ok = ok && p.Phase == "acquired" && rbdLockLockersValid(p.Lockers) && p.Size == plan.Size && rbdLockDiffValid(p.Diff, plan.Size) &&
+				rbdLockCallValid(p.HeaderLock, result.HeaderObject, "lock", "get_info") && rbdLockCallValid(p.MapLock, result.MapObject, "lock", "get_info") &&
+				rbdLockRawValid(p.MapRaw, result.MapObject) && rbdWriteWatchersValid(p.Watchers) && len(p.Owners) <= 1 && p.WaitNS > 0 && p.CloseNS == 0 && p.Negative == nil &&
+				rbdLockWritesValid(p.Writes, "owner", plan.OwnerWrites) && p.WriteNS > 0 && p.GoExtents == nil &&
+				rbdLockBlocklistValid(p.BlocklistBefore) && rbdLockBlocklistValid(p.Blocklist)
+		}
 	case "lock":
 		c := result.Check
-		ok = ok && result.Writes == nil && result.SetID == nil && result.SetIDGo == nil && len(result.Phases) == len(rbdLockPhases) && c != nil && c.ElapsedNS > 0 && len(c.Stdout) <= 4096 && len(c.Stderr) <= 4096 &&
-			slices.Equal(c.Argv, []string{"--rbd_cache=false", "--log_to_stderr=false", "--err_to_stderr=true", "object-map", "check", "--no-progress", plan.Pool + "/" + plan.Image})
+		ok = ok && result.Writes == nil && result.SetID == nil && result.SetIDGo == nil && len(result.Phases) == len(rbdLockPhases) && checked(c)
 		for i, label := range rbdLockPhases {
 			if i >= len(result.Phases) {
 				break
 			}
 			p := result.Phases[i]
 			closed := label == "closed"
-			ok = ok && p.Phase == label && rbdLockLockersValid(p.Lockers) && p.Size == plan.Size && rbdLockDiffValid(p.Diff, plan.Size) &&
+			ok = ok && p.Phase == label && p.BlocklistBefore == nil && p.Blocklist == nil && rbdLockLockersValid(p.Lockers) && p.Size == plan.Size && rbdLockDiffValid(p.Diff, plan.Size) &&
 				rbdLockCallValid(p.HeaderLock, result.HeaderObject, "lock", "get_info") && rbdLockCallValid(p.MapLock, result.MapObject, "lock", "get_info") &&
 				rbdLockRawValid(p.MapRaw, result.MapObject) && rbdWriteWatchersValid(p.Watchers) && len(p.Owners) <= 1 &&
 				(i == 0) == (p.WaitNS == 0) && p.WaitNS >= 0 && closed == (p.CloseNS > 0) && (!closed || !p.IsOwner && p.Owners == nil && p.Watchers == nil)
@@ -801,10 +958,17 @@ func checkRBDLockBlobs(out, action string, blobs map[string]rbdBaseBlob) error {
 
 // rbdLockNativeTimeout bounds one native lock action: the lock action waits
 // for four Go steps of at most 30 s each, then runs the object-map check
-// (at most 60 s) and the observation.
+// (at most 60 s) and the observation. The takeover's write waits until the
+// dead owner's watch (30 s) is gone and its proceed wait is at most 30 s; the
+// final action runs the check.
 func rbdLockNativeTimeout(action string) time.Duration {
-	if action == "lock" {
+	switch action {
+	case "lock":
 		return 220 * time.Second
+	case "takeover":
+		return 150 * time.Second
+	case "final":
+		return 120 * time.Second
 	}
 	return 60 * time.Second
 }
@@ -817,16 +981,27 @@ func (c *fixtureCluster) rbdLockRunNative(ctx context.Context, action string, re
 	}
 	argv := []string{"python3", "-c", rbdLockNativePython, "client.rbd-base-native-" + x.token, action, x.token, strconv.FormatInt(request, 10), string(plan)}
 	process, err := c.runKeyedNative(ctx, c.Container, ceph.NativeCommand{Argv: argv, Timeout: rbdLockNativeTimeout(action), MaxStdout: rbdBaseJSONLimit, MaxStderr: 16 << 10, Label: "owned native RBD lock " + action}, x.native)
-	if err != nil || !process.Complete() || process.ExitCode != 0 {
+	if err != nil || !process.Complete() || process.ExitCode != rbdLockExit(action) {
 		return &process, rbdLockNative{}, errors.Join(err, fmt.Errorf("native RBD lock %s did not complete (exit %d, timed out %v)", action, process.ExitCode, process.TimedOut))
+	}
+	if process.ExitCode != 0 {
+		// The keyed runner strips the key receipt line only from a worker
+		// that exited with 0; the killed takeover driver's output still
+		// starts with it. The runner has already checked that every byte
+		// it wrote was delivered.
+		rest, err := splitNativeKeyReceipt(process.Stdout, int(process.InputWritten))
+		if err != nil {
+			return &process, rbdLockNative{}, err
+		}
+		process.Stdout = rest
 	}
 	native, err := decodeRBDLockNative(action, x.token, request, x.lockPlan, bytes.TrimSpace(process.Stdout))
 	return &process, native, err
 }
 
 // parseRBDLockRequest admits <id> <ownership token> <action> where the action
-// is the next one of rbdLockActions (next is its index).
-func parseRBDLockRequest(fields []string, token string, previousID int64, next int) (int64, string, error) {
+// is the next one of the selected sequence (next is its index).
+func parseRBDLockRequest(actions, fields []string, token string, previousID int64, next int) (int64, string, error) {
 	if len(fields) != 3 || len(token) != 32 || fields[1] != token {
 		return 0, "", errors.New("invalid owned RBD lock request scope")
 	}
@@ -837,19 +1012,33 @@ func parseRBDLockRequest(fields []string, token string, previousID int64, next i
 	if err != nil || id <= 0 || id <= previousID || strconv.FormatInt(id, 10) != fields[0] {
 		return 0, "", errors.New("invalid RBD lock request identity")
 	}
-	if !slices.Contains(rbdLockActions, fields[2]) {
+	if !slices.Contains(actions, fields[2]) {
 		return 0, "", errors.New("RBD lock action is not admitted")
 	}
-	if next >= len(rbdLockActions) || fields[2] != rbdLockActions[next] {
+	if next >= len(actions) || fields[2] != actions[next] {
 		return 0, "", errors.New("RBD lock action is out of order or was already issued")
 	}
 	return id, fields[2], nil
 }
 
-// rbdLockControl runs one native action of the closed lock sequence. The
-// setup and lock actions are journaled as mutations (image creation and
-// writes; a header watch, lock traffic, writes and the object-map check),
-// the final observation as a read-only action.
+// rbdLockTarget names what one action touches in the owned journal.
+func rbdLockTarget(plan rbdLockPlan, action string) string {
+	switch action {
+	case "lock", "final":
+		return plan.Image + ":header-watch,exclusive-lock,object-map-check"
+	case "takeover":
+		return plan.Image + ":header-watch,exclusive-lock-break,osd-blocklist,killed-owner"
+	}
+	return plan.Image
+}
+
+// rbdLockControl runs one native action of the selected closed lock
+// sequence. The setup, lock, takeover and final actions are journaled as
+// mutations (image creation and writes; a header watch, lock traffic, writes
+// and the object-map check; for the takeover also the blocklist entry librbd
+// adds), the observations as read-only actions. The addresses the
+// lock-owner-loss sequence saw as lock owners are kept for the cleanup, which
+// removes their blocklist entries.
 func (c *fixtureCluster) rbdLockControl(ctx context.Context, out string, fields []string) (resultErr error) {
 	x := c.rbdBase
 	if c.profile.rbdBase != "1" || x == nil || x.out != out || x.setup == nil || x.native == nil || !x.plan.owned(x.token) || !x.lockPlan.owned(x.token) {
@@ -864,7 +1053,7 @@ func (c *fixtureCluster) rbdLockControl(ctx context.Context, out string, fields 
 	if x.cleanupAttempted {
 		return errors.New("RBD lock control requested after cleanup began")
 	}
-	id, action, err := parseRBDLockRequest(fields, x.token, x.lockLastRequestID, x.lockNext)
+	id, action, err := parseRBDLockRequest(rbdLockActionsFor(c.profile.testRun), fields, x.token, x.lockLastRequestID, x.lockNext)
 	if err != nil {
 		return err
 	}
@@ -881,11 +1070,7 @@ func (c *fixtureCluster) rbdLockControl(ctx context.Context, out string, fields 
 		}
 		resultErr = errors.Join(resultErr, writeMDSFreshJSON(out, "rbd-lock-"+action+".json", result))
 	}()
-	target := x.lockPlan.Image
-	if action == "lock" {
-		target += ":header-watch,exclusive-lock,object-map-check"
-	}
-	m, err := c.rbdBaseBeginAction("native-lock-"+action, target, id, action == "observe-released")
+	m, err := c.rbdBaseBeginAction("native-lock-"+action, rbdLockTarget(x.lockPlan, action), id, rbdLockReadOnly(action))
 	result["mutation"] = m
 	if err != nil {
 		return err
@@ -902,5 +1087,29 @@ func (c *fixtureCluster) rbdLockControl(ctx context.Context, out string, fields 
 		return c.rbdBaseFinish(m, err)
 	}
 	result["native"] = native
+	x.lockOwnerAddresses = append(x.lockOwnerAddresses, rbdLockOwnerAddresses(action, native)...)
 	return c.rbdBaseFinish(m, nil)
+}
+
+// rbdLockOwnerAddresses returns the lock-owner addresses one action of the
+// lock-owner-loss sequence observed natively: the Go owner that is about to
+// lose its watch, and the native owner that is about to be killed. Each is
+// blocklisted by whoever breaks its lock.
+func rbdLockOwnerAddresses(action string, native rbdLockNative) []string {
+	var lockers *rbdWriteLockers
+	switch action {
+	case "observe-go-owner":
+		lockers = native.Lockers
+	case "takeover":
+		if len(native.Phases) == 1 {
+			lockers = native.Phases[0].Lockers
+		}
+	}
+	var addresses []string
+	if lockers != nil {
+		for _, l := range lockers.Lockers {
+			addresses = append(addresses, l.Address)
+		}
+	}
+	return addresses
 }

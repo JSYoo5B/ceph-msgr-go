@@ -326,6 +326,12 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if p.testRun == rbdJournalLostAppendSelector {
 			selected = p.testRun
 		}
+		// The lock-owner-loss acceptance blocklists two client addresses and
+		// kills a native lock owner; it is admitted only when explicitly
+		// selected, on a fixture no other RBD test shares.
+		if p.testRun == rbdLockOwnerLossSelector {
+			selected = p.testRun
+		}
 		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || (p.sparseReadOracle != "" || p.mapExtOracle != "") ||
 			p.testRun != "" && p.testRun != selected {
 			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture and no MDS profile", selected)
