@@ -25,15 +25,20 @@ every MDS connection of the client before Dial:
   flags, directory counts, fscrypt fields), quota delivery, inline data and
   pool namespaces, the created inode in create replies and caller pool IDs in
   open arguments.
-- CephFS client features: bits 0–9, RECLAIM_CLIENT (10), MULTI_RECONNECT (12), ALTERNATE_NAME
+- CephFS client features: bits 0–9, RECLAIM_CLIENT (10), MULTI_RECONNECT (12),
+  DELEG_INO (13), ALTERNATE_NAME
   (15), 32BITS_RETRY_FWD (18), NEW_SNAPREALM_INFO (19) and HAS_OWNER_UIDGID
-  (20), `0x1c97ff` in native `session ls`. REPLY_ENCODING selects the
+  (20), `0x1cb7ff` in native `session ls`. REPLY_ENCODING selects the
   versioned InodeStat (v8), DirStat (v1) and LeaseStat (v2);
   NEW_SNAPREALM_INFO selects SnapRealmInfoNew traces. RECLAIM_CLIENT changes
   no MDS behavior and only satisfies a `reclaim_client` filesystem
   requirement. MULTI_RECONNECT is declared only by this profile; it satisfies
   the filesystem requirement and uses the existing bounded reconnect codec.
-  Lazy wanted caps, delegated inodes, metrics,
+  DELEG_INO is declared only by this profile and is decode only: it selects
+  the `openc_response_t` form of created-inode reply extras (see "Requests")
+  and satisfies a `deleg_ino` filesystem requirement. It does not enable
+  asynchronous directory operations.
+  Lazy wanted caps, metrics,
   notify-session-state, getvxattr, client-side auth-cap checks, charmap and
   blockdiff stay withheld; see `internal/mds/CLIENT_EXTENSION_DECISIONS.md`.
 
@@ -221,7 +226,8 @@ epoch it routed with, and retry/forward counts. The legacy u8 retry/forward
 fields carry the low bytes of the 32-bit counts, as natively. REPLAY and
 ASYNC flags and a preset inode number are refused by fresh `Submit` calls.
 REPLAY is set only by the explicit recovery resubmission path described above;
-async directory operations remain unsupported. Requests also require the MDS's
+async directory operations remain unsupported, although the profile declares
+DELEG_INO: the MDS may delegate inode ranges, and no request ever uses one. Requests also require the MDS's
 OPEN to advertise REPLY_ENCODING, 32BITS_RETRY_FWD, NEW_SNAPREALM_INFO and
 HAS_OWNER_UIDGID.
 
@@ -301,7 +307,27 @@ Replies preserve the signed result (Linux numbering), MDSMap epoch, safe and
 trace flags and the raw trace, extra and snap blobs. `DecodeTrace`,
 `DecodeReaddir` and `DecodeSnapTrace` decode them in the native client order;
 `DecodeMDSXattrs` decodes an inode's xattr blob. Opaque optional metadata is
-kept as bytes. A call stays tracked until its safe reply or forward; afterwards the MDS
+kept as bytes. `MDSReply.DecodeCreateExtra` decodes the extra of a reply that
+reports a created inode: a CREATE reply, a CREATE answered from the
+completed-request record, or the traceless `already completed` reply of an
+inode-creating request. The MDS chooses the form per reply
+(`Server::set_reply_extra_bl`). With `mds_allow_async_dirops` (default true)
+it is `openc_response_t`, struct v1/compat1: the created inode and an
+interval set of delegated inode ranges, reported as `Delegation` true with
+the raw `Delegated` (start, length) pairs in wire order. The set is empty
+when the MDS was started with `mds_client_delegate_inos_pct` zero, the
+request was queued for replay, or the session already holds at least half of
+its share; the 18-byte
+empty form is distinct from the bare inode. With the option off the extra is
+the bare 8-byte inode (`Delegation` false). The same request can thus be
+answered with different extra bytes naming the same inode. The decoder
+bounds the interval count before allocating and refuses a truncated pair, an
+empty interval, an interval that does not fit in 64 bits and unordered or
+overlapping intervals. Delegated ranges are a server grant for asynchronous
+creates. The library stores nothing from them; the MDS keeps them with the
+session, shows them in `session ls` (`delegated_inos`) and purges that inode
+range when the session closes or is evicted. A caller that ignores them
+behaves like the pinned userspace client. A call stays tracked until its safe reply or forward; afterwards the MDS
 sends nothing more for that TID on the connection. A reply's `Op` is the
 MDS's: a retried non-REPLAY MKNOD, MKDIR or SYMLINK that the MDS finds in its
 completed-request record during clientreplay is executed as LOOKUP (dentry
@@ -409,9 +435,15 @@ That record predates RECLAIM_CLIENT; the PR #55 checkpoint required
 `0x1c87ff`, observed in every `mds-cephfs*` row and in the CephFS-profile
 session of the `admit_required_reclaim_client` leaf
 ([MDS_SESSIONS_VALIDATION.md](../integration/fixture/MDS_SESSIONS_VALIDATION.md)).
-The MULTI_RECONNECT checkpoint declares `0x1c97ff`; its separate native split
+The MULTI_RECONNECT checkpoint declared `0x1c97ff`; its separate native split
 and required-feature admission boundaries are in
 [MDS_MULTI_RECONNECT_VALIDATION.md](../integration/fixture/MDS_MULTI_RECONNECT_VALIDATION.md).
+The DELEG_INO checkpoint declares `0x1cb7ff`. From it on, the create extras
+quoted in the earlier records above and below (8 bytes, "extra holding the
+inode") are `openc_response_t` on an unmodified fixture; the live forms, the
+grant compared with native `delegated_inos` and the required-feature
+admission are in
+[MDS_DELEG_INO_VALIDATION.md](../integration/fixture/MDS_DELEG_INO_VALIDATION.md).
 A separate live push acceptance (product `source-2`, both profiles, seven
 leaves) received and answered a dentry-lease REVOKE (the native rename
 completed only after the Go RELEASE), snapshot UPDATE/SPLIT/DESTROY pushes
@@ -606,7 +638,7 @@ request or resubmitting a forward requires the caller's explicit APIs. These
 APIs do not automatically retry file I/O. The library implements no path
 walking, inode or dentry cache, capability bookkeeping,
 lease expiry, snapshot realm tree, dirty metadata or data writeback, file
-locks, delegated inodes or async operations. File data I/O semantics (layout, striping,
+locks, delegated inode allocation or async operations. File data I/O semantics (layout, striping,
 flush ordering against capabilities) remain the consumer's.
 
 Withheld CephFS client feature decisions: [CLIENT_EXTENSION_DECISIONS.md](../internal/mds/CLIENT_EXTENSION_DECISIONS.md).

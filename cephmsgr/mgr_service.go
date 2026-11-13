@@ -97,11 +97,7 @@ func (c *Client) OpenMgrService(ctx context.Context, options MgrServiceOptions) 
 		return nil, err
 	}
 	options.Metadata, options.Status = cloneStrings(options.Metadata), cloneStrings(options.Status)
-	svc := &MgrService{
-		c: c, options: options, key: mgrServiceKey{options.Service, options.Daemon},
-		configured: make(chan struct{}), periodWake: make(chan struct{}, 1),
-		closeAck: make(chan struct{}), closeDone: make(chan struct{}), done: make(chan struct{}),
-	}
+	svc := c.newMgrService(options)
 	if err := c.reserveMgrService(svc); err != nil {
 		return nil, err
 	}
@@ -109,9 +105,9 @@ func (c *Client) OpenMgrService(ctx context.Context, options MgrServiceOptions) 
 		c.releaseMgrService(svc)
 		return nil, err
 	}
-	c.wg.Add(2)
-	go svc.watchBinding()
-	go svc.beaconLoop()
+	if err := c.startMgrServiceWorkers(svc); err != nil {
+		return nil, err
+	}
 	if err := svc.s.SendControl(ctx, open); err != nil {
 		svc.fail(err)
 		return nil, err
@@ -124,6 +120,14 @@ func (c *Client) OpenMgrService(ctx context.Context, options MgrServiceOptions) 
 	case <-ctx.Done():
 		svc.fail(ctx.Err())
 		return nil, fmt.Errorf("%w: %w", ErrMgrServiceOutcomeUnknown, ctx.Err())
+	}
+}
+
+func (c *Client) newMgrService(options MgrServiceOptions) *MgrService {
+	return &MgrService{
+		c: c, options: options, key: mgrServiceKey{options.Service, options.Daemon},
+		configured: make(chan struct{}), periodWake: make(chan struct{}, 1),
+		closeAck: make(chan struct{}), closeDone: make(chan struct{}), done: make(chan struct{}),
 	}
 }
 
@@ -151,6 +155,27 @@ func (c *Client) reserveMgrService(svc *MgrService) error {
 		return ErrMgrServiceExists
 	}
 	c.mgrServices[svc.key] = svc
+	return nil
+}
+
+// startMgrServiceWorkers admits the handle's binding watcher and beacon loop.
+// The setup admission of dialMgrService ends when the dial returns, so Close
+// can publish shutdown and finish waiting between that return and this call.
+// Admission therefore shares Close's critical section: either the workers are
+// owned before Close begins to wait, or the client is already closed and no
+// worker starts. In the second case nothing was queued for the MGR, so the
+// open fails as a known local ErrClosed and the reserved identity is released.
+func (c *Client) startMgrServiceWorkers(svc *MgrService) error {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		svc.fail(ErrClosed)
+		return ErrClosed
+	}
+	c.wg.Add(2)
+	c.mu.Unlock()
+	go svc.watchBinding()
+	go svc.beaconLoop()
 	return nil
 }
 

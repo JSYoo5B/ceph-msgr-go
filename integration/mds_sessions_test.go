@@ -82,6 +82,14 @@ type nativeMDSSession struct {
 	ClientFeatures string            `json:"client_features"`
 	MetricFlags    string            `json:"metric_flags"`
 	Metadata       map[string]string `json:"metadata"`
+	// DelegatedInos is the native session's delegated_inos (Session::dump).
+	DelegatedInos []nativeMDSInoRange `json:"delegated_inos"`
+}
+
+// nativeMDSInoRange is one inode range of a native session dump.
+type nativeMDSInoRange struct {
+	Start  uint64 `json:"start"`
+	Length uint64 `json:"length"`
 }
 
 type nativeMDSSessionsReceipt struct {
@@ -783,6 +791,68 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 		return
 	}
 
+	// DELEG_INO is declared only by CephFS, which decodes the delegated form
+	// of created-inode reply extras; the session-only profile submits no
+	// request and keeps its explicit REJECT. This requirement is also what the
+	// deprecated min_compat_client maps Octopus and later releases to.
+	if !leaf("admit_required_deleg_ino_only_for_cephfs", func(t *testing.T) {
+		on, err := control.request(ctx, "require-deleg-on")
+		if err != nil || on.Map.Required["feature_13"] != "deleg_ino" || len(on.Map.Required) != 1 || on.Mutation == nil || on.Mutation.State != "applied" {
+			t.Fatal("deleg_ino requirement was not applied", err)
+		}
+		plain, plainConn, _ := newClient(t, "M", identity, freshKey)
+		if cephmsgr.MDSFeatureBitsetHas(plain.MDSClientFeatures(), mds.FeatureDelegIno) {
+			t.Fatal("session-only profile declares DELEG_INO")
+		}
+		rejected := reject(t, "M-deleg-required", identity, plainConn, plain.Snapshot().GlobalID, metadata("-m"))
+		if !strings.Contains(rejected.Reason, "missing required features") {
+			t.Fatal("session-only DELEG_INO refusal lost the native reason", rejected.Reason)
+		}
+		c, conn, _ := newClient(t, "N", identity, freshKey, func(o *cephmsgr.Options) { o.EnableCephFS = true })
+		if !cephmsgr.MDSFeatureBitsetHas(c.MDSClientFeatures(), mds.FeatureDelegIno) {
+			t.Fatal("CephFS profile does not declare DELEG_INO")
+		}
+		meta, gid := metadata("-n"), c.Snapshot().GlobalID
+		s, err := conn.OpenSession(ctx, cephmsgr.MDSSessionOptions{Metadata: meta, RenewInterval: 2 * time.Second})
+		if err != nil {
+			t.Fatal("open CephFS with deleg_ino required", err)
+		}
+		closeLater(t, s)
+		open, err := s.WaitOpen(ctx)
+		if err != nil || !cephmsgr.MDSFeatureBitsetHas(open.SupportedFeatures, mds.FeatureDelegIno) {
+			t.Fatal("MDS OPEN does not advertise DELEG_INO", err)
+		}
+		native, err := control.request(ctx, "observe", gid)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := checkNativeCephFSSession(native.session(gid), identity, meta); err != nil {
+			t.Fatal(err)
+		}
+		// Admission alone delegates nothing: ranges are granted with create
+		// replies, and this session submits none.
+		if n := native.session(gid); len(n.DelegatedInos) != 0 {
+			t.Fatal("admitted session already holds delegated inodes", n.DelegatedInos)
+		}
+		closing, stop := context.WithTimeout(ctx, 15*time.Second)
+		err = s.Close(closing)
+		stop()
+		sessions = append(sessions, describeMDSSession("N-deleg-required", identity, s))
+		if err != nil || !errors.Is(s.Err(), cephmsgr.ErrMDSSessionClosed) {
+			t.Fatal("admitted DELEG_INO session close was not confirmed", err)
+		}
+		closed, err := control.request(ctx, "observe", gid)
+		if err != nil || closed.session(gid) != nil {
+			t.Fatal("admitted DELEG_INO session remained after close", err)
+		}
+		off, err := control.request(ctx, "require-deleg-off")
+		if err != nil || !maps.Equal(off.Map.Required, base.Map.Required) || off.Mutation == nil || off.Mutation.State != "restored" {
+			t.Fatal("deleg_ino requirement was not restored", err)
+		}
+	}) {
+		return
+	}
+
 	if !leaf("reject_foreign_filesystem_caps", func(t *testing.T) {
 		client, conn, _ := newClient(t, "E", foreign, foreignKey)
 		meta := map[string]string{"entity_id": strings.TrimPrefix(foreign, "client."), "hostname": "ceph-msgr-go-" + prefix + "-e", "root": "/"}
@@ -1040,7 +1110,7 @@ func TestCephMDSSessionsIntegration(t *testing.T) {
 				t.Fatal("session client dialed an OSD or redialed the MDS", r.name, r.dials.MDS.Load(), r.dials.OSD.Load())
 			}
 		}
-		if len(dialRecords) != 13 {
+		if len(dialRecords) != 15 {
 			t.Fatal("unexpected number of session clients", len(dialRecords))
 		}
 	})
@@ -1070,8 +1140,8 @@ func TestMDSSessionNativeOpenImages(t *testing.T) {
 	if got := nativeFeatureBits(cephmsgr.MDSSessionClientFeatures()); got != "0x00000000000005ff" {
 		t.Fatal("declared client features do not print as bits 0-8 and 10", got)
 	}
-	if got := nativeFeatureBits(cephmsgr.MDSCephFSClientFeatures()); got != "0x00000000001c97ff" {
-		t.Fatal("declared CephFS client features do not print as bits 0-10, 12, 15 and 18-20", got)
+	if got := nativeFeatureBits(cephmsgr.MDSCephFSClientFeatures()); got != "0x00000000001cb7ff" {
+		t.Fatal("declared CephFS client features do not print as bits 0-10, 12, 13, 15 and 18-20", got)
 	}
 	for raw, want := range map[string]string{"": "0x0", "ff01": "0x00000000000001ff", "000000000000000001": "0x00000000000000010000000000000000"} {
 		data, _ := hex.DecodeString(raw)

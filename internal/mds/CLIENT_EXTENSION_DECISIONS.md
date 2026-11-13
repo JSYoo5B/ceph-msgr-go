@@ -71,7 +71,7 @@ no declared bit beyond the pinned list.
 | 10 | `reclaim_client` | declared | declared | - | baseline |
 | 11 | `lazy_caps_wanted` | withheld | withheld | policy, optional | consumer-owned |
 | 12 | `multi_reconnect` | withheld | declared | - | baseline |
-| 13 | `deleg_ino` | withheld | withheld | codec, lifecycle, policy | implement |
+| 13 | `deleg_ino` | withheld | declared | - | baseline |
 | 14 | `metric_collect` | withheld | withheld | codec, optional | defer |
 | 15 | `alternate_name` | withheld | declared | - | baseline |
 | 16 | `notify_session_state` | withheld | withheld | lifecycle, optional | defer |
@@ -83,13 +83,14 @@ no declared bit beyond the pinned list.
 | 22 | `charmap` | withheld | withheld | codec, policy | implement |
 | 23 | `blockdiff` | withheld | withheld | optional | consumer-owned |
 
-Decision counts for the eight bits withheld by both profiles: implement 2,
+Decision counts for the seven bits withheld by both profiles: implement 1,
 defer 2, consumer-owned 4.
 
 ## How the MDS uses a client bit
 
 The pinned MDS reads the client's declared bitset for the bits withheld at
-audit time (10 to 14, 16, 17 and 21 to 23) only in the places below. Baseline
+audit time (10 to 14, 16, 17 and 21 to 23) only in the places below (bits 10,
+12 and 13 have since been declared; see "Declared extensions"). Baseline
 bits have further behavior branches that their profile contracts already
 cover: MIMIC (8) selects v7 session messages and REPLY_ENCODING (9) the
 versioned reply encodings (for example `mds/Server.cc:660`, `mds/CInode.cc:4217`),
@@ -108,7 +109,7 @@ and NEW_SNAPREALM_INFO (19) selects the snap trace format
   `MDSMap::set_min_compat_client` maps to a single release-alias bit: Nautilus
   requires bit 12, Octopus and every later release require bit 13
   (`mds/MDSMap.cc:1314-1328`). There is no CephFS release bit after Octopus.
-- Behavior of withheld bits. Bit 11 (`mds/Locker.cc:2821-2830`), bit 13
+- Behavior of the bits withheld at audit time. Bit 11 (`mds/Locker.cc:2821-2830`), bit 13
   (`mds/Server.cc:2558-2582`), bit 16 (`mds/Server.cc:650-670`, read from the
   REQUEST_OPEN message itself), bit 21 (`mds/Server.cc:757-760` and
   `1646-1649`) and bit 22 (`mds/Server.cc:4785-4801`).
@@ -196,6 +197,78 @@ rows are `baseline`; the evidence that changed the decision stays here.
   See [MDS_MULTI_RECONNECT_VALIDATION.md](../../integration/fixture/MDS_MULTI_RECONNECT_VALIDATION.md)
   for the exact tested source, profiles and remaining failure boundaries.
 
+### Bit 13: deleg_ino (CephFS profile declared, decode only)
+
+- Wire: when the MDS option `mds_allow_async_dirops` is true (default true,
+  `common/options/mds.yaml.in:1008-1011`) and the session declared the bit,
+  the extra blob of a reply that reports a created inode is
+  `openc_response_t` (struct v1/compat1: u64 `created_ino`,
+  `interval_set<inodeno_t>` as a u32 count and (start, length) u64 pairs)
+  instead of the bare u64 inode (`mds/Server.cc:2558-2582`,
+  `messages/MClientReply.h:304-334`). Three callers fill it: CREATE
+  (`mds/Server.cc:4948`), a CREATE found in the completed-request record
+  (`2864-2872`) and the traceless `already completed` reply of any
+  inode-creating request (`2625-2648`).
+- Server use: the form is chosen per reply, from the option and the session
+  bit. Ranges are added only when `mds_client_delegate_inos_pct` (default 50,
+  `common/options/mds.yaml.in:498-506`) is nonzero, the request is not queued
+  for replay and the session holds fewer than half of its share
+  (`mds/Server.cc:2568-2573`). One session therefore sees the 18-byte empty
+  form, a form with ranges and, if the option is turned off at runtime
+  (`mds/Server.cc:1381-1383`), the bare 8 bytes. The percentage itself is
+  fixed for an MDS incarnation: `Server` reads it at construction
+  (`mds/Server.cc:287`) and the option is absent from the tracked keys
+  (`mds/MDSRank.cc:4050-4145`), so its `handle_conf_change` branch
+  (`mds/Server.cc:1403-1405`) is not reached.
+- What the declaration promises: nothing beyond decoding. The pinned
+  userspace client declares the bit, decodes `openc_response_t` and discards
+  the ranges; it never issues an async request (`client/Client.cc:2018-2034`).
+  This library does the same and additionally keeps the ranges raw for the
+  caller. `Submit` still refuses `CEPH_MDS_FLAG_ASYNC` and never presets an
+  inode number, so no delegated inode is used and the async request,
+  completion and recovery lifecycle (`mds/Server.cc:336-349`, `3562-3610`;
+  lock-cache capabilities `CEPH_CAP_DIR_CREATE`/`CEPH_CAP_DIR_UNLINK`,
+  `include/ceph_fs.h:989-991`) stays unimplemented and unadvertised by any
+  request.
+- Server-side consequence of holding a grant: the ranges stay with the
+  session (`session ls` prints them as `delegated_inos`,
+  `mds/SessionMap.cc:665-671`). The set is in-memory state of the Session
+  object (`mds/SessionMap.h:433`), not part of the persisted session info; by
+  source a restarted MDS holds none until it delegates again (not exercised
+  live). When the session closes or is evicted the MDS journals the set with
+  the close and purges that inode range (`mds/Server.cc:1505-1531`,
+  `910-938`, `mds/MDCache.cc:6812-6836`); a session that misses the reconnect
+  window takes the same path (`mds/Server.cc:1897-1898`). This is the pinned
+  userspace client's footprint too.
+- Consumer-owned: any use of the ranges (inode allocation, async completion
+  tracking, replay ordering, directory capability policy). No native inode
+  allocator is copied into this repository.
+- Code: `CephFSClientFeatures` in [session.go](session.go) sets bit 13;
+  `FeatureDelegIno`, `CreateExtra` and `DecodeCreateExtra` in
+  [create_extra.go](create_extra.go); `MDSReply.DecodeCreateExtra` in
+  [mds_request.go](../../cephmsgr/mds_request.go). The decoder accepts both
+  forms by size (8 bytes, or an envelope of at least 18), bounds the interval
+  count before allocating and refuses truncated pairs, empty intervals,
+  intervals that do not fit in 64 bits and unordered or overlapping intervals.
+  Tests: [TestDecodeCreateExtraMatchesFreshNative](native_create_extra_test.go)
+  (both registered native `openc_response_t` instances, regenerated with the
+  pinned image), [TestDecodeCreateExtraRejectsMalformedInput](native_create_extra_test.go),
+  [TestCephFSDelegInoIsDecodeOnly](../../cephmsgr/mds_create_extra_test.go).
+- Declaration: CephFS only. The session-only profile submits no request and
+  keeps bit 13 withheld, so it still refuses a `deleg_ino` requirement,
+  including the one the deprecated `min_compat_client` maps Octopus and later
+  releases to (`mds/MDSMap.cc:1314-1328`).
+- Evidence: the live leaves `delegated_inode_reply_forms`,
+  `delegation_percentage_zero` and `lost_reply_and_completed_replay` of
+  `TestCephMDSCephFSCompletionIntegration`
+  and `admit_required_deleg_ino_only_for_cephfs` of
+  `TestCephMDSSessionsIntegration`; see
+  [MDS_DELEG_INO_VALIDATION.md](../../integration/fixture/MDS_DELEG_INO_VALIDATION.md)
+  for the tested source, profiles and boundaries.
+- Not claimed: async directory operations, use or release of delegated
+  inodes, the kernel client's async recovery, delegation across MDS ranks or
+  failover, and a requirement that combines `deleg_ino` with another bit.
+
 ## Withheld features
 
 ### Bit 11: lazy_caps_wanted
@@ -215,48 +288,6 @@ rows are `baseline`; the evidence that changed the decision stays here.
   Decision: consumer-owned. A future explicit opt-in would require the caller
   to state that it implements the re-announce policy, plus a live stale/resume
   acceptance. No higher-layer operation is blocked.
-
-### Bit 13: deleg_ino
-
-- Wire: when the MDS option `mds_allow_async_dirops` is true (default true,
-  `common/options/mds.yaml.in:1008-1011`) and the client declares the bit,
-  the create reply's extra blob becomes `openc_response_t` (struct v1/compat1:
-  u64 `created_ino`, `interval_set<inodeno_t>` delegated ranges) instead of
-  the bare u64 inode (`mds/Server.cc:2558-2582`, `messages/MClientReply.h:304-334`).
-  The same function fills the extra of completed-request replies for any
-  inode-creating request (`mds/Server.cc:2625-2648`, `2864-2872`).
-- Async directory operations: a request with `CEPH_MDS_FLAG_ASYNC` (4) and a
-  delegated inode in `head.ino` is queued like a REPLAY during reconnect and
-  its inode reserved (`mds/Server.cc:336-349`); new inodes are taken from the
-  session's delegated set (`mds/Server.cc:3562-3610`). Async creates and
-  unlinks rely on the directory lock-cache capabilities `CEPH_CAP_DIR_CREATE`
-  and `CEPH_CAP_DIR_UNLINK` (`include/ceph_fs.h:989-991`). Delegated inodes
-  are journaled with the session, cleared when it closes
-  (`mds/Server.cc:925-938`) and handed to purge when a session misses the
-  reconnect window (`mds/Server.cc:1897-1898`).
-- Native reference behavior: the userspace client declares the bit, decodes
-  `openc_response_t` and discards the delegated ranges; it never issues an
-  async request (`client/Client.cc:2018-2034`). The kernel client is the only
-  async producer, so no userspace native oracle exists for the async path.
-- Consumer-owned: inode allocation from delegated ranges, async completion
-  tracking, replay ordering and directory capability policy. A native inode
-  allocator is not copied into this repository.
-- Current code: `Submit` refuses the ASYNC flag and a preset inode
-  ([mds_request.go](../../cephmsgr/mds_request.go)); `MDSReply.Extra` stays
-  raw; test-only consumers read the 8-byte form, for example
-  `integration/mds_cephfs_completion_test.go`.
-- Gap: codec (`openc_response_t`), lifecycle (async requests, their
-  completion, recovery and the loss of delegated ranges on session end) and
-  policy (allocation).
-- Decision: implement a decode-only stage that matches the native userspace
-  client: an `openc_response_t` decoder for create and completed-request
-  extras, raw delegated ranges preserved, ASYNC and preset inodes still
-  refused. Async directory operations stay deferred until a caller contract
-  and an oracle for completion and recovery exist. Dependencies: a fresh
-  native vector of `openc_response_t`, updated test-only consumers, a live
-  CREATE and completed-CREATE acceptance with the bit declared, and an
-  admission acceptance with `deleg_ino` required. This also unblocks
-  filesystems that use the deprecated `min_compat_client` at Octopus or later.
 
 ### Bit 14: metric_collect
 
@@ -381,16 +412,17 @@ rows are `baseline`; the evidence that changed the decision stays here.
 - Opening, keeping or reconnecting on a filesystem with a required bit
   outside the selected profile. A `multi_reconnect` requirement (including
   deprecated Nautilus `min_compat_client`) is admitted only by CephFS; the
-  session-only profile refuses it. Both profiles refuse `deleg_ino`
-  (deprecated Octopus-or-later `min_compat_client`) until its decode-only
-  stage. Both profiles admit `reclaim_client`.
+  session-only profile refuses it. The same holds for a `deleg_ino`
+  requirement (including deprecated Octopus-or-later `min_compat_client`).
+  Both profiles admit `reclaim_client`.
 - Creating, linking or renaming entries into a directory with a charmap
   (bit 22): -EPERM.
 - Root-squash identities are reported as broken clients (bit 21). That is an
   operational warning, not a refused operation.
 
-Async directory operations (bit 13), metrics (bit 14) and duplicate-open state
-notification (bit 16) only change latency or telemetry. GETVXATTR and
+Async directory operations (unimplemented behind the declared bit 13), metrics
+(bit 14) and duplicate-open state notification (bit 16) only change latency or
+telemetry. GETVXATTR and
 BLOCKDIFF (bits 17, 23) are not blocked by absent wire data.
 
 ## Order and dependencies
@@ -398,7 +430,8 @@ BLOCKDIFF (bits 17, 23) are not blocked by absent wire data.
 Recovering already supported paths and the general coverage ledger take
 precedence (issue #11). Within this table the order was bits 10 and 12
 (evidence only), then bit 13 decode-only, then the bit 22 opt-in. Bit 10 is
-declared, as is bit 12 for CephFS; bit 13 decode-only is next. Each
+declared by both profiles, bits 12 and 13 (decode only) by CephFS; the bit 22
+opt-in is next. Each
 declaration change must update `ClientFeatures` or `CephFSClientFeatures`,
 this table, the profile contract and the native `session ls` feature
 assertions of the live tests together. The drift test fails on any one of

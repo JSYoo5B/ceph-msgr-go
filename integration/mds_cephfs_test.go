@@ -3,7 +3,6 @@ package integration_test
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -231,7 +230,7 @@ func (x *mdsCephFSControl) stat(ctx context.Context, target string) (nativeMDSCe
 func checkNativeCephFSSession(n *nativeMDSSession, identity string, metadata map[string]string) error {
 	declared := nativeFeatureBits(mds.CephFSClientFeatures)
 	if n == nil || n.State != "open" || n.AuthType != "client" || n.AuthID != strings.TrimPrefix(identity, "client.") || n.EntityType != "client" || n.Address == "" ||
-		n.ClientFeatures != declared || n.ClientFeatures != "0x00000000001c97ff" || n.MetricFlags != "0x0" || !maps.Equal(n.Metadata, metadata) {
+		n.ClientFeatures != declared || n.ClientFeatures != "0x00000000001cb7ff" || n.MetricFlags != "0x0" || !maps.Equal(n.Metadata, metadata) {
 		return fmt.Errorf("native CephFS session differs from the declared client: %+v", n)
 	}
 	return nil
@@ -586,12 +585,15 @@ func TestCephMDSCephFSIntegration(t *testing.T) {
 		}
 		st := trace.Target
 		fileIno = st.Ino
-		// REPLY_CREATE_INODE without DELEG_INO: the extra blob is the created
-		// inodeno_t, a little-endian u64, in the first reply.
-		if len(first.Extra) != 8 || binary.LittleEndian.Uint64(first.Extra) != st.Ino {
+		// DELEG_INO with the default mds_allow_async_dirops: the extra blob of
+		// the first reply is openc_response_t, naming the created inode. Its
+		// delegated ranges are recorded, not required; the grant and the bare
+		// 8-byte form are covered by the completion acceptance.
+		if !cephfsCreated(first.Extra, st.Ino) {
 			t.Fatalf("created-inode extra differs: %x target %d", first.Extra, st.Ino)
 		}
-		facts["create_unsafe_reply_first"], facts["create_extra_hex"] = e.UnsafeSeen, hex.EncodeToString(first.Extra)
+		created, _ := first.DecodeCreateExtra()
+		facts["create_unsafe_reply_first"], facts["create_extra_hex"], facts["create_extra_delegated"] = e.UnsafeSeen, hex.EncodeToString(first.Extra), created.Delegated
 		if st.Mode != 0o100644 || st.UID != 0 || st.GID != 0 || st.NLink != 1 || st.Size != 0 {
 			t.Fatalf("created inode attributes differ: %+v", summarizeInode(st))
 		}

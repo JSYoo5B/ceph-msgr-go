@@ -152,7 +152,8 @@ func checkClientExtensionDecisions(t *testing.T, document string) {
 		}
 	}
 	// Codec constants named after a feature must agree with the pinned bit.
-	for name, bit := range map[string]int{"reply_encoding": FeatureReplyEncoding, "reclaim_client": FeatureReclaimClient, "32bits_retry_fwd": Feature32BitsRetryFwd,
+	for name, bit := range map[string]int{"reply_encoding": FeatureReplyEncoding, "reclaim_client": FeatureReclaimClient,
+		"multi_reconnect": FeatureMultiReconnect, "deleg_ino": FeatureDelegIno, "32bits_retry_fwd": Feature32BitsRetryFwd,
 		"new_snaprealm_info": FeatureNewSnaprealmInfo, "has_owner_uidgid": FeatureHasOwnerUIDGID} {
 		if tentacleCephFSFeatureNames[bit] != name {
 			t.Errorf("Go feature constant for %s is bit %d (%s)", name, bit, tentacleCephFSFeatureNames[bit])

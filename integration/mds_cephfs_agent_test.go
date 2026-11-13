@@ -1223,17 +1223,27 @@ func (a *cephfsCapAgent) applyStatLocked(st *cephmsgr.MDSInodeStat, source strin
 	c.Dir = st.Mode&0o170000 == 0o040000
 	c.UID, c.GID, c.Mode, c.NLink = st.UID, st.GID, st.Mode, st.NLink
 	c.InlineVersion = st.InlineVersion
+	// A reply reaches the agent from the test's request path and a cap push
+	// from the event queue, so a push the MDS sent after this reply may have
+	// been handled first. Its client range supersedes the reply's: the MDS
+	// does not repeat a grant, so taking the older max_size here would leave
+	// the consumer waiting for one. The native client cannot see this order:
+	// one dispatch thread applies both.
+	maxSize := st.MaxSize
+	if st.Cap.Caps != 0 && c.CapID != 0 && !c.Released && cephSeqAfter(c.Seq, st.Cap.Seq) {
+		maxSize = c.MaxSize
+	}
 	if d := a.dirty[st.Ino]; d != nil {
 		// A file this client wrote: add_update_inode applies the reply
 		// through update_inode_file_size and update_inode_file_time.
 		c.updateFileSize(st.Size, st.TruncateSeq, st.TruncateSize)
 		c.updateFileTime(c.Implemented|d.Dirty|d.Flushing, st.TimeWarpSeq, st.CTime, st.MTime, st.ATime)
-		c.MaxSize, c.BTime = st.MaxSize, st.BTime
+		c.MaxSize, c.BTime = maxSize, st.BTime
 		if st.ChangeAttr > c.ChangeAttr {
 			c.ChangeAttr = st.ChangeAttr
 		}
 	} else {
-		c.Size, c.MaxSize, c.TruncateSize, c.TruncateSeq = st.Size, st.MaxSize, st.TruncateSize, st.TruncateSeq
+		c.Size, c.MaxSize, c.TruncateSize, c.TruncateSeq = st.Size, maxSize, st.TruncateSize, st.TruncateSeq
 		c.MTime, c.ATime, c.CTime, c.BTime, c.TimeWarpSeq, c.ChangeAttr = st.MTime, st.ATime, st.CTime, st.BTime, st.TimeWarpSeq, st.ChangeAttr
 	}
 	c.FscryptAuth, c.FscryptFile = slices.Clone(st.FscryptAuth), slices.Clone(st.FscryptFile)
@@ -1776,6 +1786,35 @@ func TestCephFSCapAgentHelpers(t *testing.T) {
 	c.Open[cephFileModeWR] = 1
 	if c.fileWanted()&cephCapFileExcl == 0 {
 		t.Fatal("buffered writes must want FILE_EXCL")
+	}
+	// A reply applied after a newer cap push keeps the push's max_size, with
+	// and without dirty state; a reply at or after the tracked sequence
+	// applies its own.
+	for _, dirty := range []bool{false, true} {
+		a := newCephFSCapAgent(context.Background(), nil)
+		const ino = 0x100000001f7
+		stat := func(seq uint32, maxSize uint64) *cephmsgr.MDSInodeStat {
+			return &cephmsgr.MDSInodeStat{Ino: ino, Mode: 0o100644, NLink: 1, Size: 600000, MaxSize: maxSize,
+				Cap: cephmsgr.MDSReplyCap{Caps: cephCapsForMode(cephFileModeRDWR), CapID: 1, Seq: seq}}
+		}
+		a.applyStatLocked(stat(3, 65536), "create")
+		if dirty {
+			a.dirty[ino] = &cephfsDirtyFile{}
+		}
+		// What a GRANT with sequence 5 and a larger client range leaves.
+		a.caps[ino].Seq, a.caps[ino].IssueSeq, a.caps[ino].MaxSize = 5, 5, 1310720
+		a.applyStatLocked(stat(4, 0), "open reply older than the grant")
+		if c := a.caps[ino]; c.MaxSize != 1310720 || c.Seq != 5 {
+			t.Fatalf("an older reply replaced the pushed max_size (dirty %v): max_size %d seq %d", dirty, c.MaxSize, c.Seq)
+		}
+		a.applyStatLocked(stat(5, 2621440), "reply at the tracked sequence")
+		if c := a.caps[ino]; c.MaxSize != 2621440 {
+			t.Fatalf("a current reply did not apply its max_size (dirty %v): %d", dirty, c.MaxSize)
+		}
+		a.applyStatLocked(stat(6, 0), "newer reply")
+		if c := a.caps[ino]; c.MaxSize != 0 || c.Seq != 6 {
+			t.Fatalf("a newer reply did not apply (dirty %v): max_size %d seq %d", dirty, c.MaxSize, c.Seq)
+		}
 	}
 	dir := &cephmsgr.MDSInodeStat{Mode: 0o40755, NLink: 1, Subdirs: 3}
 	file := &cephmsgr.MDSInodeStat{Mode: 0o100644, NLink: 2}

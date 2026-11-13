@@ -27,6 +27,8 @@ type (
 	MDSReaddirEntry   = mds.ReaddirEntry
 	MDSReaddir        = mds.Readdir
 	MDSSnapRealm      = mds.SnapRealm
+	MDSInodeRange     = mds.InodeRange
+	MDSCreateExtra    = mds.CreateExtra
 )
 
 // Metadata operation codes and request flags (CEPH_MDS_OP_*, CEPH_MDS_FLAG_*).
@@ -154,6 +156,16 @@ func (r MDSReply) DecodeTrace() (MDSTrace, error) {
 
 // DecodeReaddir decodes the Extra blob of a successful readdir reply.
 func (r MDSReply) DecodeReaddir() (MDSReaddir, error) { return mds.DecodeReaddir(r.Extra) }
+
+// DecodeCreateExtra decodes the Extra blob of a reply to an inode-creating
+// request: a CREATE reply, or a completed-request reply answered from the
+// MDS's record. The MDS chooses the form per reply: the bare created inode,
+// or openc_response_t (Delegation true) when mds_allow_async_dirops is set
+// and the session declared DELEG_INO. Delegated ranges are raw server grants
+// for asynchronous creates; the library neither allocates from them nor
+// submits asynchronous requests, and the MDS drops them when the session
+// ends. Other replies carry no created inode and fail to decode.
+func (r MDSReply) DecodeCreateExtra() (MDSCreateExtra, error) { return mds.DecodeCreateExtra(r.Extra) }
 
 func (r MDSReply) DecodeSnapTrace() ([]MDSSnapRealm, error) { return mds.DecodeSnapTrace(r.SnapTrace) }
 

@@ -30,9 +30,10 @@ import (
 // reconnect, a missed reconnect window, a forced read-only filesystem, a
 // dentry lease RENEW and a cap snap flush. It owns one directory, two
 // identities, runtime-only daemon settings changed through the MDS admin
-// socket (ms_blackhole_client, mds_early_reply, mds_log_pause, debug levels),
-// two central settings of the owned daemon's section (mds_deny_all_reconnect,
-// mds_reconnect_timeout), at most four restarts of the owned daemon, one
+// socket (ms_blackhole_client, mds_early_reply, mds_log_pause, debug levels,
+// mds_allow_async_dirops),
+// three central settings of the owned daemon's section (mds_deny_all_reconnect,
+// mds_reconnect_timeout, mds_client_delegate_inos_pct), at most four restarts of the owned daemon, one
 // native create+write, one snapshot and evictions of owned Go sessions.
 // Every MDS daemon command goes through the admin socket in the daemon's own
 // container: ms_blackhole_client also drops MCommand traffic of `ceph tell`,
@@ -44,7 +45,9 @@ import (
 // handle_client_reconnect, reconnect_tick, force_clients_readonly),
 // mds/MDCache.cc (force_readonly), mds/Locker.cc (handle_client_lease,
 // handle_client_caps FLUSHSNAP), mds/MDSRank.cc (admin socket commands,
-// evict_client), mds/SessionMap.cc (Session::dump completed_requests),
+// evict_client), mds/SessionMap.cc (Session::dump completed_requests and delegated_inos), mds/Server.cc
+// (set_reply_extra_bl, handle_conf_change, the constructor's read of
+// mds_client_delegate_inos_pct), mds/MDSRank.cc (MDSRankDispatcher::get_tracked_keys),
 // mon/MDSMonitor.cc (fail_mds_gid) and mds/MDSDaemon.cc (respawn) at
 // mdsFreshSource (LGPL-2.1 references; no code copied).
 
@@ -60,13 +63,13 @@ const (
 
 // mdsCephFSCompletionChildren are the closed names directly below the owned
 // directory; the grandchildren are lease/leased and snap/snap-file.
-var mdsCephFSCompletionChildren = []string{"lease", "replayed", "lost-file", "lost-dir", "fenced", "ro-file", "ro-dir", "snap"}
+var mdsCephFSCompletionChildren = []string{"lease", "replayed", "lost-file", "lost-dir", "fenced", "ro-file", "ro-dir", "snap", "deleg-plain", "deleg-grant", "deleg-held", "deleg-prime", "deleg-zero"}
 var mdsCephFSCompletionGrandchildren = []string{"lease/leased", "snap/snap-file"}
 
 // mdsCephFSCompletionConfigNames is the closed set of daemon options read back
 // through the admin socket.
 var mdsCephFSCompletionConfigNames = []string{"ms_blackhole_client", "mds_early_reply", "mds_log_pause", "debug_mds", "debug_ms", "mds_deny_all_reconnect",
-	"mds_reconnect_timeout", "mds_session_blocklist_on_timeout", "mds_session_blocklist_on_evict"}
+	"mds_reconnect_timeout", "mds_session_blocklist_on_timeout", "mds_session_blocklist_on_evict", "mds_client_delegate_inos_pct", "mds_allow_async_dirops"}
 
 // mdsCephFSCompletionRuntimeKinds maps each runtime-only change to its daemon
 // settings and the action that restores it.
@@ -78,6 +81,10 @@ var mdsCephFSCompletionRuntimeKinds = map[string]struct {
 	"early-reply-off": {map[string]string{"mds_early_reply": "false"}, "early-reply-on"},
 	"blackhole-on":    {map[string]string{"ms_blackhole_client": "true"}, "blackhole-off"},
 	"debug-on":        {map[string]string{"debug_mds": "10/10", "debug_ms": "1/5"}, "debug-off"},
+	// Server::set_reply_extra_bl sends the bare created inode without async
+	// directory operations. The option is a tracked runtime key
+	// (MDSRankDispatcher::get_tracked_keys), unlike the delegation percentage.
+	"async-dirops-off": {map[string]string{"mds_allow_async_dirops": "false"}, "async-dirops-on"},
 	// Level 15 adds the per-capability line of Server::handle_client_reconnect.
 	"debug-caps-on": {map[string]string{"debug_mds": "15/15", "debug_ms": "1/5"}, "debug-caps-off"},
 }
@@ -420,6 +427,11 @@ type mdsCephFSCompletionCentral struct {
 var mdsCephFSCompletionCentralKinds = map[string]struct{ kind, name, value string }{
 	"deny-on":   {"deny", "mds_deny_all_reconnect", "true"},
 	"window-on": {"window", "mds_reconnect_timeout", mdsCephFSCompletionWindow},
+	// Server reads mds_client_delegate_inos_pct when it is constructed and the
+	// option is not among MDSRank's tracked keys, so a running daemon keeps
+	// its percentage: like the reconnect window, zero applies to the next
+	// incarnation only.
+	"deleg-zero-on": {"deleg-zero", "mds_client_delegate_inos_pct", "0"},
 }
 
 type mdsCephFSCompletionDaemonStatus struct {
@@ -721,7 +733,8 @@ func parseMDSCephFSCompletionRequest(fields []string, token string, plan mdsCeph
 	case "list", "write-fenced", "snapshot-create", "snapshot-remove", "mds-log-mark", "config-read", "flush-journal", "force-readonly",
 		"log-pause", "log-resume", "early-reply-off", "early-reply-on", "blackhole-on", "blackhole-off", "debug-on", "debug-off",
 		"deny-on", "deny-off", "window-on", "window-off", "restart-arm", "restart-fire", "restart-status", "restart-adopt",
-		"debug-caps-on", "debug-caps-off", "split-flock-ex-nb", "split-final-flock-ex-nb":
+		"debug-caps-on", "debug-caps-off", "split-flock-ex-nb", "split-final-flock-ex-nb",
+		"deleg-zero-on", "deleg-zero-off", "async-dirops-off", "async-dirops-on":
 		if len(args) != 0 {
 			return 0, mdsCephFSCompletionAction{}, errors.New("MDS CephFS completion action takes no caller argument")
 		}
@@ -969,7 +982,8 @@ func (c *fixtureCluster) prepareMDSCephFSCompletion(ctx context.Context, out str
 	}
 	b := x.baselineConfig
 	if b["ms_blackhole_client"] != "false" || b["mds_early_reply"] != "true" || b["mds_log_pause"] != "false" || b["mds_deny_all_reconnect"] != "false" ||
-		b["mds_session_blocklist_on_timeout"] != "true" || b["mds_session_blocklist_on_evict"] != "true" || mdsCephFSCompletionSeconds(b["mds_reconnect_timeout"]) <= mdsCephFSCompletionSeconds(mdsCephFSCompletionWindow) {
+		b["mds_session_blocklist_on_timeout"] != "true" || b["mds_session_blocklist_on_evict"] != "true" ||
+		b["mds_allow_async_dirops"] != "true" || b["mds_client_delegate_inos_pct"] != "50" || mdsCephFSCompletionSeconds(b["mds_reconnect_timeout"]) <= mdsCephFSCompletionSeconds(mdsCephFSCompletionWindow) {
 		return errors.New("MDS CephFS completion acceptance refuses to adopt non-default daemon settings")
 	}
 	entries, err := observe(c.cluster).Configuration(ctx)
@@ -977,7 +991,8 @@ func (c *fixtureCluster) prepareMDSCephFSCompletion(ctx context.Context, out str
 		return err
 	}
 	for _, entry := range entries {
-		if entry.Name == "mds_deny_all_reconnect" || entry.Name == "mds_reconnect_timeout" || entry.Name == "ms_blackhole_client" || entry.Name == "mds_log_pause" || entry.Name == "mds_early_reply" {
+		if entry.Name == "mds_deny_all_reconnect" || entry.Name == "mds_reconnect_timeout" || entry.Name == "ms_blackhole_client" || entry.Name == "mds_log_pause" || entry.Name == "mds_early_reply" ||
+			entry.Name == "mds_client_delegate_inos_pct" || entry.Name == "mds_allow_async_dirops" {
 			return errors.New("MDS CephFS completion acceptance refuses to adopt an existing central entry of a setting it changes")
 		}
 	}
@@ -1250,7 +1265,7 @@ func (c *fixtureCluster) mdsCephFSCompletionAct(ctx context.Context, id int64, a
 		}
 		m.State = "applied"
 		return c.mdsCephFSCompletionJournal()
-	case "deny-on", "window-on", "deny-off", "window-off":
+	case "deny-on", "window-on", "deleg-zero-on", "deny-off", "window-off", "deleg-zero-off":
 		return c.mdsCephFSCompletionCentralAct(ctx, id, action.name, result)
 	case "restart-arm":
 		return c.mdsCephFSCompletionRestartAct(ctx, id, action, result)
@@ -1873,7 +1888,8 @@ func (c *fixtureCluster) finishMDSCephFSCompletion(ctx context.Context) error {
 		centralErr := c.mdsCephFSCompletionNoCentral(ctx)
 		fail(centralErr)
 		receipt.ConfigRestored = err == nil && centralErr == nil
-		for _, name := range []string{"ms_blackhole_client", "mds_early_reply", "mds_log_pause", "debug_mds", "debug_ms", "mds_deny_all_reconnect"} {
+		for _, name := range []string{"ms_blackhole_client", "mds_early_reply", "mds_log_pause", "debug_mds", "debug_ms", "mds_deny_all_reconnect",
+			"mds_client_delegate_inos_pct", "mds_allow_async_dirops"} {
 			if config[name] != x.baselineConfig[name] {
 				receipt.ConfigRestored = false
 				fail(fmt.Errorf("MDS daemon %s=%s differs from baseline %s", name, config[name], x.baselineConfig[name]))

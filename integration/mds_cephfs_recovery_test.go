@@ -974,7 +974,7 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 	}
 	createdIno := func(t *testing.T, name string, first cephmsgr.MDSReply, trace cephmsgr.MDSTrace) uint64 {
 		t.Helper()
-		if first.Result != 0 || trace.Target == nil || len(first.Extra) != 8 || binary.LittleEndian.Uint64(first.Extra) != trace.Target.Ino || trace.DentryName != name {
+		if first.Result != 0 || trace.Target == nil || !cephfsCreated(first.Extra, trace.Target.Ino) || trace.DentryName != name {
 			t.Fatalf("create %s reply differs: result %d extra %x", name, first.Result, first.Extra)
 		}
 		return trace.Target.Ino
@@ -1829,10 +1829,10 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 				}
 			}
 			safe := waitSafe(t, sessionR2, call, first, e, true)
-			if first.Result != 0 || safe.Result != 0 || len(first.Extra) != 8 {
+			ino, created := cephfsCreatedIno(first.Extra)
+			if first.Result != 0 || safe.Result != 0 || !created {
 				t.Fatalf("resubmitted %s did not complete: %+v", name, e)
 			}
-			ino := binary.LittleEndian.Uint64(first.Extra)
 			if i == 0 {
 				if ino != restart.ReplayedIno {
 					t.Fatalf("replayed create reported ino %d, unsafe reply reported %d", ino, restart.ReplayedIno)
