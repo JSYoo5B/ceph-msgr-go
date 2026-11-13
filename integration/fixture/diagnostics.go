@@ -96,6 +96,7 @@ var metadataFiles = []string{
 	"rbd-journal-inspect.json", "rbd-journal-replay.json", "rbd-journal-results.json",
 	"rbd-journal-observe-locked.json", "rbd-journal-checkpoint.json", "rbd-journal-observe-recorded.json",
 	"rbd-journal-lost-append-outcome.json", "rbd-journal-lost-append-results.json",
+	"rbd-lock-observe-go-owner.json", "rbd-lock-takeover.json", "rbd-lock-observe-go-broke.json", "rbd-lock-final.json", "rbd-lock-owner-loss-results.json",
 }
 
 func saveMetadata(out, diagnostics string) error {

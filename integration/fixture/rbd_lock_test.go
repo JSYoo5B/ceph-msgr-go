@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -76,24 +78,157 @@ func TestRBDLockPlanIsTokenBound(t *testing.T) {
 
 func TestRBDLockRequestIsClosedAndOrdered(t *testing.T) {
 	token := strings.Repeat("a1", 16)
-	for next := range rbdLockActions {
-		for i, action := range rbdLockActions {
-			id, got, err := parseRBDLockRequest([]string{"7", token, action}, token, 6, next)
-			if (err == nil) != (i == next) || err == nil && (id != 7 || got != action) {
-				t.Fatal("RBD lock action order differs", next, action, err)
+	for _, actions := range [][]string{rbdLockActions, rbdLockOwnerLossActions} {
+		for next := range actions {
+			for i, action := range actions {
+				id, got, err := parseRBDLockRequest(actions, []string{"7", token, action}, token, 6, next)
+				if (err == nil) != (i == next) || err == nil && (id != 7 || got != action) {
+					t.Fatal("RBD lock action order differs", next, action, err)
+				}
 			}
 		}
-	}
-	if _, _, err := parseRBDLockRequest([]string{"99", token, "observe-released"}, token, 1, len(rbdLockActions)); err == nil {
-		t.Fatal("action after the closed sequence admitted")
+		if _, _, err := parseRBDLockRequest(actions, []string{"99", token, actions[len(actions)-1]}, token, 1, len(actions)); err == nil {
+			t.Fatal("action after the closed sequence admitted")
+		}
 	}
 	for _, fields := range [][]string{
 		{"7", token, "unlock"}, {"7", token, "check"}, {"7", token}, {"7", token, "setup", "extra"},
 		{"6", token, "setup"}, {"0", token, "setup"}, {"07", token, "setup"}, {"7", strings.Repeat("b2", 16), "setup"}, {"7", token, "lock"},
 	} {
-		if _, _, err := parseRBDLockRequest(fields, token, 6, 0); err == nil {
+		if _, _, err := parseRBDLockRequest(rbdLockActions, fields, token, 6, 0); err == nil {
 			t.Fatal("unscoped RBD lock request admitted", fields)
 		}
+	}
+	// Each sequence refuses the other's actions at every position.
+	for next := 0; next <= len(rbdLockOwnerLossActions); next++ {
+		for _, action := range rbdLockActions[1:] {
+			if _, _, err := parseRBDLockRequest(rbdLockOwnerLossActions, []string{"7", token, action}, token, 6, next); err == nil {
+				t.Fatal("ordinary lock action admitted in the lock-owner-loss sequence", action, next)
+			}
+		}
+	}
+	for next := 0; next <= len(rbdLockActions); next++ {
+		for _, action := range rbdLockOwnerLossActions[1:] {
+			if _, _, err := parseRBDLockRequest(rbdLockActions, []string{"7", token, action}, token, 6, next); err == nil {
+				t.Fatal("lock-owner-loss action admitted in the ordinary sequence", action, next)
+			}
+		}
+	}
+}
+
+func TestRBDLockOwnerLossSelectorIsExclusive(t *testing.T) {
+	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
+	load := func(selector string) (profile, error) {
+		return loadProfile(func(key string) string {
+			if key == "CEPH_MSGR_TEST_RUN" {
+				return selector
+			}
+			return base[key]
+		})
+	}
+	broad := "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
+	for selector, want := range map[string]string{"": broad, broad: broad, rbdLockOwnerLossSelector: rbdLockOwnerLossSelector} {
+		p, err := load(selector)
+		if err != nil || p.testRun != want {
+			t.Fatal("RBD selector admission differs", selector, p.testRun, err)
+		}
+		actions := rbdLockActionsFor(p.testRun)
+		if (selector == rbdLockOwnerLossSelector) != slices.Equal(actions, rbdLockOwnerLossActions) || selector != rbdLockOwnerLossSelector && !slices.Equal(actions, rbdLockActions) {
+			t.Fatal("lock action sequence differs for", selector, actions)
+		}
+	}
+	if !slices.Equal(rbdLockActionsFor(rbdJournalLostAppendSelector), rbdLockActions) || !slices.Equal(rbdJournalActionsFor(rbdLockOwnerLossSelector), rbdJournalActions) {
+		t.Fatal("one exclusive RBD selector changed the other control's sequence")
+	}
+	for _, selector := range []string{"^TestCephRBDLockOwnerLossIntegration", "TestCephRBDLockOwnerLossIntegration", "^TestCephRBD.*Integration$",
+		"^TestCephRBD(ExclusiveLock|LockOwnerLoss)Integration$"} {
+		if _, err := load(selector); err == nil {
+			t.Fatal("unanchored or widened lock-owner-loss selector admitted", selector)
+		}
+	}
+	// Without the RBD opt-in the selector matches a test no fixture serves.
+	delete(base, "CEPH_MSGR_TEST_RBD")
+	if p, err := load(rbdLockOwnerLossSelector); err == nil && p.rbdBase == "1" {
+		t.Fatal("lock-owner-loss selector enabled the RBD fixture by itself")
+	}
+	plan := rbdLockPlan{Image: "i"}
+	for _, action := range rbdLockOwnerLossActions {
+		if !strings.Contains(rbdLockNativePython, "'"+action+"'") {
+			t.Fatal("native lock driver does not admit", action)
+		}
+		// Only the takeover driver ends by SIGKILL, and only observations
+		// are read-only.
+		if (rbdLockExit(action) == rbdLockKilledExit) != (action == "takeover") || rbdLockExit(action) != 0 && rbdLockExit(action) != rbdLockKilledExit ||
+			rbdLockReadOnly(action) != strings.HasPrefix(action, "observe-") || rbdLockReadOnly(action) && rbdLockTarget(plan, action) != "i" {
+			t.Fatal("lock-owner-loss action exit, mode or target differs", action)
+		}
+	}
+	for _, action := range rbdLockActions {
+		if rbdLockExit(action) != 0 || rbdLockReadOnly(action) != (action == "observe-released") {
+			t.Fatal("ordinary lock action exit or mode changed", action)
+		}
+	}
+	if rbdLockTarget(plan, "takeover") != "i:header-watch,exclusive-lock-break,osd-blocklist,killed-owner" || rbdLockTarget(plan, "final") != rbdLockTarget(plan, "lock") ||
+		rbdLockTarget(plan, "lock") != "i:header-watch,exclusive-lock,object-map-check" || rbdLockTarget(plan, "setup") != "i" {
+		t.Fatal("lock action targets differ")
+	}
+	// The takeover write waits for the dead owner's 30 s watch and then for
+	// one proceed signal of at most 30 s.
+	if rbdLockNativeTimeout("takeover") < 2*time.Minute || rbdLockNativeTimeout("final") < 90*time.Second || rbdLockNativeTimeout("observe-go-owner") != time.Minute ||
+		rbdLockNativeTimeout("takeover") > rbdLockNativeTimeout("lock") {
+		t.Fatal("lock-owner-loss action budgets differ")
+	}
+	if !strings.Contains(rbdLockNativePython, "os.kill(os.getpid(), signal.SIGKILL)") || strings.Count(rbdLockNativePython, "signal.SIGKILL") != 1 {
+		t.Fatal("the takeover driver does not end itself by SIGKILL exactly once")
+	}
+}
+
+// The addresses kept for the blocklist cleanup are the lock owners the two
+// observations name, and only theirs.
+func TestRBDLockOwnerLossBlocklistCleanup(t *testing.T) {
+	locker := func(address string) *rbdWriteLockers {
+		return &rbdWriteLockers{Tag: "internal", Exclusive: true, Lockers: []rbdWriteLocker{{Client: "client.1", Cookie: "auto 1", Address: address}}}
+	}
+	zombie, owner := "172.19.0.9:0/11", "172.19.0.9:0/22"
+	if got := rbdLockOwnerAddresses("observe-go-owner", rbdLockNative{Lockers: locker(zombie)}); !slices.Equal(got, []string{zombie}) {
+		t.Fatal("Go owner address not kept", got)
+	}
+	if got := rbdLockOwnerAddresses("takeover", rbdLockNative{Lockers: locker("ignored"), Phases: []rbdLockPhase{{Lockers: locker(owner)}}}); !slices.Equal(got, []string{owner}) {
+		t.Fatal("native owner address not kept", got)
+	}
+	for _, action := range []string{"setup", "lock", "observe-released", "observe-go-broke", "final"} {
+		if got := rbdLockOwnerAddresses(action, rbdLockNative{Lockers: locker(zombie), Phases: []rbdLockPhase{{Lockers: locker(owner)}}}); got != nil {
+			t.Fatal("address kept from an action that names no doomed owner", action, got)
+		}
+	}
+	entries := []mdsSessionsBlock{{Address: zombie, Until: "u1"}, {Address: "172.19.0.9:0/33", Until: "u2"}, {Address: owner, Range: true, Until: "u3"}}
+	var removed []string
+	ops := mdsCephFSBlocklistOps{
+		remove: func(_ context.Context, address string) error {
+			removed = append(removed, address)
+			entries = slices.DeleteFunc(entries, func(e mdsSessionsBlock) bool { return !e.Range && e.Address == address })
+			return nil
+		},
+		read: func(context.Context) ([]mdsSessionsBlock, error) { return slices.Clone(entries), nil },
+	}
+	// Only the exact entry of a kept address goes; a foreign entry, a range
+	// and a kept address without an entry are left alone.
+	got, err := rbdLockRemoveBlocklist(t.Context(), []string{zombie, owner}, ops)
+	if err != nil || len(got) != 1 || got[0].Address != zombie || !slices.Equal(removed, []string{zombie}) || len(entries) != 2 {
+		t.Fatal("owned blocklist removal differs", got, removed, entries, err)
+	}
+	if got, err := rbdLockRemoveBlocklist(t.Context(), nil, mdsCephFSBlocklistOps{}); got != nil || err != nil {
+		t.Fatal("removal without kept addresses touched the cluster", got, err)
+	}
+	// An entry that survives its removal is reported.
+	entries = []mdsSessionsBlock{{Address: zombie, Until: "u1"}}
+	ops.remove = func(context.Context, string) error { return nil }
+	if _, err := rbdLockRemoveBlocklist(t.Context(), []string{zombie}, ops); err == nil {
+		t.Fatal("remaining blocklist entry hidden")
+	}
+	ops.remove = func(context.Context, string) error { return fmt.Errorf("refused") }
+	if _, err := rbdLockRemoveBlocklist(t.Context(), []string{zombie}, ops); err == nil {
+		t.Fatal("failed blocklist removal hidden")
 	}
 }
 
@@ -153,7 +288,22 @@ func rbdLockOutput(token string, plan rbdLockPlan, action string) map[string]any
 	versioned := func(object string) map[string]any {
 		return map[string]any{"object": object, "exists": true, "hex": "0c000000" + hex.EncodeToString([]byte("f00da1a1a1a1")), "version": 3}
 	}
+	blocks := []map[string]any{{"addr": "172.19.0.9:0/7", "until": "2026-11-13T02:21:50.084618+0000"}}
+	check := map[string]any{"argv": []string{"--rbd_cache=false", "--log_to_stderr=false", "--err_to_stderr=true", "object-map", "check", "--no-progress", plan.Pool + "/" + plan.Image},
+		"returncode": 0, "stdout": "", "stderr": "", "elapsed_ns": 17}
 	switch action {
+	case "observe-go-owner":
+		value["blocklist"] = []map[string]any{}
+	case "observe-go-broke":
+		value["blocklist"] = blocks
+	case "final":
+		value["writes"], value["go_extents"], value["check"], value["blocklist"] = writes("reacquire", plan.ReacquireWrites), sums, check, blocks
+	case "takeover":
+		value["blocklist"] = blocks
+		value["phases"] = []map[string]any{{"phase": "acquired", "is_owner": true, "owners": []map[string]any{{"mode": 0, "owner": "172.19.0.9:0/2"}},
+			"watchers": []map[string]any{{"addr": "172.19.0.9:0/2", "id": 4242, "cookie": 1}}, "lockers": noLockers(), "flags": 0, "size": plan.Size, "diff": diff,
+			"header_lock": call(header), "map_lock": call(omap), "map_raw": raw(), "writes": writes("owner", plan.OwnerWrites), "write_ns": 30, "wait_ns": 7,
+			"blocklist_before": []map[string]any{}, "blocklist": blocks}}
 	case "setup":
 		value["writes"] = writes("setup", plan.SetupWrites)
 		object, id := rbdLockSetIDNames(token, "native")
@@ -188,8 +338,7 @@ func rbdLockOutput(token string, plan rbdLockPlan, action string) map[string]any
 			phases = append(phases, p)
 		}
 		value["phases"] = phases
-		value["check"] = map[string]any{"argv": []string{"--rbd_cache=false", "--log_to_stderr=false", "--err_to_stderr=true", "object-map", "check", "--no-progress", plan.Pool + "/" + plan.Image},
-			"returncode": 0, "stdout": "", "stderr": "", "elapsed_ns": 17}
+		value["check"] = check
 	}
 	return value
 }
@@ -204,7 +353,7 @@ func TestRBDLockNativeOutputShapeIsClosed(t *testing.T) {
 		}
 		return data
 	}
-	for _, action := range rbdLockActions {
+	for _, action := range slices.Concat(rbdLockActions, rbdLockOwnerLossActions[1:]) {
 		got, err := decodeRBDLockNative(action, token, 9, plan, encode(rbdLockOutput(token, plan, action)))
 		if err != nil || got.Stat.Size != plan.Size || got.Blobs["image_head"].Name != rbdLockBlobName(action, "image_head") {
 			t.Fatal("valid RBD lock output refused", action, err)
@@ -335,6 +484,85 @@ func TestRBDLockNativeOutputShapeIsClosed(t *testing.T) {
 	}
 	if _, err := decodeRBDLockNative("setup", token, 9, plan, bytes.Repeat([]byte(" "), rbdBaseJSONLimit+1)); err == nil {
 		t.Fatal("oversized output admitted")
+	}
+	// The lock-owner-loss actions: no output of one is admitted as another,
+	// and each carries exactly its own fields.
+	for _, action := range rbdLockOwnerLossActions[1:] {
+		for _, other := range slices.Concat(rbdLockActions, rbdLockOwnerLossActions[1:]) {
+			value := rbdLockOutput(token, plan, other)
+			value["action"] = action
+			for _, blob := range value["blobs"].(map[string]any) {
+				blob.(map[string]any)["name"] = strings.Replace(blob.(map[string]any)["name"].(string), "rbd-lock-"+other+"-", "rbd-lock-"+action+"-", 1)
+			}
+			// Both read-only observations have the same shape.
+			same := action == other || strings.HasPrefix(action, "observe-go-") && strings.HasPrefix(other, "observe-go-")
+			if _, err := decodeRBDLockNative(action, token, 9, plan, encode(value)); (err == nil) != same {
+				t.Fatal("lock-owner-loss output shape is not closed:", other, "as", action, err)
+			}
+		}
+	}
+	acquired := func(v map[string]any) map[string]any { return v["phases"].([]map[string]any)[0] }
+	for name, c := range map[string]struct {
+		action string
+		change func(map[string]any)
+	}{
+		"observation without blocklist": {"observe-go-owner", func(v map[string]any) { delete(v, "blocklist") }},
+		"observation with writes":       {"observe-go-broke", func(v map[string]any) { v["writes"] = []map[string]any{} }},
+		"observation with a check":      {"observe-go-owner", func(v map[string]any) { v["check"] = rbdLockOutput(token, plan, "final")["check"] }},
+		"blocklist entry without addr": {"observe-go-broke", func(v map[string]any) {
+			v["blocklist"] = []map[string]any{{"addr": "", "until": "2026-11-13T02:21:50.084618+0000"}}
+		}},
+		"blocklist entry without expiry": {"observe-go-broke", func(v map[string]any) { v["blocklist"] = []map[string]any{{"addr": "a", "until": ""}} }},
+		"blocklist over its bound": {"observe-go-broke", func(v map[string]any) {
+			v["blocklist"] = slices.Repeat([]map[string]any{{"addr": "a", "until": "u"}}, 65)
+		}},
+		"final without blocklist":      {"final", func(v map[string]any) { delete(v, "blocklist") }},
+		"final without check":          {"final", func(v map[string]any) { delete(v, "check") }},
+		"final check of another tool":  {"final", func(v map[string]any) { v["check"].(map[string]any)["argv"] = []string{"object-map", "rebuild"} }},
+		"final without writes":         {"final", func(v map[string]any) { delete(v, "writes") }},
+		"final write of the owner":     {"final", func(v map[string]any) { v["writes"].([]map[string]any)[0]["phase"] = "owner" }},
+		"final without the Go extents": {"final", func(v map[string]any) { delete(v, "go_extents") }},
+		"final with phases":            {"final", func(v map[string]any) { v["phases"] = []map[string]any{} }},
+		"takeover without phases":      {"takeover", func(v map[string]any) { delete(v, "phases") }},
+		"takeover with two phases":     {"takeover", func(v map[string]any) { v["phases"] = append(v["phases"].([]map[string]any), acquired(v)) }},
+		"takeover phase of the lock":   {"takeover", func(v map[string]any) { acquired(v)["phase"] = "owner" }},
+		"takeover without its write":   {"takeover", func(v map[string]any) { delete(acquired(v), "writes") }},
+		"takeover write not timed":     {"takeover", func(v map[string]any) { delete(acquired(v), "write_ns") }},
+		"takeover not waited":          {"takeover", func(v map[string]any) { delete(acquired(v), "wait_ns") }},
+		"takeover without before list": {"takeover", func(v map[string]any) { delete(acquired(v), "blocklist_before") }},
+		"takeover without after list":  {"takeover", func(v map[string]any) { delete(acquired(v), "blocklist") }},
+		"takeover without final list":  {"takeover", func(v map[string]any) { delete(v, "blocklist") }},
+		"takeover with a check":        {"takeover", func(v map[string]any) { v["check"] = rbdLockOutput(token, plan, "final")["check"] }},
+		"takeover with go extents":     {"takeover", func(v map[string]any) { v["go_extents"] = rbdLockOutput(token, plan, "final")["go_extents"] }},
+		"takeover map lock of header":  {"takeover", func(v map[string]any) { acquired(v)["map_lock"].(map[string]any)["object"] = "rbd_header.5678ef01" }},
+		"takeover with a compound": {"takeover", func(v map[string]any) {
+			acquired(v)["negative_compound"] = rbdLockOutput(token, plan, "lock")["phases"].([]map[string]any)[0]["negative_compound"]
+		}},
+		"takeover with two owners": {"takeover", func(v map[string]any) {
+			acquired(v)["owners"] = []map[string]any{{"mode": 0, "owner": "a"}, {"mode": 0, "owner": "b"}}
+		}},
+	} {
+		value := rbdLockOutput(token, plan, c.action)
+		c.change(value)
+		if _, err := decodeRBDLockNative(c.action, token, 9, plan, encode(value)); err == nil {
+			t.Fatal("malformed lock-owner-loss output admitted:", name)
+		}
+	}
+	// The ordinary actions carry none of the lock-owner-loss fields.
+	for name, change := range map[string]func(map[string]any){
+		"blocklist on setup":  func(v map[string]any) { v["blocklist"] = []map[string]any{} },
+		"go extents on setup": func(v map[string]any) { v["go_extents"] = rbdLockOutput(token, plan, "final")["go_extents"] },
+	} {
+		value := rbdLockOutput(token, plan, "setup")
+		change(value)
+		if _, err := decodeRBDLockNative("setup", token, 9, plan, encode(value)); err == nil {
+			t.Fatal("lock-owner-loss field admitted on an ordinary action:", name)
+		}
+	}
+	value := rbdLockOutput(token, plan, "lock")
+	value["phases"].([]map[string]any)[0]["blocklist"] = []map[string]any{}
+	if _, err := decodeRBDLockNative("lock", token, 9, plan, encode(value)); err == nil {
+		t.Fatal("blocklist admitted on a phase of the ordinary lock action")
 	}
 }
 
