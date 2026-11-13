@@ -232,7 +232,19 @@ addresses are blocklisted until the fixture's cleanup. No other RBD row
 matches the test. Each row waits twice for a 30 s watch to expire, so its test
 runs for about a minute. See the
 [lock-owner-loss record](../../integration/fixture/RBD_LOCK_OWNER_LOSS_VALIDATION.md).
-The catalog has 106 native rows in total.
+Two further `rbd` rows,
+`rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange`
+and
+`rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange`,
+select only `TestCephRBDJournalPrimaryChangeIntegration`. They are the only
+RBD rows on three OSDs: the RBD fixture admits `osd_replicas` 3 with BlueStore
+for this exact selector alone, creates its owned pool with three replicas and
+one PG, and serves the lost-append sequence with two more actions, in one of
+which the fixture marks the PG's primary out. Both rows use BlueStore; they
+differ in connection mode, key type, address family and runtime as the other
+RBD rows do. See the
+[primary-change record](../../integration/fixture/RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md).
+The catalog has 108 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
