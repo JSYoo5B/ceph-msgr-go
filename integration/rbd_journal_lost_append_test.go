@@ -64,6 +64,100 @@ const rbdJournalLostAppendWithheldWait = 10 * time.Second
 var rbdJournalLostAppendOrder = []string{"setup", "lock", "tag_create", "observe-locked", "append_submitted", "barrier", "checkpoint", "outcome_recorded",
 	"observe-recorded", "blocked_connection_closed", "watch_reconnected", "unlock", "unwatch", "replay"}
 
+// The primary-change variant (TestCephRBDJournalPrimaryChangeIntegration)
+// runs the same sequence on three replicated BlueStore OSDs, with one PG in
+// the owned pool. After the unknown outcome is recorded, the fixture marks
+// that PG's primary out, which makes another member the acting primary. The
+// subject then reattaches its watch there and resubmits the append once,
+// under its original transaction, to the new primary.
+var (
+	rbdJournalPrimaryChangeOrder = []string{"setup", "lock", "tag_create", "observe-locked", "append_submitted", "barrier", "checkpoint", "outcome_recorded",
+		"observe-recorded", "change-primary", "blocked_connection_closed", "watch_reconnected", "resubmitted", "observe-resubmitted", "unlock", "unwatch", "replay"}
+	rbdJournalPrimaryChangeStages = []string{"checkpoint", "observe-recorded", "change-primary", "observe-resubmitted", "replay"}
+)
+
+// rbdJournalPlacementView is one object's placement as the test resolved it
+// through the observer's MON command.
+type rbdJournalPlacementView struct {
+	Object  string
+	Epoch   uint32
+	PGID    string
+	Primary int32
+	Acting  []int32
+}
+
+// nativeRBDJournalPlacement and nativeRBDJournalPrimaryChange are the
+// fixture's `change-primary` receipt: `ceph osd map` of each object before
+// and after its `osd out` command.
+type nativeRBDJournalPlacement struct {
+	Epoch         uint32  `json:"epoch"`
+	Pool          string  `json:"pool"`
+	PoolID        int64   `json:"pool_id"`
+	Object        string  `json:"objname"`
+	RawPGID       string  `json:"raw_pgid"`
+	PGID          string  `json:"pgid"`
+	Up            []int32 `json:"up"`
+	UpPrimary     int32   `json:"up_primary"`
+	Acting        []int32 `json:"acting"`
+	ActingPrimary int32   `json:"acting_primary"`
+}
+
+type nativeRBDJournalPrimaryChange struct {
+	Objects []struct {
+		Object string                    `json:"object"`
+		Moved  bool                      `json:"moved"`
+		Before nativeRBDJournalPlacement `json:"before"`
+		After  nativeRBDJournalPlacement `json:"after"`
+	} `json:"objects"`
+	Out       int32    `json:"osd_out"`
+	Commands  []string `json:"commands"`
+	Polls     int      `json:"polls"`
+	ElapsedMS int64    `json:"elapsed_ms"`
+}
+
+// rbdJournalResubmission is the raw outcome of the one explicit
+// resubmission: the original transaction, sent to the new primary.
+type rbdJournalResubmission struct {
+	CallerInvocations int
+	Class             string
+	UnknownOutcome    bool
+	Error             string
+	Primary           int32
+	RetryAttempt      int32
+	Submission        cephmsgr.OSDSubmission
+	ReplyTransaction  uint64
+	ReplyCode         int32
+	ReplyRetryAttempt int32
+	ReplyMapEpoch     uint32
+	OnDisk            bool
+	UserVersion       uint64
+	RecordedUTC       string
+}
+
+// rbdJournalPrimaryChange is the primary-change variant's own record.
+type rbdJournalPrimaryChange struct {
+	// The objects whose placement is followed: the image header, the journal
+	// object of the owned entry and the journal header.
+	Objects []string
+	// LockPrimary and AppendPrimary are the OSDs the subject sent lock.lock
+	// and the append to.
+	LockPrimary, AppendPrimary int32
+	GoBefore, GoAfter          []rbdJournalPlacementView
+	Native                     *nativeRBDJournalPrimaryChange
+	// The address in the subject's lock record and the address its watch is
+	// listed at once it was reattached on the new primary, both as the new
+	// primary returned them to the subject. Both are the address of the
+	// connection to the old primary, which registered them.
+	LockerAddress, WatcherAddress string
+	// The journal object's user version as the subject read it on the new
+	// primary before and after the resubmission.
+	VersionBefore, VersionAfter uint64
+	Resubmission                *rbdJournalResubmission
+	// The dial order of the subject connections that carried the append and
+	// its resubmission.
+	AppendConnection, ResubmitConnection int
+}
+
 type rbdJournalLostAppendEntry struct {
 	Tag, EntryTID, Object    uint64
 	ObjectName               string
@@ -174,6 +268,17 @@ type rbdJournalLostAppendRecord struct {
 	ClaimsStage string
 	Problems    []string
 	Timings     map[string]string
+	// PrimaryChange is set in the primary-change variant only.
+	PrimaryChange *rbdJournalPrimaryChange
+}
+
+// rbdJournalLostAppendPlan returns the stages and the step order of the
+// variant the record belongs to.
+func rbdJournalLostAppendPlan(r *rbdJournalLostAppendRecord) (stages, order []string) {
+	if r.PrimaryChange != nil {
+		return rbdJournalPrimaryChangeStages, rbdJournalPrimaryChangeOrder
+	}
+	return rbdJournalLostAppendStages, rbdJournalLostAppendOrder
 }
 
 // rbdJournalLostAppendStages are the points at which the record is judged:
@@ -193,9 +298,18 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	// Records hold optional fields as pointers; print them as their JSON.
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
 	e := r.Entry
+	stages, order := rbdJournalLostAppendPlan(r)
+	if !slices.Contains(stages, stage) {
+		return []string{"unknown stage " + stage}
+	}
+	// reached counts the stages both variants share; the primary-change
+	// variant's two stages lie between "observe-recorded" and "replay".
+	pc := r.PrimaryChange
+	at := slices.Index(stages, stage)
+	changed, resubmitted := pc != nil && at >= 2, pc != nil && at >= 3
 	reached := slices.Index(rbdJournalLostAppendStages, stage)
 	if reached < 0 {
-		return []string{"unknown stage " + stage}
+		reached = 1
 	}
 	view := func(name string, from int) *rbdJournalLostAppendView {
 		if reached < from {
@@ -209,10 +323,17 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		return v
 	}
 	setup, locked, checkpoint, recorded, replay := view("setup", 0), view("observe-locked", 0), view("checkpoint", 0), view("observe-recorded", 1), view("replay", 2)
+	var moved, resolved *rbdJournalLostAppendView
+	if changed {
+		moved = view("change-primary", 1)
+	}
+	if resubmitted {
+		resolved = view("observe-resubmitted", 1)
+	}
 	if len(problems) != 0 {
 		return problems
 	}
-	if want := rbdJournalLostAppendOrder[:slices.Index(rbdJournalLostAppendOrder, stage)+1]; !reflect.DeepEqual(r.Order, want) {
+	if want := order[:slices.Index(order, stage)+1]; !reflect.DeepEqual(r.Order, want) {
 		fail("order: steps completed as %v, want %v", r.Order, want)
 	}
 	if e.Length <= 0 || len(e.SHA256) != 64 || e.Tag == 0 || r.SubjectGlobalID == 0 || r.SubjectGlobalID == r.ObserverGlobalID || r.WatchCookie == 0 {
@@ -286,6 +407,18 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 	held("observe-recorded", recorded)
 	unmoved("observe-recorded", recorded)
 
+	if changed {
+		rbdJournalPrimaryChangeClaims(r, moved, resolved, checkpoint, fail)
+		entryAt("change-primary", moved)
+		held("change-primary", moved)
+		unmoved("change-primary", moved)
+	}
+	if resubmitted {
+		entryAt("observe-resubmitted", resolved)
+		held("observe-resubmitted", resolved)
+		unmoved("observe-resubmitted", resolved)
+	}
+
 	if reached < 2 {
 		return problems
 	}
@@ -296,18 +429,33 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		fail("transmission: gate state missing")
 		g = &testcluster.OSDReplyGateState{}
 	}
-	if !g.Bound || g.BoundConnection != 1 || g.LargeWrites != 1 || g.Error != "" || g.Threshold != rbdJournalLostAppendThreshold || g.BoundWriteBytes < e.Length ||
-		r.DialsBeforeClose == nil || *r.DialsBeforeClose != 1 || r.DialsTotal == nil || *r.DialsTotal != 2 || g.Connections != 2 {
-		fail("transmission: not one write of the append size on the first of two subject connections: gate %s, dials before close %s, in total %s", text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
+	// The frames that carry the entry: the append alone, or in the
+	// primary-change variant the append and its one resubmission, each on a
+	// connection of its own.
+	bound, large, marked := 1, 1, []int{1}
+	if pc == nil {
+		if r.DialsBeforeClose == nil || *r.DialsBeforeClose != 1 || r.DialsTotal == nil || *r.DialsTotal != 2 || g.Connections != 2 {
+			fail("transmission: not two subject connections, one of them before the silent one was closed: gate %s, dials before close %s, in total %s", text(g), text(r.DialsBeforeClose), text(r.DialsTotal))
+		}
+	} else {
+		bound, large, marked = pc.AppendConnection, 2, []int{pc.AppendConnection, pc.ResubmitConnection}
+		if r.DialsBeforeClose == nil || r.DialsTotal == nil || pc.AppendConnection < 1 || pc.AppendConnection > *r.DialsBeforeClose || pc.ResubmitConnection <= *r.DialsBeforeClose ||
+			pc.ResubmitConnection > *r.DialsTotal || g.Connections != *r.DialsTotal {
+			fail("transmission: the append and its resubmission were not on one connection before and one after the silent connections were closed: gate %s, dials before close %s, in total %s, connections %d and %d",
+				text(g), text(r.DialsBeforeClose), text(r.DialsTotal), pc.AppendConnection, pc.ResubmitConnection)
+		}
+	}
+	if !g.Bound || g.BoundConnection != bound || g.LargeWrites != large || g.Error != "" || g.Threshold != rbdJournalLostAppendThreshold || g.BoundWriteBytes < e.Length {
+		fail("transmission: not %d write(s) of the append size with the gate bound on subject connection %d: gate %s", large, bound, text(g))
 	}
 	switch {
 	case g.Decoded != (r.ConnectionMode == "crc"):
 		fail("transmission: gate mode does not match connection mode %q", r.ConnectionMode)
 	case g.Decoded:
-		if g.MarkedRequests == nil || *g.MarkedRequests != 1 || !slices.Equal(g.MarkedConnections, []int{1}) || g.Transaction == nil || *g.Transaction != o.Submission.Transaction ||
-			g.Held == nil || g.Held.Connection != 1 || g.Held.Type != msgr.OSDOpReplyMessage || g.Held.Transaction != o.Submission.Transaction || g.Held.Sequence == 0 || g.Held.FrameBytes <= 0 ||
+		if g.MarkedRequests == nil || *g.MarkedRequests != len(marked) || !slices.Equal(g.MarkedConnections, marked) || g.Transaction == nil || *g.Transaction != o.Submission.Transaction ||
+			g.Held == nil || g.Held.Connection != bound || g.Held.Type != msgr.OSDOpReplyMessage || g.Held.Transaction != o.Submission.Transaction || g.Held.Sequence == 0 || g.Held.FrameBytes <= 0 ||
 			g.WithheldBytesSeen != nil || r.WithheldBeforeCancel != nil || r.Barrier != "held reply" || r.BarrierPolls != nil {
-			fail("transmission: the decoded gate did not see one marked request and hold the reply of its transaction %d: gate %s", o.Submission.Transaction, text(g))
+			fail("transmission: the decoded gate did not see the marked request on connection(s) %v and hold the reply of its transaction %d: gate %s", marked, o.Submission.Transaction, text(g))
 		}
 	default:
 		// An undecoded gate cannot name a frame; a record that does is wrong.
@@ -337,6 +485,95 @@ func rbdJournalLostAppendClaims(r *rbdJournalLostAppendRecord, stage string) []s
 		fail("replay: native tag, lock or watchers differ (tag=%+v next=%d free=%v subject watcher=%v)", replay.LastTag, replay.NextTag, replay.LockFree, replay.SubjectWatcher)
 	}
 	return problems
+}
+
+// rbdJournalPrimaryChangeClaims checks what the primary-change variant adds:
+// that the one primary of the followed objects was marked out and another
+// member of their acting set leads them in a newer epoch, as the fixture's
+// `ceph osd map` reads and the test's own placements agree;
+// that the journal did not change across the move; and, once resolved is
+// given, that the one resubmission was a known answer to the original
+// transaction from the new primary which left the journal object's version
+// and bytes where they were.
+func rbdJournalPrimaryChangeClaims(r *rbdJournalLostAppendRecord, moved, resolved, checkpoint *rbdJournalLostAppendView, fail func(string, ...any)) {
+	pc, e := r.PrimaryChange, r.Entry
+	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
+	n := pc.Native
+	if !slices.Equal(pc.Objects, []string{"rbd_header." + r.ImageID, e.ObjectName, r.JournalHeader}) || n == nil || len(n.Objects) != 3 || len(pc.GoBefore) != 3 || len(pc.GoAfter) != 3 {
+		fail("primary change: the followed objects, the fixture's receipt or the test's placements are missing: %s", text(pc))
+		return
+	}
+	members := func(osds []int32) []int32 { sorted := slices.Clone(osds); slices.Sort(sorted); return sorted }
+	distinct := func(osds []int32, size int) bool {
+		return len(osds) == size && len(slices.Compact(members(osds))) == size
+	}
+	for i, o := range n.Objects {
+		b, a := o.Before, o.After
+		// Before: three members, up and acting alike, led by the OSD that
+		// was then marked out. After, in the same PG and a newer epoch: the
+		// two others are the up set, one of them leads, and the OSD that was
+		// marked out is the last member of the acting set.
+		rest := slices.DeleteFunc(members(b.Acting), func(osd int32) bool { return osd == n.Out })
+		before := b.Object == o.Object && b.Pool == r.Pool && b.PoolID == r.PoolID && b.Epoch != 0 && b.PGID != "" && distinct(b.Acting, 3) && slices.Equal(b.Up, b.Acting) &&
+			b.ActingPrimary == b.Acting[0] && b.UpPrimary == b.ActingPrimary && b.ActingPrimary == n.Out
+		after := a.Object == o.Object && a.Pool == r.Pool && a.PoolID == r.PoolID && a.PGID == b.PGID && a.Epoch > b.Epoch && distinct(a.Up, 2) && slices.Equal(members(a.Up), rest) &&
+			slices.Equal(a.Acting, append(slices.Clone(a.Up), n.Out)) && a.UpPrimary == a.Up[0] && a.ActingPrimary == a.Up[0]
+		if o.Object != pc.Objects[i] || !o.Moved || !before || !after {
+			fail("primary change: the acting primary of %s did not move from osd.%d to another member of its acting set: %s", pc.Objects[i], n.Out, text(o))
+		}
+		// The test's placements, resolved through the Go client's MON
+		// commands before and after the action, name the same PGs and
+		// primaries.
+		gb, ga := pc.GoBefore[i], pc.GoAfter[i]
+		if gb.Object != o.Object || gb.PGID != b.PGID || gb.Primary != b.ActingPrimary || !slices.Equal(gb.Acting, b.Acting) || gb.Epoch == 0 || gb.Epoch > b.Epoch ||
+			ga.Object != o.Object || ga.PGID != a.PGID || ga.Primary != a.ActingPrimary || !slices.Equal(ga.Acting, a.Acting) || ga.Epoch < a.Epoch {
+			fail("primary change: the test's placement of %s differs from the fixture's: before %s and %s, after %s and %s", o.Object, text(gb), text(b), text(ga), text(a))
+		}
+	}
+	if n.Out < 0 || !slices.Equal(n.Commands, []string{fmt.Sprintf("osd out %d", n.Out)}) {
+		fail("primary change: not one `osd out` command for the old primary: osd.%d, %v", n.Out, n.Commands)
+	}
+	if pc.LockPrimary != n.Out || pc.AppendPrimary != n.Out {
+		fail("primary change: the lock (osd.%d) and the append (osd.%d) were not sent to the primary that was then marked out (osd.%d)", pc.LockPrimary, pc.AppendPrimary, n.Out)
+	}
+	if !reflect.DeepEqual(moved.ObjectSHA256, checkpoint.ObjectSHA256) || !reflect.DeepEqual(moved.ObjectSizes, checkpoint.ObjectSizes) {
+		fail("change-primary: journal objects changed across the primary change")
+	}
+	if resolved == nil {
+		if pc.Resubmission != nil {
+			fail("resubmission: sent before the primary change was judged")
+		}
+		return
+	}
+	x, o := pc.Resubmission, r.Outcome
+	if x == nil || o == nil {
+		fail("resubmission: missing")
+		return
+	}
+	if x.CallerInvocations != 1 || x.Class != "applied" || x.UnknownOutcome || x.Error != "" || x.ReplyCode != 0 || !x.OnDisk || x.RetryAttempt != 1 || x.ReplyRetryAttempt != 1 ||
+		o.Submission.Transaction == 0 || x.ReplyTransaction != o.Submission.Transaction || x.Submission.Transaction != o.Submission.Transaction || x.Submission.GlobalID != r.SubjectGlobalID ||
+		x.Primary != n.Objects[1].After.ActingPrimary || x.Primary == pc.AppendPrimary || x.ReplyMapEpoch < n.Objects[1].After.Epoch {
+		fail("resubmission: not one known answer 0 to the original transaction %d from the new primary osd.%d: %s", o.Submission.Transaction, n.Objects[1].After.ActingPrimary, text(x))
+	}
+	// A second execution would have written the object again and raised its
+	// version.
+	if x.UserVersion == 0 || x.UserVersion != pc.VersionBefore || pc.VersionAfter != pc.VersionBefore {
+		fail("resubmission: the journal object's user version is %d before, %d in the answer and %d after; the append may have run again", pc.VersionBefore, x.UserVersion, pc.VersionAfter)
+	}
+	recordedAt, err1 := time.Parse(time.RFC3339Nano, o.RecordedUTC)
+	resubmittedAt, err2 := time.Parse(time.RFC3339Nano, x.RecordedUTC)
+	if err1 != nil || err2 != nil || !resubmittedAt.After(recordedAt) {
+		fail("resubmission: not recorded after the unknown outcome (%q, %q)", o.RecordedUTC, x.RecordedUTC)
+	}
+	// The OSD lists a reattached watch under the address it was registered
+	// from, which is the address in the lock record: librbd's liveness rule
+	// compares exactly these two.
+	if pc.LockerAddress == "" || pc.WatcherAddress != pc.LockerAddress {
+		fail("resubmission: the new primary does not list the reattached watch at the lock record's address (lock %q, watch %q)", pc.LockerAddress, pc.WatcherAddress)
+	}
+	if !reflect.DeepEqual(resolved.ObjectSHA256, checkpoint.ObjectSHA256) || !reflect.DeepEqual(resolved.ObjectSizes, checkpoint.ObjectSizes) {
+		fail("observe-resubmitted: journal objects changed after the resubmission")
+	}
 }
 
 // rbdJournalLostAppendViewOf projects one native journal action. entry may be
@@ -440,10 +677,34 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 	return v, nil
 }
 
-func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
+func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) { runRBDJournalLostAppend(t, false) }
+
+// TestCephRBDJournalPrimaryChangeIntegration runs the lost-append sequence on
+// three replicated BlueStore OSDs and changes the acting primary while the
+// outcome of the append is unknown. The owned pool has one PG there, so the
+// image header, the journal header and the journal objects share one acting
+// set. Once the unknown outcome is recorded and natively observed, the
+// fixture marks that PG's primary out. The OSD keeps running, but another
+// member of the acting set is the acting primary from the next epoch on;
+// `ceph osd map` before and after is the native record of that. A native
+// observation through the new primary shows the entry, the lock and the
+// commit position where they were. The subject then closes its connection,
+// reattaches its watch on the new primary and sends the append once more as
+// an explicit resubmission: the original transaction with retry attempt 1.
+// The answer must be a known 0 with the object's
+// unchanged version, and a further native observation must find the journal
+// byte-identical: the new primary answered from the replicated PG log and did
+// not append again. Release and native replay follow as in the single-OSD
+// sequence. See integration/fixture/RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md.
+func TestCephRBDJournalPrimaryChangeIntegration(t *testing.T) { runRBDJournalLostAppend(t, true) }
+
+func runRBDJournalLostAppend(t *testing.T, primaryChange bool) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
 		t.Skip("requires the opt-in disposable RBD fixture (CEPH_MSGR_TEST_RBD=1) under its exact selector")
+	}
+	if primaryChange && (os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore") {
+		t.Skip("requires the RBD fixture on three replicated BlueStore OSDs")
 	}
 	var oracle nativeRBDOracle
 	if err := readMDSFreshJSON(filepath.Join(dir, "rbd-base-oracle.json"), &oracle); err != nil {
@@ -472,6 +733,10 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 	started := time.Now()
+	results, outcomeFile := "rbd-journal-lost-append-results.json", "rbd-journal-lost-append-outcome.json"
+	if primaryChange {
+		results, outcomeFile = "rbd-journal-primary-change-results.json", "rbd-journal-primary-change-outcome.json"
+	}
 
 	// The observer is a second Go client with its own connections. It
 	// supplies placement and, in undecoded mode, the size reads of the
@@ -515,6 +780,9 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 
 	record := rbdJournalLostAppendRecord{Token: token, Pool: oracle.Plan.Pool, PoolID: oracle.Pool.ID, GoIdentity: identity, SubjectGlobalID: gid, ObserverGlobalID: observer.Snapshot().GlobalID,
 		ConnectionMode: mode, Views: map[string]*rbdJournalLostAppendView{}, Timings: map[string]string{}}
+	if primaryChange {
+		record.PrimaryChange = &rbdJournalPrimaryChange{}
+	}
 	publish := func() error {
 		record.Timings["total"] = time.Since(started).String()
 		state := gate.State()
@@ -523,7 +791,7 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return testcluster.WritePublicEvidence(filepath.Join(dir, "rbd-journal-lost-append-results.json"), data)
+		return testcluster.WritePublicEvidence(filepath.Join(dir, results), data)
 	}
 	defer func() {
 		// A failed run keeps whatever it observed, with the last judged stage.
@@ -713,11 +981,44 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 	classOp := func(class, method string, mode cephmsgr.OSDCallMode, input []byte) cephmsgr.OSDOperation {
 		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: mode, MaxOutputBytes: 65536}}
 	}
-	// send issues one request on o and requires a successful reply with the
-	// subject's identity.
+	// The subject keeps one connection per OSD it talks to. On the single-OSD
+	// fixture that is one connection until it is closed. dialOf is the
+	// position of each connection in the subject's OSD dials, which is how
+	// the gate numbers them.
+	conns, dialOf := map[int32]*cephmsgr.OSDConnection{}, map[*cephmsgr.OSDConnection]int{}
+	connect := func(t *testing.T, r rbdRoute) *cephmsgr.OSDConnection {
+		t.Helper()
+		if o := conns[r.Primary]; o != nil {
+			return o
+		}
+		dials := osdDials.Load()
+		o, err := subject.OpenOSD(ctx, cephmsgr.OSDTarget{ID: r.Primary, Address: r.Address})
+		if err != nil {
+			t.Fatalf("subject explicit connection to osd.%d: %v", r.Primary, err)
+		}
+		if osdDials.Load() != dials+1 {
+			t.Fatal("the subject's OSD transport was not identified", osdDials.Load())
+		}
+		conns[r.Primary], dialOf[o] = o, int(dials+1)
+		return o
+	}
+	closeAll := func() error {
+		var errs []error
+		for id, o := range conns {
+			errs = append(errs, o.Close())
+			delete(conns, id)
+		}
+		return errors.Join(errs...)
+	}
+	// send issues one request and requires a successful reply with the
+	// subject's identity. Without a connection it uses the subject's
+	// connection to the object's primary.
 	send := func(t *testing.T, o *cephmsgr.OSDConnection, id uint64, label, object string, ops ...cephmsgr.OSDOperation) cephmsgr.OSDReply {
 		t.Helper()
 		r := route(t, object)
+		if o == nil {
+			o = connect(t, r)
+		}
 		req := request(r, ops...)
 		mutation := slices.ContainsFunc(ops, func(op cephmsgr.OSDOperation) bool {
 			return op.Code == cephmsgr.OSDCall && op.Class.Mode == cephmsgr.OSDCallWrite
@@ -738,14 +1039,7 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 		return reply
 	}
 	headerRoute := route(t, header)
-	target := cephmsgr.OSDTarget{ID: headerRoute.Primary, Address: headerRoute.Address}
-	first, err := subject.OpenOSD(ctx, target)
-	if err != nil {
-		t.Fatal("subject explicit OSD connection", err)
-	}
-	if osdDials.Load() != 1 {
-		t.Fatal("the subject's OSD transport was not identified", osdDials.Load())
-	}
+	first := connect(t, headerRoute)
 
 	// librbd's managed lock: the subject's image header watch handle is the
 	// lock cookie.
@@ -772,9 +1066,13 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 		if locked && !unlocked {
 			cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
 			defer stop()
-			_ = first.Close()
-			if o, err := subject.OpenOSD(cleanup, target); err == nil {
-				r := headerRoute
+			_ = closeAll()
+			// The header's primary may have changed since the lock was taken.
+			r := headerRoute
+			if p, err := recoveryObjectPlacement(cleanup, observer, plan.Pool, header); err == nil && addresses[p.Primary] != "" {
+				r.Epoch, r.Primary, r.Address = p.Epoch, p.Primary, addresses[p.Primary]
+			}
+			if o, err := subject.OpenOSD(cleanup, cephmsgr.OSDTarget{ID: r.Primary, Address: r.Address}); err == nil {
 				req := request(r, classOp("lock", "unlock", cephmsgr.OSDCallWrite, rbdLockUnlockInput(lockCookie)))
 				req.ModificationTime = now()
 				reply, err := o.Request(cleanup, req)
@@ -783,8 +1081,8 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 		}
 	}()
 	locked = true
-	send(t, first, gid, "lock_lock", header, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInput(lockCookie)))
-	r := send(t, first, gid, "lock_get_info", header, classOp("lock", "get_info", cephmsgr.OSDCallRead, rbdLockGetInfoInput()))
+	send(t, nil, gid, "lock_lock", header, classOp("lock", "lock", cephmsgr.OSDCallWrite, rbdLockLockInput(lockCookie)))
+	r := send(t, nil, gid, "lock_get_info", header, classOp("lock", "get_info", cephmsgr.OSDCallRead, rbdLockGetInfoInput()))
 	info, err := decodeRBDLockInfo(r.Operations[0].Data)
 	if err != nil || len(info.Lockers) != 1 || info.Lockers[0].NameNumber != int64(gid) || info.Lockers[0].Cookie != lockCookie || info.Tag != rbdLockTag {
 		t.Fatal("the subject does not hold the image's exclusive lock", info, err)
@@ -792,15 +1090,15 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 	done("lock")
 	// Journal open after lock acquisition (librbd/Journal.cc
 	// allocate_local_tag), as in the journal acceptance.
-	r = send(t, first, gid, "get_client_image", journalHeader, classOp("journal", "get_client", cephmsgr.OSDCallRead, rbdString("")))
+	r = send(t, nil, gid, "get_client_image", journalHeader, classOp("journal", "get_client", cephmsgr.OSDCallRead, rbdString("")))
 	if !bytes.Equal(r.Operations[0].Data, imageOutput) {
 		t.Fatal("image journal client changed since the native setup observation")
 	}
-	r = send(t, first, gid, "get_next_tag_tid", journalHeader, classOp("journal", "get_next_tag_tid", cephmsgr.OSDCallRead, nil))
+	r = send(t, nil, gid, "get_next_tag_tid", journalHeader, classOp("journal", "get_next_tag_tid", cephmsgr.OSDCallRead, nil))
 	tag := binary.LittleEndian.Uint64(r.Operations[0].Data)
 	front := imageClient.Positions[0]
 	tagData := rbdJournalTagDataEncode(rbdJournalTagData{CommitValid: true, PredecessorTag: front.Tag, PredecessorEnt: front.Entry})
-	send(t, first, gid, "tag_create", journalHeader, classOp("journal", "tag_create", cephmsgr.OSDCallWrite, append(append(rbdLE64(tag), rbdLE64(class)...), rbdJournalBL(tagData)...)))
+	send(t, nil, gid, "tag_create", journalHeader, classOp("journal", "tag_create", cephmsgr.OSDCallWrite, append(append(rbdLE64(tag), rbdLE64(class)...), rbdJournalBL(tagData)...)))
 	done("tag_create")
 
 	// The owned entry: the first Go write of the journal plan as entry 0 of
@@ -822,11 +1120,11 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 	nativeBefore := objectsBlob[lockedNative.JournalObjects[object].Offset : lockedNative.JournalObjects[object].Offset+lockedNative.JournalObjects[object].Size]
 	// A read on the subject's own connection passes the armed-to-be gate and
 	// equals the native read: the gate withholds nothing yet.
-	r = send(t, first, gid, "append_before", entry.ObjectName, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat}, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: 256 << 10})
+	r = send(t, nil, gid, "append_before", entry.ObjectName, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat}, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: 256 << 10})
 	if !bytes.Equal(r.Operations[1].Data, nativeBefore) || len(nativeBefore) != entry.Offset {
 		t.Fatal("journal object before the append differs between Go and native librados", len(r.Operations[1].Data), len(nativeBefore), entry.Offset)
 	}
-	if s := gate.State(); s.LargeWrites != 0 || s.Bound || s.Connections != 1 {
+	if s := gate.State(); s.LargeWrites != 0 || s.Bound || s.Connections != len(conns) {
 		t.Fatal("the subject already wrote a frame of the append's size, so the gate cannot single out the append", s)
 	}
 	if err := gate.Arm(entryBytes); err != nil {
@@ -835,8 +1133,18 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 
 	// The one append. It is submitted once and never again.
 	targetRoute := route(t, entry.ObjectName)
-	if targetRoute.Primary != headerRoute.Primary {
+	if !primaryChange && targetRoute.Primary != headerRoute.Primary {
 		t.Fatal("journal object and image header are on different OSDs; the single-OSD fixture is required")
+	}
+	// The control read above opened this connection, so the append is its
+	// only write of the gate's size.
+	appendConn := conns[targetRoute.Primary]
+	if appendConn == nil {
+		t.Fatal("the subject has no connection to the journal object's primary")
+	}
+	if pc := record.PrimaryChange; pc != nil {
+		pc.Objects = []string{header, entry.ObjectName, journalHeader}
+		pc.LockPrimary, pc.AppendPrimary, pc.AppendConnection = headerRoute.Primary, targetRoute.Primary, dialOf[appendConn]
 	}
 	appendRequest := request(targetRoute, classOp("journal", "append", cephmsgr.OSDCallWrite, append(rbdLE64(1<<order), rbdJournalBL(entryBytes)...)))
 	appendRequest.ModificationTime = now()
@@ -849,7 +1157,7 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 	finished := make(chan result, 1)
 	invocations := 1
 	go func() {
-		reply, err := first.Request(callCtx, appendRequest)
+		reply, err := appendConn.Request(callCtx, appendRequest)
 		finished <- result{reply, err}
 	}()
 	done("append_submitted")
@@ -877,7 +1185,7 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 		// No frame can be identified. Wait on the state itself: the observer
 		// reads the object's size until it is the earlier size plus the
 		// entry. Any other size, or the end of the caller, fails at once.
-		o, err := observer.OpenOSD(ctx, target)
+		o, err := observer.OpenOSD(ctx, cephmsgr.OSDTarget{ID: targetRoute.Primary, Address: targetRoute.Address})
 		if err != nil {
 			t.Fatal("observer explicit OSD connection", err)
 		}
@@ -958,7 +1266,7 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 		RecordedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
 	outcome, err := json.Marshal(map[string]any{"token": token, "image_id": imageID, "subject_global_id": gid, "entry": record.Entry, "outcome": record.Outcome})
 	if err == nil {
-		err = testcluster.WritePublicEvidence(filepath.Join(dir, "rbd-journal-lost-append-outcome.json"), outcome)
+		err = testcluster.WritePublicEvidence(filepath.Join(dir, outcomeFile), outcome)
 	}
 	if err != nil {
 		t.Fatal("record the unknown outcome", err)
@@ -973,20 +1281,53 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 	native(t, "observe-recorded")
 	judge(t, "observe-recorded")
 
+	if pc := record.PrimaryChange; pc != nil {
+		// The primary change, while the outcome is unknown and the lock is
+		// held. The test resolves the three placements through its own MON
+		// commands before and after; the fixture's `ceph osd map` reads
+		// around its `osd out` command are the native record.
+		placements := func(t *testing.T) []rbdJournalPlacementView {
+			t.Helper()
+			var views []rbdJournalPlacementView
+			for _, object := range pc.Objects {
+				p, err := recoveryObjectPlacement(ctx, observer, plan.Pool, object)
+				if err != nil {
+					t.Fatal(err)
+				}
+				views = append(views, rbdJournalPlacementView{Object: object, Epoch: p.Epoch, PGID: p.PGID, Primary: p.Primary, Acting: p.Acting})
+			}
+			return views
+		}
+		pc.GoBefore = placements(t)
+		native(t, "change-primary")
+		var receipt struct {
+			PrimaryChange *nativeRBDJournalPrimaryChange `json:"primary_change"`
+		}
+		if err := readMDSFreshJSON(filepath.Join(dir, "rbd-journal-change-primary.json"), &receipt); err != nil || receipt.PrimaryChange == nil {
+			t.Fatal("fixture primary-change receipt missing", err)
+		}
+		pc.Native, pc.GoAfter = receipt.PrimaryChange, placements(t)
+		judge(t, "change-primary")
+	}
+
 	// Only now the handoff. The silent connection is closed; the subject
 	// opens a new one, reattaches its watch (the lock cookie names it),
-	// confirms its ownership, releases the lock and unwatches. It sends no
-	// append, applies nothing and commits nothing.
+	// confirms its ownership, releases the lock and unwatches. On the
+	// single-OSD fixture it sends no append, applies nothing and commits
+	// nothing; after a primary change it resubmits the append once.
 	before := int(osdDials.Load())
 	record.DialsBeforeClose = &before
-	if err := first.Close(); err != nil {
+	if err := closeAll(); err != nil {
 		t.Fatal("close the silent OSD connection", err)
 	}
 	done("blocked_connection_closed")
-	second, err := subject.OpenOSD(ctx, target)
-	if err != nil {
-		t.Fatal("subject fresh OSD connection", err)
+	if primaryChange {
+		// The header has a new primary; requests name the current epoch.
+		headerRoute = route(t, header)
+		watchRequest = request(headerRoute)
+		watchRequest.Operations = nil
 	}
+	second := connect(t, headerRoute)
 	silent := time.Since(watched)
 	record.Timings["watch_without_ping"] = silent.String()
 	if silent > (rbdJournalLostAppendWatchTimeout-5)*time.Second {
@@ -998,11 +1339,51 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) {
 		t.Fatal("subject image header watch reconnect", err)
 	}
 	done("watch_reconnected")
-	r = send(t, second, gid, "lock_get_info_after", header, classOp("lock", "get_info", cephmsgr.OSDCallRead, rbdLockGetInfoInput()))
+	r = send(t, nil, gid, "lock_get_info_after", header, classOp("lock", "get_info", cephmsgr.OSDCallRead, rbdLockGetInfoInput()))
 	if info, err = decodeRBDLockInfo(r.Operations[0].Data); err != nil || len(info.Lockers) != 1 || info.Lockers[0].NameNumber != int64(gid) || info.Lockers[0].Cookie != lockCookie {
 		t.Fatal("the subject lost the image's exclusive lock", info, err)
 	}
-	send(t, second, gid, "lock_unlock", header, classOp("lock", "unlock", cephmsgr.OSDCallWrite, rbdLockUnlockInput(lockCookie)))
+	if pc := record.PrimaryChange; pc != nil {
+		// The lock record keeps the address of the connection that sent
+		// lock.lock, and the watch record that of the connection that
+		// registered it: reattaching the watch does not rewrite it.
+		pc.LockerAddress = fmt.Sprintf("%s/%d", info.Lockers[0].Address.Endpoint, info.Lockers[0].Address.Nonce)
+		listed := send(t, nil, gid, "list_watchers_after", header, cephmsgr.OSDOperation{Code: cephmsgr.OSDListWatchers, ListWatchers: cephmsgr.OSDListWatchersInput{MaxOutputBytes: 4096}})
+		for _, watcher := range listed.Operations[0].Watchers {
+			if uint64(watcher.NameNumber) == gid && watcher.Cookie == cookie {
+				pc.WatcherAddress = fmt.Sprintf("%s/%d", watcher.Address.Endpoint, watcher.Address.Nonce)
+			}
+		}
+		// The explicit resubmission: the same operations and modification
+		// time under the original transaction, retry attempt 1, routed to
+		// the journal object's new primary. It is sent once. Whatever comes
+		// back is recorded before it is judged, and nothing follows an
+		// answer that is not a known 0.
+		version := func(label string) uint64 {
+			return send(t, nil, gid, label, entry.ObjectName, cephmsgr.OSDOperation{Code: cephmsgr.OSDStat}).UserVersion
+		}
+		pc.VersionBefore = version("append_version_before")
+		newRoute := route(t, entry.ObjectName)
+		retry := request(newRoute, appendRequest.Operations...)
+		retry.ModificationTime = appendRequest.ModificationTime
+		retry.Resubmit, retry.RetryAttempt = &record.Outcome.Submission, 1
+		resubmitConn := connect(t, newRoute)
+		pc.ResubmitConnection = dialOf[resubmitConn]
+		reply, err := resubmitConn.Request(ctx, retry)
+		keep("journal_append_resubmit", newRoute, retry, reply, err)
+		class, detail := rbdMutationOutcome(reply, err)
+		pc.Resubmission = &rbdJournalResubmission{CallerInvocations: 1, Class: class, UnknownOutcome: errors.As(err, &unknown), Error: detail, Primary: newRoute.Primary, RetryAttempt: retry.RetryAttempt,
+			Submission: reply.Submission, ReplyTransaction: reply.Transaction, ReplyCode: reply.Code, ReplyRetryAttempt: reply.RetryAttempt, ReplyMapEpoch: reply.MapEpoch,
+			OnDisk: reply.Flags&cephmsgr.OSDReplyOnDisk != 0, UserVersion: reply.UserVersion, RecordedUTC: time.Now().UTC().Format(time.RFC3339Nano)}
+		if err != nil || reply.Code != 0 {
+			t.Fatal("the resubmitted append was not answered with a known 0; nothing is sent again", reply.Code, err)
+		}
+		pc.VersionAfter = version("append_version_after")
+		done("resubmitted")
+		native(t, "observe-resubmitted")
+		judge(t, "observe-resubmitted")
+	}
+	send(t, nil, gid, "lock_unlock", header, classOp("lock", "unlock", cephmsgr.OSDCallWrite, rbdLockUnlockInput(lockCookie)))
 	unlocked = true
 	done("unlock")
 	reply, err = w2.Unwatch(ctx, headerRoute.Epoch)
