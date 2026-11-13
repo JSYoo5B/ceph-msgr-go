@@ -95,6 +95,8 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"10", token, "require-reclaim-off"}, "require-reclaim-off", nil},
 		{[]string{"10", token, "require-multi-on"}, "require-multi-on", nil},
 		{[]string{"10", token, "require-multi-off"}, "require-multi-off", nil},
+		{[]string{"10", token, "require-deleg-on"}, "require-deleg-on", nil},
+		{[]string{"10", token, "require-deleg-off"}, "require-deleg-off", nil},
 		{[]string{"10", token, "stale-on"}, "stale-on", nil},
 		{[]string{"10", token, "stale-off"}, "stale-off", nil},
 	} {
@@ -110,7 +112,7 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		{"10", token, "observe", "042"}, {"10", token, "observe", "18446744073709551616"},
 		{"10", token, "evict"}, {"10", token, "evict", "42", "43"}, {"10", token, "refuse-on", "42"},
 		{"10", token, "fs", "set"}, {"10", token, "osd", "blocklist", "rm"}, {"10", token, "stale-on", "60"},
-		{"10", token, "require-reclaim-on", "reply_encoding"}, {"10", token, "require-multi-on", "charmap"}, {"10", token, "require-charmap-on"}, {"10", token, "require-reclaim"},
+		{"10", token, "require-reclaim-on", "reply_encoding"}, {"10", token, "require-multi-on", "charmap"}, {"10", token, "require-deleg-on", "deleg_ino"}, {"10", token, "require-deleg"}, {"10", token, "require-charmap-on"}, {"10", token, "require-reclaim"},
 		{"0", token, "observe", "42"}, {"010", token, "observe", "42"}, {"-1", token, "observe", "42"},
 	} {
 		if _, _, err := parseMDSSessionsRequest(fields, token, 0); err == nil {
@@ -128,6 +130,8 @@ func TestMDSSessionsRequestIsClosedAndScoped(t *testing.T) {
 		"require-reclaim-off": {"reclaim_client", "feature_10", "required_client_features_reclaim_client"},
 		"require-multi-on":    {"multi_reconnect", "feature_12", "required_client_features_multi_reconnect"},
 		"require-multi-off":   {"multi_reconnect", "feature_12", "required_client_features_multi_reconnect"},
+		"require-deleg-on":    {"deleg_ino", "feature_13", "required_client_features_deleg_ino"},
+		"require-deleg-off":   {"deleg_ino", "feature_13", "required_client_features_deleg_ino"},
 	} {
 		if got, ok := mdsSessionsRequirementFor(action); !ok || got != want {
 			t.Fatal("required-feature toggle changed", action, got, ok)
@@ -145,7 +149,7 @@ func mdsSessionsNativeSample(address string, nonce uint32) map[string]any {
 		"id": 4321, "auth_name": map[string]any{"type": 8, "type_str": "client", "id": "mds-fresh-owned"},
 		"entity": map[string]any{"name": map[string]any{"type": "client", "num": 4321}, "addr": map[string]any{"type": "v2", "addr": address, "nonce": nonce}},
 		"state":  "open", "num_leases": 0, "num_caps": 0, "uptime": 1.5, "inst": "client.4321 v2:" + address,
-		"completed_requests": []any{}, "prealloc_inos": []any{},
+		"completed_requests": []any{}, "prealloc_inos": []any{}, "delegated_inos": []any{},
 		"client_metadata": map[string]any{
 			"client_features": map[string]any{"feature_bits": "0x00000000000001ff"},
 			"metric_spec":     map[string]any{"metric_flags": map[string]any{"feature_bits": "0x0"}},
@@ -163,6 +167,15 @@ func TestMDSSessionsNativeListingPreservesComparedFields(t *testing.T) {
 		if err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatal("native session identity, address or metadata changed", got, err)
 		}
+	}
+	// Session::dump prints each delegated range as a hexadecimal start and a
+	// decimal length; the order of the daemon's interval set is kept.
+	delegated := mdsSessionsNativeSample("172.18.0.9:0", 1)
+	delegated["delegated_inos"] = []any{map[string]any{"start": "0x100000001f5", "length": 500}, map[string]any{"start": "0x10000000400", "length": 2}}
+	data, _ := json.Marshal([]any{delegated})
+	if got, err := parseMDSSessionsList(data); err != nil || len(got) != 1 ||
+		!reflect.DeepEqual(got[0].DelegatedInos, []mdsSessionsInoRange{{Start: 0x100000001f5, Length: 500}, {Start: 0x10000000400, Length: 2}}) {
+		t.Fatal("native delegated inode ranges changed", got, err)
 	}
 	if got, err := parseMDSSessionsList([]byte("[]")); err != nil || len(got) != 0 || got == nil {
 		t.Fatal("empty native listing must remain an empty owned observation", got, err)
@@ -185,6 +198,19 @@ func TestMDSSessionsNativeListingPreservesComparedFields(t *testing.T) {
 			m["client_metadata"].(map[string]any)["metric_spec"] = map[string]any{"metric_flags": "0x0"}
 		},
 		"non-string value": func(m map[string]any) { m["client_metadata"].(map[string]any)["root"] = 7 },
+		"no delegated set": func(m map[string]any) { delete(m, "delegated_inos") },
+		"decimal start": func(m map[string]any) {
+			m["delegated_inos"] = []any{map[string]any{"start": "1099511628277", "length": 1}}
+		},
+		"empty delegated range": func(m map[string]any) {
+			m["delegated_inos"] = []any{map[string]any{"start": "0x100000001f5", "length": 0}}
+		},
+		"delegated range without length": func(m map[string]any) {
+			m["delegated_inos"] = []any{map[string]any{"start": "0x100000001f5"}}
+		},
+		"delegated range past 2^64": func(m map[string]any) {
+			m["delegated_inos"] = []any{map[string]any{"start": "0xffffffffffffffff", "length": 1}}
+		},
 	} {
 		sample := mdsSessionsNativeSample("172.18.0.9:0", 1)
 		change(sample)

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -112,6 +113,11 @@ func TestMDSCephFSCompletionRequestIsClosedAndScoped(t *testing.T) {
 		{[]string{"6", token, "snapshot-create"}, mdsCephFSCompletionAction{name: "snapshot-create", target: "snapshot"}},
 		{[]string{"7", token, "blackhole-on"}, mdsCephFSCompletionAction{name: "blackhole-on"}},
 		{[]string{"8", token, "restart-adopt"}, mdsCephFSCompletionAction{name: "restart-adopt"}},
+		{[]string{"9", token, "deleg-zero-on"}, mdsCephFSCompletionAction{name: "deleg-zero-on"}},
+		{[]string{"10", token, "deleg-zero-off"}, mdsCephFSCompletionAction{name: "deleg-zero-off"}},
+		{[]string{"11", token, "async-dirops-off"}, mdsCephFSCompletionAction{name: "async-dirops-off"}},
+		{[]string{"12", token, "async-dirops-on"}, mdsCephFSCompletionAction{name: "async-dirops-on"}},
+		{[]string{"13", token, "stat", "deleg-grant"}, mdsCephFSCompletionAction{name: "stat", target: "deleg-grant"}},
 	} {
 		id, action, err := parse(0, tc.fields...)
 		if err != nil || action != tc.want || id <= 0 {
@@ -121,6 +127,7 @@ func TestMDSCephFSCompletionRequestIsClosedAndScoped(t *testing.T) {
 	for _, fields := range [][]string{
 		{"1", token, "observe"}, {"1", token, "observe", "0"}, {"1", token, "observe", "042"}, {"1", token, "mds-log", "42"}, {"1", token, "mds-log", "42", "0"},
 		{"1", token, "stat", "/etc/passwd"}, {"1", token, "stat", "dir", "x"}, {"1", token, "list", "dir"}, {"1", token, "blackhole-on", "true"}, {"1", token, "config-set", "x"},
+		{"1", token, "deleg-zero-on", "10"}, {"1", token, "async-dirops-off", "false"}, {"1", token, "deleg-zero"}, {"1", token, "deleg-pct-zero"}, {"1", token, "stat", "deleg-other"},
 		{"1", token, "tell", "mds.a", "config"}, {"1", strings.Repeat("b2", 16), "list"}, {"0", token, "list"}, {"01", token, "list"}, {"1", token},
 	} {
 		if _, _, err := parse(0, fields...); err == nil {
@@ -235,7 +242,21 @@ func TestMDSCephFSCompletionRuntimeAndRestartRules(t *testing.T) {
 			}
 		}
 	}
-	if mdsCephFSCompletionRestoreOf("blackhole-on") != "" || mdsCephFSCompletionRestoreOf("config-set") != "" {
+	// The delegated-inode controls change exactly one fixed option each. The
+	// percentage is a central override: a runtime change of it would be read
+	// back but never reach the running Server.
+	if got := mdsCephFSCompletionRuntimeKinds["async-dirops-off"]; !maps.Equal(got.settings, map[string]string{"mds_allow_async_dirops": "false"}) || got.restore != "async-dirops-on" {
+		t.Fatal("async directory operation control differs", got)
+	}
+	if got := mdsCephFSCompletionCentralKinds["deleg-zero-on"]; got.kind != "deleg-zero" || got.name != "mds_client_delegate_inos_pct" || got.value != "0" {
+		t.Fatal("delegation percentage control differs", got)
+	}
+	for kind, spec := range mdsCephFSCompletionRuntimeKinds {
+		if _, changed := spec.settings["mds_client_delegate_inos_pct"]; changed {
+			t.Fatal("the delegation percentage must not be a runtime change", kind)
+		}
+	}
+	if mdsCephFSCompletionRestoreOf("blackhole-on") != "" || mdsCephFSCompletionRestoreOf("config-set") != "" || mdsCephFSCompletionRestoreOf("async-dirops-off") != "" {
 		t.Fatal("a change action was taken for a restore")
 	}
 	token := strings.Repeat("a1", 16)
@@ -261,7 +282,7 @@ func TestMDSCephFSCompletionRuntimeAndRestartRules(t *testing.T) {
 	}
 	// Runtime changes other than debug levels are refused during a restart,
 	// before any admin socket command.
-	for _, name := range []string{"log-pause", "blackhole-on", "early-reply-off"} {
+	for _, name := range []string{"log-pause", "blackhole-on", "early-reply-off", "async-dirops-off"} {
 		if err := c.mdsCephFSCompletionDaemonAct(context.Background(), 7, mdsCephFSCompletionAction{name: name}, 41, &result); err == nil {
 			t.Fatal("runtime change admitted during a restart", name)
 		}
@@ -272,7 +293,7 @@ func TestMDSCephFSCompletionRuntimeAndRestartRules(t *testing.T) {
 		t.Fatal("the restart budget was exceeded")
 	}
 	// Restores need an owned change in effect on that incarnation.
-	for _, name := range []string{"log-resume", "blackhole-off", "early-reply-on", "debug-off"} {
+	for _, name := range []string{"log-resume", "blackhole-off", "early-reply-on", "debug-off", "async-dirops-on"} {
 		if err := c.mdsCephFSCompletionDaemonAct(context.Background(), 9, mdsCephFSCompletionAction{name: name}, 40, &result); err == nil {
 			t.Fatal("restore admitted without an owned change", name)
 		}
@@ -287,7 +308,7 @@ func TestMDSCephFSCompletionRuntimeAndRestartRules(t *testing.T) {
 	if err := c.mdsCephFSCompletionNative(context.Background(), 11, mdsCephFSCompletionAction{name: "stat", target: "dir"}, &result); err == nil {
 		t.Fatal("native work admitted while client messages are blackholed")
 	}
-	for _, name := range []string{"deny-off", "window-off"} {
+	for _, name := range []string{"deny-off", "window-off", "deleg-zero-off"} {
 		if err := c.mdsCephFSCompletionCentralAct(context.Background(), 12, name, &result); err == nil {
 			t.Fatal("central restore admitted without an owned override", name)
 		}
@@ -298,6 +319,9 @@ func TestMDSCephFSCompletionRuntimeAndRestartRules(t *testing.T) {
 	}
 	if err := c.mdsCephFSCompletionCentralAct(context.Background(), 14, "deny-on", &result); err == nil {
 		t.Fatal("a central override was applied twice")
+	}
+	if err := c.mdsCephFSCompletionCentralAct(context.Background(), 15, "deleg-zero-on", &result); err == nil {
+		t.Fatal("the delegation percentage override was applied beside an unrestored override")
 	}
 }
 
