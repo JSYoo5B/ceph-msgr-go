@@ -113,6 +113,12 @@ two dedicated catalog rows and the record
 visibility columns of RBD-3, RBD-6 and RBD-7 now point to it. RBD-6 stays
 `proposed` for the remaining fault combinations. No class changed.
 
+Updated on 2026-11-13 for issue #11. `deleg_ino` (bit 13) is declared by the
+CephFS profile as a decode-only reply form. Its acceptance adds leaves to the
+existing completion and session tests (MDS-5, MDS-3) and no catalog row; the
+record is [MDS_DELEG_INO_VALIDATION.md](MDS_DELEG_INO_VALIDATION.md). The
+visibility column of MDS-5 now points to it. No class changed.
+
 ## How to use this map
 
 This map owns the classification of native recipes and where each retained
@@ -272,7 +278,7 @@ a particular test in it ran. The Visibility column states which applies:
 | MDS-2 | Raw MDS commands with exact targets | `released` | Two identities with different MDS capabilities | Native `tell mds` output and refusals; for the applied-command cell, the active MDS's own admin socket (the `log_max_recent` runtime override) bracketed by fresh native `fs dump` reads of that daemon | Native OPEN-session absence checked; identities removed; one applied command whose reply to its own transaction is withheld while only the connection ends, with one native overwrite and one native restoration | `group:mds-commands`, `TestCephMDSCommandsIntegration`, `mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand`, `TestCephAppliedMDSCommandIsNotReplayedIntegration`, [MDS_COMMAND_FIXTURE.md](MDS_COMMAND_FIXTURE.md), [MDS_COMMAND_VALIDATION.md](MDS_COMMAND_VALIDATION.md), [DAEMON_COMMAND_OUTCOME_VALIDATION.md](DAEMON_COMMAND_OUTCOME_VALIDATION.md) | dedicated rows; the applied-command cell has direct-native CRC evidence only |
 | MDS-3 | Session open, renewal, close, reclaim and close-push admission | `released` | Owned session fixture | Native session listing, blocklist after reclaim | Uncertain close; sessions and identities removed | `group:mds-sessions`, `TestCephMDSSessionsIntegration`, [MDS_SESSIONS_FIXTURE.md](MDS_SESSIONS_FIXTURE.md), [MDS_SESSIONS_VALIDATION.md](MDS_SESSIONS_VALIDATION.md), [MDS_RECLAIM_VALIDATION.md](MDS_RECLAIM_VALIDATION.md), [MDS_CLOSE_PUSH_ADMISSION_VALIDATION.md](MDS_CLOSE_PUSH_ADMISSION_VALIDATION.md) | dedicated rows; reclaim record is historical and its MDS failover case unverified |
 | MDS-4 | Metadata requests, capabilities, leases and pushes | `released` | Owned filesystem; a native LibCephFS client as a second actor | Native mount reads, `dump inode` and session counters | Revocation by a native writer; namespace cleanup | `group:mds-cephfs`, `TestCephMDSCephFSIntegration`, `TestCephMDSCephFSPushIntegration`, [MDS_CEPHFS_VALIDATION.md](MDS_CEPHFS_VALIDATION.md), [MDS_CEPHFS_PUSH_VALIDATION.md](MDS_CEPHFS_PUSH_VALIDATION.md) | dedicated rows |
-| MDS-5 | Unsafe and safe completion with journal control | `released` | Owned completion fixture with runtime overrides and owned restarts | MDS admin socket ops in flight and daemon log | Journal pause and MDS restart; overrides restored | `group:mds-cephfs-completion`, `TestCephMDSCephFSCompletionIntegration`, [MDS_CEPHFS_COMPLETION_FIXTURE.md](MDS_CEPHFS_COMPLETION_FIXTURE.md), [MDS_CEPHFS_COMPLETION_VALIDATION.md](MDS_CEPHFS_COMPLETION_VALIDATION.md) | dedicated rows |
+| MDS-5 | Unsafe and safe completion with journal control | `released` | Owned completion fixture with runtime overrides and owned restarts | MDS admin socket ops in flight and daemon log | Journal pause and MDS restart; overrides restored | `group:mds-cephfs-completion`, `TestCephMDSCephFSCompletionIntegration`, [MDS_CEPHFS_COMPLETION_FIXTURE.md](MDS_CEPHFS_COMPLETION_FIXTURE.md), [MDS_CEPHFS_COMPLETION_VALIDATION.md](MDS_CEPHFS_COMPLETION_VALIDATION.md), [MDS_DELEG_INO_VALIDATION.md](MDS_DELEG_INO_VALIDATION.md) | dedicated rows; the delegated-inode reply forms (bare inode, grant, empty set) and a restart with delegation percentage zero run as leaves of the same test |
 | MDS-6 | Reconnect and replay to a new MDS incarnation | `released` | Owned MDS restart with outstanding requests and caps | Native session state and namespace after replay | MDS restart; pending cap flush extension | `TestCephMDSCephFSRecoveryIntegration`, [MDS_CEPHFS_RECOVERY_VALIDATION.md](MDS_CEPHFS_RECOVERY_VALIDATION.md) | dedicated `mds-cephfs` rows |
 | MDS-7 | Multi-rank forwarding, cap export and import, standby and standby-replay takeover | `released` | Two or three active ranks with a standby; owned pins and takeover controls | Native `get subtrees`, MDS perf counters, FSMap and blocklist | `mds fail` of rank 0; pins, blocklist entries and identities restored | `group:mds-cephfs-ranks`, `group:mds-cephfs-ranks-replay`, `TestCephMDSCephFSRanksIntegration`, `TestCephMDSCephFSRanksReplayIntegration`, [MDS_CEPHFS_RANKS_FIXTURE.md](MDS_CEPHFS_RANKS_FIXTURE.md), [MDS_CEPHFS_RANKS_VALIDATION.md](MDS_CEPHFS_RANKS_VALIDATION.md), [MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md](MDS_CEPHFS_RANKS_REPLAY_VALIDATION.md), [MDS_RANKS_HISTORY_VALIDATION.md](MDS_RANKS_HISTORY_VALIDATION.md) | dedicated rows |
 | MDS-8 | Coupled object I/O, cap snapshots and FLOCK | `released` | Owned data fixture with layout-based OSD I/O | Native file reads, snapshot reads and lock conflicts | MDS restart with pending cap snapshots, lost FLUSHSNAP ACK, lock interrupt | `group:mds-cephfs-data`, `TestCephMDSCephFSDataIntegration`, [MDS_CEPHFS_DATA_FIXTURE.md](MDS_CEPHFS_DATA_FIXTURE.md), [MDS_CEPHFS_DATA_VALIDATION.md](MDS_CEPHFS_DATA_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_VALIDATION.md](MDS_CEPHFS_CAPSNAP_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_RECOVERY_VALIDATION.md](MDS_CEPHFS_CAPSNAP_RECOVERY_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_RESUBMIT_VALIDATION.md](MDS_CEPHFS_CAPSNAP_RESUBMIT_VALIDATION.md), [MDS_CEPHFS_CAPSNAP_DEDUPE_VALIDATION.md](MDS_CEPHFS_CAPSNAP_DEDUPE_VALIDATION.md), [MDS_FILELOCK_VALIDATION.md](MDS_FILELOCK_VALIDATION.md), [MDS_FILELOCK_COMPLETION_VALIDATION.md](MDS_FILELOCK_COMPLETION_VALIDATION.md) | dedicated rows |
@@ -408,8 +414,10 @@ environment.
   [CLIENT_EXTENSION_DECISIONS.md](../../internal/mds/CLIENT_EXTENSION_DECISIONS.md)
   (`implement`, `defer` or `consumer-owned` per bit). The audit itself
   enabled no bit. Since then `reclaim_client` (bit 10) is declared by both
-  profiles and `multi_reconnect` (bit 12) by the CephFS profile only (MDS-3,
-  MDS-13); the eight bits withheld by both profiles are not enabled.
+  profiles, and `multi_reconnect` (bit 12) and `deleg_ino` (bit 13, as a
+  decode-only reply form) by the CephFS profile only (MDS-3, MDS-5, MDS-13);
+  the seven bits withheld by both profiles are not enabled. Asynchronous
+  directory operations stay unimplemented behind bit 13.
 - MON, MGR and OSD sessions do not implement cookie resume; this is a
   documented contract boundary, not a gap.
 - Daemon-to-daemon paths need no Go server implementation; their rows above
