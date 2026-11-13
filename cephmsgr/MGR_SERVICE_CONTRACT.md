@@ -52,6 +52,11 @@ value), a non-nil map replaces it.
    Before an active MGR exists, setup waits without dialing it. Deadline,
    cancellation and client close at that stage remain known local failures and
    release the reserved identity; no later map implicitly resubmits them.
+   A client `Close` that completes after the dial but before the handle's
+   workers are admitted is the same known local failure: the open returns
+   `ErrClosed` without queueing MMgrOpen, and no worker starts after `Close`
+   has returned. Worker admission and the closed check share the client lock,
+   so `Close` either waits for the admitted workers or refuses them.
 3. While open, the client sends an empty report at the period the MGR configured
    (the pinned `mgr_service_beacon_grace` drops a silent service daemon; period 0
    means no reports), unless `DisableBeacon` leaves liveness to `Report`.
@@ -90,7 +95,8 @@ and unit and race tests against a synthetic MGR that shares the Go frame codec
 handling, repeated 1 -> 0 -> 2 periods, threshold-only and rapid consecutive
 pushes, timer suppression/resumption, disabled automatic beacons and shutdown
 (`cephmsgr/mgr_service_reconfigure_test.go`); duplicate and bound refusals,
-unconfirmed open and close, concurrent
+unconfirmed open and close, client close between the dial and worker admission
+in both orders (`cephmsgr/mgr_service_admission_test.go`), concurrent
 `Close` callers, connection loss, failover, a service beside ordinary MGR
 commands, and client close. These source-derived and synthetic checks are
 **not** native encoder vectors and **not** live daemon evidence. Separately,
