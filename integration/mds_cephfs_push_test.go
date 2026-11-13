@@ -2,7 +2,6 @@ package integration_test
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -414,7 +413,7 @@ func TestCephMDSCephFSPushIntegration(t *testing.T) {
 		t.Helper()
 		first, safe, trace, _, e := submit(t, s, a, label, "create "+name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpCreate, Flags: cephmsgr.MDSRequestFlagWantDentry,
 			Args: cephfsOpenArgs(cephOpenCreate|cephOpenExclusive|cephOpenReadWrite, 0o644, 0), Path: cephmsgr.MDSFilePath{Ino: parent, Path: name}})
-		if first.Result != 0 || safe.Result != 0 || trace.Target == nil || trace.DentryName != name || len(first.Extra) != 8 || binary.LittleEndian.Uint64(first.Extra) != trace.Target.Ino {
+		if first.Result != 0 || safe.Result != 0 || trace.Target == nil || trace.DentryName != name || !cephfsCreated(first.Extra, trace.Target.Ino) {
 			t.Fatalf("create %s differs: %+v", name, e)
 		}
 		ino := trace.Target.Ino

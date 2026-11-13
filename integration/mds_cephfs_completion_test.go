@@ -2,7 +2,6 @@ package integration_test
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -321,27 +320,31 @@ func (x *mdsCephFSCompletionControl) stat(ctx context.Context, target string) (n
 
 // completionReply is one reply as the Go client received it.
 type completionReply struct {
-	Name         string
-	Transaction  uint64
-	Op           uint32
-	Result       int32
-	Safe         bool
-	IsDentry     bool
-	IsTarget     bool
-	MDSMapEpoch  uint32
-	TraceBytes   int
-	SnapBytes    int
-	ExtraHex     string `json:",omitempty"`
-	ExtraIno     uint64 `json:",omitempty"`
-	TargetIno    uint64 `json:",omitempty"`
-	DentryName   string `json:",omitempty"`
-	TargetMode   uint32 `json:",omitempty"`
-	TargetCaps   string `json:",omitempty"`
-	Arrival      uint64
-	AfterMicros  int64
-	Error        string             `json:",omitempty"`
-	ErrorChain   recoveryErrorChain `json:",omitempty"`
-	ExpectedNote string             `json:",omitempty"`
+	Name        string
+	Transaction uint64
+	Op          uint32
+	Result      int32
+	Safe        bool
+	IsDentry    bool
+	IsTarget    bool
+	MDSMapEpoch uint32
+	TraceBytes  int
+	SnapBytes   int
+	ExtraHex    string `json:",omitempty"`
+	ExtraIno    uint64 `json:",omitempty"`
+	// ExtraDelegation is true for the openc_response_t form of a created-inode
+	// extra; ExtraDelegated holds its raw ranges.
+	ExtraDelegation bool                     `json:",omitempty"`
+	ExtraDelegated  []cephmsgr.MDSInodeRange `json:",omitempty"`
+	TargetIno       uint64                   `json:",omitempty"`
+	DentryName      string                   `json:",omitempty"`
+	TargetMode      uint32                   `json:",omitempty"`
+	TargetCaps      string                   `json:",omitempty"`
+	Arrival         uint64
+	AfterMicros     int64
+	Error           string             `json:",omitempty"`
+	ErrorChain      recoveryErrorChain `json:",omitempty"`
+	ExpectedNote    string             `json:",omitempty"`
 }
 
 func describeCompletionReply(name string, call *cephmsgr.MDSRequestCall, r cephmsgr.MDSReply, err error, since time.Time) completionReply {
@@ -352,8 +355,8 @@ func describeCompletionReply(name string, call *cephmsgr.MDSRequestCall, r cephm
 	}
 	e.Op, e.Result, e.Safe, e.IsDentry, e.IsTarget, e.MDSMapEpoch, e.TraceBytes, e.SnapBytes = r.Op, r.Result, r.Safe, r.IsDentry, r.IsTarget, r.MDSMapEpoch, len(r.Trace), len(r.SnapTrace)
 	e.ExtraHex, e.Arrival, e.AfterMicros = hex.EncodeToString(r.Extra), r.Arrival, r.Received.Sub(since).Microseconds()
-	if len(r.Extra) == 8 {
-		e.ExtraIno = binary.LittleEndian.Uint64(r.Extra)
+	if created, err := r.DecodeCreateExtra(); err == nil {
+		e.ExtraIno, e.ExtraDelegation, e.ExtraDelegated = created.Ino, created.Delegation, created.Delegated
 	}
 	if trace, err := r.DecodeTrace(); err == nil && trace.Target != nil {
 		e.TargetIno, e.DentryName, e.TargetMode, e.TargetCaps = trace.Target.Ino, trace.DentryName, trace.Target.Mode, cephCapString(trace.Target.Cap.Caps)
@@ -515,11 +518,12 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 		identity != "client.mds-cephfs-completion-"+oracle.Token || oracle.ClientIdentity != identity || oracle.NativeIdentity != "client.mds-cephfs-completion-native-"+oracle.Token ||
 		oracle.ClientCaps["mon"] != "allow r" || oracle.ClientCaps["mds"] != "allow rw fsname="+fsName || oracle.ClientCaps["osd"] != "allow r tag cephfs data="+fsName ||
 		oracle.NativeCaps["mds"] != "allow rws fsname="+fsName || plan.Directory != "ceph-msgr-completion-"+oracle.Token ||
-		!slices.Equal(plan.Children, []string{"lease", "replayed", "lost-file", "lost-dir", "fenced", "ro-file", "ro-dir", "snap"}) ||
+		!slices.Equal(plan.Children, []string{"lease", "replayed", "lost-file", "lost-dir", "fenced", "ro-file", "ro-dir", "snap", "deleg-plain", "deleg-grant", "deleg-held", "deleg-prime", "deleg-zero"}) ||
 		!slices.Equal(plan.Grandchildren, []string{"lease/leased", "snap/snap-file"}) || plan.Snapshot != "completion-"+oracle.Token[:8] || plan.ReconnectTimeout != "5" ||
 		payloadErr != nil || len(payload) != 5000 || oracle.DataPoolName != fsName+"-data" || oracle.DataPool < 0 ||
 		current.Source != mdsFreshSource || current.Token != oracle.Token || current.Adopted != 0 || current.MDS.GID != fresh.MDS.GID || current.MDS.Nonce != fresh.MDS.Nonce ||
-		oracle.BaselineConfig["ms_blackhole_client"] != "false" || oracle.BaselineConfig["mds_early_reply"] != "true" || oracle.BaselineConfig["mds_log_pause"] != "false" {
+		oracle.BaselineConfig["ms_blackhole_client"] != "false" || oracle.BaselineConfig["mds_early_reply"] != "true" || oracle.BaselineConfig["mds_log_pause"] != "false" ||
+		oracle.BaselineConfig["mds_client_delegate_inos_pct"] != "50" || oracle.BaselineConfig["mds_allow_async_dirops"] != "true" {
 		t.Fatal("owned CephFS completion oracle, plan, target or identity differ")
 	}
 	control := &mdsCephFSCompletionControl{dir: dir, token: oracle.Token, fresh: fresh, mds: current.MDS, goGIDs: map[uint64]bool{}}
@@ -870,6 +874,136 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 		delete(agents, "holder")
 	})
 
+	// DELEG_INO (declared by the CephFS profile) lets the MDS choose the form
+	// of a created-inode extra per reply (Server::set_reply_extra_bl): with
+	// mds_allow_async_dirops it sends openc_response_t, delegating ranges only
+	// while its delegation percentage is nonzero, the request is not queued
+	// for replay and the session holds fewer than half of its share; without
+	// the option it sends the bare inode. Every created inode is compared
+	// with an independent native statx, and the decoded ranges with the
+	// native session's delegated_inos.
+	sameRanges := func(decoded []cephmsgr.MDSInodeRange, native []nativeMDSInoRange) bool {
+		return slices.EqualFunc(decoded, native, func(d cephmsgr.MDSInodeRange, n nativeMDSInoRange) bool {
+			return d.Start == n.Start && d.Length == n.Length
+		})
+	}
+	// delegSession opens a fresh session whose native entry holds no range.
+	// A failed leaf must not leave it open: the next owned restart would wait
+	// its whole reconnect window for it.
+	delegSession := func(t *testing.T, role string) (*cephmsgr.MDSSession, *cephfsCapAgent, uint64) {
+		t.Helper()
+		c, _ := client(t, role, false, control.mds.Endpoint)
+		gid := c.Snapshot().GlobalID
+		if !cephmsgr.MDSFeatureBitsetHas(c.MDSClientFeatures(), mds.FeatureDelegIno) {
+			t.Fatal("CephFS profile does not declare DELEG_INO")
+		}
+		_, s, a, _ := open(t, c, role)
+		t.Cleanup(func() {
+			if s.Status().State == cephmsgr.MDSSessionOpen {
+				closing, stop := context.WithTimeout(context.Background(), 10*time.Second)
+				defer stop()
+				s.Close(closing)
+			}
+		})
+		if !cephmsgr.MDSFeatureBitsetHas(s.Status().Open.SupportedFeatures, mds.FeatureDelegIno) {
+			t.Fatal("MDS OPEN does not advertise DELEG_INO")
+		}
+		if _, n := observe(t, gid); n == nil || len(n.DelegatedInos) != 0 {
+			t.Fatal("a session without requests already holds delegated inodes", n)
+		}
+		return s, a, gid
+	}
+	// delegCreate creates name and returns the decoded extra, its bytes and
+	// the native session's delegated ranges after the reply.
+	delegCreate := func(t *testing.T, ev map[string]any, s *cephmsgr.MDSSession, a *cephfsCapAgent, gid uint64, name string) (cephmsgr.MDSCreateExtra, []byte, []nativeMDSInoRange) {
+		t.Helper()
+		_, first, trace := submit(t, s, a, "create "+name, create(dirIno, name), true)
+		extra, err := first.DecodeCreateExtra()
+		if first.Result != 0 || err != nil || trace.Target == nil || trace.DentryName != name || extra.Ino != trace.Target.Ino {
+			t.Fatalf("create %s: result %d extra %x %v", name, first.Result, first.Extra, err)
+		}
+		for other, ino := range inos {
+			if ino == extra.Ino {
+				t.Fatalf("create %s reported inode %d of %s", name, ino, other)
+			}
+		}
+		inos[name] = extra.Ino
+		st, err := control.stat(ctx, name)
+		if err != nil || !st.Exists || st.Ino != extra.Ino || st.Mode != 0o100644 {
+			t.Fatalf("native statx of %s differs from the created inode %d: %+v %v", name, extra.Ino, st, err)
+		}
+		_, n := observe(t, gid)
+		if n == nil {
+			t.Fatal("native session missing after create", name)
+		}
+		ev[name] = map[string]any{"extra_hex": hex.EncodeToString(first.Extra), "ino": extra.Ino, "delegation": extra.Delegation, "delegated": extra.Delegated,
+			"native_ino": st.Ino, "native_delegated_inos": n.DelegatedInos, "unsafe_first": !first.Safe}
+		return extra, first.Extra, n.DelegatedInos
+	}
+	delegZeroArmed, delegZeroArmedGID := false, uint64(0)
+	leaf("delegated_inode_reply_forms", func(t *testing.T) {
+		ev := map[string]any{}
+		facts["delegated_inode_reply_forms"] = ev
+		sessionD, agentD, gidD := delegSession(t, "deleg")
+		// The declaration does not make async requests available.
+		async := create(dirIno, "deleg-async")
+		async.Flags |= mds.RequestFlagAsync
+		if call, err := sessionD.Submit(ctx, async); err == nil || call != nil {
+			t.Fatal("ASYNC create admitted on a DELEG_INO session")
+		}
+		runtime := func(action, value string) {
+			t.Helper()
+			const name = "mds_allow_async_dirops"
+			r := req(t, action)
+			if r.Runtime == nil || r.Runtime.Settings[name] != "false" || r.Runtime.Baseline[name] != oracle.BaselineConfig[name] {
+				t.Fatal("runtime control receipt differs", action, r.Runtime)
+			}
+			got, state := r.Runtime.Readback[name], "applied"
+			if value == oracle.BaselineConfig[name] {
+				got, state = r.Runtime.RestoreReadback[name], "restored"
+			}
+			if r.Runtime.State != state || got != value {
+				t.Fatalf("%s left %s=%q in state %s", action, name, got, r.Runtime.State)
+			}
+		}
+
+		// Without async directory operations the session gets the bare 8-byte
+		// inode and no delegation. Committing this first create preallocates
+		// the session's inodes, so the next reply has something to delegate.
+		runtime("async-dirops-off", "false")
+		plain, plainRaw, nativePlain := delegCreate(t, ev, sessionD, agentD, gidD, "deleg-plain")
+		if plain.Delegation || len(plainRaw) != 8 || plain.Delegated != nil || len(nativePlain) != 0 {
+			t.Fatalf("bare create extra %x, native delegated %v", plainRaw, nativePlain)
+		}
+		runtime("async-dirops-on", oracle.BaselineConfig["mds_allow_async_dirops"])
+
+		// Default settings: a grant. It is claimed only for an observed
+		// positive interval count that the native session reports identically.
+		grant, grantRaw, nativeGrant := delegCreate(t, ev, sessionD, agentD, gidD, "deleg-grant")
+		var total uint64
+		for _, r := range grant.Delegated {
+			total += r.Length
+			if grant.Ino >= r.Start && grant.Ino-r.Start < r.Length {
+				t.Fatalf("created inode %d lies inside its own delegated range %+v", grant.Ino, r)
+			}
+		}
+		if !grant.Delegation || len(grant.Delegated) == 0 || total == 0 || len(grantRaw) != 18+16*len(grant.Delegated) || !sameRanges(grant.Delegated, nativeGrant) {
+			t.Fatalf("default create extra %x delegated %v, native %v", grantRaw, grant.Delegated, nativeGrant)
+		}
+		ev["granted_intervals"], ev["granted_inodes"] = len(grant.Delegated), total
+
+		// The session now holds its share: the next reply keeps the delegated
+		// form with an empty set (18 bytes, not the bare inode), and the MDS
+		// still holds exactly the ranges it granted.
+		held, heldRaw, nativeHeld := delegCreate(t, ev, sessionD, agentD, gidD, "deleg-held")
+		if !held.Delegation || len(held.Delegated) != 0 || len(heldRaw) != 18 || !sameRanges(grant.Delegated, nativeHeld) {
+			t.Fatalf("create extra %x of a session holding its share delegated %v, native %v", heldRaw, held.Delegated, nativeHeld)
+		}
+		// The MDS drops the delegation with the session.
+		closeSession(t, sessionD, agentD, gidD)
+		delete(agents, "deleg")
+	})
+
 	if !consistent || !leaf("lost_reply_and_completed_replay", func(t *testing.T) {
 		e := &lostEv
 		armed := req(t, "restart-arm")
@@ -878,7 +1012,7 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 		// R: its unsafe reply arrives; the paused journal keeps it unsafe.
 		callR, firstR, traceR := submit(t, sessionA, agentA, "create replayed", create(dirIno, "replayed"), false)
 		e.ReplayedUnsafe = describeCompletionReply("create replayed", callR, firstR, nil, firstR.Received)
-		if firstR.Result != 0 || firstR.Safe || traceR.Target == nil || len(firstR.Extra) != 8 || binary.LittleEndian.Uint64(firstR.Extra) != traceR.Target.Ino {
+		if firstR.Result != 0 || firstR.Safe || traceR.Target == nil || !cephfsCreated(firstR.Extra, traceR.Target.Ino) {
 			t.Fatalf("the replayed create was not answered unsafe: %+v", e.ReplayedUnsafe)
 		}
 		e.ReplayedIno, e.ReplayedTID = traceR.Target.Ino, callR.Transaction()
@@ -1074,6 +1208,11 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 		// reply whose extra is the created inode (Server::handle_client_request).
 		check(rR.Error == "" && rR.Op == cephmsgr.MDSOpCreate && rR.Result == 0 && rR.Safe && !rR.IsDentry && !rR.IsTarget && rR.TraceBytes == 0 && rR.ExtraIno == e.ReplayedIno,
 			"REPLAY answer differs: %+v", rR)
+		// Both completed answers were queued for replay, so the MDS chose the
+		// delegated form for this DELEG_INO session but delegated nothing with
+		// them (Server::set_reply_extra_bl skips a queued request).
+		check(rR.ExtraDelegation && len(rR.ExtraDelegated) == 0 && rL.ExtraDelegation && len(rL.ExtraDelegated) == 0,
+			"completed create extras are not empty delegated forms: %+v %+v", rR, rL)
 		check(len(log.find("already completed client."+strconv.FormatUint(gidA, 10)+":"+strconv.FormatUint(e.ReplayedTID, 10))) == 1, "log lacks the already-completed line")
 		check(len(log.find("queuing replayed op")) >= 1 && len(log.find("queuing completed op")) >= 2, "log lacks the replay queue lines")
 		// Retried create without REPLAY during clientreplay: opened, not
@@ -1336,6 +1475,21 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 			sessionE.Close(closing)
 		}
 	})
+	// The delegation percentage is read when the MDS starts (it is not a
+	// tracked runtime option), so zero is armed as a central override for the
+	// incarnation that the force-readonly restart brings up. The lost-reply
+	// restart above ran with the default percentage: the empty sets of its
+	// completed answers are the replay queue's doing.
+	if consistent {
+		leaf("delegation_percentage_zero_armed", func(t *testing.T) {
+			on := req(t, "deleg-zero-on")
+			facts["delegation_percentage_zero_armed"] = on.Central
+			if on.Central == nil || on.Central.State != "applied" || on.Central.Name != "mds_client_delegate_inos_pct" || on.Central.Value != "0" {
+				t.Fatal("delegation percentage override was not applied", on.Central)
+			}
+			delegZeroArmed, delegZeroArmedGID = true, control.mds.GID
+		})
+	}
 	if consistent {
 		leaf("force_readonly", func(t *testing.T) {
 			e := &roEv
@@ -1520,6 +1674,46 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 		})
 	}
 
+	// The incarnation the force-readonly restart brought up was started with
+	// delegation percentage zero. A fresh session repeats the pattern that
+	// produced a grant in delegated_inode_reply_forms (a committed create,
+	// then another): both replies must keep the delegated form with an empty
+	// set and the MDS must hold nothing for the session.
+	if consistent && delegZeroArmed {
+		leaf("delegation_percentage_zero", func(t *testing.T) {
+			ev := map[string]any{}
+			facts["delegation_percentage_zero"] = ev
+			cfg := req(t, "config-read").Config
+			ev["incarnation_gid"], ev["incarnation_config"] = control.mds.GID, cfg
+			if control.mds.GID == delegZeroArmedGID || cfg["mds_client_delegate_inos_pct"] != "0" || cfg["mds_allow_async_dirops"] != "true" {
+				t.Fatal("the restarted MDS does not run with delegation percentage zero", control.mds.GID, cfg)
+			}
+			sessionZ, agentZ, gidZ := delegSession(t, "deleg-zero")
+			for _, name := range []string{"deleg-prime", "deleg-zero"} {
+				extra, raw, native := delegCreate(t, ev, sessionZ, agentZ, gidZ, name)
+				if !extra.Delegation || len(extra.Delegated) != 0 || len(raw) != 18 || len(native) != 0 {
+					t.Fatalf("zero-percentage create %s extra %x delegated %v, native %v", name, raw, extra.Delegated, native)
+				}
+			}
+			closeSession(t, sessionZ, agentZ, gidZ)
+			delete(agents, "deleg-zero")
+		})
+	}
+	if delegZeroArmed {
+		// Restored even when a leaf above failed; the running daemon keeps
+		// its percentage until the next owned restart.
+		leaf("delegation_percentage_restored", func(t *testing.T) {
+			if !consistent {
+				t.Skip("an owned restart is pending; the override is left to the fixture cleanup")
+			}
+			off := req(t, "deleg-zero-off")
+			facts["delegation_percentage_restored"] = off.Central
+			if off.Central == nil || off.Central.State != "restored" {
+				t.Fatal("delegation percentage override was not restored", off.Central)
+			}
+		})
+	}
+
 	t.Run("cleanup_unlink_release_close", func(t *testing.T) {
 		begin := time.Now()
 		defer func() { caseTimes["cleanup_unlink_release_close"] = time.Since(begin).Milliseconds() }()
@@ -1552,7 +1746,7 @@ func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 			remove(ino, "snap-file", false)
 			remove(dirIno, "snap", true)
 		}
-		for _, name := range []string{"replayed", "lost-file", "fenced", "ro-file"} {
+		for _, name := range []string{"replayed", "lost-file", "fenced", "ro-file", "deleg-plain", "deleg-grant", "deleg-held", "deleg-prime", "deleg-zero"} {
 			if inos[name] != 0 {
 				remove(dirIno, name, false)
 			}

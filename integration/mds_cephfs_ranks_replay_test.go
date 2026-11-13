@@ -3,7 +3,6 @@ package integration_test
 import (
 	"cmp"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -398,8 +397,8 @@ func TestCephMDSCephFSRanksReplayIntegration(t *testing.T) {
 		if trace.Target != nil {
 			e.TargetIno, e.TargetCapID, e.TargetCaps = trace.Target.Ino, trace.Target.Cap.CapID, cephCapString(trace.Target.Cap.Caps)
 		}
-		if len(first.Extra) == 8 {
-			e.ExtraIno = binary.LittleEndian.Uint64(first.Extra)
+		if ino, created := cephfsCreatedIno(first.Extra); created {
+			e.ExtraIno = ino
 		}
 		if snaps, err := first.DecodeSnapTrace(); err == nil && rank == 0 {
 			for _, r := range snaps {
@@ -857,7 +856,7 @@ func TestCephMDSCephFSRanksReplayIntegration(t *testing.T) {
 			e.TargetIno, e.DentryName = trace.Target.Ino, trace.DentryName
 			p := &pending{call, e, h.name, trace.Target.Ino, first}
 			if h.name == "inflight-file" {
-				if len(first.Extra) != 8 || binary.LittleEndian.Uint64(first.Extra) != p.ino {
+				if !cephfsCreated(first.Extra, p.ino) {
 					t.Fatal("unsafe create extra differs", first.Extra)
 				}
 				e.ExtraIno = p.ino

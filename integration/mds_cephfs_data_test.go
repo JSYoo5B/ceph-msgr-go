@@ -1227,7 +1227,7 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		first, trace := submit(t, "create "+name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpCreate, Flags: cephmsgr.MDSRequestFlagWantDentry,
 			Args: cephfsOpenArgs(cephOpenCreate|cephOpenExclusive|cephOpenReadWrite, 0o644, 0), Path: cephmsgr.MDSFilePath{Ino: dirIno, Path: name}})
 		st := trace.Target
-		if first.Result != 0 || st == nil || trace.DentryName != name || len(first.Extra) != 8 || binary.LittleEndian.Uint64(first.Extra) != st.Ino {
+		if first.Result != 0 || st == nil || trace.DentryName != name || !cephfsCreated(first.Extra, st.Ino) {
 			t.Fatalf("create %s differs: %d", name, first.Result)
 		}
 		agent.open(st.Ino, cephFileModeRDWR)

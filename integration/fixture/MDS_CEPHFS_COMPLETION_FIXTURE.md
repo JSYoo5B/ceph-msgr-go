@@ -70,9 +70,11 @@ complete OSD blocklist and requires an empty admin-socket `session ls`. It
 reads the daemon's baseline values of `ms_blackhole_client`,
 `mds_early_reply`, `mds_log_pause`, `debug_mds`, `debug_ms`,
 `mds_deny_all_reconnect`, `mds_reconnect_timeout`,
-`mds_session_blocklist_on_timeout` and `mds_session_blocklist_on_evict`,
+`mds_session_blocklist_on_timeout`, `mds_session_blocklist_on_evict`,
+`mds_client_delegate_inos_pct` and `mds_allow_async_dirops`,
 refuses anything but the defaults for the changed ones (a reconnect timeout
-above the planned 5 s, both blocklist options true), refuses an existing
+above the planned 5 s, both blocklist options true, delegation percentage 50
+and async directory operations true), refuses an existing
 central entry of any changed option and requires that the filesystem already
 allows snapshots. It then creates two identities, journaling each name before
 the provider call:
@@ -99,7 +101,7 @@ blocklist and daemon settings, the data pool ID and name and the plan:
 
 - directory `ceph-msgr-completion-<token>` under the filesystem root;
 - children `lease`, `replayed`, `lost-file`, `lost-dir`, `fenced`, `ro-file`,
-  `ro-dir`, `snap`, and grandchildren `lease/leased`, `snap/snap-file`;
+  `ro-dir`, `snap`, `deleg-plain`, `deleg-grant`, `deleg-held`, `deleg-prime`, `deleg-zero`, and grandchildren `lease/leased`, `snap/snap-file`;
 - snapshot `snap/.snap/completion-<token[:8]>`;
 - a 5000-byte binary payload for `fenced` (a SHA-256 chain starting from
   `ceph-msgr-cephfs-completion-fenced:<token>`);
@@ -129,18 +131,18 @@ seconds.
 
 | Action | Arguments | Native effect |
 | --- | --- | --- |
-| `observe` | GlobalID | read only: `session ls` (with the completed-request record of that GlobalID: `num_completed_requests`, each TID and created inode, requests in flight, reconnecting) and `osd blocklist ls`; records the address of an owned Go session |
+| `observe` | GlobalID | read only: `session ls` (with each session's `delegated_inos` and the completed-request record of that GlobalID: `num_completed_requests`, each TID and created inode, requests in flight, reconnecting) and `osd blocklist ls`; records the address of an owned Go session |
 | `ops-in-flight`, `historic-ops` | GlobalID | read only: `dump_ops_in_flight` or `dump_historic_ops`, reduced to client requests of an observed owned session (description, flag point, result, event names) |
 | `stat` | `dir`, a child, a grandchild or `snapshot` | read only: LibCephFS `statx` or ENOENT |
 | `list` | none | read only: `opendir`/`readdir` of the directory with `statx` per entry; only plan children are admitted, each once |
 | `write-fenced` | none | mutation, once: create `fenced` (`O_CREAT\|O_EXCL\|O_WRONLY`, 0644), write the payload, `fsync`, close, `statx` |
 | `snapshot-create`, `snapshot-remove` | none | mutation, once each: `mkdir`/`rmdir` of the planned snapshot; removal requires an applied creation |
-| `log-pause`, `early-reply-off`, `blackhole-on`, `debug-on` | none | runtime change through the admin socket (below) |
-| `log-resume`, `early-reply-on`, `blackhole-off`, `debug-off` | none | restore of that runtime change to the baseline |
+| `log-pause`, `early-reply-off`, `blackhole-on`, `debug-on`, `async-dirops-off` | none | runtime change through the admin socket (below) |
+| `log-resume`, `early-reply-on`, `blackhole-off`, `debug-off`, `async-dirops-on` | none | restore of that runtime change to the baseline |
 | `flush-journal` | none | admin socket `flush journal`; return code 0 required |
 | `force-readonly` | none | mutation, once: admin socket `force_readonly` |
 | `config-read` | none | read only: the closed option list through `config get` |
-| `deny-on`, `deny-off`, `window-on`, `window-off` | none | central override of the owned daemon's section (below) |
+| `deny-on`, `deny-off`, `window-on`, `window-off`, `deleg-zero-on`, `deleg-zero-off` | none | central override of the owned daemon's section (below) |
 | `evict` | GlobalID | mutation, once per GlobalID: admin socket `session evict id=<gid>` of an open or stale session of the Go identity whose address is not blocklisted; waits until the session is gone and the address blocklisted |
 | `mds-log-mark` | none | read only: records the current line count of the owned daemon's container log |
 | `mds-log` | GlobalID, address nonce | read only: log lines after the mark (below) |
@@ -170,7 +172,9 @@ reaches the central database, so a daemon restart discards it; firing a
 restart marks the armed incarnation's changes `discarded-by-restart`, and the
 test reads the new incarnation's values back. `log-pause` sets
 `mds_log_pause true`, `early-reply-off` sets `mds_early_reply false`,
-`blackhole-on` sets `ms_blackhole_client true`, and `debug-on` sets
+`blackhole-on` sets `ms_blackhole_client true`, `async-dirops-off` sets
+`mds_allow_async_dirops false` (the MDS then sends the bare inode in a
+created-inode reply extra), and `debug-on` sets
 `debug_mds 10/10` and `debug_ms 1/5`. `debug-caps-on` sets `debug_mds 15/15`
 and `debug_ms 1/5`; it changes the same options as `debug-on`, so only one of
 the two is in effect on an incarnation. A change of one kind is in effect at
@@ -183,13 +187,22 @@ respawned daemon.
 
 ### Central overrides
 
-`deny-on` sets `mds_deny_all_reconnect true` and `window-on` sets
-`mds_reconnect_timeout 5` in the section `mds.<owned daemon>` through the
+`deny-on` sets `mds_deny_all_reconnect true`, `window-on` sets
+`mds_reconnect_timeout 5` and `deleg-zero-on` sets
+`mds_client_delegate_inos_pct 0` in the section `mds.<owned daemon>` through the
 provider's `override.SetConfig`; they take effect in the next incarnation (the
 first is also a runtime option and must be reported by the running daemon).
+The delegation percentage is deliberately not a runtime change: the pinned
+`Server` reads it when it is constructed (`mds/Server.cc:287`) and the option
+is missing from `MDSRankDispatcher::get_tracked_keys`
+(`mds/MDSRank.cc:4050-4145`), so an
+admin socket `config set` is read back by `config get` and still never
+reaches the running daemon's percentage. A test that needs percentage zero
+applies the override before an owned restart and reads the option back from
+the new incarnation.
 Each kind is applied once, only one is unrestored at a time, and `-off`
 restores it through its handle, then requires the daemon to report the
-baseline for `mds_deny_all_reconnect` and no central entry of either option.
+baseline for `mds_deny_all_reconnect` and no central entry of any of them.
 
 ### Owned restarts
 

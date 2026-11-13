@@ -1,0 +1,27 @@
+{
+  "ceph_commit": "7f793731f1b39eb4f465e960113d2363c311b964",
+  "ceph_version": "20.2.4",
+  "image": "quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9",
+  "platform": "linux/amd64",
+  "generated": "2026-11-13",
+  "native_type": "openc_response_t",
+  "native_test_instances": 2,
+  "scope": "ceph-dencoder encoded each registered openc_response_t test instance (generate_test_instances) and a separate ceph-dencoder invocation decoded the exported file. Only the release codec ran; no daemon produced these bytes.",
+  "reader_container_removed": true,
+  "fixtures": {
+    "mds-openc-native-empty": {
+      "encode_argv": ["ceph-dencoder", "type", "openc_response_t", "select_test", "1", "encode", "export", "<scratch>/openc-1.bin"],
+      "decode_argv": ["ceph-dencoder", "type", "openc_response_t", "import", "<scratch>/openc-1.bin", "decode", "dump_json"],
+      "extra_bytes": 18,
+      "extra_sha256": "15cc20e68e73692f95f371dab7910dd335345a094df8130114300c42222772d3",
+      "native_dump": {"created_ino": 0, "delegated_inos": "[]"}
+    },
+    "mds-openc-native-range": {
+      "encode_argv": ["ceph-dencoder", "type", "openc_response_t", "select_test", "2", "encode", "export", "<scratch>/openc-2.bin"],
+      "decode_argv": ["ceph-dencoder", "type", "openc_response_t", "import", "<scratch>/openc-2.bin", "decode", "dump_json"],
+      "extra_bytes": 34,
+      "extra_sha256": "697295475a3854e8c85f8afa2e3539e5d7d60190cecb644e2d04d832d5e789b3",
+      "native_dump": {"created_ino": 1, "delegated_inos": "[0x1~0xa]"}
+    }
+  }
+}
