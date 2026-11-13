@@ -2,7 +2,6 @@ package integration_test
 
 import (
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -200,7 +199,7 @@ func runCephFSSplitReconnect(t *testing.T, held *splitHeldFlock) {
 		dirIno = tr.Target.Ino
 		for _, name := range names {
 			first, tr := submit(t, "split create "+name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpCreate, Flags: cephmsgr.MDSRequestFlagWantDentry, Args: cephfsOpenArgs(cephOpenCreate|cephOpenExclusive|cephOpenReadWrite, 0o644, 0), Path: cephmsgr.MDSFilePath{Ino: dirIno, Path: name}})
-			if tr.Target == nil || len(first.Extra) != 8 || binary.LittleEndian.Uint64(first.Extra) != tr.Target.Ino {
+			if tr.Target == nil || !cephfsCreated(first.Extra, tr.Target.Ino) {
 				t.Fatal("real create inode differs", name)
 			}
 			inodes[name] = tr.Target.Ino
