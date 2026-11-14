@@ -99,7 +99,7 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 			t.Run(api.name+"_"+ending, func(t *testing.T) {
 				subject := options
 				dial := subject.DialContext
-				var writes atomic.Int32
+				var ledger paddedWriteLedger
 				var connectionID atomic.Uint64
 				// Only a connection to a daemon that may carry this API's command
 				// can bind the gate.
@@ -110,7 +110,7 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 						return nil, err
 					}
 					_, peer, _ := testcluster.SplitPeer(endpoint)
-					return &commandWriteProbe{Conn: gate.wrap(conn, connectionID.Add(1), peer), writes: &writes}, nil
+					return ledger.wrap(gate.wrap(conn, connectionID.Add(1), peer)), nil
 				}
 				c, err := Dial(ctx, subject)
 				if err != nil {
@@ -122,8 +122,8 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 				if result, err := api.call(ctx, c, api.command(0)); err != nil || result.Code != 0 || !strings.Contains(string(result.Data), api.marker) {
 					t.Fatal("read-only control command", err, result.Code, len(result.Data))
 				}
-				if _, _, bound := gate.binding(); bound || writes.Load() != 0 {
-					t.Fatal("a write before the subject command reached the padded size", bound, writes.Load())
+				if _, _, bound := gate.binding(); bound || ledger.issued.Load() != 0 {
+					t.Fatal("a write before the subject command reached the padded size", bound, ledger.issued.Load())
 				}
 				call, stop := context.WithCancel(ctx)
 				defer stop()
@@ -151,8 +151,10 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 					}
 				}
 				connection, receiver, _ := gate.binding()
-				if count := awaitPaddedWrites(t, ctx, &writes, 1); count != 1 || !api.receiver(receiver) {
-					t.Fatal("the padded command was not written exactly once to its target", count, receiver)
+				// Complete: every byte of the one padded write was accepted
+				// without an error. A short or failed write does not count.
+				if awaitPaddedWrites(t, ctx, &ledger.complete, 1); !ledger.once() || !api.receiver(receiver) {
+					t.Fatal("the padded command was not written once and in full to its target", ledger.issued.Load(), ledger.complete.Load(), receiver)
 				}
 				select {
 				case got := <-finished:
@@ -211,8 +213,8 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 				}
 				// Nothing transmitted the padded command again, and the gate still
 				// holds only its connection.
-				if held, _, _ := gate.binding(); writes.Load() != 1 || held != connection {
-					t.Fatal("the padded command was written again or the gate was rebound", writes.Load(), held, connection)
+				if held, _, _ := gate.binding(); !ledger.once() || held != connection {
+					t.Fatal("a padded write was issued again or the gate was rebound", ledger.issued.Load(), ledger.complete.Load(), held, connection)
 				}
 			})
 		}
