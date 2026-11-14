@@ -33,6 +33,8 @@ mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell
 mon-mgr.aes256k.ip4.host.t-suite-e9be0b
 mon-mgr.aes.ip4.crc.host.t-senttellcancellation
 mon-mgr.aes256k.ip4.host.t-senttellcancellation
+mon-mgr.aes.ip4.crc.host.t-suite-afb7b2
+mon-mgr.aes256k.ip4.host.t-suite-afb7b2
 osd.aes256k.ip4.host
 osd.aes.ip4
 osd.aes256k.ip4.crc.host
@@ -109,6 +111,8 @@ osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16
 osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16
+osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0
+osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0
 osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill
 osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill
 mgr-service.aes256k.ip4.container.managers-0.t-mgrservicecoldbootstrap
