@@ -592,4 +592,110 @@ func TestCephMDSCommandsIntegration(t *testing.T) {
 			t.Fatal("command lifecycle changed native session scope or routed to OSD")
 		}
 	})
+	if t.Failed() {
+		return
+	}
+	// Last, because the fixture's only MDS is stopped and stays stopped. A
+	// command to it has one of two classifications, decided only by whether
+	// the client's session had already recorded the end of its connection.
+	// One session is put on each side on purpose; neither is awaited by time.
+	t.Run("stopped_daemon_is_known_unsent_after_the_session_ended_and_unknown_before", func(t *testing.T) {
+		open := func(configure func(*cephmsgr.Options)) (*commandHold, *cephmsgr.MDSConnection) {
+			t.Helper()
+			hold := newCommandHold(4096, daemonEndpoint(target.Address))
+			// No relay endpoint: the hold is the only wrapper of the MDS
+			// connection.
+			client, _ := mdsCommandClient(t, ctx, scope.Identity, os.Getenv("CEPH_MSGR_MDS_COMMANDS_KEY_FILE"), "", true, func(options *cephmsgr.Options) {
+				options.DialContext = hold.dialer(options.DialContext)
+				configure(options)
+			})
+			handle, err := client.OpenMDS(ctx, target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r, e := handle.Command(ctx, version); e != nil || r.Code != 0 || len(r.Data) == 0 {
+				t.Fatal("command before the stop", e)
+			}
+			if dials, large, _ := hold.counts(); dials != 1 || large != 0 {
+				t.Fatal("the MDS connection was not observed, or a write before the stop reached the padded size", dials, large)
+			}
+			return hold, handle
+		}
+		// ended: a prompt keepalive bounds the wait should the stop not end
+		// the connection by itself. unaware: the helper's keepalive of an
+		// hour never probes, and everything the client would receive is
+		// parked from before the stop, the end of the peer included.
+		endedHold, ended := open(func(options *cephmsgr.Options) {
+			options.KeepaliveInterval, options.KeepaliveTimeout = time.Second, 3*time.Second
+		})
+		unawareHold, unaware := open(func(*cephmsgr.Options) {})
+		unawareHold.holdNow()
+		if err := testcluster.ControlDaemon(ctx, dir, "stop", "mds", fresh.MDS.Name); err != nil {
+			t.Fatal("stop the owned MDS", err)
+		}
+		for name, done := range map[string]<-chan struct{}{"handle": ended.Done(), "connection": endedHold.closed} {
+			select {
+			case <-done:
+			case <-ctx.Done():
+				t.Fatal("the "+name+" of the stopped MDS never ended", ctx.Err())
+			}
+		}
+		for round := 0; round < 2; round++ {
+			r, e := ended.Command(ctx, version)
+			if !knownUnsent(r.Result, e) || errors.Is(e, cephmsgr.ErrClosed) || r.Submission != (cephmsgr.MDSCommandSubmission{}) {
+				t.Fatalf("a command after its session had ended was not a known-unsent refusal: %+v %v", r.Submission, e)
+			}
+			if round == 0 {
+				t.Log("command on the ended session of the stopped MDS: known unsent:", e)
+				cases = append(cases, mdsCommandCase{Name: "stopped-daemon-ended-session", Command: version, Result: r, Error: e.Error()})
+			}
+		}
+		type outcome struct {
+			result cephmsgr.MDSCommandResult
+			err    error
+		}
+		padded := cephmsgr.Command{JSON: append(append([]byte(nil), version.JSON...), strings.Repeat(" ", 40<<10)...)}
+		finished := make(chan outcome, 1)
+		go func() {
+			r, e := unaware.Command(ctx, padded)
+			finished <- outcome{r, e}
+		}()
+		// The padded command's local write returned, with or without an
+		// error. Only then may the session learn that its peer is gone.
+		var got *outcome
+		select {
+		case <-unawareHold.wrote:
+		case early := <-finished:
+			got = &early
+		case <-ctx.Done():
+			t.Fatal("the command to the stopped MDS was never written", ctx.Err())
+		}
+		unawareHold.releaseHeld()
+		if got == nil {
+			select {
+			case late := <-finished:
+				got = &late
+			case <-ctx.Done():
+				t.Fatal("the command to the stopped MDS never ended", ctx.Err())
+			}
+		}
+		submission := got.result.Submission
+		if _, large, _ := unawareHold.counts(); !unknownOutcome(got.result.Result, got.err) || errors.Is(got.err, cephmsgr.ErrClosed) ||
+			submission.Transaction == 0 || submission.Target != target || large != 1 {
+			t.Fatalf("a command admitted on a session unaware of the stop was not an unknown outcome with its transaction: %+v %v", submission, got.err)
+		}
+		t.Logf("command on the unaware session of the stopped MDS: unknown outcome, transaction %d: %v", submission.Transaction, got.err)
+		cases = append(cases, mdsCommandCase{Name: "stopped-daemon-unaware-session-padded-version", Command: version, Result: got.result, Error: got.err.Error()})
+		// Neither handle recovers by itself or dials again.
+		for _, handle := range []*cephmsgr.MDSConnection{ended, unaware} {
+			if r, e := handle.Command(ctx, version); !knownUnsent(r.Result, e) || r.Submission != (cephmsgr.MDSCommandSubmission{}) {
+				t.Fatalf("a failed MDS handle was not refused: %+v %v", r.Submission, e)
+			}
+		}
+		for _, hold := range []*commandHold{endedHold, unawareHold} {
+			if dials, _, _ := hold.counts(); dials != 1 {
+				t.Fatal("a failed MDS handle dialed again", dials)
+			}
+		}
+	})
 }
