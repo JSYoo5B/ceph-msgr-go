@@ -401,6 +401,31 @@
    }
   },
   {
+   "id": "mon-mgr.aes.ip4.crc.host.t-senttellcancellation",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephSentTellCancellationIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.host.t-senttellcancellation",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephSentTellCancellationIntegration$"
+   }
+  },
+  {
    "id": "osd.aes256k.ip4.host",
    "group": "osd",
    "params": {
@@ -908,6 +933,24 @@
     "runtime": "host",
     "osd": "1",
     "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "mds_fresh": "1",
+    "mds_commands": "1",
+    "test_run": "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
+   }
+  },
+  {
+   "id": "mds-commands.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand",
+   "group": "mds-commands",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "memstore",
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "mds_fresh": "1",
@@ -1614,6 +1657,22 @@
     "family": "4",
     "stress": "",
     "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
     "osd": "1",
     "osd_store": "bluestore",
     "osd_replicas": "1",

@@ -302,8 +302,11 @@ connection wrapper that earlier lost-reply tests already use
   margin. After the native overwrite the caller is checked to be still
   pending.
 - **Transmission count.** Exactly one write of at least 4096 bytes across
-  every subject connection, before and after the recovery read. The recovery
-  read must have used a later connection to the same manager.
+  every subject connection, before and after the recovery read. The same
+  manager must have been dialed again after the held connection, and the
+  receipt lists every such dial (`later_dials_to_receiver`). A dial is
+  recorded when it succeeds, before any handshake or command, so the list
+  does not say which of them carried the recovery read.
 
 What the secure mode does not establish: the transaction and sequence of A,
 that the withheld bytes contain a reply to A (they can be an acknowledgement

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,13 +65,26 @@ func goDaemonCommandValue(t *testing.T, ctx context.Context, cell daemonCommandC
 	return value
 }
 
-// appliedDaemonCommandIsNotReplayed runs one cell. The reply to A's own
-// transaction is decoded and held, so A is read once on the daemon's own admin
-// socket while the Go caller is still pending; a native overwrite B then makes
-// any replay of A visible; only the subject connection ends and the caller
-// keeps its unknown outcome. The daemon process is the same incarnation
-// throughout. Command schemas stay in test files.
+// appliedDaemonCommandIsNotReplayed runs one cell in either connection mode.
+// A is observed on the daemon's own admin socket while the Go caller is still
+// pending; a native overwrite B then makes any replay of A visible; only the
+// subject connection ends and the caller keeps its unknown outcome. The daemon
+// process is the same incarnation throughout. Command schemas stay in test
+// files.
+//
+// CRC: the reply to A's own transaction is decoded and held, so the applied
+// state is read once behind that barrier and every local write is identified
+// by connection, transaction and sequence.
+//
+// Secure: frames cannot be decoded. Every byte received on the daemon
+// connection that carried the one padded write is withheld from before that
+// write leaves, so no reply to it can reach the caller; the applied state is
+// awaited natively, bytes are then required to have arrived and been withheld
+// on that connection, and the caller is checked to be still pending. Local
+// transmission is counted by padded writes only: no write, transaction or
+// reply frame is identified in this mode.
 func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell daemonCommandCell) {
+	decoded := cell.options.ConnectionMode == CRCMode
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	role := cell.target.daemon()
 	var nonce [16]byte
@@ -152,8 +166,11 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 	var writes atomic.Int32
 	var connectionID atomic.Uint64
 	probe := &monOutcomeWrites{}
-	probe.enabled.Store(true)
+	probe.enabled.Store(decoded)
 	gate := newTellReplyGate()
+	padded := newPaddedReplyGate(4096, func(peer string) bool { return peer == role })
+	var peersMu sync.Mutex
+	peers := map[uint64]string{}
 	// Every subject connection, including later dials, is observed and gated.
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 		conn, err := dial(ctx, network, endpoint)
@@ -165,7 +182,15 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 			peer = role
 		}
 		id := connectionID.Add(1)
-		gated := newTellReplyGateConn(conn, gate, id)
+		peersMu.Lock()
+		peers[id] = peer
+		peersMu.Unlock()
+		var gated net.Conn
+		if decoded {
+			gated = newTellReplyGateConn(conn, gate, id)
+		} else {
+			gated = padded.wrap(conn, id, peer)
+		}
 		return &commandWriteProbe{Conn: &monOutcomeConn{Conn: gated, record: probe, connection: id, peer: peer}, writes: &writes}, nil
 	}
 	c, err := Dial(ctx, options)
@@ -181,23 +206,30 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 	c.mu.Lock()
 	fsid := c.fsid
 	c.mu.Unlock()
-	identity := daemonCommandOutcomeIdentity{API: cell.api, Target: cell.target, ClientGlobalID: c.snapshotAuth().GlobalID,
+	identity := daemonCommandOutcomeIdentity{API: cell.api, FramesDecoded: decoded, Target: cell.target, ClientGlobalID: c.snapshotAuth().GlobalID,
 		Incarnation: daemon.incarnation, Address: daemon.address, Baseline: baseline.value, OverridePresent: baseline.override != nil}
 	commandA := cell.mutation(a)
 	frontA := msgr.TellCommand(fsid, []string{string(commandA.JSON)}, nil).Front
 	readFront := msgr.TellCommand(fsid, []string{string(cell.read.JSON)}, nil).Front
-	gate.arm(frontA, nil)
+	if decoded {
+		gate.arm(frontA, nil)
+	}
 	// Near-miss control: a read-only command on the same connection passes the
-	// armed gate with its own transaction.
+	// armed gate before A.
 	if got := goDaemonCommandValue(t, ctx, cell, handle); got != baseline.value {
 		t.Fatal("the subject client read another baseline", got, baseline.value)
 	}
-	nearMiss := awaitMonOutcomeWrite(t, ctx, probe, readFront, nil)
-	if _, _, _, bound := gate.binding(); bound || nearMiss.Type != msgr.TellCommandMessage || nearMiss.Peer != role || writes.Load() != 0 {
-		t.Fatal("the read-only command bound the gate, missed the target daemon or reached the padded size", bound, nearMiss.Type, nearMiss.Peer, writes.Load())
+	var nearMiss monOutcomeWrite
+	if decoded {
+		nearMiss = awaitMonOutcomeWrite(t, ctx, probe, readFront, nil)
+		if _, _, _, bound := gate.binding(); bound || nearMiss.Type != msgr.TellCommandMessage || nearMiss.Peer != role || writes.Load() != 0 {
+			t.Fatal("the read-only command bound the gate, missed the target daemon or reached the padded size", bound, nearMiss.Type, nearMiss.Peer, writes.Load())
+		}
+		identity.NearMiss = &nearMiss
+		t.Logf("control before A: read-only command passed the armed gate on connection=%d tid=%d sequence=%d", nearMiss.Connection, nearMiss.Transaction, nearMiss.Sequence)
+	} else if _, _, bound := padded.binding(); bound || writes.Load() != 0 {
+		t.Fatal("a write before A reached the padded size, so padded writes cannot identify A", bound, writes.Load())
 	}
-	identity.NearMiss = &nearMiss
-	t.Logf("control before A: read-only command passed the armed gate on connection=%d tid=%d sequence=%d", nearMiss.Connection, nearMiss.Transaction, nearMiss.Sequence)
 
 	var originalResult Result
 	var originalTransaction uint64
@@ -207,43 +239,84 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 		originalResult, originalTransaction, err = handle.command(ctx, commandA)
 		finished <- err
 	}()
-	// Barrier: the daemon's reply to A's own transaction is decoded and held
-	// before any byte of it reaches the Go session.
-	select {
-	case <-gate.held:
-	case err := <-finished:
-		t.Fatal("applied command finished without a withheld reply", err)
-	case <-ctx.Done():
-		t.Fatal("the reply to the applied command was never withheld", ctx.Err())
+	var submitted monOutcomeWrite
+	var held tellHeldReply
+	var heldConnection uint64
+	if decoded {
+		// Barrier: the daemon's reply to A's own transaction is decoded and
+		// held before any byte of it reaches the Go session.
+		select {
+		case <-gate.held:
+		case err := <-finished:
+			t.Fatal("applied command finished without a withheld reply", err)
+		case <-ctx.Done():
+			t.Fatal("the reply to the applied command was never withheld", ctx.Err())
+		}
+		if held, err = gate.heldReply(); err != nil {
+			t.Fatal("the reply gate could not decode a subject stream", err)
+		}
+		// The held reply does not order A's local write completion: its
+		// record is published by the writer after the write returned.
+		submitted = awaitMonOutcomeWrite(t, ctx, probe, frontA, nil)
+		connection, transaction, sequence, _ := gate.binding()
+		if submitted.Type != msgr.TellCommandMessage || submitted.Peer != role || submitted.Connection != connection ||
+			submitted.Transaction != transaction || submitted.Sequence != sequence {
+			t.Fatal("original CRC command is not the bound command frame to the target daemon", submitted, connection, transaction, sequence)
+		}
+		if submitted.Connection != nearMiss.Connection || submitted.Transaction == nearMiss.Transaction {
+			t.Fatal("A did not use the same daemon connection with its own transaction", submitted, nearMiss)
+		}
+		if held.Type != msgr.TellCommandReplyMessage || held.Connection != submitted.Connection || held.Transaction != submitted.Transaction {
+			t.Fatal("the withheld frame is not the command reply to A's transaction", held, submitted)
+		}
+		heldConnection = submitted.Connection
+		identity.Submitted, identity.WithheldReply, identity.MatchingWrites = &submitted, &held, 1
+	} else {
+		// The padded write is issued: from before it left, every byte received
+		// on its connection is withheld.
+		select {
+		case <-padded.armed:
+		case err := <-finished:
+			t.Fatal("applied command finished without a padded write", err)
+		case <-ctx.Done():
+			t.Fatal("the padded command was never written", ctx.Err())
+		}
+		var receiver string
+		if heldConnection, receiver, _ = padded.binding(); receiver != role {
+			t.Fatalf("A was written to %q, not to the target daemon %s", receiver, role)
+		}
 	}
-	held, err := gate.heldReply()
-	if err != nil {
-		t.Fatal("the reply gate could not decode a subject stream", err)
-	}
-	// The held reply does not order A's local write completion: its record
-	// is published by the writer after the write returned.
-	submitted := awaitMonOutcomeWrite(t, ctx, probe, frontA, nil)
-	connection, transaction, sequence, _ := gate.binding()
-	if submitted.Type != msgr.TellCommandMessage || submitted.Peer != role || submitted.Connection != connection ||
-		submitted.Transaction != transaction || submitted.Sequence != sequence {
-		t.Fatal("original CRC command is not the bound command frame to the target daemon", submitted, connection, transaction, sequence)
-	}
-	if submitted.Connection != nearMiss.Connection || submitted.Transaction == nearMiss.Transaction {
-		t.Fatal("A did not use the same daemon connection with its own transaction", submitted, nearMiss)
-	}
-	if held.Type != msgr.TellCommandReplyMessage || held.Connection != submitted.Connection || held.Transaction != submitted.Transaction {
-		t.Fatal("the withheld frame is not the command reply to A's transaction", held, submitted)
+	identity.HeldConnection = heldConnection
+	var applied nativeDaemonCommandReceipt
+	if decoded {
+		// A is established on the target daemon's own admin socket while its
+		// reply is still withheld.
+		applied = requireNativeDaemonCommand(t, ctx, control, token, "applied", cell.target, daemon, a)
+	} else {
+		applied = awaitNativeDaemonCommand(t, ctx, control, token, "applied", cell.target, daemon, a, baseline, finished)
+		// The daemon sent something after the padded write and none of it
+		// reached the session. The bytes are not attributed to a reply.
+		select {
+		case <-padded.received:
+			identity.WithheldBytes = true
+		case err := <-finished:
+			t.Fatal("the original caller ended before any received byte was withheld", err)
+		case <-ctx.Done():
+			t.Fatal("no byte was received and withheld on the padded write's connection", ctx.Err())
+		}
 	}
 	if count := awaitPaddedWrites(t, ctx, &writes, 1); count != 1 {
 		t.Fatal("initial mutation was not written exactly once", count)
 	}
-	identity.Submitted, identity.WithheldReply, identity.MatchingWrites, identity.PaddedWrites = &submitted, &held, 1, writes.Load()
+	identity.PaddedWrites = writes.Load()
 	writeDaemonCommandOutcomeIdentity(t, control, identity)
-	t.Logf("original CRC command submission: api=%s peer=%s connection=%d client_global_id=%d tid=%d sequence=%d complete_local_write=true; withheld reply type=%d tid=%d sequence=%d frame_bytes=%d",
-		cell.api, submitted.Peer, submitted.Connection, identity.ClientGlobalID, submitted.Transaction, submitted.Sequence, held.Type, held.Transaction, held.Sequence, held.FrameBytes)
-	// A is established on the target daemon's own admin socket while its reply
-	// is still withheld.
-	applied := requireNativeDaemonCommand(t, ctx, control, token, "applied", cell.target, daemon, a)
+	if decoded {
+		t.Logf("original CRC command submission: api=%s peer=%s connection=%d client_global_id=%d tid=%d sequence=%d complete_local_write=true; withheld reply type=%d tid=%d sequence=%d frame_bytes=%d",
+			cell.api, submitted.Peer, submitted.Connection, identity.ClientGlobalID, submitted.Transaction, submitted.Sequence, held.Type, held.Transaction, held.Sequence, held.FrameBytes)
+	} else {
+		t.Logf("original secure command submission: api=%s peer=%s connection=%d client_global_id=%d padded_local_writes=1; every received byte withheld from before the write, and bytes were withheld; no transaction or reply attribution",
+			cell.api, role, heldConnection, identity.ClientGlobalID)
+	}
 	t.Log(nativeDaemonCommandSummary(applied))
 	// One native overwrite establishes distinct B. A replay of A would
 	// overwrite it.
@@ -261,7 +334,11 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 		t.Fatal("more than one local padded write before the subject connection ended", writes.Load())
 	}
 	// End only the subject connection. The daemon process stays up.
-	if err := gate.closeHeld(); err != nil {
+	closeHeld := gate.closeHeld
+	if !decoded {
+		closeHeld = padded.closeHeld
+	}
+	if err := closeHeld(); err != nil {
 		t.Fatal("close the subject connection", err)
 	}
 	select {
@@ -274,8 +351,9 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 			t.Fatal("unanswered command unexpectedly gained an acknowledged server result", originalResult)
 		}
 		// The caller's retained submission names the transaction that was
-		// actually written.
-		if originalTransaction != submitted.Transaction {
+		// actually written. Without decoded frames it can only be required to
+		// exist: it is not compared with any frame.
+		if decoded && originalTransaction != submitted.Transaction || originalTransaction == 0 {
 			t.Fatal("the caller's retained submission is not the written transaction", originalTransaction, submitted.Transaction)
 		}
 		identity.OutcomeUnknown, identity.CallerTransaction = true, originalTransaction
@@ -301,28 +379,48 @@ func appliedDaemonCommandIsNotReplayed(t *testing.T, ctx context.Context, cell d
 	}
 	recovered := requireNativeDaemonCommand(t, ctx, control, token, "recovered", cell.target, daemon, b)
 	t.Log(nativeDaemonCommandSummary(recovered))
-	// Across every subject connection there is still exactly one A, with its
-	// original binding, and the recovery read used another connection.
-	if again := requireMonOutcomeWrite(t, probe, frontA, nil); again != submitted || writes.Load() != 1 {
-		t.Fatal("original command identity changed or A was written again", again, submitted, writes.Load())
+	if writes.Load() != 1 {
+		t.Fatal("A was written again", writes.Load())
 	}
-	// The recovery read has the near-miss's content, and its reply does not
-	// order its own local write completion either: wait for the second
-	// record, then require exactly two.
-	reads := awaitMonOutcomeWrites(t, ctx, probe, readFront, nil, 2)
-	if len(reads) != 2 || reads[0] != nearMiss {
-		t.Fatal("expected the near-miss read and one recovery read from the subject client", reads)
+	if decoded {
+		// Across every subject connection there is still exactly one A, with
+		// its original binding, and the recovery read used another connection.
+		if again := requireMonOutcomeWrite(t, probe, frontA, nil); again != submitted {
+			t.Fatal("original command identity changed or A was written again", again, submitted)
+		}
+		// The recovery read has the near-miss's content, and its reply does
+		// not order its own local write completion either: wait for the
+		// second record, then require exactly two.
+		reads := awaitMonOutcomeWrites(t, ctx, probe, readFront, nil, 2)
+		if len(reads) != 2 || reads[0] != nearMiss {
+			t.Fatal("expected the near-miss read and one recovery read from the subject client", reads)
+		}
+		observed := reads[1]
+		if observed.Type != msgr.TellCommandMessage || observed.Peer != role || observed.Connection == submitted.Connection || !observed.Complete {
+			t.Fatal("fresh read did not use another connection to the target daemon", observed, submitted)
+		}
+		if now, err := gate.heldReply(); err != nil || now != held {
+			t.Fatal("the gate withheld another frame or lost a subject stream", now, held, err)
+		}
+		identity.Recovery, identity.RecoveryConnection = &observed, observed.Connection
+		t.Logf("fresh CRC command read: peer=%s connection=%d tid=%d sequence=%d; original local mutation writes=1", observed.Peer, observed.Connection, observed.Transaction, observed.Sequence)
+	} else {
+		// The recovery read cannot have used the withheld connection, so the
+		// target daemon was dialed again, and the gate still holds only the
+		// connection of the one padded write. A dial is recorded when it
+		// succeeds, before any handshake or command: which of the later
+		// dials carried the read is not known here and not claimed.
+		peersMu.Lock()
+		later := laterDials(peers, role, heldConnection)
+		peersMu.Unlock()
+		if connection, peer, _ := padded.binding(); len(later) == 0 || connection != heldConnection || peer != role {
+			t.Fatal("the target daemon was not dialed again for the fresh read, or the gate was rebound", later, connection, peer)
+		}
+		identity.LaterDials = later
+		t.Logf("fresh secure command read: peer=%s later dials=%v; padded local writes=1; the read's connection and transaction are not identified", role, later)
 	}
-	observed := reads[1]
-	if observed.Type != msgr.TellCommandMessage || observed.Peer != role || observed.Connection == submitted.Connection || !observed.Complete {
-		t.Fatal("fresh read did not use another connection to the target daemon", observed, submitted)
-	}
-	if now, err := gate.heldReply(); err != nil || now != held {
-		t.Fatal("the gate withheld another frame or lost a subject stream", now, held, err)
-	}
-	identity.Recovery, identity.PaddedWrites = &observed, writes.Load()
+	identity.PaddedWrites = writes.Load()
 	writeDaemonCommandOutcomeIdentity(t, control, identity)
-	t.Logf("fresh CRC command read: peer=%s connection=%d tid=%d sequence=%d; original local mutation writes=1", observed.Peer, observed.Connection, observed.Transaction, observed.Sequence)
 	t.Logf("%s to %s (incarnation %d) applied state %d; native overwrite %d confirmed on the same daemon; fresh Go and native reads kept %d; padded local writes=%d (not a server execution count)",
 		cell.api, role, daemon.incarnation, a.value, b.value, b.value, writes.Load())
 }
@@ -346,9 +444,6 @@ func osdCommandOutcomeFixture(t *testing.T) (osdCommandFixture, context.Context)
 		t.Skip("requires the opt-in disposable legacy-v6 OSD fixture")
 	}
 	options := integrationOptions(t)
-	if options.ConnectionMode != CRCMode {
-		t.Skip("the transaction-specific command reply gate decodes uncompressed CRC frames; this cell establishes no secure-mode attribution")
-	}
 	options.EnableOSD = true
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
@@ -499,9 +594,6 @@ func TestCephAppliedMDSCommandIsNotReplayedIntegration(t *testing.T) {
 		t.Skip("set CEPH_MSGR_TEST_MDS_COMMANDS=1 for the owned raw MDS command fixture")
 	}
 	options := integrationOptions(t)
-	if options.ConnectionMode != CRCMode {
-		t.Skip("the transaction-specific command reply gate decodes uncompressed CRC frames; this cell establishes no secure-mode attribution")
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	t.Cleanup(cancel)
 	var scope struct {

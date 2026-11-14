@@ -422,21 +422,19 @@ func appliedManagerTellIsNotReplayed(t *testing.T, current bool) {
 		identity.Recovery = &observed
 		t.Logf("fresh CRC Tell read: peer=%s connection=%d tid=%d sequence=%d; original local mutation writes=1", observed.Peer, observed.Connection, observed.Transaction, observed.Sequence)
 	} else {
-		// The recovery read needed a later connection to the same manager, and
-		// the gate still holds only the connection of the one padded write.
-		later := uint64(0)
+		// The recovery read cannot have used the withheld connection, so the
+		// same manager was dialed again, and the gate still holds only the
+		// connection of the one padded write. A dial is recorded when it
+		// succeeds, before any handshake or command: which of the later
+		// dials carried the read is not known here and not claimed.
 		peersMu.Lock()
-		for id, peer := range peers {
-			if peer == receiver && id > heldConnection {
-				later = max(later, id)
-			}
-		}
+		later := laterDials(peers, receiver, heldConnection)
 		peersMu.Unlock()
-		if connection, peer, _ := padded.binding(); later == 0 || connection != heldConnection || peer != receiver {
-			t.Fatal("fresh read used no later connection to the same manager, or the gate was rebound", later, connection, peer)
+		if connection, peer, _ := padded.binding(); len(later) == 0 || connection != heldConnection || peer != receiver {
+			t.Fatal("the same manager was not dialed again for the fresh read, or the gate was rebound", later, connection, peer)
 		}
-		identity.RecoveryConnection = later
-		t.Logf("fresh secure Tell read: peer=%s connection=%d; padded local writes=1; CRC transaction receipt is unavailable", receiver, later)
+		identity.LaterDials = later
+		t.Logf("fresh secure Tell read: peer=%s later dials=%v; padded local writes=1; the read's connection and transaction are not identified", receiver, later)
 	}
 	identity.RecoveryGlobalID, identity.PaddedWrites = c.snapshotAuth().GlobalID, writes.Load()
 	writeIdentity()

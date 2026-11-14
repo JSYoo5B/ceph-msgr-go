@@ -6,7 +6,9 @@ This is a bounded implementation checkpoint of #63, after the
 [current MON Tell](MON_CURRENT_TELL_OUTCOME_VALIDATION.md) and
 [MGR Tell](MGR_TELL_OUTCOME_VALIDATION.md) cells. It covers one applied
 command with a withheld reply on each explicitly targeted daemon channel:
-`OSDConnection.Command`, `OSDConnection.PGCommand` and `MDSConnection.Command`.
+`OSDConnection.Command`, `OSDConnection.PGCommand` and `MDSConnection.Command`,
+each in CRC mode and, since 2026-11-14, in a [secure mode](#secure-mode)
+without decoded frames.
 The product API and replay behavior are unchanged; see the
 [OSD and PG command contract](OSD_COMMAND_VALIDATION.md) and the
 [MDS command contract](../../cephmsgr/MDS_COMMAND_CONTRACT.md).
@@ -95,17 +97,19 @@ applied and independently observable PG-routed command exists at this tag.
 
 Tests, all in the `cephmsgr` suite without an opt-in parameter of their own:
 
-| Test | API | Required row |
-| --- | --- | --- |
-| `TestCephAppliedOSDCommandIsNotReplayedIntegration` | `OSDConnection.Command` | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16` |
-| `TestCephAppliedPGCommandIsNotReplayedIntegration` | `OSDConnection.PGCommand` | the same row |
-| `TestCephAppliedMDSCommandIsNotReplayedIntegration` | `MDSConnection.Command` | `mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand` |
+| Test | API | Required CRC row | Required secure row |
+| --- | --- | --- | --- |
+| `TestCephAppliedOSDCommandIsNotReplayedIntegration` | `OSDConnection.Command` | `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16` | `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16` |
+| `TestCephAppliedPGCommandIsNotReplayedIntegration` | `OSDConnection.PGCommand` | the same row | the same row |
+| `TestCephAppliedMDSCommandIsNotReplayedIntegration` | `MDSConnection.Command` | `mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand` | `mds-commands.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand` |
 
 The OSD and PG cells need `CEPH_MSGR_TEST_OSD=1` with the legacy-v6 profile;
 the broad OSD selection does not match their names, so only an explicit
 selector runs them. The MDS cell needs `CEPH_MSGR_TEST_MDS_COMMANDS=1`, whose
-fixture admits exactly this one further selector. All three decode CRC frames
-and skip in secure mode. Reproduce with:
+fixture admits exactly this one further selector. With
+`CEPH_MSGR_TEST_CONNECTION_MODE=crc` the cells decode frames; in the default
+secure mode they run their [secure mode](#secure-mode). Reproduce the CRC
+OSD and PG row with:
 
 ```sh
 CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes \
@@ -119,7 +123,10 @@ sh integration/run.sh
 
 For the MDS cell add `CEPH_MSGR_TEST_MDS_FRESH=1` and
 `CEPH_MSGR_TEST_MDS_COMMANDS=1` and select
-`^TestCephAppliedMDSCommandIsNotReplayedIntegration$`.
+`^TestCephAppliedMDSCommandIsNotReplayedIntegration$`. The secure rows use the
+profile of the existing secure rows of each fixture: AES256K client and
+service keys, IPv6, the test process in a container, no connection-mode
+parameter, BlueStore for the OSD and PG row and MemStore for the MDS row.
 
 ### Targets
 
@@ -204,6 +211,7 @@ bracketed by the map reads as before.
 
 ### Reply gate and sequence
 
+This is the CRC mode; the [secure mode](#secure-mode) lists its substitutions.
 The reply gate is the transaction-specific gate of the
 [MGR Tell cell](MGR_TELL_OUTCOME_VALIDATION.md#reply-gate), installed on every
 connection the subject client dials. OSD, PG and MDS commands are the same
@@ -244,8 +252,65 @@ is taken once, and no assertion depends on a wall-clock margin.
    must show the baseline. A failed or unreturned restoration is reported and
    never repeated.
 
+## Secure mode
+
+Secure frames cannot be decoded by a connection wrapper, so neither the
+written command nor a reply frame can be identified. The cells keep the same
+targets, native observer, overwrite, recovery reads and restoration, with the
+substitutions of the [MGR Tell cells](MGR_TELL_OUTCOME_VALIDATION.md#secure-mode)
+and one further requirement:
+
+- **Gate.** A is padded to more than 40 KiB. On the first write of at least
+  4096 bytes to the target daemon's endpoint, the gate binds to that
+  connection before the bytes leave and from then on withholds every byte
+  received on it. No reply to that write can reach the session. Before A, the
+  read-only command is answered on the same client and the test requires that
+  no write of that size has happened on any subject connection, so the padded
+  write is A.
+- **Barrier.** The binding shows that the padded write was issued, not that
+  the daemon replied. The applied state is therefore awaited: the `applied`
+  observation is repeated until it shows A. For the option cells an
+  observation is two admin-socket calls, so only a value and an override that
+  each belong to the baseline or to A are read again; the PG flag has only its
+  unset and set state. Any other state, an unreadable or unbracketed read, or
+  the end of the original caller fails at once. The wait ends on the state
+  itself, bounded by the test context.
+- **Withheld bytes.** After A is observed, bytes must have arrived on the
+  bound connection and been withheld. This shows that the daemon sent
+  something after the padded write that the session never received. It does
+  not show what: the bytes are not decoded.
+- **Caller.** After the native overwrite the caller is checked to be still
+  pending. When the connection is closed it must return
+  `OutcomeUnknownError` with an empty result. Its retained submission
+  transaction must be nonzero; it is compared with no frame.
+- **Transmission count.** Exactly one write of at least 4096 bytes across
+  every subject connection, before and after the recovery read. The same
+  daemon endpoint must have been dialed again after the held connection, and
+  the gate must still hold only the first one. The receipt lists every such
+  dial (`later_dials_to_target`). A dial is recorded when it succeeds, before
+  any handshake or command, so the list does not say which of them carried
+  the recovery read; `recovery_connection` is written in CRC mode only,
+  from the decoded read.
+
+What the secure mode does not establish: the transaction and sequence of A on
+the wire, that the withheld bytes contain the reply to A (they can be an
+acknowledgement or any other frame), or the identity of any frame. The applied
+native state shows that the daemon executed A; the withheld stream shows that
+the caller could not have been told. Frame-level attribution in secure mode
+would need instrumentation inside the session, after decryption, which no
+test has.
+
 ## Daemon-free checks
 
+- `TestNativeDaemonCommandBetweenAdmitsOnlyTheChangeFromPreviousToWanted`
+  (`cephmsgr/daemon_command_outcome_receipt_test.go`): the secure mode's wait
+  reads again only the previous state, the wanted state and the two torn
+  option reads; a lost application that only adds an override of the baseline
+  value, a third value or override, another incarnation, nonce or target, a
+  failed read and a PG reply without a scrubber section or of another PG are
+  refused; a torn read never ends the wait.
+- `TestPaddedReplyGateWithholdsEveryByteAfterTheFirstPaddedWrite`
+  (`cephmsgr/tell_reply_gate_test.go`): the gate of the secure mode.
 - `cephmsgr/daemon_command_outcome_receipt_test.go`: open requests are rejected
   before anything is published; a receipt matches only the wanted state on the
   target under one unchanged up incarnation and address, and not for another
@@ -367,22 +432,75 @@ itself was exercised with the fake backend only: no native run replaced a
 daemon between phases. The temporary changes above were not repeated on that
 commit.
 
+### Secure mode (2026-11-14)
+
+Direct native execution, not hosted CI: Linux amd64 host, Docker 29.9.1, the
+image above, on source commit `df89356b87ddc6093fdcb2d4dd8557898ad7d19d`,
+uploaded as an archive of that commit. It holds the tests and the catalog
+rows; the commits after it in the same pull request change documentation
+only. Each run used the environment that the native workflow passes for its
+catalog row and the same result gate. One `go test` process ran on the engine
+at a time. Every row passed on its first run on that commit; the two secure
+rows had also passed their first run on the uncommitted change.
+
+| Row | Gate | Tests | Fixture run |
+| --- | --- | --- | --- |
+| `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16` (new, secure) | expected both client tests, observed both `PASS`, no problems | OSD 5.42 s, PG 4.91 s | 69 s |
+| `mds-commands.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand` (new, secure) | expected the one client test, observed `PASS`, no problems | 5.91 s | 109 s |
+| `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16` (CRC, body changed) | expected both client tests, observed both `PASS`, no problems | OSD 5.72 s, PG 4.92 s | 61 s |
+| `mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand` (CRC, body changed) | expected the one client test, observed `PASS`, no problems | 6.12 s | 110 s |
+
+Secure rows:
+
+| Observation | OSD command | PG command | MDS command |
+| --- | --- | --- | --- |
+| Target and baseline | `osd.0`, up, `up_from` epoch 5, IPv6 address equal to the dialed one; effective 10000, no override | PG `2.0` on `osd.0`, the same bracket; `active+clean`, scrubber section present, counter not listed | the active rank-0 MDS, `up:active`, GID 4659, IPv6 address equal to the dialed one; effective 10000, no override |
+| Control before A | the read-only command returned the baseline; no write had reached 4096 bytes | the same | the same |
+| Padded write of A | to the OSD's endpoint on local connection 2; from before it left, every byte received on connection 2 was withheld | the same | to the MDS's endpoint on local connection 2 |
+| Native A, awaited with the caller pending | effective 10001, override 10001 | counter listed (query reply of 6754 bytes) | effective 10001, override 10001 |
+| Withheld bytes | bytes arrived on connection 2 after the padded write and reached no reader | the same | the same |
+| Native overwrite B | `config set log_max_recent 10002` once; effective 10002, override 10002; the caller was still pending | `scrubdebug 2.0 unset sessions` once; counter not listed (6720 bytes) | `config set log_max_recent 10002` once; effective 10002, override 10002 |
+| Original caller after connection 2 was closed | `OutcomeUnknownError` (cause: use of closed network connection), empty result, retained submission transaction 2 (compared with no frame) | the same | the same |
+| Fresh reads | Reopened connection of the subject client: B over later local connection 3 to the same endpoint. Independent Go client: B. Native: B under the same bracket | the same pattern; counter not listed | the same pattern; B under GID 4659 |
+| Local transmissions | padded writes 1 across every subject connection; no transaction or reply receipt exists in this mode | the same | the same |
+| Native restoration | One `config unset log_max_recent`; a separate fresh read shows effective 10000 and no override | One more `scrubdebug 2.0 unset sessions`; a separate fresh read shows the counter not listed | One `config unset log_max_recent`; a separate fresh read shows effective 10000 and no override |
+
+After each run no fixture container remained on the host and the uploaded
+work directory was removed; no independent final network inventory was taken.
+
+Three temporary changes were each applied to an archive of that commit, run
+on both secure rows and discarded with the run; the repository was not
+changed. Every run failed the result gate at the stated assertion.
+
+| Temporary change | OSD command | PG command | MDS command |
+| --- | --- | --- | --- |
+| Product: `OSDConnection.Command`, `OSDConnection.PGCommand` and `MDSConnection.Command` close the handle, open it again and send an uncertain command once more | The original caller returned no error: "applied command lost its unknown outcome when its connection ended" | the same assertion | the same assertion |
+| Test: the submitted command does not establish A (it sets the baseline value; for the PG it sends `unset`) | `applied`: effective 10000 with override 10000 is "a state outside the change from the previous to the wanted one", at the first observation | The awaited state never appears, and the cell fails when the caller's session ends by its keepalive timeout: "original caller ended before the native state was observed", after 63 seconds | as for the OSD command |
+| Fixture: the observer reads another daemon | The option is read on `mon.a`'s admin socket: the awaited state never appears and the cell fails when the caller ends, after 63 seconds | `pg query` on that socket is unreadable: "native baseline is not one restorable bracketed state of the target daemon", before anything is sent | The option is read on `osd.0`'s admin socket: as for the OSD command, after 64 seconds |
+
+In the first two rows the native restoration still returned the baseline. In
+the third the restoration followed the changed observer, so those runs say
+nothing about the target's final state; their fixtures were discarded. As in
+the MGR Tell cells, the secure mode refuses a change that is never observed
+only when the caller ends or the test context expires, not at once. The
+temporary changes were not repeated on the two CRC rows on this commit.
+
 No hosted CI run of these rows is recorded here. Final-head hosted execution,
 if requested, is recorded on the pull request, which supersedes this note for
 the final SHA.
 
 ## Limits
 
-One daemon incarnation per cell on single-OSD fixtures, CRC with AES client
-and service keys, IPv4, host test process and a recovery window of a few
-seconds. Not established:
+One daemon incarnation per cell on single-OSD fixtures and a recovery window
+of a few seconds. Not established:
 
 - the pre-existing-override restoration branch against a daemon (daemon-free
   fixture tests only);
-- a secure-mode cell for these three channels: the tests skip there. The
-  padded-write mode of the [MGR Tell cells](MGR_TELL_OUTCOME_VALIDATION.md#secure-mode)
-  would apply to the same messages but was not built or run for them;
-- other key types, IPv6, the container runtime, replicated or erasure-coded
+- secure-mode frame attribution (see [secure mode](#secure-mode)): no secure
+  cell identifies a write, a transaction or a reply frame;
+- profiles other than the two required ones per cell (CRC with AES keys, IPv4
+  and a host test process; secure with AES256K keys, IPv6 and a container
+  test process), replicated or erasure-coded
   pools, a replica or a changed acting set for the PG cell, an MDS standby,
   failover or another rank;
 - a daemon restart while the reply is withheld, which would clear the

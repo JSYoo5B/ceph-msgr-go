@@ -88,7 +88,36 @@ profiles and remote CI for this subset need separate evidence.
 An applied OSD command and an applied PG command whose reply is withheld,
 each observed on the OSD's own admin socket, are recorded in
 [DAEMON_COMMAND_OUTCOME_VALIDATION.md](DAEMON_COMMAND_OUTCOME_VALIDATION.md)
-(2026-11-10). They do not count executions either.
+(2026-11-10; a secure mode without decoded frames since 2026-11-14). They do
+not count executions either.
+
+The paused-OSD subtest of `TestCephOSDCommandsIntegration` also sends a PG
+`query` under a deadline to the paused primary (2026-11-14): it ends with
+`OutcomeUnknownError`, `context.DeadlineExceeded`, a nonzero submission
+transaction and the caller's PG metadata. After `Close`, `Command` and
+`PGCommand` on the closed handle return `ErrClosed` without an unknown outcome
+and with an empty submission. The routing subtest adds the local refusal of a
+PG command whose explicit primary is not the connection's OSD:
+`ErrOSDCommandTarget`, an empty submission and no unknown outcome, in contrast
+to the daemon's own -11 and -2 replies. None of these observes a frame on the
+wire; see the [channel matrix](../../cephmsgr/COMMAND_CHANNEL_MATRIX.md#cancellation-and-shutdown-after-a-command-was-sent).
+
+Direct native execution of that test on source commit
+`df89356b87ddc6093fdcb2d4dd8557898ad7d19d` (Linux amd64 host, Docker 29.9.1,
+the pinned v20.2.4 image, the result gate of the native workflow): the test
+passed with every subtest on three broad rows whose selector was narrowed for
+the run to `^TestCephOSDCommandsIntegration$`, namely `osd.aes.ip4.crc`
+(5.44 s), `osd.aes256k.ip4.host` (5.74 s) and
+`osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3` (11.14 s, the only
+one with a replica for the -11 case). These are selector overrides of broad
+rows, not required-row acceptance; the broad rows run the test with the rest
+of their selection. Two temporary product changes on `osd.aes.ip4.crc` each
+failed the gate and were discarded with the run: without the local primary
+check and with a timed-out sent PG command returned as a bare deadline error,
+"PG command naming another primary was not refused before transmission" and
+"cancelled PG command to a paused OSD lost uncertainty or its submission";
+with a command on a closed handle reported as an unknown outcome, "Command
+on the closed OSD handle was not a known-unsent refusal".
 
 ## OSD outside the acting set (2026-10-18)
 

@@ -173,8 +173,10 @@ own admin socket while the caller is still pending, and after only the
 connection ends requires `OutcomeUnknownError`, the retained submission
 transaction, a surviving native overwrite and a single local write. See the
 [outcome record](../integration/fixture/DAEMON_COMMAND_OUTCOME_VALIDATION.md).
-It is one CRC cell on one active rank-0 daemon; the option and its command
-schema are test-only.
+It is one cell on one active rank-0 daemon, with a CRC row and a secure row;
+in secure mode no frame is decoded, so the reply and the transaction on the
+wire are not identified there. The option and its command schema are
+test-only.
 
 Ceph source files cited here carry LGPL-2.1 notices. The implementation independently
 translates protocol facts; it incorporates no upstream native implementation.
