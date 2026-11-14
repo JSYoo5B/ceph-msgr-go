@@ -274,7 +274,30 @@ which the fixture marks the PG's primary out. Both rows use BlueStore; they
 differ in connection mode, key type, address family and runtime as the other
 RBD rows do. See the
 [primary-change record](../../integration/fixture/RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md).
-The catalog has 114 native rows in total.
+Four further rows narrow a broad selection to tests that need no opt-in
+parameter and also run there, so that the result gate requires their PASS:
+
+- `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0`
+  and
+  `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0`
+  select `TestCephOSDCommandsIntegration` and
+  `TestCephOSDCommandCrashIntegration`: an OSD and a PG command ended by the
+  caller after their observed local write, and the two classifications of a
+  command to a killed OSD. The in-flight crash test is not selected.
+- `mon-mgr.aes.ip4.crc.host.t-suite-afb7b2` and
+  `mon-mgr.aes256k.ip4.host.t-suite-afb7b2` select the client-suite
+  `TestCephCompleteMonitorOutageIntegration` and the API-suite
+  `TestCephNamedMonitorTellIntegration` and
+  `TestCephNamedManagerTellIntegration`: every command channel while no MON
+  is reachable, the dial cause of an exact MON Tell, and an exact MGR Tell
+  across a manager failover.
+
+See the
+[record](../../integration/fixture/COMMAND_TARGET_LOSS_VALIDATION.md). The
+sent cancellation rows above now also run `MonCommand` and `MgrCommand`
+subtests, and the public MDS command rows a last subtest that stops the
+fixture's MDS.
+The catalog has 118 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.

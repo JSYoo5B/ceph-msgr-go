@@ -89,7 +89,10 @@ Local first-run logs and private diagnostic directories remain at:
 
 Each directory contains fixture-manifest.json, fixture-ownership.json,
 named-mgr-oracle-before.json, named-mgr-oracle-after.json and
-named-mgr-results.json (18 Go observations). Only allowlisted non-secret
+named-mgr-results.json (18 Go observations in these runs; the failover
+subtest has since gained two, `sent-across-failover` and
+`unsent-across-failover`, see
+[COMMAND_TARGET_LOSS_VALIDATION.md](COMMAND_TARGET_LOSS_VALIDATION.md)). Only allowlisted non-secret
 metadata is collected. These machine-local paths are not portable repository
 artifacts; the hashes below identify the retained files.
 

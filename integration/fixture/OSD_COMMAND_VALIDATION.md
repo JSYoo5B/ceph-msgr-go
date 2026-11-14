@@ -154,6 +154,18 @@ unknown outcome). The old connection never recovers by itself. After restart
 the OSD has a new address nonce; a new connection to it answers `version` with
 the same bytes and a later transaction ID.
 
+Since 2026-11-14 the test asserts both classifications of a command to the
+killed OSD instead of logging the one it got, for `Command` and `PGCommand`:
+the session's own cause without an unknown outcome on a session that had
+already ended, and an unknown outcome with its transaction on a session that
+had not learned of the kill. The same day `TestCephOSDCommandsIntegration`
+gained a subtest that ends a written `Command` and `PGCommand` by
+cancellation, by `OSDConnection.Close` and by `Client.Close` after observing
+their one padded local write, and its paused-OSD subtest counts the padded
+local write of each of its commands instead of waiting 200 ms before Close.
+These are recorded in
+[COMMAND_TARGET_LOSS_VALIDATION.md](COMMAND_TARGET_LOSS_VALIDATION.md).
+
 In flight (2026-10-18, `TestCephOSDCommandCrashInFlightIntegration`): the
 target OSD's runtime `osd_bench_small_size_max_iops` is raised to 100000 with
 an OSD `config set` command, then a `bench` command (1 GiB of 4 KiB overwrites
