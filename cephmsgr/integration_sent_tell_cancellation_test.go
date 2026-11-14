@@ -165,16 +165,17 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 					// The withheld connection cannot deliver another reply. End
 					// it. A session that still owns it learns of the loss from
 					// its next use, so the first new invocation may fail on the
-					// ended connection, as uncertain or as a transport error
-					// without a result. The invocation after such a failure
-					// must be answered.
+					// ended connection. Only that failure is tolerated: no
+					// result field set, and the cause the locally closed
+					// connection reports, bare or as an unknown outcome. The
+					// invocation after it must be answered.
 					if err := gate.closeHeld(); err != nil {
 						t.Fatal("close the withheld connection", err)
 					}
 					result, err := read()
 					if !answered(result, err) {
-						if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, ErrClosed) || result.Code != 0 || len(result.Data) != 0 {
-							t.Fatal("the invocation that met the ended connection returned a result or another cause", err, result.Code, len(result.Data))
+						if !metLocallyEndedConnection(result, err) {
+							t.Fatal("the invocation that met the ended connection returned a result or another cause", err, result.Code, result.Message, len(result.Data))
 						}
 						t.Log("the first new invocation met the ended connection:", err)
 						if result, err = read(); !answered(result, err) {

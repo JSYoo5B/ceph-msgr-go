@@ -269,19 +269,22 @@ type mgrTellOutcomeIdentity struct {
 	ManagerGID     uint64 `json:"manager_gid"`
 	// Receiver is the fixture role of the endpoint whose connection carried the
 	// mutation; HeldConnection is that connection.
-	Receiver           string           `json:"receiver,omitempty"`
-	HeldConnection     uint64           `json:"held_connection,omitempty"`
-	RecoveryConnection uint64           `json:"recovery_connection,omitempty"`
-	Baseline           int64            `json:"baseline"`
-	OverridePresent    bool             `json:"baseline_override_present"`
-	NearMiss           *monOutcomeWrite `json:"near_miss_passed,omitempty"`
-	Submitted          *monOutcomeWrite `json:"submitted,omitempty"`
-	WithheldReply      *tellHeldReply   `json:"withheld_reply,omitempty"`
-	MatchingWrites     int              `json:"matching_local_writes"`
-	PaddedWrites       int32            `json:"padded_local_writes"`
-	OutcomeUnknown     bool             `json:"outcome_unknown"`
-	Recovery           *monOutcomeWrite `json:"recovery,omitempty"`
-	RecoveryGlobalID   uint64           `json:"recovery_client_global_id,omitempty"`
+	Receiver       string `json:"receiver,omitempty"`
+	HeldConnection uint64 `json:"held_connection,omitempty"`
+	// LaterDials lists, in secure modes, every connection dialed to the
+	// receiver after the held one; none is claimed to have carried the
+	// recovery read.
+	LaterDials       []uint64         `json:"later_dials_to_receiver,omitempty"`
+	Baseline         int64            `json:"baseline"`
+	OverridePresent  bool             `json:"baseline_override_present"`
+	NearMiss         *monOutcomeWrite `json:"near_miss_passed,omitempty"`
+	Submitted        *monOutcomeWrite `json:"submitted,omitempty"`
+	WithheldReply    *tellHeldReply   `json:"withheld_reply,omitempty"`
+	MatchingWrites   int              `json:"matching_local_writes"`
+	PaddedWrites     int32            `json:"padded_local_writes"`
+	OutcomeUnknown   bool             `json:"outcome_unknown"`
+	Recovery         *monOutcomeWrite `json:"recovery,omitempty"`
+	RecoveryGlobalID uint64           `json:"recovery_client_global_id,omitempty"`
 }
 
 func writeMgrTellOutcomeIdentity(t *testing.T, control string, current bool, value mgrTellOutcomeIdentity) {

@@ -67,8 +67,12 @@ MgrMap of a separate client, for `MgrTell` and `MgrTellTo`.
 6. `_cancel`: the withheld connection is closed by the test, because it can
    deliver no further reply. A session that still owns it learns of the loss
    from its next use, so the first new invocation through the same API may
-   fail on the ended connection, as an unknown outcome or as a transport error
-   without a result; it may not report cancellation, `ErrClosed` or a result.
+   fail on the ended connection. Only that failure is tolerated: no result
+   field (code, message, data) is set and the cause is the one a locally
+   closed connection reports (`net.ErrClosed`), bare or inside an unknown
+   outcome. A known-unsent refusal, a peer-side loss, cancellation,
+   `ErrClosed` or any other error fails the test there, so an unrelated
+   failure followed by an answered read is not reported as recovery.
    The invocation after such a failure, or the first one, must be answered.
    `_close`: a new invocation must return `ErrClosed` without an unknown
    outcome and without a result.
@@ -149,9 +153,10 @@ product. Their passes on other subtests are not used as evidence.
    failed once (`MgrTellTo_cancel`, CRC row) with a bare
    `use of closed network connection`: the same condition reported as a
    transport error without an unknown outcome. The test now accepts either
-   for the one invocation that meets the ended connection, refuses a result,
-   cancellation or `ErrClosed` there, and requires the next invocation to be
-   answered.
+   for the one invocation that meets the ended connection, admits no other
+   cause and no result field there (`metLocallyEndedConnection`, with a
+   daemon-free test of the refused cases), and requires the next invocation
+   to be answered.
 
 Whether the bare transport error and the unknown outcome for the same
 condition should be one classification is a product question this cell does

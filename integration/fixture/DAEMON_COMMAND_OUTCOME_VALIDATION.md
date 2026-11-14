@@ -284,9 +284,13 @@ and one further requirement:
   `OutcomeUnknownError` with an empty result. Its retained submission
   transaction must be nonzero; it is compared with no frame.
 - **Transmission count.** Exactly one write of at least 4096 bytes across
-  every subject connection, before and after the recovery read. The recovery
-  read must have used a later connection to the same daemon endpoint, and the
-  gate must still hold only the first one.
+  every subject connection, before and after the recovery read. The same
+  daemon endpoint must have been dialed again after the held connection, and
+  the gate must still hold only the first one. The receipt lists every such
+  dial (`later_dials_to_target`). A dial is recorded when it succeeds, before
+  any handshake or command, so the list does not say which of them carried
+  the recovery read; `recovery_connection` is written in CRC mode only,
+  from the decoded read.
 
 What the secure mode does not establish: the transaction and sequence of A on
 the wire, that the withheld bytes contain the reply to A (they can be an

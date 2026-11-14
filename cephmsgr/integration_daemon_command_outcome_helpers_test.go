@@ -261,9 +261,14 @@ type daemonCommandOutcomeIdentity struct {
 	// byte (secure) was withheld. WithheldBytes reports, in secure modes only,
 	// that bytes arrived on it after the padded write and reached no reader;
 	// they are not attributed to any message.
-	HeldConnection     uint64                    `json:"held_connection,omitempty"`
-	WithheldBytes      bool                      `json:"withheld_received_bytes,omitempty"`
+	HeldConnection uint64 `json:"held_connection,omitempty"`
+	WithheldBytes  bool   `json:"withheld_received_bytes,omitempty"`
+	// RecoveryConnection is the connection of the decoded recovery read
+	// (CRC only). LaterDials lists, in secure modes, every connection dialed
+	// to the target after the held one; none is claimed to have carried the
+	// read.
 	RecoveryConnection uint64                    `json:"recovery_connection,omitempty"`
+	LaterDials         []uint64                  `json:"later_dials_to_target,omitempty"`
 	Target             nativeDaemonCommandTarget `json:"target"`
 	ClientGlobalID     uint64                    `json:"client_global_id"`
 	Incarnation        uint64                    `json:"daemon_incarnation"`
