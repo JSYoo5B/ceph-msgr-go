@@ -154,3 +154,89 @@ func TestPGScrubSessionsCommandAndQueryProjection(t *testing.T) {
 		}
 	}
 }
+
+// The secure cells wait on the native state instead of a decoded reply. Only
+// a state of the change from the previous to the wanted one may be read again.
+func TestNativeDaemonCommandBetweenAdmitsOnlyTheChangeFromPreviousToWanted(t *testing.T) {
+	var receipt nativeDaemonCommandReceipt
+	if err := json.Unmarshal([]byte(nativeDaemonCommandOptionSample), &receipt); err != nil {
+		t.Fatal(err)
+	}
+	target := nativeDaemonCommandTarget{Kind: "osd", ID: "0"}
+	daemon := nativeDaemonIncarnation{"osd.0", 5, "192.0.2.7:6800/9"}
+	a := int64(501)
+	previous, want := nativeMonTellState{value: 500}, nativeMonTellState{501, &a}
+	state := func(value string, override *string) nativeDaemonCommandReceipt {
+		changed := receipt
+		get, diff := *receipt.Views.ConfigGet, *receipt.Views.ConfigDiff
+		get.Data, diff.Entry = []byte(`{"log_max_recent":"`+value+`"}`), nil
+		if override != nil {
+			diff.Entry = &nativeMonTellEntry{OverridePresent: true, Override: override}
+		}
+		changed.Views.ConfigGet, changed.Views.ConfigDiff = &get, &diff
+		return changed
+	}
+	wanted, baseline, other := "501", "500", "502"
+	// The previous state, the wanted state and both torn two-call reads.
+	for _, admitted := range []nativeDaemonCommandReceipt{state("500", nil), state("501", &wanted), state("500", &wanted), state("501", nil)} {
+		if !nativeDaemonCommandBetween(admitted, target, daemon, previous, want) {
+			t.Fatal("a state of the change from previous to wanted was refused", nativeDaemonCommandSummary(admitted))
+		}
+	}
+	if !nativeDaemonCommandMatches(state("501", &wanted), target, daemon, want) || nativeDaemonCommandMatches(state("500", &wanted), target, daemon, want) ||
+		nativeDaemonCommandMatches(state("501", nil), target, daemon, want) {
+		t.Fatal("a torn read ended the wait, or the wanted state did not")
+	}
+	// A lost application that only adds an override of the baseline value, a
+	// third value and a third override are not part of that change.
+	for _, refused := range []nativeDaemonCommandReceipt{state("500", &baseline), state("502", &other), state("502", nil), state("501", &other)} {
+		if nativeDaemonCommandBetween(refused, target, daemon, previous, want) {
+			t.Fatal("a state outside the change from previous to wanted was admitted", nativeDaemonCommandSummary(refused))
+		}
+	}
+	restarted := state("500", nil)
+	restarted.Views.DaemonAfter.Incarnation = 6
+	renonced := state("500", nil)
+	renonced.Views.DaemonBefore.Address = "192.0.2.7:6800/10"
+	unread := state("500", nil)
+	failed := *unread.Views.ConfigGet
+	failed.OK = false
+	unread.Views.ConfigGet = &failed
+	elsewhere := state("500", nil)
+	elsewhere.Target = nativeDaemonCommandTarget{Kind: "osd", ID: "1"}
+	for name, refused := range map[string]nativeDaemonCommandReceipt{"restarted": restarted, "another nonce": renonced, "failed read": unread, "another target": elsewhere} {
+		if nativeDaemonCommandBetween(refused, target, daemon, previous, want) {
+			t.Fatal("an unbracketed, unreadable or foreign observation was admitted:", name)
+		}
+	}
+	for _, other := range []nativeDaemonIncarnation{{"osd.1", 5, daemon.address}, {"osd.0", 6, daemon.address}, {"osd.0", 5, "192.0.2.7:6800/10"}} {
+		if nativeDaemonCommandBetween(state("500", nil), target, other, previous, want) {
+			t.Fatal("an observation bracketed by another daemon, incarnation or address was admitted", other)
+		}
+	}
+
+	// The PG flag has two states and no override: only those two are admitted,
+	// and only from the primary's scrubber section of the requested PG.
+	var query nativeDaemonCommandReceipt
+	if err := json.Unmarshal([]byte(nativeDaemonCommandPGSample), &query); err != nil {
+		t.Fatal(err)
+	}
+	pg := nativeDaemonCommandTarget{Kind: "pg", ID: "0", PGID: "2.0"}
+	unset, set := nativeMonTellState{}, nativeMonTellState{value: 1}
+	cleared := query
+	projection := *query.Views.PGQuery
+	projection.FlagPresent = false
+	cleared.Views.PGQuery = &projection
+	if !nativeDaemonCommandBetween(query, pg, daemon, unset, set) || !nativeDaemonCommandBetween(cleared, pg, daemon, unset, set) ||
+		nativeDaemonCommandMatches(cleared, pg, daemon, set) {
+		t.Fatal("the unset and set PG flag are not the two states of the change, or the unset flag ended the wait")
+	}
+	replica := query
+	projection = *query.Views.PGQuery
+	projection.ScrubberPresent = false
+	replica.Views.PGQuery = &projection
+	if nativeDaemonCommandBetween(replica, pg, daemon, unset, set) || nativeDaemonCommandBetween(query, nativeDaemonCommandTarget{Kind: "pg", ID: "0", PGID: "2.1"}, daemon, unset, set) ||
+		nativeDaemonCommandBetween(query, target, daemon, unset, set) {
+		t.Fatal("a PG observation without a scrubber section, of another PG or of another target kind was admitted")
+	}
+}

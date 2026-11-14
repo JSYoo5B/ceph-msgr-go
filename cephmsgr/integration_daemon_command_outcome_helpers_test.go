@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
@@ -203,24 +204,80 @@ func requireNativeDaemonCommand(t *testing.T, ctx context.Context, control, toke
 	return receipt
 }
 
+// awaitNativeDaemonCommand repeats one read-only observation until the
+// bracketed daemon shows the wanted state. It is for the mode without a
+// decoded reply barrier: the wait ends on the state itself. An option
+// observation is two separate admin-socket calls, so while the daemon applies
+// the change it can show the previous value with the wanted override or the
+// reverse; only a state of that change is read again. Any other state, an
+// unreadable or unbracketed read, or the end of the original caller fails
+// immediately.
+func awaitNativeDaemonCommand(t *testing.T, ctx context.Context, control, token, phase string, target nativeDaemonCommandTarget, daemon nativeDaemonIncarnation, want, previous nativeMonTellState, finished <-chan error) nativeDaemonCommandReceipt {
+	t.Helper()
+	for {
+		receipt, err := observeNativeDaemonCommand(ctx, control, token, phase, target)
+		if err != nil {
+			t.Fatal("native daemon command observation", phase, err)
+		}
+		if nativeDaemonCommandMatches(receipt, target, daemon, want) {
+			return receipt
+		}
+		if !nativeDaemonCommandBetween(receipt, target, daemon, previous, want) {
+			t.Fatalf("native daemon command %s shows a state outside the change from the previous to the wanted one on the target daemon; %s", phase, nativeDaemonCommandSummary(receipt))
+		}
+		select {
+		case err := <-finished:
+			t.Fatal("original caller ended before the native state was observed", phase, err)
+		case <-ctx.Done():
+			t.Fatalf("native daemon command %s did not reach the wanted state: %v; %s", phase, ctx.Err(), nativeDaemonCommandSummary(receipt))
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// nativeDaemonCommandBetween reports whether a readable receipt of the target,
+// bracketed by the given incarnation, shows a value and an override that each
+// belong to the previous or to the wanted state.
+func nativeDaemonCommandBetween(receipt nativeDaemonCommandReceipt, target nativeDaemonCommandTarget, daemon nativeDaemonIncarnation, previous, want nativeMonTellState) bool {
+	bracket, stable := nativeDaemonCommandBracket(receipt.Views)
+	state, ok := nativeDaemonCommandState(target, receipt.Views)
+	if !stable || !ok || receipt.Target != target || daemon.daemon != target.daemon() || bracket != daemon {
+		return false
+	}
+	override := func(of nativeMonTellState) bool {
+		return sameMonTellState(nativeMonTellState{override: state.override}, nativeMonTellState{override: of.override})
+	}
+	return (state.value == previous.value || state.value == want.value) && (override(previous) || override(want))
+}
+
 // Test-only local submission metadata. Write counts are local net.Conn facts,
 // never server execution counts.
 type daemonCommandOutcomeIdentity struct {
-	API               string                    `json:"api"`
-	Target            nativeDaemonCommandTarget `json:"target"`
-	ClientGlobalID    uint64                    `json:"client_global_id"`
-	Incarnation       uint64                    `json:"daemon_incarnation"`
-	Address           string                    `json:"daemon_address"`
-	Baseline          int64                     `json:"baseline"`
-	OverridePresent   bool                      `json:"baseline_override_present"`
-	NearMiss          *monOutcomeWrite          `json:"near_miss_passed,omitempty"`
-	Submitted         *monOutcomeWrite          `json:"submitted,omitempty"`
-	WithheldReply     *tellHeldReply            `json:"withheld_reply,omitempty"`
-	MatchingWrites    int                       `json:"matching_local_writes"`
-	PaddedWrites      int32                     `json:"padded_local_writes"`
-	OutcomeUnknown    bool                      `json:"outcome_unknown"`
-	CallerTransaction uint64                    `json:"caller_submission_transaction,omitempty"`
-	Recovery          *monOutcomeWrite          `json:"recovery,omitempty"`
+	// API is the public method under test. FramesDecoded is false in secure
+	// modes, where no write, transaction or reply frame is identified.
+	API           string `json:"api"`
+	FramesDecoded bool   `json:"crc_frames_decoded"`
+	// HeldConnection is the connection whose reply (CRC) or every received
+	// byte (secure) was withheld. WithheldBytes reports, in secure modes only,
+	// that bytes arrived on it after the padded write and reached no reader;
+	// they are not attributed to any message.
+	HeldConnection     uint64                    `json:"held_connection,omitempty"`
+	WithheldBytes      bool                      `json:"withheld_received_bytes,omitempty"`
+	RecoveryConnection uint64                    `json:"recovery_connection,omitempty"`
+	Target             nativeDaemonCommandTarget `json:"target"`
+	ClientGlobalID     uint64                    `json:"client_global_id"`
+	Incarnation        uint64                    `json:"daemon_incarnation"`
+	Address            string                    `json:"daemon_address"`
+	Baseline           int64                     `json:"baseline"`
+	OverridePresent    bool                      `json:"baseline_override_present"`
+	NearMiss           *monOutcomeWrite          `json:"near_miss_passed,omitempty"`
+	Submitted          *monOutcomeWrite          `json:"submitted,omitempty"`
+	WithheldReply      *tellHeldReply            `json:"withheld_reply,omitempty"`
+	MatchingWrites     int                       `json:"matching_local_writes"`
+	PaddedWrites       int32                     `json:"padded_local_writes"`
+	OutcomeUnknown     bool                      `json:"outcome_unknown"`
+	CallerTransaction  uint64                    `json:"caller_submission_transaction,omitempty"`
+	Recovery           *monOutcomeWrite          `json:"recovery,omitempty"`
 }
 
 func writeDaemonCommandOutcomeIdentity(t *testing.T, control string, value daemonCommandOutcomeIdentity) {
