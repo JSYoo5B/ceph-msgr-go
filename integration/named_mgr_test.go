@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,9 +209,136 @@ func TestCephNamedManagerTellIntegration(t *testing.T) {
 		check(t, name, before.Version)
 	})
 	t.Run("failover_requires_explicit_new_name", func(t *testing.T) {
+		// Two further clients name the active manager across the failover,
+		// one on each side of the transmission boundary.
+		//
+		// unsent: its dial to the named manager is held by the test until
+		// its own MgrMap no longer shows that manager, and then fails. The
+		// command was never written.
+		//
+		// sent: its padded command was written to the named manager and
+		// everything received on that connection afterwards is withheld.
+		isManager := func(endpoint string) bool {
+			_, role, _ := testcluster.SplitPeer(endpoint)
+			return role == "mgr."+name
+		}
+		var dialMu sync.Mutex
+		var managerDials []string // manager roles dialed by the two clients
+		observed := func(dial func(context.Context, string, string) (net.Conn, error)) func(context.Context, string, string) (net.Conn, error) {
+			return func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+				if _, role, _ := testcluster.SplitPeer(endpoint); strings.HasPrefix(role, "mgr.") {
+					dialMu.Lock()
+					managerDials = append(managerDials, role)
+					dialMu.Unlock()
+				}
+				return dial(ctx, network, endpoint)
+			}
+		}
+		errHeldDial := errors.New("named MGR dial held by the test across the failover")
+		reached, release := make(chan struct{}), make(chan struct{})
+		var reachedOnce sync.Once
+		unsentOptions := integrationOptions(t)
+		// The held dial must outlast the failover, not its setup bound.
+		unsentOptions.ConnectTimeout = 2 * time.Minute
+		plain := unsentOptions.DialContext
+		unsentOptions.DialContext = observed(func(ctx context.Context, network, endpoint string) (net.Conn, error) {
+			if !isManager(endpoint) {
+				return plain(ctx, network, endpoint)
+			}
+			reachedOnce.Do(func() { close(reached) })
+			select {
+			case <-release:
+				return nil, &net.OpError{Op: "dial", Net: network, Err: errHeldDial}
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		})
+		unsent, err := cephmsgr.Dial(ctx, unsentOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unsent.Close()
+		hold := newCommandHold(4096, isManager)
+		sentOptions := integrationOptions(t)
+		sentOptions.DialContext = observed(hold.dialer(sentOptions.DialContext))
+		sent, err := cephmsgr.Dial(ctx, sentOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer sent.Close()
+		if result, err := sent.MgrTellTo(ctx, name, version); err != nil || result.Code != 0 {
+			t.Fatal("control named Tell of the sent client", result.Code, err)
+		}
+		if dials, large, _ := hold.counts(); dials != 1 || large != 0 {
+			t.Fatal("a write before the subject command reached the padded size", dials, large)
+		}
+		type outcome struct {
+			result cephmsgr.Result
+			err    error
+		}
+		unsentDone, sentDone := make(chan outcome, 1), make(chan outcome, 1)
+		go func() {
+			result, err := unsent.MgrTellTo(ctx, name, version)
+			unsentDone <- outcome{result, err}
+		}()
+		hold.armOnWrite()
+		go func() {
+			result, err := sent.MgrTellTo(ctx, name, cephmsgr.Command{JSON: append(append([]byte(nil), version.JSON...), strings.Repeat(" ", 40<<10)...)})
+			sentDone <- outcome{result, err}
+		}()
+		for _, signal := range []struct {
+			name string
+			done <-chan struct{}
+		}{{"the unsent client's dial to the named manager", reached}, {"the sent client's padded write", hold.bound},
+			{"the return of that write", hold.wrote}, {"withheld received bytes after it", hold.withheld}} {
+			select {
+			case <-signal.done:
+			case got := <-unsentDone:
+				t.Fatal("the unsent named Tell ended before the failover", got.err)
+			case got := <-sentDone:
+				t.Fatal("the sent named Tell ended before the failover", got.err)
+			case <-ctx.Done():
+				t.Fatal("never observed "+signal.name, ctx.Err())
+			}
+		}
 		mutation, _ := json.Marshal(map[string]string{"prefix": "mgr fail", "who": name})
 		if result, err := c.MonCommand(ctx, cephmsgr.Command{JSON: mutation}); err != nil || result.Code != 0 {
 			t.Fatal("once-only MGR fail", result, err)
+		}
+		// sent: the client fails the named manager's session when its MgrMap
+		// changes. The written command keeps an unknown outcome and names the
+		// changed target.
+		select {
+		case got := <-sentDone:
+			record("sent-across-failover", name, got.result, got.err, sent.Snapshot())
+			if !unknownOutcome(got.result, got.err) || !errors.Is(got.err, cephmsgr.ErrManagerTargetChanged) || !errors.Is(got.err, cephmsgr.ErrManagerChanged) {
+				t.Fatal("a sent named Tell across the failover lost its unknown outcome or the changed-target cause", got.err)
+			}
+		case <-ctx.Done():
+			t.Fatal("the failover did not end the sent named Tell", ctx.Err())
+		}
+		// unsent: only after its own map changed does its dial fail. The
+		// call is then refused locally with the changed target; the dial
+		// failure itself is not the result.
+		waitClientState(t, unsent, ctx, func(s cephmsgr.State) bool {
+			return !s.Manager.Available || s.Manager.Name != name || s.Manager.GlobalID != before.After.GID
+		})
+		close(release)
+		select {
+		case got := <-unsentDone:
+			record("unsent-across-failover", name, got.result, got.err, unsent.Snapshot())
+			if !knownUnsent(got.result, got.err) || !errors.Is(got.err, cephmsgr.ErrManagerTargetChanged) || !errors.Is(got.err, cephmsgr.ErrManagerChanged) || errors.Is(got.err, errHeldDial) {
+				t.Fatal("an unsent named Tell across the failover was not a known-unsent changed-target refusal", got.err)
+			}
+		case <-ctx.Done():
+			t.Fatal("the failover did not end the unsent named Tell", ctx.Err())
+		}
+		// Neither call was moved to another manager or written again.
+		dialMu.Lock()
+		dialed := strings.Join(managerDials, ",")
+		dialMu.Unlock()
+		if _, large, _ := hold.counts(); dialed != "mgr."+name+",mgr."+name || large != 1 {
+			t.Fatal("a named Tell across the failover dialed another manager or was written again", dialed, large)
 		}
 		waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 			return s.Manager.Available && s.Manager.Name != name && s.Manager.GlobalID != before.After.GID
@@ -222,7 +350,7 @@ func TestCephNamedManagerTellIntegration(t *testing.T) {
 		waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 			return s.Manager.MapEpoch >= after.After.Epoch && s.Manager.Name == after.After.Name && s.Manager.GlobalID == after.After.GID
 		})
-		_, err := c.MgrTellTo(ctx, name, version)
+		_, err = c.MgrTellTo(ctx, name, version)
 		record("old-name-after-failover", name, cephmsgr.Result{}, err, c.Snapshot())
 		var unknown *cephmsgr.OutcomeUnknownError
 		if (!errors.Is(err, cephmsgr.ErrManagerNotFound) && !errors.Is(err, cephmsgr.ErrManagerNotActive)) || errors.As(err, &unknown) {
