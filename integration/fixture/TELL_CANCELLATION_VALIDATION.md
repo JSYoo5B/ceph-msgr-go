@@ -63,7 +63,11 @@ MgrMap of a separate client, for `MgrTell` and `MgrTellTo`.
 2. The same command, padded to more than 40 KiB, is submitted once. The gate
    binds to its connection before the bytes leave and from then on withholds
    every byte received on it.
-3. Sent: the padded write returned and is counted once, its connection's role
+3. Sent: the padded write returned complete (every byte accepted, no error;
+   a ledger counts issued and complete writes of that size separately, and
+   `TestPaddedWriteLedgerCountsOnlyCompleteWrites` shows that a short or
+   failed write is issued but not complete), exactly one such write was
+   issued, its connection's role
    is an admitted one, and bytes have arrived on that connection and been
    withheld. The caller is still pending.
 4. `_cancel`: the call's context is canceled. `_close`: `Client.Close` is

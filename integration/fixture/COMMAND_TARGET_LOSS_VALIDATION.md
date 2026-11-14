@@ -32,7 +32,12 @@ completed reply is neither.
 
 "Transmission started" is local: the client's writer took the command and
 began the write. It is not a statement about the daemon. Where a cell says a
-command was sent, it means one padded local write returned; where a daemon
+command was sent, it means one padded local write returned. In the cells
+where the caller ends the command (the sent MON, MGR and Tell commands, the
+written and the paused OSD and PG commands, the sent exact MGR Tell across a
+failover) that write is also required to be complete: every byte accepted and
+no error, so a short or failed write of that size fails the cell. The
+stopped-daemon cells accept a write that returned with an error. Where a daemon
 was already stopped, that write reached no daemon at all and the outcome is
 still unknown, because the client cannot tell.
 
@@ -85,7 +90,10 @@ reply.
   end of its peer until the test releases the hold or the connection is
   closed.
 - It reports when a padded write on a held connection returned, with or
-  without an error, and when a selected connection was closed. A session
+  without an error, and when a selected connection was closed. It counts
+  separately the padded writes that returned complete (every byte, no
+  error); `TestCommandHoldParksBytesAndErrors` shows that a short or failed
+  write is not among them. A session
   closes its connection only after it recorded its terminal cause, so the
   close means that the session has ended.
 
@@ -104,7 +112,7 @@ The client suite uses its existing padded gate
 module command, to the active manager), each with `_cancel` and `_close`,
 beside the four Tell APIs. The sequence and its limits are those of
 [TELL_CANCELLATION_VALIDATION.md](TELL_CANCELLATION_VALIDATION.md): one padded
-write returned, bytes then arrived on its connection and were withheld, the
+write returned complete, bytes then arrived on its connection and were withheld, the
 caller was still pending; after `Client.Close` the call ends with
 `OutcomeUnknownError` and `ErrClosed`, a later invocation is `ErrClosed`
 without an unknown outcome, and the padded-write count is still one.
@@ -137,7 +145,8 @@ The paused-OSD subtest of the same test no longer infers the send. It uses
 a client of its own whose one OSD connection is observed without being
 held: its deadline `Command`, its deadline `PGCommand` and the `Command`
 that `OSDConnection.Close` ends are each padded to a little over 8 KiB, and
-each is asserted, or for Close awaited, as one returned local write. The
+each is asserted, or for Close awaited, as one returned local write; all
+three are required to be complete before Close. The
 200 ms wait before Close is gone. When the daemon is resumed the count of
 padded writes is three and the OSD was dialed once; the explicit new handle
 dials once more. Three small commands stay within the socket buffers of a
