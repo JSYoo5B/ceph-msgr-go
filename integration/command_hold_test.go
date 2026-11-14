@@ -38,6 +38,7 @@ type commandHold struct {
 	dials    int
 	large    int
 	returned int
+	complete int
 	released bool
 
 	// bound is closed when a write binds the hold; withheld when a held Read
@@ -100,6 +101,16 @@ func (h *commandHold) counts() (dials, large, boundConnection int) {
 	return h.dials, h.large, boundConnection
 }
 
+// completeWrites returns how many of the returned writes of at least threshold
+// bytes accepted every byte without an error. A short or failed write is
+// counted as issued and returned but not as complete, so only this count
+// shows that a padded command left the client in full.
+func (h *commandHold) completeWrites() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.complete
+}
+
 // awaitReturned waits until want writes of at least threshold bytes on
 // selected connections have returned, held or not, and reports the count.
 func (h *commandHold) awaitReturned(ctx context.Context, want int) int {
@@ -150,6 +161,9 @@ func (c *commandHoldConn) Write(p []byte) (int, error) {
 	if large {
 		h.mu.Lock()
 		h.returned++
+		if n == len(p) && err == nil {
+			h.complete++
+		}
 		h.mu.Unlock()
 		if h.holds(c) {
 			h.once.wrote.Do(func() { close(h.wrote) })
@@ -292,8 +306,8 @@ func TestCommandHoldParksBytesAndErrors(t *testing.T) {
 		if dials, large, bound := h.counts(); dials != 2 || large != 3 || bound != 2 {
 			t.Fatal("counts", dials, large, bound)
 		}
-		if returned := h.awaitReturned(context.Background(), 3); returned != 3 {
-			t.Fatal("returned padded writes", returned)
+		if returned := h.awaitReturned(context.Background(), 3); returned != 3 || h.completeWrites() != 3 {
+			t.Fatal("returned padded writes", returned, h.completeWrites())
 		}
 		expired, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		defer stop()
@@ -303,6 +317,26 @@ func TestCommandHoldParksBytesAndErrors(t *testing.T) {
 		server.Write([]byte("reply"))
 		if err := <-read(conn); err != nil {
 			t.Fatal("a connection that did not carry the binding write was held", err)
+		}
+	})
+	t.Run("a short or failed large write returns but is not complete", func(t *testing.T) {
+		for name, script := range map[string]shortWriteConn{
+			"short with an error":      {accept: 3, err: io.ErrShortWrite},
+			"short without an error":   {accept: 3},
+			"refused":                  {accept: 0, err: net.ErrClosed},
+			"every byte with an error": {accept: -1, err: net.ErrClosed},
+		} {
+			h := newCommandHold(8, selected)
+			conn, err := h.dialer(func(context.Context, string, string) (net.Conn, error) { return script, nil })(context.Background(), "tcp", "192.0.2.1:6800")
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.holdNow()
+			conn.Write([]byte("a padded command"))
+			<-h.wrote
+			if _, large, _ := h.counts(); large != 1 || h.awaitReturned(context.Background(), 1) != 1 || h.completeWrites() != 0 {
+				t.Fatal(name, "was counted as a complete write", large, h.completeWrites())
+			}
 		}
 	})
 	t.Run("bytes are parked until released", func(t *testing.T) {
@@ -380,4 +414,19 @@ func TestCommandHoldParksBytesAndErrors(t *testing.T) {
 			t.Fatal("unknown-outcome classification")
 		}
 	})
+}
+
+// shortWriteConn accepts at most accept bytes of a write (all of them when
+// accept is negative) and returns err with the count.
+type shortWriteConn struct {
+	net.Conn
+	accept int
+	err    error
+}
+
+func (c shortWriteConn) Write(p []byte) (int, error) {
+	if c.accept >= 0 && c.accept < len(p) {
+		return c.accept, c.err
+	}
+	return len(p), c.err
 }

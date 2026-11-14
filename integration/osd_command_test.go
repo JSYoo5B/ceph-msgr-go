@@ -388,8 +388,10 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 							t.Fatal("the padded command was never "+signal.name, ctx.Err())
 						}
 					}
-					if dials, large, bound := hold.counts(); dials != 1 || large != 1 || bound != 1 {
-						t.Fatal("the padded command was not written exactly once on the one OSD connection", dials, large, bound)
+					// Complete: every byte of the one padded write was accepted
+					// without an error.
+					if dials, large, bound := hold.counts(); dials != 1 || large != 1 || bound != 1 || hold.completeWrites() != 1 {
+						t.Fatal("the padded command was not written exactly once and in full on the one OSD connection", dials, large, bound, hold.completeWrites())
 					}
 					select {
 					case got := <-finished:
@@ -511,8 +513,8 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 			done <- err
 		}()
 		// Close only after the third padded write returned.
-		if returned := observed.awaitReturned(ctx, 3); returned != 3 {
-			t.Fatal("the command to close was never written", returned)
+		if returned := observed.awaitReturned(ctx, 3); returned != 3 || observed.completeWrites() != 3 {
+			t.Fatal("the command to close was never written, or a padded write was short or failed", returned, observed.completeWrites())
 		}
 		select {
 		case err := <-done:

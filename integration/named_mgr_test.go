@@ -337,8 +337,8 @@ func TestCephNamedManagerTellIntegration(t *testing.T) {
 		dialMu.Lock()
 		dialed := strings.Join(managerDials, ",")
 		dialMu.Unlock()
-		if _, large, _ := hold.counts(); dialed != "mgr."+name+",mgr."+name || large != 1 {
-			t.Fatal("a named Tell across the failover dialed another manager or was written again", dialed, large)
+		if _, large, _ := hold.counts(); dialed != "mgr."+name+",mgr."+name || large != 1 || hold.completeWrites() != 1 {
+			t.Fatal("a named Tell across the failover dialed another manager, was written again or was not written in full", dialed, large, hold.completeWrites())
 		}
 		waitClientState(t, c, ctx, func(s cephmsgr.State) bool {
 			return s.Manager.Available && s.Manager.Name != name && s.Manager.GlobalID != before.After.GID
