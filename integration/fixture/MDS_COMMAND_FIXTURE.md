@@ -117,6 +117,27 @@ before a failed control returns. Complete success acknowledges
 `mds-commands-native-completed.<requestID>`. The driver does not parse and
 reformat the command's output bytes as a CLI might.
 
+## Stopping the MDS
+
+The public command acceptance ends with commands to its stopped daemon. Its
+last subtest stops the fixture's only MDS through the existing daemon
+control, with the kind `mds`:
+
+```go
+testcluster.ControlDaemon(ctx, dir, "stop", "mds", name)
+```
+
+`name` is the daemon name of `mds-fresh-oracle.json`. The control stops the
+owned MDS container in order and acknowledges `mds-stop.<requestID>`. It is
+closed: only `stop` is admitted for an MDS, and only in this profile with
+the public command selector. `pause`, `resume`, `start` and `kill` of an
+MDS, a stop under the applied-command selector and a stop in any other
+profile fail the controller
+(`TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS`). Nothing
+restarts the MDS afterwards; the fixture is torn down with its daemon
+stopped. The cell is described in
+[COMMAND_TARGET_LOSS_VALIDATION.md](COMMAND_TARGET_LOSS_VALIDATION.md#4-commands-to-a-stopped-daemon).
+
 ## Native OPEN-session absence and cleanup
 
 Only in command mode, the fixed MDS fresh observer accepts both Go identities:

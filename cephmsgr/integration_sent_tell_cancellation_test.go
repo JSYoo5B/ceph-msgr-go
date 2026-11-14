@@ -15,7 +15,8 @@ import (
 )
 
 // sentTellCancellationSelector exclusively selects the cell: it ends MON and
-// MGR sessions on purpose, so broad selections skip it.
+// MGR sessions on purpose, so broad selections skip it. The name predates the
+// two ordinary command channels the cell also covers.
 const sentTellCancellationSelector = "^TestCephSentTellCancellationIntegration$"
 
 // sentTellVersionCommand is the read-only daemon-local command of the cell.
@@ -24,14 +25,25 @@ func sentTellVersionCommand(padding int) Command {
 	return Command{JSON: []byte(`{"prefix":"version","format":"json"}` + strings.Repeat(" ", padding))}
 }
 
-// A Tell whose command was completely written and whose reply never reaches
-// the caller, ended by the caller: once by canceling the call's context and
-// once by Client.Close. Each of MonTell, MonTellTo, MgrTell and MgrTellTo must
-// return OutcomeUnknownError with that cause and must not transmit the command
-// again. The command is read-only, so no daemon state is compared; "sent"
-// means that the one padded local write returned and that bytes then arrived
-// on its connection and were withheld. Nothing is decoded, so the cell runs in
-// CRC and secure modes alike and attributes no byte to a reply.
+// sentMonVersionCommand is the read-only ordinary MON command of the cell.
+func sentMonVersionCommand(padding int) Command {
+	return Command{JSON: []byte(`{"prefix":"version","format":"json"}` + strings.Repeat(" ", padding))}
+}
+
+// sentMgrStatCommand is the read-only ordinary MGR module command of the cell.
+func sentMgrStatCommand(padding int) Command {
+	return Command{JSON: []byte(`{"prefix":"pg stat","format":"json"}` + strings.Repeat(" ", padding))}
+}
+
+// A command that was completely written and whose reply never reaches the
+// caller, ended by the caller: once by canceling the call's context and once
+// by Client.Close. Each of MonCommand, MgrCommand, MonTell, MonTellTo, MgrTell
+// and MgrTellTo must return OutcomeUnknownError with that cause and must not
+// transmit the command again. The command is read-only, so no daemon state is
+// compared; "sent" means that the one padded local write returned and that
+// bytes then arrived on its connection and were withheld. Nothing is decoded,
+// so the cell runs in CRC and secure modes alike and attributes no byte to a
+// reply.
 func TestCephSentTellCancellationIntegration(t *testing.T) {
 	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != sentTellCancellationSelector {
 		t.Skip("sent Tell cancellation requires its exclusive selector " + sentTellCancellationSelector)
@@ -55,17 +67,29 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 		name string
 		// receiver reports whether a fixture role may carry the command.
 		receiver func(role string) bool
-		call     func(context.Context, *Client, Command) (Result, error)
+		// command is the API's read-only command with trailing padding; marker
+		// is a string its answered output contains.
+		command func(padding int) Command
+		marker  string
+		call    func(context.Context, *Client, Command) (Result, error)
 	}{
-		{"MonTell", func(role string) bool { return strings.HasPrefix(role, "mon.") },
+		{"MonCommand", func(role string) bool { return strings.HasPrefix(role, "mon.") }, sentMonVersionCommand, "version",
+			func(ctx context.Context, c *Client, command Command) (Result, error) {
+				return c.MonCommand(ctx, command)
+			}},
+		{"MgrCommand", func(role string) bool { return role == "mgr."+manager }, sentMgrStatCommand, "num_pg",
+			func(ctx context.Context, c *Client, command Command) (Result, error) {
+				return c.MgrCommand(ctx, command)
+			}},
+		{"MonTell", func(role string) bool { return strings.HasPrefix(role, "mon.") }, sentTellVersionCommand, "version",
 			func(ctx context.Context, c *Client, command Command) (Result, error) { return c.MonTell(ctx, command) }},
-		{"MonTellTo", func(role string) bool { return role == "mon."+monitor },
+		{"MonTellTo", func(role string) bool { return role == "mon."+monitor }, sentTellVersionCommand, "version",
 			func(ctx context.Context, c *Client, command Command) (Result, error) {
 				return c.MonTellTo(ctx, monitor, command)
 			}},
-		{"MgrTell", func(role string) bool { return role == "mgr."+manager },
+		{"MgrTell", func(role string) bool { return role == "mgr."+manager }, sentTellVersionCommand, "version",
 			func(ctx context.Context, c *Client, command Command) (Result, error) { return c.MgrTell(ctx, command) }},
-		{"MgrTellTo", func(role string) bool { return role == "mgr."+manager },
+		{"MgrTellTo", func(role string) bool { return role == "mgr."+manager }, sentTellVersionCommand, "version",
 			func(ctx context.Context, c *Client, command Command) (Result, error) {
 				return c.MgrTellTo(ctx, manager, command)
 			}},
@@ -75,7 +99,7 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 			t.Run(api.name+"_"+ending, func(t *testing.T) {
 				subject := options
 				dial := subject.DialContext
-				var writes atomic.Int32
+				var ledger paddedWriteLedger
 				var connectionID atomic.Uint64
 				// Only a connection to a daemon that may carry this API's command
 				// can bind the gate.
@@ -86,7 +110,7 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 						return nil, err
 					}
 					_, peer, _ := testcluster.SplitPeer(endpoint)
-					return &commandWriteProbe{Conn: gate.wrap(conn, connectionID.Add(1), peer), writes: &writes}, nil
+					return ledger.wrap(gate.wrap(conn, connectionID.Add(1), peer)), nil
 				}
 				c, err := Dial(ctx, subject)
 				if err != nil {
@@ -95,11 +119,11 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 				defer c.Close()
 				// Control: the unpadded command through the same API is answered,
 				// and no write so far reached the padded size.
-				if result, err := api.call(ctx, c, sentTellVersionCommand(0)); err != nil || result.Code != 0 || !strings.Contains(string(result.Data), "version") {
-					t.Fatal("read-only control Tell", err, result.Code, len(result.Data))
+				if result, err := api.call(ctx, c, api.command(0)); err != nil || result.Code != 0 || !strings.Contains(string(result.Data), api.marker) {
+					t.Fatal("read-only control command", err, result.Code, len(result.Data))
 				}
-				if _, _, bound := gate.binding(); bound || writes.Load() != 0 {
-					t.Fatal("a write before the subject command reached the padded size", bound, writes.Load())
+				if _, _, bound := gate.binding(); bound || ledger.issued.Load() != 0 {
+					t.Fatal("a write before the subject command reached the padded size", bound, ledger.issued.Load())
 				}
 				call, stop := context.WithCancel(ctx)
 				defer stop()
@@ -109,7 +133,7 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 				}
 				finished := make(chan outcome, 1)
 				go func() {
-					result, err := api.call(call, c, sentTellVersionCommand(40<<10))
+					result, err := api.call(call, c, api.command(40<<10))
 					finished <- outcome{result, err}
 				}()
 				// Sent: the padded write was issued, it returned, and bytes that
@@ -121,14 +145,16 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 					select {
 					case <-signal.done:
 					case got := <-finished:
-						t.Fatal("the padded Tell ended before it was "+signal.name, got.err)
+						t.Fatal("the padded command ended before it was "+signal.name, got.err)
 					case <-ctx.Done():
-						t.Fatal("the padded Tell was never "+signal.name, ctx.Err())
+						t.Fatal("the padded command was never "+signal.name, ctx.Err())
 					}
 				}
 				connection, receiver, _ := gate.binding()
-				if count := awaitPaddedWrites(t, ctx, &writes, 1); count != 1 || !api.receiver(receiver) {
-					t.Fatal("the padded Tell was not written exactly once to its target", count, receiver)
+				// Complete: every byte of the one padded write was accepted
+				// without an error. A short or failed write does not count.
+				if awaitPaddedWrites(t, ctx, &ledger.complete, 1); !ledger.once() || !api.receiver(receiver) {
+					t.Fatal("the padded command was not written once and in full to its target", ledger.issued.Load(), ledger.complete.Load(), receiver)
 				}
 				select {
 				case got := <-finished:
@@ -141,7 +167,7 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 				} else {
 					want = ErrClosed
 					if err := c.Close(); err != nil {
-						t.Fatal("Close with a sent Tell outstanding", err)
+						t.Fatal("Close with a sent command outstanding", err)
 					}
 				}
 				select {
@@ -151,15 +177,15 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 						t.Fatalf("a sent %s ended by %s lost its unknown outcome or its cause: %v", api.name, ending, got.err)
 					}
 					if got.result.Code != 0 || got.result.Message != "" || len(got.result.Data) != 0 {
-						t.Fatal("an unanswered Tell gained an acknowledged server result", got.result)
+						t.Fatal("an unanswered command gained an acknowledged server result", got.result)
 					}
 					t.Logf("%s to %s on connection %d, ended by %s after its one padded write: %v", api.name, receiver, connection, ending, got.err)
 				case <-ctx.Done():
-					t.Fatal("ending the caller did not release the sent Tell", ctx.Err())
+					t.Fatal("ending the caller did not release the sent command", ctx.Err())
 				}
-				read := func() (Result, error) { return api.call(ctx, c, sentTellVersionCommand(0)) }
+				read := func() (Result, error) { return api.call(ctx, c, api.command(0)) }
 				answered := func(result Result, err error) bool {
-					return err == nil && result.Code == 0 && strings.Contains(string(result.Data), "version")
+					return err == nil && result.Code == 0 && strings.Contains(string(result.Data), api.marker)
 				}
 				if ending == "cancel" {
 					// The withheld connection cannot deliver another reply. End
@@ -179,7 +205,7 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 						}
 						t.Log("the first new invocation met the ended connection:", err)
 						if result, err = read(); !answered(result, err) {
-							t.Fatal("a new invocation after the canceled Tell", err, result.Code, len(result.Data))
+							t.Fatal("a new invocation after the canceled command", err, result.Code, len(result.Data))
 						}
 					}
 				} else if result, err := read(); !errors.Is(err, ErrClosed) || errors.As(err, new(*OutcomeUnknownError)) || len(result.Data) != 0 {
@@ -187,8 +213,8 @@ func TestCephSentTellCancellationIntegration(t *testing.T) {
 				}
 				// Nothing transmitted the padded command again, and the gate still
 				// holds only its connection.
-				if held, _, _ := gate.binding(); writes.Load() != 1 || held != connection {
-					t.Fatal("the padded Tell was written again or the gate was rebound", writes.Load(), held, connection)
+				if held, _, _ := gate.binding(); !ledger.once() || held != connection {
+					t.Fatal("a padded write was issued again or the gate was rebound", ledger.issued.Load(), ledger.complete.Load(), held, connection)
 				}
 			})
 		}

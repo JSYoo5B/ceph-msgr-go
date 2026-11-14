@@ -11,15 +11,21 @@ test's own connection wrapper. The product API and replay behavior are
 unchanged. The per-channel statement is in
 [the channel matrix](../../cephmsgr/COMMAND_CHANNEL_MATRIX.md#cancellation-and-shutdown-after-a-command-was-sent).
 
+Later on 2026-11-14 the same test gained the two ordinary command channels,
+`Client.MonCommand` and `Client.MgrCommand`, with the same sequence; see
+[Ordinary MON and MGR commands](#ordinary-mon-and-mgr-commands) below. The
+test keeps its name and its two rows.
+
 Reference: Tentacle v20.2.4,
 `7f793731f1b39eb4f465e960113d2363c311b964`, image
 `quay.io/ceph/ceph:v20.2.4@sha256:6bb1c8a42fbc0bf87938946990b65174466997bc11c31eb5a323225a779fd8f9`.
 
 ## Executable boundary
 
-Test: `TestCephSentTellCancellationIntegration` in the `cephmsgr` suite, eight
-subtests: `MonTell`, `MonTellTo`, `MgrTell` and `MgrTellTo`, each with `_cancel`
-and `_close`. It ends MON and MGR sessions on purpose, so it skips unless
+Test: `TestCephSentTellCancellationIntegration` in the `cephmsgr` suite, twelve
+subtests: `MonCommand`, `MgrCommand`, `MonTell`, `MonTellTo`, `MgrTell` and
+`MgrTellTo`, each with `_cancel` and `_close` (eight Tell subtests when the
+evidence below was recorded). It ends MON and MGR sessions on purpose, so it skips unless
 `-test.run` is exactly `^TestCephSentTellCancellationIntegration$`, and it
 needs the ordinary three-MON, two-MGR fixture.
 
@@ -57,7 +63,11 @@ MgrMap of a separate client, for `MgrTell` and `MgrTellTo`.
 2. The same command, padded to more than 40 KiB, is submitted once. The gate
    binds to its connection before the bytes leave and from then on withholds
    every byte received on it.
-3. Sent: the padded write returned and is counted once, its connection's role
+3. Sent: the padded write returned complete (every byte accepted, no error;
+   a ledger counts issued and complete writes of that size separately, and
+   `TestPaddedWriteLedgerCountsOnlyCompleteWrites` shows that a short or
+   failed write is issued but not complete), exactly one such write was
+   issued, its connection's role
    is an admitted one, and bytes have arrived on that connection and been
    withheld. The caller is still pending.
 4. `_cancel`: the call's context is canceled. `_close`: `Client.Close` is
@@ -133,7 +143,7 @@ Every run failed the result gate.
 | Temporary change | Result on both rows |
 | --- | --- |
 | The four Tell APIs return the bare cause of a sent command instead of `OutcomeUnknownError` | All eight subtests fail: "a sent ... ended by cancel (or close) lost its unknown outcome or its cause" |
-| The four Tell APIs transmit a canceled sent command once more, bounded by two seconds | The four `_cancel` subtests fail: "the padded Tell was written again or the gate was rebound", with a count of 2. The `_close` subtests pass, because the change does not transmit on a closed client |
+| The four Tell APIs transmit a canceled sent command once more, bounded by two seconds | The four `_cancel` subtests fail: "the padded Tell was written again or the gate was rebound" (the message now says "command"), with a count of 2. The `_close` subtests pass, because the change does not transmit on a closed client |
 
 ### Failures during development
 
@@ -159,10 +169,34 @@ product. Their passes on other subtests are not used as evidence.
    to be answered.
 
 Whether the bare transport error and the unknown outcome for the same
-condition should be one classification is a product question this cell does
-not decide; neither invents a result or retransmits.
+condition should be one classification was left open here. It is answered
+in
+[COMMAND_TARGET_LOSS_VALIDATION.md](COMMAND_TARGET_LOSS_VALIDATION.md#the-earlier-undecided-observation):
+they are the two sides of one rule (unknown exactly when transmission had
+started), which that record's cells control and assert separately. This
+cell still accepts either for the one invocation whose side it does not
+control. Neither invents a result or retransmits.
 
 No hosted CI run of these rows is recorded here.
+
+## Ordinary MON and MGR commands
+
+Added later on 2026-11-14. `MonCommand` sends the read-only MON command
+`{"prefix":"version","format":"json"}`; its padded write may go to any MON.
+`MgrCommand` sends the read-only module command
+`{"prefix":"pg stat","format":"json"}` to the active manager. Both run the
+sequence above without change, in `_cancel` and `_close`. Before this, the
+channel matrix had no deterministic case of `Client.Close` with a sent MON
+or MGR command outstanding: the shutdown-under-traffic test accepts
+`ErrClosed` or a transport cause without knowing what was sent.
+
+The limits are the ones above: the withheld bytes are not attributed to a
+reply (on a MON connection they can belong to any message), nothing shows
+that the daemon executed the command, and both commands are read-only.
+
+Evidence, the two temporary product changes for these subtests and the rows
+are in
+[COMMAND_TARGET_LOSS_VALIDATION.md](COMMAND_TARGET_LOSS_VALIDATION.md#execution-evidence).
 
 ## Daemon-free checks
 

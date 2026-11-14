@@ -7,8 +7,45 @@ import (
 	"io"
 	"net"
 	"slices"
+	"sync/atomic"
 	"testing"
 )
+
+// paddedWriteLedger counts the writes of at least 4096 bytes that a test's
+// connections issued, and separately those that returned complete: every byte
+// accepted and no error. A short or failed write of that size is issued but
+// not complete, so the issued count alone does not show that a padded command
+// left the client in full.
+type paddedWriteLedger struct {
+	issued, complete atomic.Int32
+}
+
+type paddedWriteLedgerConn struct {
+	net.Conn
+	ledger *paddedWriteLedger
+}
+
+func (l *paddedWriteLedger) wrap(conn net.Conn) net.Conn {
+	return &paddedWriteLedgerConn{Conn: conn, ledger: l}
+}
+
+func (c *paddedWriteLedgerConn) Write(p []byte) (int, error) {
+	if len(p) < 4096 {
+		return c.Conn.Write(p)
+	}
+	c.ledger.issued.Add(1)
+	n, err := c.Conn.Write(p)
+	if n == len(p) && err == nil {
+		c.ledger.complete.Add(1)
+	}
+	return n, err
+}
+
+// once reports whether exactly one padded write was issued and it returned
+// complete.
+func (l *paddedWriteLedger) once() bool {
+	return l.issued.Load() == 1 && l.complete.Load() == 1
+}
 
 // metLocallyEndedConnection reports whether a failed invocation is the one a
 // test caused by closing a connection underneath a session that still held
@@ -88,5 +125,53 @@ func TestLaterDialsListsEveryLaterDialToTheTarget(t *testing.T) {
 	}
 	if got := laterDials(peers, "mgr.b", 0); len(got) != 0 {
 		t.Fatal("a dial to another daemon was listed", got)
+	}
+}
+
+type scriptedWriteConn struct {
+	net.Conn
+	accept int
+	err    error
+}
+
+func (c scriptedWriteConn) Write(p []byte) (int, error) {
+	if c.accept >= 0 && c.accept < len(p) {
+		return c.accept, c.err
+	}
+	return len(p), c.err
+}
+
+func TestPaddedWriteLedgerCountsOnlyCompleteWrites(t *testing.T) {
+	padded, small := make([]byte, 8192), make([]byte, 4095)
+	for _, tc := range []struct {
+		name             string
+		conn             scriptedWriteConn
+		writes           [][]byte
+		issued, complete int32
+		once             bool
+	}{
+		{"complete", scriptedWriteConn{accept: -1}, [][]byte{small, padded}, 1, 1, true},
+		{"below the size", scriptedWriteConn{accept: -1}, [][]byte{small}, 0, 0, false},
+		{"short with an error", scriptedWriteConn{accept: 5000, err: io.ErrShortWrite}, [][]byte{padded}, 1, 0, false},
+		{"short without an error", scriptedWriteConn{accept: 5000}, [][]byte{padded}, 1, 0, false},
+		{"refused", scriptedWriteConn{accept: 0, err: net.ErrClosed}, [][]byte{padded}, 1, 0, false},
+		{"every byte with an error", scriptedWriteConn{accept: -1, err: net.ErrClosed}, [][]byte{padded}, 1, 0, false},
+		{"complete twice", scriptedWriteConn{accept: -1}, [][]byte{padded, padded}, 2, 2, false},
+	} {
+		var ledger paddedWriteLedger
+		conn := ledger.wrap(tc.conn)
+		for _, p := range tc.writes {
+			_, _ = conn.Write(p)
+		}
+		if ledger.issued.Load() != tc.issued || ledger.complete.Load() != tc.complete || ledger.once() != tc.once {
+			t.Errorf("%s: issued=%d complete=%d once=%t", tc.name, ledger.issued.Load(), ledger.complete.Load(), ledger.once())
+		}
+	}
+	// A complete write followed by a failed resend is not one write.
+	var ledger paddedWriteLedger
+	_, _ = ledger.wrap(scriptedWriteConn{accept: -1}).Write(padded)
+	_, _ = ledger.wrap(scriptedWriteConn{accept: 0, err: net.ErrClosed}).Write(padded)
+	if ledger.once() || ledger.issued.Load() != 2 || ledger.complete.Load() != 1 {
+		t.Error("a failed second padded write was not counted as issued", ledger.issued.Load(), ledger.complete.Load())
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -47,6 +46,9 @@ func TestCephNamedMonitorTellIntegration(t *testing.T) {
 	var mu sync.Mutex
 	var namedPeers []string
 	var blockB bool
+	// The product has no sentinel of its own for a failed dial: the caller's
+	// dialer error is the cause. This one stands for it.
+	errDialRefused := errors.New("named MON dial refused by the test dialer")
 	options.DialContext = func(ctx context.Context, network, endpoint string) (net.Conn, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -63,7 +65,7 @@ func TestCephNamedMonitorTellIntegration(t *testing.T) {
 		blocked := marked && blockB && role == "mon.b"
 		mu.Unlock()
 		if blocked {
-			return nil, &net.OpError{Op: "dial", Net: network, Err: io.EOF}
+			return nil, &net.OpError{Op: "dial", Net: network, Err: errDialRefused}
 		}
 		return dial(ctx, network, endpoint)
 	}
@@ -124,10 +126,12 @@ func TestCephNamedMonitorTellIntegration(t *testing.T) {
 	}
 	blockB = true
 	mu.Unlock()
-	_, err = c.MonTellTo(probe, "b", command)
+	refused, err := c.MonTellTo(probe, "b", command)
 	var unknown *cephmsgr.OutcomeUnknownError
-	if err == nil || errors.As(err, &unknown) {
-		t.Fatal("unavailable named TCP target lost known non-execution", err)
+	var dialFailure *net.OpError
+	if !knownUnsent(refused, err) || !errors.Is(err, errDialRefused) || !errors.As(err, &dialFailure) || dialFailure.Op != "dial" ||
+		errors.Is(err, cephmsgr.ErrMonitorNotFound) || errors.Is(err, cephmsgr.ErrMonitorTargetChanged) || errors.Is(err, cephmsgr.ErrClosed) {
+		t.Fatal("unavailable named TCP target lost known non-execution or the dialer's own cause", err)
 	}
 	mu.Lock()
 	blockB = false
