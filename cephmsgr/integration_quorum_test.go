@@ -58,8 +58,11 @@ func TestCephCompleteMonitorOutageIntegration(t *testing.T) {
 	}
 	for cycle := 0; cycle < 3; cycle++ {
 		c.mu.Lock()
-		old := c.mon
+		old, manager := c.mon, c.mgrMap.Name
 		c.mu.Unlock()
+		if manager == "" {
+			t.Fatal("no active manager name before the outage")
+		}
 		if err := controlFixtureMonitors(ctx, control, false); err != nil {
 			t.Fatal("stop all MONs", err)
 		}
@@ -68,13 +71,29 @@ func TestCephCompleteMonitorOutageIntegration(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal("old MON session remained open", ctx.Err())
 		}
-		for _, call := range []func(context.Context, Command) (Result, error){c.MonCommand, c.MgrCommand} {
+		// With no MON reachable, every command channel of the client waits
+		// for MON admission and ends with the caller's deadline: known not to
+		// have been sent. That includes both manager channels while the
+		// manager itself is still running, and both exact-name Tells, whose
+		// target is resolved from maps that need an admitted MON.
+		status, version := Command{JSON: []byte(`{"prefix":"status"}`)}, Command{JSON: []byte(`{"prefix":"version","format":"json"}`)}
+		for _, api := range []struct {
+			name string
+			call func(context.Context) (Result, error)
+		}{
+			{"MonCommand", func(ctx context.Context) (Result, error) { return c.MonCommand(ctx, status) }},
+			{"MgrCommand", func(ctx context.Context) (Result, error) { return c.MgrCommand(ctx, status) }},
+			{"MonTell", func(ctx context.Context) (Result, error) { return c.MonTell(ctx, version) }},
+			{"MgrTell", func(ctx context.Context) (Result, error) { return c.MgrTell(ctx, version) }},
+			{"MonTellTo", func(ctx context.Context) (Result, error) { return c.MonTellTo(ctx, "b", version) }},
+			{"MgrTellTo", func(ctx context.Context) (Result, error) { return c.MgrTellTo(ctx, manager, version) }},
+		} {
 			short, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-			_, err := call(short, Command{JSON: []byte(`{"prefix":"status"}`)})
+			result, err := api.call(short)
 			cancel()
 			var unknown *OutcomeUnknownError
-			if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &unknown) {
-				t.Fatal("untransmitted outage wait has incorrect result", err)
+			if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &unknown) || result.Code != 0 || result.Message != "" || len(result.Data) != 0 {
+				t.Fatal("untransmitted outage wait has incorrect result", api.name, err)
 			}
 		}
 		waiting := make(chan error, 2)

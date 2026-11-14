@@ -52,6 +52,19 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &unknown) {
 		t.Fatal("MGR discovery wait did not preserve known non-execution", err)
 	}
+	// The current-manager Tell waits for an active manager in the same way.
+	// The exact-name Tell does not wait: a name that the MgrMap does not
+	// list is refused at once. Neither was sent.
+	tell := Command{JSON: []byte(`{"prefix":"version","format":"json"}`)}
+	short, cancel = context.WithTimeout(ctx, 30*time.Millisecond)
+	result, err := c.MgrTell(short, tell)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &unknown) || result.Code != 0 || len(result.Data) != 0 {
+		t.Fatal("MGR Tell discovery wait did not preserve known non-execution", err)
+	}
+	if result, err = c.MgrTellTo(ctx, "a", tell); !errors.Is(err, ErrManagerNotFound) || errors.As(err, &unknown) || result.Code != 0 || len(result.Data) != 0 {
+		t.Fatal("an exact-name MGR Tell without any manager in the map was not a known-unsent refusal", err)
+	}
 
 	// Close must release callers blocked on discovery and on the MGR gate.
 	closing, err := Dial(ctx, integrationOptions(t))
@@ -61,7 +74,12 @@ func TestCephManagerAvailabilityIntegration(t *testing.T) {
 	defer closing.Close()
 	closedCalls := make(chan error, 8)
 	for i := 0; i < cap(closedCalls); i++ {
-		go func() { _, err := closing.MgrCommand(ctx, command); closedCalls <- err }()
+		// Half of the waiters use the current-manager Tell.
+		call, waiting := closing.MgrCommand, command
+		if i%2 == 1 {
+			call, waiting = closing.MgrTell, tell
+		}
+		go func() { _, err := call(ctx, waiting); closedCalls <- err }()
 	}
 	for len(closing.calls) != cap(closedCalls) {
 		select {
