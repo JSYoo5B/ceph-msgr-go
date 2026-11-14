@@ -269,6 +269,9 @@ cover it with a scripted peer.
   command, a Tell to a paused target, `OpenOSD` or `OpenMDS` to a stopped
   daemon, an OSD stopped in order without a command in flight, a restarted
   MDS, or `ErrMonitorTargetChanged` against a real MON.
+- The unaware side with a local write that itself fails. In every run of
+  the crash test the padded write returned and the session ended when the
+  parked end of the peer was released; the tests accept both.
 - Any profile other than the rows above.
 
 ## Execution evidence
@@ -301,7 +304,10 @@ Observed in these runs, as logged by the tests:
   session the cause was `EOF` without an unknown outcome; on the unaware
   session the padded write returned without an error and, after the release,
   the call ended as an unknown outcome with cause `EOF` and transaction 3.
-- Stopped MDS, both rows: the same, with transaction 2.
+- Stopped MDS, both rows: on the ended session the cause was `EOF` without
+  an unknown outcome; on the unaware session the call ended as an unknown
+  outcome with cause `EOF` and transaction 2. The subtest does not log
+  whether its padded write returned with an error.
 - Exact MGR Tell across the failover (CRC row): the sent call ended with
   "request outcome unknown: active manager changed" joined with "named
   manager target changed"; the unsent call with "named manager target
