@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 
+	"github.com/JSYoo5B/ceph-testcontainers-go/cephfs"
 	"github.com/JSYoo5B/ceph-testcontainers-go/fault"
 	"github.com/moby/moby/api/types/container"
 	"github.com/testcontainers/testcontainers-go"
@@ -47,11 +48,36 @@ func (c *fixtureCluster) daemon(ctx context.Context, kind, name string) (testcon
 			}
 		}
 	}
+	if kind == "mds" {
+		for _, fs := range cephfs.Filesystems(c.cluster) {
+			for _, d := range fs.MDSs() {
+				if d != nil && d.Container != nil && d.ID == name {
+					return d.Container, nil
+				}
+			}
+		}
+	}
 	return nil, errors.New("fixture daemon not found")
 }
 
+// daemonControlKinds are the daemon kinds a pause, resume, stop, start or
+// kill request may name.
+var daemonControlKinds = []string{"mon", "mgr", "osd", "mds"}
+
+// daemonControlAdmitted is the closed admission of the daemon controls. MON,
+// MGR and OSD keep every action, with kill restricted further below. An MDS
+// may only be stopped, and only in the public MDS command acceptance, whose
+// last step sends commands to its stopped daemon; no profile restarts,
+// pauses or kills an MDS through this control.
+func (p profile) daemonControlAdmitted(kind, action string) bool {
+	if kind != "mds" {
+		return kind == "mon" || kind == "mgr" || kind == "osd"
+	}
+	return action == "stop" && p.mdsCommands == "1" && p.mdsFresh == "1" && p.testRun != daemonCommandMDSSelector
+}
+
 func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) error {
-	for _, kind := range []string{"mon", "mgr", "osd"} {
+	for _, kind := range daemonControlKinds {
 		for _, action := range []string{"pause", "resume", "stop", "start", "kill"} {
 			fields, err := c.request(out, action+"-"+kind)
 			if err != nil {
@@ -62,6 +88,9 @@ func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) 
 			}
 			if len(fields) != 2 {
 				return errors.New("invalid daemon control request")
+			}
+			if !c.profile.daemonControlAdmitted(kind, action) {
+				return errors.New("MDS daemon control is restricted to stopping the owned daemon of the public MDS command acceptance")
 			}
 			name := fields[1]
 			daemon, err := c.daemon(ctx, kind, name)
