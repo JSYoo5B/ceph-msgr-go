@@ -120,11 +120,19 @@ func TestCephOSDCommandCrashIntegration(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("the session of the killed OSD never ended", ctx.Err())
 	}
+	// The error the transport of the ended session was lost with, as its
+	// connection returned it before the client closed it; nil when the
+	// keepalive ended the session instead.
+	loss := ended.hold.transportLoss()
+	t.Logf("the ended session's connection to the killed OSD was lost with: %v", loss)
 	for round := 0; round < 2; round++ {
 		for _, form := range forms {
 			result, err := call(ctx, ended.handle, form)
 			if !knownUnsent(result.Result, err) || errors.Is(err, cephmsgr.ErrClosed) || result.Submission.Transaction != 0 {
 				t.Fatalf("%s after its session had ended was not a known-unsent refusal: %+v %v", form, result.Submission, err)
+			}
+			if !endedWithSessionCause(err, loss) {
+				t.Fatalf("%s after its session had ended lost the session's terminal cause %v: %v", form, loss, err)
 			}
 			if round == 0 {
 				t.Logf("%s on the ended session of the killed OSD: known unsent: %v", form, err)

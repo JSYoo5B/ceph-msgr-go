@@ -290,7 +290,7 @@ func TestCephNamedManagerTellIntegration(t *testing.T) {
 			name string
 			done <-chan struct{}
 		}{{"the unsent client's dial to the named manager", reached}, {"the sent client's padded write", hold.bound},
-			{"the return of that write", hold.wrote}, {"withheld received bytes after it", hold.withheld}} {
+			{"the return of that write", hold.wrote}, {"withheld received bytes after it", hold.received}} {
 			select {
 			case <-signal.done:
 			case got := <-unsentDone:

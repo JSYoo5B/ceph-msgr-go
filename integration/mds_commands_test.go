@@ -640,10 +640,18 @@ func TestCephMDSCommandsIntegration(t *testing.T) {
 				t.Fatal("the "+name+" of the stopped MDS never ended", ctx.Err())
 			}
 		}
+		// The error the transport of the ended session was lost with, as
+		// its connection returned it before the client closed it; nil when
+		// the keepalive ended the session instead.
+		loss := endedHold.transportLoss()
+		t.Logf("the ended session's connection to the stopped MDS was lost with: %v", loss)
 		for round := 0; round < 2; round++ {
 			r, e := ended.Command(ctx, version)
 			if !knownUnsent(r.Result, e) || errors.Is(e, cephmsgr.ErrClosed) || r.Submission != (cephmsgr.MDSCommandSubmission{}) {
 				t.Fatalf("a command after its session had ended was not a known-unsent refusal: %+v %v", r.Submission, e)
+			}
+			if !endedWithSessionCause(e, loss) {
+				t.Fatalf("a command after its session had ended lost the session's terminal cause %v: %v", loss, e)
 			}
 			if round == 0 {
 				t.Log("command on the ended session of the stopped MDS: known unsent:", e)

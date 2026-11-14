@@ -379,7 +379,7 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 					for _, signal := range []struct {
 						name string
 						done <-chan struct{}
-					}{{"issued", hold.bound}, {"returned from its local write", hold.wrote}, {"followed by withheld received bytes", hold.withheld}} {
+					}{{"issued", hold.bound}, {"returned from its local write", hold.wrote}, {"followed by withheld received bytes", hold.received}} {
 						select {
 						case <-signal.done:
 						case got := <-finished:

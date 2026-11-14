@@ -3,9 +3,11 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -40,18 +42,22 @@ type commandHold struct {
 	returned int
 	complete int
 	released bool
+	lost     []error
 
 	// bound is closed when a write binds the hold; withheld when a held Read
-	// returned from the peer and was parked; wrote when a write of at least
+	// returned from the peer and was parked, bytes or the end of the peer
+	// alike; received only when such a parked Read carried at least one
+	// byte, so that an empty end of the peer is never taken for bytes that
+	// arrived from a live peer; wrote when a write of at least
 	// threshold bytes on a held connection returned, with or without an
 	// error; closed when a selected connection was closed.
-	bound, withheld, wrote, closed, release chan struct{}
-	once                                    struct{ bound, withheld, wrote, closed, release sync.Once }
+	bound, withheld, received, wrote, closed, release chan struct{}
+	once                                              struct{ bound, withheld, received, wrote, closed, release sync.Once }
 }
 
 func newCommandHold(threshold int, selects func(endpoint string) bool) *commandHold {
 	return &commandHold{selects: selects, threshold: threshold, bound: make(chan struct{}), withheld: make(chan struct{}),
-		wrote: make(chan struct{}), closed: make(chan struct{}), release: make(chan struct{})}
+		received: make(chan struct{}), wrote: make(chan struct{}), closed: make(chan struct{}), release: make(chan struct{})}
 }
 
 // daemonEndpoint reports whether a dialed "<ip>:<port>" is the endpoint of a
@@ -158,6 +164,7 @@ func (c *commandHoldConn) Write(p []byte) (int, error) {
 	}
 	h.mu.Unlock()
 	n, err := c.Conn.Write(p)
+	c.observe(err)
 	if large {
 		h.mu.Lock()
 		h.returned++
@@ -174,8 +181,12 @@ func (c *commandHoldConn) Write(p []byte) (int, error) {
 
 func (c *commandHoldConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
+	c.observe(err)
 	if (n > 0 || err != nil) && c.hold.holds(c) {
 		c.hold.once.withheld.Do(func() { close(c.hold.withheld) })
+		if n > 0 {
+			c.hold.once.received.Do(func() { close(c.hold.received) })
+		}
 		select {
 		case <-c.hold.release:
 		case <-c.done:
@@ -191,11 +202,60 @@ func (c *commandHoldConn) Read(p []byte) (int, error) {
 // ended, held or not.
 func (c *commandHoldConn) Close() error {
 	c.closeOnce.Do(func() {
-		c.closeErr = c.Conn.Close()
+		// done first: an I/O error that the close itself causes is not the
+		// loss of the transport.
 		close(c.done)
+		c.closeErr = c.Conn.Close()
 		c.hold.once.closed.Do(func() { close(c.hold.closed) })
 	})
 	return c.closeErr
+}
+
+// observe records every error that a Read or Write of a selected connection
+// returned before the client closed that connection, other than an expired
+// deadline: the errors with which the transport was lost, as the session met
+// them at the connection. A reader and a writer may each meet one, and the
+// session records whichever it handled first.
+func (c *commandHoldConn) observe(err error) {
+	if err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		return
+	}
+	select {
+	case <-c.done:
+		return
+	default:
+	}
+	c.hold.mu.Lock()
+	c.hold.lost = append(c.hold.lost, err)
+	c.hold.mu.Unlock()
+}
+
+// transportLoss returns the errors recorded by observe.
+func (h *commandHold) transportLoss() []error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]error(nil), h.lost...)
+}
+
+// endedWithSessionCause reports whether a known-unsent command failure
+// carries the terminal cause of its ended session: one of the errors the
+// hold saw the transport end with, or, where the transport gave none before
+// the client closed it, the keepalive timeout that ended the session. Any other
+// known-unsent error, such as a target or argument refusal, is not that
+// cause.
+func endedWithSessionCause(err error, transportLoss []error) bool {
+	if err == nil {
+		return false
+	}
+	if len(transportLoss) == 0 {
+		return errors.Is(err, cephmsgr.ErrKeepaliveTimeout)
+	}
+	for _, loss := range transportLoss {
+		if errors.Is(err, loss) {
+			return true
+		}
+	}
+	return false
 }
 
 // knownUnsent reports a command failure that is neither an unknown outcome
@@ -354,10 +414,14 @@ func TestCommandHoldParksBytesAndErrors(t *testing.T) {
 		server.Write([]byte("reply"))
 		done := read(conn)
 		<-h.withheld
+		<-h.received
 		pending(t, done)
 		h.releaseHeld()
 		if err := <-done; err != nil {
 			t.Fatal("the released read lost its bytes", err)
+		}
+		if len(h.transportLoss()) != 0 {
+			t.Fatal("received bytes were recorded as a transport loss", h.transportLoss())
 		}
 	})
 	t.Run("the end of the peer is parked until released", func(t *testing.T) {
@@ -368,6 +432,15 @@ func TestCommandHoldParksBytesAndErrors(t *testing.T) {
 		done := read(conn)
 		<-h.withheld
 		pending(t, done)
+		// An empty end of the peer is parked but is not received bytes.
+		select {
+		case <-h.received:
+			t.Fatal("the end of the peer without a byte was reported as received bytes")
+		default:
+		}
+		if loss := h.transportLoss(); len(loss) != 1 || !errors.Is(loss[0], io.EOF) {
+			t.Fatal("the end of the peer was not recorded as the transport loss", h.transportLoss())
+		}
 		select {
 		case <-h.closed:
 			t.Fatal("the hold reported a close of the client side")
@@ -376,6 +449,45 @@ func TestCommandHoldParksBytesAndErrors(t *testing.T) {
 		h.releaseHeld()
 		if err := <-done; !errors.Is(err, io.EOF) {
 			t.Fatal("the released read lost the peer's end", err)
+		}
+	})
+	t.Run("only the session's own cause passes for an ended session", func(t *testing.T) {
+		reset := &net.OpError{Op: "read", Err: errors.New("connection reset by peer")}
+		for name, tc := range map[string]struct {
+			err  error
+			loss []error
+			want bool
+		}{
+			"the observed end of the peer":           {io.EOF, []error{io.EOF}, true},
+			"the observed error wrapped":             {fmt.Errorf("session: %w", reset), []error{reset}, true},
+			"keepalive without a transport error":    {fmt.Errorf("ended: %w", cephmsgr.ErrKeepaliveTimeout), nil, true},
+			"another transport error":                {io.ErrUnexpectedEOF, []error{io.EOF}, false},
+			"an equal message from another error":    {errors.New("EOF"), []error{io.EOF}, false},
+			"a target refusal":                       {cephmsgr.ErrOSDCommandTarget, []error{io.EOF}, false},
+			"an argument refusal":                    {errors.New("invalid command"), []error{io.EOF}, false},
+			"keepalive although a loss was observed": {cephmsgr.ErrKeepaliveTimeout, []error{io.EOF}, false},
+			"a target refusal without a loss":        {cephmsgr.ErrOSDCommandTarget, nil, false},
+			"a closed handle without a loss":         {cephmsgr.ErrClosed, nil, false},
+			"no error":                               {nil, []error{io.EOF}, false},
+			"the second of two observed errors":      {reset, []error{io.EOF, reset}, true},
+			"neither of two observed errors":         {io.ErrUnexpectedEOF, []error{io.EOF, reset}, false},
+		} {
+			if got := endedWithSessionCause(tc.err, tc.loss); got != tc.want {
+				t.Error(name, got)
+			}
+		}
+	})
+	t.Run("an error caused by the client's own close is not a transport loss", func(t *testing.T) {
+		h := newCommandHold(8, selected)
+		conn, _ := wrap(t, h, "192.0.2.1:6800")
+		done := read(conn)
+		conn.Close()
+		if err := <-done; err == nil {
+			t.Fatal("a read on a closed connection returned no error")
+		}
+		conn.Write([]byte("after the close"))
+		if len(h.transportLoss()) != 0 {
+			t.Fatal("the close was recorded as a transport loss", h.transportLoss())
 		}
 	})
 	t.Run("a close is reported without a hold", func(t *testing.T) {
