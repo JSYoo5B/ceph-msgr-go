@@ -247,9 +247,12 @@ These establish no native result.
   sequences; `advance-map` runs no driver; the epoch is raised until it is
   far enough and the flag is clear, within a bound; a set flag, an unread
   map, a refused command, an unchanged flag, an epoch that never moves and
-  unread operations are errors; operations left in flight at the bound are
-  reported; `dump_ops_in_flight` decodes to client operations only, within a
-  bound.
+  unread operations are errors; both samples are answers of the one OSD
+  pinned at the start, and an inventory that is empty, larger or names
+  another OSD at either sample is an error; operations left in flight at the
+  bound are reported; `dump_ops_in_flight` decodes to client operations
+  only, within a bound, and an absent or null `ops` array is refused beside
+  the valid empty one.
 
 ## Execution evidence
 

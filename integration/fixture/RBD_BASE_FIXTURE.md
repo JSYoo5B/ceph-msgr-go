@@ -408,9 +408,14 @@ two new actions at any position.
   the flag is clear again. It issues at most 32 commands. The flag suppresses
   deep scrubs of the owned pool while it is set and starts no new PG
   interval. Before the first command and after the last one the fixture reads
-  `ceph tell osd.<id> dump_ops_in_flight` of every OSD and keeps the client
-  operations (description, client, transaction, receipt time, age and flag
-  point; at most 32). After the last command it repeats that read every
+  `ceph tell osd.<id> dump_ops_in_flight` of the selector's one OSD and keeps
+  the client operations (description, client, transaction, receipt time, age
+  and flag point; at most 32). The OSD is pinned at the first read: the
+  inventory must name exactly one OSD then and the same one before every
+  later read, and each read must be that OSD's own answer with its `ops`
+  array present, which the OSD writes even when it holds nothing. An empty,
+  larger or different inventory and an absent or null array are errors, so
+  no sample is empty because nothing was asked. After the last command it repeats that read every
   200 ms until none of the operations seen at the start is left, for at most
   20 s; what remains then is reported, not judged. The receipt
   `rbd-lock-advance-map.json` has no `native` or `native_process` part; its
@@ -741,9 +746,12 @@ that `advance-map` runs no driver and is a mutation of the owned pool; that
 the epoch is raised by toggling the flag until it is far enough and the flag
 is clear, within a bound, and that a set flag, an unread map, a refused
 command, a flag that did not change, an epoch that never moves and unread
-operations are errors; that operations still in flight at the bound are
-reported; and the decoding of `dump_ops_in_flight` (client operations only,
-within a bound).
+operations are errors; that both samples come from the one OSD pinned at the
+start, and that an inventory without an OSD, with two, or that lost, gained
+or replaced its OSD after the first sample is an error; that operations
+still in flight at the bound are reported; and the decoding of
+`dump_ops_in_flight` (client operations only, within a bound, an absent or
+null `ops` array refused beside the valid empty one).
 `TestRBDLockTestOnlyEncodings` in `integration/rbd_lock_test.go` checks the
 watch-notify `ClientId`, `NotifyMessage` and `ResponseMessage` encodings and
 decoders (every truncation, a trailing byte, compat 2, version 1 payloads,

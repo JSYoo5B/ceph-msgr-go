@@ -257,6 +257,9 @@ func TestRBDLockAdvanceMap(t *testing.T) {
 		setErr        error
 		ignoreSet     bool
 		inFlightErrAt int
+		inventory     func(look int) []int
+		asked         []int
+		nilAt         int
 	}
 	ops := func(s *state) rbdLockAdvanceOps {
 		return rbdLockAdvanceOps{
@@ -272,15 +275,26 @@ func TestRBDLockAdvanceMap(t *testing.T) {
 				s.epoch += s.step
 				return nil
 			},
-			inFlight: func(context.Context) ([]rbdLockOp, error) {
+			osds: func(context.Context) ([]int, error) {
+				if s.inventory != nil {
+					// Look 0 is the pin, look n the inventory before sample n.
+					return s.inventory(s.looks), nil
+				}
+				return []int{0}, nil
+			},
+			inFlight: func(_ context.Context, osd int) ([]rbdLockOp, error) {
 				s.looks++
+				s.asked = append(s.asked, osd)
 				if s.inFlightErrAt == s.looks {
 					return nil, fmt.Errorf("tell failed")
+				}
+				if s.nilAt == s.looks {
+					return nil, nil
 				}
 				if s.answerAt != 0 && s.epoch >= s.answerAt {
 					return []rbdLockOp{}, nil
 				}
-				return slices.Clone(s.held), nil
+				return append([]rbdLockOp{}, s.held...), nil
 			},
 			settle: 50 * time.Millisecond, pause: time.Millisecond,
 		}
@@ -293,6 +307,15 @@ func TestRBDLockAdvanceMap(t *testing.T) {
 		!slices.Equal(r.Epochs, []uint32{28, 29, 30, 31, 32, 33, 34, 35}) || r.Commands[0] != "osd pool set p nodeep-scrub true" || r.Commands[7] != "osd pool set p nodeep-scrub false" ||
 		len(r.OpsBefore) != 2 || len(r.OpsAfter) != 0 || r.Pool != "p" || r.Flag != rbdLockAdvanceFlag {
 		t.Fatal("advance-map receipt differs", r, err)
+	}
+	// Both samples are answers of the one OSD of the inventory.
+	if len(s.asked) < 2 || slices.ContainsFunc(s.asked, func(osd int) bool { return osd != 0 }) {
+		t.Fatal("the samples were not taken from the pinned OSD", s.asked)
+	}
+	// The pinned OSD is the inventory's, whatever its ID.
+	s = &state{epoch: 27, step: 1, held: []rbdLockOp{{OSD: 3, Client: "client.4791", Transaction: 10}}, answerAt: 32, inventory: func(int) []int { return []int{3} }}
+	if r, err = rbdLockAdvanceMap(t.Context(), "p", ops(s)); err != nil || len(r.OpsBefore) != 1 || len(r.OpsAfter) != 0 || slices.ContainsFunc(s.asked, func(osd int) bool { return osd != 3 }) {
+		t.Fatal("the inventory's OSD was not the one asked", r, s.asked, err)
 	}
 	// Two epochs per command: the target is reached while the flag is set,
 	// so one more command clears it.
@@ -314,10 +337,38 @@ func TestRBDLockAdvanceMap(t *testing.T) {
 		"epoch never moves":            {epoch: 27, step: 0},
 		"operations unavailable":       {epoch: 27, step: 1, inFlightErrAt: 1},
 		"operations unavailable after": {epoch: 27, step: 1, inFlightErrAt: 2},
+		"no operations list":           {epoch: 27, step: 1, held: held, nilAt: 1},
+		"no operations list after":     {epoch: 27, step: 1, held: held, nilAt: 2},
+		"no OSD":                       {epoch: 27, step: 1, held: held, inventory: func(int) []int { return []int{} }},
+		"two OSDs":                     {epoch: 27, step: 1, held: held, inventory: func(int) []int { return []int{0, 1} }},
+		// The inventory is empty, larger or another OSD's once the held
+		// operations were seen: without the pin the after-sample would be an
+		// empty list nobody supplied.
+		"OSD gone after": {epoch: 27, step: 1, held: held, inventory: func(look int) []int {
+			if look < 1 {
+				return []int{0}
+			}
+			return []int{}
+		}},
+		"OSD added after": {epoch: 27, step: 1, held: held, inventory: func(look int) []int {
+			if look < 1 {
+				return []int{0}
+			}
+			return []int{0, 1}
+		}},
+		"OSD replaced after": {epoch: 27, step: 1, held: held, answerAt: 32, inventory: func(look int) []int {
+			if look < 1 {
+				return []int{0}
+			}
+			return []int{1}
+		}},
 	} {
 		r, err := rbdLockAdvanceMap(t.Context(), "p", ops(s))
 		if err == nil {
 			t.Error("advance-map hid a failure:", name, r)
+		}
+		if len(r.OpsAfter) != 0 && strings.Contains(name, "after") {
+			t.Error("advance-map reported operations it could not sample:", name, r)
 		}
 		if len(s.sets) > 4*rbdLockPendingEpochs {
 			t.Error("advance-map is not bounded:", name, len(s.sets))
@@ -343,6 +394,9 @@ func TestRBDLockOpsInFlightDecoding(t *testing.T) {
 		InitiatedAt: "2026-11-13T01:00:00.000000+0000", Age: 31.5, FlagPoint: "delayed"}) || got[1].Transaction != 11 {
 		t.Fatal("operations in flight decode differently", got, err)
 	}
+	if got, err := decodeRBDLockOps(0, []byte(`{"num_ops":0,"ops":[]}`)); err != nil || got == nil || len(got) != 0 {
+		t.Fatal("the idle answer in the OSD's own field order is not an empty list", got, err)
+	}
 	if got, err := decodeRBDLockOps(0, dump(0)); err != nil || got == nil || len(got) != 0 {
 		t.Fatal("an idle OSD is not an empty list", got, err)
 	}
@@ -350,6 +404,8 @@ func TestRBDLockOpsInFlightDecoding(t *testing.T) {
 	for name, data := range map[string][]byte{
 		"count differs":  dump(2, op("client.1", 1)),
 		"count missing":  []byte(`{"ops":[]}`),
+		"ops missing":    []byte(`{"num_ops":0}`),
+		"ops null":       []byte(`{"ops":null,"num_ops":0}`),
 		"not JSON":       []byte("error"),
 		"over the bound": dump(len(many), many...),
 		"oversized":      append(dump(0), bytes.Repeat([]byte(" "), mdsFreshJSONLimit)...),

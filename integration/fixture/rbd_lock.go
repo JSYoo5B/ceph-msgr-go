@@ -153,11 +153,13 @@ type rbdLockAdvance struct {
 }
 
 // rbdLockAdvanceOps reads the OSDMap epoch with the pool flag, sets or
-// clears the flag, and lists the client operations in flight on every OSD.
+// clears the flag, names the cluster's OSDs and lists the client operations
+// in flight on one of them.
 type rbdLockAdvanceOps struct {
 	read     func(context.Context) (epoch uint32, flag bool, err error)
 	set      func(ctx context.Context, value bool) error
-	inFlight func(context.Context) ([]rbdLockOp, error)
+	osds     func(context.Context) ([]int, error)
+	inFlight func(ctx context.Context, osd int) ([]rbdLockOp, error)
 	// settle is how long the action waits for the operations it first saw
 	// to leave the OSDs, and pause the time between two looks.
 	settle, pause time.Duration
@@ -173,7 +175,31 @@ func rbdLockAdvanceMap(ctx context.Context, pool string, ops rbdLockAdvanceOps) 
 	if err != nil {
 		return r, err
 	}
-	if r.OpsBefore, err = ops.inFlight(ctx); err != nil {
+	// The selector owns one OSD. Every sample is that OSD's own answer: an
+	// inventory that is empty, larger or names another OSD is a failure, so
+	// that no sample can be empty because nothing was asked.
+	osds, err := ops.osds(ctx)
+	if err != nil {
+		return r, err
+	}
+	if len(osds) != 1 {
+		return r, errors.New("the lock control's OSD inventory is not exactly one OSD")
+	}
+	sample := func() ([]rbdLockOp, error) {
+		now, err := ops.osds(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !slices.Equal(now, osds) {
+			return nil, errors.New("the OSD inventory changed between two samples of the operations in flight")
+		}
+		got, err := ops.inFlight(ctx, osds[0])
+		if err == nil && got == nil {
+			err = errors.New("native OSD operations in flight unavailable")
+		}
+		return got, err
+	}
+	if r.OpsBefore, err = sample(); err != nil {
 		return r, err
 	}
 	if flag || epoch == 0 {
@@ -197,7 +223,8 @@ func rbdLockAdvanceMap(ctx context.Context, pool string, ops rbdLockAdvanceOps) 
 			// until none of the operations seen at the start is left; what
 			// remains at the bound is reported, not judged.
 			for deadline := time.Now().Add(ops.settle); ; {
-				if r.OpsAfter, err = ops.inFlight(ctx); err != nil {
+				if r.OpsAfter, err = sample(); err != nil {
+					r.OpsAfter = []rbdLockOp{}
 					return r, err
 				}
 				left := slices.ContainsFunc(r.OpsAfter, func(after rbdLockOp) bool {
@@ -220,10 +247,12 @@ func rbdLockAdvanceMap(ctx context.Context, pool string, ops rbdLockAdvanceOps) 
 }
 
 // decodeRBDLockOps projects one OSD's `dump_ops_in_flight` output. Only
-// client operations are kept; the OSD's own work has no client.
+// client operations are kept; the OSD's own work has no client. The OSD
+// writes the ops array even when it holds nothing, so an absent or null
+// array is not an idle OSD and is refused.
 func decodeRBDLockOps(osd int, data []byte) ([]rbdLockOp, error) {
 	var dump struct {
-		Ops []struct {
+		Ops *[]struct {
 			Description string  `json:"description"`
 			InitiatedAt string  `json:"initiated_at"`
 			Age         float64 `json:"age"`
@@ -237,11 +266,11 @@ func decodeRBDLockOps(osd int, data []byte) ([]rbdLockOp, error) {
 		} `json:"ops"`
 		Count *int `json:"num_ops"`
 	}
-	if len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &dump) != nil || dump.Count == nil || *dump.Count != len(dump.Ops) {
+	if len(data) > mdsFreshJSONLimit || json.Unmarshal(data, &dump) != nil || dump.Ops == nil || dump.Count == nil || *dump.Count != len(*dump.Ops) {
 		return nil, errors.New("native OSD operations in flight unavailable")
 	}
 	ops := []rbdLockOp{}
-	for _, o := range dump.Ops {
+	for _, o := range *dump.Ops {
 		if o.TypeData.ClientInfo == nil {
 			continue
 		}
@@ -283,24 +312,24 @@ func (c *fixtureCluster) rbdLockAdvanceOps(pool string) rbdLockAdvanceOps {
 			_, err := c.cluster.Ceph(ctx, "osd", "pool", "set", pool, rbdLockAdvanceFlag, strconv.FormatBool(value))
 			return err
 		},
-		inFlight: func(ctx context.Context) ([]rbdLockOp, error) {
+		osds: func(ctx context.Context) ([]int, error) {
 			osds, err := c.cluster.OSDs(ctx)
 			if err != nil {
 				return nil, err
 			}
-			all := []rbdLockOp{}
+			ids := make([]int, 0, len(osds))
 			for _, d := range osds {
-				data, err := c.cluster.Ceph(ctx, "tell", "osd."+strconv.Itoa(d.ID), "dump_ops_in_flight")
-				if err != nil {
-					return nil, err
-				}
-				ops, err := decodeRBDLockOps(d.ID, data)
-				if err != nil {
-					return nil, err
-				}
-				all = append(all, ops...)
+				ids = append(ids, d.ID)
 			}
-			return all, nil
+			slices.Sort(ids)
+			return ids, nil
+		},
+		inFlight: func(ctx context.Context, osd int) ([]rbdLockOp, error) {
+			data, err := c.cluster.Ceph(ctx, "tell", "osd."+strconv.Itoa(osd), "dump_ops_in_flight")
+			if err != nil {
+				return nil, err
+			}
+			return decodeRBDLockOps(osd, data)
 		},
 		settle: 20 * time.Second, pause: 200 * time.Millisecond,
 	}
