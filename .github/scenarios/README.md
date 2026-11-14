@@ -182,8 +182,26 @@ reply, all client-suite tests without an opt-in parameter of their own:
   selects `TestCephAppliedMDSCommandIsNotReplayedIntegration` on the owned MDS
   command fixture, which admits this one further exact selector.
 
+Two further rows run those OSD, PG and MDS cells in secure mode, where frames
+are not decoded and the cells use their padded-write mode, on the profile of
+the existing secure rows of each fixture (AES256K, IPv6, container test
+process):
+
+- `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16`
+  selects the OSD and PG cells on one single-BlueStore legacy-v6 fixture.
+- `mds-commands.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand`
+  selects the MDS cell on the owned MDS command fixture.
+
 The OSD, PG and MDS cells are described in the
 [daemon command recipe](../../integration/fixture/DAEMON_COMMAND_OUTCOME_VALIDATION.md).
+Two `mon-mgr` rows, `mon-mgr.aes.ip4.crc.host.t-senttellcancellation` and
+`mon-mgr.aes256k.ip4.host.t-senttellcancellation`, select only the client-suite
+`TestCephSentTellCancellationIntegration`: a sent `MonTell`, `MonTellTo`,
+`MgrTell` and `MgrTellTo` whose reply is withheld, each ended once by the
+caller's cancellation and once by `Client.Close`. The test ends MON and MGR
+sessions on purpose and skips without this exact selector, so broad rows do
+not run it. See the
+[recipe](../../integration/fixture/TELL_CANCELLATION_VALIDATION.md).
 One further `rbd` row,
 `rbd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdmirrorpathrecovery`,
 selects only `TestCephRBDMirrorPathRecoveryIntegration` on the single-BlueStore
@@ -256,7 +274,7 @@ which the fixture marks the PG's primary out. Both rows use BlueStore; they
 differ in connection mode, key type, address family and runtime as the other
 RBD rows do. See the
 [primary-change record](../../integration/fixture/RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md).
-The catalog has 110 native rows in total.
+The catalog has 114 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
