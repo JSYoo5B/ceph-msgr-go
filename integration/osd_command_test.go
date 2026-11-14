@@ -272,6 +272,16 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 		} else {
 			t.Log("single-replica profile has no acting replica; non-primary refusal not exercised")
 		}
+		// A PG command whose explicit primary is not this connection's OSD is
+		// a local refusal: nothing is submitted, unlike the daemon refusals
+		// above and below, which are completed replies.
+		elsewhere := pg
+		elsewhere.Primary = primary + 1
+		var unsent *cephmsgr.OutcomeUnknownError
+		if result, err := o.PGCommand(ctx, elsewhere, cephmsgr.Command{JSON: []byte(query)}); !errors.Is(err, cephmsgr.ErrOSDCommandTarget) || errors.As(err, &unsent) ||
+			result.Submission != (cephmsgr.OSDCommandSubmission{}) || result.Code != 0 || result.Data != nil {
+			t.Fatalf("PG command naming another primary was not refused before transmission: %+v %v", result.Submission, err)
+		}
 		absent := cephmsgr.OSDCommandPG{Pool: 4095, Seed: 0, Primary: primary}
 		command := `{"prefix":"query","pgid":"4095.0"}`
 		native := nativeOSDCommand(t, ctx, osdCommandNativeInput{OSD: osdID(primary), Command: command})
@@ -338,6 +348,14 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 		if !errors.As(err, &unknown) || result.Submission.Transaction == 0 || result.Code != 0 || result.Data != nil {
 			t.Fatalf("cancelled command to a paused OSD lost uncertainty: %+v %v", result.Submission, err)
 		}
+		// The same for a PG command to the paused primary.
+		wait, stop = context.WithTimeout(ctx, 1500*time.Millisecond)
+		result, err = o.PGCommand(wait, pg, cephmsgr.Command{JSON: []byte(query)})
+		stop()
+		if !errors.As(err, &unknown) || !errors.Is(err, context.DeadlineExceeded) || result.Submission.Transaction == 0 ||
+			result.Submission.PG == nil || *result.Submission.PG != pg || result.Code != 0 || result.Data != nil {
+			t.Fatalf("cancelled PG command to a paused OSD lost uncertainty or its submission: %+v %v", result.Submission, err)
+		}
 		closing := mutationConnection(t, c, ctx, base) // same ID and address: shared handle
 		if closing != o {
 			t.Fatal("same OSD target did not share the explicit handle")
@@ -356,6 +374,21 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 			}
 		case <-ctx.Done():
 			t.Fatal("Close did not release the pending OSD command")
+		}
+		// The closed handle is an unavailable target, not an uncertain one:
+		// both command forms are refused before anything is submitted.
+		for name, call := range map[string]func() (cephmsgr.OSDCommandResult, error){
+			"Command": func() (cephmsgr.OSDCommandResult, error) {
+				return o.Command(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"version"}`)})
+			},
+			"PGCommand": func() (cephmsgr.OSDCommandResult, error) {
+				return o.PGCommand(ctx, pg, cephmsgr.Command{JSON: []byte(query)})
+			},
+		} {
+			if result, err := call(); !errors.Is(err, cephmsgr.ErrClosed) || errors.As(err, new(*cephmsgr.OutcomeUnknownError)) ||
+				result.Submission != (cephmsgr.OSDCommandSubmission{}) {
+				t.Fatalf("%s on the closed OSD handle was not a known-unsent refusal: %+v %v", name, result.Submission, err)
+			}
 		}
 		if err := testcluster.ControlDaemon(ctx, dir, "resume", "osd", name); err != nil {
 			t.Fatal("resume primary OSD", err)
