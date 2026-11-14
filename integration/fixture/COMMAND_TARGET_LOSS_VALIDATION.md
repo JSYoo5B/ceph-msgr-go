@@ -110,7 +110,7 @@ bytes, a parked end of the peer (which must not set the received-bytes
 signal and must be recorded as the transport loss), release, close (whose
 own errors are not a transport loss) and the classification helpers,
 including the refusal of a target error, an argument error, another
-transport error and an unrelated keepalive cause as the terminal cause of an
+transport error and a keepalive timeout as the terminal cause of an
 ended session. It establishes no native result.
 
 The client suite uses its existing padded gate
@@ -196,8 +196,8 @@ assert both.
 
 | Side | How the test puts a session there | Required result |
 | --- | --- | --- |
-| Ended | A client with a one-second keepalive. After the daemon is stopped the test waits until that client closed its connection to the daemon (and, for the MDS, until `MDSConnection.Done` is closed) | An error that is not an unknown outcome and not `ErrClosed`, with no result and no transaction (OSD, PG) or an empty submission (MDS), and that wraps one of the errors the hold saw that client's connection to the daemon end with; only when the connection gave no error before the client closed it must the error be `ErrKeepaliveTimeout`. Asked twice |
-| Unaware | A client whose keepalive never probes within the test (ten minutes, or the MDS helper's hour). From before the daemon is stopped, everything it would receive on the daemon connection is parked, the end of the peer included | The padded command is written once. When that write returned, the hold is released, so the session learns that its peer is gone. The call must be `OutcomeUnknownError` without `ErrClosed`, with no result, a nonzero transaction and, for a PG command, PG metadata. A further command on the handle is refused |
+| Ended | A client whose keepalive cannot expire within the test (an hour), so that the transport is the only source of the session's terminal cause. After the daemon is stopped the test waits until that client closed its connection to the daemon (and, for the MDS, until `MDSConnection.Done` is closed) | An error that is not an unknown outcome and not `ErrClosed`, with no result and no transaction (OSD, PG) or an empty submission (MDS), and that wraps one of the errors the hold saw that client's connection to the daemon end with; the test fails if the connection returned none. Asked twice |
+| Unaware | A client whose keepalive never probes within the test (an hour). From before the daemon is stopped, everything it would receive on the daemon connection is parked, the end of the peer included | The padded command is written once. When that write returned, the hold is released, so the session learns that its peer is gone. The call must be `OutcomeUnknownError` without `ErrClosed`, with no result, a nonzero transaction and, for a PG command, PG metadata. A further command on the handle is refused |
 
 `TestCephOSDCommandCrashIntegration` does this for `Command` and `PGCommand`
 with SIGKILL of the single BlueStore OSD: one ended client asked with both

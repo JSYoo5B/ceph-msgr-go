@@ -93,16 +93,19 @@ func TestCephOSDCommandCrashIntegration(t *testing.T) {
 		}
 		return side{hold, handle}
 	}
-	// A prompt keepalive bounds the wait should the kill not end the
-	// connection by itself.
-	ended := open(func(options *cephmsgr.Options) {
-		options.KeepaliveInterval, options.KeepaliveTimeout = time.Second, 3*time.Second
-	})
+	// Neither side's keepalive can expire within the test. On the ended
+	// side that leaves the transport as the only source of the session's
+	// terminal cause: a keepalive loop beside the reader could otherwise
+	// end the session first, after the connection had already returned its
+	// error. Should the kill not end the connection, the test's deadline
+	// reports it.
+	idle := func(options *cephmsgr.Options) {
+		options.KeepaliveInterval, options.KeepaliveTimeout = time.Hour, 2*time.Hour
+	}
+	ended := open(idle)
 	unaware := map[string]side{}
 	for _, form := range forms {
-		unaware[form] = open(func(options *cephmsgr.Options) {
-			options.KeepaliveInterval, options.KeepaliveTimeout = 10*time.Minute, 11*time.Minute
-		})
+		unaware[form] = open(idle)
 		unaware[form].hold.holdNow()
 	}
 	name := strconv.FormatInt(int64(base.ID), 10)
@@ -120,10 +123,12 @@ func TestCephOSDCommandCrashIntegration(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("the session of the killed OSD never ended", ctx.Err())
 	}
-	// The error the transport of the ended session was lost with, as its
-	// connection returned it before the client closed it; nil when the
-	// keepalive ended the session instead.
+	// The errors the transport of the ended session was lost with, as its
+	// connection returned them before the client closed it.
 	loss := ended.hold.transportLoss()
+	if len(loss) == 0 {
+		t.Fatal("the session of the killed OSD ended although its connection returned no error")
+	}
 	t.Logf("the ended session's connection to the killed OSD was lost with: %v", loss)
 	for round := 0; round < 2; round++ {
 		for _, form := range forms {

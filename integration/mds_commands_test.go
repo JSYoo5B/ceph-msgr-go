@@ -621,13 +621,15 @@ func TestCephMDSCommandsIntegration(t *testing.T) {
 			}
 			return hold, handle
 		}
-		// ended: a prompt keepalive bounds the wait should the stop not end
-		// the connection by itself. unaware: the helper's keepalive of an
-		// hour never probes, and everything the client would receive is
-		// parked from before the stop, the end of the peer included.
-		endedHold, ended := open(func(options *cephmsgr.Options) {
-			options.KeepaliveInterval, options.KeepaliveTimeout = time.Second, 3*time.Second
-		})
+		// The helper's keepalive of an hour never probes on either side. On
+		// the ended side that leaves the transport as the only source of
+		// the session's terminal cause: a keepalive loop beside the reader
+		// could otherwise end the session first, after the connection had
+		// already returned its error. Should the stop not end the
+		// connection, the test's deadline reports it. unaware: everything
+		// the client would receive is parked from before the stop, the end
+		// of the peer included.
+		endedHold, ended := open(func(*cephmsgr.Options) {})
 		unawareHold, unaware := open(func(*cephmsgr.Options) {})
 		unawareHold.holdNow()
 		if err := testcluster.ControlDaemon(ctx, dir, "stop", "mds", fresh.MDS.Name); err != nil {
@@ -640,10 +642,12 @@ func TestCephMDSCommandsIntegration(t *testing.T) {
 				t.Fatal("the "+name+" of the stopped MDS never ended", ctx.Err())
 			}
 		}
-		// The error the transport of the ended session was lost with, as
-		// its connection returned it before the client closed it; nil when
-		// the keepalive ended the session instead.
+		// The errors the transport of the ended session was lost with, as
+		// its connection returned them before the client closed it.
 		loss := endedHold.transportLoss()
+		if len(loss) == 0 {
+			t.Fatal("the session of the stopped MDS ended although its connection returned no error")
+		}
 		t.Logf("the ended session's connection to the stopped MDS was lost with: %v", loss)
 		for round := 0; round < 2; round++ {
 			r, e := ended.Command(ctx, version)

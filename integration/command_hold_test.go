@@ -239,16 +239,19 @@ func (h *commandHold) transportLoss() []error {
 
 // endedWithSessionCause reports whether a known-unsent command failure
 // carries the terminal cause of its ended session: one of the errors the
-// hold saw the transport end with, or, where the transport gave none before
-// the client closed it, the keepalive timeout that ended the session. Any other
-// known-unsent error, such as a target or argument refusal, is not that
-// cause.
+// hold saw the transport end with. Any other known-unsent error, such as a
+// target or argument refusal, is not that cause.
+//
+// It decides nothing about a keepalive timeout. A session keeps the first
+// cause it is failed with, and its keepalive loop runs beside its reader, so
+// a session may end with ErrKeepaliveTimeout although its connection had
+// already returned an error. The recorded errors cannot tell that case from
+// a lost cause; a caller therefore gives its client a keepalive that cannot
+// expire within the test, which leaves the transport as the only source of
+// the terminal cause.
 func endedWithSessionCause(err error, transportLoss []error) bool {
 	if err == nil {
 		return false
-	}
-	if len(transportLoss) == 0 {
-		return errors.Is(err, cephmsgr.ErrKeepaliveTimeout)
 	}
 	for _, loss := range transportLoss {
 		if errors.Is(err, loss) {
@@ -460,7 +463,7 @@ func TestCommandHoldParksBytesAndErrors(t *testing.T) {
 		}{
 			"the observed end of the peer":           {io.EOF, []error{io.EOF}, true},
 			"the observed error wrapped":             {fmt.Errorf("session: %w", reset), []error{reset}, true},
-			"keepalive without a transport error":    {fmt.Errorf("ended: %w", cephmsgr.ErrKeepaliveTimeout), nil, true},
+			"keepalive without a transport error":    {fmt.Errorf("ended: %w", cephmsgr.ErrKeepaliveTimeout), nil, false},
 			"another transport error":                {io.ErrUnexpectedEOF, []error{io.EOF}, false},
 			"an equal message from another error":    {errors.New("EOF"), []error{io.EOF}, false},
 			"a target refusal":                       {cephmsgr.ErrOSDCommandTarget, []error{io.EOF}, false},
