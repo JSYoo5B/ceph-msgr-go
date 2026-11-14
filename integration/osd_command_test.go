@@ -330,6 +330,127 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 			seen[tid] = true
 		}
 	})
+	t.Run("written commands ended by the caller are uncertain and never resent", func(t *testing.T) {
+		// Each case has its own client. The command is read-only and padded,
+		// so its one local write is recognizable without decoding a frame:
+		// "sent" means that this write returned and that bytes then arrived
+		// on its connection and were withheld. Nothing is attributed to a
+		// reply and no daemon execution is counted.
+		for _, form := range []string{"Command", "PGCommand"} {
+			for _, ending := range []string{"cancel", "OSDConnection.Close", "Client.Close"} {
+				t.Run(form+" "+ending, func(t *testing.T) {
+					hold := newCommandHold(4096, daemonEndpoint(base.Address))
+					options := integrationOptions(t)
+					options.EnableOSD = true
+					options.DialContext = hold.dialer(options.DialContext)
+					subject, err := cephmsgr.Dial(ctx, options)
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer subject.Close()
+					handle := mutationConnection(t, subject, ctx, base)
+					defer handle.Close()
+					call := func(ctx context.Context, connection *cephmsgr.OSDConnection, padding int) (cephmsgr.OSDCommandResult, error) {
+						if form == "PGCommand" {
+							return connection.PGCommand(ctx, pg, cephmsgr.Command{JSON: []byte(query + strings.Repeat(" ", padding))})
+						}
+						return connection.Command(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"version"}` + strings.Repeat(" ", padding))})
+					}
+					// Control: the unpadded command is answered and no write on the
+					// OSD connection reached the padded size.
+					if result, err := call(ctx, handle, 0); err != nil || result.Code != 0 || len(result.Data) == 0 {
+						t.Fatal("read-only control command", err, result.Code)
+					}
+					if dials, large, bound := hold.counts(); dials != 1 || large != 0 || bound != 0 {
+						t.Fatal("a write before the subject command reached the padded size, or the OSD was dialed more than once", dials, large, bound)
+					}
+					hold.armOnWrite()
+					wait, stop := context.WithCancel(ctx)
+					defer stop()
+					type outcome struct {
+						result cephmsgr.OSDCommandResult
+						err    error
+					}
+					finished := make(chan outcome, 1)
+					go func() {
+						result, err := call(wait, handle, 40<<10)
+						finished <- outcome{result, err}
+					}()
+					for _, signal := range []struct {
+						name string
+						done <-chan struct{}
+					}{{"issued", hold.bound}, {"returned from its local write", hold.wrote}, {"followed by withheld received bytes", hold.withheld}} {
+						select {
+						case <-signal.done:
+						case got := <-finished:
+							t.Fatal("the padded command ended before it was "+signal.name, got.err)
+						case <-ctx.Done():
+							t.Fatal("the padded command was never "+signal.name, ctx.Err())
+						}
+					}
+					if dials, large, bound := hold.counts(); dials != 1 || large != 1 || bound != 1 {
+						t.Fatal("the padded command was not written exactly once on the one OSD connection", dials, large, bound)
+					}
+					select {
+					case got := <-finished:
+						t.Fatal("the caller ended while every received byte was withheld", got.err)
+					default:
+					}
+					want := cephmsgr.ErrClosed
+					switch ending {
+					case "cancel":
+						want = context.Canceled
+						stop()
+					case "OSDConnection.Close":
+						if err := handle.Close(); err != nil {
+							t.Fatal(err)
+						}
+					case "Client.Close":
+						if err := subject.Close(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					select {
+					case got := <-finished:
+						submission := got.result.Submission
+						if !unknownOutcome(got.result.Result, got.err) || !errors.Is(got.err, want) || submission.Transaction == 0 || submission.OSD != primary ||
+							(form == "PGCommand") != (submission.PG != nil) || submission.PG != nil && *submission.PG != pg {
+							t.Fatalf("a written %s ended by %s lost its unknown outcome, its cause or its submission: %+v %v", form, ending, submission, got.err)
+						}
+						t.Logf("%s ended by %s after its one padded write: transaction %d: %v", form, ending, submission.Transaction, got.err)
+					case <-ctx.Done():
+						t.Fatal("ending the caller did not release the written command", ctx.Err())
+					}
+					// A canceled call leaves the handle on a connection that can
+					// deliver nothing; its owner ends it. The closed handle then
+					// refuses both forms before anything is submitted.
+					handle.Close()
+					if result, err := call(ctx, handle, 0); !errors.Is(err, cephmsgr.ErrClosed) || !knownUnsent(result.Result, err) || result.Submission != (cephmsgr.OSDCommandSubmission{}) {
+						t.Fatalf("%s on the closed handle was not a known-unsent refusal: %+v %v", form, result.Submission, err)
+					}
+					redials := 1
+					if ending == "Client.Close" {
+						if _, err := subject.OpenOSD(ctx, cephmsgr.OSDTarget{ID: base.ID, Address: base.Address}); !errors.Is(err, cephmsgr.ErrClosed) {
+							t.Fatal("the closed client opened an OSD connection", err)
+						}
+					} else {
+						// Only an explicit new handle reaches the OSD again.
+						redials = 2
+						fresh := mutationConnection(t, subject, ctx, base)
+						defer fresh.Close()
+						if result, err := call(ctx, fresh, 0); err != nil || result.Code != 0 || len(result.Data) == 0 {
+							t.Fatal("an explicitly reopened handle did not serve the command", err, result.Code)
+						}
+					}
+					// Nothing wrote the padded command again or dialed the OSD
+					// without the caller.
+					if dials, large, bound := hold.counts(); dials != redials || large != 1 || bound != 1 {
+						t.Fatal("the padded command was written again, or the OSD was dialed without the caller", dials, large, bound)
+					}
+				})
+			}
+		}
+	})
 	t.Run("paused OSD cancellation and Close are uncertain and never resent", func(t *testing.T) {
 		name := strconv.FormatInt(int64(primary), 10)
 		if err := testcluster.ControlDaemon(ctx, dir, "pause", "osd", name); err != nil {
