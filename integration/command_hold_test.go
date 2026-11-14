@@ -37,6 +37,7 @@ type commandHold struct {
 	holder   *commandHoldConn
 	dials    int
 	large    int
+	returned int
 	released bool
 
 	// bound is closed when a write binds the hold; withheld when a held Read
@@ -99,6 +100,24 @@ func (h *commandHold) counts() (dials, large, boundConnection int) {
 	return h.dials, h.large, boundConnection
 }
 
+// awaitReturned waits until want writes of at least threshold bytes on
+// selected connections have returned, held or not, and reports the count.
+func (h *commandHold) awaitReturned(ctx context.Context, want int) int {
+	for {
+		h.mu.Lock()
+		returned := h.returned
+		h.mu.Unlock()
+		if returned >= want {
+			return returned
+		}
+		select {
+		case <-ctx.Done():
+			return returned
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
 func (h *commandHold) holds(c *commandHoldConn) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -128,8 +147,13 @@ func (c *commandHoldConn) Write(p []byte) (int, error) {
 	}
 	h.mu.Unlock()
 	n, err := c.Conn.Write(p)
-	if large && h.holds(c) {
-		h.once.wrote.Do(func() { close(h.wrote) })
+	if large {
+		h.mu.Lock()
+		h.returned++
+		h.mu.Unlock()
+		if h.holds(c) {
+			h.once.wrote.Do(func() { close(h.wrote) })
+		}
 	}
 	return n, err
 }
@@ -267,6 +291,14 @@ func TestCommandHoldParksBytesAndErrors(t *testing.T) {
 		<-h.wrote
 		if dials, large, bound := h.counts(); dials != 2 || large != 3 || bound != 2 {
 			t.Fatal("counts", dials, large, bound)
+		}
+		if returned := h.awaitReturned(context.Background(), 3); returned != 3 {
+			t.Fatal("returned padded writes", returned)
+		}
+		expired, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer stop()
+		if returned := h.awaitReturned(expired, 4); returned != 3 {
+			t.Fatal("a padded write that was never issued was reported as returned", returned)
 		}
 		server.Write([]byte("reply"))
 		if err := <-read(conn); err != nil {

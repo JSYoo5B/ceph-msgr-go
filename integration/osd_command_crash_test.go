@@ -52,8 +52,9 @@ func TestCephOSDCommandCrashIntegration(t *testing.T) {
 	}
 	// The commands of the unaware side are padded, so that their one local
 	// write is told apart from acknowledgements without decoding a frame.
+	// A little over 8 KiB fits the socket buffer of a peer that is gone.
 	padded := func(ctx context.Context, o *cephmsgr.OSDConnection, form string) (cephmsgr.OSDCommandResult, error) {
-		padding := strings.Repeat(" ", 40<<10)
+		padding := strings.Repeat(" ", 8<<10)
 		if form == "PGCommand" {
 			return o.PGCommand(ctx, pg, cephmsgr.Command{JSON: append(append([]byte(nil), query.JSON...), padding...)})
 		}

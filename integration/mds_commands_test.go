@@ -654,7 +654,8 @@ func TestCephMDSCommandsIntegration(t *testing.T) {
 			result cephmsgr.MDSCommandResult
 			err    error
 		}
-		padded := cephmsgr.Command{JSON: append(append([]byte(nil), version.JSON...), strings.Repeat(" ", 40<<10)...)}
+		// A little over 8 KiB fits the socket buffer of a peer that is gone.
+		padded := cephmsgr.Command{JSON: append(append([]byte(nil), version.JSON...), strings.Repeat(" ", 8<<10)...)}
 		finished := make(chan outcome, 1)
 		go func() {
 			r, e := unaware.Command(ctx, padded)

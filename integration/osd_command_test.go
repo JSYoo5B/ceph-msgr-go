@@ -452,6 +452,21 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 		}
 	})
 	t.Run("paused OSD cancellation and Close are uncertain and never resent", func(t *testing.T) {
+		// A client of its own, so that its one OSD connection is observed.
+		observed := newCommandHold(4096, daemonEndpoint(base.Address))
+		options := integrationOptions(t)
+		options.EnableOSD = true
+		options.DialContext = observed.dialer(options.DialContext)
+		subject, err := cephmsgr.Dial(ctx, options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer subject.Close()
+		o := mutationConnection(t, subject, ctx, base)
+		defer o.Close()
+		if result, err := o.Command(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"version"}`)}); err != nil || result.Code != 0 {
+			t.Fatal("command before the pause", err)
+		}
 		name := strconv.FormatInt(int64(primary), 10)
 		if err := testcluster.ControlDaemon(ctx, dir, "pause", "osd", name); err != nil {
 			t.Fatal("pause primary OSD", err)
@@ -462,31 +477,48 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 				_ = testcluster.ControlDaemon(context.Background(), dir, "resume", "osd", name)
 			}
 		}()
+		// The commands to the paused primary are padded, so each local write
+		// is counted on the connection without decoding a frame. The hold is
+		// never armed: it withholds nothing here, the paused daemon answers
+		// nothing by itself. Three commands of a little over 8 KiB stay
+		// within the socket buffers of a peer that reads nothing.
+		padding := strings.Repeat(" ", 8<<10)
+		if _, large, _ := observed.counts(); large != 0 {
+			t.Fatal("a write before the paused commands reached the padded size", large)
+		}
 		wait, stop := context.WithTimeout(ctx, 1500*time.Millisecond)
-		result, err := o.Command(wait, cephmsgr.Command{JSON: []byte(`{"prefix":"version"}`)})
+		result, err := o.Command(wait, cephmsgr.Command{JSON: []byte(`{"prefix":"version"}` + padding)})
 		stop()
 		var unknown *cephmsgr.OutcomeUnknownError
-		if !errors.As(err, &unknown) || result.Submission.Transaction == 0 || result.Code != 0 || result.Data != nil {
-			t.Fatalf("cancelled command to a paused OSD lost uncertainty: %+v %v", result.Submission, err)
+		if !errors.As(err, &unknown) || result.Submission.Transaction == 0 || result.Code != 0 || result.Data != nil || observed.awaitReturned(ctx, 1) != 1 {
+			t.Fatalf("cancelled command to a paused OSD lost uncertainty or was not written once: %+v %v", result.Submission, err)
 		}
 		// The same for a PG command to the paused primary.
 		wait, stop = context.WithTimeout(ctx, 1500*time.Millisecond)
-		result, err = o.PGCommand(wait, pg, cephmsgr.Command{JSON: []byte(query)})
+		result, err = o.PGCommand(wait, pg, cephmsgr.Command{JSON: []byte(query + padding)})
 		stop()
 		if !errors.As(err, &unknown) || !errors.Is(err, context.DeadlineExceeded) || result.Submission.Transaction == 0 ||
-			result.Submission.PG == nil || *result.Submission.PG != pg || result.Code != 0 || result.Data != nil {
-			t.Fatalf("cancelled PG command to a paused OSD lost uncertainty or its submission: %+v %v", result.Submission, err)
+			result.Submission.PG == nil || *result.Submission.PG != pg || result.Code != 0 || result.Data != nil || observed.awaitReturned(ctx, 2) != 2 {
+			t.Fatalf("cancelled PG command to a paused OSD lost uncertainty, its submission or its one write: %+v %v", result.Submission, err)
 		}
-		closing := mutationConnection(t, c, ctx, base) // same ID and address: shared handle
+		closing := mutationConnection(t, subject, ctx, base) // same ID and address: shared handle
 		if closing != o {
 			t.Fatal("same OSD target did not share the explicit handle")
 		}
 		done := make(chan error, 1)
 		go func() {
-			_, err := o.Command(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"version"}`)})
+			_, err := o.Command(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"version"}` + padding)})
 			done <- err
 		}()
-		time.Sleep(200 * time.Millisecond)
+		// Close only after the third padded write returned.
+		if returned := observed.awaitReturned(ctx, 3); returned != 3 {
+			t.Fatal("the command to close was never written", returned)
+		}
+		select {
+		case err := <-done:
+			t.Fatal("the paused OSD ended a command by itself", err)
+		default:
+		}
 		_ = o.Close()
 		select {
 		case err := <-done:
@@ -515,12 +547,20 @@ func TestCephOSDCommandsIntegration(t *testing.T) {
 			t.Fatal("resume primary OSD", err)
 		}
 		resumed = true
-		fresh := mutationConnection(t, c, ctx, base)
+		// Until here the client wrote each padded command once and dialed
+		// the OSD once: nothing was resent and nothing reconnected.
+		if dials, large, _ := observed.counts(); dials != 1 || large != 3 {
+			t.Fatal("a command to the paused OSD was written again, or the OSD was dialed without the caller", dials, large)
+		}
+		fresh := mutationConnection(t, subject, ctx, base)
 		defer fresh.Close()
 		result, err = fresh.Command(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"version"}`)})
 		if err != nil || !bytes.Contains(result.Data, []byte("20.2.4")) {
 			t.Fatal("fresh explicit OSD handle did not serve a command after resume", err)
 		}
-		t.Log("cancelled and closed commands returned OutcomeUnknownError; no automatic resend or reconnect; fresh handle served version")
+		if dials, large, _ := observed.counts(); dials != 2 || large != 3 {
+			t.Fatal("the explicit new handle did not dial once, or a paused command was written again after the resume", dials, large)
+		}
+		t.Log("cancelled and closed commands returned OutcomeUnknownError after their one observed padded write; no resend or reconnect; fresh handle served version")
 	})
 }
