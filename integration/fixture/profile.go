@@ -329,12 +329,18 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		// The lock-owner-loss acceptance blocklists two client addresses and
 		// kills a native lock owner; it is admitted only when explicitly
 		// selected, on a fixture no other RBD test shares.
-		if p.testRun == rbdLockOwnerLossSelector {
+		if p.testRun == rbdLockOwnerLossSelector || p.testRun == rbdLockOwnerLossPendingSelector {
 			selected = p.testRun
 		}
-		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || (p.sparseReadOracle != "" || p.mapExtOracle != "") ||
-			p.testRun != "" && p.testRun != selected {
-			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture and no MDS profile", selected)
+		// The primary-change acceptance is the lost-append-reply sequence on
+		// three replicated BlueStore OSDs. No other RBD selection is admitted
+		// on that topology, and this one on no other.
+		if p.testRun == rbdJournalPrimaryChangeSelector {
+			selected = p.testRun
+		}
+		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != p.rbdReplicas() || p.osdReplicas == "3" && p.osdStore != "bluestore" || p.mdsFresh != "0" ||
+			(p.sparseReadOracle != "" || p.mapExtOracle != "") || p.testRun != "" && p.testRun != selected {
+			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture (three BlueStore OSDs for %s alone) and no MDS profile", selected, rbdJournalPrimaryChangeSelector)
 		}
 	}
 	if p.monPing == "1" {
@@ -390,6 +396,15 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		return profile{}, err
 	}
 	return p, nil
+}
+
+// rbdReplicas is the OSD topology the selected RBD acceptance runs on: one
+// OSD, or three for the primary-change sequence.
+func (p profile) rbdReplicas() string {
+	if p.testRun == rbdJournalPrimaryChangeSelector {
+		return "3"
+	}
+	return "1"
 }
 
 // osdErasureWidthSelectors are the only selections the four-OSD topology

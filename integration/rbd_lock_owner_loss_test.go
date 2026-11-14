@@ -81,6 +81,84 @@ var (
 // first handoff, each once.
 var rbdLockOwnerLossFenced = []string{"object_map_update", "data_write", "lock_unlock"}
 
+// The pending variant (TestCephRBDLockOwnerLossPendingIntegration): before it
+// goes silent the zombie sends two requests that the OSD holds, because they
+// name an OSDMap epoch the cluster has not reached. They stay unanswered
+// through both handoffs. The wait for the first is canceled once the zombie
+// is fenced; the second is answered when the fixture has raised the epoch.
+// The fenced attempts follow on the same connection, after those two, and
+// the read on a new connection after that one is closed.
+const (
+	// rbdLockOwnerLossPendingEpochs is how far above the epoch read before
+	// sending the pending requests name theirs. The fixture's advance-map
+	// action raises the epoch by the same amount from where it starts.
+	rbdLockOwnerLossPendingEpochs = 8
+	rbdLockOwnerLossCanceled      = "pending_object_map_update"
+	rbdLockOwnerLossAwaited       = "pending_data_write"
+)
+
+var (
+	rbdLockOwnerLossPendingStages = []string{"go-owner", "takeover", "go-break", "answered", "final"}
+	rbdLockOwnerLossPendingOrder  = []string{
+		"setup", "zombie_lock", "pending_submitted", "observe-go-owner",
+		"request_while_listed", "native_acquired", "pending_canceled", "zombie_watch_end", "fresh_read", "takeover",
+		"dead_owner_listed", "dead_owner_unlisted", "blocklist_add", "break_lock", "go_lock", "map_break_lock", "go_write", "observe-go-broke",
+		"advance-map", "pending_answered", "fenced_attempts", "new_connection", "observe-answered",
+		"go_release", "final", "observer_unwatch"}
+	rbdLockOwnerLossPendingStageEnd = map[string]string{"go-owner": "observe-go-owner", "takeover": "takeover", "go-break": "observe-go-broke", "answered": "observe-answered", "final": "observer_unwatch"}
+)
+
+// rbdLockOwnerLossPlan returns the stages, the step order and the last step
+// of each stage for the variant the record belongs to.
+func rbdLockOwnerLossPlan(r *rbdLockOwnerLossRecord) (stages, order []string, end map[string]string) {
+	if r.Pending != nil {
+		return rbdLockOwnerLossPendingStages, rbdLockOwnerLossPendingOrder, rbdLockOwnerLossPendingStageEnd
+	}
+	return rbdLockOwnerLossStages, rbdLockOwnerLossOrder, rbdLockOwnerLossStageEnd
+}
+
+// rbdLockOwnerLossOp is one operation the OSD reported in flight
+// (dump_ops_in_flight), as the fixture read it around its advance-map
+// commands.
+type rbdLockOwnerLossOp struct {
+	OSD         int     `json:"osd"`
+	Description string  `json:"description"`
+	Client      string  `json:"client"`
+	Transaction uint64  `json:"tid"`
+	InitiatedAt string  `json:"initiated_at"`
+	Age         float64 `json:"age"`
+	FlagPoint   string  `json:"flag_point"`
+}
+
+// rbdLockOwnerLossAdvance is the fixture's advance-map receipt.
+type rbdLockOwnerLossAdvance struct {
+	Pool        string               `json:"pool"`
+	Flag        string               `json:"pool_flag"`
+	EpochBefore uint32               `json:"epoch_before"`
+	EpochTarget uint32               `json:"epoch_target"`
+	EpochAfter  uint32               `json:"epoch_after"`
+	Epochs      []uint32             `json:"epochs"`
+	Commands    []string             `json:"commands"`
+	FlagFinally bool                 `json:"flag_finally"`
+	OpsBefore   []rbdLockOwnerLossOp `json:"ops_before"`
+	OpsAfter    []rbdLockOwnerLossOp `json:"ops_after"`
+}
+
+// rbdLockOwnerLossPending is the pending variant's own record.
+type rbdLockOwnerLossPending struct {
+	// SentAtEpoch is the OSDMap epoch the observer read before the two
+	// requests were sent, NamedEpoch the one they name.
+	SentAtEpoch, NamedEpoch uint32
+	// Requests holds the canceled request and then the awaited one. An entry
+	// has no Class until its call returned.
+	Requests []rbdLockOwnerLossAttempt
+	// Whether both calls (later: the awaited one) were still blocked when the
+	// named observation had returned.
+	PendingAfterGoOwner, PendingAfterTakeover, PendingAfterGoBreak bool
+	CanceledUTC, AnsweredUTC                                       string
+	Advance                                                        *rbdLockOwnerLossAdvance
+}
+
 // rbdLockOwnerLossParty is one client of the sequence: its GlobalID, its
 // header watch handle, the lock cookie librbd derives from that handle and
 // the legacy address (ip:port/nonce) of the connection that carries both.
@@ -143,12 +221,14 @@ type rbdLockOwnerLossEvent struct {
 // rbdLockOwnerLossAttempt is one request whose raw outcome is kept instead of
 // being required: what the caller sent and what it was told.
 type rbdLockOwnerLossAttempt struct {
-	Label            string
-	Invocations      int
-	Class            string
-	Code             int32
-	ErrorCode        int32
-	UnknownOutcome   bool
+	Label          string
+	Invocations    int
+	Class          string
+	Code           int32
+	ErrorCode      int32
+	UnknownOutcome bool
+	// Canceled says that the caller's own context ended the wait.
+	Canceled         bool
 	Error            string
 	Submission       cephmsgr.OSDSubmission
 	ReplyTransaction uint64
@@ -256,6 +336,8 @@ type rbdLockOwnerLossRecord struct {
 	ClaimsStage                                 string
 	Problems                                    []string
 	Timings                                     map[string]string
+	// Pending is set in the pending variant only.
+	Pending *rbdLockOwnerLossPending
 }
 
 // rbdLockOwnerLossClaims checks the record up to one stage and returns one
@@ -280,11 +362,19 @@ func rbdLockOwnerLossClaims(r *rbdLockOwnerLossRecord, stage string) []string {
 	var problems []string
 	fail := func(format string, args ...any) { problems = append(problems, fmt.Sprintf(format, args...)) }
 	text := func(v any) string { data, _ := json.Marshal(v); return string(data) }
-	reached := slices.Index(rbdLockOwnerLossStages, stage)
-	if reached < 0 {
+	stages, order, stageEnd := rbdLockOwnerLossPlan(r)
+	if !slices.Contains(stages, stage) {
 		return []string{"unknown stage " + stage}
 	}
-	if want := rbdLockOwnerLossOrder[:slices.Index(rbdLockOwnerLossOrder, rbdLockOwnerLossStageEnd[stage])+1]; !slices.Equal(r.Order, want) {
+	// reached counts the stages both variants share; the pending variant's
+	// "answered" stage lies between "go-break" and "final".
+	pending := r.Pending
+	answered := pending != nil && (stage == "answered" || stage == "final")
+	reached := slices.Index(rbdLockOwnerLossStages, stage)
+	if stage == "answered" {
+		reached = 2
+	}
+	if want := order[:slices.Index(order, stageEnd[stage])+1]; !slices.Equal(r.Order, want) {
 		fail("order: steps completed as %v, want %v", r.Order, want)
 	}
 	needed := [][]string{
@@ -292,6 +382,9 @@ func rbdLockOwnerLossClaims(r *rbdLockOwnerLossRecord, stage string) []string {
 		{"request-while-listed", "acquired", "native-owner", "takeover"},
 		{"dead-owner-listed", "dead-owner-unlisted", "blocklisted", "go-broke", "observe-go-broke"},
 		{"released", "final", "end"}}
+	if answered {
+		needed[2] = append(needed[2], "observe-answered")
+	}
 	for _, names := range needed[:reached+1] {
 		for _, name := range names {
 			if v := r.Views[name]; v == nil || v.Label != name || (v.Source != "native" && v.Source != "go") {
@@ -434,6 +527,36 @@ func rbdLockOwnerLossClaims(r *rbdLockOwnerLossRecord, stage string) []string {
 	if !note(0, rbdNotifyAcquiredLock, z.id()) {
 		fail("notifications: the first notification is not the zombie's AcquiredLock: %s", text(notes))
 	}
+	// Pending variant: two requests were sent before the silence and name an
+	// epoch the cluster has not reached. An entry without a class has not
+	// returned to its caller.
+	last := r.ZombieLastTransaction
+	unanswered := func(at string, a rbdLockOwnerLossAttempt) {
+		if a.Class != "" || a.Invocations != 1 || a.ReplyTransaction != 0 || a.Code != 0 {
+			fail("pending: the zombie's %s is no longer unanswered at %s: %s", a.Label, at, text(a))
+		}
+	}
+	epochBelow := func(names ...string) {
+		for _, name := range names {
+			if e := view(name).Epoch; e < pending.SentAtEpoch || e >= pending.NamedEpoch {
+				fail("%s: OSDMap epoch %d is not below the epoch the pending requests name (%d, sent at %d)", name, e, pending.NamedEpoch, pending.SentAtEpoch)
+			}
+		}
+	}
+	if pending != nil {
+		if pending.SentAtEpoch == 0 || pending.NamedEpoch != pending.SentAtEpoch+rbdLockOwnerLossPendingEpochs || len(pending.Requests) != 2 ||
+			pending.Requests[0].Label != rbdLockOwnerLossCanceled || pending.Requests[1].Label != rbdLockOwnerLossAwaited {
+			return append(problems, fmt.Sprintf("pending: not the two requests naming an epoch %d above the one read before they were sent: %s", rbdLockOwnerLossPendingEpochs, text(pending)))
+		}
+		epochBelow("go-owner")
+		if !pending.PendingAfterGoOwner {
+			fail("pending: the two requests were not both unanswered after the go-owner observations")
+		}
+		if reached < 1 {
+			unanswered("go-owner", pending.Requests[0])
+			unanswered("go-owner", pending.Requests[1])
+		}
+	}
 	if reached < 1 {
 		if len(notes) != 1 {
 			fail("notifications: %d notifications before the takeover, want 1", len(notes))
@@ -489,31 +612,64 @@ func rbdLockOwnerLossClaims(r *rbdLockOwnerLossRecord, stage string) []string {
 	// Their transactions follow the zombie's last request before its silence
 	// without a gap, so it sent no ping, acknowledgement or release meanwhile
 	// and nothing between the attempts.
-	labels := []string{}
-	for i, a := range r.Fenced {
-		labels = append(labels, a.Label)
-		if a.Invocations != 1 || a.Class != "refused" || a.Code != rbdOSDBlocklisted || a.ErrorCode != rbdOSDBlocklisted || a.UnknownOutcome || a.Submission.Transaction == 0 ||
-			a.Submission.GlobalID != z.GlobalID || a.ReplyTransaction != a.Submission.Transaction {
-			fail("fencing: the zombie's %s was not sent once and refused with %d: %s", a.Label, rbdOSDBlocklisted, text(a))
+	// In the pending variant the two pending requests take the next two
+	// transactions and the attempts follow once those were answered.
+	fenced := func(first uint64) {
+		labels := []string{}
+		for i, a := range r.Fenced {
+			labels = append(labels, a.Label)
+			if a.Invocations != 1 || a.Class != "refused" || a.Code != rbdOSDBlocklisted || a.ErrorCode != rbdOSDBlocklisted || a.UnknownOutcome || a.Submission.Transaction == 0 ||
+				a.Submission.GlobalID != z.GlobalID || a.ReplyTransaction != a.Submission.Transaction {
+				fail("fencing: the zombie's %s was not sent once and refused with %d: %s", a.Label, rbdOSDBlocklisted, text(a))
+			}
+			if last == 0 || a.Submission.Transaction != first+uint64(i) {
+				fail("fencing: the zombie's %s has transaction %d, want %d directly after its earlier requests (the last before the silence was %d)", a.Label, a.Submission.Transaction, first+uint64(i), last)
+			}
 		}
-		if r.ZombieLastTransaction == 0 || a.Submission.Transaction != r.ZombieLastTransaction+1+uint64(i) {
-			fail("fencing: the zombie's %s has transaction %d, want %d directly after its last request before the silence (%d)", a.Label, a.Submission.Transaction, r.ZombieLastTransaction+1+uint64(i), r.ZombieLastTransaction)
+		if !slices.Equal(labels, rbdLockOwnerLossFenced) {
+			fail("fencing: attempts are %v, want %v", labels, rbdLockOwnerLossFenced)
 		}
 	}
-	if !slices.Equal(labels, rbdLockOwnerLossFenced) {
-		fail("fencing: attempts are %v, want %v", labels, rbdLockOwnerLossFenced)
+	// The blocklist entry names the address of the connection that took the
+	// lock. Another connection of the same client has another address.
+	newConnection := func(tid uint64, owner rbdLockOwnerLossParty) {
+		if a := r.NewConnection; a == nil || a.Invocations != 1 || a.Class != "applied" || a.Code != 0 || a.Submission.GlobalID != z.GlobalID || a.Submission.Transaction != tid ||
+			!slices.Equal(r.NewConnectionLockers, []rbdLockOwnerLossLocker{{entity(owner), owner.LockCookie, owner.Address}}) {
+			fail("new connection: the zombie client's read on a new connection (transaction %d) did not return the lock owner client.%d: %s %s", tid, owner.GlobalID, text(a), text(r.NewConnectionLockers))
+		}
+	}
+	pendingTIDs := []uint64{last + 1, last + 2}
+	if pending == nil {
+		fenced(last + 1)
+		newConnection(last+1+uint64(len(rbdLockOwnerLossFenced)), r.NativeOwner)
+	} else {
+		// The wait for the first request was canceled only after the observer
+		// had read the zombie's blocklist entry; the caller learned nothing.
+		c := pending.Requests[0]
+		if c.Invocations != 1 || c.Class != "uncertain" || !c.UnknownOutcome || !c.Canceled || c.Code != 0 || c.ErrorCode != 0 || c.ReplyTransaction != 0 ||
+			last == 0 || !slices.Contains(pendingTIDs, c.Submission.Transaction) || c.Submission.GlobalID != z.GlobalID || c.Submission.MapEpoch != pending.NamedEpoch {
+			fail("pending: the zombie's %s did not end as one unknown outcome of a canceled wait with its submission: %s", c.Label, text(c))
+		}
+		canceledAt, err1 := time.Parse(time.RFC3339Nano, pending.CanceledUTC)
+		fencedAt, err2 := time.Parse(time.RFC3339Nano, view("native-owner").ObservedUTC)
+		if err1 != nil || err2 != nil || !canceledAt.After(fencedAt) {
+			fail("pending: the wait for %s was not canceled after the observer read the zombie's blocklist entry (%q, %q)", c.Label, pending.CanceledUTC, view("native-owner").ObservedUTC)
+		}
+		epochBelow("request-while-listed", "native-owner")
+		if !pending.PendingAfterTakeover {
+			fail("pending: the zombie's %s was not unanswered when the native owner had been killed", pending.Requests[1].Label)
+		}
+		if reached < 2 {
+			unanswered("takeover", pending.Requests[1])
+			if len(r.Fenced) != 0 || r.NewConnection != nil {
+				fail("fencing: %d attempts or a read on a new connection before the pending requests were answered", len(r.Fenced))
+			}
+		}
 	}
 	if view("takeover").MapRawHex != acquired.MapRawHex || view("takeover").HeaderLockHex != acquired.HeaderLockHex || view("takeover").MapLockHex != acquired.MapLockHex {
 		fail("takeover: the object map or a lock changed between the native acquisition and the observation after the zombie's attempts")
 	}
 	image("takeover", "takeover", true, true, false, false, false)
-	// The blocklist entry names the address of the connection that took the
-	// lock. Another connection of the same client has another address.
-	if a := r.NewConnection; a == nil || a.Invocations != 1 || a.Class != "applied" || a.Code != 0 || a.Submission.GlobalID != z.GlobalID ||
-		a.Submission.Transaction != r.ZombieLastTransaction+1+uint64(len(r.Fenced)) ||
-		!slices.Equal(r.NewConnectionLockers, []rbdLockOwnerLossLocker{{entity(n), n.LockCookie, n.Address}}) {
-		fail("new connection: the zombie client's read on a new connection did not return the native owner: %s %s", text(a), text(r.NewConnectionLockers))
-	}
 	b := r.Breaker
 	if b.GlobalID == 0 || b.GlobalID == z.GlobalID || b.GlobalID == o.GlobalID || b.GlobalID == n.GlobalID {
 		fail("identity: the breaker is not a new client: %s", text(b))
@@ -577,6 +733,69 @@ func rbdLockOwnerLossClaims(r *rbdLockOwnerLossRecord, stage string) []string {
 	if !note(2+requests, rbdNotifyAcquiredLock, b.id()) {
 		fail("notifications: the native AcquiredLock is not followed by the breaker's: %s", text(notes))
 	}
+	if pending != nil {
+		// The second request stayed unanswered through the Go break as well.
+		epochBelow("dead-owner-listed", "dead-owner-unlisted", "blocklisted", "go-broke")
+		if !pending.PendingAfterGoBreak {
+			fail("pending: the zombie's %s was not unanswered after the Go break", pending.Requests[1].Label)
+		}
+		if !answered {
+			unanswered("go-break", pending.Requests[1])
+			if len(r.Fenced) != 0 || r.NewConnection != nil {
+				fail("fencing: %d attempts or a read on a new connection before the pending requests were answered", len(r.Fenced))
+			}
+		}
+	}
+	if answered {
+		// The fixture raised the epoch past the named one, starting below it.
+		a := pending.Advance
+		if a == nil {
+			fail("advance: receipt missing")
+			a = &rbdLockOwnerLossAdvance{}
+		}
+		if a.EpochBefore < view("go-broke").Epoch || a.EpochBefore >= pending.NamedEpoch || a.EpochAfter < pending.NamedEpoch || a.EpochAfter < a.EpochTarget || a.FlagFinally || len(a.Commands) == 0 {
+			fail("advance: the OSDMap epoch was not raised from below the named epoch %d to at least it, with the pool flag left clear: %s", pending.NamedEpoch, text(a))
+		}
+		// The OSD's own list of operations in flight: it had both requests
+		// before the first observation of the Go owner, still held them when
+		// the fixture began, and holds none of the zombie's afterwards.
+		c, w := pending.Requests[0], pending.Requests[1]
+		goOwnerAt, ownerErr := time.Parse(time.RFC3339Nano, view("go-owner").ObservedUTC)
+		for _, request := range []rbdLockOwnerLossAttempt{c, w} {
+			i := slices.IndexFunc(a.OpsBefore, func(o rbdLockOwnerLossOp) bool {
+				return o.Client == entity(z) && o.Transaction == request.Submission.Transaction && request.Submission.Transaction != 0
+			})
+			if i < 0 {
+				fail("advance: the OSD did not report the zombie's %s (transaction %d) in flight before the epoch was raised: %s", request.Label, request.Submission.Transaction, text(a.OpsBefore))
+				continue
+			}
+			initiated, err := rbdLockOwnerLossUntil(a.OpsBefore[i].InitiatedAt)
+			at, parseErr := time.Parse(time.RFC3339Nano, initiated)
+			if err != nil || parseErr != nil || ownerErr != nil || !at.Before(goOwnerAt) {
+				fail("advance: the OSD did not have the zombie's %s before the go-owner observation (initiated %q, observed %q)", request.Label, a.OpsBefore[i].InitiatedAt, view("go-owner").ObservedUTC)
+			}
+		}
+		if slices.ContainsFunc(a.OpsAfter, func(o rbdLockOwnerLossOp) bool { return o.Client == entity(z) }) {
+			fail("advance: the OSD still reports an operation of the zombie in flight after the epoch was raised: %s", text(a.OpsAfter))
+		}
+		// The awaited request: a known answer, the blocklisted code, at an
+		// epoch not below the named one.
+		if w.Invocations != 1 || w.Class != "refused" || w.Code != rbdOSDBlocklisted || w.ErrorCode != rbdOSDBlocklisted || w.UnknownOutcome || w.Canceled ||
+			!slices.Contains(pendingTIDs, w.Submission.Transaction) || w.Submission.Transaction == c.Submission.Transaction || w.ReplyTransaction != w.Submission.Transaction ||
+			w.Submission.GlobalID != z.GlobalID || w.Submission.MapEpoch != pending.NamedEpoch || w.ReplyMapEpoch < pending.NamedEpoch {
+			fail("pending: the zombie's %s was not answered once with %d at the named epoch %d or later: %s", w.Label, rbdOSDBlocklisted, pending.NamedEpoch, text(w))
+		}
+		fenced(last + 3)
+		newConnection(last+3+uint64(len(rbdLockOwnerLossFenced)), b)
+		heldBy("observe-answered", b)
+		watchers("observe-answered", []rbdLockOwnerLossParty{o, b}, n, z)
+		states("observe-answered", 1, 1, 1, 0, 0)
+		blocked("observe-answered", view("observe-answered").Blocklist, view("observe-answered").ObservedUTC, z.Address, n.Address)
+		if v, w := view("observe-answered"), view("observe-go-broke"); v.MapRawHex != w.MapRawHex || v.HeaderLockHex != w.HeaderLockHex || v.MapLockHex != w.MapLockHex || !slices.Equal(v.Objects, w.Objects) {
+			fail("observe-answered: the object map, a lock or a data object changed after the pending requests were answered")
+		}
+		image("observe-answered", "go-break", true, true, true, false, false)
+	}
 	if reached < 3 {
 		if len(notes) != 3+requests {
 			fail("notifications: %d notifications after the Go break, want %d", len(notes), 3+requests)
@@ -623,6 +842,23 @@ func rbdLockOwnerLossClaims(r *rbdLockOwnerLossRecord, stage string) []string {
 		fail("fencing: %d zombie attempts by the end, want %d", len(r.Fenced), len(rbdLockOwnerLossFenced))
 	}
 	return problems
+}
+
+// rbdLockOwnerLossOutcome is the raw outcome of one request that was sent
+// once: what its caller was told.
+func rbdLockOwnerLossOutcome(label string, reply cephmsgr.OSDReply, err error) rbdLockOwnerLossAttempt {
+	var server *cephmsgr.OSDError
+	var unknown *cephmsgr.OutcomeUnknownError
+	a := rbdLockOwnerLossAttempt{Label: label, Invocations: 1, Code: reply.Code, UnknownOutcome: errors.As(err, &unknown), Canceled: errors.Is(err, context.Canceled),
+		Submission: reply.Submission, ReplyTransaction: reply.Transaction, ReplyMapEpoch: reply.MapEpoch}
+	a.Class, a.Error = rbdMutationOutcome(reply, err)
+	if errors.As(err, &server) {
+		a.ErrorCode = server.Code
+	}
+	for _, op := range reply.Operations {
+		a.OperationResults = append(a.OperationResults, op.Result)
+	}
+	return a
 }
 
 // rbdLockBreakInput is cls_lock_break_op: ENCODE_START(1, 1), the lock name,
@@ -789,7 +1025,27 @@ func waitRBDLockNotification(ctx context.Context, r *rbdLockResponder, from int,
 	}
 }
 
-func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
+func TestCephRBDLockOwnerLossIntegration(t *testing.T) { runRBDLockOwnerLoss(t, false) }
+
+// TestCephRBDLockOwnerLossPendingIntegration is the same double handoff with
+// two requests of the first owner unanswered when it loses the lock. Before
+// it goes silent the zombie sends librbd's guarded object-map update and the
+// data write that would follow, both for an object nobody wrote and both
+// naming an OSDMap epoch the cluster has not reached, so the OSD holds them.
+// They stay unanswered while native librbd blocklists the zombie and breaks
+// its locks, while the native owner is killed and while the breaker takes the
+// lock and writes. The wait for the first is canceled once the zombie is
+// fenced: its caller gets an unknown outcome and sends nothing again. The
+// fixture then raises the OSDMap epoch; the OSD answers the second with its
+// blocklisted error, and the zombie's three further attempts on the same
+// connection get the same answer. A native observation follows. The OSD's
+// own list of operations in flight, read by the fixture before and after it
+// raised the epoch, shows both requests held since before the handoff and
+// gone afterwards. See
+// integration/fixture/RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md.
+func TestCephRBDLockOwnerLossPendingIntegration(t *testing.T) { runRBDLockOwnerLoss(t, true) }
+
+func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {
 		t.Skip("requires the opt-in disposable RBD fixture (CEPH_MSGR_TEST_RBD=1) under its exact selector")
@@ -828,6 +1084,10 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 
 	record := rbdLockOwnerLossRecord{Token: token, Pool: oracle.Plan.Pool, PoolID: oracle.Pool.ID, GoIdentity: identity, ConnectionMode: mode, WatchTimeoutSeconds: rbdLockOwnerLossWatchTimeout,
 		Views: map[string]*rbdLockOwnerLossView{}, ExpectedHead: map[string]string{}, NativeStderr: map[string]string{}, Timings: map[string]string{}}
+	results := "rbd-lock-owner-loss-results.json"
+	if pendingVariant {
+		record.Pending, results = &rbdLockOwnerLossPending{}, "rbd-lock-owner-loss-pending-results.json"
+	}
 	var observerResponder, breakerResponder *rbdLockResponder
 	snapshot := func() {
 		if observerResponder != nil {
@@ -851,7 +1111,7 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 		record.Timings["total"] = time.Since(started).String()
 		data, err := json.Marshal(record)
 		if err == nil {
-			err = testcluster.WritePublicEvidence(filepath.Join(dir, "rbd-lock-owner-loss-results.json"), data)
+			err = testcluster.WritePublicEvidence(filepath.Join(dir, results), data)
 		}
 		if err != nil {
 			t.Error("RBD lock-owner-loss evidence", err)
@@ -1112,18 +1372,7 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 	attempt := func(t *testing.T, p *party, label, object string, ops ...cephmsgr.OSDOperation) rbdLockOwnerLossAttempt {
 		t.Helper()
 		_, reply, err := submit(t, p, label, object, ops...)
-		var server *cephmsgr.OSDError
-		var unknown *cephmsgr.OutcomeUnknownError
-		a := rbdLockOwnerLossAttempt{Label: label, Invocations: 1, Code: reply.Code, UnknownOutcome: errors.As(err, &unknown), Submission: reply.Submission,
-			ReplyTransaction: reply.Transaction, ReplyMapEpoch: reply.MapEpoch}
-		a.Class, a.Error = rbdMutationOutcome(reply, err)
-		if errors.As(err, &server) {
-			a.ErrorCode = server.Code
-		}
-		for _, op := range reply.Operations {
-			a.OperationResults = append(a.OperationResults, op.Result)
-		}
-		return a
+		return rbdLockOwnerLossOutcome(label, reply, err)
 	}
 	classOp := func(class, method string, mode cephmsgr.OSDCallMode, input []byte) cephmsgr.OSDOperation {
 		return cephmsgr.OSDOperation{Code: cephmsgr.OSDCall, Data: input, Class: cephmsgr.OSDClassInput{Class: class, Method: method, Mode: mode, MaxOutputBytes: 4096}}
@@ -1304,6 +1553,40 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 	// it back once (never a repeated lock, never a repeated mutation), the
 	// watches go, and the native action is not left behind.
 	var zombieLocked, zombieGone, breakerLocked, breakerReleased, breakerWatching bool
+	// The pending variant's two calls, each blocked in its own goroutine
+	// until the OSD answers or its context ends.
+	type pendingCall struct {
+		label  string
+		route  rbdRoute
+		req    cephmsgr.OSDRequest
+		cancel context.CancelFunc
+		done   chan struct{}
+		reply  cephmsgr.OSDReply
+		err    error
+	}
+	var pendingCalls []*pendingCall
+	stillPending := func(indexes ...int) bool {
+		for _, i := range indexes {
+			select {
+			case <-pendingCalls[i].done:
+				return false
+			default:
+			}
+		}
+		return true
+	}
+	// settle waits for one pending call to return and keeps its raw outcome.
+	settle := func(t *testing.T, i int, bound time.Duration) {
+		t.Helper()
+		c := pendingCalls[i]
+		select {
+		case <-c.done:
+		case <-time.After(bound):
+			t.Fatalf("the zombie's %s did not return within %v", c.label, bound)
+		}
+		keep("zombie:"+c.label, c.route, c.req, c.reply, c.err)
+		record.Pending.Requests[i] = rbdLockOwnerLossOutcome(c.label, c.reply, c.err)
+	}
 	var breaker *party
 	var bw *cephmsgr.OSDWatch
 	var breakerStop context.CancelFunc
@@ -1329,7 +1612,22 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 		if !t.Failed() {
 			return
 		}
+		for _, c := range pendingCalls {
+			c.cancel()
+		}
 		if zombieLocked && !zombieGone && zombie.conn != nil {
+			if pendingVariant {
+				// Whatever is sent on the lock connection waits behind the
+				// held requests, and a client has one connection per OSD.
+				// cls_lock unlocks by entity and cookie, so a connection
+				// opened after that one is closed releases.
+				cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+				_ = zombie.conn.Close()
+				if o, err := zombie.client.OpenOSD(cleanup, target); err == nil {
+					zombie.conn = o
+				}
+				stop()
+			}
 			unlockBoth(zombie, record.Zombie.LockCookie)
 		}
 		if breakerLocked && !breakerReleased {
@@ -1397,12 +1695,55 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 	})
 	done("zombie_lock")
 
+	// The mutations of an owner without the lock: librbd's guarded object-map
+	// update for an object nobody wrote, and a data write to it.
+	fencedObject := objectCount - 1
+	mapUpdate := []cephmsgr.OSDOperation{
+		classOp("lock", "assert_locked", cephmsgr.OSDCallRead, rbdLockAssertInput("", "")),
+		classOp("rbd", "object_map_update", cephmsgr.OSDCallWrite, rbdObjectMapUpdateInput(fencedObject, fencedObject+1, rbdObjectExists, nil))}
+	dataWrite := func(phase string, offset uint64) []cephmsgr.OSDOperation {
+		data := rbdLockPattern(token, phase, fencedObject*objectSize+offset, 4*k)
+		return []cephmsgr.OSDOperation{
+			{Code: cephmsgr.OSDSetAllocHint, Flags: cephmsgr.OSDFailOK, AllocHint: cephmsgr.OSDAllocHint{ExpectedObjectSize: objectSize, ExpectedWriteSize: objectSize}},
+			{Code: cephmsgr.OSDWrite, Offset: offset, Length: uint64(len(data)), Data: data}}
+	}
+	fencedName := fmt.Sprintf("%s.%016x", prefix, fencedObject)
+	if pendingVariant {
+		// Two requests that the OSD holds: they name an epoch the cluster has
+		// not reached, so the OSD waits for that map before it looks at them.
+		// Each is sent once, from its own goroutine, and never again.
+		p := record.Pending
+		p.SentAtEpoch, _ = blocklist(t, observer, "pending_epoch")
+		p.NamedEpoch = p.SentAtEpoch + rbdLockOwnerLossPendingEpochs
+		conn := zombie.conn
+		for _, c := range []struct {
+			label, object string
+			ops           []cephmsgr.OSDOperation
+		}{{rbdLockOwnerLossCanceled, mapObject, mapUpdate}, {rbdLockOwnerLossAwaited, fencedName, dataWrite("pending", 16*k)}} {
+			r := route(t, c.object)
+			r.Epoch = p.NamedEpoch
+			callCtx, cancelCall := context.WithCancel(ctx)
+			call := &pendingCall{label: c.label, route: r, cancel: cancelCall, done: make(chan struct{}),
+				req: cephmsgr.OSDRequest{MapEpoch: r.Epoch, Object: cephmsgr.OSDObject{Pool: r.Pool, Name: r.Object, Hash: r.Hash}, Operations: c.ops, ModificationTime: now()}}
+			pendingCalls = append(pendingCalls, call)
+			p.Requests = append(p.Requests, rbdLockOwnerLossAttempt{Label: c.label, Invocations: 1})
+			go func() {
+				defer close(call.done)
+				call.reply, call.err = conn.Request(callCtx, call.req)
+			}()
+		}
+		done("pending_submitted")
+	}
+
 	// From here on the zombie sends nothing: no ping, no acknowledgement, no
 	// release. Its connection stays open.
 	_, owner := native(t, "observe-go-owner")
 	nativeView(t, "observe-go-owner", owner)
 	done("observe-go-owner")
 	goView(t, "go-owner")
+	if pendingVariant {
+		record.Pending.PendingAfterGoOwner = stillPending(0, 1)
+	}
 	judge(t, "go-owner")
 
 	// The native takeover runs in the background: its write returns only
@@ -1471,16 +1812,26 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 	// what an owner does: librbd's guarded object-map update for an object
 	// nobody wrote, the data write that would follow, and a release. Each is
 	// sent once and its raw outcome is kept; none is ever sent again.
-	fencedObject := objectCount - 1
-	fencedOffset, fencedData := uint64(8*k), rbdLockPattern(token, "fenced", (objectCount-1)*objectSize+8*k, 4*k)
-	record.Fenced = append(record.Fenced, attempt(t, zombie, "object_map_update", mapObject,
-		classOp("lock", "assert_locked", cephmsgr.OSDCallRead, rbdLockAssertInput("", "")),
-		classOp("rbd", "object_map_update", cephmsgr.OSDCallWrite, rbdObjectMapUpdateInput(fencedObject, fencedObject+1, rbdObjectExists, nil))))
-	record.Fenced = append(record.Fenced, attempt(t, zombie, "data_write", fmt.Sprintf("%s.%016x", prefix, fencedObject),
-		cephmsgr.OSDOperation{Code: cephmsgr.OSDSetAllocHint, Flags: cephmsgr.OSDFailOK, AllocHint: cephmsgr.OSDAllocHint{ExpectedObjectSize: objectSize, ExpectedWriteSize: objectSize}},
-		cephmsgr.OSDOperation{Code: cephmsgr.OSDWrite, Offset: fencedOffset, Length: uint64(len(fencedData)), Data: fencedData}))
-	record.Fenced = append(record.Fenced, attempt(t, zombie, "lock_unlock", header, classOp("lock", "unlock", cephmsgr.OSDCallWrite, rbdLockUnlockInput(record.Zombie.LockCookie))))
-	done("fenced_attempts")
+	// In the pending variant the OSD holds whatever arrives on this connection
+	// behind the two pending requests, so the attempts follow their answer.
+	fencedAttempts := func(t *testing.T, p *party) {
+		t.Helper()
+		record.Fenced = append(record.Fenced, attempt(t, p, "object_map_update", mapObject, mapUpdate...))
+		record.Fenced = append(record.Fenced, attempt(t, p, "data_write", fencedName, dataWrite("fenced", 8*k)...))
+		record.Fenced = append(record.Fenced, attempt(t, p, "lock_unlock", header, classOp("lock", "unlock", cephmsgr.OSDCallWrite, rbdLockUnlockInput(record.Zombie.LockCookie))))
+		done("fenced_attempts")
+	}
+	if pendingVariant {
+		// The zombie is fenced and its two requests are still unanswered. The
+		// wait for the first is canceled: its caller learns nothing more, and
+		// nothing is sent in its place.
+		pendingCalls[0].cancel()
+		settle(t, 0, 20*time.Second)
+		record.Pending.CanceledUTC = time.Now().UTC().Format(time.RFC3339Nano)
+		done("pending_canceled")
+	} else {
+		fencedAttempts(t, zombie)
+	}
 	// What its watch had queued while it was silent. It acknowledges nothing.
 	for {
 		wait, stop := context.WithTimeout(ctx, 20*time.Second)
@@ -1504,25 +1855,28 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 		record.ZombieEvents = append(record.ZombieEvents, e)
 	}
 	done("zombie_watch_end")
-	// The same client on a new OSD connection: a read only.
-	if err := zombie.conn.Close(); err != nil {
-		t.Fatal("close the zombie's fenced connection", err)
-	}
-	open(t, zombie)
-	_, reply, err := submit(t, zombie, "new_connection_lock_get_info", header, classOp("lock", "get_info", cephmsgr.OSDCallRead, rbdLockGetInfoInput()))
-	again := rbdLockOwnerLossAttempt{Label: "new_connection_lock_get_info", Invocations: 1, Code: reply.Code, Submission: reply.Submission, ReplyTransaction: reply.Transaction, ReplyMapEpoch: reply.MapEpoch}
-	again.Class, again.Error = rbdMutationOutcome(reply, err)
-	var server *cephmsgr.OSDError
-	if errors.As(err, &server) {
-		again.ErrorCode = server.Code
-	}
-	record.NewConnection = &again
-	if err == nil && len(reply.Operations) == 1 {
-		if record.NewConnectionLockers, err = rbdLockOwnerLossLockers(reply.Operations[0].Data, rbdLockTag); err != nil {
-			t.Fatal("the zombie client's read on a new connection does not decode", err)
+	// The same client on a new OSD connection: a read only. A client has one
+	// connection per OSD, so the fenced one is closed first. The pending
+	// variant keeps it for the answers still to come and does this later.
+	newConnection := func(t *testing.T) {
+		t.Helper()
+		if err := zombie.conn.Close(); err != nil {
+			t.Fatal("close the zombie's fenced connection", err)
 		}
+		open(t, zombie)
+		_, reply, err := submit(t, zombie, "new_connection_lock_get_info", header, classOp("lock", "get_info", cephmsgr.OSDCallRead, rbdLockGetInfoInput()))
+		again := rbdLockOwnerLossOutcome("new_connection_lock_get_info", reply, err)
+		record.NewConnection = &again
+		if err == nil && len(reply.Operations) == 1 {
+			if record.NewConnectionLockers, err = rbdLockOwnerLossLockers(reply.Operations[0].Data, rbdLockTag); err != nil {
+				t.Fatal("the zombie client's read on a new connection does not decode", err)
+			}
+		}
+		done("new_connection")
 	}
-	done("new_connection")
+	if !pendingVariant {
+		newConnection(t)
+	}
 
 	// A Go client dialed only now reads what native librbd left.
 	breaker = dial(t, "breaker")
@@ -1580,6 +1934,9 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 		}
 	}
 	done("takeover")
+	if pendingVariant {
+		record.Pending.PendingAfterTakeover = stillPending(1)
+	}
 	judge(t, "takeover")
 
 	// The breaker registers its header watch, as a librbd open does, and
@@ -1747,7 +2104,56 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) {
 		t.Fatal("native librados reads the breaker's object differently from its write")
 	}
 	done("observe-go-broke")
+	if pendingVariant {
+		record.Pending.PendingAfterGoBreak = stillPending(1)
+	}
 	judge(t, "go-break")
+
+	if pendingVariant {
+		// The second request has been unanswered through both handoffs. The
+		// fixture raises the OSDMap epoch past the one it names, and reads the
+		// OSD's operations in flight before and after.
+		var advance struct {
+			Source    string `json:"source_commit"`
+			Token     string `json:"token"`
+			RequestID int64  `json:"request_id"`
+			Action    string `json:"action"`
+			Mutation  *struct {
+				Kind      string `json:"kind"`
+				RequestID int64  `json:"request_id"`
+				ReadOnly  bool   `json:"read_only"`
+				State     string `json:"state"`
+			} `json:"mutation"`
+			Advance  *rbdLockOwnerLossAdvance `json:"advance"`
+			Complete bool                     `json:"complete"`
+			Error    string                   `json:"error"`
+		}
+		begun := time.Now()
+		if err := testcluster.RequestControl(ctx, dir, "rbd-lock", "rbd-lock-completed", token, "advance-map"); err != nil {
+			t.Fatal("fixture advance-map", err)
+		}
+		record.Timings["native_advance-map"] = time.Since(begun).String()
+		if err := readMDSFreshJSON(filepath.Join(dir, "rbd-lock-advance-map.json"), &advance); err != nil {
+			t.Fatal(err)
+		}
+		if advance.Source != mdsFreshSource || advance.Token != token || advance.Action != "advance-map" || !advance.Complete || advance.Error != "" || advance.Mutation == nil ||
+			advance.Mutation.Kind != "native-lock-advance-map" || advance.Mutation.State != "applied" || advance.Mutation.ReadOnly || advance.Mutation.RequestID != advance.RequestID ||
+			advance.Advance == nil || advance.Advance.Pool != plan.Pool {
+			t.Fatal("fixture advance-map receipt differs", advance.Error)
+		}
+		record.Pending.Advance = advance.Advance
+		done("advance-map")
+		// The OSD now has the named map and answers. Nothing was resent.
+		settle(t, 1, 30*time.Second)
+		record.Pending.AnsweredUTC = time.Now().UTC().Format(time.RFC3339Nano)
+		done("pending_answered")
+		fencedAttempts(t, zombie)
+		newConnection(t)
+		_, answered := native(t, "observe-answered")
+		nativeView(t, "observe-answered", answered)
+		done("observe-answered")
+		judge(t, "answered")
+	}
 
 	// The breaker releases as librbd's PreReleaseRequest and ReleaseRequest
 	// do and removes its watch.

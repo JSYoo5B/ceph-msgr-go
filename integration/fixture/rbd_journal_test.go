@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRBDJournalPlanIsTokenBound(t *testing.T) {
@@ -82,7 +84,7 @@ func TestRBDJournalPlanIsTokenBound(t *testing.T) {
 
 func TestRBDJournalRequestIsClosedAndOrdered(t *testing.T) {
 	token := strings.Repeat("a1", 16)
-	for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions} {
+	for _, actions := range [][]string{rbdJournalActions, rbdJournalLostAppendActions, rbdJournalPrimaryChangeActions} {
 		for next := range actions {
 			for i, action := range actions {
 				id, got, err := parseRBDJournalRequest(actions, []string{"7", token, action}, token, 6, next)
@@ -164,6 +166,221 @@ func TestRBDJournalLostAppendSelectorIsExclusive(t *testing.T) {
 	}
 	if rbdJournalTarget(rbdJournalPlan{Image: "i"}, "checkpoint") != "i:journal-inspect" || rbdJournalTarget(rbdJournalPlan{Image: "i"}, "observe-locked") != "i" {
 		t.Fatal("lost-append action targets differ")
+	}
+}
+
+// The primary-change sequence is the lost-append sequence with change-primary
+// and observe-resubmitted before the replay. It is admitted only under its
+// exact selector and only on three BlueStore OSDs, a topology no other RBD
+// selection is admitted on.
+func TestRBDJournalPrimaryChangeSelectorIsExclusive(t *testing.T) {
+	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}
+	load := func(selector string) (profile, error) {
+		return loadProfile(func(key string) string {
+			if key == "CEPH_MSGR_TEST_RUN" {
+				return selector
+			}
+			return base[key]
+		})
+	}
+	p, err := load(rbdJournalPrimaryChangeSelector)
+	if err != nil || p.testRun != rbdJournalPrimaryChangeSelector || p.rbdReplicas() != "3" || p.osdTopology().poolSize != 3 || p.osdTopology().poolMinSize != 2 ||
+		!slices.Equal(rbdJournalActionsFor(p.testRun), rbdJournalPrimaryChangeActions) {
+		t.Fatal("primary-change selector admission differs", p.testRun, err)
+	}
+	// Three OSDs admit no other RBD selection, not even the default one.
+	for _, selector := range []string{"", "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$", rbdJournalLostAppendSelector, rbdLockOwnerLossSelector,
+		rbdLockOwnerLossPendingSelector, "^TestCephRBDJournalPrimaryChangeIntegration", "^TestCephRBDJournal(LostAppendReply|PrimaryChange)Integration$"} {
+		if _, err := load(selector); err == nil {
+			t.Fatal("another RBD selection admitted on three OSDs:", selector)
+		}
+	}
+	// The selector needs exactly that topology.
+	for key, value := range map[string]string{"CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_OSD_STORE": "memstore", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"} {
+		previous, had := base[key]
+		base[key] = value
+		if _, err := load(rbdJournalPrimaryChangeSelector); err == nil {
+			t.Fatal("primary-change selector admitted with", key, value)
+		}
+		if had {
+			base[key] = previous
+		} else {
+			delete(base, key)
+		}
+	}
+	if (profile{testRun: rbdJournalLostAppendSelector}).rbdReplicas() != "1" || (profile{}).rbdReplicas() != "1" {
+		t.Fatal("another RBD selection asks for three OSDs")
+	}
+	if !slices.Equal(rbdJournalActionsFor(rbdJournalLostAppendSelector), rbdJournalLostAppendActions) || !slices.Equal(rbdLockActionsFor(rbdJournalPrimaryChangeSelector), rbdLockActions) {
+		t.Fatal("the primary-change selector changed another sequence")
+	}
+	want := slices.Insert(slices.Clone(rbdJournalLostAppendActions), len(rbdJournalLostAppendActions)-1, "change-primary", "observe-resubmitted")
+	if !slices.Equal(rbdJournalPrimaryChangeActions, want) {
+		t.Fatal("primary-change sequence differs", rbdJournalPrimaryChangeActions)
+	}
+	token := strings.Repeat("a1", 16)
+	for next := 0; next <= len(rbdJournalLostAppendActions); next++ {
+		for _, action := range []string{"change-primary", "observe-resubmitted"} {
+			if _, _, err := parseRBDJournalRequest(rbdJournalLostAppendActions, []string{"7", token, action}, token, 6, next); err == nil {
+				t.Fatal("primary-change action admitted in the lost-append sequence", action, next)
+			}
+			if _, _, err := parseRBDJournalRequest(rbdJournalActions, []string{"7", token, action}, token, 6, next); err == nil {
+				t.Fatal("primary-change action admitted in the ordinary sequence", action, next)
+			}
+		}
+	}
+	for _, action := range rbdJournalPrimaryChangeActions {
+		if !strings.Contains(rbdJournalNativePython, "'"+action+"'") {
+			t.Fatal("native journal driver does not admit", action)
+		}
+	}
+	plan := rbdJournalPlan{Image: "i"}
+	if rbdJournalReadOnly("change-primary") || !rbdJournalReadOnly("observe-resubmitted") || rbdJournalInspected("change-primary") || rbdJournalInspected("observe-resubmitted") ||
+		rbdJournalTarget(plan, "change-primary") != "i:osd-out,acting-primary" || rbdJournalTarget(plan, "observe-resubmitted") != "i" {
+		t.Fatal("primary-change action classification or target differs")
+	}
+	if !slices.Equal(rbdJournalPrimaryObjects(3, "ab12"), []string{"rbd_header.ab12", "journal_data.3.ab12.0", "journal.ab12"}) {
+		t.Fatal("followed objects differ")
+	}
+}
+
+// change-primary marks the objects' one common primary out and succeeds only
+// when each object is on the two other members alone.
+func TestRBDJournalChangePrimary(t *testing.T) {
+	objects := []string{"h", "j", "m"}
+	type cluster struct {
+		epoch    uint32
+		acting   map[string][]int
+		out      map[int]bool
+		commands []int
+		recorded []int
+		stuck    bool
+		placeErr error
+		outErr   error
+		markErr  error
+		foreign  bool
+		dropped  bool
+	}
+	ops := func(c *cluster) rbdJournalPrimaryOps {
+		return rbdJournalPrimaryOps{
+			place: func(_ context.Context, object string) (rbdJournalPlacement, error) {
+				// Marked out, an OSD leaves the up set; the new primary keeps
+				// it as the last member of the acting set.
+				up := slices.Clone(c.acting[object])
+				acting := slices.Clone(up)
+				if !c.stuck {
+					up = slices.DeleteFunc(up, func(osd int) bool { return c.out[osd] })
+					acting = slices.Clone(up)
+					for _, osd := range c.acting[object] {
+						if c.out[osd] && !c.dropped {
+							acting = append(acting, osd)
+						}
+					}
+				}
+				if c.foreign && len(c.commands) != 0 {
+					up, acting = []int{7, 8}, []int{7, 8, 1}
+				}
+				p := rbdJournalPlacement{Epoch: c.epoch, Pool: "p", PoolID: 3, Object: object, RawPGID: "3.1", PGID: "3.0", Up: up, Acting: acting}
+				if len(acting) != 0 && len(up) != 0 {
+					p.UpPrimary, p.ActingPrimary = up[0], acting[0]
+				}
+				return p, c.placeErr
+			},
+			out: func(_ context.Context, osd int) error {
+				c.commands = append(c.commands, osd)
+				if c.outErr != nil {
+					return c.outErr
+				}
+				c.out[osd] = true
+				c.epoch++
+				return nil
+			},
+			marking: func(osd int) error {
+				c.recorded = append(c.recorded, osd)
+				return c.markErr
+			},
+			bound: 20 * time.Millisecond, pause: time.Millisecond,
+		}
+	}
+	fresh := func(header, journal, meta []int) *cluster {
+		return &cluster{epoch: 40, acting: map[string][]int{"h": header, "j": journal, "m": meta}, out: map[int]bool{}}
+	}
+	one := func() *cluster { return fresh([]int{1, 0, 2}, []int{1, 0, 2}, []int{1, 0, 2}) }
+	c := one()
+	r, err := rbdJournalChangePrimary(t.Context(), "p", objects, ops(c))
+	if err != nil || r.Out != 1 || !slices.Equal(c.recorded, []int{1}) || !slices.Equal(c.commands, []int{1}) || len(r.Objects) != 3 || !slices.Equal(r.Commands, []string{"osd out 1"}) {
+		t.Fatal("primary change differs", r, err)
+	}
+	for _, o := range r.Objects {
+		if !o.Moved || o.Before.ActingPrimary != 1 || o.After.ActingPrimary != 0 || !slices.Equal(o.After.Up, []int{0, 2}) || !slices.Equal(o.After.Acting, []int{0, 2, 1}) ||
+			o.After.Epoch != 41 || o.Before.Epoch != 40 {
+			t.Fatal("object did not move to the next member", o)
+		}
+	}
+	failing := map[string]*cluster{
+		"primary does not move":           one(),
+		"objects led by different OSDs":   fresh([]int{1, 0, 2}, []int{0, 2, 1}, []int{1, 0, 2}),
+		"two-member placement":            fresh([]int{1, 0}, []int{1, 0}, []int{1, 0}),
+		"duplicate member":                fresh([]int{1, 1, 2}, []int{1, 1, 2}, []int{1, 1, 2}),
+		"placement unavailable":           one(),
+		"command refused":                 one(),
+		"intent not recorded":             one(),
+		"another acting set afterwards":   one(),
+		"old primary left the acting set": one(),
+		"epoch unknown":                   one(),
+	}
+	failing["primary does not move"].stuck = true
+	failing["placement unavailable"].placeErr = fmt.Errorf("no map")
+	failing["command refused"].outErr = fmt.Errorf("EPERM")
+	failing["intent not recorded"].markErr = fmt.Errorf("disk")
+	failing["another acting set afterwards"].foreign = true
+	failing["old primary left the acting set"].dropped = true
+	failing["epoch unknown"].epoch = 0
+	for name, c := range failing {
+		r, err := rbdJournalChangePrimary(t.Context(), "p", objects, ops(c))
+		if err == nil {
+			t.Error("primary change hid a failure:", name, r)
+		}
+		// No command without its recorded intent, and none after a refused
+		// record.
+		if len(c.commands) > len(c.recorded) || c.markErr != nil && len(c.commands) != 0 || len(c.commands) > 1 {
+			t.Error("osd out without a recorded intent, or more than once:", name)
+		}
+	}
+	if _, err := rbdJournalChangePrimary(t.Context(), "p", nil, ops(one())); err == nil {
+		t.Fatal("primary change without an object admitted")
+	}
+	if _, err := rbdJournalChangePrimary(t.Context(), "other", objects, ops(one())); err == nil {
+		t.Fatal("placement of another pool admitted")
+	}
+}
+
+// The cleanup marks every OSD in again and reports only what the OSDMap
+// confirms.
+func TestRBDJournalMarkIn(t *testing.T) {
+	state := map[int]bool{0: true, 1: false, 2: true}
+	in := func(_ context.Context, osd int) error {
+		state[osd] = true
+		return nil
+	}
+	read := func(context.Context) (map[int]bool, error) { return state, nil }
+	restored, err := rbdJournalMarkIn(t.Context(), []int{1}, in, read)
+	if err != nil || !slices.Equal(restored, []int{1}) || !state[1] {
+		t.Fatal("OSD not marked in", restored, err)
+	}
+	calls := 0
+	if restored, err := rbdJournalMarkIn(t.Context(), nil, func(context.Context, int) error { calls++; return nil }, read); err != nil || restored != nil || calls != 0 {
+		t.Fatal("cleanup without an OSD marked out issued commands", restored, err)
+	}
+	state = map[int]bool{0: true, 1: false, 2: true}
+	if restored, err := rbdJournalMarkIn(t.Context(), []int{1}, func(context.Context, int) error { return fmt.Errorf("EPERM") }, read); err == nil || len(restored) != 0 {
+		t.Fatal("an OSD left out was reported in", restored, err)
+	}
+	if restored, err := rbdJournalMarkIn(t.Context(), []int{1}, in, func(context.Context) (map[int]bool, error) { return nil, fmt.Errorf("no map") }); err == nil || restored != nil {
+		t.Fatal("an unread OSDMap confirmed an OSD in", restored, err)
+	}
+	if restored, err := rbdJournalMarkIn(t.Context(), []int{5}, func(context.Context, int) error { return nil }, read); err == nil || len(restored) != 0 {
+		t.Fatal("an OSD missing from the OSDMap was reported in", restored, err)
 	}
 }
 
@@ -254,7 +471,7 @@ func TestRBDJournalNativeOutputShapeIsClosed(t *testing.T) {
 		}
 		return data
 	}
-	for _, action := range slices.Concat(rbdJournalActions, rbdJournalLostAppendActions) {
+	for _, action := range slices.Concat(rbdJournalActions, rbdJournalLostAppendActions, []string{"change-primary", "observe-resubmitted"}) {
 		if _, err := decodeRBDJournalNative(action, token, 9, plan, encode(rbdJournalOutput(token, plan, action))); err != nil {
 			t.Fatal("well-formed journal output refused", action, err)
 		}

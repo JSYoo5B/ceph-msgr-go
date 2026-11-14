@@ -165,6 +165,11 @@ type rbdBaseScope struct {
 	journalPlan          rbdJournalPlan
 	journalLastRequestID int64
 	journalNext          int
+	// journalImageID is the journaling image's id once its setup returned.
+	// osdsMarkedOut are the OSDs the primary-change sequence marked out,
+	// recorded before the command; the cleanup marks them in again.
+	journalImageID string
+	osdsMarkedOut  []int
 }
 
 func (x *rbdBaseScope) mutated(kind string) bool {
@@ -207,10 +212,16 @@ func (c *fixtureCluster) rbdBaseJournal() error {
 	if x.nativeIntent {
 		native = "client.rbd-base-native-" + x.token
 	}
-	return writeMDSFreshJSON(x.out, "rbd-base-owned.json", map[string]any{
+	owned := map[string]any{
 		"source_commit": rbdBaseSource, "token": x.token, "fsid": c.profile.fsid, "plan": x.plan, "write_plan": x.writePlan, "lock_plan": x.lockPlan, "clone_plan": x.clonePlan, "journal_plan": x.journalPlan, "pool_intended": x.poolIntent, "pool_id": x.poolID,
 		"client_identity": identity, "native_identity": native, "mutations": x.mutations,
-	})
+	}
+	if len(x.osdsMarkedOut) != 0 {
+		// Recorded before the `osd out` command of the primary-change
+		// sequence.
+		owned["osds_marked_out"] = x.osdsMarkedOut
+	}
+	return writeMDSFreshJSON(x.out, "rbd-base-owned.json", owned)
 }
 
 // The fixed native librbd driver. The fixture passes only the token-bound plan
@@ -627,8 +638,15 @@ type rbdBasePoolPolicy struct {
 // journaled first; an error leaves cleanup to remove whatever was intended.
 func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	p := c.profile
-	if p.rbdBase != "1" || p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || c.rbdBase != nil {
+	if p.rbdBase != "1" || p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != p.rbdReplicas() || p.mdsFresh != "0" || c.rbdBase != nil {
 		return errors.New("invalid RBD base preparation scope")
+	}
+	// One OSD and eight PGs, or the three-replica policy of the
+	// primary-change sequence with a single PG, so that every owned object
+	// has the same acting set and primary.
+	topology, pgs := p.osdTopology(), 8
+	if p.osdReplicas == "3" {
+		pgs = 1
 	}
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
@@ -647,11 +665,11 @@ func (c *fixtureCluster) prepareRBDBase(ctx context.Context, out string) error {
 	if err != nil {
 		return err
 	}
-	// Eight PGs, no HASHPSPOOL: the legacy-v6 client sends the raw object
-	// hash and the OSD folds it with the legacy additive seed.
+	// No HASHPSPOOL: the legacy-v6 client sends the raw object hash and the
+	// OSD folds it with the legacy additive seed.
 	// A Pool returned with an error still identifies the attempted resources
 	// for cleanup.
-	x.pool, err = c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: x.plan.Pool, PGNum: 8, Replicas: 1, MinSize: 1, Application: "rbd", NoHashPSPool: true})
+	x.pool, err = c.cluster.CreatePool(ctx, ceph.PoolConfig{Name: x.plan.Pool, PGNum: pgs, Replicas: topology.poolSize, MinSize: topology.poolMinSize, Application: "rbd", NoHashPSPool: true})
 	if err := c.rbdBaseFinish(m, err); err != nil {
 		return fmt.Errorf("create owned RBD pool: %w", err)
 	}
@@ -833,8 +851,12 @@ type rbdBaseCleanup struct {
 	// observed and their blocklist entries, removed and verified absent.
 	LockOwnerAddresses   []string           `json:"lock_owner_addresses,omitempty"`
 	LockBlocklistRemoved []mdsSessionsBlock `json:"lock_blocklist_removed,omitempty"`
-	Completed            bool               `json:"completed"`
-	Errors               []string           `json:"errors,omitempty"`
+	// The primary-change sequence only: the OSDs it marked out, and those
+	// the cleanup read back in.
+	OSDsMarkedOut []int    `json:"osds_marked_out,omitempty"`
+	OSDsMarkedIn  []int    `json:"osds_marked_in,omitempty"`
+	Completed     bool     `json:"completed"`
+	Errors        []string `json:"errors,omitempty"`
 }
 
 // rbdLockRemoveBlocklist removes the exact blocklist entries of the given
@@ -905,6 +927,12 @@ func (c *fixtureCluster) finishRBDBase(ctx context.Context) error {
 	if len(x.lockOwnerAddresses) != 0 {
 		removed, err := rbdLockRemoveBlocklist(ctx, x.lockOwnerAddresses, c.mdsCephFSBlocklistOps())
 		receipt.LockOwnerAddresses, receipt.LockBlocklistRemoved = x.lockOwnerAddresses, removed
+		fail(err)
+	}
+	if len(x.osdsMarkedOut) != 0 {
+		in, read := c.rbdJournalMarkInOps()
+		restored, err := rbdJournalMarkIn(ctx, x.osdsMarkedOut, in, read)
+		receipt.OSDsMarkedOut, receipt.OSDsMarkedIn = x.osdsMarkedOut, restored
 		fail(err)
 	}
 	if x.poolIntent {
