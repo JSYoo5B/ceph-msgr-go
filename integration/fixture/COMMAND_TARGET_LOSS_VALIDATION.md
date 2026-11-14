@@ -88,7 +88,14 @@ reply.
 - A held connection parks the result of each `Read`, received bytes and
   errors alike. The session therefore learns neither of a reply nor of the
   end of its peer until the test releases the hold or the connection is
-  closed.
+  closed. It has two signals for a parked `Read`: one for any parked result
+  and one that is set only when a parked `Read` carried at least one byte.
+  The live-peer cells (the written OSD and PG commands and the sent exact
+  MGR Tell across a failover) wait for the second, so a complete local write
+  followed by an empty end of the peer does not pass as "bytes arrived".
+- It records every error a `Read` or `Write` of a selected connection
+  returned before the client closed that connection, other than an expired
+  deadline: the errors the transport was lost with, as the session met them.
 - It reports when a padded write on a held connection returned, with or
   without an error, and when a selected connection was closed. It counts
   separately the padded writes that returned complete (every byte, no
@@ -99,8 +106,12 @@ reply.
 
 The cluster-free test `TestCommandHoldParksBytesAndErrors` covers selection
 by endpoint, binding only to the first padded write after arming, parked
-bytes, a parked end of the peer, release, close and the two classification
-helpers. It establishes no native result.
+bytes, a parked end of the peer (which must not set the received-bytes
+signal and must be recorded as the transport loss), release, close (whose
+own errors are not a transport loss) and the classification helpers,
+including the refusal of a target error, an argument error, another
+transport error and an unrelated keepalive cause as the terminal cause of an
+ended session. It establishes no native result.
 
 The client suite uses its existing padded gate
 (`cephmsgr/integration_tell_reply_gate_test.go`).
@@ -185,7 +196,7 @@ assert both.
 
 | Side | How the test puts a session there | Required result |
 | --- | --- | --- |
-| Ended | A client with a one-second keepalive. After the daemon is stopped the test waits until that client closed its connection to the daemon (and, for the MDS, until `MDSConnection.Done` is closed) | An error that is not an unknown outcome and not `ErrClosed`, with no result and no transaction (OSD, PG) or an empty submission (MDS). Asked twice |
+| Ended | A client with a one-second keepalive. After the daemon is stopped the test waits until that client closed its connection to the daemon (and, for the MDS, until `MDSConnection.Done` is closed) | An error that is not an unknown outcome and not `ErrClosed`, with no result and no transaction (OSD, PG) or an empty submission (MDS), and that wraps one of the errors the hold saw that client's connection to the daemon end with; only when the connection gave no error before the client closed it must the error be `ErrKeepaliveTimeout`. Asked twice |
 | Unaware | A client whose keepalive never probes within the test (ten minutes, or the MDS helper's hour). From before the daemon is stopped, everything it would receive on the daemon connection is parked, the end of the peer included | The padded command is written once. When that write returned, the hold is released, so the session learns that its peer is gone. The call must be `OutcomeUnknownError` without `ErrClosed`, with no result, a nonzero transaction and, for a PG command, PG metadata. A further command on the handle is refused |
 
 `TestCephOSDCommandCrashIntegration` does this for `Command` and `PGCommand`
