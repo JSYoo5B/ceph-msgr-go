@@ -493,20 +493,27 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegratio
 	// No shard may show a head past its entries: nothing peered.
 	primary, shards := run.capture([]pgHistoryTarget{state.fullKey, state.patchKey, key}, state.misses, nil)
 	run.requireShardLogs("after the later write", primary, shards, state.want.object, writes, false, func(shard int) [][]shardPartialWrite {
-		before := state.shards.Shards[shard].PartialWrites
-		if slices.Contains(run.facts.nonprimary, shard) || len(before) == 0 {
-			// A nonprimary shard records nothing, and a holder without a
-			// record gains none from a write that names every shard
-			// (pinned src/osd/PGBackend.cc:419-428).
+		if slices.Contains(run.facts.nonprimary, shard) {
+			// A nonprimary shard records nothing (pinned
+			// src/osd/PGBackend.cc:424-428).
 			return [][]shardPartialWrite{nil}
 		}
-		// The roll-forward of the later write, which no reply waits for,
-		// resets each record to that write (pinned :474-489).
-		var reset []shardPartialWrite
+		// No reply waits for a roll-forward. That of the overwrite records
+		// the range of each left-out shard; that of the later write, which
+		// names every shard, resets an existing record to that write and
+		// adds none (pinned :419-421, :474-490).
+		var partial, reset []shardPartialWrite
 		for _, left := range state.want.skipped() {
+			partial = append(partial, shardPartialWrite{Shard: left, From: state.want.full, To: state.want.patch})
 			reset = append(reset, shardPartialWrite{Shard: left, From: writes[2].version, To: writes[2].version})
 		}
-		return [][]shardPartialWrite{before, reset}
+		allowed := [][]shardPartialWrite{partial, reset}
+		if len(state.shards.Shards[shard].PartialWrites) == 0 {
+			// The first capture preceded the overwrite's roll-forward on
+			// this shard, so the second may precede it as well.
+			allowed = append(allowed, nil)
+		}
+		return allowed
 	})
 	if ended := run.showInterval().Observation.Query.SameIntervalSince; ended != started {
 		t.Fatalf("the PG's interval started at epoch %d before the writes and at epoch %d after the last capture", started, ended)
