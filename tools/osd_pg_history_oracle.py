@@ -102,25 +102,34 @@ def parse_eversion(text, label):
     return epoch, version
 
 
-def parse_log(raw):
-    """Parse one complete native ``pg log`` JSON reply, or raise HistoryError."""
+def strict_document(raw, limit):
+    """One complete strict JSON document of at most limit bytes, or HistoryError."""
     if not isinstance(raw, (bytes, bytearray)):
         raise HistoryError("native output is not bytes")
     if not raw:
         raise HistoryError("native output is empty")
-    if len(raw) > MAX_LOG_BYTES:
+    if len(raw) > limit:
         raise HistoryError("native output exceeds the snapshot bound")
     try:
-        document = json.loads(bytes(raw).decode("utf-8"), object_pairs_hook=_strict_object)
+        return json.loads(bytes(raw).decode("utf-8"), object_pairs_hook=_strict_object)
     except HistoryError:
         raise
     except (UnicodeDecodeError, ValueError) as error:
         # A truncated reply ends inside the document and fails here.
         raise HistoryError("native output is not one complete JSON document: " + str(error)[:120]) from None
+
+
+def parse_log(raw):
+    """Parse one complete native ``pg log`` JSON reply, or raise HistoryError."""
+    document = strict_document(raw, MAX_LOG_BYTES)
     if not isinstance(document, dict) or set(document) != {"pg_log_t"} or not isinstance(document["pg_log_t"], dict):
         raise HistoryError("native output is not a pg_log_t dump")
-    body = document["pg_log_t"]
-    if set(body) != {"head", "tail", "log", "dups"}:
+    return parse_log_body(document["pg_log_t"])
+
+
+def parse_log_body(body):
+    """Parse the ``pg_log_t`` section of a strictly loaded dump."""
+    if not isinstance(body, dict) or set(body) != {"head", "tail", "log", "dups"}:
         raise HistoryError("pg_log_t must have exactly head, tail, log and dups")
     head, tail = parse_eversion(body["head"], "head"), parse_eversion(body["tail"], "tail")
     if tail > head:
