@@ -56,6 +56,8 @@ type poolReceipt struct {
 	History pgHistorySnapshot `json:"history"`
 	// shardhistory mode, phase after: every acting shard's own PG log.
 	ShardHistory shardHistorySnapshot `json:"shard_history"`
+	// pginterval mode: one owned interval change of a PG and its judgement.
+	PGInterval pgIntervalReceipt `json:"pg_interval"`
 
 	Epochs      map[string]uint64 `json:"epochs"`
 	PoolType    int               `json:"pool_type"`
