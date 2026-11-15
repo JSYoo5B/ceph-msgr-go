@@ -532,7 +532,13 @@ def mode_shardhistory(rados, cluster, request, out):
             raise ValueError("invalid shard dump name")
         return read_bounded(out / name, limit)
 
-    receipt = shard_history.snapshot(before, after, capture, dumps, targets)
+    # Only the pool's own nonprimary shards may show a log head newer than
+    # their last entry; an unreadable set admits none.
+    try:
+        nonprimary = shard_history.parse_written_shards(descriptor.get("nonprimary_shards"), 0)
+    except shard_history.HistoryError:
+        nonprimary = []
+    receipt = shard_history.snapshot(before, after, capture, dumps, targets, nonprimary)
     # One bracket admits one judgement.
     stored.unlink()
     return {"shard_history": receipt}

@@ -99,6 +99,26 @@ class ParseTest(unittest.TestCase):
             with self.subTest(cut=cut), self.assertRaises(history.HistoryError):
                 history.parse_log(raw[:-cut])
 
+    def test_a_head_past_the_last_entry_is_parsed_only_on_request(self):
+        entries = [ENTRY % ("29'2", "29'1", SEED, ""), ENTRY % ("29'3", "29'2", KNOWN, "")]
+        body = json.loads(dump(entries))["pg_log_t"]
+        with self.assertRaisesRegex(history.HistoryError, "the last log entry is not head"):
+            history.parse_log_body(body)
+        with self.assertRaisesRegex(history.HistoryError, "the last log entry is not head"):
+            history.parse_log(dump(entries))
+        parsed = history.parse_log_body(body, head_past_entries=True)
+        self.assertEqual((parsed["head"], parsed["last_entry"], len(parsed["log"])), ((29, 4), (29, 3), 2))
+        # A complete log reports its head as the last entry, and a log
+        # without entries its tail.
+        self.assertEqual(history.parse_log(captured())["last_entry"], (29, 4))
+        empty = history.parse_log_body(json.loads(dump([]))["pg_log_t"], head_past_entries=True)
+        self.assertEqual((empty["last_entry"], empty["log"]), ((29, 1), []))
+        # An entry newer than the head is refused either way.
+        beyond = json.loads(dump(entries + [ENTRY % ("29'5", "29'3", "client.4180.3:9", "")]))["pg_log_t"]
+        for allowed in (False, True):
+            with self.assertRaisesRegex(history.HistoryError, "the last log entry is not head"):
+                history.parse_log_body(beyond, head_past_entries=allowed)
+
     def test_incomplete_or_reshaped_documents_fail_closed(self):
         entries = [ENTRY % ("29'2", "29'1", SEED, ""), ENTRY % ("29'3", "29'2", KNOWN, ""),
                    ENTRY % ("29'4", "29'3", "client.4180.3:9", "")]
