@@ -155,12 +155,15 @@ This supports a policy explanation; it is not a negotiation-frame capture.
 
 `Transport.Compression` is exposed through the MON snapshot and
 `OSDConnection.Compression()`. `TestCephMsgrCompressionOfferIntegration` checks
-those values are empty and MON/OSD commands succeed. It does not observe the
-peer banner compression bit, an enabled request or a disabled response, so
-it cannot distinguish a declined offer from skipped negotiation. The dedicated
-CRC/AES IPv4 host, single-BlueStore legacy-v6 CI row requires this parent to
-PASS. The selected 2026-10-23 native run and its source are recorded separately
-from the historical run in
+those values are empty and MON/OSD commands succeed. It also reads the
+negotiation back from the bytes of the connections that served those
+commands and requires the peer banner compression bit, the enabled request
+for zstd then snappy and the disabled response on each, so a declined offer
+is distinguished from skipped negotiation. The dedicated CRC/AES IPv4 host,
+single-BlueStore legacy-v6 CI row requires this parent to PASS. The
+historical run, the selected 2026-10-23 native run (algorithm and commands
+only) and the 2026-11-15 run with the negotiation read back are recorded
+separately in
 [MSGR_COMPRESSION_VALIDATION.md](../../integration/fixture/MSGR_COMPRESSION_VALIDATION.md).
 
 Live compressed-frame interoperability remains unverified. Codec/frame tests
