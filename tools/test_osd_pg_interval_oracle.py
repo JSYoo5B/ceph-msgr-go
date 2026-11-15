@@ -49,6 +49,18 @@ def seen(placement=SETTLED, raw=None, code=0, second=None, oversized=None):
 
 
 ORIGIN_QUERY = interval.parse_query(query())
+# The PG without the member of acting position 1: its interval started at
+# epoch 26, one epoch before the placement record.
+HOLED = [3, interval.NONE, 1, 0]
+ABSENT = dict(ORIGIN, epoch=27, up=HOLED, acting=HOLED)
+
+
+def absent_query(state="active+undersized+degraded", epoch=27, up=HOLED, acting=HOLED, interval_since=26, started=27, **fields):
+    return query(state=state, epoch=epoch, up=up, acting=acting, interval_since=interval_since, started=started, **fields)
+
+
+def absent(placement=ABSENT, raw=None, code=0, second=None, oversized=None, **fields):
+    return seen(placement=placement, raw=absent_query(**fields) if raw is None else raw, code=code, second=second, oversized=oversized)
 
 
 class ParseTest(unittest.TestCase):
@@ -202,6 +214,91 @@ class JudgementTest(unittest.TestCase):
                 reasons = interval.origin_failures(origin, observed)
                 self.assertTrue(any(text in reason for reason in reasons), reasons)
 
+    def test_an_active_pg_without_one_nonprimary_member_is_accepted(self):
+        self.assertEqual(interval.absent_failures(ORIGIN, 1, 24, absent()), [])
+        # The primary may report the PG before it counted its degraded
+        # objects, the interval may start at the bracketing epoch itself and
+        # the primary may be at a newer map than the placement record.
+        for name, reply in {"undersized only": dict(state="active+undersized"), "another token order": dict(state="degraded+undersized+active"),
+                            "interval at the placement's epoch": dict(interval_since=27, started=27), "primary ahead": dict(epoch=28)}.items():
+            with self.subTest(name=name):
+                self.assertEqual(interval.absent_failures(ORIGIN, 1, 24, absent(**reply)), [])
+        # Any other position than the primary's may be the empty one.
+        for shard in (2, 3):
+            holed = ACTING[:shard] + [interval.NONE] + ACTING[shard + 1:]
+            self.assertEqual(interval.absent_failures(ORIGIN, shard, 24, absent(placement=dict(ABSENT, up=holed, acting=holed), up=holed, acting=holed)), [])
+        # The recorded interval may have started at the recorded epoch.
+        self.assertEqual(interval.absent_failures(ORIGIN, 1, 25, absent()), [])
+
+    def test_every_other_observation_is_not_the_pg_without_that_member(self):
+        other = [3, 2, interval.NONE, 0]
+        two = [3, interval.NONE, interval.NONE, 0]
+        cases = {
+            "no first placement": (absent(placement="no placement: invalid native placement acting set"), "no placement record"),
+            "no second placement": (interval.observation(ABSENT, 0, absent_query(), "", None, "no placement: deadline"), "no placement record"),
+            "epoch moved during the observation": (absent(second=dict(ABSENT, epoch=28)), "placement or epoch changed during the observation"),
+            "the member is still acting": (absent(placement=SETTLED), "placement up is [3, 2, 1, 0]"),
+            "only the acting set has the hole": (absent(placement=dict(ABSENT, up=ACTING)), "placement up is [3, 2, 1, 0]"),
+            "only the up set has the hole": (absent(placement=dict(ABSENT, acting=ACTING)), "placement acting is [3, 2, 1, 0]"),
+            "another position is empty": (absent(placement=dict(ABSENT, up=other, acting=other)), "placement up is [3, 2, 2147483647, 0]"),
+            "two positions are empty": (absent(placement=dict(ABSENT, up=two, acting=two)), "placement acting is [3, 2147483647, 2147483647, 0]"),
+            "another OSD took the position": (absent(placement=dict(ABSENT, up=[3, 4, 1, 0], acting=[3, 4, 1, 0])), "placement acting is [3, 4, 1, 0]"),
+            "a shorter set": (absent(placement=dict(ABSENT, up=[3, 1, 0], acting=[3, 1, 0])), "placement up is [3, 1, 0]"),
+            "the same epoch": (absent(placement=dict(ABSENT, epoch=25)), "the map epoch 25 is not newer than 25"),
+            "a pg_temp": (absent(placement=dict(ABSENT, pg_temp=True)), "the PG has a pg_temp"),
+            "another primary": (absent(placement=dict(ABSENT, primary_id=1, osd_id=1, pg_shard=2)), "placement primary_id is 1"),
+            "another shard": (absent(placement=dict(ABSENT, pg_shard=2)), "placement pg_shard is 2"),
+            "another PG": (absent(placement=dict(ABSENT, pgid="3.6")), "placement pgid is '3.6'"),
+            "another address": (absent(placement=dict(ABSENT, address="v2:192.0.2.7:6801/2")), "placement address is"),
+            "another min_size": (absent(placement=dict(ABSENT, min_size=2)), "placement min_size is 2"),
+            "query refused": (absent(code=-11), "pg query returned -11"),
+            "query oversized": (absent(oversized=interval.MAX_QUERY_BYTES + 1), "exceeds the bound"),
+            "query truncated": (absent(raw=absent_query()[:-3]), "not one complete JSON document"),
+            "clean": (absent(state="active+clean"), "the primary reports active+clean"),
+            "peering": (absent(state="peering"), "the primary reports peering"),
+            "peered below min_size": (absent(state="undersized+degraded+peered"), "the primary reports undersized+degraded+peered"),
+            "recovering": (absent(state="active+recovering+undersized+degraded"), "the primary reports active+recovering+undersized+degraded"),
+            "remapped": (absent(state="active+undersized+remapped"), "the primary reports active+undersized+remapped"),
+            "active alone": (absent(state="active"), "the primary reports active"),
+            "degraded without undersized": (absent(state="active+degraded"), "the primary reports active+degraded"),
+            "a repeated token": (absent(state="active+undersized+undersized"), "the primary reports active+undersized+undersized"),
+            "primary's acting is complete": (absent(acting=ACTING), "the primary's up"),
+            "primary's up is complete": (absent(up=ACTING), "the primary's up"),
+            "answered for another shard": (absent(primary="3.7s2"), "the query was answered for 3.7s2"),
+            "answered with another shard ID": (absent(change=lambda document: document["info"].update(shard="2")), "the query was answered for 3.7s0"),
+            "the recorded interval": (absent(interval_since=24, started=25), "the interval still started at epoch 24"),
+            "an older interval": (absent(interval_since=23, started=25), "the interval still started at epoch 23"),
+            "interval after the placement": (absent(epoch=28, interval_since=28, started=28), "the interval started at epoch 28, after the placement's epoch"),
+            "not started in its interval": (absent(interval_since=26, started=25), "the PG has not started in its current interval"),
+            "primary behind the placement": (absent(epoch=26), "the primary is at map epoch 26, behind the placement's epoch"),
+        }
+        for name, (observed, text) in cases.items():
+            with self.subTest(name=name):
+                reasons = interval.absent_failures(ORIGIN, 1, 24, observed)
+                self.assertTrue(any(text in reason for reason in reasons), reasons)
+        # The request itself: only a nonprimary position of a complete
+        # erasure-coded placement, with an interval start that is not after it.
+        for name, (origin, shard, since, text) in {
+                "the primary's position": (ORIGIN, 0, 24, "not an acting position other than the primary's"),
+                "a position beyond the set": (ORIGIN, 4, 24, "not an acting position"),
+                "a negative position": (ORIGIN, -1, 24, "not an acting position"),
+                "a boolean position": (ORIGIN, True, 24, "not an acting position"),
+                "a position as text": (ORIGIN, "1", 24, "not an acting position"),
+                "an interval after the placement": (ORIGIN, 1, 26, "is not an epoch at or before"),
+                "interval zero": (ORIGIN, 1, 0, "is not an epoch at or before"),
+                "an interval as text": (ORIGIN, 1, "24", "is not an epoch at or before"),
+                "a recorded hole": (dict(ORIGIN, up=ABSENT["up"], acting=ABSENT["acting"]), 2, 24, "not a complete erasure-coded acting set"),
+                "recorded up differs": (dict(ORIGIN, up=[3, 2, 0, 1]), 1, 24, "not a complete erasure-coded acting set"),
+                "a recorded pg_temp": (dict(ORIGIN, pg_temp=True), 1, 24, "not a complete erasure-coded acting set"),
+                "replicated": (dict(ORIGIN, pool_type=1), 1, 24, "not a complete erasure-coded acting set"),
+                "no recorded shard": (dict(ORIGIN, pg_shard=-1), 1, 24, "not a complete erasure-coded acting set"),
+                "no recorded epoch": ({k: v for k, v in ORIGIN.items() if k != "epoch"}, 1, 24, "not a complete erasure-coded acting set"),
+                "no record": (None, 1, 24, "not a complete erasure-coded acting set")}.items():
+            with self.subTest(name=name):
+                reasons = interval.absent_failures(origin, shard, since, absent())
+                self.assertEqual(len(reasons), 1)
+                self.assertIn(text, reasons[0])
+
 
 class FakeRados:
     lib = None
@@ -313,9 +410,38 @@ class ModeTest(unittest.TestCase):
                 self.assertTrue(any(text in failure for failure in receipt["failures"]), receipt["failures"])
                 self.assertEqual(self.rados.sent, [])
 
+    def test_absent_observes_once_without_a_command(self):
+        self.placements, self.replies = [ABSENT], [absent_query()]
+        receipt = self.run_mode(action="absent", origin=ORIGIN, shard=1, since=24)
+        self.assertEqual((receipt["action"], receipt["settled"], receipt["failures"], receipt["observations"], self.rados.sent), ("absent", True, [], 1, []))
+        self.assertEqual((receipt["observation"]["before"], receipt["observation"]["query"]["same_interval_since"]), (ABSENT, 26))
+        self.assertEqual(self.rados.queries, [(3, {"prefix": "pg", "pgid": PGID, "cmd": "query", "format": "json"}, interval.MAX_QUERY_BYTES)])
+        for name, placement, reply, request, text in (
+                ("the member still acting", ORIGIN, query(), {}, "placement up is [3, 2, 1, 0]"),
+                ("clean again", SETTLED, query(epoch=28, interval_since=27, started=28), {}, "the primary reports active+clean"),
+                ("no placement", ValueError("native target OSD is not up and in"), absent_query(), {}, "no placement record"),
+                ("query refused", ABSENT, (-11, b"", "busy", None), {}, "pg query returned -11: busy"),
+                ("another position named", ABSENT, absent_query(), {"shard": 2}, "placement up is [3, 2147483647, 1, 0]"),
+                ("the primary's position named", ABSENT, absent_query(), {"shard": 0}, "not an acting position other than the primary's"),
+                ("the interval of the observation named", ABSENT, absent_query(), {"since": 26}, "is not an epoch at or before")):
+            with self.subTest(name=name):
+                self.setUp()
+                self.placements, self.replies = [placement], [reply]
+                receipt = self.run_mode(**dict({"action": "absent", "origin": ORIGIN, "shard": 1, "since": 24}, **request))
+                self.assertFalse(receipt["settled"])
+                self.assertTrue(any(text in failure for failure in receipt["failures"]), receipt["failures"])
+                self.assertEqual(self.rados.sent, [])
+
     def test_invalid_requests_are_refused_before_native_contact(self):
         for request in ({}, {"action": "out"}, {"action": "repeer", "osd": 1}, {"action": "repeer", "slot": 3}, {"action": "show"},
-                        {"action": "show", "origin": {"pgid": PGID}}, {"action": "show", "origin": "3.7"}, {"action": "repeer", "object": ""}):
+                        {"action": "show", "origin": {"pgid": PGID}}, {"action": "show", "origin": "3.7"}, {"action": "repeer", "object": ""},
+                        {"action": "repeer", "origin": ORIGIN}, {"action": "show", "origin": ORIGIN, "shard": 1},
+                        {"action": "show", "origin": ORIGIN, "since": 24}, {"action": "repeer", "shard": 1},
+                        {"action": "absent"}, {"action": "absent", "origin": ORIGIN}, {"action": "absent", "origin": ORIGIN, "shard": 1},
+                        {"action": "absent", "origin": ORIGIN, "since": 24}, {"action": "absent", "origin": ORIGIN, "shard": "1", "since": 24},
+                        {"action": "absent", "origin": ORIGIN, "shard": 1, "since": 24.0},
+                        {"action": "absent", "origin": {"pgid": PGID}, "shard": 1, "since": 24},
+                        {"action": "absent", "origin": ORIGIN, "shard": 1, "since": 24, "osd": 2}):
             with self.subTest(request=request), self.assertRaises(ValueError):
                 self.run_mode(**request)
         self.assertEqual((self.rados.sent, self.rados.queries), ([], []))

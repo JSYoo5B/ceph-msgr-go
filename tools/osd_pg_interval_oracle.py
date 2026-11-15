@@ -33,9 +33,19 @@ not after the bracketing epoch, and the primary's own map epoch is not
 behind the bracketing epoch. Anything else is reported as not settled with
 its reasons; nothing is inferred from a later observation.
 
+``absent_failures`` judges one further state for the controls that take the
+OSD of one acting member out of the PG with the fixture's own daemon
+control: the PG active on its original primary while that one acting
+position is empty. It sends nothing and is as strict: the same two placement
+records, the recorded placement except for a newer epoch and the one empty
+position in the up and acting sets, no pg_temp, a primary that reports
+exactly active and undersized, with or without degraded, in an interval that
+started after the recorded one, in which the PG has started.
+
 The receipt says that the PG entered a newer interval with its original
-placement. It says nothing about what any shard holds; that is read from the
-shards' own stores by the shard-history capture.
+placement, or that it is active without one member. It says nothing about
+what any shard holds; that is read from the shards' own stores by the
+shard-history capture.
 """
 import osd_pg_history_oracle as history
 import osd_shard_history_oracle as shard_history
@@ -43,6 +53,14 @@ import osd_shard_history_oracle as shard_history
 MAX_QUERY_BYTES = 256 << 10
 SOURCE_COMMIT = "7f793731f1b39eb4f465e960113d2363c311b964"
 CLEAN = "active+clean"
+# CRUSH_ITEM_NONE, the map's value for an acting position without an OSD
+# (src/osd/osd_types.h:1267).
+NONE = (1 << 31) - 1
+# What the primary of an active PG reports while one acting position is
+# empty: src/osd/PeeringState.cc:3224-3228 sets undersized for an acting set
+# smaller than the pool size, and :4354-4358 sets degraded once the PG's
+# statistics count a degraded object.
+ABSENT_STATES = (["active", "undersized"], ["active", "degraded", "undersized"])
 PLACEMENT_KEYS = ("pgid", "pool_id", "object", "namespace", "up", "acting", "primary_id", "osd_id", "pg_shard", "address",
                   "replicas", "min_size", "pool_type", "nonprimary_shard_count", "hash", "raw_pgid", "pg_seed")
 HistoryError = history.HistoryError
@@ -179,5 +197,64 @@ def origin_failures(origin, seen):
         reasons.append("the interval started after the placement's epoch")
     if query["epoch"] < origin["epoch"]:
         # It may still have an interval change of a newer map ahead of it.
+        reasons.append("the primary is at map epoch %d, behind the placement's epoch" % query["epoch"])
+    return reasons
+
+
+def absent_failures(origin, shard, since, seen):
+    """Why one observation is not the PG active without one acting member.
+
+    ``origin`` is the complete placement recorded before the member's OSD
+    left, ``shard`` its acting position and ``since`` the epoch at which the
+    interval of that placement started. The observation is accepted only if
+    two identical placement records surround one complete query of the same
+    primary; the placement is the recorded one in every field but a newer
+    epoch and up and acting sets whose position ``shard`` alone is empty; it
+    has no pg_temp; the primary reports active and undersized, optionally
+    degraded and nothing else, with those sets, for its own shard, in an
+    interval that started after ``since`` and not after the placement's
+    epoch, in which the PG has started; and the primary's own map epoch is
+    not behind the placement's.
+    """
+    vector = origin.get("acting") if isinstance(origin, dict) else None
+    if (not isinstance(vector, list) or NONE in vector or origin.get("up") != vector or origin.get("pool_type") != 3
+            or origin.get("pg_temp") is not False or type(origin.get("epoch")) is not int
+            or type(origin.get("pg_shard")) is not int or not 0 <= origin["pg_shard"] < len(vector)):
+        return ["the recorded placement is not a complete erasure-coded acting set without a pg_temp"]
+    if type(shard) is not int or not 0 <= shard < len(vector) or shard == origin["pg_shard"]:
+        return ["the absent position %r is not an acting position other than the primary's" % (shard,)]
+    if type(since) is not int or not 0 < since <= origin["epoch"]:
+        return ["the recorded interval start %r is not an epoch at or before the recorded placement's" % (since,)]
+    first, second = seen.get("before"), seen.get("after")
+    if not isinstance(first, dict) or not isinstance(second, dict):
+        return ["no placement record: %s" % seen.get("placement_failure", "")]
+    reasons = []
+    if first != second:
+        reasons.append("placement or epoch changed during the observation")
+    holed = vector[:shard] + [NONE] + vector[shard + 1:]
+    for key in PLACEMENT_KEYS:
+        want = holed if key in ("up", "acting") else origin.get(key)
+        if first.get(key) != want:
+            reasons.append("placement %s is %r; want %r" % (key, first.get(key), want))
+    if first.get("pg_temp") is not False:
+        reasons.append("the PG has a pg_temp")
+    if type(first.get("epoch")) is not int or first["epoch"] <= origin["epoch"]:
+        reasons.append("the map epoch %r is not newer than %d" % (first.get("epoch"), origin["epoch"]))
+    query = seen.get("query")
+    if query is None:
+        return reasons + [seen.get("query_failure", "no pg query reply")]
+    if sorted(query["state"].split("+")) not in ABSENT_STATES:
+        reasons.append("the primary reports %s" % query["state"][:80])
+    if query["up"] != holed or query["acting"] != holed:
+        reasons.append("the primary's up %r and acting %r are not %r" % (query["up"], query["acting"], holed))
+    if query["info"]["pgid"] != "%ss%d" % (origin["pgid"], origin["pg_shard"]) or query["info"]["shard"] != origin["pg_shard"]:
+        reasons.append("the query was answered for %s" % query["info"]["pgid"])
+    if query["same_interval_since"] <= since:
+        reasons.append("the interval still started at epoch %d" % query["same_interval_since"])
+    elif type(first.get("epoch")) is int and not query["same_interval_since"] <= first["epoch"]:
+        reasons.append("the interval started at epoch %d, after the placement's epoch" % query["same_interval_since"])
+    if query["last_epoch_started"] < query["same_interval_since"]:
+        reasons.append("the PG has not started in its current interval")
+    if type(first.get("epoch")) is int and query["epoch"] < first["epoch"]:
         reasons.append("the primary is at map epoch %d, behind the placement's epoch" % query["epoch"])
     return reasons

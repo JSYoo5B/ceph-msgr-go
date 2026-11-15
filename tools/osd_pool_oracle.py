@@ -23,7 +23,9 @@ pginterval ends the current interval of the PG of one owned object with one
 the primary asks to drop again, and reads the placement and the primary's
 `pg query` until osd_pg_interval_oracle.py judges the PG settled in a newer
 interval with its original placement. Action show sends no command and
-reports one observation of the same kind.
+reports one observation of the same kind; action absent sends none either
+and judges one observation of the PG active without the member of one acting
+position, whose OSD the caller took out through the fixture's daemon control.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
 servicecompare independently registers a native service with the Go caller's
@@ -562,12 +564,16 @@ def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=ti
     Action repeer requires a clean erasure-coded PG without a pg_temp, sends
     one `pg repeer` command, which is never resent, and observes until the
     PG is settled in a newer interval or the time bound is used up. Action
-    show observes once. Both report the last observation and its judgement;
-    a PG that did not settle is reported, not raised.
+    show observes once and judges a clean PG on the recorded placement.
+    Action absent observes once and judges the PG active without the member
+    of one acting position of the recorded placement. Each reports the last
+    observation and its judgement; a PG that did not settle is reported, not
+    raised.
     """
     action = request.get("action")
-    if action not in ("repeer", "show") or set(request) - {"action", "slot", "object", "namespace", "origin"} or (action == "repeer" and "origin" in request):
-        raise ValueError("pginterval needs action repeer or show and no unknown field")
+    allowed = {"action", "slot", "object", "namespace"} | {"show": {"origin"}, "absent": {"origin", "shard", "since"}}.get(action, set())
+    if action not in ("repeer", "show", "absent") or set(request) - allowed:
+        raise ValueError("pginterval needs action repeer, show or absent and no unknown field")
     pool = pool_name(request["slot"])
     _, namespace = object_request(request)
     descriptor = find_pool(rados.dump(cluster), pool)
@@ -593,13 +599,17 @@ def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=ti
         return pg_interval.observation(first, code, raw, status, oversized, place())
 
     started = clock()
-    if action == "show":
+    if action in ("show", "absent"):
         origin = request.get("origin")
         if not isinstance(origin, dict) or not isinstance(origin.get("pgid"), str) or type(origin.get("primary_id")) is not int:
-            raise ValueError("pginterval show needs the placement recorded before the command")
+            raise ValueError("pginterval %s needs the placement recorded before the command" % action)
+        if action == "absent" and (type(request.get("shard")) is not int or type(request.get("since")) is not int):
+            raise ValueError("pginterval absent needs the absent acting position and the recorded interval start")
         seen = observe(origin["pgid"], origin["primary_id"])
         now = seen["before"]
-        if now is None:
+        if action == "absent":
+            failures = pg_interval.absent_failures(origin, request["shard"], request["since"], seen)
+        elif now is None:
             failures = ["no placement record: " + seen["placement_failure"]]
         else:
             failures = pg_interval.origin_failures(now, seen) + [
