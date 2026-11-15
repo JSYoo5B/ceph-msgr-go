@@ -351,6 +351,39 @@ class SnapshotTest(unittest.TestCase):
                     change(capture.record["shards"][1])
                 self.refused(capture, "shard 1 (osd.3): capture record has an unexpected shape", shard=1)
 
+    def test_a_dump_file_of_another_shard_or_operation_is_not_read(self):
+        # Shard 1's own log holds the copy without the source identity. A
+        # record that names shard 0's log file must not attribute shard 0's
+        # nested identity to shard 1: the log dump carries no shard of its own.
+        other = "client.4722.5:9"
+        assert len(other) == len(SOURCE)
+        capture = Capture(logs={1: copied().replace(SOURCE.encode(), other.encode())})
+        own = capture.snapshot()["shards"][1]
+        self.assertTrue(own["complete"], own["failures"])
+        self.assertEqual([len(t["locations"]) for t in own["targets"]], [1, 0, 0])
+        cases = {
+            "another shard's log": ("log_file", "osd-shard-history-s0-log.json"),
+            "another shard's info": ("info_file", "osd-shard-history-s0-info.json"),
+            "this shard's info as its log": ("log_file", "osd-shard-history-s1-info.json"),
+            "this shard's log as its info": ("info_file", "osd-shard-history-s1-log.json"),
+            "a shard beyond the acting vector": ("log_file", "osd-shard-history-s7-log.json"),
+            "no name": ("log_file", ""),
+            "not a name": ("info_file", None),
+        }
+        for name, (field, value) in cases.items():
+            with self.subTest(name=name):
+                capture = Capture(logs={1: copied().replace(SOURCE.encode(), other.encode())})
+                record = capture.record["shards"][1]
+                record[field] = value
+                if isinstance(value, str) and value in capture.files:
+                    # Same recorded length, so only the name tells them apart.
+                    record[field[:-5] + "_bytes"] = len(capture.files[value])
+                with patch.object(Capture, "dumps", side_effect=lambda name, limit, c=capture: self.only_other_shards(c, name, limit)):
+                    receipt = self.refused(capture, "shard 1 (osd.3): the capture names", shard=1)
+                self.assertNotIn("raw", receipt["shards"][1])
+                self.assertNotIn("targets", receipt["shards"][1])
+                self.assertEqual([s["complete"] for s in receipt["shards"]], [True, False, True, True])
+
     @staticmethod
     def only_other_shards(capture, name, limit):
         if "-s1-" in name:
@@ -504,7 +537,10 @@ class ModeTest(unittest.TestCase):
         self.publish_capture()
         receipt = self.run_mode(phase="after", targets=self.capture.targets)["shard_history"]
         self.assertFalse(receipt["complete"])
-        self.assertTrue(any("offline log dump is unreadable: invalid shard dump name" in f for f in receipt["failures"]), receipt["failures"])
+        # The judgement refuses the name before the mode's own name filter
+        # would; nothing outside the control directory's dumps is opened.
+        self.assertEqual(receipt["failures"], ["shard 0 (osd.1): the capture names '../key' as this shard's log dump"])
+        self.assertNotIn("raw", receipt["shards"][0])
 
 
 if __name__ == "__main__":

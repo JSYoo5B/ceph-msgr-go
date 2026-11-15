@@ -32,7 +32,8 @@ no Ceph code; it reads the JSON shape that source emits:
 
 One shard is complete only when the fixture attributed its copy (acting
 index, OSD, ``whoami``, an isolated reader, a regular block file, the OSD
-resumed, the reader and its copy removed), both offline operations exited 0
+resumed, the reader and its copy removed, each dump under the one file name
+of that index and operation), both offline operations exited 0
 without diagnostics, both dumps are within the byte bound and parse as one
 strict JSON document of exactly that shape, the info names that ``spg_t``
 and the acting index as its shard ID, every entry's ``written_shards`` and
@@ -65,6 +66,11 @@ HistoryError = history.HistoryError
 # shard_id_set is a 128-bit set printed in ascending order.
 MAX_SHARD_ID = 128
 SHARD_SET = re.compile(r"\{(?:(?:0|[1-9][0-9]{0,2})(?:,(?:0|[1-9][0-9]{0,2}))*)?\}")
+
+
+def dump_name(index, op):
+    """The one file the fixture writes for an acting index and operation."""
+    return "osd-shard-history-s%d-%s.json" % (index, op)
 
 
 def parse_written_shards(text, index):
@@ -148,6 +154,11 @@ def _shard(index, osd, pgid, record, dumps, identities):
             failures.append("offline %s exited %r" % (op, record[op + "_exit_code"]))
         if record[op + "_stderr"] != "":
             failures.append("offline %s wrote diagnostics: %s" % (op, str(record[op + "_stderr"])[:200]))
+    for op in ("info", "log"):
+        # A dump carries no acting index and the log dump no shard at all, so
+        # only the canonical name binds a file to this index and operation.
+        if record[op + "_file"] != dump_name(index, op):
+            failures.append("the capture names %s as this shard's %s dump" % (repr(record[op + "_file"])[:60], op))
     if failures:
         # An unattributed or refused copy is not read at all.
         return dict(receipt, complete=False, failures=failures)
