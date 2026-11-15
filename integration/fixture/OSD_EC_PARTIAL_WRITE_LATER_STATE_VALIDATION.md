@@ -136,9 +136,10 @@ observation. Action `show` sends no command and reports one observation.
 The Go test rechecks the receipt in `checkPGInterval` without relying on
 the oracle's verdict.
 
-The fixture admits the mode only for the selectors of these two controls,
-on the four-BlueStore topology of the capture; every other profile is
-refused, the two older capture selectors included.
+The fixture admits the mode only for the selectors of these two controls
+and of the two [outage controls](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md),
+which only observe with it, on the four-BlueStore topology of the capture;
+every other profile is refused, the two older capture selectors included.
 
 The command touches the temporary mapping of one PG. The PG is not active
 while its acting set is the primary alone (one shard is below `min_size`),
@@ -493,9 +494,10 @@ epoch 31.
   replicated-pg-v8, four BlueStore OSDs, isa k=2,m=2 with optimizations,
   stripe width 8192. Other widths, more than one nonprimary shard and
   plugins with a chunk mapping were not run.
-- The interval change keeps the primary and the acting set. A primary
-  change onto another shard, a degraded write and the recovery of a shard
-  that missed a write are not exercised; see the next section.
+- The interval change keeps the primary and the acting set. An outage of
+  the left-out shard's OSD, without and with a degraded write, has its own
+  [controls](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md). A primary change
+  onto another shard is not exercised; see the next section.
 - A log whose head is past its last entry is accepted for exactly the shape
   described above. A nonprimary shard whose log holds no entry, a range that
   the shard's own info does not record, and the same shape on a shard that
@@ -516,11 +518,15 @@ epoch 31.
   shard can hold later entries without an earlier one, and a shard's head
   can be past its last entry.
 
-## Not built: primary replacement and degraded write
+## Not built: primary replacement
 
 Issue #9 also asks for a primary replacement and a degraded write followed
-by recovery, with a capture of the shards afterwards. These controls stop
-before it, for these reasons:
+by recovery, with a capture of the shards afterwards. The degraded write
+and the recovery of the left-out shard are the subject of two later
+[controls](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md), which take that
+shard's OSD out of the PG with the fixture's forced kill of an owned OSD,
+as the existing degraded-write tests do. These two controls stop before a
+primary replacement, for these reasons:
 
 - Marking the acting primary's OSD out does not give the PG another active
   primary while that OSD runs. The member that leads the next interval
@@ -540,17 +546,14 @@ before it, for these reasons:
   two epochs later, and the native bytes and user version were unchanged.
   No other member was an active primary, and the change touched all eight
   PGs of the pool.
-- Another active primary therefore needs the old one down in the map. The
-  existing failover and degraded-write tests kill the OSD's process, which
-  this control was not to add. Marking a running OSD down and holding it
-  down with the cluster-wide `noup` flag touches every PG of that OSD and
-  depends on how and when the daemon reacts to its own map state; that was
-  not run, so no deterministic assertion can be stated for it yet.
+- Another active primary therefore needs the old one down in the map, which
+  means killing the primary's OSD. The left-out shard cannot lead, so a
+  parity shard's OSD leads under a primary-first pg_temp, and the old
+  primary leads again after its return, through further intervals and a
+  recovery of its own. Marking a running OSD down and holding it down with
+  the cluster-wide `noup` flag touches every PG of that OSD and depends on
+  how and when the daemon reacts to its own map state. Neither was run with
+  this capture, so no deterministic assertion can be stated for it yet.
 - The capture copies every member of the acting vector and refuses a vector
-  with an empty position, so a degraded PG can be captured only before the
-  outage and after the recovery.
-- A shard that returns after missing a write is recovered from the log of
-  another shard. What its own log then holds, and what the range records
-  hold after a recovery
-  ([invalidation](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/PeeringState.cc#L4798-L4849)),
-  needs its own source reading and its own judgement.
+  with an empty position, so a PG without a member can be captured only
+  before the outage and after the return.

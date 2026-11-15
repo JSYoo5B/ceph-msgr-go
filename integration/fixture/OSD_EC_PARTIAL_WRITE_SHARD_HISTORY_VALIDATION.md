@@ -76,9 +76,10 @@ native placement records around a sequential copy of every acting OSD's
 store, each read offline in a reader without a network. The fixture now
 admits it for two selectors, that control's and
 `^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$`, each
-on the four-BlueStore topology only. Its two
-[continuations](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md) have their
-own selectors.
+on the four-BlueStore topology only. Its continuations
+([later state](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md),
+[outage and recovery](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md)) have
+their own selectors.
 
 `tools/osd_shard_history_oracle.py` reports three more things per shard, and
 a shard is incomplete if any of them does not parse:
@@ -338,9 +339,11 @@ removed readers.
   shard's `last_update` and log head to the end of a partial-write range
   without giving it the entries
   ([range application](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/PeeringState.cc#L324-L364)).
-  This control admits no log whose head is past its last entry. A primary
-  change onto another shard and the recovery of a shard that missed a write
-  are not exercised by any of them.
+  This control admits no log whose head is past its last entry. Two more
+  [continuations](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md) capture the
+  shard after an outage of its own OSD, without and with a degraded write
+  that is then recovered to it. A primary change onto another shard is not
+  exercised by any of them.
 - The copies are sequential captures of paused containers and are not one
   atomic snapshot across the four stores. Identical brackets fix placement
   and epoch, not store contents. No subject request was sent between the
