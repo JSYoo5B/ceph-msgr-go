@@ -85,8 +85,10 @@ The capture has three parts. None of them is retried.
    judgement.
 
 The fixture admits the capture only for the selector
-`^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$` on the
-four-BlueStore topology, and tells the test through
+`^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$` and for the
+selector of the
+[partial-overwrite control](OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md),
+each on the four-BlueStore topology, and tells the test through
 `CEPH_MSGR_NATIVE_SHARD_HISTORY=1`. Any other selection refuses the control.
 
 ### Completeness
@@ -99,11 +101,13 @@ One shard is complete only if all of the following hold:
 - both offline operations exited 0 and wrote nothing to standard error;
 - each dump is at most 64 KiB, has the length the capture recorded and is
   one strict UTF-8 JSON document without duplicate keys;
-- the `info` dump names exactly `<pgid>s<i>`;
+- the `info` dump names exactly `<pgid>s<i>` and shard `i`, and its
+  `partial_writes_last_complete` records parse;
 - the `log` dump is exactly `pg_log_t` plus `pg_missing_t`, and its log has
   the shape and ordering rules of the primary snapshot parser (versions
   increase inside (tail, head], the last entry is head, every request
-  identity parses, no duplicate is newer than tail);
+  identity parses, no duplicate is newer than tail), and every entry's
+  `written_shards` is a parsable shard set;
 - the log runs from the info's `log_tail` to its `last_update`,
   `last_complete` equals `last_update`, and the missing set is empty.
 
@@ -168,7 +172,9 @@ type `osd`, and a TID that was never used.
 
 The fourth row from the bottom is a statement about a fresh-head copy only.
 A partial overwrite of an existing object may give a shard an empty
-transaction; this control does not exercise it and says nothing about it.
+transaction; this control does not exercise it. The
+[partial-overwrite control](OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md)
+does.
 
 ## Cluster-free checks
 
@@ -318,9 +324,10 @@ store copies lived only inside the removed readers.
   nothing was trimmed and no retention setting was changed. The
   duplicate-tier lookup is pinned only by synthetic tests.
 - One fresh head with one source write was copied, so every shard was
-  written. A shard left out of a partial write, more than one transferred
-  identity, a source with existing extra request IDs and the ten-identity cap
-  were not exercised.
+  written. More than one transferred identity, a source with existing extra
+  request IDs and the ten-identity cap were not exercised. A shard left out
+  of a partial write is the subject of a
+  [separate control](OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md).
 - The reader supports one layout: a regular `block` file in the OSD data
   directory without a separate DB or WAL. Anything else is refused.
 - No replay or deduplication behaviour follows from a match. The proposed

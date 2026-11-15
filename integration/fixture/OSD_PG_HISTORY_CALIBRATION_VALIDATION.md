@@ -125,7 +125,9 @@ evidence for a later revision.
   history in general. A separate
   [shard-local capture](OSD_EC_COPY_FROM_SHARD_HISTORY_VALIDATION.md) reads
   every acting shard's own log from a private store copy, as a positive
-  control only. The proposed history-eviction resubmission cell needs a
+  control only, and a
+  [partial-overwrite control](OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md)
+  finds an acknowledged request's entry on three of four shards. The proposed history-eviction resubmission cell needs a
   complete absence judgement for every acting shard at the intended PG
   state. That oracle remains open.
 - The native calibration exercises only the ordinary `log` tier. Positions in
