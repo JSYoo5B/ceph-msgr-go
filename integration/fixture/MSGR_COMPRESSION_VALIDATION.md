@@ -87,16 +87,23 @@ Linux. These checks do not replace the live native parent PASS above.
 
 ## Negotiation read back from the serving connections, 2026-11-15
 
-Source: `21e71bbf73b0667b5b039b4a9f6994929bc088e6`, attempt **1**, from an
-archive of that commit. Same scenario, selector, pinned image, provider and
+Source: `36cae2b05ca1ad521a76cab0712d3c2041a3eb7a`, attempt **1**, from an
+archive of that commit. An earlier form of the check at
+`21e71bbf73b0667b5b039b4a9f6994929bc088e6` observed the same values, but
+selected connections by being open instead of by the command they carried. Same scenario, selector, pinned image, provider and
 topology as the 2026-10-23 execution; Linux/amd64, Go 1.26.9, Docker 29.9.1.
 
 The subject is a client of its own whose dialer copies, per connection and
 direction, every byte it writes and reads
 (`integration/compression_exchange_test.go`). A CRC-mode connection carries
 its frames in the clear, so after both commands returned the test reads each
-copy back as a banner followed by frames. It requires, on every connection to
-a MON and every connection to the owned OSD that the client still has open:
+copy back as a banner followed by frames, and notes the type of every message
+frame. Exactly one connection to a MON must carry the MON command message and
+its reply, and exactly one connection to the owned OSD the tell command and
+its reply, both after that connection's negotiation frames. Whether the
+connection is still open does not matter; a command or reply found on more
+than one connection, or apart from each other, fails the test. On each of
+those two connections it requires:
 
 | Observation | Required | Observed, MON | Observed, OSD |
 | --- | --- | --- | --- |
@@ -107,11 +114,11 @@ a MON and every connection to the owned OSD that the client still has open:
 | Frames after the negotiation | at least one in each direction, none with the compressed-frame flag | 6 sent, 4 received, 0 compressed | 3 sent, 2 received, 0 compressed |
 
 The client dialed two connections in that run, one to a MON and one to the
-owned OSD, and both were open when they were read. The MON `status` and the
-OSD `version` command had returned code 0 with nonempty data before, so each
-travelled on a connection of this table. A connection the client had already
-closed (a MON it tried and did not keep) would be logged and decide nothing;
-none occurred. The parent reported PASS in 0.21 seconds and the result gate
+owned OSD. The MON `status` command and its reply were found on the first
+and the OSD `version` command and its reply on the second; both commands had
+returned code 0 with nonempty data. A connection that only negotiated (a MON
+the client tried and did not keep, or a replacement) is logged and decides
+nothing; none occurred. The parent reported PASS in 0.22 seconds and the result gate
 found exactly that parent, without problems. After teardown no owned
 container remained on the engine.
 
@@ -125,21 +132,27 @@ No OSD-peer compression option was changed for this observation.
 ### Controls
 
 Two temporary changes of the product source, each run on the same row from
-the working tree of `21e71bb` and then discarded:
+a working tree and then discarded. The first was repeated on `36cae2b` with
+the same result; the second ran on `21e71bb` only:
 
 | Change | Result |
 | --- | --- |
-| The client sends CompressionRequest with compression disabled and no method | The parent failed on both connections: "the CompressionRequest was enabled=false methods=[], not an offer of zstd then snappy". The daemon answered with the same disabled CompressionDone, and both commands had succeeded, so the earlier form of the test would have passed |
+| The client sends CompressionRequest with compression disabled and no method | The parent failed for both commands on their own connections: "the CompressionRequest was enabled=false methods=[], not an offer of zstd then snappy". The daemon answered with the same disabled CompressionDone, and both commands had succeeded, so the earlier form of the test would have passed |
 | The client skips the negotiation although the peer banner carries the bit | The fixture's first client could not be admitted: each MON closed the connection during session identification (`EOF`). The run therefore never reached the subject's check. It shows that a Tentacle daemon whose banner carries the bit does not accept a client that omits the request |
 
 `TestCompressionExchangeReadsOneConnection` (cluster-free) covers the reader
 without a daemon: a stream delivered one byte at a time gives the same copy
 and the same result, a stream cut inside a frame concludes nothing, and each
-of fifteen missing or different observations is reported (a banner without
+of sixteen missing or different observations is reported (a banner without
 the bit on either side, no request, a disabled or reordered offer, no answer,
 an enabling answer, a refusal that names a method, a request before the
-signature, one direction only, a compressed later frame, bytes that are not
-frames). It also reads the archived native MON capture
+signature, one direction only, a compressed later frame, the same frame cut
+right after its flagged preamble, bytes that are not frames). For the
+selection it covers a command that ran on a closed connection without
+negotiation beside an idle negotiated replacement, idle connections only, a
+command on two connections or on another role, a command and its reply on
+different connections, a missing reply and a command sent before the
+request; each is reported. It also reads the archived native MON capture
 (`internal/msgr/testdata/ceph-mon-hello-v20.2.4.bin`), which stops before
 authentication: the banner bit is found and no refusal is concluded. The
 other streams of that test are written by the Go frame writer and are
@@ -152,9 +165,11 @@ synthetic.
   does not offer compression there.
 - The frames after the negotiation are those the client had exchanged when
   the copies were read, not the whole life of the connection.
-- The reader checks the preamble and segment CRCs of each frame and decodes
-  the two negotiation payloads. It does not decode any other payload, so it
-  does not attribute a later frame to a particular command.
+- The reader checks the preamble and segment CRCs of each frame, decodes the
+  two negotiation payloads and reads the type field of each message header.
+  It does not decode any message payload or match transaction IDs: the
+  command is attributed to a connection by its message type and that of its
+  reply, which only this subject client sends on these connections.
 - A daemon that enables compression toward a client was not observed; the
   enabling path remains covered by synthetic tests only.
 
