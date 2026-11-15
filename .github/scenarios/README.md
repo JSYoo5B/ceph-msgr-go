@@ -101,6 +101,8 @@ requires the PG clean on its original placement: the left-out shard's log
 head must then be at the overwrite without its entry, and the first write of
 the new interval must be held by every shard.
 The fixture admits the store-copy step for these four selectors alone.
+It admits the owned-pool oracle's `pginterval` mode, which observes one
+owned PG and can end its interval, for the last two alone.
 That value travels in the
 already-forwarded `osd_replicas` input, so it needs no new workflow parameter;
 the fixture refuses it with any other selector.
