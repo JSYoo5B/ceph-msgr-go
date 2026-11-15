@@ -235,24 +235,34 @@ Linux amd64 host with Docker 29.9.1 and Go 1.26.9, through
 `integration/run.sh` and the native result gate, with one test process on
 the engine.
 
-The recorded runs used an archive of test commit `ef52774` (later commits of
-the same pull request change documents only). Its first run was the first
-run of that commit. The same archive then ran the three neighbouring rows
-and this row twice more, each in its own fixture. The gate recorded
+The recorded runs used archives of two commits. The first is test commit
+`ef52774`. Its first run was the first run of that commit. The same archive
+then ran the three neighbouring rows and this row twice more, each in its
+own fixture. The gate recorded
 `TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration` as PASS
 with no problem all three times: 59.95 s, 59.85 s and 59.95 s for the test
 and 125 s, 116 s and 116 s for the row.
 
-All three runs observed the same placement and the same per-shard result.
-The fixture's topology is deterministic, so they are three repetitions of
-one placement, not three different ones.
+Two later commits changed the capture and its judgement: a shard's dumps are
+read only under the file name of its acting index and operation, and a
+capture fails when the collection of a tool's standard error exits nonzero.
+An archive of commit `553bc79`, which contains both (later commits of the
+same pull request change documents only), ran this row and the COPY_FROM2
+shard-history row once each, as the first run of that commit. Both passed:
+this test in 59.95 s (row 125 s) and the COPY_FROM2 control in 64.75 s (row
+121 s, all four shard copies of PG `4.2` holding both linked identities at
+`28'3`).
+
+All four runs of this test observed the same placement and the same
+per-shard result. The fixture's topology is deterministic, so they are
+repetitions of one placement, not different ones.
 
 | Observation | Value |
 | --- | --- |
 | Geometry | stripe_width 8192, chunk 4096, profile k=2, m=2, plugin isa, no mapping, `nonprimary_shards` `{1}` |
 | Object | 16,384 bytes (two stripes); overwrite of 14 bytes at offset 5 |
 | Restated plan | names shards 0, 2 and 3, leaves out shard 1 |
-| Full write | `client.4716.7:1` (first run; `client.4722.7:1` in the other two), replay version `25'1`, user version 1 |
+| Full write | `client.4716.7:1` (first run; `client.4722.7:1` in the other three), replay version `25'1`, user version 1 |
 | Overwrite | `client.4716.9:2` (`client.4722.9:2`), replay version `25'2`, user version 2 |
 | Placement, both brackets | epoch 25, PG `3.7`, up = acting = `[3,2,1,0]`, primary osd.3 on shard 0 |
 | Live primary (osd.3, epoch 25) | 1,242 bytes, head `25'2`, tail `0'0`, 2 log entries, 0 duplicates; the full write is the `modify` entry of `3:e65c9b8f:::ec-partial-write-history:head` at `25'1` with `"written_shards":"{}"`, the overwrite the `modify` entry at `25'2` with `"written_shards":"{0,2,3}"` and prior version `25'1` |
@@ -275,7 +285,7 @@ dumped with a `ROLLBACK_EXTENTS` operation for extent `[0,4096]` on shards
 while the others reported 2. These are recorded as observed and are not
 asserted.
 
-The same archive ran three neighbouring rows, because the receipt and the
+The first archive ran three neighbouring rows, because the receipt and the
 log parser they share gained fields: the COPY_FROM2 shard-history control
 (`...t-osderasureoptimizedk2m2copyfromhistory`, PASS in 64.85 s, with all
 four shard copies of PG `4.2` holding both linked identities at `27'3`), the
