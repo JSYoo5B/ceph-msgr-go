@@ -141,8 +141,11 @@ func (h partialWriteShardHistory) String() string {
 
 // checkShardDumps rechecks one shard's info dump against its digest and
 // reads both raw dumps independently of the Python parser: the info's shard
-// ID and partial_writes_last_complete records and every ordinary log
-// entry's version and written_shards text must equal the receipt.
+// ID, last_update, last_complete and partial_writes_last_complete records,
+// the log's head, its last entry and every ordinary log entry's version and
+// written_shards text must equal the receipt. A head newer than the last
+// entry must be reported as such and be spanned by the shard's own
+// partial-write record.
 func checkShardDumps(shard shardHistoryShard) error {
 	info, err := base64.StdEncoding.DecodeString(shard.InfoRaw)
 	digest := sha256.Sum256(info)
@@ -150,9 +153,11 @@ func checkShardDumps(shard shardHistoryShard) error {
 		return fmt.Errorf("info dump differs from its receipt: %v, %d of %d bytes", err, len(info), shard.InfoBytes)
 	}
 	var document struct {
-		PGID    string `json:"pgid"`
-		Shard   string `json:"shard"`
-		Records []struct {
+		PGID         string `json:"pgid"`
+		Shard        string `json:"shard"`
+		LastUpdate   string `json:"last_update"`
+		LastComplete string `json:"last_complete"`
+		Records      []struct {
 			ID   *int   `json:"id"`
 			From string `json:"from"`
 			To   string `json:"to"`
@@ -166,6 +171,9 @@ func checkShardDumps(shard shardHistoryShard) error {
 	if shard.Shard == nil || *shard.Shard != shard.Index || document.Shard != strconv.Itoa(shard.Index) {
 		return fmt.Errorf("info dump names shard %q; the capture selected acting index %d", document.Shard, shard.Index)
 	}
+	if document.LastUpdate == "" || document.LastUpdate != shard.LastUpdate || document.LastComplete != shard.LastComplete {
+		return fmt.Errorf("info dump is at last_update %q last_complete %q; the receipt has %s and %s", document.LastUpdate, document.LastComplete, shard.LastUpdate, shard.LastComplete)
+	}
 	for i, record := range document.Records {
 		if got := shard.PartialWrites[i]; record.ID == nil || *record.ID != got.Shard || record.From != got.From || record.To != got.To {
 			return fmt.Errorf("partial-write record %d differs from the info dump: %+v", i, got)
@@ -174,6 +182,8 @@ func checkShardDumps(shard shardHistoryShard) error {
 	raw, err := base64.StdEncoding.DecodeString(shard.Raw)
 	var log struct {
 		Log struct {
+			Head    string `json:"head"`
+			Tail    string `json:"tail"`
 			Entries []struct {
 				Version       string  `json:"version"`
 				WrittenShards *string `json:"written_shards"`
@@ -193,7 +203,40 @@ func checkShardDumps(shard shardHistoryShard) error {
 			return fmt.Errorf("log entry %d differs from the dump: receipt %+v", i, got)
 		}
 	}
+	// The log's bounds, read from the dump itself. A log without entries
+	// ends at its tail.
+	last := log.Log.Tail
+	if len(log.Log.Entries) != 0 {
+		last = log.Log.Entries[len(log.Log.Entries)-1].Version
+	}
+	if log.Log.Head == "" || log.Log.Head != shard.Head || log.Log.Tail != shard.Tail || last != shard.LastEntry || shard.HeadPastEntries != (last != log.Log.Head) {
+		return fmt.Errorf("log dump runs from %q to head %q with last entry %q; the receipt has tail %s, head %s, last entry %s, head past entries %t",
+			log.Log.Tail, log.Log.Head, last, shard.Tail, shard.Head, shard.LastEntry, shard.HeadPastEntries)
+	}
+	if shard.HeadPastEntries {
+		// Only a partial-write range of this very shard explains a head
+		// without its entry: the range must end at the head and start at the
+		// last entry or earlier, and the log must hold an entry.
+		own := slices.IndexFunc(shard.PartialWrites, func(record shardPartialWrite) bool { return record.Shard == shard.Index })
+		if own < 0 || shard.PartialWrites[own].To != shard.Head || !versionAtOrBefore(shard.PartialWrites[own].From, last) || len(log.Log.Entries) == 0 {
+			return fmt.Errorf("log head %s is newer than the last entry %s without this shard's partial-write record between them: %+v", shard.Head, last, shard.PartialWrites)
+		}
+	}
 	return nil
+}
+
+// versionAtOrBefore compares two eversion_t print forms ("epoch'version").
+// An unparsable version is never at or before another.
+func versionAtOrBefore(a, b string) bool {
+	parse := func(text string) (epoch, version uint64, ok bool) {
+		left, right, found := strings.Cut(text, "'")
+		epoch, errEpoch := strconv.ParseUint(left, 10, 32)
+		version, errVersion := strconv.ParseUint(right, 10, 64)
+		return epoch, version, found && errEpoch == nil && errVersion == nil
+	}
+	aEpoch, aVersion, aOK := parse(a)
+	bEpoch, bVersion, bOK := parse(b)
+	return aOK && bOK && (aEpoch < bEpoch || aEpoch == bEpoch && aVersion <= bVersion)
 }
 
 // writeEntry requires an identity to be exactly one ordinary successful
@@ -456,7 +499,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration(t *testi
 	}
 
 	// Then every acting shard's own store, with no further subject request.
-	shards := shardPGHistory(t, ctx, slot, object, route, targets)
+	shards := shardPGHistory(t, ctx, slot, object, route, targets, nil)
 	if shards.Before.Epoch != primary.After.Epoch {
 		t.Fatalf("map epoch moved from %d to %d between the primary snapshot and the shard capture", primary.After.Epoch, shards.Before.Epoch)
 	}
@@ -586,24 +629,42 @@ func partialWriteShard(held, recorded bool) (shardHistoryShard, []pgHistoryLocat
 	object := "4:53c99ff5:::obj:head"
 	full := []pgHistoryLocation{{Tier: "log", Index: 2, Version: "28'3", Op: "modify", Object: object, ReturnCode: &zero}}
 	index := 1
-	shard := shardHistoryShard{Index: index, Shard: &index, OSD: 3, SPG: "4.2s1", Head: "28'3", LastUpdate: "28'3", LastComplete: "28'3", LogEntries: 3, LimitBytes: 64 << 10,
+	shard := shardHistoryShard{Index: index, Shard: &index, OSD: 3, SPG: "4.2s1", Head: "28'3", Tail: "0'0", LastEntry: "28'3", LastUpdate: "28'3", LastComplete: "28'3", LogEntries: 3, LimitBytes: 64 << 10,
 		Entries: []shardLogEntry{{Version: "28'1", WrittenShards: []int{}}, {Version: "28'2", WrittenShards: []int{}}, {Version: "28'3", WrittenShards: []int{}}}}
 	var patch []pgHistoryLocation
 	log := `{"version":"28'1","written_shards":"{}"},{"version":"28'2","written_shards":"{}"},{"version":"28'3","written_shards":"{}"}`
-	info := `{"pgid":"4.2s1","shard":"1","partial_writes_last_complete":[]}`
+	records := ""
 	if held {
 		patch = []pgHistoryLocation{{Tier: "log", Index: 3, Version: "28'4", Op: "modify", Object: object, ReturnCode: &zero}}
-		shard.Head, shard.LastUpdate, shard.LastComplete, shard.LogEntries = "28'4", "28'4", "28'4", 4
+		shard.Head, shard.LastEntry, shard.LastUpdate, shard.LastComplete, shard.LogEntries = "28'4", "28'4", "28'4", "28'4", 4
 		shard.Entries = append(shard.Entries, shardLogEntry{Version: "28'4", WrittenShards: []int{0, 2, 3}})
 		log += `,{"version":"28'4","written_shards":"{0,2,3}"}`
 	}
 	if recorded {
 		shard.PartialWrites, shard.PartialWritesEpoch = []shardPartialWrite{{Shard: 1, From: "28'3", To: "28'4"}}, 28
-		info = `{"pgid":"4.2s1","shard":"1","partial_writes_last_complete":[{"id":1,"from":"28'3","to":"28'4"}]}`
+		records = `{"id":1,"from":"28'3","to":"28'4"}`
 	}
-	setShardDumps(&shard, `{"pg_log_t":{"log":[`+log+`]}}`, info)
+	setShardDumps(&shard, `{"pg_log_t":{"head":"`+shard.Head+`","tail":"0'0","log":[`+log+`]}}`,
+		`{"pgid":"4.2s1","shard":"1","last_update":"`+shard.Head+`","last_complete":"`+shard.Head+`","partial_writes_last_complete":[`+records+`]}`)
 	return shard, full, patch
 }
+
+// advancedShard builds the synthetic receipt of a nonprimary shard after a
+// peering that followed a partial write it was left out of: its info and its
+// log head are at the overwrite, its last entry is the full write and its
+// own info holds the range between them. No daemon produced it.
+func advancedShard() shardHistoryShard {
+	shard, _, _ := partialWriteShard(false, false)
+	shard.Head, shard.LastUpdate, shard.LastComplete, shard.HeadPastEntries = "28'4", "28'4", "28'4", true
+	shard.PartialWrites, shard.PartialWritesEpoch = []shardPartialWrite{{Shard: 1, From: "28'3", To: "28'4"}}, 30
+	setShardDumps(&shard, advancedShardLog, advancedShardInfo)
+	return shard
+}
+
+const (
+	advancedShardLog  = `{"pg_log_t":{"head":"28'4","tail":"0'0","log":[{"version":"28'1","written_shards":"{}"},{"version":"28'2","written_shards":"{}"},{"version":"28'3","written_shards":"{}"}]}}`
+	advancedShardInfo = `{"pgid":"4.2s1","shard":"1","last_update":"28'4","last_complete":"28'4","partial_writes_last_complete":[{"id":1,"from":"28'3","to":"28'4"}]}`
+)
 
 func setShardDumps(shard *shardHistoryShard, log, info string) {
 	digest := sha256.Sum256([]byte(info))
@@ -716,8 +777,8 @@ func TestCheckShardDumps(t *testing.T) {
 		}
 	}
 	const (
-		log  = `{"pg_log_t":{"log":[{"version":"28'1","written_shards":"{}"},{"version":"28'2","written_shards":"{}"},{"version":"28'3","written_shards":"{}"},{"version":"28'4","written_shards":"{0,2,3}"}]}}`
-		info = `{"pgid":"4.2s1","shard":"1","partial_writes_last_complete":[{"id":1,"from":"28'3","to":"28'4"}]}`
+		log  = `{"pg_log_t":{"head":"28'4","tail":"0'0","log":[{"version":"28'1","written_shards":"{}"},{"version":"28'2","written_shards":"{}"},{"version":"28'3","written_shards":"{}"},{"version":"28'4","written_shards":"{0,2,3}"}]}}`
+		info = `{"pgid":"4.2s1","shard":"1","last_update":"28'4","last_complete":"28'4","partial_writes_last_complete":[{"id":1,"from":"28'3","to":"28'4"}]}`
 	)
 	for name, edit := range map[string]func(*shardHistoryShard){
 		"info is not base64":             func(s *shardHistoryShard) { s.InfoRaw += "%" },
@@ -760,11 +821,96 @@ func TestCheckShardDumps(t *testing.T) {
 			setShardDumps(s, strings.Replace(log, `,{"version":"28'4","written_shards":"{0,2,3}"}`, "", 1), info)
 		},
 		"dump entry in another order": func(s *shardHistoryShard) { setShardDumps(s, strings.Replace(log, "{0,2,3}", "{2,0,3}", 1), info) },
+		// The bounds, read from the dumps themselves.
+		"info at another last_update": func(s *shardHistoryShard) {
+			setShardDumps(s, log, strings.Replace(info, `"last_update":"28'4"`, `"last_update":"28'5"`, 1))
+		},
+		"info at another last_complete": func(s *shardHistoryShard) {
+			setShardDumps(s, log, strings.Replace(info, `"last_complete":"28'4"`, `"last_complete":"28'3"`, 1))
+		},
+		"info without last_update": func(s *shardHistoryShard) {
+			setShardDumps(s, log, strings.Replace(info, `"last_update":"28'4",`, "", 1))
+		},
+		"receipt at another update":   func(s *shardHistoryShard) { s.LastUpdate = "28'3" },
+		"receipt at another complete": func(s *shardHistoryShard) { s.LastComplete = "28'3" },
+		"dump at another head": func(s *shardHistoryShard) {
+			setShardDumps(s, strings.Replace(log, `"head":"28'4"`, `"head":"28'5"`, 1), info)
+		},
+		"dump without a head": func(s *shardHistoryShard) { setShardDumps(s, strings.Replace(log, `"head":"28'4",`, "", 1), info) },
+		"dump at another tail": func(s *shardHistoryShard) {
+			setShardDumps(s, strings.Replace(log, `"tail":"0'0"`, `"tail":"28'1"`, 1), info)
+		},
+		"receipt at another head":       func(s *shardHistoryShard) { s.Head = "28'5" },
+		"receipt at another tail":       func(s *shardHistoryShard) { s.Tail = "28'1" },
+		"receipt at another last entry": func(s *shardHistoryShard) { s.LastEntry = "28'3" },
+		"receipt without a last entry":  func(s *shardHistoryShard) { s.LastEntry = "" },
+		"head past entries claimed":     func(s *shardHistoryShard) { s.HeadPastEntries = true },
 	} {
 		shard, _, _ := partialWriteShard(true, true)
 		edit(&shard)
 		if err := checkShardDumps(shard); err == nil {
 			t.Error("shard dumps accepted:", name)
+		}
+	}
+	// A head newer than the last entry: accepted only as reported, with
+	// this shard's own record from the last entry or earlier to the head.
+	if err := checkShardDumps(advancedShard()); err != nil {
+		t.Error("advanced nonprimary shard refused:", err)
+	}
+	earlier := advancedShard()
+	earlier.PartialWrites[0].From = "28'2"
+	setShardDumps(&earlier, advancedShardLog, strings.Replace(advancedShardInfo, `"from":"28'3"`, `"from":"28'2"`, 1))
+	if err := checkShardDumps(earlier); err != nil {
+		t.Error("advanced shard with a range from an earlier version refused:", err)
+	}
+	record := func(from, to string) func(*shardHistoryShard) {
+		return func(s *shardHistoryShard) {
+			s.PartialWrites[0].From, s.PartialWrites[0].To = from, to
+			setShardDumps(s, advancedShardLog, strings.Replace(advancedShardInfo, `"from":"28'3","to":"28'4"`, `"from":"`+from+`","to":"`+to+`"`, 1))
+		}
+	}
+	for name, edit := range map[string]func(*shardHistoryShard){
+		"not reported as past the entries": func(s *shardHistoryShard) { s.HeadPastEntries = false },
+		"receipt's last entry is the head": func(s *shardHistoryShard) { s.LastEntry = "28'4" },
+		"no record": func(s *shardHistoryShard) {
+			s.PartialWrites = nil
+			setShardDumps(s, advancedShardLog, strings.Replace(advancedShardInfo, `{"id":1,"from":"28'3","to":"28'4"}`, "", 1))
+		},
+		"record of another shard only": func(s *shardHistoryShard) {
+			s.PartialWrites[0].Shard = 2
+			setShardDumps(s, advancedShardLog, strings.Replace(advancedShardInfo, `"id":1`, `"id":2`, 1))
+		},
+		"record ends before the head":           record("28'2", "28'3"),
+		"record ends after the head":            record("28'3", "28'5"),
+		"record ends in a later epoch":          record("28'3", "29'4"),
+		"record starts after the last entry":    record("28'4", "28'4"),
+		"record starts in a later epoch":        record("29'1", "28'4"),
+		"record start unparsable":               record("28.3", "28'4"),
+		"record start without a version":        record("28'", "28'4"),
+		"record start with a negative version":  record("28'-1", "28'4"),
+		"record start beyond the epoch's range": record("4294967296'1", "28'4"),
+		"log without an entry": func(s *shardHistoryShard) {
+			s.Entries, s.LogEntries, s.LastEntry = nil, 0, "0'0"
+			s.PartialWrites[0].From = "0'0"
+			setShardDumps(s, `{"pg_log_t":{"head":"28'4","tail":"0'0","log":[]}}`, strings.Replace(advancedShardInfo, `"from":"28'3"`, `"from":"0'0"`, 1))
+		},
+	} {
+		shard := advancedShard()
+		edit(&shard)
+		if err := checkShardDumps(shard); err == nil {
+			t.Error("advanced shard dumps accepted:", name)
+		}
+	}
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"28'3", "28'3", true}, {"28'2", "28'3", true}, {"27'9", "28'3", true}, {"0'0", "28'3", true},
+		{"28'4", "28'3", false}, {"29'1", "28'3", false}, {"", "28'3", false}, {"28'3", "", false}, {"28", "28'3", false},
+		{"x'1", "28'3", false}, {"28'x", "28'3", false}, {"28'3", "28'3'1", false}, {"-1'3", "28'3", false},
+	} {
+		if got := versionAtOrBefore(c.a, c.b); got != c.want {
+			t.Errorf("versionAtOrBefore(%q, %q) = %t", c.a, c.b, got)
 		}
 	}
 }
