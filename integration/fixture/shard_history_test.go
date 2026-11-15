@@ -222,26 +222,41 @@ func TestCaptureShardHistoriesStopsAtTheFirstFailedShard(t *testing.T) {
 }
 
 func TestShardHistoryCaptureAdmission(t *testing.T) {
-	selected := profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", osdProfile: "replicated-pg-v8", testRun: shardHistorySelector}
-	if !selected.shardHistorySelected() || selected.testEnvironment("/out", "")[shardHistoryMarker] != "1" {
-		t.Fatal("the selected four-BlueStore profile does not admit the capture")
+	selected := profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", osdProfile: "replicated-pg-v8", testRun: shardHistorySelectors[0]}
+	// Exactly the COPY_FROM2 control and the partial-overwrite control.
+	if !slices.Equal(shardHistorySelectors, []string{
+		"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
+		"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
+	}) {
+		t.Fatal("the capture's selector list changed:", shardHistorySelectors)
 	}
-	if !slices.Contains(osdErasureWidthSelectors, shardHistorySelector) {
-		t.Fatal("the capture selector is not one of the four-OSD topology's selectors")
+	for _, selector := range shardHistorySelectors {
+		p := selected
+		p.testRun = selector
+		if !p.shardHistorySelected() || p.testEnvironment("/out", "")[shardHistoryMarker] != "1" {
+			t.Fatal("the selected four-BlueStore profile does not admit the capture for", selector)
+		}
+		if !slices.Contains(osdErasureWidthSelectors, selector) {
+			t.Fatal("the capture selector is not one of the four-OSD topology's selectors:", selector)
+		}
 	}
 	for name, change := range map[string]func(*profile){
 		"no selector":       func(p *profile) { p.testRun = "" },
 		"broad selector":    func(p *profile) { p.testRun = "^TestCephOSD.*Integration$" },
+		"both selectors":    func(p *profile) { p.testRun = strings.Join(shardHistorySelectors, "|") },
 		"another EC cell":   func(p *profile) { p.testRun = osdErasureWidthSelectors[4] },
 		"three OSDs":        func(p *profile) { p.osdReplicas = "3" },
 		"one OSD":           func(p *profile) { p.osdReplicas = "1" },
 		"MemStore":          func(p *profile) { p.osdStore = "memstore" },
 		"no OSD acceptance": func(p *profile) { p.osd = "0" },
 	} {
-		p := selected
-		change(&p)
-		if p.shardHistorySelected() || p.testEnvironment("/out", "")[shardHistoryMarker] != "" {
-			t.Error("capture admitted for", name)
+		for _, selector := range shardHistorySelectors {
+			p := selected
+			p.testRun = selector
+			change(&p)
+			if p.shardHistorySelected() || p.testEnvironment("/out", "")[shardHistoryMarker] != "" {
+				t.Error("capture admitted for", name, selector)
+			}
 		}
 	}
 	// The control refuses before it reads anything when it is not selected.

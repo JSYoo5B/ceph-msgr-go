@@ -412,8 +412,9 @@ func (p profile) rbdReplicas() string {
 // k=2,m=2 baseline with its failover reads, and the optimized k=2,m=2
 // in-flight mutation epoch change with the snapshot and degraded-write case,
 // deliberate resubmission of an independently observed applied mutation, the
-// primary PG-history presence calibration, and the COPY_FROM2 history control
-// that also reads every acting shard's own store copy.
+// primary PG-history presence calibration, the COPY_FROM2 history control
+// that also reads every acting shard's own store copy, and the partial
+// overwrite control that reads those copies as well.
 var osdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureK2M2Integration$",
 	"^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$",
@@ -421,6 +422,7 @@ var osdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
 }
 
 // osdTopology is one closed OSD fixture shape. Daemon capacity and the

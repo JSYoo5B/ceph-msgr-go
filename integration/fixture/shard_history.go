@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -42,8 +43,6 @@ import (
 // to the owned-pool oracle (tools/osd_pool_oracle.py mode shardhistory).
 
 const (
-	// shardHistorySelector is the only selection that admits the capture.
-	shardHistorySelector = "^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$"
 	// shardHistoryMarker tells the selected test that the fixture admits the
 	// capture. Without it the test skips instead of failing the controller.
 	shardHistoryMarker = "CEPH_MSGR_NATIVE_SHARD_HISTORY"
@@ -67,10 +66,18 @@ const (
 	shardHistoryToolBudget = 60 * time.Second
 )
 
+// shardHistorySelectors are the only selections that admit the capture: the
+// COPY_FROM2 control and the partial-overwrite control. Each is one exact
+// test of the four-OSD topology's closed list.
+var shardHistorySelectors = []string{
+	"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
+}
+
 var shardHistoryPGID = regexp.MustCompile(`^[1-9][0-9]{0,9}\.(0|[1-9a-f][0-9a-f]{0,7})$`)
 
 func (p profile) shardHistorySelected() bool {
-	return p.testRun == shardHistorySelector && p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "4"
+	return slices.Contains(shardHistorySelectors, p.testRun) && p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "4"
 }
 
 // shardHistoryShard is what the capture did for one index of the acting
