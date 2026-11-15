@@ -28,6 +28,8 @@ within the byte bound, parses as one strict JSON document of exactly that
 shape, every request identity in it parses, log versions increase within
 (tail, head] and end at head, duplicates do not exceed tail, and the before and
 after placement observations are identical. Anything else fails closed.
+``parse_log_body`` can leave the "end at head" rule to its caller; only the
+shard-local reader (osd_shard_history_oracle.py) does, for one bounded shape.
 
 A complete snapshot reports where an exact identity occurs on the primary at
 that bracketed epoch. Absence from one snapshot is not evidence that the
@@ -127,8 +129,13 @@ def parse_log(raw):
     return parse_log_body(document["pg_log_t"])
 
 
-def parse_log_body(body):
-    """Parse the ``pg_log_t`` section of a strictly loaded dump."""
+def parse_log_body(body, head_past_entries=False):
+    """Parse the ``pg_log_t`` section of a strictly loaded dump.
+
+    The entries must end at head. Only a caller that passes
+    ``head_past_entries`` gets a log whose head is newer than its last entry;
+    it must then judge that shape itself from the reported ``last_entry``.
+    """
     if not isinstance(body, dict) or set(body) != {"head", "tail", "log", "dups"}:
         raise HistoryError("pg_log_t must have exactly head, tail, log and dups")
     head, tail = parse_eversion(body["head"], "head"), parse_eversion(body["tail"], "tail")
@@ -160,7 +167,7 @@ def parse_log_body(body):
                         "object": entry["object"], "return_code": entry["return_code"], "extra_reqids": extras,
                         # Kept as dumped; only the shard-local reader interprets it.
                         "written_shards": entry.get("written_shards")})
-    if previous != head:
+    if previous != head and not (head_past_entries and previous < head):
         raise HistoryError("the last log entry is not head; the log array is incomplete")
     dups = []
     for index, dup in enumerate(body["dups"]):
@@ -170,7 +177,8 @@ def parse_log_body(body):
         if version > tail:
             raise HistoryError("dup %d is newer than the log tail" % index)
         dups.append({"version": version, "reqid": parse_reqid(dup["reqid"])})
-    return {"head": head, "tail": tail, "log": entries, "dups": dups}
+    # last_entry is the tail for a log without entries.
+    return {"head": head, "tail": tail, "log": entries, "dups": dups, "last_entry": previous}
 
 
 def locate(parsed, identity):

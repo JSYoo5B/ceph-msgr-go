@@ -87,9 +87,11 @@ The capture has three parts. None of them is retried.
    judgement.
 
 The fixture admits the capture only for the selector
-`^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$` and for the
+`^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$`, for the
 selector of the
-[partial-overwrite control](OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md),
+[partial-overwrite control](OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md)
+and for the selectors of its
+[two continuations](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md),
 each on the four-BlueStore topology, and tells the test through
 `CEPH_MSGR_NATIVE_SHARD_HISTORY=1`. Any other selection refuses the control.
 
@@ -112,7 +114,13 @@ One shard is complete only if all of the following hold:
   the shape and ordering rules of the primary snapshot parser (versions
   increase inside (tail, head], the last entry is head, every request
   identity parses, no duplicate is newer than tail), and every entry's
-  `written_shards` is a parsable shard set;
+  `written_shards` is a parsable shard set. The one exception to "the
+  last entry is head" is a nonprimary shard whose own info records the
+  partial-write range between its last entry and its head; the receipt
+  reports it as `head_past_entries`, and a test accepts it only on the
+  shards it lists
+  ([bound](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md#what-changed-in-the-captures-judgement)).
+  This control lists none;
 - the log runs from the info's `log_tail` to its `last_update`,
   `last_complete` equals `last_update`, and the missing set is empty.
 

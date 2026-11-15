@@ -38,9 +38,13 @@ without diagnostics, both dumps are within the byte bound and parse as one
 strict JSON document of exactly that shape, the info names that ``spg_t``
 and the acting index as its shard ID, every entry's ``written_shards`` and
 every partial-write record parses, the log runs from the info's ``log_tail``
-to its ``last_update`` and the missing set is empty. The receipt is complete only when every index of the
-acting vector has a complete shard and the two placement records are
-identical. Anything else fails closed.
+to its ``last_update`` and the missing set is empty. The log's entries must
+end at its head, with one exception that ``advanced_head_failure`` bounds: a
+nonprimary shard whose own info records the partial-write range between its
+last entry and its head. The receipt reports that shape per shard as
+``head_past_entries`` with the ``last_entry``. The receipt is complete only
+when every index of the acting vector has a complete shard and the two
+placement records are identical. Anything else fails closed.
 
 A complete receipt reports where an exact identity occurs in each acting
 shard's own log at that bracketed placement. The copies are sequential and
@@ -86,8 +90,12 @@ def parse_written_shards(text, index):
     return shards
 
 
-def parse_offline_log(raw):
-    """Parse one offline ``--op log`` dump; returns the log and the missing count."""
+def parse_offline_log(raw, head_past_entries=False):
+    """Parse one offline ``--op log`` dump; returns the log and the missing count.
+
+    ``head_past_entries`` admits a head newer than the last entry; see
+    ``advanced_head_failure`` for the only shape that is then accepted.
+    """
     document = history.strict_document(raw, MAX_SHARD_BYTES)
     if not isinstance(document, dict) or set(document) != {"pg_log_t", "pg_missing_t"}:
         raise HistoryError("offline output is not a pg_log_t and pg_missing_t dump")
@@ -95,7 +103,7 @@ def parse_offline_log(raw):
     if (not isinstance(missing, dict) or set(missing) != {"missing", "may_include_deletes"}
             or not isinstance(missing["missing"], list) or type(missing["may_include_deletes"]) is not bool):
         raise HistoryError("pg_missing_t must have exactly a missing array and may_include_deletes")
-    parsed = history.parse_log_body(document["pg_log_t"])
+    parsed = history.parse_log_body(document["pg_log_t"], head_past_entries)
     for index, entry in enumerate(parsed["log"]):
         entry["written_shards"] = parse_written_shards(entry["written_shards"], index)
     return parsed, len(missing["missing"])
@@ -103,7 +111,11 @@ def parse_offline_log(raw):
 
 def parse_offline_info(raw, spg):
     """The shard, log bounds and partial-write records of one offline ``--op info`` dump for exactly ``spg``."""
-    document = history.strict_document(raw, MAX_SHARD_BYTES)
+    return info_fields(history.strict_document(raw, MAX_SHARD_BYTES), spg)
+
+
+def info_fields(document, spg):
+    """The same fields of one strictly loaded ``pg_info_t`` dump, which must name exactly ``spg``."""
     if not isinstance(document, dict) or not {"pgid", "last_update", "last_complete", "log_tail"} <= set(document):
         raise HistoryError("offline output is not a pg_info_t dump")
     if document["pgid"] != spg:
@@ -129,8 +141,42 @@ def parse_offline_info(raw, spg):
     return info
 
 
-def _shard(index, osd, pgid, record, dumps, identities):
-    """One shard's receipt. ``record`` is the fixture's capture of that index."""
+def advanced_head_failure(index, parsed, info):
+    """Why a log whose head is newer than its last entry is not the one accepted shape.
+
+    A nonprimary shard gets no sub-write for a partial write that does not
+    name it. At the next peering the pinned source advances that shard's
+    ``last_update`` and log head to the end of the partial-write range that
+    the primary sent for it, without any entry (src/osd/PeeringState.cc
+    :324-364, applied to the shard's own info and log at :430-434), and
+    keeps the ranges it merged in the shard's own info (:369-421). The
+    offline reader takes the log head from the info's ``last_update``
+    (src/osd/PGLog.h:1683-1689).
+
+    The shape is therefore accepted only for a shard that the caller named
+    as nonprimary, whose log holds at least one entry and whose own info
+    holds exactly one record for its own shard ID that starts at or before
+    the last entry and ends at the head. Returns None when it is that shape.
+    """
+    if info is None:
+        return "the log's head is newer than its last entry and the shard's info is unusable"
+    if not parsed["log"]:
+        return "the log's head is newer than its tail and it holds no entry"
+    own = [record for record in info["partial_writes"] if record["shard"] == index]
+    if len(own) != 1:
+        return "the log's head is newer than its last entry without a partial-write record of this shard"
+    start, end = (history.parse_eversion(own[0][name], "partial write " + name) for name in ("from", "to"))
+    if not start <= parsed["last_entry"] < end or end != parsed["head"]:
+        return "the log's head is newer than its last entry and this shard's partial-write record does not span them"
+    return None
+
+
+def _shard(index, osd, pgid, record, dumps, identities, nonprimary=()):
+    """One shard's receipt. ``record`` is the fixture's capture of that index.
+
+    ``nonprimary`` are the pool's native nonprimary shard IDs; only such a
+    shard may show a log head newer than its last entry.
+    """
     spg = "%ss%d" % (pgid, index)
     receipt = {"index": index, "osd": osd, "spg": spg, "limit_bytes": MAX_SHARD_BYTES}
     failures = []
@@ -184,18 +230,23 @@ def _shard(index, osd, pgid, record, dumps, identities):
         failures.append("info: " + str(error))
     try:
         if "log" in raw:
-            parsed, missing = parse_offline_log(raw["log"])
+            parsed, missing = parse_offline_log(raw["log"], index in nonprimary)
     except HistoryError as error:
         failures.append("log: " + str(error))
     if parsed is not None:
         receipt.update(head="%d'%d" % parsed["head"], tail="%d'%d" % parsed["tail"], log_entries=len(parsed["log"]),
                        dup_entries=len(parsed["dups"]), extra_reqid_entries=sum(len(e["extra_reqids"]) for e in parsed["log"]),
-                       missing_entries=missing,
+                       missing_entries=missing, last_entry="%d'%d" % parsed["last_entry"],
+                       head_past_entries=parsed["last_entry"] != parsed["head"],
                        entries=[{"version": "%d'%d" % e["version"], "written_shards": e["written_shards"]} for e in parsed["log"]])
         receipt["targets"] = [{"reqid": history.reqid_text(identity), "locations": history.locate(parsed, identity)}
                               for identity in identities]
         if missing:
             failures.append("the shard's missing set has %d entries" % missing)
+        if receipt["head_past_entries"]:
+            reason = advanced_head_failure(index, parsed, info)
+            if reason:
+                failures.append(reason)
     if info is not None:
         receipt.update(shard=info["shard"], last_update="%d'%d" % info["last_update"], last_complete="%d'%d" % info["last_complete"],
                        partial_writes_last_complete=info["partial_writes"],
@@ -211,18 +262,21 @@ def _shard(index, osd, pgid, record, dumps, identities):
     return receipt
 
 
-def snapshot(before_raw, after, capture_raw, dumps, targets):
+def snapshot(before_raw, after, capture_raw, dumps, targets, nonprimary=()):
     """One fail-closed receipt over every acting shard.
 
     ``before_raw`` is the stored first placement record, ``after`` the
     placement read after the last dump, ``capture_raw`` the fixture's capture
     record and ``dumps(name, limit)`` returns one raw dump of at most limit
-    bytes.
+    bytes. ``nonprimary`` are the pool's native nonprimary shard IDs.
     """
+    nonprimary = sorted(nonprimary)
+    if any(type(shard) is not int or not 0 <= shard < MAX_SHARD_ID for shard in nonprimary):
+        raise ValueError("invalid nonprimary shard IDs")
     identities = [history.target_identity(t) for t in targets]
     if not 1 <= len(identities) <= history.MAX_TARGETS:
         raise ValueError("between 1 and %d history targets are required" % history.MAX_TARGETS)
-    receipt = {"after": after, "all_acting_shards": True, "absence_established": False, "shards": []}
+    receipt = {"after": after, "all_acting_shards": True, "absence_established": False, "shards": [], "nonprimary_shards": nonprimary}
     failures = []
 
     def finish():
@@ -262,7 +316,7 @@ def snapshot(before_raw, after, capture_raw, dumps, targets):
         failures.append("the capture has %d shards for %d acting members" % (len(capture["shards"]), len(acting)))
     for index, osd in enumerate(acting):
         record = capture["shards"][index] if index < len(capture["shards"]) else None
-        shard = _shard(index, osd, pgid, record, dumps, identities)
+        shard = _shard(index, osd, pgid, record, dumps, identities, nonprimary)
         receipt["shards"].append(shard)
         failures.extend("shard %d (osd.%d): %s" % (index, osd, text) for text in shard["failures"])
     return finish()

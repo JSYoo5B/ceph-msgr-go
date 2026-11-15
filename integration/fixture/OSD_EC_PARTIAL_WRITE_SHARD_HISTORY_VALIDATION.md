@@ -76,7 +76,9 @@ native placement records around a sequential copy of every acting OSD's
 store, each read offline in a reader without a network. The fixture now
 admits it for two selectors, that control's and
 `^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$`, each
-on the four-BlueStore topology only.
+on the four-BlueStore topology only. Its two
+[continuations](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md) have their
+own selectors.
 
 `tools/osd_shard_history_oracle.py` reports three more things per shard, and
 a shard is incomplete if any of them does not parse:
@@ -93,7 +95,9 @@ The receipt also carries the raw info dump with its length and SHA-256. The
 other completeness rules are unchanged: among them, each shard's log must
 run from its info's `log_tail` to its `last_update`, `last_complete` must
 equal `last_update`, and the missing set must be empty. A shard without the
-overwrite's entry satisfies them with an older `last_update`.
+overwrite's entry satisfies them with an older `last_update`. The receipt
+also reports each log's last entry, which this control requires to be the
+head on every shard.
 
 ## Scenario
 
@@ -327,14 +331,16 @@ removed readers.
   observation of that shard's copy at that bracketed placement. It does not
   establish that the identity is absent from the PG, was evicted or trimmed,
   or would be replayed.
-- What happens to the left-out shard afterwards is not exercised. During
-  peering the pinned source can advance that shard's `last_update` and log
-  head to the end of a partial-write range without giving it the entries
+- What happens to the left-out shard afterwards is not part of this
+  control. Two [continuations](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md)
+  capture it after a later write that names it and after an interval change
+  that keeps the primary: during peering the pinned source advances that
+  shard's `last_update` and log head to the end of a partial-write range
+  without giving it the entries
   ([range application](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/PeeringState.cc#L324-L364)).
-  A log whose head is past its last entry is refused by this oracle's
-  parser as incomplete. A capture after an interval change, a primary
-  change onto another shard, recovery of the left-out shard or a later write
-  that names it needs its own source reading and its own judgement.
+  This control admits no log whose head is past its last entry. A primary
+  change onto another shard and the recovery of a shard that missed a write
+  are not exercised by any of them.
 - The copies are sequential captures of paused containers and are not one
   atomic snapshot across the four stores. Identical brackets fix placement
   and epoch, not store contents. No subject request was sent between the

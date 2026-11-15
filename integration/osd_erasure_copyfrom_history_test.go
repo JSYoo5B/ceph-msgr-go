@@ -54,6 +54,12 @@ type shardHistoryShard struct {
 	DupEntries        int      `json:"dup_entries"`
 	ExtraReqidEntries int      `json:"extra_reqid_entries"`
 	MissingEntries    int      `json:"missing_entries"`
+	// LastEntry is the version of the log's last entry. HeadPastEntries says
+	// that the head is newer than it: the one shape the oracle admits for a
+	// nonprimary shard whose own info records the partial-write range between
+	// the two.
+	LastEntry       string `json:"last_entry"`
+	HeadPastEntries bool   `json:"head_past_entries"`
 	// The info dump with the shard ID it names, every ordinary entry's
 	// version and named shards, and the info's partial-write records.
 	Shard              *int                `json:"shard"`
@@ -82,14 +88,20 @@ type shardHistorySnapshot struct {
 	AllActingShards    bool                `json:"all_acting_shards"`
 	AbsenceEstablished bool                `json:"absence_established"`
 	Shards             []shardHistoryShard `json:"shards"`
+	// NonprimaryShards are the pool's native nonprimary shard IDs as the
+	// oracle read them: the only shards it lets show HeadPastEntries.
+	NonprimaryShards []int `json:"nonprimary_shards"`
 }
 
 // checkShardHistory requires a complete receipt whose brackets are identical
 // and equal the placement the requests used, with one attributed and
 // complete shard for every index of that acting vector. It rechecks each
 // dump's length and digest and counts every exact quoted identity
-// independently of the Python parser.
-func checkShardHistory(s shardHistorySnapshot, route osdFixtureOracle, targets []pgHistoryTarget) error {
+// independently of the Python parser. Every log must end at its head, except
+// on the shards listed in past: those may show a head newer than their last
+// entry, and the oracle must then have admitted that shape for exactly these
+// shards as the pool's nonprimary shards.
+func checkShardHistory(s shardHistorySnapshot, route osdFixtureOracle, targets []pgHistoryTarget, past []int) error {
 	if !s.Complete || len(s.Failures) != 0 {
 		return fmt.Errorf("shard-history receipt is incomplete: %q", s.Failures)
 	}
@@ -98,6 +110,9 @@ func checkShardHistory(s shardHistorySnapshot, route osdFixtureOracle, targets [
 	}
 	if !reflect.DeepEqual(s.Before, s.After) {
 		return fmt.Errorf("placement changed between the brackets: before %+v after %+v", s.Before, s.After)
+	}
+	if past != nil && !slices.Equal(s.NonprimaryShards, past) {
+		return fmt.Errorf("the oracle read nonprimary shards %v; the caller admits a head past the last entry on %v", s.NonprimaryShards, past)
 	}
 	if b := s.Before; b.ID != route.ID || b.PrimaryID != route.PrimaryID || !slices.Equal(b.Acting, route.Acting) || !slices.Equal(b.Up, route.Up) ||
 		b.PGID != route.PGID || b.Shard != route.Shard || b.PGTemp != route.PGTemp || b.Address != route.Address || b.Epoch < route.Epoch {
@@ -116,6 +131,9 @@ func checkShardHistory(s shardHistorySnapshot, route osdFixtureOracle, targets [
 		}
 		if shard.MissingEntries != 0 || shard.LastUpdate != shard.Head || shard.LastComplete != shard.Head || shard.Head == "" {
 			return fmt.Errorf("shard %d is not complete at its head: head %s last_update %s last_complete %s, %d missing", i, shard.Head, shard.LastUpdate, shard.LastComplete, shard.MissingEntries)
+		}
+		if shard.LastEntry == "" || shard.HeadPastEntries != (shard.LastEntry != shard.Head) || shard.HeadPastEntries && !slices.Contains(past, i) {
+			return fmt.Errorf("shard %d: log head %s, last entry %q, head past entries %t; admitted on shards %v only", i, shard.Head, shard.LastEntry, shard.HeadPastEntries, past)
 		}
 		raw, err := base64.StdEncoding.DecodeString(shard.Raw)
 		digest := sha256.Sum256(raw)
@@ -193,8 +211,9 @@ func copyFromShardObservation(copyKey, sourceKey []pgHistoryLocation, want copyF
 // holds an object of the owned pool in slot. The oracle stores the first
 // placement, the fixture copies and reads every acting shard's store under
 // it, and the oracle reads the placement again. It establishes where the
-// identities occur in each shard's own log, never absence.
-func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, route osdFixtureOracle, targets []pgHistoryTarget) shardHistorySnapshot {
+// identities occur in each shard's own log, never absence. past lists the
+// shards whose log head may be newer than their last entry; nil admits none.
+func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, route osdFixtureOracle, targets []pgHistoryTarget, past []int) shardHistorySnapshot {
 	t.Helper()
 	first := nativePool(t, ctx, "shardhistory", map[string]any{"phase": "before", "slot": slot, "object": object}).Placement
 	if first.PGID != route.PGID || !slices.Equal(first.Acting, route.Acting) || first.PrimaryID != route.PrimaryID {
@@ -206,14 +225,14 @@ func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, 
 	s := nativePool(t, ctx, "shardhistory", map[string]any{"phase": "after", "slot": slot, "object": object, "targets": targets}).ShardHistory
 	for _, shard := range s.Shards {
 		raw, _ := base64.StdEncoding.DecodeString(shard.Raw)
-		t.Logf("shard copy %s of osd.%d (whoami %q, paused %d ms, %d archive bytes): complete=%t %q, %d bytes sha256 %s, head %s tail %s, %d log entries, %d extra reqids, %d dups, %d missing",
+		t.Logf("shard copy %s of osd.%d (whoami %q, paused %d ms, %d archive bytes): complete=%t %q, %d bytes sha256 %s, head %s tail %s last entry %s, %d log entries, %d extra reqids, %d dups, %d missing",
 			shard.SPG, shard.OSD, shard.Whoami, shard.PausedMillis, shard.ArchiveBytes, shard.Complete, shard.Failures, shard.Bytes, shard.SHA256,
-			shard.Head, shard.Tail, shard.LogEntries, shard.ExtraReqidEntries, shard.DupEntries, shard.MissingEntries)
+			shard.Head, shard.Tail, shard.LastEntry, shard.LogEntries, shard.ExtraReqidEntries, shard.DupEntries, shard.MissingEntries)
 		if len(raw) != 0 && len(raw) <= 16<<10 {
 			t.Logf("complete offline log dump of %s: %s", shard.SPG, raw)
 		}
 	}
-	if err := checkShardHistory(s, route, targets); err != nil {
+	if err := checkShardHistory(s, route, targets, past); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("shard-history brackets: epoch %d pg %s up %v acting %v primary osd.%d shard %d", s.Before.Epoch, s.PGID, s.Before.Up, s.Acting, s.Before.PrimaryID, s.Before.Shard)
@@ -377,7 +396,7 @@ func TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration(t *testing.T) {
 	}
 
 	// Then every acting shard's own store, with no further subject request.
-	shards := shardPGHistory(t, ctx, destinationSlot, destination, destinationRoute, targets)
+	shards := shardPGHistory(t, ctx, destinationSlot, destination, destinationRoute, targets, nil)
 	if shards.Before.Epoch != primary.After.Epoch {
 		t.Fatalf("map epoch moved from %d to %d between the primary snapshot and the shard capture", primary.After.Epoch, shards.Before.Epoch)
 	}
@@ -486,7 +505,7 @@ func TestCheckShardHistory(t *testing.T) {
 		for i, osd := range route.Acting {
 			shard := shardHistoryShard{Index: i, OSD: osd, SPG: "4.2s" + strconv.Itoa(i), Whoami: strconv.Itoa(int(osd)), Complete: true,
 				Bytes: len(raw), LimitBytes: 64 << 10, SHA256: hex.EncodeToString(digest[:]), Raw: base64.StdEncoding.EncodeToString(raw),
-				Head: "28'3", Tail: "0'0", LastUpdate: "28'3", LastComplete: "28'3", LogEntries: 1, ExtraReqidEntries: 1}
+				Head: "28'3", Tail: "0'0", LastUpdate: "28'3", LastComplete: "28'3", LastEntry: "28'3", LogEntries: 1, ExtraReqidEntries: 1}
 			for j, target := range targets {
 				var locations []pgHistoryLocation
 				if j == 0 {
@@ -504,13 +523,52 @@ func TestCheckShardHistory(t *testing.T) {
 		}
 		return s
 	}
-	if err := checkShardHistory(build(), route, targets); err != nil {
+	if err := checkShardHistory(build(), route, targets, nil); err != nil {
 		t.Fatal("complete attributed receipt refused:", err)
 	}
 	newer := build()
 	newer.Before.Epoch, newer.After.Epoch = 29, 29
-	if err := checkShardHistory(newer, route, targets); err != nil {
+	if err := checkShardHistory(newer, route, targets, nil); err != nil {
 		t.Fatal("identical brackets at a newer epoch refused:", err)
+	}
+	// A head newer than the last entry is accepted only on a shard the
+	// caller lists, and only when the oracle admitted exactly those shards.
+	advance := func(s *shardHistorySnapshot, shard int) {
+		s.Shards[shard].Head, s.Shards[shard].LastUpdate, s.Shards[shard].LastComplete, s.Shards[shard].HeadPastEntries = "28'4", "28'4", "28'4", true
+	}
+	for name, c := range map[string]struct {
+		nonprimary, past []int
+		shard            int
+		accepted         bool
+	}{
+		"the admitted nonprimary shard":       {[]int{1}, []int{1}, 1, true},
+		"no shard admitted":                   {[]int{1}, nil, 1, false},
+		"an empty admission":                  {[]int{1}, []int{}, 1, false},
+		"another shard admitted":              {[]int{2}, []int{2}, 1, false},
+		"the primary's shard":                 {[]int{1}, []int{1}, 0, false},
+		"a parity shard":                      {[]int{1}, []int{1}, 3, false},
+		"the oracle admitted no shard":        {nil, []int{1}, 1, false},
+		"the oracle admitted another shard":   {[]int{2}, []int{1}, 1, false},
+		"the oracle admitted one shard more":  {[]int{1, 2}, []int{1}, 1, false},
+		"the caller admitted one shard more":  {[]int{1}, []int{1, 2}, 1, false},
+		"the oracle's set in another order":   {[]int{2, 1}, []int{1, 2}, 1, false},
+		"both admit two shards, in one order": {[]int{1, 2}, []int{1, 2}, 2, true},
+	} {
+		s := build()
+		s.NonprimaryShards = c.nonprimary
+		advance(&s, c.shard)
+		if err := checkShardHistory(s, route, targets, c.past); (err == nil) != c.accepted {
+			t.Errorf("a head past the last entry on shard %d, %s: %v", c.shard, name, err)
+		}
+	}
+	// With an admission, an ordinary receipt needs the same nonprimary set.
+	ordinary := build()
+	ordinary.NonprimaryShards = []int{1}
+	if err := checkShardHistory(ordinary, route, targets, []int{1}); err != nil {
+		t.Error("ordinary receipt with an admitted shard refused:", err)
+	}
+	if err := checkShardHistory(build(), route, targets, []int{1}); err == nil {
+		t.Error("receipt without the oracle's nonprimary shards accepted for an admission")
 	}
 	for name, edit := range map[string]func(*shardHistorySnapshot){
 		"incomplete receipt":             func(s *shardHistorySnapshot) { s.Complete = false },
@@ -555,6 +613,10 @@ func TestCheckShardHistory(t *testing.T) {
 		"missing set not empty":           func(s *shardHistorySnapshot) { s.Shards[3].MissingEntries = 1 },
 		"log behind the info":             func(s *shardHistorySnapshot) { s.Shards[3].LastUpdate = "28'4" },
 		"last_complete behind":            func(s *shardHistorySnapshot) { s.Shards[3].LastComplete = "28'2" },
+		"no last entry":                   func(s *shardHistorySnapshot) { s.Shards[3].LastEntry = "" },
+		"last entry behind the head":      func(s *shardHistorySnapshot) { s.Shards[3].LastEntry = "28'2" },
+		"head past entries at the head":   func(s *shardHistorySnapshot) { s.Shards[3].HeadPastEntries = true },
+		"head past entries, not admitted": func(s *shardHistorySnapshot) { s.Shards[1].LastEntry, s.Shards[1].HeadPastEntries = "28'2", true },
 		"no head": func(s *shardHistorySnapshot) {
 			s.Shards[3].Head, s.Shards[3].LastUpdate, s.Shards[3].LastComplete = "", "", ""
 		},
@@ -590,7 +652,7 @@ func TestCheckShardHistory(t *testing.T) {
 	} {
 		s := build()
 		edit(&s)
-		if err := checkShardHistory(s, route, targets); err == nil {
+		if err := checkShardHistory(s, route, targets, nil); err == nil {
 			t.Error("shard-history receipt accepted:", name)
 		}
 	}

@@ -96,8 +96,8 @@ class Capture:
             raise ValueError("%s exceeds %d bytes" % (name, limit))
         return data
 
-    def snapshot(self):
-        return shard_history.snapshot(self.before, self.after, json.dumps(self.record).encode(), self.dumps, self.targets)
+    def snapshot(self, nonprimary=()):
+        return shard_history.snapshot(self.before, self.after, json.dumps(self.record).encode(), self.dumps, self.targets, nonprimary)
 
 
 class SnapshotTest(unittest.TestCase):
@@ -171,6 +171,87 @@ class SnapshotTest(unittest.TestCase):
             info = base64.b64decode(shard["info_raw"])
             self.assertEqual((info, shard["info_bytes"], shard["info_sha256"]),
                              (capture.files["osd-shard-history-s%d-info.json" % index], len(info), hashlib.sha256(info).hexdigest()))
+
+    def advanced(self, log=None, info=None, others="28'4"):
+        """A partial overwrite at 28'4 that left shard 1 out, captured after a
+        later peering: shard 1's info and log head are at 28'4, its last entry
+        is the full write at 28'3 and its own info holds the range."""
+        full = ENTRY % (OBJECT, "28'3", SOURCE, "")
+        patch_entry = (ENTRY % (OBJECT, "28'4", COPY, "")).replace('"written_shards":"{}"', '"written_shards":"{0,2,3}"')
+        written = log_dump([full, patch_entry], head=others)
+        capture = Capture(logs={0: written, 1: log or log_dump([full], head="28'4"), 2: written, 3: written})
+        for index in (0, 2, 3):
+            capture.set_file(index, "info", info_dump("4.2s%d" % index, last_update=others, last_complete=others,
+                                                      partial=[(1, "28'3", "28'4")], partial_epoch="30"))
+        capture.set_file(1, "info", info or info_dump("4.2s1", last_update="28'4", last_complete="28'4",
+                                                      partial=[(1, "28'3", "28'4")], partial_epoch="30"))
+        return capture
+
+    def test_a_nonprimary_shard_whose_head_passed_its_last_entry_is_reported(self):
+        receipt = self.advanced().snapshot(nonprimary=[1])
+        self.assertTrue(receipt["complete"], receipt["failures"])
+        self.assertEqual(receipt["nonprimary_shards"], [1])
+        self.assertEqual([(s["head"], s["last_entry"], s["head_past_entries"], s["last_update"], s["last_complete"], s["log_entries"])
+                          for s in receipt["shards"]],
+                         [("28'4", "28'4", False, "28'4", "28'4", 2), ("28'4", "28'3", True, "28'4", "28'4", 1),
+                          ("28'4", "28'4", False, "28'4", "28'4", 2), ("28'4", "28'4", False, "28'4", "28'4", 2)])
+        self.assertEqual(receipt["shards"][1]["entries"], [{"version": "28'3", "written_shards": []}])
+        self.assertEqual([len(t["locations"]) for t in receipt["shards"][1]["targets"][:2]], [0, 1])
+        self.assertEqual(receipt["shards"][1]["partial_writes_last_complete"], [{"shard": 1, "from": "28'3", "to": "28'4"}])
+        # A record that starts before the last entry spans it as well.
+        earlier = self.advanced(info=info_dump("4.2s1", last_update="28'4", last_complete="28'4", partial=[(1, "28'2", "28'4")], partial_epoch="30"))
+        self.assertTrue(earlier.snapshot(nonprimary=[1])["complete"])
+        # An ordinary shard is unchanged by the nonprimary set.
+        self.assertTrue(Capture().snapshot(nonprimary=[1])["complete"])
+        self.assertFalse(Capture().snapshot(nonprimary=[1])["shards"][1]["head_past_entries"])
+
+    def test_a_head_past_the_last_entry_is_refused_outside_that_one_shape(self):
+        stale = "log: the last log entry is not head"
+        full = ENTRY % (OBJECT, "28'3", SOURCE, "")
+        # The shape is admitted for the pool's nonprimary shards only.
+        for name, nonprimary in {"no nonprimary shard": (), "another nonprimary shard": [2], "a primary-capable data shard": [0]}.items():
+            with self.subTest(name=name):
+                receipt = self.advanced().snapshot(nonprimary=nonprimary)
+                self.assertFalse(receipt["complete"])
+                self.assertEqual(receipt["failures"], ["shard 1 (osd.3): " + stale + "; the log array is incomplete"])
+                self.assertNotIn("head", receipt["shards"][1])
+        # The same shape on the primary's shard or on a parity shard.
+        for index in (0, 2, 3):
+            with self.subTest(index=index):
+                capture = self.advanced()
+                capture.set_file(index, "log", log_dump([full], head="28'4"))
+                receipt = capture.snapshot(nonprimary=[1])
+                self.assertEqual(receipt["failures"], ["shard %d (osd.%d): %s; the log array is incomplete" % (index, ACTING[index], stale)])
+
+        def info(partial, last_update="28'4", last_complete="28'4"):
+            return info_dump("4.2s1", last_update=last_update, last_complete=last_complete, partial=partial, partial_epoch="30")
+        cases = {
+            "no record at all": (None, info([]), "without a partial-write record of this shard"),
+            "a record of another shard only": (None, info([(2, "28'3", "28'4")]), "without a partial-write record of this shard"),
+            "record ends before the head": (None, info([(1, "28'2", "28'3")]), "partial-write record does not span them"),
+            "record ends after the head": (None, info([(1, "28'3", "28'5")]), "partial-write record does not span them"),
+            "record starts after the last entry": (log_dump([ENTRY % (OBJECT, "28'2", SOURCE, "")], head="28'4"), info([(1, "28'3", "28'4")]),
+                                                   "partial-write record does not span them"),
+            "record is the empty range at the head": (None, info([(1, "28'4", "28'4")]), "partial-write record does not span them"),
+            "record of a later epoch": (None, info([(1, "28'3", "29'4")]), "partial-write record does not span them"),
+            "no entry at all": (log_dump([], head="28'4"), info([(1, "0'0", "28'4")]), "it holds no entry"),
+            "an entry newer than the head": (log_dump([full, ENTRY % (OBJECT, "28'5", COPY, "")], head="28'4"), None, stale),
+            "entries out of order": (log_dump([full, ENTRY % (OBJECT, "28'3", COPY, "")], head="28'4"), None, "version does not increase"),
+            "info behind the log head": (None, info([(1, "28'3", "28'4")], last_update="28'3", last_complete="28'3"),
+                                         "the log does not run from the info's log_tail to its last_update"),
+            "last_complete behind": (None, info([(1, "28'3", "28'4")], last_complete="28'3"), "the shard's last_complete is behind its last_update"),
+            "a missing object": (log_dump([full], head="28'4", missing='{"object":"x"}'), None, "the shard's missing set has 1 entries"),
+            "unusable info": (None, info_dump("4.2s0"), "the shard's info is unusable"),
+        }
+        for name, (log, changed, text) in cases.items():
+            with self.subTest(name=name):
+                receipt = self.advanced(log=log, info=changed).snapshot(nonprimary=[1])
+                self.assertFalse(receipt["complete"] or receipt["absence_established"])
+                self.assertTrue(any(failure.startswith("shard 1 (osd.3): ") and text in failure for failure in receipt["failures"]), receipt["failures"])
+                self.assertEqual([s["complete"] for s in receipt["shards"]], [True, False, True, True])
+        for nonprimary in ([-1], [128], ["1"], [1.0], [True]):
+            with self.subTest(nonprimary=nonprimary), self.assertRaises(ValueError):
+                self.advanced().snapshot(nonprimary=nonprimary)
 
     def test_unparsable_written_shards_or_partial_write_records_fail_closed(self):
         entry = ENTRY % (OBJECT, "28'3", COPY, "")
@@ -461,9 +542,13 @@ class SnapshotTest(unittest.TestCase):
 
 class FakeRados:
     lib = None
+    nonprimary = None
 
     def dump(self, cluster):
-        return {"pools": [{"pool_name": "ceph-msgr-owned-pool-2", "pool": 4}]}
+        pool = {"pool_name": "ceph-msgr-owned-pool-2", "pool": 4}
+        if self.nonprimary is not None:
+            pool["nonprimary_shards"] = self.nonprimary
+        return {"pools": [pool]}
 
 
 class ModeTest(unittest.TestCase):
@@ -478,10 +563,12 @@ class ModeTest(unittest.TestCase):
         self.placements.append((pool, name, pool_id, namespace))
         return copy.deepcopy(self.capture.after)
 
-    def run_mode(self, **request):
+    def run_mode(self, nonprimary=None, **request):
         request = dict({"slot": 2, "object": "ec-copy-history-destination"}, **request)
+        rados = FakeRados()
+        rados.nonprimary = nonprimary
         with patch.object(oracle.mutation, "collect_placement", side_effect=self.place):
-            return oracle.mode_shardhistory(FakeRados(), None, request, self.out)
+            return oracle.mode_shardhistory(rados, None, request, self.out)
 
     def publish_capture(self):
         (self.out / oracle.SHARD_CAPTURE).write_bytes(json.dumps(self.capture.record).encode())
@@ -528,6 +615,23 @@ class ModeTest(unittest.TestCase):
             with self.subTest(request=request), self.assertRaises(ValueError):
                 self.run_mode(**request)
         self.assertEqual(len(self.placements), placed)
+
+    def test_only_the_pools_own_nonprimary_shards_admit_a_head_past_the_last_entry(self):
+        # The pool's nonprimary_shards dump in its pinned set print form
+        # admits the shape for exactly those shards; any other value admits
+        # none, and the shard is then refused as before.
+        for nonprimary, complete in (("{1}", True), ("{1,2}", True), ("{}", False), ("{2}", False), (None, False),
+                                     ([1], False), ("1", False), ("{1", False), (1, False)):
+            with self.subTest(nonprimary=nonprimary):
+                self.capture = SnapshotTest().advanced()
+                self.run_mode(phase="before")
+                self.capture.before = (self.out / oracle.SHARD_BEFORE).read_bytes()
+                self.capture.record["before_sha256"] = hashlib.sha256(self.capture.before).hexdigest()
+                self.publish_capture()
+                receipt = self.run_mode(nonprimary=nonprimary, phase="after", targets=self.capture.targets)["shard_history"]
+                self.assertEqual(receipt["complete"], complete, receipt["failures"])
+                if not complete:
+                    self.assertEqual(receipt["failures"], ["shard 1 (osd.3): log: the last log entry is not head; the log array is incomplete"])
 
     def test_only_capture_dump_names_are_read(self):
         self.run_mode(phase="before")

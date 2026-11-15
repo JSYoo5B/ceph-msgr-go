@@ -141,8 +141,11 @@ func (h partialWriteShardHistory) String() string {
 
 // checkShardDumps rechecks one shard's info dump against its digest and
 // reads both raw dumps independently of the Python parser: the info's shard
-// ID and partial_writes_last_complete records and every ordinary log
-// entry's version and written_shards text must equal the receipt.
+// ID, last_update, last_complete and partial_writes_last_complete records,
+// the log's head, its last entry and every ordinary log entry's version and
+// written_shards text must equal the receipt. A head newer than the last
+// entry must be reported as such and be spanned by the shard's own
+// partial-write record.
 func checkShardDumps(shard shardHistoryShard) error {
 	info, err := base64.StdEncoding.DecodeString(shard.InfoRaw)
 	digest := sha256.Sum256(info)
@@ -150,9 +153,11 @@ func checkShardDumps(shard shardHistoryShard) error {
 		return fmt.Errorf("info dump differs from its receipt: %v, %d of %d bytes", err, len(info), shard.InfoBytes)
 	}
 	var document struct {
-		PGID    string `json:"pgid"`
-		Shard   string `json:"shard"`
-		Records []struct {
+		PGID         string `json:"pgid"`
+		Shard        string `json:"shard"`
+		LastUpdate   string `json:"last_update"`
+		LastComplete string `json:"last_complete"`
+		Records      []struct {
 			ID   *int   `json:"id"`
 			From string `json:"from"`
 			To   string `json:"to"`
@@ -166,6 +171,9 @@ func checkShardDumps(shard shardHistoryShard) error {
 	if shard.Shard == nil || *shard.Shard != shard.Index || document.Shard != strconv.Itoa(shard.Index) {
 		return fmt.Errorf("info dump names shard %q; the capture selected acting index %d", document.Shard, shard.Index)
 	}
+	if document.LastUpdate == "" || document.LastUpdate != shard.LastUpdate || document.LastComplete != shard.LastComplete {
+		return fmt.Errorf("info dump is at last_update %q last_complete %q; the receipt has %s and %s", document.LastUpdate, document.LastComplete, shard.LastUpdate, shard.LastComplete)
+	}
 	for i, record := range document.Records {
 		if got := shard.PartialWrites[i]; record.ID == nil || *record.ID != got.Shard || record.From != got.From || record.To != got.To {
 			return fmt.Errorf("partial-write record %d differs from the info dump: %+v", i, got)
@@ -174,6 +182,8 @@ func checkShardDumps(shard shardHistoryShard) error {
 	raw, err := base64.StdEncoding.DecodeString(shard.Raw)
 	var log struct {
 		Log struct {
+			Head    string `json:"head"`
+			Tail    string `json:"tail"`
 			Entries []struct {
 				Version       string  `json:"version"`
 				WrittenShards *string `json:"written_shards"`
@@ -193,7 +203,40 @@ func checkShardDumps(shard shardHistoryShard) error {
 			return fmt.Errorf("log entry %d differs from the dump: receipt %+v", i, got)
 		}
 	}
+	// The log's bounds, read from the dump itself. A log without entries
+	// ends at its tail.
+	last := log.Log.Tail
+	if len(log.Log.Entries) != 0 {
+		last = log.Log.Entries[len(log.Log.Entries)-1].Version
+	}
+	if log.Log.Head == "" || log.Log.Head != shard.Head || log.Log.Tail != shard.Tail || last != shard.LastEntry || shard.HeadPastEntries != (last != log.Log.Head) {
+		return fmt.Errorf("log dump runs from %q to head %q with last entry %q; the receipt has tail %s, head %s, last entry %s, head past entries %t",
+			log.Log.Tail, log.Log.Head, last, shard.Tail, shard.Head, shard.LastEntry, shard.HeadPastEntries)
+	}
+	if shard.HeadPastEntries {
+		// Only a partial-write range of this very shard explains a head
+		// without its entry: the range must end at the head and start at the
+		// last entry or earlier, and the log must hold an entry.
+		own := slices.IndexFunc(shard.PartialWrites, func(record shardPartialWrite) bool { return record.Shard == shard.Index })
+		if own < 0 || shard.PartialWrites[own].To != shard.Head || !versionAtOrBefore(shard.PartialWrites[own].From, last) || len(log.Log.Entries) == 0 {
+			return fmt.Errorf("log head %s is newer than the last entry %s without this shard's partial-write record between them: %+v", shard.Head, last, shard.PartialWrites)
+		}
+	}
 	return nil
+}
+
+// versionAtOrBefore compares two eversion_t print forms ("epoch'version").
+// An unparsable version is never at or before another.
+func versionAtOrBefore(a, b string) bool {
+	parse := func(text string) (epoch, version uint64, ok bool) {
+		left, right, found := strings.Cut(text, "'")
+		epoch, errEpoch := strconv.ParseUint(left, 10, 32)
+		version, errVersion := strconv.ParseUint(right, 10, 64)
+		return epoch, version, found && errEpoch == nil && errVersion == nil
+	}
+	aEpoch, aVersion, aOK := parse(a)
+	bEpoch, bVersion, bOK := parse(b)
+	return aOK && bOK && (aEpoch < bEpoch || aEpoch == bEpoch && aVersion <= bVersion)
 }
 
 // writeEntry requires an identity to be exactly one ordinary successful
@@ -284,20 +327,41 @@ func nativeStripeWidth(dump []byte, pool int64) (uint64, error) {
 	return 0, errors.New("the pool has no bounded stripe_width in the authenticated map")
 }
 
-// The Go client writes two full stripes to a fresh head of an owned
-// optimized isa k=2,m=2 pool and then overwrites a few bytes inside shard
-// 0's chunk of the first stripe. Native readback checks the final bytes and
-// the live primary must hold both requests by their full identity. Then
-// every acting shard's store is copied while its container is paused and
-// read offline, between two identical native placement records. The full
-// write's entry must be held by every shard and name every shard. The
-// overwrite's entry must be held by shard 0 and by the parity shards and
-// name exactly those; the nonprimary data shard, which the overwrite does
-// not touch, must not hold it in this capture and its own log must end at
-// the full write. This is a control of what each shard's log holds after an
-// acknowledged partial write: it stops before any trimming, peering or
-// resubmission and claims nothing about eviction, loss or replay.
-func TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration(t *testing.T) {
+const (
+	partialWriteSlot   = 2
+	partialWriteObject = "ec-partial-write-history"
+	// The partial overwrite starts a few bytes into the object, inside shard
+	// 0's chunk of the first stripe for every chunk size above 32 bytes.
+	partialWriteOffset = 5
+)
+
+// partialWriteRun is one owned optimized isa k=2,m=2 pool with eight PGs and
+// the single object that a partial-overwrite control writes through the Go
+// client. Every request is sent once; a failed or unknown result stops the
+// test and nothing is resent.
+type partialWriteRun struct {
+	t       *testing.T
+	ctx     context.Context
+	client  *cephmsgr.Client
+	request func(osdFixtureOracle, ...cephmsgr.OSDOperation) cephmsgr.OSDRequest
+	width   erasureWidth
+	facts   erasureFacts
+	// stripe is the pool's stripe_width from the Go client's own map dump.
+	stripe uint64
+	gid    uint64
+	// route is the native placement the requests use and connection the
+	// session to its primary.
+	route      osdFixtureOracle
+	connection *cephmsgr.OSDConnection
+	// data is the object's expected content after the acknowledged writes.
+	data []byte
+}
+
+// startPartialWriteRun creates the pool, reads its geometry from native
+// sources only, requires the head to be absent and connects to the native
+// primary. The pool and its profile are removed on cleanup.
+func startPartialWriteRun(t *testing.T, timeout time.Duration) *partialWriteRun {
+	t.Helper()
 	width := erasureK2M2
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
@@ -305,13 +369,14 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration(t *testi
 	if os.Getenv("CEPH_MSGR_NATIVE_SHARD_HISTORY") != "1" {
 		t.Skip("requires the fixture-selected exclusive shard-history capture marker")
 	}
-	fixture, request, hash := osdFixture, osdObjectRequest, false
+	fixture, hash := osdFixture, false
+	run := &partialWriteRun{t: t, width: width, request: osdObjectRequest}
 	if isReplicatedPGFixtureProfile() {
-		fixture, request, hash = replicatedPGFixture, replicatedPGRequest, true
+		fixture, run.request, hash = replicatedPGFixture, replicatedPGRequest, true
 	}
-	c, _, _, _ := fixture(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 420*time.Second)
-	defer cancel()
+	run.client, _, _, _ = fixture(t)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	run.ctx = ctx
 	t.Cleanup(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
@@ -323,165 +388,236 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration(t *testi
 			t.Error("owned erasure-code profile was not removed", width.profile)
 		}
 	})
+	t.Cleanup(cancel)
 	pg := 1
 	if hash {
 		pg = 8
 	}
-	const (
-		slot             = 2
-		object           = "ec-partial-write-history"
-		fullIncarnation  = 7
-		patchIncarnation = 9
-		// The overwrite starts a few bytes into the object, inside shard 0's
-		// chunk of the first stripe for every chunk size above 32 bytes.
-		patchOffset = 5
-	)
-	created := nativePool(t, ctx, "create", map[string]any{"slot": slot, "pg_num": pg, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": true, "plugin": "isa"})
+	created := nativePool(t, ctx, "create", map[string]any{"slot": partialWriteSlot, "pg_num": pg, "hashpspool": hash, "erasure": true, "width": width.name, "optimized": true, "plugin": "isa"})
 	if created.PoolType != 3 || !created.ECOptimized || created.Width != width.name || created.ErasureCodeProfile != width.profile {
 		t.Fatal("pool is not the requested erasure-coded shape", created.PoolType, created.ECOptimized, created.Width, created.ErasureCodeProfile)
 	}
-	facts := erasurePoolMapFacts(t, ctx, c, created, width, true)
+	run.facts = erasurePoolMapFacts(t, ctx, run.client, created, width, true)
 	// The geometry comes from the native map and profile: the stripe width
 	// from the Go client's authenticated map dump, the width and plugin from
 	// the profile the oracle read back, and the shards that may not be
 	// primary from the pool. isa defines no chunk mapping, and the profile
 	// must not carry one, so shard i holds raw chunk i.
-	dump, err := c.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"osd dump","format":"json"}`)})
+	dump, err := run.client.MonCommand(ctx, cephmsgr.Command{JSON: []byte(`{"prefix":"osd dump","format":"json"}`)})
 	if err != nil {
 		t.Fatal("authenticated osd dump", err)
 	}
-	stripe, err := nativeStripeWidth(dump.Data, created.PoolID)
-	if err != nil {
+	if run.stripe, err = nativeStripeWidth(dump.Data, created.PoolID); err != nil {
 		t.Fatal(err)
 	}
 	if _, mapped := created.ECProfile["mapping"]; mapped || created.ECProfile["plugin"] != "isa" ||
 		created.ECProfile["k"] != strconv.Itoa(width.k) || created.ECProfile["m"] != strconv.Itoa(width.m) {
 		t.Fatalf("native profile %v is not an unmapped isa %s profile", created.ECProfile, width)
 	}
+	t.Logf("pool %d: stripe_width %d, chunk %d, profile k=%s m=%s plugin=%s, nonprimary shards %v",
+		created.PoolID, run.stripe, run.stripe/uint64(width.k), created.ECProfile["k"], created.ECProfile["m"], created.ECProfile["plugin"], run.facts.nonprimary)
+	if poolObserve(t, ctx, partialWriteSlot, partialWriteObject, "", "").Code != -2 {
+		t.Fatal("the head already exists")
+	}
+	run.route = poolPlace(t, ctx, partialWriteSlot, partialWriteObject, "")
+	if run.route.Pool != created.PoolID {
+		t.Fatal("the object is not in the owned pool", run.route.PGID)
+	}
+	run.facts.checkPlacement(t, run.route)
+	run.connection = mutationConnection(t, run.client, ctx, run.route)
+	t.Cleanup(func() { run.connection.Close() })
+	run.gid = run.client.Snapshot().GlobalID
+	return run
+}
+
+// plan restates which shards the pinned primary names for an overwrite of
+// the object's current bytes that is not the first write of an interval.
+func (r *partialWriteRun) plan(offset uint64, length int) (written, skipped []int) {
+	r.t.Helper()
+	written, skipped, err := partialWritePlan(r.width.k, r.width.m, r.facts.nonprimary, r.stripe, uint64(len(r.data)), offset, uint64(length))
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	return written, skipped
+}
+
+// send issues one Go request exactly once under its own incarnation and
+// requires an acknowledged ONDISK reply that keeps the submission's identity.
+func (r *partialWriteRun) send(label string, incarnation uint32, seconds uint32, op cephmsgr.OSDOperation) cephmsgr.OSDReply {
+	r.t.Helper()
+	message := r.request(r.route, op)
+	message.ClientIncarnation = incarnation
+	message.ModificationTime = cephmsgr.OSDTime{Seconds: seconds}
+	reply, err := r.connection.Request(r.ctx, message)
+	if err != nil || reply.Code != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
+		r.t.Fatalf("%s: err=%v code=%d flags=%#x; not resent", label, err, reply.Code, reply.Flags)
+	}
+	if reply.Transaction == 0 || reply.Submission.Transaction != reply.Transaction || reply.Submission.GlobalID != r.gid || reply.Submission.ClientIncarnation != incarnation ||
+		reply.Submission.Attempt != 0 || reply.RetryAttempt != 0 || reply.Object != r.route.Name || reply.PG.Pool != uint64(r.route.Pool) || len(reply.Operations) != 1 || reply.Operations[0].Result != 0 {
+		r.t.Fatal("reply identity differs from its submission", label, reply.Transaction, reply.Submission)
+	}
+	return reply
+}
+
+// observe is the independent native readback: the object holds exactly the
+// expected bytes at the reply's user version.
+func (r *partialWriteRun) observe(label string, reply cephmsgr.OSDReply) {
+	r.t.Helper()
+	if native := poolObserve(r.t, r.ctx, partialWriteSlot, partialWriteObject, "", ""); native.Code != 0 || !bytes.Equal(native.Data, r.data) || native.Version != reply.UserVersion || reply.UserVersion == 0 {
+		r.t.Fatalf("native object after the %s differs: code=%d, %d bytes, version %d, reply version %d", label, native.Code, len(native.Data), native.Version, reply.UserVersion)
+	}
+}
+
+// overwrite sends one WRITE inside the object and reads the result back
+// natively.
+func (r *partialWriteRun) overwrite(label string, incarnation uint32, seconds uint32, offset uint64, patch []byte) cephmsgr.OSDReply {
+	r.t.Helper()
+	reply := r.send(label, incarnation, seconds, cephmsgr.OSDOperation{Code: cephmsgr.OSDWrite, Offset: offset, Length: uint64(len(patch)), Data: patch})
+	copy(r.data[offset:], patch)
+	r.observe(label, reply)
+	return reply
+}
+
+func (r *partialWriteRun) key(incarnation int32, reply cephmsgr.OSDReply) pgHistoryTarget {
+	return pgHistoryTarget{Type: "client", Num: r.gid, Inc: incarnation, TID: reply.Transaction}
+}
+
+func replayVersion(reply cephmsgr.OSDReply) string {
+	return fmt.Sprintf("%d'%d", reply.ReplayVersion.Epoch, reply.ReplayVersion.Version)
+}
+
+// capture takes one bracketed snapshot of the live primary's log and then one
+// shard-local capture of every acting shard's own store, with no subject
+// request in between. The map epoch must not move between the two. None of
+// the near-miss identities may have a position anywhere, each shard's dumps
+// are rechecked in Go, nothing may have been trimmed or copied, and the
+// primary's store copy must repeat its live answer. past lists the shards
+// whose log head may be newer than their last entry; nil admits none.
+func (r *partialWriteRun) capture(keys, misses []pgHistoryTarget, past []int) (pgHistorySnapshot, shardHistorySnapshot) {
+	r.t.Helper()
+	targets := append(slices.Clone(keys), misses...)
+	primary := primaryPGHistory(r.t, r.ctx, partialWriteSlot, partialWriteObject, targets)
+	requirePGHistoryOnRoute(r.t, primary, r.route)
+	for i := range misses {
+		if got := primary.Targets[len(keys)+i]; len(got.Locations) != 0 {
+			r.t.Fatalf("near-miss identity %s matched on the primary: %+v", got.Reqid, got.Locations)
+		}
+	}
+	shards := shardPGHistory(r.t, r.ctx, partialWriteSlot, partialWriteObject, r.route, targets, past)
+	if shards.Before.Epoch != primary.After.Epoch {
+		r.t.Fatalf("map epoch moved from %d to %d between the primary snapshot and the shard capture", primary.After.Epoch, shards.Before.Epoch)
+	}
+	for i, shard := range shards.Shards {
+		if err := checkShardDumps(shard); err != nil {
+			r.t.Fatalf("shard %s (osd.%d): %v", shard.SPG, shard.OSD, err)
+		}
+		if info, _ := base64.StdEncoding.DecodeString(shard.InfoRaw); len(info) <= 16<<10 {
+			r.t.Logf("complete offline info dump of %s: %s", shard.SPG, info)
+		}
+		for j := range misses {
+			if got := shard.Targets[len(keys)+j]; len(got.Locations) != 0 {
+				r.t.Fatalf("near-miss identity %s matched on shard %s: %+v", got.Reqid, shard.SPG, got.Locations)
+			}
+		}
+		if shard.DupEntries != 0 || shard.ExtraReqidEntries != 0 {
+			r.t.Fatalf("shard %s holds %d duplicates and %d extra request IDs; nothing was trimmed or copied", shard.SPG, shard.DupEntries, shard.ExtraReqidEntries)
+		}
+		if i == int(r.route.Shard) {
+			// The primary's offline copy must repeat its live answer.
+			if shard.OSD != primary.OSD || shard.Head != primary.Head || shard.Tail != primary.Tail || shard.LogEntries != primary.LogEntries ||
+				shard.DupEntries != primary.DupEntries || !reflect.DeepEqual(shard.Targets, primary.Targets) {
+				r.t.Fatalf("the primary's store copy %s differs from its live PG log: %+v vs live head %s tail %s", shard.SPG, shard.Targets, primary.Head, primary.Tail)
+			}
+		}
+	}
+	return primary, shards
+}
+
+// partialOverwrite is the acknowledged state every partial-overwrite control
+// starts from: one full write and one overwrite confined to shard 0's chunk.
+type partialOverwrite struct {
+	full, patched     cephmsgr.OSDReply
+	fullKey, patchKey pgHistoryTarget
+	// misses are near-miss identities that must have no position anywhere.
+	misses []pgHistoryTarget
+	want   partialWriteWant
+	// shards is the capture taken after the overwrite.
+	shards shardHistorySnapshot
+}
+
+// partialOverwrite writes two full stripes to the fresh head and then
+// overwrites a few bytes inside shard 0's chunk of the first stripe. Native
+// readback checks the bytes after each write and the live primary must hold
+// both requests by their full identity. Then every acting shard's store is
+// copied while its container is paused and read offline, between two
+// identical native placement records. The full write's entry must be held by
+// every shard and name every shard. The overwrite's entry must be held by
+// shard 0 and by the parity shards and name exactly those; the nonprimary
+// data shard, which the overwrite does not touch, must not hold it in this
+// capture and its own log must end at the full write.
+func (r *partialWriteRun) partialOverwrite() partialOverwrite {
+	r.t.Helper()
+	const (
+		fullIncarnation  = 7
+		patchIncarnation = 9
+	)
 	patch := []byte("partial\x00\xffpatch")
-	data := make([]byte, 2*stripe)
+	data := make([]byte, 2*r.stripe)
 	for i := range data {
 		data[i] = byte(i*7 + i>>8)
 	}
-	written, skipped, err := partialWritePlan(width.k, width.m, facts.nonprimary, stripe, uint64(len(data)), patchOffset, uint64(len(patch)))
-	if err != nil {
-		t.Fatal(err)
+	full := r.send("full write", fullIncarnation, 1700009100, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(data)), Data: data})
+	r.data = data
+	r.observe("full write", full)
+	written, skipped := r.plan(partialWriteOffset, len(patch))
+	if !slices.Equal(skipped, r.facts.nonprimary) || len(skipped) == 0 {
+		r.t.Fatalf("the overwrite plan names shards %v and leaves out %v; this control needs the nonprimary shards %v left out", written, skipped, r.facts.nonprimary)
 	}
-	if !slices.Equal(skipped, facts.nonprimary) || len(skipped) == 0 {
-		t.Fatalf("the overwrite plan names shards %v and leaves out %v; this control needs the nonprimary shards %v left out", written, skipped, facts.nonprimary)
-	}
-	t.Logf("pool %d: stripe_width %d, chunk %d, profile k=%s m=%s plugin=%s, nonprimary shards %v; overwrite [%d,+%d) of %d bytes names shards %v and leaves out %v",
-		created.PoolID, stripe, stripe/uint64(width.k), created.ECProfile["k"], created.ECProfile["m"], created.ECProfile["plugin"], facts.nonprimary,
-		patchOffset, len(patch), len(data), written, skipped)
-
-	if poolObserve(t, ctx, slot, object, "", "").Code != -2 {
-		t.Fatal("the head already exists")
-	}
-	route := poolPlace(t, ctx, slot, object, "")
-	if route.Pool != created.PoolID {
-		t.Fatal("the object is not in the owned pool", route.PGID)
-	}
-	facts.checkPlacement(t, route)
-	connection := mutationConnection(t, c, ctx, route)
-	defer connection.Close()
-	gid := c.Snapshot().GlobalID
-	// send issues one Go request exactly once under its own incarnation.
-	send := func(label string, incarnation uint32, seconds uint32, op cephmsgr.OSDOperation) cephmsgr.OSDReply {
-		t.Helper()
-		message := request(route, op)
-		message.ClientIncarnation = incarnation
-		message.ModificationTime = cephmsgr.OSDTime{Seconds: seconds}
-		reply, err := connection.Request(ctx, message)
-		if err != nil || reply.Code != 0 || reply.Flags&cephmsgr.OSDReplyOnDisk == 0 {
-			t.Fatalf("%s: err=%v code=%d flags=%#x; not resent", label, err, reply.Code, reply.Flags)
-		}
-		if reply.Transaction == 0 || reply.Submission.Transaction != reply.Transaction || reply.Submission.GlobalID != gid || reply.Submission.ClientIncarnation != incarnation ||
-			reply.Submission.Attempt != 0 || reply.RetryAttempt != 0 || reply.Object != route.Name || reply.PG.Pool != uint64(route.Pool) || len(reply.Operations) != 1 || reply.Operations[0].Result != 0 {
-			t.Fatal("reply identity differs from its submission", label, reply.Transaction, reply.Submission)
-		}
-		return reply
-	}
-	observe := func(label string, reply cephmsgr.OSDReply) {
-		t.Helper()
-		if native := poolObserve(t, ctx, slot, object, "", ""); native.Code != 0 || !bytes.Equal(native.Data, data) || native.Version != reply.UserVersion || reply.UserVersion == 0 {
-			t.Fatalf("native object after the %s differs: code=%d, %d bytes, version %d, reply version %d", label, native.Code, len(native.Data), native.Version, reply.UserVersion)
-		}
-	}
-	full := send("full write", fullIncarnation, 1700009100, cephmsgr.OSDOperation{Code: cephmsgr.OSDWriteFull, Length: uint64(len(data)), Data: data})
-	observe("full write", full)
-	patched := send("partial overwrite", patchIncarnation, 1700009101, cephmsgr.OSDOperation{Code: cephmsgr.OSDWrite, Offset: patchOffset, Length: uint64(len(patch)), Data: patch})
-	copy(data[patchOffset:], patch)
+	r.t.Logf("overwrite [%d,+%d) of %d bytes names shards %v and leaves out %v", partialWriteOffset, len(patch), len(data), written, skipped)
 	// Independent native readback of the final bytes at the overwrite's
 	// user version.
-	observe("partial overwrite", patched)
+	patched := r.overwrite("partial overwrite", patchIncarnation, 1700009101, partialWriteOffset, patch)
 	if patched.UserVersion <= full.UserVersion {
-		t.Fatal("the overwrite did not advance the user version", full.UserVersion, patched.UserVersion)
+		r.t.Fatal("the overwrite did not advance the user version", full.UserVersion, patched.UserVersion)
 	}
-
-	fullKey := pgHistoryTarget{Type: "client", Num: gid, Inc: fullIncarnation, TID: full.Transaction}
-	patchKey := pgHistoryTarget{Type: "client", Num: gid, Inc: patchIncarnation, TID: patched.Transaction}
+	state := partialOverwrite{full: full, patched: patched, fullKey: r.key(fullIncarnation, full), patchKey: r.key(patchIncarnation, patched)}
 	if full.Transaction == patched.Transaction {
-		t.Fatal("the two requests share a transaction ID", fullKey, patchKey)
+		r.t.Fatal("the two requests share a transaction ID", state.fullKey, state.patchKey)
 	}
 	// Near misses: each request's real TID under the other request's
 	// incarnation, then one changed field of the overwrite's key.
-	misses := []pgHistoryTarget{
-		{Type: "client", Num: gid, Inc: fullIncarnation, TID: patched.Transaction},
-		{Type: "client", Num: gid, Inc: patchIncarnation, TID: full.Transaction},
-		{Type: "client", Num: gid + 1, Inc: patchIncarnation, TID: patched.Transaction},
-		{Type: "osd", Num: gid, Inc: patchIncarnation, TID: patched.Transaction},
+	state.misses = []pgHistoryTarget{
+		{Type: "client", Num: r.gid, Inc: fullIncarnation, TID: patched.Transaction},
+		{Type: "client", Num: r.gid, Inc: patchIncarnation, TID: full.Transaction},
+		{Type: "client", Num: r.gid + 1, Inc: patchIncarnation, TID: patched.Transaction},
+		{Type: "osd", Num: r.gid, Inc: patchIncarnation, TID: patched.Transaction},
 	}
-	targets := append([]pgHistoryTarget{fullKey, patchKey}, misses...)
-	version := func(reply cephmsgr.OSDReply) string {
-		return fmt.Sprintf("%d'%d", reply.ReplayVersion.Epoch, reply.ReplayVersion.Version)
-	}
-	want := partialWriteWant{object: hobjectHead(route), full: version(full), patch: version(patched), shards: facts.size, written: written}
-	t.Logf("full write %s at %s, user version %d; partial overwrite %s at %s, user version %d", fullKey, want.full, full.UserVersion, patchKey, want.patch, patched.UserVersion)
+	state.want = partialWriteWant{object: hobjectHead(r.route), full: replayVersion(full), patch: replayVersion(patched), shards: r.facts.size, written: written}
+	want := state.want
+	r.t.Logf("full write %s at %s, user version %d; partial overwrite %s at %s, user version %d", state.fullKey, want.full, full.UserVersion, state.patchKey, want.patch, patched.UserVersion)
 
-	// The live primary first: both requests are ordinary entries of the head.
-	primary := primaryPGHistory(t, ctx, slot, object, targets)
-	requirePGHistoryOnRoute(t, primary, route)
+	// The live primary first: both requests are ordinary entries of the
+	// head. Then every acting shard's own store.
+	primary, shards := r.capture([]pgHistoryTarget{state.fullKey, state.patchKey}, state.misses, nil)
 	for i, expected := range []string{want.full, want.patch} {
 		if _, err := writeEntry(primary.Targets[i].Locations, want.object, expected); err != nil {
-			t.Fatalf("live primary, %s: %v", primary.Targets[i].Reqid, err)
+			r.t.Fatalf("live primary, %s: %v", primary.Targets[i].Reqid, err)
 		}
 	}
 	if primary.Head != want.patch {
-		t.Fatalf("the live primary's log ends at %s, not at the overwrite %s", primary.Head, want.patch)
-	}
-	for i := range misses {
-		if got := primary.Targets[2+i]; len(got.Locations) != 0 {
-			t.Fatalf("near-miss identity %s matched on the primary: %+v", got.Reqid, got.Locations)
-		}
-	}
-
-	// Then every acting shard's own store, with no further subject request.
-	shards := shardPGHistory(t, ctx, slot, object, route, targets)
-	if shards.Before.Epoch != primary.After.Epoch {
-		t.Fatalf("map epoch moved from %d to %d between the primary snapshot and the shard capture", primary.After.Epoch, shards.Before.Epoch)
+		r.t.Fatalf("the live primary's log ends at %s, not at the overwrite %s", primary.Head, want.patch)
 	}
 	for i, shard := range shards.Shards {
 		// The capture selected and the store returned collection <pgid>s<i>,
 		// so acting index i is shard i; the role follows from the native
 		// width and nonprimary shards, never from the OSD's position among
 		// the wire targets.
-		role := erasureShardRole(i, width.k, facts.nonprimary)
-		if err := checkShardDumps(shard); err != nil {
-			t.Fatalf("shard %s (osd.%d): %v", shard.SPG, shard.OSD, err)
-		}
-		if info, _ := base64.StdEncoding.DecodeString(shard.InfoRaw); len(info) <= 16<<10 {
-			t.Logf("complete offline info dump of %s: %s", shard.SPG, info)
-		}
-		for j := range misses {
-			if got := shard.Targets[2+j]; len(got.Locations) != 0 {
-				t.Fatalf("near-miss identity %s matched on shard %s: %+v", got.Reqid, shard.SPG, got.Locations)
-			}
-		}
+		role := erasureShardRole(i, r.width.k, r.facts.nonprimary)
 		observed, err := partialWriteShardObservation(shard, shard.Targets[0].Locations, shard.Targets[1].Locations, want)
 		if err != nil {
-			t.Fatalf("shard %s (osd.%d, %s) contradicts the two acknowledged writes: %v", shard.SPG, shard.OSD, role, err)
+			r.t.Fatalf("shard %s (osd.%d, %s) contradicts the two acknowledged writes: %v", shard.SPG, shard.OSD, role, err)
 		}
-		t.Logf("shard %s (osd.%d, %s): %s; log head %s, last_update %s, entries %+v, partial-write records %+v at epoch %d",
+		r.t.Logf("shard %s (osd.%d, %s): %s; log head %s, last_update %s, entries %+v, partial-write records %+v at epoch %d",
 			shard.SPG, shard.OSD, role, observed, shard.Head, shard.LastUpdate, shard.Entries, shard.PartialWrites, shard.PartialWritesEpoch)
 		// The overwrite names shard 0, the parity shards and the data shards
 		// it touches; the primary builds a sub-write for each of them and the
@@ -490,19 +626,22 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration(t *testi
 		// name has an empty transaction and gets no sub-write, so its own
 		// log still ends at the full write.
 		if named := slices.Contains(written, i); named != observed.Patch {
-			t.Fatalf("shard %s (osd.%d, %s): %s; the overwrite names shards %v", shard.SPG, shard.OSD, role, observed, written)
-		}
-		if shard.DupEntries != 0 || shard.ExtraReqidEntries != 0 {
-			t.Fatalf("shard %s holds %d duplicates and %d extra request IDs; nothing was trimmed or copied", shard.SPG, shard.DupEntries, shard.ExtraReqidEntries)
-		}
-		if i == int(route.Shard) {
-			// The primary's offline copy must repeat its live answer.
-			if shard.OSD != primary.OSD || shard.Head != primary.Head || shard.Tail != primary.Tail || shard.LogEntries != primary.LogEntries ||
-				shard.DupEntries != primary.DupEntries || !reflect.DeepEqual(shard.Targets, primary.Targets) {
-				t.Fatalf("the primary's store copy %s differs from its live PG log: %+v vs live head %s tail %s", shard.SPG, shard.Targets, primary.Head, primary.Tail)
-			}
+			r.t.Fatalf("shard %s (osd.%d, %s): %s; the overwrite names shards %v", shard.SPG, shard.OSD, role, observed, written)
 		}
 	}
+	state.shards = shards
+	return state
+}
+
+// The Go client writes two full stripes to a fresh head of an owned
+// optimized isa k=2,m=2 pool and then overwrites a few bytes inside shard
+// 0's chunk of the first stripe; partialOverwrite states what is required of
+// the primary and of every acting shard's own log afterwards. This is a
+// control of what each shard's log holds after an acknowledged partial
+// write: it stops before any trimming, peering or resubmission and claims
+// nothing about eviction, loss or replay.
+func TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration(t *testing.T) {
+	startPartialWriteRun(t, 420*time.Second).partialOverwrite()
 }
 
 func TestPartialWritePlan(t *testing.T) {
@@ -586,24 +725,42 @@ func partialWriteShard(held, recorded bool) (shardHistoryShard, []pgHistoryLocat
 	object := "4:53c99ff5:::obj:head"
 	full := []pgHistoryLocation{{Tier: "log", Index: 2, Version: "28'3", Op: "modify", Object: object, ReturnCode: &zero}}
 	index := 1
-	shard := shardHistoryShard{Index: index, Shard: &index, OSD: 3, SPG: "4.2s1", Head: "28'3", LastUpdate: "28'3", LastComplete: "28'3", LogEntries: 3, LimitBytes: 64 << 10,
+	shard := shardHistoryShard{Index: index, Shard: &index, OSD: 3, SPG: "4.2s1", Head: "28'3", Tail: "0'0", LastEntry: "28'3", LastUpdate: "28'3", LastComplete: "28'3", LogEntries: 3, LimitBytes: 64 << 10,
 		Entries: []shardLogEntry{{Version: "28'1", WrittenShards: []int{}}, {Version: "28'2", WrittenShards: []int{}}, {Version: "28'3", WrittenShards: []int{}}}}
 	var patch []pgHistoryLocation
 	log := `{"version":"28'1","written_shards":"{}"},{"version":"28'2","written_shards":"{}"},{"version":"28'3","written_shards":"{}"}`
-	info := `{"pgid":"4.2s1","shard":"1","partial_writes_last_complete":[]}`
+	records := ""
 	if held {
 		patch = []pgHistoryLocation{{Tier: "log", Index: 3, Version: "28'4", Op: "modify", Object: object, ReturnCode: &zero}}
-		shard.Head, shard.LastUpdate, shard.LastComplete, shard.LogEntries = "28'4", "28'4", "28'4", 4
+		shard.Head, shard.LastEntry, shard.LastUpdate, shard.LastComplete, shard.LogEntries = "28'4", "28'4", "28'4", "28'4", 4
 		shard.Entries = append(shard.Entries, shardLogEntry{Version: "28'4", WrittenShards: []int{0, 2, 3}})
 		log += `,{"version":"28'4","written_shards":"{0,2,3}"}`
 	}
 	if recorded {
 		shard.PartialWrites, shard.PartialWritesEpoch = []shardPartialWrite{{Shard: 1, From: "28'3", To: "28'4"}}, 28
-		info = `{"pgid":"4.2s1","shard":"1","partial_writes_last_complete":[{"id":1,"from":"28'3","to":"28'4"}]}`
+		records = `{"id":1,"from":"28'3","to":"28'4"}`
 	}
-	setShardDumps(&shard, `{"pg_log_t":{"log":[`+log+`]}}`, info)
+	setShardDumps(&shard, `{"pg_log_t":{"head":"`+shard.Head+`","tail":"0'0","log":[`+log+`]}}`,
+		`{"pgid":"4.2s1","shard":"1","last_update":"`+shard.Head+`","last_complete":"`+shard.Head+`","partial_writes_last_complete":[`+records+`]}`)
 	return shard, full, patch
 }
+
+// advancedShard builds the synthetic receipt of a nonprimary shard after a
+// peering that followed a partial write it was left out of: its info and its
+// log head are at the overwrite, its last entry is the full write and its
+// own info holds the range between them. No daemon produced it.
+func advancedShard() shardHistoryShard {
+	shard, _, _ := partialWriteShard(false, false)
+	shard.Head, shard.LastUpdate, shard.LastComplete, shard.HeadPastEntries = "28'4", "28'4", "28'4", true
+	shard.PartialWrites, shard.PartialWritesEpoch = []shardPartialWrite{{Shard: 1, From: "28'3", To: "28'4"}}, 30
+	setShardDumps(&shard, advancedShardLog, advancedShardInfo)
+	return shard
+}
+
+const (
+	advancedShardLog  = `{"pg_log_t":{"head":"28'4","tail":"0'0","log":[{"version":"28'1","written_shards":"{}"},{"version":"28'2","written_shards":"{}"},{"version":"28'3","written_shards":"{}"}]}}`
+	advancedShardInfo = `{"pgid":"4.2s1","shard":"1","last_update":"28'4","last_complete":"28'4","partial_writes_last_complete":[{"id":1,"from":"28'3","to":"28'4"}]}`
+)
 
 func setShardDumps(shard *shardHistoryShard, log, info string) {
 	digest := sha256.Sum256([]byte(info))
@@ -716,8 +873,8 @@ func TestCheckShardDumps(t *testing.T) {
 		}
 	}
 	const (
-		log  = `{"pg_log_t":{"log":[{"version":"28'1","written_shards":"{}"},{"version":"28'2","written_shards":"{}"},{"version":"28'3","written_shards":"{}"},{"version":"28'4","written_shards":"{0,2,3}"}]}}`
-		info = `{"pgid":"4.2s1","shard":"1","partial_writes_last_complete":[{"id":1,"from":"28'3","to":"28'4"}]}`
+		log  = `{"pg_log_t":{"head":"28'4","tail":"0'0","log":[{"version":"28'1","written_shards":"{}"},{"version":"28'2","written_shards":"{}"},{"version":"28'3","written_shards":"{}"},{"version":"28'4","written_shards":"{0,2,3}"}]}}`
+		info = `{"pgid":"4.2s1","shard":"1","last_update":"28'4","last_complete":"28'4","partial_writes_last_complete":[{"id":1,"from":"28'3","to":"28'4"}]}`
 	)
 	for name, edit := range map[string]func(*shardHistoryShard){
 		"info is not base64":             func(s *shardHistoryShard) { s.InfoRaw += "%" },
@@ -760,11 +917,96 @@ func TestCheckShardDumps(t *testing.T) {
 			setShardDumps(s, strings.Replace(log, `,{"version":"28'4","written_shards":"{0,2,3}"}`, "", 1), info)
 		},
 		"dump entry in another order": func(s *shardHistoryShard) { setShardDumps(s, strings.Replace(log, "{0,2,3}", "{2,0,3}", 1), info) },
+		// The bounds, read from the dumps themselves.
+		"info at another last_update": func(s *shardHistoryShard) {
+			setShardDumps(s, log, strings.Replace(info, `"last_update":"28'4"`, `"last_update":"28'5"`, 1))
+		},
+		"info at another last_complete": func(s *shardHistoryShard) {
+			setShardDumps(s, log, strings.Replace(info, `"last_complete":"28'4"`, `"last_complete":"28'3"`, 1))
+		},
+		"info without last_update": func(s *shardHistoryShard) {
+			setShardDumps(s, log, strings.Replace(info, `"last_update":"28'4",`, "", 1))
+		},
+		"receipt at another update":   func(s *shardHistoryShard) { s.LastUpdate = "28'3" },
+		"receipt at another complete": func(s *shardHistoryShard) { s.LastComplete = "28'3" },
+		"dump at another head": func(s *shardHistoryShard) {
+			setShardDumps(s, strings.Replace(log, `"head":"28'4"`, `"head":"28'5"`, 1), info)
+		},
+		"dump without a head": func(s *shardHistoryShard) { setShardDumps(s, strings.Replace(log, `"head":"28'4",`, "", 1), info) },
+		"dump at another tail": func(s *shardHistoryShard) {
+			setShardDumps(s, strings.Replace(log, `"tail":"0'0"`, `"tail":"28'1"`, 1), info)
+		},
+		"receipt at another head":       func(s *shardHistoryShard) { s.Head = "28'5" },
+		"receipt at another tail":       func(s *shardHistoryShard) { s.Tail = "28'1" },
+		"receipt at another last entry": func(s *shardHistoryShard) { s.LastEntry = "28'3" },
+		"receipt without a last entry":  func(s *shardHistoryShard) { s.LastEntry = "" },
+		"head past entries claimed":     func(s *shardHistoryShard) { s.HeadPastEntries = true },
 	} {
 		shard, _, _ := partialWriteShard(true, true)
 		edit(&shard)
 		if err := checkShardDumps(shard); err == nil {
 			t.Error("shard dumps accepted:", name)
+		}
+	}
+	// A head newer than the last entry: accepted only as reported, with
+	// this shard's own record from the last entry or earlier to the head.
+	if err := checkShardDumps(advancedShard()); err != nil {
+		t.Error("advanced nonprimary shard refused:", err)
+	}
+	earlier := advancedShard()
+	earlier.PartialWrites[0].From = "28'2"
+	setShardDumps(&earlier, advancedShardLog, strings.Replace(advancedShardInfo, `"from":"28'3"`, `"from":"28'2"`, 1))
+	if err := checkShardDumps(earlier); err != nil {
+		t.Error("advanced shard with a range from an earlier version refused:", err)
+	}
+	record := func(from, to string) func(*shardHistoryShard) {
+		return func(s *shardHistoryShard) {
+			s.PartialWrites[0].From, s.PartialWrites[0].To = from, to
+			setShardDumps(s, advancedShardLog, strings.Replace(advancedShardInfo, `"from":"28'3","to":"28'4"`, `"from":"`+from+`","to":"`+to+`"`, 1))
+		}
+	}
+	for name, edit := range map[string]func(*shardHistoryShard){
+		"not reported as past the entries": func(s *shardHistoryShard) { s.HeadPastEntries = false },
+		"receipt's last entry is the head": func(s *shardHistoryShard) { s.LastEntry = "28'4" },
+		"no record": func(s *shardHistoryShard) {
+			s.PartialWrites = nil
+			setShardDumps(s, advancedShardLog, strings.Replace(advancedShardInfo, `{"id":1,"from":"28'3","to":"28'4"}`, "", 1))
+		},
+		"record of another shard only": func(s *shardHistoryShard) {
+			s.PartialWrites[0].Shard = 2
+			setShardDumps(s, advancedShardLog, strings.Replace(advancedShardInfo, `"id":1`, `"id":2`, 1))
+		},
+		"record ends before the head":           record("28'2", "28'3"),
+		"record ends after the head":            record("28'3", "28'5"),
+		"record ends in a later epoch":          record("28'3", "29'4"),
+		"record starts after the last entry":    record("28'4", "28'4"),
+		"record starts in a later epoch":        record("29'1", "28'4"),
+		"record start unparsable":               record("28.3", "28'4"),
+		"record start without a version":        record("28'", "28'4"),
+		"record start with a negative version":  record("28'-1", "28'4"),
+		"record start beyond the epoch's range": record("4294967296'1", "28'4"),
+		"log without an entry": func(s *shardHistoryShard) {
+			s.Entries, s.LogEntries, s.LastEntry = nil, 0, "0'0"
+			s.PartialWrites[0].From = "0'0"
+			setShardDumps(s, `{"pg_log_t":{"head":"28'4","tail":"0'0","log":[]}}`, strings.Replace(advancedShardInfo, `"from":"28'3"`, `"from":"0'0"`, 1))
+		},
+	} {
+		shard := advancedShard()
+		edit(&shard)
+		if err := checkShardDumps(shard); err == nil {
+			t.Error("advanced shard dumps accepted:", name)
+		}
+	}
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{
+		{"28'3", "28'3", true}, {"28'2", "28'3", true}, {"27'9", "28'3", true}, {"0'0", "28'3", true},
+		{"28'4", "28'3", false}, {"29'1", "28'3", false}, {"", "28'3", false}, {"28'3", "", false}, {"28", "28'3", false},
+		{"x'1", "28'3", false}, {"28'x", "28'3", false}, {"28'3", "28'3'1", false}, {"-1'3", "28'3", false},
+	} {
+		if got := versionAtOrBefore(c.a, c.b); got != c.want {
+			t.Errorf("versionAtOrBefore(%q, %q) = %t", c.a, c.b, got)
 		}
 	}
 }

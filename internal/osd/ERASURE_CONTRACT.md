@@ -114,9 +114,22 @@ Those three shard copies held it; the copy of nonprimary data shard 1 did
 not, and its own log and `last_update` ended at the full write, while the
 other shards recorded shard 1 as left out of that version range. A request
 identity can therefore be missing from one acting shard's log by design,
-without any trimming. What that shard holds after peering, recovery or a
-primary change was not observed, and nothing here is a replay or
-deduplication claim.
+without any trimming.
+
+Two [continuations](../../integration/fixture/OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md)
+capture that shard's later state. After one more overwrite inside shard 1's
+chunk in the same interval, shard 1's own log held the full write's entry
+and the new entry, and not the overwrite's entry between them. After the
+PG's interval was ended once by an owned `pg repeer`, with the primary and
+the acting set unchanged and no daemon stopped, shard 1's `last_update`,
+`last_complete` and log head were at the overwrite's version while its last
+entry was still the full write, and its own info recorded that version
+range; the first write of the new interval, although confined to shard 0's
+chunk, named every shard and was held by all four. A shard's log head is
+therefore not evidence that the shard holds every entry up to it. A primary
+change onto another shard, a degraded write and the recovery of a shard
+that missed a write were not observed with this capture, and nothing here
+is a replay or deduplication claim.
 
 ## Optimized EC pools (`allow_ec_optimizations`)
 

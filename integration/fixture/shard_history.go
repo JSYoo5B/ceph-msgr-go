@@ -67,17 +67,34 @@ const (
 )
 
 // shardHistorySelectors are the only selections that admit the capture: the
-// COPY_FROM2 control and the partial-overwrite control. Each is one exact
-// test of the four-OSD topology's closed list.
+// COPY_FROM2 control, the partial-overwrite control and its two
+// continuations (a later write that names the left-out shard, and an owned
+// interval change). Each is one exact test of the four-OSD topology's closed
+// list.
 var shardHistorySelectors = []string{
 	"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
+}
+
+// pgIntervalSelectors are the only selections whose test may use the
+// owned-pool oracle's pginterval mode, which observes one owned PG and can
+// end its interval with one `pg repeer`: the two continuations of the
+// partial-overwrite control.
+var pgIntervalSelectors = []string{
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
 }
 
 var shardHistoryPGID = regexp.MustCompile(`^[1-9][0-9]{0,9}\.(0|[1-9a-f][0-9a-f]{0,7})$`)
 
 func (p profile) shardHistorySelected() bool {
 	return slices.Contains(shardHistorySelectors, p.testRun) && p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "4"
+}
+
+func (p profile) pgIntervalSelected() bool {
+	return p.shardHistorySelected() && slices.Contains(pgIntervalSelectors, p.testRun)
 }
 
 // shardHistoryShard is what the capture did for one index of the acting

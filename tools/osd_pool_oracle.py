@@ -9,7 +9,7 @@ Go client. create also makes an erasure-coded pool of a closed width: k2m1
 (profile ceph-msgr-owned-ec) or k2m2 (its own ceph-msgr-owned-ec-k2m2 profile,
 isa, never overwritten, optionally optimized with its nonprimary shards read
 back); cleanup removes both profiles.
-Modes: create, seed, observe, place, pghistory, shardhistory, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
+Modes: create, seed, observe, place, pghistory, shardhistory, pginterval, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
 pghistory takes one bounded primary PG-history snapshot for an owned object:
 placement before, the PG `log` command to that primary OSD, placement after,
 then the fail-closed parse in osd_pg_history_oracle.py. It reports where exact
@@ -18,6 +18,12 @@ shardhistory brackets the fixture's shard-local capture of the same PG: phase
 before stores the placement the capture reads its PG and acting vector from;
 phase after reads the placement again and judges the capture record and each
 acting shard's offline dumps in osd_shard_history_oracle.py.
+pginterval ends the current interval of the PG of one owned object with one
+`pg repeer` command, which only stores a temporary mapping of that PG that
+the primary asks to drop again, and reads the placement and the primary's
+`pg query` until osd_pg_interval_oracle.py judges the PG settled in a newer
+interval with its original placement. Action show sends no command and
+reports one observation of the same kind.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
 servicecompare independently registers a native service with the Go caller's
@@ -43,15 +49,17 @@ import pathlib
 import re
 import subprocess
 import sys
+import time
 
 import osd_mutation_oracle as mutation
 import osd_pg_history_oracle as history
+import osd_pg_interval_oracle as pg_interval
 import osd_shard_history_oracle as shard_history
 import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "pghistory", "shardhistory", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
+MODES = ("create", "seed", "observe", "place", "pghistory", "shardhistory", "pginterval", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -532,10 +540,99 @@ def mode_shardhistory(rados, cluster, request, out):
             raise ValueError("invalid shard dump name")
         return read_bounded(out / name, limit)
 
-    receipt = shard_history.snapshot(before, after, capture, dumps, targets)
+    # Only the pool's own nonprimary shards may show a log head newer than
+    # their last entry; an unreadable set admits none.
+    try:
+        nonprimary = shard_history.parse_written_shards(descriptor.get("nonprimary_shards"), 0)
+    except shard_history.HistoryError:
+        nonprimary = []
+    receipt = shard_history.snapshot(before, after, capture, dumps, targets, nonprimary)
     # One bracket admits one judgement.
     stored.unlink()
     return {"shard_history": receipt}
+
+
+INTERVAL_SECONDS = 30
+INTERVAL_PAUSE = .5
+
+
+def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=time.sleep):
+    """One owned interval change of the PG of an owned object, or one observation of it.
+
+    Action repeer requires a clean erasure-coded PG without a pg_temp, sends
+    one `pg repeer` command, which is never resent, and observes until the
+    PG is settled in a newer interval or the time bound is used up. Action
+    show observes once. Both report the last observation and its judgement;
+    a PG that did not settle is reported, not raised.
+    """
+    action = request.get("action")
+    if action not in ("repeer", "show") or set(request) - {"action", "slot", "object", "namespace", "origin"} or (action == "repeer" and "origin" in request):
+        raise ValueError("pginterval needs action repeer or show and no unknown field")
+    pool = pool_name(request["slot"])
+    _, namespace = object_request(request)
+    descriptor = find_pool(rados.dump(cluster), pool)
+    if descriptor is None:
+        raise RuntimeError("owned pool is missing")
+
+    def command(*arguments, timeout):
+        return mutation.native_mon_query(rados.lib, cluster, *arguments, timeout=timeout)
+
+    def place():
+        try:
+            return mutation.collect_placement(command, pool, request["object"], descriptor["pool"], namespace=namespace, timeout=10)
+        except (ValueError, RuntimeError) as error:
+            # A PG between two intervals has no complete routing record.
+            return "no placement: " + str(error)[:160]
+
+    def observe(pgid, primary):
+        first = place()
+        if isinstance(first, dict):
+            pgid, primary = first["pgid"], first["primary_id"]
+        code, raw, status, oversized = rados.osd(cluster, primary, {"prefix": "pg", "pgid": pgid, "cmd": "query", "format": "json"},
+                                                 pg_interval.MAX_QUERY_BYTES)
+        return pg_interval.observation(first, code, raw, status, oversized, place())
+
+    started = clock()
+    if action == "show":
+        origin = request.get("origin")
+        if not isinstance(origin, dict) or not isinstance(origin.get("pgid"), str) or type(origin.get("primary_id")) is not int:
+            raise ValueError("pginterval show needs the placement recorded before the command")
+        seen = observe(origin["pgid"], origin["primary_id"])
+        now = seen["before"]
+        if now is None:
+            failures = ["no placement record: " + seen["placement_failure"]]
+        else:
+            failures = pg_interval.origin_failures(now, seen) + [
+                "placement %s is %r; it was %r before the command" % (key, now.get(key), origin.get(key))
+                for key in pg_interval.PLACEMENT_KEYS if now.get(key) != origin.get(key)]
+        return {"pg_interval": {"action": action, "observation": seen, "failures": failures, "settled": not failures, "observations": 1,
+                                "elapsed_ms": int((clock() - started) * 1000)}}
+    origin = place()
+    if not isinstance(origin, dict):
+        raise RuntimeError("the PG has no placement before the command: " + origin)
+    first = observe(origin["pgid"], origin["primary_id"])
+    receipt = {"action": action, "origin": origin, "origin_observation": first, "observations": 0, "settled": False}
+    failures = pg_interval.origin_failures(origin, first)
+    if failures:
+        # Nothing was sent.
+        receipt.update(failures=failures, command_sent=False, elapsed_ms=int((clock() - started) * 1000))
+        return {"pg_interval": receipt}
+    sent = {"prefix": "pg repeer", "pgid": origin["pgid"]}
+    code, _ = rados.mon(cluster, sent)
+    receipt.update(command=sent, command_sent=True, command_code=code, command_status=rados.last_status)
+    if code != 0:
+        receipt.update(failures=["pg repeer returned %d: %s" % (code, rados.last_status[:200])], elapsed_ms=int((clock() - started) * 1000))
+        return {"pg_interval": receipt}
+    deadline = clock() + INTERVAL_SECONDS
+    while True:
+        seen = observe(origin["pgid"], origin["primary_id"])
+        receipt["observations"] += 1
+        failures = pg_interval.unsettled(origin, first["query"], seen)
+        if not failures or clock() >= deadline:
+            break
+        sleep(INTERVAL_PAUSE)
+    receipt.update(observation=seen, failures=failures, settled=not failures, elapsed_ms=int((clock() - started) * 1000))
+    return {"pg_interval": receipt}
 
 
 def mode_snapshot(rados, cluster, request, out):
@@ -947,7 +1044,7 @@ def mode_cleanup(rados, cluster, request, out):
     return {"removed": removed, "pools_removed": gone, "ec_profiles_remaining": remaining}
 
 
-HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "shardhistory": mode_shardhistory,
+HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "shardhistory": mode_shardhistory, "pginterval": mode_pginterval,
             "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "mgrstate": mode_mgrstate, "service": mode_service, "servicewatch": mode_servicewatch, "servicecompare": mode_servicecompare, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 
