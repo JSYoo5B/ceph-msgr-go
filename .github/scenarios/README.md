@@ -144,8 +144,9 @@ changing any other profile. Request that ID with `/ci run`; `all` includes it
 in periodic main verification. The required-test gate binds it to
 `api/TestCephMsgrCompressionOfferIntegration`, so a missing or skipped parent
 cannot pass. The [selected native receipt](../../integration/fixture/MSGR_COMPRESSION_VALIDATION.md)
-records no negotiated compression and successful MON/OSD commands; it does
-not prove that negotiation frames were exchanged or compressed frames worked.
+records no negotiated compression, successful MON/OSD commands and, since
+2026-11-15, the enabled request and disabled response decoded on the serving
+connections; it does not prove that compressed frames worked.
 One dedicated `mon-mgr` row,
 `mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold`, selects only the
 client-suite `TestCephMonServiceMapLifecycleFailedMonHoldIntegration`. It
