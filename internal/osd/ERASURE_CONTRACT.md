@@ -97,6 +97,17 @@ only. It does not establish that an identity is absent from replica or
 shard-local history, so it is not a precondition for resubmitting after
 history loss.
 
+A test-only [shard-local capture](../../integration/fixture/OSD_EC_COPY_FROM_SHARD_HISTORY_VALIDATION.md)
+on the same profile reads every acting shard's own PG log from a private
+copy of its store. After one version-pinned COPY_FROM2 from a replicated pool
+into a fresh head of the optimized pool, the primary and all four shard
+copies held the copy's request identity on the destination entry and the
+source write's identity with its user version as that entry's first extra
+request ID. This is a positive control for a copy that creates the head on
+every shard. It does not show what a shard left out of a partial write
+holds, and it establishes no absence, eviction, trimming or replay
+behaviour.
+
 ## Optimized EC pools (`allow_ec_optimizations`)
 
 Tentacle's optimized EC (`OSDMonitor::enable_pool_ec_optimizations`, Ceph

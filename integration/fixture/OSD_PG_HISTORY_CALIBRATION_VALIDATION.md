@@ -25,9 +25,11 @@ Ceph v20.2.4, source `7f793731f1b39eb4f465e960113d2363c311b964`:
   incarnation, TID), prints it as `<entity>.<incarnation>:<tid>` and compares
   all three fields. `RetryAttempt` is not part of the key.
 
-The offline `ceph-objectstore-tool --op log` is not used. Its pinned mount
-policy (`src/tools/ceph_objectstore_tool.cc:3992-4011`) does not list `log`
-as a read-only operation, so it is not classified as a read-only oracle here.
+The offline `ceph-objectstore-tool --op log` is not used by this oracle. Its
+pinned mount policy (`src/tools/ceph_objectstore_tool.cc:3992-4011`) does not
+list `log` as a read-only operation, so it is not classified as a read-only
+oracle here. A separate control runs it on private store copies only
+([shard-local capture](OSD_EC_COPY_FROM_SHARD_HISTORY_VALIDATION.md)).
 
 ## Oracle contract
 
@@ -120,14 +122,19 @@ evidence for a later revision.
 - Only presence on the primary at one bracketed epoch is calibrated. An
   identity missing from a complete snapshot does not show that it is absent
   from replica or shard-local history, from other epochs, or from the PG's
-  history in general. The proposed history-eviction resubmission cell needs a
-  separate, safe, complete shard-local observation recipe for every acting
-  shard. That oracle remains open.
+  history in general. A separate
+  [shard-local capture](OSD_EC_COPY_FROM_SHARD_HISTORY_VALIDATION.md) reads
+  every acting shard's own log from a private store copy, as a positive
+  control only. The proposed history-eviction resubmission cell needs a
+  complete absence judgement for every acting shard at the intended PG
+  state. That oracle remains open.
 - The native calibration exercises only the ordinary `log` tier. Positions in
   `dups` are pinned only by the synthetic cluster-free tests: no native
   request was moved into `dups` (by trimming). One native `extra_reqids`
   position is observed separately, on a replicated pool, by the
-  [COPY_FROM2 destination control](OSD_COPY_FROM_HISTORY_VALIDATION.md).
+  [COPY_FROM2 destination control](OSD_COPY_FROM_HISTORY_VALIDATION.md), and
+  on this optimized profile, on the primary and in every acting shard's
+  store copy, by the shard-local capture above.
 - No PG-log retention bound, trim boundary, timed window or exactly-once
   behaviour is established. No replay safety follows from a match.
 - Placement and epochs are bracketed only around the command. A placement
