@@ -9,11 +9,15 @@ Go client. create also makes an erasure-coded pool of a closed width: k2m1
 (profile ceph-msgr-owned-ec) or k2m2 (its own ceph-msgr-owned-ec-k2m2 profile,
 isa, never overwritten, optionally optimized with its nonprimary shards read
 back); cleanup removes both profiles.
-Modes: create, seed, observe, place, pghistory, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
+Modes: create, seed, observe, place, pghistory, shardhistory, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
 pghistory takes one bounded primary PG-history snapshot for an owned object:
 placement before, the PG `log` command to that primary OSD, placement after,
 then the fail-closed parse in osd_pg_history_oracle.py. It reports where exact
 request identities occur on that primary; it never establishes absence.
+shardhistory brackets the fixture's shard-local capture of the same PG: phase
+before stores the placement the capture reads its PG and acting vector from;
+phase after reads the placement again and judges the capture record and each
+acting shard's offline dumps in osd_shard_history_oracle.py.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
 servicecompare independently registers a native service with the Go caller's
@@ -42,11 +46,12 @@ import sys
 
 import osd_mutation_oracle as mutation
 import osd_pg_history_oracle as history
+import osd_shard_history_oracle as shard_history
 import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "pghistory", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
+MODES = ("create", "seed", "observe", "place", "pghistory", "shardhistory", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -464,6 +469,75 @@ def mode_pghistory(rados, cluster, request, out):
     return {"history": receipt}
 
 
+SHARD_BEFORE = "osd-shard-history-before.json"
+SHARD_CAPTURE = "osd-shard-history-capture.json"
+SHARD_DUMP = re.compile(r"osd-shard-history-s[0-7]-(info|log)\.json")
+
+
+def read_bounded(path, limit):
+    with path.open("rb") as file:
+        data = file.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("%s exceeds %d bytes" % (path.name, limit))
+    return data
+
+
+def mode_shardhistory(rados, cluster, request, out):
+    """Placement brackets and judgement of one shard-local capture.
+
+    Phase before stores the native placement of the object; the fixture's
+    capture takes its PG and ordered acting vector from that stored record.
+    Phase after reads the placement again after the last offline dump and
+    requires the two complete records to be identical. Neither phase copies a
+    store or contacts an OSD; presence in each shard's own log is reported,
+    absence is never established.
+    """
+    phase = request.get("phase")
+    if phase not in ("before", "after") or set(request) - {"phase", "slot", "object", "namespace", "targets"}:
+        raise ValueError("shardhistory needs phase before or after and no unknown field")
+    pool = pool_name(request["slot"])
+    _, namespace = object_request(request)
+    targets = request.get("targets")
+    if phase == "before":
+        if targets is not None:
+            raise ValueError("shardhistory targets belong to phase after")
+    else:
+        if not isinstance(targets, list) or not 1 <= len(targets) <= history.MAX_TARGETS:
+            raise ValueError("shardhistory needs 1 to %d targets" % history.MAX_TARGETS)
+        for target in targets:
+            history.target_identity(target)
+    descriptor = find_pool(rados.dump(cluster), pool)
+    if descriptor is None:
+        raise RuntimeError("owned pool is missing")
+
+    def command(*arguments, timeout):
+        return mutation.native_mon_query(rados.lib, cluster, *arguments, timeout=timeout)
+
+    stored = out / SHARD_BEFORE
+    if phase == "before":
+        # A capture or bracket left by an earlier run must not be judged again.
+        for stale in (stored, out / SHARD_CAPTURE):
+            stale.unlink(missing_ok=True)
+        placement = mutation.collect_placement(command, pool, request["object"], descriptor["pool"], namespace=namespace)
+        temporary = out / (SHARD_BEFORE + ".tmp")
+        temporary.write_bytes(json.dumps(placement).encode())
+        os.replace(temporary, stored)
+        return {"placement": placement}
+    before = read_bounded(stored, shard_history.MAX_RECORD_BYTES)
+    capture = read_bounded(out / SHARD_CAPTURE, shard_history.MAX_RECORD_BYTES)
+    after = mutation.collect_placement(command, pool, request["object"], descriptor["pool"], namespace=namespace)
+
+    def dumps(name, limit):
+        if not isinstance(name, str) or not SHARD_DUMP.fullmatch(name):
+            raise ValueError("invalid shard dump name")
+        return read_bounded(out / name, limit)
+
+    receipt = shard_history.snapshot(before, after, capture, dumps, targets)
+    # One bracket admits one judgement.
+    stored.unlink()
+    return {"shard_history": receipt}
+
+
 def mode_snapshot(rados, cluster, request, out):
     pool = pool_name(request["slot"])
     snap = request["name"]
@@ -873,7 +947,7 @@ def mode_cleanup(rados, cluster, request, out):
     return {"removed": removed, "pools_removed": gone, "ec_profiles_remaining": remaining}
 
 
-HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory,
+HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "shardhistory": mode_shardhistory,
             "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "mgrstate": mode_mgrstate, "service": mode_service, "servicewatch": mode_servicewatch, "servicecompare": mode_servicecompare, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 

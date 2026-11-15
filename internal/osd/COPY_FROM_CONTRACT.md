@@ -99,6 +99,10 @@ version-pinned COPY_FROM2, the destination primary's native PG log holds the
 copy's own request identity on the destination entry and the source write's
 identity with its user version among that entry's extra request IDs. It is a
 positive control past the destination commit, not a crash barrier.
+A [second control](../../integration/fixture/OSD_EC_COPY_FROM_SHARD_HISTORY_VALIDATION.md)
+copies from a replicated pool into a fresh head of an optimized isa k=2,m=2
+pool and finds the same binding on the destination primary and in the own
+PG log of each of the four acting shards.
 Destination loss after source-read completion/staging remains unverified. A committed copy
 survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.

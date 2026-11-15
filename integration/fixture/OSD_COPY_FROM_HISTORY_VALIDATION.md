@@ -162,7 +162,7 @@ times at the destination". The mutation was then discarded.
   completion and before destination commit still needs an independent,
   deterministic barrier; post-reply history and chunk counts cannot supply
   one. That cell stays open in #7.
-- Only presence on each primary at one bracketed epoch is observed. The
+- Only presence on each primary at one bracketed epoch is observed here. The
   required empty positions (the copy's key in the source PG, the near
   misses) describe those two complete snapshots only. They do not establish
   absence on replicas, at other epochs or in the PG's history in general.
@@ -175,4 +175,7 @@ times at the destination". The mutation was then discarded.
 - One profile ran: secure, aes256k client and service keys, IPv6, container
   runtime, legacy-v6, one BlueStore OSD. COPY_FROM (the older opcode),
   multi-chunk copies, snapshots, erasure-coded pools and replicated
-  topologies with more than one OSD are not part of this control.
+  topologies with more than one OSD are not part of this control. A
+  [separate control](OSD_EC_COPY_FROM_SHARD_HISTORY_VALIDATION.md) repeats
+  the destination binding on an optimized erasure-coded destination and
+  reads every acting shard's own log.

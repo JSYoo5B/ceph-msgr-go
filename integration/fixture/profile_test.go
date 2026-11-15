@@ -423,6 +423,7 @@ func TestProfileEnvironmentContracts(t *testing.T) {
 				copyFromLateErrorMarker:                  "",
 				copyFromMultiChunkMarker:                 "",
 				monForcedKillMarker:                      "",
+				shardHistoryMarker:                       "",
 				rbdMirrorMarker:                          "",
 				"CEPH_MSGR_KEY_FILE":                     filepath.Join(controlDir, "key"), "CEPH_MSGR_CONTROL_DIR": controlDir,
 				"CEPH_MSGR_TEST_PEERS": p.peers, "CEPH_MSGR_IDENTITY": "client.test", "CEPH_MSGR_FSID": p.fsid,
