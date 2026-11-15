@@ -183,6 +183,8 @@ class JudgementTest(unittest.TestCase):
         cases = {
             "placement moved": (ORIGIN, interval.observation(ORIGIN, 0, query(), "", None, dict(ORIGIN, epoch=26)), "changed while the starting point was read"),
             "no second placement": (ORIGIN, interval.observation(ORIGIN, 0, query(), "", None, "no placement: x"), "changed while the starting point was read"),
+            "no first placement": (ORIGIN, interval.observation("no placement: x", 0, query(), "", None, copy.deepcopy(ORIGIN)), "changed while the starting point was read"),
+            "first placement moved": (ORIGIN, interval.observation(dict(ORIGIN, epoch=26), 0, query(), "", None, copy.deepcopy(ORIGIN)), "changed while the starting point was read"),
             "a pg_temp": (dict(ORIGIN, pg_temp=True), None, "not an erasure-coded PG without a pg_temp"),
             "up differs": (dict(ORIGIN, up=[3, 2, 1]), None, "not an erasure-coded PG without a pg_temp"),
             "replicated": (dict(ORIGIN, pool_type=1, pg_shard=-1), None, "not an erasure-coded PG without a pg_temp"),
@@ -273,6 +275,17 @@ class ModeTest(unittest.TestCase):
                 receipt = self.run_mode(action="repeer")
                 self.assertEqual((receipt["settled"], receipt["command_sent"], self.rados.sent, receipt["observations"]), (False, False, [], 0))
                 self.assertTrue(receipt["failures"])
+        # A starting point whose first bracket could not be read gets no
+        # command, even when the bracket after the query matches.
+        for name, placements in (("no first bracket", [ORIGIN, ValueError("placement unavailable"), ORIGIN, SETTLED]),
+                                 ("no second bracket", [ORIGIN, ORIGIN, ValueError("placement unavailable"), SETTLED]),
+                                 ("first bracket moved", [ORIGIN, dict(ORIGIN, epoch=26), ORIGIN, SETTLED])):
+            with self.subTest(name=name):
+                self.setUp()
+                self.placements, self.replies = placements, [query(), query(epoch=28, interval_since=27, started=28)]
+                receipt = self.run_mode(action="repeer")
+                self.assertEqual((receipt["settled"], receipt["command_sent"], self.rados.sent, receipt["observations"]), (False, False, [], 0))
+                self.assertTrue(any("changed while the starting point was read" in failure for failure in receipt["failures"]), receipt["failures"])
         self.setUp()
         self.placements = [ValueError("native placement epochs did not converge within read budget")]
         with self.assertRaisesRegex(RuntimeError, "no placement before the command"):

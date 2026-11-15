@@ -161,8 +161,9 @@ def unsettled(origin, origin_query, seen):
 
 def origin_failures(origin, seen):
     """Why the PG is not a clean, unmapped starting point for the command."""
-    if not isinstance(seen.get("after"), dict) or seen["after"] != origin:
-        return ["placement or epoch changed while the starting point was read"]
+    for position in ("before", "after"):
+        if not isinstance(seen.get(position), dict) or seen[position] != origin:
+            return ["placement or epoch changed while the starting point was read, or a placement record is missing"]
     reasons = []
     if origin.get("pg_temp") is not False or origin.get("up") != origin.get("acting") or origin.get("pool_type") != 3:
         reasons.append("the PG is not an erasure-coded PG without a pg_temp and with equal up and acting sets")
