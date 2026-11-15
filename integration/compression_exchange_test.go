@@ -114,13 +114,22 @@ type compressionExchange struct {
 	doneAfter   msgr.Tag // the peer's frame before it
 
 	// The frames of each direction after its negotiation frame, and how
-	// many of them carried the compressed-frame flag.
+	// many preambles of the direction carried the compressed-frame flag.
 	laterOut, laterIn, compressedOut, compressedIn int
+
+	// The message types of each direction, in order, and whether each
+	// followed the direction's negotiation frame.
+	messagesOut, messagesIn []compressionMessage
 
 	// outEnd and inEnd say why reading a direction stopped: io.EOF at a
 	// frame boundary, io.ErrUnexpectedEOF inside a frame that had not been
 	// received in full, or a real framing error.
 	outEnd, inEnd error
+}
+
+type compressionMessage struct {
+	kind       uint16
+	negotiated bool
 }
 
 // The limit of one recorded frame segment. A map can be large; the copies
@@ -133,10 +142,10 @@ const compressionTapFrameLimit = 1 << 28
 // frame.
 func readCompressionExchange(out, in []byte) compressionExchange {
 	var x compressionExchange
-	x.localSupported, x.localBanner, x.request, x.requestAfter, x.requestEnabled, x.requestMethods, x.laterOut, x.compressedOut, x.outEnd =
+	x.localSupported, x.localBanner, x.request, x.requestAfter, x.requestEnabled, x.requestMethods, x.laterOut, x.compressedOut, x.messagesOut, x.outEnd =
 		readCompressionDirection(out, msgr.CompressionRequest)
 	var method []uint32
-	x.peerSupported, x.peerBanner, x.done, x.doneAfter, x.doneEnabled, method, x.laterIn, x.compressedIn, x.inEnd =
+	x.peerSupported, x.peerBanner, x.done, x.doneAfter, x.doneEnabled, method, x.laterIn, x.compressedIn, x.messagesIn, x.inEnd =
 		readCompressionDirection(in, msgr.CompressionDone)
 	if len(method) == 1 {
 		x.doneMethod = method[0]
@@ -144,23 +153,24 @@ func readCompressionExchange(out, in []byte) compressionExchange {
 	return x
 }
 
-func readCompressionDirection(stream []byte, subject msgr.Tag) (supported uint64, banner, found bool, after msgr.Tag, enabled bool, methods []uint32, later, compressed int, end error) {
+func readCompressionDirection(stream []byte, subject msgr.Tag) (supported uint64, banner, found bool, after msgr.Tag, enabled bool, methods []uint32, later, compressed int, messages []compressionMessage, end error) {
 	// The banner: the prefix, a 16-bit length of 16, then the supported
 	// and required masks.
 	const head = len(msgr.BannerPrefix) + 2
 	if len(stream) < head+16 {
-		return 0, false, false, 0, false, nil, 0, 0, io.ErrUnexpectedEOF
+		return 0, false, false, 0, false, nil, 0, 0, nil, io.ErrUnexpectedEOF
 	}
 	if !bytes.HasPrefix(stream, []byte(msgr.BannerPrefix)) || binary.LittleEndian.Uint16(stream[len(msgr.BannerPrefix):]) != 16 {
-		return 0, false, false, 0, false, nil, 0, 0, errors.New("not a msgr2 banner")
+		return 0, false, false, 0, false, nil, 0, 0, nil, errors.New("not a msgr2 banner")
 	}
 	supported, banner = binary.LittleEndian.Uint64(stream[head:]), true
 	rest := stream[head+16:]
 	var last msgr.Tag
 	for len(rest) > 0 {
 		// The compressed-frame flag is the flags byte of a preamble whose
-		// own CRC holds. A plain reader refuses such a frame, so look
-		// before reading.
+		// own CRC holds. A plain reader refuses such a frame, and a
+		// snapshot may end inside its body, so the complete preamble alone
+		// counts.
 		flagged := len(rest) >= 32 && rest[26]&msgr.FrameEarlyDataCompressed != 0 &&
 			msgr.CRC(0, rest[:28]) == binary.LittleEndian.Uint32(rest[28:])
 		input := bytes.NewReader(rest)
@@ -170,22 +180,30 @@ func readCompressionDirection(stream []byte, subject msgr.Tag) (supported uint64
 				// A frame cut inside its preamble or body.
 				err = io.ErrUnexpectedEOF
 			}
-			if flagged && !errors.Is(err, io.ErrUnexpectedEOF) {
-				compressed++
-			}
-			return supported, banner, found, after, enabled, methods, later, compressed, err
-		}
-		rest = rest[len(rest)-input.Len():]
-		switch {
-		case found:
-			later++
 			if flagged {
 				compressed++
 			}
+			return supported, banner, found, after, enabled, methods, later, compressed, messages, err
+		}
+		rest = rest[len(rest)-input.Len():]
+		if flagged {
+			compressed++
+		}
+		if f.Tag == msgr.Message {
+			// The type field of the message header: after the sequence
+			// and the transaction ID.
+			if len(f.Segments) == 0 || len(f.Segments[0]) < 18 {
+				return supported, banner, found, after, enabled, methods, later, compressed, messages, errors.New("a message frame without a header")
+			}
+			messages = append(messages, compressionMessage{binary.LittleEndian.Uint16(f.Segments[0][16:]), found})
+		}
+		switch {
+		case found:
+			later++
 		case f.Tag == subject:
 			found, after = true, last
 			if len(f.Segments) != 1 {
-				return supported, banner, found, after, false, nil, later, compressed, fmt.Errorf("tag %d with %d segments", subject, len(f.Segments))
+				return supported, banner, found, after, false, nil, later, compressed, messages, fmt.Errorf("tag %d with %d segments", subject, len(f.Segments))
 			}
 			d := wire.NewDecoder(f.Segments[0])
 			enabled = d.Bool()
@@ -197,12 +215,12 @@ func readCompressionDirection(stream []byte, subject msgr.Tag) (supported uint64
 				methods = []uint32{d.U32()}
 			}
 			if err := d.Done(); err != nil {
-				return supported, banner, found, after, enabled, methods, later, compressed, fmt.Errorf("tag %d payload: %w", subject, err)
+				return supported, banner, found, after, enabled, methods, later, compressed, messages, fmt.Errorf("tag %d payload: %w", subject, err)
 			}
 		}
 		last = f.Tag
 	}
-	return supported, banner, found, after, enabled, methods, later, compressed, io.EOF
+	return supported, banner, found, after, enabled, methods, later, compressed, messages, io.EOF
 }
 
 // declinedOffer reports why the exchange is not the one this client expects
@@ -253,6 +271,54 @@ func (x compressionExchange) declinedOffer() []string {
 	}
 	slices.Sort(missing)
 	return missing
+}
+
+// servedCommand finds, among the recorded connections of one daemon role, the
+// one connection whose own bytes carry the command message and its reply,
+// and reports why that connection does not show a refused offer followed by
+// that command. Open or closed makes no difference: the command and the
+// reply are read from the recording itself. A command or reply on more than
+// one connection, or a reply without its command on the same connection,
+// leaves the serving connection ambiguous and is reported, so an idle
+// replacement with a complete negotiation cannot stand in for it.
+func servedCommand(recorded []compressionTapped, selects func(string) bool, command, reply uint16) (index int, exchange compressionExchange, problems []string) {
+	count := func(messages []compressionMessage, kind uint16) (all, negotiated int) {
+		for _, m := range messages {
+			if m.kind == kind {
+				all++
+				if m.negotiated {
+					negotiated++
+				}
+			}
+		}
+		return all, negotiated
+	}
+	index = -1
+	carried := 0
+	for i, c := range recorded {
+		if !selects(c.endpoint) {
+			continue
+		}
+		x := readCompressionExchange(c.out, c.in)
+		commands, _ := count(x.messagesOut, command)
+		replies, _ := count(x.messagesIn, reply)
+		if commands == 0 && replies == 0 {
+			continue
+		}
+		carried++
+		index, exchange = i, x
+	}
+	if carried != 1 {
+		return -1, compressionExchange{}, []string{fmt.Sprintf("%d connections carried message type %d or %d; exactly one must have served the command", carried, command, reply)}
+	}
+	problems = exchange.declinedOffer()
+	if commands, negotiated := count(exchange.messagesOut, command); commands == 0 || negotiated != commands {
+		problems = append(problems, fmt.Sprintf("%d commands of type %d were sent, %d of them after the CompressionRequest", commands, command, negotiated))
+	}
+	if replies, negotiated := count(exchange.messagesIn, reply); replies == 0 || negotiated != replies {
+		problems = append(problems, fmt.Sprintf("%d replies of type %d were received, %d of them after the CompressionDone", replies, reply, negotiated))
+	}
+	return index, exchange, problems
 }
 
 func (x compressionExchange) String() string {
@@ -423,12 +489,67 @@ func TestCompressionExchangeReadsOneConnection(t *testing.T) {
 			"only the received direction":       {nil, in, 2},
 			"the received stream stops early":   {out, in[:60], 1},
 			"a later sent frame was compressed": {compressed(out), in, 2},
-			"the received stream is not frames": {out, append(slices.Clone(in[:26]), bytes.Repeat([]byte{0xff}, 64)...), 2},
-			"the sent stream is not a banner":   {bytes.Repeat([]byte{1}, 64), in, 3},
+			// The snapshot ends right after the flagged preamble, inside
+			// the frame: the flag is direct evidence all the same.
+			"a later sent frame was compressed and cut after its preamble": {compressed(out)[:len(out)-len(frames(t, one(msgr.Keepalive, 6)))+32], in, 1},
+			"the received stream is not frames":                            {out, append(slices.Clone(in[:26]), bytes.Repeat([]byte{0xff}, 64)...), 2},
+			"the sent stream is not a banner":                              {bytes.Repeat([]byte{1}, 64), in, 3},
 		} {
 			x := readCompressionExchange(tc.out, tc.in)
 			if problems := x.declinedOffer(); len(problems) != tc.want {
 				t.Errorf("%s: %d problems %q (%s)", name, len(problems), problems, x)
+			}
+		}
+	})
+	t.Run("the command binds the check to the connection that carried it", func(t *testing.T) {
+		const command, reply = msgr.MonCommandMessage, msgr.MonCommandReplyMessage
+		typed := func(kind uint16) msgr.Frame { return msgr.MessageData{Sequence: 1, Transaction: 1, Type: kind}.Frame() }
+		// A connection up to and including session identification, with
+		// optional negotiation frames and messages after it.
+		stream := func(t *testing.T, client bool, negotiation []msgr.Frame, messages ...msgr.Frame) []byte {
+			list := []msgr.Frame{one(msgr.Hello, 1), one(msgr.AuthRequest, 2), one(msgr.AuthSignature, 4)}
+			ident := one(msgr.ClientIdent, 5)
+			if !client {
+				list, ident = []msgr.Frame{one(msgr.Hello, 1), one(msgr.AuthDone, 3), one(msgr.AuthSignature, 4)}, one(msgr.ServerIdent, 5)
+			}
+			list = append(append(append(list, negotiation...), ident), messages...)
+			return append(banner(both), frames(t, list...)...)
+		}
+		offered, refused := []msgr.Frame{offer(true, zstd, snappy)}, []msgr.Frame{answer(false, 0)}
+		idle := compressionTapped{endpoint: "192.0.2.1:3300", out: stream(t, true, offered), in: stream(t, false, refused)}
+		serving := compressionTapped{endpoint: "192.0.2.1:3300", out: stream(t, true, offered, typed(command)), in: stream(t, false, refused, typed(reply))}
+		// The command succeeded on a connection that never negotiated and
+		// has since closed.
+		silent := compressionTapped{endpoint: "192.0.2.1:3300", closed: true, out: stream(t, true, nil, typed(command)), in: stream(t, false, nil, typed(reply))}
+		elsewhere := serving
+		elsewhere.endpoint = "192.0.2.9:6800"
+		all := func(string) bool { return true }
+		mon := func(endpoint string) bool { return endpoint == "192.0.2.1:3300" }
+
+		if index, _, problems := servedCommand([]compressionTapped{idle, serving, elsewhere}, mon, command, reply); index != 1 || len(problems) != 0 {
+			t.Fatal("the serving connection", index, problems)
+		}
+		closed := serving
+		closed.closed = true
+		if index, _, problems := servedCommand([]compressionTapped{closed, idle}, mon, command, reply); index != 0 || len(problems) != 0 {
+			t.Fatal("a closed serving connection still shows its own exchange", index, problems)
+		}
+		for name, tc := range map[string]struct {
+			recorded []compressionTapped
+			selects  func(string) bool
+			index    int
+		}{
+			"the command ran on a closed connection without negotiation, beside an idle negotiated replacement": {[]compressionTapped{silent, idle}, mon, 0},
+			"only idle connections":                {[]compressionTapped{idle, idle}, mon, -1},
+			"the command on two connections":       {[]compressionTapped{serving, serving}, mon, -1},
+			"the command on another role":          {[]compressionTapped{idle, elsewhere}, mon, -1},
+			"the command and its reply apart":      {[]compressionTapped{{endpoint: idle.endpoint, out: serving.out, in: idle.in}, {endpoint: idle.endpoint, out: idle.out, in: serving.in}}, all, -1},
+			"the reply never arrived":              {[]compressionTapped{{endpoint: idle.endpoint, out: serving.out, in: idle.in}}, all, 0},
+			"the command preceded the negotiation": {[]compressionTapped{{endpoint: idle.endpoint, out: append(banner(both), frames(t, one(msgr.Hello, 1), one(msgr.AuthSignature, 4), typed(command), offer(true, zstd, snappy))...), in: serving.in}}, all, 0},
+		} {
+			index, x, problems := servedCommand(tc.recorded, tc.selects, command, reply)
+			if index != tc.index || len(problems) == 0 {
+				t.Errorf("%s: connection %d, problems %q (%s)", name, index, problems, x)
 			}
 		}
 	})

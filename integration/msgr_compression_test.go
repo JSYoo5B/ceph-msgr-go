@@ -7,11 +7,13 @@ import (
 	"time"
 
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
+	"github.com/JSYoo5B/ceph-msgr-go/internal/msgr"
 )
 
 // The CRC handshake offers snappy/zstd when the peer banner supports
 // compression. This test reads the negotiation back from the bytes of the
-// very connections that then serve a MON and an OSD command: the daemon's
+// very connections that carry a MON and an OSD command and their replies
+// (found by message type in the recording): the daemon's
 // banner carries the compression bit, the client offers zstd then snappy
 // right after its AUTH_SIGNATURE, the daemon refuses with CompressionDone
 // (disabled, method 0), and no later frame of that connection is compressed.
@@ -70,47 +72,37 @@ func TestCephMsgrCompressionOfferIntegration(t *testing.T) {
 	}
 	t.Log("OSD version command succeeded: code=0, nonempty data, negotiated compression=none")
 
-	// Both commands have returned, so each travelled on a connection that
-	// is still open. Every open connection to a MON, and every open
-	// connection to the owned OSD, must show the whole refused offer and
-	// frames in both directions after it. A connection the client already
-	// closed (a MON it tried but did not keep) is logged and decides
-	// nothing.
-	roles := map[string]func(string) bool{
-		"MON": func(endpoint string) bool {
+	// Each command is found in the recording itself: exactly one connection
+	// to a MON carries the MON command and its reply, exactly one connection
+	// to the owned OSD carries the tell command and its reply, and that very
+	// connection must show the whole refused offer before them. Whether the
+	// connection is still open does not matter, and a connection that only
+	// negotiated (a MON the client tried but did not keep, or a replacement)
+	// is logged and decides nothing.
+	recorded := tap.connections()
+	for index, c := range recorded {
+		t.Logf("connection %d (closed=%v): %s", index+1, c.closed, readCompressionExchange(c.out, c.in))
+	}
+	for _, role := range []struct {
+		name           string
+		selects        func(string) bool
+		command, reply uint16
+	}{
+		{"MON", func(endpoint string) bool {
 			for _, monitor := range options.Monitors {
 				if daemonEndpoint(monitor)(endpoint) {
 					return true
 				}
 			}
 			return false
-		},
-		"OSD": daemonEndpoint(base.Address),
-	}
-	served := map[string]int{}
-	for index, recorded := range tap.connections() {
-		role := "other"
-		for name, selects := range roles {
-			if selects(recorded.endpoint) {
-				role = name
-			}
-		}
-		x := readCompressionExchange(recorded.out, recorded.in)
-		t.Logf("connection %d (%s, closed=%v): %s", index+1, role, recorded.closed, x)
-		if role == "other" || recorded.closed {
+		}, msgr.MonCommandMessage, msgr.MonCommandReplyMessage},
+		{"OSD", daemonEndpoint(base.Address), msgr.TellCommandMessage, msgr.TellCommandReplyMessage},
+	} {
+		index, x, problems := servedCommand(recorded, role.selects, role.command, role.reply)
+		if len(problems) != 0 {
+			t.Errorf("the %s command (connection %d) does not follow a refused compression offer on its own connection: %q", role.name, index+1, problems)
 			continue
 		}
-		if problems := x.declinedOffer(); len(problems) != 0 {
-			t.Errorf("open %s connection %d does not show a refused compression offer: %q", role, index+1, problems)
-		}
-		if x.laterOut == 0 || x.laterIn == 0 {
-			t.Errorf("open %s connection %d carried no frame in both directions after the negotiation: sent=%d received=%d", role, index+1, x.laterOut, x.laterIn)
-		}
-		served[role]++
-	}
-	for role := range roles {
-		if served[role] == 0 {
-			t.Errorf("no open %s connection of the subject client was observed", role)
-		}
+		t.Logf("the %s command and its reply travelled on connection %d after its refused offer: %d sent and %d received frames after the negotiation", role.name, index+1, x.laterOut, x.laterIn)
 	}
 }
