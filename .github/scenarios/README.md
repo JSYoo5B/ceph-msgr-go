@@ -60,7 +60,7 @@ vulnerability scans still execute. Branch protection settings are not modified.
 
 `catalog.json` preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
-Five further `osd` rows use the four-OSD erasure-capacity topology
+Six further `osd` rows use the four-OSD erasure-capacity topology
 (`osd_replicas` value `4`): one selects only `TestCephOSDErasureK2M2Integration`,
 another only `TestCephOSDErasureOptimizedK2M2Integration` and
 `TestCephOSDErasureOptimizedK2M2FailoverIntegration`, and the third only
@@ -74,6 +74,13 @@ The fifth selects only
 bracketed snapshot of the primary's native PG log that must contain two known
 Go requests by their full request identity. It calibrates presence detection
 only ([validation](../../integration/fixture/OSD_PG_HISTORY_CALIBRATION_VALIDATION.md)).
+The sixth selects only
+`TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration`: one version-pinned
+COPY_FROM2 from an owned replicated pool into the optimized pool, whose two
+linked request identities are required on the live primary and then looked up
+in a private store copy of every acting shard. The fixture admits that copy
+step for this selector alone
+([validation](../../integration/fixture/OSD_EC_COPY_FROM_SHARD_HISTORY_VALIDATION.md)).
 That value travels in the
 already-forwarded `osd_replicas` input, so it needs no new workflow parameter;
 the fixture refuses it with any other selector.
@@ -298,7 +305,7 @@ See the
 sent cancellation rows above now also run `MonCommand` and `MgrCommand`
 subtests, and the public MDS command rows a last subtest that stops the
 fixture's MDS.
-The catalog has 118 native rows in total.
+The catalog has 119 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
