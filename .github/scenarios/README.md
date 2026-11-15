@@ -60,7 +60,7 @@ vulnerability scans still execute. Branch protection settings are not modified.
 
 `catalog.json` preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
-Nine further `osd` rows use the four-OSD erasure-capacity topology
+Eleven further `osd` rows use the four-OSD erasure-capacity topology
 (`osd_replicas` value `4`): one selects only `TestCephOSDErasureK2M2Integration`,
 another only `TestCephOSDErasureOptimizedK2M2Integration` and
 `TestCephOSDErasureOptimizedK2M2FailoverIntegration`, and the third only
@@ -100,9 +100,21 @@ ends the PG's interval once with an owned, self-restoring `pg repeer` and
 requires the PG clean on its original placement: the left-out shard's log
 head must then be at the overwrite without its entry, and the first write of
 the new interval must be held by every shard.
-The fixture admits the store-copy step for these four selectors alone.
+The tenth and the eleventh continue the same sequence with an outage of the
+left-out shard's OSD, through the fixture's forced kill and start of an owned
+OSD, and capture every acting shard once the PG is clean on its original
+placement again
+([validation](../../integration/fixture/OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md)).
+`TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration`
+writes nothing while the OSD is away: the returned shard's log head must be
+at the overwrite without its entry.
+`TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration`
+sends one overwrite inside the absent shard's chunk while the PG is active
+without it: after the recovery the returned shard must hold all three
+entries, the overwrite's included, with an empty missing set.
+The fixture admits the store-copy step for these six selectors alone.
 It admits the owned-pool oracle's `pginterval` mode, which observes one
-owned PG and can end its interval, for the last two alone.
+owned PG and can end its interval, for the last four alone.
 That value travels in the
 already-forwarded `osd_replicas` input, so it needs no new workflow parameter;
 the fixture refuses it with any other selector.
@@ -327,7 +339,7 @@ See the
 sent cancellation rows above now also run `MonCommand` and `MgrCommand`
 subtests, and the public MDS command rows a last subtest that stops the
 fixture's MDS.
-The catalog has 122 native rows in total.
+The catalog has 124 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
