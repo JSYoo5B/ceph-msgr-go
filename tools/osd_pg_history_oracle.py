@@ -157,7 +157,9 @@ def parse_log_body(body):
                 raise HistoryError("log entry %d extra_reqid %d has an invalid user_version" % (index, extra_index))
             extras.append({"reqid": parse_reqid(extra["reqid"]), "user_version": int(extra["user_version"])})
         entries.append({"version": version, "reqid": parse_reqid(entry["reqid"]), "op": entry["op"],
-                        "object": entry["object"], "return_code": entry["return_code"], "extra_reqids": extras})
+                        "object": entry["object"], "return_code": entry["return_code"], "extra_reqids": extras,
+                        # Kept as dumped; only the shard-local reader interprets it.
+                        "written_shards": entry.get("written_shards")})
     if previous != head:
         raise HistoryError("the last log entry is not head; the log array is incomplete")
     dups = []

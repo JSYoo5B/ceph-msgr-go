@@ -47,9 +47,11 @@ def copied(extra=True):
     ])
 
 
-def info_dump(spg, last_update="28'3", last_complete="28'3", log_tail="0'0"):
-    return json.dumps({"pgid": spg, "last_update": last_update, "last_complete": last_complete, "log_tail": log_tail,
-                       "last_user_version": 1, "last_backfill": "MAX", "purged_snaps": [],
+def info_dump(spg, last_update="28'3", last_complete="28'3", log_tail="0'0", partial=(), partial_epoch="0"):
+    return json.dumps({"pgid": spg, "shard": spg.rpartition("s")[2] if "s" in spg else "255", "last_update": last_update, "last_complete": last_complete, "log_tail": log_tail,
+                       "last_user_version": 1, "last_backfill": "MAX",
+                       "partial_writes_last_complete": [{"id": shard, "from": start, "to": end} for shard, start, end in partial],
+                       "partial_writes_last_complete_epoch": partial_epoch, "purged_snaps": [],
                        "history": {"epoch_created": 26, "same_interval_since": 27}, "stats": {"version": last_update},
                        "empty": 0, "dne": 0, "incomplete": 0, "last_epoch_started": 27,
                        "hit_set_history": {"current_last_update": "0'0", "history": []}}, separators=(",", ":")).encode()
@@ -143,6 +145,100 @@ class SnapshotTest(unittest.TestCase):
         self.assertTrue(shard["complete"], shard["failures"])
         self.assertEqual([t["locations"] for t in shard["targets"][:2]],
                          [[{"tier": "dups", "index": 0, "version": "28'3"}], [{"tier": "dups", "index": 1, "version": "28'3"}]])
+
+    def test_a_partial_overwrite_reports_written_shards_and_partial_write_records(self):
+        # One full write named every shard; one overwrite named shards 0, 2
+        # and 3. Shard 1 was left out: its own log ends at the full write.
+        full = ENTRY % (OBJECT, "28'3", SOURCE, "")
+        patch_entry = (ENTRY % (OBJECT, "28'4", COPY, "")).replace('"written_shards":"{}"', '"written_shards":"{0,2,3}"')
+        written = log_dump([full, patch_entry], head="28'4")
+        capture = Capture(logs={0: written, 1: log_dump([full]), 2: written, 3: written})
+        for index in (0, 2, 3):
+            capture.set_file(index, "info", info_dump("4.2s%d" % index, last_update="28'4", last_complete="28'4",
+                                                      partial=[(1, "28'3", "28'4")], partial_epoch="28"))
+        receipt = capture.snapshot()
+        self.assertTrue(receipt["complete"], receipt["failures"])
+        self.assertFalse(receipt["absence_established"])
+        self.assertEqual([s["head"] for s in receipt["shards"]], ["28'4", "28'3", "28'4", "28'4"])
+        entries = [{"version": "28'3", "written_shards": []}, {"version": "28'4", "written_shards": [0, 2, 3]}]
+        self.assertEqual([s["entries"] for s in receipt["shards"]], [entries, entries[:1], entries, entries])
+        record = [{"shard": 1, "from": "28'3", "to": "28'4"}]
+        self.assertEqual([s["partial_writes_last_complete"] for s in receipt["shards"]], [record, [], record, record])
+        self.assertEqual([s["partial_writes_last_complete_epoch"] for s in receipt["shards"]], [28, 0, 28, 28])
+        self.assertEqual([s["shard"] for s in receipt["shards"]], [0, 1, 2, 3])
+        self.assertEqual([[len(t["locations"]) for t in s["targets"][:2]] for s in receipt["shards"]], [[1, 1], [0, 1], [1, 1], [1, 1]])
+        for index, shard in enumerate(receipt["shards"]):
+            info = base64.b64decode(shard["info_raw"])
+            self.assertEqual((info, shard["info_bytes"], shard["info_sha256"]),
+                             (capture.files["osd-shard-history-s%d-info.json" % index], len(info), hashlib.sha256(info).hexdigest()))
+
+    def test_unparsable_written_shards_or_partial_write_records_fail_closed(self):
+        entry = ENTRY % (OBJECT, "28'3", COPY, "")
+        for name, text in {"unterminated": '"{0,2,3"', "descending": '"{2,0}"', "repeated": '"{0,0}"', "beyond the set": '"{128}"',
+                           "bare list": '"0,2,3"', "spaced": '"{0, 2}"', "leading zero": '"{00}"', "trailing comma": '"{0,}"',
+                           "an array": "[0,2,3]", "a number": "0", "signed": '"{-1}"', "four digits": '"{1000}"',
+                           "trailing text": '"{0,2}x"', "leading text": '"x{0,2}"', "an object": "{}", "null": "null"}.items():
+            with self.subTest(written_shards=name):
+                capture = Capture()
+                capture.set_file(1, "log", log_dump([entry.replace('"written_shards":"{}"', '"written_shards":' + text)]))
+                self.refused(capture, "shard 1 (osd.3): log: log entry 0", shard=1)
+        capture = Capture()
+        capture.set_file(1, "log", log_dump([entry.replace('"written_shards":"{}",', "")]))
+        self.refused(capture, "shard 1 (osd.3): log: log entry 0 has an unparsable written_shards None", shard=1)
+        capture = Capture()
+        capture.set_file(1, "log", log_dump([entry.replace('"written_shards":"{}"', '"written_shards":"{0,127}"')]))
+        self.assertEqual(capture.snapshot()["shards"][1]["entries"], [{"version": "28'3", "written_shards": [0, 127]}])
+
+        def edited(change):
+            document = json.loads(info_dump("4.2s1", partial=[(1, "28'2", "28'3"), (3, "28'3", "28'3")], partial_epoch="28"))
+            change(document)
+            return json.dumps(document, separators=(",", ":")).encode()
+
+        def record(change):
+            return edited(lambda d: change(d["partial_writes_last_complete"][0]))
+
+        capture = Capture()
+        capture.set_file(1, "info", edited(lambda d: None))
+        shard = capture.snapshot()["shards"][1]
+        self.assertTrue(shard["complete"], shard["failures"])
+        self.assertEqual((shard["partial_writes_last_complete"], shard["partial_writes_last_complete_epoch"]),
+                         ([{"shard": 1, "from": "28'2", "to": "28'3"}, {"shard": 3, "from": "28'3", "to": "28'3"}], 28))
+        cases = {
+            "no shard": edited(lambda d: d.pop("shard")),
+            "numeric shard": edited(lambda d: d.update(shard=1)),
+            "shard beyond the set": edited(lambda d: d.update(shard="128")),
+            "shard with a sign": edited(lambda d: d.update(shard="+1")),
+            "no shard of a replicated PG": edited(lambda d: d.update(shard="255")),
+            "no array": edited(lambda d: d.pop("partial_writes_last_complete")),
+            "no epoch": edited(lambda d: d.pop("partial_writes_last_complete_epoch")),
+            "array is an object": edited(lambda d: d.update(partial_writes_last_complete={})),
+            "numeric epoch": edited(lambda d: d.update(partial_writes_last_complete_epoch=28)),
+            "signed epoch": edited(lambda d: d.update(partial_writes_last_complete_epoch="-1")),
+            "oversized epoch": edited(lambda d: d.update(partial_writes_last_complete_epoch="1" * 11)),
+            "record shard beyond the set": edited(lambda d: d["partial_writes_last_complete"][1].update(id=128)),
+            "record is a list": edited(lambda d: d["partial_writes_last_complete"].insert(0, [1, "28'2", "28'3"])),
+            "record without to": record(lambda r: r.pop("to")),
+            "record with another key": record(lambda r: r.update(epoch=28)),
+            "shard as text": record(lambda r: r.update(id="1")),
+            "shard as a boolean": record(lambda r: r.update(id=True)),
+            "negative shard": record(lambda r: r.update(id=-1)),
+            "shard repeated": edited(lambda d: d["partial_writes_last_complete"][1].update(id=1)),
+            "shards out of order": record(lambda r: r.update(id=4)),
+            "unparsable from": record(lambda r: r.update({"from": "28.2"})),
+            "unparsable to": record(lambda r: r.update(to=None)),
+            "range ends before it starts": record(lambda r: r.update({"from": "28'4"})),
+        }
+        for name, data in cases.items():
+            with self.subTest(partial_write=name):
+                capture = Capture()
+                capture.set_file(1, "info", data)
+                receipt = self.refused(capture, "shard 1 (osd.3): info: ", shard=1)
+                self.assertNotIn("partial_writes_last_complete", receipt["shards"][1])
+        # The store returned another shard's collection under the expected name.
+        capture = Capture()
+        capture.set_file(1, "info", edited(lambda d: d.update(shard="0")))
+        receipt = self.refused(capture, "shard 1 (osd.3): the copied collection is shard 0, not acting index 1", shard=1)
+        self.assertEqual(receipt["shards"][1]["shard"], 0)
 
     def refused(self, capture, text, shard=None):
         receipt = capture.snapshot()

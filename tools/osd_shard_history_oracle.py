@@ -16,17 +16,28 @@ no Ceph code; it reads the JSON shape that source emits:
   ``pg_missing_t`` (``pg_missing_set::dump``, src/osd/osd_types.h, emits
   ``missing`` and ``may_include_deletes``).
 - The ``info`` operation prints that collection's ``pg_info_t``
-  (src/osd/osd_types.cc ``pg_info_t::dump``): ``pgid`` is the ``spg_t``, with
-  ``last_update``, ``last_complete`` and ``log_tail``.
+  (src/osd/osd_types.cc ``pg_info_t::dump``): ``pgid`` is the ``spg_t`` and
+  ``shard`` its shard ID, with ``last_update``, ``last_complete`` and
+  ``log_tail``.
 - The ``pg_log_t`` section has the shape osd_pg_history_oracle.py parses.
+- Each log entry's ``written_shards`` (src/osd/osd_types.cc
+  ``pg_log_entry_t::dump``) is the stream form of a shard set
+  (src/common/bitset_set.h: ``{}`` or ``{0,2,3}``, ascending). The pinned
+  writer stores the empty set for an entry that names every shard
+  (src/osd/ECTransaction.cc:873-886), so an empty set never means "no shard".
+- The info's ``partial_writes_last_complete`` array holds one
+  ``{"id", "from", "to"}`` record per shard that a shard able to be primary
+  saw left out of a partial write (src/osd/PGBackend.cc:414-496), and
+  ``partial_writes_last_complete_epoch`` the map epoch of its last change.
 
 One shard is complete only when the fixture attributed its copy (acting
 index, OSD, ``whoami``, an isolated reader, a regular block file, the OSD
 resumed, the reader and its copy removed), both offline operations exited 0
 without diagnostics, both dumps are within the byte bound and parse as one
-strict JSON document of exactly that shape, the info names that ``spg_t``,
-the log runs from the info's ``log_tail`` to its ``last_update`` and the
-missing set is empty. The receipt is complete only when every index of the
+strict JSON document of exactly that shape, the info names that ``spg_t``
+and the acting index as its shard ID, every entry's ``written_shards`` and
+every partial-write record parses, the log runs from the info's ``log_tail``
+to its ``last_update`` and the missing set is empty. The receipt is complete only when every index of the
 acting vector has a complete shard and the two placement records are
 identical. Anything else fails closed.
 
@@ -39,6 +50,7 @@ PG, was evicted or trimmed, or would not be replayed.
 import base64
 import hashlib
 import json
+import re
 
 import osd_pg_history_oracle as history
 
@@ -50,6 +62,22 @@ SHARD_KEYS = {"index", "osd", "spg", "reader_isolated", "paused", "resumed", "pa
               "unsupported_layout", "info_exit_code", "info_bytes", "info_stderr", "info_file", "log_exit_code", "log_bytes",
               "log_stderr", "log_file", "reader_removed"}
 HistoryError = history.HistoryError
+# shard_id_set is a 128-bit set printed in ascending order.
+MAX_SHARD_ID = 128
+SHARD_SET = re.compile(r"\{(?:(?:0|[1-9][0-9]{0,2})(?:,(?:0|[1-9][0-9]{0,2}))*)?\}")
+
+
+def parse_written_shards(text, index):
+    """The shard IDs of one entry's ``written_shards``, ascending.
+
+    An empty list is the dump's empty set: the entry names every shard.
+    """
+    if not isinstance(text, str) or not SHARD_SET.fullmatch(text):
+        raise HistoryError("log entry %d has an unparsable written_shards %s" % (index, repr(text)[:80]))
+    shards = [int(n) for n in text[1:-1].split(",")] if text != "{}" else []
+    if any(b <= a for a, b in zip(shards, shards[1:])) or any(shard >= MAX_SHARD_ID for shard in shards):
+        raise HistoryError("log entry %d written_shards is not an ascending shard set" % index)
+    return shards
 
 
 def parse_offline_log(raw):
@@ -61,17 +89,38 @@ def parse_offline_log(raw):
     if (not isinstance(missing, dict) or set(missing) != {"missing", "may_include_deletes"}
             or not isinstance(missing["missing"], list) or type(missing["may_include_deletes"]) is not bool):
         raise HistoryError("pg_missing_t must have exactly a missing array and may_include_deletes")
-    return history.parse_log_body(document["pg_log_t"]), len(missing["missing"])
+    parsed = history.parse_log_body(document["pg_log_t"])
+    for index, entry in enumerate(parsed["log"]):
+        entry["written_shards"] = parse_written_shards(entry["written_shards"], index)
+    return parsed, len(missing["missing"])
 
 
 def parse_offline_info(raw, spg):
-    """The log bounds of one offline ``--op info`` dump for exactly ``spg``."""
+    """The shard, log bounds and partial-write records of one offline ``--op info`` dump for exactly ``spg``."""
     document = history.strict_document(raw, MAX_SHARD_BYTES)
     if not isinstance(document, dict) or not {"pgid", "last_update", "last_complete", "log_tail"} <= set(document):
         raise HistoryError("offline output is not a pg_info_t dump")
     if document["pgid"] != spg:
         raise HistoryError("offline info is for %r, not %s" % (str(document["pgid"])[:40], spg))
-    return {name: history.parse_eversion(document[name], "info " + name) for name in ("last_update", "last_complete", "log_tail")}
+    shard = document.get("shard")
+    if not isinstance(shard, str) or not re.fullmatch(r"0|[1-9][0-9]{0,2}", shard) or int(shard) >= MAX_SHARD_ID:
+        raise HistoryError("offline info has no shard ID")
+    info = {name: history.parse_eversion(document[name], "info " + name) for name in ("last_update", "last_complete", "log_tail")}
+    records, epoch = document.get("partial_writes_last_complete"), document.get("partial_writes_last_complete_epoch")
+    if not isinstance(records, list) or not isinstance(epoch, str) or not epoch.isdigit() or len(epoch) > 10:
+        raise HistoryError("offline info has no partial_writes_last_complete array and epoch")
+    info["partial_writes"], previous = [], -1
+    for record in records:
+        if (not isinstance(record, dict) or set(record) != {"id", "from", "to"} or type(record["id"]) is not int
+                or not previous < record["id"] < MAX_SHARD_ID):
+            raise HistoryError("offline info has an unexpected partial_writes_last_complete record")
+        previous = record["id"]
+        start, end = (history.parse_eversion(record[name], "partial write " + name) for name in ("from", "to"))
+        if start > end:
+            raise HistoryError("a partial_writes_last_complete range ends before it starts")
+        info["partial_writes"].append({"shard": record["id"], "from": "%d'%d" % start, "to": "%d'%d" % end})
+    info["partial_writes_epoch"], info["shard"] = int(epoch), int(shard)
+    return info
 
 
 def _shard(index, osd, pgid, record, dumps, identities):
@@ -113,6 +162,9 @@ def _shard(index, osd, pgid, record, dumps, identities):
             failures.append("offline %s dump has %d bytes; the capture recorded %r" % (op, len(raw[op]), record[op + "_bytes"]))
     if "log" in raw:
         receipt.update(bytes=len(raw["log"]), sha256=hashlib.sha256(raw["log"]).hexdigest(), raw=base64.b64encode(raw["log"]).decode())
+    if "info" in raw:
+        receipt.update(info_bytes=len(raw["info"]), info_sha256=hashlib.sha256(raw["info"]).hexdigest(),
+                       info_raw=base64.b64encode(raw["info"]).decode())
     info = parsed = None
     try:
         if "info" in raw:
@@ -127,13 +179,18 @@ def _shard(index, osd, pgid, record, dumps, identities):
     if parsed is not None:
         receipt.update(head="%d'%d" % parsed["head"], tail="%d'%d" % parsed["tail"], log_entries=len(parsed["log"]),
                        dup_entries=len(parsed["dups"]), extra_reqid_entries=sum(len(e["extra_reqids"]) for e in parsed["log"]),
-                       missing_entries=missing)
+                       missing_entries=missing,
+                       entries=[{"version": "%d'%d" % e["version"], "written_shards": e["written_shards"]} for e in parsed["log"]])
         receipt["targets"] = [{"reqid": history.reqid_text(identity), "locations": history.locate(parsed, identity)}
                               for identity in identities]
         if missing:
             failures.append("the shard's missing set has %d entries" % missing)
     if info is not None:
-        receipt.update(last_update="%d'%d" % info["last_update"], last_complete="%d'%d" % info["last_complete"])
+        receipt.update(shard=info["shard"], last_update="%d'%d" % info["last_update"], last_complete="%d'%d" % info["last_complete"],
+                       partial_writes_last_complete=info["partial_writes"],
+                       partial_writes_last_complete_epoch=info["partial_writes_epoch"])
+        if info["shard"] != index:
+            failures.append("the copied collection is shard %d, not acting index %d" % (info["shard"], index))
         if info["last_complete"] != info["last_update"]:
             failures.append("the shard's last_complete is behind its last_update")
         if parsed is not None and (info["last_update"] != parsed["head"] or info["log_tail"] != parsed["tail"]):
