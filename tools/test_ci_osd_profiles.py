@@ -89,8 +89,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         # 1 secure applied OSD and PG command row, 1 secure applied MDS command row,
         # 2 sent Tell cancellation rows,
         # 2 OSD and PG command outcome rows, 2 unavailable MON and MGR target rows
-        # and 1 optimized EC COPY_FROM2 shard-history row.
-        self.assertEqual(len(self.rows), 119)
+        # and 2 optimized EC shard-history rows (COPY_FROM2 and a partial overwrite).
+        self.assertEqual(len(self.rows), 120)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
@@ -565,6 +565,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
             dict(base, test_run="^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$"),
             dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$"),
             dict(base, test_run="^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$"),
+            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$"),
         ])
         # Each row's selector must match the fixture's closed four-OSD list.
         fixture = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
@@ -574,7 +575,8 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                                          "TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration"},
                                         {"TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration"},
                                         {"TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration"})):
+                                        {"TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration"},
+                                        {"TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration"})):
             with self.subTest(test_run=row["test_run"]):
                 self.assertIn('"%s",' % row["test_run"], fixture)
                 selector = re.compile(row["test_run"])
