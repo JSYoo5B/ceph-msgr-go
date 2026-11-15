@@ -411,14 +411,16 @@ func (p profile) rbdReplicas() string {
 // admits: the nonoptimized k=2,m=2 baseline (the default), the optimized
 // k=2,m=2 baseline with its failover reads, and the optimized k=2,m=2
 // in-flight mutation epoch change with the snapshot and degraded-write case,
-// deliberate resubmission of an independently observed applied mutation, and
-// the primary PG-history presence calibration.
+// deliberate resubmission of an independently observed applied mutation, the
+// primary PG-history presence calibration, and the COPY_FROM2 history control
+// that also reads every acting shard's own store copy.
 var osdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureK2M2Integration$",
 	"^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$",
 	"^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$",
 	"^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
 }
 
 // osdTopology is one closed OSD fixture shape. Daemon capacity and the
@@ -576,6 +578,10 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	if p.rbdMirrorSelected() {
 		mirrorMarker = "1"
 	}
+	shardHistory := ""
+	if p.shardHistorySelected() {
+		shardHistory = "1"
+	}
 	monKillMarker := ""
 	if p.monForcedKillSelected() {
 		monKillMarker = "1"
@@ -610,6 +616,7 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 		copyFromMultiChunkMarker:                 multiChunkMarker,
 		rbdMirrorMarker:                          mirrorMarker,
 		monForcedKillMarker:                      monKillMarker,
+		shardHistoryMarker:                       shardHistory,
 		"CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE":    marker,
 		"CEPH_MSGR_NATIVE_MAPEXT_ORACLE":         mapMarker,
 		"CEPH_MSGR_NATIVE_U64_XATTR_ORACLE":      u64Marker,

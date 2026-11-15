@@ -175,6 +175,9 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 	if err := c.controlOwnedPoolRequest(ctx, out); err != nil {
 		return err
 	}
+	if err := c.controlOSDShardHistoryRequest(ctx, out); err != nil {
+		return err
+	}
 	if err := c.controlOSDChecksumRequest(ctx, out); err != nil {
 		return err
 	}
