@@ -71,7 +71,9 @@ The capture has three parts. None of them is retried.
    - run `ceph-objectstore-tool --no-mon-config --data-path /shard/ceph-<id>
      --type bluestore --pgid <pgid>s<i> --format json --op info`, then
      `--op log`, each bounded at 64 KiB of output, with standard error kept
-     apart. The reader holds an empty local configuration file, so the tool
+     apart in a file that a second command reads. If that second command
+     exits nonzero the capture fails: its bytes are not the tool's
+     diagnostics. The reader holds an empty local configuration file, so the tool
      runs on its defaults and prints no configuration diagnostics;
    - remove the reader, which holds the only copy, and require Docker to
      report it gone. This also happens after any failure.
@@ -99,6 +101,9 @@ One shard is complete only if all of the following hold:
   the reader isolated, the OSD paused and resumed, the reader removed, the
   copied `whoami` equal to the OSD ID and no unsupported block layout;
 - both offline operations exited 0 and wrote nothing to standard error;
+- the record names exactly `osd-shard-history-s<i>-info.json` and
+  `osd-shard-history-s<i>-log.json`. A log dump carries no shard of its own,
+  so only the file name binds it to the acting index and the operation;
 - each dump is at most 64 KiB, has the length the capture recorded and is
   one strict UTF-8 JSON document without duplicate keys;
 - the `info` dump names exactly `<pgid>s<i>` and shard `i`, and its
