@@ -54,7 +54,16 @@ type shardHistoryShard struct {
 	DupEntries        int      `json:"dup_entries"`
 	ExtraReqidEntries int      `json:"extra_reqid_entries"`
 	MissingEntries    int      `json:"missing_entries"`
-	Targets           []struct {
+	// The info dump with the shard ID it names, every ordinary entry's
+	// version and named shards, and the info's partial-write records.
+	Shard              *int                `json:"shard"`
+	InfoBytes          int                 `json:"info_bytes"`
+	InfoSHA256         string              `json:"info_sha256"`
+	InfoRaw            string              `json:"info_raw"`
+	Entries            []shardLogEntry     `json:"entries"`
+	PartialWrites      []shardPartialWrite `json:"partial_writes_last_complete"`
+	PartialWritesEpoch uint32              `json:"partial_writes_last_complete_epoch"`
+	Targets            []struct {
 		Reqid     string              `json:"reqid"`
 		Locations []pgHistoryLocation `json:"locations"`
 	} `json:"targets"`
