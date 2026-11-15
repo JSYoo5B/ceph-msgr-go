@@ -477,15 +477,31 @@ func (r *dockerShardHistoryReader) exec(ctx context.Context, argv []string, limi
 }
 
 func (r *dockerShardHistoryReader) run(ctx context.Context, argv []string, limit int) (int, []byte, []byte, error) {
-	// Standard error goes to a file of the reader so that it cannot enter
-	// the JSON document on standard output.
+	return runShardHistoryCommand(func(argv []string, limit int) (int, []byte, error) {
+		return r.exec(ctx, argv, limit)
+	}, argv, limit)
+}
+
+// runShardHistoryCommand runs one reader command through exec and then
+// collects what it wrote to standard error. Standard error goes to a file of
+// the reader so that it cannot enter the JSON document on standard output.
+// The exec transport reports a command's own failure only through its exit
+// code, so a collection that exits nonzero is an error: its bytes, possibly
+// none, are not the command's diagnostics.
+func runShardHistoryCommand(exec func(argv []string, limit int) (int, []byte, error), argv []string, limit int) (int, []byte, []byte, error) {
 	wrapped := append([]string{"sh", "-c", `"$@" 2>/tmp/shard-history-stderr`, "sh"}, argv...)
-	code, stdout, err := r.exec(ctx, wrapped, limit)
+	code, stdout, err := exec(wrapped, limit)
 	if err != nil {
 		return code, nil, nil, err
 	}
-	_, stderr, err := r.exec(ctx, []string{"head", "-c", strconv.Itoa(shardHistoryStderrLimit), "/tmp/shard-history-stderr"}, shardHistoryStderrLimit)
-	return code, stdout, stderr, err
+	collected, stderr, err := exec([]string{"head", "-c", strconv.Itoa(shardHistoryStderrLimit), "/tmp/shard-history-stderr"}, shardHistoryStderrLimit)
+	if err == nil && collected != 0 {
+		err = fmt.Errorf("collecting the command's standard error exited %d", collected)
+	}
+	if err != nil {
+		return code, nil, nil, err
+	}
+	return code, stdout, stderr, nil
 }
 
 func (r *dockerShardHistoryReader) remove(ctx context.Context) error {

@@ -306,3 +306,56 @@ func TestRemoveShardHistoryOutputsLeavesOtherReceipts(t *testing.T) {
 		t.Fatal("second removal:", err)
 	}
 }
+
+func TestShardHistoryCommandRequiresItsDiagnostics(t *testing.T) {
+	type step struct {
+		code int
+		out  []byte
+		err  error
+	}
+	run := func(steps ...step) (int, []byte, []byte, error, [][]string) {
+		var calls [][]string
+		code, stdout, stderr, err := runShardHistoryCommand(func(argv []string, limit int) (int, []byte, error) {
+			calls = append(calls, argv)
+			if len(calls) == 2 && limit != shardHistoryStderrLimit {
+				t.Errorf("standard error is collected with limit %d", limit)
+			}
+			s := steps[len(calls)-1]
+			return s.code, s.out, s.err
+		}, []string{"tool", "--op", "log"}, 64)
+		return code, stdout, stderr, err, calls
+	}
+	code, stdout, stderr, err, calls := run(step{0, []byte("{}"), nil}, step{0, []byte("warning"), nil})
+	if err != nil || code != 0 || string(stdout) != "{}" || string(stderr) != "warning" || len(calls) != 2 {
+		t.Fatal("a read command with diagnostics:", code, stdout, stderr, err)
+	}
+	if got := strings.Join(calls[0], " "); got != `sh -c "$@" 2>/tmp/shard-history-stderr sh tool --op log` {
+		t.Fatal("wrapped command:", got)
+	}
+	if got := strings.Join(calls[1], " "); got != "head -c 4096 /tmp/shard-history-stderr" {
+		t.Fatal("collection command:", got)
+	}
+	// The tool's own exit code is the caller's to judge, with its diagnostics.
+	if code, _, stderr, err, _ := run(step{1, nil, nil}, step{0, []byte("PG not found"), nil}); err != nil || code != 1 || string(stderr) != "PG not found" {
+		t.Fatal("a refused tool run:", code, stderr, err)
+	}
+	// A collection that fails without a transport error returned no usable
+	// diagnostics: a successful tool run must not be reported with an empty
+	// standard error.
+	for name, collection := range map[string]step{
+		"killed before any byte": {137, nil, nil},
+		"killed after some":      {137, []byte("warn"), nil},
+		"file missing":           {1, nil, nil},
+		"negative code":          {-1, nil, nil},
+		"transport error":        {0, nil, errors.New("exec stream closed")},
+	} {
+		code, stdout, stderr, err, calls := run(step{0, []byte("{}"), nil}, collection)
+		if err == nil || stdout != nil || stderr != nil || len(calls) != 2 {
+			t.Errorf("%s: code %d stdout %q stderr %q err %v", name, code, stdout, stderr, err)
+		}
+	}
+	// A failed command is not followed by a collection.
+	if _, stdout, stderr, err, calls := run(step{0, nil, errors.New("exec failed")}); err == nil || stdout != nil || stderr != nil || len(calls) != 1 {
+		t.Fatal("a command that did not run:", err, len(calls))
+	}
+}
