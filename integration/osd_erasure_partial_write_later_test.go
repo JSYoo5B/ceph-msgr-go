@@ -568,7 +568,9 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegrati
 		readIncarnation  = 12
 		firstIncarnation = 13
 	)
-	run.read("read in the new interval", readIncarnation)
+	if read := run.read("read in the new interval", readIncarnation); read.UserVersion != state.patched.UserVersion {
+		t.Fatalf("the Go read in the new interval returned user version %d; the overwrite's is %d", read.UserVersion, state.patched.UserVersion)
+	}
 	// Without the interval change this overwrite would leave the nonprimary
 	// data shard out again; the first write of an interval names every shard.
 	first := []byte("first\x00\xffwrite")
