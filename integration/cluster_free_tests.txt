@@ -49,6 +49,7 @@ TestCephFSSharedFlockRecipeBlobAndChecks
 TestCephFSStriperRestatement
 TestCephFSWritebackLedgerClassifiesAndBoundsMetadata
 TestChainedForwardFailureRetainsPartialNativeEvidence
+TestCheckPGAbsent
 TestCheckPGInterval
 TestCheckShardDumps
 TestCheckShardHistory
@@ -106,3 +107,4 @@ TestSetChunkGoRefsOrderAndTargetGate
 TestSetChunkSourceKeptRequiresMTime
 TestShardLogExpected
 TestShardLogObservation
+TestShardLogRecovered
