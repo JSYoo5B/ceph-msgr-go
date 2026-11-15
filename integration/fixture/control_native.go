@@ -39,7 +39,7 @@ func (c *fixtureCluster) runOracleCommandWithTimeout(ctx context.Context, out st
 }
 
 // nativeOwnedPoolModes are the requests the native owned-pool oracle accepts.
-var nativeOwnedPoolModes = map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "pghistory": true, "shardhistory": true, "snapshot": true, "selfmanaged": true, "quota": true, "poolinfo": true, "clusterstat": true, "versions": true, "mgrstate": true, "service": true, "servicewatch": true, "servicecompare": true, "servicemetadata": true, "fullratios": true, "osdflags": true, "inconsistent": true, "cleanup": true}
+var nativeOwnedPoolModes = map[string]bool{"create": true, "seed": true, "observe": true, "place": true, "pghistory": true, "shardhistory": true, "pginterval": true, "snapshot": true, "selfmanaged": true, "quota": true, "poolinfo": true, "clusterstat": true, "versions": true, "mgrstate": true, "service": true, "servicewatch": true, "servicecompare": true, "servicemetadata": true, "fullratios": true, "osdflags": true, "inconsistent": true, "cleanup": true}
 
 func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string) error {
 	var fields []string
@@ -77,6 +77,11 @@ func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string
 
 // Cold bootstrap admits only MON MgrMap observation and the bounded service
 // identity watch. It does not grant object/pool control to a MON-only fixture.
+// The pginterval mode is admitted only for the selectors that own it.
 func nativePoolModeAllowed(p profile, mode string) bool {
+	if mode == "pginterval" && !p.pgIntervalSelected() {
+		// Ending a PG's interval is admitted for its two selectors alone.
+		return false
+	}
 	return nativeOwnedPoolModes[mode] && (p.osd == "1" || p.mgrServiceColdBootstrap() && (mode == "mgrstate" || mode == "servicewatch"))
 }
