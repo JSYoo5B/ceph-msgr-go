@@ -223,13 +223,15 @@ func TestCaptureShardHistoriesStopsAtTheFirstFailedShard(t *testing.T) {
 
 func TestShardHistoryCaptureAdmission(t *testing.T) {
 	selected := profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", osdProfile: "replicated-pg-v8", testRun: shardHistorySelectors[0]}
-	// Exactly the COPY_FROM2 control and the three partial-overwrite
+	// Exactly the COPY_FROM2 control and the five partial-overwrite
 	// controls.
 	if !slices.Equal(shardHistorySelectors, []string{
 		"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
 		"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
 		"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
 		"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
+		"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
+		"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
 	}) {
 		t.Fatal("the capture's selector list changed:", shardHistorySelectors)
 	}
@@ -264,8 +266,8 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 			}
 		}
 	}
-	// The oracle mode that can end a PG's interval is admitted for the two
-	// continuations alone, on the capture's topology.
+	// The oracle mode that observes one PG and can end its interval is
+	// admitted for the four continuations alone, on the capture's topology.
 	if !slices.Equal(pgIntervalSelectors, shardHistorySelectors[2:]) {
 		t.Fatal("the interval mode's selector list changed:", pgIntervalSelectors)
 	}
@@ -280,7 +282,8 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 		}
 		for name, change := range map[string]func(*profile){
 			"broad selector":    func(p *profile) { p.testRun = "^TestCephOSD.*Integration$" },
-			"both selectors":    func(p *profile) { p.testRun = strings.Join(pgIntervalSelectors, "|") },
+			"every selector":    func(p *profile) { p.testRun = strings.Join(pgIntervalSelectors, "|") },
+			"two selectors":     func(p *profile) { p.testRun = strings.Join(pgIntervalSelectors[2:], "|") },
 			"another EC cell":   func(p *profile) { p.testRun = osdErasureWidthSelectors[1] },
 			"three OSDs":        func(p *profile) { p.osdReplicas = "3" },
 			"MemStore":          func(p *profile) { p.osdStore = "memstore" },

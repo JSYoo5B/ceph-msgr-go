@@ -80,7 +80,8 @@ func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string
 // The pginterval mode is admitted only for the selectors that own it.
 func nativePoolModeAllowed(p profile, mode string) bool {
 	if mode == "pginterval" && !p.pgIntervalSelected() {
-		// Ending a PG's interval is admitted for its two selectors alone.
+		// Observing one PG's interval, and ending it, is admitted for the
+		// selectors of pgIntervalSelectors alone.
 		return false
 	}
 	return nativeOwnedPoolModes[mode] && (p.osd == "1" || p.mgrServiceColdBootstrap() && (mode == "mgrstate" || mode == "servicewatch"))
