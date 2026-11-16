@@ -45,6 +45,8 @@ type copyGetHistory struct {
 // can still compare. Receiving EIO is not a cleanup barrier, so cleanup is
 // observed by a bounded poll of a complete native PG enumeration. This does
 // not establish removal timing, destination loss or automatic replay.
+//
+//fixture:isolated sets the OSD copy-from injector and max chunk by admin socket; the restore leaves runtime overrides
 func TestCephOSDCopyFromMultiChunkLateErrorIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_COPYFROM_MULTICHUNK_ERROR") != "1" {
 		t.Skip("requires the fixture-selected exclusive multi-chunk copy fault marker")

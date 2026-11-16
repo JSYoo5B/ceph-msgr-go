@@ -24,6 +24,8 @@ import (
 // Only tags and those decoded fields are kept and logged: no authentication
 // payload, key, address or message. Live compressed frames remain
 // unverified; codec/frame tests are synthetic.
+//
+//fixture:shareable reads MON status and OSD version over CRC connections only
 func TestCephMsgrCompressionOfferIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_CONNECTION_MODE") != "crc" {
 		t.Skip("message compression is offered only on CRC-mode connections")

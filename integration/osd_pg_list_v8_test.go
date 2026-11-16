@@ -38,6 +38,7 @@ type pgListV8Evidence struct {
 	ObjectBefore, ObjectAfter mutationSnapshot
 }
 
+//fixture:shareable creates owned objects and a namespace head; deletes them, confirms absence, checks the fixture object
 func TestCephOSDPGListV8Integration(t *testing.T) {
 	if !isReplicatedPGFixtureProfile() {
 		t.Skip("requires an explicit replicated-PG fixture profile")

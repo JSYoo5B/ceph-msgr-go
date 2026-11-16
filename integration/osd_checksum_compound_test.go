@@ -92,6 +92,7 @@ func checksumCompoundNativeOnce(t *testing.T, ctx context.Context, name, which s
 	return n, map[string]any{"receipt": n, "sha256": fmt.Sprintf("%x", sha256.Sum256(raw)), "bytes": len(raw)}
 }
 
+//fixture:shareable read-only checksum vectors on its owned objects; checked omap-write cleanup removes them
 func TestCephOSDChecksumCompoundIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

@@ -24,6 +24,7 @@ func (conn *publicLimitConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
+//fixture:shareable oversized requests refused locally; reads and tells only
 func TestCephPublicLimitErrorsIntegration(t *testing.T) {
 	ordinaryLogFixture(t)
 	// Reserve room for bootstrap maps containing MGR module metadata.

@@ -21,6 +21,8 @@ import (
 
 // Both the caller-targeted object and native mirror can map to any owned OSD.
 // The fixture gates every owned daemon's effective limits before this test sends.
+//
+//fixture:shareable sets OSD xattr limits in central config, restored with readback; fixture xattrs restored and verified
 func TestCephOSDXattrServerLimitsIntegration(t *testing.T) {
 	c, _, oracle, original := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

@@ -251,6 +251,7 @@ func poolPlaceOn(t *testing.T, ctx context.Context, slot int, object, namespace 
 
 func attrNames(a nativeXattrSnapshot) map[string]string { return xattrInventory(a) }
 
+//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
 func TestCephOSDCrossPoolAndNamespaceCopyFromIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {
@@ -325,6 +326,8 @@ func TestCephOSDCrossPoolAndNamespaceCopyFromIntegration(t *testing.T) {
 // Pool snapshots are the other snapshot mode: the daemon takes the SnapContext
 // from the pool, so the client sends none for writes and names the pool snap
 // id only when reading or rolling back.
+//
+//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
 func TestCephOSDPoolSnapshotIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

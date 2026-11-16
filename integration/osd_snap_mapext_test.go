@@ -65,6 +65,7 @@ func mapExtRangeOracle(t *testing.T, ctx context.Context, object string, offset,
 	return r
 }
 
+//fixture:isolated allocates self-managed snaps on the shared fixture pool, leaving its selfmanaged_snaps flag set
 func TestCephOSDSnapshotMapExtIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_MAPEXT_ORACLE") != "1" {
 		t.Skip("requires the explicitly staged pinned native MAPEXT oracle")

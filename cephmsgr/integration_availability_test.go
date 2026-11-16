@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+//fixture:isolated creates and starts both MGR daemons on a fixture that began with no MGR; they are left running
 func TestCephManagerAvailabilityIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MGR_COUNT") != "0" {
 		t.Skip("requires a disposable fixture with delayed MGR startup")

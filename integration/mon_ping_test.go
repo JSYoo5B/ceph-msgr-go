@@ -39,6 +39,7 @@ type monPingObservation struct {
 	} `json:"mon_status"`
 }
 
+//fixture:isolated appends a cluster log entry and reads log history from version 1; the start-state check omits the log
 func TestCephMonPingIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MON_PING") != "1" {
 		t.Skip("requires the explicit native MON ping fixture")

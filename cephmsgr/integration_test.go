@@ -45,6 +45,7 @@ func integrationOptions(t *testing.T) Options {
 	return Options{Monitors: strings.Split(monitors, ","), Identity: os.Getenv("CEPH_MSGR_IDENTITY"), Key: key, ExpectedFSID: os.Getenv("CEPH_MSGR_FSID"), DialContext: testcluster.Dialer(), ConnectionMode: mode}
 }
 
+//fixture:shareable reads MON status and MGR pg stat only, including concurrent reads
 func TestCephIntegration(t *testing.T) {
 	options := integrationOptions(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -94,6 +95,8 @@ func TestCephIntegration(t *testing.T) {
 
 // Faults require the disposable fixture's control directory. Ordinary external
 // cluster credentials alone cannot trigger mutations or stop any daemon.
+//
+//fixture:isolated runs mgr fail and stops mon.a through stop-mon-a; mon.a is never restarted
 func TestCephRecoveryIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if control == "" {

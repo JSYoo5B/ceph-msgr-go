@@ -16,6 +16,8 @@ import (
 // default client got, the second an unknown outcome caused by the frame limit,
 // with no partial output. That client's next command, on a new connection, is
 // answered.
+//
+//fixture:shareable reads OSD config help and version only, through new client sessions
 func TestCephOSDCommandFrameLimitIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

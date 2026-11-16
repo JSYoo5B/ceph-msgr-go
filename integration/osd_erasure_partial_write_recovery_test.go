@@ -403,6 +403,8 @@ func (r *partialWriteRun) leftOutShard(state partialOverwrite) int {
 // overwrite, past its last entry, and the partial-write range between them
 // in its own info. This states what each shard's own log holds at capture
 // time; it claims nothing about eviction, loss or replay.
+//
+//fixture:isolated kills a shard OSD, restart verified osd-ready clean; pauses OSDs; CRUSH rule and pool-delete config left
 func TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 900*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince
@@ -520,6 +522,8 @@ func (r *partialWriteRun) recoveredShardLogs(label string, primary pgHistorySnap
 // read back natively and through the Go client. This states what each
 // shard's own log holds at capture time; it does not read the returned
 // shard's chunk and claims nothing about eviction, loss or replay.
+//
+//fixture:isolated kills a shard OSD, restart verified osd-ready clean; pauses OSDs; CRUSH rule and pool-delete config left
 func TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 900*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince

@@ -100,6 +100,7 @@ func waitMonOSDEpoch(t *testing.T, ctx context.Context, s *cephmsgr.OSDMapStream
 	}
 }
 
+//fixture:shareable sets noout, removed by a deferred checked osd unset noout; otherwise map reads
 func TestCephMonOSDMapsIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	c, ctx := fixtureClient(t, 60*time.Second)
@@ -181,6 +182,7 @@ func TestCephMonOSDMapsIntegration(t *testing.T) {
 	t.Logf("MON latest full, exact full/incremental ranges, future empty reply, concurrent private requests and live subscription verified at epoch %d without OSD ticket/connection", newEpoch)
 }
 
+//fixture:shareable toggles noout and ends with a checked osd unset; client-only seed fault
 func TestCephMonOSDMapsRecoveryIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

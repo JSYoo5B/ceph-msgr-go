@@ -17,6 +17,8 @@ import (
 // A COPY_FROM whose reply never reaches the client has executed on the daemon.
 // The local wait ends with an unknown outcome, the request identity survives,
 // and a fresh session neither replays the copy nor observes a second one.
+//
+//fixture:shareable client-side reply drop only; copies between owned UUID objects that checked cleanup removes
 func TestCephOSDCopyFromLostReplyIntegration(t *testing.T) {
 	observer, ctx, base, _ := osdFixture(t)
 	_ = observer

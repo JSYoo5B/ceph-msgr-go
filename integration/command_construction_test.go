@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+//fixture:isolated sets a config-key and removes it only as the last step; config-key is not in the start-state check
 func TestCephCommandConstructionIntegration(t *testing.T) {
 	ordinaryLogFixture(t)
 	c, ctx := fixtureClient(t, 30*time.Second)

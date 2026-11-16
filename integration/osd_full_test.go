@@ -15,6 +15,8 @@ import (
 // A pool over its object quota is flagged full_quota. Writes without a full
 // flag are never answered; FULL_TRY gets the server's -EDQUOT with no effect;
 // FULL_FORCE proceeds. Native observation checks every outcome independently.
+//
+//fixture:isolated sets a quota on its owned pool; the pool cleanup leaves mon/mon_allow_pool_delete=true in central config
 func TestCephOSDFullPoolFlagsIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {
@@ -152,6 +154,8 @@ func hasPoolFlag(names, flag string) bool {
 // write is never answered, FULL_TRY gets -ENOSPC, FULL_FORCE and reads
 // proceed, and after the ratios are restored and the flag clears a plain
 // write is answered again. The ratios are restored even on failure.
+//
+//fixture:isolated lowers the cluster full ratios; owned-pool cleanup leaves mon_allow_pool_delete in central config
 func TestCephOSDFullRatioIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("OSD fullness is measured on the BlueStore fixture")

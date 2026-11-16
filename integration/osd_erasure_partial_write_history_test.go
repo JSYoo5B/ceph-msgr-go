@@ -640,6 +640,8 @@ func (r *partialWriteRun) partialOverwrite() partialOverwrite {
 // control of what each shard's log holds after an acknowledged partial
 // write: it stops before any trimming, peering or resubmission and claims
 // nothing about eviction, loss or replay.
+//
+//fixture:isolated pauses each acting OSD for a store copy, no clean wait; EC CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration(t *testing.T) {
 	startPartialWriteRun(t, 420*time.Second).partialOverwrite()
 }

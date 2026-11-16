@@ -223,6 +223,7 @@ func cachePoolCompare(t *testing.T, which string, r cephmsgr.OSDReply, baseline 
 	}
 }
 
+//fixture:isolated runs the cache-pool scope finish, which removes the start-state cache pools, CRUSH rules and identities
 func TestCephOSDIgnoreCacheIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_CACHE_POOLS") != "1" {
 		t.Skip("requires isolated cache-pool fixture")

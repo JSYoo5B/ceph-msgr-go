@@ -17,6 +17,8 @@ import (
 // A notify sent to the new primary while the watcher is between primaries
 // waits for it; the watcher's explicit RECONNECT to the new primary makes the
 // OSD redeliver the notification, and the ACK completes the notify.
+//
+//fixture:isolated kills the primary OSD; recovery waits active+clean without a pg_temp proof and rewrites the fixture object
 func TestCephOSDWatchFailoverRedeliveryIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" || isReplicatedPGFixtureProfile() {
 		// The shared restoration helper is legacy-v6 only.

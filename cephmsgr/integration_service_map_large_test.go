@@ -48,6 +48,8 @@ const (
 //
 // It runs only when exclusively selected: these maps would otherwise reach
 // every ServiceMap watch of a broad suite.
+//
+//fixture:isolated cleanup kills live holders without proving their service map entries are gone; the service map is not checked
 func TestCephMonServiceMapLargeMapIntegration(t *testing.T) {
 	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != serviceMapLargeSelector {
 		t.Skip("large ServiceMap cell requires its exclusive selector " + serviceMapLargeSelector)

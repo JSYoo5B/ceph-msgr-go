@@ -19,6 +19,8 @@ import (
 // OMAP and xattr writes committed with ONDISK survive SIGKILL of the object's
 // primary, and an OMAP compare-then-set vector whose reply was lost resolves
 // through an explicit resubmission: re-executing it would fail its compare.
+//
+//fixture:isolated kills and restarts an OSD; recovery has no pg_temp proof and rewrites the fixture object
 func TestCephOSDOmapDurabilityIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("daemon termination persistence needs the BlueStore fixture")

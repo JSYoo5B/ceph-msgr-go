@@ -14,6 +14,8 @@ import (
 // PGNLS_FILTER with the OSD's built-in "plain" filter lists only objects whose
 // attribute equals the value; rejected objects still advance the cursor. The
 // expected set comes from native xattr observation of every seeded object.
+//
+//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
 func TestCephOSDPGListFilterIntegration(t *testing.T) {
 	fixture := osdFixture
 	modern := isReplicatedPGFixtureProfile()

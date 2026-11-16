@@ -48,6 +48,7 @@ func watcherOracle(t *testing.T, ctx context.Context, action string) nativeWatch
 	return result
 }
 
+//fixture:shareable the native watcher worker is stopped and owned objects are removed in checked cleanup
 func TestCephOSDListWatchersIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)

@@ -316,6 +316,7 @@ type mdsCephFSResumeEvidence struct {
 	HeldIncomingAtClose bool `json:",omitempty"`
 }
 
+//fixture:isolated removes its CephFS dir and files only in a final subtest; CephFS state is not in the start-state check
 func TestCephMDSCephFSIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS=1 for owned native CephFS metadata acceptance")

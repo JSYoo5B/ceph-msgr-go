@@ -178,6 +178,7 @@ func xattrEncodedInventory(t *testing.T, data []byte) map[string]string {
 	return result
 }
 
+//fixture:shareable edits fixture object xattrs and bytes; cleanup restores and natively verifies bytes, xattrs and mtime
 func TestCephOSDXattrsIntegration(t *testing.T) {
 	c, _, oracle, original := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

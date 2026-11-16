@@ -145,6 +145,8 @@ func checkSplitUnknown(t *testing.T, reply cephmsgr.OSDReply, err error, request
 // independently observed execution before a reply is withheld across the split.
 // The second is received at the old parent after its split epoch. Its native
 // envelope receipt and unchanged snapshot do not establish a mutation outcome.
+//
+//fixture:shareable splits fixture pool PGs 8 to 16; checked finish merges back to 8 and waits for the pool active+clean
 func TestCephOSDSplitIntegration(t *testing.T) {
 	if !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
 		t.Skip("requires an owned single-OSD replicated-PG PG split fixture")

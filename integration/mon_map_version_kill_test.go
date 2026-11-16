@@ -46,6 +46,8 @@ func requireMonKillReceipt(t *testing.T, control, name string) {
 // killed with SIGKILL instead of stopped in order. This is the forced-death
 // counterpart of TestCephMonMapVersionConnectedStopIntegration: the MON has
 // answered, the caller is still waiting, and the peer dies without shutdown.
+//
+//fixture:shareable kills a peon MON, restarts it and waits for a settled full quorum (cleanup does the same)
 func TestCephMonMapVersionConnectedKillIntegration(t *testing.T) {
 	requireMonForcedKill(t)
 	runMapVersionConnectedLoss(t, "kill")
@@ -156,6 +158,8 @@ func awaitMonQuorumLossDuringStop(ctx context.Context, stopped <-chan error, int
 // answered by the same MON, which is still out of quorum, and no version
 // reply exists. Only then is that MON killed with SIGKILL. No reply is
 // withheld by the test and no elapsed-time guess sets the fault phase.
+//
+//fixture:shareable stops two MONs and kills the third; restarts all and waits for a settled full quorum
 func TestCephMonMapVersionUnprocessedKillIntegration(t *testing.T) {
 	requireMonForcedKill(t)
 	options := integrationOptions(t)

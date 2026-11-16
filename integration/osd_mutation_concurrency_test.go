@@ -12,6 +12,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//fixture:isolated rewrites the shared fixture object; recovery rewrites bytes and mtime only, version not restored
 func TestCephOSDMutationConcurrencyIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
