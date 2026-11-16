@@ -191,6 +191,7 @@ func pushArrivals(s cephfsAgentSnapshot, from int) []pushArrival {
 	return out
 }
 
+//fixture:shareable sets mds caps config, makes a snapshot, quota and files; final step reverts all and checks config and stat
 func TestCephMDSCephFSPushIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS=1 for owned native CephFS push acceptance")

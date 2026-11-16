@@ -175,6 +175,8 @@ func rbdMirrorPeerWitness(osd []rbdMirrorSession, mons []rbdMirrorMonSession, ad
 // still reads the native oracle object. After the restore the distinguishable
 // patch arrives at the destination. The product implements no mirroring: the
 // Go session is the control that attributes the fault to one peer path.
+//
+//fixture:isolated creates pool msgr-mirror with mirroring and a peer user, kept after finish; starts mirror containers
 func TestCephRBDMirrorPathRecoveryIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_RBD_MIRROR") != "1" {
 		t.Skip("requires the fixture-selected exclusive RBD mirror marker")

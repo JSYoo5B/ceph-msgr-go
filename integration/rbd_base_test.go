@@ -496,6 +496,7 @@ func waitRBDWatchState(ctx context.Context, path, phase string, finished <-chan 
 	}
 }
 
+//fixture:isolated native librbd resizes the fixture's RBD image twice and leaves it resized
 func TestCephRBDBaseIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {

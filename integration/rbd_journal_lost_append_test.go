@@ -677,6 +677,7 @@ func rbdJournalLostAppendViewOf(dir string, result nativeRBDJournalResult, entry
 	return v, nil
 }
 
+//fixture:isolated creates a journaling image in the fixture's RBD pool and appends to it; image not removed
 func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) { runRBDJournalLostAppend(t, false) }
 
 // TestCephRBDJournalPrimaryChangeIntegration runs the lost-append sequence on
@@ -696,6 +697,8 @@ func TestCephRBDJournalLostAppendReplyIntegration(t *testing.T) { runRBDJournalL
 // byte-identical: the new primary answered from the replicated PG log and did
 // not append again. Release and native replay follow as in the single-OSD
 // sequence. See integration/fixture/RBD_JOURNAL_PRIMARY_CHANGE_VALIDATION.md.
+//
+//fixture:isolated marks the PG primary OSD out (marked in only at fixture teardown) and leaves a journaling image
 func TestCephRBDJournalPrimaryChangeIntegration(t *testing.T) { runRBDJournalLostAppend(t, true) }
 
 func runRBDJournalLostAppend(t *testing.T, primaryChange bool) {

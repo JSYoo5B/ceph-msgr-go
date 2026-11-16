@@ -273,6 +273,7 @@ func waitMDSSession(ctx context.Context, s *cephmsgr.MDSSession, limit time.Dura
 	}
 }
 
+//fixture:isolated evicts sessions natively, by autoclose and by reclaim, adding OSDMap blocklist entries it does not remove
 func TestCephMDSSessionsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_SESSIONS") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_SESSIONS=1 for owned native CephFS session acceptance")

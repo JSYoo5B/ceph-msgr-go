@@ -486,6 +486,7 @@ type completionSnapEvidence struct {
 	SnapshotRemoved     *nativeMDSCephFSOutput
 }
 
+//fixture:isolated mds fail restarts the owned MDS, evicts a session, force-readonly and runtime overrides; start state not proven
 func TestCephMDSCephFSCompletionIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION=1 for owned native CephFS completion acceptance")

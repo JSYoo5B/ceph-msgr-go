@@ -316,6 +316,7 @@ type mdsCephFSResumeEvidence struct {
 	HeldIncomingAtClose bool `json:",omitempty"`
 }
 
+//fixture:shareable creates its own dir and files in the fixture filesystem, unlinks them and checks with native stat
 func TestCephMDSCephFSIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS=1 for owned native CephFS metadata acceptance")
