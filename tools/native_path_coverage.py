@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Check the native path coverage map against the catalog, tests and records.
 
-This validates references, not the truth of a native observation. It runs no
-tests, starts no fixture and makes no network requests. Upstream fixture
+This validates references, not the truth of a native observation. Top-level
+Go test names are the tests Go lists in the product, fixture and quality
+modules (go_test_list.py): listing compiles the test binaries, which may fetch
+uncached modules, and executes no test body. It starts no fixture. Upstream fixture
 receipts (``ctg@v0.3.0:``, ``ctg@v0.4.0:`` and ``ctg@main:`` tokens) are cited by name only and
 are not resolved, because the provider repository is not part of this tree.
 """
@@ -10,6 +12,7 @@ import re
 import sys
 from pathlib import Path
 
+import go_test_list
 import scenario_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -21,18 +24,22 @@ HEADER = ["ID", "Path", "Class", "Setup and control", "Independent observation",
           "Fault and cleanup", "Evidence", "Visibility"]
 LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 CODE = re.compile(r"`([^`]+)`")
-TEST = re.compile(r"(?m)^func (Test\w+)\(t \*testing\.T\)")
 UPSTREAM = re.compile(r"^ctg@(v0\.3\.0|v0\.4\.0|main):(Test\w+(?:/[\w./-]+)?)$")
 SCENARIO = re.compile(r"^[a-z][a-z0-9-]*\.(?:aes|aes256k)\b[a-z0-9.-]*$")
 
 
-def go_tests(root):
-    """Return every top-level Go test function name in the repository."""
+# The Go modules whose tests the map may name: the product, the fixture and the
+# quality tooling. The development-only capture modules under tools/msgrcap
+# are not native evidence.
+MODULES = (".", "integration/fixture", "tools/quality")
+
+
+def go_tests(root, modules=MODULES):
+    """Return every top-level Go test that Go lists in the repository's modules."""
     names = set()
-    for path in root.rglob("*_test.go"):
-        if ".git" in path.parts:
-            continue
-        names.update(TEST.findall(path.read_text(errors="replace")))
+    for module in modules:
+        for listed in go_test_list.list_tests(Path(root) / module, ("./...",)).values():
+            names.update(listed)
     return names
 
 

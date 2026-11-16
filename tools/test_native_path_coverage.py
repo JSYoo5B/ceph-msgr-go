@@ -1,6 +1,7 @@
 import unittest
 
 import native_path_coverage as coverage
+from test_go_test_list import SHAPES, module
 
 
 class NativePathCoverageTests(unittest.TestCase):
@@ -28,6 +29,18 @@ class NativePathCoverageTests(unittest.TestCase):
     def test_go_tests_include_both_integration_packages(self):
         self.assertIn("TestCephMonPingIntegration", self.tests)
         self.assertIn("TestCephServiceKeyEpochIntegration", self.tests)
+
+    def test_plain_test_names_resolve_against_the_tests_go_lists(self):
+        tests = coverage.go_tests(module(self, SHAPES), modules=(".",))
+        # Literal expectation: the bare Test, the aliased-import test and the
+        # blank parameter are tests; TestMain, the method, the lowercase helper
+        # and the build-constrained test are not.
+        self.assertEqual(tests, {"Test", "TestAlias", "TestX"})
+        for token in ("TestAlias", "TestX/subtest", "^TestAl.*$"):
+            self.assertEqual(coverage.token_problems(token, tests, set(), set(), set()), [], token)
+        for token in ("TestMain", "TestY", "TestIgnored"):
+            self.assertEqual(coverage.token_problems(token, tests, set(), set(), set()),
+                             ["missing top-level Go test " + token])
 
     def test_unknown_scenario_group_and_suite_are_reported(self):
         text = self.text.replace("`mon-mgr.aes256k.ip4.expiry-1`", "`mon-mgr.aes256k.ip4.expiry-2`")
