@@ -146,12 +146,7 @@ func TestCICatalogInventory(t *testing.T) {
 		}
 		return data
 	}
-	var catalog struct {
-		Scenarios []ciScenario `json:"scenarios"`
-	}
-	if err := json.Unmarshal(read(".github/scenarios/catalog.json"), &catalog); err != nil {
-		t.Fatal(err)
-	}
+	scenarios := ciRepositoryCatalog(t)
 	bindings, err := ciBindings(string(read(".github/workflows/native-scenarios.yml")))
 	if err != nil {
 		t.Fatal(err)
@@ -168,7 +163,7 @@ func TestCICatalogInventory(t *testing.T) {
 	for _, name := range listed {
 		rows = append(rows, ciTestSelection{Test: name, Source: sources[name], Candidates: []string{}, Required: []string{}})
 	}
-	for _, scenario := range catalog.Scenarios {
+	for _, scenario := range scenarios {
 		p, err := ciProfile(scenario, bindings)
 		if err != nil {
 			t.Errorf("%s: %v", scenario.ID, err)
