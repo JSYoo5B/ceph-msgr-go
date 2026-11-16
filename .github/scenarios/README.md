@@ -60,7 +60,7 @@ vulnerability scans still execute. Branch protection settings are not modified.
 
 `catalog.json` preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
-Twelve further `osd` rows use the four-OSD erasure-capacity topology
+Thirteen further `osd` rows use the four-OSD erasure-capacity topology
 (`osd_replicas` value `4`): one selects only `TestCephOSDErasureK2M2Integration`,
 another only `TestCephOSDErasureOptimizedK2M2Integration` and
 `TestCephOSDErasureOptimizedK2M2FailoverIntegration`, and the third only
@@ -127,6 +127,15 @@ owned PG and can end its interval, for the last five alone.
 That value travels in the
 already-forwarded `osd_replicas` input, so it needs no new workflow parameter;
 the fixture refuses it with any other selector.
+The thirteenth selects only
+`TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration`
+([validation](../../integration/fixture/OSD_EC_HELD_REQUEST_VALIDATION.md)):
+one Go APPEND+SETXATTR that names a map epoch the cluster has not published
+must be held unapplied in the primary's op tracker when the primary's OSD is
+killed. The call must end with an unknown outcome under its original
+identity, the native object must be unchanged after the return, and the
+returned primary's PG log must not hold that identity until the caller
+resubmits it once.
 Two further `osd-cache-pools` rows: one selects only
 `TestCephOSDCacheTierOpsIntegration`, the native-only cache-tier operation
 checkpoint, and another selects only `TestCephOSDCacheOpGoIntegration`, the
@@ -348,7 +357,7 @@ See the
 sent cancellation rows above now also run `MonCommand` and `MgrCommand`
 subtests, and the public MDS command rows a last subtest that stops the
 fixture's MDS.
-The catalog has 125 native rows in total.
+The catalog has 126 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
