@@ -298,14 +298,16 @@ a single observation and for the unusable placements above.
 
 ## Reproduction
 
-On an authorized Linux runner, hold its run lock, use the pinned image and
-the environment of the
-[partial-overwrite control](OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md#reproduction)
-with one of
+On an authorized Linux runner, hold its run lock and run either dedicated row
+with the environment the catalog gives it, which includes the pinned image
+and the row's fixture capabilities:
 
 ```sh
-CEPH_MSGR_TEST_RUN='^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$'
-CEPH_MSGR_TEST_RUN='^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$'
+eval "$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritelaterwriteshardhistory)"
+sh integration/run.sh
+
+eval "$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritenewintervalshardhistory)"
+sh integration/run.sh
 ```
 
 The dedicated mandatory rows are

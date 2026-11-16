@@ -109,16 +109,7 @@ change the observed daemon error or weaken the controller's exclusivity.
 On an authorized Linux runner, hold its run lock, use the pinned image and:
 
 ```sh
-CEPH_MSGR_TEST_OSD=1 \
-CEPH_MSGR_TEST_OSD_STORE=bluestore \
-CEPH_MSGR_TEST_OSD_REPLICAS=1 \
-CEPH_MSGR_TEST_OSD_PROFILE=legacy-v6 \
-CEPH_MSGR_TEST_RUNTIME=host \
-CEPH_MSGR_TEST_KEY_TYPE=aes \
-CEPH_MSGR_TEST_SERVICE_CIPHER=aes \
-CEPH_MSGR_TEST_CONNECTION_MODE=crc \
-CEPH_MSGR_TEST_IP_FAMILY=4 \
-CEPH_MSGR_TEST_RUN='^TestCephOSDCopyFromLateErrorIntegration$' \
+eval "$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror)"
 CEPH_MSGR_TEST_TIMEOUT=8m \
 go -C integration/fixture run . run -project ../..
 ```

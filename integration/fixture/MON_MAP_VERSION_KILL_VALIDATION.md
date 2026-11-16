@@ -220,14 +220,8 @@ The result gate requires the row's `api/` test to PASS. On an authorized
 Linux/amd64 Docker runner, holding its execution lock:
 
 ```sh
-CGO_ENABLED=0 CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
-CEPH_MSGR_TEST_OSD_PROFILE=legacy-v6 CEPH_MSGR_TEST_OSD_REPLICAS=1 \
-CEPH_MSGR_TEST_CONNECTION_MODE=crc CEPH_MSGR_TEST_KEY_TYPE=aes \
-CEPH_MSGR_TEST_SERVICE_CIPHER=aes CEPH_MSGR_TEST_IP_FAMILY=4 \
-CEPH_MSGR_TEST_RUNTIME=host \
-CEPH_MSGR_TEST_RUN='^TestCephMonMapVersionConnectedKillIntegration$' \
-CEPH_MSGR_TEST_CAPABILITIES=mon-forced-kill \
-sh integration/run.sh
+eval "$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill)"
+CGO_ENABLED=0 sh integration/run.sh
 ```
 
 ## Daemon-free evidence

@@ -298,13 +298,13 @@ shards.
 
 ## Reproduction
 
-On an authorized Linux runner, hold its run lock, use the pinned image and
-the environment of the
-[partial-overwrite control](OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md#reproduction)
-with
+On an authorized Linux runner, hold its run lock and run the dedicated row
+with the environment the catalog gives it, which includes the pinned image
+and the row's fixture capabilities:
 
 ```sh
-CEPH_MSGR_TEST_RUN='^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$'
+eval "$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteprimaryreplacementshardhistory)"
+sh integration/run.sh
 ```
 
 The dedicated mandatory row is

@@ -131,14 +131,17 @@ metadata and all independent native seed/branch observations.
 ## Reproduction and remaining cells
 
 Run the existing fixture command on an authorized Linux runner under its run
-lock with `CEPH_MSGR_TEST_OSD_CACHE_POOLS=1`, `CEPH_MSGR_TEST_OSD=1`,
-`CEPH_MSGR_TEST_OSD_STORE=bluestore`, `CEPH_MSGR_TEST_OSD_REPLICAS=1`,
-`CEPH_MSGR_TEST_OSD_PROFILE=legacy-v6` and
-`CEPH_MSGR_TEST_RUN=^TestCephOSDCacheOpGoIntegration$`. Select secure,
-aes256k client/service, IPv6 and container runtime, with the pinned image.
-The existing exact scenario row is
-`osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcacheopgo`;
-no duplicate row or workflow trigger is added.
+lock with the environment the catalog gives the existing exact scenario row
+(secure, aes256k client/service, IPv6, container runtime, the cache-pool
+fixture on one BlueStore legacy-v6 OSD, the pinned image and the
+`exclusive-osd-cache-pools` capability):
+
+```sh
+eval "$(python3 tools/scenario_plan.py env osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcacheopgo)"
+sh integration/run.sh
+```
+
+No duplicate row or workflow trigger is added.
 
 This establishes the selected terminal contract and state distinctions,
 not every cache configuration, live lost-response behavior, crash durability,
