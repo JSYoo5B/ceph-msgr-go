@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import protocol_evidence as evidence
-from test_go_test_list import REPEATED, SHAPES, WRONG_FILE, module
+from test_go_test_list import REPEATED, SHAPES, WRONG_FILE, module, tests_file
 
 
 class ProtocolEvidenceTests(unittest.TestCase):
@@ -117,6 +117,17 @@ class ProtocolEvidenceTests(unittest.TestCase):
                            ("TestActual", "wrong_test.go")):
             self.assertFalse(evidence.listed_test(root, package / file, name), name)
         self.assertTrue(evidence.listed_test(root, package / "right_test.go", "TestActual"))
+
+    def test_linked_test_of_a_nested_module_is_listed_by_that_module(self):
+        root = module(self, {})
+        nested = root / "fixture"
+        (nested / "sub").mkdir(parents=True)
+        (nested / "go.mod").write_text("module example.com/nested\n\ngo 1.24\n", encoding="utf-8")
+        (nested / "sub" / "a_test.go").write_text(tests_file("func TestNested(t *testing.T) {}", package="sub"),
+                                                  encoding="utf-8")
+        self.assertEqual(evidence.module_dir(root, nested / "sub" / "a_test.go"), nested.resolve())
+        self.assertTrue(evidence.listed_test(root, nested / "sub" / "a_test.go", "TestNested"))
+        self.assertFalse(evidence.listed_test(root, nested / "sub" / "a_test.go", "TestOther"))
 
     def test_repeated_init_functions_do_not_hide_a_linked_test(self):
         root = module(self, REPEATED)

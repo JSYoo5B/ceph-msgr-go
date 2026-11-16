@@ -105,10 +105,27 @@ def frame_receipt_problems(cell, receipts):
     return problems
 
 
+def module_dir(root, path):
+    """The directory of the go.mod nearest to `path` inside root, or None.
+
+    A nested module (integration/fixture, tools/quality) lists its own
+    packages; the root module's listing does not contain them."""
+    root, directory = Path(root).resolve(), Path(path).resolve().parent
+    while directory.is_relative_to(root):
+        if (directory / "go.mod").is_file():
+            return directory
+        if directory == root:
+            break
+        directory = directory.parent
+    return None
+
+
 def listed_test(root, path, name):
     """True when `path` declares `name` as a top-level test that Go lists for
-    the package compiling `path` (see go_test_list.declares)."""
-    return go_test_list.declares(root, path, name)
+    the package compiling `path` in the module containing it (see
+    go_test_list.declares)."""
+    module = module_dir(root, path)
+    return module is not None and go_test_list.declares(module, path, name)
 
 
 def linked_test_directories(root, rows):
