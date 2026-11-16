@@ -22,7 +22,12 @@ WORKFLOWS = ("ci.yml", "platform-checks.yml", "native-scenarios.yml")
 
 
 def declared_tests(directory, root=ROOT):
-    """The top-level tests Go lists for one native suite package (integration or cephmsgr)."""
+    """The names of the top-level tests Go lists for one native suite package
+    (integration or cephmsgr), each once.
+
+    The row tests compare names only. A row that selects a name Go lists more
+    than once is refused by scenario_plan.selector_problems (validate) and by
+    the result gate's snapshot, so these lookups need no count."""
     return set(scenario_plan.suite_tests(root)[directory])
 
 

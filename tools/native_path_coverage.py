@@ -37,7 +37,9 @@ MODULES = (".", "integration/fixture", "tools/quality")
 
 
 def go_tests(root, modules=MODULES):
-    """Return every top-level Go test that Go lists in the repository's modules."""
+    """Return the name of every top-level Go test that Go lists in the
+    repository's modules. A coverage token names a test; how often Go lists
+    the name plays no part."""
     names = set()
     for module in modules:
         for listed in go_test_list.list_tests(Path(root) / module, ("./...",)).values():

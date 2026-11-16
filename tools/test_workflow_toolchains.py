@@ -239,7 +239,7 @@ class WorkflowToolchainTests(unittest.TestCase):
             if path.name.startswith("test_"):
                 continue
             text = path.read_text(encoding="utf-8")
-            if re.search(r"go_test_list\.(?:list_tests|package_tests|test_files|declares|declarations)\b"
+            if re.search(r"go_test_list\.(?:list_tests|package_tests|selected_tests|test_files|declares|declarations)\b"
                          r"|\[\"go\"|_go\(", text):
                 calling.add(path.stem)
         self.assertEqual(calling, set(LISTERS))

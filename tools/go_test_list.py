@@ -13,6 +13,16 @@ A missing `go`, a non-zero exit, a build failure or any event this module does
 not recognise raises ListError; nothing is silently returned as empty.
 Results are cached for the life of the process.
 
+The listing keeps Go's multiplicity: each package maps every listed name to
+the number of times Go lists it. The internal and the external test package of
+one directory may each declare a test of the same name; Go lists it twice and
+runs both under that one name. A reader that only asks whether a name exists,
+or where it is declared, reads the names. A reader that selects tests by name
+for a run, or judges a run by its result lines, takes its names through
+`selected_tests` (or checks them with `repeated`), which refuses a selected
+name listed more than once: `-run` cannot select one of the two tests and a
+`--- PASS: Name` line cannot say which of them it reports.
+
 `go test -list` says which tests exist, not where they are declared. A check
 that ties a test to a file uses `declares`: the name must be listed for the
 package, the file must be one Go compiles for that package's tests (go list),
@@ -28,6 +38,7 @@ from pathlib import Path
 import posixpath
 import re
 import subprocess
+from types import MappingProxyType
 
 PATTERN = "^Test"
 TIMEOUT = 600
@@ -73,13 +84,12 @@ def _relative(module_path, package):
 
 
 def parse(text, module_path):
-    """Map module-relative package directories to their listed test names.
+    """Map module-relative package directories to {listed test name: count}.
 
     Only the events and output lines `go test -json -list` writes for a
-    successful listing are accepted. A name may be listed twice: the internal
-    and the external test package of one directory may each declare it, and
-    go test runs both. The result gates refuse the duplicate results that
-    such a name produces."""
+    successful listing are accepted. A name may be listed more than once: the
+    internal and the external test package of one directory may each declare
+    it, and go test runs both. The count keeps that; see `selected_tests`."""
     outputs, finals, problems = {}, {}, []
     for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
@@ -111,10 +121,10 @@ def parse(text, module_path):
             raise ListError("unexpected go test -json action %r for %s" % (action, package))
     listed = {}
     for package, output in outputs.items():
-        names, empty = [], False
+        names, empty = {}, False
         for line in output.splitlines():
             if NAME.fullmatch(line):
-                names.append(line)
+                names[line] = names.get(line, 0) + 1
             elif line.startswith("ok  \t%s\t" % package):
                 continue
             elif line == "?   \t%s\t[no test files]" % package:
@@ -124,18 +134,19 @@ def parse(text, module_path):
         final = finals.get(package)
         if final != "pass" and not (final == "skip" and empty and not names):
             raise ListError("listing of %s ended with %s" % (package, final or "no final event"))
-        listed[_relative(module_path, package)] = frozenset(names)
+        listed[_relative(module_path, package)] = MappingProxyType(names)
     if set(finals) - set(outputs):
         raise ListError("final event without a start for %s" % ", ".join(sorted(set(finals) - set(outputs))))
     return listed
 
 
 def list_tests(module, packages, timeout=TIMEOUT):
-    """{module-relative package directory: frozenset of top-level test names}.
+    """{module-relative package directory: read-only {top-level test name: count}}.
 
     `module` is the directory of a go.mod; `packages` are package patterns
     relative to it ("./integration", "./..."). A named package that Go does not
-    list is an error."""
+    list is an error. Iterating a package's mapping gives each name once; the
+    count is how many times Go lists it (see `selected_tests`)."""
     module = Path(module).resolve()
     packages = tuple(packages)
     key = (str(module), packages)
@@ -161,9 +172,37 @@ def _directory(package):
 
 
 def package_tests(module, package, timeout=TIMEOUT):
-    """The listed top-level tests of one package directory of a module."""
+    """{listed top-level test name: count} of one package directory of a module."""
     directory = _directory(package)
     return list_tests(module, ("./" + directory,), timeout)[directory]
+
+
+def repeated(listing, chosen):
+    """[(package, name, count)], sorted, of the names `chosen(package, name)`
+    selects in a `list_tests` result that Go lists more than once."""
+    return sorted((package, name, count) for package, names in listing.items()
+                  for name, count in names.items() if count > 1 and chosen(package, name))
+
+
+def repeated_message(package, name, count):
+    return ("%s is listed %d times for %s (the internal and the external test package both declare it): "
+            "go test -run cannot select one of them and a result line cannot tell them apart"
+            % (name, count, package))
+
+
+def selected_tests(module, packages, chosen, timeout=TIMEOUT):
+    """{package directory: frozenset of the listed names `chosen(package, name)` selects}.
+
+    This is the listing for a reader that selects tests for a run or judges
+    a run by result lines. A selected name that Go lists more than once
+    raises ListError before any result is read; names that are not selected
+    may repeat."""
+    listing = list_tests(module, packages, timeout)
+    problems = repeated(listing, chosen)
+    if problems:
+        raise ListError("; ".join(repeated_message(*problem) for problem in problems))
+    return {package: frozenset(name for name in names if chosen(package, name))
+            for package, names in listing.items()}
 
 
 def test_files(module, packages, timeout=TIMEOUT):

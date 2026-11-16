@@ -87,6 +87,15 @@ def tests_file(*bodies, package="integration"):
     return 'package %s\n\nimport "testing"\n\nvar _ testing.TB\n\n%s\n' % (package, "\n".join(bodies))
 
 
+# The reviewer's multiplicity case: the internal and the external test package
+# of integration both declare TestActual, so go test lists and runs it twice
+# under one name; TestOther is listed once.
+TWICE = {
+    "internal_test.go": tests_file("func TestActual(t *testing.T) {}", "func TestOther(t *testing.T) {}"),
+    "external_test.go": tests_file("func TestActual(t *testing.T) {}", package="integration_test"),
+}
+
+
 def event(action, package=MODULE + "/p", **fields):
     return json.dumps(dict(Action=action, Package=package, **fields))
 
@@ -94,7 +103,7 @@ def event(action, package=MODULE + "/p", **fields):
 class GoTestListTests(unittest.TestCase):
     def test_compiled_shapes_follow_go_discovery(self):
         root = module(self, SHAPES)
-        self.assertEqual(go_test_list.package_tests(root, "integration"), SHAPE_TESTS)
+        self.assertEqual(dict(go_test_list.package_tests(root, "integration")), dict.fromkeys(SHAPE_TESTS, 1))
         self.assertEqual(go_test_list.test_files(root, ["./integration"])["integration"],
                          {"shapes_test.go", "alias_test.go"})
 
@@ -142,11 +151,32 @@ class GoTestListTests(unittest.TestCase):
             "right_test.go": (("init", False), ("init", False), ("TestActual", True)),
             "blank_test.go": (("_", False), ("_", False)),
         })
-        self.assertEqual(go_test_list.package_tests(root, "integration"), {"TestActual"})
+        self.assertEqual(dict(go_test_list.package_tests(root, "integration")), {"TestActual": 1})
         self.assertTrue(go_test_list.declares(root, package / "right_test.go", "TestActual"))
         for file in ("wrong_test.go", "blank_test.go"):
             self.assertFalse(go_test_list.declares(root, package / file, "TestActual"), file)
         self.assertFalse(go_test_list.declares(root, package / "right_test.go", "init"))
+
+    def test_listing_keeps_how_often_go_lists_a_name(self):
+        root = module(self, TWICE)
+        listed = go_test_list.package_tests(root, "integration")
+        self.assertEqual(dict(listed), {"TestActual": 2, "TestOther": 1})
+        self.assertEqual(sorted(listed), ["TestActual", "TestOther"])
+        with self.assertRaises(TypeError):
+            listed["TestActual"] = 1
+        listing = go_test_list.list_tests(root, ["./integration"])
+        self.assertEqual(go_test_list.repeated(listing, lambda package, name: True), [("integration", "TestActual", 2)])
+        self.assertEqual(go_test_list.repeated(listing, lambda package, name: name == "TestOther"), [])
+
+    def test_a_selected_name_listed_twice_is_refused(self):
+        root = module(self, TWICE)
+        with self.assertRaisesRegex(go_test_list.ListError, "TestActual is listed 2 times for integration"):
+            go_test_list.selected_tests(root, ["./integration"], lambda package, name: True)
+        with self.assertRaisesRegex(go_test_list.ListError, "TestActual is listed 2 times"):
+            go_test_list.selected_tests(root, ["./integration"], lambda package, name: name == "TestActual")
+        # A repeated name that is not selected does not block the others.
+        self.assertEqual(go_test_list.selected_tests(root, ["./integration"], lambda package, name: name == "TestOther"),
+                         {"integration": {"TestOther"}})
 
     def test_internal_and_external_test_packages_may_share_a_name(self):
         root = module(self, {
@@ -155,7 +185,7 @@ class GoTestListTests(unittest.TestCase):
             "wrong_test.go": 'package integration\n\nconst doc = "func TestShared(t *testing.T) {}"\n',
         })
         package = root / "integration"
-        self.assertEqual(go_test_list.package_tests(root, "integration"), {"TestShared"})
+        self.assertEqual(dict(go_test_list.package_tests(root, "integration")), {"TestShared": 2})
         for file in ("internal_test.go", "external_test.go"):
             self.assertTrue(go_test_list.declares(root, package / file, "TestShared"), file)
         self.assertFalse(go_test_list.declares(root, package / "wrong_test.go", "TestShared"))
@@ -189,12 +219,12 @@ class GoTestListTests(unittest.TestCase):
     def test_parse_accepts_only_a_successful_listing(self):
         good = [event("start"), event("output", Output="Test\n"), event("output", Output="TestA\n"),
                 event("output", Output="ok  \t%s/p\t0.01s\n" % MODULE), event("pass")]
-        self.assertEqual(go_test_list.parse("\n".join(good), MODULE), {"p": {"Test", "TestA"}})
+        self.assertEqual(go_test_list.parse("\n".join(good), MODULE), {"p": {"Test": 1, "TestA": 1}})
         # Literal expectation: the internal and the external test package may
-        # both declare Test; Go lists it twice and the set holds it once.
-        self.assertEqual(go_test_list.parse("\n".join(good[:2] + good[1:]), MODULE), {"p": {"Test", "TestA"}})
+        # both declare Test; Go lists it twice and the count keeps that.
+        self.assertEqual(go_test_list.parse("\n".join(good[:2] + good[1:]), MODULE), {"p": {"Test": 2, "TestA": 1}})
         none = [event("start"), event("output", Output="?   \t%s/p\t[no test files]\n" % MODULE), event("skip")]
-        self.assertEqual(go_test_list.parse("\n".join(none), MODULE), {"p": frozenset()})
+        self.assertEqual(go_test_list.parse("\n".join(none), MODULE), {"p": {}})
         bad = {
             "not JSON": good[:1] + ["Test"] + good[1:],
             "not an event": good + ["[]"],
