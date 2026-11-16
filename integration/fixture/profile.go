@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -40,6 +41,12 @@ type profile struct {
 	nativeMgrPreparation, monPing, osdCachePools, mgrService              string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
 	stressDuration, testRun, testTimeout, diagnostics                     string
+	// capabilities are the declared fixture capabilities in canonical
+	// (sorted, comma-separated) form; capability.go admits their modes.
+	capabilities string
+	// defaultRun is the selection of the fixture this profile starts, which
+	// testRun equals unless a capability admits one exact test instead.
+	defaultRun string
 	// osdSoak is the opt-in OSD soak duration; it selects admitted soak parents.
 	osdSoak string
 	// sourceSHA is the controller's tested revision for workload receipts.
@@ -97,10 +104,16 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		sourceSHA:            getenv("CEPH_MSGR_TEST_SOURCE_SHA"),
 		monFreeze:            getenv("CEPH_MSGR_TEST_MON_FREEZE"),
 		testRun:              getenv("CEPH_MSGR_TEST_RUN"),
+		capabilities:         getenv("CEPH_MSGR_TEST_CAPABILITIES"),
 		testTimeout:          value("CEPH_MSGR_TEST_TIMEOUT", "10m"),
 		diagnostics:          getenv("CEPH_MSGR_TEST_DIAGNOSTICS"),
 	}
 	p.serviceCipher = value("CEPH_MSGR_TEST_SERVICE_CIPHER", p.keyType)
+	capabilities, err := parseCapabilities(p.capabilities, p.testRun)
+	if err != nil {
+		return profile{}, err
+	}
+	p.capabilities = capabilities
 	for _, choice := range []struct {
 		name, value string
 		allowed     []string
@@ -389,8 +402,10 @@ func loadProfile(getenv func(string) string) (profile, error) {
 			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires one of its exclusive selectors %v, BlueStore and the legacy-v6 or replicated-pg-v8 profile", osdErasureWidthSelectors)
 		}
 	}
-	if p.testRun == "" {
-		p.testRun = selected
+	p.testRun = cmp.Or(p.testRun, selected)
+	p.defaultRun = selected
+	if err := capabilityTopologyProblem(p); err != nil {
+		return profile{}, err
 	}
 	if _, err := soakExpectedTests(p); err != nil {
 		return profile{}, err
