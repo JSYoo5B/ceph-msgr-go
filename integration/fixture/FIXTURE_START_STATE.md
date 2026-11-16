@@ -206,5 +206,25 @@ poll; why it did is not established. A first run of the same recipe
 failed only because the test required the text `ceph status` in that
 step; the check's report was the same.
 
+A third exploratory test on the same row and image, at the commit that made
+each read independent and the MON reads concurrent, took the OSD out and
+stopped two of the three MONs:
+
+| Step | Budget | Result | Condition and detail |
+| --- | --- | --- | --- |
+| fresh fixture | 60 s | passed, 1 poll, 0.35 s | |
+| `osd out 0` | 5 s | failed, 4 polls | `osd-in`: osd.0 is out |
+| osd out, mon.b and mon.c stopped | 25 s | failed, 5 polls | `observation` for each of the five MON reads: context deadline exceeded; `daemon-running`: mon.b and mon.c containers exited |
+| the same, again | 25 s | failed, 3 polls | the same failures |
+| mon.b and mon.c started, `osd in 0` | 240 s | passed, 1 poll | |
+
+The test passed in 60.23 s and the gate reported its PASS; the row took
+117 s and cleanup left no Testcontainers container. Every MON read timed
+out in both stopped-MON checks, so this run did not show a poll in which
+`ceph status` completed while another MON read failed, as the second run
+did. That case, a failed read beside the conditions of the reads that
+completed, and the merge of a poll cut by the budget are covered by the
+fixture unit tests only.
+
 The stopped OSD, non-clean PG, pg_temp, foreign container and MDS admin
 socket paths are covered by the fixture unit tests only.
