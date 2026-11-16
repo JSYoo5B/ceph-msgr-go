@@ -421,13 +421,21 @@ func TestMDSCephFSMultiReconnectOwnedPaths(t *testing.T) {
 func TestMDSCephFSMultiReconnectSelectorIsExclusive(t *testing.T) {
 	env := mdsCephFSCompletionProfileEnv()
 	env["CEPH_MSGR_TEST_RUN"] = "^TestCephMDSCephFSMultiReconnectIntegration$"
+	env["CEPH_MSGR_TEST_CAPABILITIES"] = "exclusive-mds-cephfs-completion"
 	p, err := loadProfile(func(n string) string { return env[n] })
 	if err != nil || p.testRun != env["CEPH_MSGR_TEST_RUN"] {
 		t.Fatal("exclusive split reconnect selector refused", p.testRun, err)
 	}
 	for _, selector := range []string{"^TestCephMDSCephFS(Completion|MultiReconnect)Integration$", "TestCephMDSCephFSMultiReconnectIntegration", "^TestCephMDSCephFSMultiReconnectIntegrationExtended$"} {
 		env["CEPH_MSGR_TEST_RUN"] = selector
-		if _, err := loadProfile(func(n string) string { return env[n] }); err == nil {
+		// A broad selector is refused with the capability, and any foreign
+		// selector without the declaration.
+		if _, err := loadProfile(func(n string) string { return env[n] }); err == nil && !exactTestSelector.MatchString(selector) {
+			t.Fatal("broad or foreign split selector admitted", selector)
+		}
+		undeclared := copyProfileEnv(env)
+		undeclared["CEPH_MSGR_TEST_CAPABILITIES"] = ""
+		if _, err := loadProfile(func(n string) string { return undeclared[n] }); err == nil {
 			t.Fatal("broad or foreign split selector admitted", selector)
 		}
 	}

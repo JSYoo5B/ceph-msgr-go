@@ -16,7 +16,8 @@
     "osd_profile": "legacy-v6",
     "mds_fresh": "1",
     "mds_cephfs_data": "1",
-    "test_run": "^TestCephMDSCephFSWritebackFenceIntegration$"
+    "test_run": "^TestCephMDSCephFSWritebackFenceIntegration$",
+    "capabilities": "mds-writeback-fence"
    }
   },
   {
@@ -34,7 +35,8 @@
     "osd_profile": "legacy-v6",
     "mds_fresh": "1",
     "mds_cephfs_data": "1",
-    "test_run": "^TestCephMDSCephFSWritebackFenceIntegration$"
+    "test_run": "^TestCephMDSCephFSWritebackFenceIntegration$",
+    "capabilities": "mds-writeback-fence"
    }
   }
  ]

@@ -29,7 +29,7 @@ func TestDaemonControlAdmitsOnlyStoppingTheCommandFixtureMDS(t *testing.T) {
 		}
 	}
 	for name, p := range map[string]profile{
-		"applied-command cell": load(map[string]string{"CEPH_MSGR_TEST_RUN": daemonCommandMDSSelector}),
+		"applied-command cell": load(map[string]string{"CEPH_MSGR_TEST_RUN": daemonCommandMDSSelector, "CEPH_MSGR_TEST_CAPABILITIES": "mds-applied-command"}),
 		"fresh MDS fixture":    load(map[string]string{"CEPH_MSGR_TEST_MDS_COMMANDS": "0", "CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"}),
 		"no MDS fixture":       {},
 	} {

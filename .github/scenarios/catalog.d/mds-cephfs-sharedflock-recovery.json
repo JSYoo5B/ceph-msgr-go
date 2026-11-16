@@ -16,7 +16,8 @@
     "osd_profile": "legacy-v6",
     "mds_fresh": "1",
     "mds_cephfs": "1",
-    "test_run": "^TestCephMDSCephFSSharedFlockRecoveryIntegration$"
+    "test_run": "^TestCephMDSCephFSSharedFlockRecoveryIntegration$",
+    "capabilities": "exclusive-mds-cephfs"
    }
   },
   {
@@ -34,7 +35,8 @@
     "osd_profile": "legacy-v6",
     "mds_fresh": "1",
     "mds_cephfs": "1",
-    "test_run": "^TestCephMDSCephFSSharedFlockRecoveryIntegration$"
+    "test_run": "^TestCephMDSCephFSSharedFlockRecoveryIntegration$",
+    "capabilities": "exclusive-mds-cephfs"
    }
   }
  ]

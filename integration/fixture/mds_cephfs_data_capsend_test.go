@@ -148,6 +148,7 @@ func TestMDSCephFSDataCapLogUpdateBranches(t *testing.T) {
 func TestMDSCephFSDataProfileAdmitsOnlyTheExplicitCapSendSelector(t *testing.T) {
 	env := mdsCephFSDataProfileEnv()
 	env["CEPH_MSGR_TEST_RUN"] = "^TestCephMDSCephFSCapSendRecoveryIntegration$"
+	env["CEPH_MSGR_TEST_CAPABILITIES"] = "exclusive-mds-cephfs-data"
 	p, err := loadProfile(func(k string) string { return env[k] })
 	if err != nil || p.testRun != "^TestCephMDSCephFSCapSendRecoveryIntegration$" || p.mdsCephFSData != "1" || !p.mdsFreshOSDAllowed() {
 		t.Fatal("explicit cap-send selector was not admitted on the data fixture", p, err)
@@ -158,9 +159,12 @@ func TestMDSCephFSDataProfileAdmitsOnlyTheExplicitCapSendSelector(t *testing.T) 
 		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFS(Data|CapSendRecovery)Integration$"},
 		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSCapSendRecoveryIntegration"},
 		{"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"},
+		{"CEPH_MSGR_TEST_CAPABILITIES": ""},
+		{"CEPH_MSGR_TEST_CAPABILITIES": "exclusive-mds-cephfs"},
 	} {
 		env := mdsCephFSDataProfileEnv()
 		env["CEPH_MSGR_TEST_RUN"] = "^TestCephMDSCephFSCapSendRecoveryIntegration$"
+		env["CEPH_MSGR_TEST_CAPABILITIES"] = "exclusive-mds-cephfs-data"
 		for k, v := range change {
 			env[k] = v
 		}

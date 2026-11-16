@@ -8,9 +8,20 @@ import (
 	"testing"
 )
 
+// mdsCephFSWritebackSelector is the native test that declares
+// mds-writeback-fence (catalog.d/mds-cephfs-writeback.json).
+const mdsCephFSWritebackSelector = "^TestCephMDSCephFSWritebackFenceIntegration$"
+
+// writebackProfile is the data fixture profile of the writeback-fence row.
+func writebackProfile(p profile) profile {
+	p.mdsFresh, p.mdsCephFSData, p.testRun, p.capabilities = "1", "1", mdsCephFSWritebackSelector, capMDSWritebackFence.name
+	return p
+}
+
 func TestMDSCephFSDataProfileAdmitsOnlyTheExplicitWritebackSelector(t *testing.T) {
 	env := mdsCephFSDataProfileEnv()
 	env["CEPH_MSGR_TEST_RUN"] = mdsCephFSWritebackSelector
+	env["CEPH_MSGR_TEST_CAPABILITIES"] = "mds-writeback-fence"
 	p, err := loadProfile(func(k string) string { return env[k] })
 	if err != nil || p.testRun != mdsCephFSWritebackSelector || p.mdsCephFSData != "1" || !p.mdsFreshOSDAllowed() {
 		t.Fatal("explicit writeback-fence selector was not admitted on the data fixture", p, err)
@@ -20,9 +31,12 @@ func TestMDSCephFSDataProfileAdmitsOnlyTheExplicitWritebackSelector(t *testing.T
 		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFS(Data|WritebackFence)Integration$"},
 		{"CEPH_MSGR_TEST_RUN": "^TestCephMDSCephFSWritebackFenceIntegration"},
 		{"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"},
+		{"CEPH_MSGR_TEST_CAPABILITIES": ""},
+		{"CEPH_MSGR_TEST_CAPABILITIES": "exclusive-mds-cephfs-completion"},
 	} {
 		env := mdsCephFSDataProfileEnv()
 		env["CEPH_MSGR_TEST_RUN"] = mdsCephFSWritebackSelector
+		env["CEPH_MSGR_TEST_CAPABILITIES"] = "mds-writeback-fence"
 		for k, v := range change {
 			env[k] = v
 		}
@@ -180,7 +194,7 @@ func TestMDSCephFSDataBackgroundReaderAdmission(t *testing.T) {
 	x.osdDrop = drop
 	drop.State = "restored"
 	c := &fixtureCluster{mdsCephFSData: x}
-	c.profile.testRun = mdsCephFSWritebackSelector
+	c.profile = writebackProfile(c.profile)
 	x.owned = map[string]uint64{}
 	if err := c.mdsCephFSDataEvict(context.Background(), 6, 4100, &mdsCephFSDataResult{}); err == nil || len(x.mutations) != 0 {
 		t.Fatal("eviction admitted while the reader runs", err)
@@ -233,13 +247,13 @@ func TestMDSCephFSDataWritebackControlsRequireTheirSelector(t *testing.T) {
 	for _, name := range []string{"osd-drop-on", "osd-drop-off", "osd-log", "evict", "reader-start", "reader-status", "reader-wait"} {
 		result := &mdsCephFSDataResult{}
 		if err := c.mdsCephFSDataWritebackAct(context.Background(), 1, mdsCephFSDataAction{name: name, gid: 4100, nonce: 77}, result); err == nil ||
-			!strings.Contains(err.Error(), "writeback-fence selector") || x.osdDrop != nil || len(x.mutations) != 0 {
+			!strings.Contains(err.Error(), "capability mds-writeback-fence") || x.osdDrop != nil || len(x.mutations) != 0 {
 			t.Fatal("writeback control ran without its selector", name, err)
 		}
 	}
 	// With the selector, a restore or log without an applied override and an
 	// eviction during an active drop are refused before any native work.
-	c.profile.testRun = mdsCephFSWritebackSelector
+	c.profile = writebackProfile(c.profile)
 	if err := c.mdsCephFSDataWritebackAct(context.Background(), 1, mdsCephFSDataAction{name: "osd-drop-off"}, &mdsCephFSDataResult{}); err == nil {
 		t.Fatal("OSD drop restore admitted without an override")
 	}

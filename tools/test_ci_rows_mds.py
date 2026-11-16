@@ -20,27 +20,28 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
         self.assert_client_row(APPLIED_MDS_COMMAND_SELECTOR,
                                {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
                                 "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
-                                "mds_fresh": "1", "mds_commands": "1"},
+                                "mds_fresh": "1", "mds_commands": "1", "capabilities": "mds-applied-command"},
                                {"TestCephAppliedMDSCommandIsNotReplayedIntegration"},
                                {"key": "aes256k", "service": "aes256k", "family": "6", "stress": "", "runtime": "container",
                                 "osd": "1", "osd_store": "memstore", "osd_replicas": "1", "osd_profile": "legacy-v6",
-                                "mds_fresh": "1", "mds_commands": "1"})
+                                "mds_fresh": "1", "mds_commands": "1", "capabilities": "mds-applied-command"})
         public = [{name: value for name, value in row.items() if name != "test_run"}
                   for row in self.rows if row.get("test_run") == "^TestCephMDSCommandsIntegration$"]
-        applied = [{name: value for name, value in row.items() if name != "test_run"}
+        applied = [{name: value for name, value in row.items() if name not in ("test_run", "capabilities")}
                    for row in self.rows if row.get("test_run") == APPLIED_MDS_COMMAND_SELECTOR]
         self.assertEqual(applied, public)
+        # The fixture admits the cell by the capability its rows declare.
         profile = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
         outcome = (ROOT / "integration" / "fixture" / "daemon_command_outcome.go").read_text(encoding="utf-8")
-        self.assertIn("if p.testRun == daemonCommandMDSSelector {", profile)
-        self.assertIn('daemonCommandMDSSelector = "%s"' % APPLIED_MDS_COMMAND_SELECTOR, " ".join(outcome.split()))
+        self.assertIn("admitted = p.admits(capMDSAppliedCommand)", profile)
+        self.assertIn('var capMDSAppliedCommand = defineCapability("mds-applied-command",', outcome)
 
     def test_mds_stop_control_is_admitted_only_for_the_public_command_acceptance(self):
         # The stopped-daemon step of the public MDS command test is the only
         # user of an MDS daemon control. The fixture admits stop alone, and
         # not for the applied-command cell on the same fixture.
         control = " ".join((ROOT / "integration" / "fixture" / "control_daemon.go").read_text(encoding="utf-8").split())
-        self.assertIn('return action == "stop" && p.mdsCommands == "1" && p.mdsFresh == "1" && p.testRun != daemonCommandMDSSelector', control)
+        self.assertIn('return action == "stop" && p.mdsCommands == "1" && p.mdsFresh == "1" && !p.admits(capMDSAppliedCommand)', control)
         self.assertIn("if !c.profile.daemonControlAdmitted(kind, action) {", control)
         users = [source.name for source in sorted((ROOT / "integration").glob("*_test.go")) + sorted((ROOT / "cephmsgr").glob("*_test.go"))
                  if re.search(r'ControlDaemon\([^)]*"mds"', source.read_text(encoding="utf-8"))]

@@ -282,13 +282,12 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}
 	if p.mdsFresh == "1" {
 		selected = "^TestCephMDSFreshIntegration$"
+		admitted := false
 		if p.mdsCommands == "1" {
 			selected = "^TestCephMDSCommandsIntegration$"
 			// The applied-command outcome cell shares the owned command
-			// fixture and is admitted only when explicitly selected.
-			if p.testRun == daemonCommandMDSSelector {
-				selected = p.testRun
-			}
+			// fixture and is admitted only by its capability.
+			admitted = p.admits(capMDSAppliedCommand)
 		}
 		if p.mdsSessions == "1" {
 			selected = "^TestCephMDSSessionsIntegration$"
@@ -296,10 +295,8 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if p.mdsCephFS == "1" {
 			selected = "^TestCephMDSCephFS(Push|Recovery)?Integration$"
 			// The shared held-lock variant of the recovery acceptance owns a
-			// fresh metadata fixture and is admitted only when explicitly selected.
-			if p.testRun == mdsCephFSSharedFlockSelector {
-				selected = p.testRun
-			}
+			// fresh metadata fixture and is admitted only by its capability.
+			admitted = p.admits(capExclusiveMDSCephFS)
 		}
 		if p.mdsCephFSRanks == "1" {
 			selected = "^TestCephMDSCephFSRanksIntegration$"
@@ -310,21 +307,17 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if p.mdsCephFSCompletion == "1" {
 			selected = "^TestCephMDSCephFSCompletionIntegration$"
 			// The split reconnect and its held-lock variants each own a fresh
-			// completion fixture and are admitted only when explicitly selected.
-			if p.testRun == "^TestCephMDSCephFSMultiReconnectIntegration$" || p.testRun == mdsCephFSHeldFlockSplitSelector || p.testRun == mdsCephFSHeldFlockSplitFragmentsSelector {
-				selected = p.testRun
-			}
+			// completion fixture and are admitted only by a capability.
+			admitted = p.admits(capExclusiveMDSCephFSCompletion) || p.admits(capMDSHeldFlockSplit)
 		}
 		if p.mdsCephFSData == "1" {
 			selected = "^TestCephMDSCephFSDataIntegration$"
 			// The cap-send recovery and writeback-fence variants share the
-			// owned data fixture and are admitted only when explicitly selected.
-			if p.testRun == "^TestCephMDSCephFSCapSendRecoveryIntegration$" || p.testRun == mdsCephFSWritebackSelector {
-				selected = p.testRun
-			}
+			// owned data fixture and are admitted only by a capability.
+			admitted = p.admits(capExclusiveMDSCephFSData) || p.admits(capMDSWritebackFence)
 		}
 		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || (p.sparseReadOracle != "" || p.mapExtOracle != "") ||
-			p.testRun != "" && p.testRun != selected {
+			!ownSelection(p.testRun, selected, admitted) {
 			return profile{}, fmt.Errorf("MDS fixture requires its exclusive selector %s and one admitted OSD profile", selected)
 		}
 	}

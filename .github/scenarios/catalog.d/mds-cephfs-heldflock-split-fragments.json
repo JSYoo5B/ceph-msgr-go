@@ -16,7 +16,8 @@
     "osd_profile": "legacy-v6",
     "mds_fresh": "1",
     "mds_cephfs_completion": "1",
-    "test_run": "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$"
+    "test_run": "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$",
+    "capabilities": "mds-held-flock-split,mds-held-flock-split-fragments"
    }
   },
   {
@@ -34,7 +35,8 @@
     "osd_profile": "legacy-v6",
     "mds_fresh": "1",
     "mds_cephfs_completion": "1",
-    "test_run": "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$"
+    "test_run": "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$",
+    "capabilities": "mds-held-flock-split,mds-held-flock-split-fragments"
    }
   }
  ]
