@@ -4,16 +4,19 @@
 The catalog (composed by scenario_catalog.py) is the discoverable list of the
 real-daemon scenarios and selectable platform check suites. Each native entry
 has a stable identifier, group and workflow matrix parameters. This tool
-validates the catalog against the mandatory list and reusable check jobs and prints the
-selected matrix with an explanation. It reads local files only and executes no
-test.
+validates the catalog against the mandatory list, the reusable check jobs and
+the fixture, and prints the selected matrix with an explanation. `list`,
+`plan` and `env` read local files only. `validate` also runs the fixture's own
+admission of every row (one cluster-free Go test of integration/fixture, which
+needs the fixture module's Go toolchain) and starts no cluster.
 
   scenario_plan.py validate               invariants, mandatory list, fixed jobs, selector targets,
-                                          fixture capability vocabulary
+                                          fixture admission of every row
   scenario_plan.py list                   one identifier per line
   scenario_plan.py plan --select S        matrix JSON on stdout, explanation on stderr
+  scenario_plan.py env ID                 shell exports of the native workflow's environment for one row
 
-Both `list` and `plan` accept --catalog PATH to plan against another revision's
+`list`, `plan` and `env` accept --catalog PATH to read another revision's
 catalog (a pull request's vocabulary) while running this trusted script. PATH
 is a fragment directory, or the earlier single catalog file of a pull request
 opened before the split.
@@ -25,16 +28,28 @@ A row may declare the fixture capabilities its test needs in the parameter
 "capabilities": a comma-separated, sorted list of names that the fixture
 defines with defineCapability calls in integration/fixture. Every reading of
 the catalog refuses a capability on a row whose test_run is not exactly one
-anchored test (^TestName$). validate also refuses a capability that the
-fixture source of the same tree does not define, and one whose requirements
-(the defineCapability requirement terms) the row's parameters do not meet.
-plan reads another revision's catalog and leaves those two checks to that
-revision's own validate and to its fixture, which refuses the same
-declarations before it starts a cluster.
+anchored test (^TestName$). Whether the fixture defines a declared capability
+and admits it on the row's topology is the fixture's own decision: validate
+passes every row, as the native workflow forwards it, through the fixture's
+loadProfile (TestCatalogRowsAreAdmittedByTheFixture) and reports each row the
+fixture refuses, so the planner keeps no copy of the fixture's rules. plan
+reads another revision's catalog and leaves that check to that revision's own
+validate and to its fixture, which refuses the same rows before it starts a
+cluster.
+
+`env ID` prints one `export NAME=value` line for every variable the native
+workflow binds to a matrix parameter, with the workflow's fallbacks, so a
+documented reproduction runs a row as CI does:
+
+  eval "$(python3 tools/scenario_plan.py env ID)"
+  sh integration/run.sh
 """
 import argparse
 import json
+import os
 import re
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,11 +67,10 @@ FIXTURE = ROOT / "integration" / "fixture"
 # The fixture's exactTestSelector and capabilityNamePattern (capability.go).
 EXACT_TEST = re.compile(r"\^Test[A-Za-z0-9_]+\$")
 CAPABILITY_NAME = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
-# defineCapability(name, summary, requires, extra): the name, summary and
-# requirements are plain string literals, which
-# TestFixtureCapabilityVocabularyIsTheSourceDeclarations enforces with this
-# same expression.
-CAPABILITY_DEFINITION = re.compile(r'\bdefineCapability\(\s*"([^"\\]*)",\s*"(?:[^"\\]|\\.)*",\s*"([^"\\]*)"')
+# The fixture test that passes every catalog row through loadProfile, and the
+# mark of each problem line it reports (capability_test.go).
+ADMISSION_TEST = "TestCatalogRowsAreAdmittedByTheFixture"
+ADMISSION_MARK = "catalog admission: "
 WORKFLOW_BINDING = re.compile(r"(?m)^ +(CEPH_[A-Z0-9_]+): \$\{\{ matrix\.([a-z_]+)(?: \|\| '([^']*)')? \}\}\s*$")
 
 
@@ -141,16 +155,6 @@ def declaration_problems(sid, params):
     return problems
 
 
-def fixture_capabilities(directory=FIXTURE):
-    """[(name, requirement terms)] the fixture defines, from its non-test source."""
-    found = []
-    for path in sorted(Path(directory).glob("*.go")):
-        if not path.name.endswith("_test.go"):
-            found.extend((name, requires.split()) for name, requires
-                         in CAPABILITY_DEFINITION.findall(path.read_text(encoding="utf-8")))
-    return found
-
-
 def workflow_bindings(text=None):
     """{environment variable: (matrix parameter, fallback)} of the native job."""
     if text is None:
@@ -158,43 +162,44 @@ def workflow_bindings(text=None):
     return {name: (param, fallback) for name, param, fallback in WORKFLOW_BINDING.findall(text)}
 
 
-def requirement_problem(sid, name, term, declared, params, bindings):
-    if term[0] == "+":
-        return None if term[1:] in declared else "%s: capability %s requires capability %s" % (sid, name, term[1:])
-    if term[0] == "!":
-        return None if term[1:] not in declared else "%s: capability %s excludes capability %s" % (sid, name, term[1:])
-    variable, _, want = term.partition("=")
-    binding = bindings.get("CEPH_MSGR_TEST_" + variable)
-    if binding is None:
-        return "%s: capability %s requires CEPH_MSGR_TEST_%s, which the native workflow does not forward" % (sid, name, variable)
-    param, fallback = binding
-    got = params.get(param) or fallback
-    if got != want:
-        return "%s: capability %s requires %s=%r, the row has %r" % (sid, name, param, want, got)
-    return None
+def row_environment(params, bindings):
+    """The environment the native workflow gives one row, in binding order."""
+    return [(name, params.get(param) or fallback) for name, (param, fallback) in bindings.items()]
 
 
-def capability_problems(scenarios, vocabulary, bindings):
-    """Every declared capability is defined, and the row meets its requirements."""
-    problems = []
-    names = [name for name, _ in vocabulary]
-    if len(set(names)) != len(names):
-        problems.append("the fixture defines a capability twice")
-    requirements = dict(vocabulary)
-    for entry in scenarios:
-        params = entry.get("params", {})
-        value = params.get("capabilities")
-        if not isinstance(value, str):
+def fixture_admission_problems(run=subprocess.run, directory=FIXTURE):
+    """The rows of this tree's catalog that its fixture refuses.
+
+    Runs the fixture's TestCatalogRowsAreAdmittedByTheFixture, which passes
+    every row through loadProfile with the native workflow's bindings and
+    reports each refusal on a line marked ADMISSION_MARK. A check that does
+    not run, does not pass and reports no row is a problem as well, never a
+    silent pass."""
+    command = ["go", "test", "-mod=readonly", "-count=1", "-json", "-run", "^%s$" % ADMISSION_TEST, "."]
+    try:
+        result = run(command, cwd=str(directory), env=dict(os.environ, GOWORK="off"),
+                     capture_output=True, text=True, timeout=1200)
+    except (OSError, subprocess.SubprocessError) as error:
+        return ["the fixture admission check (%s) did not run: %s" % (ADMISSION_TEST, error)]
+    problems, actions = [], []
+    for line in result.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
             continue
-        declared = set(value.split(","))
-        for name in value.split(","):
-            if name not in requirements:
-                problems.append("%s declares capability %s, which the fixture does not define" % (entry["id"], name))
-                continue
-            for term in requirements[name]:
-                problem = requirement_problem(entry["id"], name, term, declared, params, bindings)
-                if problem:
-                    problems.append(problem)
+        if not isinstance(event, dict) or event.get("Test") != ADMISSION_TEST:
+            continue
+        if event.get("Action") in ("pass", "fail", "skip"):
+            actions.append(event["Action"])
+        output = event.get("Output") or ""
+        if ADMISSION_MARK in output:
+            problems.append(output.split(ADMISSION_MARK, 1)[1].rstrip())
+    if result.returncode == 0 and actions == ["pass"] and not problems:
+        return []
+    if not problems:
+        tail = " | ".join((result.stderr or result.stdout).strip().splitlines()[-5:])
+        problems.append("the fixture admission check (%s) reported %s with exit status %d and no row: %s"
+                        % (ADMISSION_TEST, ",".join(actions) or "no result", result.returncode, tail))
     return problems
 
 
@@ -309,6 +314,9 @@ def main(argv=None):
     plan = sub.add_parser("plan")
     plan.add_argument("--select", action="append", required=True)
     plan.add_argument("--catalog", default=str(CATALOG))
+    env = sub.add_parser("env")
+    env.add_argument("id")
+    env.add_argument("--catalog", default=str(CATALOG))
     args = parser.parse_args(argv)
     try:
         scenarios = load_catalog(getattr(args, "catalog", CATALOG))
@@ -317,15 +325,25 @@ def main(argv=None):
             problems = (validate_catalog(scenarios) + mandatory_problems(scenarios, load_mandatory())
                         + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
                         + selector_problems(scenarios, integration_tests())
-                        + capability_problems(scenarios, fixture_capabilities(), workflow_bindings()))
+                        + fixture_admission_problems())
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
                 return 1
-            print("catalog valid: %d scenarios, all mandatory, selecting existing tests" % len(scenarios))
+            print("catalog valid: %d scenarios, all mandatory, selecting existing tests, admitted by the fixture"
+                  % len(scenarios))
         elif args.command == "list":
             for entry in scenarios + fixed_entries(load_catalog_document(args.catalog)):
                 print(entry["id"])
+        elif args.command == "env":
+            problems = validate_catalog(scenarios)
+            if problems:
+                raise PlanError("; ".join(problems))
+            rows = [entry for entry in scenarios if entry["id"] == args.id]
+            if not rows:
+                raise PlanError("unknown scenario %r" % args.id)
+            for name, value in row_environment(rows[0]["params"], workflow_bindings()):
+                print("export %s=%s" % (name, shlex.quote(value)))
         else:
             problems = validate_catalog(scenarios)
             document = load_catalog_document(args.catalog)

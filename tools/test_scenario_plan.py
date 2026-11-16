@@ -1,6 +1,12 @@
 import copy
+import io
 import json
+import re
+import shlex
+import subprocess
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from unittest import mock
 
 import scenario_plan as plan
 
@@ -50,21 +56,19 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("lacks required parameter service", text)
         self.assertIn("invalid test selector", text)
 
-    def test_repository_capabilities_are_defined_and_met(self):
-        scenarios = plan.load_catalog()
-        vocabulary = plan.fixture_capabilities()
-        self.assertEqual(plan.capability_problems(scenarios, vocabulary, plan.workflow_bindings()), [])
-        names = [name for name, _ in vocabulary]
-        self.assertEqual(len(names), len(set(names)))
-        declared = {name for row in scenarios for name in row["params"].get("capabilities", "").split(",") if name}
-        self.assertEqual(declared, set(names))
-        self.assertEqual(plan.workflow_bindings()["CEPH_MSGR_TEST_CAPABILITIES"], ("capabilities", ""))
+    def test_workflow_bindings_cover_every_matrix_variable(self):
+        text = plan.NATIVE_WORKFLOW.read_text(encoding="utf-8")
+        bound = re.findall(r"(?m)^ +(CEPH_[A-Z0-9_]+): .*matrix\.", text)
+        bindings = plan.workflow_bindings(text)
+        self.assertEqual(sorted(bound), sorted(bindings), "a matrix binding the planner cannot read")
+        self.assertEqual(bindings["CEPH_MSGR_TEST_CAPABILITIES"], ("capabilities", ""))
 
-    # The four refusals of the acceptance, by the planner: a capability on a
-    # selector of more than one test, a row that lacks a capability its
-    # declared one requires, a capability the fixture does not define, and a
-    # declared capability whose requirements the row's topology does not meet.
-    # The fixture's refusals are in integration/fixture/capability_test.go.
+    # The planner's own refusal: a capability on a selector of more than one
+    # test. Every other refusal (an undefined capability, a missing capability
+    # that a declared one extends, a declared capability on a topology the
+    # fixture does not admit) is the fixture's, through
+    # fixture_admission_problems; integration/fixture/capability_test.go
+    # covers those.
     def test_capability_requires_one_anchored_test(self):
         for selector in ("^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$", "^TestCephOSD.*Integration$",
                          "TestCephOSDUpmapIntegration", "^TestCephOSDUpmapIntegration", "^TestA$|^TestB$", "^TestA$/sub", "^Test$"):
@@ -79,35 +83,85 @@ class CatalogTests(unittest.TestCase):
             text = "\n".join(plan.validate_catalog([entry("x", test_run="^TestX$", capabilities=value)]))
             self.assertTrue("invalid capability list" in text or "sorted and unique" in text, value)
 
-    def test_capability_vocabulary_and_requirements_are_checked(self):
-        vocabulary = [("mon-kill", ["OSD=1", "OSD_STORE=bluestore", "MDS_FRESH=0"]), ("pg-interval", ["+shard-history"]),
-                      ("shard-history", ["OSD_REPLICAS=4"]), ("late", ["OSD=1"]), ("multi", ["OSD=1", "!late"]), ("local", ["LOCAL_ONLY="])]
-        bindings = {"CEPH_MSGR_TEST_OSD": ("osd", "0"), "CEPH_MSGR_TEST_OSD_STORE": ("osd_store", "memstore"),
-                    "CEPH_MSGR_TEST_MDS_FRESH": ("mds_fresh", "0"), "CEPH_MSGR_TEST_OSD_REPLICAS": ("osd_replicas", "1")}
-        row = lambda sid, value, **params: entry(sid, test_run="^TestX$", capabilities=value, **params)
-        good = [row("a", "mon-kill", osd="1", osd_store="bluestore"), row("b", "pg-interval,shard-history", osd_replicas="4"),
-                row("c", "multi", osd="1")]
-        self.assertEqual(plan.capability_problems(good, vocabulary, bindings), [])
-        for scenario, wanted in (
-                (row("u", "osd-kill"), "does not define"),
-                (row("t", "mon-kill", osd="1"), "requires osd_store='bluestore', the row has 'memstore'"),
-                (row("f", "mon-kill", osd="1", osd_store="bluestore", mds_fresh="1"), "requires mds_fresh='0'"),
-                (row("n", "mon-kill"), "requires osd='1', the row has '0'"),
-                (row("d", "pg-interval", osd_replicas="4"), "requires capability shard-history"),
-                (row("x", "late,multi", osd="1"), "excludes capability late"),
-                (row("l", "local"), "does not forward")):
-            with self.subTest(scenario=scenario["id"]):
-                self.assertIn(wanted, "\n".join(plan.capability_problems([scenario], vocabulary, bindings)))
-        self.assertIn("defines a capability twice", "\n".join(plan.capability_problems([], vocabulary + vocabulary[:1], bindings)))
+    def test_fixture_admission_reports_the_fixtures_own_refusals(self):
+        calls = []
 
-    def test_vocabulary_is_read_from_the_fixture_source(self):
-        import tempfile
-        from pathlib import Path
-        with tempfile.TemporaryDirectory() as directory:
-            Path(directory, "a.go").write_text('var x = defineCapability("one",\n\t"a \\"quoted\\" summary",\n\t"OSD=1 +two", nil)\n'
-                                               'var y = defineCapability("two", "s", "!one", func(p profile) bool { return true })\n', encoding="utf-8")
-            Path(directory, "a_test.go").write_text('var z = defineCapability("test-only", "s", "OSD=1", nil)\n', encoding="utf-8")
-            self.assertEqual(plan.fixture_capabilities(directory), [("one", ["OSD=1", "+two"]), ("two", ["!one"])])
+        def fake(stdout="", returncode=0, stderr="", raises=None):
+            def run(command, **kwargs):
+                calls.append((command, kwargs))
+                if raises:
+                    raise raises
+                return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+            return run
+
+        def event(action, output=None, test=plan.ADMISSION_TEST):
+            record = {"Action": action, "Package": "fixture", "Test": test}
+            if output is not None:
+                record["Output"] = output
+            return json.dumps(record)
+
+        passed = "\n".join([event("run"), event("pass")])
+        self.assertEqual(plan.fixture_admission_problems(fake(passed)), [])
+        command, kwargs = calls[0]
+        self.assertEqual(command[:2], ["go", "test"])
+        self.assertIn("^%s$" % plan.ADMISSION_TEST, command)
+        self.assertEqual(kwargs["cwd"], str(plan.FIXTURE))
+        self.assertEqual(kwargs["env"]["GOWORK"], "off")
+        refused = "\n".join([
+            event("run"),
+            event("output", "    capability_test.go:9: catalog admission: osd.x: the fixture refuses the row: four-OSD topology\n"),
+            event("output", "    capability_test.go:9: catalog admission: rbd.y: the fixture does not admit capability rbd-mirror\n"),
+            event("output", "    capability_test.go:9: catalog admission: z: unrelated\n", test="TestOther"),
+            event("fail")])
+        self.assertEqual(plan.fixture_admission_problems(fake(refused, 1)),
+                         ["osd.x: the fixture refuses the row: four-OSD topology",
+                          "rbd.y: the fixture does not admit capability rbd-mirror"])
+        # A check that does not run, is skipped, fails without naming a row or
+        # cannot start is a problem, never a silent pass.
+        for name, run in (("no test", fake('{"Action":"output","Output":"testing: warning: no tests to run\\n"}')),
+                          ("skipped", fake("\n".join([event("run"), event("skip")]))),
+                          ("build failure", fake("", 1, "go: go.mod requires go >= 1.26.0")),
+                          ("failure without a row", fake("\n".join([event("run"), event("fail")]), 1)),
+                          ("passed with a non-zero exit", fake(passed, 2)),
+                          ("no go command", fake(raises=FileNotFoundError("go")))):
+            with self.subTest(name):
+                problems = plan.fixture_admission_problems(run)
+                self.assertEqual(len(problems), 1)
+                self.assertIn(plan.ADMISSION_TEST, problems[0])
+        self.assertIn("go >= 1.26.0", plan.fixture_admission_problems(fake("", 1, "go: go.mod requires go >= 1.26.0"))[0])
+
+    def test_fixture_admission_test_is_the_one_the_planner_runs(self):
+        source = (plan.FIXTURE / "capability_test.go").read_text(encoding="utf-8")
+        self.assertIn("func %s(t *testing.T) {" % plan.ADMISSION_TEST, source)
+        self.assertIn('t.Error("%s" + problem)' % plan.ADMISSION_MARK, source)
+
+    def test_validate_fails_on_a_row_the_fixture_refuses(self):
+        refusal = "osd.x: the fixture refuses the row: four-OSD erasure-capacity topology requires ..."
+        err = io.StringIO()
+        with mock.patch.object(plan, "fixture_admission_problems", return_value=[refusal]), \
+                redirect_stdout(io.StringIO()), redirect_stderr(err):
+            self.assertEqual(plan.main(["validate"]), 1)
+        self.assertIn(refusal, err.getvalue())
+
+    def test_env_prints_the_workflow_environment_of_one_row(self):
+        row = next(entry for entry in plan.load_catalog() if entry["params"].get("capabilities", "").count(",") == 2)
+        out = io.StringIO()
+        with redirect_stdout(out), redirect_stderr(io.StringIO()):
+            self.assertEqual(plan.main(["env", row["id"]]), 0)
+        exported = {}
+        for line in out.getvalue().splitlines():
+            name, _, value = line.partition("=")
+            self.assertTrue(name.startswith("export CEPH_"), line)
+            exported[name[len("export "):]] = shlex.split(value)[0] if value else ""
+        self.assertEqual(set(exported), set(plan.workflow_bindings()))
+        self.assertEqual(exported["CEPH_MSGR_TEST_CAPABILITIES"], row["params"]["capabilities"])
+        self.assertEqual(exported["CEPH_MSGR_TEST_RUN"], row["params"]["test_run"])
+        self.assertEqual(exported["CEPH_MSGR_TEST_OSD_REPLICAS"], row["params"]["osd_replicas"])
+        self.assertEqual(exported["CEPH_MSGR_TEST_MGR_COUNT"], "2", "the workflow fallback")
+        self.assertTrue(exported["CEPH_MSGR_TEST_IMAGE"].startswith("quay.io/ceph/ceph:v20.2."), "the pinned image")
+        self.assertEqual(exported["CEPH_MSGR_TEST_MODE_REJECTION"], "")
+        with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(plan.main(["env", "no-such-scenario"]), 2)
 
     def test_mandatory_list_detects_silent_omission_in_both_directions(self):
         scenarios = [entry("a"), entry("b")]
@@ -206,7 +260,10 @@ class PlannerTests(unittest.TestCase):
                 self.assertEqual(plan.main(["plan", "--catalog", path, "--select", "m9"]), 2)
 
     def test_cli_exit_codes(self):
-        self.assertEqual(plan.main(["validate"]), 0)
+        # The fixture's own admission runs in the validate command itself
+        # (Basic CI); these unit tests also run with the product's Go 1.25.
+        with mock.patch.object(plan, "fixture_admission_problems", return_value=[]), redirect_stdout(io.StringIO()):
+            self.assertEqual(plan.main(["validate"]), 0)
         self.assertEqual(plan.main(["plan", "--select", "no-such-scenario"]), 2)
 
 
