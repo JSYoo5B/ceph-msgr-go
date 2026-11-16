@@ -26,6 +26,7 @@ const (
 	legacyDaemonCommandMDSSelector                 = "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
 	legacyMonForcedKillSelector                    = "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
 	legacyMdsCephFSSharedFlockSelector             = "^TestCephMDSCephFSSharedFlockRecoveryIntegration$"
+	legacyMdsCephFSHeldFcntlSelector               = "^TestCephMDSCephFSFcntlRangeRecoveryIntegration$"
 	legacyMdsCephFSHeldFlockSplitSelector          = "^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$"
 	legacyMdsCephFSHeldFlockSplitFragmentsSelector = "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$"
 	legacyMdsCephFSWritebackSelector               = "^TestCephMDSCephFSWritebackFenceIntegration$"
@@ -388,7 +389,9 @@ func legacyLoadProfile(getenv func(string) string) (profile, error) {
 			selected = "^TestCephMDSCephFS(Push|Recovery)?Integration$"
 			// The shared held-lock variant of the recovery acceptance owns a
 			// fresh metadata fixture and is admitted only when explicitly selected.
-			if run == legacyMdsCephFSSharedFlockSelector {
+			// The FCNTL variant was added after the migration with its
+			// capability mds-held-fcntl; this model admits it the same way.
+			if run == legacyMdsCephFSSharedFlockSelector || run == legacyMdsCephFSHeldFcntlSelector {
 				selected = run
 			}
 		}
@@ -551,6 +554,7 @@ type admissionModes struct {
 	Kill, Daemon, PoolModes, Journal, Lock, Markers string
 	CopyLate, CopyMulti, Mirror, Shard, Interval    bool
 	HeldFlock, Writeback, ColdBootstrap, Probe      string
+	HeldFcntl                                       string
 	Auth, Service, Cleanup                          time.Duration
 	BlockSize                                       int64
 	RBDReplicas, Manifest, Environment              string
@@ -611,6 +615,7 @@ func capabilityModes(p profile, err error) admissionModes {
 	m.CopyLate, m.CopyMulti, m.Mirror = p.copyFromLateErrorSelected(), p.copyFromMultiChunkSelected(), p.rbdMirrorSelected()
 	m.Shard, m.Interval = p.shardHistorySelected(), p.pgIntervalSelected()
 	m.Writeback = flags(p.admits(capMDSWritebackFence))
+	m.HeldFcntl = flags(admitMDSCephFSHeldFcntl("fcntl-probe", p) == nil)
 	m.ColdBootstrap = flags(p.mgrServiceColdBootstrap())
 	m.Probe = flags(validateIgnoreCacheProbeProfile(p) == nil)
 	m.Auth, m.Service = fixtureTicketTTLs(p)
@@ -662,6 +667,7 @@ func legacyModes(p profile, err error) admissionModes {
 	}
 	m.Markers = strings.Join([]string{marker(m.CopyLate), marker(m.CopyMulti), marker(m.Mirror), marker(legacyMonForcedKill(p)), marker(m.Shard)}, ",")
 	m.Writeback = flags(run == legacyMdsCephFSWritebackSelector)
+	m.HeldFcntl = flags(run == legacyMdsCephFSHeldFcntlSelector && p.mdsFresh == "1" && p.mdsCephFS == "1")
 	m.ColdBootstrap = flags(legacyMgrColdBootstrap(p))
 	m.Probe = flags(legacyValidateIgnoreCacheProbeProfile(p, run) == nil)
 	m.Auth, m.Service = legacyFixtureTicketTTLs(p)
