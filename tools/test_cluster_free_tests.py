@@ -1,4 +1,6 @@
 import re
+import shutil
+import subprocess
 import tempfile
 from pathlib import Path
 import unittest
@@ -34,6 +36,35 @@ class ClusterFreeTestsTests(unittest.TestCase):
         self.assertEqual(tests.cluster_free(root), ["TestCephFSHelper", "TestHelper"])
         added = self.fixture([source + "func TestNew(t *testing.T) {}\n"])
         self.assertEqual(tests.cluster_free(added), ["TestCephFSHelper", "TestHelper", "TestNew"])
+
+    def test_discovery_follows_go_test_rules(self):
+        source = ("func Test(t *testing.T) {}\n"
+                  "func TestOther(t *testing.T) {}\n"
+                  "func Test_underscore(t *testing.T) {}\n"
+                  "func Test1(_ *testing.T) {}\n"
+                  "func TestMain(m *testing.M) {}\n"
+                  "func Testable(t *testing.T) {}\n"
+                  "func TestHelperArgs(t *testing.T, n int) {}\n"
+                  "func TestBench(b *testing.B) {}\n"
+                  "func (s suite) TestMethod(t *testing.T) {}\n"
+                  "// func TestCommented(t *testing.T) {}\n")
+        root = self.fixture([source])
+        self.assertEqual(tests.declared(root), ["Test", "TestOther", "Test_underscore", "Test1"])
+        self.assertEqual(tests.selector(root), "^(Test|Test1|TestOther|Test_underscore)$")
+        passing = "".join("--- PASS: %s (0.00s)\n" % name for name in ("Test", "TestOther", "Test_underscore", "Test1"))
+        self.assertEqual(tests.verify(root, passing), [])
+        # The reviewer's counterexample: a log without the bare `Test` fails.
+        self.assertTrue(any(problem.startswith("Test: MISSING") for problem in
+                            tests.verify(root, passing.replace("--- PASS: Test (0.00s)\n", ""))))
+        # TestMain is the harness: it is never expected to report a PASS of its own.
+        self.assertFalse(any("TestMain" in problem for problem in tests.verify(root, passing)))
+
+    @unittest.skipUnless(shutil.which("go"), "go is not installed")
+    def test_discovery_matches_go_test_list_for_the_integration_package(self):
+        listed = subprocess.run(["go", "test", "-mod=readonly", "-list", ".", "./integration"], cwd=ROOT,
+                                capture_output=True, text=True, timeout=600, check=True).stdout.split()
+        listed = sorted(name for name in listed if name.startswith("Test"))
+        self.assertEqual(sorted(tests.declared(ROOT)), listed)
 
     def test_duplicate_and_empty_sets_fail(self):
         cases = [

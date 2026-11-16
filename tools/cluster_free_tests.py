@@ -4,7 +4,7 @@
 The integration package mixes TestCeph...Integration native fixture tests, which
 stay opt-in, with helper/decoder tests that need no cluster (including
 TestCephFS... consumer-helper tests). The name rule classifies every top-level
-test from the source: a TestCeph...Integration name is a native fixture test
+test from the source, discovered as `go test` discovers it (see FUNC below): a TestCeph...Integration name is a native fixture test
 and every other top-level test is cluster-free, so there is no list to edit.
 `check` refuses duplicate top-level names and an empty cluster-free set.
 `selector` prints the anchored -run pattern for exactly the cluster-free tests.
@@ -21,10 +21,25 @@ import sys
 NATIVE = re.compile(r"TestCeph\w*Integration")
 
 
+# A top-level function that `go test` runs as a test: no receiver, a name that is
+# `Test` alone or `Test` followed by a character that is not a lowercase letter,
+# and one *testing.T parameter. `TestMain(m *testing.M)` is the package harness,
+# not a test, and reports no result of its own.
+FUNC = re.compile(r"(?m)^func (Test\w*)\s*\(([^)]*)\)")
+TEST_NAME = re.compile(r"Test(?:[^a-z]\w*)?")
+TESTING_T = re.compile(r"\s*(?:\w+\s+)?\*testing\.T\s*")
+
+
+def is_go_test(name, params):
+    return bool(TEST_NAME.fullmatch(name)) and bool(TESTING_T.fullmatch(params))
+
+
 def declared(root):
     names = []
     for path in sorted((Path(root) / "integration").glob("*_test.go")):
-        names.extend(re.findall(r"(?m)^func (Test\w+)\s*\(", path.read_text(encoding="utf-8")))
+        for name, params in FUNC.findall(path.read_text(encoding="utf-8")):
+            if is_go_test(name, params):
+                names.append(name)
     return names
 
 
@@ -50,7 +65,7 @@ def selector(root):
 def verify(root, text):
     observed, problems = {}, check(root)
     for line in text.splitlines():
-        match = re.fullmatch(r"--- (PASS|FAIL|SKIP): (Test\w+) \([^\r\n]*\)", line)
+        match = re.fullmatch(r"--- (PASS|FAIL|SKIP): (Test\w*) \([^\r\n]*\)", line)
         if match:
             if match[2] in observed:
                 problems.append("duplicate result: %s" % match[2])
