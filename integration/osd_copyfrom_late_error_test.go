@@ -18,6 +18,8 @@ import (
 // The pinned injector runs after copy cursor completion/digest checks and before
 // fill_in_final_tx. This verifies a late server error, not daemon loss, temporary
 // copy staging, rollback of arbitrary vectors, or automatic mutation replay.
+//
+//fixture:isolated sets the OSD copy-from injector by admin socket; the restore re-sets the value, leaving a runtime override
 func TestCephOSDCopyFromLateErrorIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_COPYFROM_LATE_ERROR") != "1" {
 		t.Skip("requires the fixture-selected exclusive late-copy fault marker")

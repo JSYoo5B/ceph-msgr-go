@@ -15,6 +15,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated leaves native-stream-marker config-key entries that are never removed
 func TestCephStreamCancellationIntegration(t *testing.T) {
 	for _, mgr := range []bool{false, true} {
 		name := "MON"

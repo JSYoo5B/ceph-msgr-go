@@ -601,6 +601,7 @@ func waitRBDWriteState(ctx context.Context, path, phase string, finished <-chan 
 	}
 }
 
+//fixture:isolated creates and writes an image in the fixture's RBD pool, resizes and locks it; image not removed
 func TestCephRBDWriteIntegration(t *testing.T) {
 	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_RBD") != "1" || os.Getenv("CEPH_MSGR_TEST_OSD") != "1" || dir == "" {

@@ -19,6 +19,12 @@ def entry(sid, group="mon-mgr", **params):
     return {"id": sid, "group": group, "params": base}
 
 
+def all_shareable():
+    """A fixture sharing value for every repository row, as a passing fixture
+    check reports them."""
+    return {row["id"]: "shareable" for row in plan.load_catalog()}
+
+
 class CatalogTests(unittest.TestCase):
     def test_repository_catalog_is_valid_and_complete(self):
         document = plan.load_catalog_document()
@@ -141,9 +147,113 @@ class CatalogTests(unittest.TestCase):
         refusal = "osd.x: the fixture refuses the row: four-OSD erasure-capacity topology requires ..."
         err = io.StringIO()
         with mock.patch.object(plan, "fixture_admission_problems", return_value=[refusal]), \
+                mock.patch.object(plan, "fixture_sharing", return_value=([], all_shareable())), \
                 redirect_stdout(io.StringIO()), redirect_stderr(err):
             self.assertEqual(plan.main(["validate"]), 1)
         self.assertIn(refusal, err.getvalue())
+
+    def test_fixture_sharing_reads_the_fixtures_own_values_and_problems(self):
+        calls = []
+
+        def fake(stdout="", returncode=0, stderr="", raises=None):
+            def run(command, **kwargs):
+                calls.append((command, kwargs))
+                if raises:
+                    raise raises
+                return subprocess.CompletedProcess(command, returncode, stdout, stderr)
+            return run
+
+        def event(action, output=None, test=plan.SHARING_TEST):
+            record = {"Action": action, "Package": "fixture", "Test": test}
+            if output is not None:
+                record["Output"] = output
+            return json.dumps(record)
+
+        passed = "\n".join([
+            event("run"),
+            event("output", "    sharing_test.go:9: fixture sharing row: a shareable\n"),
+            event("output", "    sharing_test.go:9: fixture sharing row: b isolated by 1 of 2 selected tests, first integration/TestCephKillIntegration\n"),
+            event("output", "    sharing_test.go:9: fixture sharing row: c shareable\n", test="TestOther"),
+            event("pass")])
+        self.assertEqual(plan.fixture_sharing(fake(passed)), ([], {"a": "shareable", "b": "isolated"}))
+        command, kwargs = calls[0]
+        self.assertEqual(command[:2], ["go", "test"])
+        self.assertIn("^%s$" % plan.SHARING_TEST, command)
+        self.assertEqual(kwargs["cwd"], str(plan.FIXTURE))
+        self.assertEqual(kwargs["env"]["GOWORK"], "off")
+        refused = "\n".join([
+            event("run"),
+            event("output", "    sharing_test.go:9: fixture sharing: integration/TestCephNewIntegration (integration/new_test.go) declares no fixture sharing\n"),
+            event("output", "    sharing_test.go:9: fixture sharing: n: no fixture sharing value: it selects integration/TestCephNewIntegration\n"),
+            event("fail")])
+        problems, values = plan.fixture_sharing(fake(refused, 1))
+        self.assertEqual(values, {})
+        self.assertEqual(problems, ["integration/TestCephNewIntegration (integration/new_test.go) declares no fixture sharing",
+                                    "n: no fixture sharing value: it selects integration/TestCephNewIntegration"])
+        for name, run in (("no test", fake('{"Action":"output","Output":"testing: warning: no tests to run\\n"}')),
+                          ("skipped", fake("\n".join([event("run"), event("skip")]))),
+                          ("build failure", fake("", 1, "go: go.mod requires go >= 1.26.0")),
+                          ("failure without a problem", fake("\n".join([event("run"), event("fail")]), 1)),
+                          ("passed with a non-zero exit", fake(passed, 2)),
+                          ("unknown value", fake("\n".join([event("run"), event("output", "fixture sharing row: a sharable\n"), event("pass")]))),
+                          ("repeated row", fake("\n".join([event("run"), event("output", "fixture sharing row: a shareable\n"),
+                                                           event("output", "fixture sharing row: a isolated by x\n"), event("pass")]))),
+                          ("no go command", fake(raises=FileNotFoundError("go")))):
+            with self.subTest(name):
+                problems, _ = plan.fixture_sharing(run)
+                self.assertEqual(len(problems), 1)
+                self.assertIn("fixture sharing", problems[0])
+
+    def test_fixture_sharing_test_is_the_one_the_planner_runs(self):
+        source = (plan.FIXTURE / "sharing_test.go").read_text(encoding="utf-8")
+        self.assertIn("func %s(t *testing.T) {" % plan.SHARING_TEST, source)
+        self.assertIn('sharingMark    = "%s"' % plan.SHARING_MARK, source)
+        self.assertIn('sharingRowMark = "%s"' % plan.SHARING_ROW_MARK, source)
+        self.assertIn("t.Error(sharingMark + problem)", source)
+        self.assertIn("t.Log(sharingRowMark + row.line())", source)
+
+    def test_planner_refuses_a_row_without_a_fixture_sharing_value(self):
+        rows = [entry("a"), entry("b"), entry("c")]
+        self.assertEqual(plan.sharing_problems(rows, {"a": "shareable", "b": "isolated", "c": "isolated"}), [])
+        self.assertEqual(plan.sharing_problems(rows, {"a": "shareable", "b": "sharable", "z": "isolated"}),
+                         ["b has no fixture sharing value", "c has no fixture sharing value",
+                          "fixture sharing value for unknown row z"])
+        values = all_shareable()
+        missing = sorted(values)[0]
+        del values[missing]
+        err = io.StringIO()
+        for command in ("validate", "sharing"):
+            with self.subTest(command), mock.patch.object(plan, "fixture_admission_problems", return_value=[]), \
+                    mock.patch.object(plan, "fixture_sharing", return_value=([], values)), \
+                    redirect_stdout(io.StringIO()), redirect_stderr(err):
+                self.assertEqual(plan.main([command]), 1)
+            self.assertIn("%s has no fixture sharing value" % missing, err.getvalue())
+        declaration = "integration/TestCephNewIntegration (integration/new_test.go) declares no fixture sharing"
+        err = io.StringIO()
+        with mock.patch.object(plan, "fixture_admission_problems", return_value=[]), \
+                mock.patch.object(plan, "fixture_sharing", return_value=([declaration], all_shareable())), \
+                redirect_stdout(io.StringIO()), redirect_stderr(err):
+            self.assertEqual(plan.main(["validate"]), 1)
+        self.assertIn(declaration, err.getvalue())
+
+    def test_shareable_rows_of_one_configuration_form_one_job(self):
+        rows = [entry("a.1", test_run="^TestCephAIntegration$"), entry("a.2", test_run="^TestCephBIntegration$"),
+                entry("a.3", test_run="^TestCephKillIntegration$"), entry("a.broad"),
+                entry("b.1", family="6", test_run="^TestCephAIntegration$"),
+                entry("c.1", family="6", runtime="host", test_run="^TestCephKillIntegration$")]
+        values = {"a.1": "shareable", "a.2": "shareable", "a.3": "isolated", "a.broad": "isolated",
+                  "b.1": "shareable", "c.1": "isolated"}
+        groups = plan.sharing_groups(rows, values)
+        self.assertEqual([(shareable, isolated) for _, shareable, isolated in groups],
+                         [(["a.1", "a.2"], ["a.3", "a.broad"]), (["b.1"], []), ([], ["c.1"])])
+        self.assertEqual(groups[0][0], {"key": "aes", "service": "aes", "family": "4"})
+        self.assertEqual(plan.grouped_jobs(groups), 1 + 2 + 1 + 1)
+        out = io.StringIO()
+        with mock.patch.object(plan, "load_catalog", return_value=rows), \
+                mock.patch.object(plan, "fixture_sharing", return_value=([], values)), redirect_stdout(out):
+            self.assertEqual(plan.main(["sharing"]), 0)
+        self.assertIn("6 rows: 3 shareable, 3 isolated; 3 configurations, 1 with more than one shareable row", out.getvalue())
+        self.assertIn("default coverage: 6 jobs, 5 once shareable rows of one configuration share a fixture", out.getvalue())
 
     def test_env_prints_the_workflow_environment_of_one_row(self):
         row = next(entry for entry in plan.load_catalog() if entry["params"].get("capabilities", "").count(",") == 2)
@@ -349,7 +459,9 @@ class PlannerTests(unittest.TestCase):
     def test_cli_exit_codes(self):
         # The fixture's own admission runs in the validate command itself
         # (Basic CI); these unit tests also run with the product's Go 1.25.
-        with mock.patch.object(plan, "fixture_admission_problems", return_value=[]), redirect_stdout(io.StringIO()):
+        with mock.patch.object(plan, "fixture_admission_problems", return_value=[]), \
+                mock.patch.object(plan, "fixture_sharing", return_value=([], all_shareable())), \
+                redirect_stdout(io.StringIO()):
             self.assertEqual(plan.main(["validate"]), 0)
         self.assertEqual(plan.main(["plan", "--select", "no-such-scenario"]), 2)
 

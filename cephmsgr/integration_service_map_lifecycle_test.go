@@ -24,6 +24,8 @@ import (
 // Native holders outlive their control requests. The second registration is
 // created only after the first watch's actual MON has stopped, so receiving it
 // on that same watch cannot be satisfied by a buffered pre-fault snapshot.
+//
+//fixture:isolated cleanup kills live holders without proving their service map entries are gone; the service map is not checked
 func TestCephMonServiceMapLifecycleIntegration(t *testing.T) {
 	runServiceMapLifecycle(t, false)
 }
@@ -37,6 +39,8 @@ const serviceMapLifecycleHoldSelector = "^TestCephMonServiceMapLifecycleFailedMo
 // setup timeout) before the failure is returned. This makes the failed-seed
 // delay deterministic. It runs only when exclusively selected, so broad rows
 // keep the unmodified lifecycle as their only lifecycle cell.
+//
+//fixture:isolated cleanup kills live holders without proving their service map entries are gone; the service map is not checked
 func TestCephMonServiceMapLifecycleFailedMonHoldIntegration(t *testing.T) {
 	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != serviceMapLifecycleHoldSelector {
 		t.Skip("held stopped-MON dial variant requires its exclusive selector " + serviceMapLifecycleHoldSelector)

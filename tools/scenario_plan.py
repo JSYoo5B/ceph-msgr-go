@@ -15,6 +15,8 @@ needs the fixture module's Go toolchain) and starts no cluster.
   scenario_plan.py list                   one identifier per line
   scenario_plan.py plan --select S        matrix JSON on stdout, explanation on stderr
   scenario_plan.py env ID                 shell exports of the native workflow's environment for one row
+  scenario_plan.py sharing                every row's fixture sharing value and the default coverage's
+                                          jobs once shareable rows of one configuration share a fixture
 
 `list`, `plan` and `env` accept --catalog PATH to read another revision's
 catalog (a pull request's vocabulary) while running this trusted script. PATH
@@ -52,6 +54,17 @@ assignment keeps that status, which `eval "$(...)"` would replace with eval's
 own success, so the && chain never starts the runner with another row's
 environment, and the subshell keeps one row's environment from the next.
 
+Every native test declares whether it may share a fixture with the tests
+after it, beside its function (//fixture:shareable <reason> or
+//fixture:isolated <reason>; integration/fixture/FIXTURE_SHARING.md). A row is
+shareable only when every test its effective selector selects is. The fixture
+derives each row's value (TestCatalogRowsDeclareFixtureSharing); validate and
+sharing run that test and refuse a row without a value, a test without a
+declaration and a misplaced declaration. A fixture configuration is a row's
+parameters without test_run. sharing lists, per configuration, the shareable
+rows that one fixture can run and the isolated rows that keep their own; it
+plans nothing, and the default and periodic coverage still run one job per row.
+
 validate refuses a documented `env ID` of an unknown row, a documented `env`
 that is not this checked form, and a hand-written reproduction that selects
 the exact test of a row with capabilities but does not declare them.
@@ -83,6 +96,12 @@ CAPABILITY_NAME = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 # mark of each problem line it reports (capability_test.go).
 ADMISSION_TEST = "TestCatalogRowsAreAdmittedByTheFixture"
 ADMISSION_MARK = "catalog admission: "
+# The fixture test that derives every row's fixture sharing value, the mark of
+# each problem line and the mark of each row's value (sharing_test.go).
+SHARING_TEST = "TestCatalogRowsDeclareFixtureSharing"
+SHARING_MARK = "fixture sharing: "
+SHARING_ROW_MARK = "fixture sharing row: "
+SHARING_VALUES = ("shareable", "isolated")
 # A documented assignment of one exact test selector, and a documented
 # reproduction through `env` (reproduction_problems).
 DOCUMENTED_RUN = re.compile(r"CEPH_MSGR_TEST_RUN=['\"]?(\^Test[A-Za-z0-9_]+\$)")
@@ -323,6 +342,83 @@ def fixture_admission_problems(run=subprocess.run, directory=FIXTURE):
     return problems
 
 
+def fixture_sharing(run=subprocess.run, directory=FIXTURE):
+    """(problems, {row: value}) as this tree's fixture derives them.
+
+    Runs the fixture's TestCatalogRowsDeclareFixtureSharing, which reads the
+    declaration beside every native test and derives each row's value from
+    the tests the row's effective selector selects. A problem line is marked
+    SHARING_MARK, a row's value SHARING_ROW_MARK. A check that does not run or
+    does not pass is a problem as well, never a silent pass."""
+    command = ["go", "test", "-mod=readonly", "-count=1", "-json", "-run", "^%s$" % SHARING_TEST, "."]
+    try:
+        result = run(command, cwd=str(directory), env=dict(os.environ, GOWORK="off"),
+                     capture_output=True, text=True, timeout=1200)
+    except (OSError, subprocess.SubprocessError) as error:
+        return ["the fixture sharing check (%s) did not run: %s" % (SHARING_TEST, error)], {}
+    problems, values, actions = [], {}, []
+    for line in result.stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("Test") != SHARING_TEST:
+            continue
+        if event.get("Action") in ("pass", "fail", "skip"):
+            actions.append(event["Action"])
+        output = event.get("Output") or ""
+        if SHARING_MARK in output:
+            problems.append(output.split(SHARING_MARK, 1)[1].rstrip())
+        elif SHARING_ROW_MARK in output:
+            fields = output.split(SHARING_ROW_MARK, 1)[1].split()
+            if len(fields) < 2 or fields[1] not in SHARING_VALUES or fields[0] in values:
+                problems.append("the fixture sharing check reported an unreadable row line %r" % output.strip())
+            else:
+                values[fields[0]] = fields[1]
+    if result.returncode == 0 and actions == ["pass"] and not problems:
+        return [], values
+    if not problems:
+        tail = " | ".join((result.stderr or result.stdout).strip().splitlines()[-5:])
+        problems.append("the fixture sharing check (%s) reported %s with exit status %d and no problem line: %s"
+                        % (SHARING_TEST, ",".join(actions) or "no result", result.returncode, tail))
+    return problems, values
+
+
+def sharing_problems(scenarios, values):
+    """Every row has exactly one fixture sharing value and no value names an
+    unknown row: the planner refuses a row without one."""
+    ids = [entry["id"] for entry in scenarios]
+    problems = ["%s has no fixture sharing value" % sid for sid in ids if values.get(sid) not in SHARING_VALUES]
+    problems += ["fixture sharing value for unknown row %s" % sid for sid in sorted(set(values) - set(ids))]
+    return problems
+
+
+def configuration(params):
+    """A row's fixture configuration: its parameters without test_run."""
+    return {name: value for name, value in params.items() if name != "test_run"}
+
+
+def sharing_groups(scenarios, values):
+    """[(configuration, shareable ids, isolated ids)] in catalog order.
+
+    The shareable rows of one configuration can run on one fixture; every
+    isolated row keeps a fixture of its own."""
+    groups, order = {}, []
+    for entry in scenarios:
+        key = json.dumps(configuration(entry["params"]), sort_keys=True)
+        if key not in groups:
+            groups[key] = (configuration(entry["params"]), [], [])
+            order.append(key)
+        groups[key][1 if values[entry["id"]] == "shareable" else 2].append(entry["id"])
+    return [groups[key] for key in order]
+
+
+def grouped_jobs(groups):
+    """Jobs of a coverage once each configuration's shareable rows share one
+    fixture: one per configuration with a shareable row, one per isolated row."""
+    return sum((1 if shareable else 0) + len(isolated) for _, shareable, isolated in groups)
+
+
 def mandatory_problems(scenarios, mandatory):
     """The mandatory list names every scenario the default coverage must run.
 
@@ -434,6 +530,7 @@ def main(argv=None):
     plan = sub.add_parser("plan")
     plan.add_argument("--select", action="append", required=True)
     plan.add_argument("--catalog", default=str(CATALOG))
+    sub.add_parser("sharing")
     env = sub.add_parser("env")
     env.add_argument("id")
     env.add_argument("--catalog", default=str(CATALOG))
@@ -448,12 +545,34 @@ def main(argv=None):
                         + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
                                                  for path in documentation_files()], scenarios)
                         + fixture_admission_problems())
+            shared, values = fixture_sharing()
+            problems += shared + sharing_problems(scenarios, values)
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
                 return 1
-            print("catalog valid: %d scenarios, all mandatory, selecting existing tests, admitted by the fixture"
-                  % len(scenarios))
+            print("catalog valid: %d scenarios, all mandatory, selecting existing tests, admitted by the fixture,"
+                  " each with a fixture sharing value" % len(scenarios))
+        elif args.command == "sharing":
+            problems, values = fixture_sharing()
+            problems += sharing_problems(scenarios, values)
+            if problems:
+                for problem in problems:
+                    print(problem, file=sys.stderr)
+                return 1
+            groups = sharing_groups(scenarios, values)
+            for params, shareable, isolated in groups:
+                print("configuration %s" % json.dumps(params, sort_keys=True))
+                for sid in shareable:
+                    print("  shareable %s" % sid)
+                for sid in isolated:
+                    print("  isolated  %s" % sid)
+            shareable_rows = sum(len(group[1]) for group in groups)
+            print("%d rows: %d shareable, %d isolated; %d configurations, %d with more than one shareable row"
+                  % (len(scenarios), shareable_rows, len(scenarios) - shareable_rows, len(groups),
+                     sum(1 for group in groups if len(group[1]) > 1)))
+            print("default coverage: %d jobs, %d once shareable rows of one configuration share a fixture"
+                  % (len(scenarios), grouped_jobs(groups)))
         elif args.command == "list":
             for entry in scenarios + fixed_entries(load_catalog_document(args.catalog)):
                 print(entry["id"])

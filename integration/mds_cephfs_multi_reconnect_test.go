@@ -21,6 +21,8 @@ import (
 // TestCephMDSCephFSMultiReconnectIntegration restores only real retained
 // capabilities, with no request replay or pending metadata flush. The small
 // frame bound makes this a split-wire acceptance rather than a scale test.
+//
+//fixture:isolated restarts the owned MDS via mds fail and sets debug overrides; leaves 32 split files in the fixture filesystem
 func TestCephMDSCephFSMultiReconnectIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION=1 for owned split reconnect acceptance")

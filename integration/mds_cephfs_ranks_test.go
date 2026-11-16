@@ -576,6 +576,7 @@ type ranksStatusSample struct {
 	ArmedBlocklist  []nativeMDSSessionsBlock
 }
 
+//fixture:isolated pauses MDS logs and fails a rank with mds fail for standby takeover; rank layout not restored
 func TestCephMDSCephFSRanksIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS_RANKS=1 for owned multi-rank CephFS acceptance")

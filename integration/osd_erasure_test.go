@@ -19,17 +19,23 @@ import (
 // to the PG primary with that primary's shard in spg_t (replicated-PG
 // profiles) or with the raw hash the OSD maps itself (object-hash profile).
 // The independent native client observes every result.
+//
+//fixture:isolated own EC pool and profile removed checked, but its CRUSH rule and config mon_allow_pool_delete=true stay behind
 func TestCephOSDErasureIntegration(t *testing.T) { erasureScenario(t, erasureK2M1, false, "") }
 
 // Tentacle's optimized EC (allow_ec_optimizations) changes the OSD write and
 // read paths, makes the non-first data shards ineligible as primary and stores
 // pg_temp primary-first. None of that is on this client's wire: the caller's
 // placement still names the primary and its shard, so the same cases apply.
+//
+//fixture:isolated own EC pool and profile removed checked, but its CRUSH rule and config mon_allow_pool_delete=true stay behind
 func TestCephOSDErasureOptimizedIntegration(t *testing.T) { erasureScenario(t, erasureK2M1, true, "") }
 
 // The same cases on a pool whose k=2,m=1 profile names the jerasure plugin
 // instead of Tentacle's default isa: the encoding is inside the OSDs, so the
 // client's requests and the native observations are the same.
+//
+//fixture:isolated own EC pool and profile removed checked, but its CRUSH rule and config mon_allow_pool_delete=true stay behind
 func TestCephOSDErasureJerasureIntegration(t *testing.T) {
 	erasureScenario(t, erasureK2M1, false, "jerasure")
 }
@@ -37,11 +43,15 @@ func TestCephOSDErasureJerasureIntegration(t *testing.T) {
 // The first wider width: an isa k=2,m=2 pool on the four-OSD topology, with
 // no optimizations and no faults. Size, min_size, acting set, primary shard
 // and control shard all come from the native pool and map, not from k=2,m=1.
+//
+//fixture:isolated own EC pool and profile removed checked, but its CRUSH rule and config mon_allow_pool_delete=true stay behind
 func TestCephOSDErasureK2M2Integration(t *testing.T) { erasureScenario(t, erasureK2M2, false, "isa") }
 
 // The optimized isa k=2,m=2 pool on the four-OSD topology, without faults:
 // the native map must report nonprimary shard {1} for size 4, and the native
 // primary must hold a primary-eligible shard before any Go I/O.
+//
+//fixture:isolated own EC pool and profile removed checked, but its CRUSH rule and config mon_allow_pool_delete=true stay behind
 func TestCephOSDErasureOptimizedK2M2Integration(t *testing.T) {
 	erasureScenario(t, erasureK2M2, true, "isa")
 }

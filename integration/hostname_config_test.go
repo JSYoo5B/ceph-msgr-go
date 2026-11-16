@@ -34,6 +34,7 @@ func verifyNativeHostnameConfig(t *testing.T, ctx context.Context, control, labe
 	}
 }
 
+//fixture:isolated adds CRUSH buckets and watches the cluster log; neither the hierarchy nor the log is in the start-state check
 func TestCephHostnameConfigIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)

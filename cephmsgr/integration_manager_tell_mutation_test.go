@@ -61,6 +61,8 @@ func waitGoManager(t *testing.T, ctx context.Context, c *Client, want nativeMgrT
 // on that daemon's own admin socket while the Go caller is still pending, a
 // native overwrite B then makes any replay of A visible, and the caller keeps
 // its unknown outcome. The command schema stays in test files.
+//
+//fixture:shareable sets an active MGR runtime override; cleanup restores it and a fresh read shows the baseline
 func TestCephAppliedNamedManagerTellIsNotReplayedIntegration(t *testing.T) {
 	appliedManagerTellIsNotReplayed(t, false)
 }
@@ -68,6 +70,8 @@ func TestCephAppliedNamedManagerTellIsNotReplayedIntegration(t *testing.T) {
 // The same cell for MgrTell, whose target is the active manager of the
 // client's MgrMap rather than a name the caller supplies. The native observer
 // is bound to the manager whose connection actually carried the command.
+//
+//fixture:shareable sets an active MGR runtime override; cleanup restores it and a fresh read shows the baseline
 func TestCephAppliedCurrentManagerTellIsNotReplayedIntegration(t *testing.T) {
 	appliedManagerTellIsNotReplayed(t, true)
 }

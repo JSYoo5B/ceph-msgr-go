@@ -27,6 +27,8 @@ import (
 // inode's reconnect capability and requires native contention, the original
 // owner and one explicit release on the replacement incarnation. The locked
 // file is the first split file, whose capability a nonfinal fragment carries.
+//
+//fixture:isolated restarts the owned MDS via mds fail and sets debug overrides; leaves files in the fixture filesystem
 func TestCephMDSCephFSHeldFlockSplitReconnectIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION=1 for owned held-lock split reconnect acceptance")
@@ -40,6 +42,8 @@ func TestCephMDSCephFSHeldFlockSplitReconnectIntegration(t *testing.T) {
 // fragment carries. Each capability record carries its own one-record blob,
 // so lock blobs travel in more than one MClientReconnect. After the restart
 // both locks must be restored independently and released one at a time.
+//
+//fixture:isolated restarts the owned MDS via mds fail and sets debug overrides; leaves files in the fixture filesystem
 func TestCephMDSCephFSHeldFlockSplitFragmentsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION=1 for owned two-fragment held-lock split reconnect acceptance")

@@ -11,6 +11,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated restarts a MON without a quorum settle, then runs mgr fail; neither is restored
 func TestCephSnapshotIntegration(t *testing.T) {
 	c, ctx := fixtureClient(t, time.Minute)
 	initial := waitClientState(t, c, ctx, func(s cephmsgr.State) bool { return s.Manager.Available })

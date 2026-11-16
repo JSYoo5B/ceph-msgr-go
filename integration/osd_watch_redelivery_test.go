@@ -13,6 +13,8 @@ import (
 // on the OSD (the registration is disconnected, not removed). An explicit
 // RECONNECT makes the OSD redeliver it (Watch::connect sends in-progress
 // notifies), and the reconnected handle's ACK completes the notify.
+//
+//fixture:shareable reconnects and unwatches a watch on an owned object; checked cleanup removes the object
 func TestCephOSDWatchNotifyRedeliveryIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()
 	var c *cephmsgr.Client

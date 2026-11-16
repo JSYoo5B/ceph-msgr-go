@@ -26,6 +26,8 @@ import (
 // At the end the native client must see exactly the bytes and xattr each
 // worker expects, so no append was lost, duplicated or reordered, and the
 // client's goroutines must return to their starting level.
+//
+//fixture:shareable workers write owned UUID objects in the fixture pool; checked cleanup removes them
 func TestCephOSDSoakIntegration(t *testing.T) {
 	value := os.Getenv("CEPH_MSGR_TEST_OSD_SOAK")
 	if value == "" {

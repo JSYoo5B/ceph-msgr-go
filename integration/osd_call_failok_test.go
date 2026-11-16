@@ -13,6 +13,8 @@ import (
 // -EINVAL. With FAILOK the vector continues; native observation shows whether
 // the failed method's staged xattr is committed with the later operations
 // (observed: it is).
+//
+//fixture:shareable writes xattrs on its owned UUID object only; omap-write cleanup removes it and fails the test on error
 func TestCephOSDCallFailOKIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

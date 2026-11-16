@@ -147,6 +147,7 @@ func (o *securityModeObserver) check() (int, error) {
 	return len(o.conns), nil
 }
 
+//fixture:isolated its MGR variant restarts both MGRs into secure mode; the CRC-only start state is not restored
 func TestCephConnectionModeRejectionIntegration(t *testing.T) {
 	mode := os.Getenv("CEPH_MSGR_TEST_MODE_REJECTION")
 	if mode == "" {

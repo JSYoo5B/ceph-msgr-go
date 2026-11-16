@@ -149,6 +149,7 @@ type replayTakeoverEvidence struct {
 	MDSDials                 []recoveryDial
 }
 
+//fixture:isolated pins subtrees, pauses an MDS log and fails a rank for standby takeover; ranks not restored
 func TestCephMDSCephFSRanksReplayIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_CEPHFS_RANKS=1 and CEPH_MSGR_TEST_MDS_CEPHFS_RANKS_REPLAY=1 for owned standby-replay CephFS acceptance")

@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:shareable sends pg stat reads and closes its own client during the MGR handshake; changes nothing in the cluster
 func TestCephCloseDuringManagerHandshakeIntegration(t *testing.T) {
 	observer, ctx := fixtureClient(t, 30*time.Second)
 	query := Command{JSON: []byte(`{"prefix":"pg stat","format":"json"}`)}

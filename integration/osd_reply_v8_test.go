@@ -103,6 +103,8 @@ func replyV8Omap(t *testing.T, state omapWriteState) map[string]string {
 // The selected public profile rejects replies outside v8/compat2. These actual
 // daemon requests supplement its independently built five reply codec vectors;
 // they do not establish every opcode family or general placement support.
+//
+//fixture:shareable writes owned UUID objects and native mirrors in the fixture pool; checked cleanup removes them
 func TestCephOSDReplyV8Integration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-reply-v8" && os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-request-v9-reply-v8" {
 		t.Skip("requires explicit replicated-pg-reply-v8 fixture")

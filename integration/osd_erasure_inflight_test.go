@@ -33,6 +33,8 @@ import (
 // primary and shard. Only where it shows that the first attempt was not
 // applied does the test, as the caller, resubmit the same operations under
 // the original identity to the replacement primary.
+//
+//fixture:isolated kills the primary OSD, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration(t *testing.T) {
 	erasureInFlightScenario(t, erasureK2M2, true, "isa", false)
 }
@@ -40,6 +42,8 @@ func TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration(t *testing.T) {
 // The caller deliberately repeats an independently observed applied mutation
 // after an epoch change. PG-log duplicate detection in this bounded experiment
 // is separate from automatic replay policy and an exactly-once guarantee.
+//
+//fixture:isolated kills the primary OSD, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration(t *testing.T) {
 	erasureInFlightScenario(t, erasureK2M2, true, "isa", true)
 }

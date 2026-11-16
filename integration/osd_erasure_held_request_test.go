@@ -206,6 +206,8 @@ func checkHeldRequest(s opsInFlightSnapshot, route osdFixtureOracle, gid uint64,
 // and the returned primary's PG log must hold the seed write's identity but
 // not the held one. The caller then resubmits the same operations once under
 // the original transaction, which must apply once and appear once in that log.
+//
+//fixture:isolated kills the primary OSD, restart verified osd-ready clean; EC CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *testing.T) {
 	width := erasureK2M2
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

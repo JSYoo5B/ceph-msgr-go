@@ -18,6 +18,8 @@ import (
 // An ONDISK COPY_FROM2 reply means the copied bytes, xattrs and OMAP are
 // committed: they survive SIGKILL and restart of a BlueStore OSD. This covers
 // daemon termination only, not host power loss or device durability.
+//
+//fixture:isolated kills and restarts the primary OSD; no pg_temp or placement proof, recovery rewrites the fixture object
 func TestCephOSDCopyFromCrashIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("forced daemon termination persistence requires the sparse-file BlueStore fixture")

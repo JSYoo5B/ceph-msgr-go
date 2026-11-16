@@ -32,6 +32,8 @@ import (
 //
 // Neither side invents a result, and the old handle never recovers by itself.
 // After the daemon restarts, a new connection to its new address answers.
+//
+//fixture:isolated kills and restarts the primary OSD; recovery has no pg_temp proof and rewrites the fixture object
 func TestCephOSDCommandCrashIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("daemon restart needs the BlueStore fixture")
@@ -218,6 +220,8 @@ func TestCephOSDCommandCrashIntegration(t *testing.T) {
 // transaction, never with a result. A stop must not report success either; a
 // known error the daemon sends while shutting down is accepted and logged.
 // Nothing is resent to the restarted daemon, and a new connection answers.
+//
+//fixture:isolated sets OSD runtime config, kills the OSD mid-bench and restarts it; no pg_temp proof, fixture object rewritten
 func TestCephOSDCommandCrashInFlightIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("daemon restart needs the BlueStore fixture")

@@ -14,6 +14,8 @@ import (
 // _delete_oid): the watcher stopped pinging past its timeout, or another
 // client deleted the object. The handle delivers that event and then reports
 // ErrOSDWatchDisconnected; nothing is re-registered automatically.
+//
+//fixture:shareable watches owned UUID objects and deletes them; checked cleanup removes the remaining owned objects
 func TestCephOSDWatchDisconnectIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()
 	var c *cephmsgr.Client

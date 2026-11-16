@@ -1025,6 +1025,7 @@ func waitRBDLockNotification(ctx context.Context, r *rbdLockResponder, from int,
 	}
 }
 
+//fixture:isolated kills the native lock owner and blocklists its address; removed only at fixture teardown
 func TestCephRBDLockOwnerLossIntegration(t *testing.T) { runRBDLockOwnerLoss(t, false) }
 
 // TestCephRBDLockOwnerLossPendingIntegration is the same double handoff with
@@ -1043,6 +1044,8 @@ func TestCephRBDLockOwnerLossIntegration(t *testing.T) { runRBDLockOwnerLoss(t, 
 // raised the epoch, shows both requests held since before the handoff and
 // gone afterwards. See
 // integration/fixture/RBD_LOCK_OWNER_LOSS_PENDING_VALIDATION.md.
+//
+//fixture:isolated blocklists the lock owner, toggles pool flag nodeep-scrub; blocklist removed only at fixture teardown
 func TestCephRBDLockOwnerLossPendingIntegration(t *testing.T) { runRBDLockOwnerLoss(t, true) }
 
 func runRBDLockOwnerLoss(t *testing.T, pendingVariant bool) {

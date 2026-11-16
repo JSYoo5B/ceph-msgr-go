@@ -70,6 +70,7 @@ func sparseReadOracleAt(t *testing.T, ctx context.Context, name string, offset, 
 	return result
 }
 
+//fixture:shareable writes owned UUID objects in the fixture pool; checked cleanup removes them
 func TestCephOSDSparseReadIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE") != "1" {
 		t.Skip("requires staged independent native sparse-read oracle; set CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE=1 after staging the matching binary")

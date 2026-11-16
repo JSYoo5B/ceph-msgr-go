@@ -14,6 +14,8 @@ import (
 // it with nowhere to send an event. A RECONNECT sent after that is refused with
 // a known -107 (ENOTCONN) and creates no registration; the client does not fall
 // back to a new WATCH.
+//
+//fixture:shareable the watch expires by timeout (verified gone); checked cleanup removes the owned object
 func TestCephOSDWatchExpiredReconnectIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()
 	var c *cephmsgr.Client

@@ -12,6 +12,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated pauses a standby MGR and restarts it with a new GID; needs a fresh preparation receipt
 func TestCephNativeManagerPreparationIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_NATIVE_MGR_PREPARATION") != "1" {
 		t.Skip("requires the isolated opt-in native MGR preparation acceptance fixture")

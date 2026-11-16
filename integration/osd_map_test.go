@@ -17,6 +17,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:shareable sets noout to advance the map and unsets it with a checked cleanup command; otherwise reads only
 func TestCephOSDMapDeliveryIntegration(t *testing.T) {
 	c, ctx, oracle, data := osdFixture(t)
 	directory := os.Getenv("CEPH_MSGR_CONTROL_DIR")

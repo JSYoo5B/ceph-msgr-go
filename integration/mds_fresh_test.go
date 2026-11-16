@@ -215,6 +215,7 @@ func mdsFreshKeepalive(ctx context.Context, tr *session.Transport, evidence *mds
 	return errors.New("MDS did not acknowledge within the bounded control-frame count")
 }
 
+//fixture:shareable authenticates and sends MDS keepalives only; native session-map reads, no CephFS session opened
 func TestCephMDSFreshIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_FRESH") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_FRESH=1 for owned native MDS authentication and keepalive acceptance")
