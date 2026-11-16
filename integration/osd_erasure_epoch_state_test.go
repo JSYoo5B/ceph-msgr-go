@@ -14,7 +14,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -249,6 +248,16 @@ type ecEpochRun struct {
 	pgNum   int
 	request func(osdFixtureOracle, ...cephmsgr.OSDOperation) cephmsgr.OSDRequest
 	facts   erasureFacts
+	// control runs one fixture daemon control (action, daemon, name).
+	control func(ctx context.Context, action, daemon, name string) error
+	// outages lists every OSD the run killed, in kill order.
+	outages []*ecOutage
+}
+
+// fixtureControl runs one daemon control through the native fixture's
+// control directory.
+func fixtureControl(ctx context.Context, action, daemon, name string) error {
+	return testcluster.ControlDaemon(ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), action, daemon, name)
 }
 
 func startECEpochRun(t *testing.T, timeout time.Duration) *ecEpochRun {
@@ -256,7 +265,7 @@ func startECEpochRun(t *testing.T, timeout time.Duration) *ecEpochRun {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skipf("%s with overwrites needs the BlueStore OSD topology %q", width, width.topology)
 	}
-	r := &ecEpochRun{t: t, request: osdObjectRequest, pgNum: 1}
+	r := &ecEpochRun{t: t, request: osdObjectRequest, pgNum: 1, control: fixtureControl}
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {
 		fixture, r.request, r.hash, r.pgNum = replicatedPGFixture, replicatedPGRequest, true, 8
@@ -268,7 +277,7 @@ func startECEpochRun(t *testing.T, timeout time.Duration) *ecEpochRun {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	t.Cleanup(cancel)
 	r.ctx = ctx
-	t.Cleanup(func() {
+	r.teardown(func() {
 		cleanup, stop := context.WithTimeout(context.Background(), 90*time.Second)
 		defer stop()
 		removed := nativePool(t, cleanup, "cleanup", nil)
@@ -346,32 +355,77 @@ func (r *ecEpochRun) waitState(label, object string, judge func(pgIntervalObserv
 // ecOutage is one owned forced kill of an OSD that the run restores.
 type ecOutage struct {
 	osd     int32
-	once    sync.Once
 	started bool
 }
 
-// kill SIGKILLs one owned OSD through the fixture and registers a cleanup
-// that starts it again if the test did not. Waiting for clean PGs is left
-// to the caller, which may have taken further OSDs out.
+// teardown registers the run's two cleanups: removePool, then one recovery
+// of every OSD the run killed and did not start. Go runs cleanups last in,
+// first out, so the recovery runs first on every exit, also a fatal one
+// with several OSDs down, and the pool is removed only after it.
+func (r *ecEpochRun) teardown(removePool func()) {
+	r.t.Cleanup(removePool)
+	r.t.Cleanup(r.recover)
+}
+
+// recover starts every OSD the run killed and has not started, then waits
+// once for every OSD up and every PG clean (restoreOSDOutages). A per-kill
+// cleanup that waited for clean PGs after its own start would ask for that
+// state while another killed OSD is still down.
+func (r *ecEpochRun) recover() {
+	var down []int32
+	for _, o := range r.outages {
+		if !o.started {
+			down = append(down, o.osd)
+		}
+	}
+	if len(down) == 0 {
+		return
+	}
+	restore, stop := context.WithTimeout(context.Background(), 300*time.Second)
+	defer stop()
+	errs := restoreOSDOutages(down,
+		func(id int32) error { return r.control(restore, "start", "osd", strconv.FormatInt(int64(id), 10)) },
+		func() error { return r.control(restore, "verify", "osd-ready", "clean") })
+	for _, err := range errs {
+		r.t.Error(err)
+	}
+	if len(errs) == 0 {
+		r.t.Logf("restored: started osd %v; every OSD up and every PG clean", down)
+	}
+}
+
+// restoreOSDOutages starts every OSD in down, in order, and attempts each
+// start even after an earlier one failed. Only once every start succeeded
+// does it run clean, exactly once; with any OSD still down the clean state
+// cannot be reached, so the check is not asked for and that is reported.
+// It returns every failure in order.
+func restoreOSDOutages(down []int32, start func(int32) error, clean func() error) []error {
+	var errs []error
+	for _, id := range down {
+		if err := start(id); err != nil {
+			errs = append(errs, fmt.Errorf("restart the killed osd.%d: %w", id, err))
+		}
+	}
+	if len(errs) != 0 {
+		return append(errs, fmt.Errorf("every OSD up and every PG clean was not checked: %d of the killed OSDs %v did not start", len(errs), down))
+	}
+	if err := clean(); err != nil {
+		return []error{fmt.Errorf("the fixture did not return to every OSD up and every PG clean: %w", err)}
+	}
+	return nil
+}
+
+// kill SIGKILLs one owned OSD through the fixture. The OSD is recorded as
+// down before the kill is requested, because a control error cannot prove
+// that the daemon still runs; the run's single recovery starts it on exit
+// if the test did not. Waiting for clean PGs is left to the caller, which
+// may have taken further OSDs out.
 func (r *ecEpochRun) kill(id int32) *ecOutage {
 	r.t.Helper()
 	dir, name := os.Getenv("CEPH_MSGR_CONTROL_DIR"), strconv.FormatInt(int64(id), 10)
 	o := &ecOutage{osd: id}
-	r.t.Cleanup(func() {
-		if o.started {
-			return
-		}
-		restore, stop := context.WithTimeout(context.Background(), 240*time.Second)
-		defer stop()
-		if err := testcluster.ControlDaemon(restore, dir, "start", "osd", name); err != nil {
-			r.t.Error("restart the killed OSD:", id, err)
-			return
-		}
-		if err := testcluster.ControlDaemon(restore, dir, "verify", "osd-ready", "clean"); err != nil {
-			r.t.Error("the fixture did not return to every OSD up and every PG clean:", err)
-		}
-	})
-	if err := testcluster.ControlDaemon(r.ctx, dir, "kill", "osd", name); err != nil {
+	r.outages = append(r.outages, o)
+	if err := r.control(r.ctx, "kill", "osd", name); err != nil {
 		r.t.Fatal("kill", id, err)
 	}
 	var state struct {
@@ -387,7 +441,7 @@ func (r *ecEpochRun) kill(id int32) *ecOutage {
 // start starts the killed OSD again.
 func (r *ecEpochRun) start(o *ecOutage) {
 	r.t.Helper()
-	if err := testcluster.ControlDaemon(r.ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "start", "osd", strconv.FormatInt(int64(o.osd), 10)); err != nil {
+	if err := r.control(r.ctx, "start", "osd", strconv.FormatInt(int64(o.osd), 10)); err != nil {
 		r.t.Fatal("start", o.osd, err)
 	}
 	o.started = true
@@ -396,7 +450,7 @@ func (r *ecEpochRun) start(o *ecOutage) {
 // clean waits until every OSD is up and every PG is clean.
 func (r *ecEpochRun) clean() {
 	r.t.Helper()
-	if err := testcluster.ControlDaemon(r.ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "osd-ready", "clean"); err != nil {
+	if err := r.control(r.ctx, "verify", "osd-ready", "clean"); err != nil {
 		r.t.Fatal("the fixture did not return to every OSD up and every PG clean:", err)
 	}
 }
@@ -1139,6 +1193,88 @@ func TestCheckOSDDials(t *testing.T) {
 	} {
 		if err := checkOSDDials(snapshot, now, osds, "192.0.2.9:6800"); err == nil {
 			t.Error("dials accepted:", name)
+		}
+	}
+}
+
+func TestRestoreOSDOutages(t *testing.T) {
+	run := func(failStart map[int32]bool, cleanErr error) ([]string, []error) {
+		var calls []string
+		errs := restoreOSDOutages([]int32{3, 1, 2}, func(id int32) error {
+			calls = append(calls, "start "+strconv.Itoa(int(id)))
+			if failStart[id] {
+				return errors.New("start refused")
+			}
+			return nil
+		}, func() error {
+			calls = append(calls, "clean")
+			return cleanErr
+		})
+		return calls, errs
+	}
+	if calls, errs := run(nil, nil); len(errs) != 0 || !slices.Equal(calls, []string{"start 3", "start 1", "start 2", "clean"}) {
+		t.Fatal("every start succeeded:", calls, errs)
+	}
+	// A failed start does not stop the later ones, and the clean state is
+	// not asked for while an OSD is down.
+	if calls, errs := run(map[int32]bool{3: true}, nil); len(errs) != 2 || !slices.Equal(calls, []string{"start 3", "start 1", "start 2"}) ||
+		!strings.Contains(errs[0].Error(), "osd.3") || !strings.Contains(errs[1].Error(), "not checked") {
+		t.Fatal("the first start failed:", calls, errs)
+	}
+	if calls, errs := run(map[int32]bool{1: true, 2: true}, nil); len(errs) != 3 || !slices.Equal(calls, []string{"start 3", "start 1", "start 2"}) {
+		t.Fatal("two later starts failed:", calls, errs)
+	}
+	if calls, errs := run(nil, errors.New("not clean")); len(errs) != 1 || !slices.Equal(calls, []string{"start 3", "start 1", "start 2", "clean"}) {
+		t.Fatal("the clean check failed:", calls, errs)
+	}
+}
+
+// TestECEpochRunRecoversEveryOutageOnce ends a run early with OSDs killed
+// and not started, as a fatal check after the kills would, against a fake
+// fixture control that refuses the clean check while any OSD it killed is
+// down. The run's cleanups must start every outstanding OSD, ask for clean
+// PGs once after the last start and remove the pool only after that.
+func TestECEpochRunRecoversEveryOutageOnce(t *testing.T) {
+	t.Setenv("CEPH_MSGR_CONTROL_DIR", t.TempDir())
+	dir := os.Getenv("CEPH_MSGR_CONTROL_DIR")
+	for name, c := range map[string]struct {
+		body func(r *ecEpochRun)
+		want []string
+	}{
+		"two OSDs down": {func(r *ecEpochRun) { r.kill(3); r.kill(1) },
+			[]string{"kill osd 3", "kill osd 1", "start osd 3", "start osd 1", "verify osd-ready clean", "remove pool"}},
+		"one of two started": {func(r *ecEpochRun) { first := r.kill(3); r.kill(1); r.start(first) },
+			[]string{"kill osd 3", "kill osd 1", "start osd 3", "start osd 1", "verify osd-ready clean", "remove pool"}},
+		"both started": {func(r *ecEpochRun) { a, b := r.kill(3), r.kill(1); r.start(b); r.start(a) },
+			[]string{"kill osd 3", "kill osd 1", "start osd 1", "start osd 3", "remove pool"}},
+		"no outage": {func(*ecEpochRun) {}, []string{"remove pool"}},
+	} {
+		var calls []string
+		down := map[string]bool{}
+		var refused error
+		t.Run(name, func(t *testing.T) {
+			control := func(_ context.Context, action, daemon, id string) error {
+				calls = append(calls, strings.Join([]string{action, daemon, id}, " "))
+				switch {
+				case action == "kill" && daemon == "osd":
+					down[id] = true
+					receipt, _ := json.Marshal(map[string]any{"daemon": "osd." + id, "exit_code": 137})
+					return os.WriteFile(filepath.Join(dir, "osd-crash-state.json"), receipt, 0o600)
+				case action == "start" && daemon == "osd":
+					delete(down, id)
+				case action == "verify" && daemon == "osd-ready" && len(down) != 0:
+					refused = fmt.Errorf("clean PGs asked for with osd %v down", slices.Sorted(maps.Keys(down)))
+					return refused
+				}
+				return nil
+			}
+			r := &ecEpochRun{t: t, ctx: context.Background(), control: control}
+			r.teardown(func() { calls = append(calls, "remove pool") })
+			// The test ends here, before any explicit restart or clean check.
+			c.body(r)
+		})
+		if refused != nil || len(down) != 0 || !slices.Equal(calls, c.want) {
+			t.Errorf("%s: fixture controls %q (down %v, %v); want %q", name, calls, down, refused, c.want)
 		}
 	}
 }

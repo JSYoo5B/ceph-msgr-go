@@ -163,9 +163,18 @@ version. The client must have dialed no other connection. The shard-1 OSD is
 started; once every PG is clean and the PG is active+clean on its original
 placement under the unchanged address, the native state must be unchanged.
 
-Every test removes its owned pool and profile on cleanup. A killed OSD that
-the test did not start again is started by the cleanup, which waits for every
-PG to be clean.
+Every test removes its owned pool and profile on cleanup. Each kill records
+its OSD with the run before the kill is requested. The run registers one
+recovery, which Go runs before the pool removal on every exit. It starts
+every recorded OSD that the test did not start again, attempting each start
+even after one fails. Only once every start succeeded does it ask the
+fixture, once, for every OSD up and every PG clean; with an OSD still down
+that check cannot pass, so it is not asked for and the failure is reported.
+A cleanup per kill that waited for clean PGs after its own start would ask
+for that state while the backoff control's other OSD is still down. The
+cluster-free `TestECEpochRunRecoversEveryOutageOnce` ends a run after two
+kills against a fake control that refuses the clean check while an OSD is
+down, and `TestRestoreOSDOutages` covers a failed start.
 
 ## Observations
 
