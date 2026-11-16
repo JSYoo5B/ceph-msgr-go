@@ -90,6 +90,7 @@ type nativeMDSCephFSOutput struct {
 		Files     uint64 `json:"f_files"`
 	} `json:"statfs"`
 	Flock *nativeMDSCephFSFlockProbe `json:"flock"`
+	Fcntl *nativeMDSCephFSFcntlState `json:"fcntl"`
 }
 
 type nativeMDSCephFSFlockState struct {

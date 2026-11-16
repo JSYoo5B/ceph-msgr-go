@@ -16,10 +16,27 @@ const (
 	cephFlockNativeOwner uint64 = 0x8000000063657068
 )
 
-func cephfsFlockArgs(kind byte, owner uint64) (args [56]byte) {
-	args[0], args[1] = 2, kind // CEPH_LOCK_FLOCK, requested lock type.
+// Lock rules of filelock_change (CEPH_LOCK_FCNTL and CEPH_LOCK_FLOCK).
+const (
+	cephLockRuleFcntl byte = 1
+	cephLockRuleFlock byte = 2
+)
+
+// cephfsFilelockArgs is the packed filelock_change of one SETFILELOCK or
+// GETFILELOCK: rule, type, then owner, pid, start and length as little-endian
+// u64 and wait. wait stays 0 (nonblocking); unused union bytes stay zero.
+func cephfsFilelockArgs(rule, kind byte, owner, pid, start, length uint64) (args [56]byte) {
+	args[0], args[1] = rule, kind
 	binary.LittleEndian.PutUint64(args[2:10], owner)
-	return args // wait=0, whole file, pid=0; unused union bytes stay zero.
+	binary.LittleEndian.PutUint64(args[10:18], pid)
+	binary.LittleEndian.PutUint64(args[18:26], start)
+	binary.LittleEndian.PutUint64(args[26:34], length)
+	return args
+}
+
+// cephfsFlockArgs is a whole-file FLOCK request with pid 0.
+func cephfsFlockArgs(kind byte, owner uint64) [56]byte {
+	return cephfsFilelockArgs(cephLockRuleFlock, kind, owner, 0, 0, 0)
 }
 
 type cephfsFilelock struct {

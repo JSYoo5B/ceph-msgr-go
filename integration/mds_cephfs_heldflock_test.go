@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"slices"
 	"strconv"
 	"testing"
@@ -82,7 +83,7 @@ func TestCephFSHeldFlockBlobMatchesNativeLayout(t *testing.T) {
 	}
 
 	held := cephfsFilelock{Client: 4711, Owner: cephFlockGoOwner, Type: cephFlockExclusive}
-	blob := cephfsFilelockBlob(nil, []cephfsFilelock{held})
+	blob := heldLockBlob(exclusiveHeldFlock.locks(4711))
 	if len(blob) != 4+4+41 || binary.LittleEndian.Uint32(blob[0:4]) != 0 || binary.LittleEndian.Uint32(blob[4:8]) != 1 {
 		t.Fatalf("held-lock blob counts or size differ: %x", blob)
 	}
@@ -98,26 +99,76 @@ func TestCephFSHeldFlockBlobMatchesNativeLayout(t *testing.T) {
 	}
 }
 
-// heldFlockRecipe is the set of whole-file FLOCK locks that the Go recovery
-// session holds across the owned MDS restart: one lock of Type for each owner,
-// acquired in order. The same order is the order of the reconnect blob and of
-// the explicit unlocks after the restart.
+// heldLockSpec is one lock the Go recovery session holds: its rule (FCNTL or
+// FLOCK), type, owner and, for an FCNTL lock, pid and byte range (Length 0 is
+// to the end of the file). A FLOCK lock is whole-file with pid 0.
+type heldLockSpec struct {
+	Rule, Type                byte
+	Owner, PID, Start, Length uint64
+}
+
+// heldFlockRecipe is the set of locks that the Go recovery session holds
+// across the owned MDS restart, acquired in order, one per owner. The same
+// order is the order of the unlocks after the restart and, within each rule,
+// of the reconnect blob.
 type heldFlockRecipe struct {
 	Name string
 	// Results is the evidence file the recovery recipe writes.
 	Results string
-	Type    byte
-	Owners  []uint64
+	Locks   []heldLockSpec
 }
 
 var (
 	// exclusiveHeldFlock is the held lock of TestCephMDSCephFSRecoveryIntegration.
-	exclusiveHeldFlock = heldFlockRecipe{Name: "exclusive-one-owner", Results: "mds-cephfs-recovery-results.json", Type: cephFlockExclusive, Owners: []uint64{cephFlockGoOwner}}
+	exclusiveHeldFlock = heldFlockRecipe{Name: "exclusive-one-owner", Results: "mds-cephfs-recovery-results.json",
+		Locks: []heldLockSpec{{Rule: cephLockRuleFlock, Type: cephFlockExclusive, Owner: cephFlockGoOwner}}}
 	// sharedHeldFlock is the held lock set of
 	// TestCephMDSCephFSSharedFlockRecoveryIntegration.
-	sharedHeldFlock = heldFlockRecipe{Name: "shared-two-owners", Results: "mds-cephfs-sharedflock-recovery-results.json", Type: cephFlockShared,
-		Owners: []uint64{cephFlockGoOwner, cephFlockGoSecondOwner}}
+	sharedHeldFlock = heldFlockRecipe{Name: "shared-two-owners", Results: "mds-cephfs-sharedflock-recovery-results.json",
+		Locks: []heldLockSpec{{Rule: cephLockRuleFlock, Type: cephFlockShared, Owner: cephFlockGoOwner}, {Rule: cephLockRuleFlock, Type: cephFlockShared, Owner: cephFlockGoSecondOwner}}}
 )
+
+// heldLock is one granted lock of the recipe: its rule and the ceph_filelock
+// the MDS holds for it.
+type heldLock struct {
+	Rule byte
+	cephfsFilelock
+}
+
+// args is the filelock_change of a SETFILELOCK of this lock with the given
+// type: the acquire with the lock's own type, the unlock with
+// cephFlockUnlock over the same owner, pid and range.
+func (l heldLock) args(kind byte) [56]byte {
+	return cephfsFilelockArgs(l.Rule, kind, l.Owner, l.PID, l.Start, l.Length)
+}
+
+// heldLocksOfRule returns the locks of one rule, in order.
+func heldLocksOfRule(locks []heldLock, rule byte) []cephfsFilelock {
+	var out []cephfsFilelock
+	for _, l := range locks {
+		if l.Rule == rule {
+			out = append(out, l.cephfsFilelock)
+		}
+	}
+	return out
+}
+
+// heldLockBlob is the reconnect blob of the held locks: the FCNTL records,
+// then the FLOCK records, each in acquisition order.
+func heldLockBlob(locks []heldLock) []byte {
+	return cephfsFilelockBlob(heldLocksOfRule(locks, cephLockRuleFcntl), heldLocksOfRule(locks, cephLockRuleFlock))
+}
+
+// rules returns the lock rules the recipe holds, FCNTL before FLOCK.
+func (r heldFlockRecipe) rules() []byte {
+	var out []byte
+	for _, rule := range []byte{cephLockRuleFcntl, cephLockRuleFlock} {
+		if slices.ContainsFunc(r.Locks, func(l heldLockSpec) bool { return l.Rule == rule }) {
+			out = append(out, rule)
+		}
+	}
+	return out
+}
 
 // cephFlockGoSecondOwner is the second Go lock owner of the shared recipe.
 // cephFlockGoOwner+1 is the owner of every GETFILELOCK test lock, so the two
@@ -136,46 +187,63 @@ func TestCephMDSCephFSSharedFlockRecoveryIntegration(t *testing.T) {
 }
 
 // locks returns the held locks of the recipe for the given client GlobalID.
-func (r heldFlockRecipe) locks(client uint64) []cephfsFilelock {
-	locks := make([]cephfsFilelock, 0, len(r.Owners))
-	for _, owner := range r.Owners {
-		locks = append(locks, cephfsFilelock{Client: client, Owner: owner, Type: r.Type})
+func (r heldFlockRecipe) locks(client uint64) []heldLock {
+	locks := make([]heldLock, 0, len(r.Locks))
+	for _, l := range r.Locks {
+		locks = append(locks, heldLock{Rule: l.Rule, cephfsFilelock: cephfsFilelock{Start: l.Start, Length: l.Length, Client: client, Owner: l.Owner, PID: l.PID, Type: l.Type}})
 	}
 	return locks
 }
 
 // callName labels one SETFILELOCK of the recipe in the request evidence.
 func (r heldFlockRecipe) callName(op string, owner int) string {
-	kind := "exclusive"
-	if r.Type == cephFlockShared {
+	l := r.Locks[owner]
+	kind, rule := "exclusive", "flock"
+	if l.Type == cephFlockShared {
 		kind = "shared"
 	}
-	if len(r.Owners) == 1 {
-		return "flock-" + kind + "-" + op
+	if l.Rule == cephLockRuleFcntl {
+		rule = "fcntl"
 	}
-	return fmt.Sprintf("flock-%s-%s-owner-%d", kind, op, owner)
+	if len(r.Locks) == 1 {
+		return rule + "-" + kind + "-" + op
+	}
+	return fmt.Sprintf("%s-%s-%s-owner-%d", rule, kind, op, owner)
 }
 
-// heldFlockProbeWant is one closed native probe and the errno it must return.
+// heldFlockProbeWant is one closed native probe and what it must return: the
+// errno of a FLOCK probe, or the result of every request of the FCNTL probe.
 type heldFlockProbeWant struct {
 	Action string
 	Errno  int
+	Fcntl  []heldFcntlExpect
 }
 
 // probes returns the native probes that must pass, in order, while the first
-// held of the recipe's locks are released and the others still held. With
-// every lock released a native exclusive acquire succeeds. An exclusive lock
-// refuses a native exclusive acquire. Shared locks also refuse it, and while
-// all of them are held a native shared acquire must succeed beside them.
+// of the recipe's locks are released and the last held still held. The FLOCK
+// probes come first. With no FLOCK lock held a native exclusive FLOCK acquire
+// succeeds. An exclusive FLOCK lock refuses it. Shared FLOCK locks also refuse
+// it, and while all of them are held a native shared acquire must succeed
+// beside them. A recipe with FCNTL locks adds one FCNTL probe, whose expected
+// results follow from the FCNTL locks still held (heldFcntlExpected). FCNTL
+// and FLOCK locks are separate lock states in the MDS, so neither affects the
+// other's probe.
 func (r heldFlockRecipe) probes(held int) []heldFlockProbeWant {
+	still := r.locks(0)[len(r.Locks)-held:]
+	all, flock := heldLocksOfRule(r.locks(0), cephLockRuleFlock), heldLocksOfRule(still, cephLockRuleFlock)
+	var wants []heldFlockProbeWant
 	switch {
-	case held == 0:
-		return []heldFlockProbeWant{{"flock-ex-nb", 0}}
-	case r.Type == cephFlockShared && held == len(r.Owners):
-		return []heldFlockProbeWant{{"flock-sh-nb", 0}, {"flock-ex-nb", 11}}
+	case len(flock) == 0:
+		wants = []heldFlockProbeWant{{Action: "flock-ex-nb"}}
+	case len(flock) == len(all) && !slices.ContainsFunc(flock, func(l cephfsFilelock) bool { return l.Type != cephFlockShared }):
+		wants = []heldFlockProbeWant{{Action: "flock-sh-nb"}, {Action: "flock-ex-nb", Errno: 11}}
 	default:
-		return []heldFlockProbeWant{{"flock-ex-nb", 11}}
+		wants = []heldFlockProbeWant{{Action: "flock-ex-nb", Errno: 11}}
 	}
+	if slices.Contains(r.rules(), cephLockRuleFcntl) {
+		wants = append(wants, heldFlockProbeWant{Action: "fcntl-probe", Fcntl: heldFcntlExpected(heldLocksOfRule(still, cephLockRuleFcntl))})
+	}
+	return wants
 }
 
 // heldFlockHolder checks a GETFILELOCK result for an exclusive test lock of
@@ -190,6 +258,28 @@ func (r heldFlockRecipe) probes(held int) []heldFlockProbeWant {
 func heldFlockHolder(got cephfsFilelock, held []cephfsFilelock) error {
 	if len(held) == 0 || got != held[0] {
 		return fmt.Errorf("GETFILELOCK names %+v, not the first held Go lock of %+v", got, held)
+	}
+	return nil
+}
+
+// heldLockGetTest is the whole-file exclusive test lock of every GETFILELOCK
+// of the recipe: owner cephFlockGoOwner+1, pid 0.
+func heldLockGetTest(rule byte) [56]byte {
+	return cephfsFilelockArgs(rule, cephFlockExclusive, cephFlockGoOwner+1, 0, 0, 0)
+}
+
+// heldLockGetCheck checks a GETFILELOCK of one rule (heldLockGetTest) while
+// the given locks are held. With a lock of that rule held, the answer is the
+// first one of them in held_locks order (heldFlockHolder): for whole-file
+// FLOCK locks that is acquisition order, and the FCNTL locks of a recipe
+// ascend by start. With none of that rule held, look_for_lock returns the test
+// lock itself as an unlock (mds/flock.cc).
+func heldLockGetCheck(rule byte, got cephfsFilelock, held []heldLock, client uint64) error {
+	if same := heldLocksOfRule(held, rule); len(same) != 0 {
+		return heldFlockHolder(got, same)
+	}
+	if want := (cephfsFilelock{Client: client, Owner: cephFlockGoOwner + 1, Type: cephFlockUnlock}); got != want {
+		return fmt.Errorf("GETFILELOCK of rule %d with none of its locks held names %+v, want the unlocked test lock %+v", rule, got, want)
 	}
 	return nil
 }
@@ -235,12 +325,13 @@ func cephfsDecodeFilelockBlob(blob []byte) (fcntl, flock []cephfsFilelock, err e
 // GETFILELOCK holder check.
 func TestCephFSSharedFlockRecipeBlobAndChecks(t *testing.T) {
 	const gid = 4711
-	locks := sharedHeldFlock.locks(gid)
-	if len(locks) != 2 || locks[0].Owner == locks[1].Owner || cephFlockGoSecondOwner == cephFlockGoOwner+1 || cephFlockGoSecondOwner == cephFlockNativeOwner ||
+	held := sharedHeldFlock.locks(gid)
+	locks := heldLocksOfRule(held, cephLockRuleFlock)
+	if len(held) != 2 || len(locks) != 2 || locks[0].Owner == locks[1].Owner || cephFlockGoSecondOwner == cephFlockGoOwner+1 || cephFlockGoSecondOwner == cephFlockNativeOwner ||
 		cephFlockGoSecondOwner>>63 != 1 || locks[0].Type != cephFlockShared || locks[1].Type != cephFlockShared {
 		t.Fatal("the shared recipe does not hold two shared locks of distinct high-bit owners", locks)
 	}
-	if got := exclusiveHeldFlock.locks(gid); len(got) != 1 || got[0] != (cephfsFilelock{Client: gid, Owner: cephFlockGoOwner, Type: cephFlockExclusive}) {
+	if got := exclusiveHeldFlock.locks(gid); len(got) != 1 || got[0] != (heldLock{Rule: cephLockRuleFlock, cephfsFilelock: cephfsFilelock{Client: gid, Owner: cephFlockGoOwner, Type: cephFlockExclusive}}) {
 		t.Fatal("the exclusive recipe changed", got)
 	}
 	// Client::_encode_filelocks writes each held lock as one ceph_filelock
@@ -280,13 +371,13 @@ func TestCephFSSharedFlockRecipeBlobAndChecks(t *testing.T) {
 		held   int
 		want   step
 	}{
-		"shared, both held":     {sharedHeldFlock, 2, step{{"flock-sh-nb", 0}, {"flock-ex-nb", 11}}},
-		"shared, one released":  {sharedHeldFlock, 1, step{{"flock-ex-nb", 11}}},
-		"shared, both released": {sharedHeldFlock, 0, step{{"flock-ex-nb", 0}}},
-		"exclusive, held":       {exclusiveHeldFlock, 1, step{{"flock-ex-nb", 11}}},
-		"exclusive, released":   {exclusiveHeldFlock, 0, step{{"flock-ex-nb", 0}}},
+		"shared, both held":     {sharedHeldFlock, 2, step{{Action: "flock-sh-nb", Errno: 0}, {Action: "flock-ex-nb", Errno: 11}}},
+		"shared, one released":  {sharedHeldFlock, 1, step{{Action: "flock-ex-nb", Errno: 11}}},
+		"shared, both released": {sharedHeldFlock, 0, step{{Action: "flock-ex-nb", Errno: 0}}},
+		"exclusive, held":       {exclusiveHeldFlock, 1, step{{Action: "flock-ex-nb", Errno: 11}}},
+		"exclusive, released":   {exclusiveHeldFlock, 0, step{{Action: "flock-ex-nb", Errno: 0}}},
 	} {
-		if got := tc.recipe.probes(tc.held); !slices.Equal(got, tc.want) {
+		if got := tc.recipe.probes(tc.held); !reflect.DeepEqual(got, tc.want) {
 			t.Fatal("probe sequence differs:", name, got)
 		}
 	}
@@ -322,21 +413,21 @@ func TestCephFSSharedFlockRecipeBlobAndChecks(t *testing.T) {
 	}
 
 	var h heldFlockEvidence
-	for i, l := range slices.Concat(locks, locks) {
+	for i, l := range slices.Concat(held, held) {
 		kind, op := l.Type, "acquire"
-		if i >= len(locks) {
+		if i >= len(held) {
 			kind, op = cephFlockUnlock, "unlock"
 		}
-		h.acceptFlock(sharedHeldFlock.callName(op, i%len(locks)), l.Owner, kind)(uint64(10 + i))
+		h.acceptFlock(sharedHeldFlock.callName(op, i%len(held)), l, kind)(uint64(10 + i))
 		h.settleFlock(cephmsgr.MDSReply{}, nil)
 	}
-	if err := heldFlockCallsExact(h.Calls, locks); err != nil || h.SetFileLockSubmissions != 4 {
+	if err := heldFlockCallsExact(h.Calls, held); err != nil || h.SetFileLockSubmissions != 4 {
 		t.Fatal("the shared recipe's SETFILELOCK calls were refused", err, h.Calls)
 	}
 	edit := func(f func([]heldFlockCall) []heldFlockCall) []heldFlockCall { return f(slices.Clone(h.Calls)) }
 	for name, calls := range map[string][]heldFlockCall{
 		"second acquisition": edit(func(c []heldFlockCall) []heldFlockCall {
-			return slices.Insert(c, 2, heldFlockCall{Owner: locks[0].Owner, Type: cephFlockShared, TID: 99, Outcome: "reply result 0"})
+			return slices.Insert(c, 2, heldFlockCall{Rule: cephLockRuleFlock, Owner: locks[0].Owner, Type: cephFlockShared, TID: 99, Outcome: "reply result 0"})
 		}),
 		"missing unlock":    edit(func(c []heldFlockCall) []heldFlockCall { return c[:3] }),
 		"unlock order":      edit(func(c []heldFlockCall) []heldFlockCall { c[2], c[3] = c[3], c[2]; return c }),
@@ -348,7 +439,7 @@ func TestCephFSSharedFlockRecipeBlobAndChecks(t *testing.T) {
 			return c
 		}),
 	} {
-		if heldFlockCallsExact(calls, locks) == nil {
+		if heldFlockCallsExact(calls, held) == nil {
 			t.Fatal("wrong SETFILELOCK submissions accepted:", name)
 		}
 	}
@@ -385,7 +476,7 @@ func TestCephFSSharedFlockRecipeBlobAndChecks(t *testing.T) {
 		}
 	}
 	var failed heldFlockEvidence
-	failed.acceptFlock("flock-shared-acquire-owner-0", locks[0].Owner, cephFlockShared)(7)
+	failed.acceptFlock("flock-shared-acquire-owner-0", held[0], cephFlockShared)(7)
 	failed.settleFlock(cephmsgr.MDSReply{}, errors.New("lost"))
 	if failed.SetFileLockSubmissions != 1 || failed.Calls[0].TID != 7 || failed.Calls[0].Outcome != "wait error: lost" {
 		t.Fatal("an accepted SETFILELOCK whose wait failed was not recorded with its TID", failed.Calls)
@@ -394,8 +485,10 @@ func TestCephFSSharedFlockRecipeBlobAndChecks(t *testing.T) {
 
 // heldFlockCall is one application SETFILELOCK call that Submit accepted.
 type heldFlockCall struct {
-	Name  string
-	Owner uint64
+	Name string
+	// Rule, Owner, PID, Start and Length are the lock the call names.
+	Rule                      byte
+	Owner, PID, Start, Length uint64
 	// Type is the requested lock type: shared, exclusive or unlock.
 	Type byte
 	TID  uint64
@@ -414,7 +507,7 @@ type heldFlockEvidence struct {
 	NativeAddress   string
 	// Locks are the granted locks in acquisition order, which is also their
 	// order in the reconnect blob and the order of the unlocks.
-	Locks []cephfsFilelock
+	Locks []heldLock
 	// Calls are recorded as soon as Submit accepted them, before their replies
 	// are awaited, so a call whose reply is lost or refused is still counted
 	// with its TID. SetFileLockSubmissions counts them.
@@ -424,10 +517,12 @@ type heldFlockEvidence struct {
 	NativeBefore           *nativeMDSCephFSFlockState
 	ProbeBefore            []heldFlockProbe
 	ProbeAfter             []heldFlockProbe
-	GetBefore, GetAfter    *cephfsFilelock
-	// GetBetween holds the GETFILELOCK result after each unlock that left
+	// GetBefore and GetAfter hold one GETFILELOCK result per rule of the
+	// recipe (FCNTL before FLOCK).
+	GetBefore, GetAfter []cephfsFilelock
+	// GetBetween holds the GETFILELOCK results after each unlock that left
 	// another lock held.
-	GetBetween          []cephfsFilelock
+	GetBetween          [][]cephfsFilelock
 	MDSBefore, MDSAfter nativeMDSCephFSDaemon
 	// AcquireTIDInHistoricOps is whether an original acquire TID appears in
 	// the one bounded dump_historic_ops snapshot read right after adoption.
@@ -440,20 +535,21 @@ type heldFlockEvidence struct {
 	AcquireTIDInHistoricOps *bool
 }
 
-// acceptFlock returns the hook that records one SETFILELOCK call that Submit
-// accepted.
-func (h *heldFlockEvidence) acceptFlock(name string, owner uint64, kind byte) func(uint64) {
+// acceptFlock returns the hook that records one SETFILELOCK call of lock l
+// with type kind that Submit accepted.
+func (h *heldFlockEvidence) acceptFlock(name string, l heldLock, kind byte) func(uint64) {
 	return func(tid uint64) {
-		h.Calls = append(h.Calls, heldFlockCall{Name: name, Owner: owner, Type: kind, TID: tid})
+		h.Calls = append(h.Calls, heldFlockCall{Name: name, Rule: l.Rule, Owner: l.Owner, PID: l.PID, Start: l.Start, Length: l.Length, Type: kind, TID: tid})
 		h.SetFileLockSubmissions++
 	}
 }
 
 // heldFlockCallsExact checks that the application submitted exactly one
 // SETFILELOCK acquire per held lock, in order, and then exactly one unlock per
-// owner in the same order, each answered with result 0. A second acquisition
-// of any owner, before or after the restart, is refused.
-func heldFlockCallsExact(calls []heldFlockCall, locks []cephfsFilelock) error {
+// owner in the same order and over the same rule, pid and range, each
+// answered with result 0. A second acquisition of any owner, before or after
+// the restart, is refused.
+func heldFlockCallsExact(calls []heldFlockCall, locks []heldLock) error {
 	if len(calls) != 2*len(locks) {
 		return fmt.Errorf("%d SETFILELOCK submissions for %d held locks", len(calls), len(locks))
 	}
@@ -462,7 +558,7 @@ func heldFlockCallsExact(calls []heldFlockCall, locks []cephfsFilelock) error {
 		if i >= len(locks) {
 			want = cephFlockUnlock
 		}
-		if c.Owner != l.Owner || c.Type != want || c.TID == 0 || c.Outcome != "reply result 0" {
+		if c.Rule != l.Rule || c.Owner != l.Owner || c.PID != l.PID || c.Start != l.Start || c.Length != l.Length || c.Type != want || c.TID == 0 || c.Outcome != "reply result 0" {
 			return fmt.Errorf("SETFILELOCK submission %d differs: %+v", i, c)
 		}
 	}
@@ -508,15 +604,24 @@ type heldFlockProbe struct {
 	MDSNonce       uint32
 	MDSIncarnation int32
 	Probe          nativeMDSCephFSFlockProbe
+	// Fcntl is the receipt of an FCNTL probe; Probe is then zero.
+	Fcntl *nativeMDSCephFSFcntlState `json:",omitempty"`
 }
 
-// heldFlockProbeNative runs one closed nonblocking native FLOCK probe on the
-// metadata fixture's go-file and checks the receipt. The owned file must not
-// change: the baseline is fixed by the first probe.
+// heldFlockProbeNative runs one closed nonblocking native FLOCK or FCNTL probe
+// on the metadata fixture's go-file and checks the receipt. The owned file
+// must not change: the baseline is fixed by the first probe.
 func heldFlockProbeNative(ctx context.Context, control *mdsCephFSRecoveryControl, want heldFlockProbeWant, ino uint64, baseline **nativeMDSCephFSFlockState) (heldFlockProbe, error) {
 	r, err := control.request(ctx, want.Action, "go-file")
 	if err != nil {
 		return heldFlockProbe{}, fmt.Errorf("native %s probe: %w", want.Action, err)
+	}
+	if want.Action == "fcntl-probe" {
+		if r.Native == nil || r.Native.Fcntl == nil {
+			return heldFlockProbe{}, errors.New("native fcntl receipt lacks its probe")
+		}
+		out := heldFlockProbe{Action: r.Action, NativeGlobalID: r.Native.NativeGlobalID, RequestID: r.RequestID, MDSGID: r.MDSGID, MDSNonce: r.MDSNonce, MDSIncarnation: r.MDSIncarnation, Fcntl: r.Native.Fcntl}
+		return out, checkHeldFcntlProbe(r, want, ino, control.goGIDs, baseline)
 	}
 	if r.Native == nil || r.Native.Flock == nil {
 		return heldFlockProbe{}, errors.New("native flock receipt lacks its probe")
@@ -528,6 +633,9 @@ func heldFlockProbeNative(ctx context.Context, control *mdsCephFSRecoveryControl
 
 func checkHeldFlockProbe(r nativeMDSCephFSReceipt, want heldFlockProbeWant, ino uint64, goGIDs map[uint64]bool, baseline **nativeMDSCephFSFlockState) error {
 	p := *r.Native.Flock
+	if r.Native.Fcntl != nil {
+		return errors.New("native flock receipt also carries an FCNTL probe")
+	}
 	if r.Action != want.Action || r.Native.Action != want.Action || goGIDs[r.Native.NativeGlobalID] || r.Native.NativeGlobalID == 0 {
 		return fmt.Errorf("native flock receipt is for %q/%q or from a Go client, want %q", r.Action, r.Native.Action, want.Action)
 	}
@@ -588,7 +696,7 @@ func TestCephFSHeldFlockProbeReceiptChecks(t *testing.T) {
 	if baseline == nil || *baseline != state {
 		t.Fatal("the first probe did not fix the baseline", baseline)
 	}
-	shared, exclusive := heldFlockProbeWant{"flock-sh-nb", 0}, heldFlockProbeWant{"flock-ex-nb", 11}
+	shared, exclusive := heldFlockProbeWant{Action: "flock-sh-nb", Errno: 0}, heldFlockProbeWant{Action: "flock-ex-nb", Errno: 11}
 	for name, tc := range map[string]struct {
 		want heldFlockProbeWant
 		got  nativeMDSCephFSReceipt
