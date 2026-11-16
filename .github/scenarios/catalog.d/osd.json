@@ -1,0 +1,707 @@
+{
+ "scenarios": [
+  {
+   "id": "osd.aes256k.ip4.host",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1"
+   }
+  },
+  {
+   "id": "osd.aes.ip4",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "family": "4",
+    "stress": "",
+    "osd": "1"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.crc.host",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "osd": "1"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.osd-store-bluestore",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "osd": "1",
+    "osd_store": "bluestore"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.race-1",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3",
+    "race": "1"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.osd-store-bluestore.osd-replicas-3",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.osd-store-bluestore.osd-replicas-3.osd-soak-4m",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3",
+    "osd_soak": "4m"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-v8.t-suite-3937e5",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-replicated-pg-v8.t-suite-3937e5",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "memstore",
+    "osd_replicas": "1",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDObjectBackoffFailoverIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdobjectbackofffailover",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDObjectBackoffFailoverIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDUpmapIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDUpmapIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasurek2m2",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureK2M2Integration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2inflight",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2appliedresubmit",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2primaryhistorycalibration",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2copyfromhistory",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardhistory",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritelaterwriteshardhistory",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritenewintervalshardhistory",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardreturnshardhistory",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwritedegradedwriteshardhistory",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteprimaryreplacementshardhistory",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2requestheldatdyingprimary",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdsetchunknative",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephOSDSetChunkNativeIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdsetchunkgo",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephOSDSetChunkGoIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromdestinationhistory",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephOSDCopyFromDestinationHistoryIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-suite-16671c",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "replicated-pg-reply-v8",
+    "test_run": "^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-suite-16671c",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "memstore",
+    "osd_replicas": "1",
+    "osd_profile": "replicated-pg-reply-v8",
+    "test_run": "^TestCeph(OSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|EnforceSnapContext|ChecksumCompound)|MDSMaps)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-request-v9-reply-v8.t-suite-385915",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "replicated-pg-request-v9-reply-v8",
+    "test_run": "^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-replicated-pg-request-v9-reply-v8.t-suite-385915",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "memstore",
+    "osd_replicas": "1",
+    "osd_profile": "replicated-pg-request-v9-reply-v8",
+    "test_run": "^TestCephOSD(ReplicatedPG|PGListV8|Backoff(LateAck)?|WatchReconnect|Split|SplitResubmit|ReplyV8|RequestV9|PGListFilter|Redirect|Fadvise|WatchDisconnect|WatchBlocklist|WatchExpiredReconnect|WatchNotifyRedelivery|WatchPermissions|EnforceSnapContext|ChecksumCompound)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephMsgrCompressionOfferIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b6ed16",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephApplied(OSD|PG)CommandIsNotReplayedIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephOSDCommand(s|Crash)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-suite-b300c0",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephOSDCommand(s|Crash)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephOSDCopyFromLateErrorIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfrommultichunklateerror",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "mode": "crc",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
+   }
+  }
+ ]
+}
