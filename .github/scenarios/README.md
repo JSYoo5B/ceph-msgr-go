@@ -512,8 +512,19 @@ protocol evidence links, test-named links in the coverage map) also needs Go's
 parser to find the declaration in that file (`go_test_list.declares`, through
 `tools/quality/testdecls` under the go/build context). That file check counts
 only the test-shaped declarations of the looked-up test, so other functions of
-the file, such as repeated `init` functions, do not affect it. The coverage map
-check also lists the fixture module, so the Python tool tests need Go 1.26 or later.
+the file, such as repeated `init` functions, do not affect it.
+
+The listing keeps how often Go lists each name. The internal and the external
+test package of one directory may both declare a test of the same name, and Go
+lists and runs both under that one name. The checks that select tests for a run
+or read their result lines (the selector check of `validate`, the native result
+gate's `snapshot` and the cluster-free gate) refuse a selected name that Go lists
+more than once, before any result is read: `-run` cannot select one of the two
+tests and a `--- PASS` line cannot say which one it reports. The checks that ask
+only whether a name exists or where it is declared read the names.
+
+The coverage map check also lists the fixture module, and `validate` runs
+cluster-free tests of the fixture module, so the Python tool tests need Go 1.26 or later.
 Basic CI and the platform unit matrix run them with Go 1.27 and install the
 product's Go 1.25.0 (or the matrix Go) afterwards for the product steps;
 `tools/test_workflow_toolchains.py` refuses a workflow step whose installed Go

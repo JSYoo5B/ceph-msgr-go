@@ -444,6 +444,9 @@ them to report PASS. The tests are the ones `go test -list` reports for
 `./integration` (`tools/go_test_list.py`), so Go's own rules decide what a test
 is. A top-level `TestCeph...Integration` test is native and stays opt-in, and
 every other listed test there is cluster-free, so adding one needs no list edit.
+A cluster-free name that Go lists twice (declared in both the internal and the
+external test package) is refused before the log is read, because one result
+line cannot stand for two tests.
 
 `integration/fixture/` contains bounded native setup/control/oracle recipes.
 Run Docker profiles on Linux with their documented selectors. Native vectors,
