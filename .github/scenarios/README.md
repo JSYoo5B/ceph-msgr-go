@@ -387,11 +387,11 @@ missing suite definitions.
 
 ## Test inventory and selection evidence
 
-Basic CI verifies two explicit inventories without starting a cluster:
+Basic CI verifies two inventories without starting a cluster:
 
-- `native-tests.txt` registers every top-level `TestCeph...Integration` in
-  `integration` and `cephmsgr`. Fixture tests parse Go declarations, reject
-  missing/stale/duplicate registrations, and compare the source list with the
+- The native test inventory is every top-level `TestCeph...Integration` declared
+  in `integration` and `cephmsgr`; there is no list to edit. Fixture tests parse
+  Go declarations, reject duplicate names, and compare the source set with the
   compiled `go test -json -list` result. The current check requires these tests
   in the default build; adding platform-constrained tests needs an explicit
   inventory-policy change.
@@ -403,10 +403,10 @@ Basic CI verifies two explicit inventories without starting a cluster:
 `TestCICatalogInventory` reads the native workflow's actual matrix-to-environment
 bindings (including fallback values) and passes each catalog row through the
 fixture's real `loadProfile`. Unsupported expressions, unforwarded parameters,
-invalid fixture combinations, empty effective selections and native tests outside
-all selections fail the check. It uses Go regular expressions, matching the
-native runner's selector semantics. This complements `scenario_plan.py validate`;
-it does not replace catalog/mandatory-row checks.
+invalid fixture combinations, rows whose effective selection includes no native
+test and native tests that no row selects fail the check. It uses Go regular
+expressions, matching the native runner's selector semantics. This complements
+`scenario_plan.py validate`; it does not replace the catalog checks.
 
 The `native-test-selection` artifact lists the source location, candidate scenarios
 and explicit-selector required scenarios for every native test. `required_scenarios`
