@@ -157,8 +157,10 @@ PGs. It
    original TID; the native object must hold the seed and one copy of the
    appended bytes at the reply's user version, with the new mtime and xattr;
    a second PG-history snapshot must hold the held identity once, at the
-   reply's replay version, and the seed's once. The resubmission must be the
-   one new dial, and the original outcome stays unknown.
+   reply's replay version, and the seed's once. The resubmission must be
+   exactly one new dial attempt, at the returned primary's endpoint (the old
+   one or another), with no attempt at any other OSD endpoint; the original
+   outcome stays unknown.
 
 If the call does not end within the 30 seconds, the test cancels it and
 waits at most five more seconds for a late result, which it reports only as
@@ -174,6 +176,7 @@ result channel lets that worker finish during cleanup.
 | The session ends the call with `OutcomeUnknownError`, no server error, and the held TID, global ID, incarnation, held epoch, attempt 0 and placement in its submission | required |
 | The tracked TID equals the TID of the unknown outcome | required: the op the primary held is the Go request |
 | No dial after the unknown outcome, up to the caller's resubmission | required; a MON redial would be allowed, none happened |
+| The resubmission is exactly one dial attempt, at the returned primary's endpoint, and no other OSD is dialed | required, by the change of each endpoint's attempt count |
 | A map naming another primary, on a shard that can lead, with the killed OSD out of the acting set, at an epoch newer than the route's and older than the held one; the native object unchanged | required; the pg_temp and the shard are recorded |
 | After the restart, every PG `active+clean` and the placement back on the recorded primary under a new address, without a pg_temp | required |
 | Native bytes, user version, mtime and xattrs equal the pre-state | required: not applied |
@@ -198,7 +201,14 @@ when an entry exists. The control does not look at the other shards' logs.
 - `TestCheckHeldRequest` accepts the synthetic receipt and the same
   placement at a newer epoch, and refuses twenty-six changed receipts and
   five requests. `TestNewDials` accepts unchanged dials and a MON redial and
-  refuses a second dial of the OSD and a dial of another endpoint.
+  refuses a second dial of the OSD and a dial of another endpoint, and
+  reports two attempts at the OSD with both counts. For the resubmission,
+  `checkOneDial` accepts one attempt at the old endpoint, at a new endpoint,
+  and with a MON redial, and refuses no attempt, two attempts at the old or
+  at a new endpoint, the attempt at an endpoint other than the returned
+  primary's, an attempt at both endpoints, and an attempt at another OSD.
+  With its attempt-count check removed it accepted the two cases with two
+  attempts at one endpoint.
 - `TestEndWithin` takes a result within the wait, reports a call that ends
   only on the cancellation, and returns within the wait and the grace for a
   call that stays blocked. With the grace removed from the diagnostic

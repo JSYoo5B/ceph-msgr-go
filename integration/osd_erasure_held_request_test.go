@@ -62,18 +62,39 @@ func (f *erasureFaultClient) dialSnapshot() map[string]int {
 	return maps.Clone(f.dials)
 }
 
+// dialChange is one endpoint whose dial count changed since a snapshot.
+type dialChange struct {
+	endpoint    string
+	before, now int
+}
+
+func (c dialChange) String() string {
+	return fmt.Sprintf("%s (%d -> %d)", c.endpoint, c.before, c.now)
+}
+
 // newDials reports every endpoint the client dialed since snapshot, except
 // the endpoints it had dialed before (its MON sessions may reconnect), and
-// any further dial of the OSD endpoint.
-func newDials(snapshot, now map[string]int, osd string) []string {
-	var found []string
+// any further dial of the OSD endpoint, with the counts before and now.
+func newDials(snapshot, now map[string]int, osd string) []dialChange {
+	var found []dialChange
 	for endpoint, n := range now {
 		if before, ok := snapshot[endpoint]; !ok || endpoint == osd && n != before {
-			found = append(found, fmt.Sprintf("%s (%d -> %d)", endpoint, before, n))
+			found = append(found, dialChange{endpoint, before, n})
 		}
 	}
-	slices.Sort(found)
+	slices.SortFunc(found, func(a, b dialChange) int { return strings.Compare(a.endpoint, b.endpoint) })
 	return found
+}
+
+// checkOneDial requires the dials since snapshot to be exactly one attempt at
+// endpoint at, and no attempt at any other OSD endpoint: the OSD endpoint osd
+// or one the client had not dialed before. A MON redial is allowed.
+func checkOneDial(snapshot, now map[string]int, osd, at string) error {
+	found := newDials(snapshot, now, osd)
+	if len(found) != 1 || found[0].endpoint != at || found[0].now-found[0].before != 1 {
+		return fmt.Errorf("dials since the snapshot %v; want exactly one new attempt at %s (%d before) and none at another OSD", found, at, snapshot[at])
+	}
+	return nil
 }
 
 // endWithin waits up to wait for the call's result. If none arrives it
@@ -430,8 +451,10 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 	if !errors.As(lost.err, &unknown) {
 		t.Fatal("the resubmission changed the original outcome")
 	}
-	if extra := newDials(dialed, fc.dialSnapshot(), endpoint); len(extra) != 1 {
-		t.Fatal("the resubmission did not open exactly its one connection:", extra)
+	// Exactly one attempt at the returned primary, which may listen on the
+	// endpoint it had before or on another one, and no other OSD dial.
+	if err := checkOneDial(dialed, fc.dialSnapshot(), endpoint, osdEndpoint(t, back.Address)); err != nil {
+		t.Fatal("the resubmission did not open exactly its one connection:", err)
 	}
 	t.Logf("applied once by the resubmission at %s, version %d -> %d, tail count %d; the original outcome stays unknown", replayVersion(reply), pre.Version, final.Version, bytes.Count(final.Data, tail))
 }
@@ -529,6 +552,40 @@ func TestNewDials(t *testing.T) {
 	} {
 		if got := newDials(before, now, "192.0.2.7:6800"); len(got) != 1 {
 			t.Error("dial not reported:", name, got)
+		}
+	}
+	if got := newDials(before, map[string]int{"192.0.2.1:3300": 1, "192.0.2.7:6800": 3}, "192.0.2.7:6800"); len(got) != 1 || got[0] != (dialChange{"192.0.2.7:6800", 1, 3}) {
+		t.Error("two attempts at the OSD not reported with their counts:", got)
+	}
+
+	// The resubmission's one connection to the returned primary, at its old
+	// endpoint or at a new one.
+	const mon, old, moved, other = "192.0.2.1:3300", "192.0.2.7:6800", "192.0.2.7:6802", "192.0.2.8:6800"
+	for name, c := range map[string]struct {
+		now map[string]int
+		at  string
+	}{
+		"one attempt at the old endpoint": {map[string]int{mon: 1, old: 2}, old},
+		"one attempt at a new endpoint":   {map[string]int{mon: 1, old: 1, moved: 1}, moved},
+		"one attempt and a MON redial":    {map[string]int{mon: 3, old: 2}, old},
+	} {
+		if err := checkOneDial(before, c.now, old, c.at); err != nil {
+			t.Errorf("%s refused: %v", name, err)
+		}
+	}
+	for name, c := range map[string]struct {
+		now map[string]int
+		at  string
+	}{
+		"no attempt":                                  {maps.Clone(before), old},
+		"two attempts at the old endpoint":            {map[string]int{mon: 1, old: 3}, old},
+		"two attempts at a new endpoint":              {map[string]int{mon: 1, old: 1, moved: 2}, moved},
+		"the attempt at another endpoint":             {map[string]int{mon: 1, old: 2}, moved},
+		"the attempt at the new endpoint and the old": {map[string]int{mon: 1, old: 2, moved: 1}, moved},
+		"one attempt and another OSD":                 {map[string]int{mon: 1, old: 2, other: 1}, old},
+	} {
+		if err := checkOneDial(before, c.now, old, c.at); err == nil {
+			t.Error("dials accepted:", name)
 		}
 	}
 }
