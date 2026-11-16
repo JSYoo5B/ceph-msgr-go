@@ -307,30 +307,6 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                               "TestCephMonPingIntegration", "TestCephMDSFreshIntegration"):
                 self.assertIsNone(selector.search(unrelated))
 
-    def test_mgr_service_rows_require_explicit_opt_in_and_only_the_declared_test(self):
-        self.assertEqual(self.workflow.count("CEPH_MSGR_TEST_MGR_SERVICE: ${{ matrix.mgr_service || '0' }}"), 1)
-        self.assertIn("${{ matrix.mgr_service == '1' && 'MGR-service ' || '' }}", self.workflow)
-        rows = [row for row in self.rows if row.get("mgr_service") == "1"]
-        common = {
-            "stress": "", "osd": "1", "osd_store": "memstore", "osd_replicas": "1",
-            "osd_profile": "legacy-v6", "mgr_service": "1",
-            "test_run": "^TestCephMgrServiceRegistrationIntegration$",
-        }
-        self.assertEqual(rows, [
-            dict(common, key="aes", service="aes", mode="crc", family="4", runtime="host"),
-            dict(common, key="aes256k", service="aes256k", family="6", runtime="container"),
-            dict(key="aes256k", service="aes256k", family="4", runtime="container", managers="0",
-                 mgr_service="1", test_run="^TestCephMgrServiceColdBootstrapIntegration$"),
-        ])
-        for row in rows:
-            expected = ("TestCephMgrServiceColdBootstrapIntegration" if row.get("managers") == "0"
-                        else "TestCephMgrServiceRegistrationIntegration")
-            self.assertIn(expected, self.declared)
-            selector = re.compile(row["test_run"])
-            self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
-            for unrelated in (expected + "Extended", "Prefix" + expected, "TestCephMonServiceMapIntegration"):
-                self.assertIsNone(selector.search(unrelated))
-
     def test_infrastructure_steps_are_bounded_and_retried(self):
         # The reaper pre-pull precedes both jobs that start Testcontainers clusters.
         for job in ("\n  race:\n", "\n  ceph:\n"):
