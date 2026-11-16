@@ -476,6 +476,8 @@ func (r *ecEpochRun) write(label string, route osdFixtureOracle, data []byte, se
 // list must hold exactly that registration throughout and nothing after the
 // UNWATCH, and the client must open no OSD connection the caller did not ask
 // for.
+//
+//fixture:isolated kills the primary OSD, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 	r := startECEpochRun(t, 900*time.Second)
 	const (
@@ -612,6 +614,8 @@ func TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration(t *testing.T) {
 // match the native reads. After the original primary returns and every PG is
 // clean, the same reads and LIST_SNAPS through it must give the same bytes,
 // clones and user versions.
+//
+//fixture:isolated kills the primary OSD, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 	r := startECEpochRun(t, 900*time.Second)
 	const object = "ec-snapshot-failover"
@@ -750,6 +754,8 @@ func TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration(t *testing.T) {
 // unknown outcome; the native object is unchanged, and one explicit
 // resubmission under the original identity applies it once. After the last
 // OSD returns and every PG is clean, the native state is unchanged.
+//
+//fixture:isolated kills two OSDs, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedK2M2PGBackoffIntegration(t *testing.T) {
 	r := startECEpochRun(t, 900*time.Second)
 	const (
