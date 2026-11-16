@@ -139,10 +139,25 @@ clean again, with an empty missing set: the primary's log at the return gave
 it the entry of the overwrite it had been left out of, which names the other
 three shards only. Which entries a shard's own log holds therefore also
 depends on whether it was recovered after the write. Neither control reads
-the returned shard's chunk bytes. A primary change onto another shard, the
-outage of a parity shard's or the primary's OSD, and a write during the
-recovery itself were not observed with this capture, and nothing here is a
-replay or deduplication claim.
+the returned shard's chunk bytes.
+
+One more [control](../../integration/fixture/OSD_EC_PARTIAL_WRITE_PRIMARY_REPLACEMENT_VALIDATION.md)
+takes the primary's own OSD out after the overwrite. The map named the
+left-out shard's OSD first for one epoch, which did not activate the PG,
+and then the first parity shard's OSD under a primary-first pg_temp, which
+led the PG active with shard 0's position empty. Its info held the same
+range for shard 1, so its peering sent shard 1 nothing. One acknowledged Go
+overwrite inside shard 0's chunk went through it with primary-first shard
+numbering; as the first write of its interval it named every shard,
+although by its bytes it left shard 1 out. After the original primary
+returned, under a new address, and recovered the object to itself, the PG
+was clean on its original placement: shards 0, 2 and 3 held all three
+entries, and shard 1 held the full write and that overwrite without the
+earlier overwrite between them. A shard that can lead therefore takes over
+the record of the range a nonprimary shard was left out of. The outage of a
+parity shard's OSD, more than one write while a member is away, and a write
+during the recovery itself were not observed with this capture, and nothing
+here is a replay or deduplication claim.
 
 ## Optimized EC pools (`allow_ec_optimizations`)
 

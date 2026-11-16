@@ -114,8 +114,8 @@ Not exercised by these controls, from the same source:
   without later entries, never without an entry between two it holds; it is
   caught up from the log in the same way and takes no part in the question
   of a left-out shard. The primary's OSD's outage needs another shard to
-  lead; see
-  [not built](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md#not-built-primary-replacement).
+  lead; it has its own
+  [control](OSD_EC_PARTIAL_WRITE_PRIMARY_REPLACEMENT_VALIDATION.md).
 
 No Ceph source is incorporated into the product.
 
@@ -483,10 +483,11 @@ Testcontainers label left.
   it runs and a network partition were not run.
 - Only the left-out shard's OSD leaves. The outage of a parity shard's OSD
   or of the primary's OSD, two members away at once (which leaves the PG
-  below `min_size`) and a primary change were not run; see the source basis
-  for why the first is not a left-out-shard question and
-  [not built](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md#not-built-primary-replacement)
-  for the last.
+  below `min_size`) and a primary change were not run by these controls; see
+  the source basis for why the first is not a left-out-shard question. The
+  outage of the primary's OSD and the primary change it causes are the
+  subject of a separate
+  [control](OSD_EC_PARTIAL_WRITE_PRIMARY_REPLACEMENT_VALIDATION.md).
 - One write is sent while the shard is away, and it is the first of its
   interval. A second degraded write that would leave the absent shard out
   by its bytes, a write during the recovery itself, backfill instead of log
