@@ -16,6 +16,8 @@ import (
 // whose OSD capability is only "allow r" is refused WATCH with a known EPERM
 // and no registration, while its NOTIFY reaches the admin client's watch and
 // completes with that watcher's ACK.
+//
+//fixture:shareable watches and notifies an owned object with existing keys; unwatches, and checked cleanup removes it
 func TestCephOSDWatchPermissionsIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()
 	var c *cephmsgr.Client

@@ -30,12 +30,16 @@ func goMonTellValue(t *testing.T, ctx context.Context, c *Client, target string)
 // test keeps that process alive, ends only the subject connection and wait, and
 // reads the later value through fresh sessions. A restart would clear the
 // override, so the surviving distinct override also shows the same incarnation.
+//
+//fixture:shareable sets a runtime override on mon.b; cleanup restores it and fresh native views show baseline override state
 func TestCephAppliedMonitorTellIsNotReplayedIntegration(t *testing.T) {
 	testAppliedMonitorTell(t, false)
 }
 
 // The current-MON API shares the admitted primary connection. Losing its reply
 // ends that primary session, unlike MonTellTo's operation-private connection.
+//
+//fixture:shareable sets a runtime override on mon.b; cleanup restores it and fresh native views show baseline override state
 func TestCephAppliedCurrentMonitorTellIsNotReplayedIntegration(t *testing.T) {
 	testAppliedMonitorTell(t, true)
 }

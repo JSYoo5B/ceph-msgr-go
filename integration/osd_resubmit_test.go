@@ -17,6 +17,8 @@ import (
 // An explicit resubmission repeats a request under its original transaction ID
 // and incarnation with FLAG_RETRY, so the OSD answers from its PG log instead of
 // appending again. A new request with a new ID executes again (the control).
+//
+//fixture:shareable mutates owned UUID objects in the fixture pool; checked cleanup removes them
 func TestCephOSDResubmitIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest
 	if isReplicatedPGFixtureProfile() {

@@ -15,6 +15,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated kills and restarts the primary OSD; clean wait lacks a pg_temp proof; rewrites the fixture object unverified
 func TestCephOSDReplicasIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("requires three sparse-file BlueStore replicas")

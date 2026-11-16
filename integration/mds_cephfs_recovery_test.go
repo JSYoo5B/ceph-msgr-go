@@ -765,6 +765,7 @@ func recoveryOSDRead(ctx context.Context, o *cephmsgr.OSDConnection, request cep
 	return r
 }
 
+//fixture:isolated pauses the MDS journal, fails the owned rank-0 MDS and evicts a session (blocklist entry); no restore proof
 func TestCephMDSCephFSRecoveryIntegration(t *testing.T) {
 	runCephFSRecovery(t, exclusiveHeldFlock)
 }

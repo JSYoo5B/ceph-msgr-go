@@ -17,6 +17,8 @@ import (
 // executed, retried nor redirected. A single-replica owned pool on the
 // three-OSD fixture leaves two OSDs without its PG. The native client's
 // command to the same OSD is the reference.
+//
+//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
 func TestCephOSDCommandOutsideActingSetIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" {
 		t.Skip("needs an OSD outside a single-replica PG's acting set")

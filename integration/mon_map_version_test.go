@@ -13,6 +13,8 @@ import (
 
 // MapVersion's newest committed version equals the map epoch the native
 // client's MON dump commands report, for the OSD, MON and filesystem maps.
+//
+//fixture:shareable reads map versions from the Go client and the native oracle only
 func TestCephMonMapVersionIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {
@@ -76,6 +78,8 @@ func TestCephMonMapVersionIntegration(t *testing.T) {
 // MMonGetVersion and MStatfs sent to a peon while the leader is stopped are
 // answered once the remaining monitors re-elect; the stopped leader is
 // restarted and the election settled on every path.
+//
+//fixture:shareable stops the leader MON, restarts it and waits for a settled full quorum (cleanup does the same)
 func TestCephMonMapVersionLeaderStopIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

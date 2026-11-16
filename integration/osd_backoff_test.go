@@ -118,6 +118,7 @@ func nativeBackoffRoute(t *testing.T, base osdFixtureOracle, state nativeBackoff
 	return base
 }
 
+//fixture:isolated sets fixture pool size/min_size 1/1 to 2/2 and back; restore waits for one PG active, not all clean
 func TestCephOSDBackoffIntegration(t *testing.T) {
 	if !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
 		t.Skip("requires an opt-in single-OSD replicated-PG native backoff fixture")

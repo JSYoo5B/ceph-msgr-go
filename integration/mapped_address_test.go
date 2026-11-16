@@ -35,6 +35,7 @@ func mappedOracleEndpoints(t *testing.T, role string, endpoints []string, names 
 	return seen
 }
 
+//fixture:isolated its lifecycle subtest runs mgr fail; the active MGR is not restored
 func TestCephMappedAddressIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if control == "" || os.Getenv("CEPH_MSGR_TEST_MAPPED_IPV6") != "1" || os.Getenv("CEPH_MSGR_TEST_PROXY") != "" {

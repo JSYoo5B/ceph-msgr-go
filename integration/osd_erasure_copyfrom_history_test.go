@@ -250,6 +250,8 @@ func shardPGHistory(t *testing.T, ctx context.Context, slot int, object string, 
 // creates the head on every shard. This is a positive control: it stops
 // before any trimming or resubmission and claims nothing about absence,
 // eviction or replay.
+//
+//fixture:isolated pauses each acting OSD for a store copy, no clean wait; EC CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration(t *testing.T) {
 	width := erasureK2M2
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != width.topology || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {

@@ -57,6 +57,7 @@ func fixtureRejectsOldProof(ctx context.Context, options Options, initial *cephx
 	return true, nil
 }
 
+//fixture:isolated stops all MONs until tickets expire; start waits for quorum only, MGR and daemon re-auth not proven
 func TestCephExpiredTicketRecoveryIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if control == "" || os.Getenv("CEPH_MSGR_TEST_EXPIRE_TICKETS") != "1" {
@@ -125,6 +126,7 @@ func TestCephExpiredTicketRecoveryIntegration(t *testing.T) {
 	t.Logf("strict reclaim: global ID=%d retained after ticket lifetime expired and renewed", current.GlobalID)
 }
 
+//fixture:isolated stops all MONs for about 48s while keys rotate; start waits for quorum only, MGR availability not proven
 func TestCephDiscardedTicketProofIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if control == "" || os.Getenv("CEPH_MSGR_TEST_EXPIRE_TICKETS") != "1" {

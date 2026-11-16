@@ -19,6 +19,8 @@ import (
 // quorum re-elects, object writes on an open OSD connection keep completing;
 // the client's MON session recovers on its own, and native bytes match every
 // acknowledged write.
+//
+//fixture:shareable stops and restarts the MON leader; waits for a settled election with the original quorum
 func TestCephOSDIOAcrossMonLeaderStopIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest
 	if isReplicatedPGFixtureProfile() {

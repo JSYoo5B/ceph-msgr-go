@@ -214,6 +214,7 @@ type mdsCommandCase struct {
 	WriteChunksBefore, WriteChunksAfter uint64                    `json:",omitempty"`
 }
 
+//fixture:isolated stops the owned MDS daemon through fixture control and never restarts it
 func TestCephMDSCommandsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MDS_COMMANDS") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MDS_COMMANDS=1 for owned raw MDS command acceptance")

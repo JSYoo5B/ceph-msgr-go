@@ -55,6 +55,8 @@ type enforceSnapNative struct {
 // between pool-provided and caller-enforced SnapContext. Native librados does
 // not expose ENFORCE_SNAPC: it supplies ordinary WRITEFULL+ORDERSNAP and
 // independent selected-snapshot STAT2/READ/LISTSNAPS observations only.
+//
+//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
 func TestCephOSDEnforceSnapContextIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

@@ -16,6 +16,8 @@ import (
 // APPEND whose entry has been trimmed is executed again when resubmitted under
 // its original identity: the client cannot tell, which is why resubmission is
 // never a replay guarantee and is never automatic.
+//
+//fixture:isolated sets OSD pg log options (checked config rm restores); owned-pool cleanup leaves mon_allow_pool_delete
 func TestCephOSDResubmitAfterTrimIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

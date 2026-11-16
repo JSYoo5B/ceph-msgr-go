@@ -182,6 +182,8 @@ const cephFlockGoSecondOwner uint64 = 0x80000000474f0003
 // of two distinct Go owners on one owned file in place of the one exclusive
 // lock. It needs a fresh mds-cephfs fixture of its own: the recipe performs
 // the fixture's only owned MDS restart.
+//
+//fixture:isolated pauses the MDS journal, fails the owned rank-0 MDS and evicts a session (blocklist entry); no restore proof
 func TestCephMDSCephFSSharedFlockRecoveryIntegration(t *testing.T) {
 	runCephFSRecovery(t, sharedHeldFlock)
 }

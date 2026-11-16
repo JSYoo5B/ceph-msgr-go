@@ -394,6 +394,8 @@ func (r *partialWriteRun) primaryBack(o *primaryOutage) pgIntervalReceipt {
 // during the outage, not the overwrite between them, with its head at its
 // last entry. This states what each shard's own log holds at capture time;
 // it claims nothing about eviction, loss or replay.
+//
+//fixture:isolated kills the primary OSD; its PG proven clean without pg_temp; CRUSH rule and pool-delete config left
 func TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 900*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince

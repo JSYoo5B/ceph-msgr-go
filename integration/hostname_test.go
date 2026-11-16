@@ -15,6 +15,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//fixture:shareable dials by hostname and reads status and pg stat only
 func TestCephHostnameSeedIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" || os.Getenv("CEPH_MSGR_TEST_PROXY") != "" {
 		t.Skip("requires container-local disposable Ceph and the default Go DNS dialer")
@@ -55,6 +56,7 @@ type genericHostnameConn struct {
 
 func (c *genericHostnameConn) RemoteAddr() net.Addr { return c.peer }
 
+//fixture:shareable dials through an aliased seed and reads status and pg stat only
 func TestCephGenericHostnameSeedIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {
 		t.Skip("requires the disposable Ceph fixture")

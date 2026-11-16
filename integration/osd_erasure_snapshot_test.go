@@ -17,12 +17,16 @@ import (
 // a write SnapContext. A write accepted while one shard's OSD is down still
 // reads back natively after that OSD returns, the PGs are clean and another
 // OSD is down.
+//
+//fixture:isolated kills two OSDs, restart waits osd-ready clean (second start unchecked); CRUSH rule, pool-delete config left
 func TestCephOSDErasureSnapshotAndDegradedWriteIntegration(t *testing.T) {
 	erasureSnapshotScenario(t, erasureK2M1, false, "")
 }
 
 // The same on an optimized pool, whose partial-stripe write path and recovery
 // differ inside the OSDs; nothing differs on this client's wire.
+//
+//fixture:isolated kills two OSDs, restart waits osd-ready clean (second start unchecked); CRUSH rule, pool-delete config left
 func TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration(t *testing.T) {
 	erasureSnapshotScenario(t, erasureK2M1, true, "")
 }
@@ -33,6 +37,8 @@ func TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration(t *testing.T
 // native object bytes must still match. Three shards then remain, and k=2
 // of them suffice to decode, so this read does not show which bytes the
 // returned shard holds.
+//
+//fixture:isolated kills two OSDs, restart waits osd-ready clean (second start unchecked); CRUSH rule, pool-delete config left
 func TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration(t *testing.T) {
 	erasureSnapshotScenario(t, erasureK2M2, true, "isa")
 }

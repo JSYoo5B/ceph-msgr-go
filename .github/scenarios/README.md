@@ -133,6 +133,21 @@ The fixture reads only the capability value and the exact selector. It does
 not know that a catalog row supplied them, so a declaration placed beside the
 test can supply the same two values later without a fixture change.
 
+### Fixture sharing
+
+Every native test declares beside its function whether a later test may use
+the fixture it ran on: `//fixture:shareable <reason>` or
+`//fixture:isolated <reason>` as the last line of its doc comment. A row has
+no field of its own: it is shareable only when every test its effective
+selector selects is. The fixture derives each row's value
+(`TestCatalogRowsDeclareFixtureSharing`), and `scenario_plan.py validate`
+runs it and refuses a native test without a valid declaration, a misplaced
+declaration and a row without a value. `scenario_plan.py sharing` lists the
+shareable and isolated rows of each fixture configuration (a row's
+parameters without `test_run`). The planner does not group rows yet; every
+row still runs on its own fixture. The rule and the first classification are
+in [FIXTURE_SHARING.md](../../integration/fixture/FIXTURE_SHARING.md).
+
 The catalog preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
 Fifteen further `osd` rows use the four-OSD erasure-capacity topology

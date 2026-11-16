@@ -65,6 +65,8 @@ func sortedPGList(entries []cephmsgr.OSDPGListEntry) []cephmsgr.OSDPGListEntry {
 	})
 	return result
 }
+
+//fixture:shareable writes owned UUID objects and one namespace head; deletes the head and removes owned objects, checked
 func TestCephOSDPGListIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)

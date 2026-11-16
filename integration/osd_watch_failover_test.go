@@ -18,6 +18,8 @@ import (
 // the generation advances, the native watcher list still shows exactly one
 // registration, and a notification from another client reaches the
 // reconnected handle and completes with its ACK.
+//
+//fixture:isolated kills and restarts an OSD; cleanup waits active+clean without a pg_temp or placement proof
 func TestCephOSDWatchFailoverIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("primary failover needs three BlueStore replicas")

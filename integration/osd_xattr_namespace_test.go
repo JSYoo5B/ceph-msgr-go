@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//fixture:shareable creates two namespaced objects in the fixture pool and deletes them, natively verifying absence
 func TestCephOSDXattrNamespacesIntegration(t *testing.T) {
 	c, _, base, original := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)

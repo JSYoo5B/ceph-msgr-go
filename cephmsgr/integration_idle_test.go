@@ -28,6 +28,7 @@ func (c *idleSessionReadProbe) Read(p []byte) (int, error) {
 	return n, err
 }
 
+//fixture:isolated runs mgr fail to switch the active MGR; it does not restore the original active MGR
 func TestCephIdleSessionsIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_IDLE_SESSIONS") != "1" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {
 		t.Skip("requires the isolated long-ticket disposable fixture")

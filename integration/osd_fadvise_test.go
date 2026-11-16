@@ -12,6 +12,8 @@ import (
 
 // FADVISE cache hints ride on the data-path operations and change no result:
 // writes and reads carrying them match the native client's view of the object.
+//
+//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
 func TestCephOSDFadviseIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

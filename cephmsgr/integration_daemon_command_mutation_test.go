@@ -532,6 +532,8 @@ func (f osdCommandFixture) cell(kind string) daemonCommandCell {
 // One applied OSDConnection.Command whose reply is withheld: the daemon-local
 // runtime option of the explicitly targeted OSD process, the same reversible
 // command and bound as the MON and MGR Tell cells.
+//
+//fixture:shareable sets an OSD runtime override; cleanup restores it natively and a fresh read shows baseline value and provenance
 func TestCephAppliedOSDCommandIsNotReplayedIntegration(t *testing.T) {
 	fixture, ctx := osdCommandOutcomeFixture(t)
 	cell := fixture.cell("osd")
@@ -570,6 +572,8 @@ func parsePGScrubSessions(pgid string, data []byte) (int64, bool) {
 // commands of the pinned OSD have exactly one reversible, synchronously
 // applied state: the scrubber's "sessions" debug flag. A sets it, the native
 // overwrite B unsets it again, so a replay of A would list the counter again.
+//
+//fixture:shareable sets the PG scrubdebug sessions flag; overwrite and restore unset it and a fresh read shows the baseline
 func TestCephAppliedPGCommandIsNotReplayedIntegration(t *testing.T) {
 	fixture, ctx := osdCommandOutcomeFixture(t)
 	cell := fixture.cell("pg")
@@ -588,6 +592,8 @@ func TestCephAppliedPGCommandIsNotReplayedIntegration(t *testing.T) {
 
 // One applied MDSConnection.Command whose reply is withheld: the daemon-local
 // runtime option of the explicitly targeted active MDS process.
+//
+//fixture:shareable sets an MDS runtime override; cleanup restores it natively and a fresh read shows the baseline
 func TestCephAppliedMDSCommandIsNotReplayedIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if os.Getenv("CEPH_MSGR_TEST_MDS_COMMANDS") != "1" || control == "" {

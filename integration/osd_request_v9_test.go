@@ -74,6 +74,8 @@ func checkActualV9Prefix(t *testing.T, m msgr.MessageData, want v9RuntimeExpecte
 		t.Fatal("actual v9 frame lost its full fixed feature masks", want.Name)
 	}
 }
+
+//fixture:shareable writes one owned UUID object; checked cleanup removes it and verifies the fixture head unchanged
 func TestCephOSDRequestV9Integration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-request-v9-reply-v8" {
 		t.Skip("requires explicit request-v9/reply-v8 fixture")

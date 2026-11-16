@@ -28,6 +28,8 @@ import (
 // end and a deleted head whose clone remains. The allocation map is the
 // store's (BlueStore logical extents, MemStore whole ranges); the native
 // client decides the expected map on the active store.
+//
+//fixture:isolated allocates self-managed snaps on the shared fixture pool, leaving its selfmanaged_snaps flag set
 func TestCephOSDSnapshotSparseReadIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE") != "1" {
 		t.Skip("requires staged independent native sparse-read oracle; set CEPH_MSGR_NATIVE_SPARSE_READ_ORACLE=1 after staging the matching binary")

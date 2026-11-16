@@ -16,6 +16,8 @@ import (
 // degraded PG (one non-primary shard's OSD killed) reconstructs the bytes; after
 // the primary is killed the new primary holds a different shard, and only a
 // request carrying that new shard is answered.
+//
+//fixture:isolated kills two OSDs, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M1, false, "")
 }
@@ -23,6 +25,8 @@ func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 // With allow_ec_optimizations, raw shard 1 (the second data shard) may never be
 // primary: when the primary is lost the MON picks a parity shard instead, and
 // the caller's placement must carry that shard.
+//
+//fixture:isolated kills two OSDs, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M1, true, "")
 }
@@ -32,6 +36,8 @@ func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
 // the native map. One killed OSD leaves three shards (min_size), so the PG
 // stays active; after the primary's loss a parity shard's OSD must lead and
 // the request carries that shard in primary-first numbering for pool size 4.
+//
+//fixture:isolated kills two OSDs, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
 func TestCephOSDErasureOptimizedK2M2FailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M2, true, "isa")
 }

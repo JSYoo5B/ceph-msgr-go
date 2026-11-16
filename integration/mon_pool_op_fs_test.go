@@ -16,6 +16,8 @@ import (
 // allocation on its data pool are both a known -EOPNOTSUPP that leaves the
 // pool's snapshots and snap_seq unchanged. The filesystem is removed before
 // the pools.
+//
+//fixture:isolated owned pools removed, but the cleanup leaves mon/mon_allow_pool_delete in central config
 func TestCephMonPoolOpFilesystemPoolIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

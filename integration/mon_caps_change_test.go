@@ -16,6 +16,8 @@ import (
 // existing session, which authenticated under the old capabilities, sees the
 // change, and requires a newly dialed client to be allowed. The write is a
 // harmless option on the identity's own config section, removed afterwards.
+//
+//fixture:isolated creates an auth entity before its cleanup and ignores the auth rm code; auth is not in the start-state check
 func TestCephMonCommandCapsChangeIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
