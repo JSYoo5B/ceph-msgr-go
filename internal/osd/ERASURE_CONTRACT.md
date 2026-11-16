@@ -86,9 +86,25 @@ TID/incarnation returned ONDISK with the original user version, and native bytes
 xattr and mtime did not change. A fresh-TID control appended again and advanced
 the native version. The original caller's unknown outcome was preserved. This
 is bounded PG-log duplicate handling, not an automatic replay policy or a
-universal exactly-once guarantee. Not verified: a request held at the primary
-when it dies, retention/trim boundaries, other profiles and a signed refusal
-across the epoch change.
+universal exactly-once guarantee.
+
+A [held-request control](../../integration/fixture/OSD_EC_HELD_REQUEST_VALIDATION.md)
+on that profile covers a request that reached the primary and was held
+there. A Go APPEND+SETXATTR named a map epoch the cluster had not
+published, so the primary queued it in `waiting_for_map` before decoding its
+operations; the primary's op tracker showed it undecoded and delayed for the
+map. The primary's OSD was then SIGKILLed. The call ended through the session
+with `OutcomeUnknownError` and the TID the primary had tracked, and no further
+OSD connection was opened. After the restart and clean PGs the native object
+was unchanged and the returned primary's PG log did not hold the identity.
+One caller resubmission under the original transaction then applied once.
+For this client a PG below `min_size` does not hold a request: the
+replicated-PG profiles advertise RADOS_BACKOFF, so the primary installs a
+PG-wide backoff and drops the op. One exploratory run saw that BLOCK, and the
+later kill of the primary ended that call as unknown too; it is not part of
+the control.
+Not verified: a request held after it reached `do_op`, retention/trim
+boundaries, other profiles and a signed refusal across the epoch change.
 
 A test-only [primary PG-history snapshot](../../integration/fixture/OSD_PG_HISTORY_CALIBRATION_VALIDATION.md)
 on the same profile finds known Go request identities in the primary's native
