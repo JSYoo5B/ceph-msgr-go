@@ -31,7 +31,7 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
         self.assertEqual(rows, [{
             "key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
             "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
-            "test_run": RBD_MIRROR_SELECTOR,
+            "test_run": RBD_MIRROR_SELECTOR, "capabilities": "rbd-mirror",
         }])
         expected = "TestCephRBDMirrorPathRecoveryIntegration"
         selector = re.compile(RBD_MIRROR_SELECTOR)
@@ -54,12 +54,13 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
             self.assertIsNone(selector.search(unrelated))
         for row in broad:
             self.assertIsNone(re.compile(row["test_run"]).search(expected))
-        profile = lambda row: {key: value for key, value in row.items() if key != "test_run"}
+        profile = lambda row: {key: value for key, value in row.items() if key not in ("test_run", "capabilities")}
         self.assertEqual(sorted(map(repr, map(profile, rows))), sorted(map(repr, map(profile, broad))))
         for row in rows:
             self.assertEqual(row["rbd"], "1")
         modes = {row.get("mode", "secure") for row in rows}
         self.assertEqual(modes, {"crc", "secure"})
+        self.assertEqual({row["capabilities"] for row in rows}, {"rbd-journal-lost-append"})
 
     def test_rbd_lock_owner_loss_rows_are_exclusive(self):
         # The lock-owner-loss cell blocklists two client addresses and kills a
@@ -80,12 +81,13 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
             self.assertIsNone(selector.search(unrelated))
         for row in others:
             self.assertIsNone(re.compile(row["test_run"]).search(expected))
-        profile = lambda row: {key: value for key, value in row.items() if key != "test_run"}
+        profile = lambda row: {key: value for key, value in row.items() if key not in ("test_run", "capabilities")}
         self.assertEqual(sorted(map(repr, map(profile, rows))), sorted(map(repr, map(profile, broad))))
         for row in rows:
             self.assertEqual(row["rbd"], "1")
         self.assertEqual({row.get("mode", "secure") for row in rows}, {"crc", "secure"})
         self.assertEqual({row["osd_store"] for row in rows}, {"bluestore", "memstore"})
+        self.assertEqual({row["capabilities"] for row in rows}, {"rbd-lock-owner-loss"})
 
     def test_rbd_lock_owner_loss_pending_rows_are_exclusive(self):
         # The pending variant holds two requests of the first lock owner on
@@ -105,10 +107,11 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
             self.assertIsNone(selector.search(unrelated))
         for row in others:
             self.assertIsNone(re.compile(row["test_run"]).search(expected))
-        profile = lambda row: {key: value for key, value in row.items() if key != "test_run"}
+        profile = lambda row: {key: value for key, value in row.items() if key not in ("test_run", "capabilities")}
         self.assertEqual(sorted(map(repr, map(profile, rows))), sorted(map(repr, map(profile, broad))))
         self.assertEqual({row.get("mode", "secure") for row in rows}, {"crc", "secure"})
         self.assertEqual({row["osd_store"] for row in rows}, {"bluestore", "memstore"})
+        self.assertEqual({row["capabilities"] for row in rows}, {"rbd-lock-owner-loss,rbd-lock-pending-requests"})
 
     def test_rbd_journal_primary_change_rows_are_exclusive(self):
         # The primary-change cell is the only RBD selection on three OSDs:
@@ -136,6 +139,7 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"), ("family", ""), ("runtime", "container"))))
         self.assertEqual(observed, {("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")})
+        self.assertEqual({row["capabilities"] for row in rows}, {"rbd-journal-primary-change"})
 
     def test_rbd_rows_select_only_the_declared_rbd_tests(self):
         rows = [row for row in self.rows if row.get("rbd") == "1" and row.get("test_run") not in RBD_EXCLUSIVE_SELECTORS]
@@ -147,7 +151,8 @@ class RBDRowsTest(ci_row_catalog.RowsTestCase):
         for row in rows:
             self.assertEqual((row["osd_profile"], row["osd"], row["osd_replicas"], row["stress"]),
                              ("legacy-v6", "1", "1", ""))
-            for field in ("mds_fresh", "mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "image", "race"):
+            for field in ("mds_fresh", "mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "image", "race",
+                          "capabilities"):
                 self.assertNotIn(field, row)
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, expected)

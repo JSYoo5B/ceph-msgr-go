@@ -52,10 +52,12 @@ import (
 // Each action runs at most once and only after its predecessors.
 var rbdLockActions = []string{"setup", "lock", "observe-released"}
 
-// rbdLockOwnerLossSelector selects the lock-owner-loss acceptance. It runs
-// alone on a fresh RBD fixture and replaces the ordinary sequence with
-// rbdLockOwnerLossActions.
-const rbdLockOwnerLossSelector = "^TestCephRBDLockOwnerLossIntegration$"
+// capRBDLockOwnerLoss admits the lock-owner-loss acceptance. Its test runs
+// alone on a fresh RBD fixture, and the lock control replaces the ordinary
+// sequence with rbdLockOwnerLossActions.
+var capRBDLockOwnerLoss = defineCapability("rbd-lock-owner-loss",
+	"run one test alone on a fresh RBD fixture with the lock-owner-loss sequence (blocklists and a native SIGKILL)",
+	"RBD=1 !rbd-journal-lost-append !rbd-journal-primary-change", nil)
 
 // rbdLockOwnerLossActions is the closed, ordered action sequence of the
 // lock-owner-loss acceptance on the same image plan. After the setup, the Go
@@ -75,11 +77,12 @@ const rbdLockOwnerLossSelector = "^TestCephRBDLockOwnerLossIntegration$"
 // address) at rbdBaseSource.
 var rbdLockOwnerLossActions = []string{"setup", "observe-go-owner", "takeover", "observe-go-broke", "final"}
 
-// rbdLockOwnerLossPendingSelector selects the variant of the lock-owner-loss
-// acceptance in which the Go owner has two requests unanswered when it loses
-// the lock. It runs alone on a fresh RBD fixture and replaces the ordinary
-// sequence with rbdLockOwnerLossPendingActions.
-const rbdLockOwnerLossPendingSelector = "^TestCephRBDLockOwnerLossPendingIntegration$"
+// capRBDLockPendingRequests extends rbd-lock-owner-loss to the variant in
+// which the Go owner has two requests unanswered when it loses the lock: the
+// lock control replaces the sequence with rbdLockOwnerLossPendingActions.
+var capRBDLockPendingRequests = defineCapability("rbd-lock-pending-requests",
+	"extend rbd-lock-owner-loss with the pending-request sequence and its OSDMap epoch advance",
+	"+rbd-lock-owner-loss", nil)
 
 // rbdLockOwnerLossPendingActions is the lock-owner-loss sequence with two
 // more actions before the final one. The Go owner's pending requests name an
@@ -101,13 +104,13 @@ const rbdLockPendingEpochs = 8
 // starts no new PG interval.
 const rbdLockAdvanceFlag = "nodeep-scrub"
 
-// rbdLockActionsFor returns the action sequence the selected test run admits.
-func rbdLockActionsFor(testRun string) []string {
-	switch testRun {
-	case rbdLockOwnerLossSelector:
-		return rbdLockOwnerLossActions
-	case rbdLockOwnerLossPendingSelector:
+// rbdLockActionsFor returns the action sequence the profile admits.
+func rbdLockActionsFor(p profile) []string {
+	switch {
+	case p.admits(capRBDLockPendingRequests):
 		return rbdLockOwnerLossPendingActions
+	case p.admits(capRBDLockOwnerLoss):
+		return rbdLockOwnerLossActions
 	}
 	return rbdLockActions
 }
@@ -1307,7 +1310,7 @@ func (c *fixtureCluster) rbdLockControl(ctx context.Context, out string, fields 
 	if x.cleanupAttempted {
 		return errors.New("RBD lock control requested after cleanup began")
 	}
-	id, action, err := parseRBDLockRequest(rbdLockActionsFor(c.profile.testRun), fields, x.token, x.lockLastRequestID, x.lockNext)
+	id, action, err := parseRBDLockRequest(rbdLockActionsFor(c.profile), fields, x.token, x.lockLastRequestID, x.lockNext)
 	if err != nil {
 		return err
 	}

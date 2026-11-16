@@ -328,25 +328,16 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		// every pool must keep the legacy placement seed.
 		selected = "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
 		// The lost-append-reply acceptance needs a journal no other test has
-		// advanced and is admitted only when explicitly selected.
-		if p.testRun == rbdJournalLostAppendSelector {
-			selected = p.testRun
-		}
-		// The lock-owner-loss acceptance blocklists two client addresses and
-		// kills a native lock owner; it is admitted only when explicitly
-		// selected, on a fixture no other RBD test shares.
-		if p.testRun == rbdLockOwnerLossSelector || p.testRun == rbdLockOwnerLossPendingSelector {
-			selected = p.testRun
-		}
-		// The primary-change acceptance is the lost-append-reply sequence on
-		// three replicated BlueStore OSDs. No other RBD selection is admitted
-		// on that topology, and this one on no other.
-		if p.testRun == rbdJournalPrimaryChangeSelector {
-			selected = p.testRun
-		}
+		// advanced. The lock-owner-loss acceptances blocklist two client
+		// addresses and kill a native lock owner. The primary-change
+		// acceptance is the lost-append-reply sequence on three replicated
+		// BlueStore OSDs; no other RBD selection is admitted on that topology,
+		// and that one on no other. Each runs alone on a fresh fixture and is
+		// admitted only by its capability.
+		admitted := p.admits(capRBDJournalLostAppend) || p.admits(capRBDLockOwnerLoss) || p.admits(capRBDJournalPrimaryChange)
 		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != p.rbdReplicas() || p.osdReplicas == "3" && p.osdStore != "bluestore" || p.mdsFresh != "0" ||
-			(p.sparseReadOracle != "" || p.mapExtOracle != "") || p.testRun != "" && p.testRun != selected {
-			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture (three BlueStore OSDs for %s alone) and no MDS profile", selected, rbdJournalPrimaryChangeSelector)
+			(p.sparseReadOracle != "" || p.mapExtOracle != "") || !ownSelection(p.testRun, selected, admitted) {
+			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s or one capability-admitted test, the single-OSD legacy-v6 fixture (three BlueStore OSDs for capability %s alone) and no MDS profile", selected, capRBDJournalPrimaryChange.name)
 		}
 	}
 	if p.monPing == "1" {
@@ -412,7 +403,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 // rbdReplicas is the OSD topology the selected RBD acceptance runs on: one
 // OSD, or three for the primary-change sequence.
 func (p profile) rbdReplicas() string {
-	if p.testRun == rbdJournalPrimaryChangeSelector {
+	if p.declares(capRBDJournalPrimaryChange) {
 		return "3"
 	}
 	return "1"

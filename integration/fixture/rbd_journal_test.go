@@ -125,14 +125,43 @@ func TestRBDJournalRequestIsClosedAndOrdered(t *testing.T) {
 	}
 }
 
+// The native tests that declare the RBD journal and lock capabilities
+// (catalog.d/rbd.json).
+const (
+	rbdJournalLostAppendSelector    = "^TestCephRBDJournalLostAppendReplyIntegration$"
+	rbdJournalPrimaryChangeSelector = "^TestCephRBDJournalPrimaryChangeIntegration$"
+	rbdLockOwnerLossSelector        = "^TestCephRBDLockOwnerLossIntegration$"
+	rbdLockOwnerLossPendingSelector = "^TestCephRBDLockOwnerLossPendingIntegration$"
+)
+
+// rbdSelectionProfile is the profile of the RBD catalog row that selects
+// selector, with its declared capabilities and topology.
+func rbdSelectionProfile(t *testing.T, selector string) profile {
+	t.Helper()
+	for _, row := range ciRepositoryCatalog(t) {
+		if row.Params["test_run"] == selector && row.Params["rbd"] == "1" {
+			p, err := ciProfile(row, ciWorkflowBindings(t))
+			if err != nil {
+				t.Fatal(row.ID, err)
+			}
+			return p
+		}
+	}
+	t.Fatal("no RBD row selects", selector)
+	return profile{}
+}
+
 // The lost-append-reply sequence is admitted only under its exact selector,
 // which the RBD fixture accepts as its one further exclusive selection.
 func TestRBDJournalLostAppendSelectorIsExclusive(t *testing.T) {
 	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
 	load := func(selector string) (profile, error) {
 		return loadProfile(func(key string) string {
-			if key == "CEPH_MSGR_TEST_RUN" {
+			switch key {
+			case "CEPH_MSGR_TEST_RUN":
 				return selector
+			case "CEPH_MSGR_TEST_CAPABILITIES":
+				return catalogCapabilities(t, selector)
 			}
 			return base[key]
 		})
@@ -143,7 +172,7 @@ func TestRBDJournalLostAppendSelectorIsExclusive(t *testing.T) {
 		if err != nil || p.testRun != want {
 			t.Fatal("RBD selector admission differs", selector, p.testRun, err)
 		}
-		actions := rbdJournalActionsFor(p.testRun)
+		actions := rbdJournalActionsFor(p)
 		if (selector == rbdJournalLostAppendSelector) != slices.Equal(actions, rbdJournalLostAppendActions) || selector != rbdJournalLostAppendSelector && !slices.Equal(actions, rbdJournalActions) {
 			t.Fatal("journal action sequence differs for", selector, actions)
 		}
@@ -177,15 +206,18 @@ func TestRBDJournalPrimaryChangeSelectorIsExclusive(t *testing.T) {
 	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1", "CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"}
 	load := func(selector string) (profile, error) {
 		return loadProfile(func(key string) string {
-			if key == "CEPH_MSGR_TEST_RUN" {
+			switch key {
+			case "CEPH_MSGR_TEST_RUN":
 				return selector
+			case "CEPH_MSGR_TEST_CAPABILITIES":
+				return catalogCapabilities(t, selector)
 			}
 			return base[key]
 		})
 	}
 	p, err := load(rbdJournalPrimaryChangeSelector)
 	if err != nil || p.testRun != rbdJournalPrimaryChangeSelector || p.rbdReplicas() != "3" || p.osdTopology().poolSize != 3 || p.osdTopology().poolMinSize != 2 ||
-		!slices.Equal(rbdJournalActionsFor(p.testRun), rbdJournalPrimaryChangeActions) {
+		!slices.Equal(rbdJournalActionsFor(p), rbdJournalPrimaryChangeActions) {
 		t.Fatal("primary-change selector admission differs", p.testRun, err)
 	}
 	// Three OSDs admit no other RBD selection, not even the default one.
@@ -208,10 +240,10 @@ func TestRBDJournalPrimaryChangeSelectorIsExclusive(t *testing.T) {
 			delete(base, key)
 		}
 	}
-	if (profile{testRun: rbdJournalLostAppendSelector}).rbdReplicas() != "1" || (profile{}).rbdReplicas() != "1" {
+	if rbdSelectionProfile(t, rbdJournalLostAppendSelector).rbdReplicas() != "1" || (profile{}).rbdReplicas() != "1" {
 		t.Fatal("another RBD selection asks for three OSDs")
 	}
-	if !slices.Equal(rbdJournalActionsFor(rbdJournalLostAppendSelector), rbdJournalLostAppendActions) || !slices.Equal(rbdLockActionsFor(rbdJournalPrimaryChangeSelector), rbdLockActions) {
+	if !slices.Equal(rbdJournalActionsFor(rbdSelectionProfile(t, rbdJournalLostAppendSelector)), rbdJournalLostAppendActions) || !slices.Equal(rbdLockActionsFor(rbdSelectionProfile(t, rbdJournalPrimaryChangeSelector)), rbdLockActions) {
 		t.Fatal("the primary-change selector changed another sequence")
 	}
 	want := slices.Insert(slices.Clone(rbdJournalLostAppendActions), len(rbdJournalLostAppendActions)-1, "change-primary", "observe-resubmitted")

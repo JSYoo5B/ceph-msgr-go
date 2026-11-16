@@ -48,7 +48,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
-    "test_run": "^TestCephRBDMirrorPathRecoveryIntegration$"
+    "test_run": "^TestCephRBDMirrorPathRecoveryIntegration$",
+    "capabilities": "rbd-mirror"
    }
   },
   {
@@ -66,7 +67,8 @@
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "rbd": "1",
-    "test_run": "^TestCephRBDJournalLostAppendReplyIntegration$"
+    "test_run": "^TestCephRBDJournalLostAppendReplyIntegration$",
+    "capabilities": "rbd-journal-lost-append"
    }
   },
   {
@@ -83,7 +85,8 @@
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "rbd": "1",
-    "test_run": "^TestCephRBDJournalLostAppendReplyIntegration$"
+    "test_run": "^TestCephRBDJournalLostAppendReplyIntegration$",
+    "capabilities": "rbd-journal-lost-append"
    }
   },
   {
@@ -101,7 +104,8 @@
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "rbd": "1",
-    "test_run": "^TestCephRBDLockOwnerLossIntegration$"
+    "test_run": "^TestCephRBDLockOwnerLossIntegration$",
+    "capabilities": "rbd-lock-owner-loss"
    }
   },
   {
@@ -118,7 +122,8 @@
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "rbd": "1",
-    "test_run": "^TestCephRBDLockOwnerLossIntegration$"
+    "test_run": "^TestCephRBDLockOwnerLossIntegration$",
+    "capabilities": "rbd-lock-owner-loss"
    }
   },
   {
@@ -136,7 +141,8 @@
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "rbd": "1",
-    "test_run": "^TestCephRBDLockOwnerLossPendingIntegration$"
+    "test_run": "^TestCephRBDLockOwnerLossPendingIntegration$",
+    "capabilities": "rbd-lock-owner-loss,rbd-lock-pending-requests"
    }
   },
   {
@@ -153,7 +159,8 @@
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "rbd": "1",
-    "test_run": "^TestCephRBDLockOwnerLossPendingIntegration$"
+    "test_run": "^TestCephRBDLockOwnerLossPendingIntegration$",
+    "capabilities": "rbd-lock-owner-loss,rbd-lock-pending-requests"
    }
   },
   {
@@ -171,7 +178,8 @@
     "osd_replicas": "3",
     "osd_profile": "legacy-v6",
     "rbd": "1",
-    "test_run": "^TestCephRBDJournalPrimaryChangeIntegration$"
+    "test_run": "^TestCephRBDJournalPrimaryChangeIntegration$",
+    "capabilities": "rbd-journal-primary-change"
    }
   },
   {
@@ -188,7 +196,8 @@
     "osd_replicas": "3",
     "osd_profile": "legacy-v6",
     "rbd": "1",
-    "test_run": "^TestCephRBDJournalPrimaryChangeIntegration$"
+    "test_run": "^TestCephRBDJournalPrimaryChangeIntegration$",
+    "capabilities": "rbd-journal-primary-change"
    }
   }
  ]

@@ -53,10 +53,12 @@ import (
 // control. Each action runs at most once and only after its predecessors.
 var rbdJournalActions = []string{"setup", "observe-registered", "write", "observe-committed", "inspect", "replay", "concurrent"}
 
-// rbdJournalLostAppendSelector selects the lost-append-reply acceptance. It
-// runs alone on a fresh RBD fixture and replaces the ordinary sequence with
-// rbdJournalLostAppendActions.
-const rbdJournalLostAppendSelector = "^TestCephRBDJournalLostAppendReplyIntegration$"
+// capRBDJournalLostAppend admits the lost-append-reply acceptance. Its test
+// runs alone on a fresh RBD fixture, and the journal control replaces the
+// ordinary sequence with rbdJournalLostAppendActions.
+var capRBDJournalLostAppend = defineCapability("rbd-journal-lost-append",
+	"run one test alone on a fresh RBD fixture with the lost-append-reply journal sequence",
+	"RBD=1 !rbd-journal-primary-change !rbd-lock-owner-loss", nil)
 
 // rbdJournalLostAppendActions is the closed, ordered action sequence of the
 // lost-append-reply acceptance: the setup, an observation once the Go test
@@ -67,13 +69,15 @@ const rbdJournalLostAppendSelector = "^TestCephRBDJournalLostAppendReplyIntegrat
 // in the ordinary sequence; only the order and the receipt names differ.
 var rbdJournalLostAppendActions = []string{"setup", "observe-locked", "checkpoint", "observe-recorded", "replay"}
 
-// rbdJournalPrimaryChangeSelector selects the lost-append-reply sequence on
-// three replicated BlueStore OSDs, with a change of the acting primary before
-// the Go test resolves its unknown outcome. It runs alone on a fresh RBD
-// fixture of that topology, whose owned pool has a single PG, so that the
-// image header, the journal header and every journal object share one acting
-// set and one primary.
-const rbdJournalPrimaryChangeSelector = "^TestCephRBDJournalPrimaryChangeIntegration$"
+// capRBDJournalPrimaryChange admits the lost-append-reply sequence on three
+// replicated BlueStore OSDs, with a change of the acting primary before the
+// Go test resolves its unknown outcome. Its test runs alone on a fresh RBD
+// fixture of that topology (profile.go rbdReplicas), whose owned pool has a
+// single PG, so that the image header, the journal header and every journal
+// object share one acting set and one primary.
+var capRBDJournalPrimaryChange = defineCapability("rbd-journal-primary-change",
+	"run one test alone on a fresh three-OSD RBD fixture with the primary-change journal sequence",
+	"RBD=1 OSD_REPLICAS=3 OSD_STORE=bluestore !rbd-journal-lost-append !rbd-lock-owner-loss", nil)
 
 // rbdJournalPrimaryChangeActions is the lost-append-reply sequence with two
 // more actions before the replay. `change-primary` first lets the fixture
@@ -90,13 +94,12 @@ const rbdJournalPrimaryChangeSelector = "^TestCephRBDJournalPrimaryChangeIntegra
 // does not advertise, so every OSD would refuse its next connection.
 var rbdJournalPrimaryChangeActions = []string{"setup", "observe-locked", "checkpoint", "observe-recorded", "change-primary", "observe-resubmitted", "replay"}
 
-// rbdJournalActionsFor returns the action sequence the selected test run
-// admits.
-func rbdJournalActionsFor(testRun string) []string {
-	switch testRun {
-	case rbdJournalLostAppendSelector:
+// rbdJournalActionsFor returns the action sequence the profile admits.
+func rbdJournalActionsFor(p profile) []string {
+	switch {
+	case p.admits(capRBDJournalLostAppend):
 		return rbdJournalLostAppendActions
-	case rbdJournalPrimaryChangeSelector:
+	case p.admits(capRBDJournalPrimaryChange):
 		return rbdJournalPrimaryChangeActions
 	}
 	return rbdJournalActions
@@ -1073,7 +1076,7 @@ func (c *fixtureCluster) rbdJournalControl(ctx context.Context, out string, fiel
 	if x.cleanupAttempted {
 		return errors.New("RBD journal control requested after cleanup began")
 	}
-	id, action, err := parseRBDJournalRequest(rbdJournalActionsFor(c.profile.testRun), fields, x.token, x.journalLastRequestID, x.journalNext)
+	id, action, err := parseRBDJournalRequest(rbdJournalActionsFor(c.profile), fields, x.token, x.journalLastRequestID, x.journalNext)
 	if err != nil {
 		return err
 	}
