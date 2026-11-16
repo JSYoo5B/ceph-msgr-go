@@ -53,7 +53,8 @@
     "osd_profile": "legacy-v6",
     "mds_fresh": "1",
     "mds_commands": "1",
-    "test_run": "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
+    "test_run": "^TestCephAppliedMDSCommandIsNotReplayedIntegration$",
+    "capabilities": "mds-applied-command"
    }
   },
   {
@@ -71,7 +72,8 @@
     "osd_profile": "legacy-v6",
     "mds_fresh": "1",
     "mds_commands": "1",
-    "test_run": "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
+    "test_run": "^TestCephAppliedMDSCommandIsNotReplayedIntegration$",
+    "capabilities": "mds-applied-command"
    }
   }
  ]

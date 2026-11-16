@@ -6,13 +6,25 @@ import (
 	"time"
 )
 
-func monForcedKillProfile(t *testing.T, overrides map[string]string) profile {
-	t.Helper()
+// The two native tests that declare mon-forced-kill (catalog.d/osd.json).
+const (
+	monConnectedKillSelector   = "^TestCephMonMapVersionConnectedKillIntegration$"
+	monUnprocessedKillSelector = "^TestCephMonMapVersionUnprocessedKillIntegration$"
+)
+
+func monForcedKillEnv(overrides map[string]string) map[string]string {
 	values := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1",
-		"CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUN": monForcedKillSelector}
+		"CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_CONNECTION_MODE": "crc", "CEPH_MSGR_TEST_RUN": monConnectedKillSelector,
+		"CEPH_MSGR_TEST_CAPABILITIES": "mon-forced-kill"}
 	for key, value := range overrides {
 		values[key] = value
 	}
+	return values
+}
+
+func monForcedKillProfile(t *testing.T, overrides map[string]string) profile {
+	t.Helper()
+	values := monForcedKillEnv(overrides)
 	p, err := loadProfile(func(key string) string { return values[key] })
 	if err != nil {
 		t.Fatal(err)
@@ -20,20 +32,37 @@ func monForcedKillProfile(t *testing.T, overrides map[string]string) profile {
 	return p
 }
 
-// SIGKILL of a MON is admitted only for the exact two-cell selection on the
-// single-BlueStore legacy-v6 fixture. Broad OSD selections, which also match
-// those test names, keep the kill control restricted to OSDs.
+// SIGKILL of a MON is admitted only for one exact test that declares
+// mon-forced-kill, on the single-BlueStore legacy-v6 fixture. Broad OSD
+// selections, which also match those test names, and either cell without
+// the declaration keep the kill control restricted to OSDs.
 func TestMonForcedKillIsAdmittedOnlyForItsExclusiveSelection(t *testing.T) {
-	selected := monForcedKillProfile(t, nil)
-	if !selected.monForcedKillSelected() || !selected.forcedKillAdmitted("mon") || !selected.forcedKillAdmitted("osd") || selected.forcedKillAdmitted("mgr") {
-		t.Fatal("selected profile admission", selected.testRun)
+	for _, selector := range []string{monConnectedKillSelector, monUnprocessedKillSelector} {
+		selected := monForcedKillProfile(t, map[string]string{"CEPH_MSGR_TEST_RUN": selector})
+		if !selected.monForcedKillSelected() || !selected.forcedKillAdmitted("mon") || !selected.forcedKillAdmitted("osd") || selected.forcedKillAdmitted("mgr") {
+			t.Fatal("selected profile admission", selected.testRun)
+		}
 	}
 	for name, overrides := range map[string]map[string]string{
-		"broad":          {"CEPH_MSGR_TEST_RUN": ""},
-		"one cell":       {"CEPH_MSGR_TEST_RUN": "^TestCephMonMapVersionConnectedKillIntegration$"},
-		"wider":          {"CEPH_MSGR_TEST_RUN": "^TestCephMonMapVersion.*Integration$"},
-		"three replicas": {"CEPH_MSGR_TEST_OSD_REPLICAS": "3"},
+		"three replicas": {"CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_OSD_STORE": "bluestore"},
 		"memstore":       {"CEPH_MSGR_TEST_OSD_STORE": "memstore"},
+		"pg-v8":          {"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"},
+		"both cells":     {"CEPH_MSGR_TEST_RUN": "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"},
+		"wider":          {"CEPH_MSGR_TEST_RUN": "^TestCephMonMapVersion.*Integration$"},
+		"broad":          {"CEPH_MSGR_TEST_RUN": ""},
+	} {
+		values := monForcedKillEnv(overrides)
+		if p, err := loadProfile(func(key string) string { return values[key] }); err == nil {
+			t.Fatal("MON forced kill capability accepted outside its topology or one exact test", name, p.testRun)
+		}
+	}
+	for name, overrides := range map[string]map[string]string{
+		"broad":            {"CEPH_MSGR_TEST_RUN": "", "CEPH_MSGR_TEST_CAPABILITIES": ""},
+		"undeclared cell":  {"CEPH_MSGR_TEST_RUN": monUnprocessedKillSelector, "CEPH_MSGR_TEST_CAPABILITIES": ""},
+		"undeclared pair":  {"CEPH_MSGR_TEST_RUN": "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$", "CEPH_MSGR_TEST_CAPABILITIES": ""},
+		"wider":            {"CEPH_MSGR_TEST_RUN": "^TestCephMonMapVersion.*Integration$", "CEPH_MSGR_TEST_CAPABILITIES": ""},
+		"three replicas":   {"CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_CAPABILITIES": ""},
+		"other capability": {"CEPH_MSGR_TEST_CAPABILITIES": "osd-copy-from-late-error"},
 	} {
 		p := monForcedKillProfile(t, overrides)
 		if p.monForcedKillSelected() || p.forcedKillAdmitted("mon") || !p.forcedKillAdmitted("osd") || p.forcedKillAdmitted("mgr") {
@@ -46,7 +75,7 @@ func TestMonForcedKillIsAdmittedOnlyForItsExclusiveSelection(t *testing.T) {
 			t.Fatal("unselected profile lost the ordinary ticket validity", name, auth, service)
 		}
 	}
-	if (profile{testRun: monForcedKillSelector}).forcedKillAdmitted("mon") {
+	if (profile{testRun: monConnectedKillSelector, capabilities: "mon-forced-kill"}).forcedKillAdmitted("mon") {
 		t.Fatal("MON forced kill admitted without the OSD fixture")
 	}
 }
@@ -57,7 +86,7 @@ func TestMonForcedKillIsAdmittedOnlyForItsExclusiveSelection(t *testing.T) {
 func TestMonForcedKillMarkerAndTicketValidityFollowSelection(t *testing.T) {
 	t.Setenv(monForcedKillMarker, "1")
 	selected := monForcedKillProfile(t, map[string]string{monForcedKillMarker: "1"})
-	broad := monForcedKillProfile(t, map[string]string{monForcedKillMarker: "1", "CEPH_MSGR_TEST_RUN": ""})
+	broad := monForcedKillProfile(t, map[string]string{monForcedKillMarker: "1", "CEPH_MSGR_TEST_RUN": "", "CEPH_MSGR_TEST_CAPABILITIES": ""})
 	for _, test := range []struct {
 		p    profile
 		want string

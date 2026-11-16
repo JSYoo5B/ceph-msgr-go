@@ -11,11 +11,9 @@ import (
 // identities. The product client sends the cache operations; this closed
 // native observer only seeds, observes and removes its own four heads and
 // never issues a cache operation. Each phase is one control; an uncertain
-// observer call is retained and nothing is reissued.
-const (
-	cacheOpGoSelector = "^TestCephOSDCacheOpGoIntegration$"
-	cacheOpGoAction   = "go-ops"
-)
+// observer call is retained and nothing is reissued. Its test runs alone with
+// capability exclusive-osd-cache-pools.
+const cacheOpGoAction = "go-ops"
 
 var cacheOpGoLabels = map[string]bool{"after-evict-dirty": true, "pinned": true, "unpinned": true, "flushed": true, "try-flushed": true, "evicted": true, "absent-final": true, "clean-flush": true, "clean-try-flush": true, "absent-flush": true, "absent-try-flush": true, "absent-evict": true, "lost-flushed": true, "lost-flush-settled": true}
 

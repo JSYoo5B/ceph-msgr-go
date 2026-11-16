@@ -209,7 +209,10 @@ checks; the failover and snapshot tests do not use those checks. The k=2,m=2 tes
 
 The four-OSD topology admits a second closed selector,
 `^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$`, on legacy-v6 or
-replicated-pg-v8; its first selector stays the default. The pool oracle's
+replicated-pg-v8; its first selector stays the default. (Since the fixture
+capabilities, each of the two tests has its own row and runs alone with
+`osd-erasure-width`; the joined selector is no longer admitted. The results
+below were recorded with the joined selector.) The pool oracle's
 `k2m2` width now accepts `optimized` (isa only). After enabling
 `allow_ec_optimizations` it reads the pool's `nonprimary_shards` back and
 requires the set the pinned `OSDMonitor::enable_pool_ec_optimizations`
@@ -266,7 +269,10 @@ after a newer map. The in-flight mutation case is recorded separately below.
 
 The four-OSD topology admits a third closed selector,
 `^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$`,
-and one catalog row selects it on replicated-pg-v8. Both tests create the
+and one catalog row selects it on replicated-pg-v8. (Since the fixture
+capabilities, each test has its own row and runs alone with
+`osd-erasure-width`; the joined selector is no longer admitted. The results
+below were recorded with the joined selector.) Both tests create the
 optimized isa k=2,m=2 pool through the same oracle path and fact checks as
 the preceding section.
 

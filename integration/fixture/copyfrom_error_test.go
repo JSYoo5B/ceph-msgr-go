@@ -94,8 +94,17 @@ func TestCopyFromErrorScopeRequiresAnEffectiveRuntimeChange(t *testing.T) {
 	}
 }
 
+// The native tests that declare the copy-from capabilities
+// (catalog.d/osd.json).
+const (
+	copyFromLateErrorSelector  = "^TestCephOSDCopyFromLateErrorIntegration$"
+	copyFromMultiChunkSelector = "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"
+)
+
 func TestCopyFromErrorControlRequiresExclusiveSelector(t *testing.T) {
-	for _, p := range []profile{{}, {osd: "1", osdStore: "bluestore", osdReplicas: "3", testRun: copyFromLateErrorSelector}, {osd: "1", osdStore: "bluestore", osdReplicas: "1", testRun: ".*"}} {
+	for _, p := range []profile{{}, {osd: "1", osdStore: "bluestore", osdReplicas: "3", osdProfile: "legacy-v6", testRun: copyFromLateErrorSelector, capabilities: "osd-copy-from-late-error"},
+		{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", testRun: ".*", capabilities: "osd-copy-from-late-error"},
+		{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", testRun: copyFromLateErrorSelector}} {
 		c := &fixtureCluster{profile: p}
 		if err := c.copyFromErrorControl(context.Background(), t.TempDir(), []string{"1", "apply"}); err == nil {
 			t.Fatal("nonexclusive fault injection admitted")
@@ -110,7 +119,7 @@ func TestCopyFromErrorMarkerOnlyReachesExclusiveTestEnvironment(t *testing.T) {
 		for _, selector := range []string{copyFromLateErrorSelector, "", "^TestCeph.*Integration$", "^TestCeph(OSD|MonOSDMaps).*Integration$", "^TestCephOSDSetChunkGoIntegration$"} {
 			t.Run(runtime+"/"+selector, func(t *testing.T) {
 				p, err := loadProfile(func(key string) string {
-					return map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_RUNTIME": runtime, "CEPH_MSGR_TEST_RUN": selector, copyFromLateErrorMarker: "1"}[key]
+					return map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_RUNTIME": runtime, "CEPH_MSGR_TEST_RUN": selector, "CEPH_MSGR_TEST_CAPABILITIES": catalogCapabilities(t, selector), copyFromLateErrorMarker: "1"}[key]
 				})
 				if err != nil {
 					t.Fatal(err)
@@ -224,9 +233,9 @@ func TestCopyFromErrorScopeRejectsNonLoweringChunk(t *testing.T) {
 }
 
 func TestCopyFromErrorObservationsRequireMultiChunkSelector(t *testing.T) {
-	single := profile{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", testRun: copyFromLateErrorSelector}
+	single := profile{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", testRun: copyFromLateErrorSelector, capabilities: "osd-copy-from-late-error"}
 	multi := single
-	multi.testRun = copyFromMultiChunkSelector
+	multi.testRun, multi.capabilities = copyFromMultiChunkSelector, "osd-copy-from-multi-chunk"
 	broad := multi
 	broad.testRun = "^TestCephOSD.*Integration$"
 	for _, tc := range []struct {
@@ -251,12 +260,12 @@ func TestCopyFromErrorObservationsRequireMultiChunkSelector(t *testing.T) {
 }
 
 func TestCopyFromMultiChunkBootstrapRetainsShortOpHistory(t *testing.T) {
-	multi := profile{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", testRun: copyFromMultiChunkSelector}
+	multi := profile{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", testRun: copyFromMultiChunkSelector, capabilities: "osd-copy-from-multi-chunk"}
 	if sections := bootstrapSections(t, fixtureBootstrapConfig(multi)); sections["osd"]["osd_op_history_size"] != "1024" {
 		t.Fatal("multi-chunk cell lacks its enlarged op history", sections)
 	}
 	single := multi
-	single.testRun = copyFromLateErrorSelector
+	single.testRun, single.capabilities = copyFromLateErrorSelector, "osd-copy-from-late-error"
 	if strings.Contains(fixtureBootstrapConfig(single), "osd_op_history_size") {
 		t.Fatal("op history enlargement leaked to another cell")
 	}
@@ -299,7 +308,7 @@ func TestCopyFromMultiChunkMarkerOnlyReachesExclusiveTestEnvironment(t *testing.
 	t.Setenv(copyFromMultiChunkMarker, "1")
 	for _, selector := range []string{copyFromMultiChunkSelector, copyFromLateErrorSelector, "", "^TestCeph.*Integration$"} {
 		p, err := loadProfile(func(key string) string {
-			return map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RUN": selector, copyFromMultiChunkMarker: "1"}[key]
+			return map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "1", "CEPH_MSGR_TEST_RUNTIME": "host", "CEPH_MSGR_TEST_RUN": selector, "CEPH_MSGR_TEST_CAPABILITIES": catalogCapabilities(t, selector), copyFromMultiChunkMarker: "1"}[key]
 		})
 		if err != nil {
 			t.Fatal(err)

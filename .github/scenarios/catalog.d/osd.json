@@ -211,7 +211,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "3",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDUpmapIntegration$"
+    "test_run": "^TestCephOSDUpmapIntegration$",
+    "capabilities": "osd-long-tickets"
    }
   },
   {
@@ -227,7 +228,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "3",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDUpmapIntegration$"
+    "test_run": "^TestCephOSDUpmapIntegration$",
+    "capabilities": "osd-long-tickets"
    }
   },
   {
@@ -259,7 +261,25 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2Integration$",
+    "capabilities": "osd-erasure-width"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2failover",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2FailoverIntegration$",
+    "capabilities": "osd-erasure-width"
    }
   },
   {
@@ -275,7 +295,25 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration$",
+    "capabilities": "osd-erasure-width"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2snapshotanddegradedwrite",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "4",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration$",
+    "capabilities": "osd-erasure-width"
    }
   },
   {
@@ -291,7 +329,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$",
+    "capabilities": "osd-erasure-width"
    }
   },
   {
@@ -307,7 +346,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$",
+    "capabilities": "osd-erasure-width"
    }
   },
   {
@@ -323,7 +363,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
+    "capabilities": "osd-erasure-width,osd-shard-history"
    }
   },
   {
@@ -339,7 +380,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
+    "capabilities": "osd-erasure-width,osd-shard-history"
    }
   },
   {
@@ -355,7 +397,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
+    "capabilities": "osd-erasure-width,osd-pg-interval,osd-shard-history"
    }
   },
   {
@@ -371,7 +414,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
+    "capabilities": "osd-erasure-width,osd-pg-interval,osd-shard-history"
    }
   },
   {
@@ -387,7 +431,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
+    "capabilities": "osd-erasure-width,osd-pg-interval,osd-shard-history"
    }
   },
   {
@@ -403,7 +448,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
+    "capabilities": "osd-erasure-width,osd-pg-interval,osd-shard-history"
    }
   },
   {
@@ -419,7 +465,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
+    "capabilities": "osd-erasure-width,osd-pg-interval,osd-shard-history"
    }
   },
   {
@@ -435,7 +482,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "4",
     "osd_profile": "replicated-pg-v8",
-    "test_run": "^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$"
+    "test_run": "^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$",
+    "capabilities": "osd-erasure-width"
    }
   },
   {
@@ -649,7 +697,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
-    "test_run": "^TestCephOSDCopyFromLateErrorIntegration$"
+    "test_run": "^TestCephOSDCopyFromLateErrorIntegration$",
+    "capabilities": "osd-copy-from-late-error"
    }
   },
   {
@@ -666,7 +715,8 @@
     "osd_store": "bluestore",
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
-    "test_run": "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"
+    "test_run": "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$",
+    "capabilities": "osd-copy-from-multi-chunk"
    }
   },
   {
@@ -683,7 +733,26 @@
     "osd_store": "bluestore",
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
-    "test_run": "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
+    "test_run": "^TestCephMonMapVersionConnectedKillIntegration$",
+    "capabilities": "mon-forced-kill"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionunprocessedkill",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephMonMapVersionUnprocessedKillIntegration$",
+    "capabilities": "mon-forced-kill"
    }
   },
   {
@@ -700,7 +769,26 @@
     "osd_store": "bluestore",
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
-    "test_run": "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
+    "test_run": "^TestCephMonMapVersionConnectedKillIntegration$",
+    "capabilities": "mon-forced-kill"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionunprocessedkill",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "mode": "crc",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephMonMapVersionUnprocessedKillIntegration$",
+    "capabilities": "mon-forced-kill"
    }
   }
  ]

@@ -89,30 +89,39 @@ var mdsCephFSCompletionRuntimeKinds = map[string]struct {
 	"debug-caps-on": {map[string]string{"debug_mds": "15/15", "debug_ms": "1/5"}, "debug-caps-off"},
 }
 
-// mdsCephFSHeldFlockSplitSelector selects the held-FLOCK split reconnect
-// acceptance. Its lock probe, level-15 debug window and per-capability log
-// read are admitted only under this exclusive selector and under the
-// two-fragment selector below.
-const mdsCephFSHeldFlockSplitSelector = "^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$"
+// capExclusiveMDSCephFSCompletion admits one test alone on a fresh
+// completion fixture in place of its default suite (the split reconnect),
+// with only the actions the completion fixture already admits.
+var capExclusiveMDSCephFSCompletion = defineCapability("exclusive-mds-cephfs-completion",
+	"run one test alone on a fresh MDS CephFS completion fixture",
+	"MDS_FRESH=1 MDS_CEPHFS_COMPLETION=1", nil)
 
-// mdsCephFSHeldFlockSplitFragmentsSelector selects the acceptance that holds
-// one lock in a nonfinal and one in the final fragment of the split
-// reconnect. It admits the actions of the single-lock selector and, alone,
-// the lock probe of the last split file.
-const mdsCephFSHeldFlockSplitFragmentsSelector = "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$"
+// capMDSHeldFlockSplit admits one test alone on a fresh completion fixture
+// with the held-FLOCK split reconnect controls: its split-file lock probe,
+// level-15 debug window and per-capability log read.
+var capMDSHeldFlockSplit = defineCapability("mds-held-flock-split",
+	"run one test alone on a fresh MDS CephFS completion fixture with the held-FLOCK split reconnect controls",
+	"MDS_FRESH=1 MDS_CEPHFS_COMPLETION=1", nil)
+
+// capMDSHeldFlockSplitFragments adds the lock probe of the last split file,
+// for the acceptance that holds one lock in a nonfinal and one in the final
+// fragment of the split reconnect. It extends mds-held-flock-split.
+var capMDSHeldFlockSplitFragments = defineCapability("mds-held-flock-split-fragments",
+	"add the final-fragment lock probe to mds-held-flock-split",
+	"+mds-held-flock-split", nil)
 
 var mdsCephFSHeldFlockSplitActions = []string{"split-flock-ex-nb", "debug-caps-on", "debug-caps-off", "reconnect-cap-log"}
 
 // mdsCephFSHeldFlockSplitFragmentsActions are admitted under the
-// two-fragment selector only.
+// final-fragment capability only.
 var mdsCephFSHeldFlockSplitFragmentsActions = []string{"split-final-flock-ex-nb"}
 
-func admitMDSCephFSHeldFlockSplit(action, testRun string) error {
-	if slices.Contains(mdsCephFSHeldFlockSplitActions, action) && testRun != mdsCephFSHeldFlockSplitSelector && testRun != mdsCephFSHeldFlockSplitFragmentsSelector {
-		return errors.New("MDS CephFS completion held-lock split action requires its exclusive selector")
+func admitMDSCephFSHeldFlockSplit(action string, p profile) error {
+	if slices.Contains(mdsCephFSHeldFlockSplitActions, action) && !p.admits(capMDSHeldFlockSplit) {
+		return errors.New("MDS CephFS completion held-lock split action requires capability " + capMDSHeldFlockSplit.name)
 	}
-	if slices.Contains(mdsCephFSHeldFlockSplitFragmentsActions, action) && testRun != mdsCephFSHeldFlockSplitFragmentsSelector {
-		return errors.New("MDS CephFS completion final-fragment lock probe requires its exclusive selector")
+	if slices.Contains(mdsCephFSHeldFlockSplitFragmentsActions, action) && !p.admits(capMDSHeldFlockSplitFragments) {
+		return errors.New("MDS CephFS completion final-fragment lock probe requires capability " + capMDSHeldFlockSplitFragments.name)
 	}
 	return nil
 }
@@ -1086,7 +1095,7 @@ func (c *fixtureCluster) mdsCephFSCompletionControl(ctx context.Context, out str
 	if err != nil {
 		return err
 	}
-	if err := admitMDSCephFSHeldFlockSplit(action.name, c.profile.testRun); err != nil {
+	if err := admitMDSCephFSHeldFlockSplit(action.name, c.profile); err != nil {
 		return err
 	}
 	x.lastRequestID = id

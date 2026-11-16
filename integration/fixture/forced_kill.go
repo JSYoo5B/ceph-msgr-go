@@ -59,17 +59,20 @@ func forceKill(parent context.Context, kill func(context.Context) error, state f
 	}
 }
 
-// monForcedKillSelector is the only selection that admits SIGKILL of a MON.
-// Its two cells kill the MON that an in-flight MMonGetVersion is connected
-// to; every other profile keeps forced crashes restricted to OSDs.
-const monForcedKillSelector = "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
+// capMONForcedKill is the only admission of SIGKILL of a MON, on the
+// single-BlueStore legacy-v6 fixture. Its tests kill the MON that an in-flight
+// MMonGetVersion is connected to; every other profile keeps forced crashes
+// restricted to OSDs.
+var capMONForcedKill = defineCapability("mon-forced-kill",
+	"admit SIGKILL of a MON for one test on the single-BlueStore legacy-v6 fixture, with 120 s tickets",
+	"OSD=1 OSD_STORE=bluestore OSD_REPLICAS=1 OSD_PROFILE=legacy-v6", nil)
 
 // monForcedKillMarker tells the selected tests that the fixture admits the
 // MON kill control. Without it they skip instead of failing the controller.
 const monForcedKillMarker = "CEPH_MSGR_NATIVE_MON_FORCED_KILL"
 
 func (p profile) monForcedKillSelected() bool {
-	return p.testRun == monForcedKillSelector && p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "1" && p.osdProfile == "legacy-v6"
+	return p.admits(capMONForcedKill)
 }
 
 // forcedKillAdmitted is the closed admission of the kill control: any owned

@@ -14,6 +14,10 @@ import (
 	"github.com/moby/moby/api/types/container"
 )
 
+// rbdMirrorSelector is the native test that declares rbd-mirror
+// (catalog.d/rbd.json).
+const rbdMirrorSelector = "^TestCephRBDMirrorPathRecoveryIntegration$"
+
 func TestRBDMirrorMarkerOnlyReachesExclusiveTestEnvironment(t *testing.T) {
 	// A caller-supplied marker cannot enable a broad suite or another row.
 	t.Setenv(rbdMirrorMarker, "1")
@@ -27,6 +31,8 @@ func TestRBDMirrorMarkerOnlyReachesExclusiveTestEnvironment(t *testing.T) {
 						return runtime
 					case "CEPH_MSGR_TEST_RUN":
 						return selector
+					case "CEPH_MSGR_TEST_CAPABILITIES":
+						return catalogCapabilities(t, selector)
 					}
 					return base[key]
 				})
@@ -66,7 +72,7 @@ func TestRBDMirrorMarkerOnlyReachesExclusiveTestEnvironment(t *testing.T) {
 }
 
 func TestRBDMirrorSelectionRequiresItsFixtureShape(t *testing.T) {
-	selected := profile{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", ipFamily: "4", mappedIPv6: "0", rbdBase: "0", mdsFresh: "0", osdCachePools: "0", mgrService: "0", testRun: rbdMirrorSelector}
+	selected := profile{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", ipFamily: "4", mappedIPv6: "0", rbdBase: "0", mdsFresh: "0", osdCachePools: "0", mgrService: "0", testRun: rbdMirrorSelector, capabilities: "rbd-mirror"}
 	if !selected.rbdMirrorSelected() {
 		t.Fatal("the closed single-BlueStore IPv4 profile is not selected")
 	}
@@ -109,7 +115,7 @@ func TestRBDMirrorControlRequiresExclusiveSelector(t *testing.T) {
 }
 
 func TestRBDMirrorControlEnforcesPhaseOrder(t *testing.T) {
-	p := profile{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", ipFamily: "4", mappedIPv6: "0", rbdBase: "0", mdsFresh: "0", osdCachePools: "0", mgrService: "0", testRun: rbdMirrorSelector}
+	p := profile{osd: "1", osdStore: "bluestore", osdReplicas: "1", osdProfile: "legacy-v6", ipFamily: "4", mappedIPv6: "0", rbdBase: "0", mdsFresh: "0", osdCachePools: "0", mgrService: "0", testRun: rbdMirrorSelector, capabilities: "rbd-mirror"}
 	for _, tc := range []struct {
 		scope  *rbdMirrorScope
 		action string

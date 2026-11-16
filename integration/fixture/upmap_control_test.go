@@ -10,7 +10,7 @@ import (
 )
 
 func TestUpmapTicketWindowKeepsOtherProfiles(t *testing.T) {
-	selected := profile{osd: "1", osdProfile: "replicated-pg-v8", osdReplicas: "3", osdStore: "bluestore", testRun: "^TestCephOSDUpmapIntegration$"}
+	selected := profile{osd: "1", osdProfile: "replicated-pg-v8", osdReplicas: "3", osdStore: "bluestore", mdsFresh: "0", shortTickets: "0", testRun: "^TestCephOSDUpmapIntegration$", capabilities: "osd-long-tickets"}
 	for _, tc := range []struct {
 		name    string
 		change  func(*profile)
@@ -18,7 +18,8 @@ func TestUpmapTicketWindowKeepsOtherProfiles(t *testing.T) {
 		service time.Duration
 	}{
 		{"selected", func(*profile) {}, 120 * time.Second, 120 * time.Second},
-		{"other selector", func(p *profile) { p.testRun = "^TestCephOSDObjectBackoffFailoverIntegration$" }, 12 * time.Second, 12 * time.Second},
+		{"undeclared", func(p *profile) { p.capabilities = "" }, 12 * time.Second, 12 * time.Second},
+		{"two tests", func(p *profile) { p.testRun = "^TestCephOSD(Upmap|ObjectBackoffFailover)Integration$" }, 12 * time.Second, 12 * time.Second},
 		{"whole suite", func(p *profile) { p.testRun = "" }, 12 * time.Second, 12 * time.Second},
 		{"one OSD", func(p *profile) { p.osdReplicas = "1" }, 12 * time.Second, 12 * time.Second},
 		{"no OSD", func(p *profile) { p.osd = "0" }, 12 * time.Second, 12 * time.Second},

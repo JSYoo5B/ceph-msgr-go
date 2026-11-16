@@ -120,8 +120,11 @@ func TestRBDLockOwnerLossSelectorIsExclusive(t *testing.T) {
 	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
 	load := func(selector string) (profile, error) {
 		return loadProfile(func(key string) string {
-			if key == "CEPH_MSGR_TEST_RUN" {
+			switch key {
+			case "CEPH_MSGR_TEST_RUN":
 				return selector
+			case "CEPH_MSGR_TEST_CAPABILITIES":
+				return catalogCapabilities(t, selector)
 			}
 			return base[key]
 		})
@@ -132,12 +135,12 @@ func TestRBDLockOwnerLossSelectorIsExclusive(t *testing.T) {
 		if err != nil || p.testRun != want {
 			t.Fatal("RBD selector admission differs", selector, p.testRun, err)
 		}
-		actions := rbdLockActionsFor(p.testRun)
+		actions := rbdLockActionsFor(p)
 		if (selector == rbdLockOwnerLossSelector) != slices.Equal(actions, rbdLockOwnerLossActions) || selector != rbdLockOwnerLossSelector && !slices.Equal(actions, rbdLockActions) {
 			t.Fatal("lock action sequence differs for", selector, actions)
 		}
 	}
-	if !slices.Equal(rbdLockActionsFor(rbdJournalLostAppendSelector), rbdLockActions) || !slices.Equal(rbdJournalActionsFor(rbdLockOwnerLossSelector), rbdJournalActions) {
+	if !slices.Equal(rbdLockActionsFor(rbdSelectionProfile(t, rbdJournalLostAppendSelector)), rbdLockActions) || !slices.Equal(rbdJournalActionsFor(rbdSelectionProfile(t, rbdLockOwnerLossSelector)), rbdJournalActions) {
 		t.Fatal("one exclusive RBD selector changed the other control's sequence")
 	}
 	for _, selector := range []string{"^TestCephRBDLockOwnerLossIntegration", "TestCephRBDLockOwnerLossIntegration", "^TestCephRBD.*Integration$",
@@ -190,17 +193,20 @@ func TestRBDLockOwnerLossPendingSequenceIsExclusive(t *testing.T) {
 	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_RBD": "1"}
 	load := func(selector string) (profile, error) {
 		return loadProfile(func(key string) string {
-			if key == "CEPH_MSGR_TEST_RUN" {
+			switch key {
+			case "CEPH_MSGR_TEST_RUN":
 				return selector
+			case "CEPH_MSGR_TEST_CAPABILITIES":
+				return catalogCapabilities(t, selector)
 			}
 			return base[key]
 		})
 	}
 	p, err := load(rbdLockOwnerLossPendingSelector)
-	if err != nil || p.testRun != rbdLockOwnerLossPendingSelector || !slices.Equal(rbdLockActionsFor(p.testRun), rbdLockOwnerLossPendingActions) {
+	if err != nil || p.testRun != rbdLockOwnerLossPendingSelector || !slices.Equal(rbdLockActionsFor(p), rbdLockOwnerLossPendingActions) {
 		t.Fatal("pending lock-owner-loss selector admission differs", p.testRun, err)
 	}
-	if !slices.Equal(rbdLockActionsFor(rbdLockOwnerLossSelector), rbdLockOwnerLossActions) || !slices.Equal(rbdJournalActionsFor(rbdLockOwnerLossPendingSelector), rbdJournalActions) {
+	if !slices.Equal(rbdLockActionsFor(rbdSelectionProfile(t, rbdLockOwnerLossSelector)), rbdLockOwnerLossActions) || !slices.Equal(rbdJournalActionsFor(rbdSelectionProfile(t, rbdLockOwnerLossPendingSelector)), rbdJournalActions) {
 		t.Fatal("the pending selector changed another sequence")
 	}
 	for _, selector := range []string{"^TestCephRBDLockOwnerLossPendingIntegration", "TestCephRBDLockOwnerLossPendingIntegration$", "^TestCephRBDLockOwnerLoss(Pending)?Integration$",

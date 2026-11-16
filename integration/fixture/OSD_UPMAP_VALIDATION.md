@@ -87,12 +87,21 @@ coverage, not a native same-PG execution claim.
 
 Original artifacts and adjacent stdout logs:
 
-To reproduce either row, select `CEPH_MSGR_TEST_OSD=1`,
-`CEPH_MSGR_TEST_OSD_PROFILE=replicated-pg-v8`,
-`CEPH_MSGR_TEST_OSD_REPLICAS=3`, `CEPH_MSGR_TEST_OSD_STORE=bluestore`,
-`CEPH_MSGR_TEST_RUN=^TestCephOSDUpmapIntegration$`, a unique diagnostics
-directory, and that row's key/service cipher, connection mode, IP family
-and runtime before running `sh integration/run.sh` from the project root.
+To reproduce either row, run from the project root with the environment the
+catalog gives that row (three BlueStore `replicated-pg-v8` OSDs, the row's
+key/service cipher, connection mode, IP family and runtime, and the
+`osd-long-tickets` capability) and a unique diagnostics directory:
+
+```sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap) &&
+  eval "$env_lines" &&
+  CEPH_MSGR_TEST_DIAGNOSTICS="$(mktemp -d)" sh integration/run.sh
+)
+```
+
+The secure row is
+`osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap`.
 
 ## CI authentication window correction
 

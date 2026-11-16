@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -66,43 +65,29 @@ const (
 	shardHistoryToolBudget = 60 * time.Second
 )
 
-// shardHistorySelectors are the only selections that admit the capture: the
-// COPY_FROM2 control, the partial-overwrite control and its five
-// continuations (a later write that names the left-out shard, an owned
-// interval change, an owned outage of the left-out shard's OSD without and
-// with a write in between, and an owned outage of the primary's OSD with a
-// write through its replacement). Each is one exact test of the four-OSD
-// topology's closed list.
-var shardHistorySelectors = []string{
-	"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
-}
+// capOSDShardHistory admits the capture of every acting shard's own store
+// copy, for one test of the four-OSD topology: the COPY_FROM2 control, the
+// partial-overwrite control and its five continuations.
+var capOSDShardHistory = defineCapability("osd-shard-history",
+	"capture every acting shard's store copy offline for one test of the four-OSD BlueStore topology",
+	"OSD=1 OSD_STORE=bluestore OSD_REPLICAS=4", nil)
 
-// pgIntervalSelectors are the only selections whose test may use the
-// owned-pool oracle's pginterval mode, which observes one owned PG and can
-// end its interval with one `pg repeer`: the five continuations of the
-// partial-overwrite control. The three outage controls only observe with it.
-var pgIntervalSelectors = []string{
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
-}
+// capOSDPGInterval admits the owned-pool oracle's pginterval mode, which
+// observes one owned PG and can end its interval with one `pg repeer`: the
+// five continuations of the partial-overwrite control. The three outage
+// controls only observe with it. It extends osd-shard-history.
+var capOSDPGInterval = defineCapability("osd-pg-interval",
+	"admit the owned-pool oracle's pginterval mode (one `pg repeer`) for an osd-shard-history test",
+	"+osd-shard-history", nil)
 
 var shardHistoryPGID = regexp.MustCompile(`^[1-9][0-9]{0,9}\.(0|[1-9a-f][0-9a-f]{0,7})$`)
 
 func (p profile) shardHistorySelected() bool {
-	return slices.Contains(shardHistorySelectors, p.testRun) && p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "4"
+	return p.admits(capOSDShardHistory)
 }
 
 func (p profile) pgIntervalSelected() bool {
-	return p.shardHistorySelected() && slices.Contains(pgIntervalSelectors, p.testRun)
+	return p.admits(capOSDPGInterval)
 }
 
 // shardHistoryShard is what the capture did for one index of the acting

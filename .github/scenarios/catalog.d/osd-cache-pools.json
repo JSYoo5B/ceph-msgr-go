@@ -49,7 +49,8 @@
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "osd_cache_pools": "1",
-    "test_run": "^TestCephOSDCacheTierOpsIntegration$"
+    "test_run": "^TestCephOSDCacheTierOpsIntegration$",
+    "capabilities": "exclusive-osd-cache-pools"
    }
   },
   {
@@ -66,7 +67,8 @@
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
     "osd_cache_pools": "1",
-    "test_run": "^TestCephOSDCacheOpGoIntegration$"
+    "test_run": "^TestCephOSDCacheOpGoIntegration$",
+    "capabilities": "exclusive-osd-cache-pools"
    }
   }
  ]

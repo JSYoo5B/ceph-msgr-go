@@ -68,10 +68,14 @@ import (
 // (src/osd/OSD.cc, src/osd/PrimaryLogPG.cc), and the scrubber flag is set in
 // PgScrubber::asok_debug and read in PgScrubber::dump_scrubber
 // (src/osd/scrubber/pg_scrubber.cc).
+// capMDSAppliedCommand admits one further test on the owned MDS command
+// fixture (profile.go): the applied-command outcome cell, which must keep its
+// MDS running, so the MDS stop control is withheld (control_daemon.go).
+var capMDSAppliedCommand = defineCapability("mds-applied-command",
+	"run one test alone on the owned MDS command fixture, without the MDS stop control",
+	"MDS_FRESH=1 MDS_COMMANDS=1", nil)
+
 const (
-	// daemonCommandMDSSelector is the one further selector the owned MDS
-	// command fixture admits (profile.go).
-	daemonCommandMDSSelector    = "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
 	daemonCommandPrefix         = "native-daemon-command-no-replay-"
 	daemonCommandPGFlag         = "sessions"
 	daemonCommandPGCounter      = "test_sequence"

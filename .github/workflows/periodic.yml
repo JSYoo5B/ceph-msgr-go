@@ -27,7 +27,7 @@ jobs:
   plan:
     name: Plan the full catalog
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
       scenarios: ${{ steps.plan.outputs.scenarios }}
@@ -37,6 +37,12 @@ jobs:
         with:
           persist-credentials: false
           ref: main
+      # validate passes every catalog row through the fixture's own admission,
+      # a cluster-free Go test of the fixture module (Go 1.26 or later).
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
       - name: Validate the catalog and select everything
         id: plan
         run: |

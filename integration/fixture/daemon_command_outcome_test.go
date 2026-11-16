@@ -383,9 +383,14 @@ func TestDaemonCommandIdentityProjections(t *testing.T) {
 	}
 }
 
+// daemonCommandMDSSelector is the native test that declares
+// mds-applied-command (catalog.d/mds-commands.json).
+const daemonCommandMDSSelector = "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
+
 func TestMDSCommandsProfileAdmitsOnlyTheExplicitAppliedCommandSelector(t *testing.T) {
 	env := mdsCommandsProfileEnv()
 	env["CEPH_MSGR_TEST_RUN"] = daemonCommandMDSSelector
+	env["CEPH_MSGR_TEST_CAPABILITIES"] = "mds-applied-command"
 	p, err := loadProfile(func(k string) string { return env[k] })
 	if err != nil || p.testRun != daemonCommandMDSSelector || p.mdsCommands != "1" || !p.mdsFreshOSDAllowed() {
 		t.Fatal("explicit applied-command selector was not admitted on the command fixture", p, err)
@@ -395,9 +400,12 @@ func TestMDSCommandsProfileAdmitsOnlyTheExplicitAppliedCommandSelector(t *testin
 		{"CEPH_MSGR_TEST_RUN": "^TestCeph(MDSCommands|AppliedMDSCommandIsNotReplayed)Integration$"},
 		{"CEPH_MSGR_TEST_RUN": "^TestCephAppliedMDSCommandIsNotReplayedIntegration"},
 		{"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-v8"},
+		{"CEPH_MSGR_TEST_CAPABILITIES": ""},
+		{"CEPH_MSGR_TEST_CAPABILITIES": "exclusive-mds-cephfs"},
 	} {
 		env := mdsCommandsProfileEnv()
 		env["CEPH_MSGR_TEST_RUN"] = daemonCommandMDSSelector
+		env["CEPH_MSGR_TEST_CAPABILITIES"] = "mds-applied-command"
 		for k, v := range change {
 			env[k] = v
 		}

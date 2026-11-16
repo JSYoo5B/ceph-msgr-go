@@ -8,12 +8,10 @@ import (
 
 // The native-only cache-tier operation checkpoint reuses the live cache-pool
 // fixture (owned base and writeback tier, no overlay) and its scoped
-// identities. It has its own selector, oracle and receipt; it neither extends
-// the IGNORE_CACHE probe's closed 66-call matrix nor uses the product client.
-const (
-	cacheTierOpsSelector = "^TestCephOSDCacheTierOpsIntegration$"
-	cacheTierOpsAction   = "tier-ops"
-)
+// identities. Its test runs alone with capability exclusive-osd-cache-pools
+// and has its own oracle and receipt; it neither extends the IGNORE_CACHE
+// probe's closed 66-call matrix nor uses the product client.
+const cacheTierOpsAction = "tier-ops"
 
 // The checkpoint is selected at most once per fixture. A failed or uncertain
 // run is retained in its receipt and the fixture step, never reissued.

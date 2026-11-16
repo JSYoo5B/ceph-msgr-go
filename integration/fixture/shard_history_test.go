@@ -221,95 +221,90 @@ func TestCaptureShardHistoriesStopsAtTheFirstFailedShard(t *testing.T) {
 	}
 }
 
-func TestShardHistoryCaptureAdmission(t *testing.T) {
-	selected := profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", osdProfile: "replicated-pg-v8", testRun: shardHistorySelectors[0]}
-	// Exactly the COPY_FROM2 control and the six partial-overwrite
-	// controls.
-	if !slices.Equal(shardHistorySelectors, []string{
-		"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
-		"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
-		"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
-		"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
-		"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
-		"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
-		"^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
-	}) {
-		t.Fatal("the capture's selector list changed:", shardHistorySelectors)
+// shardHistoryRows are the four-OSD catalog rows that declare the capture,
+// each with its declared capabilities.
+func shardHistoryRows(t *testing.T) map[string]string {
+	t.Helper()
+	rows := map[string]string{}
+	for _, row := range ciRepositoryCatalog(t) {
+		if strings.Contains(","+row.Params["capabilities"]+",", ",osd-shard-history,") {
+			rows[row.Params["test_run"]] = row.Params["capabilities"]
+		}
 	}
-	for _, selector := range shardHistorySelectors {
-		p := selected
-		p.testRun = selector
-		if !p.shardHistorySelected() || p.testEnvironment("/out", "")[shardHistoryMarker] != "1" {
+	if len(rows) == 0 {
+		t.Fatal("no catalog row declares osd-shard-history")
+	}
+	return rows
+}
+
+func TestShardHistoryCaptureAdmission(t *testing.T) {
+	base := profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", osdProfile: "replicated-pg-v8"}
+	rows := shardHistoryRows(t)
+	intervals := 0
+	for selector, capabilities := range rows {
+		p := base
+		p.testRun, p.capabilities = selector, capabilities
+		if !p.shardHistorySelected() || p.testEnvironment("/out", "")[shardHistoryMarker] != "1" || !p.admits(capOSDErasureWidth) {
 			t.Fatal("the selected four-BlueStore profile does not admit the capture for", selector)
 		}
-		if !slices.Contains(osdErasureWidthSelectors, selector) {
-			t.Fatal("the capture selector is not one of the four-OSD topology's selectors:", selector)
+		// The oracle mode that observes one PG and can end its interval is
+		// admitted where it is declared alone, on the capture's topology.
+		want := strings.Contains(capabilities, "osd-pg-interval")
+		if want {
+			intervals++
 		}
-	}
-	for name, change := range map[string]func(*profile){
-		"no selector":       func(p *profile) { p.testRun = "" },
-		"broad selector":    func(p *profile) { p.testRun = "^TestCephOSD.*Integration$" },
-		"every selector":    func(p *profile) { p.testRun = strings.Join(shardHistorySelectors, "|") },
-		"two selectors":     func(p *profile) { p.testRun = strings.Join(shardHistorySelectors[1:3], "|") },
-		"a common prefix":   func(p *profile) { p.testRun = "^TestCephOSDErasureOptimizedK2M2PartialWrite" },
-		"another EC cell":   func(p *profile) { p.testRun = osdErasureWidthSelectors[4] },
-		"three OSDs":        func(p *profile) { p.osdReplicas = "3" },
-		"one OSD":           func(p *profile) { p.osdReplicas = "1" },
-		"MemStore":          func(p *profile) { p.osdStore = "memstore" },
-		"no OSD acceptance": func(p *profile) { p.osd = "0" },
-	} {
-		for _, selector := range shardHistorySelectors {
-			p := selected
-			p.testRun = selector
-			change(&p)
-			if p.shardHistorySelected() || p.testEnvironment("/out", "")[shardHistoryMarker] != "" {
-				t.Error("capture admitted for", name, selector)
-			}
-		}
-	}
-	// The oracle mode that observes one PG and can end its interval is
-	// admitted for the five continuations alone, on the capture's topology.
-	if !slices.Equal(pgIntervalSelectors, shardHistorySelectors[2:]) {
-		t.Fatal("the interval mode's selector list changed:", pgIntervalSelectors)
-	}
-	for _, selector := range shardHistorySelectors {
-		p := selected
-		p.testRun = selector
-		if want := slices.Contains(pgIntervalSelectors, selector); p.pgIntervalSelected() != want || nativePoolModeAllowed(p, "pginterval") != want {
+		if p.pgIntervalSelected() != want || nativePoolModeAllowed(p, "pginterval") != want {
 			t.Error("interval mode admission differs for", selector)
 		}
 		if !nativePoolModeAllowed(p, "shardhistory") || !nativePoolModeAllowed(p, "place") {
 			t.Error("other oracle modes refused for", selector)
 		}
 		for name, change := range map[string]func(*profile){
-			"broad selector":    func(p *profile) { p.testRun = "^TestCephOSD.*Integration$" },
-			"every selector":    func(p *profile) { p.testRun = strings.Join(pgIntervalSelectors, "|") },
-			"three selectors":   func(p *profile) { p.testRun = strings.Join(pgIntervalSelectors[2:], "|") },
-			"another EC cell":   func(p *profile) { p.testRun = osdErasureWidthSelectors[1] },
-			"three OSDs":        func(p *profile) { p.osdReplicas = "3" },
-			"MemStore":          func(p *profile) { p.osdStore = "memstore" },
-			"no OSD acceptance": func(p *profile) { p.osd = "0" },
+			"no selector":        func(p *profile) { p.testRun = "" },
+			"broad selector":     func(p *profile) { p.testRun = "^TestCephOSD.*Integration$" },
+			"two selectors":      func(p *profile) { p.testRun = selector + "|^TestCephOSDErasureOptimizedK2M2Integration$" },
+			"a common prefix":    func(p *profile) { p.testRun = "^TestCephOSDErasureOptimizedK2M2PartialWrite" },
+			"undeclared capture": func(p *profile) { p.capabilities = "osd-erasure-width" },
+			"no declaration":     func(p *profile) { p.capabilities = "" },
+			"three OSDs":         func(p *profile) { p.osdReplicas = "3" },
+			"one OSD":            func(p *profile) { p.osdReplicas = "1" },
+			"MemStore":           func(p *profile) { p.osdStore = "memstore" },
+			"no OSD acceptance":  func(p *profile) { p.osd = "0" },
 		} {
 			changed := p
 			change(&changed)
-			if changed.pgIntervalSelected() || nativePoolModeAllowed(changed, "pginterval") {
-				t.Error("interval mode admitted for", name, selector)
+			if changed.shardHistorySelected() || changed.testEnvironment("/out", "")[shardHistoryMarker] != "" ||
+				changed.pgIntervalSelected() || nativePoolModeAllowed(changed, "pginterval") {
+				t.Error("capture or interval mode admitted for", name, selector)
 			}
 		}
+		// The interval mode needs the capture it extends.
+		alone := p
+		alone.capabilities = "osd-erasure-width,osd-pg-interval"
+		if alone.pgIntervalSelected() || nativePoolModeAllowed(alone, "pginterval") {
+			t.Error("interval mode admitted without the capture for", selector)
+		}
+	}
+	if intervals == 0 || intervals == len(rows) {
+		t.Fatal("the catalog no longer separates capture-only rows from interval rows", intervals, len(rows))
 	}
 	// The control refuses before it reads anything when it is not selected.
 	out := t.TempDir()
 	if err := os.WriteFile(filepath.Join(out, "capture-osd-shard-history"), []byte("7 \n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	c := &fixtureCluster{profile: profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", testRun: osdErasureWidthSelectors[4]}}
+	c := &fixtureCluster{profile: profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", testRun: "^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$", capabilities: "osd-erasure-width"}}
 	if err := c.controlOSDShardHistoryRequest(context.Background(), out); err == nil || !strings.Contains(err.Error(), "exclusive four-BlueStore selector") {
 		t.Fatal("unselected capture request:", err)
 	}
 	if err := os.WriteFile(filepath.Join(out, "capture-osd-shard-history"), []byte("7 4.2\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	c.profile = selected
+	for selector, capabilities := range shardHistoryRows(t) {
+		c.profile = base
+		c.profile.testRun, c.profile.capabilities = selector, capabilities
+		break
+	}
 	if err := c.controlOSDShardHistoryRequest(context.Background(), out); err == nil || !strings.Contains(err.Error(), "takes no argument") {
 		t.Fatal("capture request with an argument:", err)
 	}

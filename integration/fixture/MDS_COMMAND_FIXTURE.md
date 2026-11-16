@@ -4,7 +4,8 @@
 `CEPH_MSGR_TEST_MDS_FRESH=1`. With an empty `CEPH_MSGR_TEST_RUN` it selects
 `^TestCephMDSCommandsIntegration$` and admits one further exact
 selector, `^TestCephAppliedMDSCommandIsNotReplayedIntegration$`, only when
-`CEPH_MSGR_TEST_RUN` is exactly that value; that cell and its closed
+`CEPH_MSGR_TEST_RUN` is exactly one test and its row declares the fixture
+capability `mds-applied-command` (`CEPH_MSGR_TEST_CAPABILITIES`); that cell and its closed
 `observe-daemon-command` control are described in
 [DAEMON_COMMAND_OUTCOME_VALIDATION.md](DAEMON_COMMAND_OUTCOME_VALIDATION.md).
 Any other nonempty selector is rejected when the profile is loaded, before

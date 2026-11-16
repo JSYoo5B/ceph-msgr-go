@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -40,6 +41,12 @@ type profile struct {
 	nativeMgrPreparation, monPing, osdCachePools, mgrService              string
 	modeRejection, connectionMode, mappedIPv6, osd, osdStore, osdReplicas string
 	stressDuration, testRun, testTimeout, diagnostics                     string
+	// capabilities are the declared fixture capabilities in canonical
+	// (sorted, comma-separated) form; capability.go admits their modes.
+	capabilities string
+	// defaultRun is the selection of the fixture this profile starts, which
+	// testRun equals unless a capability admits one exact test instead.
+	defaultRun string
 	// osdSoak is the opt-in OSD soak duration; it selects admitted soak parents.
 	osdSoak string
 	// sourceSHA is the controller's tested revision for workload receipts.
@@ -97,10 +104,16 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		sourceSHA:            getenv("CEPH_MSGR_TEST_SOURCE_SHA"),
 		monFreeze:            getenv("CEPH_MSGR_TEST_MON_FREEZE"),
 		testRun:              getenv("CEPH_MSGR_TEST_RUN"),
+		capabilities:         getenv("CEPH_MSGR_TEST_CAPABILITIES"),
 		testTimeout:          value("CEPH_MSGR_TEST_TIMEOUT", "10m"),
 		diagnostics:          getenv("CEPH_MSGR_TEST_DIAGNOSTICS"),
 	}
 	p.serviceCipher = value("CEPH_MSGR_TEST_SERVICE_CIPHER", p.keyType)
+	capabilities, err := parseCapabilities(p.capabilities, p.testRun)
+	if err != nil {
+		return profile{}, err
+	}
+	p.capabilities = capabilities
 	for _, choice := range []struct {
 		name, value string
 		allowed     []string
@@ -269,13 +282,12 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}
 	if p.mdsFresh == "1" {
 		selected = "^TestCephMDSFreshIntegration$"
+		admitted := false
 		if p.mdsCommands == "1" {
 			selected = "^TestCephMDSCommandsIntegration$"
 			// The applied-command outcome cell shares the owned command
-			// fixture and is admitted only when explicitly selected.
-			if p.testRun == daemonCommandMDSSelector {
-				selected = p.testRun
-			}
+			// fixture and is admitted only by its capability.
+			admitted = p.admits(capMDSAppliedCommand)
 		}
 		if p.mdsSessions == "1" {
 			selected = "^TestCephMDSSessionsIntegration$"
@@ -283,10 +295,8 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if p.mdsCephFS == "1" {
 			selected = "^TestCephMDSCephFS(Push|Recovery)?Integration$"
 			// The shared held-lock variant of the recovery acceptance owns a
-			// fresh metadata fixture and is admitted only when explicitly selected.
-			if p.testRun == mdsCephFSSharedFlockSelector {
-				selected = p.testRun
-			}
+			// fresh metadata fixture and is admitted only by its capability.
+			admitted = p.admits(capExclusiveMDSCephFS)
 		}
 		if p.mdsCephFSRanks == "1" {
 			selected = "^TestCephMDSCephFSRanksIntegration$"
@@ -297,21 +307,17 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		if p.mdsCephFSCompletion == "1" {
 			selected = "^TestCephMDSCephFSCompletionIntegration$"
 			// The split reconnect and its held-lock variants each own a fresh
-			// completion fixture and are admitted only when explicitly selected.
-			if p.testRun == "^TestCephMDSCephFSMultiReconnectIntegration$" || p.testRun == mdsCephFSHeldFlockSplitSelector || p.testRun == mdsCephFSHeldFlockSplitFragmentsSelector {
-				selected = p.testRun
-			}
+			// completion fixture and are admitted only by a capability.
+			admitted = p.admits(capExclusiveMDSCephFSCompletion) || p.admits(capMDSHeldFlockSplit)
 		}
 		if p.mdsCephFSData == "1" {
 			selected = "^TestCephMDSCephFSDataIntegration$"
 			// The cap-send recovery and writeback-fence variants share the
-			// owned data fixture and are admitted only when explicitly selected.
-			if p.testRun == "^TestCephMDSCephFSCapSendRecoveryIntegration$" || p.testRun == mdsCephFSWritebackSelector {
-				selected = p.testRun
-			}
+			// owned data fixture and are admitted only by a capability.
+			admitted = p.admits(capExclusiveMDSCephFSData) || p.admits(capMDSWritebackFence)
 		}
 		if p.osd != "1" || !p.mdsFreshOSDAllowed() || p.osdReplicas != "1" || (p.sparseReadOracle != "" || p.mapExtOracle != "") ||
-			p.testRun != "" && p.testRun != selected {
+			!ownSelection(p.testRun, selected, admitted) {
 			return profile{}, fmt.Errorf("MDS fixture requires its exclusive selector %s and one admitted OSD profile", selected)
 		}
 	}
@@ -322,42 +328,34 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		// every pool must keep the legacy placement seed.
 		selected = "^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$"
 		// The lost-append-reply acceptance needs a journal no other test has
-		// advanced and is admitted only when explicitly selected.
-		if p.testRun == rbdJournalLostAppendSelector {
-			selected = p.testRun
-		}
-		// The lock-owner-loss acceptance blocklists two client addresses and
-		// kills a native lock owner; it is admitted only when explicitly
-		// selected, on a fixture no other RBD test shares.
-		if p.testRun == rbdLockOwnerLossSelector || p.testRun == rbdLockOwnerLossPendingSelector {
-			selected = p.testRun
-		}
-		// The primary-change acceptance is the lost-append-reply sequence on
-		// three replicated BlueStore OSDs. No other RBD selection is admitted
-		// on that topology, and this one on no other.
-		if p.testRun == rbdJournalPrimaryChangeSelector {
-			selected = p.testRun
-		}
+		// advanced. The lock-owner-loss acceptances blocklist two client
+		// addresses and kill a native lock owner. The primary-change
+		// acceptance is the lost-append-reply sequence on three replicated
+		// BlueStore OSDs; no other RBD selection is admitted on that topology,
+		// and that one on no other. Each runs alone on a fresh fixture and is
+		// admitted only by its capability.
+		admitted := p.admits(capRBDJournalLostAppend) || p.admits(capRBDLockOwnerLoss) || p.admits(capRBDJournalPrimaryChange)
 		if p.osd != "1" || p.osdProfile != "legacy-v6" || p.osdReplicas != p.rbdReplicas() || p.osdReplicas == "3" && p.osdStore != "bluestore" || p.mdsFresh != "0" ||
-			(p.sparseReadOracle != "" || p.mapExtOracle != "") || p.testRun != "" && p.testRun != selected {
-			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s, the single-OSD legacy-v6 fixture (three BlueStore OSDs for %s alone) and no MDS profile", selected, rbdJournalPrimaryChangeSelector)
+			(p.sparseReadOracle != "" || p.mapExtOracle != "") || !ownSelection(p.testRun, selected, admitted) {
+			return profile{}, fmt.Errorf("RBD acceptance requires its exclusive selector %s or one capability-admitted test, the single-OSD legacy-v6 fixture (three BlueStore OSDs for capability %s alone) and no MDS profile", selected, capRBDJournalPrimaryChange.name)
 		}
 	}
 	if p.monPing == "1" {
 		selected = "^TestCephMonPingIntegration$"
-		if p.mgrCount != "2" || p.osd != "0" || p.mdsFresh != "0" || p.rbdBase != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.nativeMgrPreparation != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.stressDuration != "" || p.monFreeze != "" || p.testRun != "" && p.testRun != selected {
+		if p.mgrCount != "2" || p.osd != "0" || p.mdsFresh != "0" || p.rbdBase != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.nativeMgrPreparation != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.stressDuration != "" || p.monFreeze != "" || !ownSelection(p.testRun, selected, false) {
 			return profile{}, fmt.Errorf("MON ping acceptance requires its exclusive selector %s and the ordinary three-MON/two-MGR fixture", selected)
 		}
 	}
 	if p.osdCachePools == "1" {
 		selected = "^TestCephOSDIgnoreCacheIntegration$"
-		if p.mgrCount != "2" || p.testRun != "" && p.testRun != selected && p.testRun != cacheTierOpsSelector && p.testRun != cacheOpGoSelector {
-			return profile{}, fmt.Errorf("cache-pool acceptance requires two MGRs and an exclusive selector %s, %s or %s", selected, cacheTierOpsSelector, cacheOpGoSelector)
+		// The Go cache-tier and cache-operation acceptances reuse the live
+		// cache-pool fixture alone and are admitted only by its capability.
+		if p.mgrCount != "2" || !ownSelection(p.testRun, selected, p.admits(capExclusiveOSDCachePools)) {
+			return profile{}, fmt.Errorf("cache-pool acceptance requires two MGRs and its exclusive selector %s or one test with capability %s", selected, capExclusiveOSDCachePools.name)
 		}
 		checked := p
 		checked.osdCachePools = "0"
-		checked.testRun = "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"
-		if err := validateIgnoreCacheProbeProfile(checked); err != nil {
+		if err := validateIgnoreCacheProbeTopology(checked); err != nil {
 			return profile{}, err
 		}
 	}
@@ -367,13 +365,13 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		selected = "^TestCephMgrServiceRegistrationIntegration$"
 		topologyAllowed := p.osd == "1" && p.mgrCount == "2"
 		if p.mgrCount == "0" {
-			selected = mgrServiceColdBootstrapSelector
+			selected = "^TestCephMgrServiceColdBootstrapIntegration$"
 			topologyAllowed = p.osd == "0" && p.runtime == "container"
 		}
 		if !topologyAllowed || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || p.rbdBase != "0" ||
 			p.monPing != "0" || p.osdCachePools != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" ||
 			p.nativeMgrPreparation != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.stressDuration != "" || p.osdSoak != "" || p.monFreeze != "" ||
-			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.testRun != "" && p.testRun != selected {
+			p.sparseReadOracle != "" || p.mapExtOracle != "" || !ownSelection(p.testRun, selected, false) {
 			return profile{}, fmt.Errorf("MGR service acceptance requires its exclusive selector %s and either two MGRs with one legacy-v6 OSD or zero initial MGRs without OSDs", selected)
 		}
 	}
@@ -381,16 +379,20 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		// The four-daemon topology exists only for the bounded k=2,m=2
 		// erasure-width scenarios. The fixture's ordinary pools keep the
 		// three-replica policy; broad OSD selections stay on topology "3".
-		selected = osdErasureWidthSelectors[0]
+		// The nonoptimized k=2,m=2 baseline is the default; every other
+		// selection is one exact test with the erasure-width capability.
+		selected = "^TestCephOSDErasureK2M2Integration$"
 		if p.osd != "1" || (p.osdProfile != "legacy-v6" && p.osdProfile != "replicated-pg-v8") || p.osdSoak != "" || p.monFreeze != "" ||
 			p.osdCachePools != "0" || p.mgrService != "0" || p.mdsFresh != "0" || p.rbdBase != "0" ||
 			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.u64XattrOracle != "" || p.writeSameOracle != "" ||
-			p.testRun != "" && !slices.Contains(osdErasureWidthSelectors, p.testRun) {
-			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires one of its exclusive selectors %v, BlueStore and the legacy-v6 or replicated-pg-v8 profile", osdErasureWidthSelectors)
+			!ownSelection(p.testRun, selected, p.admits(capOSDErasureWidth)) {
+			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires its default selector %s or one test with capability %s, BlueStore and the legacy-v6 or replicated-pg-v8 profile", selected, capOSDErasureWidth.name)
 		}
 	}
-	if p.testRun == "" {
-		p.testRun = selected
+	p.testRun = cmp.Or(p.testRun, selected)
+	p.defaultRun = selected
+	if err := capabilityTopologyProblem(p); err != nil {
+		return profile{}, err
 	}
 	if _, err := soakExpectedTests(p); err != nil {
 		return profile{}, err
@@ -401,39 +403,10 @@ func loadProfile(getenv func(string) string) (profile, error) {
 // rbdReplicas is the OSD topology the selected RBD acceptance runs on: one
 // OSD, or three for the primary-change sequence.
 func (p profile) rbdReplicas() string {
-	if p.testRun == rbdJournalPrimaryChangeSelector {
+	if p.declares(capRBDJournalPrimaryChange) {
 		return "3"
 	}
 	return "1"
-}
-
-// osdErasureWidthSelectors are the only selections the four-OSD topology
-// admits: the nonoptimized k=2,m=2 baseline (the default), the optimized
-// k=2,m=2 baseline with its failover reads, and the optimized k=2,m=2
-// in-flight mutation epoch change with the snapshot and degraded-write case,
-// deliberate resubmission of an independently observed applied mutation, the
-// primary PG-history presence calibration, the COPY_FROM2 history control
-// that also reads every acting shard's own store copy, and the partial
-// overwrite control that reads those copies as well, with its five
-// continuations: a later write that names the left-out shard, an owned
-// interval change of the PG, an owned outage of the left-out shard's OSD
-// without and with a write in between, and an owned outage of the primary's
-// OSD with a write through its replacement; and a request held at the
-// primary when the primary's OSD is killed.
-var osdErasureWidthSelectors = []string{
-	"^TestCephOSDErasureK2M2Integration$",
-	"^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$",
-	"^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$",
-	"^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$",
 }
 
 // osdTopology is one closed OSD fixture shape. Daemon capacity and the
@@ -450,6 +423,12 @@ type osdTopology struct {
 	// erasure-coded pool owned by its exclusive test.
 	erasureCapacity bool
 }
+
+// capOSDErasureWidth admits one exact test other than the default k=2,m=2
+// baseline on the four-OSD erasure-capacity topology.
+var capOSDErasureWidth = defineCapability("osd-erasure-width",
+	"run one test other than the default k=2,m=2 baseline on the four-OSD erasure-capacity topology",
+	"OSD=1 OSD_REPLICAS=4", nil)
 
 // osdTopologies is the closed CEPH_MSGR_TEST_OSD_REPLICAS vocabulary. The
 // variable keeps its historical name because the trusted native workflow
@@ -704,8 +683,8 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	return result
 }
 
-const mgrServiceColdBootstrapSelector = "^TestCephMgrServiceColdBootstrapIntegration$"
-
+// mgrServiceColdBootstrap reports the MON-only cold-bootstrap fixture running
+// its own closed observation recipe.
 func (p profile) mgrServiceColdBootstrap() bool {
-	return p.mgrService == "1" && p.mgrCount == "0" && p.osd == "0" && p.testRun == mgrServiceColdBootstrapSelector
+	return p.mgrService == "1" && p.mgrCount == "0" && p.osd == "0" && p.runsDefault()
 }

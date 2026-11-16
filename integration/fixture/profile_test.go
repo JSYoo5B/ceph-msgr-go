@@ -47,6 +47,7 @@ func TestProfileDefaults(t *testing.T) {
 		osdReplicas:    "1",
 		osdProfile:     "legacy-v6",
 		testRun:        "^TestCeph.*Integration$",
+		defaultRun:     "^TestCeph.*Integration$",
 		testTimeout:    "10m",
 	}
 	if p != want {

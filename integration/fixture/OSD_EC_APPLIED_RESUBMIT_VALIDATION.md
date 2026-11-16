@@ -80,17 +80,11 @@ tests, fixture unit tests and fixture vet.
 On an authorized Linux runner, use the existing fixture run/check locks and:
 
 ```sh
-CEPH_MSGR_TEST_KEY_TYPE=aes256k \
-CEPH_MSGR_TEST_SERVICE_CIPHER=aes256k \
-CEPH_MSGR_TEST_CONNECTION_MODE=secure \
-CEPH_MSGR_TEST_IP_FAMILY=4 \
-CEPH_MSGR_TEST_RUNTIME=container \
-CEPH_MSGR_TEST_OSD=1 \
-CEPH_MSGR_TEST_OSD_STORE=bluestore \
-CEPH_MSGR_TEST_OSD_REPLICAS=4 \
-CEPH_MSGR_TEST_OSD_PROFILE=replicated-pg-v8 \
-CEPH_MSGR_TEST_RUN='^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$' \
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2appliedresubmit) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
 The dedicated mandatory scenario is

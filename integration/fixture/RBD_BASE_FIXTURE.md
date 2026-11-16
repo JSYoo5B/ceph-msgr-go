@@ -3,7 +3,11 @@
 `CEPH_MSGR_TEST_RBD=1` is a closed development-only extension of the opt-in
 OSD fixture (`CEPH_MSGR_TEST_OSD=1`). It selects only
 `^TestCephRBD(Base|Write|ExclusiveLock|Clone|Journal)Integration$` (an
-explicit `CEPH_MSGR_TEST_RUN` must be that selector, or the exact selector of
+explicit `CEPH_MSGR_TEST_RUN` must be that selector, or, with the fixture
+capability its row declares in `CEPH_MSGR_TEST_CAPABILITIES`
+(`rbd-journal-lost-append`, `rbd-journal-primary-change`,
+`rbd-lock-owner-loss`, or that and `rbd-lock-pending-requests`), the exact
+selector of
 the lost-append-reply acceptance described under
 "[Lost-append-reply sequence](#lost-append-reply-sequence)", of the
 primary-change acceptance described under

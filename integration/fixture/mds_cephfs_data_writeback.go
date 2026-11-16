@@ -17,8 +17,8 @@ import (
 )
 
 // The interrupted-writeback/fencing recipe (issue #10 checkpoint 2) shares the
-// DATA scope and adds closed controls, admitted only for its explicit
-// selector:
+// DATA scope and adds closed controls, admitted only by capability
+// mds-writeback-fence:
 //
 //   - osd-drop-on/osd-drop-off: a daemon-local override of the single owned
 //     OSD, debug_ms=10/10 then ms_blackhole_client=true, read back from its
@@ -54,7 +54,16 @@ import (
 // is_blackhole, msg/async/ProtocolV2.cc handle_message and _conn_prefix,
 // messages/MOSDOp.h print, osd/PrimaryLogPG.cc do_op (EBLOCKLISTED),
 // mds/MDSRank.cc evict_client and mds/Server.cc kill_session.
-const mdsCephFSWritebackSelector = "^TestCephMDSCephFSWritebackFenceIntegration$"
+var capMDSWritebackFence = defineCapability("mds-writeback-fence",
+	"run one test alone on the owned MDS CephFS data fixture with the OSD client-drop writeback controls",
+	"MDS_FRESH=1 MDS_CEPHFS_DATA=1", nil)
+
+// capExclusiveMDSCephFSData admits one test alone on the owned data fixture
+// in place of its default suite (the cap-send recovery), with only the
+// actions the data fixture already admits.
+var capExclusiveMDSCephFSData = defineCapability("exclusive-mds-cephfs-data",
+	"run one test alone on the owned MDS CephFS data fixture",
+	"MDS_FRESH=1 MDS_CEPHFS_DATA=1", nil)
 
 var mdsCephFSDataOSDConfigNames = []string{"debug_ms", "ms_blackhole_client"}
 
@@ -201,8 +210,8 @@ func (x *mdsCephFSDataScope) newOSDDrop(id int64, daemon string, baseline map[st
 
 func (c *fixtureCluster) mdsCephFSDataWritebackAct(ctx context.Context, id int64, a mdsCephFSDataAction, result *mdsCephFSDataResult) error {
 	x := c.mdsCephFSData
-	if c.profile.testRun != mdsCephFSWritebackSelector {
-		return errors.New("DATA writeback controls require the explicit writeback-fence selector")
+	if !c.profile.admits(capMDSWritebackFence) {
+		return errors.New("DATA writeback controls require capability " + capMDSWritebackFence.name)
 	}
 	switch a.name {
 	case "osd-drop-on":

@@ -76,7 +76,7 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
         self.assertEqual(rows, [{
             "key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
             "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
-            "test_run": COPY_FROM_LATE_ERROR_SELECTOR,
+            "test_run": COPY_FROM_LATE_ERROR_SELECTOR, "capabilities": "osd-copy-from-late-error",
         }])
         expected = "TestCephOSDCopyFromLateErrorIntegration"
         selector = re.compile(COPY_FROM_LATE_ERROR_SELECTOR)
@@ -91,7 +91,7 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
         self.assertEqual(rows, [{
             "key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
             "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
-            "test_run": COPY_FROM_MULTI_CHUNK_SELECTOR,
+            "test_run": COPY_FROM_MULTI_CHUNK_SELECTOR, "capabilities": "osd-copy-from-multi-chunk",
         }])
         expected = "TestCephOSDCopyFromMultiChunkLateErrorIntegration"
         selector = re.compile(COPY_FROM_MULTI_CHUNK_SELECTOR)
@@ -129,15 +129,15 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
             "test_run": "^TestCephOSDIgnoreCacheIntegration$",
         }
         # The native-only tier-ops checkpoint and the Go cache-op test reuse
-        # the same fixture opt-in with their own exclusive selectors; no new
-        # workflow parameter exists.
+        # the same fixture opt-in, each alone by the capability its row
+        # declares.
         self.assertEqual(rows, [
             dict(common, key="aes", service="aes", mode="crc", family="4", runtime="host"),
             dict(common, key="aes256k", service="aes256k", family="6", runtime="container"),
             dict(common, key="aes256k", service="aes256k", family="6", runtime="container",
-                 test_run="^TestCephOSDCacheTierOpsIntegration$"),
+                 test_run="^TestCephOSDCacheTierOpsIntegration$", capabilities="exclusive-osd-cache-pools"),
             dict(common, key="aes256k", service="aes256k", family="6", runtime="container",
-                 test_run="^TestCephOSDCacheOpGoIntegration$"),
+                 test_run="^TestCephOSDCacheOpGoIntegration$", capabilities="exclusive-osd-cache-pools"),
         ])
         for row in rows:
             expected = re.fullmatch(r"\^(\w+)\$", row["test_run"]).group(1)

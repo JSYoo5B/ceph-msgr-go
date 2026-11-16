@@ -77,11 +77,11 @@ func (c *fixtureCluster) controlOwnedPoolRequest(ctx context.Context, out string
 
 // Cold bootstrap admits only MON MgrMap observation and the bounded service
 // identity watch. It does not grant object/pool control to a MON-only fixture.
-// The pginterval mode is admitted only for the selectors that own it.
+// The pginterval mode is admitted only by its capability.
 func nativePoolModeAllowed(p profile, mode string) bool {
 	if mode == "pginterval" && !p.pgIntervalSelected() {
-		// Observing one PG's interval, and ending it, is admitted for the
-		// selectors of pgIntervalSelectors alone.
+		// Observing one PG's interval, and ending it, is admitted by
+		// capability osd-pg-interval alone.
 		return false
 	}
 	return nativeOwnedPoolModes[mode] && (p.osd == "1" || p.mgrServiceColdBootstrap() && (mode == "mgrstate" || mode == "servicewatch"))

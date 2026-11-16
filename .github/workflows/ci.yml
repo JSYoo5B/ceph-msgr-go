@@ -36,17 +36,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # validate passes every catalog row through the fixture's own admission
+      # (a cluster-free Go test of the fixture module, which needs Go 1.26 or
+      # later). The product steps below run with the product's Go 1.25.0,
+      # installed after this step.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
+      - name: Test Python tools and validate scenarios
+        run: |
+          python3 -m unittest discover -s tools -p 'test_*.py'
+          python3 tools/scenario_plan.py validate
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.25.0'
       - name: Check Go formatting
         run: |
+          go version | grep -F ' go1.25.0 '
           files=$(git ls-files -z '*.go' | xargs -0 gofmt -l)
           if test -n "$files"; then printf '%s\n' "$files"; exit 1; fi
-      - name: Test Python tools and validate scenarios
-        run: |
-          python3 -m unittest discover -s tools -p 'test_*.py'
-          python3 tools/scenario_plan.py validate
       - name: Build and lint the product
         run: |
           go build -mod=readonly ./...
