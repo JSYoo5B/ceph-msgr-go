@@ -160,6 +160,12 @@ PGs. It
    reply's replay version, and the seed's once. The resubmission must be the
    one new dial, and the original outcome stays unknown.
 
+If the call does not end within the 30 seconds, the test cancels it and
+waits at most five more seconds for a late result, which it reports only as
+a diagnostic, then fails. A worker that stays blocked after the cancellation
+therefore cannot hold the test with the primary still down; the buffered
+result channel lets that worker finish during cleanup.
+
 | Statement | Status |
 | --- | --- |
 | The primary's op tracker holds exactly one op of the client and incarnation, for the route's PG and shard at the held epoch, undecoded, at flag point `op must wait for map`, with that event right after `reached_pg` and nothing after it | required, in two snapshots with the same TID |
@@ -193,6 +199,10 @@ when an entry exists. The control does not look at the other shards' logs.
   placement at a newer epoch, and refuses twenty-six changed receipts and
   five requests. `TestNewDials` accepts unchanged dials and a MON redial and
   refuses a second dial of the OSD and a dial of another endpoint.
+- `TestEndWithin` takes a result within the wait, reports a call that ends
+  only on the cancellation, and returns within the wait and the grace for a
+  call that stays blocked. With the grace removed from the diagnostic
+  receive the test did not return and hit its five-second timeout.
 
 ## Reproduction
 

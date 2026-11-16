@@ -76,6 +76,26 @@ func newDials(snapshot, now map[string]int, osd string) []string {
 	return found
 }
 
+// endWithin waits up to wait for the call's result. If none arrives it
+// cancels the call and waits at most grace for a late result, which it
+// reports only as a diagnostic, so a worker that stays blocked after the
+// cancellation cannot hold the caller. ok is false whenever no result arrived
+// within wait.
+func endWithin[R any](finished <-chan R, wait, grace time.Duration, cancel func()) (result R, ok bool, late string) {
+	select {
+	case result = <-finished:
+		return result, true, ""
+	case <-time.After(wait):
+	}
+	cancel()
+	select {
+	case r := <-finished:
+		return result, false, fmt.Sprintf("after the cancellation it ended with %+v", r)
+	case <-time.After(grace):
+		return result, false, fmt.Sprintf("it did not end within %v of the cancellation either", grace)
+	}
+}
+
 // heldEvent is the event the pinned PrimaryLogPG::do_request marks when an op
 // names a map epoch newer than the PG's (src/osd/PrimaryLogPG.cc:1855-1861).
 const heldEvent = "op must wait for map"
@@ -306,12 +326,9 @@ func TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration(t *test
 	defer restore()
 	// The killed daemon's socket closes, so the session ends the call; the
 	// caller's context stays live.
-	var lost result
-	select {
-	case lost = <-finished:
-	case <-time.After(30 * time.Second):
-		cancelCall()
-		t.Fatal("the session did not end the held request after the primary's OSD was killed:", (<-finished).err)
+	lost, ended, late := endWithin(finished, 30*time.Second, 5*time.Second, cancelCall)
+	if !ended {
+		t.Fatal("the session did not end the held request within 30 s after the primary's OSD was killed;", late)
 	}
 	var unknown *cephmsgr.OutcomeUnknownError
 	var server *cephmsgr.OSDError
@@ -513,5 +530,31 @@ func TestNewDials(t *testing.T) {
 		if got := newDials(before, now, "192.0.2.7:6800"); len(got) != 1 {
 			t.Error("dial not reported:", name, got)
 		}
+	}
+}
+
+// TestEndWithin covers the bounded wait for the held request's end: a
+// result within the wait, a worker that ends only on the cancellation and one
+// that stays blocked, which must not hold the caller past wait and grace.
+func TestEndWithin(t *testing.T) {
+	const wait, grace = 20 * time.Millisecond, 20 * time.Millisecond
+	done := make(chan int, 1)
+	done <- 7
+	if got, ok, late := endWithin(done, wait, grace, func() { t.Error("cancelled a call that ended") }); !ok || got != 7 || late != "" {
+		t.Fatal("result within the wait refused:", got, ok, late)
+	}
+	onCancel := make(chan int, 1)
+	cancelled := false
+	if _, ok, late := endWithin(onCancel, wait, grace, func() { cancelled = true; onCancel <- 9 }); ok || !cancelled || !strings.Contains(late, "9") {
+		t.Fatal("a call that ended only on the cancellation:", ok, cancelled, late)
+	}
+	blocked := make(chan int, 1)
+	start := time.Now()
+	_, ok, late := endWithin(blocked, wait, grace, func() {})
+	if ok || !strings.Contains(late, "did not end") {
+		t.Fatal("a blocked call:", ok, late)
+	}
+	if elapsed := time.Since(start); elapsed > wait+grace+time.Second {
+		t.Fatal("a blocked call held the caller for", elapsed)
 	}
 }
