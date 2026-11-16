@@ -12,6 +12,8 @@ from pathlib import Path
 import re
 import subprocess
 
+import scenario_catalog
+
 ROOT = Path(__file__).resolve().parent.parent
 UNREAD_DOCS = frozenset({"README.md", "THIRD_PARTY_NOTICES.md"})
 SELF = {"tools/ci_change_plan.py", "tools/test_ci_change_plan.py"}
@@ -97,7 +99,7 @@ def recommend(entries, groups, skip, fallback):
 
 
 def plan(root, event, fork, base, head):
-    document = json.loads((root / ".github/scenarios/catalog.json").read_text())
+    document = scenario_catalog.load(root / scenario_catalog.CATALOG)
     groups = sorted({row["group"] for row in document["scenarios"]})
     if not groups:
         raise ValueError("catalog has no native groups")
