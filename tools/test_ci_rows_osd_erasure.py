@@ -32,6 +32,8 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
             dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$"),
             dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$"),
             dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$"),
+            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$"),
+            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$"),
         ])
         # Each row's selector must match the fixture's closed four-OSD list.
         fixture = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
@@ -46,7 +48,9 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
                                         {"TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration"},
                                         {"TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration"},
                                         {"TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration"})):
+                                        {"TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration"},
+                                        {"TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration"},
+                                        {"TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration"})):
             with self.subTest(test_run=row["test_run"]):
                 self.assertIn('"%s",' % row["test_run"], fixture)
                 selector = re.compile(row["test_run"])

@@ -496,8 +496,10 @@ epoch 31.
   plugins with a chunk mapping were not run.
 - The interval change keeps the primary and the acting set. An outage of
   the left-out shard's OSD, without and with a degraded write, has its own
-  [controls](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md). A primary change
-  onto another shard is not exercised; see the next section.
+  [controls](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md), and a primary
+  change onto another shard through an outage of the primary's OSD has its
+  own [control](OSD_EC_PARTIAL_WRITE_PRIMARY_REPLACEMENT_VALIDATION.md); see
+  the next section.
 - A log whose head is past its last entry is accepted for exactly the shape
   described above. A nonprimary shard whose log holds no entry, a range that
   the shard's own info does not record, and the same shape on a shard that
@@ -518,15 +520,19 @@ epoch 31.
   shard can hold later entries without an earlier one, and a shard's head
   can be past its last entry.
 
-## Not built: primary replacement
+## Primary replacement
 
 Issue #9 also asks for a primary replacement and a degraded write followed
 by recovery, with a capture of the shards afterwards. The degraded write
 and the recovery of the left-out shard are the subject of two later
 [controls](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md), which take that
 shard's OSD out of the PG with the fixture's forced kill of an owned OSD,
-as the existing degraded-write tests do. These two controls stop before a
-primary replacement, for these reasons:
+as the existing degraded-write tests do. The primary replacement is the
+subject of a third
+[control](OSD_EC_PARTIAL_WRITE_PRIMARY_REPLACEMENT_VALIDATION.md), which
+kills the primary's OSD the same way. A replacement through an OSD marked
+out was not built, for the reasons below, which also explain why the
+control kills the primary's OSD instead:
 
 - Marking the acting primary's OSD out does not give the PG another active
   primary while that OSD runs. The member that leads the next interval
@@ -546,14 +552,15 @@ primary replacement, for these reasons:
   two epochs later, and the native bytes and user version were unchanged.
   No other member was an active primary, and the change touched all eight
   PGs of the pool.
-- Another active primary therefore needs the old one down in the map, which
-  means killing the primary's OSD. The left-out shard cannot lead, so a
-  parity shard's OSD leads under a primary-first pg_temp, and the old
-  primary leads again after its return, through further intervals and a
-  recovery of its own. Marking a running OSD down and holding it down with
-  the cluster-wide `noup` flag touches every PG of that OSD and depends on
-  how and when the daemon reacts to its own map state. Neither was run with
-  this capture, so no deterministic assertion can be stated for it yet.
+- Another active primary therefore needs the old one down in the map. The
+  control does that with the fixture's forced kill of the primary's OSD:
+  the left-out shard's OSD is named first for one epoch and does not
+  activate, a parity shard's OSD leads under a primary-first pg_temp, and
+  the old primary leads again after its return, through further intervals
+  and a recovery of its own. Marking a running OSD down and holding it down
+  with the cluster-wide `noup` flag would touch every PG of that OSD and
+  depend on how and when the daemon reacts to its own map state; it was not
+  run.
 - The capture copies every member of the acting vector and refuses a vector
   with an empty position, so a PG without a member can be captured only
   before the outage and after the return.
