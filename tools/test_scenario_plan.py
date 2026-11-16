@@ -4,8 +4,10 @@ import json
 import re
 import shlex
 import subprocess
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
 from unittest import mock
 
 import scenario_plan as plan
@@ -166,7 +168,8 @@ class CatalogTests(unittest.TestCase):
     def test_documented_reproductions_declare_their_row(self):
         scenarios = [entry("osd.a", test_run="^TestCephA$", capabilities="osd-erasure-width,osd-shard-history"),
                      entry("osd.b", test_run="^TestCephB$")]
-        good = ("Run it with:\n\n```sh\neval \"$(python3 tools/scenario_plan.py env osd.a)\"\nsh integration/run.sh\n```\n\n"
+        good = ("Run it with:\n\n```sh\n(\n  env_lines=$(python3 tools/scenario_plan.py env osd.a) &&\n"
+                "  eval \"$env_lines\" &&\n  sh integration/run.sh\n)\n```\n\n"
                 "```sh\nCEPH_MSGR_TEST_RUN='^TestCephA$' \\\nCEPH_MSGR_TEST_CAPABILITIES=osd-erasure-width,osd-shard-history \\\n"
                 "sh integration/run.sh\n```\n\nSelect `CEPH_MSGR_TEST_RUN=^TestCephB$` alone.\n")
         self.assertEqual(plan.reproduction_problems([("good.md", good)], scenarios), [])
@@ -177,9 +180,70 @@ class CatalogTests(unittest.TestCase):
                  "lacks CEPH_MSGR_TEST_CAPABILITIES=osd-erasure-width,osd-shard-history"),
                 ("```sh\nCEPH_MSGR_TEST_CAPABILITIES=osd-erasure-width,osd-shard-history\n```\n\n"
                  "```sh\nCEPH_MSGR_TEST_RUN='^TestCephA$'\n```\n", "lacks CEPH_MSGR_TEST_CAPABILITIES"),
-                ("```sh\neval \"$(python3 tools/scenario_plan.py env osd.gone)\"\n```\n", "unknown scenario osd.gone")):
+                ("```sh\n(\n  env_lines=$(python3 tools/scenario_plan.py env osd.gone) &&\n  eval \"$env_lines\" &&\n"
+                 "  sh integration/run.sh\n)\n```\n", "unknown scenario osd.gone")):
             with self.subTest(text=text):
                 self.assertIn(wanted, "\n".join(plan.reproduction_problems([("bad.md", text)], scenarios)))
+
+    def test_documented_env_lookups_cannot_start_a_runner_after_failing(self):
+        scenarios = [entry("osd.a", test_run="^TestCephA$", capabilities="osd-erasure-width"),
+                     entry("osd.b", test_run="^TestCephB$", capabilities="osd-erasure-width")]
+        lookup = "  env_lines=$(python3 tools/scenario_plan.py env osd.%s) &&\n"
+        good = ("```sh\n(\n" + lookup % "a" + "  eval \"$env_lines\" &&\n  CEPH_MSGR_TEST_TIMEOUT=8m \\\n"
+                "    go -C integration/fixture run . run -project ../..\n) && (\n" + lookup % "b"
+                + "  eval \"$env_lines\" &&\n  sh integration/run.sh\n)\n```\n\n"
+                "`scenario_plan.py env ID` prints the row's exports; `eval \"$(...)\"` would hide its status.\n")
+        self.assertEqual(plan.reproduction_problems([("good.md", good)], scenarios), [])
+        for text, wanted in (
+                # The form this guard replaces: eval succeeds on an empty string.
+                ("```sh\neval \"$(python3 tools/scenario_plan.py env osd.a)\"\nsh integration/run.sh\n```\n",
+                 "unchecked env lookup"),
+                ("```sh\neval `python3 tools/scenario_plan.py env osd.a`\nsh integration/run.sh\n```\n",
+                 "unchecked env lookup"),
+                ("Run `eval \"$(python3 tools/scenario_plan.py env osd.a)\"` first.\n", "unchecked env lookup"),
+                ("```sh\n(\n  env_lines=$(python3 tools/scenario_plan.py env osd.a)\n  eval \"$env_lines\" &&\n"
+                 "  sh integration/run.sh\n)\n```\n", "unchecked env lookup"),
+                ("```sh\nenv_lines=$(python3 tools/scenario_plan.py env osd.a) &&\neval \"$env_lines\" &&\n"
+                 "sh integration/run.sh\n```\n", "does not open a subshell"),
+                ("```sh\n(\n" + lookup % "a" + "  eval \"$env_lines\"\n  sh integration/run.sh\n)\n```\n",
+                 "does not reach its runner through an && chain"),
+                ("```sh\n(\n" + lookup % "a" + "  sh integration/run.sh\n)\n```\n", "is not evaluated"),
+                ("```sh\n(\n" + lookup % "a" + "  eval \"$other\" &&\n  sh integration/run.sh\n)\n```\n",
+                 "is not evaluated"),
+                ("```sh\n(\n" + lookup % "a" + "  eval \"$env_lines\" &&\n  sh integration/run.sh\n```\n",
+                 "leaves its subshell open")):
+            with self.subTest(text=text):
+                self.assertIn(wanted, "\n".join(plan.reproduction_problems([("bad.md", text)], scenarios)))
+
+    def test_documented_env_recipe_runs_no_runner_for_an_unknown_row(self):
+        """The README recipe, run by sh -e with a stub runner, exits non-zero
+        and never starts the runner when the row is unknown, and runs the
+        runner with the row's environment when it is known."""
+        readme = (plan.ROOT / ".github" / "scenarios" / "README.md").read_text(encoding="utf-8")
+        recipe = next(chunk for chunk in plan.markdown_chunks(readme) if "scenario_plan.py env ID" in chunk)
+        row = next(entry for entry in plan.load_catalog() if entry["params"].get("capabilities"))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "tools").symlink_to(plan.ROOT / "tools")
+            (root / ".github").symlink_to(plan.ROOT / ".github")
+            (root / "integration").mkdir()
+            marker = root / "ran"
+            (root / "integration" / "run.sh").write_text(
+                'printf "%s\\n" "$CEPH_MSGR_TEST_RUN" >> "' + str(marker) + '"\n')
+            for sid, status, ran in (("no-such-scenario", "non-zero", None),
+                                     (row["id"], 0, row["params"]["test_run"] + "\n")):
+                with self.subTest(sid=sid):
+                    script = ("export CEPH_MSGR_TEST_RUN='^TestStale$'\n"
+                              + recipe.replace("env ID", "env " + sid) + "\n")
+                    result = subprocess.run(["sh", "-e", "-c", script], cwd=root, capture_output=True, text=True)
+                    if status == 0:
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(marker.read_text(), ran)
+                        marker.unlink()
+                    else:
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn("unknown scenario", result.stderr)
+                        self.assertFalse(marker.exists(), "the runner started after a failed lookup")
 
     def test_repository_reproductions_declare_their_row(self):
         documents = [(str(path), path.read_text(encoding="utf-8")) for path in plan.documentation_files()]

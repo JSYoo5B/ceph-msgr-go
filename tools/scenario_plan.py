@@ -41,12 +41,20 @@ cluster.
 workflow binds to a matrix parameter, with the workflow's fallbacks, so a
 documented reproduction runs a row as CI does:
 
-  eval "$(python3 tools/scenario_plan.py env ID)"
-  sh integration/run.sh
+  (
+    env_lines=$(python3 tools/scenario_plan.py env ID) &&
+    eval "$env_lines" &&
+    sh integration/run.sh
+  )
 
-validate refuses a documented `env ID` of an unknown row, and a hand-written
-reproduction that selects the exact test of a row with capabilities but does
-not declare them.
+`env` exits non-zero and prints nothing on stdout for an unknown row. The
+assignment keeps that status, which `eval "$(...)"` would replace with eval's
+own success, so the && chain never starts the runner with another row's
+environment, and the subshell keeps one row's environment from the next.
+
+validate refuses a documented `env ID` of an unknown row, a documented `env`
+that is not this checked form, and a hand-written reproduction that selects
+the exact test of a row with capabilities but does not declare them.
 """
 import argparse
 import json
@@ -80,6 +88,12 @@ ADMISSION_MARK = "catalog admission: "
 DOCUMENTED_RUN = re.compile(r"CEPH_MSGR_TEST_RUN=['\"]?(\^Test[A-Za-z0-9_]+\$)")
 DOCUMENTED_CAPABILITIES = re.compile(r"CEPH_MSGR_TEST_CAPABILITIES=['\"]?([a-z0-9,-]+)")
 DOCUMENTED_ENV = re.compile(r"scenario_plan\.py env ([^\s\"'`)]+)")
+# The checked form of a documented `env` (env_recipe_problems): the lookup is
+# assigned on its own line inside a subshell, and its status reaches the runner
+# through an && chain.
+CHECKED_ENV = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=\$\(python3 tools/scenario_plan\.py env [^\s)]+\) &&$")
+SUBSTITUTED_ENV = re.compile(r"\$\(\s*(?:python3\s+)?\S*scenario_plan\.py env |`python3\s+\S*scenario_plan\.py env ")
+DOCUMENTED_RUNNER = re.compile(r"integration/run\.sh|integration/fixture run ")
 WORKFLOW_BINDING = re.compile(r"(?m)^ +(CEPH_[A-Z0-9_]+): \$\{\{ matrix\.([a-z_]+)(?: \|\| '([^']*)')? \}\}\s*$")
 
 
@@ -200,6 +214,48 @@ def documentation_files(root=ROOT):
     return sorted(path for path in Path(root).rglob("*.md") if ".git" not in path.relative_to(root).parts)
 
 
+def env_recipe_problems(name, chunk):
+    """A documented `env` lookup cannot start a runner after it failed.
+
+    `eval "$(python3 tools/scenario_plan.py env ID)"` evaluates an empty string
+    when the lookup fails and succeeds, so the next line starts the runner
+    with whatever environment the shell already had (under `sh -e` as well).
+    Every line that substitutes an `env` lookup is therefore the
+    assignment CHECKED_ENV on the line after one that opens a subshell "(",
+    followed by `eval "$VAR"` and the runner in one && chain, with the
+    subshell closed on the line after the runner."""
+    problems = []
+    lines = [line.strip() for line in chunk.splitlines()]
+    for index, line in enumerate(lines):
+        if "scenario_plan.py env " not in line:
+            continue
+        checked = CHECKED_ENV.match(line)
+        if not checked:
+            if SUBSTITUTED_ENV.search(line):
+                problems.append("%s: unchecked env lookup %r; assign it, then chain eval and the runner with &&"
+                                % (name, line))
+            continue
+        variable = checked.group(1)
+        if index == 0 or not lines[index - 1].endswith("("):
+            problems.append("%s: env lookup %r does not open a subshell" % (name, line))
+        evaluated, runner = False, None
+        for later in range(index + 1, len(lines)):
+            if lines[later] == 'eval "$%s" &&' % variable:
+                evaluated = True
+            if DOCUMENTED_RUNNER.search(lines[later]):
+                runner = later
+                break
+            if not (lines[later].endswith("&&") or lines[later].endswith("\\")):
+                break
+        if runner is None:
+            problems.append("%s: env lookup %r does not reach its runner through an && chain" % (name, line))
+        elif not evaluated:
+            problems.append('%s: env lookup %r is not evaluated by eval "$%s" &&' % (name, line, variable))
+        elif runner + 1 >= len(lines) or not lines[runner + 1].startswith(")"):
+            problems.append("%s: env lookup %r leaves its subshell open after the runner" % (name, line))
+    return problems
+
+
 def reproduction_problems(documents, scenarios):
     """A documented reproduction runs a catalog row as the fixture admits it.
 
@@ -207,7 +263,8 @@ def reproduction_problems(documents, scenarios):
     ID` names a row of the catalog. A hand-written environment that selects
     the exact test of a row declaring capabilities declares the same
     capabilities in the same code block or paragraph; without them the fixture
-    refuses the run before it starts a cluster."""
+    refuses the run before it starts a cluster. An `env` lookup has the
+    checked form of env_recipe_problems."""
     ids = {entry["id"] for entry in scenarios}
     declared = {}
     for entry in scenarios:
@@ -217,6 +274,7 @@ def reproduction_problems(documents, scenarios):
     problems = []
     for name, text in documents:
         for chunk in markdown_chunks(text):
+            problems += env_recipe_problems(name, chunk)
             for sid in DOCUMENTED_ENV.findall(chunk):
                 if sid not in ids and sid != "ID":
                     problems.append("%s: reproduction names unknown scenario %s" % (name, sid))
