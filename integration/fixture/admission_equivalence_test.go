@@ -54,6 +54,9 @@ var legacyOsdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2WatchFailoverIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2SnapshotFailoverIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PGBackoffIntegration$",
 }
 
 var legacyShardHistorySelectors = legacyOsdErasureWidthSelectors[5:12]
