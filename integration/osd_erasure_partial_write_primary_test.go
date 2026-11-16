@@ -268,25 +268,47 @@ func (r *partialWriteRun) replacePrimary(since uint32) *primaryOutage {
 	return o
 }
 
+// checkPGStillReplaced rechecks a later observation of the PG under the
+// replacement primary: checkPGReplaced's judgement, and the replacement of the
+// accepted observation, the same OSD on the same shard under the same address.
+func checkPGStillReplaced(r, accepted pgIntervalReceipt, origin osdFixtureOracle, nonprimary []int, since uint32) error {
+	lead, err := checkPGReplaced(r, origin, nonprimary, since)
+	if err != nil {
+		return err
+	}
+	if got, want := r.Observation.Before, accepted.Observation.Before; lead != int(want.Shard) || got.PrimaryID != want.PrimaryID || got.Address != want.Address {
+		return fmt.Errorf("the PG is led by osd.%d on shard %d at %s, not by the accepted replacement osd.%d on shard %d at %s",
+			got.PrimaryID, lead, got.Address, want.PrimaryID, want.Shard, want.Address)
+	}
+	return nil
+}
+
+// reobserveReplaced observes the PG under the replacement primary again
+// (reobserveInterval) until a held observation satisfies want.
+func (r *partialWriteRun) reobserveReplaced(o *primaryOutage, want func(pgIntervalReceipt) bool) (pgIntervalReceipt, int, error) {
+	return reobserveInterval(o.replaced, intervalReobservations, time.Second, func() (pgIntervalReceipt, error) {
+		seen := nativePool(r.t, r.ctx, "pginterval", map[string]any{"action": "replaced", "slot": partialWriteSlot, "object": partialWriteObject,
+			"origin": o.origin, "since": o.since}).PGInterval
+		return seen, checkPGStillReplaced(seen, o.replaced, o.origin, r.facts.nonprimary, o.since)
+	}, want)
+}
+
 // waitReplacedRecords observes the live replacement primary until its own
 // info holds exactly the partial-write records, within a bounded number of
-// observations. No client reply waits for the roll-forward that writes them,
-// and the peering at the return reads them.
+// observations, in the interval in which the PG was accepted under it. No
+// client reply waits for the roll-forward that writes them, and the peering
+// at the return reads them.
 func (r *partialWriteRun) waitReplacedRecords(o *primaryOutage, records []shardPartialWrite) {
 	r.t.Helper()
 	var got []shardPartialWrite
-	for attempt := 1; attempt <= 15; attempt++ {
-		seen, _, err := r.observeReplaced(r.ctx, o)
-		if err != nil {
-			r.t.Fatalf("the PG is no longer active under the replacement primary: %v", err)
-		}
-		if got = seen.Observation.Query.Info.PartialWrites; slices.Equal(got, records) {
-			r.t.Logf("the live replacement primary's info holds the partial-write records %+v at epoch %d (observation %d)", got, seen.Observation.Query.Info.PartialWritesEpoch, attempt)
-			return
-		}
-		time.Sleep(time.Second)
+	seen, attempt, err := r.reobserveReplaced(o, func(seen pgIntervalReceipt) bool {
+		got = seen.Observation.Query.Info.PartialWrites
+		return slices.Equal(got, records)
+	})
+	if err != nil {
+		r.t.Fatalf("the live replacement primary does not hold the partial-write records %+v (last held: %+v): %v", records, got, err)
 	}
-	r.t.Fatalf("the live replacement primary's info holds the partial-write records %+v, not %+v", got, records)
+	r.t.Logf("the live replacement primary's info holds the partial-write records %+v at epoch %d (observation %d)", got, seen.Observation.Query.Info.PartialWritesEpoch, attempt)
 }
 
 // primaryBack starts the outage's OSD again and waits, within a bounded
@@ -296,10 +318,15 @@ func (r *partialWriteRun) waitReplacedRecords(o *primaryOutage, records []shardP
 // that state.
 func (r *partialWriteRun) primaryBack(o *primaryOutage) pgIntervalReceipt {
 	r.t.Helper()
-	last, _, err := r.observeReplaced(r.ctx, o)
-	if err != nil || last.Observation.Query.SameIntervalSince != o.replaced.Observation.Query.SameIntervalSince {
-		r.t.Fatalf("the PG left the interval under the replacement primary before osd.%d was started: %v", o.osd, err)
+	// The PG must still be active under the replacement, in the interval that
+	// was observed, right before the OSD starts: one held observation, past
+	// samples the primary answered from an older map.
+	last, attempt, err := r.reobserveReplaced(o, anyHeld)
+	if err != nil {
+		r.t.Fatalf("the PG is not shown active under the replacement primary in its interval before osd.%d was started: %v", o.osd, err)
 	}
+	r.t.Logf("pg %s still active under osd.%d at epoch %d in the interval since %d (observation %d)", o.origin.PGID, last.Observation.Before.PrimaryID,
+		last.Observation.Before.Epoch, last.Observation.Query.SameIntervalSince, attempt)
 	replaced := last.Observation.Query.SameIntervalSince
 	if err := testcluster.ControlDaemon(r.ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "start", "osd", strconv.FormatInt(int64(o.osd), 10)); err != nil {
 		r.t.Fatal("start", o.osd, err)
@@ -321,13 +348,19 @@ func (r *partialWriteRun) primaryBack(o *primaryOutage) pgIntervalReceipt {
 				if err := testcluster.ControlDaemon(r.ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "osd-ready", "clean"); err != nil {
 					r.t.Fatal("the fixture did not return to every OSD up and every PG clean:", err)
 				}
-				again, still, ok := r.showReturned(r.ctx, o.origin)
-				if !ok || !reflect.DeepEqual(still, back) {
-					r.t.Fatalf("the restarted primary's address moved from %s: %+v", back.Address, still)
+				// One held observation in the interval in which the PG was
+				// clean again, on the recorded placement under the same
+				// address, past samples the primary answered from an older
+				// map. A record under another address is a departure.
+				again, seen, err := reobserveInterval(shown, intervalReobservations, shardOutagePause, func() (pgIntervalReceipt, error) {
+					s := nativePool(r.t, r.ctx, "pginterval", map[string]any{"action": "show", "slot": partialWriteSlot, "object": partialWriteObject, "origin": back}).PGInterval
+					return s, checkPGReturned(s, back, replaced)
+				}, anyHeld)
+				if err != nil {
+					r.t.Fatalf("the PG left the interval since epoch %d in which it was clean again under %s: %v", q.SameIntervalSince, back.Address, err)
 				}
-				if err := checkPGReturned(again, back, replaced); err != nil || again.Observation.Query.SameIntervalSince != q.SameIntervalSince {
-					r.t.Fatalf("the PG left the interval since epoch %d in which it was clean again: %v", q.SameIntervalSince, err)
-				}
+				r.t.Logf("pg %s still clean at epoch %d in the interval since %d under %s after the readiness control (observation %d)", o.origin.PGID,
+					again.Observation.Before.Epoch, q.SameIntervalSince, back.Address, seen)
 				fresh := poolPlace(r.t, r.ctx, partialWriteSlot, partialWriteObject, "")
 				if !samePlacement(fresh, *again.Observation.After) || fresh.Epoch < again.Observation.After.Epoch {
 					r.t.Fatalf("placement moved after the PG was clean again: %+v vs %+v", fresh, *again.Observation.After)
@@ -595,6 +628,97 @@ func TestCheckPGReplaced(t *testing.T) {
 		edit(&changed)
 		if back, ok := restarted(route, changed); ok || !reflect.DeepEqual(back, route) {
 			t.Error("restart accepted:", name)
+		}
+	}
+}
+
+// TestReobserveReplaced covers the later observations of the PG under the
+// replacement primary: a sample from a primary behind the placement's epoch
+// is retried, never accepted, and a confirmed change of interval or of the
+// replacement fails at once.
+func TestReobserveReplaced(t *testing.T) {
+	accepted, route := pgReplacedObservation()
+	held := func(epoch uint32) pgIntervalReceipt {
+		r, _ := pgReplacedObservation()
+		r.Observation.Before.Epoch, r.Observation.After.Epoch, r.Observation.Query.Epoch = epoch, epoch, epoch
+		return r
+	}
+	edited := func(r pgIntervalReceipt, edit func(*pgIntervalReceipt)) pgIntervalReceipt {
+		edit(&r)
+		return r
+	}
+	// The MON published epoch 29 with the PG's sets unchanged, and the
+	// replacement still answered from epoch 28. The oracle refuses it.
+	lagging := func(interval uint32) pgIntervalReceipt {
+		return edited(held(29), func(r *pgIntervalReceipt) {
+			r.Observation.Query.Epoch, r.Observation.Query.SameIntervalSince = 28, interval
+			r.Settled, r.Failures = false, []string{"the primary is at map epoch 28, behind the placement's epoch"}
+		})
+	}
+	recorded := func(r pgIntervalReceipt) pgIntervalReceipt {
+		return edited(r, func(r *pgIntervalReceipt) {
+			r.Observation.Query.Info.PartialWrites = []shardPartialWrite{{Shard: 1, From: "28'3", To: "28'3"}}
+		})
+	}
+	readdressed := func(r *pgIntervalReceipt) {
+		r.Observation.Before.Address, r.Observation.After.Address = "v2:192.0.2.8:6800/4", "v2:192.0.2.8:6800/4"
+	}
+	// The second parity shard's OSD leads a later interval: the map no
+	// longer names the accepted replacement.
+	another := edited(held(30), func(r *pgIntervalReceipt) {
+		for _, p := range []*osdFixtureOracle{r.Observation.Before, r.Observation.After} {
+			p.ID, p.PrimaryID, p.Shard, p.Address = 0, 0, 3, "v2:192.0.2.9:6800/5"
+		}
+		r.Observation.Query.SameIntervalSince, r.Observation.Query.LastEpochStarted = 30, 30
+		r.Observation.Query.Info.PGID, r.Observation.Query.Info.Shard = "3.7s3", 3
+	})
+	// The original primary is back in a later interval.
+	back := edited(held(30), func(r *pgIntervalReceipt) {
+		full := []int32{3, 2, 1, 0}
+		for _, p := range []*osdFixtureOracle{r.Observation.Before, r.Observation.After} {
+			p.Up, p.Acting, p.PGTemp, p.ID, p.PrimaryID, p.Shard = slices.Clone(full), slices.Clone(full), false, 3, 3, 0
+		}
+		q := r.Observation.Query
+		q.State, q.Up, q.Acting, q.SameIntervalSince, q.LastEpochStarted = "active+clean", slices.Clone(full), slices.Clone(full), 30, 30
+		q.Info.PGID, q.Info.Shard = "3.7s0", 0
+	})
+	hasRecords := func(r pgIntervalReceipt) bool { return len(r.Observation.Query.Info.PartialWrites) == 1 }
+	for name, c := range map[string]struct {
+		samples []pgIntervalReceipt
+		want    func(pgIntervalReceipt) bool
+		attempt int
+		ok      bool
+	}{
+		"held at once":                          {[]pgIntervalReceipt{held(28)}, anyHeld, 1, true},
+		"held at a newer epoch":                 {[]pgIntervalReceipt{held(29)}, anyHeld, 1, true},
+		"lagging, then held":                    {[]pgIntervalReceipt{lagging(27), lagging(27), held(29)}, anyHeld, 3, true},
+		"lagging, then the records":             {[]pgIntervalReceipt{held(28), lagging(27), recorded(held(29))}, hasRecords, 3, true},
+		"another address, lagging, then held":   {[]pgIntervalReceipt{edited(lagging(27), readdressed), held(29)}, anyHeld, 2, true},
+		"persistent lag":                        {[]pgIntervalReceipt{lagging(27), lagging(27), lagging(27), lagging(27)}, anyHeld, 4, false},
+		"the records never appear":              {[]pgIntervalReceipt{held(28), held(28), held(28), held(28)}, hasRecords, 4, false},
+		"the replacement under another address": {[]pgIntervalReceipt{edited(held(29), readdressed), held(29)}, anyHeld, 1, false},
+		"another replacement":                   {[]pgIntervalReceipt{another, held(30)}, anyHeld, 1, false},
+		"lagging, then another replacement":     {[]pgIntervalReceipt{lagging(27), another}, anyHeld, 2, false},
+		"a later interval, lagging":             {[]pgIntervalReceipt{lagging(29), held(29)}, anyHeld, 1, false},
+		"the original primary back":             {[]pgIntervalReceipt{back, held(30)}, anyHeld, 1, false},
+		"lagging, then peering": {[]pgIntervalReceipt{lagging(27), edited(held(29), func(r *pgIntervalReceipt) { r.Observation.Query.State = "peering" }), held(29)},
+			anyHeld, 2, false},
+	} {
+		next := 0
+		observe := func() (pgIntervalReceipt, error) {
+			r := c.samples[min(next, len(c.samples)-1)]
+			next++
+			return r, checkPGStillReplaced(r, accepted, route, []int{1}, 24)
+		}
+		seen, attempt, err := reobserveInterval(accepted, 4, 0, observe, c.want)
+		if (err == nil) != c.ok || attempt != c.attempt || next != c.attempt {
+			t.Errorf("%s: attempt %d after %d observations, error %v; want attempt %d, accepted %t", name, attempt, next, err, c.attempt, c.ok)
+			continue
+		}
+		if c.ok {
+			if err := checkPGStillReplaced(seen, accepted, route, []int{1}, 24); err != nil || seen.Observation.Query.SameIntervalSince != 27 {
+				t.Errorf("%s: returned an observation that is not held in the interval since 27: %v", name, err)
+			}
 		}
 	}
 }

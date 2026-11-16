@@ -178,19 +178,42 @@ first observation of the earlier continuations. Then it
    primary: inside shard 0's chunk of the first stripe, where by its bytes it
    names shards 0, 2 and 3 and leaves shard 1 out. Native readback follows,
    then one Go read (incarnation 14). The test then observes the new
-   primary, at most fifteen times a second apart, until its own info holds
-   exactly the record "shard 1, from that write to that write";
-6. observes once more that the PG is active under the new primary in the
-   same interval, starts the OSD, and observes, at most 150 times a second
+   primary, at most thirty times a second apart, until a held observation
+   (below) shows exactly the record "shard 1, from that write to that write"
+   in its own info;
+6. observes, at most thirty times a second apart, until one observation is
+   held: the PG active under the same new primary in the same interval. It
+   then starts the OSD and observes, at most 150 times a second
    apart, until the PG is `active+clean` on its original placement, under the
    original primary's new address, without a pg_temp, in an interval that
    started after the one under the replacement;
 7. asks the fixture's readiness control for every OSD up and in and every PG
-   `active+clean`, observes the PG once more in the same interval and under
-   the same address, and adopts its placement record with a new session;
+   `active+clean`, observes the PG, at most thirty times a second apart,
+   until one observation is held clean in the same interval on the recorded
+   placement under the same address, and adopts its placement record with a
+   new session;
 8. captures every acting shard, reads the object back natively and through
    the Go client (incarnation 15), and observes that the interval did not
    change.
+
+Steps 5 to 7 judge each later observation as the outage controls of
+`OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md` do, with the same
+`intervalHeld` and `reobserveInterval`. The MON may publish an epoch that
+leaves the PG's sets unchanged before the primary has it; a sample from a
+primary behind the placement's epoch, or without a placement record or a
+query reply, or with placement records that differ around the query, is
+inconclusive and is observed again. It never counts as held. A primary that
+reports another interval start, even from an older map, has left the
+accepted interval, and every other refusal is a confirmed departure; both
+stop the test at once. Under the replacement, `checkPGStillReplaced` keeps
+`checkPGReplaced`'s judgement of every sample and requires the accepted
+replacement's OSD, shard and address. After the return, `checkPGReturned`
+judges every sample against the recorded placement under the restarted
+primary's address, so a record under another address is a departure. Each
+sample's checks are unchanged. Before these, the pre-start check and the
+records wait failed at the first sample from a primary behind the
+placement's epoch, and the clean observation after the readiness control was
+a single sample.
 
 Every Go request is sent once; a failed or unknown result stops the test and
 nothing is resent. Each Go read must return the bytes and the user version
@@ -253,6 +276,23 @@ shards.
   refuses thirty-three changed receipts and ten requests. It accepts the
   restarted primary's placement with only its address changed and refuses
   five other changes.
+- `TestReobserveReplaced` drives the later observations under the
+  replacement with synthetic samples. It holds a sample at once and at a
+  newer epoch, after lagging samples, once the records appear after a
+  lagging sample, and after a lagging sample under another address. It
+  fails on persistent lag and on records that never appear, both after the
+  bound. It fails at once on the replacement under another address, on
+  another replacement (lagging before it or not), on a later interval from a
+  lagging primary, on the original primary back, and on a peering state
+  after a lagging sample. With lag treated as a departure it failed on six
+  cases, and without the address check it held the replacement under
+  another address.
+- `TestReobserveReturned` (in the recovery controls' file) drives the clean
+  observation after the readiness control. It holds a sample at once, at a
+  newer epoch and after lagging samples, and fails on persistent lag, on a
+  later interval (lagging or not, or after a lagging sample), on the primary
+  under another address and on a recovering state. With lag treated as a
+  departure it failed on four cases.
 - `TestShardHistoryCaptureAdmission` in the fixture pins the seven capture
   selectors and the five selectors that admit the interval mode.
 

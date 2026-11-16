@@ -103,6 +103,7 @@ TestRBDMirrorRequiresExclusiveMarker
 TestRBDMutationOutcomeLedger
 TestRBDWriteTestOnlyEncodings
 TestReobserveAbsent
+TestReobserveReplaced
 TestReobserveReturned
 TestReplicatedPGFixtureProfiles
 TestSecurityModeObserver
