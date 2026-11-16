@@ -462,8 +462,11 @@ underlying Messenger paths and are not application completeness claims.
 any test body: every scenario ID, `group:` and `suite:` reference exists in the
 catalog, every plain test name is a top-level Go test that `go test -list`
 reports in the product, fixture or quality module,
-every linked record exists, each row has one known class, every SPEC.md
+every linked record exists, a link whose text is a test name and whose target
+is a Go file points at the file that declares that test (Go's parser under the
+build context), each row has one known class, every SPEC.md
 final-scope path has a section, and every `released` row cites local evidence.
 It prints the number of rows in each class. Pull-request state is not recorded
-here: whether a pull request has merged is read from GitHub. Upstream `ctg@` receipts are checked for form only. The unit test
+here: whether a pull request has merged is read from GitHub. Upstream `ctg@`
+receipts are checked for form only. The unit test
 `tools/test_native_path_coverage.py` runs this check in basic CI.

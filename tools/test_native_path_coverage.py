@@ -1,7 +1,7 @@
 import unittest
 
 import native_path_coverage as coverage
-from test_go_test_list import SHAPES, module
+from test_go_test_list import SHAPES, WRONG_FILE, module
 
 
 class NativePathCoverageTests(unittest.TestCase):
@@ -41,6 +41,24 @@ class NativePathCoverageTests(unittest.TestCase):
         for token in ("TestMain", "TestY", "TestIgnored"):
             self.assertEqual(coverage.token_problems(token, tests, set(), set(), set()),
                              ["missing top-level Go test " + token])
+
+    def test_test_link_must_reach_the_declaring_file(self):
+        root = module(self, dict(SHAPES, **WRONG_FILE))
+        package = (root / "integration").resolve()
+        self.assertEqual(coverage.test_link_problems(root, "TestActual", package / "right_test.go"), [])
+        self.assertEqual(coverage.test_link_problems(root, "TestAlias", package / "alias_test.go"), [])
+        for name, file in (("TestActual", "wrong_test.go"), ("TestIgnored", "ignored_test.go"),
+                           ("TestY", "shapes_test.go"), ("TestAlias", "shapes_test.go")):
+            self.assertEqual(coverage.test_link_problems(root, name, package / file),
+                             ["link integration/%s does not reach the file declaring top-level Go test %s" % (file, name)])
+
+    def test_test_links_in_the_map_are_checked(self):
+        row = self.row("MSG-1")
+        right = row.replace(" |", " [TestCephMonPingIntegration](../../integration/mon_ping_test.go) |", 1)
+        self.assertEqual(self.check(self.text.replace(row, right)), [])
+        wrong = row.replace(" |", " [`TestCephMonPingIntegration`](../../integration/commands_test.go) |", 1)
+        self.assertIn("link integration/commands_test.go does not reach the file declaring top-level Go test "
+                      "TestCephMonPingIntegration", self.check(self.text.replace(row, wrong)))
 
     def test_unknown_scenario_group_and_suite_are_reported(self):
         text = self.text.replace("`mon-mgr.aes256k.ip4.expiry-1`", "`mon-mgr.aes256k.ip4.expiry-2`")

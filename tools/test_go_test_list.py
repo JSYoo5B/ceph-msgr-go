@@ -50,6 +50,14 @@ func TestIgnored(t *testing.T) {}
 }
 SHAPE_TESTS = {"Test", "TestAlias", "TestX"}
 
+# The reviewer's wrong-file case: Go lists TestActual for the package, the
+# declaration is in right_test.go, and wrong_test.go only holds a raw string
+# whose line reads like the declaration.
+WRONG_FILE = {
+    "right_test.go": 'package integration\n\nimport "testing"\n\nfunc TestActual(t *testing.T) {}\n',
+    "wrong_test.go": 'package integration\n\nconst doc = `\nfunc TestActual(t *testing.T) {}\nfunc TestActual()\n`\n',
+}
+
 
 def module(case, files, directory="integration"):
     """A temporary Go module whose package `directory` holds `files`."""
@@ -100,6 +108,36 @@ class GoTestListTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PATH": ""}):
             with self.assertRaisesRegex(go_test_list.ListError, "go is required"):
                 go_test_list.list_tests(module(self, {}), ["./integration"])
+
+    def test_declarations_come_from_the_parser_under_the_build_context(self):
+        root = module(self, dict(SHAPES, **WRONG_FILE))
+        package = root / "integration"
+        files = go_test_list.declarations([package])[str(package.resolve())]
+        # Literal expectation: the method, the raw string in wrong_test.go and
+        # the build-ignored file declare nothing (a file without a top-level
+        # function is absent); TestMain and the lowercase helper are not tests.
+        self.assertEqual(files, {
+            "shapes_test.go": {"Test": True, "TestX": True, "Testable": False, "TestMain": False},
+            "alias_test.go": {"TestAlias": True},
+            "right_test.go": {"TestActual": True},
+        })
+
+    def test_declares_needs_the_listing_the_file_and_the_declaration(self):
+        root = module(self, dict(SHAPES, **WRONG_FILE))
+        package = root / "integration"
+        for name, file in (("Test", "shapes_test.go"), ("TestX", "shapes_test.go"),
+                           ("TestAlias", "alias_test.go"), ("TestActual", "right_test.go")):
+            self.assertTrue(go_test_list.declares(root, package / file, name), (name, file))
+        for name, file in (("TestActual", "wrong_test.go"), ("TestAlias", "shapes_test.go"),
+                           ("TestY", "shapes_test.go"), ("TestMain", "shapes_test.go"),
+                           ("Testable", "shapes_test.go"), ("TestIgnored", "ignored_test.go"),
+                           ("TestActual", "doc.go")):
+            self.assertFalse(go_test_list.declares(root, package / file, name), (name, file))
+
+    def test_declaration_failures_are_errors(self):
+        broken = module(self, {"a_test.go": "package integration\n\nfunc TestA(\n"})
+        with self.assertRaisesRegex(go_test_list.ListError, "testdecls failed"):
+            go_test_list.declarations([broken / "integration"])
 
     def test_parse_accepts_only_a_successful_listing(self):
         good = [event("start"), event("output", Output="Test\n"), event("output", Output="TestA\n"),

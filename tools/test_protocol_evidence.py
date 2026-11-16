@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import protocol_evidence as evidence
-from test_go_test_list import SHAPES, module
+from test_go_test_list import SHAPES, WRONG_FILE, module
 
 
 class ProtocolEvidenceTests(unittest.TestCase):
@@ -105,7 +105,7 @@ class ProtocolEvidenceTests(unittest.TestCase):
         self.assertIn("message 2: missing unit test link", self.check(text))
 
     def test_linked_test_must_be_one_go_lists_for_that_file(self):
-        root = module(self, SHAPES)
+        root = module(self, dict(SHAPES, **WRONG_FILE))
         package = root / "integration"
         # Literal expectation: the bare Test, the aliased-import test and the
         # blank parameter are tests; TestMain, the method, the lowercase helper
@@ -113,8 +113,10 @@ class ProtocolEvidenceTests(unittest.TestCase):
         for name, file in (("Test", "shapes_test.go"), ("TestX", "shapes_test.go"), ("TestAlias", "alias_test.go")):
             self.assertTrue(evidence.listed_test(root, package / file, name), name)
         for name, file in (("TestMain", "shapes_test.go"), ("TestY", "shapes_test.go"), ("Testable", "shapes_test.go"),
-                           ("TestIgnored", "ignored_test.go"), ("TestAlias", "shapes_test.go")):
+                           ("TestIgnored", "ignored_test.go"), ("TestAlias", "shapes_test.go"),
+                           ("TestActual", "wrong_test.go")):
             self.assertFalse(evidence.listed_test(root, package / file, name), name)
+        self.assertTrue(evidence.listed_test(root, package / "right_test.go", "TestActual"))
 
     def test_product_source_or_integration_selector_is_not_unit_evidence(self):
         text = self.text.replace("(mon_ping_test.go)", "(mon_ping.go)")

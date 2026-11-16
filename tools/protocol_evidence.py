@@ -2,9 +2,11 @@
 """Check frame/message/role ledger links to tests and retained evidence.
 
 This validates references, not the truth of a native observation. A linked
-unit test must be a top-level test that Go lists for the package compiling the
-linked file (go_test_list.py compiles the test binaries and executes no test
-body). No producer tools are executed by this inventory check.
+unit test must be declared as a top-level test in the linked file and listed by
+Go for that file's package (go_test_list.declares: `go test -list` gives the
+runnable set and Go's parser the declaring file; listing compiles the test
+binaries and executes no test body). No producer tools are executed by this
+inventory check.
 """
 import csv
 import re
@@ -104,14 +106,24 @@ def frame_receipt_problems(cell, receipts):
 
 
 def listed_test(root, path, name):
-    """True when Go lists `name` as a top-level test of the package whose
-    default build compiles `path`, and `path` declares it."""
-    root, path = Path(root).resolve(), Path(path).resolve()
-    package = path.parent.relative_to(root).as_posix()
-    files = go_test_list.test_files(root, ("./...",))
-    return (path.name in files.get(package, ())
-            and name in go_test_list.list_tests(root, ("./...",)).get(package, ())
-            and re.search(r"(?m)^func %s\(" % re.escape(name), path.read_text()) is not None)
+    """True when `path` declares `name` as a top-level test that Go lists for
+    the package compiling `path` (see go_test_list.declares)."""
+    return go_test_list.declares(root, path, name)
+
+
+def linked_test_directories(root, rows):
+    """Directories of every linked _test.go file, so that one parser run
+    covers them all."""
+    directories = set()
+    for row in rows:
+        for _, target in LINK.findall(row[2]):
+            try:
+                path = local_file(root, EVIDENCE, target)
+            except ValueError:
+                continue
+            if path.name.endswith("_test.go"):
+                directories.add(path.parent)
+    return sorted(directories)
 
 
 def local_file(root, document, target):
@@ -156,6 +168,8 @@ def check(root=ROOT, text=None):
                     problems.append("receipt " + name + ": record must be Markdown")
             except ValueError as error:
                 problems.append(str(error))
+    go_test_list.declarations(linked_test_directories(
+        root, [row for rows in (messages, features, frames, opcodes) for row in rows.values() if len(row) > 2]))
     for label, rows in (("message", messages), ("feature", features), ("frame", frames), ("opcode", opcodes)):
         for key, row in rows.items():
             prefix = label + " " + key

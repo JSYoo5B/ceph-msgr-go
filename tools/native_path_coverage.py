@@ -4,7 +4,9 @@
 This validates references, not the truth of a native observation. Top-level
 Go test names are the tests Go lists in the product, fixture and quality
 modules (go_test_list.py): listing compiles the test binaries, which may fetch
-uncached modules, and executes no test body. It starts no fixture. Upstream fixture
+uncached modules, and executes no test body. A link whose text is a test name
+and whose target is a Go file must point at the file that declares it
+(go_test_list.declares, Go's parser under the build context). It starts no fixture. Upstream fixture
 receipts (``ctg@v0.3.0:``, ``ctg@v0.4.0:`` and ``ctg@main:`` tokens) are cited by name only and
 are not resolved, because the provider repository is not part of this tree.
 """
@@ -41,6 +43,25 @@ def go_tests(root, modules=MODULES):
         for listed in go_test_list.list_tests(Path(root) / module, ("./...",)).values():
             names.update(listed)
     return names
+
+
+def module_of(root, path):
+    """The listed module directory (relative to root) that contains path."""
+    best = None
+    for module in MODULES:
+        base = (Path(root) / module).resolve()
+        if path.is_relative_to(base) and (best is None or len(base.parts) > len(best[1].parts)):
+            best = (module, base)
+    return None if best is None else best[1]
+
+
+def test_link_problems(root, name, path):
+    """A test-named link to a Go file must reach the file declaring the test."""
+    module = module_of(root, path)
+    if module is None or not go_test_list.declares(module, path, name):
+        return ["link %s does not reach the file declaring top-level Go test %s"
+                % (path.relative_to(Path(root).resolve()).as_posix(), name)]
+    return []
 
 
 def catalog_vocabulary(root):
@@ -155,12 +176,14 @@ def check(root=ROOT, text=None, tests=None, catalog=None):
         problems.extend(token_problems(token, tests, scenarios, groups, suites))
 
     document = (root / COVERAGE).parent
-    for _, target in LINK.findall(text):
+    for label, target in LINK.findall(text):
         if re.match(r"^[a-z]+:", target) or target.startswith("#"):
             continue
         path = (document / target.split("#", 1)[0]).resolve()
         if not path.is_relative_to(root.resolve()) or not path.exists():
             problems.append("missing or non-repository file " + target)
+        elif path.suffix == ".go" and re.fullmatch(r"Test\w*", label.strip("`")):
+            problems.extend(test_link_problems(root, label.strip("`"), path))
 
     areas = set()
     seen = set()

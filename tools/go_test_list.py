@@ -12,15 +12,25 @@ The listing runs per Go module with GOWORK=off, CGO_ENABLED=0 and
 A missing `go`, a non-zero exit, a build failure or any event this module does
 not recognise raises ListError; nothing is silently returned as empty.
 Results are cached for the life of the process.
+
+`go test -list` says which tests exist, not where they are declared. A check
+that ties a test to a file uses `declares`: the name must be listed for the
+package, the file must be one Go compiles for that package's tests (go list),
+and Go's parser must find a top-level function of the test shape with that
+name in that file (tools/quality/testdecls, which applies the go/build
+context). A raw string, a comment, a method or a build-excluded file cannot
+satisfy it.
 """
 import json
 import os
 from pathlib import Path
+import posixpath
 import re
 import subprocess
 
 PATTERN = "^Test"
 TIMEOUT = 600
+QUALITY = Path(__file__).resolve().parent / "quality"
 # Under the ^Test pattern every listed name is a test; examples, benchmarks
 # and fuzz targets do not match it.
 NAME = re.compile(r"Test\w*")
@@ -136,16 +146,22 @@ def list_tests(module, packages, timeout=TIMEOUT):
         listed = parse(result.stdout, module_path)
         for package in packages:
             if "..." not in package:
-                directory = os.path.normpath(package)
+                directory = _directory(package)
                 if directory not in listed:
                     raise ListError("go test -list did not list package %s in %s" % (package, module))
         _CACHE[key] = listed
     return _CACHE[key]
 
 
+def _directory(package):
+    """A module-relative package pattern as the slash-separated key Go reports."""
+    return posixpath.normpath(package.replace("\\", "/"))
+
+
 def package_tests(module, package, timeout=TIMEOUT):
     """The listed top-level tests of one package directory of a module."""
-    return list_tests(module, ("./" + os.path.normpath(package),), timeout)[os.path.normpath(package)]
+    directory = _directory(package)
+    return list_tests(module, ("./" + directory,), timeout)[directory]
 
 
 def test_files(module, packages, timeout=TIMEOUT):
@@ -177,3 +193,49 @@ def test_files(module, packages, timeout=TIMEOUT):
             files[_relative(module_path, package["ImportPath"])] = frozenset(names)
         _CACHE[key] = files
     return _CACHE[key]
+
+
+def declarations(directories, timeout=TIMEOUT):
+    """{absolute directory: {file name: {function name: has the test shape}}}.
+
+    Go's parser reads the _test.go files that the go/build context selects in
+    each directory (tools/quality/testdecls); methods are not listed, and a
+    file without a top-level function is absent. A directory without test
+    files maps to an empty dictionary."""
+    directories = [str(Path(directory).resolve()) for directory in directories]
+    missing = sorted({directory for directory in directories if ("decls", directory) not in _CACHE})
+    if missing:
+        result = _go(QUALITY, ["run", "-mod=readonly", "./testdecls"] + missing, timeout)
+        if result.returncode:
+            raise ListError("testdecls failed (exit %d): %s" % (result.returncode, result.stderr.strip()[-2000:]))
+        found = {directory: {} for directory in missing}
+        for number, line in enumerate(result.stdout.splitlines(), 1):
+            try:
+                decl = json.loads(line)
+                directory, file, name, test = decl["dir"], decl["file"], decl["name"], decl["test"]
+            except (ValueError, TypeError, KeyError) as error:
+                raise ListError("line %d of testdecls output is not a declaration: %s" % (number, error)) from error
+            if directory not in found or not isinstance(test, bool):
+                raise ListError("unexpected testdecls declaration on line %d: %s" % (number, line[:200]))
+            names = found[directory].setdefault(file, {})
+            if name in names:
+                raise ListError("duplicate declaration of %s in %s" % (name, file))
+            names[name] = test
+        for directory, files in found.items():
+            _CACHE[("decls", directory)] = files
+    return {directory: _CACHE[("decls", directory)] for directory in directories}
+
+
+def declares(module, path, name, timeout=TIMEOUT):
+    """True when `path` declares `name` as a top-level test that Go lists.
+
+    `module` is the directory of the go.mod containing `path`. Go must list
+    `name` for the package of `path`, compile `path` for that package's tests,
+    and its parser must find `name` declared there with the test shape."""
+    module, path = Path(module).resolve(), Path(path).resolve()
+    package = path.parent.relative_to(module).as_posix()
+    if path.name not in test_files(module, ("./...",), timeout).get(package, ()):
+        return False
+    if name not in list_tests(module, ("./...",), timeout).get(package, ()):
+        return False
+    return declarations([path.parent], timeout)[str(path.parent)].get(path.name, {}).get(name) is True
