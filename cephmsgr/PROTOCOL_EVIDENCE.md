@@ -10,7 +10,8 @@ Header versions/contracts remain in those ledgers; nested authentication is in
 [FRAME_TAG_LEDGER.md](../internal/session/FRAME_TAG_LEDGER.md), and unsupported
 OSD opcodes in [UNSUPPORTED_OPCODES.md](../internal/osd/UNSUPPORTED_OPCODES.md).
 
-`python3 tools/protocol_evidence.py` checks exact row coverage, test definitions,
+`python3 tools/protocol_evidence.py` checks exact row coverage, that each linked
+test is a top-level test `go test -list` reports for the linked file's package,
 receipt IDs, opcode values/contracts, frame observation kinds and repository-local
 links. Basic CI runs this through the Python tool tests. It does not execute
 the linked selectors or verify native outcomes;

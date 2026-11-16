@@ -440,9 +440,10 @@ dependencies. Fixture-only dependencies remain in `integration/fixture/`.
 
 Basic CI also runs, with the race detector, exactly the cluster-free
 integration-package tests, and `tools/cluster_free_tests.py` requires each of
-them to report PASS. The name rule classifies them from the source: a
-top-level `TestCeph...Integration` test is native and stays opt-in, and every
-other top-level test there is cluster-free, so adding one needs no list edit.
+them to report PASS. The tests are the ones `go test -list` reports for
+`./integration` (`tools/go_test_list.py`), so Go's own rules decide what a test
+is. A top-level `TestCeph...Integration` test is native and stays opt-in, and
+every other listed test there is cluster-free, so adding one needs no list edit.
 
 `integration/fixture/` contains bounded native setup/control/oracle recipes.
 Run Docker profiles on Linux with their documented selectors. Native vectors,

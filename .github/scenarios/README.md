@@ -380,7 +380,8 @@ checking out that PR does not replace the default branch's reusable workflow.
 The MGR-service opt-in is forwarded in advance of its feature implementation.
 
 Native runs use the calling revision's result gate. For an explicit `test_run`,
-it inventories matching top-level tests in the tested checkout before execution
+it lists the matching top-level tests that `go test -list` reports for the tested
+checkout's `integration` and `cephmsgr` packages before execution
 and requires a complete PASS result for every selected test. A skipped, missing
 or failed selected test fails the job even if the process exits zero. An empty
 secondary package is permitted; a selector matching no tests is refused.
@@ -407,6 +408,16 @@ python3 tools/scenario_plan.py validate
 python3 tools/scenario_plan.py list
 python3 tools/scenario_plan.py plan --select group:rbd --select windows-ceph
 ```
+
+The tools never read `func Test...` text to decide which top-level tests exist.
+`validate`, the native result gate, the cluster-free gate, the row admission
+tests, the coverage map check and the protocol evidence check all ask
+`go test -json -list` through `tools/go_test_list.py`, per Go module with
+`GOWORK=off`, `CGO_ENABLED=0` and `-mod=readonly`. Listing compiles the test
+binaries and runs no test body. A missing `go`, a build failure or unexpected
+listing output is an error, never an empty set. The coverage map check also
+lists the fixture module, so the Python tool tests need Go 1.26 or later; basic
+CI runs them with Go 1.27 before installing the product's Go 1.25.0.
 
 The planner emits native rows in `include` and selected check suites in `fixed`.
 `--catalog` reads the tested revision's vocabulary using the trusted planner.
@@ -448,11 +459,11 @@ The `native-test-selection` artifact lists the source location, candidate scenar
 and explicit-selector required scenarios for every native test. `required_scenarios`
 means that the existing native result gate requires that top-level test to PASS
 when the scenario runs. It is not evidence of an actual PASS. Broad candidates
-can still skip because of per-test environment requirements. The initial inventory
-has 229 native tests: 59 have an explicit required scenario and 170 have only
-broad candidates. These counts describe selection, not verified interoperability.
-Adding a test requires registering it and reviewing its intended fixture/selector;
-registration alone cannot prove that all of its skip conditions are satisfied.
+can still skip because of per-test environment requirements. The artifact's counts
+describe selection, not verified interoperability. A new native test needs no
+registration; some catalog row's selector must include it, and its intended
+fixture and selector still need review. Selection alone cannot prove that all of
+its skip conditions are satisfied.
 
 Requested/periodic `fuzz` now runs all 26 registered targets, including wire,
 MDS and additional CephX/OSD decoders omitted from the former ten-command list.

@@ -197,7 +197,8 @@ never read as an accepted path.
   [catalog.d](../../.github/scenarios/catalog.d/); `suite:<id>` refers to
   its check suites. Every native row of that catalog is in the default
   coverage.
-- A plain `TestCeph...` name is a top-level Go test in this repository.
+- A plain `TestCeph...` name is a top-level Go test that `go test -list` reports
+  in the product, fixture or quality module.
 - `ctg@v0.3.0:`, `ctg@v0.4.0:` and `ctg@main:` name a native receipt test of
   the provider at that revision. These are fixture readiness receipts with native clients;
   they do not exercise the Go implementation of this repository.
@@ -458,8 +459,9 @@ underlying Messenger paths and are not application completeness claims.
 ## Drift check
 
 `python3 tools/native_path_coverage.py` checks this document without running
-any test: every scenario ID, `group:` and `suite:` reference exists in the
-catalog, every plain test name is a top-level Go test in this repository,
+any test body: every scenario ID, `group:` and `suite:` reference exists in the
+catalog, every plain test name is a top-level Go test that `go test -list`
+reports in the product, fixture or quality module,
 every linked record exists, each row has one known class, every SPEC.md
 final-scope path has a section, and every `released` row cites local evidence.
 It prints the number of rows in each class. Pull-request state is not recorded
