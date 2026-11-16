@@ -11,7 +11,8 @@ profile has settled (OSD pools and CRUSH hierarchy, MDS filesystems, RBD and
 cache pools, the native oracle worker and, for the host runtime, the relay),
 immediately before the control loop starts. No control request has run
 yet, so the snapshot is the state every test of the fixture starts from.
-Every source below must be observed for the snapshot. A snapshot failure
+Every read below must complete for the snapshot, including the admin socket
+of every daemon. A snapshot failure
 does not fail the fixture: it is kept, and every later check fails with the
 `start-snapshot` condition and its cause.
 
@@ -28,25 +29,28 @@ oracle client, each MON, MGR, OSD and MDS daemon and the control container)
 and any Testcontainers container of the fixture's own session that is
 listed at that moment.
 
-## Sources
+## Reads
 
-One observation reads three independent sources:
+One observation is made of independent reads:
 
-1. the Docker container listing, first;
-2. the MON reads `ceph status`, `osd dump`, `osd erasure-code-profile ls`,
-   `osd crush rule ls` and `config dump`, in that order, from the native
-   oracle client;
+1. the Docker container list, first;
+2. the MON reads `ceph status`, `ceph osd dump`,
+   `ceph osd erasure-code-profile ls`, `ceph osd crush rule ls` and
+   `ceph config dump`, from the native oracle client;
 3. `config diff` on the admin socket of each MON, MGR, OSD and MDS daemon of
    the snapshot (MON, MGR and OSD through the provider's daemon handle, an
    MDS in its own container), skipped for a daemon whose container the
    listing shows not running.
 
-The MON reads and the admin socket reads run concurrently after the
-listing. The MON reads share one source, so the first that fails ends them.
-A failed or undecodable source fails the `observation` condition, naming
-the source, and hides only its own conditions: with the MONs stopped, the
-report still names `daemon-running` from the listing and `daemon-config`
-from the admin sockets.
+Each MON read and each admin socket read runs concurrently after the
+listing. Each condition is computed from the one read it depends on (the
+table below names it). A read that fails or prints output that does not
+decode fails the `observation` condition, naming the read, and hides only
+the conditions computed from it. Every other read is still compared: with
+`ceph status` showing peering PGs and `ceph osd dump` timing out, the report
+names both `pg-clean` and the `observation` of `ceph osd dump`; with the
+MONs stopped, it still names `daemon-running` from the listing and
+`daemon-config` from the admin sockets.
 
 ## Control
 
@@ -55,10 +59,12 @@ A test requests the check with
 which publishes `verify-start-state <id> <seconds>`. The budget is optional,
 in whole seconds from 1 to 300, and defaults to 30 seconds. The check polls
 once a second until no condition fails or the budget ends; each MON read,
-admin socket read and the Docker listing has its own 10-second bound. A poll
-whose reads the budget cut short does not replace the previous completed
-comparison. The result of the last poll is written to `start-state.json` before the acknowledgement
-`start-state-verify.<id>`:
+admin socket read and the Docker listing has its own 10-second bound. In a
+poll that the end of the budget cut short, a read that did not complete
+keeps the failures its latest completed read found, if it found any, and
+is otherwise reported as its `observation`; the reads the poll completed
+replace their earlier failures. The result of the last poll is written to
+`start-state.json` before the acknowledgement `start-state-verify.<id>`:
 
 ```json
 {"started_at": "...", "budget_ms": 30000, "elapsed_ms": 1234, "polls": 2,
@@ -71,9 +77,9 @@ the range or extra fields) is a fixture control failure.
 
 ## Conditions
 
-Each failure names one condition. A source that fails or returns output
-that does not decode fails the `observation` condition for that poll; the
-other sources' conditions are still compared.
+Each failure names one condition. A read that fails or returns output that
+does not decode fails the `observation` condition for that poll; the
+conditions of every other read are still compared.
 
 | Condition | Requirement | Native source |
 | --- | --- | --- |
