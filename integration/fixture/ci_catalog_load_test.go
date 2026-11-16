@@ -13,7 +13,7 @@ import (
 
 // ciCatalogPath is the scenario catalog relative to the repository root. The
 // rules mirror tools/scenario_catalog.py, the loader of every Python reader.
-const ciCatalogPath = ".github/scenarios/catalog.json"
+const ciCatalogPath = ".github/scenarios/catalog.d"
 
 const ciCatalogIndex = "_catalog.json"
 

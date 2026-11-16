@@ -105,6 +105,37 @@ class FragmentTests(unittest.TestCase):
         self.assertIn("duplicate identifier osd.a", err)
 
 
+class RepositoryCatalogTests(unittest.TestCase):
+    def test_fragments_are_canonical_and_split_back_unchanged(self):
+        document = catalog.load()
+        files = {path.name: path.read_text(encoding="utf-8") for path in catalog.CATALOG_DIR.iterdir()}
+        self.assertEqual(catalog.split(document), files)
+
+    def test_adding_a_row_edits_exactly_one_fragment(self):
+        document = catalog.load()
+        before = catalog.split(document)
+        for group in sorted({r["group"] for r in document["scenarios"]}):
+            with self.subTest(group=group):
+                added = dict(document, scenarios=document["scenarios"] + [row(group + ".new", group)])
+                after = catalog.split(added)
+                self.assertEqual(sorted(name for name in after if after[name] != before.get(name)), [group + ".json"])
+
+    def test_single_file_and_fragments_plan_identically(self):
+        """The trusted planner gives the same answer for a revision with the
+        single file as for one with the same rows in fragments."""
+        document = catalog.load()
+        with tempfile.TemporaryDirectory() as directory:
+            legacy = Path(directory) / "catalog.json"
+            legacy.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")
+            selectors = ["all"] + ["group:" + g for g in sorted({r["group"] for r in document["scenarios"]})]
+            selectors += [r["id"] for r in document["scenarios"]] + [j["id"] for j in document["fixed_jobs"]]
+            for selector in selectors:
+                with self.subTest(selector=selector):
+                    fragmented = plan(catalog.CATALOG_DIR, selector)
+                    self.assertEqual(fragmented[0], 0, fragmented[2])
+                    self.assertEqual(plan(legacy, selector), fragmented)
+
+
 class ExtractTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

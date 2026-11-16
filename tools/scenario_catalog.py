@@ -34,7 +34,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCENARIOS = Path(".github") / "scenarios"
-CATALOG = SCENARIOS / "catalog.json"  # relative to a repository root
+CATALOG = SCENARIOS / "catalog.d"  # relative to a repository root
+CATALOG_DIR = ROOT / CATALOG
 INDEX = "_catalog.json"
 LEGACY = "catalog.json"
 FRAGMENT = re.compile(r"[a-z0-9][a-z0-9-]{0,63}\.json")
@@ -111,7 +112,7 @@ def compose(directory):
     return document
 
 
-def load(path=ROOT / CATALOG):
+def load(path=CATALOG_DIR):
     """Return the catalog document of a fragment directory or a single file."""
     path = Path(path)
     if path.is_dir():
