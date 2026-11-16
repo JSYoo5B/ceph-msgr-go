@@ -45,9 +45,10 @@ func TestCommandChannelMatrixSelectorsExist(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The parser's view must equal Go's own listing, so the shape rule
-		// below cannot drift from go test's discovery unnoticed.
-		if got, want := slices.Sorted(maps.Keys(decls)), slices.Sorted(maps.Keys(listed[suite])); !slices.Equal(got, want) {
+		// The parser's view must equal Go's own listing, name by name and
+		// in how often each name is listed, so the shape rule cannot drift
+		// from go test's discovery unnoticed.
+		if got, want := declarationCounts(decls), listed[suite]; !maps.Equal(got, want) {
 			t.Fatalf("%s: parsed test declarations %v differ from go test -list %v", suite, got, want)
 		}
 		declared[suite] = decls
@@ -91,6 +92,16 @@ func suiteTestDecls(dir string) (map[string][]string, error) {
 	return decls, nil
 }
 
+// declarationCounts maps each test name to how many files declare it, the
+// count go test -list reports for the name.
+func declarationCounts(decls map[string][]string) map[string]int {
+	counts := make(map[string]int, len(decls))
+	for name, files := range decls {
+		counts[name] = len(files)
+	}
+	return counts
+}
+
 // hasTestShape follows cmd/go's discovery: a top-level function named Test or
 // Test plus a non-lowercase rune, without type parameters or results, taking
 // one *T or *x.T. TestMain(*testing.M) is the harness, not a test.
@@ -119,9 +130,11 @@ func hasTestShape(fn *ast.FuncDecl) bool {
 	return false
 }
 
-// listedSuiteTests returns, per suite package, the top-level tests go test
-// -list reports. Listing compiles the packages and runs no test.
-func listedSuiteTests(t *testing.T) map[string]map[string]bool {
+// listedSuiteTests returns, per suite package, each top-level test go test
+// -list reports and how many times it is listed (twice when the internal and
+// the external test package both declare it). Listing compiles the packages
+// and runs no test.
+func listedSuiteTests(t *testing.T) map[string]map[string]int {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -134,7 +147,7 @@ func listedSuiteTests(t *testing.T) map[string]map[string]bool {
 	if err != nil {
 		t.Fatalf("go test -list: %v\n%s\n%s", err, output, stderr.Bytes())
 	}
-	listed := map[string]map[string]bool{"integration": {}, "cephmsgr": {}}
+	listed := map[string]map[string]int{"integration": {}, "cephmsgr": {}}
 	done := map[string]string{}
 	name := regexp.MustCompile(`^Test\w*$`)
 	scanner := bufio.NewScanner(bytes.NewReader(output))
@@ -150,7 +163,7 @@ func listedSuiteTests(t *testing.T) map[string]map[string]bool {
 			line := strings.TrimSuffix(event.Output, "\n")
 			switch {
 			case name.MatchString(line) && listed[path.Base(event.Package)] != nil:
-				listed[path.Base(event.Package)][line] = true
+				listed[path.Base(event.Package)][line]++
 			case strings.HasPrefix(line, "ok  \t"+event.Package+"\t"):
 			default:
 				t.Fatalf("unexpected listing output for %s: %q", event.Package, line)
@@ -199,5 +212,10 @@ func TestSuiteTestDeclsFollowGoDiscovery(t *testing.T) {
 	}
 	if !maps.EqualFunc(decls, want, slices.Equal) {
 		t.Fatalf("got %v, want %v", decls, want)
+	}
+	// go test lists TestActual twice for this package; the counts compared
+	// with the listing must say so.
+	if got, want := declarationCounts(decls), map[string]int{"TestActual": 2, "TestAlias": 1}; !maps.Equal(got, want) {
+		t.Fatalf("declaration counts %v, want %v", got, want)
 	}
 }
