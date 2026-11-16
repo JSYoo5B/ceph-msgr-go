@@ -25,7 +25,9 @@ LISTERS = {
     "go_test_list": (None, ("tools/quality",)),  # declarations run tools/quality/testdecls
     "cluster_free_tests": (None, (".",)),
     "native_test_results": (("snapshot",), (".",)),
-    "scenario_plan": (("validate",), (".",)),
+    # validate and sharing list the suites and run fixture tests
+    # (TestCatalogRowsAreAdmittedByTheFixture, TestCatalogRowsDeclareFixtureSharing).
+    "scenario_plan": (("validate", "sharing"), (".", "integration/fixture")),
     "protocol_evidence": (None, (".",)),
     "native_path_coverage": (None, None),  # its MODULES, read below
     "fuzz_targets": (None, (".",)),
@@ -216,7 +218,13 @@ class WorkflowToolchainTests(unittest.TestCase):
         validate = "jobs:\n  plan:\n    steps:\n      - uses: actions/setup-go@v\n        with:\n          go-version: '1.24.x'\n" \
                    "      - run: python3 tools/scenario_plan.py validate\n      - run: python3 tools/scenario_plan.py plan --select all\n"
         self.assertEqual(problems("p.yml", validate),
-                         ["p.yml plan: scenario_plan validate needs Go 1.25.0, runs with Go 1.24.x"])
+                         ["p.yml plan: scenario_plan validate needs Go 1.26.0, runs with Go 1.24.x"])
+        # The periodic plan job of this branch before main's fixture admission
+        # merged: validate under the product's Go 1.25.0 cannot run the fixture tests.
+        for command in ("validate", "sharing"):
+            product = validate.replace("'1.24.x'", "'1.25.0'").replace("scenario_plan.py validate", "scenario_plan.py " + command)
+            self.assertEqual(problems("p.yml", product),
+                             ["p.yml plan: scenario_plan %s needs Go 1.26.0, runs with Go 1.25.0" % command])
 
     def test_product_steps_keep_the_compatibility_go(self):
         platform = (WORKFLOWS / "platform-checks.yml").read_text(encoding="utf-8")
