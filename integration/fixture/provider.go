@@ -59,6 +59,10 @@ type fixtureCluster struct {
 	// rbdMirror owns the RBD mirror checkpoint's destination cluster, mirror
 	// daemon and directed source OSD fault.
 	rbdMirror *rbdMirrorScope
+	// startState is the snapshot recorded once the fixture was ready, before
+	// its control loop started; startStateErr explains a missing snapshot.
+	startState    *startStateSnapshot
+	startStateErr error
 }
 
 func (c *fixtureCluster) NetworkName() string { return clusterNetworkName(c.cluster) }
@@ -550,6 +554,9 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 			return c, err
 		}
 	}
+	// Every preparation step above has settled; nothing has served a control
+	// request yet. This is the state the start-state check compares against.
+	c.recordStartState(ctx, out)
 	controlCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.done = make(chan struct{})

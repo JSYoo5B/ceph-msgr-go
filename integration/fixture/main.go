@@ -354,38 +354,48 @@ func recordOwnership(c *fixtureCluster, out string, created ...*ceph.ManagerCont
 	if c == nil {
 		return nil
 	}
-	containerID := ""
 	if c.Container != nil {
-		containerID = c.GetContainerID()
-		if err := os.WriteFile(filepath.Join(out, "container-name"), []byte(containerID+"\n"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(out, "container-name"), []byte(c.GetContainerID()+"\n"), 0o600); err != nil {
 			return err
 		}
-	}
-	owned := map[string]string{}
-	if c.Container != nil {
-		owned["messenger-oracles"] = c.GetContainerID()
 	}
 	// Ownership is also recorded after the run context ended. The listings
 	// only wait for a concurrent topology change, as before.
 	ctx, cancel := context.WithTimeout(context.Background(), fixtureStartupTimeout)
 	defer cancel()
-	monitors, err := c.cluster.Monitors(ctx)
+	containerID, owned, err := c.ownedContainers(ctx, created...)
 	if err != nil {
 		return err
+	}
+	return writeFixtureOwnership(out, containerID, c.NetworkName(), owned)
+}
+
+// ownedContainers maps every container the fixture owns to its ID: the native
+// oracle client, each MON, MGR, OSD and MDS daemon, and the control container.
+func (c *fixtureCluster) ownedContainers(ctx context.Context, created ...*ceph.ManagerContainer) (string, map[string]string, error) {
+	containerID := ""
+	owned := map[string]string{}
+	if c.Container != nil {
+		containerID = c.GetContainerID()
+		owned["messenger-oracles"] = containerID
+	}
+	monitors, err := c.cluster.Monitors(ctx)
+	if err != nil {
+		return "", nil, err
 	}
 	for _, mon := range monitors {
 		owned["mon."+mon.DaemonName] = mon.GetContainerID()
 	}
 	managers, err := c.cluster.Managers(ctx)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	addManagerOwnership(owned, managers...)
 	// Preserve even a returned partial descriptor absent from a later snapshot.
 	addManagerOwnership(owned, created...)
 	osds, err := c.cluster.OSDs(ctx)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
 	for _, osd := range osds {
 		owned[fmt.Sprintf("osd.%d", osd.ID)] = osd.GetContainerID()
@@ -396,7 +406,7 @@ func recordOwnership(c *fixtureCluster, out string, created ...*ceph.ManagerCont
 	if control, err := c.cluster.ControlContainer(ctx); err == nil && control != nil {
 		owned["control"] = control.GetContainerID()
 	}
-	return writeFixtureOwnership(out, containerID, c.NetworkName(), owned)
+	return containerID, owned, nil
 }
 
 func writeFixtureOwnership(out, containerID, network string, owned map[string]string) error {
