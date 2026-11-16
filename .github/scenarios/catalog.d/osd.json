@@ -733,7 +733,26 @@
     "osd_store": "bluestore",
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
-    "test_run": "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
+    "test_run": "^TestCephMonMapVersionConnectedKillIntegration$",
+    "capabilities": "mon-forced-kill"
+   }
+  },
+  {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionunprocessedkill",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephMonMapVersionUnprocessedKillIntegration$",
+    "capabilities": "mon-forced-kill"
    }
   },
   {
@@ -750,7 +769,26 @@
     "osd_store": "bluestore",
     "osd_replicas": "1",
     "osd_profile": "legacy-v6",
-    "test_run": "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
+    "test_run": "^TestCephMonMapVersionConnectedKillIntegration$",
+    "capabilities": "mon-forced-kill"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionunprocessedkill",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "mode": "crc",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "1",
+    "osd_profile": "legacy-v6",
+    "test_run": "^TestCephMonMapVersionUnprocessedKillIntegration$",
+    "capabilities": "mon-forced-kill"
    }
   }
  ]

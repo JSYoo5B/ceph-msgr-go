@@ -3,7 +3,7 @@ package main
 import "testing"
 
 func TestMgrServiceColdBootstrapProfileAndOracleBoundary(t *testing.T) {
-	base := map[string]string{"CEPH_MSGR_TEST_MGR_SERVICE": "1", "CEPH_MSGR_TEST_MGR_COUNT": "0", "CEPH_MSGR_TEST_RUN": mgrServiceColdBootstrapSelector}
+	base := map[string]string{"CEPH_MSGR_TEST_MGR_SERVICE": "1", "CEPH_MSGR_TEST_MGR_COUNT": "0", "CEPH_MSGR_TEST_RUN": "^TestCephMgrServiceColdBootstrapIntegration$"}
 	p, err := loadProfile(func(k string) string { return base[k] })
 	if err != nil || !p.mgrServiceColdBootstrap() || p.osd != "0" || p.runtime != "container" {
 		t.Fatal(p, err)

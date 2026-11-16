@@ -342,7 +342,7 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}
 	if p.monPing == "1" {
 		selected = "^TestCephMonPingIntegration$"
-		if p.mgrCount != "2" || p.osd != "0" || p.mdsFresh != "0" || p.rbdBase != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.nativeMgrPreparation != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.stressDuration != "" || p.monFreeze != "" || p.testRun != "" && p.testRun != selected {
+		if p.mgrCount != "2" || p.osd != "0" || p.mdsFresh != "0" || p.rbdBase != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.nativeMgrPreparation != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.stressDuration != "" || p.monFreeze != "" || !ownSelection(p.testRun, selected, false) {
 			return profile{}, fmt.Errorf("MON ping acceptance requires its exclusive selector %s and the ordinary three-MON/two-MGR fixture", selected)
 		}
 	}
@@ -365,13 +365,13 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		selected = "^TestCephMgrServiceRegistrationIntegration$"
 		topologyAllowed := p.osd == "1" && p.mgrCount == "2"
 		if p.mgrCount == "0" {
-			selected = mgrServiceColdBootstrapSelector
+			selected = "^TestCephMgrServiceColdBootstrapIntegration$"
 			topologyAllowed = p.osd == "0" && p.runtime == "container"
 		}
 		if !topologyAllowed || p.osdProfile != "legacy-v6" || p.osdReplicas != "1" || p.mdsFresh != "0" || p.rbdBase != "0" ||
 			p.monPing != "0" || p.osdCachePools != "0" || p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" ||
 			p.nativeMgrPreparation != "0" || p.modeRejection != "" || p.mappedIPv6 != "0" || p.stressDuration != "" || p.osdSoak != "" || p.monFreeze != "" ||
-			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.testRun != "" && p.testRun != selected {
+			p.sparseReadOracle != "" || p.mapExtOracle != "" || !ownSelection(p.testRun, selected, false) {
 			return profile{}, fmt.Errorf("MGR service acceptance requires its exclusive selector %s and either two MGRs with one legacy-v6 OSD or zero initial MGRs without OSDs", selected)
 		}
 	}
@@ -683,8 +683,8 @@ func (p profile) testEnvironment(controlDir, proxy string) map[string]string {
 	return result
 }
 
-const mgrServiceColdBootstrapSelector = "^TestCephMgrServiceColdBootstrapIntegration$"
-
+// mgrServiceColdBootstrap reports the MON-only cold-bootstrap fixture running
+// its own closed observation recipe.
 func (p profile) mgrServiceColdBootstrap() bool {
-	return p.mgrService == "1" && p.mgrCount == "0" && p.osd == "0" && p.testRun == mgrServiceColdBootstrapSelector
+	return p.mgrService == "1" && p.mgrCount == "0" && p.osd == "0" && p.runsDefault()
 }

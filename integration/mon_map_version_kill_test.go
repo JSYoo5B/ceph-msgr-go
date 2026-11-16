@@ -23,7 +23,7 @@ import (
 func requireMonForcedKill(t *testing.T) {
 	t.Helper()
 	if os.Getenv("CEPH_MSGR_NATIVE_MON_FORCED_KILL") != "1" {
-		t.Skip("SIGKILL of a MON requires the exclusive selector ^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$")
+		t.Skip("SIGKILL of a MON requires this test alone as the exact selector with fixture capability mon-forced-kill")
 	}
 }
 
