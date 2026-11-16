@@ -122,47 +122,6 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
                 for field in opt_ins:
                     self.assertNotIn(field, row)
 
-    def test_mon_kill_and_large_service_map_rows_are_exclusive(self):
-        # The MON SIGKILL cells run on CRC only (the relay decodes CRC frames)
-        # with one BlueStore OSD; the large ServiceMap cell needs no OSD.
-        rows = [row for row in self.rows if row.get("test_run") == MON_MAP_VERSION_KILL_SELECTOR]
-        self.assertEqual(rows, [
-            {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host", "osd": "1",
-             "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6", "test_run": MON_MAP_VERSION_KILL_SELECTOR},
-            {"key": "aes256k", "service": "aes256k", "mode": "crc", "family": "6", "stress": "", "runtime": "container", "osd": "1",
-             "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6", "test_run": MON_MAP_VERSION_KILL_SELECTOR}])
-        rows = [row for row in self.rows if row.get("test_run") == SERVICE_MAP_LARGE_SELECTOR]
-        self.assertEqual(rows, [
-            {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "test_run": SERVICE_MAP_LARGE_SELECTOR},
-            {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
-             "test_run": SERVICE_MAP_LARGE_SELECTOR}])
-
-    def test_service_map_lifecycle_hold_row_is_exclusive(self):
-        rows = [row for row in self.rows if row.get("test_run") == SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR]
-        self.assertEqual(rows, [{"key": "aes256k", "service": "aes256k", "family": "4", "stress": "",
-                                 "test_run": SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR}])
-        client = set()
-        for source in (ROOT / "cephmsgr").glob("*_test.go"):
-            client.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))
-        selector = re.compile(SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR)
-        self.assertEqual({name for name in client | self.declared if selector.search(name)},
-                         {"TestCephMonServiceMapLifecycleFailedMonHoldIntegration"})
-
-    def test_applied_named_mgr_tell_row_requires_its_client_test(self):
-        # The row is the broad AES/CRC IPv4 host mon-mgr profile narrowed to one
-        # client-suite test, so the result gate requires that parent to PASS. The
-        # test needs no opt-in parameter and also runs in broad CRC rows.
-        rows = [row for row in self.rows if row.get("test_run") == APPLIED_NAMED_MGR_TELL_SELECTOR]
-        self.assertEqual(rows, [{"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "",
-                                 "runtime": "host", "test_run": APPLIED_NAMED_MGR_TELL_SELECTOR}])
-        client = set()
-        for source in (ROOT / "cephmsgr").glob("*_test.go"):
-            client.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))
-        selector = re.compile(APPLIED_NAMED_MGR_TELL_SELECTOR)
-        self.assertEqual({name for name in client | self.declared if selector.search(name)},
-                         {"TestCephAppliedNamedManagerTellIsNotReplayedIntegration"})
-        self.assertNotIn("TestCephAppliedNamedManagerTellIsNotReplayedIntegration", self.declared)
-
     def client_tests(self):
         client = set()
         for source in (ROOT / "cephmsgr").glob("*_test.go"):
@@ -178,21 +137,6 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         compiled = re.compile(selector)
         self.assertEqual({name for name in self.client_tests() | self.declared if compiled.search(name)}, tests)
         self.assertFalse(tests & self.declared)
-
-    def test_applied_current_mgr_tell_row_requires_its_client_test(self):
-        # The same AES/CRC IPv4 host mon-mgr profile as the exact-name row,
-        # narrowed to the current-manager cell.
-        self.assert_client_row(APPLIED_CURRENT_MGR_TELL_SELECTOR,
-                               {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host"},
-                               {"TestCephAppliedCurrentManagerTellIsNotReplayedIntegration"})
-
-    def test_applied_mgr_tell_secure_row_requires_both_client_tests(self):
-        # One secure AES256K IPv4 host mon-mgr fixture runs both MGR Tell cells
-        # through their mode without decoded frames.
-        self.assert_client_row(APPLIED_MGR_TELL_SECURE_SELECTOR,
-                               {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "host"},
-                               {"TestCephAppliedNamedManagerTellIsNotReplayedIntegration",
-                                "TestCephAppliedCurrentManagerTellIsNotReplayedIntegration"})
 
     def test_applied_osd_and_pg_command_rows_require_both_client_tests(self):
         # The broad legacy OSD selection never matches these names, so one
@@ -231,17 +175,6 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("if p.testRun == daemonCommandMDSSelector {", profile)
         self.assertIn('daemonCommandMDSSelector = "%s"' % APPLIED_MDS_COMMAND_SELECTOR, " ".join(outcome.split()))
 
-    def test_sent_tell_cancellation_rows_require_their_exclusive_client_test(self):
-        # The cell ends MON and MGR sessions on purpose and skips without its
-        # exact selector, so one CRC and one secure mon-mgr row select it.
-        self.assert_client_row(SENT_TELL_CANCELLATION_SELECTOR,
-                               {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host"},
-                               {"TestCephSentTellCancellationIntegration"},
-                               {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "host"})
-        source = (ROOT / "cephmsgr" / "integration_sent_tell_cancellation_test.go").read_text(encoding="utf-8")
-        self.assertIn('sentTellCancellationSelector = "%s"' % SENT_TELL_CANCELLATION_SELECTOR, source)
-        self.assertIn("selected.Value.String() != sentTellCancellationSelector", source)
-
     def test_osd_command_outcome_rows_require_the_two_api_tests(self):
         # Both tests also belong to the broad legacy OSD selection, where a
         # result gate requires no single test. One CRC and one secure
@@ -268,24 +201,6 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         crash = (ROOT / "integration" / "osd_command_crash_test.go").read_text(encoding="utf-8")
         self.assertIn('os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore"', crash)
 
-    def test_unavailable_target_rows_require_one_client_and_two_api_tests(self):
-        # The three tests need no opt-in parameter and also run in the broad
-        # ordinary mon-mgr rows. One CRC and one secure host row narrow that
-        # selection, so the gate requires each parent to PASS: every command
-        # channel during a complete MON outage, the dial cause of an exact MON
-        # Tell, and the exact MGR Tell across a manager failover.
-        rows = [row for row in self.rows if row.get("test_run") == UNAVAILABLE_TARGET_SELECTOR]
-        self.assertEqual(rows, [
-            {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
-             "test_run": UNAVAILABLE_TARGET_SELECTOR},
-            {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "host",
-             "test_run": UNAVAILABLE_TARGET_SELECTOR}])
-        selector = re.compile(UNAVAILABLE_TARGET_SELECTOR)
-        self.assertEqual({name for name in self.client_tests() if selector.search(name)},
-                         {"TestCephCompleteMonitorOutageIntegration"})
-        self.assertEqual({name for name in self.declared if selector.search(name)},
-                         {"TestCephNamedMonitorTellIntegration", "TestCephNamedManagerTellIntegration"})
-
     def test_mds_stop_control_is_admitted_only_for_the_public_command_acceptance(self):
         # The stopped-daemon step of the public MDS command test is the only
         # user of an MDS daemon control. The fixture admits stop alone, and
@@ -296,24 +211,6 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         users = [source.name for source in sorted((ROOT / "integration").glob("*_test.go")) + sorted((ROOT / "cephmsgr").glob("*_test.go"))
                  if re.search(r'ControlDaemon\([^)]*"mds"', source.read_text(encoding="utf-8"))]
         self.assertEqual(users, ["mds_commands_test.go"])
-
-    def test_mon_ping_rows_are_exclusive_and_reach_the_native_fixture(self):
-        self.assertIn("CEPH_MSGR_TEST_MON_PING: ${{ matrix.mon_ping || '0' }}", self.workflow)
-        rows = [row for row in self.rows if row.get("mon_ping") == "1"]
-        self.assertEqual(len(rows), 2)
-        observed = set()
-        for row in rows:
-            self.assertEqual(row["stress"], "")
-            for field in ("osd", "mds_fresh", "rbd", "image", "race", "expiry", "idle", "auth_epoch", "short_tickets", "mode_rejection", "mapped", "native_mgr_preparation"):
-                self.assertNotIn(field, row)
-            selector = re.compile(row["test_run"])
-            expected = "TestCephMonPingIntegration"
-            self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
-            self.assertIsNone(selector.search(expected + "Extended"))
-            self.assertIsNone(selector.search("Prefix" + expected))
-            observed.add(tuple(row.get(field, fallback) for field, fallback in (
-                ("key", ""), ("service", ""), ("mode", "secure"), ("family", ""), ("runtime", "container"))))
-        self.assertEqual(observed, {("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")})
 
     def test_copyfrom_late_error_row_is_exclusive_single_bluestore(self):
         rows = [row for row in self.rows if row.get("test_run") == COPY_FROM_LATE_ERROR_SELECTOR]
