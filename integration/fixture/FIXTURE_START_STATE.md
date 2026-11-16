@@ -142,7 +142,21 @@ options: it compares every override of every daemon.
   as owned is not read.
 - A daemon restarted after the snapshot loses its runtime overrides; one
   that had an override at start then fails `daemon-config` with that
-  override removed.
+  override removed. Overrides the daemon sets itself while it starts come
+  back once it has started: under the mClock scheduler an OSD sets its
+  `osd_*_sleep` options to `0` during startup
+  (`OSD::maybe_override_sleep_options_for_qos` in
+  [`src/osd/OSD.cc`](https://github.com/ceph/ceph/blob/v20.2.4/src/osd/OSD.cc)),
+  and the fourth native run below
+  saw them missing in the first poll after the restart and back a few
+  seconds later.
+- `pg-clean` reads the PG states of the MGR's PG map, which follows a change
+  only after the OSDs report it. A check that starts immediately after a
+  change that affects PGs can pass before the PG map shows it: in the fourth
+  native run a check started right after a pool size change passed in one
+  poll, and `ceph status` showed the degraded PG about 3 s later. Pool size
+  itself is not compared (below), so the check does not see such a change
+  until the PG map does.
 - Pools are compared by name and flags. Size, PG count, application
   metadata and objects are not compared.
 - Auth entities, OSDMap blocklist entries, upmap entries and primary_temp
@@ -226,5 +240,32 @@ did. That case, a failed read beside the conditions of the reads that
 completed, and the merge of a poll cut by the budget are covered by the
 fixture unit tests only.
 
-The stopped OSD, non-clean PG, pg_temp, foreign container and MDS admin
-socket paths are covered by the fixture unit tests only.
+A fourth exploratory test, at `de21923` (the head the review asked about),
+used catalog row `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3`
+(three BlueStore OSDs, legacy-v6, host runtime, so the test process can
+run the Docker CLI) with the same image and the native result gate. It
+started a foreign container, made PGs undersized and stopped an OSD through
+the fixture's daemon control:
+
+| Step | Budget | Result | Condition and detail |
+| --- | --- | --- | --- |
+| fresh fixture | 60 s | passed, 1 poll, 0.40 s | |
+| `docker run` of a container labelled `org.testcontainers=true` | 5 s | failed, 4 polls | `foreign-container`: container ... (msgr-179-start-state-foreign) is running |
+| container removed with `docker rm -f` | 60 s | passed, 1 poll | |
+| `osd pool set .mgr size 4` (three OSDs), check started at once | 1 s | passed, 1 poll | none: the PG map did not show the change yet |
+| the same, after `ceph status` showed `active+undersized+degraded` (3.0 s after the change) | 15 s | failed, 11 polls | `pg-clean`: PGs not active+clean: 1xactive+undersized+degraded |
+| `osd pool set .mgr size 3` | 120 s | passed, 4 polls, 4.5 s | |
+| osd.0 stopped | 20 s | failed, 15 polls | `daemon-running`: osd.0 container ... is exited; `osd-up`: osd.0 is down; `pg-clean`: 2xactive+undersized+degraded |
+| the same, again | 45 s | failed, 33 polls | the same failures |
+| osd.0 started, check at once | 1 s | failed, 1 poll | `osd-up`, `pg-clean` as above; `daemon-config`: 17 `osd_*_sleep` overrides of osd.0 removed, were "0" |
+| the same | 240 s | passed, 5 polls, 5.9 s | |
+
+The test passed in 105.35 s and the gate reported its PASS; the row took
+166 s and cleanup left no Testcontainers container. The 1-second checks are
+recorded for what they show, not asserted: the first is the PG map lag
+described under Limits, the second the OSD's own startup overrides, which
+came back before the next check passed.
+
+The pg_temp and MDS admin socket paths are covered by the fixture unit
+tests only; the fourth run's `osd pg-temp` request was rejected for its
+argument form (`bad or missing field 'id'`), so no pg_temp entry was made.
