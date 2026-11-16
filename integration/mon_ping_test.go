@@ -39,6 +39,7 @@ type monPingObservation struct {
 	} `json:"mon_status"`
 }
 
+//fixture:shareable pings MONs, runs reads and appends one cluster log line
 func TestCephMonPingIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MON_PING") != "1" {
 		t.Skip("requires the explicit native MON ping fixture")

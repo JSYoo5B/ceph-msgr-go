@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//fixture:shareable config set for client.native-config-test, removed by checked config rm and verified absent
 func TestCephConfigCommandsIntegration(t *testing.T) {
 	c, ctx := fixtureClient(t, 20*time.Second)
 	set := `{"prefix":"config set","who":"client.native-config-test","name":"debug_ms","value":"2/3"}`
@@ -81,6 +82,7 @@ func waitIostatState(t *testing.T, c *cephmsgr.Client, ctx context.Context, enab
 	}
 }
 
+//fixture:isolated disables and re-enables iostat, then runs mgr fail; the active MGR is not restored
 func TestCephMgrModulesIntegration(t *testing.T) {
 	c, ctx := fixtureClient(t, time.Minute)
 	checkModuleCommands(t, c, ctx)

@@ -17,6 +17,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated leaves a native-lost-reply config-key that is never removed
 func TestCephLostMutationReplyIntegration(t *testing.T) {
 	// fixtureClient checks the control directory before any mutation.
 	observer, ctx := fixtureClient(t, 45*time.Second)

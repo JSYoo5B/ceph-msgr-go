@@ -13,6 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated runs mgr fail; the prometheus port config rm runs only on the success path
 func TestCephManagerModuleOptionsIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

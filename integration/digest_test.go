@@ -89,6 +89,7 @@ func verifyNativeDigest(t *testing.T, ctx context.Context, control, label string
 	t.Logf("%s: MON %s status and full health detail match independent native clients", label, name)
 }
 
+//fixture:shareable sticky health mute removed by a checked health unmute; client-only seed fault
 func TestCephDigestIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

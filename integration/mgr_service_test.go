@@ -73,6 +73,8 @@ func TestServiceWatchRequestMatchesNativeOracleInputs(t *testing.T) {
 // The test registers a daemon in the cluster's service map, so it runs only in
 // the opt-in CEPH_MSGR_TEST_MGR_SERVICE=1 profile; see
 // cephmsgr/MGR_SERVICE_CONTRACT.md.
+//
+//fixture:isolated its recovery subtest runs mgr fail; the active MGR is not restored
 func TestCephMgrServiceRegistrationIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MGR_SERVICE") != "1" {
 		t.Skip("set CEPH_MSGR_TEST_MGR_SERVICE=1: Go service registration changes the cluster service map")

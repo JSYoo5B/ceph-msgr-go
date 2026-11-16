@@ -10,6 +10,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:shareable appends cluster log lines; client-only seed TCP fault; daemons untouched
 func TestCephLogRecoveryIntegration(t *testing.T) {
 	ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

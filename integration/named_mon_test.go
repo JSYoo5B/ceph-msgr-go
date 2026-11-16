@@ -28,6 +28,7 @@ type namedMonStatus struct {
 	} `json:"monmap"`
 }
 
+//fixture:shareable named MON tells and reads, refused tells and one cluster log append
 func TestCephNamedMonitorTellIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	data, err := os.ReadFile(filepath.Join(control, "named-mon-b.json"))

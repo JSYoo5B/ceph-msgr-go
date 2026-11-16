@@ -8,6 +8,7 @@ import (
 	"time"
 )
 
+//fixture:shareable config-key set on its own key, removed by checked config-key rm as the final step; otherwise reads
 func TestCephCommandConstructionIntegration(t *testing.T) {
 	ordinaryLogFixture(t)
 	c, ctx := fixtureClient(t, 30*time.Second)

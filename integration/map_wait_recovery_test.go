@@ -12,6 +12,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated runs mgr fail on the active MGR; not restored
 func TestCephMapWaitRecoveryIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

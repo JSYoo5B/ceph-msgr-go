@@ -15,6 +15,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:shareable ticket renewals and reads only; the MGR keyring gate is a read
 func TestCephFractionalTicketRenewalIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_SHORT_TICKETS") != "1" {
 		t.Skip("requires the isolated fractional AUTH ticket fixture")

@@ -12,6 +12,8 @@ import (
 // A native client registers a service daemon (as RGW or rbd-mirror do); the Go
 // service map watch receives a map holding it, and the daemon matches the MON's
 // own "service dump" for GID, metadata and (at the same epoch) start epoch.
+//
+//fixture:isolated the native oracle registers a ceph-msgr service daemon; its removal is never checked
 func TestCephMonServiceMapIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

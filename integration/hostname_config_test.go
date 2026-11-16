@@ -34,6 +34,7 @@ func verifyNativeHostnameConfig(t *testing.T, ctx context.Context, control, labe
 	}
 }
 
+//fixture:shareable adds empty CRUSH roots/hosts and masked config; checked cleanup runs config rm and osd crush rm
 func TestCephHostnameConfigIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)

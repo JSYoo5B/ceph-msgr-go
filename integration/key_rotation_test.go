@@ -12,6 +12,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//fixture:shareable imports another key for client.revocable; a deferred checked auth import restores the key and caps
 func TestCephReplacedCredentialIntegration(t *testing.T) {
 	admin, ctx := fixtureClient(t, time.Minute)
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
