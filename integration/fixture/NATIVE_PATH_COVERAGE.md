@@ -195,7 +195,8 @@ never read as an accepted path.
 
 - `group:<name>` and full scenario IDs refer to
   [catalog.json](../../.github/scenarios/catalog.json); `suite:<id>` refers to
-  its check suites. Every native row of that catalog is in `mandatory.txt`.
+  its check suites. Every native row of that catalog is in the default
+  coverage.
 - A plain `TestCeph...` name is a top-level Go test in this repository.
 - `ctg@v0.3.0:`, `ctg@v0.4.0:` and `ctg@main:` name a native receipt test of
   the provider at that revision. These are fixture readiness receipts with native clients;

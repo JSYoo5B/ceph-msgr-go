@@ -4,11 +4,12 @@
 The catalog (.github/scenarios/catalog.json) is the discoverable list of the
 real-daemon scenarios and selectable platform check suites. Each native entry
 has a stable identifier, group and workflow matrix parameters. This tool
-validates the catalog against the mandatory list and reusable check jobs and prints the
-selected matrix with an explanation. It reads local files only and executes no
-test.
+validates the catalog against the reusable check jobs and the tests it selects
+and prints the selected matrix with an explanation. Every catalog row is in the
+default coverage (`all`); there is no separate list of required rows. It reads
+local files only and executes no test.
 
-  scenario_plan.py validate               invariants, mandatory list, fixed jobs, selector targets
+  scenario_plan.py validate               invariants, fixed jobs, selector targets
   scenario_plan.py list                   one identifier per line
   scenario_plan.py plan --select S        matrix JSON on stdout, explanation on stderr
 
@@ -29,7 +30,6 @@ CATALOG = ROOT / ".github" / "scenarios" / "catalog.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "platform-checks.yml"
 NATIVE_WORKFLOW = ROOT / ".github" / "workflows" / "native-scenarios.yml"
-MANDATORY = ROOT / ".github" / "scenarios" / "mandatory.txt"
 REQUIRED_PARAMS = ("key", "service", "family")
 SUPPORTED_RELEASE = re.compile(r"^20\.2\.\d+$")
 
@@ -95,28 +95,6 @@ def validate_catalog(scenarios):
                 except re.error as error:
                     problems.append("%s has an invalid test selector: %s" % (sid, error))
     return problems
-
-
-def mandatory_problems(scenarios, mandatory):
-    """The mandatory list names every scenario the default coverage must run.
-
-    Removing or renaming a scenario therefore needs an explicit edit of both
-    files; a scenario cannot be dropped from the catalog silently."""
-    ids = [entry["id"] for entry in scenarios if isinstance(entry.get("id"), str)]
-    problems = []
-    for sid in mandatory:
-        if sid not in ids:
-            problems.append("mandatory scenario missing from catalog: %s" % sid)
-    for sid in ids:
-        if sid not in mandatory:
-            problems.append("catalog scenario not in the mandatory list: %s" % sid)
-    if len(set(mandatory)) != len(mandatory):
-        problems.append("mandatory list has duplicates")
-    return problems
-
-
-def load_mandatory(path=MANDATORY):
-    return [line.strip() for line in Path(path).read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
 def fixed_job_problems(document, workflow_text):
@@ -213,14 +191,14 @@ def main(argv=None):
         scenarios = load_catalog(getattr(args, "catalog", CATALOG))
         if args.command == "validate":
             document = load_catalog_document()
-            problems = (validate_catalog(scenarios) + mandatory_problems(scenarios, load_mandatory())
+            problems = (validate_catalog(scenarios)
                         + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
                         + selector_problems(scenarios, integration_tests()))
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
                 return 1
-            print("catalog valid: %d scenarios, all mandatory, selecting existing tests" % len(scenarios))
+            print("catalog valid: %d scenarios, all in default coverage, selecting existing tests" % len(scenarios))
         elif args.command == "list":
             for entry in scenarios + fixed_entries(load_catalog_document(args.catalog)):
                 print(entry["id"])

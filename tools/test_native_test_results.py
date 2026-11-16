@@ -55,7 +55,6 @@ class NativeResultTests(unittest.TestCase):
         selector = "^TestCephMsgrCompressionOfferIntegration$"
         rows = [row for row in plan.load_catalog() if row["params"].get("test_run") == selector]
         self.assertEqual(len(rows), 1)
-        self.assertIn(rows[0]["id"], plan.load_mandatory())
         request = results.snapshot(plan.ROOT, rows[0]["params"]["test_run"])
         name = "TestCephMsgrCompressionOfferIntegration"
         self.assertEqual(request["expected"], [["api", name]])

@@ -16,7 +16,12 @@ class CatalogTests(unittest.TestCase):
         document = plan.load_catalog_document()
         scenarios = document["scenarios"]
         self.assertEqual(plan.validate_catalog(scenarios), [])
-        self.assertEqual(plan.mandatory_problems(scenarios, plan.load_mandatory()), [])
+        # Default coverage is every catalog row: the periodic run selects
+        # `all`, and `all` leaves no row out.
+        chosen, _ = plan.select(scenarios, ["all"])
+        self.assertEqual(chosen, scenarios)
+        periodic = (plan.ROOT / ".github" / "workflows" / "periodic.yml").read_text(encoding="utf-8")
+        self.assertIn("scenario_plan.py plan --select all", periodic)
         self.assertEqual(plan.fixed_job_problems(document, plan.CHECKS_WORKFLOW.read_text(encoding="utf-8")), [])
         self.assertEqual(plan.selector_problems(scenarios, plan.integration_tests()), [])
 
@@ -49,14 +54,6 @@ class CatalogTests(unittest.TestCase):
         text = "\n".join(plan.validate_catalog([bad]))
         self.assertIn("lacks required parameter service", text)
         self.assertIn("invalid test selector", text)
-
-    def test_mandatory_list_detects_silent_omission_in_both_directions(self):
-        scenarios = [entry("a"), entry("b")]
-        self.assertEqual(plan.mandatory_problems(scenarios, ["a", "b"]), [])
-        text = "\n".join(plan.mandatory_problems(scenarios, ["a", "c", "c"]))
-        self.assertIn("missing from catalog: c", text)
-        self.assertIn("not in the mandatory list: b", text)
-        self.assertIn("duplicates", text)
 
     def test_fixed_jobs_must_exist_in_the_workflow(self):
         document = {"fixed_jobs": [{"id": "unit", "job": "unit"}, {"id": "fuzz", "job": "fuzz"}]}

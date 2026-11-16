@@ -339,10 +339,10 @@ See the
 sent cancellation rows above now also run `MonCommand` and `MgrCommand`
 subtests, and the public MDS command rows a last subtest that stops the
 fixture's MDS.
-The catalog has 124 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
-Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
-coverage; deleting a row requires an explicit coverage change.
+Only Tentacle 20.2.x is accepted. Every catalog row is in the default coverage
+(`all`, which the periodic run selects); there is no separate list of required
+rows or row total to edit, and deleting a row is a visible catalog change.
 
 The trusted planner refuses catalog parameters that its native workflow cannot
 forward. Land new workflow opt-ins before requesting a feature PR's new profile;
@@ -382,8 +382,7 @@ The planner emits native rows in `include` and selected check suites in `fixed`.
 `--catalog` reads the tested revision's vocabulary using the trusted planner.
 Unknown selectors fail rather than silently matching nothing. Validation rejects
 duplicate identifiers, unsupported releases, missing parameters, bad or empty
-test selectors, selectors matching no test, missing mandatory native rows and
-missing suite definitions.
+test selectors, selectors matching no test and missing suite definitions.
 
 ## Test inventory and selection evidence
 

@@ -68,31 +68,6 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_COMPLETION: ${{ matrix.mds_cephfs_completion || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_CEPHFS_DATA: ${{ matrix.mds_cephfs_data || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RBD: ${{ matrix.rbd || '0' }}", self.workflow)
-        # 63 original rows, 2 mgr-service, 3 erasure k2m2, 1 cache-tier-ops, 1 cache-op-go,
-        # 2 mds-cephfs-capsend, 1 native SET_CHUNK checkpoint, 1 Go SET_CHUNK acceptance,
-        # 2 mds-cephfs-writeback, 2 mds-cephfs-multi-reconnect,
-        # 1 exclusive COPY_FROM2 late-error cell, 1 applied EC resubmission,
-        # 1 exclusive multi-chunk COPY_FROM2 late-error cell, 1 CRC compression-offer row,
-        # 1 zero-initial-MGR service bootstrap row, 1 primary PG-history calibration row,
-        # 1 held stopped-MON dial ServiceMap lifecycle row, 1 RBD mirror path-recovery row,
-        # 1 COPY_FROM2 destination PG-history control row,
-        # 1 applied exact-name MGR Tell row with a withheld reply,
-        # 1 applied current-manager MGR Tell row, 1 secure row for both MGR Tell cells,
-        # 1 applied OSD and PG command row and 1 applied MDS command row,
-        # 2 MapVersion connected-MON SIGKILL rows, 2 large ServiceMap rows,
-        # 2 mds-cephfs-heldflock-split-reconnect rows,
-        # 2 mds-cephfs-sharedflock-recovery rows,
-        # 2 mds-cephfs-heldflock-split-fragments rows,
-        # 2 RBD journal lost-append-reply rows,
-        # 2 RBD lock-owner-loss rows, 2 RBD pending lock-owner-loss rows,
-        # 2 RBD journal primary-change rows,
-        # 1 secure applied OSD and PG command row, 1 secure applied MDS command row,
-        # 2 sent Tell cancellation rows,
-        # 2 OSD and PG command outcome rows, 2 unavailable MON and MGR target rows
-        # and 6 optimized EC shard-history rows (COPY_FROM2, a partial overwrite,
-        # a later write after it, an interval change after it, and an outage of
-        # the left-out shard's OSD after it without and with a degraded write).
-        self.assertEqual(len(self.rows), 124)
         opt_ins = ("mds_commands", "mds_sessions", "mds_cephfs", "mds_cephfs_ranks", "mds_cephfs_completion", "mds_cephfs_data", "rbd", "mon_ping", "mgr_service", "osd_cache_pools")
         # Dedicated legacy-v6 rows select one test explicitly; the
         # original broad legacy rows keep their suite selection.
