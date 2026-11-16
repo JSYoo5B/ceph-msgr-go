@@ -64,11 +64,20 @@ func fakeStartRaw() startStateRaw {
 func fakeStartSnapshot(t *testing.T) startStateSnapshot {
 	t.Helper()
 	raw := fakeStartRaw()
-	view, err := decodeStartState(raw)
-	if err != nil {
-		t.Fatal(err)
+	view := decodeStartState(raw)
+	if len(view.Unobserved) != 0 {
+		t.Fatal(view.Unobserved)
 	}
 	return newStartStateSnapshot(view, fakeStartOwned, raw.Containers, fakeStartSession)
+}
+
+func decodeFakeStart(t *testing.T, raw startStateRaw) (startStateView, error) {
+	t.Helper()
+	view := decodeStartState(raw)
+	if len(view.Unobserved) != 0 {
+		return view, errors.New(view.Unobserved[0].Detail)
+	}
+	return view, nil
 }
 
 func replaceOnce(t *testing.T, data []byte, old, replacement string) []byte {
@@ -101,10 +110,7 @@ func startConditions(failures []startStateFailure) []string {
 
 func TestStartStateAcceptsTheRecordedStartState(t *testing.T) {
 	snapshot := fakeStartSnapshot(t)
-	view, err := decodeStartState(fakeStartRaw())
-	if err != nil {
-		t.Fatal(err)
-	}
+	view := decodeStartState(fakeStartRaw())
 	if failures := compareStartState(snapshot, view); len(failures) != 0 {
 		t.Fatal("rejected the start state", failures)
 	}
@@ -171,6 +177,17 @@ func TestStartStateNamesEachFailedCondition(t *testing.T) {
 		{"removed config option", func(t *testing.T, raw *startStateRaw) {
 			raw.Config = []byte(`[{"section":"global","name":"mon_allow_pool_delete","value":"true","mask":""}]`)
 		}, []string{startConditionConfig}, "osd/osd_recovery_sleep removed"},
+		{"stopped single MON", func(t *testing.T, raw *startStateRaw) {
+			// The MON reads fail; the Docker listing still names the
+			// stopped daemon.
+			raw.Status, raw.OSDDump, raw.Profiles, raw.Rules, raw.Config = nil, nil, nil, nil, nil
+			raw.NativeErr = errors.New("ceph status: synthetic timeout")
+			raw.Containers = setContainerState(raw.Containers, "id-mon-a", "exited")
+		}, []string{startConditionObservation, startConditionDaemonRunning}, "mon.a container id-mon-a is exited"},
+		{"failed Docker listing", func(t *testing.T, raw *startStateRaw) {
+			raw.Containers, raw.DockerErr = nil, errors.New("synthetic daemon socket failure")
+			raw.OSDDump = replaceOnce(t, raw.OSDDump, `"flags":"sortbitwise,`, `"flags":"noout,sortbitwise,`)
+		}, []string{startConditionObservation, startConditionOSDFlags}, "list Docker containers: synthetic daemon socket failure"},
 		{"foreign container", func(t *testing.T, raw *startStateRaw) {
 			raw.Containers = append(slices.Clone(raw.Containers), fakeStartContainer("id-left-behind", "netem-helper", "exited",
 				map[string]string{"org.testcontainers": "true", "org.testcontainers.sessionId": fakeStartSession}))
@@ -187,10 +204,7 @@ func TestStartStateNamesEachFailedCondition(t *testing.T) {
 			snapshot := fakeStartSnapshot(t)
 			raw := fakeStartRaw()
 			tc.change(t, &raw)
-			view, err := decodeStartState(raw)
-			if err != nil {
-				t.Fatal(err)
-			}
+			view := decodeStartState(raw)
 			failures := compareStartState(snapshot, view)
 			if got := startConditions(failures); !slices.Equal(got, tc.want) {
 				t.Fatalf("conditions %v, want %v: %v", got, tc.want, failures)
@@ -206,6 +220,8 @@ func TestStartStateNamesEachFailedCondition(t *testing.T) {
 	}
 }
 
+// Malformed output of one source is an observation failure of that source
+// only: the others are still decoded.
 func TestStartStateDecodingRejectsMalformedNativeOutput(t *testing.T) {
 	for name, change := range map[string]func(*startStateRaw){
 		"status":   func(raw *startStateRaw) { raw.Status = []byte("{") },
@@ -216,22 +232,10 @@ func TestStartStateDecodingRejectsMalformedNativeOutput(t *testing.T) {
 	} {
 		raw := fakeStartRaw()
 		change(&raw)
-		if _, err := decodeStartState(raw); err == nil {
-			t.Fatal("accepted malformed", name)
+		view := decodeStartState(raw)
+		if view.Native || len(view.Unobserved) != 1 || !view.Docker {
+			t.Fatal("malformed", name, "was accepted or hid another source", view.Unobserved, view.Docker)
 		}
-	}
-}
-
-func TestStartStateReportRedactsAndBoundsConfigValues(t *testing.T) {
-	changes := configChanges(nil, []startConfigEntry{
-		{Section: "client.rgw", Name: "rgw_crypt_s3_kms_encryption_keys", Value: "testkey=c2VjcmV0"},
-		{Section: "global", Name: "mon_host", Value: strings.Repeat("v", 4*startStateValueLimit)},
-	})
-	if len(changes) != 2 || strings.Contains(changes[0], "c2VjcmV0") || !strings.Contains(changes[0], "<redacted>") {
-		t.Fatal("a credential-like value reached the report", changes)
-	}
-	if len(changes[1]) > 2*startStateValueLimit {
-		t.Fatal("an unbounded value reached the report", len(changes[1]))
 	}
 }
 
@@ -242,10 +246,7 @@ func TestStartStateSnapshotFileOmitsSensitiveValues(t *testing.T) {
 	raw := fakeStartRaw()
 	raw.Config = replaceOnce(t, raw.Config, `"mask":""}]`,
 		`"mask":""},{"section":"client.rgw","name":"rgw_crypt_s3_kms_encryption_keys","value":"testkey=`+secret+`","mask":""}]`)
-	view, err := decodeStartState(raw)
-	if err != nil {
-		t.Fatal(err)
-	}
+	view := decodeStartState(raw)
 	snapshot := newStartStateSnapshot(view, fakeStartOwned, raw.Containers, fakeStartSession)
 	out := t.TempDir()
 	if err := writeStartStateSnapshot(out, snapshot); err != nil {
@@ -265,11 +266,7 @@ func TestStartStateSnapshotFileOmitsSensitiveValues(t *testing.T) {
 	}
 	changed := raw
 	changed.Config = replaceOnce(t, raw.Config, "testkey="+secret, "testkey=other")
-	now, err := decodeStartState(changed)
-	if err != nil {
-		t.Fatal(err)
-	}
-	failures := compareStartState(snapshot, now)
+	failures := compareStartState(snapshot, decodeStartState(changed))
 	if got := startConditions(failures); !slices.Equal(got, []string{startConditionConfig}) {
 		t.Fatal("a changed credential-like value was not detected", failures)
 	}
@@ -277,6 +274,19 @@ func TestStartStateSnapshotFileOmitsSensitiveValues(t *testing.T) {
 		if strings.Contains(f.Detail, secret) || strings.Contains(f.Detail, "other") || !strings.Contains(f.Detail, "<redacted>") {
 			t.Fatal("a credential-like value reached the report", f)
 		}
+	}
+}
+
+func TestStartStateReportRedactsAndBoundsConfigValues(t *testing.T) {
+	changes := configChanges(nil, []startConfigEntry{
+		{Section: "client.rgw", Name: "rgw_crypt_s3_kms_encryption_keys", Value: "testkey=c2VjcmV0"},
+		{Section: "global", Name: "mon_host", Value: strings.Repeat("v", 4*startStateValueLimit)},
+	})
+	if len(changes) != 2 || strings.Contains(changes[0], "c2VjcmV0") || !strings.Contains(changes[0], "<redacted>") {
+		t.Fatal("a credential-like value reached the report", changes)
+	}
+	if len(changes[1]) > 2*startStateValueLimit {
+		t.Fatal("an unbounded value reached the report", len(changes[1]))
 	}
 }
 
@@ -292,7 +302,7 @@ func TestWaitStartStateAcceptsAPassingLaterPoll(t *testing.T) {
 		case 2:
 			raw.OSDDump = replaceOnce(t, raw.OSDDump, `"pg_temp":[]`, `"pg_temp":[{"pgid":"1.0","osds":[0]}]`)
 		}
-		return decodeStartState(raw)
+		return decodeFakeStart(t, raw)
 	})
 	if !report.Passed || report.Polls != 3 || len(report.Failures) != 0 {
 		t.Fatal("did not pass once the leftover cleared", report)
@@ -305,7 +315,7 @@ func TestWaitStartStateIsBoundedAndReportsTheLastPoll(t *testing.T) {
 	report := waitStartState(context.Background(), 200*time.Millisecond, 20*time.Millisecond, &snapshot, nil, func(context.Context) (startStateView, error) {
 		raw := fakeStartRaw()
 		raw.OSDDump = replaceOnce(t, raw.OSDDump, `"flags":"sortbitwise,`, `"flags":"noout,sortbitwise,`)
-		return decodeStartState(raw)
+		return decodeFakeStart(t, raw)
 	})
 	if elapsed := time.Since(started); elapsed > 2*time.Second {
 		t.Fatal("the check outlived its budget", elapsed)
@@ -335,7 +345,7 @@ func TestWaitStartStateKeepsTheLastComparisonWhenTheBudgetEndsMidPoll(t *testing
 		}
 		raw := fakeStartRaw()
 		raw.OSDDump = replaceOnce(t, raw.OSDDump, `"flags":"sortbitwise,`, `"flags":"noout,sortbitwise,`)
-		return decodeStartState(raw)
+		return decodeFakeStart(t, raw)
 	})
 	if report.Passed || report.Polls != 2 || !slices.Equal(startConditions(report.Failures), []string{startConditionOSDFlags}) {
 		t.Fatal("an interrupted poll replaced the completed comparison", report)

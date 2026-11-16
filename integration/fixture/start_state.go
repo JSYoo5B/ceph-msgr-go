@@ -54,14 +54,20 @@ const (
 	startConditionForeignContainer = "foreign-container"
 )
 
-// startStateRaw is the native and Docker output of one observation.
+// startStateRaw is the output of one observation, from two independent
+// sources: the MON reads and the Docker listing. A source that failed carries
+// its error instead of output, and the other source is still decoded and
+// compared.
 type startStateRaw struct {
-	Status     []byte
-	OSDDump    []byte
-	Profiles   []byte
-	Rules      []byte
-	Config     []byte
+	Status   []byte
+	OSDDump  []byte
+	Profiles []byte
+	Rules    []byte
+	Config   []byte
+	// NativeErr is the first failed MON read; the later ones were not sent.
+	NativeErr  error
 	Containers []container.Summary
+	DockerErr  error
 }
 
 type startConfigEntry struct {
@@ -143,6 +149,11 @@ type startStateView struct {
 	Containers map[string]string `json:"-"`
 	Names      map[string]string `json:"-"`
 	Labelled   []string          `json:"-"`
+	// Native and Docker report whether that source was observed.
+	// Unobserved names each source that failed, as an observation failure.
+	Native     bool                `json:"-"`
+	Docker     bool                `json:"-"`
+	Unobserved []startStateFailure `json:"-"`
 }
 
 // startStateSnapshot is the fixture's recorded start state.
@@ -170,14 +181,47 @@ type startStateFailure struct {
 
 func (f startStateFailure) String() string { return f.Condition + ": " + f.Detail }
 
-func decodeStartState(raw startStateRaw) (startStateView, error) {
+// decodeStartState decodes each source of one observation on its own: a
+// source that failed or printed output that does not decode becomes an
+// observation failure and leaves the other sources' fields in place.
+func decodeStartState(raw startStateRaw) startStateView {
 	var v startStateView
+	unobserved := func(format string, args ...any) {
+		v.Unobserved = append(v.Unobserved, startStateFailure{startConditionObservation, fmt.Sprintf(format, args...)})
+	}
+	if raw.NativeErr != nil {
+		unobserved("%v", raw.NativeErr)
+	} else if err := decodeStartNative(raw, &v); err != nil {
+		unobserved("%v", err)
+	} else {
+		v.Native = true
+	}
+	if raw.DockerErr != nil {
+		unobserved("list Docker containers: %v", raw.DockerErr)
+	} else {
+		v.Docker = true
+		v.Containers, v.Names = map[string]string{}, map[string]string{}
+		for _, item := range raw.Containers {
+			v.Containers[item.ID] = string(item.State)
+			if len(item.Names) > 0 {
+				v.Names[item.ID] = strings.TrimPrefix(item.Names[0], "/")
+			}
+			if item.Labels["org.testcontainers"] == "true" {
+				v.Labelled = append(v.Labelled, item.ID)
+			}
+		}
+		slices.Sort(v.Labelled)
+	}
+	return v
+}
+
+func decodeStartNative(raw startStateRaw, v *startStateView) error {
 	var status struct {
 		Quorum []string `json:"quorum_names"`
 		osdCleanStatus
 	}
 	if err := json.Unmarshal(raw.Status, &status); err != nil {
-		return v, fmt.Errorf("decode ceph status: %w", err)
+		return fmt.Errorf("decode ceph status: %w", err)
 	}
 	v.Quorum = slices.Sorted(slices.Values(status.Quorum))
 	v.MgrAvailable = status.MgrMap.Available
@@ -199,7 +243,7 @@ func decodeStartState(raw startStateRaw) (startStateView, error) {
 		} `json:"pg_temp"`
 	}
 	if err := json.Unmarshal(raw.OSDDump, &dump); err != nil {
-		return v, fmt.Errorf("decode ceph osd dump: %w", err)
+		return fmt.Errorf("decode ceph osd dump: %w", err)
 	}
 	v.Flags = splitStartList(dump.Flags)
 	v.OSDs = slices.SortedFunc(slices.Values(dump.OSDs), func(a, b startOSD) int { return a.ID - b.ID })
@@ -212,29 +256,18 @@ func decodeStartState(raw startStateRaw) (startStateView, error) {
 	}
 	slices.Sort(v.PGTemp)
 	if err := json.Unmarshal(raw.Profiles, &v.Profiles); err != nil {
-		return v, fmt.Errorf("decode erasure-code profiles: %w", err)
+		return fmt.Errorf("decode erasure-code profiles: %w", err)
 	}
 	slices.Sort(v.Profiles)
 	if err := json.Unmarshal(raw.Rules, &v.Rules); err != nil {
-		return v, fmt.Errorf("decode CRUSH rules: %w", err)
+		return fmt.Errorf("decode CRUSH rules: %w", err)
 	}
 	slices.Sort(v.Rules)
 	if err := json.Unmarshal(raw.Config, &v.Config); err != nil {
-		return v, fmt.Errorf("decode config dump: %w", err)
+		return fmt.Errorf("decode config dump: %w", err)
 	}
 	slices.SortFunc(v.Config, func(a, b startConfigEntry) int { return strings.Compare(a.key(), b.key()) })
-	v.Containers, v.Names = map[string]string{}, map[string]string{}
-	for _, item := range raw.Containers {
-		v.Containers[item.ID] = string(item.State)
-		if len(item.Names) > 0 {
-			v.Names[item.ID] = strings.TrimPrefix(item.Names[0], "/")
-		}
-		if item.Labels["org.testcontainers"] == "true" {
-			v.Labelled = append(v.Labelled, item.ID)
-		}
-	}
-	slices.Sort(v.Labelled)
-	return v, nil
+	return nil
 }
 
 func splitStartList(list string) []string {
@@ -277,13 +310,43 @@ func startDaemonName(name string) bool {
 	return ok && slices.Contains(daemonControlKinds, kind)
 }
 
-// compareStartState returns every failed condition, in a fixed order.
+// compareStartState returns every failed condition, in a fixed order: first
+// each source that was not observed, then the conditions of the sources that
+// were. A source that failed hides only its own conditions.
 func compareStartState(s startStateSnapshot, v startStateView) []startStateFailure {
+	failures := slices.Clone(v.Unobserved)
+	fail := func(condition, format string, args ...any) {
+		failures = append(failures, startStateFailure{condition, fmt.Sprintf(format, args...)})
+	}
+	if v.Docker {
+		failures = append(failures, compareStartContainers(s, v)...)
+	}
+	if v.Native {
+		failures = append(failures, compareStartNative(s, v)...)
+	}
+	if v.Docker {
+		owned := map[string]bool{}
+		for _, id := range s.Owned {
+			owned[id] = true
+		}
+		for _, id := range v.Labelled {
+			if !owned[id] {
+				fail(startConditionForeignContainer, "container %s (%s) is %s", startShortID(id), v.Names[id], v.Containers[id])
+			}
+		}
+	}
+	return failures
+}
+
+func startShortID(id string) string { return id[:min(len(id), 12)] }
+
+// compareStartContainers compares the daemon and other owned containers.
+func compareStartContainers(s startStateSnapshot, v startStateView) []startStateFailure {
 	var failures []startStateFailure
 	fail := func(condition, format string, args ...any) {
 		failures = append(failures, startStateFailure{condition, fmt.Sprintf(format, args...)})
 	}
-	shortID := func(id string) string { return id[:min(len(id), 12)] }
+	shortID := startShortID
 	for _, name := range slices.Sorted(maps.Keys(s.Daemons)) {
 		id := s.Daemons[name]
 		state, ok := v.Containers[id]
@@ -301,6 +364,15 @@ func compareStartState(s startStateSnapshot, v startStateView) []startStateFailu
 		} else if state != want {
 			fail(startConditionContainerState, "%s container %s is %s, was %s", name, shortID(id), state, want)
 		}
+	}
+	return failures
+}
+
+// compareStartNative compares the conditions of the MON reads.
+func compareStartNative(s startStateSnapshot, v startStateView) []startStateFailure {
+	var failures []startStateFailure
+	fail := func(condition, format string, args ...any) {
+		failures = append(failures, startStateFailure{condition, fmt.Sprintf(format, args...)})
 	}
 	if !slices.Equal(v.Quorum, s.View.Quorum) {
 		fail(startConditionMonQuorum, "quorum [%s], was [%s]", strings.Join(v.Quorum, ","), strings.Join(s.View.Quorum, ","))
@@ -366,15 +438,6 @@ func compareStartState(s startStateSnapshot, v startStateView) []startStateFailu
 	}
 	for _, change := range configChanges(s.View.Config, v.Config) {
 		fail(startConditionConfig, "%s", change)
-	}
-	owned := map[string]bool{}
-	for _, id := range s.Owned {
-		owned[id] = true
-	}
-	for _, id := range v.Labelled {
-		if !owned[id] {
-			fail(startConditionForeignContainer, "container %s (%s) is %s", shortID(id), v.Names[id], v.Containers[id])
-		}
 	}
 	return failures
 }
@@ -455,17 +518,21 @@ func waitStartState(ctx context.Context, budget, interval time.Duration, snapsho
 	for {
 		report.Polls++
 		view, err := observe(deadline)
-		switch {
-		case err == nil:
-			report.Failures, compared = compareStartState(*snapshot, view), true
-		case deadline.Err() != nil && compared:
-			// Keep the last completed comparison's failures.
-		default:
-			report.Failures = []startStateFailure{{startConditionObservation, err.Error()}}
+		var failures []startStateFailure
+		if err != nil {
+			failures = []startStateFailure{{startConditionObservation, err.Error()}}
+		} else {
+			failures = compareStartState(*snapshot, view)
 		}
-		if err == nil && len(report.Failures) == 0 {
-			report.Passed = true
+		if len(failures) == 0 {
+			report.Passed, report.Failures = true, nil
 			return report
+		}
+		// A poll whose reads the budget cut short does not replace an
+		// earlier comparison.
+		cut := deadline.Err() != nil && (err != nil || len(view.Unobserved) > 0)
+		if !cut || !compared {
+			report.Failures, compared = failures, true
 		}
 		timer := time.NewTimer(interval)
 		select {
@@ -477,9 +544,19 @@ func waitStartState(ctx context.Context, budget, interval time.Duration, snapsho
 	}
 }
 
-// observeStartState reads one observation from the owned cluster and Docker.
-func (c *fixtureCluster) observeStartState(ctx context.Context) (startStateView, []container.Summary, error) {
+// observeStartState reads one observation of the owned cluster from its two
+// independent sources, the Docker listing and the MON reads. A failed source
+// is recorded in the observation and never stops the other source.
+func (c *fixtureCluster) observeStartState(ctx context.Context) (startStateView, []container.Summary) {
 	var raw startStateRaw
+	raw.Containers, raw.DockerErr = listStartContainers(ctx)
+	raw.NativeErr = c.readStartNative(ctx, &raw)
+	return decodeStartState(raw), raw.Containers
+}
+
+// readStartNative sends the MON reads in order. They share one source, so the
+// first failure ends them.
+func (c *fixtureCluster) readStartNative(ctx context.Context, raw *startStateRaw) error {
 	for _, read := range []struct {
 		into *[]byte
 		args []string
@@ -494,37 +571,44 @@ func (c *fixtureCluster) observeStartState(ctx context.Context) (startStateView,
 		data, err := c.cluster.Ceph(poll, append(read.args, "--format", "json")...)
 		cancel()
 		if err != nil {
-			return startStateView{}, nil, fmt.Errorf("ceph %s: %w", strings.Join(read.args, " "), err)
+			return fmt.Errorf("ceph %s: %w", strings.Join(read.args, " "), err)
 		}
 		*read.into = data
 	}
+	return nil
+}
+
+func listStartContainers(ctx context.Context) ([]container.Summary, error) {
 	poll, cancel := context.WithTimeout(ctx, startStatePollTimeout)
 	defer cancel()
 	docker, err := testcontainers.NewDockerClientWithOpts(poll)
 	if err != nil {
-		return startStateView{}, nil, err
+		return nil, err
 	}
 	defer func() { _ = docker.Close() }()
 	listed, err := docker.ContainerList(poll, client.ContainerListOptions{All: true})
 	if err != nil {
-		return startStateView{}, nil, fmt.Errorf("list Docker containers: %w", err)
+		return nil, err
 	}
-	raw.Containers = listed.Items
-	view, err := decodeStartState(raw)
-	return view, raw.Containers, err
+	return listed.Items, nil
 }
 
-// recordStartState takes the snapshot once the fixture is ready. A failure is
-// kept and reported by every later check instead of failing the fixture.
+// recordStartState takes the snapshot once the fixture is ready. Every source
+// must be observed. A failure is kept and reported by every later check
+// instead of failing the fixture.
 func (c *fixtureCluster) recordStartState(ctx context.Context, out string) {
 	err := func() error {
 		_, owned, err := c.ownedContainers(ctx)
 		if err != nil {
 			return err
 		}
-		view, containers, err := c.observeStartState(ctx)
-		if err != nil {
-			return err
+		view, containers := c.observeStartState(ctx)
+		if len(view.Unobserved) > 0 {
+			var errs []error
+			for _, f := range view.Unobserved {
+				errs = append(errs, errors.New(f.Detail))
+			}
+			return errors.Join(errs...)
 		}
 		snapshot := newStartStateSnapshot(view, owned, containers, testcontainers.SessionID())
 		if err := writeStartStateSnapshot(out, snapshot); err != nil {
@@ -564,8 +648,8 @@ func writeStartStateFile(out, name string, data []byte, mode os.FileMode) error 
 // verifyStartState runs one bounded check and records its report.
 func (c *fixtureCluster) verifyStartState(ctx context.Context, out string, budget time.Duration) (startStateReport, error) {
 	report := waitStartState(ctx, budget, startStatePollInterval, c.startState, c.startStateErr, func(ctx context.Context) (startStateView, error) {
-		view, _, err := c.observeStartState(ctx)
-		return view, err
+		view, _ := c.observeStartState(ctx)
+		return view, nil
 	})
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
