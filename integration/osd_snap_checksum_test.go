@@ -18,6 +18,8 @@ import (
 // Native setup and read-snap selection belong only to this disposable test.
 // Each checksum is compared directly with librados at the same read snap;
 // the product neither discovers snapshots nor computes local expected hashes.
+//
+//fixture:isolated allocates self-managed snaps on the shared fixture pool, leaving its selfmanaged_snaps flag set
 func TestCephOSDSnapshotChecksumIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 360*time.Second)

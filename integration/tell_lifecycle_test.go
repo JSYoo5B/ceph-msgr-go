@@ -14,6 +14,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated runs mgr fail on the active MGR; not restored
 func TestCephTellRecoveryIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if control == "" || os.Getenv("CEPH_MSGR_TEST_MGR_COUNT") != "2" || os.Getenv("CEPH_MSGR_TEST_MAPPED_IPV6") == "1" {

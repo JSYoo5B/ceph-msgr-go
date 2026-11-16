@@ -23,16 +23,17 @@ relay, correlation rules and TID note apply here unchanged.
 
 The daemon `kill` control sends SIGKILL through the Docker API and accepts
 only a stopped container with exit code 137 that was not OOM-killed. It was
-restricted to OSDs. It now also accepts a MON, only when the fixture runs the
-exact selector
-
-```
-^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$
-```
-
-on the single-BlueStore legacy-v6 OSD fixture. Any other selection, including
-the broad OSD selection that matches both names, keeps the OSD-only rule; the
-two tests then skip. The MON receipt is written to `mon-crash-state.json`.
+restricted to OSDs. It now also accepts a MON, only when the fixture runs one
+exact test with the fixture capability `mon-forced-kill`
+(`CEPH_MSGR_TEST_CAPABILITIES`, declared by the test's catalog row) on the
+single-BlueStore legacy-v6 OSD fixture. Each of
+`TestCephMonMapVersionConnectedKillIntegration` and
+`TestCephMonMapVersionUnprocessedKillIntegration` has its own row. Any other
+selection, including the broad OSD selection that matches both names, keeps
+the OSD-only rule; the two tests then skip. The results below were recorded
+before the capability, when one exact two-test selector
+`^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$` admitted
+the kill; that selector is no longer admitted. The MON receipt is written to `mon-crash-state.json`.
 
 That selection also runs with 120 s AUTH and service tickets instead of the
 ordinary 12 s. The second cell keeps every MON out of quorum for tens of
@@ -207,22 +208,23 @@ receipts. The native oracle supplies the newest OSDMap epoch only.
 
 ## Reproduction
 
-Catalog rows (both CRC; secure frames are outside the relay's contract):
+Catalog rows (all CRC; secure frames are outside the relay's contract):
 
 - `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill`
-- `osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill`
+  and `osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill`
+  (the connected cell)
+- the same two IDs ending in `t-monmapversionunprocessedkill` (the
+  unprocessed cell)
 
-The result gate requires both `api/` tests to PASS. On an authorized
+The result gate requires the row's `api/` test to PASS. On an authorized
 Linux/amd64 Docker runner, holding its execution lock:
 
 ```sh
-CGO_ENABLED=0 CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
-CEPH_MSGR_TEST_OSD_PROFILE=legacy-v6 CEPH_MSGR_TEST_OSD_REPLICAS=1 \
-CEPH_MSGR_TEST_CONNECTION_MODE=crc CEPH_MSGR_TEST_KEY_TYPE=aes \
-CEPH_MSGR_TEST_SERVICE_CIPHER=aes CEPH_MSGR_TEST_IP_FAMILY=4 \
-CEPH_MSGR_TEST_RUNTIME=host \
-CEPH_MSGR_TEST_RUN='^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$' \
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill) &&
+  eval "$env_lines" &&
+  CGO_ENABLED=0 sh integration/run.sh
+)
 ```
 
 ## Daemon-free evidence

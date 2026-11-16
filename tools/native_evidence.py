@@ -59,6 +59,10 @@ SOAK_PROFILE = dict(DEFAULTS, key="aes256k", service="aes256k", family="4", osd=
 COMMON = dict(DEFAULTS, osd="1", mds_fresh="1", mds_cephfs_data="1", test_run=SELECTOR)
 PROFILES = [dict(COMMON, key="aes", service="aes", mode="crc", family="4", runtime="host", osd_store="bluestore"),
             dict(COMMON, family="6")]
+# The fixture capability the cap-send rows declare. It travels in the matrix
+# but is not part of the recorded profile, so evidence recorded before rows
+# declared capabilities keeps its context.
+CAPSEND_CAPABILITIES = "exclusive-mds-cephfs-data"
 CONTEXT_KEYS = {"execution_source", "tested_sha", "controller_sha", "run_id", "attempt", "scenario", "selector", "profile", "configured_image"}
 CLEAN_FLAGS = ("attempted", "completed", "config_restored", "osd_config_restored", "namespace_checked",
                "namespace_restored", "layout_restored", "blocklist_restored", "client_identity_removed", "native_identity_removed")
@@ -164,10 +168,11 @@ def context(request):
     keys(request, {"execution_source", "tested_sha", "controller_sha", "run_id", "attempt", "matrix"})
     need(request["execution_source"] in {"github-actions", "linux-runner"}, "execution-source")
     matrix = request["matrix"]
-    need(isinstance(matrix, dict) and set(matrix) <= set(DEFAULTS) | {"scenario", "image"}, "unsupported-matrix-field")
+    need(isinstance(matrix, dict) and set(matrix) <= set(DEFAULTS) | {"scenario", "image", "capabilities"}, "unsupported-matrix-field")
     need(all(isinstance(value, str) for value in matrix.values()), "matrix-value")
     profile = dict(DEFAULTS, **{key: value for key, value in matrix.items() if key in DEFAULTS})
     need((profile in PROFILES or is_soak(profile)) and matrix.get("scenario") == scenario_id(profile), "unsupported-profile")
+    need(matrix.get("capabilities") in (None, "" if is_soak(profile) else CAPSEND_CAPABILITIES), "unsupported-capabilities")
     image = matrix.get("image", IMAGE)
     need(image == IMAGE, "unsupported-image")
     value = {"execution_source": request["execution_source"], "tested_sha": sha(request["tested_sha"]), "controller_sha": sha(request["controller_sha"]),

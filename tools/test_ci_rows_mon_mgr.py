@@ -12,7 +12,8 @@ from ci_row_catalog import ROOT
 
 SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR = "^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$"
 SERVICE_MAP_LARGE_SELECTOR = "^TestCephMonServiceMapLargeMapIntegration$"
-MON_MAP_VERSION_KILL_SELECTOR = "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
+MON_CONNECTED_KILL_SELECTOR = "^TestCephMonMapVersionConnectedKillIntegration$"
+MON_UNPROCESSED_KILL_SELECTOR = "^TestCephMonMapVersionUnprocessedKillIntegration$"
 APPLIED_NAMED_MGR_TELL_SELECTOR = "^TestCephAppliedNamedManagerTellIsNotReplayedIntegration$"
 APPLIED_CURRENT_MGR_TELL_SELECTOR = "^TestCephAppliedCurrentManagerTellIsNotReplayedIntegration$"
 APPLIED_MGR_TELL_SECURE_SELECTOR = "^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$"
@@ -20,7 +21,7 @@ SENT_TELL_CANCELLATION_SELECTOR = "^TestCephSentTellCancellationIntegration$"
 UNAVAILABLE_TARGET_SELECTOR = "^TestCeph(CompleteMonitorOutage|NamedMonitorTell|NamedManagerTell)Integration$"
 # Dedicated legacy-v6 rows of this area that select one test explicitly
 # (collected by the cross-area legacy check).
-DEDICATED_LEGACY_SELECTORS = (SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR, SERVICE_MAP_LARGE_SELECTOR, MON_MAP_VERSION_KILL_SELECTOR,
+DEDICATED_LEGACY_SELECTORS = (SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR, SERVICE_MAP_LARGE_SELECTOR, MON_CONNECTED_KILL_SELECTOR, MON_UNPROCESSED_KILL_SELECTOR,
                               APPLIED_NAMED_MGR_TELL_SELECTOR, APPLIED_CURRENT_MGR_TELL_SELECTOR, APPLIED_MGR_TELL_SECURE_SELECTOR,
                               SENT_TELL_CANCELLATION_SELECTOR, UNAVAILABLE_TARGET_SELECTOR)
 
@@ -29,12 +30,17 @@ class MonMgrCommandRowsTest(ci_row_catalog.RowsTestCase):
     def test_mon_kill_and_large_service_map_rows_are_exclusive(self):
         # The MON SIGKILL cells run on CRC only (the relay decodes CRC frames)
         # with one BlueStore OSD; the large ServiceMap cell needs no OSD.
-        rows = [row for row in self.rows if row.get("test_run") == MON_MAP_VERSION_KILL_SELECTOR]
-        self.assertEqual(rows, [
-            {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host", "osd": "1",
-             "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6", "test_run": MON_MAP_VERSION_KILL_SELECTOR},
-            {"key": "aes256k", "service": "aes256k", "mode": "crc", "family": "6", "stress": "", "runtime": "container", "osd": "1",
-             "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6", "test_run": MON_MAP_VERSION_KILL_SELECTOR}])
+        # Each cell has its own row, because the capability that admits the
+        # MON kill admits it for one exact test.
+        for selector in (MON_CONNECTED_KILL_SELECTOR, MON_UNPROCESSED_KILL_SELECTOR):
+            rows = [row for row in self.rows if row.get("test_run") == selector]
+            self.assertEqual(rows, [
+                {"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host", "osd": "1",
+                 "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6", "test_run": selector, "capabilities": "mon-forced-kill"},
+                {"key": "aes256k", "service": "aes256k", "mode": "crc", "family": "6", "stress": "", "runtime": "container", "osd": "1",
+                 "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6", "test_run": selector, "capabilities": "mon-forced-kill"}])
+        self.assertEqual([row for row in self.rows if row.get("capabilities") == "mon-forced-kill"],
+                         [row for row in self.rows if row.get("test_run") in (MON_CONNECTED_KILL_SELECTOR, MON_UNPROCESSED_KILL_SELECTOR)])
         rows = [row for row in self.rows if row.get("test_run") == SERVICE_MAP_LARGE_SELECTOR]
         self.assertEqual(rows, [
             {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "test_run": SERVICE_MAP_LARGE_SELECTOR},

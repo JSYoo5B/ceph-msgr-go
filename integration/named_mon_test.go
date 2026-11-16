@@ -28,6 +28,7 @@ type namedMonStatus struct {
 	} `json:"monmap"`
 }
 
+//fixture:isolated appends a cluster log entry and reads log history from version 1; the start-state check omits the log
 func TestCephNamedMonitorTellIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	data, err := os.ReadFile(filepath.Join(control, "named-mon-b.json"))

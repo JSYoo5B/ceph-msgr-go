@@ -32,10 +32,20 @@ func TestOSDTopologyVocabularySeparatesDaemonsFromReplication(t *testing.T) {
 
 func TestOSDTopologyErasureCapacityProfile(t *testing.T) {
 	base := map[string]string{"CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_OSD_REPLICAS": "4"}
+	// The four-OSD rows of the catalog, each with the capabilities it declares.
+	selections := map[string]string{"": ""}
+	for _, row := range ciRepositoryCatalog(t) {
+		if row.Params["osd_replicas"] == "4" {
+			selections[row.Params["test_run"]] = row.Params["capabilities"]
+		}
+	}
+	if len(selections) < 3 || selections["^TestCephOSDErasureK2M2Integration$"] != "" {
+		t.Fatal("four-OSD catalog rows", selections)
+	}
 	for _, osdProfile := range []string{"legacy-v6", "replicated-pg-v8"} {
-		for _, selector := range append([]string{""}, osdErasureWidthSelectors...) {
+		for selector, capabilities := range selections {
 			env := copyProfileEnv(base)
-			env["CEPH_MSGR_TEST_OSD_PROFILE"], env["CEPH_MSGR_TEST_RUN"] = osdProfile, selector
+			env["CEPH_MSGR_TEST_OSD_PROFILE"], env["CEPH_MSGR_TEST_RUN"], env["CEPH_MSGR_TEST_CAPABILITIES"] = osdProfile, selector, capabilities
 			p, err := loadProfile(func(name string) string { return env[name] })
 			if err != nil {
 				t.Fatal(osdProfile, selector, err)
@@ -48,27 +58,30 @@ func TestOSDTopologyErasureCapacityProfile(t *testing.T) {
 		}
 	}
 	for name, change := range map[string]map[string]string{
-		"no OSD":            {"CEPH_MSGR_TEST_OSD": "0"},
-		"MemStore":          {"CEPH_MSGR_TEST_OSD_STORE": "memstore"},
-		"reply-v8":          {"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"},
-		"request-v9":        {"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-request-v9-reply-v8"},
-		"broad selector":    {"CEPH_MSGR_TEST_RUN": "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
-		"legacy EC test":    {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureIntegration$"},
-		"k2m1 failover":     {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedFailoverIntegration$"},
-		"joined selectors":  {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasure(K2M2|OptimizedK2M2(Failover)?)Integration$"},
-		"joined in-flight":  {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK2M2(Failover|InFlightMutation)Integration$"},
-		"k2m1 snapshot":     {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration$"},
-		"soak":              {"CEPH_MSGR_TEST_OSD_SOAK": "4m"},
-		"MON freeze":        {"CEPH_MSGR_TEST_MON_FREEZE": "1"},
-		"cache pools":       {"CEPH_MSGR_TEST_OSD_CACHE_POOLS": "1"},
-		"MGR service":       {"CEPH_MSGR_TEST_MGR_SERVICE": "1"},
-		"RBD":               {"CEPH_MSGR_TEST_RBD": "1"},
-		"MDS":               {"CEPH_MSGR_TEST_MDS_FRESH": "1"},
-		"WRITESAME oracle":  {"CEPH_MSGR_TEST_WRITESAME_ORACLE": "/oracle"},
-		"sparse oracle":     {"CEPH_MSGR_TEST_SPARSE_READ_ORACLE": "/oracle"},
-		"unknown topology":  {"CEPH_MSGR_TEST_OSD_REPLICAS": "2"},
-		"padded topology":   {"CEPH_MSGR_TEST_OSD_REPLICAS": "04"},
-		"arbitrary integer": {"CEPH_MSGR_TEST_OSD_REPLICAS": "6"},
+		"no OSD":              {"CEPH_MSGR_TEST_OSD": "0"},
+		"MemStore":            {"CEPH_MSGR_TEST_OSD_STORE": "memstore"},
+		"reply-v8":            {"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-reply-v8"},
+		"request-v9":          {"CEPH_MSGR_TEST_OSD_PROFILE": "replicated-pg-request-v9-reply-v8"},
+		"broad selector":      {"CEPH_MSGR_TEST_RUN": "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"},
+		"legacy EC test":      {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureIntegration$"},
+		"k2m1 failover":       {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedFailoverIntegration$"},
+		"joined selectors":    {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasure(K2M2|OptimizedK2M2(Failover)?)Integration$"},
+		"joined in-flight":    {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK2M2(Failover|InFlightMutation)Integration$"},
+		"k2m1 snapshot":       {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedSnapshotAndDegradedWriteIntegration$"},
+		"soak":                {"CEPH_MSGR_TEST_OSD_SOAK": "4m"},
+		"MON freeze":          {"CEPH_MSGR_TEST_MON_FREEZE": "1"},
+		"cache pools":         {"CEPH_MSGR_TEST_OSD_CACHE_POOLS": "1"},
+		"MGR service":         {"CEPH_MSGR_TEST_MGR_SERVICE": "1"},
+		"RBD":                 {"CEPH_MSGR_TEST_RBD": "1"},
+		"MDS":                 {"CEPH_MSGR_TEST_MDS_FRESH": "1"},
+		"WRITESAME oracle":    {"CEPH_MSGR_TEST_WRITESAME_ORACLE": "/oracle"},
+		"sparse oracle":       {"CEPH_MSGR_TEST_SPARSE_READ_ORACLE": "/oracle"},
+		"unknown topology":    {"CEPH_MSGR_TEST_OSD_REPLICAS": "2"},
+		"padded topology":     {"CEPH_MSGR_TEST_OSD_REPLICAS": "04"},
+		"arbitrary integer":   {"CEPH_MSGR_TEST_OSD_REPLICAS": "6"},
+		"undeclared width":    {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK2M2FailoverIntegration$"},
+		"joined with width":   {"CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$", "CEPH_MSGR_TEST_CAPABILITIES": "osd-erasure-width"},
+		"width on topology 3": {"CEPH_MSGR_TEST_OSD_REPLICAS": "3", "CEPH_MSGR_TEST_RUN": "^TestCephOSDErasureOptimizedK2M2FailoverIntegration$", "CEPH_MSGR_TEST_CAPABILITIES": "osd-erasure-width"},
 	} {
 		env := copyProfileEnv(base)
 		for key, value := range change {

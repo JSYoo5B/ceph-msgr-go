@@ -5,8 +5,13 @@ import (
 	"testing"
 )
 
+// cacheTierOpsSelector is a native test that declares
+// exclusive-osd-cache-pools (catalog.d/osd-cache-pools.json).
+const cacheTierOpsSelector = "^TestCephOSDCacheTierOpsIntegration$"
+
 func TestCacheTierOpsSelectorReusesExclusiveCachePoolProfile(t *testing.T) {
-	config := map[string]string{"CEPH_MSGR_TEST_OSD_CACHE_POOLS": "1", "CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_RUN": cacheTierOpsSelector}
+	config := map[string]string{"CEPH_MSGR_TEST_OSD_CACHE_POOLS": "1", "CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_RUN": cacheTierOpsSelector,
+		"CEPH_MSGR_TEST_CAPABILITIES": "exclusive-osd-cache-pools"}
 	p, err := loadProfile(func(k string) string { return config[k] })
 	if err != nil || p.testRun != cacheTierOpsSelector || p.testEnvironment("/out", "")["CEPH_MSGR_TEST_OSD_CACHE_POOLS"] != "1" {
 		t.Fatal("tier-ops selector did not reach the cache-pool fixture", p.testRun, err)
@@ -17,7 +22,11 @@ func TestCacheTierOpsSelectorReusesExclusiveCachePoolProfile(t *testing.T) {
 			t.Fatal("non-exclusive cache selector accepted", selector)
 		}
 	}
-	config["CEPH_MSGR_TEST_RUN"] = cacheTierOpsSelector
+	config["CEPH_MSGR_TEST_RUN"], config["CEPH_MSGR_TEST_CAPABILITIES"] = cacheTierOpsSelector, ""
+	if _, err := loadProfile(func(k string) string { return config[k] }); err == nil {
+		t.Fatal("cache selector accepted without its capability")
+	}
+	config["CEPH_MSGR_TEST_CAPABILITIES"] = "exclusive-osd-cache-pools"
 	config["CEPH_MSGR_TEST_OSD_CACHE_POOLS"] = "0"
 	p, err = loadProfile(func(k string) string { return config[k] })
 	if err == nil && p.osdCachePools != "0" {

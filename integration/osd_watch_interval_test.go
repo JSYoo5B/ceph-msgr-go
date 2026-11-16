@@ -19,6 +19,8 @@ import (
 // (ETIMEDOUT, the OSD's request to reconnect) while the native watcher list
 // still shows the registration. An explicit RECONNECT on a newer connection
 // restores it and Ping succeeds again. Nothing is re-registered automatically.
+//
+//fixture:isolated kills a replica OSD; recovery waits active+clean without a pg_temp proof and rewrites the fixture object
 func TestCephOSDWatchIntervalChangeIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" || isReplicatedPGFixtureProfile() {
 		// The shared restoration helper is legacy-v6 only.

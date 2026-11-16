@@ -83,6 +83,8 @@ func TestColdBootstrapDialAttributionIncludesLaterManager(t *testing.T) {
 
 // A distinct closed fixture starts with no MGR processes. The native MON map,
 // every dial attempt and renewed MON ticket precede one explicit activation.
+//
+//fixture:isolated starts MGRs on a zero-MGR fixture through start-mgrs; never returns to no MGR
 func TestCephMgrServiceColdBootstrapIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_MGR_SERVICE") != "1" || os.Getenv("CEPH_MSGR_TEST_MGR_COUNT") != "0" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {
 		t.Skip("requires the closed zero-initial-MGR service fixture")

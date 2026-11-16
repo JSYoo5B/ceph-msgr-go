@@ -186,6 +186,8 @@ func objectBackoffHeldDegraded(op objectBackoffOp, client string) bool {
 // default no-backoff configuration, a write held server-side on a degraded
 // object is in flight when its primary is SIGKILLed; the caller then resubmits
 // explicitly to the replacement primary. Native rados clients run alongside.
+//
+//fixture:isolated pauses and stops OSDs and changes flags and config; cleanup waits active+clean without a pg_temp proof
 func TestCephOSDObjectBackoffFailoverIntegration(t *testing.T) {
 	if !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("requires an opt-in three-BlueStore replicated-PG object backoff fixture")

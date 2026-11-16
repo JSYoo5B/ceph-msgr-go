@@ -975,12 +975,15 @@ const (
 	cephfsDataWritebackFenceRestart
 )
 
+//fixture:isolated pauses the MDS log, blackholes acks and fails the owned MDS (mds fail); no restored-state proof
 func TestCephMDSCephFSDataIntegration(t *testing.T) {
 	runCephMDSCephFSDataAcceptance(t, cephfsDataCapSnapRestart)
 }
 
 // TestCephMDSCephFSCapSendRecoveryIntegration runs the same owned data
 // fixture with the cap-send recovery restart instead of the cap-snap one.
+//
+//fixture:isolated restarts the owned rank-0 MDS with mds fail and leaves a new incarnation, a blocklist entry and data
 func TestCephMDSCephFSCapSendRecoveryIntegration(t *testing.T) {
 	runCephMDSCephFSDataAcceptance(t, cephfsDataCapSendRestart)
 }
@@ -988,6 +991,8 @@ func TestCephMDSCephFSCapSendRecoveryIntegration(t *testing.T) {
 // TestCephMDSCephFSWritebackFenceIntegration runs the same owned data fixture
 // with the interrupted-writeback, revoke, restart and eviction recipe instead
 // of the cap-snap restart.
+//
+//fixture:isolated restarts the owned MDS with mds fail and evicts a client session, adding a blocklist entry that stays
 func TestCephMDSCephFSWritebackFenceIntegration(t *testing.T) {
 	runCephMDSCephFSDataAcceptance(t, cephfsDataWritebackFenceRestart)
 }

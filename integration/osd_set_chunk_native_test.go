@@ -154,6 +154,8 @@ func setChunkRefsEncoding(count int, name string, hash uint32, pool int64) []byt
 // the target's cls_cas chunk_refs attribute and the source's own reference
 // count before and after; deleting the source releases both references and
 // the target. No product client sends SET_CHUNK.
+//
+//fixture:isolated owned-pool cleanup leaves mon_allow_pool_delete config set; its native checkpoint runs once per fixture
 func TestCephOSDSetChunkNativeIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

@@ -28,8 +28,12 @@ import (
 // The RBD mirror path-recovery checkpoint owns a second disposable
 // destination cluster and one rbd-mirror daemon for the fixture's own
 // single-BlueStore cluster, which is the mirror source. It is admitted only
-// by its exact selector; broad suites never start it.
-const rbdMirrorSelector = "^TestCephRBDMirrorPathRecoveryIntegration$"
+// by its capability for one exact test; broad suites never start it.
+var capRBDMirror = defineCapability("rbd-mirror",
+	"start a second disposable destination cluster and an rbd-mirror daemon for one test",
+	"OSD=1 OSD_STORE=bluestore OSD_REPLICAS=1 OSD_PROFILE=legacy-v6 IP_FAMILY=4 MAPPED_IPV6=0 RBD=0 MDS_FRESH=0 OSD_CACHE_POOLS=0 MGR_SERVICE=0 OSD_SOAK=",
+	func(p profile) bool { return p.rbdMirrorFixture() })
+
 const rbdMirrorMarker = "CEPH_MSGR_NATIVE_RBD_MIRROR"
 
 // rbdMirrorNetemImage is the provider's netem helper image
@@ -66,7 +70,7 @@ func (p profile) rbdMirrorFixture() bool {
 }
 
 func (p profile) rbdMirrorSelected() bool {
-	return p.testRun == rbdMirrorSelector && p.rbdMirrorFixture()
+	return p.admits(capRBDMirror)
 }
 
 // rbdMirrorPayload is the deterministic image content; the product test
@@ -301,7 +305,7 @@ func (c *fixtureCluster) controlRBDMirrorRequest(ctx context.Context, out string
 func (c *fixtureCluster) rbdMirrorStart(ctx context.Context, s *rbdMirrorScope) error {
 	p := c.profile
 	r := &s.receipt
-	r.Schema, r.Selector, r.CephImage, r.NetemImage = 1, rbdMirrorSelector, p.image, rbdMirrorNetemImage
+	r.Schema, r.Selector, r.CephImage, r.NetemImage = 1, p.testRun, p.image, rbdMirrorNetemImage
 	r.Pool, r.Image, r.Mode = rbdMirrorPool, rbdMirrorImage, string(rbdmirror.ModeSnapshot)
 	r.Source.KeyType, r.Source.Messenger, r.Source.AddressKind = p.keyType, p.connectionMode, "ipv4"
 	osds, err := c.cluster.OSDs(ctx)

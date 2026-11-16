@@ -41,6 +41,7 @@ func nativeReadonlyXattr(t *testing.T, ctx context.Context, oracle osdFixtureOra
 	return result
 }
 
+//fixture:shareable sets an xattr on the fixture object; cleanup removes it, restores mtime and natively verifies the state
 func TestCephOSDXattrPermissionsIntegration(t *testing.T) {
 	admin, _, oracle, original := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

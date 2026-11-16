@@ -36,9 +36,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # The Python tools list Go tests with go test -list in every module,
-      # and the fixture module needs Go 1.26 or later. The product steps
-      # below run with the product's Go 1.25.0, installed after this step.
+      # The Python tools list Go tests with go test -list in every module, and
+      # validate passes every catalog row through the fixture's own admission
+      # (a cluster-free Go test of the fixture module). The fixture module needs
+      # Go 1.26 or later. The product steps below run with the product's
+      # Go 1.25.0, installed after this step.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.x'

@@ -27,6 +27,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/wire"
 )
 
+//fixture:isolated wipes the rotating service keys each cycle and advances the auth epoch; nothing restores it
 func TestCephServiceKeyEpochIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_AUTH_EPOCH") != "1" {
 		t.Skip("requires an isolated service-key disposal fixture")

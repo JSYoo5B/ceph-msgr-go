@@ -24,6 +24,7 @@ func (c *largeReplyConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
+//fixture:shareable sends a large padded status request; reads only
 func TestCephLargeMonitorReplyIntegration(t *testing.T) {
 	options := integrationOptions(t)
 	options.MaxFrameSize = 32 << 20

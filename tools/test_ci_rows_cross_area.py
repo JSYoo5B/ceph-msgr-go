@@ -15,6 +15,7 @@ class CrossAreaRowsTest(ci_row_catalog.RowsTestCase):
     def test_closed_profile_and_selector_reach_the_fixture(self):
         self.assertIn("CEPH_MSGR_TEST_OSD_PROFILE: ${{ matrix.osd_profile || 'legacy-v6' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}", self.workflow)
+        self.assertIn("CEPH_MSGR_TEST_CAPABILITIES: ${{ matrix.capabilities || '' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_FRESH: ${{ matrix.mds_fresh || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_COMMANDS: ${{ matrix.mds_commands || '0' }}", self.workflow)
         self.assertIn("CEPH_MSGR_TEST_MDS_SESSIONS: ${{ matrix.mds_sessions || '0' }}", self.workflow)

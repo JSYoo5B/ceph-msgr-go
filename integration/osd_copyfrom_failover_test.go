@@ -23,6 +23,8 @@ import (
 // source PG gets a new primary; the destination OSD then resends its read and
 // completes the copy. The caller only waits: one request, one ONDISK reply,
 // and the destination equals the source natively.
+//
+//fixture:isolated pauses, kills and restarts an OSD; owned-pool cleanup leaves mon_allow_pool_delete in central config
 func TestCephOSDCopyFromSourceFailoverIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("source failover needs three BlueStore replicas")
@@ -111,6 +113,8 @@ func TestCephOSDCopyFromSourceFailoverIntegration(t *testing.T) {
 // and nothing is resent. After both OSDs are back and the PGs are clean the
 // destination is either absent or an exact copy, never partial, and it does
 // not change afterwards.
+//
+//fixture:isolated pauses and kills OSDs and restarts them; owned-pool cleanup leaves mon_allow_pool_delete in config
 func TestCephOSDCopyFromDestinationCrashIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("destination crash needs three BlueStore replicas")

@@ -18,6 +18,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:shareable sends only pg stat and status reads; the stall is in a client-side connection wrapper
 func TestCephManagerReceiveStallIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {
 		t.Skip("requires a disposable fixture")
@@ -196,6 +197,7 @@ func (p *writeStallRelay) Close() error {
 	return nil
 }
 
+//fixture:isolated an applied config-key set is left behind when the test fails; config-key is not in the start-state check
 func TestCephMonitorWriteStallIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {
 		t.Skip("requires a disposable fixture")

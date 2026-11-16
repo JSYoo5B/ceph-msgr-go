@@ -20,6 +20,8 @@ import (
 // split carried the entry with its request ID) with the original user version,
 // and nothing executes again. The same holds in reverse: an APPEND lost in the
 // child is answered from the parent's log after the PGs merge back.
+//
+//fixture:shareable splits fixture pool PGs 8 to 16; checked finish merges back to 8 and waits for the pool active+clean
 func TestCephOSDSplitResubmitIntegration(t *testing.T) {
 	if !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
 		t.Skip("requires an owned single-OSD replicated-PG PG split fixture")

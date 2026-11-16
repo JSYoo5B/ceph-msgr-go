@@ -59,6 +59,10 @@ type fixtureCluster struct {
 	// rbdMirror owns the RBD mirror checkpoint's destination cluster, mirror
 	// daemon and directed source OSD fault.
 	rbdMirror *rbdMirrorScope
+	// startState is the snapshot recorded once the fixture was ready, before
+	// its control loop started; startStateErr explains a missing snapshot.
+	startState    *startStateSnapshot
+	startStateErr error
 }
 
 func (c *fixtureCluster) NetworkName() string { return clusterNetworkName(c.cluster) }
@@ -235,8 +239,7 @@ func fixtureTicketTTLs(p profile) (auth, service time.Duration) {
 		// Dedicated short-ticket authentication below retains its own TTL.
 		auth = 120 * time.Second
 	}
-	if p.osd == "1" && p.osdProfile == "replicated-pg-v8" && p.osdReplicas == "3" &&
-		p.osdStore == "bluestore" && p.mdsFresh != "1" && p.shortTickets != "1" && p.testRun == "^TestCephOSDUpmapIntegration$" {
+	if p.admits(capOSDLongTickets) {
 		// This placement-only recipe can spend tens of seconds in native
 		// controls. A 12 s ticket leaves only 3 s at renewal, less than one
 		// 10 s MON setup attempt. Give both reclaim and OSD service proofs
@@ -266,7 +269,7 @@ func fixtureTicketTTLs(p profile) (auth, service time.Duration) {
 // Zero leaves the producer's default untouched for every other profile.
 func fixtureOSDBlockSize(p profile) int64 {
 	if p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "3" &&
-		p.osdSoak != "" && p.testRun == "^TestCephOSDSoak(Failover)?Integration$" {
+		p.osdSoak != "" && p.runsDefault() {
 		return 4 << 30
 	}
 	return 0
@@ -551,6 +554,9 @@ func startCluster(ctx context.Context, p profile, out string) (*fixtureCluster, 
 			return c, err
 		}
 	}
+	// Every preparation step above has settled; nothing has served a control
+	// request yet. This is the state the start-state check compares against.
+	c.recordStartState(ctx, out)
 	controlCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 	c.done = make(chan struct{})

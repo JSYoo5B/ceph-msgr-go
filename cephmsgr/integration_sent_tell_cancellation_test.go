@@ -44,6 +44,8 @@ func sentMgrStatCommand(padding int) Command {
 // bytes then arrived on its connection and were withheld. Nothing is decoded,
 // so the cell runs in CRC and secure modes alike and attributes no byte to a
 // reply.
+//
+//fixture:shareable sends only read-only version and pg stat commands, then cancels them or closes its own clients
 func TestCephSentTellCancellationIntegration(t *testing.T) {
 	if selected := flag.Lookup("test.run"); selected == nil || selected.Value.String() != sentTellCancellationSelector {
 		t.Skip("sent Tell cancellation requires its exclusive selector " + sentTellCancellationSelector)

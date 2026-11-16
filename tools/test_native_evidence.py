@@ -86,8 +86,14 @@ class NativeEvidenceTests(unittest.TestCase):
         for row in rows:
             request = dict(self.request, matrix=dict(row["params"], scenario=row["id"]))
             self.assertIn(evidence.context(request)["profile"], evidence.PROFILES)
+        # The rows declare their fixture capability; evidence recorded
+        # before the declaration (no capabilities field) keeps its context.
+        self.assertEqual({row["params"].get("capabilities") for row in rows}, {evidence.CAPSEND_CAPABILITIES})
+        legacy = dict(self.request, matrix={key: value for key, value in rows[0]["params"].items() if key != "capabilities"} | {"scenario": rows[0]["id"]})
+        self.assertIn(evidence.context(legacy)["profile"], evidence.PROFILES)
         for field, value in (("scenario", "arbitrary"), ("test_run", "^TestOther$"), ("mode", "secure"),
-                             ("image", "quay.io/ceph/ceph:latest"), ("unknown", "1")):
+                             ("image", "quay.io/ceph/ceph:latest"), ("unknown", "1"), ("capabilities", "exclusive-mds-cephfs"),
+                             ("capabilities", "")):
             request = copy.deepcopy(self.request)
             request["matrix"][field] = value
             with self.subTest(field=field), self.assertRaises(evidence.EvidenceError):

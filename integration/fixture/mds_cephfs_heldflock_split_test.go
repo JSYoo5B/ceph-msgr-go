@@ -9,9 +9,23 @@ import (
 	"testing"
 )
 
+// The native tests that declare the held-FLOCK split capabilities
+// (catalog.d/mds-cephfs-heldflock-split-*.json).
+const (
+	mdsCephFSHeldFlockSplitSelector          = "^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$"
+	mdsCephFSHeldFlockSplitFragmentsSelector = "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$"
+)
+
+// heldFlockProfile is a completion profile that runs selector with the
+// capabilities its catalog rows declare.
+func heldFlockProfile(t *testing.T, selector string) profile {
+	return profile{mdsFresh: "1", mdsCephFSCompletion: "1", testRun: selector, capabilities: catalogCapabilities(t, selector)}
+}
+
 func TestMDSCephFSHeldFlockSplitSelectorIsExclusive(t *testing.T) {
 	env := mdsCephFSCompletionProfileEnv()
 	env["CEPH_MSGR_TEST_RUN"] = mdsCephFSHeldFlockSplitSelector
+	env["CEPH_MSGR_TEST_CAPABILITIES"] = "mds-held-flock-split"
 	p, err := loadProfile(func(n string) string { return env[n] })
 	if err != nil || p.testRun != mdsCephFSHeldFlockSplitSelector {
 		t.Fatal("exclusive held-lock split selector refused", p.testRun, err)
@@ -19,7 +33,15 @@ func TestMDSCephFSHeldFlockSplitSelectorIsExclusive(t *testing.T) {
 	for _, selector := range []string{"^TestCephMDSCephFS(MultiReconnect|HeldFlockSplitReconnect)Integration$", "TestCephMDSCephFSHeldFlockSplitReconnectIntegration",
 		"^TestCephMDSCephFSHeldFlockSplitReconnectIntegrationExtended$"} {
 		env["CEPH_MSGR_TEST_RUN"] = selector
-		if _, err := loadProfile(func(n string) string { return env[n] }); err == nil {
+		// A broad selector is refused with the capability; a foreign test
+		// without its declaration is refused as well. The fixture does not
+		// know which test a declaration belongs to.
+		if _, err := loadProfile(func(n string) string { return env[n] }); err == nil && !exactTestSelector.MatchString(selector) {
+			t.Fatal("broad or foreign held-lock split selector admitted", selector)
+		}
+		undeclared := copyProfileEnv(env)
+		undeclared["CEPH_MSGR_TEST_CAPABILITIES"] = ""
+		if _, err := loadProfile(func(n string) string { return undeclared[n] }); err == nil {
 			t.Fatal("broad or foreign held-lock split selector admitted", selector)
 		}
 	}
@@ -28,18 +50,18 @@ func TestMDSCephFSHeldFlockSplitSelectorIsExclusive(t *testing.T) {
 	// refuses them.
 	for _, action := range mdsCephFSHeldFlockSplitActions {
 		for _, selector := range []string{mdsCephFSHeldFlockSplitSelector, mdsCephFSHeldFlockSplitFragmentsSelector} {
-			if err := admitMDSCephFSHeldFlockSplit(action, selector); err != nil {
+			if err := admitMDSCephFSHeldFlockSplit(action, heldFlockProfile(t, selector)); err != nil {
 				t.Fatal("held-lock split action refused under its selector", action, selector, err)
 			}
 		}
 		for _, selector := range []string{"", "^TestCephMDSCephFSCompletionIntegration$", "^TestCephMDSCephFSMultiReconnectIntegration$"} {
-			if err := admitMDSCephFSHeldFlockSplit(action, selector); err == nil {
+			if err := admitMDSCephFSHeldFlockSplit(action, heldFlockProfile(t, selector)); err == nil {
 				t.Fatal("held-lock split action admitted under another selector", action, selector)
 			}
 		}
 	}
 	for _, action := range []string{"list", "debug-on", "reconnect-log", "restart-arm"} {
-		if err := admitMDSCephFSHeldFlockSplit(action, "^TestCephMDSCephFSMultiReconnectIntegration$"); err != nil {
+		if err := admitMDSCephFSHeldFlockSplit(action, heldFlockProfile(t, "^TestCephMDSCephFSMultiReconnectIntegration$")); err != nil {
 			t.Fatal("an existing completion action was bound to the held-lock selector", action, err)
 		}
 	}
@@ -50,6 +72,7 @@ func TestMDSCephFSHeldFlockSplitSelectorIsExclusive(t *testing.T) {
 func TestMDSCephFSHeldFlockSplitFragmentsSelectorIsExclusive(t *testing.T) {
 	env := mdsCephFSCompletionProfileEnv()
 	env["CEPH_MSGR_TEST_RUN"] = mdsCephFSHeldFlockSplitFragmentsSelector
+	env["CEPH_MSGR_TEST_CAPABILITIES"] = "mds-held-flock-split,mds-held-flock-split-fragments"
 	p, err := loadProfile(func(n string) string { return env[n] })
 	if err != nil || p.testRun != mdsCephFSHeldFlockSplitFragmentsSelector || mdsCephFSHeldFlockSplitFragmentsSelector == mdsCephFSHeldFlockSplitSelector {
 		t.Fatal("exclusive two-fragment held-lock selector refused", p.testRun, err)
@@ -57,19 +80,27 @@ func TestMDSCephFSHeldFlockSplitFragmentsSelectorIsExclusive(t *testing.T) {
 	for _, selector := range []string{"^TestCephMDSCephFSHeldFlockSplit(Fragments)?ReconnectIntegration$", "TestCephMDSCephFSHeldFlockSplitFragmentsIntegration",
 		"^TestCephMDSCephFSHeldFlockSplitFragmentsIntegrationExtended$", "^TestCephMDSCephFSHeldFlockSplitFragments"} {
 		env["CEPH_MSGR_TEST_RUN"] = selector
-		if _, err := loadProfile(func(n string) string { return env[n] }); err == nil {
+		// A broad selector is refused with the capability; a foreign test
+		// without its declaration is refused as well. The fixture does not
+		// know which test a declaration belongs to.
+		if _, err := loadProfile(func(n string) string { return env[n] }); err == nil && !exactTestSelector.MatchString(selector) {
+			t.Fatal("broad or foreign two-fragment held-lock selector admitted", selector)
+		}
+		undeclared := copyProfileEnv(env)
+		undeclared["CEPH_MSGR_TEST_CAPABILITIES"] = ""
+		if _, err := loadProfile(func(n string) string { return undeclared[n] }); err == nil {
 			t.Fatal("broad or foreign two-fragment held-lock selector admitted", selector)
 		}
 	}
 	if !slices.Equal(mdsCephFSHeldFlockSplitFragmentsActions, []string{"split-final-flock-ex-nb"}) || slices.Contains(mdsCephFSHeldFlockSplitActions, "split-final-flock-ex-nb") {
 		t.Fatal("the final-fragment probe is not the one action of its selector", mdsCephFSHeldFlockSplitFragmentsActions)
 	}
-	if err := admitMDSCephFSHeldFlockSplit("split-final-flock-ex-nb", mdsCephFSHeldFlockSplitFragmentsSelector); err != nil {
+	if err := admitMDSCephFSHeldFlockSplit("split-final-flock-ex-nb", heldFlockProfile(t, mdsCephFSHeldFlockSplitFragmentsSelector)); err != nil {
 		t.Fatal("final-fragment lock probe refused under its selector", err)
 	}
 	// The merged single-lock selector does not gain the second probe.
 	for _, selector := range []string{"", "^TestCephMDSCephFSCompletionIntegration$", "^TestCephMDSCephFSMultiReconnectIntegration$", mdsCephFSHeldFlockSplitSelector} {
-		if err := admitMDSCephFSHeldFlockSplit("split-final-flock-ex-nb", selector); err == nil {
+		if err := admitMDSCephFSHeldFlockSplit("split-final-flock-ex-nb", heldFlockProfile(t, selector)); err == nil {
 			t.Fatal("final-fragment lock probe admitted under another selector", selector)
 		}
 	}

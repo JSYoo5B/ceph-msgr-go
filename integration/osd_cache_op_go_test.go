@@ -225,6 +225,7 @@ func cacheOpGoLostFlushUnknown(reply cephmsgr.OSDReply, err error, globalID uint
 	return nil
 }
 
+//fixture:shareable seeds, pins and flushes its own heads in the cache pools; checked finish deletes them and confirms absence
 func TestCephOSDCacheOpGoIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_CACHE_POOLS") != "1" {
 		t.Skip("requires isolated cache-pool fixture")

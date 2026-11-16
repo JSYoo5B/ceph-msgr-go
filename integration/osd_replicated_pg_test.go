@@ -222,6 +222,7 @@ type replicatedPGCase struct {
 	FreshReply *cephmsgr.OSDReply `json:"fresh_go_reply,omitempty"`
 }
 
+//fixture:shareable reads the fixture object and writes only owned UUID objects; checked cleanup removes them
 func TestCephOSDReplicatedPGIntegration(t *testing.T) {
 	if !isReplicatedPGFixtureProfile() {
 		t.Skip("requires an explicit replicated-PG fixture profile")

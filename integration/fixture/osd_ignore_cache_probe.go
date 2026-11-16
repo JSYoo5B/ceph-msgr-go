@@ -20,8 +20,22 @@ import (
 // product feature advertisement. Its explicit entry point isolates tier pools
 // (which make MON require OSD_CACHEPOOL) from all ordinary integration suites.
 func validateIgnoreCacheProbeProfile(p profile) error {
+	if err := validateIgnoreCacheProbeTopology(p); err != nil {
+		return err
+	}
+	// With every other fixture excluded above, the default selection is the
+	// broad OSD one; the probe runs no other test selection.
+	if !p.runsDefault() {
+		return errors.New("native IgnoreCache probe requires the OSD fixture's default selection")
+	}
+	return nil
+}
+
+// validateIgnoreCacheProbeTopology is the probe's fixture shape, which the
+// cache-pool profile also has to keep (profile.go).
+func validateIgnoreCacheProbeTopology(p profile) error {
 	if p.osdCachePools != "0" || p.image != profileDefaultImage || p.osd != "1" || p.osdReplicas != "1" || p.osdStore != "bluestore" || p.osdProfile != "legacy-v6" ||
-		p.mdsFresh != "0" || p.mdsCommands != "0" || p.mdsSessions != "0" || p.mdsCephFS != "0" || p.mdsCephFSRanks != "0" || p.mdsCephFSCompletion != "0" || p.mdsCephFSData != "0" || p.rbdBase != "0" || p.monPing != "0" || p.monFreeze != "" || p.testRun != "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$" || p.osdSoak != "" || p.stressDuration != "" ||
+		p.mdsFresh != "0" || p.mdsCommands != "0" || p.mdsSessions != "0" || p.mdsCephFS != "0" || p.mdsCephFSRanks != "0" || p.mdsCephFSCompletion != "0" || p.mdsCephFSData != "0" || p.rbdBase != "0" || p.monPing != "0" || p.mgrService != "0" || p.monFreeze != "" || p.osdSoak != "" || p.stressDuration != "" ||
 		p.expireTickets != "0" || p.idleSessions != "0" || p.authEpoch != "0" || p.shortTickets != "0" || p.nativeMgrPreparation != "0" || p.modeRejection != "" ||
 		p.sparseReadOracle != "" || p.mapExtOracle != "" || p.u64XattrOracle != "" || p.writeSameOracle != "" || p.race != "0" || p.mappedIPv6 != "0" {
 		return errors.New("native IgnoreCache probe requires pinned isolated legacy-v6 single BlueStore OSD, no MDS/RBD or other test selector/fault profile")

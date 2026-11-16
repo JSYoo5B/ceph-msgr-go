@@ -18,6 +18,8 @@ import (
 // data error injected on one replica and found by a deep scrub is listed as
 // one raw inconsistent-object value for that object, under the interval the
 // native CLI reports; a stale interval is -EAGAIN.
+//
+//fixture:isolated injects a data error and deep-scrubs; owned-pool cleanup leaves mon_allow_pool_delete config set
 func TestCephOSDScrubListIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("a replica data error needs three BlueStore replicas")

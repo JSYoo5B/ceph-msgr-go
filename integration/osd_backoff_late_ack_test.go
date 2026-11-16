@@ -34,6 +34,8 @@ type nativeLateAckReceipt struct {
 // Unlike the normal-ACK acceptance, this leaves the native BLOCK unacknowledged
 // until after activation delivered UNBLOCK. The same authenticated connection
 // must retain a bounded receipt and local gate until the original ACK is queued.
+//
+//fixture:isolated sets fixture pool size/min_size to 2/2 and back; restore waits for one PG active, not all clean
 func TestCephOSDBackoffLateAckIntegration(t *testing.T) {
 	if !isReplicatedPGFixtureProfile() || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "1" {
 		t.Skip("requires an opt-in single-OSD replicated-PG native late-ACK fixture")

@@ -10,6 +10,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
+//fixture:isolated runs mgr fail; the active MGR is not restored
 func TestCephReadinessIntegration(t *testing.T) {
 	c, ctx := fixtureClient(t, time.Minute)
 	if err := c.WaitMonReady(ctx); err != nil {

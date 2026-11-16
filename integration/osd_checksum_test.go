@@ -54,6 +54,7 @@ func nativeChecksum(t *testing.T, ctx context.Context, object string, offset, le
 	return receipt
 }
 
+//fixture:shareable read-only checksums on its owned UUID objects; checked omap-write cleanup removes them
 func TestCephOSDChecksumIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)

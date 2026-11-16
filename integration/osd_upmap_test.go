@@ -247,6 +247,8 @@ func checkUpmapRestored(t *testing.T, s nativeUpmapScope, prepared nativeUpmapSc
 
 // This is caller-side acceptance for an exclusively owned auxiliary pool. It
 // never calculates CRUSH placement, decodes inner maps or replays a mutation.
+//
+//fixture:isolated creates an owned upmap pool that its finish deliberately keeps; only upmap items and objects are removed
 func TestCephOSDUpmapIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_PROFILE") != "replicated-pg-v8" || os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("requires opt-in three-BlueStore replicated-pg-v8 native upmap fixture")

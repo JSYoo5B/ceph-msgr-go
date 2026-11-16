@@ -18,6 +18,8 @@ import (
 // A committed WRITESAME reply survives SIGKILL of the object's primary: the two
 // remaining BlueStore replicas hold identical bytes, version and mtime, and a
 // caller-targeted read on the replacement primary sees them without any replay.
+//
+//fixture:isolated kills the primary OSD; recovery waits active+clean without a pg_temp proof and rewrites the fixture object
 func TestCephOSDWriteSameFailoverIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("requires three sparse-file BlueStore replicas")

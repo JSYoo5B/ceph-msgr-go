@@ -16,6 +16,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:shareable restarts the current MON 8 times; each restart control waits until the 3-MON quorum is back
 func TestCephRepeatedMonitorRecoveryIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if control == "" {

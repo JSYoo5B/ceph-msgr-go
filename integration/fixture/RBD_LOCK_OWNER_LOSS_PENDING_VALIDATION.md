@@ -91,12 +91,11 @@ and no other RBD test runs. Required rows:
 Reproduce the CRC row with:
 
 ```sh
-CEPH_MSGR_TEST_KEY_TYPE=aes CEPH_MSGR_TEST_SERVICE_CIPHER=aes \
-CEPH_MSGR_TEST_CONNECTION_MODE=crc CEPH_MSGR_TEST_IP_FAMILY=4 \
-CEPH_MSGR_TEST_RUNTIME=host CEPH_MSGR_TEST_OSD=1 CEPH_MSGR_TEST_OSD_STORE=bluestore \
-CEPH_MSGR_TEST_OSD_REPLICAS=1 CEPH_MSGR_TEST_OSD_PROFILE=legacy-v6 CEPH_MSGR_TEST_RBD=1 \
-CEPH_MSGR_TEST_RUN='^TestCephRBDLockOwnerLossPendingIntegration$' \
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerlosspending) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
 Image, clients and the two handoffs are those of the lock-owner-loss record.

@@ -73,7 +73,7 @@ func (p profile) daemonControlAdmitted(kind, action string) bool {
 	if kind != "mds" {
 		return kind == "mon" || kind == "mgr" || kind == "osd"
 	}
-	return action == "stop" && p.mdsCommands == "1" && p.mdsFresh == "1" && p.testRun != daemonCommandMDSSelector
+	return action == "stop" && p.mdsCommands == "1" && p.mdsFresh == "1" && !p.admits(capMDSAppliedCommand)
 }
 
 func (c *fixtureCluster) controlDaemonRequests(ctx context.Context, out string) error {

@@ -116,6 +116,7 @@ func fetchNativeCatalogs(t *testing.T, ctx context.Context, c *cephmsgr.Client, 
 	return mon, mgr
 }
 
+//fixture:isolated reads command catalogs, then runs mgr fail; the active MGR is not restored
 func TestCephCommandDescriptionsIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	c, ctx := fixtureClient(t, time.Minute)

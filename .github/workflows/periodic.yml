@@ -37,10 +37,13 @@ jobs:
         with:
           persist-credentials: false
           ref: main
-      # validate resolves row selectors against Go's own test listing.
+      # validate resolves row selectors against Go's own test listing and
+      # passes every catalog row through the fixture's own admission, a
+      # cluster-free Go test of the fixture module (Go 1.26 or later).
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.0'
+          go-version: '1.27.x'
+          cache-dependency-path: integration/fixture/go.sum
       - name: Validate the catalog and select everything
         id: plan
         run: |

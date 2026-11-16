@@ -33,6 +33,7 @@ func (ctx *snapshotAdmissionContext) Err() error {
 	return ctx.Context.Err()
 }
 
+//fixture:isolated leaves a native-context-admission config-key that is never removed
 func TestCephContextAdmissionIntegration(t *testing.T) {
 	c, ctx := fixtureClient(t, 30*time.Second)
 	for _, mgr := range []bool{false, true} {

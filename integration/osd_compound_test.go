@@ -41,6 +41,7 @@ func nativeCompoundSnapshot(t *testing.T, ctx context.Context, label string) mut
 	return result.Snapshot
 }
 
+//fixture:isolated rewrites and deletes the shared fixture object; the restore rewrites bytes and mtime only, unverified
 func TestCephOSDCompoundIntegration(t *testing.T) {
 	c, ctx, oracle, original := osdFixture(t)
 	defer restoreMutationObject(t, c, oracle, original)
