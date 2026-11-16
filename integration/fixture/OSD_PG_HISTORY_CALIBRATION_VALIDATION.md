@@ -130,7 +130,9 @@ evidence for a later revision.
   finds an acknowledged request's entry on three of four shards. Two
   [continuations](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md) find that
   fourth shard holding later entries without it, and with its log head past
-  its last entry after a peering. The proposed history-eviction resubmission cell needs a
+  its last entry after a peering; two
+  [more](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md) find it holding that
+  entry after the shard was recovered from the primary's log. The proposed history-eviction resubmission cell needs a
   complete absence judgement for every acting shard at the intended PG
   state. That oracle remains open.
 - The native calibration exercises only the ordinary `log` tier. Positions in

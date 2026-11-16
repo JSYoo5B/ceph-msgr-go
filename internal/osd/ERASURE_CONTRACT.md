@@ -126,10 +126,23 @@ the acting set unchanged and no daemon stopped, shard 1's `last_update`,
 entry was still the full write, and its own info recorded that version
 range; the first write of the new interval, although confined to shard 0's
 chunk, named every shard and was held by all four. A shard's log head is
-therefore not evidence that the shard holds every entry up to it. A primary
-change onto another shard, a degraded write and the recovery of a shard
-that missed a write were not observed with this capture, and nothing here
-is a replay or deduplication claim.
+therefore not evidence that the shard holds every entry up to it.
+
+Two further [controls](../../integration/fixture/OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md)
+take shard 1's OSD out of the PG after the overwrite, through the fixture's
+forced kill of an owned OSD, and start it again. With nothing written in
+between, the returned shard's copy was as after the interval change: only
+the full write's entry under a head at the overwrite's version. With one
+acknowledged Go overwrite inside shard 1's chunk while the PG was active
+without it, the returned shard's copy held all three entries once the PG was
+clean again, with an empty missing set: the primary's log at the return gave
+it the entry of the overwrite it had been left out of, which names the other
+three shards only. Which entries a shard's own log holds therefore also
+depends on whether it was recovered after the write. Neither control reads
+the returned shard's chunk bytes. A primary change onto another shard, the
+outage of a parity shard's or the primary's OSD, and a write during the
+recovery itself were not observed with this capture, and nothing here is a
+replay or deduplication claim.
 
 ## Optimized EC pools (`allow_ec_optimizations`)
 

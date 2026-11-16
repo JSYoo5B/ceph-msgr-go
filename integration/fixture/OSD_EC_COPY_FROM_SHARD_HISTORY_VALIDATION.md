@@ -90,8 +90,9 @@ The fixture admits the capture only for the selector
 `^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$`, for the
 selector of the
 [partial-overwrite control](OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md)
-and for the selectors of its
-[two continuations](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md),
+and for the selectors of its four continuations
+([later state](OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md),
+[outage and recovery](OSD_EC_PARTIAL_WRITE_RECOVERY_VALIDATION.md)),
 each on the four-BlueStore topology, and tells the test through
 `CEPH_MSGR_NATIVE_SHARD_HISTORY=1`. Any other selection refuses the control.
 

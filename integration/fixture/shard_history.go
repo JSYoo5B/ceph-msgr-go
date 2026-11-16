@@ -67,24 +67,29 @@ const (
 )
 
 // shardHistorySelectors are the only selections that admit the capture: the
-// COPY_FROM2 control, the partial-overwrite control and its two
-// continuations (a later write that names the left-out shard, and an owned
-// interval change). Each is one exact test of the four-OSD topology's closed
-// list.
+// COPY_FROM2 control, the partial-overwrite control and its four
+// continuations (a later write that names the left-out shard, an owned
+// interval change, and an owned outage of the left-out shard's OSD without
+// and with a write in between). Each is one exact test of the four-OSD
+// topology's closed list.
 var shardHistorySelectors = []string{
 	"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
 }
 
 // pgIntervalSelectors are the only selections whose test may use the
 // owned-pool oracle's pginterval mode, which observes one owned PG and can
-// end its interval with one `pg repeer`: the two continuations of the
-// partial-overwrite control.
+// end its interval with one `pg repeer`: the four continuations of the
+// partial-overwrite control. The two outage controls only observe with it.
 var pgIntervalSelectors = []string{
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
 }
 
 var shardHistoryPGID = regexp.MustCompile(`^[1-9][0-9]{0,9}\.(0|[1-9a-f][0-9a-f]{0,7})$`)
