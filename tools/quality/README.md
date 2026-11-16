@@ -4,9 +4,13 @@ This independent, standard-library-only Go module keeps source analysis and
 subprocess execution out of the product module and dependency graph. It requires
 Go 1.24. `structmetrics` measures concrete Go owners and package size;
 `lintcalibration` records and pairs complexity, function length and duplication
-findings from golangci-lint v2.15.0.
+findings from golangci-lint v2.15.0. `testdecls` prints the top-level function
+declarations of the test files the Go build context selects in a package
+directory, with whether each has the `go test` test shape; the Python inventory
+checks under `tools/` use it to tie a test name to its declaring file
+(`go_test_list.declares`), while `go test -list` decides which tests exist.
 
-The analyzers and their tests are adapted from ceph-testcontainers-go commit
+The two analyzers and their tests are adapted from ceph-testcontainers-go commit
 `2d4243d1e04167ff570f582a899b91a58871b61f`, originally in
 `internal/tools/structmetrics` and `internal/tools/lintcalibration`, under MIT.
 See `LICENSE` and the repository's `THIRD_PARTY_NOTICES.md`.
