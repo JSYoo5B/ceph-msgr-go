@@ -5,7 +5,7 @@ import unittest
 
 import native_test_results as results
 import scenario_plan as plan
-from test_go_test_list import SHAPES, module, tests_file
+from test_go_test_list import SHAPES, TWICE, module, tests_file
 
 
 class NativeResultTests(unittest.TestCase):
@@ -71,6 +71,24 @@ class NativeResultTests(unittest.TestCase):
         self.assertTrue(results.verify(request, log)["passed"])
         self.assertIn("api/TestAlias: MISSING", results.verify(request, log.replace("--- PASS: TestAlias (0.00s)\n", ""))["problems"])
         self.assertIn("api/Test: MISSING", results.verify(request, log.replace("--- PASS: Test (0.00s)\n", ""))["problems"])
+
+    def test_snapshot_refuses_a_selected_name_listed_twice(self):
+        # The reviewer's case: internal and external TestActual in the API
+        # suite. Without the refusal, a log of the internal test alone has one
+        # PASS for api/TestActual and would satisfy the request.
+        root = module(self, TWICE)
+        (root / "cephmsgr").mkdir()
+        (root / "cephmsgr" / "client_test.go").write_text(tests_file("func TestActual(t *testing.T) {}", package="cephmsgr"),
+                                                          encoding="utf-8")
+        for selector in ("^TestActual$", "^Test", "Actual"):
+            with self.subTest(selector), self.assertRaisesRegex(ValueError, "TestActual is listed 2 times for integration"):
+                results.snapshot(root, selector)
+        output = root / "expected.json"
+        self.assertEqual(results.main(["snapshot", "--root", str(root), "--selector", "^TestActual$",
+                                       "--output", str(output)]), 1)
+        self.assertFalse(output.exists())
+        # The repeated name not selected, and the same name once per suite, are fine.
+        self.assertEqual(results.snapshot(root, "^TestOther$")["expected"], [["api", "TestOther"]])
 
     def test_broad_snapshot_needs_no_listing(self):
         with tempfile.TemporaryDirectory() as root:

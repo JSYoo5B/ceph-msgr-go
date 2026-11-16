@@ -5,7 +5,7 @@ from pathlib import Path
 import unittest
 
 import cluster_free_tests as tests
-from test_go_test_list import SHAPES, module, tests_file
+from test_go_test_list import SHAPES, TWICE, module, tests_file
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -57,6 +57,34 @@ class ClusterFreeTestsTests(unittest.TestCase):
                       tests.verify(root, log + "\n--- PASS: TestCephNativeIntegration (0.00s)\n"))
         self.assertIn("test outside the cluster-free set ran: TestIgnored",
                       tests.verify(root, log + "\n--- PASS: TestIgnored (0.00s)\n"))
+
+    def test_a_name_listed_twice_is_refused_before_any_result(self):
+        # The reviewer's case: internal and external TestActual. Go runs both
+        # under one name; a log of only the internal file has one PASS.
+        root = module(self, TWICE)
+        env = dict(os.environ, GOWORK="off", CGO_ENABLED="0")
+        internal = subprocess.run(["go", "test", "-mod=readonly", "-count=1", "-v", "-run", "^(TestActual|TestOther)$",
+                                   "./integration/internal_test.go", "./integration/doc.go"],
+                                  cwd=root, env=env, capture_output=True, text=True, timeout=600, check=True).stdout
+        self.assertEqual(re.findall(r"(?m)^--- PASS: (\w+) ", internal), ["TestActual", "TestOther"])
+        full = self.run_go(root, "^(TestActual|TestOther)$")
+        self.assertEqual(re.findall(r"(?m)^--- PASS: (\w+) ", full).count("TestActual"), 2)
+        for log in (internal, full, ""):
+            with self.assertRaisesRegex(ValueError, "TestActual is listed 2 times for integration"):
+                tests.verify(root, log)
+        with self.assertRaisesRegex(ValueError, "TestActual is listed 2 times"):
+            tests.check(root)
+        path = root / "go-test.log"
+        path.write_text(internal, encoding="utf-8")
+        for command in (["check"], ["selector"], ["verify", "--log", str(path)]):
+            self.assertEqual(tests.main(["--root", str(root)] + command), 1, command)
+        # A native name listed twice is not cluster-free and does not block the gate.
+        native = module(self, {"internal_test.go": tests_file("func TestCephXIntegration(t *testing.T) {}",
+                                                              "func TestOther(t *testing.T) {}"),
+                               "external_test.go": tests_file("func TestCephXIntegration(t *testing.T) {}",
+                                                              package="integration_test")})
+        self.assertEqual(tests.cluster_free(native), ["TestOther"])
+        self.assertEqual(tests.verify(native, "--- PASS: TestOther (0.00s)\n"), [])
 
     def test_unlistable_and_empty_sets_fail(self):
         duplicate = self.fixture("func TestHelper(t *testing.T) {}", "func TestHelper(t *testing.T) {}")

@@ -6,7 +6,11 @@ secondary suite is allowed. Broad fixture defaults may intentionally skip tests;
 they require at least one pass and retain all observed skips without claiming
 that every test ran. Only complete, unindented Go verbose result lines count.
 The selectable top-level tests are the ones Go lists for each suite package
-(tools/go_test_list.py), not a scan of the source text.
+(tools/go_test_list.py), not a scan of the source text. An explicit selector
+that selects a name Go lists more than once in one suite package (the internal
+and the external test package both declare it) is refused by `snapshot`, before
+any run: `-run` runs both under that name and a result line cannot tell which
+one it reports.
 """
 import argparse
 import json
@@ -26,9 +30,10 @@ def snapshot(root, selector):
     expected = []
     if pattern:
         # A broad default selects no explicit test, so it needs no listing.
-        listed = go_test_list.list_tests(root, ["./" + directory for _, directory in SUITES])
+        selected = go_test_list.selected_tests(root, ["./" + directory for _, directory in SUITES],
+                                               lambda package, name: bool(pattern.search(name)))
         for suite, directory in SUITES:
-            expected.extend([suite, name] for name in sorted(listed[directory]) if pattern.search(name))
+            expected.extend([suite, name] for name in sorted(selected[directory]))
     if selector and not expected:
         raise ValueError("explicit selector matches no top-level tests")
     return {"selector": selector, "expected": expected}
