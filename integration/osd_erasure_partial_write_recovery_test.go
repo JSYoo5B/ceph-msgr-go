@@ -231,25 +231,83 @@ func (r *partialWriteRun) logLivePrimary(label string, seen pgIntervalReceipt) {
 	}
 }
 
+// absentReobservations bounds the observations of the PG without the member
+// after the first accepted one. The MON may publish an epoch that leaves the
+// PG's sets unchanged (another OSD's up_thru, for example) before the primary
+// has it; the primary then answers from its older map and that sample shows
+// nothing about the PG's interval at the placement's epoch.
+const absentReobservations = 30
+
+// absentAgain classifies one later observation of the PG without the member
+// against the accepted observation, given checkPGAbsent's verdict err on it.
+// It is held when err is nil and the primary reports the accepted interval.
+// A primary that reports another interval has left it: a primary's map epoch
+// does not go back, and the accepted observation's primary was not behind its
+// placement, so a later interval start is a confirmed change even from a
+// primary behind the current placement. Without that, a sample shows nothing
+// and is inconclusive when a placement record or the query reply is missing,
+// the placement changed around the query, or the primary is behind the
+// placement's epoch. Every other refusal is a confirmed departure. The second
+// result is nil exactly when the sample is held or inconclusive.
+func absentAgain(r pgIntervalReceipt, err error, accepted pgIntervalReceipt) (bool, error) {
+	o, interval := r.Observation, accepted.Observation.Query.SameIntervalSince
+	if q := o.Query; q != nil && q.SameIntervalSince != interval {
+		return false, fmt.Errorf("the primary reports the interval since epoch %d, not the one since epoch %d in which the PG was active without the member (%v)", q.SameIntervalSince, interval, err)
+	}
+	if err == nil {
+		return true, nil
+	}
+	if o.Before == nil || o.After == nil || !reflect.DeepEqual(o.Before, o.After) || o.Query == nil || o.Query.Epoch < o.Before.Epoch {
+		return false, nil
+	}
+	return false, err
+}
+
+// reobserveAbsent observes the PG without the member again, within attempts
+// observations spaced by pause, until one is held in the accepted interval
+// (absentAgain) and satisfies want. It fails at the first confirmed
+// departure, and when no held observation satisfies want within the bound;
+// an inconclusive sample never stands in for a held one.
+func reobserveAbsent(accepted pgIntervalReceipt, attempts int, pause time.Duration, observe func() (pgIntervalReceipt, error), want func(pgIntervalReceipt) bool) (pgIntervalReceipt, int, error) {
+	last := "no observation"
+	for attempt := 1; attempt <= attempts; attempt++ {
+		seen, err := observe()
+		held, left := absentAgain(seen, err, accepted)
+		if left != nil {
+			return seen, attempt, fmt.Errorf("observation %d: %w", attempt, left)
+		}
+		if held && want(seen) {
+			return seen, attempt, nil
+		}
+		if last = "held, without the wanted state"; !held {
+			last = fmt.Sprintf("inconclusive: %v", err)
+		}
+		if attempt < attempts {
+			time.Sleep(pause)
+		}
+	}
+	return pgIntervalReceipt{}, attempts, fmt.Errorf("no held observation in the interval since epoch %d with the wanted state within %d observations; the last was %s",
+		accepted.Observation.Query.SameIntervalSince, attempts, last)
+}
+
 // waitAbsentRecords observes the live primary of the PG without the member
 // until its own info holds exactly the partial-write records, within a
-// bounded number of observations. No client reply waits for the roll-forward
+// bounded number of observations, in the interval in which the PG was
+// accepted without the member. No client reply waits for the roll-forward
 // that writes them, and the peering at the member's return reads them.
 func (r *partialWriteRun) waitAbsentRecords(o *shardOutage, records []shardPartialWrite) {
 	r.t.Helper()
 	var got []shardPartialWrite
-	for attempt := 1; attempt <= 15; attempt++ {
-		seen, err := r.observeAbsent(r.ctx, o)
-		if err != nil {
-			r.t.Fatalf("the PG is no longer active without osd.%d: %v", o.osd, err)
-		}
-		if got = seen.Observation.Query.Info.PartialWrites; slices.Equal(got, records) {
-			r.t.Logf("the live primary's info holds the partial-write records %+v at epoch %d (observation %d)", got, seen.Observation.Query.Info.PartialWritesEpoch, attempt)
-			return
-		}
-		time.Sleep(time.Second)
+	seen, attempt, err := reobserveAbsent(o.absent, absentReobservations, time.Second,
+		func() (pgIntervalReceipt, error) { return r.observeAbsent(r.ctx, o) },
+		func(seen pgIntervalReceipt) bool {
+			got = seen.Observation.Query.Info.PartialWrites
+			return slices.Equal(got, records)
+		})
+	if err != nil {
+		r.t.Fatalf("the live primary of the PG without osd.%d does not hold the partial-write records %+v (last held: %+v): %v", o.osd, records, got, err)
 	}
-	r.t.Fatalf("the live primary's info holds the partial-write records %+v, not %+v", got, records)
+	r.t.Logf("the live primary's info holds the partial-write records %+v at epoch %d (observation %d)", got, seen.Observation.Query.Info.PartialWritesEpoch, attempt)
 }
 
 // comeBack starts the outage's OSD again and waits, within a bounded number
@@ -259,12 +317,17 @@ func (r *partialWriteRun) waitAbsentRecords(o *shardOutage, records []shardParti
 func (r *partialWriteRun) comeBack(o *shardOutage) pgIntervalReceipt {
 	r.t.Helper()
 	// The PG must still be active without the member, in the interval that
-	// was observed, right before the OSD starts.
-	last, err := r.observeAbsent(r.ctx, o)
-	if err != nil || last.Observation.Query.SameIntervalSince != o.absent.Observation.Query.SameIntervalSince {
-		r.t.Fatalf("the PG left the interval in which it was active without osd.%d before the OSD was started: %v", o.osd, err)
+	// was observed, right before the OSD starts: one fresh accepted
+	// observation in that interval, past samples the primary answered from
+	// an older map.
+	last, attempt, err := reobserveAbsent(o.absent, absentReobservations, shardOutagePause,
+		func() (pgIntervalReceipt, error) { return r.observeAbsent(r.ctx, o) },
+		func(pgIntervalReceipt) bool { return true })
+	if err != nil {
+		r.t.Fatalf("the PG is not shown active without osd.%d in its interval before the OSD was started: %v", o.osd, err)
 	}
 	absent := last.Observation.Query.SameIntervalSince
+	r.t.Logf("pg %s still active without osd.%d at epoch %d in the interval since %d (observation %d)", o.origin.PGID, o.osd, last.Observation.Before.Epoch, absent, attempt)
 	if err := testcluster.ControlDaemon(r.ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "start", "osd", strconv.FormatInt(int64(o.osd), 10)); err != nil {
 		r.t.Fatal("start", o.osd, err)
 	}
@@ -668,6 +731,87 @@ func TestCheckPGAbsent(t *testing.T) {
 		edit(&r)
 		if err := checkPGReturned(r, route, 26); err == nil {
 			t.Error("return accepted:", name)
+		}
+	}
+}
+
+// TestReobserveAbsent covers the later observations of the PG without the
+// member: a sample from a primary behind the placement's epoch is retried,
+// never accepted, and a confirmed change of interval or state fails at once.
+func TestReobserveAbsent(t *testing.T) {
+	accepted, route := pgAbsentObservation()
+	held := func(epoch uint32) pgIntervalReceipt {
+		r, _ := pgAbsentObservation()
+		r.Observation.Before.Epoch, r.Observation.After.Epoch, r.Observation.Query.Epoch = epoch, epoch, epoch
+		return r
+	}
+	// The hosted sample: the MON published epoch 28 with the PG's sets
+	// unchanged, and the primary still answered from epoch 27. The oracle
+	// refused it.
+	lagging := func(interval uint32) pgIntervalReceipt {
+		r := held(28)
+		r.Observation.Query.Epoch, r.Observation.Query.SameIntervalSince = 27, interval
+		r.Settled, r.Failures = false, []string{"the primary is at map epoch 27, behind the placement's epoch"}
+		return r
+	}
+	edited := func(r pgIntervalReceipt, edit func(*pgIntervalReceipt)) pgIntervalReceipt {
+		edit(&r)
+		return r
+	}
+	moved := edited(held(28), func(r *pgIntervalReceipt) { r.Observation.After.Epoch = 29 })
+	noQuery := edited(held(28), func(r *pgIntervalReceipt) {
+		r.Observation.Query, r.Observation.QueryFailure = nil, "pg query returned -11"
+	})
+	noRecord := edited(held(28), func(r *pgIntervalReceipt) { r.Observation.After = nil })
+	later := edited(held(29), func(r *pgIntervalReceipt) {
+		r.Observation.Query.SameIntervalSince, r.Observation.Query.LastEpochStarted = 29, 29
+	})
+	peering := edited(held(28), func(r *pgIntervalReceipt) { r.Observation.Query.State = "peering" })
+	marked := edited(held(28), func(r *pgIntervalReceipt) {
+		for _, p := range []*osdFixtureOracle{r.Observation.Before, r.Observation.After} {
+			p.Up, p.Acting = []int32{3, 4, 1, 0}, []int32{3, 4, 1, 0}
+		}
+	})
+	always := func(pgIntervalReceipt) bool { return true }
+	for name, c := range map[string]struct {
+		samples []pgIntervalReceipt
+		want    func(pgIntervalReceipt) bool
+		attempt int
+		ok      bool
+	}{
+		"held at once":                      {[]pgIntervalReceipt{held(27)}, always, 1, true},
+		"held at a newer epoch":             {[]pgIntervalReceipt{held(28)}, always, 1, true},
+		"lagging, then held":                {[]pgIntervalReceipt{lagging(26), lagging(26), held(28)}, always, 3, true},
+		"moved around the query, then held": {[]pgIntervalReceipt{moved, held(29)}, always, 2, true},
+		"no query reply, then held":         {[]pgIntervalReceipt{noQuery, held(28)}, always, 2, true},
+		"no placement record, then held":    {[]pgIntervalReceipt{noRecord, held(28)}, always, 2, true},
+		"held until the wanted state": {[]pgIntervalReceipt{held(27), lagging(26), held(28)}, func(r pgIntervalReceipt) bool {
+			return r.Observation.Before.Epoch == 28
+		}, 3, true},
+		"persistent lag":                     {[]pgIntervalReceipt{lagging(26), lagging(26), lagging(26), lagging(26)}, always, 4, false},
+		"never the wanted state":             {[]pgIntervalReceipt{held(27), held(27), held(27), held(27)}, func(pgIntervalReceipt) bool { return false }, 4, false},
+		"a later interval":                   {[]pgIntervalReceipt{later, held(29)}, always, 1, false},
+		"a later interval, lagging":          {[]pgIntervalReceipt{lagging(28), held(28)}, always, 1, false},
+		"lagging, then a later interval":     {[]pgIntervalReceipt{lagging(26), later}, always, 2, false},
+		"lagging, then peering":              {[]pgIntervalReceipt{lagging(26), peering, held(28)}, always, 2, false},
+		"another OSD took the position":      {[]pgIntervalReceipt{marked, held(28)}, always, 1, false},
+		"an earlier interval from the reply": {[]pgIntervalReceipt{edited(held(28), func(r *pgIntervalReceipt) { r.Observation.Query.SameIntervalSince = 24 })}, always, 1, false},
+	} {
+		next := 0
+		observe := func() (pgIntervalReceipt, error) {
+			r := c.samples[min(next, len(c.samples)-1)]
+			next++
+			return r, checkPGAbsent(r, route, 1, 24)
+		}
+		seen, attempt, err := reobserveAbsent(accepted, 4, 0, observe, c.want)
+		if (err == nil) != c.ok || attempt != c.attempt || next != c.attempt {
+			t.Errorf("%s: attempt %d after %d observations, error %v; want attempt %d, accepted %t", name, attempt, next, err, c.attempt, c.ok)
+			continue
+		}
+		if c.ok {
+			if err := checkPGAbsent(seen, route, 1, 24); err != nil || seen.Observation.Query.SameIntervalSince != 26 {
+				t.Errorf("%s: returned an observation that is not held in the interval since 26: %v", name, err)
+			}
 		}
 	}
 }
