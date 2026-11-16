@@ -78,6 +78,7 @@ func restoreMutationObject(t *testing.T, c *cephmsgr.Client, oracle osdFixtureOr
 	}
 }
 
+//fixture:isolated deletes and rewrites the shared fixture object; the native compare leaves a -native-mutation mirror object
 func TestCephOSDMutationsIntegration(t *testing.T) {
 	c, ctx, oracle, original := osdFixture(t)
 	// This consumer test uses the already routed fixture object and restores it
@@ -183,6 +184,7 @@ func TestCephOSDMutationsIntegration(t *testing.T) {
 	}
 }
 
+//fixture:isolated appends to the shared fixture object; cleanup rewrites bytes and mtime with no native readback proof
 func TestCephOSDMutationLostReplyIntegration(t *testing.T) {
 	observer, ctx, oracle, original := osdFixture(t)
 	defer restoreMutationObject(t, observer, oracle, original)
@@ -265,6 +267,7 @@ func TestCephOSDMutationLostReplyIntegration(t *testing.T) {
 	t.Log("native readback proved one append; local cancellation retained request identity, fresh session did not replay")
 }
 
+//fixture:isolated stops and restarts an OSD; clean wait only on 3 replicas, no pg_temp check; rewrites the fixture object
 func TestCephOSDMutationRestartIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("restart persistence requires the sparse-file BlueStore fixture")

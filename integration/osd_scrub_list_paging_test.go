@@ -18,6 +18,8 @@ import (
 // scrub lists them. SCRUBLS pages of one value each, every request starting
 // after the object the previous page returned, together list each object
 // exactly once, matching the native list-inconsistent-obj names.
+//
+//fixture:isolated injects OSD data errors; config rm is checked but owned-pool cleanup leaves mon_allow_pool_delete
 func TestCephOSDScrubListPagingIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("a replica data error needs three BlueStore replicas")

@@ -18,6 +18,8 @@ import (
 // an OSD session opened after the renewal is allowed, while the session that
 // authenticated before it keeps its old capabilities. The client never renews
 // because of a capability change.
+//
+//fixture:shareable creates and widens its own auth entity; cleanup removes it with a checked auth rm
 func TestCephOSDCommandCapsRenewalIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

@@ -18,6 +18,8 @@ import (
 // observation confirms. (The cache-tier CACHE_FLUSH/EVICT/PIN and dedup
 // SET_CHUNK opcodes return -EINVAL/-EOPNOTSUPP on a plain pool and are not
 // implemented.)
+//
+//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
 func TestCephOSDDirtyFlagIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

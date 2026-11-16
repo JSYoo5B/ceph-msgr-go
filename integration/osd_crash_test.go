@@ -14,6 +14,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated writes the fixture object, kills and restarts the OSD; the single-OSD path has no clean wait
 func TestCephOSDMutationCrashIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("forced daemon termination persistence requires the sparse-file BlueStore fixture")

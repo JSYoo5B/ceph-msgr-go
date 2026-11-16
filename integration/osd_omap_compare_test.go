@@ -58,6 +58,7 @@ func omapCmpAction(flags cephmsgr.OSDOperationFlags, key string, value []byte, c
 	return omapWriteAction{Op: "cmp", Flags: uint32(flags), Key: []byte(key), Value: append([]byte{}, value...), Comparison: &comparison}
 }
 
+//fixture:shareable OMAP compares on its owned UUID objects; checked omap-write cleanup removes them
 func TestCephOSDOmapCompareIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)

@@ -16,6 +16,8 @@ import (
 // OSD session, on a new OSD session of the same client (which reuses its
 // cached OSD service ticket), and on a newly dialed client with fresh tickets.
 // The client never refreshes tickets because of a capability change.
+//
+//fixture:shareable creates and widens its own auth entity; cleanup removes it with a checked auth rm
 func TestCephOSDCommandCapsChangeIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

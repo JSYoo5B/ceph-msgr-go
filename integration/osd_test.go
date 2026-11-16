@@ -102,6 +102,7 @@ func checkOSDMetadata(t *testing.T, reply cephmsgr.OSDReply, oracle osdFixtureOr
 	}
 }
 
+//fixture:shareable reads the fixture object and opens and closes client and OSD sessions only
 func TestCephOSDIOIntegration(t *testing.T) {
 	c, ctx, oracle, data := osdFixture(t)
 	o, err := c.OpenOSD(ctx, cephmsgr.OSDTarget{ID: oracle.ID, Address: oracle.Address})
@@ -177,6 +178,7 @@ func TestCephOSDIOIntegration(t *testing.T) {
 	t.Logf("native stat2 and %d binary bytes matched; partial/EOF/ENOENT and eight concurrent requests passed", len(data))
 }
 
+//fixture:shareable reads the fixture object and renews and closes client sessions only
 func TestCephOSDRenewalIntegration(t *testing.T) {
 	c, ctx, oracle, data := osdFixture(t)
 	target := cephmsgr.OSDTarget{ID: oracle.ID, Address: oracle.Address}
@@ -211,6 +213,7 @@ func TestCephOSDRenewalIntegration(t *testing.T) {
 	t.Log("OSD service ticket renewed; new session kept request identity and native read bytes; parent shutdown rejected later I/O")
 }
 
+//fixture:isolated sets crush tunables optimal and back to legacy without waiting for clean PGs or proving the baseline
 func TestCephOSDUnsupportedFeaturesIntegration(t *testing.T) {
 	c, ctx, oracle, _ := osdFixture(t)
 	// Disposable configuration changes belong to the test consumer. The product

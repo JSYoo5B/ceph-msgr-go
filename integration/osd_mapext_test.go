@@ -57,6 +57,7 @@ func mapExtOracle(t *testing.T, ctx context.Context, name string, offset, length
 	return result
 }
 
+//fixture:shareable sparse-read mapping on its owned UUID objects; checked omap-write cleanup removes them
 func TestCephOSDMapExtIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)

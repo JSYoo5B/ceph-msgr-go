@@ -78,6 +78,7 @@ func watchReconnectNotify(ctx context.Context, action, name string) (nativeRecon
 	return result, err
 }
 
+//fixture:shareable the watch is unwatched, the native notifier finished and the owned object removed in checked cleanup
 func TestCephOSDWatchReconnectIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()
 	var c *cephmsgr.Client

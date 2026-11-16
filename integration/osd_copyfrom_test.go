@@ -21,6 +21,8 @@ import (
 // native client never executes copy-from here: librados' copy_from2 cannot set
 // TRUNCATE_SEQ, so the independent evidence is the native-observed source and
 // destination state, not a native twin execution.
+//
+//fixture:isolated allocates a self-managed snap in the fixture pool, permanently adding its selfmanaged_snaps pool flag
 func TestCephOSDCopyFromIntegration(t *testing.T) {
 	fixture := osdFixture
 	request := osdObjectRequest

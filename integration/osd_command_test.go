@@ -113,6 +113,7 @@ func osdDumpAddresses(t *testing.T, ctx context.Context, c *cephmsgr.Client) map
 	return addresses
 }
 
+//fixture:isolated pauses the primary OSD and resumes it without waiting for OSD up or PGs active+clean
 func TestCephOSDCommandsIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)

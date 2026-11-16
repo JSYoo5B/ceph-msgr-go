@@ -126,6 +126,7 @@ type setChunkGoRecord struct {
 	Unknown bool                `json:"unknown_outcome"`
 }
 
+//fixture:isolated owned-pool cleanup leaves central config mon/mon_allow_pool_delete=true set
 func TestCephOSDSetChunkGoIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

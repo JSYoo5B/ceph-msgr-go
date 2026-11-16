@@ -15,6 +15,8 @@ import (
 // Go handle ends without re-registering, the native list empties, and the
 // watcher client's next request to that OSD gets a known -108 (ESHUTDOWN). The
 // blocklist entry is removed in cleanup.
+//
+//fixture:shareable adds an OSD blocklist entry removed by a checked rm in cleanup; the owned watch object is removed
 func TestCephOSDWatchBlocklistIntegration(t *testing.T) {
 	modern := isReplicatedPGFixtureProfile()
 	var c *cephmsgr.Client

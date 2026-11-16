@@ -71,6 +71,8 @@ func copyFromDestinationBinding(copyKey, sourceKey []pgHistoryLocation, want cop
 // readback checks the copied bytes and xattr independently. The copy-error
 // injector stays off. This is a positive control past the destination commit:
 // it times no crash and claims nothing about absence, replicas or replay.
+//
+//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
 func TestCephOSDCopyFromDestinationHistoryIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

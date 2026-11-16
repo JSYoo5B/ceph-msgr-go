@@ -48,6 +48,7 @@ func notifyOracle(t *testing.T, ctx context.Context, action string) nativeNotify
 	return result
 }
 
+//fixture:shareable native workers stopped, the Go watch unwatched and owned objects removed in checked cleanup
 func TestCephOSDWatchNotifyIntegration(t *testing.T) {
 	c, _, base, _ := osdFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)

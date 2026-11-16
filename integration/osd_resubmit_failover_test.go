@@ -20,6 +20,8 @@ import (
 // under the original transaction ID and incarnation is answered from that log:
 // a completed exclusive CREATE does not answer EEXIST and an append whose reply
 // was lost is not executed a second time.
+//
+//fixture:isolated kills the primary OSD; recovery waits active+clean without a pg_temp proof and rewrites the fixture object
 func TestCephOSDResubmitFailoverIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("requires three sparse-file BlueStore replicas")
