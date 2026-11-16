@@ -54,6 +54,8 @@ type poolReceipt struct {
 
 	// pghistory mode: one bracketed primary PG-history snapshot.
 	History pgHistorySnapshot `json:"history"`
+	// opsinflight mode: one bracketed snapshot of the primary's op tracker.
+	OpsInFlight opsInFlightSnapshot `json:"ops_in_flight"`
 	// shardhistory mode, phase after: every acting shard's own PG log.
 	ShardHistory shardHistorySnapshot `json:"shard_history"`
 	// pginterval mode: one owned interval change of a PG and its judgement.

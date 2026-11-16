@@ -86,9 +86,25 @@ TID/incarnation returned ONDISK with the original user version, and native bytes
 xattr and mtime did not change. A fresh-TID control appended again and advanced
 the native version. The original caller's unknown outcome was preserved. This
 is bounded PG-log duplicate handling, not an automatic replay policy or a
-universal exactly-once guarantee. Not verified: a request held at the primary
-when it dies, retention/trim boundaries, other profiles and a signed refusal
-across the epoch change.
+universal exactly-once guarantee.
+
+A [held-request control](../../integration/fixture/OSD_EC_HELD_REQUEST_VALIDATION.md)
+on that profile covers a request that reached the primary and was held
+there. A Go APPEND+SETXATTR named a map epoch the cluster had not
+published, so the primary queued it in `waiting_for_map` before decoding its
+operations; the primary's op tracker showed it undecoded and delayed for the
+map. The primary's OSD was then SIGKILLed. The call ended through the session
+with `OutcomeUnknownError` and the TID the primary had tracked, and no further
+OSD connection was opened. After the restart and clean PGs the native object
+was unchanged and the returned primary's PG log did not hold the identity.
+One caller resubmission under the original transaction then applied once.
+For this client a PG below `min_size` does not hold a request: the
+replicated-PG profiles advertise RADOS_BACKOFF, so the primary installs a
+PG-wide backoff and drops the op. One exploratory run saw that BLOCK, and the
+later kill of the primary ended that call as unknown too; it is not part of
+the control.
+Not verified: a request held after it reached `do_op`, retention/trim
+boundaries, other profiles and a signed refusal across the epoch change.
 
 A test-only [primary PG-history snapshot](../../integration/fixture/OSD_PG_HISTORY_CALIBRATION_VALIDATION.md)
 on the same profile finds known Go request identities in the primary's native
@@ -139,10 +155,25 @@ clean again, with an empty missing set: the primary's log at the return gave
 it the entry of the overwrite it had been left out of, which names the other
 three shards only. Which entries a shard's own log holds therefore also
 depends on whether it was recovered after the write. Neither control reads
-the returned shard's chunk bytes. A primary change onto another shard, the
-outage of a parity shard's or the primary's OSD, and a write during the
-recovery itself were not observed with this capture, and nothing here is a
-replay or deduplication claim.
+the returned shard's chunk bytes.
+
+One more [control](../../integration/fixture/OSD_EC_PARTIAL_WRITE_PRIMARY_REPLACEMENT_VALIDATION.md)
+takes the primary's own OSD out after the overwrite. The map named the
+left-out shard's OSD first for one epoch, which did not activate the PG,
+and then the first parity shard's OSD under a primary-first pg_temp, which
+led the PG active with shard 0's position empty. Its info held the same
+range for shard 1, so its peering sent shard 1 nothing. One acknowledged Go
+overwrite inside shard 0's chunk went through it with primary-first shard
+numbering; as the first write of its interval it named every shard,
+although by its bytes it left shard 1 out. After the original primary
+returned, under a new address, and recovered the object to itself, the PG
+was clean on its original placement: shards 0, 2 and 3 held all three
+entries, and shard 1 held the full write and that overwrite without the
+earlier overwrite between them. A shard that can lead therefore takes over
+the record of the range a nonprimary shard was left out of. The outage of a
+parity shard's OSD, more than one write while a member is away, and a write
+during the recovery itself were not observed with this capture, and nothing
+here is a replay or deduplication claim.
 
 ## Optimized EC pools (`allow_ec_optimizations`)
 

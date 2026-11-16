@@ -355,16 +355,19 @@ native observer, not the client, tells applied from not applied. A caller
 resubmission of a mutation that had not applied ran exactly once on the
 replacement primary. They do not establish exactly-once delivery or
 deduplication of an applied EC mutation on resubmission. They also do not
-cover a request held at the primary (for example while the PG is not
-active) when it dies, or a signed refusal across the epoch change.
+cover a request held at the primary when it dies; a
+[separate control](OSD_EC_HELD_REQUEST_VALIDATION.md) holds one there,
+before `do_op`, and finds that for this client a PG below `min_size` drops
+a request with a backoff instead of holding it. A signed refusal across the
+epoch change is not covered.
 
 Not verified for k=2,m=2: legacy-v6, other security, address or runtime
 profiles, jerasure, wire shard 2 of the size-4 primary-first permutation,
 snapshots or degraded writes on the nonoptimized pool, the chunk recovered
 onto the returned shard after the degraded write (min_size stays 3 and no
 direct shard read is made, so no native oracle checks that chunk), an in-flight
-mutation held inside the OSD when the primary dies, and EC resubmission
-after an applied mutation. The unit-level numeric-domain test of
+mutation held inside the OSD after `do_op` when the primary dies, and EC
+resubmission after an applied mutation. The unit-level numeric-domain test of
 `OSDPrimaryFirst` (PoolSize 2..128) is synthetic and does not accept those
 combinations as EC configurations.
 
