@@ -3,6 +3,7 @@ import json
 import unittest
 
 import scenario_plan as plan
+from test_go_test_list import SHAPES, module, tests_file
 
 
 def entry(sid, group="mon-mgr", **params):
@@ -79,6 +80,23 @@ class CatalogTests(unittest.TestCase):
         tests = plan.integration_tests()
         self.assertIn("TestCephMonPingIntegration", tests)  # API suite
         self.assertIn("TestCephMonServiceMapLifecycleFailedMonHoldIntegration", tests)  # client suite
+
+    def test_selectors_resolve_against_the_tests_go_lists(self):
+        root = module(self, SHAPES)
+        client = root / "cephmsgr"
+        client.mkdir()
+        (client / "client_test.go").write_text(tests_file("func TestClient(t *testing.T) {}", package="cephmsgr"),
+                                               encoding="utf-8")
+        tests = plan.integration_tests(root)
+        # Literal expectation: the bare Test, the aliased-import test and the
+        # blank parameter are tests; TestMain, the method, the lowercase helper
+        # and the build-constrained test are not.
+        self.assertEqual(tests, {"Test", "TestAlias", "TestX", "TestClient"})
+        scenarios = [entry("bare", test_run="^Test$"), entry("alias", test_run="^TestAlias$"),
+                     entry("main", test_run="^TestMain$"), entry("ignored", test_run="^TestIgnored$"),
+                     entry("method", test_run="^TestY$")]
+        problems = plan.selector_problems(scenarios, tests)
+        self.assertEqual([problem.split(":")[0] for problem in problems], ["main", "ignored", "method"])
 
     def test_pr_catalog_cannot_silently_add_a_trusted_runner_parameter(self):
         from unittest.mock import patch

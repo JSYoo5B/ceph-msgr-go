@@ -6,8 +6,10 @@ real-daemon scenarios and selectable platform check suites. Each native entry
 has a stable identifier, group and workflow matrix parameters. This tool
 validates the catalog against the reusable check jobs and the tests it selects
 and prints the selected matrix with an explanation. Every catalog row is in the
-default coverage (`all`); there is no separate list of required rows. It reads
-local files only and executes no test.
+default coverage (`all`); there is no separate list of required rows.
+`validate` resolves test selectors against the tests Go lists for the native
+suites (go_test_list.py compiles them and executes no test body); `list` and
+`plan` read local files only.
 
   scenario_plan.py validate               invariants, fixed jobs, selector targets
   scenario_plan.py list                   one identifier per line
@@ -27,6 +29,7 @@ import re
 import sys
 from pathlib import Path
 
+import go_test_list
 import scenario_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -120,16 +123,20 @@ def fixed_job_problems(document, workflow_text):
     return problems
 
 
-def integration_tests(directories=(ROOT / "integration", ROOT / "cephmsgr")):
-    """Names of the top-level Go tests of both native suites.
+SUITE_PACKAGES = ("integration", "cephmsgr")
+
+
+def suite_tests(root=ROOT):
+    """{package: top-level tests} that Go lists for both native suites.
 
     The native runner applies one selector to the API suite (integration) and
     the client suite (cephmsgr), as the result gate does."""
-    names = set()
-    for directory in directories:
-        for path in sorted(Path(directory).glob("*_test.go")):
-            names.update(re.findall(r"(?m)^func (Test[A-Za-z0-9_]*)\(", path.read_text(encoding="utf-8")))
-    return names
+    return go_test_list.list_tests(root, ["./" + package for package in SUITE_PACKAGES])
+
+
+def integration_tests(root=ROOT):
+    """Names of the top-level Go tests of both native suites."""
+    return set().union(*suite_tests(root).values())
 
 
 def selector_problems(scenarios, tests):
