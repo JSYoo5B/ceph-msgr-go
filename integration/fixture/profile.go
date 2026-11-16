@@ -418,7 +418,8 @@ func (p profile) rbdReplicas() string {
 // continuations: a later write that names the left-out shard, an owned
 // interval change of the PG, an owned outage of the left-out shard's OSD
 // without and with a write in between, and an owned outage of the primary's
-// OSD with a write through its replacement.
+// OSD with a write through its replacement; and a request held at the
+// primary when the primary's OSD is killed.
 var osdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureK2M2Integration$",
 	"^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$",
@@ -432,6 +433,7 @@ var osdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$",
 }
 
 // osdTopology is one closed OSD fixture shape. Daemon capacity and the
