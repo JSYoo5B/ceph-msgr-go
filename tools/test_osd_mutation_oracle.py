@@ -128,6 +128,24 @@ class PlacementOracleTests(unittest.TestCase):
         self.assertEqual((primary["pg_shard"], primary["pool_type"]), (0, 3))
         self.assertEqual((replica["osd_id"], replica["pg_shard"]), (1, 2))
 
+    def test_erasure_sets_may_repeat_only_the_empty_position(self):
+        none = oracle.CRUSH_ITEM_NONE
+        mapped, dump = pair()
+        dump["pools"][0].update(type=3, size=4, min_size=3)
+        # Two members down: both positions are empty and keep their place.
+        mapped["up"] = mapped["acting"] = [2, none, 0, none]
+        result = collect_placement(lambda *args, timeout: copy.deepcopy(mapped if args[:2] == ("osd", "map") else dump), "test", "binary", 7)
+        self.assertEqual((result["acting"], result["up"], result["pg_shard"], result["primary_id"]), ([2, none, 0, none], [2, none, 0, none], 0, 2))
+        for name, edit in (("a repeated member", lambda m, d: m.update(up=[2, 0, 0, none], acting=[2, 0, 0, none])),
+                           ("an empty position of a replicated pool", lambda m, d: (d["pools"][0].update(type=1),
+                                                                                     m.update(up=[2, none, 0], acting=[2, none, 0]))),
+                           ("an empty primary", lambda m, d: m.update(acting_primary=none))):
+            with self.subTest(name=name):
+                bad_map, bad_dump = copy.deepcopy(mapped), copy.deepcopy(dump)
+                edit(bad_map, bad_dump)
+                with self.assertRaises(ValueError):
+                    collect_placement(lambda *args, timeout: copy.deepcopy(bad_map if args[:2] == ("osd", "map") else bad_dump), "test", "binary", 7)
+
     def test_each_read_respects_remaining_deadline(self):
         times = iter([0, 0, 4, 4, 8])
         result, calls = self.query(pair(), clock=lambda: next(times), timeout=8)

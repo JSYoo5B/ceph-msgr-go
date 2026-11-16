@@ -23,6 +23,10 @@ MAX_DATA_BYTES = 1 << 20
 MAX_IDENTITY_BYTES = 4096
 MAX_MON_OUTPUT_BYTES = 1 << 20
 MAX_MON_DIAGNOSTIC_BYTES = 16 << 10
+# CRUSH_ITEM_NONE (pinned src/crush/crush.h): an erasure-coded acting or up
+# position without an OSD. Only an erasure-coded set keeps positions, so only
+# there may it appear, and more than once when several members are down.
+CRUSH_ITEM_NONE = (1 << 31) - 1
 
 
 def fixture_identity(value, label, *, empty=False):
@@ -216,9 +220,10 @@ def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
             raise ValueError("invalid native acting primary")
         for field in ("up", "acting"):
             vector = mapped.get(field)
+            members = [osd for osd in vector if osd != CRUSH_ITEM_NONE] if isinstance(vector, list) else []
             if (not isinstance(vector, list) or not 1 <= len(vector) <= 64
                     or any(type(osd) is not int or not 0 <= osd < 1 << 31 for osd in vector)
-                    or len(set(vector)) != len(vector)):
+                    or len(set(members)) != len(members)):
                 raise ValueError("invalid native placement " + field + " set")
         if primary not in mapped["acting"] or primary not in mapped["up"]:
             raise ValueError("native acting primary absent from current routing sets")
@@ -243,6 +248,8 @@ def collect_placement(command, pool_name, object_name, pool_id, *, attempts=5,
                 or type(pool.get("size")) is not int or type(pool.get("min_size")) is not int
                 or not 1 <= pool["min_size"] <= pool["size"] <= 64):
             raise ValueError("native target pool is not a replicated or erasure-coded pool")
+        if pool["type"] != 3 and (CRUSH_ITEM_NONE in mapped["up"] or CRUSH_ITEM_NONE in mapped["acting"]):
+            raise ValueError("an empty placement position outside an erasure-coded pool")
         public = daemon.get("public_addrs", {})
         if not isinstance(public, dict):
             raise ValueError("invalid native target address vector")
