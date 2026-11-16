@@ -203,12 +203,12 @@ only, and the Go client reads the object once more (incarnation 13).
 | Statement | Status |
 | --- | --- |
 | The PG active on its original primary with exactly the left-out shard's position empty, in a newer interval; the primary's info at the overwrite with the record "shard 1, from the full write to the overwrite" | required |
-| Native bytes and user version unchanged while the member is away; the Go read returns the bytes | required |
+| Native bytes and user version unchanged while the member is away; the Go read returns the bytes and that user version | required |
 | The PG `active+clean` on the same PG, up and acting sets, primary, shard and address, without a pg_temp, in an interval that started after the one without the member | required |
 | After the return, shard 0 and both parity shards hold the full write's and the overwrite's entry and their head is the overwrite | required |
 | After the return, shard 1 holds only the full write's entry; its head, `last_update` and `last_complete` are the overwrite's version, past its last entry; its missing set is empty | required: the primary found it up to date through the range and sent no entry |
 | After the return, every shard's info, shard 1's included, holds exactly the record "shard 1, from the full write to the overwrite" | required: the primary's record was established in step 1 and nothing was written since |
-| Native bytes and user version unchanged after the return; the Go read returns the bytes | required |
+| Native bytes and user version unchanged after the return; the Go read returns the bytes and that user version | required |
 | The epochs, the number of observations, the states seen before each accepted observation, the primary's view of each peer, the epoch of the partial-write records | recorded |
 | Cleanup: the PG is clean on its original placement without a pg_temp | required |
 
@@ -228,14 +228,14 @@ the Go client reads the object once more (incarnation 15).
 | Statement | Status |
 | --- | --- |
 | The PG active without the member and the primary's info as in the first control, before the write | required |
-| The degraded write acknowledged ONDISK with a replay version whose epoch is not older than the start of the interval without the member; native bytes and user version equal while the member is away; the Go read returns the bytes | required |
+| The degraded write acknowledged ONDISK with a replay version whose epoch is not older than the start of the interval without the member; native bytes and user version equal while the member is away; the Go read returns the bytes and that user version | required |
 | Before the OSD starts, the live primary's info holds exactly the record "shard 1, from the degraded write to the degraded write" | required: the return's peering reads it |
 | The PG `active+clean` on its original placement in a newer interval | required; it includes the recovery of the object to the returned shard |
 | After the recovery, every shard holds exactly the three entries, in order, with its head, `last_update` and `last_complete` at the degraded write and an empty missing set | required |
 | The degraded write's entry names every shard on every copy | required: the first write of an interval names every shard, the absent one included |
 | After the recovery, shard 1's copy holds the overwrite's entry, which names shards 0, 2 and 3 only | required: the primary sent every entry after the shard's `last_update` |
 | After the recovery, every shard's info, shard 1's included, holds exactly the record "shard 1, from the degraded write to the degraded write" | required |
-| Native bytes and user version of the degraded write after the recovery; the Go read returns the bytes | required |
+| Native bytes and user version of the degraded write after the recovery; the Go read returns the bytes and that user version | required |
 | The replay version's epoch, the epochs, the number of observations, the states seen, the primary's view of each peer, the epoch of the partial-write records | recorded |
 | Cleanup: the PG is clean on its original placement without a pg_temp | required |
 

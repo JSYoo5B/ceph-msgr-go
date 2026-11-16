@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
@@ -348,7 +349,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegrati
 		absentReadIncarnation   = 12
 		returnedReadIncarnation = 13
 	)
-	run.read("read without the member", absentReadIncarnation)
+	run.readVersion("read without the member", absentReadIncarnation, state.patched)
 
 	returned := run.comeBack(outage)
 	interval := returned.Observation.Query.SameIntervalSince
@@ -360,7 +361,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegrati
 	exact := func(int) [][]shardPartialWrite { return [][]shardPartialWrite{records} }
 	run.requireShardLogs("after the return", primary, shards, state.want.object, writes, true, exact)
 	run.observe("return", state.patched)
-	run.read("read after the return", returnedReadIncarnation)
+	run.readVersion("read after the return", returnedReadIncarnation, state.patched)
 	if ended := run.showInterval().Observation.Query.SameIntervalSince; ended != interval {
 		t.Fatalf("the PG's interval started at epoch %d when the member was back and at epoch %d after the last capture", interval, ended)
 	}
@@ -379,6 +380,16 @@ func shardLogRecovered(writes []shardWrite, shards int) (shardLogState, error) {
 		return shardLogState{}, fmt.Errorf("%d writes over %d shards, the first and the last of which must name every shard", len(writes), shards)
 	}
 	return shardLogState{Held: slices.Repeat([]bool{true}, len(writes)), Head: writes[len(writes)-1].version}, nil
+}
+
+// readVersion sends one Go read of the whole object exactly once and requires
+// the expected bytes and the user version of the acknowledged write that
+// produced them.
+func (r *partialWriteRun) readVersion(label string, incarnation uint32, write cephmsgr.OSDReply) {
+	r.t.Helper()
+	if read := r.read(label, incarnation); read.UserVersion != write.UserVersion {
+		r.t.Fatalf("%s returned user version %d; the acknowledged write's is %d", label, read.UserVersion, write.UserVersion)
+	}
 }
 
 // recoveredShardLogs requires every acting shard's own log to be exactly
@@ -476,7 +487,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegra
 		{"degraded write", replayVersion(reply), run.everyShard()},
 	}
 	t.Logf("degraded write %s [%d,+%d) at %s, user version %d, without osd.%d (shard %d)", key, offset, len(degraded), writes[2].version, reply.UserVersion, outage.osd, left)
-	run.read("read without the member", absentReadIncarnation)
+	run.readVersion("read without the member", absentReadIncarnation, reply)
 	// The return's peering must find the range reset: it then cannot advance
 	// the returning shard, which gets every entry after its last_update.
 	reset := []shardPartialWrite{{Shard: left, From: writes[2].version, To: writes[2].version}}
@@ -487,7 +498,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegra
 	primary, shards := run.capture([]pgHistoryTarget{state.fullKey, state.patchKey, key}, state.misses, nil)
 	run.recoveredShardLogs("after the recovery", primary, shards, state.want.object, writes, func(int) [][]shardPartialWrite { return [][]shardPartialWrite{reset} })
 	run.observe("recovery", reply)
-	run.read("read after the recovery", returnedReadIncarnation)
+	run.readVersion("read after the recovery", returnedReadIncarnation, reply)
 	if ended := run.showInterval().Observation.Query.SameIntervalSince; ended != interval {
 		t.Fatalf("the PG's interval started at epoch %d when the member was back and at epoch %d after the last capture", interval, ended)
 	}
