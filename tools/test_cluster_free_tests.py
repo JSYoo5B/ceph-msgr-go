@@ -33,6 +33,10 @@ class ClusterFreeTestsTests(unittest.TestCase):
         self.assertEqual(tests.check(root), [])
         # A TestCeph-prefixed helper without the Integration suffix is cluster-free.
         self.assertEqual(tests.cluster_free(root), ["TestCephFSHelper", "TestHelper"])
+        # The fixture's native rule is Go's ASCII \w: a non-ASCII name is not
+        # native there, so it must be cluster-free here, not in neither gate.
+        unicode = self.fixture("func TestCephÄIntegration(t *testing.T) {}", "func TestCephBIntegration(t *testing.T) {}")
+        self.assertEqual(tests.cluster_free(unicode), ["TestCephÄIntegration"])
         added = self.fixture(*bodies + ("func TestNew(t *testing.T) {}",))
         self.assertEqual(tests.cluster_free(added), ["TestCephFSHelper", "TestHelper", "TestNew"])
 

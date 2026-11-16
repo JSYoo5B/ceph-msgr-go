@@ -130,6 +130,10 @@ func hasTestShape(fn *ast.FuncDecl) bool {
 	return false
 }
 
+// listedTestName is a test name line of go test -list. A Go identifier may
+// hold any Unicode letter or digit; RE2's \w is ASCII only.
+var listedTestName = regexp.MustCompile(`^Test[\p{L}\p{Nd}_]*$`)
+
 // listedSuiteTests returns, per suite package, each top-level test go test
 // -list reports and how many times it is listed (twice when the internal and
 // the external test package both declare it). Listing compiles the packages
@@ -149,7 +153,6 @@ func listedSuiteTests(t *testing.T) map[string]map[string]int {
 	}
 	listed := map[string]map[string]int{"integration": {}, "cephmsgr": {}}
 	done := map[string]string{}
-	name := regexp.MustCompile(`^Test\w*$`)
 	scanner := bufio.NewScanner(bytes.NewReader(output))
 	for scanner.Scan() {
 		var event struct{ Action, Package, Output, Test string }
@@ -162,7 +165,7 @@ func listedSuiteTests(t *testing.T) map[string]map[string]int {
 		case event.Action == "output":
 			line := strings.TrimSuffix(event.Output, "\n")
 			switch {
-			case name.MatchString(line) && listed[path.Base(event.Package)] != nil:
+			case listedTestName.MatchString(line) && listed[path.Base(event.Package)] != nil:
 				listed[path.Base(event.Package)][line]++
 			case strings.HasPrefix(line, "ok  \t"+event.Package+"\t"):
 			default:
@@ -212,6 +215,11 @@ func TestSuiteTestDeclsFollowGoDiscovery(t *testing.T) {
 	}
 	if !maps.EqualFunc(decls, want, slices.Equal) {
 		t.Fatalf("got %v, want %v", decls, want)
+	}
+	for _, line := range []string{"Test", "TestÄpfel", "Test_1"} {
+		if !listedTestName.MatchString(line) {
+			t.Errorf("listing line %q is not read as a test name", line)
+		}
 	}
 	// go test lists TestActual twice for this package; the counts compared
 	// with the listing must say so.
