@@ -14,7 +14,7 @@ class ChangePlanTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.git('init', '-q')
         self.write('README.md', 'before\n')
-        self.write('.github/scenarios/catalog.json', json.dumps({'scenarios':[
+        self.write('.github/scenarios/catalog.json', json.dumps({'version':1, 'scenarios':[
             {'group':'mon-mgr'}, {'group':'osd'}, {'group':'mds-sessions'}, {'group':'rbd'}]}))
         self.base = self.commit()
 

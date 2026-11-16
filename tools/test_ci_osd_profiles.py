@@ -1,14 +1,15 @@
 """Static admission checks for explicitly selected native OSD and MDS CI profiles.
 
-The matrix rows come from .github/scenarios/catalog.json (standard library only,
+The matrix rows come from the scenario catalog (standard library only,
 for all three runner OSes); checked workflow text includes basic CI and the
 reusable platform/native workflows. Workflow syntax is checked separately with the
 available workflow/YAML tooling.
 """
 from pathlib import Path
-import json
 import re
 import unittest
+
+import scenario_catalog
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -41,7 +42,7 @@ RBD_EXCLUSIVE_SELECTORS = (RBD_JOURNAL_LOST_APPEND_SELECTOR, RBD_LOCK_OWNER_LOSS
 
 def ceph_rows():
     """The scenario matrix rows, from the catalog that drives the workflow."""
-    document = json.loads((ROOT / ".github/scenarios/catalog.json").read_text(encoding="utf-8"))
+    document = scenario_catalog.load()
     return [dict(entry["params"]) for entry in document["scenarios"]]
 
 
@@ -838,7 +839,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         selector_text = "^" + test + "$"
         rows = [row for row in self.rows if row.get("test_run") == selector_text]
         self.assertEqual(len(rows), 2)
-        catalog = json.loads((ROOT / ".github/scenarios/catalog.json").read_text(encoding="utf-8"))["scenarios"]
+        catalog = scenario_catalog.load()["scenarios"]
         self.assertEqual({entry["group"] for entry in catalog if entry["params"].get("test_run") == selector_text}, {"mds-cephfs-sharedflock-recovery"})
         self.assertIn(test, self.declared)
         observed = set()
@@ -876,7 +877,7 @@ class NativeOSDCIProfilesTest(unittest.TestCase):
         selector_text = "^" + test + "$"
         rows = [row for row in self.rows if row.get("test_run") == selector_text]
         self.assertEqual(len(rows), 2)
-        catalog = json.loads((ROOT / ".github/scenarios/catalog.json").read_text(encoding="utf-8"))["scenarios"]
+        catalog = scenario_catalog.load()["scenarios"]
         self.assertEqual({entry["group"] for entry in catalog if entry["params"].get("test_run") == selector_text}, {group})
         expected = {test}
         self.assertTrue(expected <= self.declared)
