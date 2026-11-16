@@ -155,15 +155,15 @@ one: placement epoch 28, primary at epoch 27, interval still the one since
 epoch 26. The oracle refused it, and the single pre-start observation
 stopped the test.
 
-`absentAgain` and `reobserveAbsent` in the test now classify every later
+`intervalHeld` and `reobserveInterval` in the test now classify every later
 sample against the accepted observation, at most thirty a second apart:
 
 - a primary that reports another interval start has left the accepted
   interval, even from an older map. A primary's map epoch does not go back
   and the accepted observation's primary was not behind its placement, so a
   different start is a confirmed change; the test stops;
-- a sample accepted by the oracle and by `checkPGAbsent`, in the accepted
-  interval, is held;
+- a sample accepted by the oracle and by the state's own check
+  (`checkPGAbsent` here), in the accepted interval, is held;
 - a sample without a placement record or a query reply, with placement
   records that differ around the query, or from a primary behind the
   placement's epoch is inconclusive and is observed again. It never counts
@@ -175,6 +175,14 @@ The OSD starts only after one held sample. The records wait requires a held
 sample that shows the records. If the bound passes first, the test fails
 and names the last sample's reason. The checks of each sample are
 unchanged.
+
+The clean observation after the return and the readiness control is judged
+the same way: the first clean observation after the return is the accepted
+one, and `checkPGReturned` judges each later sample. Before, it was a single
+sample, and a primary behind a newly published epoch stopped the test. The
+primary-replacement control
+(`OSD_EC_PARTIAL_WRITE_PRIMARY_REPLACEMENT_VALIDATION.md`) uses the same two
+helpers for its observations under the replacement and after its return.
 
 The capture is unchanged. It still refuses an acting vector with an empty
 position, so both controls capture before the outage and after the return
@@ -208,8 +216,9 @@ Then both
    apart, until the PG is `active+clean` on its original placement without a
    pg_temp in an interval that started after that one;
 6. ask the fixture's readiness control for every OSD up and in and every PG
-   `active+clean`, observe the PG once more in the same interval and adopt
-   its placement record with a new session;
+   `active+clean`, observe the PG, at most thirty times a second apart,
+   until one observation is held clean in the same interval (as above), and
+   adopt its placement record with a new session;
 7. capture every acting shard, read the object back natively and through
    the Go client, and observe that the interval did not change.
 
@@ -313,6 +322,12 @@ two of the four shards.
   Three mutations failed it as intended: lag treated as a departure (the
   hosted failure), an interval change read from a refused sample ignored,
   and an inconclusive sample accepted.
+- `TestReobserveReturned` drives the clean observation after the
+  readiness control: it holds a sample at once, at a newer epoch and after
+  lagging samples, and fails on persistent lag, on a later interval
+  (lagging or not, or after a lagging sample), on the primary under another
+  address and on a recovering state. With lag treated as a departure it
+  failed on four cases.
 - `TestShardLogRecovered` pins the recovered shape against five synthetic
   shard receipts, of which only the one that holds every entry is equal to
   it, and refuses seven write sequences whose first or last write does not
