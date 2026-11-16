@@ -90,14 +90,33 @@ The vocabulary is the `defineCapability` calls in
 [`integration/fixture`](../../integration/fixture/capability.go), each beside
 the mode it admits, with its requirements: workflow-forwarded variables the
 profile must have (`OSD_REPLICAS=4`), capabilities it extends (`+name`) and
-capabilities it excludes (`!name`). `scenario_plan.py validate` reads those
-calls and refuses a row that declares an undefined capability or does not
-meet a requirement, and every reading of the catalog refuses a capability on
-a `test_run` that is not one anchored test. The fixture refuses the same
-declarations before it starts a cluster, and its Go tests keep the source
-declarations, the planner's reading of them and the registry equal. A new
+capabilities it excludes (`!name`). Those terms are only part of what the
+fixture checks: the topology a capability runs on has its own rules (the
+four-OSD topology, for example, admits only BlueStore with the `legacy-v6` or
+`replicated-pg-v8` profile). The planner therefore keeps no copy of either.
+Every reading of the catalog refuses a capability on a `test_run` that is not
+one anchored test, and `scenario_plan.py validate` runs the fixture's
+`TestCatalogRowsAreAdmittedByTheFixture`, which passes every row, as the
+native workflow forwards it, through the fixture's `loadProfile`. A row that
+declares an undefined capability, or a capability on a topology the fixture
+refuses for any reason, fails validation with the fixture's own error, the
+same refusal the fixture gives before it starts a cluster. `validate`
+therefore needs the fixture module's Go toolchain (1.26 or later). A new
 control adds its `defineCapability` call beside its own code and the
 declaration to its own row; it edits no shared selector list.
+
+A documented reproduction runs a row (scenario identifier `ID`) with the
+environment the catalog gives it, so the declaration and the topology cannot
+drift from the row:
+
+```sh
+eval "$(python3 tools/scenario_plan.py env ID)"
+sh integration/run.sh
+```
+
+`validate` refuses a documented `env` of an unknown row and a hand-written
+reproduction that selects the exact test of a row with capabilities without
+declaring them in the same code block or paragraph.
 
 The fixture reads only the capability value and the exact selector. It does
 not know that a catalog row supplied them, so a declaration placed beside the

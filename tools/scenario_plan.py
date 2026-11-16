@@ -11,7 +11,7 @@ admission of every row (one cluster-free Go test of integration/fixture, which
 needs the fixture module's Go toolchain) and starts no cluster.
 
   scenario_plan.py validate               invariants, mandatory list, fixed jobs, selector targets,
-                                          fixture admission of every row
+                                          documented reproductions, fixture admission of every row
   scenario_plan.py list                   one identifier per line
   scenario_plan.py plan --select S        matrix JSON on stdout, explanation on stderr
   scenario_plan.py env ID                 shell exports of the native workflow's environment for one row
@@ -43,6 +43,10 @@ documented reproduction runs a row as CI does:
 
   eval "$(python3 tools/scenario_plan.py env ID)"
   sh integration/run.sh
+
+validate refuses a documented `env ID` of an unknown row, and a hand-written
+reproduction that selects the exact test of a row with capabilities but does
+not declare them.
 """
 import argparse
 import json
@@ -71,6 +75,11 @@ CAPABILITY_NAME = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
 # mark of each problem line it reports (capability_test.go).
 ADMISSION_TEST = "TestCatalogRowsAreAdmittedByTheFixture"
 ADMISSION_MARK = "catalog admission: "
+# A documented assignment of one exact test selector, and a documented
+# reproduction through `env` (reproduction_problems).
+DOCUMENTED_RUN = re.compile(r"CEPH_MSGR_TEST_RUN=['\"]?(\^Test[A-Za-z0-9_]+\$)")
+DOCUMENTED_CAPABILITIES = re.compile(r"CEPH_MSGR_TEST_CAPABILITIES=['\"]?([a-z0-9,-]+)")
+DOCUMENTED_ENV = re.compile(r"scenario_plan\.py env ([^\s\"'`)]+)")
 WORKFLOW_BINDING = re.compile(r"(?m)^ +(CEPH_[A-Z0-9_]+): \$\{\{ matrix\.([a-z_]+)(?: \|\| '([^']*)')? \}\}\s*$")
 
 
@@ -165,6 +174,59 @@ def workflow_bindings(text=None):
 def row_environment(params, bindings):
     """The environment the native workflow gives one row, in binding order."""
     return [(name, params.get(param) or fallback) for name, (param, fallback) in bindings.items()]
+
+
+def markdown_chunks(text):
+    """The fenced code blocks and the paragraphs of a Markdown text."""
+    chunks, current, fenced = [], [], False
+    for line in text.splitlines():
+        if line.lstrip().startswith("```"):
+            if current:
+                chunks.append("\n".join(current))
+            current, fenced = [], not fenced
+        elif not fenced and not line.strip():
+            if current:
+                chunks.append("\n".join(current))
+            current = []
+        else:
+            current.append(line)
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+def documentation_files(root=ROOT):
+    """The Markdown files of the tree, outside .git."""
+    return sorted(path for path in Path(root).rglob("*.md") if ".git" not in path.relative_to(root).parts)
+
+
+def reproduction_problems(documents, scenarios):
+    """A documented reproduction runs a catalog row as the fixture admits it.
+
+    documents is [(name, text)]. A reproduction through `scenario_plan.py env
+    ID` names a row of the catalog. A hand-written environment that selects
+    the exact test of a row declaring capabilities declares the same
+    capabilities in the same code block or paragraph; without them the fixture
+    refuses the run before it starts a cluster."""
+    ids = {entry["id"] for entry in scenarios}
+    declared = {}
+    for entry in scenarios:
+        params = entry.get("params", {})
+        if params.get("capabilities"):
+            declared.setdefault(params.get("test_run"), set()).add(params["capabilities"])
+    problems = []
+    for name, text in documents:
+        for chunk in markdown_chunks(text):
+            for sid in DOCUMENTED_ENV.findall(chunk):
+                if sid not in ids and sid != "ID":
+                    problems.append("%s: reproduction names unknown scenario %s" % (name, sid))
+            given = set(DOCUMENTED_CAPABILITIES.findall(chunk))
+            for selector in DOCUMENTED_RUN.findall(chunk):
+                wanted = declared.get(selector)
+                if wanted and not given & wanted:
+                    problems.append("%s: reproduction of %s lacks CEPH_MSGR_TEST_CAPABILITIES=%s"
+                                    % (name, selector, " or ".join(sorted(wanted))))
+    return problems
 
 
 def fixture_admission_problems(run=subprocess.run, directory=FIXTURE):
@@ -325,6 +387,8 @@ def main(argv=None):
             problems = (validate_catalog(scenarios) + mandatory_problems(scenarios, load_mandatory())
                         + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
                         + selector_problems(scenarios, integration_tests())
+                        + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
+                                                 for path in documentation_files()], scenarios)
                         + fixture_admission_problems())
             for problem in problems:
                 print(problem, file=sys.stderr)

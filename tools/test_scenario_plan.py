@@ -163,6 +163,29 @@ class CatalogTests(unittest.TestCase):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             self.assertEqual(plan.main(["env", "no-such-scenario"]), 2)
 
+    def test_documented_reproductions_declare_their_row(self):
+        scenarios = [entry("osd.a", test_run="^TestCephA$", capabilities="osd-erasure-width,osd-shard-history"),
+                     entry("osd.b", test_run="^TestCephB$")]
+        good = ("Run it with:\n\n```sh\neval \"$(python3 tools/scenario_plan.py env osd.a)\"\nsh integration/run.sh\n```\n\n"
+                "```sh\nCEPH_MSGR_TEST_RUN='^TestCephA$' \\\nCEPH_MSGR_TEST_CAPABILITIES=osd-erasure-width,osd-shard-history \\\n"
+                "sh integration/run.sh\n```\n\nSelect `CEPH_MSGR_TEST_RUN=^TestCephB$` alone.\n")
+        self.assertEqual(plan.reproduction_problems([("good.md", good)], scenarios), [])
+        for text, wanted in (
+                ("```sh\nCEPH_MSGR_TEST_RUN='^TestCephA$' \\\nsh integration/run.sh\n```\n", "lacks CEPH_MSGR_TEST_CAPABILITIES"),
+                ("Select `CEPH_MSGR_TEST_RUN=^TestCephA$` and the row's key.\n", "lacks CEPH_MSGR_TEST_CAPABILITIES"),
+                ("```sh\nCEPH_MSGR_TEST_RUN='^TestCephA$'\nCEPH_MSGR_TEST_CAPABILITIES=osd-erasure-width\n```\n",
+                 "lacks CEPH_MSGR_TEST_CAPABILITIES=osd-erasure-width,osd-shard-history"),
+                ("```sh\nCEPH_MSGR_TEST_CAPABILITIES=osd-erasure-width,osd-shard-history\n```\n\n"
+                 "```sh\nCEPH_MSGR_TEST_RUN='^TestCephA$'\n```\n", "lacks CEPH_MSGR_TEST_CAPABILITIES"),
+                ("```sh\neval \"$(python3 tools/scenario_plan.py env osd.gone)\"\n```\n", "unknown scenario osd.gone")):
+            with self.subTest(text=text):
+                self.assertIn(wanted, "\n".join(plan.reproduction_problems([("bad.md", text)], scenarios)))
+
+    def test_repository_reproductions_declare_their_row(self):
+        documents = [(str(path), path.read_text(encoding="utf-8")) for path in plan.documentation_files()]
+        self.assertTrue(any("scenario_plan.py env " in text for _, text in documents))
+        self.assertEqual(plan.reproduction_problems(documents, plan.load_catalog()), [])
+
     def test_mandatory_list_detects_silent_omission_in_both_directions(self):
         scenarios = [entry("a"), entry("b")]
         self.assertEqual(plan.mandatory_problems(scenarios, ["a", "b"]), [])
