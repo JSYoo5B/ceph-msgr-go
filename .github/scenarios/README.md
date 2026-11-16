@@ -415,9 +415,16 @@ tests, the coverage map check and the protocol evidence check all ask
 `go test -json -list` through `tools/go_test_list.py`, per Go module with
 `GOWORK=off`, `CGO_ENABLED=0` and `-mod=readonly`. Listing compiles the test
 binaries and runs no test body. A missing `go`, a build failure or unexpected
-listing output is an error, never an empty set. The coverage map check also
-lists the fixture module, so the Python tool tests need Go 1.26 or later; basic
-CI runs them with Go 1.27 before installing the product's Go 1.25.0.
+listing output is an error, never an empty set. `go test -list` says which tests
+exist, not where they are declared: a check that ties a test to a file (the
+protocol evidence links, test-named links in the coverage map) also needs Go's
+parser to find the declaration in that file (`go_test_list.declares`, through
+`tools/quality/testdecls` under the go/build context). The coverage map check
+also lists the fixture module, so the Python tool tests need Go 1.26 or later.
+Basic CI and the platform unit matrix run them with Go 1.27 and install the
+product's Go 1.25.0 (or the matrix Go) afterwards for the product steps;
+`tools/test_workflow_toolchains.py` refuses a workflow step whose installed Go
+is older than the modules its tools load.
 
 The planner emits native rows in `include` and selected check suites in `fixed`.
 `--catalog` reads the tested revision's vocabulary using the trusted planner.
