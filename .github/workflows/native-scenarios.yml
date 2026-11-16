@@ -60,6 +60,8 @@ jobs:
       - name: Preserve the trusted test result gate
         run: |
           cp .trusted-native/tools/native_test_results.py "$RUNNER_TEMP/native_test_results.py"
+          # The result gate imports its Go test listing from its own directory.
+          cp .trusted-native/tools/go_test_list.py "$RUNNER_TEMP/go_test_list.py"
           cp .trusted-native/tools/native_evidence.py "$RUNNER_TEMP/native_evidence.py"
           # The soak collector imports this validator from its own directory;
           # the tested checkout's copy is never used for retained evidence.
