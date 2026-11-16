@@ -258,6 +258,26 @@ The test was wrong, not the client. `checkOSDDials` now counts the dials at
 every OSD endpoint, earlier ones included; its cluster-free test covers the
 reused endpoint. Every step up to that check behaved as recorded above.
 
+Single recovery. Commit `1090dcb` replaced the cleanup per kill with the
+run's single recovery. An archive of it, on the same host and image and
+inside the CI result gate, passed the three rows again: watch 20.88 s,
+snapshot 26.11 s, backoff 24.83 s. No other test uses the changed helpers.
+
+Early-exit control. A copy of that archive, changed only on the remote host,
+stopped the backoff test with `t.Fatalf` right after both kills (osd.0 on
+shard 3, then osd.2 on shard 1), before either explicit start. As intended,
+the gate rejected the row: one FAIL, the forced stop. This is a control
+and not a pass. The recovery then started osd.0 and osd.2 in kill order and
+reported every OSD up and every PG clean from its one readiness check. The
+pool removal that followed reported no error. A final cleanup added to the
+copy ran after every other cleanup. Its readiness check passed again. The
+fixture's start-state check (120 s budget) reported one state difference,
+`mon_allow_pool_delete` set to true, which is the entry the
+`//fixture:isolated` directive declares. Its other entries were reads cut
+short by the end of the budget; those reads had found no difference in
+their earlier completed polls. The run ended with zero testcontainers
+containers and its run directory removed.
+
 ## Limits
 
 - One profile: replicated-pg-v8, secure aes256k, IPv4, container, optimized
