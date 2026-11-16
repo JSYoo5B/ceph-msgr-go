@@ -1,15 +1,11 @@
 package main
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 )
@@ -32,11 +28,6 @@ func catalogCapabilities(t *testing.T, selector string) string {
 	return value
 }
 
-// capabilityDefinitionPattern is the planner's CAPABILITY_DEFINITION
-// (tools/scenario_plan.py): the name, the summary and the requirements of one
-// defineCapability call, each a plain string literal.
-var capabilityDefinitionPattern = regexp.MustCompile(`\bdefineCapability\(\s*"([^"\\]*)",\s*"(?:[^"\\]|\\.)*",\s*"([^"\\]*)"`)
-
 // ciWorkflowBindings are the trusted native workflow's matrix bindings.
 func ciWorkflowBindings(t *testing.T) map[string]ciBinding {
 	t.Helper()
@@ -54,68 +45,12 @@ func ciWorkflowBindings(t *testing.T) map[string]ciBinding {
 	return bindings
 }
 
-// The planner reads the vocabulary and the requirements from the
-// defineCapability calls of the non-test source with a regular expression.
-// Every call must therefore have its name, summary and requirements as plain
-// string literals, and the planner's view, the syntax tree and the registry
-// the fixture admits must be equal. Every requirement names a variable the
-// native workflow forwards and the profile reports, or a defined capability.
-func TestFixtureCapabilityVocabularyIsTheSourceDeclarations(t *testing.T) {
-	paths, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var parsed, scanned []string
-	for _, path := range paths {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		ast.Inspect(file, func(node ast.Node) bool {
-			call, ok := node.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if name, ok := call.Fun.(*ast.Ident); !ok || name.Name != "defineCapability" {
-				return true
-			}
-			var values []string
-			for _, arg := range call.Args[:3] {
-				literal, ok := arg.(*ast.BasicLit)
-				if !ok || literal.Kind != token.STRING || !strings.HasPrefix(literal.Value, `"`) {
-					t.Fatalf("%s: defineCapability needs its name, summary and requirements as string literals", path)
-				}
-				value, err := strconv.Unquote(literal.Value)
-				if err != nil {
-					t.Fatal(err)
-				}
-				values = append(values, value)
-			}
-			if strings.ContainsAny(values[0]+values[2], `"\`) {
-				t.Fatalf("%s: capability %q has quotes or escapes in its name or requirements", path, values[0])
-			}
-			parsed = append(parsed, values[0]+" "+values[2])
-			return true
-		})
-		source, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, match := range capabilityDefinitionPattern.FindAllStringSubmatch(string(source), -1) {
-			scanned = append(scanned, match[1]+" "+match[2])
-		}
-	}
-	var registered []string
-	for _, name := range slices.Sorted(maps.Keys(fixtureCapabilities)) {
-		registered = append(registered, name+" "+fixtureCapabilities[name].requires)
-	}
-	slices.Sort(parsed)
-	slices.Sort(scanned)
-	if !slices.Equal(parsed, scanned) || !slices.Equal(parsed, registered) || len(registered) == 0 {
-		t.Fatalf("capability vocabulary differs: syntax %v, planner view %v, registry %v", parsed, scanned, registered)
+// Every requirement names a variable the native workflow forwards and the
+// profile reports, or a defined capability, and every defined capability is
+// declared by some catalog row.
+func TestFixtureCapabilityDefinitions(t *testing.T) {
+	if len(fixtureCapabilities) == 0 {
+		t.Fatal("the fixture defines no capability")
 	}
 	bindings := ciWorkflowBindings(t)
 	reported := profile{}.containerEnvironment()
@@ -229,31 +164,89 @@ func TestFixtureRefusesCapabilityOutsideItsDeclaration(t *testing.T) {
 	}
 }
 
-// Every catalog row's declaration loads, and every capability it declares is
-// admitted on the row's own topology.
-func TestCatalogCapabilitiesAreAdmittedOnTheirRows(t *testing.T) {
-	bindings := ciWorkflowBindings(t)
-	rows := 0
-	for _, row := range ciRepositoryCatalog(t) {
+// catalogAdmissionProblems is the fixture's admission of catalog rows as the
+// trusted native workflow forwards them: loadProfile accepts the row (every
+// topology, selector and capability rule of the fixture), and a declared
+// capability list is loaded unchanged for the row's own test_run, each
+// capability admitted on the row's topology. A capability's requirement terms
+// are only part of what loadProfile checks, so no reading of those terms can
+// stand in for this.
+func catalogAdmissionProblems(rows []ciScenario, bindings map[string]ciBinding) []string {
+	var problems []string
+	for _, row := range rows {
+		p, err := ciProfile(row, bindings)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: the fixture refuses the row: %v", row.ID, err))
+			continue
+		}
 		value := row.Params["capabilities"]
 		if value == "" {
 			continue
 		}
-		rows++
-		p, err := ciProfile(row, bindings)
-		if err != nil {
-			t.Fatalf("%s: %v", row.ID, err)
-		}
 		if p.capabilities != value || p.testRun != row.Params["test_run"] {
-			t.Fatalf("%s: loaded capabilities %q for %q", row.ID, p.capabilities, p.testRun)
+			problems = append(problems, fmt.Sprintf("%s: the fixture loaded capabilities %q for %q", row.ID, p.capabilities, p.testRun))
+			continue
 		}
 		for _, name := range strings.Split(value, ",") {
 			if !p.admits(fixtureCapabilities[name]) {
-				t.Fatalf("%s: capability %s not admitted", row.ID, name)
+				problems = append(problems, fmt.Sprintf("%s: the fixture does not admit capability %s", row.ID, name))
 			}
 		}
 	}
-	if rows == 0 {
-		t.Fatal("no catalog row declares a capability")
+	return problems
+}
+
+// tools/scenario_plan.py validate runs this test and reports each line marked
+// "catalog admission: " as a catalog problem, so a row the fixture refuses
+// fails validation with the fixture's own error.
+func TestCatalogRowsAreAdmittedByTheFixture(t *testing.T) {
+	rows := ciRepositoryCatalog(t)
+	for _, problem := range catalogAdmissionProblems(rows, ciWorkflowBindings(t)) {
+		t.Error("catalog admission: " + problem)
+	}
+	if !slices.ContainsFunc(rows, func(row ciScenario) bool { return row.Params["capabilities"] != "" }) {
+		t.Error("catalog admission: no catalog row declares a capability")
+	}
+}
+
+// A declared capability whose own requirement terms hold can still sit on a
+// topology the fixture refuses. The four-OSD erasure-capacity topology admits
+// only BlueStore with the legacy-v6 or replicated-pg-v8 profile and no other
+// fixture mode, which osd-erasure-width's terms (OSD=1 OSD_REPLICAS=4) do not
+// repeat. The admission is the fixture's, so each such row is refused, while
+// the row as the catalog declares it is admitted.
+func TestCatalogAdmissionRefusesCapabilityOnRefusedTopology(t *testing.T) {
+	bindings := ciWorkflowBindings(t)
+	const failover = "^TestCephOSDErasureOptimizedK2M2FailoverIntegration$"
+	var row ciScenario
+	for _, candidate := range ciRepositoryCatalog(t) {
+		if candidate.Params["test_run"] == failover {
+			row = candidate
+		}
+	}
+	if row.ID == "" || row.Params["capabilities"] != capOSDErasureWidth.name {
+		t.Fatalf("no catalog row declares %s for %s", capOSDErasureWidth.name, failover)
+	}
+	if problems := catalogAdmissionProblems([]ciScenario{row}, bindings); len(problems) != 0 {
+		t.Fatal("the catalog's own row is refused:", problems)
+	}
+	for name, change := range map[string]map[string]string{
+		"reply-v8 profile":   {"osd_profile": "replicated-pg-reply-v8"},
+		"request-v9 profile": {"osd_profile": "replicated-pg-request-v9-reply-v8"},
+		"MemStore":           {"osd_store": "memstore"},
+		"workflow store":     {"osd_store": ""},
+		"cache pools":        {"osd_cache_pools": "1"},
+		"MDS fixture":        {"mds_fresh": "1"},
+		"RBD fixture":        {"rbd": "1"},
+		"OSD soak":           {"osd_soak": "1m"},
+		"no MGR":             {"managers": "0"},
+		"three OSDs":         {"osd_replicas": "3"},
+	} {
+		mutated := ciScenario{ID: row.ID, Params: maps.Clone(row.Params)}
+		maps.Copy(mutated.Params, change)
+		problems := catalogAdmissionProblems([]ciScenario{mutated}, bindings)
+		if len(problems) == 0 || !strings.HasPrefix(problems[0], row.ID+": ") {
+			t.Fatalf("%s: row admitted: %v", name, problems)
+		}
 	}
 }

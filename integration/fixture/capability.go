@@ -18,12 +18,13 @@ import (
 // the same two values without a fixture change.
 //
 // Each capability is defined once, beside the mode it admits, by one
-// defineCapability call whose name and requirements are string literals.
-// Those calls are the whole vocabulary. tools/scenario_plan.py validate reads
-// them from this package's source and refuses a row that declares an
-// undefined capability or one whose requirements its parameters do not meet;
-// TestFixtureCapabilityVocabularyIsTheSourceDeclarations keeps the source
-// declarations, the planner's reading of them and this registry equal.
+// defineCapability call. Those calls are the whole vocabulary. The planner
+// keeps no copy of it or of any admission rule: tools/scenario_plan.py
+// validate runs TestCatalogRowsAreAdmittedByTheFixture, which passes every
+// catalog row through loadProfile as the native workflow forwards it, so a row
+// that declares an undefined capability, or a capability on a topology this
+// fixture refuses for any reason, fails validation with this fixture's own
+// error.
 //
 // The requirements are space-separated terms over the profile:
 //
@@ -33,8 +34,7 @@ import (
 //	!name       capability name is not declared
 //
 // extra, when not nil, is a further condition on fixture inputs that no row
-// parameter carries (for example the local oracle variables). The planner
-// cannot see it; the fixture refuses a declaration that fails it.
+// parameter carries (for example the local oracle variables).
 type fixtureCapability struct {
 	name, summary, requires string
 	extra                   func(profile) bool
