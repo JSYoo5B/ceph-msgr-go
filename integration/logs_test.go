@@ -62,7 +62,7 @@ func waitLogEntry(t *testing.T, ctx context.Context, stream *cephmsgr.LogStream,
 	}
 }
 
-//fixture:shareable watches logs and appends cluster log lines only
+//fixture:isolated appends cluster log entries and reads log history from version 1; the start-state check omits the log
 func TestCephLogWatchIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	data, err := os.ReadFile(filepath.Join(control, "log-oracle.json"))

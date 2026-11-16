@@ -18,7 +18,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
-//fixture:shareable config set/rm on client_mount_timeout entries restored by checked cleanup; client-only TCP fault
+//fixture:isolated appends a cluster log entry and reads log history from version 1; the start-state check omits the log
 func TestCephConfigStreamIntegration(t *testing.T) {
 	control := ordinaryLogFixture(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

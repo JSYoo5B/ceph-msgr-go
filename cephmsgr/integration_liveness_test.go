@@ -197,7 +197,7 @@ func (p *writeStallRelay) Close() error {
 	return nil
 }
 
-//fixture:shareable its config-key set is cut short by a client-side relay and config-key get confirms the key is absent
+//fixture:isolated an applied config-key set is left behind when the test fails; config-key is not in the start-state check
 func TestCephMonitorWriteStallIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {
 		t.Skip("requires a disposable fixture")

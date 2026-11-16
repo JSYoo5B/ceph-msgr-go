@@ -141,7 +141,7 @@ func (o *crcOfferObserver) check(mon, mgr string) (int, error) {
 	return completed, nil
 }
 
-//fixture:shareable reads and tells; its own config-key is removed by a checked deferred config-key del
+//fixture:isolated sets a config-key; cleanup is registered after the set and ignores the result code; config-key is not checked
 func TestCephCRCConnectionModeIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_CONNECTION_MODE") != "crc" {
 		t.Skip("requires the explicitly selected CRC-only fixture")
