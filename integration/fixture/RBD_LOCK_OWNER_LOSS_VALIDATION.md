@@ -112,8 +112,11 @@ and no other RBD test runs. Required rows:
 Reproduce the CRC row with:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss)"
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
 The image is the lock image of the exclusive-lock acceptance: 320 KiB, order

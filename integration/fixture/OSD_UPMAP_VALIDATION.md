@@ -93,8 +93,11 @@ key/service cipher, connection mode, IP family and runtime, and the
 `osd-long-tickets` capability) and a unique diagnostics directory:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap)"
-CEPH_MSGR_TEST_DIAGNOSTICS="$(mktemp -d)" sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdupmap) &&
+  eval "$env_lines" &&
+  CEPH_MSGR_TEST_DIAGNOSTICS="$(mktemp -d)" sh integration/run.sh
+)
 ```
 
 The secure row is

@@ -110,8 +110,11 @@ sequence `setup`, `observe-locked`, `checkpoint`, `observe-recorded`,
 Reproduce the CRC row with:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange)"
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
 Clients, the owned entry and the reply gate are those of the lost-append

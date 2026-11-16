@@ -144,9 +144,12 @@ failure by itself.
 On an authorized Linux runner, hold its run lock, use the pinned image and:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfrommultichunklateerror)"
-CEPH_MSGR_TEST_TIMEOUT=8m \
-go -C integration/fixture run . run -project ../..
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfrommultichunklateerror) &&
+  eval "$env_lines" &&
+  CEPH_MSGR_TEST_TIMEOUT=8m \
+    go -C integration/fixture run . run -project ../..
+)
 ```
 
 Its scenario ID is

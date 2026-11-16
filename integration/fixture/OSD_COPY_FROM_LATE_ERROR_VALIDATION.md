@@ -109,9 +109,12 @@ change the observed daemon error or weaken the controller's exclusivity.
 On an authorized Linux runner, hold its run lock, use the pinned image and:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror)"
-CEPH_MSGR_TEST_TIMEOUT=8m \
-go -C integration/fixture run . run -project ../..
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromlateerror) &&
+  eval "$env_lines" &&
+  CEPH_MSGR_TEST_TIMEOUT=8m \
+    go -C integration/fixture run . run -project ../..
+)
 ```
 
 The operation context is 240 seconds. The controller rejects a broad test

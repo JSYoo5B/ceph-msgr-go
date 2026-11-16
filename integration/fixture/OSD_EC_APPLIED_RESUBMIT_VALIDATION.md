@@ -80,8 +80,11 @@ tests, fixture unit tests and fixture vet.
 On an authorized Linux runner, use the existing fixture run/check locks and:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2appliedresubmit)"
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2appliedresubmit) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
 The dedicated mandatory scenario is

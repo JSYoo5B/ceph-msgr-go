@@ -137,8 +137,11 @@ fixture on one BlueStore legacy-v6 OSD, the pinned image and the
 `exclusive-osd-cache-pools` capability):
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcacheopgo)"
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd-cache-pools.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcacheopgo) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
 No duplicate row or workflow trigger is added.

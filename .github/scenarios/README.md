@@ -110,13 +110,24 @@ environment the catalog gives it, so the declaration and the topology cannot
 drift from the row:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env ID)"
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env ID) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
-`validate` refuses a documented `env` of an unknown row and a hand-written
-reproduction that selects the exact test of a row with capabilities without
-declaring them in the same code block or paragraph.
+For an unknown row `env` prints nothing on stdout and exits non-zero. The
+assignment keeps that status (`eval "$(...)"` would replace it with the
+success of evaluating an empty string), so the `&&` chain never starts the
+runner with the environment the shell already had, and the subshell keeps one
+row's environment out of the next. A record that reproduces two rows joins
+their subshells with `&&`.
+
+`validate` refuses a documented `env` of an unknown row, a documented `env`
+lookup that is not this checked form, and a hand-written reproduction that
+selects the exact test of a row with capabilities without declaring them in
+the same code block or paragraph.
 
 The fixture reads only the capability value and the exact selector. It does
 not know that a catalog row supplied them, so a declaration placed beside the

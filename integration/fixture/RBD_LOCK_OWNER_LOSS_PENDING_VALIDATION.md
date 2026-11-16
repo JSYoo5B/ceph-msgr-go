@@ -91,8 +91,11 @@ and no other RBD test runs. Required rows:
 Reproduce the CRC row with:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerlosspending)"
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerlosspending) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
 Image, clients and the two handoffs are those of the lock-owner-loss record.

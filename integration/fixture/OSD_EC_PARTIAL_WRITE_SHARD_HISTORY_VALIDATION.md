@@ -212,8 +212,11 @@ count comparisons, the adjacency of the two entries, and two forms of the
 On an authorized Linux runner, hold its run lock, use the pinned image and:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardhistory)"
-go -C integration/fixture run . run -project ../..
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2partialwriteshardhistory) &&
+  eval "$env_lines" &&
+  go -C integration/fixture run . run -project ../..
+)
 ```
 
 The dedicated mandatory row is

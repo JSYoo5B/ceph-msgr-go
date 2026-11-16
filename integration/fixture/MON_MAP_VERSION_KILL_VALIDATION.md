@@ -220,8 +220,11 @@ The result gate requires the row's `api/` test to PASS. On an authorized
 Linux/amd64 Docker runner, holding its execution lock:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill)"
-CGO_ENABLED=0 sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill) &&
+  eval "$env_lines" &&
+  CGO_ENABLED=0 sh integration/run.sh
+)
 ```
 
 ## Daemon-free evidence

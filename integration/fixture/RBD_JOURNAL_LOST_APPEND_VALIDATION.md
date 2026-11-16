@@ -90,8 +90,11 @@ Required rows:
 Reproduce the CRC row with:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply)"
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env rbd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
 ### Clients

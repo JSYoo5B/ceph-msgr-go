@@ -228,8 +228,11 @@ that redundant bound was deleted instead.
 On an authorized Linux runner, hold its run lock, use the pinned image and:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2copyfromhistory)"
-go -C integration/fixture run . run -project ../..
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2copyfromhistory) &&
+  eval "$env_lines" &&
+  go -C integration/fixture run . run -project ../..
+)
 ```
 
 The dedicated mandatory row is

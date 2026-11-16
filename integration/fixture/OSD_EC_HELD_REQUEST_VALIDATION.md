@@ -221,8 +221,11 @@ with the environment the catalog gives it, which includes the pinned image
 and the row's fixture capabilities:
 
 ```sh
-eval "$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2requestheldatdyingprimary)"
-sh integration/run.sh
+(
+  env_lines=$(python3 tools/scenario_plan.py env osd.aes256k.ip4.container.osd-store-bluestore.osd-replicas-4.osd-profile-replicated-pg-v8.t-osderasureoptimizedk2m2requestheldatdyingprimary) &&
+  eval "$env_lines" &&
+  sh integration/run.sh
+)
 ```
 
 The dedicated mandatory row is
