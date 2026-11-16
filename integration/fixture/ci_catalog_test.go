@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"maps"
@@ -83,15 +85,24 @@ func ciProfile(row ciScenario, bindings map[string]ciBinding) (profile, error) {
 	})
 }
 
+// ciNativeSources maps each native test to its declaring file. The files are
+// the _test.go files the build context selects (CGO disabled, as the listing
+// in TestCINativeCompiledInventory), parsed by Go's parser; that test pairs
+// the names with go test -list, which decides which tests exist.
 func ciNativeSources(root string) (map[string]string, error) {
 	result := map[string]string{}
 	native := regexp.MustCompile(`^TestCeph\w*Integration$`)
+	ctx := build.Default
+	ctx.CgoEnabled = false
 	for _, pkg := range []string{"integration", "cephmsgr"} {
-		paths, err := filepath.Glob(filepath.Join(root, pkg, "*_test.go"))
-		if err != nil {
+		dir := filepath.Join(root, pkg)
+		info, err := ctx.ImportDir(dir, 0)
+		var none *build.NoGoError
+		if err != nil && !errors.As(err, &none) {
 			return nil, err
 		}
-		for _, path := range paths {
+		for _, name := range append(slices.Clone(info.TestGoFiles), info.XTestGoFiles...) {
+			path := filepath.Join(dir, name)
 			file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 			if err != nil {
 				return nil, err
@@ -323,6 +334,17 @@ func TestCINativeSourcesRefuseDuplicateNames(t *testing.T) {
 	write("integration/a_test.go", native+"func TestCephAHelper(t *testing.T) {}\nfunc (s suite) TestCephMethodIntegration(t *testing.T) {}\n")
 	write("cephmsgr/a_test.go", native)
 	sources, err := ciNativeSources(root)
+	if err != nil || !maps.Equal(sources, map[string]string{"integration/TestCephAIntegration": "integration/a_test.go", "cephmsgr/TestCephAIntegration": "cephmsgr/a_test.go"}) {
+		t.Fatalf("sources %v, err %v", sources, err)
+	}
+	// A build-ignored file and a raw string that reads like a declaration
+	// add no native test; neither does a file outside the test files.
+	if err := os.WriteFile(filepath.Join(root, "integration", "ignored_test.go"), []byte("//go:build ignore\n\npackage x\n\nfunc TestCephIgnoredIntegration(t *testing.T) {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write("integration/doc_test.go", "const doc = `\nfunc TestCephTextIntegration(t *testing.T) {}\n`\n")
+	write("cephmsgr/helper.go", "func TestCephSourceIntegration(t *testing.T) {}\n")
+	sources, err = ciNativeSources(root)
 	if err != nil || !maps.Equal(sources, map[string]string{"integration/TestCephAIntegration": "integration/a_test.go", "cephmsgr/TestCephAIntegration": "cephmsgr/a_test.go"}) {
 		t.Fatalf("sources %v, err %v", sources, err)
 	}
