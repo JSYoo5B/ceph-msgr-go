@@ -42,8 +42,25 @@ position in the up and acting sets, no pg_temp, a primary that reports
 exactly active and undersized, with or without degraded, in an interval that
 started after the recorded one, in which the PG has started.
 
+``replaced_failures`` judges the state of the controls that take the OSD of
+the primary itself out of the PG: the PG active under the member that the
+pinned map makes primary while the original primary's position is empty. A
+shard listed in the pool's ``nonprimary_shards`` cannot lead; the member of
+such a shard that the map names first asks for a pg_temp of the acting set
+(src/osd/PeeringState.cc:2639-2664), the MON stores it with the shards that
+can lead first (src/osd/OSDMap.cc:2968-2989) and the first member of that
+order that exists and is up becomes primary (src/osd/OSDMap.cc:3060-3093).
+For an empty position 0 that is the first parity shard. It sends nothing and
+is as strict as the others: the same two placement records, the recorded
+placement except for a newer epoch, the one empty position, a pg_temp and
+the primary that order names, with another address; a primary that reports
+exactly active and undersized, with or without degraded, for its own shard,
+in an interval that started after the recorded one, in which the PG has
+started.
+
 The receipt says that the PG entered a newer interval with its original
-placement, or that it is active without one member. It says nothing about
+placement, that it is active without one member, or that it is active under
+another primary. It says nothing about
 what any shard holds; that is read from the shards' own stores by the
 shard-history capture.
 """
@@ -249,6 +266,80 @@ def absent_failures(origin, shard, since, seen):
     if query["up"] != holed or query["acting"] != holed:
         reasons.append("the primary's up %r and acting %r are not %r" % (query["up"], query["acting"], holed))
     if query["info"]["pgid"] != "%ss%d" % (origin["pgid"], origin["pg_shard"]) or query["info"]["shard"] != origin["pg_shard"]:
+        reasons.append("the query was answered for %s" % query["info"]["pgid"])
+    if query["same_interval_since"] <= since:
+        reasons.append("the interval still started at epoch %d" % query["same_interval_since"])
+    elif type(first.get("epoch")) is int and not query["same_interval_since"] <= first["epoch"]:
+        reasons.append("the interval started at epoch %d, after the placement's epoch" % query["same_interval_since"])
+    if query["last_epoch_started"] < query["same_interval_since"]:
+        reasons.append("the PG has not started in its current interval")
+    if type(first.get("epoch")) is int and query["epoch"] < first["epoch"]:
+        reasons.append("the primary is at map epoch %d, behind the placement's epoch" % query["epoch"])
+    return reasons
+
+
+def primary_first(size, nonprimary):
+    """The shard order of an optimized pool's pg_temp: the shards that can
+    lead in shard order, then the others (src/osd/OSDMap.cc:2968-2989)."""
+    return [shard for shard in range(size) if shard not in nonprimary] + [shard for shard in range(size) if shard in nonprimary]
+
+
+def replaced_failures(origin, since, nonprimary, seen):
+    """Why one observation is not the PG active under another primary.
+
+    ``origin`` is the complete placement recorded before the primary's OSD
+    left, ``since`` the epoch at which its interval started and
+    ``nonprimary`` the pool's nonprimary shards as the map lists them. The
+    observation is accepted only if two identical placement records surround
+    one complete query of the new primary; the placement is the recorded one
+    in every field but a newer epoch, up and acting sets whose primary
+    position alone is empty, a pg_temp, and a primary, OSD, shard and
+    address of the first member of the primary-first order; the new
+    primary's shard is not a nonprimary shard; that primary reports active
+    and undersized, optionally degraded and nothing else, with those sets,
+    for its own shard, in an interval that started after ``since`` and not
+    after the placement's epoch, in which the PG has started; and its own map
+    epoch is not behind the placement's.
+    """
+    vector = origin.get("acting") if isinstance(origin, dict) else None
+    if (not isinstance(vector, list) or NONE in vector or origin.get("up") != vector or origin.get("pool_type") != 3
+            or origin.get("pg_temp") is not False or type(origin.get("epoch")) is not int
+            or type(origin.get("pg_shard")) is not int or not 0 <= origin["pg_shard"] < len(vector)
+            or origin.get("primary_id") != vector[origin["pg_shard"]] or not isinstance(origin.get("address"), str)):
+        return ["the recorded placement is not a complete erasure-coded acting set led by its primary without a pg_temp"]
+    if (not isinstance(nonprimary, list) or not nonprimary or any(type(shard) is not int or not 0 <= shard < len(vector) for shard in nonprimary)
+            or len(set(nonprimary)) != len(nonprimary) or len(nonprimary) != origin.get("nonprimary_shard_count") or origin["pg_shard"] in nonprimary):
+        return ["the nonprimary shards %r are not those of the recorded placement" % (nonprimary,)]
+    if type(since) is not int or not 0 < since <= origin["epoch"]:
+        return ["the recorded interval start %r is not an epoch at or before the recorded placement's" % (since,)]
+    holed = vector[:origin["pg_shard"]] + [NONE] + vector[origin["pg_shard"] + 1:]
+    lead = next(shard for shard in primary_first(len(vector), nonprimary) if holed[shard] != NONE)
+    if lead in nonprimary:
+        return ["no member that can lead is left in %r" % (holed,)]
+    first, second = seen.get("before"), seen.get("after")
+    if not isinstance(first, dict) or not isinstance(second, dict):
+        return ["no placement record: %s" % seen.get("placement_failure", "")]
+    reasons = []
+    if first != second:
+        reasons.append("placement or epoch changed during the observation")
+    want = dict(up=holed, acting=holed, primary_id=holed[lead], osd_id=holed[lead], pg_shard=lead)
+    for key in PLACEMENT_KEYS:
+        if key != "address" and first.get(key) != want.get(key, origin.get(key)):
+            reasons.append("placement %s is %r; want %r" % (key, first.get(key), want.get(key, origin.get(key))))
+    if not isinstance(first.get("address"), str) or not first["address"] or first["address"] == origin["address"]:
+        reasons.append("the placement's address %r is not another OSD's" % (first.get("address"),))
+    if first.get("pg_temp") is not True:
+        reasons.append("the PG has no pg_temp")
+    if type(first.get("epoch")) is not int or first["epoch"] <= origin["epoch"]:
+        reasons.append("the map epoch %r is not newer than %d" % (first.get("epoch"), origin["epoch"]))
+    query = seen.get("query")
+    if query is None:
+        return reasons + [seen.get("query_failure", "no pg query reply")]
+    if sorted(query["state"].split("+")) not in ABSENT_STATES:
+        reasons.append("the primary reports %s" % query["state"][:80])
+    if query["up"] != holed or query["acting"] != holed:
+        reasons.append("the primary's up %r and acting %r are not %r" % (query["up"], query["acting"], holed))
+    if query["info"]["pgid"] != "%ss%d" % (origin["pgid"], lead) or query["info"]["shard"] != lead:
         reasons.append("the query was answered for %s" % query["info"]["pgid"])
     if query["same_interval_since"] <= since:
         reasons.append("the interval still started at epoch %d" % query["same_interval_since"])

@@ -25,7 +25,10 @@ the primary asks to drop again, and reads the placement and the primary's
 interval with its original placement. Action show sends no command and
 reports one observation of the same kind; action absent sends none either
 and judges one observation of the PG active without the member of one acting
-position, whose OSD the caller took out through the fixture's daemon control.
+position, whose OSD the caller took out through the fixture's daemon control;
+action replaced sends none and judges one observation of the PG active under
+the member the map makes primary after the caller took the primary's own OSD
+out the same way.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
 servicecompare independently registers a native service with the Go caller's
@@ -566,14 +569,17 @@ def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=ti
     PG is settled in a newer interval or the time bound is used up. Action
     show observes once and judges a clean PG on the recorded placement.
     Action absent observes once and judges the PG active without the member
-    of one acting position of the recorded placement. Each reports the last
+    of one acting position of the recorded placement. Action replaced
+    observes once and judges the PG active under the primary that the map
+    names without the recorded primary's member. Each reports the last
     observation and its judgement; a PG that did not settle is reported, not
     raised.
     """
     action = request.get("action")
-    allowed = {"action", "slot", "object", "namespace"} | {"show": {"origin"}, "absent": {"origin", "shard", "since"}}.get(action, set())
-    if action not in ("repeer", "show", "absent") or set(request) - allowed:
-        raise ValueError("pginterval needs action repeer, show or absent and no unknown field")
+    allowed = {"action", "slot", "object", "namespace"} | {"show": {"origin"}, "absent": {"origin", "shard", "since"},
+                                                           "replaced": {"origin", "since"}}.get(action, set())
+    if action not in ("repeer", "show", "absent", "replaced") or set(request) - allowed:
+        raise ValueError("pginterval needs action repeer, show, absent or replaced and no unknown field")
     pool = pool_name(request["slot"])
     _, namespace = object_request(request)
     descriptor = find_pool(rados.dump(cluster), pool)
@@ -599,16 +605,26 @@ def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=ti
         return pg_interval.observation(first, code, raw, status, oversized, place())
 
     started = clock()
-    if action in ("show", "absent"):
+    if action in ("show", "absent", "replaced"):
         origin = request.get("origin")
         if not isinstance(origin, dict) or not isinstance(origin.get("pgid"), str) or type(origin.get("primary_id")) is not int:
             raise ValueError("pginterval %s needs the placement recorded before the command" % action)
         if action == "absent" and (type(request.get("shard")) is not int or type(request.get("since")) is not int):
             raise ValueError("pginterval absent needs the absent acting position and the recorded interval start")
+        if action == "replaced" and type(request.get("since")) is not int:
+            raise ValueError("pginterval replaced needs the recorded interval start")
         seen = observe(origin["pgid"], origin["primary_id"])
         now = seen["before"]
         if action == "absent":
             failures = pg_interval.absent_failures(origin, request["shard"], request["since"], seen)
+        elif action == "replaced":
+            # The shards that cannot lead, as the pool's own map entry lists
+            # them; an unreadable list admits no observation.
+            try:
+                nonprimary = shard_history.parse_written_shards(descriptor.get("nonprimary_shards"), 0)
+            except shard_history.HistoryError:
+                nonprimary = None
+            failures = pg_interval.replaced_failures(origin, request["since"], nonprimary, seen)
         elif now is None:
             failures = ["no placement record: " + seen["placement_failure"]]
         else:
