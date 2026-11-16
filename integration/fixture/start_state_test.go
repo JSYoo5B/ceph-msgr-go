@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -34,6 +35,15 @@ const (
 {"section":"osd","name":"osd_recovery_sleep","value":"0.000000","level":"advanced","can_update_at_runtime":true,"mask":""}]`
 )
 
+// fakeStartDiff is an admin socket `config diff` reply in the pinned shape:
+// one runtime override present at start (the override level), and options
+// set by the MON database and the configuration file, which are not
+// overrides.
+const fakeStartDiff = `{"diff":{"log_max_recent":{"default":10000,"override":10000,"final":10000},
+"osd_recovery_sleep":{"default":0,"mon":0,"final":0},"log_to_stderr":{"default":true,"file":false,"final":false}}}`
+
+const fakeStartEmptyDiff = `{"diff":{"debug_ms":{"default":"0/5","file":"0/5","final":"0/5"}}}`
+
 const fakeStartSession = "f00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeedf00dfeed"
 
 func fakeStartContainer(id, name, state string, labels map[string]string) container.Summary {
@@ -57,8 +67,15 @@ var fakeStartOwned = map[string]string{
 }
 
 func fakeStartRaw() startStateRaw {
-	return startStateRaw{Status: []byte(fakeStartStatus), OSDDump: []byte(fakeStartOSDDump), Profiles: []byte(fakeStartProfiles),
-		Rules: []byte(fakeStartRules), Config: []byte(fakeStartConfig), Containers: fakeStartContainers()}
+	raw := startStateRaw{Status: []byte(fakeStartStatus), OSDDump: []byte(fakeStartOSDDump), Profiles: []byte(fakeStartProfiles),
+		Rules: []byte(fakeStartRules), Config: []byte(fakeStartConfig), Containers: fakeStartContainers(), Overrides: map[string][]byte{}}
+	for name := range fakeStartOwned {
+		if startDaemonName(name) {
+			raw.Overrides[name] = []byte(fakeStartEmptyDiff)
+		}
+	}
+	raw.Overrides["mgr.x"] = []byte(fakeStartDiff)
+	return raw
 }
 
 func fakeStartSnapshot(t *testing.T) startStateSnapshot {
@@ -113,6 +130,9 @@ func TestStartStateAcceptsTheRecordedStartState(t *testing.T) {
 	view := decodeStartState(fakeStartRaw())
 	if failures := compareStartState(snapshot, view); len(failures) != 0 {
 		t.Fatal("rejected the start state", failures)
+	}
+	if len(snapshot.View.Overrides) != 1 || snapshot.View.Overrides[0] != (startConfigEntry{Section: "mgr.x", Name: "log_max_recent", Value: "10000"}) {
+		t.Fatal("the start overrides are not exactly the override level of config diff", snapshot.View.Overrides)
 	}
 	if len(snapshot.Daemons) != 7 || len(snapshot.Others) != 2 || snapshot.Others["control"].State != "running" {
 		t.Fatal("daemons of the profile are not separated from the other owned containers", snapshot.Daemons, snapshot.Others)
@@ -177,17 +197,45 @@ func TestStartStateNamesEachFailedCondition(t *testing.T) {
 		{"removed config option", func(t *testing.T, raw *startStateRaw) {
 			raw.Config = []byte(`[{"section":"global","name":"mon_allow_pool_delete","value":"true","mask":""}]`)
 		}, []string{startConditionConfig}, "osd/osd_recovery_sleep removed"},
+		{"leftover daemon override", func(t *testing.T, raw *startStateRaw) {
+			// ceph tell mgr.y config set log_max_recent 10002, not restored.
+			raw.Overrides["mgr.y"] = []byte(`{"diff":{"log_max_recent":{"default":10000,"override":10002,"final":10002}}}`)
+		}, []string{startConditionDaemonConfig}, `mgr.y runtime override log_max_recent set to "10002", absent at start`},
+		{"changed daemon override", func(t *testing.T, raw *startStateRaw) {
+			raw.Overrides["mgr.x"] = replaceOnce(t, raw.Overrides["mgr.x"], `"override":10000,"final":10000`, `"override":10002,"final":10002`)
+		}, []string{startConditionDaemonConfig}, `mgr.x runtime override log_max_recent is "10002", was "10000"`},
+		{"removed daemon override", func(t *testing.T, raw *startStateRaw) {
+			// config unset of an override that existed at start.
+			raw.Overrides["mgr.x"] = replaceOnce(t, raw.Overrides["mgr.x"], `"override":10000,`, ``)
+		}, []string{startConditionDaemonConfig}, "mgr.x runtime override log_max_recent removed"},
+		{"string override on an OSD", func(t *testing.T, raw *startStateRaw) {
+			// injectargs and admin socket config set land on the same level.
+			raw.Overrides["osd.0"] = []byte(`{"diff":{"debug_ms":{"default":"0/5","file":"0/5","override":"20/20","final":"20/20"}}}`)
+		}, []string{startConditionDaemonConfig}, `osd.0 runtime override debug_ms set to "20/20"`},
+		{"MON database level in config diff", func(t *testing.T, raw *startStateRaw) {
+			// A MON database change shows on the mon level of config diff
+			// and is reported once, by config.
+			raw.Overrides["mgr.x"] = replaceOnce(t, raw.Overrides["mgr.x"], `"mon":0,"final":0`, `"mon":0.25,"final":0.25`)
+			raw.Config = replaceOnce(t, raw.Config, `"value":"0.000000"`, `"value":"0.250000"`)
+		}, []string{startConditionConfig}, "osd/osd_recovery_sleep"},
 		{"stopped single MON", func(t *testing.T, raw *startStateRaw) {
-			// The MON reads fail; the Docker listing still names the
-			// stopped daemon.
+			// The MON reads fail; Docker and the other admin sockets still
+			// name the stopped daemon and a leftover override.
 			raw.Status, raw.OSDDump, raw.Profiles, raw.Rules, raw.Config = nil, nil, nil, nil, nil
 			raw.NativeErr = errors.New("ceph status: synthetic timeout")
 			raw.Containers = setContainerState(raw.Containers, "id-mon-a", "exited")
-		}, []string{startConditionObservation, startConditionDaemonRunning}, "mon.a container id-mon-a is exited"},
+			delete(raw.Overrides, "mon.a")
+			raw.Overrides["osd.1"] = []byte(`{"diff":{"debug_osd":{"default":"1/5","override":"20/20","final":"20/20"}}}`)
+		}, []string{startConditionObservation, startConditionDaemonRunning, startConditionDaemonConfig}, "mon.a container id-mon-a is exited"},
 		{"failed Docker listing", func(t *testing.T, raw *startStateRaw) {
 			raw.Containers, raw.DockerErr = nil, errors.New("synthetic daemon socket failure")
 			raw.OSDDump = replaceOnce(t, raw.OSDDump, `"flags":"sortbitwise,`, `"flags":"noout,sortbitwise,`)
 		}, []string{startConditionObservation, startConditionOSDFlags}, "list Docker containers: synthetic daemon socket failure"},
+		{"failed admin socket", func(t *testing.T, raw *startStateRaw) {
+			delete(raw.Overrides, "osd.0")
+			raw.OverrideErrs = map[string]error{"osd.0": errors.New("synthetic admin socket failure")}
+			raw.Overrides["mgr.x"] = replaceOnce(t, raw.Overrides["mgr.x"], `"override":10000,"final":10000`, `"override":10002,"final":10002`)
+		}, []string{startConditionObservation, startConditionDaemonConfig}, "osd.0 admin socket config diff: synthetic admin socket failure"},
 		{"foreign container", func(t *testing.T, raw *startStateRaw) {
 			raw.Containers = append(slices.Clone(raw.Containers), fakeStartContainer("id-left-behind", "netem-helper", "exited",
 				map[string]string{"org.testcontainers": "true", "org.testcontainers.sessionId": fakeStartSession}))
@@ -233,9 +281,30 @@ func TestStartStateDecodingRejectsMalformedNativeOutput(t *testing.T) {
 		raw := fakeStartRaw()
 		change(&raw)
 		view := decodeStartState(raw)
-		if view.Native || len(view.Unobserved) != 1 || !view.Docker {
-			t.Fatal("malformed", name, "was accepted or hid another source", view.Unobserved, view.Docker)
+		if view.Native || len(view.Unobserved) != 1 || !view.Docker || len(view.Read) != 7 {
+			t.Fatal("malformed", name, "was accepted or hid another source", view.Unobserved, view.Docker, view.Read)
 		}
+	}
+	for name, diff := range map[string]string{"not JSON": "{", "no diff object": `{"log_max_recent":{"override":1}}`} {
+		raw := fakeStartRaw()
+		raw.Overrides["osd.1"] = []byte(diff)
+		view := decodeStartState(raw)
+		if !view.Native || slices.Contains(view.Read, "osd.1") || len(view.Unobserved) != 1 || !strings.Contains(view.Unobserved[0].Detail, "osd.1") {
+			t.Fatal("malformed config diff", name, "was accepted", view.Unobserved, view.Read)
+		}
+	}
+}
+
+// A daemon whose container the listing shows not running is not read; every
+// daemon is read when the listing failed.
+func TestStartStateReadsTheAdminSocketOfRunningDaemons(t *testing.T) {
+	daemons := map[string]string{"mon.a": "id-mon-a", "osd.0": "id-osd-0", "osd.1": "id-osd-1"}
+	containers := setContainerState(fakeStartContainers(), "id-osd-1", "exited")
+	if got := startDaemonsToRead(daemons, containers, nil); !slices.Equal(got, []string{"mon.a", "osd.0"}) {
+		t.Fatal("read daemons", got)
+	}
+	if got := startDaemonsToRead(daemons, nil, errors.New("synthetic")); !slices.Equal(got, []string{"mon.a", "osd.0", "osd.1"}) {
+		t.Fatal("read daemons without a listing", got)
 	}
 }
 
@@ -246,6 +315,7 @@ func TestStartStateSnapshotFileOmitsSensitiveValues(t *testing.T) {
 	raw := fakeStartRaw()
 	raw.Config = replaceOnce(t, raw.Config, `"mask":""}]`,
 		`"mask":""},{"section":"client.rgw","name":"rgw_crypt_s3_kms_encryption_keys","value":"testkey=`+secret+`","mask":""}]`)
+	raw.Overrides["osd.0"] = []byte(`{"diff":{"rgw_keystone_admin_password":{"default":"","override":"` + secret + `","final":"` + secret + `"}}}`)
 	view := decodeStartState(raw)
 	snapshot := newStartStateSnapshot(view, fakeStartOwned, raw.Containers, fakeStartSession)
 	out := t.TempDir()
@@ -257,8 +327,8 @@ func TestStartStateSnapshotFileOmitsSensitiveValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), secret) || strings.Count(string(data), `"value_redacted": true`) != 1 ||
-		!strings.Contains(string(data), `"value": "0.000000"`) {
+	if strings.Contains(string(data), secret) || strings.Count(string(data), `"value_redacted": true`) != 2 ||
+		!strings.Contains(string(data), `"value": "0.000000"`) || !strings.Contains(string(data), `"value": "10000"`) {
 		t.Fatal("unexpected snapshot file", string(data))
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
@@ -266,8 +336,10 @@ func TestStartStateSnapshotFileOmitsSensitiveValues(t *testing.T) {
 	}
 	changed := raw
 	changed.Config = replaceOnce(t, raw.Config, "testkey="+secret, "testkey=other")
+	changed.Overrides = maps.Clone(raw.Overrides)
+	changed.Overrides["osd.0"] = []byte(`{"diff":{"rgw_keystone_admin_password":{"default":"","override":"other","final":"other"}}}`)
 	failures := compareStartState(snapshot, decodeStartState(changed))
-	if got := startConditions(failures); !slices.Equal(got, []string{startConditionConfig}) {
+	if got := startConditions(failures); !slices.Equal(got, []string{startConditionConfig, startConditionDaemonConfig}) {
 		t.Fatal("a changed credential-like value was not detected", failures)
 	}
 	for _, f := range failures {
@@ -278,7 +350,7 @@ func TestStartStateSnapshotFileOmitsSensitiveValues(t *testing.T) {
 }
 
 func TestStartStateReportRedactsAndBoundsConfigValues(t *testing.T) {
-	changes := configChanges(nil, []startConfigEntry{
+	changes := configChanges("", nil, []startConfigEntry{
 		{Section: "client.rgw", Name: "rgw_crypt_s3_kms_encryption_keys", Value: "testkey=c2VjcmV0"},
 		{Section: "global", Name: "mon_host", Value: strings.Repeat("v", 4*startStateValueLimit)},
 	})

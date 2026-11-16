@@ -11,8 +11,10 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/JSYoo5B/ceph-testcontainers-go/ceph"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 	"github.com/testcontainers/testcontainers-go"
@@ -29,6 +31,8 @@ const (
 	startStatePollInterval = time.Second
 	// startStateValueLimit bounds a configuration value kept in a report.
 	startStateValueLimit = 128
+	// startStateAdminSocketLimit bounds one MDS admin socket reply.
+	startStateAdminSocketLimit = 1 << 20
 )
 
 // Condition names reported by the start-state check. They are stable: tests
@@ -51,13 +55,14 @@ const (
 	startConditionCrushRule        = "crush-rule"
 	startConditionOSDFlags         = "osd-flags"
 	startConditionConfig           = "config"
+	startConditionDaemonConfig     = "daemon-config"
 	startConditionForeignContainer = "foreign-container"
 )
 
-// startStateRaw is the output of one observation, from two independent
-// sources: the MON reads and the Docker listing. A source that failed carries
-// its error instead of output, and the other source is still decoded and
-// compared.
+// startStateRaw is the output of one observation, from three independent
+// sources: the MON reads, the Docker listing and each daemon's admin socket.
+// A source that failed carries its error instead of output, and the other
+// sources are still decoded and compared.
 type startStateRaw struct {
 	Status   []byte
 	OSDDump  []byte
@@ -68,6 +73,11 @@ type startStateRaw struct {
 	NativeErr  error
 	Containers []container.Summary
 	DockerErr  error
+	// Overrides maps each daemon read to its admin socket `config diff`
+	// output, or OverrideErrs to the read's error. A daemon whose container
+	// the Docker listing shows not running is not read.
+	Overrides    map[string][]byte
+	OverrideErrs map[string]error
 }
 
 type startConfigEntry struct {
@@ -144,15 +154,20 @@ type startStateView struct {
 	Profiles     []string           `json:"erasure_code_profiles"`
 	Rules        []string           `json:"crush_rules"`
 	Config       []startConfigEntry `json:"config"`
+	// Overrides holds every runtime override (the `override` level of
+	// `config diff`) of each daemon read, with the daemon name as Section.
+	Overrides []startConfigEntry `json:"daemon_overrides"`
 	// Containers maps every listed container ID to its state; Labelled
 	// holds the IDs carrying the Testcontainers base label.
 	Containers map[string]string `json:"-"`
 	Names      map[string]string `json:"-"`
 	Labelled   []string          `json:"-"`
-	// Native and Docker report whether that source was observed.
-	// Unobserved names each source that failed, as an observation failure.
+	// Native and Docker report whether that source was observed; Read holds
+	// the daemons whose overrides were read. Unobserved names each source
+	// that failed, as an observation failure.
 	Native     bool                `json:"-"`
 	Docker     bool                `json:"-"`
+	Read       []string            `json:"-"`
 	Unobserved []startStateFailure `json:"-"`
 }
 
@@ -212,6 +227,19 @@ func decodeStartState(raw startStateRaw) startStateView {
 		}
 		slices.Sort(v.Labelled)
 	}
+	for _, daemon := range slices.Sorted(maps.Keys(raw.OverrideErrs)) {
+		unobserved("%s admin socket config diff: %v", daemon, raw.OverrideErrs[daemon])
+	}
+	for _, daemon := range slices.Sorted(maps.Keys(raw.Overrides)) {
+		overrides, err := decodeStartOverrides(daemon, raw.Overrides[daemon])
+		if err != nil {
+			unobserved("%s admin socket config diff: %v", daemon, err)
+			continue
+		}
+		v.Read = append(v.Read, daemon)
+		v.Overrides = append(v.Overrides, overrides...)
+	}
+	slices.SortFunc(v.Overrides, func(a, b startConfigEntry) int { return strings.Compare(a.key(), b.key()) })
 	return v
 }
 
@@ -270,6 +298,38 @@ func decodeStartNative(raw startStateRaw, v *startStateView) error {
 	return nil
 }
 
+// decodeStartOverrides returns the runtime overrides in one daemon's admin
+// socket `config diff` reply, {"diff": {option: {level: value, ...}}}. Only
+// the `override` level is kept: `ceph tell <daemon> config set`, an admin
+// socket `config set` and `injectargs` set it, while the MON configuration
+// database (the `mon` level) is compared through `config dump`. A value is
+// kept as its JSON text, a string unquoted.
+func decodeStartOverrides(daemon string, data []byte) ([]startConfigEntry, error) {
+	var reply struct {
+		Diff map[string]map[string]json.RawMessage `json:"diff"`
+	}
+	if err := json.Unmarshal(data, &reply); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+	if reply.Diff == nil {
+		return nil, errors.New("reply has no diff object")
+	}
+	var out []startConfigEntry
+	for name, levels := range reply.Diff {
+		value, ok := levels["override"]
+		if !ok {
+			continue
+		}
+		text := string(value)
+		var str string
+		if json.Unmarshal(value, &str) == nil {
+			text = str
+		}
+		out = append(out, startConfigEntry{Section: daemon, Name: name, Value: text})
+	}
+	return out, nil
+}
+
 func splitStartList(list string) []string {
 	var out []string
 	for item := range strings.SplitSeq(list, ",") {
@@ -323,6 +383,14 @@ func compareStartState(s startStateSnapshot, v startStateView) []startStateFailu
 	}
 	if v.Native {
 		failures = append(failures, compareStartNative(s, v)...)
+	}
+	// Overrides are compared for each daemon read now; a daemon not read is
+	// either not running (daemon-running) or unobserved.
+	read := func(entries []startConfigEntry) []startConfigEntry {
+		return slices.DeleteFunc(slices.Clone(entries), func(e startConfigEntry) bool { return !slices.Contains(v.Read, e.Section) })
+	}
+	for _, change := range configChanges("runtime override ", read(s.View.Overrides), read(v.Overrides)) {
+		fail(startConditionDaemonConfig, "%s", change)
 	}
 	if v.Docker {
 		owned := map[string]bool{}
@@ -436,7 +504,7 @@ func compareStartNative(s startStateSnapshot, v startStateView) []startStateFail
 	if added, removed := setDifference(v.Flags, s.View.Flags); len(added)+len(removed) > 0 {
 		fail(startConditionOSDFlags, "OSDMap flags set %v, cleared %v", added, removed)
 	}
-	for _, change := range configChanges(s.View.Config, v.Config) {
+	for _, change := range configChanges("", s.View.Config, v.Config) {
 		fail(startConditionConfig, "%s", change)
 	}
 	return failures
@@ -460,7 +528,9 @@ func setDifference[T interface{ ~int | ~string }](now, start []T) (added, remove
 	return added, removed
 }
 
-func configChanges(start, now []startConfigEntry) []string {
+// configChanges describes each entry added, changed or removed; label
+// prefixes the option name, after its section.
+func configChanges(label string, start, now []startConfigEntry) []string {
 	before, after := map[string]startConfigEntry{}, map[string]startConfigEntry{}
 	for _, e := range start {
 		before[e.key()] = e
@@ -469,17 +539,23 @@ func configChanges(start, now []startConfigEntry) []string {
 		after[e.key()] = e
 	}
 	var changes []string
+	name := func(e startConfigEntry) string {
+		if label == "" {
+			return e.key()
+		}
+		return e.Section + " " + label + e.Name
+	}
 	for _, key := range slices.Sorted(maps.Keys(after)) {
 		e := after[key]
 		if old, ok := before[key]; !ok {
-			changes = append(changes, fmt.Sprintf("%s set to %s, absent at start", key, e.reportValue()))
+			changes = append(changes, fmt.Sprintf("%s set to %s, absent at start", name(e), e.reportValue()))
 		} else if old.Value != e.Value {
-			changes = append(changes, fmt.Sprintf("%s is %s, was %s", key, e.reportValue(), old.reportValue()))
+			changes = append(changes, fmt.Sprintf("%s is %s, was %s", name(e), e.reportValue(), old.reportValue()))
 		}
 	}
 	for _, key := range slices.Sorted(maps.Keys(before)) {
 		if _, ok := after[key]; !ok {
-			changes = append(changes, fmt.Sprintf("%s removed, was %s", key, before[key].reportValue()))
+			changes = append(changes, fmt.Sprintf("%s removed, was %s", name(before[key]), before[key].reportValue()))
 		}
 	}
 	return changes
@@ -544,14 +620,52 @@ func waitStartState(ctx context.Context, budget, interval time.Duration, snapsho
 	}
 }
 
-// observeStartState reads one observation of the owned cluster from its two
-// independent sources, the Docker listing and the MON reads. A failed source
-// is recorded in the observation and never stops the other source.
-func (c *fixtureCluster) observeStartState(ctx context.Context) (startStateView, []container.Summary) {
+// observeStartState reads one observation of the owned cluster from its three
+// independent sources. The Docker listing is read first, then the MON reads
+// and the admin socket of each daemon in daemons (name to container ID) run
+// concurrently. A failed source is recorded in the observation and never
+// stops the other sources.
+func (c *fixtureCluster) observeStartState(ctx context.Context, daemons map[string]string) (startStateView, []container.Summary) {
 	var raw startStateRaw
 	raw.Containers, raw.DockerErr = listStartContainers(ctx)
-	raw.NativeErr = c.readStartNative(ctx, &raw)
+	var wait sync.WaitGroup
+	wait.Go(func() { raw.NativeErr = c.readStartNative(ctx, &raw) })
+	var lock sync.Mutex
+	raw.Overrides, raw.OverrideErrs = map[string][]byte{}, map[string]error{}
+	for _, name := range startDaemonsToRead(daemons, raw.Containers, raw.DockerErr) {
+		wait.Go(func() {
+			poll, cancel := context.WithTimeout(ctx, startStatePollTimeout)
+			defer cancel()
+			data, err := c.startStateAdminSocket(poll, name, "config", "diff")
+			lock.Lock()
+			defer lock.Unlock()
+			if err != nil {
+				raw.OverrideErrs[name] = err
+			} else {
+				raw.Overrides[name] = data
+			}
+		})
+	}
+	wait.Wait()
 	return decodeStartState(raw), raw.Containers
+}
+
+// startDaemonsToRead returns the daemons whose admin socket is read: every
+// daemon, unless the Docker listing succeeded and shows its container not
+// running, which daemon-running reports instead.
+func startDaemonsToRead(daemons map[string]string, containers []container.Summary, dockerErr error) []string {
+	states := map[string]string{}
+	for _, item := range containers {
+		states[item.ID] = string(item.State)
+	}
+	var names []string
+	for _, name := range slices.Sorted(maps.Keys(daemons)) {
+		if dockerErr == nil && states[daemons[name]] != "running" {
+			continue
+		}
+		names = append(names, name)
+	}
+	return names
 }
 
 // readStartNative sends the MON reads in order. They share one source, so the
@@ -593,6 +707,26 @@ func listStartContainers(ctx context.Context) ([]container.Summary, error) {
 	return listed.Items, nil
 }
 
+// startStateAdminSocket runs one admin socket command on an owned MON, MGR,
+// OSD or MDS daemon. An MDS socket is reached in the daemon's own container.
+func (c *fixtureCluster) startStateAdminSocket(ctx context.Context, daemon string, args ...string) ([]byte, error) {
+	kind, id, _ := strings.Cut(daemon, ".")
+	if kind != "mds" {
+		return adminSocket(ctx, c.cluster, daemon, args...)
+	}
+	target, err := c.daemon(ctx, kind, id)
+	if err != nil {
+		return nil, err
+	}
+	process, err := c.cluster.RunNativeCommand(ctx, target, ceph.NativeCommand{
+		Argv:    append([]string{"ceph", "--admin-daemon", "/var/run/ceph/ceph-mds." + id + ".asok"}, args...),
+		Timeout: startStatePollTimeout, MaxStdout: startStateAdminSocketLimit, MaxStderr: 16 << 10, Label: "start-state MDS admin socket"})
+	if err != nil || !process.Complete() || process.ExitCode != 0 {
+		return nil, errors.Join(err, fmt.Errorf("MDS admin socket %s did not complete (exit %d, timed out %v)", args[0], process.ExitCode, process.TimedOut))
+	}
+	return process.Stdout, nil
+}
+
 // recordStartState takes the snapshot once the fixture is ready. Every source
 // must be observed. A failure is kept and reported by every later check
 // instead of failing the fixture.
@@ -602,7 +736,13 @@ func (c *fixtureCluster) recordStartState(ctx context.Context, out string) {
 		if err != nil {
 			return err
 		}
-		view, containers := c.observeStartState(ctx)
+		daemons := map[string]string{}
+		for name, id := range owned {
+			if startDaemonName(name) {
+				daemons[name] = id
+			}
+		}
+		view, containers := c.observeStartState(ctx, daemons)
 		if len(view.Unobserved) > 0 {
 			var errs []error
 			for _, f := range view.Unobserved {
@@ -647,8 +787,12 @@ func writeStartStateFile(out, name string, data []byte, mode os.FileMode) error 
 
 // verifyStartState runs one bounded check and records its report.
 func (c *fixtureCluster) verifyStartState(ctx context.Context, out string, budget time.Duration) (startStateReport, error) {
+	var daemons map[string]string
+	if c.startState != nil {
+		daemons = c.startState.Daemons
+	}
 	report := waitStartState(ctx, budget, startStatePollInterval, c.startState, c.startStateErr, func(ctx context.Context) (startStateView, error) {
-		view, _ := c.observeStartState(ctx)
+		view, _ := c.observeStartState(ctx, daemons)
 		return view, nil
 	})
 	data, err := json.MarshalIndent(report, "", "  ")
