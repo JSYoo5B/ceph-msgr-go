@@ -1,25 +1,24 @@
+import os
 import re
-import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 import unittest
 
 import cluster_free_tests as tests
+from test_go_test_list import SHAPES, module, tests_file
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 class ClusterFreeTestsTests(unittest.TestCase):
-    def fixture(self, sources):
-        directory = tempfile.TemporaryDirectory()
-        self.addCleanup(directory.cleanup)
-        root = Path(directory.name)
-        (root / "integration").mkdir()
-        for index, body in enumerate(sources):
-            (root / "integration" / ("case%d_test.go" % index)).write_text(
-                "package integration_test\n\n" + body, encoding="utf-8")
-        return root
+    def fixture(self, *bodies):
+        return module(self, {"case%d_test.go" % index: tests_file(body) for index, body in enumerate(bodies)})
+
+    def run_go(self, root, selector):
+        """The verbose log of Go actually running the selected tests."""
+        return subprocess.run(["go", "test", "-mod=readonly", "-count=1", "-v", "-run", selector, "./integration"],
+                              cwd=root, env=dict(os.environ, GOWORK="off", CGO_ENABLED="0"),
+                              capture_output=True, text=True, timeout=600, check=True).stdout
 
     def test_repository_tests_are_classified_by_the_name_rule(self):
         self.assertEqual(tests.check(ROOT), [])
@@ -28,64 +27,55 @@ class ClusterFreeTestsTests(unittest.TestCase):
             self.assertEqual(bool(pattern.fullmatch(name)), not tests.NATIVE.fullmatch(name), name)
 
     def test_name_rule_classifies_without_a_list(self):
-        source = ("func TestCephNativeIntegration(t *testing.T) {}\nfunc TestCephFSHelper(t *testing.T) {}\n"
-                  "func TestHelper(t *testing.T) {}\nfunc (s suite) TestMethod(t *testing.T) {}\n")
-        root = self.fixture([source])
+        bodies = ("func TestCephNativeIntegration(t *testing.T) {}", "func TestCephFSHelper(t *testing.T) {}",
+                  "func TestHelper(t *testing.T) {}")
+        root = self.fixture(*bodies)
         self.assertEqual(tests.check(root), [])
         # A TestCeph-prefixed helper without the Integration suffix is cluster-free.
         self.assertEqual(tests.cluster_free(root), ["TestCephFSHelper", "TestHelper"])
-        added = self.fixture([source + "func TestNew(t *testing.T) {}\n"])
+        added = self.fixture(*bodies + ("func TestNew(t *testing.T) {}",))
         self.assertEqual(tests.cluster_free(added), ["TestCephFSHelper", "TestHelper", "TestNew"])
 
-    def test_discovery_follows_go_test_rules(self):
-        source = ("func Test(t *testing.T) {}\n"
-                  "func TestOther(t *testing.T) {}\n"
-                  "func Test_underscore(t *testing.T) {}\n"
-                  "func Test1(_ *testing.T) {}\n"
-                  "func TestMain(m *testing.M) {}\n"
-                  "func Testable(t *testing.T) {}\n"
-                  "func TestHelperArgs(t *testing.T, n int) {}\n"
-                  "func TestBench(b *testing.B) {}\n"
-                  "func (s suite) TestMethod(t *testing.T) {}\n"
-                  "// func TestCommented(t *testing.T) {}\n")
-        root = self.fixture([source])
-        self.assertEqual(tests.declared(root), ["Test", "TestOther", "Test_underscore", "Test1"])
-        self.assertEqual(tests.selector(root), "^(Test|Test1|TestOther|Test_underscore)$")
-        passing = "".join("--- PASS: %s (0.00s)\n" % name for name in ("Test", "TestOther", "Test_underscore", "Test1"))
-        self.assertEqual(tests.verify(root, passing), [])
-        # The reviewer's counterexample: a log without the bare `Test` fails.
-        self.assertTrue(any(problem.startswith("Test: MISSING") for problem in
-                            tests.verify(root, passing.replace("--- PASS: Test (0.00s)\n", ""))))
-        # TestMain is the harness: it is never expected to report a PASS of its own.
-        self.assertFalse(any("TestMain" in problem for problem in tests.verify(root, passing)))
+    def test_go_discovery_shapes_reach_the_selector_and_the_gate(self):
+        native = tests_file("func TestCephNativeIntegration(t *testing.T) {}")
+        root = module(self, dict(SHAPES, **{"native_test.go": native}))
+        # Literal expectation, not the helper's own output: the bare Test, the
+        # aliased import and the blank parameter are tests; TestMain, the
+        # method, the lowercase helper and the ignored file are not.
+        self.assertEqual(tests.cluster_free(root), ["Test", "TestAlias", "TestX"])
+        selector = tests.selector(root)
+        self.assertEqual(selector, "^(Test|TestAlias|TestX)$")
+        log = self.run_go(root, selector)
+        self.assertEqual(tests.verify(root, log), [])
+        # The reviewer's counterexamples: a log without the aliased-import test
+        # or without the bare Test fails the gate.
+        for name in ("TestAlias", "Test"):
+            missing = re.sub(r"(?m)^--- PASS: %s \(.*\)\n" % name, "", log)
+            self.assertNotEqual(missing, log, name)
+            self.assertIn("%s: MISSING" % name, tests.verify(root, missing))
+        self.assertIn("test outside the cluster-free set ran: TestCephNativeIntegration",
+                      tests.verify(root, log + "\n--- PASS: TestCephNativeIntegration (0.00s)\n"))
+        self.assertIn("test outside the cluster-free set ran: TestIgnored",
+                      tests.verify(root, log + "\n--- PASS: TestIgnored (0.00s)\n"))
 
-    @unittest.skipUnless(shutil.which("go"), "go is not installed")
-    def test_discovery_matches_go_test_list_for_the_integration_package(self):
-        listed = subprocess.run(["go", "test", "-mod=readonly", "-list", ".", "./integration"], cwd=ROOT,
-                                capture_output=True, text=True, timeout=600, check=True).stdout.split()
-        listed = sorted(name for name in listed if name.startswith("Test"))
-        self.assertEqual(sorted(tests.declared(ROOT)), listed)
-
-    def test_duplicate_and_empty_sets_fail(self):
-        cases = [
-            ("duplicate top-level", ["func TestHelper(t *testing.T) {}\n", "func TestHelper(t *testing.T) {}\n"]),
-            ("no cluster-free", ["func TestCephOnlyIntegration(t *testing.T) {}\n"]),
-        ]
-        for want, sources in cases:
-            root = self.fixture(sources)
-            problems = tests.check(root)
-            self.assertTrue(any(want in problem for problem in problems), (want, problems))
-            self.assertTrue(any(want in problem for problem in tests.verify(root, "PASS\n")), want)
+    def test_unlistable_and_empty_sets_fail(self):
+        duplicate = self.fixture("func TestHelper(t *testing.T) {}", "func TestHelper(t *testing.T) {}")
+        with self.assertRaises(ValueError):
+            tests.check(duplicate)
+        self.assertEqual(tests.main(["--root", str(duplicate), "check"]), 1)
+        native_only = self.fixture("func TestCephOnlyIntegration(t *testing.T) {}")
+        self.assertIn("no cluster-free top-level test", tests.check(native_only))
+        self.assertIn("no cluster-free top-level test", tests.verify(native_only, "PASS\n"))
 
     def test_selector_is_anchored_to_cluster_free_names(self):
-        root = self.fixture(["func TestA(t *testing.T) {}\nfunc TestAB(t *testing.T) {}\n"])
+        root = self.fixture("func TestA(t *testing.T) {}", "func TestAB(t *testing.T) {}")
         pattern = re.compile(tests.selector(root))
         self.assertTrue(pattern.search("TestA") and pattern.search("TestAB"))
         self.assertIsNone(pattern.search("TestABC"))
 
     def test_gate_requires_a_top_level_pass_for_every_cluster_free_test(self):
-        root = self.fixture(["func TestA(t *testing.T) {}\nfunc TestB(t *testing.T) {}\n"
-                             "func TestCephNativeIntegration(t *testing.T) {}\n"])
+        root = self.fixture("func TestA(t *testing.T) {}", "func TestB(t *testing.T) {}",
+                            "func TestCephNativeIntegration(t *testing.T) {}")
         passing = "--- PASS: TestA (0.00s)\n--- PASS: TestB (0.01s)\nPASS\nok  \tpkg\t0.1s\n"
         self.assertEqual(tests.verify(root, passing), [])
         for text in ("PASS\n",
@@ -100,7 +90,7 @@ class ClusterFreeTestsTests(unittest.TestCase):
             self.assertNotEqual(tests.verify(root, text), [], text)
 
     def test_command_line_exit_status(self):
-        root = self.fixture(["func TestA(t *testing.T) {}\n"])
+        root = self.fixture("func TestA(t *testing.T) {}")
         log = root / "go-test.log"
         log.write_text("--- PASS: TestA (0.00s)\n", encoding="utf-8")
         self.assertEqual(tests.main(["--root", str(root), "check"]), 0)
