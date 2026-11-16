@@ -407,12 +407,13 @@ type startStateReport struct {
 }
 
 // waitStartState polls until no condition fails or the budget ends, and
-// returns the failures of the last poll. An observation error is a failed
-// condition of that poll, not a fixture failure; a missing snapshot fails
-// at once.
+// returns the failures of the last completed comparison. An observation error
+// is a failed condition of that poll, not a fixture failure; an observation
+// cut short by the end of the budget does not replace an earlier completed
+// comparison. A missing snapshot fails at once.
 func waitStartState(ctx context.Context, budget, interval time.Duration, snapshot *startStateSnapshot, snapshotErr error,
-	observe func(context.Context) (startStateView, error)) startStateReport {
-	report := startStateReport{Started: time.Now().UTC(), BudgetMS: budget.Milliseconds()}
+	observe func(context.Context) (startStateView, error)) (report startStateReport) {
+	report = startStateReport{Started: time.Now().UTC(), BudgetMS: budget.Milliseconds()}
 	defer func() { report.ElapsedMS = time.Since(report.Started).Milliseconds() }()
 	if snapshot == nil {
 		detail := "the fixture recorded no start state"
@@ -424,15 +425,19 @@ func waitStartState(ctx context.Context, budget, interval time.Duration, snapsho
 	}
 	deadline, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
+	compared := false
 	for {
 		report.Polls++
 		view, err := observe(deadline)
-		if err != nil {
+		switch {
+		case err == nil:
+			report.Failures, compared = compareStartState(*snapshot, view), true
+		case deadline.Err() != nil && compared:
+			// Keep the last completed comparison's failures.
+		default:
 			report.Failures = []startStateFailure{{startConditionObservation, err.Error()}}
-		} else {
-			report.Failures = compareStartState(*snapshot, view)
 		}
-		if len(report.Failures) == 0 {
+		if err == nil && len(report.Failures) == 0 {
 			report.Passed = true
 			return report
 		}

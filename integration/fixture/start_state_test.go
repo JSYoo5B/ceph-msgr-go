@@ -277,6 +277,29 @@ func TestWaitStartStateIsBoundedAndReportsTheLastPoll(t *testing.T) {
 	}
 }
 
+// A poll cut short by the end of the budget must not hide the condition the
+// previous completed poll found.
+func TestWaitStartStateKeepsTheLastComparisonWhenTheBudgetEndsMidPoll(t *testing.T) {
+	snapshot := fakeStartSnapshot(t)
+	polls := 0
+	report := waitStartState(context.Background(), 100*time.Millisecond, time.Millisecond, &snapshot, nil, func(ctx context.Context) (startStateView, error) {
+		polls++
+		if polls > 1 {
+			<-ctx.Done()
+			return startStateView{}, ctx.Err()
+		}
+		raw := fakeStartRaw()
+		raw.OSDDump = replaceOnce(t, raw.OSDDump, `"flags":"sortbitwise,`, `"flags":"noout,sortbitwise,`)
+		return decodeStartState(raw)
+	})
+	if report.Passed || report.Polls != 2 || !slices.Equal(startConditions(report.Failures), []string{startConditionOSDFlags}) {
+		t.Fatal("an interrupted poll replaced the completed comparison", report)
+	}
+	if report.ElapsedMS < 100 {
+		t.Fatal("the report does not record the elapsed time", report.ElapsedMS)
+	}
+}
+
 func TestWaitStartStateWithoutSnapshotFailsAtOnce(t *testing.T) {
 	report := waitStartState(context.Background(), time.Minute, time.Millisecond, nil, errors.New("synthetic snapshot failure"), func(context.Context) (startStateView, error) {
 		t.Fatal("observed without a snapshot")
