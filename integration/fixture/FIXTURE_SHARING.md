@@ -37,6 +37,70 @@ it does when it runs; its skip conditions do not matter. The
 [start-state check](FIXTURE_START_STATE.md) is the gate between tests; the
 classification decides which tests are offered to it.
 
+## Shared state and the start-state check
+
+The start-state check sees only what it compares. A leftover in a compared
+category stops the next test at the check, so a test that changes such state
+may restore it as an ordinary last step. A leftover in a category the check
+does not compare would reach the next test unseen. A test that changes such
+state is `shareable` only if its restoration runs on every path: it is
+registered (`t.Cleanup` or `defer`) before the first change, uses its own
+context that is still usable after the body's context ended, and fails the
+test unless it confirms the restored state. A restoration that runs only as
+the last step of the body, that is registered after the change, or that
+ignores the command's result makes the test `isolated`. So does reading
+state that other tests change and the check does not compare (cluster log
+history).
+
+Compared by the start-state check:
+
+| Category | Condition |
+| --- | --- |
+| MON, MGR, OSD and MDS containers of the snapshot are running; the fixture's other containers keep their state; no foreign Testcontainers container | `daemon-running`, `container-state`, `foreign-container` |
+| MON quorum names; MGR availability | `mon-quorum`, `mgr-available` |
+| OSD IDs, up and in | `osd-set`, `osd-up`, `osd-in` |
+| every PG `active+clean`; no pg_temp | `pg-clean`, `pg-temp` |
+| pool names and pool flags | `pool`, `pool-flags` |
+| erasure-code profile names and CRUSH rule names | `erasure-code-profile`, `crush-rule` |
+| OSDMap flags (`noout` and the others) | `osd-flags` |
+| central configuration (`ceph config dump`) | `config` |
+| runtime overrides of the snapshot's daemons (admin socket `config diff`) | `daemon-config` |
+
+Not compared, so a `shareable` test restores it on every path or does not
+change it:
+
+| Category | Examples of changes | Classification |
+| --- | --- | --- |
+| cluster and audit log | `log` appends; log watches from version 1 | `isolated` for a test that appends or reads log history (below) |
+| config-key store | `config-key set`, `rm`, `del` | restoration on every path, confirmed absent |
+| auth entities, keys and caps | `auth get-or-create`, `caps`, `import`, `rm` | restoration on every path, confirmed |
+| OSDMap blocklist | `osd blocklist add` | restoration on every path, confirmed |
+| upmap, primary_temp, primary affinity, CRUSH weights and reweight | `osd pg-upmap-items`, `osd reweight` | no shareable test changes them |
+| CRUSH hierarchy (buckets and hosts) | `osd crush add-bucket`, `move` | restoration on every path, confirmed |
+| pool properties other than name and flags: size, PG count, application, quota, pool snapshots | `osd pool set`, PG split and merge | restoration on every path, confirmed natively |
+| objects, xattrs and OMAP in the fixture's pools | the fixture object, owned UUID objects, cache pool heads | fixture object: restoration registered before the change and verified natively; owned objects: cleanup registered before they are created (below) |
+| CephFS entries, snapshots, quotas and client sessions | `mkdir`, `create`, snapshots, quotas | restoration on every path, confirmed |
+| MGR service map | native service holders | restoration on every path, confirmed absent |
+| MGR modules and the active MGR | `mgr module disable`, `mgr fail` | no shareable test changes them |
+| health mutes | `health mute` | restoration on every path, confirmed |
+| in-memory daemon state outside the configuration | PG `scrubdebug` flags | restoration on every path, confirmed by a fresh read |
+| runtime overrides of a daemon outside the snapshot (an MDS the fixture does not record as owned) | MDS `config set` | restoration on every path, confirmed by a fresh read |
+| MON leader, election epoch and map epochs | MON stop and restart; any map change | not restorable; no shareable test depends on a particular leader or epoch value |
+
+The cluster log cannot be restored, and every MON command adds an audit
+entry, so it changes in every test. A test that appends entries or reads
+retained history (a `WatchLogs` from version 1) therefore depends on what the
+tests before it did and is `isolated`. A test that only causes daemon or
+audit entries stays `shareable` as long as no shareable test reads log
+history.
+
+Owned UUID objects have names no other test uses. A leftover of one, after a
+test failed before its cleanup knew the object, is not read by any other
+test as a precondition: the tests that list PGs or read pool statistics
+compare the Go result with a native read taken at the same time, not with a
+start value. Such objects therefore do not make a test `isolated` as long as
+its checked cleanup is registered before the first object is created.
+
 ## Rows
 
 A row's fixture configuration is its parameters without `test_run`. A row is
@@ -69,10 +133,49 @@ changes.
 
 ## Findings at classification
 
-The first classification covered 255 native tests and 130 rows: 103 tests
-and 24 rows are `shareable`. The 130 rows have 101 configurations; six
+The classification covers 255 native tests and 130 rows: 81 tests and 19
+rows are `shareable`. The 130 rows have 101 configurations; five
 configurations have more than one shareable row, so the default coverage
-would need 122 jobs instead of 130.
+would need 124 jobs instead of 130.
+
+A first pass declared 103 tests `shareable`. Checking each of them against
+the categories above made 22 of them `isolated`:
+
+- cluster log: `TestCephLogRecoveryIntegration`, `TestCephLogWatchIntegration`,
+  `TestCephMonPingIntegration`, `TestCephNamedMonitorTellIntegration` and
+  `TestCephConfigStreamIntegration` append entries and read history from
+  version 1; `TestCephHostnameConfigIntegration` watches the log and adds
+  CRUSH buckets;
+- config-key: `TestCephCommandConstructionIntegration` removes its key only as
+  the last step, `TestCephCRCConnectionModeIntegration` registers its removal
+  after the set and ignores the result code, and
+  `TestCephMonitorWriteStallIntegration` leaves an applied key when it fails;
+- auth: `TestCephOSDCommandCapsChangeIntegration`,
+  `TestCephOSDCommandCapsRenewalIntegration` and
+  `TestCephMonCommandCapsChangeIntegration` create their entity before
+  registering its removal and ignore the `auth rm` result;
+  `TestCephRevokedCredentialRecoveryIntegration` and
+  `TestCephReplacedCredentialIntegration` restore the fixture's
+  `client.revocable` from a copy written in the test, not from the start
+  state;
+- blocklist: `TestCephOSDWatchBlocklistIntegration` registers the removal
+  after the entry is added;
+- health mutes: `TestCephDigestIntegration` leaves its sticky mute when the
+  unmute fails;
+- CephFS: `TestCephMDSCephFSPushIntegration` reverts its snapshot, quota and
+  files only in its last step, and `TestCephMDSCephFSIntegration` removes its
+  directory only in a final subtest;
+- service map: `TestCephServiceMapNativeHolderIntegration`,
+  `TestCephMonServiceMapLargeMapIntegration`,
+  `TestCephMonServiceMapLifecycleIntegration` and
+  `TestCephMonServiceMapLifecycleFailedMonHoldIntegration` kill a live holder
+  in cleanup without proving that its service map entry is gone.
+
+`TestCephAppliedMonitorMutationIsNotReplayedIntegration` keeps `shareable`:
+its config-key removal is deferred before the set, uses its own context and
+fails the test unless a native read confirms the key is absent.
+`TestCephConfigCommandsIntegration` removes its central configuration entry
+as its last step, which the `config` condition covers.
 
 Two leftovers of the shared owned-pool cleanup (`mode_cleanup` in
 [`tools/osd_pool_oracle.py`](../../tools/osd_pool_oracle.py)) make every test
