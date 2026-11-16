@@ -1,18 +1,21 @@
 #!/usr/bin/env python3
 """Check frame/message/role ledger links to tests and retained evidence.
 
-This validates references, not the truth of a native observation. No tests,
-producer tools or network requests are executed by this inventory check.
+This validates references, not the truth of a native observation. A linked
+unit test must be a top-level test that Go lists for the package compiling the
+linked file (go_test_list.py compiles the test binaries and executes no test
+body). No producer tools are executed by this inventory check.
 """
 import csv
 import re
 import sys
 from pathlib import Path
 
+import go_test_list
+
 ROOT = Path(__file__).resolve().parent.parent
 EVIDENCE = Path("cephmsgr/PROTOCOL_EVIDENCE.md")
 LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
-TEST = re.compile(r"(?m)^func (Test\w+)\(t \*testing\.T\)")
 
 
 def table(text, heading):
@@ -100,6 +103,17 @@ def frame_receipt_problems(cell, receipts):
     return problems
 
 
+def listed_test(root, path, name):
+    """True when Go lists `name` as a top-level test of the package whose
+    default build compiles `path`, and `path` declares it."""
+    root, path = Path(root).resolve(), Path(path).resolve()
+    package = path.parent.relative_to(root).as_posix()
+    files = go_test_list.test_files(root, ("./...",))
+    return (path.name in files.get(package, ())
+            and name in go_test_list.list_tests(root, ("./...",)).get(package, ())
+            and re.search(r"(?m)^func %s\(" % re.escape(name), path.read_text()) is not None)
+
+
 def local_file(root, document, target):
     # Only repository-local file links are evidence inputs. External run URLs
     # can occur in prose, but cannot replace a checked-in receipt or test.
@@ -169,7 +183,7 @@ def check(root=ROOT, text=None):
             for name, target in tests:
                 try:
                     path = local_file(root, EVIDENCE, target)
-                    if not path.name.endswith("_test.go") or name not in TEST.findall(path.read_text()):
+                    if not path.name.endswith("_test.go") or not listed_test(root, path, name):
                         problems.append(prefix + ": missing top-level Go test " + name)
                     elif "integration" in path.relative_to(root.resolve()).parts:
                         problems.append(prefix + ": integration selector is not unit evidence")
