@@ -260,6 +260,12 @@ Two `mds-cephfs-sharedflock-recovery` rows select only
 profiles, each on a fresh metadata fixture (`mds_cephfs`). It runs the
 recovery recipe of the `mds-cephfs` rows with two shared locks and declares
 `exclusive-mds-cephfs`; the broad `mds-cephfs` selector does not reach it.
+Two `mds-cephfs-fcntl-recovery` rows select only
+`TestCephMDSCephFSFcntlRangeRecoveryIntegration` in the same two MDS
+profiles, each on a fresh metadata fixture. It runs the same recovery recipe
+with two FCNTL byte-range locks and one FLOCK lock and declares
+`mds-held-fcntl`, which alone admits the closed FCNTL probe of the lock file;
+the broad `mds-cephfs` selector does not reach it.
 One further `osd` row selects only `TestCephOSDCopyFromLateErrorIntegration`
 on the CRC/AES IPv4 host single-BlueStore legacy-v6 fixture. This owned daemon
 fault requires `osd-copy-from-late-error` and the exact selector; broad suites
