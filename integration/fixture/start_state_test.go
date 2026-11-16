@@ -222,7 +222,10 @@ func TestStartStateNamesEachFailedCondition(t *testing.T) {
 			// The MON reads fail; Docker and the other admin sockets still
 			// name the stopped daemon and a leftover override.
 			raw.Status, raw.OSDDump, raw.Profiles, raw.Rules, raw.Config = nil, nil, nil, nil, nil
-			raw.NativeErr = errors.New("ceph status: synthetic timeout")
+			raw.NativeErrs = map[string]error{}
+			for _, read := range startNativeReads {
+				raw.NativeErrs[read.name] = errors.New("synthetic timeout")
+			}
 			raw.Containers = setContainerState(raw.Containers, "id-mon-a", "exited")
 			delete(raw.Overrides, "mon.a")
 			raw.Overrides["osd.1"] = []byte(`{"diff":{"debug_osd":{"default":"1/5","override":"20/20","final":"20/20"}}}`)
@@ -230,7 +233,7 @@ func TestStartStateNamesEachFailedCondition(t *testing.T) {
 		{"failed Docker listing", func(t *testing.T, raw *startStateRaw) {
 			raw.Containers, raw.DockerErr = nil, errors.New("synthetic daemon socket failure")
 			raw.OSDDump = replaceOnce(t, raw.OSDDump, `"flags":"sortbitwise,`, `"flags":"noout,sortbitwise,`)
-		}, []string{startConditionObservation, startConditionOSDFlags}, "list Docker containers: synthetic daemon socket failure"},
+		}, []string{startConditionObservation, startConditionOSDFlags}, "Docker container list: synthetic daemon socket failure"},
 		{"failed admin socket", func(t *testing.T, raw *startStateRaw) {
 			delete(raw.Overrides, "osd.0")
 			raw.OverrideErrs = map[string]error{"osd.0": errors.New("synthetic admin socket failure")}
@@ -268,30 +271,127 @@ func TestStartStateNamesEachFailedCondition(t *testing.T) {
 	}
 }
 
-// Malformed output of one source is an observation failure of that source
-// only: the others are still decoded.
+// Malformed output of one read is an observation failure of that read only:
+// every other read is still decoded.
 func TestStartStateDecodingRejectsMalformedNativeOutput(t *testing.T) {
-	for name, change := range map[string]func(*startStateRaw){
-		"status":   func(raw *startStateRaw) { raw.Status = []byte("{") },
-		"osd dump": func(raw *startStateRaw) { raw.OSDDump = []byte("[]") },
-		"profiles": func(raw *startStateRaw) { raw.Profiles = []byte(`{"default":{}}`) },
-		"rules":    func(raw *startStateRaw) { raw.Rules = nil },
-		"config":   func(raw *startStateRaw) { raw.Config = []byte(`{}`) },
+	for read, change := range map[string]func(*startStateRaw){
+		startReadStatus:   func(raw *startStateRaw) { raw.Status = []byte("{") },
+		startReadOSDDump:  func(raw *startStateRaw) { raw.OSDDump = []byte("[]") },
+		startReadProfiles: func(raw *startStateRaw) { raw.Profiles = []byte(`{"default":{}}`) },
+		startReadRules:    func(raw *startStateRaw) { raw.Rules = nil },
+		startReadConfig:   func(raw *startStateRaw) { raw.Config = []byte(`{}`) },
 	} {
 		raw := fakeStartRaw()
 		change(&raw)
 		view := decodeStartState(raw)
-		if view.Native || len(view.Unobserved) != 1 || !view.Docker || len(view.Read) != 7 {
-			t.Fatal("malformed", name, "was accepted or hid another source", view.Unobserved, view.Docker, view.Read)
+		if view.Observed[read] || len(view.Unobserved) != 1 || !strings.HasPrefix(view.Unobserved[0].Detail, read+": decode: ") ||
+			len(view.Observed) != len(startNativeReads)-1+1+7 || len(view.Read) != 7 {
+			t.Fatal("malformed", read, "was accepted or hid another read", view.Unobserved, view.Observed)
 		}
 	}
 	for name, diff := range map[string]string{"not JSON": "{", "no diff object": `{"log_max_recent":{"override":1}}`} {
 		raw := fakeStartRaw()
 		raw.Overrides["osd.1"] = []byte(diff)
 		view := decodeStartState(raw)
-		if !view.Native || slices.Contains(view.Read, "osd.1") || len(view.Unobserved) != 1 || !strings.Contains(view.Unobserved[0].Detail, "osd.1") {
+		if !view.Observed[startReadStatus] || slices.Contains(view.Read, "osd.1") || len(view.Unobserved) != 1 || !strings.Contains(view.Unobserved[0].Detail, "osd.1") {
 			t.Fatal("malformed config diff", name, "was accepted", view.Unobserved, view.Read)
 		}
+	}
+}
+
+// The review case: a completed `ceph status` with peering PGs still fails
+// pg-clean when the next MON read, `ceph osd dump`, times out.
+func TestStartStateKeepsTheStatusWhenOSDDumpFails(t *testing.T) {
+	snapshot := fakeStartSnapshot(t)
+	raw := fakeStartRaw()
+	raw.Status = replaceOnce(t, raw.Status, `"active+clean","count":9`, `"peering","count":9`)
+	raw.OSDDump, raw.NativeErrs = nil, map[string]error{startReadOSDDump: context.DeadlineExceeded}
+	failures := compareStartState(snapshot, decodeStartState(raw))
+	if got := startConditions(failures); !slices.Equal(got, []string{startConditionObservation, startConditionPGClean}) {
+		t.Fatal("conditions", got, failures)
+	}
+	if failures[0].Detail != "ceph osd dump: context deadline exceeded" || failures[1].Detail != "PGs not active+clean: 9xpeering" {
+		t.Fatal("details", failures)
+	}
+}
+
+// startStateLeftovers changes every read of a fake observation the way a
+// leftover shows in it, and names the condition each read then fails.
+func startStateLeftovers(t *testing.T, raw *startStateRaw) map[string]string {
+	t.Helper()
+	raw.Status = replaceOnce(t, raw.Status, `"active+clean","count":9`, `"peering","count":9`)
+	raw.OSDDump = replaceOnce(t, raw.OSDDump, `"flags":"sortbitwise,`, `"flags":"noout,sortbitwise,`)
+	raw.Profiles = []byte(`["default","owned-k2m2"]`)
+	raw.Rules = []byte(`["owned-k2m2","replicated_rule"]`)
+	raw.Config = replaceOnce(t, raw.Config, `"value":"0.000000"`, `"value":"0.100000"`)
+	raw.Containers = append(slices.Clone(raw.Containers), fakeStartContainer("id-left-behind", "netem-helper", "exited",
+		map[string]string{"org.testcontainers": "true", "org.testcontainers.sessionId": fakeStartSession}))
+	raw.Overrides["mgr.y"] = []byte(`{"diff":{"log_max_recent":{"default":10000,"override":10002,"final":10002}}}`)
+	return map[string]string{
+		startReadStatus: startConditionPGClean, startReadOSDDump: startConditionOSDFlags, startReadProfiles: startConditionErasureProfile,
+		startReadRules: startConditionCrushRule, startReadConfig: startConditionConfig, startReadDocker: startConditionForeignContainer,
+		startReadAdminSocket("mgr.y"): startConditionDaemonConfig,
+	}
+}
+
+// For each read that fails, the conditions of every other read, all with a
+// leftover, are still reported beside the failed read's observation.
+func TestStartStateFailedReadKeepsTheOtherReads(t *testing.T) {
+	snapshot := fakeStartSnapshot(t)
+	for _, failed := range []string{startReadStatus, startReadOSDDump, startReadProfiles, startReadRules, startReadConfig,
+		startReadDocker, startReadAdminSocket("mgr.y")} {
+		t.Run(failed, func(t *testing.T) {
+			raw := fakeStartRaw()
+			leftovers := startStateLeftovers(t, &raw)
+			cause := errors.New("synthetic failure")
+			switch failed {
+			case startReadDocker:
+				raw.Containers, raw.DockerErr = nil, cause
+			case startReadAdminSocket("mgr.y"):
+				delete(raw.Overrides, "mgr.y")
+				raw.OverrideErrs = map[string]error{"mgr.y": cause}
+			default:
+				raw.NativeErrs = map[string]error{failed: cause}
+			}
+			failures := compareStartState(snapshot, decodeStartState(raw))
+			want := []string{startConditionObservation}
+			for _, condition := range startConditionOrder {
+				for read, leftover := range leftovers {
+					if leftover == condition && read != failed {
+						want = append(want, condition)
+					}
+				}
+			}
+			if got := startConditions(failures); !slices.Equal(got, want) {
+				t.Fatalf("conditions %v, want %v: %v", got, want, failures)
+			}
+			if observations := slices.DeleteFunc(slices.Clone(failures), func(f startStateFailure) bool { return f.Condition != startConditionObservation }); len(observations) != 1 ||
+				observations[0].Detail != failed+": synthetic failure" {
+				t.Fatal("the observation failure does not name the failed read", observations)
+			}
+		})
+	}
+}
+
+// The snapshot needs every read, including the admin socket of a daemon
+// whose container was not running.
+func TestStartStateSnapshotNeedsEveryRead(t *testing.T) {
+	daemons := map[string]string{}
+	for name, id := range fakeStartOwned {
+		if startDaemonName(name) {
+			daemons[name] = id
+		}
+	}
+	if err := startSnapshotComplete(decodeStartState(fakeStartRaw()), daemons); err != nil {
+		t.Fatal("rejected a complete observation", err)
+	}
+	raw := fakeStartRaw()
+	delete(raw.Overrides, "osd.1")
+	raw.NativeErrs = map[string]error{startReadRules: errors.New("synthetic failure")}
+	err := startSnapshotComplete(decodeStartState(raw), daemons)
+	if err == nil || !strings.Contains(err.Error(), "ceph osd crush rule ls: synthetic failure") ||
+		!strings.Contains(err.Error(), "osd.1 admin socket config diff: not read") {
+		t.Fatal("accepted an incomplete observation", err)
 	}
 }
 
@@ -424,6 +524,58 @@ func TestWaitStartStateKeepsTheLastComparisonWhenTheBudgetEndsMidPoll(t *testing
 	}
 	if report.ElapsedMS < 100 {
 		t.Fatal("the report does not record the elapsed time", report.ElapsedMS)
+	}
+}
+
+// A poll that the end of the budget cut short reports each read it completed
+// and keeps, for each read it did not, the failures the latest completed read
+// found; a read that has no failure to keep is reported as its observation.
+func TestWaitStartStateMergesTheReadsOfAPollTheBudgetCut(t *testing.T) {
+	snapshot := fakeStartSnapshot(t)
+	polls := 0
+	report := waitStartState(context.Background(), 100*time.Millisecond, time.Millisecond, &snapshot, nil, func(ctx context.Context) (startStateView, error) {
+		polls++
+		raw := fakeStartRaw()
+		if polls == 1 {
+			// Completed: osd-flags from osd dump and crush-rule from the rule list.
+			raw.OSDDump = replaceOnce(t, raw.OSDDump, `"flags":"sortbitwise,`, `"flags":"noout,sortbitwise,`)
+			raw.Rules = []byte(`["owned-k2m2","replicated_rule"]`)
+			return decodeStartState(raw), nil
+		}
+		// Cut: the status completes with peering PGs and a clean rule list;
+		// osd dump and the config dump do not complete.
+		<-ctx.Done()
+		raw.Status = replaceOnce(t, raw.Status, `"active+clean","count":9`, `"peering","count":9`)
+		raw.OSDDump, raw.Config = nil, nil
+		raw.NativeErrs = map[string]error{startReadOSDDump: ctx.Err(), startReadConfig: ctx.Err()}
+		return decodeStartState(raw), nil
+	})
+	var got []string
+	for _, f := range report.Failures {
+		got = append(got, f.String())
+	}
+	want := []string{"observation: ceph config dump: context deadline exceeded", "pg-clean: PGs not active+clean: 9xpeering",
+		"osd-flags: OSDMap flags set [noout], cleared []"}
+	if report.Passed || report.Polls != 2 || !slices.Equal(got, want) {
+		t.Fatalf("report %v, want %v", got, want)
+	}
+	// A read that failed in a poll the budget did not cut reports its
+	// observation, not an earlier poll's failures.
+	latest := map[string][]startStateFailure{}
+	raw := fakeStartRaw()
+	raw.OSDDump = replaceOnce(t, raw.OSDDump, `"flags":"sortbitwise,`, `"flags":"noout,sortbitwise,`)
+	view := decodeStartState(raw)
+	mergeStartPoll(compareStartState(snapshot, view), view.Observed, latest, false)
+	raw = fakeStartRaw()
+	raw.NativeErrs = map[string]error{startReadOSDDump: errors.New("synthetic failure")}
+	view = decodeStartState(raw)
+	if merged := mergeStartPoll(compareStartState(snapshot, view), view.Observed, latest, false); len(merged) != 1 ||
+		merged[0].Detail != "ceph osd dump: synthetic failure" {
+		t.Fatal("an uncut failed read kept an earlier poll's failures", merged)
+	}
+	if merged := mergeStartPoll(compareStartState(snapshot, view), view.Observed, latest, true); len(merged) != 1 ||
+		merged[0].Condition != startConditionObservation {
+		t.Fatal("a cut read kept failures the latest completed read did not find", merged)
 	}
 }
 

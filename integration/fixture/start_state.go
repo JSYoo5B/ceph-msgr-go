@@ -59,18 +59,50 @@ const (
 	startConditionForeignContainer = "foreign-container"
 )
 
-// startStateRaw is the output of one observation, from three independent
-// sources: the MON reads, the Docker listing and each daemon's admin socket.
-// A source that failed carries its error instead of output, and the other
-// sources are still decoded and compared.
+// The reads of one observation. Each read is independent: a read that fails
+// hides only the conditions computed from it.
+const (
+	startReadDocker   = "Docker container list"
+	startReadStatus   = "ceph status"
+	startReadOSDDump  = "ceph osd dump"
+	startReadProfiles = "ceph osd erasure-code-profile ls"
+	startReadRules    = "ceph osd crush rule ls"
+	startReadConfig   = "ceph config dump"
+)
+
+// startReadAdminSocket names the admin socket `config diff` read of a daemon.
+func startReadAdminSocket(daemon string) string { return daemon + " admin socket config diff" }
+
+// startNativeRead is one MON read: its command, where its output is kept, how
+// it is decoded and the conditions computed from it alone.
+type startNativeRead struct {
+	name    string
+	args    []string
+	output  func(*startStateRaw) *[]byte
+	decode  func([]byte, *startStateView) error
+	compare func(startStateSnapshot, startStateView) []startStateFailure
+}
+
+var startNativeReads = []startNativeRead{
+	{startReadStatus, []string{"status"}, func(r *startStateRaw) *[]byte { return &r.Status }, decodeStartStatus, compareStartStatus},
+	{startReadOSDDump, []string{"osd", "dump"}, func(r *startStateRaw) *[]byte { return &r.OSDDump }, decodeStartOSDDump, compareStartOSDDump},
+	{startReadProfiles, []string{"osd", "erasure-code-profile", "ls"}, func(r *startStateRaw) *[]byte { return &r.Profiles }, decodeStartProfiles, compareStartProfiles},
+	{startReadRules, []string{"osd", "crush", "rule", "ls"}, func(r *startStateRaw) *[]byte { return &r.Rules }, decodeStartRules, compareStartRules},
+	{startReadConfig, []string{"config", "dump"}, func(r *startStateRaw) *[]byte { return &r.Config }, decodeStartConfig, compareStartConfig},
+}
+
+// startStateRaw is the output of one observation. A read that failed carries
+// its error instead of output, and every other read is still decoded and
+// compared.
 type startStateRaw struct {
 	Status   []byte
 	OSDDump  []byte
 	Profiles []byte
 	Rules    []byte
 	Config   []byte
-	// NativeErr is the first failed MON read; the later ones were not sent.
-	NativeErr  error
+	// NativeErrs maps each MON read that failed (startReadStatus and the
+	// others of startNativeReads) to its error.
+	NativeErrs map[string]error
 	Containers []container.Summary
 	DockerErr  error
 	// Overrides maps each daemon read to its admin socket `config diff`
@@ -162,11 +194,10 @@ type startStateView struct {
 	Containers map[string]string `json:"-"`
 	Names      map[string]string `json:"-"`
 	Labelled   []string          `json:"-"`
-	// Native and Docker report whether that source was observed; Read holds
-	// the daemons whose overrides were read. Unobserved names each source
-	// that failed, as an observation failure.
-	Native     bool                `json:"-"`
-	Docker     bool                `json:"-"`
+	// Observed holds each read that completed and decoded; Read holds the
+	// daemons whose overrides were read. Unobserved has an observation
+	// failure for each other read.
+	Observed   map[string]bool     `json:"-"`
 	Read       []string            `json:"-"`
 	Unobserved []startStateFailure `json:"-"`
 }
@@ -192,29 +223,62 @@ type startContainer struct {
 type startStateFailure struct {
 	Condition string `json:"condition"`
 	Detail    string `json:"detail"`
+	// read names the read the failure was computed from.
+	read string
+}
+
+// startConditionOrder is the fixed order of the failures in a report.
+var startConditionOrder = []string{
+	startConditionSnapshot, startConditionObservation, startConditionDaemonRunning, startConditionContainerState,
+	startConditionMonQuorum, startConditionMgrAvailable, startConditionOSDSet, startConditionOSDUp, startConditionOSDIn,
+	startConditionPGClean, startConditionPGTemp, startConditionPool, startConditionPoolFlags, startConditionErasureProfile,
+	startConditionCrushRule, startConditionOSDFlags, startConditionConfig, startConditionDaemonConfig, startConditionForeignContainer,
+}
+
+func sortStartFailures(failures []startStateFailure) {
+	slices.SortStableFunc(failures, func(a, b startStateFailure) int {
+		return slices.Index(startConditionOrder, a.Condition) - slices.Index(startConditionOrder, b.Condition)
+	})
+}
+
+// startFailures collects the failures computed from one read.
+type startFailures []startStateFailure
+
+func (f *startFailures) fail(condition, format string, args ...any) {
+	*f = append(*f, startStateFailure{Condition: condition, Detail: fmt.Sprintf(format, args...)})
+}
+
+// from records the read each failure was computed from.
+func (f startFailures) from(read string) []startStateFailure {
+	for i := range f {
+		f[i].read = read
+	}
+	return f
 }
 
 func (f startStateFailure) String() string { return f.Condition + ": " + f.Detail }
 
-// decodeStartState decodes each source of one observation on its own: a
-// source that failed or printed output that does not decode becomes an
-// observation failure and leaves the other sources' fields in place.
+// decodeStartState decodes each read of one observation on its own: a read
+// that failed or printed output that does not decode becomes an observation
+// failure and leaves the other reads' fields in place.
 func decodeStartState(raw startStateRaw) startStateView {
-	var v startStateView
-	unobserved := func(format string, args ...any) {
-		v.Unobserved = append(v.Unobserved, startStateFailure{startConditionObservation, fmt.Sprintf(format, args...)})
+	v := startStateView{Observed: map[string]bool{}}
+	unobserved := func(read string, err error) {
+		v.Unobserved = append(v.Unobserved, startStateFailure{Condition: startConditionObservation, Detail: fmt.Sprintf("%s: %v", read, err), read: read})
 	}
-	if raw.NativeErr != nil {
-		unobserved("%v", raw.NativeErr)
-	} else if err := decodeStartNative(raw, &v); err != nil {
-		unobserved("%v", err)
-	} else {
-		v.Native = true
+	for _, read := range startNativeReads {
+		if err := raw.NativeErrs[read.name]; err != nil {
+			unobserved(read.name, err)
+		} else if err := read.decode(*read.output(&raw), &v); err != nil {
+			unobserved(read.name, fmt.Errorf("decode: %w", err))
+		} else {
+			v.Observed[read.name] = true
+		}
 	}
 	if raw.DockerErr != nil {
-		unobserved("list Docker containers: %v", raw.DockerErr)
+		unobserved(startReadDocker, raw.DockerErr)
 	} else {
-		v.Docker = true
+		v.Observed[startReadDocker] = true
 		v.Containers, v.Names = map[string]string{}, map[string]string{}
 		for _, item := range raw.Containers {
 			v.Containers[item.ID] = string(item.State)
@@ -228,14 +292,15 @@ func decodeStartState(raw startStateRaw) startStateView {
 		slices.Sort(v.Labelled)
 	}
 	for _, daemon := range slices.Sorted(maps.Keys(raw.OverrideErrs)) {
-		unobserved("%s admin socket config diff: %v", daemon, raw.OverrideErrs[daemon])
+		unobserved(startReadAdminSocket(daemon), raw.OverrideErrs[daemon])
 	}
 	for _, daemon := range slices.Sorted(maps.Keys(raw.Overrides)) {
 		overrides, err := decodeStartOverrides(daemon, raw.Overrides[daemon])
 		if err != nil {
-			unobserved("%s admin socket config diff: %v", daemon, err)
+			unobserved(startReadAdminSocket(daemon), err)
 			continue
 		}
+		v.Observed[startReadAdminSocket(daemon)] = true
 		v.Read = append(v.Read, daemon)
 		v.Overrides = append(v.Overrides, overrides...)
 	}
@@ -243,13 +308,16 @@ func decodeStartState(raw startStateRaw) startStateView {
 	return v
 }
 
-func decodeStartNative(raw startStateRaw, v *startStateView) error {
+// Each MON read's decoder fills its own fields of the view, and only once
+// its whole output decoded.
+
+func decodeStartStatus(data []byte, v *startStateView) error {
 	var status struct {
 		Quorum []string `json:"quorum_names"`
 		osdCleanStatus
 	}
-	if err := json.Unmarshal(raw.Status, &status); err != nil {
-		return fmt.Errorf("decode ceph status: %w", err)
+	if err := json.Unmarshal(data, &status); err != nil {
+		return err
 	}
 	v.Quorum = slices.Sorted(slices.Values(status.Quorum))
 	v.MgrAvailable = status.MgrMap.Available
@@ -258,6 +326,10 @@ func decodeStartNative(raw startStateRaw, v *startStateView) error {
 	for _, state := range status.PGMap.PGsByState {
 		v.PGStates[state.StateName] += state.Count
 	}
+	return nil
+}
+
+func decodeStartOSDDump(data []byte, v *startStateView) error {
 	var dump struct {
 		Flags string     `json:"flags"`
 		OSDs  []startOSD `json:"osds"`
@@ -270,8 +342,8 @@ func decodeStartNative(raw startStateRaw, v *startStateView) error {
 			OSDs []int  `json:"osds"`
 		} `json:"pg_temp"`
 	}
-	if err := json.Unmarshal(raw.OSDDump, &dump); err != nil {
-		return fmt.Errorf("decode ceph osd dump: %w", err)
+	if err := json.Unmarshal(data, &dump); err != nil {
+		return err
 	}
 	v.Flags = splitStartList(dump.Flags)
 	v.OSDs = slices.SortedFunc(slices.Values(dump.OSDs), func(a, b startOSD) int { return a.ID - b.ID })
@@ -283,18 +355,34 @@ func decodeStartNative(raw startStateRaw, v *startStateView) error {
 		v.PGTemp = append(v.PGTemp, fmt.Sprintf("%s->%v", temp.PGID, temp.OSDs))
 	}
 	slices.Sort(v.PGTemp)
-	if err := json.Unmarshal(raw.Profiles, &v.Profiles); err != nil {
-		return fmt.Errorf("decode erasure-code profiles: %w", err)
+	return nil
+}
+
+func decodeStartProfiles(data []byte, v *startStateView) error {
+	var profiles []string
+	if err := json.Unmarshal(data, &profiles); err != nil {
+		return err
 	}
-	slices.Sort(v.Profiles)
-	if err := json.Unmarshal(raw.Rules, &v.Rules); err != nil {
-		return fmt.Errorf("decode CRUSH rules: %w", err)
+	v.Profiles = slices.Sorted(slices.Values(profiles))
+	return nil
+}
+
+func decodeStartRules(data []byte, v *startStateView) error {
+	var rules []string
+	if err := json.Unmarshal(data, &rules); err != nil {
+		return err
 	}
-	slices.Sort(v.Rules)
-	if err := json.Unmarshal(raw.Config, &v.Config); err != nil {
-		return fmt.Errorf("decode config dump: %w", err)
+	v.Rules = slices.Sorted(slices.Values(rules))
+	return nil
+}
+
+func decodeStartConfig(data []byte, v *startStateView) error {
+	var config []startConfigEntry
+	if err := json.Unmarshal(data, &config); err != nil {
+		return err
 	}
-	slices.SortFunc(v.Config, func(a, b startConfigEntry) int { return strings.Compare(a.key(), b.key()) })
+	slices.SortFunc(config, func(a, b startConfigEntry) int { return strings.Compare(a.key(), b.key()) })
+	v.Config = config
 	return nil
 }
 
@@ -370,39 +458,43 @@ func startDaemonName(name string) bool {
 	return ok && slices.Contains(daemonControlKinds, kind)
 }
 
-// compareStartState returns every failed condition, in a fixed order: first
-// each source that was not observed, then the conditions of the sources that
-// were. A source that failed hides only its own conditions.
+// compareStartState returns every failed condition, in the fixed order of
+// startConditionOrder. Each condition is computed from the read it depends
+// on, so a read that failed hides only its own conditions; it is reported as
+// an observation failure.
 func compareStartState(s startStateSnapshot, v startStateView) []startStateFailure {
 	failures := slices.Clone(v.Unobserved)
-	fail := func(condition, format string, args ...any) {
-		failures = append(failures, startStateFailure{condition, fmt.Sprintf(format, args...)})
-	}
-	if v.Docker {
-		failures = append(failures, compareStartContainers(s, v)...)
-	}
-	if v.Native {
-		failures = append(failures, compareStartNative(s, v)...)
-	}
-	// Overrides are compared for each daemon read now; a daemon not read is
-	// either not running (daemon-running) or unobserved.
-	read := func(entries []startConfigEntry) []startConfigEntry {
-		return slices.DeleteFunc(slices.Clone(entries), func(e startConfigEntry) bool { return !slices.Contains(v.Read, e.Section) })
-	}
-	for _, change := range configChanges("runtime override ", read(s.View.Overrides), read(v.Overrides)) {
-		fail(startConditionDaemonConfig, "%s", change)
-	}
-	if v.Docker {
+	if v.Observed[startReadDocker] {
+		docker := startFailures(compareStartContainers(s, v))
 		owned := map[string]bool{}
 		for _, id := range s.Owned {
 			owned[id] = true
 		}
 		for _, id := range v.Labelled {
 			if !owned[id] {
-				fail(startConditionForeignContainer, "container %s (%s) is %s", startShortID(id), v.Names[id], v.Containers[id])
+				docker.fail(startConditionForeignContainer, "container %s (%s) is %s", startShortID(id), v.Names[id], v.Containers[id])
 			}
 		}
+		failures = append(failures, docker.from(startReadDocker)...)
 	}
+	for _, read := range startNativeReads {
+		if v.Observed[read.name] {
+			failures = append(failures, startFailures(read.compare(s, v)).from(read.name)...)
+		}
+	}
+	// Overrides are compared for each daemon read now; a daemon not read is
+	// either not running (daemon-running) or unobserved.
+	of := func(entries []startConfigEntry, daemon string) []startConfigEntry {
+		return slices.DeleteFunc(slices.Clone(entries), func(e startConfigEntry) bool { return e.Section != daemon })
+	}
+	for _, daemon := range v.Read {
+		var overrides startFailures
+		for _, change := range configChanges("runtime override ", of(s.View.Overrides, daemon), of(v.Overrides, daemon)) {
+			overrides.fail(startConditionDaemonConfig, "%s", change)
+		}
+		failures = append(failures, overrides.from(startReadAdminSocket(daemon))...)
+	}
+	sortStartFailures(failures)
 	return failures
 }
 
@@ -410,10 +502,8 @@ func startShortID(id string) string { return id[:min(len(id), 12)] }
 
 // compareStartContainers compares the daemon and other owned containers.
 func compareStartContainers(s startStateSnapshot, v startStateView) []startStateFailure {
-	var failures []startStateFailure
-	fail := func(condition, format string, args ...any) {
-		failures = append(failures, startStateFailure{condition, fmt.Sprintf(format, args...)})
-	}
+	var failures startFailures
+	fail := failures.fail
 	shortID := startShortID
 	for _, name := range slices.Sorted(maps.Keys(s.Daemons)) {
 		id := s.Daemons[name]
@@ -436,18 +526,39 @@ func compareStartContainers(s startStateSnapshot, v startStateView) []startState
 	return failures
 }
 
-// compareStartNative compares the conditions of the MON reads.
-func compareStartNative(s startStateSnapshot, v startStateView) []startStateFailure {
-	var failures []startStateFailure
-	fail := func(condition, format string, args ...any) {
-		failures = append(failures, startStateFailure{condition, fmt.Sprintf(format, args...)})
-	}
+// compareStartStatus compares the conditions of `ceph status`.
+func compareStartStatus(s startStateSnapshot, v startStateView) []startStateFailure {
+	var failures startFailures
+	fail := failures.fail
 	if !slices.Equal(v.Quorum, s.View.Quorum) {
 		fail(startConditionMonQuorum, "quorum [%s], was [%s]", strings.Join(v.Quorum, ","), strings.Join(s.View.Quorum, ","))
 	}
 	if s.View.MgrAvailable && !v.MgrAvailable {
 		fail(startConditionMgrAvailable, "no available manager")
 	}
+	clean, other := 0, []string{}
+	for _, state := range slices.Sorted(maps.Keys(v.PGStates)) {
+		if state == "active+clean" {
+			clean += v.PGStates[state]
+		} else {
+			other = append(other, fmt.Sprintf("%dx%s", v.PGStates[state], state))
+		}
+	}
+	switch {
+	case len(other) > 0:
+		fail(startConditionPGClean, "PGs not active+clean: %s", strings.Join(other, ","))
+	case clean != v.NumPGs:
+		fail(startConditionPGClean, "PG states cover %d of %d PGs", clean, v.NumPGs)
+	case v.NumPGs == 0 && s.View.NumPGs > 0:
+		fail(startConditionPGClean, "no PG statistics, %d PGs at start", s.View.NumPGs)
+	}
+	return failures
+}
+
+// compareStartOSDDump compares the conditions of `ceph osd dump`.
+func compareStartOSDDump(s startStateSnapshot, v startStateView) []startStateFailure {
+	var failures startFailures
+	fail := failures.fail
 	start, now := map[int]startOSD{}, map[int]startOSD{}
 	for _, osd := range s.View.OSDs {
 		start[osd.ID] = osd
@@ -468,22 +579,6 @@ func compareStartNative(s startStateSnapshot, v startStateView) []startStateFail
 			fail(startConditionOSDIn, "osd.%d is out", osd.ID)
 		}
 	}
-	clean, other := 0, []string{}
-	for _, state := range slices.Sorted(maps.Keys(v.PGStates)) {
-		if state == "active+clean" {
-			clean += v.PGStates[state]
-		} else {
-			other = append(other, fmt.Sprintf("%dx%s", v.PGStates[state], state))
-		}
-	}
-	switch {
-	case len(other) > 0:
-		fail(startConditionPGClean, "PGs not active+clean: %s", strings.Join(other, ","))
-	case clean != v.NumPGs:
-		fail(startConditionPGClean, "PG states cover %d of %d PGs", clean, v.NumPGs)
-	case v.NumPGs == 0 && s.View.NumPGs > 0:
-		fail(startConditionPGClean, "no PG statistics, %d PGs at start", s.View.NumPGs)
-	}
 	if len(v.PGTemp) > 0 {
 		fail(startConditionPGTemp, "pg_temp %s", strings.Join(v.PGTemp, " "))
 	}
@@ -495,17 +590,32 @@ func compareStartNative(s startStateSnapshot, v startStateView) []startStateFail
 			fail(startConditionPoolFlags, "pool %s flags [%s], were [%s]", name, v.Pools[name], want)
 		}
 	}
-	if added, removed := setDifference(v.Profiles, s.View.Profiles); len(added)+len(removed) > 0 {
-		fail(startConditionErasureProfile, "erasure-code profiles added %v, removed %v", added, removed)
-	}
-	if added, removed := setDifference(v.Rules, s.View.Rules); len(added)+len(removed) > 0 {
-		fail(startConditionCrushRule, "CRUSH rules added %v, removed %v", added, removed)
-	}
 	if added, removed := setDifference(v.Flags, s.View.Flags); len(added)+len(removed) > 0 {
 		fail(startConditionOSDFlags, "OSDMap flags set %v, cleared %v", added, removed)
 	}
+	return failures
+}
+
+func compareStartProfiles(s startStateSnapshot, v startStateView) []startStateFailure {
+	var failures startFailures
+	if added, removed := setDifference(v.Profiles, s.View.Profiles); len(added)+len(removed) > 0 {
+		failures.fail(startConditionErasureProfile, "erasure-code profiles added %v, removed %v", added, removed)
+	}
+	return failures
+}
+
+func compareStartRules(s startStateSnapshot, v startStateView) []startStateFailure {
+	var failures startFailures
+	if added, removed := setDifference(v.Rules, s.View.Rules); len(added)+len(removed) > 0 {
+		failures.fail(startConditionCrushRule, "CRUSH rules added %v, removed %v", added, removed)
+	}
+	return failures
+}
+
+func compareStartConfig(s startStateSnapshot, v startStateView) []startStateFailure {
+	var failures startFailures
 	for _, change := range configChanges("", s.View.Config, v.Config) {
-		fail(startConditionConfig, "%s", change)
+		failures.fail(startConditionConfig, "%s", change)
 	}
 	return failures
 }
@@ -572,10 +682,11 @@ type startStateReport struct {
 }
 
 // waitStartState polls until no condition fails or the budget ends, and
-// returns the failures of the last completed comparison. An observation error
-// is a failed condition of that poll, not a fixture failure; an observation
-// cut short by the end of the budget does not replace an earlier completed
-// comparison. A missing snapshot fails at once.
+// returns the failures of the last poll. An observation error is a failed
+// condition of that poll, not a fixture failure. A read that the end of the
+// budget cut short does not replace the failures its latest completed read
+// found; the poll's other reads still replace theirs. A missing snapshot
+// fails at once.
 func waitStartState(ctx context.Context, budget, interval time.Duration, snapshot *startStateSnapshot, snapshotErr error,
 	observe func(context.Context) (startStateView, error)) (report startStateReport) {
 	report = startStateReport{Started: time.Now().UTC(), BudgetMS: budget.Milliseconds()}
@@ -585,30 +696,29 @@ func waitStartState(ctx context.Context, budget, interval time.Duration, snapsho
 		if snapshotErr != nil {
 			detail += ": " + snapshotErr.Error()
 		}
-		report.Failures = []startStateFailure{{startConditionSnapshot, detail}}
+		report.Failures = []startStateFailure{{Condition: startConditionSnapshot, Detail: detail}}
 		return report
 	}
 	deadline, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
-	compared := false
+	latest := map[string][]startStateFailure{}
 	for {
 		report.Polls++
 		view, err := observe(deadline)
-		var failures []startStateFailure
+		cut := deadline.Err() != nil
 		if err != nil {
-			failures = []startStateFailure{{startConditionObservation, err.Error()}}
+			// No read of this poll is known.
+			if !cut || report.Failures == nil {
+				report.Failures = []startStateFailure{{Condition: startConditionObservation, Detail: err.Error()}}
+				clear(latest)
+			}
 		} else {
-			failures = compareStartState(*snapshot, view)
-		}
-		if len(failures) == 0 {
-			report.Passed, report.Failures = true, nil
-			return report
-		}
-		// A poll whose reads the budget cut short does not replace an
-		// earlier comparison.
-		cut := deadline.Err() != nil && (err != nil || len(view.Unobserved) > 0)
-		if !cut || !compared {
-			report.Failures, compared = failures, true
+			failures := compareStartState(*snapshot, view)
+			if len(failures) == 0 {
+				report.Passed, report.Failures = true, nil
+				return report
+			}
+			report.Failures = mergeStartPoll(failures, view.Observed, latest, cut)
 		}
 		timer := time.NewTimer(interval)
 		select {
@@ -620,18 +730,63 @@ func waitStartState(ctx context.Context, budget, interval time.Duration, snapsho
 	}
 }
 
-// observeStartState reads one observation of the owned cluster from its three
-// independent sources. The Docker listing is read first, then the MON reads
-// and the admin socket of each daemon in daemons (name to container ID) run
-// concurrently. A failed source is recorded in the observation and never
-// stops the other sources.
+// mergeStartPoll returns the failures to report for one compared poll and
+// records, in latest, the failures of each read the poll completed. A read
+// the poll did not complete is reported as its observation failure, except
+// that a read cut short by the end of the budget keeps the failures its
+// latest completed read found.
+func mergeStartPoll(failures []startStateFailure, observed map[string]bool, latest map[string][]startStateFailure, cut bool) []startStateFailure {
+	byRead := map[string][]startStateFailure{}
+	for _, f := range failures {
+		byRead[f.read] = append(byRead[f.read], f)
+	}
+	for read := range observed {
+		latest[read] = byRead[read]
+	}
+	var out []startStateFailure
+	for _, f := range failures {
+		if f.Condition != startConditionObservation {
+			out = append(out, f)
+			continue
+		}
+		if earlier := latest[f.read]; cut && len(earlier) > 0 {
+			out = append(out, earlier...)
+			continue
+		}
+		if !cut {
+			delete(latest, f.read)
+		}
+		out = append(out, f)
+	}
+	sortStartFailures(out)
+	return out
+}
+
+// observeStartState reads one observation of the owned cluster. The Docker
+// listing is read first, then each MON read and the admin socket of each
+// daemon in daemons (name to container ID) run concurrently, each with its
+// own bound. A failed read is recorded in the observation and never stops
+// another read.
 func (c *fixtureCluster) observeStartState(ctx context.Context, daemons map[string]string) (startStateView, []container.Summary) {
 	var raw startStateRaw
 	raw.Containers, raw.DockerErr = listStartContainers(ctx)
 	var wait sync.WaitGroup
-	wait.Go(func() { raw.NativeErr = c.readStartNative(ctx, &raw) })
 	var lock sync.Mutex
-	raw.Overrides, raw.OverrideErrs = map[string][]byte{}, map[string]error{}
+	raw.NativeErrs, raw.Overrides, raw.OverrideErrs = map[string]error{}, map[string][]byte{}, map[string]error{}
+	for _, read := range startNativeReads {
+		wait.Go(func() {
+			poll, cancel := context.WithTimeout(ctx, startStatePollTimeout)
+			defer cancel()
+			data, err := c.cluster.Ceph(poll, append(slices.Clone(read.args), "--format", "json")...)
+			lock.Lock()
+			defer lock.Unlock()
+			if err != nil {
+				raw.NativeErrs[read.name] = err
+			} else {
+				*read.output(&raw) = data
+			}
+		})
+	}
 	for _, name := range startDaemonsToRead(daemons, raw.Containers, raw.DockerErr) {
 		wait.Go(func() {
 			poll, cancel := context.WithTimeout(ctx, startStatePollTimeout)
@@ -666,30 +821,6 @@ func startDaemonsToRead(daemons map[string]string, containers []container.Summar
 		names = append(names, name)
 	}
 	return names
-}
-
-// readStartNative sends the MON reads in order. They share one source, so the
-// first failure ends them.
-func (c *fixtureCluster) readStartNative(ctx context.Context, raw *startStateRaw) error {
-	for _, read := range []struct {
-		into *[]byte
-		args []string
-	}{
-		{&raw.Status, []string{"status"}},
-		{&raw.OSDDump, []string{"osd", "dump"}},
-		{&raw.Profiles, []string{"osd", "erasure-code-profile", "ls"}},
-		{&raw.Rules, []string{"osd", "crush", "rule", "ls"}},
-		{&raw.Config, []string{"config", "dump"}},
-	} {
-		poll, cancel := context.WithTimeout(ctx, startStatePollTimeout)
-		data, err := c.cluster.Ceph(poll, append(read.args, "--format", "json")...)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("ceph %s: %w", strings.Join(read.args, " "), err)
-		}
-		*read.into = data
-	}
-	return nil
 }
 
 func listStartContainers(ctx context.Context) ([]container.Summary, error) {
@@ -727,8 +858,8 @@ func (c *fixtureCluster) startStateAdminSocket(ctx context.Context, daemon strin
 	return process.Stdout, nil
 }
 
-// recordStartState takes the snapshot once the fixture is ready. Every source
-// must be observed. A failure is kept and reported by every later check
+// recordStartState takes the snapshot once the fixture is ready. Every read
+// must be observed, including the admin socket of every daemon. A failure is kept and reported by every later check
 // instead of failing the fixture.
 func (c *fixtureCluster) recordStartState(ctx context.Context, out string) {
 	err := func() error {
@@ -743,12 +874,8 @@ func (c *fixtureCluster) recordStartState(ctx context.Context, out string) {
 			}
 		}
 		view, containers := c.observeStartState(ctx, daemons)
-		if len(view.Unobserved) > 0 {
-			var errs []error
-			for _, f := range view.Unobserved {
-				errs = append(errs, errors.New(f.Detail))
-			}
-			return errors.Join(errs...)
+		if err := startSnapshotComplete(view, daemons); err != nil {
+			return err
 		}
 		snapshot := newStartStateSnapshot(view, owned, containers, testcontainers.SessionID())
 		if err := writeStartStateSnapshot(out, snapshot); err != nil {
@@ -758,6 +885,23 @@ func (c *fixtureCluster) recordStartState(ctx context.Context, out string) {
 		return nil
 	}()
 	c.startStateErr = err
+}
+
+// startSnapshotComplete returns an error naming every read the snapshot
+// lacks: each read that failed and each daemon whose admin socket was not
+// read because its container was not running.
+func startSnapshotComplete(view startStateView, daemons map[string]string) error {
+	var errs []error
+	for _, f := range view.Unobserved {
+		errs = append(errs, errors.New(f.Detail))
+	}
+	for _, name := range slices.Sorted(maps.Keys(daemons)) {
+		read := startReadAdminSocket(name)
+		if !view.Observed[read] && !slices.ContainsFunc(view.Unobserved, func(f startStateFailure) bool { return f.read == read }) {
+			errs = append(errs, fmt.Errorf("%s: not read, the container is not running", read))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // writeStartStateSnapshot writes the snapshot as evidence, owner-readable
