@@ -22,7 +22,6 @@ HEADER = ["ID", "Path", "Class", "Setup and control", "Independent observation",
 LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 CODE = re.compile(r"`([^`]+)`")
 TEST = re.compile(r"(?m)^func (Test\w+)\(t \*testing\.T\)")
-PR = re.compile(r"#(\d+)\b")
 UPSTREAM = re.compile(r"^ctg@(v0\.3\.0|v0\.4\.0|main):(Test\w+(?:/[\w./-]+)?)$")
 SCENARIO = re.compile(r"^[a-z][a-z0-9-]*\.(?:aes|aes256k)\b[a-z0-9.-]*$")
 
@@ -83,26 +82,14 @@ def coverage_rows(text):
             yield area, cells
 
 
-def summary_counts(text):
-    match = re.search(r"(?m)^## Classification summary\n", text)
-    if not match:
-        raise ValueError("missing classification summary")
-    section = re.split(r"(?m)^## ", text[match.end():], maxsplit=1)[0]
-    counts = {}
-    for line in section.splitlines():
-        cells = split_row(line) if line.startswith("| ") else []
-        if len(cells) >= 2 and cells[0].strip("`") in CLASSES:
-            counts[cells[0].strip("`")] = int(cells[1])
+def class_counts(text):
+    """Count the coverage rows of each known class; the map keeps no totals."""
+    counts = dict.fromkeys(CLASSES, 0)
+    for _, cells in coverage_rows(text):
+        klass = cells[2].strip("`") if len(cells) == len(HEADER) else None
+        if klass in counts:
+            counts[klass] += 1
     return counts
-
-
-def open_pull_requests(text):
-    match = re.search(r"(?m)^## Open pull requests\n", text)
-    if not match:
-        raise ValueError("missing open pull request section")
-    section = re.split(r"(?m)^## ", text[match.end():], maxsplit=1)[0]
-    return {number for line in section.splitlines() if line.startswith("| ")
-            for number in PR.findall(split_row(line)[0])}
 
 
 def placeholder(token):
@@ -170,8 +157,6 @@ def check(root=ROOT, text=None, tests=None, catalog=None):
 
     areas = set()
     seen = set()
-    counts = dict.fromkeys(CLASSES, 0)
-    open_prs = open_pull_requests(text)
     for area, cells in coverage_rows(text):
         if len(cells) != len(HEADER) or not all(cells):
             problems.append("row %s: expected %d nonempty columns" % (cells[0], len(HEADER)))
@@ -186,10 +171,6 @@ def check(root=ROOT, text=None, tests=None, catalog=None):
         if klass not in CLASSES:
             problems.append("row " + key + ": unknown class " + cells[2])
             continue
-        counts[klass] += 1
-        if klass in ("released", "main-only", "primitive"):
-            for number in sorted(set(PR.findall(" ".join(cells))) & open_prs):
-                problems.append("row " + key + ": unmerged PR #" + number + " cited as " + klass)
         if klass == "released" and not LINK.search(cells[6]) and not CODE.search(cells[6]):
             problems.append("row " + key + ": released row needs local evidence")
     if not seen:
@@ -198,16 +179,6 @@ def check(root=ROOT, text=None, tests=None, catalog=None):
     for label in spec_paths(root):
         if label not in areas:
             problems.append("SPEC path without coverage section: " + label)
-
-    try:
-        summary = summary_counts(text)
-    except ValueError as error:
-        problems.append(str(error))
-    else:
-        for klass in CLASSES:
-            if summary.get(klass) != counts[klass]:
-                problems.append("summary %s: table says %s, rows give %d"
-                                % (klass, summary.get(klass), counts[klass]))
     return problems
 
 
@@ -220,7 +191,9 @@ def main():
         for problem in problems:
             print("native_path_coverage: " + problem, file=sys.stderr)
         return 1
+    counts = class_counts((ROOT / COVERAGE).read_text())
     print("native path coverage references valid; native outcomes require record review")
+    print("rows per class: " + ", ".join("%s %d" % (klass, counts[klass]) for klass in CLASSES))
     return 0
 
 

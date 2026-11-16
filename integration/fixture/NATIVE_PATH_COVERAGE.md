@@ -376,13 +376,8 @@ a particular test in it ran. The Visibility column states which applies:
 
 ## Classification summary
 
-| Class | Rows |
-| --- | --- |
-| `released` | 79 |
-| `main-only` | 0 |
-| `primitive` | 13 |
-| `proposed` | 8 |
-| `absent` | 2 |
+`python3 tools/native_path_coverage.py` prints the number of rows in each
+class; this map keeps no totals to update.
 
 The `released` rows are recipes, not accepted paths: most have native evidence
 only on selected profiles, several records are historical, and some selected
@@ -421,12 +416,6 @@ independent native observation is still missing.
   staged native oracles (OSD-2, OSD-4) are not selected by any catalog row.
   MSG-12 now has its dedicated CRC/single-OSD row and required parent gate;
   its live observation remains no negotiated compression and working commands.
-
-## Open pull requests
-
-No pull request that changes a path in this map is open at the reviewed
-commit. #40, #41, #42, #43, #45, #46 and #47 have merged and are classified in
-OSD-15, OSD-17, OSD-12, MDS-9, RBD-5, MDS-10 and OSD-15 respectively.
 
 ## Product wire gaps (separate from environment completeness)
 
@@ -471,8 +460,8 @@ underlying Messenger paths and are not application completeness claims.
 `python3 tools/native_path_coverage.py` checks this document without running
 any test: every scenario ID, `group:` and `suite:` reference exists in the
 catalog, every plain test name is a top-level Go test in this repository,
-every linked record exists, each row has one known class, unmerged pull
-requests are not cited by `released`, `main-only` or `primitive` rows, every
-SPEC.md final-scope path has a section, and the summary counts match the rows.
-Upstream `ctg@` receipts are checked for form only. The unit test
+every linked record exists, each row has one known class, every SPEC.md
+final-scope path has a section, and every `released` row cites local evidence.
+It prints the number of rows in each class. Pull-request state is not recorded
+here: whether a pull request has merged is read from GitHub. Upstream `ctg@` receipts are checked for form only. The unit test
 `tools/test_native_path_coverage.py` runs this check in basic CI.

@@ -66,30 +66,30 @@ class NativePathCoverageTests(unittest.TestCase):
         text = self.text + "\n[outside](../../../outside.md)\n"
         self.assertIn("missing or non-repository file ../../../outside.md", self.check(text))
 
-    def test_rows_need_a_known_class_unique_ids_and_matching_summary(self):
+    def test_rows_need_a_known_class_and_unique_ids(self):
         row = self.row("MSG-1")
         text = self.text.replace(row, row.replace("`released`", "`covered`"))
-        problems = self.check(text)
-        self.assertIn("row MSG-1: unknown class `covered`", problems)
-        self.assertTrue(any(problem.startswith("summary released: table says") for problem in problems))
+        self.assertIn("row MSG-1: unknown class `covered`", self.check(text))
         text = self.text.replace(row, row + "\n" + row)
         self.assertIn("duplicate row MSG-1", self.check(text))
         text = self.text.replace(row, "| MSG-1 | short |")
         self.assertIn("row MSG-1: expected 8 nonempty columns", self.check(text))
 
-    def test_unmerged_pull_requests_are_not_capabilities(self):
-        # Self-contained: list a synthetic open PR and cite it from a row, so the
-        # check does not depend on which pull requests are open today.
-        row = self.row("MDS-10")
-        heading = "## Open pull requests\n"
-        text = self.text.replace(heading, heading + "\n| Pull request | Scope | Status |\n"
-                                 "| --- | --- | --- |\n| #999 | synthetic | open PR, unmerged |\n")
-        cited_row = row.replace("issue #11;", "issue #11; open PR #999;", 1)
-        cited = text.replace(row, cited_row)
-        self.assertEqual(self.check(cited), [])
-        cited = cited.replace(cited_row, cited_row.replace("`proposed`", "`released`", 1))
-        self.assertIn("row MDS-10: unmerged PR #999 cited as released", self.check(cited))
+    def test_class_counts_come_from_the_rows(self):
+        counts = coverage.class_counts(self.text)
+        self.assertEqual(set(counts), set(coverage.CLASSES))
+        self.assertEqual(sum(counts.values()), len(list(coverage.coverage_rows(self.text))))
+        row = self.row("MSG-1")
+        moved = coverage.class_counts(self.text.replace(row, row.replace("`released`", "`proposed`")))
+        self.assertEqual(moved["released"], counts["released"] - 1)
+        self.assertEqual(moved["proposed"], counts["proposed"] + 1)
 
+    def test_released_rows_need_local_evidence(self):
+        row = self.row("MSG-1")
+        cells = coverage.split_row(row)
+        cells[6] = "upstream receipt only"
+        text = self.text.replace(row, "| " + " | ".join(cells) + " |")
+        self.assertIn("row MSG-1: released row needs local evidence", self.check(text))
 
 if __name__ == "__main__":
     unittest.main()
