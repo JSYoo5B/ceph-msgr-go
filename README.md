@@ -439,10 +439,10 @@ module externally, and rejects native sources, module replacements and subproces
 dependencies. Fixture-only dependencies remain in `integration/fixture/`.
 
 Basic CI also runs, with the race detector, exactly the cluster-free
-integration-package tests listed in `integration/cluster_free_tests.txt`, and
-`tools/cluster_free_tests.py` requires each of them to report PASS. Every other
-top-level test there must be a `TestCeph...Integration` native test, which
-stays opt-in.
+integration-package tests, and `tools/cluster_free_tests.py` requires each of
+them to report PASS. The name rule classifies them from the source: a
+top-level `TestCeph...Integration` test is native and stays opt-in, and every
+other top-level test there is cluster-free, so adding one needs no list edit.
 
 `integration/fixture/` contains bounded native setup/control/oracle recipes.
 Run Docker profiles on Linux with their documented selectors. Native vectors,

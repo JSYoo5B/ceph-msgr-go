@@ -3,19 +3,21 @@
 
 The integration package mixes TestCeph...Integration native fixture tests, which
 stay opt-in, with helper/decoder tests that need no cluster (including
-TestCephFS... consumer-helper tests). integration/cluster_free_tests.txt lists
-the latter. `check` requires every top-level test to be either a native fixture
-test or listed, and every listed name to exist. `selector` prints the anchored -run
-pattern for exactly the listed tests. `verify` requires every listed test to
-report an unindented top-level PASS line; a skip, a missing result, a failure
-or an unlisted test fails the gate even when the process exited zero.
+TestCephFS... consumer-helper tests). The name rule classifies every top-level
+test from the source: a TestCeph...Integration name is a native fixture test
+and every other top-level test is cluster-free, so there is no list to edit.
+`check` refuses duplicate top-level names and an empty cluster-free set.
+`selector` prints the anchored -run pattern for exactly the cluster-free tests.
+`verify` requires every cluster-free test to report an unindented top-level PASS
+line; a skip, a missing result, a failure or a test outside the cluster-free set
+(a native fixture test or a name the source does not declare) fails the gate
+even when the process exited zero.
 """
 import argparse
 from pathlib import Path
 import re
 import sys
 
-INVENTORY = Path("integration") / "cluster_free_tests.txt"
 NATIVE = re.compile(r"TestCeph\w*Integration")
 
 
@@ -26,53 +28,39 @@ def declared(root):
     return names
 
 
-def inventory(root):
-    lines = (Path(root) / INVENTORY).read_text(encoding="utf-8").splitlines()
-    return [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
+def cluster_free(root):
+    """Every declared top-level test that is not a native fixture test, sorted."""
+    return sorted({name for name in declared(root) if not NATIVE.fullmatch(name)})
 
 
 def check(root):
     problems = []
-    names, listed = declared(root), inventory(root)
+    names = declared(root)
     for name in sorted({name for name in names if names.count(name) > 1}):
         problems.append("duplicate top-level test: %s" % name)
-    for name in sorted({name for name in listed if listed.count(name) > 1}):
-        problems.append("duplicate inventory entry: %s" % name)
-    if listed != sorted(listed):
-        problems.append("inventory is not sorted")
-    for name in listed:
-        if not re.fullmatch(r"Test\w+", name):
-            problems.append("invalid inventory entry: %r" % name)
-        elif NATIVE.fullmatch(name):
-            problems.append("native fixture test listed as cluster-free: %s" % name)
-        elif name not in names:
-            problems.append("inventory entry has no top-level test: %s" % name)
-    for name in sorted(set(names) - set(listed)):
-        if not NATIVE.fullmatch(name):
-            problems.append("unclassified top-level test (list it, or name a native test TestCeph...Integration): %s" % name)
-    if not listed:
-        problems.append("inventory is empty")
+    if not cluster_free(root):
+        problems.append("no cluster-free top-level test")
     return problems
 
 
 def selector(root):
-    return "^(%s)$" % "|".join(inventory(root))
+    return "^(%s)$" % "|".join(cluster_free(root))
 
 
 def verify(root, text):
-    observed, problems = {}, []
+    observed, problems = {}, check(root)
     for line in text.splitlines():
         match = re.fullmatch(r"--- (PASS|FAIL|SKIP): (Test\w+) \([^\r\n]*\)", line)
         if match:
             if match[2] in observed:
                 problems.append("duplicate result: %s" % match[2])
             observed[match[2]] = match[1]
-    listed = inventory(root)
-    for name in listed:
+    expected = cluster_free(root)
+    for name in expected:
         if observed.get(name) != "PASS":
             problems.append("%s: %s" % (name, observed.get(name, "MISSING")))
-    for name in sorted(set(observed) - set(listed)):
-        problems.append("unlisted test ran: %s" % name)
+    for name in sorted(set(observed) - set(expected)):
+        problems.append("test outside the cluster-free set ran: %s" % name)
     return problems
 
 
@@ -100,7 +88,7 @@ def main(argv=None):
         print("cluster-free integration tests: " + "; ".join(problems), file=sys.stderr)
         return 1
     if args.command == "verify":
-        print("cluster-free integration tests: %d passed" % len(inventory(args.root)))
+        print("cluster-free integration tests: %d passed" % len(cluster_free(args.root)))
     return 0
 
 
