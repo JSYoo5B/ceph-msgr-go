@@ -45,9 +45,7 @@ class MonMgrCommandRowsTest(ci_row_catalog.RowsTestCase):
         rows = [row for row in self.rows if row.get("test_run") == SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR]
         self.assertEqual(rows, [{"key": "aes256k", "service": "aes256k", "family": "4", "stress": "",
                                  "test_run": SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR}])
-        client = set()
-        for source in (ROOT / "cephmsgr").glob("*_test.go"):
-            client.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))
+        client = self.client_tests()
         selector = re.compile(SERVICE_MAP_LIFECYCLE_HOLD_SELECTOR)
         self.assertEqual({name for name in client | self.declared if selector.search(name)},
                          {"TestCephMonServiceMapLifecycleFailedMonHoldIntegration"})
@@ -59,9 +57,7 @@ class MonMgrCommandRowsTest(ci_row_catalog.RowsTestCase):
         rows = [row for row in self.rows if row.get("test_run") == APPLIED_NAMED_MGR_TELL_SELECTOR]
         self.assertEqual(rows, [{"key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "",
                                  "runtime": "host", "test_run": APPLIED_NAMED_MGR_TELL_SELECTOR}])
-        client = set()
-        for source in (ROOT / "cephmsgr").glob("*_test.go"):
-            client.update(re.findall(r"^func (Test\w+)\(", source.read_text(encoding="utf-8"), re.MULTILINE))
+        client = self.client_tests()
         selector = re.compile(APPLIED_NAMED_MGR_TELL_SELECTOR)
         self.assertEqual({name for name in client | self.declared if selector.search(name)},
                          {"TestCephAppliedNamedManagerTellIsNotReplayedIntegration"})
