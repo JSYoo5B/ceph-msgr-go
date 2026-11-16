@@ -70,29 +70,64 @@ fragment. A duplicate identifier in any two fragments, a row whose `group` is
 not its file's name, an empty fragment and any other file or directory are
 refused.
 
+### Fixture capabilities
+
+A destructive or test-specific fixture mode (a MON SIGKILL, an injected OSD
+fault, an exclusive owned fixture, the four-OSD topology and so on) is
+admitted by a fixture capability, never by the fixture naming a test. The row
+whose test needs the mode declares it in the parameter `capabilities`, a
+sorted comma-separated list such as `"osd-erasure-width,osd-pg-interval,osd-shard-history"`.
+The native workflow forwards it as `CEPH_MSGR_TEST_CAPABILITIES`, and the
+fixture admits a mode only when its capability is declared, `test_run` is
+exactly one anchored test (`^TestName$`) and the profile meets the
+capability's requirements. A row with a capability therefore selects one
+test; the tests that once shared a two-test row with a capability
+(`TestCephMonMapVersion*KillIntegration`, `TestCephOSDErasureOptimizedK2M2`
+with `...FailoverIntegration`, and `...InFlightMutationIntegration` with
+`...SnapshotAndDegradedWriteIntegration`) now have a row each.
+
+The vocabulary is the `defineCapability` calls in
+[`integration/fixture`](../../integration/fixture/capability.go), each beside
+the mode it admits, with its requirements: workflow-forwarded variables the
+profile must have (`OSD_REPLICAS=4`), capabilities it extends (`+name`) and
+capabilities it excludes (`!name`). `scenario_plan.py validate` reads those
+calls and refuses a row that declares an undefined capability or does not
+meet a requirement, and every reading of the catalog refuses a capability on
+a `test_run` that is not one anchored test. The fixture refuses the same
+declarations before it starts a cluster, and its Go tests keep the source
+declarations, the planner's reading of them and the registry equal. A new
+control adds its `defineCapability` call beside its own code and the
+declaration to its own row; it edits no shared selector list.
+
+The fixture reads only the capability value and the exact selector. It does
+not know that a catalog row supplied them, so a declaration placed beside the
+test can supply the same two values later without a fixture change.
+
 The catalog preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
-Thirteen further `osd` rows use the four-OSD erasure-capacity topology
-(`osd_replicas` value `4`): one selects only `TestCephOSDErasureK2M2Integration`,
-another only `TestCephOSDErasureOptimizedK2M2Integration` and
-`TestCephOSDErasureOptimizedK2M2FailoverIntegration`, and the third only
+Fifteen further `osd` rows use the four-OSD erasure-capacity topology
+(`osd_replicas` value `4`), each with one test. The first selects
+`TestCephOSDErasureK2M2Integration`, the topology's default selection; every
+other one declares `osd-erasure-width`. The second to the fifth select
+`TestCephOSDErasureOptimizedK2M2Integration`,
+`TestCephOSDErasureOptimizedK2M2FailoverIntegration`,
 `TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration` and
-`TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration`. The fourth
+`TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration`. The sixth
 selects only `TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration`: one
 explicit caller resubmission of an independently observed applied APPEND after
 primary replacement, with a fresh-transaction append as the byte/version control.
-The fifth selects only
+The seventh selects only
 `TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration`: one
 bracketed snapshot of the primary's native PG log that must contain two known
 Go requests by their full request identity. It calibrates presence detection
 only ([validation](../../integration/fixture/OSD_PG_HISTORY_CALIBRATION_VALIDATION.md)).
-The sixth selects only
+The eighth selects only
 `TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration`: one version-pinned
 COPY_FROM2 from an owned replicated pool into the optimized pool, whose two
 linked request identities are required on the live primary and then looked up
 in a private store copy of every acting shard
 ([validation](../../integration/fixture/OSD_EC_COPY_FROM_SHARD_HISTORY_VALIDATION.md)).
-The seventh selects only
+The ninth selects only
 `TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration`: one full
 write and one overwrite confined to shard 0's chunk, whose request identities
 are required on the live primary and then looked up in a private store copy
@@ -100,7 +135,7 @@ of every acting shard. The shards the overwrite names must hold its entry;
 the nonprimary data shard it leaves out must not, and its own log must end at
 the full write
 ([validation](../../integration/fixture/OSD_EC_PARTIAL_WRITE_SHARD_HISTORY_VALIDATION.md)).
-The eighth and the ninth continue that sequence and capture every acting
+The tenth and the eleventh continue that sequence and capture every acting
 shard again
 ([validation](../../integration/fixture/OSD_EC_PARTIAL_WRITE_LATER_STATE_VALIDATION.md)).
 `TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration`
@@ -112,7 +147,7 @@ ends the PG's interval once with an owned, self-restoring `pg repeer` and
 requires the PG clean on its original placement: the left-out shard's log
 head must then be at the overwrite without its entry, and the first write of
 the new interval must be held by every shard.
-The tenth and the eleventh continue the same sequence with an outage of the
+The twelfth and the thirteenth continue the same sequence with an outage of the
 left-out shard's OSD, through the fixture's forced kill and start of an owned
 OSD, and capture every acting shard once the PG is clean on its original
 placement again
@@ -124,7 +159,7 @@ at the overwrite without its entry.
 sends one overwrite inside the absent shard's chunk while the PG is active
 without it: after the recovery the returned shard must hold all three
 entries, the overwrite's included, with an empty missing set.
-The twelfth,
+The fourteenth,
 `TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration`,
 continues it with an outage of the primary's own OSD
 ([validation](../../integration/fixture/OSD_EC_PARTIAL_WRITE_PRIMARY_REPLACEMENT_VALIDATION.md)):
@@ -133,13 +168,13 @@ pg_temp, one overwrite inside the absent shard 0's chunk goes through that
 primary, and after the original primary's return and recovery the left-out
 shard must hold the full write and that overwrite without the earlier one,
 while every other shard holds all three entries.
-The fixture admits the store-copy step for these seven selectors alone.
-It admits the owned-pool oracle's `pginterval` mode, which observes one
-owned PG and can end its interval, for the last five alone.
-That value travels in the
-already-forwarded `osd_replicas` input, so it needs no new workflow parameter;
-the fixture refuses it with any other selector.
-The thirteenth selects only
+These seven rows declare `osd-shard-history`, which admits the store-copy
+step, and the last five also `osd-pg-interval`, which admits the owned-pool
+oracle's `pginterval` mode that observes one owned PG and can end its
+interval. The topology value travels in the already-forwarded `osd_replicas`
+input; the fixture refuses it with any selector other than its default or
+one test that declares `osd-erasure-width`.
+The fifteenth selects only
 `TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration`
 ([validation](../../integration/fixture/OSD_EC_HELD_REQUEST_VALIDATION.md)):
 one Go APPEND+SETXATTR that names a map epoch the cluster has not published
@@ -154,17 +189,19 @@ checkpoint, and another selects only `TestCephOSDCacheOpGoIntegration`, the
 Go-originated cache-tier operations with a native observer, including its
 lost-reply CACHE_FLUSH subtest
 (`lost_reply_flush_applied_without_caller_replay`). Both reuse the
-already-forwarded `osd_cache_pools` input; the cache-pool fixture accepts only
-those selectors or `TestCephOSDIgnoreCacheIntegration`.
+already-forwarded `osd_cache_pools` input and declare
+`exclusive-osd-cache-pools`; the cache-pool fixture accepts only its default
+`TestCephOSDIgnoreCacheIntegration` or one test with that capability.
 Two `mds-cephfs-capsend` rows select only
 `TestCephMDSCephFSCapSendRecoveryIntegration` in the two selected MDS
-profiles. They reuse the already-forwarded `mds_cephfs_data` input; the
-data fixture accepts only that selector, the writeback-fence selector below or
-`TestCephMDSCephFSDataIntegration`.
+profiles. They reuse the already-forwarded `mds_cephfs_data` input and declare
+`exclusive-mds-cephfs-data`; the data fixture accepts only its default
+`TestCephMDSCephFSDataIntegration` or one test with that capability or the
+writeback-fence capability below.
 Two `mds-cephfs-writeback` rows select only
 `TestCephMDSCephFSWritebackFenceIntegration` in the same two MDS profiles and
-reuse the same input; the data fixture admits its OSD drop, background
-reader and eviction controls only for that selector.
+reuse the same input; they declare `mds-writeback-fence`, which alone admits
+the OSD drop, background reader and eviction controls.
 One further `osd` row selects only `TestCephOSDSetChunkNativeIntegration`, the
 native-only SET_CHUNK manifest checkpoint, on the single-BlueStore legacy-v6
 fixture. It needs no opt-in parameter: the checkpoint uses the ordinary OSD
@@ -174,30 +211,33 @@ the Go-originated SET_CHUNK acceptance with native observation, on the same
 fixture and likewise without an opt-in parameter.
 Two `mds-cephfs-multi-reconnect` rows select only
 `TestCephMDSCephFSMultiReconnectIntegration`, reusing the completion opt-in
-for a fresh, isolated fixture in each selected MDS profile. Existing
-completion rows keep their original selector.
+for a fresh, isolated fixture in each selected MDS profile with
+`exclusive-mds-cephfs-completion`. Existing completion rows keep their
+original selector.
 Two `mds-cephfs-heldflock-split-reconnect` rows select only
 `TestCephMDSCephFSHeldFlockSplitReconnectIntegration` in the same two MDS
-profiles, again on a fresh completion fixture. The fixture admits its closed
-split-file lock probe, level-15 debug window and per-capability reconnect log
-read only for that selector and the next one.
+profiles, again on a fresh completion fixture. They declare
+`mds-held-flock-split`, which alone admits the closed split-file lock probe,
+level-15 debug window and per-capability reconnect log read.
 Two `mds-cephfs-heldflock-split-fragments` rows select only
 `TestCephMDSCephFSHeldFlockSplitFragmentsIntegration` in the same two MDS
 profiles, each on a fresh completion fixture. It holds one lock in a nonfinal
-and one in the final fragment of the split reconnect. The fixture admits the
-closed lock probe of the last split file only for that selector.
+and one in the final fragment of the split reconnect. They declare
+`mds-held-flock-split` and `mds-held-flock-split-fragments`, which alone admits
+the closed lock probe of the last split file.
 Two `mds-cephfs-sharedflock-recovery` rows select only
 `TestCephMDSCephFSSharedFlockRecoveryIntegration` in the same two MDS
 profiles, each on a fresh metadata fixture (`mds_cephfs`). It runs the
-recovery recipe of the `mds-cephfs` rows with two shared locks; the broad
-`mds-cephfs` selector does not reach it.
+recovery recipe of the `mds-cephfs` rows with two shared locks and declares
+`exclusive-mds-cephfs`; the broad `mds-cephfs` selector does not reach it.
 One further `osd` row selects only `TestCephOSDCopyFromLateErrorIntegration`
 on the CRC/AES IPv4 host single-BlueStore legacy-v6 fixture. This owned daemon
-fault requires its exact exclusive selector; broad suites do not execute it.
+fault requires `osd-copy-from-late-error` and the exact selector; broad suites
+do not execute it.
 A separate `osd` row on the same fixture selects only
 `TestCephOSDCopyFromMultiChunkLateErrorIntegration`. It lowers the owned
 daemon's copy chunk limit to force multi-chunk staging before the same
-injected error, with its own exclusive selector and marker.
+injected error, with its own capability `osd-copy-from-multi-chunk` and marker.
 One further `osd` row,
 `osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-osdcopyfromdestinationhistory`,
 selects only `TestCephOSDCopyFromDestinationHistoryIntegration`: one Go source
@@ -252,7 +292,8 @@ reply, all client-suite tests without an opt-in parameter of their own:
   these names, so no other row runs them.
 - `mds-commands.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-appliedmdscommand`
   selects `TestCephAppliedMDSCommandIsNotReplayedIntegration` on the owned MDS
-  command fixture, which admits this one further exact selector.
+  command fixture, which admits this one further test by its declared
+  `mds-applied-command`.
 
 Two further rows run those OSD, PG and MDS cells in secure mode, where frames
 are not decoded and the cells use their padded-write mode, on the profile of
@@ -279,17 +320,19 @@ One further `rbd` row,
 selects only `TestCephRBDMirrorPathRecoveryIntegration` on the single-BlueStore
 IPv4 fixture. It needs no opt-in parameter and does not use the RBD base
 opt-in: the fixture derives its owned destination cluster, rbd-mirror daemon
-and directed source OSD fault from this exact selector. See the
+and directed source OSD fault from its declared `rbd-mirror` and the exact
+selector. See the
 [mirror recipe](../../integration/fixture/RBD_MIRROR_VALIDATION.md).
-Two `osd` rows select only `TestCephMonMapVersionConnectedKillIntegration`
-and `TestCephMonMapVersionUnprocessedKillIntegration`, both on CRC with one
-BlueStore OSD and legacy-v6:
+Four `osd` rows select `TestCephMonMapVersionConnectedKillIntegration` or
+`TestCephMonMapVersionUnprocessedKillIntegration` alone, each test on CRC with
+one BlueStore OSD and legacy-v6 in two profiles:
 `osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill`
 and
-`osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill`.
-They need no opt-in parameter. The fixture admits SIGKILL of a MON and uses
-120 s tickets only for this exact selector; broad OSD rows match the two
-names and report them as skipped. See the
+`osd.aes256k.ip6.crc.container.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-monmapversionkill`
+for the connected cell, and the same IDs ending in `t-monmapversionunprocessedkill`
+for the unprocessed cell. They declare `mon-forced-kill`; the fixture admits
+SIGKILL of a MON and uses 120 s tickets only with that capability for one
+exact test. Broad OSD rows match the two names and report them as skipped. See the
 [kill record](../../integration/fixture/MON_MAP_VERSION_KILL_VALIDATION.md).
 Two `mon-mgr` rows, `mon-mgr.aes256k.ip4.t-monservicemaplargemap` and
 `mon-mgr.aes.ip4.crc.host.t-monservicemaplargemap`, select only the
@@ -304,8 +347,9 @@ and
 `rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdjournallostappendreply`,
 select only `TestCephRBDJournalLostAppendReplyIntegration` on the two RBD
 profiles, each on a fresh fixture. They reuse the already-forwarded `rbd`
-input; the RBD fixture admits this one further exact selector and then serves
-a different closed journal action sequence. The broad RBD selector does not
+input and declare `rbd-journal-lost-append`; the RBD fixture admits this one
+further exact test by that capability and then serves a different closed
+journal action sequence. The broad RBD selector does not
 match the test, so no other row runs it. The CRC row attributes the withheld
 reply by transaction ID; the secure row cannot and says so in its record. See
 the
@@ -315,8 +359,9 @@ Two further `rbd` rows,
 and
 `rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerloss`,
 select only `TestCephRBDLockOwnerLossIntegration` on the same two profiles,
-each on a fresh fixture. They reuse the `rbd` input too; the RBD fixture
-admits this exact selector and then serves a different closed lock action
+each on a fresh fixture. They reuse the `rbd` input too and declare
+`rbd-lock-owner-loss`; the RBD fixture admits this exact test by that
+capability and then serves a different closed lock action
 sequence, in which one native driver process ends by SIGKILL and two client
 addresses are blocklisted until the fixture's cleanup. No other RBD row
 matches the test. Each row waits twice for a 30 s watch to expire, so its test
@@ -327,7 +372,8 @@ Two further `rbd` rows,
 and
 `rbd.aes256k.ip6.container.osd-store-memstore.osd-replicas-1.osd-profile-legacy-v6.t-rbdlockownerlosspending`,
 select only `TestCephRBDLockOwnerLossPendingIntegration` on the same two
-profiles, each on a fresh fixture. The test is the lock-owner-loss sequence
+profiles, each on a fresh fixture, and declare `rbd-lock-owner-loss` and
+`rbd-lock-pending-requests`. The test is the lock-owner-loss sequence
 with two requests of the first owner held on the OSD through both handoffs.
 Its closed lock action sequence has two more actions; in one of them the
 fixture sets and clears a flag of the owned pool until the OSDMap epoch is
@@ -339,8 +385,8 @@ Two further `rbd` rows,
 and
 `rbd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-legacy-v6.t-rbdjournalprimarychange`,
 select only `TestCephRBDJournalPrimaryChangeIntegration`. They are the only
-RBD rows on three OSDs: the RBD fixture admits `osd_replicas` 3 with BlueStore
-for this exact selector alone, creates its owned pool with three replicas and
+RBD rows on three OSDs: they declare `rbd-journal-primary-change`, and the RBD
+fixture admits `osd_replicas` 3 with BlueStore for that capability alone, creates its owned pool with three replicas and
 one PG, and serves the lost-append sequence with two more actions, in one of
 which the fixture marks the PG's primary out. Both rows use BlueStore; they
 differ in connection mode, key type, address family and runtime as the other

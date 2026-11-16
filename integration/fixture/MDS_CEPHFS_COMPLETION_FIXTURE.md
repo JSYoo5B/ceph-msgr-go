@@ -266,18 +266,19 @@ never written is compared and recorded, not required to be nonzero. Each
 request is journaled as a `native-split-flock-ex-nb` mutation before it runs
 and an uncertain native process is not replayed. The probe, `debug-caps-on`,
 `debug-caps-off` and `reconnect-cap-log` are refused unless the fixture runs
-under the exclusive selector
+one exact test with the fixture capability `mds-held-flock-split`: the rows of
 `^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$`
 ([MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md](MDS_FILELOCK_SPLIT_RECONNECT_VALIDATION.md))
-or under the exclusive selector of the two-fragment acceptance below. In the
-action table "held-lock split selector only" means these two selectors.
+and of the two-fragment acceptance below declare it. In the action table
+"held-lock split selector only" means that capability.
 
 `split-final-flock-ex-nb` is the same probe with the same native owner, bound
 to the last split file of the plan. It takes no argument, is journaled as a
-`native-split-final-flock-ex-nb` mutation and is admitted only under
+`native-split-final-flock-ex-nb` mutation and is admitted only with the
+further capability `mds-held-flock-split-fragments`, which the rows of
 `^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$`
-([MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md](MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md));
-the single-lock selector refuses it. The native driver names exactly these two
+([MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md](MDS_FILELOCK_SPLIT_FRAGMENTS_VALIDATION.md))
+declare; the single-lock rows refuse it. The native driver names exactly these two
 lock paths and refuses a lock on any other one. The fixture accepts a lock
 receipt only for the path it started the driver with, and refuses a probe
 whose target is not the action's own file before it journals anything.
