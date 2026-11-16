@@ -60,7 +60,7 @@ vulnerability scans still execute. Branch protection settings are not modified.
 
 `catalog.json` preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
-Eleven further `osd` rows use the four-OSD erasure-capacity topology
+Twelve further `osd` rows use the four-OSD erasure-capacity topology
 (`osd_replicas` value `4`): one selects only `TestCephOSDErasureK2M2Integration`,
 another only `TestCephOSDErasureOptimizedK2M2Integration` and
 `TestCephOSDErasureOptimizedK2M2FailoverIntegration`, and the third only
@@ -112,9 +112,18 @@ at the overwrite without its entry.
 sends one overwrite inside the absent shard's chunk while the PG is active
 without it: after the recovery the returned shard must hold all three
 entries, the overwrite's included, with an empty missing set.
-The fixture admits the store-copy step for these six selectors alone.
+The twelfth,
+`TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration`,
+continues it with an outage of the primary's own OSD
+([validation](../../integration/fixture/OSD_EC_PARTIAL_WRITE_PRIMARY_REPLACEMENT_VALIDATION.md)):
+the PG must become active under the first parity shard's OSD with a
+pg_temp, one overwrite inside the absent shard 0's chunk goes through that
+primary, and after the original primary's return and recovery the left-out
+shard must hold the full write and that overwrite without the earlier one,
+while every other shard holds all three entries.
+The fixture admits the store-copy step for these seven selectors alone.
 It admits the owned-pool oracle's `pginterval` mode, which observes one
-owned PG and can end its interval, for the last four alone.
+owned PG and can end its interval, for the last five alone.
 That value travels in the
 already-forwarded `osd_replicas` input, so it needs no new workflow parameter;
 the fixture refuses it with any other selector.
@@ -339,7 +348,7 @@ See the
 sent cancellation rows above now also run `MonCommand` and `MgrCommand`
 subtests, and the public MDS command rows a last subtest that stops the
 fixture's MDS.
-The catalog has 124 native rows in total.
+The catalog has 125 native rows in total.
 Each entry has a stable identifier, group and concrete fixture parameters.
 Only Tentacle 20.2.x is accepted. `mandatory.txt` preserves the required native
 coverage; deleting a row requires an explicit coverage change.
