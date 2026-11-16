@@ -85,6 +85,26 @@ func ciProfile(row ciScenario, bindings map[string]ciBinding) (profile, error) {
 	})
 }
 
+// ciSuiteTestFiles returns the paths of the _test.go files of the suite
+// package pkg under root that the build context selects (CGO disabled, as the
+// listing in TestCINativeCompiledInventory): the internal and the external
+// test package, without files a build constraint excludes.
+func ciSuiteTestFiles(root, pkg string) ([]string, error) {
+	ctx := build.Default
+	ctx.CgoEnabled = false
+	dir := filepath.Join(root, pkg)
+	info, err := ctx.ImportDir(dir, 0)
+	var none *build.NoGoError
+	if err != nil && !errors.As(err, &none) {
+		return nil, err
+	}
+	var paths []string
+	for _, name := range append(slices.Clone(info.TestGoFiles), info.XTestGoFiles...) {
+		paths = append(paths, filepath.Join(dir, name))
+	}
+	return paths, nil
+}
+
 // ciNativeSources maps each native test to its declaring file. The files are
 // the _test.go files the build context selects (CGO disabled, as the listing
 // in TestCINativeCompiledInventory), parsed by Go's parser; that test pairs
@@ -92,17 +112,12 @@ func ciProfile(row ciScenario, bindings map[string]ciBinding) (profile, error) {
 func ciNativeSources(root string) (map[string]string, error) {
 	result := map[string]string{}
 	native := regexp.MustCompile(`^TestCeph\w*Integration$`)
-	ctx := build.Default
-	ctx.CgoEnabled = false
 	for _, pkg := range []string{"integration", "cephmsgr"} {
-		dir := filepath.Join(root, pkg)
-		info, err := ctx.ImportDir(dir, 0)
-		var none *build.NoGoError
-		if err != nil && !errors.As(err, &none) {
+		paths, err := ciSuiteTestFiles(root, pkg)
+		if err != nil {
 			return nil, err
 		}
-		for _, name := range append(slices.Clone(info.TestGoFiles), info.XTestGoFiles...) {
-			path := filepath.Join(dir, name)
+		for _, path := range paths {
 			file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 			if err != nil {
 				return nil, err
