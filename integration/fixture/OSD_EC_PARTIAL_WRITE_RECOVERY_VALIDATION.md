@@ -143,6 +143,39 @@ The Go test rechecks the receipt in `checkPGAbsent` without relying on the
 oracle's verdict. The fixture admits the `pginterval` mode for the selectors
 of these two controls as well; they use actions `absent` and `show` only.
 
+### Later observations without the member
+
+After the first accepted observation the tests observe the PG without the
+member again: while waiting for the primary's partial-write records and
+right before the OSD starts. The MON may publish an epoch that leaves the
+PG's sets unchanged, and the primary may answer before it has that map.
+Such a sample cannot show the PG's interval at the placement's epoch. On
+hosted run 43789717139 attempt 1 the first control's pre-start sample was
+one: placement epoch 28, primary at epoch 27, interval still the one since
+epoch 26. The oracle refused it, and the single pre-start observation
+stopped the test.
+
+`absentAgain` and `reobserveAbsent` in the test now classify every later
+sample against the accepted observation, at most thirty a second apart:
+
+- a primary that reports another interval start has left the accepted
+  interval, even from an older map. A primary's map epoch does not go back
+  and the accepted observation's primary was not behind its placement, so a
+  different start is a confirmed change; the test stops;
+- a sample accepted by the oracle and by `checkPGAbsent`, in the accepted
+  interval, is held;
+- a sample without a placement record or a query reply, with placement
+  records that differ around the query, or from a primary behind the
+  placement's epoch is inconclusive and is observed again. It never counts
+  as held;
+- every other refusal (another state, another set, a pg_temp) is a
+  confirmed departure; the test stops.
+
+The OSD starts only after one held sample. The records wait requires a held
+sample that shows the records. If the bound passes first, the test fails
+and names the last sample's reason. The checks of each sample are
+unchanged.
+
 The capture is unchanged. It still refuses an acting vector with an empty
 position, so both controls capture before the outage and after the return
 only. A capture of the three remaining shards while the fourth is away was
@@ -168,8 +201,10 @@ Then both
    with a new session to the unchanged primary. The primary's info must
    still be at the overwrite with the same record;
 4. do what is described below while the member is away;
-5. observe once more that the PG is still active without the member in the
-   same interval, start the OSD, and observe, at most 150 times a second
+5. observe, at most thirty times a second apart, until one sample is held
+   in the same interval (see
+   [later observations](#later-observations-without-the-member)), start
+   the OSD, and observe, at most 150 times a second
    apart, until the PG is `active+clean` on its original placement without a
    pg_temp in an interval that started after that one;
 6. ask the fixture's readiness control for every OSD up and in and every PG
@@ -220,9 +255,9 @@ While the member is away the Go client sends one WRITE of 15 bytes at
 `chunk + 5` (incarnation 13), inside the absent shard's chunk of the first
 stripe: the bytes that change are the ones that shard stores. Native
 readback follows, then one Go read (incarnation 14). The test then observes
-the live primary, at most fifteen times a second apart, until its own info
-holds exactly the record "shard 1, from the degraded write to the degraded
-write". After the return the capture admits no head past the entries, and
+the live primary, at most thirty times a second apart, until a held sample
+in the interval without the member shows exactly the record "shard 1, from
+the degraded write to the degraded write" in the primary's own info. After the return the capture admits no head past the entries, and
 the Go client reads the object once more (incarnation 15).
 
 | Statement | Status |
@@ -267,6 +302,17 @@ two of the four shards.
   ones and eleven requests. For the return it accepts a clean observation
   after two earlier intervals and refuses three interval relations and five
   changed receipts.
+- `TestReobserveAbsent` drives the later observations with synthetic
+  samples. It holds a sample at once and at a newer epoch, after lagging
+  samples, after placement records that moved around the query, after a
+  missing query reply or placement record, and once the wanted state
+  appears. It fails on persistent lag and on a wanted state that never
+  appears, both after the bound. It fails at once on a later interval
+  (lagging or not), on a later interval or a peering state after a lagging
+  sample, on another OSD in the empty position and on an earlier interval.
+  Three mutations failed it as intended: lag treated as a departure (the
+  hosted failure), an interval change read from a refused sample ignored,
+  and an inconclusive sample accepted.
 - `TestShardLogRecovered` pins the recovered shape against five synthetic
   shard receipts, of which only the one that holds every entry is equal to
   it, and refuses seven write sequences whose first or last write does not
