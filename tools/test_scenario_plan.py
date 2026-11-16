@@ -50,6 +50,65 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("lacks required parameter service", text)
         self.assertIn("invalid test selector", text)
 
+    def test_repository_capabilities_are_defined_and_met(self):
+        scenarios = plan.load_catalog()
+        vocabulary = plan.fixture_capabilities()
+        self.assertEqual(plan.capability_problems(scenarios, vocabulary, plan.workflow_bindings()), [])
+        names = [name for name, _ in vocabulary]
+        self.assertEqual(len(names), len(set(names)))
+        declared = {name for row in scenarios for name in row["params"].get("capabilities", "").split(",") if name}
+        self.assertEqual(declared, set(names))
+        self.assertEqual(plan.workflow_bindings()["CEPH_MSGR_TEST_CAPABILITIES"], ("capabilities", ""))
+
+    # The four refusals of the acceptance, by the planner: a capability on a
+    # selector of more than one test, a row that lacks a capability its
+    # declared one requires, a capability the fixture does not define, and a
+    # declared capability whose requirements the row's topology does not meet.
+    # The fixture's refusals are in integration/fixture/capability_test.go.
+    def test_capability_requires_one_anchored_test(self):
+        for selector in ("^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$", "^TestCephOSD.*Integration$",
+                         "TestCephOSDUpmapIntegration", "^TestCephOSDUpmapIntegration", "^TestA$|^TestB$", "^TestA$/sub", "^Test$"):
+            text = "\n".join(plan.validate_catalog([entry("a", test_run=selector, capabilities="osd-long-tickets")]))
+            self.assertIn("require a test_run of exactly one anchored test", text, selector)
+        text = "\n".join(plan.validate_catalog([entry("a", capabilities="osd-long-tickets")]))
+        self.assertIn("require a test_run of exactly one anchored test", text)
+        self.assertEqual(plan.validate_catalog([entry("a", test_run="^TestCephOSDUpmapIntegration$", capabilities="osd-long-tickets")]), [])
+
+    def test_capability_list_is_canonical(self):
+        for value in ("", ",", "b,a", "a,a", "A", "a b", "a,,b", "-a"):
+            text = "\n".join(plan.validate_catalog([entry("x", test_run="^TestX$", capabilities=value)]))
+            self.assertTrue("invalid capability list" in text or "sorted and unique" in text, value)
+
+    def test_capability_vocabulary_and_requirements_are_checked(self):
+        vocabulary = [("mon-kill", ["OSD=1", "OSD_STORE=bluestore", "MDS_FRESH=0"]), ("pg-interval", ["+shard-history"]),
+                      ("shard-history", ["OSD_REPLICAS=4"]), ("late", ["OSD=1"]), ("multi", ["OSD=1", "!late"]), ("local", ["LOCAL_ONLY="])]
+        bindings = {"CEPH_MSGR_TEST_OSD": ("osd", "0"), "CEPH_MSGR_TEST_OSD_STORE": ("osd_store", "memstore"),
+                    "CEPH_MSGR_TEST_MDS_FRESH": ("mds_fresh", "0"), "CEPH_MSGR_TEST_OSD_REPLICAS": ("osd_replicas", "1")}
+        row = lambda sid, value, **params: entry(sid, test_run="^TestX$", capabilities=value, **params)
+        good = [row("a", "mon-kill", osd="1", osd_store="bluestore"), row("b", "pg-interval,shard-history", osd_replicas="4"),
+                row("c", "multi", osd="1")]
+        self.assertEqual(plan.capability_problems(good, vocabulary, bindings), [])
+        for scenario, wanted in (
+                (row("u", "osd-kill"), "does not define"),
+                (row("t", "mon-kill", osd="1"), "requires osd_store='bluestore', the row has 'memstore'"),
+                (row("f", "mon-kill", osd="1", osd_store="bluestore", mds_fresh="1"), "requires mds_fresh='0'"),
+                (row("n", "mon-kill"), "requires osd='1', the row has '0'"),
+                (row("d", "pg-interval", osd_replicas="4"), "requires capability shard-history"),
+                (row("x", "late,multi", osd="1"), "excludes capability late"),
+                (row("l", "local"), "does not forward")):
+            with self.subTest(scenario=scenario["id"]):
+                self.assertIn(wanted, "\n".join(plan.capability_problems([scenario], vocabulary, bindings)))
+        self.assertIn("defines a capability twice", "\n".join(plan.capability_problems([], vocabulary + vocabulary[:1], bindings)))
+
+    def test_vocabulary_is_read_from_the_fixture_source(self):
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as directory:
+            Path(directory, "a.go").write_text('var x = defineCapability("one",\n\t"a \\"quoted\\" summary",\n\t"OSD=1 +two", nil)\n'
+                                               'var y = defineCapability("two", "s", "!one", func(p profile) bool { return true })\n', encoding="utf-8")
+            Path(directory, "a_test.go").write_text('var z = defineCapability("test-only", "s", "OSD=1", nil)\n', encoding="utf-8")
+            self.assertEqual(plan.fixture_capabilities(directory), [("one", ["OSD=1", "+two"]), ("two", ["!one"])])
+
     def test_mandatory_list_detects_silent_omission_in_both_directions(self):
         scenarios = [entry("a"), entry("b")]
         self.assertEqual(plan.mandatory_problems(scenarios, ["a", "b"]), [])

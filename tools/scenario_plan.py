@@ -8,7 +8,8 @@ validates the catalog against the mandatory list and reusable check jobs and pri
 selected matrix with an explanation. It reads local files only and executes no
 test.
 
-  scenario_plan.py validate               invariants, mandatory list, fixed jobs, selector targets
+  scenario_plan.py validate               invariants, mandatory list, fixed jobs, selector targets,
+                                          fixture capability vocabulary
   scenario_plan.py list                   one identifier per line
   scenario_plan.py plan --select S        matrix JSON on stdout, explanation on stderr
 
@@ -19,6 +20,17 @@ opened before the split.
 
 A selector S is "all", "group:<group>" or a scenario identifier; several can be
 given. An unknown selector is an error, never an empty or conservative match.
+
+A row may declare the fixture capabilities its test needs in the parameter
+"capabilities": a comma-separated, sorted list of names that the fixture
+defines with defineCapability calls in integration/fixture. Every reading of
+the catalog refuses a capability on a row whose test_run is not exactly one
+anchored test (^TestName$). validate also refuses a capability that the
+fixture source of the same tree does not define, and one whose requirements
+(the defineCapability requirement terms) the row's parameters do not meet.
+plan reads another revision's catalog and leaves those two checks to that
+revision's own validate and to its fixture, which refuses the same
+declarations before it starts a cluster.
 """
 import argparse
 import json
@@ -36,6 +48,16 @@ NATIVE_WORKFLOW = ROOT / ".github" / "workflows" / "native-scenarios.yml"
 MANDATORY = ROOT / ".github" / "scenarios" / "mandatory.txt"
 REQUIRED_PARAMS = ("key", "service", "family")
 SUPPORTED_RELEASE = re.compile(r"^20\.2\.\d+$")
+FIXTURE = ROOT / "integration" / "fixture"
+# The fixture's exactTestSelector and capabilityNamePattern (capability.go).
+EXACT_TEST = re.compile(r"\^Test[A-Za-z0-9_]+\$")
+CAPABILITY_NAME = re.compile(r"[a-z][a-z0-9]*(-[a-z0-9]+)*")
+# defineCapability(name, summary, requires, extra): the name, summary and
+# requirements are plain string literals, which
+# TestFixtureCapabilityVocabularyIsTheSourceDeclarations enforces with this
+# same expression.
+CAPABILITY_DEFINITION = re.compile(r'\bdefineCapability\(\s*"([^"\\]*)",\s*"(?:[^"\\]|\\.)*",\s*"([^"\\]*)"')
+WORKFLOW_BINDING = re.compile(r"(?m)^ +(CEPH_[A-Z0-9_]+): \$\{\{ matrix\.([a-z_]+)(?: \|\| '([^']*)')? \}\}\s*$")
 
 
 class PlanError(Exception):
@@ -98,6 +120,81 @@ def validate_catalog(scenarios):
                     re.compile(pattern)
                 except re.error as error:
                     problems.append("%s has an invalid test selector: %s" % (sid, error))
+        if "capabilities" in params:
+            problems.extend(declaration_problems(sid, params))
+    return problems
+
+
+def declaration_problems(sid, params):
+    """A capability admits a fixture mode for exactly one anchored test."""
+    value = params["capabilities"]
+    names = value.split(",") if isinstance(value, str) else None
+    if not names or not all(CAPABILITY_NAME.fullmatch(name) for name in names):
+        return ["%s has an invalid capability list %r" % (sid, value)]
+    problems = []
+    if names != sorted(set(names)):
+        problems.append("%s: capabilities must be sorted and unique" % sid)
+    selector = params.get("test_run")
+    if not isinstance(selector, str) or not EXACT_TEST.fullmatch(selector):
+        problems.append("%s: capabilities %s require a test_run of exactly one anchored test (^TestName$), not %r"
+                        % (sid, value, selector))
+    return problems
+
+
+def fixture_capabilities(directory=FIXTURE):
+    """[(name, requirement terms)] the fixture defines, from its non-test source."""
+    found = []
+    for path in sorted(Path(directory).glob("*.go")):
+        if not path.name.endswith("_test.go"):
+            found.extend((name, requires.split()) for name, requires
+                         in CAPABILITY_DEFINITION.findall(path.read_text(encoding="utf-8")))
+    return found
+
+
+def workflow_bindings(text=None):
+    """{environment variable: (matrix parameter, fallback)} of the native job."""
+    if text is None:
+        text = NATIVE_WORKFLOW.read_text(encoding="utf-8")
+    return {name: (param, fallback) for name, param, fallback in WORKFLOW_BINDING.findall(text)}
+
+
+def requirement_problem(sid, name, term, declared, params, bindings):
+    if term[0] == "+":
+        return None if term[1:] in declared else "%s: capability %s requires capability %s" % (sid, name, term[1:])
+    if term[0] == "!":
+        return None if term[1:] not in declared else "%s: capability %s excludes capability %s" % (sid, name, term[1:])
+    variable, _, want = term.partition("=")
+    binding = bindings.get("CEPH_MSGR_TEST_" + variable)
+    if binding is None:
+        return "%s: capability %s requires CEPH_MSGR_TEST_%s, which the native workflow does not forward" % (sid, name, variable)
+    param, fallback = binding
+    got = params.get(param) or fallback
+    if got != want:
+        return "%s: capability %s requires %s=%r, the row has %r" % (sid, name, param, want, got)
+    return None
+
+
+def capability_problems(scenarios, vocabulary, bindings):
+    """Every declared capability is defined, and the row meets its requirements."""
+    problems = []
+    names = [name for name, _ in vocabulary]
+    if len(set(names)) != len(names):
+        problems.append("the fixture defines a capability twice")
+    requirements = dict(vocabulary)
+    for entry in scenarios:
+        params = entry.get("params", {})
+        value = params.get("capabilities")
+        if not isinstance(value, str):
+            continue
+        declared = set(value.split(","))
+        for name in value.split(","):
+            if name not in requirements:
+                problems.append("%s declares capability %s, which the fixture does not define" % (entry["id"], name))
+                continue
+            for term in requirements[name]:
+                problem = requirement_problem(entry["id"], name, term, declared, params, bindings)
+                if problem:
+                    problems.append(problem)
     return problems
 
 
@@ -219,7 +316,8 @@ def main(argv=None):
             document = load_catalog_document()
             problems = (validate_catalog(scenarios) + mandatory_problems(scenarios, load_mandatory())
                         + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
-                        + selector_problems(scenarios, integration_tests()))
+                        + selector_problems(scenarios, integration_tests())
+                        + capability_problems(scenarios, fixture_capabilities(), workflow_bindings()))
             for problem in problems:
                 print(problem, file=sys.stderr)
             if problems:
