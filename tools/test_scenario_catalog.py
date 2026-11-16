@@ -212,6 +212,14 @@ class ExtractTests(unittest.TestCase):
         self.refused("main", "revision must be a full commit SHA")
         self.refused("0" * 40, "git cat-file failed")
 
+    def test_ci_command_plans_the_extracted_catalog_with_the_trusted_planner(self):
+        text = (catalog.ROOT / ".github/workflows/ci-command.yml").read_text(encoding="utf-8")
+        step = text.split("- name: Resolve the selectors against the tested revision", 1)[1].split("- name:", 1)[0]
+        self.assertIn('catalog=$(python3 tools/scenario_catalog.py extract --revision "$SHA" --output', step)
+        self.assertIn('python3 tools/scenario_plan.py plan --catalog "$catalog"', step)
+        self.assertNotIn("git show", step)
+        self.assertNotIn("checkout", step)
+
     def test_cli_prints_the_path(self):
         self.fragments()
         revision = self.commit()
