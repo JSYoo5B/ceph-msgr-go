@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -120,6 +121,30 @@ func TestDeclarationsFollowGoTestDiscovery(t *testing.T) {
 		if got[name] != where {
 			t.Errorf("%s: got %q, want %q", name, got[name], where)
 		}
+	}
+}
+
+// TestDeclarationsKeepRepeatedFunctions pins that repeatable top-level
+// functions (init and the blank identifier) are reported once per
+// declaration, in source order; the Python lookup decides which names matter.
+func TestDeclarationsKeepRepeatedFunctions(t *testing.T) {
+	dir := writeTree(t, map[string]string{
+		"doc.go":    "package p\n",
+		"a_test.go": "package p\n\nimport \"testing\"\n\nfunc init() {}\n\nfunc init() {}\n\nfunc _() {}\n\nfunc _() {}\n\nfunc TestActual(t *testing.T) {}\n",
+	})
+	decls, err := declarations(build.Default, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Decl{
+		{Dir: dir, File: "a_test.go", Name: "init", Line: 5},
+		{Dir: dir, File: "a_test.go", Name: "init", Line: 7},
+		{Dir: dir, File: "a_test.go", Name: "_", Line: 9},
+		{Dir: dir, File: "a_test.go", Name: "_", Line: 11},
+		{Dir: dir, File: "a_test.go", Name: "TestActual", Line: 13, Test: true},
+	}
+	if !slices.Equal(decls, want) {
+		t.Fatalf("got %+v, want %+v", decls, want)
 	}
 }
 

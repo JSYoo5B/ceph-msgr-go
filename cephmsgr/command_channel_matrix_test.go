@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"go/ast"
 	"go/build"
 	"go/parser"
@@ -40,7 +39,7 @@ func TestCommandChannelMatrixSelectorsExist(t *testing.T) {
 		t.Fatal("matrix names no tests")
 	}
 	listed := listedSuiteTests(t)
-	declared := map[string]map[string]string{}
+	declared := map[string]map[string][]string{}
 	for _, suite := range []string{"integration", "cephmsgr"} {
 		decls, err := suiteTestDecls(filepath.Join("..", suite))
 		if err != nil {
@@ -64,16 +63,19 @@ func TestCommandChannelMatrixSelectorsExist(t *testing.T) {
 	}
 }
 
-// suiteTestDecls returns test name -> declaring file for the _test.go files
-// that the build context (CGO disabled, as the listing) selects in dir.
-func suiteTestDecls(dir string) (map[string]string, error) {
+// suiteTestDecls returns test name -> declaring files for the _test.go files
+// that the build context (CGO disabled, as the listing) selects in dir. Only
+// test-shaped declarations are indexed, so repeated init functions play no
+// part; the internal and the external test package may each declare a test
+// of the same name, which go test lists and runs twice.
+func suiteTestDecls(dir string) (map[string][]string, error) {
 	ctx := build.Default
 	ctx.CgoEnabled = false
 	pkg, err := ctx.ImportDir(dir, 0)
 	if err != nil {
 		return nil, err
 	}
-	decls := map[string]string{}
+	decls := map[string][]string{}
 	fset := token.NewFileSet()
 	for _, name := range append(slices.Clone(pkg.TestGoFiles), pkg.XTestGoFiles...) {
 		file, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.SkipObjectResolution)
@@ -82,10 +84,7 @@ func suiteTestDecls(dir string) (map[string]string, error) {
 		}
 		for _, decl := range file.Decls {
 			if fn, ok := decl.(*ast.FuncDecl); ok && hasTestShape(fn) {
-				if previous, dup := decls[fn.Name.Name]; dup {
-					return nil, errors.New(fn.Name.Name + " declared in " + previous + " and " + name)
-				}
-				decls[fn.Name.Name] = name
+				decls[fn.Name.Name] = append(decls[fn.Name.Name], name)
 			}
 		}
 	}
@@ -174,14 +173,16 @@ func listedSuiteTests(t *testing.T) map[string]map[string]bool {
 // TestSuiteTestDeclsFollowGoDiscovery is the negative control of the parser
 // side: a raw string that reads like a declaration, a build-ignored file, a
 // method and the TestMain harness declare no test; an aliased testing import
-// does.
+// does. Repeated init functions beside a test, and the same test name in the
+// internal and the external test package, are valid Go and are accepted.
 func TestSuiteTestDeclsFollowGoDiscovery(t *testing.T) {
 	dir := t.TempDir()
 	files := map[string]string{
-		"right_test.go":   "package p\n\nimport \"testing\"\n\nfunc TestActual(t *testing.T) {}\n",
-		"wrong_test.go":   "package p\n\nconst doc = `\nfunc TestActual(t *testing.T) {}\nfunc TestWrongOnly(t *testing.T) {}\n`\n",
-		"ignored_test.go": "//go:build ignore\n\npackage p\n\nimport \"testing\"\n\nfunc TestIgnored(t *testing.T) {}\n",
-		"alias_test.go":   "package p\n\nimport testpkg \"testing\"\n\ntype suite struct{}\n\nfunc TestAlias(t *testpkg.T) {}\n\nfunc (suite) TestMethod(t *testpkg.T) {}\n\nfunc TestMain(m *testpkg.M) {}\n\nfunc Testable(t *testpkg.T) {}\n",
+		"right_test.go":    "package p\n\nimport \"testing\"\n\nfunc init() {}\n\nfunc init() {}\n\nfunc TestActual(t *testing.T) {}\n",
+		"external_test.go": "package p_test\n\nimport \"testing\"\n\nfunc TestActual(t *testing.T) {}\n",
+		"wrong_test.go":    "package p\n\nconst doc = `\nfunc TestActual(t *testing.T) {}\nfunc TestWrongOnly(t *testing.T) {}\n`\n",
+		"ignored_test.go":  "//go:build ignore\n\npackage p\n\nimport \"testing\"\n\nfunc TestIgnored(t *testing.T) {}\n",
+		"alias_test.go":    "package p\n\nimport testpkg \"testing\"\n\ntype suite struct{}\n\nfunc TestAlias(t *testpkg.T) {}\n\nfunc (suite) TestMethod(t *testpkg.T) {}\n\nfunc TestMain(m *testpkg.M) {}\n\nfunc Testable(t *testpkg.T) {}\n",
 	}
 	for name, text := range files {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(text), 0o644); err != nil {
@@ -192,8 +193,11 @@ func TestSuiteTestDeclsFollowGoDiscovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]string{"TestActual": "right_test.go", "TestAlias": "alias_test.go"}
-	if !maps.Equal(decls, want) {
+	want := map[string][]string{"TestActual": {"external_test.go", "right_test.go"}, "TestAlias": {"alias_test.go"}}
+	for _, files := range decls {
+		slices.Sort(files)
+	}
+	if !maps.EqualFunc(decls, want, slices.Equal) {
 		t.Fatalf("got %v, want %v", decls, want)
 	}
 }

@@ -1,7 +1,7 @@
 import unittest
 
 import native_path_coverage as coverage
-from test_go_test_list import SHAPES, WRONG_FILE, module
+from test_go_test_list import REPEATED, SHAPES, WRONG_FILE, module
 
 
 class NativePathCoverageTests(unittest.TestCase):
@@ -51,6 +51,13 @@ class NativePathCoverageTests(unittest.TestCase):
                            ("TestY", "shapes_test.go"), ("TestAlias", "shapes_test.go")):
             self.assertEqual(coverage.test_link_problems(root, name, package / file),
                              ["link integration/%s does not reach the file declaring top-level Go test %s" % (file, name)])
+
+    def test_repeated_init_functions_do_not_hide_a_linked_test(self):
+        root = module(self, REPEATED)
+        package = (root / "integration").resolve()
+        self.assertEqual(coverage.test_link_problems(root, "TestActual", package / "right_test.go"), [])
+        self.assertEqual(coverage.test_link_problems(root, "TestActual", package / "wrong_test.go"),
+                         ["link integration/wrong_test.go does not reach the file declaring top-level Go test TestActual"])
 
     def test_test_links_in_the_map_are_checked(self):
         row = self.row("MSG-1")

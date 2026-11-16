@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import protocol_evidence as evidence
-from test_go_test_list import SHAPES, WRONG_FILE, module
+from test_go_test_list import REPEATED, SHAPES, WRONG_FILE, module
 
 
 class ProtocolEvidenceTests(unittest.TestCase):
@@ -117,6 +117,12 @@ class ProtocolEvidenceTests(unittest.TestCase):
                            ("TestActual", "wrong_test.go")):
             self.assertFalse(evidence.listed_test(root, package / file, name), name)
         self.assertTrue(evidence.listed_test(root, package / "right_test.go", "TestActual"))
+
+    def test_repeated_init_functions_do_not_hide_a_linked_test(self):
+        root = module(self, REPEATED)
+        package = root / "integration"
+        self.assertTrue(evidence.listed_test(root, package / "right_test.go", "TestActual"))
+        self.assertFalse(evidence.listed_test(root, package / "wrong_test.go", "TestActual"))
 
     def test_product_source_or_integration_selector_is_not_unit_evidence(self):
         text = self.text.replace("(mon_ping_test.go)", "(mon_ping.go)")

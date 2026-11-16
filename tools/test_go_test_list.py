@@ -58,6 +58,16 @@ WRONG_FILE = {
     "wrong_test.go": 'package integration\n\nconst doc = `\nfunc TestActual(t *testing.T) {}\nfunc TestActual()\n`\n',
 }
 
+# The reviewer's repeated-declaration case: Go permits several top-level init
+# functions (and blank `_` functions) in one file, so right_test.go is a valid
+# declaration site of TestActual; wrong_test.go still only mentions it.
+REPEATED = {
+    "right_test.go": 'package integration\n\nimport "testing"\n\nfunc init() {}\n\nfunc init() {}\n\n'
+                     'func TestActual(t *testing.T) {}\n',
+    "blank_test.go": 'package integration\n\nfunc _() {}\n\nfunc _() {}\n',
+    "wrong_test.go": WRONG_FILE["wrong_test.go"],
+}
+
 
 def module(case, files, directory="integration"):
     """A temporary Go module whose package `directory` holds `files`."""
@@ -117,10 +127,47 @@ class GoTestListTests(unittest.TestCase):
         # the build-ignored file declare nothing (a file without a top-level
         # function is absent); TestMain and the lowercase helper are not tests.
         self.assertEqual(files, {
-            "shapes_test.go": {"Test": True, "TestX": True, "Testable": False, "TestMain": False},
-            "alias_test.go": {"TestAlias": True},
-            "right_test.go": {"TestActual": True},
+            "shapes_test.go": (("Test", True), ("TestX", True), ("Testable", False), ("TestMain", False)),
+            "alias_test.go": (("TestAlias", True),),
+            "right_test.go": (("TestActual", True),),
         })
+
+    def test_repeated_non_test_declarations_do_not_block_a_lookup(self):
+        root = module(self, REPEATED)
+        package = root / "integration"
+        files = go_test_list.declarations([package])[str(package.resolve())]
+        # Literal expectation: both init and both blank functions are kept in
+        # source order; none is a test.
+        self.assertEqual(files, {
+            "right_test.go": (("init", False), ("init", False), ("TestActual", True)),
+            "blank_test.go": (("_", False), ("_", False)),
+        })
+        self.assertEqual(go_test_list.package_tests(root, "integration"), {"TestActual"})
+        self.assertTrue(go_test_list.declares(root, package / "right_test.go", "TestActual"))
+        for file in ("wrong_test.go", "blank_test.go"):
+            self.assertFalse(go_test_list.declares(root, package / file, "TestActual"), file)
+        self.assertFalse(go_test_list.declares(root, package / "right_test.go", "init"))
+
+    def test_internal_and_external_test_packages_may_share_a_name(self):
+        root = module(self, {
+            "internal_test.go": tests_file("func init() {}", "func TestShared(t *testing.T) {}"),
+            "external_test.go": tests_file("func TestShared(t *testing.T) {}", package="integration_test"),
+            "wrong_test.go": 'package integration\n\nconst doc = "func TestShared(t *testing.T) {}"\n',
+        })
+        package = root / "integration"
+        self.assertEqual(go_test_list.package_tests(root, "integration"), {"TestShared"})
+        for file in ("internal_test.go", "external_test.go"):
+            self.assertTrue(go_test_list.declares(root, package / file, "TestShared"), file)
+        self.assertFalse(go_test_list.declares(root, package / "wrong_test.go", "TestShared"))
+
+    def test_only_the_looked_up_test_may_not_repeat(self):
+        root = module(self, {"a_test.go": tests_file("func TestA(t *testing.T) {}")})
+        path = (root / "integration" / "a_test.go").resolve()
+        go_test_list.list_tests(root, ("./...",))
+        go_test_list._CACHE[("decls", str(path.parent))] = {
+            "a_test.go": (("init", False), ("init", False), ("TestA", True), ("TestA", True))}
+        with self.assertRaisesRegex(go_test_list.ListError, "duplicate test declaration of TestA in a_test.go"):
+            go_test_list.declares(root, path, "TestA")
 
     def test_declares_needs_the_listing_the_file_and_the_declaration(self):
         root = module(self, dict(SHAPES, **WRONG_FILE))
@@ -143,6 +190,9 @@ class GoTestListTests(unittest.TestCase):
         good = [event("start"), event("output", Output="Test\n"), event("output", Output="TestA\n"),
                 event("output", Output="ok  \t%s/p\t0.01s\n" % MODULE), event("pass")]
         self.assertEqual(go_test_list.parse("\n".join(good), MODULE), {"p": {"Test", "TestA"}})
+        # Literal expectation: the internal and the external test package may
+        # both declare Test; Go lists it twice and the set holds it once.
+        self.assertEqual(go_test_list.parse("\n".join(good[:2] + good[1:]), MODULE), {"p": {"Test", "TestA"}})
         none = [event("start"), event("output", Output="?   \t%s/p\t[no test files]\n" % MODULE), event("skip")]
         self.assertEqual(go_test_list.parse("\n".join(none), MODULE), {"p": frozenset()})
         bad = {
@@ -155,7 +205,6 @@ class GoTestListTests(unittest.TestCase):
             "test event": good[:1] + [event("run", Test="TestA")] + good[1:],
             "unknown action": good[:1] + [event("pause")] + good[1:],
             "build failure": [json.dumps({"ImportPath": "p", "Action": "build-fail"})] + good,
-            "duplicate name": good[:2] + good[1:],
             "skip with names": good[:-1] + [event("skip")],
             "outside module": [line.replace(MODULE, "other.example") for line in good],
         }

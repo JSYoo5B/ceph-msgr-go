@@ -419,8 +419,10 @@ listing output is an error, never an empty set. `go test -list` says which tests
 exist, not where they are declared: a check that ties a test to a file (the
 protocol evidence links, test-named links in the coverage map) also needs Go's
 parser to find the declaration in that file (`go_test_list.declares`, through
-`tools/quality/testdecls` under the go/build context). The coverage map check
-also lists the fixture module, so the Python tool tests need Go 1.26 or later.
+`tools/quality/testdecls` under the go/build context). That file check counts
+only the test-shaped declarations of the looked-up test, so other functions of
+the file, such as repeated `init` functions, do not affect it. The coverage map
+check also lists the fixture module, so the Python tool tests need Go 1.26 or later.
 Basic CI and the platform unit matrix run them with Go 1.27 and install the
 product's Go 1.25.0 (or the matrix Go) afterwards for the product steps;
 `tools/test_workflow_toolchains.py` refuses a workflow step whose installed Go

@@ -19,7 +19,8 @@ package, the file must be one Go compiles for that package's tests (go list),
 and Go's parser must find a top-level function of the test shape with that
 name in that file (tools/quality/testdecls, which applies the go/build
 context). A raw string, a comment, a method or a build-excluded file cannot
-satisfy it.
+satisfy it. Only the declarations of the looked-up test are checked; other
+functions of the file, such as repeated `init` functions, are not.
 """
 import json
 import os
@@ -75,7 +76,10 @@ def parse(text, module_path):
     """Map module-relative package directories to their listed test names.
 
     Only the events and output lines `go test -json -list` writes for a
-    successful listing are accepted."""
+    successful listing are accepted. A name may be listed twice: the internal
+    and the external test package of one directory may each declare it, and
+    go test runs both. The result gates refuse the duplicate results that
+    such a name produces."""
     outputs, finals, problems = {}, {}, []
     for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
@@ -120,8 +124,6 @@ def parse(text, module_path):
         final = finals.get(package)
         if final != "pass" and not (final == "skip" and empty and not names):
             raise ListError("listing of %s ended with %s" % (package, final or "no final event"))
-        if len(set(names)) != len(names):
-            raise ListError("duplicate listed test in %s" % package)
         listed[_relative(module_path, package)] = frozenset(names)
     if set(finals) - set(outputs):
         raise ListError("final event without a start for %s" % ", ".join(sorted(set(finals) - set(outputs))))
@@ -196,12 +198,15 @@ def test_files(module, packages, timeout=TIMEOUT):
 
 
 def declarations(directories, timeout=TIMEOUT):
-    """{absolute directory: {file name: {function name: has the test shape}}}.
+    """{absolute directory: {file name: ((function name, has the test shape), ...)}}.
 
     Go's parser reads the _test.go files that the go/build context selects in
     each directory (tools/quality/testdecls); methods are not listed, and a
-    file without a top-level function is absent. A directory without test
-    files maps to an empty dictionary."""
+    file without a top-level function is absent. The functions keep their
+    source order and are not required to have distinct names: Go permits
+    repeated top-level `init` and `_` functions, and only a lookup decides
+    which names matter (see `declares`). A directory without test files maps
+    to an empty dictionary."""
     directories = [str(Path(directory).resolve()) for directory in directories]
     missing = sorted({directory for directory in directories if ("decls", directory) not in _CACHE})
     if missing:
@@ -217,12 +222,9 @@ def declarations(directories, timeout=TIMEOUT):
                 raise ListError("line %d of testdecls output is not a declaration: %s" % (number, error)) from error
             if directory not in found or not isinstance(test, bool):
                 raise ListError("unexpected testdecls declaration on line %d: %s" % (number, line[:200]))
-            names = found[directory].setdefault(file, {})
-            if name in names:
-                raise ListError("duplicate declaration of %s in %s" % (name, file))
-            names[name] = test
+            found[directory].setdefault(file, []).append((name, test))
         for directory, files in found.items():
-            _CACHE[("decls", directory)] = files
+            _CACHE[("decls", directory)] = {file: tuple(decls) for file, decls in files.items()}
     return {directory: _CACHE[("decls", directory)] for directory in directories}
 
 
@@ -231,11 +233,18 @@ def declares(module, path, name, timeout=TIMEOUT):
 
     `module` is the directory of the go.mod containing `path`. Go must list
     `name` for the package of `path`, compile `path` for that package's tests,
-    and its parser must find `name` declared there with the test shape."""
+    and its parser must find `name` declared there with the test shape.
+    Only the test-shaped declarations of `name` in `path` are counted; other
+    functions of the file, repeated or not, play no part. More than one such
+    declaration cannot compile and raises ListError."""
     module, path = Path(module).resolve(), Path(path).resolve()
     package = path.parent.relative_to(module).as_posix()
     if path.name not in test_files(module, ("./...",), timeout).get(package, ()):
         return False
     if name not in list_tests(module, ("./...",), timeout).get(package, ()):
         return False
-    return declarations([path.parent], timeout)[str(path.parent)].get(path.name, {}).get(name) is True
+    decls = declarations([path.parent], timeout)[str(path.parent)].get(path.name, ())
+    count = decls.count((name, True))
+    if count > 1:
+        raise ListError("duplicate test declaration of %s in %s" % (name, path.name))
+    return count == 1
