@@ -27,6 +27,7 @@ func (ctx stressSnapshotContext) Err() error {
 	return ctx.Context.Err()
 }
 
+//fixture:isolated runs mgr fail every 30s under load; it never restores the original active MGR
 func TestCephStressIntegration(t *testing.T) {
 	value := os.Getenv("CEPH_MSGR_STRESS_DURATION")
 	if value == "" || os.Getenv("CEPH_MSGR_CONTROL_DIR") == "" {

@@ -15,6 +15,8 @@ import (
 // with the holder's own GID, and only an explicit release ends it. This test
 // verifies that fixture prerequisite natively. It starts no Go ServiceMap
 // watch and does not stop any MON.
+//
+//fixture:shareable registers a native service-map daemon, releases it, and checks it stays absent in the final step
 func TestCephServiceMapNativeHolderIntegration(t *testing.T) {
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
 	if control == "" {

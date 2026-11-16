@@ -49,6 +49,7 @@ func fixtureRecoveryRead(ctx context.Context, c *Client, mgr bool) error {
 	}
 }
 
+//fixture:shareable stops and starts all MONs 3 times; start waits for 3-MON quorum and an MGR read succeeds after each
 func TestCephCompleteMonitorOutageIntegration(t *testing.T) {
 	baseline := runtime.NumGoroutine()
 	c, ctx := fixtureClient(t, 2*time.Minute)

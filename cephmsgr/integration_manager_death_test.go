@@ -11,6 +11,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/internal/testcluster"
 )
 
+//fixture:isolated stops the active MGR so the standby takes over; cleanup proves only that it rejoins as standby
 func TestCephNaturalManagerFailoverIntegration(t *testing.T) {
 	c, ctx := fixtureClient(t, 90*time.Second)
 	control := os.Getenv("CEPH_MSGR_CONTROL_DIR")
