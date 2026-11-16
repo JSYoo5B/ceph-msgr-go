@@ -10,10 +10,17 @@ The start-state check finds such leftovers and names each one.
 profile has settled (OSD pools and CRUSH hierarchy, MDS filesystems, RBD and
 cache pools, the native oracle worker and, for the host runtime, the relay),
 immediately before the control loop starts. No control request has run
-yet, so the snapshot is the state every test of the fixture starts from. It
-is written to `start-state-snapshot.json` in the control directory. A
-snapshot failure does not fail the fixture: it is kept, and every later
-check fails with the `start-snapshot` condition and its cause.
+yet, so the snapshot is the state every test of the fixture starts from.
+Every source below must be observed for the snapshot. A snapshot failure
+does not fail the fixture: it is kept, and every later check fails with the
+`start-snapshot` condition and its cause.
+
+The check compares the snapshot kept in the fixture's memory. A copy is
+written to `start-state-snapshot.json` in the control directory as evidence,
+readable by its owner only (mode 0600). In that copy the value of every
+configuration entry and runtime override whose option name contains `key`,
+`secret`, `password` or `token` is left out and marked `"value_redacted":
+true`.
 
 The snapshot holds the decoded fields listed below and the IDs of the
 fixture's own containers: those of `fixture-ownership.json` (the native
@@ -21,15 +28,36 @@ oracle client, each MON, MGR, OSD and MDS daemon and the control container)
 and any Testcontainers container of the fixture's own session that is
 listed at that moment.
 
+## Sources
+
+One observation reads three independent sources:
+
+1. the Docker container listing, first;
+2. the MON reads `ceph status`, `osd dump`, `osd erasure-code-profile ls`,
+   `osd crush rule ls` and `config dump`, in that order, from the native
+   oracle client;
+3. `config diff` on the admin socket of each MON, MGR, OSD and MDS daemon of
+   the snapshot (MON, MGR and OSD through the provider's daemon handle, an
+   MDS in its own container), skipped for a daemon whose container the
+   listing shows not running.
+
+The MON reads and the admin socket reads run concurrently after the
+listing. The MON reads share one source, so the first that fails ends them.
+A failed or undecodable source fails the `observation` condition, naming
+the source, and hides only its own conditions: with the MONs stopped, the
+report still names `daemon-running` from the listing and `daemon-config`
+from the admin sockets.
+
 ## Control
 
 A test requests the check with
 `testcluster.ControlDaemon(ctx, dir, "verify", "start-state", "<seconds>")`,
 which publishes `verify-start-state <id> <seconds>`. The budget is optional,
 in whole seconds from 1 to 300, and defaults to 30 seconds. The check polls
-once a second until no condition fails or the budget ends; each native
-command and the Docker listing has its own 10-second bound. The result of the
-last poll is written to `start-state.json` before the acknowledgement
+once a second until no condition fails or the budget ends; each MON read,
+admin socket read and the Docker listing has its own 10-second bound. A poll
+whose reads the budget cut short does not replace the previous completed
+comparison. The result of the last poll is written to `start-state.json` before the acknowledgement
 `start-state-verify.<id>`:
 
 ```json
@@ -43,8 +71,9 @@ the range or extra fields) is a fixture control failure.
 
 ## Conditions
 
-Each failure names one condition. A native command that fails or returns
-output that does not decode fails the `observation` condition for that poll.
+Each failure names one condition. A source that fails or returns output
+that does not decode fails the `observation` condition for that poll; the
+other sources' conditions are still compared.
 
 | Condition | Requirement | Native source |
 | --- | --- | --- |
@@ -63,17 +92,51 @@ output that does not decode fails the `observation` condition for that poll.
 | `crush-rule` | The CRUSH rules equal those at start. | `ceph osd crush rule ls` |
 | `osd-flags` | The OSDMap flags equal those at start. | `ceph osd dump`: `flags` |
 | `config` | Every central configuration entry (section, mask, name) has its start value; none was added or removed. | `ceph config dump` |
+| `daemon-config` | Every daemon read has exactly the runtime overrides it had at start, with the same values: none added, changed or removed. | admin socket `config diff`: the `override` level of each option |
 | `foreign-container` | Every container with the `org.testcontainers=true` label belongs to the fixture's start set. | Docker container list |
 
-Configuration values in a report are quoted and cut to 128 bytes; a value
-whose option name contains `key`, `secret`, `password` or `token` is shown as
-`<redacted>`.
+Configuration and override values in a report are quoted and cut to 128
+bytes; a value whose option name contains `key`, `secret`, `password` or
+`token` is shown as `<redacted>`.
+
+## Runtime overrides
+
+Ceph keeps each option's value per level (`src/common/config.cc` at
+`v20.2.4`): `default`, `mon` (the MON configuration database), `file`,
+`env`, `cmdline` and `override`. `ceph tell <daemon> config set`, an MCommand
+`config set` sent to a daemon, an admin socket `config set` and `injectargs`
+all set the `override` level, and `config unset` removes it; `config diff`
+lists every option with a non-default level. `daemon-config` compares the
+`override` level only. The `mon` level follows the MON database, which
+`config` already compares, and the other levels do not change at runtime.
+
+The fixture and integration paths that change daemon-local runtime
+configuration, found with `git grep` for `config set`, `config unset`,
+`injectargs`, `tell` and `--admin-daemon` in `integration` and
+`integration/fixture`:
+
+| Path | Daemon | Options |
+| --- | --- | --- |
+| `mgr_tell_outcome.go` (MGR Tell outcome cells) | named MGR | `log_max_recent` |
+| `daemon_command_outcome.go` (daemon command outcome cells) | OSD, MDS | `log_max_recent` |
+| `copyfrom_error.go` | OSD | `osd_debug_inject_copyfrom_error`, `osd_copyfrom_max_chunk` |
+| `runtime_config.go` (`override.SetDebugLevel` windows and direct admin socket sets) | OSD, MDS | debug levels, `mds_log_pause`, `ms_blackhole_client` and the MDS CephFS profiles' other runtime options |
+| `mds_cephfs_ranks.go`, `mds_cephfs_recovery.go` (`tell mds.<name or GID> config set`) | MDS | `mds_log_pause` and the ranks profile's runtime options |
+| `osd_command_crash_test.go` (MCommand `config set` to an OSD) | OSD | `osd_bench_small_size_max_iops` |
+
+All of them set the `override` level, so a leftover of any of them fails
+`daemon-config` on a daemon of the snapshot. The check does not list these
+options: it compares every override of every daemon.
 
 ## Limits
 
-- `config` compares the MON configuration database only. A runtime override
-  made through a daemon's admin socket or `ceph tell ... config set` does
-  not appear in `ceph config dump` and is not detected.
+- `daemon-config` reads the daemons of the snapshot: each MON, MGR and OSD,
+  and the MDS daemons of `fixture-ownership.json` (the `mds_fresh`
+  profiles). An MDS, RGW or mirror daemon that the fixture does not record
+  as owned is not read.
+- A daemon restarted after the snapshot loses its runtime overrides; one
+  that had an override at start then fails `daemon-config` with that
+  override removed.
 - Pools are compared by name and flags. Size, PG count, application
   metadata and objects are not compared.
 - Auth entities, OSDMap blocklist entries, upmap entries and primary_temp
@@ -110,5 +173,32 @@ The test passed in 23.69 s and the gate reported its PASS. One poll took
 about 1.2 s. An earlier run of the same recipe showed that the second poll
 of a 3-second budget was cut by the budget and its context error replaced
 the `osd-flags` finding; the check now keeps the last completed comparison
-in that case. The stopped OSD, non-clean PG, pg_temp and foreign container
-conditions are covered by the fixture unit tests only.
+in that case.
+
+A second exploratory test on the same row and image, at the commit that
+added `daemon-config` and the independent sources, changed daemon-local
+runtime configuration through the Go client's MGR and MON tell commands
+and stopped two of the three MONs through the fixture's daemon control:
+
+| Step | Budget | Result | Condition and detail |
+| --- | --- | --- | --- |
+| fresh fixture | 60 s | passed, 1 poll, 1.3 s | |
+| MGR tell `config set log_max_recent 10002` | 3 s | failed, 2 polls | `daemon-config`: mgr.a runtime override log_max_recent set to "10002", absent at start |
+| MGR tell `config unset log_max_recent` | 60 s | passed, 1 poll | |
+| MGR tell `injectargs --log_max_recent=10003` | 3 s | failed, 2 polls | `daemon-config`: mgr.a runtime override log_max_recent set to "10003", absent at start |
+| MGR tell `config unset log_max_recent` | 60 s | passed, 1 poll | |
+| MON tell `config set log_max_recent 10004` | 3 s | failed, 2 polls | `daemon-config`: mon.a runtime override log_max_recent set to "10004", absent at start |
+| MON tell `config unset log_max_recent` | 60 s | passed, 1 poll | |
+| MGR override 10005 left, mon.b and mon.c stopped | 25 s | failed, 4 polls | `observation`: ceph osd dump: context deadline exceeded; `daemon-running`: mon.b and mon.c containers exited; `daemon-config`: mgr.a override 10005 |
+| mon.b and mon.c started, quorum of three back, override unset | 180 s | passed, 1 poll | |
+
+The test passed in 42.86 s and the gate reported its PASS; the row took
+101 s and cleanup left no Testcontainers container. One poll still took
+about 1.3 s with the admin socket reads. In the stopped-MON step the
+reported MON read is `ceph osd dump`, so `ceph status` returned in that
+poll; why it did is not established. A first run of the same recipe
+failed only because the test required the text `ceph status` in that
+step; the check's report was the same.
+
+The stopped OSD, non-clean PG, pg_temp, foreign container and MDS admin
+socket paths are covered by the fixture unit tests only.
