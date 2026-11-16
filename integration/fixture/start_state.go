@@ -78,19 +78,45 @@ func (e startConfigEntry) key() string {
 	return e.Section + "/" + e.Name
 }
 
-// reportValue keeps reports bounded and never repeats a value whose option
-// name suggests a credential.
-func (e startConfigEntry) reportValue() string {
+// sensitive reports whether the option name suggests a credential.
+func (e startConfigEntry) sensitive() bool {
 	name := strings.ToLower(e.Name)
 	for _, secret := range []string{"key", "secret", "password", "token"} {
 		if strings.Contains(name, secret) {
-			return "<redacted>"
+			return true
 		}
+	}
+	return false
+}
+
+// reportValue keeps reports bounded and never repeats a value whose option
+// name suggests a credential.
+func (e startConfigEntry) reportValue() string {
+	if e.sensitive() {
+		return "<redacted>"
 	}
 	if len(e.Value) > startStateValueLimit {
 		return strconv.Quote(e.Value[:startStateValueLimit]) + "..."
 	}
 	return strconv.Quote(e.Value)
+}
+
+// MarshalJSON writes the entry to the on-disk snapshot. The value of a
+// credential-like option is left out; the check compares the value kept in
+// memory.
+func (e startConfigEntry) MarshalJSON() ([]byte, error) {
+	type entry struct {
+		Section  string  `json:"section"`
+		Name     string  `json:"name"`
+		Value    *string `json:"value,omitempty"`
+		Redacted bool    `json:"value_redacted,omitempty"`
+		Mask     string  `json:"mask,omitempty"`
+	}
+	out := entry{Section: e.Section, Name: e.Name, Mask: e.Mask, Redacted: e.sensitive()}
+	if !out.Redacted {
+		out.Value = &e.Value
+	}
+	return json.Marshal(out)
 }
 
 type startOSD struct {
@@ -501,11 +527,7 @@ func (c *fixtureCluster) recordStartState(ctx context.Context, out string) {
 			return err
 		}
 		snapshot := newStartStateSnapshot(view, owned, containers, testcontainers.SessionID())
-		data, err := json.MarshalIndent(snapshot, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := writeStartStateFile(out, "start-state-snapshot.json", data); err != nil {
+		if err := writeStartStateSnapshot(out, snapshot); err != nil {
 			return err
 		}
 		c.startState = &snapshot
@@ -514,14 +536,25 @@ func (c *fixtureCluster) recordStartState(ctx context.Context, out string) {
 	c.startStateErr = err
 }
 
-func writeStartStateFile(out, name string, data []byte) error {
+// writeStartStateSnapshot writes the snapshot as evidence, owner-readable
+// only and without the value of a credential-like option (see
+// startConfigEntry.MarshalJSON). The check compares the snapshot in memory.
+func writeStartStateSnapshot(out string, snapshot startStateSnapshot) error {
+	data, err := json.MarshalIndent(snapshot, "", "  ")
+	if err != nil {
+		return err
+	}
+	return writeStartStateFile(out, "start-state-snapshot.json", data, 0o600)
+}
+
+func writeStartStateFile(out, name string, data []byte, mode os.FileMode) error {
 	tmp, err := os.CreateTemp(out, name+"-")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
 	_, err = tmp.Write(append(data, '\n'))
-	err = errors.Join(err, tmp.Chmod(0644), tmp.Close())
+	err = errors.Join(err, tmp.Chmod(mode), tmp.Close())
 	if err != nil {
 		return err
 	}
@@ -538,7 +571,7 @@ func (c *fixtureCluster) verifyStartState(ctx context.Context, out string, budge
 	if err != nil {
 		return report, err
 	}
-	return report, writeStartStateFile(out, "start-state.json", data)
+	return report, writeStartStateFile(out, "start-state.json", data, 0o644)
 }
 
 // parseStartStateBudget reads the optional budget in whole seconds.

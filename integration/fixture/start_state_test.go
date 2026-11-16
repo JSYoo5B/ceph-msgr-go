@@ -235,6 +235,51 @@ func TestStartStateReportRedactsAndBoundsConfigValues(t *testing.T) {
 	}
 }
 
+// The on-disk snapshot leaves out credential-like values and is readable by
+// its owner only; the comparison still uses the values kept in memory.
+func TestStartStateSnapshotFileOmitsSensitiveValues(t *testing.T) {
+	const secret = "c2VjcmV0LXN0YXJ0LXN0YXRl"
+	raw := fakeStartRaw()
+	raw.Config = replaceOnce(t, raw.Config, `"mask":""}]`,
+		`"mask":""},{"section":"client.rgw","name":"rgw_crypt_s3_kms_encryption_keys","value":"testkey=`+secret+`","mask":""}]`)
+	view, err := decodeStartState(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := newStartStateSnapshot(view, fakeStartOwned, raw.Containers, fakeStartSession)
+	out := t.TempDir()
+	if err := writeStartStateSnapshot(out, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(out, "start-state-snapshot.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), secret) || strings.Count(string(data), `"value_redacted": true`) != 1 ||
+		!strings.Contains(string(data), `"value": "0.000000"`) {
+		t.Fatal("unexpected snapshot file", string(data))
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatal("snapshot file mode", info, err)
+	}
+	changed := raw
+	changed.Config = replaceOnce(t, raw.Config, "testkey="+secret, "testkey=other")
+	now, err := decodeStartState(changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failures := compareStartState(snapshot, now)
+	if got := startConditions(failures); !slices.Equal(got, []string{startConditionConfig}) {
+		t.Fatal("a changed credential-like value was not detected", failures)
+	}
+	for _, f := range failures {
+		if strings.Contains(f.Detail, secret) || strings.Contains(f.Detail, "other") || !strings.Contains(f.Detail, "<redacted>") {
+			t.Fatal("a credential-like value reached the report", f)
+		}
+	}
+}
+
 func TestWaitStartStateAcceptsAPassingLaterPoll(t *testing.T) {
 	snapshot := fakeStartSnapshot(t)
 	polls := 0
