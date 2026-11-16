@@ -364,13 +364,14 @@ func loadProfile(getenv func(string) string) (profile, error) {
 	}
 	if p.osdCachePools == "1" {
 		selected = "^TestCephOSDIgnoreCacheIntegration$"
-		if p.mgrCount != "2" || p.testRun != "" && p.testRun != selected && p.testRun != cacheTierOpsSelector && p.testRun != cacheOpGoSelector {
-			return profile{}, fmt.Errorf("cache-pool acceptance requires two MGRs and an exclusive selector %s, %s or %s", selected, cacheTierOpsSelector, cacheOpGoSelector)
+		// The Go cache-tier and cache-operation acceptances reuse the live
+		// cache-pool fixture alone and are admitted only by its capability.
+		if p.mgrCount != "2" || !ownSelection(p.testRun, selected, p.admits(capExclusiveOSDCachePools)) {
+			return profile{}, fmt.Errorf("cache-pool acceptance requires two MGRs and its exclusive selector %s or one test with capability %s", selected, capExclusiveOSDCachePools.name)
 		}
 		checked := p
 		checked.osdCachePools = "0"
-		checked.testRun = "^TestCeph(OSD|MonOSDMaps|MonPoolOp|MonStatfs|MonMapVersion|MonServiceMap).*Integration$"
-		if err := validateIgnoreCacheProbeProfile(checked); err != nil {
+		if err := validateIgnoreCacheProbeTopology(checked); err != nil {
 			return profile{}, err
 		}
 	}
@@ -394,12 +395,14 @@ func loadProfile(getenv func(string) string) (profile, error) {
 		// The four-daemon topology exists only for the bounded k=2,m=2
 		// erasure-width scenarios. The fixture's ordinary pools keep the
 		// three-replica policy; broad OSD selections stay on topology "3".
-		selected = osdErasureWidthSelectors[0]
+		// The nonoptimized k=2,m=2 baseline is the default; every other
+		// selection is one exact test with the erasure-width capability.
+		selected = "^TestCephOSDErasureK2M2Integration$"
 		if p.osd != "1" || (p.osdProfile != "legacy-v6" && p.osdProfile != "replicated-pg-v8") || p.osdSoak != "" || p.monFreeze != "" ||
 			p.osdCachePools != "0" || p.mgrService != "0" || p.mdsFresh != "0" || p.rbdBase != "0" ||
 			p.sparseReadOracle != "" || p.mapExtOracle != "" || p.u64XattrOracle != "" || p.writeSameOracle != "" ||
-			p.testRun != "" && !slices.Contains(osdErasureWidthSelectors, p.testRun) {
-			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires one of its exclusive selectors %v, BlueStore and the legacy-v6 or replicated-pg-v8 profile", osdErasureWidthSelectors)
+			!ownSelection(p.testRun, selected, p.admits(capOSDErasureWidth)) {
+			return profile{}, fmt.Errorf("four-OSD erasure-capacity topology requires its default selector %s or one test with capability %s, BlueStore and the legacy-v6 or replicated-pg-v8 profile", selected, capOSDErasureWidth.name)
 		}
 	}
 	p.testRun = cmp.Or(p.testRun, selected)
@@ -422,35 +425,6 @@ func (p profile) rbdReplicas() string {
 	return "1"
 }
 
-// osdErasureWidthSelectors are the only selections the four-OSD topology
-// admits: the nonoptimized k=2,m=2 baseline (the default), the optimized
-// k=2,m=2 baseline with its failover reads, and the optimized k=2,m=2
-// in-flight mutation epoch change with the snapshot and degraded-write case,
-// deliberate resubmission of an independently observed applied mutation, the
-// primary PG-history presence calibration, the COPY_FROM2 history control
-// that also reads every acting shard's own store copy, and the partial
-// overwrite control that reads those copies as well, with its five
-// continuations: a later write that names the left-out shard, an owned
-// interval change of the PG, an owned outage of the left-out shard's OSD
-// without and with a write in between, and an owned outage of the primary's
-// OSD with a write through its replacement; and a request held at the
-// primary when the primary's OSD is killed.
-var osdErasureWidthSelectors = []string{
-	"^TestCephOSDErasureK2M2Integration$",
-	"^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$",
-	"^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$",
-	"^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
-	"^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$",
-}
-
 // osdTopology is one closed OSD fixture shape. Daemon capacity and the
 // replication policy of the fixture's own replicated pools are separate
 // facts: a wider erasure-code profile needs more daemons, not a different
@@ -465,6 +439,12 @@ type osdTopology struct {
 	// erasure-coded pool owned by its exclusive test.
 	erasureCapacity bool
 }
+
+// capOSDErasureWidth admits one exact test other than the default k=2,m=2
+// baseline on the four-OSD erasure-capacity topology.
+var capOSDErasureWidth = defineCapability("osd-erasure-width",
+	"run one test other than the default k=2,m=2 baseline on the four-OSD erasure-capacity topology",
+	"OSD=1 OSD_REPLICAS=4", nil)
 
 // osdTopologies is the closed CEPH_MSGR_TEST_OSD_REPLICAS vocabulary. The
 // variable keeps its historical name because the trusted native workflow

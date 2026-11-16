@@ -13,12 +13,8 @@ import (
 
 const copyFromErrorOption = "osd_debug_inject_copyfrom_error"
 const copyFromChunkOption = "osd_copyfrom_max_chunk"
-const copyFromLateErrorSelector = "^TestCephOSDCopyFromLateErrorIntegration$"
 const copyFromLateErrorMarker = "CEPH_MSGR_NATIVE_COPYFROM_LATE_ERROR"
 
-// The multi-chunk cell lowers the owned daemon's copy chunk below its 64 KiB
-// source so that the bounded native observer still covers every byte.
-const copyFromMultiChunkSelector = "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"
 const copyFromMultiChunkMarker = "CEPH_MSGR_NATIVE_COPYFROM_MULTICHUNK_ERROR"
 const copyFromMultiChunkLimit = 32 << 10
 
@@ -26,12 +22,25 @@ func (p profile) copyFromErrorFixture() bool {
 	return p.osd == "1" && p.osdStore == "bluestore" && p.osdReplicas == "1" && p.osdProfile == "legacy-v6"
 }
 
+// capOSDCopyFromLateError admits the injected late COPY_FROM error for one
+// test on the single-BlueStore legacy-v6 fixture.
+var capOSDCopyFromLateError = defineCapability("osd-copy-from-late-error",
+	"inject one late COPY_FROM error into the owned OSD for one test",
+	"OSD=1 OSD_STORE=bluestore OSD_REPLICAS=1 OSD_PROFILE=legacy-v6", nil)
+
+// capOSDCopyFromMultiChunk is the multi-chunk cell: it lowers the owned
+// daemon's copy chunk below its 64 KiB source so that the bounded native
+// observer still covers every byte. The two copy-from cells are exclusive.
+var capOSDCopyFromMultiChunk = defineCapability("osd-copy-from-multi-chunk",
+	"inject one late COPY_FROM error into the owned OSD with a lowered copy chunk for one test",
+	"OSD=1 OSD_STORE=bluestore OSD_REPLICAS=1 OSD_PROFILE=legacy-v6 !osd-copy-from-late-error", nil)
+
 func (p profile) copyFromLateErrorSelected() bool {
-	return p.testRun == copyFromLateErrorSelector && p.copyFromErrorFixture()
+	return p.admits(capOSDCopyFromLateError)
 }
 
 func (p profile) copyFromMultiChunkSelected() bool {
-	return p.testRun == copyFromMultiChunkSelector && p.copyFromErrorFixture()
+	return p.admits(capOSDCopyFromMultiChunk)
 }
 
 type copyFromErrorReceipt struct {

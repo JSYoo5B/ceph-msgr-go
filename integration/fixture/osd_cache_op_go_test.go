@@ -33,8 +33,13 @@ func TestCacheOpGoControlIsClosed(t *testing.T) {
 	}
 }
 
+// cacheOpGoSelector is a native test that declares exclusive-osd-cache-pools
+// (catalog.d/osd-cache-pools.json).
+const cacheOpGoSelector = "^TestCephOSDCacheOpGoIntegration$"
+
 func TestCacheOpGoSelectorReusesExclusiveCachePoolProfile(t *testing.T) {
-	config := map[string]string{"CEPH_MSGR_TEST_OSD_CACHE_POOLS": "1", "CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_RUN": cacheOpGoSelector}
+	config := map[string]string{"CEPH_MSGR_TEST_OSD_CACHE_POOLS": "1", "CEPH_MSGR_TEST_OSD": "1", "CEPH_MSGR_TEST_OSD_STORE": "bluestore", "CEPH_MSGR_TEST_RUN": cacheOpGoSelector,
+		"CEPH_MSGR_TEST_CAPABILITIES": "exclusive-osd-cache-pools"}
 	p, err := loadProfile(func(k string) string { return config[k] })
 	if err != nil || p.testRun != cacheOpGoSelector || p.testEnvironment("/out", "")["CEPH_MSGR_TEST_OSD_CACHE_POOLS"] != "1" {
 		t.Fatal("Go cache-op selector did not reach the cache-pool fixture", p.testRun, err)

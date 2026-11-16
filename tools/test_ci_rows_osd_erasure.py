@@ -20,44 +20,33 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
         rows = [row for row in self.rows if row.get("osd_replicas") == "4"]
         base = {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
                 "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8"}
-        self.assertEqual(rows, [
-            dict(base, test_run="^TestCephOSDErasureK2M2Integration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2(InFlightMutation|SnapshotAndDegradedWrite)Integration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$"),
-            dict(base, test_run="^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$"),
-        ])
-        # Each row's selector must match the fixture's closed four-OSD list.
+        # Every row selects one exact test. The default k=2,m=2 baseline needs
+        # no capability; every other row declares osd-erasure-width, and the
+        # shard-history controls also the capture and its interval mode.
+        width, capture, interval = "osd-erasure-width", "osd-erasure-width,osd-shard-history", "osd-erasure-width,osd-pg-interval,osd-shard-history"
+        cells = [("K2M2", None), ("OptimizedK2M2", width), ("OptimizedK2M2Failover", width),
+                 ("OptimizedK2M2InFlightMutation", width), ("OptimizedK2M2SnapshotAndDegradedWrite", width),
+                 ("OptimizedK2M2AppliedResubmit", width), ("OptimizedK2M2PrimaryHistoryCalibration", width),
+                 ("OptimizedK2M2CopyFromHistory", capture), ("OptimizedK2M2PartialWriteShardHistory", capture),
+                 ("OptimizedK2M2PartialWriteLaterWriteShardHistory", interval), ("OptimizedK2M2PartialWriteNewIntervalShardHistory", interval),
+                 ("OptimizedK2M2PartialWriteShardReturnShardHistory", interval), ("OptimizedK2M2PartialWriteDegradedWriteShardHistory", interval),
+                 ("OptimizedK2M2PartialWritePrimaryReplacementShardHistory", interval), ("OptimizedK2M2RequestHeldAtDyingPrimary", width)]
+        expected_rows = []
+        for cell, capabilities in cells:
+            row = dict(base, test_run="^TestCephOSDErasure%sIntegration$" % cell)
+            if capabilities:
+                row["capabilities"] = capabilities
+            expected_rows.append(row)
+        self.assertEqual(rows, expected_rows)
         fixture = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
-        for row, expected in zip(rows, ({"TestCephOSDErasureK2M2Integration"},
-                                        {"TestCephOSDErasureOptimizedK2M2Integration", "TestCephOSDErasureOptimizedK2M2FailoverIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2InFlightMutationIntegration",
-                                         "TestCephOSDErasureOptimizedK2M2SnapshotAndDegradedWriteIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2AppliedResubmitIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2PrimaryHistoryCalibrationIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2PartialWriteShardHistoryIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration"},
-                                        {"TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration"})):
+        self.assertIn('selected = "^TestCephOSDErasureK2M2Integration$"', fixture)
+        for row in rows:
+            name = row["test_run"][1:-1]
             with self.subTest(test_run=row["test_run"]):
-                self.assertIn('"%s",' % row["test_run"], fixture)
                 selector = re.compile(row["test_run"])
-                self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
-                for name in expected:
-                    self.assertIsNone(selector.search(name + "Extended"))
-                    self.assertIsNone(selector.search("Prefix" + name))
+                self.assertEqual({test for test in self.declared if selector.search(test)}, {name})
+                self.assertIsNone(selector.search(name + "Extended"))
+                self.assertIsNone(selector.search("Prefix" + name))
                 for other in ("TestCephOSDErasureIntegration", "TestCephOSDErasureOptimizedIntegration",
                               "TestCephOSDErasureOptimizedFailoverIntegration", "TestCephOSDErasureFailoverIntegration",
                               "TestCephOSDErasureSnapshotAndDegradedWriteIntegration",
