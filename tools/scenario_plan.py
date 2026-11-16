@@ -445,7 +445,7 @@ SUITE_PACKAGES = ("integration", "cephmsgr")
 
 
 def suite_tests(root=ROOT):
-    """{package: top-level tests} that Go lists for both native suites.
+    """{package: {top-level test: count}} that Go lists for both native suites.
 
     The native runner applies one selector to the API suite (integration) and
     the client suite (cephmsgr), as the result gate does."""
@@ -453,17 +453,30 @@ def suite_tests(root=ROOT):
 
 
 def integration_tests(root=ROOT):
-    """Names of the top-level Go tests of both native suites."""
+    """Names of the top-level Go tests of both native suites, each once."""
     return set().union(*suite_tests(root).values())
 
 
-def selector_problems(scenarios, tests):
-    """A test selector that matches no test would silently run nothing."""
+def selector_problems(scenarios, listing):
+    """A row's test selector must select at least one listed test, each of
+    them listed once.
+
+    `listing` is suite_tests(). A selector that matches no test would silently
+    run nothing. A selected name that Go lists more than once in one suite
+    package (the internal and the external test package both declare it)
+    cannot be selected alone, and the result gate refuses it before the run
+    (go_test_list.selected_tests), so the row is refused here already."""
     problems = []
     for entry in scenarios:
         pattern = entry["params"].get("test_run")
-        if pattern and not any(re.search(pattern, name) for name in tests):
+        if not pattern:
+            continue
+        def chosen(package, name):
+            return bool(re.search(pattern, name))
+        if not any(chosen(package, name) for package, names in listing.items() for name in names):
             problems.append("%s: selector %s matches no integration test" % (entry["id"], pattern))
+        for repeat in go_test_list.repeated(listing, chosen):
+            problems.append("%s: selector %s selects %s" % (entry["id"], pattern, go_test_list.repeated_message(*repeat)))
     return problems
 
 
@@ -526,7 +539,7 @@ def main(argv=None):
             document = load_catalog_document()
             problems = (validate_catalog(scenarios)
                         + fixed_job_problems(document, CHECKS_WORKFLOW.read_text(encoding="utf-8"))
-                        + selector_problems(scenarios, integration_tests())
+                        + selector_problems(scenarios, suite_tests())
                         + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
                                                  for path in documentation_files()], scenarios)
                         + fixture_admission_problems())
