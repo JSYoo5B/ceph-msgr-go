@@ -17,7 +17,7 @@ import (
 // change, and requires a newly dialed client to be allowed. The write is a
 // harmless option on the identity's own config section, removed afterwards.
 //
-//fixture:shareable creates an auth entity and a config entry; checked cleanup runs config rm and auth rm
+//fixture:isolated creates an auth entity before its cleanup and ignores the auth rm code; auth is not in the start-state check
 func TestCephMonCommandCapsChangeIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()

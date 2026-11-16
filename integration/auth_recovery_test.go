@@ -85,7 +85,7 @@ func TestAuthenticationRejectionOracle(t *testing.T) {
 	}
 }
 
-//fixture:shareable removes client.revocable and re-imports it with the same key and caps by a checked command
+//fixture:isolated removes and re-imports the fixture's client.revocable from a test copy; auth is not in the start-state check
 func TestCephRevokedCredentialRecoveryIntegration(t *testing.T) {
 	admin, ctx := fixtureClient(t, time.Minute)
 	encoded, err := os.ReadFile(filepath.Join(os.Getenv("CEPH_MSGR_CONTROL_DIR"), "revocable.key"))

@@ -19,7 +19,7 @@ import (
 // authenticated before it keeps its old capabilities. The client never renews
 // because of a capability change.
 //
-//fixture:shareable creates and widens its own auth entity; cleanup removes it with a checked auth rm
+//fixture:isolated creates an auth entity before its cleanup and ignores the auth rm code; auth is not in the start-state check
 func TestCephOSDCommandCapsRenewalIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

@@ -13,7 +13,7 @@ import (
 	"github.com/JSYoo5B/ceph-msgr-go/cephmsgr"
 )
 
-//fixture:shareable config set for client.native-config-test, removed by checked config rm and verified absent
+//fixture:shareable sets one central config entry and removes it as the last step; a leftover fails the start-state config check
 func TestCephConfigCommandsIntegration(t *testing.T) {
 	c, ctx := fixtureClient(t, 20*time.Second)
 	set := `{"prefix":"config set","who":"client.native-config-test","name":"debug_ms","value":"2/3"}`
