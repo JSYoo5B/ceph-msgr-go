@@ -414,10 +414,12 @@ func (p profile) rbdReplicas() string {
 // deliberate resubmission of an independently observed applied mutation, the
 // primary PG-history presence calibration, the COPY_FROM2 history control
 // that also reads every acting shard's own store copy, and the partial
-// overwrite control that reads those copies as well, with its four
+// overwrite control that reads those copies as well, with its five
 // continuations: a later write that names the left-out shard, an owned
-// interval change of the PG, and an owned outage of the left-out shard's OSD
-// without and with a write in between.
+// interval change of the PG, an owned outage of the left-out shard's OSD
+// without and with a write in between, and an owned outage of the primary's
+// OSD with a write through its replacement; and a request held at the
+// primary when the primary's OSD is killed.
 var osdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureK2M2Integration$",
 	"^TestCephOSDErasureOptimizedK2M2(Failover)?Integration$",
@@ -430,6 +432,8 @@ var osdErasureWidthSelectors = []string{
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
 	"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
+	"^TestCephOSDErasureOptimizedK2M2RequestHeldAtDyingPrimaryIntegration$",
 }
 
 // osdTopology is one closed OSD fixture shape. Daemon capacity and the

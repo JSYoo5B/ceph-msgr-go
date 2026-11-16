@@ -9,11 +9,16 @@ Go client. create also makes an erasure-coded pool of a closed width: k2m1
 (profile ceph-msgr-owned-ec) or k2m2 (its own ceph-msgr-owned-ec-k2m2 profile,
 isa, never overwritten, optionally optimized with its nonprimary shards read
 back); cleanup removes both profiles.
-Modes: create, seed, observe, place, pghistory, shardhistory, pginterval, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
+Modes: create, seed, observe, place, pghistory, opsinflight, shardhistory, pginterval, snapshot, selfmanaged, quota, poolinfo, clusterstat, versions, service, servicewatch, fullratios, osdflags, inconsistent, cleanup.
 pghistory takes one bounded primary PG-history snapshot for an owned object:
 placement before, the PG `log` command to that primary OSD, placement after,
 then the fail-closed parse in osd_pg_history_oracle.py. It reports where exact
 request identities occur on that primary; it never establishes absence.
+opsinflight takes one bounded snapshot of the same primary's op tracker:
+placement before, `dump_ops_in_flight` to that primary OSD, placement after,
+then the fail-closed parse in osd_ops_in_flight_oracle.py. It reports the
+in-flight ops of one client entity and incarnation; it never establishes
+absence.
 shardhistory brackets the fixture's shard-local capture of the same PG: phase
 before stores the placement the capture reads its PG and acting vector from;
 phase after reads the placement again and judges the capture record and each
@@ -25,7 +30,10 @@ the primary asks to drop again, and reads the placement and the primary's
 interval with its original placement. Action show sends no command and
 reports one observation of the same kind; action absent sends none either
 and judges one observation of the PG active without the member of one acting
-position, whose OSD the caller took out through the fixture's daemon control.
+position, whose OSD the caller took out through the fixture's daemon control;
+action replaced sends none and judges one observation of the PG active under
+the member the map makes primary after the caller took the primary's own OSD
+out the same way.
 servicemetadata prepares/restores the native selftest module and reads only a
 fixed get_metadata expression for the exclusive MGR service fixture.
 servicecompare independently registers a native service with the Go caller's
@@ -54,6 +62,7 @@ import sys
 import time
 
 import osd_mutation_oracle as mutation
+import osd_ops_in_flight_oracle as ops_in_flight
 import osd_pg_history_oracle as history
 import osd_pg_interval_oracle as pg_interval
 import osd_shard_history_oracle as shard_history
@@ -61,7 +70,7 @@ import osd_xattr_native as xattr
 from osd_oracle import Timespec
 
 SOURCE_COMMIT = xattr.SOURCE_COMMIT
-MODES = ("create", "seed", "observe", "place", "pghistory", "shardhistory", "pginterval", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
+MODES = ("create", "seed", "observe", "place", "pghistory", "opsinflight", "shardhistory", "pginterval", "snapshot", "selfmanaged", "quota", "poolinfo", "clusterstat", "versions", "mgrstate", "service", "servicewatch", "servicecompare", "servicemetadata", "fullratios", "osdflags", "inconsistent", "cleanup")
 RECOVERY_FLAGS = ("norecover", "nobackfill")
 RATIO_COMMANDS = (("nearfull", "osd set-nearfull-ratio"), ("backfillfull", "osd set-backfillfull-ratio"), ("full", "osd set-full-ratio"))
 SLOTS = (1, 2)
@@ -479,6 +488,38 @@ def mode_pghistory(rados, cluster, request, out):
     return {"history": receipt}
 
 
+def mode_opsinflight(rados, cluster, request, out):
+    """Bracketed snapshot of the primary's in-flight ops; presence only.
+
+    The owned object's primary answers ``dump_ops_in_flight`` from its own op
+    tracker (pinned OSD.cc:2854-2878). Both brackets must be identical or the
+    receipt is incomplete.
+    """
+    if set(request) - {"slot", "object", "namespace", "entity"}:
+        raise ValueError("unknown opsinflight fields")
+    pool = pool_name(request["slot"])
+    _, namespace = object_request(request)
+    ops_in_flight.client_entity(request.get("entity"))
+    descriptor = find_pool(rados.dump(cluster), pool)
+    if descriptor is None:
+        raise RuntimeError("owned pool is missing")
+
+    def command(*arguments, timeout):
+        return mutation.native_mon_query(rados.lib, cluster, *arguments, timeout=timeout)
+
+    def place():
+        return mutation.collect_placement(command, pool, request["object"], descriptor["pool"], namespace=namespace)
+
+    before = place()
+    code, raw, status, oversized = rados.osd(cluster, before["primary_id"], {"prefix": "dump_ops_in_flight", "format": "json"},
+                                             ops_in_flight.MAX_OPS_BYTES)
+    after = place()
+    receipt = ops_in_flight.snapshot(before, after, code, raw, status, request["entity"], oversized)
+    receipt["osd"] = before["primary_id"]
+    receipt["pgid"] = before["pgid"]
+    return {"ops_in_flight": receipt}
+
+
 SHARD_BEFORE = "osd-shard-history-before.json"
 SHARD_CAPTURE = "osd-shard-history-capture.json"
 SHARD_DUMP = re.compile(r"osd-shard-history-s[0-7]-(info|log)\.json")
@@ -566,14 +607,17 @@ def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=ti
     PG is settled in a newer interval or the time bound is used up. Action
     show observes once and judges a clean PG on the recorded placement.
     Action absent observes once and judges the PG active without the member
-    of one acting position of the recorded placement. Each reports the last
+    of one acting position of the recorded placement. Action replaced
+    observes once and judges the PG active under the primary that the map
+    names without the recorded primary's member. Each reports the last
     observation and its judgement; a PG that did not settle is reported, not
     raised.
     """
     action = request.get("action")
-    allowed = {"action", "slot", "object", "namespace"} | {"show": {"origin"}, "absent": {"origin", "shard", "since"}}.get(action, set())
-    if action not in ("repeer", "show", "absent") or set(request) - allowed:
-        raise ValueError("pginterval needs action repeer, show or absent and no unknown field")
+    allowed = {"action", "slot", "object", "namespace"} | {"show": {"origin"}, "absent": {"origin", "shard", "since"},
+                                                           "replaced": {"origin", "since"}}.get(action, set())
+    if action not in ("repeer", "show", "absent", "replaced") or set(request) - allowed:
+        raise ValueError("pginterval needs action repeer, show, absent or replaced and no unknown field")
     pool = pool_name(request["slot"])
     _, namespace = object_request(request)
     descriptor = find_pool(rados.dump(cluster), pool)
@@ -599,16 +643,26 @@ def mode_pginterval(rados, cluster, request, out, clock=time.monotonic, sleep=ti
         return pg_interval.observation(first, code, raw, status, oversized, place())
 
     started = clock()
-    if action in ("show", "absent"):
+    if action in ("show", "absent", "replaced"):
         origin = request.get("origin")
         if not isinstance(origin, dict) or not isinstance(origin.get("pgid"), str) or type(origin.get("primary_id")) is not int:
             raise ValueError("pginterval %s needs the placement recorded before the command" % action)
         if action == "absent" and (type(request.get("shard")) is not int or type(request.get("since")) is not int):
             raise ValueError("pginterval absent needs the absent acting position and the recorded interval start")
+        if action == "replaced" and type(request.get("since")) is not int:
+            raise ValueError("pginterval replaced needs the recorded interval start")
         seen = observe(origin["pgid"], origin["primary_id"])
         now = seen["before"]
         if action == "absent":
             failures = pg_interval.absent_failures(origin, request["shard"], request["since"], seen)
+        elif action == "replaced":
+            # The shards that cannot lead, as the pool's own map entry lists
+            # them; an unreadable list admits no observation.
+            try:
+                nonprimary = shard_history.parse_written_shards(descriptor.get("nonprimary_shards"), 0)
+            except shard_history.HistoryError:
+                nonprimary = None
+            failures = pg_interval.replaced_failures(origin, request["since"], nonprimary, seen)
         elif now is None:
             failures = ["no placement record: " + seen["placement_failure"]]
         else:
@@ -1054,7 +1108,7 @@ def mode_cleanup(rados, cluster, request, out):
     return {"removed": removed, "pools_removed": gone, "ec_profiles_remaining": remaining}
 
 
-HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "shardhistory": mode_shardhistory, "pginterval": mode_pginterval,
+HANDLERS = {"create": mode_create, "seed": mode_seed, "observe": mode_observe, "place": mode_place, "pghistory": mode_pghistory, "opsinflight": mode_opsinflight, "shardhistory": mode_shardhistory, "pginterval": mode_pginterval,
             "snapshot": mode_snapshot, "selfmanaged": mode_selfmanaged, "quota": mode_quota, "poolinfo": mode_poolinfo, "clusterstat": mode_clusterstat, "versions": mode_versions, "mgrstate": mode_mgrstate, "service": mode_service, "servicewatch": mode_servicewatch, "servicecompare": mode_servicecompare, "servicemetadata": mode_servicemetadata, "fullratios": mode_fullratios, "osdflags": mode_osdflags, "inconsistent": mode_inconsistent, "cleanup": mode_cleanup}
 
 

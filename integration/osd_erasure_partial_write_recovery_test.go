@@ -231,28 +231,28 @@ func (r *partialWriteRun) logLivePrimary(label string, seen pgIntervalReceipt) {
 	}
 }
 
-// absentReobservations bounds the observations of the PG without the member
-// after the first accepted one. The MON may publish an epoch that leaves the
-// PG's sets unchanged (another OSD's up_thru, for example) before the primary
-// has it; the primary then answers from its older map and that sample shows
-// nothing about the PG's interval at the placement's epoch.
-const absentReobservations = 30
+// intervalReobservations bounds the later observations of a PG state after
+// its first accepted observation. The MON may publish an epoch that leaves
+// the PG's sets unchanged (another OSD's up_thru, for example) before the
+// primary has it; the primary then answers from its older map and that sample
+// shows nothing about the PG's interval at the placement's epoch.
+const intervalReobservations = 30
 
-// absentAgain classifies one later observation of the PG without the member
-// against the accepted observation, given checkPGAbsent's verdict err on it.
-// It is held when err is nil and the primary reports the accepted interval.
-// A primary that reports another interval has left it: a primary's map epoch
-// does not go back, and the accepted observation's primary was not behind its
-// placement, so a later interval start is a confirmed change even from a
-// primary behind the current placement. Without that, a sample shows nothing
-// and is inconclusive when a placement record or the query reply is missing,
-// the placement changed around the query, or the primary is behind the
-// placement's epoch. Every other refusal is a confirmed departure. The second
-// result is nil exactly when the sample is held or inconclusive.
-func absentAgain(r pgIntervalReceipt, err error, accepted pgIntervalReceipt) (bool, error) {
+// intervalHeld classifies one later observation of a PG state against the
+// accepted observation of that state, given the state's own check verdict err
+// on it. It is held when err is nil and the primary reports the accepted
+// interval. A primary that reports another interval has left it: a primary's
+// map epoch does not go back, and the accepted observation's primary was not
+// behind its placement, so a later interval start is a confirmed change even
+// from a primary behind the current placement. Without that, a sample shows
+// nothing and is inconclusive when a placement record or the query reply is
+// missing, the placement changed around the query, or the primary is behind
+// the placement's epoch. Every other refusal is a confirmed departure. The
+// second result is nil exactly when the sample is held or inconclusive.
+func intervalHeld(r pgIntervalReceipt, err error, accepted pgIntervalReceipt) (bool, error) {
 	o, interval := r.Observation, accepted.Observation.Query.SameIntervalSince
 	if q := o.Query; q != nil && q.SameIntervalSince != interval {
-		return false, fmt.Errorf("the primary reports the interval since epoch %d, not the one since epoch %d in which the PG was active without the member (%v)", q.SameIntervalSince, interval, err)
+		return false, fmt.Errorf("the primary reports the interval since epoch %d, not the accepted one since epoch %d (%v)", q.SameIntervalSince, interval, err)
 	}
 	if err == nil {
 		return true, nil
@@ -263,16 +263,17 @@ func absentAgain(r pgIntervalReceipt, err error, accepted pgIntervalReceipt) (bo
 	return false, err
 }
 
-// reobserveAbsent observes the PG without the member again, within attempts
-// observations spaced by pause, until one is held in the accepted interval
-// (absentAgain) and satisfies want. It fails at the first confirmed
-// departure, and when no held observation satisfies want within the bound;
-// an inconclusive sample never stands in for a held one.
-func reobserveAbsent(accepted pgIntervalReceipt, attempts int, pause time.Duration, observe func() (pgIntervalReceipt, error), want func(pgIntervalReceipt) bool) (pgIntervalReceipt, int, error) {
+// reobserveInterval observes a PG state again, within attempts observations
+// spaced by pause, until one is held in the accepted interval (intervalHeld)
+// and satisfies want. It fails at the first confirmed departure, and when no
+// held observation satisfies want within the bound; an inconclusive sample
+// never stands in for a held one. observe returns one sample and the state's
+// own check verdict on it, unchanged.
+func reobserveInterval(accepted pgIntervalReceipt, attempts int, pause time.Duration, observe func() (pgIntervalReceipt, error), want func(pgIntervalReceipt) bool) (pgIntervalReceipt, int, error) {
 	last := "no observation"
 	for attempt := 1; attempt <= attempts; attempt++ {
 		seen, err := observe()
-		held, left := absentAgain(seen, err, accepted)
+		held, left := intervalHeld(seen, err, accepted)
 		if left != nil {
 			return seen, attempt, fmt.Errorf("observation %d: %w", attempt, left)
 		}
@@ -290,6 +291,9 @@ func reobserveAbsent(accepted pgIntervalReceipt, attempts int, pause time.Durati
 		accepted.Observation.Query.SameIntervalSince, attempts, last)
 }
 
+// anyHeld wants every held observation.
+func anyHeld(pgIntervalReceipt) bool { return true }
+
 // waitAbsentRecords observes the live primary of the PG without the member
 // until its own info holds exactly the partial-write records, within a
 // bounded number of observations, in the interval in which the PG was
@@ -298,7 +302,7 @@ func reobserveAbsent(accepted pgIntervalReceipt, attempts int, pause time.Durati
 func (r *partialWriteRun) waitAbsentRecords(o *shardOutage, records []shardPartialWrite) {
 	r.t.Helper()
 	var got []shardPartialWrite
-	seen, attempt, err := reobserveAbsent(o.absent, absentReobservations, time.Second,
+	seen, attempt, err := reobserveInterval(o.absent, intervalReobservations, time.Second,
 		func() (pgIntervalReceipt, error) { return r.observeAbsent(r.ctx, o) },
 		func(seen pgIntervalReceipt) bool {
 			got = seen.Observation.Query.Info.PartialWrites
@@ -320,9 +324,8 @@ func (r *partialWriteRun) comeBack(o *shardOutage) pgIntervalReceipt {
 	// was observed, right before the OSD starts: one fresh accepted
 	// observation in that interval, past samples the primary answered from
 	// an older map.
-	last, attempt, err := reobserveAbsent(o.absent, absentReobservations, shardOutagePause,
-		func() (pgIntervalReceipt, error) { return r.observeAbsent(r.ctx, o) },
-		func(pgIntervalReceipt) bool { return true })
+	last, attempt, err := reobserveInterval(o.absent, intervalReobservations, shardOutagePause,
+		func() (pgIntervalReceipt, error) { return r.observeAbsent(r.ctx, o) }, anyHeld)
 	if err != nil {
 		r.t.Fatalf("the PG is not shown active without osd.%d in its interval before the OSD was started: %v", o.osd, err)
 	}
@@ -350,17 +353,23 @@ func (r *partialWriteRun) comeBack(o *shardOutage) pgIntervalReceipt {
 			if err := testcluster.ControlDaemon(r.ctx, os.Getenv("CEPH_MSGR_CONTROL_DIR"), "verify", "osd-ready", "clean"); err != nil {
 				r.t.Fatal("the fixture did not return to every OSD up and every PG clean:", err)
 			}
-			shown = nativePool(r.t, r.ctx, "pginterval", map[string]any{"action": "show", "slot": partialWriteSlot, "object": partialWriteObject, "origin": o.origin}).PGInterval
-			if err := checkPGReturned(shown, o.origin, absent); err != nil || shown.Observation.Query.SameIntervalSince != q.SameIntervalSince {
+			// One held observation in the interval in which the PG was clean
+			// again, past samples the primary answered from an older map.
+			again, seen, err := reobserveInterval(shown, intervalReobservations, shardOutagePause, func() (pgIntervalReceipt, error) {
+				s := nativePool(r.t, r.ctx, "pginterval", map[string]any{"action": "show", "slot": partialWriteSlot, "object": partialWriteObject, "origin": o.origin}).PGInterval
+				return s, checkPGReturned(s, o.origin, absent)
+			}, anyHeld)
+			if err != nil {
 				r.t.Fatalf("the PG left the interval since epoch %d in which it was clean again: %v", q.SameIntervalSince, err)
 			}
+			r.t.Logf("pg %s still clean at epoch %d in the interval since %d after the readiness control (observation %d)", o.origin.PGID, again.Observation.Before.Epoch, q.SameIntervalSince, seen)
 			fresh := poolPlace(r.t, r.ctx, partialWriteSlot, partialWriteObject, "")
-			if !samePlacement(fresh, *shown.Observation.After) || fresh.Epoch < shown.Observation.After.Epoch {
-				r.t.Fatalf("placement moved after the PG was clean again: %+v vs %+v", fresh, *shown.Observation.After)
+			if !samePlacement(fresh, *again.Observation.After) || fresh.Epoch < again.Observation.After.Epoch {
+				r.t.Fatalf("placement moved after the PG was clean again: %+v vs %+v", fresh, *again.Observation.After)
 			}
 			r.facts.checkPlacement(r.t, fresh)
 			r.adopt(fresh)
-			return shown
+			return again
 		}
 		if q := shown.Observation.Query; q != nil && (len(states) == 0 || states[len(states)-1] != q.State) {
 			states = append(states, q.State)
@@ -772,7 +781,7 @@ func TestReobserveAbsent(t *testing.T) {
 			p.Up, p.Acting = []int32{3, 4, 1, 0}, []int32{3, 4, 1, 0}
 		}
 	})
-	always := func(pgIntervalReceipt) bool { return true }
+	always := anyHeld
 	for name, c := range map[string]struct {
 		samples []pgIntervalReceipt
 		want    func(pgIntervalReceipt) bool
@@ -803,7 +812,7 @@ func TestReobserveAbsent(t *testing.T) {
 			next++
 			return r, checkPGAbsent(r, route, 1, 24)
 		}
-		seen, attempt, err := reobserveAbsent(accepted, 4, 0, observe, c.want)
+		seen, attempt, err := reobserveInterval(accepted, 4, 0, observe, c.want)
 		if (err == nil) != c.ok || attempt != c.attempt || next != c.attempt {
 			t.Errorf("%s: attempt %d after %d observations, error %v; want attempt %d, accepted %t", name, attempt, next, err, c.attempt, c.ok)
 			continue
@@ -867,5 +876,72 @@ func TestShardLogRecovered(t *testing.T) {
 	two := []shardWrite{writes[0], writes[2]}
 	if got, err := shardLogRecovered(two, 4); err != nil || !reflect.DeepEqual(got, shardLogState{[]bool{true, true}, "25'3", false}) {
 		t.Error("two writes that name every shard:", got, err)
+	}
+}
+
+// TestReobserveReturned covers the observation of the PG clean again after
+// the fixture's readiness control: a sample from a primary behind the
+// placement's epoch is retried, never accepted, and a later interval, another
+// state or the primary under another address fails at once.
+func TestReobserveReturned(t *testing.T) {
+	_, route := pgIntervalChange()
+	clean := func(epoch uint32) pgIntervalReceipt {
+		changed, _ := pgIntervalChange()
+		r := pgIntervalReceipt{Action: "show", Observation: changed.Observation, Observations: 1, Settled: true}
+		r.Observation.Before.Epoch, r.Observation.After.Epoch, r.Observation.Query.Epoch = epoch, epoch, epoch
+		return r
+	}
+	accepted := clean(28)
+	edited := func(r pgIntervalReceipt, edit func(*pgIntervalReceipt)) pgIntervalReceipt {
+		edit(&r)
+		return r
+	}
+	// Another OSD's up_thru at epoch 29, and the primary still at epoch 28.
+	lagging := func(interval uint32) pgIntervalReceipt {
+		return edited(clean(29), func(r *pgIntervalReceipt) {
+			r.Observation.Query.Epoch, r.Observation.Query.SameIntervalSince = 28, interval
+			r.Settled, r.Failures = false, []string{"the primary is at map epoch 28, behind the placement's epoch"}
+		})
+	}
+	// The primary restarted again: the map names it under another address.
+	readdressed := func(r *pgIntervalReceipt) {
+		r.Observation.Before.Address, r.Observation.After.Address = "v2:192.0.2.7:6800/9", "v2:192.0.2.7:6800/9"
+		r.Settled, r.Failures = false, []string{"the placement differs from the recorded one"}
+	}
+	later := edited(clean(30), func(r *pgIntervalReceipt) {
+		r.Observation.Query.SameIntervalSince, r.Observation.Query.LastEpochStarted = 30, 30
+	})
+	for name, c := range map[string]struct {
+		samples []pgIntervalReceipt
+		attempt int
+		ok      bool
+	}{
+		"held at once":                        {[]pgIntervalReceipt{clean(28)}, 1, true},
+		"held at a newer epoch":               {[]pgIntervalReceipt{clean(29)}, 1, true},
+		"lagging, then held":                  {[]pgIntervalReceipt{lagging(27), lagging(27), clean(29)}, 3, true},
+		"another address, lagging, then held": {[]pgIntervalReceipt{edited(lagging(27), readdressed), clean(29)}, 2, true},
+		"persistent lag":                      {[]pgIntervalReceipt{lagging(27), lagging(27), lagging(27), lagging(27)}, 4, false},
+		"a later interval":                    {[]pgIntervalReceipt{later, clean(30)}, 1, false},
+		"a later interval, lagging":           {[]pgIntervalReceipt{lagging(29), clean(29)}, 1, false},
+		"lagging, then a later interval":      {[]pgIntervalReceipt{lagging(27), later}, 2, false},
+		"the primary under another address":   {[]pgIntervalReceipt{edited(clean(29), readdressed), clean(29)}, 1, false},
+		"recovering again":                    {[]pgIntervalReceipt{edited(clean(29), func(r *pgIntervalReceipt) { r.Observation.Query.State = "active+recovering" }), clean(29)}, 1, false},
+	} {
+		next := 0
+		observe := func() (pgIntervalReceipt, error) {
+			r := c.samples[min(next, len(c.samples)-1)]
+			next++
+			return r, checkPGReturned(r, route, 26)
+		}
+		seen, attempt, err := reobserveInterval(accepted, 4, 0, observe, anyHeld)
+		if (err == nil) != c.ok || attempt != c.attempt || next != c.attempt {
+			t.Errorf("%s: attempt %d after %d observations, error %v; want attempt %d, accepted %t", name, attempt, next, err, c.attempt, c.ok)
+			continue
+		}
+		if c.ok {
+			if err := checkPGReturned(seen, route, 26); err != nil || seen.Observation.Query.SameIntervalSince != 27 {
+				t.Errorf("%s: returned an observation that is not held in the interval since 27: %v", name, err)
+			}
+		}
 	}
 }

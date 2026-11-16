@@ -223,7 +223,7 @@ func TestCaptureShardHistoriesStopsAtTheFirstFailedShard(t *testing.T) {
 
 func TestShardHistoryCaptureAdmission(t *testing.T) {
 	selected := profile{osd: "1", osdStore: "bluestore", osdReplicas: "4", osdProfile: "replicated-pg-v8", testRun: shardHistorySelectors[0]}
-	// Exactly the COPY_FROM2 control and the five partial-overwrite
+	// Exactly the COPY_FROM2 control and the six partial-overwrite
 	// controls.
 	if !slices.Equal(shardHistorySelectors, []string{
 		"^TestCephOSDErasureOptimizedK2M2CopyFromHistoryIntegration$",
@@ -232,6 +232,7 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 		"^TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration$",
 		"^TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration$",
 		"^TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration$",
+		"^TestCephOSDErasureOptimizedK2M2PartialWritePrimaryReplacementShardHistoryIntegration$",
 	}) {
 		t.Fatal("the capture's selector list changed:", shardHistorySelectors)
 	}
@@ -267,7 +268,7 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 		}
 	}
 	// The oracle mode that observes one PG and can end its interval is
-	// admitted for the four continuations alone, on the capture's topology.
+	// admitted for the five continuations alone, on the capture's topology.
 	if !slices.Equal(pgIntervalSelectors, shardHistorySelectors[2:]) {
 		t.Fatal("the interval mode's selector list changed:", pgIntervalSelectors)
 	}
@@ -283,7 +284,7 @@ func TestShardHistoryCaptureAdmission(t *testing.T) {
 		for name, change := range map[string]func(*profile){
 			"broad selector":    func(p *profile) { p.testRun = "^TestCephOSD.*Integration$" },
 			"every selector":    func(p *profile) { p.testRun = strings.Join(pgIntervalSelectors, "|") },
-			"two selectors":     func(p *profile) { p.testRun = strings.Join(pgIntervalSelectors[2:], "|") },
+			"three selectors":   func(p *profile) { p.testRun = strings.Join(pgIntervalSelectors[2:], "|") },
 			"another EC cell":   func(p *profile) { p.testRun = osdErasureWidthSelectors[1] },
 			"three OSDs":        func(p *profile) { p.osdReplicas = "3" },
 			"MemStore":          func(p *profile) { p.osdStore = "memstore" },
