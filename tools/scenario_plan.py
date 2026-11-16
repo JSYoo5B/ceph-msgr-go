@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Validate the native interoperability scenario catalog and plan a selection.
 
-The catalog (.github/scenarios/catalog.json) is the discoverable list of the
+The catalog (composed by scenario_catalog.py) is the discoverable list of the
 real-daemon scenarios and selectable platform check suites. Each native entry
 has a stable identifier, group and workflow matrix parameters. This tool
 validates the catalog against the reusable check jobs and the tests it selects
@@ -13,8 +13,10 @@ local files only and executes no test.
   scenario_plan.py list                   one identifier per line
   scenario_plan.py plan --select S        matrix JSON on stdout, explanation on stderr
 
-Both `list` and `plan` accept --catalog FILE to plan against another revision's
-catalog (a pull request's vocabulary) while running this trusted script.
+Both `list` and `plan` accept --catalog PATH to plan against another revision's
+catalog (a pull request's vocabulary) while running this trusted script. PATH
+is a fragment directory, or the earlier single catalog file of a pull request
+opened before the split.
 
 A selector S is "all", "group:<group>" or a scenario identifier; several can be
 given. An unknown selector is an error, never an empty or conservative match.
@@ -25,8 +27,10 @@ import re
 import sys
 from pathlib import Path
 
+import scenario_catalog
+
 ROOT = Path(__file__).resolve().parent.parent
-CATALOG = ROOT / ".github" / "scenarios" / "catalog.json"
+CATALOG = ROOT / scenario_catalog.CATALOG
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 CHECKS_WORKFLOW = ROOT / ".github" / "workflows" / "platform-checks.yml"
 NATIVE_WORKFLOW = ROOT / ".github" / "workflows" / "native-scenarios.yml"
@@ -39,10 +43,10 @@ class PlanError(Exception):
 
 
 def load_catalog_document(path=CATALOG):
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if data.get("version") != 1:
-        raise PlanError("unsupported catalog version %r" % data.get("version"))
-    return data
+    try:
+        return scenario_catalog.load(path)
+    except scenario_catalog.CatalogError as error:
+        raise PlanError(str(error)) from None
 
 
 def load_catalog(path=CATALOG):

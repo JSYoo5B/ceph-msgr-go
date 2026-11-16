@@ -1,0 +1,357 @@
+{
+ "scenarios": [
+  {
+   "id": "mon-mgr.aes256k.ip4",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "3m"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "family": "4",
+    "stress": ""
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip6",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": ""
+   }
+  },
+  {
+   "id": "mon-mgr.aes-svc-aes256k.ip4",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes256k",
+    "family": "4",
+    "stress": ""
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k-svc-aes.ip4",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes",
+    "family": "4",
+    "stress": ""
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.managers-0",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "managers": "0"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.release-20.2.3",
+   "group": "mon-mgr",
+   "params": {
+    "release": "20.2.3",
+    "key": "aes",
+    "service": "aes",
+    "family": "4",
+    "stress": "3m",
+    "image": "quay.io/ceph/ceph:v20.2.3@sha256:d195020de02512030118e772cef7859e92904e91eb4cb21acb503f8b94118137"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.host",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "host"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.expiry-1",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "expiry": "1"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip6.host.idle-1",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "host",
+    "idle": "1"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip6.auth-epoch-1",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "auth_epoch": "1"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.auth-epoch-1",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "family": "4",
+    "stress": "",
+    "auth_epoch": "1"
+   }
+  },
+  {
+   "id": "mon-mgr.aes-svc-aes256k.ip4.native-mgr-preparation-1",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "native_mgr_preparation": "1"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip6.short-tickets-1",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "short_tickets": "1"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.short-tickets-1",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "family": "4",
+    "stress": "",
+    "short_tickets": "1"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip6.mode-rejection-mon",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "mode_rejection": "mon"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.mode-rejection-mgr",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "family": "4",
+    "stress": "",
+    "mode_rejection": "mgr"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip6.mapped-1",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "mapped": "1"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.crc.host",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.crc.host",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip6.crc",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "mode": "crc",
+    "family": "6",
+    "stress": ""
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.t-monservicemaplifecyclefailedmonhold",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "test_run": "^TestCephMonServiceMapLifecycleFailedMonHoldIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.t-monservicemaplargemap",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "test_run": "^TestCephMonServiceMapLargeMapIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.crc.host.t-monservicemaplargemap",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephMonServiceMapLargeMapIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.crc.host.t-appliednamedmanagertell",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephAppliedNamedManagerTellIsNotReplayedIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.crc.host.t-appliedcurrentmanagertell",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephAppliedCurrentManagerTellIsNotReplayedIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.host.t-suite-e9be0b",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephApplied(Named|Current)ManagerTellIsNotReplayedIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.crc.host.t-senttellcancellation",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephSentTellCancellationIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.host.t-senttellcancellation",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCephSentTellCancellationIntegration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes.ip4.crc.host.t-suite-afb7b2",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCeph(CompleteMonitorOutage|NamedMonitorTell|NamedManagerTell)Integration$"
+   }
+  },
+  {
+   "id": "mon-mgr.aes256k.ip4.host.t-suite-afb7b2",
+   "group": "mon-mgr",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "test_run": "^TestCeph(CompleteMonitorOutage|NamedMonitorTell|NamedManagerTell)Integration$"
+   }
+  }
+ ]
+}

@@ -14,8 +14,9 @@ class ChangePlanTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.git('init', '-q')
         self.write('README.md', 'before\n')
-        self.write('.github/scenarios/catalog.json', json.dumps({'scenarios':[
-            {'group':'mon-mgr'}, {'group':'osd'}, {'group':'mds-sessions'}, {'group':'rbd'}]}))
+        self.write('.github/scenarios/catalog.d/_catalog.json', json.dumps({'version':1}))
+        for group in ('mon-mgr', 'osd', 'mds-sessions', 'rbd'):
+            self.write('.github/scenarios/catalog.d/%s.json' % group, json.dumps({'scenarios':[{'group':group}]}))
         self.base = self.commit()
 
     def git(self, *args):
@@ -71,7 +72,7 @@ class ChangePlanTests(unittest.TestCase):
         self.assertFalse(self.result()['docs_only'])
         self.git('reset','--hard',self.base)
         (self.root/'README.md').unlink()
-        (self.root/'README.md').symlink_to('.github/scenarios/catalog.json')
+        (self.root/'README.md').symlink_to('.github/scenarios/catalog.d/_catalog.json')
         self.commit()
         self.assertFalse(self.result()['docs_only'])
 

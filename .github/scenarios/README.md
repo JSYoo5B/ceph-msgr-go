@@ -58,7 +58,19 @@ vulnerability scans still execute. Branch protection settings are not modified.
 
 ## Catalog and planner
 
-`catalog.json` preserves the original 63 native interoperability matrix rows and adds
+The catalog is the directory [`catalog.d`](catalog.d/). `_catalog.json` holds the
+catalog version and the fixed check suites. Every row group has its own
+`<group>.json`, `{"scenarios": [...]}`, holding that group's rows, and each row
+keeps its `group` field. A new row goes into its group's file only; a new group
+is a new file. `tools/scenario_catalog.py` composes the directory for every
+reader (the planner, the change planner, the coverage map check and the
+fixture's Go tests use it or its Go counterpart `ciLoadCatalog`). The composed
+rows are in file-name order of the fragments and in file order within each
+fragment. A duplicate identifier in any two fragments, a row whose `group` is
+not its file's name, an empty fragment and any other file or directory are
+refused.
+
+The catalog preserves the original 63 native interoperability matrix rows and adds
 the two opt-in `mgr-service` rows for Go service registration.
 Thirteen further `osd` rows use the four-OSD erasure-capacity topology
 (`osd_replicas` value `4`): one selects only `TestCephOSDErasureK2M2Integration`,
@@ -398,6 +410,13 @@ python3 tools/scenario_plan.py plan --select group:rbd --select windows-ceph
 
 The planner emits native rows in `include` and selected check suites in `fixed`.
 `--catalog` reads the tested revision's vocabulary using the trusted planner.
+It takes a fragment directory, or the single `catalog.json` that held the
+catalog before it was split. For `/ci run`, the trusted
+`scenario_catalog.py extract` copies the tested revision's catalog blobs from
+Git objects, without checking the revision out, and refuses a revision with
+neither layout, with both, or with a symlink, subdirectory or unknown file in
+`catalog.d`. The single-file path exists only for pull requests opened before
+the split and can be removed once none of them is open.
 Unknown selectors fail rather than silently matching nothing. Validation rejects
 duplicate identifiers, unsupported releases, missing parameters, bad or empty
 test selectors, selectors matching no test and missing suite definitions.

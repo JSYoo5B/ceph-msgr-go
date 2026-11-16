@@ -1,9 +1,7 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -61,21 +59,8 @@ func TestProfileDefaults(t *testing.T) {
 // a syntactically valid planner row whose parent would skip.
 func TestCompressionOfferCatalogProfile(t *testing.T) {
 	const id = "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-msgrcompressionoffer"
-	data, err := os.ReadFile(filepath.Join("..", "..", ".github", "scenarios", "catalog.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var catalog struct {
-		Scenarios []struct {
-			ID     string            `json:"id"`
-			Params map[string]string `json:"params"`
-		} `json:"scenarios"`
-	}
-	if err := json.Unmarshal(data, &catalog); err != nil {
-		t.Fatal(err)
-	}
 	var params map[string]string
-	for _, row := range catalog.Scenarios {
+	for _, row := range ciRepositoryCatalog(t) {
 		if row.ID == id {
 			if params != nil {
 				t.Fatal("duplicate compression-offer scenario")

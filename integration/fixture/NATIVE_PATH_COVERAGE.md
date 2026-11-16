@@ -194,7 +194,7 @@ never read as an accepted path.
 ## Reading the evidence column
 
 - `group:<name>` and full scenario IDs refer to
-  [catalog.json](../../.github/scenarios/catalog.json); `suite:<id>` refers to
+  [catalog.d](../../.github/scenarios/catalog.d/); `suite:<id>` refers to
   its check suites. Every native row of that catalog is in the default
   coverage.
 - A plain `TestCeph...` name is a top-level Go test in this repository.

@@ -1,4 +1,3 @@
-import json
 import unittest
 
 import native_path_coverage as coverage
@@ -43,7 +42,7 @@ class NativePathCoverageTests(unittest.TestCase):
         self.assertIn("unknown scenario mon-mgx.aes256k.ip4.expiry-1", self.check(text))
 
     def test_scenarios_of_a_removed_group_are_reported(self):
-        data = json.loads((coverage.ROOT / coverage.CATALOG).read_text())
+        data = coverage.scenario_catalog.load()
         data["scenarios"] = [row for row in data["scenarios"] if row["group"] != "mon-mgr"]
         problems = coverage.check(text=self.text, tests=self.tests, catalog=coverage.catalog_from(data))
         self.assertIn("unknown scenario mon-mgr.aes256k.ip4.expiry-1", problems)

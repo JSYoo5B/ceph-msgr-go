@@ -6,14 +6,14 @@ tests, starts no fixture and makes no network requests. Upstream fixture
 receipts (``ctg@v0.3.0:``, ``ctg@v0.4.0:`` and ``ctg@main:`` tokens) are cited by name only and
 are not resolved, because the provider repository is not part of this tree.
 """
-import json
 import re
 import sys
 from pathlib import Path
 
+import scenario_catalog
+
 ROOT = Path(__file__).resolve().parent.parent
 COVERAGE = Path("integration/fixture/NATIVE_PATH_COVERAGE.md")
-CATALOG = Path(".github/scenarios/catalog.json")
 SPEC = Path("SPEC.md")
 
 CLASSES = ("released", "main-only", "primitive", "proposed", "absent")
@@ -37,7 +37,7 @@ def go_tests(root):
 
 
 def catalog_vocabulary(root):
-    return catalog_from(json.loads((root / CATALOG).read_text()))
+    return catalog_from(scenario_catalog.load(root / scenario_catalog.CATALOG))
 
 
 def spec_paths(root):
