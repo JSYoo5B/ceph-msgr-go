@@ -153,8 +153,13 @@ func boundedRaw(encoded string) string {
 // snapshots of the destination primary taken while pauserd is set: its op
 // tracker holds exactly one op of the copying client entity and incarnation,
 // for the route's PG at the route's epoch, and its internal Objecter holds
-// exactly one op of the owned source, paused before it was sent, that is a
-// single copy-get. Both answered for the route's primary between identical
+// exactly one op of the owned source, paused and never sent, that is a
+// single copy-get. The Objecter counts every prepared send in attempts
+// (src/osdc/Objecter.cc:3385-3400 clears paused and increments it) and
+// pauses an op already sent when a later map calls for it
+// (Objecter.cc:3081), so a copy-get sent once and waiting to be sent again
+// is paused too; only attempts 0 shows that the source read never left the
+// OSD. Both snapshots answered for the route's primary between identical
 // placement records of the route. It returns both ops.
 func checkCopyHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, route osdFixtureOracle, gid uint64, incarnation int32) (opsInFlightOp, objecterRequestsOp, error) {
 	for name, s := range map[string]struct {
@@ -195,18 +200,19 @@ func checkCopyHeld(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, r
 		return op, objecterRequestsOp{}, fmt.Errorf("the objecter holds %d ops of the source; want one held copy-get: %+v", len(objecter.Ops), objecter.Ops)
 	}
 	read := objecter.Ops[0]
-	if !read.Paused || len(read.CopyGetMax) != 1 || len(read.OSDOps) != 1 {
-		return op, read, fmt.Errorf("the source op is not one paused copy-get: %+v", read)
+	if !read.Paused || read.Attempts != 0 || len(read.CopyGetMax) != 1 || len(read.OSDOps) != 1 {
+		return op, read, fmt.Errorf("the source op is not one paused copy-get that was never sent: %+v", read)
 	}
 	return op, read, nil
 }
 
 // checkCopyDropped judges two snapshots of the former primary after the
 // primary change, while pauserd is still set: neither its op tracker nor its
-// Objecter holds anything of the copy any more. A paused copy-get cannot have
-// been sent, so its disappearance under pauserd is the cancellation of the
-// copy, not its completion. The brackets name the new primary, so they must
-// not name the former one.
+// Objecter holds anything of the copy any more. The barrier saw the copy-get
+// paused with no send attempt, and pauserd has stayed set since, so it was
+// never sent and its disappearance is the cancellation of the copy, not its
+// completion. The brackets name the new primary, so they must not name the
+// former one.
 func checkCopyDropped(ops opsInFlightSnapshot, objecter objecterRequestsSnapshot, former int32) error {
 	if !ops.Complete || len(ops.Failures) != 0 || !objecter.Complete || len(objecter.Failures) != 0 {
 		return fmt.Errorf("incomplete snapshots of the former primary: %q, %q", ops.Failures, objecter.Failures)
@@ -230,6 +236,18 @@ func checkPrimaryMoved(before, now osdFixtureOracle) error {
 	}
 	if now.ID == before.ID || now.PrimaryID != now.ID || now.ID < 0 || slices.Contains(now.Up, before.ID) || !slices.Contains(now.Acting, now.ID) {
 		return fmt.Errorf("osd.%d (up %v, acting %v) is not a new primary without osd.%d in the up set", now.ID, now.Up, now.Acting, before.ID)
+	}
+	return nil
+}
+
+// checkPrimaryReturned says whether now is the original placement of the
+// destination again after recovery: a newer epoch, and otherwise the same
+// PG, up and acting sets, primary, address and no pg_temp. A clean PG whose
+// primary is still the replacement is refused, so the checks that follow run
+// on the original primary and not on the OSD that answered before recovery.
+func checkPrimaryReturned(original, now osdFixtureOracle) error {
+	if now.Epoch <= original.Epoch || !samePlacement(now, original) {
+		return fmt.Errorf("placement %+v is not the original placement %+v at a newer epoch", now, original)
 	}
 	return nil
 }
@@ -501,8 +519,29 @@ func sameNative(a, b nativeXattrSnapshot) bool {
 	return a.Code == b.Code && bytes.Equal(a.Data, b.Data) && reflect.DeepEqual(attrNames(a), attrNames(b)) && a.Version == b.Version && a.Seconds == b.Seconds && a.Nanos == b.Nanos
 }
 
-// finish restores the cluster, then reads the destination once on a fresh
-// connection and observes it natively after a delay: it must still be
+// waitReturned polls the destination placement after recovery until two
+// observations a second apart agree on the original placement.
+func (r *copyPrimaryChangeRun) waitReturned() osdFixtureOracle {
+	r.t.Helper()
+	deadline := time.Now().Add(120 * time.Second)
+	var last osdFixtureOracle
+	for {
+		now := poolPlace(r.t, r.ctx, 2, r.dest, "")
+		err := checkPrimaryReturned(r.dstRoute, now)
+		if err == nil && reflect.DeepEqual(now, last) {
+			return now
+		}
+		last = now
+		if time.Now().After(deadline) {
+			r.t.Fatalf("the original destination primary osd.%d did not return: %v", r.dstRoute.ID, err)
+		}
+		time.Sleep(time.Second)
+	}
+}
+
+// finish restores the cluster and waits until the original destination
+// primary leads the PG again, then reads the destination once on a fresh
+// connection to it and observes it natively after a delay: it must still be
 // exactly want, so neither the former nor the current primary replayed the
 // copy. The PG log of the returned primary must still hold the copy once.
 func (r *copyPrimaryChangeRun) finish(want nativeXattrSnapshot, last uint64, copyKey, sourceKey pgHistoryTarget, binding copyFromHistoryWant) {
@@ -511,7 +550,7 @@ func (r *copyPrimaryChangeRun) finish(want nativeXattrSnapshot, last uint64, cop
 	if r.t.Failed() {
 		r.t.FailNow()
 	}
-	route := poolPlace(r.t, r.ctx, 2, r.dest, "")
+	route := r.waitReturned()
 	read := r.pools.request(route, cephmsgr.OSDOperation{Code: cephmsgr.OSDRead, Length: uint64(len(want.Data) + 64)})
 	o := mutationConnection(r.t, r.client, r.ctx, route)
 	reply, err := o.Request(r.ctx, read)
@@ -562,7 +601,8 @@ func copyPrimaryChangeFixture(t *testing.T) (context.Context, ownedPools, *copyP
 // gave the executed copy, ONDISK, and a destination that still holds the
 // first source bytes, attributes, version and mtime. The new primary's PG log
 // holds the copy's identity once, bound to the first source write. After
-// recovery a fresh session reads the same bytes and nothing changes.
+// recovery the original primary must lead the PG again; a fresh session to it
+// reads the same bytes, nothing changes, and its PG log holds the copy once.
 //
 //fixture:isolated marks OSDs out and in, waits osd-ready clean without a pg_temp proof; leaves mon_allow_pool_delete
 func TestCephOSDCopyFromLostReplyPrimaryChangeIntegration(t *testing.T) {
@@ -660,15 +700,16 @@ func TestCephOSDCopyFromLostReplyPrimaryChangeIntegration(t *testing.T) {
 // source read: pauserd keeps the primary's internal Objecter from sending
 // the copy-get. Two bracketed native snapshots of that primary are the phase
 // barrier: its op tracker holds the client's op and its Objecter one paused
-// copy-get of the owned source. The primary is then marked out. Snapshots of
+// copy-get of the owned source with no send attempt. The primary is then marked out. Snapshots of
 // the former primary, still under pauserd, must show both gone, and the
 // caller's wait ends as an unknown outcome with the barrier's transaction.
 // After pauserd is unset the native destination must still be its seeded
 // state and the new primary's PG log must not name the copy. Only then does
 // the caller resubmit to the new primary under the original identity, which
 // executes the copy once; after a second source write a second resubmission
-// must be answered from the PG log without copying again. After recovery a
-// fresh session reads the copy once and nothing changes.
+// must be answered from the PG log without copying again. After recovery the
+// original primary must lead the PG again; a fresh session to it reads the
+// copy, nothing changes, and its PG log holds the copy once.
 //
 //fixture:isolated sets pause and marks OSDs out, restored checked, waits osd-ready clean without pg_temp proof
 func TestCephOSDCopyFromInFlightPrimaryChangeIntegration(t *testing.T) {
@@ -859,7 +900,12 @@ func TestCopyFromPrimaryChangeJudgements(t *testing.T) {
 		"op identity differs":   func(o *opsInFlightSnapshot, _ *objecterRequestsSnapshot) { o.Ops[0].Reqid = "client.4641.33:6" },
 		"no source read":        func(_ *opsInFlightSnapshot, r *objecterRequestsSnapshot) { r.Ops = nil },
 		"two source reads":      func(_ *opsInFlightSnapshot, r *objecterRequestsSnapshot) { r.Ops = append(r.Ops, r.Ops[0]) },
-		"source read sent":      func(_ *opsInFlightSnapshot, r *objecterRequestsSnapshot) { r.Ops[0].Paused = false },
+		"source read sent": func(_ *opsInFlightSnapshot, r *objecterRequestsSnapshot) {
+			r.Ops[0].Paused, r.Ops[0].Attempts = false, 1
+		},
+		"source read sent once and paused again": func(_ *opsInFlightSnapshot, r *objecterRequestsSnapshot) {
+			r.Ops[0].Paused, r.Ops[0].Attempts = true, 1
+		},
 		"source read not copy-get": func(_ *opsInFlightSnapshot, r *objecterRequestsSnapshot) {
 			r.Ops[0].OSDOps, r.Ops[0].CopyGetMax = []string{"read 0~10"}, nil
 		},
@@ -894,6 +940,30 @@ func TestCopyFromPrimaryChangeJudgements(t *testing.T) {
 		edit(&p)
 		if checkPrimaryMoved(route, p) == nil {
 			t.Error("moved primary accepted:", name)
+		}
+	}
+
+	returned := route
+	returned.Epoch = 36
+	if err := checkPrimaryReturned(route, returned); err != nil {
+		t.Fatal("returned primary refused:", err)
+	}
+	for name, edit := range map[string]func(*osdFixtureOracle){
+		"replacement still primary": func(p *osdFixtureOracle) { *p = moved; p.Epoch = 36 },
+		"replacement leads clean": func(p *osdFixtureOracle) {
+			p.ID, p.PrimaryID, p.Up, p.Acting = 0, 0, []int32{0, 1, 2}, []int32{0, 1, 2}
+		},
+		"pg_temp left":    func(p *osdFixtureOracle) { p.PGTemp = true },
+		"acting differs":  func(p *osdFixtureOracle) { p.Acting = []int32{1, 2, 0} },
+		"not newer":       func(p *osdFixtureOracle) { p.Epoch = route.Epoch },
+		"another PG":      func(p *osdFixtureOracle) { p.PGID = "4.1" },
+		"another address": func(p *osdFixtureOracle) { p.Address = "v2:192.0.2.12:6800/1" },
+	} {
+		p := returned
+		p.Up, p.Acting = slices.Clone(returned.Up), slices.Clone(returned.Acting)
+		edit(&p)
+		if checkPrimaryReturned(route, p) == nil {
+			t.Error("returned primary accepted:", name)
 		}
 	}
 
