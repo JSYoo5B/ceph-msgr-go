@@ -86,17 +86,25 @@ func TestMDSCephFSDataObjectBytesAdmissionPrecedesNativeWork(t *testing.T) {
 		t.Fatal("the test profile does not admit the object-bytes view")
 	}
 	for _, tc := range []struct {
-		name string
-		p    profile
-		drop *mdsCephFSDataOSDDrop
-		want string
+		name    string
+		p       profile
+		drop    *mdsCephFSDataOSDDrop
+		restart *mdsCephFSRestart
+		reader  bool
+		want    string
 	}{
-		{"no capability", profile{}, nil, "capability mds-writeback-mixed"},
-		{"writeback-fence only", fence, nil, "capability mds-writeback-mixed"},
-		{"applied OSD drop", mixed, &mdsCephFSDataOSDDrop{State: "applied"}, "native action refused"},
-		{"uncertain OSD drop", mixed, &mdsCephFSDataOSDDrop{State: "uncertain"}, "native action refused"},
+		{"no capability", profile{}, nil, nil, false, "capability mds-writeback-mixed"},
+		{"writeback-fence only", fence, nil, nil, false, "capability mds-writeback-mixed"},
+		{"applied OSD drop", mixed, &mdsCephFSDataOSDDrop{State: "applied"}, nil, false, "native action refused"},
+		{"uncertain OSD drop", mixed, &mdsCephFSDataOSDDrop{State: "uncertain"}, nil, false, "native action refused"},
+		{"pending restart", mixed, nil, &mdsCephFSRestart{State: "applied"}, false, "restart is not adopted"},
+		{"running reader", mixed, nil, nil, true, "native action refused"},
 	} {
-		x := &mdsCephFSDataScope{out: out, plan: mdsCephFSDataPlanFor(token), owned: map[string]uint64{}, current: dataRestartDaemon(), baselineConfig: dataRuntimeBaseline(), osdDrop: tc.drop}
+		x := &mdsCephFSDataScope{out: out, plan: mdsCephFSDataPlanFor(token), owned: map[string]uint64{}, current: dataRestartDaemon(), baselineConfig: dataRuntimeBaseline(),
+			osdDrop: tc.drop, restart: tc.restart}
+		if tc.reader {
+			x.reader = newMDSCephFSDataReaderRun(1)
+		}
 		c := &fixtureCluster{profile: tc.p, mdsFresh: &mdsFreshScope{out: out, token: token, name: "owned"}, mdsCephFSData: x}
 		var result mdsCephFSDataResult
 		err := c.mdsCephFSDataAct(context.Background(), 1, action, &result)

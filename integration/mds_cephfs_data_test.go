@@ -2941,8 +2941,9 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		}
 
 		// 7. The consumer's rules: B stays uncertain although the native
-		// view shows it did not land, nothing is resendable, and no cap
-		// message of either incarnation's agent reported more than the prefix.
+		// view shows it did not land, nothing is resendable, and neither the
+		// max_size request nor any cap update recorded for the dirty file by
+		// either incarnation's agent reported more than the prefix.
 		closeFile(t, f, cephFileModeRDWR)
 		for i := range ledger.Writes {
 			if ledger.mayResend(i) == nil {
@@ -2956,7 +2957,9 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 		for _, a := range []*cephfsCapAgent{preRestart, agent} {
 			d, _ := a.dirtyState(f.Ino)
 			for _, ev := range d.Events {
-				if ev.Kind == "cap-update" {
+				// The reconnected agent starts from a copy of the old one's
+				// events; each cap update is kept once.
+				if ev.Kind == "cap-update" && !slices.ContainsFunc(capUpdates, func(r cephfsDirtyEvent) bool { return r.At.Equal(ev.At) && r.Seq == ev.Seq && r.TID == ev.TID }) {
 					capUpdates = append(capUpdates, ev)
 				}
 			}
@@ -2969,7 +2972,10 @@ func runCephMDSCephFSDataAcceptance(t *testing.T, recipe cephfsDataRestartRecipe
 			t.Fatal("no cap message of the writer was recorded")
 		}
 		if beyond := cephfsCapUpdatesBeyond(capUpdates, committed); len(beyond) != 0 {
-			t.Fatalf("a cap message reported a size beyond the completed prefix: %+v", beyond)
+			t.Fatalf("a cap update reported a size beyond the completed prefix: %+v", beyond)
+		}
+		if r := f.MaxSizeRequest; r != nil && r.Size > committed {
+			t.Fatalf("the max_size request reported a size beyond the completed prefix: %+v", r)
 		}
 		mx["object_writes"] = leafWrites()
 	}) {
