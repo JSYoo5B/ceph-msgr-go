@@ -1,3 +1,5 @@
+import posixpath
+import re
 import subprocess
 import tempfile
 import unittest
@@ -7,6 +9,7 @@ import native_path_coverage as coverage
 from test_go_test_list import REPEATED, SHAPES, WRONG_FILE, module
 
 DIRECTORY = coverage.COVERAGE.as_posix()
+LEGACY = "integration/fixture/NATIVE_PATH_COVERAGE.md"
 
 
 def where(name):
@@ -31,6 +34,29 @@ def git(cwd, *args):
     return subprocess.run(["git", "-c", "user.name=CI test", "-c", "user.email=ci@example.invalid",
                            "-c", "core.autocrlf=false", *args],
                           cwd=cwd, capture_output=True, text=True, timeout=60)
+
+
+def relink(cells, directory):
+    """Rewrite every relative link of the cells to a repository path."""
+    def sub(match):
+        label, target = match.groups()
+        if re.match(r"^[a-z]+:", target) or target.startswith("#"):
+            return match.group(0)
+        path, sep, anchor = target.partition("#")
+        resolved = posixpath.normpath(posixpath.join(directory, path)) + ("/" if path.endswith("/") else "")
+        return "[%s](%s%s%s)" % (label, resolved, sep, anchor)
+    return [coverage.LINK.sub(sub, cell) for cell in cells]
+
+
+def legacy_rows(text):
+    """(area, cells) of every row of the single-file map, by its ### headings."""
+    sections = re.split(r"(?m)^(#{2,3} .*)$", text)
+    rows = []
+    for heading, body in zip(sections[1::2], sections[2::2]):
+        if heading.startswith("### "):
+            rows.extend((heading[4:].strip(), relink(cells, "integration/fixture"))
+                        for cells in coverage.table_rows(body))
+    return rows
 
 
 class NativePathCoverageTests(unittest.TestCase):
@@ -308,6 +334,39 @@ class MergeTests(unittest.TestCase):
             keys = [cells[0] for _, _, rows in coverage.compose(merged)[0] for cells in rows]
             self.assertIn("OSD-901", keys)
             self.assertIn("MDS-902", keys)
+
+
+class SplitTests(unittest.TestCase):
+    """The commit that split the single-file map kept every row."""
+
+    def test_split_rows_equal_the_single_file_rows(self):
+        root = coverage.ROOT
+        added = git(root, "log", "--format=%H", "--diff-filter=A", "--", where(coverage.INDEX))
+        commits = added.stdout.split() if added.returncode == 0 else []
+        if not commits:
+            self.skipTest("no Git history of " + where(coverage.INDEX))
+        split = commits[-1]
+        parent = git(root, "rev-parse", "--verify", "--quiet", split + "^")
+        if parent.returncode != 0:
+            self.skipTest("the parent of the split commit is not in this checkout (shallow clone)")
+        parent = parent.stdout.strip()
+        old = git(root, "show", "%s:%s" % (parent, LEGACY))
+        self.assertEqual(old.returncode, 0, old.stderr)
+        self.assertNotEqual(git(root, "cat-file", "-e", "%s:%s" % (split, LEGACY)).returncode, 0,
+                            "the split commit still has the single file")
+        names = git(root, "ls-tree", "--name-only", split, DIRECTORY + "/")
+        self.assertEqual(names.returncode, 0, names.stderr)
+        documents = {}
+        for path in names.stdout.split():
+            shown = git(root, "show", "%s:%s" % (split, path))
+            self.assertEqual(shown.returncode, 0, shown.stderr)
+            documents[posixpath.basename(path)] = shown.stdout
+        areas, problems = coverage.compose(documents)
+        self.assertEqual(problems, [])
+        composed = [(label, relink(cells, DIRECTORY)) for _, label, rows in areas for cells in rows]
+        expected = legacy_rows(old.stdout)
+        self.assertGreater(len(expected), 0)
+        self.assertEqual(composed, expected)
 
 
 if __name__ == "__main__":
