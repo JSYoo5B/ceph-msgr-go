@@ -22,16 +22,16 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
                 "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8"}
         # Every row is the four-OSD BlueStore profile and selects one exact
         # test. The default k=2,m=2 baseline is the only row without a
-        # capability; every other row declares osd-erasure-width, which the
-        # topology requires of any other test, with the capabilities of its
-        # own mode. No list of the rows is kept, so a new row edits none.
+        # capability. Which capability admits another test is the fixture's
+        # decision (exactly one exclusive capability of the topology, which
+        # validate checks for every row), not this module's: a new row may
+        # declare osd-erasure-width or an exclusive capability of its own.
+        # No list of the rows is kept, so a new row edits none.
         default = "^TestCephOSDErasureK2M2Integration$"
         self.assertEqual([row for row in rows if "capabilities" not in row], [dict(base, test_run=default)])
         for row in rows:
             self.assertEqual({key: value for key, value in row.items() if key not in ("test_run", "capabilities")}, base)
             self.assertRegex(row["test_run"], r"^\^TestCephOSDErasure[A-Za-z0-9]+Integration\$$")
-            if row["test_run"] != default:
-                self.assertIn("osd-erasure-width", row["capabilities"].split(","))
         # The rows that existed when the list was removed keep the
         # capabilities of their modes. The mapping is frozen: a later row
         # checks its own capabilities in a module of its own.
