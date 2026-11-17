@@ -256,6 +256,9 @@ class Repository:
     def git(self, *args, check=True):
         return self.run("git", *self.isolation, "-c", "user.name=Merge proof", "-c", "user.email=merge-proof@example.invalid",
                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-c", "rerere.enabled=false",
+                        # No background gc, maintenance or file monitor writes
+                        # into the repository while it is removed.
+                        "-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "core.fsmonitor=false",
                         *args, check=check)
 
     def blob(self, revision):
@@ -292,7 +295,9 @@ def copy_tracked(source, target):
 
 def remove_tree(path):
     def writable(function, name, _):
-        os.chmod(name, stat.S_IWRITE)
+        # Read-only files (Git objects on Windows) need write permission to be
+        # removed; a directory keeps read and search permission.
+        os.chmod(name, stat.S_IRWXU)
         function(name)
     if sys.version_info >= (3, 12):
         shutil.rmtree(path, onexc=writable)
