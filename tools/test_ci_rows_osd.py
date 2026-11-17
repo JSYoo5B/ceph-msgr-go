@@ -308,6 +308,16 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
         for other in (expected + "Extended", "Prefix" + expected, "TestCephOSDSetChunkGoIntegration", "TestCephOSDCacheOpGoIntegration"):
             self.assertIsNone(selector.search(other))
 
+    def test_tier_evict_lost_reply_uses_a_crc_single_osd_row(self):
+        test = "TestCephManifestTierEvictLostReplyIntegration"
+        selector = "^" + test + "$"
+        rows = [row for row in self.rows if row.get("test_run") == selector]
+        self.assertEqual(rows, [{
+            "key": "aes", "service": "aes", "mode": "crc", "family": "4", "stress": "", "runtime": "host",
+            "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6", "test_run": selector,
+        }])
+        self.assertEqual({name for name in self.declared if re.search(selector, name)}, {test})
+
 
 if __name__ == "__main__":
     unittest.main()

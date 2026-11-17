@@ -332,7 +332,12 @@ fixture and likewise without an opt-in parameter. A third selects only
 `TestCephOSDTierOpGoIntegration`, the Go-originated TIER_PROMOTE, TIER_FLUSH
 and TIER_EVICT acceptance against a native twin, on the same fixture and
 also without an opt-in parameter: it configures the dedup options of its own
-owned pool only.
+owned pool only. The dedicated IPv4 CRC host row
+`osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-legacy-v6.t-manifesttierevictlostreply`
+runs `TestCephManifestTierEvictLostReplyIntegration` with one BlueStore OSD.
+Its client holds the reply to a single TIER_EVICT on an owned clean chunked
+manifest while an independent native observer reads both pools. See the
+[withheld-reply record](../../integration/fixture/OSD_TIER_OP_GO_VALIDATION.md#lost-reply).
 Two `mds-cephfs-multi-reconnect` rows select only
 `TestCephMDSCephFSMultiReconnectIntegration`, reusing the completion opt-in
 for a fresh, isolated fixture in each selected MDS profile with
