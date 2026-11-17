@@ -2,7 +2,7 @@
 
 Shared loading lives in ci_row_catalog; these tests check only the OSD and
 PG command rows, the dedicated single-OSD legacy-v6 rows (COPY_FROM2,
-SET_CHUNK, compression offer), the cache-pool rows and the replicated v8
+SET_CHUNK, tier operations, compression offer), the cache-pool rows and the replicated v8
 profile rows. The four-OSD erasure rows are checked in
 test_ci_rows_osd_erasure.
 """
@@ -15,6 +15,7 @@ from ci_row_catalog import ROOT
 
 SET_CHUNK_SELECTOR = "^TestCephOSDSetChunkNativeIntegration$"
 SET_CHUNK_GO_SELECTOR = "^TestCephOSDSetChunkGoIntegration$"
+TIER_OP_GO_SELECTOR = "^TestCephOSDTierOpGoIntegration$"
 COPY_FROM_LATE_ERROR_SELECTOR = "^TestCephOSDCopyFromLateErrorIntegration$"
 COPY_FROM_MULTI_CHUNK_SELECTOR = "^TestCephOSDCopyFromMultiChunkLateErrorIntegration$"
 COPY_FROM_HISTORY_SELECTOR = "^TestCephOSDCopyFromDestinationHistoryIntegration$"
@@ -23,7 +24,7 @@ APPLIED_OSD_PG_COMMAND_SELECTOR = "^TestCephApplied(OSD|PG)CommandIsNotReplayedI
 OSD_COMMAND_OUTCOME_SELECTOR = "^TestCephOSDCommand(s|Crash)Integration$"
 # Dedicated legacy-v6 rows of this area that select one test explicitly
 # (collected by the cross-area legacy check).
-DEDICATED_LEGACY_SELECTORS = (SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR,
+DEDICATED_LEGACY_SELECTORS = (SET_CHUNK_SELECTOR, SET_CHUNK_GO_SELECTOR, TIER_OP_GO_SELECTOR, COPY_FROM_LATE_ERROR_SELECTOR, COPY_FROM_MULTI_CHUNK_SELECTOR,
                               COPY_FROM_HISTORY_SELECTOR, COMPRESSION_SELECTOR, APPLIED_OSD_PG_COMMAND_SELECTOR,
                               OSD_COMMAND_OUTCOME_SELECTOR)
 
@@ -283,6 +284,22 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
         expected = "TestCephOSDSetChunkGoIntegration"
         self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
         for other in (expected + "Extended", "Prefix" + expected, "TestCephOSDSetChunkNativeIntegration", "TestCephOSDCacheOpGoIntegration"):
+            self.assertIsNone(selector.search(other))
+
+    def test_tier_op_go_row_selects_only_the_go_acceptance(self):
+        # The Go-originated tier-operation acceptance uses only the ordinary
+        # OSD fixture, the owned-pool oracle and its own native observer; it
+        # has no opt-in parameter and no cache-pool profile.
+        rows = [row for row in self.rows if row.get("test_run") == TIER_OP_GO_SELECTOR]
+        self.assertEqual(rows, [{
+            "key": "aes256k", "service": "aes256k", "family": "6", "stress": "", "runtime": "container",
+            "osd": "1", "osd_store": "bluestore", "osd_replicas": "1", "osd_profile": "legacy-v6",
+            "test_run": TIER_OP_GO_SELECTOR,
+        }])
+        selector = re.compile(TIER_OP_GO_SELECTOR)
+        expected = "TestCephOSDTierOpGoIntegration"
+        self.assertEqual({name for name in self.declared if selector.search(name)}, {expected})
+        for other in (expected + "Extended", "Prefix" + expected, "TestCephOSDSetChunkGoIntegration", "TestCephOSDCacheOpGoIntegration"):
             self.assertIsNone(selector.search(other))
 
 
