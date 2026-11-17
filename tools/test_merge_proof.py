@@ -177,7 +177,7 @@ def newline(text):
 def append_rows(text, rows):
     """Append catalog rows to a fragment as an author does: after its last row."""
     nl = newline(text)
-    match = re.search(r"\n  \}\r?\n \]\r?\n\}(\r?\n)?\Z", text)
+    match = re.search(r"\r?\n  \}\r?\n \]\r?\n\}(\r?\n)?\Z", text)
     if not match:
         raise AssertionError("catalog fragment does not end in its last row")
     blocks = []
@@ -265,8 +265,12 @@ class Repository:
         config.write_text("", encoding="utf-8")
         self.env = dict(os.environ, GIT_CONFIG_GLOBAL=str(config), GIT_CONFIG_NOSYSTEM="1",
                         GIT_TERMINAL_PROMPT="0", LC_ALL="C", PYTHONDONTWRITEBYTECODE="1")
-        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"):
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                     "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_ATTR_SOURCE"):
             self.env.pop(name, None)
+        # The user's attributes file (merge drivers such as merge=union) and
+        # excludes file are read even without a global config; empty both.
+        self.isolation = ("-c", "core.attributesFile=" + str(config), "-c", "core.excludesFile=" + str(config))
 
     def run(self, *args, check=True, cwd=None):
         result = subprocess.run(list(args), cwd=str(cwd or self.path), env=self.env, capture_output=True,
@@ -277,9 +281,16 @@ class Repository:
         return result
 
     def git(self, *args, check=True):
-        return self.run("git", "-c", "user.name=Merge proof", "-c", "user.email=merge-proof@example.invalid",
+        return self.run("git", *self.isolation, "-c", "user.name=Merge proof", "-c", "user.email=merge-proof@example.invalid",
                         "-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", "-c", "rerere.enabled=false",
                         *args, check=check)
+
+    def blob(self, revision):
+        result = subprocess.run(["git", *self.isolation, "show", revision], cwd=str(self.path), env=self.env,
+                                capture_output=True, timeout=TIMEOUT)
+        if result.returncode != 0:
+            raise AssertionError("git show %s failed: %s" % (revision, result.stderr.decode(errors="replace")))
+        return result.stdout.decode("utf-8")
 
     def read(self, relative):
         return (self.path / relative).read_bytes().decode("utf-8")
@@ -387,7 +398,8 @@ class MergeProofTest(unittest.TestCase):
         return set(self.repo.git("diff", "--name-only", "--diff-filter=U").stdout.split())
 
     def stage(self, relative, number):
-        return self.repo.git("show", ":%d:%s" % (number, relative)).stdout
+        """One stage of an unmerged path, byte for byte (its line endings kept)."""
+        return self.repo.blob(":%d:%s" % (number, relative))
 
     def validate(self, authors):
         """Run the validators of the merged tree in it and check they saw the
@@ -497,7 +509,14 @@ class CompositionTest(unittest.TestCase):
         composed = compose_fragment(self.FRAGMENT, ours, theirs)
         self.assertEqual([row["id"] for row in json.loads(composed)["scenarios"]], ["a", "b", "c"])
         crlf = self.FRAGMENT.replace("\n", "\r\n")
-        self.assertNotIn("\n", append_rows(crlf, [{"id": "b", "group": "g", "params": {}}]).replace("\r\n", ""))
+        added = append_rows(crlf, [{"id": "b", "group": "g", "params": {}}])
+        self.assertTrue(added.startswith(crlf[:crlf.rindex("\r\n  }")]))
+        self.assertEqual(added.replace("\r\n", ""), added.replace("\r\n", "").replace("\r", "").replace("\n", ""))
+        self.assertEqual(added.replace("\r\n", "\n"), append_rows(self.FRAGMENT, [{"id": "b", "group": "g", "params": {}}]))
+        crlf_ours, crlf_theirs = (append_rows(crlf, [{"id": sid, "group": "g", "params": {}}]) for sid in ("b", "c"))
+        crlf_composed = compose_fragment(crlf, crlf_ours, crlf_theirs)
+        self.assertEqual(crlf_composed.replace("\r\n", "\n"), composed)
+        self.assertNotIn("\n", crlf_composed.replace("\r\n", ""))
         with self.assertRaisesRegex(AssertionError, "changed rows of the base"):
             compose_fragment(self.FRAGMENT, ours, theirs.replace('"a"', '"z"'))
         with self.assertRaisesRegex(AssertionError, "one identifier"):
@@ -509,6 +528,8 @@ class CompositionTest(unittest.TestCase):
         theirs = base.replace("| A-1 |\n", "| A-1 |\n| A-3 |\n") + "\nnote 3\n"
         self.assertEqual(compose_insertions(base, ours, theirs),
                          "# T\n\n| A-1 |\n| A-2 |\n| A-3 |\n\n## Updates\n\nnote 1\n\nnote 2\n\nnote 3\n")
+        crlf = [text.replace("\n", "\r\n") for text in (base, ours, theirs)]
+        self.assertEqual(compose_insertions(*crlf), compose_insertions(base, ours, theirs).replace("\n", "\r\n"))
         with self.assertRaisesRegex(AssertionError, "changed base lines"):
             compose_insertions(base, ours, theirs.replace("note 1", "note one"))
 
