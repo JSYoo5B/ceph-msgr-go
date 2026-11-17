@@ -77,11 +77,15 @@ const (
 	// chunked manifest, into the object (a plain object is a no-op);
 	// OSDTierEvict marks every chunk missing and zeroes its local range
 	// (EINVAL for a plain object); OSDTierFlush runs the dedup flush that the
-	// pool's own dedup options configure for a dirty or plain object (EINVAL
-	// without them) and reports a clean manifest as done. Results are the
-	// OSD's signed codes (ENOENT for an absent object, EINVAL on a cache-tier
-	// pool), and a lost reply after transmission remains an unknown outcome
-	// that is never resent. Choosing objects, chunking and dedup pools stays
+	// pool's own dedup options configure for a dirty or plain non-empty object
+	// (EINVAL without them) and reports a clean manifest or an empty object as
+	// done. A successful dedup flush keeps the per-op Result -11 (EAGAIN) the
+	// OSD stored before it blocked the object; its aggregate Code 0 is the
+	// result. Results are the OSD's signed codes (ENOENT for an absent object;
+	// on a pool in a cache-tier relation EOPNOTSUPP without the negotiated
+	// cache-pool capability and EINVAL from a tier pool's handler with it), and
+	// a lost reply after transmission remains an unknown outcome that is never
+	// resent. Choosing objects, chunking and dedup pools stays
 	// with the caller.
 	OSDTierPromote OSDOpcode = OSDOpcode(osd.TierPromote)
 	OSDTierFlush   OSDOpcode = OSDOpcode(osd.TierFlush)

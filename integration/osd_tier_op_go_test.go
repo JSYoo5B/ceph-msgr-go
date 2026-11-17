@@ -24,7 +24,8 @@ import (
 // redirect targets and, once slot 1 carries its dedup options, the
 // fingerprint-named dedup chunks. Every tier operation the Go client sends is
 // paired with the same operation issued once by a closed native librados
-// twin on a separate object seeded the same way, and both results must equal
+// twin on a separate object seeded the same way (the absent control is one
+// shared absent name), and both results must equal
 // the source-derived signed code. The native observer judges both objects
 // without promoting them (IGNORE_REDIRECT local reads, is_dirty, proxied
 // reads of closed extents and the slot-2 targets' bytes and chunk_refs).
