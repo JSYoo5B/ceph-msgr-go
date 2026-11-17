@@ -219,8 +219,8 @@ No product change was needed.
 ## Not claimed
 
 - A daemon loss in either cell, or a copy held after its source read
-  completed. Destination loss after source-read completion and staging
-  remains open in #7.
+  completed. Destination loss after source-read completion and staging is
+  the separate [destination-loss record](OSD_COPY_FROM_DESTINATION_LOSS_VALIDATION.md).
 - A barrier tied to `pausewr`. The copy-get is a read, and the pause affects
   only native Objecters; neither this client nor the oracle's observations
   consult it, and the oracle reads no object while it is set.

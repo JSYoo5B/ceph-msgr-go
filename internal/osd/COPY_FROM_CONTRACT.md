@@ -120,7 +120,18 @@ log. A copy gives the destination the source's user version, which can be
 lower than the destination's previous one. The client never resubmits on
 its own: the server drops a cancelled copy because a native Objecter would
 resend it, and this client leaves that decision to the caller.
-Destination loss after source-read completion/staging remains unverified. A committed copy
+A [destination-loss checkpoint](../../integration/fixture/OSD_COPY_FROM_DESTINATION_LOSS_VALIDATION.md)
+pauses destination replicas so that a copy finishes its source read and
+stages its final transaction, observed natively on the destination
+primary's op tracker (waiting for sub ops after its own commit) with no
+source read left in its Objecter, and then SIGKILLs that primary. The caller
+keeps an unknown outcome with the original identity. Native state under the
+new primary decides the result before any resubmission: with one replica
+commit the full copy must survive; with none, the run records whether the
+copy or the seed remained (every observed run kept the copy). One explicit
+resubmission is then answered from the PG log when the copy survived, and
+must execute once otherwise. Multi-chunk temporary-object staging remains
+unverified. A committed copy
 survived OSD SIGKILL and restart on BlueStore; a lost reply was verified
 (unknown outcome, no replay) on single and three-replica BlueStore.
 

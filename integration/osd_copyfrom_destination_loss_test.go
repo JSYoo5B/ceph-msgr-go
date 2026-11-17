@@ -31,11 +31,11 @@ import (
 //     incomplete), so the final copy transaction is issued under the client's
 //     own op. A temporary-object write of a multi-chunk copy is a separate
 //     op context without the client's op.
-//   - src/osd/ReplicatedBackend.cc:1134-1160 (issue_op) marks that op
+//   - src/osd/ReplicatedBackend.cc:1134-1187 (issue_op) marks that op
 //     "waiting for subops from <replicas>" when it sends the repops, with the
 //     flag point "waiting for sub ops"; ReplicatedBackend.cc:641-664
 //     (op_commit) marks "op_commit" at the primary's own commit and
-//     ReplicatedBackend.cc:666-713 (do_repop_reply) "sub_op_commit_rec" at
+//     ReplicatedBackend.cc:666-721 (do_repop_reply) "sub_op_commit_rec" at
 //     each replica's commit. The client is answered only once every acting
 //     replica committed.
 //
