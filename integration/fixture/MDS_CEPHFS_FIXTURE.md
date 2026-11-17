@@ -3,9 +3,13 @@
 `CEPH_MSGR_TEST_MDS_CEPHFS=1` is a closed development-only extension of
 `CEPH_MSGR_TEST_MDS_FRESH=1`. It selects only
 `^TestCephMDSCephFS(Push|Recovery)?Integration$`, or, when that exact
-selector is given, only `^TestCephMDSCephFSSharedFlockRecoveryIntegration$`
-(the recovery recipe with two shared locks; see
-[shared held-lock restart](MDS_FILELOCK_SHARED_RESTART_VALIDATION.md)), and excludes both
+selector is given with its capability, only
+`^TestCephMDSCephFSSharedFlockRecoveryIntegration$` (the recovery recipe with
+two shared locks; see
+[shared held-lock restart](MDS_FILELOCK_SHARED_RESTART_VALIDATION.md)) or only
+`^TestCephMDSCephFSFcntlRangeRecoveryIntegration$` (the recovery recipe with
+FCNTL byte-range locks; see
+[FCNTL held-lock restart](MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md)), and excludes both
 `CEPH_MSGR_TEST_MDS_COMMANDS=1` and `CEPH_MSGR_TEST_MDS_SESSIONS=1`. Like
 those profiles it requires one OSD with `legacy-v6`: the owned metadata/data
 pools disable HASHPSPOOL (16/1 PGs, replication/min_size 1/1), so the public
@@ -51,6 +55,20 @@ the broad selector above does not match it. It uses only actions this fixture
 already admits (the closed `flock-sh-nb` and `flock-ex-nb` probes on
 `go-file`), so no action is added for it. Its results are written to
 `mds-cephfs-sharedflock-recovery-results.json`.
+
+`TestCephMDSCephFSFcntlRangeRecoveryIntegration` runs the same recipe with two
+FCNTL byte-range locks and one FLOCK lock, on a fresh fixture of its own (the
+two `mds-cephfs-fcntl-recovery` rows). Its rows declare the capability
+`mds-held-fcntl`, which alone admits the closed action `fcntl-probe` on
+`go-file`. The pinned Python binding has no record-lock call, so the native
+driver of that action opens a second native mount through `ctypes` on the
+image's `libcephfs.so.2` and runs a fixed set of seven nonblocking
+`ceph_getlk`/`ceph_setlk` requests (`mdsCephFSFcntlProbes` in
+`mds_cephfs.go`), releasing every range it acquires; the first mount reads
+the file state before and after them. Each probe is journaled as a native
+mutation before it runs and is never replayed after an uncertain outcome,
+as for the FLOCK probes. Its results are written to
+`mds-cephfs-fcntl-recovery-results.json`.
 
 Reference: Tentacle Ceph 20.2.4 commit
 `7f793731f1b39eb4f465e960113d2363c311b964`. Relied-upon behavior is read from
