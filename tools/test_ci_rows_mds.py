@@ -376,10 +376,6 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
                 self.assertNotIn(field, row)
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
-            for other in ("TestCephMDSCephFSDataIntegration", "TestCephMDSCephFSCapSendRecoveryIntegration",
-                          "TestCephMDSCephFSWritebackFenceIntegration", "TestCephMDSCephFSMixedWritebackRecoveryIntegration"):
-                if other != test:
-                    self.assertIsNone(selector.search(other))
             self.assertIsNone(selector.search(test + "Extended"))
             self.assertIsNone(selector.search("Prefix" + test))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (
