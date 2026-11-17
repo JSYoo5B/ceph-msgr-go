@@ -87,7 +87,8 @@ not retained. The failed run's diagnostics retain only the pre-restart part.
   after a restart carrying the caller-built blob; it does not show that the
   new MDS would have lost the lock without it.
 - One exclusive whole-file FLOCK of one owner, one client session. Waiting
-  locks, FCNTL byte ranges, shared locks, several owners or clients, interrupt
+  locks, FCNTL byte ranges (recorded in
+  [MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md](MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md)), shared locks, several owners or clients, interrupt
   races, interaction with dirty cap state, standby takeover and crash
   durability of lock state are not exercised. In-memory lock state is not a
   journal durability promise.

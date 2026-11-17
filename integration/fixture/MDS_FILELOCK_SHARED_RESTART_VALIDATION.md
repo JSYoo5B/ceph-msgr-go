@@ -183,7 +183,9 @@ Exact-head CI is separate from these runs.
   of shared and exclusive locks, owners of several clients, locks on several
   inodes, a lock in the final fragment or in several fragments of a split
   reconnect and interrupt races are not exercised. The pinned Python binding
-  offers `LibCephFS.flock` only, so the native probe cannot take FCNTL ranges.
+  offers `LibCephFS.flock` only; FCNTL ranges across the same restart, probed
+  through libcephfs record-lock calls, are recorded in
+  [MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md](MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md).
 - The restart is the fixture's single owned restart, so the restart without
   the second record is shown only by the temporary mutation runs above, not by
   a retained leaf.

@@ -125,10 +125,12 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
 
     def test_mds_cephfs_rows_select_only_the_declared_cephfs_tests(self):
         cephfs = [row for row in self.rows if row.get("mds_cephfs") == "1"]
-        self.assertEqual(len(cephfs), 4)
-        # The shared held-lock recovery rows reuse the metadata fixture opt-in
-        # with their own selector; they are checked separately below.
-        rows = [row for row in cephfs if row["test_run"] != "^TestCephMDSCephFSSharedFlockRecoveryIntegration$"]
+        self.assertEqual(len(cephfs), 6)
+        # The shared and FCNTL held-lock recovery rows reuse the metadata
+        # fixture opt-in with their own selectors; they are checked
+        # separately below.
+        dedicated = {"^TestCephMDSCephFSSharedFlockRecoveryIntegration$", "^TestCephMDSCephFSFcntlRangeRecoveryIntegration$"}
+        rows = [row for row in cephfs if row["test_run"] not in dedicated]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSCephFSIntegration", "TestCephMDSCephFSPushIntegration", "TestCephMDSCephFSRecoveryIntegration"}
         self.assertTrue(expected <= self.declared)
@@ -237,11 +239,17 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
         })
 
     def test_mds_sharedflock_recovery_rows_select_only_the_dedicated_acceptance(self):
-        test = "TestCephMDSCephFSSharedFlockRecoveryIntegration"
+        self.check_dedicated_metadata_rows("TestCephMDSCephFSSharedFlockRecoveryIntegration", "mds-cephfs-sharedflock-recovery", "exclusive-mds-cephfs")
+
+    def test_mds_fcntl_recovery_rows_select_only_the_dedicated_acceptance(self):
+        self.check_dedicated_metadata_rows("TestCephMDSCephFSFcntlRangeRecoveryIntegration", "mds-cephfs-fcntl-recovery", "mds-held-fcntl")
+
+    def check_dedicated_metadata_rows(self, test, group, capability):
         selector_text = "^" + test + "$"
         rows = [row for row in self.rows if row.get("test_run") == selector_text]
         self.assertEqual(len(rows), 2)
-        self.assertEqual({entry["group"] for entry in self.entries if entry["params"].get("test_run") == selector_text}, {"mds-cephfs-sharedflock-recovery"})
+        self.assertEqual({entry["group"] for entry in self.entries if entry["params"].get("test_run") == selector_text}, {group})
+        self.assertEqual({row.get("capabilities") for row in rows}, {capability})
         self.assertIn(test, self.declared)
         observed = set()
         for row in rows:
@@ -254,7 +262,7 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
                 self.assertNotIn(field, row)
             observed.add(tuple(row.get(field, fallback) for field, fallback in (("key", ""), ("service", ""), ("mode", "secure"), ("family", ""), ("runtime", "container"), ("osd_store", "memstore"))))
         self.assertEqual(observed, {("aes", "aes", "crc", "4", "host", "bluestore"), ("aes256k", "aes256k", "secure", "6", "container", "memstore")})
-        # The broad metadata selector does not reach the shared variant.
+        # The broad metadata selector does not reach the dedicated variant.
         self.assertIsNone(re.compile("^TestCephMDSCephFS(Push|Recovery)?Integration$").search(test))
 
     def test_mds_multi_reconnect_rows_select_only_the_dedicated_acceptance(self):

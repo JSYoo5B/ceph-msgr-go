@@ -288,6 +288,18 @@ it still fails after the first owner's unlock and succeeds after the second.
 GETFILELOCK names the first lock still held. Both Linux profiles passed. It
 adds no product source and no fixture action. FCNTL ranges, waiting locks,
 mixed lock types, several clients and crash durability remain unverified.
+The [FCNTL held-lock restart acceptance](../integration/fixture/MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md)
+runs the same recipe with an exclusive and a shared FCNTL byte range of two
+owners and one FLOCK lock of a third on one inode, so the blob carries records
+in both of its sections. A native second mount checks fixed byte ranges with
+`ceph_getlk` and nonblocking `ceph_setlk`: before the restart, after adoption
+and after each explicit unlock, each request is refused with the expected
+conflicting range, type and pid or is acquired, and the FLOCK lock affects
+only the FLOCK probe. Both Linux profiles passed, and dropping either section
+of the blob in a temporary control run made the matching native probe acquire.
+It adds one closed fixture probe and no product source. Waiting or
+interrupted FCNTL locks, merged or split ranges of one owner, several clients
+and FCNTL ranges in a split reconnect remain unverified.
 Wire inode Version can advance for capability max-size negotiation; user
 change_attr and timestamps are independently preserved in the live evidence.
 
