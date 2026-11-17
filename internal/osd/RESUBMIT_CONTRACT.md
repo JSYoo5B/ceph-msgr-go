@@ -43,6 +43,12 @@ split, resubmitted to the child PG by the caller's new placement, is answered
 from the child's log with the original user version and not executed again;
 likewise an APPEND lost in the child is answered from the parent's log after
 the PGs merge back. A primary that is SIGKILLed and restarted answers from
-the PG log it reloads from BlueStore. Reads need no duplicate detection.
+the PG log it reloads from BlueStore. A COPY_FROM or COPY_FROM2 whose reply
+was lost is answered from the log by a new primary after `osd out` of the
+old one, although a later write had replaced its source; a copy that the old
+primary dropped unanswered before its source read is absent from the new
+primary's log, so its resubmission executes it once
+([record](../../integration/fixture/OSD_COPY_FROM_PRIMARY_CHANGE_VALIDATION.md)).
+Reads need no duplicate detection.
 
 Verification: [OSD_RESUBMIT_VALIDATION.md](../../integration/fixture/OSD_RESUBMIT_VALIDATION.md).

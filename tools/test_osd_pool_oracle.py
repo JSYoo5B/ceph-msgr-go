@@ -760,6 +760,68 @@ class PoolOracleTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             oracle.main(["x", "create", "/root"])
 
+    def test_objecter_requests_targets_the_bracketed_primary(self):
+        placement = {"epoch": 31, "pgid": "4.0", "primary_id": 1, "osd_id": 1}
+        sent = []
+
+        class Rados:
+            lib = None
+
+            def dump(self, cluster):
+                return {}
+
+            def osd(self, cluster, osd, command, limit):
+                sent.append((osd, command, limit))
+                return 0, b'{"ops":[],"linger_ops":[],"pool_ops":[],"pool_stat_ops":[],"statfs_ops":[],"command_ops":[]}', "", None
+
+        saved = oracle.find_pool, oracle.mutation.collect_placement
+        oracle.find_pool = lambda dump, pool: {"pool": 4}
+        oracle.mutation.collect_placement = lambda *arguments, **keywords: dict(placement)
+        try:
+            receipt = oracle.mode_objecterrequests(Rados(), None, {"slot": 2, "object": "dst", "source": {"pool": 3, "name": "src"}}, None)["objecter_requests"]
+            former = oracle.mode_objecterrequests(Rados(), None, {"slot": 2, "object": "dst", "source": {"pool": 3, "name": "src"}, "osd": 2}, None)["objecter_requests"]
+            for bad in ({"slot": 2, "object": "dst", "source": {"pool": 3, "name": "src"}, "entity": {}},
+                        {"slot": 2, "object": "dst", "source": {"pool": 3, "name": "src"}, "osd": -1},
+                        {"slot": 2, "object": "dst", "source": {"pool": 3, "name": "src"}, "osd": True},
+                        {"slot": 2, "object": "dst", "source": {"pool": 3}}, {"slot": 2, "object": "dst"}):
+                with self.subTest(bad):
+                    with self.assertRaises(ValueError):
+                        oracle.mode_objecterrequests(Rados(), None, bad, None)
+        finally:
+            oracle.find_pool, oracle.mutation.collect_placement = saved
+        command = {"prefix": "objecter_requests", "format": "json"}
+        self.assertEqual(sent, [(1, command, oracle.objecter_requests.MAX_REQUESTS_BYTES), (2, command, oracle.objecter_requests.MAX_REQUESTS_BYTES)])
+        self.assertTrue(receipt["complete"], receipt["failures"])
+        self.assertEqual((receipt["osd"], receipt["pgid"], receipt["ops"]), (1, "4.0", []))
+        # An explicit former primary is asked instead; the brackets still name the current primary.
+        self.assertEqual((former["osd"], former["before"]["primary_id"]), (2, 1))
+
+    def test_ops_in_flight_can_ask_an_explicit_osd(self):
+        sent = []
+
+        class Rados:
+            lib = None
+
+            def dump(self, cluster):
+                return {}
+
+            def osd(self, cluster, osd, command, limit):
+                sent.append(osd)
+                return 0, b'{"ops":[],"num_ops":0}', "", None
+
+        saved = oracle.find_pool, oracle.mutation.collect_placement
+        oracle.find_pool = lambda dump, pool: {"pool": 4}
+        oracle.mutation.collect_placement = lambda *arguments, **keywords: {"epoch": 31, "pgid": "4.0", "primary_id": 1}
+        entity = {"type": "client", "num": 4171, "inc": 21}
+        try:
+            primary = oracle.mode_opsinflight(Rados(), None, {"slot": 2, "object": "dst", "entity": entity}, None)["ops_in_flight"]
+            former = oracle.mode_opsinflight(Rados(), None, {"slot": 2, "object": "dst", "entity": entity, "osd": 0}, None)["ops_in_flight"]
+            with self.assertRaises(ValueError):
+                oracle.mode_opsinflight(Rados(), None, {"slot": 2, "object": "dst", "entity": entity, "osd": "0"}, None)
+        finally:
+            oracle.find_pool, oracle.mutation.collect_placement = saved
+        self.assertEqual((sent, primary["osd"], former["osd"], primary["complete"], former["complete"]), ([1, 0], 1, 0, True, True))
+
     def test_integer_bounds(self):
         self.assertEqual(oracle.integer(3, 1, 3, "size"), 3)
         for bad in (0, 4, True, "3"):
