@@ -51,3 +51,7 @@ says how they differ from environment completeness.
   profile (OSD-26), which is the live evidence for the Go request.
   Cache flush, try-flush, evict, pin and unpin are implemented and accepted
   live on one profile (OSD-23).
+
+## Updates
+
+Dated notes of changes to this area's rows follow here, oldest first.

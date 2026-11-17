@@ -54,7 +54,7 @@ import (
 // is_blackhole, msg/async/ProtocolV2.cc handle_message and _conn_prefix,
 // messages/MOSDOp.h print, osd/PrimaryLogPG.cc do_op (EBLOCKLISTED),
 // mds/MDSRank.cc evict_client and mds/Server.cc kill_session.
-var capMDSWritebackFence = defineCapability("mds-writeback-fence",
+var capMDSWritebackFence = defineExclusiveCapability(fixtureMDSCephFSData, "mds-writeback-fence",
 	"run one test alone on the owned MDS CephFS data fixture with the OSD client-drop writeback controls",
 	"MDS_FRESH=1 MDS_CEPHFS_DATA=1", nil)
 
@@ -73,7 +73,7 @@ var capMDSWritebackMixed = defineCapability("mds-writeback-mixed",
 // capExclusiveMDSCephFSData admits one test alone on the owned data fixture
 // in place of its default suite (the cap-send recovery), with only the
 // actions the data fixture already admits.
-var capExclusiveMDSCephFSData = defineCapability("exclusive-mds-cephfs-data",
+var capExclusiveMDSCephFSData = defineExclusiveCapability(fixtureMDSCephFSData, "exclusive-mds-cephfs-data",
 	"run one test alone on the owned MDS CephFS data fixture",
 	"MDS_FRESH=1 MDS_CEPHFS_DATA=1", nil)
 

@@ -33,8 +33,8 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
         # The fixture admits the cell by the capability its rows declare.
         profile = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
         outcome = (ROOT / "integration" / "fixture" / "daemon_command_outcome.go").read_text(encoding="utf-8")
-        self.assertIn("admitted = p.admits(capMDSAppliedCommand)", profile)
-        self.assertIn('var capMDSAppliedCommand = defineCapability("mds-applied-command",', outcome)
+        self.assertIn("admitted = p.admitsExclusive(fixtureMDSCommands)", profile)
+        self.assertIn('var capMDSAppliedCommand = defineExclusiveCapability(fixtureMDSCommands, "mds-applied-command",', outcome)
 
     def test_mds_stop_control_is_admitted_only_for_the_public_command_acceptance(self):
         # The stopped-daemon step of the public MDS command test is the only
@@ -76,9 +76,8 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
     def test_mds_command_rows_select_only_the_declared_public_command_test(self):
         # The applied-command rows share this fixture with their own selector
         # and are pinned by their own test.
-        opted = [row for row in self.rows if row.get("mds_commands") == "1"]
-        rows = [row for row in opted if row.get("test_run") != APPLIED_MDS_COMMAND_SELECTOR]
-        self.assertEqual((len(opted), len(rows)), (4, 2))
+        rows = [row for row in self.rows if row.get("mds_commands") == "1" and "capabilities" not in row]
+        self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSCommandsIntegration"}
         self.assertTrue(expected <= self.declared)
         observed = set()
@@ -124,13 +123,10 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
         })
 
     def test_mds_cephfs_rows_select_only_the_declared_cephfs_tests(self):
-        cephfs = [row for row in self.rows if row.get("mds_cephfs") == "1"]
-        self.assertEqual(len(cephfs), 6)
-        # The shared and FCNTL held-lock recovery rows reuse the metadata
-        # fixture opt-in with their own selectors; they are checked
-        # separately below.
-        dedicated = {"^TestCephMDSCephFSSharedFlockRecoveryIntegration$", "^TestCephMDSCephFSFcntlRangeRecoveryIntegration$"}
-        rows = [row for row in cephfs if row["test_run"] not in dedicated]
+        # The rows that reuse the metadata fixture opt-in with their own
+        # selector declare the capability that admits it and are checked
+        # by their own tests.
+        rows = [row for row in self.rows if row.get("mds_cephfs") == "1" and "capabilities" not in row]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSCephFSIntegration", "TestCephMDSCephFSPushIntegration", "TestCephMDSCephFSRecoveryIntegration"}
         self.assertTrue(expected <= self.declared)
@@ -303,14 +299,10 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
         self.assertEqual(observed, {("aes", "aes", "crc", "4", "host", "bluestore"), ("aes256k", "aes256k", "secure", "6", "container", "memstore")})
 
     def test_mds_cephfs_data_rows_select_only_the_declared_data_test(self):
-        data = [row for row in self.rows if row.get("mds_cephfs_data") == "1"]
-        self.assertEqual(len(data), 8)
-        # The cap-send recovery, writeback-fence and mixed-extent writeback
-        # rows reuse the owned data fixture opt-in with their own selectors;
-        # they are checked separately below.
-        rows = [row for row in data if row["test_run"] not in (
-            "^TestCephMDSCephFSCapSendRecoveryIntegration$", "^TestCephMDSCephFSWritebackFenceIntegration$",
-            "^TestCephMDSCephFSMixedWritebackRecoveryIntegration$")]
+        # The rows that reuse the owned data fixture opt-in with their own
+        # selector declare the capability that admits it and are checked by
+        # their own tests.
+        rows = [row for row in self.rows if row.get("mds_cephfs_data") == "1" and "capabilities" not in row]
         self.assertEqual(len(rows), 2)
         expected = {"TestCephMDSCephFSDataIntegration"}
         self.assertTrue(expected <= self.declared)
@@ -384,10 +376,6 @@ class MDSRowsTest(ci_row_catalog.RowsTestCase):
                 self.assertNotIn(field, row)
             selector = re.compile(row["test_run"])
             self.assertEqual({name for name in self.declared if selector.search(name)}, expected)
-            for other in ("TestCephMDSCephFSDataIntegration", "TestCephMDSCephFSCapSendRecoveryIntegration",
-                          "TestCephMDSCephFSWritebackFenceIntegration", "TestCephMDSCephFSMixedWritebackRecoveryIntegration"):
-                if other != test:
-                    self.assertIsNone(selector.search(other))
             self.assertIsNone(selector.search(test + "Extended"))
             self.assertIsNone(selector.search("Prefix" + test))
             observed.add(tuple(row.get(field, fallback) for field, fallback in (

@@ -4,13 +4,18 @@
 The map is the directory integration/fixture/coverage: an index (README.md)
 whose "Area files" section links one file per area, <PREFIX>.md, in the
 order the rows compose, with each file's prefix and title (its SPEC.md path)
-in one table line. Every row is in the Rows section of the area file whose
-prefix its ID carries. The check refuses an entry of the directory that is
-neither the index nor a listed area file (a directory, a symbolic link or
-non-UTF-8 data included), a listed area file that is missing or disagrees
-with its table line, a row in the index or outside a Rows section, a row in
-the wrong area file and a row ID used in two places. Nothing counts or lists the rows, so a row added to one area edits
-that area file only.
+in one table line. The rows numbered <PREFIX>-<number> are in the Rows
+section of the area file whose prefix their ID carries. A row added since is
+a row file of its own, <PREFIX>/<PREFIX>-<name>.md, whose title is its ID
+and whose Rows section holds that one row; its name is chosen by its author
+from the row's subject, so two pull requests never need to agree on a
+number or edit one file. The check refuses an entry of the directory that is
+neither the index, a listed area file nor a row file of a listed area (a
+nested directory, a symbolic link or non-UTF-8 data included), a listed
+area file that is missing or disagrees with its table line, a row in the
+index or outside a Rows section, a row in the wrong area file, a row file
+whose name, title or one row disagree, and a row ID used in two places.
+Nothing counts or lists the rows, so a row added to one area adds one file.
 
 This validates references, not the truth of a native observation. Top-level
 Go test names are the tests Go lists in the product, fixture and quality
@@ -33,6 +38,7 @@ COVERAGE = Path("integration") / "fixture" / "coverage"  # relative to a reposit
 INDEX = "README.md"
 AREA_FILE = re.compile(r"([A-Z][A-Z0-9]*)\.md")
 ROW_ID = re.compile(r"([A-Z][A-Z0-9]*)-[1-9][0-9]*")
+ROW_NAME = re.compile(r"([A-Z][A-Z0-9]*)-[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 SPEC = Path("SPEC.md")
 
 CLASSES = ("released", "main-only", "primitive", "proposed", "absent")
@@ -117,20 +123,31 @@ def table_rows(text):
             yield cells
 
 
+def read_text(path):
+    """The UTF-8 text of a regular file, or None."""
+    if not path.is_symlink() and path.is_file():
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeError:
+            pass
+    return None
+
+
 def read_documents(root=ROOT):
     """Return {entry name: text} for every entry of the coverage directory.
 
-    An entry that is not a regular UTF-8 text file (a directory, a symbolic
-    link or binary data such as a desktop's folder metadata) maps to None, so
-    the check refuses it instead of failing to read it."""
+    The entries of a directory (the row files of an area) are named
+    <directory>/<entry>. An entry that is not a regular UTF-8 text file (a
+    nested directory, an empty directory, a symbolic link or binary data such
+    as a desktop's folder metadata) maps to None, so the check refuses it
+    instead of failing to read it."""
     documents = {}
     for path in sorted((Path(root) / COVERAGE).iterdir(), key=lambda p: p.name):
-        documents[path.name] = None
-        if not path.is_symlink() and path.is_file():
-            try:
-                documents[path.name] = path.read_text(encoding="utf-8")
-            except UnicodeError:
-                pass
+        if path.is_dir() and not path.is_symlink() and any(path.iterdir()):
+            for entry in sorted(path.iterdir(), key=lambda p: p.name):
+                documents[path.name + "/" + entry.name] = read_text(entry)
+        else:
+            documents[path.name] = read_text(path)
     return documents
 
 
@@ -177,11 +194,30 @@ def where(name):
     return (COVERAGE / name).as_posix()
 
 
+def row_file_problems(name, text):
+    """Problems of one row file <PREFIX>/<ID>.md, and its rows."""
+    key = name.split("/", 1)[1][:-3]
+    if title(text) != key:
+        return ["row file %s: first line is not the title # %s" % (where(name), key)], []
+    rows = section(text, "Rows")
+    if rows is None:
+        return ["row file %s: missing Rows section" % where(name)], []
+    problems = []
+    inside = list(table_rows(rows))
+    for cells in table_rows(text.replace(rows, "", 1)):
+        problems.append("row %s: outside the Rows section of %s" % (cells[0], where(name)))
+    if [cells[0] for cells in inside] != [key]:
+        problems.append("row file %s: its Rows section must hold the one row %s, not %s"
+                        % (where(name), key, ", ".join(cells[0] for cells in inside) or "none"))
+    return problems, inside
+
+
 def compose(documents):
     """Return (areas, problems) for a coverage directory's documents.
 
-    areas is a list of (file name, area title, rows) in the index's order;
-    rows are the cells of the file's coverage rows in file order."""
+    areas is a list of (file name, area title, rows) in the index's order,
+    each area file followed by its row files in name order; rows are the
+    cells of the file's coverage rows in file order."""
     index = documents.get(INDEX)
     if index is None:
         return [], ["missing index " + where(INDEX)]
@@ -191,11 +227,20 @@ def compose(documents):
     problems = []
     if not listed:
         problems.append(where(INDEX) + ": lists no area file")
+    row_files = {}
     for name in sorted(documents):
+        directory, _, entry = name.rpartition("/")
         if documents[name] is None:
             problems.append("not a regular UTF-8 text file " + where(name))
-        elif name != INDEX and name not in listed:
+        elif not directory:
+            if name != INDEX and name not in listed:
+                problems.append("unlisted file " + where(name))
+        elif directory + ".md" not in listed or not AREA_FILE.fullmatch(directory + ".md"):
             problems.append("unlisted file " + where(name))
+        elif not entry.endswith(".md") or not ROW_NAME.fullmatch(entry[:-3]) or ROW_NAME.fullmatch(entry[:-3]).group(1) != directory:
+            problems.append("row file %s: name is not %s/%s-<name>.md" % (where(name), directory, directory))
+        else:
+            row_files.setdefault(directory + ".md", []).append(name)
     for cells in table_rows(index):
         problems.append("row %s: in the index %s, not in an area file" % (cells[0], where(INDEX)))
     table = area_table(index)
@@ -228,6 +273,10 @@ def compose(documents):
         for cells in table_rows(text.replace(rows, "", 1) if rows else text):
             problems.append("row %s: outside the Rows section of %s" % (cells[0], where(name)))
         areas.append((name, label, inside))
+        for row_file in row_files.get(name, []):
+            found, rows = row_file_problems(row_file, documents[row_file])
+            problems.extend(found)
+            areas.append((row_file, label, rows))
     return areas, problems
 
 
@@ -304,7 +353,7 @@ def check(root=ROOT, documents=None, tests=None, catalog=None):
         for label, target in LINK.findall(text):
             if re.match(r"^[a-z]+:", target) or target.startswith("#"):
                 continue
-            path = (directory / target.split("#", 1)[0]).resolve()
+            path = ((directory / name).parent / target.split("#", 1)[0]).resolve()
             if not path.is_relative_to(root.resolve()) or not path.exists():
                 problems.append(where(name) + ": missing or non-repository file " + target)
             elif path.suffix == ".go" and re.fullmatch(r"Test\w*", label.strip("`")):
@@ -314,15 +363,16 @@ def check(root=ROOT, documents=None, tests=None, catalog=None):
     labels = set()
     seen = {}
     for name, label, rows in areas:
-        prefix = AREA_FILE.fullmatch(name).group(1)
+        row_file = "/" in name
+        prefix = name.split("/", 1)[0] if row_file else AREA_FILE.fullmatch(name).group(1)
         for cells in rows:
             if len(cells) != len(HEADER) or not all(cells):
                 problems.append("row %s: expected %d nonempty columns" % (cells[0], len(HEADER)))
                 continue
             key, klass = cells[0], cells[2].strip("`")
-            match = ROW_ID.fullmatch(key)
+            match = (ROW_NAME if row_file else ROW_ID).fullmatch(key)
             if match is None or match.group(1) != prefix:
-                problems.append("row %s: in %s, whose rows are %s-<number>" % (key, where(name), prefix))
+                problems.append("row %s: in %s, whose rows are %s-<%s>" % (key, where(name), prefix, "name" if row_file else "number"))
             if key in seen:
                 problems.append("duplicate row %s: in %s and %s" % (key, where(seen[key]), where(name)))
             else:

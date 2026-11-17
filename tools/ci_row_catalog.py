@@ -5,11 +5,12 @@ The matrix rows come from the scenario catalog through scenario_plan's loader
 includes basic CI and the reusable platform/native workflows. Workflow syntax
 is checked separately with the available workflow/YAML tooling.
 
-Each area module checks only its own rows. This module holds no test: unittest
-discovery collects test_*.py modules only, and the base class below defines no
-test method.
+Each area module checks only its own rows. No check counts the rows of an
+area or lists the rows a check skips: a new row adds its own checks (in its
+area module or a module of its own) and edits no count or list of another
+row's check. This module holds no test: unittest discovery collects test_*.py
+modules only, and the base class below defines no test method.
 """
-import importlib
 from pathlib import Path
 import re
 import unittest
@@ -29,18 +30,6 @@ def declared_tests(directory, root=ROOT):
     than once is refused by scenario_plan.selector_problems (validate) and by
     the result gate's snapshot, so these lookups need no count."""
     return set(scenario_plan.suite_tests(root)[directory])
-
-
-def dedicated_legacy_selectors():
-    """The exact selectors of the dedicated legacy-v6 rows of every area.
-
-    Each test_ci_rows_* module owns the dedicated legacy-v6 rows of its area
-    in DEDICATED_LEGACY_SELECTORS, so a new row edits only its area module.
-    """
-    selectors = set()
-    for path in sorted(Path(__file__).resolve().parent.glob("test_ci_rows_*.py")):
-        selectors.update(getattr(importlib.import_module(path.stem), "DEDICATED_LEGACY_SELECTORS", ()))
-    return selectors
 
 
 class RowsTestCase(unittest.TestCase):

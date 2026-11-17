@@ -56,6 +56,40 @@ quality matrix jobs retain their expanded check names and report that work was
 not executed by policy. A policy skip is not test/scan success evidence. Weekly
 vulnerability scans still execute. Branch protection settings are not modified.
 
+## Adding a native test
+
+A pull request that adds a native test edits only the files below. It edits
+no list, count or file of another area:
+
+- `integration/<name>_test.go`: the native test `TestCeph<Name>Integration`
+  with its `//fixture:shareable` or `//fixture:isolated` line (see
+  [Fixture sharing](#fixture-sharing)) and any cluster-free helper test.
+  Neither is registered anywhere; the tools list them with `go test -list`.
+- `.github/scenarios/catalog.d/<group>.json`: the row, after the last row of
+  its group's fragment, or a new fragment for a new group. A row with a
+  `test_run` has an identifier that ends in `.t-<name>`.
+- `integration/fixture/<name>.go`: the capability of a test-specific fixture
+  mode, `defineCapability` beside the mode (see
+  [Fixture capabilities](#fixture-capabilities)). The row declares it in
+  `capabilities`. On a fixture with its own default selection the row also
+  declares the one capability that admits its test there: an existing one
+  (`osd-erasure-width` on the four-OSD topology), or a new
+  `defineExclusiveCapability` when the new mode is the admission itself.
+- `integration/fixture/coverage/<AREA>/<AREA>-<name>.md`: the row of the
+  [coverage map](../../integration/fixture/coverage/README.md#area-files)
+  in a row file of its own, named after the row's subject, with its dated
+  note. The area file `<AREA>.md` is not edited, and no number is taken.
+- `tools/test_ci_rows_<group>_<name>.py`: the row's own checks, when it needs
+  more than `validate`, as a module of its own on
+  `ci_row_catalog.RowsTestCase`.
+
+A row's description belongs in its fixture record and its coverage row, not
+in this document. `tools/test_merge_proof.py` makes two such pull requests in
+a temporary Git repository, once in two areas and once in one area, merges
+them and runs the validators on the merged tree. The two areas merge without
+a conflict. In one area, only the group's catalog fragment may conflict, and
+keeping both sides' rows resolves it.
+
 ## Catalog and planner
 
 The catalog is the directory [`catalog.d`](catalog.d/). `_catalog.json` holds the
@@ -104,6 +138,19 @@ same refusal the fixture gives before it starts a cluster. `validate`
 therefore needs the fixture module's Go toolchain (1.26 or later). A new
 control adds its `defineCapability` call beside its own code and the
 declaration to its own row; it edits no shared selector list.
+
+A fixture with its own default selection (the MDS command, CephFS metadata,
+completion and data fixtures, the RBD fixture, the cache-pool fixture and the
+four-OSD erasure-capacity topology) runs one further exact test only when a
+capability defined for it with `defineExclusiveCapability` admits that test.
+`loadProfile` asks whether any declared capability of that fixture admits the
+run, so a new one is defined beside its mode without editing `loadProfile`.
+At most one such capability of a fixture may be declared for a run, so these
+capabilities never exclude each other by name. A further mode on such a
+fixture that only extends the test the exclusive capability admits (the
+shard-history capture beside `osd-erasure-width`, or
+`mds-held-flock-split-fragments` beside `mds-held-flock-split`) is an ordinary
+`defineCapability` declared together with it.
 
 A documented reproduction runs a row (scenario identifier `ID`) with the
 environment the catalog gives it, so the declaration and the topology cannot

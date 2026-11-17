@@ -21,6 +21,15 @@ def synthetic_row(prefix):
             "| not in catalog |" % prefix)
 
 
+def row_file(key, row=None, note="Updated on 2026-11-17 for issue #177. New row."):
+    """The text of the row file of key, as an author writes it."""
+    prefix = key.split("-", 1)[0]
+    row = row or synthetic_row(prefix).replace("| %s-900 |" % prefix, "| %s |" % key, 1)
+    return ("# %s\n\nThis file holds one `%s` row of the [native path coverage map](../README.md).\n\n"
+            "## Rows\n\n| %s |\n%s|\n%s\n\n## Updates\n\n%s\n"
+            % (key, prefix, " | ".join(coverage.HEADER), "| --- " * len(coverage.HEADER), row, note))
+
+
 def add_row(text, row):
     """Append row to the end of the file's coverage table."""
     lines = text.splitlines()
@@ -102,7 +111,11 @@ class NativePathCoverageTests(unittest.TestCase):
     def test_index_lists_every_area_file_in_order(self):
         names = coverage.area_files(self.documents[coverage.INDEX])
         self.assertEqual(names, ["MSG.md", "MM.md", "OSD.md", "MDS.md", "RBD.md", "D2D.md", "SVC.md"])
-        self.assertEqual(sorted(names + [coverage.INDEX]), sorted(self.documents))
+        # The other entries are row files of these areas.
+        self.assertEqual(sorted(names + [coverage.INDEX]), sorted(name for name in self.documents if "/" not in name))
+        for name in self.documents:
+            if "/" in name:
+                self.assertIn(name.split("/", 1)[0] + ".md", names)
 
     def test_every_spec_path_has_an_area_file_with_rows(self):
         areas = {label for _, label, rows in coverage.compose(self.documents)[0] if rows}
@@ -304,6 +317,72 @@ class NativePathCoverageTests(unittest.TestCase):
         self.assertProblem(self.check(self.edit(name, row, "| " + " | ".join(cells) + " |")),
                            "row MSG-1: released row needs local evidence")
 
+    def test_a_row_file_adds_one_row_to_its_area(self):
+        """A new row is a file of its own under its area's directory."""
+        counts = coverage.class_counts(self.documents)
+        for name in coverage.area_files(self.documents[coverage.INDEX]):
+            prefix = name[:-3]
+            with self.subTest(area=prefix):
+                key = prefix + "-synthetic-path"
+                documents = self.with_text(prefix + "/" + key + ".md", row_file(key))
+                self.assertEqual(self.check(documents), [])
+                self.assertEqual(coverage.class_counts(documents)["proposed"], counts["proposed"] + 1)
+                areas = coverage.compose(documents)[0]
+                self.assertIn((prefix + "/" + key + ".md", areas[[n for n, _, _ in areas].index(name)][1],
+                               [coverage.split_row(synthetic_row(prefix).replace(prefix + "-900", key))]), areas)
+
+    def test_a_row_file_is_refused_unless_name_title_and_row_agree(self):
+        good = row_file("RBD-synthetic-path")
+        for name, problem in (
+                ("RBD/RBD-11.md", "row file %s: name is not RBD/RBD-<name>.md"),
+                ("RBD/OSD-synthetic-path.md", "row file %s: name is not RBD/RBD-<name>.md"),
+                ("RBD/RBD-Synthetic.md", "row file %s: name is not RBD/RBD-<name>.md"),
+                ("RBD/RBD-synthetic--path.md", "row file %s: name is not RBD/RBD-<name>.md"),
+                ("RBD/RBD-synthetic-path.txt", "row file %s: name is not RBD/RBD-<name>.md"),
+                ("NOTES/NOTES-synthetic-path.md", "unlisted file %s"),
+                ("rbd/rbd-synthetic-path.md", "unlisted file %s")):
+            with self.subTest(name=name):
+                self.assertProblem(self.check(self.with_text(name, good)), problem % where(name))
+        name = "RBD/RBD-synthetic-path.md"
+        self.assertEqual(self.check(self.with_text(name, good.replace("# RBD-synthetic-path\n", "# RBD underlying I/O\n"))),
+                         ["row file %s: first line is not the title # RBD-synthetic-path" % where(name)])
+        self.assertEqual(self.check(self.with_text(name, good.replace("## Rows\n", "## Table\n"))),
+                         ["row file %s: missing Rows section" % where(name)])
+        other = good.replace("| RBD-synthetic-path |", "| RBD-other-path |")
+        self.assertEqual(self.check(self.with_text(name, other)),
+                         ["row file %s: its Rows section must hold the one row RBD-synthetic-path, not RBD-other-path" % where(name)])
+        row = synthetic_row("RBD").replace("RBD-900", "RBD-synthetic-path")
+        self.assertEqual(self.check(self.with_text(name, good.replace(row, row + "\n" + row.replace("synthetic-path", "second-path")))),
+                         ["row file %s: its Rows section must hold the one row RBD-synthetic-path, not RBD-synthetic-path, RBD-second-path"
+                          % where(name)])
+        self.assertProblem(self.check(self.with_text(name, good.replace(row, "| " + " | ".join(coverage.HEADER) + " |"))),
+                           "row file %s: its Rows section must hold the one row RBD-synthetic-path, not none" % where(name))
+        moved = good.replace("\n## Updates\n", "\n## Updates\n\n| " + " | ".join(coverage.HEADER) + " |\n"
+                             + "| --- " * len(coverage.HEADER) + "|\n" + row.replace("synthetic-path", "second-path") + "\n")
+        self.assertEqual(self.check(self.with_text(name, moved)),
+                         ["row RBD-second-path: outside the Rows section of " + where(name)])
+        self.assertEqual(self.check(self.with_text("RBD/drafts", None)), ["not a regular UTF-8 text file " + where("RBD/drafts")])
+        # A numbered row stays in the area table: a number in a row file, or
+        # a name in an area table, is refused.
+        _, line = self.row("RBD-1")
+        documents = self.edit("RBD.md", line, line.replace("| RBD-1 |", "| RBD-first |", 1))
+        self.assertProblem(self.check(documents), "row RBD-first: in %s, whose rows are RBD-<number>" % where("RBD.md"))
+
+    def test_row_file_links_are_relative_to_the_row_file(self):
+        name = "RBD/RBD-synthetic-path.md"
+        right = row_file("RBD-synthetic-path", note="See [the base record](../../RBD_BASE_FIXTURE.md).")
+        self.assertEqual(self.check(self.with_text(name, right)), [])
+        wrong = right.replace("(../../RBD_BASE_FIXTURE.md)", "(../RBD_BASE_FIXTURE.md)")
+        self.assertEqual(self.check(self.with_text(name, wrong)),
+                         [where(name) + ": missing or non-repository file ../RBD_BASE_FIXTURE.md"])
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / coverage.COVERAGE
+            (root / "RBD" / "nested").mkdir(parents=True)
+            (root / "empty").mkdir()
+            (root / "RBD" / "RBD-a.md").write_text("# RBD-a\n", encoding="utf-8")
+            self.assertEqual(coverage.read_documents(Path(directory)),
+                             {"RBD/RBD-a.md": "# RBD-a\n", "RBD/nested": None, "empty": None})
+
     def test_a_row_added_to_one_area_edits_that_area_file_only(self):
         """No count, index line or list elsewhere has to change with a row."""
         for name in coverage.area_files(self.documents[coverage.INDEX]):
@@ -358,6 +437,36 @@ class MergeTests(unittest.TestCase):
             keys = [cells[0] for _, _, rows in coverage.compose(merged)[0] for cells in rows]
             self.assertIn("OSD-901", keys)
             self.assertIn("MDS-902", keys)
+
+    def test_row_files_of_one_area_merge_without_a_conflict(self):
+        """Two authors from one base each add a row to one area: each names
+        its own row, so neither file nor number is shared."""
+        with tempfile.TemporaryDirectory() as directory:
+            self.root = Path(directory)
+            (self.root / coverage.COVERAGE).mkdir(parents=True)
+            for name, text in self.documents.items():
+                (self.root / coverage.COVERAGE / name).parent.mkdir(parents=True, exist_ok=True)
+                self.write(name, text)
+            self.run_git("init", "-q")
+            self.run_git("add", "-A")
+            self.run_git("commit", "-q", "-m", "base")
+            self.run_git("branch", "base")
+            added = {}
+            for branch, key in (("a", "RBD-first-path"), ("b", "RBD-second-path")):
+                self.run_git("checkout", "-q", "-b", branch, "base")
+                (self.root / coverage.COVERAGE / "RBD").mkdir(exist_ok=True)
+                self.write("RBD/%s.md" % key, row_file(key))
+                self.run_git("add", "-A")
+                self.run_git("commit", "-q", "-m", branch)
+                added[branch] = self.run_git("diff", "--name-only", "base", branch).split()
+            self.assertEqual(added, {"a": [where("RBD/RBD-first-path.md")], "b": [where("RBD/RBD-second-path.md")]})
+            self.run_git("checkout", "-q", "a")
+            self.run_git("merge", "-q", "--no-edit", "b")
+            merged = coverage.read_documents(self.root)
+            self.assertEqual(coverage.check(documents=merged, tests=self.tests), [])
+            keys = [cells[0] for _, _, rows in coverage.compose(merged)[0] for cells in rows]
+            self.assertEqual([key for key in keys if key.startswith("RBD-") and not key[4:].isdigit()],
+                             ["RBD-first-path", "RBD-second-path"])
 
 
 class SplitTests(unittest.TestCase):

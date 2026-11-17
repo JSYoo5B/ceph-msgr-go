@@ -20,25 +20,33 @@ class OSDErasureRowsTest(ci_row_catalog.RowsTestCase):
         rows = [row for row in self.rows if row.get("osd_replicas") == "4"]
         base = {"key": "aes256k", "service": "aes256k", "family": "4", "stress": "", "runtime": "container",
                 "osd": "1", "osd_store": "bluestore", "osd_replicas": "4", "osd_profile": "replicated-pg-v8"}
-        # Every row selects one exact test. The default k=2,m=2 baseline needs
-        # no capability; every other row declares osd-erasure-width, and the
-        # shard-history controls also the capture and its interval mode.
+        # Every row is the four-OSD BlueStore profile and selects one exact
+        # test. The default k=2,m=2 baseline is the only row without a
+        # capability. Which capability admits another test is the fixture's
+        # decision (exactly one exclusive capability of the topology, which
+        # validate checks for every row), not this module's: a new row may
+        # declare osd-erasure-width or an exclusive capability of its own.
+        # No list of the rows is kept, so a new row edits none.
+        default = "^TestCephOSDErasureK2M2Integration$"
+        self.assertEqual([row for row in rows if "capabilities" not in row], [dict(base, test_run=default)])
+        for row in rows:
+            self.assertEqual({key: value for key, value in row.items() if key not in ("test_run", "capabilities")}, base)
+            self.assertRegex(row["test_run"], r"^\^TestCephOSDErasure[A-Za-z0-9]+Integration\$$")
+        # The rows that existed when the list was removed keep the
+        # capabilities of their modes. The mapping is frozen: a later row
+        # checks its own capabilities in a module of its own.
         width, capture, interval = "osd-erasure-width", "osd-erasure-width,osd-shard-history", "osd-erasure-width,osd-pg-interval,osd-shard-history"
-        cells = [("K2M2", None), ("OptimizedK2M2", width), ("OptimizedK2M2Failover", width),
-                 ("OptimizedK2M2InFlightMutation", width), ("OptimizedK2M2SnapshotAndDegradedWrite", width),
-                 ("OptimizedK2M2AppliedResubmit", width), ("OptimizedK2M2PrimaryHistoryCalibration", width),
-                 ("OptimizedK2M2CopyFromHistory", capture), ("OptimizedK2M2PartialWriteShardHistory", capture),
-                 ("OptimizedK2M2PartialWriteLaterWriteShardHistory", interval), ("OptimizedK2M2PartialWriteNewIntervalShardHistory", interval),
-                 ("OptimizedK2M2PartialWriteShardReturnShardHistory", interval), ("OptimizedK2M2PartialWriteDegradedWriteShardHistory", interval),
-                 ("OptimizedK2M2PartialWritePrimaryReplacementShardHistory", interval), ("OptimizedK2M2RequestHeldAtDyingPrimary", width),
-                 ("OptimizedK2M2WatchFailover", width), ("OptimizedK2M2SnapshotFailover", width), ("OptimizedK2M2PGBackoff", width)]
-        expected_rows = []
-        for cell, capabilities in cells:
-            row = dict(base, test_run="^TestCephOSDErasure%sIntegration$" % cell)
-            if capabilities:
-                row["capabilities"] = capabilities
-            expected_rows.append(row)
-        self.assertEqual(rows, expected_rows)
+        frozen = [("OptimizedK2M2", width), ("OptimizedK2M2Failover", width),
+                  ("OptimizedK2M2InFlightMutation", width), ("OptimizedK2M2SnapshotAndDegradedWrite", width),
+                  ("OptimizedK2M2AppliedResubmit", width), ("OptimizedK2M2PrimaryHistoryCalibration", width),
+                  ("OptimizedK2M2CopyFromHistory", capture), ("OptimizedK2M2PartialWriteShardHistory", capture),
+                  ("OptimizedK2M2PartialWriteLaterWriteShardHistory", interval), ("OptimizedK2M2PartialWriteNewIntervalShardHistory", interval),
+                  ("OptimizedK2M2PartialWriteShardReturnShardHistory", interval), ("OptimizedK2M2PartialWriteDegradedWriteShardHistory", interval),
+                  ("OptimizedK2M2PartialWritePrimaryReplacementShardHistory", interval), ("OptimizedK2M2RequestHeldAtDyingPrimary", width),
+                  ("OptimizedK2M2WatchFailover", width), ("OptimizedK2M2SnapshotFailover", width), ("OptimizedK2M2PGBackoff", width)]
+        for cell, capabilities in frozen:
+            selector = "^TestCephOSDErasure%sIntegration$" % cell
+            self.assertEqual([row.get("capabilities") for row in rows if row["test_run"] == selector], [capabilities], selector)
         fixture = (ROOT / "integration" / "fixture" / "profile.go").read_text(encoding="utf-8")
         self.assertIn('selected = "^TestCephOSDErasureK2M2Integration$"', fixture)
         for row in rows:
