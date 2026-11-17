@@ -56,6 +56,7 @@ class FixtureSharingSourceTests(unittest.TestCase):
                                "cephmsgr/b_test.go": "package cephmsgr_test\n"}.items():
                 (root / path).parent.mkdir(parents=True, exist_ok=True)
                 (root / path).write_text(text)
+            (root / "integration/fixture/sequence.go").write_text('const sequenceEnv = "CEPH_MSGR_TEST_SEQUENCE"\n')
             run("add", ".")
             run("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "x")
             sha = run("rev-parse", "HEAD").stdout.decode().strip()
@@ -66,6 +67,11 @@ class FixtureSharingSourceTests(unittest.TestCase):
             self.assertEqual(sorted(sharing.tree_sources(root)), ["cephmsgr/b_test.go", "integration/a_test.go"])
             with self.assertRaises(scenario_catalog.CatalogError):
                 sharing.revision_sources("HEAD", root)
+            # A revision whose fixture cannot run a sequence gets no sources.
+            run("rm", "-q", "integration/fixture/sequence.go")
+            run("-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-qm", "older fixture")
+            older = run("rev-parse", "HEAD").stdout.decode().strip()
+            self.assertIsNone(sharing.revision_sources(older, root))
 
 
 if __name__ == "__main__":

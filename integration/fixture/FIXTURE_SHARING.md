@@ -148,8 +148,12 @@ test its selector matches in `integration` and `cephmsgr` has a
 `//fixture:shareable` declaration directly above its function, and
 `validate` requires that reading to agree with
 `TestCatalogRowsDeclareFixtureSharing` for every row with an explicit
-`test_run`. Without the sources of another revision's catalog, `plan` groups
-nothing.
+`test_run`. Without the sources of another revision's catalog, or for a
+revision whose fixture has no sequence runner (`sequence.go` reading
+`CEPH_MSGR_TEST_SEQUENCE`), `plan` groups nothing: an older fixture would run
+the union selector in one process without the checks between tests.
+`validate` also passes every sequence job it plans of the default coverage
+through the fixture's `loadProfile`, as the workflow forwards it.
 
 A sequence job has the configuration's parameters, the rows' selectors in
 `test_sequence` (forwarded as `CEPH_MSGR_TEST_SEQUENCE`), their union in
@@ -181,7 +185,13 @@ before the next test and after the last one:
   before it. The native result gate (`tools/native_test_results.py`)
   records it as a problem of that test, and every later test as missing.
 
-Every selected test still needs its own `PASS` line in the gate.
+Every selected test still needs its own `PASS` line in the gate, and the
+gate's snapshot of a sequence job (`snapshot --sequence`) also requires a
+`passed` check line after every test. A sequence keeps every capability mode
+each member gets alone: it declares a capability only when every member is
+one exact test, and the fixture refuses a sequence whose admissions or test
+environment differ from any member's alone. A sequence job has a 120-minute
+bound instead of 45.
 `fixture-sequence.json`, kept with the diagnostics, records each test's
 suite, selector, start and end time, result and the check report after it,
 so a daemon log line can be placed in the test whose window holds it.

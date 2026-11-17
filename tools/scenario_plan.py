@@ -591,7 +591,11 @@ def matrix(entries, declared=None):
 def plan_sources(args):
     """The declarations plan and env group by, or None (no grouping)."""
     if getattr(args, "sources_revision", None):
-        return sharing_sources.declarations(sharing_sources.revision_sources(args.sources_revision, Path.cwd()))
+        try:
+            sources = sharing_sources.revision_sources(args.sources_revision, Path.cwd())
+        except scenario_catalog.CatalogError as error:
+            raise PlanError("test sources of %s: %s" % (args.sources_revision, error)) from None
+        return None if sources is None else sharing_sources.declarations(sources)
     if Path(args.catalog).resolve() == CATALOG.resolve():
         return sharing_sources.declarations(sharing_sources.tree_sources(ROOT))
     return None

@@ -72,10 +72,28 @@ def tree_sources(root):
             for directory in SUITE_DIRECTORIES for path in sorted((root / directory).glob("*_test.go"))}
 
 
+# A revision whose fixture runs sequences (integration/fixture/sequence.go
+# reads this variable). An older fixture would run a sequence job's union
+# selector in one process without the start-state checks, so the planner
+# groups nothing for it.
+SEQUENCE_RUNNER = (Path("integration") / "fixture", "sequence.go", b"CEPH_MSGR_TEST_SEQUENCE")
+
+
+def runs_sequences(revision, git_dir):
+    directory, name, mark = SEQUENCE_RUNNER
+    for mode, kind, oid, entry in scenario_catalog._tree(git_dir, revision, directory):
+        if entry == name and kind == "blob":
+            return mark in scenario_catalog._git(git_dir, "cat-file", "blob", oid)
+    return False
+
+
 def revision_sources(revision, git_dir):
-    """The suite packages' test files of a Git revision, from its blobs."""
+    """The suite packages' test files of a Git revision, from its blobs, or
+    None when that revision's fixture does not run sequences."""
     if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", revision):
         raise scenario_catalog.CatalogError("revision must be a full commit SHA")
+    if not runs_sequences(revision, git_dir):
+        return None
     sources = {}
     for directory in SUITE_DIRECTORIES:
         for mode, kind, oid, name in scenario_catalog._tree(git_dir, revision, Path(directory)):
