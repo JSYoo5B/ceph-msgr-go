@@ -11,6 +11,12 @@ that selects a name Go lists more than once in one suite package (the internal
 and the external test package both declare it) is refused by `snapshot`, before
 any run: `-run` runs both under that name and a result line cannot tell which
 one it reports.
+
+A fixture sequence (several rows' tests on one fixture, run one test at a
+time) reports the start-state check after each test on a line
+"Fixture start state after <suite>/<Test>: FAILED: ..." when it fails; that
+test then fails the gate with the check's conditions, and the tests the
+sequence did not reach are missing.
 """
 import argparse
 import json
@@ -50,6 +56,9 @@ def verify(request, text):
             if key in observed:
                 problems.append("duplicate result: %s/%s" % key)
             observed[key] = match[1]
+        check = re.fullmatch(r"Fixture start state after (api|client)/(Test\w*): FAILED: ([^\r\n]*)", line)
+        if check:
+            problems.append("%s/%s: the fixture start-state check after it failed: %s" % (check[1], check[2], check[3]))
     for key in map(tuple, request["expected"]):
         if observed.get(key) != "PASS":
             problems.append("%s/%s: %s" % (*key, observed.get(key, "MISSING")))
