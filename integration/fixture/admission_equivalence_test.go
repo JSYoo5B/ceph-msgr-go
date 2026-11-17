@@ -19,6 +19,13 @@ import (
 // admission predicates), and requires the capability admission to admit the
 // same modes. The copy compares a run argument with the old named selectors;
 // it is test-only and is not used by the fixture.
+//
+// The proof is historical. It covers the catalog rows of the migration
+// (legacyHistoricalRows), their topologies and their selectors and
+// declarations, the only cases the old admission decided. A row, selector,
+// capability or mode added after the migration has no old admission: it is
+// not taught to this copy, and its own tests prove where it is admitted and
+// refused. The copy stays as of e2d4b01.
 
 const (
 	legacyCopyFromLateErrorSelector                = "^TestCephOSDCopyFromLateErrorIntegration$"
@@ -26,7 +33,6 @@ const (
 	legacyDaemonCommandMDSSelector                 = "^TestCephAppliedMDSCommandIsNotReplayedIntegration$"
 	legacyMonForcedKillSelector                    = "^TestCephMonMapVersion(ConnectedKill|UnprocessedKill)Integration$"
 	legacyMdsCephFSSharedFlockSelector             = "^TestCephMDSCephFSSharedFlockRecoveryIntegration$"
-	legacyMdsCephFSHeldFcntlSelector               = "^TestCephMDSCephFSFcntlRangeRecoveryIntegration$"
 	legacyMdsCephFSHeldFlockSplitSelector          = "^TestCephMDSCephFSHeldFlockSplitReconnectIntegration$"
 	legacyMdsCephFSHeldFlockSplitFragmentsSelector = "^TestCephMDSCephFSHeldFlockSplitFragmentsIntegration$"
 	legacyMdsCephFSWritebackSelector               = "^TestCephMDSCephFSWritebackFenceIntegration$"
@@ -389,9 +395,7 @@ func legacyLoadProfile(getenv func(string) string) (profile, error) {
 			selected = "^TestCephMDSCephFS(Push|Recovery)?Integration$"
 			// The shared held-lock variant of the recovery acceptance owns a
 			// fresh metadata fixture and is admitted only when explicitly selected.
-			// The FCNTL variant was added after the migration with its
-			// capability mds-held-fcntl; this model admits it the same way.
-			if run == legacyMdsCephFSSharedFlockSelector || run == legacyMdsCephFSHeldFcntlSelector {
+			if run == legacyMdsCephFSSharedFlockSelector {
 				selected = run
 			}
 		}
@@ -554,7 +558,6 @@ type admissionModes struct {
 	Kill, Daemon, PoolModes, Journal, Lock, Markers string
 	CopyLate, CopyMulti, Mirror, Shard, Interval    bool
 	HeldFlock, Writeback, ColdBootstrap, Probe      string
-	HeldFcntl                                       string
 	Auth, Service, Cleanup                          time.Duration
 	BlockSize                                       int64
 	RBDReplicas, Manifest, Environment              string
@@ -615,7 +618,6 @@ func capabilityModes(p profile, err error) admissionModes {
 	m.CopyLate, m.CopyMulti, m.Mirror = p.copyFromLateErrorSelected(), p.copyFromMultiChunkSelected(), p.rbdMirrorSelected()
 	m.Shard, m.Interval = p.shardHistorySelected(), p.pgIntervalSelected()
 	m.Writeback = flags(p.admits(capMDSWritebackFence))
-	m.HeldFcntl = flags(admitMDSCephFSHeldFcntl("fcntl-probe", p) == nil)
 	m.ColdBootstrap = flags(p.mgrServiceColdBootstrap())
 	m.Probe = flags(validateIgnoreCacheProbeProfile(p) == nil)
 	m.Auth, m.Service = fixtureTicketTTLs(p)
@@ -667,7 +669,6 @@ func legacyModes(p profile, err error) admissionModes {
 	}
 	m.Markers = strings.Join([]string{marker(m.CopyLate), marker(m.CopyMulti), marker(m.Mirror), marker(legacyMonForcedKill(p)), marker(m.Shard)}, ",")
 	m.Writeback = flags(run == legacyMdsCephFSWritebackSelector)
-	m.HeldFcntl = flags(run == legacyMdsCephFSHeldFcntlSelector && p.mdsFresh == "1" && p.mdsCephFS == "1")
 	m.ColdBootstrap = flags(legacyMgrColdBootstrap(p))
 	m.Probe = flags(legacyValidateIgnoreCacheProbeProfile(p, run) == nil)
 	m.Auth, m.Service = legacyFixtureTicketTTLs(p)
@@ -712,16 +713,38 @@ func loadBoth(env map[string]string) (current, legacy admissionModes) {
 	return current, legacy
 }
 
-// For every catalog row the capability admission admits exactly the modes the
-// selector-keyed admission admitted, the split rows each the modes of the row
-// they come from. Over every row topology combined with every row's selector
-// and declaration it never admits a profile or mode the old admission did not:
-// a selector without a declaration behaves exactly as before, and a declared
-// capability is admitted only where the old admission admitted its test, or
-// refused.
+// historicalCatalogRows are the current catalog's rows of the migration, in
+// catalog order. A migration row that is gone or renamed fails the test: the
+// proof would otherwise shrink without notice.
+func historicalCatalogRows(t *testing.T) []ciScenario {
+	t.Helper()
+	historical := map[string]bool{}
+	for _, id := range legacyHistoricalRows {
+		historical[id] = true
+	}
+	var rows []ciScenario
+	for _, row := range ciRepositoryCatalog(t) {
+		if historical[row.ID] {
+			rows = append(rows, row)
+			delete(historical, row.ID)
+		}
+	}
+	if len(historical) != 0 || len(rows) != len(legacyHistoricalRows) {
+		t.Fatalf("%d migration rows in the catalog, missing %v", len(rows), slices.Sorted(maps.Keys(historical)))
+	}
+	return rows
+}
+
+// For every catalog row of the migration the capability admission admits
+// exactly the modes the selector-keyed admission admitted, the split rows each
+// the modes of the row they come from. Over every such row topology combined
+// with every such row's selector and declaration it never admits a profile or
+// mode the old admission did not: a selector without a declaration behaves
+// exactly as before, and a declared capability is admitted only where the old
+// admission admitted its test, or refused.
 func TestCapabilityAdmissionMatchesTheLegacySelectorAdmission(t *testing.T) {
 	bindings := ciWorkflowBindings(t)
-	rows := ciRepositoryCatalog(t)
+	rows := historicalCatalogRows(t)
 	declarations := map[string]string{"": ""}
 	for _, row := range rows {
 		declarations[row.Params["test_run"]] = row.Params["capabilities"]
