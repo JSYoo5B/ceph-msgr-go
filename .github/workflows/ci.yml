@@ -96,7 +96,7 @@ jobs:
       - name: Verify compiled fuzz inventory without fuzzing
         run: python3 tools/fuzz_targets.py verify
       - name: Validate workflow syntax
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7 -shellcheck= -pyflakes=
+        run: python3 tools/workflow_lint.py
       - name: Preserve basic test evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
