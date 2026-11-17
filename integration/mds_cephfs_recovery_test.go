@@ -40,6 +40,9 @@ import (
 // held lock set is its parameter (heldFlockRecipe), and
 // TestCephMDSCephFSSharedFlockRecoveryIntegration runs it with two shared
 // locks of two owners; see MDS_FILELOCK_SHARED_RESTART_VALIDATION.md.
+// TestCephMDSCephFSFcntlRangeRecoveryIntegration runs it with two FCNTL
+// byte-range locks and one FLOCK lock; see
+// MDS_FILELOCK_FCNTL_RESTART_VALIDATION.md.
 
 type nativeMDSCephFSRecoveryPlan struct {
 	Directory        string   `json:"directory"`
@@ -994,6 +997,31 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 	var heldNativeBaseline *nativeMDSCephFSFlockState
 	var heldDirIno uint64
 	facts["held_flock"] = &hf
+	// heldLockGets sends one GETFILELOCK per rule of the recipe (FCNTL before
+	// FLOCK) with the whole-file exclusive test lock and checks each answer
+	// against the locks still held (heldLockGetCheck). It returns every
+	// answer it decoded.
+	heldLockGets := func(t *testing.T, s *cephmsgr.MDSSession, a *cephfsCapAgent, label, when string, held []heldLock) ([]cephfsFilelock, error) {
+		t.Helper()
+		var got []cephfsFilelock
+		for _, rule := range recipe.rules() {
+			prefix := "flock"
+			if rule == cephLockRuleFcntl {
+				prefix = "fcntl"
+			}
+			call, first, _, _ := submitFirst(t, s, a, label, prefix+"-get-"+when, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock,
+				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: heldLockGetTest(rule)})
+			lock, err := cephfsDecodeFilelock(first.Extra)
+			if first.Result != 0 || err != nil {
+				return got, fmt.Errorf("%s GETFILELOCK (tid %d) result %d: %v", prefix, call.Transaction(), first.Result, err)
+			}
+			got = append(got, lock)
+			if err := heldLockGetCheck(rule, lock, held, gidR); err != nil {
+				return got, fmt.Errorf("%s GETFILELOCK (tid %d): %w", prefix, call.Transaction(), err)
+			}
+		}
+		return got, nil
+	}
 
 	// The restart client outlives every leaf: its cleanup belongs to the test.
 	dialsR = newRecoveryDials(false, current.MDS.Endpoint)
@@ -1284,7 +1312,7 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		for i, want := range recipe.locks(gidR) {
 			name := recipe.callName("acquire", i)
 			call, first, _, e := submitFirstHooked(t, sessionR, agentR, "restart", name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
-				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(want.Type, want.Owner)}, hf.acceptFlock(name, want.Owner, want.Type), hf.settleFlock)
+				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: want.args(want.Type)}, hf.acceptFlock(name, want, want.Type), hf.settleFlock)
 			safe := waitSafe(t, sessionR, call, first, e, false)
 			if first.Result != 0 || safe.Result != 0 {
 				t.Fatalf("Go %s acquire failed: %d %d", name, first.Result, safe.Result)
@@ -1296,13 +1324,9 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		if err != nil {
 			t.Fatal("native nonblocking probes do not see the Go locks", err)
 		}
-		getCall, getFirst, _, _ := submitFirst(t, sessionR, agentR, "restart", "flock-get-before-restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock,
-			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
-		lock, err := cephfsDecodeFilelock(getFirst.Extra)
-		if getFirst.Result != 0 || err != nil || heldFlockHolder(lock, hf.Locks) != nil {
-			t.Fatalf("GETFILELOCK before restart does not identify the first held Go lock: %+v %v (tid %d)", lock, err, getCall.Transaction())
+		if hf.GetBefore, err = heldLockGets(t, sessionR, agentR, "restart", "before-restart", hf.Locks); err != nil {
+			t.Fatal("GETFILELOCK before restart does not identify the first held Go lock of each rule:", err)
 		}
-		hf.GetBefore = &lock
 	}) {
 		return
 	}
@@ -1736,7 +1760,7 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		}
 		// The held locks are carried only by this explicit, caller-selected
 		// reconnect record. SETFILELOCK is not submitted again.
-		heldBlob := cephfsFilelockBlob(nil, hf.Locks)
+		heldBlob := heldLockBlob(hf.Locks)
 		heldCap := slices.IndexFunc(caps, func(c cephmsgr.MDSCapReconnect) bool { return c.Ino == hf.Ino })
 		if heldCap < 0 || len(caps[heldCap].Flock) != 0 {
 			t.Fatal("the held-lock inode has no capability to reconnect, or already carries a lock blob")
@@ -1992,13 +2016,9 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		if err := heldFlockObserve(ctx, control, recipe.probes(len(hf.Locks)), hf.Ino, &heldNativeBaseline, &hf.ProbeAfter); err != nil {
 			t.Fatal("native nonblocking probes do not see the restored locks", err)
 		}
-		_, getAfter, _, _ := submitFirst(t, sessionR2, agentR2, "reconnected", "flock-get-after-restart", cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock,
-			Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
-		restored, err := cephfsDecodeFilelock(getAfter.Extra)
-		if getAfter.Result != 0 || err != nil || heldFlockHolder(restored, hf.Locks) != nil {
-			t.Fatalf("GETFILELOCK after restart does not identify the first original Go lock: %+v %v", restored, err)
+		if hf.GetAfter, err = heldLockGets(t, sessionR2, agentR2, "reconnected", "after-restart", hf.Locks); err != nil {
+			t.Fatal("GETFILELOCK after restart does not identify the first original Go lock of each rule:", err)
 		}
-		hf.GetAfter = &restored
 		// One explicit unlock per owner, in acquisition order. After each one
 		// the locks of the other owners must still refuse a native exclusive
 		// acquire and GETFILELOCK must name the first of them; after the last one
@@ -2006,7 +2026,7 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 		for i, l := range hf.Locks {
 			name := recipe.callName("unlock", i)
 			unlockCall, unlockFirst, _, unlockE := submitFirstHooked(t, sessionR2, agentR2, "reconnected", name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpSetFileLock,
-				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockUnlock, l.Owner)}, hf.acceptFlock(name, l.Owner, cephFlockUnlock), hf.settleFlock)
+				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: l.args(cephFlockUnlock)}, hf.acceptFlock(name, l, cephFlockUnlock), hf.settleFlock)
 			if unlockSafe := waitSafe(t, sessionR2, unlockCall, unlockFirst, unlockE, false); unlockFirst.Result != 0 || unlockSafe.Result != 0 {
 				t.Fatalf("explicit %s after restart failed: %d %d", name, unlockFirst.Result, unlockSafe.Result)
 			}
@@ -2017,13 +2037,11 @@ func runCephFSRecovery(t *testing.T, recipe heldFlockRecipe) {
 			if len(remaining) == 0 {
 				break
 			}
-			_, between, _, _ := submitFirst(t, sessionR2, agentR2, "reconnected", "flock-get-after-"+name, cephmsgr.MDSRequest{Op: cephmsgr.MDSOpGetFileLock,
-				Path: cephmsgr.MDSFilePath{Ino: hf.Ino}, Args: cephfsFlockArgs(cephFlockExclusive, cephFlockGoOwner+1)})
-			holder, err := cephfsDecodeFilelock(between.Extra)
-			if between.Result != 0 || err != nil || heldFlockHolder(holder, remaining) != nil {
-				t.Fatalf("GETFILELOCK after %s does not identify the first still-held Go lock: %+v %v", name, holder, err)
+			holders, err := heldLockGets(t, sessionR2, agentR2, "reconnected", "after-"+name, remaining)
+			hf.GetBetween = append(hf.GetBetween, holders)
+			if err != nil {
+				t.Fatalf("GETFILELOCK after %s does not identify the first still-held Go lock of each rule: %v", name, err)
 			}
-			hf.GetBetween = append(hf.GetBetween, holder)
 		}
 		if err := heldFlockCallsExact(hf.Calls, hf.Locks); err != nil || hf.SetFileLockSubmissions != len(hf.Calls) {
 			t.Fatal("application SETFILELOCK submissions differ from one acquire before and one unlock after the restart per owner", err, hf.Calls)
