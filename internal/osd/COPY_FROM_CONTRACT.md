@@ -110,7 +110,8 @@ primary (original transaction and incarnation, `RetryAttempt` 1, the
 caller's new placement) is answered from the replicated PG log, even though
 a later write had replaced the source; the destination keeps the first
 copy. A copy held before its source read (`osd set pause`, with the
-destination primary's own Objecter holding one paused copy-get) is dropped
+destination primary's own Objecter holding one paused copy-get that it never
+sent, with 0 attempts) is dropped
 without a reply by the former primary, whose op tracker and Objecter then
 hold nothing of it. The caller's wait is an unknown outcome, and native
 state shows no change. Only then does an explicit resubmission to the new

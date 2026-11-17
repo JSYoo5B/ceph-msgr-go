@@ -71,8 +71,12 @@ snapshot holds the copy's identity once, as an ordinary modify entry of the
 destination head at the reply's replay version. The first source write's
 identity is the entry's first extra request ID with its user version, and
 the second source write is not bound there. Near-miss identities do not
-match. After recovery (below) a new connection reads the same bytes under a
-later transaction, native readback 2 s later is unchanged, and the returned
+match. After recovery (below) the test waits until two placements a second
+apart are the original placement again at a newer epoch: the original
+primary, the same up and acting sets and no pg_temp. A clean PG still led by
+the replacement fails the test instead of being read as the returned
+primary. A new connection to the original primary then reads the same bytes
+under a later transaction, native readback 2 s later is unchanged, and that
 primary's PG log still holds the copy once with the same binding.
 
 ## A copy held before its source read
@@ -89,14 +93,20 @@ primary's PG log still holds the copy once with the same binding.
    destination primary. Its op tracker (`dump_ops_in_flight`) must hold
    exactly one op of the copying client entity and incarnation, for the
    route's PG at the request's epoch. Its Objecter (`objecter_requests`) must
-   hold exactly one op of the owned source, paused, made of a single
-   `copy-get`. The Go call must still be unanswered.
+   hold exactly one op of the owned source, paused, with 0 attempts, made of
+   a single `copy-get`. The Objecter counts every prepared send in `attempts`
+   ([Objecter.cc](https://github.com/ceph/ceph/blob/v20.2.4/src/osdc/Objecter.cc#L3385-L3400))
+   and also pauses an op it already sent when a later map calls for it
+   ([Objecter.cc](https://github.com/ceph/ceph/blob/v20.2.4/src/osdc/Objecter.cc#L3081)),
+   so a paused op with attempts 1 is a copy-get sent once and waiting to be
+   sent again, and the barrier refuses it. The Go call must still be
+   unanswered.
 5. `osd out` of the destination primary. The test waits for the moved
    placement as above.
 6. While the pause is still set, the test polls the same two snapshots of the
-   former primary until neither holds anything of the copy. A paused copy-get
-   cannot have been sent, so its disappearance under `pauserd` is the
-   cancellation and not the completion. The Go call stays unanswered for 2 s
+   former primary until neither holds anything of the copy. The barrier's
+   copy-get had never been sent, and `pauserd` stayed set, so its
+   disappearance is the cancellation and not the completion. The Go call stays unanswered for 2 s
    more and is then cancelled. The unknown outcome must carry the barrier
    op's transaction and the request's map epoch.
 7. `osd unset pause`, confirmed natively. After 2 s the native destination
@@ -111,8 +121,8 @@ primary's PG log still holds the copy once with the same binding.
    (`RetryAttempt` 2) is sent. It must be answered from the log: the same
    transaction, user version and replay version, an unchanged native
    destination, and the copy still once in the log.
-10. After recovery, the same fresh-session read, delayed native readback and
-    returned-primary PG-log check as above.
+10. After recovery, the same wait for the original placement, fresh-session
+    read, delayed native readback and returned-primary PG-log check as above.
 
 ## Recovery
 
