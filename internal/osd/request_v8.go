@@ -61,6 +61,9 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	if err := ValidateSetChunkRequest(r.Request); err != nil {
 		return msgr.MessageData{}, err
 	}
+	if err := ValidateTierRequest(r.Request); err != nil {
+		return msgr.MessageData{}, err
+	}
 	if err := ValidateChecksumCompoundRequest(r.Request); err != nil {
 		return msgr.MessageData{}, err
 	}
@@ -70,7 +73,7 @@ func encodeReplicatedRequest(r replicatedRequest, features uint64, limit uint32,
 	if (ChecksumCompound(r.Operations) || SparseReadCompound(r.Operations)) && r.Shard != -1 {
 		return msgr.MessageData{}, ErrRequest
 	}
-	if (r.IgnoreCache || IsSetChunk(r.Operations)) && r.Shard != -1 {
+	if (r.IgnoreCache || IsSetChunk(r.Operations) || IsTierRequest(r.Operations)) && r.Shard != -1 {
 		return msgr.MessageData{}, ErrRequest
 	}
 	if r.PG.Pool > math.MaxInt64 || r.PG.Pool != uint64(r.Locator.Pool) || r.Shard < -1 || r.MapEpoch == 0 || r.Locator.Pool < 0 || r.Object == "" || r.Locator.Hash != -1 || len(r.Operations) == 0 || len(r.Operations) > MaxOperations {

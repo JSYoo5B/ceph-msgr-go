@@ -17,6 +17,10 @@ func ValidateIgnoreCache(r Request, features uint64) error {
 	if len(r.Operations) == 1 && IsCacheOperation(r.Operations[0].Code) {
 		return ValidateCacheRequest(r, features)
 	}
+	// So does a manifest tier operation, which needs no cache-pool capability.
+	if IsTierRequest(r.Operations) {
+		return ValidateTierRequest(r)
+	}
 	if features&FeatureCachePool == 0 {
 		return ErrFeatures
 	}
