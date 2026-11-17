@@ -586,6 +586,39 @@
    }
   },
   {
+   "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange",
+   "group": "osd",
+   "params": {
+    "key": "aes",
+    "service": "aes",
+    "mode": "crc",
+    "family": "4",
+    "stress": "",
+    "runtime": "host",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDCopyFrom(LostReply|InFlight)PrimaryChangeIntegration$"
+   }
+  },
+  {
+   "id": "osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange",
+   "group": "osd",
+   "params": {
+    "key": "aes256k",
+    "service": "aes256k",
+    "family": "6",
+    "stress": "",
+    "runtime": "container",
+    "osd": "1",
+    "osd_store": "bluestore",
+    "osd_replicas": "3",
+    "osd_profile": "replicated-pg-v8",
+    "test_run": "^TestCephOSDCopyFrom(LostReply|InFlight)PrimaryChangeIntegration$"
+   }
+  },
+  {
    "id": "osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-1.osd-profile-replicated-pg-reply-v8.t-suite-16671c",
    "group": "osd",
    "params": {

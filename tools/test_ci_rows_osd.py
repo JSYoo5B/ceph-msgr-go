@@ -218,11 +218,17 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
     def test_three_replica_v8_rows_select_only_their_closed_acceptance(self):
         rows = [row for row in self.rows if row.get("osd_profile") in {"replicated-pg-v8", "replicated-pg-reply-v8"}
                 and row.get("osd_replicas") == "3"]
-        self.assertEqual(len(rows), 4)
-        expected = {"TestCephOSDObjectBackoffFailoverIntegration", "TestCephOSDUpmapIntegration"}
-        self.assertTrue(expected <= self.declared)
-        observed = {name: set() for name in expected}
-        counts = {name: 0 for name in expected}
+        self.assertEqual(len(rows), 6)
+        # Each closed acceptance is one exact set of tests on both profiles.
+        acceptances = {
+            frozenset({"TestCephOSDObjectBackoffFailoverIntegration"}),
+            frozenset({"TestCephOSDUpmapIntegration"}),
+            frozenset({"TestCephOSDCopyFromLostReplyPrimaryChangeIntegration", "TestCephOSDCopyFromInFlightPrimaryChangeIntegration"}),
+        }
+        for acceptance in acceptances:
+            self.assertTrue(acceptance <= self.declared)
+        observed = {acceptance: set() for acceptance in acceptances}
+        counts = {acceptance: 0 for acceptance in acceptances}
         for row in rows:
             self.assertEqual((row["osd_profile"], row["osd"], row["osd_store"], row["stress"]),
                              ("replicated-pg-v8", "1", "bluestore", ""))
@@ -230,19 +236,18 @@ class OSDRowsTest(ci_row_catalog.RowsTestCase):
             self.assertNotIn("race", row)
             self.assertNotIn("mds_fresh", row)
             selector = re.compile(row["test_run"])
-            selected = {name for name in self.declared if selector.search(name)}
-            self.assertEqual(len(selected), 1)
-            self.assertTrue(selected <= expected)
-            name = next(iter(selected))
-            self.assertIsNone(selector.search(name + "Extended"))
-            self.assertIsNone(selector.search("Prefix" + name))
-            counts[name] += 1
-            observed[name].add(tuple(row.get(field, fallback) for field, fallback in (
+            selected = frozenset(name for name in self.declared if selector.search(name))
+            self.assertIn(selected, acceptances)
+            for name in selected:
+                self.assertIsNone(selector.search(name + "Extended"))
+                self.assertIsNone(selector.search("Prefix" + name))
+            counts[selected] += 1
+            observed[selected].add(tuple(row.get(field, fallback) for field, fallback in (
                 ("key", ""), ("service", ""), ("mode", "secure"), ("family", ""), ("runtime", "container"))))
-        for name in expected:
-            with self.subTest(test=name):
-                self.assertEqual(counts[name], 2)
-                self.assertEqual(observed[name], {("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")})
+        for acceptance in acceptances:
+            with self.subTest(tests=sorted(acceptance)):
+                self.assertEqual(counts[acceptance], 2)
+                self.assertEqual(observed[acceptance], {("aes", "aes", "crc", "4", "host"), ("aes256k", "aes256k", "secure", "6", "container")})
 
     def test_compression_row_selects_only_the_crc_single_osd_test(self):
         rows = [row for row in self.rows if row.get("test_run") == COMPRESSION_SELECTOR]

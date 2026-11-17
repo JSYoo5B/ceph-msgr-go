@@ -274,6 +274,9 @@ here.
   recovery after an eviction that leaves a partially applied range, multiple
   writers and persistence across an OSD restart (MemStore) remain outside
   this recipe.
+- A completed write beyond the uncertain extent, with only the completed
+  prefix flushed across the restart, is the separate
+  [mixed-extent cell](MDS_CEPHFS_WRITEBACK_MIXED_VALIDATION.md).
 - Large reconnect state ([MDS_MULTI_RECONNECT_VALIDATION.md](MDS_MULTI_RECONNECT_VALIDATION.md))
   and held-lock recovery ([MDS_FILELOCK_RESTART_VALIDATION.md](MDS_FILELOCK_RESTART_VALIDATION.md))
   are separate checkpoints.

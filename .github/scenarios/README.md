@@ -312,6 +312,11 @@ Two `mds-cephfs-writeback` rows select only
 `TestCephMDSCephFSWritebackFenceIntegration` in the same two MDS profiles and
 reuse the same input; they declare `mds-writeback-fence`, which alone admits
 the OSD drop, background reader and eviction controls.
+Two `mds-cephfs-mixed-writeback` rows select only
+`TestCephMDSCephFSMixedWritebackRecoveryIntegration` in the same two MDS
+profiles on the same input. They declare `mds-writeback-fence` for the OSD
+drop and `mds-writeback-mixed`, which alone admits the closed native
+object-bytes view of `capsnap-file`.
 One further `osd` row selects only `TestCephOSDSetChunkNativeIntegration`, the
 native-only SET_CHUNK manifest checkpoint, on the single-BlueStore legacy-v6
 fixture. It needs no opt-in parameter: the checkpoint uses the ordinary OSD
@@ -362,6 +367,19 @@ primary PG-log snapshots that must show the source write's request identity
 among the destination entry's extra request IDs. It injects no fault and needs
 no opt-in parameter, so the test also belongs to the broad legacy OSD
 selection ([validation](../../integration/fixture/OSD_COPY_FROM_HISTORY_VALIDATION.md)).
+Two `osd` rows,
+`osd.aes.ip4.crc.host.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange`
+and
+`osd.aes256k.ip6.container.osd-store-bluestore.osd-replicas-3.osd-profile-replicated-pg-v8.t-osdcopyfromprimarychange`,
+select only `TestCephOSDCopyFromLostReplyPrimaryChangeIntegration` and
+`TestCephOSDCopyFromInFlightPrimaryChangeIntegration` on three BlueStore
+replicas. Both move the destination primary with `osd out` around a
+COPY_FROM and a COPY_FROM2 and resubmit explicitly to the new primary. The
+in-flight test also holds the copy's source read with `osd set pause`. They need no
+fixture capability: every change is a MON command of the test, which a single
+run-level recovery undoes before one clean check. The broad legacy-v6
+three-replica rows select them too
+([validation](../../integration/fixture/OSD_COPY_FROM_PRIMARY_CHANGE_VALIDATION.md)).
 One dedicated `osd` row selects only `TestCephMsgrCompressionOfferIntegration`
 on CRC/AES client and service cipher, IPv4 host runtime, one BlueStore OSD,
 replica/min-size one and legacy-v6. Its ID is
