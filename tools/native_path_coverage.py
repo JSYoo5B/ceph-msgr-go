@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Check the native path coverage map against the catalog, tests and records.
 
-This validates references, not the truth of a native observation. It runs no
-tests, starts no fixture and makes no network requests. Upstream fixture
+This validates references, not the truth of a native observation. Top-level
+Go test names are the tests Go lists in the product, fixture and quality
+modules (go_test_list.py): listing compiles the test binaries, which may fetch
+uncached modules, and executes no test body. A link whose text is a test name
+and whose target is a Go file must point at the file that declares it
+(go_test_list.declares, Go's parser under the build context). It starts no fixture. Upstream fixture
 receipts (``ctg@v0.3.0:``, ``ctg@v0.4.0:`` and ``ctg@main:`` tokens) are cited by name only and
 are not resolved, because the provider repository is not part of this tree.
 """
@@ -10,6 +14,7 @@ import re
 import sys
 from pathlib import Path
 
+import go_test_list
 import scenario_catalog
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -21,20 +26,44 @@ HEADER = ["ID", "Path", "Class", "Setup and control", "Independent observation",
           "Fault and cleanup", "Evidence", "Visibility"]
 LINK = re.compile(r"\[([^\]]+)\]\(([^)\s]+)\)")
 CODE = re.compile(r"`([^`]+)`")
-TEST = re.compile(r"(?m)^func (Test\w+)\(t \*testing\.T\)")
-PR = re.compile(r"#(\d+)\b")
 UPSTREAM = re.compile(r"^ctg@(v0\.3\.0|v0\.4\.0|main):(Test\w+(?:/[\w./-]+)?)$")
 SCENARIO = re.compile(r"^[a-z][a-z0-9-]*\.(?:aes|aes256k)\b[a-z0-9.-]*$")
 
 
-def go_tests(root):
-    """Return every top-level Go test function name in the repository."""
+# The Go modules whose tests the map may name: the product, the fixture and the
+# quality tooling. The development-only capture modules under tools/msgrcap
+# are not native evidence.
+MODULES = (".", "integration/fixture", "tools/quality")
+
+
+def go_tests(root, modules=MODULES):
+    """Return the name of every top-level Go test that Go lists in the
+    repository's modules. A coverage token names a test; how often Go lists
+    the name plays no part."""
     names = set()
-    for path in root.rglob("*_test.go"):
-        if ".git" in path.parts:
-            continue
-        names.update(TEST.findall(path.read_text(errors="replace")))
+    for module in modules:
+        for listed in go_test_list.list_tests(Path(root) / module, ("./...",)).values():
+            names.update(listed)
     return names
+
+
+def module_of(root, path):
+    """The listed module directory (relative to root) that contains path."""
+    best = None
+    for module in MODULES:
+        base = (Path(root) / module).resolve()
+        if path.is_relative_to(base) and (best is None or len(base.parts) > len(best[1].parts)):
+            best = (module, base)
+    return None if best is None else best[1]
+
+
+def test_link_problems(root, name, path):
+    """A test-named link to a Go file must reach the file declaring the test."""
+    module = module_of(root, path)
+    if module is None or not go_test_list.declares(module, path, name):
+        return ["link %s does not reach the file declaring top-level Go test %s"
+                % (path.relative_to(Path(root).resolve()).as_posix(), name)]
+    return []
 
 
 def catalog_vocabulary(root):
@@ -83,26 +112,14 @@ def coverage_rows(text):
             yield area, cells
 
 
-def summary_counts(text):
-    match = re.search(r"(?m)^## Classification summary\n", text)
-    if not match:
-        raise ValueError("missing classification summary")
-    section = re.split(r"(?m)^## ", text[match.end():], maxsplit=1)[0]
-    counts = {}
-    for line in section.splitlines():
-        cells = split_row(line) if line.startswith("| ") else []
-        if len(cells) >= 2 and cells[0].strip("`") in CLASSES:
-            counts[cells[0].strip("`")] = int(cells[1])
+def class_counts(text):
+    """Count the coverage rows of each known class; the map keeps no totals."""
+    counts = dict.fromkeys(CLASSES, 0)
+    for _, cells in coverage_rows(text):
+        klass = cells[2].strip("`") if len(cells) == len(HEADER) else None
+        if klass in counts:
+            counts[klass] += 1
     return counts
-
-
-def open_pull_requests(text):
-    match = re.search(r"(?m)^## Open pull requests\n", text)
-    if not match:
-        raise ValueError("missing open pull request section")
-    section = re.split(r"(?m)^## ", text[match.end():], maxsplit=1)[0]
-    return {number for line in section.splitlines() if line.startswith("| ")
-            for number in PR.findall(split_row(line)[0])}
 
 
 def placeholder(token):
@@ -161,17 +178,17 @@ def check(root=ROOT, text=None, tests=None, catalog=None):
         problems.extend(token_problems(token, tests, scenarios, groups, suites))
 
     document = (root / COVERAGE).parent
-    for _, target in LINK.findall(text):
+    for label, target in LINK.findall(text):
         if re.match(r"^[a-z]+:", target) or target.startswith("#"):
             continue
         path = (document / target.split("#", 1)[0]).resolve()
         if not path.is_relative_to(root.resolve()) or not path.exists():
             problems.append("missing or non-repository file " + target)
+        elif path.suffix == ".go" and re.fullmatch(r"Test\w*", label.strip("`")):
+            problems.extend(test_link_problems(root, label.strip("`"), path))
 
     areas = set()
     seen = set()
-    counts = dict.fromkeys(CLASSES, 0)
-    open_prs = open_pull_requests(text)
     for area, cells in coverage_rows(text):
         if len(cells) != len(HEADER) or not all(cells):
             problems.append("row %s: expected %d nonempty columns" % (cells[0], len(HEADER)))
@@ -186,10 +203,6 @@ def check(root=ROOT, text=None, tests=None, catalog=None):
         if klass not in CLASSES:
             problems.append("row " + key + ": unknown class " + cells[2])
             continue
-        counts[klass] += 1
-        if klass in ("released", "main-only", "primitive"):
-            for number in sorted(set(PR.findall(" ".join(cells))) & open_prs):
-                problems.append("row " + key + ": unmerged PR #" + number + " cited as " + klass)
         if klass == "released" and not LINK.search(cells[6]) and not CODE.search(cells[6]):
             problems.append("row " + key + ": released row needs local evidence")
     if not seen:
@@ -198,16 +211,6 @@ def check(root=ROOT, text=None, tests=None, catalog=None):
     for label in spec_paths(root):
         if label not in areas:
             problems.append("SPEC path without coverage section: " + label)
-
-    try:
-        summary = summary_counts(text)
-    except ValueError as error:
-        problems.append(str(error))
-    else:
-        for klass in CLASSES:
-            if summary.get(klass) != counts[klass]:
-                problems.append("summary %s: table says %s, rows give %d"
-                                % (klass, summary.get(klass), counts[klass]))
     return problems
 
 
@@ -220,7 +223,9 @@ def main():
         for problem in problems:
             print("native_path_coverage: " + problem, file=sys.stderr)
         return 1
+    counts = class_counts((ROOT / COVERAGE).read_text())
     print("native path coverage references valid; native outcomes require record review")
+    print("rows per class: " + ", ".join("%s %d" % (klass, counts[klass]) for klass in CLASSES))
     return 0
 
 

@@ -5,8 +5,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"maps"
@@ -83,11 +85,35 @@ func ciProfile(row ciScenario, bindings map[string]ciBinding) (profile, error) {
 	})
 }
 
+// ciSuiteTestFiles returns the paths of the _test.go files of the suite
+// package pkg under root that the build context selects (CGO disabled, as the
+// listing in TestCINativeCompiledInventory): the internal and the external
+// test package, without files a build constraint excludes.
+func ciSuiteTestFiles(root, pkg string) ([]string, error) {
+	ctx := build.Default
+	ctx.CgoEnabled = false
+	dir := filepath.Join(root, pkg)
+	info, err := ctx.ImportDir(dir, 0)
+	var none *build.NoGoError
+	if err != nil && !errors.As(err, &none) {
+		return nil, err
+	}
+	var paths []string
+	for _, name := range append(slices.Clone(info.TestGoFiles), info.XTestGoFiles...) {
+		paths = append(paths, filepath.Join(dir, name))
+	}
+	return paths, nil
+}
+
+// ciNativeSources maps each native test to its declaring file. The files are
+// the _test.go files the build context selects (CGO disabled, as the listing
+// in TestCINativeCompiledInventory), parsed by Go's parser; that test pairs
+// the names with go test -list, which decides which tests exist.
 func ciNativeSources(root string) (map[string]string, error) {
 	result := map[string]string{}
 	native := regexp.MustCompile(`^TestCeph\w*Integration$`)
 	for _, pkg := range []string{"integration", "cephmsgr"} {
-		paths, err := filepath.Glob(filepath.Join(root, pkg, "*_test.go"))
+		paths, err := ciSuiteTestFiles(root, pkg)
 		if err != nil {
 			return nil, err
 		}
@@ -136,6 +162,52 @@ func ciInventoryProblems(declared map[string]string, listed []string) []string {
 	return problems
 }
 
+// ciSelection joins every native test declared in the source with the catalog
+// rows whose effective fixture selector includes it. The source declarations
+// are the inventory, so there is no list to keep in step. A row that selects
+// no native test and a native test that no row selects are problems.
+func ciSelection(sources map[string]string, scenarios []ciScenario, bindings map[string]ciBinding) ([]ciTestSelection, []string) {
+	names := slices.Sorted(maps.Keys(sources))
+	rows := make([]ciTestSelection, 0, len(names))
+	for _, name := range names {
+		rows = append(rows, ciTestSelection{Test: name, Source: sources[name], Candidates: []string{}, Required: []string{}})
+	}
+	var problems []string
+	for _, scenario := range scenarios {
+		p, err := ciProfile(scenario, bindings)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: %v", scenario.ID, err))
+			continue
+		}
+		selector, err := regexp.Compile(p.testRun)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("%s: %v", scenario.ID, err))
+			continue
+		}
+		matches := 0
+		for index := range rows {
+			name := strings.SplitN(rows[index].Test, "/", 2)[1]
+			if !selector.MatchString(name) {
+				continue
+			}
+			matches++
+			rows[index].Candidates = append(rows[index].Candidates, scenario.ID)
+			if scenario.Params["test_run"] != "" {
+				rows[index].Required = append(rows[index].Required, scenario.ID)
+			}
+		}
+		if matches == 0 {
+			problems = append(problems, fmt.Sprintf("%s: effective fixture selector matches no native tests", scenario.ID))
+		}
+	}
+	for _, row := range rows {
+		if len(row.Candidates) == 0 {
+			problems = append(problems, "no catalog selector includes "+row.Test)
+		}
+	}
+	return rows, problems
+}
+
 func TestCICatalogInventory(t *testing.T) {
 	root := filepath.Join("..", "..")
 	read := func(name string) []byte {
@@ -155,51 +227,17 @@ func TestCICatalogInventory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed := strings.Fields(string(read(".github/scenarios/native-tests.txt")))
-	if problems := ciInventoryProblems(sources, listed); len(problems) != 0 {
-		t.Fatal(strings.Join(problems, "\n"))
-	}
-	rows := make([]ciTestSelection, 0, len(listed))
-	for _, name := range listed {
-		rows = append(rows, ciTestSelection{Test: name, Source: sources[name], Candidates: []string{}, Required: []string{}})
-	}
-	for _, scenario := range scenarios {
-		p, err := ciProfile(scenario, bindings)
-		if err != nil {
-			t.Errorf("%s: %v", scenario.ID, err)
-			continue
-		}
-		selector, err := regexp.Compile(p.testRun)
-		if err != nil {
-			t.Errorf("%s: %v", scenario.ID, err)
-			continue
-		}
-		matches := 0
-		for index := range rows {
-			name := strings.SplitN(rows[index].Test, "/", 2)[1]
-			if !selector.MatchString(name) {
-				continue
-			}
-			matches++
-			rows[index].Candidates = append(rows[index].Candidates, scenario.ID)
-			if scenario.Params["test_run"] != "" {
-				rows[index].Required = append(rows[index].Required, scenario.ID)
-			}
-		}
-		if matches == 0 {
-			t.Errorf("%s: effective fixture selector matches no native tests", scenario.ID)
-		}
+	rows, problems := ciSelection(sources, scenarios, bindings)
+	for _, problem := range problems {
+		t.Error(problem)
 	}
 	broad := 0
 	for _, row := range rows {
-		if len(row.Candidates) == 0 {
-			t.Errorf("no catalog selector includes %s", row.Test)
-		}
 		if len(row.Required) == 0 {
 			broad++
 		}
 	}
-	t.Logf("%d registered native tests; %d have only broad candidate selection (optional skips remain possible)", len(rows), broad)
+	t.Logf("%d native tests; %d have only broad candidate selection (optional skips remain possible)", len(rows), broad)
 	if output := os.Getenv("CEPH_MSGR_CI_SELECTION_REPORT"); output != "" {
 		data, err := json.MarshalIndent(struct {
 			Schema string            `json:"schema"`
@@ -260,6 +298,74 @@ func TestCIInventoryRefusesMissingStaleAndDuplicateEntries(t *testing.T) {
 		if len(ciInventoryProblems(declared, listed)) == 0 {
 			t.Fatalf("accepted %v", listed)
 		}
+	}
+}
+
+func TestCISelectionRefusesUnselectedTestsAndEmptyRows(t *testing.T) {
+	bindings, err := ciBindings("  CEPH_MSGR_TEST_RUN: ${{ matrix.test_run || '' }}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources := map[string]string{
+		"integration/TestCephAIntegration": "integration/a_test.go",
+		"cephmsgr/TestCephBIntegration":    "cephmsgr/b_test.go",
+	}
+	row := func(id, selector string) ciScenario {
+		return ciScenario{ID: id, Params: map[string]string{"test_run": selector}}
+	}
+	rows, problems := ciSelection(sources, []ciScenario{row("a", "^TestCephAIntegration$"), row("b", "^TestCephBIntegration$")}, bindings)
+	if len(problems) != 0 || len(rows) != 2 || rows[0].Test != "cephmsgr/TestCephBIntegration" || !slices.Equal(rows[1].Required, []string{"a"}) {
+		t.Fatalf("complete selection: rows %+v problems %v", rows, problems)
+	}
+	for name, test := range map[string]struct {
+		scenarios []ciScenario
+		want      string
+	}{
+		"native test without a row": {[]ciScenario{row("a", "^TestCephAIntegration$")}, "no catalog selector includes cephmsgr/TestCephBIntegration"},
+		"row that selects nothing":  {[]ciScenario{row("a", "^TestCeph[AB]Integration$"), row("gone", "^TestCephGoneIntegration$")}, "gone: effective fixture selector matches no native tests"},
+		"invalid selector":          {[]ciScenario{row("a", "^TestCeph[AB]Integration$"), row("bad", "(")}, "bad: "},
+	} {
+		_, problems := ciSelection(sources, test.scenarios, bindings)
+		if !slices.ContainsFunc(problems, func(problem string) bool { return strings.HasPrefix(problem, test.want) }) {
+			t.Errorf("%s: problems %v lack %q", name, problems, test.want)
+		}
+	}
+}
+
+func TestCINativeSourcesRefuseDuplicateNames(t *testing.T) {
+	root := t.TempDir()
+	for _, pkg := range []string{"integration", "cephmsgr"} {
+		if err := os.Mkdir(filepath.Join(root, pkg), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, path), []byte("package x\n\n"+body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	native := "func TestCephAIntegration(t *testing.T) {}\n"
+	write("integration/a_test.go", native+"func TestCephAHelper(t *testing.T) {}\nfunc (s suite) TestCephMethodIntegration(t *testing.T) {}\n")
+	write("cephmsgr/a_test.go", native)
+	sources, err := ciNativeSources(root)
+	if err != nil || !maps.Equal(sources, map[string]string{"integration/TestCephAIntegration": "integration/a_test.go", "cephmsgr/TestCephAIntegration": "cephmsgr/a_test.go"}) {
+		t.Fatalf("sources %v, err %v", sources, err)
+	}
+	// A build-ignored file and a raw string that reads like a declaration
+	// add no native test; neither does a file outside the test files.
+	if err := os.WriteFile(filepath.Join(root, "integration", "ignored_test.go"), []byte("//go:build ignore\n\npackage x\n\nfunc TestCephIgnoredIntegration(t *testing.T) {}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write("integration/doc_test.go", "const doc = `\nfunc TestCephTextIntegration(t *testing.T) {}\n`\n")
+	write("cephmsgr/helper.go", "func TestCephSourceIntegration(t *testing.T) {}\n")
+	sources, err = ciNativeSources(root)
+	if err != nil || !maps.Equal(sources, map[string]string{"integration/TestCephAIntegration": "integration/a_test.go", "cephmsgr/TestCephAIntegration": "cephmsgr/a_test.go"}) {
+		t.Fatalf("sources %v, err %v", sources, err)
+	}
+	write("integration/b_test.go", native)
+	if sources, err := ciNativeSources(root); err == nil {
+		t.Fatalf("accepted a duplicate native test: %v", sources)
 	}
 }
 
