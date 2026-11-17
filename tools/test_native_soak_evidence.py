@@ -491,7 +491,7 @@ class NativeSoakEvidenceTests(unittest.TestCase):
         self.assertNotIn("tools/osd_soak_receipts.py", text.replace("cp .trusted-native/tools/osd_soak_receipts.py", ""))
         # Evidence is required for any soak row, so an unadmitted profile fails
         # closed in the collector instead of silently skipping retention.
-        condition = "(matrix.test_run == '^" + evidence.TEST + "$' || (matrix.osd_soak || '') != '')"
+        condition = "(matrix.test_run == '%s' || matrix.test_run == '%s' || (matrix.osd_soak || '') != '')" % (evidence.SELECTOR, evidence.FLOCK_SELECTOR)
         self.assertEqual(text.count(condition), 3)
         self.assertIn('--receipts "$RUNNER_TEMP/ceph-diagnostics"', text)
 

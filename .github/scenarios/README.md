@@ -779,7 +779,7 @@ Artifact retention follows the purpose of each upload:
 
 | Artifact category | Retention | Current uploads |
 | --- | --- | --- |
-| General results | 7 days | Scenario result/test JSON for requested and periodic runs; reviewed explicit cap-send and four-minute soak success bundles; successful Windows interoperability evidence |
+| General results | 7 days | Scenario result/test JSON for requested and periodic runs; reviewed cap-send, shared-FLOCK and four-minute soak success bundles; successful Windows interoperability evidence |
 | Failure diagnostics | 14 days | Failed native, race and unit-test logs/metadata; Windows evidence when the job fails |
 | Deployment evidence | 30 days | Policy for future deployment workflows; no deployment workflow currently uploads evidence |
 

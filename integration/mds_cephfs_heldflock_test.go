@@ -599,6 +599,7 @@ func (h *heldFlockEvidence) settleFlock(reply cephmsgr.MDSReply, err error) {
 }
 
 type heldFlockProbe struct {
+	AfterUnlockTID uint64 `json:",omitempty"`
 	Action         string
 	NativeGlobalID uint64
 	RequestID      int64
