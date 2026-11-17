@@ -230,6 +230,7 @@ class CatalogTests(unittest.TestCase):
         err = io.StringIO()
         for command in ("validate", "sharing"):
             with self.subTest(command), mock.patch.object(plan, "fixture_admission_problems", return_value=[]), \
+                mock.patch.object(plan, "sequence_problems", return_value=[]), \
                     mock.patch.object(plan, "fixture_sharing", return_value=([], values)), \
                     redirect_stdout(io.StringIO()), redirect_stderr(err):
                 self.assertEqual(plan.main([command]), 1)
@@ -237,6 +238,7 @@ class CatalogTests(unittest.TestCase):
         declaration = "integration/TestCephNewIntegration (integration/new_test.go) declares no fixture sharing"
         err = io.StringIO()
         with mock.patch.object(plan, "fixture_admission_problems", return_value=[]), \
+                mock.patch.object(plan, "sequence_problems", return_value=[]), \
                 mock.patch.object(plan, "fixture_sharing", return_value=([declaration], all_shareable())), \
                 redirect_stdout(io.StringIO()), redirect_stderr(err):
             self.assertEqual(plan.main(["validate"]), 1)
@@ -253,13 +255,96 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual([(shareable, isolated) for _, shareable, isolated in groups],
                          [(["a.1", "a.2"], ["a.3", "a.broad"]), (["b.1"], []), ([], ["c.1"])])
         self.assertEqual(groups[0][0], {"key": "aes", "service": "aes", "family": "4"})
-        self.assertEqual(plan.grouped_jobs(groups), 1 + 2 + 1 + 1)
+        declared = {"TestCephAIntegration": {"shareable"}, "TestCephBIntegration": {"shareable"},
+                    "TestCephKillIntegration": {"isolated"}}
         out = io.StringIO()
         with mock.patch.object(plan, "load_catalog", return_value=rows), \
-                mock.patch.object(plan, "fixture_sharing", return_value=([], values)), redirect_stdout(out):
+                mock.patch.object(plan, "fixture_sharing", return_value=([], values)), \
+                mock.patch.object(plan, "plan_sources", return_value=declared), redirect_stdout(out):
             self.assertEqual(plan.main(["sharing"]), 0)
         self.assertIn("6 rows: 3 shareable, 3 isolated; 3 configurations, 1 with more than one shareable row", out.getvalue())
-        self.assertIn("default coverage: 6 jobs, 5 once shareable rows of one configuration share a fixture", out.getvalue())
+        self.assertIn("default coverage: 6 rows in 5 jobs, 1 of them fixture sequences of 2 rows", out.getvalue())
+
+    def sequence_rows(self):
+        return [entry("a.1", test_run="^TestCephAIntegration$"), entry("x.1", family="6", test_run="^TestCephAIntegration$"),
+                entry("a.kill", test_run="^TestCephKillIntegration$"), entry("a.broad"),
+                entry("a.2", test_run="^TestCephB(One|Two)Integration$"), entry("a.cap", test_run="^TestCephAIntegration$", capabilities="c"),
+                entry("a.3", test_run="^TestCephCIntegration$")]
+
+    declared = {"TestCephAIntegration": {"shareable"}, "TestCephBOneIntegration": {"shareable"}, "TestCephBTwoIntegration": {"shareable"},
+                "TestCephCIntegration": {"shareable"}, "TestCephKillIntegration": {"isolated"}}
+
+    def test_planner_groups_shareable_rows_of_one_configuration_in_catalog_order(self):
+        jobs = plan.matrix(self.sequence_rows(), self.declared)["include"]
+        self.assertEqual([job["scenario"] for job in jobs], ["a.1", "x.1", "a.kill", "a.broad", "a.cap"])
+        sequence = jobs[0]
+        self.assertEqual(sequence, {"key": "aes", "service": "aes", "family": "4", "scenario": "a.1", "scenarios": "a.1 a.2 a.3",
+                                    "sequence_rows": "3",
+                                    "test_run": "^TestCephAIntegration$|^TestCephB(One|Two)Integration$|^TestCephCIntegration$",
+                                    "test_sequence": "^TestCephAIntegration$ ^TestCephB(One|Two)Integration$ ^TestCephCIntegration$"})
+        # An isolated row, a broad row, another configuration (here the family,
+        # or a declared capability) keeps a job of its own, unchanged.
+        self.assertEqual(jobs[1], dict(self.sequence_rows()[1]["params"], scenario="x.1"))
+        self.assertEqual(jobs[2], dict(self.sequence_rows()[2]["params"], scenario="a.kill"))
+        self.assertEqual(jobs[3], dict(self.sequence_rows()[3]["params"], scenario="a.broad"))
+        self.assertNotIn("test_sequence", jobs[4])
+
+    def test_a_request_of_one_row_is_never_grouped(self):
+        for row in self.sequence_rows():
+            with self.subTest(row=row["id"]):
+                self.assertEqual(plan.matrix([row], self.declared)["include"], [dict(row["params"], scenario=row["id"])])
+        # Unknown sources (another revision's catalog without its sources) group nothing.
+        rows = self.sequence_rows()
+        self.assertEqual(len(plan.matrix(rows, None)["include"]), len(rows))
+
+    def test_a_row_with_any_selected_test_not_declared_shareable_is_not_grouped(self):
+        rows = [entry("a.1", test_run="^TestCephAIntegration$"), entry("a.2", test_run="^TestCephB(One|Two)Integration$")]
+        for declared in ({**self.declared, "TestCephBTwoIntegration": {"isolated"}},
+                         {**self.declared, "TestCephBTwoIntegration": {"shareable", None}},
+                         {key: value for key, value in self.declared.items() if key != "TestCephBTwoIntegration" and key != "TestCephBOneIntegration"}):
+            with self.subTest(declared=declared):
+                self.assertEqual(len(plan.matrix(rows, declared)["include"]), 2)
+        self.assertEqual(len(plan.matrix(rows, self.declared)["include"]), 1)
+
+    def test_a_large_group_is_split_in_order(self):
+        names = ["TestCephG%dIntegration" % i for i in range(plan.MAX_SEQUENCE_ROWS + 2)]
+        rows = [entry("g.%d" % i, test_run="^%s$" % name) for i, name in enumerate(names)]
+        jobs = plan.matrix(rows, {name: {"shareable"} for name in names})["include"]
+        self.assertEqual([job.get("sequence_rows") for job in jobs], [str(plan.MAX_SEQUENCE_ROWS), "2"])
+        self.assertEqual(jobs[1]["scenarios"], "g.%d g.%d" % (plan.MAX_SEQUENCE_ROWS, plan.MAX_SEQUENCE_ROWS + 1))
+
+    def test_planner_reading_must_agree_with_the_fixture(self):
+        rows = self.sequence_rows()
+        values = {"a.1": "shareable", "x.1": "shareable", "a.kill": "isolated", "a.broad": "isolated",
+                  "a.2": "shareable", "a.cap": "shareable", "a.3": "shareable"}
+        self.assertEqual(plan.sequence_problems(rows, values, self.declared), [])
+        self.assertEqual(plan.sequence_problems(rows, dict(values, **{"a.3": "isolated"}), self.declared),
+                         ["a.3: the planner reads it as shareable, the fixture as isolated"])
+        self.assertEqual(plan.sequence_problems(rows, values, {**self.declared, "TestCephCIntegration": {None}}),
+                         ["a.3: the planner reads it as isolated, the fixture as shareable"])
+
+    def test_rows_cannot_set_the_planners_sequence_parameters(self):
+        for name in plan.SEQUENCE_PARAMS:
+            with self.subTest(name=name):
+                problems = plan.validate_catalog([entry("a.1", test_run="^TestA$", **{name: "x"})])
+                self.assertIn("a.1: parameter %s is set by the planner, not by a row" % name, problems)
+        self.assertIn("a.1: a test selector has no white space", plan.validate_catalog([entry("a.1", test_run="^TestA$ ^TestB$")]))
+
+    def test_env_prints_one_fixture_sequence(self):
+        rows = self.sequence_rows()
+        out = io.StringIO()
+        with mock.patch.object(plan, "load_catalog", return_value=rows), \
+                mock.patch.object(plan, "plan_sources", return_value=self.declared), redirect_stdout(out), redirect_stderr(io.StringIO()):
+            self.assertEqual(plan.main(["env", "a.1", "a.3"]), 0)
+        exported = dict(line[len("export "):].split("=", 1) for line in out.getvalue().splitlines())
+        self.assertEqual(shlex.split(exported["CEPH_MSGR_TEST_SEQUENCE"]), ["^TestCephAIntegration$ ^TestCephCIntegration$"])
+        self.assertEqual(shlex.split(exported["CEPH_MSGR_TEST_RUN"]), ["^TestCephAIntegration$|^TestCephCIntegration$"])
+        for ids in (["a.1", "x.1"], ["a.1", "a.kill"], ["a.1", "a.1"]):
+            with self.subTest(ids=ids), mock.patch.object(plan, "load_catalog", return_value=rows), \
+                    mock.patch.object(plan, "plan_sources", return_value=self.declared), \
+                    redirect_stdout(io.StringIO()) as refused, redirect_stderr(io.StringIO()):
+                self.assertEqual(plan.main(["env", *ids]), 2)
+                self.assertEqual(refused.getvalue(), "")
 
     def test_env_prints_the_workflow_environment_of_one_row(self):
         row = next(entry for entry in plan.load_catalog() if entry["params"].get("capabilities", "").count(",") == 2)
@@ -496,6 +581,7 @@ class PlannerTests(unittest.TestCase):
         # The fixture's own admission runs in the validate command itself
         # (Basic CI); these unit tests also run with the product's Go 1.25.
         with mock.patch.object(plan, "fixture_admission_problems", return_value=[]), \
+                mock.patch.object(plan, "sequence_problems", return_value=[]), \
                 mock.patch.object(plan, "fixture_sharing", return_value=([], all_shareable())), \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(plan.main(["validate"]), 0)

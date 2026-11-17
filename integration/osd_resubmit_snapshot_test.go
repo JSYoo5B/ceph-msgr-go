@@ -20,7 +20,7 @@ import (
 // the PG log with the original user version, and native observation shows one
 // clone and one head: the snapshotted write did not run again.
 //
-//fixture:isolated its owned pool and snap are removed, but the pool cleanup leaves config mon_allow_pool_delete set
+//fixture:shareable lost-reply resubmit with a self-managed snap in an owned pool; checked owned-pool cleanup removes pool and snap
 func TestCephOSDResubmitSnapshotIntegration(t *testing.T) {
 	fixture, request := osdFixture, osdObjectRequest
 	if isReplicatedPGFixtureProfile() {

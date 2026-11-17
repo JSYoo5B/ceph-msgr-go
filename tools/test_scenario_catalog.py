@@ -4,6 +4,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
@@ -122,8 +123,13 @@ class RepositoryCatalogTests(unittest.TestCase):
 
     def test_single_file_and_fragments_plan_identically(self):
         """The trusted planner gives the same answer for a revision with the
-        single file as for one with the same rows in fragments."""
+        single file as for one with the same rows in fragments. Both plans
+        read the same test sources (a revision's own, in /ci run)."""
         document = catalog.load()
+        sources = scenario_plan.sharing_sources.declarations(scenario_plan.sharing_sources.tree_sources(scenario_plan.ROOT))
+        patch = mock.patch.object(scenario_plan, "plan_sources", return_value=sources)
+        patch.start()
+        self.addCleanup(patch.stop)
         with tempfile.TemporaryDirectory() as directory:
             legacy = Path(directory) / "catalog.json"
             legacy.write_text(json.dumps(document, indent=1) + "\n", encoding="utf-8")

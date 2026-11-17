@@ -15,7 +15,7 @@ import (
 // the native client alike. UNSET_MANIFEST makes it a plain (now empty) object
 // again. Refusals are the known codes of PrimaryLogPG.
 //
-//fixture:isolated owned-pool cleanup leaves central config mon/mon_allow_pool_delete=true set
+//fixture:shareable manifest ops in two owned pools only; checked owned-pool cleanup removes them and restores the config it changed
 func TestCephOSDRedirectIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

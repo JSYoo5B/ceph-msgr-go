@@ -17,7 +17,7 @@ import (
 // the primary is killed the new primary holds a different shard, and only a
 // request carrying that new shard is answered.
 //
-//fixture:isolated kills two OSDs, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
+//fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M1, false, "")
 }
@@ -26,7 +26,7 @@ func TestCephOSDErasureFailoverIntegration(t *testing.T) {
 // primary: when the primary is lost the MON picks a parity shard instead, and
 // the caller's placement must carry that shard.
 //
-//fixture:isolated kills two OSDs, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
+//fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M1, true, "")
 }
@@ -37,7 +37,7 @@ func TestCephOSDErasureOptimizedFailoverIntegration(t *testing.T) {
 // stays active; after the primary's loss a parity shard's OSD must lead and
 // the request carries that shard in primary-first numbering for pool size 4.
 //
-//fixture:isolated kills two OSDs, restart waits osd-ready clean; EC pool CRUSH rule and mon_allow_pool_delete config left
+//fixture:isolated kills two OSDs; restart waits osd-ready clean, which does not prove no pg_temp
 func TestCephOSDErasureOptimizedK2M2FailoverIntegration(t *testing.T) {
 	erasureFailoverScenario(t, erasureK2M2, true, "isa")
 }

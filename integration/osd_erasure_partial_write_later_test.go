@@ -467,7 +467,7 @@ func (r *partialWriteRun) everyShard() []int {
 // in one interval. This states what each shard's own log holds at capture
 // time; it claims nothing about eviction, loss or replay.
 //
-//fixture:isolated pauses each acting OSD for a store copy, no clean wait; EC CRUSH rule and mon_allow_pool_delete config left
+//fixture:isolated pauses each acting OSD for a store copy; no wait for every PG clean without pg_temp afterwards
 func TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 600*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince
@@ -539,7 +539,7 @@ func TestCephOSDErasureOptimizedK2M2PartialWriteLaterWriteShardHistoryIntegratio
 // each shard's own log holds at capture time; it claims nothing about
 // eviction, loss or replay, and it changes no primary.
 //
-//fixture:isolated repeers its PG and proves it clean without pg_temp; pauses OSDs; CRUSH rule and pool-delete config left
+//fixture:isolated repeers its PG and proves it clean without pg_temp, but pauses each acting OSD for a store copy with no clean wait
 func TestCephOSDErasureOptimizedK2M2PartialWriteNewIntervalShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 600*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince

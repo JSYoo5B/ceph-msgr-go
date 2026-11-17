@@ -15,7 +15,7 @@ import (
 // vector. Without them a replica treats the request as misdirected and never
 // answers. Native observation supplies the expected bytes and attributes.
 //
-//fixture:isolated owned-pool cleanup runs config set mon mon_allow_pool_delete true and never removes it
+//fixture:shareable balanced and localized reads in one owned pool; checked owned-pool cleanup removes it and restores the config
 func TestCephOSDReplicaReadIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" {
 		t.Skip("requires three replicas")

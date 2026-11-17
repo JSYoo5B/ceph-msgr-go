@@ -21,7 +21,7 @@ import (
 // resends nothing, and the caller's later read (after the next write in the
 // PG, or after recovery) is served with the native bytes.
 //
-//fixture:isolated sets norecover/nobackfill, kills and restarts a replica OSD; owned-pool cleanup leaves mon_allow_pool_delete
+//fixture:isolated kills and restarts a replica OSD; restart waits osd-ready clean, no pg_temp proof; norecover/nobackfill unset
 func TestCephOSDReplicaReadBounceIntegration(t *testing.T) {
 	if os.Getenv("CEPH_MSGR_TEST_OSD_REPLICAS") != "3" || os.Getenv("CEPH_MSGR_TEST_OSD_STORE") != "bluestore" {
 		t.Skip("requires three BlueStore replicas")

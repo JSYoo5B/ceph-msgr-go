@@ -77,8 +77,18 @@ type poolReceipt struct {
 	ErasureCodeProfile string            `json:"erasure_code_profile"`
 	ECProfile          map[string]string `json:"ec_profile"`
 	ECOverwrites       *bool             `json:"ec_overwrites"`
-	// cleanup mode: owned erasure-code profiles still readable afterwards.
-	ECProfilesRemaining []string `json:"ec_profiles_remaining"`
+	// cleanup mode: owned erasure-code profiles and CRUSH rules still readable
+	// afterwards, and whether the central mon_allow_pool_delete entry the
+	// cleanup opened is back in its prior state (confirmed by a fresh read).
+	ECProfilesRemaining      []string `json:"ec_profiles_remaining"`
+	CrushRulesRemaining      []string `json:"crush_rules_remaining"`
+	PoolDeleteConfigRestored bool     `json:"pool_delete_config_restored"`
+	// cleanup mode: owned erasure-code profiles whose read neither found
+	// them nor reported them absent, with the native error code.
+	ECProfilesUnread map[string]int `json:"ec_profiles_unread"`
+	// cleanup mode: owned names present that this test's create did not
+	// record; the cleanup leaves them and nativePool fails the test.
+	UnclaimedPresent map[string][]string `json:"unclaimed_present"`
 	// fullratios mode.
 	NearfullRatio     float64           `json:"nearfull_ratio"`
 	BackfillfullRatio float64           `json:"backfillfull_ratio"`
@@ -161,6 +171,27 @@ func nativePool(t *testing.T, ctx context.Context, mode string, input any) poolR
 	const source = "7f793731f1b39eb4f465e960113d2363c311b964"
 	if receipt.Schema != 1 || receipt.Commit != source || receipt.Mode != mode || !strings.Contains(receipt.DaemonVersion, source) {
 		t.Fatal("pool oracle receipt provenance differs", receipt)
+	}
+	if mode == "cleanup" {
+		// Every caller's cleanup owes the start state these leftovers would
+		// break: the central configuration, CRUSH rules and EC profiles. It
+		// removes only what this test's create recorded as made by it.
+		if !receipt.PoolDeleteConfigRestored {
+			t.Error("owned-pool cleanup did not restore the central mon_allow_pool_delete entry")
+		}
+		if len(receipt.CrushRulesRemaining) != 0 || len(receipt.ECProfilesRemaining) != 0 {
+			t.Error("owned-pool cleanup left owned CRUSH rules", receipt.CrushRulesRemaining, "or erasure-code profiles", receipt.ECProfilesRemaining)
+		}
+		if len(receipt.ECProfilesUnread) != 0 {
+			t.Error("owned-pool cleanup could not read owned erasure-code profiles", receipt.ECProfilesUnread)
+		}
+		// An owned name this test's create did not record is either an
+		// earlier test's leftover or a lost claim; the cleanup leaves it.
+		for kind, names := range receipt.UnclaimedPresent {
+			if len(names) != 0 {
+				t.Error("owned-pool cleanup found", kind, names, "that this test's create did not record")
+			}
+		}
 	}
 	return receipt
 }
@@ -253,7 +284,7 @@ func poolPlaceOn(t *testing.T, ctx context.Context, slot int, object, namespace 
 
 func attrNames(a nativeXattrSnapshot) map[string]string { return xattrInventory(a) }
 
-//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
+//fixture:shareable copies across two owned pools and namespaces; checked owned-pool cleanup removes them and restores the config
 func TestCephOSDCrossPoolAndNamespaceCopyFromIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {
@@ -329,7 +360,7 @@ func TestCephOSDCrossPoolAndNamespaceCopyFromIntegration(t *testing.T) {
 // from the pool, so the client sends none for writes and names the pool snap
 // id only when reading or rolling back.
 //
-//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
+//fixture:shareable pool snapshot, writes and rollback in one owned pool; checked owned-pool cleanup removes it
 func TestCephOSDPoolSnapshotIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

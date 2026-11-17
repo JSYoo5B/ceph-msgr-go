@@ -19,7 +19,7 @@ import (
 // SET_CHUNK opcodes return -EINVAL/-EOPNOTSUPP on a plain pool and are not
 // implemented.)
 //
-//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete=true in central config
+//fixture:shareable dirty-flag ops in one owned pool only; checked owned-pool cleanup removes it and restores the config it changed
 func TestCephOSDDirtyFlagIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

@@ -613,7 +613,7 @@ func copyPrimaryChangeFixture(t *testing.T) (context.Context, ownedPools, *copyP
 // recovery the original primary must lead the PG again; a fresh session to it
 // reads the same bytes, nothing changes, and its PG log holds the copy once.
 //
-//fixture:isolated marks OSDs out and in, waits osd-ready clean without a pg_temp proof; leaves mon_allow_pool_delete
+//fixture:isolated marks OSDs out and in, waits osd-ready clean without a pg_temp proof
 func TestCephOSDCopyFromLostReplyPrimaryChangeIntegration(t *testing.T) {
 	ctx, pools, recovery := copyPrimaryChangeFixture(t)
 	for _, tc := range copyPrimaryChangeCases {

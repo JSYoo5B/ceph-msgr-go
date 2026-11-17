@@ -15,7 +15,7 @@ import (
 // Client.Statfs sends the MStatfs that librados cluster_stat and libcephfs
 // statfs send. The independent native client asks for the same figures.
 //
-//fixture:isolated owned-pool cleanup leaves mon/mon_allow_pool_delete set in central config
+//fixture:shareable statfs reads and seeds in one owned pool; checked owned-pool cleanup removes it and restores the config it changed
 func TestCephMonStatfsIntegration(t *testing.T) {
 	fixture := osdFixture
 	if isReplicatedPGFixtureProfile() {

@@ -132,8 +132,7 @@ path. It first sends `osd unset pause` and `osd in` for every recorded OSD
 and keeps going after a failed command. Then it checks the native OSDMap
 flags once and waits once for `osd-ready clean`. If a command failed, it
 reports every failure and skips the clean check. Both tests are
-`//fixture:isolated`: the clean wait does not prove pg_temp absence, and the
-owned-pool cleanup leaves `mon_allow_pool_delete`.
+`//fixture:isolated`: the clean wait does not prove pg_temp absence.
 
 ## Results
 

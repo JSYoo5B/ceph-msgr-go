@@ -51,12 +51,24 @@ type profile struct {
 	osdSoak string
 	// sourceSHA is the controller's tested revision for workload receipts.
 	sourceSHA string
+	// sequence holds the space-separated selectors of a fixture sequence
+	// (sequence.go), whose union testRun is; empty for one row.
+	sequence string
 	// monFreeze opts in to the connected-MON freeze tests, which can leave the
 	// OSD on an old OSDMap (integration/fixture/MON_FREEZE_FIXTURE_ISSUE.md).
 	monFreeze string
 }
 
+// loadProfile reads one row's fixture profile, or a sequence of rows that
+// share it (CEPH_MSGR_TEST_SEQUENCE, sequence.go).
 func loadProfile(getenv func(string) string) (profile, error) {
+	if sequence := getenv(sequenceEnv); sequence != "" {
+		return loadSequenceProfile(getenv, sequence)
+	}
+	return loadSingleProfile(getenv)
+}
+
+func loadSingleProfile(getenv func(string) string) (profile, error) {
 	value := func(name, fallback string) string {
 		if result := getenv(name); result != "" {
 			return result

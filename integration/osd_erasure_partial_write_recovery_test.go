@@ -404,7 +404,7 @@ func (r *partialWriteRun) leftOutShard(state partialOverwrite) int {
 // in its own info. This states what each shard's own log holds at capture
 // time; it claims nothing about eviction, loss or replay.
 //
-//fixture:isolated kills a shard OSD, restart verified osd-ready clean; pauses OSDs; CRUSH rule and pool-delete config left
+//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
 func TestCephOSDErasureOptimizedK2M2PartialWriteShardReturnShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 900*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince
@@ -523,7 +523,7 @@ func (r *partialWriteRun) recoveredShardLogs(label string, primary pgHistorySnap
 // shard's own log holds at capture time; it does not read the returned
 // shard's chunk and claims nothing about eviction, loss or replay.
 //
-//fixture:isolated kills a shard OSD, restart verified osd-ready clean; pauses OSDs; CRUSH rule and pool-delete config left
+//fixture:isolated kills a shard OSD (restart verified osd-ready clean) and pauses each acting OSD for a store copy, no pg_temp proof
 func TestCephOSDErasureOptimizedK2M2PartialWriteDegradedWriteShardHistoryIntegration(t *testing.T) {
 	run := startPartialWriteRun(t, 900*time.Second)
 	started := run.showInterval().Observation.Query.SameIntervalSince
