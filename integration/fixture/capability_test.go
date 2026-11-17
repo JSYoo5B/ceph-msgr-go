@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
@@ -207,6 +208,41 @@ func TestCatalogRowsAreAdmittedByTheFixture(t *testing.T) {
 	if !slices.ContainsFunc(rows, func(row ciScenario) bool { return row.Params["capabilities"] != "" }) {
 		t.Error("catalog admission: no catalog row declares a capability")
 	}
+	// validate also passes the fixture sequences its planner makes of the
+	// default coverage (CEPH_MSGR_PLANNED_JOBS, a JSON list of matrix
+	// entries), so a planned job the fixture would refuse fails validation.
+	if path := os.Getenv("CEPH_MSGR_PLANNED_JOBS"); path != "" {
+		data, err := os.ReadFile(path)
+		var jobs []map[string]string
+		if err == nil {
+			err = json.Unmarshal(data, &jobs)
+		}
+		if err != nil {
+			t.Fatal("catalog admission: planned jobs:", err)
+		}
+		for _, problem := range plannedJobAdmissionProblems(jobs, ciWorkflowBindings(t)) {
+			t.Error("catalog admission: " + problem)
+		}
+	}
+}
+
+// plannedJobAdmissionProblems passes each planned fixture sequence job, as the
+// native workflow forwards it, through loadProfile.
+func plannedJobAdmissionProblems(jobs []map[string]string, bindings map[string]ciBinding) []string {
+	var problems []string
+	for _, job := range jobs {
+		params := maps.Clone(job)
+		for _, planner := range []string{"scenario", "scenarios", "sequence_rows"} {
+			delete(params, planner)
+		}
+		p, err := ciProfile(ciScenario{ID: job["scenario"], Params: params}, bindings)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("planned sequence %s: the fixture refuses it: %v", job["scenarios"], err))
+		} else if job["test_sequence"] != "" && p.sequence != job["test_sequence"] {
+			problems = append(problems, fmt.Sprintf("planned sequence %s: the fixture loaded no sequence", job["scenarios"]))
+		}
+	}
+	return problems
 }
 
 // A declared capability whose own requirement terms hold can still sit on a

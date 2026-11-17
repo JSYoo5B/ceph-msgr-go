@@ -93,6 +93,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import fixture_sharing as sharing_sources
@@ -338,20 +339,24 @@ def reproduction_problems(documents, scenarios):
     return problems
 
 
-def fixture_admission_problems(run=subprocess.run, directory=FIXTURE):
+def fixture_admission_problems(run=subprocess.run, directory=FIXTURE, planned=()):
     """The rows of this tree's catalog that its fixture refuses.
 
     Runs the fixture's TestCatalogRowsAreAdmittedByTheFixture, which passes
     every row through loadProfile with the native workflow's bindings and
     reports each refusal on a line marked ADMISSION_MARK. A check that does
     not run, does not pass and reports no row is a problem as well, never a
-    silent pass."""
+    silent pass. planned are matrix entries of fixture sequences the planner
+    makes; the same test passes each of them through loadProfile."""
     command = ["go", "test", "-mod=readonly", "-count=1", "-json", "-run", "^%s$" % ADMISSION_TEST, "."]
-    try:
-        result = run(command, cwd=str(directory), env=dict(os.environ, GOWORK="off"),
-                     capture_output=True, text=True, timeout=1200)
-    except (OSError, subprocess.SubprocessError) as error:
-        return ["the fixture admission check (%s) did not run: %s" % (ADMISSION_TEST, error)]
+    with tempfile.TemporaryDirectory() as scratch:
+        jobs = Path(scratch) / "planned-jobs.json"
+        jobs.write_text(json.dumps(list(planned)), encoding="utf-8")
+        try:
+            result = run(command, cwd=str(directory), env=dict(os.environ, GOWORK="off", CEPH_MSGR_PLANNED_JOBS=str(jobs)),
+                         capture_output=True, text=True, timeout=1200)
+        except (OSError, subprocess.SubprocessError) as error:
+            return ["the fixture admission check (%s) did not run: %s" % (ADMISSION_TEST, error)]
     problems, actions = [], []
     for line in result.stdout.splitlines():
         try:
@@ -622,7 +627,8 @@ def main(argv=None):
                         + selector_problems(scenarios, suite_tests())
                         + reproduction_problems([(str(path.relative_to(ROOT)), path.read_text(encoding="utf-8"))
                                                  for path in documentation_files()], scenarios)
-                        + fixture_admission_problems())
+                        + fixture_admission_problems(planned=[job for job in matrix(
+                            scenarios, plan_sources(args_with_catalog(CATALOG)))["include"] if "test_sequence" in job]))
             shared, values = fixture_sharing()
             problems += shared + sharing_problems(scenarios, values)
             problems += sequence_problems(scenarios, values, plan_sources(args_with_catalog(CATALOG)))
