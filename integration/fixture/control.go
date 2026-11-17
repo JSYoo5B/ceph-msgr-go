@@ -172,6 +172,9 @@ func (c *fixtureCluster) controls(ctx context.Context, out string) error {
 	if err := c.controlOSDSetChunkRequest(ctx, out); err != nil {
 		return err
 	}
+	if err := c.controlOSDTierOpRequest(ctx, out); err != nil {
+		return err
+	}
 	if err := c.controlManagerServiceConfigRequest(ctx, out); err != nil {
 		return err
 	}
